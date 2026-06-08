@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//e/work/project/小猫AI员工/data/workspace/**)"
+    ]
+  }
+}
