@@ -3,18 +3,29 @@
 编排完整的检测流程：
 1. 定位微信窗口
 2. 读取当前聊天窗口消息
-3. 筛选销售本人消息（sender=self）
-4. 若 self 消息为空 → 启用兜底模式：分析所有非 system 文本消息
+3. 筛选销售发送的消息（sender=friend，即销售发给主机微信的消息）
+4. 若无法区分发送方 → 启用兜底模式：分析所有非 system 文本消息
 5. 调用 reply_analyzer 判断有效性
 6. 更新 reply_checks 和 douyin_leads
 
-核心前提：当前电脑登录的微信账号就是对应销售人员账号。
+核心前提：系统运行在主机微信所在电脑上。
+当前电脑登录的是主机微信，系统检测的是销售对主机微信的回复。
+
+业务流程：
+  抖音线索 → 分配销售 → 销售处理 → 销售给主机微信回复 → 系统检测
+
+发送方语义（主机微信场景）：
+  self   = 主机微信发出的消息
+  friend = 销售发送给主机微信的消息
+
+当前微信版本无法稳定区分 self/friend，
+因此 MVP 启用 fallback_current_window_text 模式。
 
 检测模式：
-  - self_only：成功识别 self/friend，只分析 self 消息
+  - self_only：成功区分 self/friend，只分析 friend 消息（即销售回复）
   - fallback_current_window_text：无法区分发送方，
-    基于业务前提（当前窗口=销售微信+目标客户聊天），
-    分析所有非 system 文本消息
+    基于业务前提（当前窗口=主机微信+目标客户聊天），
+    分析所有非 system 文本消息（strict_mode=True，必须命中关键词）
 """
 
 import logging
@@ -59,6 +70,7 @@ def detect_reply_from_wechat(
         "messages_read": 0,
         "self_messages_count": 0,
         "detection_mode": None,
+        "warning": None,
         "is_effective": 0,
         "effectiveness_reason": None,
         "matched_content": None,
@@ -106,6 +118,10 @@ def detect_reply_from_wechat(
             # 兜底模式：分析所有非 system 的文本消息
             analyze_msgs = find_fallback_messages(messages)
             detection_mode = "fallback_current_window_text"
+            result["warning"] = (
+                "兜底检测模式：当前无法区分发送方，"
+                "结果可能包含主机或销售消息，建议人工确认"
+            )
             logger.info(f"兜底模式: {len(analyze_msgs)} 条候选文本消息（共 {len(messages)} 条）")
 
         result["detection_mode"] = detection_mode
@@ -138,8 +154,11 @@ def detect_reply_from_wechat(
         effective_keywords = [k.strip() for k in effective_kw_str.split(",") if k.strip()]
         invalid_keywords = [k.strip() for k in invalid_kw_str.split(",") if k.strip()]
 
+        # fallback 模式使用 strict_mode=True，必须命中有效关键词才算有效
+        use_strict = (detection_mode == "fallback_current_window_text")
         is_effective, reason, matched_content = find_effective_reply(
             analyze_msgs, effective_keywords, invalid_keywords, min_length,
+            strict_mode=use_strict,
         )
 
         result["is_effective"] = 1 if is_effective else 0

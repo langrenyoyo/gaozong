@@ -18,6 +18,7 @@ from app.services.lead_service import create_lead, get_lead, list_leads
 from app.services.assign_service import assign_lead
 from app.services.reply_checker import record_manual_reply, run_checks, list_checks
 from app.services.report_service import get_summary
+from app.wechat_ui.reply_detector import find_fallback_messages, find_effective_reply
 
 
 # 使用内存数据库
@@ -167,3 +168,63 @@ def test_summary():
     assert summary["total_leads"] > 0
     assert isinstance(summary["staff_stats"], list)
     db.close()
+
+
+# ========== Fallback 兜底模式测试 ==========
+
+def test_fallback_hit_keyword():
+    """fallback 模式：命中有效关键词 → 有效"""
+    messages = [
+        {"sender": "system", "content": "09:11", "index": 0},
+        {"sender": "unknown", "content": "你好", "index": 1},
+        {"sender": "unknown", "content": "收到，已添加微信", "index": 2},
+    ]
+    fallback = find_fallback_messages(messages)
+    assert len(fallback) == 2
+
+    effective_keywords = ["收到", "已添加", "已联系"]
+    invalid_keywords = ["不知道", "没空"]
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, effective_keywords, invalid_keywords, min_length=2, strict_mode=True,
+    )
+    assert is_effective is True
+    assert "收到" in matched or "已添加" in matched
+    assert "命中有效关键词" in reason
+
+
+def test_fallback_no_keyword_strict():
+    """fallback 模式（strict）：未命中关键词 → 无效，即使长度达标也不算"""
+    messages = [
+        {"sender": "system", "content": "09:11", "index": 0},
+        {"sender": "unknown", "content": "你好，请问多少钱", "index": 1},
+    ]
+    fallback = find_fallback_messages(messages)
+    assert len(fallback) == 1
+
+    effective_keywords = ["收到", "已添加", "已联系"]
+    invalid_keywords = ["不知道", "没空"]
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, effective_keywords, invalid_keywords, min_length=2, strict_mode=True,
+    )
+    assert is_effective is False
+    assert matched is None
+    assert "严格模式" in reason
+
+
+def test_fallback_no_keyword_lenient():
+    """精确模式（non-strict）：未命中关键词但长度达标 → 默认有效"""
+    messages = [
+        {"sender": "unknown", "content": "好的我马上处理", "index": 0},
+    ]
+    fallback = find_fallback_messages(messages)
+
+    effective_keywords = ["收到", "已添加", "已联系"]
+    invalid_keywords = ["不知道", "没空"]
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, effective_keywords, invalid_keywords, min_length=2, strict_mode=False,
+    )
+    assert is_effective is True
+    assert "默认有效" in reason

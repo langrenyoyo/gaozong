@@ -30,14 +30,14 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
     通过微信 UI 自动化检测当前聊天窗口中是否存在销售有效回复。
 
     前提条件：
-    - 当前电脑已登录微信 PC 客户端
-    - 当前登录的微信账号就是对应销售人员的账号
+    - 当前电脑已登录微信 PC 客户端（主机微信）
     - 已手动打开目标客户的聊天窗口
+    - 销售已在该聊天窗口中回复主机微信
 
     检测流程：
-    1. 定位微信窗口
+    1. 定位微信窗口（主机微信）
     2. 读取当前聊天窗口最近 max_messages 条消息
-    3. 筛选销售本人发送的消息（self）
+    3. 筛选销售发送的消息
     4. 判断是否存在有效回复
     5. 有效回复时更新 reply_checks 和 douyin_leads
     """
