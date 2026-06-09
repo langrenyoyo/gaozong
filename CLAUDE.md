@@ -44,15 +44,44 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P2 Completed
+当前阶段：P3 Completed（反馈发送模块已完成）
 
-当前聚焦：P2.5 Sender Identification Research（发送方精确识别专项实验）
+当前聚焦：P4 上游线索对接（douyinAPI → auto_wechat）
 
 业务架构：
 
 ```text
-数据源微信(A) → 主机微信(B) → 销售微信(C) → 跟进检测 → 反馈给 A
+抖音平台
+    ↓ Webhook
+douyinAPI（数据源系统 A，端口 8081）
+    ↓ HTTP API
+auto_wechat（副系统，端口 9000）
+    ↓ UI Automation
+主机微信 B
+    ↓ 微信消息
+销售微信 C
+    ↓ 回复检测
+主机微信 B → 反馈给数据源 A
 ```
+
+auto_wechat 的职责：
+
+1. 接收上游线索（从 douyinAPI 拉取）
+2. 线索入库
+3. 销售分配
+4. 主机微信 B 通知销售 C
+5. 检测销售 C 是否在指定时间内回复主机微信 B
+6. 检测结果入库
+7. 主机微信 B 将跟进结果反馈给数据源 A
+
+auto_wechat 不负责：
+
+- 抖音 Webhook 接收
+- 抖音账号授权
+- 抖音私信管理
+- 抖音消息存储
+
+这些属于 douyinAPI。
 
 技术约束：
 
@@ -67,6 +96,61 @@ Output Rules
   - 视觉识别
   - OCR
 ```
+
+------
+
+# Upstream System Constraints
+
+auto_wechat 不是线索源系统。
+
+线索来源于上游系统 douyinAPI。
+
+## 对接原则
+
+优先通过 HTTP API 对接上游系统。
+
+禁止：
+
+- 数据库直读
+- SQLite 文件共享
+- 手工复制数据库
+
+第一原则：系统之间通过 API 通信。
+
+## 上游接口（douyinAPI）
+
+拉取线索：
+
+```text
+GET http://douyinapi-host:8081/leads?lead_status=pending&page_size=50
+GET http://douyinapi-host:8081/leads/export
+```
+
+字段映射（douyinAPI → auto_wechat）：
+
+| douyinAPI 字段 | auto_wechat 字段 | 说明 |
+|----------------|-----------------|------|
+| open_id | source_id | 抖音用户唯一标识 |
+| display_name | customer_name | 客户昵称 |
+| last_interaction_record | content | 最近交互内容 |
+| "douyin" | source | 来源平台 |
+| "私信" | lead_type | 线索类型 |
+
+## 本地开发原则
+
+任何开发和测试：
+
+不得修改生产 douyinAPI 数据。
+
+必须支持：
+
+- 本地 Mock 数据
+- dry_run
+- 本地 SQLite 测试库
+
+禁止：
+
+开发阶段直接连接生产数据库。
 
 ------
 
