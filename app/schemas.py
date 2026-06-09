@@ -134,6 +134,7 @@ class WechatDetectResponse(BaseModel):
     self_messages_count: int = Field(0, description="销售本人消息数")
     detection_mode: Optional[str] = Field(None, description="检测模式: self_only / fallback_current_window_text")
     warning: Optional[str] = Field(None, description="检测警告信息（兜底模式时提示需人工确认）")
+    confirmed_required: bool = Field(False, description="是否需要人工复核（兜底模式时为 true）")
     is_effective: int = Field(0, description="是否有效回复 0/1")
     effectiveness_reason: Optional[str] = Field(None, description="判定原因")
     matched_content: Optional[str] = Field(None, description="匹配到的有效回复内容")

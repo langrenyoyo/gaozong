@@ -98,8 +98,9 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 3. 读取最近 N 条消息
 4. 尝试通过头像位置判断发送方（右侧=self=主机微信，左侧=friend=销售）
 5. **优先分析 friend 消息**（销售回复）；若无法区分发送方，**启用兜底模式**分析所有非 system 文本消息
-6. 使用关键词 + 长度判断有效性（兜底模式下必须命中有效关键词）
-7. 有效回复时更新 `reply_checks` 和 `douyin_leads` 状态
+6. 匹配优先级：**期望回复文本**（`expected_reply_text`）→ **有效关键词** → 长度
+7. 兜底模式下必须命中期望回复文本或有效关键词，不允许仅靠长度判有效
+8. 有效回复时更新 `reply_checks` 和 `douyin_leads` 状态
 
 ### 检测模式说明
 
@@ -110,6 +111,19 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 
 兜底模式的前提：当前电脑登录的是**主机微信**，且已打开目标客户聊天窗口。
 在此前提下，窗口中的有效回复文本可作为销售已处理线索的 MVP 证据。
+**兜底模式结果建议人工复核**（接口返回 `confirmed_required = true`）。
+
+### 可配置项
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| `expected_reply_text` | 收到，已添加微信 | 期望回复文本，优先精确/包含匹配 |
+| `effective_keywords` | 收到,已添加,已联系,... | 有效关键词列表 |
+| `invalid_keywords` | 不知道,不清楚,... | 无效关键词列表 |
+| `reply_deadline_minutes` | 30 | 回复截止时间（分钟） |
+| `effective_reply_min_length` | 2 | 有效回复最小长度 |
+
+> 以上配置存储在 `check_configs` 表中，可通过数据库动态修改，无需改代码。
 
 ### ⚠️ 当前限制（必须了解）
 

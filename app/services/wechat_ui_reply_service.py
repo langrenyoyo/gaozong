@@ -71,6 +71,7 @@ def detect_reply_from_wechat(
         "self_messages_count": 0,
         "detection_mode": None,
         "warning": None,
+        "confirmed_required": False,
         "is_effective": 0,
         "effectiveness_reason": None,
         "matched_content": None,
@@ -122,6 +123,7 @@ def detect_reply_from_wechat(
                 "兜底检测模式：当前无法区分发送方，"
                 "结果可能包含主机或销售消息，建议人工确认"
             )
+            result["confirmed_required"] = True
             logger.info(f"兜底模式: {len(analyze_msgs)} 条候选文本消息（共 {len(messages)} 条）")
 
         result["detection_mode"] = detection_mode
@@ -146,6 +148,8 @@ def detect_reply_from_wechat(
         invalid_kw_str = get_config_value(db, "invalid_keywords",
                                            "不知道,不清楚,等下再说,没空,无法处理")
         min_length_str = get_config_value(db, "effective_reply_min_length", "2")
+        expected_reply_text = get_config_value(db, "expected_reply_text",
+                                                "收到，已添加微信")
         try:
             min_length = int(min_length_str)
         except ValueError:
@@ -154,11 +158,12 @@ def detect_reply_from_wechat(
         effective_keywords = [k.strip() for k in effective_kw_str.split(",") if k.strip()]
         invalid_keywords = [k.strip() for k in invalid_kw_str.split(",") if k.strip()]
 
-        # fallback 模式使用 strict_mode=True，必须命中有效关键词才算有效
+        # fallback 模式使用 strict_mode=True，必须命中关键词才算有效
         use_strict = (detection_mode == "fallback_current_window_text")
         is_effective, reason, matched_content = find_effective_reply(
             analyze_msgs, effective_keywords, invalid_keywords, min_length,
             strict_mode=use_strict,
+            expected_reply_text=expected_reply_text,
         )
 
         result["is_effective"] = 1 if is_effective else 0

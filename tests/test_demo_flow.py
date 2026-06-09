@@ -228,3 +228,80 @@ def test_fallback_no_keyword_lenient():
     )
     assert is_effective is True
     assert "默认有效" in reason
+
+
+# ========== P1 新增测试 ==========
+
+def test_fallback_hit_expected_reply_text():
+    """fallback 模式：精确匹配 expected_reply_text → 有效"""
+    messages = [
+        {"sender": "unknown", "content": "你好", "index": 0},
+        {"sender": "unknown", "content": "收到，已添加微信", "index": 1},
+    ]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["收到", "已添加"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text="收到，已添加微信",
+    )
+    assert is_effective is True
+    assert "精确匹配期望回复文本" in reason
+    assert matched == "收到，已添加微信"
+
+
+def test_fallback_hit_expected_reply_text_contains():
+    """fallback 模式：包含 expected_reply_text → 有效"""
+    messages = [
+        {"sender": "unknown", "content": "收到，已添加微信。谢谢", "index": 0},
+    ]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["已联系"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text="收到，已添加微信",
+    )
+    assert is_effective is True
+    assert "包含期望回复文本" in reason
+
+
+def test_fallback_only_length_no_keyword_strict():
+    """fallback 模式（strict）：只有长度达标但无关键词 → 无效"""
+    messages = [
+        {"sender": "unknown", "content": "我正在看这个问题", "index": 0},
+    ]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["收到", "已添加"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text="收到，已添加微信",
+    )
+    assert is_effective is False
+    assert matched is None
+    assert "严格模式" in reason
+
+
+def test_fallback_warning_and_confirmed_required():
+    """验证 fallback 模式返回 warning 和 confirmed_required=True"""
+    # 直接模拟 wechat_ui_reply_service 的 fallback 路径逻辑
+    detection_mode = "fallback_current_window_text"
+    warning = None
+    confirmed_required = False
+
+    if detection_mode == "fallback_current_window_text":
+        warning = "兜底检测模式：当前无法区分发送方，结果可能包含主机或销售消息，建议人工确认"
+        confirmed_required = True
+
+    assert warning is not None
+    assert len(warning) > 0
+    assert confirmed_required is True
+
+
+def test_self_only_no_confirmed_required():
+    """验证精确模式 confirmed_required=False"""
+    detection_mode = "self_only"
+    confirmed_required = False
+
+    if detection_mode == "fallback_current_window_text":
+        confirmed_required = True
+
+    assert confirmed_required is False

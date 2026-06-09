@@ -63,6 +63,7 @@ def find_effective_reply(
     invalid_keywords: list[str],
     min_length: int,
     strict_mode: bool = False,
+    expected_reply_text: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """
     在候选消息中寻找有效回复。
@@ -70,13 +71,20 @@ def find_effective_reply(
     按时间倒序（最近的优先）检查每条消息。
     找到第一条有效回复即返回。
 
+    匹配优先级：
+      1. expected_reply_text 精确/包含匹配（最高优先级）
+      2. effective_keywords 关键词匹配
+      3. strict_mode=False 时：长度达标 → 默认有效
+
     Args:
         self_messages: 候选消息列表
         effective_keywords: 有效关键词列表
         invalid_keywords: 无效关键词列表
         min_length: 有效回复最小长度
-        strict_mode: 严格模式。True 时必须命中有效关键词才算有效，
+        strict_mode: 严格模式。True 时必须命中关键词才算有效，
                      不允许"仅长度达标就默认有效"。
+        expected_reply_text: 期望回复文本（如"收到，已添加微信"）。
+                             优先精确/包含匹配此文本。
 
     Returns:
         (is_effective, reason, matched_content)
@@ -93,10 +101,23 @@ def find_effective_reply(
         text = content.strip()
 
         # 先检查无效关键词
+        is_invalid = False
         for kw in invalid_keywords:
             if kw and kw in text:
-                # 这条是无效回复，继续检查下一条
-                continue
+                is_invalid = True
+                break
+        if is_invalid:
+            continue
+
+        # 优先匹配 expected_reply_text（精确匹配或包含匹配）
+        if expected_reply_text and expected_reply_text.strip():
+            expected = expected_reply_text.strip()
+            if text == expected:
+                reason = f"精确匹配期望回复文本: {expected}"
+                return True, reason, text
+            if expected in text:
+                reason = f"包含期望回复文本: {expected}"
+                return True, reason, text
 
         # 检查有效关键词
         for kw in effective_keywords:
@@ -105,22 +126,23 @@ def find_effective_reply(
                     reason = f"命中有效关键词: {kw}，回复长度 {len(text)} >= {min_length}"
                     return True, reason, text
 
-        # strict_mode=True 时：必须命中有效关键词，不允许默认有效
+        # strict_mode=True 时：必须命中关键词，不允许默认有效
         if strict_mode:
             continue
 
         # strict_mode=False（原逻辑）：未命中关键词但长度达标 → 默认有效
         if len(text) >= min_length:
-            # 再排除一下无效关键词
-            is_invalid = False
+            is_invalid_check = False
             for kw in invalid_keywords:
                 if kw and kw in text:
-                    is_invalid = True
+                    is_invalid_check = True
                     break
-            if not is_invalid:
+            if not is_invalid_check:
                 reason = f"回复长度 {len(text)} >= {min_length}，默认有效"
                 return True, reason, text
 
     if strict_mode:
+        if expected_reply_text:
+            return False, "候选消息中未命中期望回复文本或有效关键词（严格模式）", None
         return False, "候选消息中未命中有效关键词（严格模式）", None
     return False, "候选消息中未检测到有效回复", None

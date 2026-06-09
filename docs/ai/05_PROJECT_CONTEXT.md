@@ -110,8 +110,12 @@ MVP 验证阶段（已完成后端闭环 + 微信 UI 读取模块）
 - 消息内容提取（过滤非文本、时间、系统消息）
 - 微信 UI 自动检测编排服务
 - 调试诊断脚本（窗口探测 + 消息控件结构分析）
+- 期望回复文本配置（`expected_reply_text`，优先精确/包含匹配）
+- 兜底模式严格匹配（`strict_mode`，必须命中关键词或期望回复文本）
+- 检测结果人工复核标记（`confirmed_required`，兜底模式时为 true）
+- 检测结果警告信息（`warning`，兜底模式时提示需人工确认）
 - Demo 数据脚本
-- 端到端自动化测试
+- 端到端自动化测试（19 个用例）
 
 ------
 
@@ -248,6 +252,7 @@ auto_wechat/
 | effective_reply_min_length | 2 | 有效回复最小长度 |
 | effective_keywords | 收到,已添加微信,已添加 | 有效确认关键词 |
 | invalid_keywords | 不知道,不清楚,等下再说,没空,无法处理 | 无效关键词 |
+| expected_reply_text | 收到，已添加微信 | 期望回复文本，优先精确/包含匹配 |
 
 ------
 
@@ -308,16 +313,21 @@ replied（已确认）       invalid（无效回复）     timeout（超时）
 
 ### 10.3 判定规则
 
-判定顺序：
+判定顺序（优先级从高到低）：
 
 1. 回复内容为空 → **无效**
 2. 命中无效关键词（如"不知道"、"没空"等）→ **无效**
-3. 命中有效确认关键词 且 长度 ≥ 配置值 → **有效**
-4. 命中有效确认关键词 但 长度 < 配置值 → **无效**
-5. 未命中任何关键词 且 长度 ≥ 配置值 → **有效**（默认有效）
-6. 未命中任何关键词 且 长度 < 配置值 → **无效**
+3. 精确匹配 `expected_reply_text` → **有效**
+4. 包含 `expected_reply_text` → **有效**
+5. 命中有效确认关键词 且 长度 ≥ 配置值 → **有效**
+6. 命中有效确认关键词 但 长度 < 配置值 → **无效**
+7. 兜底模式（`strict_mode=True`）时：到此为止 → **无效**
+8. 精确模式（`strict_mode=False`）时：未命中关键词 但 长度 ≥ 配置值 → **有效**（默认有效）
+9. 未命中任何关键词 且 长度 < 配置值 → **无效**
 
 > 以上规则均可通过 `check_configs` 表动态配置，无需改代码。
+>
+> 兜底模式下 `strict_mode=True`，必须命中 `expected_reply_text` 或有效关键词才算有效。
 
 ### 10.4 超时规则
 
@@ -393,6 +403,11 @@ replied（已确认）       invalid（无效回复）     timeout（超时）
 
 兜底模式下，将所有非系统消息、有文本内容的消息作为候选分析对象，确保不遗漏。
 
+兜底模式安全护栏：
+- `strict_mode=True`：必须命中 `expected_reply_text` 或有效关键词才算有效，不允许仅靠长度判有效
+- `warning`：返回警告信息，提示"当前无法区分发送方，建议人工确认"
+- `confirmed_required=true`：标记检测结果需要人工复核
+
 ### 11.5 核心前提
 
 > 当前电脑登录的微信账号就是主机微信。因此 `self`（自己发的）消息是主机微信发的，`friend`（对方发的）消息才是销售发的。
@@ -419,6 +434,24 @@ replied（已确认）       invalid（无效回复）     timeout（超时）
 | POST | `/checks/run` | 手动触发一次超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
+| GET | `/replies/debug/messages` | 调试：返回消息控件结构 |
+
+### 12.1 WechatDetectResponse 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | bool | 检测是否成功执行 |
+| message | str | 检测结果描述 |
+| chat_title | str? | 当前聊天窗口标题 |
+| messages_read | int | 读取到的消息总数 |
+| self_messages_count | int | sender=self 的消息数 |
+| detection_mode | str? | 检测模式：`self_only` / `fallback_current_window_text` |
+| warning | str? | 兜底模式时返回警告信息 |
+| confirmed_required | bool | 是否需要人工复核（兜底模式时为 true） |
+| is_effective | int | 是否有效回复 0/1 |
+| effectiveness_reason | str? | 判定原因 |
+| matched_content | str? | 匹配到的有效回复内容 |
+| check_status | str | 检测状态 |
 
 ------
 
