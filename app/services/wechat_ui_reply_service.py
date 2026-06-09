@@ -48,6 +48,7 @@ def detect_reply_from_wechat(
     lead_id: int,
     staff_id: int,
     max_messages: int = 20,
+    confirm_current_chat: bool = False,
 ) -> dict:
     """
     通过微信 UI 自动化检测当前聊天窗口中是否存在销售有效回复。
@@ -72,6 +73,7 @@ def detect_reply_from_wechat(
         "detection_mode": None,
         "warning": None,
         "confirmed_required": False,
+        "risk_level": "none",
         "is_effective": 0,
         "effectiveness_reason": None,
         "matched_content": None,
@@ -124,6 +126,9 @@ def detect_reply_from_wechat(
                 "结果可能包含主机或销售消息，建议人工确认"
             )
             result["confirmed_required"] = True
+            # 未确认聊天窗口时追加风险提示
+            if not confirm_current_chat:
+                result["warning"] += "；当前未确认聊天窗口是否正确，请人工确认后再采信结果"
             logger.info(f"兜底模式: {len(analyze_msgs)} 条候选文本消息（共 {len(messages)} 条）")
 
         result["detection_mode"] = detection_mode
@@ -148,7 +153,7 @@ def detect_reply_from_wechat(
         invalid_kw_str = get_config_value(db, "invalid_keywords",
                                            "不知道,不清楚,等下再说,没空,无法处理")
         min_length_str = get_config_value(db, "effective_reply_min_length", "2")
-        expected_reply_text = get_config_value(db, "expected_reply_text",
+        expected_reply_text_raw = get_config_value(db, "expected_reply_text",
                                                 "收到，已添加微信")
         try:
             min_length = int(min_length_str)
@@ -158,15 +163,28 @@ def detect_reply_from_wechat(
         effective_keywords = [k.strip() for k in effective_kw_str.split(",") if k.strip()]
         invalid_keywords = [k.strip() for k in invalid_kw_str.split(",") if k.strip()]
 
+        # expected_reply_text 支持 | 分隔多值
+        expected_reply_list = [t.strip() for t in expected_reply_text_raw.split("|") if t.strip()]
+
         # fallback 模式使用 strict_mode=True，必须命中关键词才算有效
         use_strict = (detection_mode == "fallback_current_window_text")
         is_effective, reason, matched_content = find_effective_reply(
             analyze_msgs, effective_keywords, invalid_keywords, min_length,
             strict_mode=use_strict,
-            expected_reply_text=expected_reply_text,
+            expected_reply_text_list=expected_reply_list,
         )
 
         result["is_effective"] = 1 if is_effective else 0
+
+        # 计算 risk_level
+        if not is_effective:
+            result["risk_level"] = "none"
+        elif detection_mode == "self_only":
+            result["risk_level"] = "low"
+        elif confirm_current_chat:
+            result["risk_level"] = "medium"
+        else:
+            result["risk_level"] = "high"
         result["effectiveness_reason"] = reason
         result["matched_content"] = matched_content
 

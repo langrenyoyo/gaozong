@@ -78,9 +78,15 @@ python -m pytest tests/ -v
 ### 使用方式
 
 ```bash
+# 基本调用
 curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
   -H "Content-Type: application/json" \
   -d '{"lead_id": 1, "staff_id": 1, "max_messages": 20}'
+
+# 确认当前聊天窗口（降低 risk_level）
+curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
+  -H "Content-Type: application/json" \
+  -d '{"lead_id": 1, "staff_id": 1, "max_messages": 20, "confirm_current_chat": true}'
 ```
 
 ### 操作步骤
@@ -113,11 +119,29 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 在此前提下，窗口中的有效回复文本可作为销售已处理线索的 MVP 证据。
 **兜底模式结果建议人工复核**（接口返回 `confirmed_required = true`）。
 
+### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `lead_id` | int | 是 | 线索 ID |
+| `staff_id` | int | 是 | 销售 ID |
+| `max_messages` | int | 否 | 最多读取消息条数（默认 20） |
+| `confirm_current_chat` | bool | 否 | 确认当前微信窗口已打开目标销售聊天窗口（默认 false） |
+
+### risk_level 可信度
+
+| 值 | 含义 |
+|----|------|
+| `low` | 精确模式（self_only）检测到有效回复 |
+| `medium` | 兜底模式检测到有效回复，且 `confirm_current_chat=true` |
+| `high` | 兜底模式检测到有效回复，且 `confirm_current_chat=false`（**建议人工确认**） |
+| `none` | 未检测到有效回复或检测失败 |
+
 ### 可配置项
 
 | 配置键 | 默认值 | 说明 |
 |--------|--------|------|
-| `expected_reply_text` | 收到，已添加微信 | 期望回复文本，优先精确/包含匹配 |
+| `expected_reply_text` | 收到，已添加微信\|收到，已添加\|已添加微信 | 期望回复文本（`\|` 分隔多值），优先精确/包含匹配 |
 | `effective_keywords` | 收到,已添加,已联系,... | 有效关键词列表 |
 | `invalid_keywords` | 不知道,不清楚,... | 无效关键词列表 |
 | `reply_deadline_minutes` | 30 | 回复截止时间（分钟） |
@@ -138,6 +162,7 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 9. 依赖 `uiautomation` 库（Windows UI Automation 的 Python 封装）
 10. **当前微信版本无法通过 UI 控件区分 self/friend 发送方**，MVP 使用窗口文本兜底检测
 11. 兜底模式下，聊天窗口中**所有非 system 文本**都参与分析，**可能包含主机或客户发送的内容**，仅限 MVP 场景使用
+12. `confirmed_required` 和 `risk_level` 为检测响应字段，**暂不落库**，无法通过报表永久统计
 
 ## 项目结构
 

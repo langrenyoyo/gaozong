@@ -124,6 +124,7 @@ class WechatDetectRequest(BaseModel):
     lead_id: int = Field(..., description="线索ID")
     staff_id: int = Field(..., description="销售ID")
     max_messages: int = Field(20, ge=5, le=100, description="最多读取的消息条数")
+    confirm_current_chat: bool = Field(False, description="调用方确认当前微信窗口已打开目标销售聊天窗口")
 
 
 class WechatDetectResponse(BaseModel):
@@ -135,6 +136,7 @@ class WechatDetectResponse(BaseModel):
     detection_mode: Optional[str] = Field(None, description="检测模式: self_only / fallback_current_window_text")
     warning: Optional[str] = Field(None, description="检测警告信息（兜底模式时提示需人工确认）")
     confirmed_required: bool = Field(False, description="是否需要人工复核（兜底模式时为 true）")
+    risk_level: str = Field("none", description="检测结果可信度: low / medium / high / none")
     is_effective: int = Field(0, description="是否有效回复 0/1")
     effectiveness_reason: Optional[str] = Field(None, description="判定原因")
     matched_content: Optional[str] = Field(None, description="匹配到的有效回复内容")

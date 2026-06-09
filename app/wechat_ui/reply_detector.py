@@ -63,7 +63,7 @@ def find_effective_reply(
     invalid_keywords: list[str],
     min_length: int,
     strict_mode: bool = False,
-    expected_reply_text: str | None = None,
+    expected_reply_text_list: list[str] | None = None,
 ) -> tuple[bool, str, str | None]:
     """
     在候选消息中寻找有效回复。
@@ -72,7 +72,7 @@ def find_effective_reply(
     找到第一条有效回复即返回。
 
     匹配优先级：
-      1. expected_reply_text 精确/包含匹配（最高优先级）
+      1. expected_reply_text_list 精确/包含匹配（最高优先级，支持多值）
       2. effective_keywords 关键词匹配
       3. strict_mode=False 时：长度达标 → 默认有效
 
@@ -83,8 +83,8 @@ def find_effective_reply(
         min_length: 有效回复最小长度
         strict_mode: 严格模式。True 时必须命中关键词才算有效，
                      不允许"仅长度达标就默认有效"。
-        expected_reply_text: 期望回复文本（如"收到，已添加微信"）。
-                             优先精确/包含匹配此文本。
+        expected_reply_text_list: 期望回复文本列表（如 ["收到，已添加微信", "收到，已添加"]）。
+                                  任一命中即有效。优先精确匹配，其次包含匹配。
 
     Returns:
         (is_effective, reason, matched_content)
@@ -109,15 +109,18 @@ def find_effective_reply(
         if is_invalid:
             continue
 
-        # 优先匹配 expected_reply_text（精确匹配或包含匹配）
-        if expected_reply_text and expected_reply_text.strip():
-            expected = expected_reply_text.strip()
-            if text == expected:
-                reason = f"精确匹配期望回复文本: {expected}"
-                return True, reason, text
-            if expected in text:
-                reason = f"包含期望回复文本: {expected}"
-                return True, reason, text
+        # 优先匹配 expected_reply_text_list（精确匹配或包含匹配，多值）
+        if expected_reply_text_list:
+            for expected in expected_reply_text_list:
+                if not expected or not expected.strip():
+                    continue
+                exp = expected.strip()
+                if text == exp:
+                    reason = f"精确匹配期望回复文本: {exp}"
+                    return True, reason, text
+                if exp in text:
+                    reason = f"包含期望回复文本: {exp}"
+                    return True, reason, text
 
         # 检查有效关键词
         for kw in effective_keywords:
@@ -142,7 +145,7 @@ def find_effective_reply(
                 return True, reason, text
 
     if strict_mode:
-        if expected_reply_text:
+        if expected_reply_text_list:
             return False, "候选消息中未命中期望回复文本或有效关键词（严格模式）", None
         return False, "候选消息中未命中有效关键词（严格模式）", None
     return False, "候选消息中未检测到有效回复", None

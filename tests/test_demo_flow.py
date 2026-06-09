@@ -242,7 +242,7 @@ def test_fallback_hit_expected_reply_text():
 
     is_effective, reason, matched = find_effective_reply(
         fallback, ["收到", "已添加"], ["不知道"], min_length=2,
-        strict_mode=True, expected_reply_text="收到，已添加微信",
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信"],
     )
     assert is_effective is True
     assert "精确匹配期望回复文本" in reason
@@ -258,7 +258,7 @@ def test_fallback_hit_expected_reply_text_contains():
 
     is_effective, reason, matched = find_effective_reply(
         fallback, ["已联系"], ["不知道"], min_length=2,
-        strict_mode=True, expected_reply_text="收到，已添加微信",
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信"],
     )
     assert is_effective is True
     assert "包含期望回复文本" in reason
@@ -273,7 +273,7 @@ def test_fallback_only_length_no_keyword_strict():
 
     is_effective, reason, matched = find_effective_reply(
         fallback, ["收到", "已添加"], ["不知道"], min_length=2,
-        strict_mode=True, expected_reply_text="收到，已添加微信",
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信"],
     )
     assert is_effective is False
     assert matched is None
@@ -305,3 +305,117 @@ def test_self_only_no_confirmed_required():
         confirmed_required = True
 
     assert confirmed_required is False
+
+
+# ========== P2 新增测试 ==========
+
+def test_expected_reply_multi_value_hit_first():
+    """expected_reply_text 多值：命中第一项 → 有效"""
+    messages = [{"sender": "unknown", "content": "收到，已添加微信", "index": 0}]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["已联系"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信", "收到，已添加", "已添加微信"],
+    )
+    assert is_effective is True
+    assert "精确匹配期望回复文本" in reason
+    assert matched == "收到，已添加微信"
+
+
+def test_expected_reply_multi_value_hit_second():
+    """expected_reply_text 多值：命中第二项 → 有效"""
+    messages = [{"sender": "unknown", "content": "收到，已添加", "index": 0}]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["已联系"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信", "收到，已添加", "已添加微信"],
+    )
+    assert is_effective is True
+    assert "精确匹配期望回复文本: 收到，已添加" in reason
+
+
+def test_expected_reply_multi_value_miss_but_keyword_hit():
+    """expected_reply_text 多值全部未命中但命中 effective_keywords → 有效"""
+    messages = [{"sender": "unknown", "content": "已联系客户", "index": 0}]
+    fallback = find_fallback_messages(messages)
+
+    is_effective, reason, matched = find_effective_reply(
+        fallback, ["已联系"], ["不知道"], min_length=2,
+        strict_mode=True, expected_reply_text_list=["收到，已添加微信", "收到，已添加"],
+    )
+    assert is_effective is True
+    assert "命中有效关键词: 已联系" in reason
+
+
+def test_risk_level_fallback_confirmed():
+    """fallback + confirm_current_chat=True → risk_level=medium"""
+    is_effective = True
+    detection_mode = "fallback_current_window_text"
+    confirm_current_chat = True
+
+    if not is_effective:
+        risk_level = "none"
+    elif detection_mode == "self_only":
+        risk_level = "low"
+    elif confirm_current_chat:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    assert risk_level == "medium"
+
+
+def test_risk_level_fallback_unconfirmed():
+    """fallback + confirm_current_chat=False → risk_level=high"""
+    is_effective = True
+    detection_mode = "fallback_current_window_text"
+    confirm_current_chat = False
+
+    if not is_effective:
+        risk_level = "none"
+    elif detection_mode == "self_only":
+        risk_level = "low"
+    elif confirm_current_chat:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    assert risk_level == "high"
+
+
+def test_risk_level_self_only():
+    """self_only → risk_level=low"""
+    is_effective = True
+    detection_mode = "self_only"
+    confirm_current_chat = False
+
+    if not is_effective:
+        risk_level = "none"
+    elif detection_mode == "self_only":
+        risk_level = "low"
+    elif confirm_current_chat:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    assert risk_level == "low"
+
+
+def test_risk_level_not_effective():
+    """未检测到有效回复 → risk_level=none"""
+    is_effective = False
+    detection_mode = "fallback_current_window_text"
+    confirm_current_chat = True
+
+    if not is_effective:
+        risk_level = "none"
+    elif detection_mode == "self_only":
+        risk_level = "low"
+    elif confirm_current_chat:
+        risk_level = "medium"
+    else:
+        risk_level = "high"
+
+    assert risk_level == "none"

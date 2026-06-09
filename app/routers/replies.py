@@ -46,6 +46,7 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
         lead_id=data.lead_id,
         staff_id=data.staff_id,
         max_messages=data.max_messages,
+        confirm_current_chat=data.confirm_current_chat,
     )
     return WechatDetectResponse(**result)
 

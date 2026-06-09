@@ -114,8 +114,11 @@ MVP 验证阶段（已完成后端闭环 + 微信 UI 读取模块）
 - 兜底模式严格匹配（`strict_mode`，必须命中关键词或期望回复文本）
 - 检测结果人工复核标记（`confirmed_required`，兜底模式时为 true）
 - 检测结果警告信息（`warning`，兜底模式时提示需人工确认）
+- 聊天窗口人工确认（`confirm_current_chat`，降低误操作风险）
+- 检测结果可信度（`risk_level`，low/medium/high/none）
+- 期望回复文本多值支持（`expected_reply_text`，`|` 分隔多值）
 - Demo 数据脚本
-- 端到端自动化测试（19 个用例）
+- 端到端自动化测试（26 个用例）
 
 ------
 
@@ -252,7 +255,7 @@ auto_wechat/
 | effective_reply_min_length | 2 | 有效回复最小长度 |
 | effective_keywords | 收到,已添加微信,已添加 | 有效确认关键词 |
 | invalid_keywords | 不知道,不清楚,等下再说,没空,无法处理 | 无效关键词 |
-| expected_reply_text | 收到，已添加微信 | 期望回复文本，优先精确/包含匹配 |
+| expected_reply_text | 收到，已添加微信\|收到，已添加\|已添加微信 | 期望回复文本（`\|` 分隔多值），优先精确/包含匹配 |
 
 ------
 
@@ -436,7 +439,16 @@ replied（已确认）       invalid（无效回复）     timeout（超时）
 | GET | `/reports/summary` | 汇总报表 |
 | GET | `/replies/debug/messages` | 调试：返回消息控件结构 |
 
-### 12.1 WechatDetectResponse 字段
+### 12.1 WechatDetectRequest 请求参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| lead_id | int | 是 | 线索 ID |
+| staff_id | int | 是 | 销售 ID |
+| max_messages | int | 否 | 最多读取消息条数（默认 20） |
+| confirm_current_chat | bool | 否 | 确认当前微信窗口已打开目标销售聊天窗口（默认 false） |
+
+### 12.2 WechatDetectResponse 响应字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -447,11 +459,23 @@ replied（已确认）       invalid（无效回复）     timeout（超时）
 | self_messages_count | int | sender=self 的消息数 |
 | detection_mode | str? | 检测模式：`self_only` / `fallback_current_window_text` |
 | warning | str? | 兜底模式时返回警告信息 |
-| confirmed_required | bool | 是否需要人工复核（兜底模式时为 true） |
+| confirmed_required | bool | 是否需要人工复核（兜底模式时为 true，**暂不落库**） |
+| risk_level | str | 检测结果可信度：`low` / `medium` / `high` / `none`（**暂不落库**） |
 | is_effective | int | 是否有效回复 0/1 |
 | effectiveness_reason | str? | 判定原因 |
 | matched_content | str? | 匹配到的有效回复内容 |
 | check_status | str | 检测状态 |
+
+### 12.3 risk_level 规则
+
+| risk_level | 条件 | 含义 |
+|------------|------|------|
+| `low` | `detection_mode=self_only` 且 `is_effective=1` | 精确模式，可信度高 |
+| `medium` | `detection_mode=fallback` 且 `confirm_current_chat=true` 且 `is_effective=1` | 兜底模式但已确认窗口，中等可信 |
+| `high` | `detection_mode=fallback` 且 `confirm_current_chat=false` 且 `is_effective=1` | 兜底模式且未确认窗口，**建议人工确认** |
+| `none` | `is_effective=0` 或检测失败 | 未检测到有效回复 |
+
+> `confirmed_required` 和 `risk_level` 当前为检测响应字段，**暂不持久化到数据库**，无法通过报表永久统计。后续如需落库，需新增数据库字段。
 
 ------
 
