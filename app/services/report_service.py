@@ -1,0 +1,61 @@
+"""报表服务"""
+
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
+from app.models import DouyinLead, ReplyCheck, SalesStaff
+
+
+def get_summary(db: Session) -> dict:
+    """获取报表汇总数据"""
+    # 总线索数
+    total_leads = db.query(func.count(DouyinLead.id)).scalar() or 0
+
+    # 各状态计数
+    status_counts = {}
+    rows = db.query(DouyinLead.status, func.count(DouyinLead.id)).group_by(DouyinLead.status).all()
+    for status, count in rows:
+        status_counts[status] = count
+
+    assigned_count = status_counts.get("assigned", 0)
+    replied_count = status_counts.get("replied", 0)
+    timeout_count = status_counts.get("timeout", 0)
+    pending_count = status_counts.get("pending", 0)
+
+    # 各销售处理统计
+    staff_list = db.query(SalesStaff).filter(SalesStaff.status == "active").all()
+    staff_stats = []
+    for staff in staff_list:
+        total_assigned = db.query(func.count(DouyinLead.id)).filter(
+            DouyinLead.assigned_staff_id == staff.id
+        ).scalar() or 0
+
+        replied = db.query(func.count(DouyinLead.id)).filter(
+            DouyinLead.assigned_staff_id == staff.id,
+            DouyinLead.status == "replied",
+        ).scalar() or 0
+
+        timed_out = db.query(func.count(DouyinLead.id)).filter(
+            DouyinLead.assigned_staff_id == staff.id,
+            DouyinLead.status == "timeout",
+        ).scalar() or 0
+
+        rate = round(replied / total_assigned * 100, 1) if total_assigned > 0 else 0.0
+
+        staff_stats.append({
+            "staff_id": staff.id,
+            "staff_name": staff.name,
+            "total_assigned": total_assigned,
+            "replied_count": replied,
+            "timeout_count": timed_out,
+            "reply_rate": rate,
+        })
+
+    return {
+        "total_leads": total_leads,
+        "assigned_count": assigned_count,
+        "replied_count": replied_count,
+        "timeout_count": timeout_count,
+        "pending_count": pending_count,
+        "staff_stats": staff_stats,
+    }

@@ -1,529 +1,409 @@
-# Project Context
+# 05_PROJECT_CONTEXT.md
 
-> 本文件用于帮助 AI 理解当前项目。
+> 本文档是 AI Coding Agent 的项目上下文。
 >
-> 开发者应填写业务背景、系统设计、核心约束等信息。
+> 优先级低于阅读规范，高于执行规范、测试规范、输出规范。
 >
-> AI 在开始编码前必须优先阅读本文件。
->
-> 注意：
->
-> - 不要填写代码细节
-> - 不要填写实现细节
-> - 重点填写业务语义和设计原则
-> - AI 可以自己读代码，但无法自己理解业务背景
+> 任何 AI 开始任务前必须先阅读本文档。
 
 ------
 
-# 1. 项目简介
+## 1. 项目名称
 
-## 项目名称
+抖音线索销售微信回复检测系统
+
+## 2. 项目阶段
+
+MVP 验证阶段（已完成 MVP 闭环）
+
+## 3. 项目目标
+
+验证销售人员在接收到抖音分配线索后，是否在规定时间内通过微信进行了有效回复。
+
+核心流程：
 
 ```text
-<项目名称>
+抖音线索 → 分配销售 → 销售微信处理 → 系统检测是否有效回复 → 超时统计 → 报表统计
 ```
 
-例如：
+## 4. 项目定位
+
+本项目是一个**独立项目**，运行于 `E:\work\project\auto_wechat`。
+
+**不依赖**以下任何外部系统或模块：
+
+- 小猫AI员工
+- `core/*.pyd`
+- `wxauto.pyd`
+- 企业微信 DLL 注入
+- MCP 工具接口
+
+------
+
+## 5. 技术栈
+
+| 技术 | 用途 |
+|------|------|
+| Python 3.10+ | 运行环境 |
+| FastAPI + Uvicorn | Web 框架，端口 9000 |
+| SQLAlchemy 2.x | ORM |
+| SQLite | 本地数据库 `data/auto_wechat.db` |
+| Pydantic 2.x | 数据校验 |
+| threading | 定时任务调度（轻量后台线程） |
+
+------
+
+## 6. 当前 MVP 已完成
+
+以下功能均已实现且通过测试：
+
+- FastAPI 项目骨架（`app/main.py`）
+- SQLite 数据库 + ORM 模型（4 张表）
+- 销售人员管理（增删改查）
+- 抖音线索管理（创建、查询、分配）
+- 线索分配（手动分配 + 自动轮询分配）
+- 手动回复录入
+- 回复有效性分析（关键词 + 长度规则）
+- 超时检测（定时扫描 + 手动触发）
+- 汇总报表（全局统计 + 分销售统计）
+- 定时任务调度器（后台线程）
+- Demo 数据脚本
+- 端到端自动化测试
+
+------
+
+## 7. 实际项目结构
 
 ```text
-Homework Warning System
+auto_wechat/
+├── app/
+│   ├── __init__.py
+│   ├── main.py                 # FastAPI 入口
+│   ├── config.py               # 项目配置
+│   ├── database.py             # 数据库连接与会话管理
+│   ├── models.py               # ORM 模型（4 张表）
+│   ├── schemas.py              # Pydantic 请求/响应模型
+│   ├── routers/                # API 路由
+│   │   ├── __init__.py
+│   │   ├── staff.py            #   销售管理 API
+│   │   ├── leads.py            #   线索管理 API
+│   │   ├── replies.py          #   手动回复 API
+│   │   ├── checks.py           #   回复检测 API
+│   │   └── reports.py          #   报表统计 API
+│   ├── services/               # 业务逻辑层
+│   │   ├── __init__.py
+│   │   ├── staff_service.py    #   销售服务
+│   │   ├── lead_service.py     #   线索服务
+│   │   ├── assign_service.py   #   分配服务
+│   │   ├── reply_analyzer.py   #   回复有效性分析
+│   │   ├── reply_checker.py    #   回复检测服务
+│   │   └── report_service.py   #   报表服务
+│   └── scheduler/
+│       ├── __init__.py
+│       └── check_scheduler.py  # 定时检测调度器
+├── scripts/
+│   ├── init_db.py              # 初始化数据库
+│   ├── seed_demo_data.py       # 插入演示数据
+│   └── run_demo_flow.py        # 端到端演示脚本
+├── tests/
+│   └── test_demo_flow.py       # 端到端自动化测试
+├── data/
+│   └── auto_wechat.db          # SQLite 数据库（运行后生成）
+├── docs/
+│   ├── Phase0/
+│   │   └── 流程图.png
+│   └── ai/
+│       ├── 01_READING_RULES.md
+│       ├── 02_EXECUTION_RULES.md
+│       ├── 03_TESTING_RULES.md
+│       ├── 04_OUTPUT_RULES.md
+│       └── 05_PROJECT_CONTEXT.md
+├── requirements.txt
+├── .gitignore
+├── CLAUDE.md
+└── README.md
 ```
 
 ------
 
-## 项目目标
+## 8. 核心数据库表
 
-```text
-本项目解决什么问题？
+### 8.1 sales_staff（销售人员）
 
-为什么要开发它？
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | Integer PK | 自增主键 |
+| name | String(50) | 销售姓名 |
+| wechat_id | String(100) | 微信号 |
+| wechat_nickname | String(100) | 微信昵称 |
+| phone | String(20) | 手机号 |
+| status | String(20) | 状态：active / inactive |
+| created_at | DateTime | 创建时间 |
+| updated_at | DateTime | 更新时间 |
 
-最终想达到什么目标？
-```
+### 8.2 douyin_leads（抖音线索）
 
-例如：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | Integer PK | 自增主键 |
+| source | String(20) | 来源平台，默认 douyin |
+| lead_type | String(20) | 线索类型：lead / comment / chat |
+| customer_name | String(100) | 客户名称/昵称 |
+| customer_contact | String(100) | 联系方式 |
+| content | Text | 线索内容 |
+| source_url | String(500) | 来源链接 |
+| source_id | String(100) | 来源平台ID |
+| assigned_staff_id | Integer FK | 分配的销售ID |
+| assigned_at | DateTime | 分配时间 |
+| status | String(20) | 状态：pending / assigned / replied / timeout / closed |
+| raw_data | Text | 原始数据JSON |
+| created_at | DateTime | 创建时间 |
+| updated_at | DateTime | 更新时间 |
 
-```text
-通过 AI 自动评阅学生作业，
-降低教师批改成本，
-并自动生成学习预警。
-```
+### 8.3 reply_checks（回复检测记录）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | Integer PK | 自增主键 |
+| lead_id | Integer FK | 线索ID |
+| staff_id | Integer FK | 销售ID |
+| reply_deadline | DateTime | 要求回复截止时间 |
+| actual_reply_at | DateTime | 实际回复时间 |
+| reply_content | Text | 回复内容 |
+| is_effective | Integer | 是否有效回复：0 / 1 |
+| effectiveness_reason | String(200) | 判定原因 |
+| check_status | String(20) | 检测状态：pending / replied / timeout / invalid |
+| checked_at | DateTime | 检测时间 |
+| created_at | DateTime | 创建时间 |
+
+### 8.4 check_configs（检测配置）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | Integer PK | 自增主键 |
+| config_key | String(100) UNIQUE | 配置键 |
+| config_value | Text | 配置值 |
+| description | String(200) | 说明 |
+| updated_at | DateTime | 更新时间 |
+
+默认配置项：
+
+| 配置键 | 默认值 | 说明 |
+|--------|--------|------|
+| reply_deadline_minutes | 30 | 回复截止时间（分钟） |
+| check_interval_minutes | 5 | 定时检测间隔（分钟） |
+| effective_reply_min_length | 2 | 有效回复最小长度 |
+| effective_keywords | 收到,已添加,已联系,已通过,通过了,OK,好的,正在处理 | 有效关键词 |
+| invalid_keywords | 不知道,不清楚,等下再说,没空,无法处理 | 无效关键词 |
 
 ------
 
-## 当前阶段
+## 9. 业务状态机
 
-选择：
-
-```text
-MVP
-Beta
-Production
-Maintenance
-```
-
-当前：
+### 9.1 线索状态流转
 
 ```text
-<填写当前阶段>
-```
-
-------
-
-## 当前优先级
-
-选择：
-
-```text
-稳定性优先
-交付速度优先
-成本优先
-扩展性优先
-```
-
-当前：
-
-```text
-<填写当前优先级>
-```
-
-------
-
-# 2. 核心业务流程
-
-## 流程 1
-
-```text
-用户
-↓
-操作
-↓
-系统处理
-↓
-结果
+pending（待分配）
+    ↓ 分配销售
+assigned（已分配）
+    ↓ 有效回复           ↓ 超时
+replied（已回复）    timeout（超时未回复）
 ```
 
 说明：
 
+- **pending**：线索已创建，等待分配
+- **assigned**：已分配给销售，等待回复
+- **replied**：检测到有效回复
+- **timeout**：超过截止时间未回复
+
+### 9.2 检测记录状态流转
+
 ```text
-<补充说明>
+pending（等待回复）
+    ↓ 有效回复           ↓ 无效回复           ↓ 超时
+replied（已回复）   invalid（无效回复）   timeout（超时）
 ```
 
 ------
 
-## 流程 2
+## 10. 有效回复判定规则
+
+判定顺序：
+
+1. 回复内容为空 → **无效**（原因：回复内容为空）
+2. 命中无效关键词 → **无效**（原因：命中无效关键词: xxx）
+3. 命中有效关键词 且 长度 ≥ 配置值 → **有效**
+4. 命中有效关键词 但 长度 < 配置值 → **无效**
+5. 未命中任何关键词 且 长度 ≥ 配置值 → **有效**（原因：默认有效）
+6. 未命中任何关键词 且 长度 < 配置值 → **无效**
+
+### 10.1 有效关键词
 
 ```text
-用户
-↓
-操作
-↓
-系统处理
-↓
-结果
+收到、已添加、已联系、已通过、通过了、OK、好的、正在处理
 ```
 
-说明：
+### 10.2 无效关键词
 
 ```text
-<补充说明>
+不知道、不清楚、等下再说、没空、无法处理
 ```
+
+### 10.3 默认最小回复长度
+
+2 个字符
+
+> 以上规则均可通过 `check_configs` 表动态配置。
 
 ------
 
-## 流程 3
+## 11. API 接口清单
 
-```text
-用户
-↓
-操作
-↓
-系统处理
-↓
-结果
-```
-
-说明：
-
-```text
-<补充说明>
-```
-
-------
-
-# 3. 系统模块地图
-
-## 模块名称
-
-```text
-模块：
-<模块名称>
-
-职责：
-<负责什么>
-
-输入：
-<输入内容>
-
-输出：
-<输出内容>
-```
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/staff` | 创建销售人员 |
+| GET | `/staff` | 获取销售列表 |
+| GET | `/staff/{id}` | 获取单个销售 |
+| PUT | `/staff/{id}` | 更新销售信息 |
+| POST | `/leads` | 创建线索 |
+| GET | `/leads` | 获取线索列表 |
+| GET | `/leads/{id}` | 获取单条线索 |
+| POST | `/leads/{id}/assign` | 分配线索给销售 |
+| POST | `/replies/manual` | 手动录入回复 |
+| POST | `/checks/run` | 手动触发一次回复检测 |
+| GET | `/checks` | 查看检测记录 |
+| GET | `/reports/summary` | 汇总报表 |
 
 ------
 
-## 模块名称
+## 12. 调用链
+
+### 12.1 标准请求调用链
 
 ```text
-模块：
-<模块名称>
-
-职责：
-<负责什么>
-
-输入：
-<输入内容>
-
-输出：
-<输出内容>
+API（routers/）
+    ↓ Depends(get_db)
+Service（services/）
+    ↓ SQLAlchemy ORM
+Database（SQLite）
 ```
 
-------
-
-# 4. 核心业务对象
-
-## 对象
+### 12.2 线索分配调用链
 
 ```text
-名称：
-<对象名称>
-
-说明：
-<业务含义>
-
-主要字段：
-<列举关键字段>
-```
-
-示例：
-
-```text
-名称：
-Submission
-
-说明：
-学生提交记录
-
-主要字段：
-id
-student_id
-assignment_id
-status
-```
-
-------
-
-# 5. 业务语义映射
-
-> 本部分非常重要。
->
-> 用于告诉 AI：
->
-> 技术字段代表什么业务角色。
-
-------
-
-## 用户相关
-
-```text
-current_user
-=
-<业务含义>
-
-creator
-=
-<业务含义>
-
-owner
-=
-<业务含义>
-
-admin
-=
-<业务含义>
-```
-
-------
-
-## 数据相关
-
-```text
-status
-=
-<业务含义>
-
-result
-=
-<业务含义>
-
-receiver
-=
-<业务含义>
-```
-
-------
-
-# 6. 架构约束
-
-## 当前架构
-
-填写：
-
-```text
-API
-↓
-Service
-↓
-Repository
-↓
+POST /leads/{id}/assign
+    ↓
+assign_service.assign_lead()
+    ↓ 更新 douyin_leads 状态为 assigned
+    ↓ 创建 reply_checks 记录（pending）
+    ↓ 计算 reply_deadline
 Database
 ```
 
-或
+### 12.3 回复录入调用链
 
 ```text
-Controller
-↓
-Domain
-↓
-Persistence
+POST /replies/manual
+    ↓
+reply_checker.record_manual_reply()
+    ↓ 查找/创建 reply_checks 记录
+    ↓ reply_analyzer.analyze_reply() 判定有效性
+    ↓ 更新 reply_checks（is_effective, check_status）
+    ↓ 同步更新 douyin_leads 状态
+Database
+```
+
+### 12.4 超时检测调用链
+
+```text
+定时调度器（scheduler/check_scheduler.py）或 POST /checks/run
+    ↓
+reply_checker.run_checks()
+    ↓ 查询所有 pending 状态的 reply_checks
+    ↓ 检查 now > reply_deadline
+    ↓ 更新为 timeout
+    ↓ 同步更新 douyin_leads 状态
+Database
 ```
 
 ------
 
-## 架构规则
+## 13. 下一阶段开发方向
 
-```text
-允许：
+### 13.1 重点工作：微信 UI 图形自动化检测
 
-<填写>
+采用方案：**Windows UI Automation**
 
-禁止：
+不采用方案：
+- ~~读取微信数据库~~
+- ~~解密微信数据库~~
 
-<填写>
-```
+### 13.2 第一版范围
 
-示例：
+1. 人工打开微信 PC 客户端
+2. 人工进入目标客户聊天窗口
+3. 系统通过 UI Automation 读取当前聊天窗口最近消息
+4. 检测销售是否发送有效回复
+5. 同步更新 `reply_checks` 表
+6. 同步更新 `douyin_leads` 表状态
 
-```text
-允许：
+### 13.3 暂不实现
 
-API → Service → Repository
-
-禁止：
-
-API 直接访问数据库
-
-Repository 写业务逻辑
-```
-
-------
-
-# 7. 数据库约束
-
-## 数据库类型
-
-```text
-PostgreSQL
-MySQL
-SQLite
-MongoDB
-其他
-```
-
-当前：
-
-```text
-<填写>
-```
+- 自动搜索联系人
+- 自动切换会话
+- 自动发送消息
+- AI 自动回复
+- 企业微信支持
 
 ------
 
-## 数据规则
+## 14. 当前阶段不关注
 
-```text
-软删除字段：
+以下能力在当前阶段明确**不做**：
 
-<填写>
-
-唯一索引要求：
-
-<填写>
-
-迁移方式：
-
-<填写>
-```
-
-------
-
-# 8. 权限模型
-
-## 系统角色
-
-```text
-角色 1：
-<名称>
-
-职责：
-<说明>
-角色 2：
-<名称>
-
-职责：
-<说明>
-```
+- AI 自动回复
+- Agent
+- RAG
+- 自动发送消息
+- 微信数据库读取/解密
+- 企业微信 DLL 注入
+- 小猫AI员工集成
+- 权限系统
+- 多租户
+- 前端 UI
 
 ------
 
-## 权限规则
+## 15. 重要约束
 
-```text
-谁可以查看？
+任何后续开发必须遵守：
 
-谁可以修改？
-
-谁可以删除？
-
-谁可以审批？
-```
+1. **优先复用**现有 FastAPI、数据库、服务层代码
+2. **禁止推翻**现有 MVP 重构
+3. **禁止重新设计**数据库
+4. **禁止引入**复杂架构
+5. **遵循**先验证业务闭环，再接入真实微信，最后扩展 AI 能力
 
 ------
 
-# 9. 项目特殊规则
+## 16. 开发原则
 
-> AI 最需要阅读的部分。
-
-填写：
-
-```text
-本项目有哪些特殊要求？
-
-有哪些容易误解的业务规则？
-
-有哪些必须遵守的原则？
-```
-
-示例：
-
-```text
-所有 AI 输出必须落库
-
-所有评测结果必须支持人工复核
-
-教师邮箱预警默认开启
-
-学生不可查看其他学生数据
-```
+- 先做最小验证，不做大而全
+- 优先跑通一条线索的完整检测链路
+- 规则判断优先，AI 判断后置
+- 先保证可解释，再追求自动化程度
+- 所有外部软件交互都要封装，避免业务逻辑散落
+- 每一步都要保留日志
 
 ------
 
-# 10. 禁止触碰区域
+## 17. 禁止事项
 
-## 禁止修改模块
-
-```text
-authentication/
-
-payment/
-
-legacy/
-```
-
-如无：
-
-```text
-无
-```
-
-------
-
-## 高风险区域
-
-```text
-数据库结构
-
-权限系统
-
-部署配置
-
-生产环境变量
-```
-
-修改前是否需要确认：
-
-```text
-YES / NO
-```
-
-------
-
-# 11. 开发约束
-
-## 是否允许新增依赖
-
-```text
-YES / NO
-```
-
-------
-
-## 是否允许重构
-
-```text
-YES / NO
-```
-
-------
-
-## 是否允许数据库结构变更
-
-```text
-YES / NO
-```
-
-------
-
-## 是否允许接口协议变更
-
-```text
-YES / NO
-```
-
-------
-
-# 12. AI 阅读完成标准
-
-AI 阅读本文件后，必须能够回答：
-
-```text
-项目是干什么的？
-
-核心业务流程是什么？
-
-有哪些模块？
-
-关键业务对象是什么？
-
-权限模型是什么？
-
-哪些地方不能改？
-
-哪些修改需要确认？
-```
-
-如果无法回答：
-
-```text
-继续阅读
-禁止编码
-```
+- 禁止反编译 `.pyd` 文件
+- 禁止修改小猫AI员工安装目录
+- 禁止把 MVP 写成完整 CRM
+- 禁止一开始就接复杂大模型 Agent
+- 禁止没有证据就输出确定性结论
+- 禁止绕过微信/企业微信安全机制
+- 禁止做骚扰、群发、自动营销能力
