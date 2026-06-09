@@ -28,6 +28,7 @@ from app.wechat_ui.window_locator import (
     find_current_chat_title,
     find_message_list,
     find_chat_title_candidates,
+    activate_wechat_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -156,3 +157,22 @@ def debug_current_chat():
         "message_list_found": message_list_found,
         "input_box_found": input_box_found,
     }
+
+
+@router.post("/debug/activate-wechat-window")
+def debug_activate_wechat_window():
+    """
+    调试接口：将微信窗口激活置顶并移动到屏幕右上角。
+
+    用于人工调试和确认微信窗口状态。
+    调用 Win32 API（ctypes）：ShowWindow → SetWindowPos → SetForegroundWindow。
+    """
+    try:
+        result = activate_wechat_window()
+        return result
+    except Exception as e:
+        logger.error(f"激活微信窗口失败: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": str(e),
+        }

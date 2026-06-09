@@ -18,7 +18,7 @@
 
 已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4
 
-当前聚焦：P5-2A~P5-2D 已完成，下一步 P5-3 Lead Assignment UI Integration
+当前聚焦：P5-4 检测记录展示已完成，局域网访问已配置
 
 ## 3. 项目目标
 
@@ -143,6 +143,14 @@ LeadsManagement 页面状态：
 - 多次出现 baseUrl 弃用提示
 - 多次出现 composite 缺失提示
 - 已确认最终稳定配置
+
+验证结论（2026-06-09）：
+
+- VSCode 提示 `ignoreDeprecations: "6.0"` 可消除 baseUrl 弃用警告
+- 但项目 TypeScript 5.9.3 不支持 `"6.0"`，使用会导致 TS5103 构建失败
+- 正确值：`ignoreDeprecations: "5.0"`，构建通过
+- VSCode 中的弃用提示是语言服务版本差异导致，不影响构建
+- 升级 TS 7.x 时需重新评估路径别名方案
 
 后续开发禁止修改 TS 配置结构。
 
@@ -1037,3 +1045,71 @@ React 项目（`E:\work\project\react`）是最终交付界面。
 - 禁止没有证据就输出确定性结论
 - 禁止绕过微信/企业微信安全机制
 - 禁止做骚扰、群发、自动营销能力
+
+------
+
+## 27. 已知环境问题
+
+### React TypeScript 配置
+
+时间：2026-06-09
+
+现象：
+
+VSCode 提示：
+
+Option 'baseUrl' is deprecated.
+
+并建议：
+
+ignoreDeprecations = 6.0
+
+实际情况：
+
+项目 TypeScript 编译器不支持 6.0。
+
+正确配置：
+
+ignoreDeprecations = 5.0
+
+验证方式：
+
+npm run build
+
+如 build 成功则配置正确。
+
+禁止根据 VSCode 提示自动修改为 6.0。
+
+### React tsconfig.json 修改记录
+
+时间：2026-06-09
+
+文件：`E:\work\project\react\tsconfig.json`
+
+用户手动修改（非 AI 修改）：
+
+- 添加了 `ignoreDeprecations = 6.0`
+- 注：AI 不应修改此文件，保持用户手动配置
+
+### 局域网访问配置
+
+时间：2026-06-09
+
+后端启动：
+
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 9000 --reload
+```
+
+前端启动：
+
+```bash
+cp .env.lan .env.development   # 临时切换为局域网地址
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+局域网 IP：`192.168.110.113`
+
+CORS 已包含局域网地址（`app/main.py`）。
+
+注意：`.env.development` 已恢复为本地地址 `http://127.0.0.1:9000`。局域网访问需手动切换为 `.env.lan` 内容。

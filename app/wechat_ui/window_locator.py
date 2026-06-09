@@ -10,7 +10,9 @@
 """
 
 import ctypes
+import ctypes.wintypes
 import logging
+import time
 
 import comtypes
 import uiautomation as uia
@@ -356,3 +358,121 @@ def list_suspected_windows() -> list[dict]:
         logger.error(f"调试窗口列表获取失败: {e}")
 
     return results
+
+
+def activate_wechat_window(
+    win_width: int = 880,
+    win_height: int = 700,
+) -> dict:
+    """
+    将微信窗口激活置顶并移动到屏幕右上角。
+
+    用于人工调试和确认微信窗口状态。
+
+    Args:
+        win_width: 目标窗口宽度（像素），默认 880
+        win_height: 目标窗口高度（像素），默认 700
+
+    Returns:
+        {"success", "message", "hwnd", "target_rect", "actual_rect",
+         "work_area", "moved", "warning"}
+    """
+    window = find_wechat_window()
+    hwnd = window.NativeWindowHandle
+    if not hwnd:
+        return {
+            "success": False,
+            "message": "微信窗口已定位但无法获取窗口句柄",
+        }
+
+    user32 = ctypes.windll.user32
+
+    # 获取工作区（排除任务栏）
+    SPI_GETWORKAREA = 0x0030
+    work_rect = ctypes.wintypes.RECT()
+    user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(work_rect), 0)
+
+    work_area = {
+        "left": work_rect.left,
+        "top": work_rect.top,
+        "right": work_rect.right,
+        "bottom": work_rect.bottom,
+    }
+
+    # 计算右上角位置（基于工作区）
+    pos_x = work_rect.right - win_width
+    pos_y = work_rect.top
+
+    # 如果最小化或最大化，先恢复为普通窗口
+    SW_RESTORE = 9
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    time.sleep(0.3)
+
+    # 使用 MoveWindow 定位（比 SetWindowPos 更可靠）
+    user32.MoveWindow(hwnd, pos_x, pos_y, win_width, win_height, True)
+    time.sleep(0.2)
+
+    # 置顶（仅改变层级，不改变位置和大小）
+    HWND_TOPMOST = -1
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    SWP_SHOWWINDOW = 0x0040
+    user32.SetWindowPos(
+        hwnd, HWND_TOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
+
+    # 激活到前台
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.1)
+
+    # 取消置顶（但保持位置和前台）
+    HWND_NOTOPMOST = -2
+    user32.SetWindowPos(
+        hwnd, HWND_NOTOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
+
+    # 获取最终窗口位置
+    actual = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(actual))
+
+    target_rect = {
+        "left": pos_x, "top": pos_y,
+        "right": pos_x + win_width, "bottom": pos_y + win_height,
+    }
+    actual_rect = {
+        "left": actual.left, "top": actual.top,
+        "right": actual.right, "bottom": actual.bottom,
+    }
+
+    # 偏差检查（允许 50px 误差）
+    dx = abs(actual.left - pos_x)
+    dy = abs(actual.top - pos_y)
+    moved = dx < 50 and dy < 50
+    warning = None
+    if not moved:
+        warning = (
+            f"窗口移动偏差较大: 目标({pos_x},{pos_y}), "
+            f"实际({actual.left},{actual.top}), 偏差({dx},{dy})"
+        )
+        logger.warning(warning)
+
+    logger.info(
+        f"微信窗口已激活，HWND={hwnd}, "
+        f"目标=({pos_x},{pos_y}), 实际=({actual.left},{actual.top}), "
+        f"偏差=({dx},{dy}), moved={moved}"
+    )
+
+    return {
+        "success": True,
+        "message": "微信窗口已置顶并移动到右上角" if moved else "微信窗口已激活但移动可能有偏差",
+        "hwnd": hwnd,
+        "target_rect": target_rect,
+        "actual_rect": actual_rect,
+        "work_area": work_area,
+        "moved": moved,
+        "warning": warning,
+    }
