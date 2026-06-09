@@ -76,6 +76,7 @@ python -m pytest tests/ -v
 | POST | `/feedback/compose` | **生成反馈文本（主机微信 B → 数据源微信 A）** |
 | POST | `/feedback/send-current-chat` | **将反馈文本写入当前微信聊天窗口** |
 | GET | `/feedback/records` | 查询反馈发送记录 |
+| GET | `/feedback/debug/current-chat` | 调试：探测当前聊天窗口标题、候选控件、输入框状态 |
 | POST | `/checks/run` | 手动触发超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
@@ -230,6 +231,20 @@ curl http://127.0.0.1:9000/feedback/records
 - **`require_confirm=false`**：粘贴后自动回车发送，**高风险，建议仅在可信环境使用**
 - **`confirm_chat_title`**：校验当前聊天窗口标题是否匹配，不匹配则拒绝写入，防止发错窗口
 - **状态校验**：只有 `composed` 状态的记录才能发送，避免重复发送
+- **标题获取失败时**的行为：
+  - 传了 `confirm_chat_title` 但标题获取失败 → **拒绝写入**
+  - 未传 `confirm_chat_title` + `require_confirm=true` + 标题获取失败 → **允许粘贴**，但返回 warning 提醒人工确认窗口
+  - 未传 `confirm_chat_title` + `require_confirm=false` + 标题获取失败 → **拒绝自动发送**
+
+### 调试标题获取
+
+如果 `send-current-chat` 返回标题为 null，可用调试接口排查：
+
+```bash
+curl http://127.0.0.1:9000/feedback/debug/current-chat
+```
+
+返回 `title`（探测到的标题）、`candidate_titles`（所有候选控件）、`message_list_found`、`input_box_found`。
 
 ### 默认反馈模板
 

@@ -248,10 +248,11 @@ def send_feedback_current_chat(
     chat_title = find_current_chat_title(window)
     result["chat_title"] = chat_title
 
-    # --- 第 5 步：聊天标题校验 ---
+    # --- 第 5 步：聊天标题校验与发送策略 ---
     if confirm_chat_title:
+        # 传了 confirm_chat_title：必须校验
         if not chat_title:
-            warning = "无法获取当前聊天窗口标题，跳过写入以防误发"
+            warning = "无法获取当前聊天窗口标题，已传 confirm_chat_title，拒绝写入以防误发"
             _mark_failed(db, record, warning)
             result["warning"] = warning
             result["message"] = warning
@@ -266,6 +267,22 @@ def send_feedback_current_chat(
             result["warning"] = warning
             result["message"] = warning
             return result
+
+    else:
+        # 未传 confirm_chat_title
+        if not chat_title:
+            if not require_confirm:
+                # require_confirm=false + 标题未知 → 拒绝自动发送
+                warning = "无法获取当前聊天标题，禁止自动发送（require_confirm=false + 无标题校验）"
+                _mark_failed(db, record, warning)
+                result["warning"] = warning
+                result["message"] = warning
+                return result
+            # require_confirm=true + 标题未知 → 允许粘贴但加 warning
+            result["warning"] = (
+                "无法获取当前聊天标题，已在人工确认模式下写入，"
+                "请确认窗口正确后再手动发送"
+            )
 
     # --- 第 6 步：写入微信输入框 ---
     try:

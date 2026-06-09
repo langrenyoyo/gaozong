@@ -23,6 +23,12 @@ from app.schemas import (
     FeedbackRecordOut,
 )
 from app.services import feedback_service
+from app.wechat_ui.window_locator import (
+    find_wechat_window,
+    find_current_chat_title,
+    find_message_list,
+    find_chat_title_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +102,57 @@ def list_feedback_records(
         total=result["total"],
         records=records,
     )
+
+
+@router.get("/debug/current-chat")
+def debug_current_chat():
+    """
+    调试接口：返回当前微信聊天窗口的标题探测结果。
+
+    用于排查 confirm_chat_title 匹配失败或标题获取为 null 的问题。
+    返回探测到的标题、所有候选控件、消息列表和输入框状态。
+    """
+    try:
+        window = find_wechat_window()
+        wechat_found = True
+    except Exception as e:
+        return {
+            "success": False,
+            "wechat_found": False,
+            "error": str(e),
+            "title": None,
+            "candidate_titles": [],
+            "message_list_found": False,
+            "input_box_found": False,
+        }
+
+    # 获取标题
+    title = find_current_chat_title(window)
+
+    # 候选控件
+    candidates = find_chat_title_candidates(window)
+
+    # 消息列表
+    try:
+        find_message_list(window, timeout=2)
+        message_list_found = True
+    except Exception:
+        message_list_found = False
+
+    # 输入框
+    input_box_found = False
+    try:
+        from app.wechat_ui.input_writer import find_input_box
+        find_input_box(window)
+        input_box_found = True
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "wechat_found": wechat_found,
+        "title": title,
+        "candidate_titles": candidates[:20],
+        "message_list_found": message_list_found,
+        "input_box_found": input_box_found,
+    }

@@ -172,24 +172,135 @@ def find_wechat_window() -> uia.Control:
 def find_current_chat_title(window: uia.Control) -> str | None:
     """
     获取当前聊天窗口标题（联系人/群名）。
-    尽力而为，失败不阻塞流程。
+    多策略增强，尽力而为，失败不阻塞流程。
     """
+    # 策略1：顶部 PaneControl 直接子控件
     try:
-        # 微信聊天窗口标题通常在顶部的 PaneControl 中
         pane = window.PaneControl(searchDepth=5)
         if pane.Exists(maxSearchSeconds=1):
             children = pane.GetChildren()
             for child in children[:10]:
                 child_name = child.Name or ""
-                if (child_name
-                        and child_name not in ("微信", "Weixin", "WeChat", "")
-                        and len(child_name) > 0
-                        and len(child_name) < 100):
+                if _is_valid_chat_title(child_name):
+                    logger.debug(f"标题获取（策略1 PaneControl）: '{child_name}'")
                     return child_name
     except Exception as e:
-        logger.debug(f"获取聊天标题失败（非致命）: {e}")
+        logger.debug(f"策略1获取聊天标题失败: {e}")
+
+    # 策略2：遍历窗口顶层子控件，找聊天区域上方的文本
+    try:
+        win_rect = window.BoundingRectangle
+        win_mid_x = (win_rect.left + win_rect.right) / 2
+        # 标题区域在窗口顶部 15% 且位于右侧聊天区域（微信右侧约占 60% 宽度）
+        title_top = win_rect.top
+        title_bottom = win_rect.top + win_rect.height() * 0.15
+        chat_left = win_rect.left + win_rect.width() * 0.4
+
+        children = window.GetChildren()
+        for child in children:
+            child_name = child.Name or ""
+            if not _is_valid_chat_title(child_name):
+                continue
+            try:
+                r = child.BoundingRectangle
+                # 标题控件应在窗口顶部区域且在右侧聊天区域
+                if (r.top >= title_top and r.bottom <= title_bottom
+                        and r.left >= chat_left):
+                    logger.debug(f"标题获取（策略2 位置筛选）: '{child_name}'")
+                    return child_name
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"策略2获取聊天标题失败: {e}")
+
+    # 策略3：深度遍历，收集所有候选标题
+    try:
+        candidates = []
+        for ctrl, depth in window.WalkControl(maxDepth=8):
+            ctrl_name = ctrl.Name or ""
+            if not _is_valid_chat_title(ctrl_name):
+                continue
+            if depth > 5:
+                continue
+            try:
+                r = ctrl.BoundingRectangle
+                candidates.append({
+                    "name": ctrl_name,
+                    "depth": depth,
+                    "top": r.top,
+                    "left": r.left,
+                })
+            except Exception:
+                continue
+
+        if candidates:
+            # 优先选择深度浅且位于顶部的
+            candidates.sort(key=lambda c: (c["depth"], c["top"]))
+            best = candidates[0]
+            logger.debug(f"标题获取（策略3 深度遍历）: '{best['name']}' (depth={best['depth']})")
+            return best["name"]
+    except Exception as e:
+        logger.debug(f"策略3获取聊天标题失败: {e}")
 
     return None
+
+
+# 已知的非标题文本，用于过滤
+_NON_TITLE_NAMES = {
+    "微信", "Weixin", "WeChat", "微信（最小化）",
+    "消息", "通讯录", "收藏", "聊天文件", "朋友圈",
+    "搜一搜", "小程序", "设置",
+    "文件传输助手",  # 特殊：这是有效的聊天标题，不排除
+}
+
+# 时间格式的简单检测
+import re as _re
+_TIME_PATTERN = _re.compile(r"^\d{1,2}:\d{2}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|昨天|星期|周[一二三四五六日天]")
+
+
+def _is_valid_chat_title(name: str) -> bool:
+    """判断控件 Name 是否是有效的聊天标题"""
+    if not name or len(name) < 1 or len(name) > 100:
+        return False
+    # 排除微信自身按钮文案（但"文件传输助手"作为标题不应排除）
+    if name in ("微信", "Weixin", "WeChat", "消息", "通讯录",
+                "收藏", "聊天文件", "朋友圈", "搜一搜", "小程序",
+                "设置", "关闭", "最小化", "最大化"):
+        return False
+    # 排除纯时间文本
+    if _TIME_PATTERN.match(name) and len(name) <= 12:
+        return False
+    return True
+
+
+def find_chat_title_candidates(window: uia.Control) -> list[dict]:
+    """
+    调试用：收集所有可能的聊天标题候选控件。
+    供 /feedback/debug/current-chat 调用。
+    """
+    candidates = []
+    try:
+        for ctrl, depth in window.WalkControl(maxDepth=8):
+            ctrl_name = ctrl.Name or ""
+            if not ctrl_name or len(ctrl_name) > 100:
+                continue
+            try:
+                r = ctrl.BoundingRectangle
+                candidates.append({
+                    "name": ctrl_name[:80],
+                    "class_name": ctrl.ClassName or "",
+                    "control_type": ctrl.ControlTypeName,
+                    "depth": depth,
+                    "rect": {
+                        "left": r.left, "top": r.top,
+                        "right": r.right, "bottom": r.bottom,
+                    },
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return candidates
 
 
 def find_message_list(window: uia.Control, timeout: int = 3) -> uia.Control:

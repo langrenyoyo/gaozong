@@ -1071,3 +1071,160 @@ def test_feedback_send_success_auto_send():
     assert record.send_mode == "auto_send"
 
     db.close()
+
+
+# ========== P3-fix 发送策略修正测试 ==========
+
+
+def test_send_confirm_title_but_title_none_rejects():
+    """confirm_chat_title 有值但 title=None → 拒绝写入"""
+    from app.services.feedback_service import send_feedback_current_chat
+
+    db = _db()
+    record = _create_composed_record(db)
+
+    mock_window = MagicMock()
+
+    with patch("app.wechat_ui.window_locator.find_wechat_window", return_value=mock_window), \
+         patch("app.wechat_ui.window_locator.find_current_chat_title", return_value=None):
+
+        result = send_feedback_current_chat(
+            db,
+            record_id=record.id,
+            confirm_chat_title="文件传输助手",
+        )
+
+    assert result["success"] is False
+    assert result["warning"] is not None
+    assert "confirm_chat_title" in result["warning"]
+
+    # 记录应为 failed
+    db.refresh(record)
+    assert record.feedback_status == "failed"
+    db.close()
+
+
+def test_send_no_confirm_title_require_confirm_true_title_none_allows():
+    """confirm_chat_title 为空 + require_confirm=true + title=None → 允许粘贴，有 warning"""
+    from app.services.feedback_service import send_feedback_current_chat
+
+    db = _db()
+    record = _create_composed_record(db)
+
+    mock_window = MagicMock()
+    mock_write_result = {
+        "success": True,
+        "action": "pasted_only",
+        "message": "文本已粘贴到输入框",
+    }
+
+    with patch("app.wechat_ui.window_locator.find_wechat_window", return_value=mock_window), \
+         patch("app.wechat_ui.window_locator.find_current_chat_title", return_value=None), \
+         patch("app.wechat_ui.input_writer.write_text_to_input", return_value=mock_write_result):
+
+        result = send_feedback_current_chat(
+            db,
+            record_id=record.id,
+            require_confirm=True,
+            confirm_chat_title=None,
+        )
+
+    assert result["success"] is True
+    assert result["action"] == "pasted_only"
+    assert result["warning"] is not None
+    assert "人工确认模式" in result["warning"]
+
+    # 记录应为 sent
+    db.refresh(record)
+    assert record.feedback_status == "sent"
+    db.close()
+
+
+def test_send_no_confirm_title_require_confirm_false_title_none_rejects():
+    """confirm_chat_title 为空 + require_confirm=false + title=None → 拒绝自动发送"""
+    from app.services.feedback_service import send_feedback_current_chat
+
+    db = _db()
+    record = _create_composed_record(db)
+
+    mock_window = MagicMock()
+
+    with patch("app.wechat_ui.window_locator.find_wechat_window", return_value=mock_window), \
+         patch("app.wechat_ui.window_locator.find_current_chat_title", return_value=None):
+
+        result = send_feedback_current_chat(
+            db,
+            record_id=record.id,
+            require_confirm=False,
+            confirm_chat_title=None,
+        )
+
+    assert result["success"] is False
+    assert result["warning"] is not None
+    assert "禁止自动发送" in result["warning"]
+
+    # 记录应为 failed
+    db.refresh(record)
+    assert record.feedback_status == "failed"
+    db.close()
+
+
+def test_send_title_matches_confirm_allows():
+    """title 获取成功且与 confirm_chat_title 匹配 → 允许写入"""
+    from app.services.feedback_service import send_feedback_current_chat
+
+    db = _db()
+    record = _create_composed_record(db)
+
+    mock_window = MagicMock()
+    mock_write_result = {
+        "success": True,
+        "action": "pasted_only",
+        "message": "文本已粘贴到输入框",
+    }
+
+    with patch("app.wechat_ui.window_locator.find_wechat_window", return_value=mock_window), \
+         patch("app.wechat_ui.window_locator.find_current_chat_title", return_value="文件传输助手"), \
+         patch("app.wechat_ui.input_writer.write_text_to_input", return_value=mock_write_result):
+
+        result = send_feedback_current_chat(
+            db,
+            record_id=record.id,
+            require_confirm=True,
+            confirm_chat_title="文件传输助手",
+        )
+
+    assert result["success"] is True
+    assert result["warning"] is None
+    assert result["chat_title"] == "文件传输助手"
+
+    db.refresh(record)
+    assert record.feedback_status == "sent"
+    db.close()
+
+
+def test_send_title_mismatch_rejects():
+    """title 获取成功但不匹配 confirm_chat_title → 拒绝"""
+    from app.services.feedback_service import send_feedback_current_chat
+
+    db = _db()
+    record = _create_composed_record(db)
+
+    mock_window = MagicMock()
+
+    with patch("app.wechat_ui.window_locator.find_wechat_window", return_value=mock_window), \
+         patch("app.wechat_ui.window_locator.find_current_chat_title", return_value="张三"):
+
+        result = send_feedback_current_chat(
+            db,
+            record_id=record.id,
+            confirm_chat_title="数据源A",
+        )
+
+    assert result["success"] is False
+    assert result["warning"] is not None
+    assert "不匹配" in result["warning"]
+
+    db.refresh(record)
+    assert record.feedback_status == "failed"
+    db.close()
