@@ -96,9 +96,20 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 1. 定位微信窗口（标题 `Weixin`，类名 `mmui::MainWindow`）
 2. 查找消息列表（`ListControl Name='消息'`）
 3. 读取最近 N 条消息
-4. 通过头像位置判断发送方（右侧=self=销售，左侧=friend=客户）
-5. 只分析 `self` 消息，使用关键词 + 长度判断有效性
-6. 有效回复时更新 `reply_checks` 和 `douyin_leads` 状态
+4. 尝试通过头像位置判断发送方（右侧=self=销售，左侧=friend=客户）
+5. **优先分析 self 消息**；若 self 消息为空，**启用兜底模式**分析所有非 system 文本消息
+6. 使用关键词 + 长度判断有效性
+7. 有效回复时更新 `reply_checks` 和 `douyin_leads` 状态
+
+### 检测模式说明
+
+| 模式 | 说明 |
+|------|------|
+| `self_only` | 成功区分 self/friend，只分析 self 消息（精确模式） |
+| `fallback_current_window_text` | 无法区分发送方，基于业务前提分析所有非 system 文本消息（兜底模式） |
+
+兜底模式的前提：当前电脑登录的是销售微信，且已打开目标客户聊天窗口。
+在此前提下，窗口中的有效回复文本可作为销售已处理线索的 MVP 证据。
 
 ### ⚠️ 当前限制（必须了解）
 
@@ -111,6 +122,8 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 7. **微信 UI 结构可能随版本变化失效**
 8. 当前能力**只用于 MVP 验证**，非生产级别
 9. 依赖 `uiautomation` 库（Windows UI Automation 的 Python 封装）
+10. **当前微信版本无法通过 UI 控件区分 self/friend 发送方**，MVP 使用窗口文本兜底检测
+11. 兜底模式下，聊天窗口中**所有非 system 文本**都参与分析，**可能包含客户发送的内容**，仅限 MVP 场景使用
 
 ## 项目结构
 

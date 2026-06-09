@@ -3,11 +3,18 @@
 编排完整的检测流程：
 1. 定位微信窗口
 2. 读取当前聊天窗口消息
-3. 筛选销售本人消息
-4. 调用 reply_analyzer 判断有效性
-5. 更新 reply_checks 和 douyin_leads
+3. 筛选销售本人消息（sender=self）
+4. 若 self 消息为空 → 启用兜底模式：分析所有非 system 文本消息
+5. 调用 reply_analyzer 判断有效性
+6. 更新 reply_checks 和 douyin_leads
 
 核心前提：当前电脑登录的微信账号就是对应销售人员账号。
+
+检测模式：
+  - self_only：成功识别 self/friend，只分析 self 消息
+  - fallback_current_window_text：无法区分发送方，
+    基于业务前提（当前窗口=销售微信+目标客户聊天），
+    分析所有非 system 文本消息
 """
 
 import logging
@@ -20,7 +27,7 @@ from app.services.reply_analyzer import analyze_reply, get_config_value
 from app.wechat_ui.exceptions import WechatUIError
 from app.wechat_ui.window_locator import find_wechat_window, find_message_list, find_current_chat_title
 from app.wechat_ui.current_chat_reader import read_recent_messages
-from app.wechat_ui.reply_detector import find_self_messages, find_effective_reply
+from app.wechat_ui.reply_detector import find_self_messages, find_fallback_messages, find_effective_reply
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,7 @@ def detect_reply_from_wechat(
         "chat_title": None,
         "messages_read": 0,
         "self_messages_count": 0,
+        "detection_mode": None,
         "is_effective": 0,
         "effectiveness_reason": None,
         "matched_content": None,
@@ -88,17 +96,35 @@ def detect_reply_from_wechat(
         self_msgs = find_self_messages(messages)
         result["self_messages_count"] = len(self_msgs)
 
-        if not self_msgs:
+        # --- 第6步：确定分析消息集合和检测模式 ---
+        if self_msgs:
+            # 精确模式：只分析 self 消息
+            analyze_msgs = self_msgs
+            detection_mode = "self_only"
+            logger.info(f"精确模式: {len(self_msgs)} 条 self 消息")
+        else:
+            # 兜底模式：分析所有非 system 的文本消息
+            analyze_msgs = find_fallback_messages(messages)
+            detection_mode = "fallback_current_window_text"
+            logger.info(f"兜底模式: {len(analyze_msgs)} 条候选文本消息（共 {len(messages)} 条）")
+
+        result["detection_mode"] = detection_mode
+
+        if not analyze_msgs:
             result["success"] = True
-            result["message"] = (
-                f"已读取 {len(messages)} 条消息，"
-                f"未检测到销售本人发送的消息（共 {len(self_msgs)} 条 self 消息）"
-            )
-            # 不更新业务状态
+            if detection_mode == "fallback_current_window_text":
+                result["message"] = (
+                    f"未能区分发送方，当前窗口无可分析文本消息。"
+                    f"已读取 {len(messages)} 条消息，无候选文本。"
+                )
+            else:
+                result["message"] = (
+                    f"已读取 {len(messages)} 条消息，"
+                    f"未检测到销售本人发送的消息"
+                )
             return result
 
-        # --- 第6步：在 self 消息中寻找有效回复 ---
-        # 读取配置
+        # --- 第7步：在候选消息中寻找有效回复 ---
         effective_kw_str = get_config_value(db, "effective_keywords",
                                              "收到,已添加,已联系,已通过,通过了,OK,好的,正在处理")
         invalid_kw_str = get_config_value(db, "invalid_keywords",
@@ -113,7 +139,7 @@ def detect_reply_from_wechat(
         invalid_keywords = [k.strip() for k in invalid_kw_str.split(",") if k.strip()]
 
         is_effective, reason, matched_content = find_effective_reply(
-            self_msgs, effective_keywords, invalid_keywords, min_length,
+            analyze_msgs, effective_keywords, invalid_keywords, min_length,
         )
 
         result["is_effective"] = 1 if is_effective else 0
@@ -121,16 +147,30 @@ def detect_reply_from_wechat(
         result["matched_content"] = matched_content
 
         if is_effective:
-            # --- 第7步：检测到有效回复，更新业务状态 ---
+            # --- 第8步：检测到有效回复，更新业务状态 ---
             _update_check_as_replied(db, lead_id, staff_id, matched_content, reason)
             result["check_status"] = "replied"
             result["success"] = True
-            result["message"] = f"检测到有效回复: {reason}"
+
+            if detection_mode == "fallback_current_window_text":
+                result["message"] = (
+                    f"未能区分发送方，已使用当前窗口文本兜底检测；"
+                    f"检测到有效回复: {reason}"
+                )
+            else:
+                result["message"] = f"检测到有效回复: {reason}"
         else:
             # 未检测到有效回复，不更新业务状态
             result["check_status"] = "pending_check"
             result["success"] = True
-            result["message"] = f"已读取 {len(self_msgs)} 条销售消息，{reason}"
+
+            if detection_mode == "fallback_current_window_text":
+                result["message"] = (
+                    f"未能区分发送方，已使用当前窗口文本兜底检测；"
+                    f"{len(analyze_msgs)} 条候选文本中，{reason}"
+                )
+            else:
+                result["message"] = f"已读取 {len(self_msgs)} 条销售消息，{reason}"
 
         return result
 
