@@ -29,22 +29,44 @@ P4 Output Rules
 发生冲突时：
 
 Reading Rules
-
 >
-
 Project Context
-
 >
-
 Execution Rules
-
 >
-
 Testing Rules
-
 >
-
 Output Rules
+
+------
+
+# Current Project Status
+
+项目名称：主机微信线索分发与销售跟进检测系统
+
+当前阶段：P2 Completed
+
+当前聚焦：P2.5 Sender Identification Research（发送方精确识别专项实验）
+
+业务架构：
+
+```text
+数据源微信(A) → 主机微信(B) → 销售微信(C) → 跟进检测 → 反馈给 A
+```
+
+技术约束：
+
+```text
+禁止使用：
+  - 微信数据库解密
+  - DLL 注入
+  - 微信协议逆向
+
+优先使用：
+  - UI Automation
+  - 视觉识别
+  - OCR
+```
 
 ------
 
@@ -79,7 +101,6 @@ Output Rules
 开始任务后按顺序阅读：
 
 1. 
-
 docs/ai/01_READING_RULES.md
 
 1. 
@@ -172,6 +193,5 @@ AI 的首要职责是理解项目。
 编码只是执行。
 
 因此：
-
 Reading First.
 Coding Later.

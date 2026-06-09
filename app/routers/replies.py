@@ -278,3 +278,263 @@ def _inspect_message_control(child, mid_x: float, index: int, list_rect_dict: di
         "children": children_info,
         "sender_debug": sender_debug,
     }
+
+
+# ========== 实验性调试端点（不影响正式检测逻辑） ==========
+
+
+@router.get("/debug/raw-tree")
+def debug_raw_tree(max_messages: int = Query(5, ge=1, le=20)):
+    """
+    实验接口：UIA 深层控件树探测。
+
+    对最近消息进行 WalkControl / FindAll / ControlFromPoint 探测，
+    判断是否存在可用于区分 self/friend 的深层控件。
+    """
+    import uiautomation as uia
+
+    try:
+        window = find_wechat_window()
+        msg_list = find_message_list(window, timeout=5)
+        list_rect = msg_list.BoundingRectangle
+        mid_x = (list_rect.left + list_rect.right) / 2
+
+        children = msg_list.GetChildren()
+        total = len(children)
+        start_idx = max(0, total - max_messages)
+        recent = children[start_idx:]
+
+        messages = []
+        for i, child in enumerate(recent):
+            msg_info = _deep_inspect(child, mid_x, start_idx + i)
+            messages.append(msg_info)
+
+        return {
+            "success": True,
+            "total_messages": total,
+            "showing": len(recent),
+            "list_rect": _rect_to_dict(list_rect),
+            "chat_mid_x": mid_x,
+            "messages": messages,
+        }
+
+    except Exception as e:
+        logger.error(f"raw-tree 探测异常: {e}", exc_info=True)
+        return {"success": False, "error": str(e), "messages": []}
+
+
+def _deep_inspect(msg_control, mid_x: float, index: int) -> dict:
+    """
+    深层探测单个消息控件：WalkControl + FindAll + ControlFromPoint。
+    """
+    import uiautomation as uia
+
+    name = msg_control.Name or ""
+    class_name = msg_control.ClassName or ""
+
+    try:
+        rect = msg_control.BoundingRectangle
+        rect_dict = _rect_to_dict(rect)
+    except Exception:
+        rect_dict = None
+
+    # --- WalkControl 深层遍历 ---
+    walk_controls = []
+    walk_count = 0
+    try:
+        for ctrl, depth in msg_control.WalkControl(maxDepth=10):
+            walk_count += 1
+            if walk_count <= 30:
+                c_name = ctrl.Name or ""
+                c_class = ctrl.ClassName or ""
+                c_type = ctrl.ControlTypeName
+                try:
+                    c_rect = ctrl.BoundingRectangle
+                    c_rect_dict = _rect_to_dict(c_rect)
+                    c_center_x = (c_rect.left + c_rect.right) / 2
+                    c_side = "右" if c_center_x > mid_x else "左"
+                except Exception:
+                    c_rect_dict = None
+                    c_center_x = 0
+                    c_side = ""
+
+                walk_controls.append({
+                    "depth": depth,
+                    "type": c_type,
+                    "name": c_name[:80],
+                    "class_name": c_class[:80],
+                    "rect": c_rect_dict,
+                    "center_x": round(c_center_x, 1),
+                    "side": c_side,
+                })
+    except Exception:
+        pass
+
+    # --- FindAll 子孙数量 ---
+    findall_length = -1
+    try:
+        ptrs = msg_control.FindAll(return_pointer=True)
+        findall_length = ptrs.Length
+    except Exception:
+        pass
+
+    # --- ControlFromPoint 点采样 ---
+    point_samples = []
+    if rect_dict:
+        w = rect_dict["width"]
+        h = rect_dict["height"]
+        points = [
+            ("左侧", rect_dict["left"] + w // 4, rect_dict["top"] + h // 2),
+            ("中心", rect_dict["left"] + w // 2, rect_dict["top"] + h // 2),
+            ("右侧", rect_dict["left"] + 3 * w // 4, rect_dict["top"] + h // 2),
+        ]
+        for label_pt, px, py in points:
+            try:
+                hit = uia.ControlFromPoint(px, py)
+                hit_type = hit.ControlTypeName
+                hit_name = (hit.Name or "")[:80]
+                hit_class = (hit.ClassName or "")[:80]
+                try:
+                    hit_rect = _rect_to_dict(hit.BoundingRectangle)
+                except Exception:
+                    hit_rect = None
+                is_deeper = hit_type != "ListItemControl"
+                point_samples.append({
+                    "label": label_pt,
+                    "point": [px, py],
+                    "type": hit_type,
+                    "name": hit_name,
+                    "class_name": hit_class,
+                    "rect": hit_rect,
+                    "is_deeper": is_deeper,
+                })
+            except Exception as e:
+                point_samples.append({"label": label_pt, "point": [px, py], "error": str(e)})
+
+    return {
+        "index": index,
+        "name": name[:80],
+        "class_name": class_name[:80],
+        "rect": rect_dict,
+        "walk_count": walk_count,
+        "findall_length": findall_length,
+        "walk_controls": walk_controls,
+        "point_samples": point_samples,
+    }
+
+
+@router.post("/debug/sender-experiment")
+def debug_sender_experiment(data: dict):
+    """
+    实验接口：发送方识别方案实验。
+
+    传入已知的 self/friend 消息文本，尝试用不同方案判断发送方。
+
+    请求体：
+    {
+        "max_messages": 10,
+        "known_friend_text": "收到，已添加微信",
+        "known_self_text": "请回复收到"
+    }
+    """
+    import uiautomation as uia
+
+    max_messages = data.get("max_messages", 10)
+    known_friend = data.get("known_friend_text", "")
+    known_self = data.get("known_self_text", "")
+
+    try:
+        window = find_wechat_window()
+        msg_list = find_message_list(window, timeout=5)
+        list_rect = msg_list.BoundingRectangle
+        mid_x = (list_rect.left + list_rect.right) / 2
+
+        children = msg_list.GetChildren()
+        total = len(children)
+        start_idx = max(0, total - max_messages)
+        recent = children[start_idx:]
+
+        results = []
+        for i, child in enumerate(recent):
+            msg_name = child.Name or ""
+
+            friend_found_in_tree = False
+            self_found_in_tree = False
+            friend_position = None
+            self_position = None
+
+            # 在控件名中搜索已知文本
+            if known_friend and known_friend in msg_name:
+                friend_found_in_tree = True
+                try:
+                    r = child.BoundingRectangle
+                    center_x = (r.left + r.right) / 2
+                    friend_position = {
+                        "center_x": round(center_x, 1),
+                        "side": "右" if center_x > mid_x else "左",
+                        "relative": "right_of_mid" if center_x > mid_x else "left_of_mid",
+                    }
+                except Exception:
+                    pass
+
+            if known_self and known_self in msg_name:
+                self_found_in_tree = True
+                try:
+                    r = child.BoundingRectangle
+                    center_x = (r.left + r.right) / 2
+                    self_position = {
+                        "center_x": round(center_x, 1),
+                        "side": "右" if center_x > mid_x else "左",
+                        "relative": "right_of_mid" if center_x > mid_x else "left_of_mid",
+                    }
+                except Exception:
+                    pass
+
+            results.append({
+                "index": start_idx + i,
+                "name": msg_name[:80],
+                "friend_found_in_tree": friend_found_in_tree,
+                "self_found_in_tree": self_found_in_tree,
+                "friend_position": friend_position,
+                "self_position": self_position,
+            })
+
+        # 综合判断
+        recommendation = "cannot_determine"
+        friend_msg = [r for r in results if r["friend_found_in_tree"]]
+        self_msg = [r for r in results if r["self_found_in_tree"]]
+
+        analysis = {
+            "friend_text_searched": known_friend,
+            "self_text_searched": known_self,
+            "friend_found_count": len(friend_msg),
+            "self_found_count": len(self_msg),
+            "friend_is_left": all(
+                r["friend_position"]["side"] == "左"
+                for r in friend_msg if r.get("friend_position")
+            ) if friend_msg else False,
+            "self_is_right": all(
+                r["self_position"]["side"] == "右"
+                for r in self_msg if r.get("self_position")
+            ) if self_msg else False,
+        }
+
+        if analysis["friend_is_left"] and analysis["self_is_right"]:
+            recommendation = "screenshot_position"
+        elif len(friend_msg) > 0 or len(self_msg) > 0:
+            recommendation = "uia_name_search"
+        else:
+            recommendation = "cannot_determine"
+
+        return {
+            "success": True,
+            "list_rect": _rect_to_dict(list_rect),
+            "mid_x": round(mid_x, 1),
+            "analysis": analysis,
+            "recommendation": recommendation,
+            "messages": results,
+        }
+
+    except Exception as e:
+        logger.error(f"sender-experiment 异常: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}

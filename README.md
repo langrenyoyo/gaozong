@@ -69,6 +69,10 @@ python -m pytest tests/ -v
 | POST | `/leads/{id}/assign` | 分配线索给销售 |
 | POST | `/replies/manual` | 手动录入回复 |
 | POST | `/replies/current-wechat-detect` | **微信 UI 自动化检测当前聊天窗口回复** |
+| GET | `/replies/debug/windows` | 调试：列出所有疑似微信窗口 |
+| GET | `/replies/debug/messages` | 调试：返回消息原始控件结构 |
+| GET | `/replies/debug/raw-tree` | P2.5 实验：UIA 深层控件树探测 |
+| POST | `/replies/debug/sender-experiment` | P2.5 实验：发送方识别方案验证 |
 | POST | `/checks/run` | 手动触发超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
@@ -160,9 +164,21 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 7. **微信 UI 结构可能随版本变化失效**
 8. 当前能力**只用于 MVP 验证**，非生产级别
 9. 依赖 `uiautomation` 库（Windows UI Automation 的 Python 封装）
-10. **当前微信版本无法通过 UI 控件区分 self/friend 发送方**，MVP 使用窗口文本兜底检测
+10. **当前微信版本无法通过 UI 控件区分 self/friend 发送方**（P2.5 实验证实：`ListItemControl` child_count=0，无头像/气泡子控件），MVP 使用窗口文本兜底检测
 11. 兜底模式下，聊天窗口中**所有非 system 文本**都参与分析，**可能包含主机或客户发送的内容**，仅限 MVP 场景使用
 12. `confirmed_required` 和 `risk_level` 为检测响应字段，**暂不落库**，无法通过报表永久统计
+
+### P2.5 发送方精确识别实验结论
+
+| 方向 | 结论 | 说明 |
+|------|------|------|
+| UIA 深层控件树 | ❌ 不可行 | `GetChildren()` / `WalkControl()` / `FindAll()` 均无子孙控件 |
+| ControlFromPoint | ❌ 不可行 | 左/中/右采样均命中 ListItemControl 自身 |
+| 截图 + 像素分析 | ⚠️ 后续预研 | 理论可行，但不进入当前主线 |
+
+**正式方案**：保持 `fallback_current_window_text` + `strict_mode` 作为 MVP 检测方案。
+
+详细实验报告见 [docs/experiment_report_sender_identification.md](docs/experiment_report_sender_identification.md)。
 
 ## 项目结构
 
@@ -199,7 +215,9 @@ auto_wechat/
 ├── scripts/
 │   ├── init_db.py                   # 初始化数据库
 │   ├── seed_demo_data.py            # 插入演示数据
-│   └── run_demo_flow.py             # 端到端演示
+│   ├── run_demo_flow.py             # 端到端演示
+│   ├── debug_wechat_raw_tree.py     # P2.5: UIA 深层控件树探测
+│   └── debug_wechat_screenshot.py   # P2.5: 截图 + 像素分析
 ├── tests/
 │   └── test_demo_flow.py            # 自动化测试
 ├── data/
