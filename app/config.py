@@ -27,3 +27,9 @@ DEFAULT_CONFIGS = {
     "feedback_template": "线索已跟进：\n客户：{customer_name}\n销售：{staff_name}\n回复：{reply_content}\n时间：{actual_reply_at}",
     "feedback_require_confirm": "true",
 }
+
+# ---------- douyinAPI 上游对接配置 ----------
+# 仅本地开发使用，不连接生产环境
+DOUYIN_API_BASE_URL = os.getenv("DOUYIN_API_BASE_URL", "http://127.0.0.1:8081")
+DOUYIN_API_TIMEOUT_SECONDS = int(os.getenv("DOUYIN_API_TIMEOUT_SECONDS", "10"))
+DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))

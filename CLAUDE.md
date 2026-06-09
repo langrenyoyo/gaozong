@@ -154,6 +154,109 @@ GET http://douyinapi-host:8081/leads/export
 
 ------
 
+# System Architecture (2026-06)
+
+当前系统由三个独立项目组成，各有明确职责边界：
+
+```text
+抖音平台
+    ↓ Webhook
+douyinAPI（上游数据源，端口 8081）
+    ↓ HTTP API
+auto_wechat（中间业务执行层，端口 9000）
+    ↓ UI Automation
+主机微信 B
+    ↓ 微信消息
+销售微信 C
+    ↓ 回复检测
+主机微信 B → 反馈给 douyinAPI
+    ↓
+React UI（客户运营后台前端原型，纯 Mock）
+```
+
+## douyinAPI
+
+路径：`E:\work\project\douyinAPI`
+
+负责：
+
+- 抖音 Webhook 接收
+- 抖音私信会话管理
+- 线索沉淀与存储
+- 抖音授权管理
+
+不负责：
+
+- 销售分配
+- 微信自动化
+- 回复检测
+- 主机微信反馈
+
+## auto_wechat
+
+路径：`E:\work\project\auto_wechat`
+
+负责：
+
+- 上游线索同步（从 douyinAPI 拉取）
+- 销售分配
+- 回复检测
+- 超时检测
+- 主机微信反馈
+- 微信 UI 自动化
+
+## React UI
+
+路径：`E:\work\project\react`
+
+负责：
+
+- 客户运营后台展示
+- 线索管理界面
+- 销售管理界面
+- 微信助手界面
+- AI 剪辑界面
+- 商户管理界面
+
+当前状态：
+
+- 纯前端原型
+- 无 API
+- 所有数据均为 Mock
+- 用于产品演示
+
+------
+
+# Development Strategy
+
+当前阶段：P4
+
+目标：douyinAPI → auto_wechat 线索同步
+
+原则：
+
+1. HTTP API 对接
+2. 不共享数据库
+3. 不直读 SQLite
+4. 不修改 douyinAPI
+5. 本地测试优先
+
+------
+
+# Frontend Strategy
+
+重要结论：
+
+React 项目（`E:\work\project\react`）是最终交付界面。
+
+不要新建第二套前端。
+
+未来开发方式：
+
+React 页面逐步替换 Mock 数据，接入 auto_wechat 和 douyinAPI 真实接口。
+
+------
+
 # Mandatory Workflow
 
 任何任务必须遵循：

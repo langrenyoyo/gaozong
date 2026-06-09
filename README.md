@@ -80,6 +80,7 @@ python -m pytest tests/ -v
 | POST | `/checks/run` | 手动触发超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
+| POST | `/integrations/douyin/sync-leads` | **P4：从 douyinAPI 拉取线索并同步（支持 dry_run 预览）** |
 
 ## 微信 UI 自动化检测
 
@@ -258,6 +259,75 @@ curl http://127.0.0.1:9000/feedback/debug/current-chat
 
 > 模板可通过 `check_configs` 表的 `feedback_template` 配置动态修改。
 
+## douyinAPI 线索同步（P4：上游线索对接）
+
+### 使用方式
+
+```bash
+# 第一步：预览（dry_run=true，不写库）
+curl -X POST http://127.0.0.1:9000/integrations/douyin/sync-leads \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": true, "limit": 50, "lead_status": "pending"}'
+
+# 第二步：确认后执行写库
+curl -X POST http://127.0.0.1:9000/integrations/douyin/sync-leads \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": false, "limit": 50, "lead_status": "pending"}'
+```
+
+### 请求参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `dry_run` | bool | `true` | 预览模式（不写库）；设为 `false` 执行写库 |
+| `limit` | int | 50 | 拉取数量上限（1-200） |
+| `lead_status` | string | `"pending"` | 过滤线索状态 |
+| `start_time` | int | null | 起始时间（毫秒时间戳） |
+| `auto_assign` | bool | `false` | 自动分配（**P4-3 已支持**，仅新建线索触发） |
+
+### 同步规则
+
+| 场景 | 条件 | 动作 |
+|------|------|------|
+| 新建 | 本地不存在该 `source_id` | 创建 `DouyinLead`（status=pending） |
+| 更新 | 本地存在且 `status=pending` | 更新 `customer_name`/`content`/`customer_contact`/`lead_type`/`raw_data` |
+| 跳过 | 本地存在且 `status≠pending`（assigned/replied/timeout/closed） | 不覆盖 |
+
+> **安全约束**：update 时不会修改 `id`、`source`、`source_id`、`assigned_staff_id`、`assigned_at`、`status`。
+
+### 自动分配规则（auto_assign=true）
+
+| 条件 | 行为 |
+|------|------|
+| 新建线索（create） | 自动调用 `assign_service.auto_assign_next()` 分配给当前负载最低的活跃销售 |
+| 已存在 pending（update） | 不触发自动分配 |
+| 已存在非 pending（skip） | 不触发自动分配 |
+| 无活跃销售 | 线索保持 `pending`，reason 标记 `no_active_staff` |
+| 分配异常 | 线索保持 `pending`，reason 标记 `assign_failed`，不影响其他线索 |
+| dry_run=true | 不执行分配，reason 标记 `dry_run 未执行自动分配` |
+
+### 字段映射
+
+| douyinAPI 字段 | auto_wechat 字段 | 说明 |
+|----------------|-----------------|------|
+| `open_id` | `source_id` | 抖音用户唯一标识 |
+| `display_name` | `customer_name` | 空值用"未命名客户" |
+| `last_interaction_record` | `content` | 空值用空字符串 |
+| `phone` | `customer_contact` | 可为 null |
+| `lead_type` | `lead_type` | 空值用"私信" |
+| 固定 `"douyin"` | `source` | 来源平台 |
+
+### 前置条件
+
+douyinAPI 开发容器需先启动：
+
+```bash
+cd E:\work\project\douyinAPI
+docker compose -f docker-compose.dev.yml --env-file .env.dev up -d --build
+```
+
+详见 [douyinAPI/README_DEV.md](../douyinAPI/README_DEV.md)。
+
 ## 项目结构
 
 ```
@@ -273,14 +343,18 @@ auto_wechat/
 │   │   ├── leads.py                 #   线索管理
 │   │   ├── replies.py               #   回复管理（手动 + 微信UI检测）
 │   │   ├── feedback.py              #   反馈管理（P3：主机→数据源）
+│   │   ├── integrations.py          #   外部系统集成（P4：douyinAPI 同步）
 │   │   ├── checks.py                #   超时检测
 │   │   └── reports.py               #   报表统计
+│   ├── integrations/                # 外部系统集成
+│   │   └── douyin_api_client.py     #   douyinAPI HTTP 客户端（只读）
 │   ├── services/                    # 业务逻辑
 │   │   ├── staff_service.py         #   销售服务
 │   │   ├── lead_service.py          #   线索服务
 │   │   ├── assign_service.py        #   分配服务
 │   │   ├── reply_analyzer.py        #   回复有效性分析
 │   │   ├── reply_checker.py         #   回复检测（手动 + 超时）
+│   │   ├── douyin_sync_service.py   #   P4 douyinAPI 线索同步服务
 │   │   ├── wechat_ui_reply_service.py # 微信UI检测编排
 │   │   ├── feedback_service.py        #   反馈文本生成+发送服务
 │   │   └── report_service.py        #   报表服务
@@ -300,7 +374,8 @@ auto_wechat/
 │   ├── debug_wechat_raw_tree.py     # P2.5: UIA 深层控件树探测
 │   └── debug_wechat_screenshot.py   # P2.5: 截图 + 像素分析
 ├── tests/
-│   └── test_demo_flow.py            # 自动化测试
+│   ├── test_demo_flow.py            # 端到端自动化测试
+│   └── test_douyin_sync.py          # P4 douyinAPI 同步测试
 ├── data/
 │   └── auto_wechat.db               # SQLite 数据库（运行后生成）
 ├── requirements.txt

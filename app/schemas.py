@@ -209,3 +209,42 @@ class FeedbackRecordsResponse(BaseModel):
     """反馈记录列表响应"""
     total: int = 0
     records: list[FeedbackRecordOut] = []
+
+
+# ========== P4-1：douyinAPI 线索同步（dry_run 预览） ==========
+
+
+class DouyinSyncRequest(BaseModel):
+    """douyinAPI 线索同步请求"""
+    dry_run: bool = Field(True, description="预览模式，不写库（默认 true）")
+    limit: int = Field(50, ge=1, le=200, description="拉取数量上限")
+    lead_status: str = Field("pending", description="过滤线索状态")
+    start_time: Optional[int] = Field(None, description="起始时间（毫秒时间戳）")
+    auto_assign: bool = Field(False, description="是否自动分配（仅对新建线索生效，P4-3 已支持）")
+
+
+class DouyinSyncItem(BaseModel):
+    """单条线索映射结果"""
+    source_id: Optional[str] = Field(None, description="来源平台 ID（open_id）")
+    customer_name: Optional[str] = Field(None, description="客户名称")
+    content: Optional[str] = Field(None, description="线索内容")
+    source: Optional[str] = Field(None, description="来源平台")
+    lead_type: Optional[str] = Field(None, description="线索类型")
+    customer_contact: Optional[str] = Field(None, description="联系方式")
+    raw_data: Optional[dict] = Field(None, description="原始数据")
+    action: Optional[str] = Field(None, description="预判动作: create / update / skip")
+    reason: Optional[str] = Field(None, description="动作原因说明")
+
+
+class DouyinSyncResponse(BaseModel):
+    """douyinAPI 线索同步响应"""
+    success: bool = False
+    message: str = ""
+    fetched: int = Field(0, description="从上游拉取的线索数")
+    mapped: int = Field(0, description="映射后的线索数")
+    created: int = Field(0, description="新建数（dry_run 时为 0）")
+    updated: int = Field(0, description="更新数（dry_run 时为 0）")
+    skipped: int = Field(0, description="跳过数")
+    assigned: int = Field(0, description="自动分配数（P4-1 为 0）")
+    dry_run: bool = Field(True, description="是否 dry_run 模式")
+    items: list[DouyinSyncItem] = []
