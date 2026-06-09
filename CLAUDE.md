@@ -44,9 +44,21 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P3 Completed（反馈发送模块已完成）
+当前阶段：P5 React UI Integration
 
-当前聚焦：P4 上游线索对接（douyinAPI → auto_wechat）
+已完成：
+- P0 项目初始化、数据库设计
+- P1 线索入库、销售分配、回复检测
+- P2 微信 UI 自动化检测
+- P2.5 发送方识别实验（结论：保留兜底模式，截图/OCR 作为后续预研方向）
+- P3 反馈发送（主机微信 B → 数据源 A）
+- P4 douyinAPI 线索同步与自动分配
+- P5-2A auto_wechat CORS 配置（允许 5173 跨域）
+- P5-2B React API 基础层（axios 客户端 + 类型定义 + 5 个 API 模块）
+- P5-2C LeadsManagement 只读接入真实 API（线索列表 + 销售下拉 + 统计卡片）
+- P5-2D LeadsManagement 增加 douyinAPI 测试环境同步按钮（dry_run 预览 → 二次确认 → 写库）
+
+下一步：P5-3 Lead Assignment UI Integration
 
 业务架构：
 
@@ -62,6 +74,16 @@ auto_wechat（副系统，端口 9000）
 销售微信 C
     ↓ 回复检测
 主机微信 B → 反馈给数据源 A
+```
+
+前端架构：
+
+```text
+React UI（端口 5173）
+    ↓ axios API
+auto_wechat（端口 9000）
+    ↓ HTTP API
+douyinAPI 测试环境（端口 8081）
 ```
 
 auto_wechat 的职责：
@@ -171,7 +193,7 @@ auto_wechat（中间业务执行层，端口 9000）
     ↓ 回复检测
 主机微信 B → 反馈给 douyinAPI
     ↓
-React UI（客户运营后台前端原型，纯 Mock）
+React UI（客户运营后台，端口 5173）
 ```
 
 ## douyinAPI
@@ -218,20 +240,22 @@ React UI（客户运营后台前端原型，纯 Mock）
 - AI 剪辑界面
 - 商户管理界面
 
-当前状态：
+当前状态（2026-06-09 更新）：
 
-- 纯前端原型
-- 无 API
-- 所有数据均为 Mock
-- 用于产品演示
+- LeadsManagement 页面已接入真实 API（线索列表、统计卡片、销售下拉）
+- 已集成 douyinAPI 测试环境同步按钮（dry_run 预览 + 二次确认写库）
+- API 基础层已完成（`src/api/`：client.ts、types.ts、leads.ts、staff.ts、reports.ts、integrations.ts）
+- 环境变量已配置（`.env.development`：`VITE_AUTO_WECHAT_API_BASE_URL=http://127.0.0.1:9000`）
+- 其余页面仍为 Mock 数据
+- 正在逐步替换 Mock 数据，接入真实 API
 
 ------
 
 # Development Strategy
 
-当前阶段：P4
+当前阶段：P5 React UI Integration
 
-目标：douyinAPI → auto_wechat 线索同步
+目标：React UI 逐步替换 Mock 数据，接入 auto_wechat 真实接口
 
 原则：
 
@@ -240,6 +264,26 @@ React UI（客户运营后台前端原型，纯 Mock）
 3. 不直读 SQLite
 4. 不修改 douyinAPI
 5. 本地测试优先
+
+## React UI 集成进度
+
+已完成：
+
+- P5-2A：auto_wechat CORS 配置
+- P5-2B：React API 基础层（axios 客户端 + 类型定义 + 5 个 API 模块）
+- P5-2C：LeadsManagement 只读接入真实 API
+- P5-2D：LeadsManagement 增加 douyinAPI 测试环境同步按钮
+
+下一步：
+
+- P5-3：Lead Assignment UI Integration（线索分配 UI）
+
+待规划：
+
+- P5-4：Report Dashboard（报表看板）
+- P5-5：Check Records（检测记录）
+- P5-6：Lead Detail Enhancement（线索详情增强）
+- P5-7：Chat Integration（对话跟进集成）
 
 ------
 
@@ -251,9 +295,109 @@ React 项目（`E:\work\project\react`）是最终交付界面。
 
 不要新建第二套前端。
 
-未来开发方式：
+开发方式：
 
 React 页面逐步替换 Mock 数据，接入 auto_wechat 和 douyinAPI 真实接口。
+
+当前进展：
+
+LeadsManagement 页面已完成真实 API 接入，不再使用 Mock 数据。
+
+API 层架构：
+
+```text
+src/api/client.ts        — axios 实例（baseURL 从环境变量读取）
+src/api/types.ts         — TypeScript 类型定义（与 auto_wechat schemas 对齐）
+src/api/leads.ts         — 线索 API（GET /leads, GET /leads/{id}）
+src/api/staff.ts         — 销售 API（GET /staff）
+src/api/reports.ts       — 报表 API（GET /reports/summary）
+src/api/integrations.ts  — 同步 API（POST /integrations/douyin/sync-leads）
+```
+
+------
+
+# React TypeScript 配置约束
+
+React 项目（`E:\work\project\react`）使用 TypeScript 5.9 + Vite 项目模板。
+
+以下约束经 2026-06-09 确认为最终稳定配置，禁止后续开发修改。
+
+### Constraint 1 — ignoreDeprecations
+
+所有三个 TS 配置文件必须保留：
+
+```json
+{
+  "ignoreDeprecations": "5.0"
+}
+```
+
+禁止移除。移除后会出现 `baseUrl` 弃用提示。
+
+### Constraint 2 — composite
+
+tsconfig.json 使用 project references：
+
+```json
+{
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+```
+
+因此：
+
+tsconfig.app.json 必须包含：
+
+```json
+{
+  "composite": true
+}
+```
+
+tsconfig.node.json 必须包含：
+
+```json
+{
+  "composite": true
+}
+```
+
+否则 VSCode 会提示：`Referenced project must have setting "composite": true`
+
+### Constraint 3 — emitDeclarationOnly
+
+不要使用 `noEmit: true` 与 `composite` 组合。
+
+当前项目必须使用：
+
+```json
+{
+  "emitDeclarationOnly": true
+}
+```
+
+避免：`Referenced project may not disable emit`
+
+### Development Rule
+
+未来任何 React 项目开发任务，涉及以下文件：
+
+- tsconfig.json
+- tsconfig.app.json
+- tsconfig.node.json
+
+修改前必须检查：
+
+1. ignoreDeprecations 是否保留为 5.0
+2. composite 是否保留为 true
+3. emitDeclarationOnly 是否保留
+4. @ 路径别名是否正常
+5. vite.config.ts 中 alias 是否正常
+
+禁止自动升级或重构 TS 配置。
 
 ------
 

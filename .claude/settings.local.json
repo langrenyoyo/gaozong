@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//e/work/project/小猫AI员工/data/workspace/**)"
+      "Read(//e/work/project/小猫AI员工/data/workspace/**)",
+      "Bash(npm run *)"
     ]
   }
 }

@@ -27,12 +27,14 @@ def create_app() -> FastAPI:
         description="实现 抖音线索→分配销售→录入回复→检测有效性→超时判断→报表统计 的 MVP 闭环",
     )
 
-    # 开发环境 CORS：仅允许 React 开发服务器跨域访问
+    # 开发环境 CORS：允许本机和局域网 React 开发服务器跨域访问
+    # 注意：局域网地址仅用于临时开发测试，上线前需移除
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "http://127.0.0.1:5173",
             "http://localhost:5173",
+            "http://192.168.110.113:5173",
         ],
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
