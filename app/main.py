@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app.routers import staff, leads, replies, checks, reports, feedback, integrations
@@ -24,6 +25,17 @@ def create_app() -> FastAPI:
         title="抖音线索销售微信回复检测系统 MVP",
         version="0.1.0",
         description="实现 抖音线索→分配销售→录入回复→检测有效性→超时判断→报表统计 的 MVP 闭环",
+    )
+
+    # 开发环境 CORS：仅允许 React 开发服务器跨域访问
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
     )
 
     # 注册路由
