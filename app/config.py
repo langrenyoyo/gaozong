@@ -24,4 +24,6 @@ DEFAULT_CONFIGS = {
     "effective_keywords": "收到,已添加,已联系,已通过,通过了,OK,好的,正在处理",
     "invalid_keywords": "不知道,不清楚,等下再说,没空,无法处理",
     "expected_reply_text": "收到，已添加微信|收到，已添加|已添加微信",
+    "feedback_template": "线索已跟进：\n客户：{customer_name}\n销售：{staff_name}\n回复：{reply_content}\n时间：{actual_reply_at}",
+    "feedback_require_confirm": "true",
 }

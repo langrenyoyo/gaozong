@@ -141,3 +141,71 @@ class WechatDetectResponse(BaseModel):
     effectiveness_reason: Optional[str] = Field(None, description="判定原因")
     matched_content: Optional[str] = Field(None, description="匹配到的有效回复内容")
     check_status: str = Field("pending_check", description="检测状态")
+
+
+# ========== 反馈模块（P3：主机微信 B → 数据源微信 A） ==========
+
+
+class FeedbackComposeRequest(BaseModel):
+    """反馈文本生成请求"""
+    lead_id: int = Field(..., description="线索 ID")
+    dry_run: bool = Field(True, description="只生成文本，不入库、不写微信（默认 true）")
+    require_confirm: bool = Field(True, description="写入输入框后不自动回车（默认 true）")
+
+
+class FeedbackComposeResponse(BaseModel):
+    """反馈文本生成响应"""
+    success: bool = False
+    message: str = ""
+    lead_id: Optional[int] = Field(None, description="线索 ID")
+    lead_status: Optional[str] = Field(None, description="线索当前状态")
+    staff_name: Optional[str] = Field(None, description="销售姓名")
+    customer_name: Optional[str] = Field(None, description="客户名称")
+    reply_content: Optional[str] = Field(None, description="销售回复内容")
+    actual_reply_at: Optional[datetime] = Field(None, description="实际回复时间")
+    feedback_text: Optional[str] = Field(None, description="生成的反馈文本")
+    dry_run: bool = Field(True, description="是否 dry_run 模式")
+    record_id: Optional[int] = Field(None, description="反馈记录 ID（dry_run 时为 null）")
+    feedback_status: Optional[str] = Field(None, description="记录状态（dry_run 时为 null）")
+
+
+class FeedbackSendRequest(BaseModel):
+    """反馈文本发送请求"""
+    record_id: int = Field(..., description="反馈记录 ID")
+    require_confirm: bool = Field(True, description="写入后不自动回车（默认 true）")
+    confirm_chat_title: Optional[str] = Field(None, description="预期聊天窗口标题，不匹配则拒绝写入")
+
+
+class FeedbackSendResponse(BaseModel):
+    """反馈文本发送响应"""
+    success: bool = False
+    message: str = ""
+    record_id: Optional[int] = Field(None, description="反馈记录 ID")
+    feedback_text: Optional[str] = Field(None, description="写入的反馈文本")
+    chat_title: Optional[str] = Field(None, description="当前聊天窗口标题")
+    require_confirm: bool = Field(True, description="是否需要人工确认回车")
+    action: Optional[str] = Field(None, description="实际动作: pasted_only / pasted_and_sent")
+    warning: Optional[str] = Field(None, description="风险提示")
+
+
+class FeedbackRecordOut(BaseModel):
+    """反馈记录输出"""
+    id: int
+    lead_id: int
+    staff_id: int
+    check_id: Optional[int] = None
+    feedback_text: Optional[str] = None
+    feedback_status: str
+    send_mode: Optional[str] = None
+    chat_title: Optional[str] = None
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackRecordsResponse(BaseModel):
+    """反馈记录列表响应"""
+    total: int = 0
+    records: list[FeedbackRecordOut] = []

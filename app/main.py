@@ -5,7 +5,7 @@ import logging
 from fastapi import FastAPI
 
 from app.database import engine, Base
-from app.routers import staff, leads, replies, checks, reports
+from app.routers import staff, leads, replies, checks, reports, feedback
 from app.scheduler.check_scheduler import scheduler
 
 # 配置日志
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(replies.router)
     app.include_router(checks.router)
     app.include_router(reports.router)
+    app.include_router(feedback.router)
 
     @app.on_event("startup")
     def on_startup():

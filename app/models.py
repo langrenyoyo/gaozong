@@ -80,3 +80,26 @@ class CheckConfig(Base):
     config_value = Column(Text, nullable=False)
     description = Column(String(200))
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class FeedbackRecord(Base):
+    """反馈记录表 — 主机微信 B 向数据源微信 A 反馈检测结果"""
+    __tablename__ = "feedback_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    lead_id = Column(Integer, ForeignKey("douyin_leads.id"), nullable=False, comment="线索ID")
+    staff_id = Column(Integer, ForeignKey("sales_staff.id"), nullable=False, comment="销售ID")
+    check_id = Column(Integer, ForeignKey("reply_checks.id"), comment="关联的检测记录ID，可为空")
+    feedback_text = Column(Text, comment="实际生成/准备发送给数据源微信 A 的反馈文本")
+    feedback_status = Column(String(20), default="composed",
+                             comment="状态: pending/composed/sent/failed/skipped")
+    send_mode = Column(String(20), comment="发送模式: dry_run/require_confirm/auto_send")
+    chat_title = Column(String(100), comment="发送时当前微信聊天窗口标题")
+    error_message = Column(String(500), comment="失败原因")
+    sent_at = Column(DateTime, comment="实际发送时间")
+    created_at = Column(DateTime, default=datetime.now)
+
+    # 关联
+    lead = relationship("DouyinLead")
+    staff = relationship("SalesStaff")
+    check = relationship("ReplyCheck")

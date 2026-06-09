@@ -73,6 +73,9 @@ python -m pytest tests/ -v
 | GET | `/replies/debug/messages` | 调试：返回消息原始控件结构 |
 | GET | `/replies/debug/raw-tree` | P2.5 实验：UIA 深层控件树探测 |
 | POST | `/replies/debug/sender-experiment` | P2.5 实验：发送方识别方案验证 |
+| POST | `/feedback/compose` | **生成反馈文本（主机微信 B → 数据源微信 A）** |
+| POST | `/feedback/send-current-chat` | **将反馈文本写入当前微信聊天窗口** |
+| GET | `/feedback/records` | 查询反馈发送记录 |
 | POST | `/checks/run` | 手动触发超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
@@ -180,6 +183,66 @@ curl -X POST http://127.0.0.1:9000/replies/current-wechat-detect \
 
 详细实验报告见 [docs/experiment_report_sender_identification.md](docs/experiment_report_sender_identification.md)。
 
+## 反馈发送（P3：主机微信 B → 数据源微信 A）
+
+### 使用方式
+
+```bash
+# 第一步：生成反馈文本（dry_run 预览）
+curl -X POST http://127.0.0.1:9000/feedback/compose \
+  -H "Content-Type: application/json" \
+  -d '{"lead_id": 1, "dry_run": true}'
+
+# 第二步：确认后生成并入库
+curl -X POST http://127.0.0.1:9000/feedback/compose \
+  -H "Content-Type: application/json" \
+  -d '{"lead_id": 1, "dry_run": false, "require_confirm": true}'
+
+# 第三步：写入当前微信聊天窗口（require_confirm=true 只粘贴不发送）
+curl -X POST http://127.0.0.1:9000/feedback/send-current-chat \
+  -H "Content-Type: application/json" \
+  -d '{"record_id": 1, "require_confirm": true, "confirm_chat_title": "数据源A"}'
+
+# 查询反馈记录
+curl http://127.0.0.1:9000/feedback/records
+```
+
+### 操作步骤
+
+1. 确认销售已有效回复（线索状态为 `replied`）
+2. 人工打开微信中**数据源微信 A** 的聊天窗口
+3. 调用 `/feedback/compose` 生成反馈文本
+4. 确认文本内容无误后，调用 `/feedback/send-current-chat` 写入输入框
+5. `require_confirm=true`（默认）：文本粘贴到输入框，人工目视确认后手动回车发送
+6. `require_confirm=false`：粘贴后自动回车发送（**高风险**）
+
+### send-current-chat 参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `record_id` | int | 是 | 反馈记录 ID（由 compose 返回） |
+| `require_confirm` | bool | 否 | 只粘贴不回车（默认 true） |
+| `confirm_chat_title` | string | 否 | 预期聊天窗口标题，不匹配则拒绝写入（防误发） |
+
+### 安全机制
+
+- **`require_confirm=true`（默认）**：文本只粘贴到输入框，**不自动回车**，需人工确认后手动发送
+- **`require_confirm=false`**：粘贴后自动回车发送，**高风险，建议仅在可信环境使用**
+- **`confirm_chat_title`**：校验当前聊天窗口标题是否匹配，不匹配则拒绝写入，防止发错窗口
+- **状态校验**：只有 `composed` 状态的记录才能发送，避免重复发送
+
+### 默认反馈模板
+
+```text
+线索已跟进：
+客户：{customer_name}
+销售：{staff_name}
+回复：{reply_content}
+时间：{actual_reply_at}
+```
+
+> 模板可通过 `check_configs` 表的 `feedback_template` 配置动态修改。
+
 ## 项目结构
 
 ```
@@ -188,12 +251,13 @@ auto_wechat/
 │   ├── main.py                      # FastAPI 入口
 │   ├── config.py                    # 配置
 │   ├── database.py                  # 数据库连接
-│   ├── models.py                    # ORM 模型（4张表）
+│   ├── models.py                    # ORM 模型（5张表）
 │   ├── schemas.py                   # Pydantic 模型
 │   ├── routers/                     # API 路由
 │   │   ├── staff.py                 #   销售管理
 │   │   ├── leads.py                 #   线索管理
 │   │   ├── replies.py               #   回复管理（手动 + 微信UI检测）
+│   │   ├── feedback.py              #   反馈管理（P3：主机→数据源）
 │   │   ├── checks.py                #   超时检测
 │   │   └── reports.py               #   报表统计
 │   ├── services/                    # 业务逻辑
@@ -203,13 +267,15 @@ auto_wechat/
 │   │   ├── reply_analyzer.py        #   回复有效性分析
 │   │   ├── reply_checker.py         #   回复检测（手动 + 超时）
 │   │   ├── wechat_ui_reply_service.py # 微信UI检测编排
+│   │   ├── feedback_service.py        #   反馈文本生成+发送服务
 │   │   └── report_service.py        #   报表服务
 │   ├── wechat_ui/                   # 微信 UI 自动化（与业务解耦）
 │   │   ├── exceptions.py            #   UI 异常定义
 │   │   ├── window_locator.py        #   微信窗口定位
 │   │   ├── current_chat_reader.py   #   当前聊天消息读取
 │   │   ├── message_parser.py        #   消息解析（发送方+内容）
-│   │   └── reply_detector.py        #   销售有效回复检测
+│   │   ├── reply_detector.py        #   销售有效回复检测
+│   │   └── input_writer.py          #   P3: 微信输入框写入
 │   └── scheduler/
 │       └── check_scheduler.py       # 定时超时检测调度器
 ├── scripts/
@@ -233,6 +299,7 @@ auto_wechat/
 - **douyin_leads** — 抖音线索（来源、内容、分配状态）
 - **reply_checks** — 回复检测记录（截止时间、回复内容、有效性判定）
 - **check_configs** — 检测配置（回复时限、关键词等）
+- **feedback_records** — 反馈发送记录（P3：主机微信 B 向数据源微信 A 的反馈，可追溯）
 
 ## 业务规则
 
