@@ -18,6 +18,7 @@ from app.integrations.douyin_api_client import fetch_leads, DouyinApiError
 from app.models import DouyinLead
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem
 from app.services import assign_service
+from app.services.notification_service import auto_notify_assigned_lead
 
 logger = logging.getLogger("douyin_sync_service")
 
@@ -133,6 +134,23 @@ def _try_auto_assign(db: Session, lead_id: int) -> tuple[bool, str]:
         return False, "assign_failed"
 
 
+def _try_auto_notify(db: Session, lead_id: int) -> dict:
+    """尝试对已分配线索自动通知销售
+
+    P8-3：包装 notification_service.auto_notify_assigned_lead，
+    捕获异常以避免同步流程因通知失败而中断。
+
+    Returns:
+        {"success": bool, "message": str}
+    """
+    try:
+        result = auto_notify_assigned_lead(db, lead_id)
+        return result
+    except Exception as exc:
+        logger.error("auto_notify 异常: lead_id=%d, %s", lead_id, exc, exc_info=True)
+        return {"success": False, "message": f"通知异常: {exc}"}
+
+
 def preview_sync_leads(
     db: Session,
     request: DouyinSyncRequest,
@@ -164,7 +182,7 @@ def preview_sync_leads(
 
     # 逐条处理
     sync_items: list[DouyinSyncItem] = []
-    counts = {"created": 0, "updated": 0, "skipped": 0, "assigned": 0}
+    counts = {"created": 0, "updated": 0, "skipped": 0, "assigned": 0, "notified": 0}
 
     for raw_item in raw_items:
         mapped = _map_lead_item(raw_item)
@@ -187,6 +205,15 @@ def preview_sync_leads(
                     if assign_ok:
                         counts["assigned"] += 1
                         reason += f"，{assign_tag}"
+
+                        # P8-3：auto_notify — 分配成功后自动搜索销售微信并发送通知
+                        if request.auto_notify:
+                            notify_result = _try_auto_notify(db, lead.id)
+                            if notify_result["success"]:
+                                counts["notified"] += 1
+                                reason += "，已通知销售"
+                            else:
+                                reason += f"，通知失败({notify_result.get('message', '未知')})"
                     else:
                         reason += f"，{assign_tag}"
 
@@ -232,17 +259,21 @@ def preview_sync_leads(
         msg = f"同步完成，新建 {counts['created']} 条，更新 {counts['updated']} 条，跳过 {counts['skipped']} 条"
         if request.auto_assign:
             msg += f"，自动分配 {counts['assigned']} 条"
+        if request.auto_notify and counts["notified"] > 0:
+            msg += f"，自动通知 {counts['notified']} 条"
 
     logger.info(
-        "同步完成 dry_run=%s auto_assign=%s fetched=%d mapped=%d create=%d update=%d skip=%d assigned=%d",
+        "同步完成 dry_run=%s auto_assign=%s auto_notify=%s fetched=%d mapped=%d create=%d update=%d skip=%d assigned=%d notified=%d",
         request.dry_run,
         request.auto_assign,
+        request.auto_notify,
         fetched,
         len(sync_items),
         counts["created"],
         counts["updated"],
         counts["skipped"],
         counts["assigned"],
+        counts["notified"],
     )
 
     return DouyinSyncResponse(
@@ -254,6 +285,7 @@ def preview_sync_leads(
         updated=counts["updated"] if not request.dry_run else 0,
         skipped=counts["skipped"],
         assigned=counts["assigned"] if not request.dry_run else 0,
+        notified=counts["notified"] if not request.dry_run else 0,
         dry_run=request.dry_run,
         items=sync_items,
     )

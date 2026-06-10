@@ -227,6 +227,13 @@ def send_feedback_current_chat(
 
     result["feedback_text"] = record.feedback_text
 
+    # --- 紧急停止检查 ---
+    from app.services.automation_control import is_automation_allowed, BLOCKED_MESSAGE
+    if not is_automation_allowed():
+        result["message"] = BLOCKED_MESSAGE
+        logger.warning("反馈发送被紧急停止拦截: record_id=%d", record_id)
+        return result
+
     # --- 第 2 步：验证状态 ---
     if record.feedback_status != "composed":
         result["message"] = (

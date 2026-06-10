@@ -14,11 +14,13 @@
 
 ## 2. 项目阶段
 
-**P5 React UI Integration（进行中）**
+**P8 Demo Hardening / P0 Risk Fixes（进行中）**
 
-已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4
+已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4 → P5 → P6 → P7 → P8 主要功能
 
-当前聚焦：P5-4 检测记录展示已完成，局域网访问已配置
+当前聚焦：P0-2 微信自动化稳定化
+
+P8 主体功能已完成，正在处理演示稳定性和产品化验证风险。
 
 ## 3. 项目目标
 
@@ -51,8 +53,8 @@ React UI（客户运营后台，端口 5173）
 | 系统 | 定位 | 路径 | 当前状态 |
 |------|------|------|----------|
 | douyinAPI | 上游数据源 | `E:\work\project\douyinAPI` | 已部署，接收抖音私信 |
-| auto_wechat | 中间业务执行层 | `E:\work\project\auto_wechat` | P4 完成，P5 进行中 |
-| React UI | 客户运营后台 | `E:\work\project\react` | LeadsManagement 已接入真实 API，其余页面仍为 Mock |
+| auto_wechat | 中间业务执行层 | `E:\work\project\auto_wechat` | P8 主要功能已完成，P0 稳定化进行中 |
+| React UI | 客户运营后台 | `E:\work\project\react` | 线索管理已接入真实 API，分配/检测/局域网已完成 |
 
 ------
 
@@ -194,7 +196,9 @@ auto_wechat 从 douyinAPI 拉取线索（P4 已完成）
     ↓
 auto_wechat 线索入库 + 自动分配（P4 已完成）
     ↓
-主机微信 B 通知销售 C
+主机微信 B 搜索销售昵称，打开销售聊天窗口（P7 目标）
+    ↓
+主机微信 B 自动发送线索通知给销售 C（P7 目标）
     ↓
 销售人员 C 在指定时间内给主机微信 B 回复确认消息
     ↓
@@ -207,6 +211,38 @@ auto_wechat 线索入库 + 自动分配（P4 已完成）
 检测结果入库
     ↓
 主机微信 B 向数据源微信 A 反馈检测结果
+```
+
+### 8.1 当前完整业务闭环
+
+P8 已验证闭环：
+
+```text
+douyinAPI 测试线索生成
+    ↓
+React 自动同步派单
+    ↓
+auto_wechat 同步入库
+    ↓
+auto_wechat 自动分配销售
+    ↓
+auto_wechat 搜索 sales_staff.wechat_nickname
+    ↓
+主机微信发送线索通知
+    ↓
+lead_notifications 记录 sent
+    ↓
+设置 wechat_active_check_id
+    ↓
+销售回复"收到，已添加微信"
+    ↓
+wechat_auto_detect_scheduler 自动检测
+    ↓
+reply_checks.check_status=replied
+    ↓
+douyin_leads.status=replied
+    ↓
+React 显示"已跟进"
 ```
 
 ------
@@ -273,20 +309,30 @@ auto_wechat 线索入库 + 自动分配（P4 已完成）
 - P5-2C LeadsManagement 只读接入：线索列表 + 销售下拉 + 统计卡片 均从真实 API 拉取
 - P5-2D 同步按钮：dry_run 预览 → 二次确认 → 写库 → 刷新（详见下方 P5 章节）
 - 端到端自动化测试（66 个用例）
+- P5-3 线索分配 UI 集成（Lead Assignment）
+- P5-4 检测记录展示（Check Records）
+- P5-5 微信状态检测与局域网访问
+- P6 微信回复检测闭环：主机微信窗口识别、置顶/移动、消息读取、关键词命中、reply_check 入库、自动检测目标 wechat_active_check_id、wechat_auto_detect_scheduler 每 10 秒自动检测
+- P7 销售派单 Demo：微信联系人搜索（contact_searcher.py）、自动打开销售聊天窗口、自动发送线索通知、lead_notifications 记录、发送后设置自动检测目标、销售回复后自动检测
+- P7-BUG-1 自触发误判修复：通知模板去除关键词、发送后静默期、exclude_text_list 排除系统通知文本
+- P7-STOP-1 紧急停止机制：/automation/status、/automation/emergency-stop、/automation/resume、6 个自动化入口 guard、前端停止按钮
+- P8-1 WechatAgent 添加销售配置接入 POST /staff
+- P8-2 douyinAPI 开发测试线索自动生成器（/dev/test-leads/start/stop/status）
+- P8-3 React 自动同步派单 + 后端 auto_notify
+- P8-4 Alt+Q 全局紧急停止（hotkey_listener.py + RegisterHotKey）+ 桌面自动化状态浮层（desktop_overlay.py）
+- P8-5 微信固定左侧布局（activate_wechat_window(position="left")）
+- P0-1 局域网访问修复（React dev:lan + CORS + 防火墙）
 
 ### 11.2 未完成 □
 
 - 数据源微信 A 自动发送线索给主机微信 B
 - 数据源微信 A 自动接收反馈
 - 线索结构化解析（从微信消息文本中提取线索字段）
-- 主机微信自动切换会话（从销售 C 切换到销售 D）
-- 销售聊天窗口自动定位（自动找到对应销售的聊天窗口）
 - 发送方精确识别（P2.5 结论：当前微信版本 UIA 不可行，保持兜底模式，截图/OCR 作为后续预研方向）
-- P5-3 线索分配 UI 集成（Lead Assignment）
-- P5-4 报表看板（Report Dashboard）
-- P5-5 检测记录（Check Records）
-- P5-6 线索详情增强（Lead Detail Enhancement）
-- P5-7 对话跟进集成（Chat Integration）
+- P0-2 微信自动化稳定化（搜索框/输入框定位、鼠标干扰降低）
+- P0-3 多目标检测队列（wechat_active_check_id 升级为多目标）
+- 跨机器 / Windows VM 运行验证
+- Agent 产品化架构设计
 
 ------
 
@@ -335,7 +381,7 @@ auto_wechat 线索入库 + 自动分配（P4 已完成）
 - douyinAPI → auto_wechat 拉取 → 入库 → 自动分配 → reply_check 创建 → 完整链路验证通过
 - 66 个自动化测试全部通过
 
-### P5：React UI 接入真实 API（进行中）
+### P5：React UI 接入真实 API（已完成 ✅）
 
 目标：
 
@@ -390,24 +436,350 @@ LeadsManagement 新增「同步 douyinAPI 测试环境线索」按钮：
 - 不自动分配（autoAssign=false）
 - dry_run=false 必须二次确认
 
-#### P5-3 Lead Assignment UI Integration（下一步）
+#### P5-3 Lead Assignment UI Integration ✅
 
-目标：把 LeadsManagement 中 disabled 的「重新分配」功能接入 `POST /leads/{id}/assign`
+- 「重新分配」功能接入 `POST /leads/{id}/assign`
+- 使用已有 active staff 列表（`fetchStaffList("active")`）
+- 分配弹窗选择销售，调用接口
+- 成功后刷新线索列表和统计
 
-预计内容：
+#### P5-4 检测记录展示 ✅
 
-1. 使用已有 active staff 列表（`fetchStaffList("active")`）
-2. 打开分配弹窗，选择销售
-3. 调用 `POST /leads/{id}/assign` 分配线索
-4. 成功后刷新线索列表和统计
-5. 失败时 toast/error 提示
+- 检测记录列表接入真实 API
+- 微信状态检测功能
+- 局域网访问配置
 
-#### P5-4~P5-7 待规划
+#### P5-5 微信状态检测与局域网访问 ✅
 
-- P5-4：Report Dashboard（报表看板）
-- P5-5：Check Records（检测记录）
-- P5-6：Lead Detail Enhancement（线索详情增强）
-- P5-7：Chat Integration（对话跟进集成）
+- 微信窗口状态检测 API
+- 局域网访问配置（Vite 允许外部 IP）
+
+### P6：微信回复检测闭环（已完成 ✅）
+
+目标：实现从微信消息读取到自动检测销售回复的完整闭环。
+
+#### P6-1 主机微信窗口识别 ✅
+
+- 微信窗口定位（多策略：窗口标题、类名、控件树）
+- 窗口置顶/移动（activate_wechat_window）
+
+#### P6-2 当前微信窗口消息读取 ✅
+
+- 读取当前聊天窗口最近消息
+- 消息解析（发送方识别、内容提取）
+
+#### P6-3 关键词命中检测 ✅
+
+- 命中"收到，已添加微信"等关键词
+- reply_check 入库
+- lead.status 更新为 replied
+- 前端显示"已跟进"
+
+#### P6-4 自动检测目标 ✅
+
+- wechat_active_check_id：设置当前自动检测目标
+- wechat_auto_detect_scheduler：每 10 秒自动检测
+- 命中关键词后自动更新状态
+
+### P7：Sales Dispatch Demo（已完成 ✅）
+
+目标：补齐"通知销售"环节，实现完整业务闭环。
+
+P7 目标闭环：
+
+```text
+douyinAPI → auto_wechat sync → assign staff
+    → open sales WeChat chat by nickname
+    → send lead notification
+    → sales replies
+    → auto detect reply
+    → mark lead as replied
+    → React shows 已跟进
+```
+
+#### P7-0 参考软件探索 ✅
+
+##### 小猫AI员工探索结论
+
+- PyInstaller + Cython .pyd
+- wxauto 核心 .pyd 不可读
+- 可读部分显示其发送机制本质是剪贴板 + Ctrl+V + Enter
+- 消息读取使用 UIAutomation 消息列表解析
+- 有任务调度数据库，但不是销售线索分配业务
+- 当前微信版本存在 wxauto 不兼容问题
+- 不建议直接复用 wxauto / DLL / wecom 注入方案
+- 可参考任务调度、状态记录、UIAutomation 思路
+
+##### ai-bot-pc 探索结论
+
+- Electron 38 + Vue 3 + TypeScript
+- 本地只是瘦客户端
+- 业务逻辑在服务端
+- 本地无微信自动化能力
+- 无任务分发、无销售/线索概念、无本地数据库
+- 对 P7 设计不产生改变
+
+结论：auto_wechat 继续使用 uiautomation + input_writer 方案。
+
+#### P7-1 微信联系人搜索 ✅
+
+- contact_searcher.py
+- `open_chat_by_nickname(nickname)`
+- 通过微信搜索框输入 sales_staff.wechat_nickname
+- 点击第一个搜索结果
+- 返回 chat_title 和结果
+
+#### P7-2 线索通知发送 ✅
+
+- lead_notifications 表记录
+- 生成通知文本
+- 调用 input_writer 写入微信输入框
+- Demo 允许 auto_send=true
+- 保留 require_confirm 降级方案
+
+#### P7-3 同步/分配后自动通知 ✅
+
+- sync auto_assign 成功后 auto_notify=true
+- notification_service.auto_notify_assigned_lead
+- send-pending-assigned 接口
+- 通知失败不回滚线索入库和分配
+
+#### P7-4 发送后自动监听回复 ✅
+
+- 发送成功后设置 wechat_active_check_id
+- wechat_auto_detect_scheduler 自动检测
+- 命中关键词后状态变 replied
+- React 显示已跟进
+
+#### P7-BUG-1 自触发误判修复 ✅
+
+- 通知模板去除关键词
+- 发送后静默期
+- exclude_text_list 排除系统通知文本
+
+#### P7-STOP-1 紧急停止机制 ✅
+
+- `GET /automation/status` — 查询自动化运行状态
+- `POST /automation/emergency-stop` — 紧急停止所有自动化
+- `POST /automation/resume` — 恢复自动化
+- 6 个自动化入口 guard 检查
+- 前端停止按钮
+
+#### P7 风险
+
+1. 自动搜索销售昵称可能匹配错误联系人
+2. 自动发送可能误发
+3. 微信 UI 变化会导致搜索失败
+4. 当前 Demo 可使用 auto_send，但生产默认应 require_confirm=true
+5. 若搜索失败，必须降级为当前窗口发送
+6. 任何通知发送都不能代表已跟进，只有销售回复命中关键词后才算已跟进
+7. 发送动作必须有记录，不能静默执行
+
+#### 微信窗口布局策略
+
+微信窗口默认应移动到左侧。
+
+原因：React 右侧详情区域包含核心按钮（设为自动检测目标、检测微信回复、发送线索给销售），微信放右侧会遮挡操作按钮。
+
+推荐工作台布局：
+
+```text
+微信窗口（左侧）  |  React 后台（右侧）
+```
+
+当前 activate_wechat_window 已支持窗口移动。后续默认应从右上角改为左侧布局。
+
+未来可设计：
+
+```json
+POST /feedback/debug/activate-wechat-window
+{
+  "position": "left" | "right",
+  "width": 880,
+  "height": 700
+}
+```
+
+Demo 可先默认 left。
+
+### P8：Demo Hardening（主要功能已完成 ✅）
+
+目标：让连续演示稳定可靠，不新增业务功能。
+
+P8 完整业务链路：
+
+```text
+douyinAPI 自动生成测试线索
+    ↓
+React 自动同步派单
+    ↓
+auto_wechat 同步入库
+    ↓
+auto_wechat 自动分配销售
+    ↓
+auto_wechat 搜索 sales_staff.wechat_nickname
+    ↓
+主机微信发送线索通知
+    ↓
+lead_notifications 记录 sent
+    ↓
+设置 wechat_active_check_id
+    ↓
+销售回复"收到，已添加微信"
+    ↓
+wechat_auto_detect_scheduler 自动检测
+    ↓
+reply_checks.check_status=replied
+    ↓
+douyin_leads.status=replied
+    ↓
+React 显示"已跟进"
+```
+
+#### P8 已完成能力
+
+1. **WechatAgent 添加销售配置** → POST /staff
+2. **douyinAPI 测试线索生成器**：
+   - `POST /dev/test-leads/start`
+   - `POST /dev/test-leads/stop`
+   - `GET /dev/test-leads/status`
+3. **微信固定左侧布局**：
+   - `activate_wechat_window(position="left")`
+   - contact_searcher 搜索前固定窗口
+4. **Alt+Q 紧急停止**：
+   - `hotkey_listener.py`
+   - `RegisterHotKey` 全局热键
+   - `request_emergency_stop`
+5. **桌面浮层**：
+   - `desktop_overlay.py`
+   - 自动化运行中 / 已停止提示
+6. **自动同步派单**：
+   - `sync-leads auto_notify=true`
+   - `notification_service.auto_notify_assigned_lead`
+   - `send-pending-assigned`
+7. **P7-BUG-1 修复**：
+   - 通知模板去关键词
+   - 静默期
+   - exclude_text_list
+
+#### P8 真实验证结果
+
+- 线索同步：7/7
+- 自动分配：7/7
+- 自动通知：7/7
+- 联系人搜索：4/4
+- 用户确认收到微信通知
+- 紧急停止机制生效
+- 桌面浮层和 Alt+Q 已运行
+- 自动检测：13/28 replied，存在单目标覆盖限制
+- 结论：可以演示，但需说明当前检测是单目标监听，P9 支持队列化
+
+### P0：风险修复（进行中）
+
+#### P0-1 局域网访问修复 ✅
+
+修复点：
+
+1. React API baseURL 不能是 127.0.0.1
+2. 新增 `npm run dev:lan`，加载 `.env.lan`
+3. `.env.lan` 指向 `http://192.168.110.113:9000`
+4. CORS 增加 `http://DESKTOP-T0HA3GO:5173`
+5. 防火墙需开放 TCP 9000 和 TCP 5173
+
+局域网访问地址：
+
+- React: `http://192.168.110.113:5173`
+- API docs: `http://192.168.110.113:9000/docs`
+- automation status: `http://192.168.110.113:9000/automation/status`
+
+#### P0-2 微信自动化稳定化（进行中）
+
+子阶段进展：
+
+| 子阶段 | 内容 | 状态 |
+|--------|------|------|
+| P0-2A~2D | 搜索框/输入框稳定化 | ✅ 已完成 |
+| P0-2E | 联系人二次确认 | ✅ 已完成 |
+| P0-2F | 白屏根因隔离 | ✅ 已完成（17/40 白屏是窗口隐藏 + 截桌面误判；但灰屏现象仍存在） |
+| P0-2G | 窗口隐藏与白屏误判修复 | ⚠️ **部分修复** |
+| P0-2H | 内容渲染验证 | 🔲 待做 |
+
+**P0-2G 修复范围（已解决）：**
+- ✅ Esc 导致 Qt5 窗口隐藏（`IsWindowVisible=False`）
+- ✅ 白屏检测前置可见性检查（不再误判桌面背景为白屏）
+- ✅ 窗口恢复逻辑 `ensure_wechat_visible()`
+- ✅ 搜索流程 Esc 清理
+- ✅ 177/177 单元测试通过
+
+**P0-2G 未修复（灰屏问题）：**
+- ❌ 窗口可见但客户区内容不渲染（灰色/空白）
+- 实际现象：`IsWindowVisible=True`、`IsIconic=False`、窗口可见，但客户区灰色，UI 内容未渲染
+- 这与 P0-2F 的"窗口隐藏"是**不同的问题**：窗口状态正常但内容未绘制
+
+**白屏问题演化：**
+
+| 时期 | 现象 | 根因 | 状态 |
+|------|------|------|------|
+| P0-2F 发现 | 白屏 17/40 | Esc 隐藏窗口 → 截到桌面背景 | ✅ P0-2G 已修复 |
+| P0-2G 后发现 | 灰屏（窗口可见但内容空白） | DWM 渲染/重绘时机/绘画不完整 | ❌ 未修复 |
+
+**白屏失败定义更新：**
+
+| 版本 | 失败定义 |
+|------|---------|
+| P0-2F 前 | `visible=False`（窗口隐藏截到桌面） |
+| P0-2G 后 | `visible=True` AND 客户区灰色/空白 AND 内容未渲染 |
+
+**P0-2H 目标（联系人验证前必须完成）：**
+
+定位窗口可见但内容未渲染的原因，确保自动化不会在灰屏状态下操作。
+
+排查方向（优先级排序）：
+1. P0：微信重绘/渲染失败 + DWM 合成时机
+2. P1：UIAutomation 在未完成重绘时交互
+3. P1：GPU 加速导致过期帧
+4. P2：Overlay/窗口 Z 序干扰
+
+必须实现：
+1. 每个关键步骤后截图
+2. 验证客户区渲染状态（检测灰屏比例）
+3. 确认聊天列表和消息列表存在性
+4. 必要时强制重绘
+5. 只有渲染验证通过后才继续自动化
+6. 渲染验证失败时中止并记录，不盲目继续
+
+**⚠️ 不要声称白屏问题已完全解决，直到截图验证确认内容渲染正常。**
+
+#### P0-3 多目标检测队列（待做）
+
+- wechat_active_check_id 只能保存一个 check
+- 多条线索连续发送时，后发目标会覆盖前一个目标
+- 需要升级为多目标检测队列
+
+#### 当前 P0 风险排序
+
+| 优先级 | 风险 | 状态 |
+|--------|------|------|
+| P0-1 | 局域网访问 | ✅ 已完成 |
+| P0-2 | 微信自动化稳定化 | 进行中 |
+| P0-3 | 多目标检测队列 | 待做 |
+| P1-1 | 桌面常驻状态中心 | 待做 |
+| P2-1 | Windows VM / 跨机器运行验证 | 待做 |
+| P3-1 | Agent 产品化架构 | 待设计 |
+| P4-1 | CV 识别搜索框/输入框 | 后续预研 |
+
+### 跨机器架构说明
+
+局域网其他机器可以访问 React 和 API，但微信自动化执行在 auto_wechat 所在机器。
+
+```text
+机器 A 运行 auto_wechat → 只能控制机器 A 的微信
+机器 B 浏览器访问机器 A → 只能看到页面并触发机器 A 的微信自动化，不能控制机器 B 的微信
+```
+
+如果要让另一台机器执行微信自动化，必须在那台机器运行 auto_wechat Agent，并登录本机微信。
+
+未来产品化目标：中心后台 + 多 Windows Agent。
 
 ------
 
@@ -426,6 +798,15 @@ LeadsManagement 新增「同步 douyinAPI 测试环境线索」按钮：
 | 7 | 定时超时检测 | check_scheduler 后台线程 |
 | 8 | React 真实数据展示 | LeadsManagement 页面接入 /leads, /staff, /reports/summary |
 | 9 | React 同步按钮 | dry_run 预览 → 二次确认 → 写库 → 刷新 |
+| 10 | React 线索分配 UI | 分配弹窗 + POST /leads/{id}/assign |
+| 11 | React 检测记录展示 | 检测记录列表接入真实 API |
+| 12 | 微信窗口置顶/移动 | activate_wechat_window |
+| 13 | 关键词命中自动检测 | wechat_auto_detect_scheduler + wechat_active_check_id |
+| 14 | 微信联系人搜索 | contact_searcher.open_chat_by_nickname |
+| 15 | 线索通知自动发送 | notification_service + lead_notifications |
+| 16 | 自动同步派单 | sync-leads auto_notify=true |
+| 17 | 紧急停止机制 | Alt+Q + /automation/emergency-stop + 前端按钮 |
+| 18 | 局域网访问 | dev:lan + 0.0.0.0 绑定 + CORS + 防火墙 |
 
 ------
 

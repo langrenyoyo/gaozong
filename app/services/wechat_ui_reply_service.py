@@ -49,6 +49,7 @@ def detect_reply_from_wechat(
     staff_id: int,
     max_messages: int = 20,
     confirm_current_chat: bool = False,
+    exclude_text_list: list[str] | None = None,
 ) -> dict:
     """
     通过微信 UI 自动化检测当前聊天窗口中是否存在销售有效回复。
@@ -60,6 +61,10 @@ def detect_reply_from_wechat(
         lead_id: 线索 ID
         staff_id: 销售 ID
         max_messages: 最多读取的消息条数
+        confirm_current_chat: 是否已确认当前聊天窗口
+        exclude_text_list: 排除文本列表（P7-BUG-1）。候选消息如果匹配
+                           任一排除文本，则跳过该消息。
+                           用于排除系统通知文本，避免自触发误判。
 
     Returns:
         检测结果字典，结构见 WechatDetectResponse
@@ -172,6 +177,7 @@ def detect_reply_from_wechat(
             analyze_msgs, effective_keywords, invalid_keywords, min_length,
             strict_mode=use_strict,
             expected_reply_text_list=expected_reply_list,
+            exclude_text_list=exclude_text_list,
         )
 
         result["is_effective"] = 1 if is_effective else 0

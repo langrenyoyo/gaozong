@@ -162,10 +162,10 @@ def debug_current_chat():
 @router.post("/debug/activate-wechat-window")
 def debug_activate_wechat_window():
     """
-    调试接口：将微信窗口激活置顶并移动到屏幕右上角。
+    调试接口：将微信窗口激活置顶并移动到屏幕左侧。
 
-    用于人工调试和确认微信窗口状态。
-    调用 Win32 API（ctypes）：ShowWindow → SetWindowPos → SetForegroundWindow。
+    P8-5：默认左侧布局，避免遮挡 React 右侧操作按钮。
+    可通过 position 参数指定 "left" 或 "right"。
     """
     try:
         result = activate_wechat_window()

@@ -103,3 +103,36 @@ class FeedbackRecord(Base):
     lead = relationship("DouyinLead")
     staff = relationship("SalesStaff")
     check = relationship("ReplyCheck")
+
+
+class LeadNotification(Base):
+    """线索通知记录表 — 主机微信 B 向销售 C 发送线索信息"""
+    __tablename__ = "lead_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    lead_id = Column(Integer, ForeignKey("douyin_leads.id"), nullable=False, comment="线索ID")
+    staff_id = Column(Integer, ForeignKey("sales_staff.id"), nullable=False, comment="销售ID")
+    check_id = Column(Integer, ForeignKey("reply_checks.id"), comment="关联的检测记录ID")
+
+    # 通知内容
+    notification_text = Column(Text, comment="实际生成的通知文本")
+    template_name = Column(String(50), default="default", comment="使用的通知模板名称")
+
+    # 发送状态
+    send_status = Column(String(20), default="composed",
+                         comment="状态: composed/sent/failed/skipped")
+    send_mode = Column(String(20), default="auto_send",
+                      comment="发送模式: auto_send/require_confirm")
+
+    # 环境信息
+    chat_title = Column(String(100), comment="发送时当前微信聊天窗口标题")
+    error_message = Column(String(500), comment="失败原因")
+
+    # 时间
+    sent_at = Column(DateTime, comment="实际发送时间")
+    created_at = Column(DateTime, default=datetime.now)
+
+    # 关联
+    lead = relationship("DouyinLead")
+    staff = relationship("SalesStaff")
+    check = relationship("ReplyCheck")

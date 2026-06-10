@@ -221,6 +221,7 @@ class DouyinSyncRequest(BaseModel):
     lead_status: str = Field("pending", description="过滤线索状态")
     start_time: Optional[int] = Field(None, description="起始时间（毫秒时间戳）")
     auto_assign: bool = Field(False, description="是否自动分配（仅对新建线索生效，P4-3 已支持）")
+    auto_notify: bool = Field(False, description="分配后自动搜索销售微信并发送线索通知（P8-3）")
 
 
 class DouyinSyncItem(BaseModel):
@@ -246,5 +247,105 @@ class DouyinSyncResponse(BaseModel):
     updated: int = Field(0, description="更新数（dry_run 时为 0）")
     skipped: int = Field(0, description="跳过数")
     assigned: int = Field(0, description="自动分配数（P4-1 为 0）")
+    notified: int = Field(0, description="自动通知数（P8-3，auto_notify 成功发送的线索数）")
     dry_run: bool = Field(True, description="是否 dry_run 模式")
     items: list[DouyinSyncItem] = []
+
+
+# ========== 微信自动检测 ==========
+
+class WechatAutoDetectSetTargetRequest(BaseModel):
+    """设置自动检测目标请求"""
+    check_id: int = Field(..., description="要自动监听的 reply_check ID")
+
+
+class WechatAutoDetectStatusResponse(BaseModel):
+    """自动检测状态响应"""
+    success: bool = True
+    message: str = ""
+    active_check_id: Optional[int] = Field(None, description="当前检测目标的 check ID，无则为 null")
+    enabled: bool = Field(True, description="自动检测是否启用")
+    interval_seconds: int = Field(10, description="检测间隔（秒）")
+    lead_id: Optional[int] = Field(None, description="关联线索 ID")
+    staff_id: Optional[int] = Field(None, description="关联销售 ID")
+    customer_name: Optional[str] = Field(None, description="客户名称")
+    staff_name: Optional[str] = Field(None, description="销售名称")
+    check_status: Optional[str] = Field(None, description="检测记录当前状态")
+    lead_status: Optional[str] = Field(None, description="线索当前状态")
+    reply_deadline: Optional[str] = Field(None, description="回复截止时间")
+    last_detect_at: Optional[str] = Field(None, description="上次检测时间")
+    last_result: Optional[str] = Field(None, description="上次检测结果摘要")
+    warning: Optional[str] = Field(None, description="安全提示")
+
+
+# ========== 线索通知 ==========
+
+class SendToStaffRequest(BaseModel):
+    """发送线索给销售请求"""
+    lead_id: int = Field(..., description="线索 ID")
+    auto_send: bool = Field(True, description="是否自动发送（Demo 默认 True）")
+
+
+class SendToStaffResponse(BaseModel):
+    """发送线索给销售响应"""
+    success: bool = True
+    message: str = ""
+    notification_id: Optional[int] = Field(None, description="通知记录 ID")
+    lead_id: int = Field(..., description="线索 ID")
+    staff_id: Optional[int] = Field(None, description="销售 ID")
+    staff_name: Optional[str] = Field(None, description="销售姓名")
+    wechat_nickname: Optional[str] = Field(None, description="销售微信昵称")
+    chat_title: Optional[str] = Field(None, description="打开的聊天窗口标题")
+    notification_text: Optional[str] = Field(None, description="实际发送的通知文本")
+    send_status: Optional[str] = Field(None, description="发送状态")
+    auto_detect_set: bool = Field(False, description="是否已设置自动检测目标")
+    warning: Optional[str] = Field(None, description="安全提示")
+    # P0-2E：联系人确认结果
+    contact_verified: Optional[bool] = Field(None, description="联系人是否已确认")
+    contact_verified_strategy: Optional[str] = Field(None, description="确认策略: top_title/title_profile_card/avatar_profile_card")
+
+
+class NotificationRecordOut(BaseModel):
+    """通知记录输出"""
+    id: int
+    lead_id: int
+    staff_id: int
+    check_id: Optional[int] = None
+    notification_text: Optional[str] = None
+    send_status: str
+    send_mode: Optional[str] = None
+    chat_title: Optional[str] = None
+    error_message: Optional[str] = None
+    sent_at: Optional[str] = None
+    created_at: Optional[str] = None
+    # 关联信息
+    customer_name: Optional[str] = None
+    staff_name: Optional[str] = None
+
+
+class NotificationRecordsResponse(BaseModel):
+    """通知记录列表响应"""
+    total: int
+    records: list[NotificationRecordOut]
+
+
+class OpenChatRequest(BaseModel):
+    """打开聊天窗口请求"""
+    nickname: str = Field(..., min_length=1, description="销售微信昵称")
+
+
+class OpenChatResponse(BaseModel):
+    """打开聊天窗口响应"""
+    success: bool = True
+    message: str = ""
+    nickname: str = ""
+    chat_title: Optional[str] = None
+    chat_verified: bool = Field(False, description="聊天窗口是否已验证（P0-2C）")
+    confidence: float = Field(0.0, description="验证置信度（0.0-1.0）")
+    warning: Optional[str] = None
+    attempts: int = Field(0, description="尝试次数")
+    input_box_found: bool = Field(False, description="是否找到输入框")
+    message_list_found: bool = Field(False, description="是否找到消息列表")
+    failure_stage: Optional[str] = Field(None, description="失败阶段")
+    debug_steps: list = Field([], description="详细调试步骤")
+    debug_screenshots: list = Field([], description="调试截图路径列表（P0-2C）")

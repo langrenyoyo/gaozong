@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Read(//e/work/project/小猫AI员工/data/workspace/**)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(cat \"C:/tmp/ai-bot-extracted/eslint.config.mjs\" 2>&1)",
+      "Read(//c/tmp/ai-bot-extracted/**)",
+      "Bash(cat \"C:/tmp/ai-bot-extracted/out/main/index.jsc\" 2>&1 | strings 2>/dev/null | grep -iE \"wechat|微信|wx|chat|contact|send|message|task|schedule|port|localhost|127\\\\.0\\\\.0|url|api|http|ws://\" 2>/dev/null | head -30)",
+      "Read(//c/tmp/ai-bot-extracted/out/main/**)"
     ]
   }
 }

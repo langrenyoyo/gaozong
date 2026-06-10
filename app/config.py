@@ -26,6 +26,8 @@ DEFAULT_CONFIGS = {
     "expected_reply_text": "收到，已添加微信|收到，已添加|已添加微信",
     "feedback_template": "线索已跟进：\n客户：{customer_name}\n销售：{staff_name}\n回复：{reply_content}\n时间：{actual_reply_at}",
     "feedback_require_confirm": "true",
+    "p7_notification_silent_seconds": "8",
+    "wechat_require_visible_before_automation": "true",
 }
 
 # ---------- douyinAPI 上游对接配置 ----------

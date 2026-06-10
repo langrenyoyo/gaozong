@@ -18,11 +18,24 @@
   2. 兜底模式：当前微信 UI 无法区分 self/friend 时，
      将所有非 system、有文本内容的消息视为候选分析对象。
      兜底模式基于业务前提：当前窗口是主机微信与目标客户的聊天。
+
+P7-BUG-1 修复：
+  增加 exclude_text_list 参数，排除系统通知文本，避免自触发误判。
 """
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize(text: str) -> str:
+    """标准化文本：去空白、换行、标点，用于模糊比较"""
+    # 去掉所有空白字符（空格、换行、制表符等）
+    text = re.sub(r'\s+', '', text)
+    # 去掉常见标点
+    text = re.sub(r'[，。、！？；：“”‘’（）\[\]{}【】,.!?;:\'\"\(\)\[\]\{\}]', '', text)
+    return text
 
 
 def find_self_messages(messages: list[dict]) -> list[dict]:
@@ -64,6 +77,7 @@ def find_effective_reply(
     min_length: int,
     strict_mode: bool = False,
     expected_reply_text_list: list[str] | None = None,
+    exclude_text_list: list[str] | None = None,
 ) -> tuple[bool, str, str | None]:
     """
     在候选消息中寻找有效回复。
@@ -85,12 +99,22 @@ def find_effective_reply(
                      不允许"仅长度达标就默认有效"。
         expected_reply_text_list: 期望回复文本列表（如 ["收到，已添加微信", "收到，已添加"]）。
                                   任一命中即有效。优先精确匹配，其次包含匹配。
+        exclude_text_list: 排除文本列表（P7-BUG-1）。候选消息如果匹配
+                           任一排除文本（标准化后比较），则跳过该消息。
+                           用于排除系统通知文本，避免自触发误判。
 
     Returns:
         (is_effective, reason, matched_content)
     """
     if not self_messages:
         return False, "未检测到候选消息", None
+
+    # 预处理 exclude_text_list（标准化一次，避免每条消息重复计算）
+    normalized_excludes = []
+    if exclude_text_list:
+        for et in exclude_text_list:
+            if et and et.strip():
+                normalized_excludes.append(_normalize(et))
 
     # 按倒序检查（最近的优先）
     for msg in reversed(self_messages):
@@ -99,6 +123,21 @@ def find_effective_reply(
             continue
 
         text = content.strip()
+
+        # P7-BUG-1 修复：排除通知文本（标准化后比较包含关系）
+        if normalized_excludes:
+            text_norm = _normalize(text)
+            is_excluded = False
+            for exc_norm in normalized_excludes:
+                if exc_norm and (text_norm == exc_norm or exc_norm in text_norm or text_norm in exc_norm):
+                    is_excluded = True
+                    logger.info(
+                        "跳过系统通知文本，避免自触发误判: text_len=%d, exclude_len=%d",
+                        len(text), len(exc_norm),
+                    )
+                    break
+            if is_excluded:
+                continue
 
         # 先检查无效关键词
         is_invalid = False
