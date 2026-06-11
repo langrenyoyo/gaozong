@@ -43,6 +43,9 @@ from app.wechat_ui.window_locator import (
     ensure_wechat_foreground,
     check_wechat_ready_for_automation,
     WECHAT_NOT_READY_MESSAGE,
+    _get_window_process_id,
+    _get_process_name,
+    _hwnd_debug_info,
 )
 from app.services.automation_control import (
     is_automation_allowed,
@@ -442,6 +445,8 @@ def _locate_search_box_by_calibration(win_rect: dict) -> dict:
 def _locate_search_box_by_vision(hwnd: int, win_rect: dict) -> dict:
     """Find the light rounded search-box rectangle in WeChat's top-left area."""
     region = _search_box_candidate_region(win_rect)
+    expected_width_range = [130, 200]
+    expected_height_range = [20, 42]
     try:
         image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
         gray = image.convert("L")
@@ -475,27 +480,64 @@ def _locate_search_box_by_vision(hwnd: int, win_rect: dict) -> dict:
         groups.append(current)
 
         best = None
+        candidate_details = []
         for group in groups:
             top = group[0][0]
             bottom = group[-1][0] + 1
             height_px = bottom - top
-            if not 20 <= height_px <= 42:
-                continue
             left = min(item[1] for item in group)
             right = max(item[2] for item in group) + 1
             width_px = right - left
-            if not 130 <= width_px <= 200:
+            reasons = []
+            if not expected_height_range[0] <= height_px <= expected_height_range[1]:
+                reasons.append("height_out_of_range")
+            if not expected_width_range[0] <= width_px <= expected_width_range[1]:
+                reasons.append("width_out_of_range")
+            candidate_rect = {
+                "left": region["left"] + left,
+                "top": region["top"] + top,
+                "right": region["left"] + right,
+                "bottom": region["top"] + bottom,
+            }
+            candidate_details.append({
+                "rect": candidate_rect,
+                "width": width_px,
+                "height": height_px,
+                "rejected_reason": ",".join(reasons) if reasons else None,
+            })
+            if reasons:
                 continue
             score = height_px * width_px
             if best is None or score > best[0]:
                 best = (score, left, top, right, bottom)
 
         if best is None:
+            closest = None
+            if candidate_details:
+                target_width = sum(expected_width_range) / 2
+                target_height = sum(expected_height_range) / 2
+                closest = min(
+                    candidate_details,
+                    key=lambda item: abs(item["width"] - target_width) + abs(item["height"] - target_height),
+                )
             return {
                 "success": False,
                 "strategy": "vision_search_box_rect",
                 "reason": "search_box_size_not_matched",
                 "candidate_region": region,
+                "candidate_count": len(candidate_details),
+                "candidate_rects": [item["rect"] for item in candidate_details[:8]],
+                "candidate_sizes": [
+                    {"width": item["width"], "height": item["height"]}
+                    for item in candidate_details[:8]
+                ],
+                "expected_width_range": expected_width_range,
+                "expected_height_range": expected_height_range,
+                "rejected_reasons": [
+                    item["rejected_reason"] for item in candidate_details[:8]
+                ],
+                "closest_candidate": closest["rect"] if closest else None,
+                "closest_candidate_reason": closest["rejected_reason"] if closest else None,
             }
 
         _, left, top, right, bottom = best
@@ -650,6 +692,156 @@ def _json_safe_debug_value(value, visited: set[int] | None = None, depth: int = 
     return str(value)
 
 
+def _get_cursor_pos_debug() -> dict | None:
+    try:
+        point = ctypes.wintypes.POINT()
+        ok = ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+        if not ok:
+            return None
+        return {"x": int(point.x), "y": int(point.y)}
+    except Exception:
+        return None
+
+
+def _foreground_window_debug() -> dict:
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        info = _hwnd_debug_info(hwnd)
+        return {
+            "hwnd": info.get("hwnd"),
+            "title": info.get("title", ""),
+            "class": info.get("class", ""),
+            "process_name": info.get("process_name", ""),
+        }
+    except Exception as exc:
+        return {
+            "hwnd": None,
+            "title": "",
+            "class": "",
+            "process_name": "",
+            "error": str(exc),
+        }
+
+
+def _safe_window_rect_debug(hwnd: int | None) -> dict | None:
+    if not hwnd:
+        return None
+    try:
+        return _get_window_rect_dict(hwnd)
+    except Exception:
+        return None
+
+
+def _integrity_label_from_rid(rid: int) -> str:
+    if rid >= 0x4000:
+        return "system"
+    if rid >= 0x3000:
+        return "high"
+    if rid >= 0x2000:
+        return "medium"
+    if rid >= 0x1000:
+        return "low"
+    return f"rid_{rid}"
+
+
+def _process_integrity_level(pid: int | None) -> tuple[str | None, str | None]:
+    if not pid:
+        return None, "pid unavailable"
+    try:
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        TOKEN_QUERY = 0x0008
+        TokenIntegrityLevel = 25
+
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        advapi32.OpenProcessToken.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.HANDLE),
+        ]
+        advapi32.OpenProcessToken.restype = ctypes.wintypes.BOOL
+        advapi32.GetTokenInformation.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        advapi32.GetTokenInformation.restype = ctypes.wintypes.BOOL
+        advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+        advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+        advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, ctypes.wintypes.DWORD]
+        advapi32.GetSidSubAuthority.restype = ctypes.POINTER(ctypes.wintypes.DWORD)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+        process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not process:
+            return None, f"OpenProcess failed: {ctypes.get_last_error()}"
+        token = ctypes.wintypes.HANDLE()
+        try:
+            if not advapi32.OpenProcessToken(process, TOKEN_QUERY, ctypes.byref(token)):
+                return None, f"OpenProcessToken failed: {ctypes.get_last_error()}"
+            size = ctypes.wintypes.DWORD(0)
+            advapi32.GetTokenInformation(token, TokenIntegrityLevel, None, 0, ctypes.byref(size))
+            if not size.value:
+                return None, f"GetTokenInformation size failed: {ctypes.get_last_error()}"
+            buffer = ctypes.create_string_buffer(size.value)
+            if not advapi32.GetTokenInformation(token, TokenIntegrityLevel, buffer, size, ctypes.byref(size)):
+                return None, f"GetTokenInformation failed: {ctypes.get_last_error()}"
+            sid_ptr = ctypes.c_void_p.from_buffer_copy(buffer.raw[:ctypes.sizeof(ctypes.c_void_p)]).value
+            if not sid_ptr:
+                return None, "integrity sid unavailable"
+            sub_count_ptr = advapi32.GetSidSubAuthorityCount(sid_ptr)
+            sub_count = int(sub_count_ptr.contents.value)
+            rid = int(advapi32.GetSidSubAuthority(sid_ptr, sub_count - 1).contents.value)
+            return _integrity_label_from_rid(rid), None
+        finally:
+            if token:
+                kernel32.CloseHandle(token)
+            kernel32.CloseHandle(process)
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _integrity_rank(level: str | None) -> int | None:
+    ranks = {"low": 1, "medium": 2, "high": 3, "system": 4}
+    return ranks.get(level or "")
+
+
+def _click_integrity_debug(hwnd: int | None) -> dict:
+    try:
+        agent_level, agent_error = _process_integrity_level(os.getpid())
+        wechat_pid = _get_window_process_id(hwnd) if hwnd else 0
+        wechat_level, wechat_error = _process_integrity_level(wechat_pid)
+        agent_rank = _integrity_rank(agent_level)
+        wechat_rank = _integrity_rank(wechat_level)
+        mismatch = None
+        if agent_rank is not None and wechat_rank is not None:
+            mismatch = agent_rank < wechat_rank
+        reasons = [reason for reason in (agent_error, wechat_error) if reason]
+        return {
+            "agent_integrity_level": agent_level,
+            "wechat_integrity_level": wechat_level,
+            "integrity_level_mismatch": mismatch,
+            "integrity_unavailable_reason": "; ".join(reasons) or None,
+        }
+    except Exception as exc:
+        return {
+            "agent_integrity_level": None,
+            "wechat_integrity_level": None,
+            "integrity_level_mismatch": None,
+            "integrity_unavailable_reason": str(exc),
+        }
+
+
 def _locator_attempt_summary(attempt) -> dict:
     if not isinstance(attempt, dict):
         return {"value": _json_safe_debug_value(attempt)}
@@ -724,6 +916,275 @@ def _sanitize_click_point_for_debug(click_point: dict | None) -> dict | None:
         sanitized["locator_attempts"] = locator_attempts
 
     return sanitized
+
+
+def _search_box_crop_rect(win_rect: dict, click_point: dict | None) -> dict:
+    rect = (click_point or {}).get("search_box_rect") or (click_point or {}).get("candidate_region")
+    if not rect:
+        rect = _search_box_candidate_region(win_rect)
+    pad_x = 12
+    pad_y = 8
+    return {
+        "left": max(int(win_rect["left"]), int(rect["left"]) - pad_x),
+        "top": max(int(win_rect["top"]), int(rect["top"]) - pad_y),
+        "right": min(int(win_rect["right"]), int(rect["right"]) + pad_x),
+        "bottom": min(int(win_rect["bottom"]), int(rect["bottom"]) + pad_y),
+    }
+
+
+def _save_search_box_focus_crop(hwnd: int, crop_rect: dict | None, safe_nick: str, stage: str) -> str | None:
+    if not crop_rect:
+        return None
+    try:
+        image = grab_screen((crop_rect["left"], crop_rect["top"], crop_rect["right"], crop_rect["bottom"]))
+        out_dir = SCREENSHOT_DIR / "search_focus_debug"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{safe_nick}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("save search focus crop failed: %s", exc)
+        return None
+
+
+def _compare_image_paths(before_path: str | None, after_path: str | None) -> float | None:
+    if not before_path or not after_path:
+        return None
+    try:
+        from PIL import Image, ImageChops, ImageStat
+
+        before = Image.open(before_path).convert("L")
+        after = Image.open(after_path).convert("L").resize(before.size)
+        diff = ImageChops.difference(before, after)
+        return round(float(ImageStat.Stat(diff).mean[0]), 3)
+    except Exception as exc:
+        logger.debug("compare search focus crops failed: %s", exc)
+        return None
+
+
+def _search_box_visual_state(crop_path: str | None) -> dict:
+    base = {
+        "placeholder_visible": None,
+        "border_active_hint": None,
+        "caret_visual_hint": None,
+        "search_panel_expanded_hint": None,
+    }
+    if not crop_path:
+        return base
+    try:
+        from PIL import Image
+
+        image = Image.open(crop_path).convert("L")
+        width, height = image.size
+        pixels = image.load()
+        dark_vertical_runs = 0
+        for x in range(width):
+            run = 0
+            for y in range(height):
+                if pixels[x, y] < 80:
+                    run += 1
+                    if run >= max(8, int(height * 0.45)):
+                        dark_vertical_runs += 1
+                        break
+                else:
+                    run = 0
+        base["caret_visual_hint"] = dark_vertical_runs > 0
+        base["placeholder_visible"] = None
+        base["border_active_hint"] = None
+        base["search_panel_expanded_hint"] = None
+        return base
+    except Exception as exc:
+        logger.debug("search box visual state failed: %s", exc)
+        return base
+
+
+def _caret_debug_from_rect(
+    caret_rect: dict | None,
+    caret_hwnd: int | None,
+    win_rect: dict,
+    search_box_rect: dict | None,
+) -> dict:
+    return {
+        "caret_available": bool(caret_rect),
+        "caret_unavailable_reason": None if caret_rect else "caret_rect_unavailable",
+        "caret_hwnd": caret_hwnd,
+        "caret_rect": caret_rect,
+        "caret_in_search_box": _rect_in_search_region(caret_rect, win_rect) and _point_in_rect(
+            {
+                "x": int((caret_rect["left"] + caret_rect["right"]) / 2),
+                "y": int((caret_rect["top"] + caret_rect["bottom"]) / 2),
+            },
+            search_box_rect,
+        ) if caret_rect else False,
+        "caret_in_chat_input": _rect_in_chat_input_region(caret_rect, win_rect) if caret_rect else False,
+    }
+
+
+def _get_gui_thread_caret_debug(hwnd: int, win_rect: dict, search_box_rect: dict | None) -> dict:
+    try:
+        user32 = ctypes.windll.user32
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.wintypes.LONG), ("y", ctypes.wintypes.LONG)]
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.wintypes.LONG),
+                ("top", ctypes.wintypes.LONG),
+                ("right", ctypes.wintypes.LONG),
+                ("bottom", ctypes.wintypes.LONG),
+            ]
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.wintypes.DWORD),
+                ("flags", ctypes.wintypes.DWORD),
+                ("hwndActive", ctypes.wintypes.HWND),
+                ("hwndFocus", ctypes.wintypes.HWND),
+                ("hwndCapture", ctypes.wintypes.HWND),
+                ("hwndMenuOwner", ctypes.wintypes.HWND),
+                ("hwndMoveSize", ctypes.wintypes.HWND),
+                ("hwndCaret", ctypes.wintypes.HWND),
+                ("rcCaret", RECT),
+            ]
+
+        thread_id = user32.GetWindowThreadProcessId(hwnd, None)
+        info = GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(GUITHREADINFO)
+        if not user32.GetGUIThreadInfo(thread_id, ctypes.byref(info)):
+            return {
+                "caret_available": False,
+                "caret_unavailable_reason": "GetGUIThreadInfo returned false",
+                "caret_hwnd": None,
+                "caret_rect": None,
+                "caret_in_search_box": False,
+                "caret_in_chat_input": False,
+            }
+
+        caret_hwnd = int(info.hwndCaret or 0) or None
+        if not caret_hwnd:
+            return {
+                "caret_available": False,
+                "caret_unavailable_reason": "hwndCaret is empty",
+                "caret_hwnd": None,
+                "caret_rect": None,
+                "caret_in_search_box": False,
+                "caret_in_chat_input": False,
+            }
+
+        point = POINT(int(info.rcCaret.left), int(info.rcCaret.top))
+        user32.ClientToScreen(caret_hwnd, ctypes.byref(point))
+        width = int(info.rcCaret.right) - int(info.rcCaret.left)
+        height = int(info.rcCaret.bottom) - int(info.rcCaret.top)
+        caret_rect = {
+            "left": int(point.x),
+            "top": int(point.y),
+            "right": int(point.x) + max(1, width),
+            "bottom": int(point.y) + max(1, height),
+        }
+        return _caret_debug_from_rect(caret_rect, caret_hwnd, win_rect, search_box_rect)
+    except Exception as exc:
+        return {
+            "caret_available": False,
+            "caret_unavailable_reason": str(exc),
+            "caret_hwnd": None,
+            "caret_rect": None,
+            "caret_in_search_box": False,
+            "caret_in_chat_input": False,
+        }
+
+
+def _collect_uia_tree_summary(hwnd: int, win_rect: dict) -> dict:
+    summary = {
+        "root_name": None,
+        "root_class_name": None,
+        "root_control_type": None,
+        "root_rect": None,
+        "uia_tree_child_count": 0,
+        "matched_edit_count": 0,
+        "matched_search_count": 0,
+        "matched_controls": [],
+    }
+    try:
+        root = uia.ControlFromHandle(hwnd)
+        summary.update({
+            "root_name": getattr(root, "Name", None),
+            "root_class_name": getattr(root, "ClassName", None),
+            "root_control_type": getattr(root, "ControlTypeName", None),
+            "root_rect": _control_rect_to_dict(root),
+        })
+
+        def _walk(control, depth: int = 0) -> None:
+            if depth >= 4 or summary["uia_tree_child_count"] >= 80:
+                return
+            try:
+                children = control.GetChildren()
+            except Exception:
+                return
+            for child in children:
+                if summary["uia_tree_child_count"] >= 80:
+                    return
+                summary["uia_tree_child_count"] += 1
+                try:
+                    rect = _control_rect_to_dict(child)
+                    name = getattr(child, "Name", None)
+                    class_name = getattr(child, "ClassName", None)
+                    control_type = getattr(child, "ControlTypeName", None)
+                    text = f"{name or ''} {class_name or ''} {control_type or ''}".lower()
+                    is_edit = control_type == "EditControl"
+                    is_search = ("搜索" in text) or ("search" in text)
+                    if is_edit:
+                        summary["matched_edit_count"] += 1
+                    if is_search:
+                        summary["matched_search_count"] += 1
+                    if is_edit or is_search or _rect_in_search_region(rect, win_rect):
+                        summary["matched_controls"].append({
+                            "name": name,
+                            "class_name": class_name,
+                            "control_type": control_type,
+                            "rect": rect,
+                            "rect_in_search_region": _rect_in_search_region(rect, win_rect),
+                        })
+                except Exception:
+                    pass
+                _walk(child, depth + 1)
+
+        _walk(root)
+    except Exception as exc:
+        summary["error"] = str(exc)
+    return _json_safe_debug_value(summary)
+
+
+def _augment_focus_failure_evidence(
+    focus: dict,
+    hwnd: int,
+    win_rect: dict,
+    click_point: dict | None,
+    safe_nick: str,
+    before_crop_path: str | None,
+    after_crop_path: str | None,
+    image_diff_score: float | None,
+    caret_debug: dict | None = None,
+    uia_tree_summary: dict | None = None,
+    click_debug: dict | None = None,
+) -> dict:
+    focus = _augment_search_focus_diagnostics(focus, click_point, win_rect)
+    crop_rect = _search_box_crop_rect(win_rect, click_point)
+    visual_state = _search_box_visual_state(after_crop_path)
+    focus.update({
+        "before_search_box_crop_path": before_crop_path,
+        "after_search_box_crop_path": after_crop_path,
+        "focus_poll_search_box_crop_paths": focus.get("focus_poll_search_box_crop_paths") or [],
+        "crop_rect": crop_rect,
+        "image_diff_score": image_diff_score,
+        "focus_poll_image_diffs": focus.get("focus_poll_image_diffs") or [],
+        **visual_state,
+    })
+    focus.update(caret_debug or _get_gui_thread_caret_debug(hwnd, win_rect, focus.get("search_box_rect")))
+    focus["uia_tree_summary"] = uia_tree_summary or _collect_uia_tree_summary(hwnd, win_rect)
+    if click_debug is not None:
+        focus["click_debug"] = click_debug
+    return _json_safe_debug_value(focus)
 
 
 def _augment_search_focus_diagnostics(focus: dict, click_point: dict | None, win_rect: dict) -> dict:
@@ -892,11 +1353,24 @@ def verify_search_box_focus(hwnd: int, win_rect: dict, click_point: dict | None 
         "manual_review_required": True,
         "focus_control": None,
         "focus_poll_attempts": [],
+        "focus_poll_search_box_crop_paths": [],
+        "focus_poll_image_diffs": [],
         "reason": None,
     }
+    crop_rect = _search_box_crop_rect(win_rect, click_point)
+    previous_crop_path = None
     for delay in (0, 0.2, 0.5, 0.8):
         if delay:
             time.sleep(delay)
+        poll_crop_path = _save_search_box_focus_crop(
+            hwnd,
+            crop_rect,
+            _safe_file_nick("focus_poll"),
+            f"poll_{int(delay * 1000)}ms",
+        )
+        result["focus_poll_search_box_crop_paths"].append(poll_crop_path)
+        result["focus_poll_image_diffs"].append(_compare_image_paths(previous_crop_path, poll_crop_path))
+        previous_crop_path = poll_crop_path
 
         try:
             control = uia.GetFocusedControl()
@@ -1406,10 +1880,75 @@ def build_search_action_completed_result(
     }
 
 
-def _click_left_button(x: int, y: int) -> None:
-    ctypes.windll.user32.SetCursorPos(int(x), int(y))
-    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
+    start = time.time()
+    down_time = start
+    up_time = start
+    debug = {
+        "click_method": "SetCursorPos+mouse_event",
+        "target_x": int(x),
+        "target_y": int(y),
+        "set_cursor_pos_ok": False,
+        "set_cursor_pos_last_error": None,
+        "cursor_before": None,
+        "cursor_after_set": None,
+        "cursor_after_down": None,
+        "cursor_after_up": None,
+        "foreground_before_click": None,
+        "foreground_after_set_cursor": None,
+        "foreground_after_mouse_down": None,
+        "foreground_after_mouse_up": None,
+        "foreground_after_click": None,
+        "window_rect_before_click": None,
+        "window_rect_after_click": None,
+        "legacy_foreground_ok": None,
+        "legacy_foreground_diag": None,
+        "agent_integrity_level": None,
+        "wechat_integrity_level": None,
+        "integrity_level_mismatch": None,
+        "integrity_unavailable_reason": None,
+        "click_exception": None,
+        "click_duration_ms": None,
+        "down_up_interval_ms": None,
+    }
+    try:
+        user32 = ctypes.windll.user32
+        debug["cursor_before"] = _get_cursor_pos_debug()
+        debug["foreground_before_click"] = _foreground_window_debug()
+        debug["window_rect_before_click"] = _safe_window_rect_debug(hwnd)
+        debug.update(_click_integrity_debug(hwnd))
+
+        try:
+            ctypes.set_last_error(0)
+        except Exception:
+            pass
+        set_ok = bool(user32.SetCursorPos(int(x), int(y)))
+        debug["set_cursor_pos_ok"] = set_ok
+        try:
+            debug["set_cursor_pos_last_error"] = int(ctypes.get_last_error())
+        except Exception:
+            debug["set_cursor_pos_last_error"] = None
+        debug["cursor_after_set"] = _get_cursor_pos_debug()
+        debug["foreground_after_set_cursor"] = _foreground_window_debug()
+
+        user32.mouse_event(0x0002, 0, 0, 0, 0)
+        down_time = time.time()
+        debug["cursor_after_down"] = _get_cursor_pos_debug()
+        debug["foreground_after_mouse_down"] = _foreground_window_debug()
+
+        user32.mouse_event(0x0004, 0, 0, 0, 0)
+        up_time = time.time()
+        debug["cursor_after_up"] = _get_cursor_pos_debug()
+        debug["foreground_after_mouse_up"] = _foreground_window_debug()
+        debug["foreground_after_click"] = debug["foreground_after_mouse_up"]
+        debug["window_rect_after_click"] = _safe_window_rect_debug(hwnd)
+    except Exception as exc:
+        debug["click_exception"] = str(exc)
+    finally:
+        end = time.time()
+        debug["click_duration_ms"] = int(round((end - start) * 1000))
+        debug["down_up_interval_ms"] = int(round((up_time - down_time) * 1000))
+    return _json_safe_debug_value(debug)
 
 
 def locate_search_result_click_point(win_rect: dict, nickname: str) -> dict:
@@ -1691,6 +2230,13 @@ def run_search_box_debug(nickname: str = "Aw3", position: str = "right") -> dict
         set_action_in_progress(False)
         return result
 
+    search_box_crop_rect = _search_box_crop_rect(ctx["win_rect"], click_point)
+    before_search_box_crop_path = _save_search_box_focus_crop(
+        hwnd,
+        search_box_crop_rect,
+        safe_nick,
+        "search_debug_before_click_search_box",
+    )
     guard = ensure_wechat_foreground(hwnd, reason="search_debug_before_click")
     if not guard.get("success"):
         result["failure_stage"] = "foreground_lost_before_search_debug_click"
@@ -1698,12 +2244,19 @@ def run_search_box_debug(nickname: str = "Aw3", position: str = "right") -> dict
         set_action_in_progress(False)
         return result
 
-    _click_left_button(int(click_point["x"]), int(click_point["y"]))
+    click_debug = _click_left_button(int(click_point["x"]), int(click_point["y"]), hwnd=hwnd)
     result["clicked"] = True
     time.sleep(0.5)
     result["screenshots"]["after_click"] = save_debug_screenshot(
         f"search_debug_{safe_nick}", "2_after_click",
     )
+    after_search_box_crop_path = _save_search_box_focus_crop(
+        hwnd,
+        search_box_crop_rect,
+        safe_nick,
+        "search_debug_after_click_search_box",
+    )
+    search_box_image_diff = _compare_image_paths(before_search_box_crop_path, after_search_box_crop_path)
 
     focus = verify_search_box_focus(hwnd, ctx["win_rect"], click_point)
     focus = _augment_search_focus_diagnostics(focus, click_point, ctx["win_rect"])
@@ -1712,6 +2265,17 @@ def run_search_box_debug(nickname: str = "Aw3", position: str = "right") -> dict
     result["verified"] = bool(focus.get("verified"))
     result["search_focus"] = focus
     if not focus.get("verified"):
+        result["search_focus"] = _augment_focus_failure_evidence(
+            focus,
+            hwnd=hwnd,
+            win_rect=ctx["win_rect"],
+            click_point=click_point,
+            safe_nick=safe_nick,
+            before_crop_path=before_search_box_crop_path,
+            after_crop_path=after_search_box_crop_path,
+            image_diff_score=search_box_image_diff,
+            click_debug=click_debug,
+        )
         result["failure_stage"] = "search_focus_not_verified"
         result["message"] = "搜索框焦点未确认，已阻止粘贴关键词"
         set_action_in_progress(False)
@@ -2097,6 +2661,13 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         screenshots.append(overlay_path)
 
     search_x, search_y = int(click_point["x"]), int(click_point["y"])
+    search_box_crop_rect = _search_box_crop_rect(win_rect, click_point)
+    before_search_box_crop_path = _save_search_box_focus_crop(
+        hwnd,
+        search_box_crop_rect,
+        safe_nick,
+        f"before_click_search_box_a{attempt}",
+    )
 
     logger.info("点击搜索区域: (%d, %d), rect=%s", search_x, search_y, win_rect)
 
@@ -2114,6 +2685,13 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     # 点击搜索框
     _click_left_button(search_x, search_y)
     time.sleep(0.8)  # 等搜索面板展开
+    after_search_box_crop_path = _save_search_box_focus_crop(
+        hwnd,
+        search_box_crop_rect,
+        safe_nick,
+        f"after_click_search_box_a{attempt}",
+    )
+    search_box_image_diff = _compare_image_paths(before_search_box_crop_path, after_search_box_crop_path)
 
     # 检查前台窗口（带恢复尝试）
     ok_fg, fg_diag = _ensure_wechat_foreground(hwnd, max_retries=3)
@@ -2141,6 +2719,16 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     focus = verify_search_box_focus(hwnd, win_rect, click_point)
     focus = _augment_search_focus_diagnostics(focus, click_point, win_rect)
     if not focus.get("verified"):
+        focus = _augment_focus_failure_evidence(
+            focus,
+            hwnd=hwnd,
+            win_rect=win_rect,
+            click_point=click_point,
+            safe_nick=safe_nick,
+            before_crop_path=before_search_box_crop_path,
+            after_crop_path=after_search_box_crop_path,
+            image_diff_score=search_box_image_diff,
+        )
         step = _DebugStep("search_focus_verified", attempt)
         step.fail(f"搜索框焦点未确认: {focus.get('reason')}", strategy="focus_guard")
         steps.append(step.to_dict())

@@ -843,6 +843,368 @@ def test_open_chat_focus_failure_sanitizes_recursive_locator_attempts():
     assert "{Enter}" not in sent_keys
 
 
+def test_open_chat_focus_failure_returns_non_uia_focus_diagnostics():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "manual_calibration",
+        "confidence": 0.7,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "manual"},
+    }
+    focus = {
+        "verified": False,
+        "focused": False,
+        "clicked": True,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "reason": "focused_control_not_search_box",
+        "focus_control": {
+            "name": "微信",
+            "class_name": "Qt51514QWindowIcon",
+            "control_type": "WindowControl",
+            "rect": win_rect,
+        },
+        "focus_poll_search_box_crop_paths": ["poll0.png", "poll200.png"],
+        "focus_poll_image_diffs": [0.0, 1.2],
+    }
+    caret_debug = {
+        "caret_available": False,
+        "caret_unavailable_reason": "GetGUIThreadInfo unavailable",
+        "caret_hwnd": None,
+        "caret_rect": None,
+        "caret_in_search_box": False,
+        "caret_in_chat_input": False,
+    }
+    uia_tree_summary = {
+        "root_name": "微信",
+        "root_class_name": "Qt51514QWindowIcon",
+        "root_control_type": "WindowControl",
+        "root_rect": win_rect,
+        "uia_tree_child_count": 0,
+        "matched_edit_count": 0,
+        "matched_search_count": 0,
+        "matched_controls": [],
+    }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher._save_search_box_focus_crop",
+               side_effect=["before_crop.png", "after_crop.png"]), \
+         patch("app.wechat_ui.contact_searcher._compare_image_paths", return_value=7.5), \
+         patch("app.wechat_ui.contact_searcher._search_box_visual_state",
+               return_value={"placeholder_visible": True, "border_active_hint": False,
+                             "caret_visual_hint": False, "search_panel_expanded_hint": False}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher._get_gui_thread_caret_debug", return_value=caret_debug), \
+         patch("app.wechat_ui.contact_searcher._collect_uia_tree_summary", return_value=uia_tree_summary), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    focus_result = result["search_focus"]
+    assert focus_result["before_search_box_crop_path"] == "before_crop.png"
+    assert focus_result["after_search_box_crop_path"] == "after_crop.png"
+    assert focus_result["focus_poll_search_box_crop_paths"] == ["poll0.png", "poll200.png"]
+    assert focus_result["crop_rect"]["left"] <= click_point["search_box_rect"]["left"]
+    assert focus_result["crop_rect"]["top"] <= click_point["search_box_rect"]["top"]
+    assert focus_result["crop_rect"]["right"] >= click_point["search_box_rect"]["right"]
+    assert focus_result["crop_rect"]["bottom"] >= click_point["search_box_rect"]["bottom"]
+    assert focus_result["click_point"]["x"] == 120
+    assert focus_result["search_box_rect"] == click_point["search_box_rect"]
+    assert focus_result["image_diff_score"] == 7.5
+    assert focus_result["focus_poll_image_diffs"] == [0.0, 1.2]
+    assert focus_result["placeholder_visible"] is True
+    assert focus_result["border_active_hint"] is False
+    assert focus_result["caret_visual_hint"] is False
+    assert focus_result["search_panel_expanded_hint"] is False
+    assert focus_result["caret_available"] is False
+    assert focus_result["caret_unavailable_reason"] == "GetGUIThreadInfo unavailable"
+    assert focus_result["uia_tree_summary"]["uia_tree_child_count"] == 0
+    jsonable_encoder(focus_result)
+    assert result["pasted"] is False
+    assert result["sent"] is False
+    mock_clipboard.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Ctrl}v" not in sent_keys
+    assert "{Enter}" not in sent_keys
+
+
+def test_click_left_button_returns_click_debug():
+    from app.wechat_ui import contact_searcher
+
+    positions = [
+        (10, 20),
+        (120, 95),
+        (120, 95),
+        (120, 95),
+    ]
+    foregrounds = [321, 321, 321, 321, 321]
+    rects = [
+        {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        {"left": 0, "top": 0, "right": 880, "bottom": 700},
+    ]
+
+    with patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", side_effect=positions), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", side_effect=[
+             {"hwnd": hwnd, "title": "微信", "class": "Qt51514QWindowIcon", "process_name": "WeChat.exe"}
+             for hwnd in foregrounds
+         ]), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", side_effect=rects), \
+         patch("app.wechat_ui.contact_searcher._click_integrity_debug", return_value={
+             "agent_integrity_level": "medium",
+             "wechat_integrity_level": "medium",
+             "integrity_level_mismatch": False,
+             "integrity_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[100.0, 100.02, 100.05]):
+        mock_ctypes.windll.user32.SetCursorPos.return_value = 1
+
+        debug = contact_searcher._click_left_button(120, 95, hwnd=321)
+
+    assert debug["click_method"] == "SetCursorPos+mouse_event"
+    assert debug["target_x"] == 120
+    assert debug["target_y"] == 95
+    assert debug["set_cursor_pos_ok"] is True
+    assert debug["cursor_before"] == {"x": 10, "y": 20}
+    assert debug["cursor_after_set"] == {"x": 120, "y": 95}
+    assert debug["cursor_after_down"] == {"x": 120, "y": 95}
+    assert debug["cursor_after_up"] == {"x": 120, "y": 95}
+    assert debug["foreground_before_click"]["hwnd"] == 321
+    assert debug["foreground_after_click"]["hwnd"] == 321
+    assert debug["window_rect_before_click"] == rects[0]
+    assert debug["window_rect_after_click"] == rects[1]
+    assert debug["agent_integrity_level"] == "medium"
+    assert debug["wechat_integrity_level"] == "medium"
+    assert debug["integrity_level_mismatch"] is False
+    assert debug["click_exception"] is None
+    assert debug["click_duration_ms"] == 50
+    assert debug["down_up_interval_ms"] == 30
+    jsonable_encoder(debug)
+
+
+def test_click_left_button_reports_set_cursor_pos_failure_and_integrity_unavailable():
+    from app.wechat_ui import contact_searcher
+
+    with patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", return_value={"x": 1, "y": 2}), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
+             "hwnd": 999,
+             "title": "Code",
+             "class": "Chrome_WidgetWin_1",
+             "process_name": "Code.exe",
+         }), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", return_value=None), \
+         patch("app.wechat_ui.contact_searcher._click_integrity_debug", return_value={
+             "agent_integrity_level": None,
+             "wechat_integrity_level": None,
+             "integrity_level_mismatch": None,
+             "integrity_unavailable_reason": "OpenProcessToken failed",
+         }), \
+         patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[1.0, 1.0, 1.0]):
+        mock_ctypes.windll.user32.SetCursorPos.return_value = 0
+        mock_ctypes.get_last_error.return_value = 5
+
+        debug = contact_searcher._click_left_button(120, 95, hwnd=321)
+
+    assert debug["set_cursor_pos_ok"] is False
+    assert debug["set_cursor_pos_last_error"] == 5
+    assert debug["integrity_unavailable_reason"] == "OpenProcessToken failed"
+    jsonable_encoder(debug)
+
+
+def test_open_chat_focus_failure_includes_click_debug_without_paste_or_send():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "manual_calibration",
+        "confidence": 0.7,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+    }
+    focus = {
+        "verified": False,
+        "focused": False,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "reason": "focused_control_not_search_box",
+        "focus_control": {"rect": win_rect, "control_type": "WindowControl"},
+    }
+    click_debug = {
+        "click_method": "SetCursorPos+mouse_event",
+        "target_x": 120,
+        "target_y": 95,
+        "set_cursor_pos_ok": True,
+        "cursor_after_set": {"x": 120, "y": 95},
+    }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground",
+               return_value=(False, "foreground is Code")), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher._click_left_button", return_value=click_debug), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    focus_result = result["search_focus"]
+    assert focus_result["click_debug"]["click_method"] == "SetCursorPos+mouse_event"
+    assert focus_result["click_debug"]["target_x"] == 120
+    assert focus_result["click_debug"]["target_y"] == 95
+    assert focus_result["click_debug"]["legacy_foreground_ok"] is False
+    assert focus_result["click_debug"]["legacy_foreground_diag"] == "foreground is Code"
+    jsonable_encoder(focus_result["click_debug"])
+    assert result["search_keyword_pasted"] is False
+    assert result["pasted"] is False
+    assert result["sent"] is False
+    mock_clipboard.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Ctrl}v" not in sent_keys
+    assert "{Enter}" not in sent_keys
+
+
+def test_caret_in_search_box_is_diagnostic_only_for_focus_failure():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    focus = {
+        "verified": False,
+        "success": False,
+        "focus_control": {"rect": win_rect, "control_type": "WindowControl"},
+    }
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+    }
+    caret_debug = {
+        "caret_available": True,
+        "caret_unavailable_reason": None,
+        "caret_hwnd": 456,
+        "caret_rect": {"left": 100, "top": 80, "right": 102, "bottom": 98},
+        "caret_in_search_box": True,
+        "caret_in_chat_input": False,
+    }
+
+    enriched = contact_searcher._augment_focus_failure_evidence(
+        focus,
+        hwnd=123,
+        win_rect=win_rect,
+        click_point=click_point,
+        safe_nick="Aw3",
+        before_crop_path=None,
+        after_crop_path=None,
+        image_diff_score=None,
+        caret_debug=caret_debug,
+        uia_tree_summary={"uia_tree_child_count": 0, "matched_controls": []},
+    )
+
+    assert enriched["verified"] is False
+    assert enriched["success"] is False
+    assert enriched["caret_in_search_box"] is True
+    assert enriched["caret_in_chat_input"] is False
+
+
+def test_caret_in_chat_input_is_reported_as_diagnostic():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    search_box_rect = {"left": 80, "top": 75, "right": 250, "bottom": 115}
+    caret_debug = contact_searcher._caret_debug_from_rect(
+        {"left": 400, "top": 610, "right": 402, "bottom": 630},
+        caret_hwnd=456,
+        win_rect=win_rect,
+        search_box_rect=search_box_rect,
+    )
+
+    assert caret_debug["caret_available"] is True
+    assert caret_debug["caret_in_search_box"] is False
+    assert caret_debug["caret_in_chat_input"] is True
+
+
+def test_uia_tree_summary_is_json_safe_without_raw_controls():
+    from app.wechat_ui import contact_searcher
+
+    root_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    edit_rect = {"left": 80, "top": 75, "right": 250, "bottom": 115}
+    root = _focus_control(name="微信", class_name="Qt51514QWindowIcon",
+                          control_type="WindowControl", rect=root_rect)
+    edit = _focus_control(name="搜索", class_name="", control_type="EditControl", rect=edit_rect)
+    root.GetChildren.return_value = [edit]
+    edit.GetChildren.return_value = []
+
+    with patch("app.wechat_ui.contact_searcher.uia.ControlFromHandle", return_value=root):
+        summary = contact_searcher._collect_uia_tree_summary(123, root_rect)
+
+    assert summary["root_control_type"] == "WindowControl"
+    assert summary["uia_tree_child_count"] == 1
+    assert summary["matched_edit_count"] == 1
+    assert summary["matched_search_count"] == 1
+    assert summary["matched_controls"][0]["control_type"] == "EditControl"
+    assert "GetChildren" not in jsonable_encoder(summary)["matched_controls"][0]
+
+
+def test_vision_failure_returns_candidate_diagnostics():
+    from app.wechat_ui import contact_searcher
+
+    class _FakeGrayImage:
+        size = (180, 40)
+
+        def load(self):
+            return self
+
+        def __getitem__(self, point):
+            x, y = point
+            if 5 <= x <= 124 and 8 <= y <= 29:
+                return 240
+            return 0
+
+    class _FakeImage:
+        def convert(self, mode):
+            return _FakeGrayImage()
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=_FakeImage()):
+        result = contact_searcher._locate_search_box_by_vision(123, win_rect)
+
+    assert result["success"] is False
+    assert result["reason"] == "search_box_size_not_matched"
+    assert result["candidate_count"] >= 1
+    assert result["candidate_rects"]
+    assert result["candidate_sizes"][0]["width"] == 120
+    assert result["expected_width_range"] == [130, 200]
+    assert result["expected_height_range"] == [20, 42]
+    assert result["rejected_reasons"]
+    assert result["closest_candidate"] is not None
+
+
 def test_agent_wechat_test_returns_json_when_search_focus_diagnostics_are_recursive():
     from app.wechat_ui.contact_searcher import open_chat_by_nickname
     from app.local_agent_main import create_local_agent_app
