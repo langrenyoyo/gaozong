@@ -38,7 +38,8 @@
       "Bash(taskkill //F //PID 3292)",
       "Bash(curl -s --max-time 5 -X POST http://127.0.0.1:19000/agent/ocr/warmup)",
       "Bash(curl -s --max-time 3 http://127.0.0.1:19000/agent/ocr/status)",
-      "Bash(curl -s --max-time 120 -X POST http://127.0.0.1:19000/agent/wechat/test -H 'Content-Type: application/json' -d '{\"nickname\":\"Aw3\",\"mode\":\"paste_only\",\"engine\":\"easyocr\",\"position\":\"right\"}')"
+      "Bash(curl -s --max-time 120 -X POST http://127.0.0.1:19000/agent/wechat/test -H 'Content-Type: application/json' -d '{\"nickname\":\"Aw3\",\"mode\":\"paste_only\",\"engine\":\"easyocr\",\"position\":\"right\"}')",
+      "Bash(C:/Users/A/miniconda3/envs/demo_auto_wechat/python.exe *)"
     ]
   }
 }

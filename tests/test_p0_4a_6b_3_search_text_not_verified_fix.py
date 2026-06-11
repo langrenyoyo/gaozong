@@ -503,3 +503,480 @@ def test_react_has_copy_open_chat_debug_json():
     assert "复制 open_chat debug JSON" in panel
     assert "clipboard.writeText" in panel
     assert "JSON.stringify(result.open_chat" in panel
+
+
+# =====================================================
+# 12. P0-4A-6B-3T-D: 策略 A2 readtext 传入 numpy.ndarray 而非 PIL.Image
+# =====================================================
+
+
+def test_strategy_a2_passes_numpy_ndarray_to_readtext():
+    """验证 verify_search_text_in_search_box 策略 A2 调用 readtext 时传入 numpy.ndarray。"""
+    import numpy as np
+    from unittest.mock import call
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.return_value = []  # 搜索框 OCR 空
+    _easyocr().Reader.return_value = mock_reader
+
+    # 构造一个真实 PIL.Image 作为 grab_screen 返回值
+    from PIL import Image
+    fake_image = Image.new("RGB", (200, 30), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="Aw3", click_point=click_point,
+        )
+
+    # readtext 至少被调用 2 次（策略 A2 + 策略 B）
+    assert mock_reader.readtext.call_count >= 1
+    # 第一次调用（策略 A2）的参数必须是 numpy.ndarray
+    first_arg = mock_reader.readtext.call_args_list[0][0][0]
+    assert isinstance(first_arg, np.ndarray), f"策略 A2 readtext 入参类型={type(first_arg)}，期望 numpy.ndarray"
+
+
+# =====================================================
+# 13. P0-4A-6B-3T-D: 策略 B readtext 传入 numpy.ndarray 而非 PIL.Image
+# =====================================================
+
+
+def test_strategy_b_passes_numpy_ndarray_to_readtext():
+    """验证 verify_search_text_in_search_box 策略 B 调用 readtext 时传入 numpy.ndarray。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_reader = MagicMock()
+    # 策略 A2 返回空（不匹配）→ 进入策略 B → 策略 B 也返回空
+    mock_reader.readtext.side_effect = [
+        [],  # 策略 A2：搜索框 OCR 空
+        [],  # 策略 B：结果区 OCR 空
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (200, 30), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="Aw3", click_point=click_point,
+        )
+
+    # readtext 被调用 2 次（策略 A2 + 策略 B）
+    assert mock_reader.readtext.call_count == 2
+    # 第二次调用（策略 B）的参数必须是 numpy.ndarray
+    second_arg = mock_reader.readtext.call_args_list[1][0][0]
+    assert isinstance(second_arg, np.ndarray), f"策略 B readtext 入参类型={type(second_arg)}，期望 numpy.ndarray"
+    # 安全失败
+    assert result["search_text_verified"] is False
+
+
+# =====================================================
+# 14. P0-4A-6B-3T-D: detect_search_result readtext 传入 numpy.ndarray
+# =====================================================
+
+
+def test_detect_search_result_passes_numpy_ndarray_to_readtext():
+    """验证 detect_search_result 调用 readtext 时传入 numpy.ndarray。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import detect_search_result
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.return_value = []  # 无 OCR 结果
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (400, 300), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_result_region_screenshot", return_value="result.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_result_overlay", return_value="overlay.png"):
+        result = detect_search_result(123, win_rect, "Aw3")
+
+    # readtext 被调用 1 次
+    assert mock_reader.readtext.call_count == 1
+    first_arg = mock_reader.readtext.call_args_list[0][0][0]
+    assert isinstance(first_arg, np.ndarray), f"detect_search_result readtext 入参类型={type(first_arg)}，期望 numpy.ndarray"
+
+
+# =====================================================
+# 15. P0-4A-6B-3T-D: OCR 异常时仍安全失败，不进入成功
+# =====================================================
+
+
+def test_ocr_exception_still_safely_fails():
+    """验证 readtext 抛异常时，verify_search_text_in_search_box 安全失败。"""
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_reader = MagicMock()
+    # 策略 A2 抛异常
+    mock_reader.readtext.side_effect = TypeError("Invalid input type")
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (200, 30), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="Aw3", click_point=click_point,
+        )
+
+    # 安全失败
+    assert result["search_text_verified"] is False
+    assert result["verified"] is False
+    assert result["success"] is False
+    assert result["manual_review_required"] is True
+    # search_text_debug.reason 包含 OCR 异常信息（策略 A2 或策略 B 的 except 捕获）
+    debug_reason = result["search_text_debug"].get("reason") or ""
+    assert "Invalid input type" in debug_reason or "ocr_check_failed" in debug_reason, \
+        f"期望包含 OCR 异常信息，实际: {debug_reason}"
+
+
+# =====================================================
+# 16. P0-4A-6B-3T-D: search_text_debug 字段在修复后仍完整
+# =====================================================
+
+
+def test_search_text_debug_fields_still_present_after_fix():
+    """修复后 search_text_debug 仍保留所有诊断字段。"""
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.side_effect = [
+        [],  # 策略 A2 空
+        [],  # 策略 B 空
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (200, 30), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="Aw3", click_point=click_point,
+        )
+
+    debug = result["search_text_debug"]
+    assert debug["search_box_crop_path"] == "crop.png"
+    assert debug["expected"] == "Aw3"
+    assert debug["verified"] is False
+    assert debug["reason"] is not None
+    # 策略 B 也应执行过
+    assert "result_area_ocr_text" in debug
+
+
+# =====================================================
+# 17. P0-4A-6B-3T-D: _pil_to_ndarray 对 numpy 输入直接返回
+# =====================================================
+
+
+def test_pil_to_ndarray_passthrough_numpy():
+    """验证 _pil_to_ndarray 对已经是 numpy 的输入直接返回。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import _pil_to_ndarray
+
+    arr = np.zeros((30, 200, 3), dtype=np.uint8)
+    result = _pil_to_ndarray(arr)
+    assert result is arr, "numpy 输入应直接返回原对象"
+
+
+def test_pil_to_ndarray_converts_pil_image():
+    """验证 _pil_to_ndarray 正确转换 PIL.Image 为 numpy。"""
+    import numpy as np
+    from PIL import Image
+    from app.wechat_ui.contact_searcher import _pil_to_ndarray
+
+    img = Image.new("RGBA", (200, 30), color=(255, 0, 0, 255))
+    result = _pil_to_ndarray(img)
+    assert isinstance(result, np.ndarray)
+    assert result.shape == (30, 200, 3), f"形状应为 (30, 200, 3)，实际 {result.shape}"
+    assert result.dtype == np.uint8
+
+
+# =====================================================
+# 18. P0-4A-6B-3T-D: _pil_to_ndarray 对 numpy 输入直接返回
+# =====================================================
+# （注：上面 test 17 已有两个 _pil_to_ndarray 测试，此处接续编号 19）
+
+# =====================================================
+# 19. P0-4A-6B-3U-D: ocr_items bbox 坐标为 Python int 而非 numpy.int32
+# =====================================================
+
+
+def test_ocr_items_bbox_is_python_int_not_numpy():
+    """验证 EasyOCR 返回 numpy 标量后，ocr_items bbox 全部为 Python int。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    # 模拟 EasyOCR 返回包含 numpy 标量的 bbox
+    mock_reader = MagicMock()
+    numpy_bbox = [
+        np.array([np.int32(10), np.int32(20)]),
+        np.array([np.int32(50), np.int32(20)]),
+        np.array([np.int32(50), np.int32(40)]),
+        np.array([np.int32(10), np.int32(40)]),
+    ]
+    mock_reader.readtext.side_effect = [
+        # 策略 A2：搜索框 OCR 返回含 numpy 标量的结果
+        [(numpy_bbox, "Aw3", np.float32(0.91))],
+        # 策略 B：结果区 OCR 空（跳过）
+        [],
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (200, 30), color=(255, 255, 255))
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="Aw3", click_point=click_point,
+        )
+
+    ocr_items = result["search_text_debug"]["ocr_items"]
+    assert len(ocr_items) >= 1, "ocr_items 应至少有 1 条 OCR 结果"
+
+    for i, item in enumerate(ocr_items):
+        # text 必须是 str
+        assert isinstance(item["text"], str), f"ocr_items[{i}].text 类型={type(item['text'])}，期望 str"
+        # confidence 必须是 float
+        assert isinstance(item["confidence"], float), f"ocr_items[{i}].confidence 类型={type(item['confidence'])}，期望 float"
+        # bbox 必须是嵌套 list，内部全部是 Python int
+        assert isinstance(item["bbox"], list), f"ocr_items[{i}].bbox 类型={type(item['bbox'])}，期望 list"
+        for j, point in enumerate(item["bbox"]):
+            assert isinstance(point, list), f"ocr_items[{i}].bbox[{j}] 类型={type(point)}，期望 list"
+            for k, coord in enumerate(point):
+                assert isinstance(coord, int), \
+                    f"ocr_items[{i}].bbox[{j}][{k}] 类型={type(coord).__name__}（值={coord}），期望 Python int"
+                assert not isinstance(coord, np.integer), \
+                    f"ocr_items[{i}].bbox[{j}][{k}] 仍是 numpy 类型 {type(coord).__name__}"
+
+
+# =====================================================
+# 20. P0-4A-6B-3U-D: _json_safe_debug_value 处理 numpy 标量
+# =====================================================
+
+
+def test_json_safe_debug_value_handles_numpy_scalars():
+    """验证 _json_safe_debug_value 将 numpy 标量转为 Python 原生类型。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import _json_safe_debug_value
+
+    # numpy.int32 → Python int
+    result_int = _json_safe_debug_value(np.int32(42))
+    assert isinstance(result_int, int), f"期望 int，实际 {type(result_int)}"
+    assert result_int == 42
+    assert not isinstance(result_int, np.integer)
+
+    # numpy.float32 → Python float
+    result_float = _json_safe_debug_value(np.float32(3.14))
+    assert isinstance(result_float, float), f"期望 float，实际 {type(result_float)}"
+    assert abs(result_float - 3.14) < 0.01
+
+    # numpy.float64 → Python float
+    result_f64 = _json_safe_debug_value(np.float64(2.718))
+    assert isinstance(result_f64, float)
+    assert abs(result_f64 - 2.718) < 0.001
+
+    # numpy.bool_ → Python bool
+    result_bool = _json_safe_debug_value(np.bool_(True))
+    assert isinstance(result_bool, bool), f"期望 bool，实际 {type(result_bool)}"
+    assert result_bool is True
+
+
+# =====================================================
+# 21. P0-4A-6B-3U-D: _json_safe_debug_value 处理 numpy ndarray
+# =====================================================
+
+
+def test_json_safe_debug_value_handles_numpy_ndarray():
+    """验证 _json_safe_debug_value 将 numpy ndarray 转为嵌套 Python list。"""
+    import numpy as np
+    from app.wechat_ui.contact_searcher import _json_safe_debug_value
+
+    arr = np.array([[np.int32(10), np.int32(20)], [np.int32(30), np.int32(40)]])
+    result = _json_safe_debug_value(arr)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    # 内部元素也应被转为 Python int
+    for row in result:
+        assert isinstance(row, list)
+        for val in row:
+            assert isinstance(val, int), f"期望 Python int，实际 {type(val).__name__}"
+            assert not isinstance(val, np.integer)
+
+
+# =====================================================
+# 22. P0-4A-6B-3U-D: 含 numpy 标量的完整响应 JSON 序列化不抛 500
+# =====================================================
+
+
+def test_full_response_json_serializable_with_numpy_scalars():
+    """验证含 numpy 标量的完整 /agent/wechat/test 响应可以被 JSON 序列化。"""
+    import json
+    import numpy as np
+    from app.wechat_ui.contact_searcher import _json_safe_debug_value
+
+    # 模拟 verify_search_text_in_search_box 返回含 numpy 标量的 ocr_items
+    numpy_bbox = [
+        np.array([np.int32(10), np.int32(20)]),
+        np.array([np.int32(50), np.int32(20)]),
+        np.array([np.int32(50), np.int32(40)]),
+        np.array([np.int32(10), np.int32(40)]),
+    ]
+    ocr_items = [{
+        "text": "Aw3",
+        "confidence": float(np.float32(0.91)),
+        "bbox": [[int(v) for v in p] for p in numpy_bbox],
+    }]
+
+    search_focus = {
+        "search_text_verified": True,
+        "text_pasted_into_search_box": True,
+        "search_text_debug": {
+            "expected": "Aw3",
+            "verified": True,
+            "ocr_items": ocr_items,
+        },
+    }
+
+    open_result = {
+        "success": True,
+        "nickname": "Aw3",
+        "failure_stage": None,
+        "chat_verified": False,
+        "confidence": 0.3,
+        "evidence": {"screenshot": "open.png"},
+        "search_keyword": "Aw3",
+        "opened_by": "search",
+        "search_action_completed": True,
+        "search_keyword_pasted": True,
+        "maybe_chat_opened": True,
+        "search_focus": search_focus,
+        "notes": [],
+    }
+
+    with patch("app.local_agent_main.is_automation_allowed", return_value=True), \
+         patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
+         patch("app.local_agent_main.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.local_agent_main.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.local_agent_main.open_chat_by_nickname", return_value=open_result), \
+         patch("app.local_agent_main.verify_current_chat_contact",
+               return_value=_verified()), \
+         patch("app.local_agent_main.write_text_to_input",
+               return_value={"success": True, "pasted": True}), \
+         patch("app.local_agent_main.get_ocr_status",
+               return_value={"success": True, "ocr_available": True, "ocr_initialized": True,
+                             "model_ready": True, "initializing": False, "engine": "easyocr"}), \
+         patch("app.local_agent_main._check_ocr_ready_for_agent_test", return_value=None), \
+         patch("app.local_agent_main._safe_screenshot", return_value=None):
+        response = _client().post("/agent/wechat/test", json={
+            "nickname": "Aw3", "message": "test",
+        })
+
+    # 不应返回 500
+    assert response.status_code == 200, f"状态码={response.status_code}，响应={response.text[:500]}"
+    data = response.json()
+    assert data["success"] is True
+    assert data["action"]["pasted"] is True
+    assert data["action"]["sent"] is False
+    # 验证 JSON 可以被二次序列化（不含 numpy 残留）
+    json_str = json.dumps(data)
+    reloaded = json.loads(json_str)
+    assert reloaded["success"] is True
+
+
+# =====================================================
+# 23. P0-4A-6B-3U-D: _json_safe_debug_value 不改变 Python 原生值
+# =====================================================
+
+
+def test_json_safe_debug_value_preserves_native_types():
+    """验证 _json_safe_debug_value 不改变已有的 Python 原生类型值。"""
+    from app.wechat_ui.contact_searcher import _json_safe_debug_value
+
+    # Python 原生类型应原样返回
+    assert _json_safe_debug_value(42) == 42
+    assert isinstance(_json_safe_debug_value(42), int)
+    assert _json_safe_debug_value(3.14) == 3.14
+    assert isinstance(_json_safe_debug_value(3.14), float)
+    assert _json_safe_debug_value("hello") == "hello"
+    assert _json_safe_debug_value(True) is True
+    assert _json_safe_debug_value(None) is None
+
+    # dict 应递归处理
+    d = {"a": 1, "b": "two", "c": None}
+    result = _json_safe_debug_value(d)
+    assert result == d
+
+    # list 应递归处理
+    lst = [1, "two", None, True]
+    result = _json_safe_debug_value(lst)
+    assert result == lst

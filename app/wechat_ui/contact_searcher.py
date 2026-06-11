@@ -35,6 +35,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 import uiautomation as uia
 
 from app.wechat_ui.window_locator import (
@@ -93,6 +95,20 @@ OPEN_CHAT_STAGE_KEYS = (
 
 def _new_open_chat_stages() -> dict:
     return {key: False for key in OPEN_CHAT_STAGE_KEYS}
+
+
+def _pil_to_ndarray(image) -> "np.ndarray":
+    """将 PIL.Image 转为 numpy ndarray，确保 EasyOCR readtext 输入类型正确。
+
+    P0-4A-6B-3T-D：当前 EasyOCR 环境不支持 PIL.Image.Image 直接传入 readtext，
+    必须转为 numpy.ndarray。此函数统一处理转换，确保 RGB 模式。
+    """
+    if isinstance(image, np.ndarray):
+        return image
+    # 确保是 RGB 模式（排除 RGBA、L 等模式导致维度不一致）
+    if hasattr(image, "convert"):
+        image = image.convert("RGB")
+    return np.array(image)
 
 
 class _DebugStep:
@@ -663,6 +679,16 @@ def _json_safe_debug_value(value, visited: set[int] | None = None, depth: int = 
     """Return a JSON-safe debug value without following object cycles."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    # P0-4A-6B-3U-D：numpy 标量不是 Python 原生类型，isinstance(np.int32, int) 为 False。
+    # 用 .item() 转为 Python 原生类型，避免 FastAPI jsonable_encoder 500。
+    if hasattr(value, "item") and not isinstance(value, (dict, list, tuple, set)):
+        try:
+            return value.item()  # numpy.int32 → int, numpy.float32 → float, numpy.bool_ → bool
+        except Exception:
+            pass
+    if isinstance(value, np.ndarray):
+        # numpy ndarray 转为嵌套 list，逐元素递归清洗
+        return [_json_safe_debug_value(v, visited, depth + 1) for v in value]
     if isinstance(value, Path):
         return str(value)
     if depth >= 6:
@@ -2146,14 +2172,14 @@ def verify_search_text_in_search_box(
             result["search_text_debug"]["search_box_overlay_path"] = overlay_path
 
             reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
-            raw = reader.readtext(image)
+            raw = reader.readtext(_pil_to_ndarray(image))
             ocr_items = []
             for item in raw:
                 if len(item) >= 2:
                     ocr_items.append({
                         "text": str(item[1]),
                         "confidence": float(item[2]) if len(item) >= 3 else 0.8,
-                        "bbox": [list(p) for p in item[0]] if len(item) >= 1 else [],
+                        "bbox": [[int(v) for v in p] for p in item[0]] if len(item) >= 1 else [],
                     })
             ocr_text = " ".join(str(item[1]) for item in raw if len(item) >= 2)
             normalized_ocr = _normalize_text(ocr_text)
@@ -2224,7 +2250,7 @@ def verify_search_text_in_search_box(
             result["search_text_debug"]["result_area_crop_path"] = result_crop_path
 
             reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
-            raw = reader.readtext(result_image)
+            raw = reader.readtext(_pil_to_ndarray(result_image))
             result_ocr = " ".join(str(item[1]) for item in raw if len(item) >= 2)
             normalized_result_ocr = _normalize_text(result_ocr)
 
@@ -2672,7 +2698,7 @@ def detect_search_result(hwnd: int, win_rect: dict, nickname: str) -> dict:
 
         image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
         reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
-        raw = reader.readtext(image)
+        raw = reader.readtext(_pil_to_ndarray(image))
         best = None
         for item in raw:
             if len(item) < 2:
