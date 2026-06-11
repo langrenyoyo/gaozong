@@ -8,6 +8,12 @@
 
 # Project AI Entry Protocol
 
+CLAUDE.md 是所有 VibeCoding / Codex / Claude Code 任务的项目入口文件。
+
+开始任何任务前，必须第一步阅读 CLAUDE.md；随后再按 Required Reading Order 阅读 docs/ai 规则文件。
+
+不得跳过 CLAUDE.md 直接进入代码、测试、日志或业务实现。
+
 你正在参与一个真实项目开发。
 
 本项目遵循分层 AI 协作规范。
@@ -18,8 +24,13 @@
 
 # Rule Priority
 
+CLAUDE.md 是入口规则和项目级约束汇总文件。
+
+docs/ai/*.md 是分层执行规则文件。
+
 优先级如下：
 
+P-1 CLAUDE.md Entry Protocol
 P0 Reading Rules
 P1 Project Context
 P2 Execution Rules
@@ -28,6 +39,8 @@ P4 Output Rules
 
 发生冲突时：
 
+CLAUDE.md Entry Protocol
+>
 Reading Rules
 >
 Project Context
@@ -514,6 +527,19 @@ P0-4 下一步：
 12. React 本机 Agent 面板不能使用 VITE_API_BASE_URL
 13. 不能操作开发主机微信作为测试电脑结果
 
+## WeChat Automation Safety Boundary
+
+以下边界适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
+
+1. 不允许绕过 foreground_guard。
+2. 不允许绕过 search_focus guard。
+3. 不允许绕过 search_text_verified。
+4. 不允许未经验证直接粘贴。
+5. 不允许发送 Ctrl+V。
+6. 不允许发送 Enter。
+7. 不允许把 sent 置为 true。
+8. 不允许业务自动派单发送。
+
 # LAN Access Rules
 
 局域网演示必须使用：
@@ -750,6 +776,13 @@ tsconfig.node.json 必须包含：
 
 ------
 
+## Current Task Focus and Bug-Fix Gate
+
+1. Bug 修复前必须先澄清真实调用链、真实根因、涉及文件、修改范围、是否影响无关模块、是否可能引入回归。
+2. 高风险逻辑必须写诊断日志，便于后续排查；不得只记录“失败了”。
+3. 当前重点是 /agent/wechat/test、Local Agent 19000、微信搜索框自动点击诊断、search_focus_not_verified、_click_left_button / SetCursorPos / mouse_event、click_debug 诊断。
+4. 除非用户明确批准，当前不应进入 OCR Reader、verify_search_text_in_search_box、search_text_not_verified、P0-5A WechatTask、React、发送逻辑。
+
 # Mandatory Workflow
 
 任何任务必须遵循：
@@ -780,24 +813,12 @@ tsconfig.node.json 必须包含：
 
 开始任务后按顺序阅读：
 
-1. 
-docs/ai/01_READING_RULES.md
-
-1. 
-
-docs/ai/05_PROJECT_CONTEXT.md
-
-1. 
-
-docs/ai/02_EXECUTION_RULES.md
-
-1. 
-
-docs/ai/03_TESTING_RULES.md
-
-1. 
-
-docs/ai/04_OUTPUT_RULES.md
+1. CLAUDE.md
+2. docs/ai/01_READING_RULES.md
+3. docs/ai/05_PROJECT_CONTEXT.md
+4. docs/ai/02_EXECUTION_RULES.md
+5. docs/ai/03_TESTING_RULES.md
+6. docs/ai/04_OUTPUT_RULES.md
 
 ------
 

@@ -947,10 +947,10 @@ def test_click_left_button_returns_click_debug():
     from app.wechat_ui import contact_searcher
 
     positions = [
-        (10, 20),
-        (120, 95),
-        (120, 95),
-        (120, 95),
+        {"x": 10, "y": 20},
+        {"x": 120, "y": 95},
+        {"x": 120, "y": 95},
+        {"x": 120, "y": 95},
     ]
     foregrounds = [321, 321, 321, 321, 321]
     rects = [
@@ -970,16 +970,71 @@ def test_click_left_button_returns_click_debug():
              "integrity_level_mismatch": False,
              "integrity_unavailable_reason": None,
          }), \
+         patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "target_in_virtual_screen": True,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._click_process_session_debug", return_value={
+             "agent_pid": 100,
+             "agent_process_path": "agent.exe",
+             "agent_session_id": 1,
+             "wechat_pid": 200,
+             "wechat_process_path": "WeChat.exe",
+             "wechat_session_id": 1,
+             "foreground_pid": 200,
+             "foreground_session_id": 1,
+             "same_session_agent_wechat": True,
+             "same_session_agent_foreground": True,
+             "agent_process_unavailable_reason": None,
+             "wechat_process_unavailable_reason": None,
+             "foreground_process_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._desktop_debug", return_value={
+             "process_window_station_name": "WinSta0",
+             "thread_desktop_name": "Default",
+             "input_desktop_name": "Default",
+             "open_input_desktop_ok": True,
+             "open_input_desktop_last_error": 0,
+             "open_input_desktop_last_error_message": "",
+             "thread_desktop_equals_input_desktop": True,
+             "is_winsta0_default": True,
+             "session_id": 1,
+             "env_SESSIONNAME": "Console",
+             "sm_remote_session": 0,
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "desktop_debug_exception": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
          patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
-         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[100.0, 100.02, 100.05]):
-        mock_ctypes.windll.user32.SetCursorPos.return_value = 1
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[100.0, 100.02, 100.05, 100.05]):
+        mock_user32 = MagicMock()
+        mock_ctypes.WinDLL.return_value = mock_user32
+        mock_user32.SetCursorPos.return_value = 1
+        mock_ctypes.get_last_error.return_value = 0
 
         debug = contact_searcher._click_left_button(120, 95, hwnd=321)
 
+    mock_ctypes.WinDLL.assert_any_call("user32", use_last_error=True)
+    assert mock_user32.SetCursorPos.argtypes == [mock_ctypes.c_int, mock_ctypes.c_int]
+    assert mock_user32.SetCursorPos.restype == mock_ctypes.wintypes.BOOL
+    mock_ctypes.set_last_error.assert_any_call(0)
     assert debug["click_method"] == "SetCursorPos+mouse_event"
     assert debug["target_x"] == 120
     assert debug["target_y"] == 95
     assert debug["set_cursor_pos_ok"] is True
+    assert debug["set_cursor_pos_last_error"] == 0
+    assert debug["set_cursor_pos_last_error_message"] == ""
     assert debug["cursor_before"] == {"x": 10, "y": 20}
     assert debug["cursor_after_set"] == {"x": 120, "y": 95}
     assert debug["cursor_after_down"] == {"x": 120, "y": 95}
@@ -988,9 +1043,21 @@ def test_click_left_button_returns_click_debug():
     assert debug["foreground_after_click"]["hwnd"] == 321
     assert debug["window_rect_before_click"] == rects[0]
     assert debug["window_rect_after_click"] == rects[1]
+    assert debug["legacy_foreground_ok"] is True
+    assert debug["legacy_foreground_diag"] == "OK"
     assert debug["agent_integrity_level"] == "medium"
     assert debug["wechat_integrity_level"] == "medium"
     assert debug["integrity_level_mismatch"] is False
+    assert debug["virtual_screen_left"] == 0
+    assert debug["virtual_screen_right"] == 1920
+    assert debug["target_in_virtual_screen"] is True
+    assert debug["agent_pid"] == 100
+    assert debug["wechat_pid"] == 200
+    assert debug["foreground_pid"] == 200
+    assert debug["same_session_agent_wechat"] is True
+    assert debug["same_session_agent_foreground"] is True
+    assert debug["desktop_debug"]["process_window_station_name"] == "WinSta0"
+    assert debug["desktop_debug"]["thread_desktop_equals_input_desktop"] is True
     assert debug["click_exception"] is None
     assert debug["click_duration_ms"] == 50
     assert debug["down_up_interval_ms"] == 30
@@ -1000,7 +1067,8 @@ def test_click_left_button_returns_click_debug():
 def test_click_left_button_reports_set_cursor_pos_failure_and_integrity_unavailable():
     from app.wechat_ui import contact_searcher
 
-    with patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", return_value={"x": 1, "y": 2}), \
+    with patch.dict(contact_searcher.os.environ, {}, clear=True), \
+         patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", return_value={"x": 1, "y": 2}), \
          patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
              "hwnd": 999,
              "title": "Code",
@@ -1014,17 +1082,405 @@ def test_click_left_button_reports_set_cursor_pos_failure_and_integrity_unavaila
              "integrity_level_mismatch": None,
              "integrity_unavailable_reason": "OpenProcessToken failed",
          }), \
+         patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 100,
+             "virtual_screen_height": 100,
+             "virtual_screen_right": 100,
+             "virtual_screen_bottom": 100,
+             "target_in_virtual_screen": False,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._click_process_session_debug", return_value={
+             "agent_pid": 100,
+             "agent_process_path": None,
+             "agent_session_id": None,
+             "wechat_pid": 200,
+             "wechat_process_path": None,
+             "wechat_session_id": None,
+             "foreground_pid": 999,
+             "foreground_session_id": None,
+             "same_session_agent_wechat": None,
+             "same_session_agent_foreground": None,
+             "agent_process_unavailable_reason": "ProcessIdToSessionId failed",
+             "wechat_process_unavailable_reason": "OpenProcess failed",
+             "foreground_process_unavailable_reason": "ProcessIdToSessionId failed",
+         }), \
+         patch("app.wechat_ui.contact_searcher._desktop_debug", return_value={
+             "process_window_station_name": None,
+             "thread_desktop_name": None,
+             "input_desktop_name": None,
+             "open_input_desktop_ok": False,
+             "open_input_desktop_last_error": 5,
+             "open_input_desktop_last_error_message": "Access is denied.",
+             "thread_desktop_equals_input_desktop": None,
+             "is_winsta0_default": None,
+             "session_id": None,
+             "env_SESSIONNAME": "Console",
+             "sm_remote_session": None,
+             "virtual_screen_left": None,
+             "virtual_screen_top": None,
+             "virtual_screen_width": None,
+             "virtual_screen_height": None,
+             "virtual_screen_right": None,
+             "virtual_screen_bottom": None,
+             "desktop_debug_exception": "OpenInputDesktop failed",
+         }), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(False, "foreground is Code")), \
          patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
-         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[1.0, 1.0, 1.0]):
-        mock_ctypes.windll.user32.SetCursorPos.return_value = 0
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[1.0, 1.0, 1.0, 1.0]):
+        mock_user32 = MagicMock()
+        mock_ctypes.WinDLL.return_value = mock_user32
+        mock_user32.SetCursorPos.return_value = 0
         mock_ctypes.get_last_error.return_value = 5
+        mock_ctypes.FormatError.return_value = "Access is denied."
 
         debug = contact_searcher._click_left_button(120, 95, hwnd=321)
 
+    assert mock_user32.SetCursorPos.argtypes == [mock_ctypes.c_int, mock_ctypes.c_int]
+    assert mock_user32.SetCursorPos.restype == mock_ctypes.wintypes.BOOL
     assert debug["set_cursor_pos_ok"] is False
     assert debug["set_cursor_pos_last_error"] == 5
+    assert debug["set_cursor_pos_last_error_message"] == "Access is denied."
+    assert debug["target_in_virtual_screen"] is False
+    assert debug["agent_process_unavailable_reason"] == "ProcessIdToSessionId failed"
+    assert debug["wechat_process_unavailable_reason"] == "OpenProcess failed"
+    assert debug["legacy_foreground_ok"] is False
+    assert debug["legacy_foreground_diag"] == "foreground is Code"
     assert debug["integrity_unavailable_reason"] == "OpenProcessToken failed"
+    assert debug["desktop_debug"]["open_input_desktop_ok"] is False
+    assert debug["desktop_debug"]["open_input_desktop_last_error"] == 5
+    assert "sendinput_mouse_debug" not in debug
     jsonable_encoder(debug)
+
+
+def test_click_left_button_sendinput_diag_enabled_success_does_not_sendinput():
+    from app.wechat_ui import contact_searcher
+
+    with patch.dict(contact_searcher.os.environ, {"AUTO_WECHAT_SENDINPUT_MOUSE_DIAG": "1"}, clear=True), \
+         patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", side_effect=[
+             {"x": 1, "y": 2},
+             {"x": 120, "y": 95},
+             {"x": 120, "y": 95},
+             {"x": 120, "y": 95},
+         ]), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
+             "hwnd": 321,
+             "title": "微信",
+             "class": "Qt51514QWindowIcon",
+             "process_name": "WeChat.exe",
+         }), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", return_value={
+             "left": 0, "top": 0, "right": 880, "bottom": 700,
+         }), \
+         patch("app.wechat_ui.contact_searcher._click_integrity_debug", return_value={}), \
+         patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "target_in_virtual_screen": True,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._click_process_session_debug", return_value={}), \
+         patch("app.wechat_ui.contact_searcher._sendinput_mouse_move_only_debug") as mock_diag, \
+         patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[1.0, 1.0, 1.0, 1.0]):
+        mock_user32 = MagicMock()
+        mock_ctypes.WinDLL.return_value = mock_user32
+        mock_user32.SetCursorPos.return_value = 1
+        mock_ctypes.get_last_error.return_value = 0
+
+        debug = contact_searcher._click_left_button(120, 95, hwnd=321)
+
+    mock_diag.assert_not_called()
+    assert debug["sendinput_mouse_debug"] == {
+        "enabled": False,
+        "mode": "move_only",
+        "reason": "set_cursor_pos_reached_target",
+    }
+    jsonable_encoder(debug)
+
+
+def test_click_left_button_sendinput_diag_enabled_failure_calls_move_only():
+    from app.wechat_ui import contact_searcher
+
+    sendinput_debug = {
+        "enabled": True,
+        "mode": "move_only",
+        "reason": "set_cursor_pos_failed_or_cursor_not_at_target",
+        "sendinput_move_sent_count": 1,
+    }
+    with patch.dict(contact_searcher.os.environ, {"AUTO_WECHAT_SENDINPUT_MOUSE_DIAG": "1"}, clear=True), \
+         patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug", return_value={"x": 1, "y": 2}), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
+             "hwnd": 321,
+             "title": "微信",
+             "class": "Qt51514QWindowIcon",
+             "process_name": "WeChat.exe",
+         }), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", return_value=None), \
+         patch("app.wechat_ui.contact_searcher._click_integrity_debug", return_value={}), \
+         patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "target_in_virtual_screen": True,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._click_process_session_debug", return_value={}), \
+         patch("app.wechat_ui.contact_searcher._sendinput_mouse_move_only_debug", return_value=sendinput_debug) as mock_diag, \
+         patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes, \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[1.0, 1.0, 1.0, 1.0]):
+        mock_user32 = MagicMock()
+        mock_ctypes.WinDLL.return_value = mock_user32
+        mock_user32.SetCursorPos.return_value = 0
+        mock_ctypes.get_last_error.return_value = 0
+
+        debug = contact_searcher._click_left_button(120, 95, hwnd=321)
+
+    mock_diag.assert_called_once_with(
+        120,
+        95,
+        hwnd=321,
+        reason="set_cursor_pos_failed_or_cursor_not_at_target",
+    )
+    assert debug["sendinput_mouse_debug"] == sendinput_debug
+    jsonable_encoder(debug)
+
+
+def test_sendinput_absolute_coord_normalization_single_screen_boundaries():
+    from app.wechat_ui import contact_searcher
+
+    assert contact_searcher._normalize_sendinput_absolute_coord(0, 0, 1920) == 0
+    assert contact_searcher._normalize_sendinput_absolute_coord(1919, 0, 1920) == 65535
+
+
+def test_sendinput_absolute_coord_normalization_negative_virtual_screen():
+    from app.wechat_ui import contact_searcher
+
+    assert contact_searcher._normalize_sendinput_absolute_coord(-1920, -1920, 3840) == 0
+    assert contact_searcher._normalize_sendinput_absolute_coord(1919, -1920, 3840) == 65535
+
+
+def test_sendinput_mouse_move_only_records_success_without_click_flags():
+    from app.wechat_ui import contact_searcher
+
+    captured = {}
+    mock_user32 = MagicMock()
+
+    def fake_sendinput(count, input_ptr, cb_size):
+        captured["count"] = count
+        captured["cb_size"] = cb_size
+        captured["type"] = int(input_ptr[0].type)
+        captured["dx"] = int(input_ptr[0].union.mi.dx)
+        captured["dy"] = int(input_ptr[0].union.mi.dy)
+        captured["flags"] = int(input_ptr[0].union.mi.dwFlags)
+        return 1
+
+    mock_user32.SendInput.side_effect = fake_sendinput
+
+    with patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "target_in_virtual_screen": True,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug",
+               side_effect=[{"x": 1, "y": 2}, {"x": 120, "y": 95}]), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
+             "hwnd": 321,
+             "title": "微信",
+             "class": "Qt51514QWindowIcon",
+             "process_name": "WeChat.exe",
+         }), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", return_value=None), \
+         patch.object(contact_searcher.ctypes, "WinDLL", return_value=mock_user32), \
+         patch.object(contact_searcher.ctypes, "get_last_error", return_value=0), \
+         patch.object(contact_searcher.ctypes, "set_last_error"), \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[10.0, 10.02]):
+        result = contact_searcher._sendinput_mouse_move_only_debug(120, 95, hwnd=321, reason="unit_test")
+
+    assert captured["count"] == 1
+    assert captured["type"] == 0
+    assert captured["flags"] & 0x0001
+    assert captured["flags"] & 0x8000
+    assert captured["flags"] & 0x4000
+    assert not captured["flags"] & 0x0002
+    assert not captured["flags"] & 0x0004
+    assert result["enabled"] is True
+    assert result["mode"] == "move_only"
+    assert result["sendinput_move_sent_count"] == 1
+    assert result["sendinput_last_error"] == 0
+    assert result["cursor_after_sendinput_move"] == {"x": 120, "y": 95}
+    jsonable_encoder(result)
+
+
+def test_sendinput_mouse_move_only_records_failure_last_error():
+    from app.wechat_ui import contact_searcher
+
+    mock_user32 = MagicMock()
+    mock_user32.SendInput.return_value = 0
+    with patch("app.wechat_ui.contact_searcher._virtual_screen_debug", return_value={
+             "virtual_screen_left": 0,
+             "virtual_screen_top": 0,
+             "virtual_screen_width": 1920,
+             "virtual_screen_height": 1080,
+             "virtual_screen_right": 1920,
+             "virtual_screen_bottom": 1080,
+             "target_in_virtual_screen": True,
+             "virtual_screen_unavailable_reason": None,
+         }), \
+         patch("app.wechat_ui.contact_searcher._get_cursor_pos_debug",
+               side_effect=[{"x": 1, "y": 2}, {"x": 1, "y": 2}]), \
+         patch("app.wechat_ui.contact_searcher._foreground_window_debug", return_value={
+             "hwnd": 321,
+             "title": "微信",
+             "class": "Qt51514QWindowIcon",
+             "process_name": "WeChat.exe",
+         }), \
+         patch("app.wechat_ui.contact_searcher._safe_window_rect_debug", return_value=None), \
+         patch.object(contact_searcher.ctypes, "WinDLL", return_value=mock_user32), \
+         patch.object(contact_searcher.ctypes, "get_last_error", return_value=5), \
+         patch.object(contact_searcher.ctypes, "FormatError", return_value="Access is denied."), \
+         patch.object(contact_searcher.ctypes, "set_last_error"), \
+         patch("app.wechat_ui.contact_searcher.time.time", side_effect=[10.0, 10.02]):
+        result = contact_searcher._sendinput_mouse_move_only_debug(120, 95, hwnd=321, reason="unit_test")
+
+    assert result["sendinput_move_sent_count"] == 0
+    assert result["sendinput_last_error"] == 5
+    assert result["sendinput_last_error_message"] == "Access is denied."
+    jsonable_encoder(result)
+
+
+def test_desktop_debug_returns_winsta0_default():
+    from app.wechat_ui import contact_searcher
+
+    result = contact_searcher._desktop_debug()
+
+    assert "process_window_station_name" in result
+    assert "thread_desktop_name" in result
+    assert "input_desktop_name" in result
+    assert "open_input_desktop_ok" in result
+    assert "thread_desktop_equals_input_desktop" in result
+    assert "is_winsta0_default" in result
+    assert "session_id" in result
+    assert "sm_remote_session" in result
+    jsonable_encoder(result)
+
+
+def test_desktop_debug_open_input_desktop_failure_returns_error():
+    from app.wechat_ui import contact_searcher
+
+    mock_user32 = MagicMock()
+    mock_kernel32 = MagicMock()
+    mock_user32.GetProcessWindowStation.return_value = 111
+    mock_user32.GetThreadDesktop.return_value = 222
+    mock_user32.OpenInputDesktop.return_value = 0
+    mock_user32.GetSystemMetrics.side_effect = [0, 0, 1920, 1080, 0]
+    mock_kernel32.GetCurrentThreadId.return_value = 333
+    mock_kernel32.ProcessIdToSessionId.return_value = 1
+
+    def fake_get_user_object_info(handle, index, buffer, size, needed):
+        if not buffer:
+            needed._obj.value = 16
+            return 0
+        buffer.value = "Default"
+        return 1
+
+    mock_user32.GetUserObjectInformationW.side_effect = fake_get_user_object_info
+    with patch.object(contact_searcher.ctypes, "WinDLL", side_effect=[mock_user32, mock_kernel32]), \
+         patch.object(contact_searcher.ctypes, "get_last_error", return_value=5), \
+         patch.object(contact_searcher.ctypes, "FormatError", return_value="Access is denied."):
+        result = contact_searcher._desktop_debug()
+
+    assert result["open_input_desktop_ok"] is False
+    assert result["open_input_desktop_last_error"] == 5
+    assert result["open_input_desktop_last_error_message"] == "Access is denied."
+    assert result["desktop_debug_exception"]
+    jsonable_encoder(result)
+
+
+def test_desktop_debug_get_user_object_information_failure_returns_error():
+    from app.wechat_ui import contact_searcher
+
+    mock_user32 = MagicMock()
+    mock_kernel32 = MagicMock()
+    mock_user32.GetProcessWindowStation.return_value = 111
+    mock_user32.GetThreadDesktop.return_value = 222
+    mock_user32.OpenInputDesktop.return_value = 333
+    mock_user32.GetSystemMetrics.side_effect = [0, 0, 1920, 1080, 0]
+    mock_kernel32.GetCurrentThreadId.return_value = 333
+    mock_kernel32.ProcessIdToSessionId.return_value = 1
+
+    def fake_get_user_object_info(_handle, _index, _buffer, _size, needed):
+        needed._obj.value = 0
+        return 0
+
+    mock_user32.GetUserObjectInformationW.side_effect = fake_get_user_object_info
+    with patch.object(contact_searcher.ctypes, "WinDLL", side_effect=[mock_user32, mock_kernel32]), \
+         patch.object(contact_searcher.ctypes, "get_last_error", return_value=6), \
+         patch.object(contact_searcher.ctypes, "FormatError", return_value="The handle is invalid."):
+        result = contact_searcher._desktop_debug()
+
+    assert result["desktop_debug_exception"]
+    assert "GetUserObjectInformationW size failed" in result["desktop_debug_exception"]
+    jsonable_encoder(result)
+
+
+def test_virtual_screen_debug_calculates_target_inside():
+    from app.wechat_ui import contact_searcher
+
+    mock_user32 = MagicMock()
+    mock_user32.GetSystemMetrics.side_effect = [0, 0, 1920, 1080]
+    with patch("app.wechat_ui.contact_searcher.ctypes") as mock_ctypes:
+        mock_ctypes.WinDLL.return_value = mock_user32
+        result = contact_searcher._virtual_screen_debug(176, 58)
+
+    mock_ctypes.WinDLL.assert_called_once_with("user32", use_last_error=True)
+    assert mock_user32.GetSystemMetrics.argtypes == [mock_ctypes.c_int]
+    assert mock_user32.GetSystemMetrics.restype == mock_ctypes.c_int
+    assert result["virtual_screen_left"] == 0
+    assert result["virtual_screen_top"] == 0
+    assert result["virtual_screen_right"] == 1920
+    assert result["virtual_screen_bottom"] == 1080
+    assert result["target_in_virtual_screen"] is True
+    jsonable_encoder(result)
+
+
+def test_click_process_session_debug_returns_unavailable_reasons():
+    from app.wechat_ui import contact_searcher
+
+    with patch("app.wechat_ui.contact_searcher.os.getpid", return_value=100), \
+         patch("app.wechat_ui.contact_searcher.ctypes.windll.user32.GetForegroundWindow", return_value=999), \
+         patch("app.wechat_ui.contact_searcher._hwnd_debug_info",
+               return_value={"pid": 300, "hwnd": 999, "title": "Code", "class": "ConsoleWindowClass"}), \
+         patch("app.wechat_ui.contact_searcher._get_window_process_id", return_value=200), \
+         patch("app.wechat_ui.contact_searcher._process_path",
+               side_effect=[(None, "agent path failed"), (None, "wechat path failed"), (None, "foreground path failed")]), \
+         patch("app.wechat_ui.contact_searcher._process_session_id",
+               side_effect=[(None, "agent session failed"), (None, "wechat session failed"), (None, "foreground session failed")]):
+        result = contact_searcher._click_process_session_debug(321)
+
+    assert result["agent_pid"] == 100
+    assert result["wechat_pid"] == 200
+    assert result["foreground_pid"] == 300
+    assert result["same_session_agent_wechat"] is None
+    assert result["same_session_agent_foreground"] is None
+    assert result["agent_process_unavailable_reason"] == "agent path failed; agent session failed"
+    assert result["wechat_process_unavailable_reason"] == "wechat path failed; wechat session failed"
+    assert result["foreground_process_unavailable_reason"] == "foreground path failed; foreground session failed"
+    jsonable_encoder(result)
 
 
 def test_open_chat_focus_failure_includes_click_debug_without_paste_or_send():
@@ -1055,6 +1511,28 @@ def test_open_chat_focus_failure_includes_click_debug_without_paste_or_send():
         "target_y": 95,
         "set_cursor_pos_ok": True,
         "cursor_after_set": {"x": 120, "y": 95},
+        "legacy_foreground_ok": False,
+        "legacy_foreground_diag": "foreground is Code",
+        "desktop_debug": {
+            "process_window_station_name": "WinSta0",
+            "thread_desktop_name": "Default",
+            "input_desktop_name": "Default",
+            "open_input_desktop_ok": True,
+            "open_input_desktop_last_error": 0,
+            "open_input_desktop_last_error_message": "",
+            "thread_desktop_equals_input_desktop": True,
+            "is_winsta0_default": True,
+            "session_id": 1,
+            "env_SESSIONNAME": "Console",
+            "sm_remote_session": 0,
+            "virtual_screen_left": 0,
+            "virtual_screen_top": 0,
+            "virtual_screen_width": 1920,
+            "virtual_screen_height": 1080,
+            "virtual_screen_right": 1920,
+            "virtual_screen_bottom": 1080,
+            "desktop_debug_exception": None,
+        },
     }
 
     with patch("app.wechat_ui.contact_searcher._check_preconditions",
@@ -1063,7 +1541,7 @@ def test_open_chat_focus_failure_includes_click_debug_without_paste_or_send():
          patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
          patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
          patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground",
-               return_value=(False, "foreground is Code")), \
+               side_effect=[(False, "foreground is Code"), (True, "OK")]), \
          patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
          patch("app.wechat_ui.contact_searcher._click_left_button", return_value=click_debug), \
          patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
@@ -1079,6 +1557,7 @@ def test_open_chat_focus_failure_includes_click_debug_without_paste_or_send():
     assert focus_result["click_debug"]["target_y"] == 95
     assert focus_result["click_debug"]["legacy_foreground_ok"] is False
     assert focus_result["click_debug"]["legacy_foreground_diag"] == "foreground is Code"
+    assert focus_result["click_debug"]["desktop_debug"]["thread_desktop_equals_input_desktop"] is True
     jsonable_encoder(focus_result["click_debug"])
     assert result["search_keyword_pasted"] is False
     assert result["pasted"] is False
@@ -1651,6 +2130,90 @@ def test_open_chat_blocks_enter_when_search_text_not_verified():
     sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
     assert "{Enter}" not in sent_keys
     assert "{Down}" not in sent_keys
+
+
+def test_agent_test_search_text_not_verified_sanitizes_recursive_click_point():
+    from app.local_agent_main import create_local_agent_app
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "uia_search_edit",
+        "confidence": 0.9,
+        "source": "uia",
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "uia"},
+    }
+    click_point["locator_attempts"] = {"uia_attempt": click_point}
+    focus = {
+        "verified": True,
+        "focused": True,
+        "clicked": True,
+        "success": True,
+        "failure_stage": None,
+        "text_leaked_to_chat_input": False,
+    }
+    text_check = {
+        "search_text_verified": False,
+        "text_pasted_into_search_box": False,
+        "text_leaked_to_chat_input": False,
+        "verified": False,
+        "success": False,
+        "failure_stage": "search_text_not_verified",
+        "reason": "ocr_not_matched",
+        "search_text_debug": {
+            "expected": "Aw3",
+            "verified": False,
+            "method": None,
+            "reason": "ocr_not_matched",
+        },
+    }
+    app = create_local_agent_app(host="127.0.0.1", port=19000)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with patch("app.local_agent_main.get_ocr_status",
+               return_value={"ocr_available": True, "model_ready": True, "ocr_initialized": True}), \
+         patch("app.local_agent_main.is_automation_allowed", return_value=True), \
+         patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
+         patch("app.local_agent_main.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.local_agent_main.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.capture_wechat_region"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box", return_value=text_check), \
+         patch("app.wechat_ui.contact_searcher.detect_search_result") as mock_detect, \
+         patch("app.wechat_ui.contact_searcher._click_left_button"), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard"), \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        response = client.post("/agent/wechat/test", json={"nickname": "Aw3", "message": "blocked"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["failure_stage"] == "open_chat_failed"
+    assert data["open_chat"]["failure_stage"] == "search_text_not_verified"
+    assert data["open_chat"]["success"] is False
+    assert data["open_chat"]["search_keyword_pasted"] is True
+    click_debug = data["open_chat"]["search_focus"]["click_point"]
+    assert click_debug["strategy"] == "uia_search_edit"
+    assert click_debug["locator_attempts"]["uia_attempt"]["strategy"] == "uia_search_edit"
+    assert "locator_attempts" not in click_debug["locator_attempts"]["uia_attempt"]
+    assert data["action"]["sent"] is False
+    assert data["action"]["pasted"] is False
+    mock_detect.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Enter}" not in sent_keys
 
 
 def test_open_chat_reports_text_leaked_to_chat_input():

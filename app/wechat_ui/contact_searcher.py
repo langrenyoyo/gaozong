@@ -76,6 +76,7 @@ MAX_ATTEMPTS = 3
 FOREGROUND_CHECK_INTERVAL = True
 
 SEARCH_BOX_CANDIDATE_OFFSET = {"left": 50, "top": 25, "right": 260, "bottom": 100}
+SENDINPUT_MOUSE_DIAG_ENV = "AUTO_WECHAT_SENDINPUT_MOUSE_DIAG"
 OPEN_CHAT_STAGE_KEYS = (
     "readiness_checked",
     "foreground_ready",
@@ -730,6 +731,489 @@ def _safe_window_rect_debug(hwnd: int | None) -> dict | None:
         return _get_window_rect_dict(hwnd)
     except Exception:
         return None
+
+
+def _format_win32_error(code: int | None) -> str:
+    if not code:
+        return ""
+    try:
+        return ctypes.FormatError(int(code)).strip()
+    except Exception as exc:
+        return f"FormatError failed: {exc}"
+
+
+def _get_click_user32():
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = ctypes.wintypes.BOOL
+    return user32
+
+
+def _sendinput_mouse_diag_enabled() -> bool:
+    return os.environ.get(SENDINPUT_MOUSE_DIAG_ENV) == "1"
+
+
+def _cursor_matches_target(cursor: dict | None, x: int, y: int) -> bool:
+    if not isinstance(cursor, dict):
+        return False
+    try:
+        return int(cursor.get("x")) == int(x) and int(cursor.get("y")) == int(y)
+    except Exception:
+        return False
+
+
+def _virtual_screen_debug(x: int, y: int) -> dict:
+    result = {
+        "virtual_screen_left": None,
+        "virtual_screen_top": None,
+        "virtual_screen_width": None,
+        "virtual_screen_height": None,
+        "virtual_screen_right": None,
+        "virtual_screen_bottom": None,
+        "target_in_virtual_screen": None,
+        "virtual_screen_unavailable_reason": None,
+    }
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        left = int(user32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+        top = int(user32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+        width = int(user32.GetSystemMetrics(78))  # SM_CXVIRTUALSCREEN
+        height = int(user32.GetSystemMetrics(79))  # SM_CYVIRTUALSCREEN
+        right = left + width
+        bottom = top + height
+        result.update({
+            "virtual_screen_left": left,
+            "virtual_screen_top": top,
+            "virtual_screen_width": width,
+            "virtual_screen_height": height,
+            "virtual_screen_right": right,
+            "virtual_screen_bottom": bottom,
+            "target_in_virtual_screen": left <= int(x) < right and top <= int(y) < bottom,
+        })
+    except Exception as exc:
+        result["virtual_screen_unavailable_reason"] = str(exc)
+    return result
+
+
+def _normalize_sendinput_absolute_coord(
+    value: int,
+    virtual_origin: int,
+    virtual_size: int,
+) -> int:
+    if int(virtual_size) <= 1:
+        raise ValueError("virtual_size must be greater than 1")
+    normalized = round((int(value) - int(virtual_origin)) * 65535 / (int(virtual_size) - 1))
+    return max(0, min(65535, int(normalized)))
+
+
+def _build_sendinput_mouse_structs() -> dict[str, type[ctypes.Structure] | type[ctypes.Union]]:
+    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.wintypes.LONG),
+            ("dy", ctypes.wintypes.LONG),
+            ("mouseData", ctypes.wintypes.DWORD),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("time", ctypes.wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.wintypes.WORD),
+            ("wScan", ctypes.wintypes.WORD),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("time", ctypes.wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.wintypes.DWORD),
+            ("wParamL", ctypes.wintypes.WORD),
+            ("wParamH", ctypes.wintypes.WORD),
+        ]
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = [
+            ("mi", MOUSEINPUT),
+            ("ki", KEYBDINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.wintypes.DWORD),
+            ("union", INPUT_UNION),
+        ]
+
+    return {
+        "MOUSEINPUT": MOUSEINPUT,
+        "KEYBDINPUT": KEYBDINPUT,
+        "HARDWAREINPUT": HARDWAREINPUT,
+        "INPUT_UNION": INPUT_UNION,
+        "INPUT": INPUT,
+    }
+
+
+def _desktop_debug() -> dict:
+    result = {
+        "process_window_station_name": None,
+        "thread_desktop_name": None,
+        "input_desktop_name": None,
+        "open_input_desktop_ok": False,
+        "open_input_desktop_last_error": None,
+        "open_input_desktop_last_error_message": "",
+        "thread_desktop_equals_input_desktop": None,
+        "is_winsta0_default": None,
+        "session_id": None,
+        "env_SESSIONNAME": os.environ.get("SESSIONNAME"),
+        "sm_remote_session": None,
+        "virtual_screen_left": None,
+        "virtual_screen_top": None,
+        "virtual_screen_width": None,
+        "virtual_screen_height": None,
+        "virtual_screen_right": None,
+        "virtual_screen_bottom": None,
+        "desktop_debug_exception": None,
+    }
+    input_desktop = None
+    try:
+        UOI_NAME = 2
+        DESKTOP_READOBJECTS = 0x0001
+        DESKTOP_SWITCHDESKTOP = 0x0100
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32.GetProcessWindowStation.restype = ctypes.wintypes.HANDLE
+        user32.GetThreadDesktop.argtypes = [ctypes.wintypes.DWORD]
+        user32.GetThreadDesktop.restype = ctypes.wintypes.HANDLE
+        user32.OpenInputDesktop.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        ]
+        user32.OpenInputDesktop.restype = ctypes.wintypes.HANDLE
+        user32.CloseDesktop.argtypes = [ctypes.wintypes.HANDLE]
+        user32.CloseDesktop.restype = ctypes.wintypes.BOOL
+        user32.GetUserObjectInformationW.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.wintypes.LPVOID,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        user32.GetUserObjectInformationW.restype = ctypes.wintypes.BOOL
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
+        kernel32.ProcessIdToSessionId.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.ProcessIdToSessionId.restype = ctypes.wintypes.BOOL
+
+        def _user_object_name(handle) -> tuple[str | None, str | None]:
+            if not handle:
+                return None, "handle unavailable"
+            needed = ctypes.wintypes.DWORD(0)
+            ctypes.set_last_error(0)
+            user32.GetUserObjectInformationW(handle, UOI_NAME, None, 0, ctypes.byref(needed))
+            if needed.value <= 0:
+                code = int(ctypes.get_last_error())
+                return None, f"GetUserObjectInformationW size failed: {code} {_format_win32_error(code)}".strip()
+            buffer = ctypes.create_unicode_buffer((int(needed.value) // ctypes.sizeof(ctypes.c_wchar)) + 2)
+            ctypes.set_last_error(0)
+            ok = bool(user32.GetUserObjectInformationW(
+                handle,
+                UOI_NAME,
+                buffer,
+                ctypes.sizeof(buffer),
+                ctypes.byref(needed),
+            ))
+            if not ok:
+                code = int(ctypes.get_last_error())
+                return None, f"GetUserObjectInformationW name failed: {code} {_format_win32_error(code)}".strip()
+            return str(buffer.value), None
+
+        winsta = user32.GetProcessWindowStation()
+        result["process_window_station_name"], winsta_error = _user_object_name(winsta)
+        if winsta_error:
+            result["desktop_debug_exception"] = winsta_error
+
+        thread_id = kernel32.GetCurrentThreadId()
+        thread_desktop = user32.GetThreadDesktop(thread_id)
+        result["thread_desktop_name"], thread_error = _user_object_name(thread_desktop)
+        if thread_error:
+            result["desktop_debug_exception"] = thread_error
+
+        ctypes.set_last_error(0)
+        input_desktop = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP)
+        input_error = int(ctypes.get_last_error())
+        result["open_input_desktop_ok"] = bool(input_desktop)
+        result["open_input_desktop_last_error"] = 0 if input_desktop else input_error
+        result["open_input_desktop_last_error_message"] = "" if input_desktop else _format_win32_error(input_error)
+        result["input_desktop_name"], input_name_error = _user_object_name(input_desktop)
+        if input_name_error:
+            result["desktop_debug_exception"] = input_name_error
+
+        if result["thread_desktop_name"] is not None and result["input_desktop_name"] is not None:
+            result["thread_desktop_equals_input_desktop"] = (
+                result["thread_desktop_name"] == result["input_desktop_name"]
+            )
+        if result["process_window_station_name"] is not None and result["thread_desktop_name"] is not None:
+            result["is_winsta0_default"] = (
+                result["process_window_station_name"] == "WinSta0"
+                and result["thread_desktop_name"] == "Default"
+            )
+
+        session_id = ctypes.wintypes.DWORD(0)
+        ctypes.set_last_error(0)
+        if kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
+            result["session_id"] = int(session_id.value)
+        else:
+            code = int(ctypes.get_last_error())
+            result["desktop_debug_exception"] = (
+                f"ProcessIdToSessionId failed: {code} {_format_win32_error(code)}".strip()
+            )
+
+        left = int(user32.GetSystemMetrics(76))
+        top = int(user32.GetSystemMetrics(77))
+        width = int(user32.GetSystemMetrics(78))
+        height = int(user32.GetSystemMetrics(79))
+        result.update({
+            "sm_remote_session": int(user32.GetSystemMetrics(0x1000)),
+            "virtual_screen_left": left,
+            "virtual_screen_top": top,
+            "virtual_screen_width": width,
+            "virtual_screen_height": height,
+            "virtual_screen_right": left + width,
+            "virtual_screen_bottom": top + height,
+        })
+    except Exception as exc:
+        result["desktop_debug_exception"] = str(exc)
+    finally:
+        if input_desktop:
+            try:
+                user32.CloseDesktop(input_desktop)
+            except Exception:
+                pass
+    return _json_safe_debug_value(result)
+
+
+def _sendinput_mouse_move_only_debug(x: int, y: int, hwnd: int | None = None, reason: str = "") -> dict:
+    start = time.time()
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+    MOUSEEVENTF_VIRTUALDESK = 0x4000
+    flags_move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    expected_count = 1
+    virtual = _virtual_screen_debug(int(x), int(y))
+    debug = {
+        "enabled": True,
+        "mode": "move_only",
+        "reason": str(reason or ""),
+        "target_x": int(x),
+        "target_y": int(y),
+        "normalized_x": None,
+        "normalized_y": None,
+        "virtual_screen_left": virtual.get("virtual_screen_left"),
+        "virtual_screen_top": virtual.get("virtual_screen_top"),
+        "virtual_screen_width": virtual.get("virtual_screen_width"),
+        "virtual_screen_height": virtual.get("virtual_screen_height"),
+        "virtual_screen_right": virtual.get("virtual_screen_right"),
+        "virtual_screen_bottom": virtual.get("virtual_screen_bottom"),
+        "flags_move": flags_move,
+        "expected_input_count": expected_count,
+        "sendinput_move_sent_count": None,
+        "sendinput_last_error": None,
+        "sendinput_last_error_message": "",
+        "cursor_before_sendinput": None,
+        "cursor_after_sendinput_move": None,
+        "foreground_before_sendinput": None,
+        "foreground_after_sendinput": None,
+        "window_rect_before_sendinput": None,
+        "window_rect_after_sendinput": None,
+        "exception": None,
+        "duration_ms": None,
+    }
+    try:
+        debug["cursor_before_sendinput"] = _get_cursor_pos_debug()
+        debug["foreground_before_sendinput"] = _foreground_window_debug()
+        debug["window_rect_before_sendinput"] = _safe_window_rect_debug(hwnd)
+
+        left = virtual.get("virtual_screen_left")
+        top = virtual.get("virtual_screen_top")
+        width = virtual.get("virtual_screen_width")
+        height = virtual.get("virtual_screen_height")
+        if left is None or top is None or width is None or height is None:
+            raise RuntimeError(virtual.get("virtual_screen_unavailable_reason") or "virtual screen unavailable")
+        norm_x = _normalize_sendinput_absolute_coord(int(x), int(left), int(width))
+        norm_y = _normalize_sendinput_absolute_coord(int(y), int(top), int(height))
+        debug["normalized_x"] = norm_x
+        debug["normalized_y"] = norm_y
+
+        structs = _build_sendinput_mouse_structs()
+        MOUSEINPUT = structs["MOUSEINPUT"]
+        INPUT = structs["INPUT"]
+        INPUT_MOUSE = 0
+        inputs = (INPUT * expected_count)()
+        inputs[0].type = INPUT_MOUSE
+        inputs[0].union.mi = MOUSEINPUT(norm_x, norm_y, 0, flags_move, 0, 0)
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SendInput.argtypes = [
+            ctypes.wintypes.UINT,
+            ctypes.POINTER(INPUT),
+            ctypes.c_int,
+        ]
+        user32.SendInput.restype = ctypes.wintypes.UINT
+
+        try:
+            ctypes.set_last_error(0)
+        except Exception:
+            pass
+        sent = int(user32.SendInput(expected_count, ctypes.cast(inputs, ctypes.POINTER(INPUT)), ctypes.sizeof(INPUT)))
+        debug["sendinput_move_sent_count"] = sent
+        try:
+            last_error = int(ctypes.get_last_error())
+            debug["sendinput_last_error"] = last_error
+            debug["sendinput_last_error_message"] = _format_win32_error(last_error)
+        except Exception:
+            debug["sendinput_last_error"] = None
+            debug["sendinput_last_error_message"] = ""
+
+        debug["cursor_after_sendinput_move"] = _get_cursor_pos_debug()
+        debug["foreground_after_sendinput"] = _foreground_window_debug()
+        debug["window_rect_after_sendinput"] = _safe_window_rect_debug(hwnd)
+    except Exception as exc:
+        debug["exception"] = str(exc)
+        try:
+            debug["cursor_after_sendinput_move"] = _get_cursor_pos_debug()
+            debug["foreground_after_sendinput"] = _foreground_window_debug()
+            debug["window_rect_after_sendinput"] = _safe_window_rect_debug(hwnd)
+        except Exception:
+            pass
+    finally:
+        debug["duration_ms"] = int(round((time.time() - start) * 1000))
+    return _json_safe_debug_value(debug)
+
+
+def _process_session_id(pid: int | None) -> tuple[int | None, str | None]:
+    if not pid:
+        return None, "pid unavailable"
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.ProcessIdToSessionId.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.ProcessIdToSessionId.restype = ctypes.wintypes.BOOL
+        session_id = ctypes.wintypes.DWORD(0)
+        ctypes.set_last_error(0)
+        if not kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(session_id)):
+            code = int(ctypes.get_last_error())
+            msg = _format_win32_error(code)
+            return None, f"ProcessIdToSessionId failed: {code} {msg}".strip()
+        return int(session_id.value), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _process_path(pid: int | None) -> tuple[str | None, str | None]:
+    if not pid:
+        return None, "pid unavailable"
+    try:
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPWSTR,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+        ctypes.set_last_error(0)
+        process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not process:
+            code = int(ctypes.get_last_error())
+            msg = _format_win32_error(code)
+            return None, f"OpenProcess failed: {code} {msg}".strip()
+        try:
+            size = ctypes.wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            ctypes.set_last_error(0)
+            if not kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+                code = int(ctypes.get_last_error())
+                msg = _format_win32_error(code)
+                return None, f"QueryFullProcessImageNameW failed: {code} {msg}".strip()
+            return str(buffer.value), None
+        finally:
+            kernel32.CloseHandle(process)
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _click_process_session_debug(hwnd: int | None) -> dict:
+    result = {
+        "agent_pid": int(os.getpid()),
+        "agent_process_path": None,
+        "agent_session_id": None,
+        "wechat_pid": None,
+        "wechat_process_path": None,
+        "wechat_session_id": None,
+        "foreground_pid": None,
+        "foreground_session_id": None,
+        "same_session_agent_wechat": None,
+        "same_session_agent_foreground": None,
+        "agent_process_unavailable_reason": None,
+        "wechat_process_unavailable_reason": None,
+        "foreground_process_unavailable_reason": None,
+    }
+    try:
+        fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        fg_info = _hwnd_debug_info(fg_hwnd)
+        result["foreground_pid"] = fg_info.get("pid") or None
+    except Exception as exc:
+        result["foreground_process_unavailable_reason"] = str(exc)
+
+    try:
+        result["wechat_pid"] = _get_window_process_id(hwnd) if hwnd else None
+    except Exception as exc:
+        result["wechat_process_unavailable_reason"] = str(exc)
+
+    for prefix, pid_key in (
+        ("agent", "agent_pid"),
+        ("wechat", "wechat_pid"),
+        ("foreground", "foreground_pid"),
+    ):
+        pid = result.get(pid_key)
+        path, path_error = _process_path(pid)
+        session_id, session_error = _process_session_id(pid)
+        if prefix != "foreground":
+            result[f"{prefix}_process_path"] = path
+        result[f"{prefix}_session_id"] = session_id
+        reasons = [reason for reason in (path_error, session_error) if reason]
+        if reasons:
+            result[f"{prefix}_process_unavailable_reason"] = "; ".join(reasons)
+
+    if result["agent_session_id"] is not None and result["wechat_session_id"] is not None:
+        result["same_session_agent_wechat"] = result["agent_session_id"] == result["wechat_session_id"]
+    if result["agent_session_id"] is not None and result["foreground_session_id"] is not None:
+        result["same_session_agent_foreground"] = result["agent_session_id"] == result["foreground_session_id"]
+    return result
 
 
 def _integrity_label_from_rid(rid: int) -> str:
@@ -1880,7 +2364,13 @@ def build_search_action_completed_result(
     }
 
 
-def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
+def _click_left_button(
+    x: int,
+    y: int,
+    hwnd: int | None = None,
+    legacy_foreground_ok: bool | None = None,
+    legacy_foreground_diag: str | None = None,
+) -> dict:
     start = time.time()
     down_time = start
     up_time = start
@@ -1890,6 +2380,7 @@ def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
         "target_y": int(y),
         "set_cursor_pos_ok": False,
         "set_cursor_pos_last_error": None,
+        "set_cursor_pos_last_error_message": "",
         "cursor_before": None,
         "cursor_after_set": None,
         "cursor_after_down": None,
@@ -1907,16 +2398,52 @@ def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
         "wechat_integrity_level": None,
         "integrity_level_mismatch": None,
         "integrity_unavailable_reason": None,
+        "virtual_screen_left": None,
+        "virtual_screen_top": None,
+        "virtual_screen_width": None,
+        "virtual_screen_height": None,
+        "virtual_screen_right": None,
+        "virtual_screen_bottom": None,
+        "target_in_virtual_screen": None,
+        "virtual_screen_unavailable_reason": None,
+        "agent_pid": None,
+        "agent_process_path": None,
+        "agent_session_id": None,
+        "wechat_pid": None,
+        "wechat_process_path": None,
+        "wechat_session_id": None,
+        "foreground_pid": None,
+        "foreground_session_id": None,
+        "same_session_agent_wechat": None,
+        "same_session_agent_foreground": None,
+        "agent_process_unavailable_reason": None,
+        "wechat_process_unavailable_reason": None,
+        "foreground_process_unavailable_reason": None,
+        "desktop_debug": None,
         "click_exception": None,
         "click_duration_ms": None,
         "down_up_interval_ms": None,
     }
     try:
-        user32 = ctypes.windll.user32
+        user32 = _get_click_user32()
+        debug.update(_virtual_screen_debug(int(x), int(y)))
+        debug.update(_click_process_session_debug(hwnd))
+        debug["desktop_debug"] = _desktop_debug()
         debug["cursor_before"] = _get_cursor_pos_debug()
         debug["foreground_before_click"] = _foreground_window_debug()
         debug["window_rect_before_click"] = _safe_window_rect_debug(hwnd)
         debug.update(_click_integrity_debug(hwnd))
+        if legacy_foreground_ok is not None or legacy_foreground_diag is not None:
+            debug["legacy_foreground_ok"] = legacy_foreground_ok
+            debug["legacy_foreground_diag"] = legacy_foreground_diag
+        elif hwnd:
+            try:
+                legacy_ok, legacy_diag = _ensure_wechat_foreground(hwnd)
+                debug["legacy_foreground_ok"] = bool(legacy_ok)
+                debug["legacy_foreground_diag"] = str(legacy_diag)
+            except Exception as exc:
+                debug["legacy_foreground_ok"] = False
+                debug["legacy_foreground_diag"] = str(exc)
 
         try:
             ctypes.set_last_error(0)
@@ -1925,9 +2452,12 @@ def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
         set_ok = bool(user32.SetCursorPos(int(x), int(y)))
         debug["set_cursor_pos_ok"] = set_ok
         try:
-            debug["set_cursor_pos_last_error"] = int(ctypes.get_last_error())
+            last_error = int(ctypes.get_last_error())
+            debug["set_cursor_pos_last_error"] = last_error
+            debug["set_cursor_pos_last_error_message"] = _format_win32_error(last_error)
         except Exception:
             debug["set_cursor_pos_last_error"] = None
+            debug["set_cursor_pos_last_error_message"] = ""
         debug["cursor_after_set"] = _get_cursor_pos_debug()
         debug["foreground_after_set_cursor"] = _foreground_window_debug()
 
@@ -1942,6 +2472,21 @@ def _click_left_button(x: int, y: int, hwnd: int | None = None) -> dict:
         debug["foreground_after_mouse_up"] = _foreground_window_debug()
         debug["foreground_after_click"] = debug["foreground_after_mouse_up"]
         debug["window_rect_after_click"] = _safe_window_rect_debug(hwnd)
+
+        if _sendinput_mouse_diag_enabled():
+            if set_ok and _cursor_matches_target(debug.get("cursor_after_set"), int(x), int(y)):
+                debug["sendinput_mouse_debug"] = {
+                    "enabled": False,
+                    "mode": "move_only",
+                    "reason": "set_cursor_pos_reached_target",
+                }
+            else:
+                debug["sendinput_mouse_debug"] = _sendinput_mouse_move_only_debug(
+                    int(x),
+                    int(y),
+                    hwnd=hwnd,
+                    reason="set_cursor_pos_failed_or_cursor_not_at_target",
+                )
     except Exception as exc:
         debug["click_exception"] = str(exc)
     finally:
@@ -2683,7 +3228,13 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     # 清空操作已在下方的 nickname_input 阶段执行。
 
     # 点击搜索框
-    _click_left_button(search_x, search_y)
+    click_debug = _click_left_button(
+        search_x,
+        search_y,
+        hwnd=hwnd,
+        legacy_foreground_ok=ok_fg,
+        legacy_foreground_diag=fg_diag,
+    )
     time.sleep(0.8)  # 等搜索面板展开
     after_search_box_crop_path = _save_search_box_focus_crop(
         hwnd,
@@ -2728,6 +3279,7 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
             before_crop_path=before_search_box_crop_path,
             after_crop_path=after_search_box_crop_path,
             image_diff_score=search_box_image_diff,
+            click_debug=click_debug,
         )
         step = _DebugStep("search_focus_verified", attempt)
         step.fail(f"搜索框焦点未确认: {focus.get('reason')}", strategy="focus_guard")
@@ -2830,7 +3382,11 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         screenshots.append(ss_path)
 
     text_check = verify_search_text_in_search_box(hwnd, win_rect, nickname, click_point, ss_path)
-    result["search_focus"] = {**focus, **text_check, "click_point": click_point}
+    result["search_focus"] = {
+        **focus,
+        **text_check,
+        "click_point": _sanitize_click_point_for_debug(click_point),
+    }
     if not text_check.get("search_text_verified"):
         step.fail(
             f"搜索关键词未确认出现在搜索框中: {text_check.get('reason')}",
