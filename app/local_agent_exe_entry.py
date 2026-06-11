@@ -1,14 +1,22 @@
-"""Executable entry point for 小高AI微信助手."""
+"""Executable entry point for XiaoGao AI WeChat Assistant."""
 
 from __future__ import annotations
 
 import argparse
 import socket
+import sys
+import traceback
 from collections.abc import Sequence
 
 import uvicorn
 
-from app.local_agent_build_info import BUILD_VERSION, BUILD_TIME, GIT_COMMIT
+try:
+    from app.local_agent_build_info import BUILD_TIME, BUILD_VERSION, GIT_COMMIT
+except Exception:
+    BUILD_VERSION = "dev-source"
+    BUILD_TIME = "unknown"
+    GIT_COMMIT = "unknown"
+
 from app.local_agent_main import create_local_agent_app, get_route_paths
 
 
@@ -33,36 +41,35 @@ def _port_is_available(host: str, port: int) -> bool:
 def _print_startup_message(host: str, port: int) -> None:
     import sys
 
-    # 创建 app 以获取路由列表（仅用于打印，不影响 uvicorn.run 中的 app）
     app = create_local_agent_app(host=host, port=port)
     routes = get_route_paths(app)
 
     print("=" * 50)
-    print(f"{EXE_DISPLAY_NAME} 版本：{BUILD_VERSION}")
-    print(f"构建时间：{BUILD_TIME}")
-    print(f"Git Commit：{GIT_COMMIT}")
-    print(f"exe_mode：{getattr(sys, 'frozen', False)}")
-    print(f"Python：{sys.executable}")
+    print(f"{EXE_DISPLAY_NAME} 已启动")
+    print(f"build_version: {BUILD_VERSION}")
+    print(f"build_time: {BUILD_TIME}")
+    print(f"git_commit: {GIT_COMMIT}")
+    print(f"exe_mode: {getattr(sys, 'frozen', False)}")
+    print(f"python: {sys.executable}")
     print("=" * 50)
-    print(f"本机服务地址：http://{host}:{port}")
-    print(f"版本诊断：http://{host}:{port}/agent/version")
-    print(f"健康检查：http://{host}:{port}/health")
+    print(f"local_agent_url: http://{host}:{port}")
+    print(f"agent_version_url: http://{host}:{port}/agent/version")
+    print(f"health_url: http://{host}:{port}/health")
     print()
-    print("已注册接口：")
+    print("routes:")
     for route_path in routes:
-        marker = " ✔" if "search-result-debug" in route_path else ""
+        marker = " [OK]" if "search-result-debug" in route_path else ""
         print(f"  {route_path}{marker}")
     print()
     if "/agent/wechat/search-result-debug" not in routes:
-        print("⚠ 警告：/agent/wechat/search-result-debug 未注册！请确认使用最新版。")
+        print("[WARN] /agent/wechat/search-result-debug is not registered")
     else:
-        print("✔ /agent/wechat/search-result-debug 已注册")
+        print("[OK] /agent/wechat/search-result-debug is registered")
     print()
-    print(f"OCR 模型已随 {EXE_DISPLAY_NAME} 打包。")
-    print(f"请复制完整 dist\\{EXE_DISPLAY_NAME} 目录，不要只复制 exe。")
-    print("请保持本窗口运行")
-    print("请打开微信并保持窗口可见")
-    print("然后在浏览器访问主系统页面并点击「启动微信测试」")
+    print(f"OCR models are bundled with {EXE_DISPLAY_NAME}.")
+    print(f"Copy the full dist\\{EXE_DISPLAY_NAME} directory; do not copy only the exe.")
+    print("Keep this window open while using the assistant.")
+    print("Open WeChat and keep the window visible before running local tests.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -71,8 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     port = int(args.port)
 
     if not _port_is_available(host, port):
-        print(f"{EXE_DISPLAY_NAME} 启动失败：端口 {host}:{port} 已被占用")
-        print("请关闭已运行的本机微信 Agent 后重试")
+        print(f"{EXE_DISPLAY_NAME} 启动失败")
+        print(f"端口 {port} 已被占用，请关闭旧的小高AI微信助手.exe 后重试。")
         return 1
 
     _print_startup_message(host, port)
@@ -80,5 +87,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def run_with_startup_guard(argv: Sequence[str] | None = None) -> int:
+    try:
+        return main(argv)
+    except Exception:
+        print("小高AI微信助手启动失败")
+        traceback.print_exc(file=sys.stdout)
+        print("请复制以上错误信息给开发人员")
+        try:
+            print("按回车退出")
+            input()
+        except EOFError:
+            pass
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_with_startup_guard())

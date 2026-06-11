@@ -13,7 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.services.automation_control import BLOCKED_MESSAGE, is_automation_allowed
-from app.local_agent_build_info import BUILD_VERSION, BUILD_TIME, GIT_COMMIT
+try:
+    from app.local_agent_build_info import BUILD_VERSION, BUILD_TIME, GIT_COMMIT
+except Exception:
+    BUILD_VERSION = "dev-source"
+    BUILD_TIME = "unknown"
+    GIT_COMMIT = "unknown"
 from app.wechat_ui.contact_searcher import (
     calibrate_search_box,
     open_chat_by_nickname,

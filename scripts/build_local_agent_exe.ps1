@@ -23,7 +23,7 @@ $ModelTarget = Join-Path $DistDir "models\easyocr"
 # 1. 生成版本戳
 # ============================================================
 
-$BuildVersion = "P0-4A-6B-3"
+$BuildVersion = "P0-4A-EXE-CRASH-FIX"
 $BuildTime = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
 $GitCommit = "unknown"
@@ -35,21 +35,39 @@ try {
 }
 
 Write-Host "Generating build info: $BuildInfoFile"
-# Use ASCII-only docstring to avoid encoding issues with Out-File
-$buildInfoContent = @"
-""""""
-Local Agent build info - auto generated.
-""""
+function ConvertTo-PythonStringLiteral {
+    param([string]$Value)
+    return ($Value | ConvertTo-Json -Compress)
+}
 
-BUILD_VERSION = "$BuildVersion"
-BUILD_TIME = "$BuildTime"
-GIT_COMMIT = "$GitCommit"
-"@
+$buildInfoLines = @(
+    '"""',
+    'Local Agent build info - auto generated.',
+    '"""',
+    '',
+    ("BUILD_VERSION = {0}" -f (ConvertTo-PythonStringLiteral $BuildVersion)),
+    ("BUILD_TIME = {0}" -f (ConvertTo-PythonStringLiteral $BuildTime)),
+    ("GIT_COMMIT = {0}" -f (ConvertTo-PythonStringLiteral $GitCommit))
+)
+$buildInfoContent = ($buildInfoLines -join [Environment]::NewLine) + [Environment]::NewLine
 [System.IO.File]::WriteAllText($BuildInfoFile, $buildInfoContent, [System.Text.Encoding]::UTF8)
 
 Write-Host "BUILD_VERSION: $BuildVersion"
 Write-Host "BUILD_TIME: $BuildTime"
 Write-Host "GIT_COMMIT: $GitCommit"
+
+Write-Host "Validating build info Python syntax..."
+Push-Location $ProjectRoot
+try {
+    & $PythonExe -m py_compile "app\local_agent_build_info.py"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Build info validation failed: app\local_agent_build_info.py is not valid Python"
+        exit 1
+    }
+}
+finally {
+    Pop-Location
+}
 
 # ============================================================
 # 2. 检查环境
@@ -105,6 +123,7 @@ try {
         --collect-all torchvision `
         --collect-all PIL `
         --collect-all cv2 `
+        --hidden-import app.local_agent_build_info `
         "app\local_agent_exe_entry.py"
 }
 finally {
@@ -130,6 +149,15 @@ Write-Host "Model target: $ModelTarget"
 Write-Host "Copied model file count: $($copiedFiles.Count)"
 Write-Host "Copied model total size: $copiedSizeMb MB"
 
+$RequiredModelFiles = @("craft_mlt_25k.pth", "zh_sim_g2.pth")
+foreach ($modelFile in $RequiredModelFiles) {
+    $modelPath = Join-Path $ModelTarget $modelFile
+    if (-not (Test-Path $modelPath)) {
+        Write-Host "Build failed: required EasyOCR model missing: $modelPath"
+        exit 1
+    }
+}
+
 # ============================================================
 # 5. 验证路由包含 search-result-debug
 # ============================================================
@@ -150,6 +178,56 @@ for r in routes:
     print(f'  route: {r}')
 " 2>&1
 Write-Host $verifyResult
+
+# ============================================================
+# 6. Smoke test exe /health and /agent/version
+# ============================================================
+
+Write-Host "Smoke testing built exe..."
+$smokeProcess = $null
+try {
+    $smokeProcess = Start-Process -FilePath $OutputExe -WorkingDirectory $DistDir -PassThru -WindowStyle Hidden
+    $health = $null
+    $version = $null
+    for ($i = 0; $i -lt 30; $i++) {
+        if ($smokeProcess.HasExited) {
+            Write-Host "Smoke failed: exe exited early with code $($smokeProcess.ExitCode)"
+            exit 1
+        }
+        try {
+            $health = Invoke-RestMethod "http://127.0.0.1:19000/health" -TimeoutSec 2
+            $version = Invoke-RestMethod "http://127.0.0.1:19000/agent/version" -TimeoutSec 2
+            break
+        } catch {
+            Start-Sleep -Seconds 1
+        }
+    }
+
+    if ($null -eq $health -or $null -eq $version) {
+        Write-Host "Smoke failed: /health or /agent/version did not respond"
+        exit 1
+    }
+    if (-not $health.success) {
+        Write-Host "Smoke failed: /health success=false"
+        exit 1
+    }
+    if (-not ($version.routes -contains "/agent/version")) {
+        Write-Host "Smoke failed: /agent/version route list missing /agent/version"
+        exit 1
+    }
+    if (-not ($version.routes -contains "/agent/wechat/search-result-debug")) {
+        Write-Host "Smoke failed: route list missing /agent/wechat/search-result-debug"
+        exit 1
+    }
+    Write-Host "Smoke /health: OK"
+    Write-Host "Smoke /agent/version: OK"
+    Write-Host "Smoke search-result-debug route: OK"
+}
+finally {
+    if ($null -ne $smokeProcess -and -not $smokeProcess.HasExited) {
+        Stop-Process -Id $smokeProcess.Id -Force
+    }
+}
 
 # ============================================================
 # 6. 完成
