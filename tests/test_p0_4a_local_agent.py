@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 
 
@@ -445,6 +446,472 @@ def test_local_agent_test_blocks_when_open_chat_failed():
     mock_write.assert_not_called()
 
 
+def _window_with_rect(hwnd=123):
+    window = _window(hwnd)
+    rect = MagicMock()
+    rect.left = 0
+    rect.top = 0
+    rect.right = 880
+    rect.bottom = 700
+    window.BoundingRectangle = rect
+    return window
+
+
+def _focus_control(name="", class_name="", control_type="WindowControl",
+                   rect=None):
+    control = MagicMock()
+    control.Name = name
+    control.ClassName = class_name
+    control.ControlTypeName = control_type
+    bounds = MagicMock()
+    rect = rect or {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    bounds.left = rect["left"]
+    bounds.top = rect["top"]
+    bounds.right = rect["right"]
+    bounds.bottom = rect["bottom"]
+    control.BoundingRectangle = bounds
+    return control
+
+
+def test_check_preconditions_uses_public_foreground_guard_success():
+    from app.wechat_ui import contact_searcher
+
+    with patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher.find_wechat_window", return_value=_window_with_rect()), \
+         patch("app.wechat_ui.contact_searcher.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_workspace_layout",
+               return_value={"layout_ok": True}), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "legacy")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground",
+               return_value={"success": True}) as mock_guard, \
+         patch("app.wechat_ui.contact_searcher.set_action_in_progress"):
+        ok, msg, ctx = contact_searcher._check_preconditions()
+
+    assert ok is True
+    assert ctx["hwnd"] == 123
+    assert ctx["win_rect"] == {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    mock_guard.assert_called_once_with(123, reason="open_chat_preconditions")
+
+
+def test_check_preconditions_public_foreground_guard_failure_has_diagnostics():
+    from app.wechat_ui import contact_searcher
+
+    foreground_guard = {
+        "success": False,
+        "message": "微信前台焦点恢复失败",
+        "foreground_debug": {"reason": "open_chat_preconditions", "attempts": []},
+    }
+
+    with patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher.find_wechat_window", return_value=_window_with_rect()), \
+         patch("app.wechat_ui.contact_searcher.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_workspace_layout",
+               return_value={"layout_ok": True}), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "legacy")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground",
+               return_value=foreground_guard), \
+         patch("app.wechat_ui.contact_searcher.set_action_in_progress") as mock_in_progress:
+        ok, msg, ctx = contact_searcher._check_preconditions()
+
+    assert ok is False
+    assert msg == "微信前台焦点恢复失败"
+    assert ctx["failure_stage"] == "foreground_lost_preconditions"
+    assert ctx["foreground_guard"] == foreground_guard
+    assert ctx["foreground_debug"] == foreground_guard["foreground_debug"]
+    assert ctx["window"].NativeWindowHandle == 123
+    mock_in_progress.assert_not_called()
+
+
+def test_do_search_once_passes_precondition_foreground_diagnostics():
+    from app.wechat_ui import contact_searcher
+
+    foreground_guard = {
+        "success": False,
+        "message": "微信前台焦点恢复失败",
+        "foreground_debug": {"reason": "open_chat_preconditions"},
+    }
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(False, "微信前台焦点恢复失败", {
+                   "failure_stage": "foreground_lost_preconditions",
+                   "foreground_guard": foreground_guard,
+                   "foreground_debug": foreground_guard["foreground_debug"],
+               })), \
+         patch("app.wechat_ui.contact_searcher._save_failure_screenshot"):
+        result = contact_searcher._do_search_once("Aw3", attempt=1, safe_nick="Aw3")
+
+    assert result["success"] is False
+    assert result["failure_stage"] == "foreground_lost_preconditions"
+    assert result["foreground_guard"] == foreground_guard
+    assert result["foreground_debug"] == foreground_guard["foreground_debug"]
+
+
+def test_open_chat_foreground_lost_preconditions_does_not_click_paste_or_send():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    foreground_guard = {"success": False, "foreground_debug": {"reason": "open_chat_preconditions"}}
+    with patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(False, "微信前台焦点恢复失败", {
+                   "failure_stage": "foreground_lost_preconditions",
+                   "foreground_guard": foreground_guard,
+                   "foreground_debug": foreground_guard["foreground_debug"],
+               })), \
+         patch("app.wechat_ui.contact_searcher._save_failure_screenshot"), \
+         patch("app.wechat_ui.contact_searcher._click_left_button") as mock_click, \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys:
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["success"] is False
+    assert result["failure_stage"] == "foreground_lost_preconditions"
+    assert result["sent"] is False
+    assert result["pasted"] is False
+    mock_click.assert_not_called()
+    mock_clipboard.assert_not_called()
+    mock_keys.assert_not_called()
+
+
+def test_local_agent_test_passes_open_chat_foreground_lost_preconditions():
+    open_result = _open_chat(
+        success=False,
+        failure_stage="foreground_lost_preconditions",
+        sent=False,
+        pasted=False,
+    )
+    with patch("app.local_agent_main.is_automation_allowed", return_value=True), \
+         patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
+         patch("app.local_agent_main.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.local_agent_main.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.local_agent_main.open_chat_by_nickname", return_value=open_result), \
+         patch("app.local_agent_main.verify_current_chat_contact") as mock_verify, \
+         patch("app.local_agent_main.write_text_to_input") as mock_write:
+        data = _client().post("/agent/wechat/test", json={
+            "nickname": "Aw3",
+            "message": "blocked",
+        }).json()
+
+    assert data["success"] is False
+    assert data["failure_stage"] == "open_chat_failed"
+    assert data["open_chat"]["failure_stage"] == "foreground_lost_preconditions"
+    assert data["action"]["sent"] is False
+    assert data["action"]["pasted"] is False
+    mock_verify.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_verify_search_box_focus_chat_input_region_reports_diagnostics():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "manual_calibration",
+        "confidence": 0.7,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "manual"},
+    }
+    chat_control = _focus_control(
+        name="",
+        class_name="",
+        control_type="EditControl",
+        rect={"left": 320, "top": 520, "right": 850, "bottom": 680},
+    )
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl", return_value=chat_control), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        focus = contact_searcher.verify_search_box_focus(123, win_rect, click_point)
+
+    assert focus["verified"] is False
+    assert focus["text_leaked_to_chat_input"] is True
+    assert focus["focus_control_rect_in_chat_input_region"] is True
+    assert focus["focus_control_rect_in_search_region"] is False
+    assert focus["click_point_inside_search_box"] is True
+    assert focus["search_box_rect"] == click_point["search_box_rect"]
+    assert focus["focus_control_type"] == "EditControl"
+
+
+def test_verify_search_box_focus_window_control_never_passes():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    window_control = _focus_control(
+        name="微信",
+        class_name="Qt51514QWindowIcon",
+        control_type="WindowControl",
+        rect=win_rect,
+    )
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl", return_value=window_control), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        focus = contact_searcher.verify_search_box_focus(123, win_rect, {
+            "success": True,
+            "x": 120,
+            "y": 95,
+            "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        })
+
+    assert focus["verified"] is False
+    assert focus["success"] is False
+    assert focus["reason"] == "focused_control_not_search_box"
+    assert focus["focus_control_type"] == "WindowControl"
+    assert all(not item["looks_like_search"] for item in focus["focus_poll_attempts"])
+
+
+def test_verify_search_box_focus_poll_succeeds_only_for_search_control():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    window_control = _focus_control(
+        name="微信",
+        class_name="Qt51514QWindowIcon",
+        control_type="WindowControl",
+        rect=win_rect,
+    )
+    search_control = _focus_control(
+        name="Search",
+        class_name="",
+        control_type="EditControl",
+        rect={"left": 80, "top": 75, "right": 250, "bottom": 115},
+    )
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=[window_control, search_control]), \
+         patch("app.wechat_ui.contact_searcher.time.sleep") as mock_sleep:
+        focus = contact_searcher.verify_search_box_focus(123, win_rect, {
+            "success": True,
+            "x": 120,
+            "y": 95,
+            "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        })
+
+    assert focus["verified"] is True
+    assert focus["success"] is True
+    assert focus["focused"] is True
+    assert focus["reason"] == "focused_control_matches_search_region"
+    assert len(focus["focus_poll_attempts"]) == 2
+    mock_sleep.assert_called()
+
+
+def test_verify_search_box_focus_poll_all_failures_keeps_guard():
+    from app.wechat_ui import contact_searcher
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    window_control = _focus_control(
+        name="微信",
+        class_name="Qt51514QWindowIcon",
+        control_type="WindowControl",
+        rect=win_rect,
+    )
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl", return_value=window_control), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        focus = contact_searcher.verify_search_box_focus(123, win_rect, {
+            "success": True,
+            "x": 120,
+            "y": 95,
+            "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        })
+
+    assert focus["verified"] is False
+    assert focus["failure_stage"] == "search_focus_not_verified"
+    assert focus["manual_review_required"] is True
+    assert len(focus["focus_poll_attempts"]) == 4
+
+
+def test_open_chat_focus_failure_returns_click_point_diagnostics_without_paste_or_send():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "manual_calibration",
+        "confidence": 0.7,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "manual"},
+    }
+    focus = {
+        "verified": False,
+        "focused": False,
+        "clicked": True,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "reason": "focused_control_not_search_box",
+        "focus_control": {
+            "name": "微信",
+            "class_name": "Qt51514QWindowIcon",
+            "control_type": "WindowControl",
+            "rect": win_rect,
+        },
+    }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["failure_stage"] == "search_focus_not_verified"
+    assert result["search_focus"]["click_point"]["x"] == click_point["x"]
+    assert result["search_focus"]["click_point"]["y"] == click_point["y"]
+    assert result["search_focus"]["click_point"]["strategy"] == click_point["strategy"]
+    assert result["search_focus"]["click_point"]["confidence"] == click_point["confidence"]
+    assert result["search_focus"]["click_point"]["source"] == "manual"
+    assert result["search_focus"]["search_box_rect"] == click_point["search_box_rect"]
+    assert result["search_focus"]["click_point_inside_search_box"] is True
+    assert result["search_focus"]["focus_control_type"] == "WindowControl"
+    assert result["pasted"] is False
+    assert result["sent"] is False
+    mock_clipboard.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Ctrl}v" not in sent_keys
+    assert "{Enter}" not in sent_keys
+
+
+def test_open_chat_focus_failure_sanitizes_recursive_locator_attempts():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "uia_search_edit",
+        "confidence": 0.9,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "uia"},
+    }
+    click_point["locator_attempts"] = {"uia_attempt": click_point}
+    focus = {
+        "verified": False,
+        "focused": False,
+        "clicked": True,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "reason": "focused_control_not_search_box",
+        "focus_control": {
+            "name": "微信",
+            "class_name": "Qt51514QWindowIcon",
+            "control_type": "WindowControl",
+            "rect": win_rect,
+        },
+    }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    encoded = jsonable_encoder(result)
+    sanitized = encoded["search_focus"]["click_point"]
+    assert sanitized["strategy"] == "uia_search_edit"
+    assert sanitized["confidence"] == 0.9
+    assert sanitized["search_box_rect"] == click_point["search_box_rect"]
+    assert sanitized["locator_attempts"]["uia_attempt"]["strategy"] == "uia_search_edit"
+    assert "locator_attempts" not in sanitized["locator_attempts"]["uia_attempt"]
+    assert result["pasted"] is False
+    assert result["sent"] is False
+    mock_clipboard.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Ctrl}v" not in sent_keys
+    assert "{Enter}" not in sent_keys
+
+
+def test_agent_wechat_test_returns_json_when_search_focus_diagnostics_are_recursive():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+    from app.local_agent_main import create_local_agent_app
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {
+        "success": True,
+        "x": 120,
+        "y": 95,
+        "strategy": "uia_search_edit",
+        "confidence": 0.9,
+        "search_box_rect": {"left": 80, "top": 75, "right": 250, "bottom": 115},
+        "candidate_region": {"left": 0, "top": 40, "right": 260, "bottom": 135},
+        "window_rect": win_rect,
+        "evidence": {"source": "uia"},
+    }
+    click_point["locator_attempts"] = {"uia_attempt": click_point}
+    focus = {
+        "verified": False,
+        "focused": False,
+        "clicked": True,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "reason": "focused_control_not_search_box",
+        "focus_control": {
+            "name": "微信",
+            "class_name": "Qt51514QWindowIcon",
+            "control_type": "WindowControl",
+            "rect": win_rect,
+        },
+    }
+    app = create_local_agent_app(host="127.0.0.1", port=19000)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with patch("app.local_agent_main.get_ocr_status",
+               return_value={"ocr_available": True, "model_ready": True, "ocr_initialized": True}), \
+         patch("app.local_agent_main.is_automation_allowed", return_value=True), \
+         patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
+         patch("app.local_agent_main.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.local_agent_main.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": win_rect, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point", return_value=click_point), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus", return_value=focus), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard") as mock_clipboard, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        response = client.post("/agent/wechat/test", json={"nickname": "Aw3", "message": "blocked"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["failure_stage"] == "open_chat_failed"
+    assert data["open_chat"]["failure_stage"] == "search_focus_not_verified"
+    assert data["open_chat"]["search_focus"]["click_point"]["locator_attempts"]["uia_attempt"]["success"] is True
+    assert "locator_attempts" not in data["open_chat"]["search_focus"]["click_point"]["locator_attempts"]["uia_attempt"]
+    assert data["open_chat"]["search_keyword_pasted"] is False
+    assert data["action"]["pasted"] is False
+    assert data["action"]["sent"] is False
+    mock_clipboard.assert_not_called()
+    sent_keys = [call.args[0] for call in mock_keys.call_args_list if call.args]
+    assert "{Ctrl}v" not in sent_keys
+    assert "{Enter}" not in sent_keys
+
+
 def test_local_agent_test_blocks_when_verify_after_open_failed():
     with patch("app.local_agent_main.is_automation_allowed", return_value=True), \
          patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
@@ -775,6 +1242,11 @@ def test_open_chat_requires_search_text_verified_before_enter():
                return_value={"verified": True, "focused": True, "clicked": True, "text_leaked_to_chat_input": False}), \
          patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
                return_value={"search_text_verified": True, "text_pasted_into_search_box": True, "text_leaked_to_chat_input": False}) as mock_verify_text, \
+         patch("app.wechat_ui.contact_searcher.detect_search_result",
+               return_value={"success": True, "search_result_detected": True,
+                             "method": "ocr_result_area",
+                             "click_point": {"x": 180, "y": 155},
+                             "confidence": 0.85, "screenshots": {}}), \
          patch("app.wechat_ui.contact_searcher._click_left_button"), \
          patch("app.wechat_ui.contact_searcher._set_clipboard"), \
          patch("app.wechat_ui.contact_searcher.uia.SendKeys"), \

@@ -990,40 +990,112 @@ def _hwnd_debug_info(hwnd: int | None) -> dict:
     }
 
 
-def _send_alt_wakeup(user32) -> tuple[bool, str | None]:
+def _build_sendinput_structs() -> dict[str, type[ctypes.Structure] | type[ctypes.Union]]:
+    """Build ctypes structures matching the Windows SendInput INPUT layout."""
+    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.wintypes.LONG),
+            ("dy", ctypes.wintypes.LONG),
+            ("mouseData", ctypes.wintypes.DWORD),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("time", ctypes.wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.wintypes.WORD),
+            ("wScan", ctypes.wintypes.WORD),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("time", ctypes.wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", ctypes.wintypes.DWORD),
+            ("wParamL", ctypes.wintypes.WORD),
+            ("wParamH", ctypes.wintypes.WORD),
+        ]
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = [
+            ("mi", MOUSEINPUT),
+            ("ki", KEYBDINPUT),
+            ("hi", HARDWAREINPUT),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [
+            ("type", ctypes.wintypes.DWORD),
+            ("union", INPUT_UNION),
+        ]
+
+    return {
+        "MOUSEINPUT": MOUSEINPUT,
+        "KEYBDINPUT": KEYBDINPUT,
+        "HARDWAREINPUT": HARDWAREINPUT,
+        "INPUT_UNION": INPUT_UNION,
+        "INPUT": INPUT,
+    }
+
+
+def _send_alt_wakeup(user32) -> tuple[bool, dict | None]:
     """使用 SendInput 发送 Alt down/up，帮助突破 Windows 前台锁。"""
     try:
         INPUT_KEYBOARD = 1
         VK_MENU = 0x12
         KEYEVENTF_KEYUP = 0x0002
 
-        class KEYBDINPUT(ctypes.Structure):
-            _fields_ = [
-                ("wVk", ctypes.wintypes.WORD),
-                ("wScan", ctypes.wintypes.WORD),
-                ("dwFlags", ctypes.wintypes.DWORD),
-                ("time", ctypes.wintypes.DWORD),
-                ("dwExtraInfo", ctypes.wintypes.ULONG_PTR),
-            ]
-
-        class INPUT_UNION(ctypes.Union):
-            _fields_ = [("ki", KEYBDINPUT)]
-
-        class INPUT(ctypes.Structure):
-            _fields_ = [
-                ("type", ctypes.wintypes.DWORD),
-                ("union", INPUT_UNION),
-            ]
+        structs = _build_sendinput_structs()
+        KEYBDINPUT = structs["KEYBDINPUT"]
+        INPUT = structs["INPUT"]
 
         inputs = (INPUT * 2)()
         inputs[0].type = INPUT_KEYBOARD
         inputs[0].union.ki = KEYBDINPUT(VK_MENU, 0, 0, 0, 0)
         inputs[1].type = INPUT_KEYBOARD
         inputs[1].union.ki = KEYBDINPUT(VK_MENU, 0, KEYEVENTF_KEYUP, 0, 0)
-        sent = user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT))
-        return int(sent) == 2, None if int(sent) == 2 else f"SendInput returned {sent}"
+        diagnostic_user32 = ctypes.WinDLL("user32", use_last_error=True)
+        diagnostic_user32.SendInput.argtypes = [
+            ctypes.wintypes.UINT,
+            ctypes.POINTER(INPUT),
+            ctypes.c_int,
+        ]
+        diagnostic_user32.SendInput.restype = ctypes.wintypes.UINT
+
+        expected_count = 2
+        cb_size = ctypes.sizeof(INPUT)
+        input_ptr = ctypes.cast(inputs, ctypes.POINTER(INPUT))
+        ctypes.set_last_error(0)
+        sent = int(diagnostic_user32.SendInput(expected_count, input_ptr, cb_size))
+        if sent == expected_count:
+            return True, None
+
+        last_error = int(ctypes.get_last_error())
+        try:
+            last_error_message = ctypes.FormatError(last_error).strip()
+        except Exception:
+            last_error_message = ""
+        return False, {
+            "message": f"SendInput returned {sent}",
+            "sent_count": sent,
+            "expected_count": expected_count,
+            "cb_size": cb_size,
+            "last_error": last_error,
+            "last_error_message": last_error_message,
+        }
     except Exception as exc:
-        return False, str(exc)
+        return False, {
+            "message": str(exc),
+            "sent_count": None,
+            "expected_count": 2,
+            "cb_size": None,
+            "last_error": None,
+            "last_error_message": "",
+        }
 
 
 def ensure_wechat_foreground(
@@ -1074,7 +1146,12 @@ def ensure_wechat_foreground(
     }
     result["foreground_debug"] = foreground_debug
 
-    def _update_after(method: str, success_hint: bool = False, error: str | None = None) -> bool:
+    def _update_after(
+        method: str,
+        success_hint: bool = False,
+        error: str | None = None,
+        error_detail: dict | None = None,
+    ) -> bool:
         fg_after = _hwnd_debug_info(user32.GetForegroundWindow())
         is_wechat_foreground = fg_after["hwnd"] == hwnd
         attempt = {
@@ -1086,6 +1163,10 @@ def ensure_wechat_foreground(
             "foreground_after_process_name": fg_after["process_name"],
             "error": error,
         }
+        if error_detail:
+            for key, value in error_detail.items():
+                if key != "message":
+                    attempt[key] = value
         if success_hint and not is_wechat_foreground and not error:
             attempt["error"] = "API returned success but foreground did not change"
         foreground_debug["attempts"].append(attempt)
@@ -1192,11 +1273,17 @@ def ensure_wechat_foreground(
         except Exception as exc:
             _update_after("attach_thread_input", error=str(exc))
 
-        alt_ok, alt_error = _send_alt_wakeup(user32)
+        alt_ok, alt_error_detail = _send_alt_wakeup(user32)
+        alt_error = alt_error_detail.get("message") if alt_error_detail else None
         try:
             user32.SetForegroundWindow(hwnd)
             time.sleep(0.12)
-            if _update_after("alt_wakeup_set_foreground", success_hint=alt_ok, error=alt_error):
+            if _update_after(
+                "alt_wakeup_set_foreground",
+                success_hint=alt_ok,
+                error=alt_error,
+                error_detail=alt_error_detail,
+            ):
                 result.update({
                     "success": True,
                     "foreground_hwnd": hwnd,
@@ -1207,7 +1294,14 @@ def ensure_wechat_foreground(
                 })
                 return result
         except Exception as exc:
-            _update_after("alt_wakeup_set_foreground", error=f"{alt_error or ''} {exc}".strip())
+            if alt_error_detail:
+                alt_error_detail = dict(alt_error_detail)
+                alt_error_detail["message"] = f"{alt_error or ''} {exc}".strip()
+            _update_after(
+                "alt_wakeup_set_foreground",
+                error=f"{alt_error or ''} {exc}".strip(),
+                error_detail=alt_error_detail,
+            )
 
         try:
             HWND_TOP = 0

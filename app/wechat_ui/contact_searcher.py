@@ -264,11 +264,16 @@ def _check_preconditions() -> tuple[bool, str, dict]:
     except Exception as e:
         return False, f"获取窗口位置失败: {e}", {}
 
-    # 检查 4：确认微信窗口在前台（使用带恢复的前台管理）
-    ok_fg, fg_diag = _ensure_wechat_foreground(hwnd)
-    if not ok_fg:
-        return False, f"微信不在前台（{fg_diag}）", {
-            "hwnd": hwnd, "win_rect": win_rect,
+    # 检查 4：确认微信窗口在前台（复用统一 foreground guard）
+    foreground_guard = ensure_wechat_foreground(hwnd, reason="open_chat_preconditions")
+    if not foreground_guard.get("success"):
+        return False, foreground_guard.get("message") or "微信不在前台", {
+            "hwnd": hwnd,
+            "win_rect": win_rect,
+            "window": window,
+            "failure_stage": "foreground_lost_preconditions",
+            "foreground_guard": foreground_guard,
+            "foreground_debug": foreground_guard.get("foreground_debug"),
         }
 
     # 检查 5：确认鼠标/焦点没有在其他窗口（前台窗口标题应为微信相关）
@@ -562,6 +567,20 @@ def _rect_center(rect: dict) -> tuple[int, int]:
     )
 
 
+def _point_in_rect(point: dict | None, rect: dict | None) -> bool:
+    if not point or not rect:
+        return False
+    try:
+        x = int(point["x"])
+        y = int(point["y"])
+        return (
+            int(rect["left"]) <= x <= int(rect["right"])
+            and int(rect["top"]) <= y <= int(rect["bottom"])
+        )
+    except Exception:
+        return False
+
+
 def _rect_in_search_region(rect: dict | None, win_rect: dict) -> bool:
     if not rect:
         return False
@@ -595,6 +614,146 @@ def _control_looks_like_search(control) -> bool:
         return False
     text = f"{name} {class_name} {control_type}".lower()
     return any(token in text for token in ("搜索", "search", "edit"))
+
+
+def _json_safe_debug_value(value, visited: set[int] | None = None, depth: int = 0):
+    """Return a JSON-safe debug value without following object cycles."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if depth >= 6:
+        return str(value)
+
+    visited = visited or set()
+    value_id = id(value)
+    if value_id in visited:
+        return "<recursion>"
+
+    if isinstance(value, dict):
+        visited.add(value_id)
+        try:
+            return {
+                str(key): _json_safe_debug_value(item, visited, depth + 1)
+                for key, item in value.items()
+            }
+        finally:
+            visited.discard(value_id)
+
+    if isinstance(value, (list, tuple, set)):
+        visited.add(value_id)
+        try:
+            return [_json_safe_debug_value(item, visited, depth + 1) for item in value]
+        finally:
+            visited.discard(value_id)
+
+    return str(value)
+
+
+def _locator_attempt_summary(attempt) -> dict:
+    if not isinstance(attempt, dict):
+        return {"value": _json_safe_debug_value(attempt)}
+
+    allowed_keys = (
+        "success",
+        "strategy",
+        "reason",
+        "confidence",
+        "x",
+        "y",
+        "search_box_rect",
+        "candidate_region",
+        "error",
+        "source",
+        "failure_stage",
+        "final_strategy",
+        "final_reason",
+    )
+    summary = {
+        key: _json_safe_debug_value(attempt.get(key))
+        for key in allowed_keys
+        if key in attempt
+    }
+    evidence = attempt.get("evidence")
+    if isinstance(evidence, dict) and "source" not in summary and evidence.get("source") is not None:
+        summary["source"] = _json_safe_debug_value(evidence.get("source"))
+    return summary
+
+
+def _sanitize_locator_attempts_for_debug(attempts) -> dict | None:
+    if not isinstance(attempts, dict):
+        return None
+    return {
+        str(name): _locator_attempt_summary(attempt)
+        for name, attempt in attempts.items()
+    }
+
+
+def _sanitize_click_point_for_debug(click_point: dict | None) -> dict | None:
+    if not isinstance(click_point, dict):
+        return None
+
+    allowed_keys = (
+        "success",
+        "x",
+        "y",
+        "strategy",
+        "confidence",
+        "search_box_rect",
+        "candidate_region",
+        "window_rect",
+        "source",
+        "final_strategy",
+        "final_reason",
+        "reason",
+        "position",
+        "evidence",
+        "notes",
+    )
+    sanitized = {
+        key: _json_safe_debug_value(click_point.get(key))
+        for key in allowed_keys
+        if key in click_point
+    }
+    evidence = click_point.get("evidence")
+    if isinstance(evidence, dict) and "source" not in sanitized and evidence.get("source") is not None:
+        sanitized["source"] = _json_safe_debug_value(evidence.get("source"))
+
+    locator_attempts = _sanitize_locator_attempts_for_debug(click_point.get("locator_attempts"))
+    if locator_attempts is not None:
+        sanitized["locator_attempts"] = locator_attempts
+
+    return sanitized
+
+
+def _augment_search_focus_diagnostics(focus: dict, click_point: dict | None, win_rect: dict) -> dict:
+    focus = dict(focus or {})
+    click_point = _sanitize_click_point_for_debug(click_point) or {}
+    search_box_rect = click_point.get("search_box_rect")
+    candidate_region = click_point.get("candidate_region")
+    focus_control = focus.get("focus_control") or {}
+    focus_rect = focus_control.get("rect")
+    evidence = click_point.get("evidence")
+
+    focus["click_point"] = click_point or None
+    focus["search_box_rect"] = search_box_rect
+    focus["candidate_region"] = candidate_region
+    focus["window_rect"] = click_point.get("window_rect") or win_rect
+    focus["strategy"] = click_point.get("strategy")
+    focus["confidence"] = click_point.get("confidence")
+    focus["source"] = click_point.get("source") or (evidence or {}).get("source")
+    focus["evidence"] = evidence
+    focus["notes"] = click_point.get("notes")
+    focus["click_point_inside_search_box"] = _point_in_rect(click_point, search_box_rect)
+    focus["click_point_inside_candidate_region"] = _point_in_rect(click_point, candidate_region)
+
+    focus["focus_control_rect"] = focus_rect
+    focus["focus_control_name"] = focus_control.get("name")
+    focus["focus_control_class_name"] = focus_control.get("class_name")
+    focus["focus_control_type"] = focus_control.get("control_type")
+    focus["focus_control_rect_in_search_region"] = _rect_in_search_region(focus_rect, win_rect)
+    focus["focus_control_rect_in_chat_input_region"] = _rect_in_chat_input_region(focus_rect, win_rect)
+    return focus
 
 
 def _locate_search_box_by_uia(hwnd: int) -> dict:
@@ -647,6 +806,8 @@ def _locate_search_box_by_ocr(hwnd: int, win_rect: dict) -> dict:
 
 def locate_search_box_click_point(hwnd: int, position: str = "right") -> dict:
     """Locate the WeChat search box click point: UIA, vision, OCR placeholder, calibration."""
+    attempts = {}
+
     def _finalize(found: dict) -> dict:
         rect = found.get("search_box_rect")
         if rect and (found.get("x") is None or found.get("y") is None):
@@ -654,24 +815,31 @@ def locate_search_box_click_point(hwnd: int, position: str = "right") -> dict:
         found.setdefault("window_rect", win_rect)
         found.setdefault("candidate_region", _search_box_candidate_region(win_rect))
         found["position"] = position
+        found["locator_attempts"] = attempts
+        found["final_strategy"] = found.get("strategy")
+        found["final_reason"] = found.get("reason")
         return found
 
     try:
         win_rect = _get_window_rect_dict(hwnd)
 
         result = _locate_search_box_by_uia(hwnd)
+        attempts["uia_attempt"] = result
         if result.get("success"):
             return _finalize(result)
 
         result = _locate_search_box_by_vision(hwnd, win_rect)
+        attempts["vision_attempt"] = result
         if result.get("success"):
             return _finalize(result)
 
         result = _locate_search_box_by_ocr(hwnd, win_rect)
+        attempts["ocr_attempt"] = result
         if result.get("success"):
             return _finalize(result)
 
         result = _locate_search_box_by_calibration(win_rect)
+        attempts["calibration_attempt"] = result
         if result.get("success"):
             return _finalize(result)
 
@@ -687,6 +855,9 @@ def locate_search_box_click_point(hwnd: int, position: str = "right") -> dict:
             "candidate_region": _search_box_candidate_region(win_rect),
             "evidence": {},
             "position": position,
+            "locator_attempts": attempts,
+            "final_strategy": "no_search_box_locator_available",
+            "final_reason": "search_box_locate_failed",
         }
     except Exception as exc:
         return {
@@ -700,6 +871,9 @@ def locate_search_box_click_point(hwnd: int, position: str = "right") -> dict:
             "window_rect": None,
             "evidence": {},
             "position": position,
+            "locator_attempts": attempts,
+            "final_strategy": "search_box_locate_exception",
+            "final_reason": str(exc),
         }
 
 
@@ -717,25 +891,60 @@ def verify_search_box_focus(hwnd: int, win_rect: dict, click_point: dict | None 
         "manual": True,
         "manual_review_required": True,
         "focus_control": None,
+        "focus_poll_attempts": [],
         "reason": None,
     }
-    try:
-        control = uia.GetFocusedControl()
-        rect = _control_rect_to_dict(control)
-        info = {
-            "name": getattr(control, "Name", None),
-            "class_name": getattr(control, "ClassName", None),
-            "control_type": getattr(control, "ControlTypeName", None),
-            "rect": rect,
-        }
+    for delay in (0, 0.2, 0.5, 0.8):
+        if delay:
+            time.sleep(delay)
+
+        try:
+            control = uia.GetFocusedControl()
+            rect = _control_rect_to_dict(control)
+            info = {
+                "name": getattr(control, "Name", None),
+                "class_name": getattr(control, "ClassName", None),
+                "control_type": getattr(control, "ControlTypeName", None),
+                "rect": rect,
+            }
+            rect_in_chat_input = _rect_in_chat_input_region(rect, win_rect)
+            rect_in_search = _rect_in_search_region(rect, win_rect)
+            looks_like_search = _control_looks_like_search(control)
+            reason = "focused_control_not_search_box"
+        except Exception as exc:
+            rect = None
+            info = {
+                "name": None,
+                "class_name": None,
+                "control_type": None,
+                "rect": None,
+            }
+            rect_in_chat_input = False
+            rect_in_search = False
+            looks_like_search = False
+            reason = str(exc)
+
+        if rect_in_chat_input:
+            reason = "focused_control_in_chat_input_region"
+        elif rect_in_search and looks_like_search:
+            reason = "focused_control_matches_search_region"
+
         result["focus_control"] = info
+        result["focus_poll_attempts"].append({
+            "delay_ms": int(delay * 1000),
+            **info,
+            "rect_in_search_region": rect_in_search,
+            "rect_in_chat_input_region": rect_in_chat_input,
+            "looks_like_search": looks_like_search,
+            "reason": reason,
+        })
 
-        if _rect_in_chat_input_region(rect, win_rect):
+        if rect_in_chat_input:
             result["text_leaked_to_chat_input"] = True
-            result["reason"] = "focused_control_in_chat_input_region"
-            return result
+            result["reason"] = reason
+            return _augment_search_focus_diagnostics(result, click_point, win_rect)
 
-        if _rect_in_search_region(rect, win_rect) and _control_looks_like_search(control):
+        if rect_in_search and looks_like_search:
             result.update({
                 "focused": True,
                 "verified": True,
@@ -743,15 +952,13 @@ def verify_search_box_focus(hwnd: int, win_rect: dict, click_point: dict | None 
                 "failure_stage": None,
                 "manual": False,
                 "manual_review_required": False,
-                "reason": "focused_control_matches_search_region",
+                "reason": reason,
             })
-            return result
+            return _augment_search_focus_diagnostics(result, click_point, win_rect)
 
-        result["reason"] = "focused_control_not_search_box"
-        return result
-    except Exception as exc:
-        result["reason"] = str(exc)
-        return result
+        result["reason"] = reason
+
+    return _augment_search_focus_diagnostics(result, click_point, win_rect)
 
 
 def save_search_box_overlay(hwnd: int, click_point: dict | None, safe_nick: str, stage: str = "overlay") -> str | None:
@@ -1499,6 +1706,7 @@ def run_search_box_debug(nickname: str = "Aw3", position: str = "right") -> dict
     )
 
     focus = verify_search_box_focus(hwnd, ctx["win_rect"], click_point)
+    focus = _augment_search_focus_diagnostics(focus, click_point, ctx["win_rect"])
     result["focused"] = bool(focus.get("focused"))
     result["text_leaked_to_chat_input"] = bool(focus.get("text_leaked_to_chat_input"))
     result["verified"] = bool(focus.get("verified"))
@@ -1835,6 +2043,10 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         result["message"] = msg
         result["debug_steps"] = steps
         result["debug_screenshots"] = screenshots
+        if "foreground_guard" in ctx:
+            result["foreground_guard"] = ctx["foreground_guard"]
+        if "foreground_debug" in ctx:
+            result["foreground_debug"] = ctx["foreground_debug"]
         _save_failure_screenshot(safe_nick, "preconditions_fail")
         return result
     stages["readiness_checked"] = True
@@ -1927,6 +2139,7 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     steps.append(step.to_dict())
 
     focus = verify_search_box_focus(hwnd, win_rect, click_point)
+    focus = _augment_search_focus_diagnostics(focus, click_point, win_rect)
     if not focus.get("verified"):
         step = _DebugStep("search_focus_verified", attempt)
         step.fail(f"搜索框焦点未确认: {focus.get('reason')}", strategy="focus_guard")
