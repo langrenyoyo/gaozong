@@ -12,3 +12,4 @@ dist/
 build/
 data/debug_screenshots/*
 data/uvicorn_p0_3e.err.log
+CLAUDE.md
