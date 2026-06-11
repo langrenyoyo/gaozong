@@ -1,0 +1,17 @@
+小高AI微信助手 已启动
+本机服务地址：http://127.0.0.1:19000
+健康检查：http://127.0.0.1:19000/health
+微信窗口诊断：http://127.0.0.1:19000/agent/wechat/windows
+OCR 状态：http://127.0.0.1:19000/agent/ocr/status
+OCR 预热：http://127.0.0.1:19000/agent/ocr/warmup
+OCR 模型已随 小高AI微信助手 打包。
+请复制完整 dist\小高AI微信助手 目录，不要只复制 exe。
+请保持本窗口运行
+请打开微信并保持窗口可见
+然后在浏览器访问主系统页面并点击「启动微信测试」
+INFO:     127.0.0.1:49903 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "GET /agent/ocr/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "POST /agent/ocr/warmup HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "GET /agent/ocr/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "GET /agent/ocr/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "GET /agent/ocr/status HTTP/1.1" 200 OK

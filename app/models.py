@@ -136,3 +136,34 @@ class LeadNotification(Base):
     lead = relationship("DouyinLead")
     staff = relationship("SalesStaff")
     check = relationship("ReplyCheck")
+
+
+class WechatTask(Base):
+    """微信任务队列 — P0-5A 新增，用于 Local Agent 架构的任务分发与结果回写"""
+    __tablename__ = "wechat_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_type = Column(String(30), nullable=False, default="notify_sales",
+                       comment="任务类型: notify_sales / detect_reply")
+    lead_id = Column(Integer, ForeignKey("douyin_leads.id"), comment="关联线索 ID")
+    staff_id = Column(Integer, ForeignKey("sales_staff.id"), comment="关联销售 ID")
+    reply_check_id = Column(Integer, ForeignKey("reply_checks.id"), comment="关联检测记录 ID（可为空）")
+    target_nickname = Column(String(100), comment="目标微信联系人昵称")
+    message = Column(Text, comment="要粘贴/发送的消息内容")
+    mode = Column(String(20), nullable=False, default="paste_only",
+                  comment="执行模式: paste_only / single_send")
+    status = Column(String(20), nullable=False, default="pending",
+                    comment="任务状态: pending / running / pasted / failed / blocked / cancelled")
+    failure_stage = Column(String(100), comment="失败阶段标识")
+    raw_result = Column(Text, comment="Agent 返回的原始结果 JSON")
+    agent_hostname = Column(String(100), comment="执行 Agent 的主机名")
+    agent_pid = Column(Integer, comment="执行 Agent 的进程 ID")
+    pasted_at = Column(DateTime, comment="粘贴完成时间")
+    sent_at = Column(DateTime, comment="发送完成时间（P0-5A 期间必须为 None）")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # 关联
+    lead = relationship("DouyinLead")
+    staff = relationship("SalesStaff")
+    reply_check = relationship("ReplyCheck")

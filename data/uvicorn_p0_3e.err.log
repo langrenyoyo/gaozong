@@ -1,0 +1,1175 @@
+INFO:     Started server process [22440]
+INFO:     Waiting for application startup.
+2026-06-10 15:36:37,987 [INFO] app.scheduler.check_scheduler - 定时检测调度器已启动
+2026-06-10 15:36:38,003 [INFO] app.scheduler.wechat_auto_detect_scheduler - 微信自动检测调度器已启动
+2026-06-10 15:36:38,028 [INFO] app.services.hotkey_listener - \u2705 Alt+Q 全局热键已注册
+2026-06-10 15:36:38,190 [INFO] app.services.desktop_overlay - 桌面提示浮层已启动
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9000 (Press CTRL+C to quit)
+2026-06-10 15:41:37,988 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 15:46:38,011 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 15:51:38,015 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 15:52:48,198 [INFO] app.scheduler.wechat_auto_detect_scheduler - 开始自动检测: check #11, lead #12 (scheduler_test_customer), staff #3
+2026-06-10 15:52:48,250 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=10029596
+2026-06-10 15:52:52,349 [WARNING] app.scheduler.wechat_auto_detect_scheduler - 自动检测失败: check #11, 未找到当前聊天窗口的消息列表。请确认微信已登录，并且已打开了某个联系人的聊天窗口。
+2026-06-10 15:56:38,017 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:01:38,019 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:06:38,023 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:11:38,026 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:16:38,028 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:21:38,032 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:26:38,035 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:31:38,037 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:36:38,040 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:41:38,042 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:46:38,045 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:51:38,048 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 16:56:38,051 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:01:38,054 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:06:38,057 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:08:06,903 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:08:07,270 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:08:07,272 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:08:07,281 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 17:08:08,241 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:08:08,288 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:08:08,289 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:08:08,364 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 17:08:16,191 [ERROR] app.routers.feedback - 激活微信窗口失败: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。
+Traceback (most recent call last):
+  File "E:\work\project\auto_wechat\app\routers\feedback.py", line 171, in debug_activate_wechat_window
+    result = activate_wechat_window()
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 807, in activate_wechat_window
+    fg = user32.GetForegroundWindow()
+             ^^^^^^^^^^^^^^^^^^^^
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 156, in find_wechat_window
+    
+    
+    for child in children:
+    ^^^^^^^^^^^^^^^^^^^^^^
+        name = child.Name or ""
+        ^^^^^
+app.wechat_ui.exceptions.WechatNotFoundError: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。
+2026-06-10 17:08:35,154 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略2 Desktop 遍历）, name='微信', class='mmui::LoginWindow', HWND=14418382, area=114848
+2026-06-10 17:08:40,176 [ERROR] app.wechat_ui.input_writer - 坐标兜底失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-10 17:08:42,077 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:08:42,079 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=1579544, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=4398036
+2026-06-10 17:08:42,481 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=1579544, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:08:42,488 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:08:45,584 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:08:45,921 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 17:08:58,403 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:08:58,404 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=1579544, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=4398036
+2026-06-10 17:08:58,806 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=1579544, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:08:58,812 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:08:59,889 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:09:00,203 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 17:09:03,930 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:09:03,931 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=1579544, iconic=False, visible=True, rect=(10,320,890,1020), title='微信', class='Qt51514QWindowIcon', fg_hwnd=4398036
+2026-06-10 17:09:04,334 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=1579544, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:09:04,340 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:09:05,434 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:09:05,753 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 17:09:12,071 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:09:12,108 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:09:12,109 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:09:12,128 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 17:09:14,579 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:09:14,580 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=1579544, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=4398036
+2026-06-10 17:09:14,982 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=1579544, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:09:14,988 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:09:16,062 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:09:16,369 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 17:09:28,292 [WARNING] app.services.automation_control - \u26a0\ufe0f 自动化已紧急停止: reason=前端手动停止
+2026-06-10 17:09:28,294 [WARNING] app.routers.automation_control - 紧急停止 API 调用: reason=前端手动停止, result={'success': True, 'message': '自动化已紧急停止: 前端手动停止'}
+2026-06-10 17:09:33,771 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=1579544
+2026-06-10 17:09:34,847 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:09:35,154 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 17:11:38,062 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:16:38,065 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:21:38,070 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:26:38,073 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:31:38,076 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:34:37,389 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略2 Desktop 遍历）, name='微信', class='mmui::LoginWindow', HWND=8590702, area=106400
+2026-06-10 17:34:42,501 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (959, 633)
+2026-06-10 17:34:42,852 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:35:48,732 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略2 Desktop 遍历）, name='微信', class='mmui::LoginWindow', HWND=8590702, area=106400
+2026-06-10 17:35:53,803 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (959, 633)
+2026-06-10 17:35:54,136 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:36:38,078 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:41:38,081 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:46:38,084 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:47:42,520 [ERROR] app.routers.feedback - 激活微信窗口失败: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。
+Traceback (most recent call last):
+  File "E:\work\project\auto_wechat\app\routers\feedback.py", line 171, in debug_activate_wechat_window
+    result = activate_wechat_window()
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 807, in activate_wechat_window
+    fg = user32.GetForegroundWindow()
+             ^^^^^^^^^^^^^^^^^^^^
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 156, in find_wechat_window
+    
+    
+    for child in children:
+    ^^^^^^^^^^^^^^^^^^^^^^
+        name = child.Name or ""
+        ^^^^^
+app.wechat_ui.exceptions.WechatNotFoundError: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。
+2026-06-10 17:49:08,851 [INFO] app.services.automation_control - \u2705 自动化已恢复
+2026-06-10 17:49:08,852 [INFO] app.routers.automation_control - 恢复自动化 API 调用: result={'success': True, 'message': '自动化已恢复'}
+2026-06-10 17:50:57,000 [WARNING] app.services.automation_control - \u26a0\ufe0f 自动化已紧急停止: reason=前端手动停止
+2026-06-10 17:50:57,001 [WARNING] app.routers.automation_control - 紧急停止 API 调用: reason=前端手动停止, result={'success': True, 'message': '自动化已紧急停止: 前端手动停止'}
+2026-06-10 17:51:00,298 [INFO] app.services.automation_control - \u2705 自动化已恢复
+2026-06-10 17:51:00,299 [INFO] app.routers.automation_control - 恢复自动化 API 调用: result={'success': True, 'message': '自动化已恢复'}
+2026-06-10 17:51:05,852 [WARNING] app.services.automation_control - \u26a0\ufe0f 自动化已紧急停止: reason=前端手动停止
+2026-06-10 17:51:05,853 [WARNING] app.routers.automation_control - 紧急停止 API 调用: reason=前端手动停止, result={'success': True, 'message': '自动化已紧急停止: 前端手动停止'}
+2026-06-10 17:51:38,087 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:53:06,298 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略2 Desktop 遍历）, name='微信', class='mmui::LoginWindow', HWND=27466656, area=106400
+2026-06-10 17:53:11,346 [ERROR] app.wechat_ui.input_writer - 坐标兜底失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-10 17:53:31,640 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:53:34,738 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (429, 863)
+2026-06-10 17:53:35,114 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:54:32,150 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:54:33,229 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (429, 863)
+2026-06-10 17:54:33,563 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:54:51,036 [INFO] app.services.automation_control - \u2705 自动化已恢复
+2026-06-10 17:54:51,037 [INFO] app.routers.automation_control - 恢复自动化 API 调用: result={'success': True, 'message': '自动化已恢复'}
+2026-06-10 17:55:00,625 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:55:00,735 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:55:00,737 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:55:00,801 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:00,802 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=13
+2026-06-10 17:55:00,803 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:00,805 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:00,808 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:00,809 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(-19,351,877,999), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:01,212 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:01,762 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:01,763 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:02,684 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:02,685 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:03,088 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:03,095 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:03,264 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:03,266 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:03,268 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:03,269 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:03,672 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:04,181 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:55:04,270 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175504.png
+2026-06-10 17:55:04,272 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:04,526 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:55:05,773 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:05,776 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:05,780 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:05,782 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:06,184 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:06,697 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:06,698 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:06,731 [INFO] app.services.notification_service - 通知记录已创建: id=2, lead_id=13, status=failed, mode=auto_notify
+2026-06-10 17:55:06,767 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:06,768 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=14
+2026-06-10 17:55:06,768 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:06,770 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:06,775 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:06,775 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:07,178 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:07,690 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:07,691 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:09,192 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:09,202 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:09,206 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:09,207 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:09,608 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:10,131 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:10,132 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:11,634 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:11,636 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:11,639 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:11,640 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:12,041 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:12,554 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:12,555 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:12,582 [INFO] app.services.notification_service - 通知记录已创建: id=1, lead_id=14, status=failed, mode=auto_notify
+2026-06-10 17:55:12,619 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:12,620 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=15
+2026-06-10 17:55:12,620 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:12,624 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:12,626 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:12,627 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:13,028 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:13,603 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175513.png
+2026-06-10 17:55:13,605 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:15,106 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:15,109 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:15,111 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:15,112 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:15,513 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:16,026 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:16,027 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:17,528 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:17,531 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:17,533 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:17,534 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:17,935 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:18,519 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175518.png
+2026-06-10 17:55:18,520 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:18,558 [INFO] app.services.notification_service - 通知记录已创建: id=1, lead_id=15, status=failed, mode=auto_notify
+2026-06-10 17:55:18,610 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:18,611 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=16
+2026-06-10 17:55:18,612 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:18,614 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:18,616 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:18,617 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:19,018 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:19,532 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:19,533 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:21,034 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:21,052 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:21,058 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:21,058 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:21,461 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:21,971 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:21,972 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:23,473 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:23,476 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:23,480 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:23,481 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:23,882 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:24,412 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:24,426 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:24,597 [INFO] app.services.notification_service - 通知记录已创建: id=1, lead_id=16, status=failed, mode=auto_notify
+2026-06-10 17:55:24,898 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:24,899 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=1
+2026-06-10 17:55:24,899 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:24,901 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:24,907 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:24,907 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:25,310 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:25,910 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175525.png
+2026-06-10 17:55:25,912 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:27,413 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:27,416 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:27,419 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:27,420 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:27,822 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:28,424 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175528.png
+2026-06-10 17:55:28,437 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:29,938 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:29,945 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:29,948 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:29,948 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:30,350 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:30,609 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:55:30,647 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:55:30,648 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:55:30,694 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:30,696 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=13
+2026-06-10 17:55:30,696 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:30,699 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:30,701 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:30,704 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:30,978 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175530.png
+2026-06-10 17:55:30,979 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:31,005 [INFO] app.services.notification_service - 通知记录已创建: id=2, lead_id=1, status=failed, mode=auto_notify
+2026-06-10 17:55:31,043 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:31,044 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=14
+2026-06-10 17:55:31,045 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:31,048 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:31,052 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:31,053 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:31,106 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:31,455 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:31,689 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175531.png
+2026-06-10 17:55:31,691 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:31,966 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:31,967 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:33,193 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:33,197 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:33,199 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:33,199 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:33,468 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:33,471 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:33,473 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:33,475 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:33,601 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:33,877 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:34,112 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:34,113 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:34,390 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:34,391 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:35,614 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:35,616 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:35,619 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:35,619 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:35,892 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:35,894 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:35,898 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:35,898 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:36,021 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:36,300 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:36,530 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:36,531 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:36,557 [INFO] app.services.notification_service - 通知记录已创建: id=3, lead_id=13, status=failed, mode=auto_notify
+2026-06-10 17:55:36,594 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,595 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=15
+2026-06-10 17:55:36,596 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:36,598 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,600 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,601 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:36,889 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175536.png
+2026-06-10 17:55:36,891 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:36,915 [INFO] app.services.notification_service - 通知记录已创建: id=4, lead_id=14, status=failed, mode=auto_notify
+2026-06-10 17:55:36,951 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,952 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=16
+2026-06-10 17:55:36,953 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:36,955 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,958 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:36,959 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:37,002 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:37,360 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:37,585 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175537.png
+2026-06-10 17:55:37,586 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:37,868 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:37,869 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:39,088 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:39,091 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:39,093 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:39,094 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:39,370 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:39,373 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:39,375 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:39,376 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:39,495 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:39,777 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:40,069 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175540.png
+2026-06-10 17:55:40,070 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:40,291 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:40,292 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 2/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:41,571 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:41,574 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:41,577 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:41,578 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:41,793 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 3/3
+2026-06-10 17:55:41,796 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:41,799 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:41,801 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:41,979 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:42,203 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:42,621 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175542.png
+2026-06-10 17:55:42,623 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:42,701 [INFO] app.services.notification_service - 通知记录已创建: id=5, lead_id=15, status=failed, mode=auto_notify
+2026-06-10 17:55:42,752 [INFO] app.services.notification_service - 通知记录已创建: id=6, lead_id=17, status=failed, mode=auto_notify
+2026-06-10 17:55:42,797 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,798 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=18
+2026-06-10 17:55:42,799 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:42,801 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,804 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,805 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:42,811 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175542.png
+2026-06-10 17:55:42,813 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 3/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:42,868 [INFO] app.services.notification_service - 通知记录已创建: id=7, lead_id=16, status=failed, mode=auto_notify
+2026-06-10 17:55:42,927 [INFO] app.services.notification_service - 通知记录已创建: id=8, lead_id=19, status=failed, mode=auto_notify
+2026-06-10 17:55:42,962 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,963 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=20
+2026-06-10 17:55:42,963 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:42,966 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,968 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:42,969 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=11016500
+2026-06-10 17:55:43,209 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:43,370 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:43,850 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175543.png
+2026-06-10 17:55:43,852 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:43,998 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\fail_测试微信昵称_preconditions_fail_20260610_175543.png
+2026-06-10 17:55:44,000 [WARNING] app.wechat_ui.contact_searcher - 搜索失败（尝试 1/3）: stage=preconditions, msg=微信不在前台（前台窗口: hwnd=11016500, title='test_demo_windows - VMware Workstation'）
+2026-06-10 17:55:45,353 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:45,356 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:45,358 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\A\miniconda3\Lib\logging\__init__.py", line 1151, in emit
+    msg = self.format(record)
+  File "C:\Users\A\miniconda3\Lib\logging\__init__.py", line 999, in format
+    return fmt.format(record)
+           ~~~~~~~~~~^^^^^^^^
+  File "C:\Users\A\miniconda3\Lib\logging\__init__.py", line 712, in format
+    record.message = record.getMessage()
+                     ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\logging\__init__.py", line 400, in getMessage
+    msg = msg % self.args
+          ~~~~^~~~~~~~~~~
+TypeError: %d format: a real number is required, not NoneType
+Call stack:
+  File "C:\Users\A\miniconda3\Lib\threading.py", line 1015, in _bootstrap
+    self._bootstrap_inner()
+  File "C:\Users\A\miniconda3\Lib\threading.py", line 1044, in _bootstrap_inner
+    self.run()
+  File "C:\Users\A\miniconda3\Lib\site-packages\anyio\_backends\_asyncio.py", line 967, in run
+    result = context.run(func, *args)
+  File "E:\work\project\auto_wechat\app\routers\integrations.py", line 22, in sync_leads
+    return preview_sync_leads(db, request)
+  File "E:\work\project\auto_wechat\app\services\douyin_sync_service.py", line 211, in preview_sync_leads
+    notify_result = _try_auto_notify(db, lead.id)
+  File "E:\work\project\auto_wechat\app\services\douyin_sync_service.py", line 147, in _try_auto_notify
+    result = auto_notify_assigned_lead(db, lead_id)
+  File "E:\work\project\auto_wechat\app\services\notification_service.py", line 176, in auto_notify_assigned_lead
+    search_result = open_chat_by_nickname(staff.wechat_nickname)
+  File "E:\work\project\auto_wechat\app\wechat_ui\contact_searcher.py", line 348, in open_chat_by_nickname
+    attempt_result = _do_search_once(nickname, attempt, safe_nick)
+  File "E:\work\project\auto_wechat\app\wechat_ui\contact_searcher.py", line 420, in _do_search_once
+    ok, msg, ctx = _check_preconditions()
+  File "E:\work\project\auto_wechat\app\wechat_ui\contact_searcher.py", line 230, in _check_preconditions
+    layout = ensure_wechat_workspace_layout(allow_restore=False)
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 389, in ensure_wechat_workspace_layout
+    f"HWND={best['hwnd']}, area={best['area']}")
+  File "E:\work\project\auto_wechat\app\wechat_ui\window_locator.py", line 830, in activate_wechat_window
+    "visible": False,
+Message: "activate_wechat_window 前状态: hwnd=%d, iconic=%s, visible=%s, rect=(%d,%d,%d,%d), title='%s', class='%s', fg_hwnd=%d"
+Arguments: (5702576, False, True, 0, 0, 880, 700, '微信', 'Qt51514QWindowIcon', None)
+2026-06-10 17:55:45,501 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 2/3
+2026-06-10 17:55:45,506 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:45,513 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:45,514 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=5702576
+2026-06-10 17:55:45,783 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:45,915 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:46,164 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_1_before_click_search_a2_20260610_175546.png
+2026-06-10 17:55:46,175 [INFO] app.wechat_ui.contact_searcher - 点击搜索区域: (137, 38), rect={'left': 8, 'top': 0, 'right': 872, 'bottom': 692}
+2026-06-10 17:55:46,277 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_1_before_click_search_a2_20260610_175546.png
+2026-06-10 17:55:46,292 [INFO] app.wechat_ui.contact_searcher - 点击搜索区域: (137, 38), rect={'left': 8, 'top': 0, 'right': 872, 'bottom': 692}
+2026-06-10 17:55:48,631 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_2_after_paste_nickname_a2_20260610_175548.png
+2026-06-10 17:55:48,633 [INFO] app.wechat_ui.contact_searcher - 搜索区域截图已保存（非阻塞验证）
+2026-06-10 17:55:48,659 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:48,660 [INFO] app.wechat_ui.contact_searcher - 搜索区域截图已保存（非阻塞验证）
+2026-06-10 17:55:49,104 [INFO] app.wechat_ui.contact_searcher - 已按 Down+Enter 选择第一个搜索结果
+2026-06-10 17:55:49,105 [INFO] app.wechat_ui.contact_searcher - 等待 2 秒让聊天窗口打开...
+2026-06-10 17:55:49,286 [INFO] app.wechat_ui.contact_searcher - 已按 Down+Enter 选择第一个搜索结果
+2026-06-10 17:55:49,287 [INFO] app.wechat_ui.contact_searcher - 等待 2 秒让聊天窗口打开...
+2026-06-10 17:55:51,140 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_3_after_down_enter_a2_20260610_175551.png
+2026-06-10 17:55:51,288 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:51,295 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:51,355 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:52,624 [INFO] app.wechat_ui.contact_searcher - 聊天窗口已打开: nickname='测试微信昵称', verified=True, confidence=0.6, attempts=2
+2026-06-10 17:55:52,625 [INFO] app.services.notification_service - auto_notify: 聊天窗口已打开: chat_title='None', chat_verified=True
+2026-06-10 17:55:52,626 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略A: 读取顶部标题, expected='测试微信昵称'
+2026-06-10 17:55:52,628 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:52,690 [INFO] app.wechat_ui.contact_searcher - 聊天窗口已打开: nickname='测试微信昵称', verified=True, confidence=0.6, attempts=2
+2026-06-10 17:55:52,691 [INFO] app.services.notification_service - auto_notify: 聊天窗口已打开: chat_title='None', chat_verified=True
+2026-06-10 17:55:52,692 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略A: 读取顶部标题, expected='测试微信昵称'
+2026-06-10 17:55:52,694 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:53,652 [INFO] app.wechat_ui.contact_verifier - 策略A: 未读取到标题，继续策略B
+2026-06-10 17:55:53,653 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略B: 点击顶部标题获取资料卡
+2026-06-10 17:55:53,658 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:53,658 [INFO] app.wechat_ui.contact_verifier - 策略B: 点击标题区域 (612, 41)
+2026-06-10 17:55:53,720 [INFO] app.wechat_ui.contact_verifier - 策略A: 未读取到标题，继续策略B
+2026-06-10 17:55:53,721 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略B: 点击顶部标题获取资料卡
+2026-06-10 17:55:53,806 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_before_title_click_20260610_175553.png
+2026-06-10 17:55:53,808 [INFO] app.wechat_ui.contact_verifier - 策略B: 点击标题区域 (612, 41)
+2026-06-10 17:55:54,706 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_title_profile_card_20260610_175554.png
+2026-06-10 17:55:54,709 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:54,709 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:55:54,710 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:55:54,810 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:54,887 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:54,888 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:55:54,889 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:55:55,081 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:55,082 [INFO] app.wechat_ui.contact_verifier - 策略B: 资料卡未匹配 (card_text='None')
+2026-06-10 17:55:55,082 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略C: 点击联系人头像获取资料卡
+2026-06-10 17:55:55,083 [INFO] app.wechat_ui.contact_verifier - 策略C: 点击头像区域 (396, 415)
+2026-06-10 17:55:55,259 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:55,260 [INFO] app.wechat_ui.contact_verifier - 策略B: 资料卡未匹配 (card_text='None')
+2026-06-10 17:55:55,260 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略C: 点击联系人头像获取资料卡
+2026-06-10 17:55:55,261 [INFO] app.wechat_ui.contact_verifier - 策略C: 点击头像区域 (396, 415)
+2026-06-10 17:55:56,108 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_avatar_profile_card_20260610_175556.png
+2026-06-10 17:55:56,111 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,112 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:55:56,113 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:55:56,263 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:55:56,265 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,266 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:55:56,267 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:55:56,475 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,477 [INFO] app.wechat_ui.contact_verifier - 策略C: 资料卡未匹配 (card_text='None')
+2026-06-10 17:55:56,478 [WARNING] app.wechat_ui.contact_verifier - 联系人确认失败: expected='测试微信昵称', 三种策略均未匹配
+2026-06-10 17:55:56,479 [INFO] app.services.notification_service - auto_notify: 联系人确认结果: verified=False, strategy=None, matched='None'
+2026-06-10 17:55:56,515 [INFO] app.services.notification_service - 通知记录已创建: id=9, lead_id=18, status=failed, mode=auto_notify
+2026-06-10 17:55:56,573 [INFO] app.services.notification_service - 通知记录已创建: id=10, lead_id=21, status=failed, mode=auto_notify
+2026-06-10 17:55:56,625 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,631 [INFO] app.services.notification_service - 通知记录已创建: id=11, lead_id=22, status=failed, mode=auto_notify
+2026-06-10 17:55:56,632 [INFO] app.wechat_ui.contact_verifier - 策略C: 资料卡未匹配 (card_text='None')
+2026-06-10 17:55:56,633 [WARNING] app.wechat_ui.contact_verifier - 联系人确认失败: expected='测试微信昵称', 三种策略均未匹配
+2026-06-10 17:55:56,634 [INFO] app.services.notification_service - auto_notify: 联系人确认结果: verified=False, strategy=None, matched='None'
+2026-06-10 17:55:56,673 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,674 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=23
+2026-06-10 17:55:56,675 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:56,679 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,708 [INFO] app.services.notification_service - 通知记录已创建: id=12, lead_id=20, status=failed, mode=auto_notify
+2026-06-10 17:55:56,711 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,714 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=5702576
+2026-06-10 17:55:56,771 [INFO] app.services.notification_service - 通知记录已创建: id=13, lead_id=24, status=failed, mode=auto_notify
+2026-06-10 17:55:56,832 [INFO] app.services.notification_service - 通知记录已创建: id=14, lead_id=25, status=failed, mode=auto_notify
+2026-06-10 17:55:56,873 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,874 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=26
+2026-06-10 17:55:56,875 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:55:56,876 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,879 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:55:56,879 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=5702576
+2026-06-10 17:55:57,115 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:57,281 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:55:57,418 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:57,421 [ERROR] app.wechat_ui.screenshot_debug - 微信区域截图失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:57,422 [INFO] app.wechat_ui.contact_searcher - 点击搜索区域: (137, 38), rect={'left': 8, 'top': 0, 'right': 872, 'bottom': 692}
+2026-06-10 17:55:57,582 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:57,584 [ERROR] app.wechat_ui.screenshot_debug - 微信区域截图失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:55:57,585 [INFO] app.wechat_ui.contact_searcher - 点击搜索区域: (137, 38), rect={'left': 8, 'top': 0, 'right': 872, 'bottom': 692}
+2026-06-10 17:55:59,877 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_2_after_paste_nickname_a1_20260610_175559.png
+2026-06-10 17:55:59,879 [INFO] app.wechat_ui.contact_searcher - 搜索区域截图已保存（非阻塞验证）
+2026-06-10 17:56:00,024 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_2_after_paste_nickname_a1_20260610_175559.png
+2026-06-10 17:56:00,027 [INFO] app.wechat_ui.contact_searcher - 搜索区域截图已保存（非阻塞验证）
+2026-06-10 17:56:00,324 [INFO] app.wechat_ui.contact_searcher - 已按 Down+Enter 选择第一个搜索结果
+2026-06-10 17:56:00,332 [INFO] app.wechat_ui.contact_searcher - 等待 2 秒让聊天窗口打开...
+2026-06-10 17:56:00,471 [INFO] app.wechat_ui.contact_searcher - 已按 Down+Enter 选择第一个搜索结果
+2026-06-10 17:56:00,472 [INFO] app.wechat_ui.contact_searcher - 等待 2 秒让聊天窗口打开...
+2026-06-10 17:56:02,334 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:56:02,342 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:02,512 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_3_after_down_enter_a1_20260610_175602.png
+2026-06-10 17:56:02,516 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:03,674 [INFO] app.wechat_ui.contact_searcher - 聊天窗口已打开: nickname='测试微信昵称', verified=True, confidence=0.6, attempts=1
+2026-06-10 17:56:03,676 [INFO] app.services.notification_service - auto_notify: 聊天窗口已打开: chat_title='None', chat_verified=True
+2026-06-10 17:56:03,677 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略A: 读取顶部标题, expected='测试微信昵称'
+2026-06-10 17:56:03,680 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:03,843 [INFO] app.wechat_ui.contact_searcher - 聊天窗口已打开: nickname='测试微信昵称', verified=True, confidence=0.6, attempts=1
+2026-06-10 17:56:03,844 [INFO] app.services.notification_service - auto_notify: 聊天窗口已打开: chat_title='None', chat_verified=True
+2026-06-10 17:56:03,846 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略A: 读取顶部标题, expected='测试微信昵称'
+2026-06-10 17:56:03,848 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:04,699 [INFO] app.wechat_ui.contact_verifier - 策略A: 未读取到标题，继续策略B
+2026-06-10 17:56:04,700 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略B: 点击顶部标题获取资料卡
+2026-06-10 17:56:04,777 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_before_title_click_20260610_175604.png
+2026-06-10 17:56:04,779 [INFO] app.wechat_ui.contact_verifier - 策略B: 点击标题区域 (612, 41)
+2026-06-10 17:56:04,868 [INFO] app.wechat_ui.contact_verifier - 策略A: 未读取到标题，继续策略B
+2026-06-10 17:56:04,869 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略B: 点击顶部标题获取资料卡
+2026-06-10 17:56:04,962 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_before_title_click_20260610_175604.png
+2026-06-10 17:56:04,963 [INFO] app.wechat_ui.contact_verifier - 策略B: 点击标题区域 (612, 41)
+2026-06-10 17:56:05,826 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_title_profile_card_20260610_175605.png
+2026-06-10 17:56:05,829 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:05,829 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:05,830 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:05,988 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_title_profile_card_20260610_175605.png
+2026-06-10 17:56:05,991 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:05,992 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:05,993 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:06,193 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:06,194 [INFO] app.wechat_ui.contact_verifier - 策略B: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:06,194 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略C: 点击联系人头像获取资料卡
+2026-06-10 17:56:06,195 [INFO] app.wechat_ui.contact_verifier - 策略C: 点击头像区域 (396, 415)
+2026-06-10 17:56:06,359 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:06,360 [INFO] app.wechat_ui.contact_verifier - 策略B: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:06,361 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略C: 点击联系人头像获取资料卡
+2026-06-10 17:56:06,363 [INFO] app.wechat_ui.contact_verifier - 策略C: 点击头像区域 (396, 415)
+2026-06-10 17:56:07,209 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:56:07,212 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,212 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:07,213 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:07,365 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:56:07,367 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,368 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:07,368 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:07,567 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,568 [INFO] app.wechat_ui.contact_verifier - 策略C: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:07,569 [WARNING] app.wechat_ui.contact_verifier - 联系人确认失败: expected='测试微信昵称', 三种策略均未匹配
+2026-06-10 17:56:07,571 [INFO] app.services.notification_service - auto_notify: 联系人确认结果: verified=False, strategy=None, matched='None'
+2026-06-10 17:56:07,609 [INFO] app.services.notification_service - 通知记录已创建: id=15, lead_id=23, status=failed, mode=auto_notify
+2026-06-10 17:56:07,667 [INFO] app.services.notification_service - 通知记录已创建: id=16, lead_id=27, status=failed, mode=auto_notify
+2026-06-10 17:56:07,717 [INFO] app.services.notification_service - 通知记录已创建: id=17, lead_id=28, status=failed, mode=auto_notify
+2026-06-10 17:56:07,725 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,766 [INFO] app.wechat_ui.contact_verifier - 策略C: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:07,766 [WARNING] app.wechat_ui.contact_verifier - 联系人确认失败: expected='测试微信昵称', 三种策略均未匹配
+2026-06-10 17:56:07,767 [INFO] app.services.notification_service - auto_notify: 联系人确认结果: verified=False, strategy=None, matched='None'
+2026-06-10 17:56:07,768 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,786 [INFO] app.services.notification_service - 通知记录已创建: id=18, lead_id=26, status=failed, mode=auto_notify
+2026-06-10 17:56:07,787 [INFO] app.services.notification_service - auto_notify: 开始搜索销售聊天窗口: nickname='测试微信昵称', lead_id=29
+2026-06-10 17:56:07,788 [INFO] app.wechat_ui.contact_searcher - 搜索联系人: nickname='测试微信昵称', 尝试 1/3
+2026-06-10 17:56:07,797 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,826 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:07,844 [INFO] app.services.notification_service - 通知记录已创建: id=19, lead_id=30, status=failed, mode=auto_notify
+2026-06-10 17:56:07,845 [INFO] app.wechat_ui.window_locator - activate_wechat_window 前状态: hwnd=5702576, iconic=False, visible=True, rect=(0,0,880,700), title='微信', class='Qt51514QWindowIcon', fg_hwnd=5702576
+2026-06-10 17:56:07,906 [INFO] app.services.notification_service - 通知记录已创建: id=20, lead_id=31, status=failed, mode=auto_notify
+2026-06-10 17:56:07,907 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=14 update=0 skip=5 assigned=14 notified=0
+2026-06-10 17:56:08,248 [INFO] app.wechat_ui.window_locator - 微信窗口已激活到左侧，HWND=5702576, 步骤=['already_visible_skip_restore', 'MoveWindow', 'SetForegroundWindow'], 目标=(0,0), 实际=(0,0), 偏差=(0,0)
+2026-06-10 17:56:08,549 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 2: OverflowError: int too long to convert
+2026-06-10 17:56:08,558 [INFO] app.wechat_ui.contact_searcher - 点击搜索区域: (137, 38), rect={'left': 8, 'top': 0, 'right': 872, 'bottom': 692}
+2026-06-10 17:56:11,006 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_2_after_paste_nickname_a1_20260610_175610.png
+2026-06-10 17:56:11,008 [INFO] app.wechat_ui.contact_searcher - 搜索区域截图已保存（非阻塞验证）
+2026-06-10 17:56:11,452 [INFO] app.wechat_ui.contact_searcher - 已按 Down+Enter 选择第一个搜索结果
+2026-06-10 17:56:11,454 [INFO] app.wechat_ui.contact_searcher - 等待 2 秒让聊天窗口打开...
+2026-06-10 17:56:13,490 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\open_chat_测试微信昵称_3_after_down_enter_a1_20260610_175613.png
+2026-06-10 17:56:13,493 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:14,824 [INFO] app.wechat_ui.contact_searcher - 聊天窗口已打开: nickname='测试微信昵称', verified=True, confidence=0.6, attempts=1
+2026-06-10 17:56:14,825 [INFO] app.services.notification_service - auto_notify: 聊天窗口已打开: chat_title='None', chat_verified=True
+2026-06-10 17:56:14,826 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略A: 读取顶部标题, expected='测试微信昵称'
+2026-06-10 17:56:14,828 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:15,847 [INFO] app.wechat_ui.contact_verifier - 策略A: 未读取到标题，继续策略B
+2026-06-10 17:56:15,847 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略B: 点击顶部标题获取资料卡
+2026-06-10 17:56:15,922 [INFO] app.wechat_ui.screenshot_debug - 截图已保存: data\debug_screenshots\verify_contact_before_title_click_20260610_175615.png
+2026-06-10 17:56:15,924 [INFO] app.wechat_ui.contact_verifier - 策略B: 点击标题区域 (612, 41)
+2026-06-10 17:56:16,942 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:56:16,946 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:16,946 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:16,947 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:17,309 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:17,310 [INFO] app.wechat_ui.contact_verifier - 策略B: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:17,310 [INFO] app.wechat_ui.contact_verifier - 联系人确认 策略C: 点击联系人头像获取资料卡
+2026-06-10 17:56:17,311 [INFO] app.wechat_ui.contact_verifier - 策略C: 点击头像区域 (396, 415)
+2026-06-10 17:56:18,325 [ERROR] app.wechat_ui.screenshot_debug - 截图保存失败: argument 1: OverflowError: int too long to convert
+2026-06-10 17:56:18,328 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:18,329 [WARNING] app.wechat_ui.contact_verifier - 读取资料卡文本失败: 'WindowControl' object has no attribute 'WalkControl'
+2026-06-10 17:56:18,330 [INFO] app.wechat_ui.contact_verifier - 安全关闭资料卡: 点击空白区域 (483, 622)
+2026-06-10 17:56:18,684 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:18,685 [INFO] app.wechat_ui.contact_verifier - 策略C: 资料卡未匹配 (card_text='None')
+2026-06-10 17:56:18,685 [WARNING] app.wechat_ui.contact_verifier - 联系人确认失败: expected='测试微信昵称', 三种策略均未匹配
+2026-06-10 17:56:18,686 [INFO] app.services.notification_service - auto_notify: 联系人确认结果: verified=False, strategy=None, matched='None'
+2026-06-10 17:56:18,728 [INFO] app.services.notification_service - 通知记录已创建: id=21, lead_id=29, status=failed, mode=auto_notify
+2026-06-10 17:56:18,731 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=10 update=0 skip=9 assigned=10 notified=0
+2026-06-10 17:56:38,092 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 17:56:38,987 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:56:39,021 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:56:39,023 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:56:39,032 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:56:40,187 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:56:40,222 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:56:40,224 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:56:40,233 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:56:43,636 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:56:44,723 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:56:45,064 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:57:43,758 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:57:43,795 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:57:43,797 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:57:43,807 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:58:13,751 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:58:13,790 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:58:13,792 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:58:13,801 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:58:43,735 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:58:43,781 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:58:43,783 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:58:43,792 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:59:13,747 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:59:13,805 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:59:13,806 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:59:13,816 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 17:59:34,604 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 17:59:35,689 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 17:59:36,018 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 17:59:43,737 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 17:59:43,776 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 17:59:43,777 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 17:59:43,787 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 18:00:13,733 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 18:00:13,792 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 18:00:13,794 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 18:00:13,811 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 18:00:24,853 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:00:25,948 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:00:26,287 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:00:44,577 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 18:00:44,613 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 18:00:44,614 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 18:00:44,622 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 18:00:56,261 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:00:57,346 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:00:57,683 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:01:13,733 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 18:01:13,768 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 18:01:13,770 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 18:01:13,780 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 18:01:38,094 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:01:43,730 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 18:01:43,765 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 18:01:43,766 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 18:01:43,817 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:43,851 [INFO] app.services.notification_service - 通知记录已创建: id=2, lead_id=13, status=failed, mode=auto_notify
+2026-06-10 18:01:43,854 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=13, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:43,891 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:43,926 [INFO] app.services.notification_service - 通知记录已创建: id=3, lead_id=14, status=failed, mode=auto_notify
+2026-06-10 18:01:43,929 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=14, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:43,966 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,001 [INFO] app.services.notification_service - 通知记录已创建: id=4, lead_id=15, status=failed, mode=auto_notify
+2026-06-10 18:01:44,003 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=15, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,042 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,076 [INFO] app.services.notification_service - 通知记录已创建: id=5, lead_id=16, status=failed, mode=auto_notify
+2026-06-10 18:01:44,078 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=16, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,129 [INFO] app.services.notification_service - 通知记录已创建: id=6, lead_id=17, status=failed, mode=auto_notify
+2026-06-10 18:01:44,170 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,197 [INFO] app.services.notification_service - 通知记录已创建: id=7, lead_id=18, status=failed, mode=auto_notify
+2026-06-10 18:01:44,198 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=18, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,255 [INFO] app.services.notification_service - 通知记录已创建: id=8, lead_id=19, status=failed, mode=auto_notify
+2026-06-10 18:01:44,296 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,330 [INFO] app.services.notification_service - 通知记录已创建: id=9, lead_id=20, status=failed, mode=auto_notify
+2026-06-10 18:01:44,332 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=20, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,389 [INFO] app.services.notification_service - 通知记录已创建: id=10, lead_id=21, status=failed, mode=auto_notify
+2026-06-10 18:01:44,446 [INFO] app.services.notification_service - 通知记录已创建: id=11, lead_id=22, status=failed, mode=auto_notify
+2026-06-10 18:01:44,487 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,514 [INFO] app.services.notification_service - 通知记录已创建: id=12, lead_id=23, status=failed, mode=auto_notify
+2026-06-10 18:01:44,515 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=23, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,582 [INFO] app.services.notification_service - 通知记录已创建: id=13, lead_id=24, status=failed, mode=auto_notify
+2026-06-10 18:01:44,640 [INFO] app.services.notification_service - 通知记录已创建: id=14, lead_id=25, status=failed, mode=auto_notify
+2026-06-10 18:01:44,684 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,715 [INFO] app.services.notification_service - 通知记录已创建: id=15, lead_id=26, status=failed, mode=auto_notify
+2026-06-10 18:01:44,717 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=26, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:44,832 [INFO] app.services.notification_service - 通知记录已创建: id=16, lead_id=27, status=failed, mode=auto_notify
+2026-06-10 18:01:44,891 [INFO] app.services.notification_service - 通知记录已创建: id=17, lead_id=28, status=failed, mode=auto_notify
+2026-06-10 18:01:44,934 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:01:44,960 [INFO] app.services.notification_service - 通知记录已创建: id=18, lead_id=29, status=failed, mode=auto_notify
+2026-06-10 18:01:44,962 [WARNING] app.services.notification_service - auto_notify 微信自动化前置门禁失败: lead_id=29, staff_id=1, ready={'success': False, 'hwnd': 5702576, 'is_window': True, 'visible': True, 'iconic': True, 'foreground_hwnd': 11016500, 'foreground_title': 'test_demo_windows - VMware Workstation', 'foreground_class': 'VMUIFrame', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常'}
+2026-06-10 18:01:45,008 [INFO] app.services.notification_service - 通知记录已创建: id=19, lead_id=30, status=failed, mode=auto_notify
+2026-06-10 18:01:45,066 [INFO] app.services.notification_service - 通知记录已创建: id=20, lead_id=31, status=failed, mode=auto_notify
+2026-06-10 18:01:45,067 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=19 update=0 skip=0 assigned=19 notified=0
+2026-06-10 18:02:13,736 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 18:02:13,779 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 18:02:13,781 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 18:02:13,790 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=True auto_notify=True fetched=19 mapped=19 create=0 update=0 skip=19 assigned=0 notified=0
+2026-06-10 18:02:37,414 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:02:38,497 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:02:38,832 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:06:38,097 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:08:55,388 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:08:56,479 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:08:56,826 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:09:55,789 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:09:56,874 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:09:57,217 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:11:38,101 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:16:38,105 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:17:24,636 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:17:29,654 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 560)
+2026-06-10 18:17:29,970 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: GroupControl
+2026-06-10 18:21:38,109 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:22:54,484 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:22:55,566 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:22:55,900 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:26:38,112 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:31:38,115 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:36:38,118 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:38:15,031 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:38:16,106 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:38:16,452 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:41:38,123 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:43:27,085 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:43:28,159 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:43:28,499 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:44:03,924 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:44:05,017 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:44:05,359 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:46:38,126 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:49:40,327 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 18:49:41,411 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 18:49:41,744 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 18:51:38,129 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 18:56:38,132 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:01:38,134 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:03:51,981 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 19:03:53,061 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 19:03:53,419 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 19:06:38,137 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:11:38,140 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:16:38,143 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:21:38,146 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:26:38,153 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:30:47,130 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 19:30:47,429 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 19:30:47,431 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 19:30:47,443 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 19:30:48,446 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 19:30:48,489 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 19:30:48,490 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 19:30:48,545 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 19:30:54,758 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 19:30:55,843 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 19:30:56,183 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 19:31:38,155 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:36:38,158 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:41:38,160 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:46:38,164 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:51:38,167 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:56:38,170 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 19:59:05,477 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 19:59:06,559 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (443, 554)
+2026-06-10 19:59:06,904 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: PaneControl
+2026-06-10 20:01:38,174 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:06:38,177 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:11:38,180 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:16:38,183 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:21:38,186 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:22:05,788 [INFO] app.scheduler.wechat_auto_detect_scheduler - 通知发送后 0.1 秒，静默期内跳过检测（阈值 8 秒）: check #1
+2026-06-10 20:26:38,190 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:31:38,204 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:31:45,201 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 20:31:46,278 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (434, 533)
+2026-06-10 20:31:46,595 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: GroupControl
+2026-06-10 20:33:13,575 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 20:33:14,652 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (434, 533)
+2026-06-10 20:33:14,975 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: GroupControl
+2026-06-10 20:36:38,207 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:41:38,210 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:42:31,227 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 20:42:32,316 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (901, 805)
+2026-06-10 20:42:32,630 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 20:46:38,213 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:51:38,216 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 20:56:38,219 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:01:38,223 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:06:38,226 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:06:56,627 [INFO] app.scheduler.wechat_auto_detect_scheduler - 通知发送后 0.0 秒，静默期内跳过检测（阈值 8 秒）: check #1
+2026-06-10 21:11:38,228 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:16:38,231 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:21:38,236 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:26:38,240 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:31:38,245 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:36:39,296 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:40:57,391 [INFO] app.scheduler.wechat_auto_detect_scheduler - 开始自动检测: check #1, lead #13 (bug1_test_customer_214057), staff #4
+2026-06-10 21:40:57,401 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 21:40:58,482 [INFO] app.wechat_ui.current_chat_reader - 读取消息完成: 总数=5, 读取=5, self=0, friend=0, system=2, unknown=3
+2026-06-10 21:40:58,503 [INFO] app.services.wechat_ui_reply_service - 兜底模式: 3 条候选文本消息（共 5 条）
+E:\work\project\auto_wechat\app\services\wechat_ui_reply_service.py:260: SAWarning: Identity map already had an identity for (<class 'app.models.ReplyCheck'>, (1,), None), replacing it with newly flushed object.   Are there load operations occurring inside of an event handler within the flush?
+  db.flush()
+2026-06-10 21:40:58,556 [ERROR] app.services.wechat_ui_reply_service - 微信 UI 检测异常: UPDATE statement on table 'douyin_leads' expected to update 1 row(s); 0 were matched.
+Traceback (most recent call last):
+  File "E:\work\project\auto_wechat\app\services\wechat_ui_reply_service.py", line 199, in detect_reply_from_wechat
+    _update_check_as_replied(db, lead_id, staff_id, matched_content, reason)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\work\project\auto_wechat\app\services\wechat_ui_reply_service.py", line 275, in _update_check_as_replied
+    db.commit()
+    ~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2034, in commit
+    trans.commit(_to_root=True)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 2, in commit
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 1315, in commit
+    self._prepare_impl()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "<string>", line 2, in _prepare_impl
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 1290, in _prepare_impl
+    self.session.flush()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 4352, in flush
+    self._flush(objects)
+    ~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 4487, in _flush
+    with util.safe_reraise():
+         ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\util\langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 4448, in _flush
+    flush_context.execute()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 465, in execute
+    rec.execute(self)
+    ~~~~~~~~~~~^^^^^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 641, in execute
+    util.preloaded.orm_persistence.save_obj(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.mapper,
+        ^^^^^^^^^^^^
+        uow.states_for_mapper_hierarchy(self.mapper, False, False),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        uow,
+        ^^^^
+    )
+    ^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\persistence.py", line 86, in save_obj
+    _emit_update_statements(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        base_mapper,
+        ^^^^^^^^^^^^
+    ...<3 lines>...
+        update,
+        ^^^^^^^
+    )
+    ^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\persistence.py", line 949, in _emit_update_statements
+    raise orm_exc.StaleDataError(
+    ...<3 lines>...
+    )
+sqlalchemy.orm.exc.StaleDataError: UPDATE statement on table 'douyin_leads' expected to update 1 row(s); 0 were matched.
+2026-06-10 21:40:58,575 [ERROR] app.scheduler.wechat_auto_detect_scheduler - 微信自动检测执行异常: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: UPDATE statement on table 'douyin_leads' expected to update 1 row(s); 0 were matched. (Background on this error at: https://sqlalche.me/e/20/7s2a)
+Traceback (most recent call last):
+  File "E:\work\project\auto_wechat\app\scheduler\wechat_auto_detect_scheduler.py", line 201, in run_once
+    self._clear_target(db, f"replied:{matched}")
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\work\project\auto_wechat\app\scheduler\wechat_auto_detect_scheduler.py", line 248, in _clear_target
+    self._write_config(db, _CFG_ACTIVE_CHECK_ID, "")
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\work\project\auto_wechat\app\scheduler\wechat_auto_detect_scheduler.py", line 269, in _write_config
+    cfg = db.query(CheckConfig).filter(CheckConfig.config_key == key).first()
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2766, in first
+    return self.limit(1)._iter().first()  # type: ignore
+           ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\query.py", line 2864, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                                  ~~~~~~~~~~~~~~~~~~~~^
+        statement,
+        ^^^^^^^^^^
+        params,
+        ^^^^^^^
+        execution_options={"_sa_orm_load_options": self.load_options},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2372, in execute
+    return self._execute_internal(
+           ~~~~~~~~~~~~~~~~~~~~~~^
+        statement,
+        ^^^^^^^^^^
+    ...<4 lines>...
+        _add_event=_add_event,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2260, in _execute_internal
+    conn = self._connection_for_bind(bind)
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 2112, in _connection_for_bind
+    return trans._connection_for_bind(engine, execution_options)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 2, in _connection_for_bind
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 101, in _go
+    self._raise_for_prerequisite_state(fn.__name__, current_state)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\A\miniconda3\Lib\site-packages\sqlalchemy\orm\session.py", line 975, in _raise_for_prerequisite_state
+    raise sa_exc.PendingRollbackError(
+    ...<6 lines>...
+    )
+sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled back due to a previous exception during flush. To begin a new transaction with this Session, first issue Session.rollback(). Original exception was: UPDATE statement on table 'douyin_leads' expected to update 1 row(s); 0 were matched. (Background on this error at: https://sqlalche.me/e/20/7s2a)
+
+2026-06-10 21:41:39,299 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:46:28,660 [INFO] app.scheduler.wechat_auto_detect_scheduler - 开始自动检测: check #10, lead #11 (scheduler_test_customer), staff #3
+2026-06-10 21:46:28,676 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 21:46:32,729 [WARNING] app.scheduler.wechat_auto_detect_scheduler - 自动检测失败: check #10, 未找到当前聊天窗口的消息列表。请确认微信已登录，并且已打开了某个联系人的聊天窗口。
+2026-06-10 21:46:39,305 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:51:39,311 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 21:56:39,314 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:01:39,318 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:06:39,324 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:11:39,327 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:16:39,330 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:21:39,333 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:26:39,337 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:31:39,343 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:36:39,350 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:41:39,353 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:46:39,359 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:47:47,819 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 22:47:48,894 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (453, 554)
+2026-06-10 22:47:49,210 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: GroupControl
+2026-06-10 22:51:39,364 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 22:56:39,366 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:01:39,370 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:04:57,702 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:04:58,111 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:04:58,114 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:04:58,126 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 23:04:59,454 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:04:59,493 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:04:59,495 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:04:59,566 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 23:06:39,374 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:09:26,795 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 23:09:27,875 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:09:28,193 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 23:11:21,220 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 23:11:22,299 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:11:22,605 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 23:11:39,378 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:16:39,381 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:21:39,384 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:26:38,225 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 23:26:39,307 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:26:39,389 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:26:39,613 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: EditControl
+2026-06-10 23:29:19,568 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 23:29:20,642 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:29:20,950 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:31:00,866 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:31:00,907 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:31:00,908 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:31:00,917 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 23:31:02,169 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:31:02,221 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:31:02,222 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:31:02,276 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=19 update=0 skip=0 assigned=0 notified=0
+2026-06-10 23:31:07,033 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=5702576
+2026-06-10 23:31:08,104 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:31:08,419 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:31:39,391 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:32:53,567 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:32:53,620 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:32:53,621 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:32:53,635 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:32:54,967 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:32:55,002 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:32:55,004 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:32:55,022 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:32:59,953 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=8782540
+2026-06-10 23:33:03,038 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:33:03,349 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:36:39,397 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:36:52,873 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:36:52,923 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:36:52,926 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:36:52,936 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:36:54,192 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:36:54,240 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:36:54,242 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:36:54,261 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:36:59,144 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=8782540
+2026-06-10 23:37:00,219 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:37:00,540 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:37:24,279 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:37:24,338 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:37:24,339 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:37:24,347 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:37:25,407 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:37:25,439 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:37:25,440 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:37:25,458 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:37:29,034 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=8782540
+2026-06-10 23:37:30,114 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:37:30,444 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:38:47,535 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:38:47,570 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:38:47,571 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:38:47,579 [INFO] douyin_sync_service - 同步完成 dry_run=True auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:38:48,488 [INFO] douyin_api_client - 开始拉取线索 url=http://127.0.0.1:8081/leads params={'lead_status': 'pending', 'page_size': 50, 'page': 1}
+2026-06-10 23:38:48,522 [INFO] httpx - HTTP Request: GET http://127.0.0.1:8081/leads?lead_status=pending&page_size=50&page=1 "HTTP/1.1 200 OK"
+2026-06-10 23:38:48,523 [INFO] douyin_api_client - 拉取线索完成 total=19 page=1
+2026-06-10 23:38:48,541 [INFO] douyin_sync_service - 同步完成 dry_run=False auto_assign=False auto_notify=False fetched=19 mapped=19 create=0 update=19 skip=0 assigned=0 notified=0
+2026-06-10 23:38:52,753 [INFO] app.wechat_ui.window_locator - 微信窗口已定位（策略1 FindWindowW）, title='微信', class='mmui::MainWindow', HWND=8782540
+2026-06-10 23:38:53,829 [WARNING] app.wechat_ui.input_writer - 未找到输入框控件，尝试坐标兜底点击: (440, 554)
+2026-06-10 23:38:54,136 [INFO] app.wechat_ui.input_writer - 坐标兜底后获得焦点控件: ButtonControl
+2026-06-10 23:41:39,400 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:42:04,645 [INFO] app.scheduler.wechat_auto_detect_scheduler - 通知发送后 0.1 秒，静默期内跳过检测（阈值 8 秒）: check #1
+2026-06-10 23:46:39,404 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:51:39,407 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-10 23:56:39,414 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:01:39,419 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:06:39,421 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:11:39,424 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:16:39,430 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:21:39,442 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:26:39,447 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:31:39,453 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:36:39,458 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:41:39,460 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:46:39,462 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:51:39,468 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 00:56:39,470 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:01:39,476 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:06:39,481 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:11:39,487 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:16:39,493 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:21:39,499 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:26:39,502 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:31:39,505 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:36:39,508 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:41:39,510 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:46:39,517 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:51:39,519 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 01:56:39,522 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:01:39,524 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:06:39,530 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:11:39,532 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:16:39,535 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:21:39,538 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:26:39,541 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:31:39,543 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:36:39,546 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:41:39,548 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:46:39,553 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:51:39,556 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 02:56:39,562 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:01:39,565 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:06:39,571 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:11:39,574 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:16:39,578 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:21:39,581 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:26:39,585 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:31:39,588 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:36:39,594 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:41:39,597 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:46:39,600 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:51:39,607 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 03:56:39,610 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:01:39,616 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:06:39,622 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:11:39,628 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:16:39,631 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:21:39,636 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:26:39,642 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:31:39,648 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:36:39,654 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:41:39,656 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:46:39,660 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:51:39,666 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 04:56:39,672 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:01:39,675 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:06:39,681 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:11:39,687 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:16:39,691 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:21:39,696 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:26:39,702 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:31:39,709 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:36:39,714 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:41:39,717 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:46:39,721 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:51:39,723 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 05:56:39,727 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:01:39,731 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:06:39,733 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:11:39,739 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:16:39,743 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:21:39,750 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:26:39,755 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:31:39,758 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:36:39,764 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:41:39,771 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:46:39,777 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:51:39,783 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 06:56:39,788 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:01:39,794 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:06:39,799 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:11:39,802 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:16:39,806 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:21:39,812 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:26:39,818 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:31:39,821 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:36:39,827 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:41:39,832 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:46:39,838 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:51:39,844 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 07:56:39,850 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:01:39,857 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:06:39,863 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:11:39,869 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:16:39,875 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:21:39,880 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:26:39,886 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:31:39,889 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:36:39,895 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:41:39,901 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:46:39,904 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:51:39,907 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 08:56:39,913 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:01:39,919 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:06:39,924 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:11:39,927 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:16:39,933 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:21:39,939 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:26:39,941 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:31:39,943 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:36:39,946 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:41:39,949 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:46:39,951 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 09:51:39,955 [INFO] app.scheduler.check_scheduler - 开始执行定时检测

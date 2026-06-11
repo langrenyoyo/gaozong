@@ -47,6 +47,9 @@ def _all_search_patches():
         patch("app.wechat_ui.contact_searcher.capture_wechat_region", return_value=MagicMock()),
         patch("app.wechat_ui.contact_searcher.verify_search_area_changed",
               return_value={"verified": True, "diff_ratio": 0.15, "message": "已变化"}),
+        patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+              return_value={"success": True, "x": 120, "y": 88, "strategy": "manual_calibration", "confidence": 0.7}),
+        patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"),
         patch("app.wechat_ui.contact_searcher.uia.SendKeys"),
         patch("app.wechat_ui.contact_searcher._save_clipboard", return_value=""),
         patch("app.wechat_ui.contact_searcher._set_clipboard"),
@@ -54,6 +57,24 @@ def _all_search_patches():
         patch("app.wechat_ui.contact_searcher._is_wechat_foreground", return_value=True),
         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground",
               return_value={"success": True, "message": "OK"}),
+        patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+              return_value={
+                  "clicked": True,
+                  "focused": True,
+                  "verified": True,
+                  "success": True,
+                  "text_pasted_into_search_box": False,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+                  "manual_review_required": False,
+              }),
+        patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+              return_value={
+                  "search_text_verified": True,
+                  "text_pasted_into_search_box": True,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+              }),
         patch("app.wechat_ui.contact_searcher.ctypes"),
         patch("app.wechat_ui.contact_searcher.time.sleep"),
         patch("app.wechat_ui.contact_searcher._trigger_emergency_stop"),
@@ -94,7 +115,7 @@ class TestOpenChatRetry:
         assert result["failure_stage"] == "preconditions"
 
     def test_success_returns_all_fields(self):
-        """成功时返回完整 debug_steps、screenshots、chat_verified"""
+        """成功时返回完整 debug_steps、screenshots，但不再声明联系人已验证"""
         from app.wechat_ui.contact_searcher import open_chat_by_nickname
 
         with ExitStack() as stack:
@@ -106,19 +127,23 @@ class TestOpenChatRetry:
         assert result["success"] is True
         assert result["attempts"] == 1
         assert result["failure_stage"] is None
-        assert result["chat_verified"] is True
-        assert result["input_box_found"] is True
-        assert result["confidence"] >= 0.5
+        assert result["search_action_completed"] is True
+        assert result["search_keyword_pasted"] is True
+        assert result["maybe_chat_opened"] is True
+        assert result["chat_verified"] is False
+        assert result["input_box_found"] is False
+        assert result["confidence"] <= 0.3
         assert len(result["debug_steps"]) > 0
         assert len(result["debug_screenshots"]) > 0
         assert result["window_rect"] is not None
         assert result["warning"] is not None
+        assert "final verification requires OCR" in result["warning"]
 
         stages = [s["stage"] for s in result["debug_steps"]]
         assert "preconditions" in stages
         assert "search_box_clicked" in stages
         assert "search_input_verified" in stages
-        assert "chat_window_verified" in stages
+        assert "search_action_completed" in stages
 
     def test_retry_on_precond_failure_then_success(self):
         """前置条件失败后重试成功"""

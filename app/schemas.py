@@ -221,7 +221,11 @@ class DouyinSyncRequest(BaseModel):
     lead_status: str = Field("pending", description="过滤线索状态")
     start_time: Optional[int] = Field(None, description="起始时间（毫秒时间戳）")
     auto_assign: bool = Field(False, description="是否自动分配（仅对新建线索生效，P4-3 已支持）")
-    auto_notify: bool = Field(False, description="分配后自动搜索销售微信并发送线索通知（P8-3）")
+    auto_notify: bool = Field(False, description="分配后自动搜索销售微信并发送线索通知（P8-3，旧通知链路）")
+    auto_create_wechat_task: bool = Field(
+        False,
+        description="分配后创建 WechatTask(pending) 任务（P0-5A，新 Local Agent 队列，不执行微信自动化）",
+    )
 
 
 class DouyinSyncItem(BaseModel):
@@ -237,6 +241,15 @@ class DouyinSyncItem(BaseModel):
     reason: Optional[str] = Field(None, description="动作原因说明")
 
 
+class WechatTaskSyncStats(BaseModel):
+    """P0-5A：同步过程中 WechatTask 创建统计"""
+    auto_create_enabled: bool = Field(False, description="是否启用了 auto_create_wechat_task")
+    created_count: int = Field(0, description="成功创建的任务数")
+    skipped_count: int = Field(0, description="跳过的任务数（非 Aw3 销售）")
+    task_ids: list[int] = Field([], description="成功创建的任务 ID 列表")
+    skipped: list[dict] = Field([], description="跳过详情 [{lead_id, reason}]")
+
+
 class DouyinSyncResponse(BaseModel):
     """douyinAPI 线索同步响应"""
     success: bool = False
@@ -250,6 +263,9 @@ class DouyinSyncResponse(BaseModel):
     notified: int = Field(0, description="自动通知数（P8-3，auto_notify 成功发送的线索数）")
     dry_run: bool = Field(True, description="是否 dry_run 模式")
     items: list[DouyinSyncItem] = []
+    wechat_tasks: Optional[WechatTaskSyncStats] = Field(
+        None, description="P0-5A：WechatTask 创建统计（仅 auto_create_wechat_task=true 时出现）",
+    )
 
 
 # ========== 微信自动检测 ==========
@@ -332,6 +348,56 @@ class NotificationRecordsResponse(BaseModel):
 class OpenChatRequest(BaseModel):
     """打开聊天窗口请求"""
     nickname: str = Field(..., min_length=1, description="销售微信昵称")
+
+
+# ========== P0-5A：微信任务队列 ==========
+
+class WechatTaskCreateRequest(BaseModel):
+    """创建微信任务请求"""
+    lead_id: Optional[int] = Field(None, description="关联线索 ID")
+    staff_id: Optional[int] = Field(None, description="关联销售 ID")
+    reply_check_id: Optional[int] = Field(None, description="关联检测记录 ID")
+    task_type: str = Field("notify_sales", description="任务类型: notify_sales / detect_reply")
+    target_nickname: str = Field(..., min_length=1, description="目标微信联系人昵称")
+    message: str = Field("", description="要粘贴/发送的消息内容")
+    mode: str = Field("paste_only", description="执行模式: paste_only")
+
+
+class WechatTaskResultRequest(BaseModel):
+    """回写微信任务结果请求"""
+    success: bool = Field(..., description="Agent 执行是否成功")
+    verified: bool = Field(False, description="OCR 是否验证通过")
+    partial_match: bool = Field(False, description="是否部分匹配")
+    manual_review_required: bool = Field(False, description="是否需要人工复核")
+    pasted: bool = Field(False, description="是否已粘贴到输入框")
+    sent: bool = Field(False, description="是否已发送（P0-5A 期间必须为 false）")
+    failure_stage: Optional[str] = Field(None, description="失败阶段标识")
+    agent_hostname: Optional[str] = Field(None, description="执行 Agent 的主机名")
+    agent_pid: Optional[int] = Field(None, description="执行 Agent 的进程 ID")
+    raw_result: Optional[dict] = Field(None, description="Agent 返回的原始结果")
+
+
+class WechatTaskResponse(BaseModel):
+    """微信任务响应"""
+    id: int
+    task_type: str
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    reply_check_id: Optional[int] = None
+    target_nickname: Optional[str] = None
+    message: Optional[str] = None
+    mode: str
+    status: str
+    failure_stage: Optional[str] = None
+    raw_result: Optional[str] = None
+    agent_hostname: Optional[str] = None
+    agent_pid: Optional[int] = None
+    pasted_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
 
 
 class OpenChatResponse(BaseModel):

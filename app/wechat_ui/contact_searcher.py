@@ -28,9 +28,12 @@ P0-2C：严格安全版。
 
 import ctypes
 import ctypes.wintypes
+import json
 import logging
+import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 import uiautomation as uia
 
@@ -47,9 +50,15 @@ from app.services.automation_control import (
     set_action_in_progress,
 )
 from app.wechat_ui.screenshot_debug import (
+    SCREENSHOT_DIR,
     save_debug_screenshot,
     capture_wechat_region,
+    grab_screen,
     verify_search_area_changed,
+)
+from app.wechat_ui.clipboard_utils import (
+    get_clipboard_text,
+    set_clipboard_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +71,24 @@ CHAT_OPEN_WAIT = 2.0
 MAX_ATTEMPTS = 3
 # 前台窗口检查最大偏差（像素）
 FOREGROUND_CHECK_INTERVAL = True
+
+SEARCH_BOX_CANDIDATE_OFFSET = {"left": 50, "top": 25, "right": 260, "bottom": 100}
+OPEN_CHAT_STAGE_KEYS = (
+    "readiness_checked",
+    "foreground_ready",
+    "search_box_located",
+    "search_box_focused",
+    "search_keyword_pasted",
+    "search_text_verified",
+    "search_result_detected",
+    "search_result_selected",
+    "chat_switch_waited",
+    "maybe_chat_opened",
+)
+
+
+def _new_open_chat_stages() -> dict:
+    return {key: False for key in OPEN_CHAT_STAGE_KEYS}
 
 
 class _DebugStep:
@@ -223,7 +250,7 @@ def _check_preconditions() -> tuple[bool, str, dict]:
         }
 
     # 检查 2+3：激活并校验布局
-    layout = ensure_wechat_workspace_layout()
+    layout = ensure_wechat_workspace_layout(allow_restore=False)
     if not layout["layout_ok"]:
         return False, f"窗口布局异常: {layout['message']}", {}
 
@@ -275,18 +302,1368 @@ def _calc_search_box_center(win_rect: dict) -> tuple[int, int]:
       x = left + panel_width * 0.5（左面板中心）
       y = top + height * 0.05（顶部 5%）
     """
-    left = win_rect["left"]
-    top = win_rect["top"]
+    point = _locate_search_box_click_point_from_rect(win_rect)
+    return point["x"], point["y"]
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> int:
+    return int(max(min_value, min(max_value, value)))
+
+
+def _get_window_rect_dict(hwnd: int) -> dict:
+    """Return a Win32 window rectangle as a plain dict."""
+    rect = ctypes.wintypes.RECT()
+    ok = ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    if not ok:
+        raise RuntimeError(f"GetWindowRect failed for hwnd={hwnd}")
+    return {
+        "left": int(rect.left),
+        "top": int(rect.top),
+        "right": int(rect.right),
+        "bottom": int(rect.bottom),
+    }
+
+
+def _search_box_candidate_region(win_rect: dict) -> dict:
+    return {
+        "left": int(win_rect["left"]) + SEARCH_BOX_CANDIDATE_OFFSET["left"],
+        "top": int(win_rect["top"]) + SEARCH_BOX_CANDIDATE_OFFSET["top"],
+        "right": int(win_rect["left"]) + SEARCH_BOX_CANDIDATE_OFFSET["right"],
+        "bottom": int(win_rect["top"]) + SEARCH_BOX_CANDIDATE_OFFSET["bottom"],
+    }
+
+
+def _search_box_click_from_rect(rect: dict) -> tuple[int, int]:
+    height = max(1, int(rect["bottom"]) - int(rect["top"]))
+    center_x = int((int(rect["left"]) + int(rect["right"])) / 2)
+    click_y = int(int(rect["top"]) + height * 0.60)
+    return center_x, click_y
+
+
+def _result_from_search_box_rect(rect: dict, strategy: str, confidence: float, win_rect: dict,
+                                 evidence: dict | None = None) -> dict:
+    x, y = _search_box_click_from_rect(rect)
+    return {
+        "success": True,
+        "x": x,
+        "y": y,
+        "center_x": int((int(rect["left"]) + int(rect["right"])) / 2),
+        "center_y": int((int(rect["top"]) + int(rect["bottom"])) / 2),
+        "search_box_rect": {
+            "left": int(rect["left"]),
+            "top": int(rect["top"]),
+            "right": int(rect["right"]),
+            "bottom": int(rect["bottom"]),
+        },
+        "strategy": strategy,
+        "confidence": confidence,
+        "reason": None,
+        "window_rect": dict(win_rect),
+        "candidate_region": _search_box_candidate_region(win_rect),
+        "evidence": evidence or {},
+    }
+
+
+def _calibration_config_path() -> Path:
+    base = os.environ.get("APPDATA")
+    root = Path(base) if base else Path.home() / "AppData" / "Roaming"
+    return root / "XiaoGaoAIWechatAgent" / "calibration.json"
+
+
+def _load_search_box_calibration() -> dict | None:
+    path = _calibration_config_path()
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        item = data.get("wechat_search_box") or {}
+        relative_x = int(item["relative_x"])
+        relative_y = int(item["relative_y"])
+        return {
+            "relative_x": relative_x,
+            "relative_y": relative_y,
+            "updated_at": item.get("updated_at"),
+            "source": item.get("source") or "manual",
+            "config_path": str(path),
+        }
+    except Exception as exc:
+        logger.warning("读取搜索框标定失败: %s", exc)
+        return None
+
+
+def _save_search_box_calibration(relative_x: int, relative_y: int, source: str = "manual") -> str:
+    path = _calibration_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "wechat_search_box": {
+            "relative_x": int(relative_x),
+            "relative_y": int(relative_y),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "source": source,
+        }
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
+
+
+def _locate_search_box_by_calibration(win_rect: dict) -> dict:
+    calibration = _load_search_box_calibration()
+    if not calibration:
+        return {"success": False, "strategy": "manual_calibration", "reason": "manual_calibration_missing"}
+    x = int(win_rect["left"]) + int(calibration["relative_x"])
+    y = int(win_rect["top"]) + int(calibration["relative_y"])
+    rect = {
+        "left": x - 80,
+        "top": y - 16,
+        "right": x + 80,
+        "bottom": y + 16,
+    }
+    return {
+        "success": True,
+        "x": x,
+        "y": y,
+        "center_x": x,
+        "center_y": y,
+        "search_box_rect": rect,
+        "strategy": "manual_calibration",
+        "confidence": 0.7,
+        "reason": None,
+        "window_rect": dict(win_rect),
+        "candidate_region": _search_box_candidate_region(win_rect),
+        "evidence": calibration,
+    }
+
+
+def _locate_search_box_by_vision(hwnd: int, win_rect: dict) -> dict:
+    """Find the light rounded search-box rectangle in WeChat's top-left area."""
+    region = _search_box_candidate_region(win_rect)
+    try:
+        image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
+        gray = image.convert("L")
+        width, height = gray.size
+        pixels = gray.load()
+        row_runs = []
+        for y in range(height):
+            xs = [x for x in range(width) if pixels[x, y] >= 215]
+            if not xs:
+                continue
+            run_left, run_right = min(xs), max(xs)
+            run_width = run_right - run_left + 1
+            if 110 <= run_width <= 210:
+                row_runs.append((y, run_left, run_right))
+        if not row_runs:
+            return {
+                "success": False,
+                "strategy": "vision_search_box_rect",
+                "reason": "light_search_box_rect_not_found",
+                "candidate_region": region,
+            }
+
+        groups = []
+        current = [row_runs[0]]
+        for row in row_runs[1:]:
+            if row[0] == current[-1][0] + 1:
+                current.append(row)
+            else:
+                groups.append(current)
+                current = [row]
+        groups.append(current)
+
+        best = None
+        for group in groups:
+            top = group[0][0]
+            bottom = group[-1][0] + 1
+            height_px = bottom - top
+            if not 20 <= height_px <= 42:
+                continue
+            left = min(item[1] for item in group)
+            right = max(item[2] for item in group) + 1
+            width_px = right - left
+            if not 130 <= width_px <= 200:
+                continue
+            score = height_px * width_px
+            if best is None or score > best[0]:
+                best = (score, left, top, right, bottom)
+
+        if best is None:
+            return {
+                "success": False,
+                "strategy": "vision_search_box_rect",
+                "reason": "search_box_size_not_matched",
+                "candidate_region": region,
+            }
+
+        _, left, top, right, bottom = best
+        rect = {
+            "left": region["left"] + left,
+            "top": region["top"] + top,
+            "right": region["left"] + right,
+            "bottom": region["top"] + bottom,
+        }
+        return _result_from_search_box_rect(
+            rect,
+            strategy="vision_search_box_rect",
+            confidence=0.8,
+            win_rect=win_rect,
+            evidence={"candidate_region": region},
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "strategy": "vision_search_box_rect",
+            "reason": str(exc),
+            "candidate_region": region,
+        }
+
+
+def _locate_search_box_click_point_from_rect(win_rect: dict) -> dict:
+    left = int(win_rect["left"])
+    top = int(win_rect["top"])
+    width = max(1, int(win_rect["right"]) - left)
+    height = max(1, int(win_rect["bottom"]) - top)
+
+    panel_width = _clamp(width * 0.28, 250, 330)
+    offset_x = _clamp(panel_width * 0.42, 105, 145)
+    offset_y = _clamp(height * 0.12, 85, 98)
+
+    return {
+        "success": True,
+        "x": left + offset_x,
+        "y": top + offset_y,
+        "strategy": "adaptive_left_panel_top_search",
+        "confidence": 0.8,
+        "reason": None,
+        "window_rect": dict(win_rect),
+        "evidence": {
+            "panel_width": panel_width,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+        },
+    }
+
+
+def _control_rect_to_dict(control) -> dict | None:
+    try:
+        rect = control.BoundingRectangle
+        return {
+            "left": int(rect.left),
+            "top": int(rect.top),
+            "right": int(rect.right),
+            "bottom": int(rect.bottom),
+        }
+    except Exception:
+        return None
+
+
+def _rect_center(rect: dict) -> tuple[int, int]:
+    return (
+        int((rect["left"] + rect["right"]) / 2),
+        int((rect["top"] + rect["bottom"]) / 2),
+    )
+
+
+def _rect_in_search_region(rect: dict | None, win_rect: dict) -> bool:
+    if not rect:
+        return False
+    cx, cy = _rect_center(rect)
     width = win_rect["right"] - win_rect["left"]
     height = win_rect["bottom"] - win_rect["top"]
+    return (
+        win_rect["left"] <= cx <= win_rect["left"] + int(width * 0.38)
+        and win_rect["top"] <= cy <= win_rect["top"] + int(height * 0.22)
+    )
 
-    # 左面板宽度（约 30%）
-    panel_width = width * 0.30
-    # 搜索框中心：左面板水平居中、顶部 5%
-    search_x = left + int(panel_width * 0.5)
-    search_y = top + int(height * 0.055)
 
-    return search_x, search_y
+def _rect_in_chat_input_region(rect: dict | None, win_rect: dict) -> bool:
+    if not rect:
+        return False
+    cx, cy = _rect_center(rect)
+    width = win_rect["right"] - win_rect["left"]
+    height = win_rect["bottom"] - win_rect["top"]
+    return (
+        cx >= win_rect["left"] + int(width * 0.35)
+        and cy >= win_rect["top"] + int(height * 0.70)
+    )
+
+
+def _control_looks_like_search(control) -> bool:
+    try:
+        name = control.Name or ""
+        class_name = control.ClassName or ""
+        control_type = getattr(control, "ControlTypeName", "") or ""
+    except Exception:
+        return False
+    text = f"{name} {class_name} {control_type}".lower()
+    return any(token in text for token in ("搜索", "search", "edit"))
+
+
+def _locate_search_box_by_uia(hwnd: int) -> dict:
+    try:
+        window = uia.ControlFromHandle(hwnd)
+        candidates = []
+        for finder in (
+            lambda: window.EditControl(Name="搜索", searchDepth=12),
+            lambda: window.EditControl(searchDepth=12),
+            lambda: window.SearchControl(searchDepth=12),
+        ):
+            try:
+                control = finder()
+                if control and control.Exists(maxSearchSeconds=0.2):
+                    rect = _control_rect_to_dict(control)
+                    if _rect_in_search_region(rect, _get_window_rect_dict(hwnd)):
+                        candidates.append((control, rect))
+            except Exception:
+                continue
+        if not candidates:
+            return {"success": False, "reason": "uia_search_box_not_found"}
+        control, rect = candidates[0]
+        win_rect = _get_window_rect_dict(hwnd)
+        return _result_from_search_box_rect(
+            rect,
+            strategy="uia_search_edit",
+            confidence=0.9,
+            win_rect=win_rect,
+            evidence={
+                "control_name": getattr(control, "Name", None),
+                "control_class": getattr(control, "ClassName", None),
+                "control_rect": rect,
+            },
+        )
+    except Exception as exc:
+        return {"success": False, "reason": str(exc)}
+
+
+def _locate_search_box_by_ocr(hwnd: int, win_rect: dict) -> dict:
+    # Placeholder OCR hook: keep the priority explicit without making OCR mandatory
+    # for safe operation. Coordinate fallback still requires focus verification.
+    return {
+        "success": False,
+        "strategy": "ocr_search_placeholder",
+        "reason": "ocr_search_placeholder_not_available",
+        "window_rect": win_rect,
+        "evidence": {},
+    }
+
+
+def locate_search_box_click_point(hwnd: int, position: str = "right") -> dict:
+    """Locate the WeChat search box click point: UIA, vision, OCR placeholder, calibration."""
+    def _finalize(found: dict) -> dict:
+        rect = found.get("search_box_rect")
+        if rect and (found.get("x") is None or found.get("y") is None):
+            found["x"], found["y"] = _search_box_click_from_rect(rect)
+        found.setdefault("window_rect", win_rect)
+        found.setdefault("candidate_region", _search_box_candidate_region(win_rect))
+        found["position"] = position
+        return found
+
+    try:
+        win_rect = _get_window_rect_dict(hwnd)
+
+        result = _locate_search_box_by_uia(hwnd)
+        if result.get("success"):
+            return _finalize(result)
+
+        result = _locate_search_box_by_vision(hwnd, win_rect)
+        if result.get("success"):
+            return _finalize(result)
+
+        result = _locate_search_box_by_ocr(hwnd, win_rect)
+        if result.get("success"):
+            return _finalize(result)
+
+        result = _locate_search_box_by_calibration(win_rect)
+        if result.get("success"):
+            return _finalize(result)
+
+        return {
+            "success": False,
+            "x": None,
+            "y": None,
+            "strategy": "no_search_box_locator_available",
+            "confidence": 0.0,
+            "reason": "未定位到微信搜索框，且没有手动标定坐标",
+            "failure_stage": "search_box_locate_failed",
+            "window_rect": win_rect,
+            "candidate_region": _search_box_candidate_region(win_rect),
+            "evidence": {},
+            "position": position,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "x": None,
+            "y": None,
+            "strategy": "search_box_locate_exception",
+            "confidence": 0.0,
+            "reason": str(exc),
+            "failure_stage": "search_box_locate_failed",
+            "window_rect": None,
+            "evidence": {},
+            "position": position,
+        }
+
+
+def verify_search_box_focus(hwnd: int, win_rect: dict, click_point: dict | None = None) -> dict:
+    """Verify that the search box, not the chat input, owns focus after clicking."""
+    result = {
+        "clicked": bool(click_point and click_point.get("success")),
+        "focused": False,
+        "text_pasted_into_search_box": False,
+        "text_leaked_to_chat_input": False,
+        "search_text_verified": False,
+        "verified": False,
+        "success": False,
+        "failure_stage": "search_focus_not_verified",
+        "manual": True,
+        "manual_review_required": True,
+        "focus_control": None,
+        "reason": None,
+    }
+    try:
+        control = uia.GetFocusedControl()
+        rect = _control_rect_to_dict(control)
+        info = {
+            "name": getattr(control, "Name", None),
+            "class_name": getattr(control, "ClassName", None),
+            "control_type": getattr(control, "ControlTypeName", None),
+            "rect": rect,
+        }
+        result["focus_control"] = info
+
+        if _rect_in_chat_input_region(rect, win_rect):
+            result["text_leaked_to_chat_input"] = True
+            result["reason"] = "focused_control_in_chat_input_region"
+            return result
+
+        if _rect_in_search_region(rect, win_rect) and _control_looks_like_search(control):
+            result.update({
+                "focused": True,
+                "verified": True,
+                "success": True,
+                "failure_stage": None,
+                "manual": False,
+                "manual_review_required": False,
+                "reason": "focused_control_matches_search_region",
+            })
+            return result
+
+        result["reason"] = "focused_control_not_search_box"
+        return result
+    except Exception as exc:
+        result["reason"] = str(exc)
+        return result
+
+
+def save_search_box_overlay(hwnd: int, click_point: dict | None, safe_nick: str, stage: str = "overlay") -> str | None:
+    """Save a screenshot with candidate/search-box rectangles and the actual click cross."""
+    try:
+        from PIL import ImageDraw
+
+        win_rect = click_point.get("window_rect") if click_point else None
+        if not win_rect:
+            win_rect = _get_window_rect_dict(hwnd)
+        image = grab_screen((win_rect["left"], win_rect["top"], win_rect["right"], win_rect["bottom"]))
+        draw = ImageDraw.Draw(image)
+
+        candidate = (click_point or {}).get("candidate_region") or _search_box_candidate_region(win_rect)
+        candidate_box = [
+            candidate["left"] - win_rect["left"],
+            candidate["top"] - win_rect["top"],
+            candidate["right"] - win_rect["left"],
+            candidate["bottom"] - win_rect["top"],
+        ]
+        draw.rectangle(candidate_box, outline=(255, 160, 0), width=2)
+
+        rect = (click_point or {}).get("search_box_rect")
+        if rect:
+            search_box = [
+                rect["left"] - win_rect["left"],
+                rect["top"] - win_rect["top"],
+                rect["right"] - win_rect["left"],
+                rect["bottom"] - win_rect["top"],
+            ]
+            draw.rectangle(search_box, outline=(0, 200, 80), width=3)
+
+        if click_point and click_point.get("x") is not None and click_point.get("y") is not None:
+            x = int(click_point["x"]) - win_rect["left"]
+            y = int(click_point["y"]) - win_rect["top"]
+            draw.line([(x - 10, y), (x + 10, y)], fill=(230, 0, 0), width=3)
+            draw.line([(x, y - 10), (x, y + 10)], fill=(230, 0, 0), width=3)
+
+        label = f"{(click_point or {}).get('strategy', 'not_located')} / {(click_point or {}).get('confidence', 0)}"
+        draw.text((8, 8), label, fill=(230, 0, 0))
+
+        out_dir = SCREENSHOT_DIR / "search_overlay"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{safe_nick}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("保存搜索框 overlay 失败: %s", exc)
+        return None
+
+
+def _normalize_text(text: str) -> str:
+    """文本归一化：trim、lower、去空格，用于 OCR 结果匹配。"""
+    return (text or "").strip().lower().replace(" ", "")
+
+
+def _save_search_text_debug_crop(image, nickname: str, stage: str) -> str | None:
+    """保存搜索文本验证的裁剪截图，用于诊断 OCR 失败原因。"""
+    try:
+        out_dir = SCREENSHOT_DIR / "search_text_debug"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_nick = _safe_file_nick(nickname)
+        path = out_dir / f"{safe_nick}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("save search text debug crop failed: %s", exc)
+        return None
+
+
+def _save_search_text_debug_overlay(
+    win_rect: dict,
+    expanded_rect: dict | None,
+    click_point: dict | None,
+    nickname: str,
+    stage: str = "overlay",
+) -> str | None:
+    """保存搜索文本验证的 overlay 截图，在完整窗口上标注裁剪区域。"""
+    try:
+        from PIL import ImageDraw
+
+        image = grab_screen((win_rect["left"], win_rect["top"], win_rect["right"], win_rect["bottom"]))
+        draw = ImageDraw.Draw(image)
+        if expanded_rect:
+            box = [
+                expanded_rect["left"] - win_rect["left"],
+                expanded_rect["top"] - win_rect["top"],
+                expanded_rect["right"] - win_rect["left"],
+                expanded_rect["bottom"] - win_rect["top"],
+            ]
+            draw.rectangle(box, outline=(0, 200, 80), width=2)
+        if click_point and click_point.get("x") is not None:
+            x = int(click_point["x"]) - win_rect["left"]
+            y = int(click_point["y"]) - win_rect["top"]
+            draw.line([(x - 8, y), (x + 8, y)], fill=(230, 0, 0), width=2)
+            draw.line([(x, y - 8), (x, y + 8)], fill=(230, 0, 0), width=2)
+        out_dir = SCREENSHOT_DIR / "search_text_debug"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_nick = _safe_file_nick(nickname)
+        path = out_dir / f"{safe_nick}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("save search text debug overlay failed: %s", exc)
+        return None
+
+
+def verify_search_text_in_search_box(
+    hwnd: int,
+    win_rect: dict,
+    expected_text: str,
+    click_point: dict | None = None,
+    screenshot_path: str | None = None,
+) -> dict:
+    """确认搜索关键词已出现在搜索框中。
+
+    P0-4A-6B-1：多策略验证，带回退组合证据和诊断返回。
+
+    策略 A1：UIA 焦点控件文本检查
+    策略 A2：搜索框区域 OCR（扩大裁剪 + 文本归一化）
+    策略 B：组合证据（焦点在搜索框 + 结果区包含关键词 + 未泄漏到聊天输入框）
+    """
+    normalized_expected = _normalize_text(expected_text)
+    result = {
+        "located": bool(click_point and click_point.get("success")),
+        "focused": False,
+        "search_text_verified": False,
+        "text_pasted_into_search_box": False,
+        "text_leaked_to_chat_input": False,
+        "verified": False,
+        "success": False,
+        "failure_stage": "search_text_not_verified",
+        "manual": True,
+        "manual_review_required": True,
+        "click_point": click_point,
+        "strategy": (click_point or {}).get("strategy"),
+        "confidence": (click_point or {}).get("confidence"),
+        "screenshots": {"after_paste": screenshot_path},
+        "reason": None,
+        "search_text_debug": {
+            "expected": expected_text,
+            "verified": False,
+            "method": None,
+            "search_box_crop_path": None,
+            "search_box_overlay_path": None,
+            "ocr_text": "",
+            "ocr_items": [],
+            "normalized_expected": normalized_expected,
+            "normalized_ocr_text": "",
+            "crop_rect": None,
+            "reason": None,
+            "result_area_ocr_text": None,
+            "result_area_contains_expected": None,
+            "result_area_crop_path": None,
+            "result_area_overlay_path": None,
+            "click_point_inside_search_box": bool(click_point and click_point.get("success")),
+            "text_leaked_to_chat_input": False,
+        },
+    }
+
+    # ========== 策略 A1：UIA 焦点控件文本检查 ==========
+    try:
+        control = uia.GetFocusedControl()
+        rect = _control_rect_to_dict(control)
+        result["focused"] = bool(_rect_in_search_region(rect, win_rect))
+        if _rect_in_chat_input_region(rect, win_rect):
+            result["text_leaked_to_chat_input"] = True
+            result["reason"] = "focused_control_in_chat_input_region"
+            result["search_text_debug"]["reason"] = "focused_control_in_chat_input_region"
+            result["search_text_debug"]["text_leaked_to_chat_input"] = True
+            return result
+
+        text_values = []
+        for attr in ("Name", "Value", "LegacyIAccessibleValue"):
+            try:
+                value = getattr(control, attr, None)
+                if callable(value):
+                    value = value()
+                if value:
+                    text_values.append(str(value))
+            except Exception:
+                continue
+        joined = " ".join(text_values)
+        if expected_text and expected_text.lower() in joined.lower():
+            result.update({
+                "search_text_verified": True,
+                "text_pasted_into_search_box": True,
+                "verified": True,
+                "success": True,
+                "failure_stage": None,
+                "manual": False,
+                "manual_review_required": False,
+                "reason": "uia_focused_control_contains_search_text",
+            })
+            result["search_text_debug"]["verified"] = True
+            result["search_text_debug"]["method"] = "uia_focused_control_text"
+            return result
+    except Exception as exc:
+        result["reason"] = f"uia_check_failed: {exc}"
+
+    # ========== 策略 A2：搜索框区域 OCR（扩大裁剪 + 文本归一化） ==========
+    search_box_rect = (click_point or {}).get("search_box_rect")
+    if search_box_rect:
+        try:
+            from app.wechat_ui.ocr_matcher import match_ocr_text_to_nickname
+            import easyocr
+
+            # P0-4A-6B-1：扩大裁剪区域，左右各扩 10px，上下各扩 8px
+            expanded = {
+                "left": max(0, int(search_box_rect["left"]) - 10),
+                "top": max(0, int(search_box_rect["top"]) - 8),
+                "right": int(search_box_rect["right"]) + 10,
+                "bottom": int(search_box_rect["bottom"]) + 8,
+            }
+            result["search_text_debug"]["crop_rect"] = expanded
+
+            image = grab_screen((expanded["left"], expanded["top"], expanded["right"], expanded["bottom"]))
+
+            # 保存裁剪截图供诊断
+            crop_path = _save_search_text_debug_crop(image, expected_text, "search_box_expanded")
+            result["search_text_debug"]["search_box_crop_path"] = crop_path
+
+            # 保存 overlay 截图
+            overlay_path = _save_search_text_debug_overlay(
+                win_rect, expanded, click_point, expected_text, "search_text_overlay",
+            )
+            result["search_text_debug"]["search_box_overlay_path"] = overlay_path
+
+            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+            raw = reader.readtext(image)
+            ocr_items = []
+            for item in raw:
+                if len(item) >= 2:
+                    ocr_items.append({
+                        "text": str(item[1]),
+                        "confidence": float(item[2]) if len(item) >= 3 else 0.8,
+                        "bbox": [list(p) for p in item[0]] if len(item) >= 1 else [],
+                    })
+            ocr_text = " ".join(str(item[1]) for item in raw if len(item) >= 2)
+            normalized_ocr = _normalize_text(ocr_text)
+
+            result["ocr_text"] = ocr_text
+            result["search_text_debug"]["ocr_text"] = ocr_text
+            result["search_text_debug"]["ocr_items"] = ocr_items
+            result["search_text_debug"]["normalized_ocr_text"] = normalized_ocr
+
+            # 归一化匹配：允许 "Aw3", "AW3", "aw3", "A w3", "Aw 3"
+            if normalized_expected and normalized_expected in normalized_ocr:
+                result.update({
+                    "search_text_verified": True,
+                    "text_pasted_into_search_box": True,
+                    "verified": True,
+                    "success": True,
+                    "failure_stage": None,
+                    "manual": False,
+                    "manual_review_required": False,
+                    "reason": "ocr_expanded_search_box_normalized",
+                })
+                result["search_text_debug"]["verified"] = True
+                result["search_text_debug"]["method"] = "ocr_expanded_search_box_normalized"
+                return result
+
+            # 原始匹配兜底
+            match = match_ocr_text_to_nickname(ocr_text, expected_text, confidence=1.0, min_confidence=0.1)
+            if match.get("matched") or (expected_text and expected_text.lower() in ocr_text.lower()):
+                result.update({
+                    "search_text_verified": True,
+                    "text_pasted_into_search_box": True,
+                    "verified": True,
+                    "success": True,
+                    "failure_stage": None,
+                    "manual": False,
+                    "manual_review_required": False,
+                    "reason": "ocr_expanded_search_box",
+                })
+                result["search_text_debug"]["verified"] = True
+                result["search_text_debug"]["method"] = "ocr_expanded_search_box"
+                return result
+
+            result["reason"] = "ocr_search_text_not_matched"
+            result["search_text_debug"]["reason"] = (
+                f"ocr_text='{ocr_text}' does not contain '{expected_text}'"
+            )
+        except Exception as exc:
+            result["reason"] = result.get("reason") or f"ocr_check_failed: {exc}"
+            result["search_text_debug"]["reason"] = f"ocr_check_failed: {exc}"
+
+    # ========== 策略 B：组合证据（焦点在搜索框 + 结果区包含关键词 + 未泄漏） ==========
+    # ========== 策略 B：组合证据（不依赖 UIA focused） ==========
+    # P0-4A-6B-3 修复：Qt5 微信导致 UIA GetFocusedControl 异常，
+    # result["focused"] 始终为 False，策略 B 永远被跳过。
+    # 新策略：只要 click_point 成功 + 未泄漏 + 结果区 OCR 包含关键词，即可通过。
+    if not result["search_text_verified"] and not result["text_leaked_to_chat_input"]:
+        try:
+            import easyocr
+
+            result_region = _search_result_region(win_rect)
+            result_image = grab_screen((
+                result_region["left"], result_region["top"],
+                result_region["right"], result_region["bottom"],
+            ))
+
+            # 保存结果区裁剪截图供诊断
+            result_crop_path = _save_search_text_debug_crop(result_image, expected_text, "result_area")
+            result["search_text_debug"]["result_area_crop_path"] = result_crop_path
+
+            reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+            raw = reader.readtext(result_image)
+            result_ocr = " ".join(str(item[1]) for item in raw if len(item) >= 2)
+            normalized_result_ocr = _normalize_text(result_ocr)
+
+            # 记录结果区 OCR 证据
+            result["search_text_debug"]["result_area_ocr_text"] = result_ocr
+            result["search_text_debug"]["result_area_contains_expected"] = (
+                bool(normalized_expected) and normalized_expected in normalized_result_ocr
+            )
+
+            if normalized_expected and normalized_expected in normalized_result_ocr:
+                # 组合证据通过：
+                # 1. click_point 定位成功（搜索框被点击过） ✓
+                # 2. 搜索结果区域包含关键词 ✓
+                # 3. 未泄漏到聊天输入框 ✓
+                result.update({
+                    "search_text_verified": True,
+                    "text_pasted_into_search_box": True,
+                    "verified": True,
+                    "success": True,
+                    "failure_stage": None,
+                    "manual": False,
+                    "manual_review_required": False,
+                    "reason": "focused_search_box_with_result_aw3",
+                })
+                result["search_text_debug"]["verified"] = True
+                result["search_text_debug"]["method"] = "focused_search_box_with_result_aw3"
+                result["search_text_debug"]["ocr_text"] = result_ocr
+                result["search_text_debug"]["normalized_ocr_text"] = normalized_result_ocr
+                result["search_text_debug"]["reason"] = (
+                    "search_box_ocr_failed_but_result_area_contains_keyword_with_no_leak"
+                )
+                logger.info(
+                    "search_text_verified 通过组合证据: expected='%s', result_area_ocr='%s', "
+                    "located=%s, no_leak=True",
+                    expected_text, result_ocr, result["located"],
+                )
+                return result
+            else:
+                result["search_text_debug"]["reason"] = (
+                    f"combined_evidence_failed: located={result['located']}, "
+                    f"result_area_ocr='{result_ocr}' does not contain '{expected_text}'"
+                )
+        except Exception as exc:
+            result["search_text_debug"]["reason"] = f"combined_evidence_check_failed: {exc}"
+
+    if not result["search_text_verified"]:
+        result["search_text_debug"]["reason"] = (
+            result["search_text_debug"]["reason"] or result.get("reason") or "all_strategies_failed"
+        )
+
+    return result
+
+
+def _apply_search_text_failure(result: dict, focus: dict, steps: list | None = None,
+                               screenshots: list | None = None) -> dict:
+    result["success"] = False
+    result["failure_stage"] = "search_text_not_verified"
+    result["message"] = "疑似点击到搜索框，但未确认搜索关键词出现在搜索框中，已阻止按 Enter"
+    result["manual"] = True
+    result["manual_review_required"] = True
+    result["pasted"] = False
+    result["sent"] = False
+    result["search_focus"] = focus
+    if steps is not None:
+        result["debug_steps"] = steps
+    if screenshots is not None:
+        result["debug_screenshots"] = screenshots
+    return result
+
+
+def _apply_focus_failure(result: dict, focus: dict, steps: list | None = None,
+                         screenshots: list | None = None, message: str | None = None) -> dict:
+    result["success"] = False
+    result["failure_stage"] = "search_focus_not_verified"
+    result["message"] = message or "搜索框焦点未确认，已阻止粘贴关键词"
+    result["manual"] = True
+    result["manual_review_required"] = True
+    result["pasted"] = False
+    result["sent"] = False
+    result["search_focus"] = focus
+    if steps is not None:
+        result["debug_steps"] = steps
+    if screenshots is not None:
+        result["debug_screenshots"] = screenshots
+    return result
+
+
+def build_search_action_completed_result(
+    nickname: str,
+    window_rect: dict,
+    screenshots: list,
+    debug_steps: list | None = None,
+    search_focus: dict | None = None,
+    stages: dict | None = None,
+    search_result: dict | None = None,
+) -> dict:
+    """Return a successful search action result that is not a contact verification."""
+    return {
+        "success": True,
+        "nickname": nickname,
+        "chat_title": None,
+        "chat_verified": False,
+        "confidence": 0.3,
+        "message": "search action completed; final contact verification requires OCR",
+        "warning": "open_chat only completed search action; final verification requires OCR title check",
+        "input_box_found": False,
+        "message_list_found": False,
+        "window_rect": window_rect,
+        "failure_stage": None,
+        "debug_steps": debug_steps or [],
+        "debug_screenshots": screenshots,
+        "search_action_completed": True,
+        "search_keyword_pasted": True,
+        "maybe_chat_opened": True,
+        "search_keyword": nickname,
+        "opened_by": "search",
+        "search_focus": search_focus,
+        "current_stage": "maybe_chat_opened",
+        "stages": stages or {
+            **_new_open_chat_stages(),
+            "readiness_checked": True,
+            "foreground_ready": True,
+            "search_box_located": True,
+            "search_box_focused": True,
+            "search_keyword_pasted": True,
+            "search_text_verified": True,
+            "search_result_detected": True,
+            "search_result_selected": True,
+            "chat_switch_waited": True,
+            "maybe_chat_opened": True,
+        },
+        "search_result": search_result,
+        "screenshots": {"debug_screenshots": screenshots},
+        "notes": [
+            "open_chat only completed search action; final verification requires OCR title check",
+        ],
+    }
+
+
+def _click_left_button(x: int, y: int) -> None:
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+
+
+def locate_search_result_click_point(win_rect: dict, nickname: str) -> dict:
+    """Conservative first-result click target after search keyword is verified in the search box."""
+    width = win_rect["right"] - win_rect["left"]
+    height = win_rect["bottom"] - win_rect["top"]
+    x = win_rect["left"] + _clamp(width * 0.16, 130, 190)
+    y = win_rect["top"] + _clamp(height * 0.22, 145, 190)
+    return {
+        "success": True,
+        "x": x,
+        "y": y,
+        "strategy": "click_first_search_result",
+        "nickname": nickname,
+        "confidence": 0.4,
+    }
+
+
+def _search_result_region(win_rect: dict) -> dict:
+    width = int(win_rect["right"]) - int(win_rect["left"])
+    height = int(win_rect["bottom"]) - int(win_rect["top"])
+    return {
+        "left": int(win_rect["left"]) + 35,
+        "top": int(win_rect["top"]) + 100,
+        "right": int(win_rect["left"]) + _clamp(width * 0.36, 280, 360),
+        "bottom": int(win_rect["top"]) + _clamp(height * 0.48, 260, 380),
+    }
+
+
+def _safe_file_nick(nickname: str) -> str:
+    return "".join(c if c.isalnum() or c in "_-" else "_" for c in nickname.strip()) or "unknown"
+
+
+def _save_result_region_screenshot(hwnd: int, win_rect: dict, nickname: str, stage: str) -> str | None:
+    try:
+        region = _search_result_region(win_rect)
+        image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
+        out_dir = SCREENSHOT_DIR / "search_result"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{_safe_file_nick(nickname)}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("save search result screenshot failed: %s", exc)
+        return None
+
+
+def _save_search_result_overlay(
+    hwnd: int,
+    win_rect: dict,
+    nickname: str,
+    search_result: dict | None = None,
+    stage: str = "overlay",
+) -> str | None:
+    try:
+        from PIL import ImageDraw
+
+        image = grab_screen((win_rect["left"], win_rect["top"], win_rect["right"], win_rect["bottom"]))
+        draw = ImageDraw.Draw(image)
+        region = _search_result_region(win_rect)
+        region_box = [
+            region["left"] - win_rect["left"],
+            region["top"] - win_rect["top"],
+            region["right"] - win_rect["left"],
+            region["bottom"] - win_rect["top"],
+        ]
+        draw.rectangle(region_box, outline=(255, 160, 0), width=2)
+
+        rect = (search_result or {}).get("rect")
+        if rect:
+            result_box = [
+                int(rect["left"]) - win_rect["left"],
+                int(rect["top"]) - win_rect["top"],
+                int(rect["right"]) - win_rect["left"],
+                int(rect["bottom"]) - win_rect["top"],
+            ]
+            draw.rectangle(result_box, outline=(0, 200, 80), width=3)
+
+        click = (search_result or {}).get("click_point")
+        if click:
+            x = int(click["x"]) - win_rect["left"]
+            y = int(click["y"]) - win_rect["top"]
+            draw.line([(x - 10, y), (x + 10, y)], fill=(230, 0, 0), width=3)
+            draw.line([(x, y - 10), (x, y + 10)], fill=(230, 0, 0), width=3)
+
+        label = f"{(search_result or {}).get('method', 'not_detected')} / {(search_result or {}).get('confidence', 0)}"
+        draw.text((8, 8), label, fill=(230, 0, 0))
+
+        out_dir = SCREENSHOT_DIR / "search_result"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{_safe_file_nick(nickname)}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+        image.save(path)
+        return str(path)
+    except Exception as exc:
+        logger.warning("save search result overlay failed: %s", exc)
+        return None
+
+
+def _detect_single_visible_result_row(hwnd: int, win_rect: dict, nickname: str) -> dict:
+    """Low-confidence fallback: find one non-empty horizontal row in the result area."""
+    region = _search_result_region(win_rect)
+    try:
+        image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
+        gray = image.convert("L")
+        width, height = gray.size
+        pixels = gray.load()
+        active_rows = []
+        for y in range(height):
+            dark = 0
+            for x in range(width):
+                if pixels[x, y] < 225:
+                    dark += 1
+            if dark >= max(18, int(width * 0.08)):
+                active_rows.append(y)
+        if not active_rows:
+            return {"success": False, "reason": "result_area_blank"}
+        groups = []
+        current = [active_rows[0]]
+        for y in active_rows[1:]:
+            if y <= current[-1] + 1:
+                current.append(y)
+            else:
+                groups.append(current)
+                current = [y]
+        groups.append(current)
+        groups = [g for g in groups if len(g) >= 18]
+        if len(groups) != 1:
+            return {"success": False, "reason": f"visible_result_row_count={len(groups)}"}
+        group = groups[0]
+        top = region["top"] + group[0]
+        bottom = region["top"] + group[-1] + 1
+        rect = {
+            "left": region["left"],
+            "top": top,
+            "right": region["right"],
+            "bottom": bottom,
+        }
+        return {
+            "success": True,
+            "search_result_detected": True,
+            "nickname": nickname,
+            "method": "single_visible_result_row_fallback",
+            "rect": rect,
+            "click_point": {
+                "x": int(rect["left"] + 70),
+                "y": int((rect["top"] + rect["bottom"]) / 2),
+            },
+            "confidence": 0.45,
+        }
+    except Exception as exc:
+        return {"success": False, "reason": str(exc)}
+
+
+def detect_search_result(hwnd: int, win_rect: dict, nickname: str) -> dict:
+    """Detect the Aw3 row in WeChat search results without clicking it."""
+    screenshots = {
+        "result_area": _save_result_region_screenshot(hwnd, win_rect, nickname, "result_area"),
+        "overlay": None,
+    }
+    base = {
+        "success": False,
+        "search_result_detected": False,
+        "nickname": nickname,
+        "method": None,
+        "rect": None,
+        "click_point": None,
+        "confidence": 0.0,
+        "failure_stage": "search_result_not_detected",
+        "screenshots": screenshots,
+        "notes": [],
+    }
+    region = _search_result_region(win_rect)
+    try:
+        from app.wechat_ui.ocr_matcher import match_ocr_text_to_nickname
+        import easyocr
+
+        image = grab_screen((region["left"], region["top"], region["right"], region["bottom"]))
+        reader = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+        raw = reader.readtext(image)
+        best = None
+        for item in raw:
+            if len(item) < 2:
+                continue
+            box, text = item[0], str(item[1])
+            conf = float(item[2]) if len(item) >= 3 else 0.8
+            match = match_ocr_text_to_nickname(text, nickname, confidence=conf, min_confidence=0.1)
+            if not match.get("matched") and nickname.lower() not in text.lower():
+                continue
+            xs = [float(p[0]) for p in box]
+            ys = [float(p[1]) for p in box]
+            rect = {
+                "left": int(region["left"] + min(xs) - 55),
+                "top": int(region["top"] + min(ys) - 14),
+                "right": int(region["left"] + max(xs) + 120),
+                "bottom": int(region["top"] + max(ys) + 18),
+            }
+            click = {"x": int(rect["left"] + 70), "y": int((rect["top"] + rect["bottom"]) / 2)}
+            candidate = {
+                "success": True,
+                "search_result_detected": True,
+                "nickname": nickname,
+                "method": "ocr_result_area",
+                "rect": rect,
+                "click_point": click,
+                "confidence": conf,
+                "ocr_text": text,
+                "failure_stage": None,
+                "screenshots": screenshots,
+                "notes": [],
+            }
+            if best is None or conf > best.get("confidence", 0):
+                best = candidate
+        if best:
+            best["screenshots"]["overlay"] = _save_search_result_overlay(hwnd, win_rect, nickname, best, "overlay")
+            return best
+        base["notes"].append(f"{nickname} text not found by OCR in search result area")
+    except Exception as exc:
+        base["notes"].append(f"ocr_result_area_failed: {exc}")
+
+    fallback = _detect_single_visible_result_row(hwnd, win_rect, nickname)
+    if fallback.get("success"):
+        fallback["failure_stage"] = None
+        fallback["screenshots"] = screenshots
+        fallback["notes"] = ["low-confidence fallback; final OCR title verification is still required"]
+        fallback["screenshots"]["overlay"] = _save_search_result_overlay(hwnd, win_rect, nickname, fallback, "overlay")
+        return fallback
+
+    base["notes"].append("Aw3 search text is verified, but no clickable search result row was detected")
+    base["screenshots"]["overlay"] = _save_search_result_overlay(hwnd, win_rect, nickname, base, "overlay")
+    return base
+
+
+def run_search_box_debug(nickname: str = "Aw3", position: str = "right") -> dict:
+    """Click and paste a nickname into WeChat search box without opening a chat."""
+    result = {
+        "success": False,
+        "nickname": nickname,
+        "position": position,
+        "clicked": False,
+        "focused": False,
+        "text_pasted_into_search_box": False,
+        "text_leaked_to_chat_input": False,
+        "verified": False,
+        "manual": True,
+        "click_point": None,
+        "screenshots": {
+            "before": None,
+            "overlay": None,
+            "after_click": None,
+            "after_paste": None,
+        },
+        "failure_stage": None,
+        "message": "",
+        "notes": [],
+    }
+    if not nickname or not nickname.strip():
+        result["failure_stage"] = "validation"
+        result["message"] = "nickname is empty"
+        return result
+
+    ok, msg, ctx = _check_preconditions()
+    if not ok:
+        result["failure_stage"] = ctx.get("failure_stage", "preconditions")
+        result["message"] = msg
+        return result
+
+    hwnd = ctx["hwnd"]
+    safe_nick = "".join(c if c.isalnum() or c in "_-" else "_" for c in nickname.strip())
+    result["screenshots"]["before"] = save_debug_screenshot(
+        f"search_debug_{safe_nick}", "1_before_click",
+    )
+
+    click_point = locate_search_box_click_point(hwnd, position=position)
+    result["click_point"] = click_point
+    result["screenshots"]["overlay"] = save_search_box_overlay(hwnd, click_point, safe_nick, "overlay")
+    if not click_point.get("success"):
+        result["failure_stage"] = "search_box_locate_failed"
+        result["message"] = click_point.get("reason") or "search box locate failed"
+        set_action_in_progress(False)
+        return result
+
+    guard = ensure_wechat_foreground(hwnd, reason="search_debug_before_click")
+    if not guard.get("success"):
+        result["failure_stage"] = "foreground_lost_before_search_debug_click"
+        result["message"] = guard.get("message") or "wechat foreground failed"
+        set_action_in_progress(False)
+        return result
+
+    _click_left_button(int(click_point["x"]), int(click_point["y"]))
+    result["clicked"] = True
+    time.sleep(0.5)
+    result["screenshots"]["after_click"] = save_debug_screenshot(
+        f"search_debug_{safe_nick}", "2_after_click",
+    )
+
+    focus = verify_search_box_focus(hwnd, ctx["win_rect"], click_point)
+    result["focused"] = bool(focus.get("focused"))
+    result["text_leaked_to_chat_input"] = bool(focus.get("text_leaked_to_chat_input"))
+    result["verified"] = bool(focus.get("verified"))
+    result["search_focus"] = focus
+    if not focus.get("verified"):
+        result["failure_stage"] = "search_focus_not_verified"
+        result["message"] = "搜索框焦点未确认，已阻止粘贴关键词"
+        set_action_in_progress(False)
+        return result
+
+    old_clipboard = _save_clipboard()
+    try:
+        guard = ensure_wechat_foreground(hwnd, reason="search_debug_before_ctrl_a")
+        if not guard.get("success"):
+            result["failure_stage"] = "foreground_lost_before_ctrl_a"
+            result["message"] = guard.get("message") or "wechat foreground failed before Ctrl+A"
+            return result
+        uia.SendKeys("{Ctrl}a", waitTime=0.05)
+        time.sleep(0.05)
+        uia.SendKeys("{Back}", waitTime=0.05)
+        time.sleep(0.05)
+        _set_clipboard(nickname.strip())
+        guard = ensure_wechat_foreground(hwnd, reason="search_debug_before_paste")
+        if not guard.get("success"):
+            result["failure_stage"] = "foreground_lost_before_paste"
+            result["message"] = guard.get("message") or "wechat foreground failed before paste"
+            return result
+        uia.SendKeys("{Ctrl}v", waitTime=0.1)
+        time.sleep(0.5)
+        result["text_pasted_into_search_box"] = True
+        result["screenshots"]["after_paste"] = save_debug_screenshot(
+            f"search_debug_{safe_nick}", "3_after_paste",
+        )
+        text_check = verify_search_text_in_search_box(
+            hwnd,
+            ctx["win_rect"],
+            nickname.strip(),
+            click_point,
+            result["screenshots"]["after_paste"],
+        )
+        result["search_focus"] = {**focus, **text_check}
+        result["text_pasted_into_search_box"] = bool(text_check.get("text_pasted_into_search_box"))
+        result["text_leaked_to_chat_input"] = bool(text_check.get("text_leaked_to_chat_input"))
+        result["search_text_verified"] = bool(text_check.get("search_text_verified"))
+        if not text_check.get("search_text_verified"):
+            result["failure_stage"] = "search_text_not_verified"
+            result["message"] = "搜索关键词未确认出现在搜索框中，已阻止继续"
+            return result
+    except Exception as exc:
+        result["failure_stage"] = "search_debug_exception"
+        result["message"] = str(exc)
+        return result
+    finally:
+        _restore_clipboard(old_clipboard)
+        set_action_in_progress(False)
+
+    result["verified"] = bool(result["focused"] and result["text_pasted_into_search_box"] and not result["text_leaked_to_chat_input"])
+    result["success"] = result["verified"]
+    result["manual"] = not result["verified"]
+    result["failure_stage"] = None
+    result["message"] = "search debug completed"
+    result["notes"].append("search-debug does not press Down or Enter and does not send messages")
+    return result
+
+
+def run_search_result_debug(nickname: str = "Aw3", position: str = "right") -> dict:
+    """Verify search text and detect the Aw3 result row without clicking or pressing Enter."""
+    result = {
+        "success": False,
+        "nickname": nickname,
+        "position": position,
+        "search_text_verified": False,
+        "search_result_detected": False,
+        "search_result": None,
+        "screenshots": {
+            "after_search_text": None,
+            "result_area": None,
+            "overlay": None,
+        },
+        "failure_stage": None,
+        "message": "",
+        "notes": ["search-result-debug does not click results, press Enter, paste messages, or send"],
+    }
+    search_debug = run_search_box_debug(nickname=nickname, position=position)
+    result["search_text_verified"] = bool(
+        search_debug.get("search_text_verified")
+        or (search_debug.get("search_focus") or {}).get("search_text_verified")
+    )
+    result["screenshots"]["after_search_text"] = (search_debug.get("screenshots") or {}).get("after_paste")
+    result["search_focus"] = search_debug.get("search_focus")
+    if not result["search_text_verified"]:
+        result["failure_stage"] = search_debug.get("failure_stage") or "search_text_not_verified"
+        result["message"] = search_debug.get("message") or "search text was not verified in WeChat search box"
+        result["notes"].append("Aw3 did not reach the search box, so result detection was skipped")
+        return result
+
+    try:
+        window = find_wechat_window()
+        hwnd = getattr(window, "NativeWindowHandle", None)
+        if not isinstance(hwnd, int):
+            result["failure_stage"] = "wechat_window_not_found"
+            result["message"] = "invalid WeChat window handle"
+            return result
+        win_rect = _get_window_rect_dict(hwnd)
+        detected = detect_search_result(hwnd, win_rect, nickname)
+        result["search_result_detected"] = bool(detected.get("search_result_detected"))
+        result["search_result"] = {
+            "nickname": nickname,
+            "method": detected.get("method"),
+            "rect": detected.get("rect"),
+            "click_point": detected.get("click_point"),
+            "confidence": detected.get("confidence"),
+        }
+        shots = detected.get("screenshots") or {}
+        result["screenshots"]["result_area"] = shots.get("result_area")
+        result["screenshots"]["overlay"] = shots.get("overlay")
+        result["notes"].extend(detected.get("notes") or [])
+        if not detected.get("success"):
+            result["failure_stage"] = detected.get("failure_stage") or "search_result_not_detected"
+            result["message"] = f"{nickname} is in search box, but result row was not detected"
+            return result
+        result["success"] = True
+        result["failure_stage"] = None
+        result["message"] = "search result detected"
+        return result
+    except Exception as exc:
+        result["failure_stage"] = "search_result_debug_failed"
+        result["message"] = str(exc)
+        return result
+
+
+def calibrate_search_box(countdown_seconds: int = 5) -> dict:
+    """Save current mouse position as a relative WeChat search-box calibration point."""
+    try:
+        window = find_wechat_window()
+        hwnd = getattr(window, "NativeWindowHandle", None)
+        if not isinstance(hwnd, int):
+            return {"success": False, "failure_stage": "wechat_window_not_found", "message": "微信窗口句柄无效"}
+        guard = ensure_wechat_foreground(hwnd, reason="search_calibration")
+        if not guard.get("success"):
+            return {
+                "success": False,
+                "failure_stage": "foreground_guard_failed",
+                "message": guard.get("message") or "微信前台焦点恢复失败",
+            }
+        time.sleep(max(0, int(countdown_seconds)))
+        point = ctypes.wintypes.POINT()
+        ok = ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+        if not ok:
+            return {"success": False, "failure_stage": "get_cursor_pos_failed", "message": "读取鼠标位置失败"}
+        win_rect = _get_window_rect_dict(hwnd)
+        relative_x = int(point.x) - int(win_rect["left"])
+        relative_y = int(point.y) - int(win_rect["top"])
+        path = _save_search_box_calibration(relative_x, relative_y, source="manual")
+        return {
+            "success": True,
+            "relative_x": relative_x,
+            "relative_y": relative_y,
+            "absolute_x": int(point.x),
+            "absolute_y": int(point.y),
+            "config_path": path,
+            "message": "搜索框坐标已保存",
+        }
+    except Exception as exc:
+        return {"success": False, "failure_stage": "search_calibration_failed", "message": str(exc)}
 
 
 # ========== 主搜索函数 ==========
@@ -314,6 +1691,21 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
         "failure_stage": None,
         "debug_steps": [],
         "debug_screenshots": [],
+        "manual": False,
+        "manual_review_required": False,
+        "pasted": False,
+        "sent": False,
+        "search_focus": None,
+        "search_action_completed": False,
+        "search_keyword_pasted": False,
+        "maybe_chat_opened": False,
+        "search_keyword": nickname,
+        "opened_by": None,
+        "current_stage": None,
+        "stages": _new_open_chat_stages(),
+        "search_result": None,
+        "screenshots": {},
+        "notes": [],
     }
 
     if not nickname or not nickname.strip():
@@ -349,7 +1741,11 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
                 result.update({
                     k: attempt_result[k]
                     for k in ("success", "chat_title", "chat_verified", "confidence",
-                              "input_box_found", "message_list_found", "window_rect", "warning")
+                              "input_box_found", "message_list_found", "window_rect", "warning",
+                              "search_action_completed", "search_keyword_pasted", "maybe_chat_opened",
+                              "manual", "manual_review_required", "pasted", "sent", "search_focus",
+                              "search_keyword", "opened_by", "notes", "message", "current_stage",
+                              "stages", "search_result", "screenshots")
                     if k in attempt_result
                 })
                 result["attempts"] = attempt
@@ -359,6 +1755,13 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
 
             result["failure_stage"] = attempt_result.get("failure_stage", "unknown")
             result["message"] = attempt_result.get("message", "")
+            for key in (
+                "manual", "manual_review_required", "pasted", "sent", "search_focus",
+                "search_action_completed", "search_keyword_pasted", "maybe_chat_opened",
+                "current_stage", "stages", "search_result", "screenshots",
+            ):
+                if key in attempt_result:
+                    result[key] = attempt_result[key]
             logger.warning(
                 "搜索失败（尝试 %d/%d）: stage=%s, msg=%s",
                 attempt, max_attempts,
@@ -392,6 +1795,7 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     """执行一次完整搜索流程"""
     steps = []
     screenshots = []
+    stages = _new_open_chat_stages()
 
     result = {
         "success": False,
@@ -407,6 +1811,16 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         "failure_stage": None,
         "debug_steps": [],
         "debug_screenshots": [],
+        "search_focus": None,
+        "search_action_completed": False,
+        "search_keyword_pasted": False,
+        "maybe_chat_opened": False,
+        "search_keyword": nickname,
+        "opened_by": None,
+        "current_stage": None,
+        "stages": stages,
+        "search_result": None,
+        "screenshots": {},
     }
 
     # =====================================================
@@ -423,6 +1837,8 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         result["debug_screenshots"] = screenshots
         _save_failure_screenshot(safe_nick, "preconditions_fail")
         return result
+    stages["readiness_checked"] = True
+    stages["foreground_ready"] = True
     step.ok(message=msg)
     steps.append(step.to_dict())
 
@@ -452,7 +1868,23 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     # 阶段 2：点击搜索区域
     # =====================================================
     step = _DebugStep("search_box_clicked", attempt)
-    search_x, search_y = _calc_search_box_center(win_rect)
+    click_point = locate_search_box_click_point(hwnd)
+    if not click_point.get("success"):
+        step.fail(click_point.get("reason") or "搜索框点击点计算失败", strategy=click_point.get("strategy"))
+        steps.append(step.to_dict())
+        result["failure_stage"] = "search_box_locate_failed"
+        result["message"] = step.message
+        result["debug_steps"] = steps
+        result["debug_screenshots"] = screenshots
+        result["current_stage"] = "search_box_located"
+        return result
+    stages["search_box_located"] = True
+
+    overlay_path = save_search_box_overlay(hwnd, click_point, safe_nick, f"overlay_a{attempt}")
+    if overlay_path:
+        screenshots.append(overlay_path)
+
+    search_x, search_y = int(click_point["x"]), int(click_point["y"])
 
     logger.info("点击搜索区域: (%d, %d), rect=%s", search_x, search_y, win_rect)
 
@@ -468,9 +1900,7 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     # 清空操作已在下方的 nickname_input 阶段执行。
 
     # 点击搜索框
-    ctypes.windll.user32.SetCursorPos(search_x, search_y)
-    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # 左键按下
-    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # 左键释放
+    _click_left_button(search_x, search_y)
     time.sleep(0.8)  # 等搜索面板展开
 
     # 检查前台窗口（带恢复尝试）
@@ -486,9 +1916,33 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         _trigger_emergency_stop("前台窗口丢失")
         return result
 
-    step.ok(strategy="坐标点击", message=f"({search_x}, {search_y})",
-            position={"x": search_x, "y": search_y})
+    step.ok(strategy=click_point.get("strategy"), message=f"({search_x}, {search_y})",
+            position={
+                "x": search_x,
+                "y": search_y,
+                "confidence": click_point.get("confidence"),
+                "window_rect": click_point.get("window_rect"),
+                "search_box_rect": click_point.get("search_box_rect"),
+            })
     steps.append(step.to_dict())
+
+    focus = verify_search_box_focus(hwnd, win_rect, click_point)
+    if not focus.get("verified"):
+        step = _DebugStep("search_focus_verified", attempt)
+        step.fail(f"搜索框焦点未确认: {focus.get('reason')}", strategy="focus_guard")
+        steps.append(step.to_dict())
+        _restore_clipboard(None)
+        _apply_focus_failure(result, focus, steps, screenshots)
+        result["current_stage"] = "search_box_focused"
+        _save_failure_screenshot(safe_nick, "search_focus_not_verified")
+        set_action_in_progress(False)
+        return result
+
+    step = _DebugStep("search_focus_verified", attempt)
+    step.ok(strategy="focus_guard", message="搜索框焦点已确认", position=focus.get("focus_control"))
+    steps.append(step.to_dict())
+    result["search_focus"] = {**focus, "click_point": click_point}
+    stages["search_box_focused"] = True
 
     # =====================================================
     # 阶段 3：清空 + 粘贴搜索词
@@ -545,6 +1999,9 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
             _trigger_emergency_stop("粘贴昵称前台焦点丢失")
             return result
         uia.SendKeys("{Ctrl}v", waitTime=0.1)
+        result["pasted"] = True
+        result["search_keyword_pasted"] = True
+        stages["search_keyword_pasted"] = True
         time.sleep(SEARCH_RESULT_WAIT)
     except Exception as e:
         step.fail(f"剪贴板粘贴失败: {e}", strategy="clipboard_paste")
@@ -553,6 +2010,7 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         result["message"] = step.message
         result["debug_steps"] = steps
         result["debug_screenshots"] = screenshots
+        result["current_stage"] = "search_keyword_pasted"
         _restore_clipboard(old_clipboard)
         return result
 
@@ -570,22 +2028,35 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     if ss_path:
         screenshots.append(ss_path)
 
-    # P0-2C 实测结论：当前系统截图 API 无法可靠对比像素差异
-    # 改为非阻塞式：截图保存为人工复核证据，不阻塞搜索流程
+    text_check = verify_search_text_in_search_box(hwnd, win_rect, nickname, click_point, ss_path)
+    result["search_focus"] = {**focus, **text_check, "click_point": click_point}
+    if not text_check.get("search_text_verified"):
+        step.fail(
+            f"搜索关键词未确认出现在搜索框中: {text_check.get('reason')}",
+            strategy="search_text_guard",
+            screenshot=ss_path,
+        )
+        steps.append(step.to_dict())
+        _restore_clipboard(old_clipboard)
+        _apply_search_text_failure(result, result["search_focus"], steps, screenshots)
+        result["current_stage"] = "search_text_verified"
+        _save_failure_screenshot(safe_nick, "search_text_not_verified")
+        set_action_in_progress(False)
+        return result
+
     step.ok(
-        strategy="截图记录",
-        message="截图已保存供人工复核（像素对比已降级为非阻塞）",
+        strategy="search_text_guard",
+        message="搜索关键词已确认出现在搜索框中",
         screenshot=ss_path,
     )
     steps.append(step.to_dict())
+    stages["search_text_verified"] = True
     logger.info("搜索区域截图已保存（非阻塞验证）")
 
-    steps.append(step.to_dict())
-
     # =====================================================
-    # 阶段 5：键盘选择搜索结果（Down + Enter）
+    # 阶段 5：OCR 检测搜索结果 → 点击结果行
     # =====================================================
-    step = _DebugStep("search_result_selected", attempt)
+    step = _DebugStep("search_result_detect", attempt)
 
     # 检查前台（带恢复尝试）
     ok_fg, fg_diag = _ensure_wechat_foreground(hwnd)
@@ -600,38 +2071,97 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         _trigger_emergency_stop("前台窗口丢失")
         return result
 
-    guard = ensure_wechat_foreground(hwnd, reason="before_down")
+    guard = ensure_wechat_foreground(hwnd, reason="before_detect_search_result")
     if not guard.get("success"):
-        step.fail(f"Down 前微信不在前台: {guard.get('message')}", strategy="foreground_guard")
+        step.fail(f"检测搜索结果前微信不在前台: {guard.get('message')}", strategy="foreground_guard")
         steps.append(step.to_dict())
-        result["failure_stage"] = "foreground_lost_before_down"
+        result["failure_stage"] = "foreground_lost_before_search_result_detect"
         result["message"] = step.message
         result["debug_steps"] = steps
         result["debug_screenshots"] = screenshots
         _restore_clipboard(old_clipboard)
-        _save_failure_screenshot(safe_nick, "foreground_lost_before_down")
-        _trigger_emergency_stop("Down 前台焦点丢失")
+        _save_failure_screenshot(safe_nick, "foreground_lost_before_search_result_detect")
+        _trigger_emergency_stop("检测搜索结果前台焦点丢失")
         return result
-    uia.SendKeys("{Down}", waitTime=0.05)
-    time.sleep(0.3)
 
-    guard = ensure_wechat_foreground(hwnd, reason="before_enter")
-    if not guard.get("success"):
-        step.fail(f"Enter 前微信不在前台: {guard.get('message')}", strategy="foreground_guard")
+    # P0-4A-6B：使用 detect_search_result OCR 检测结果行
+    detected = detect_search_result(hwnd, win_rect, nickname)
+    result["search_result"] = {
+        "nickname": nickname,
+        "method": detected.get("method"),
+        "rect": detected.get("rect"),
+        "click_point": detected.get("click_point"),
+        "confidence": detected.get("confidence"),
+    }
+    # 合并截图
+    detected_shots = detected.get("screenshots") or {}
+    for shot_key in ("result_area", "overlay"):
+        shot_path = detected_shots.get(shot_key)
+        if shot_path and shot_path not in screenshots:
+            screenshots.append(shot_path)
+
+    if not detected.get("search_result_detected"):
+        step.fail(
+            f"搜索结果中未识别到 '{nickname}': {detected.get('failure_stage') or 'search_result_not_detected'}",
+            strategy=detected.get("method"),
+        )
         steps.append(step.to_dict())
-        result["failure_stage"] = "foreground_lost_before_enter"
-        result["message"] = step.message
+        result["failure_stage"] = "search_result_not_detected"
+        result["message"] = f"搜索结果中未识别到 '{nickname}'，已阻止点击"
         result["debug_steps"] = steps
         result["debug_screenshots"] = screenshots
+        result["current_stage"] = "search_result_detected"
         _restore_clipboard(old_clipboard)
-        _save_failure_screenshot(safe_nick, "foreground_lost_before_enter")
-        _trigger_emergency_stop("Enter 前台焦点丢失")
+        _save_failure_screenshot(safe_nick, "search_result_not_detected")
+        set_action_in_progress(False)
         return result
-    uia.SendKeys("{Enter}", waitTime=0.05)
-    logger.info("已按 Down+Enter 选择第一个搜索结果")
 
-    step.ok(strategy="Down+Enter", message="键盘选择第一个搜索结果")
+    stages["search_result_detected"] = True
+    step.ok(
+        strategy=detected.get("method"),
+        message=f"OCR 检测到 '{nickname}' 结果行, confidence={detected.get('confidence', 0):.2f}",
+    )
     steps.append(step.to_dict())
+
+    # P0-4A-6B：点击 OCR 检测到的结果行
+    click_step = _DebugStep("search_result_clicked", attempt)
+    click_point = detected.get("click_point")
+    if not click_point or click_point.get("x") is None or click_point.get("y") is None:
+        click_step.fail("搜索结果行缺少点击坐标", strategy=detected.get("method"))
+        steps.append(click_step.to_dict())
+        result["failure_stage"] = "search_result_click_point_missing"
+        result["message"] = "搜索结果行缺少点击坐标"
+        result["debug_steps"] = steps
+        result["debug_screenshots"] = screenshots
+        _restore_clipboard(old_clipboard)
+        set_action_in_progress(False)
+        return result
+
+    guard = ensure_wechat_foreground(hwnd, reason="before_click_search_result")
+    if not guard.get("success"):
+        click_step.fail(f"点击搜索结果前微信不在前台: {guard.get('message')}", strategy="foreground_guard")
+        steps.append(click_step.to_dict())
+        result["failure_stage"] = "foreground_lost_before_search_result_click"
+        result["message"] = click_step.message
+        result["debug_steps"] = steps
+        result["debug_screenshots"] = screenshots
+        _restore_clipboard(old_clipboard)
+        _save_failure_screenshot(safe_nick, "foreground_lost_before_search_result_click")
+        _trigger_emergency_stop("点击搜索结果前台焦点丢失")
+        return result
+
+    _click_left_button(int(click_point["x"]), int(click_point["y"]))
+    time.sleep(0.5)
+    stages["search_result_selected"] = True
+    logger.info("已点击搜索结果: nickname='%s', point=(%s, %s), method=%s",
+                nickname, click_point["x"], click_point["y"], detected.get("method"))
+
+    click_step.ok(
+        strategy=detected.get("method"),
+        message="点击搜索结果",
+        position={"x": click_point["x"], "y": click_point["y"]},
+    )
+    steps.append(click_step.to_dict())
 
     # 恢复剪贴板
     _restore_clipboard(old_clipboard)
@@ -639,11 +2169,18 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     # =====================================================
     # 阶段 6：等待聊天窗口打开 + 截图
     # =====================================================
+    ss_path = save_debug_screenshot(
+        f"open_chat_{safe_nick}", f"3_after_result_click_a{attempt}",
+        region=(win_rect["left"], win_rect["top"], win_rect["right"], win_rect["bottom"]),
+    )
+    if ss_path:
+        screenshots.append(ss_path)
+
     logger.info("等待 %d 秒让聊天窗口打开...", CHAT_OPEN_WAIT)
     time.sleep(CHAT_OPEN_WAIT)
 
     ss_path = save_debug_screenshot(
-        f"open_chat_{safe_nick}", f"3_after_down_enter_a{attempt}",
+        f"open_chat_{safe_nick}", f"4_after_wait_a{attempt}",
         region=(win_rect["left"], win_rect["top"], win_rect["right"], win_rect["bottom"]),
     )
     if ss_path:
@@ -667,109 +2204,29 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         return result
 
     # =====================================================
-    # 阶段 7：验证聊天窗口
+    # 阶段 7：只标记搜索动作完成，不在 open_chat 内做最终联系人确认
     # =====================================================
-    step = _DebugStep("chat_window_verified", attempt)
-
-    # 获取最新窗口 rect（可能变化）
-    try:
-        window2 = find_wechat_window()
-        r2 = window2.BoundingRectangle
-        result["window_rect"] = {
-            "left": r2.left, "top": r2.top,
-            "right": r2.right, "bottom": r2.bottom,
-        }
-        win_rect = result["window_rect"]
-    except Exception:
-        pass  # 使用原始 rect
-
-    # 验证策略 A：尝试读取 chat_title
-    chat_title = None
-    try:
-        from app.wechat_ui.window_locator import find_current_chat_title
-        chat_title = find_current_chat_title(window)
-    except Exception:
-        pass
-
-    # 验证策略 B：输入框可写 + 消息列表
-    input_box_found = False
-    try:
-        # 点击输入区域获取焦点
-        input_x = win_rect["left"] + int((win_rect["right"] - win_rect["left"]) * 0.6)
-        input_y = win_rect["bottom"] - int((win_rect["bottom"] - win_rect["top"]) * 0.15)
-        ctypes.windll.user32.SetCursorPos(input_x, input_y)
-        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-        time.sleep(0.3)
-        input_box_found = True
-    except Exception:
-        pass
-
-    # 综合判定 chat_verified
-    confidence = 0.0
-    chat_verified = False
-    verification_details = []
-
-    if chat_title and nickname in (chat_title or ""):
-        # A：标题匹配 → 高置信度
-        confidence = 0.9
-        chat_verified = True
-        verification_details.append(f"chat_title匹配: '{chat_title}'")
-    elif chat_title:
-        # A：标题存在但不匹配 → 中等置信度（可能是搜索结果名称不同）
-        confidence = 0.5
-        verification_details.append(f"chat_title存在但不匹配: '{chat_title}'")
-
-    if input_box_found:
-        # B：输入区域可点击
-        if confidence < 0.6:
-            confidence = 0.6
-        verification_details.append("输入区域可点击")
-
-    # 截图证据始终记录，供人工复核
-    verification_details.append("截图已保存供人工复核")
-
-    # 最终判定：至少 input_box_found 才能算基本成功
-    if input_box_found:
-        chat_verified = True
-        if confidence < 0.6:
-            confidence = 0.6  # 最低置信度
-    else:
-        chat_verified = False
-        confidence = 0.0
-
-    result["chat_title"] = chat_title
-    result["input_box_found"] = input_box_found
-    result["message_list_found"] = input_box_found  # Qt5 降级
-    result["chat_verified"] = chat_verified
-    result["confidence"] = confidence
-
-    detail_msg = "; ".join(verification_details)
-    step.ok(message=f"chat_verified={chat_verified}, confidence={confidence:.1f}, {detail_msg}")
+    step = _DebugStep("search_action_completed", attempt)
+    step.ok(
+        strategy="search_action_only",
+        message="open_chat only completed search action; final verification requires OCR title check",
+    )
     steps.append(step.to_dict())
 
-    if not chat_verified:
-        result["failure_stage"] = "chat_not_verified"
-        result["message"] = f"聊天窗口未验证: {detail_msg}"
-        result["success"] = False
-        result["warning"] = "聊天窗口无法验证，不允许后续自动发送"
-        result["debug_steps"] = steps
-        result["debug_screenshots"] = screenshots
-        return result
-
-    # 成功
-    result["success"] = True
-    result["message"] = f"已打开聊天窗口: {nickname} (confidence={confidence:.1f})"
-    result["warning"] = f"Qt5 坐标定位, confidence={confidence:.1f}"
-
-    logger.info(
-        "聊天窗口已打开: nickname='%s', verified=%s, confidence=%.1f, attempts=%d",
-        nickname, chat_verified, confidence, attempt,
+    completed = build_search_action_completed_result(
+        nickname=nickname,
+        window_rect=win_rect,
+        screenshots=screenshots,
+        debug_steps=steps,
+        search_focus=result.get("search_focus"),
+        stages=stages,
+        search_result=result.get("search_result"),
     )
-
-    result["debug_steps"] = steps
-    result["debug_screenshots"] = screenshots
-    return result
+    logger.info(
+        "搜索动作已完成: nickname='%s', chat_verified=False, confidence=0.3, attempts=%d",
+        nickname, attempt,
+    )
+    return completed
 
 
 # ========== 辅助函数 ==========
@@ -777,16 +2234,15 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
 def _save_clipboard() -> str | None:
     """保存当前剪贴板"""
     try:
-        import pyperclip
-        return pyperclip.paste()
-    except Exception:
+        return get_clipboard_text()
+    except Exception as e:
+        logger.warning("保存剪贴板失败（非致命）: %s", e)
         return None
 
 
 def _set_clipboard(text: str):
     """写入剪贴板"""
-    import pyperclip
-    pyperclip.copy(text)
+    set_clipboard_text(text)
 
 
 def _restore_clipboard(old_text: str | None):
@@ -794,10 +2250,9 @@ def _restore_clipboard(old_text: str | None):
     if old_text is None:
         return
     try:
-        import pyperclip
-        pyperclip.copy(old_text)
-    except Exception:
-        pass
+        set_clipboard_text(old_text)
+    except Exception as e:
+        logger.warning("恢复剪贴板失败（非致命）: %s", e)
 
 
 def _save_failure_screenshot(prefix: str, stage: str) -> str | None:

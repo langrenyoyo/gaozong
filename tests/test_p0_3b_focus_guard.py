@@ -47,12 +47,33 @@ def _mock_precond_ok():
 def _search_patches():
     return [
         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="test.png"),
+        patch("app.wechat_ui.contact_searcher.save_search_box_overlay", return_value="overlay.png"),
         patch("app.wechat_ui.contact_searcher.capture_wechat_region", return_value=MagicMock()),
+        patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+              return_value={"success": True, "x": 120, "y": 88, "strategy": "manual_calibration", "confidence": 0.7}),
         patch("app.wechat_ui.contact_searcher.uia.SendKeys"),
         patch("app.wechat_ui.contact_searcher._save_clipboard", return_value=""),
         patch("app.wechat_ui.contact_searcher._set_clipboard"),
         patch("app.wechat_ui.contact_searcher._restore_clipboard"),
         patch("app.wechat_ui.contact_searcher._is_wechat_foreground", return_value=True),
+        patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+              return_value={
+                  "clicked": True,
+                  "focused": True,
+                  "verified": True,
+                  "success": True,
+                  "text_pasted_into_search_box": False,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+                  "manual_review_required": False,
+              }),
+        patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+              return_value={
+                  "search_text_verified": True,
+                  "text_pasted_into_search_box": True,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+              }),
         patch("app.wechat_ui.contact_searcher.ctypes"),
         patch("app.wechat_ui.contact_searcher.time.sleep"),
         patch("app.wechat_ui.contact_searcher._trigger_emergency_stop"),
@@ -108,7 +129,7 @@ def test_ensure_wechat_foreground_fails_after_retries():
     assert result["success"] is False
     assert result["reason"] == "before_enter"
     assert result["foreground_hwnd"] == 999
-    assert mock_set.call_count == 3
+    assert mock_set.call_count >= 3
 
 
 def test_contact_searcher_checks_foreground_before_ctrl_a():

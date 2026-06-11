@@ -12,7 +12,9 @@
 import ctypes
 import ctypes.wintypes
 import logging
+import os
 import time
+from dataclasses import asdict, dataclass
 
 import comtypes
 import uiautomation as uia
@@ -22,13 +24,60 @@ from app.wechat_ui.exceptions import WechatNotFoundError, ChatWindowNotFoundErro
 logger = logging.getLogger(__name__)
 
 WECHAT_NOT_READY_MESSAGE = "微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常"
+WECHAT_MANUAL_OPEN_MESSAGE = "微信窗口当前隐藏或最小化，请手动打开微信并确认内容正常后重试"
 
 # 微信窗口可能的名字和类名
 WECHAT_NAMES = ["Weixin", "微信", "WeChat"]
 WECHAT_CLASS_NAMES = ["mmui::MainWindow"]
 # 模糊匹配用的关键词
 WECHAT_NAME_CONTAINS = ["微信", "Weixin", "WeChat"]
-WECHAT_CLASS_CONTAINS = ["mmui", "WeChatMainWnd"]
+WECHAT_PROCESS_CONTAINS = ["WeChat", "Weixin"]
+WECHAT_EXCLUDED_PROCESS_NAMES = {
+    "wxwork.exe",
+    "msedge.exe",
+    "chrome.exe",
+    "firefox.exe",
+    "brave.exe",
+    "360se.exe",
+    "360chrome.exe",
+}
+WECHAT_EXCLUDED_CLASS_CONTAINS = ["Chrome_WidgetWin", "MozillaWindowClass"]
+WECHAT_EXCLUDED_TITLE_CONTAINS = ["AutoWeChat Status", "AutoWeChat"]
+LOCAL_AGENT_EXCLUDED_TITLE_CONTAINS = ["小高AI微信助手", "微信助手"]
+LOCAL_AGENT_EXCLUDED_PROCESS_CONTAINS = ["小高AI微信助手"]
+WECHAT_CLASS_CONTAINS = [
+    "mmui",
+    "WeChatMainWnd",
+    "Qt",
+    "QWindow",
+    "Qt51514QWindowIcon",
+]
+
+
+@dataclass
+class WechatWindowReadiness:
+    hwnd: int | None = None
+    is_window: bool = False
+    visible: bool = False
+    iconic: bool = False
+    foreground: bool = False
+    foreground_hwnd: int | None = None
+    foreground_title: str = ""
+    foreground_class: str = ""
+    restored_from_hidden_or_minimized: bool = False
+    automation_allowed: bool = False
+    requires_manual_open: bool = True
+    reason: str = WECHAT_MANUAL_OPEN_MESSAGE
+
+    @property
+    def success(self) -> bool:
+        return self.automation_allowed
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["success"] = self.success
+        data["message"] = self.reason
+        return data
 
 
 def _ensure_com_initialized():
@@ -80,6 +129,195 @@ def _has_message_list(ctrl: uia.Control) -> bool:
         return False
 
 
+def _rect_to_dict(rect: ctypes.wintypes.RECT) -> dict:
+    return {
+        "left": int(rect.left),
+        "top": int(rect.top),
+        "right": int(rect.right),
+        "bottom": int(rect.bottom),
+    }
+
+
+def _window_area_from_info(info: dict) -> int:
+    rect = info.get("rect") or {}
+    width = max(0, int(rect.get("right", 0)) - int(rect.get("left", 0)))
+    height = max(0, int(rect.get("bottom", 0)) - int(rect.get("top", 0)))
+    return width * height
+
+
+def _get_window_process_id(hwnd: int) -> int:
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        pid = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(
+            ctypes.wintypes.HWND(hwnd),
+            ctypes.byref(pid),
+        )
+        return int(pid.value)
+    except Exception:
+        return 0
+
+
+def _get_process_name(process_id: int) -> str:
+    if not process_id:
+        return ""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        PROCESS_VM_READ = 0x0010
+        kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        psapi.GetModuleBaseNameW.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.HMODULE,
+            ctypes.wintypes.LPWSTR,
+            ctypes.wintypes.DWORD,
+        ]
+        psapi.GetModuleBaseNameW.restype = ctypes.wintypes.DWORD
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            False,
+            process_id,
+        )
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            if psapi.GetModuleBaseNameW(handle, None, buf, len(buf)):
+                return buf.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+    return ""
+
+
+def enumerate_top_level_windows(limit: int | None = None) -> list[dict]:
+    """枚举当前桌面顶层窗口，供本机 Agent 诊断使用。"""
+    user32 = getattr(ctypes, "windll", None)
+    if not user32:
+        return []
+    user32 = ctypes.windll.user32
+    windows: list[dict] = []
+
+    def _callback(hwnd, _lparam):
+        try:
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(ctypes.wintypes.HWND(hwnd), ctypes.byref(rect))
+            pid = _get_window_process_id(int(hwnd))
+            windows.append({
+                "hwnd": int(hwnd),
+                "title": _get_hwnd_text(int(hwnd)),
+                "class_name": _get_hwnd_class(int(hwnd)),
+                "visible": bool(user32.IsWindowVisible(ctypes.wintypes.HWND(hwnd))),
+                "iconic": bool(user32.IsIconic(ctypes.wintypes.HWND(hwnd))),
+                "rect": _rect_to_dict(rect),
+                "process_id": pid,
+                "process_name": _get_process_name(pid),
+            })
+        except Exception as exc:
+            logger.debug("枚举窗口失败 hwnd=%s: %s", hwnd, exc)
+        if limit is not None and len(windows) >= limit:
+            return False
+        return True
+
+    try:
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows(enum_proc(_callback), 0)
+    except Exception as exc:
+        logger.warning("EnumWindows 失败: %s", exc)
+    return windows
+
+
+def _is_wechat_window_info(info: dict) -> bool:
+    """判断 Win32 窗口信息是否疑似个人微信主窗口。"""
+    title = str(info.get("title") or "")
+    class_name = str(info.get("class_name") or "")
+    process_name = str(info.get("process_name") or "")
+    process_id = int(info.get("process_id") or 0)
+    process_name_lower = process_name.lower()
+
+    if process_id and process_id == os.getpid():
+        return False
+    if process_name_lower in WECHAT_EXCLUDED_PROCESS_NAMES:
+        return False
+    if any(keyword.lower() in title.lower() for keyword in WECHAT_EXCLUDED_TITLE_CONTAINS):
+        return False
+    if any(keyword.lower() in title.lower() for keyword in LOCAL_AGENT_EXCLUDED_TITLE_CONTAINS):
+        return False
+    if any(keyword.lower() in process_name_lower for keyword in LOCAL_AGENT_EXCLUDED_PROCESS_CONTAINS):
+        return False
+    if any(keyword.lower() in class_name.lower() for keyword in WECHAT_EXCLUDED_CLASS_CONTAINS):
+        return False
+    if title in WECHAT_NAMES:
+        return True
+    if any(keyword.lower() in title.lower() for keyword in WECHAT_NAME_CONTAINS):
+        return True
+    if any(keyword.lower() in process_name_lower for keyword in WECHAT_PROCESS_CONTAINS):
+        return True
+    if any(keyword.lower() in class_name.lower() for keyword in WECHAT_CLASS_CONTAINS):
+        return True
+    return False
+
+
+def _select_best_wechat_window_info(windows: list[dict]) -> dict | None:
+    """从窗口列表中选择最像微信主窗口的候选，排除隐藏/最小化并优先大窗口。"""
+    candidates = [
+        info for info in windows
+        if _is_wechat_window_info(info)
+        and bool(info.get("visible"))
+        and not bool(info.get("iconic"))
+        and _window_area_from_info(info) > 0
+    ]
+    if not candidates:
+        return None
+
+    def _score(info: dict) -> tuple:
+        title = str(info.get("title") or "")
+        process_name = str(info.get("process_name") or "").lower()
+        class_name = str(info.get("class_name") or "")
+        return (
+            process_name in {"wechat.exe", "weixin.exe"},
+            title in {"微信", "WeChat"},
+            "wechatmainwnd" in class_name.lower() or "qt" in class_name.lower(),
+            _window_area_from_info(info),
+        )
+
+    return sorted(candidates, key=_score, reverse=True)[0]
+
+
+def collect_wechat_window_diagnostics() -> dict:
+    """收集本机 Agent 可见的窗口诊断信息，不改变任何窗口状态。"""
+    all_windows = enumerate_top_level_windows()
+    visible_windows = [info for info in all_windows if info.get("visible")]
+    wechat_candidates = [info for info in all_windows if _is_wechat_window_info(info)]
+    selected = _select_best_wechat_window_info(all_windows)
+    notes = []
+
+    if not selected:
+        notes.extend([
+            "未检测到可用的微信主窗口",
+            "可能原因：微信窗口最小化、托盘隐藏、窗口标题/类名与本机不同",
+            "可能原因：小高AI微信助手 与微信权限级别不一致，或不在同一桌面会话",
+        ])
+        if any(info.get("iconic") for info in wechat_candidates):
+            notes.append("检测到疑似微信窗口处于最小化状态")
+        if not wechat_candidates:
+            notes.append("疑似微信候选为空，请检查 all_windows_sample 中的 WeChat/微信/Qt 相关窗口")
+
+    return {
+        "wechat_detected": selected is not None,
+        "wechat_candidates": wechat_candidates,
+        "all_windows_sample": visible_windows[:50],
+        "notes": notes,
+    }
+
+
 def find_wechat_window() -> uia.Control:
     """
     多策略定位微信主窗口。
@@ -95,6 +333,24 @@ def find_wechat_window() -> uia.Control:
         WechatNotFoundError: 微信窗口未找到
     """
     _ensure_com_initialized()
+
+    # ========== 策略0：Win32 顶层窗口枚举 ==========
+    try:
+        best_info = _select_best_wechat_window_info(enumerate_top_level_windows())
+        if best_info:
+            hwnd = best_info["hwnd"]
+            control = uia.ControlFromHandle(hwnd)
+            if control:
+                logger.info(
+                    "微信窗口已定位（策略0 Win32 枚举）, title='%s', class='%s', process='%s', HWND=%s",
+                    best_info.get("title"),
+                    best_info.get("class_name"),
+                    best_info.get("process_name"),
+                    hwnd,
+                )
+                return control
+    except Exception as exc:
+        logger.debug("Win32 枚举定位微信失败，继续 UIA fallback: %s", exc)
 
     # ========== 策略1：ctypes FindWindowW ==========
     found_hwnds = set()
@@ -362,7 +618,7 @@ def list_suspected_windows() -> list[dict]:
     return results
 
 
-def ensure_wechat_workspace_layout(position: str = "left") -> dict:
+def ensure_wechat_workspace_layout(position: str = "left", allow_restore: bool = True) -> dict:
     """
     P0-2：确保微信窗口处于标准工作区布局。
 
@@ -386,7 +642,34 @@ def ensure_wechat_workspace_layout(position: str = "left") -> dict:
     max_attempts = 2
 
     for attempt in range(1, max_attempts + 1):
+        if not allow_restore:
+            ready = check_wechat_ready_for_automation()
+            if not ready.get("success"):
+                return {
+                    "layout_ok": False,
+                    "hwnd": ready.get("hwnd"),
+                    "actual_rect": None,
+                    "message": WECHAT_MANUAL_OPEN_MESSAGE,
+                    "attempts": attempt,
+                    "ready_check": ready,
+                    "restored_from_hidden_or_minimized": False,
+                    "automation_allowed": False,
+                }
+
         result = activate_wechat_window(position=position)
+
+        activation_readiness = readiness_from_activation_result(result)
+        if activation_readiness.restored_from_hidden_or_minimized and not allow_restore:
+            return {
+                "layout_ok": False,
+                "hwnd": result.get("hwnd"),
+                "actual_rect": result.get("actual_rect"),
+                "message": WECHAT_MANUAL_OPEN_MESSAGE,
+                "attempts": attempt,
+                "ready_check": activation_readiness.to_dict(),
+                "restored_from_hidden_or_minimized": True,
+                "automation_allowed": False,
+            }
 
         if not result.get("success"):
             return {
@@ -623,6 +906,126 @@ def check_wechat_ready_for_automation(hwnd: int | None = None) -> dict:
     return result
 
 
+def check_wechat_ready_for_business_automation(hwnd: int | None = None) -> WechatWindowReadiness:
+    """Business preflight: read state only, never restore or activate."""
+    user32 = ctypes.windll.user32
+    readiness = WechatWindowReadiness(hwnd=hwnd, reason=WECHAT_MANUAL_OPEN_MESSAGE)
+
+    if not hwnd:
+        try:
+            window = find_wechat_window()
+            hwnd = window.NativeWindowHandle
+            readiness.hwnd = hwnd
+        except Exception as exc:
+            readiness.reason = f"{WECHAT_MANUAL_OPEN_MESSAGE}（未找到微信窗口: {exc}）"
+            return readiness
+
+    try:
+        readiness.is_window = bool(user32.IsWindow(hwnd))
+        if not readiness.is_window:
+            readiness.reason = f"{WECHAT_MANUAL_OPEN_MESSAGE}（微信窗口句柄无效）"
+            return readiness
+
+        readiness.visible = bool(user32.IsWindowVisible(hwnd))
+        readiness.iconic = bool(user32.IsIconic(hwnd))
+        fg = user32.GetForegroundWindow()
+        readiness.foreground_hwnd = fg
+        readiness.foreground = bool(fg == hwnd)
+        readiness.foreground_title = _get_hwnd_text(fg)
+        readiness.foreground_class = _get_hwnd_class(fg)
+    except Exception as exc:
+        readiness.reason = f"{WECHAT_MANUAL_OPEN_MESSAGE}（状态检查失败: {exc}）"
+        return readiness
+
+    if not readiness.visible or readiness.iconic:
+        return readiness
+
+    readiness.automation_allowed = True
+    readiness.requires_manual_open = False
+    readiness.reason = "微信窗口已可见且未最小化"
+    return readiness
+
+
+def readiness_from_activation_result(result: dict) -> WechatWindowReadiness:
+    """Convert a debug activation result into business readiness semantics."""
+    restored = bool(result.get("was_minimized") or result.get("was_visible") is False)
+    return WechatWindowReadiness(
+        hwnd=result.get("hwnd"),
+        is_window=bool(result.get("success")),
+        visible=bool(result.get("success")),
+        iconic=False,
+        restored_from_hidden_or_minimized=restored,
+        automation_allowed=bool(result.get("success")) and not restored,
+        requires_manual_open=restored or not result.get("success"),
+        reason=WECHAT_MANUAL_OPEN_MESSAGE if restored else result.get("message", "微信窗口已可见且未最小化"),
+    )
+
+
+def check_wechat_ready_for_automation(hwnd: int | None = None) -> dict:
+    """Backward-compatible dict wrapper for P0-3C callers."""
+    return check_wechat_ready_for_business_automation(hwnd).to_dict()
+
+
+def _hwnd_debug_info(hwnd: int | None) -> dict:
+    hwnd = int(hwnd or 0)
+    process_id = _get_window_process_id(hwnd) if hwnd else 0
+    try:
+        title = _get_hwnd_text(hwnd) if hwnd else ""
+    except Exception:
+        title = ""
+    try:
+        class_name = _get_hwnd_class(hwnd) if hwnd else ""
+    except Exception:
+        class_name = ""
+    try:
+        process_name = _get_process_name(process_id)
+    except Exception:
+        process_name = ""
+    return {
+        "hwnd": hwnd,
+        "title": title,
+        "class": class_name,
+        "pid": process_id,
+        "process_name": process_name,
+    }
+
+
+def _send_alt_wakeup(user32) -> tuple[bool, str | None]:
+    """使用 SendInput 发送 Alt down/up，帮助突破 Windows 前台锁。"""
+    try:
+        INPUT_KEYBOARD = 1
+        VK_MENU = 0x12
+        KEYEVENTF_KEYUP = 0x0002
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", ctypes.wintypes.WORD),
+                ("wScan", ctypes.wintypes.WORD),
+                ("dwFlags", ctypes.wintypes.DWORD),
+                ("time", ctypes.wintypes.DWORD),
+                ("dwExtraInfo", ctypes.wintypes.ULONG_PTR),
+            ]
+
+        class INPUT_UNION(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.wintypes.DWORD),
+                ("union", INPUT_UNION),
+            ]
+
+        inputs = (INPUT * 2)()
+        inputs[0].type = INPUT_KEYBOARD
+        inputs[0].union.ki = KEYBDINPUT(VK_MENU, 0, 0, 0, 0)
+        inputs[1].type = INPUT_KEYBOARD
+        inputs[1].union.ki = KEYBDINPUT(VK_MENU, 0, KEYEVENTF_KEYUP, 0, 0)
+        sent = user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+        return int(sent) == 2, None if int(sent) == 2 else f"SendInput returned {sent}"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def ensure_wechat_foreground(
     hwnd: int,
     reason: str,
@@ -646,21 +1049,74 @@ def ensure_wechat_foreground(
         "attempts": 0,
         "message": "",
     }
+    stage = "before_paste" if "paste" in reason else reason
+    wechat_info = _hwnd_debug_info(hwnd)
+    initial_foreground_hwnd = user32.GetForegroundWindow()
+    foreground_before = _hwnd_debug_info(initial_foreground_hwnd)
+    foreground_debug = {
+        "stage": stage,
+        "wechat_hwnd": hwnd,
+        "wechat_title": wechat_info["title"],
+        "wechat_class": wechat_info["class"],
+        "wechat_pid": wechat_info["pid"],
+        "wechat_process_name": wechat_info["process_name"],
+        "foreground_before_hwnd": foreground_before["hwnd"],
+        "foreground_before_title": foreground_before["title"],
+        "foreground_before_class": foreground_before["class"],
+        "foreground_before_process_name": foreground_before["process_name"],
+        "attempts": [],
+        "foreground_after_hwnd": foreground_before["hwnd"],
+        "foreground_after_title": foreground_before["title"],
+        "foreground_after_class": foreground_before["class"],
+        "foreground_after_process_name": foreground_before["process_name"],
+        "is_wechat_foreground": foreground_before["hwnd"] == hwnd,
+        "reason": reason,
+    }
+    result["foreground_debug"] = foreground_debug
+
+    def _update_after(method: str, success_hint: bool = False, error: str | None = None) -> bool:
+        fg_after = _hwnd_debug_info(user32.GetForegroundWindow())
+        is_wechat_foreground = fg_after["hwnd"] == hwnd
+        attempt = {
+            "method": method,
+            "success": is_wechat_foreground,
+            "foreground_after_hwnd": fg_after["hwnd"],
+            "foreground_after_title": fg_after["title"],
+            "foreground_after_class": fg_after["class"],
+            "foreground_after_process_name": fg_after["process_name"],
+            "error": error,
+        }
+        if success_hint and not is_wechat_foreground and not error:
+            attempt["error"] = "API returned success but foreground did not change"
+        foreground_debug["attempts"].append(attempt)
+        foreground_debug.update({
+            "foreground_after_hwnd": fg_after["hwnd"],
+            "foreground_after_title": fg_after["title"],
+            "foreground_after_class": fg_after["class"],
+            "foreground_after_process_name": fg_after["process_name"],
+            "is_wechat_foreground": is_wechat_foreground,
+        })
+        return is_wechat_foreground
 
     if not hwnd or not user32.IsWindow(hwnd):
         result["message"] = "微信窗口句柄无效"
+        foreground_debug["reason"] = "invalid_hwnd"
         return result
 
     if not user32.IsWindowVisible(hwnd):
         result["message"] = "微信窗口不可见"
+        foreground_debug["reason"] = "wechat_not_visible"
         return result
 
     if user32.IsIconic(hwnd):
         result["message"] = "微信窗口已最小化"
+        foreground_debug["reason"] = "wechat_minimized"
         return result
 
-    fg = user32.GetForegroundWindow()
+    fg = initial_foreground_hwnd
     if fg == hwnd:
+        foreground_debug["is_wechat_foreground"] = True
+        foreground_debug["reason"] = "already_foreground"
         result.update({
             "success": True,
             "foreground_hwnd": fg,
@@ -674,26 +1130,119 @@ def ensure_wechat_foreground(
     for attempt in range(1, max_attempts + 1):
         result["attempts"] = attempt
         _push_overlay_back()
-        user32.SetForegroundWindow(hwnd)
-        time.sleep(0.2 + (attempt - 1) * 0.15)
 
-        fg = user32.GetForegroundWindow()
-        if fg == hwnd:
-            result.update({
-                "success": True,
-                "foreground_hwnd": fg,
-                "foreground_title": _get_hwnd_text(fg),
-                "foreground_class": _get_hwnd_class(fg),
-                "recovered": True,
-                "message": f"微信前台焦点已恢复（尝试 {attempt} 次）",
-            })
-            return result
+        try:
+            set_ok = bool(user32.SetForegroundWindow(hwnd))
+            time.sleep(0.12 + (attempt - 1) * 0.08)
+            if _update_after("set_foreground", success_hint=set_ok):
+                result.update({
+                    "success": True,
+                    "foreground_hwnd": hwnd,
+                    "foreground_title": _get_hwnd_text(hwnd),
+                    "foreground_class": _get_hwnd_class(hwnd),
+                    "recovered": True,
+                    "message": f"微信前台焦点已恢复（尝试 {attempt} 次）",
+                })
+                return result
+        except Exception as exc:
+            _update_after("set_foreground", error=str(exc))
+
+        try:
+            top_ok = bool(user32.BringWindowToTop(hwnd))
+            time.sleep(0.12)
+            if _update_after("bring_window_to_top", success_hint=top_ok):
+                result.update({
+                    "success": True,
+                    "foreground_hwnd": hwnd,
+                    "foreground_title": _get_hwnd_text(hwnd),
+                    "foreground_class": _get_hwnd_class(hwnd),
+                    "recovered": True,
+                    "message": f"微信前台焦点已恢复（BringWindowToTop，尝试 {attempt} 次）",
+                })
+                return result
+        except Exception as exc:
+            _update_after("bring_window_to_top", error=str(exc))
+
+        try:
+            kernel32 = ctypes.windll.kernel32
+            current_thread = kernel32.GetCurrentThreadId()
+            foreground_hwnd = user32.GetForegroundWindow()
+            foreground_thread = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+            wechat_thread = user32.GetWindowThreadProcessId(hwnd, None)
+            attached_foreground = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
+            attached_wechat = bool(user32.AttachThreadInput(current_thread, wechat_thread, True))
+            try:
+                user32.SetForegroundWindow(hwnd)
+                time.sleep(0.12)
+            finally:
+                if attached_wechat:
+                    user32.AttachThreadInput(current_thread, wechat_thread, False)
+                if attached_foreground:
+                    user32.AttachThreadInput(current_thread, foreground_thread, False)
+            if _update_after("attach_thread_input", success_hint=attached_foreground or attached_wechat):
+                result.update({
+                    "success": True,
+                    "foreground_hwnd": hwnd,
+                    "foreground_title": _get_hwnd_text(hwnd),
+                    "foreground_class": _get_hwnd_class(hwnd),
+                    "recovered": True,
+                    "message": f"微信前台焦点已恢复（AttachThreadInput，尝试 {attempt} 次）",
+                })
+                return result
+        except Exception as exc:
+            _update_after("attach_thread_input", error=str(exc))
+
+        alt_ok, alt_error = _send_alt_wakeup(user32)
+        try:
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.12)
+            if _update_after("alt_wakeup_set_foreground", success_hint=alt_ok, error=alt_error):
+                result.update({
+                    "success": True,
+                    "foreground_hwnd": hwnd,
+                    "foreground_title": _get_hwnd_text(hwnd),
+                    "foreground_class": _get_hwnd_class(hwnd),
+                    "recovered": True,
+                    "message": f"微信前台焦点已恢复（Alt wakeup，尝试 {attempt} 次）",
+                })
+                return result
+        except Exception as exc:
+            _update_after("alt_wakeup_set_foreground", error=f"{alt_error or ''} {exc}".strip())
+
+        try:
+            HWND_TOP = 0
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            pos_ok = bool(user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE))
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.12)
+            if _update_after("set_window_pos_top", success_hint=pos_ok):
+                result.update({
+                    "success": True,
+                    "foreground_hwnd": hwnd,
+                    "foreground_title": _get_hwnd_text(hwnd),
+                    "foreground_class": _get_hwnd_class(hwnd),
+                    "recovered": True,
+                    "message": f"微信前台焦点已恢复（SetWindowPos，尝试 {attempt} 次）",
+                })
+                return result
+        except Exception as exc:
+            _update_after("set_window_pos_top", error=str(exc))
 
     fg = user32.GetForegroundWindow()
+    fg_info = _hwnd_debug_info(fg)
+    foreground_debug.update({
+        "foreground_after_hwnd": fg_info["hwnd"],
+        "foreground_after_title": fg_info["title"],
+        "foreground_after_class": fg_info["class"],
+        "foreground_after_process_name": fg_info["process_name"],
+        "is_wechat_foreground": fg == hwnd,
+        "reason": reason,
+    })
     result.update({
         "foreground_hwnd": fg,
-        "foreground_title": _get_hwnd_text(fg),
-        "foreground_class": _get_hwnd_class(fg),
+        "foreground_title": fg_info["title"],
+        "foreground_class": fg_info["class"],
         "message": "微信前台焦点恢复失败",
     })
     logger.warning(

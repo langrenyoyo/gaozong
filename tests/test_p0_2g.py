@@ -247,7 +247,7 @@ class TestProfileCardSafeClose:
 
         win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
 
-        result = _close_profile_card_safe(win_rect)
+        result = _close_profile_card_safe(win_rect, allow_esc_fallback=True)
 
         # 应该回退到 Esc 并调用恢复
         assert result["esc_used"] is True

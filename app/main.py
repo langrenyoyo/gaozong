@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
-from app.routers import staff, leads, replies, checks, reports, feedback, integrations, wechat_auto_detect, lead_notifications, automation_control
+from app.routers import staff, leads, replies, checks, reports, feedback, integrations, wechat_auto_detect, lead_notifications, automation_control, wechat_tasks
 from app.scheduler.check_scheduler import scheduler
 from app.scheduler.wechat_auto_detect_scheduler import wechat_auto_detect_scheduler
 
@@ -53,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(wechat_auto_detect.router)
     app.include_router(lead_notifications.router)
     app.include_router(automation_control.router)
+    app.include_router(wechat_tasks.router)
 
     @app.on_event("startup")
     def on_startup():

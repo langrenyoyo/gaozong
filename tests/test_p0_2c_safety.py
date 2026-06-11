@@ -51,6 +51,12 @@ def _all_contact_searcher_patches(**overrides):
               return_value=MagicMock()),
         patch("app.wechat_ui.contact_searcher.verify_search_area_changed",
               return_value=overrides.get("verify", {"verified": True, "diff_ratio": 0.15, "message": "已变化"})),
+        patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+              return_value=overrides.get("click_point", {
+                  "success": True, "x": 120, "y": 88, "strategy": "manual_calibration", "confidence": 0.7,
+              })),
+        patch("app.wechat_ui.contact_searcher.save_search_box_overlay",
+              return_value=overrides.get("overlay", "overlay.png")),
         patch("app.wechat_ui.contact_searcher.uia.SendKeys"),
         patch("app.wechat_ui.contact_searcher._save_clipboard", return_value=""),
         patch("app.wechat_ui.contact_searcher._set_clipboard"),
@@ -59,6 +65,24 @@ def _all_contact_searcher_patches(**overrides):
               side_effect=overrides.get("foreground", lambda hwnd: True)),
         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground",
               return_value=overrides.get("foreground_guard", {"success": True, "message": "OK"})),
+        patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+              return_value=overrides.get("search_focus", {
+                  "clicked": True,
+                  "focused": True,
+                  "verified": True,
+                  "success": True,
+                  "text_pasted_into_search_box": False,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+                  "manual_review_required": False,
+              })),
+        patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+              return_value=overrides.get("search_text", {
+                  "search_text_verified": True,
+                  "text_pasted_into_search_box": True,
+                  "text_leaked_to_chat_input": False,
+                  "manual": False,
+              })),
         patch("app.wechat_ui.contact_searcher.ctypes"),
         patch("app.wechat_ui.contact_searcher.time.sleep"),
         patch("app.wechat_ui.contact_searcher._trigger_emergency_stop"),
@@ -81,17 +105,19 @@ def _run_open_chat(nickname="测试", **overrides):
         return open_chat_by_nickname(nickname)
 
 
-# ========== 测试 1：open_chat 必须要求 chat_verified ==========
+# ========== 测试 1：open_chat 只表示搜索动作完成，不表示联系人已验证 ==========
 
 class TestChatVerifiedRequired:
 
     def test_no_success_without_chat_verified(self):
-        """success=True 时 chat_verified 必须为 True（不允许假成功）"""
+        """success=True 时也不得把搜索动作伪装成联系人 verified"""
         result = _run_open_chat()
 
         if result["success"]:
-            assert result["chat_verified"] is True, \
-                "success=True 但 chat_verified=False — 假成功！"
+            assert result["search_action_completed"] is True
+            assert result["chat_verified"] is False
+            assert result["confidence"] <= 0.3
+            assert "final verification requires OCR" in result["warning"]
 
     def test_search_area_screenshot_always_saved(self):
         """截图证据应始终保存（非阻塞）——P0-2C 降级策略"""
@@ -204,13 +230,13 @@ class TestNoFalseSuccess:
         assert hasattr(resp, "debug_screenshots")
 
     def test_success_implies_chat_verified_and_input_box(self):
-        """success=True 必须伴随 chat_verified=True 和 input_box_found=True"""
+        """success=True 只能表示搜索动作完成，最终验证必须交给 OCR"""
         result = _run_open_chat()
 
         if result["success"]:
-            assert result["chat_verified"] is True, \
-                "success=True 但 chat_verified=False — 假成功"
-            assert result["input_box_found"] is True, \
-                "success=True 但 input_box_found=False"
-            assert result["confidence"] >= 0.5, \
-                f"success=True 但 confidence={result['confidence']} < 0.5"
+            assert result["search_action_completed"] is True
+            assert result["search_keyword_pasted"] is True
+            assert result["maybe_chat_opened"] is True
+            assert result["chat_verified"] is False
+            assert result["input_box_found"] is False
+            assert result["confidence"] <= 0.3

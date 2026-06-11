@@ -17,6 +17,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.wechat_ui.clipboard_utils import (  # noqa: E402
+    get_clipboard_text as _get_clipboard_text,
+    get_clipboard_text_win32 as _get_clipboard_text_win32,
+    set_clipboard_text as _set_clipboard_text,
+    set_clipboard_text_win32 as _set_clipboard_text_win32,
+)
+
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "debug_screenshots" / "render_state"
 
 logger = logging.getLogger("debug_wechat_render_state")
@@ -384,73 +391,22 @@ def prompt_manual_observation(step: str) -> str | None:
 
 def get_clipboard_text() -> str | None:
     """读取剪贴板文本，优先使用 pyperclip，失败时使用 Win32。"""
-    try:
-        import pyperclip
-
-        return pyperclip.paste()
-    except Exception:
-        return get_clipboard_text_win32()
+    return _get_clipboard_text()
 
 
 def set_clipboard_text(text: str) -> None:
     """设置剪贴板文本，优先使用 pyperclip，失败时使用 Win32。"""
-    try:
-        import pyperclip
-
-        pyperclip.copy(text)
-        return
-    except Exception:
-        set_clipboard_text_win32(text)
+    _set_clipboard_text(text)
 
 
 def get_clipboard_text_win32() -> str | None:
     """使用 Win32 API 读取 Unicode 文本剪贴板。"""
-    CF_UNICODETEXT = 13
-    kernel32 = ctypes.windll.kernel32
-    if not user32.OpenClipboard(None):
-        return None
-    try:
-        handle = user32.GetClipboardData(CF_UNICODETEXT)
-        if not handle:
-            return None
-        ptr = kernel32.GlobalLock(handle)
-        if not ptr:
-            return None
-        try:
-            return ctypes.wstring_at(ptr)
-        finally:
-            kernel32.GlobalUnlock(handle)
-    finally:
-        user32.CloseClipboard()
+    return _get_clipboard_text_win32()
 
 
 def set_clipboard_text_win32(text: str) -> None:
     """使用 Win32 API 写入 Unicode 文本剪贴板。"""
-    CF_UNICODETEXT = 13
-    GMEM_MOVEABLE = 0x0002
-    kernel32 = ctypes.windll.kernel32
-    data = (text or "") + "\0"
-    byte_count = len(data.encode("utf-16-le"))
-
-    if not user32.OpenClipboard(None):
-        raise RuntimeError("OpenClipboard 失败")
-    try:
-        if not user32.EmptyClipboard():
-            raise RuntimeError("EmptyClipboard 失败")
-        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, byte_count)
-        if not handle:
-            raise RuntimeError("GlobalAlloc 失败")
-        ptr = kernel32.GlobalLock(handle)
-        if not ptr:
-            raise RuntimeError("GlobalLock 失败")
-        try:
-            ctypes.memmove(ptr, data.encode("utf-16-le"), byte_count)
-        finally:
-            kernel32.GlobalUnlock(handle)
-        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
-            raise RuntimeError("SetClipboardData 失败")
-    finally:
-        user32.CloseClipboard()
+    _set_clipboard_text_win32(text)
 
 
 def first_render_suspect_step(records: list[dict]) -> str | None:

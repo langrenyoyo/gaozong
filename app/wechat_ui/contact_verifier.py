@@ -37,8 +37,15 @@ import time
 
 import uiautomation as uia
 
-from app.wechat_ui.window_locator import find_wechat_window, find_current_chat_title, ensure_wechat_visible
+from app.wechat_ui.window_locator import (
+    find_wechat_window,
+    find_current_chat_title,
+    ensure_wechat_visible,
+    check_wechat_ready_for_automation,
+    WECHAT_MANUAL_OPEN_MESSAGE,
+)
 from app.wechat_ui.screenshot_debug import save_debug_screenshot
+from app.wechat_ui.contact_ocr_verifier import verify_contact_by_top_title_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,10 @@ def verify_current_chat_contact(
         "debug_screenshots": [],
         "warning": None,
         "message": "",
+        "confidence": None,
+        "ocr_text": None,
+        "partial_match": False,
+        "evidence": {},
     }
 
     if not expected_nickname or not expected_nickname.strip():
@@ -86,13 +97,30 @@ def verify_current_chat_contact(
 
     expected_nickname = expected_nickname.strip()
 
+    hwnd = None
+    try:
+        window = find_wechat_window()
+        hwnd = getattr(window, "NativeWindowHandle", None)
+        if isinstance(hwnd, int):
+            ready = check_wechat_ready_for_automation(hwnd)
+            if not ready.get("success"):
+                result["failure_stage"] = "wechat_not_ready"
+                result["message"] = WECHAT_MANUAL_OPEN_MESSAGE
+                result["ready_check"] = ready
+                return result
+        else:
+            ready = {"success": True, "message": "non-win32 test window"}
+    except Exception as exc:
+        result["failure_stage"] = "wechat_not_ready"
+        result["message"] = f"{WECHAT_MANUAL_OPEN_MESSAGE}（{exc}）"
+        return result
+
     # =====================================================
     # 策略 A：读取顶部标题（成本最低，优先执行）
     # =====================================================
     logger.info("联系人确认 策略A: 读取顶部标题, expected='%s'", expected_nickname)
 
     try:
-        window = find_wechat_window()
         chat_title = find_current_chat_title(window)
 
         if chat_title:
@@ -116,6 +144,53 @@ def verify_current_chat_contact(
             logger.info("策略A: 未读取到标题，继续策略B")
     except Exception as e:
         logger.warning("策略A异常: %s", e)
+
+    # =====================================================
+    # 策略 B：顶部标题 OCR。只截图识别，不点击资料卡，不发送 Esc。
+    # =====================================================
+    if isinstance(hwnd, int):
+        try:
+            ocr_result = verify_contact_by_top_title_ocr(
+                expected_nickname=expected_nickname,
+                hwnd=hwnd,
+                position="right",
+                engine="easyocr",
+            )
+            result["strategy"] = ocr_result.get("strategy") or "ocr_top_title"
+            result["confidence"] = ocr_result.get("confidence")
+            result["ocr_text"] = ocr_result.get("ocr_text")
+            result["partial_match"] = bool(ocr_result.get("partial_match"))
+            result["matched_text"] = ocr_result.get("matched_text") or ocr_result.get("ocr_text")
+            result["manual_review_required"] = bool(ocr_result.get("manual_review_required", True))
+            result["failure_stage"] = ocr_result.get("failure_stage")
+            result["evidence"] = {
+                "screenshot_path": ocr_result.get("screenshot_path"),
+                "cropped_path": ocr_result.get("cropped_path"),
+                "preprocessed_path": ocr_result.get("preprocessed_path"),
+            }
+            for key in ("screenshot_path", "cropped_path", "preprocessed_path"):
+                path = ocr_result.get(key)
+                if path:
+                    result["debug_screenshots"].append(path)
+
+            if ocr_result.get("verified"):
+                result["verified"] = True
+                result["manual_review_required"] = False
+                result["failure_stage"] = None
+                result["message"] = f"OCR 顶部标题确认成功: {ocr_result.get('ocr_text')}"
+                return result
+
+            result["verified"] = False
+            result["warning"] = "OCR 顶部标题未能确认联系人，已阻止后续自动发送"
+            result["message"] = "OCR 顶部标题未能确认联系人，需要人工复核"
+            return result
+        except Exception as e:
+            logger.warning("策略B OCR 顶部标题异常: %s", e)
+            result["strategy"] = "ocr_top_title"
+            result["failure_stage"] = "ocr_top_title_exception"
+            result["manual_review_required"] = True
+            result["message"] = f"OCR 顶部标题异常，需要人工复核: {e}"
+            return result
 
     # =====================================================
     # 策略 B：点击顶部标题 → 右侧资料卡
@@ -158,7 +233,12 @@ def verify_current_chat_contact(
 
             # P0-2G：点击聊天区空白区域关闭资料卡（优先于 Esc）
             # 原因：Esc 可能导致 Qt5 微信窗口被隐藏
-            _close_profile_card_safe(win_rect)
+            close_result = _close_profile_card_safe(win_rect)
+            if close_result.get("automation_allowed") is False:
+                result["failure_stage"] = "profile_card_close_unverified"
+                result["warning"] = close_result.get("message")
+                result["message"] = close_result.get("message")
+                return result
 
             if card_text and _nickname_matches(expected_nickname, card_text):
                 result["verified"] = True
@@ -213,7 +293,12 @@ def verify_current_chat_contact(
             card_text = _try_read_profile_card_text(expected_nickname)
 
             # P0-2G：安全关闭资料卡
-            _close_profile_card_safe(win_rect)
+            close_result = _close_profile_card_safe(win_rect)
+            if close_result.get("automation_allowed") is False:
+                result["failure_stage"] = "profile_card_close_unverified"
+                result["warning"] = close_result.get("message")
+                result["message"] = close_result.get("message")
+                return result
 
             if card_text and _nickname_matches(expected_nickname, card_text):
                 result["verified"] = True
@@ -307,7 +392,7 @@ def _try_read_profile_card_text(expected_nickname: str) -> str | None:
         return None
 
 
-def _close_profile_card_safe(win_rect: dict) -> dict:
+def _close_profile_card_safe(win_rect: dict, allow_esc_fallback: bool = False) -> dict:
     """
     P0-2G：安全关闭微信资料卡。
 
@@ -352,6 +437,16 @@ def _close_profile_card_safe(win_rect: dict) -> dict:
 
     except Exception as e:
         logger.debug("点击空白区域失败: %s", e)
+
+    if not allow_esc_fallback:
+        logger.warning("资料卡关闭未确认，业务路径不使用 Esc 回退")
+        return {
+            "method": "click_blank_unverified",
+            "esc_used": False,
+            "visibility_restored": False,
+            "automation_allowed": False,
+            "message": "已点击空白区域尝试关闭资料卡；业务路径禁止使用 Esc 回退，需停止后续自动化",
+        }
 
     # 策略 2：回退到 Esc + 立即恢复可见性
     logger.warning("点击空白区域未关闭资料卡，回退到 Esc + 恢复可见性")

@@ -44,7 +44,7 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P8 Demo Hardening / P0 Risk Fixes
+当前阶段：P0-4 Local Agent / exe 架构验证
 
 已完成：
 - P0 项目初始化、数据库设计
@@ -56,22 +56,18 @@ Output Rules
 - P5 React UI Integration（线索列表、详情、同步、分配、检测记录、微信状态检测、局域网访问）
 - P6 微信回复检测闭环（窗口识别、消息读取、关键词命中、自动检测调度器）
 - P7 销售派单 Demo（联系人搜索、自动通知、自触发误判修复、紧急停止机制）
-- P8 Demo 稳定化主要功能（AI小高助手配置、测试线索生成器、微信固定左侧、Alt+Q 紧急停止、桌面浮层、自动同步派单）
+- P8 Demo 稳定化主要功能（小高AI微信助手配置、测试线索生成器、微信固定左侧、Alt+Q 紧急停止、桌面浮层、自动同步派单）
 - P0-1 局域网访问修复
-- P0-2E 联系人二次确认（策略 A/B/C、send_to_staff guard）
-- P0-2F 白屏根因隔离（结论：17/40 白屏是 Esc 导致窗口隐藏 + 截桌面背景误判；但灰屏现象仍存在）
-- P0-2G 微信窗口隐藏与白屏误判修复 — ⚠️ **部分修复**
-  - ✅ 已解决：Esc 导致窗口隐藏、截桌面背景误判白屏、ensure_wechat_visible 恢复、搜索流程 Esc 清理
-  - ❌ 未解决：窗口 visible=True 但客户区灰色/空白、UI 内容不渲染
+- P0-2 微信自动化稳定化（前台焦点守卫、白屏/灰屏诊断、Esc 隐藏修复、联系人确认策略、剪贴板修复）
+- P0-3 本机微信自动化稳定性与安全门禁（前台焦点守卫、hidden/minimized 禁止恢复、剪贴板修复、OCR 识别验证、Aw3 debug 单发）
 
 进行中：
-- P0-2 微信自动化稳定化
+- P0-4 本地 Agent / exe 架构验证
 
 下一步聚焦：
-- **P0-2H 内容渲染验证**：定位窗口可见但内容未渲染的原因；每个关键步骤后截图验证；检测灰屏比例；确认聊天列表/消息列表存在后才继续自动化
-- 联系人确认/发送复测（P0-2H 渲染验证通过后才能继续）
-- 多目标检测队列
-- 跨机器 / VM 运行验证
+- **P0-4A-3**：让 /agent/wechat/test 在虚拟机 exe 中自动打开 Aw3 → OCR verified → paste_only → sent=false
+- P0-4B：小高AI微信助手.exe 安装包 / 分发优化
+- P0-4C：Windows 10 测试电脑复测
 
 业务架构：
 
@@ -89,6 +85,26 @@ auto_wechat（副系统，端口 9000）
 主机微信 B → 反馈给数据源 A
 ```
 
+本地 Agent 架构（P0-4 新增）：
+
+```text
+开发主机（192.168.110.113）
+  提供 React 页面（端口 5173）
+  提供源码开发、打包
+
+测试电脑 / 虚拟机（无源码）
+  运行 小高AI微信助手.exe（监听 127.0.0.1:19000）
+  浏览器访问 React → 点击按钮 → 调用本机 127.0.0.1:19000
+  操作本机微信
+```
+
+关键约束：
+- 微信自动化必须运行在微信所在的那台 Windows 电脑上
+- 谁打开 React 页面，谁点击按钮，127.0.0.1 就是谁的电脑
+- 虚拟机/测试电脑默认无源码，不得要求运行 python 命令作为验收
+- React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
+- 业务自动派单发送仍禁止
+
 前端架构：
 
 ```text
@@ -97,6 +113,10 @@ React UI（端口 5173）
 auto_wechat（端口 9000）
     ↓ HTTP API
 douyinAPI 测试环境（端口 8081）
+
+React 本机 Agent 面板
+    ↓ 直接调用
+浏览器所在电脑 127.0.0.1:19000（小高AI微信助手.exe）
 ```
 
 auto_wechat 的职责：
@@ -298,8 +318,14 @@ React UI（客户运营后台，端口 5173）
 ## P0 风险修复
 
 - P0-1：局域网访问修复（已完成 ✅）
-- P0-2：微信自动化稳定化（进行中）
-- P0-3：多目标检测队列（待做）
+- P0-2：微信自动化稳定化（已完成 ✅：前台焦点守卫、白屏/灰屏诊断、Esc 隐藏修复、联系人确认策略）
+- P0-3：本机微信自动化稳定性与安全门禁（已完成 ✅：OCR 验证、Aw3 debug 单发）
+- P0-4：本地 Agent / exe 架构验证（进行中）
+  - P0-4A：初版 local agent + exe（已完成 ✅）
+  - P0-4A-1：微信窗口发现诊断（已完成 ✅）
+  - P0-4A-2：前台焦点交接诊断（已完成 ✅）
+  - P0-4A-3：/agent/wechat/test 自动打开 Aw3 → OCR → paste_only（下一步）
+- P0-5：多目标检测队列（待做）
 
 ------
 
@@ -415,6 +441,79 @@ P8 真实验证结果：
 
 ------
 
+# P0-3 微信自动化稳定性与安全门禁（已完成 ✅）
+
+P0-3 主要解决本机微信自动化稳定性和安全门禁。
+
+P0-3 已完成：
+
+1. **P0-3A Render Ready 诊断**：debug_wechat_render_state.py，发现前台焦点丢失、hidden 恢复导致灰屏等问题
+2. **P0-3B 前台焦点守卫**：ensure_wechat_foreground，Ctrl+A/Backspace/Ctrl+V/Down/Enter 前检查微信是否前台，失败不继续
+3. **P0-3C hidden/minimized 禁止恢复**：业务路径禁止从 hidden/minimized 微信自动恢复后继续执行，必须提示人工打开
+4. **P0-3D 剪贴板修复**：统一剪贴板工具，pyperclip 优先 + Win32 fallback 修复 64 位句柄问题
+5. **P0-3E 联系人确认真实验证**：open_chat_by_nickname 能打开聊天，但纯 UIA 无法可靠读取 Qt5 微信标题/资料卡
+6. **P0-3F 截图链路修复**：修复 screenshot_debug.py Win32 64 位 GDI 句柄问题，100 次截图压力测试通过
+7. **P0-3G OCR 最小实测**：EasyOCR 安装，Aw3 顶部标题 OCR 5/5 成功，啊东、只能识别主体
+8. **P0-3H OCR 接入联系人验证**：ocr_matcher.py + contact_ocr_verifier.py，Aw3 5/5 verified，啊东、5/5 partial_match
+9. **P0-3I Aw3 单条发送复测**：debug_aw3_single_send.py，paste-only 成功，single_send 成功，但业务自动派单发送仍未放开
+
+P0-3 结论：
+- Aw3 是当前唯一允许自动验证和 debug 测试的联系人（OCR 5/5 verified）
+- 啊东、只能 partial_match，不允许自动发送
+- P0-3I 证明 debug 单发链路可用，不代表业务自动发送已放开
+
+------
+
+# P0-4 本地 Agent / exe 架构验证（进行中）
+
+P0-4 目标：验证测试电脑无源码运行小高AI微信助手.exe，由 React 页面调用测试电脑本机 127.0.0.1:19000 操作本机微信。
+
+本地 Agent 命名：**小高AI微信助手**（exe：小高AI微信助手.exe）
+
+P0-4 已完成：
+
+1. **P0-4A 初版 local agent**：app/local_agent_main.py，监听 127.0.0.1:19000，GET /health + POST /agent/wechat/test
+2. **P0-4A 修正版 exe**：app/local_agent_exe_entry.py + PyInstaller onedir 打包，开发机 /health smoke test 通过
+3. **P0-4A-1 微信窗口发现诊断**：GET /agent/wechat/windows，find_wechat_window 增强 Win32 枚举，排除误识别
+4. **P0-4A-2 前台焦点交接诊断**：POST /agent/wechat/foreground-debug，SetForegroundWindow + BringWindowToTop + AttachThreadInput + Alt wakeup
+
+Windows 11 虚拟机真实状态：
+- ✅ 能访问开发主机 React（http://192.168.110.113:5173）
+- ✅ 能运行小高AI微信助手.exe
+- ✅ React 检测虚拟机本机 Agent online=true（hostname: DESKTOP-TQHE53J）
+- ✅ 诊断微信窗口成功
+- ✅ 前台焦点诊断成功
+- ❌ 点击「启动微信测试」后未自动切换到 Aw3（提示：联系人验证需要人工复核，禁止发送）
+- ❌ 虚拟机 Aw3 输入框未出现测试消息
+
+当前真实阻塞：
+- /agent/wechat/test 只验证当前聊天窗口，没有自动执行 open_chat_by_nickname("Aw3")
+
+P0-4 下一步：
+- **P0-4A-3**：/agent/wechat/test 自动执行 readiness → foreground → open_chat_by_nickname("Aw3") → verify OCR → paste_only → sent=false
+- P0-4B：安装包/分发优化
+- P0-4C：Windows 10 测试电脑复测
+
+------
+
+# Current Safety Gates（当前活跃安全约束）
+
+以下约束在 P0-4A-3 通过前必须严格执行：
+
+1. **业务自动派单发送仍禁止**（sent 必须为 false）
+2. P0-4A 只验证本地 Agent 架构和 Aw3 paste_only
+3. Aw3 是唯一允许自动验证和 debug 测试的联系人
+4. 啊东、只能 partial_match，不允许自动发送
+5. partial_match 不允许 verified=true
+6. manual_review_required=true 不允许粘贴或发送
+7. hidden/minimized 微信不允许自动恢复后继续
+8. ESC 不允许业务路径使用后继续
+9. foreground guard 失败必须停止
+10. OCR/截图失败不能伪造成功
+11. 小高AI微信助手.exe 不应监听 0.0.0.0，默认只监听 127.0.0.1:19000
+12. React 本机 Agent 面板不能使用 VITE_API_BASE_URL
+13. 不能操作开发主机微信作为测试电脑结果
+
 # LAN Access Rules
 
 局域网演示必须使用：
@@ -460,36 +559,46 @@ CORS 必须允许：
 
 ## P0 — 必须修复
 
-1. **微信自动化定位不稳定**：鼠标移动、窗口焦点变化、坐标漂移可能导致搜索框/输入框定位失败。当前正在 P0-2 修复。
+1. **P0-4A-3 未通过**：/agent/wechat/test 未自动执行 open_chat_by_nickname("Aw3")，虚拟机 Aw3 输入框未出现测试消息。当前真实阻塞。
 
-2. **自动检测单目标覆盖**：wechat_active_check_id 只能保存一个 check。多条线索连续发送时，后发目标会覆盖前一个目标。P0-3 / P9 需要升级为多目标检测队列。
-
-3. **跨机器运行尚未验证**：当前已验证局域网访问页面和 API。但微信自动化只能控制 Agent 所在机器的微信。产品化需要验证 Windows 电脑 / Windows VM 上运行 Agent。
+2. **自动检测单目标覆盖**：wechat_active_check_id 只能保存一个 check。多条线索连续发送时后发覆盖前一个目标。P0-5 需要升级为多目标检测队列。
 
 ## P1 — 产品化优化
 
 1. 桌面浮层需要改为更明显的常驻控制中心
 2. 演示数据需要清理，避免无 wechat_nickname 的销售导致 failed
 3. 自动同步派单耗时较长，当前是串行搜索+发送
+4. 啊东、等中文昵称 OCR 识别不稳定，需要继续优化或采用人工确认兜底
+
+## P2 — 架构验证
+
+1. Windows 10 测试电脑尚未复测
+2. 小高AI微信助手.exe 安装包/分发方案待设计
 
 ------
 
 # Product Architecture Clarification
 
-当前 Demo 架构不是"远程控制任意电脑微信"。
+## 机器角色
 
-微信自动化只能发生在运行 auto_wechat Agent 的 Windows 机器上。
+| 角色 | IP | 说明 |
+|------|-----|------|
+| 开发主机 | 192.168.110.113 | 提供 React 页面、源码开发、打包。路径：auto_wechat、react |
+| Windows 11 虚拟机 | — | 无源码、无 conda，只运行小高AI微信助手.exe。验证无源码闭环 |
+| Windows 10 测试电脑 | — | 同样作为真实物理 Agent 测试机，后续复制同一份 exe 验证 |
 
-```text
-机器 A 运行 auto_wechat → 只能控制机器 A 的微信
-机器 B 浏览器访问机器 A → 只能看到页面并触发机器 A 的微信自动化，不能控制机器 B 的微信
-```
+核心架构原则：
+
+- 微信自动化只能发生在运行小高AI微信助手.exe 的 Windows 电脑上
+- React 页面按钮直连浏览器所在电脑的 127.0.0.1:19000
+- 开发主机微信不会被测试电脑的操作影响
+- 虚拟机/测试电脑默认没有项目代码，不能以"运行 Python 命令"作为验收前提
 
 未来产品化方向：
 
 ```text
 中心服务 / 管理后台
-    → 多个 Windows Agent
+    → 多个 Windows Agent（小高AI微信助手.exe）
     → 每个 Agent 控制本机微信
 ```
 
@@ -623,6 +732,21 @@ tsconfig.node.json 必须包含：
 5. vite.config.ts 中 alias 是否正常
 
 禁止自动升级或重构 TS 配置。
+
+------
+
+# Critical Reminders
+
+每次开始新任务前，必须先阅读 docs/ai/05_PROJECT_CONTEXT.md 中的当前活跃阶段和安全约束。
+
+1. 当前 auto_wechat 已进入本地 Agent / exe 架构验证阶段（P0-4）
+2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
+3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
+4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
+5. 业务自动派单发送仍禁止，sent 必须为 false
+6. React 离线提示应使用："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
+7. Bug 修复必须先做代码探索和根因确认，禁止仅凭现象就编写修复方案（详见 02_EXECUTION_RULES.md #17 BUG 修复前置探索原则）
+8. 高风险逻辑必须强制写诊断日志，包含 stage、输入摘要、failure_stage，禁止只写"失败了"（详见 02_EXECUTION_RULES.md #19 高风险代码日志原则）
 
 ------
 

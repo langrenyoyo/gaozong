@@ -6,7 +6,12 @@
       "Bash(cat \"C:/tmp/ai-bot-extracted/eslint.config.mjs\" 2>&1)",
       "Read(//c/tmp/ai-bot-extracted/**)",
       "Bash(cat \"C:/tmp/ai-bot-extracted/out/main/index.jsc\" 2>&1 | strings 2>/dev/null | grep -iE \"wechat|微信|wx|chat|contact|send|message|task|schedule|port|localhost|127\\\\.0\\\\.0|url|api|http|ws://\" 2>/dev/null | head -30)",
-      "Read(//c/tmp/ai-bot-extracted/out/main/**)"
+      "Read(//c/tmp/ai-bot-extracted/out/main/**)",
+      "Bash(xargs grep -l 'LocalWechatAgent\\\\|localWechatAgent\\\\|wechat_agent\\\\|小高AI')",
+      "Bash(python)",
+      "Bash(node scripts/check-frontend-encoding.mjs)",
+      "Bash(python docs/ai/_update_rules_helper.py)",
+      "Bash(python -c \"print\\('05_PROJECT_CONTEXT.md:', '经验教训' in open\\('docs/ai/05_PROJECT_CONTEXT.md', encoding='utf-8'\\).read\\(\\)\\); print\\('CLAUDE.md:', 'Bug 修复必须先做代码探索' in open\\('CLAUDE.md', encoding='utf-8'\\).read\\(\\)\\)\")"
     ]
   }
 }

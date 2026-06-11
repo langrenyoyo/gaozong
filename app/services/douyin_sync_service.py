@@ -5,6 +5,11 @@ P4-3：支持 dry_run + auto_assign 联动。
 - dry_run=false + auto_assign=false: 只写库，不分配
 - dry_run=false + auto_assign=true: 写库 + 对新建线索自动分配
 - auto_assign 仅作用于本次 create 的新线索，update/skip 不触发分配
+
+P0-5A-2：支持 auto_create_wechat_task 联动。
+- auto_create_wechat_task=true 且分配成功后创建 WechatTask(status=pending)
+- 只允许 Aw3，非 Aw3 跳过
+- 不调用微信自动化，不调用 Local Agent
 """
 
 import json
@@ -15,10 +20,11 @@ from sqlalchemy.orm import Session
 
 from app.config import DOUYIN_API_BASE_URL, DOUYIN_API_TIMEOUT_SECONDS
 from app.integrations.douyin_api_client import fetch_leads, DouyinApiError
-from app.models import DouyinLead
-from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem
+from app.models import DouyinLead, SalesStaff
+from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem, WechatTaskSyncStats
 from app.services import assign_service
-from app.services.notification_service import auto_notify_assigned_lead
+from app.services.notification_service import auto_notify_assigned_lead, _compose_notification_text
+from app.services import wechat_task_service
 
 logger = logging.getLogger("douyin_sync_service")
 
@@ -151,6 +157,66 @@ def _try_auto_notify(db: Session, lead_id: int) -> dict:
         return {"success": False, "message": f"通知异常: {exc}"}
 
 
+def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
+    """P0-5A-2：分配成功后尝试创建 WechatTask(pending)
+
+    只允许 Aw3，非 Aw3 跳过并记录 reason。
+    不调用微信自动化，不调用 Local Agent。
+    复用 notification_service._compose_notification_text 生成消息内容。
+
+    Returns:
+        {"created": bool, "task_id": int | None, "reason": str | None}
+    """
+    result = {"created": False, "task_id": None, "reason": None}
+
+    # 获取分配的销售信息
+    if not lead.assigned_staff_id:
+        result["reason"] = "lead_not_assigned"
+        return result
+
+    staff = db.query(SalesStaff).filter(SalesStaff.id == lead.assigned_staff_id).first()
+    if not staff:
+        result["reason"] = "staff_not_found"
+        return result
+
+    # P0-5A 安全门禁：只允许 Aw3
+    if staff.wechat_nickname != "Aw3":
+        result["reason"] = f"only_aw3_allowed_for_p0_5a (staff_nickname={staff.wechat_nickname})"
+        logger.info(
+            "WechatTask 跳过: lead_id=%d, staff='%s', nickname='%s' != 'Aw3'",
+            lead.id, staff.name, staff.wechat_nickname,
+        )
+        return result
+
+    # 复用通知模板生成消息（纯函数，不发送）
+    message = _compose_notification_text(lead)
+
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            target_nickname="Aw3",
+            message=message,
+            mode="paste_only",
+        )
+        result["created"] = True
+        result["task_id"] = task.id
+        logger.info(
+            "WechatTask 已创建: task_id=%d, lead_id=%d, staff_id=%d",
+            task.id, lead.id, staff.id,
+        )
+    except Exception as exc:
+        result["reason"] = f"create_failed: {exc}"
+        logger.error(
+            "WechatTask 创建失败: lead_id=%d, staff_id=%d, %s",
+            lead.id, staff.id, exc, exc_info=True,
+        )
+
+    return result
+
+
 def preview_sync_leads(
     db: Session,
     request: DouyinSyncRequest,
@@ -160,6 +226,10 @@ def preview_sync_leads(
     dry_run=true: 只预览，不写库，不分配
     dry_run=false + auto_assign=false: 只写库
     dry_run=false + auto_assign=true: 写库 + 对新建线索自动分配
+
+    P0-5A-2：
+    auto_create_wechat_task=true + 分配成功 → 创建 WechatTask(pending)
+    只允许 Aw3，非 Aw3 跳过并记录 reason
     """
     # 从上游拉取线索
     try:
@@ -184,6 +254,9 @@ def preview_sync_leads(
     sync_items: list[DouyinSyncItem] = []
     counts = {"created": 0, "updated": 0, "skipped": 0, "assigned": 0, "notified": 0}
 
+    # P0-5A-2：WechatTask 创建统计
+    wt_stats = WechatTaskSyncStats(auto_create_enabled=request.auto_create_wechat_task)
+
     for raw_item in raw_items:
         mapped = _map_lead_item(raw_item)
         source_id = mapped["source_id"]
@@ -206,7 +279,7 @@ def preview_sync_leads(
                         counts["assigned"] += 1
                         reason += f"，{assign_tag}"
 
-                        # P8-3：auto_notify — 分配成功后自动搜索销售微信并发送通知
+                        # P8-3：auto_notify — 分配成功后自动搜索销售微信并发送通知（旧链路）
                         if request.auto_notify:
                             notify_result = _try_auto_notify(db, lead.id)
                             if notify_result["success"]:
@@ -214,6 +287,20 @@ def preview_sync_leads(
                                 reason += "，已通知销售"
                             else:
                                 reason += f"，通知失败({notify_result.get('message', '未知')})"
+
+                        # P0-5A-2：auto_create_wechat_task — 分配成功后创建 pending 任务（新链路）
+                        if request.auto_create_wechat_task:
+                            wt_result = _try_create_wechat_task(db, lead)
+                            if wt_result.get("created"):
+                                wt_stats.created_count += 1
+                                wt_stats.task_ids.append(wt_result["task_id"])
+                                reason += "，已创建微信任务"
+                            else:
+                                wt_stats.skipped_count += 1
+                                wt_stats.skipped.append({
+                                    "lead_id": lead.id,
+                                    "reason": wt_result.get("reason", "unknown"),
+                                })
                     else:
                         reason += f"，{assign_tag}"
 
@@ -261,12 +348,17 @@ def preview_sync_leads(
             msg += f"，自动分配 {counts['assigned']} 条"
         if request.auto_notify and counts["notified"] > 0:
             msg += f"，自动通知 {counts['notified']} 条"
+        if request.auto_create_wechat_task and wt_stats.created_count > 0:
+            msg += f"，创建微信任务 {wt_stats.created_count} 条"
 
     logger.info(
-        "同步完成 dry_run=%s auto_assign=%s auto_notify=%s fetched=%d mapped=%d create=%d update=%d skip=%d assigned=%d notified=%d",
+        "同步完成 dry_run=%s auto_assign=%s auto_notify=%s auto_create_wechat_task=%s "
+        "fetched=%d mapped=%d create=%d update=%d skip=%d assigned=%d notified=%d "
+        "wechat_tasks_created=%d wechat_tasks_skipped=%d",
         request.dry_run,
         request.auto_assign,
         request.auto_notify,
+        request.auto_create_wechat_task,
         fetched,
         len(sync_items),
         counts["created"],
@@ -274,6 +366,8 @@ def preview_sync_leads(
         counts["skipped"],
         counts["assigned"],
         counts["notified"],
+        wt_stats.created_count,
+        wt_stats.skipped_count,
     )
 
     return DouyinSyncResponse(
@@ -288,4 +382,5 @@ def preview_sync_leads(
         notified=counts["notified"] if not request.dry_run else 0,
         dry_run=request.dry_run,
         items=sync_items,
+        wechat_tasks=wt_stats if request.auto_create_wechat_task else None,
     )

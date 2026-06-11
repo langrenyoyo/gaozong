@@ -20,6 +20,8 @@ import logging
 import time
 from pathlib import Path
 
+from ctypes import wintypes
+
 logger = logging.getLogger(__name__)
 
 # 截图输出目录
@@ -32,6 +34,76 @@ def _ensure_dir():
 
 
 # ========== Windows API 截图 ==========
+
+
+class ScreenshotError(RuntimeError):
+    """截图操作失败，携带失败阶段。"""
+
+    def __init__(self, stage: str, message: str):
+        super().__init__(message)
+        self.stage = stage
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    """Win32 BITMAPINFOHEADER 结构。"""
+
+    _fields_ = [
+        ("biSize", wintypes.DWORD),
+        ("biWidth", wintypes.LONG),
+        ("biHeight", wintypes.LONG),
+        ("biPlanes", wintypes.WORD),
+        ("biBitCount", wintypes.WORD),
+        ("biCompression", wintypes.DWORD),
+        ("biSizeImage", wintypes.DWORD),
+        ("biXPelsPerMeter", wintypes.LONG),
+        ("biYPelsPerMeter", wintypes.LONG),
+        ("biClrUsed", wintypes.DWORD),
+        ("biClrImportant", wintypes.DWORD),
+    ]
+
+
+def _configure_screenshot_api(user32, gdi32) -> None:
+    """声明截图相关 Win32 API 类型，避免 64 位句柄被截断。"""
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.GetDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = ctypes.c_int
+
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.BitBlt.argtypes = [
+        wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+    ]
+    gdi32.BitBlt.restype = wintypes.BOOL
+    gdi32.GetDIBits.argtypes = [
+        wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+        wintypes.LPVOID, ctypes.c_void_p, wintypes.UINT,
+    ]
+    gdi32.GetDIBits.restype = ctypes.c_int
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+
+
+def _get_screenshot_api():
+    """获取并配置 Win32 截图 API。"""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    _configure_screenshot_api(user32, gdi32)
+    return user32, gdi32
+
+
+def _last_error_message(action: str) -> str:
+    code = ctypes.get_last_error()
+    return f"{action} 失败，Win32错误码={code}" if code else f"{action} 失败"
 
 def grab_screen(bbox: tuple = None) -> "PIL.Image.Image":
     """
@@ -47,8 +119,8 @@ def grab_screen(bbox: tuple = None) -> "PIL.Image.Image":
     """
     from PIL import Image
 
-    user32 = ctypes.windll.user32
-    gdi32 = ctypes.windll.gdi32
+    user32, gdi32 = _get_screenshot_api()
+    _configure_screenshot_api(user32, gdi32)
 
     # 获取屏幕尺寸
     screen_w = user32.GetSystemMetrics(0)  # SM_CXSCREEN
@@ -66,61 +138,62 @@ def grab_screen(bbox: tuple = None) -> "PIL.Image.Image":
         raise ValueError(f"无效的截图区域: width={width}, height={height}")
 
     # 获取屏幕 DC
-    hdc_src = user32.GetDC(0)
-    if not hdc_src:
-        raise RuntimeError("GetDC 失败")
-
-    h_bitmap = None
+    hdc_src = None
     hdc_mem = None
+    h_bitmap = None
+    old_object = None
+
+    hdc_src = user32.GetDC(None)
+    if not hdc_src:
+        raise ScreenshotError("getdc_failed", _last_error_message("GetDC"))
+
     try:
         # 创建兼容 DC 和位图
         hdc_mem = gdi32.CreateCompatibleDC(hdc_src)
+        if not hdc_mem:
+            raise ScreenshotError(
+                "create_compatible_dc_failed",
+                _last_error_message("CreateCompatibleDC"),
+            )
         h_bitmap = gdi32.CreateCompatibleBitmap(hdc_src, width, height)
-        gdi32.SelectObject(int(hdc_mem), int(h_bitmap))
+        if not h_bitmap:
+            raise ScreenshotError(
+                "create_compatible_bitmap_failed",
+                _last_error_message("CreateCompatibleBitmap"),
+            )
+        old_object = gdi32.SelectObject(hdc_mem, h_bitmap)
+        if not old_object:
+            raise ScreenshotError("select_object_failed", _last_error_message("SelectObject"))
 
         # BitBlt 复制屏幕（显式类型转换避免 OverflowError）
         SRCCOPY = 0x00CC0020
-        gdi32.BitBlt(
-            int(hdc_mem), 0, 0, width, height,
-            int(hdc_src), left, top, SRCCOPY,
+        bitblt_ok = gdi32.BitBlt(
+            hdc_mem, 0, 0, int(width), int(height),
+            hdc_src, int(left), int(top), SRCCOPY,
         )
-
-        # 获取位图数据
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ("biSize", ctypes.wintypes.DWORD),
-                ("biWidth", ctypes.wintypes.LONG),
-                ("biHeight", ctypes.wintypes.LONG),
-                ("biPlanes", ctypes.wintypes.WORD),
-                ("biBitCount", ctypes.wintypes.WORD),
-                ("biCompression", ctypes.wintypes.DWORD),
-                ("biSizeImage", ctypes.wintypes.DWORD),
-                ("biXPelsPerMeter", ctypes.wintypes.LONG),
-                ("biYPelsPerMeter", ctypes.wintypes.LONG),
-                ("biClrUsed", ctypes.wintypes.DWORD),
-                ("biClrImportant", ctypes.wintypes.DWORD),
-            ]
+        if not bitblt_ok:
+            raise ScreenshotError("bitblt_failed", _last_error_message("BitBlt"))
 
         bmi = BITMAPINFOHEADER()
         bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = width
-        bmi.biHeight = -height  # 负值 = 从上到下
+        bmi.biWidth = int(width)
+        bmi.biHeight = -int(height)  # 负值 = 从上到下
         bmi.biPlanes = 1
         bmi.biBitCount = 32
         bmi.biCompression = 0  # BI_RGB
 
         # 分配缓冲区
-        buf_size = width * height * 4
+        buf_size = int(width) * int(height) * 4
         buf = ctypes.create_string_buffer(buf_size)
 
         # 获取位图数据
         result = gdi32.GetDIBits(
-            int(hdc_mem), int(h_bitmap), 0, int(height),
+            hdc_mem, h_bitmap, 0, int(height),
             buf, ctypes.byref(bmi), 0,  # DIB_RGB_COLORS
         )
 
         if result == 0:
-            raise RuntimeError("GetDIBits 返回 0，截图失败")
+            raise ScreenshotError("getdibits_failed", "GetDIBits 返回 0，截图失败")
 
         # 转换为 PIL Image (BGRA -> RGB)
         img = Image.frombytes("RGB", (width, height), buf.raw, "raw", "BGRX")
@@ -128,11 +201,65 @@ def grab_screen(bbox: tuple = None) -> "PIL.Image.Image":
         return img
 
     finally:
+        if hdc_mem and old_object:
+            try:
+                gdi32.SelectObject(hdc_mem, old_object)
+            except Exception:
+                pass
         if h_bitmap:
-            gdi32.DeleteObject(int(h_bitmap))
+            gdi32.DeleteObject(h_bitmap)
         if hdc_mem:
-            gdi32.DeleteDC(int(hdc_mem))
-        user32.ReleaseDC(0, int(hdc_src))
+            gdi32.DeleteDC(hdc_mem)
+        if hdc_src:
+            user32.ReleaseDC(None, hdc_src)
+
+
+def capture_screen_result(
+    bbox: tuple = None,
+    path: str | Path | None = None,
+) -> dict:
+    """
+    截图并以结构化结果返回。
+
+    失败时不向业务流程抛异常，返回 success=false 和失败阶段。
+    """
+    started = time.time()
+    try:
+        img = grab_screen(bbox=bbox)
+        saved_path = None
+        if path is not None:
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(str(path))
+            saved_path = str(path)
+        return {
+            "success": True,
+            "path": saved_path,
+            "error": None,
+            "stage": None,
+            "image": img,
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except ScreenshotError as exc:
+        logger.error("截图失败: stage=%s, error=%s", exc.stage, exc)
+        return {
+            "success": False,
+            "path": None,
+            "error": str(exc),
+            "stage": exc.stage,
+            "image": None,
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except Exception as exc:
+        logger.error("截图失败: %s", exc)
+        return {
+            "success": False,
+            "path": None,
+            "error": str(exc),
+            "stage": "unexpected_exception",
+            "image": None,
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
 
 
 # ========== 截图保存 ==========

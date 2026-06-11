@@ -37,6 +37,10 @@ from app.wechat_ui.window_locator import (
     check_wechat_ready_for_automation,
     WECHAT_NOT_READY_MESSAGE,
 )
+from app.wechat_ui.clipboard_utils import (
+    get_clipboard_text,
+    set_clipboard_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +245,7 @@ def write_text_to_input(
                     time.sleep(0.5)
                     try:
                         from app.wechat_ui.window_locator import ensure_wechat_workspace_layout
-                        ensure_wechat_workspace_layout()
+                        ensure_wechat_workspace_layout(allow_restore=False)
                         window = find_wechat_window_safe()
                     except Exception:
                         pass
@@ -311,7 +315,7 @@ def _do_write_once(
             return result
 
     # === 发送前校验 1：窗口布局 ===
-    layout = ensure_wechat_workspace_layout()
+    layout = ensure_wechat_workspace_layout(allow_restore=False)
     if not layout["layout_ok"]:
         result["message"] = f"窗口布局异常: {layout['message']}"
         result["debug_screenshots"] = screenshots
@@ -497,16 +501,15 @@ def _save_fail_screenshot(prefix: str, stage: str):
 def _save_clipboard() -> str | None:
     """保存当前剪贴板文本内容"""
     try:
-        import pyperclip
-        return pyperclip.paste()
-    except Exception:
+        return get_clipboard_text()
+    except Exception as e:
+        logger.warning("保存剪贴板失败（非致命）: %s", e)
         return None
 
 
 def _set_clipboard(text: str):
     """将文本写入系统剪贴板"""
-    import pyperclip
-    pyperclip.copy(text)
+    set_clipboard_text(text)
 
 
 def _restore_clipboard(old_text: str | None):
@@ -514,7 +517,6 @@ def _restore_clipboard(old_text: str | None):
     if old_text is None:
         return
     try:
-        import pyperclip
-        pyperclip.copy(old_text)
-    except Exception:
-        pass
+        set_clipboard_text(old_text)
+    except Exception as e:
+        logger.warning("恢复剪贴板失败（非致命）: %s", e)
