@@ -1277,3 +1277,38 @@ sqlalchemy.exc.PendingRollbackError: This Session's transaction has been rolled 
 2026-06-11 18:11:39,636 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
 2026-06-11 18:16:39,640 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
 2026-06-11 18:21:39,643 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:26:39,650 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:31:39,654 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:36:39,657 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:41:39,660 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:46:39,666 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:51:39,670 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 18:56:39,673 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:01:39,676 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:06:39,683 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:11:08,576 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-11 19:11:39,685 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:14:07,994 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-11 19:14:38,834 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-11 19:14:38,903 [INFO] app.routers.lead_notifications - 通知记录已创建: id=4, lead_id=2, status=failed
+2026-06-11 19:14:38,908 [WARNING] app.routers.lead_notifications - 微信自动化前置门禁失败: lead_id=2, staff_id=2, ready={'success': False, 'hwnd': None, 'is_window': False, 'visible': False, 'iconic': False, 'foreground_hwnd': None, 'foreground_title': '', 'foreground_class': '', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常（未找到微信窗口: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。）'}
+2026-06-11 19:16:39,692 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:17:38,239 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-11 19:17:38,267 [INFO] app.routers.lead_notifications - 通知记录已创建: id=5, lead_id=2, status=failed
+2026-06-11 19:17:38,268 [WARNING] app.routers.lead_notifications - 微信自动化前置门禁失败: lead_id=2, staff_id=2, ready={'success': False, 'hwnd': None, 'is_window': False, 'visible': False, 'iconic': False, 'foreground_hwnd': None, 'foreground_title': '', 'foreground_class': '', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常（未找到微信窗口: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。）'}
+2026-06-11 19:17:44,851 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147024891, '拒绝访问。', (None, None, None, 0, None))
+2026-06-11 19:21:15,068 [INFO] app.routers.lead_notifications - 通知记录已创建: id=6, lead_id=2, status=failed
+2026-06-11 19:21:15,070 [WARNING] app.routers.lead_notifications - 微信自动化前置门禁失败: lead_id=2, staff_id=2, ready={'success': False, 'hwnd': None, 'is_window': False, 'visible': False, 'iconic': False, 'foreground_hwnd': None, 'foreground_title': '', 'foreground_class': '', 'message': '微信窗口当前不可见或最小化，请先手动打开微信主窗口并确认界面正常（未找到微信窗口: 微信窗口未找到。请确认微信 PC 客户端已启动并登录。）'}
+2026-06-11 19:21:39,698 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:26:39,700 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:31:39,705 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:36:39,709 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:41:39,711 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:46:39,714 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:51:39,718 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 19:56:39,722 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 20:01:39,726 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 20:03:25,206 [WARNING] app.wechat_ui.window_locator - Desktop 遍历失败: (-2147220991, '事件无法调用任何订户', (None, None, None, 0, None))
+2026-06-11 20:06:39,733 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 20:11:39,738 [INFO] app.scheduler.check_scheduler - 开始执行定时检测
+2026-06-11 20:16:39,742 [INFO] app.scheduler.check_scheduler - 开始执行定时检测

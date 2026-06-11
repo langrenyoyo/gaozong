@@ -654,3 +654,279 @@ class TestPastedOnlyStatus:
             assert notif.send_status == "failed"
         finally:
             db.close()
+
+
+# ========== P0-MAIN-2D: chat_verified=false 不再提前阻止，OCR 为最终门禁 ==========
+
+class TestChatVerifiedBypassOCR:
+    """验证 chat_verified=false 时不再提前返回，而是继续执行 OCR 联系人验证。"""
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_notification_service_chat_not_verified_but_ocr_verified(self, mock_window, mock_write, mock_verify, mock_search):
+        """notification_service: chat_verified=false + OCR verified=true → 粘贴成功"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": None,
+            "chat_verified": False,
+            "confidence": 0.3,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "ocr_top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        mock_write.return_value = {
+            "success": True, "action": "pasted_only",
+            "pasted": True, "sent": False,
+            "message": "文本已粘贴到输入框",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            check = _create_pending_check(db, lead, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
+
+            # chat_verified=false 不再阻止，OCR verified=true 允许粘贴
+            assert result["send_status"] == "pasted"
+            assert result["success"] is False  # paste_only 不算最终成功
+
+            notif = db.query(LeadNotification).filter(
+                LeadNotification.lead_id == lead.id
+            ).first()
+            assert notif is not None
+            assert notif.send_status == "pasted"
+            assert notif.sent_at is None
+
+            # OCR 验证通过但 paste_only 不设自动检测目标
+            cfg = db.query(CheckConfig).filter(
+                CheckConfig.config_key == "wechat_active_check_id"
+            ).first()
+            assert cfg is None or cfg.config_value != str(check.id)
+        finally:
+            db.close()
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_notification_service_chat_not_verified_and_ocr_failed(self, mock_window, mock_write, mock_verify, mock_search):
+        """notification_service: chat_verified=false + OCR verified=false → 仍阻止"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": None,
+            "chat_verified": False,
+            "confidence": 0.3,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": False, "expected_nickname": "测试微信昵称",
+            "matched_text": None, "strategy": None,
+            "manual_review_required": True, "failure_stage": "contact_not_verified",
+            "debug_screenshots": [], "warning": None, "message": "OCR 未匹配",
+        }
+        mock_write.return_value = {"success": False, "message": "不应执行"}
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
+
+            assert result["send_status"] == "failed"
+            assert result["success"] is False
+            # notification_service 返回的是 "无法确认当前聊天对象为..." 而非 "联系人未确认"
+            assert "无法确认当前聊天对象" in result["message"]
+
+            notif = db.query(LeadNotification).filter(
+                LeadNotification.lead_id == lead.id
+            ).first()
+            assert notif is not None
+            assert notif.send_status == "failed"
+            # error_message 中包含 "联系人未确认"
+            assert "联系人未确认" in (notif.error_message or "")
+
+            # write_text_to_input 不应被调用
+            mock_write.assert_not_called()
+        finally:
+            db.close()
+
+    @patch("app.routers.lead_notifications.open_chat_by_nickname")
+    @patch("app.routers.lead_notifications.verify_current_chat_contact")
+    @patch("app.routers.lead_notifications.write_text_to_input")
+    @patch("app.routers.lead_notifications.find_wechat_window")
+    def test_route_chat_not_verified_but_ocr_verified(self, mock_window, mock_write, mock_verify, mock_search):
+        """POST /lead-notifications/send-to-staff: chat_verified=false + OCR verified=true → send_status=pasted"""
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": None,
+            "chat_verified": False,
+            "confidence": 0.3,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "ocr_top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        mock_write.return_value = {
+            "success": True, "action": "pasted_only",
+            "pasted": True, "sent": False,
+            "message": "文本已粘贴到输入框",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            _create_pending_check(db, lead, staff)
+            lead_id = lead.id
+            db.close()
+
+            response = client.post("/lead-notifications/send-to-staff", json={
+                "lead_id": lead_id,
+                "auto_send": False,
+            })
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["send_status"] == "pasted"
+            assert data["success"] is False
+            assert data["contact_verified"] is True
+            assert data["contact_verified_strategy"] == "ocr_top_title"
+
+            # 验证通知记录
+            db2 = SessionLocal()
+            try:
+                notif = db2.query(LeadNotification).filter(
+                    LeadNotification.lead_id == lead_id
+                ).first()
+                assert notif is not None
+                assert notif.send_status == "pasted"
+                assert notif.sent_at is None
+                assert notif.send_mode == "require_confirm"
+            finally:
+                db2.close()
+        finally:
+            if db:
+                db.close()
+
+    @patch("app.routers.lead_notifications.open_chat_by_nickname")
+    @patch("app.routers.lead_notifications.verify_current_chat_contact")
+    @patch("app.routers.lead_notifications.write_text_to_input")
+    @patch("app.routers.lead_notifications.find_wechat_window")
+    def test_route_chat_not_verified_and_ocr_failed(self, mock_window, mock_write, mock_verify, mock_search):
+        """POST /lead-notifications/send-to-staff: chat_verified=false + OCR verified=false → failed"""
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": None,
+            "chat_verified": False,
+            "confidence": 0.3,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": False, "expected_nickname": "测试微信昵称",
+            "matched_text": None, "strategy": None,
+            "manual_review_required": True, "failure_stage": "contact_not_verified",
+            "debug_screenshots": [], "warning": None, "message": "OCR 未匹配",
+        }
+        mock_write.return_value = {"success": False, "message": "不应执行"}
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            _create_pending_check(db, lead, staff)
+            lead_id = lead.id
+            db.close()
+
+            response = client.post("/lead-notifications/send-to-staff", json={
+                "lead_id": lead_id,
+                "auto_send": False,
+            })
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["send_status"] == "failed"
+            assert data["success"] is False
+            assert data["contact_verified"] is False
+
+            # write_text_to_input 不应被调用
+            mock_write.assert_not_called()
+
+            # 验证通知记录 send_mode 正确
+            db2 = SessionLocal()
+            try:
+                notif = db2.query(LeadNotification).filter(
+                    LeadNotification.lead_id == lead_id
+                ).first()
+                assert notif is not None
+                assert notif.send_status == "failed"
+                assert notif.send_mode == "require_confirm"
+            finally:
+                db2.close()
+        finally:
+            if db:
+                db.close()
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_chat_verified_true_still_works(self, mock_window, mock_write, mock_verify, mock_search):
+        """回归：chat_verified=true + OCR verified=true → 正常粘贴（原有路径不受影响）"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": "测试微信昵称",
+            "chat_verified": True,
+            "confidence": 0.9,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        mock_write.return_value = {
+            "success": True, "action": "pasted_only",
+            "pasted": True, "sent": False,
+            "message": "文本已粘贴到输入框",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
+
+            assert result["send_status"] == "pasted"
+            mock_verify.assert_called_once()
+        finally:
+            db.close()

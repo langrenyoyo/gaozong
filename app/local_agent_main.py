@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes
 import os
 import platform
 import socket
@@ -67,6 +69,13 @@ class LocalWechatSearchDebugRequest(BaseModel):
     position: str = "right"
 
 
+class LocalWechatMouseDebugRequest(BaseModel):
+    target_x: int
+    target_y: int
+    move_only: bool = True
+    method: str = "set_cursor_pos"  # set_cursor_pos / sendinput_absolute
+
+
 def get_machine_identity() -> dict:
     return {
         "hostname": socket.gethostname(),
@@ -83,6 +92,91 @@ def get_route_paths(app: FastAPI) -> list[str]:
         if path:
             paths.append(path)
     return sorted(paths)
+
+
+# ========== P0-MAIN-5B：HTTP 辅助函数 ==========
+
+def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> dict:
+    """HTTP GET 请求，返回 {"ok": bool, "status": int, "json": any, "error": str|None}。"""
+    import urllib.request
+    import urllib.parse
+    if params:
+        url = f"{url}?{urllib.parse.urlencode(params)}"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return {"ok": True, "status": resp.status, "json": __import__("json").loads(body), "error": None}
+    except Exception as exc:
+        return {"ok": False, "status": None, "json": None, "error": str(exc)}
+
+
+def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
+    """HTTP POST JSON 请求，返回 {"ok": bool, "status": int, "json": any, "error": str|None}。"""
+    import urllib.request
+    body = __import__("json").dumps(data, ensure_ascii=False).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp_body = resp.read().decode("utf-8")
+            return {"ok": True, "status": resp.status, "json": __import__("json").loads(resp_body), "error": None}
+    except Exception as exc:
+        return {"ok": False, "status": None, "json": None, "error": str(exc)}
+
+
+def _write_back_task_result(
+    result: dict,
+    server_url: str,
+    task_id: int | None,
+    *,
+    success: bool = False,
+    verified: bool = False,
+    partial_match: bool = False,
+    manual_review_required: bool = False,
+    pasted: bool = False,
+    sent: bool = False,
+    failure_stage: str | None = None,
+    raw_result: dict | None = None,
+) -> dict | None:
+    """P0-MAIN-5B：回写任务结果到主系统。
+
+    调用 POST {server_url}/wechat-tasks/{task_id}/result。
+    将回写响应存入 result["write_back"]。
+    """
+    if not task_id:
+        result["write_back"] = {"skipped": True, "reason": "no_task_id"}
+        return None
+
+    # P0-MAIN-5B：回写时同步设置 result 的 failure_stage，确保响应体包含诊断信息
+    if failure_stage and not success:
+        result["failure_stage"] = failure_stage
+
+    import socket as _socket
+    payload = {
+        "success": success,
+        "verified": verified,
+        "partial_match": partial_match,
+        "manual_review_required": manual_review_required,
+        "pasted": pasted,
+        "sent": sent,
+        "failure_stage": failure_stage,
+        "agent_hostname": _socket.gethostname(),
+        "agent_pid": os.getpid(),
+        "raw_result": raw_result,
+    }
+
+    wb_url = f"{server_url}/wechat-tasks/{task_id}/result"
+    resp = _http_post_json(wb_url, payload)
+    result["write_back"] = {
+        "url": wb_url,
+        "ok": resp.get("ok"),
+        "status": resp.get("status"),
+        "error": resp.get("error"),
+    }
+    return resp
 
 
 def _base_response(request: LocalWechatTestRequest | None = None) -> dict:
@@ -137,11 +231,13 @@ def _base_response(request: LocalWechatTestRequest | None = None) -> dict:
 
 
 def _fail(result: dict, failure_stage: str, message: str) -> dict:
+    """标记失败。使用 setdefault 确保 result 无 action 键时不抛 KeyError。"""
     result["success"] = False
     result["failure_stage"] = failure_stage
     result["message"] = message
-    result["action"]["pasted"] = False
-    result["action"]["sent"] = False
+    action = result.setdefault("action", {})
+    action["pasted"] = False
+    action["sent"] = False
     return result
 
 
@@ -373,7 +469,11 @@ def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
     return result
 
 
-def create_local_agent_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> FastAPI:
+def create_local_agent_app(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    server_url: str | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="小高AI微信助手 Local Agent",
         version="0.1.0",
@@ -444,6 +544,123 @@ def create_local_agent_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -
     def agent_wechat_search_result_debug(request: LocalWechatSearchDebugRequest):
         return run_search_result_debug(nickname=request.nickname, position=request.position)
 
+    @app.post("/agent/wechat/mouse-debug")
+    def agent_wechat_mouse_debug(request: LocalWechatMouseDebugRequest):
+        """P0-MAIN-5B-3: 鼠标移动诊断 — 不操作微信，不点击，不粘贴，不发送。"""
+        result = {
+            "success": False,
+            "agent_machine": get_machine_identity(),
+            "target": {"x": request.target_x, "y": request.target_y},
+            "method": request.method,
+            "move_only": request.move_only,
+            "cursor_before": None,
+            "cursor_after": None,
+            "move_ok": False,
+            "message": "",
+        }
+
+        # 获取移动前光标位置
+        try:
+            pt_before = ctypes.wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt_before))
+            result["cursor_before"] = {"x": pt_before.x, "y": pt_before.y}
+        except Exception as exc:
+            result["message"] = f"获取光标位置失败: {exc}"
+            return result
+
+        # 执行移动
+        if request.method == "set_cursor_pos":
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+            user32.SetCursorPos.restype = ctypes.wintypes.BOOL
+            ctypes.set_last_error(0)
+            set_ok = bool(user32.SetCursorPos(request.target_x, request.target_y))
+            result["set_cursor_pos_ok"] = set_ok
+            try:
+                result["set_cursor_pos_last_error"] = int(ctypes.get_last_error())
+            except Exception:
+                result["set_cursor_pos_last_error"] = None
+
+        elif request.method == "sendinput_absolute":
+            # SendInput absolute move（复用 contact_searcher 的归一化逻辑）
+            try:
+                from app.wechat_ui.contact_searcher import (
+                    _virtual_screen_debug,
+                    _normalize_sendinput_absolute_coord,
+                    _build_sendinput_mouse_structs,
+                )
+                virtual = _virtual_screen_debug(request.target_x, request.target_y)
+                result["virtual_screen"] = {
+                    k: virtual.get(k) for k in (
+                        "virtual_screen_left", "virtual_screen_top",
+                        "virtual_screen_width", "virtual_screen_height",
+                    )
+                }
+                left = virtual.get("virtual_screen_left")
+                top = virtual.get("virtual_screen_top")
+                width = virtual.get("virtual_screen_width")
+                height = virtual.get("virtual_screen_height")
+                if None not in (left, top, width, height):
+                    MOUSEEVENTF_MOVE = 0x0001
+                    MOUSEEVENTF_ABSOLUTE = 0x8000
+                    MOUSEEVENTF_VIRTUALDESK = 0x4000
+                    flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+                    norm_x = _normalize_sendinput_absolute_coord(
+                        request.target_x, int(left), int(width))
+                    norm_y = _normalize_sendinput_absolute_coord(
+                        request.target_y, int(top), int(height))
+                    result["sendinput_normalized"] = {"x": norm_x, "y": norm_y, "flags": flags}
+
+                    structs = _build_sendinput_mouse_structs()
+                    MOUSEINPUT = structs["MOUSEINPUT"]
+                    INPUT = structs["INPUT"]
+                    INPUT_MOUSE = 0
+                    inputs = (INPUT * 1)()
+                    inputs[0].type = INPUT_MOUSE
+                    inputs[0].union.mi = MOUSEINPUT(norm_x, norm_y, 0, flags, 0, 0)
+
+                    user32_si = ctypes.WinDLL("user32", use_last_error=True)
+                    user32_si.SendInput.argtypes = [
+                        ctypes.wintypes.UINT,
+                        ctypes.POINTER(INPUT),
+                        ctypes.c_int,
+                    ]
+                    user32_si.SendInput.restype = ctypes.wintypes.UINT
+                    ctypes.set_last_error(0)
+                    sent = int(user32_si.SendInput(
+                        1, ctypes.cast(inputs, ctypes.POINTER(INPUT)), ctypes.sizeof(INPUT)))
+                    result["sendinput_sent_count"] = sent
+                    try:
+                        result["sendinput_last_error"] = int(ctypes.get_last_error())
+                    except Exception:
+                        result["sendinput_last_error"] = None
+                else:
+                    result["message"] = f"虚拟屏幕信息不可用: {virtual.get('virtual_screen_unavailable_reason')}"
+            except Exception as exc:
+                result["sendinput_exception"] = str(exc)
+
+        # 获取移动后光标位置
+        try:
+            pt_after = ctypes.wintypes.POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt_after))
+            result["cursor_after"] = {"x": pt_after.x, "y": pt_after.y}
+        except Exception:
+            pass
+
+        # 判断是否到达目标（±3 像素容差）
+        after = result["cursor_after"]
+        if after and abs(after["x"] - request.target_x) <= 3 and abs(after["y"] - request.target_y) <= 3:
+            result["move_ok"] = True
+            result["success"] = True
+            result["message"] = "鼠标已到达目标位置"
+        else:
+            result["message"] = (
+                f"鼠标未到达目标: 期望({request.target_x},{request.target_y}), "
+                f"实际({(after or {}).get('x','?')},{(after or {}).get('y','?')})"
+            )
+
+        return result
+
     @app.get("/agent/wechat/windows")
     def agent_wechat_windows():
         diagnostics = collect_wechat_window_diagnostics()
@@ -456,6 +673,289 @@ def create_local_agent_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -
             "notes": diagnostics.get("notes") or [],
         }
 
+    # ========== P0-MAIN-5B：任务队列 poll-and-execute ==========
+
+    @app.get("/agent/tasks/server-url")
+    def agent_server_url():
+        """返回当前配置的主系统地址。"""
+        return {
+            "server_url": server_url,
+            "configured": server_url is not None,
+        }
+
+    @app.post("/agent/tasks/poll-and-execute")
+    def agent_poll_and_execute():
+        """P0-MAIN-5B：从主系统拉取一条 pending task，执行微信自动化，回写结果。
+
+        安全约束：
+        - 只处理 notify_sales 任务
+        - 只允许 target_nickname=Aw3
+        - 只允许 mode=paste_only
+        - 不按 Enter，不发送
+        - 每次只执行一条任务
+        - 不后台轮询
+        """
+        result = {
+            "success": False,
+            "agent_machine": get_machine_identity(),
+            "server_url": server_url,
+            "task": None,
+            "execution": None,
+            "write_back": None,
+            "action": {"pasted": False, "sent": False},  # P0-MAIN-5B-1: 防止 _fail KeyError
+            "failure_stage": None,
+            "message": "",
+        }
+
+        # 1. 检查 server_url 是否已配置
+        if not server_url:
+            result["failure_stage"] = "server_url_not_configured"
+            result["message"] = "未配置主系统地址，请启动时传入 --server-url 参数"
+            return result
+
+        # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
+        try:
+            # 2. 从主系统拉取 pending task
+            try:
+                poll_resp = _http_get(f"{server_url}/wechat-tasks/pending", params={"limit": 1})
+            except Exception as exc:
+                result["failure_stage"] = "server_connection_failed"
+                result["message"] = f"连接主系统失败: {exc}"
+                return result
+
+            if not poll_resp.get("ok"):
+                result["failure_stage"] = "server_request_failed"
+                result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
+                return result
+
+            tasks = poll_resp.get("json", [])
+            if not tasks:
+                result["failure_stage"] = None
+                result["message"] = "无待执行任务"
+                result["task_found"] = False
+                return result
+
+            task_data = tasks[0]
+            result["task"] = {
+                "id": task_data.get("id"),
+                "task_type": task_data.get("task_type"),
+                "target_nickname": task_data.get("target_nickname"),
+                "mode": task_data.get("mode"),
+                "lead_id": task_data.get("lead_id"),
+                "staff_id": task_data.get("staff_id"),
+            }
+
+            task_id = task_data.get("id")
+            task_type = task_data.get("task_type", "")
+            target_nickname = task_data.get("target_nickname", "")
+            mode = task_data.get("mode", "")
+            message = task_data.get("message", "")
+
+            # 3. 安全验证
+            if task_type != "notify_sales":
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="task_type_not_notify_sales",
+                                        raw_result={"rejected_task": result["task"]})
+                result["message"] = f"任务类型 {task_type} 不被支持，只支持 notify_sales"
+                return result
+
+            if target_nickname != ONLY_ALLOWED_NICKNAME:
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="target_nickname_not_aw3",
+                                        raw_result={"rejected_task": result["task"]})
+                result["message"] = f"目标联系人 {target_nickname} 不被允许，只允许 {ONLY_ALLOWED_NICKNAME}"
+                return result
+
+            if mode != "paste_only":
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="mode_not_paste_only",
+                                        raw_result={"rejected_task": result["task"]})
+                result["message"] = f"执行模式 {mode} 不被支持，只支持 paste_only"
+                return result
+
+            if not message or not message.strip():
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="message_empty",
+                                        raw_result={"rejected_task": result["task"]})
+                result["message"] = "消息内容为空，不允许执行"
+                return result
+
+            # 4. 紧急停止检查
+            if not is_automation_allowed():
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="emergency_stop",
+                                        raw_result={"emergency_stop": True})
+                result["message"] = BLOCKED_MESSAGE
+                return result
+
+            # 5. OCR 就绪检查
+            ocr_block = _check_ocr_ready_for_agent_test(result)
+            if ocr_block is not None:
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage=ocr_block.get("failure_stage", "ocr_not_ready"),
+                                        raw_result={"ocr_status": result.get("ocr")})
+                result["message"] = ocr_block.get("message", "OCR 未就绪")
+                return result
+
+            # 6. 微信窗口就绪 + 前台交接
+            try:
+                window = find_wechat_window()
+                hwnd = getattr(window, "NativeWindowHandle", None)
+            except Exception as exc:
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="wechat_window_not_found",
+                                        raw_result={"exception": str(exc)})
+                result["message"] = f"微信窗口未找到: {exc}"
+                return result
+
+            if isinstance(hwnd, int):
+                readiness = check_wechat_ready_for_automation(hwnd)
+                if not readiness.get("success"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="wechat_not_ready",
+                                            raw_result={"readiness": readiness})
+                    result["message"] = readiness.get("message", "微信未就绪")
+                    return result
+
+                foreground_guard = ensure_wechat_foreground(hwnd, reason="poll_and_execute_before_open_chat")
+                if not foreground_guard.get("success"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="foreground_lost_before_open_chat",
+                                            raw_result={"foreground_guard": foreground_guard})
+                    result["message"] = foreground_guard.get("message", "微信前台焦点丢失")
+                    return result
+
+            # 6.5. P0-MAIN-5B-2: 先验证当前聊天是否已是目标联系人
+            _already_on_target = False
+            pre_verify = verify_current_chat_contact(target_nickname)
+            if (pre_verify.get("verified")
+                    and not pre_verify.get("partial_match")
+                    and not pre_verify.get("manual_review_required")):
+                _already_on_target = True
+                verify_result = pre_verify
+                result["execution"] = {
+                    "already_on_target": True,
+                    "contact_verified": True,
+                    "contact_verified_strategy": pre_verify.get("strategy"),
+                    "open_chat_skipped": True,
+                }
+            else:
+                # 7. 执行 open_chat_by_nickname
+                try:
+                    open_result = open_chat_by_nickname(target_nickname)
+                except Exception as exc:
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="open_chat_exception",
+                                            raw_result={"exception": str(exc)})
+                    result["message"] = f"打开聊天异常: {exc}"
+                    result["execution"] = {"open_chat_exception": str(exc)}
+                    return result
+
+                if not open_result.get("success"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage=open_result.get("failure_stage", "open_chat_failed"),
+                                            raw_result={"open_result": open_result})
+                    result["message"] = f"打开聊天失败: {open_result.get('message', '')}"
+                    result["execution"] = {"open_chat_failed": True, "open_result": open_result}
+                    return result
+
+                # 8. OCR 联系人验证
+                verify_result = verify_current_chat_contact(target_nickname,
+                                                             win_rect=open_result.get("window_rect"))
+
+                if verify_result.get("partial_match"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="partial_match_blocked",
+                                            verified=False, partial_match=True,
+                                            raw_result={"verify_result": verify_result})
+                    result["message"] = f"联系人部分匹配，不允许执行: {target_nickname}"
+                    return result
+
+                if verify_result.get("manual_review_required"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="manual_review_required_blocked",
+                                            verified=False, manual_review_required=True,
+                                            raw_result={"verify_result": verify_result})
+                    result["message"] = "联系人验证需要人工复核，不允许执行"
+                    return result
+
+                if not verify_result.get("verified"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="contact_not_verified",
+                                            verified=False,
+                                            raw_result={"verify_result": verify_result})
+                    result["message"] = f"联系人验证未通过: {verify_result.get('message', '')}"
+                    return result
+
+            # 9. 再次检查紧急停止
+            if not is_automation_allowed():
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage="emergency_stop_before_paste",
+                                        raw_result={"emergency_stop": True})
+                result["message"] = BLOCKED_MESSAGE
+                return result
+
+            # 10. 再次前台检查
+            if isinstance(hwnd, int):
+                foreground_guard = ensure_wechat_foreground(hwnd, reason="poll_and_execute_before_paste")
+                if not foreground_guard.get("success"):
+                    _write_back_task_result(result, server_url, task_id,
+                                            success=False, failure_stage="foreground_lost_before_paste",
+                                            raw_result={"foreground_guard": foreground_guard})
+                    result["message"] = foreground_guard.get("message", "粘贴前前台焦点丢失")
+                    return result
+
+            # 11. paste_only
+            write_result = write_text_to_input(
+                window,
+                message.strip(),
+                require_confirm=True,
+                debug_prefix="poll_and_execute",
+            )
+
+            if not write_result.get("success"):
+                _write_back_task_result(result, server_url, task_id,
+                                        success=False, failure_stage=write_result.get("failure_stage", "paste_failed"),
+                                        verified=True,
+                                        raw_result={"write_result": write_result})
+                result["message"] = f"粘贴失败: {write_result.get('message', '')}"
+                return result
+
+            # 12. 成功 — 回写结果
+            execution_summary = {
+                "pasted": True,
+                "sent": False,
+                "contact_verified": True,
+                "contact_verified_strategy": verify_result.get("strategy"),
+                "already_on_target": _already_on_target,
+                "open_chat_skipped": _already_on_target,
+            }
+            result["execution"] = execution_summary
+
+            _write_back_task_result(result, server_url, task_id,
+                                    success=True, pasted=True, sent=False,
+                                    verified=True, raw_result=execution_summary)
+            result["success"] = True
+            result["message"] = "任务执行成功（paste_only）"
+            return result
+        except Exception as exc:
+            # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
+            import logging as _logging
+            _logging.getLogger("local_agent_main").error(
+                "poll-and-execute 内部异常: %s", exc, exc_info=True,
+            )
+            result["failure_stage"] = result.get("failure_stage") or "internal_error"
+            result["message"] = f"内部错误: {exc}"
+            _task_info = result.get("task") or {}
+            if _task_info.get("id"):
+                try:
+                    _write_back_task_result(result, server_url, _task_info["id"],
+                                            success=False, failure_stage="internal_error",
+                                            raw_result={"exception": str(exc)})
+                except Exception:
+                    pass
+            return result
+
     return app
 
 
@@ -463,6 +963,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Start local WeChat Agent")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--server-url", default=None,
+                        help="主系统地址（如 http://192.168.110.113:9000），用于拉取任务和回写结果")
     return parser
 
 
@@ -470,7 +972,10 @@ def main() -> int:
     import uvicorn
 
     args = build_parser().parse_args()
-    uvicorn.run(create_local_agent_app(host=args.host, port=args.port), host=args.host, port=args.port)
+    uvicorn.run(
+        create_local_agent_app(host=args.host, port=args.port, server_url=args.server_url),
+        host=args.host, port=args.port,
+    )
     return 0
 
 

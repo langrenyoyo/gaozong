@@ -2487,6 +2487,27 @@ def _click_left_button(
         debug["cursor_after_set"] = _get_cursor_pos_debug()
         debug["foreground_after_set_cursor"] = _foreground_window_debug()
 
+        # P0-MAIN-5B-3: 光标移动门禁 — 确认光标到达目标后才允许点击
+        cursor_at_target = _cursor_matches_target(debug["cursor_after_set"], int(x), int(y))
+        debug["cursor_at_target_after_set"] = cursor_at_target
+
+        if not cursor_at_target:
+            # SendInput absolute move 回退方案（不再仅用于诊断）
+            fallback = _sendinput_mouse_move_only_debug(
+                int(x), int(y), hwnd=hwnd,
+                reason="set_cursor_pos_cursor_not_at_target",
+            )
+            debug["sendinput_fallback"] = fallback
+            cursor_after_fallback = fallback.get("cursor_after_sendinput_move")
+            cursor_at_target = _cursor_matches_target(cursor_after_fallback, int(x), int(y))
+            debug["cursor_at_target_after_sendinput"] = cursor_at_target
+
+        if not cursor_at_target:
+            # 光标未到达目标，禁止在错误位置点击
+            debug["mouse_move_failed"] = True
+            return _json_safe_debug_value(debug)
+
+        # 光标已到达目标，执行 LEFTDOWN + LEFTUP
         user32.mouse_event(0x0002, 0, 0, 0, 0)
         down_time = time.time()
         debug["cursor_after_down"] = _get_cursor_pos_debug()
@@ -2498,21 +2519,6 @@ def _click_left_button(
         debug["foreground_after_mouse_up"] = _foreground_window_debug()
         debug["foreground_after_click"] = debug["foreground_after_mouse_up"]
         debug["window_rect_after_click"] = _safe_window_rect_debug(hwnd)
-
-        if _sendinput_mouse_diag_enabled():
-            if set_ok and _cursor_matches_target(debug.get("cursor_after_set"), int(x), int(y)):
-                debug["sendinput_mouse_debug"] = {
-                    "enabled": False,
-                    "mode": "move_only",
-                    "reason": "set_cursor_pos_reached_target",
-                }
-            else:
-                debug["sendinput_mouse_debug"] = _sendinput_mouse_move_only_debug(
-                    int(x),
-                    int(y),
-                    hwnd=hwnd,
-                    reason="set_cursor_pos_failed_or_cursor_not_at_target",
-                )
     except Exception as exc:
         debug["click_exception"] = str(exc)
     finally:

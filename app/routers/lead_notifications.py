@@ -180,23 +180,22 @@ def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
         result.send_status = "failed"
         return result
 
-    # P0-2C 守卫：chat_verified=false 时不允许发送
+    # P0-2C 守卫：chat_verified 来自 UIA 控件树，Qt5 微信不可靠（P0-3E 结论）。
+    # 不再作为终止条件，改由后续 OCR 联系人验证作为最终硬门禁（P0-MAIN-2D）。
     chat_verified = search_result.get("chat_verified", False)
     result.chat_title = search_result.get("chat_title")
     logger.info(
-        f"聊天窗口已打开: chat_title='{result.chat_title}', chat_verified={chat_verified}"
+        "聊天窗口已打开: chat_title='%s', chat_verified=%s, confidence=%s",
+        result.chat_title, chat_verified, search_result.get("confidence", 0),
     )
 
     if not chat_verified:
-        _create_notification_record(
-            db, lead.id, staff.id, notification_text, "failed",
-            error_message=f"聊天窗口未验证 (confidence={search_result.get('confidence', 0)})",
+        logger.info(
+            "chat_verified=false（UIA 不可靠），将继续执行 OCR 联系人验证: nickname='%s'",
+            staff.wechat_nickname,
         )
-        result.message = "聊天窗口未验证，不允许发送"
-        result.send_status = "failed"
-        return result
 
-    # P0-2E 守卫：联系人二次确认（验证当前聊天对象为目标销售）
+    # P0-2E 守卫：联系人 OCR 二次确认（最终硬门禁）
     verify_result = verify_current_chat_contact(
         staff.wechat_nickname,
         win_rect=search_result.get("window_rect"),
@@ -212,13 +211,20 @@ def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
         _create_notification_record(
             db, lead.id, staff.id, notification_text, "failed",
             error_message=f"联系人未确认: {verify_result.get('message', '')}",
+            send_mode="require_confirm" if not request.auto_send else "auto_send",
         )
         result.message = (
             f"无法确认当前聊天对象为 '{staff.wechat_nickname}'，不允许发送: "
             f"{verify_result.get('message', '')}"
         )
         result.send_status = "failed"
+        result.contact_verified = False
+        result.contact_verified_strategy = verify_result.get("strategy")
         return result
+
+    # OCR 验证通过，记录联系人确认信息
+    result.contact_verified = True
+    result.contact_verified_strategy = verify_result.get("strategy")
 
     # 5. 发送通知文本
     try:

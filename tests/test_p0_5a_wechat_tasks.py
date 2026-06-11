@@ -4,12 +4,17 @@
 不调用微信自动化，不依赖 Local Agent。
 """
 
+import json
 import pytest
+from datetime import datetime
 from fastapi.testclient import TestClient
 
 from app.database import Base, engine, SessionLocal
 from app.main import create_app
-from app.models import WechatTask
+from app.models import (
+    WechatTask, LeadNotification, CheckConfig,
+    SalesStaff, DouyinLead, ReplyCheck,
+)
 
 # 创建测试应用和数据库
 app = create_app()
@@ -21,10 +26,17 @@ def _setup_db():
     """每个测试前重建所有表，测试后清理。"""
     Base.metadata.create_all(bind=engine)
     yield
-    # 清理 wechat_tasks 表，不影响其他表
+    # 清理相关表
     db = SessionLocal()
     try:
         db.query(WechatTask).delete()
+        db.query(LeadNotification).delete()
+        db.query(CheckConfig).filter(
+            CheckConfig.config_key == "wechat_active_check_id"
+        ).delete()
+        db.query(ReplyCheck).delete()
+        db.query(DouyinLead).delete()
+        db.query(SalesStaff).delete()
         db.commit()
     finally:
         db.close()
@@ -325,3 +337,365 @@ def test_submit_result_keeps_sent_at_none():
     assert data["status"] == "pasted"
     assert data["pasted_at"] is not None
     assert data["sent_at"] is None
+
+
+# ========== P0-MAIN-5A：submit result 联动 lead_notifications + check_configs ==========
+
+def _create_staff_and_lead(db):
+    """创建销售 + 已分配线索 + pending reply_check，返回 (staff, lead, check)。"""
+    staff = SalesStaff(name="测试销售", wechat_nickname="Aw3", status="active")
+    db.add(staff)
+    db.commit()
+    db.refresh(staff)
+
+    lead = DouyinLead(
+        source="douyin",
+        source_id=f"test_p0_main_5a_{datetime.now().timestamp()}",
+        customer_name="测试客户",
+        content="测试内容",
+        status="assigned",
+        assigned_staff_id=staff.id,
+        assigned_at=datetime.now(),
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    check = ReplyCheck(
+        lead_id=lead.id,
+        staff_id=staff.id,
+        check_status="pending",
+    )
+    db.add(check)
+    db.commit()
+    db.refresh(check)
+
+    return staff, lead, check
+
+
+def test_submit_pasted_creates_lead_notification():
+    """P0-MAIN-5A：pasted 成功后自动创建 lead_notification(send_status=pasted)。"""
+    db = SessionLocal()
+    try:
+        staff, lead, check = _create_staff_and_lead(db)
+
+        # 创建 task（带 reply_check_id）
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "【新线索分配】\n客户：测试客户",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+            "reply_check_id": check.id,
+        })
+        assert create_resp.status_code == 200
+        task_id = create_resp.json()["id"]
+
+        # 回写 pasted 结果
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "partial_match": False,
+            "manual_review_required": False,
+            "pasted": True,
+            "sent": False,
+            "agent_hostname": "TEST-HOST-5A",
+            "raw_result": {"action": "pasted_only", "contact_verified": True},
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "pasted"
+
+        # 验证 lead_notification 已创建
+        notif = db.query(LeadNotification).filter(
+            LeadNotification.lead_id == lead.id,
+            LeadNotification.staff_id == staff.id,
+        ).first()
+        assert notif is not None
+        assert notif.send_status == "pasted"
+        assert notif.sent_at is None
+        assert notif.send_mode == "wechat_task"
+    finally:
+        db.close()
+
+
+def test_submit_pasted_sets_auto_detect_target():
+    """P0-MAIN-5A：pasted + reply_check_id → wechat_active_check_id 被设置。"""
+    db = SessionLocal()
+    try:
+        staff, lead, check = _create_staff_and_lead(db)
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "测试自动检测",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+            "reply_check_id": check.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pasted"
+
+        # 验证 wechat_active_check_id 已设置
+        cfg = db.query(CheckConfig).filter(
+            CheckConfig.config_key == "wechat_active_check_id"
+        ).first()
+        assert cfg is not None
+        assert cfg.config_value == str(check.id)
+    finally:
+        db.close()
+
+
+def test_submit_pasted_no_reply_check_no_auto_detect():
+    """P0-MAIN-5A：pasted 但无 reply_check_id → 不设置自动检测目标。"""
+    db = SessionLocal()
+    try:
+        staff, lead, _ = _create_staff_and_lead(db)
+
+        # 不传 reply_check_id
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "无 reply_check",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+        })
+        assert resp.json()["status"] == "pasted"
+
+        # 不应设置自动检测目标
+        cfg = db.query(CheckConfig).filter(
+            CheckConfig.config_key == "wechat_active_check_id"
+        ).first()
+        assert cfg is None
+    finally:
+        db.close()
+
+
+def test_submit_failed_creates_lead_notification_failed():
+    """P0-MAIN-5A：failed 结果 → lead_notification.send_status=failed。"""
+    db = SessionLocal()
+    try:
+        staff, lead, _ = _create_staff_and_lead(db)
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "失败测试",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": False,
+            "failure_stage": "search_focus_not_verified",
+            "pasted": False,
+            "sent": False,
+        })
+        assert resp.json()["status"] == "failed"
+
+        notif = db.query(LeadNotification).filter(
+            LeadNotification.lead_id == lead.id,
+        ).first()
+        assert notif is not None
+        assert notif.send_status == "failed"
+        assert "search_focus_not_verified" in (notif.error_message or "")
+        assert notif.sent_at is None
+    finally:
+        db.close()
+
+
+def test_submit_blocked_creates_lead_notification_blocked():
+    """P0-MAIN-5A：blocked 结果 → lead_notification.send_status=blocked。"""
+    db = SessionLocal()
+    try:
+        staff, lead, _ = _create_staff_and_lead(db)
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "blocked 测试",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": False,
+            "pasted": False,
+            "sent": False,
+        })
+        assert resp.json()["status"] == "blocked"
+
+        notif = db.query(LeadNotification).filter(
+            LeadNotification.lead_id == lead.id,
+        ).first()
+        assert notif is not None
+        assert notif.send_status == "blocked"
+    finally:
+        db.close()
+
+
+def test_submit_sent_true_creates_failed_notification():
+    """P0-MAIN-5A：sent=true → task failed + lead_notification.send_status=failed。"""
+    db = SessionLocal()
+    try:
+        staff, lead, _ = _create_staff_and_lead(db)
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "sent true 测试",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": True,
+        })
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert data["failure_stage"] == "sent_not_allowed_for_p0_5a"
+
+        notif = db.query(LeadNotification).filter(
+            LeadNotification.lead_id == lead.id,
+        ).first()
+        assert notif is not None
+        assert notif.send_status == "failed"
+        assert "sent=true" in (notif.error_message or "")
+    finally:
+        db.close()
+
+
+def test_submit_pasted_does_not_change_lead_status():
+    """P0-MAIN-5A：pasted 成功后 douyin_leads.status 仍为 assigned。"""
+    db = SessionLocal()
+    try:
+        staff, lead, check = _create_staff_and_lead(db)
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "状态测试",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+            "reply_check_id": check.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+        })
+
+        # lead.status 仍为 assigned
+        db.refresh(lead)
+        assert lead.status == "assigned"
+    finally:
+        db.close()
+
+
+def test_submit_result_updates_existing_notification():
+    """P0-MAIN-5A：已有通知记录时更新而非重复创建。"""
+    db = SessionLocal()
+    try:
+        staff, lead, _ = _create_staff_and_lead(db)
+
+        # 先手动创建一条失败的通知记录
+        existing_notif = LeadNotification(
+            lead_id=lead.id,
+            staff_id=staff.id,
+            notification_text="旧通知",
+            send_status="failed",
+            send_mode="wechat_task",
+            error_message="旧错误",
+        )
+        db.add(existing_notif)
+        db.commit()
+
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "notify_sales",
+            "target_nickname": "Aw3",
+            "message": "重试通知",
+            "mode": "paste_only",
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+        })
+        task_id = create_resp.json()["id"]
+
+        # 第二次回写 pasted
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+        })
+        assert resp.json()["status"] == "pasted"
+
+        # 应更新已有记录而非新建
+        notifs = db.query(LeadNotification).filter(
+            LeadNotification.lead_id == lead.id,
+            LeadNotification.staff_id == staff.id,
+        ).all()
+        assert len(notifs) == 1
+        assert notifs[0].send_status == "pasted"
+    finally:
+        db.close()
+
+
+def test_non_notify_sales_task_no_notification():
+    """P0-MAIN-5A：task_type != notify_sales 时不联动 lead_notification。"""
+    db = SessionLocal()
+    try:
+        # 创建不带 lead_id 的 task
+        create_resp = client.post("/wechat-tasks", json={
+            "task_type": "detect_reply",
+            "target_nickname": "Aw3",
+            "message": "",
+            "mode": "paste_only",
+        })
+        task_id = create_resp.json()["id"]
+
+        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+        })
+        assert resp.json()["status"] == "pasted"
+
+        # 不应创建 lead_notification（无 lead_id/staff_id）
+        notif_count = db.query(LeadNotification).count()
+        assert notif_count == 0
+    finally:
+        db.close()

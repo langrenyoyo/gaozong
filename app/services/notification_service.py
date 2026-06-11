@@ -187,23 +187,20 @@ def auto_notify_assigned_lead(
         result["send_status"] = "failed"
         return result
 
-    # P0-2C 守卫：chat_verified=false 时不允许自动发送
+    # P0-2C 守卫：chat_verified 来自 UIA 控件树，Qt5 微信不可靠（P0-3E 结论）。
+    # 不再作为终止条件，改由后续 OCR 联系人验证作为最终硬门禁（P0-MAIN-2D）。
     chat_verified = search_result.get("chat_verified", False)
     chat_title = search_result.get("chat_title")
     logger.info(
-        "auto_notify: 聊天窗口已打开: chat_title='%s', chat_verified=%s",
-        chat_title, chat_verified,
+        "auto_notify: 聊天窗口已打开: chat_title='%s', chat_verified=%s, confidence=%s",
+        chat_title, chat_verified, search_result.get("confidence", 0),
     )
 
     if not chat_verified:
-        _create_notification_record(
-            db, lead.id, staff.id, notification_text, "failed",
-            error_message=f"聊天窗口未验证 (confidence={search_result.get('confidence', 0)})",
-            send_mode="auto_notify",
+        logger.info(
+            "auto_notify: chat_verified=false（UIA 不可靠），将继续执行 OCR 联系人验证: nickname='%s'",
+            staff.wechat_nickname,
         )
-        result["message"] = "聊天窗口未验证，不允许自动发送"
-        result["send_status"] = "failed"
-        return result
 
     # P0-2E 守卫：联系人二次确认（发送前验证当前聊天对象）
     verify_result = verify_current_chat_contact(

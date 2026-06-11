@@ -29,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=f"启动 {EXE_DISPLAY_NAME}")
     parser.add_argument("--host", default=DEFAULT_EXE_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_EXE_PORT)
+    parser.add_argument("--server-url", default=None,
+                        help="主系统地址（如 http://192.168.110.113:9000），用于拉取任务和回写结果")
     return parser
 
 
@@ -38,10 +40,10 @@ def _port_is_available(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) != 0
 
 
-def _print_startup_message(host: str, port: int) -> None:
+def _print_startup_message(host: str, port: int, server_url: str | None) -> None:
     import sys
 
-    app = create_local_agent_app(host=host, port=port)
+    app = create_local_agent_app(host=host, port=port, server_url=server_url)
     routes = get_route_paths(app)
 
     print("=" * 50)
@@ -55,6 +57,7 @@ def _print_startup_message(host: str, port: int) -> None:
     print(f"local_agent_url: http://{host}:{port}")
     print(f"agent_version_url: http://{host}:{port}/agent/version")
     print(f"health_url: http://{host}:{port}/health")
+    print(f"server_url: {server_url or '（未配置 — 任务拉取不可用）'}")
     print()
     print("routes:")
     for route_path in routes:
@@ -76,14 +79,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     host = args.host
     port = int(args.port)
+    server_url = args.server_url
 
     if not _port_is_available(host, port):
         print(f"{EXE_DISPLAY_NAME} 启动失败")
         print(f"端口 {port} 已被占用，请关闭旧的小高AI微信助手.exe 后重试。")
         return 1
 
-    _print_startup_message(host, port)
-    uvicorn.run(create_local_agent_app(host=host, port=port), host=host, port=port)
+    _print_startup_message(host, port, server_url)
+    uvicorn.run(
+        create_local_agent_app(host=host, port=port, server_url=server_url),
+        host=host, port=port,
+    )
     return 0
 
 

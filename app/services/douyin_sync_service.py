@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.config import DOUYIN_API_BASE_URL, DOUYIN_API_TIMEOUT_SECONDS
 from app.integrations.douyin_api_client import fetch_leads, DouyinApiError
-from app.models import DouyinLead, SalesStaff
+from app.models import DouyinLead, SalesStaff, ReplyCheck
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem, WechatTaskSyncStats
 from app.services import assign_service
 from app.services.notification_service import auto_notify_assigned_lead, _compose_notification_text
@@ -191,12 +191,23 @@ def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
     # 复用通知模板生成消息（纯函数，不发送）
     message = _compose_notification_text(lead)
 
+    # P0-MAIN-5A：查找该 lead+staff 最新的 pending reply_check，填入 reply_check_id
+    reply_check_id = None
+    latest_check = db.query(ReplyCheck).filter(
+        ReplyCheck.lead_id == lead.id,
+        ReplyCheck.staff_id == staff.id,
+        ReplyCheck.check_status == "pending",
+    ).order_by(ReplyCheck.id.desc()).first()
+    if latest_check:
+        reply_check_id = latest_check.id
+
     try:
         task = wechat_task_service.create_wechat_task(
             db,
             task_type="notify_sales",
             lead_id=lead.id,
             staff_id=staff.id,
+            reply_check_id=reply_check_id,
             target_nickname="Aw3",
             message=message,
             mode="paste_only",

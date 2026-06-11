@@ -1197,11 +1197,9 @@ def test_click_left_button_sendinput_diag_enabled_success_does_not_sendinput():
         debug = contact_searcher._click_left_button(120, 95, hwnd=321)
 
     mock_diag.assert_not_called()
-    assert debug["sendinput_mouse_debug"] == {
-        "enabled": False,
-        "mode": "move_only",
-        "reason": "set_cursor_pos_reached_target",
-    }
+    # P0-MAIN-5B-3: cursor 到达目标时不再设置 sendinput_mouse_debug，直接 down/up
+    assert debug.get("sendinput_fallback") is None  # 无需 fallback
+    assert debug.get("mouse_move_failed") is not True  # 未失败
     jsonable_encoder(debug)
 
 
@@ -1249,9 +1247,10 @@ def test_click_left_button_sendinput_diag_enabled_failure_calls_move_only():
         120,
         95,
         hwnd=321,
-        reason="set_cursor_pos_failed_or_cursor_not_at_target",
+        reason="set_cursor_pos_cursor_not_at_target",
     )
-    assert debug["sendinput_mouse_debug"] == sendinput_debug
+    # P0-MAIN-5B-3: key 改为 sendinput_fallback
+    assert debug["sendinput_fallback"] == sendinput_debug
     jsonable_encoder(debug)
 
 

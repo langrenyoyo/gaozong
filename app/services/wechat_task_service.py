@@ -2,6 +2,8 @@
 
 负责 WechatTask 的创建、查询、结果回写。
 本阶段不调用微信自动化，不调用 Local Agent。
+
+P0-MAIN-5A：submit result 联动 lead_notifications、check_configs。
 """
 
 import json
@@ -10,7 +12,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.models import WechatTask
+from app.models import WechatTask, LeadNotification, CheckConfig
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,8 @@ def submit_wechat_task_result(
         task.agent_pid = agent_pid
         db.commit()
         db.refresh(task)
+        _update_linked_notification(db, task, send_status="failed",
+                                    error_message="sent=true 被 P0 安全门禁拒绝")
         logger.warning("WechatTask %s: sent=true 被拒绝（P0-5A 不允许发送）", task.id)
         return task
 
@@ -145,6 +149,8 @@ def submit_wechat_task_result(
         task.failure_stage = failure_stage or "unknown_failure"
         db.commit()
         db.refresh(task)
+        _update_linked_notification(db, task, send_status="failed",
+                                    error_message=task.failure_stage)
         logger.info("WechatTask %s: 执行失败, stage=%s", task.id, task.failure_stage)
         return task
 
@@ -156,6 +162,8 @@ def submit_wechat_task_result(
         task.failure_stage = "partial_match_blocked"
         db.commit()
         db.refresh(task)
+        _update_linked_notification(db, task, send_status="blocked",
+                                    error_message="partial_match 被阻止")
         logger.info("WechatTask %s: partial_match 被阻止", task.id)
         return task
 
@@ -165,6 +173,8 @@ def submit_wechat_task_result(
         task.failure_stage = "manual_review_required_blocked"
         db.commit()
         db.refresh(task)
+        _update_linked_notification(db, task, send_status="blocked",
+                                    error_message="manual_review_required 被阻止")
         logger.info("WechatTask %s: manual_review_required 被阻止", task.id)
         return task
 
@@ -174,6 +184,8 @@ def submit_wechat_task_result(
         task.failure_stage = "verified_false_blocked"
         db.commit()
         db.refresh(task)
+        _update_linked_notification(db, task, send_status="blocked",
+                                    error_message="联系人验证未通过")
         logger.info("WechatTask %s: verified=false 被阻止", task.id)
         return task
 
@@ -186,6 +198,10 @@ def submit_wechat_task_result(
         task.sent_at = None
         db.commit()
         db.refresh(task)
+        # P0-MAIN-5A：联动 lead_notifications
+        _update_linked_notification(db, task, send_status="pasted")
+        # P0-MAIN-5A：如果有 reply_check_id，设置自动检测目标
+        _try_set_auto_detect_target(db, task)
         logger.info("WechatTask %s: paste_only 完成", task.id)
         return task
 
@@ -194,5 +210,102 @@ def submit_wechat_task_result(
     task.failure_stage = "unhandled_result_combination"
     db.commit()
     db.refresh(task)
+    _update_linked_notification(db, task, send_status="blocked",
+                                error_message="未匹配的结果组合")
     logger.warning("WechatTask %s: 未匹配的结果组合", task.id)
     return task
+
+
+def _update_linked_notification(
+    db: Session,
+    task: WechatTask,
+    *,
+    send_status: str,
+    error_message: str | None = None,
+) -> LeadNotification | None:
+    """P0-MAIN-5A：任务结果回写时联动更新 lead_notifications。
+
+    逻辑：
+      1. 如果 task 有 lead_id + staff_id，查找该 lead+staff 是否已有通知记录。
+      2. 已有 → 更新 send_status。
+      3. 无 → 创建新记录。
+      4. task.message 作为 notification_text。
+      5. send_mode 使用 "wechat_task" 标识来自任务队列。
+      6. 如果 task.task_type 不是 notify_sales，跳过（不联动）。
+    """
+    if task.task_type != "notify_sales":
+        return None
+
+    if not task.lead_id or not task.staff_id:
+        logger.debug("任务 %s 无 lead_id 或 staff_id，跳过通知联动", task.id)
+        return None
+
+    # 查找已有通知记录（同一 lead + staff）
+    existing = db.query(LeadNotification).filter(
+        LeadNotification.lead_id == task.lead_id,
+        LeadNotification.staff_id == task.staff_id,
+    ).order_by(LeadNotification.id.desc()).first()
+
+    if existing:
+        existing.send_status = send_status
+        existing.error_message = error_message
+        existing.sent_at = None  # P0 阶段 sent_at 始终为 None
+        db.commit()
+        db.refresh(existing)
+        logger.info(
+            "通知记录已更新: id=%d, send_status=%s, linked_task=%d",
+            existing.id, send_status, task.id,
+        )
+        return existing
+
+    # 无已有记录，创建新的
+    record = LeadNotification(
+        lead_id=task.lead_id,
+        staff_id=task.staff_id,
+        notification_text=task.message or "",
+        send_status=send_status,
+        send_mode="wechat_task",
+        error_message=error_message,
+        sent_at=None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    logger.info(
+        "通知记录已创建: id=%d, send_status=%s, linked_task=%d",
+        record.id, send_status, task.id,
+    )
+    return record
+
+
+def _try_set_auto_detect_target(db: Session, task: WechatTask) -> bool:
+    """P0-MAIN-5A：如果 task 有 reply_check_id 且 pasted 成功，设置自动检测目标。
+
+    将 wechat_active_check_id 设为 task.reply_check_id，
+    以便后续回复检测调度器知道当前要检测哪个 check。
+    """
+    if not task.reply_check_id:
+        return False
+
+    try:
+        cfg = db.query(CheckConfig).filter(
+            CheckConfig.config_key == "wechat_active_check_id"
+        ).first()
+        if cfg:
+            cfg.config_value = str(task.reply_check_id)
+        else:
+            cfg = CheckConfig(
+                config_key="wechat_active_check_id",
+                config_value=str(task.reply_check_id),
+                description="当前自动检测目标的 check_id（由 wechat_task 设置）",
+            )
+            db.add(cfg)
+        db.commit()
+        logger.info(
+            "自动检测目标已设置: check_id=%d, source_task=%d",
+            task.reply_check_id, task.id,
+        )
+        return True
+    except Exception as exc:
+        logger.error("设置自动检测目标失败: %s", exc)
+        return False
