@@ -233,10 +233,17 @@ def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
         )
 
         if write_result["success"]:
-            send_status = "sent"
-            sent_at = datetime.now()
-            result.send_status = "sent"
-            result.message = f"线索已发送给销售 {staff.name}"
+            # P0-MAIN-2B：区分 pasted_only 和真正发送，修复状态语义
+            if write_result.get("action") == "pasted_only":
+                send_status = "pasted"
+                sent_at = None
+                result.send_status = "pasted"
+                result.message = f"线索通知已粘贴到 {staff.name} 聊天输入框（等待人工确认）"
+            else:
+                send_status = "sent"
+                sent_at = datetime.now()
+                result.send_status = "sent"
+                result.message = f"线索已发送给销售 {staff.name}"
         else:
             send_status = "failed"
             sent_at = None

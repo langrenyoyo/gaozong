@@ -428,3 +428,229 @@ class TestSendPendingAssigned:
         finally:
             if db:
                 db.close()
+
+
+# ========== P0-MAIN-2B: paste_only 状态语义修复测试 ==========
+
+class TestPastedOnlyStatus:
+    """验证 auto_send=False / require_confirm=True / action="pasted_only" 时 send_status="pasted" 而非 "sent"。"""
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_notification_service_paste_only_records_pasted(self, mock_window, mock_write, mock_verify, mock_search):
+        """notification_service: auto_send=False + pasted_only → send_status="pasted", sent_at=None"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": "测试微信昵称",
+            "chat_verified": True,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        # 关键：action="pasted_only" 表示只粘贴未发送
+        mock_write.return_value = {
+            "success": True,
+            "action": "pasted_only",
+            "pasted": True,
+            "sent": False,
+            "message": "文本已粘贴到输入框（未发送，等待人工确认回车）",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            check = _create_pending_check(db, lead, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
+
+            # result 应为 pasted，非 sent
+            assert result["send_status"] == "pasted"
+            assert result["success"] is False  # paste_only 不算最终成功
+
+            # 通知记录应记录为 pasted
+            notif = db.query(LeadNotification).filter(
+                LeadNotification.lead_id == lead.id
+            ).first()
+            assert notif is not None
+            assert notif.send_status == "pasted"
+            assert notif.sent_at is None
+
+            # 自动检测目标不应设置（消息未真正发送）
+            cfg = db.query(CheckConfig).filter(
+                CheckConfig.config_key == "wechat_active_check_id"
+            ).first()
+            assert cfg is None or cfg.config_value != str(check.id)
+        finally:
+            db.close()
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_notification_service_auto_send_true_records_sent(self, mock_window, mock_write, mock_verify, mock_search):
+        """notification_service: auto_send=True + sent → send_status="sent"（不受修复影响）"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": "测试微信昵称",
+            "chat_verified": True,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        # auto_send=True → action="pasted_and_sent"
+        mock_write.return_value = {
+            "success": True,
+            "action": "pasted_and_sent",
+            "pasted": True,
+            "sent": True,
+            "message": "文本已粘贴并自动发送",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            check = _create_pending_check(db, lead, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=True)
+
+            assert result["send_status"] == "sent"
+            assert result["success"] is True
+
+            notif = db.query(LeadNotification).filter(
+                LeadNotification.lead_id == lead.id
+            ).first()
+            assert notif is not None
+            assert notif.send_status == "sent"
+            assert notif.sent_at is not None
+        finally:
+            db.close()
+
+    @patch("app.routers.lead_notifications.open_chat_by_nickname")
+    @patch("app.routers.lead_notifications.verify_current_chat_contact")
+    @patch("app.routers.lead_notifications.write_text_to_input")
+    @patch("app.routers.lead_notifications.find_wechat_window")
+    def test_lead_notifications_route_paste_only_records_pasted(self, mock_window, mock_write, mock_verify, mock_search):
+        """POST /lead-notifications/send-to-staff { auto_send: false } + pasted_only → send_status="pasted" """
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": "测试微信昵称",
+            "chat_verified": True,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        mock_write.return_value = {
+            "success": True,
+            "action": "pasted_only",
+            "pasted": True,
+            "sent": False,
+            "message": "文本已粘贴到输入框（未发送，等待人工确认回车）",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+            _create_pending_check(db, lead, staff)
+            lead_id = lead.id
+            db.close()
+
+            response = client.post("/lead-notifications/send-to-staff", json={
+                "lead_id": lead_id,
+                "auto_send": False,
+            })
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["send_status"] == "pasted"
+            assert data["success"] is False
+
+            # 用新 session 验证通知记录
+            db2 = SessionLocal()
+            try:
+                notif = db2.query(LeadNotification).filter(
+                    LeadNotification.lead_id == lead.id
+                ).first()
+                assert notif is not None
+                assert notif.send_status == "pasted"
+                assert notif.sent_at is None
+                assert notif.send_mode == "require_confirm"
+            finally:
+                db2.close()
+        finally:
+            if db:
+                db.close()
+
+    @patch("app.services.notification_service.open_chat_by_nickname")
+    @patch("app.services.notification_service.verify_current_chat_contact")
+    @patch("app.services.notification_service.write_text_to_input")
+    @patch("app.services.notification_service.find_wechat_window")
+    def test_notification_service_failed_stays_failed(self, mock_window, mock_write, mock_verify, mock_search):
+        """write_result["success"]=False → send_status 保持 "failed"（不受修复影响）"""
+        from app.services.notification_service import auto_notify_assigned_lead
+
+        mock_search.return_value = {
+            "success": True,
+            "chat_title": "测试微信昵称",
+            "chat_verified": True,
+            "message": "已打开",
+            "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700},
+        }
+        mock_verify.return_value = {
+            "verified": True, "expected_nickname": "测试微信昵称",
+            "matched_text": "测试微信昵称", "strategy": "top_title",
+            "manual_review_required": False, "failure_stage": None,
+            "debug_screenshots": [], "warning": None, "message": "ok",
+        }
+        mock_write.return_value = {
+            "success": False,
+            "action": None,
+            "pasted": False,
+            "sent": False,
+            "message": "写入微信输入框失败: 输入框未找到",
+        }
+        mock_window.return_value = MagicMock()
+
+        db = SessionLocal()
+        try:
+            staff = _create_staff(db)
+            lead = _create_assigned_lead(db, staff)
+
+            result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
+
+            assert result["send_status"] == "failed"
+            assert result["success"] is False
+
+            notif = db.query(LeadNotification).filter(
+                LeadNotification.lead_id == lead.id
+            ).first()
+            assert notif is not None
+            assert notif.send_status == "failed"
+        finally:
+            db.close()
