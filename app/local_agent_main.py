@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.wintypes
+import logging
 import os
 import platform
 import socket
@@ -28,6 +29,7 @@ from app.wechat_ui.contact_searcher import (
     run_search_result_debug,
 )
 from app.wechat_ui.contact_verifier import verify_current_chat_contact
+from app.wechat_ui.current_chat_reader import read_recent_messages
 from app.wechat_ui.input_writer import write_text_to_input
 from app.wechat_ui.ocr_runtime import get_ocr_status, start_ocr_warmup
 from app.wechat_ui.screenshot_debug import save_debug_screenshot
@@ -35,9 +37,12 @@ from app.wechat_ui.window_locator import (
     check_wechat_ready_for_automation,
     collect_wechat_window_diagnostics,
     ensure_wechat_foreground,
+    find_message_list,
     find_wechat_window,
 )
 
+
+logger = logging.getLogger(__name__)
 
 AGENT_SERVICE_NAME = "auto_wechat_local_agent"
 ONLY_ALLOWED_NICKNAME = "Aw3"
@@ -74,6 +79,14 @@ class LocalWechatMouseDebugRequest(BaseModel):
     target_y: int
     move_only: bool = True
     method: str = "set_cursor_pos"  # set_cursor_pos / sendinput_absolute
+
+
+class AgentReplyDetectRequest(BaseModel):
+    """P0-REPLY-2：Local Agent 回复检测请求"""
+    lead_id: int = Field(..., description="线索 ID")
+    staff_id: int = Field(..., description="销售 ID")
+    task_id: int | None = Field(None, description="关联任务 ID")
+    target_nickname: str = Field(ONLY_ALLOWED_NICKNAME, description="目标联系人昵称")
 
 
 def get_machine_identity() -> dict:
@@ -940,10 +953,7 @@ def create_local_agent_app(
             return result
         except Exception as exc:
             # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
-            import logging as _logging
-            _logging.getLogger("local_agent_main").error(
-                "poll-and-execute 内部异常: %s", exc, exc_info=True,
-            )
+            logger.error("poll-and-execute 内部异常: %s", exc, exc_info=True)
             result["failure_stage"] = result.get("failure_stage") or "internal_error"
             result["message"] = f"内部错误: {exc}"
             _task_info = result.get("task") or {}
@@ -955,6 +965,217 @@ def create_local_agent_app(
                 except Exception:
                     pass
             return result
+
+    # ========== P0-REPLY-2：回复检测 ==========
+
+    @app.post("/agent/replies/detect")
+    def agent_replies_detect(request: AgentReplyDetectRequest):
+        """P0-REPLY-2：读取客户电脑 B 微信消息，发送给主系统分析回复。
+
+        安全约束：
+        - 只读取消息，不写入输入框，不发送，不按 Enter
+        - 不调用 input_writer
+        - 只允许 target_nickname=Aw3
+        - OCR 验证失败 → blocked
+        - open_chat 失败 → 不继续检测
+        - sent=false, pasted=false（本接口不做任何写入操作）
+        """
+        result = {
+            "success": False,
+            "agent_machine": get_machine_identity(),
+            "detected_status": "failed",
+            "matched_reply": None,
+            "messages_read": 0,
+            "messages": [],
+            "failure_stage": None,
+            "write_back": None,
+            "message": "",
+            "raw_result": None,
+        }
+
+        # 1. 检查 server_url
+        if not server_url:
+            result["failure_stage"] = "server_url_not_configured"
+            result["message"] = "未配置主系统地址，请启动时传入 --server-url 参数"
+            return result
+
+        # 2. 只允许 Aw3
+        if request.target_nickname != ONLY_ALLOWED_NICKNAME:
+            result["failure_stage"] = "target_nickname_not_aw3"
+            result["message"] = f"目标联系人 {request.target_nickname} 不被允许，只允许 {ONLY_ALLOWED_NICKNAME}"
+            return result
+
+        # 3. 紧急停止检查
+        if not is_automation_allowed():
+            result["failure_stage"] = "emergency_stop"
+            result["message"] = BLOCKED_MESSAGE
+            result["detected_status"] = "blocked"
+            return result
+
+        try:
+            # 4. OCR 就绪检查
+            ocr_check = {"ocr": None}
+            ocr_block = _check_ocr_ready_for_agent_test(ocr_check)
+            if ocr_block is not None:
+                result["failure_stage"] = ocr_block.get("failure_stage", "ocr_not_ready")
+                result["message"] = ocr_block.get("message", "OCR 未就绪")
+                result["raw_result"] = {"ocr_status": ocr_check.get("ocr")}
+                return result
+
+            # 5. 微信窗口 + 前台
+            try:
+                window = find_wechat_window()
+                hwnd = getattr(window, "NativeWindowHandle", None)
+            except Exception as exc:
+                result["failure_stage"] = "wechat_window_not_found"
+                result["message"] = f"微信窗口未找到: {exc}"
+                return result
+
+            if isinstance(hwnd, int):
+                readiness = check_wechat_ready_for_automation(hwnd)
+                if not readiness.get("success"):
+                    result["failure_stage"] = "wechat_not_ready"
+                    result["message"] = readiness.get("message", "微信未就绪")
+                    result["raw_result"] = {"readiness": readiness}
+                    return result
+
+                fg = ensure_wechat_foreground(hwnd, reason="reply_detect_before_open_chat")
+                if not fg.get("success"):
+                    result["failure_stage"] = "foreground_guard_failed"
+                    result["message"] = fg.get("message", "微信前台焦点丢失")
+                    result["raw_result"] = {"foreground_guard": fg}
+                    return result
+
+            # 6. 验证当前聊天是否已是目标
+            already_on_target = False
+            pre_verify = verify_current_chat_contact(request.target_nickname)
+            if (pre_verify.get("verified")
+                    and not pre_verify.get("partial_match")
+                    and not pre_verify.get("manual_review_required")):
+                already_on_target = True
+                logger.info("reply_detect: 已在目标聊天窗口 %s，跳过 open_chat", request.target_nickname)
+            else:
+                # 7. 需要打开目标聊天
+                try:
+                    open_result = open_chat_by_nickname(request.target_nickname)
+                except Exception as exc:
+                    result["failure_stage"] = "open_chat_exception"
+                    result["message"] = f"打开聊天异常: {exc}"
+                    return result
+
+                if not open_result.get("success"):
+                    result["failure_stage"] = open_result.get("failure_stage", "open_chat_failed")
+                    result["message"] = f"打开聊天失败: {open_result.get('message', '')}"
+                    result["raw_result"] = {"open_result": open_result}
+                    return result
+
+                # 8. OCR 验证联系人
+                verify_result = verify_current_chat_contact(
+                    request.target_nickname,
+                    win_rect=open_result.get("window_rect"),
+                )
+
+                if verify_result.get("partial_match"):
+                    result["failure_stage"] = "partial_match_blocked"
+                    result["message"] = f"联系人部分匹配，不允许检测: {request.target_nickname}"
+                    result["detected_status"] = "blocked"
+                    result["raw_result"] = {"verify_result": verify_result}
+                    return result
+
+                if verify_result.get("manual_review_required"):
+                    result["failure_stage"] = "manual_review_required_blocked"
+                    result["message"] = "联系人验证需要人工复核，不允许检测"
+                    result["detected_status"] = "blocked"
+                    result["raw_result"] = {"verify_result": verify_result}
+                    return result
+
+                if not verify_result.get("verified"):
+                    result["failure_stage"] = "contact_not_verified"
+                    result["message"] = f"联系人验证未通过: {verify_result.get('message', '')}"
+                    result["detected_status"] = "blocked"
+                    result["raw_result"] = {"verify_result": verify_result}
+                    return result
+
+            # 9. 定位消息列表并读取消息
+            try:
+                msg_list = find_message_list(window, timeout=5)
+            except Exception as exc:
+                result["failure_stage"] = "message_list_not_found"
+                result["message"] = f"消息列表未找到: {exc}"
+                return result
+
+            try:
+                messages = read_recent_messages(msg_list, max_messages=20)
+            except Exception as exc:
+                result["failure_stage"] = "message_read_failed"
+                result["message"] = f"消息读取失败: {exc}"
+                return result
+
+            result["messages_read"] = len(messages)
+            result["messages"] = [
+                {
+                    "sender": m.get("sender", "unknown"),
+                    "content": m.get("content"),
+                    "sender_debug": m.get("sender_debug"),
+                }
+                for m in messages
+            ]
+
+            logger.info(
+                "reply_detect: 读取 %d 条消息, lead_id=%s, staff_id=%s",
+                len(messages), request.lead_id, request.staff_id,
+            )
+
+            # 10. 调用主系统 agent-write-back
+            wb_payload = {
+                "lead_id": request.lead_id,
+                "staff_id": request.staff_id,
+                "task_id": request.task_id,
+                "target_nickname": request.target_nickname,
+                "messages": result["messages"],
+                "agent_result": {
+                    "success": True,
+                    "failure_stage": None,
+                    "raw_result": {
+                        "messages_read": len(messages),
+                        "already_on_target": already_on_target,
+                    },
+                },
+            }
+
+            wb_resp = _http_post_json(f"{server_url}/replies/agent-write-back", wb_payload)
+            result["write_back"] = {
+                "ok": wb_resp.get("ok"),
+                "status_code": wb_resp.get("status"),
+                "error": wb_resp.get("error"),
+            }
+
+            if wb_resp.get("ok") and wb_resp.get("json"):
+                wb_data = wb_resp["json"]
+                result["detected_status"] = wb_data.get("detected_status", "pending")
+                result["matched_reply"] = wb_data.get("matched_reply")
+                result["message"] = wb_data.get("message", "")
+                result["success"] = True
+                result["raw_result"] = {
+                    "write_back_response": wb_data,
+                    "messages_read": len(messages),
+                    "already_on_target": already_on_target,
+                }
+                logger.info(
+                    "reply_detect: 主系统分析完成, detected_status=%s, matched=%s",
+                    wb_data.get("detected_status"), wb_data.get("matched_reply"),
+                )
+            else:
+                result["failure_stage"] = "server_request_failed"
+                result["message"] = f"主系统分析请求失败: {wb_resp.get('status', '?')} {wb_resp.get('error', '')}"
+                result["raw_result"] = {"wb_resp": wb_resp}
+
+        except Exception as exc:
+            logger.error("reply_detect 内部异常: %s", exc, exc_info=True)
+            result["failure_stage"] = result.get("failure_stage") or "internal_error"
+            result["message"] = f"内部错误: {exc}"
+
+        return result
 
     return app
 

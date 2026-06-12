@@ -24,7 +24,8 @@ def read_recent_messages(
     Returns:
         [{"sender": "self"|"friend"|"system"|"unknown",
           "content": "文本内容"或None,
-          "index": 序号}, ...]
+          "index": 序号,
+          "sender_debug": dict或None}, ...]
         按 UI 顺序排列（时间从早到晚）
 
     Raises:
@@ -45,10 +46,22 @@ def read_recent_messages(
         start_idx = max(0, total - max_messages)
         recent = children[start_idx:]
 
+        # P0-REPLY-3B：截取消息列表区域截图（一次截取，复用于所有消息）
+        list_img = _grab_list_screenshot(list_rect)
+
         messages = []
         for i, child in enumerate(recent):
-            # 判断发送方（传入 list_rect 用于 item 边缘判断）
-            sender = identify_sender(child, chat_mid_x, list_rect=list_rect)
+            # 从列表截图中裁剪 item 区域
+            item_img = _crop_item_from_list_img(child, list_rect, list_img)
+
+            # 判断发送方（传入截图用于像素颜色分析）
+            debug: dict = {}
+            sender = identify_sender(
+                child, chat_mid_x,
+                list_rect=list_rect,
+                item_img=item_img,
+                debug=debug,
+            )
 
             # 提取文本内容
             content = extract_text(child)
@@ -61,6 +74,7 @@ def read_recent_messages(
                 "sender": sender,
                 "content": content,
                 "index": start_idx + i,
+                "sender_debug": debug if debug else None,
             })
 
         logger.info(
@@ -78,6 +92,61 @@ def read_recent_messages(
         if isinstance(e, MessageReadError):
             raise
         raise MessageReadError(f"读取聊天消息失败: {e}") from e
+
+
+def _grab_list_screenshot(list_rect) -> object | None:
+    """P0-REPLY-3B：截取消息列表区域截图。
+
+    失败时返回 None（不影响主流程，截图策略会被跳过）。
+    """
+    try:
+        from app.wechat_ui.screenshot_debug import grab_screen
+        bbox = (list_rect.left, list_rect.top, list_rect.right, list_rect.bottom)
+        return grab_screen(bbox=bbox)
+    except Exception as e:
+        logger.debug(f"消息列表截图失败（不影响主流程）: {e}")
+        return None
+
+
+def _crop_item_from_list_img(
+    child: uia.Control,
+    list_rect,
+    list_img: object | None,
+) -> object | None:
+    """P0-REPLY-3B：从列表截图中裁剪单条消息区域。
+
+    Args:
+        child: 消息控件
+        list_rect: 列表矩形
+        list_img: 列表截图 PIL Image
+
+    Returns:
+        裁剪后的 PIL Image，失败或超出范围返回 None
+    """
+    if list_img is None:
+        return None
+
+    try:
+        item_rect = child.BoundingRectangle
+        # 计算 item 在列表截图中的偏移坐标
+        crop_x1 = item_rect.left - list_rect.left
+        crop_y1 = item_rect.top - list_rect.top
+        crop_x2 = item_rect.right - list_rect.left
+        crop_y2 = item_rect.bottom - list_rect.top
+
+        # 检查 item 是否完全在截图范围内
+        img_w, img_h = list_img.size
+        if crop_x1 < 0 or crop_y1 < 0 or crop_x2 > img_w or crop_y2 > img_h:
+            logger.debug(
+                f"item 超出截图范围: crop=({crop_x1},{crop_y1},{crop_x2},{crop_y2}), "
+                f"img=({img_w},{img_h})"
+            )
+            return None
+
+        return list_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+    except Exception as e:
+        logger.debug(f"裁剪 item 截图失败: {e}")
+        return None
 
 
 def _log_unknown_message(

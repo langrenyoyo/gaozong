@@ -77,6 +77,8 @@ def identify_sender(
     msg_control: uia.Control,
     chat_mid_x: float,
     list_rect=None,
+    item_img=None,
+    debug: dict | None = None,
 ) -> str:
     """
     判断消息发送方。
@@ -86,12 +88,15 @@ def identify_sender(
       2. item 边缘位置（PRIMARY）
       3. ButtonControl / ImageControl 头像
       4. TextControl 位置（辅助）
-      5. unknown
+      5. 截图像素颜色分析（P0-REPLY-3B 新增）
+      6. unknown
 
     Args:
         msg_control: 消息控件（ListItemControl）
         chat_mid_x: 聊天区域水平中线 X 坐标
         list_rect: 消息列表的 BoundingRectangle（用于 item 边缘判断）
+        item_img: item 区域的截图 PIL Image（用于像素颜色分析）
+        debug: 可选字典，接收各策略的调试信息
 
     Returns:
         "self" | "friend" | "system" | "unknown"
@@ -110,6 +115,9 @@ def identify_sender(
         system_reason = _check_is_system(msg_control, item_rect)
         if system_reason:
             logger.debug(f"  → system: {system_reason}")
+            if debug is not None:
+                debug["strategy"] = "system"
+                debug["reason"] = system_reason
             return "system"
 
         # ====== 步骤二：item 边缘位置（PRIMARY） ======
@@ -117,34 +125,61 @@ def identify_sender(
             result = _sender_by_item_edges(msg_control, item_rect, list_rect)
             if result:
                 logger.debug(f"  → {result} (item 边缘位置)")
+                if debug is not None:
+                    debug["strategy"] = "item_edges"
+                    debug["reason"] = "边缘距离判断"
                 return result
 
         # ====== 步骤三：ButtonControl / ImageControl 头像 ======
         result = _sender_by_button_avatar(msg_control, chat_mid_x)
         if result:
             logger.debug(f"  → {result} (ButtonControl 头像)")
+            if debug is not None:
+                debug["strategy"] = "button_avatar"
+                debug["reason"] = "ButtonControl 头像位置"
             return result
 
         result = _sender_by_other_avatar(msg_control, chat_mid_x)
         if result:
             logger.debug(f"  → {result} (其他头像控件)")
+            if debug is not None:
+                debug["strategy"] = "other_avatar"
+                debug["reason"] = "ImageControl/子控件头像位置"
             return result
 
         # ====== 步骤四：TextControl 位置（辅助） ======
         result = _sender_by_text_position(msg_control, chat_mid_x)
         if result:
             logger.debug(f"  → {result} (TextControl 位置)")
+            if debug is not None:
+                debug["strategy"] = "text_position"
+                debug["reason"] = "TextControl 中心位置"
             return result
+
+        # ====== 步骤五：截图像素颜色分析（P0-REPLY-3B） ======
+        # 仅对文本消息应用（ChatTextItemView），跳过图片/特殊消息
+        class_name = getattr(msg_control, "ClassName", "") or ""
+        if item_img is not None and "ChatTextItemView" in class_name:
+            result = _sender_by_screenshot_color(item_img, debug=debug)
+            if result:
+                logger.debug(f"  → {result} (截图像素颜色)")
+                return result
 
         # 所有策略都未命中
         child_summary = _get_child_summary(msg_control)
         logger.debug(
             f"  → unknown。子控件: {child_summary}"
         )
+        if debug is not None:
+            debug["strategy"] = "unknown"
+            debug["reason"] = f"所有策略未命中，子控件: {child_summary}"
         return "unknown"
 
     except Exception as e:
         logger.debug(f"发送方识别异常: {e}")
+        if debug is not None:
+            debug["strategy"] = "exception"
+            debug["reason"] = str(e)
         return "unknown"
 
 
@@ -416,6 +451,186 @@ def _get_child_summary(msg_control: uia.Control) -> str:
         return f"数量={len(children)}, 类型={types}"
     except Exception:
         return "(获取失败)"
+
+
+# ============================================================
+# P0-REPLY-3B：截图像素颜色分析策略
+# ============================================================
+
+# 微信 self 气泡绿色 RGB 约 (157, 242, 159)
+# 微信 friend 气泡白色 RGB 约 (238, 238, 240)
+# 微信浅色背景 RGB 约 (245-255, 245-255, 245-255)
+_SCREENSHOT_GREEN_THRESHOLD = 0.10   # 10% 绿色像素视为显著
+_SCREENSHOT_NONBG_THRESHOLD = 0.05   # 5% 非背景像素视为有内容
+_SCREENSHOT_MIN_SIZE = 20            # item 截图最小尺寸（像素）
+
+
+def _is_green_pixel(r: int, g: int, b: int) -> bool:
+    """判断像素是否为微信绿色气泡颜色。
+
+    微信 self 气泡绿色特征：G 通道明显高于 R 和 B。
+    典型值 (157, 242, 159)，G > R+30 且 G > B+30。
+    """
+    return g > 140 and g > r + 30 and g > b + 30 and r < 200
+
+
+def _is_background_pixel(r: int, g: int, b: int) -> bool:
+    """判断像素是否为微信聊天背景色。
+
+    浅色背景特征：三通道接近且较亮（>245），用于排除气泡和文字。
+    """
+    return (r > 245 and g > 245 and b > 245
+            and abs(r - g) < 8 and abs(g - b) < 8)
+
+
+def _sender_by_screenshot_color(item_img, debug: dict | None = None) -> str | None:
+    """
+    P0-REPLY-3B：截图像素颜色分析策略。
+
+    通过分析消息 item 截图中左右区域的像素颜色分布判断发送方。
+
+    识别规则（保守）：
+      1. self：右侧区域有显著绿色像素（微信绿色气泡），右侧绿色 > 左侧绿色
+      2. friend：左侧区域有显著非背景像素（白色/浅灰气泡），右侧无绿色，
+         左侧非背景显著高于右侧
+      3. 无法判断 → 返回 None（调用方会降级为 unknown）
+
+    Args:
+        item_img: PIL Image，消息 item 区域截图
+        debug: 可选字典，接收像素分析调试信息
+
+    Returns:
+        "self" | "friend" | None（None 表示无法判断）
+    """
+    try:
+        w, h = item_img.size
+        if w < _SCREENSHOT_MIN_SIZE or h < 5:
+            if debug is not None:
+                debug["screenshot"] = {
+                    "result": None, "reason": f"截图尺寸过小: {w}x{h}",
+                }
+            return None
+
+        mid = w // 2
+        pixels = item_img.load()
+
+        left_green = 0
+        right_green = 0
+        left_nonbg = 0
+        right_nonbg = 0
+        left_total = 0
+        right_total = 0
+
+        # 自适应采样步长：每边至少采样 50 个点
+        step = max(1, min(w, h) // 30)
+
+        for y in range(0, h, step):
+            for x in range(0, w, step):
+                px = pixels[x, y]
+                r, g, b = px[0], px[1], px[2]
+
+                is_green = _is_green_pixel(r, g, b)
+                is_bg = _is_background_pixel(r, g, b)
+
+                if x < mid:
+                    left_total += 1
+                    if is_green:
+                        left_green += 1
+                    if not is_bg:
+                        left_nonbg += 1
+                else:
+                    right_total += 1
+                    if is_green:
+                        right_green += 1
+                    if not is_bg:
+                        right_nonbg += 1
+
+        left_green_pct = left_green / left_total if left_total > 0 else 0
+        right_green_pct = right_green / right_total if right_total > 0 else 0
+        left_nonbg_pct = left_nonbg / left_total if left_total > 0 else 0
+        right_nonbg_pct = right_nonbg / right_total if right_total > 0 else 0
+
+        result = None
+        reason = ""
+
+        max_green = max(left_green_pct, right_green_pct)
+
+        # ---- 规则 1：绿色检测（self 气泡） ----
+        if max_green > _SCREENSHOT_GREEN_THRESHOLD:
+            if right_green_pct > left_green_pct:
+                # 右侧绿色显著 → self（绿色气泡在右侧）
+                result = "self"
+                reason = (
+                    f"右侧绿色={right_green_pct:.1%}"
+                    f">{_SCREENSHOT_GREEN_THRESHOLD:.0%}, 右>左"
+                    f"({left_green_pct:.1%})"
+                )
+            elif left_green_pct > right_green_pct:
+                # 左侧绿色显著 → friend（理论上不应出现，保守处理）
+                result = "friend"
+                reason = (
+                    f"左侧绿色={left_green_pct:.1%}"
+                    f">{_SCREENSHOT_GREEN_THRESHOLD:.0%}, 左>右"
+                    f"({right_green_pct:.1%})"
+                )
+            else:
+                reason = (
+                    f"左右绿色接近: 左={left_green_pct:.1%}"
+                    f" 右={right_green_pct:.1%}"
+                )
+        else:
+            # ---- 规则 2：无绿色时的非背景内容检测 ----
+            # friend 气泡在左侧（白色/浅灰），右侧无绿色
+            if (left_nonbg_pct > _SCREENSHOT_NONBG_THRESHOLD
+                    and left_nonbg_pct > right_nonbg_pct * 2
+                    and right_green_pct < 0.02):
+                result = "friend"
+                reason = (
+                    f"左侧非背景={left_nonbg_pct:.1%}"
+                    f">{_SCREENSHOT_NONBG_THRESHOLD:.0%}, "
+                    f"左>右*2({right_nonbg_pct:.1%}), 无绿色"
+                )
+            # 右侧有非背景内容但无绿色（极端情况，绿色阈值未达）
+            elif (right_nonbg_pct > _SCREENSHOT_NONBG_THRESHOLD
+                  and right_nonbg_pct > left_nonbg_pct * 2
+                  and left_green_pct < 0.02
+                  and right_green_pct < 0.02):
+                result = "self"
+                reason = (
+                    f"右侧非背景={right_nonbg_pct:.1%}"
+                    f">{_SCREENSHOT_NONBG_THRESHOLD:.0%}, "
+                    f"右>左*2({left_nonbg_pct:.1%}), 无绿色"
+                )
+            else:
+                reason = (
+                    f"绿色不足({max_green:.1%}"
+                    f"<{_SCREENSHOT_GREEN_THRESHOLD:.0%}), "
+                    f"非背景不显著(左={left_nonbg_pct:.1%}"
+                    f" 右={right_nonbg_pct:.1%})"
+                )
+
+        if debug is not None:
+            debug["screenshot"] = {
+                "green_left_pct": round(left_green_pct, 4),
+                "green_right_pct": round(right_green_pct, 4),
+                "nonbg_left_pct": round(left_nonbg_pct, 4),
+                "nonbg_right_pct": round(right_nonbg_pct, 4),
+                "sample_total": left_total + right_total,
+                "step": step,
+                "result": result,
+                "reason": reason,
+            }
+
+        if result:
+            logger.debug(f"  截图像素: {reason}")
+
+        return result
+
+    except Exception as e:
+        if debug is not None:
+            debug["screenshot"] = {"result": None, "error": str(e)}
+        logger.debug(f"  截图像素分析异常: {e}")
+        return None
 
 
 # ============================================================

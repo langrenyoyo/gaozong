@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.database import engine, Base
 from app.routers import staff, leads, replies, checks, reports, feedback, integrations, wechat_auto_detect, lead_notifications, automation_control, wechat_tasks
@@ -17,6 +18,15 @@ logging.basicConfig(
 )
 
 
+class UTF8JSONResponse(JSONResponse):
+    """显式声明 charset=utf-8 的 JSON 响应。
+
+    解决 Windows PowerShell 5.1 Invoke-RestMethod 对
+    Content-Type: application/json（无 charset）按系统代码页解码导致中文乱码。
+    """
+    media_type = "application/json; charset=utf-8"
+
+
 def create_app() -> FastAPI:
     """创建并返回 FastAPI 应用实例"""
     # 创建数据库表
@@ -26,6 +36,7 @@ def create_app() -> FastAPI:
         title="抖音线索销售微信回复检测系统 MVP",
         version="0.1.0",
         description="实现 抖音线索→分配销售→录入回复→检测有效性→超时判断→报表统计 的 MVP 闭环",
+        default_response_class=UTF8JSONResponse,
     )
 
     # 开发环境 CORS：允许本机和局域网 React 开发服务器跨域访问

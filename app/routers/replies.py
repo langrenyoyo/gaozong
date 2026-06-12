@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas import ManualReply, CheckOut, WechatDetectRequest, WechatDetectResponse
+from app.schemas import (
+    ManualReply, CheckOut, WechatDetectRequest, WechatDetectResponse,
+    AgentWriteBackRequest, AgentWriteBackResponse,
+)
 from app.services import reply_checker
 from app.services import wechat_ui_reply_service
 from app.wechat_ui.window_locator import list_suspected_windows, find_wechat_window, find_message_list
@@ -49,6 +52,32 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
         confirm_current_chat=data.confirm_current_chat,
     )
     return WechatDetectResponse(**result)
+
+
+@router.post("/agent-write-back", response_model=AgentWriteBackResponse)
+def agent_write_back(data: AgentWriteBackRequest, db: Session = Depends(get_db)):
+    """P0-REPLY-2：接收 Local Agent 从客户电脑微信读取的消息，分析关键词并回写数据库。
+
+    调用方：Local Agent POST 19000 /agent/replies/detect 内部调用此接口。
+
+    处理规则：
+    1. 根据 lead_id + staff_id 查找 pending ReplyCheck
+    2. 找不到 → failed
+    3. friend 消息命中关键词 → replied
+    4. unknown 消息命中关键词 → manual_review
+    5. 未命中 → pending
+    6. 不伪造 replied，不修改 sent_at
+    """
+    result = wechat_ui_reply_service.agent_write_back_reply(
+        db=db,
+        lead_id=data.lead_id,
+        staff_id=data.staff_id,
+        task_id=data.task_id,
+        target_nickname=data.target_nickname,
+        messages=[m.model_dump() for m in data.messages],
+        agent_result=data.agent_result.model_dump(),
+    )
+    return AgentWriteBackResponse(**result)
 
 
 @router.get("/debug/windows")

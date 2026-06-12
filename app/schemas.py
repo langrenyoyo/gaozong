@@ -415,3 +415,39 @@ class OpenChatResponse(BaseModel):
     failure_stage: Optional[str] = Field(None, description="失败阶段")
     debug_steps: list = Field([], description="详细调试步骤")
     debug_screenshots: list = Field([], description="调试截图路径列表（P0-2C）")
+
+
+# ========== P0-REPLY-2：Local Agent 回复检测回写 ==========
+
+class AgentMessage(BaseModel):
+    """Local Agent 读取的单条微信消息"""
+    sender: str = Field("unknown", description="发送方: self / friend / system / unknown")
+    content: Optional[str] = Field(None, description="消息文本内容")
+    sender_debug: Optional[dict] = Field(None, description="P0-REPLY-3B：发送方识别调试信息")
+
+
+class AgentResult(BaseModel):
+    """Local Agent 检测执行结果摘要"""
+    success: bool = Field(False, description="Agent 检测流程是否成功完成")
+    failure_stage: Optional[str] = Field(None, description="失败阶段标识")
+    raw_result: Optional[dict] = Field(None, description="原始诊断数据")
+
+
+class AgentWriteBackRequest(BaseModel):
+    """Local Agent 回写请求：将客户电脑 B 微信消息发送给主系统分析"""
+    lead_id: int = Field(..., description="线索 ID")
+    staff_id: int = Field(..., description="销售 ID")
+    task_id: Optional[int] = Field(None, description="关联任务 ID")
+    target_nickname: str = Field("Aw3", description="目标联系人昵称")
+    messages: list[AgentMessage] = Field(default_factory=list, description="从微信读取的消息列表")
+    agent_result: AgentResult = Field(default_factory=AgentResult, description="Agent 执行结果")
+
+
+class AgentWriteBackResponse(BaseModel):
+    """主系统分析回写响应"""
+    success: bool = Field(False, description="分析是否成功完成")
+    detected_status: str = Field("pending", description="检测结果: replied / pending / manual_review / failed")
+    check_id: Optional[int] = Field(None, description="匹配的 reply_check ID")
+    matched_reply: Optional[str] = Field(None, description="匹配到的有效回复文本")
+    effectiveness_reason: Optional[str] = Field(None, description="判定原因")
+    message: str = ""
