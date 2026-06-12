@@ -92,4 +92,6 @@ def submit_wechat_task_result(
         agent_hostname=data.agent_hostname,
         agent_pid=data.agent_pid,
         raw_result=data.raw_result,
+        detected_status=data.detected_status,
+        detect_count=data.detect_count,
     )

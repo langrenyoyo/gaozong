@@ -375,6 +375,9 @@ class WechatTaskResultRequest(BaseModel):
     agent_hostname: Optional[str] = Field(None, description="执行 Agent 的主机名")
     agent_pid: Optional[int] = Field(None, description="执行 Agent 的进程 ID")
     raw_result: Optional[dict] = Field(None, description="Agent 返回的原始结果")
+    # P1-AUTO-1：detect_reply 专用字段
+    detected_status: Optional[str] = Field(None, description="P1-AUTO-1：检测结果（仅 detect_reply 类型）: replied / pending / manual_review / failed / blocked")
+    detect_count: Optional[int] = Field(None, description="P1-AUTO-1：累计检测次数（仅 detect_reply 类型）")
 
 
 class WechatTaskResponse(BaseModel):
