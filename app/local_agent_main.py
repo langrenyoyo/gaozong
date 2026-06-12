@@ -15,6 +15,7 @@ from typing import Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.services.automation_control import BLOCKED_MESSAGE, is_automation_allowed
@@ -45,6 +46,16 @@ from app.wechat_ui.window_locator import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class UTF8JSONResponse(JSONResponse):
+    """显式声明 charset=utf-8 的 JSON 响应。
+
+    解决 Windows PowerShell 5.1 Invoke-RestMethod 对
+    Content-Type: application/json（无 charset）按系统代码页解码导致中文乱码。
+    """
+    media_type = "application/json; charset=utf-8"
+
 
 AGENT_SERVICE_NAME = "auto_wechat_local_agent"
 ONLY_ALLOWED_NICKNAME = "Aw3"
@@ -668,6 +679,7 @@ def create_local_agent_app(
         title="小高AI微信助手 Local Agent",
         version="0.1.0",
         description="Local WeChat UI automation agent, loopback only.",
+        default_response_class=UTF8JSONResponse,
     )
     app.add_middleware(
         CORSMiddleware,
