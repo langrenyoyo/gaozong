@@ -8,6 +8,8 @@ import ctypes.wintypes
 import logging
 import os
 import platform
+import json
+import threading
 import socket
 from typing import Literal
 
@@ -54,6 +56,9 @@ REACT_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+# P1-AUTO-1C：运行锁，确保同一时间只有一个微信 UI 任务
+_wechat_task_lock: threading.Lock | None = None
+
 
 class LocalWechatTestRequest(BaseModel):
     nickname: str = Field(ONLY_ALLOWED_NICKNAME)
@@ -87,6 +92,11 @@ class AgentReplyDetectRequest(BaseModel):
     staff_id: int = Field(..., description="销售 ID")
     task_id: int | None = Field(None, description="关联任务 ID")
     target_nickname: str = Field(ONLY_ALLOWED_NICKNAME, description="目标联系人昵称")
+
+
+class PollAndDetectRequest(BaseModel):
+    """P1-AUTO-1C：poll-and-detect 请求"""
+    max_messages: int = Field(20, ge=5, le=100, description="最多读取的消息条数")
 
 
 def get_machine_identity() -> dict:
@@ -153,6 +163,8 @@ def _write_back_task_result(
     sent: bool = False,
     failure_stage: str | None = None,
     raw_result: dict | None = None,
+    detected_status: str | None = None,
+    detect_count: int | None = None,
 ) -> dict | None:
     """P0-MAIN-5B：回写任务结果到主系统。
 
@@ -180,6 +192,11 @@ def _write_back_task_result(
         "agent_pid": os.getpid(),
         "raw_result": raw_result,
     }
+    # P1-AUTO-1C: detected_status 和 detect_count 条件加入
+    if detected_status is not None:
+        payload["detected_status"] = detected_status
+    if detect_count is not None:
+        payload["detect_count"] = detect_count
 
     wb_url = f"{server_url}/wechat-tasks/{task_id}/result"
     resp = _http_post_json(wb_url, payload)
@@ -369,6 +386,166 @@ def _foreground_debug_response(position: str = "right") -> dict:
     return result
 
 
+
+def _detect_reply_for_task(
+    *,
+    target_nickname: str,
+    max_messages: int = 20,
+    server_url: str = "",
+    lead_id: int = 0,
+    staff_id: int = 0,
+    task_id: int | None = None,
+) -> dict:
+    """P1-AUTO-1C：通用微信消息读取 + 回写检测 helper。
+
+    调用方负责 server_url、emergency_stop、运行锁等前置检查。
+    流程：OCR → 微信窗口 → 前台 → 验证/打开聊天 → 读取消息 → agent-write-back
+
+    安全约束：只读取，不写入，不粘贴，不发送。
+    """
+    result: dict = {
+        "success": False,
+        "detected_status": "failed",
+        "matched_reply": None,
+        "messages_read": 0,
+        "messages": [],
+        "failure_stage": None,
+        "verify": None,
+        "write_back": None,
+        "raw_result": None,
+        "action": {"sent": False, "pasted": False},
+    }
+
+    try:
+        # 1. OCR 就绪检查
+        ocr_check: dict = {"ocr": None}
+        ocr_block = _check_ocr_ready_for_agent_test(ocr_check)
+        if ocr_block is not None:
+            result["failure_stage"] = ocr_block.get("failure_stage", "ocr_not_ready")
+            result["raw_result"] = {"ocr_status": ocr_check.get("ocr")}
+            return result
+
+        # 2. 微信窗口 + 前台
+        try:
+            window = find_wechat_window()
+            hwnd = getattr(window, "NativeWindowHandle", None)
+        except Exception as exc:
+            result["failure_stage"] = "wechat_window_not_found"
+            result["raw_result"] = {"exception": str(exc)}
+            return result
+
+        if isinstance(hwnd, int):
+            readiness = check_wechat_ready_for_automation(hwnd)
+            if not readiness.get("success"):
+                result["failure_stage"] = "wechat_not_ready"
+                result["raw_result"] = {"readiness": readiness}
+                return result
+            fg = ensure_wechat_foreground(hwnd, reason="detect_reply_for_task")
+            if not fg.get("success"):
+                result["failure_stage"] = "foreground_guard_failed"
+                result["raw_result"] = {"foreground_guard": fg}
+                return result
+
+        # 3. 验证当前聊天是否已是目标
+        already_on_target = False
+        pre_verify = verify_current_chat_contact(target_nickname)
+        if (pre_verify.get("verified")
+                and not pre_verify.get("partial_match")
+                and not pre_verify.get("manual_review_required")):
+            already_on_target = True
+            logger.info("detect_reply_for_task: 已在目标聊天窗口 %s，跳过 open_chat", target_nickname)
+        else:
+            # 4. 打开目标聊天
+            try:
+                open_result = open_chat_by_nickname(target_nickname)
+            except Exception as exc:
+                result["failure_stage"] = "open_chat_exception"
+                result["raw_result"] = {"exception": str(exc)}
+                return result
+            if not open_result.get("success"):
+                result["failure_stage"] = open_result.get("failure_stage", "open_chat_failed")
+                result["raw_result"] = {"open_result": open_result}
+                return result
+
+            # 5. OCR 验证联系人
+            verify_result = verify_current_chat_contact(target_nickname,
+                                                         win_rect=open_result.get("window_rect"))
+            result["verify"] = {
+                "verified": bool(verify_result.get("verified")),
+                "strategy": verify_result.get("strategy"),
+                "ocr_text": verify_result.get("ocr_text"),
+                "confidence": verify_result.get("confidence"),
+                "partial_match": bool(verify_result.get("partial_match")),
+                "manual_review_required": bool(verify_result.get("manual_review_required", True)),
+                "failure_stage": verify_result.get("failure_stage"),
+            }
+            if verify_result.get("partial_match"):
+                result["failure_stage"] = "partial_match_blocked"
+                result["detected_status"] = "blocked"
+                return result
+            if verify_result.get("manual_review_required"):
+                result["failure_stage"] = "manual_review_required_blocked"
+                result["detected_status"] = "blocked"
+                return result
+            if not verify_result.get("verified"):
+                result["failure_stage"] = "contact_not_verified"
+                result["detected_status"] = "blocked"
+                return result
+
+        # 6. 读取消息
+        try:
+            msg_list = find_message_list(window, timeout=5)
+        except Exception as exc:
+            result["failure_stage"] = "message_list_not_found"
+            result["raw_result"] = {"exception": str(exc)}
+            return result
+        try:
+            messages = read_recent_messages(msg_list, max_messages=max_messages)
+        except Exception as exc:
+            result["failure_stage"] = "message_read_failed"
+            result["raw_result"] = {"exception": str(exc)}
+            return result
+
+        result["messages_read"] = len(messages)
+        result["messages"] = [
+            {"sender": m.get("sender", "unknown"), "content": m.get("content"),
+             "sender_debug": m.get("sender_debug")}
+            for m in messages
+        ]
+        logger.info("detect_reply_for_task: 读取 %d 条消息, lead_id=%s, staff_id=%s",
+                     len(messages), lead_id, staff_id)
+
+        # 7. 调用主系统 agent-write-back
+        wb_payload = {
+            "lead_id": lead_id, "staff_id": staff_id,
+            "task_id": task_id, "target_nickname": target_nickname,
+            "messages": result["messages"],
+            "agent_result": {"success": True, "failure_stage": None,
+                             "raw_result": {"messages_read": len(messages),
+                                            "already_on_target": already_on_target}},
+        }
+        wb_resp = _http_post_json(f"{server_url}/replies/agent-write-back", wb_payload)
+        result["write_back"] = {"ok": wb_resp.get("ok"), "status_code": wb_resp.get("status"),
+                                "error": wb_resp.get("error")}
+        if wb_resp.get("ok") and wb_resp.get("json"):
+            wb_data = wb_resp["json"]
+            result["detected_status"] = wb_data.get("detected_status", "pending")
+            result["matched_reply"] = wb_data.get("matched_reply")
+            result["success"] = True
+            result["raw_result"] = {"write_back_response": wb_data,
+                                    "messages_read": len(messages),
+                                    "already_on_target": already_on_target}
+            logger.info("detect_reply_for_task: 主系统分析完成, detected_status=%s",
+                         wb_data.get("detected_status"))
+        else:
+            result["failure_stage"] = "server_request_failed"
+            result["raw_result"] = {"wb_resp": wb_resp}
+    except Exception as exc:
+        logger.error("_detect_reply_for_task 内部异常: %s", exc, exc_info=True)
+        result["failure_stage"] = result.get("failure_stage") or "internal_error"
+        result["raw_result"] = {"exception": str(exc)}
+    return result
+
 def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
     """Run the local Aw3 paste-only test: OCR ready -> ready -> foreground -> open -> verify -> paste."""
     result = _base_response(request)
@@ -497,7 +674,12 @@ def create_local_agent_app(
         allow_origins=REACT_ALLOWED_ORIGINS,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
+
     )
+
+    # P1-AUTO-1C：初始化运行锁
+    global _wechat_task_lock
+    _wechat_task_lock = threading.Lock()
 
     @app.get("/agent/version")
     def agent_version():
@@ -720,10 +902,18 @@ def create_local_agent_app(
             "message": "",
         }
 
+        # P1-AUTO-1C：运行锁（与 poll-and-detect 共享）
+        if _wechat_task_lock is None or not _wechat_task_lock.acquire(blocking=False):
+            result["failure_stage"] = "agent_busy"
+            result["message"] = "Agent 正在执行其他任务，请稍后重试"
+            logger.warning("poll-and-execute: 运行锁被占用或未初始化，跳过")
+            return result
+
         # 1. 检查 server_url 是否已配置
         if not server_url:
             result["failure_stage"] = "server_url_not_configured"
             result["message"] = "未配置主系统地址，请启动时传入 --server-url 参数"
+            _wechat_task_lock.release()
             return result
 
         # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
@@ -965,6 +1155,206 @@ def create_local_agent_app(
                 except Exception:
                     pass
             return result
+        finally:
+            _wechat_task_lock.release()
+
+    # ========== P1-AUTO-1C：detect_reply 任务检测 ==========
+
+    @app.post("/agent/tasks/poll-and-detect")
+    def agent_poll_and_detect(request: PollAndDetectRequest | None = None):
+        """P1-AUTO-1C：从主系统拉取 detect_reply 任务，执行检测，回写结果。
+
+        优先级原则：
+        1. React/调度器应先调用 poll-and-execute 处理 notify_sales
+        2. 再调用 poll-and-detect 处理 detect_reply
+        3. 两个端点共享运行锁，不会并发操作微信
+
+        安全约束：
+        - 只处理 detect_reply 任务
+        - 只读取消息，不写入，不粘贴，不发送
+        - 不调用 input_writer
+        - action.sent=false, action.pasted=false
+        """
+        max_messages = request.max_messages if request else 20
+
+        result = {
+            "success": False,
+            "agent_machine": get_machine_identity(),
+            "task": None,
+            "detect_result": None,
+            "write_back": None,
+            "task_result_write_back": None,
+            "action": {"sent": False, "pasted": False},
+            "failure_stage": None,
+            "message": "",
+        }
+
+        # P1-AUTO-1C：运行锁（与 poll-and-execute 共享）
+        if _wechat_task_lock is None or not _wechat_task_lock.acquire(blocking=False):
+            result["failure_stage"] = "agent_busy"
+            result["message"] = "Agent 正在执行其他任务，请稍后重试"
+            logger.warning("poll-and-detect: 运行锁被占用或未初始化，跳过")
+            return result
+
+        try:
+            # 1. 检查 server_url
+            if not server_url:
+                result["failure_stage"] = "server_url_not_configured"
+                result["message"] = "未配置主系统地址"
+                return result
+
+            # 2. 拉取 detect_reply 任务
+            try:
+                poll_resp = _http_get(
+                    f"{server_url}/wechat-tasks/pending",
+                    params={"task_type": "detect_reply", "limit": 1},
+                )
+            except Exception as exc:
+                result["failure_stage"] = "server_connection_failed"
+                result["message"] = f"连接主系统失败: {exc}"
+                return result
+
+            if not poll_resp.get("ok"):
+                result["failure_stage"] = "server_request_failed"
+                result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
+                return result
+
+            tasks = poll_resp.get("json", [])
+            if not tasks:
+                result["success"] = True
+                result["message"] = "无待检测任务"
+                return result
+
+            task_data = tasks[0]
+            task_id = task_data.get("id")
+            task_type = task_data.get("task_type", "")
+            target_nickname = task_data.get("target_nickname", "")
+            lead_id = task_data.get("lead_id")
+            staff_id = task_data.get("staff_id")
+            reply_check_id = task_data.get("reply_check_id")
+            raw_result_str = task_data.get("raw_result")
+
+            result["task"] = {
+                "id": task_id,
+                "task_type": task_type,
+                "lead_id": lead_id,
+                "staff_id": staff_id,
+                "reply_check_id": reply_check_id,
+                "target_nickname": target_nickname,
+            }
+
+            # 3. 类型安全验证：只允许 detect_reply
+            if task_type != "detect_reply":
+                _write_back_task_result(
+                    result, server_url, task_id,
+                    success=False,
+                    failure_stage="task_type_not_detect_reply",
+                    raw_result={"rejected_task": result["task"]},
+                )
+                result["message"] = f"任务类型 {task_type} 不被支持，只支持 detect_reply"
+                return result
+
+            # 4. 联系人安全验证
+            if target_nickname != ONLY_ALLOWED_NICKNAME:
+                _write_back_task_result(
+                    result, server_url, task_id,
+                    success=False,
+                    failure_stage="target_nickname_not_aw3",
+                    raw_result={"rejected_task": result["task"]},
+                )
+                result["message"] = f"目标联系人 {target_nickname} 不被允许"
+                return result
+
+            # 5. 紧急停止检查
+            if not is_automation_allowed():
+                _write_back_task_result(
+                    result, server_url, task_id,
+                    success=False,
+                    failure_stage="emergency_stop",
+                    raw_result={"emergency_stop": True},
+                )
+                result["message"] = BLOCKED_MESSAGE
+                return result
+
+            # 6. 调用检测 helper
+            detect_result = _detect_reply_for_task(
+                target_nickname=target_nickname,
+                max_messages=max_messages,
+                server_url=server_url,
+                lead_id=lead_id or 0,
+                staff_id=staff_id or 0,
+                task_id=task_id,
+            )
+            result["detect_result"] = {
+                "detected_status": detect_result.get("detected_status"),
+                "matched_reply": detect_result.get("matched_reply"),
+                "messages_read": detect_result.get("messages_read", 0),
+                "failure_stage": detect_result.get("failure_stage"),
+            }
+
+            # 保留 agent-write-back 的响应
+            if detect_result.get("write_back"):
+                result["write_back"] = detect_result["write_back"]
+
+            # 7. 计算 detect_count
+            prev_count = 0
+            if raw_result_str:
+                try:
+                    prev_data = json.loads(raw_result_str) if isinstance(raw_result_str, str) else raw_result_str
+                    prev_count = prev_data.get("detect_count", 0)
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    prev_count = 0
+            current_detect_count = prev_count + 1
+
+            # 8. 回写任务结果到 9000
+            task_wb = _write_back_task_result(
+                result, server_url, task_id,
+                success=detect_result.get("success", False),
+                verified=bool(detect_result.get("verify", {}).get("verified", False)) if detect_result.get("verify") else True,
+                detected_status=detect_result.get("detected_status"),
+                detect_count=current_detect_count,
+                failure_stage=detect_result.get("failure_stage"),
+                raw_result={
+                    "detect_result": {
+                        "detected_status": detect_result.get("detected_status"),
+                        "messages_read": detect_result.get("messages_read", 0),
+                        "matched_reply": detect_result.get("matched_reply"),
+                        "already_on_target": (detect_result.get("raw_result") or {}).get("already_on_target"),
+                    },
+                    "detect_count": current_detect_count,
+                },
+            )
+            result["task_result_write_back"] = {
+                "ok": task_wb.get("ok") if task_wb else None,
+                "status_code": task_wb.get("status") if task_wb else None,
+            }
+
+            result["success"] = detect_result.get("success", False)
+            result["message"] = (
+                "检测任务执行完成" if detect_result.get("success")
+                else f"检测任务执行失败: {detect_result.get('failure_stage', 'unknown')}"
+            )
+
+        except Exception as exc:
+            logger.error("poll-and-detect 内部异常: %s", exc, exc_info=True)
+            result["failure_stage"] = result.get("failure_stage") or "internal_error"
+            result["message"] = f"内部错误: {exc}"
+            _task_info = result.get("task") or {}
+            if _task_info.get("id"):
+                try:
+                    _write_back_task_result(
+                        result, server_url, _task_info["id"],
+                        success=False,
+                        failure_stage="internal_error",
+                        raw_result={"exception": str(exc)},
+                    )
+                except Exception:
+                    pass
+        finally:
+            _wechat_task_lock.release()
+
+        return result
+
 
     # ========== P0-REPLY-2：回复检测 ==========
 
