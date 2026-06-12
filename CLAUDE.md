@@ -57,7 +57,7 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P0-4 Local Agent / exe 架构验证
+当前阶段：P0-END-1 MVP 主链路冻结验收（已完成）
 
 已完成：
 - P0 项目初始化、数据库设计
@@ -75,11 +75,12 @@ Output Rules
 - P0-3 本机微信自动化稳定性与安全门禁（前台焦点守卫、hidden/minimized 禁止恢复、剪贴板修复、OCR 识别验证、Aw3 debug 单发）
 
 进行中：
-- P0-4 本地 Agent / exe 架构验证
+- MVP 主链路冻结，等待重启服务器加载最新代码
 
 下一步聚焦：
-- **P0-4A-3**：让 /agent/wechat/test 在虚拟机 exe 中自动打开 Aw3 → OCR verified → paste_only → sent=false
-- P0-4B：小高AI微信助手.exe 安装包 / 分发优化
+- 重启 9000 + 19000 服务器，端到端真机验收
+- P0-END-2 旧调度器清理 + 自动化检测轮询
+- P0-5 多目标检测队列
 - P0-4C：Windows 10 测试电脑复测
 
 业务架构：
@@ -585,7 +586,7 @@ CORS 必须允许：
 
 ## P0 — 必须修复
 
-1. **P0-4A-3 未通过**：/agent/wechat/test 未自动执行 open_chat_by_nickname("Aw3")，虚拟机 Aw3 输入框未出现测试消息。当前真实阻塞。
+1. **服务器需重启加载最新代码**：9000 和 19000 当前运行的是 P0-4A-3 时代的旧代码，需手动重启加载 P0-REPLY-3B + UTF-8 修复。
 
 2. **自动检测单目标覆盖**：wechat_active_check_id 只能保存一个 check。多条线索连续发送时后发覆盖前一个目标。P0-5 需要升级为多目标检测队列。
 
@@ -765,7 +766,7 @@ tsconfig.node.json 必须包含：
 
 每次开始新任务前，必须先阅读 docs/ai/05_PROJECT_CONTEXT.md 中的当前活跃阶段和安全约束。
 
-1. 当前 auto_wechat 已进入本地 Agent / exe 架构验证阶段（P0-4）
+1. 当前 auto_wechat 已完成 MVP 主链路冻结验收（P0-END-1），验收文档见 docs/ai/P0_END_1_ACCEPTANCE.md
 2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
 3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
 4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL

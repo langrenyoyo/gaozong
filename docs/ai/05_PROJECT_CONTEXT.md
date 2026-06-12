@@ -14,13 +14,21 @@
 
 ## 2. 项目阶段
 
-**P0-4 本地 Agent / exe 架构验证（进行中）**
+**P0-END-1 MVP 主链路冻结验收（已完成）**
 
-已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4 → P5 → P6 → P7 → P8 → P0-2 → P0-3
+已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4 → P5 → P6 → P7 → P8 → P0-2 → P0-3 → P0-4 → P0-REPLY-2 → P0-REPLY-3B → P0-END-1
 
-当前聚焦：P0-4A-3 — /agent/wechat/test 自动打开 Aw3 → OCR verified → paste_only
+当前聚焦：**MVP 冻结，等待重启服务器加载最新代码后做端到端验证**
 
-P0-3 已完成本机微信自动化稳定性与安全门禁（OCR 验证、Aw3 debug 单发通过）。P0-4 验证本地 Agent exe 架构。
+最近完成：
+- P0-REPLY-3B：截图像素分析识别微信消息 sender（self/friend/system），真机 Aw3 验证零误判
+- UTF-8 JSON 响应修复：Content-Type 含 charset=utf-8，PowerShell 中文不乱码
+- P0-END-1：主链路冻结验收文档（见 docs/ai/P0_END_1_ACCEPTANCE.md）
+
+下一步：
+- 重启 9000 + 19000 服务器加载最新代码
+- 端到端真机验收（创建任务 → paste_only → 检测回复 → replied）
+- P0-END-2 旧调度器清理 + 自动化检测轮询
 
 ## 3. 项目目标
 
