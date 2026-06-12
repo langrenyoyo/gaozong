@@ -35,3 +35,9 @@ DEFAULT_CONFIGS = {
 DOUYIN_API_BASE_URL = os.getenv("DOUYIN_API_BASE_URL", "http://127.0.0.1:8081")
 DOUYIN_API_TIMEOUT_SECONDS = int(os.getenv("DOUYIN_API_TIMEOUT_SECONDS", "10"))
 DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))
+
+# ---------- 旧链路开关 ----------
+# P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。
+# 新主线使用 19000 Local Agent 操作微信，旧调度器会在 9000 所在电脑直接操作微信导致冲突。
+# 设置为 "1" 可恢复旧行为（仅供开发调试或回退使用）。
+AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT = os.getenv("AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT", "0") == "1"

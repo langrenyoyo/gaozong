@@ -1,7 +1,7 @@
 """FastAPI 应用入口"""
 
 import logging
-
+logger = logging.getLogger(__name__)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -69,7 +69,24 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def on_startup():
         scheduler.start()
-        wechat_auto_detect_scheduler.start()
+
+        # P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。
+        # 新主线使用 19000 Local Agent 操作微信，旧调度器会在 9000 所在电脑直接操作微信导致冲突。
+        # 如需恢复旧调度器（仅供开发调试或回退），设置环境变量 AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT=1。
+        from app.config import AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT
+        if AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT:
+            wechat_auto_detect_scheduler.start()
+            logger.warning(
+                "旧链路 wechat_auto_detect_scheduler 已通过环境变量启用。"
+                "新主线应使用 19000 Local Agent 进行微信自动检测。"
+            )
+        else:
+            logger.info(
+                "旧链路 wechat_auto_detect_scheduler 默认禁用。"
+                "新主线请使用 19000 Local Agent 进行微信自动检测。"
+                "如需启用旧调度器，设置环境变量 AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT=1。"
+            )
+
         # P8-4：全局热键 + 桌面提示
         from app.services.hotkey_listener import start_hotkey_listener
         from app.services.desktop_overlay import start_desktop_overlay
