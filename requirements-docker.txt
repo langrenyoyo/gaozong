@@ -1,5 +1,7 @@
-fastapi>=0.100.0
-uvicorn>=0.20.0
-sqlalchemy>=2.0.0
-pydantic>=2.0.0
-httpx>=0.24.0
+# Docker 部署专用依赖（Linux 兼容，排除 Windows 专用包）
+# 版本锁定基于本地验证通过的环境
+fastapi==0.136.3
+uvicorn==0.49.0
+sqlalchemy==2.0.50
+pydantic==2.12.4
+httpx==0.28.1

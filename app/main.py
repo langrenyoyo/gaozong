@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(checks.router)
     app.include_router(reports.router)
     app.include_router(integrations.router)
+    app.include_router(integrations.legacy_webhook_router)
     app.include_router(wechat_auto_detect.router)
     app.include_router(automation_control.router)
     app.include_router(wechat_tasks.router)

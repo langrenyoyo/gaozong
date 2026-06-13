@@ -554,3 +554,99 @@ def test_webhook_api_wrong_signature():
         )
 
     assert resp.status_code == 401
+
+
+# ========== 兼容路径 /webhook/douyin 测试 ==========
+
+
+def test_webhook_legacy_api_no_signature():
+    """POST /webhook/douyin 无签名头 → 401"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+        resp = client.post(
+            "/webhook/douyin",
+            data=b'{"event":"test"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401
+
+
+def test_webhook_legacy_api_success():
+    """POST /webhook/douyin 正确签名 → 200，创建线索"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    uid = f"legacy_api_{int(time.time())}"
+    payload = _sample_payload(from_user_id=uid, nick_name="兼容路径测试", message_text="旧路径消息")
+    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
+
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+        resp = client.post(
+            "/webhook/douyin",
+            data=body_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Auth-Timestamp": ts,
+                "Authorization": sig,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["code"] == 0
+    assert data["msg"] == "success"
+    assert data["lead_action"] == "created"
+    assert data["is_new_lead"] is True
+    assert data["lead_id"] is not None
+
+
+def test_webhook_legacy_and_main_path_idempotent():
+    """同一事件从 /webhook/douyin 和 /integrations/douyin/webhook 各发一次 → 只创建 1 条线索"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    uid = f"cross_path_{int(time.time())}"
+    payload = _sample_payload(from_user_id=uid, nick_name="跨路径幂等测试", message_text="跨路径消息")
+    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Auth-Timestamp": ts,
+        "Authorization": sig,
+    }
+
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+        # 第一次从兼容路径发送
+        resp1 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers=headers)
+        # 第二次从主路径发送（同一事件）
+        resp2 = client.post(
+            "/integrations/douyin/webhook", data=body_text.encode("utf-8"), headers=headers
+        )
+
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+
+    data1 = resp1.json()
+    data2 = resp2.json()
+
+    # 第一次创建，第二次为重复
+    assert data1["lead_action"] == "created"
+    assert data1["is_new_lead"] is True
+    assert data2["is_duplicate"] is True
+    assert data2["lead_action"] == "not_lead_event"
+
+    # 两路径返回相同 lead_id（共享幂等逻辑）
+    assert data1["lead_id"] == data2["lead_id"]
+    assert data1["event_id"] == data2["event_id"]
