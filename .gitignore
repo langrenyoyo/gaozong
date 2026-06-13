@@ -1,17 +1,34 @@
 __pycache__/
 *.pyc
 *.pyo
-data/*.db
-data/*.db-wal
-data/*.db-shm
-data/*.log
+*.log
+*.pth
+*.spec
 .venv/
 venv/
 *.egg-info/
 dist/
 build/
-data/debug_screenshots/*
-data/uvicorn_p0_3e.err.log
 CLAUDE.md
-data/auto_wechat.db-shm
-data/auto_wechat.db-wal
+
+# 数据库运行时文件
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.log
+data/debug_screenshots/*
+
+# 模型权重文件（太大，不提交）
+resources/easyocr_models/*.pth
+
+# IDE / 工具本地配置
+.vscode/
+.claude/settings.local.json
+
+# 构建产物（自动生成）
+app/local_agent_build_info.py
+
+# 测试/调试临时文件
+test_cors_leads.json
+test_wechat_debug.json
+@AutomationLog.txt
