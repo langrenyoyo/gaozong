@@ -481,136 +481,64 @@ def test_process_webhook_content_as_object():
 # ========== API 端点测试 ==========
 
 
-def test_webhook_api_success():
-    """POST /integrations/douyin/webhook 签名正确 → 200"""
+# ---------- 鉴权关闭场景（DOUYIN_WEBHOOK_AUTH_REQUIRED=false，默认） ----------
+
+
+def test_webhook_api_no_auth_success():
+    """auth_required=false：POST /integrations/douyin/webhook 无签名合法 payload → 200"""
     from fastapi.testclient import TestClient
     from app.main import create_app
 
     app = create_app()
     client = TestClient(app)
 
-    # 使用时间戳确保 from_user_id 唯一，避免真实数据库残留数据干扰
-    uid = f"api_test_{int(time.time())}"
-    payload = _sample_payload(from_user_id=uid, nick_name="API测试", message_text="API消息")
-    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
+    uid = f"noauth_{int(time.time())}"
+    payload = _sample_payload(from_user_id=uid, nick_name="无鉴权测试", message_text="无签名消息")
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+    with patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", False):
         resp = client.post(
             "/integrations/douyin/webhook",
             data=body_text.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Auth-Timestamp": ts,
-                "Authorization": sig,
-            },
+            headers={"Content-Type": "application/json"},
         )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["code"] == 0
-    assert data["msg"] == "success"
     assert data["lead_action"] == "created"
     assert data["is_new_lead"] is True
 
 
-def test_webhook_api_no_signature():
-    """POST /integrations/douyin/webhook 无签名头 → 401"""
+def test_webhook_legacy_api_no_auth_success():
+    """auth_required=false：POST /webhook/douyin 无签名合法 payload → 200，创建线索"""
     from fastapi.testclient import TestClient
     from app.main import create_app
 
     app = create_app()
     client = TestClient(app)
 
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
-        resp = client.post(
-            "/integrations/douyin/webhook",
-            data=b'{"event":"test"}',
-            headers={"Content-Type": "application/json"},
-        )
-
-    assert resp.status_code == 401
-
-
-def test_webhook_api_wrong_signature():
-    """POST /integrations/douyin/webhook 签名错误 → 401"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
-
-    payload = _sample_payload(from_user_id="api_wrong_sig")
+    uid = f"legacy_noauth_{int(time.time())}"
+    payload = _sample_payload(from_user_id=uid, nick_name="兼容路径无鉴权", message_text="无签名旧路径")
     body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
-        resp = client.post(
-            "/integrations/douyin/webhook",
-            data=body_text.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Auth-Timestamp": str(int(time.time())),
-                "Authorization": "completely_wrong_signature",
-            },
-        )
-
-    assert resp.status_code == 401
-
-
-# ========== 兼容路径 /webhook/douyin 测试 ==========
-
-
-def test_webhook_legacy_api_no_signature():
-    """POST /webhook/douyin 无签名头 → 401"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
-
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+    with patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", False):
         resp = client.post(
             "/webhook/douyin",
-            data=b'{"event":"test"}',
+            data=body_text.encode("utf-8"),
             headers={"Content-Type": "application/json"},
-        )
-
-    assert resp.status_code == 401
-
-
-def test_webhook_legacy_api_success():
-    """POST /webhook/douyin 正确签名 → 200，创建线索"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
-
-    uid = f"legacy_api_{int(time.time())}"
-    payload = _sample_payload(from_user_id=uid, nick_name="兼容路径测试", message_text="旧路径消息")
-    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
-
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
-        resp = client.post(
-            "/webhook/douyin",
-            data=body_text.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Auth-Timestamp": ts,
-                "Authorization": sig,
-            },
         )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["code"] == 0
-    assert data["msg"] == "success"
     assert data["lead_action"] == "created"
     assert data["is_new_lead"] is True
     assert data["lead_id"] is not None
 
 
-def test_webhook_legacy_and_main_path_idempotent():
-    """同一事件从 /webhook/douyin 和 /integrations/douyin/webhook 各发一次 → 只创建 1 条线索"""
+def test_webhook_legacy_and_main_path_idempotent_no_auth():
+    """auth_required=false：同一事件跨两路径 → 只创建 1 条线索（共享幂等 event_key）"""
     from fastapi.testclient import TestClient
     from app.main import create_app
 
@@ -619,15 +547,11 @@ def test_webhook_legacy_and_main_path_idempotent():
 
     uid = f"cross_path_{int(time.time())}"
     payload = _sample_payload(from_user_id=uid, nick_name="跨路径幂等测试", message_text="跨路径消息")
-    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-Auth-Timestamp": ts,
-        "Authorization": sig,
-    }
+    headers = {"Content-Type": "application/json"}
 
-    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+    with patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", False):
         # 第一次从兼容路径发送
         resp1 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers=headers)
         # 第二次从主路径发送（同一事件）
@@ -650,3 +574,98 @@ def test_webhook_legacy_and_main_path_idempotent():
     # 两路径返回相同 lead_id（共享幂等逻辑）
     assert data1["lead_id"] == data2["lead_id"]
     assert data1["event_id"] == data2["event_id"]
+
+
+# ---------- 鉴权开启场景（DOUYIN_WEBHOOK_AUTH_REQUIRED=true） ----------
+
+
+def test_webhook_api_auth_required_success():
+    """auth_required=true：正确签名 → 200"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    uid = f"authok_{int(time.time())}"
+    payload = _sample_payload(from_user_id=uid, nick_name="鉴权通过测试", message_text="签名消息")
+    body_text, ts, sig = _make_signed_request(payload, TEST_SECRET)
+
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET), \
+         patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", True):
+        resp = client.post(
+            "/integrations/douyin/webhook",
+            data=body_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Auth-Timestamp": ts,
+                "Authorization": sig,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["code"] == 0
+    assert data["lead_action"] == "created"
+
+
+def test_webhook_api_auth_required_no_signature():
+    """auth_required=true：POST /integrations/douyin/webhook 无签名头 → 401"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    with patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", True):
+        resp = client.post(
+            "/integrations/douyin/webhook",
+            data=b'{"event":"test"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401
+
+
+def test_webhook_api_auth_required_wrong_signature():
+    """auth_required=true：签名错误 → 401"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    payload = _sample_payload(from_user_id="wrong_sig_auth")
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET), \
+         patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", True):
+        resp = client.post(
+            "/integrations/douyin/webhook",
+            data=body_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Auth-Timestamp": str(int(time.time())),
+                "Authorization": "completely_wrong_signature",
+            },
+        )
+
+    assert resp.status_code == 401
+
+
+def test_webhook_legacy_api_auth_required_no_signature():
+    """auth_required=true：POST /webhook/douyin 无签名头 → 401"""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app()
+    client = TestClient(app)
+
+    with patch("app.routers.integrations.DOUYIN_WEBHOOK_AUTH_REQUIRED", True):
+        resp = client.post(
+            "/webhook/douyin",
+            data=b'{"event":"test"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401

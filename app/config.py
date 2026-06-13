@@ -48,6 +48,10 @@ DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
 DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
 DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+# 入站 webhook 是否强制签名鉴权
+# GMP 推送 callback_url 不携带签名，默认 false（不鉴权）
+# 置为 true 时恢复 X-Auth-Timestamp + Authorization 校验（仅调试/安全审计用）
+DOUYIN_WEBHOOK_AUTH_REQUIRED = os.getenv("DOUYIN_WEBHOOK_AUTH_REQUIRED", "false").lower() == "true"
 DY_CALLBACK_EVENTS = [
     item.strip()
     for item in os.getenv("DY_CALLBACK_EVENTS", "").split(",")

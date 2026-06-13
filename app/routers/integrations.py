@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.config import DOUYIN_WEBHOOK_AUTH_REQUIRED
 from app.database import get_db
 from app.integrations.douyin_webhook import (
     WebhookSignatureError,
@@ -33,7 +34,11 @@ async def _handle_douyin_webhook(
     """抖音 GMP Webhook 共享处理逻辑
 
     被 /integrations/douyin/webhook 和 /webhook/douyin 两个入口复用，
-    确保验签、解析、幂等、线索写入行为完全一致。
+    确保验签/解析、幂等、线索写入行为完全一致。
+
+    鉴权开关 DOUYIN_WEBHOOK_AUTH_REQUIRED：
+    - false（默认）：GMP 推送不鉴权，直接解析处理
+    - true：强制 X-Auth-Timestamp + Authorization 签名校验
 
     Args:
         body: 原始请求体字节流（用于验签）
@@ -42,32 +47,40 @@ async def _handle_douyin_webhook(
         db: 数据库会话
         source_path: 入口路径，用于日志区分（不参与业务逻辑）
     """
-    # 验签（缺少签名头或签名错误均拒绝）
-    try:
-        verify_signature(body, x_auth_timestamp, authorization)
-    except WebhookSignatureError as exc:
-        logger.warning(
-            "webhook 验签失败: source_path=%s, status=%d, message=%s",
+    # 鉴权（默认关闭，GMP 推送 callback_url 不携带签名）
+    if DOUYIN_WEBHOOK_AUTH_REQUIRED:
+        try:
+            verify_signature(body, x_auth_timestamp, authorization)
+        except WebhookSignatureError as exc:
+            logger.warning(
+                "webhook 验签失败: source_path=%s, webhook_auth_required=true, status=%d, message=%s",
+                source_path,
+                exc.status_code,
+                exc.message,
+            )
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    else:
+        logger.info(
+            "webhook 鉴权已关闭: source_path=%s, webhook_auth_required=false",
             source_path,
-            exc.status_code,
-            exc.message,
         )
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     # 解析 payload
     try:
         payload = json.loads(body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.warning(
-            "webhook payload 解析失败: source_path=%s, %s",
+            "webhook payload 解析失败: source_path=%s, webhook_auth_required=%s, %s",
             source_path,
+            DOUYIN_WEBHOOK_AUTH_REQUIRED,
             exc,
         )
         raise HTTPException(status_code=400, detail=f"无效的 JSON payload: {exc}")
 
     logger.info(
-        "webhook 接收成功: source_path=%s, event=%s, from=%s",
+        "webhook 接收成功: source_path=%s, webhook_auth_required=%s, event=%s, from=%s",
         source_path,
+        DOUYIN_WEBHOOK_AUTH_REQUIRED,
         payload.get("event"),
         (payload.get("from_user_id") or "")[:8] + "...",
     )
@@ -108,8 +121,9 @@ async def douyin_webhook(
 ) -> WebhookResponse:
     """接收抖音 GMP 私信 Webhook（主路径）
 
-    签名校验规则：SHA256(SECRET_KEY + body + "-" + timestamp)
-    必须携带 X-Auth-Timestamp 和 Authorization 头，否则 401。
+    鉴权由 DOUYIN_WEBHOOK_AUTH_REQUIRED 控制：
+    - false（默认）：不鉴权，GMP 推送直接处理
+    - true：要求 X-Auth-Timestamp + Authorization 签名
     """
     body = await request.body()
     return await _handle_douyin_webhook(
@@ -129,6 +143,7 @@ async def douyin_webhook_legacy(
 
     GMP 已配置的回调地址 https://callback.misanduo.com/webhook/douyin 保持不变，
     宝塔整站反代到 9000 后由此路径处理。与 /integrations/douyin/webhook 行为完全一致。
+    鉴权由 DOUYIN_WEBHOOK_AUTH_REQUIRED 控制。
     """
     body = await request.body()
     return await _handle_douyin_webhook(
