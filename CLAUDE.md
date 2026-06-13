@@ -57,7 +57,7 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P0-END-1 MVP 主链路冻结验收（已完成）
+当前阶段：P1-END-1 自动检测单次闭环演示版冻结（已完成）
 
 已完成：
 - P0 项目初始化、数据库设计
@@ -73,15 +73,32 @@ Output Rules
 - P0-1 局域网访问修复
 - P0-2 微信自动化稳定化（前台焦点守卫、白屏/灰屏诊断、Esc 隐藏修复、联系人确认策略、剪贴板修复）
 - P0-3 本机微信自动化稳定性与安全门禁（前台焦点守卫、hidden/minimized 禁止恢复、剪贴板修复、OCR 识别验证、Aw3 debug 单发）
+- P0-REPLY-2 Local Agent 销售回复检测 + 主系统回写（agent-write-back、sender 截图识别、UTF-8 修复）
+- P0-REPLY-3B 截图像素分析识别微信消息 sender（self/friend/system），真机 Aw3 验证零误判
+- P0-END-1 MVP 主链路冻结验收
+- P1-AUTO-1A/B detect_reply task + 检测结果回写（detected_status / detect_count）
+- P1-AUTO-1AB-FIX2 notify_sales pasted 后自动创建 detect_reply task + ReplyCheck 绑定
+- P1-AUTO-1C 19000 poll-and-detect 端点 + read_only 只读检测
+- P1-AUTO-1C-UTF8 19000 charset=utf-8 修复
+- P1-AUTO-1D React 自动回复检测面板 + poll-and-execute/poll-and-detect task_id 指定执行
+- P1-AUTO-1D-FIX2 poll-and-execute 支持 task_id
+- P1-AUTO-1D-FIX3 poll-and-detect 支持 task_id，避免旧 pending 队列阻塞
+- P1-AUTO-1D-FIX4 search-debug 安全序列化防止 500 RecursionError
+
+当前版本定位：
+- ✅ 自动检测单次闭环演示版
+- ❌ 不是后台无限自动轮询版
+- ❌ 不是自动发送版
+- ❌ 不是多客户生产版
 
 进行中：
-- MVP 主链路冻结，等待重启服务器加载最新代码
+- P1-END-1 文档冻结
 
 下一步聚焦：
-- 重启 9000 + 19000 服务器，端到端真机验收
-- P0-END-2 旧调度器清理 + 自动化检测轮询
-- P0-5 多目标检测队列
-- P0-4C：Windows 10 测试电脑复测
+- P1-END-2 修复前端 pasted 展示字段
+- P1-END-3 清理/归档旧 pending 任务策略
+- P2-A 后台定时轮询检测
+- P2-B 客户配置化关键词/工作时间/销售
 
 业务架构：
 
@@ -766,7 +783,7 @@ tsconfig.node.json 必须包含：
 
 每次开始新任务前，必须先阅读 docs/ai/05_PROJECT_CONTEXT.md 中的当前活跃阶段和安全约束。
 
-1. 当前 auto_wechat 已完成 MVP 主链路冻结验收（P0-END-1），验收文档见 docs/ai/P0_END_1_ACCEPTANCE.md
+1. 当前 auto_wechat 已完成 P1-END-1 自动检测单次闭环演示版冻结，验收文档见 docs/ai/P1_END_1_ACCEPTANCE.md
 2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
 3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
 4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
@@ -774,6 +791,9 @@ tsconfig.node.json 必须包含：
 6. React 离线提示应使用："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
 7. Bug 修复必须先做代码探索和根因确认，禁止仅凭现象就编写修复方案（详见 02_EXECUTION_RULES.md #17 BUG 修复前置探索原则）
 8. 高风险逻辑必须强制写诊断日志，包含 stage、输入摘要、failure_stage，禁止只写"失败了"（详见 02_EXECUTION_RULES.md #19 高风险代码日志原则）
+9. P1-END-1 后新窗口必须先阅读 docs/ai/P1_END_1_ACCEPTANCE.md
+10. 禁止绕过 task_id 指定执行机制，新建任务后必须按 task_id 执行当前任务
+11. 诊断接口（search-debug 等）不得返回原始 UIA 对象，必须安全 JSON 序列化
 
 ------
 

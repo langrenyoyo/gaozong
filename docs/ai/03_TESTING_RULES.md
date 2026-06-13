@@ -675,3 +675,43 @@ exe 启动和运行时
 | 异常路径 | 日志输出异常类型 + 关键状态 |
 | 安全门禁 | 日志输出门禁检查结果 + 拒绝原因 |
 ```
+
+------
+
+# 20. P1-END-1 后必跑测试
+
+### 后端 / Local Agent
+
+```bash
+python -m py_compile app/local_agent_main.py
+python -m pytest tests/test_p0_main_5b_poll_and_execute.py -v
+python -m pytest tests/test_p1_auto_1c_poll_and_detect.py -v
+python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
+```
+
+### 前端
+
+```bash
+npm run build
+```
+
+### lint 说明
+
+npm run lint 当前有旧问题（14 errors + 7 warnings），属于非 P1 阻塞技术债，记录但不阻塞提交。
+
+### 真机验收必检项
+
+| # | 检查项 | 预期 |
+|---|--------|------|
+| 1 | 新 lead 创建成功 | lead_id 有值 |
+| 2 | notify_sales task 创建并按 task_id 执行 | task_id 指定，非队列头部 |
+| 3 | paste_only 成功 | pasted=true, sent=false |
+| 4 | detect_reply task 自动创建 | reply_check_id 有值 |
+| 5 | detect_reply 按 task_id 执行 | task_id 指定 |
+| 6 | 销售回复识别 | detected_status=replied, matched_reply 有值 |
+| 7 | notification 状态更新 | send_status=销售已回复 |
+| 8 | check 状态更新 | check_status=replied |
+| 9 | sent=false / pasted=false（检测链路） | action 中均为 false |
+| 10 | search-debug 不再 500 | 返回 200 + 合法 JSON |
+| 11 | 不出现 task_type_not_notify_sales | 任务类型正确 |
+| 12 | 不被旧 pending 队列阻塞 | task_id 机制生效 |

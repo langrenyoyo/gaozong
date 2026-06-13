@@ -696,3 +696,53 @@ AI 的职责是：
 
 日志记录敏感明文
 ```
+
+------
+
+# 20. P1-END-1 后微信自动化安全边界
+
+以下安全边界适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
+
+```text
+1.  poll-and-execute 必须只处理 notify_sales
+2.  poll-and-detect 必须只处理 detect_reply
+3.  poll-and-detect 不调用 input_writer.py
+4.  poll-and-detect 不写输入框、不按 Enter、不发送消息
+5.  detect_reply 必须 action.sent=false、action.pasted=false
+6.  notify_sales 只允许 paste_only
+7.  target_nickname 当前只允许 Aw3
+8.  9000 不直接操作微信
+9.  微信操作只发生在客户机本地 19000 Local Agent
+10. poll-and-execute 与 poll-and-detect 共享运行锁，避免并发操作微信
+```
+
+------
+
+# 21. task_id 指定执行规则
+
+P1-AUTO-1D-FIX2/FIX3 引入的 task_id 机制是当前主线的核心执行方式。
+
+```text
+1. React 新建任务后必须将 createdTask.id 传给 Local Agent
+2. poll-and-execute 收到 task_id 时按指定任务执行
+3. poll-and-detect 收到 task_id 时按指定任务执行
+4. 无 task_id 时 fallback 到 pending 队列拉取
+5. 禁止在主链路中依赖旧 pending 队列头部
+6. 旧 pending 数据不应直接清理，但主链路不应被其阻塞
+```
+
+------
+
+# 22. 诊断接口安全序列化规则
+
+P1-AUTO-1D-FIX4 引入的安全序列化机制。
+
+```text
+1. 诊断接口（search-debug、search-result-debug 等）不得返回原始 UIA 控件对象
+2. 返回值必须经过 _safe_json_serialize 清洗
+3. Exception 转为 {"type": ..., "message": ...}
+4. UIA 控件只保留 name/class_name/control_type/bounding_rectangle
+5. 循环引用转为 "<circular_ref>"
+6. 诊断接口即使内部异常也应返回 200 + success=false，不应抛 500
+7. numpy 标量/ndarray 必须转为 Python 原生类型
+```

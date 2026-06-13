@@ -14,21 +14,22 @@
 
 ## 2. 项目阶段
 
-**P0-END-1 MVP 主链路冻结验收（已完成）**
+**P1-END-1 自动检测单次闭环演示版冻结（已完成）**
 
-已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4 → P5 → P6 → P7 → P8 → P0-2 → P0-3 → P0-4 → P0-REPLY-2 → P0-REPLY-3B → P0-END-1
+已完成阶段：P0 → P1 → P2 → P2.5 → P3 → P4 → P5 → P6 → P7 → P8 → P0-2 → P0-3 → P0-4 → P0-REPLY-2 → P0-REPLY-3B → P0-END-1 → P1-AUTO-1A/B → P1-AUTO-1AB-FIX2 → P1-AUTO-1C → P1-AUTO-1D → P1-END-1
 
-当前聚焦：**MVP 冻结，等待重启服务器加载最新代码后做端到端验证**
+当前聚焦：**P1-END-1 文档冻结，自动检测单次闭环演示版已通过真机验收**
 
 最近完成：
-- P0-REPLY-3B：截图像素分析识别微信消息 sender（self/friend/system），真机 Aw3 验证零误判
-- UTF-8 JSON 响应修复：Content-Type 含 charset=utf-8，PowerShell 中文不乱码
-- P0-END-1：主链路冻结验收文档（见 docs/ai/P0_END_1_ACCEPTANCE.md）
+- P1-AUTO-1D-FIX2：poll-and-execute 支持 task_id 指定执行
+- P1-AUTO-1D-FIX3：poll-and-detect 支持 task_id 指定执行，避免旧 pending 队列阻塞
+- P1-AUTO-1D-FIX4：search-debug 安全序列化防止 500 RecursionError
+- P1-END-1：自动检测单次闭环演示版冻结（验收文档见 docs/ai/P1_END_1_ACCEPTANCE.md）
 
 下一步：
-- 重启 9000 + 19000 服务器加载最新代码
-- 端到端真机验收（创建任务 → paste_only → 检测回复 → replied）
-- P0-END-2 旧调度器清理 + 自动化检测轮询
+- P1-END-2：修复前端 pasted 展示字段
+- P1-END-3：清理/归档旧 pending 任务策略
+- P2-A：后台定时轮询检测
 
 ## 3. 项目目标
 
@@ -380,6 +381,14 @@ React 直连测试电脑 127.0.0.1:19000（不走开发主机）
 - P0-4A-2 前台焦点交接诊断（POST /agent/wechat/foreground-debug）
 - React LocalWechatAgentTestPanel（本机 Agent 测试面板）
 - React 按钮直连 127.0.0.1:19000（不走 VITE_API_BASE_URL）
+- P1-AUTO-1A/B detect_reply task + 检测结果回写（detected_status / detect_count）
+- P1-AUTO-1AB-FIX2 notify_sales pasted 后自动创建 detect_reply task + ReplyCheck 绑定 + LeadNotification 回填
+- P1-AUTO-1C 19000 /agent/tasks/poll-and-detect 端点 + read_only 只读检测 + 与 poll-and-execute 共享运行锁
+- P1-AUTO-1C-UTF8 19000 响应 charset=utf-8 修复 PowerShell 中文乱码
+- P1-AUTO-1D React 自动回复检测面板 + 按钮触发 poll-and-detect
+- P1-AUTO-1D-FIX2 poll-and-execute 支持 task_id 指定执行
+- P1-AUTO-1D-FIX3 poll-and-detect 支持 task_id 指定执行，避免旧 pending 队列阻塞
+- P1-AUTO-1D-FIX4 search-debug/search-result-debug 安全 JSON 序列化防止 500 RecursionError
 
 ### 11.2 未完成 □
 
@@ -387,11 +396,14 @@ React 直连测试电脑 127.0.0.1:19000（不走开发主机）
 - 数据源微信 A 自动接收反馈
 - 线索结构化解析（从微信消息文本中提取线索字段）
 - 发送方精确识别（P2.5 结论：当前微信版本 UIA 不可行，保持兜底模式，截图/OCR 作为后续预研方向）
-- **P0-4A-3**：/agent/wechat/test 自动打开 Aw3 → OCR verified → paste_only → sent=false
-- P0-4B：小高AI微信助手.exe 安装包/分发优化
-- P0-4C：Windows 10 测试电脑复测
+- P1-END-2：修复前端 pasted 展示字段取错
+- P1-END-3：清理/归档旧 pending 任务策略
+- P2-A：后台定时轮询检测（从手动触发升级为自动）
+- P2-B：客户配置化关键词/工作时间/销售
+- P2-C：多客户隔离
+- P2-D：报表与超时策略
 - P0-5 多目标检测队列（wechat_active_check_id 升级为多目标）
-- 业务自动派单发送小流量复测（P0-4A-3 通过后才考虑）
+- 业务自动派单发送小流量复测
 
 ------
 
@@ -897,21 +909,26 @@ P0-4A-3 通过后，才能判定 P0-4A 完成。
 
 ### Current Safety Gates（当前活跃安全约束）
 
-以下约束在 P0-4A-3 通过前必须严格执行：
+以下约束在 P1-END-1 后必须严格执行：
 
 1. **业务自动派单发送仍禁止**（sent 必须为 false）
-2. P0-4A 只验证本地 Agent 架构和 Aw3 paste_only
-3. **Aw3 是唯一允许自动验证和 debug 测试的联系人**
-4. 啊东、只能 partial_match，不允许自动发送
-5. partial_match 不允许 verified=true
-6. manual_review_required=true 不允许粘贴或发送
-7. hidden/minimized 微信不允许自动恢复后继续
-8. ESC 不允许业务路径使用后继续
-9. foreground guard 失败必须停止
-10. OCR/截图失败不能伪造成功
-11. 小高AI微信助手.exe 不应监听 0.0.0.0，默认只监听 127.0.0.1:19000
-12. React 本机 Agent 面板不能使用 VITE_API_BASE_URL
-13. 不能操作开发主机微信作为测试电脑结果
+2. **Aw3 是唯一允许自动验证和 debug 测试的联系人**
+3. 啊东、只能 partial_match，不允许自动发送
+4. partial_match 不允许 verified=true
+5. manual_review_required=true 不允许粘贴或发送
+6. hidden/minimized 微信不允许自动恢复后继续
+7. ESC 不允许业务路径使用后继续
+8. foreground guard 失败必须停止
+9. OCR/截图失败不能伪造成功
+10. 小高AI微信助手.exe 不应监听 0.0.0.0，默认只监听 127.0.0.1:19000
+11. React 本机 Agent 面板不能使用 VITE_API_BASE_URL
+12. 不能操作开发主机微信作为测试电脑结果
+13. **poll-and-execute 必须只处理 notify_sales**
+14. **poll-and-detect 必须只处理 detect_reply**
+15. **detect_reply 必须 action.sent=false、action.pasted=false**
+16. **新建任务后必须按 task_id 执行当前任务，禁止依赖旧 pending 队列头部**
+17. **诊断接口不得返回原始 UIA 对象，必须安全 JSON 序列化**
+18. **旧 wechat_auto_detect_scheduler 默认禁用，启用需显式设置 AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT=1**
 
 ### 真实测试联系人
 
