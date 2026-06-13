@@ -7,7 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.database import engine, Base
-from app.routers import staff, leads, replies, checks, reports, feedback, integrations, wechat_auto_detect, lead_notifications, automation_control, wechat_tasks
+from app.routers import staff, leads, checks, reports, integrations, wechat_auto_detect, automation_control, wechat_tasks
+
+# Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
+try:
+    from app.routers import replies, feedback, lead_notifications
+    _WINDOWS_ROUTERS_AVAILABLE = True
+except ImportError:
+    _WINDOWS_ROUTERS_AVAILABLE = False
+    logger.warning("Windows 专用路由（replies/feedback/lead_notifications）导入跳过，当前平台不支持微信 UI 自动化")
 from app.scheduler.check_scheduler import scheduler
 from app.scheduler.wechat_auto_detect_scheduler import wechat_auto_detect_scheduler
 
@@ -53,18 +61,21 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # 注册路由
+    # 注册路由（跨平台）
     app.include_router(staff.router)
     app.include_router(leads.router)
-    app.include_router(replies.router)
     app.include_router(checks.router)
     app.include_router(reports.router)
-    app.include_router(feedback.router)
     app.include_router(integrations.router)
     app.include_router(wechat_auto_detect.router)
-    app.include_router(lead_notifications.router)
     app.include_router(automation_control.router)
     app.include_router(wechat_tasks.router)
+
+    # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
+    if _WINDOWS_ROUTERS_AVAILABLE:
+        app.include_router(replies.router)
+        app.include_router(feedback.router)
+        app.include_router(lead_notifications.router)
 
     @app.on_event("startup")
     def on_startup():

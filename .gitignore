@@ -21,6 +21,9 @@ data/*.db-shm
 data/*.log
 data/debug_screenshots/*
 
+# Docker 持久化数据（本地测试用）
+docker-data/
+
 # 模型权重文件（太大，不提交）
 resources/easyocr_models/*.pth
 

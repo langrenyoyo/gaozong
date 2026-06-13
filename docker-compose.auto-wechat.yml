@@ -1,0 +1,21 @@
+services:
+  auto-wechat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auto-wechat
+    env_file:
+      - .env
+    ports:
+      # 只绑定本机，公网通过宝塔 Nginx 反代进入
+      - "127.0.0.1:9000:9000"
+    volumes:
+      # SQLite 数据持久化（独立目录，避免与本地 uvicorn 冲突）
+      - ./docker-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/docs')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -23,8 +23,14 @@ from app.integrations.douyin_api_client import fetch_leads, DouyinApiError
 from app.models import DouyinLead, SalesStaff, ReplyCheck
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem, WechatTaskSyncStats
 from app.services import assign_service
-from app.services.notification_service import auto_notify_assigned_lead, _compose_notification_text
 from app.services import wechat_task_service
+
+# 延迟导入：notification_service 依赖 wechat_ui（Windows 专用），Linux/Docker 环境不可用
+try:
+    from app.services.notification_service import auto_notify_assigned_lead, _compose_notification_text
+    _NOTIFICATION_AVAILABLE = True
+except ImportError:
+    _NOTIFICATION_AVAILABLE = False
 
 logger = logging.getLogger("douyin_sync_service")
 
@@ -145,10 +151,13 @@ def _try_auto_notify(db: Session, lead_id: int) -> dict:
 
     P8-3：包装 notification_service.auto_notify_assigned_lead，
     捕获异常以避免同步流程因通知失败而中断。
+    Linux/Docker 环境下跳过（依赖 Windows 专用微信 UI 自动化）。
 
     Returns:
         {"success": bool, "message": str}
     """
+    if not _NOTIFICATION_AVAILABLE:
+        return {"success": False, "message": "跳过：微信通知依赖 Windows 环境，当前平台不可用"}
     try:
         result = auto_notify_assigned_lead(db, lead_id)
         return result
@@ -168,6 +177,11 @@ def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
         {"created": bool, "task_id": int | None, "reason": str | None}
     """
     result = {"created": False, "task_id": None, "reason": None}
+
+    # Linux/Docker 环境跳过：通知模板依赖 Windows 专用模块
+    if not _NOTIFICATION_AVAILABLE:
+        result["reason"] = "跳过：通知模板依赖 Windows 环境，当前平台不可用"
+        return result
 
     # 获取分配的销售信息
     if not lead.assigned_staff_id:
