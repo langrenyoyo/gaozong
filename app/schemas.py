@@ -454,3 +454,17 @@ class AgentWriteBackResponse(BaseModel):
     matched_reply: Optional[str] = Field(None, description="匹配到的有效回复文本")
     effectiveness_reason: Optional[str] = Field(None, description="判定原因")
     message: str = ""
+
+
+# ========== 抖音 GMP Webhook ==========
+
+
+class WebhookResponse(BaseModel):
+    """Webhook 接收响应"""
+    code: int = Field(0, description="响应码：0=成功")
+    msg: str = Field("success", description="响应消息")
+    event_id: Optional[int] = Field(None, description="事件记录 ID")
+    lead_id: Optional[int] = Field(None, description="线索 ID（仅 im_receive_msg 时有值）")
+    is_new_lead: bool = Field(False, description="是否为新创建的线索")
+    is_duplicate: bool = Field(False, description="是否为重复事件")
+    lead_action: str = Field("not_lead_event", description="线索动作: created/updated/skipped/not_lead_event")

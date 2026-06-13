@@ -167,3 +167,18 @@ class WechatTask(Base):
     lead = relationship("DouyinLead")
     staff = relationship("SalesStaff")
     reply_check = relationship("ReplyCheck")
+
+
+class DouyinWebhookEvent(Base):
+    """抖音 GMP Webhook 原始事件日志"""
+    __tablename__ = "douyin_webhook_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event = Column(String(128), comment="事件类型: im_receive_msg / im_send_msg / im_enter_direct_msg 等")
+    from_user_id = Column(String(255), comment="发送者 open_id")
+    to_user_id = Column(String(255), comment="接收者 open_id")
+    event_key = Column(String(128), unique=True, index=True, comment="幂等去重键")
+    is_duplicate = Column(Integer, nullable=False, default=0, comment="是否重复事件 0/1")
+    lead_id = Column(Integer, nullable=True, comment="关联的 douyin_leads.id（仅 im_receive_msg）")
+    raw_body = Column(Text, nullable=False, comment="原始 payload JSON")
+    created_at = Column(DateTime, default=datetime.now)

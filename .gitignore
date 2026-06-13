@@ -11,6 +11,9 @@ dist/
 build/
 CLAUDE.md
 
+# 环境变量（含密钥，禁止提交）
+.env
+
 # 数据库运行时文件
 data/*.db
 data/*.db-wal

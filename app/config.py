@@ -36,6 +36,24 @@ DOUYIN_API_BASE_URL = os.getenv("DOUYIN_API_BASE_URL", "http://127.0.0.1:8081")
 DOUYIN_API_TIMEOUT_SECONDS = int(os.getenv("DOUYIN_API_TIMEOUT_SECONDS", "10"))
 DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))
 
+# ---------- 抖音 GMP 直连接入配置 ----------
+# auto_wechat 自己的环境变量，不读取 douyinAPI/.env
+DY_SECRET_KEY = os.getenv("DY_SECRET_KEY", "")
+DY_BASE_URL = os.getenv(
+    "DY_BASE_URL",
+    "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi",
+)
+DY_MAIN_ACCOUNT_ID = int(os.getenv("DY_MAIN_ACCOUNT_ID", "0"))
+DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
+DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
+DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+DY_CALLBACK_EVENTS = [
+    item.strip()
+    for item in os.getenv("DY_CALLBACK_EVENTS", "").split(",")
+    if item.strip()
+]
+
 # ---------- 旧链路开关 ----------
 # P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。
 # 新主线使用 19000 Local Agent 操作微信，旧调度器会在 9000 所在电脑直接操作微信导致冲突。
