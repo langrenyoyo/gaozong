@@ -677,24 +677,25 @@ def test_non_notify_sales_task_no_notification():
     """P0-MAIN-5A：task_type != notify_sales 时不联动 lead_notification。"""
     db = SessionLocal()
     try:
-        # 创建不带 lead_id 的 task
+        # 创建 detect_reply task（不带 lead_id/staff_id）
         create_resp = client.post("/wechat-tasks", json={
             "task_type": "detect_reply",
             "target_nickname": "Aw3",
             "message": "",
-            "mode": "paste_only",
+            "mode": "read_only",
         })
         task_id = create_resp.json()["id"]
 
+        # P1-AUTO-1：detect_reply 使用 detected_status 而非 pasted
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,
             "verified": True,
-            "pasted": True,
+            "detected_status": "replied",
             "sent": False,
         })
-        assert resp.json()["status"] == "pasted"
+        assert resp.json()["status"] == "completed"
 
-        # 不应创建 lead_notification（无 lead_id/staff_id）
+        # 不应创建 lead_notification（无 lead_id/staff_id，且 detect_reply 不联动通知）
         notif_count = db.query(LeadNotification).count()
         assert notif_count == 0
     finally:

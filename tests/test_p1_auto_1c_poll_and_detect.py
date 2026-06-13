@@ -434,3 +434,188 @@ def test_poll_and_detect_releases_lock_after_completion(mock_get):
 
     resp2 = client_with_server.post("/agent/tasks/poll-and-detect")
     assert resp2.json()["success"] is True
+
+
+# ========== P1-AUTO-1D-FIX3：task_id 支持 ==========
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main._detect_reply_for_task")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_with_task_id_fetches_specific_task(mock_get, mock_auto, mock_helper, mock_post):
+    """FIX3: 带task_id时直接调用GET /wechat-tasks/{task_id}，不走队列。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {
+            "id": 55, "task_type": "detect_reply", "target_nickname": "Aw3",
+            "mode": "read_only", "lead_id": 10, "staff_id": 2,
+            "reply_check_id": 8, "raw_result": None, "status": "pending",
+        },
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_helper.return_value = {
+        "success": True,
+        "detected_status": "replied",
+        "matched_reply": "好的",
+        "messages_read": 5,
+        "failure_stage": None,
+        "verify": {"verified": True},
+        "write_back": {"ok": True, "status_code": 200},
+        "raw_result": {"already_on_target": True, "messages_read": 5},
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": 55, "max_messages": 20})
+    data = resp.json()
+    assert data["success"] is True
+    assert data["task"]["id"] == 55
+    assert data["detect_result"]["detected_status"] == "replied"
+    assert data["action"]["sent"] is False
+    assert data["action"]["pasted"] is False
+
+    # 验证 GET 调用的是 /wechat-tasks/55 而非 /wechat-tasks/pending
+    mock_get.assert_called_once()
+    assert "/wechat-tasks/55" in mock_get.call_args[0][0]
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main._detect_reply_for_task")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_task_id_notify_sales_rejected(mock_get, mock_auto, mock_helper, mock_post):
+    """FIX3: task_id指向notify_sales → task_type_not_detect_reply。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {
+            "id": 66, "task_type": "notify_sales", "target_nickname": "Aw3",
+            "mode": "paste_only", "status": "pending",
+        },
+        "error": None,
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": 66})
+    data = resp.json()
+    assert data["success"] is False
+    assert data["failure_stage"] == "task_type_not_detect_reply"
+    assert data["action"]["sent"] is False
+    assert data["action"]["pasted"] is False
+
+    # helper 不应被调用
+    mock_helper.assert_not_called()
+
+
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_task_id_not_pending(mock_get):
+    """FIX3: task_id指向非pending任务 → task_not_pending。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {
+            "id": 77, "task_type": "detect_reply", "status": "completed",
+        },
+        "error": None,
+    }
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": 77})
+    data = resp.json()
+    assert data["success"] is False
+    assert data["failure_stage"] == "task_not_pending"
+    assert "completed" in data["message"]
+
+
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_task_id_not_found(mock_get):
+    """FIX3: task_id不存在 → task_not_found。"""
+    mock_get.return_value = {
+        "ok": False, "status": 404, "json": None, "error": "Not Found",
+    }
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": 999})
+    data = resp.json()
+    assert data["success"] is False
+    assert data["failure_stage"] == "task_not_found"
+    assert "999" in data["message"]
+
+
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_no_task_id_fallback_uses_detect_reply_filter(mock_get):
+    """FIX3: 不传task_id时fallback URL仍包含task_type=detect_reply。"""
+    mock_get.return_value = {"ok": True, "status": 200, "json": [], "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"max_messages": 20})
+    data = resp.json()
+    assert data["success"] is True
+    assert data["message"] == "无待检测任务"
+
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    call_params = mock_get.call_args[1].get("params") or (
+        mock_get.call_args[0][1] if len(mock_get.call_args[0]) > 1 else None
+    )
+    # 验证走的是 pending 队列 URL，带 task_type=detect_reply
+    assert "pending" in call_url
+    assert call_params is not None
+    assert call_params.get("task_type") == "detect_reply"
+    assert call_params.get("limit") == 1
+
+
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_null_task_id_fallback(mock_get):
+    """FIX3: task_id=null时走fallback队列。"""
+    mock_get.return_value = {"ok": True, "status": 200, "json": [], "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": None, "max_messages": 20})
+    data = resp.json()
+    assert data["success"] is True
+    assert data["message"] == "无待检测任务"
+
+    # 走的是 pending 队列，不是 /wechat-tasks/{id}
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "pending" in call_url
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main._detect_reply_for_task")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_fix3_poll_and_detect_task_id_success_no_queue(mock_get, mock_auto, mock_helper, mock_post):
+    """FIX3: task_id成功时不调用pending队列，直接处理指定任务。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {
+            "id": 88, "task_type": "detect_reply", "target_nickname": "Aw3",
+            "mode": "read_only", "lead_id": 5, "staff_id": 3,
+            "reply_check_id": 10, "raw_result": None, "status": "pending",
+        },
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_helper.return_value = {
+        "success": True,
+        "detected_status": "pending",
+        "messages_read": 3,
+        "failure_stage": None,
+        "verify": {"verified": True},
+        "write_back": {"ok": True, "status_code": 200},
+        "raw_result": {"already_on_target": True, "messages_read": 3},
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-detect", json={"task_id": 88, "max_messages": 30})
+    data = resp.json()
+    assert data["success"] is True
+    assert data["task"]["id"] == 88
+    assert data["detect_result"]["detected_status"] == "pending"
+    assert data["action"]["sent"] is False
+    assert data["action"]["pasted"] is False
+
+    # 只调用了一次 _http_get，且是 /wechat-tasks/88，不是 pending
+    assert mock_get.call_count == 1
+    assert "/wechat-tasks/88" in mock_get.call_args[0][0]
+
+    # 验证 helper 的 max_messages 传递
+    call_kwargs = mock_helper.call_args[1]
+    assert call_kwargs["max_messages"] == 30

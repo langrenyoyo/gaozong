@@ -923,3 +923,198 @@ def test_mouse_debug_sendinput_method_exists():
     data = resp.json()
     assert data["method"] == "sendinput_absolute"
     assert "sendinput_sent_count" in data or "sendinput_exception" in data
+
+
+# ========== P1-AUTO-1D-FIX：poll-and-execute 只拉 notify_sales ==========
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_requests_task_type_notify_sales(mock_get):
+    """P1-AUTO-1D-FIX：poll-and-execute 请求 pending 时 URL 包含 task_type=notify_sales。"""
+    mock_get.return_value = {"ok": True, "status": 200, "json": [], "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    assert resp.status_code == 200
+
+    # 验证请求参数包含 task_type=notify_sales
+    mock_get.assert_called_once()
+    call_params = mock_get.call_args[1].get("params") or (
+        mock_get.call_args[0][1] if len(mock_get.call_args[0]) > 1 else None
+    )
+    assert call_params is not None
+    assert call_params.get("task_type") == "notify_sales"
+    assert call_params.get("limit") == 1
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_skips_detect_reply_by_filter(mock_get, mock_post):
+    """P1-AUTO-1D-FIX：队列中存在 detect_reply pending 时，poll-and-execute 不会拉它。
+
+    因为请求参数带了 task_type=notify_sales，后端只会返回 notify_sales 任务。
+    如果后端仍返回 detect_reply，仍会被 task_type 检查拒绝（双重保险）。
+    """
+    # 模拟后端错误地返回了 detect_reply（双重保险测试）
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": [{"id": 100, "task_type": "detect_reply", "target_nickname": "Aw3",
+                   "mode": "read_only", "message": ""}],
+        "error": None,
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    data = resp.json()
+    assert data["success"] is False
+    assert "task_type_not_notify_sales" in data["failure_stage"]
+
+    # 但请求参数确实包含了 task_type=notify_sales
+    call_params = mock_get.call_args[1].get("params") or (
+        mock_get.call_args[0][1] if len(mock_get.call_args[0]) > 1 else None
+    )
+    assert call_params.get("task_type") == "notify_sales"
+
+
+# ========== P1-AUTO-1D-FIX2：poll-and-execute 支持指定 task_id ==========
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_with_task_id_fetches_specific_task(mock_get):
+    """P1-AUTO-1D-FIX2：请求体带 task_id 时，调用 GET /wechat-tasks/{task_id}。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {"id": 44, "task_type": "notify_sales", "target_nickname": "Aw3",
+                 "mode": "paste_only", "message": "新线索", "status": "pending",
+                 "lead_id": 10, "staff_id": 20},
+        "error": None,
+    }
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": 44})
+    # 请求发送到特定任务 URL（不是 pending 队列）
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "/wechat-tasks/44" in call_url
+    assert "/pending" not in call_url
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main.write_text_to_input")
+@patch("app.local_agent_main.verify_current_chat_contact")
+@patch("app.local_agent_main.open_chat_by_nickname")
+@patch("app.local_agent_main.ensure_wechat_foreground")
+@patch("app.local_agent_main.check_wechat_ready_for_automation")
+@patch("app.local_agent_main.find_wechat_window")
+@patch("app.local_agent_main._check_ocr_ready_for_agent_test")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_task_id_notify_sales_success(
+    mock_get, mock_auto, mock_ocr, mock_find, mock_ready, mock_fg,
+    mock_open, mock_verify, mock_write, mock_post):
+    """P1-AUTO-1D-FIX2：task_id 指向 notify_sales + pending -> 正常执行。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {"id": 44, "task_type": "notify_sales", "target_nickname": "Aw3",
+                 "mode": "paste_only", "message": "新线索通知", "status": "pending",
+                 "lead_id": 10, "staff_id": 20},
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_ocr.return_value = None
+    mock_find.return_value = MagicMock(NativeWindowHandle=12345)
+    mock_ready.return_value = {"success": True}
+    mock_fg.return_value = {"success": True}
+    mock_open.return_value = {"success": True, "window_rect": {}}
+    mock_verify.return_value = {
+        "verified": True, "partial_match": False,
+        "manual_review_required": False, "strategy": "ocr_top_title",
+    }
+    mock_write.return_value = {
+        "success": True, "pasted": True, "sent": False, "message": "ok",
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": 44})
+    data = resp.json()
+    assert data["success"] is True
+    assert data["message"] == "任务执行成功（paste_only）"
+    assert data["task"]["id"] == 44
+    assert data["execution"]["pasted"] is True
+    assert data["execution"]["sent"] is False
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_task_id_detect_reply_rejected(mock_get, mock_post):
+    """P1-AUTO-1D-FIX2：task_id 指向 detect_reply -> 返回 task_type_not_notify_sales。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {"id": 5, "task_type": "detect_reply", "target_nickname": "Aw3",
+                 "mode": "read_only", "message": "", "status": "pending"},
+        "error": None,
+    }
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": 5})
+    data = resp.json()
+    assert data["success"] is False
+    assert "task_type_not_notify_sales" in data["failure_stage"]
+
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_task_id_not_pending(mock_get):
+    """P1-AUTO-1D-FIX2：task_id 指向非 pending 任务 -> 返回 task_not_pending。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": {"id": 42, "task_type": "notify_sales", "target_nickname": "Aw3",
+                 "mode": "paste_only", "message": "旧任务", "status": "pasted"},
+        "error": None,
+    }
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": 42})
+    data = resp.json()
+    assert data["success"] is False
+    assert "task_not_pending" in data["failure_stage"]
+
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_task_id_not_found(mock_get):
+    """P1-AUTO-1D-FIX2：task_id 不存在 -> 返回 task_not_found。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": None,
+        "error": None,
+    }
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": 9999})
+    data = resp.json()
+    assert data["success"] is False
+    assert "task_not_found" in data["failure_stage"]
+
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_no_task_id_fallback_uses_task_type(mock_get):
+    """P1-AUTO-1D-FIX2：不传 task_id -> fallback 查询 URL 包含 task_type=notify_sales。"""
+    mock_get.return_value = {"ok": True, "status": 200, "json": [], "error": None}
+
+    # 空请求体
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    assert resp.json()["task_found"] is False
+
+    mock_get.assert_called_once()
+    call_url = mock_get.call_args[0][0]
+    assert "/pending" in call_url
+    call_params = mock_get.call_args[1].get("params") or (
+        mock_get.call_args[0][1] if len(mock_get.call_args[0]) > 1 else None
+    )
+    assert call_params.get("task_type") == "notify_sales"
+
+
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_null_task_id_fallback(mock_get):
+    """P1-AUTO-1D-FIX2：task_id=null -> fallback 队列拉取。"""
+    mock_get.return_value = {"ok": True, "status": 200, "json": [], "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute", json={"task_id": None})
+    assert resp.json()["task_found"] is False
+
+    # 应走 pending 队列路径
+    call_url = mock_get.call_args[0][0]
+    assert "/pending" in call_url

@@ -106,8 +106,14 @@ class AgentReplyDetectRequest(BaseModel):
 
 
 class PollAndDetectRequest(BaseModel):
-    """P1-AUTO-1C：poll-and-detect 请求"""
+    """P1-AUTO-1C / P1-AUTO-1D-FIX3：poll-and-detect 请求，支持指定 task_id"""
     max_messages: int = Field(20, ge=5, le=100, description="最多读取的消息条数")
+    task_id: int | None = Field(None, description="指定要检测的任务 ID（优先于队列拉取）")
+
+
+class PollAndExecuteRequest(BaseModel):
+    """P1-AUTO-1D-FIX2：poll-and-execute 请求，支持指定 task_id"""
+    task_id: int | None = Field(None, description="指定要执行的任务 ID（优先于队列拉取）")
 
 
 def get_machine_identity() -> dict:
@@ -891,8 +897,10 @@ def create_local_agent_app(
         }
 
     @app.post("/agent/tasks/poll-and-execute")
-    def agent_poll_and_execute():
+    def agent_poll_and_execute(request: PollAndExecuteRequest | None = None):
         """P0-MAIN-5B：从主系统拉取一条 pending task，执行微信自动化，回写结果。
+
+        P1-AUTO-1D-FIX2：支持请求体指定 task_id，优先拉取该任务而非队列头部。
 
         安全约束：
         - 只处理 notify_sales 任务
@@ -930,27 +938,59 @@ def create_local_agent_app(
 
         # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
         try:
-            # 2. 从主系统拉取 pending task
-            try:
-                poll_resp = _http_get(f"{server_url}/wechat-tasks/pending", params={"limit": 1})
-            except Exception as exc:
-                result["failure_stage"] = "server_connection_failed"
-                result["message"] = f"连接主系统失败: {exc}"
-                return result
+            # P1-AUTO-1D-FIX2：支持指定 task_id，优先于队列拉取
+            requested_task_id = request.task_id if request else None
 
-            if not poll_resp.get("ok"):
-                result["failure_stage"] = "server_request_failed"
-                result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
-                return result
+            if requested_task_id:
+                # 指定 task_id → 直接拉取该任务
+                try:
+                    task_resp = _http_get(f"{server_url}/wechat-tasks/{requested_task_id}")
+                except Exception as exc:
+                    result["failure_stage"] = "server_connection_failed"
+                    result["message"] = f"连接主系统失败: {exc}"
+                    return result
 
-            tasks = poll_resp.get("json", [])
-            if not tasks:
-                result["failure_stage"] = None
-                result["message"] = "无待执行任务"
-                result["task_found"] = False
-                return result
+                if not task_resp.get("ok"):
+                    result["failure_stage"] = "server_request_failed"
+                    result["message"] = f"请求主系统失败: {task_resp.get('status', '?')}"
+                    return result
 
-            task_data = tasks[0]
+                task_data = task_resp.get("json")
+                if not task_data:
+                    result["failure_stage"] = "task_not_found"
+                    result["message"] = f"任务 #{requested_task_id} 不存在"
+                    return result
+
+                # 校验 status
+                if task_data.get("status") != "pending":
+                    result["failure_stage"] = "task_not_pending"
+                    result["message"] = f"任务 #{requested_task_id} 状态为 {task_data.get('status')}，不是 pending"
+                    return result
+
+                logger.info("poll-and-execute: 指定任务 #%d，跳过队列拉取", requested_task_id)
+            else:
+                # fallback → 队列拉取（必须带 task_type=notify_sales）
+                try:
+                    poll_resp = _http_get(f"{server_url}/wechat-tasks/pending", params={"task_type": "notify_sales", "limit": 1})
+                except Exception as exc:
+                    result["failure_stage"] = "server_connection_failed"
+                    result["message"] = f"连接主系统失败: {exc}"
+                    return result
+
+                if not poll_resp.get("ok"):
+                    result["failure_stage"] = "server_request_failed"
+                    result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
+                    return result
+
+                tasks = poll_resp.get("json", [])
+                if not tasks:
+                    result["failure_stage"] = None
+                    result["message"] = "无待执行任务"
+                    result["task_found"] = False
+                    return result
+
+                task_data = tasks[0]
+
             result["task"] = {
                 "id": task_data.get("id"),
                 "task_type": task_data.get("task_type"),
@@ -1174,7 +1214,9 @@ def create_local_agent_app(
 
     @app.post("/agent/tasks/poll-and-detect")
     def agent_poll_and_detect(request: PollAndDetectRequest | None = None):
-        """P1-AUTO-1C：从主系统拉取 detect_reply 任务，执行检测，回写结果。
+        """P1-AUTO-1C / P1-AUTO-1D-FIX3：从主系统拉取 detect_reply 任务，执行检测，回写结果。
+
+        P1-AUTO-1D-FIX3：支持请求体指定 task_id，优先拉取该任务而非队列头部。
 
         优先级原则：
         1. React/调度器应先调用 poll-and-execute 处理 notify_sales
@@ -1188,6 +1230,7 @@ def create_local_agent_app(
         - action.sent=false, action.pasted=false
         """
         max_messages = request.max_messages if request else 20
+        requested_task_id = request.task_id if request else None
 
         result = {
             "success": False,
@@ -1216,28 +1259,63 @@ def create_local_agent_app(
                 return result
 
             # 2. 拉取 detect_reply 任务
-            try:
-                poll_resp = _http_get(
-                    f"{server_url}/wechat-tasks/pending",
-                    params={"task_type": "detect_reply", "limit": 1},
-                )
-            except Exception as exc:
-                result["failure_stage"] = "server_connection_failed"
-                result["message"] = f"连接主系统失败: {exc}"
-                return result
+            # P1-AUTO-1D-FIX3：支持指定 task_id，优先于队列拉取
+            if requested_task_id:
+                # 指定 task_id → 直接拉取该任务
+                try:
+                    task_resp = _http_get(f"{server_url}/wechat-tasks/{requested_task_id}")
+                except Exception as exc:
+                    result["failure_stage"] = "server_connection_failed"
+                    result["message"] = f"连接主系统失败: {exc}"
+                    return result
 
-            if not poll_resp.get("ok"):
-                result["failure_stage"] = "server_request_failed"
-                result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
-                return result
+                if not task_resp.get("ok"):
+                    status_code = task_resp.get("status")
+                    if status_code == 404:
+                        result["failure_stage"] = "task_not_found"
+                        result["message"] = f"任务 #{requested_task_id} 不存在"
+                    else:
+                        result["failure_stage"] = "server_request_failed"
+                        result["message"] = f"请求主系统失败: {status_code or '?'}"
+                    return result
 
-            tasks = poll_resp.get("json", [])
-            if not tasks:
-                result["success"] = True
-                result["message"] = "无待检测任务"
-                return result
+                task_data = task_resp.get("json")
+                if not task_data:
+                    result["failure_stage"] = "task_not_found"
+                    result["message"] = f"任务 #{requested_task_id} 不存在"
+                    return result
 
-            task_data = tasks[0]
+                # 校验 status
+                if task_data.get("status") != "pending":
+                    result["failure_stage"] = "task_not_pending"
+                    result["message"] = f"任务 #{requested_task_id} 状态为 {task_data.get('status')}，不是 pending"
+                    return result
+
+                logger.info("poll-and-detect: 指定任务 #%d，跳过队列拉取", requested_task_id)
+            else:
+                # fallback → 队列拉取（必须带 task_type=detect_reply）
+                try:
+                    poll_resp = _http_get(
+                        f"{server_url}/wechat-tasks/pending",
+                        params={"task_type": "detect_reply", "limit": 1},
+                    )
+                except Exception as exc:
+                    result["failure_stage"] = "server_connection_failed"
+                    result["message"] = f"连接主系统失败: {exc}"
+                    return result
+
+                if not poll_resp.get("ok"):
+                    result["failure_stage"] = "server_request_failed"
+                    result["message"] = f"请求主系统失败: {poll_resp.get('status', '?')}"
+                    return result
+
+                tasks = poll_resp.get("json", [])
+                if not tasks:
+                    result["success"] = True
+                    result["message"] = "无待检测任务"
+                    return result
+
+                task_data = tasks[0]
             task_id = task_data.get("id")
             task_type = task_data.get("task_type", "")
             target_nickname = task_data.get("target_nickname", "")
