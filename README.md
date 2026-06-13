@@ -81,6 +81,8 @@ python -m pytest tests/ -v
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
 | POST | `/integrations/douyin/sync-leads` | **P4：从 douyinAPI 拉取线索并同步（支持 dry_run 预览）** |
+| POST | `/integrations/douyin/webhook` | **GMP 私信事件回调（内部/新路径入口，鉴权可配置）** |
+| POST | `/webhook/douyin` | **GMP 私信事件回调（客户旧路径兼容入口，宝塔整站反代目标）** |
 
 ## 微信 UI 自动化检测
 
@@ -327,6 +329,69 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev up -d --build
 ```
 
 详见 [douyinAPI/README_DEV.md](../douyinAPI/README_DEV.md)。
+
+## 抖音 GMP Webhook 直连接入
+
+auto_wechat 可直接接收抖音/GMP 私信事件回调，不再强依赖 douyinAPI 中间层。
+
+### 当前链路
+
+```text
+抖音平台 / GMP 私信事件
+    ↓
+https://callback.misanduo.com/webhook/douyin
+    ↓
+宝塔整站反代（callback.misanduo.com → http://127.0.0.1:9000）
+    ↓
+http://127.0.0.1:9000/webhook/douyin
+    ↓
+auto_wechat → douyin_webhook_events + DouyinLead
+```
+
+### 双入口
+
+| 路径 | 角色 |
+|------|------|
+| `POST /webhook/douyin` | 客户旧路径兼容入口（GMP 实际推送目标） |
+| `POST /integrations/douyin/webhook` | 内部/新路径入口（联调测试用） |
+
+两个入口复用同一处理函数，行为完全一致。
+
+### 正式 callback_url（保持不变）
+
+```text
+https://callback.misanduo.com/webhook/douyin
+```
+
+禁止改为 `/integrations/douyin/webhook`、`douyinapi.misanduo.com`、`127.0.0.1:9000` 等地址。
+
+### 鉴权策略
+
+```env
+DOUYIN_WEBHOOK_AUTH_REQUIRED=false
+```
+
+| 值 | 含义 |
+|----|------|
+| `false`（默认） | 入站 webhook 不强制签名校验，符合 GMP 私信事件回调业务确认 |
+| `true` | 启用 `X-Auth-Timestamp` + `Authorization` 签名校验（调试/审计用） |
+
+**关键约束**：
+
+- GMP 文档鉴权章节适用于外部系统主动调用 GMP OpenAPI，**不适用**于 GMP 推送 callback_url 的入站 webhook
+- 不允许默认改回强制鉴权
+- `verify_signature` 逻辑保留，通过开关控制
+
+### 事件处理规则
+
+| 事件类型 | 行为 |
+|----------|------|
+| `im_receive_msg` | 创建/更新 DouyinLead |
+| `im_send_msg` | 记录事件，不创建线索 |
+| `im_enter_direct_msg` | 记录事件，不创建线索 |
+| 重复事件 | event_key 幂等去重，不重复创建线索 |
+
+> 详见 [docs/ai/P1_END_2_WEBHOOK_ACCEPTANCE.md](docs/ai/P1_END_2_WEBHOOK_ACCEPTANCE.md)。
 
 ## 项目结构
 

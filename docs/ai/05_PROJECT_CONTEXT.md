@@ -85,11 +85,11 @@ React UI（客户运营后台，端口 5173）
 
 项目路径：`E:\work\project\douyinAPI`
 
-项目定位：抖音私信线索接收系统。
+项目定位：抖音私信线索接收系统（旧中间层，逐步退出主线）。
 
 核心能力：
 
-- `POST /webhook/douyin` — 接收抖音 Webhook
+- `POST /webhook/douyin` — 接收抖音 Webhook（旧路径，原由 douyinAPI 处理）
 - `leads` — 线索管理
 - `conversations` — 会话管理
 - `messages` — 消息管理
@@ -102,7 +102,13 @@ React UI（客户运营后台，端口 5173）
 - `conversations` — 会话记录
 - `messages` — 消息记录
 
-已确认：auto_wechat 的上游数据源就是 douyinAPI。
+> ⚠️ **路径归属说明（2026-06-13 更新）**：
+>
+> 客户/GMP 已配置的回调地址 `https://callback.misanduo.com/webhook/douyin` 现已由 **auto_wechat** 处理（宝塔整站反代到 9000）。auto_wechat 新增了同名兼容路径 `POST /webhook/douyin`，复用自身的 `_handle_douyin_webhook` 逻辑。
+>
+> 因此当前实际链路为：GMP → callback.misanduo.com → 宝塔 → auto_wechat:9000/webhook/douyin → 入库。
+>
+> douyinAPI（8081）仍保留作为旧同步链路（`/integrations/douyin/sync-leads`），但已不再是事件回调的归属系统。详见 [第 28 节：GMP Webhook 直连接入现状](#28-gmp-webhook-直连接入现状)。
 
 ------
 
@@ -1372,6 +1378,8 @@ risk_level        = medium / high  # 中高风险
 | POST | `/feedback/send-current-chat` | P3：将反馈文本写入当前微信聊天窗口 |
 | GET | `/feedback/records` | P3：查询反馈发送记录 |
 | POST | `/integrations/douyin/sync-leads` | P4：从 douyinAPI 拉取线索并同步（dry_run 预览 + 写库） |
+| POST | `/integrations/douyin/webhook` | GMP 私信事件回调（内部/新路径入口，鉴权可配置） |
+| POST | `/webhook/douyin` | GMP 私信事件回调（**客户旧路径兼容入口**，宝塔整站反代目标） |
 | POST | `/checks/run` | 手动触发一次超时检测 |
 | GET | `/checks` | 查看检测记录 |
 | GET | `/reports/summary` | 汇总报表 |
@@ -1714,3 +1722,156 @@ React 本机 Agent 面板直连 `127.0.0.1:19000`，不走 VITE_API_BASE_URL。
 React 离线提示："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
 
 虚拟机/测试电脑默认无源码，不能以"运行 python 命令"作为验收前提。
+
+---
+
+## 28. GMP Webhook 直连接入现状
+
+时间：2026-06-13
+
+auto_wechat 已具备直接接收抖音/GMP 私信事件回调的能力，不再强依赖 douyinAPI 作为中间层。本章记录当前线上联调确认的最终链路、鉴权策略与事件处理规则。
+
+### 28.1 当前最终链路
+
+```text
+抖音平台 / GMP 私信事件
+    ↓
+https://callback.misanduo.com/webhook/douyin
+    ↓
+宝塔整站反代（callback.misanduo.com → http://127.0.0.1:9000）
+    ↓
+http://127.0.0.1:9000/webhook/douyin
+    ↓
+auto_wechat 旧路径兼容路由（douyin_webhook_legacy）
+    ↓
+_handle_douyin_webhook（共享处理函数）
+    ↓
+process_webhook_event
+    ↓
+douyin_webhook_events（事件日志） + DouyinLead（线索入库）
+```
+
+### 28.2 正式 callback_url（保持不变）
+
+事件回调链接保持：
+
+```text
+https://callback.misanduo.com/webhook/douyin
+```
+
+**禁止改成**：
+
+- ❌ `https://callback.misanduo.com/integrations/douyin/webhook`
+- ❌ `https://douyinapi.misanduo.com/...`
+- ❌ `http://127.0.0.1:9000/...`
+
+客户原地址 `https://callback.misanduo.com/webhook/douyin` 必须保持不变，由 auto_wechat 的 `/webhook/douyin` 兼容入口承接。
+
+### 28.3 双入口说明
+
+| 路径 | 角色 | 说明 |
+|------|------|------|
+| `POST /webhook/douyin` | 客户旧路径兼容入口 | GMP 实际推送目标，宝塔整站反代到此 |
+| `POST /integrations/douyin/webhook` | 内部/新路径入口 | 内部联调与测试用，行为与旧路径完全一致 |
+
+两个入口复用同一个 `_handle_douyin_webhook()` 共享函数，验签、解析、幂等、线索写入行为完全一致。日志通过 `source_path` 区分入口。
+
+### 28.4 授权返回链接（与事件回调无关）
+
+授权流程使用的返回链接：
+
+```text
+https://douyinapi.misanduo.com/auth/callback
+```
+
+这是授权流程的 redirect/callback，**不等同于事件回调 webhook**。本次修复只确认了事件回调链路，不代表 `/auth/callback` 已经迁移到 auto_wechat。后续如涉及重新授权、换号、重新生成二维码，需要单独探索并迁移授权回调逻辑。
+
+### 28.5 鉴权策略说明
+
+**当前配置**：
+
+```env
+DOUYIN_WEBHOOK_AUTH_REQUIRED=false
+```
+
+| 值 | 含义 |
+|----|------|
+| `false`（默认） | 入站 webhook 不强制签名校验，符合当前 GMP 私信事件回调业务确认 |
+| `true` | 启用 `X-Auth-Timestamp` + `Authorization` 签名校验，主要用于兼容测试或未来安全策略调整 |
+
+**必须遵守**：
+
+1. 入站 webhook（GMP 推送到 callback_url）默认 `false`，不强制鉴权。
+2. 文档中的鉴权章节（`X-Auth-Timestamp` + `Authorization`）适用于**外部系统主动调用 GMP OpenAPI**，**不允许**套用到 GMP 推送 callback_url 的入站 webhook 上。
+3. `verify_signature` 逻辑保留，但通过 `DOUYIN_WEBHOOK_AUTH_REQUIRED` 开关控制，不删除。
+4. 不允许后续再把入站 webhook 默认改回强制鉴权，除非有明确的安全策略变更审批。
+
+### 28.6 事件处理规则
+
+| 事件类型 | 行为 |
+|----------|------|
+| `im_receive_msg` | 创建/更新 `DouyinLead`（pending 更新，非 pending 跳过） |
+| `im_send_msg` | 记录到 `douyin_webhook_events`，但不创建线索（`lead_action=not_lead_event`） |
+| `im_enter_direct_msg` | 记录到 `douyin_webhook_events`，但不创建线索 |
+| 重复事件 | 通过 `event_key`（SHA256 幂等键）去重，不重复创建线索，返回原始 event_id |
+
+**日志规范**：
+
+- 所有日志包含 `source_path` 和 `webhook_auth_required=true/false`
+- 不打印 secret
+- `from_user_id` 只打印前 8 字符 + `...`
+- 不打印完整敏感 payload
+
+### 28.7 已验证结果（线上联调）
+
+| # | 验证项 | 结果 |
+|---|--------|------|
+| 1 | `POST /webhook/douyin` 已部署到 OpenAPI | ✅ |
+| 2 | `https://callback.misanduo.com/webhook/douyin` 保持客户原地址不变 | ✅ |
+| 3 | 宝塔整站反代 `callback.misanduo.com → http://127.0.0.1:9000` | ✅ |
+| 4 | `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 生效 | ✅ |
+| 5 | 真实/有效 payload 返回 200 | ✅ |
+| 6 | `im_receive_msg` 已创建 `DouyinLead`（lead_id=4, customer_name=正本清源, lead_action=created） | ✅ |
+| 7 | `im_send_msg` / `im_enter_direct_msg` 记录事件但不创建线索 | ✅ |
+| 8 | 无效空 body 返回 400（正常行为，非鉴权问题） | ✅ |
+
+**日志示例结论**：
+
+```text
+webhook 鉴权已关闭: source_path=/webhook/douyin, webhook_auth_required=false
+webhook 接收成功: event=im_receive_msg
+webhook 新建线索: lead_id=4, customer_name=正本清源
+POST /webhook/douyin HTTP/1.1 200 OK
+```
+
+### 28.8 dev 阶段遗漏问题复盘
+
+**问题**：
+
+dev 阶段误将文档中的鉴权章节理解为入站 webhook 也必须强制鉴权，导致 auto_wechat 初版对 `/webhook/douyin` 和 `/integrations/douyin/webhook` 强制要求 `X-Auth-Timestamp` 与 `Authorization`。
+
+**影响**：
+
+如果 GMP 真实回调不带签名头，auto_wechat 会返回 401，导致真实私信事件无法入库。
+
+**原因**：
+
+未提前确认文档鉴权适用范围，没有区分：
+
+- 外部系统主动调用 GMP API（需要鉴权）
+- GMP 主动推送事件到 callback_url（不需要鉴权）
+
+**修复**：
+
+新增 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`，默认关闭入站 webhook 强制鉴权；保留 `true` 模式用于测试和未来兼容。
+
+**当前状态**：已修复并通过线上日志验证。
+
+### 28.9 后续待办
+
+| 优先级 | 待办 | 说明 |
+|--------|------|------|
+| P1 | 观察真实私信回调稳定性 | 持续观察 webhook event 与 DouyinLead 入库情况 |
+| P1 | 服务器 `.env` 显式保留 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` | 防止误改回强制鉴权 |
+| P2 | 处理旧 8081 douyinAPI 残留同步链路 | `/integrations/douyin/sync-leads` 仍调用 `http://127.0.0.1:8081/leads`；若 douyinAPI 废弃需禁用该入口（建议新增 `DOUYIN_SYNC_LEGACY_API_ENABLED=false`，关闭时返回 410） |
+| P2 | 授权返回链接 `/auth/callback` 迁移 | 是否迁移到 auto_wechat，后续单独探索，不与本次事件回调混淆 |
