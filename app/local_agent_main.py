@@ -288,6 +288,118 @@ def _fail(result: dict, failure_stage: str, message: str) -> dict:
     return result
 
 
+def _safe_json_serialize(value, _visited: set[int] | None = None, _depth: int = 0):
+    """P1-AUTO-1D-FIX4：将任意值安全转为 JSON 可序列化结构。
+
+    防止 FastAPI jsonable_encoder 因 UIA 控件对象、ctypes 对象、
+    循环引用 debug 对象、Exception 等导致 RecursionError 500。
+
+    规则：
+    - str/int/float/bool/None → 原样返回
+    - dict → 递归，限制 max_depth=6
+    - list/tuple/set → 递归，限制 max_depth=6
+    - Exception → {"type": ..., "message": ...}
+    - numpy 标量/ndarray → Python 原生类型
+    - UIA 控件 → 只保留 name/class_name/control_type/bounding_rectangle
+    - 其他对象 → {"type": class_name, "repr": repr(obj)[:500]}
+    - 循环引用 → "<circular_ref>"
+    """
+    # 基本类型直接返回
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    # numpy 标量（np.int32 等）和 ndarray
+    if hasattr(value, "item") and not isinstance(value, (dict, list, tuple, set)):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "__array__") and hasattr(value, "dtype") and hasattr(value, "shape"):
+        try:
+            import numpy as np
+            if isinstance(value, np.ndarray):
+                return [_safe_json_serialize(v, _visited, _depth + 1) for v in value]
+        except ImportError:
+            pass
+
+    # depth 限制
+    if _depth >= 6:
+        try:
+            return str(value)[:500]
+        except Exception:
+            return "<max_depth_exceeded>"
+
+    # 循环引用检测
+    visited = _visited or set()
+    value_id = id(value)
+    if value_id in visited:
+        return "<circular_ref>"
+
+    # dict
+    if isinstance(value, dict):
+        visited.add(value_id)
+        try:
+            return {
+                str(k): _safe_json_serialize(v, visited, _depth + 1)
+                for k, v in value.items()
+            }
+        finally:
+            visited.discard(value_id)
+
+    # list/tuple
+    if isinstance(value, (list, tuple)):
+        visited.add(value_id)
+        try:
+            return [_safe_json_serialize(item, visited, _depth + 1) for item in value]
+        finally:
+            visited.discard(value_id)
+
+    # set
+    if isinstance(value, set):
+        visited.add(value_id)
+        try:
+            return [_safe_json_serialize(item, visited, _depth + 1) for item in value]
+        finally:
+            visited.discard(value_id)
+
+    # Exception
+    if isinstance(value, Exception):
+        return {
+            "type": type(value).__name__,
+            "message": str(value)[:500],
+        }
+
+    # UIA 控件对象 — 只提取安全字段
+    type_name = type(value).__name__
+    module_name = getattr(type(value), "__module__", "") or ""
+    if "uiautomation" in module_name or type_name.endswith("Control"):
+        safe_info: dict = {"_uia_control": True, "type": type_name}
+        for attr in ("Name", "ClassName", "ControlTypeName"):
+            try:
+                safe_info[attr.lower()] = str(getattr(value, attr, None))
+            except Exception:
+                safe_info[attr.lower()] = None
+        try:
+            rect = getattr(value, "BoundingRectangle", None)
+            if rect is not None:
+                safe_info["bounding_rectangle"] = {
+                    "left": getattr(rect, "left", None),
+                    "top": getattr(rect, "top", None),
+                    "right": getattr(rect, "right", None),
+                    "bottom": getattr(rect, "bottom", None),
+                }
+        except Exception:
+            safe_info["bounding_rectangle"] = None
+        return safe_info
+
+    # 其他未知对象 — 保留 type 和 repr
+    try:
+        repr_str = repr(value)[:500]
+    except Exception:
+        repr_str = "<repr_failed>"
+    return {"type": type_name, "repr": repr_str}
+
+
 def _check_ocr_ready_for_agent_test(result: dict) -> dict | None:
     status = get_ocr_status()
     result["ocr"] = status
@@ -747,7 +859,18 @@ def create_local_agent_app(
 
     @app.post("/agent/wechat/search-debug")
     def agent_wechat_search_debug(request: LocalWechatSearchDebugRequest):
-        return run_search_box_debug(nickname=request.nickname, position=request.position)
+        """P1-AUTO-1D-FIX4：搜索框诊断，包裹安全序列化防止 500。"""
+        try:
+            raw = run_search_box_debug(nickname=request.nickname, position=request.position)
+        except Exception as exc:
+            logger.error("search-debug 内部异常: %s", exc, exc_info=True)
+            raw = {
+                "success": False,
+                "failure_stage": "search_debug_exception",
+                "nickname": request.nickname,
+                "message": f"内部异常: {exc}",
+            }
+        return _safe_json_serialize(raw)
 
     @app.post("/agent/wechat/search-calibration/start")
     def agent_wechat_search_calibration_start():
@@ -755,7 +878,18 @@ def create_local_agent_app(
 
     @app.post("/agent/wechat/search-result-debug")
     def agent_wechat_search_result_debug(request: LocalWechatSearchDebugRequest):
-        return run_search_result_debug(nickname=request.nickname, position=request.position)
+        """P1-AUTO-1D-FIX4：搜索结果诊断，包裹安全序列化防止 500。"""
+        try:
+            raw = run_search_result_debug(nickname=request.nickname, position=request.position)
+        except Exception as exc:
+            logger.error("search-result-debug 内部异常: %s", exc, exc_info=True)
+            raw = {
+                "success": False,
+                "failure_stage": "search_result_debug_exception",
+                "nickname": request.nickname,
+                "message": f"内部异常: {exc}",
+            }
+        return _safe_json_serialize(raw)
 
     @app.post("/agent/wechat/mouse-debug")
     def agent_wechat_mouse_debug(request: LocalWechatMouseDebugRequest):
