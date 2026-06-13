@@ -863,3 +863,123 @@ def test_douyin_sync_dry_run_auto_assign_not_executed():
     assert lead is None
 
     db.close()
+
+
+# ========== wechat fallback 测试 ==========
+
+
+def test_douyin_sync_wechat_fallback_when_phone_empty():
+    """phone 为空但 wechat 有值时，customer_contact 取 wechat"""
+    db = _db()
+
+    response = {
+        "items": [
+            {
+                "open_id": "wechat_fb_001",
+                "display_name": "微信用户",
+                "phone": None,
+                "wechat": "wx_test_001",
+                "last_interaction_record": "你好",
+                "lead_type": "私信",
+            }
+        ],
+        "total": 1,
+        "page": 1,
+        "page_size": 50,
+    }
+
+    with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
+        mock_fetch.return_value = response
+        request = DouyinSyncRequest(dry_run=False)
+        result = preview_sync_leads(db, request)
+
+    assert result.success is True
+    assert result.created == 1
+
+    # 验证 customer_contact 取了 wechat 值
+    lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wechat_fb_001").first()
+    assert lead is not None
+    assert lead.customer_contact == "wx_test_001"
+
+    # 清理
+    db.delete(lead)
+    db.commit()
+    db.close()
+
+
+def test_douyin_sync_phone_priority_over_wechat():
+    """phone 和 wechat 都有值时，customer_contact 优先取 phone"""
+    db = _db()
+
+    response = {
+        "items": [
+            {
+                "open_id": "phone_pri_001",
+                "display_name": "双值用户",
+                "phone": "13800006666",
+                "wechat": "wx_test_002",
+                "last_interaction_record": "你好",
+                "lead_type": "私信",
+            }
+        ],
+        "total": 1,
+        "page": 1,
+        "page_size": 50,
+    }
+
+    with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
+        mock_fetch.return_value = response
+        request = DouyinSyncRequest(dry_run=False)
+        result = preview_sync_leads(db, request)
+
+    assert result.success is True
+    assert result.created == 1
+
+    # 验证 customer_contact 取了 phone 而非 wechat
+    lead = db.query(DouyinLead).filter(DouyinLead.source_id == "phone_pri_001").first()
+    assert lead is not None
+    assert lead.customer_contact == "13800006666"
+
+    # 清理
+    db.delete(lead)
+    db.commit()
+    db.close()
+
+
+def test_douyin_sync_both_phone_and_wechat_empty():
+    """phone 和 wechat 都为空时，customer_contact 为 None"""
+    db = _db()
+
+    response = {
+        "items": [
+            {
+                "open_id": "both_empty_001",
+                "display_name": "无联系方式用户",
+                "phone": None,
+                "wechat": None,
+                "last_interaction_record": "你好",
+                "lead_type": "私信",
+            }
+        ],
+        "total": 1,
+        "page": 1,
+        "page_size": 50,
+    }
+
+    with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
+        mock_fetch.return_value = response
+        request = DouyinSyncRequest(dry_run=False)
+        result = preview_sync_leads(db, request)
+
+    assert result.success is True
+    assert result.created == 1
+
+    # 验证 customer_contact 为 None，同步不报错
+    lead = db.query(DouyinLead).filter(DouyinLead.source_id == "both_empty_001").first()
+    assert lead is not None
+    assert lead.customer_contact is None
+
+    # 清理
+    db.delete(lead)
+    db.commit()
+    db.close()

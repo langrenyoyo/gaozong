@@ -36,7 +36,7 @@ def _map_lead_item(raw_item: dict[str, Any]) -> dict[str, Any]:
         open_id → source_id
         display_name → customer_name，空值用 "未命名客户"
         last_interaction_record → content，空值用空字符串
-        phone → customer_contact
+        phone → customer_contact，phone 为空时 fallback 到 wechat
         lead_type → lead_type，空值用 "私信"
         source 固定为 "douyin"
     """
@@ -46,7 +46,7 @@ def _map_lead_item(raw_item: dict[str, Any]) -> dict[str, Any]:
         "content": raw_item.get("last_interaction_record") or "",
         "source": "douyin",
         "lead_type": raw_item.get("lead_type") or "私信",
-        "customer_contact": raw_item.get("phone") or None,
+        "customer_contact": raw_item.get("phone") or raw_item.get("wechat") or None,
         "raw_data": raw_item,
     }
 
