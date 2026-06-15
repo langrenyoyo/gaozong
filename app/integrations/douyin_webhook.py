@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -167,6 +168,11 @@ def find_existing_event(db: Session, event_key: str) -> DouyinWebhookEvent | Non
 # ========== 事件持久化 ==========
 
 
+def build_duplicate_event_key(original_event_key: str) -> str:
+    """生成重复 webhook 到达记录的派生唯一键。"""
+    return f"{original_event_key}:dup:{uuid.uuid4().hex}"
+
+
 def persist_webhook_event(
     db: Session,
     payload: dict[str, Any],
@@ -193,6 +199,28 @@ def persist_webhook_event(
 
 
 # ========== 线索写入 ==========
+
+
+def persist_duplicate_webhook_event(
+    db: Session,
+    payload: dict[str, Any],
+    original_event_key: str,
+    lead_id: int | None = None,
+) -> DouyinWebhookEvent:
+    """写入重复 webhook 原始事件，不触发线索更新。"""
+    event = DouyinWebhookEvent(
+        event=payload.get("event"),
+        from_user_id=payload.get("from_user_id"),
+        to_user_id=payload.get("to_user_id"),
+        event_key=build_duplicate_event_key(original_event_key),
+        is_duplicate=1,
+        lead_id=lead_id,
+        raw_body=json.dumps(payload, ensure_ascii=False),
+        created_at=datetime.now(),
+    )
+    db.add(event)
+    db.flush()
+    return event
 
 
 def find_lead_by_source_id(db: Session, source_id: str) -> DouyinLead | None:
@@ -317,19 +345,25 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
     existing_event = find_existing_event(db, event_key)
 
     if existing_event is not None:
+        duplicate_event = persist_duplicate_webhook_event(
+            db,
+            payload,
+            original_event_key=event_key,
+            lead_id=existing_event.lead_id,
+        )
         # 重复事件：不插入、不更新线索，直接返回原始记录
         logger.info(
             "webhook 重复事件: event_id=%d, event=%s, event_key=%s...12s",
-            existing_event.id,
+            duplicate_event.id,
             event_type,
             event_key[:12],
         )
         return {
-            "event_id": existing_event.id,
+            "event_id": duplicate_event.id,
             "lead_id": existing_event.lead_id,
             "is_new_lead": False,
             "is_duplicate": True,
-            "lead_action": "not_lead_event",
+            "lead_action": "duplicate_event",
         }
 
     lead_id = None
