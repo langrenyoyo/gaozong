@@ -1,4 +1,4 @@
-"""Read-only service for raw Douyin webhook events."""
+"""抖音原始 webhook 事件的只读服务"""
 
 import json
 from dataclasses import dataclass

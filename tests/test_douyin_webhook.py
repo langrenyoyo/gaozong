@@ -334,6 +334,8 @@ def test_process_webhook_duplicate_event():
         db.commit()
         result2 = process_webhook_event(db, payload)
         db.commit()
+        result3 = process_webhook_event(db, payload)
+        db.commit()
 
     # 首次：正常创建
     assert result1["is_duplicate"] is False
@@ -341,14 +343,19 @@ def test_process_webhook_duplicate_event():
 
     # 重复：标记为重复
     assert result2["is_duplicate"] is True
-    assert result2["lead_action"] == "not_lead_event"
+    assert result2["lead_action"] == "duplicate_event"
     assert result2["is_new_lead"] is False
 
     # 返回原始 event_id
-    assert result2["event_id"] == result1["event_id"]
+    assert result2["event_id"] != result1["event_id"]
 
     # 返回原始 lead_id
     assert result2["lead_id"] == result1["lead_id"]
+
+    assert result3["is_duplicate"] is True
+    assert result3["lead_action"] == "duplicate_event"
+    assert result3["event_id"] not in {result1["event_id"], result2["event_id"]}
+    assert result3["lead_id"] == result1["lead_id"]
 
     # 验证只有 1 条线索
     leads = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_dup_001").all()
@@ -358,12 +365,19 @@ def test_process_webhook_duplicate_event():
     events = db.query(DouyinWebhookEvent).filter(
         DouyinWebhookEvent.from_user_id == "wh_dup_001"
     ).all()
-    assert len(events) == 1
+    assert len(events) == 3
     assert events[0].is_duplicate == 0
     # event_key 等于真实幂等键，无后缀
-    assert "-dup-" not in events[0].event_key
+    assert events[1].is_duplicate == 1
+    assert events[1].lead_id == result1["lead_id"]
+    assert events[1].event_key.startswith(f"{events[0].event_key}:dup:")
+    assert events[2].is_duplicate == 1
+    assert events[2].lead_id == result1["lead_id"]
+    assert events[2].event_key.startswith(f"{events[0].event_key}:dup:")
+    assert events[2].event_key != events[1].event_key
 
-    db.delete(events[0])
+    for event in events:
+        db.delete(event)
     db.delete(leads[0])
     db.commit()
     db.close()
@@ -755,11 +769,11 @@ def test_webhook_legacy_and_main_path_idempotent_no_auth():
     assert data1["lead_action"] == "created"
     assert data1["is_new_lead"] is True
     assert data2["is_duplicate"] is True
-    assert data2["lead_action"] == "not_lead_event"
+    assert data2["lead_action"] == "duplicate_event"
 
     # 两路径返回相同 lead_id（共享幂等逻辑）
     assert data1["lead_id"] == data2["lead_id"]
-    assert data1["event_id"] == data2["event_id"]
+    assert data1["event_id"] != data2["event_id"]
 
 
 # ---------- 鉴权开启场景（DOUYIN_WEBHOOK_AUTH_REQUIRED=true） ----------

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.integrations.douyin_webhook import process_webhook_event
 from app.main import create_app
 from app.models import DouyinLead, DouyinWebhookEvent
 
@@ -262,6 +263,48 @@ def test_list_webhook_events_filters_is_duplicate():
     items = client.get("/webhook-events?is_duplicate=true").json()["data"]["items"]
 
     assert [item["event_key"] for item in items] == ["dup_filter"]
+
+
+def test_list_webhook_events_shows_real_duplicate_from_webhook_flow():
+    payload = _payload(
+        from_user_id="real_dup_user",
+        content=_content(
+            text="wx abc123",
+            server_message_id="real_dup_msg",
+            conversation_short_id="real_dup_conv",
+        ),
+    )
+    db = TestSession()
+    try:
+        first = process_webhook_event(db, payload)
+        db.commit()
+        second = process_webhook_event(db, payload)
+        db.commit()
+    finally:
+        db.close()
+
+    assert first["lead_action"] == "created"
+    assert second["lead_action"] == "duplicate_event"
+    assert second["is_duplicate"] is True
+    assert second["event_id"] != first["event_id"]
+    assert second["lead_id"] == first["lead_id"]
+
+    client = _client()
+
+    duplicate_items = client.get("/webhook-events?lead_action=duplicate_event").json()["data"]["items"]
+    assert [item["id"] for item in duplicate_items] == [second["event_id"]]
+    assert duplicate_items[0]["is_duplicate"] is True
+
+    duplicate_flag_items = client.get("/webhook-events?is_duplicate=true").json()["data"]["items"]
+    assert [item["id"] for item in duplicate_flag_items] == [second["event_id"]]
+
+    duplicate_detail = client.get(f"/webhook-events/{second['event_id']}").json()["data"]
+    assert duplicate_detail["lead_action"] == "duplicate_event"
+    assert duplicate_detail["raw_body"]["from_user_id"] == "real_dup_user"
+
+    original_detail = client.get(f"/webhook-events/{first['event_id']}").json()["data"]
+    assert original_detail["lead_action"] == "valid_lead"
+    assert original_detail["is_duplicate"] is False
 
 
 def test_list_webhook_events_filters_keyword_event_key_or_raw_body():
