@@ -116,6 +116,35 @@ class AgentStatusResponse(BaseModel):
 
 # ========== 销售人员 ==========
 
+class AgentHeartbeatRequest(BaseModel):
+    """Local Agent heartbeat payload posted to the 9000 server."""
+
+    agent_client_id: str = Field(..., min_length=1)
+    agent_name: Optional[str] = None
+    host_name: Optional[str] = None
+    agent_status: str = Field(..., min_length=1)
+    wechat_status: str = Field(..., min_length=1)
+    current_task_id: Optional[int] = None
+    current_task_type: Optional[str] = None
+    version: Optional[str] = None
+
+
+class AgentHeartbeatData(BaseModel):
+    """Local Agent heartbeat acknowledgement data."""
+
+    received: bool = True
+    server_time: datetime
+    next_heartbeat_seconds: int
+
+
+class AgentHeartbeatResponse(BaseModel):
+    """Local Agent heartbeat response wrapper."""
+
+    success: bool = True
+    data: AgentHeartbeatData
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")
