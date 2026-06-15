@@ -7,7 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.database import engine, Base
-from app.routers import staff, leads, checks, reports, integrations, wechat_auto_detect, automation_control, wechat_tasks
+from app.routers import (
+    staff,
+    leads,
+    checks,
+    reports,
+    integrations,
+    wechat_auto_detect,
+    automation_control,
+    wechat_tasks,
+    webhook_events,
+)
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
 try:
@@ -71,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(wechat_auto_detect.router)
     app.include_router(automation_control.router)
     app.include_router(wechat_tasks.router)
+    app.include_router(webhook_events.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:

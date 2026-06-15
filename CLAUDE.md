@@ -1034,3 +1034,34 @@ logging_config.py 使用说明.md
 5. `/webhook/douyin` 和 `/integrations/douyin/webhook` 继续共用 `_handle_douyin_webhook()`，验签逻辑一致。
 6. 签名算法保持 `sha256Hex(SECRET_KEY + body + "-" + timestamp)` 不变。
 7. 本轮没有修改数据库模型、没有执行迁移、没有改 Local Agent 自动化逻辑、没有引入新依赖。
+
+------
+
+# P0-DEV-E1 原始事件 / invalid 只读查询接口完成记录
+
+更新时间：2026-06-15
+
+完成状态：P0-DEV-E1 已完成。
+
+已新增只读接口：
+
+1. `GET /webhook-events`
+2. `GET /webhook-events/{event_id}`
+
+关键结论：
+
+1. 数据来源为现有 `douyin_webhook_events`。
+2. 当前不新增字段、不迁移数据库。
+3. 当前通过解析 `raw_body` 和现有字段推导事件展示状态：
+   - `duplicate_event`
+   - `valid_lead`
+   - `non_lead_event`
+   - `invalid_content`
+   - `non_text_message`
+   - `invalid_contact`
+   - `unknown`
+4. `/leads` 保持只展示有效线索。
+5. invalid / 原始事件通过 `/webhook-events` 单独展示。
+6. 全量测试结果：`722 passed, 149 warnings`。
+7. warnings 为既有 deprecation warnings。
+8. 本轮未修改 webhook 验签、webhook 写入、contact_extractor、有效线索生成规则、Local Agent、数据库模型、依赖。

@@ -6,6 +6,60 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# ========== Raw webhook event read-only query ==========
+
+
+class WebhookEventOut(BaseModel):
+    """Raw webhook event list item."""
+
+    id: int
+    event: Optional[str] = None
+    from_user_id: Optional[str] = None
+    to_user_id: Optional[str] = None
+    event_key: Optional[str] = None
+    is_duplicate: bool = False
+    lead_id: Optional[int] = None
+    lead_action: str
+    created_at: Optional[datetime] = None
+    server_message_id: Optional[str] = None
+    conversation_short_id: Optional[str] = None
+    message_text: Optional[str] = None
+    contact_extract_status: Optional[str] = None
+    customer_contact: Optional[str] = None
+    failure_reason: Optional[str] = None
+
+
+class WebhookEventDetailOut(WebhookEventOut):
+    """Raw webhook event detail."""
+
+    raw_body: Optional[dict] = None
+
+
+class WebhookEventListData(BaseModel):
+    """Raw webhook event paginated data."""
+
+    page: int
+    page_size: int
+    total: int
+    items: list[WebhookEventOut]
+
+
+class WebhookEventListResponse(BaseModel):
+    """Raw webhook event list response."""
+
+    success: bool = True
+    data: WebhookEventListData
+    message: str = "success"
+
+
+class WebhookEventDetailResponse(BaseModel):
+    """Raw webhook event detail response."""
+
+    success: bool = True
+    data: WebhookEventDetailOut
+    message: str = "success"
+
+
 # ========== 销售人员 ==========
 
 class StaffCreate(BaseModel):
