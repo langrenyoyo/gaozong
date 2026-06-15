@@ -8,6 +8,265 @@
 
 ------
 
+## 0. P0-DOC-PRD-1 最终 PRD 冻结同步
+
+更新时间：2026-06-15
+
+最新冻结 PRD：`docs/ai/06_PRD_AUTO_WECHAT.md`
+
+本轮同步只更新项目定位与 PRD 边界，不代表已完成技术方案、数据库模型、接口契约或业务代码变更。
+
+### 0.1 最新项目定位
+
+auto_wechat / 小高AI微信助手属于 NewCarProject 外部客户系统下的一组商户可售卖子功能系统。
+
+整体结构：
+
+```text
+NewCarProject
+  ↓
+外部客户系统 / React 商户端
+  ↓
+多个可售卖子功能系统
+```
+
+NewCarProject 负责商户、账号、权限、菜单、套餐、消耗管理。外部客户系统是商户入口。
+
+子功能系统包括：
+
+1. 抖音AI小高客服
+2. AI小高线索
+3. 小高AI微信助手
+4. AI小高剪辑
+5. 小高素材库
+6. 小高算力
+
+其中小高算力不是子功能系统，是商户查看套餐和消耗的展示能力。
+
+### 0.2 当前重点建设链路
+
+当前重点建设链路：
+
+```text
+AI小高线索 → 小高AI微信助手
+```
+
+AI小高线索负责抖音扫码鉴权、获取抖音私信、识别线索来源、记录原始线索事件、从用户私信纯文本中提取手机号 / 微信号并生成有效线索。
+
+小高AI微信助手负责获取有效线索、分配销售、创建微信通知任务、调用 Local Agent 操作客户本地微信、通知销售、检测销售是否回复、判断已回复 / 超时未回复、支持超时重分配、失败记录、人工处理和 Excel 数据导出。
+
+### 0.3 子功能边界
+
+AI小高线索、小高AI微信助手、AI小高剪辑是需要具备独立运行能力的子功能服务，必须预留独立启动、独立部署、独立配置、独立健康检查、独立日志、独立异常处理能力。
+
+巨量一键过审属于 AI小高剪辑，不属于小高AI微信助手。巨量一键过审需要巨量服务扫码鉴权，后续单独出 PRD，不混入 auto_wechat 第一版。
+
+douyinAPI 当前定位为：
+
+```text
+demo / 参考实现 / 历史代码沉淀
+```
+
+后续产品化时，不应直接把 douyinAPI 作为长期正式依赖，而应按子功能边界拆分、验证和迁移：
+
+```text
+抖音扫码鉴权、抖音私信线索 → AI小高线索
+巨量扫码鉴权、巨量一键过审 → AI小高剪辑
+线索分配、微信通知、回复检测 → 小高AI微信助手
+```
+
+### 0.4 Webhook 与线索接入冻结规则
+
+第一版正式验收链路为：
+
+```text
+webhook 直收
+```
+
+正式地址继续使用：
+
+```text
+callback.misanduo.com/webhook/douyin
+```
+
+Webhook 验签规则按《抖音私信能力对外 OpenApi》：
+
+```text
+signature = sha256Hex(SECRET_KEY + body + "-" + timestamp)
+```
+
+Header：
+
+```text
+Authorization: signature
+X-Auth-Timestamp: timestamp
+```
+
+`body` 为请求体原始字符串，`timestamp` 为秒级时间戳，`SECRET_KEY` 第一版按客户 / 商户维度配置。后续如果每个抖音账号需要不同 `SECRET_KEY`，再扩展到账号维度。
+
+所有 webhook 事件进入 `lead_source_events`。有效线索进入 `douyin_leads`。第一版从用户发出的私信纯文本中用正则 / 规则提取手机号或微信号，不依赖顶层 `phone` / `wechat` 字段，不依赖 `retain_consult_card` 留资卡片，不接入 LLM。
+
+### 0.5 第一版关键业务规则
+
+有效线索规则：
+
+1. 手机号或微信号任一存在，即视为有效线索。
+2. 无联系方式的事件只记录原始事件，不进入有效线索分配。
+3. invalid 进入前端列表并参与数据导出，不需要回调。
+4. 一个消息中多个手机号 / 微信号全部保存，主字段取第一个。
+
+幂等规则：
+
+1. 优先使用数据源 `id` 作为 `external_lead_id`。
+2. 如果 `id` 缺失，使用 `open_id + account_open_id`。
+3. `conversation_short_id` 用于会话级辅助去重。
+4. `server_message_id` 用于事件级幂等。
+5. `event_key` 用于 webhook 事件幂等。
+6. 重复事件返回成功并记录幂等命中结果。
+
+状态规则：
+
+1. 内部建议状态包括 `received`、`invalid`、`delay_assign`、`pending_assign`、`assigned`、`notified`、`waiting_reply`、`replied`、`timeout`、`reassigned`、`manual_required`、`failed`、`closed`。
+2. 对外状态只包括：未分配、已分配、已回复、超时未回复。
+3. `callback_success` 仅作为内部 `callback_logs.status = success`，不作为对外业务状态。
+
+### 0.6 NewCarProject 对接预留
+
+NewCarProject 跳转 auto_wechat 使用：
+
+```text
+token + cookie
+```
+
+auto_wechat 需要支持识别 token 和 cookie。
+
+后续待确认项：
+
+```text
+NewCarProject token / cookie / roles / merchant_id 的具体字段结构，后续需要与 NewCarProject 同事确认。
+```
+
+customer_id 映射规则：
+
+1. auto_wechat 本地生成 `customer_id`。
+2. NewCarProject 的商户 ID 保存为 `external_customer_id`。
+3. 后续 NewCarProject 正式接入时，通过 `external_customer_id` 建立映射。
+
+### 0.7 Local Agent 安全边界
+
+每个客户第一版只考虑一台电脑运行 Local Agent，不支持客户多台 Local Agent，不支持多个账号。同一电脑、同一微信窗口、同一 `agent_client_id` 同一时间只允许执行一个任务。
+
+发送任务和检测任务必须互斥，`poll-and-execute` 与 `poll-and-detect` 必须互斥。忙碌时返回 `agent_busy`。微信异常、未确认联系人、微信窗口不可用、搜索框焦点未确认时必须停止操作并回写失败原因。禁止并发操作微信，高风险操作必须有日志。
+
+exe 名称统一为：
+
+```text
+小高AI微信助手
+```
+
+### 0.8 第一版明确不做
+
+1. 不修改业务代码时不得顺手实现 PRD 内容。
+2. 不把 douyinAPI 写成正式生产依赖。
+3. 不把 AI小高线索、小高AI微信助手、AI小高剪辑混成一个服务。
+4. 不把巨量一键过审放入小高AI微信助手。
+5. 不把 LLM 写入第一版需求。
+6. 不把截图保存写入第一版需求。
+7. 第一版截图不保存、不入库。
+8. 第一版业务数据保存 180 天，不做数据归档。
+
+### 0.9 P0-ARCH-1 架构设计完成记录
+
+更新时间：2026-06-15
+
+架构文档：`docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
+
+关键结论：第一版产品化设计上拆分 AI小高线索与小高AI微信助手，生产环境 webhook 必须按 OpenApi 签名规则验签；旧 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 只能作为开发 / 联调兼容，不作为正式验收口径。
+
+### 0.10 P0-DATA-1 数据模型设计完成记录
+
+更新时间：2026-06-15
+
+数据模型文档：`docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
+
+关键结论：第一版推荐保留 `douyin_webhook_events` 物理表名，语义上承接 `lead_source_events` 原始事件域，后续产品化稳定后再单独做物理表名迁移；所有核心业务域需预留 `customer_id`，并补齐联系方式提取、幂等、分配历史、Local Agent、回调、导出和人工处理等数据边界。
+
+### 0.11 P0-API-1 接口契约设计完成记录
+
+更新时间：2026-06-15
+
+接口契约文档：`docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+
+关键结论：第一版保留正式 webhook 入口 `/webhook/douyin`，反向代理继续承接 `callback.misanduo.com/webhook/douyin`；AI小高线索到小高AI微信助手推荐先采用拉取式边界或服务层模拟，降低拆分风险；Local Agent 第一版兼容现有 `poll-and-execute` / `poll-and-detect` 任务接口，同时标记心跳、商户后台、NewCarProject 入口、导出和状态回调等目标接口为后续契约实现范围。
+
+### 0.12 P0-WEBHOOK-AUTH-1 Webhook 验签迁移技术方案完成记录
+
+更新时间：2026-06-15
+
+技术方案文档：`docs/ai/10_WEBHOOK_AUTH_MIGRATION.md`
+
+关键结论：douyinAPI 已实现与 PRD 一致的 `sha256Hex(SECRET_KEY + body + "-" + timestamp)` 签名计算、原始 body 读取、timestamp 过期窗口和本地签名测试脚本，可作为参考；auto_wechat 当前已有更严格的 `verify_signature()`，但默认 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 只能保留为开发 / 联调兼容，生产环境必须通过后续代码方案引入环境识别并强制验签，且不得把 douyinAPI 作为正式运行时依赖。
+
+### 0.13 P0-CODEPLAN-1 产品化代码修改计划完成记录
+
+更新时间：2026-06-15
+
+代码修改计划文档：`docs/ai/11_CODE_PLAN_AUTO_WECHAT.md`
+
+关键结论：第一版产品化建议按 Webhook 生产验签、联系方式提取、原始事件与有效线索规则、数据模型补齐、状态流转、customer_id 预留、Local Agent 回归、前端接口与导出补齐的顺序渐进实施；当前真实代码仍存在 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 默认值、`im_receive_msg` 直接 upsert `douyin_leads`、`douyin_webhook_events` 字段不足、缺少 `customer_id` 和未引入迁移体系等冲突，后续执行前必须先确认生产验签切换和数据库迁移策略。
+
+### 0.14 P0-CODEPLAN-1A 日志模板只读探索补充
+
+更新时间：2026-06-15
+
+只读探索路径：`D:\zws\ask_next_Project\log-template`
+
+探索对象：
+
+```text
+log-template/
+├── logging_config.py
+└── logging_config.py 使用说明.md
+```
+
+日志模板结论：
+
+1. 模板提供 `setup_logging()` 和 `get_module_logger()`，支持根 logger 初始化、模块 logger 缓存、彩色控制台输出、常规日志文件和 ERROR 独立日志文件。
+2. 日志格式为 `时间 - logger 名称 - 级别 - filename:lineno - message`，适合基础文本日志，但不是结构化日志。
+3. 日志级别支持 `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL`，默认从 `LOG_LEVEL` 环境变量读取，未配置时为 `INFO`。
+4. 日志轮转使用 `TimedRotatingFileHandler`，每天午夜轮转，默认保留 7 天。
+5. 模板没有内置 `request_id` / `trace_id`，没有 FastAPI middleware、exception handler、contextvars 或响应头回传。
+6. 模板没有敏感信息脱敏 filter，不能直接用于记录 webhook、token、cookie、手机号、微信号、Authorization、SECRET_KEY 或原始请求体。
+7. 模板没有全局异常接入，异常堆栈依赖调用方显式使用 `logger.exception()` 或 `exc_info=True`。
+
+是否适合复用：适合作为后续 auto_wechat 日志基础设施的参考，不适合未经适配直接复制。后续正式执行前，必须先确认日志目录、运行日志保留周期、request_id / trace_id 生成与透传规则、敏感字段脱敏规则、FastAPI 接入方式、Local Agent exe 落盘位置，以及是否采用纯文本 key-value 还是 JSON Lines。
+
+P0-CODEPLAN-1A 只补充日志要求和执行前决策；没有修改业务代码、配置默认值、接口、数据库模型、测试、依赖，没有复制日志代码，没有启动服务或执行迁移。
+
+### 0.15 P0-TESTPLAN-1 测试验收计划完成记录
+
+更新时间：2026-06-15
+
+测试验收计划文档：`docs/ai/12_TEST_PLAN_AUTO_WECHAT.md`
+
+关键结论：第一版产品化测试验收必须以生产强制 Webhook 验签、原始 body 签名一致性、私信纯文本联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出为主线。正式验收不以免验签为通过口径，Local Agent 真机验收必须保持 `sent=false`、检测只读、不粘贴、不发送、不按 Enter。
+
+### 0.16 P0-DEV-A1 Webhook 验签生产安全改造完成记录
+
+更新时间：2026-06-15
+
+本轮只执行 Webhook 验签生产安全小补丁：
+
+1. 增加 `APP_ENV` 环境识别，默认 `development`。
+2. 保留 `APP_ENV=development` 且 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 的本地开发 / 联调免验签能力。
+3. `APP_ENV=production` 时强制 webhook 验签，即使 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 也不得静默放行。
+4. `APP_ENV=production` 且 `DY_SECRET_KEY` 缺失时，webhook 请求拒绝，不进入业务事件处理。
+5. `/webhook/douyin` 与 `/integrations/douyin/webhook` 继续复用 `_handle_douyin_webhook()` 和同一套验签判断。
+6. 签名算法保持不变：`sha256Hex(SECRET_KEY + body + "-" + timestamp)`。
+7. `.env.example` 已明确 `production must set DOUYIN_WEBHOOK_AUTH_REQUIRED=true` 和 `production must set DY_SECRET_KEY`。
+
+本轮未修改数据库模型、未执行迁移、未修改 Local Agent 自动化逻辑、未引入新依赖、未实现联系方式提取、未改有效线索生成规则、未新增接口。
+
 ## 1. 项目名称
 
 主机微信线索分发与销售跟进检测系统

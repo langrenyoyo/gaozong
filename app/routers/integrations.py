@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.config import DOUYIN_WEBHOOK_AUTH_REQUIRED
+from app import config
 from app.database import get_db
 from app.integrations.douyin_webhook import (
     WebhookSignatureError,
@@ -36,9 +36,9 @@ async def _handle_douyin_webhook(
     被 /integrations/douyin/webhook 和 /webhook/douyin 两个入口复用，
     确保验签/解析、幂等、线索写入行为完全一致。
 
-    鉴权开关 DOUYIN_WEBHOOK_AUTH_REQUIRED：
-    - false（默认）：GMP 推送不鉴权，直接解析处理
-    - true：强制 X-Auth-Timestamp + Authorization 签名校验
+    鉴权开关：
+    - development + DOUYIN_WEBHOOK_AUTH_REQUIRED=false：允许本地开发 / 联调免验签
+    - production：强制 X-Auth-Timestamp + Authorization 签名校验
 
     Args:
         body: 原始请求体字节流（用于验签）
@@ -47,22 +47,24 @@ async def _handle_douyin_webhook(
         db: 数据库会话
         source_path: 入口路径，用于日志区分（不参与业务逻辑）
     """
-    # 鉴权（默认关闭，GMP 推送 callback_url 不携带签名）
-    if DOUYIN_WEBHOOK_AUTH_REQUIRED:
+    auth_required = config.is_douyin_webhook_auth_required()
+    if auth_required:
         try:
             verify_signature(body, x_auth_timestamp, authorization)
         except WebhookSignatureError as exc:
             logger.warning(
-                "webhook 验签失败: source_path=%s, webhook_auth_required=true, status=%d, message=%s",
+                "webhook 验签失败: source_path=%s, app_env=%s, webhook_auth_required=true, status=%d, message=%s",
                 source_path,
+                config.APP_ENV,
                 exc.status_code,
                 exc.message,
             )
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
     else:
         logger.info(
-            "webhook 鉴权已关闭: source_path=%s, webhook_auth_required=false",
+            "webhook 鉴权已关闭: source_path=%s, app_env=%s, webhook_auth_required=false",
             source_path,
+            config.APP_ENV,
         )
 
     # 解析 payload
@@ -72,7 +74,7 @@ async def _handle_douyin_webhook(
         logger.warning(
             "webhook payload 解析失败: source_path=%s, webhook_auth_required=%s, %s",
             source_path,
-            DOUYIN_WEBHOOK_AUTH_REQUIRED,
+            auth_required,
             exc,
         )
         raise HTTPException(status_code=400, detail=f"无效的 JSON payload: {exc}")
@@ -80,7 +82,7 @@ async def _handle_douyin_webhook(
     logger.info(
         "webhook 接收成功: source_path=%s, webhook_auth_required=%s, event=%s, from=%s",
         source_path,
-        DOUYIN_WEBHOOK_AUTH_REQUIRED,
+        auth_required,
         payload.get("event"),
         (payload.get("from_user_id") or "")[:8] + "...",
     )

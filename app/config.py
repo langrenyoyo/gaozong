@@ -38,6 +38,7 @@ DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))
 
 # ---------- 抖音 GMP 直连接入配置 ----------
 # auto_wechat 自己的环境变量，不读取 douyinAPI/.env
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 DY_SECRET_KEY = os.getenv("DY_SECRET_KEY", "")
 DY_BASE_URL = os.getenv(
     "DY_BASE_URL",
@@ -49,14 +50,26 @@ DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
 DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 # 入站 webhook 是否强制签名鉴权
-# GMP 推送 callback_url 不携带签名，默认 false（不鉴权）
-# 置为 true 时恢复 X-Auth-Timestamp + Authorization 校验（仅调试/安全审计用）
+# development 可关闭用于本地开发 / 联调；production 始终强制验签
 DOUYIN_WEBHOOK_AUTH_REQUIRED = os.getenv("DOUYIN_WEBHOOK_AUTH_REQUIRED", "false").lower() == "true"
 DY_CALLBACK_EVENTS = [
     item.strip()
     for item in os.getenv("DY_CALLBACK_EVENTS", "").split(",")
     if item.strip()
 ]
+
+
+def is_production_env() -> bool:
+    """判断当前是否为生产环境。"""
+    return APP_ENV == "production"
+
+
+def is_douyin_webhook_auth_required() -> bool:
+    """返回当前 webhook 是否需要验签。
+
+    production 环境强制验签，避免 DOUYIN_WEBHOOK_AUTH_REQUIRED=false 静默放行。
+    """
+    return is_production_env() or DOUYIN_WEBHOOK_AUTH_REQUIRED
 
 # ---------- 旧链路开关 ----------
 # P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。

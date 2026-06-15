@@ -40,7 +40,7 @@ def _port_is_available(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) != 0
 
 
-def _print_startup_message(host: str, port: int, server_url: str | None) -> None:
+def _print_startup_message(host: str, port: int, server_url: str | None = None) -> None:
     import sys
 
     app = create_local_agent_app(host=host, port=port, server_url=server_url)

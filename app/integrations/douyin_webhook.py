@@ -23,6 +23,7 @@ from app.config import (
     DY_SECRET_KEY,
 )
 from app.models import DouyinLead, DouyinWebhookEvent
+from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
 
 logger = logging.getLogger("douyin_webhook")
 
@@ -122,6 +123,14 @@ def normalize_message_text(content: dict[str, Any]) -> str:
     return ""
 
 
+def is_text_message(content: dict[str, Any]) -> bool:
+    """判断 content 是否表示纯文本私信消息。"""
+    message_type = content.get("message_type")
+    if message_type is None:
+        return True
+    return str(message_type).lower() == "text"
+
+
 # ========== 幂等 ==========
 
 
@@ -201,6 +210,9 @@ def find_lead_by_source_id(db: Session, source_id: str) -> DouyinLead | None:
 def upsert_lead_from_webhook(
     db: Session,
     payload: dict[str, Any],
+    contact_result: ContactExtractResult,
+    content: dict[str, Any] | None = None,
+    message_text: str | None = None,
 ) -> DouyinLead:
     """从 webhook payload 创建或更新线索
 
@@ -209,18 +221,29 @@ def upsert_lead_from_webhook(
     - 已存在且 pending → 更新 customer_name/content/raw_data
     - 已存在且非 pending → 不修改业务状态，仅返回
     """
-    content = parse_content(payload.get("content"))
+    content = content if content is not None else parse_content(payload.get("content"))
     from_user_id = payload.get("from_user_id") or ""
     if not from_user_id:
         raise ValueError("webhook payload 缺少 from_user_id")
 
     nick_name, _avatar = extract_user_profile(payload)
-    message_text = normalize_message_text(content)
+    message_text = message_text if message_text is not None else normalize_message_text(content)
+    customer_contact = contact_result.phone or contact_result.wechat
 
     # 构造 raw_data：保存 payload + 解析后的 content
     raw_data = {
         "webhook_payload": payload,
         "parsed_content": content,
+        "raw_message_text": message_text,
+        "contact_extract": {
+            "phone": contact_result.phone,
+            "wechat": contact_result.wechat,
+            "phones": contact_result.phones,
+            "wechats": contact_result.wechats,
+            "all_contacts": contact_result.all_contacts,
+            "status": contact_result.status,
+            "failure_reason": contact_result.failure_reason,
+        },
     }
 
     existing = find_lead_by_source_id(db, from_user_id)
@@ -231,7 +254,7 @@ def upsert_lead_from_webhook(
             source="douyin",
             source_id=from_user_id,
             customer_name=nick_name or "未命名客户",
-            customer_contact=None,
+            customer_contact=customer_contact,
             content=message_text,
             lead_type="私信",
             raw_data=json.dumps(raw_data, ensure_ascii=False),
@@ -250,6 +273,7 @@ def upsert_lead_from_webhook(
     if existing.status == "pending":
         # 更新允许的字段
         existing.customer_name = nick_name or existing.customer_name or "未命名客户"
+        existing.customer_contact = customer_contact
         existing.content = message_text or existing.content
         existing.raw_data = json.dumps(raw_data, ensure_ascii=False)
         db.flush()
@@ -316,17 +340,45 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
     if event_type == "im_receive_msg":
         existing = find_lead_by_source_id(db, from_user_id) if from_user_id else None
         was_existing = existing is not None
+        content = parse_content(payload.get("content"))
+        message_text = normalize_message_text(content)
 
-        lead = upsert_lead_from_webhook(db, payload)
-        lead_id = lead.id
-
-        if not was_existing:
-            is_new_lead = True
-            lead_action = "created"
-        elif existing.status == "pending":
-            lead_action = "updated"
+        if not is_text_message(content):
+            lead_action = "invalid_contact"
+            logger.info(
+                "webhook 非文本私信不生成线索: event=%s, source_id=%s, message_type=%s",
+                event_type,
+                from_user_id[:8] + "...",
+                content.get("message_type"),
+            )
         else:
-            lead_action = "skipped"
+            contact_result = extract_contacts_from_text(message_text)
+            if contact_result.status == "matched" and (contact_result.phone or contact_result.wechat):
+                lead = upsert_lead_from_webhook(
+                    db,
+                    payload,
+                    contact_result=contact_result,
+                    content=content,
+                    message_text=message_text,
+                )
+                lead_id = lead.id
+
+                if not was_existing:
+                    is_new_lead = True
+                    lead_action = "created"
+                elif existing.status == "pending":
+                    lead_action = "updated"
+                else:
+                    lead_action = "skipped"
+            else:
+                lead_action = "invalid_contact"
+                logger.info(
+                    "webhook 未提取到联系方式，不生成线索: event=%s, source_id=%s, extract_status=%s, reason=%s",
+                    event_type,
+                    from_user_id[:8] + "...",
+                    contact_result.status,
+                    contact_result.failure_reason,
+                )
 
     # 首次收到的事件，写入事件日志
     event = persist_webhook_event(
