@@ -2257,7 +2257,10 @@ check_scheduler（后台线程，间隔 check_interval_minutes 默认 5min）
 
 ### B. 当前最大阻塞点
 
-1. **数据库迁移体系缺失（HIGH，硬阻塞）**：当前使用 `Base.metadata.create_all`，对已存在表不会自动 ALTER；生产 SQLite 已有数据。新增字段会导致旧库缺列报错。在 Alembic / 手写迁移脚本方案确认前，禁止修改 `models.py`。下一步输出 `docs/ai/14_DB_MIGRATION_PLAN.md`（仅方案，不落库）。
+1. **数据库迁移体系（HIGH，P2-A 已完成、P2-B/C 待确认执行）**：当前使用 `Base.metadata.create_all`，对已存在表不会自动 ALTER；已有数据的主库新增字段会导致旧库缺列报错。
+   - **已完成**：DB-MIG 迁移方案（`docs/ai/14_DB_MIGRATION_PLAN.md`）；P2-A 迁移脚本骨架（`migrations/migrate_sqlite.py` + `versions/0001_prd_base_fields.sql`），已用 `sqlite3 backup()` 生成副本并完成 dry-run / apply / 幂等验证，13 项迁移测试通过，全量回归 748 passed，未改 `models.py`、未碰主线库结构。
+   - **待确认**：P2-B（`models.py` 字段补齐）、P2-C（主线 `data/auto_wechat.db` 正式迁移，需 `--allow-mainline`）。
+   - **验收口径（WAL 模式，重要）**：`data/auto_wechat.db` 是开发测试库（非生产库），SQLite 处于 WAL 模式。`.db` 文件 hash / mtime **不能**作为「主线未变化」的唯一证据——WAL checkpoint 会把历史 `-wal` 帧合并进主 `.db`，导致 hash 变化但业务数据 / 结构完全不变（P2-A 实测确认，详见 `14_DB_MIGRATION_PLAN.md` §0c-1、`P0_DEV_PLAN.md` §1.5）。后续 P2-C 验收**必须以结构对比 + 数据语义对比为主**（`PRAGMA table_info` / 行数 / 关键字段抽样 / `reassign_count` 默认值 / 新增列存在性），文件 hash 仅作辅助参考。P2-C 前如需收缩 WAL，单独确认后再执行 checkpoint，迁移阶段不主动 checkpoint。
 
 2. **生产验签切换（HIGH）**：线上 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`，且 `APP_ENV` 实际值、GMP 真实回调是否带签名头需复核（第 28 章历史结论：线上不带签名头）。切换 production + DY_SECRET_KEY 前必须确认，否则会导致线上 401、事件不入库。
 

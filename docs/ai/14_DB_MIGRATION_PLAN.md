@@ -49,6 +49,37 @@
 
 ------
 
+## 0c-1. WAL 模式下的验收口径（2026-06-15 P2-A-END 追加，重要）
+
+> **结论：`.db` 文件 hash / mtime 不能作为「主线数据未变化」的唯一证据。**
+
+背景（P2-A 实测发现）：
+
+```text
+当前 data/auto_wechat.db 是开发测试库（非生产库），SQLite 处于 WAL 模式。
+主 .db + -wal + -shm 三文件共存，-wal 内有历史积累的未 checkpoint 帧。
+P2-A 副本验证期间，主 .db 文件 hash 曾从 101d5e8... 变为 728385e...，
+但经排查是 WAL checkpoint 把历史 -wal 帧合并进主 .db 所致，
+迁移脚本本身对主线零写入（只读 backup + mode=ro），结构 / 数据语义完全不变。
+```
+
+口径（后续 P2-C 主线迁移验收必须遵守）：
+
+1. **不能**用「迁移前后 `.db` 文件 hash 是否一致」判断主线是否被迁移修改。
+2. checkpoint 可能导致 `.db` hash 变化，但**不代表业务数据或结构发生变化**。
+3. 后续主线库验收**必须以结构对比 + 数据语义对比为主**：
+   - `PRAGMA table_info(douyin_leads)` —— 新增列是否存在、类型 / 可空性正确
+   - `PRAGMA table_info(sales_staff)` —— 同上
+   - `schema_migrations` 是否存在、`version_num` 版本记录是否正确
+   - 关键表行数（`COUNT(*)`）迁移前后一致（ADD COLUMN 不应改行数）
+   - 新增字段是否存在（尤其确认主线未出现预期外的新列）
+   - 旧数据关键字段抽样一致（如 `status`、`source_id`、`customer_name` 未被改动）
+   - `reassign_count` 默认值符合预期（旧行自动为 0）
+4. 文件 hash **只能作为辅助参考**，不能作为唯一判断依据。
+5. P2-C 前如需处理 WAL（如收缩 4MB `-wal`），应**单独确认后再执行 checkpoint**，迁移骨架阶段（P2-A）不执行 checkpoint。
+
+------
+
 ## 0c. 阶段边界说明（2026-06-15 追加）
 
 本文件所属阶段是 **DB-MIG：迁移体系方案设计**。
@@ -305,15 +336,19 @@ SQLite 备份策略（按优先级）：
 
 ### Q8. 如何做迁移后验证？
 
+> **验收口径（见 §0c-1）**：WAL 模式下 `.db` 文件 hash 不能作为「数据未变化」的唯一证据，checkpoint 会改 hash 但不改业务数据。验收以结构对比 + 数据语义对比为主，hash 仅作辅助参考。
+
 验证清单（迁移脚本结束后自动执行 + 人工复核）：
 
-1. **结构验证**：`PRAGMA table_info(表)` 确认新列存在、类型正确、可空。
+1. **结构验证（主）**：`PRAGMA table_info(douyin_leads)` / `PRAGMA table_info(sales_staff)` 确认新列存在、类型正确、可空性符合预期。
 2. **版本验证**：`SELECT version_num FROM schema_migrations` 确认版本已写入。
-3. **行数验证**：迁移前后各表 `COUNT(*)` 一致（ADD COLUMN 不应改行数；回填 UPDATE 不应改行数）。
-4. **回填验证**：抽查 N 条旧记录的新列是否有值（针对回填字段）。
-5. **应用冒烟**：启动 uvicorn，调一次只读接口（`GET /leads`、`GET /webhook-events`），确认无 `no such column`。
-6. **业务回归**：跑 `tests/` 全量（当前 722 passed 基线），确认无回归。
-7. **WAL 检查点**：迁移后执行 `PRAGMA wal_checkpoint(TRUNCATE)`，确保 WAL 内容落主库。
+3. **行数验证（主）**：迁移前后各表 `COUNT(*)` 一致（ADD COLUMN 不应改行数；回填 UPDATE 不应改行数）。
+4. **旧数据抽样验证（主）**：抽查关键表旧记录的关键字段（`status` / `source_id` / `customer_name` 等）未被改动；新增联系方式类列旧行应为 NULL（符合不回填边界）；`reassign_count` 旧行应为 0。
+5. **回填验证**：抽查 N 条旧记录的新列是否有值（仅针对已执行回填的字段）。
+6. **应用冒烟**：启动 uvicorn，调一次只读接口（`GET /leads`、`GET /webhook-events`），确认无 `no such column`。
+7. **业务回归**：跑 `tests/` 全量（当前基线见最新运行结果），确认无回归。
+8. **WAL 检查点（单独确认后执行）**：迁移稳定后可执行 `PRAGMA wal_checkpoint(TRUNCATE)` 收缩 `-wal`；**但 checkpoint 会改变 `.db` 文件 hash**，因此必须在结构 / 数据验收通过之后再做，不能用它反推验收结论。
+9. **文件 hash（仅辅助）**：迁移前后 `.db` hash 可记录备查，但「hash 是否一致」不作为主线是否被修改的判据（见 §0c-1）。
 
 ### Q9. 如何回滚？
 
@@ -550,7 +585,8 @@ migrations/
 | HIGH | ADD COLUMN 后应用未重启 / 旧进程缓存 schema | 迁移后强制重启 uvicorn，冒烟验证 |
 | MEDIUM | 回填脚本解析 raw_data JSON 失败 | 单条失败记日志跳过，不阻断；raw_data 本身保留完整信息 |
 | MEDIUM | 两个 db 文件并存导致环境混乱 | 明确 data/ 为主库，docker-data/ 标注为非主线；第一版迁移只针对 data/ |
-| MEDIUM | WAL 文件过大（当前 -wal 4MB）影响备份一致性 | 备份用 backup_to（WAL 安全），迁移后 wal_checkpoint |
+| MEDIUM | WAL 文件过大（当前 -wal 4MB）影响备份一致性 | 备份用 backup_to（WAL 安全），迁移稳定后单独确认再 wal_checkpoint |
+| HIGH | 误用 `.db` 文件 hash 判断主线是否被迁移修改 | WAL checkpoint 会改 hash 但不改业务数据（P2-A 实测确认，见 §0c-1）；验收必须以 `PRAGMA table_info` / 行数 / 关键字段抽样为主，hash 仅辅助 |
 | MEDIUM | check_configs 0 行，迁移不应依赖它 | 第一批迁移不涉及 check_configs，独立处理 |
 | LOW | sort_order 回填后顺序轮询改变现有分配行为 | 回填为 id 序，与现有 auto_assign_next 的"最少分配"行为不同，需在 P6 评估 |
 | LOW | 无业务二级索引，大数据量下查询慢 | 当前数据量小（44 行），延后到性能阶段 |

@@ -103,6 +103,7 @@ P3~P12 按阶段边界继续推进
 
 - **最终目标**：把已经 dry-run 验证过的迁移安全应用到当前开发测试主线库 `data/auto_wechat.db`。
 - **完成状态**：迁移前有备份；迁移后字段存在；schema_migrations 有记录；重复执行安全；现有接口和测试不报错。
+- **验收口径（WAL 模式，重要）**：`data/auto_wechat.db` 处于 SQLite WAL 模式，`.db` 文件 hash / mtime **不能**作为「主线未变化」的唯一证据——checkpoint 会把历史 `-wal` 帧合并进主 `.db`，导致 hash 变化但业务数据 / 结构完全不变（P2-A 实测确认，详见 `14_DB_MIGRATION_PLAN.md` §0c-1）。本阶段验收**必须以结构对比 + 数据语义对比为主**：`PRAGMA table_info(douyin_leads)` / `PRAGMA table_info(sales_staff)`、`schema_migrations` 版本记录、关键表行数、新增列存在性、旧数据关键字段抽样、`reassign_count` 默认值；文件 hash 仅作辅助参考。P2-C 前如需收缩 WAL，单独确认后再执行 checkpoint，本阶段不主动 checkpoint。
 - **不属于本阶段**：不做复杂历史数据回填、不改业务流程、不改状态流转、不改前端页面。
 
 ### 1.6 P3：Webhook 生产化规范
