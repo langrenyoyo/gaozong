@@ -84,6 +84,36 @@ class WebhookEventDetailResponse(BaseModel):
     message: str = "success"
 
 
+# ========== Agent status read-only query ==========
+
+
+class AgentStatusData(BaseModel):
+    """Conservative server-side Local Agent status for merchant UI guards."""
+
+    agent_online: bool = False
+    agent_status: str = "offline"
+    wechat_available: str = "unknown"
+    wechat_status: str = "unknown"
+    automation_enabled: bool = True
+    emergency_stopped: bool = False
+    action_in_progress: bool = False
+    current_task_id: Optional[int] = None
+    current_task_type: Optional[str] = None
+    last_heartbeat_at: Optional[datetime] = None
+    last_checked_at: datetime
+    can_run_wechat_action: bool = False
+    disabled_reason: str
+    status_source: str = "server_only"
+
+
+class AgentStatusResponse(BaseModel):
+    """Agent status response wrapper."""
+
+    success: bool = True
+    data: AgentStatusData
+    message: str = "success"
+
+
 # ========== 销售人员 ==========
 
 class StaffCreate(BaseModel):

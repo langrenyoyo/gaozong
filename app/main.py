@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.database import engine, Base
 from app.routers import (
+    agent,
     staff,
     leads,
     checks,
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(automation_control.router)
     app.include_router(wechat_tasks.router)
     app.include_router(webhook_events.router)
+    app.include_router(agent.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:
