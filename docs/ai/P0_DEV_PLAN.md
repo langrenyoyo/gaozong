@@ -95,7 +95,8 @@ P3~P12 按阶段边界继续推进
 ### 1.4 P2-B：models.py 字段补齐
 
 - **最终目标**：让 SQLAlchemy 模型字段与已经验证过的迁移字段保持一致。
-- **完成状态**：`models.py` 中补齐第一批 PRD 基础字段；测试库迁移后的表结构与模型字段一致；已有测试不因字段新增失败。
+- **完成状态**：`models.py` 中补齐第一批 PRD 基础字段（与 `14_DB_MIGRATION_PLAN.md` 第一批字段一致）；`DouyinLead.status` 列已存在，仅扩注释 / 取值域，不新增列；测试库迁移后的表结构与模型字段一致；已有测试不因字段新增失败。
+- **补充口径**：`schema_migrations` 表是迁移基础设施，**不进入 `app/models.py`**，仅由迁移 runner 维护。
 - **不属于本阶段**：不实现状态机重构、不实现 webhook 新业务逻辑、不实现超时重分配、不实现销售导入、不实现 Excel 导出、不实现 NewCarProject 登录。
 
 ### 1.5 P2-C：开发测试库正式迁移
@@ -257,7 +258,7 @@ P3~P12 按阶段边界继续推进
 
 - **目标**：补齐 PRD 要求但当前缺失的持久化字段。
 - **修改范围**（预估，DB-MIG 通过后细化）：
-  - `DouyinLead`：扩展 status 注释为 13 态；新增 `external_lead_id`、`account_open_id`、`conversation_short_id`、`server_message_id`、`extracted_phone`、`extracted_wechat`、`all_extracted_contacts`、`contact_extract_status`、`contact_extract_reason`、`reassign_count`、`customer_id`、`external_customer_id`。
+  - `DouyinLead`：扩展 status 注释为 13 态（`status` 列已存在，不新增、不改类型，仅扩取值域）；新增 `raw_message_text`、`external_lead_id`、`account_open_id`、`conversation_short_id`、`server_message_id`、`extracted_phone`、`extracted_wechat`、`all_extracted_contacts`、`contact_extract_status`、`contact_extract_reason`、`reassign_count`、`customer_id`、`external_customer_id`。
   - `SalesStaff`：新增 `remark`、`sort_order`。
   - 可选新增 `CallbackLog` 表（若状态回调第一版不对接，可后置）。
 - **验收标准**：

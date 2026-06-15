@@ -213,30 +213,39 @@ replied:  1
 
 具体：
 
-- 联系方式提取结果列（`extracted_phone` / `extracted_wechat` / `all_extracted_contacts` / `contact_extract_status` / `contact_extract_reason`）→ NULL，因为旧线索的提取结果已在 `raw_data` JSON 内，迁移后新线索才写独立列，旧线索保持 NULL 或回填（见 Q5）。
+- 原始文本与联系方式提取结果列（`raw_message_text` / `extracted_phone` / `extracted_wechat` / `all_extracted_contacts` / `contact_extract_status` / `contact_extract_reason`）→ NULL，因为旧线索的原始文本与提取结果已在 `raw_data` JSON 内，迁移后新线索才写独立列，旧线索保持 NULL 或回填（见 Q5）。
 - 幂等键列（`external_lead_id` / `account_open_id` / `conversation_short_id` / `server_message_id`）→ NULL，旧线索这些值在 raw_body 内，按需回填。
-- `reassign_count` → 允许 NULL，但建议给默认值 0（见下）。
+- `reassign_count` → `NOT NULL DEFAULT 0`（唯一例外，见下）。
 - `customer_id` / `external_customer_id` → NULL，NewCarProject 未对接。
 - `SalesStaff.remark` / `sort_order` → NULL；sort_order 建议回填为现有 id 序（见 Q5）。
-- `DouyinLead.status` → 不新增列，只是扩展取值域（从 3 态扩到 13 态），无需迁移结构。
+- `DouyinLead.status` → **不新增列**，只是扩展取值域（从 3 态扩到 13 态），无需迁移结构。
 
 **例外（建议给默认值而非纯 NULL）**：
 
-- `reassign_count INTEGER DEFAULT 0`：计数列，NULL 会让 `count + 1` 逻辑出错，应给 0。
+- `reassign_count INTEGER NOT NULL DEFAULT 0`：计数列，NULL 会让 `count + 1` 逻辑出错，必须 `NOT NULL DEFAULT 0`。
 - `sort_order INTEGER`：可空，回填脚本赋值。
 
 ### Q5. 哪些字段需要历史数据回填？
 
 | 字段 | 是否回填 | 回填来源 | 必要性 |
 |------|---------|---------|--------|
+| `raw_message_text` | 建议回填 | 解析 `douyin_leads.raw_data` JSON 的 `raw_message_text` / `content` 节点 | 中（不回填则旧线索原始文本列空，但 raw_data 仍有值） |
 | `extracted_phone` / `extracted_wechat` / `all_extracted_contacts` / `contact_extract_status` | 建议回填 | 解析 `douyin_leads.raw_data` JSON 的 `contact_extract` 节点 | 中（不回填则旧线索在列表/导出时提取列空，但 raw_data 仍有值） |
 | `contact_extract_reason` | 建议回填 | 同上 | 中 |
 | `external_lead_id` | 可回填 | 用现有 `source_id`（= from_user_id）回填，或留空 | 低 |
 | `account_open_id` / `conversation_short_id` / `server_message_id` | 可回填 | 解析 `raw_data.webhook_payload.content` | 低（仅在需要事件级幂等查询时才有价值） |
-| `reassign_count` | 必须回填 0 | 直接 `UPDATE ... SET reassign_count=0 WHERE reassign_count IS NULL` | 高（计数列不能 NULL） |
+| `reassign_count` | 由 DEFAULT 自动置 0 | 迁移脚本 `ADD COLUMN ... NOT NULL DEFAULT 0` 对旧行自动填 0 | 高（计数列不能 NULL） |
 | `customer_id` / `external_customer_id` | 不回填 | NewCarProject 未对接 | — |
-| `SalesStaff.sort_order` | 建议回填 | `UPDATE sales_staff SET sort_order=id WHERE sort_order IS NULL` | 中（顺序轮询依赖） |
+| `SalesStaff.sort_order` | 建议回填 | `UPDATE sales_staff SET sort_order=id WHERE sort_order IS NULL` | 中（顺序轮询依赖，是否回填放 P2-C 或 P6 前确认） |
 | `SalesStaff.remark` | 不回填 | 无历史值 | — |
+
+> **P2-A 阶段回填边界（重要）**：上表是迁移方案层面的"最终回填计划"，不等于 P2-A 阶段就要执行。
+>
+> P2-A 阶段**只验证迁移脚本机制**，回填口径为：
+>
+> - **允许**：通过 `reassign_count NOT NULL DEFAULT 0` 验证默认值机制（ADD COLUMN 时旧行自动填 0）。
+> - **暂不做**：不从 `raw_data` JSON 回填联系方式字段；不回填 `raw_message_text` / `extracted_phone` / `extracted_wechat` / `all_extracted_contacts` / `contact_extract_status` / `contact_extract_reason` / `customer_id` / `external_customer_id`；不改变已有 `status`；不改变分配逻辑。
+> - `SalesStaff.sort_order` 是否回填为 id 序，放 P2-C 或 P6 前再确认；P2-A 先不做业务回填。
 
 **回填原则**：
 
@@ -359,45 +368,56 @@ Base.metadata.create_all()  # 建所有表（含新字段）
 第一批（migration 0001 + 0002）：
 
 ```text
-0001: CREATE TABLE schema_migrations（基础设施）
+0001: CREATE TABLE schema_migrations（基础设施，不进入 app/models.py）
 0002: ALTER TABLE douyin_leads
-        ADD COLUMN extracted_phone VARCHAR(100);
-        ADD COLUMN extracted_wechat VARCHAR(100);
-        ADD COLUMN contact_extract_status VARCHAR(30);
-        ADD COLUMN reassign_count INTEGER DEFAULT 0;
-        ADD COLUMN customer_id VARCHAR(64);
-        ADD COLUMN external_customer_id VARCHAR(64);
+        ADD COLUMN raw_message_text TEXT;
+        ADD COLUMN extracted_phone TEXT;
+        ADD COLUMN extracted_wechat TEXT;
+        ADD COLUMN all_extracted_contacts TEXT;
+        ADD COLUMN contact_extract_status TEXT;
+        ADD COLUMN contact_extract_reason TEXT;
+        ADD COLUMN reassign_count INTEGER NOT NULL DEFAULT 0;
+        ADD COLUMN customer_id TEXT;
+        ADD COLUMN external_customer_id TEXT;
       ALTER TABLE sales_staff
         ADD COLUMN sort_order INTEGER;
-        ADD COLUMN remark VARCHAR(200);
+        ADD COLUMN remark TEXT;
 ```
+
+> **字段口径声明（最终确认）**：
+>
+> 1. `DouyinLead.status` **已存在**，不作为新增字段。本批迁移不新增 `status` 列，仅由后续业务阶段（P5 状态机）扩展其取值域。
+> 2. 新增列除 `reassign_count` 外，全部允许 `NULL` 默认（SQLite 对旧行自动填 NULL）。
+> 3. `reassign_count` 唯一例外：`INTEGER NOT NULL DEFAULT 0`。
+> 4. 全部联系方式 / 原始文本 / 备注类列统一用 `TEXT`，不再用 `VARCHAR(n)`（SQLite 不强制长度，`TEXT` 更贴合 PRD 口径）。
+> 5. `schema_migrations` 是迁移基础设施表，**不进入 `app/models.py`**，仅由迁移 runner 维护。
 
 选这批的理由：
 
-- `reassign_count`：超时重分配（P7）硬依赖，且必须 DEFAULT 0。
-- `extracted_phone/wechat/status`：导出（P10）和 invalid 展示（P2 PRD §7）依赖，回填来源清晰（raw_data JSON）。
-- `customer_id/external_customer_id`：NewCarProject 预留（P11），先占位。
+- `raw_message_text`：保存完整用户私信原文，是联系方式提取与 invalid 展示（P2 PRD §7）的基础。
+- `extracted_phone` / `extracted_wechat`：主联系方式字段，导出（P11）和 invalid 展示（P2 PRD §7）依赖。
+- `all_extracted_contacts`：保存全部提取结果（建议 JSON 数组），支持一个消息内多个联系方式。
+- `contact_extract_status` / `contact_extract_reason`：提取状态与失败原因，invalid 判定与展示依赖。
+- `reassign_count`：超时重分配（P7）硬依赖，且必须 `NOT NULL DEFAULT 0`。
+- `customer_id` / `external_customer_id`：NewCarProject 预留（P12），先占位。
 - `sort_order`：销售顺序轮询（P6）依赖，可回填为现有 id 序。
 - `remark`：销售管理（P6）依赖，纯新增无需回填。
 
 第一批**不含**：
 
-- `all_extracted_contacts`（TEXT JSON 列，可延后，导出第一版可不导全量）。
 - `external_lead_id / account_open_id / conversation_short_id / server_message_id`（幂等键，可单独成第三批，且部分仅在需要事件级查询时才必要）。
-- `contact_extract_reason`（可延后，失败原因已在 raw_data）。
-- 状态机扩展（不改结构，只改取值域与映射层，属 P5 业务改动，不属于迁移）。
+- `CallbackLog` 表（状态回调对接时再加，属 P3）。
+- 状态机扩展（不改结构，只改取值域与映射层，属 P5 业务改动，不属于迁移；`DouyinLead.status` 列已存在，无需新增）。
 
 ### Q12. 哪些字段应该延后？
 
 | 字段 | 延后到 | 原因 |
 |------|--------|------|
-| `all_extracted_contacts`（TEXT） | P10 导出阶段 | 体积大，第一版导出未必需要全量 |
-| `contact_extract_reason` | P4 后 | 失败原因已有 raw_data 兜底 |
 | `external_lead_id` | P4 幂等体系 | 当前 source_id 去重够用 |
 | `account_open_id` | P4 | 同上 |
 | `conversation_short_id` / `server_message_id` | P4 事件级查询需求出现时 | 仅查询优化用，非必需 |
 | `CallbackLog` 表 | P3 状态回调对接时 | 第一版状态回调未对接 |
-| 状态机取值域扩展 | P5 | 不改结构，是业务改动 |
+| 状态机取值域扩展 | P5 | 不改结构，是业务改动（`status` 列已存在，仅扩取值域） |
 | 业务二级索引（source_id 等） | 性能阶段（P20 QPS） | 当前数据量小，无性能瓶颈 |
 
 延后原则：**按需迁移，不为可能的需求提前加列**（遵循 02_EXECUTION_RULES §3 禁止提前抽象）。
@@ -542,7 +562,10 @@ migrations/
 ### 9.1 结论
 
 - 第一版采用**手写迁移脚本 + schema_migrations 版本表**，不引入 Alembic。
-- 第一批迁移只做基础设施（schema_migrations）+ 6 个高优先级字段（reassign_count、extracted_phone/wechat/status、customer_id、external_customer_id、sort_order、remark）。
+- 第一批迁移只做基础设施（`schema_migrations`，不进入 `app/models.py`）+ 第一批字段：
+  - `douyin_leads` 新增 9 列：`raw_message_text`、`extracted_phone`、`extracted_wechat`、`all_extracted_contacts`、`contact_extract_status`、`contact_extract_reason`、`reassign_count`（`NOT NULL DEFAULT 0`）、`customer_id`、`external_customer_id`。
+  - `sales_staff` 新增 2 列：`sort_order`、`remark`。
+  - **`DouyinLead.status` 已存在，本批不新增、不改动**（取值域扩展属 P5 业务阶段）。
 - 回滚 = 备份恢复 + 代码 revert，不依赖 DROP COLUMN。
 - create_all（建）与 migration（演进）共存，migration 全部幂等。
 
