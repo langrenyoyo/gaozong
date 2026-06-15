@@ -1,9 +1,33 @@
 """Pydantic 请求/响应模型"""
 
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def _safe_load_json_object(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_contact_values(all_contacts: Any) -> list[str]:
+    values: list[str] = []
+    if not isinstance(all_contacts, list):
+        return values
+    for item in all_contacts:
+        value = item.get("value") if isinstance(item, dict) else item
+        if isinstance(value, str) and value and value not in values:
+            values.append(value)
+    return values
 
 
 # ========== Raw webhook event read-only query ==========
@@ -113,6 +137,11 @@ class LeadOut(BaseModel):
     lead_type: Optional[str] = None
     customer_name: Optional[str] = None
     customer_contact: Optional[str] = None
+    phone: Optional[str] = None
+    wechat: Optional[str] = None
+    all_extracted_contacts: list[str] = Field(default_factory=list)
+    contact_extract_status: Optional[str] = None
+    original_message_text: Optional[str] = None
     content: Optional[str] = None
     source_url: Optional[str] = None
     source_id: Optional[str] = None
@@ -122,6 +151,48 @@ class LeadOut(BaseModel):
     raw_data: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_contact_extract_fields(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            data = dict(value)
+        else:
+            data = {
+                "id": getattr(value, "id", None),
+                "source": getattr(value, "source", None),
+                "lead_type": getattr(value, "lead_type", None),
+                "customer_name": getattr(value, "customer_name", None),
+                "customer_contact": getattr(value, "customer_contact", None),
+                "content": getattr(value, "content", None),
+                "source_url": getattr(value, "source_url", None),
+                "source_id": getattr(value, "source_id", None),
+                "assigned_staff_id": getattr(value, "assigned_staff_id", None),
+                "assigned_at": getattr(value, "assigned_at", None),
+                "status": getattr(value, "status", None),
+                "raw_data": getattr(value, "raw_data", None),
+                "created_at": getattr(value, "created_at", None),
+                "updated_at": getattr(value, "updated_at", None),
+            }
+
+        raw_data = _safe_load_json_object(data.get("raw_data"))
+        contact_extract = raw_data.get("contact_extract")
+        if not isinstance(contact_extract, dict):
+            contact_extract = {}
+
+        data.setdefault("phone", contact_extract.get("phone"))
+        data.setdefault("wechat", contact_extract.get("wechat"))
+        data.setdefault("contact_extract_status", contact_extract.get("status"))
+        data.setdefault(
+            "original_message_text",
+            raw_data.get("raw_message_text") or data.get("content"),
+        )
+
+        contact_values = _extract_contact_values(contact_extract.get("all_contacts"))
+        if not contact_values and data.get("customer_contact"):
+            contact_values = [data["customer_contact"]]
+        data.setdefault("all_extracted_contacts", contact_values)
+        return data
 
     model_config = {"from_attributes": True}
 
