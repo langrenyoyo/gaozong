@@ -48,9 +48,43 @@ def _preview(value: str | None, head: int = 4, tail: int = 4) -> str | None:
     return f"{value[:head]}...{value[-tail:]}"
 
 
-def _content_dict(payload: dict[str, Any]) -> dict[str, Any]:
+def _content_info(payload: dict[str, Any]) -> dict[str, Any]:
     content = payload.get("content")
-    return content if isinstance(content, dict) else {}
+    if isinstance(content, dict):
+        return {
+            "content": content,
+            "parse_success": True,
+            "parse_error": None,
+        }
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return {
+                "content": {},
+                "parse_success": False,
+                "parse_error": "content is not valid JSON",
+            }
+        if isinstance(parsed, dict):
+            return {
+                "content": parsed,
+                "parse_success": True,
+                "parse_error": None,
+            }
+        return {
+            "content": {},
+            "parse_success": False,
+            "parse_error": "content JSON is not an object",
+        }
+    return {
+        "content": {},
+        "parse_success": False,
+        "parse_error": "content is missing or unsupported",
+    }
+
+
+def _content_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    return _content_info(payload)["content"]
 
 
 def _safe_key_list(payload: dict[str, Any]) -> list[str]:
@@ -257,7 +291,8 @@ def record_webhook_observe(headers: dict[str, str], payload: dict[str, Any]) -> 
     """Record webhook request shape without passing it to production processing."""
     global _last_webhook_observe
     normalized_headers = {key.lower(): value for key, value in headers.items()}
-    content = _content_dict(payload)
+    content_info = _content_info(payload)
+    content = content_info["content"]
     summary = {
         "received_at": _now(),
         "has_authorization": bool(normalized_headers.get("authorization")),
@@ -272,6 +307,12 @@ def record_webhook_observe(headers: dict[str, str], payload: dict[str, Any]) -> 
         or "conversation_short_id" in content,
         "body_has_server_message_id": "server_message_id" in payload
         or "server_message_id" in content,
+        "content_parse_success": content_info["parse_success"],
+        "content_parse_error": content_info["parse_error"],
+        "content_has_conversation_short_id": "conversation_short_id" in content,
+        "content_has_server_message_id": "server_message_id" in content,
+        "content_has_message_type": "message_type" in content,
+        "content_message_type": content.get("message_type"),
         "event": payload.get("event"),
         "body_keys": _safe_key_list(payload),
         "content_keys": _safe_key_list(content),

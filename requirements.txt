@@ -5,3 +5,4 @@ pydantic>=2.0.0
 uiautomation>=2.0.0
 pyperclip>=1.8.0
 httpx>=0.24.0
+requests==2.32.3

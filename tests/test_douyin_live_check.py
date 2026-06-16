@@ -239,6 +239,69 @@ def test_webhook_observe_records_headers_and_body_keys_without_token_leak():
     assert "body-token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
+def test_webhook_observe_parses_stringified_json_content():
+    client = _client()
+    payload = {
+        "event": "im_receive_msg",
+        "open_id": "open-1",
+        "account_open_id": "account-1",
+        "content": json.dumps(
+            {
+                "conversation_short_id": "conv-1",
+                "server_message_id": "msg-1",
+                "message_type": "text",
+                "access_token": "content-token-should-not-leak",
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+        status_resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["body_has_event"] is True
+    assert data["body_has_content"] is True
+    assert data["body_has_open_id"] is True
+    assert data["body_has_account_open_id"] is True
+    assert data["body_has_conversation_short_id"] is True
+    assert data["body_has_server_message_id"] is True
+    assert data["content_parse_success"] is True
+    assert data["content_parse_error"] is None
+    assert data["content_has_conversation_short_id"] is True
+    assert data["content_has_server_message_id"] is True
+    assert data["content_has_message_type"] is True
+    assert data["content_message_type"] == "text"
+    assert data["content_keys"] == ["conversation_short_id", "message_type", "server_message_id"]
+    assert status_resp.json()["data"]["last_webhook_observe"]["content_parse_success"] is True
+    assert "content-token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
+
+
+def test_webhook_observe_handles_non_json_content_without_leaking_text():
+    client = _client()
+    payload = {
+        "event": "im_receive_msg",
+        "content": "not-json phone 13812345678 token-secret-value",
+    }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["body_has_event"] is True
+    assert data["body_has_content"] is True
+    assert data["body_has_conversation_short_id"] is False
+    assert data["body_has_server_message_id"] is False
+    assert data["content_parse_success"] is False
+    assert data["content_parse_error"] == "content is not valid JSON"
+    assert data["content_keys"] == []
+    assert "13812345678" not in json.dumps(resp.json(), ensure_ascii=False)
+    assert "token-secret-value" not in json.dumps(resp.json(), ensure_ascii=False)
+
+
 def test_config_loads_env_file_values(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
