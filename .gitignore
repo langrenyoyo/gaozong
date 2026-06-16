@@ -40,3 +40,4 @@ app/local_agent_build_info.py
 test_cors_leads.json
 test_wechat_debug.json
 @AutomationLog.txt
+dist_backup_20260616_130831/小高AI微信助手/*
