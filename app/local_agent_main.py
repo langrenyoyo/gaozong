@@ -61,6 +61,9 @@ AGENT_SERVICE_NAME = "auto_wechat_local_agent"
 ONLY_ALLOWED_NICKNAME = "Aw3"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 19000
+HEARTBEAT_INTERVAL_SECONDS = 10
+AGENT_CLIENT_ID = "local-agent-default"
+AGENT_DISPLAY_NAME = "小高AI微信助手"
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
     "http://localhost:5173",
@@ -165,6 +168,70 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
             return {"ok": True, "status": resp.status, "json": __import__("json").loads(resp_body), "error": None}
     except Exception as exc:
         return {"ok": False, "status": None, "json": None, "error": str(exc)}
+
+
+def _is_wechat_task_busy() -> bool:
+    """只检查本地任务锁状态，不阻塞、不探测微信窗口。"""
+    if _wechat_task_lock is None:
+        return False
+    acquired = _wechat_task_lock.acquire(blocking=False)
+    if acquired:
+        _wechat_task_lock.release()
+        return False
+    return True
+
+
+def _build_agent_heartbeat_payload() -> dict:
+    """构造 Local Agent 心跳；本阶段不探测微信可用性。"""
+    return {
+        "agent_client_id": AGENT_CLIENT_ID,
+        "agent_name": AGENT_DISPLAY_NAME,
+        "host_name": socket.gethostname(),
+        "agent_status": "busy" if _is_wechat_task_busy() else "idle",
+        "wechat_status": "unknown",
+        "current_task_id": None,
+        "current_task_type": None,
+        "version": BUILD_VERSION,
+    }
+
+
+def _send_agent_heartbeat_once(server_url: str) -> dict:
+    """向 9000 上报一次心跳；失败只记录日志，不影响 Local Agent 主流程。"""
+    heartbeat_url = f"{server_url.rstrip('/')}/agent/heartbeat"
+    payload = _build_agent_heartbeat_payload()
+    result = _http_post_json(heartbeat_url, payload, timeout=3.0)
+    if not result.get("ok"):
+        logger.warning(
+            "heartbeat report failed: status=%s error=%s",
+            result.get("status"),
+            result.get("error"),
+        )
+    return result
+
+
+def start_heartbeat_loop(server_url: str | None) -> threading.Thread | None:
+    """启动 daemon 心跳线程；server_url 缺失时安全跳过。"""
+    if not server_url:
+        logger.warning("heartbeat loop skipped: server_url is not configured")
+        return None
+
+    stop_event = threading.Event()
+
+    def _loop() -> None:
+        while not stop_event.is_set():
+            try:
+                _send_agent_heartbeat_once(server_url)
+            except Exception as exc:
+                logger.warning("heartbeat loop error: %s", exc)
+            stop_event.wait(HEARTBEAT_INTERVAL_SECONDS)
+
+    thread = threading.Thread(
+        target=_loop,
+        name="local-agent-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _write_back_task_result(
@@ -810,6 +877,8 @@ def create_local_agent_app(
     # P1-AUTO-1C：初始化运行锁
     global _wechat_task_lock
     _wechat_task_lock = threading.Lock()
+    if server_url:
+        start_heartbeat_loop(server_url)
 
     @app.get("/agent/version")
     def agent_version():
