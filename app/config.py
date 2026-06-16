@@ -1,6 +1,34 @@
 """项目配置"""
 
 import os
+from pathlib import Path
+
+BASE_PATH = Path(__file__).resolve().parents[1]
+ENV_FILE = BASE_PATH / ".env"
+
+
+def _load_env_file(env_file: Path) -> None:
+    """Load project .env without overriding explicit environment variables."""
+    if not env_file.exists():
+        return
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file(ENV_FILE)
 
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +68,7 @@ DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))
 # auto_wechat 自己的环境变量，不读取 douyinAPI/.env
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 DY_SECRET_KEY = os.getenv("DY_SECRET_KEY", "")
+DY_GMP_SECRET_KEY = os.getenv("DY_GMP_SECRET_KEY", "")
 DY_BASE_URL = os.getenv(
     "DY_BASE_URL",
     "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi",
@@ -49,6 +78,7 @@ DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
 DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
 DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
+DY_LIVE_CHECK_ENABLED = os.getenv("DY_LIVE_CHECK_ENABLED", "false").lower() == "true"
 # 入站 webhook 是否强制签名鉴权
 # development 可关闭用于本地开发 / 联调；production 始终强制验签
 DOUYIN_WEBHOOK_AUTH_REQUIRED = os.getenv("DOUYIN_WEBHOOK_AUTH_REQUIRED", "false").lower() == "true"

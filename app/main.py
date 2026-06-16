@@ -18,6 +18,7 @@ from app.routers import (
     automation_control,
     wechat_tasks,
     webhook_events,
+    douyin_live_check,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(wechat_tasks.router)
     app.include_router(webhook_events.router)
     app.include_router(agent.router)
+    app.include_router(douyin_live_check.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:

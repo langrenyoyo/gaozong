@@ -145,6 +145,30 @@ class AgentHeartbeatResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinLiveCheckAuthUrlResponse(BaseModel):
+    """Douyin live-check auth URL response wrapper."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
+class DouyinLiveCheckObserveResponse(BaseModel):
+    """Douyin live-check observation response wrapper."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
+class DouyinLiveCheckStatusResponse(BaseModel):
+    """Douyin live-check status response wrapper."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")
