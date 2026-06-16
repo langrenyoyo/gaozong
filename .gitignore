@@ -10,7 +10,7 @@ venv/
 dist/
 build/
 CLAUDE.md
-dist_backup_20260616_130831/
+dist/dist_backup_20260616_130831/
 
 # 环境变量（含密钥，禁止提交）
 .env
