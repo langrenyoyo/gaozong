@@ -145,6 +145,31 @@ def test_build_script_outputs_local_agent_directory_without_overwriting_old_dist
     assert "console=False" in spec
 
 
+def test_stop_local_agent_script_uses_port_and_process_safety_checks():
+    script_path = Path("scripts/stop_local_agent.ps1")
+    assert script_path.exists()
+    script = script_path.read_text(encoding="utf-8")
+
+    assert "[int]$Port = 19000" in script
+    assert "Get-NetTCPConnection" in script
+    assert "-LocalAddress \"127.0.0.1\"" in script
+    assert "Get-CimInstance Win32_Process" in script
+    assert "小高AI微信助手" in script
+    assert "local_agent" in script
+    assert "Stop-Process" in script
+    assert "当前未检测到小高AI微信助手正在运行" in script
+    assert "请右键 PowerShell 以管理员身份运行" in script
+
+
+def test_build_script_copies_stop_local_agent_script_to_dist():
+    script = Path("scripts/build_local_agent_exe.ps1").read_text(encoding="utf-8")
+
+    assert "stop_local_agent.ps1" in script
+    assert "停止小高AI微信助手.ps1" in script
+    assert "Stop script missing" in script
+    assert "Copy-Item" in script
+
+
 def test_exe_entry_reads_environment_defaults(monkeypatch):
     from app.local_agent_exe_entry import resolve_runtime_config
 

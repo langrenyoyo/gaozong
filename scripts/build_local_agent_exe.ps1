@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$PythonExe = "python",
     [string]$ServerUrl = "https://callback.misanduo.com"
 )
@@ -13,6 +13,8 @@ $DistDir = Join-Path $ProjectRoot "dist\local-agent"
 $OutputExe = Join-Path $DistDir "$AppName.exe"
 $EnvFile = Join-Path $DistDir ".env"
 $LogDir = Join-Path $DistDir "logs"
+$StopScriptSource = Join-Path $ProjectRoot "scripts\stop_local_agent.ps1"
+$StopScriptTarget = Join-Path $DistDir "停止小高AI微信助手.ps1"
 $ModelSourceRelative = "resources\easyocr_models"
 $ModelSource = Join-Path $ProjectRoot $ModelSourceRelative
 $ModelTarget = Join-Path $DistDir "models\easyocr"
@@ -88,6 +90,11 @@ print('PIL ok')
         exit 1
     }
 
+    if (-not (Test-Path $StopScriptSource)) {
+        Write-Host "Stop script missing: $StopScriptSource"
+        exit 1
+    }
+
     if (-not (Test-Path $ModelSource)) {
         Write-Host "Missing $ModelSourceRelative"
         Write-Host "Please run first: python scripts\prepare_easyocr_models.py"
@@ -116,6 +123,7 @@ print('PIL ok')
     Copy-Item -Path (Join-Path $ModelSource "*") -Destination $ModelTarget -Recurse -Force
 
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    Copy-Item -LiteralPath $StopScriptSource -Destination $StopScriptTarget -Force
     $envLines = @(
         "AUTO_WECHAT_SERVER_URL=$ServerUrl",
         "AUTO_WECHAT_AGENT_CLIENT_ID=local-agent-default",
@@ -185,6 +193,7 @@ print('PIL ok')
     Write-Host "sha256: $($hash.Hash)"
     Write-Host "env: $EnvFile"
     Write-Host "log: $(Join-Path $DistDir 'logs\local_agent.log')"
+    Write-Host "stop: powershell -NoProfile -ExecutionPolicy Bypass -File `"$StopScriptTarget`""
     Write-Host "start: double-click $OutputExe"
     Write-Host "health: Invoke-RestMethod http://127.0.0.1:19000/health"
     Write-Host "version: Invoke-RestMethod http://127.0.0.1:19000/agent/version"
