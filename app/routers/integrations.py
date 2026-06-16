@@ -30,6 +30,7 @@ async def _handle_douyin_webhook(
     authorization: str | None,
     db: Session,
     source_path: str,
+    skip_signature_verification: bool = False,
 ) -> WebhookResponse:
     """抖音 GMP Webhook 共享处理逻辑
 
@@ -47,7 +48,7 @@ async def _handle_douyin_webhook(
         db: 数据库会话
         source_path: 入口路径，用于日志区分（不参与业务逻辑）
     """
-    auth_required = config.is_douyin_webhook_auth_required()
+    auth_required = config.is_douyin_webhook_auth_required() and not skip_signature_verification
     if auth_required:
         try:
             verify_signature(body, x_auth_timestamp, authorization)

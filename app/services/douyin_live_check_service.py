@@ -91,6 +91,12 @@ def _safe_key_list(payload: dict[str, Any]) -> list[str]:
     return sorted(key for key in payload.keys() if key.lower() not in SENSITIVE_KEYS)
 
 
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 def _auth_url_base_data() -> dict[str, Any]:
     missing: list[str] = []
     if not config.DY_BASE_URL:
@@ -307,6 +313,12 @@ def record_webhook_observe(headers: dict[str, str], payload: dict[str, Any]) -> 
         or "conversation_short_id" in content,
         "body_has_server_message_id": "server_message_id" in payload
         or "server_message_id" in content,
+        "from_user_id": _optional_str(payload.get("from_user_id")),
+        "to_user_id": _optional_str(payload.get("to_user_id")),
+        "body_open_id": _optional_str(payload.get("open_id")),
+        "body_account_open_id": _optional_str(payload.get("account_open_id")),
+        "content_open_id": _optional_str(content.get("open_id")),
+        "content_account_open_id": _optional_str(content.get("account_open_id")),
         "content_parse_success": content_info["parse_success"],
         "content_parse_error": content_info["parse_error"],
         "content_has_conversation_short_id": "conversation_short_id" in content,
@@ -316,6 +328,12 @@ def record_webhook_observe(headers: dict[str, str], payload: dict[str, Any]) -> 
         "event": payload.get("event"),
         "body_keys": _safe_key_list(payload),
         "content_keys": _safe_key_list(content),
+        "forward_to_formal_enabled": False,
+        "forward_to_formal_success": None,
+        "forward_to_formal_event_id": None,
+        "forward_to_formal_lead_id": None,
+        "forward_to_formal_lead_action": None,
+        "forward_to_formal_error": None,
     }
     with _state_lock:
         _last_webhook_observe = summary
@@ -327,6 +345,16 @@ def record_webhook_observe(headers: dict[str, str], payload: dict[str, Any]) -> 
         summary["body_keys"],
     )
     return summary
+
+
+def update_webhook_observe_forward_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Attach formal-forward result fields to the latest observe summary."""
+    global _last_webhook_observe
+    with _state_lock:
+        if _last_webhook_observe is None:
+            return None
+        _last_webhook_observe.update(result)
+        return dict(_last_webhook_observe)
 
 
 def get_live_check_status() -> dict[str, Any]:

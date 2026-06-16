@@ -79,6 +79,7 @@ DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
 DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 DY_LIVE_CHECK_ENABLED = os.getenv("DY_LIVE_CHECK_ENABLED", "false").lower() == "true"
+DY_LIVE_CHECK_FORWARD_TO_FORMAL = os.getenv("DY_LIVE_CHECK_FORWARD_TO_FORMAL", "false").lower() == "true"
 # 入站 webhook 是否强制签名鉴权
 # development 可关闭用于本地开发 / 联调；production 始终强制验签
 DOUYIN_WEBHOOK_AUTH_REQUIRED = os.getenv("DOUYIN_WEBHOOK_AUTH_REQUIRED", "false").lower() == "true"

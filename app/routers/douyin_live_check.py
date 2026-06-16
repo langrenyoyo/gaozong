@@ -1,10 +1,15 @@
 """Douyin on-site live-check endpoints."""
 
+import json
+import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 from app import config
+from app.database import get_db
+from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
     DouyinLiveCheckAuthUrlResponse,
     DouyinLiveCheckObserveResponse,
@@ -16,7 +21,11 @@ from app.services.douyin_live_check_service import (
     get_live_check_status,
     record_oauth_callback,
     record_webhook_observe,
+    update_webhook_observe_forward_result,
 )
+
+logger = logging.getLogger(__name__)
+LIVE_CHECK_OBSERVE_PATH = "/integrations/douyin/live-check/webhook-observe"
 
 router = APIRouter(
     prefix="/integrations/douyin/live-check",
@@ -58,14 +67,94 @@ def status() -> DouyinLiveCheckStatusResponse:
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)
-async def webhook_observe(request: Request) -> DouyinLiveCheckObserveResponse:
+async def webhook_observe(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> DouyinLiveCheckObserveResponse:
     _ensure_enabled()
+    body = await request.body()
     try:
-        payload: dict[str, Any] = await request.json()
-    except ValueError as exc:
+        payload: dict[str, Any] = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
     data = record_webhook_observe(dict(request.headers), payload)
+    forward_result = await _maybe_forward_to_formal(request, body, payload, db)
+    data.update(forward_result)
+    update_webhook_observe_forward_result(forward_result)
     return DouyinLiveCheckObserveResponse(data=data)
+
+
+def _forward_disabled_result() -> dict[str, Any]:
+    return {
+        "forward_to_formal_enabled": False,
+        "forward_to_formal_success": None,
+        "forward_to_formal_event_id": None,
+        "forward_to_formal_lead_id": None,
+        "forward_to_formal_lead_action": None,
+        "forward_to_formal_error": None,
+    }
+
+
+def _forward_error_result(exc: Exception) -> dict[str, Any]:
+    return {
+        "forward_to_formal_enabled": True,
+        "forward_to_formal_success": False,
+        "forward_to_formal_event_id": None,
+        "forward_to_formal_lead_id": None,
+        "forward_to_formal_lead_action": None,
+        "forward_to_formal_error": type(exc).__name__,
+    }
+
+
+async def _maybe_forward_to_formal(
+    request: Request,
+    body: bytes,
+    payload: dict[str, Any],
+    db: Session,
+) -> dict[str, Any]:
+    if not config.DY_LIVE_CHECK_FORWARD_TO_FORMAL:
+        logger.info(
+            "live-check webhook observe: source_path=%s, forward_to_formal_enabled=false, event=%s, forward_result=disabled",
+            LIVE_CHECK_OBSERVE_PATH,
+            payload.get("event"),
+        )
+        return _forward_disabled_result()
+
+    try:
+        formal = await _handle_douyin_webhook(
+            body=body,
+            x_auth_timestamp=request.headers.get("X-Auth-Timestamp"),
+            authorization=request.headers.get("Authorization"),
+            db=db,
+            source_path=LIVE_CHECK_OBSERVE_PATH,
+            skip_signature_verification=True,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "live-check webhook observe: source_path=%s, forward_to_formal_enabled=true, event=%s, forward_result=error, error_type=%s",
+            LIVE_CHECK_OBSERVE_PATH,
+            payload.get("event"),
+            type(exc).__name__,
+        )
+        return _forward_error_result(exc)
+
+    logger.info(
+        "live-check webhook observe: source_path=%s, forward_to_formal_enabled=true, event=%s, forward_result=success, event_id=%s, lead_id=%s, lead_action=%s",
+        LIVE_CHECK_OBSERVE_PATH,
+        payload.get("event"),
+        formal.event_id,
+        formal.lead_id,
+        formal.lead_action,
+    )
+    return {
+        "forward_to_formal_enabled": True,
+        "forward_to_formal_success": True,
+        "forward_to_formal_event_id": formal.event_id,
+        "forward_to_formal_lead_id": formal.lead_id,
+        "forward_to_formal_lead_action": formal.lead_action,
+        "forward_to_formal_error": None,
+    }

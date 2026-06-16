@@ -15,10 +15,23 @@ import hashlib
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import config
+from app.database import Base, get_db
 from app.main import create_app
+from app.models import DouyinLead, DouyinWebhookEvent
 from app.services.douyin_live_check_service import reset_live_check_state
+
+
+test_engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 
 class FakeUpstreamResponse:
@@ -39,7 +52,49 @@ class FakeUpstreamResponse:
 
 def _client():
     reset_live_check_state()
-    return TestClient(create_app())
+    app = create_app()
+
+    def _override_get_db():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    return TestClient(app)
+
+
+def setup_function():
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+
+
+def _live_receive_payload(
+    *,
+    from_user_id: str = "live_forward_user_001",
+    server_message_id: str = "live_forward_msg_001",
+    conversation_short_id: str = "live_forward_conv_001",
+    text: str = "测试线索0616，我的微信 wx_test_0616，手机号 13633624849",
+) -> dict:
+    return {
+        "event": "im_receive_msg",
+        "from_user_id": from_user_id,
+        "to_user_id": "live_forward_account_001",
+        "content": json.dumps(
+            {
+                "create_time": 1710000000000,
+                "conversation_short_id": conversation_short_id,
+                "server_message_id": server_message_id,
+                "message_type": "text",
+                "text": text,
+                "user_infos": [
+                    {"open_id": from_user_id, "nick_name": "live用户", "avatar": ""},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    }
 
 
 def test_live_check_disabled_returns_clear_error():
@@ -234,6 +289,12 @@ def test_webhook_observe_records_headers_and_body_keys_without_token_leak():
     assert data["body_has_event"] is True
     assert data["body_has_content"] is True
     assert data["body_has_account_open_id"] is True
+    assert data["from_user_id"] == "from-1"
+    assert data["to_user_id"] is None
+    assert data["body_open_id"] is None
+    assert data["body_account_open_id"] == "account-1"
+    assert data["content_open_id"] is None
+    assert data["content_account_open_id"] is None
     assert data["body_has_conversation_short_id"] is True
     assert data["body_has_server_message_id"] is True
     assert "body-token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
@@ -243,10 +304,14 @@ def test_webhook_observe_parses_stringified_json_content():
     client = _client()
     payload = {
         "event": "im_receive_msg",
+        "from_user_id": "from-open-1",
+        "to_user_id": "to-open-1",
         "open_id": "open-1",
         "account_open_id": "account-1",
         "content": json.dumps(
             {
+                "open_id": "content-open-1",
+                "account_open_id": "content-account-1",
                 "conversation_short_id": "conv-1",
                 "server_message_id": "msg-1",
                 "message_type": "text",
@@ -266,6 +331,12 @@ def test_webhook_observe_parses_stringified_json_content():
     assert data["body_has_content"] is True
     assert data["body_has_open_id"] is True
     assert data["body_has_account_open_id"] is True
+    assert data["from_user_id"] == "from-open-1"
+    assert data["to_user_id"] == "to-open-1"
+    assert data["body_open_id"] == "open-1"
+    assert data["body_account_open_id"] == "account-1"
+    assert data["content_open_id"] == "content-open-1"
+    assert data["content_account_open_id"] == "content-account-1"
     assert data["body_has_conversation_short_id"] is True
     assert data["body_has_server_message_id"] is True
     assert data["content_parse_success"] is True
@@ -274,8 +345,15 @@ def test_webhook_observe_parses_stringified_json_content():
     assert data["content_has_server_message_id"] is True
     assert data["content_has_message_type"] is True
     assert data["content_message_type"] == "text"
-    assert data["content_keys"] == ["conversation_short_id", "message_type", "server_message_id"]
+    assert data["content_keys"] == [
+        "account_open_id",
+        "conversation_short_id",
+        "message_type",
+        "open_id",
+        "server_message_id",
+    ]
     assert status_resp.json()["data"]["last_webhook_observe"]["content_parse_success"] is True
+    assert status_resp.json()["data"]["last_webhook_observe"]["content_open_id"] == "content-open-1"
     assert "content-token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
@@ -302,24 +380,131 @@ def test_webhook_observe_handles_non_json_content_without_leaking_text():
     assert "token-secret-value" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
+def test_webhook_observe_forward_disabled_does_not_write_formal_event():
+    client = _client()
+    payload = _live_receive_payload()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", False):
+        resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["forward_to_formal_enabled"] is False
+    assert data["forward_to_formal_success"] is None
+
+    db = TestSession()
+    try:
+        assert db.query(DouyinWebhookEvent).count() == 0
+        assert db.query(DouyinLead).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead():
+    client = _client()
+    payload = _live_receive_payload(from_user_id="live_forward_create_001")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
+         patch("app.config.APP_ENV", "production"):
+        resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["forward_to_formal_enabled"] is True
+    assert data["forward_to_formal_success"] is True
+    assert data["forward_to_formal_event_id"] is not None
+    assert data["forward_to_formal_lead_id"] is not None
+    assert data["forward_to_formal_lead_action"] == "created"
+    assert data["forward_to_formal_error"] is None
+
+    db = TestSession()
+    try:
+        event = db.query(DouyinWebhookEvent).filter_by(id=data["forward_to_formal_event_id"]).first()
+        lead = db.query(DouyinLead).filter_by(id=data["forward_to_formal_lead_id"]).first()
+        assert event is not None
+        assert event.event == "im_receive_msg"
+        assert lead is not None
+        assert lead.source_id == "live_forward_create_001"
+        assert lead.customer_contact == "13633624849"
+    finally:
+        db.close()
+
+
+def test_webhook_observe_forward_enabled_duplicate_uses_formal_idempotency():
+    client = _client()
+    payload = _live_receive_payload(from_user_id="live_forward_dup_001")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True):
+        first = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+        second = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_data = first.json()["data"]
+    second_data = second.json()["data"]
+    assert first_data["forward_to_formal_lead_action"] == "created"
+    assert second_data["forward_to_formal_success"] is True
+    assert second_data["forward_to_formal_lead_action"] == "duplicate_event"
+    assert second_data["forward_to_formal_lead_id"] == first_data["forward_to_formal_lead_id"]
+    assert second_data["forward_to_formal_event_id"] != first_data["forward_to_formal_event_id"]
+
+    db = TestSession()
+    try:
+        assert db.query(DouyinLead).filter_by(source_id="live_forward_dup_001").count() == 1
+        assert db.query(DouyinWebhookEvent).filter_by(from_user_id="live_forward_dup_001").count() == 2
+    finally:
+        db.close()
+
+
+def test_webhook_observe_forward_failure_keeps_200_and_masks_error():
+    client = _client()
+    payload = _live_receive_payload(text="token-secret-value 手机号 13633624849")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch(
+             "app.routers.douyin_live_check._handle_douyin_webhook",
+             side_effect=RuntimeError("boom token-secret-value"),
+         ):
+        resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert resp.status_code == 200
+    body = json.dumps(resp.json(), ensure_ascii=False)
+    data = resp.json()["data"]
+    assert data["forward_to_formal_enabled"] is True
+    assert data["forward_to_formal_success"] is False
+    assert data["forward_to_formal_event_id"] is None
+    assert data["forward_to_formal_lead_id"] is None
+    assert data["forward_to_formal_lead_action"] is None
+    assert data["forward_to_formal_error"] == "RuntimeError"
+    assert "token-secret-value" not in body
+    assert "13633624849" not in body
+
+
 def test_config_loads_env_file_values(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
             [
                 "DY_LIVE_CHECK_ENABLED=true",
+                "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
             ]
         ),
         encoding="utf-8",
     )
-    for key in ["DY_LIVE_CHECK_ENABLED", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
+    for key in ["DY_LIVE_CHECK_ENABLED", "DY_LIVE_CHECK_FORWARD_TO_FORMAL", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
         monkeypatch.delenv(key, raising=False)
 
     config._load_env_file(env_file)
 
     assert os.environ["DY_LIVE_CHECK_ENABLED"] == "true"
+    assert os.environ["DY_LIVE_CHECK_FORWARD_TO_FORMAL"] == "true"
     assert os.environ["DY_MAIN_ACCOUNT_ID"] == "2124269908"
     assert os.environ["PUBLIC_BASE_URL"] == "https://callback.misanduo.com"
 
@@ -330,6 +515,7 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
         "\n".join(
             [
                 "DY_LIVE_CHECK_ENABLED=true",
+                "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
             ]
@@ -337,12 +523,14 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
         encoding="utf-8",
     )
     monkeypatch.setenv("DY_LIVE_CHECK_ENABLED", "false")
+    monkeypatch.setenv("DY_LIVE_CHECK_FORWARD_TO_FORMAL", "false")
     monkeypatch.setenv("DY_MAIN_ACCOUNT_ID", "999")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://env.example.com")
 
     config._load_env_file(env_file)
 
     assert os.environ["DY_LIVE_CHECK_ENABLED"] == "false"
+    assert os.environ["DY_LIVE_CHECK_FORWARD_TO_FORMAL"] == "false"
     assert os.environ["DY_MAIN_ACCOUNT_ID"] == "999"
     assert os.environ["PUBLIC_BASE_URL"] == "https://env.example.com"
 
@@ -353,13 +541,14 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
         "\n".join(
             [
                 "DY_LIVE_CHECK_ENABLED=true",
+                "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
             ]
         ),
         encoding="utf-8",
     )
-    for key in ["DY_LIVE_CHECK_ENABLED", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
+    for key in ["DY_LIVE_CHECK_ENABLED", "DY_LIVE_CHECK_FORWARD_TO_FORMAL", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
         monkeypatch.delenv(key, raising=False)
 
     monkeypatch.setattr(config, "ENV_FILE", env_file)
@@ -367,5 +556,6 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
     reloaded = importlib.reload(config)
 
     assert reloaded.DY_LIVE_CHECK_ENABLED is True
+    assert reloaded.DY_LIVE_CHECK_FORWARD_TO_FORMAL is True
     assert reloaded.DY_MAIN_ACCOUNT_ID == 2124269908
     assert reloaded.PUBLIC_BASE_URL == "https://callback.misanduo.com"
