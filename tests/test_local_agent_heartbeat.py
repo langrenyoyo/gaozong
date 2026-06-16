@@ -23,6 +23,18 @@ def test_heartbeat_payload_reports_idle_without_wechat_probe():
     mock_ready.assert_not_called()
 
 
+def test_heartbeat_payload_reads_agent_identity_from_environment(monkeypatch):
+    from app import local_agent_main
+
+    monkeypatch.setenv("AUTO_WECHAT_AGENT_CLIENT_ID", "agent-from-env")
+    monkeypatch.setenv("AUTO_WECHAT_AGENT_NAME", "小高AI微信助手")
+
+    payload = local_agent_main._build_agent_heartbeat_payload()
+
+    assert payload["agent_client_id"] == "agent-from-env"
+    assert payload["agent_name"] == "小高AI微信助手"
+
+
 def test_heartbeat_payload_reports_busy_when_task_lock_is_held():
     from app import local_agent_main
 

@@ -184,8 +184,8 @@ def _is_wechat_task_busy() -> bool:
 def _build_agent_heartbeat_payload() -> dict:
     """构造 Local Agent 心跳；本阶段不探测微信可用性。"""
     return {
-        "agent_client_id": AGENT_CLIENT_ID,
-        "agent_name": AGENT_DISPLAY_NAME,
+        "agent_client_id": os.getenv("AUTO_WECHAT_AGENT_CLIENT_ID", AGENT_CLIENT_ID),
+        "agent_name": os.getenv("AUTO_WECHAT_AGENT_NAME", AGENT_DISPLAY_NAME),
         "host_name": socket.gethostname(),
         "agent_status": "busy" if _is_wechat_task_busy() else "idle",
         "wechat_status": "unknown",

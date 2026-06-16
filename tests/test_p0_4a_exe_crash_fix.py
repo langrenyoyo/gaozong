@@ -111,9 +111,10 @@ def test_route_summary_does_not_require_build_info(capsys):
 
 def test_build_script_contains_hidden_import_local_agent_build_info():
     script = Path("scripts/build_local_agent_exe.ps1").read_text(encoding="utf-8")
+    spec = Path("local_agent.spec").read_text(encoding="utf-8")
 
-    assert "--hidden-import" in script
-    assert "app.local_agent_build_info" in script
+    assert "local_agent.spec" in script
+    assert "app.local_agent_build_info" in spec
 
 
 def test_build_script_runs_py_compile_for_build_info():
@@ -122,3 +123,130 @@ def test_build_script_runs_py_compile_for_build_info():
     assert "py_compile" in script
     assert "local_agent_build_info.py" in script
     assert "Build info validation failed" in script
+
+
+def test_build_script_outputs_local_agent_directory_without_overwriting_old_dist():
+    script = Path("scripts/build_local_agent_exe.ps1").read_text(encoding="utf-8")
+    spec = Path("local_agent.spec").read_text(encoding="utf-8")
+
+    assert 'dist\\local-agent' in script
+    assert 'name="local-agent"' in spec
+    assert "console=False" in spec
+
+
+def test_exe_entry_reads_environment_defaults(monkeypatch):
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    monkeypatch.setenv("AUTO_WECHAT_SERVER_URL", "https://callback.misanduo.com")
+    monkeypatch.setenv("LOCAL_AGENT_HOST", "127.0.0.1")
+    monkeypatch.setenv("LOCAL_AGENT_PORT", "19000")
+
+    config = resolve_runtime_config([])
+
+    assert config.host == "127.0.0.1"
+    assert config.port == 19000
+    assert config.server_url == "https://callback.misanduo.com"
+
+
+def test_exe_entry_reads_dotenv_without_overriding_environment(tmp_path, monkeypatch):
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join([
+            "AUTO_WECHAT_SERVER_URL=https://callback.misanduo.com",
+            "LOCAL_AGENT_HOST=127.0.0.1",
+            "LOCAL_AGENT_PORT=19000",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTO_WECHAT_SERVER_URL", "http://127.0.0.1:9000")
+
+    config = resolve_runtime_config([], env_file=env_file)
+
+    assert config.host == "127.0.0.1"
+    assert config.port == 19000
+    assert config.server_url == "http://127.0.0.1:9000"
+
+
+def test_exe_entry_reads_dotenv_next_to_frozen_exe(tmp_path, monkeypatch):
+    import sys
+
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    monkeypatch.delenv("AUTO_WECHAT_SERVER_URL", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_HOST", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_PORT", raising=False)
+    exe_file = tmp_path / "小高AI微信助手.exe"
+    exe_file.write_text("", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AUTO_WECHAT_SERVER_URL=https://callback.misanduo.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_file))
+    monkeypatch.chdir(tmp_path.parent)
+
+    config = resolve_runtime_config([])
+
+    assert config.server_url == "https://callback.misanduo.com"
+
+
+def test_exe_entry_dotenv_fills_empty_environment_value(tmp_path, monkeypatch):
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AUTO_WECHAT_SERVER_URL=https://callback.misanduo.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTO_WECHAT_SERVER_URL", "")
+
+    config = resolve_runtime_config([], env_file=env_file)
+
+    assert config.server_url == "https://callback.misanduo.com"
+
+
+def test_exe_entry_dotenv_accepts_utf8_bom(tmp_path, monkeypatch):
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AUTO_WECHAT_SERVER_URL=https://callback.misanduo.com\n",
+        encoding="utf-8-sig",
+    )
+    monkeypatch.delenv("AUTO_WECHAT_SERVER_URL", raising=False)
+
+    config = resolve_runtime_config([], env_file=env_file)
+
+    assert config.server_url == "https://callback.misanduo.com"
+
+
+def test_exe_entry_rejects_invalid_port(tmp_path, monkeypatch):
+    from app.local_agent_exe_entry import resolve_runtime_config
+
+    monkeypatch.delenv("LOCAL_AGENT_PORT", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LOCAL_AGENT_PORT=not-a-port\n", encoding="utf-8")
+
+    try:
+        resolve_runtime_config([], env_file=env_file)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("invalid LOCAL_AGENT_PORT should fail argument parsing")
+
+
+def test_exe_entry_configures_file_logging(tmp_path):
+    from app.local_agent_exe_entry import configure_file_logging
+
+    log_file = tmp_path / "logs" / "local_agent.log"
+    configure_file_logging(log_file)
+
+    import logging
+
+    logging.getLogger("app.local_agent_exe_entry").info("local agent log smoke")
+
+    assert log_file.exists()
+    assert "local agent log smoke" in log_file.read_text(encoding="utf-8")
