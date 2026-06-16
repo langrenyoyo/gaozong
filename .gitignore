@@ -7,11 +7,11 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
-dist/
+dist/*
 build/
 CLAUDE.md
-dist/dist_backup_20260616_130831/
-dist/local-agent
+dist/dist_backup_20260616_130831/*
+dist/local-agent/*
 
 # 环境变量（含密钥，禁止提交）
 .env
