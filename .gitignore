@@ -1,43 +1,45 @@
+# Python cache
 __pycache__/
-*.pyc
-*.pyo
-*.log
-*.pth
-*.spec
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments and packaging metadata
 .venv/
 venv/
 *.egg-info/
-dist/*
-build/
-CLAUDE.md
-dist/dist_backup_20260616_130831/*
-dist/local-agent/*
 
-# 环境变量（含密钥，禁止提交）
+# Environment files
 .env
+.env.*
+!.env.example
 
-# 数据库运行时文件
-data/*.db
-data/*.db-wal
-data/*.db-shm
-data/*.log
-data/debug_screenshots/*
+# Build artifacts and local backups
+build/
+dist/
+dist_backup_*/
+*.spec
+!local_agent.spec
 
-# Docker 持久化数据（本地测试用）
-docker-data/
+# Runtime data and logs
+data/
+logs/
+*.log
+@AutomationLog.txt
 
-# 模型权重文件（太大，不提交）
-resources/easyocr_models/*.pth
-
-# IDE / 工具本地配置
-.vscode/
-.claude/settings.local.json
-
-# 构建产物（自动生成）
+# Generated local agent build info
 app/local_agent_build_info.py
 
-# 测试/调试临时文件
+# OCR model weights
+resources/easyocr_models/*.pth
+resources/easyocr_models/*.pt
+resources/easyocr_models/*.onnx
+
+# Local tool configuration
+.vscode/
+.claude/settings.local.json
+CLAUDE.md
+
+# Test/debug temporary files
 test_cors_leads.json
 test_wechat_debug.json
-@AutomationLog.txt
-dist_backup_20260616_130831/小高AI微信助手/*
