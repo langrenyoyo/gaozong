@@ -60,6 +60,26 @@ try {
     }
 
     & $PythonExe --version
+    Write-Host "Verifying OCR runtime dependencies..."
+    $ocrDependencyCheck = @'
+import easyocr
+import torch
+import cv2
+from PIL import Image
+print('easyocr ok', easyocr.__version__)
+print('torch ok', torch.__version__)
+print('cv2 ok', cv2.__version__)
+print('PIL ok')
+'@
+    $ocrDependencyOutput = & $PythonExe -c $ocrDependencyCheck
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "OCR dependency validation failed"
+        Write-Host "The Local Agent exe must be built with easyocr, torch, cv2 and PIL available."
+        Write-Host "Recommended: -PythonExe C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe"
+        exit 1
+    }
+    Write-Host $ocrDependencyOutput
+
     $pyinstallerVersion = & $PythonExe -c "import PyInstaller; print(PyInstaller.__version__)"
     Write-Host "PyInstaller version: $pyinstallerVersion"
 

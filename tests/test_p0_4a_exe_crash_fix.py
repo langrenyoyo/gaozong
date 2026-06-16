@@ -125,6 +125,17 @@ def test_build_script_runs_py_compile_for_build_info():
     assert "Build info validation failed" in script
 
 
+def test_build_script_fails_fast_when_ocr_dependencies_missing():
+    script = Path("scripts/build_local_agent_exe.ps1").read_text(encoding="utf-8")
+
+    assert "Verifying OCR runtime dependencies" in script
+    assert "import easyocr" in script
+    assert "import torch" in script
+    assert "import cv2" in script
+    assert "OCR dependency validation failed" in script
+    assert "demo_auto_wechat" in script
+
+
 def test_build_script_outputs_local_agent_directory_without_overwriting_old_dist():
     script = Path("scripts/build_local_agent_exe.ps1").read_text(encoding="utf-8")
     spec = Path("local_agent.spec").read_text(encoding="utf-8")
