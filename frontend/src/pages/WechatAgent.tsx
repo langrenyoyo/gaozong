@@ -5,17 +5,12 @@ import {
   MessageCircleIcon,
   OctagonAlertIcon,
   PauseIcon,
-  PlusIcon,
   PlayIcon,
-  PowerIcon,
   RefreshCwIcon,
-  SearchIcon,
   TestTube2Icon,
-  XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { WechatRule, wechatConfigs } from "../data/wechatAgentData";
 import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
 import WechatTaskPanel from "../components/WechatTaskPanel";
 
@@ -28,7 +23,6 @@ import {
   emergencyStopAutomation,
   resumeAutomation,
 } from "../api/automation";
-import { createStaff } from "../api/staff";
 import { syncDouyinLeads } from "../api/integrations";
 import type { CheckRecord, Staff, WechatAutoDetectStatus, AutomationStatus, DouyinSyncResponse } from "../api/types";
 import type { WechatDebugResult } from "../api/wechat";
@@ -73,119 +67,12 @@ function formatTime(value: string | null): string {
   }
 }
 
-// ========== 配置弹窗（接入真实 API） ==========
-
-function ConfigModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
-  const [name, setName] = useState("");
-  const [wechatNickname, setWechatNickname] = useState("");
-  const [wechatId, setWechatId] = useState("");
-  const [phone, setPhone] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleSubmit = async () => {
-    if (!name.trim()) {
-      toast.error("请输入销售姓名");
-      return;
-    }
-    if (!wechatNickname.trim()) {
-      toast.error("请输入微信昵称（用于自动搜索联系人）");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await createStaff({
-        name: name.trim(),
-        wechat_nickname: wechatNickname.trim(),
-        wechat_id: wechatId.trim() || undefined,
-        phone: phone.trim() || undefined,
-      });
-      toast.success(`销售「${name.trim()}」已添加`);
-      onSuccess();
-      onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "添加销售失败");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-20 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
-      <div className="w-full max-w-[560px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
-        <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
-          <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">添加销售配置</h2>
-            <p className="mt-1 text-xs text-[#8b95a6]">新增销售人员，配置微信昵称后可自动搜索发送线索</p>
-          </div>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
-            <XIcon size={16} />
-          </button>
-        </div>
-
-        <div className="grid gap-4 px-5 py-5 text-xs">
-          <label className="grid grid-cols-[84px_1fr] items-center gap-3">
-            <span className="text-[#64748b]">销售姓名 <span className="text-red-500">*</span></span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="h-10 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="请输入销售姓名"
-            />
-          </label>
-          <label className="grid grid-cols-[84px_1fr] items-center gap-3">
-            <span className="text-[#64748b]">微信昵称 <span className="text-red-500">*</span></span>
-            <input
-              value={wechatNickname}
-              onChange={(e) => setWechatNickname(e.target.value)}
-              className="h-10 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="微信昵称（用于自动搜索联系人，必填）"
-            />
-          </label>
-          <label className="grid grid-cols-[84px_1fr] items-center gap-3">
-            <span className="text-[#64748b]">微信号</span>
-            <input
-              value={wechatId}
-              onChange={(e) => setWechatId(e.target.value)}
-              className="h-10 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="微信号（可选）"
-            />
-          </label>
-          <label className="grid grid-cols-[84px_1fr] items-center gap-3">
-            <span className="text-[#64748b]">联系电话</span>
-            <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="h-10 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="手机号（可选）"
-            />
-          </label>
-        </div>
-
-        <div className="flex justify-end border-t border-[#e4e8f0] px-5 py-4">
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !name.trim() || !wechatNickname.trim()}
-            className="h-9 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {submitting ? "提交中..." : "确认添加"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ========== 主页面 ==========
 
 export default function WechatAgent() {
-  // 配置面板状态（保持 Mock）
-  const [selectedId, setSelectedId] = useState(wechatConfigs[0].id);
-  const [showModal, setShowModal] = useState(false);
-  const [disabledMap, setDisabledMap] = useState<Record<string, boolean>>({});
   const [wechatDebug, setWechatDebug] = useState<WechatDebugResult | null>(null);
   const [wechatDebugLoading, setWechatDebugLoading] = useState(false);
   const [activateLoading, setActivateLoading] = useState(false);
-  const [keyword, setKeyword] = useState("");
 
   // 检测记录 API 状态
   const [checks, setChecks] = useState<CheckRecord[]>([]);
@@ -209,22 +96,6 @@ export default function WechatAgent() {
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const autoSyncTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const getWechatName = (title: string, fallback: string) => title.split("·")[0]?.trim() || fallback;
-  const filteredConfigs = wechatConfigs.filter((config) => {
-    const value = keyword.trim();
-    if (!value) return true;
-    return [
-      getWechatName(config.title, config.nickname),
-      config.nickname,
-      config.title,
-      config.owner,
-      config.phone,
-      config.rules.join("、"),
-    ].some((item) => item.includes(value));
-  });
-  const selected = wechatConfigs.find((item) => item.id === selectedId) || filteredConfigs[0] || wechatConfigs[0];
-  const isDisabled = disabledMap[selected.id] ?? selected.status === "禁用";
-  const selectedStatus = isDisabled ? "禁用" : "启用";
   // 微信状态：从真实 API 检测
   const wechatStatus = wechatDebug
     ? wechatDebug.success && wechatDebug.wechat_found
@@ -525,82 +396,7 @@ export default function WechatAgent() {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-r border-[#e4e8f0] bg-white">
-          <div className="border-b border-[#e4e8f0] p-3">
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#2563eb] text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
-            >
-              <PlusIcon size={14} />
-              添加配置
-            </button>
-            <label className="relative mt-3 block">
-              <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8b95a6]" />
-              <input
-                value={keyword}
-                onChange={(event) => {
-                  const nextKeyword = event.target.value;
-                  setKeyword(nextKeyword);
-                  const nextValue = nextKeyword.trim();
-                  if (!nextValue) return;
-                  const nextConfig = wechatConfigs.find((config) =>
-                    [
-                      getWechatName(config.title, config.nickname),
-                      config.nickname,
-                      config.title,
-                      config.owner,
-                      config.phone,
-                      config.rules.join("、"),
-                    ].some((item) => item.includes(nextValue)),
-                  );
-                  if (nextConfig) {
-                    setSelectedId(nextConfig.id);
-                  }
-                }}
-                className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none transition-smooth focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                placeholder="搜索微信昵称、规则"
-              />
-            </label>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-2">
-            {filteredConfigs.map((config) => {
-              const active = selectedId === config.id;
-              return (
-                <button
-                  key={config.id}
-                  onClick={() => setSelectedId(config.id)}
-                  className={`mb-1.5 flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-smooth ${
-                    active ? "bg-[#eff6ff] ring-1 ring-[#bfdbfe]" : "hover:bg-[#f8fafc]"
-                  }`}
-                >
-                  <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
-                    active ? "bg-[#dcfce7] text-[#16a34a]" : "bg-[#f1f5f9] text-[#94a3b8]"
-                  }`}>
-                    <MessageCircleIcon size={18} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-bold text-[#1a1f2e]">
-                      {getWechatName(config.title, config.nickname)}
-                    </div>
-                    <div className="mt-1 truncate text-[11px] text-[#8b95a6]">{config.rules.join("、")}</div>
-                  </div>
-                </button>
-              );
-            })}
-            {filteredConfigs.length === 0 ? (
-              <div className="px-3 py-8 text-center text-xs text-[#8b95a6]">
-                暂无匹配配置
-              </div>
-            ) : null}
-          </div>
-
-          <div className="border-t border-[#e4e8f0] px-4 py-3 text-xs font-semibold text-[#64748b]">
-            已配置 {filteredConfigs.length}
-          </div>
-        </aside>
-
+      <div className="min-h-0 flex-1">
         <section className="min-h-0 overflow-y-auto bg-[#f3f6fa] p-5">
           <LocalWechatAgentTestPanel />
 
@@ -616,20 +412,12 @@ export default function WechatAgent() {
                 </div>
                 <div>
                   <h2 className="text-[15px] font-bold text-[#1a1f2e]">回复检测记录</h2>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#64748b]">
-                    <span>负责人：{selected.owner}</span>
-                    <span>联系电话：{selected.phone}</span>
-                    <span
-                      className={`rounded-md px-2 py-0.5 font-semibold ${
-                        isDisabled ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
-                      }`}
-                    >
-                      配置状态：{selectedStatus}
-                    </span>
-                  </div>
+                  <p className="mt-2 text-xs text-[#64748b]">
+                    微信助手规则配置暂未接入真实接口；当前仅展示真实检测记录、任务队列和本机微信助手联调能力。
+                  </p>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="shrink-0">
                 <button
                   onClick={handleActivateWechat}
                   disabled={activateLoading}
@@ -642,20 +430,6 @@ export default function WechatAgent() {
                     <TestTube2Icon size={14} />
                   )}
                   启动微信测试
-                </button>
-                <button
-                  onClick={() => {
-                    setDisabledMap((prev) => ({ ...prev, [selected.id]: !isDisabled }));
-                    toast.success(isDisabled ? "已启用该配置" : "已禁用该配置");
-                  }}
-                  className={`flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-smooth ${
-                    isDisabled
-                      ? "border-blue-200 bg-[#eff6ff] text-[#2563eb]"
-                      : "border-[#e4e8f0] bg-white text-[#374151]"
-                  }`}
-                >
-                  <PowerIcon size={14} />
-                  {isDisabled ? "启用" : "禁用"}
                 </button>
               </div>
             </div>
@@ -943,8 +717,6 @@ export default function WechatAgent() {
           </div>
         </section>
       </div>
-
-      {showModal ? <ConfigModal onClose={() => setShowModal(false)} onSuccess={loadData} /> : null}
     </section>
   );
 }

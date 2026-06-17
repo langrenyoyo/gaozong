@@ -16,9 +16,7 @@ import { fetchLeads } from "../api/leads";
 import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
 import type { ChatMessage, Contact, TagType } from "../types";
-import AiVideoEditor from "./AiVideoEditor";
 import LeadsModulePage from "./LeadsModulePage";
-import MaterialLibrary from "./MaterialLibrary";
 import WechatAgent from "./WechatAgent";
 import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
@@ -747,10 +745,6 @@ export default function Index({
           <DouyinAiCsTestPage />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
-        ) : activeNav === "ai-edit" ? (
-          <AiVideoEditor />
-        ) : activeNav === "assets" ? (
-          <MaterialLibrary />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">

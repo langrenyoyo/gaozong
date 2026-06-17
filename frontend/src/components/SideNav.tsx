@@ -9,7 +9,6 @@ import {
   MessageCircleMoreIcon,
   MessageSquareIcon,
   MonitorSmartphoneIcon,
-  ScissorsIcon,
   ShieldCheckIcon,
   UserCogIcon,
   WalletCardsIcon,
@@ -34,8 +33,6 @@ const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "douyin-ai-cs-test", label: "测试", expandedLabel: "抖音AI客服测试", path: "/douyin-ai-cs-test" },
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
   { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
-  { id: "ai-edit", label: "剪辑", expandedLabel: "AI小高剪辑", path: "/ai-edit" },
-  { id: "assets", label: "素材", expandedLabel: "小高素材库", path: "/assets" },
 ];
 
 const superNavItems: Array<NavItem & { expandedLabel: string }> = [
@@ -50,8 +47,6 @@ const navIcons: Record<string, React.ReactNode> = {
   "douyin-ai-cs-test": <WrenchIcon size={18} />,
   leads: <FilterIcon size={18} />,
   "ai-agent": <BotIcon size={18} />,
-  "ai-edit": <ScissorsIcon size={18} />,
-  assets: <DatabaseIcon size={18} />,
   compute: <CpuIcon size={18} />,
   "merchant-agent": <BotIcon size={18} />,
   "merchant-management": <DatabaseIcon size={18} />,
