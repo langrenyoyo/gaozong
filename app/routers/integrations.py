@@ -144,6 +144,20 @@ def get_douyin_conversation_messages(
     )
 
 
+@router.get("/conversation-messages")
+def get_douyin_conversation_messages_by_query(
+    conversation_key: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return real private-message events without putting conversation_key in the path."""
+    return list_conversation_messages(
+        db,
+        conversation_key=conversation_key,
+        account_open_id=account_open_id,
+    )
+
+
 @router.post("/webhook", response_model=WebhookResponse)
 async def douyin_webhook(
     request: Request,

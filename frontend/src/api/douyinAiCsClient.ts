@@ -288,8 +288,13 @@ export async function getDouyinConversationMessages(
   params?: { account_open_id?: string },
 ): Promise<DouyinMessageListResponse> {
   return apiClient.get(
-    `/integrations/douyin/conversations/${encodeURIComponent(String(conversationId))}/messages`,
-    { params },
+    "/integrations/douyin/conversation-messages",
+    {
+      params: {
+        conversation_key: String(conversationId),
+        account_open_id: params?.account_open_id,
+      },
+    },
   ) as unknown as Promise<DouyinMessageListResponse>;
 }
 

@@ -226,6 +226,81 @@ def test_messages_are_sorted_by_event_time():
     assert [item["content"] for item in messages] == ["first by time", "second in db first by id"]
 
 
+def test_query_conversation_messages_supports_key_with_slash_plus_and_equals():
+    conversation_key = "@9VxWzqPHW8E4PX2vc4woV87902DrPv+GO5ByqQylLFgQZvX+60zdRmYqig357zEB/x3+IH10/OLr3uaiHvEJUA=="
+    _insert_event(
+        open_id="customer_special_key",
+        account_open_id="account_special_key",
+        text="special key message",
+        conversation_short_id=conversation_key,
+        event_key="special_key_event",
+    )
+
+    messages = _client().get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": conversation_key,
+            "account_open_id": "account_special_key",
+        },
+    ).json()["items"]
+
+    assert [item["content"] for item in messages] == ["special key message"]
+
+
+def test_query_conversation_messages_keeps_account_open_id_isolation():
+    conversation_key = "shared_special_key"
+    _insert_event(
+        open_id="customer_isolated_a",
+        account_open_id="account_query_a",
+        text="account a query message",
+        conversation_short_id=conversation_key,
+        event_key="query_account_a",
+    )
+    _insert_event(
+        open_id="customer_isolated_b",
+        account_open_id="account_query_b",
+        text="account b query message",
+        conversation_short_id=conversation_key,
+        event_key="query_account_b",
+    )
+
+    messages = _client().get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": conversation_key,
+            "account_open_id": "account_query_b",
+        },
+    ).json()["items"]
+
+    assert [item["content"] for item in messages] == ["account b query message"]
+
+
+def test_query_conversation_messages_keeps_contact_not_found_message_visible():
+    _insert_event(
+        open_id="customer_query_no_contact",
+        account_open_id="account_query_no_contact",
+        text="hello no contact",
+        conversation_short_id="query_no_contact_conv",
+        event_key="query_no_contact",
+    )
+
+    client = _client()
+    conversation = client.get(
+        "/integrations/douyin/accounts/account_query_no_contact/conversations",
+        params={"account_open_id": "account_query_no_contact"},
+    ).json()["items"][0]
+    messages = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": conversation["id"],
+            "account_open_id": "account_query_no_contact",
+        },
+    ).json()["items"]
+
+    assert conversation["lead_status"] == "contact_not_found"
+    assert messages[0]["content"] == "hello no contact"
+
+
 def test_different_douyin_accounts_are_isolated():
     _insert_event(
         open_id="same_customer",
