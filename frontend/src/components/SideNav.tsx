@@ -30,6 +30,7 @@ interface SideNavProps {
 }
 
 const navItems: Array<NavItem & { expandedLabel: string }> = [
+  { id: "douyin-ai-cs", label: "客服", expandedLabel: "抖音AI小高客服", path: "/douyin-ai-cs" },
   { id: "chat", label: "客服", expandedLabel: "抖音AI小高客服", path: "/" },
   { id: "douyin-ai-cs-test", label: "测试", expandedLabel: "抖音AI客服测试", path: "/douyin-ai-cs-test" },
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
@@ -50,6 +51,7 @@ const superNavItems: Array<NavItem & { expandedLabel: string }> = [
 ];
 
 const navIcons: Record<string, React.ReactNode> = {
+  "douyin-ai-cs": <MessageCircleMoreIcon size={18} />,
   chat: <MessageSquareIcon size={18} />,
   "douyin-ai-cs-test": <WrenchIcon size={18} />,
   leads: <FilterIcon size={18} />,

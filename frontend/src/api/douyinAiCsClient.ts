@@ -18,6 +18,58 @@ export interface DouyinAiCsHealthResponse {
   port?: number;
 }
 
+export interface DouyinAccountItem {
+  id: number;
+  tenant_id: string;
+  account_name: string;
+  account_open_id: string;
+  status: string;
+  avatar?: string | null;
+  unread_count?: number;
+  last_active_at?: string | null;
+}
+
+export interface DouyinAccountListResponse {
+  items: DouyinAccountItem[];
+}
+
+export interface DouyinConversationItem {
+  id: number;
+  account_id: number;
+  open_id: string;
+  nickname: string;
+  last_message: string;
+  last_message_at: string;
+  unread_count: number;
+  lead_status?: string | null;
+}
+
+export interface DouyinConversationListResponse {
+  items: DouyinConversationItem[];
+}
+
+export interface DouyinMessageItem {
+  id: number;
+  conversation_id: number;
+  direction: "inbound" | "outbound" | "system" | string;
+  content: string;
+  created_at: string;
+}
+
+export interface DouyinMessageListResponse {
+  items: DouyinMessageItem[];
+}
+
+export interface DouyinUserProfileResponse {
+  conversation_id: number;
+  budget_min?: number | null;
+  budget_max?: number | null;
+  brand_preference?: string | null;
+  vehicle_preference?: string | null;
+  purchase_intent_level: string;
+  lead_capture_suggested: boolean;
+}
+
 export interface CreateRagDocumentRequest {
   tenant_id: string;
   merchant_id: string;
@@ -170,6 +222,40 @@ export async function getDouyinAiCsReady(): Promise<DouyinAiCsHealthResponse> {
 
 export async function getDouyinAiCsVersion(): Promise<DouyinAiCsHealthResponse> {
   return requestDouyinAiCs(douyinAiCsClient.get<DouyinAiCsHealthResponse>("/version"));
+}
+
+export async function getDouyinAccounts(): Promise<DouyinAccountListResponse> {
+  return requestDouyinAiCs(douyinAiCsClient.get<DouyinAccountListResponse>("/douyin/accounts"));
+}
+
+export async function getDouyinAccountConversations(
+  accountId: string | number,
+): Promise<DouyinConversationListResponse> {
+  return requestDouyinAiCs(
+    douyinAiCsClient.get<DouyinConversationListResponse>(
+      `/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
+    ),
+  );
+}
+
+export async function getDouyinConversationMessages(
+  conversationId: string | number,
+): Promise<DouyinMessageListResponse> {
+  return requestDouyinAiCs(
+    douyinAiCsClient.get<DouyinMessageListResponse>(
+      `/douyin/conversations/${encodeURIComponent(String(conversationId))}/messages`,
+    ),
+  );
+}
+
+export async function getDouyinConversationProfile(
+  conversationId: string | number,
+): Promise<DouyinUserProfileResponse> {
+  return requestDouyinAiCs(
+    douyinAiCsClient.get<DouyinUserProfileResponse>(
+      `/douyin/conversations/${encodeURIComponent(String(conversationId))}/profile`,
+    ),
+  );
 }
 
 export async function createRagDocument(

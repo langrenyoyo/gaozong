@@ -89,10 +89,15 @@ def test_mock_accounts_conversations_messages_and_profile_shape(tmp_path, monkey
 
     accounts = client.get("/douyin/accounts")
     assert accounts.status_code == 200
-    account = accounts.json()["items"][0]
+    account_items = accounts.json()["items"]
+    assert len(account_items) >= 2
+    account = account_items[0]
     assert account["tenant_id"] == "demo_tenant"
     assert account["account_open_id"] == "demo_account_001"
     assert account["status"] == "active"
+    assert account["avatar"]
+    assert account["unread_count"] >= 1
+    assert account["last_active_at"]
 
     conversations = client.get("/douyin/accounts/1/conversations")
     assert conversations.status_code == 200
@@ -100,6 +105,11 @@ def test_mock_accounts_conversations_messages_and_profile_shape(tmp_path, monkey
     assert conversation["account_id"] == 1
     assert conversation["open_id"] == "demo_user_001"
     assert conversation["unread_count"] == 1
+    assert conversation["lead_status"] == "pending"
+
+    other_conversations = client.get("/douyin/accounts/2/conversations")
+    assert other_conversations.status_code == 200
+    assert other_conversations.json()["items"][0]["account_id"] == 2
 
     messages = client.get("/douyin/conversations/1/messages")
     assert messages.status_code == 200

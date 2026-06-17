@@ -31,6 +31,9 @@ class DouyinAccountItem(BaseModel):
     account_name: str
     account_open_id: str
     status: str
+    avatar: str | None = None
+    unread_count: int = 0
+    last_active_at: str | None = None
 
 
 class DouyinAccountListResponse(BaseModel):
@@ -45,6 +48,7 @@ class ConversationItem(BaseModel):
     last_message: str
     last_message_at: str
     unread_count: int
+    lead_status: str | None = None
 
 
 class ConversationListResponse(BaseModel):

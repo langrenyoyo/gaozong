@@ -21,6 +21,7 @@ import ComputeCenter from "./ComputeCenter";
 import LeadsModulePage from "./LeadsModulePage";
 import MaterialLibrary from "./MaterialLibrary";
 import WechatAgent from "./WechatAgent";
+import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
@@ -751,6 +752,8 @@ export default function Index({
               <ContactInfo contact={selectedContact} />
             </div>
           </>
+        ) : activeNav === "douyin-ai-cs" ? (
+          <DouyinAiCsWorkbenchPage />
         ) : activeNav === "leads" ? (
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (
