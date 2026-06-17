@@ -28,6 +28,9 @@ export interface DouyinAccountItem {
   avatar?: string | null;
   unread_count?: number;
   last_active_at?: string | null;
+  source?: string | null;
+  is_authorized?: boolean;
+  has_events?: boolean;
 }
 
 export interface DouyinAccountListResponse {

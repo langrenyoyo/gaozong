@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
 from app.models import DouyinWebhookEvent
 from app.services.contact_extractor import extract_contacts_from_text
+from app.services.douyin_live_check_service import list_authorized_accounts
 
 
 PRIVATE_MESSAGE_EVENTS = {"im_receive_msg", "im_send_msg"}
@@ -66,6 +67,29 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
     return {"items": items}
 
 
+def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str, Any]:
+    """Return live-check accounts plus event-derived fallback accounts."""
+    authorized = list_authorized_accounts()
+    items = list(authorized.get("items") or [])
+    existing_open_ids = {
+        str(item.get("account_open_id") or item.get("open_id"))
+        for item in items
+        if item.get("account_open_id") or item.get("open_id")
+    }
+
+    for account in _event_derived_accounts(db):
+        if account["account_open_id"] in existing_open_ids:
+            continue
+        items.append(account)
+        existing_open_ids.add(account["account_open_id"])
+
+    return {
+        "items": items,
+        "total": len(items),
+        "source": "live_check_memory_with_webhook_events_fallback",
+    }
+
+
 def list_conversation_messages(
     db: Session,
     *,
@@ -110,6 +134,69 @@ def _load_messages(db: Session, *, account_open_id: str | None = None) -> list[W
             continue
         messages.append(message)
     return messages
+
+
+def _event_derived_accounts(db: Session) -> list[dict[str, Any]]:
+    rows = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
+        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
+        .limit(500)
+        .all()
+    )
+    accounts: dict[str, dict[str, Any]] = {}
+    last_active_at: dict[str, datetime | None] = {}
+    for row in rows:
+        payload = _parse_raw_body(row.raw_body)
+        if payload is None:
+            continue
+        content = parse_content(payload.get("content"))
+        account_open_id = _account_open_id(row, payload, content)
+        if not account_open_id:
+            continue
+        profile = _profile_for_account(row, payload, content, account_open_id)
+        display_name = profile.get("nick_name") or f"抖音号 {account_open_id[-6:]}"
+        current = accounts.get(account_open_id)
+        if current is None:
+            accounts[account_open_id] = {
+                "id": _stable_numeric_id(account_open_id),
+                "account_id": account_open_id,
+                "douyin_account_id": _stable_numeric_id(account_open_id),
+                "account_open_id": account_open_id,
+                "open_id": account_open_id,
+                "account_name": display_name,
+                "name": display_name,
+                "nickname": display_name,
+                "avatar": profile.get("avatar") or "",
+                "avatar_url": profile.get("avatar") or "",
+                "status": "event_source",
+                "is_active": False,
+                "is_authorized": False,
+                "has_events": True,
+                "last_active_at": row.created_at,
+                "authorized_at": None,
+                "unread_count": 0,
+                "source": "webhook_events",
+            }
+            last_active_at[account_open_id] = row.created_at
+            continue
+        if not current.get("avatar") and profile.get("avatar"):
+            current["avatar"] = profile["avatar"]
+            current["avatar_url"] = profile["avatar"]
+        if current["account_name"].startswith("抖音号 ") and profile.get("nick_name"):
+            current["account_name"] = profile["nick_name"]
+            current["name"] = profile["nick_name"]
+            current["nickname"] = profile["nick_name"]
+        if (row.created_at or datetime.min) > (last_active_at.get(account_open_id) or datetime.min):
+            current["last_active_at"] = row.created_at
+            last_active_at[account_open_id] = row.created_at
+
+    return sorted(
+        accounts.values(),
+        key=lambda item: item.get("last_active_at") or datetime.min,
+        reverse=True,
+    )
 
 
 def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
@@ -190,6 +277,40 @@ def _profile_for_customer(
     return profiles.get(open_id, {"nick_name": None, "avatar": None})
 
 
+def _profile_for_account(
+    row: DouyinWebhookEvent,
+    payload: dict[str, Any],
+    content: dict[str, Any],
+    account_open_id: str,
+) -> dict[str, str | None]:
+    profiles: dict[str, dict[str, str | None]] = {}
+    _merge_profile(profiles, row.from_user_id, payload)
+    _merge_profile(profiles, row.to_user_id, payload)
+    _merge_profile(profiles, content.get("account_open_id") or row.to_user_id, content)
+    user_infos = content.get("user_infos")
+    if not isinstance(user_infos, list):
+        user_infos = payload.get("user_infos")
+    if isinstance(user_infos, list):
+        for item in user_infos:
+            if isinstance(item, dict):
+                _merge_profile(profiles, item.get("open_id"), item)
+
+    profile = profiles.get(account_open_id, {"nick_name": None, "avatar": None})
+    nick_name = (
+        _optional_str(payload.get("to_user_nick_name"))
+        or _optional_str(payload.get("account_name"))
+        or _optional_str(content.get("account_name"))
+        or profile.get("nick_name")
+    )
+    avatar = (
+        _optional_str(payload.get("to_user_avatar"))
+        or _optional_str(payload.get("account_avatar"))
+        or _optional_str(content.get("account_avatar"))
+        or profile.get("avatar")
+    )
+    return {"nick_name": nick_name, "avatar": avatar}
+
+
 def _merge_profile(
     profiles: dict[str, dict[str, str | None]],
     open_id: Any,
@@ -235,6 +356,13 @@ def _sender_type(event: str) -> str:
 
 def _sort_messages(messages: list[WorkbenchMessage]) -> list[WorkbenchMessage]:
     return sorted(messages, key=lambda item: (item.created_at or datetime.min, item.event_id))
+
+
+def _stable_numeric_id(value: str) -> int:
+    total = 0
+    for char in value:
+        total = (total * 31 + ord(char)) & 0xFFFFFFFF
+    return total or 1
 
 
 def _optional_str(value: Any) -> str | None:

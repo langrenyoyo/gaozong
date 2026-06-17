@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import DouyinWebhookEvent
+from app.services.douyin_live_check_service import record_oauth_callback, reset_live_check_state
 
 
 test_engine = create_engine(
@@ -22,6 +24,7 @@ TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 def setup_function():
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
+    reset_live_check_state()
 
 
 def _client() -> TestClient:
@@ -245,3 +248,95 @@ def test_different_douyin_accounts_are_isolated():
     assert len(items) == 1
     assert items[0]["account_open_id"] == "account_a"
     assert items[0]["last_message"] == "account a message"
+
+
+def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_empty():
+    _insert_event(
+        open_id="customer_account_fallback",
+        account_open_id="account_from_events",
+        text="hello from history",
+        event_key="account_fallback_1",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
+
+    assert data["total"] == 1
+    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
+    assert data["items"][0]["account_open_id"] == "account_from_events"
+    assert data["items"][0]["source"] == "webhook_events"
+    assert data["items"][0]["is_authorized"] is False
+    assert data["items"][0]["has_events"] is True
+
+
+def test_accounts_fallback_does_not_duplicate_authorized_account():
+    record_oauth_callback({"open_id": "account_dup", "nick_name": "Authorized Account"})
+    _insert_event(
+        open_id="customer_dup",
+        account_open_id="account_dup",
+        text="same account event",
+        event_key="account_dup_event",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
+
+    assert data["total"] == 1
+    assert data["items"][0]["account_open_id"] == "account_dup"
+    assert data["items"][0]["source"] == "live_check_oauth_callback"
+
+
+def test_accounts_fallback_groups_different_account_open_ids():
+    _insert_event(
+        open_id="customer_multi_1",
+        account_open_id="account_multi_a",
+        text="message a",
+        event_key="account_multi_a_event",
+    )
+    _insert_event(
+        open_id="customer_multi_2",
+        account_open_id="account_multi_b",
+        text="message b",
+        event_key="account_multi_b_event",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        items = _client().get("/integrations/douyin/live-check/accounts").json()["data"]["items"]
+
+    assert {item["account_open_id"] for item in items} == {"account_multi_a", "account_multi_b"}
+
+
+def test_event_derived_account_can_load_real_conversations():
+    _insert_event(
+        open_id="customer_from_event_account",
+        account_open_id="account_event_loads_conversations",
+        text="conversation is visible",
+        event_key="event_account_conversation",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        account = _client().get("/integrations/douyin/live-check/accounts").json()["data"]["items"][0]
+    conversations = _client().get(
+        f"/integrations/douyin/accounts/{account['account_id']}/conversations",
+        params={"account_open_id": account["account_open_id"]},
+    ).json()["items"]
+
+    assert conversations[0]["last_message"] == "conversation is visible"
+    assert conversations[0]["lead_status"] == "contact_not_found"
+
+
+def test_accounts_fallback_keeps_webhook_events_api_unchanged():
+    _insert_event(
+        open_id="customer_raw_unchanged",
+        account_open_id="account_raw_unchanged",
+        text="raw event still visible",
+        event_key="raw_unchanged",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        _client().get("/integrations/douyin/live-check/accounts")
+    data = _client().get("/webhook-events?page=1&page_size=5").json()["data"]
+
+    assert data["total"] == 1
+    assert data["items"][0]["event_key"] == "raw_unchanged"
+    assert data["items"][0]["message_text"] == "raw event still visible"

@@ -119,7 +119,8 @@ function accountIdFromOpenId(openId: string): number {
 function mapAuthorizedAccount(item: DouyinLiveCheckAccount): DouyinAccountItem | null {
   const openId = item.account_open_id || item.open_id;
   if (!openId) return null;
-  const id = item.account_id || item.douyin_account_id || item.id || accountIdFromOpenId(openId);
+  const numericAccountId = typeof item.account_id === "number" ? item.account_id : null;
+  const id = item.douyin_account_id || item.id || numericAccountId || accountIdFromOpenId(openId);
   return {
     id,
     tenant_id: TENANT_ID,
@@ -129,6 +130,9 @@ function mapAuthorizedAccount(item: DouyinLiveCheckAccount): DouyinAccountItem |
     avatar: item.avatar_url || item.avatar || null,
     unread_count: item.unread_count || 0,
     last_active_at: item.last_active_at || item.authorized_at || null,
+    source: item.source || null,
+    is_authorized: item.is_authorized,
+    has_events: item.has_events,
   };
 }
 
@@ -494,14 +498,14 @@ export default function DouyinAiCsWorkbenchPage() {
               <RefreshCwIcon size={15} className={loadingAccounts ? "animate-spin" : ""} />
             </button>
           </div>
-
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {loadingAccounts ? <EmptyState text="正在加载抖音号..." /> : null}
             {!loadingAccounts && accounts.length === 0 ? (
-              <EmptyState text="暂未接入抖音号，请点击下方添加抖音号扫码授权。" />
+              <EmptyState text="暂无抖音号：未发现授权账号或历史私信事件，请扫码授权。" />
             ) : null}
             {accounts.map((account) => {
               const active = account.id === selectedAccountId;
+              const isEventSource = account.source === "webhook_events";
               return (
                 <button
                   key={account.id}
@@ -519,8 +523,13 @@ export default function DouyinAiCsWorkbenchPage() {
                     <span className="block truncate text-sm font-semibold text-[#172033]">
                       {account.account_name}
                     </span>
+                    {isEventSource ? (
+                      <span className="mt-1 inline-flex max-w-full rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                        事件来源
+                      </span>
+                    ) : null}
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
-                      真实授权 · {statusText(account.status)} · {formatTime(account.last_active_at)}
+                      {isEventSource ? "来自历史私信事件" : `真实授权 · ${statusText(account.status)}`} · {formatTime(account.last_active_at)}
                     </span>
                   </span>
                   {account.unread_count ? (

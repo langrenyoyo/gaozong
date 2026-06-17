@@ -192,7 +192,7 @@ export interface DouyinLiveCheckAuthUrlData {
 
 export interface DouyinLiveCheckAccount {
   id?: number;
-  account_id?: number;
+  account_id?: number | string;
   douyin_account_id?: number;
   account_open_id?: string | null;
   open_id?: string | null;
@@ -206,6 +206,8 @@ export interface DouyinLiveCheckAccount {
   authorized_at?: string | null;
   unread_count?: number;
   source?: string | null;
+  is_authorized?: boolean;
+  has_events?: boolean;
 }
 
 export interface DouyinLiveCheckAccountsData {

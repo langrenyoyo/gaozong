@@ -19,11 +19,13 @@ from app.schemas import (
 from app.services.douyin_live_check_service import (
     build_auth_url,
     fetch_auth_url,
-    list_authorized_accounts,
     get_live_check_status,
     record_oauth_callback,
     record_webhook_observe,
     update_webhook_observe_forward_result,
+)
+from app.services.douyin_workbench_conversation_service import (
+    list_douyin_workbench_accounts_with_event_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,9 +71,11 @@ def status() -> DouyinLiveCheckStatusResponse:
 
 
 @router.get("/accounts", response_model=DouyinLiveCheckAccountsResponse)
-def accounts() -> DouyinLiveCheckAccountsResponse:
+def accounts(db: Session = Depends(get_db)) -> DouyinLiveCheckAccountsResponse:
     _ensure_enabled()
-    return DouyinLiveCheckAccountsResponse(data=list_authorized_accounts())
+    return DouyinLiveCheckAccountsResponse(
+        data=list_douyin_workbench_accounts_with_event_fallback(db)
+    )
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)
