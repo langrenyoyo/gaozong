@@ -1,0 +1,84 @@
+# 本地开发调试容器编排（9000 主后端 + 9100 抖音AI客服 + frontend 前端）
+#
+# 启动：  docker compose -f docker-compose.dev.yml up --build
+# 停止：  docker compose -f docker-compose.dev.yml down
+#
+# 重要边界：
+# - 19000 小高AI微信助手【不】在本编排中。它依赖宿主机 Windows 微信窗口、UIA、
+#   剪贴板、OCR、Windows GUI 自动化，必须在宿主机本地运行，不能放进容器。
+#   宿主机需要按 19000 本地 Agent 启动命令单独运行。
+# - LLM 相关环境变量只写占位（空值），不写真实 API Key。
+#   未配置 Key 时 9100 的 reply-suggestion 返回 manual_required=true、llm_used=false。
+# - docker-data/ 为本地运行数据目录，不应提交（已由 .gitignore / .dockerignore 忽略）。
+#
+# 说明：9000 与 9100 共用同一后端镜像（image 名相同，compose 只构建一次）。
+
+services:
+  # ===== 9000 主后端（AI小高线索）=====
+  auto-wechat-api:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    container_name: auto-wechat-api-dev
+    working_dir: /workspace
+    ports:
+      - "9000:9000"
+    volumes:
+      # 挂载全部源码用于开发热更新
+      - .:/workspace
+      # 9000 SQLite 数据持久化（覆盖上面的 /workspace/data，避免与本地 data/ 冲突）
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      - APP_ENV=development
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    restart: "no"
+
+  # ===== 9100 抖音AI客服（RAG / 回复建议）=====
+  xg-douyin-ai-cs:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    container_name: xg-douyin-ai-cs-dev
+    working_dir: /workspace
+    ports:
+      - "9100:9100"
+    volumes:
+      - .:/workspace
+      # 9100 SQLite RAG 库独立持久化
+      - ./docker-data/xg_douyin_ai_cs:/data
+    environment:
+      # RAG 数据库路径（挂载到独立 /data，与 9000 的 data 隔离）
+      - XG_DOUYIN_AI_CS_DB_PATH=/data/xg_douyin_ai_cs.db
+      # LLM 占位变量（空值=不启用真实 LLM，reply-suggestion 返回人工确认）
+      - XG_DOUYIN_AI_LLM_BASE_URL=
+      - XG_DOUYIN_AI_LLM_API_KEY=
+      - XG_DOUYIN_AI_LLM_CHAT_MODEL=
+      - XG_DOUYIN_AI_LLM_EMBEDDING_MODEL=
+      - XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS=30
+      - XG_DOUYIN_AI_LLM_TEMPERATURE=0.3
+    command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
+    restart: "no"
+
+  # ===== frontend 前端（React + Vite，5173）=====
+  auto-wechat-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.dev
+    container_name: auto-wechat-frontend-dev
+    working_dir: /workspace/frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      # 挂载前端源码（热更新）
+      - ./frontend:/workspace/frontend
+      # 匿名 volume 隔离 node_modules，避免宿主机 Windows 二进制覆盖容器 Linux 依赖
+      - /workspace/frontend/node_modules
+    environment:
+      # 这些 URL 给浏览器访问，本地开发用 127.0.0.1 正确
+      - VITE_API_BASE_URL=http://127.0.0.1:9000
+      - VITE_AUTO_WECHAT_API_BASE_URL=http://127.0.0.1:9000
+      - VITE_LOCAL_WECHAT_AGENT_BASE_URL=http://127.0.0.1:19000
+      - VITE_DOUYIN_AI_CS_API_BASE_URL=http://127.0.0.1:9100
+    restart: "no"

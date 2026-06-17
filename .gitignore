@@ -57,3 +57,6 @@ node_modules/
 .vite/
 frontend/dist/
 frontend/.vite/
+
+# Docker 本地开发运行数据（容器 SQLite 持久化，不应提交）
+docker-data/

@@ -1,0 +1,31 @@
+# 本地开发调试用后端镜像（9000 主后端 + 9100 抖音AI客服共用）
+#
+# 说明：
+# - 复用 requirements-docker.txt（Linux 兼容，已排除 Windows 专用的
+#   uiautomation / easyocr / torch / opencv 等 19000 微信自动化重型依赖）。
+# - 9000（app.main:app）与 9100（apps.xg_douyin_ai_cs.main:app）共用同一镜像，
+#   通过 docker-compose.dev.yml 的 command 区分启动入口与端口。
+# - 19000 小高AI微信助手不进入本镜像（依赖宿主机 Windows 微信窗口/UIA/OCR）。
+FROM python:3.10-slim
+
+# pip 国内镜像与超时配置（加速本地构建）
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+# 先装依赖（利用 Docker 层缓存，源码改动不触发重装）
+COPY requirements-docker.txt ./requirements-docker.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --prefer-binary -r requirements-docker.txt
+
+# 复制后端源码：9000 的 app/ 与 9100 的 apps/
+COPY app/ ./app/
+COPY apps/ ./apps/
+
+# 9000、9100 均通过 compose command 指定实际入口，这里仅给默认（9000）
+EXPOSE 9000 9100
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]

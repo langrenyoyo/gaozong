@@ -36,6 +36,7 @@ build/
 
 # 日志
 logs/
+*.log
 
 # Docker 相关（避免递归）
 docker-compose*.yml
@@ -48,3 +49,21 @@ test_cors_leads.json
 test_wechat_debug.json
 @AutomationLog.txt
 resources/
+
+# 环境变量（含密钥，禁止进入镜像；.env.example 无密钥可进）
+.env*
+!.env.example
+
+# 前端依赖与构建产物（不进镜像）
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# 本地数据库与运行数据（不进镜像）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+docker-data/
