@@ -1,0 +1,30 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "src": "src/pages/Index.tsx"
+    }
+  ],
+  "components": [
+    {
+      "name": "ChatPanel",
+      "src": "src/components/ChatPanel.tsx",
+      "route": "/preview/chat-panel"
+    },
+    {
+      "name": "ContactInfo",
+      "src": "src/components/ContactInfo.tsx",
+      "route": "/preview/contact-info"
+    },
+    {
+      "name": "ContactList",
+      "src": "src/components/ContactList.tsx",
+      "route": "/preview/contact-list"
+    },
+    {
+      "name": "SideNav",
+      "src": "src/components/SideNav.tsx",
+      "route": "/preview/side-nav"
+    }
+  ]
+}

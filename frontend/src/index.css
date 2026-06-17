@@ -1,0 +1,203 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@font-face {
+  font-family: "Barlow-Regular_2";
+  src: url("/fonts/Barlow-Regular_2.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  --font-sans: var(--fontSans);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --shadow-x: var(--shadow-x);
+  --shadow-y: var(--shadow-y);
+  --shadow-blur: var(--shadow-blur);
+  --shadow-spread: var(--shadow-spread);
+  --shadow-color: var(--shadow-color);
+  /* Custom app colors */
+  --color-nav-bg: var(--nav-bg);
+  --color-nav-active: var(--nav-active);
+  --color-chat-bubble-ai: var(--chat-bubble-ai);
+  --color-chat-bubble-user: var(--chat-bubble-user);
+  --color-tag-high: var(--tag-high);
+  --color-tag-manual: var(--tag-manual);
+  --color-tag-pending: var(--tag-pending);
+  --color-tag-registered: var(--tag-registered);
+  --color-ai-badge: var(--ai-badge);
+}
+
+:root {
+  --fontSans: "Outfit", "PingFang SC", "Microsoft YaHei", "Barlow-Regular_2", sans-serif;
+  --radius: 0.5rem;
+
+  --background: #f4f6f8;
+  --foreground: #1a1f2e;
+  --card: #ffffff;
+  --card-foreground: #1a1f2e;
+  --popover: #ffffff;
+  --popover-foreground: #1a1f2e;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #eff6ff;
+  --secondary-foreground: #1e3a6e;
+  --muted: #f1f5f9;
+  --muted-foreground: #8b95a6;
+  --accent: #e0edff;
+  --accent-foreground: #1e3a6e;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e4e8f0;
+  --input: #e8edf5;
+  --ring: #93c5fd;
+  --chart-1: #3b82f6;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #8b5cf6;
+  --chart-5: #ec4899;
+  --sidebar: #1a2035;
+  --sidebar-foreground: #c8d3e8;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #1a2035;
+  --sidebar-accent: #2d3a54;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #2a3449;
+  --sidebar-ring: #3b82f6;
+
+  /* Custom colors */
+  --nav-bg: #1a2035;
+  --nav-active: #2563eb;
+  --chat-bubble-ai: #1a2035;
+  --chat-bubble-user: #f1f5f9;
+  --tag-high: #10b981;
+  --tag-manual: #f59e0b;
+  --tag-pending: #ef4444;
+  --tag-registered: #8b5cf6;
+  --ai-badge: #2563eb;
+
+  --shadow-x: 0px;
+  --shadow-y: 2px;
+  --shadow-blur: 8px;
+  --shadow-spread: 0px;
+  --shadow-color: rgba(0, 0, 0, 0.06);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    min-width: 1024px;
+    overflow: hidden;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d1d9e6;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #b0bdd4;
+  }
+}
+
+@layer utilities {
+  .shadow-custom {
+    box-shadow: var(--shadow-x) var(--shadow-y) var(--shadow-blur) var(--shadow-spread) var(--shadow-color);
+  }
+  .shadow-panel {
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .shadow-card {
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  }
+  .transition-smooth {
+    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .chat-user-bubble {
+    background: #f1f5f9;
+    color: #1a1f2e;
+  }
+  .chat-ai-bubble {
+    background: #1a2035;
+    color: #e8edf8;
+  }
+  .status-dot-pulse {
+    animation: statusPulse 2s ease-in-out infinite;
+  }
+  @keyframes statusPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+  .shimmer {
+    background: linear-gradient(90deg, #f1f5f9 25%, #e8edf5 50%, #f1f5f9 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  .nav-item-active {
+    background: var(--nav-active);
+    color: white;
+  }
+}
