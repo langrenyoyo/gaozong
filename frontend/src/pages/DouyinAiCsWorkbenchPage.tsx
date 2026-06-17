@@ -6,12 +6,23 @@ import {
   ClipboardIcon,
   LoaderIcon,
   MessageSquareTextIcon,
+  PlusIcon,
+  QrCodeIcon,
   RefreshCwIcon,
   SearchIcon,
   SparklesIcon,
+  XIcon,
   UserRoundIcon,
 } from "lucide-react";
 
+import {
+  fetchDouyinLiveCheckAuthUrl,
+  fetchDouyinLiveCheckStatus,
+} from "../api/douyinLiveCheck";
+import type {
+  DouyinLiveCheckAuthUrlData,
+  DouyinLiveCheckStatusData,
+} from "../api/types";
 import {
   getDouyinAccountConversations,
   getDouyinAccounts,
@@ -37,6 +48,41 @@ const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }>
   { key: "has_contact", label: "已留资" },
   { key: "pending_follow_up", label: "待回访" },
 ];
+
+const LIVE_CHECK_DISABLED_MESSAGE =
+  "抖音授权联调未开启，请在后端配置 DY_LIVE_CHECK_ENABLED=true 后重启服务。";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function liveCheckErrorMessage(err: unknown): string {
+  if (!isRecord(err)) return "无法连接 9000 授权服务，请确认主后端已启动。";
+  const response = isRecord(err.response) ? err.response : null;
+  const status = typeof response?.status === "number" ? response.status : undefined;
+  const data = response && isRecord(response.data) ? response.data : null;
+  const rawDetail = data?.detail;
+  const detail =
+    typeof rawDetail === "string"
+      ? rawDetail
+      : isRecord(rawDetail)
+        ? JSON.stringify(rawDetail)
+        : "";
+
+  if (status === 403 && detail.toLowerCase().includes("disabled")) {
+    return LIVE_CHECK_DISABLED_MESSAGE;
+  }
+  if (status === 400 && detail) {
+    return `抖音授权配置不完整：${detail}`;
+  }
+  if (status === 502 && detail) {
+    return `抖音授权上游接口失败：${detail}`;
+  }
+  if (status) {
+    return `抖音授权接口请求失败，HTTP ${status}`;
+  }
+  return "无法连接 9000 授权服务，请确认主后端已启动。";
+}
 
 function formatTime(value?: string | null) {
   if (!value) return "-";
@@ -114,10 +160,20 @@ export default function DouyinAiCsWorkbenchPage() {
   const [error, setError] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilterKey>("all");
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authUrlInfo, setAuthUrlInfo] = useState<DouyinLiveCheckAuthUrlData | null>(null);
+  const [authStatus, setAuthStatus] = useState<DouyinLiveCheckStatusData | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authStatusLoading, setAuthStatusLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authFrameFailed, setAuthFrameFailed] = useState(false);
+  const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
+  const authCallback = authStatus?.last_oauth_callback || null;
+  const authAuthorized = Boolean(authCallback?.open_id);
   const latestMessage = useMemo(() => {
     const inbound = [...messages].reverse().find((item) => item.direction === "inbound");
     return inbound?.content || selectedConversation?.last_message || "";
@@ -225,6 +281,72 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, [filteredConversations, selectedConversationId]);
 
+  const refreshAuthStatus = useCallback(async () => {
+    setAuthStatusLoading(true);
+    try {
+      const result = await fetchDouyinLiveCheckStatus();
+      setAuthStatus(result.data);
+      if (result.data.last_oauth_callback?.error) {
+        setAuthError(result.data.last_oauth_callback.error_description || result.data.last_oauth_callback.error);
+      } else {
+        setAuthError(null);
+      }
+      return result.data;
+    } catch (err) {
+      const message = liveCheckErrorMessage(err);
+      setAuthError(message);
+      return null;
+    } finally {
+      setAuthStatusLoading(false);
+    }
+  }, []);
+
+  async function openAuthModal() {
+    setAuthModalOpen(true);
+    setAuthLoading(true);
+    setAuthError(null);
+    setAuthUrlInfo(null);
+    setAuthStatus(null);
+    setAuthFrameFailed(false);
+    setAuthAccountRefreshDone(false);
+    try {
+      const [authUrlResult] = await Promise.all([
+        fetchDouyinLiveCheckAuthUrl(),
+        refreshAuthStatus(),
+      ]);
+      setAuthUrlInfo(authUrlResult.data);
+      if (!authUrlResult.data.configured || !authUrlResult.data.auth_url) {
+        setAuthError(
+          authUrlResult.data.missing.length
+            ? `抖音授权配置不完整：${authUrlResult.data.missing.join("，")}`
+            : "未返回可用的抖音授权 URL。",
+        );
+      }
+    } catch (err) {
+      setAuthError(liveCheckErrorMessage(err));
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function refreshAccountsAfterAuth() {
+    await loadAccounts();
+    setAuthAccountRefreshDone(true);
+  }
+
+  useEffect(() => {
+    if (!authModalOpen) return undefined;
+    const timer = window.setInterval(() => {
+      void refreshAuthStatus();
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [authModalOpen, refreshAuthStatus]);
+
+  useEffect(() => {
+    if (!authModalOpen || !authAuthorized || authAccountRefreshDone) return;
+    void refreshAccountsAfterAuth();
+  }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
+
   async function generateReply() {
     if (!selectedAccount || !selectedConversation || !latestMessage) return;
     setGenerating(true);
@@ -318,6 +440,16 @@ export default function DouyinAiCsWorkbenchPage() {
                 </button>
               );
             })}
+          </div>
+
+          <div className="border-t border-[#edf1f6] p-3">
+            <button
+              onClick={() => void openAuthModal()}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <PlusIcon size={15} />
+              添加抖音号
+            </button>
           </div>
         </aside>
 
@@ -577,6 +709,144 @@ export default function DouyinAiCsWorkbenchPage() {
           )}
         </aside>
       </div>
+
+      {authModalOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+          <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-blue-50 text-blue-600">
+                  <QrCodeIcon size={18} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-[#172033]">添加抖音号</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    请使用抖音 App 扫码授权。授权页在系统内弹出，不会打开外部浏览器。
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuthModalOpen(false)}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                aria-label="关闭授权弹窗"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              {authError ? (
+                <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              ) : null}
+
+              {authAuthorized ? (
+                <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
+                  已检测到授权回调：{authCallback?.nick_name || "未返回昵称"} / {authCallback?.open_id}
+                  {authAccountRefreshDone ? "。抖音号列表已刷新。" : "。正在刷新抖音号列表..."}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                <div className="min-h-[420px] overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                  {authLoading ? (
+                    <div className="grid h-[420px] place-items-center text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-2">
+                        <LoaderIcon size={15} className="animate-spin" />
+                        正在获取抖音授权页面...
+                      </span>
+                    </div>
+                  ) : authUrlInfo?.auth_url ? (
+                    <>
+                      <iframe
+                        title="抖音扫码授权"
+                        src={authUrlInfo.auth_url}
+                        className="h-[420px] w-full bg-white"
+                        onError={() => setAuthFrameFailed(true)}
+                      />
+                      {authFrameFailed ? (
+                        <div className="border-t border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                          授权页可能禁止内嵌显示。当前页面不会自动打开外部浏览器，可手动复制下方授权 URL 到受控环境处理。
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="grid h-[420px] place-items-center px-6 text-center text-xs leading-6 text-slate-500">
+                      暂无可展示的授权页面，请检查 9000 授权配置。
+                    </div>
+                  )}
+                </div>
+
+                <aside className="rounded-md border border-slate-200 bg-white p-3 text-xs">
+                  <div className="font-bold text-[#172033]">授权状态</div>
+                  <div className="mt-3 space-y-2 text-slate-600">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>状态轮询</span>
+                      <span className="inline-flex items-center gap-1 font-semibold">
+                        {authStatusLoading ? <LoaderIcon size={12} className="animate-spin" /> : null}
+                        {authAuthorized ? "已授权" : "授权中"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>open_id</span>
+                      <span className="max-w-[132px] truncate text-right font-mono">
+                        {authCallback?.open_id || "-"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>昵称</span>
+                      <span className="max-w-[132px] truncate text-right">
+                        {authCallback?.nick_name || "-"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>接收时间</span>
+                      <span className="max-w-[132px] text-right">
+                        {formatTime(authCallback?.received_at)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {authUrlInfo?.auth_url ? (
+                    <div className="mt-4">
+                      <div className="mb-1 font-semibold text-slate-500">授权 URL</div>
+                      <div className="max-h-24 overflow-auto break-all rounded-md bg-slate-50 p-2 font-mono text-[10px] leading-4 text-slate-500">
+                        {authUrlInfo.auth_url}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 grid gap-2">
+                    <button
+                      onClick={() => void refreshAuthStatus()}
+                      disabled={authStatusLoading}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <RefreshCwIcon size={14} className={authStatusLoading ? "animate-spin" : ""} />
+                      刷新状态
+                    </button>
+                    <button
+                      onClick={() => void refreshAccountsAfterAuth()}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 font-semibold text-white hover:bg-blue-700"
+                    >
+                      <RefreshCwIcon size={14} className={loadingAccounts ? "animate-spin" : ""} />
+                      我已完成授权，刷新抖音号
+                    </button>
+                    <button
+                      onClick={() => setAuthModalOpen(false)}
+                      className="h-9 rounded-md border border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
