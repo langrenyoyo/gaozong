@@ -6,6 +6,7 @@ import argparse
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.routers import (
@@ -19,6 +20,11 @@ from apps.xg_douyin_ai_cs.routers import (
 
 logger = logging.getLogger(__name__)
 
+LOCAL_FRONTEND_ORIGINS = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+
 
 def create_app() -> FastAPI:
     """创建 9100 独立应用。
@@ -29,6 +35,13 @@ def create_app() -> FastAPI:
         title="抖音AI小高客服",
         version=settings.version,
         description="抖音AI小高客服 9100 独立功能系统 P0 骨架",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=LOCAL_FRONTEND_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.include_router(health.router)
     app.include_router(categories.router)

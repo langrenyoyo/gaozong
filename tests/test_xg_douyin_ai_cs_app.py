@@ -49,6 +49,26 @@ def test_health_ready_and_version(tmp_path, monkeypatch):
     assert data["port"] == 9100
 
 
+def test_local_frontend_origin_is_allowed_by_cors(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.get("/health", headers={"Origin": "http://127.0.0.1:5173"})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+    preflight = client.options(
+        "/rag/documents",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+    assert "POST" in preflight.headers["access-control-allow-methods"]
+
+
 def test_categories_returns_ten_fixed_items(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).get("/categories")
 
