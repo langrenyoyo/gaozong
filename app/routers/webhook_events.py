@@ -27,6 +27,9 @@ def list_events(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     keyword: str | None = None,
+    open_id: str | None = None,
+    conversation_short_id: str | None = None,
+    lead_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     """List raw webhook events without changing business state."""
@@ -41,6 +44,9 @@ def list_events(
             start_time=start_time,
             end_time=end_time,
             keyword=keyword,
+            open_id=open_id,
+            conversation_short_id=conversation_short_id,
+            lead_id=lead_id,
         ),
     )
     return {"success": True, "data": data, "message": "success"}
