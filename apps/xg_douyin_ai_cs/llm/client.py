@@ -42,7 +42,7 @@ class OpenAICompatibleClient:
         }
 
     def embed(self, text: str) -> dict:
-        if not self.config.configured:
+        if not self.config.real_embedding_configured:
             return {
                 "embedding": mock_embedding(text),
                 "model": "mock_for_test_only",
