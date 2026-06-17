@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
@@ -23,7 +23,7 @@ const App = () => {
             path="/"
             element={
               user ? (
-                <Index user={user} onLogout={() => setUser(null)} />
+                <Navigate to="/douyin-ai-cs" replace />
               ) : (
                 <Login onLogin={setUser} />
               )

@@ -7,7 +7,9 @@ import {
   LoaderIcon,
   MessageSquareTextIcon,
   RefreshCwIcon,
+  SearchIcon,
   SparklesIcon,
+  UserRoundIcon,
 } from "lucide-react";
 
 import {
@@ -25,6 +27,16 @@ import {
 
 const TENANT_ID = "demo_tenant";
 const MERCHANT_ID = "demo_bba";
+
+type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "has_contact" | "pending_follow_up";
+
+const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
+  { key: "all", label: "全部" },
+  { key: "manual_required", label: "需人工" },
+  { key: "high_intent", label: "高意向" },
+  { key: "has_contact", label: "已留资" },
+  { key: "pending_follow_up", label: "待回访" },
+];
 
 function formatTime(value?: string | null) {
   if (!value) return "-";
@@ -56,6 +68,26 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+function budgetText(profile: DouyinUserProfileResponse | null) {
+  if (!profile) return "-";
+  if (profile.budget_min && profile.budget_max) {
+    return `${profile.budget_min.toLocaleString()} - ${profile.budget_max.toLocaleString()}`;
+  }
+  if (profile.budget_min) return `${profile.budget_min.toLocaleString()} 起`;
+  if (profile.budget_max) return `${profile.budget_max.toLocaleString()} 内`;
+  return "暂无预算";
+}
+
+function conversationMatchesFilter(conversation: DouyinConversationItem, filter: ConversationFilterKey) {
+  const status = String(conversation.lead_status || "").toLowerCase();
+  if (filter === "all") return true;
+  if (filter === "manual_required") return status.includes("manual") || status.includes("人工");
+  if (filter === "high_intent") return status.includes("high") || status.includes("高意向");
+  if (filter === "has_contact") return status.includes("captured") || status.includes("已留资");
+  if (filter === "pending_follow_up") return status.includes("pending") || status.includes("待回访") || status.includes("待跟进");
+  return true;
+}
+
 function ErrorBanner({ message }: { message: string | null }) {
   if (!message) return null;
   return (
@@ -80,6 +112,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilterKey>("all");
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
@@ -88,6 +122,23 @@ export default function DouyinAiCsWorkbenchPage() {
     const inbound = [...messages].reverse().find((item) => item.direction === "inbound");
     return inbound?.content || selectedConversation?.last_message || "";
   }, [messages, selectedConversation]);
+  const filteredConversations = useMemo(() => {
+    const keyword = conversationSearch.trim().toLowerCase();
+    return conversations.filter((conversation) => {
+      const matchesKeyword =
+        !keyword ||
+        [
+          conversation.nickname,
+          conversation.last_message,
+          conversation.open_id,
+          conversation.lead_status || "",
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(keyword);
+      return matchesKeyword && conversationMatchesFilter(conversation, conversationFilter);
+    });
+  }, [conversationFilter, conversationSearch, conversations]);
 
   const loadAccounts = useCallback(async () => {
     setLoadingAccounts(true);
@@ -164,6 +215,16 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, [loadConversationDetail, selectedConversationId]);
 
+  useEffect(() => {
+    if (!filteredConversations.length) {
+      setSelectedConversationId(null);
+      return;
+    }
+    if (!selectedConversationId || !filteredConversations.some((item) => item.id === selectedConversationId)) {
+      setSelectedConversationId(filteredConversations[0].id);
+    }
+  }, [filteredConversations, selectedConversationId]);
+
   async function generateReply() {
     if (!selectedAccount || !selectedConversation || !latestMessage) return;
     setGenerating(true);
@@ -207,7 +268,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
       <ErrorBanner message={error} />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_340px_minmax(520px,1fr)] overflow-hidden p-4 pt-3">
+      <div className="grid min-h-0 flex-1 grid-cols-[260px_320px_minmax(460px,1fr)_260px] overflow-hidden p-4 pt-3">
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-l-lg border border-r-0 border-[#dfe5ee] bg-white">
           <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-4">
             <div>
@@ -261,16 +322,43 @@ export default function DouyinAiCsWorkbenchPage() {
         </aside>
 
         <aside className="flex min-h-0 flex-col overflow-hidden border border-r-0 border-[#dfe5ee] bg-white">
-          <div className="h-14 border-b border-[#edf1f6] px-4 py-3">
+          <div className="border-b border-[#edf1f6] px-4 py-3">
             <div className="text-sm font-bold text-[#172033]">会话列表</div>
             <div className="mt-0.5 truncate text-[11px] text-slate-500">
               {selectedAccount?.account_name || "未选择抖音号"}
+            </div>
+            <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-500">
+              <SearchIcon size={14} />
+              <input
+                value={conversationSearch}
+                onChange={(event) => setConversationSearch(event.target.value)}
+                placeholder="搜索客户、联系方式或消息"
+                className="min-w-0 flex-1 bg-transparent text-slate-700 outline-none placeholder:text-slate-400"
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {CONVERSATION_FILTERS.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setConversationFilter(item.key)}
+                  className={`h-7 rounded-md px-2 text-[11px] font-semibold transition ${
+                    conversationFilter === item.key
+                      ? "bg-blue-600 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {loadingConversations ? <EmptyState text="正在加载会话..." /> : null}
             {!loadingConversations && conversations.length === 0 ? <EmptyState text="暂无会话。" /> : null}
-            {conversations.map((conversation) => {
+            {!loadingConversations && conversations.length > 0 && filteredConversations.length === 0 ? (
+              <EmptyState text="没有符合条件的会话。" />
+            ) : null}
+            {filteredConversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;
               return (
                 <button
@@ -305,7 +393,7 @@ export default function DouyinAiCsWorkbenchPage() {
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-col overflow-hidden rounded-r-lg border border-[#dfe5ee] bg-white">
+        <section className="flex min-h-0 flex-col overflow-hidden border border-r-0 border-[#dfe5ee] bg-white">
           <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-5">
             <div className="min-w-0">
               <div className="truncate text-sm font-bold text-[#172033]">
@@ -429,6 +517,65 @@ export default function DouyinAiCsWorkbenchPage() {
             </div>
           </div>
         </section>
+
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-r-lg border border-[#dfe5ee] bg-white">
+          <div className="flex h-14 items-center gap-2 border-b border-[#edf1f6] px-4">
+            <span className="grid h-8 w-8 place-items-center rounded-md bg-blue-50 text-blue-600">
+              <UserRoundIcon size={16} />
+            </span>
+            <div>
+              <div className="text-sm font-bold text-[#172033]">客户画像</div>
+              <div className="text-[11px] text-slate-500">会话辅助信息</div>
+            </div>
+          </div>
+          {selectedConversation ? (
+            <div className="min-h-0 flex-1 overflow-auto p-4">
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="text-sm font-bold text-[#172033]">{selectedConversation.nickname}</div>
+                <div className="mt-1 text-[11px] text-slate-500">{selectedConversation.open_id}</div>
+              </div>
+
+              <div className="mt-4 space-y-3 text-xs">
+                <div>
+                  <div className="font-semibold text-slate-500">意向等级</div>
+                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {profile?.purchase_intent_level || "暂无客户画像"}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-500">品牌 / 车型</div>
+                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {profile ? `${profile.brand_preference || "未知品牌"} / ${profile.vehicle_preference || "未知车型"}` : "暂无客户画像"}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-500">预算</div>
+                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {budgetText(profile)}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-500">联系方式/留资状态</div>
+                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {profile?.lead_capture_suggested || selectedConversation.lead_status === "captured"
+                      ? "建议引导留资或已留资"
+                      : "暂无联系方式"}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-500">最近跟进建议</div>
+                  <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 leading-5 text-amber-800">
+                    {profile?.lead_capture_suggested
+                      ? "客户意向较明确，建议复制 AI 回复后由人工确认，引导留下联系方式。"
+                      : "先确认客户预算、品牌和车型偏好，再决定是否引导留资。"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <EmptyState text="暂无客户画像" />
+          )}
+        </aside>
       </div>
     </section>
   );

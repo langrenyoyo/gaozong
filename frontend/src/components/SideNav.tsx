@@ -31,7 +31,6 @@ interface SideNavProps {
 
 const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "douyin-ai-cs", label: "客服", expandedLabel: "抖音AI小高客服", path: "/douyin-ai-cs" },
-  { id: "chat", label: "线索", expandedLabel: "AI小高线索会话", path: "/" },
   { id: "douyin-ai-cs-test", label: "测试", expandedLabel: "抖音AI客服测试", path: "/douyin-ai-cs-test" },
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
   { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
