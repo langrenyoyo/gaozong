@@ -179,6 +179,14 @@ class DouyinLiveCheckStatusResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinLiveCheckAccountsResponse(BaseModel):
+    """Douyin live-check authorized account list response wrapper."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")

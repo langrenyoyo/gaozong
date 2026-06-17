@@ -258,6 +258,51 @@ def test_oauth_callback_records_summary_without_sensitive_values():
     assert "token-should-not-leak" not in json.dumps(status_resp.json(), ensure_ascii=False)
 
 
+def test_authorized_accounts_empty_before_oauth_callback():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/accounts")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["items"] == []
+    assert data["total"] == 0
+    assert data["source"] == "live_check_memory"
+
+
+def test_authorized_accounts_returns_oauth_callback_account_without_secret():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        client.get(
+            "/integrations/douyin/live-check/oauth-callback",
+            params={
+                "code": "code-1234567890",
+                "state": "state-abc",
+                "open_id": "open-account-001",
+                "nick_name": "授权抖音号",
+                "avatar": "https://avatar.example.com/a.png",
+                "access_token": "token-should-not-leak",
+            },
+        )
+        resp = client.get("/integrations/douyin/live-check/accounts")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    assert data["source"] == "live_check_memory"
+    account = data["items"][0]
+    assert account["account_open_id"] == "open-account-001"
+    assert account["open_id"] == "open-account-001"
+    assert account["account_name"] == "授权抖音号"
+    assert account["avatar_url"] == "https://avatar.example.com/a.png"
+    assert account["status"] == "active"
+    assert account["is_active"] is True
+    assert account["unread_count"] == 0
+    assert "token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
+
+
 def test_webhook_observe_records_headers_and_body_keys_without_token_leak():
     client = _client()
     payload = {

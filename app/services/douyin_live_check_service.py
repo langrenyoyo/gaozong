@@ -275,6 +275,8 @@ def record_oauth_callback(params: dict[str, Any]) -> dict[str, Any]:
         "code_preview": _preview(params.get("code")),
         "state": params.get("state"),
         "open_id": params.get("open_id"),
+        "nick_name": params.get("nick_name") or params.get("nickname"),
+        "avatar": params.get("avatar") or params.get("avatar_url"),
         "error": params.get("error"),
         "error_description": params.get("error_description"),
         "query_keys": sorted(
@@ -371,3 +373,33 @@ def get_live_check_status() -> dict[str, Any]:
         "last_oauth_callback": oauth_callback,
         "last_webhook_observe": webhook_observe,
     }
+
+
+def list_authorized_accounts() -> dict[str, Any]:
+    """Return authorized Douyin accounts observed by live-check OAuth callback."""
+    with _state_lock:
+        oauth_callback = dict(_last_oauth_callback) if _last_oauth_callback else None
+
+    if not oauth_callback or not oauth_callback.get("open_id") or oauth_callback.get("error"):
+        return {"items": [], "total": 0, "source": "live_check_memory"}
+
+    open_id = str(oauth_callback["open_id"])
+    account_id = int(hashlib.sha256(open_id.encode("utf-8")).hexdigest()[:8], 16)
+    item = {
+        "id": account_id,
+        "account_id": account_id,
+        "douyin_account_id": account_id,
+        "account_open_id": open_id,
+        "open_id": open_id,
+        "account_name": oauth_callback.get("nick_name") or f"已授权抖音号 {open_id[-4:]}",
+        "nickname": oauth_callback.get("nick_name"),
+        "avatar": oauth_callback.get("avatar"),
+        "avatar_url": oauth_callback.get("avatar"),
+        "status": "active",
+        "is_active": True,
+        "last_active_at": oauth_callback.get("received_at"),
+        "authorized_at": oauth_callback.get("received_at"),
+        "unread_count": 0,
+        "source": "live_check_oauth_callback",
+    }
+    return {"items": [item], "total": 1, "source": "live_check_memory"}

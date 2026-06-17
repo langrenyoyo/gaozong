@@ -16,16 +16,17 @@ import {
 } from "lucide-react";
 
 import {
+  fetchDouyinLiveCheckAccounts,
   fetchDouyinLiveCheckAuthUrl,
   fetchDouyinLiveCheckStatus,
 } from "../api/douyinLiveCheck";
 import type {
+  DouyinLiveCheckAccount,
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
 } from "../api/types";
 import {
   getDouyinAccountConversations,
-  getDouyinAccounts,
   getDouyinConversationMessages,
   getDouyinConversationProfile,
   getReplySuggestion,
@@ -106,6 +107,30 @@ function statusText(value?: string | null) {
   return value || "未知";
 }
 
+function accountIdFromOpenId(openId: string): number {
+  let hash = 0;
+  for (let index = 0; index < openId.length; index += 1) {
+    hash = (hash * 31 + openId.charCodeAt(index)) >>> 0;
+  }
+  return hash || 1;
+}
+
+function mapAuthorizedAccount(item: DouyinLiveCheckAccount): DouyinAccountItem | null {
+  const openId = item.account_open_id || item.open_id;
+  if (!openId) return null;
+  const id = item.account_id || item.douyin_account_id || item.id || accountIdFromOpenId(openId);
+  return {
+    id,
+    tenant_id: TENANT_ID,
+    account_name: item.account_name || item.nickname || `已授权抖音号 ${openId.slice(-4)}`,
+    account_open_id: openId,
+    status: item.status || (item.is_active === false ? "inactive" : "active"),
+    avatar: item.avatar_url || item.avatar || null,
+    unread_count: item.unread_count || 0,
+    last_active_at: item.last_active_at || item.authorized_at || null,
+  };
+}
+
 function EmptyState({ text }: { text: string }) {
   return (
     <div className="grid min-h-[180px] place-items-center px-6 text-center text-xs text-slate-500">
@@ -158,6 +183,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountListSource, setAccountListSource] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilterKey>("all");
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -196,17 +222,31 @@ export default function DouyinAiCsWorkbenchPage() {
     });
   }, [conversationFilter, conversationSearch, conversations]);
 
-  const loadAccounts = useCallback(async () => {
+  const loadAccounts = useCallback(async (preferredOpenId?: string | null) => {
     setLoadingAccounts(true);
     setError(null);
     try {
-      const data = await getDouyinAccounts();
-      setAccounts(data.items);
-      setSelectedAccountId((current) => current || data.items[0]?.id || null);
+      const data = await fetchDouyinLiveCheckAccounts();
+      const mapped = data.data.items
+        .map(mapAuthorizedAccount)
+        .filter((item): item is DouyinAccountItem => Boolean(item));
+      setAccounts(mapped);
+      setAccountListSource(data.data.source || "live_check");
+      setSelectedAccountId((current) => {
+        const preferred = preferredOpenId
+          ? mapped.find((item) => item.account_open_id === preferredOpenId)
+          : null;
+        if (preferred) return preferred.id;
+        if (current && mapped.some((item) => item.id === current)) return current;
+        return mapped[0]?.id || null;
+      });
+      return mapped;
     } catch (err) {
       setAccounts([]);
       setSelectedAccountId(null);
-      setError(err instanceof Error ? err.message : "抖音号列表加载失败");
+      setAccountListSource(null);
+      setError(liveCheckErrorMessage(err));
+      return [];
     } finally {
       setLoadingAccounts(false);
     }
@@ -330,7 +370,7 @@ export default function DouyinAiCsWorkbenchPage() {
   }
 
   async function refreshAccountsAfterAuth() {
-    await loadAccounts();
+    await loadAccounts(authCallback?.open_id);
     setAuthAccountRefreshDone(true);
   }
 
@@ -395,7 +435,9 @@ export default function DouyinAiCsWorkbenchPage() {
           <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-4">
             <div>
               <div className="text-sm font-bold text-[#172033]">抖音号</div>
-              <div className="text-[11px] text-slate-500">{TENANT_ID} / {MERCHANT_ID}</div>
+              <div className="text-[11px] text-slate-500">
+                {accountListSource ? "真实授权账号" : `${TENANT_ID} / ${MERCHANT_ID}`}
+              </div>
             </div>
             <button
               onClick={() => void loadAccounts()}
@@ -408,7 +450,9 @@ export default function DouyinAiCsWorkbenchPage() {
 
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {loadingAccounts ? <EmptyState text="正在加载抖音号..." /> : null}
-            {!loadingAccounts && accounts.length === 0 ? <EmptyState text="暂无抖音号，请确认 9100 已启动。" /> : null}
+            {!loadingAccounts && accounts.length === 0 ? (
+              <EmptyState text="暂未接入抖音号，请点击下方添加抖音号扫码授权。" />
+            ) : null}
             {accounts.map((account) => {
               const active = account.id === selectedAccountId;
               return (
@@ -429,7 +473,7 @@ export default function DouyinAiCsWorkbenchPage() {
                       {account.account_name}
                     </span>
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
-                      {statusText(account.status)} · {formatTime(account.last_active_at)}
+                      真实授权 · {statusText(account.status)} · {formatTime(account.last_active_at)}
                     </span>
                   </span>
                   {account.unread_count ? (

@@ -11,6 +11,7 @@ from app import config
 from app.database import get_db
 from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
+    DouyinLiveCheckAccountsResponse,
     DouyinLiveCheckAuthUrlResponse,
     DouyinLiveCheckObserveResponse,
     DouyinLiveCheckStatusResponse,
@@ -18,6 +19,7 @@ from app.schemas import (
 from app.services.douyin_live_check_service import (
     build_auth_url,
     fetch_auth_url,
+    list_authorized_accounts,
     get_live_check_status,
     record_oauth_callback,
     record_webhook_observe,
@@ -64,6 +66,12 @@ def oauth_callback(request: Request) -> DouyinLiveCheckObserveResponse:
 def status() -> DouyinLiveCheckStatusResponse:
     _ensure_enabled()
     return DouyinLiveCheckStatusResponse(data=get_live_check_status())
+
+
+@router.get("/accounts", response_model=DouyinLiveCheckAccountsResponse)
+def accounts() -> DouyinLiveCheckAccountsResponse:
+    _ensure_enabled()
+    return DouyinLiveCheckAccountsResponse(data=list_authorized_accounts())
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)

@@ -190,6 +190,30 @@ export interface DouyinLiveCheckAuthUrlData {
   callback_url: string | null;
 }
 
+export interface DouyinLiveCheckAccount {
+  id?: number;
+  account_id?: number;
+  douyin_account_id?: number;
+  account_open_id?: string | null;
+  open_id?: string | null;
+  account_name?: string | null;
+  nickname?: string | null;
+  avatar?: string | null;
+  avatar_url?: string | null;
+  status?: string | null;
+  is_active?: boolean;
+  last_active_at?: string | null;
+  authorized_at?: string | null;
+  unread_count?: number;
+  source?: string | null;
+}
+
+export interface DouyinLiveCheckAccountsData {
+  items: DouyinLiveCheckAccount[];
+  total: number;
+  source?: string;
+}
+
 export interface DouyinLiveCheckStatusResponse {
   success: boolean;
   data: DouyinLiveCheckStatusData;
@@ -199,6 +223,12 @@ export interface DouyinLiveCheckStatusResponse {
 export interface DouyinLiveCheckAuthUrlResponse {
   success: boolean;
   data: DouyinLiveCheckAuthUrlData;
+  message: string;
+}
+
+export interface DouyinLiveCheckAccountsResponse {
+  success: boolean;
+  data: DouyinLiveCheckAccountsData;
   message: string;
 }
 
