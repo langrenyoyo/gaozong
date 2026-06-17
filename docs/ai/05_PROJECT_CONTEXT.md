@@ -20,8 +20,10 @@
 
 ```text
 P0 与 DB-MIG 文档阶段已完成。
-当前下一步应进入 P2-A：迁移脚本骨架与副本 dry-run。
-P2-A 前必须遵守阶段目标总控。
+P2-A 迁移脚本骨架与副本 dry-run / apply 验证已完成（13 测试通过，748 全量回归通过，未改 models.py、未碰主线库结构）。
+P2-A-END WAL/hash 验收口径修正已完成。
+当前下一步应进入 P2-C：开发测试主线库正式迁移（先迁库，再补 models.py）。
+P2-C 前必须遵守阶段目标总控。
 当前 data/auto_wechat.db 是开发测试库，不是生产库。
 迁移体系按准生产规范设计，方便未来真实客户数据上线后沿用。
 ```
@@ -2259,7 +2261,8 @@ check_scheduler（后台线程，间隔 check_interval_minutes 默认 5min）
 
 1. **数据库迁移体系（HIGH，P2-A 已完成、P2-B/C 待确认执行）**：当前使用 `Base.metadata.create_all`，对已存在表不会自动 ALTER；已有数据的主库新增字段会导致旧库缺列报错。
    - **已完成**：DB-MIG 迁移方案（`docs/ai/14_DB_MIGRATION_PLAN.md`）；P2-A 迁移脚本骨架（`migrations/migrate_sqlite.py` + `versions/0001_prd_base_fields.sql`），已用 `sqlite3 backup()` 生成副本并完成 dry-run / apply / 幂等验证，13 项迁移测试通过，全量回归 748 passed，未改 `models.py`、未碰主线库结构。
-   - **待确认**：P2-B（`models.py` 字段补齐）、P2-C（主线 `data/auto_wechat.db` 正式迁移，需 `--allow-mainline`）。
+   - **待确认（执行顺序已调整）**：先 **P2-C**（主线 `data/auto_wechat.db` 正式迁移，需 `--allow-mainline`），再 **P2-B**（`models.py` 字段补齐）。
+   - **顺序说明（2026-06-15 调整）**：P2-C 先于 P2-B。原因：若先改 `models.py` 而主线库未迁移，SQLAlchemy 模型会认为新字段已存在但实际表无此列，运行接口 / 查询时缺列报错。先迁移主线库落出新列，再补 `models.py`，确保数据库结构与模型同步、不领先。
    - **验收口径（WAL 模式，重要）**：`data/auto_wechat.db` 是开发测试库（非生产库），SQLite 处于 WAL 模式。`.db` 文件 hash / mtime **不能**作为「主线未变化」的唯一证据——WAL checkpoint 会把历史 `-wal` 帧合并进主 `.db`，导致 hash 变化但业务数据 / 结构完全不变（P2-A 实测确认，详见 `14_DB_MIGRATION_PLAN.md` §0c-1、`P0_DEV_PLAN.md` §1.5）。后续 P2-C 验收**必须以结构对比 + 数据语义对比为主**（`PRAGMA table_info` / 行数 / 关键字段抽样 / `reassign_count` 默认值 / 新增列存在性），文件 hash 仅作辅助参考。P2-C 前如需收缩 WAL，单独确认后再执行 checkpoint，迁移阶段不主动 checkpoint。
 
 2. **生产验签切换（HIGH）**：线上 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`，且 `APP_ENV` 实际值、GMP 真实回调是否带签名头需复核（第 28 章历史结论：线上不带签名头）。切换 production + DY_SECRET_KEY 前必须确认，否则会导致线上 401、事件不入库。

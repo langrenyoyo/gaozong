@@ -98,6 +98,9 @@ python migrations/migrate_sqlite.py --db-path data/auto_wechat.db.migtest --appl
 
 ## 阶段定位
 
-- **P2-A**（本阶段）：迁移脚本骨架 + 副本 dry-run / apply 验证（已完成 ✅）。
-- **P2-B**：确认 P2-A 安全后，才允许 `models.py` 字段补齐。
-- **P2-C**：确认 P2-B 后，才允许对主线 `data/auto_wechat.db` 执行正式迁移（`--allow-mainline`）。
+- **P2-A**：迁移脚本骨架 + 副本 dry-run / apply 验证（已完成 ✅）。
+- **P2-A-END**：WAL/hash 验收口径修正（已完成 ✅）。
+- **P2-C**（下一步）：确认 P2-A 安全后，对主线 `data/auto_wechat.db` 执行正式迁移（`--allow-mainline`）。**先于 P2-B**。
+- **P2-B**：确认 P2-C 主线库已迁出新列后，才允许 `models.py` 字段补齐。**后于 P2-C**。
+
+> **顺序说明**：P2-C 先于 P2-B。原因：若先改 `models.py` 而主线库未迁移，SQLAlchemy 模型会认为新字段已存在但实际表无此列，运行时缺列报错。先迁库再补模型，确保数据库结构与模型同步。
