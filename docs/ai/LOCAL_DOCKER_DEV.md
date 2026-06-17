@@ -107,6 +107,8 @@ curl -X POST http://127.0.0.1:9100/douyin/conversations/1/reply-suggestion ^
 
 如果复用 OpenRouter 等 chat provider，建议先设置 `XG_DOUYIN_AI_LLM_EMBEDDING_ENABLED=false`，只验证 chat 智能回复；确认 provider 支持 `/embeddings` 后，再启用真实 embedding。
 
+Docker Compose 会从宿主机环境变量或根目录 `.env` 读取 `XG_DOUYIN_AI_LLM_*` 并透传给 9100 容器。真实 API Key 不要写进 `docker-compose.dev.yml`，也不要提交 `.env`。OpenRouter 只做 chat 联调时，建议设置 `XG_DOUYIN_AI_LLM_EMBEDDING_ENABLED=false`。
+
 ## 6. 数据目录
 
 `docker-data/` 是本地运行数据目录，不要提交。

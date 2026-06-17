@@ -50,14 +50,16 @@ services:
       - ./docker-data/xg_douyin_ai_cs:/data
     environment:
       # RAG 数据库路径（挂载到独立 /data，与 9000 的 data 隔离）
-      - XG_DOUYIN_AI_CS_DB_PATH=/data/xg_douyin_ai_cs.db
-      # LLM 占位变量（空值=不启用真实 LLM，reply-suggestion 返回人工确认）
-      - XG_DOUYIN_AI_LLM_BASE_URL=
-      - XG_DOUYIN_AI_LLM_API_KEY=
-      - XG_DOUYIN_AI_LLM_CHAT_MODEL=
-      - XG_DOUYIN_AI_LLM_EMBEDDING_MODEL=
-      - XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS=30
-      - XG_DOUYIN_AI_LLM_TEMPERATURE=0.3
+      XG_DOUYIN_AI_CS_DB_PATH: /data/xg_douyin_ai_cs.db
+      # LLM 变量从宿主机环境变量或根目录 .env 透传；不要把真实 Key 写入 compose。
+      XG_DOUYIN_AI_LLM_BASE_URL: "${XG_DOUYIN_AI_LLM_BASE_URL:-}"
+      XG_DOUYIN_AI_LLM_API_KEY: "${XG_DOUYIN_AI_LLM_API_KEY:-}"
+      XG_DOUYIN_AI_LLM_CHAT_MODEL: "${XG_DOUYIN_AI_LLM_CHAT_MODEL:-}"
+      XG_DOUYIN_AI_LLM_EMBEDDING_MODEL: "${XG_DOUYIN_AI_LLM_EMBEDDING_MODEL:-}"
+      XG_DOUYIN_AI_LLM_EMBEDDING_ENABLED: "${XG_DOUYIN_AI_LLM_EMBEDDING_ENABLED:-false}"
+      XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS: "${XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS:-30}"
+      XG_DOUYIN_AI_LLM_TEMPERATURE: "${XG_DOUYIN_AI_LLM_TEMPERATURE:-0.3}"
+      PYTHONUNBUFFERED: "1"
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
     restart: "no"
 
