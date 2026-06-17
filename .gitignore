@@ -27,6 +27,14 @@ logs/
 *.log
 @AutomationLog.txt
 
+# xg_douyin_ai_cs local runtime data
+apps/xg_douyin_ai_cs/data/*.db
+apps/xg_douyin_ai_cs/data/*.db-journal
+apps/xg_douyin_ai_cs/data/*.db-wal
+apps/xg_douyin_ai_cs/data/*.db-shm
+apps/xg_douyin_ai_cs/data/*.sqlite
+apps/xg_douyin_ai_cs/data/*.sqlite3
+
 # Generated local agent build info
 app/local_agent_build_info.py
 
@@ -43,3 +51,9 @@ CLAUDE.md
 # Test/debug temporary files
 test_cors_leads.json
 test_wechat_debug.json
+
+# Frontend（React/Vite 构建产物与缓存）
+node_modules/
+.vite/
+frontend/dist/
+frontend/.vite/
