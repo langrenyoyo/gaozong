@@ -182,6 +182,43 @@ def test_list_webhook_events_infers_non_lead_event():
     assert item["lead_action"] == "non_lead_event"
 
 
+def test_list_webhook_events_exposes_profile_summary_from_user_infos():
+    _insert_event(
+        event_key="profile_001",
+        from_user_id="customer_open_001",
+        to_user_id="account_open_001",
+        raw_payload=_payload(
+            from_user_id="customer_open_001",
+            to_user_id="account_open_001",
+            content={
+                **_content(text="你好，先了解一下", conversation_short_id="profile_conv"),
+                "user_infos": [
+                    {
+                        "open_id": "customer_open_001",
+                        "nick_name": "抖音客户小赵",
+                        "avatar": "https://example.com/customer.jpg",
+                    },
+                    {
+                        "open_id": "account_open_001",
+                        "nick_name": "老高企业号",
+                        "avatar": "https://example.com/account.jpg",
+                    },
+                ],
+            },
+        ),
+    )
+    client = _client()
+
+    item = client.get("/webhook-events").json()["data"]["items"][0]
+
+    assert item["nick_name"] == "抖音客户小赵"
+    assert item["avatar"] == "https://example.com/customer.jpg"
+    assert item["from_user_nick_name"] == "抖音客户小赵"
+    assert item["from_user_avatar"] == "https://example.com/customer.jpg"
+    assert item["to_user_nick_name"] == "老高企业号"
+    assert item["to_user_avatar"] == "https://example.com/account.jpg"
+
+
 def test_list_webhook_events_infers_invalid_content():
     _insert_event(
         event_key="bad_content_001",
@@ -321,6 +358,137 @@ def test_list_webhook_events_filters_keyword_event_key_or_raw_body():
 
     assert [item["event_key"] for item in key_items] == ["keyword_key_001"]
     assert [item["event_key"] for item in raw_items] == ["other_key_001"]
+
+
+def test_list_webhook_events_filters_open_id_across_columns_body_and_content():
+    target = "_0002ag2OYRK27wlUoJJb0yVG0CkU_Jn8Eib"
+    _insert_event(event_key="match_from", from_user_id=target)
+    _insert_event(event_key="match_to", to_user_id=target)
+    _insert_event(
+        event_key="match_body_open",
+        from_user_id="body_open_user",
+        raw_payload={
+            **_payload(from_user_id="body_open_user"),
+            "open_id": target,
+        },
+    )
+    _insert_event(
+        event_key="match_body_account",
+        from_user_id="body_account_user",
+        raw_payload={
+            **_payload(from_user_id="body_account_user"),
+            "account_open_id": target,
+        },
+    )
+    _insert_event(
+        event_key="match_content_open",
+        from_user_id="content_open_user",
+        raw_payload=_payload(
+            from_user_id="content_open_user",
+            content={**_content(server_message_id="content_open_msg"), "open_id": target},
+        ),
+    )
+    _insert_event(
+        event_key="match_content_account",
+        from_user_id="content_account_user",
+        raw_payload={
+            **_payload(from_user_id="content_account_user"),
+            "content": {**_content(server_message_id="content_account_msg"), "account_open_id": target},
+        },
+    )
+    _insert_event(
+        event_key="not_match_text_only",
+        from_user_id="other_user",
+        raw_payload=_payload(
+            from_user_id="other_user",
+            content=_content(text=f"文本里提到 {target}，但不是 open_id 字段", server_message_id="not_match_msg"),
+        ),
+    )
+    client = _client()
+
+    items = client.get(f"/webhook-events?open_id={target}&page_size=20").json()["data"]["items"]
+
+    assert [item["event_key"] for item in items] == [
+        "match_content_account",
+        "match_content_open",
+        "match_body_account",
+        "match_body_open",
+        "match_to",
+        "match_from",
+    ]
+    by_key = {item["event_key"]: item for item in items}
+    assert by_key["match_body_open"]["body_open_id"] == target
+    assert by_key["match_body_account"]["body_account_open_id"] == target
+    assert by_key["match_content_open"]["content_open_id"] == target
+    assert by_key["match_content_account"]["content_account_open_id"] == target
+
+
+def test_list_webhook_events_filters_conversation_short_id():
+    _insert_event(
+        event_key="conv_match_receive",
+        raw_payload=_payload(
+            event="im_receive_msg",
+            content=_content(
+                text="wx convmatch",
+                server_message_id="conv_match_msg_1",
+                conversation_short_id="conv_target",
+            ),
+        ),
+        created_at=datetime.now() - timedelta(minutes=2),
+    )
+    _insert_event(
+        event="im_send_msg",
+        event_key="conv_match_send",
+        raw_payload=_payload(
+            event="im_send_msg",
+            content=_content(
+                text="您好，已收到",
+                server_message_id="conv_match_msg_2",
+                conversation_short_id="conv_target",
+            ),
+        ),
+        created_at=datetime.now() - timedelta(minutes=1),
+    )
+    _insert_event(
+        event_key="conv_other",
+        raw_payload=_payload(
+            content=_content(
+                text="wx other",
+                server_message_id="conv_other_msg",
+                conversation_short_id="conv_other",
+            ),
+        ),
+    )
+    client = _client()
+
+    data = client.get("/webhook-events?conversation_short_id=conv_target&page_size=20").json()["data"]
+
+    assert data["total"] == 2
+    assert [item["event_key"] for item in data["items"]] == ["conv_match_send", "conv_match_receive"]
+    assert {item["conversation_short_id"] for item in data["items"]} == {"conv_target"}
+
+
+def test_list_webhook_events_filters_lead_id():
+    lead_id = _insert_lead()
+    _insert_event(event_key="lead_match", lead_id=lead_id)
+    _insert_event(event_key="lead_none", lead_id=None)
+    _insert_event(event_key="lead_other", lead_id=lead_id + 1)
+    client = _client()
+
+    data = client.get(f"/webhook-events?lead_id={lead_id}&page_size=20").json()["data"]
+
+    assert data["total"] == 1
+    assert data["items"][0]["event_key"] == "lead_match"
+    assert data["items"][0]["lead_id"] == lead_id
+
+
+def test_list_webhook_events_filters_conversation_empty_result():
+    _insert_event(event_key="conv_existing")
+    client = _client()
+
+    data = client.get("/webhook-events?conversation_short_id=missing_conv&page_size=20").json()["data"]
+
+    assert data == {"page": 1, "page_size": 20, "total": 0, "items": []}
 
 
 def test_get_webhook_event_detail_exists():

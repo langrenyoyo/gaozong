@@ -23,6 +23,9 @@ class WebhookEventFilters:
     start_time: datetime | None = None
     end_time: datetime | None = None
     keyword: str | None = None
+    open_id: str | None = None
+    conversation_short_id: str | None = None
+    lead_id: int | None = None
 
 
 def list_webhook_events(db: Session, filters: WebhookEventFilters) -> dict[str, Any]:
@@ -34,10 +37,18 @@ def list_webhook_events(db: Session, filters: WebhookEventFilters) -> dict[str, 
     query = _apply_db_filters(query, filters)
 
     rows = query.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc()).all()
+    if filters.open_id:
+        rows = [row for row in rows if _row_matches_open_id(row, filters.open_id)]
     enriched = [_to_event_dict(row, include_raw_body=False) for row in rows]
 
     if filters.lead_action:
         enriched = [item for item in enriched if item["lead_action"] == filters.lead_action]
+    if filters.conversation_short_id:
+        enriched = [
+            item
+            for item in enriched
+            if item["conversation_short_id"] == filters.conversation_short_id
+        ]
 
     total = len(enriched)
     start = (page - 1) * page_size
@@ -70,17 +81,32 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
     if filters.keyword:
         like = f"%{filters.keyword}%"
         query = query.filter(or_(DouyinWebhookEvent.event_key.like(like), DouyinWebhookEvent.raw_body.like(like)))
+    if filters.lead_id is not None:
+        query = query.filter(DouyinWebhookEvent.lead_id == filters.lead_id)
+    if filters.open_id:
+        like = f"%{filters.open_id}%"
+        query = query.filter(
+            or_(
+                DouyinWebhookEvent.from_user_id == filters.open_id,
+                DouyinWebhookEvent.to_user_id == filters.open_id,
+                DouyinWebhookEvent.raw_body.like(like),
+            )
+        )
     return query
 
 
 def _to_event_dict(row: DouyinWebhookEvent, *, include_raw_body: bool) -> dict[str, Any]:
     raw_payload, raw_error = _parse_raw_body(row.raw_body)
     summary = _summarize_payload(row, raw_payload, raw_error)
+    open_id_fields = _extract_open_id_fields(raw_payload)
+    profile_fields = _extract_profile_fields(row, raw_payload)
     data = {
         "id": row.id,
         "event": row.event,
         "from_user_id": row.from_user_id,
         "to_user_id": row.to_user_id,
+        **open_id_fields,
+        **profile_fields,
         "event_key": row.event_key,
         "is_duplicate": bool(row.is_duplicate),
         "lead_id": row.lead_id,
@@ -210,3 +236,127 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _extract_open_id_fields(payload: dict[str, Any] | None) -> dict[str, str | None]:
+    if payload is None:
+        content: dict[str, Any] = {}
+    else:
+        content = parse_content(payload.get("content"))
+    return {
+        "body_open_id": _optional_str(payload.get("open_id")) if payload else None,
+        "body_account_open_id": _optional_str(payload.get("account_open_id")) if payload else None,
+        "content_open_id": _optional_str(content.get("open_id")),
+        "content_account_open_id": _optional_str(content.get("account_open_id")),
+    }
+
+
+def _profile_from_record(record: Any) -> dict[str, str | None]:
+    if not isinstance(record, dict):
+        return {"nick_name": None, "avatar": None}
+    return {
+        "nick_name": _optional_str(record.get("nick_name") or record.get("nickname")),
+        "avatar": _optional_str(record.get("avatar") or record.get("avatar_url")),
+    }
+
+
+def _merge_profile(
+    profiles: dict[str, dict[str, str | None]],
+    open_id: Any,
+    profile: dict[str, str | None],
+) -> None:
+    open_id_text = _optional_str(open_id)
+    if not open_id_text or not (profile.get("nick_name") or profile.get("avatar")):
+        return
+    current = profiles.get(open_id_text, {"nick_name": None, "avatar": None})
+    profiles[open_id_text] = {
+        "nick_name": current.get("nick_name") or profile.get("nick_name"),
+        "avatar": current.get("avatar") or profile.get("avatar"),
+    }
+
+
+def _profile_for_open_id(
+    profiles: dict[str, dict[str, str | None]],
+    open_id: Any,
+) -> dict[str, str | None]:
+    open_id_text = _optional_str(open_id)
+    if open_id_text and open_id_text in profiles:
+        return profiles[open_id_text]
+    return {"nick_name": None, "avatar": None}
+
+
+def _customer_open_id(row: DouyinWebhookEvent, payload: dict[str, Any] | None, content: dict[str, Any]) -> str | None:
+    if row.event == "im_receive_msg" and row.from_user_id:
+        return row.from_user_id
+    if row.event == "im_send_msg" and row.to_user_id:
+        return row.to_user_id
+    return (
+        _optional_str(content.get("open_id"))
+        or (_optional_str(payload.get("open_id")) if payload else None)
+        or row.from_user_id
+    )
+
+
+def _extract_profile_fields(
+    row: DouyinWebhookEvent,
+    payload: dict[str, Any] | None,
+) -> dict[str, str | None]:
+    content = parse_content(payload.get("content")) if payload else {}
+    profiles: dict[str, dict[str, str | None]] = {}
+
+    if payload:
+        _merge_profile(
+            profiles,
+            payload.get("open_id") or row.from_user_id,
+            _profile_from_record(payload),
+        )
+    _merge_profile(
+        profiles,
+        content.get("open_id") or row.from_user_id,
+        _profile_from_record(content),
+    )
+
+    user_infos = content.get("user_infos")
+    if not isinstance(user_infos, list) and payload:
+        user_infos = payload.get("user_infos")
+    if isinstance(user_infos, list):
+        for user in user_infos:
+            if isinstance(user, dict):
+                _merge_profile(profiles, user.get("open_id"), _profile_from_record(user))
+
+    customer_profile = _profile_for_open_id(profiles, _customer_open_id(row, payload, content))
+    from_profile = _profile_for_open_id(profiles, row.from_user_id)
+    to_profile = _profile_for_open_id(profiles, row.to_user_id)
+    return {
+        "nick_name": customer_profile.get("nick_name"),
+        "avatar": customer_profile.get("avatar"),
+        "from_user_nick_name": from_profile.get("nick_name"),
+        "from_user_avatar": from_profile.get("avatar"),
+        "to_user_nick_name": to_profile.get("nick_name"),
+        "to_user_avatar": to_profile.get("avatar"),
+    }
+
+
+def _value_matches_open_id(value: Any, open_id: str) -> bool:
+    return value is not None and str(value) == open_id
+
+
+def _row_matches_open_id(row: DouyinWebhookEvent, open_id: str) -> bool:
+    if _value_matches_open_id(row.from_user_id, open_id):
+        return True
+    if _value_matches_open_id(row.to_user_id, open_id):
+        return True
+
+    payload, raw_error = _parse_raw_body(row.raw_body)
+    if raw_error or payload is None:
+        return False
+    if _value_matches_open_id(payload.get("open_id"), open_id):
+        return True
+    if _value_matches_open_id(payload.get("account_open_id"), open_id):
+        return True
+
+    content = parse_content(payload.get("content"))
+    return (
+        _value_matches_open_id(content.get("open_id"), open_id)
+        or _value_matches_open_id(content.get("account_open_id"), open_id)
+    )

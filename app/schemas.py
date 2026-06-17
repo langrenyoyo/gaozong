@@ -40,6 +40,16 @@ class WebhookEventOut(BaseModel):
     event: Optional[str] = None
     from_user_id: Optional[str] = None
     to_user_id: Optional[str] = None
+    body_open_id: Optional[str] = None
+    body_account_open_id: Optional[str] = None
+    content_open_id: Optional[str] = None
+    content_account_open_id: Optional[str] = None
+    nick_name: Optional[str] = None
+    avatar: Optional[str] = None
+    from_user_nick_name: Optional[str] = None
+    from_user_avatar: Optional[str] = None
+    to_user_nick_name: Optional[str] = None
+    to_user_avatar: Optional[str] = None
     event_key: Optional[str] = None
     is_duplicate: bool = False
     lead_id: Optional[int] = None
