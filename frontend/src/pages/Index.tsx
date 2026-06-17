@@ -21,6 +21,7 @@ import ComputeCenter from "./ComputeCenter";
 import LeadsModulePage from "./LeadsModulePage";
 import MaterialLibrary from "./MaterialLibrary";
 import WechatAgent from "./WechatAgent";
+import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
 import SuperMerchantManagement from "./SuperMerchantManagement";
@@ -641,11 +642,13 @@ function DouyinConnectEmpty({ onConnect }: { onConnect: () => void }) {
 export default function Index({
   user,
   onLogout = () => {},
+  initialActiveNav = "chat",
 }: {
   user: AppUser;
   onLogout?: () => void;
+  initialActiveNav?: string;
 }) {
-  const [activeNav, setActiveNav] = useState("chat");
+  const [activeNav, setActiveNav] = useState(initialActiveNav);
   const [superActiveNav, setSuperActiveNav] = useState("merchant-agent");
   const [isNavExpanded, setIsNavExpanded] = useState(true);
   const [selectedContactId, setSelectedContactId] = useState("");
@@ -750,6 +753,8 @@ export default function Index({
           </>
         ) : activeNav === "leads" ? (
           <LeadsModulePage />
+        ) : activeNav === "douyin-ai-cs-test" ? (
+          <DouyinAiCsTestPage />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
         ) : activeNav === "ai-edit" ? (

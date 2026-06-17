@@ -29,6 +29,16 @@ const App = () => {
               )
             }
           />
+          <Route
+            path="/douyin-ai-cs-test"
+            element={
+              user ? (
+                <Index user={user} onLogout={() => setUser(null)} initialActiveNav="douyin-ai-cs-test" />
+              ) : (
+                <Login onLogin={setUser} />
+              )
+            }
+          />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
