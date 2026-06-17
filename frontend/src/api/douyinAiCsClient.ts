@@ -1,4 +1,5 @@
 import axios, { AxiosError } from "axios";
+import apiClient from "./client";
 
 export const DOUYIN_AI_CS_API_BASE_URL =
   import.meta.env.VITE_DOUYIN_AI_CS_API_BASE_URL || "http://127.0.0.1:9100";
@@ -49,10 +50,15 @@ export interface DouyinAgentListResponse {
 }
 
 export interface DouyinConversationItem {
-  id: number;
-  account_id: number;
+  id: string | number;
+  account_id: string | number;
+  conversation_id?: string | number;
+  conversation_key?: string;
+  conversation_short_id?: string | null;
+  account_open_id?: string;
   open_id: string;
   nickname: string;
+  avatar?: string | null;
   last_message: string;
   last_message_at: string;
   unread_count: number;
@@ -64,11 +70,15 @@ export interface DouyinConversationListResponse {
 }
 
 export interface DouyinMessageItem {
-  id: number;
-  conversation_id: number;
+  id: string | number;
+  conversation_id: string | number;
+  conversation_key?: string;
   direction: "inbound" | "outbound" | "system" | string;
+  sender_type?: "customer" | "staff" | "system" | string;
   content: string;
   created_at: string;
+  raw_event_id?: number;
+  server_message_id?: string | null;
 }
 
 export interface DouyinMessageListResponse {
@@ -262,22 +272,22 @@ export async function getDouyinAccountAgents(
 
 export async function getDouyinAccountConversations(
   accountId: string | number,
+  params?: { account_open_id?: string },
 ): Promise<DouyinConversationListResponse> {
-  return requestDouyinAiCs(
-    douyinAiCsClient.get<DouyinConversationListResponse>(
-      `/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
-    ),
-  );
+  return apiClient.get(
+    `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
+    { params },
+  ) as unknown as Promise<DouyinConversationListResponse>;
 }
 
 export async function getDouyinConversationMessages(
   conversationId: string | number,
+  params?: { account_open_id?: string },
 ): Promise<DouyinMessageListResponse> {
-  return requestDouyinAiCs(
-    douyinAiCsClient.get<DouyinMessageListResponse>(
-      `/douyin/conversations/${encodeURIComponent(String(conversationId))}/messages`,
-    ),
-  );
+  return apiClient.get(
+    `/integrations/douyin/conversations/${encodeURIComponent(String(conversationId))}/messages`,
+    { params },
+  ) as unknown as Promise<DouyinMessageListResponse>;
 }
 
 export async function getDouyinConversationProfile(

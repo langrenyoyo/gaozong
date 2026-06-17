@@ -15,6 +15,10 @@ from app.integrations.douyin_webhook import (
 )
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.douyin_sync_service import preview_sync_leads
+from app.services.douyin_workbench_conversation_service import (
+    list_account_conversations,
+    list_conversation_messages,
+)
 
 logger = logging.getLogger("integrations_router")
 
@@ -113,6 +117,31 @@ def sync_leads(
     默认 dry_run=true（只预览，不写库）。
     """
     return preview_sync_leads(db, request)
+
+
+@router.get("/accounts/{account_id}/conversations")
+def get_douyin_account_conversations(
+    account_id: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Aggregate real private-message webhook events into workbench conversations."""
+    resolved_account_open_id = account_open_id or account_id
+    return list_account_conversations(db, account_open_id=resolved_account_open_id)
+
+
+@router.get("/conversations/{conversation_key}/messages")
+def get_douyin_conversation_messages(
+    conversation_key: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return real private-message webhook events for one workbench conversation."""
+    return list_conversation_messages(
+        db,
+        conversation_key=conversation_key,
+        account_open_id=account_open_id,
+    )
 
 
 @router.post("/webhook", response_model=WebhookResponse)

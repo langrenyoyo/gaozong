@@ -29,7 +29,6 @@ import {
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationMessages,
-  getDouyinConversationProfile,
   getReplySuggestion,
   type DouyinAccountItem,
   type DouyinAgentItem,
@@ -175,7 +174,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [conversations, setConversations] = useState<DouyinConversationItem[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(null);
   const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
   const [profile, setProfile] = useState<DouyinUserProfileResponse | null>(null);
   const [reply, setReply] = useState<ReplySuggestionResponse | null>(null);
@@ -259,11 +258,13 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const loadConversations = useCallback(async (accountId: number) => {
+  const loadConversations = useCallback(async (account: DouyinAccountItem) => {
     setLoadingConversations(true);
     setError(null);
     try {
-      const data = await getDouyinAccountConversations(accountId);
+      const data = await getDouyinAccountConversations(account.id, {
+        account_open_id: account.account_open_id,
+      });
       setConversations(data.items);
       setSelectedConversationId(data.items[0]?.id || null);
     } catch (err) {
@@ -305,17 +306,16 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const loadConversationDetail = useCallback(async (conversationId: number) => {
+  const loadConversationDetail = useCallback(async (conversationId: string | number) => {
     setLoadingMessages(true);
     setError(null);
     setReply(null);
     try {
-      const [messageData, profileData] = await Promise.all([
-        getDouyinConversationMessages(conversationId),
-        getDouyinConversationProfile(conversationId),
-      ]);
+      const messageData = await getDouyinConversationMessages(conversationId, {
+        account_open_id: selectedAccount?.account_open_id,
+      });
       setMessages(messageData.items);
-      setProfile(profileData);
+      setProfile(null);
     } catch (err) {
       setMessages([]);
       setProfile(null);
@@ -323,16 +323,16 @@ export default function DouyinAiCsWorkbenchPage() {
     } finally {
       setLoadingMessages(false);
     }
-  }, []);
+  }, [selectedAccount?.account_open_id]);
 
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
 
   useEffect(() => {
-    if (selectedAccountId) {
-      void loadConversations(selectedAccountId);
-      void loadAccountAgents(selectedAccountId);
+    if (selectedAccount) {
+      void loadConversations(selectedAccount);
+      void loadAccountAgents(selectedAccount.id);
     } else {
       setConversations([]);
       setSelectedConversationId(null);
@@ -340,7 +340,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setSelectedAgentId(null);
       setAgentNotice(null);
     }
-  }, [loadAccountAgents, loadConversations, selectedAccountId]);
+  }, [loadAccountAgents, loadConversations, selectedAccount, selectedAccountId]);
 
   useEffect(() => {
     if (selectedConversationId) {
@@ -437,7 +437,7 @@ export default function DouyinAiCsWorkbenchPage() {
     setGenerating(true);
     setError(null);
     try {
-      const data = await getReplySuggestion(selectedConversation.id, {
+      const data = await getReplySuggestion(selectedAccount.id, {
         tenant_id: TENANT_ID,
         merchant_id: MERCHANT_ID,
         account_id: selectedAccount.id,
@@ -577,7 +577,7 @@ export default function DouyinAiCsWorkbenchPage() {
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {loadingConversations ? <EmptyState text="正在加载会话..." /> : null}
-            {!loadingConversations && conversations.length === 0 ? <EmptyState text="暂无会话。" /> : null}
+            {!loadingConversations && conversations.length === 0 ? <EmptyState text="该抖音号暂无私信会话。" /> : null}
             {!loadingConversations && conversations.length > 0 && filteredConversations.length === 0 ? (
               <EmptyState text="没有符合条件的会话。" />
             ) : null}
