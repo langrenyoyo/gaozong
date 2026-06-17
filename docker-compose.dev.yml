@@ -79,8 +79,8 @@ services:
       - /workspace/frontend/node_modules
     environment:
       # 这些 URL 给浏览器访问，本地开发用 127.0.0.1 正确
-      - VITE_API_BASE_URL=http://127.0.0.1:9000
-      - VITE_AUTO_WECHAT_API_BASE_URL=http://127.0.0.1:9000
-      - VITE_LOCAL_WECHAT_AGENT_BASE_URL=http://127.0.0.1:19000
-      - VITE_DOUYIN_AI_CS_API_BASE_URL=http://127.0.0.1:9100
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://127.0.0.1:9000}
+      - VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-http://127.0.0.1:9000}
+      - VITE_LOCAL_WECHAT_AGENT_BASE_URL=${VITE_LOCAL_WECHAT_AGENT_BASE_URL:-http://127.0.0.1:19000}
+      - VITE_DOUYIN_AI_CS_API_BASE_URL=${VITE_DOUYIN_AI_CS_API_BASE_URL:-http://127.0.0.1:9100}
     restart: "no"
