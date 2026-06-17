@@ -36,16 +36,11 @@ const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
   { id: "ai-edit", label: "剪辑", expandedLabel: "AI小高剪辑", path: "/ai-edit" },
   { id: "assets", label: "素材", expandedLabel: "小高素材库", path: "/assets" },
-  { id: "compute", label: "算力", expandedLabel: "小高算力", path: "/compute" },
 ];
 
 const superNavItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "merchant-agent", label: "智能体", expandedLabel: "商户智能体", path: "/merchant-agent" },
-  { id: "merchant-management", label: "商户", expandedLabel: "商户管理", path: "/merchant-management" },
-  { id: "forbidden-words", label: "词库", expandedLabel: "违禁词库", path: "/forbidden-words" },
-  { id: "follow-up-prompts", label: "回访", expandedLabel: "回访提示词", path: "/follow-up-prompts" },
   { id: "ai-reply-records", label: "回复", expandedLabel: "AI回复记录", path: "/ai-reply-records" },
-  { id: "compute-config", label: "算力", expandedLabel: "算力配置", path: "/compute-config" },
   { id: "admin-accounts", label: "账号", expandedLabel: "管理员账号", path: "/admin-accounts" },
 ];
 

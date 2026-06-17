@@ -17,7 +17,6 @@ import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
 import type { ChatMessage, Contact, TagType } from "../types";
 import AiVideoEditor from "./AiVideoEditor";
-import ComputeCenter from "./ComputeCenter";
 import LeadsModulePage from "./LeadsModulePage";
 import MaterialLibrary from "./MaterialLibrary";
 import WechatAgent from "./WechatAgent";
@@ -25,12 +24,8 @@ import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
-import SuperMerchantManagement from "./SuperMerchantManagement";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
-import SuperComputeConfig from "./SuperComputeConfig";
 import SuperAdminAccounts from "./SuperAdminAccounts";
-import SuperForbiddenWords from "./SuperForbiddenWords";
-import SuperFollowUpPrompts from "./SuperFollowUpPrompts";
 
 interface DouyinAccount {
   name: string;
@@ -721,16 +716,8 @@ export default function Index({
           user={user}
         />
         {isAdminUser ? (
-          superActiveNav === "merchant-management" ? (
-            <SuperMerchantManagement />
-          ) : superActiveNav === "forbidden-words" ? (
-            <SuperForbiddenWords />
-          ) : superActiveNav === "follow-up-prompts" ? (
-            <SuperFollowUpPrompts />
-          ) : superActiveNav === "ai-reply-records" ? (
+          superActiveNav === "ai-reply-records" ? (
             <SuperAiReplyRecords />
-          ) : superActiveNav === "compute-config" ? (
-            <SuperComputeConfig />
           ) : superActiveNav === "admin-accounts" ? (
             <SuperAdminAccounts />
           ) : (
@@ -764,8 +751,6 @@ export default function Index({
           <AiVideoEditor />
         ) : activeNav === "assets" ? (
           <MaterialLibrary />
-        ) : activeNav === "compute" ? (
-          <ComputeCenter />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
