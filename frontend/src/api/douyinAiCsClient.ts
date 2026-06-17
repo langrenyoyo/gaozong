@@ -33,6 +33,21 @@ export interface DouyinAccountListResponse {
   items: DouyinAccountItem[];
 }
 
+export interface DouyinAgentItem {
+  agent_id: string;
+  agent_name: string;
+  agent_category: string;
+  reply_style: string;
+  business_scope: string;
+  is_default: boolean;
+  is_active: boolean;
+}
+
+export interface DouyinAgentListResponse {
+  items: DouyinAgentItem[];
+  default_agent_id?: string | null;
+}
+
 export interface DouyinConversationItem {
   id: number;
   account_id: number;
@@ -125,6 +140,8 @@ export interface ReplySuggestionRequest {
   tenant_id: string;
   merchant_id?: string;
   account_id: number;
+  douyin_account_id?: number;
+  agent_id?: string;
   latest_message: string;
   max_history_messages?: number;
 }
@@ -149,6 +166,9 @@ export interface ReplySuggestionResponse {
   rag_used?: boolean;
   source_chunks?: ReplySourceChunk[];
   warnings?: string[];
+  agent_id?: string | null;
+  agent_name?: string | null;
+  agent_category?: string | null;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -226,6 +246,18 @@ export async function getDouyinAiCsVersion(): Promise<DouyinAiCsHealthResponse> 
 
 export async function getDouyinAccounts(): Promise<DouyinAccountListResponse> {
   return requestDouyinAiCs(douyinAiCsClient.get<DouyinAccountListResponse>("/douyin/accounts"));
+}
+
+export async function getDouyinAccountAgents(
+  accountId: string | number,
+  params?: { tenant_id?: string; merchant_id?: string },
+): Promise<DouyinAgentListResponse> {
+  return requestDouyinAiCs(
+    douyinAiCsClient.get<DouyinAgentListResponse>(
+      `/douyin/accounts/${encodeURIComponent(String(accountId))}/agents`,
+      { params },
+    ),
+  );
 }
 
 export async function getDouyinAccountConversations(

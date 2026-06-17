@@ -40,6 +40,21 @@ class DouyinAccountListResponse(BaseModel):
     items: list[DouyinAccountItem]
 
 
+class AgentItem(BaseModel):
+    agent_id: str
+    agent_name: str
+    agent_category: str
+    reply_style: str
+    business_scope: str
+    is_default: bool = False
+    is_active: bool = True
+
+
+class AccountAgentListResponse(BaseModel):
+    items: list[AgentItem]
+    default_agent_id: str | None = None
+
+
 class ConversationItem(BaseModel):
     id: int
     account_id: int
@@ -82,6 +97,8 @@ class ReplySuggestionRequest(BaseModel):
     account_id: int
     latest_message: str
     merchant_id: str = "demo_bba"
+    douyin_account_id: int | None = None
+    agent_id: str | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)
 
 
@@ -105,3 +122,6 @@ class ReplySuggestionResponse(BaseModel):
     rag_used: bool = False
     source_chunks: list[dict] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    agent_id: str | None = None
+    agent_name: str | None = None
+    agent_category: str | None = None

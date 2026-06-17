@@ -1,6 +1,7 @@
 """抖音AI客服工作台 P1 mock 数据服务。"""
 
 from apps.xg_douyin_ai_cs.schemas import (
+    AgentItem,
     ConversationItem,
     DouyinAccountItem,
     MessageItem,
@@ -135,9 +136,150 @@ MOCK_PROFILES = {
     ),
 }
 
+AGENTS = [
+    {
+        "agent_id": "agent_bba",
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "agent_name": "小高精品BBA客服",
+        "agent_category": "精品BBA",
+        "system_prompt": (
+            "你是精品BBA二手车销售客服，重点服务宝马、奔驰、奥迪客户。"
+            "回复要专业、直接，优先确认车型、预算和联系方式，并自然引导客户留资。"
+        ),
+        "reply_style": "专业、直接、促留资",
+        "business_scope": "精品BBA二手车咨询、车况介绍、价格沟通、到店邀约",
+        "is_active": True,
+    },
+    {
+        "agent_id": "agent_luxury_gap",
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "agent_name": "小高差价豪车客服",
+        "agent_category": "精品差价豪车",
+        "system_prompt": (
+            "你是精品差价豪车销售客服，重点突出价格差、车况透明、稀缺车源。"
+            "回复要体现高价值感，提醒客户尽快到店或留下联系方式锁定车源。"
+        ),
+        "reply_style": "高价值感、强调稀缺、促到店",
+        "business_scope": "保时捷、玛莎拉蒂、路虎等豪车咨询",
+        "is_active": True,
+    },
+    {
+        "agent_id": "agent_lead_capture",
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "agent_name": "小高留资转化客服",
+        "agent_category": "留资转化",
+        "system_prompt": (
+            "你是抖音私信留资转化客服，目标是礼貌确认客户需求，"
+            "并在不过度打扰的前提下引导客户留下电话或微信。"
+        ),
+        "reply_style": "亲和、克制、重转化",
+        "business_scope": "客户需求确认、电话/微信留资、销售顾问跟进衔接",
+        "is_active": True,
+    },
+]
+
+ACCOUNT_AGENT_BINDINGS = [
+    {
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "douyin_account_id": 1,
+        "agent_id": "agent_bba",
+        "is_default": True,
+        "priority": 10,
+        "is_active": True,
+    },
+    {
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "douyin_account_id": 1,
+        "agent_id": "agent_luxury_gap",
+        "is_default": False,
+        "priority": 20,
+        "is_active": True,
+    },
+    {
+        "tenant_id": "demo_tenant",
+        "merchant_id": "demo_bba",
+        "douyin_account_id": 2,
+        "agent_id": "agent_lead_capture",
+        "is_default": True,
+        "priority": 10,
+        "is_active": True,
+    },
+]
+
 
 def list_accounts() -> list[DouyinAccountItem]:
     return MOCK_ACCOUNTS
+
+
+def list_account_agents(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    douyin_account_id: int,
+) -> tuple[list[AgentItem], str | None]:
+    bound = _bound_agent_records(tenant_id, merchant_id, douyin_account_id)
+    items = [
+        AgentItem(
+            agent_id=agent["agent_id"],
+            agent_name=agent["agent_name"],
+            agent_category=agent["agent_category"],
+            reply_style=agent["reply_style"],
+            business_scope=agent["business_scope"],
+            is_default=bool(binding.get("is_default")),
+            is_active=bool(agent.get("is_active")),
+        )
+        for binding, agent in bound
+    ]
+    default_agent = next((item for item in items if item.is_default), None)
+    return items, default_agent.agent_id if default_agent else None
+
+
+def resolve_account_agent(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    douyin_account_id: int,
+    agent_id: str | None,
+) -> tuple[dict | None, list[str]]:
+    bound = _bound_agent_records(tenant_id, merchant_id, douyin_account_id)
+    if not bound:
+        return None, ["agent_not_configured"]
+
+    if agent_id:
+        selected = next((agent for _, agent in bound if agent["agent_id"] == agent_id), None)
+        if not selected:
+            return None, ["agent_not_bound"]
+        return selected, []
+
+    default = next((agent for binding, agent in bound if binding.get("is_default")), None)
+    if default:
+        return default, []
+    return bound[0][1], ["default_agent_missing"]
+
+
+def _bound_agent_records(
+    tenant_id: str,
+    merchant_id: str,
+    douyin_account_id: int,
+) -> list[tuple[dict, dict]]:
+    agents_by_id = {agent["agent_id"]: agent for agent in AGENTS if agent.get("is_active")}
+    records: list[tuple[dict, dict]] = []
+    for binding in sorted(ACCOUNT_AGENT_BINDINGS, key=lambda item: int(item.get("priority") or 0)):
+        if not binding.get("is_active"):
+            continue
+        if binding.get("tenant_id") != tenant_id or binding.get("merchant_id") != merchant_id:
+            continue
+        if int(binding.get("douyin_account_id") or 0) != int(douyin_account_id):
+            continue
+        agent = agents_by_id.get(str(binding.get("agent_id")))
+        if agent:
+            records.append((binding, agent))
+    return records
 
 
 def list_conversations(account_id: int) -> list[ConversationItem]:

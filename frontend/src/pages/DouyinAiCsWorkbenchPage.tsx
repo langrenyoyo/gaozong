@@ -26,11 +26,13 @@ import type {
   DouyinLiveCheckStatusData,
 } from "../api/types";
 import {
+  getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationMessages,
   getDouyinConversationProfile,
   getReplySuggestion,
   type DouyinAccountItem,
+  type DouyinAgentItem,
   type DouyinConversationItem,
   type DouyinMessageItem,
   type DouyinUserProfileResponse,
@@ -177,10 +179,14 @@ export default function DouyinAiCsWorkbenchPage() {
   const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
   const [profile, setProfile] = useState<DouyinUserProfileResponse | null>(null);
   const [reply, setReply] = useState<ReplySuggestionResponse | null>(null);
+  const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingAgents, setLoadingAgents] = useState(false);
+  const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountListSource, setAccountListSource] = useState<string | null>(null);
@@ -198,6 +204,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
+  const selectedAgent = agents.find((item) => item.agent_id === selectedAgentId) || null;
   const authCallback = authStatus?.last_oauth_callback || null;
   const authAuthorized = Boolean(authCallback?.open_id);
   const latestMessage = useMemo(() => {
@@ -268,6 +275,36 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
+  const loadAccountAgents = useCallback(async (accountId: number) => {
+    setLoadingAgents(true);
+    setAgentNotice(null);
+    setReply(null);
+    try {
+      const data = await getDouyinAccountAgents(accountId, {
+        tenant_id: TENANT_ID,
+        merchant_id: MERCHANT_ID,
+      });
+      setAgents(data.items);
+      if (!data.items.length) {
+        setSelectedAgentId(null);
+        setAgentNotice("当前抖音号未配置 AI客服 Agent，请先配置后再生成回复建议。");
+        return;
+      }
+      const defaultAgent = data.default_agent_id
+        ? data.items.find((item) => item.agent_id === data.default_agent_id)
+        : null;
+      const nextAgent = defaultAgent || data.items[0];
+      setSelectedAgentId(nextAgent.agent_id);
+      setAgentNotice(defaultAgent ? null : "未配置默认 Agent，已临时使用第一个可用 Agent。");
+    } catch (err) {
+      setAgents([]);
+      setSelectedAgentId(null);
+      setAgentNotice(err instanceof Error ? err.message : "AI客服 Agent 加载失败");
+    } finally {
+      setLoadingAgents(false);
+    }
+  }, []);
+
   const loadConversationDetail = useCallback(async (conversationId: number) => {
     setLoadingMessages(true);
     setError(null);
@@ -295,11 +332,15 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     if (selectedAccountId) {
       void loadConversations(selectedAccountId);
+      void loadAccountAgents(selectedAccountId);
     } else {
       setConversations([]);
       setSelectedConversationId(null);
+      setAgents([]);
+      setSelectedAgentId(null);
+      setAgentNotice(null);
     }
-  }, [loadConversations, selectedAccountId]);
+  }, [loadAccountAgents, loadConversations, selectedAccountId]);
 
   useEffect(() => {
     if (selectedConversationId) {
@@ -387,8 +428,12 @@ export default function DouyinAiCsWorkbenchPage() {
     void refreshAccountsAfterAuth();
   }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
 
+  useEffect(() => {
+    setReply(null);
+  }, [selectedAgentId]);
+
   async function generateReply() {
-    if (!selectedAccount || !selectedConversation || !latestMessage) return;
+    if (!selectedAccount || !selectedConversation || !selectedAgent || !latestMessage) return;
     setGenerating(true);
     setError(null);
     try {
@@ -396,6 +441,8 @@ export default function DouyinAiCsWorkbenchPage() {
         tenant_id: TENANT_ID,
         merchant_id: MERCHANT_ID,
         account_id: selectedAccount.id,
+        douyin_account_id: selectedAccount.id,
+        agent_id: selectedAgent.agent_id,
         latest_message: latestMessage,
       });
       setReply(data);
@@ -627,7 +674,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 </div>
                 <button
                   onClick={() => void generateReply()}
-                  disabled={!selectedConversation || generating}
+                  disabled={!selectedConversation || !selectedAgent || generating}
                   className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {generating ? <LoaderIcon size={14} className="animate-spin" /> : <SparklesIcon size={14} />}
@@ -635,8 +682,52 @@ export default function DouyinAiCsWorkbenchPage() {
                 </button>
               </div>
 
+              <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-[#172033]">当前 AI客服</span>
+                  {loadingAgents ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                      <LoaderIcon size={12} className="animate-spin" />
+                      加载中
+                    </span>
+                  ) : null}
+                  <select
+                    value={selectedAgentId || ""}
+                    onChange={(event) => setSelectedAgentId(event.target.value || null)}
+                    disabled={!agents.length || loadingAgents}
+                    className="h-8 min-w-[220px] rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    {!agents.length ? <option value="">未配置 Agent</option> : null}
+                    {agents.map((agent) => (
+                      <option key={agent.agent_id} value={agent.agent_id}>
+                        {agent.agent_name} · {agent.agent_category}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedAgent ? (
+                  <div className="mt-2 grid gap-2 text-[11px] text-slate-600 md:grid-cols-3">
+                    <span>分类：{selectedAgent.agent_category}</span>
+                    <span>风格：{selectedAgent.reply_style}</span>
+                    <span>{selectedAgent.is_default ? "默认 Agent" : "手动选择 Agent"}</span>
+                    <span className="md:col-span-3">业务范围：{selectedAgent.business_scope}</span>
+                  </div>
+                ) : null}
+                {agentNotice ? (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-800">
+                    {agentNotice}
+                  </div>
+                ) : null}
+              </div>
+
               {reply ? (
                 <div className="space-y-3">
+                  {reply.agent_id ? (
+                    <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                      Agent：{reply.agent_name || reply.agent_id}
+                      {reply.agent_category ? ` · 分类：${reply.agent_category}` : ""}
+                    </div>
+                  ) : null}
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-800">
                     {reply.reply_text || "暂无建议内容"}
                   </div>

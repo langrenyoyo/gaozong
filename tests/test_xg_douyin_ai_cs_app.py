@@ -127,6 +127,102 @@ def test_mock_accounts_conversations_messages_and_profile_shape(tmp_path, monkey
     assert profile_data["lead_capture_suggested"] is False
 
 
+def test_account_agents_returns_multiple_agents_and_default(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).get(
+        "/douyin/accounts/1/agents",
+        params={"tenant_id": "demo_tenant", "merchant_id": "demo_bba"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["default_agent_id"] == "agent_bba"
+    assert [item["agent_id"] for item in data["items"]] == [
+        "agent_bba",
+        "agent_luxury_gap",
+    ]
+    assert data["items"][0]["agent_name"] == "小高精品BBA客服"
+    assert data["items"][0]["agent_category"] == "精品BBA"
+    assert data["items"][0]["is_default"] is True
+    assert data["items"][1]["is_default"] is False
+
+
+def test_reply_suggestion_uses_explicit_bound_agent_and_never_auto_send(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我想要奥迪A6",
+            "agent_id": "agent_luxury_gap",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == "agent_luxury_gap"
+    assert data["agent_name"] == "小高差价豪车客服"
+    assert data["agent_category"] == "精品差价豪车"
+    assert data["manual_required"] is False
+    assert data["auto_send"] is False
+
+
+def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我想要奥迪A6",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == "agent_bba"
+    assert data["agent_name"] == "小高精品BBA客服"
+    assert data["agent_category"] == "精品BBA"
+    assert data["auto_send"] is False
+
+
+def test_reply_suggestion_unbound_agent_requires_manual_review(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我想要奥迪A6",
+            "agent_id": "agent_not_bound",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is True
+    assert data["auto_send"] is False
+    assert "agent_not_bound" in data["warnings"]
+
+
+def test_reply_suggestion_without_agents_requires_manual_review(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/99/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 99,
+            "latest_message": "我想要奥迪A6",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is True
+    assert data["auto_send"] is False
+    assert data["warnings"] == ["agent_not_configured"]
+
+
 def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).post(
         "/douyin/conversations/1/reply-suggestion",
