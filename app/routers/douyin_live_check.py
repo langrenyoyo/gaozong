@@ -11,6 +11,8 @@ from app import config
 from app.database import get_db
 from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
+    DouyinBindInfoSyncRequest,
+    DouyinBindInfoSyncResponse,
     DouyinLiveCheckAccountsResponse,
     DouyinLiveCheckAuthUrlResponse,
     DouyinLiveCheckObserveResponse,
@@ -22,6 +24,7 @@ from app.services.douyin_live_check_service import (
     get_live_check_status,
     record_oauth_callback,
     record_webhook_observe,
+    sync_bind_info_accounts,
     update_webhook_observe_forward_result,
 )
 from app.services.douyin_workbench_conversation_service import (
@@ -75,6 +78,22 @@ def accounts(db: Session = Depends(get_db)) -> DouyinLiveCheckAccountsResponse:
     _ensure_enabled()
     return DouyinLiveCheckAccountsResponse(
         data=list_douyin_workbench_accounts_with_event_fallback(db)
+    )
+
+
+@router.post("/accounts/sync-bind-info", response_model=DouyinBindInfoSyncResponse)
+def sync_accounts_bind_info(
+    request: DouyinBindInfoSyncRequest = DouyinBindInfoSyncRequest(),
+    db: Session = Depends(get_db),
+) -> DouyinBindInfoSyncResponse:
+    _ensure_enabled()
+    return DouyinBindInfoSyncResponse(
+        data=sync_bind_info_accounts(
+            db,
+            page_num=request.page_num,
+            page_size=request.page_size,
+            name_or_open_id=request.name_or_open_id,
+        )
     )
 
 

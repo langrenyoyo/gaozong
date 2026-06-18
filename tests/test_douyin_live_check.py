@@ -22,7 +22,7 @@ from sqlalchemy.pool import StaticPool
 from app import config
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import DouyinLead, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 from app.services.douyin_live_check_service import (
     _openapi_endpoint_config,
     build_signed_openapi_request_body_and_headers,
@@ -99,6 +99,40 @@ def _live_receive_payload(
             ensure_ascii=False,
         ),
     }
+
+
+def _insert_event_for_live_check_account(account_open_id: str) -> None:
+    db = TestSession()
+    try:
+        payload = {
+            "event": "im_receive_msg",
+            "from_user_id": "customer_for_" + account_open_id,
+            "to_user_id": account_open_id,
+            "account_open_id": account_open_id,
+            "content": json.dumps(
+                {
+                    "message_type": "text",
+                    "text": "hello",
+                    "open_id": "customer_for_" + account_open_id,
+                    "account_open_id": account_open_id,
+                    "server_message_id": "msg_" + account_open_id,
+                },
+                ensure_ascii=False,
+            ),
+        }
+        db.add(
+            DouyinWebhookEvent(
+                event="im_receive_msg",
+                from_user_id=payload["from_user_id"],
+                to_user_id=account_open_id,
+                event_key="event_" + account_open_id,
+                is_duplicate=0,
+                raw_body=json.dumps(payload, ensure_ascii=False),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_live_check_disabled_returns_clear_error():
@@ -395,6 +429,192 @@ def test_auth_url_upstream_403_returns_safe_error_without_secret():
     assert "token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
+def test_sync_bind_info_posts_signed_body_and_upserts_accounts():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.time.time", return_value=1700000000), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "2106745398",
+                            "open_id": "account_bind_open_1",
+                            "account_name": "Bound Account",
+                            "avatar_url": "https://avatar.example.com/a.png",
+                            "union_id": "union-1",
+                            "bind_status": 1,
+                            "account_type": 1,
+                            "bind_time": "2025-12-15 16:12:46",
+                            "unbind_time": None,
+                            "created_at": "2025-12-15 14:17:43",
+                        }
+                    ]
+                },
+            },
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/accounts/sync-bind-info",
+            json={"page_num": 1, "page_size": 50},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["fetched"] == 1
+    assert data["upserted"] == 1
+    assert data["active_count"] == 1
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/list_bind_info"
+    )
+    sent_body = mock_post.call_args.kwargs["data"]
+    assert isinstance(sent_body, bytes)
+    assert "json" not in mock_post.call_args.kwargs
+    assert json.loads(sent_body.decode("utf-8")) == {
+        "main_account_id": 123,
+        "page_num": 1,
+        "page_size": 50,
+    }
+
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").one()
+        assert row.main_account_id == 123
+        assert row.account_name == "Bound Account"
+        assert row.bind_status == 1
+    finally:
+        db.close()
+
+
+def test_sync_bind_info_updates_existing_account_without_duplicate():
+    client = _client()
+
+    def upstream(payload_name: str) -> FakeUpstreamResponse:
+        return FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "user-1",
+                            "open_id": "account_same_open",
+                            "account_name": payload_name,
+                            "bind_status": 1,
+                        }
+                    ]
+                },
+            },
+        )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.side_effect = [upstream("First Name"), upstream("Updated Name")]
+        first = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+        second = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    db = TestSession()
+    try:
+        rows = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_same_open").all()
+        assert len(rows) == 1
+        assert rows[0].account_name == "Updated Name"
+    finally:
+        db.close()
+
+
+def test_accounts_prefers_persisted_bind_info_and_keeps_webhook_fallback():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_persisted",
+                account_name="Persisted Account",
+                bind_status=1,
+                raw_body_json="{}",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    _insert_event_for_live_check_account(account_open_id="account_from_event")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
+
+    assert data["items"][0]["account_open_id"] == "account_persisted"
+    assert data["items"][0]["source"] == "persisted_bind_info"
+    assert {item["account_open_id"] for item in data["items"]} == {
+        "account_persisted",
+        "account_from_event",
+    }
+
+
+def test_sync_bind_info_persists_inactive_but_accounts_hides_it_by_default():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {"user_id": "user-3", "open_id": "account_unbound", "account_name": "Unbound", "bind_status": 3}
+                    ]
+                },
+            },
+        )
+        sync_resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+        accounts_resp = client.get("/integrations/douyin/live-check/accounts")
+
+    assert sync_resp.status_code == 200
+    assert accounts_resp.status_code == 200
+    db = TestSession()
+    try:
+        assert db.query(DouyinAuthorizedAccount).filter_by(open_id="account_unbound").count() == 1
+    finally:
+        db.close()
+    assert all(item["account_open_id"] != "account_unbound" for item in accounts_resp.json()["data"]["items"])
+
+
+def test_sync_bind_info_upstream_business_error_does_not_write_db_or_leak_secret():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, {"code": 1001, "msg": "business failed", "data": {}})
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert resp.status_code == 502
+    assert "business failed" in json.dumps(resp.json(), ensure_ascii=False)
+    assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
+    db = TestSession()
+    try:
+        assert db.query(DouyinAuthorizedAccount).count() == 0
+    finally:
+        db.close()
+
+
 def test_oauth_callback_records_summary_without_sensitive_values():
     client = _client()
 
@@ -429,7 +649,7 @@ def test_authorized_accounts_empty_before_oauth_callback():
     data = resp.json()["data"]
     assert data["items"] == []
     assert data["total"] == 0
-    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
+    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
 
 
 def test_authorized_accounts_returns_oauth_callback_account_without_secret():
@@ -452,7 +672,7 @@ def test_authorized_accounts_returns_oauth_callback_account_without_secret():
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["total"] == 1
-    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
+    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
     account = data["items"][0]
     assert account["account_open_id"] == "open-account-001"
     assert account["open_id"] == "open-account-001"

@@ -337,7 +337,7 @@ def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_
         data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
 
     assert data["total"] == 1
-    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
+    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
     assert data["items"][0]["account_open_id"] == "account_from_events"
     assert data["items"][0]["source"] == "webhook_events"
     assert data["items"][0]["is_authorized"] is False

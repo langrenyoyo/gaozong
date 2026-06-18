@@ -10,8 +10,10 @@ from typing import Any
 
 import requests
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from app import config
+from app.models import DouyinAuthorizedAccount
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +297,9 @@ def fetch_auth_url() -> dict[str, Any]:
             "legacy_base_url_used": endpoint["legacy_base_url_used"],
             "legacy_base_url_present": endpoint["legacy_base_url_present"],
             "openapi_config_source": endpoint["source"],
+            "body_keys": sorted(payload.keys()),
+            "timestamp_format": "unix_seconds" if headers["X-Auth-Timestamp"].isdigit() else "unknown",
+            "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
         }
     )
     timestamp = headers["X-Auth-Timestamp"]
@@ -354,6 +359,223 @@ def fetch_auth_url() -> dict[str, Any]:
         **base_data,
         "auth_url": auth_url,
     }
+
+
+def call_douyin_openapi(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Call a signed Douyin OpenAPI endpoint using the shared P1-E signing helper."""
+    endpoint = _openapi_endpoint_config()
+    upstream_url = f"{endpoint['upstream_base_url']}/{path.strip('/')}"
+    body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
+    debug.update(
+        {
+            "upstream_url": upstream_url,
+            "upstream_base_url": endpoint["upstream_base_url"],
+            "openapi_base_url": endpoint["base_url"],
+            "openapi_prefix": endpoint["prefix"],
+            "legacy_base_url_used": endpoint["legacy_base_url_used"],
+            "legacy_base_url_present": endpoint["legacy_base_url_present"],
+            "openapi_config_source": endpoint["source"],
+        }
+    )
+    resp = None
+    try:
+        resp = requests.post(
+            upstream_url,
+            data=body_text.encode("utf-8"),
+            headers=headers,
+            timeout=config.DY_HTTP_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        upstream_payload = resp.json()
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=_safe_upstream_error(
+                resp,
+                type(exc).__name__,
+                payload=payload,
+                timestamp=headers["X-Auth-Timestamp"],
+                signature=headers["Authorization"],
+                debug=debug,
+            ),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=_safe_upstream_error(
+                resp,
+                type(exc).__name__,
+                payload=payload,
+                timestamp=headers["X-Auth-Timestamp"],
+                signature=headers["Authorization"],
+                debug=debug,
+            ),
+        ) from exc
+
+    if not isinstance(upstream_payload, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                **debug,
+                "upstream_status": resp.status_code if resp is not None else None,
+                "upstream_code": None,
+                "upstream_msg": "invalid upstream response",
+                "body_keys": sorted(payload.keys()),
+                "timestamp_format": "unix_seconds",
+                "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
+                "error_type": "InvalidUpstreamResponse",
+            },
+        )
+
+    code = upstream_payload.get("code")
+    if code != 0:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                **debug,
+                "upstream_status": resp.status_code,
+                "upstream_code": code,
+                "upstream_msg": upstream_payload.get("msg") or upstream_payload.get("message"),
+                "body_keys": sorted(payload.keys()),
+                "timestamp_format": "unix_seconds",
+                "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
+                "error_type": "UpstreamBusinessError",
+            },
+        )
+    return {"payload": upstream_payload, "debug": debug}
+
+
+def sync_bind_info_accounts(
+    db: Session,
+    *,
+    page_num: int = 1,
+    page_size: int = 50,
+    name_or_open_id: str | None = None,
+) -> dict[str, Any]:
+    request_payload: dict[str, Any] = {
+        "main_account_id": config.DY_MAIN_ACCOUNT_ID,
+        "page_num": page_num,
+        "page_size": page_size,
+    }
+    if name_or_open_id:
+        request_payload["name_or_open_id"] = name_or_open_id
+
+    result = call_douyin_openapi("/list_bind_info", request_payload)
+    upstream_payload = result["payload"]
+    data = upstream_payload.get("data")
+    bind_list = data.get("bind_list") if isinstance(data, dict) else None
+    if not isinstance(bind_list, list):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                **result["debug"],
+                "upstream_status": 200,
+                "upstream_code": upstream_payload.get("code"),
+                "upstream_msg": "missing data.bind_list",
+                "body_keys": sorted(request_payload.keys()),
+                "timestamp_format": "unix_seconds",
+                "error_type": "InvalidBindListResponse",
+            },
+        )
+
+    upserted = 0
+    active_count = 0
+    inactive_count = 0
+    for item in bind_list:
+        if not isinstance(item, dict):
+            continue
+        open_id = _optional_str(item.get("open_id"))
+        if not open_id:
+            continue
+        bind_status = _int_or_default(item.get("bind_status"), 0)
+        row = (
+            db.query(DouyinAuthorizedAccount)
+            .filter_by(main_account_id=config.DY_MAIN_ACCOUNT_ID, open_id=open_id)
+            .first()
+        )
+        if row is None:
+            row = DouyinAuthorizedAccount(
+                main_account_id=config.DY_MAIN_ACCOUNT_ID,
+                open_id=open_id,
+                created_at=_now(),
+            )
+            db.add(row)
+        row.user_id = _optional_str(item.get("user_id"))
+        row.union_id = _optional_str(item.get("union_id"))
+        row.account_name = _optional_str(item.get("account_name"))
+        row.avatar_url = _optional_str(item.get("avatar_url"))
+        row.bind_status = bind_status
+        row.account_type = _int_or_none(item.get("account_type"))
+        row.bind_time = _optional_str(item.get("bind_time"))
+        row.unbind_time = _optional_str(item.get("unbind_time"))
+        row.source_created_at = _optional_str(item.get("created_at"))
+        row.last_synced_at = _now()
+        row.raw_body_json = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+        row.updated_at = _now()
+        upserted += 1
+        if bind_status == 1:
+            active_count += 1
+        else:
+            inactive_count += 1
+    db.commit()
+    return {
+        "fetched": len(bind_list),
+        "upserted": upserted,
+        "active_count": active_count,
+        "inactive_count": inactive_count,
+        "debug": result["debug"],
+    }
+
+
+def list_persisted_authorized_accounts(db: Session) -> dict[str, Any]:
+    rows = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.bind_status == 1)
+        .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
+        .all()
+    )
+    items = [_persisted_account_item(row) for row in rows]
+    return {"items": items, "total": len(items), "source": "persisted_bind_info"}
+
+
+def _persisted_account_item(row: DouyinAuthorizedAccount) -> dict[str, Any]:
+    open_id = row.open_id
+    display_name = row.account_name or f"抖音号 {open_id[-6:]}"
+    account_id = int(hashlib.sha256(open_id.encode("utf-8")).hexdigest()[:8], 16)
+    return {
+        "id": account_id,
+        "account_id": open_id,
+        "douyin_account_id": account_id,
+        "account_open_id": open_id,
+        "open_id": open_id,
+        "account_name": display_name,
+        "name": display_name,
+        "nickname": display_name,
+        "avatar": row.avatar_url or "",
+        "avatar_url": row.avatar_url or "",
+        "status": "active",
+        "is_active": True,
+        "is_authorized": True,
+        "bind_status": row.bind_status,
+        "account_type": row.account_type,
+        "last_active_at": row.last_synced_at,
+        "authorized_at": row.bind_time or row.created_at,
+        "unread_count": 0,
+        "source": "persisted_bind_info",
+        "has_events": False,
+    }
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_default(value: Any, default: int) -> int:
+    parsed = _int_or_none(value)
+    return default if parsed is None else parsed
 
 
 def build_auth_url() -> dict[str, Any]:

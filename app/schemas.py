@@ -187,6 +187,22 @@ class DouyinLiveCheckAccountsResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinBindInfoSyncRequest(BaseModel):
+    """Request for manually syncing Douyin OpenAPI list_bind_info."""
+
+    page_num: int = Field(1, ge=1)
+    page_size: int = Field(50, ge=1, le=200)
+    name_or_open_id: Optional[str] = None
+
+
+class DouyinBindInfoSyncResponse(BaseModel):
+    """Douyin list_bind_info sync response wrapper."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")

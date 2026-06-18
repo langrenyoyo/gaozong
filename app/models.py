@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey,
+    Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -182,3 +182,28 @@ class DouyinWebhookEvent(Base):
     lead_id = Column(Integer, nullable=True, comment="关联的 douyin_leads.id（仅 im_receive_msg）")
     raw_body = Column(Text, nullable=False, comment="原始 payload JSON")
     created_at = Column(DateTime, default=datetime.now)
+
+
+class DouyinAuthorizedAccount(Base):
+    """Douyin OpenAPI authorized account binding persisted from list_bind_info."""
+    __tablename__ = "douyin_authorized_accounts"
+    __table_args__ = (
+        UniqueConstraint("main_account_id", "open_id", name="uk_douyin_authorized_account_main_open"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    main_account_id = Column(Integer, nullable=False, comment="GMP main account id")
+    open_id = Column(String(255), nullable=False, comment="Authorized Douyin account open_id")
+    user_id = Column(String(255), comment="Douyin user id")
+    union_id = Column(String(255), comment="Douyin union_id")
+    account_name = Column(String(255), comment="Douyin account name")
+    avatar_url = Column(String(1000), comment="Douyin account avatar")
+    bind_status = Column(Integer, nullable=False, default=0, comment="0 unbound / 1 success / 2 failed / 3 unbound")
+    account_type = Column(Integer, comment="Douyin account type")
+    bind_time = Column(String(64), comment="Upstream bind_time")
+    unbind_time = Column(String(64), comment="Upstream unbind_time")
+    source_created_at = Column(String(64), comment="Upstream created_at")
+    last_synced_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    raw_body_json = Column(Text, comment="Raw list_bind_info item JSON")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

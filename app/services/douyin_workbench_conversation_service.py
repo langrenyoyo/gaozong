@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
 from app.models import DouyinWebhookEvent
 from app.services.contact_extractor import extract_contacts_from_text
-from app.services.douyin_live_check_service import list_authorized_accounts
+from app.services.douyin_live_check_service import (
+    list_authorized_accounts,
+    list_persisted_authorized_accounts,
+)
 
 
 PRIVATE_MESSAGE_EVENTS = {"im_receive_msg", "im_send_msg"}
@@ -68,14 +71,22 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
 
 
 def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str, Any]:
-    """Return live-check accounts plus event-derived fallback accounts."""
-    authorized = list_authorized_accounts()
-    items = list(authorized.get("items") or [])
+    """Return persisted authorized accounts, then live-check memory, then event fallback."""
+    persisted = list_persisted_authorized_accounts(db)
+    items = list(persisted.get("items") or [])
     existing_open_ids = {
         str(item.get("account_open_id") or item.get("open_id"))
         for item in items
         if item.get("account_open_id") or item.get("open_id")
     }
+
+    authorized = list_authorized_accounts()
+    for account in authorized.get("items") or []:
+        account_open_id = str(account.get("account_open_id") or account.get("open_id") or "")
+        if not account_open_id or account_open_id in existing_open_ids:
+            continue
+        items.append(account)
+        existing_open_ids.add(account_open_id)
 
     for account in _event_derived_accounts(db):
         if account["account_open_id"] in existing_open_ids:
@@ -86,7 +97,7 @@ def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str,
     return {
         "items": items,
         "total": len(items),
-        "source": "live_check_memory_with_webhook_events_fallback",
+        "source": "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback",
     }
 
 
