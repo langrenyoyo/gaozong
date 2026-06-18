@@ -162,6 +162,44 @@ export interface DouyinUserProfileResponse {
   lead_capture_suggested: boolean;
 }
 
+export interface DouyinConversationProfile {
+  conversation_id: string;
+  conversation_key?: string;
+  conversation_short_id?: string | null;
+  account_open_id?: string | null;
+  open_id?: string | null;
+  nickname?: string | null;
+  avatar?: string | null;
+  online_status?: "online" | "offline" | "unknown" | string | null;
+  source_channel?: string | null;
+  intent_car?: string | null;
+  car_year?: string | null;
+  budget?: string | null;
+  city?: string | null;
+  tags?: string[];
+  tag_labels?: string[];
+  lead_score?: number | null;
+  trace?: {
+    event_key?: string | null;
+    conversation_short_id?: string | null;
+    server_message_id?: string | null;
+    source?: string | null;
+    created_at?: string | null;
+  } | null;
+  lead?: {
+    id?: number;
+    status?: string | null;
+    customer_contact?: string | null;
+    assigned_staff_id?: number | null;
+  } | null;
+}
+
+export interface DouyinConversationProfileResponse {
+  success?: boolean;
+  data: DouyinConversationProfile;
+  message?: string;
+}
+
 export interface CreateRagDocumentRequest {
   tenant_id: string;
   merchant_id: string;
@@ -576,6 +614,24 @@ export async function getDouyinConversationMessages(
       },
     },
   ) as unknown as Promise<DouyinMessageListResponse>;
+}
+
+export async function getDouyinConversationProfileFrom9000(
+  accountId: string | number,
+  conversationKey: string | number,
+  params?: { account_open_id?: string },
+): Promise<DouyinConversationProfile> {
+  try {
+    const response = (await apiClient.get(
+      `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations/${encodeURIComponent(
+        String(conversationKey),
+      )}/profile`,
+      { params },
+    )) as unknown as DouyinConversationProfileResponse;
+    return response.data;
+  } catch (error) {
+    throw new Error(`抖音客户画像加载失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function sendDouyinManualMessage(

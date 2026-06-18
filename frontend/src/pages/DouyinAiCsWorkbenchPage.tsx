@@ -35,6 +35,7 @@ import {
   downloadDouyinResource,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
+  getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   getTrustedReplySuggestion,
   listDouyinAccounts,
@@ -44,8 +45,8 @@ import {
   type DouyinAccountItem,
   type DouyinAgentItem,
   type DouyinConversationItem,
+  type DouyinConversationProfile,
   type DouyinMessageItem,
-  type DouyinUserProfileResponse,
   type ReplySuggestionResponse,
   type UploadDouyinImageResponse,
 } from "../api/douyinAiCsClient";
@@ -123,16 +124,6 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-function budgetText(profile: DouyinUserProfileResponse | null) {
-  if (!profile) return "-";
-  if (profile.budget_min && profile.budget_max) {
-    return `${profile.budget_min.toLocaleString()} - ${profile.budget_max.toLocaleString()}`;
-  }
-  if (profile.budget_min) return `${profile.budget_min.toLocaleString()} 起`;
-  if (profile.budget_max) return `${profile.budget_max.toLocaleString()} 内`;
-  return "暂无预算";
-}
-
 function conversationMatchesFilter(conversation: DouyinConversationItem, filter: ConversationFilterKey) {
   if (filter === "all") return true;
   return Array.isArray(conversation.tags) && conversation.tags.includes(filter);
@@ -144,6 +135,46 @@ function conversationTagText(tag: string) {
   if (tag === "retained_contact") return "已留资";
   if (tag === "follow_up") return "待回访";
   return tag;
+}
+
+function profileFieldText(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") return "暂无";
+  return String(value);
+}
+
+function onlineStatusText(value?: string | null) {
+  if (value === "online") return "在线";
+  if (value === "offline") return "离线";
+  if (value === "unknown") return "状态未知";
+  return value || "状态未知";
+}
+
+function clampLeadScore(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
+  return Math.max(0, Math.min(100, Math.round(Number(value))));
+}
+
+function compactOpenId(value?: string | null) {
+  if (!value) return "-";
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
+function profileTagsText(profile: DouyinConversationProfile | null, fallback?: string[] | null) {
+  const tags = (profile?.tags?.length ? profile.tags : fallback || []).filter(Boolean);
+  if (!tags.length) return [];
+  return tags.map((tag) => conversationTagText(tag));
+}
+
+function traceItems(profile: DouyinConversationProfile | null) {
+  if (!profile?.trace) return [];
+  return [
+    ["事件键", profile.trace.event_key],
+    ["会话短 ID", profile.trace.conversation_short_id],
+    ["消息 ID", profile.trace.server_message_id],
+    ["来源", profile.trace.source],
+    ["时间", formatTime(profile.trace.created_at)],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
 }
 
 function ErrorBanner({ message }: { message: string | null }) {
@@ -288,7 +319,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [conversations, setConversations] = useState<DouyinConversationItem[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(null);
   const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
-  const [profile, setProfile] = useState<DouyinUserProfileResponse | null>(null);
+  const [profile, setProfile] = useState<DouyinConversationProfile | null>(null);
   const [reply, setReply] = useState<ReplySuggestionResponse | null>(null);
   const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -310,6 +341,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingAgents, setLoadingAgents] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -356,6 +389,21 @@ export default function DouyinAiCsWorkbenchPage() {
       return matchesKeyword && conversationMatchesFilter(conversation, conversationFilter);
     });
   }, [conversationFilter, conversationSearch, conversations]);
+  const profileNickname = profile?.nickname || selectedConversation?.nickname || selectedConversation?.open_id || "未知客户";
+  const profileAvatar = profile?.avatar || selectedConversation?.avatar || null;
+  const profileOpenId = profile?.open_id || selectedConversation?.open_id || null;
+  const profileTags = profileTagsText(profile, selectedConversation?.tags);
+  const profileLeadScore = clampLeadScore(profile?.lead_score);
+  const profileTraceItems = traceItems(profile);
+  const profileSummary = profile
+    ? [
+        profile.intent_car ? `意向 ${profile.intent_car}` : null,
+        profile.budget ? `预算 ${profile.budget}` : null,
+        onlineStatusText(profile.online_status),
+      ].filter(Boolean).join(" / ")
+    : loadingProfile
+      ? "客户画像加载中"
+      : "暂无客户画像";
 
   const loadAccounts = useCallback(async (preferredOpenId?: string | null) => {
     setLoadingAccounts(true);
@@ -430,22 +478,37 @@ export default function DouyinAiCsWorkbenchPage() {
 
   const loadConversationDetail = useCallback(async (conversationId: string | number) => {
     setLoadingMessages(true);
+    setLoadingProfile(true);
     setError(null);
+    setProfileError(null);
     setReply(null);
     try {
       const messageData = await getDouyinConversationMessages(conversationId, {
         account_open_id: selectedAccount?.account_open_id,
       });
       setMessages(messageData.items);
-      setProfile(null);
+      if (selectedAccount) {
+        try {
+          const profileData = await getDouyinConversationProfileFrom9000(selectedAccount.id, conversationId, {
+            account_open_id: selectedAccount.account_open_id,
+          });
+          setProfile(profileData);
+        } catch (profileErr) {
+          setProfile(null);
+          setProfileError(profileErr instanceof Error ? profileErr.message : "客户画像加载失败");
+        }
+      } else {
+        setProfile(null);
+      }
     } catch (err) {
       setMessages([]);
       setProfile(null);
       setError(err instanceof Error ? err.message : "聊天详情加载失败");
     } finally {
       setLoadingMessages(false);
+      setLoadingProfile(false);
     }
-  }, [selectedAccount?.account_open_id]);
+  }, [selectedAccount]);
 
   useEffect(() => {
     void loadAccounts();
@@ -473,6 +536,8 @@ export default function DouyinAiCsWorkbenchPage() {
     } else {
       setMessages([]);
       setProfile(null);
+      setProfileError(null);
+      setLoadingProfile(false);
       setReply(null);
     }
   }, [loadConversationDetail, selectedConversationId]);
@@ -1074,9 +1139,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 {selectedConversation?.nickname || "请选择会话"}
               </div>
               <div className="mt-0.5 truncate text-[11px] text-slate-500">
-                {profile
-                  ? `${profile.brand_preference || "未知品牌"} / ${profile.vehicle_preference || "未知车型"} / ${profile.purchase_intent_level}`
-                  : "用户画像加载中"}
+                {selectedConversation ? profileSummary : "选择会话后查看客户画像"}
               </div>
             </div>
             <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
@@ -1382,44 +1445,135 @@ export default function DouyinAiCsWorkbenchPage() {
           </div>
           {selectedConversation ? (
             <div className="min-h-0 flex-1 overflow-auto p-4">
+              {loadingProfile ? (
+                <div className="mb-3 inline-flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                  <LoaderIcon size={14} className="animate-spin" />
+                  正在加载客户画像...
+                </div>
+              ) : null}
+              {profileError ? (
+                <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  <span>暂无客户画像，已保留会话基础信息。</span>
+                </div>
+              ) : null}
+
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <div className="text-sm font-bold text-[#172033]">{selectedConversation.nickname}</div>
-                <div className="mt-1 text-[11px] text-slate-500">{selectedConversation.open_id}</div>
+                <div className="flex items-center gap-3">
+                  {profileAvatar ? (
+                    <img
+                      src={profileAvatar}
+                      alt={profileNickname}
+                      className="h-10 w-10 rounded-md object-cover"
+                    />
+                  ) : (
+                    <span className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-400 ring-1 ring-slate-200">
+                      <UserRoundIcon size={18} />
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold text-[#172033]">{profileNickname}</div>
+                    <div className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                      {compactOpenId(profileOpenId)}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 inline-flex rounded bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                  {onlineStatusText(profile?.online_status)}
+                </div>
               </div>
 
               <div className="mt-4 space-y-3 text-xs">
                 <div>
-                  <div className="font-semibold text-slate-500">意向等级</div>
-                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {profile?.purchase_intent_level || "暂无客户画像"}
+                  <div className="font-semibold text-slate-500">基础信息</div>
+                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">来源渠道</span>
+                      <span className="text-right">{profileFieldText(profile?.source_channel)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">意向车型</span>
+                      <span className="text-right">{profileFieldText(profile?.intent_car)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">年份</span>
+                      <span className="text-right">{profileFieldText(profile?.car_year)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">预算</span>
+                      <span className="text-right">{profileFieldText(profile?.budget)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">城市</span>
+                      <span className="text-right">{profileFieldText(profile?.city)}</span>
+                    </div>
                   </div>
                 </div>
                 <div>
-                  <div className="font-semibold text-slate-500">品牌 / 车型</div>
-                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {profile ? `${profile.brand_preference || "未知品牌"} / ${profile.vehicle_preference || "未知车型"}` : "暂无客户画像"}
+                  <div className="font-semibold text-slate-500">当前标签</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {profileTags.length ? (
+                      profileTags.map((tag) => (
+                        <span key={tag} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                          {tag}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-slate-500">暂无标签</span>
+                    )}
                   </div>
                 </div>
                 <div>
-                  <div className="font-semibold text-slate-500">预算</div>
-                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {budgetText(profile)}
+                  <div className="font-semibold text-slate-500">线索评分</div>
+                  <div className="mt-1 rounded-md bg-white px-3 py-3 text-slate-800 ring-1 ring-slate-200">
+                    {profileLeadScore === null ? (
+                      <div className="text-slate-500">暂无评分</div>
+                    ) : (
+                      <>
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="font-semibold">{profileLeadScore}%</span>
+                          <span className="text-[11px] text-slate-500">0-100</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className="h-full rounded-full bg-blue-600"
+                            style={{ width: `${profileLeadScore}%` }}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div>
-                  <div className="font-semibold text-slate-500">联系方式/留资状态</div>
-                  <div className="mt-1 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {profile?.lead_capture_suggested || selectedConversation.lead_status === "captured"
-                      ? "建议引导留资或已留资"
-                      : "暂无联系方式"}
+                  <div className="font-semibold text-slate-500">线索信息</div>
+                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">线索 ID</span>
+                      <span className="text-right">{profileFieldText(profile?.lead?.id)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">状态</span>
+                      <span className="text-right">{profileFieldText(profile?.lead?.status || selectedConversation.lead_status)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">联系方式</span>
+                      <span className="text-right">{profileFieldText(profile?.lead?.customer_contact)}</span>
+                    </div>
                   </div>
                 </div>
                 <div>
-                  <div className="font-semibold text-slate-500">最近跟进建议</div>
-                  <div className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 leading-5 text-amber-800">
-                    {profile?.lead_capture_suggested
-                      ? "客户意向较明确，建议复制 AI 回复后由人工确认，引导留下联系方式。"
-                      : "先确认客户预算、品牌和车型偏好，再决定是否引导留资。"}
+                  <div className="font-semibold text-slate-500">溯源信息</div>
+                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+                    {profileTraceItems.length ? (
+                      profileTraceItems.map(([label, value]) => (
+                        <div key={label} className="flex justify-between gap-3">
+                          <span className="shrink-0 text-slate-500">{label}</span>
+                          <span className="min-w-0 break-all text-right font-mono text-[11px]">{value}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-slate-500">暂无溯源信息</span>
+                    )}
                   </div>
                 </div>
               </div>
