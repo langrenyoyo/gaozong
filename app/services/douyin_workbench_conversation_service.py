@@ -215,6 +215,49 @@ def list_conversation_messages(
     return {"items": items}
 
 
+def get_conversation_profile(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str,
+) -> dict[str, Any] | None:
+    messages = _sort_messages(
+        [
+            item
+            for item in _load_messages(db, account_open_id=account_open_id)
+            if item.conversation_key == conversation_key
+        ]
+    )
+    if not messages:
+        return None
+
+    first = messages[0]
+    latest = messages[-1]
+    lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
+    raw_data = _safe_lead_raw_data(lead)
+    trace_message = latest or first
+
+    return {
+        "conversation_id": first.conversation_key,
+        "conversation_key": first.conversation_key,
+        "conversation_short_id": first.conversation_short_id,
+        "account_open_id": first.account_open_id,
+        "open_id": first.open_id,
+        "nickname": first.nick_name or (lead.customer_name if lead else None) or first.open_id,
+        "avatar": first.avatar,
+        "online_status": "unknown",
+        "source_channel": _profile_source_channel(lead, raw_data),
+        "intent_car": _first_raw_value(raw_data, ("intent_car", "car_model", "model", "series", "brand_model")),
+        "car_year": _first_raw_value(raw_data, ("car_year", "year", "vehicle_year")),
+        "budget": _first_raw_value(raw_data, ("budget", "budget_range", "price_range")),
+        "city": _first_raw_value(raw_data, ("city", "location_city", "customer_city")),
+        "tags": build_conversation_tags(db, messages),
+        "lead_score": _profile_lead_score(lead, raw_data),
+        "trace": _profile_trace(db, trace_message),
+        "lead": _profile_lead_payload(lead),
+    }
+
+
 def get_send_msg_context(
     db: Session,
     *,
@@ -562,6 +605,62 @@ def _safe_lead_raw_data(lead: DouyinLead | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _first_raw_value(raw_data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = raw_data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _profile_source_channel(lead: DouyinLead | None, raw_data: dict[str, Any]) -> str:
+    if lead and lead.source:
+        return lead.source
+    return _first_raw_value(raw_data, ("source", "source_channel")) or "douyin"
+
+
+def _profile_lead_score(lead: DouyinLead | None, raw_data: dict[str, Any]) -> int:
+    value: Any = raw_data.get("lead_score")
+    if isinstance(value, dict):
+        value = value.get("score")
+    if value is None:
+        value = raw_data.get("score")
+    if value is None and lead is not None:
+        value = compute_lead_score(lead).get("score")
+    if value is None:
+        return 0
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(score, 100))
+
+
+def _profile_trace(db: Session, message: WorkbenchMessage) -> dict[str, Any]:
+    row = db.get(DouyinWebhookEvent, message.event_id)
+    return {
+        "event_key": row.event_key if row else None,
+        "conversation_short_id": message.conversation_short_id,
+        "server_message_id": message.server_message_id,
+        "source": "webhook_events",
+        "created_at": message.created_at,
+    }
+
+
+def _profile_lead_payload(lead: DouyinLead | None) -> dict[str, Any] | None:
+    if lead is None:
+        return None
+    return {
+        "id": lead.id,
+        "status": lead.status,
+        "customer_contact": lead.customer_contact,
+        "assigned_staff_id": lead.assigned_staff_id,
+    }
 
 
 def _normalized_text(*parts: Any) -> str:

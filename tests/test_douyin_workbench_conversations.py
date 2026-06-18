@@ -461,6 +461,141 @@ def test_conversation_tags_prefer_lead_raw_account_open_id_when_same_open_id_exi
     assert "retained_contact" in account_b_items[0]["tags"]
 
 
+def test_conversation_profile_returns_customer_fields_from_webhook_and_lead_raw_data():
+    lead = _insert_lead(
+        open_id="customer_profile",
+        account_open_id="account_profile",
+        customer_contact="13800001111",
+        lead_score=120,
+        status="assigned",
+        raw_data={
+            "account_open_id": "account_profile",
+            "intent_car": "奥迪A6",
+            "car_year": "2022",
+            "budget_range": "20-30万",
+            "city": "杭州",
+        },
+    )
+    _insert_event(
+        open_id="customer_profile",
+        account_open_id="account_profile",
+        text="想看车，怎么联系",
+        conversation_short_id="profile_conv",
+        event_key="profile_event",
+        server_message_id="profile_msg",
+        lead_id=lead.id,
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile/conversations/profile_conv/profile"
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["conversation_id"] == "profile_conv"
+    assert data["account_open_id"] == "account_profile"
+    assert data["open_id"] == "customer_profile"
+    assert data["nickname"] == "Customer ile"
+    assert data["avatar"] == "https://example.com/customer_profile.jpg"
+    assert data["online_status"] == "unknown"
+    assert data["source_channel"] == "douyin"
+    assert data["intent_car"] == "奥迪A6"
+    assert data["car_year"] == "2022"
+    assert data["budget"] == "20-30万"
+    assert data["city"] == "杭州"
+    assert data["lead_score"] == 100
+    assert "retained_contact" in data["tags"]
+    assert "high_intent" in data["tags"]
+    assert data["trace"] == {
+        "event_key": "profile_event",
+        "conversation_short_id": "profile_conv",
+        "server_message_id": "profile_msg",
+        "source": "webhook_events",
+        "created_at": data["trace"]["created_at"],
+    }
+    assert "raw_body" not in data["trace"]
+    assert data["lead"]["id"] == lead.id
+    assert data["lead"]["status"] == "assigned"
+    assert data["lead"]["customer_contact"] == "13800001111"
+
+
+def test_conversation_profile_returns_404_when_conversation_not_found_in_account_scope():
+    _insert_event(
+        open_id="customer_profile_scope",
+        account_open_id="account_profile_scope_a",
+        text="hello",
+        conversation_short_id="profile_scope_conv",
+        event_key="profile_scope_event",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile_scope_b/conversations/profile_scope_conv/profile"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "DOUYIN_CONVERSATION_PROFILE_NOT_FOUND"
+
+
+def test_conversation_profile_keeps_same_conversation_key_isolated_by_account():
+    _insert_event(
+        open_id="customer_profile_a",
+        account_open_id="account_profile_a",
+        text="account a",
+        conversation_short_id="shared_profile_conv",
+        event_key="profile_account_a",
+    )
+    _insert_event(
+        open_id="customer_profile_b",
+        account_open_id="account_profile_b",
+        text="account b",
+        conversation_short_id="shared_profile_conv",
+        event_key="profile_account_b",
+    )
+    _insert_lead(
+        open_id="customer_profile_b",
+        account_open_id="account_profile_b",
+        customer_contact="wechat_b",
+        raw_data={"account_open_id": "account_profile_b", "lead_score": 88},
+        status="assigned",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile_b/conversations/shared_profile_conv/profile"
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_open_id"] == "account_profile_b"
+    assert data["open_id"] == "customer_profile_b"
+    assert "retained_contact" in data["tags"]
+    assert data["trace"]["event_key"] == "profile_account_b"
+
+
+def test_conversation_profile_returns_safe_empty_values_without_optional_profile_fields():
+    _insert_event(
+        open_id="customer_empty_profile",
+        account_open_id="account_empty_profile",
+        text="hello",
+        conversation_short_id="empty_profile_conv",
+        event_key="empty_profile_event",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_empty_profile/conversations/empty_profile_conv/profile"
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["nickname"] == "Customer ile"
+    assert data["avatar"] == "https://example.com/customer_empty_profile.jpg"
+    assert data["intent_car"] is None
+    assert data["car_year"] is None
+    assert data["budget"] is None
+    assert data["city"] is None
+    assert data["lead_score"] == 0
+    assert data["lead"] is None
+
+
 def test_same_customer_and_account_aggregate_to_same_conversation_without_short_id():
     older = datetime.now() - timedelta(minutes=2)
     newer = datetime.now() - timedelta(minutes=1)

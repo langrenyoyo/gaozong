@@ -16,6 +16,7 @@ from app.integrations.douyin_webhook import (
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
+    get_conversation_profile,
     list_account_conversations,
     list_conversation_messages,
 )
@@ -142,6 +143,31 @@ def get_douyin_conversation_messages(
         conversation_key=conversation_key,
         account_open_id=account_open_id,
     )
+
+
+@router.get("/accounts/{account_id}/conversations/{conversation_key}/profile")
+def get_douyin_conversation_profile(
+    account_id: str,
+    conversation_key: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return a read-only customer profile aggregated from 9000 local data."""
+    resolved_account_open_id = account_open_id or account_id
+    data = get_conversation_profile(
+        db,
+        account_open_id=resolved_account_open_id,
+        conversation_key=conversation_key,
+    )
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DOUYIN_CONVERSATION_PROFILE_NOT_FOUND",
+                "message": "抖音会话客户画像不存在",
+            },
+        )
+    return {"success": True, "data": data, "message": "success"}
 
 
 @router.get("/conversation-messages")
