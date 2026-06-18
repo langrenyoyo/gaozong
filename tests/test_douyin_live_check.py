@@ -2022,3 +2022,114 @@ def test_config_openapi_base_and_prefix_fall_back_when_environment_values_are_bl
     assert reloaded.DY_OPENAPI_BASE_URL == "https://gmp.bytedanceapi.com"
     assert reloaded.DY_OPENAPI_PREFIX == "/ai_chat_agent_api/v1/openapi"
     assert reloaded.DY_BASE_URL == "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi"
+
+
+def test_live_check_callback_accepts_im_receive_msg_and_forwards_to_formal():
+    """callback 收到 im_receive_msg 时按 webhook 事件处理并创建线索。"""
+    client = _client()
+    payload = _live_receive_payload(from_user_id="callback_forward_create_001")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["forward_to_formal_enabled"] is True
+    assert data["forward_to_formal_success"] is True
+    assert data["forward_to_formal_lead_action"] == "created"
+    assert data["forward_to_formal_lead_id"] is not None
+
+    db = TestSession()
+    try:
+        lead = db.query(DouyinLead).filter_by(source_id="callback_forward_create_001").first()
+        assert lead is not None
+        assert lead.customer_contact == "13633624849"
+        event = db.query(DouyinWebhookEvent).filter_by(event="im_receive_msg").first()
+        assert event is not None
+    finally:
+        db.close()
+
+
+def test_live_check_callback_accepts_im_send_msg_event_without_creating_lead():
+    """callback 收到 im_send_msg 时按 webhook 事件记录，但不创建线索。"""
+    client = _client()
+    payload = {
+        "event": "im_send_msg",
+        "from_user_id": "callback_send_account_001",
+        "to_user_id": "callback_send_customer_001",
+        "content": json.dumps(
+            {
+                "conversation_short_id": "callback_send_conv_001",
+                "server_message_id": "callback_send_msg_001",
+                "message_type": "text",
+                "text": "send event body",
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["forward_to_formal_enabled"] is True
+    assert data["forward_to_formal_success"] is True
+    assert data["forward_to_formal_lead_id"] is None
+    assert data["forward_to_formal_lead_action"] == "not_lead_event"
+
+    db = TestSession()
+    try:
+        event = db.query(DouyinWebhookEvent).filter_by(event="im_send_msg").first()
+        assert event is not None
+        assert db.query(DouyinLead).count() == 0
+    finally:
+        db.close()
+
+
+def test_live_check_callback_does_not_invoke_oauth_callback_recorder():
+    """callback 路由不应触发 OAuth callback 记录，也不污染 OAuth 观察摘要。"""
+    client = _client()
+    payload = _live_receive_payload()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", False), \
+         patch("app.services.douyin_live_check_service.record_oauth_callback") as mock_oauth:
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+        status_resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    mock_oauth.assert_not_called()
+    # OAuth 观察摘要保持为空（未被 callback 污染）
+    assert status_resp.json()["data"]["last_oauth_callback"] is None
+
+
+def test_live_check_callback_handles_non_event_payload_returns_200():
+    """callback 收到非私信事件格式时仍返回 200，不误当成 OAuth callback。"""
+    client = _client()
+    payload = {"not_an_event": True, "foo": "bar"}
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", False):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["body_has_event"] is False
+    assert data["forward_to_formal_enabled"] is False
+
+
+def test_live_check_callback_respects_live_check_enabled_gate():
+    """callback 与 webhook-observe 一样受 DY_LIVE_CHECK_ENABLED 门禁。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", False):
+        resp = client.post(
+            "/integrations/douyin/live-check/callback",
+            json={"event": "im_receive_msg"},
+        )
+
+    assert resp.status_code == 403
+    assert "disabled" in resp.json()["detail"].lower()

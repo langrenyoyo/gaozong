@@ -44,6 +44,10 @@ from app.services.douyin_resource_download_service import download_douyin_resour
 
 logger = logging.getLogger(__name__)
 LIVE_CHECK_OBSERVE_PATH = "/integrations/douyin/live-check/webhook-observe"
+# 抖音 /get_aweme_auth_url 传入的 callback_url 是私信事件回调地址（非 OAuth 回调）。
+# 当 DY_CALLBACK_URL 指向本路径时，抖音把 im_receive_msg / im_send_msg /
+# im_enter_direct_msg 等私信事件推送到这里，行为与 webhook-observe 一致。
+LIVE_CHECK_CALLBACK_PATH = "/integrations/douyin/live-check/callback"
 
 router = APIRouter(
     prefix="/integrations/douyin/live-check",
@@ -166,6 +170,35 @@ async def webhook_observe(
     db: Session = Depends(get_db),
 ) -> DouyinLiveCheckObserveResponse:
     _ensure_enabled()
+    return await _handle_live_check_event(request, db, LIVE_CHECK_OBSERVE_PATH)
+
+
+@router.post("/callback", response_model=DouyinLiveCheckObserveResponse)
+async def live_check_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> DouyinLiveCheckObserveResponse:
+    """抖音私信事件回调兼容入口。
+
+    抖音 /get_aweme_auth_url 传入的 callback_url 是私信事件回调地址（非 OAuth 回调）。
+    本路由复用 webhook-observe 的私信事件处理逻辑，按配置转发到正式 webhook 管线，
+    兼容 im_receive_msg / im_send_msg / im_enter_direct_msg 等回调事件；
+    不调用 record_oauth_callback（OAuth 观察另走 oauth-callback）。
+    """
+    _ensure_enabled()
+    return await _handle_live_check_event(request, db, LIVE_CHECK_CALLBACK_PATH)
+
+
+async def _handle_live_check_event(
+    request: Request,
+    db: Session,
+    source_path: str,
+) -> DouyinLiveCheckObserveResponse:
+    """统一处理抖音私信事件回调（webhook-observe 与 callback 复用）。
+
+    解析请求体 → 记录事件观测摘要 → 按配置转发到正式 webhook 管线。
+    非私信事件格式仅记录 warning，不误当成 OAuth callback。
+    """
     body = await request.body()
     try:
         payload: dict[str, Any] = json.loads(body.decode("utf-8"))
@@ -174,8 +207,19 @@ async def webhook_observe(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
+    event = payload.get("event")
+    if not event:
+        # 非私信事件格式：记录 warning，但不误当成 OAuth callback，仍按事件观测流程处理
+        logger.warning(
+            "live-check callback 收到非私信事件格式: source_path=%s, event=%s",
+            source_path,
+            event,
+        )
+
     data = record_webhook_observe(dict(request.headers), payload)
-    forward_result = await _maybe_forward_to_formal(request, body, payload, db)
+    forward_result = await _maybe_forward_to_formal(
+        request, body, payload, db, source_path=source_path
+    )
     data.update(forward_result)
     update_webhook_observe_forward_result(forward_result)
     return DouyinLiveCheckObserveResponse(data=data)
@@ -208,11 +252,13 @@ async def _maybe_forward_to_formal(
     body: bytes,
     payload: dict[str, Any],
     db: Session,
+    *,
+    source_path: str = LIVE_CHECK_OBSERVE_PATH,
 ) -> dict[str, Any]:
     if not config.DY_LIVE_CHECK_FORWARD_TO_FORMAL:
         logger.info(
             "live-check webhook observe: source_path=%s, forward_to_formal_enabled=false, event=%s, forward_result=disabled",
-            LIVE_CHECK_OBSERVE_PATH,
+            source_path,
             payload.get("event"),
         )
         return _forward_disabled_result()
@@ -223,14 +269,14 @@ async def _maybe_forward_to_formal(
             x_auth_timestamp=request.headers.get("X-Auth-Timestamp"),
             authorization=request.headers.get("Authorization"),
             db=db,
-            source_path=LIVE_CHECK_OBSERVE_PATH,
+            source_path=source_path,
             skip_signature_verification=True,
         )
     except Exception as exc:
         db.rollback()
         logger.warning(
             "live-check webhook observe: source_path=%s, forward_to_formal_enabled=true, event=%s, forward_result=error, error_type=%s",
-            LIVE_CHECK_OBSERVE_PATH,
+            source_path,
             payload.get("event"),
             type(exc).__name__,
         )
@@ -238,7 +284,7 @@ async def _maybe_forward_to_formal(
 
     logger.info(
         "live-check webhook observe: source_path=%s, forward_to_formal_enabled=true, event=%s, forward_result=success, event_id=%s, lead_id=%s, lead_action=%s",
-        LIVE_CHECK_OBSERVE_PATH,
+        source_path,
         payload.get("event"),
         formal.event_id,
         formal.lead_id,
