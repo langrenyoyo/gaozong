@@ -2133,3 +2133,113 @@ def test_live_check_callback_respects_live_check_enabled_gate():
 
     assert resp.status_code == 403
     assert "disabled" in resp.json()["detail"].lower()
+
+
+def test_auth_redirect_with_open_id_syncs_and_redirects_success():
+    """auth-redirect 收到 open_id 时同步账号并 302 回前端 success。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        mock_sync.return_value = {"upserted": 1, "active_count": 1, "fetched": 1}
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_open_001", "nick_name": "Test Account"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.startswith("https://workbench.example.com/douyin-ai-cs?")
+    assert "auth=success" in location
+    assert "open_id=account_open_001" in location
+    mock_sync.assert_called_once()
+    assert mock_sync.call_args.kwargs["name_or_open_id"] == "account_open_001"
+    assert mock_sync.call_args.kwargs["page_num"] == 1
+    assert mock_sync.call_args.kwargs["page_size"] == 20
+
+
+def test_auth_redirect_with_nick_name_syncs_when_no_open_id():
+    """auth-redirect 无 open_id 但有 nick_name 时用 nick_name 同步。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        mock_sync.return_value = {"upserted": 1, "active_count": 1, "fetched": 1}
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"nick_name": "南京佳欣说车"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "auth=success" in location
+    assert "nick_name=" in location
+    # 中文应被 URL 编码，原文不直接出现在 location
+    assert "南京佳欣说车" not in location
+    mock_sync.assert_called_once()
+    assert mock_sync.call_args.kwargs["name_or_open_id"] == "南京佳欣说车"
+
+
+def test_auth_redirect_with_error_does_not_sync_and_redirects_failed():
+    """auth-redirect 收到 error/err_msg 时不同步，302 回前端 failed。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"error": "auth_denied", "err_msg": "user cancelled"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "auth=failed" in location
+    assert "reason=" in location
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_without_open_id_or_nick_name_redirects_unknown():
+    """auth-redirect 缺 open_id 和 nick_name 时不同步，302 回前端 unknown。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"code": "auth_code_001", "state": "state_abc"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "auth=unknown" in location
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_sync_failure_redirects_sync_failed_without_secret():
+    """auth-redirect 同步抛异常时 302 回前端 sync_failed，且不泄露 secret/token。"""
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        mock_sync.side_effect = RuntimeError("upstream failed with gmp-secret-value token-abc")
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_open_002"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "auth=sync_failed" in location
+    # 异常信息（含 secret/token）不得透传到重定向 URL
+    assert "gmp-secret-value" not in location
+    assert "token-abc" not in location

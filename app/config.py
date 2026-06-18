@@ -94,6 +94,9 @@ DY_CALLBACK_EVENTS = [
 ]
 DY_CALLBACK_URL = os.getenv("DY_CALLBACK_URL", "").strip() or None
 DY_AUTH_REDIRECT_URL = os.getenv("DY_AUTH_REDIRECT_URL", "").strip() or None
+# 授权成功后 302 回前端的基址（auth-redirect 同步完成后跳转目标）。
+# 必须与 DY_AUTH_REDIRECT_URL（传给上游、由后端 auth-redirect 接收）区分，避免循环。
+DY_AUTH_REDIRECT_FRONTEND_URL = os.getenv("DY_AUTH_REDIRECT_FRONTEND_URL", "").strip() or None
 
 # ---------- NewCarProject 登录权限对接配置 ----------
 # P0 默认不强制拦截既有业务接口，mock 仅用于本地开发和测试。

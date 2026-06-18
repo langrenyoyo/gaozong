@@ -5,7 +5,9 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+from urllib.parse import quote
 
 from app import config
 from app.auth.context import RequestContext
@@ -80,6 +82,105 @@ def oauth_callback(request: Request) -> DouyinLiveCheckObserveResponse:
     _ensure_enabled()
     params = dict(request.query_params)
     return DouyinLiveCheckObserveResponse(data=record_oauth_callback(params))
+
+
+def _auth_redirect_frontend_base() -> str:
+    """授权成功后 302 回前端的基址。
+
+    必须与传给上游的 DY_AUTH_REDIRECT_URL（后端 auth-redirect 地址）区分，
+    否则 auth-redirect 同步后会 302 回自身形成循环。
+    优先 DY_AUTH_REDIRECT_FRONTEND_URL，其次 PUBLIC_BASE_URL，最后兜底。
+    """
+    if config.DY_AUTH_REDIRECT_FRONTEND_URL:
+        return config.DY_AUTH_REDIRECT_FRONTEND_URL.rstrip("/")
+    if config.PUBLIC_BASE_URL:
+        return config.PUBLIC_BASE_URL.rstrip("/")
+    return "https://douyinapi.misanduo.com"
+
+
+def _safe_query_value(value: str | None) -> str:
+    """URL 编码 query 值，避免中文/特殊字符破坏重定向 URL。"""
+    return quote(str(value), safe="")
+
+
+@router.get("/auth-redirect")
+def auth_redirect(
+    request: Request,
+    context: RequestContext | None = Depends(get_request_context_optional),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """抖音授权成功后 GMP 302 回跳入口：同步企业号后跳回前端。
+
+    GMP /get_aweme_auth_url 的 auth_redirect_url 指向本路由。授权成功后 GMP 302
+    到这里，携带 open_id / nick_name / avatar 等。本路由调 /list_bind_info 同步
+    账号到 douyin_authorized_accounts，再 302 回前端 /douyin-ai-cs 展示结果。
+    与 oauth-callback（仅观察 OAuth 回调摘要，不写库）不同，本路由会真正同步账号。
+    """
+    _ensure_enabled()
+    params = dict(request.query_params)
+    frontend_base = _auth_redirect_frontend_base()
+
+    error = params.get("error") or params.get("err_msg")
+    if error:
+        logger.warning(
+            "douyin auth-redirect 收到授权失败: error=%s, open_id=%s",
+            error,
+            params.get("open_id"),
+        )
+        return RedirectResponse(
+            url=f"{frontend_base}/douyin-ai-cs?auth=failed&reason={_safe_query_value(error)}",
+            status_code=302,
+        )
+
+    open_id = params.get("open_id")
+    nick_name = params.get("nick_name") or params.get("nickname")
+    sync_key = open_id or nick_name
+    if not sync_key:
+        logger.warning(
+            "douyin auth-redirect 缺少 open_id 和 nick_name: query_keys=%s",
+            sorted(params.keys()),
+        )
+        return RedirectResponse(
+            url=f"{frontend_base}/douyin-ai-cs?auth=unknown",
+            status_code=302,
+        )
+
+    try:
+        sync_result = sync_bind_info_accounts(
+            db,
+            page_num=1,
+            page_size=20,
+            name_or_open_id=sync_key,
+            context=context,
+        )
+    except Exception as exc:
+        # 同步失败：仅记录 error 类型与摘要，绝不打印 secret/token/Authorization
+        logger.error(
+            "douyin auth-redirect 同步失败: sync_key=%s, error_type=%s, open_id=%s",
+            sync_key,
+            type(exc).__name__,
+            open_id,
+        )
+        return RedirectResponse(
+            url=f"{frontend_base}/douyin-ai-cs?auth=sync_failed",
+            status_code=302,
+        )
+
+    logger.info(
+        "douyin auth-redirect 同步完成: sync_key=%s, upserted=%s, active_count=%s",
+        sync_key,
+        sync_result.get("upserted"),
+        sync_result.get("active_count"),
+    )
+    if open_id:
+        return RedirectResponse(
+            url=f"{frontend_base}/douyin-ai-cs?auth=success&open_id={_safe_query_value(open_id)}",
+            status_code=302,
+        )
+    return RedirectResponse(
+        url=f"{frontend_base}/douyin-ai-cs?auth=success&nick_name={_safe_query_value(nick_name or '')}",
+        status_code=302,
+    )
 
 
 @router.get("/status", response_model=DouyinLiveCheckStatusResponse)
