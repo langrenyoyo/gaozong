@@ -184,6 +184,27 @@ export interface ReplySuggestionResponse {
   agent_category?: string | null;
 }
 
+export interface SendDouyinManualMessageRequest {
+  conversation_short_id: string;
+  customer_open_id?: string;
+  content: string;
+  scene?: "im_reply_msg";
+  manual_confirmed: true;
+  operator_id?: string;
+}
+
+export interface SendDouyinManualMessageResponse {
+  success: boolean;
+  data: {
+    send_id?: number;
+    status?: string;
+    upstream_msg_id?: string | null;
+    auto_send: boolean;
+    manual_confirmed: boolean;
+    [key: string]: unknown;
+  };
+}
+
 function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     return getAxiosErrorMessage(error);
@@ -231,6 +252,22 @@ function extractResponseDetail(data: unknown): string {
         })
         .filter(Boolean)
         .join("；");
+    }
+    if (detail && typeof detail === "object") {
+      const detailRecord = detail as {
+        safe_message?: unknown;
+        upstream_msg?: unknown;
+        detail?: unknown;
+      };
+      if (typeof detailRecord.safe_message === "string") {
+        return detailRecord.safe_message;
+      }
+      if (typeof detailRecord.upstream_msg === "string") {
+        return detailRecord.upstream_msg;
+      }
+      if (typeof detailRecord.detail === "string") {
+        return detailRecord.detail;
+      }
     }
   }
   return "";
@@ -296,6 +333,19 @@ export async function getDouyinConversationMessages(
       },
     },
   ) as unknown as Promise<DouyinMessageListResponse>;
+}
+
+export async function sendDouyinManualMessage(
+  payload: SendDouyinManualMessageRequest,
+): Promise<SendDouyinManualMessageResponse> {
+  try {
+    return (await apiClient.post(
+      "/integrations/douyin/live-check/messages/send",
+      payload,
+    )) as unknown as SendDouyinManualMessageResponse;
+  } catch (error) {
+    throw new Error(`抖音私信发送失败：${getErrorMessage(error)}`);
+  }
 }
 
 export async function getDouyinConversationProfile(

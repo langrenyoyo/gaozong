@@ -30,6 +30,7 @@ import {
   getDouyinAccountConversations,
   getDouyinConversationMessages,
   getReplySuggestion,
+  sendDouyinManualMessage,
   type DouyinAccountItem,
   type DouyinAgentItem,
   type DouyinConversationItem,
@@ -185,6 +186,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [draftReplyText, setDraftReplyText] = useState("");
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -436,6 +441,12 @@ export default function DouyinAiCsWorkbenchPage() {
     setReply(null);
   }, [selectedAgentId]);
 
+  useEffect(() => {
+    setDraftReplyText(reply?.reply_text || "");
+    setSendError(null);
+    setSendDialogOpen(false);
+  }, [reply?.reply_text, selectedConversationId]);
+
   async function generateReply() {
     if (!selectedAccount || !selectedConversation || !selectedAgent || !latestMessage) return;
     setGenerating(true);
@@ -462,6 +473,44 @@ export default function DouyinAiCsWorkbenchPage() {
     await navigator.clipboard.writeText(reply.reply_text);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  function openSendDialog() {
+    if (!selectedConversation || !selectedAccount) return;
+    setSendError(null);
+    setDraftReplyText((current) => current || reply?.reply_text || "");
+    setSendDialogOpen(true);
+  }
+
+  async function confirmManualSend() {
+    if (!selectedConversation || !selectedAccount) return;
+    const content = draftReplyText.trim();
+    if (!content) {
+      setSendError("请输入要发送的文本内容");
+      return;
+    }
+    setSendingMessage(true);
+    setSendError(null);
+    try {
+      await sendDouyinManualMessage({
+        conversation_short_id: String(selectedConversation.conversation_short_id || selectedConversation.conversation_key || selectedConversation.id),
+        customer_open_id: selectedConversation.open_id,
+        content,
+        manual_confirmed: true,
+        scene: "im_reply_msg",
+      });
+      setSendDialogOpen(false);
+      await loadConversationDetail(selectedConversation.id);
+      await loadConversations(selectedAccount);
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "发送失败";
+      setSendError(message);
+    } finally {
+      setSendingMessage(false);
+    }
   }
 
   return (
@@ -780,11 +829,15 @@ export default function DouyinAiCsWorkbenchPage() {
                       {copied ? "已复制" : "复制回复"}
                     </button>
                     <button
-                      disabled
-                      className="h-9 rounded-md border border-slate-200 bg-slate-100 px-3 text-xs font-semibold text-slate-400"
+                      onClick={() => openSendDialog()}
+                      disabled={!selectedConversation || !selectedAccount}
+                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     >
-                      人工确认发送暂未接入
+                      人工确认发送
                     </button>
+                  </div>
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                    发送前请人工确认内容，后端会强制保持 auto_send=false。
                   </div>
                 </div>
               ) : (
@@ -986,6 +1039,78 @@ export default function DouyinAiCsWorkbenchPage() {
                     </button>
                   </div>
                 </aside>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {sendDialogOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-sm font-bold text-[#172033]">人工确认发送</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  仅在你确认后发送，后端会强制按人工确认链路处理。
+                </p>
+              </div>
+              <button
+                onClick={() => setSendDialogOpen(false)}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                aria-label="关闭发送确认弹窗"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                <div className="font-semibold text-slate-700">
+                  {selectedConversation?.nickname || "-"} · {selectedConversation?.open_id || "-"}
+                </div>
+                <div className="mt-1">
+                  会话编号：{String(selectedConversation?.conversation_short_id || selectedConversation?.conversation_key || selectedConversation?.id || "-")}
+                </div>
+              </div>
+
+              <label className="block">
+                <div className="mb-2 text-xs font-semibold text-slate-700">发送内容</div>
+                <textarea
+                  value={draftReplyText}
+                  onChange={(event) => setDraftReplyText(event.target.value)}
+                  rows={7}
+                  className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none ring-0 placeholder:text-slate-400 focus:border-blue-300"
+                  placeholder="请输入要发送的文本内容"
+                />
+              </label>
+
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                发送动作由人工触发，不会携带 auto_send 字段。
+              </div>
+
+              {sendError ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  <span>{sendError}</span>
+                </div>
+              ) : null}
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setSendDialogOpen(false)}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void confirmManualSend()}
+                  disabled={sendingMessage}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {sendingMessage ? <LoaderIcon size={14} className="animate-spin" /> : null}
+                  确认发送
+                </button>
               </div>
             </div>
           </div>
