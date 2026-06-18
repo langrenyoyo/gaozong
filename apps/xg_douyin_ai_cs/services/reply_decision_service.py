@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from apps.xg_douyin_ai_cs.llm.client import (
@@ -19,7 +20,10 @@ from apps.xg_douyin_ai_cs.schemas import (
 )
 from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
 from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
+from apps.xg_douyin_ai_cs.services.compute_usage_client import ComputeUsageClient
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
+
+_logger = logging.getLogger(__name__)
 
 AUDI_A6_ALIASES = ("奥迪A6", "奥迪A6L", "A6", "A6L")
 AGENT_CONFIG_MISSING_FALLBACK = "agent_config_missing_fallback"
@@ -303,6 +307,13 @@ def _build_llm_reply(
         status="completed",
         elapsed_ms=int(result.get("elapsed_ms") or 0),
     )
+    # P1-COMPUTE-USAGE-1：LLM 成功后上报 token 消耗到 9000；上报失败不影响回复。
+    _report_llm_usage(
+        request=request,
+        agent=agent,
+        conversation_id=conversation_id,
+        result=result,
+    )
     return ReplySuggestionResponse(
         reply_text=reply_text,
         match_level="rag_llm_reply",
@@ -432,3 +443,38 @@ def _agent_response_fields(agent: dict) -> dict:
         "agent_name": agent.get("agent_name"),
         "agent_category": agent.get("agent_category"),
     }
+
+
+def _report_llm_usage(
+    *,
+    request: ReplySuggestionRequest,
+    agent: dict,
+    conversation_id: int,
+    result: dict,
+) -> None:
+    """P1-COMPUTE-USAGE-1：LLM 成功路径上报算力消耗到 9000。
+
+    仅在 usage.total_tokens 为正且 merchant_id 存在时上报；
+    上报失败只记日志，**绝不影响**回复建议主流程。
+    安全边界：本函数不涉及 auto_send，不改变回复内容，不新增任何自动发送。
+    """
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return
+    total_tokens = usage.get("total_tokens")
+    if not isinstance(total_tokens, int) or total_tokens <= 0:
+        return
+    if not request.merchant_id:
+        return
+    try:
+        ComputeUsageClient().report_usage(
+            merchant_id=request.merchant_id,
+            tokens=total_tokens,
+            source="llm",
+            model=result.get("model"),
+            agent_id=agent.get("agent_id"),
+            conversation_id=conversation_id,
+            remark="douyin_ai_reply",
+        )
+    except Exception as exc:  # noqa: BLE001  双重保险：上报失败绝不影响 AI 回复主流程
+        _logger.warning("compute_usage stage=report_call_error error=%s", exc)

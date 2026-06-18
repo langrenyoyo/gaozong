@@ -278,3 +278,254 @@ def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_p
         "宝马5系",
         "奔驰E级",
     ]
+
+
+# ----------------------------------------------------------------------------
+# P1-COMPUTE-USAGE-1：9100 LLM 成功后向 9000 上报 token 消耗的集成场景。
+# 全部不调用真实 9000 / 不调用真实 LLM，chat 与 report_usage 均通过 monkeypatch 替换。
+# ----------------------------------------------------------------------------
+
+
+def _seed_knowledge_for_usage(client):
+    """播种 RAG 知识库并训练，确保 reply-suggestion 走 LLM 路径而非兜底话术。"""
+    client.post(
+        "/rag/documents",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "douyin_account_id": 1,
+            "title": "精品BBA主营车型和留资话术",
+            "category": "sales_script",
+            "brand": "奥迪",
+            "vehicle_name": "奥迪A6",
+            "content": "我们主要做宝马、奔驰、奥迪等精品BBA车型。客户咨询奥迪A6时应引导留资。",
+        },
+    )
+    client.post(
+        "/rag/train",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "douyin_account_id": 1,
+        },
+    )
+
+
+def _patch_llm_chat_with_usage(monkeypatch, *, usage):
+    """替换 OpenAICompatibleClient.chat，返回带指定 usage 的成功响应。"""
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": "您好，我们主要做精品BBA，方便留个联系方式吗？",
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+            "usage": usage,
+        }
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat
+    )
+
+
+def _patch_report_usage_recorder(monkeypatch, sink):
+    """替换 reply_decision_service 命名空间内的 ComputeUsageClient.report_usage，
+    把每次调用的 kwargs 记录到 sink（dict），返回被调用次数。
+    """
+
+    def fake_report(self, **kwargs):
+        sink["count"] = sink.get("count", 0) + 1
+        sink.setdefault("calls", []).append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        fake_report,
+    )
+
+
+def test_reply_suggestion_reports_compute_usage_on_llm_success(tmp_path, monkeypatch):
+    """场景1+2：LLM 成功 + usage.total_tokens>0 → 触发上报，
+    payload 含 merchant_id / tokens / source=llm / model / agent_id / conversation_id。
+    且 auto_send 仍为 False（安全边界不变）。
+    """
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_llm_chat_with_usage(
+        monkeypatch,
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+    sink = {}
+    _patch_report_usage_recorder(monkeypatch, sink)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is True
+    assert data["auto_send"] is False
+
+    # 上报被触发一次，且字段全部正确
+    assert sink["count"] == 1
+    payload = sink["calls"][0]
+    assert payload["merchant_id"] == "demo_bba"
+    assert payload["tokens"] == 15
+    assert payload["source"] == "llm"
+    assert payload["model"] == "mock-chat"
+    assert payload["conversation_id"] == 1
+    assert payload["remark"] == "douyin_ai_reply"
+    # agent_id 来自 demo_bba + account 1 的默认 agent_bba
+    assert payload["agent_id"] == "agent_bba"
+
+
+def test_reply_suggestion_does_not_report_when_usage_missing(tmp_path, monkeypatch):
+    """场景3a：LLM 成功但响应未携带 usage（OpenAI-compatible 历史响应）→ 不上报。"""
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_llm_chat_with_usage(monkeypatch, usage=None)
+    sink = {}
+    _patch_report_usage_recorder(monkeypatch, sink)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["llm_used"] is True
+    assert sink.get("count", 0) == 0
+
+
+def test_reply_suggestion_does_not_report_when_total_tokens_non_positive(tmp_path, monkeypatch):
+    """场景3b：usage 存在但 total_tokens<=0 → 不上报。"""
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_llm_chat_with_usage(monkeypatch, usage={"total_tokens": 0})
+    sink = {}
+    _patch_report_usage_recorder(monkeypatch, sink)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["llm_used"] is True
+    assert sink.get("count", 0) == 0
+
+
+def test_reply_suggestion_does_not_report_when_llm_call_fails(tmp_path, monkeypatch):
+    """场景4：LLM 调用抛 LLMRequestError → 走 manual 路径，llm_used=False，不上报。"""
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    from apps.xg_douyin_ai_cs.llm.client import LLMRequestError
+
+    def fake_chat(self, messages):
+        raise LLMRequestError("upstream 500")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat
+    )
+    sink = {}
+    _patch_report_usage_recorder(monkeypatch, sink)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is False
+    assert "llm_call_failed" in data["warnings"]
+    assert sink.get("count", 0) == 0
+
+
+def test_reply_suggestion_does_not_report_when_llm_not_configured(tmp_path, monkeypatch):
+    """场景5：LLM 未配置（无 API key）→ llm_used=False，不上报。"""
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.delenv("XG_DOUYIN_AI_LLM_API_KEY", raising=False)
+    sink = {}
+    _patch_report_usage_recorder(monkeypatch, sink)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is False
+    assert "llm_not_configured" in data["warnings"]
+    assert sink.get("count", 0) == 0
+
+
+def test_reply_suggestion_still_returns_when_usage_report_raises(tmp_path, monkeypatch):
+    """场景6：report_usage 抛异常（不应发生，但 _report_llm_usage 有双重保险兜底）→
+    reply suggestion 仍正常返回，回复内容与 auto_send 不受影响。
+    """
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge_for_usage(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_llm_chat_with_usage(
+        monkeypatch,
+        usage={"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
+    )
+
+    def boom_report(self, **kwargs):
+        raise RuntimeError("unexpected compute report failure")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        boom_report,
+    )
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    # 上报异常被 _report_llm_usage 双重保险吞掉，reply 正常返回
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is True
+    assert data["reply_text"] == "您好，我们主要做精品BBA，方便留个联系方式吗？"
+    assert data["auto_send"] is False

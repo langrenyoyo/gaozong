@@ -56,6 +56,9 @@ class OpenAICompatibleClient:
             "reply_text": str(message.get("content") or "").strip(),
             "model": data.get("model") or self.config.chat_model,
             "elapsed_ms": elapsed_ms,
+            # P1-COMPUTE-USAGE-1：透传 OpenAI-compatible 响应中的 usage（prompt/completion/total_tokens）。
+            # 响应未携带 usage 时为 None，由调用方（reply_decision_service）决定是否上报算力消耗。
+            "usage": data.get("usage"),
         }
 
     def embed(self, text: str) -> dict:
