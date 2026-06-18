@@ -2,6 +2,7 @@ import {
   BotIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CoinsIcon,
   CpuIcon,
   FilterIcon,
   LogOutIcon,
@@ -30,6 +31,7 @@ const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
   { id: "ai-agents", label: "智能体", expandedLabel: "AI小高智能体", path: "/ai-agents" },
   { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
+  { id: "compute", label: "算力", expandedLabel: "小高算力", path: "/compute" },
 ];
 
 const superNavItems: Array<NavItem & { expandedLabel: string }> = [
@@ -44,6 +46,7 @@ const navIcons: Record<string, React.ReactNode> = {
   leads: <FilterIcon size={18} />,
   "ai-agents": <BotIcon size={18} />,
   "ai-agent": <ShieldCheckIcon size={18} />,
+  compute: <CoinsIcon size={18} />,
   "merchant-agent": <BotIcon size={18} />,
   "ai-reply-records": <MessageSquareIcon size={18} />,
   "admin-accounts": <UserCogIcon size={18} />,

@@ -528,3 +528,117 @@ export interface PollAndDetectResponse {
   };
   failure_stage?: string | null;
 }
+
+// ========== Compute（小高算力，P1-COMPUTE-FE-1）==========
+
+/** 算力余额与消耗统计（GET /compute/summary data）。 */
+export interface ComputeSummary {
+  merchant_id: string;
+  /** 当前算力余额（Token） */
+  balance_tokens: number;
+  /** 今日消耗（Token） */
+  today_consume: number;
+  /** 昨日消耗（Token） */
+  yesterday_consume: number;
+  /** 累计消耗（Token） */
+  total_consume: number;
+}
+
+/** 算力 Token 流水（GET /compute/transactions items）。 */
+export interface ComputeTransaction {
+  id: number;
+  merchant_id: string;
+  /** 流水类型: recharge(充值) / grant_package(发放套餐) / consume(消耗) */
+  transaction_type: string;
+  /** Token 变动（正为增加，负为消耗） */
+  delta_tokens: number;
+  /** 变动后余额 */
+  balance_after_tokens: number;
+  /** 来源: manual_recharge / package_grant / llm / embedding / other */
+  source: string;
+  remark?: string | null;
+  model?: string | null;
+  agent_id?: string | null;
+  conversation_id?: number | null;
+  created_at?: string | null;
+}
+
+/** Token 明细分页数据。 */
+export interface ComputeTransactionListData {
+  page: number;
+  page_size: number;
+  total: number;
+  items: ComputeTransaction[];
+}
+
+/** 算力套餐（GET /compute/packages items）。 */
+export interface ComputePackage {
+  id: number;
+  name: string;
+  /** 价格（整数元） */
+  price_yuan: number;
+  /** Token 数量 */
+  token_amount: number;
+  enabled: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** 商户发起充值订单请求（POST /compute/recharge-orders）。 */
+export interface ComputeRechargeOrderRequest {
+  /** 套餐充值时传入套餐 ID（与 custom_tokens 二选一） */
+  package_id?: number;
+  /** 自定义金额充值 Token 数量（与 package_id 二选一） */
+  custom_tokens?: number;
+  /** 支付方式: wechat / alipay */
+  pay_method: string;
+}
+
+/** 充值订单输出（一期 mock，不接真实支付）。 */
+export interface ComputeRechargeOrder {
+  /** mock 订单号 */
+  order_no: string;
+  pay_method: string;
+  tokens: number;
+  /** 价格（元），套餐充值时有值 */
+  price_yuan?: number | null;
+  /** mock 付款码占位 */
+  pay_qr_code?: string | null;
+  /** 订单状态: mock_pending（一期不接真实支付） */
+  status: string;
+}
+
+/** 算力余额/统计响应（GET /compute/summary）。 */
+export interface ComputeSummaryResponse {
+  success: boolean;
+  data: ComputeSummary;
+  message: string;
+}
+
+/** Token 明细列表响应（GET /compute/transactions）。 */
+export interface ComputeTransactionListResponse {
+  success: boolean;
+  data: ComputeTransactionListData;
+  message: string;
+}
+
+/** 套餐列表响应（GET /compute/packages）。 */
+export interface ComputePackageListResponse {
+  success: boolean;
+  data: ComputePackage[];
+  message: string;
+}
+
+/** 充值订单响应（POST /compute/recharge-orders）。 */
+export interface ComputeRechargeOrderResponse {
+  success: boolean;
+  data: ComputeRechargeOrder;
+  message: string;
+}
+
+/** Token 明细查询参数。 */
+export interface ComputeTransactionQuery {
+  transaction_type?: string;
+  page?: number;
+  page_size?: number;
+}

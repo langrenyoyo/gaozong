@@ -17,6 +17,7 @@ import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
+import ComputeCenter from "./ComputeCenter";
 import LeadsModulePage from "./LeadsModulePage";
 import WechatAgent from "./WechatAgent";
 import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
@@ -738,6 +739,8 @@ export default function Index({
           <SuperMerchantAgent />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
+        ) : activeNav === "compute" ? (
+          <ComputeCenter />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
