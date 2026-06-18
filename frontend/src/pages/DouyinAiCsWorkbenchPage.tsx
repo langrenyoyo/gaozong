@@ -489,11 +489,16 @@ export default function DouyinAiCsWorkbenchPage() {
       setSendError("请输入要发送的文本内容");
       return;
     }
+    const conversationShortId = selectedConversation.conversation_short_id;
+    if (!conversationShortId) {
+      setSendError("当前会话缺少 conversation_short_id，无法发送");
+      return;
+    }
     setSendingMessage(true);
     setSendError(null);
     try {
       await sendDouyinManualMessage({
-        conversation_short_id: String(selectedConversation.conversation_short_id || selectedConversation.conversation_key || selectedConversation.id),
+        conversation_short_id: String(conversationShortId),
         customer_open_id: selectedConversation.open_id,
         content,
         manual_confirmed: true,
@@ -828,21 +833,29 @@ export default function DouyinAiCsWorkbenchPage() {
                       <ClipboardIcon size={14} />
                       {copied ? "已复制" : "复制回复"}
                     </button>
-                    <button
-                      onClick={() => openSendDialog()}
-                      disabled={!selectedConversation || !selectedAccount}
-                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      人工确认发送
-                    </button>
-                  </div>
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                    发送前请人工确认内容，后端会强制保持 auto_send=false。
                   </div>
                 </div>
               ) : (
                 <EmptyState text="选择会话后点击生成回复建议。页面不会自动发送私信。" />
               )}
+
+              {selectedConversation ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] leading-5 text-amber-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>发送前请人工确认内容，后端会强制保持 auto_send=false。</span>
+                    <button
+                      onClick={() => openSendDialog()}
+                      disabled={!selectedAccount}
+                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      人工确认发送
+                    </button>
+                  </div>
+                  {!selectedConversation.conversation_short_id ? (
+                    <div className="mt-2 text-amber-700">当前会话缺少 conversation_short_id，确认发送时会提示原因。</div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -1070,7 +1083,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   {selectedConversation?.nickname || "-"} · {selectedConversation?.open_id || "-"}
                 </div>
                 <div className="mt-1">
-                  会话编号：{String(selectedConversation?.conversation_short_id || selectedConversation?.conversation_key || selectedConversation?.id || "-")}
+                  conversation_short_id：{selectedConversation?.conversation_short_id ? String(selectedConversation.conversation_short_id) : "缺失"}
                 </div>
               </div>
 
