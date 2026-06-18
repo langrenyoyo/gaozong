@@ -35,6 +35,12 @@ const TRANSACTION_TYPE_LABELS: Record<string, string> = {
 
 const PAGE_SIZE = 10;
 
+function formatPayMethod(value: string): string {
+  if (value === "alipay") return "支付宝";
+  if (value === "wechat") return "微信支付";
+  return value || "-";
+}
+
 /** Token 变动展示：正数加 +，负数保留 -。 */
 function formatTokenChange(delta: number): string {
   return delta > 0 ? `+${delta}` : String(delta);
@@ -158,7 +164,8 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                 <QrCodeIcon size={44} />
               </div>
               <p className="mt-4 text-sm font-bold text-[#1a1f2e]">充值订单已创建（mock）</p>
-              <p className="mt-1 text-xs text-[#8b95a6]">此为模拟付款码，不会真实支付，余额不会因此变动</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">充值订单为 mock_pending，真实支付暂未接入。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">不会调用微信支付或支付宝真实支付，余额以后台入账或测试接口为准。</p>
               <div className="mt-4 w-full space-y-1.5 rounded-xl bg-white px-3 py-3 text-left text-xs ring-1 ring-[#e4e8f0]">
                 <div className="flex justify-between">
                   <span className="text-[#8b95a6]">订单号</span>
@@ -170,8 +177,12 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#8b95a6]">支付方式</span>
+                  <span className="font-semibold text-[#1a1f2e]">{formatPayMethod(order.pay_method)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#8b95a6]">金额</span>
                   <span className="font-semibold text-[#1a1f2e]">
-                    {order.pay_method === "alipay" ? "支付宝" : "微信支付"}
+                    {order.price_yuan === null || order.price_yuan === undefined ? "自定义 Token" : `¥${order.price_yuan}`}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -219,7 +230,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                 </div>
               )}
 
-              <h3 className="mt-5 text-xs font-bold text-[#1a1f2e]">自定义金额</h3>
+              <h3 className="mt-5 text-xs font-bold text-[#1a1f2e]">自定义 Token 数量</h3>
               <div className="mt-3 flex h-10 items-center rounded-xl border border-[#e4e8f0] bg-white px-3 focus-within:border-[#2563eb]">
                 <input
                   type="number"
@@ -299,6 +310,7 @@ export default function ComputeCenter() {
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [transactionError, setTransactionError] = useState<string | null>(null);
+  const [packageError, setPackageError] = useState<string | null>(null);
   const [showRecharge, setShowRecharge] = useState(false);
 
   const loadSummary = useCallback(async () => {
@@ -337,12 +349,15 @@ export default function ComputeCenter() {
 
   const loadPackages = useCallback(async () => {
     setLoadingPackages(true);
+    setPackageError(null);
     try {
       const response = await fetchComputePackages();
       setPackages(response.data);
     } catch (err) {
+      const message = resolveErrorMessage(err);
       setPackages([]);
-      toast.error(`套餐加载失败：${resolveErrorMessage(err)}`);
+      setPackageError(message);
+      toast.error(`套餐加载失败：${message}`);
     } finally {
       setLoadingPackages(false);
     }
@@ -425,6 +440,57 @@ export default function ComputeCenter() {
             </button>
           </div>
         ) : null}
+
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
+          <div className="font-semibold">充值订单为 mock_pending，真实支付暂未接入。</div>
+          <div>不会调用微信支付或支付宝真实支付；余额以后台入账或测试接口为准。</div>
+        </div>
+
+        <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
+            <h2 className="text-sm font-bold text-[#1a1f2e]">可用套餐</h2>
+            <button
+              onClick={() => void loadPackages()}
+              disabled={loadingPackages}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e4e8f0] bg-white px-3 text-xs font-semibold text-[#475467] disabled:opacity-60"
+            >
+              <RefreshCwIcon size={13} className={loadingPackages ? "animate-spin" : ""} />
+              刷新
+            </button>
+          </div>
+
+          {packageError ? (
+            <div className="flex items-center gap-2 px-4 py-6 text-xs text-red-600">
+              <AlertCircleIcon size={14} />
+              <span>套餐加载失败：{packageError}</span>
+              <button onClick={() => void loadPackages()} className="ml-2 underline">
+                重试
+              </button>
+            </div>
+          ) : loadingPackages && packages.length === 0 ? (
+            <div className="grid grid-cols-1 gap-3 px-4 py-4 md:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl bg-[#f1f5f9]" />
+              ))}
+            </div>
+          ) : packages.length === 0 ? (
+            <div className="px-4 py-8 text-center text-xs text-[#8b95a6]">暂无可用套餐，可在充值弹窗中使用自定义 Token 数量创建模拟订单。</div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 px-4 py-4 md:grid-cols-3">
+              {packages.map((pkg) => (
+                <button
+                  key={pkg.id}
+                  onClick={() => setShowRecharge(true)}
+                  className="rounded-xl border border-[#e4e8f0] bg-white px-4 py-4 text-left transition-smooth hover:border-[#2563eb] hover:bg-[#eff6ff]"
+                >
+                  <div className="text-sm font-bold text-[#1a1f2e]">{pkg.name}</div>
+                  <div className="mt-2 text-lg font-bold text-[#2563eb]">¥{pkg.price_yuan}</div>
+                  <div className="mt-1 text-xs text-[#8b95a6]">{pkg.token_amount} Token</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Token 明细表 */}
         <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
