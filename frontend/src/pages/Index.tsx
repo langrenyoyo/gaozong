@@ -26,6 +26,7 @@ import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import SuperAdminAccounts from "./SuperAdminAccounts";
+import SuperComputeConfig from "./SuperComputeConfig";
 
 interface DouyinAccount {
   name: string;
@@ -708,6 +709,8 @@ export default function Index({
         {isAdminUser ? (
           superActiveNav === "ai-reply-records" ? (
             <SuperAiReplyRecords />
+          ) : superActiveNav === "admin-compute" ? (
+            <SuperComputeConfig />
           ) : superActiveNav === "admin-accounts" ? (
             <SuperAdminAccounts />
           ) : (

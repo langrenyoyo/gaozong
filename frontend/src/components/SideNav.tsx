@@ -37,6 +37,7 @@ const navItems: Array<NavItem & { expandedLabel: string }> = [
 const superNavItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "merchant-agent", label: "智能体", expandedLabel: "AI小高智能体", path: "/merchant-agent" },
   { id: "ai-reply-records", label: "回复", expandedLabel: "AI回复记录", path: "/ai-reply-records" },
+  { id: "admin-compute", label: "算力", expandedLabel: "算力配置", path: "/admin-compute" },
   { id: "admin-accounts", label: "账号", expandedLabel: "管理员账号", path: "/admin-accounts" },
 ];
 
@@ -49,6 +50,7 @@ const navIcons: Record<string, React.ReactNode> = {
   compute: <CoinsIcon size={18} />,
   "merchant-agent": <BotIcon size={18} />,
   "ai-reply-records": <MessageSquareIcon size={18} />,
+  "admin-compute": <CpuIcon size={18} />,
   "admin-accounts": <UserCogIcon size={18} />,
 };
 

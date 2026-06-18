@@ -13,6 +13,7 @@
 
 import apiClient from "./client";
 import type {
+  ComputePackage,
   ComputePackageListResponse,
   ComputeRechargeOrderRequest,
   ComputeRechargeOrderResponse,
@@ -20,6 +21,40 @@ import type {
   ComputeTransactionListResponse,
   ComputeTransactionQuery,
 } from "./types";
+
+/** 管理员创建算力套餐请求（POST /admin/compute/packages）。 */
+export interface ComputePackageCreateRequest {
+  name: string;
+  price_yuan: number;
+  token_amount: number;
+  enabled?: boolean;
+}
+
+/** 管理员更新算力套餐请求（PUT /admin/compute/packages/{id}）。 */
+export interface ComputePackageUpdateRequest {
+  name?: string;
+  price_yuan?: number;
+  token_amount?: number;
+  enabled?: boolean;
+}
+
+/** 管理员套餐详情响应（POST/PUT /admin/compute/packages）。 */
+export interface ComputePackageResponse {
+  success: boolean;
+  data: ComputePackage;
+  message: string;
+}
+
+/** 管理员给商户充值 Token 请求。 */
+export interface ComputeAdminRechargeRequest {
+  tokens: number;
+  remark?: string;
+}
+
+/** 管理员给商户发放套餐请求。 */
+export interface ComputeGrantPackageRequest {
+  package_id: number;
+}
 
 /** 过滤空值参数，避免发送 undefined/null/空字符串。 */
 function compactParams(
@@ -57,4 +92,40 @@ export async function createComputeRechargeOrder(
   payload: ComputeRechargeOrderRequest,
 ): Promise<ComputeRechargeOrderResponse> {
   return apiClient.post("/compute/recharge-orders", payload);
+}
+
+/** 管理员获取全部套餐（GET /admin/compute/packages，包含禁用套餐）。 */
+export async function fetchAdminComputePackages(): Promise<ComputePackageListResponse> {
+  return apiClient.get("/admin/compute/packages");
+}
+
+/** 管理员创建套餐（POST /admin/compute/packages）。 */
+export async function createAdminComputePackage(
+  payload: ComputePackageCreateRequest,
+): Promise<ComputePackageResponse> {
+  return apiClient.post("/admin/compute/packages", payload);
+}
+
+/** 管理员更新套餐（PUT /admin/compute/packages/{package_id}）。 */
+export async function updateAdminComputePackage(
+  packageId: number,
+  payload: ComputePackageUpdateRequest,
+): Promise<ComputePackageResponse> {
+  return apiClient.put(`/admin/compute/packages/${packageId}`, payload);
+}
+
+/** 管理员给指定商户后台充值 Token（不代表真实支付）。 */
+export async function rechargeMerchantCompute(
+  merchantId: string,
+  payload: ComputeAdminRechargeRequest,
+): Promise<ComputeSummaryResponse> {
+  return apiClient.post(`/admin/merchants/${encodeURIComponent(merchantId)}/compute/recharge`, payload);
+}
+
+/** 管理员给指定商户发放套餐（不代表真实支付）。 */
+export async function grantMerchantComputePackage(
+  merchantId: string,
+  payload: ComputeGrantPackageRequest,
+): Promise<ComputeSummaryResponse> {
+  return apiClient.post(`/admin/merchants/${encodeURIComponent(merchantId)}/compute/grant-package`, payload);
 }
