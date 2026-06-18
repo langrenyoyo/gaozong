@@ -543,3 +543,203 @@ def test_get_webhook_event_detail_raw_body_parse_failure_not_500():
     assert data["lead_action"] == "invalid_content"
     assert data["raw_body"] is None
     assert data["failure_reason"] == "invalid_raw_body"
+
+
+def test_process_webhook_event_persists_normalized_fields_from_json_string_content():
+    payload = _payload(
+        from_user_id="customer_norm_001",
+        to_user_id="account_norm_001",
+        content={
+            **_content(
+                text="wx norm001",
+                server_message_id="server_norm_001",
+                conversation_short_id="conv_norm_001",
+            ),
+            "conversation_type": 1,
+            "source": "aweme",
+            "user_infos": [
+                {
+                    "open_id": "customer_norm_001",
+                    "nick_name": "Customer Norm",
+                    "avatar": "https://example.com/customer_norm.png",
+                },
+                {
+                    "open_id": "account_norm_001",
+                    "nick_name": "Account Norm",
+                    "avatar": "https://example.com/account_norm.png",
+                },
+            ],
+        },
+    )
+    db = TestSession()
+    try:
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).first()
+
+        assert event is not None
+        assert event.client_key is None
+        assert event.conversation_short_id == "conv_norm_001"
+        assert event.server_message_id == "server_norm_001"
+        assert event.conversation_type == "1"
+        assert event.message_type == "text"
+        assert event.message_source == "aweme"
+        assert event.parse_status == "parsed"
+        assert event.parse_error is None
+        assert event.from_user_nick_name == "Customer Norm"
+        assert event.from_user_avatar == "https://example.com/customer_norm.png"
+        assert event.to_user_nick_name == "Account Norm"
+        assert event.to_user_avatar == "https://example.com/account_norm.png"
+        assert int(event.message_create_time.timestamp() * 1000) == 1710000000000
+        assert json.loads(event.parsed_content_json)["server_message_id"] == "server_norm_001"
+        assert json.loads(event.raw_body)["content"]
+    finally:
+        db.close()
+
+
+def test_process_webhook_event_persists_normalized_fields_from_dict_content():
+    payload = {
+        "event": "im_send_msg",
+        "from_user_id": "account_dict_001",
+        "to_user_id": "customer_dict_001",
+        "client_key": "client_dict_001",
+        "content": {
+            **_content(
+                text="已收到",
+                server_message_id="server_dict_001",
+                conversation_short_id="conv_dict_001",
+            ),
+            "conversation_type": 1,
+            "source": "staff_console",
+            "user_infos": [
+                {"open_id": "account_dict_001", "nick_name": "Account Dict"},
+                {"open_id": "customer_dict_001", "nick_name": "Customer Dict"},
+            ],
+        },
+    }
+    db = TestSession()
+    try:
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).first()
+
+        assert event is not None
+        assert event.client_key == "client_dict_001"
+        assert event.conversation_short_id == "conv_dict_001"
+        assert event.server_message_id == "server_dict_001"
+        assert event.conversation_type == "1"
+        assert event.message_type == "text"
+        assert event.message_source == "staff_console"
+        assert event.parse_status == "parsed"
+        assert event.from_user_nick_name == "Account Dict"
+        assert event.to_user_nick_name == "Customer Dict"
+    finally:
+        db.close()
+
+
+def test_process_webhook_event_invalid_content_keeps_raw_event_and_marks_parse_failed():
+    payload = _payload(
+        from_user_id="customer_bad_content",
+        to_user_id="account_bad_content",
+        content="{bad json",
+    )
+    db = TestSession()
+    try:
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).first()
+
+        assert event is not None
+        assert event.raw_body
+        assert event.parse_status == "parse_failed"
+        assert event.parse_error == "invalid_content_json"
+        assert event.parsed_content_json == "{}"
+        assert event.conversation_short_id is None
+        assert event.server_message_id is None
+    finally:
+        db.close()
+
+
+def test_duplicate_server_message_id_does_not_create_second_normalized_message():
+    payload = _payload(
+        from_user_id="customer_dup_norm",
+        to_user_id="account_dup_norm",
+        content=_content(
+            text="wx dupnorm",
+            server_message_id="server_dup_norm",
+            conversation_short_id="conv_dup_norm",
+        ),
+    )
+    db = TestSession()
+    try:
+        first = process_webhook_event(db, payload)
+        db.commit()
+        second = process_webhook_event(db, payload)
+        db.commit()
+
+        assert second["is_duplicate"] is True
+        normalized_rows = (
+            db.query(DouyinWebhookEvent)
+            .filter(
+                DouyinWebhookEvent.server_message_id == "server_dup_norm",
+                DouyinWebhookEvent.is_duplicate == 0,
+            )
+            .all()
+        )
+        assert [item.id for item in normalized_rows] == [first["event_id"]]
+    finally:
+        db.close()
+
+
+def test_get_send_msg_context_returns_latest_non_duplicate_context():
+    from app.services.douyin_workbench_conversation_service import get_send_msg_context
+
+    db = TestSession()
+    try:
+        process_webhook_event(
+            db,
+            _payload(
+                from_user_id="customer_ctx",
+                to_user_id="account_ctx",
+                content=_content(
+                    text="wx ctx",
+                    server_message_id="server_ctx_older",
+                    conversation_short_id="conv_ctx",
+                ),
+            ),
+        )
+        db.commit()
+        process_webhook_event(
+            db,
+            {
+                "event": "im_enter_direct_msg",
+                "from_user_id": "customer_ctx",
+                "to_user_id": "account_ctx",
+                "content": {
+                    **_content(
+                        text="",
+                        server_message_id="server_ctx_latest",
+                        conversation_short_id="conv_ctx",
+                    ),
+                    "conversation_type": 1,
+                    "source": "enter_direct",
+                },
+            },
+        )
+        db.commit()
+
+        context = get_send_msg_context(db, conversation_short_id="conv_ctx", customer_open_id="customer_ctx")
+
+        assert context == {
+            "conversation_id": "conv_ctx",
+            "conversation_short_id": "conv_ctx",
+            "msg_id": "server_ctx_latest",
+            "server_message_id": "server_ctx_latest",
+            "from_user_id": "customer_ctx",
+            "to_user_id": "account_ctx",
+            "customer_open_id": "customer_ctx",
+            "account_open_id": "account_ctx",
+            "scene": "im_enter_direct_msg",
+        }
+    finally:
+        db.close()

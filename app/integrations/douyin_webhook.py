@@ -101,6 +101,84 @@ def parse_content(raw_content: Any) -> dict[str, Any]:
     return {}
 
 
+def parse_content_with_status(raw_content: Any) -> tuple[dict[str, Any], str, str | None]:
+    """Parse callback content and keep a safe status for persistence."""
+    if isinstance(raw_content, dict):
+        return raw_content, "parsed", None
+    if isinstance(raw_content, str):
+        if not raw_content.strip():
+            return {}, "empty", None
+        try:
+            parsed = json.loads(raw_content)
+        except json.JSONDecodeError:
+            return {}, "parse_failed", "invalid_content_json"
+        if isinstance(parsed, dict):
+            return parsed, "parsed", None
+        return {}, "parse_failed", "content_json_not_object"
+    if raw_content is None:
+        return {}, "empty", None
+    return {}, "parse_failed", "content_not_object_or_json_string"
+
+
+def parse_douyin_callback_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize stable private-message fields while preserving raw payload separately."""
+    content, parse_status, parse_error = parse_content_with_status(payload.get("content"))
+    from_user_id = _optional_str(payload.get("from_user_id"))
+    to_user_id = _optional_str(payload.get("to_user_id"))
+    profiles = _profiles_by_open_id(content.get("user_infos"))
+    from_profile = profiles.get(from_user_id or "", {})
+    to_profile = profiles.get(to_user_id or "", {})
+
+    return {
+        "client_key": _optional_str(payload.get("client_key")),
+        "conversation_short_id": _optional_str(content.get("conversation_short_id")),
+        "server_message_id": _optional_str(content.get("server_message_id")),
+        "conversation_type": _optional_str(content.get("conversation_type")),
+        "message_type": _optional_str(content.get("message_type")),
+        "message_create_time": _message_create_time(content.get("create_time")),
+        "message_source": _optional_str(content.get("source")),
+        "from_user_nick_name": _optional_str(from_profile.get("nick_name") or from_profile.get("nickname")),
+        "from_user_avatar": _optional_str(from_profile.get("avatar") or from_profile.get("avatar_url")),
+        "to_user_nick_name": _optional_str(to_profile.get("nick_name") or to_profile.get("nickname")),
+        "to_user_avatar": _optional_str(to_profile.get("avatar") or to_profile.get("avatar_url")),
+        "parse_status": parse_status,
+        "parse_error": parse_error,
+        "parsed_content_json": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+    }
+
+
+def _profiles_by_open_id(user_infos: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(user_infos, list):
+        return {}
+    profiles: dict[str, dict[str, Any]] = {}
+    for item in user_infos:
+        if not isinstance(item, dict):
+            continue
+        open_id = _optional_str(item.get("open_id"))
+        if open_id:
+            profiles[open_id] = item
+    return profiles
+
+
+def _message_create_time(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp / 1000
+    return datetime.fromtimestamp(timestamp)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
 def extract_user_profile(payload: dict[str, Any]) -> tuple[str | None, str | None]:
     """从 user_infos 中提取 nick_name 和 avatar"""
     content = parse_content(payload.get("content"))
@@ -183,10 +261,12 @@ def persist_webhook_event(
 
     仅首次收到的事件调用此函数。event_key 保持真实幂等键，不做任何后缀处理。
     """
+    normalized = parse_douyin_callback_event(payload)
     event = DouyinWebhookEvent(
         event=payload.get("event"),
         from_user_id=payload.get("from_user_id"),
         to_user_id=payload.get("to_user_id"),
+        **normalized,
         event_key=event_key,
         is_duplicate=0,
         lead_id=lead_id,
@@ -208,10 +288,12 @@ def persist_duplicate_webhook_event(
     lead_id: int | None = None,
 ) -> DouyinWebhookEvent:
     """写入重复 webhook 原始事件，不触发线索更新。"""
+    normalized = parse_douyin_callback_event(payload)
     event = DouyinWebhookEvent(
         event=payload.get("event"),
         from_user_id=payload.get("from_user_id"),
         to_user_id=payload.get("to_user_id"),
+        **normalized,
         event_key=build_duplicate_event_key(original_event_key),
         is_duplicate=1,
         lead_id=lead_id,

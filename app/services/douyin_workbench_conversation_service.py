@@ -128,6 +128,53 @@ def list_conversation_messages(
     return {"items": items}
 
 
+def get_send_msg_context(
+    db: Session,
+    *,
+    conversation_short_id: str,
+    customer_open_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the latest non-duplicate message context needed by later send_msg work."""
+    if not conversation_short_id:
+        return None
+
+    rows = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
+        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .order_by(
+            DouyinWebhookEvent.message_create_time.desc(),
+            DouyinWebhookEvent.created_at.desc(),
+            DouyinWebhookEvent.id.desc(),
+        )
+        .all()
+    )
+    for row in rows:
+        account_open_id, resolved_customer_open_id = _send_msg_participants(row)
+        if customer_open_id and resolved_customer_open_id != customer_open_id:
+            continue
+        if not row.server_message_id or not account_open_id or not resolved_customer_open_id:
+            continue
+        return {
+            "conversation_id": row.conversation_short_id,
+            "conversation_short_id": row.conversation_short_id,
+            "msg_id": row.server_message_id,
+            "server_message_id": row.server_message_id,
+            "from_user_id": row.from_user_id,
+            "to_user_id": row.to_user_id,
+            "customer_open_id": resolved_customer_open_id,
+            "account_open_id": account_open_id,
+            "scene": row.event,
+        }
+    return None
+
+
+def _send_msg_participants(row: DouyinWebhookEvent) -> tuple[str | None, str | None]:
+    if row.event == "im_send_msg":
+        return row.from_user_id, row.to_user_id
+    return row.to_user_id, row.from_user_id
+
+
 def _load_messages(db: Session, *, account_open_id: str | None = None) -> list[WorkbenchMessage]:
     rows = (
         db.query(DouyinWebhookEvent)
