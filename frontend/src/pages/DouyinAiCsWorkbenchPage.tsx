@@ -191,6 +191,13 @@ function mediaTypeForDownload(message: DouyinMessageItem): "image" | "video" | n
   return null;
 }
 
+function resourceMissingText(reason?: string | null): string {
+  if (reason === "resource_url_not_found") {
+    return "暂无资源链接";
+  }
+  return "暂无资源链接";
+}
+
 function downloadErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message) {
     return err.message;
@@ -547,6 +554,13 @@ export default function DouyinAiCsWorkbenchPage() {
     const stateKey = String(message.id);
     const mediaType = mediaTypeForDownload(message);
     const conversationShortId = message.conversation_short_id || selectedConversation?.conversation_short_id;
+    if (!message.downloadable_resource) {
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: { error: resourceMissingText(message.resource_missing_reason) },
+      }));
+      return;
+    }
     if (!mediaType) {
       setMediaDownloads((current) => ({
         ...current,
@@ -801,8 +815,9 @@ export default function DouyinAiCsWorkbenchPage() {
                   const isCustomer = message.direction === "inbound";
                   const mediaType = mediaTypeForDownload(message);
                   const downloadState = mediaDownloads[String(message.id)] || {};
+                  const downloadableResource = Boolean(mediaType && message.downloadable_resource);
                   const canRequestDownload = Boolean(
-                    mediaType &&
+                    downloadableResource &&
                       (message.conversation_short_id || selectedConversation?.conversation_short_id) &&
                       message.server_message_id,
                   );
@@ -826,25 +841,30 @@ export default function DouyinAiCsWorkbenchPage() {
                             }`}
                           >
                             <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                onClick={() => void downloadMessageResource(message)}
-                                disabled={downloadState.loading || !canRequestDownload}
-                                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-semibold ${
-                                  isCustomer
-                                    ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                                    : "border border-blue-200/50 bg-white/10 text-white hover:bg-white/15"
-                                } disabled:cursor-not-allowed disabled:opacity-60`}
-                              >
-                                {downloadState.loading ? (
-                                  <LoaderIcon size={13} className="animate-spin" />
-                                ) : (
-                                  <DownloadIcon size={13} />
-                                )}
-                                {downloadState.loading ? "下载中..." : "下载资源"}
-                              </button>
+                              {downloadableResource ? (
+                                <button
+                                  onClick={() => void downloadMessageResource(message)}
+                                  disabled={downloadState.loading || !canRequestDownload}
+                                  className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-semibold ${
+                                    isCustomer
+                                      ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                      : "border border-blue-200/50 bg-white/10 text-white hover:bg-white/15"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                >
+                                  {downloadState.loading ? (
+                                    <LoaderIcon size={13} className="animate-spin" />
+                                  ) : (
+                                    <DownloadIcon size={13} />
+                                  )}
+                                  {downloadState.loading ? "下载中..." : "下载资源"}
+                                </button>
+                              ) : null}
                               <span>{mediaType === "image" ? "图片资源" : "视频资源"}</span>
                             </div>
-                            {!canRequestDownload ? (
+                            {mediaType && !downloadableResource ? (
+                              <div className="mt-1 leading-5">{resourceMissingText(message.resource_missing_reason)}</div>
+                            ) : null}
+                            {downloadableResource && !canRequestDownload ? (
                               <div className="mt-1 leading-5">当前消息缺少下载所需的会话或消息标识。</div>
                             ) : null}
                             {downloadState.downloadUrl ? (

@@ -82,6 +82,10 @@ export interface DouyinMessageItem {
   content: string;
   message_type?: string | null;
   media_type?: "image" | "video" | string | null;
+  resource_url?: string | null;
+  source_url?: string | null;
+  downloadable_resource?: boolean;
+  resource_missing_reason?: string | null;
   created_at: string;
   raw_event_id?: number;
   server_message_id?: string | null;

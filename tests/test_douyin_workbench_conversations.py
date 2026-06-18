@@ -91,7 +91,8 @@ def _media_payload(
     message_type: str = "image",
     conversation_short_id: str = "media_conv_001",
     server_message_id: str = "media_msg_001",
-    resource_url: str = "https://example.com/media.png",
+    resource_url: str | None = "https://example.com/media.png",
+    resource_key: str = "url",
 ) -> dict:
     from_user_id = open_id if event == "im_receive_msg" else account_open_id
     to_user_id = account_open_id if event == "im_receive_msg" else open_id
@@ -103,12 +104,12 @@ def _media_payload(
         "conversation_short_id": conversation_short_id,
         "open_id": open_id,
         "account_open_id": account_open_id,
-        "url": resource_url,
         "user_infos": [
             {"open_id": open_id, "nick_name": "Media Customer"},
             {"open_id": account_open_id, "nick_name": "Media Account"},
         ],
     }
+    content[resource_key] = resource_url
     return {
         "event": event,
         "from_user_id": from_user_id,
@@ -163,6 +164,8 @@ def _insert_media_event(
     message_type: str = "image",
     conversation_short_id: str = "media_conv_001",
     server_message_id: str = "media_msg_001",
+    resource_url: str | None = "https://example.com/media.png",
+    resource_key: str = "url",
 ) -> int:
     db = TestSession()
     try:
@@ -170,6 +173,8 @@ def _insert_media_event(
             message_type=message_type,
             conversation_short_id=conversation_short_id,
             server_message_id=server_message_id,
+            resource_url=resource_url,
+            resource_key=resource_key,
         )
         content = json.loads(payload["content"])
         item = DouyinWebhookEvent(
@@ -397,7 +402,36 @@ def test_query_conversation_messages_exposes_media_fields_without_text():
     assert messages[0]["server_message_id"] == "media_msg_001"
     assert messages[0]["message_type"] == "user_local_image"
     assert messages[0]["media_type"] == "image"
+    assert messages[0]["resource_url"] == "https://example.com/media.png"
+    assert messages[0]["source_url"] == "https://example.com/media.png"
+    assert messages[0]["downloadable_resource"] is True
+    assert messages[0]["resource_missing_reason"] is None
     assert messages[0]["content"] == "[图片]"
+
+
+def test_query_conversation_messages_marks_media_without_url_not_downloadable():
+    _insert_media_event(
+        message_type="user_local_image",
+        conversation_short_id="media_missing_url_conv",
+        server_message_id="media_missing_url_msg",
+        resource_url=None,
+        resource_key="file_Url",
+    )
+
+    messages = _client().get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": "media_missing_url_conv",
+            "account_open_id": "account_media",
+        },
+    ).json()["items"]
+
+    assert messages[0]["message_type"] == "user_local_image"
+    assert messages[0]["media_type"] == "image"
+    assert messages[0]["resource_url"] is None
+    assert messages[0]["source_url"] is None
+    assert messages[0]["downloadable_resource"] is False
+    assert messages[0]["resource_missing_reason"] == "resource_url_not_found"
 
 
 def test_different_douyin_accounts_are_isolated():

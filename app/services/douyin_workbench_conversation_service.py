@@ -19,6 +19,16 @@ from app.services.douyin_live_check_service import (
 
 
 PRIVATE_MESSAGE_EVENTS = {"im_receive_msg", "im_send_msg"}
+RESOURCE_URL_KEYS = (
+    "file_Url",
+    "file_url",
+    "url",
+    "image_url",
+    "video_url",
+    "resource_url",
+    "media_url",
+    "download_url",
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +42,7 @@ class WorkbenchMessage:
     content: str
     message_type: str | None
     media_type: str | None
+    resource_url: str | None
     created_at: datetime | None
     server_message_id: str | None
     nick_name: str | None
@@ -125,6 +136,12 @@ def list_conversation_messages(
                 "message_type": message.message_type or "text",
                 "media_type": message.media_type,
                 "conversation_short_id": message.conversation_short_id,
+                "resource_url": message.resource_url,
+                "source_url": message.resource_url,
+                "downloadable_resource": bool(message.media_type and message.resource_url),
+                "resource_missing_reason": None
+                if not message.media_type or message.resource_url
+                else "resource_url_not_found",
                 "created_at": message.created_at,
                 "server_message_id": message.server_message_id,
             }
@@ -291,6 +308,7 @@ def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
         content=text,
         message_type=message_type,
         media_type=media_type,
+        resource_url=_resource_url_from_content(content),
         created_at=row.created_at,
         server_message_id=_optional_str(content.get("server_message_id") or row.server_message_id),
         nick_name=profile.get("nick_name"),
@@ -329,6 +347,20 @@ def _media_placeholder(media_type: str | None) -> str:
     if media_type == "video":
         return "[视频]"
     return ""
+
+
+def _resource_url_from_content(content: dict[str, Any]) -> str | None:
+    for key in RESOURCE_URL_KEYS:
+        value = _optional_str(content.get(key))
+        if value:
+            return value
+    nested = content.get("resource")
+    if isinstance(nested, dict):
+        for key in RESOURCE_URL_KEYS:
+            value = _optional_str(nested.get(key))
+            if value:
+                return value
+    return None
 
 
 def _parse_raw_body(raw_body: str | None) -> dict[str, Any] | None:

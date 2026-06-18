@@ -16,6 +16,16 @@ from app.services.douyin_openapi_client import call_douyin_openapi
 
 
 ALLOWED_MEDIA_TYPES = {"image", "video"}
+RESOURCE_URL_KEYS = (
+    "file_Url",
+    "file_url",
+    "url",
+    "image_url",
+    "video_url",
+    "resource_url",
+    "media_url",
+    "download_url",
+)
 
 
 def download_douyin_resource(
@@ -201,13 +211,13 @@ def _media_type_from_content(row: DouyinWebhookEvent, content: dict[str, Any]) -
 
 
 def _resource_url_from_content(content: dict[str, Any]) -> str | None:
-    for key in ("url", "image_url", "video_url", "resource_url", "download_url"):
+    for key in RESOURCE_URL_KEYS:
         value = _optional_str(content.get(key))
         if value:
             return value
     nested = content.get("resource")
     if isinstance(nested, dict):
-        for key in ("url", "image_url", "video_url"):
+        for key in RESOURCE_URL_KEYS:
             value = _optional_str(nested.get(key))
             if value:
                 return value

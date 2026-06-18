@@ -214,6 +214,7 @@ def _insert_resource_event(
     to_user_id: str = "resource_account_001",
     message_type: str = "image",
     resource_url: str | None = "https://api-normal.amemv.com/im_open/media?resource=image001",
+    resource_key: str = "url",
 ) -> None:
     db = TestSession()
     try:
@@ -224,8 +225,7 @@ def _insert_resource_event(
             "message_type": message_type,
             "media_type": message_type,
         }
-        if resource_url is not None:
-            content["url"] = resource_url
+        content[resource_key] = resource_url
         payload = {
             "event": "im_receive_msg",
             "from_user_id": from_user_id,
@@ -1037,6 +1037,39 @@ def test_download_resource_rejects_missing_url_without_calling_upstream():
     assert resp.status_code == 400
     assert "resource_url_not_found" in json.dumps(resp.json(), ensure_ascii=False)
     mock_post.assert_not_called()
+
+
+def test_download_resource_supports_file_url_field():
+    _insert_resource_event(
+        message_type="user_local_image",
+        resource_url="https://api-normal.amemv.com/file-url-image",
+        resource_key="file_Url",
+    )
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"download_url": "https://download.example.com/file-url.png"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["download_url"] == "https://download.example.com/file-url.png"
+    body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert body["url"] == "https://api-normal.amemv.com/file-url-image"
 
 
 def test_download_resource_success_uses_signed_openapi_body_and_persists_record():
