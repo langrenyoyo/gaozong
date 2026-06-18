@@ -6,9 +6,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
+from app.database import get_db
+from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -27,26 +30,12 @@ class ReplySuggestionProxyRequest(BaseModel):
     max_history_messages: int = Field(default=20, ge=1, le=100)
 
 
-def validate_douyin_agent_binding(
-    *,
-    context: RequestContext,
-    douyin_account_id: int | str,
-    agent_id: str | None,
-) -> bool:
-    """校验商户、抖音账号和智能体绑定关系。
-
-    P0 阶段先保留集中占位，后续接真实绑定表或 9100 账号查询时只替换这里。
-    """
-    if context.super_admin:
-        return True
-    return bool(context.merchant_id and douyin_account_id)
-
-
 @router.post("/conversations/{conversation_id}/reply-suggestion")
 async def create_reply_suggestion_proxy(
     conversation_id: str,
     request: ReplySuggestionProxyRequest,
     context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """由 9000 注入可信商户上下文后调用 9100 生成回复建议。"""
     require_permission("auto_wechat:douyin_ai_cs")(context)
@@ -55,14 +44,22 @@ async def create_reply_suggestion_proxy(
             status_code=403,
             detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
         )
-    if not validate_douyin_agent_binding(
+
+    binding_result = validate_douyin_agent_binding(
+        db=db,
         context=context,
         douyin_account_id=request.douyin_account_id,
         agent_id=request.agent_id,
-    ):
+        conversation_id=conversation_id,
+    )
+    if not binding_result.allowed:
         raise HTTPException(
             status_code=403,
-            detail={"code": "DOUYIN_AGENT_BINDING_DENIED", "message": "抖音账号或智能体不属于当前商户"},
+            detail={
+                "code": binding_result.reason_code or "DOUYIN_AGENT_BINDING_DENIED",
+                "message": "抖音账号或智能体不属于当前商户",
+                "audit": binding_result.audit,
+            },
         )
 
     payload = {
@@ -88,4 +85,7 @@ async def create_reply_suggestion_proxy(
         ) from exc
 
     result["auto_send"] = False
+    existing_warnings = result.get("warnings")
+    warnings = existing_warnings if isinstance(existing_warnings, list) else []
+    result["warnings"] = [*warnings, *binding_result.warnings]
     return result

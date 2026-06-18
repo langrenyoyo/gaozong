@@ -1,4 +1,23 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.database import Base, get_db
+from app.models import DouyinAuthorizedAccount
+
+
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def setup_function():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 def _client(monkeypatch):
@@ -7,7 +26,34 @@ def _client(monkeypatch):
 
     from app.main import create_app
 
-    return TestClient(create_app())
+    app = create_app()
+
+    def _override_get_db():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    return TestClient(app)
+
+
+def _insert_account(open_id="account-open-1"):
+    db = TestSession()
+    try:
+        row = DouyinAuthorizedAccount(
+            main_account_id=123,
+            open_id=open_id,
+            bind_status=1,
+            account_name="测试抖音号",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    finally:
+        db.close()
 
 
 class FakeDouyinAiCsClient:
@@ -38,12 +84,13 @@ def test_proxy_uses_request_context_merchant_id_not_payload(monkeypatch):
 
     fake_client = FakeDouyinAiCsClient()
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
 
     response = _client(monkeypatch).post(
         "/integrations/douyin-ai-cs/conversations/conv-1/reply-suggestion",
         json={
             "merchant_id": "forged-merchant",
-            "douyin_account_id": 1001,
+            "douyin_account_id": "account-open-1",
             "agent_id": "agent-sales",
             "latest_message": "想看车",
         },
@@ -60,11 +107,12 @@ def test_proxy_passes_context_merchant_id_to_9100_client(monkeypatch):
 
     fake_client = FakeDouyinAiCsClient()
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
 
     response = _client(monkeypatch).post(
         "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
         json={
-            "douyin_account_id": 1001,
+            "douyin_account_id": "account-open-1",
             "agent_id": "agent-sales",
             "latest_message": "A6 有现车吗",
             "max_history_messages": 10,
@@ -74,7 +122,7 @@ def test_proxy_passes_context_merchant_id_to_9100_client(monkeypatch):
     assert response.status_code == 200
     assert fake_client.calls[0]["conversation_id"] == "123"
     assert fake_client.calls[0]["request"]["merchant_id"] == "dev-merchant"
-    assert fake_client.calls[0]["request"]["douyin_account_id"] == 1001
+    assert fake_client.calls[0]["request"]["douyin_account_id"] == "account-open-1"
     assert fake_client.calls[0]["request"]["max_history_messages"] == 10
 
 
@@ -93,7 +141,7 @@ def test_proxy_denies_missing_douyin_ai_cs_permission(monkeypatch):
 
     response = client.post(
         "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
-        json={"douyin_account_id": 1001, "latest_message": "你好"},
+        json={"douyin_account_id": "account-open-1", "latest_message": "你好"},
     )
 
     assert response.status_code == 403
@@ -105,10 +153,11 @@ def test_proxy_allows_mock_dev_context(monkeypatch):
 
     fake_client = FakeDouyinAiCsClient()
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
 
     response = _client(monkeypatch).post(
         "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
-        json={"douyin_account_id": 1001, "latest_message": "你好"},
+        json={"douyin_account_id": "account-open-1", "latest_message": "你好"},
     )
 
     assert response.status_code == 200
@@ -124,10 +173,11 @@ def test_proxy_returns_clear_error_when_9100_client_fails(monkeypatch):
             raise XgDouyinAiCsClientError("xg_douyin_ai_cs_unavailable")
 
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: FailingClient())
+    _insert_account()
 
     response = _client(monkeypatch).post(
         "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
-        json={"douyin_account_id": 1001, "latest_message": "你好"},
+        json={"douyin_account_id": "account-open-1", "latest_message": "你好"},
     )
 
     assert response.status_code == 502
@@ -148,11 +198,67 @@ def test_proxy_forces_auto_send_false_even_if_9100_returns_true(monkeypatch):
             return data
 
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: UnsafeClient())
+    _insert_account()
 
     response = _client(monkeypatch).post(
         "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
-        json={"douyin_account_id": 1001, "latest_message": "你好"},
+        json={"douyin_account_id": "account-open-1", "latest_message": "你好"},
     )
 
     assert response.status_code == 200
     assert response.json()["auto_send"] is False
+
+
+def test_proxy_denies_when_binding_service_rejects_account(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "missing-account", "latest_message": "你好"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_FOUND"
+    assert fake_client.calls == []
+
+
+def test_proxy_merges_binding_warnings_into_reply_suggestion(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "你好"},
+    )
+
+    assert response.status_code == 200
+    warnings = response.json()["warnings"]
+    assert "DOUYIN_ACCOUNT_MERCHANT_BINDING_NOT_ENFORCED" in warnings
+    assert "AGENT_BINDING_NOT_ENFORCED" in warnings
+
+
+def test_proxy_does_not_use_payload_merchant_id_for_binding(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={
+            "merchant_id": "forged-merchant",
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["merchant_id"] == "dev-merchant"
