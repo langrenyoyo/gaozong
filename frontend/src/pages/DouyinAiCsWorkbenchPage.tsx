@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircleIcon,
   BotIcon,
   CheckIcon,
   ClipboardIcon,
   DownloadIcon,
+  ImagePlusIcon,
   LoaderIcon,
   MessageSquareTextIcon,
   PlusIcon,
@@ -33,16 +34,23 @@ import {
   getDouyinConversationMessages,
   getTrustedReplySuggestion,
   sendDouyinManualMessage,
+  uploadDouyinImage,
   type DouyinAccountItem,
   type DouyinAgentItem,
   type DouyinConversationItem,
   type DouyinMessageItem,
   type DouyinUserProfileResponse,
   type ReplySuggestionResponse,
+  type UploadDouyinImageResponse,
 } from "../api/douyinAiCsClient";
 
 const TENANT_ID = "demo_tenant";
 const MERCHANT_ID = "demo_bba";
+const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
+const ALLOWED_UPLOAD_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"];
+const UPLOAD_IMAGE_VALIDATION_MESSAGE =
+  "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "has_contact" | "pending_follow_up";
 
@@ -184,6 +192,8 @@ type MediaDownloadState = {
   copied?: boolean;
 };
 
+type UploadedImageData = NonNullable<UploadDouyinImageResponse["data"]>;
+
 function mediaTypeForDownload(message: DouyinMessageItem): "image" | "video" | null {
   const value = String(message.media_type || message.message_type || "").toLowerCase();
   if (value === "image" || value === "user_local_image") return "image";
@@ -205,6 +215,69 @@ function downloadErrorMessage(err: unknown): string {
   return "资源下载失败，请稍后重试";
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function fileExtension(fileName: string): string {
+  const index = fileName.lastIndexOf(".");
+  return index >= 0 ? fileName.slice(index).toLowerCase() : "";
+}
+
+function validateUploadImageFile(file: File | null): string | null {
+  if (!file) {
+    return "请选择要上传的图片文件";
+  }
+  const extension = fileExtension(file.name);
+  const mimeAllowed = file.type ? ALLOWED_UPLOAD_IMAGE_MIME_TYPES.includes(file.type) : false;
+  const extensionAllowed = ALLOWED_UPLOAD_IMAGE_EXTENSIONS.includes(extension);
+  if (!mimeAllowed && !extensionAllowed) {
+    return UPLOAD_IMAGE_VALIDATION_MESSAGE;
+  }
+  if (extension === ".svg" || extension === ".gif" || file.type === "image/svg+xml" || file.type === "image/gif") {
+    return UPLOAD_IMAGE_VALIDATION_MESSAGE;
+  }
+  if (file.size > MAX_UPLOAD_IMAGE_BYTES) {
+    return UPLOAD_IMAGE_VALIDATION_MESSAGE;
+  }
+  return null;
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("图片读取失败，请重新选择文件"));
+    };
+    reader.onerror = () => reject(new Error("图片读取失败，请重新选择文件"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function uploadImageResponseMessage(response: UploadDouyinImageResponse): string {
+  const detail = response.detail;
+  if (detail && typeof detail === "object" && typeof detail.safe_message === "string") {
+    return detail.safe_message;
+  }
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (response.error?.safe_message) {
+    return response.error.safe_message;
+  }
+  if (response.error?.message) {
+    return response.error.message;
+  }
+  return response.message || "图片上传失败，请稍后重试";
+}
+
 export default function DouyinAiCsWorkbenchPage() {
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -221,6 +294,12 @@ export default function DouyinAiCsWorkbenchPage() {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [mediaDownloads, setMediaDownloads] = useState<Record<string, MediaDownloadState>>({});
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadedImageData | null>(null);
+  const [uploadImageIdCopied, setUploadImageIdCopied] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -477,6 +556,11 @@ export default function DouyinAiCsWorkbenchPage() {
     setSendError(null);
     setSendDialogOpen(false);
     setMediaDownloads({});
+    setUploadDialogOpen(false);
+    setUploadFile(null);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadImageIdCopied(false);
   }, [reply?.reply_text, selectedConversationId]);
 
   async function generateReply() {
@@ -511,6 +595,67 @@ export default function DouyinAiCsWorkbenchPage() {
     setSendError(null);
     setDraftReplyText((current) => current || reply?.reply_text || "");
     setSendDialogOpen(true);
+  }
+
+  function openUploadDialog() {
+    if (!selectedConversation || !selectedAccount) return;
+    setUploadFile(null);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadImageIdCopied(false);
+    setUploadDialogOpen(true);
+  }
+
+  function closeUploadDialog() {
+    setUploadDialogOpen(false);
+    setUploadFile(null);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadImageIdCopied(false);
+  }
+
+  function handleUploadFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    const errorMessage = validateUploadImageFile(file);
+    setUploadFile(errorMessage ? null : file);
+    setUploadResult(null);
+    setUploadImageIdCopied(false);
+    setUploadError(errorMessage);
+    event.target.value = "";
+  }
+
+  async function confirmUploadImage() {
+    if (!selectedConversation || !selectedAccount) return;
+    const errorMessage = validateUploadImageFile(uploadFile);
+    if (errorMessage || !uploadFile) {
+      setUploadError(errorMessage || UPLOAD_IMAGE_VALIDATION_MESSAGE);
+      return;
+    }
+
+    setUploadingImage(true);
+    setUploadError(null);
+    setUploadResult(null);
+    setUploadImageIdCopied(false);
+    try {
+      const imageBase64 = await readFileAsDataUrl(uploadFile);
+      const result = await uploadDouyinImage({
+        file_name: uploadFile.name,
+        image_base64: imageBase64,
+        open_id: selectedConversation.open_id,
+      });
+      if (result.success === false) {
+        setUploadError(uploadImageResponseMessage(result));
+        return;
+      }
+      setUploadResult(result.data || {});
+      setUploadFile(null);
+    } catch (err) {
+      setUploadError(
+        err instanceof Error && err.message ? err.message : "图片上传失败，请稍后重试",
+      );
+    } finally {
+      setUploadingImage(false);
+    }
   }
 
   async function confirmManualSend() {
@@ -624,6 +769,18 @@ export default function DouyinAiCsWorkbenchPage() {
         ...current,
         [stateKey]: { ...current[stateKey], error: "复制链接失败，请手动复制" },
       }));
+    }
+  }
+
+  async function copyUploadedImageId() {
+    const imageId = uploadResult?.image_id;
+    if (!imageId) return;
+    try {
+      await navigator.clipboard.writeText(imageId);
+      setUploadImageIdCopied(true);
+      window.setTimeout(() => setUploadImageIdCopied(false), 1600);
+    } catch {
+      setUploadError("复制 image_id 失败，请手动复制");
     }
   }
 
@@ -911,6 +1068,16 @@ export default function DouyinAiCsWorkbenchPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {selectedConversation ? (
+                    <button
+                      onClick={() => openUploadDialog()}
+                      disabled={!selectedAccount}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <ImagePlusIcon size={14} />
+                      上传图片
+                    </button>
+                  ) : null}
                   {selectedConversation ? (
                     <button
                       onClick={() => openSendDialog()}
@@ -1291,6 +1458,115 @@ export default function DouyinAiCsWorkbenchPage() {
                 >
                   {sendingMessage ? <LoaderIcon size={14} className="animate-spin" /> : null}
                   确认发送
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {uploadDialogOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-emerald-50 text-emerald-600">
+                  <ImagePlusIcon size={18} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-[#172033]">上传图片</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    图片上传仅用于获取 image_id，不会自动发送私信。
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => closeUploadDialog()}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                aria-label="关闭图片上传弹窗"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                <div className="font-semibold text-slate-700">
+                  {selectedConversation?.nickname || "-"} · {selectedConversation?.open_id || "-"}
+                </div>
+                <div className="mt-1">支持 jpg/jpeg/png/bmp/webp，单张图片不超过 10MB。</div>
+              </div>
+
+              <label className="flex cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-white px-4 py-6 text-center hover:border-emerald-300 hover:bg-emerald-50/40">
+                <input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp"
+                  onChange={handleUploadFileChange}
+                  className="hidden"
+                />
+                <span className="grid h-10 w-10 place-items-center rounded-md bg-emerald-50 text-emerald-600">
+                  <ImagePlusIcon size={18} />
+                </span>
+                <span className="mt-3 text-sm font-semibold text-slate-800">选择本地图片</span>
+                <span className="mt-1 text-xs text-slate-500">
+                  不支持 svg/gif，图片不会被自动发送。
+                </span>
+              </label>
+
+              {uploadFile ? (
+                <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 sm:grid-cols-3">
+                  <span className="min-w-0 truncate">文件：{uploadFile.name}</span>
+                  <span>大小：{formatFileSize(uploadFile.size)}</span>
+                  <span>格式：{uploadFile.type || fileExtension(uploadFile.name) || "未知"}</span>
+                </div>
+              ) : null}
+
+              {uploadResult ? (
+                <div className="space-y-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-xs leading-5 text-emerald-800">
+                  <div className="font-bold">图片上传成功，已获得 image_id。当前不会自动发送图片。</div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <span className="min-w-0 break-all">image_id：{uploadResult.image_id || "-"}</span>
+                    <span>状态：{uploadResult.upload_status || "success"}</span>
+                    <span>尺寸：{uploadResult.width || "-"} × {uploadResult.height || "-"}</span>
+                    <span>md5：{uploadResult.md5 || "-"}</span>
+                  </div>
+                  {uploadResult.image_id ? (
+                    <button
+                      onClick={() => void copyUploadedImageId()}
+                      className="inline-flex h-8 items-center gap-2 rounded-md border border-emerald-200 bg-white px-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      <ClipboardIcon size={13} />
+                      {uploadImageIdCopied ? "已复制 image_id" : "复制 image_id"}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                上传成功后只展示 image_id，不会调用 /messages/send，也不会把 image_id 自动塞入发送接口。
+              </div>
+
+              {uploadError ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  <span>{uploadError}</span>
+                </div>
+              ) : null}
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => closeUploadDialog()}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void confirmUploadImage()}
+                  disabled={uploadingImage || !uploadFile}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {uploadingImage ? <LoaderIcon size={14} className="animate-spin" /> : <ImagePlusIcon size={14} />}
+                  确认上传
                 </button>
               </div>
             </div>

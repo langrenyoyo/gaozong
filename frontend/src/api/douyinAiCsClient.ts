@@ -233,6 +233,28 @@ export interface DownloadDouyinResourceResponse {
   message?: string;
 }
 
+export interface UploadDouyinImageRequest {
+  file_name: string;
+  image_base64: string;
+  open_id?: string;
+}
+
+export interface UploadDouyinImageResponse {
+  success?: boolean;
+  data?: {
+    upload_status?: string;
+    image_id?: string;
+    width?: number;
+    height?: number;
+    md5?: string;
+    file_name?: string;
+    [key: string]: unknown;
+  };
+  message?: string;
+  detail?: string | { safe_message?: string; error_code?: string };
+  error?: { safe_message?: string; message?: string };
+}
+
 function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     return getAxiosErrorMessage(error);
@@ -312,6 +334,18 @@ function extractResponseDetail(data: unknown): string {
       }
       if (typeof detailRecord.detail === "string") {
         return detailRecord.detail;
+      }
+    }
+  }
+  if (typeof data === "object" && "error" in data) {
+    const error = (data as { error?: unknown }).error;
+    if (error && typeof error === "object") {
+      const errorRecord = error as { safe_message?: unknown; message?: unknown };
+      if (typeof errorRecord.safe_message === "string") {
+        return errorRecord.safe_message;
+      }
+      if (typeof errorRecord.message === "string") {
+        return errorRecord.message;
       }
     }
   }
@@ -403,6 +437,19 @@ export async function downloadDouyinResource(
     )) as unknown as DownloadDouyinResourceResponse;
   } catch (error) {
     throw new Error(`抖音资源下载失败：${getErrorMessage(error)}`);
+  }
+}
+
+export async function uploadDouyinImage(
+  payload: UploadDouyinImageRequest,
+): Promise<UploadDouyinImageResponse> {
+  try {
+    return (await apiClient.post(
+      "/integrations/douyin/live-check/resources/upload-image",
+      payload,
+    )) as unknown as UploadDouyinImageResponse;
+  } catch (error) {
+    throw new Error(`抖音图片上传失败：${getErrorMessage(error)}`);
   }
 }
 
