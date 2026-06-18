@@ -113,11 +113,15 @@ def test_auth_url_missing_config_returns_clear_error():
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_BASE_URL", ""), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 0), \
-         patch("app.config.PUBLIC_BASE_URL", ""):
+         patch("app.config.DY_AUTH_REDIRECT_URL", None), \
+         patch("app.config.DY_CALLBACK_URL", None):
         resp = client.get("/integrations/douyin/live-check/auth-url")
 
     assert resp.status_code == 400
-    assert "missing" in resp.json()["detail"].lower()
+    detail = resp.json()["detail"]
+    assert "Missing Douyin live-check config" in detail
+    assert "DY_AUTH_REDIRECT_URL" in detail
+    assert "DY_CALLBACK_URL" in detail
 
 
 def test_auth_url_configured_returns_final_scan_url_without_secret():
@@ -127,7 +131,8 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
-         patch("app.config.PUBLIC_BASE_URL", "https://callback.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg", "im_send_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
          patch("app.services.douyin_live_check_service.requests.post") as mock_post:
@@ -142,8 +147,8 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
     assert data["configured"] is True
     assert data["auth_url"] == "https://open.douyin.com/auth/scan?ticket=abc"
     assert "/get_aweme_auth_url" not in data["auth_url"]
-    assert data["auth_redirect_url"] == "https://callback.example.com/integrations/douyin/live-check/oauth-callback"
-    assert data["callback_url"] == "https://callback.example.com/integrations/douyin/live-check/webhook-observe"
+    assert data["auth_redirect_url"] == "https://callback.example.com/oauth-callback"
+    assert data["callback_url"] == "https://callback.example.com/webhook-observe"
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
     assert mock_post.call_args.kwargs["headers"]["X-Auth-Timestamp"]
@@ -159,7 +164,8 @@ def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
-         patch("app.config.PUBLIC_BASE_URL", "https://callback.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg", "im_send_msg"]), \
          patch("app.config.DY_SECRET_KEY", "webhook-secret"), \
          patch("app.config.DY_GMP_SECRET_KEY", "gmp-secret"), \
@@ -175,8 +181,8 @@ def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
     expected_payload = {
         "main_account_id": 123,
         "account_name": "demo-account",
-        "auth_redirect_url": "https://callback.example.com/integrations/douyin/live-check/oauth-callback",
-        "callback_url": "https://callback.example.com/integrations/douyin/live-check/webhook-observe",
+        "auth_redirect_url": "https://callback.example.com/oauth-callback",
+        "callback_url": "https://callback.example.com/webhook-observe",
         "callback_event": ["im_receive_msg", "im_send_msg"],
     }
     expected_body = json.dumps(expected_payload, ensure_ascii=False, separators=(",", ":"))
@@ -203,7 +209,8 @@ def test_auth_url_upstream_403_returns_safe_error_without_secret():
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
-         patch("app.config.PUBLIC_BASE_URL", "https://callback.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
          patch("app.services.douyin_live_check_service.requests.post") as mock_post:
@@ -268,7 +275,7 @@ def test_authorized_accounts_empty_before_oauth_callback():
     data = resp.json()["data"]
     assert data["items"] == []
     assert data["total"] == 0
-    assert data["source"] == "live_check_memory"
+    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
 
 
 def test_authorized_accounts_returns_oauth_callback_account_without_secret():
@@ -291,7 +298,7 @@ def test_authorized_accounts_returns_oauth_callback_account_without_secret():
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["total"] == 1
-    assert data["source"] == "live_check_memory"
+    assert data["source"] == "live_check_memory_with_webhook_events_fallback"
     account = data["items"][0]
     assert account["account_open_id"] == "open-account-001"
     assert account["open_id"] == "open-account-001"
@@ -539,11 +546,20 @@ def test_config_loads_env_file_values(tmp_path, monkeypatch):
                 "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
+                "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
+                "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
             ]
         ),
         encoding="utf-8",
     )
-    for key in ["DY_LIVE_CHECK_ENABLED", "DY_LIVE_CHECK_FORWARD_TO_FORMAL", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
+    for key in [
+        "DY_LIVE_CHECK_ENABLED",
+        "DY_LIVE_CHECK_FORWARD_TO_FORMAL",
+        "DY_MAIN_ACCOUNT_ID",
+        "PUBLIC_BASE_URL",
+        "DY_AUTH_REDIRECT_URL",
+        "DY_CALLBACK_URL",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
     config._load_env_file(env_file)
@@ -552,6 +568,8 @@ def test_config_loads_env_file_values(tmp_path, monkeypatch):
     assert os.environ["DY_LIVE_CHECK_FORWARD_TO_FORMAL"] == "true"
     assert os.environ["DY_MAIN_ACCOUNT_ID"] == "2124269908"
     assert os.environ["PUBLIC_BASE_URL"] == "https://callback.misanduo.com"
+    assert os.environ["DY_AUTH_REDIRECT_URL"] == "https://callback.misanduo.com/oauth-callback"
+    assert os.environ["DY_CALLBACK_URL"] == "https://callback.misanduo.com/webhook-observe"
 
 
 def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkeypatch):
@@ -563,6 +581,8 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
                 "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
+                "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
+                "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
             ]
         ),
         encoding="utf-8",
@@ -571,6 +591,8 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
     monkeypatch.setenv("DY_LIVE_CHECK_FORWARD_TO_FORMAL", "false")
     monkeypatch.setenv("DY_MAIN_ACCOUNT_ID", "999")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://env.example.com")
+    monkeypatch.setenv("DY_AUTH_REDIRECT_URL", "https://env.example.com/oauth")
+    monkeypatch.setenv("DY_CALLBACK_URL", "https://env.example.com/callback")
 
     config._load_env_file(env_file)
 
@@ -578,6 +600,8 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
     assert os.environ["DY_LIVE_CHECK_FORWARD_TO_FORMAL"] == "false"
     assert os.environ["DY_MAIN_ACCOUNT_ID"] == "999"
     assert os.environ["PUBLIC_BASE_URL"] == "https://env.example.com"
+    assert os.environ["DY_AUTH_REDIRECT_URL"] == "https://env.example.com/oauth"
+    assert os.environ["DY_CALLBACK_URL"] == "https://env.example.com/callback"
 
 
 def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
@@ -589,11 +613,20 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
                 "DY_LIVE_CHECK_FORWARD_TO_FORMAL=true",
                 "DY_MAIN_ACCOUNT_ID=2124269908",
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
+                "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
+                "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
             ]
         ),
         encoding="utf-8",
     )
-    for key in ["DY_LIVE_CHECK_ENABLED", "DY_LIVE_CHECK_FORWARD_TO_FORMAL", "DY_MAIN_ACCOUNT_ID", "PUBLIC_BASE_URL"]:
+    for key in [
+        "DY_LIVE_CHECK_ENABLED",
+        "DY_LIVE_CHECK_FORWARD_TO_FORMAL",
+        "DY_MAIN_ACCOUNT_ID",
+        "PUBLIC_BASE_URL",
+        "DY_AUTH_REDIRECT_URL",
+        "DY_CALLBACK_URL",
+    ]:
         monkeypatch.delenv(key, raising=False)
 
     monkeypatch.setattr(config, "ENV_FILE", env_file)
@@ -604,3 +637,5 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
     assert reloaded.DY_LIVE_CHECK_FORWARD_TO_FORMAL is True
     assert reloaded.DY_MAIN_ACCOUNT_ID == 2124269908
     assert reloaded.PUBLIC_BASE_URL == "https://callback.misanduo.com"
+    assert reloaded.DY_AUTH_REDIRECT_URL == "https://callback.misanduo.com/oauth-callback"
+    assert reloaded.DY_CALLBACK_URL == "https://callback.misanduo.com/webhook-observe"

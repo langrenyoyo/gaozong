@@ -30,6 +30,12 @@ services:
       # 9000 SQLite 数据持久化（覆盖上面的 /workspace/data，避免与本地 data/ 冲突）
       - ./docker-data/auto_wechat_9000:/workspace/data
     environment:
+      - DY_GMP_SECRET_KEY=${DY_GMP_SECRET_KEY:-}
+      - DY_MAIN_ACCOUNT_ID=${DY_MAIN_ACCOUNT_ID:-}
+      - DY_ACCOUNT_NAME=${DY_ACCOUNT_NAME:-}
+      - DY_CALLBACK_URL=${DY_CALLBACK_URL:-}
+      - DY_AUTH_REDIRECT_URL=${DY_AUTH_REDIRECT_URL:-}
+      - DY_CALLBACK_EVENTS=${DY_CALLBACK_EVENTS:-im_receive_msg,im_send_msg,im_enter_direct_msg}
       - APP_ENV=development
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
     restart: "no"

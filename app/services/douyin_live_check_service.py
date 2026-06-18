@@ -105,8 +105,10 @@ def _auth_url_base_data() -> dict[str, Any]:
         missing.append("DY_GMP_SECRET_KEY")
     if not config.DY_MAIN_ACCOUNT_ID:
         missing.append("DY_MAIN_ACCOUNT_ID")
-    if not config.PUBLIC_BASE_URL:
-        missing.append("PUBLIC_BASE_URL")
+    if not config.DY_AUTH_REDIRECT_URL:
+        missing.append("DY_AUTH_REDIRECT_URL")
+    if not config.DY_CALLBACK_URL:
+        missing.append("DY_CALLBACK_URL")
 
     if missing:
         return {
@@ -117,13 +119,12 @@ def _auth_url_base_data() -> dict[str, Any]:
             "callback_url": None,
         }
 
-    base = config.PUBLIC_BASE_URL.rstrip("/")
     return {
         "configured": True,
         "missing": [],
         "auth_url": None,
-        "auth_redirect_url": f"{base}/integrations/douyin/live-check/oauth-callback",
-        "callback_url": f"{base}/integrations/douyin/live-check/webhook-observe",
+        "auth_redirect_url": config.DY_AUTH_REDIRECT_URL,
+        "callback_url": config.DY_CALLBACK_URL,
     }
 
 

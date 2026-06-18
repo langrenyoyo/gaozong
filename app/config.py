@@ -71,7 +71,7 @@ DY_SECRET_KEY = os.getenv("DY_SECRET_KEY", "")
 DY_GMP_SECRET_KEY = os.getenv("DY_GMP_SECRET_KEY", "")
 DY_BASE_URL = os.getenv(
     "DY_BASE_URL",
-    "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi",
+    "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi",
 )
 DY_MAIN_ACCOUNT_ID = int(os.getenv("DY_MAIN_ACCOUNT_ID", "0"))
 DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
@@ -88,7 +88,8 @@ DY_CALLBACK_EVENTS = [
     for item in os.getenv("DY_CALLBACK_EVENTS", "").split(",")
     if item.strip()
 ]
-
+DY_CALLBACK_URL = os.getenv("DY_CALLBACK_URL", "").strip() or None
+DY_AUTH_REDIRECT_URL = os.getenv("DY_AUTH_REDIRECT_URL", "").strip() or None
 
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
