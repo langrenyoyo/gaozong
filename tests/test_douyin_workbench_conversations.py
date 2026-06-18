@@ -83,6 +83,40 @@ def _payload(
     }
 
 
+def _media_payload(
+    *,
+    event: str = "im_receive_msg",
+    open_id: str = "customer_media",
+    account_open_id: str = "account_media",
+    message_type: str = "image",
+    conversation_short_id: str = "media_conv_001",
+    server_message_id: str = "media_msg_001",
+    resource_url: str = "https://example.com/media.png",
+) -> dict:
+    from_user_id = open_id if event == "im_receive_msg" else account_open_id
+    to_user_id = account_open_id if event == "im_receive_msg" else open_id
+    content = {
+        "create_time": 1710000000000,
+        "server_message_id": server_message_id,
+        "message_type": message_type,
+        "media_type": message_type,
+        "conversation_short_id": conversation_short_id,
+        "open_id": open_id,
+        "account_open_id": account_open_id,
+        "url": resource_url,
+        "user_infos": [
+            {"open_id": open_id, "nick_name": "Media Customer"},
+            {"open_id": account_open_id, "nick_name": "Media Account"},
+        ],
+    }
+    return {
+        "event": event,
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "content": json.dumps(content, ensure_ascii=False),
+    }
+
+
 def _insert_event(
     *,
     event: str = "im_receive_msg",
@@ -114,6 +148,42 @@ def _insert_event(
             lead_id=lead_id,
             raw_body=json.dumps(payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return item.id
+    finally:
+        db.close()
+
+
+def _insert_media_event(
+    *,
+    event_key: str = "media_event_001",
+    message_type: str = "image",
+    conversation_short_id: str = "media_conv_001",
+    server_message_id: str = "media_msg_001",
+) -> int:
+    db = TestSession()
+    try:
+        payload = _media_payload(
+            message_type=message_type,
+            conversation_short_id=conversation_short_id,
+            server_message_id=server_message_id,
+        )
+        content = json.loads(payload["content"])
+        item = DouyinWebhookEvent(
+            event=payload["event"],
+            from_user_id=payload["from_user_id"],
+            to_user_id=payload["to_user_id"],
+            conversation_short_id=conversation_short_id,
+            server_message_id=server_message_id,
+            message_type=message_type,
+            parsed_content_json=json.dumps(content, ensure_ascii=False),
+            event_key=event_key,
+            is_duplicate=0,
+            raw_body=json.dumps(payload, ensure_ascii=False),
+            created_at=datetime.now(),
         )
         db.add(item)
         db.commit()
@@ -299,6 +369,35 @@ def test_query_conversation_messages_keeps_contact_not_found_message_visible():
 
     assert conversation["lead_status"] == "contact_not_found"
     assert messages[0]["content"] == "hello no contact"
+
+
+def test_query_conversation_messages_exposes_media_fields_without_text():
+    _insert_media_event(
+        message_type="user_local_image",
+        conversation_short_id="media_conv_001",
+        server_message_id="media_msg_001",
+    )
+
+    client = _client()
+    conversation = client.get(
+        "/integrations/douyin/accounts/account_media/conversations",
+        params={"account_open_id": "account_media"},
+    ).json()["items"][0]
+    messages = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": conversation["id"],
+            "account_open_id": "account_media",
+        },
+    ).json()["items"]
+
+    assert conversation["conversation_short_id"] == "media_conv_001"
+    assert conversation["last_message"] == "[图片]"
+    assert messages[0]["conversation_short_id"] == "media_conv_001"
+    assert messages[0]["server_message_id"] == "media_msg_001"
+    assert messages[0]["message_type"] == "user_local_image"
+    assert messages[0]["media_type"] == "image"
+    assert messages[0]["content"] == "[图片]"
 
 
 def test_different_douyin_accounts_are_isolated():

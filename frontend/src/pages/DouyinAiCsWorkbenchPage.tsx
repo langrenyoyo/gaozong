@@ -4,6 +4,7 @@ import {
   BotIcon,
   CheckIcon,
   ClipboardIcon,
+  DownloadIcon,
   LoaderIcon,
   MessageSquareTextIcon,
   PlusIcon,
@@ -26,6 +27,7 @@ import type {
   DouyinLiveCheckStatusData,
 } from "../api/types";
 import {
+  downloadDouyinResource,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationMessages,
@@ -175,6 +177,27 @@ function ErrorBanner({ message }: { message: string | null }) {
   );
 }
 
+type MediaDownloadState = {
+  loading?: boolean;
+  downloadUrl?: string;
+  error?: string;
+  copied?: boolean;
+};
+
+function mediaTypeForDownload(message: DouyinMessageItem): "image" | "video" | null {
+  const value = String(message.media_type || message.message_type || "").toLowerCase();
+  if (value === "image" || value === "user_local_image") return "image";
+  if (value === "video" || value === "user_local_video") return "video";
+  return null;
+}
+
+function downloadErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return "资源下载失败，请稍后重试";
+}
+
 export default function DouyinAiCsWorkbenchPage() {
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -190,6 +213,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [mediaDownloads, setMediaDownloads] = useState<Record<string, MediaDownloadState>>({});
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -445,6 +469,7 @@ export default function DouyinAiCsWorkbenchPage() {
     setDraftReplyText(reply?.reply_text || "");
     setSendError(null);
     setSendDialogOpen(false);
+    setMediaDownloads({});
   }, [reply?.reply_text, selectedConversationId]);
 
   async function generateReply() {
@@ -515,6 +540,77 @@ export default function DouyinAiCsWorkbenchPage() {
       setSendError(message);
     } finally {
       setSendingMessage(false);
+    }
+  }
+
+  async function downloadMessageResource(message: DouyinMessageItem) {
+    const stateKey = String(message.id);
+    const mediaType = mediaTypeForDownload(message);
+    const conversationShortId = message.conversation_short_id || selectedConversation?.conversation_short_id;
+    if (!mediaType) {
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: { error: "当前消息不是图片或视频资源" },
+      }));
+      return;
+    }
+    if (!conversationShortId || !message.server_message_id) {
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: { error: "当前消息缺少下载所需的会话或消息标识" },
+      }));
+      return;
+    }
+
+    setMediaDownloads((current) => ({
+      ...current,
+      [stateKey]: { ...current[stateKey], loading: true, error: undefined },
+    }));
+    try {
+      const result = await downloadDouyinResource({
+        conversation_short_id: String(conversationShortId),
+        server_message_id: String(message.server_message_id),
+        media_type: mediaType,
+      });
+      const downloadUrl = result.data.download_url;
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: {
+          loading: false,
+          downloadUrl: downloadUrl || "",
+          error: downloadUrl ? undefined : "后端未返回资源链接",
+        },
+      }));
+    } catch (err) {
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: {
+          loading: false,
+          error: downloadErrorMessage(err),
+        },
+      }));
+    }
+  }
+
+  async function copyDownloadUrl(messageId: string | number, downloadUrl: string) {
+    const stateKey = String(messageId);
+    try {
+      await navigator.clipboard.writeText(downloadUrl);
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: { ...current[stateKey], copied: true },
+      }));
+      window.setTimeout(() => {
+        setMediaDownloads((current) => ({
+          ...current,
+          [stateKey]: { ...current[stateKey], copied: false },
+        }));
+      }, 1600);
+    } catch {
+      setMediaDownloads((current) => ({
+        ...current,
+        [stateKey]: { ...current[stateKey], error: "复制链接失败，请手动复制" },
+      }));
     }
   }
 
@@ -703,6 +799,13 @@ export default function DouyinAiCsWorkbenchPage() {
               <div className="space-y-3">
                 {messages.map((message) => {
                   const isCustomer = message.direction === "inbound";
+                  const mediaType = mediaTypeForDownload(message);
+                  const downloadState = mediaDownloads[String(message.id)] || {};
+                  const canRequestDownload = Boolean(
+                    mediaType &&
+                      (message.conversation_short_id || selectedConversation?.conversation_short_id) &&
+                      message.server_message_id,
+                  );
                   return (
                     <div
                       key={message.id}
@@ -714,6 +817,59 @@ export default function DouyinAiCsWorkbenchPage() {
                         }`}
                       >
                         <div>{message.content}</div>
+                        {mediaType ? (
+                          <div
+                            className={`mt-2 rounded-md border px-2 py-2 text-xs ${
+                              isCustomer
+                                ? "border-slate-200 bg-slate-50 text-slate-600"
+                                : "border-blue-400/40 bg-blue-500 text-blue-50"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={() => void downloadMessageResource(message)}
+                                disabled={downloadState.loading || !canRequestDownload}
+                                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-semibold ${
+                                  isCustomer
+                                    ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                    : "border border-blue-200/50 bg-white/10 text-white hover:bg-white/15"
+                                } disabled:cursor-not-allowed disabled:opacity-60`}
+                              >
+                                {downloadState.loading ? (
+                                  <LoaderIcon size={13} className="animate-spin" />
+                                ) : (
+                                  <DownloadIcon size={13} />
+                                )}
+                                {downloadState.loading ? "下载中..." : "下载资源"}
+                              </button>
+                              <span>{mediaType === "image" ? "图片资源" : "视频资源"}</span>
+                            </div>
+                            {!canRequestDownload ? (
+                              <div className="mt-1 leading-5">当前消息缺少下载所需的会话或消息标识。</div>
+                            ) : null}
+                            {downloadState.downloadUrl ? (
+                              <div className="mt-2 space-y-1">
+                                <div className="break-all rounded bg-white/70 px-2 py-1 font-mono text-[10px] text-slate-600">
+                                  {downloadState.downloadUrl}
+                                </div>
+                                <button
+                                  onClick={() => void copyDownloadUrl(message.id, downloadState.downloadUrl || "")}
+                                  className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 font-semibold ${
+                                    isCustomer
+                                      ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                      : "border border-blue-200/50 bg-white/10 text-white hover:bg-white/15"
+                                  }`}
+                                >
+                                  <ClipboardIcon size={13} />
+                                  {downloadState.copied ? "已复制" : "复制链接"}
+                                </button>
+                              </div>
+                            ) : null}
+                            {downloadState.error ? (
+                              <div className="mt-1 leading-5 text-red-500">{downloadState.error}</div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <div className={`mt-1 text-[10px] ${isCustomer ? "text-slate-400" : "text-blue-100"}`}>
                           {isCustomer ? "客户" : "客服"} · {formatTime(message.created_at)}
                         </div>

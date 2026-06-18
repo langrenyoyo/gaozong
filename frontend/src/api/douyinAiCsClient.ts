@@ -76,9 +76,12 @@ export interface DouyinMessageItem {
   id: string | number;
   conversation_id: string | number;
   conversation_key?: string;
+  conversation_short_id?: string | null;
   direction: "inbound" | "outbound" | "system" | string;
   sender_type?: "customer" | "staff" | "system" | string;
   content: string;
+  message_type?: string | null;
+  media_type?: "image" | "video" | string | null;
   created_at: string;
   raw_event_id?: number;
   server_message_id?: string | null;
@@ -203,6 +206,27 @@ export interface SendDouyinManualMessageResponse {
     manual_confirmed: boolean;
     [key: string]: unknown;
   };
+}
+
+export interface DownloadDouyinResourceRequest {
+  conversation_short_id: string;
+  server_message_id?: string;
+  open_id?: string;
+  media_type?: "image" | "video";
+  url?: string;
+}
+
+export interface DownloadDouyinResourceResponse {
+  success: boolean;
+  data: {
+    resource_status?: string;
+    media_type?: "image" | "video" | string;
+    download_url?: string | null;
+    conversation_short_id?: string;
+    server_message_id?: string | null;
+    [key: string]: unknown;
+  };
+  message?: string;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -345,6 +369,19 @@ export async function sendDouyinManualMessage(
     )) as unknown as SendDouyinManualMessageResponse;
   } catch (error) {
     throw new Error(`抖音私信发送失败：${getErrorMessage(error)}`);
+  }
+}
+
+export async function downloadDouyinResource(
+  payload: DownloadDouyinResourceRequest,
+): Promise<DownloadDouyinResourceResponse> {
+  try {
+    return (await apiClient.post(
+      "/integrations/douyin/live-check/resources/download",
+      payload,
+    )) as unknown as DownloadDouyinResourceResponse;
+  } catch (error) {
+    throw new Error(`抖音资源下载失败：${getErrorMessage(error)}`);
   }
 }
 

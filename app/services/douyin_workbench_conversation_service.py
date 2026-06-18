@@ -30,6 +30,8 @@ class WorkbenchMessage:
     conversation_key: str
     conversation_short_id: str | None
     content: str
+    message_type: str | None
+    media_type: str | None
     created_at: datetime | None
     server_message_id: str | None
     nick_name: str | None
@@ -120,7 +122,9 @@ def list_conversation_messages(
                 "direction": direction,
                 "sender_type": _sender_type(message.event),
                 "content": message.content,
-                "message_type": "text",
+                "message_type": message.message_type or "text",
+                "media_type": message.media_type,
+                "conversation_short_id": message.conversation_short_id,
                 "created_at": message.created_at,
                 "server_message_id": message.server_message_id,
             }
@@ -262,8 +266,10 @@ def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
     payload = _parse_raw_body(row.raw_body)
     if payload is None:
         return None
-    content = parse_content(payload.get("content"))
-    text = normalize_message_text(content)
+    content = _payload_content(row, payload)
+    message_type = _message_type(row, content)
+    media_type = _media_type(message_type, content)
+    text = normalize_message_text(content) or _media_placeholder(media_type)
     if not text:
         return None
 
@@ -283,12 +289,46 @@ def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
         conversation_key=conversation_key,
         conversation_short_id=conversation_short_id,
         content=text,
+        message_type=message_type,
+        media_type=media_type,
         created_at=row.created_at,
-        server_message_id=_optional_str(content.get("server_message_id")),
+        server_message_id=_optional_str(content.get("server_message_id") or row.server_message_id),
         nick_name=profile.get("nick_name"),
         avatar=profile.get("avatar"),
         lead_id=row.lead_id,
     )
+
+
+def _payload_content(row: DouyinWebhookEvent, payload: dict[str, Any]) -> dict[str, Any]:
+    if row.parsed_content_json:
+        try:
+            parsed = json.loads(row.parsed_content_json)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return parse_content(payload.get("content"))
+
+
+def _message_type(row: DouyinWebhookEvent, content: dict[str, Any]) -> str | None:
+    return _optional_str(content.get("message_type") or row.message_type)
+
+
+def _media_type(message_type: str | None, content: dict[str, Any]) -> str | None:
+    value = _optional_str(content.get("media_type") or message_type)
+    if value in {"image", "user_local_image"}:
+        return "image"
+    if value in {"video", "user_local_video"}:
+        return "video"
+    return None
+
+
+def _media_placeholder(media_type: str | None) -> str:
+    if media_type == "image":
+        return "[图片]"
+    if media_type == "video":
+        return "[视频]"
+    return ""
 
 
 def _parse_raw_body(raw_body: str | None) -> dict[str, Any] | None:
