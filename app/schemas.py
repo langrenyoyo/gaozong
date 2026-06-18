@@ -857,3 +857,159 @@ class WebhookResponse(BaseModel):
     is_new_lead: bool = Field(False, description="是否为新创建的线索")
     is_duplicate: bool = Field(False, description="是否为重复事件")
     lead_action: str = Field("not_lead_event", description="线索动作: created/updated/skipped/not_lead_event")
+
+
+# ========== 小高算力（一期 /compute） ==========
+
+
+class ComputePackageOut(BaseModel):
+    """算力套餐输出。"""
+
+    id: int
+    name: str
+    price_yuan: int = Field(..., description="价格（整数元）")
+    token_amount: int = Field(..., description="Token 数量")
+    enabled: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ComputePackageCreate(BaseModel):
+    """算力套餐创建请求（管理员）。"""
+
+    name: str = Field(..., min_length=1, max_length=100, description="套餐名称")
+    price_yuan: int = Field(..., ge=0, description="价格（整数元）")
+    token_amount: int = Field(..., gt=0, description="Token 数量")
+    enabled: bool = Field(True, description="是否启用")
+
+
+class ComputePackageUpdate(BaseModel):
+    """算力套餐更新请求（管理员）。"""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="套餐名称")
+    price_yuan: Optional[int] = Field(None, ge=0, description="价格（整数元）")
+    token_amount: Optional[int] = Field(None, gt=0, description="Token 数量")
+    enabled: Optional[bool] = Field(None, description="是否启用")
+
+
+class ComputeSummaryOut(BaseModel):
+    """算力余额与消耗统计。"""
+
+    merchant_id: str
+    balance_tokens: int = Field(0, description="当前算力余额（Token）")
+    today_consume: int = Field(0, description="今日消耗（Token）")
+    yesterday_consume: int = Field(0, description="昨日消耗（Token）")
+    total_consume: int = Field(0, description="累计消耗（Token）")
+
+
+class ComputeTransactionOut(BaseModel):
+    """算力 Token 流水。"""
+
+    id: int
+    merchant_id: str
+    transaction_type: str = Field(..., description="流水类型: recharge / grant_package / consume")
+    delta_tokens: int = Field(..., description="Token 变动（正为增加，负为消耗）")
+    balance_after_tokens: int = Field(..., description="变动后余额")
+    source: str = Field(..., description="来源: manual_recharge / package_grant / llm / embedding / other")
+    remark: Optional[str] = None
+    model: Optional[str] = None
+    agent_id: Optional[str] = None
+    conversation_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ComputeTransactionListData(BaseModel):
+    """Token 明细分页数据。"""
+
+    page: int
+    page_size: int
+    total: int
+    items: list[ComputeTransactionOut]
+
+
+class ComputeRechargeOrderRequest(BaseModel):
+    """商户发起充值订单请求（一期 mock，不接真实支付）。"""
+
+    package_id: Optional[int] = Field(None, description="套餐充值时传入套餐 ID")
+    custom_tokens: Optional[int] = Field(None, gt=0, description="自定义金额充值 Token 数量（与 package_id 二选一）")
+    pay_method: str = Field("wechat", description="支付方式: wechat / alipay")
+
+
+class ComputeRechargeOrderOut(BaseModel):
+    """充值订单输出（一期 mock）。"""
+
+    order_no: str = Field(..., description="mock 订单号")
+    pay_method: str = Field(..., description="支付方式")
+    tokens: int = Field(..., description="本次充值 Token 数量")
+    price_yuan: Optional[int] = Field(None, description="价格（元），套餐充值时有值")
+    pay_qr_code: Optional[str] = Field(None, description="mock 付款码占位")
+    status: str = Field("mock_pending", description="订单状态: mock_pending（一期不接真实支付）")
+
+
+class ComputeAdminRechargeRequest(BaseModel):
+    """管理员给商户充值 Token 请求。"""
+
+    tokens: int = Field(..., gt=0, description="充值 Token 数量")
+    remark: Optional[str] = Field(None, description="备注")
+
+
+class ComputeGrantPackageRequest(BaseModel):
+    """管理员给商户发放套餐请求。"""
+
+    package_id: int = Field(..., description="套餐 ID")
+
+
+class ComputeUsageRequest(BaseModel):
+    """内部 AI 消耗上报请求（供 9100/19000 埋点）。"""
+
+    merchant_id: str = Field(..., description="商户 ID")
+    tokens: int = Field(..., gt=0, description="本次消耗 Token 数量")
+    source: str = Field("llm", description="消耗来源: llm / embedding / other")
+    model: Optional[str] = Field(None, description="模型标识")
+    agent_id: Optional[str] = Field(None, description="智能体 ID")
+    conversation_id: Optional[int] = Field(None, description="会话 ID")
+    remark: Optional[str] = None
+
+
+class ComputeSummaryResponse(BaseModel):
+    """算力余额/统计响应（商户侧 summary、管理员充值/发放/usage 后均复用）。"""
+
+    success: bool = True
+    data: ComputeSummaryOut
+    message: str = "success"
+
+
+class ComputeTransactionListResponse(BaseModel):
+    """Token 明细列表响应。"""
+
+    success: bool = True
+    data: ComputeTransactionListData
+    message: str = "success"
+
+
+class ComputePackageListResponse(BaseModel):
+    """套餐列表响应。"""
+
+    success: bool = True
+    data: list[ComputePackageOut]
+    message: str = "success"
+
+
+class ComputePackageResponse(BaseModel):
+    """套餐单项响应。"""
+
+    success: bool = True
+    data: ComputePackageOut
+    message: str = "success"
+
+
+class ComputeRechargeOrderResponse(BaseModel):
+    """充值订单响应。"""
+
+    success: bool = True
+    data: ComputeRechargeOrderOut
+    message: str = "success"

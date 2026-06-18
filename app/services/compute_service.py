@@ -1,0 +1,342 @@
+"""小高算力一期服务（P1-COMPUTE-BE-1）。
+
+负责商户 Token 账户余额、流水（充值/发放/消耗）、套餐 CRUD 与消耗统计。
+
+一期边界（对齐 PRD 2.7 / 3.1 / 3.5）：
+- 不接真实支付，商户充值订单仅生成 mock 订单号/付款码占位，不实际到账、不改余额。
+- 不做余额不足拦截，内部 usage 上报即使导致余额为负也照常记录（PRD 一期不阻断）。
+- 消耗统计来自 compute_transactions 中 transaction_type=consume 的负 delta，按绝对值汇总。
+- token/价格统一为整数（balance_tokens / delta_tokens / token_amount / price_yuan 均为 int）。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+
+from app.models import ComputeAccount, ComputePackage, ComputeTransaction
+from app.schemas import ComputePackageCreate, ComputePackageUpdate, ComputeRechargeOrderRequest
+
+# 流水类型与来源受控字典（一期）
+TRANSACTION_TYPES = ("recharge", "grant_package", "consume")
+USAGE_SOURCES = ("llm", "embedding", "other")
+CONSUME_TYPE = "consume"
+
+
+def _now() -> datetime:
+    """当前本地时间，便于测试 mock 与统一口径。"""
+    return datetime.now()
+
+
+def _start_of_day(dt: datetime) -> datetime:
+    """截断到当日 0 点，作为今日/昨日消耗统计的时间边界。"""
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_or_create_account(
+    db: Session, merchant_id: str, tenant_id: str | None = None
+) -> ComputeAccount:
+    """获取商户算力账户，不存在则创建（默认余额 0）。
+
+    一个商户一行（compute_accounts.uk_compute_accounts_merchant 约束）。
+    """
+    account = (
+        db.query(ComputeAccount)
+        .filter(ComputeAccount.merchant_id == merchant_id)
+        .first()
+    )
+    if account is None:
+        account = ComputeAccount(
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            balance_tokens=0,
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+    return account
+
+
+def _write_transaction(
+    db: Session,
+    account: ComputeAccount,
+    *,
+    transaction_type: str,
+    delta_tokens: int,
+    source: str,
+    remark: str | None = None,
+    model: str | None = None,
+    agent_id: str | None = None,
+    conversation_id: int | None = None,
+) -> ComputeTransaction:
+    """写入一条流水并同步更新账户余额（含 balance_after_tokens 快照）。
+
+    delta_tokens 正为增加（充值/发放），负为消耗。每次写入一个事务，立即 commit。
+    """
+    account.balance_tokens += delta_tokens
+    account.updated_at = _now()
+    tx = ComputeTransaction(
+        merchant_id=account.merchant_id,
+        tenant_id=account.tenant_id,
+        transaction_type=transaction_type,
+        delta_tokens=delta_tokens,
+        balance_after_tokens=account.balance_tokens,
+        source=source,
+        remark=remark,
+        model=model,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        created_at=_now(),
+    )
+    db.add(tx)
+    db.commit()
+    db.refresh(account)
+    db.refresh(tx)
+    return tx
+
+
+def _summarize_consume(db: Session, merchant_id: str) -> tuple[int, int, int]:
+    """统计今日/昨日/累计消耗（consume 类型负 delta 取绝对值汇总）。
+
+    返回 (today_consume, yesterday_consume, total_consume)。
+    """
+    now = _now()
+    today_start = _start_of_day(now)
+    yesterday_start = today_start - timedelta(days=1)
+
+    consume_rows = (
+        db.query(ComputeTransaction)
+        .filter(
+            ComputeTransaction.merchant_id == merchant_id,
+            ComputeTransaction.transaction_type == CONSUME_TYPE,
+        )
+        .all()
+    )
+
+    today_consume = 0
+    yesterday_consume = 0
+    total_consume = 0
+    for row in consume_rows:
+        amount = abs(row.delta_tokens)
+        total_consume += amount
+        created = row.created_at
+        if not created:
+            continue
+        if created >= today_start:
+            today_consume += amount
+        elif created >= yesterday_start:
+            yesterday_consume += amount
+    return today_consume, yesterday_consume, total_consume
+
+
+def get_summary(db: Session, merchant_id: str) -> dict:
+    """返回余额 + 今日/昨日/累计消耗（对齐 PRD 2.7.1 / 2.7.2）。"""
+    account = get_or_create_account(db, merchant_id)
+    today_consume, yesterday_consume, total_consume = _summarize_consume(db, merchant_id)
+    return {
+        "merchant_id": merchant_id,
+        "balance_tokens": account.balance_tokens,
+        "today_consume": today_consume,
+        "yesterday_consume": yesterday_consume,
+        "total_consume": total_consume,
+    }
+
+
+def list_transactions(
+    db: Session,
+    merchant_id: str,
+    transaction_type: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    """分页查询 Token 明细（默认按 id 倒序，对齐 PRD 2.7.3）。"""
+    query = db.query(ComputeTransaction).filter(
+        ComputeTransaction.merchant_id == merchant_id
+    )
+    if transaction_type:
+        query = query.filter(ComputeTransaction.transaction_type == transaction_type)
+    total = query.count()
+    rows = (
+        query.order_by(ComputeTransaction.id.desc())
+        .offset(max(page - 1, 0) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": rows,
+    }
+
+
+def list_enabled_packages(db: Session) -> list[ComputePackage]:
+    """商户充值弹窗只看启用套餐（对齐 PRD 2.7.4 套餐充值）。"""
+    return (
+        db.query(ComputePackage)
+        .filter(ComputePackage.enabled.is_(True))
+        .order_by(ComputePackage.id.asc())
+        .all()
+    )
+
+
+def list_admin_packages(db: Session) -> list[ComputePackage]:
+    """管理员算力配置查看全部套餐（含禁用，对齐 PRD 3.5）。"""
+    return db.query(ComputePackage).order_by(ComputePackage.id.asc()).all()
+
+
+def get_package(db: Session, package_id: int) -> ComputePackage | None:
+    """按 ID 获取套餐。"""
+    return db.query(ComputePackage).filter(ComputePackage.id == package_id).first()
+
+
+def create_package(db: Session, payload: ComputePackageCreate) -> ComputePackage:
+    """管理员创建套餐（对齐 PRD 3.5 套餐配置）。"""
+    pkg = ComputePackage(
+        name=payload.name.strip(),
+        price_yuan=payload.price_yuan,
+        token_amount=payload.token_amount,
+        enabled=payload.enabled,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db.add(pkg)
+    db.commit()
+    db.refresh(pkg)
+    return pkg
+
+
+def update_package(
+    db: Session, package: ComputePackage, payload: ComputePackageUpdate
+) -> ComputePackage:
+    """管理员更新套餐（仅更新显式传入字段）。"""
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("name") is not None:
+        package.name = data["name"].strip()
+    if data.get("price_yuan") is not None:
+        package.price_yuan = data["price_yuan"]
+    if data.get("token_amount") is not None:
+        package.token_amount = data["token_amount"]
+    if data.get("enabled") is not None:
+        package.enabled = data["enabled"]
+    package.updated_at = _now()
+    db.commit()
+    db.refresh(package)
+    return package
+
+
+def recharge_merchant(
+    db: Session,
+    merchant_id: str,
+    tokens: int,
+    remark: str | None = None,
+    operator_id: str | None = None,
+) -> ComputeAccount:
+    """管理员给商户充值 Token：余额增加，写 recharge 流水（对齐 PRD 3.1.4 充值）。"""
+    if tokens <= 0:
+        raise ValueError("TOKENS_MUST_BE_POSITIVE")
+    account = get_or_create_account(db, merchant_id)
+    remark_text = remark or "管理员充值"
+    if operator_id:
+        remark_text = f"{remark_text}（操作人：{operator_id}）"
+    _write_transaction(
+        db,
+        account,
+        transaction_type="recharge",
+        delta_tokens=tokens,
+        source="manual_recharge",
+        remark=remark_text,
+    )
+    return account
+
+
+def grant_package_to_merchant(
+    db: Session,
+    merchant_id: str,
+    package_id: int,
+    operator_id: str | None = None,
+) -> ComputeAccount:
+    """管理员给商户发放套餐：余额增加套餐 Token，写 grant_package 流水（对齐 PRD 3.1.4 发放套餐）。"""
+    package = get_package(db, package_id)
+    if package is None:
+        raise ValueError("PACKAGE_NOT_FOUND")
+    if not package.enabled:
+        raise ValueError("PACKAGE_DISABLED")
+    account = get_or_create_account(db, merchant_id)
+    remark = f"发放套餐：{package.name}（{package.token_amount} Token）"
+    if operator_id:
+        remark = f"{remark}（操作人：{operator_id}）"
+    _write_transaction(
+        db,
+        account,
+        transaction_type="grant_package",
+        delta_tokens=package.token_amount,
+        source="package_grant",
+        remark=remark,
+    )
+    return account
+
+
+def record_usage(
+    db: Session,
+    merchant_id: str,
+    tokens: int,
+    source: str = "llm",
+    model: str | None = None,
+    agent_id: str | None = None,
+    conversation_id: int | None = None,
+    remark: str | None = None,
+) -> ComputeAccount:
+    """内部 AI 消耗上报：余额减少，写 consume 流水（一期不做余额拦截，不阻断）。"""
+    if tokens <= 0:
+        raise ValueError("TOKENS_MUST_BE_POSITIVE")
+    if source not in USAGE_SOURCES:
+        raise ValueError("INVALID_SOURCE")
+    account = get_or_create_account(db, merchant_id)
+    _write_transaction(
+        db,
+        account,
+        transaction_type=CONSUME_TYPE,
+        delta_tokens=-tokens,  # 消耗记为负
+        source=source,
+        remark=remark,
+        model=model,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    return account
+
+
+def create_mock_recharge_order(
+    db: Session,
+    merchant_id: str,
+    payload: ComputeRechargeOrderRequest,
+) -> dict:
+    """商户充值订单（一期 mock）。
+
+    仅生成订单号/付款码占位，不接真实支付、不实际到账、不改余额、不写流水。
+    套餐充值取套餐 Token；自定义金额取 custom_tokens；两者都未提供则报错。
+    """
+    tokens: int | None = None
+    price_yuan: int | None = None
+    if payload.package_id is not None:
+        package = get_package(db, payload.package_id)
+        if package is None:
+            raise ValueError("PACKAGE_NOT_FOUND")
+        tokens = package.token_amount
+        price_yuan = package.price_yuan
+    elif payload.custom_tokens is not None:
+        tokens = payload.custom_tokens
+    else:
+        raise ValueError("RECHARGE_TARGET_REQUIRED")
+
+    return {
+        "order_no": f"CO{uuid4().hex[:16].upper()}",
+        "pay_method": payload.pay_method,
+        "tokens": tokens,
+        "price_yuan": price_yuan,
+        "pay_qr_code": f"mock://pay/{payload.pay_method}",
+        "status": "mock_pending",
+    }
