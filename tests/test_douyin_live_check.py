@@ -22,7 +22,10 @@ from sqlalchemy.pool import StaticPool
 
 from app import config
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_optional
+from app.auth.dependencies import (
+    get_request_context_optional,
+    get_request_context_required,
+)
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import (
@@ -105,6 +108,26 @@ def _client_with_context(merchant_id: str = "merchant-1"):
         permission_codes=["auto_wechat:douyin_ai_cs"],
     )
     client.app.dependency_overrides[get_request_context_optional] = lambda: context
+    return client
+
+
+def _client_with_required_context(
+    merchant_id: str | None = "merchant-1",
+    permission_codes: list[str] | None = None,
+):
+    """构造带 get_request_context_required 覆盖的客户端。
+
+    merchant_id 可为 None，用于覆盖"缺少可信商户上下文"场景。
+    """
+    client = _client()
+    context = RequestContext(
+        user_id="user-1",
+        username="user-1",
+        merchant_id=merchant_id,
+        merchant_ids=[merchant_id] if merchant_id else [],
+        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:douyin_ai_cs"],
+    )
+    client.app.dependency_overrides[get_request_context_required] = lambda: context
     return client
 
 
@@ -2133,6 +2156,234 @@ def test_live_check_callback_respects_live_check_enabled_gate():
 
     assert resp.status_code == 403
     assert "disabled" in resp.json()["detail"].lower()
+
+
+def _bind_info_payload(
+    *,
+    open_id: str = "account_bind_open_1",
+    account_name: str = "Bound Account",
+    bind_status: int = 1,
+) -> dict:
+    """构造上游 /list_bind_info 成功响应。"""
+    return {
+        "code": 0,
+        "msg": "success",
+        "data": {
+            "bind_list": [
+                {
+                    "user_id": "2106745398",
+                    "open_id": open_id,
+                    "account_name": account_name,
+                    "avatar_url": "https://avatar.example.com/a.png",
+                    "union_id": "union-1",
+                    "bind_status": bind_status,
+                    "account_type": 1,
+                    "bind_time": "2025-12-15 16:12:46",
+                    "unbind_time": None,
+                    "created_at": "2025-12-15 14:17:43",
+                }
+            ]
+        },
+    }
+
+
+_BIND_ENDPOINT = "/integrations/douyin/live-check/accounts/bind-authorized-open-id"
+
+
+def _post_bind(client, *, open_id: str = "account_bind_open_1", extra_body: dict | None = None):
+    body: dict = {"open_id": open_id}
+    if extra_body:
+        body.update(extra_body)
+    return client.post(_BIND_ENDPOINT, json=body)
+
+
+def _bind_upstream_patches():
+    """bind-authorized-open-id 通用上游 patch 链。"""
+    return (
+        patch("app.config.DY_LIVE_CHECK_ENABLED", True),
+        patch("app.config.DY_MAIN_ACCOUNT_ID", 123),
+        patch("app.config.DY_GMP_SECRET_KEY", "super-secret"),
+        patch("app.services.douyin_openapi_client.requests.post"),
+    )
+
+
+def test_bind_authorized_open_id_creates_account_with_context_merchant():
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload())
+        resp = _post_bind(client)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["action"] == "created"
+    assert data["merchant_id"] == "merchant-bind"
+    assert data["bind_status"] == 1
+    # name_or_open_id 透传到上游
+    sent = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent["name_or_open_id"] == "account_bind_open_1"
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").one()
+        assert row.main_account_id == 123
+        assert row.merchant_id == "merchant-bind"
+        assert row.bind_status == 1
+        assert row.account_name == "Bound Account"
+    finally:
+        db.close()
+
+
+def test_bind_authorized_open_id_updates_same_merchant_account():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_bind_open_1",
+                merchant_id="merchant-bind",
+                account_name="Old Name",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload(account_name="Updated Name"))
+        resp = _post_bind(client)
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["action"] == "updated"
+    db = TestSession()
+    try:
+        rows = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").all()
+        assert len(rows) == 1
+        assert rows[0].merchant_id == "merchant-bind"
+        assert rows[0].account_name == "Updated Name"
+    finally:
+        db.close()
+
+
+def test_bind_authorized_open_id_backfills_empty_merchant_id():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_bind_open_1",
+                merchant_id=None,
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload())
+        resp = _post_bind(client)
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["action"] == "backfilled"
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").one()
+        assert row.merchant_id == "merchant-bind"
+    finally:
+        db.close()
+
+
+def test_bind_authorized_open_id_rejects_other_merchant_binding():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_bind_open_1",
+                merchant_id="merchant-other",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload())
+        resp = _post_bind(client)
+
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert detail["code"] == "DOUYIN_ACCOUNT_ALREADY_BOUND_TO_OTHER_MERCHANT"
+    db = TestSession()
+    try:
+        # 归属未被覆盖
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").one()
+        assert row.merchant_id == "merchant-other"
+    finally:
+        db.close()
+
+
+def test_bind_authorized_open_id_ignores_forged_merchant_id_in_body():
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload())
+        resp = _post_bind(client, extra_body={"merchant_id": "forged-merchant"})
+
+    assert resp.status_code == 200
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_bind_open_1").one()
+        # 绑定的是 context.merchant_id，而非 body 伪造值
+        assert row.merchant_id == "merchant-bind"
+    finally:
+        db.close()
+
+
+def test_bind_authorized_open_id_rejects_open_id_mismatch():
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload(open_id="another_open"))
+        resp = _post_bind(client)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_FOUND"
+
+
+def test_bind_authorized_open_id_rejects_inactive_account():
+    client = _client_with_required_context("merchant-bind")
+    p1, p2, p3, p4 = _bind_upstream_patches()
+    with p1, p2, p3, p4 as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, _bind_info_payload(bind_status=0))
+        resp = _post_bind(client)
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_ACTIVE"
+
+
+def test_bind_authorized_open_id_requires_merchant_context():
+    client = _client_with_required_context(merchant_id=None)
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = _post_bind(client)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "MERCHANT_CONTEXT_MISSING"
+
+
+def test_bind_authorized_open_id_requires_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = _post_bind(client)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
 def test_auth_redirect_with_open_id_syncs_and_redirects_success():

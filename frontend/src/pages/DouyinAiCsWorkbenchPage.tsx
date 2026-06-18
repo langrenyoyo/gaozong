@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 
 import {
+  bindAuthorizedOpenId,
   fetchDouyinLiveCheckAuthUrl,
   fetchDouyinLiveCheckStatus,
 } from "../api/douyinLiveCheck";
@@ -389,6 +390,48 @@ function readConversationJumpParams(): {
   return { accountOpenId, conversationShortId, openId };
 }
 
+/** 读取 auth-redirect 302 回跳携带的授权结果 query。 */
+function readAuthRedirectParams(): {
+  auth: string;
+  openId: string;
+  nickName: string | null;
+  avatar: string | null;
+} | null {
+  const params = new URLSearchParams(window.location.search);
+  const auth = searchParamText(params, "auth");
+  const openId = searchParamText(params, "open_id");
+  if (!auth || !openId) return null;
+  return {
+    auth,
+    openId,
+    nickName: searchParamText(params, "nick_name") || searchParamText(params, "nickname"),
+    avatar: searchParamText(params, "avatar") || searchParamText(params, "avatar_url"),
+  };
+}
+
+/** 从绑定接口的错误响应中提取错误码。 */
+function extractBindErrorCode(err: unknown): string | null {
+  if (!isRecord(err)) return null;
+  const response = isRecord(err.response) ? err.response : null;
+  const data = response && isRecord(response.data) ? response.data : null;
+  const detail = data?.detail;
+  if (isRecord(detail) && typeof detail.code === "string") return detail.code;
+  return null;
+}
+
+/** 从绑定接口的错误响应中提取可读文案。 */
+function extractBindErrorText(err: unknown): string {
+  if (!isRecord(err)) return "绑定抖音号失败，请稍后重试。";
+  const response = isRecord(err.response) ? err.response : null;
+  const data = response && isRecord(response.data) ? response.data : null;
+  const detail = data?.detail;
+  if (isRecord(detail) && typeof detail.message === "string" && detail.message) return detail.message;
+  if (typeof detail === "string" && detail) return detail;
+  const status = typeof response?.status === "number" ? response.status : undefined;
+  if (status) return `绑定抖音号失败，HTTP ${status}。`;
+  return "绑定抖音号失败，请稍后重试。";
+}
+
 function conversationIdText(value: string | number | null | undefined): string {
   return value === null || value === undefined ? "" : String(value);
 }
@@ -457,6 +500,14 @@ export default function DouyinAiCsWorkbenchPage() {
   const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_suggestion");
   const [conversationJumpParams] = useState(() => readConversationJumpParams());
   const [conversationJumpHandled, setConversationJumpHandled] = useState(false);
+  // auth-redirect 302 回跳（?auth=success&open_id=xxx）触发的自动绑定状态
+  const [authRedirectParams] = useState(() => readAuthRedirectParams());
+  const [authRedirectBinding, setAuthRedirectBinding] = useState(false);
+  const [authRedirectMessage, setAuthRedirectMessage] = useState<{
+    text: string;
+    tone: "success" | "error";
+  } | null>(null);
+  const [authRedirectHandled, setAuthRedirectHandled] = useState(false);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
@@ -765,6 +816,32 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!authModalOpen || !authAuthorized || authAccountRefreshDone) return;
     void refreshAccountsAfterAuth();
   }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
+
+  // 授权成功后（auth-redirect 302 回跳带 ?auth=success&open_id=xxx），
+  // 自动把抖音号绑定到当前登录商户，成功后刷新账号列表。merchant_id 由后端从
+  // RequestContext 取，前端只传 open_id。仅执行一次。
+  useEffect(() => {
+    if (authRedirectHandled) return;
+    if (!authRedirectParams || authRedirectParams.auth !== "success") return;
+    const { openId } = authRedirectParams;
+    setAuthRedirectHandled(true);
+    setAuthRedirectBinding(true);
+    void bindAuthorizedOpenId(openId)
+      .then(() => loadAccounts(openId))
+      .then(() => {
+        setAuthRedirectBinding(false);
+        setAuthRedirectMessage({ text: "抖音号已绑定到当前商户，列表已刷新。", tone: "success" });
+      })
+      .catch((err: unknown) => {
+        setAuthRedirectBinding(false);
+        const code = extractBindErrorCode(err);
+        if (code === "DOUYIN_ACCOUNT_ALREADY_BOUND_TO_OTHER_MERCHANT") {
+          setAuthRedirectMessage({ text: "该抖音号已绑定其他商户，无法重复绑定。", tone: "error" });
+        } else {
+          setAuthRedirectMessage({ text: extractBindErrorText(err), tone: "error" });
+        }
+      });
+  }, [authRedirectHandled, authRedirectParams, loadAccounts]);
 
   useEffect(() => {
     setReply(null);
@@ -1851,6 +1928,29 @@ export default function DouyinAiCsWorkbenchPage() {
                 <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
                   已检测到授权回调：{authCallback?.nick_name || "未返回昵称"} / {authCallback?.open_id}
                   {authAccountRefreshDone ? "。抖音号列表已刷新。" : "。正在刷新抖音号列表..."}
+                </div>
+              ) : null}
+
+              {authRedirectBinding || authRedirectMessage ? (
+                <div
+                  className={
+                    authRedirectMessage?.tone === "error"
+                      ? "mb-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
+                      : "mb-4 flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800"
+                  }
+                >
+                  {authRedirectBinding ? (
+                    <LoaderIcon size={15} className="mt-0.5 shrink-0 animate-spin" />
+                  ) : authRedirectMessage?.tone === "error" ? (
+                    <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  ) : (
+                    <CheckIcon size={15} className="mt-0.5 shrink-0" />
+                  )}
+                  <span>
+                    {authRedirectBinding
+                      ? "正在将抖音号绑定到当前商户..."
+                      : authRedirectMessage?.text}
+                  </span>
                 </div>
               ) : null}
 

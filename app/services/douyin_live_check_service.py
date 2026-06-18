@@ -401,6 +401,152 @@ def sync_bind_info_accounts(
     }
 
 
+def bind_authorized_account_by_open_id(
+    db: Session,
+    *,
+    open_id: str,
+    context: RequestContext,
+) -> dict[str, Any]:
+    """把授权成功的单个抖音号绑定到当前登录商户。
+
+    与 sync_bind_info_accounts 的区别：
+    - 归属冲突时显式拒绝（DOUYIN_ACCOUNT_ALREADY_BOUND_TO_OTHER_MERCHANT），
+      而非静默跳过；
+    - 仅处理单个 open_id，要求上游 /list_bind_info 返回 open_id 完全匹配
+      且 bind_status=1 的账号。
+
+    merchant_id 必须来自可信 RequestContext，调用方需保证非空。
+    """
+    merchant_id = context.merchant_id
+    tenant_id = getattr(context, "tenant_id", None)
+
+    request_payload: dict[str, Any] = {
+        "main_account_id": config.DY_MAIN_ACCOUNT_ID,
+        "page_num": 1,
+        "page_size": 50,
+        "name_or_open_id": open_id,
+    }
+    result = call_douyin_openapi("/list_bind_info", request_payload)
+    upstream_payload = result["payload"]
+    data = upstream_payload.get("data")
+    bind_list = data.get("bind_list") if isinstance(data, dict) else None
+
+    # 仅接受上游返回中 open_id 完全匹配的账号
+    matched: dict[str, Any] | None = None
+    if isinstance(bind_list, list):
+        for item in bind_list:
+            if isinstance(item, dict) and _optional_str(item.get("open_id")) == open_id:
+                matched = item
+                break
+
+    if matched is None:
+        logger.info(
+            "douyin bind-authorized-open-id 未匹配到 open_id: open_id=%s, fetched=%s",
+            open_id,
+            len(bind_list) if isinstance(bind_list, list) else 0,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DOUYIN_ACCOUNT_NOT_FOUND",
+                "message": "未在上游授权列表中找到匹配的抖音号",
+                "account_open_id": open_id,
+            },
+        )
+
+    bind_status = _int_or_default(matched.get("bind_status"), 0)
+    if bind_status != 1:
+        logger.info(
+            "douyin bind-authorized-open-id 账号未激活: open_id=%s, bind_status=%s",
+            open_id,
+            bind_status,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DOUYIN_ACCOUNT_NOT_ACTIVE",
+                "message": f"抖音号未处于激活状态(bind_status={bind_status})",
+                "account_open_id": open_id,
+                "bind_status": bind_status,
+            },
+        )
+
+    # 查本地归属：(main_account_id, open_id) 全局唯一
+    row = (
+        db.query(DouyinAuthorizedAccount)
+        .filter_by(main_account_id=config.DY_MAIN_ACCOUNT_ID, open_id=open_id)
+        .first()
+    )
+    now = _now()
+    action = "updated"
+
+    if row is None:
+        # 未绑定任何商户 → 写入当前商户
+        row = DouyinAuthorizedAccount(
+            main_account_id=config.DY_MAIN_ACCOUNT_ID,
+            open_id=open_id,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            created_at=now,
+        )
+        db.add(row)
+        action = "created"
+    elif row.merchant_id and str(row.merchant_id) != str(merchant_id):
+        # 已绑定其他商户 → 显式拒绝，不覆盖
+        logger.warning(
+            "douyin bind-authorized-open-id 拒绝跨商户绑定: open_id=%s, owner_merchant_id=%s, request_merchant_id=%s",
+            open_id,
+            row.merchant_id,
+            merchant_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOUYIN_ACCOUNT_ALREADY_BOUND_TO_OTHER_MERCHANT",
+                "message": "该抖音号已绑定其他商户，无法重复绑定",
+                "account_open_id": open_id,
+                "owner_merchant_id": row.merchant_id,
+            },
+        )
+    elif not row.merchant_id:
+        # 已存在但未归属 → 回填当前商户
+        row.merchant_id = merchant_id
+        if tenant_id:
+            row.tenant_id = tenant_id
+        action = "backfilled"
+
+    # upsert 账号资料（来源：上游 /list_bind_info）
+    row.user_id = _optional_str(matched.get("user_id"))
+    row.union_id = _optional_str(matched.get("union_id"))
+    row.account_name = _optional_str(matched.get("account_name"))
+    row.avatar_url = _optional_str(matched.get("avatar_url"))
+    row.bind_status = bind_status
+    row.account_type = _int_or_none(matched.get("account_type"))
+    row.bind_time = _optional_str(matched.get("bind_time"))
+    row.unbind_time = _optional_str(matched.get("unbind_time"))
+    row.source_created_at = _optional_str(matched.get("created_at"))
+    row.raw_body_json = json.dumps(matched, ensure_ascii=False, separators=(",", ":"))
+    row.last_synced_at = now
+    row.updated_at = now
+    db.commit()
+
+    logger.info(
+        "douyin bind-authorized-open-id 完成: open_id=%s, action=%s, merchant_id=%s",
+        open_id,
+        action,
+        merchant_id,
+    )
+    return {
+        "action": action,
+        "account_open_id": open_id,
+        "merchant_id": merchant_id,
+        "bind_status": bind_status,
+        "account_name": row.account_name,
+        "avatar_url": row.avatar_url,
+        "updated_at": row.updated_at,
+    }
+
+
 def list_persisted_authorized_accounts(db: Session) -> dict[str, Any]:
     rows = (
         db.query(DouyinAuthorizedAccount)

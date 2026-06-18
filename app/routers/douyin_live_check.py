@@ -8,10 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from urllib.parse import quote
+from pydantic import BaseModel, Field
 
 from app import config
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_optional
+from app.auth.dependencies import (
+    get_request_context_optional,
+    get_request_context_required,
+    require_permission,
+)
 from app.database import get_db
 from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
@@ -30,6 +35,7 @@ from app.schemas import (
 )
 from app.services.douyin_image_upload_service import upload_douyin_image
 from app.services.douyin_live_check_service import (
+    bind_authorized_account_by_open_id,
     build_auth_url,
     fetch_auth_url,
     get_live_check_status,
@@ -213,6 +219,44 @@ def sync_accounts_bind_info(
             context=context,
         )
     )
+
+
+class _BindAuthorizedOpenIdRequest(BaseModel):
+    """授权绑定请求体：只接受 open_id。
+
+    merchant_id 由 RequestContext 提供，请求体传入的 merchant_id 会被忽略
+    （Pydantic 默认丢弃额外字段），从根本上杜绝前端伪造商户归属。
+    """
+
+    open_id: str = Field(..., min_length=1, description="授权成功的抖音企业号 open_id")
+
+
+@router.post("/accounts/bind-authorized-open-id")
+def bind_authorized_open_id(
+    request: _BindAuthorizedOpenIdRequest,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict:
+    """把授权成功的抖音号绑定到当前登录商户。
+
+    - 必须登录态（get_request_context_required）且具备 auto_wechat:douyin_ai_cs 权限；
+    - merchant_id 强制来自 RequestContext（NewCarProject 登录态），不取自请求体；
+    - 一个 open_id 只能绑定一个 merchant_id；跨商户重复绑定返回
+      DOUYIN_ACCOUNT_ALREADY_BOUND_TO_OTHER_MERCHANT。
+    """
+    _ensure_enabled()
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+    data = bind_authorized_account_by_open_id(
+        db,
+        open_id=request.open_id,
+        context=context,
+    )
+    return {"success": True, "data": data, "message": "success"}
 
 
 @router.post("/messages/send", response_model=DouyinPrivateMessageSendResponse)
