@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import get_db
-from app.schemas import LeadAssign, LeadCreate, LeadOut
+from app.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut
 from app.services import assign_service, lead_management_service, lead_service
 from app.services.lead_management_service import LeadListQuery
 
@@ -25,7 +25,7 @@ def create_lead(data: LeadCreate, db: Session = Depends(get_db)):
     return lead_service.create_lead(db, **data.model_dump())
 
 
-@router.get("", response_model=list[LeadOut])
+@router.get("", response_model=list[LeadOut] | LeadListResponse)
 def list_leads(
     status: str | None = None,
     keyword: str | None = None,
@@ -33,23 +33,37 @@ def list_leads(
     assigned_staff_id: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    response_format: str | None = None,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
     """获取线索列表，默认返回数组以兼容旧前端。"""
     _auth(context)
+    query = LeadListQuery(
+        keyword=keyword,
+        source=source,
+        status=status,
+        assigned_staff_id=int(assigned_staff_id) if assigned_staff_id else None,
+        page=page,
+        page_size=page_size,
+    )
     leads = lead_management_service.list_leads(
         db,
-        LeadListQuery(
-            keyword=keyword,
-            source=source,
-            status=status,
-            assigned_staff_id=int(assigned_staff_id) if assigned_staff_id else None,
-            page=page,
-            page_size=page_size,
-        ),
+        query,
     )
-    return [lead_management_service.build_lead_payload(db, lead) for lead in leads]
+    items = [lead_management_service.build_lead_payload(db, lead) for lead in leads]
+    if response_format == "page":
+        normalized_page = max(page, 1)
+        normalized_page_size = min(max(page_size, 1), 200)
+        return LeadListResponse(
+            data={
+                "page": normalized_page,
+                "page_size": normalized_page_size,
+                "total": lead_management_service.count_leads(db, query),
+                "items": items,
+            }
+        )
+    return items
 
 
 @router.get("/{lead_id}", response_model=LeadOut)

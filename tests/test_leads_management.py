@@ -144,6 +144,26 @@ def test_list_leads_supports_keyword_source_status_and_staff_filters():
     assert [item["id"] for item in staff_filtered.json()] == [ids["lead_ids"][1]]
 
 
+def test_list_leads_can_return_paginated_total_without_breaking_array_response():
+    ids = _seed_staff_and_leads()
+    client = _client()
+
+    legacy = client.get("/leads", params={"page": 1, "page_size": 2})
+    paginated = client.get("/leads", params={"page": 1, "page_size": 2, "response_format": "page"})
+
+    assert legacy.status_code == 200
+    assert isinstance(legacy.json(), list)
+    assert len(legacy.json()) == 2
+
+    assert paginated.status_code == 200
+    body = paginated.json()
+    assert body["success"] is True
+    assert body["data"]["page"] == 1
+    assert body["data"]["page_size"] == 2
+    assert body["data"]["total"] == 3
+    assert [item["id"] for item in body["data"]["items"]] == list(reversed(ids["lead_ids"]))[:2]
+
+
 def test_reports_summary_returns_retained_and_high_intent_counts():
     _seed_staff_and_leads()
     client = _client()

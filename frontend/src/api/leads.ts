@@ -9,7 +9,7 @@
  */
 
 import apiClient from "./client";
-import type { Lead } from "./types";
+import type { Lead, LeadListResponse } from "./types";
 
 export interface LeadListQuery {
   keyword?: string;
@@ -24,6 +24,16 @@ export interface LeadListQuery {
 export async function fetchLeads(query?: string | LeadListQuery): Promise<Lead[]> {
   const params = typeof query === "string" ? { status: query } : (query || {});
   return apiClient.get("/leads", { params });
+}
+
+/** 获取线索分页列表，返回总数；旧 fetchLeads 继续保留数组兼容。 */
+export async function fetchLeadsPage(query?: LeadListQuery): Promise<LeadListResponse> {
+  return apiClient.get("/leads", {
+    params: {
+      ...(query || {}),
+      response_format: "page",
+    },
+  });
 }
 
 /** 获取单条线索详情 */

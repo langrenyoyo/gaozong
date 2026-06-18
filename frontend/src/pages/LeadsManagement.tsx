@@ -16,7 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { assignLead, fetchLead, fetchLeads } from "../api/leads";
+import { assignLead, fetchLead, fetchLeadsPage } from "../api/leads";
 import { fetchStaffList } from "../api/staff";
 import { fetchSummary } from "../api/reports";
 import { syncDouyinLeads } from "../api/integrations";
@@ -969,6 +969,7 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
 export default function LeadsManagement() {
   // API 数据
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [totalLeads, setTotalLeads] = useState(0);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1025,7 +1026,7 @@ export default function LeadsManagement() {
   // 刷新全部数据
   const refreshData = useCallback(async () => {
     const [leadsData, staffData, summaryData, checksRes, autoStatusRes, agentStatusRes] = await Promise.all([
-      fetchLeads({
+      fetchLeadsPage({
         keyword: keyword.trim() || undefined,
         source: source === "all" ? undefined : source,
         status: status === "全部状态" ? undefined : status,
@@ -1039,7 +1040,8 @@ export default function LeadsManagement() {
       fetchWechatAutoDetectStatus().catch(() => null),
       fetchAgentStatus().catch(() => null),
     ]);
-    setLeads(leadsData);
+    setLeads(leadsData.data.items);
+    setTotalLeads(leadsData.data.total);
     setStaffList(staffData);
     setSummary(summaryData);
     setChecksData(checksRes);
@@ -1208,11 +1210,16 @@ export default function LeadsManagement() {
   const filtered = leads;
   const hasActiveFilters =
     keyword.trim() || status !== "全部状态" || source !== "all" || assignedStaffFilter !== "all";
-  const hasNextPage = filtered.length >= pageSize;
-  const totalPages = Math.max(1, page + (hasNextPage ? 1 : 0));
+  const totalPages = Math.max(1, Math.ceil(totalLeads / pageSize));
   const currentPage = page;
   const pagedLeads = filtered;
   const selectedLead = leads.find((lead) => lead.id === selectedId) || null;
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   // ========== 自动检测目标流程 ==========
 
@@ -1473,7 +1480,7 @@ export default function LeadsManagement() {
 
             <div className="flex shrink-0 items-center gap-3">
               <span className="text-xs font-semibold text-[#8b95a6]">
-                共 <b className="text-[#2563eb]">{filtered.length}</b> 条
+                共 <b className="text-[#2563eb]">{totalLeads}</b> 条
               </span>
             </div>
           </div>

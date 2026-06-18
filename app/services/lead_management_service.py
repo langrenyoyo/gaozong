@@ -186,7 +186,7 @@ def _staff_payload(staff: SalesStaff | None) -> dict[str, Any] | None:
     }
 
 
-def list_leads(db: Session, query: LeadListQuery) -> list[DouyinLead]:
+def _lead_query(db: Session, query: LeadListQuery):
     q = db.query(DouyinLead)
     if query.keyword:
         like = f"%{query.keyword.strip()}%"
@@ -205,6 +205,16 @@ def list_leads(db: Session, query: LeadListQuery) -> list[DouyinLead]:
         q = q.filter(DouyinLead.status == query.status)
     if query.assigned_staff_id is not None:
         q = q.filter(DouyinLead.assigned_staff_id == query.assigned_staff_id)
+    return q
+
+
+def count_leads(db: Session, query: LeadListQuery) -> int:
+    """返回当前筛选条件下的线索总数。"""
+    return _lead_query(db, query).count()
+
+
+def list_leads(db: Session, query: LeadListQuery) -> list[DouyinLead]:
+    q = _lead_query(db, query)
     page = max(query.page, 1)
     page_size = min(max(query.page_size, 1), 200)
     return q.order_by(DouyinLead.id.desc()).offset((page - 1) * page_size).limit(page_size).all()

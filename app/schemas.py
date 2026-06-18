@@ -476,6 +476,23 @@ class LeadOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LeadListData(BaseModel):
+    """线索列表分页数据。"""
+
+    page: int
+    page_size: int
+    total: int
+    items: list[LeadOut]
+
+
+class LeadListResponse(BaseModel):
+    """线索列表分页响应。"""
+
+    success: bool = True
+    data: LeadListData
+    message: str = "success"
+
+
 # ========== 手动回复 ==========
 
 class ManualReply(BaseModel):

@@ -51,6 +51,17 @@ export interface Lead {
   updated_at: string;
 }
 
+export interface LeadListResponse {
+  success: boolean;
+  data: {
+    page: number;
+    page_size: number;
+    total: number;
+    items: Lead[];
+  };
+  message: string;
+}
+
 // ========== Raw webhook events ==========
 
 export type WebhookLeadAction =
