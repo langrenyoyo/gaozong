@@ -740,6 +740,8 @@ def test_get_send_msg_context_returns_latest_non_duplicate_context():
             "customer_open_id": "customer_ctx",
             "account_open_id": "account_ctx",
             "scene": "im_enter_direct_msg",
+            "message_create_time": context["message_create_time"],
         }
+        assert context["message_create_time"] is not None
     finally:
         db.close()

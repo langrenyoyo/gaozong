@@ -221,3 +221,31 @@ class DouyinAuthorizedAccount(Base):
     raw_body_json = Column(Text, comment="Raw list_bind_info item JSON")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DouyinPrivateMessageSend(Base):
+    """Manual Douyin OpenAPI private-message send record."""
+    __tablename__ = "douyin_private_message_sends"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    main_account_id = Column(Integer, nullable=False, comment="GMP main account id")
+    conversation_short_id = Column(String(255), nullable=False, index=True)
+    server_message_id = Column(String(255), nullable=False, index=True)
+    from_user_id = Column(String(255), nullable=False, comment="Authorized account open_id")
+    to_user_id = Column(String(255), nullable=False, comment="Customer open_id")
+    customer_open_id = Column(String(255), comment="Customer open_id")
+    account_open_id = Column(String(255), comment="Authorized account open_id")
+    scene = Column(String(64), nullable=False, default="im_reply_msg")
+    content = Column(Text, nullable=False)
+    request_body_json = Column(Text, comment="Sanitized upstream request JSON")
+    response_body_json = Column(Text, comment="Upstream response JSON")
+    upstream_msg_id = Column(String(255), comment="Upstream data.msg_id")
+    status = Column(String(20), nullable=False, default="pending", comment="pending/sent/failed")
+    error_code = Column(String(64), comment="Upstream or local error code")
+    error_message = Column(String(500), comment="Safe error message")
+    manual_confirmed = Column(Integer, nullable=False, default=1, comment="Must be 1 before upstream call")
+    auto_send = Column(Integer, nullable=False, default=0, comment="P1-H must always be 0")
+    operator_id = Column(String(255), comment="Optional operator id")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    sent_at = Column(DateTime, comment="Sent time when upstream code=0")

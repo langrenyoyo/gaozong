@@ -165,6 +165,7 @@ def get_send_msg_context(
             "customer_open_id": resolved_customer_open_id,
             "account_open_id": account_open_id,
             "scene": row.event,
+            "message_create_time": row.message_create_time,
         }
     return None
 
