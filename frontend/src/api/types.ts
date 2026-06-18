@@ -8,6 +8,9 @@ export interface Lead {
   customer_contact: string | null;
   phone?: string | null;
   wechat?: string | null;
+  city?: string | null;
+  car_model?: string | null;
+  budget?: string | null;
   all_extracted_contacts?: string[];
   contact_extract_status?: string | null;
   original_message_text?: string | null;
@@ -283,6 +286,10 @@ export interface ReportSummary {
   timeout_count?: number;
   retained_contact_count?: number;
   high_intent_count?: number;
+  lead_growth_rate?: number | null;
+  sales_response_rate?: number | null;
+  retained_contact_rate?: number | null;
+  high_intent_hint?: string | null;
 }
 
 // ========== Reply checks ==========

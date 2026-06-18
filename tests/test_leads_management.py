@@ -156,6 +156,10 @@ def test_reports_summary_returns_retained_and_high_intent_counts():
     assert data["assigned_count"] == 1
     assert data["retained_contact_count"] == 2
     assert data["high_intent_count"] == 2
+    assert data["lead_growth_rate"] is None
+    assert data["sales_response_rate"] == 50.0
+    assert data["retained_contact_rate"] == 66.7
+    assert data["high_intent_hint"] == "需优先跟进"
 
 
 def test_get_lead_detail_returns_assigned_staff_score_and_timeline():

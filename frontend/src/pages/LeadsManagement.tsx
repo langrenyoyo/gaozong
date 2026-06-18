@@ -36,11 +36,11 @@ type LeadStatus = (typeof STATUS_OPTIONS)[number];
 const SOURCE_OPTIONS = ["douyin", "douyin_live"] as const;
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "待分配",
-  assigned: "已分配",
-  replied: "已跟进",
-  timeout: "已超时",
-  closed: "已关闭",
+  pending: "新线索",
+  assigned: "跟进中",
+  replied: "已留资",
+  timeout: "已失效",
+  closed: "已成交",
 };
 
 const STATUS_TONES: Record<string, string> = {
@@ -53,6 +53,10 @@ const STATUS_TONES: Record<string, string> = {
 
 function statusLabel(status: string): string {
   return STATUS_LABELS[status] || status;
+}
+
+function leadStatusLabel(lead: Lead): string {
+  return lead.status_label || statusLabel(lead.status);
 }
 
 function statusClass(status: string): string {
@@ -76,6 +80,56 @@ function contactStatusLabel(status?: string | null): string {
 function getLeadContactValues(lead: Lead): string[] {
   const values = [lead.phone, lead.wechat, ...(lead.all_extracted_contacts || []), lead.customer_contact];
   return values.filter((value, index): value is string => Boolean(value) && values.indexOf(value) === index);
+}
+
+function parseLeadRawData(lead: Lead): Record<string, unknown> {
+  if (!lead.raw_data) return {};
+  try {
+    const parsed = JSON.parse(lead.raw_data);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function rawString(data: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function leadDerivedValue(lead: Lead, field: "city" | "car_model" | "budget"): string | null {
+  const directValue = lead[field];
+  if (typeof directValue === "string" && directValue.trim()) return directValue.trim();
+  const raw = parseLeadRawData(lead);
+  if (field === "city") return rawString(raw, ["city", "location", "customer_city"]);
+  if (field === "car_model") return rawString(raw, ["car_model", "vehicle_model", "intent_car_model"]);
+  return rawString(raw, ["budget", "intent_budget"]);
+}
+
+function leadTraceItems(lead: Lead): Array<{ label: string; value: string; title?: string }> {
+  const items: Array<{ label: string; value: string; title?: string }> = [];
+  if (lead.source_id) items.push({ label: "来源ID", value: shortId(lead.source_id), title: lead.source_id });
+  if (lead.source_url) items.push({ label: "来源链接", value: shortId(lead.source_url, 12, 10), title: lead.source_url });
+  if (lead.source) items.push({ label: "来源", value: lead.source });
+  return items;
+}
+
+function formatPercent(value?: number | null): string | null {
+  return typeof value === "number" ? `${value.toFixed(1)}%` : null;
+}
+
+function leadGrowthHint(summary: ReportSummary): string {
+  const percent = formatPercent(summary.lead_growth_rate);
+  return percent ? `较昨日增长 ${percent}` : "暂无昨日基线";
+}
+
+function leadScorePercent(lead: Lead): number | null {
+  const score = lead.lead_score?.score;
+  if (typeof score !== "number") return null;
+  return Math.max(0, Math.min(100, score));
 }
 
 const DOUYIN_EVENT_DIRECTION: Record<string, { label: string; tone: string; align: string }> = {
@@ -384,7 +438,7 @@ function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm,
           <div className="rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
             <div className="font-bold text-[#1a1f2e]">{lead.customer_name || "-"}</div>
             <div className="mt-1 text-[#64748b]">
-              状态：{statusLabel(lead.status)} · 当前销售：{currentStaffName}
+              状态：{leadStatusLabel(lead)} · 当前销售：{currentStaffName}
             </div>
           </div>
 
@@ -602,6 +656,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
 function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
+  const scorePercent = leadScorePercent(lead);
 
   // 检测按钮可用条件
   const agentReason = agentDisabledReason(agentStatus);
@@ -635,7 +690,7 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
             </div>
           </div>
           <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusClass(lead.status)}`}>
-            {statusLabel(lead.status)}
+            {leadStatusLabel(lead)}
           </span>
         </div>
 
@@ -669,13 +724,19 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
           </div>
         ) : null}
 
-        {lead.lead_score ? (
+        {lead.lead_score && scorePercent !== null ? (
           <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-[#1a1f2e]">线索评分</p>
               <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                {lead.lead_score.level || "待跟进"} · {lead.lead_score.score ?? 0}
+                {lead.lead_score.level || "待跟进"} · {scorePercent}%
               </span>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e5e7eb]">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all"
+                style={{ width: `${scorePercent}%` }}
+              />
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {(lead.lead_score.reasons || []).map((reason) => (
@@ -685,7 +746,11 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
               ))}
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3 text-xs text-[#8b95a6]">
+            暂无评分
+          </div>
+        )}
 
         {lead.timeline && lead.timeline.length > 0 ? (
           <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
@@ -846,6 +911,7 @@ export default function LeadsManagement() {
 
   // 分配弹窗状态
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignLeadDraft, setAssignLeadDraft] = useState<Lead | null>(null);
   const [assignSubmitting, setAssignSubmitting] = useState(false);
 
   // 检测状态
@@ -892,6 +958,8 @@ export default function LeadsManagement() {
         source: source === "all" ? undefined : source,
         status: status === "全部状态" ? undefined : status,
         assigned_staff_id: assignedStaffFilter === "all" ? undefined : assignedStaffFilter,
+        page,
+        page_size: pageSize,
       }),
       fetchStaffList("active"),
       fetchSummary(),
@@ -905,7 +973,7 @@ export default function LeadsManagement() {
     setChecksData(checksRes);
     if (autoStatusRes) setAutoDetectStatus(autoStatusRes);
     setAgentStatus(agentStatusRes?.success ? agentStatusRes.data : AGENT_STATUS_FALLBACK);
-  }, [assignedStaffFilter, keyword, source, status]);
+  }, [assignedStaffFilter, keyword, page, pageSize, source, status]);
 
   // 页面加载时拉取数据
   useEffect(() => {
@@ -987,16 +1055,19 @@ export default function LeadsManagement() {
 
   const handleOpenAssign = () => {
     if (!selectedLead) return;
+    setAssignLeadDraft(selectedLead);
     setShowAssignModal(true);
   };
 
   const handleAssignConfirm = async (staffId: number, remark: string) => {
-    if (!selectedLead) return;
+    const targetLead = assignLeadDraft || selectedLead;
+    if (!targetLead) return;
     setAssignSubmitting(true);
     try {
-      await assignLead(selectedLead.id, staffId, remark || undefined);
+      await assignLead(targetLead.id, staffId, remark || undefined);
       toast.success(`已分配给 ${getStaffName(staffId)}`);
       setShowAssignModal(false);
+      setAssignLeadDraft(null);
       // 刷新列表，保持选中线索
       await refreshData();
     } catch (err) {
@@ -1010,6 +1081,7 @@ export default function LeadsManagement() {
   const handleAssignClose = () => {
     if (!assignSubmitting) {
       setShowAssignModal(false);
+      setAssignLeadDraft(null);
     }
   };
 
@@ -1064,9 +1136,10 @@ export default function LeadsManagement() {
   const filtered = leads;
   const hasActiveFilters =
     keyword.trim() || status !== "全部状态" || source !== "all" || assignedStaffFilter !== "all";
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagedLeads = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const hasNextPage = filtered.length >= pageSize;
+  const totalPages = Math.max(1, page + (hasNextPage ? 1 : 0));
+  const currentPage = page;
+  const pagedLeads = filtered;
   const selectedLead = leads.find((lead) => lead.id === selectedId) || null;
 
   // ========== 自动检测目标流程 ==========
@@ -1164,24 +1237,28 @@ export default function LeadsManagement() {
         {
           label: "累计线索",
           value: String(summary.total_leads),
+          hint: leadGrowthHint(summary),
           icon: <InboxIcon size={17} />,
           tone: "bg-blue-100 text-blue-700 ring-blue-200",
         },
         {
           label: "已分配",
           value: String(summary.assigned_count),
+          hint: formatPercent(summary.sales_response_rate) ? `销售响应率 ${formatPercent(summary.sales_response_rate)}` : "暂无响应数据",
           icon: <UserCheckIcon size={17} />,
           tone: "bg-slate-100 text-slate-700 ring-slate-200",
         },
         {
           label: "已留资",
           value: String(summary.retained_contact_count ?? 0),
+          hint: formatPercent(summary.retained_contact_rate) ? `转化率 ${formatPercent(summary.retained_contact_rate)}` : "暂无转化数据",
           icon: <CheckCircleIcon size={17} />,
           tone: "bg-emerald-100 text-emerald-700 ring-emerald-200",
         },
         {
           label: "高意向",
           value: String(summary.high_intent_count ?? 0),
+          hint: summary.high_intent_hint || "暂无高意向线索",
           icon: <AlertTriangleIcon size={17} />,
           tone: "bg-amber-100 text-amber-700 ring-amber-200",
         },
@@ -1230,6 +1307,7 @@ export default function LeadsManagement() {
                 <div>
                   <p className="text-xs font-semibold text-[#8b95a6]">{card.label}</p>
                   <strong className="mt-3 block text-2xl leading-none text-[#1a1f2e]">{card.value}</strong>
+                  <p className="mt-2 text-[11px] font-semibold text-[#64748b]">{card.hint}</p>
                 </div>
                 <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${card.tone}`}>
                   {card.icon}
@@ -1338,16 +1416,21 @@ export default function LeadsManagement() {
               <thead className="bg-[#f8fafc] text-[#64748b]">
                 <tr>
                   <th className="w-[14%] px-4 py-3 font-semibold">联系人</th>
-                  <th className="w-[30%] px-4 py-3 font-semibold">线索信息</th>
-                  <th className="w-[16%] px-4 py-3 font-semibold">联系方式</th>
-                  <th className="w-[12%] px-4 py-3 font-semibold">状态</th>
-                  <th className="w-[12%] px-4 py-3 font-semibold">分配销售</th>
-                  <th className="w-[16%] px-4 py-3 font-semibold">操作</th>
+                  <th className="w-[14%] px-4 py-3 font-semibold">线索信息</th>
+                  <th className="w-[15%] px-4 py-3 font-semibold">联系电话</th>
+                  <th className="w-[17%] px-4 py-3 font-semibold">溯源信息</th>
+                  <th className="w-[10%] px-4 py-3 font-semibold">状态</th>
+                  <th className="w-[10%] px-4 py-3 font-semibold">分配销售</th>
+                  <th className="w-[20%] px-4 py-3 font-semibold">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {pagedLeads.map((lead) => {
                   const active = selectedId === lead.id;
+                  const city = leadDerivedValue(lead, "city") || "城市未提供";
+                  const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
+                  const budget = leadDerivedValue(lead, "budget") || "预算未提供";
+                  const traceItems = leadTraceItems(lead);
                   return (
                     <tr
                       key={lead.id}
@@ -1368,15 +1451,16 @@ export default function LeadsManagement() {
                               {lead.customer_name || "-"}
                             </div>
                             <div className="mt-1 text-[10px] text-[#8b95a6]">
-                              {lead.lead_type || "-"}
+                              {city}
                             </div>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="truncate font-semibold text-[#374151]">
-                          {lead.source} · {lead.content || "-"}
+                        <div className="truncate font-semibold text-[#374151]" title={lead.content || undefined}>
+                          {lead.source || "-"} · {carModel}
                         </div>
+                        <div className="mt-1 truncate text-[10px] text-[#8b95a6]">{budget}</div>
                         <div className="mt-1 text-[10px] text-[#8b95a6]">{formatTime(lead.created_at)}</div>
                       </td>
                       <td className="px-4 py-3">
@@ -1396,20 +1480,48 @@ export default function LeadsManagement() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
+                        {traceItems.length > 0 ? (
+                          <div className="space-y-1 text-[10px] text-[#64748b]">
+                            {traceItems.map((item) => (
+                              <div key={item.label} className="truncate" title={item.title}>
+                                {item.label}：{item.value}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-[#8b95a6]">未提供</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
                         <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusClass(lead.status)}`}>
-                          {statusLabel(lead.status)}
+                          {leadStatusLabel(lead)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-[#374151]">{getStaffName(lead.assigned_staff_id)}</td>
                       <td className="px-4 py-3">
-                        <button
-                          disabled
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#2563eb]/50 ring-1 ring-[#e4e8f0] cursor-not-allowed"
-                          title="功能开发中"
-                        >
-                          对话跟进
-                          <ArrowUpRightIcon size={12} />
-                        </button>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedId(lead.id);
+                              setAssignLeadDraft(lead);
+                              setShowAssignModal(true);
+                            }}
+                            disabled={staffList.length === 0 || assignSubmitting}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#2563eb] px-2 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            title={staffList.length === 0 ? "暂无可用销售" : "重新分配销售"}
+                          >
+                            重新分配
+                          </button>
+                          <button
+                            disabled
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#2563eb]/50 ring-1 ring-[#e4e8f0] cursor-not-allowed"
+                            title="暂未接入对话跟进"
+                          >
+                            对话跟进
+                            <ArrowUpRightIcon size={12} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1516,10 +1628,10 @@ export default function LeadsManagement() {
       ) : null}
 
       {/* 分配弹窗 */}
-      {showAssignModal && selectedLead ? (
+      {showAssignModal && (assignLeadDraft || selectedLead) ? (
         <AssignModal
-          lead={selectedLead}
-          currentStaffName={getStaffName(selectedLead.assigned_staff_id)}
+          lead={(assignLeadDraft || selectedLead)!}
+          currentStaffName={getStaffName((assignLeadDraft || selectedLead)!.assigned_staff_id)}
           staffList={staffList}
           submitting={assignSubmitting}
           onConfirm={handleAssignConfirm}

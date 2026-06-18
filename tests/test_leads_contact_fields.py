@@ -173,3 +173,39 @@ def test_invalid_and_duplicate_events_do_not_add_extra_leads():
     items = resp.json()
     assert len(items) == 1
     assert items[0]["id"] == first_result["lead_id"]
+
+
+def test_lead_payload_exposes_safe_derived_display_fields_and_status_label():
+    db = TestSession()
+    lead = DouyinLead(
+        source="douyin",
+        lead_type="绉佷俊",
+        customer_name="鏄剧ず娴嬭瘯",
+        customer_contact="13800000000",
+        content="璇鋒鎴忓珌杞︽",
+        source_id="open-safe-001",
+        source_url="https://example.com/leads/open-safe-001",
+        raw_data=json.dumps(
+            {
+                "city": "涓婃捣",
+                "car_model": "姣呰窘03",
+                "budget": "20-30涓",
+                "contact_extract": {"status": "matched", "phone": "13800000000"},
+            },
+            ensure_ascii=False,
+        ),
+        status="pending",
+    )
+    db.add(lead)
+    db.commit()
+    lead_id = lead.id
+    db.close()
+
+    resp = _client().get(f"/leads/{lead_id}")
+
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["status_label"] == "新线索"
+    assert item["city"] == "涓婃捣"
+    assert item["car_model"] == "姣呰窘03"
+    assert item["budget"] == "20-30涓"

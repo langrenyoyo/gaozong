@@ -22,6 +22,7 @@ def get_summary(db: Session) -> dict:
     replied_count = status_counts.get("replied", 0)
     timeout_count = status_counts.get("timeout", 0)
     pending_count = status_counts.get("pending", 0)
+    assigned_total = db.query(func.count(DouyinLead.id)).filter(DouyinLead.assigned_staff_id.isnot(None)).scalar() or 0
 
     # 各销售处理统计
     staff_list = db.query(SalesStaff).filter(SalesStaff.status == "active").all()
@@ -53,12 +54,20 @@ def get_summary(db: Session) -> dict:
         })
 
     lead_management_summary = lead_management_service.summary(db)
+    retained_contact_count = lead_management_summary["retained_contact_count"]
+    high_intent_count = lead_management_summary["high_intent_count"]
+    sales_response_rate = round(replied_count / assigned_total * 100, 1) if assigned_total > 0 else None
+    retained_contact_rate = round(retained_contact_count / total_leads * 100, 1) if total_leads > 0 else None
 
     return {
         "total_leads": total_leads,
         "assigned_count": assigned_count,
-        "retained_contact_count": lead_management_summary["retained_contact_count"],
-        "high_intent_count": lead_management_summary["high_intent_count"],
+        "retained_contact_count": retained_contact_count,
+        "high_intent_count": high_intent_count,
+        "lead_growth_rate": None,
+        "sales_response_rate": sales_response_rate,
+        "retained_contact_rate": retained_contact_rate,
+        "high_intent_hint": "需优先跟进" if high_intent_count > 0 else "暂无高意向线索",
         "replied_count": replied_count,
         "timeout_count": timeout_count,
         "pending_count": pending_count,

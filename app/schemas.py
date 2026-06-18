@@ -30,6 +30,14 @@ def _extract_contact_values(all_contacts: Any) -> list[str]:
     return values
 
 
+def _extract_first_string(data: dict, keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 # ========== Raw webhook event read-only query ==========
 
 
@@ -389,6 +397,9 @@ class LeadOut(BaseModel):
     customer_contact: Optional[str] = None
     phone: Optional[str] = None
     wechat: Optional[str] = None
+    city: Optional[str] = None
+    car_model: Optional[str] = None
+    budget: Optional[str] = None
     all_extracted_contacts: list[str] = Field(default_factory=list)
     contact_extract_status: Optional[str] = None
     original_message_text: Optional[str] = None
@@ -423,6 +434,9 @@ class LeadOut(BaseModel):
                 "content": getattr(value, "content", None),
                 "source_url": getattr(value, "source_url", None),
                 "source_id": getattr(value, "source_id", None),
+                "city": getattr(value, "city", None),
+                "car_model": getattr(value, "car_model", None),
+                "budget": getattr(value, "budget", None),
                 "assigned_staff_id": getattr(value, "assigned_staff_id", None),
                 "assigned_at": getattr(value, "assigned_at", None),
                 "status": getattr(value, "status", None),
@@ -444,6 +458,9 @@ class LeadOut(BaseModel):
 
         data.setdefault("phone", contact_extract.get("phone"))
         data.setdefault("wechat", contact_extract.get("wechat"))
+        data.setdefault("city", _extract_first_string(raw_data, ("city", "location", "customer_city")))
+        data.setdefault("car_model", _extract_first_string(raw_data, ("car_model", "vehicle_model", "intent_car_model")))
+        data.setdefault("budget", _extract_first_string(raw_data, ("budget", "intent_budget")))
         data.setdefault("contact_extract_status", contact_extract.get("status"))
         data.setdefault(
             "original_message_text",
@@ -492,6 +509,10 @@ class ReportSummary(BaseModel):
     assigned_count: int = 0
     retained_contact_count: int = 0
     high_intent_count: int = 0
+    lead_growth_rate: Optional[float] = None
+    sales_response_rate: Optional[float] = None
+    retained_contact_rate: Optional[float] = None
+    high_intent_hint: Optional[str] = None
     replied_count: int = 0
     timeout_count: int = 0
     pending_count: int = 0
