@@ -257,6 +257,23 @@ function getAxiosErrorMessage(error: AxiosError): string {
   return error.message || "请求未能发出";
 }
 
+function getAutoWechatProxyErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    if (error.response) {
+      const detail = extractResponseDetail(error.response.data);
+      return `HTTP ${error.response.status}${detail ? `：${detail}` : ""}`;
+    }
+    if (error.request) {
+      return "无法连接 9000 主服务，请确认 auto_wechat 后端已启动";
+    }
+    return error.message || "请求未能发出";
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "未知错误";
+}
+
 function extractResponseDetail(data: unknown): string {
   if (!data) {
     return "";
@@ -425,4 +442,20 @@ export async function getReplySuggestion(
       payload,
     ),
   );
+}
+
+export async function getTrustedReplySuggestion(
+  conversationId: string | number,
+  payload: ReplySuggestionRequest,
+): Promise<ReplySuggestionResponse> {
+  try {
+    return (await apiClient.post(
+      `/integrations/douyin-ai-cs/conversations/${encodeURIComponent(
+        String(conversationId),
+      )}/reply-suggestion`,
+      payload,
+    )) as unknown as ReplySuggestionResponse;
+  } catch (error) {
+    throw new Error(`9000 抖音AI客服代理接口请求失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }

@@ -31,7 +31,7 @@ import {
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationMessages,
-  getReplySuggestion,
+  getTrustedReplySuggestion,
   sendDouyinManualMessage,
   type DouyinAccountItem,
   type DouyinAgentItem,
@@ -484,9 +484,8 @@ export default function DouyinAiCsWorkbenchPage() {
     setGenerating(true);
     setError(null);
     try {
-      const data = await getReplySuggestion(selectedAccount.id, {
+      const data = await getTrustedReplySuggestion(selectedAccount.id, {
         tenant_id: TENANT_ID,
-        merchant_id: MERCHANT_ID,
         account_id: selectedAccount.id,
         douyin_account_id: selectedAccount.id,
         agent_id: selectedAgent.agent_id,
