@@ -122,6 +122,7 @@ export interface DouyinConversationItem {
   last_message_at: string;
   unread_count: number;
   lead_status?: string | null;
+  tags?: string[];
 }
 
 export interface DouyinConversationListResponse {

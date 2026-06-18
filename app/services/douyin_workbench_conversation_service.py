@@ -7,14 +7,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
-from app.models import DouyinWebhookEvent
+from app.models import DouyinLead, DouyinWebhookEvent
 from app.services.contact_extractor import extract_contacts_from_text
 from app.services.douyin_live_check_service import (
     list_authorized_accounts,
     list_persisted_authorized_accounts,
+)
+from app.services.lead_management_service import (
+    has_retained_contact as lead_has_retained_contact,
+    lead_score as compute_lead_score,
 )
 
 
@@ -29,6 +34,17 @@ RESOURCE_URL_KEYS = (
     "media_url",
     "download_url",
 )
+HIGH_INTENT_KEYWORDS = (
+    "想看车",
+    "到店",
+    "试驾",
+    "价格能谈吗",
+    "今天方便",
+    "怎么联系",
+    "微信多少",
+    "电话多少",
+)
+MANUAL_REQUIRED_KEYWORDS = ("人工", "客服", "转人工", "真人", "电话联系", "加微信")
 
 
 @dataclass(frozen=True)
@@ -76,6 +92,7 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
                 "last_message_at": latest.created_at,
                 "unread_count": sum(1 for item in ordered if item.event == "im_receive_msg"),
                 "lead_status": _lead_status(ordered),
+                "tags": build_conversation_tags(db, ordered),
             }
         )
 
@@ -102,6 +119,34 @@ def get_account_unread_counts(
             continue
         counts[message.account_open_id] += 1
     return counts
+
+
+def build_conversation_tags(db: Session, messages: list[WorkbenchMessage]) -> list[str]:
+    """按一期确定性规则生成会话标签，不依赖 LLM 或人工判定。"""
+    if not messages:
+        return []
+
+    first = messages[0]
+    lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
+    message_text = " ".join(item.content for item in messages if item.content)
+    inbound_text = " ".join(item.content for item in messages if item.event == "im_receive_msg" and item.content)
+    text_blob = " ".join(part for part in [message_text, inbound_text] if part).strip()
+    raw_data = _safe_lead_raw_data(lead)
+    has_retained_contact = _has_retained_contact(lead, messages, raw_data, text_blob)
+    high_intent = _is_high_intent(lead, raw_data, text_blob, has_retained_contact)
+    manual_required = _is_manual_required(lead, raw_data, text_blob, first.account_open_id)
+    follow_up = _needs_follow_up(lead, messages, has_retained_contact)
+
+    tags: list[str] = []
+    if manual_required:
+        tags.append("manual_required")
+    if high_intent:
+        tags.append("high_intent")
+    if has_retained_contact:
+        tags.append("retained_contact")
+    if follow_up:
+        tags.append("follow_up")
+    return tags
 
 
 def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str, Any]:
@@ -488,6 +533,149 @@ def _lead_status(messages: list[WorkbenchMessage]) -> str:
     if any(extract_contacts_from_text(item.content).status == "matched" for item in messages):
         return "captured"
     return "contact_not_found"
+
+
+def _find_conversation_lead(db: Session, *, open_id: str, account_open_id: str) -> DouyinLead | None:
+    if not open_id:
+        return None
+    rows = (
+        db.query(DouyinLead)
+        .filter(DouyinLead.source_id == open_id)
+        .order_by(desc(DouyinLead.id))
+        .all()
+    )
+    for row in rows:
+        raw_data = _safe_lead_raw_data(row)
+        raw_account_open_id = _optional_str(raw_data.get("account_open_id"))
+        if raw_account_open_id and raw_account_open_id == account_open_id:
+            return row
+    if len(rows) == 1 and not _optional_str(_safe_lead_raw_data(rows[0]).get("account_open_id")):
+        return rows[0]
+    return None
+
+
+def _safe_lead_raw_data(lead: DouyinLead | None) -> dict[str, Any]:
+    if not lead or not lead.raw_data:
+        return {}
+    try:
+        parsed = json.loads(lead.raw_data)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalized_text(*parts: Any) -> str:
+    values = [str(part) for part in parts if isinstance(part, str) and part.strip()]
+    return " ".join(values)
+
+
+def _extract_raw_contact_values(raw_data: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, str) and value and value not in values:
+            values.append(value)
+
+    for key in ("phone", "wechat", "contact", "customer_contact"):
+        _append(raw_data.get(key))
+
+    contact_extract = raw_data.get("contact_extract")
+    if isinstance(contact_extract, dict):
+        for key in ("phone", "wechat", "contact", "customer_contact"):
+            _append(contact_extract.get(key))
+        all_contacts = contact_extract.get("all_contacts")
+        if isinstance(all_contacts, list):
+            for item in all_contacts:
+                if isinstance(item, dict):
+                    _append(item.get("value"))
+                else:
+                    _append(item)
+
+    return values
+
+
+def _has_retained_contact(
+    lead: DouyinLead | None,
+    messages: list[WorkbenchMessage],
+    raw_data: dict[str, Any],
+    text_blob: str,
+) -> bool:
+    del text_blob
+    if lead and lead_has_retained_contact(lead):
+        return True
+    if _extract_raw_contact_values(raw_data):
+        return True
+    for item in messages:
+        if extract_contacts_from_text(item.content).status == "matched":
+            return True
+    return False
+
+
+def _is_high_intent(
+    lead: DouyinLead | None,
+    raw_data: dict[str, Any],
+    text_blob: str,
+    has_retained_contact: bool,
+) -> bool:
+    if raw_data.get("lead_score") is not None:
+        try:
+            if int(raw_data.get("lead_score")) >= 80:
+                return True
+        except (TypeError, ValueError):
+            pass
+    lead_score_data = raw_data.get("lead_score")
+    if isinstance(lead_score_data, dict):
+        score_value = lead_score_data.get("score")
+        try:
+            if score_value is not None and int(score_value) >= 80:
+                return True
+        except (TypeError, ValueError):
+            pass
+        level_value = str(lead_score_data.get("level") or "").strip().lower()
+        if level_value in {"high", "high_intent", "high-intent", "高", "高意向"}:
+            return True
+
+    intent_level = str(raw_data.get("intent_level") or raw_data.get("purchase_intent_level") or "").strip().lower()
+    if intent_level in {"high", "high_intent", "high-intent", "高", "高意向"}:
+        return True
+
+    if lead is not None:
+        lead_score_payload = compute_lead_score(lead)
+        try:
+            if int(lead_score_payload.get("score") or 0) >= 80:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    return any(keyword in text_blob for keyword in HIGH_INTENT_KEYWORDS)
+
+
+def _is_manual_required(
+    lead: DouyinLead | None,
+    raw_data: dict[str, Any],
+    text_blob: str,
+    account_open_id: str,
+) -> bool:
+    del account_open_id
+    if any(keyword in text_blob for keyword in MANUAL_REQUIRED_KEYWORDS):
+        return True
+    if any(keyword in _normalized_text(raw_data.get("manual_required_reason"), raw_data.get("reply_mode")) for keyword in ("manual", "human", "人工")):
+        return True
+    return bool(lead and str(lead.status or "") == "manual_required")
+
+
+def _needs_follow_up(
+    lead: DouyinLead | None,
+    messages: list[WorkbenchMessage],
+    has_retained_contact: bool,
+) -> bool:
+    if not lead or not has_retained_contact:
+        return False
+    if lead.status not in {"pending", "assigned"}:
+        return False
+    if any(item.event == "im_send_msg" for item in messages):
+        return False
+    return True
 
 
 def _direction(event: str) -> str:

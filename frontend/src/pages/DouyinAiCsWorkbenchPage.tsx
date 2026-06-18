@@ -58,14 +58,14 @@ const ALLOWED_UPLOAD_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp
 const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 
-type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "has_contact" | "pending_follow_up";
+type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
   { key: "manual_required", label: "需人工" },
   { key: "high_intent", label: "高意向" },
-  { key: "has_contact", label: "已留资" },
-  { key: "pending_follow_up", label: "待回访" },
+  { key: "retained_contact", label: "已留资" },
+  { key: "follow_up", label: "待回访" },
 ];
 
 const LIVE_CHECK_DISABLED_MESSAGE =
@@ -134,13 +134,16 @@ function budgetText(profile: DouyinUserProfileResponse | null) {
 }
 
 function conversationMatchesFilter(conversation: DouyinConversationItem, filter: ConversationFilterKey) {
-  const status = String(conversation.lead_status || "").toLowerCase();
   if (filter === "all") return true;
-  if (filter === "manual_required") return status.includes("manual") || status.includes("人工");
-  if (filter === "high_intent") return status.includes("high") || status.includes("高意向");
-  if (filter === "has_contact") return status.includes("captured") || status.includes("已留资");
-  if (filter === "pending_follow_up") return status.includes("pending") || status.includes("待回访") || status.includes("待跟进");
-  return true;
+  return Array.isArray(conversation.tags) && conversation.tags.includes(filter);
+}
+
+function conversationTagText(tag: string) {
+  if (tag === "manual_required") return "需人工";
+  if (tag === "high_intent") return "高意向";
+  if (tag === "retained_contact") return "已留资";
+  if (tag === "follow_up") return "待回访";
+  return tag;
 }
 
 function ErrorBanner({ message }: { message: string | null }) {
@@ -1036,6 +1039,18 @@ export default function DouyinAiCsWorkbenchPage() {
                     </span>
                   </div>
                   <div className="mt-1 truncate text-xs text-slate-500">{conversation.last_message}</div>
+                  {conversation.tags?.length ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {conversation.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700"
+                        >
+                          {conversationTagText(tag)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-2 flex items-center justify-between">
                     <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
                       {statusText(conversation.lead_status)}

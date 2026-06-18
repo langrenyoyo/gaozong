@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import DouyinWebhookEvent
+from app.models import DouyinLead
 from app.services.douyin_live_check_service import record_oauth_callback, reset_live_check_state
 
 
@@ -158,6 +159,37 @@ def _insert_event(
         db.close()
 
 
+def _insert_lead(
+    *,
+    open_id: str = "customer_001",
+    account_open_id: str = "account_001",
+    customer_contact: str | None = None,
+    lead_score: int | None = None,
+    raw_data: dict | None = None,
+    status: str = "pending",
+):
+    db = TestSession()
+    try:
+        raw_payload = dict(raw_data or {})
+        raw_payload.setdefault("account_open_id", account_open_id)
+        if lead_score is not None:
+            raw_payload["lead_score"] = lead_score
+        row = DouyinLead(
+            source="douyin",
+            source_id=open_id,
+            customer_name=f"Customer {open_id[-3:]}",
+            customer_contact=customer_contact,
+            raw_data=json.dumps(raw_payload, ensure_ascii=False),
+            status=status,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    finally:
+        db.close()
+
+
 def _insert_media_event(
     *,
     event_key: str = "media_event_001",
@@ -214,6 +246,219 @@ def test_customer_private_message_aggregates_to_conversation_without_contact():
     assert data["items"][0]["open_id"] == "customer_no_contact"
     assert data["items"][0]["last_message"] == "hello"
     assert data["items"][0]["lead_status"] == "contact_not_found"
+
+
+def test_conversation_tags_are_empty_when_no_deterministic_signal_exists():
+    _insert_event(
+        open_id="customer_no_tags",
+        account_open_id="account_no_tags",
+        text="hello",
+        event_key="no_tags",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_no_tags/conversations",
+        params={"account_open_id": "account_no_tags"},
+    ).json()
+
+    assert data["items"][0]["tags"] == []
+    assert data["items"][0]["lead_status"] == "contact_not_found"
+
+
+def test_conversation_tags_generate_retained_contact_from_lead_contact():
+    _insert_event(
+        open_id="customer_contact",
+        account_open_id="account_contact",
+        text="hello",
+        event_key="contact_event",
+    )
+    _insert_lead(
+        open_id="customer_contact",
+        account_open_id="account_contact",
+        customer_contact="13800000000",
+        status="pending",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_contact/conversations",
+        params={"account_open_id": "account_contact"},
+    ).json()
+
+    assert "retained_contact" in data["items"][0]["tags"]
+
+
+def test_conversation_tags_generate_high_intent_from_lead_score():
+    _insert_event(
+        open_id="customer_high_intent",
+        account_open_id="account_high_intent",
+        text="hello",
+        event_key="high_intent_event",
+    )
+    _insert_lead(
+        open_id="customer_high_intent",
+        account_open_id="account_high_intent",
+        lead_score=85,
+        status="pending",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_high_intent/conversations",
+        params={"account_open_id": "account_high_intent"},
+    ).json()
+
+    assert "high_intent" in data["items"][0]["tags"]
+
+
+def test_conversation_tags_high_intent_keywords_do_not_imply_retained_contact():
+    _insert_event(
+        open_id="customer_high_intent_text",
+        account_open_id="account_high_intent_text",
+        text="这台车价格能谈吗，怎么联系",
+        event_key="high_intent_text_event",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_high_intent_text/conversations",
+        params={"account_open_id": "account_high_intent_text"},
+    ).json()
+
+    assert "high_intent" in data["items"][0]["tags"]
+    assert "retained_contact" not in data["items"][0]["tags"]
+
+
+def test_conversation_tags_generate_manual_required_from_text_hint():
+    _insert_event(
+        open_id="customer_manual",
+        account_open_id="account_manual",
+        text="麻烦转人工客服联系我",
+        event_key="manual_event",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_manual/conversations",
+        params={"account_open_id": "account_manual"},
+    ).json()
+
+    assert "manual_required" in data["items"][0]["tags"]
+
+
+def test_conversation_tags_generate_follow_up_when_retained_contact_has_no_outbound_reply():
+    _insert_event(
+        open_id="customer_follow_up",
+        account_open_id="account_follow_up",
+        text="hello",
+        event_key="follow_up_event",
+    )
+    _insert_lead(
+        open_id="customer_follow_up",
+        account_open_id="account_follow_up",
+        customer_contact="wechat_001",
+        status="assigned",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_follow_up/conversations",
+        params={"account_open_id": "account_follow_up"},
+    ).json()
+
+    assert "retained_contact" in data["items"][0]["tags"]
+    assert "follow_up" in data["items"][0]["tags"]
+
+
+def test_conversation_tags_do_not_mark_follow_up_after_outbound_message():
+    _insert_event(
+        open_id="customer_follow_up_sent",
+        account_open_id="account_follow_up_sent",
+        text="hello",
+        event_key="follow_up_sent_inbound",
+    )
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_follow_up_sent",
+        account_open_id="account_follow_up_sent",
+        text="已收到",
+        event_key="follow_up_sent_outbound",
+    )
+    _insert_lead(
+        open_id="customer_follow_up_sent",
+        account_open_id="account_follow_up_sent",
+        customer_contact="wechat_002",
+        status="assigned",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_follow_up_sent/conversations",
+        params={"account_open_id": "account_follow_up_sent"},
+    ).json()
+
+    assert "retained_contact" in data["items"][0]["tags"]
+    assert "follow_up" not in data["items"][0]["tags"]
+
+
+def test_conversation_tags_remain_isolated_between_multiple_conversations():
+    _insert_event(
+        open_id="customer_tag_a",
+        account_open_id="account_tag_isolation",
+        text="麻烦转人工",
+        event_key="tag_a_event",
+    )
+    _insert_event(
+        open_id="customer_tag_b",
+        account_open_id="account_tag_isolation",
+        text="hello",
+        event_key="tag_b_event",
+    )
+    _insert_lead(
+        open_id="customer_tag_b",
+        account_open_id="account_tag_isolation",
+        customer_contact="13811112222",
+        lead_score=90,
+        status="pending",
+    )
+
+    items = _client().get(
+        "/integrations/douyin/accounts/account_tag_isolation/conversations",
+        params={"account_open_id": "account_tag_isolation"},
+    ).json()["items"]
+
+    tags_by_customer = {item["open_id"]: item["tags"] for item in items}
+    assert "manual_required" in tags_by_customer["customer_tag_a"]
+    assert "manual_required" not in tags_by_customer["customer_tag_b"]
+    assert "retained_contact" in tags_by_customer["customer_tag_b"]
+    assert "high_intent" in tags_by_customer["customer_tag_b"]
+
+
+def test_conversation_tags_prefer_lead_raw_account_open_id_when_same_open_id_exists_on_multiple_accounts():
+    _insert_event(
+        open_id="customer_shared_open_id",
+        account_open_id="account_shared_a",
+        text="hello from a",
+        event_key="shared_account_a_event",
+    )
+    _insert_event(
+        open_id="customer_shared_open_id",
+        account_open_id="account_shared_b",
+        text="hello from b",
+        event_key="shared_account_b_event",
+    )
+    _insert_lead(
+        open_id="customer_shared_open_id",
+        account_open_id="account_shared_b",
+        customer_contact="13822223333",
+        status="assigned",
+    )
+
+    account_a_items = _client().get(
+        "/integrations/douyin/accounts/account_shared_a/conversations",
+        params={"account_open_id": "account_shared_a"},
+    ).json()["items"]
+    account_b_items = _client().get(
+        "/integrations/douyin/accounts/account_shared_b/conversations",
+        params={"account_open_id": "account_shared_b"},
+    ).json()["items"]
+
+    assert account_a_items[0]["tags"] == []
+    assert "retained_contact" in account_b_items[0]["tags"]
 
 
 def test_same_customer_and_account_aggregate_to_same_conversation_without_short_id():
