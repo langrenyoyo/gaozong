@@ -30,6 +30,10 @@ def _load_env_file(env_file: Path) -> None:
 
 _load_env_file(ENV_FILE)
 
+
+def _env_str(name: str, default: str = "") -> str:
+    return os.getenv(name, "").strip() or default
+
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -69,10 +73,9 @@ DOUYIN_SYNC_DEFAULT_LIMIT = int(os.getenv("DOUYIN_SYNC_DEFAULT_LIMIT", "50"))
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 DY_SECRET_KEY = os.getenv("DY_SECRET_KEY", "")
 DY_GMP_SECRET_KEY = os.getenv("DY_GMP_SECRET_KEY", "")
-DY_BASE_URL = os.getenv(
-    "DY_BASE_URL",
-    "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi",
-)
+DY_OPENAPI_BASE_URL = _env_str("DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com").rstrip("/")
+DY_OPENAPI_PREFIX = _env_str("DY_OPENAPI_PREFIX", "/ai_chat_agent_api/v1/openapi")
+DY_BASE_URL = _env_str("DY_BASE_URL", f"{DY_OPENAPI_BASE_URL}{DY_OPENAPI_PREFIX}").rstrip("/")
 DY_MAIN_ACCOUNT_ID = int(os.getenv("DY_MAIN_ACCOUNT_ID", "0"))
 DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
 DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))

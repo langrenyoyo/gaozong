@@ -99,7 +99,8 @@ def _optional_str(value: Any) -> str | None:
 
 def _auth_url_base_data() -> dict[str, Any]:
     missing: list[str] = []
-    if not config.DY_BASE_URL:
+    upstream_base_url = _openapi_base_url()
+    if not upstream_base_url:
         missing.append("DY_BASE_URL")
     if not config.DY_GMP_SECRET_KEY:
         missing.append("DY_GMP_SECRET_KEY")
@@ -144,14 +145,49 @@ def build_auth_payload() -> dict[str, Any]:
     return params
 
 
+def _openapi_base_url() -> str:
+    legacy_base_url = getattr(config, "DY_BASE_URL", "") or ""
+    if legacy_base_url:
+        return legacy_base_url.rstrip("/")
+    base_url = (getattr(config, "DY_OPENAPI_BASE_URL", "") or "").rstrip("/")
+    prefix = (getattr(config, "DY_OPENAPI_PREFIX", "") or "").strip()
+    if not base_url or not prefix:
+        return ""
+    return f"{base_url}/{prefix.strip('/')}"
+
+
+def build_signed_openapi_request_body_and_headers(
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Build canonical JSON body, OpenAPI signing headers, and safe debug fields."""
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    timestamp = str(int(time.time()))
+    canonical_string = body_text + "-" + timestamp
+    secret = config.DY_GMP_SECRET_KEY
+    signature = hashlib.sha256((secret + canonical_string).encode("utf-8")).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Auth-Timestamp": timestamp,
+        "Authorization": signature,
+    }
+    debug = {
+        "secret_len": len(secret),
+        "secret_has_space": secret != secret.strip(),
+        "body_sha256": hashlib.sha256(body_text.encode("utf-8")).hexdigest(),
+        "canonical_string_sha256": hashlib.sha256(canonical_string.encode("utf-8")).hexdigest(),
+    }
+    return body_text, headers, debug
+
+
 def _extract_upstream_auth_url(payload: dict[str, Any]) -> str | None:
     candidates = [
         payload.get("auth_url"),
         payload.get("url"),
+        payload.get("redirect_url"),
     ]
     data = payload.get("data")
     if isinstance(data, dict):
-        candidates.extend([data.get("auth_url"), data.get("url")])
+        candidates.extend([data.get("auth_url"), data.get("url"), data.get("redirect_url")])
     for candidate in candidates:
         if isinstance(candidate, str) and candidate:
             return candidate
@@ -165,6 +201,7 @@ def _safe_upstream_error(
     payload: dict[str, Any] | None = None,
     timestamp: str | None = None,
     signature: str | None = None,
+    debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     upstream_status = resp.status_code if resp is not None else None
     upstream_code = None
@@ -177,7 +214,7 @@ def _safe_upstream_error(
         if isinstance(body, dict):
             upstream_code = body.get("code")
             upstream_msg = body.get("msg") or body.get("message")
-    return {
+    safe_error = {
         "upstream_status": upstream_status,
         "upstream_code": upstream_code,
         "upstream_msg": upstream_msg,
@@ -189,6 +226,16 @@ def _safe_upstream_error(
         "timestamp_format": "unix_seconds" if timestamp and timestamp.isdigit() else "unknown",
         "authorization_preview": _preview(signature, head=6, tail=4),
     }
+    if debug:
+        safe_error.update(
+            {
+                "secret_len": debug.get("secret_len"),
+                "secret_has_space": debug.get("secret_has_space"),
+                "body_sha256": debug.get("body_sha256"),
+                "canonical_string_sha256": debug.get("canonical_string_sha256"),
+            }
+        )
+    return safe_error
 
 
 def fetch_auth_url() -> dict[str, Any]:
@@ -198,20 +245,15 @@ def fetch_auth_url() -> dict[str, Any]:
         return base_data
 
     payload = build_auth_payload()
-    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    timestamp = str(int(time.time()))
-    sign_str = body_text + "-" + timestamp
-    signature = hashlib.sha256((config.DY_GMP_SECRET_KEY + sign_str).encode("utf-8")).hexdigest()
+    body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
+    timestamp = headers["X-Auth-Timestamp"]
+    signature = headers["Authorization"]
     resp = None
     try:
         resp = requests.post(
-            f"{config.DY_BASE_URL.rstrip('/')}/get_aweme_auth_url",
+            f"{_openapi_base_url()}/get_aweme_auth_url",
             data=body_text.encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "X-Auth-Timestamp": timestamp,
-                "Authorization": signature,
-            },
+            headers=headers,
             timeout=config.DY_HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
@@ -230,6 +272,7 @@ def fetch_auth_url() -> dict[str, Any]:
                 payload=payload,
                 timestamp=timestamp,
                 signature=signature,
+                debug=debug,
             ),
         ) from exc
     except ValueError as exc:

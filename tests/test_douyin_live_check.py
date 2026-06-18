@@ -23,7 +23,10 @@ from app import config
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import DouyinLead, DouyinWebhookEvent
-from app.services.douyin_live_check_service import reset_live_check_state
+from app.services.douyin_live_check_service import (
+    build_signed_openapi_request_body_and_headers,
+    reset_live_check_state,
+)
 
 
 test_engine = create_engine(
@@ -157,6 +160,28 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
     assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
+def test_auth_url_accepts_upstream_redirect_url_compatibility_field():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
+         patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"redirect_url": "https://open.douyin.com/auth/scan?ticket=redirect"}},
+        )
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["auth_url"] == "https://open.douyin.com/auth/scan?ticket=redirect"
+
+
 def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
     client = _client()
 
@@ -202,6 +227,68 @@ def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
     assert mock_post.call_args.kwargs["headers"]["Authorization"] != wrong_webhook_signature
 
 
+def test_signed_openapi_request_uses_body_dash_timestamp_and_hex_authorization():
+    payload = {
+        "main_account_id": 123,
+        "account_name": "demo-account",
+        "auth_redirect_url": "https://callback.example.com/oauth-callback",
+        "callback_url": "https://callback.example.com/webhook-observe",
+        "callback_event": ["im_receive_msg"],
+    }
+
+    with patch("app.config.DY_GMP_SECRET_KEY", "gmp-secret"), \
+         patch("app.services.douyin_live_check_service.time.time", return_value=1700000000):
+        body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
+
+    expected_body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    expected_signature = hashlib.sha256(
+        ("gmp-secret" + expected_body + "-1700000000").encode("utf-8")
+    ).hexdigest()
+
+    assert body_text == expected_body
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-Auth-Timestamp": "1700000000",
+        "Authorization": expected_signature,
+    }
+    assert len(headers["Authorization"]) == 64
+    assert all(ch in "0123456789abcdef" for ch in headers["Authorization"])
+    assert debug["body_sha256"] == hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+    assert debug["canonical_string_sha256"] == hashlib.sha256(
+        (expected_body + "-1700000000").encode("utf-8")
+    ).hexdigest()
+    assert debug["secret_len"] == len("gmp-secret")
+    assert debug["secret_has_space"] is False
+    assert "gmp-secret" not in json.dumps(debug, ensure_ascii=False)
+    assert expected_signature not in json.dumps(debug, ensure_ascii=False)
+
+
+def test_auth_url_uses_openapi_base_url_and_prefix_when_legacy_base_url_absent():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_BASE_URL", ""), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com/"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_api/v1/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
+         patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
+        )
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 200
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi/get_aweme_auth_url"
+    )
+
+
 def test_auth_url_upstream_403_returns_safe_error_without_secret():
     client = _client()
 
@@ -236,6 +323,10 @@ def test_auth_url_upstream_403_returns_safe_error_without_secret():
     ]
     assert detail["timestamp_format"] == "unix_seconds"
     assert "..." in detail["authorization_preview"]
+    assert detail["body_sha256"]
+    assert detail["canonical_string_sha256"]
+    assert detail["secret_len"] == len("super-secret")
+    assert detail["secret_has_space"] is False
     assert "授权链接获取失败" in detail["safe_message"]
     assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
     assert "token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
@@ -639,3 +730,15 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
     assert reloaded.PUBLIC_BASE_URL == "https://callback.misanduo.com"
     assert reloaded.DY_AUTH_REDIRECT_URL == "https://callback.misanduo.com/oauth-callback"
     assert reloaded.DY_CALLBACK_URL == "https://callback.misanduo.com/webhook-observe"
+
+
+def test_config_openapi_base_and_prefix_fall_back_when_environment_values_are_blank(monkeypatch):
+    monkeypatch.setenv("DY_OPENAPI_BASE_URL", "")
+    monkeypatch.setenv("DY_OPENAPI_PREFIX", "")
+    monkeypatch.delenv("DY_BASE_URL", raising=False)
+
+    reloaded = importlib.reload(config)
+
+    assert reloaded.DY_OPENAPI_BASE_URL == "https://gmp.bytedanceapi.com"
+    assert reloaded.DY_OPENAPI_PREFIX == "/ai_chat_agent_api/v1/openapi"
+    assert reloaded.DY_BASE_URL == "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi"

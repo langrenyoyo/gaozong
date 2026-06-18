@@ -31,6 +31,8 @@ services:
       - ./docker-data/auto_wechat_9000:/workspace/data
     environment:
       - DY_GMP_SECRET_KEY=${DY_GMP_SECRET_KEY:-}
+      - DY_OPENAPI_BASE_URL=${DY_OPENAPI_BASE_URL:-https://gmp.bytedanceapi.com}
+      - DY_OPENAPI_PREFIX=${DY_OPENAPI_PREFIX:-/ai_chat_agent_api/v1/openapi}
       - DY_MAIN_ACCOUNT_ID=${DY_MAIN_ACCOUNT_ID:-}
       - DY_ACCOUNT_NAME=${DY_ACCOUNT_NAME:-}
       - DY_CALLBACK_URL=${DY_CALLBACK_URL:-}
