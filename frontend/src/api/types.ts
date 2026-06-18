@@ -17,6 +17,29 @@ export interface Lead {
   assigned_staff_id: number | null;
   assigned_at: string | null;
   status: string;
+  display_status?: string | null;
+  status_label?: string | null;
+  status_reason?: string | null;
+  lead_score?: {
+    score?: number;
+    level?: string;
+    reasons?: string[];
+  } | null;
+  assigned_staff?: {
+    id: number;
+    name: string;
+    wechat_id?: string | null;
+    wechat_nickname?: string | null;
+    phone?: string | null;
+    status?: string | null;
+  } | null;
+  timeline?: Array<{
+    id: number;
+    record_type: string;
+    content: string | null;
+    staff_id: number | null;
+    created_at: string | null;
+  }>;
   raw_data: string | null;
   created_at: string;
   updated_at: string;
@@ -258,6 +281,8 @@ export interface ReportSummary {
   assigned_count?: number;
   replied_count?: number;
   timeout_count?: number;
+  retained_contact_count?: number;
+  high_intent_count?: number;
 }
 
 // ========== Reply checks ==========

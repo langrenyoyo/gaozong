@@ -11,13 +11,22 @@
 import apiClient from "./client";
 import type { Lead } from "./types";
 
+export interface LeadListQuery {
+  keyword?: string;
+  source?: string;
+  status?: string;
+  assigned_staff_id?: number | string;
+  page?: number;
+  page_size?: number;
+}
+
 /** 获取线索列表，可按状态过滤 */
-export async function fetchLeads(status?: string): Promise<Lead[]> {
-  const params = status ? { status } : {};
+export async function fetchLeads(query?: string | LeadListQuery): Promise<Lead[]> {
+  const params = typeof query === "string" ? { status: query } : (query || {});
   return apiClient.get("/leads", { params });
 }
 
-/** 获取单条线索 */
+/** 获取单条线索详情 */
 export async function fetchLead(id: number): Promise<Lead> {
   return apiClient.get(`/leads/${id}`);
 }
@@ -33,6 +42,6 @@ export async function createLead(payload: {
 }
 
 /** 分配线索给销售 */
-export async function assignLead(leadId: number, staffId: number): Promise<Lead> {
-  return apiClient.post(`/leads/${leadId}/assign`, { staff_id: staffId });
+export async function assignLead(leadId: number, staffId: number, remark?: string): Promise<Lead> {
+  return apiClient.post(`/leads/${leadId}/assign`, { staff_id: staffId, remark });
 }

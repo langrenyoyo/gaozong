@@ -16,7 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { assignLead, fetchLeads } from "../api/leads";
+import { assignLead, fetchLead, fetchLeads } from "../api/leads";
 import { fetchStaffList } from "../api/staff";
 import { fetchSummary } from "../api/reports";
 import { syncDouyinLeads } from "../api/integrations";
@@ -33,6 +33,7 @@ import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 
 const STATUS_OPTIONS = ["pending", "assigned", "replied", "timeout", "closed"] as const;
 type LeadStatus = (typeof STATUS_OPTIONS)[number];
+const SOURCE_OPTIONS = ["douyin", "douyin_live"] as const;
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "待分配",
@@ -169,6 +170,19 @@ function detailValue(label: string, value: string): { text: string; title?: stri
     return { text: shortId(value), title: value === "-" ? undefined : value };
   }
   return { text: value };
+}
+
+const TIMELINE_TYPE_LABELS: Record<string, string> = {
+  assign: "首次分配",
+  reassign: "重新分配",
+  reply_check: "回复检测",
+  notification: "微信通知",
+  feedback: "反馈记录",
+  manual_note: "人工备注",
+};
+
+function timelineTypeLabel(type: string): string {
+  return TIMELINE_TYPE_LABELS[type] || type;
 }
 
 // ========== 同步弹窗 ==========
@@ -329,12 +343,13 @@ interface AssignModalProps {
   currentStaffName: string;
   staffList: Staff[];
   submitting: boolean;
-  onConfirm: (staffId: number) => void;
+  onConfirm: (staffId: number, remark: string) => void;
   onClose: () => void;
 }
 
 function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm, onClose }: AssignModalProps) {
   const [selectedStaffId, setSelectedStaffId] = useState<number | null>(null);
+  const [remark, setRemark] = useState("");
   const canSubmit = selectedStaffId !== null && !submitting;
 
   return (
@@ -343,7 +358,7 @@ function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm,
         onSubmit={(event) => {
           event.preventDefault();
           if (selectedStaffId !== null) {
-            onConfirm(selectedStaffId);
+            onConfirm(selectedStaffId, remark.trim());
           }
         }}
         className="w-full max-w-[460px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]"
@@ -399,6 +414,16 @@ function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm,
               </select>
             </label>
           )}
+          <label className="grid gap-1.5">
+            <span className="font-semibold text-[#64748b]">分配备注</span>
+            <textarea
+              value={remark}
+              onChange={(event) => setRemark(event.target.value)}
+              rows={3}
+              placeholder="填写本次分配或重新分配原因"
+              className="resize-none rounded-xl border border-[#e4e8f0] bg-white px-3 py-2 outline-none focus:border-[#2563eb] focus:ring-4 focus:ring-blue-500/10"
+            />
+          </label>
         </div>
 
         {/* 底部按钮 */}
@@ -644,6 +669,43 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
           </div>
         ) : null}
 
+        {lead.lead_score ? (
+          <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-[#1a1f2e]">线索评分</p>
+              <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                {lead.lead_score.level || "待跟进"} · {lead.lead_score.score ?? 0}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(lead.lead_score.reasons || []).map((reason) => (
+                <span key={reason} className="rounded-md bg-[#f8fafc] px-2 py-1 text-[11px] text-[#64748b]">
+                  {reason}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {lead.timeline && lead.timeline.length > 0 ? (
+          <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
+            <p className="text-xs font-semibold text-[#1a1f2e]">销售跟进记录</p>
+            <div className="mt-3 space-y-2">
+              {lead.timeline.map((item) => (
+                <div key={`${item.record_type}-${item.id}`} className="rounded-lg bg-[#f8fafc] px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-[#374151]">{timelineTypeLabel(item.record_type)}</span>
+                    <span className="text-[10px] text-[#8b95a6]">{formatTime(item.created_at)}</span>
+                  </div>
+                  <p className="mt-1 break-words text-[11px] leading-relaxed text-[#64748b]">
+                    {item.content || "-"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button
             onClick={onOpenAssign}
@@ -800,6 +862,8 @@ export default function LeadsManagement() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState<LeadStatus | "全部状态">("全部状态");
+  const [source, setSource] = useState("all");
+  const [assignedStaffFilter, setAssignedStaffFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -823,7 +887,12 @@ export default function LeadsManagement() {
   // 刷新全部数据
   const refreshData = useCallback(async () => {
     const [leadsData, staffData, summaryData, checksRes, autoStatusRes, agentStatusRes] = await Promise.all([
-      fetchLeads(),
+      fetchLeads({
+        keyword: keyword.trim() || undefined,
+        source: source === "all" ? undefined : source,
+        status: status === "全部状态" ? undefined : status,
+        assigned_staff_id: assignedStaffFilter === "all" ? undefined : assignedStaffFilter,
+      }),
       fetchStaffList("active"),
       fetchSummary(),
       fetchChecks(),
@@ -836,7 +905,7 @@ export default function LeadsManagement() {
     setChecksData(checksRes);
     if (autoStatusRes) setAutoDetectStatus(autoStatusRes);
     setAgentStatus(agentStatusRes?.success ? agentStatusRes.data : AGENT_STATUS_FALLBACK);
-  }, []);
+  }, [assignedStaffFilter, keyword, source, status]);
 
   // 页面加载时拉取数据
   useEffect(() => {
@@ -853,6 +922,28 @@ export default function LeadsManagement() {
     }
     loadData();
   }, [refreshData]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let cancelled = false;
+
+    async function loadSelectedLeadDetail() {
+      try {
+        const detail = await fetchLead(selectedId);
+        if (cancelled) return;
+        setLeads((current) => current.map((item) => (item.id === detail.id ? { ...item, ...detail } : item)));
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "线索详情加载失败");
+        }
+      }
+    }
+
+    void loadSelectedLeadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   // ========== 同步流程 ==========
 
@@ -899,11 +990,11 @@ export default function LeadsManagement() {
     setShowAssignModal(true);
   };
 
-  const handleAssignConfirm = async (staffId: number) => {
+  const handleAssignConfirm = async (staffId: number, remark: string) => {
     if (!selectedLead) return;
     setAssignSubmitting(true);
     try {
-      await assignLead(selectedLead.id, staffId);
+      await assignLead(selectedLead.id, staffId, remark || undefined);
       toast.success(`已分配给 ${getStaffName(staffId)}`);
       setShowAssignModal(false);
       // 刷新列表，保持选中线索
@@ -970,25 +1061,9 @@ export default function LeadsManagement() {
   };
 
   // 前端搜索与状态筛选
-  const filtered = useMemo(
-    () =>
-      leads.filter((lead) => {
-        const text = keyword.trim();
-        const matchKeyword =
-          !text ||
-          (lead.customer_name || "").includes(text) ||
-          (lead.customer_contact || "").includes(text) ||
-          (lead.phone || "").includes(text) ||
-          (lead.wechat || "").includes(text) ||
-          (lead.original_message_text || "").includes(text) ||
-          (lead.all_extracted_contacts || []).some((contact) => contact.includes(text)) ||
-          (lead.content || "").includes(text);
-        const matchStatus = status === "全部状态" || lead.status === status;
-        return matchKeyword && matchStatus;
-      }),
-    [leads, keyword, status],
-  );
-  const hasActiveFilters = keyword.trim() || status !== "全部状态";
+  const filtered = leads;
+  const hasActiveFilters =
+    keyword.trim() || status !== "全部状态" || source !== "all" || assignedStaffFilter !== "all";
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedLeads = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -1099,16 +1174,16 @@ export default function LeadsManagement() {
           tone: "bg-slate-100 text-slate-700 ring-slate-200",
         },
         {
-          label: "已跟进",
-          value: String(summary.replied_count),
+          label: "已留资",
+          value: String(summary.retained_contact_count ?? 0),
           icon: <CheckCircleIcon size={17} />,
           tone: "bg-emerald-100 text-emerald-700 ring-emerald-200",
         },
         {
-          label: "已超时",
-          value: String(summary.timeout_count),
+          label: "高意向",
+          value: String(summary.high_intent_count ?? 0),
           icon: <AlertTriangleIcon size={17} />,
-          tone: "bg-red-100 text-red-700 ring-red-200",
+          tone: "bg-amber-100 text-amber-700 ring-amber-200",
         },
       ]
     : [];
@@ -1204,10 +1279,38 @@ export default function LeadsManagement() {
                   <option key={item} value={item}>{statusLabel(item)}</option>
                 ))}
               </select>
+              <select
+                value={source}
+                onChange={(event) => {
+                  setSource(event.target.value);
+                  setPage(1);
+                }}
+                className="h-9 shrink-0 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none"
+              >
+                <option value="all">全部来源</option>
+                {SOURCE_OPTIONS.map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
+              </select>
+              <select
+                value={assignedStaffFilter}
+                onChange={(event) => {
+                  setAssignedStaffFilter(event.target.value);
+                  setPage(1);
+                }}
+                className="h-9 shrink-0 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none"
+              >
+                <option value="all">全部销售</option>
+                {staffList.map((staff) => (
+                  <option key={staff.id} value={staff.id}>{staff.name}</option>
+                ))}
+              </select>
               {hasActiveFilters ? (
                 <button
                   onClick={() => {
                     setKeyword("");
+                    setSource("all");
+                    setAssignedStaffFilter("all");
                     setStatus("全部状态");
                     setPage(1);
                   }}
