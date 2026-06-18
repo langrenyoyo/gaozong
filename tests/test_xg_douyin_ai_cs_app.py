@@ -168,6 +168,35 @@ def test_reply_suggestion_uses_explicit_bound_agent_and_never_auto_send(tmp_path
     assert "agent_config_missing_fallback" in data["warnings"]
 
 
+def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tmp_path, monkeypatch):
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 99,
+            "latest_message": "鎴戞兂瑕佸ゥ杩狝6",
+            "agent_id": "agent_from_9000",
+            "agent_config": {
+                "agent_id": "agent_from_9000",
+                "agent_name": "真实小高客服",
+                "system_prompt": "按真实库存回复，禁止自动发送。",
+                "knowledge_base_text": "A6 暂无现车，可推荐同级车型。",
+                "status": "active",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == "agent_from_9000"
+    assert data["agent_name"] == "真实小高客服"
+    assert data["agent_category"] == "bound_agent"
+    assert data["manual_required"] is False
+    assert data["auto_send"] is False
+    assert "agent_config_missing_fallback" not in data["warnings"]
+
+
 def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).post(
         "/douyin/conversations/1/reply-suggestion",

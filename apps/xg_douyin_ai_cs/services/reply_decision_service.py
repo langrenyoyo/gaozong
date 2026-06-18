@@ -114,6 +114,21 @@ def resolve_reply_agent(
     9100 正式链路只消费该上下文，不再用 demo mock 绑定表二次拦截。
     """
     if request.agent_id:
+        if request.agent_config:
+            config = request.agent_config
+            return (
+                {
+                    "agent_id": config.agent_id or request.agent_id,
+                    "agent_name": config.agent_name or config.agent_id or request.agent_id,
+                    "agent_category": "bound_agent",
+                    "system_prompt": config.system_prompt or config.prompt or "",
+                    "knowledge_base_text": config.knowledge_base_text or "",
+                    "reply_style": "",
+                    "business_scope": config.knowledge_base_text or "",
+                    "is_active": config.status in (None, "", "active"),
+                },
+                [],
+            )
         return (
             {
                 "agent_id": request.agent_id,

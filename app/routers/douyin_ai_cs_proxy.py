@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
+from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
@@ -62,12 +63,31 @@ async def create_reply_suggestion_proxy(
             },
         )
 
+    agent = get_agent(db, context, request.agent_id or "")
+    if agent is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "AGENT_NOT_FOUND", "message": "智能体不存在或不属于当前商户"},
+        )
+    if agent.status != "active":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "AGENT_NOT_ACTIVE", "message": "智能体未启用"},
+        )
+
     payload = {
         "tenant_id": context.source_system,
         "account_id": request.douyin_account_id,
         "douyin_account_id": request.douyin_account_id,
         "merchant_id": context.merchant_id,
         "agent_id": request.agent_id,
+        "agent_config": {
+            "agent_id": agent.agent_id,
+            "agent_name": agent.name,
+            "system_prompt": agent.prompt or "",
+            "knowledge_base_text": agent.knowledge_base_text or "",
+            "status": agent.status,
+        },
         "latest_message": request.latest_message,
         "max_history_messages": request.max_history_messages,
     }

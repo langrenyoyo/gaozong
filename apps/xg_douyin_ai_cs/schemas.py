@@ -92,6 +92,15 @@ class UserProfileResponse(BaseModel):
     lead_capture_suggested: bool
 
 
+class AgentConfig(BaseModel):
+    agent_id: str
+    agent_name: str | None = None
+    system_prompt: str | None = None
+    prompt: str | None = None
+    knowledge_base_text: str | None = None
+    status: str | None = None
+
+
 class ReplySuggestionRequest(BaseModel):
     tenant_id: str
     account_id: int
@@ -99,6 +108,7 @@ class ReplySuggestionRequest(BaseModel):
     merchant_id: str = "demo_bba"
     douyin_account_id: int | None = None
     agent_id: str | None = None
+    agent_config: AgentConfig | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)
 
 
