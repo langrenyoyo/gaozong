@@ -57,11 +57,16 @@ Output Rules
 
 项目名称：主机微信线索分发与销售跟进检测系统
 
-当前阶段：P0-DOC-PRD-1 最终 PRD 冻结与项目上下文同步（文档已同步）
+当前阶段（2026-06-18 同步）：
+- 微信助手主线：P1-END-1 自动检测单次闭环演示版已冻结验收（见 docs/ai/P1_END_1_ACCEPTANCE.md）
+- 抖音AI客服线：抖音AI小高客服（9100）多账号工作台已正式化（含真实私信会话接入、应用内抖音账号授权、抖音 OpenAPI 授权签名修复），前端 DouyinAiCsWorkbenchPage 已上线
+- 文档体系：PRD（06）/架构（07）/数据模型（08）/接口契约（09）/Webhook 验签迁移（10）/代码计划（11）/测试计划（12）/DB 迁移（14）已落盘
 
 最新冻结 PRD：`docs/ai/06_PRD_AUTO_WECHAT.md`
 
-当前产品定位：auto_wechat / 小高AI微信助手属于 NewCarProject 外部客户系统下的一组商户可售卖子功能系统。当前重点建设链路是 `AI小高线索 → 小高AI微信助手`。
+当前产品定位：auto_wechat / 小高AI微信助手属于 NewCarProject 外部客户系统下的一组商户可售卖子功能系统。当前重点建设链路有两条：
+- `AI小高线索 → 小高AI微信助手`（线索分发与销售跟进检测）
+- `抖音AI小高客服（9100）`（私信客服工作台 + RAG/LLM 回复建议）
 
 关键边界：
 - NewCarProject 负责商户、账号、权限、菜单、套餐、消耗管理
@@ -97,12 +102,19 @@ Output Rules
 - P1-AUTO-1D-FIX2 poll-and-execute 支持 task_id
 - P1-AUTO-1D-FIX3 poll-and-detect 支持 task_id，避免旧 pending 队列阻塞
 - P1-AUTO-1D-FIX4 search-debug 安全序列化防止 500 RecursionError
+- P0-DOC-PRD-1 PRD/架构/数据模型/接口契约/Webhook 验签迁移/代码计划/测试计划 文档体系（06~12）落盘
+- DB-MIG + P2-A 数据库迁移骨架（migrations/migrate_sqlite.py + versions/0001_prd_base_fields.sql，13 迁移测试 + 748 全量回归通过，未改 models.py、未碰主线库）
+- P0-DEV-A1 Webhook 生产验签安全改造（APP_ENV 环境识别，production 强制验签）
+- P0-DEV-E1 原始事件 / invalid 只读查询接口（GET /webhook-events）
+- 9100 抖音AI小高客服 RAG/LLM MVP（独立服务 apps/xg_douyin_ai_cs，SQLite RAG + OpenRouter chat）
+- 9100 抖音AI客服多账号工作台正式化（DouyinAiCsWorkbenchPage：真实私信会话、应用内抖音账号授权、账号 Agent 绑定、抖音 OpenAPI 授权签名修复）
+- React 前端并入 auto_wechat/frontend（提交 2c85433），不再独立位于 E:\work\project\react
+- 本地 Docker 开发环境（docker-compose.dev.yml：9000 + 9100 + frontend，19000 不容器化）
 
-当前版本定位：
-- ✅ 自动检测单次闭环演示版
-- ❌ 不是后台无限自动轮询版
-- ❌ 不是自动发送版
-- ❌ 不是多客户生产版
+当前版本定位（按子系统区分）：
+- 微信助手（9000 + 19000）：✅ 自动检测单次闭环演示版；❌ 非后台无限轮询版；❌ 非自动发送版（业务派单 sent 仍为 false）
+- 抖音AI客服（9100）：✅ 多账号工作台 + RAG/LLM 回复建议；❌ AI 回复 auto_send 恒为 false，不自动发送私信（reply_decision_service 全路径 auto_send=False）
+- 全局：❌ 非多客户生产版（NewCarProject 对接字段、生产验签切换、状态机重构待落地）
 
 进行中：
 - P0-DOC-PRD-1 文档冻结与上下文同步
@@ -118,21 +130,27 @@ Output Rules
 - 历史自动检测计划项：后台定时轮询检测（旧编号 P2-A，后续按新的阶段总控重新排期）
 - 历史自动检测计划项：客户配置化关键词/工作时间/销售（旧编号 P2-B，后续按新的阶段总控重新排期）
 
-业务架构：
+业务架构（2026-06-18 更新）：
 
 ```text
-抖音平台
-    ↓ Webhook
-douyinAPI（数据源系统 A，端口 8081）
-    ↓ HTTP API
-auto_wechat（副系统，端口 9000）
-    ↓ UI Automation
-主机微信 B
-    ↓ 微信消息
-销售微信 C
-    ↓ 回复检测
-主机微信 B → 反馈给数据源 A
+【微信助手线索链路】
+抖音平台 / GMP 私信
+    ↓ Webhook（callback.misanduo.com → 宝塔整站反代 → 9000）
+auto_wechat（端口 9000，AI小高线索 + 小高AI微信助手）
+    ↓ webhook 直收入库（im_receive_msg → 联系方式提取 → douyin_leads）
+    ↓ 分配销售 → 创建微信任务
+    ↓ UI Automation（经 Local Agent）
+主机微信 B → 销售微信 C → 回复检测 → 9000 回写
+
+【抖音AI客服链路（独立）】
+抖音私信会话
+    ↓ 9100 工作台拉取 / webhook 兜底生成账号
+抖音AI小高客服（端口 9100，apps/xg_douyin_ai_cs）
+    ↓ RAG 检索 + LLM 回复建议（auto_send=false，人工确认）
+工作台前端（DouyinAiCsWorkbenchPage）
 ```
+
+注：douyinAPI（8081）现为 demo / 参考实现 / 历史沉淀，webhook 事件回调已由 auto_wechat 9000 直收（见 05 文档第 28 章）；旧同步链路 `/integrations/douyin/sync-leads` 仍保留但非事件回调归属。
 
 本地 Agent 架构（P0-4 新增）：
 
@@ -314,27 +332,26 @@ React UI（客户运营后台，端口 5173）
 - 主机微信反馈
 - 微信 UI 自动化
 
-## React UI
+## 前端（已并入 auto_wechat/frontend）
 
-路径：`E:\work\project\react`
+路径：`E:\work\project\auto_wechat\frontend`（原独立项目 `E:\work\project\react` 已并入，提交 2c85433）
 
 负责：
 
 - 客户运营后台展示
-- 线索管理界面
-- 销售管理界面
-- 微信助手界面
-- AI 剪辑界面
-- 商户管理界面
+- 线索管理 / 销售管理 / 检测记录 / 报表
+- 微信助手（WechatAgent）/ 本机 Agent 测试面板
+- 抖音AI小高客服工作台（DouyinAiCsWorkbenchPage）+ 测试面板（DouyinAiCsTestPage）
+- 抖音直播间检测（DouyinLiveCheckPage）
+- 超管后台系列（商户管理、账号、AI 回复记录、算力配置、跟进话术、禁用词、商户 Agent 绑定）
+- webhook 事件查看（WebhookEventsPage）
 
-当前状态（2026-06-09 更新）：
+当前状态（2026-06-18 更新）：
 
-- LeadsManagement 页面已接入真实 API（线索列表、统计卡片、销售下拉）
-- 已集成 douyinAPI 测试环境同步按钮（dry_run 预览 + 二次确认写库）
-- API 基础层已完成（`src/api/`：client.ts、types.ts、leads.ts、staff.ts、reports.ts、integrations.ts）
-- 环境变量已配置（`.env.development`：`VITE_AUTO_WECHAT_API_BASE_URL=http://127.0.0.1:9000`）
-- 其余页面仍为 Mock 数据
-- 正在逐步替换 Mock 数据，接入真实 API
+- 多页面已接入真实 API（线索、销售、检测、报表、微信助手、抖音客服工作台、webhook 事件、超管后台）
+- API 层已扩展至 17 个模块（client/types/leads/staff/reports/integrations/checks/replies/notifications/wechat/wechatTasks/wechatAutoDetect/automation/agent/localWechatAgent/webhookEvents/douyinAiCsClient/douyinLiveCheck）
+- 环境变量示例：`frontend/.env.example`（VITE_API_BASE_URL / VITE_AUTO_WECHAT_API_BASE_URL=9000 / VITE_LOCAL_WECHAT_AGENT_BASE_URL=19000 / VITE_DOUYIN_AI_CS_API_BASE_URL=9100）
+- TS 配置约束：ignoreDeprecations=5.0 / composite / emitDeclarationOnly（详见下文 React TypeScript 配置约束）
 
 ------
 
