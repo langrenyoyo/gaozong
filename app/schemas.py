@@ -1,4 +1,4 @@
-﻿"""Pydantic 请求/响应模型"""
+"""Pydantic 请求/响应模型"""
 
 import json
 from datetime import datetime

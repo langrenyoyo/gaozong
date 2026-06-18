@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models import DouyinLead, SalesStaff, ReplyCheck, CheckConfig
+from app.services import lead_management_service
 from app.services.lead_service import update_lead_status
 
 
@@ -19,7 +20,13 @@ def get_config_int(db: Session, key: str, default: int = 30) -> int:
     return default
 
 
-def assign_lead(db: Session, lead_id: int, staff_id: int) -> DouyinLead:
+def assign_lead(
+    db: Session,
+    lead_id: int,
+    staff_id: int,
+    remark: str | None = None,
+    operator_id: str | None = None,
+) -> DouyinLead:
     """将线索分配给销售，同时创建回复检测记录"""
     lead = db.query(DouyinLead).filter(DouyinLead.id == lead_id).first()
     if not lead:
@@ -31,6 +38,8 @@ def assign_lead(db: Session, lead_id: int, staff_id: int) -> DouyinLead:
 
     if staff.status != "active":
         raise ValueError(f"销售 {staff.name} 当前状态非 active，无法分配")
+
+    is_reassign = lead.assigned_staff_id is not None
 
     # 更新线索状态
     lead.assigned_staff_id = staff_id
@@ -49,6 +58,14 @@ def assign_lead(db: Session, lead_id: int, staff_id: int) -> DouyinLead:
         check_status="pending",
     )
     db.add(check)
+    lead_management_service.create_followup_record(
+        db,
+        lead_id=lead_id,
+        staff_id=staff_id,
+        record_type="reassign" if is_reassign else "assign",
+        content=remark,
+        operator_id=operator_id,
+    )
 
     db.commit()
     db.refresh(lead)
