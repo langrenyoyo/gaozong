@@ -2537,3 +2537,53 @@ React
 ```
 
 其中 `9100` 抖音AI客服链路与 `19000` 微信 Local Agent 链路是两个不同方向的能力：前者是 AI 回复建议与未来 Agent Tools 编排，后者是客户本机微信执行代理。
+
+## P1-DY-ACCOUNT-AGENT 一期完成记录
+
+更新时间：2026-06-18
+
+### 1. 阶段结论
+
+`P1-DY-ACCOUNT-AGENT` 一期链路已完成并验收通过：
+
+```text
+前端企业号绑定控件
+  → 9000 权威绑定表
+  → 9000 读取真实 AiAgent
+  → 9100 使用真实 agent_config 生成回复建议
+```
+
+### 2. 核心提交
+
+- `d33620d78520ba743c4eeee3ef4158a27fa98513`：实现抖音企业号绑定智能体后端基础能力
+- `9dc3b2a2318cf890788ee44673ca6f16ac977d31`：接入抖音企业号绑定智能体前端控件
+- `8d4fc40f57b51121a5b86dcfa4195dbc138045b4`：解除 9100 正式回复建议对 mock 绑定依赖
+- `fc8c1bebc23901767bf3662c2d68e5787c716d63`：9000 代理注入真实智能体配置到 9100
+
+### 3. 关键边界
+
+- 9000 是绑定权威源。
+- 9000 负责校验企业号归属、授权状态、Agent 归属、Agent active 状态与绑定关系。
+- 9000 不信任前端传入的 `merchant_id`。
+- 9000 不信任前端传入的 `agent_config`。
+- 9000 校验通过后读取真实 `AiAgent`，再注入可信 `agent_config` 给 9100。
+- 9100 不直接读取 9000 数据库。
+- 9100 不再用 mock `ACCOUNT_AGENT_BINDINGS` 拦截正式链路。
+- 9100 仅消费 9000 注入的可信 `agent_id` / `agent_config`。
+- `mock_workbench_service` 仅保留 demo 用途。
+
+### 4. 安全边界
+
+- `auto_send=false`，9000 和 9100 双保险。
+- 不自动发送微信。
+- 不自动发送抖音私信。
+- 不引入 LangChain。
+- 不接 Agent tools。
+- 取消授权、删除企业号、Agent disabled 或 deleted 后不得继续生成建议。
+
+### 5. 后置项
+
+- 真实上游取消授权仍未接入，当前 `upstream_cancel_supported=false`。
+- RAG scope 当前仍偏 `tenant_id + merchant_id + douyin_account_id`，后续可升级为 `merchant_id + account_open_id + agent_id`。
+- 真实联调仍需要有效授权企业号、真实 `AiAgent`、真实会话数据。
+- 一期不建议继续扩展 LangChain、Agent tools 或自动发送。

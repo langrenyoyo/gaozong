@@ -1420,3 +1420,65 @@ P0-DATA-1 完成后，后续文档顺序：
 4. 当前未发现 Alembic 或 SQL 迁移脚本。
 5. 当前依赖 `Base.metadata.create_all(bind=engine)` 创建表。
 6. 当前未修改任何业务代码、数据库模型、接口、测试代码、依赖或配置默认值。
+
+------
+
+## 25. P1-DY-ACCOUNT-AGENT 数据模型落地记录
+
+更新时间：2026-06-18
+
+### 25.1 阶段结论
+
+`P1-DY-ACCOUNT-AGENT` 一期已完成“一个抖音企业号绑定一个默认智能体”的正式数据闭环。
+
+正式链路为：
+
+```text
+douyin_authorized_accounts
+  → douyin_account_agent_bindings
+  → ai_agents
+  → 9000 注入 agent_config
+  → 9100 生成回复建议
+```
+
+### 25.2 正式绑定表
+
+`douyin_account_agent_bindings` 是抖音企业号绑定 AI 智能体的正式绑定表。
+
+一期行为：
+
+1. 一个企业号同一时间只有一个 `active` 默认智能体。
+2. 绑定关系由 9000 负责创建、更新、失效和删除标记。
+3. 9100 不直接读取该表，也不把 mock `ACCOUNT_AGENT_BINDINGS` 作为正式绑定依据。
+
+### 25.3 企业号归属字段
+
+`douyin_authorized_accounts.merchant_id` 与 `douyin_authorized_accounts.tenant_id` 用于确认抖音企业号归属。
+
+正式校验必须使用可信请求上下文中的商户信息，不信任前端传入的 `merchant_id`。
+
+### 25.4 授权与删除状态
+
+`douyin_authorized_accounts.bind_status` 当前语义：
+
+| 值 | 语义 |
+|----|------|
+| `1` | 授权有效 |
+| `0` | 本地取消授权 |
+| `4` | 本地软删除 |
+
+取消授权后，对应 binding 标记为 `invalid`，`invalid_reason=account_unauthorized`。
+
+删除企业号后，对应 binding 标记为 `deleted`，`invalid_reason=account_deleted`。
+
+### 25.5 Agent 状态约束
+
+生成回复建议前，9000 必须确认：
+
+1. 企业号属于当前商户。
+2. 企业号授权仍有效。
+3. `AiAgent` 属于当前商户。
+4. `AiAgent` 状态为 active。
+5. `douyin_account_agent_bindings` 存在 active 绑定关系。
+
+Agent disabled 或 deleted 后不得继续生成回复建议。

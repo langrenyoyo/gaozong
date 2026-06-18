@@ -1411,3 +1411,141 @@ P0-API-1 完成后，后续文档顺序：
 8. NewCarProject 认证接口
 
 本轮只做接口契约设计，不修改业务代码、数据库模型、接口实现、测试代码、依赖或配置默认值。
+
+------
+
+## 16. P1-DY-ACCOUNT-AGENT 接口契约落地记录
+
+更新时间：2026-06-18
+
+### 16.1 阶段结论
+
+`P1-DY-ACCOUNT-AGENT` 一期接口链路已完成：
+
+```text
+前端企业号绑定控件
+  → 9000 企业号列表与绑定接口
+  → 9000 绑定校验与 AiAgent 读取
+  → 9000 代理注入 agent_config
+  → 9100 回复建议
+```
+
+### 16.2 企业号与绑定接口
+
+#### `GET /integrations/douyin/accounts`
+
+返回当前商户可见的抖音企业号列表。
+
+关键字段：
+
+- `account_open_id`
+- `account_name`
+- `avatar_url`
+- `bind_status`
+- `authorization_status`
+- `bound_agent_id`
+- `bound_agent_name`
+- `bound_agent_status`
+- `binding_status`
+
+#### `PUT /integrations/douyin/accounts/{account_open_id}/agent-binding`
+
+为指定企业号保存默认绑定智能体。
+
+请求体：
+
+```json
+{
+  "agent_id": "agent_xxx"
+}
+```
+
+9000 必须按可信请求上下文校验企业号归属、授权状态、Agent 归属、Agent active 状态。
+
+#### `DELETE /integrations/douyin/accounts/{account_open_id}/agent-binding`
+
+解绑指定企业号的默认智能体。
+
+解绑后，回复建议不得继续使用旧绑定。
+
+#### `POST /integrations/douyin/accounts/{account_open_id}/cancel-authorization`
+
+本地取消企业号授权。
+
+一期暂未接入真实上游取消授权能力，当前 `upstream_cancel_supported=false`。
+
+成功后：
+
+1. 企业号 `bind_status=0`。
+2. 对应 binding 标记为 `invalid`。
+3. `invalid_reason=account_unauthorized`。
+4. 不得继续生成回复建议。
+
+#### `DELETE /integrations/douyin/accounts/{account_open_id}`
+
+本地软删除企业号。
+
+成功后：
+
+1. 企业号 `bind_status=4`。
+2. 对应 binding 标记为 `deleted`。
+3. `invalid_reason=account_deleted`。
+4. 不得继续生成回复建议。
+
+### 16.3 回复建议接口
+
+#### `POST /integrations/douyin-ai-cs/conversations/{conversation_id}/reply-suggestion`
+
+前端生成回复建议时调用 9000，不直接调用 9100 正式链路。
+
+9000 处理要求：
+
+1. 不信任前端传入的 `merchant_id`。
+2. 不信任前端传入的 `agent_config`。
+3. 校验企业号归属、授权状态、Agent 归属、Agent active 状态和 active 绑定关系。
+4. 校验通过后读取真实 `AiAgent`。
+5. 转发 9100 时注入可信 `agent_config`。
+6. `auto_send=false`。
+
+9000 注入给 9100 的 `agent_config` 语义：
+
+```json
+{
+  "agent_id": "agent_xxx",
+  "agent_name": "小高客服",
+  "system_prompt": "智能体提示词",
+  "knowledge_base_text": "可选知识库上下文",
+  "status": "active"
+}
+```
+
+9100 处理要求：
+
+1. 不直接读取 9000 数据库。
+2. 不使用 mock `ACCOUNT_AGENT_BINDINGS` 拦截正式链路。
+3. 只消费 9000 注入的可信 `agent_id` / `agent_config`。
+4. 收到 `agent_config` 后使用真实 `agent_name`、`system_prompt`、`knowledge_base_text`。
+5. 只有 `agent_id` 但没有 `agent_config` 时，保留 `agent_config_missing_fallback` 提示。
+6. 未传 `agent_id` 的 demo 路径可继续使用 mock fallback。
+7. `auto_send=false`。
+
+### 16.4 错误与安全约束
+
+以下状态不得生成回复建议：
+
+1. 企业号不存在。
+2. 企业号不属于当前商户。
+3. 企业号已取消授权。
+4. 企业号已软删除。
+5. Agent 不存在。
+6. Agent 不属于当前商户。
+7. Agent disabled 或 deleted。
+8. active 绑定关系不存在。
+
+一期继续禁止：
+
+1. 自动发送微信。
+2. 自动发送抖音私信。
+3. 引入 LangChain。
+4. 接 Agent tools。
+5. 让 9100 mock binding 成为正式绑定依据。
