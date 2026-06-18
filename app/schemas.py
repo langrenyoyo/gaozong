@@ -222,6 +222,24 @@ class DouyinPrivateMessageSendResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinResourceDownloadRequest(BaseModel):
+    """Douyin media resource download request."""
+
+    conversation_short_id: str = Field(..., min_length=1)
+    server_message_id: Optional[str] = None
+    open_id: Optional[str] = None
+    media_type: Optional[str] = None
+    url: Optional[str] = None
+
+
+class DouyinResourceDownloadResponse(BaseModel):
+    """Douyin media resource download response."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")

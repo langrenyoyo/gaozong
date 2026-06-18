@@ -23,7 +23,13 @@ from sqlalchemy.pool import StaticPool
 from app import config
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.models import (
+    DouyinAuthorizedAccount,
+    DouyinLead,
+    DouyinMessageResourceDownload,
+    DouyinPrivateMessageSend,
+    DouyinWebhookEvent,
+)
 from app.services.douyin_live_check_service import (
     _openapi_endpoint_config,
     build_signed_openapi_request_body_and_headers,
@@ -173,6 +179,53 @@ def _insert_send_context_event(
                 message_create_time=message_create_time,
                 parse_status="parsed",
                 event_key=f"send_context_{conversation_short_id}_{server_message_id}",
+                is_duplicate=0,
+                raw_body=json.dumps(payload, ensure_ascii=False),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_resource_event(
+    *,
+    event_id_suffix: str = "001",
+    conversation_short_id: str = "resource_conv_001",
+    server_message_id: str = "resource_msg_001",
+    from_user_id: str = "resource_customer_001",
+    to_user_id: str = "resource_account_001",
+    message_type: str = "image",
+    resource_url: str | None = "https://api-normal.amemv.com/im_open/media?resource=image001",
+) -> None:
+    db = TestSession()
+    try:
+        content = {
+            "create_time": 1710000000000,
+            "conversation_short_id": conversation_short_id,
+            "server_message_id": server_message_id,
+            "message_type": message_type,
+            "media_type": message_type,
+        }
+        if resource_url is not None:
+            content["url"] = resource_url
+        payload = {
+            "event": "im_receive_msg",
+            "from_user_id": from_user_id,
+            "to_user_id": to_user_id,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        db.add(
+            DouyinWebhookEvent(
+                event="im_receive_msg",
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                conversation_short_id=conversation_short_id,
+                server_message_id=server_message_id,
+                message_type=message_type,
+                parsed_content_json=json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+                parse_status="parsed",
+                event_key=f"resource_event_{event_id_suffix}",
                 is_duplicate=0,
                 raw_body=json.dumps(payload, ensure_ascii=False),
             )
@@ -848,6 +901,197 @@ def test_send_message_upstream_business_error_persists_failed_record_without_sec
         assert record.error_message == "send failed"
         assert record.manual_confirmed == 1
         assert record.auto_send == 0
+    finally:
+        db.close()
+
+
+def test_download_resource_rejects_non_media_types_without_calling_upstream():
+    _insert_resource_event(message_type="text", resource_url=None)
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "text",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "media_type" in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinMessageResourceDownload).count() == 0
+    finally:
+        db.close()
+
+
+def test_download_resource_rejects_missing_url_without_calling_upstream():
+    _insert_resource_event(resource_url=None)
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "resource_url_not_found" in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+
+
+def test_download_resource_success_uses_signed_openapi_body_and_persists_record():
+    _insert_resource_event(message_type="image")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "err_no": 0,
+                    "err_msg": "",
+                    "log_id": "log-001",
+                    "data": {
+                        "media_type": "image",
+                        "url": "https://download.example.com/resource.png",
+                    },
+                },
+            },
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["resource_status"] == "success"
+    assert data["download_url"] == "https://download.example.com/resource.png"
+    assert data["conversation_short_id"] == "resource_conv_001"
+    assert data["server_message_id"] == "resource_msg_001"
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/download_resource"
+    )
+    assert "json" not in mock_post.call_args.kwargs
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body == {
+        "main_account_id": 123,
+        "conversation_id": "resource_conv_001",
+        "message_id": "resource_msg_001",
+        "open_id": "resource_customer_001",
+        "media_type": "image",
+        "url": "https://api-normal.amemv.com/im_open/media?resource=image001",
+    }
+    db = TestSession()
+    try:
+        record = db.query(DouyinMessageResourceDownload).one()
+        assert record.resource_status == "success"
+        assert record.media_type == "image"
+        assert record.download_url == "https://download.example.com/resource.png"
+        assert record.request_body_json
+        assert record.response_body_json
+    finally:
+        db.close()
+
+
+def test_download_resource_supports_user_local_media_and_data_url_response():
+    _insert_resource_event(message_type="user_local_image", resource_url="https://api-normal.amemv.com/local-image")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"url": "https://download.example.com/local-image.png"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["media_type"] == "image"
+    assert resp.json()["data"]["download_url"] == "https://download.example.com/local-image.png"
+
+
+def test_download_resource_supports_top_level_url_response_for_video():
+    _insert_resource_event(message_type="user_local_video", resource_url="https://api-normal.amemv.com/local-video")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "url": "https://download.example.com/local-video.mp4"},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["media_type"] == "video"
+    assert resp.json()["data"]["download_url"] == "https://download.example.com/local-video.mp4"
+
+
+def test_download_resource_upstream_business_error_persists_failed_record_without_secret():
+    _insert_resource_event(message_type="video")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, {"code": 1001, "msg": "download failed"})
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "video",
+            },
+        )
+
+    assert resp.status_code == 502
+    assert "download failed" in json.dumps(resp.json(), ensure_ascii=False)
+    assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
+    db = TestSession()
+    try:
+        record = db.query(DouyinMessageResourceDownload).one()
+        assert record.resource_status == "failed"
+        assert record.error_message == "download failed"
     finally:
         db.close()
 

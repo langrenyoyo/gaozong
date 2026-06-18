@@ -19,6 +19,8 @@ from app.schemas import (
     DouyinLiveCheckStatusResponse,
     DouyinPrivateMessageSendRequest,
     DouyinPrivateMessageSendResponse,
+    DouyinResourceDownloadRequest,
+    DouyinResourceDownloadResponse,
 )
 from app.services.douyin_live_check_service import (
     build_auth_url,
@@ -33,6 +35,7 @@ from app.services.douyin_workbench_conversation_service import (
     list_douyin_workbench_accounts_with_event_fallback,
 )
 from app.services.douyin_private_message_send_service import send_manual_private_message
+from app.services.douyin_resource_download_service import download_douyin_resource
 
 logger = logging.getLogger(__name__)
 LIVE_CHECK_OBSERVE_PATH = "/integrations/douyin/live-check/webhook-observe"
@@ -116,6 +119,23 @@ def send_message(
         operator_id=request.operator_id,
     )
     return DouyinPrivateMessageSendResponse(data=data)
+
+
+@router.post("/resources/download", response_model=DouyinResourceDownloadResponse)
+def download_resource(
+    request: DouyinResourceDownloadRequest,
+    db: Session = Depends(get_db),
+) -> DouyinResourceDownloadResponse:
+    _ensure_enabled()
+    data = download_douyin_resource(
+        db,
+        conversation_short_id=request.conversation_short_id,
+        server_message_id=request.server_message_id,
+        open_id=request.open_id,
+        media_type=request.media_type,
+        url=request.url,
+    )
+    return DouyinResourceDownloadResponse(data=data)
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)

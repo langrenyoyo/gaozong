@@ -249,3 +249,28 @@ class DouyinPrivateMessageSend(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     sent_at = Column(DateTime, comment="Sent time when upstream code=0")
+
+
+class DouyinMessageResourceDownload(Base):
+    """Manual resource download record for Douyin media."""
+    __tablename__ = "douyin_message_resource_downloads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    webhook_event_id = Column(Integer, nullable=True, comment="Related douyin_webhook_events.id")
+    main_account_id = Column(Integer, nullable=False, comment="GMP main account id")
+    conversation_short_id = Column(String(255), nullable=False, index=True)
+    server_message_id = Column(String(255), nullable=False, index=True)
+    open_id = Column(String(255), nullable=False, comment="Customer open_id")
+    media_type = Column(String(32), nullable=False, comment="image/video")
+    source_url = Column(Text, nullable=False)
+    download_url = Column(Text, comment="Upstream downloadable url")
+    resource_status = Column(String(20), nullable=False, default="pending", comment="pending/success/failed")
+    upstream_err_no = Column(String(64), comment="Upstream err_no")
+    upstream_err_msg = Column(String(500), comment="Upstream err_msg")
+    upstream_log_id = Column(String(255), comment="Upstream log_id")
+    request_body_json = Column(Text, comment="Sanitized upstream request JSON")
+    response_body_json = Column(Text, comment="Upstream response JSON")
+    error_message = Column(String(500), comment="Safe error message")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    downloaded_at = Column(DateTime, comment="Sent when resource download succeeds")
