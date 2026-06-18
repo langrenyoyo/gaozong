@@ -104,6 +104,11 @@ NEWCAR_AUTH_LOGIN_URL = os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip()
 NEWCAR_AUTH_SERVICE_TOKEN = os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip()
 NEWCAR_AUTH_TIMEOUT_SECONDS = int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5"))
 
+# ---------- 9000 调用 9100 抖音AI客服可信代理配置 ----------
+XG_DOUYIN_AI_CS_BASE_URL = os.getenv("XG_DOUYIN_AI_CS_BASE_URL", "http://localhost:9100").strip().rstrip("/")
+XG_DOUYIN_AI_CS_SERVICE_TOKEN = os.getenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "").strip()
+XG_DOUYIN_AI_CS_TIMEOUT_SECONDS = int(os.getenv("XG_DOUYIN_AI_CS_TIMEOUT_SECONDS", "10"))
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"
