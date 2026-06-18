@@ -123,6 +123,14 @@ docker-data/
 
 该目录已由 `.gitignore` 和 `.dockerignore` 忽略。
 
+本地联调需要基础测试数据时，手动执行：
+
+```bash
+docker compose -f docker-compose.dev.yml exec auto-wechat-api python scripts/seed_dev_data.py
+```
+
+该脚本只写本地 dev mock 数据，不会随容器启动自动执行，不会调用抖音、微信、LLM 或支付服务。
+
 ## 7. 常见问题
 
 - 9000 没有 `/health`：使用 `http://127.0.0.1:9000/docs` 验证。
