@@ -95,6 +95,15 @@ DY_CALLBACK_EVENTS = [
 DY_CALLBACK_URL = os.getenv("DY_CALLBACK_URL", "").strip() or None
 DY_AUTH_REDIRECT_URL = os.getenv("DY_AUTH_REDIRECT_URL", "").strip() or None
 
+# ---------- NewCarProject 登录权限对接配置 ----------
+# P0 默认不强制拦截既有业务接口，mock 仅用于本地开发和测试。
+NEWCAR_AUTH_ENABLED = os.getenv("NEWCAR_AUTH_ENABLED", "false").lower() == "true"
+NEWCAR_AUTH_MOCK_ENABLED = os.getenv("NEWCAR_AUTH_MOCK_ENABLED", "true").lower() == "true"
+NEWCAR_AUTH_INTROSPECT_URL = os.getenv("NEWCAR_AUTH_INTROSPECT_URL", "").strip()
+NEWCAR_AUTH_LOGIN_URL = os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip()
+NEWCAR_AUTH_SERVICE_TOKEN = os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip()
+NEWCAR_AUTH_TIMEOUT_SECONDS = int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5"))
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"
