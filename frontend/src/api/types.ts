@@ -39,8 +39,11 @@ export interface Lead {
   timeline?: Array<{
     id: number;
     record_type: string;
+    action_label?: string | null;
     content: string | null;
+    remark?: string | null;
     staff_id: number | null;
+    staff_name?: string | null;
     created_at: string | null;
   }>;
   raw_data: string | null;

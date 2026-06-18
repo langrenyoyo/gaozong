@@ -30,6 +30,15 @@ STATUS_LABELS = {
     "closed": "已成交",
 }
 
+TIMELINE_ACTION_LABELS = {
+    "assign": "分配",
+    "reassign": "重新分配",
+    "reply_check": "检测",
+    "notification": "通知",
+    "feedback": "反馈",
+    "manual_note": "人工备注",
+}
+
 
 @dataclass
 class LeadListQuery:
@@ -231,15 +240,16 @@ def create_followup_record(
 
 def build_timeline(db: Session, lead_id: int) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    staff_names = {staff.id: staff.name for staff in db.query(SalesStaff).all()}
     for record in db.query(LeadFollowupRecord).filter(LeadFollowupRecord.lead_id == lead_id).all():
-        items.append(_timeline_item(record.record_type, record.content, record.created_at, record.staff_id, record.id))
+        items.append(_timeline_item(record.record_type, record.content, record.created_at, record.staff_id, record.id, staff_names))
     for item in db.query(LeadNotification).filter(LeadNotification.lead_id == lead_id).all():
-        items.append(_timeline_item("notification", item.notification_text, item.created_at, item.staff_id, item.id))
+        items.append(_timeline_item("notification", item.notification_text, item.created_at, item.staff_id, item.id, staff_names))
     for item in db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead_id).all():
         content = item.reply_content or item.effectiveness_reason or item.check_status
-        items.append(_timeline_item("reply_check", content, item.checked_at or item.created_at, item.staff_id, item.id))
+        items.append(_timeline_item("reply_check", content, item.checked_at or item.created_at, item.staff_id, item.id, staff_names))
     for item in db.query(FeedbackRecord).filter(FeedbackRecord.lead_id == lead_id).all():
-        items.append(_timeline_item("feedback", item.feedback_text, item.created_at, item.staff_id, item.id))
+        items.append(_timeline_item("feedback", item.feedback_text, item.created_at, item.staff_id, item.id, staff_names))
     return sorted(items, key=lambda item: item["created_at"] or "")
 
 
@@ -249,12 +259,17 @@ def _timeline_item(
     created_at: datetime | None,
     staff_id: int | None,
     record_id: int,
+    staff_names: dict[int, str],
 ) -> dict[str, Any]:
+    action_label = TIMELINE_ACTION_LABELS.get(record_type, record_type)
     return {
         "id": record_id,
         "record_type": record_type,
+        "action_label": action_label,
         "content": content,
+        "remark": content,
         "staff_id": staff_id,
+        "staff_name": staff_names.get(staff_id) if staff_id else None,
         "created_at": created_at.isoformat() if created_at else None,
     }
 

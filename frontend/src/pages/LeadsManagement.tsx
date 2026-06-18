@@ -111,9 +111,18 @@ function leadDerivedValue(lead: Lead, field: "city" | "car_model" | "budget"): s
 
 function leadTraceItems(lead: Lead): Array<{ label: string; value: string; title?: string }> {
   const items: Array<{ label: string; value: string; title?: string }> = [];
+  const raw = parseLeadRawData(lead);
   if (lead.source_id) items.push({ label: "来源ID", value: shortId(lead.source_id), title: lead.source_id });
   if (lead.source_url) items.push({ label: "来源链接", value: shortId(lead.source_url, 12, 10), title: lead.source_url });
   if (lead.source) items.push({ label: "来源", value: lead.source });
+  for (const [label, key] of [
+    ["会话短ID", "conversation_short_id"],
+    ["消息ID", "server_message_id"],
+    ["事件键", "event_key"],
+  ] as const) {
+    const value = rawString(raw, [key]);
+    if (value) items.push({ label, value: shortId(value, 12, 8), title: value });
+  }
   return items;
 }
 
@@ -220,7 +229,7 @@ function shortId(value?: string | null, head = 10, tail = 8): string {
 }
 
 function detailValue(label: string, value: string): { text: string; title?: string } {
-  if (label === "来源ID") {
+  if (label === "来源ID" || label === "来源链接") {
     return { text: shortId(value), title: value === "-" ? undefined : value };
   }
   return { text: value };
@@ -237,6 +246,13 @@ const TIMELINE_TYPE_LABELS: Record<string, string> = {
 
 function timelineTypeLabel(type: string): string {
   return TIMELINE_TYPE_LABELS[type] || type;
+}
+
+function leadPrimaryContact(lead: Lead): string {
+  if (lead.phone) return `手机号：${lead.phone}`;
+  if (lead.wechat) return `微信：${lead.wechat}`;
+  const fallback = getLeadContactValues(lead)[0];
+  return fallback ? `联系方式：${fallback}` : "未留联系方式";
 }
 
 // ========== 同步弹窗 ==========
@@ -657,6 +673,11 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
+  const city = leadDerivedValue(lead, "city") || "未提供";
+  const carModel = leadDerivedValue(lead, "car_model") || "未提供";
+  const budget = leadDerivedValue(lead, "budget") || "未提供";
+  const traceItems = leadTraceItems(lead);
+  const currentStaffName = lead.assigned_staff?.name || staffName || "未分配";
 
   // 检测按钮可用条件
   const agentReason = agentDisabledReason(agentStatus);
@@ -696,14 +717,14 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
 
         <div className="mt-4 grid gap-3 text-xs">
           {[
-            ["原始联系方式", lead.customer_contact || "-"],
-            ["手机号", lead.phone || "-"],
-            ["微信号", lead.wechat || "-"],
+            ["联系方式", leadPrimaryContact(lead)],
             ["提取状态", contactStatusLabel(lead.contact_extract_status)],
             ["来源", lead.source],
             ["线索类型", lead.lead_type || "-"],
-            ["来源ID", lead.source_id || "-"],
-            ["分配销售", staffName],
+            ["意向车型", carModel],
+            ["预算", budget],
+            ["城市", city],
+            ["当前销售", currentStaffName],
           ].map(([label, value]) => {
             const display = detailValue(label, value);
             return (
@@ -715,6 +736,24 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
               </div>
             );
           })}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
+          <p className="mb-2 text-xs font-semibold text-[#1a1f2e]">溯源信息</p>
+          {traceItems.length > 0 ? (
+            <div className="grid gap-2 text-[11px]">
+              {traceItems.map((item) => (
+                <div key={item.label} className="flex min-w-0 justify-between gap-3">
+                  <span className="shrink-0 text-[#8b95a6]">{item.label}</span>
+                  <strong className="min-w-0 truncate text-right font-semibold text-[#374151]" title={item.title}>
+                    {item.value}
+                  </strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-[#8b95a6]">暂无溯源信息</p>
+          )}
         </div>
 
         {lead.content ? (
@@ -752,24 +791,47 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
           </div>
         )}
 
-        {lead.timeline && lead.timeline.length > 0 ? (
-          <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
-            <p className="text-xs font-semibold text-[#1a1f2e]">销售跟进记录</p>
+        <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
+          <p className="text-xs font-semibold text-[#1a1f2e]">销售跟进记录</p>
+          {lead.timeline && lead.timeline.length > 0 ? (
             <div className="mt-3 space-y-2">
-              {lead.timeline.map((item) => (
-                <div key={`${item.record_type}-${item.id}`} className="rounded-lg bg-[#f8fafc] px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-[#374151]">{timelineTypeLabel(item.record_type)}</span>
-                    <span className="text-[10px] text-[#8b95a6]">{formatTime(item.created_at)}</span>
+              {lead.timeline.map((item) => {
+                const action = item.action_label || timelineTypeLabel(item.record_type);
+                const remark = item.remark || item.content || "无备注";
+                return (
+                  <div key={`${item.record_type}-${item.id}`} className="rounded-lg bg-[#f8fafc] px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-semibold text-[#374151] ring-1 ring-[#e4e8f0]">
+                        {action}
+                      </span>
+                      <span className="text-[10px] text-[#8b95a6]">{formatTime(item.created_at)}</span>
+                    </div>
+                    <div className="mt-2 grid gap-1 text-[11px] leading-relaxed">
+                      <div className="flex gap-2">
+                        <span className="shrink-0 text-[#8b95a6]">操作内容</span>
+                        <span className="min-w-0 break-words font-semibold text-[#374151]">{item.content || action}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <span className="shrink-0 text-[#8b95a6]">备注信息</span>
+                        <span className="min-w-0 break-words text-[#64748b]">{remark}</span>
+                      </div>
+                      {item.staff_name || item.staff_id ? (
+                        <div className="flex gap-2">
+                          <span className="shrink-0 text-[#8b95a6]">操作人</span>
+                          <span className="min-w-0 break-words text-[#64748b]">{item.staff_name || `销售 #${item.staff_id}`}</span>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                  <p className="mt-1 break-words text-[11px] leading-relaxed text-[#64748b]">
-                    {item.content || "-"}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
-          </div>
-        ) : null}
+          ) : (
+            <div className="mt-3 rounded-lg bg-[#f8fafc] px-3 py-5 text-center text-xs text-[#8b95a6]">
+              暂无销售跟进记录
+            </div>
+          )}
+        </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button
@@ -787,6 +849,16 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
             className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#374151] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {detectLoading ? "检测中..." : "检测微信回复"}
+          </button>
+        </div>
+        <div className="mt-2">
+          <button
+            disabled
+            title="缺少会话定位信息，暂不能跳转"
+            className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#2563eb]/50 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            对话跟进
+            <ArrowUpRightIcon size={13} />
           </button>
         </div>
         {/* 自动检测目标按钮 */}
@@ -1516,7 +1588,7 @@ export default function LeadsManagement() {
                           <button
                             disabled
                             className="inline-flex items-center gap-1 rounded-lg bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#2563eb]/50 ring-1 ring-[#e4e8f0] cursor-not-allowed"
-                            title="暂未接入对话跟进"
+                            title="缺少会话定位信息，暂不能跳转"
                           >
                             对话跟进
                             <ArrowUpRightIcon size={12} />

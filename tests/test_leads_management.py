@@ -185,6 +185,10 @@ def test_get_lead_detail_returns_assigned_staff_score_and_timeline():
     assert "reply_check" in record_types
     assert "feedback" in record_types
     assert "manual_note" in record_types
+    manual_item = next(item for item in data["timeline"] if item["record_type"] == "manual_note")
+    assert manual_item["action_label"] == "人工备注"
+    assert manual_item["remark"] == "人工备注"
+    assert manual_item["staff_name"] == "张三"
 
 
 def test_assign_and_reassign_write_followup_records_with_remark():
