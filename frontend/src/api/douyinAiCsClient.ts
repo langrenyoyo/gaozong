@@ -116,6 +116,7 @@ export interface DouyinConversationItem {
   conversation_short_id?: string | null;
   account_open_id?: string;
   open_id: string;
+  customer_open_id?: string | null;
   nickname: string;
   avatar?: string | null;
   last_message: string;

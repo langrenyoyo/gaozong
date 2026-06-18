@@ -100,6 +100,65 @@ function rawString(data: Record<string, unknown>, keys: string[]): string | null
   return null;
 }
 
+function nestedRawRecords(data: Record<string, unknown>): Record<string, unknown>[] {
+  return ["content", "message", "event"]
+    .map((key) => data[key])
+    .filter((value): value is Record<string, unknown> => (
+      typeof value === "object" && value !== null && !Array.isArray(value)
+    ));
+}
+
+function rawDeepString(data: Record<string, unknown>, keys: string[]): string | null {
+  const direct = rawString(data, keys);
+  if (direct) return direct;
+  for (const nested of nestedRawRecords(data)) {
+    const value = rawString(nested, keys);
+    if (value) return value;
+  }
+  return null;
+}
+
+type ConversationJumpParams = {
+  accountOpenId: string;
+  conversationShortId: string;
+  openId: string;
+};
+
+type LeadConversationFields = Lead & {
+  account_open_id?: string | null;
+  conversation_short_id?: string | null;
+  open_id?: string | null;
+  customer_open_id?: string | null;
+};
+
+function getConversationJumpParams(lead: Lead): ConversationJumpParams | null {
+  const leadWithConversation = lead as LeadConversationFields;
+  const raw = parseLeadRawData(lead);
+  const accountOpenId = leadWithConversation.account_open_id?.trim() || rawDeepString(raw, ["account_open_id"]);
+  const conversationShortId = leadWithConversation.conversation_short_id?.trim() || rawDeepString(raw, ["conversation_short_id"]);
+  // source_id 在当前上游映射中代表客户 open_id；仅作为 raw_data 缺失时的兜底。
+  const openId =
+    leadWithConversation.open_id?.trim() ||
+    leadWithConversation.customer_open_id?.trim() ||
+    rawDeepString(raw, ["open_id", "customer_open_id"]) ||
+    lead.source_id?.trim() ||
+    null;
+
+  if (!accountOpenId || !conversationShortId || !openId) return null;
+  return { accountOpenId, conversationShortId, openId };
+}
+
+function conversationJumpUrl(lead: Lead): string | null {
+  const params = getConversationJumpParams(lead);
+  if (!params) return null;
+  const query = new URLSearchParams({
+    account_open_id: params.accountOpenId,
+    conversation_short_id: params.conversationShortId,
+    open_id: params.openId,
+  });
+  return `/douyin-ai-cs?${query.toString()}`;
+}
+
 function leadDerivedValue(lead: Lead, field: "city" | "car_model" | "budget"): string | null {
   const directValue = lead[field];
   if (typeof directValue === "string" && directValue.trim()) return directValue.trim();
@@ -538,6 +597,7 @@ interface LeadDetailProps {
   onSetAutoDetect: () => void;
   onClearAutoDetect: () => void;
   onSendToStaff: () => void;
+  onConversationJump: (lead: Lead) => void;
 }
 
 function DouyinChatTimeline({ lead }: { lead: Lead }) {
@@ -669,7 +729,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
+function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff, onConversationJump }: LeadDetailProps) {
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
@@ -684,6 +744,7 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
   const canDetect = lead.status === "assigned" && lead.assigned_staff_id !== null && !detectLoading && agentStatus.can_run_wechat_action;
   const canSetAutoDetect = Boolean(pendingCheckId) && agentStatus.can_run_wechat_action;
   const canSendToStaff = lead.status === "assigned" && lead.assigned_staff_id !== null && !notifyLoading && agentStatus.can_run_wechat_action;
+  const canJumpConversation = Boolean(conversationJumpUrl(lead));
 
   // 检测按钮禁用提示
   let detectDisabledReason = "";
@@ -853,9 +914,10 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
         </div>
         <div className="mt-2">
           <button
-            disabled
-            title="缺少会话定位信息，暂不能跳转"
-            className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#2563eb]/50 disabled:cursor-not-allowed disabled:opacity-70"
+            onClick={() => onConversationJump(lead)}
+            disabled={!canJumpConversation}
+            title={canJumpConversation ? "打开抖音 AI 客服工作台并定位会话" : "缺少会话定位信息，暂不能跳转"}
+            className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#2563eb] disabled:cursor-not-allowed disabled:text-[#2563eb]/50 disabled:opacity-70"
           >
             对话跟进
             <ArrowUpRightIcon size={13} />
@@ -1310,6 +1372,15 @@ export default function LeadsManagement() {
     }
   };
 
+  const handleConversationJump = (lead: Lead) => {
+    const url = conversationJumpUrl(lead);
+    if (!url) {
+      toast.warning("缺少会话定位信息，暂不能跳转");
+      return;
+    }
+    window.location.href = url;
+  };
+
   // 统计卡片
   const statCards = summary
     ? [
@@ -1510,6 +1581,7 @@ export default function LeadsManagement() {
                   const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
                   const budget = leadDerivedValue(lead, "budget") || "预算未提供";
                   const traceItems = leadTraceItems(lead);
+                  const jumpUrl = conversationJumpUrl(lead);
                   return (
                     <tr
                       key={lead.id}
@@ -1593,9 +1665,13 @@ export default function LeadsManagement() {
                             重新分配
                           </button>
                           <button
-                            disabled
-                            className="inline-flex items-center gap-1 rounded-lg bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#2563eb]/50 ring-1 ring-[#e4e8f0] cursor-not-allowed"
-                            title="缺少会话定位信息，暂不能跳转"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleConversationJump(lead);
+                            }}
+                            disabled={!jumpUrl}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#2563eb] ring-1 ring-[#e4e8f0] disabled:cursor-not-allowed disabled:text-[#2563eb]/50"
+                            title={jumpUrl ? "打开抖音 AI 客服工作台并定位会话" : "缺少会话定位信息，暂不能跳转"}
                           >
                             对话跟进
                             <ArrowUpRightIcon size={12} />
@@ -1684,6 +1760,7 @@ export default function LeadsManagement() {
             onClearAutoDetect={handleClearAutoDetect}
             notifyLoading={notifyLoading}
             onSendToStaff={handleSendToStaff}
+            onConversationJump={handleConversationJump}
           />
         ) : (
           <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-[#e4e8f0] bg-white">

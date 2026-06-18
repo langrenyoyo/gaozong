@@ -371,6 +371,45 @@ function hasActiveAgentBinding(account: DouyinAccountItem | null): boolean {
   );
 }
 
+function searchParamText(params: URLSearchParams, key: string): string | null {
+  const value = params.get(key);
+  return value && value.trim() ? value.trim() : null;
+}
+
+function readConversationJumpParams(): {
+  accountOpenId: string;
+  conversationShortId: string;
+  openId: string;
+} | null {
+  const params = new URLSearchParams(window.location.search);
+  const accountOpenId = searchParamText(params, "account_open_id");
+  const conversationShortId = searchParamText(params, "conversation_short_id");
+  const openId = searchParamText(params, "open_id");
+  if (!accountOpenId || !conversationShortId || !openId) return null;
+  return { accountOpenId, conversationShortId, openId };
+}
+
+function conversationIdText(value: string | number | null | undefined): string {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function matchDeepLinkedConversation(
+  conversations: DouyinConversationItem[],
+  params: { conversationShortId: string; openId: string },
+): DouyinConversationItem | null {
+  const candidates = conversations.filter((item) => {
+    const matchesConversation =
+      item.conversation_short_id === params.conversationShortId ||
+      item.conversation_key === params.conversationShortId ||
+      conversationIdText(item.id) === params.conversationShortId;
+    const matchesCustomer =
+      item.open_id === params.openId ||
+      item.customer_open_id === params.openId;
+    return matchesConversation && matchesCustomer;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 export default function DouyinAiCsWorkbenchPage() {
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -416,6 +455,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
   const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_suggestion");
+  const [conversationJumpParams] = useState(() => readConversationJumpParams());
+  const [conversationJumpHandled, setConversationJumpHandled] = useState(false);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
@@ -492,7 +533,10 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const loadConversations = useCallback(async (account: DouyinAccountItem) => {
+  const loadConversations = useCallback(async (
+    account: DouyinAccountItem,
+    options?: { skipDefaultSelection?: boolean },
+  ) => {
     setLoadingConversations(true);
     setError(null);
     try {
@@ -500,11 +544,18 @@ export default function DouyinAiCsWorkbenchPage() {
         account_open_id: account.account_open_id,
       });
       setConversations(data.items);
-      setSelectedConversationId(data.items[0]?.id || null);
+      if (!options?.skipDefaultSelection) {
+        setSelectedConversationId((current) => {
+          if (current && data.items.some((item) => item.id === current)) return current;
+          return data.items[0]?.id || null;
+        });
+      }
+      return data.items;
     } catch (err) {
       setConversations([]);
       setSelectedConversationId(null);
       setError(err instanceof Error ? err.message : "会话列表加载失败");
+      return [];
     } finally {
       setLoadingConversations(false);
     }
@@ -575,7 +626,9 @@ export default function DouyinAiCsWorkbenchPage() {
 
   useEffect(() => {
     if (selectedAccount) {
-      void loadConversations(selectedAccount);
+      void loadConversations(selectedAccount, {
+        skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
+      });
       void loadAccountAgents(selectedAccount.id);
       setSelectedAgentId(selectedAccount.bound_agent_id || null);
       setBindingNotice(null);
@@ -587,7 +640,42 @@ export default function DouyinAiCsWorkbenchPage() {
       setAgentNotice(null);
       setBindingNotice(null);
     }
-  }, [loadAccountAgents, loadConversations, selectedAccount, selectedAccountId]);
+  }, [conversationJumpHandled, conversationJumpParams, loadAccountAgents, loadConversations, selectedAccount, selectedAccountId]);
+
+  useEffect(() => {
+    if (!conversationJumpParams || conversationJumpHandled || loadingAccounts) return;
+    const account = accounts.find((item) => item.account_open_id === conversationJumpParams.accountOpenId);
+    if (!account) {
+      if (accounts.length) {
+        setError("会话不属于当前账号或无权限访问");
+        setSelectedConversationId(null);
+        setConversationJumpHandled(true);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    async function locateConversation() {
+      const items = await loadConversations(account, { skipDefaultSelection: true });
+      if (cancelled) return;
+      const matched = matchDeepLinkedConversation(items, conversationJumpParams);
+      if (matched) {
+        setSelectedAccountId(account.id);
+        setConversationSearch("");
+        setConversationFilter("all");
+        setSelectedConversationId(matched.id);
+      } else {
+        setSelectedConversationId(null);
+        setError("未找到匹配会话，请手动搜索客户");
+      }
+      setConversationJumpHandled(true);
+    }
+
+    void locateConversation();
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts, conversationJumpHandled, conversationJumpParams, loadConversations, loadingAccounts]);
 
   useEffect(() => {
     if (selectedConversationId) {
@@ -602,6 +690,7 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [loadConversationDetail, selectedConversationId]);
 
   useEffect(() => {
+    if (conversationJumpParams && !conversationJumpHandled) return;
     if (!filteredConversations.length) {
       setSelectedConversationId(null);
       return;
@@ -609,7 +698,7 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!selectedConversationId || !filteredConversations.some((item) => item.id === selectedConversationId)) {
       setSelectedConversationId(filteredConversations[0].id);
     }
-  }, [filteredConversations, selectedConversationId]);
+  }, [conversationJumpHandled, conversationJumpParams, filteredConversations, selectedConversationId]);
 
   const refreshAuthStatus = useCallback(async () => {
     setAuthStatusLoading(true);
