@@ -734,6 +734,8 @@ export default function Index({
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (
           <DouyinAiCsTestPage />
+        ) : activeNav === "ai-agents" ? (
+          <SuperMerchantAgent />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
         ) : (

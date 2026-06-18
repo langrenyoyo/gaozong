@@ -1,407 +1,427 @@
 import {
-  BookOpenIcon,
   BotIcon,
-  ChevronLeftIcon,
+  BookOpenIcon,
   ClockIcon,
-  CopyIcon,
-  MessageSquareIcon,
-  MoreVerticalIcon,
   PencilIcon,
   PlusIcon,
+  RefreshCwIcon,
   SaveIcon,
   SendIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  AiAgent,
+  AiAgentPayload,
+  createAiAgent,
+  deleteAiAgent,
+  fetchAiAgents,
+  trainingChat,
+  updateAiAgent,
+} from "../api/aiAgents";
+import { formatDateTimeLocal } from "../lib/datetime";
 
-interface AgentTemplate {
+interface ChatMessage {
   id: string;
-  name: string;
-  createdAt: string;
-  avatar: string;
-  prompt: string;
-  knowledge: string;
+  sender: "ai" | "user";
+  content: string;
 }
 
-const initialAgentTemplates: AgentTemplate[] = [
-  {
-    id: "a1",
-    name: "精品代步车",
-    createdAt: "2026-01-01 12:12:12",
-    avatar: "sales-car",
-    prompt: "你是二手车门店的销售客服，需要先确认客户关注的车型、预算和到店意向。",
-    knowledge: "库存车辆：宝马3系、奥迪A4L、凯美瑞、雅阁。重点说明车况、价格、检测报告和到店服务。",
-  },
-  {
-    id: "a2",
-    name: "金融方案助手",
-    createdAt: "2026-01-01 12:10:08",
-    avatar: "finance-agent",
-    prompt: "围绕首付、月供、分期方案进行说明，语气克制清晰。",
-    knowledge: "支持首付比例、贷款年限、月供估算、金融顾问跟进。",
-  },
-  {
-    id: "a3",
-    name: "检测报告讲解",
-    createdAt: "2026-01-01 11:48:26",
-    avatar: "inspection-agent",
-    prompt: "重点解释车辆检测报告，避免过度承诺。",
-    knowledge: "检测报告包含漆面、结构件、发动机、变速箱、内饰磨损。",
-  },
-];
+const welcomeMessage: ChatMessage = {
+  id: "welcome",
+  sender: "ai",
+  content: "你好，请输入你想训练的问题，我会按引导留资的思路给出回答。",
+};
 
-interface AgentDraft {
-  name: string;
-  prompt: string;
-  knowledge: string;
+const emptyDraft: AiAgentPayload = {
+  name: "",
+  prompt: "",
+  knowledge_base_text: "",
+};
+
+function promptPreview(prompt: string): string {
+  return prompt.trim() || "暂无提示词";
 }
 
-function formatDateTime(date: Date) {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
-    date.getMinutes(),
-  )}:${pad(date.getSeconds())}`;
+function agentAvatar(agent: AiAgent) {
+  return agent.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(agent.avatar_seed)}`;
 }
 
-function ChatTestPanel() {
+function AgentEditor({
+  agent,
+  saving,
+  onClose,
+  onSave,
+}: {
+  agent: AiAgent | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (payload: AiAgentPayload) => void;
+}) {
+  const [draft, setDraft] = useState<AiAgentPayload>(emptyDraft);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setDraft(
+      agent
+        ? {
+            name: agent.name,
+            prompt: agent.prompt,
+            knowledge_base_text: agent.knowledge_base_text,
+            avatar_url: agent.avatar_url,
+          }
+        : emptyDraft,
+    );
+  }, [agent]);
+
+  useEffect(() => {
+    window.setTimeout(() => nameInputRef.current?.focus(), 0);
+  }, []);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.name.trim()) {
+      nameInputRef.current?.focus();
+      toast.error("请填写智能体名称");
+      return;
+    }
+    onSave({
+      ...draft,
+      name: draft.name.trim(),
+      prompt: draft.prompt || "",
+      knowledge_base_text: draft.knowledge_base_text || "",
+    });
+  };
+
   return (
-    <aside className="flex min-h-0 flex-col bg-white">
-      <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-4">
+    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-950/36 p-6 backdrop-blur-sm">
+      <form
+        onSubmit={submit}
+        className="grid max-h-[88vh] w-full max-w-[760px] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl border border-[#dfe5ee] bg-white shadow-[0_24px_90px_rgba(15,23,42,0.24)]"
+      >
+        <header className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
+              <BotIcon size={21} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词和普通文本知识库。</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
+            <XIcon size={16} />
+          </button>
+        </header>
+
+        <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-5">
+          <label className="grid gap-1.5 text-xs">
+            <span className="font-semibold text-[#475569]">智能体名称</span>
+            <input
+              ref={nameInputRef}
+              value={draft.name}
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              className="h-10 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 text-sm text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              placeholder="例如：精品车接待顾问"
+            />
+          </label>
+
+          <label className="grid gap-1.5 text-xs">
+            <span className="font-semibold text-[#475569]">智能体提示词</span>
+            <textarea
+              value={draft.prompt}
+              onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
+              className="min-h-[150px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              placeholder="描述智能体身份、语气、接待策略和留资引导方式。"
+            />
+          </label>
+
+          <label className="grid gap-1.5 text-xs">
+            <span className="font-semibold text-[#475569]">智能体知识库</span>
+            <textarea
+              value={draft.knowledge_base_text}
+              onChange={(event) => setDraft({ ...draft, knowledge_base_text: event.target.value })}
+              className="min-h-[150px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              placeholder="录入门店车型、服务、报价说明、检测报告说明等普通文本。"
+            />
+          </label>
+        </div>
+
+        <footer className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
+          <button type="button" onClick={onClose} className="h-9 rounded-xl border border-[#dfe5ee] px-4 text-xs font-semibold text-[#475569]">
+            取消
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)] disabled:opacity-60"
+          >
+            {saving ? <RefreshCwIcon size={14} className="animate-spin" /> : <SaveIcon size={14} />}
+            保存
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function TrainingPanel({ agent }: { agent: AiAgent | null }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setMessages([welcomeMessage]);
+    setInput("");
+  }, [agent?.agent_id]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!agent) return;
+    const text = input.trim();
+    if (!text) {
+      inputRef.current?.focus();
+      return;
+    }
+
+    setMessages((current) => [...current, { id: `user-${Date.now()}`, sender: "user", content: text }]);
+    setInput("");
+    setSending(true);
+    try {
+      const result = await trainingChat(agent.agent_id, text);
+      setMessages((current) => [...current, { id: `ai-${Date.now()}`, sender: "ai", content: result.reply_text }]);
+      if (result.warnings?.length) {
+        toast.warning(result.warnings.join("；"));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "训练预览失败");
+      setMessages((current) => [...current, { id: `ai-error-${Date.now()}`, sender: "ai", content: "训练预览失败，请稍后重试。" }]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <aside className="flex min-h-0 flex-col border-l border-[#e4e8f0] bg-white">
+      <div className="border-b border-[#e4e8f0] px-4 py-4">
         <div className="flex items-center gap-2.5">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
-            <MessageSquareIcon size={16} />
+            <BookOpenIcon size={17} />
           </div>
-          <div>
-            <h2 className="text-sm font-bold text-[#1a1f2e]">聊天测试</h2>
-            <p className="mt-1 text-[11px] text-[#8b95a6]">实时验证智能体回复口径</p>
-          </div>
-        </div>
-        <button className="h-8 rounded-lg px-2 text-[11px] font-semibold text-[#64748b] hover:bg-[#f8fafc]">
-          清空对话
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4 flex items-start gap-2.5">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eff6ff] text-[#2563eb]">
-            <MessageSquareIcon size={14} />
-          </div>
-          <div>
-            <div className="mb-1 text-[10px] text-[#8b95a6]">客户</div>
-            <div className="rounded-2xl rounded-tl bg-[#f8fafc] px-4 py-2.5 text-xs leading-6 text-[#374151] ring-1 ring-[#e4e8f0]">
-              请问这台车最低多少钱？还能不能看车？
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-row-reverse items-start gap-2.5">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#1a2035] text-white">
-            <BotIcon size={14} />
-          </div>
-          <div className="max-w-[82%]">
-            <div className="mb-1 text-right text-[10px] text-[#8b95a6]">AI</div>
-            <div className="rounded-2xl rounded-tr bg-[#1a2035] px-4 py-2.5 text-xs leading-6 text-white">
-              您好，这台车我先帮您确认库存和车况。您主要关注价格，还是想先看检测报告？
-            </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-bold text-[#1a1f2e]">统一知识库训练预览</h2>
+            <p className="mt-1 truncate text-[11px] text-[#8b95a6]">{agent ? agent.name : "请选择一个智能体"}</p>
           </div>
         </div>
       </div>
-      <div className="border-t border-[#e4e8f0] p-4">
-        <div className="grid grid-cols-[1fr_auto] gap-2 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-2 focus-within:border-[#2563eb] focus-within:ring-4 focus-within:ring-blue-500/10">
-          <textarea className="min-h-16 resize-none bg-transparent px-2 py-1 text-xs outline-none placeholder:text-[#9ca3af]" placeholder="输入消息测试智能体效果..." />
-          <button className="mt-auto grid h-8 w-8 place-items-center rounded-lg bg-[#2563eb] text-white">
-            <SendIcon size={14} />
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-[#f8fafc] px-4 py-4">
+        {messages.map((message) => (
+          <div key={message.id} className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}>
+            <div
+              className={`max-w-[86%] rounded-2xl px-4 py-2.5 text-xs leading-6 ${
+                message.sender === "user"
+                  ? "rounded-br-md bg-[#2563eb] text-white"
+                  : "rounded-bl-md bg-white text-[#374151] ring-1 ring-[#e4e8f0]"
+              }`}
+            >
+              {message.content}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <form onSubmit={submit} className="border-t border-[#e4e8f0] p-4">
+        <div className="grid grid-cols-[1fr_auto] gap-2 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] p-2 focus-within:border-[#2563eb] focus-within:ring-4 focus-within:ring-blue-500/10">
+          <input
+            ref={inputRef}
+            value={input}
+            disabled={!agent || sending}
+            onChange={(event) => setInput(event.target.value)}
+            className="h-9 bg-transparent px-2 text-sm text-[#1a1f2e] outline-none placeholder:text-[#94a3b8] disabled:cursor-not-allowed"
+            placeholder={agent ? "输入训练问题" : "先选择智能体"}
+          />
+          <button
+            type="submit"
+            disabled={!agent || sending}
+            className="grid h-9 w-9 place-items-center rounded-lg bg-[#2563eb] text-white disabled:opacity-50"
+            aria-label="发送训练问题"
+          >
+            {sending ? <RefreshCwIcon size={15} className="animate-spin" /> : <SendIcon size={15} />}
           </button>
         </div>
-      </div>
+      </form>
     </aside>
   );
 }
 
-function AgentEditorPage({
-  mode,
-  draft,
-  onBack,
-  onDraftChange,
-  onSave,
-}: {
-  mode: "create" | "edit";
-  draft: AgentDraft;
-  onBack: () => void;
-  onDraftChange: (draft: AgentDraft) => void;
-  onSave: () => void;
-}) {
-  const promptCount = draft.prompt.length;
-
-  return (
-    <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            onClick={onBack}
-            className="grid h-9 w-9 place-items-center rounded-xl text-[#64748b] hover:bg-[#f4f6f8] hover:text-[#1a1f2e]"
-            aria-label="返回智能体列表"
-          >
-            <ChevronLeftIcon size={18} />
-          </button>
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
-            <BotIcon size={22} />
-          </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-bold text-[#1a1f2e]">
-              {mode === "create" ? "新增商户智能体" : draft.name}
-            </h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">更新时间：2026-06-01 16:14</p>
-          </div>
-        </div>
-        <button
-          onClick={onSave}
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
-        >
-          <SaveIcon size={14} />
-          保存
-        </button>
-      </header>
-
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(560px,1fr)_360px]">
-        <section className="flex min-h-0 flex-col border-r border-[#e4e8f0] bg-white">
-          <div className="shrink-0 border-b border-[#e4e8f0] px-5 py-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="inline-flex items-center gap-2 text-xs font-bold text-[#1a1f2e]">
-                <BotIcon size={15} className="text-[#2563eb]" />
-                智能体基础信息
-              </div>
-              <span className="text-[11px] text-[#8b95a6]">用于商户侧 AI 客服回复</span>
-            </div>
-            <label className="grid max-w-[520px] gap-1.5 text-xs">
-              <span className="font-semibold text-[#64748b]">智能体名称</span>
-              <input
-                value={draft.name}
-                onChange={(event) => onDraftChange({ ...draft, name: event.target.value })}
-                className="h-10 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-[#374151] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                placeholder="请输入智能体名称"
-              />
-            </label>
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col px-5 py-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="inline-flex items-center gap-2 text-xs font-bold text-[#1a1f2e]">
-                <MessageSquareIcon size={15} className="text-[#2563eb]" />
-                提示词
-              </div>
-              <span className="text-[11px] text-[#8b95a6]">{promptCount} / 10000</span>
-            </div>
-            <textarea
-              value={draft.prompt}
-              onChange={(event) => onDraftChange({ ...draft, prompt: event.target.value })}
-              className="min-h-[300px] flex-1 resize-none rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-4 py-3 text-xs leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="请输入智能体提示词"
-            />
-          </div>
-
-          <div className="shrink-0 border-t border-[#e4e8f0] px-5 py-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="inline-flex items-center gap-2 text-xs font-bold text-[#1a1f2e]">
-                <BookOpenIcon size={15} className="text-[#2563eb]" />
-                知识库
-              </div>
-              <button className="h-8 rounded-lg bg-[#eff6ff] px-3 text-[11px] font-semibold text-[#2563eb]">
-                添加知识
-              </button>
-            </div>
-            <textarea
-              value={draft.knowledge}
-              onChange={(event) => onDraftChange({ ...draft, knowledge: event.target.value })}
-              className="min-h-28 w-full resize-none rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 py-2 text-xs leading-6 text-[#374151] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="请输入智能体可参考的知识库内容"
-            />
-          </div>
-        </section>
-
-        <ChatTestPanel />
-      </div>
-    </section>
-  );
-}
-
 export default function SuperMerchantAgent() {
-  const [editorMode, setEditorMode] = useState<"list" | "create" | "edit">("list");
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [agents, setAgents] = useState<AgentTemplate[]>(initialAgentTemplates);
-  const [draft, setDraft] = useState<AgentDraft>({
-    name: "新建商户智能体",
-    prompt: "你是二手车门店的销售客服，需要先确认客户关注的车型、预算和到店意向。",
-    knowledge: "",
-  });
+  const [agents, setAgents] = useState<AiAgent[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editorAgent, setEditorAgent] = useState<AiAgent | null | undefined>(undefined);
 
-  const openCreatePage = () => {
-    setDraft({
-      name: "新建商户智能体",
-      prompt: "你是二手车门店的销售客服，需要根据客户问题，用清晰、克制、可信的语气介绍车辆信息，并引导客户补充车型、预算和到店意向。",
-      knowledge: "",
-    });
-    setEditorMode("create");
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.agent_id === selectedAgentId) || agents[0] || null,
+    [agents, selectedAgentId],
+  );
+
+  const loadAgents = async () => {
+    setLoading(true);
+    try {
+      const items = await fetchAiAgents();
+      setAgents(items);
+      setSelectedAgentId((current) => current && items.some((item) => item.agent_id === current) ? current : items[0]?.agent_id || null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "AI小高智能体加载失败");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const openEditPage = (agent: AgentTemplate) => {
-    setDraft({
-      name: agent.name,
-      prompt: agent.prompt,
-      knowledge: agent.knowledge,
-    });
-    setEditorMode("edit");
+  useEffect(() => {
+    void loadAgents();
+  }, []);
+
+  const saveAgent = async (payload: AiAgentPayload) => {
+    setSaving(true);
+    try {
+      const saved = editorAgent ? await updateAiAgent(editorAgent.agent_id, payload) : await createAiAgent(payload);
+      toast.success(editorAgent ? "智能体已更新" : "智能体已创建");
+      setEditorAgent(undefined);
+      await loadAgents();
+      setSelectedAgentId(saved.agent_id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "智能体保存失败");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const copyAgent = (agent: AgentTemplate) => {
-    const baseName = `${agent.name} 副本`;
-    const sameNameCount = agents.filter((item) => item.name === baseName || item.name.startsWith(`${baseName} `)).length;
-    const copiedAgent: AgentTemplate = {
-      ...agent,
-      id: `${agent.id}-copy-${Date.now()}`,
-      name: sameNameCount ? `${baseName} ${sameNameCount + 1}` : baseName,
-      avatar: `${agent.avatar}-copy-${Date.now()}`,
-      createdAt: formatDateTime(new Date()),
-    };
-
-    setAgents((current) => {
-      const sourceIndex = current.findIndex((item) => item.id === agent.id);
-      if (sourceIndex === -1) {
-        return [copiedAgent, ...current];
-      }
-      return [...current.slice(0, sourceIndex + 1), copiedAgent, ...current.slice(sourceIndex + 1)];
-    });
-    setOpenMenuId(null);
-    toast.success("已创建智能体副本");
+  const removeAgent = async (agent: AiAgent) => {
+    if (!window.confirm(`确认删除“${agent.name}”？`)) return;
+    try {
+      await deleteAiAgent(agent.agent_id);
+      toast.success("智能体已删除");
+      await loadAgents();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "智能体删除失败");
+    }
   };
-
-  if (editorMode !== "list") {
-    return (
-      <AgentEditorPage
-        mode={editorMode}
-        draft={draft}
-        onBack={() => setEditorMode("list")}
-        onDraftChange={setDraft}
-        onSave={() => {
-          toast.success(editorMode === "create" ? "智能体已保存" : "配置已保存");
-          setEditorMode("list");
-        }}
-      />
-    );
-  }
 
   return (
-    <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
-            <BotIcon size={22} />
+    <section className="grid h-full min-h-0 grid-cols-[minmax(620px,1fr)_420px] overflow-hidden bg-[#f3f6fa]">
+      <div className="flex min-h-0 flex-col">
+        <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
+              <BotIcon size={22} />
+            </div>
+            <div>
+              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高智能体</h1>
+              <p className="mt-1 text-xs text-[#8b95a6]">管理智能体名称、提示词和统一知识库训练预览。</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">商户智能体</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">维护商户侧 AI 客服的提示词、知识库和调试效果</p>
-          </div>
-        </div>
-        <button
-          onClick={openCreatePage}
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
-        >
-          <PlusIcon size={14} />
-          添加智能体
-        </button>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="grid grid-cols-4 gap-4 max-[1440px]:grid-cols-3 max-[1180px]:grid-cols-2">
-          {agents.map((agent) => (
-            <article
-              key={agent.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => openEditPage(agent)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openEditPage(agent);
-                }
-              }}
-              className="relative flex min-h-[198px] cursor-pointer flex-col rounded-xl border border-[#e4e8f0] bg-white px-5 pb-4 pt-5 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-smooth hover:border-[#bfdbfe] hover:shadow-[0_14px_32px_rgba(30,83,126,0.10)] focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={loadAgents}
+              className="grid h-9 w-9 place-items-center rounded-xl border border-[#dfe5ee] bg-white text-[#64748b] hover:bg-[#f8fafc]"
+              aria-label="刷新智能体列表"
             >
-              <div className="mx-auto grid h-12 w-12 place-items-center overflow-hidden rounded-full bg-[#eff6ff] ring-4 ring-[#f8fafc]">
-                <img
-                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${agent.avatar}&backgroundColor=b6e3f4,c0aede,d1d4f9`}
-                  alt={agent.name}
-                  className="h-full w-full"
-                />
-              </div>
+              <RefreshCwIcon size={15} />
+            </button>
+            <button
+              onClick={() => setEditorAgent(null)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
+            >
+              <PlusIcon size={14} />
+              创建智能体
+            </button>
+          </div>
+        </header>
 
-              <h2 className="mt-3 truncate text-sm font-bold text-[#1a1f2e]">{agent.name}</h2>
-              <p className="mx-auto mt-3 line-clamp-2 min-h-10 max-w-[260px] text-xs leading-5 text-[#8b95a6]">
-                {agent.prompt}
-              </p>
-
-              <div className="mt-auto flex items-center justify-between gap-3 pt-4 text-xs text-[#8b95a6]">
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <ClockIcon size={13} />
-                  <span className="truncate">{agent.createdAt}</span>
-                </span>
-                <button
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setOpenMenuId(openMenuId === agent.id ? null : agent.id);
-                  }}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#f8fafc] text-[#8b95a6] hover:bg-[#eff6ff] hover:text-[#2563eb]"
-                  aria-label="打开操作菜单"
-                >
-                  <MoreVerticalIcon size={16} />
-                </button>
-              </div>
-
-              {openMenuId === agent.id ? (
-                <div className="absolute bottom-10 right-4 z-10 w-[96px] overflow-hidden rounded-lg border border-[#e4e8f0] bg-white py-1 text-left text-xs shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openEditPage(agent);
-                      setOpenMenuId(null);
-                    }}
-                    className="flex h-9 w-full items-center gap-2 px-3 font-semibold text-[#374151] hover:bg-[#f8fafc]"
-                  >
-                    <PencilIcon size={13} />
-                    编辑
-                  </button>
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      copyAgent(agent);
-                    }}
-                    className="flex h-9 w-full items-center gap-2 px-3 font-semibold text-[#374151] hover:bg-[#f8fafc]"
-                  >
-                    <CopyIcon size={13} />
-                    复制
-                  </button>
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setOpenMenuId(null);
-                    }}
-                    className="flex h-9 w-full items-center gap-2 px-3 font-semibold text-red-600 hover:bg-red-50"
-                  >
-                    <Trash2Icon size={13} />
-                    删除
-                  </button>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <div className="grid h-full place-items-center text-sm text-[#64748b]">正在加载AI小高智能体...</div>
+          ) : agents.length === 0 ? (
+            <div className="grid h-full place-items-center">
+              <div className="max-w-[360px] text-center">
+                <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#eff6ff] text-[#2563eb]">
+                  <BotIcon size={28} />
                 </div>
-              ) : null}
-            </article>
-          ))}
-
-        </div>
-
-        <div className="mt-5 flex items-center justify-center gap-3 text-xs text-[#c0c6d0]">
-          <span className="h-px w-12 bg-[#e4e8f0]" />
-          已经到底了
-          <span className="h-px w-12 bg-[#e4e8f0]" />
+                <h2 className="mt-4 text-base font-bold text-[#1a1f2e]">暂无智能体</h2>
+                <p className="mt-2 text-sm leading-6 text-[#8b95a6]">创建第一个AI小高智能体后，可以维护提示词和知识库并进行训练预览。</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-4 max-[1280px]:grid-cols-2">
+              {agents.map((agent) => (
+                <article
+                  key={agent.agent_id}
+                  onClick={() => setSelectedAgentId(agent.agent_id)}
+                  className={`flex min-h-[218px] cursor-pointer flex-col rounded-xl border bg-white px-5 py-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-smooth ${
+                    selectedAgent?.agent_id === agent.agent_id
+                      ? "border-[#2563eb] ring-4 ring-blue-500/10"
+                      : "border-[#e4e8f0] hover:border-[#bfdbfe] hover:shadow-[0_14px_32px_rgba(30,83,126,0.10)]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <img src={agentAvatar(agent)} alt={agent.name} className="h-12 w-12 rounded-full bg-[#eff6ff] ring-4 ring-[#f8fafc]" />
+                    <span className="rounded-full bg-[#f1f5f9] px-2.5 py-1 text-[11px] font-semibold text-[#64748b]">
+                      {agent.status === "active" ? "启用" : "停用"}
+                    </span>
+                  </div>
+                  <h2 className="mt-4 truncate text-sm font-bold text-[#1a1f2e]">{agent.name}</h2>
+                  <p className="mt-3 line-clamp-2 min-h-10 text-xs leading-5 text-[#64748b]">{promptPreview(agent.prompt)}</p>
+                  <div className="mt-auto flex items-center justify-between gap-3 pt-4">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-[#94a3b8]">
+                      <ClockIcon size={13} />
+                      <span className="truncate">{formatDateTimeLocal(agent.created_at || null)}</span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setEditorAgent(agent);
+                        }}
+                        className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#eff6ff] hover:text-[#2563eb]"
+                        aria-label="编辑智能体"
+                      >
+                        <PencilIcon size={14} />
+                      </button>
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removeAgent(agent);
+                        }}
+                        className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-red-50 hover:text-red-600"
+                        aria-label="删除智能体"
+                      >
+                        <Trash2Icon size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
       </div>
+
+      <TrainingPanel agent={selectedAgent} />
+
+      {editorAgent !== undefined ? (
+        <AgentEditor
+          agent={editorAgent}
+          saving={saving}
+          onClose={() => setEditorAgent(undefined)}
+          onSave={(payload) => void saveAgent(payload)}
+        />
+      ) : null}
     </section>
   );
 }

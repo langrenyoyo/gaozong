@@ -94,6 +94,85 @@ class WebhookEventDetailResponse(BaseModel):
     message: str = "success"
 
 
+# ========== AI小高智能体 ==========
+
+
+class AiAgentCreate(BaseModel):
+    """AI小高智能体创建请求。"""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    prompt: str = ""
+    knowledge_base_text: str = ""
+    avatar_url: Optional[str] = None
+
+
+class AiAgentUpdate(BaseModel):
+    """AI小高智能体更新请求。"""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    prompt: Optional[str] = None
+    knowledge_base_text: Optional[str] = None
+    avatar_url: Optional[str] = None
+    status: Optional[str] = Field(None, pattern="^(active|disabled)$")
+
+
+class AiAgentOut(BaseModel):
+    """AI小高智能体响应。"""
+
+    id: int
+    agent_id: str
+    merchant_id: str
+    name: str
+    avatar_seed: str
+    avatar_url: Optional[str] = None
+    prompt: str = ""
+    knowledge_base_text: str = ""
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AiAgentTrainingChatRequest(BaseModel):
+    """AI小高智能体训练预览请求。"""
+
+    message: str = Field(..., min_length=1)
+
+
+class AiAgentTrainingChatResponseData(BaseModel):
+    """AI小高智能体训练预览结果。"""
+
+    reply_text: str
+    warnings: list[str] = []
+    llm_used: bool = False
+    knowledge_used: bool = True
+
+
+class AiAgentResponse(BaseModel):
+    """AI小高智能体单项响应包装。"""
+
+    success: bool = True
+    data: AiAgentOut
+    message: str = "success"
+
+
+class AiAgentListResponse(BaseModel):
+    """AI小高智能体列表响应包装。"""
+
+    success: bool = True
+    data: list[AiAgentOut]
+    message: str = "success"
+
+
+class AiAgentTrainingChatResponse(BaseModel):
+    """AI小高智能体训练预览响应包装。"""
+
+    success: bool = True
+    data: AiAgentTrainingChatResponseData
+    message: str = "success"
+
+
 # ========== Agent status read-only query ==========
 
 

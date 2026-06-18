@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint,
+    Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -302,3 +302,25 @@ class DouyinImageUpload(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     uploaded_at = Column(DateTime, comment="上游上传成功时间")
+
+
+class AiAgent(Base):
+    """AI小高智能体最小持久化配置。"""
+
+    __tablename__ = "ai_agents"
+    __table_args__ = (
+        UniqueConstraint("agent_id", name="uk_ai_agents_agent_id"),
+        Index("idx_ai_agents_merchant_status", "merchant_id", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(64), nullable=False, comment="智能体业务唯一 ID")
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
+    name = Column(String(100), nullable=False, comment="智能体名称")
+    avatar_seed = Column(String(128), nullable=False, comment="随机头像种子")
+    avatar_url = Column(String(1000), comment="头像地址")
+    prompt = Column(Text, nullable=False, default="", comment="智能体提示词")
+    knowledge_base_text = Column(Text, nullable=False, default="", comment="普通文本知识库")
+    status = Column(String(20), nullable=False, default="active", comment="active/disabled/deleted")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
