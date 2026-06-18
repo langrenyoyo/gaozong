@@ -371,3 +371,72 @@ class AiAgent(Base):
     status = Column(String(20), nullable=False, default="active", comment="active/disabled/deleted")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ComputeAccount(Base):
+    """小高算力：商户 Token 账户表。
+
+    对齐一期文档 2.7（余额展示）/ 3.1（管理员充值、发放套餐）。
+    一个商户一行，balance_tokens 为当前可用 Token 余额。
+    本轮只建表与字段，不做余额拦截、不做冻结、不做过期时间。
+    """
+
+    __tablename__ = "compute_accounts"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", name="uk_compute_accounts_merchant"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
+    tenant_id = Column(String(128), comment="预留租户 ID")
+    balance_tokens = Column(Integer, nullable=False, default=0, comment="当前 Token 余额（整数）")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ComputeTransaction(Base):
+    """小高算力：Token 流水表。
+
+    对齐一期文档 2.7（Token 明细、今日/昨日/累计消耗）/ 3.1（充值、套餐发放记录）。
+    transaction_type: recharge 充值 / consume 消耗 / grant_package 套餐发放
+    delta_tokens: 充值与发放为正、消耗为负，禁止 0
+    source: manual_recharge / package_grant / recharge_order / llm
+    model / agent_id / conversation_id 预留后续 AI 消耗埋点（USAGE-1），本轮允许空。
+    """
+
+    __tablename__ = "compute_transactions"
+    __table_args__ = (
+        Index("idx_compute_transactions_merchant_created", "merchant_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    tenant_id = Column(String(128), comment="预留租户 ID")
+    transaction_type = Column(String(32), nullable=False, comment="recharge/consume/grant_package")
+    delta_tokens = Column(Integer, nullable=False, comment="Token 变动，充值发放为正、消耗为负，禁止 0")
+    balance_after_tokens = Column(Integer, nullable=False, comment="本次变动后余额")
+    source = Column(String(32), nullable=False, comment="manual_recharge/package_grant/recharge_order/llm")
+    remark = Column(Text, comment="展示备注")
+    model = Column(String(128), comment="AI 消耗所用模型，预留")
+    agent_id = Column(String(64), comment="AI 消耗所属智能体，预留")
+    conversation_id = Column(Integer, comment="AI 消耗所属会话，预留")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class ComputePackage(Base):
+    """小高算力：Token 套餐表。
+
+    对齐一期文档 3.5（管理员算力配置）/ 2.7（充值弹窗套餐展示）。
+    一期套餐示例：基础版 99 元 / 100000 Token、标准版 299 元 / 350000、专业版 699 元 / 900000。
+    price_yuan 为整数元，token_amount 为整数 Token；本轮不写入默认套餐 seed。
+    """
+
+    __tablename__ = "compute_packages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, comment="套餐名称")
+    price_yuan = Column(Integer, nullable=False, comment="套餐价格（元），整数")
+    token_amount = Column(Integer, nullable=False, comment="套餐 Token 数量（整数，大于 0）")
+    enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
