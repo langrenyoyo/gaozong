@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -13,7 +15,9 @@ from app.models import DouyinAuthorizedAccount
 from app.services.douyin_account_agent_binding_service import (
     BindingValidationResult,
     bind_agent_to_account,
+    delete_bindings_for_account,
     get_binding_summary,
+    invalidate_bindings_for_account,
     unbind_agent_from_account,
 )
 
@@ -46,6 +50,38 @@ def _require_context(context: RequestContext) -> str:
             detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
         )
     return context.merchant_id
+
+
+def _find_owned_account(
+    db: Session,
+    *,
+    account_open_id: str,
+    merchant_id: str,
+) -> DouyinAuthorizedAccount:
+    row = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOUYIN_ACCOUNT_NOT_FOUND", "message": "抖音企业号不存在"},
+        )
+    if not row.merchant_id or str(row.merchant_id) != str(merchant_id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED",
+                "message": "抖音企业号不属于当前商户",
+                "audit": {
+                    "account_open_id": account_open_id,
+                    "owner_merchant_id": row.merchant_id,
+                    "request_merchant_id": merchant_id,
+                },
+            },
+        )
+    return row
 
 
 @router.get("")
@@ -138,6 +174,77 @@ def delete_douyin_account_agent_binding(
             "bound_agent_id": result.agent_id,
             "binding_status": result.status,
             "unbound_at": result.unbound_at,
+        },
+        "message": "success",
+    }
+
+
+@router.post("/{account_open_id}/cancel-authorization")
+def cancel_douyin_account_authorization(
+    account_open_id: str,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict:
+    """本地标记企业号取消授权，并将 active 绑定置为 invalid。"""
+    merchant_id = _require_context(context)
+    row = _find_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
+    now = datetime.now()
+    if row.bind_status != 0:
+        row.bind_status = 0
+    if not row.unbind_time:
+        row.unbind_time = now.isoformat(timespec="seconds")
+    row.updated_at = now
+    db.commit()
+
+    changed = invalidate_bindings_for_account(
+        db,
+        account_open_id=account_open_id,
+        reason="account_unauthorized",
+        context=context,
+    )
+    return {
+        "success": True,
+        "data": {
+            "account_open_id": account_open_id,
+            "authorization_status": "unauthorized",
+            "binding_status": "invalid" if changed else "none",
+            "invalidated_binding_count": changed,
+            "upstream_cancel_supported": False,
+        },
+        "message": "success",
+    }
+
+
+@router.delete("/{account_open_id}")
+def delete_douyin_account(
+    account_open_id: str,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict:
+    """本地软删除企业号，并将 active 绑定置为 deleted。"""
+    merchant_id = _require_context(context)
+    row = _find_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
+    now = datetime.now()
+    if row.bind_status != 4:
+        row.bind_status = 4
+    if not row.unbind_time:
+        row.unbind_time = now.isoformat(timespec="seconds")
+    row.updated_at = now
+    db.commit()
+
+    changed = delete_bindings_for_account(
+        db,
+        account_open_id=account_open_id,
+        reason="account_deleted",
+        context=context,
+    )
+    return {
+        "success": True,
+        "data": {
+            "account_open_id": account_open_id,
+            "account_status": "deleted",
+            "binding_status": "deleted" if changed else "none",
+            "deleted_binding_count": changed,
         },
         "message": "success",
     }

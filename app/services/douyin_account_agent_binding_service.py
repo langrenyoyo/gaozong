@@ -13,6 +13,7 @@ from app.models import AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccou
 
 
 ACTIVE_BINDING_STATUS = "active"
+DELETED_ACCOUNT_BIND_STATUS = 4
 
 
 @dataclass
@@ -185,6 +186,37 @@ def invalidate_bindings_for_account(
     return len(rows)
 
 
+def delete_bindings_for_account(
+    db: Session,
+    *,
+    account_open_id: str,
+    reason: str,
+    context: RequestContext,
+) -> int:
+    """删除企业号后，将 active 绑定置为 deleted，保留审计痕迹。"""
+    if not context.merchant_id:
+        return 0
+    now = datetime.now()
+    rows = (
+        db.query(DouyinAccountAgentBinding)
+        .filter(
+            DouyinAccountAgentBinding.merchant_id == context.merchant_id,
+            DouyinAccountAgentBinding.account_open_id == account_open_id,
+            DouyinAccountAgentBinding.status == ACTIVE_BINDING_STATUS,
+            DouyinAccountAgentBinding.deleted_at.is_(None),
+        )
+        .all()
+    )
+    for row in rows:
+        row.status = "deleted"
+        row.deleted_at = now
+        row.invalid_reason = reason
+        row.updated_at = now
+        row.updated_by = context.user_id
+    db.commit()
+    return len(rows)
+
+
 def validate_douyin_agent_binding(
     *,
     db: Session,
@@ -292,6 +324,12 @@ def _validate_account_context(
                 "owner_merchant_id": owner_merchant_id,
                 "owner_tenant_id": getattr(account, "tenant_id", None),
             },
+        )
+    if account.bind_status == DELETED_ACCOUNT_BIND_STATUS:
+        return BindingValidationResult(
+            allowed=False,
+            reason_code="DOUYIN_ACCOUNT_DELETED",
+            audit={**audit, "authorized_account_id": account.id, "bind_status": account.bind_status},
         )
     if account.bind_status != 1:
         return BindingValidationResult(

@@ -1,4 +1,4 @@
-"""Pydantic 请求/响应模型"""
+﻿"""Pydantic 请求/响应模型"""
 
 import json
 from datetime import datetime
@@ -378,6 +378,7 @@ class LeadCreate(BaseModel):
 
 class LeadAssign(BaseModel):
     staff_id: int = Field(..., description="分配的销售ID")
+    remark: Optional[str] = Field(None, description="分配备注")
 
 
 class LeadOut(BaseModel):
@@ -397,6 +398,12 @@ class LeadOut(BaseModel):
     assigned_staff_id: Optional[int] = None
     assigned_at: Optional[datetime] = None
     status: str
+    display_status: Optional[str] = None
+    status_label: Optional[str] = None
+    status_reason: Optional[str] = None
+    lead_score: Optional[dict] = None
+    assigned_staff: Optional[dict] = None
+    timeline: list[dict] = Field(default_factory=list)
     raw_data: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -419,6 +426,12 @@ class LeadOut(BaseModel):
                 "assigned_staff_id": getattr(value, "assigned_staff_id", None),
                 "assigned_at": getattr(value, "assigned_at", None),
                 "status": getattr(value, "status", None),
+                "display_status": getattr(value, "display_status", None),
+                "status_label": getattr(value, "status_label", None),
+                "status_reason": getattr(value, "status_reason", None),
+                "lead_score": getattr(value, "lead_score", None),
+                "assigned_staff": getattr(value, "assigned_staff", None),
+                "timeline": getattr(value, "timeline", []),
                 "raw_data": getattr(value, "raw_data", None),
                 "created_at": getattr(value, "created_at", None),
                 "updated_at": getattr(value, "updated_at", None),
@@ -477,6 +490,8 @@ class CheckOut(BaseModel):
 class ReportSummary(BaseModel):
     total_leads: int = 0
     assigned_count: int = 0
+    retained_contact_count: int = 0
+    high_intent_count: int = 0
     replied_count: int = 0
     timeout_count: int = 0
     pending_count: int = 0

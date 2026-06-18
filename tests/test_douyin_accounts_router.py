@@ -90,6 +90,26 @@ def _insert_agent(agent_id="agent-1", merchant_id="merchant-1", status="active")
         db.close()
 
 
+def _bind_account(open_id="account-open-1", agent_id="agent-1", merchant_id="merchant-1"):
+    db = TestSession()
+    try:
+        row = DouyinAccountAgentBinding(
+            merchant_id=merchant_id,
+            account_open_id=open_id,
+            agent_id=agent_id,
+            is_default=True,
+            status="active",
+            created_by="user-1",
+            updated_by="user-1",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    finally:
+        db.close()
+
+
 def test_list_accounts_returns_binding_summary():
     _insert_account()
     _insert_agent()
@@ -211,3 +231,127 @@ def test_webhook_event_fallback_account_cannot_bypass_formal_binding():
     assert list_response.json()["data"]["items"] == []
     assert bind_response.status_code == 403
     assert bind_response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_FOUND"
+
+
+def test_cancel_authorization_marks_account_unauthorized_and_binding_invalid():
+    _insert_account()
+    _insert_agent()
+    _bind_account()
+    client = _client()
+
+    response = client.post("/integrations/douyin/accounts/account-open-1/cancel-authorization")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_open_id"] == "account-open-1"
+    assert data["authorization_status"] == "unauthorized"
+    assert data["binding_status"] == "invalid"
+    assert data["upstream_cancel_supported"] is False
+    db = TestSession()
+    try:
+        account = db.query(DouyinAuthorizedAccount).filter_by(open_id="account-open-1").one()
+        binding = db.query(DouyinAccountAgentBinding).filter_by(account_open_id="account-open-1").one()
+        assert account.bind_status == 0
+        assert account.unbind_time is not None
+        assert binding.status == "invalid"
+        assert binding.invalid_reason == "account_unauthorized"
+    finally:
+        db.close()
+
+
+def test_cancel_authorization_is_idempotent():
+    _insert_account(bind_status=0)
+    _insert_agent()
+    client = _client()
+
+    first = client.post("/integrations/douyin/accounts/account-open-1/cancel-authorization")
+    second = client.post("/integrations/douyin/accounts/account-open-1/cancel-authorization")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["data"]["authorization_status"] == "unauthorized"
+
+
+def test_cancel_authorization_rejects_other_merchant_and_empty_owner_account():
+    _insert_account(open_id="account-other", merchant_id="merchant-2")
+    _insert_account(open_id="account-empty", merchant_id=None)
+    client = _client(_context("merchant-1"))
+
+    other = client.post("/integrations/douyin/accounts/account-other/cancel-authorization")
+    empty = client.post("/integrations/douyin/accounts/account-empty/cancel-authorization")
+
+    assert other.status_code == 403
+    assert other.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert empty.status_code == 403
+    assert empty.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+
+
+def test_delete_account_marks_account_deleted_and_binding_deleted():
+    _insert_account()
+    _insert_agent()
+    _bind_account()
+    client = _client()
+
+    response = client.delete("/integrations/douyin/accounts/account-open-1")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_open_id"] == "account-open-1"
+    assert data["account_status"] == "deleted"
+    assert data["binding_status"] == "deleted"
+    db = TestSession()
+    try:
+        account = db.query(DouyinAuthorizedAccount).filter_by(open_id="account-open-1").one()
+        binding = db.query(DouyinAccountAgentBinding).filter_by(account_open_id="account-open-1").one()
+        assert account.bind_status == 4
+        assert account.unbind_time is not None
+        assert binding.status == "deleted"
+        assert binding.deleted_at is not None
+        assert binding.invalid_reason == "account_deleted"
+    finally:
+        db.close()
+
+
+def test_delete_account_hides_account_and_blocks_new_binding():
+    _insert_account()
+    _insert_agent()
+    client = _client()
+
+    delete_response = client.delete("/integrations/douyin/accounts/account-open-1")
+    list_response = client.get("/integrations/douyin/accounts")
+    bind_response = client.put(
+        "/integrations/douyin/accounts/account-open-1/agent-binding",
+        json={"agent_id": "agent-1"},
+    )
+
+    assert delete_response.status_code == 200
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"] == []
+    assert bind_response.status_code == 403
+    assert bind_response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_DELETED"
+
+
+def test_delete_account_is_idempotent():
+    _insert_account(bind_status=4)
+    client = _client()
+
+    first = client.delete("/integrations/douyin/accounts/account-open-1")
+    second = client.delete("/integrations/douyin/accounts/account-open-1")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["data"]["account_status"] == "deleted"
+
+
+def test_delete_account_rejects_other_merchant_and_empty_owner_account():
+    _insert_account(open_id="account-other", merchant_id="merchant-2")
+    _insert_account(open_id="account-empty", merchant_id=None)
+    client = _client(_context("merchant-1"))
+
+    other = client.delete("/integrations/douyin/accounts/account-other")
+    empty = client.delete("/integrations/douyin/accounts/account-empty")
+
+    assert other.status_code == 403
+    assert other.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert empty.status_code == 403
+    assert empty.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"

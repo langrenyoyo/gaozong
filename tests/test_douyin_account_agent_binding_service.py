@@ -220,6 +220,20 @@ def test_rejects_unauthorized_account():
         db.close()
 
 
+def test_validate_rejects_deleted_account():
+    db = TestSession()
+    try:
+        _insert_account(db, bind_status=4)
+        _insert_agent(db)
+
+        result = bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+
+        assert result.allowed is False
+        assert result.reason_code == "DOUYIN_ACCOUNT_DELETED"
+    finally:
+        db.close()
+
+
 def test_validate_requires_active_binding_without_not_enforced_warning():
     db = TestSession()
     try:

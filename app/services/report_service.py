@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models import DouyinLead, ReplyCheck, SalesStaff
+from app.services import lead_management_service
 
 
 def get_summary(db: Session) -> dict:
@@ -51,9 +52,13 @@ def get_summary(db: Session) -> dict:
             "reply_rate": rate,
         })
 
+    lead_management_summary = lead_management_service.summary(db)
+
     return {
         "total_leads": total_leads,
         "assigned_count": assigned_count,
+        "retained_contact_count": lead_management_summary["retained_contact_count"],
+        "high_intent_count": lead_management_summary["high_intent_count"],
         "replied_count": replied_count,
         "timeout_count": timeout_count,
         "pending_count": pending_count,

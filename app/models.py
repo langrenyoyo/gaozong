@@ -138,6 +138,25 @@ class LeadNotification(Base):
     check = relationship("ReplyCheck")
 
 
+class LeadFollowupRecord(Base):
+    """线索跟进记录表，用于保存分配备注和人工跟进记录。"""
+    __tablename__ = "lead_followup_records"
+    __table_args__ = (
+        Index("idx_lead_followup_records_lead_created", "lead_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    lead_id = Column(Integer, ForeignKey("douyin_leads.id"), nullable=False, comment="线索ID")
+    staff_id = Column(Integer, ForeignKey("sales_staff.id"), comment="关联销售ID")
+    record_type = Column(String(30), nullable=False, comment="assign/reassign/reply_check/notification/feedback/manual_note")
+    content = Column(Text, comment="跟进内容或分配备注")
+    operator_id = Column(String(128), comment="操作人ID")
+    created_at = Column(DateTime, default=datetime.now)
+
+    lead = relationship("DouyinLead")
+    staff = relationship("SalesStaff")
+
+
 class WechatTask(Base):
     """微信任务队列 — P0-5A 新增，用于 Local Agent 架构的任务分发与结果回写"""
     __tablename__ = "wechat_tasks"

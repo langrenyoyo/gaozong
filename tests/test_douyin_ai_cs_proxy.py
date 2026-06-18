@@ -261,6 +261,42 @@ def test_proxy_denies_when_binding_service_rejects_account(monkeypatch):
     assert fake_client.calls == []
 
 
+def test_proxy_denies_unauthorized_account_after_cancel_authorization(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(bind_status=0)
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_AUTHORIZED"
+    assert fake_client.calls == []
+
+
+def test_proxy_denies_deleted_account(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(bind_status=4)
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_DELETED"
+    assert fake_client.calls == []
+
+
 def test_proxy_does_not_merge_not_enforced_warnings(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
