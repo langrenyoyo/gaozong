@@ -4,7 +4,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.context import RequestContext
 from app.database import Base
-from app.models import DouyinAuthorizedAccount
+from app.models import AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccount
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 
 
@@ -32,21 +32,56 @@ def _context(**kwargs) -> RequestContext:
     return RequestContext(**data)
 
 
-def _insert_account(open_id: str = "account-open-1") -> DouyinAuthorizedAccount:
-    db = TestSession()
-    try:
-        row = DouyinAuthorizedAccount(
-            main_account_id=123,
-            open_id=open_id,
-            bind_status=1,
-            account_name="测试抖音号",
-        )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        return row
-    finally:
-        db.close()
+def _insert_account(
+    db,
+    *,
+    open_id: str = "account-open-1",
+    merchant_id: str | None = "merchant-1",
+    bind_status: int = 1,
+) -> DouyinAuthorizedAccount:
+    row = DouyinAuthorizedAccount(
+        main_account_id=123,
+        open_id=open_id,
+        merchant_id=merchant_id,
+        bind_status=bind_status,
+        account_name="测试抖音号",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _insert_agent(db, *, agent_id: str = "agent-1", merchant_id: str = "merchant-1", status: str = "active"):
+    row = AiAgent(
+        agent_id=agent_id,
+        merchant_id=merchant_id,
+        name="测试智能体",
+        avatar_seed="seed",
+        prompt="",
+        knowledge_base_text="",
+        status=status,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _insert_binding(db, *, account_open_id: str = "account-open-1", agent_id: str = "agent-1"):
+    row = DouyinAccountAgentBinding(
+        merchant_id="merchant-1",
+        account_open_id=account_open_id,
+        agent_id=agent_id,
+        is_default=True,
+        status="active",
+        created_by="user-1",
+        updated_by="user-1",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _validate(**kwargs):
@@ -118,8 +153,13 @@ def test_rejects_missing_douyin_account():
     assert result.reason_code == "DOUYIN_ACCOUNT_NOT_FOUND"
 
 
-def test_allows_existing_account_but_warns_merchant_and_agent_binding_not_enforced():
-    _insert_account("account-open-1")
+def test_rejects_existing_account_without_active_binding():
+    db = TestSession()
+    try:
+        _insert_account(db)
+        _insert_agent(db)
+    finally:
+        db.close()
 
     result = _validate(
         context=_context(),
@@ -128,19 +168,24 @@ def test_allows_existing_account_but_warns_merchant_and_agent_binding_not_enforc
         conversation_id="conv-1",
     )
 
-    assert result.allowed is True
-    assert result.reason_code is None
-    assert "DOUYIN_ACCOUNT_MERCHANT_BINDING_NOT_ENFORCED" in result.warnings
-    assert "AGENT_BINDING_NOT_ENFORCED" in result.warnings
+    assert result.allowed is False
+    assert result.reason_code == "AGENT_BINDING_NOT_FOUND"
+    assert "AGENT_BINDING_NOT_ENFORCED" not in result.warnings
 
 
-def test_can_find_account_by_main_account_id():
-    _insert_account("account-open-1")
+def test_can_find_account_by_main_account_id_when_binding_exists():
+    db = TestSession()
+    try:
+        _insert_account(db)
+        _insert_agent(db)
+        _insert_binding(db)
+    finally:
+        db.close()
 
     result = _validate(
         context=_context(),
         douyin_account_id=123,
-        agent_id=None,
+        agent_id="agent-1",
         conversation_id="conv-1",
     )
 

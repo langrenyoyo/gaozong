@@ -21,6 +21,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import config
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_optional
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import (
@@ -91,6 +93,19 @@ def _client():
 
     app.dependency_overrides[get_db] = _override_get_db
     return TestClient(app)
+
+
+def _client_with_context(merchant_id: str = "merchant-1"):
+    client = _client()
+    context = RequestContext(
+        user_id="user-1",
+        username="user-1",
+        merchant_id=merchant_id,
+        merchant_ids=[merchant_id],
+        permission_codes=["auto_wechat:douyin_ai_cs"],
+    )
+    client.app.dependency_overrides[get_request_context_optional] = lambda: context
+    return client
 
 
 def setup_function():
@@ -720,6 +735,198 @@ def test_sync_bind_info_updates_existing_account_without_duplicate():
         rows = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_same_open").all()
         assert len(rows) == 1
         assert rows[0].account_name == "Updated Name"
+    finally:
+        db.close()
+
+
+def test_sync_bind_info_writes_current_context_merchant_id_for_new_account():
+    client = _client_with_context("merchant-sync")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "user-merchant",
+                            "open_id": "account_new_merchant",
+                            "account_name": "Merchant Account",
+                            "bind_status": 1,
+                        }
+                    ]
+                },
+            },
+        )
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["upserted"] == 1
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_new_merchant").one()
+        assert row.merchant_id == "merchant-sync"
+    finally:
+        db.close()
+
+
+def test_sync_bind_info_backfills_empty_merchant_id_for_matched_account():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_empty_owner",
+                account_name="Old Empty Owner",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_context("merchant-sync")
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "user-merchant",
+                            "open_id": "account_empty_owner",
+                            "account_name": "Backfilled Owner",
+                            "bind_status": 1,
+                        }
+                    ]
+                },
+            },
+        )
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["backfilled_owner_count"] == 1
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_empty_owner").one()
+        assert row.merchant_id == "merchant-sync"
+        assert row.account_name == "Backfilled Owner"
+    finally:
+        db.close()
+
+
+def test_sync_bind_info_updates_current_merchant_existing_account():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_current_owner",
+                merchant_id="merchant-sync",
+                account_name="Current Owner Old",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_context("merchant-sync")
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "user-merchant",
+                            "open_id": "account_current_owner",
+                            "account_name": "Current Owner Updated",
+                            "bind_status": 1,
+                        }
+                    ]
+                },
+            },
+        )
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["upserted"] == 1
+    assert resp.json()["data"]["skipped_owner_conflict_count"] == 0
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_current_owner").one()
+        assert row.merchant_id == "merchant-sync"
+        assert row.account_name == "Current Owner Updated"
+    finally:
+        db.close()
+
+
+def test_sync_bind_info_skips_other_merchant_account_without_reassigning():
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_other_owner",
+                merchant_id="merchant-other",
+                account_name="Other Owner",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client_with_context("merchant-sync")
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "bind_list": [
+                        {
+                            "user_id": "user-merchant",
+                            "open_id": "account_other_owner",
+                            "account_name": "Should Not Override",
+                            "bind_status": 1,
+                        }
+                    ]
+                },
+            },
+        )
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["upserted"] == 0
+    assert data["skipped_owner_conflict_count"] == 1
+    assert data["warnings"][0]["code"] == "DOUYIN_ACCOUNT_OWNER_CONFLICT"
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_other_owner").one()
+        assert row.merchant_id == "merchant-other"
+        assert row.account_name == "Other Owner"
     finally:
         db.close()
 

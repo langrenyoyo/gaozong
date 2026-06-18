@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint, Index,
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -206,6 +206,8 @@ class DouyinAuthorizedAccount(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), index=True, comment="可信商户 ID，来自 RequestContext")
+    tenant_id = Column(String(128), index=True, comment="预留租户 ID，用于后续上游隔离")
     main_account_id = Column(Integer, nullable=False, comment="GMP main account id")
     open_id = Column(String(255), nullable=False, comment="Authorized Douyin account open_id")
     user_id = Column(String(255), comment="Douyin user id")
@@ -221,6 +223,32 @@ class DouyinAuthorizedAccount(Base):
     raw_body_json = Column(Text, comment="Raw list_bind_info item JSON")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DouyinAccountAgentBinding(Base):
+    """9000 权威抖音企业号与 AI 智能体绑定表。"""
+
+    __tablename__ = "douyin_account_agent_bindings"
+    __table_args__ = (
+        Index("idx_dy_account_agent_bindings_merchant_account", "merchant_id", "account_open_id"),
+        Index("idx_dy_account_agent_bindings_merchant_agent", "merchant_id", "agent_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
+    tenant_id = Column(String(128), comment="预留租户 ID")
+    account_open_id = Column(String(255), nullable=False, comment="抖音授权企业号 open_id")
+    douyin_authorized_account_id = Column(Integer, comment="关联 douyin_authorized_accounts.id")
+    agent_id = Column(String(64), nullable=False, comment="AI 智能体业务 ID")
+    is_default = Column(Boolean, nullable=False, default=True, comment="一期一个企业号只绑定一个默认智能体")
+    status = Column(String(20), nullable=False, default="active", comment="active/unbound/invalid/deleted")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    unbound_at = Column(DateTime)
+    deleted_at = Column(DateTime)
+    created_by = Column(String(128))
+    updated_by = Column(String(128))
+    invalid_reason = Column(String(255))
 
 
 class DouyinPrivateMessageSend(Base):

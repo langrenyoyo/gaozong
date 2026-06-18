@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app import config
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_optional
 from app.database import get_db
 from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
@@ -93,6 +95,7 @@ def accounts(db: Session = Depends(get_db)) -> DouyinLiveCheckAccountsResponse:
 @router.post("/accounts/sync-bind-info", response_model=DouyinBindInfoSyncResponse)
 def sync_accounts_bind_info(
     request: DouyinBindInfoSyncRequest = DouyinBindInfoSyncRequest(),
+    context: RequestContext | None = Depends(get_request_context_optional),
     db: Session = Depends(get_db),
 ) -> DouyinBindInfoSyncResponse:
     _ensure_enabled()
@@ -102,6 +105,7 @@ def sync_accounts_bind_info(
             page_num=request.page_num,
             page_size=request.page_size,
             name_or_open_id=request.name_or_open_id,
+            context=context,
         )
     )
 

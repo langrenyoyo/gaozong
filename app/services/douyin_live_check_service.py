@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
+from app.auth.context import RequestContext
 from app.models import DouyinAuthorizedAccount
 from app.services.douyin_openapi_client import (
     build_safe_openapi_error_detail,
@@ -290,6 +291,7 @@ def sync_bind_info_accounts(
     page_num: int = 1,
     page_size: int = 50,
     name_or_open_id: str | None = None,
+    context: RequestContext | None = None,
 ) -> dict[str, Any]:
     request_payload: dict[str, Any] = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,
@@ -320,6 +322,11 @@ def sync_bind_info_accounts(
     upserted = 0
     active_count = 0
     inactive_count = 0
+    backfilled_owner_count = 0
+    skipped_owner_conflict_count = 0
+    warnings: list[dict[str, Any]] = []
+    merchant_id = context.merchant_id if context and context.merchant_id else None
+    tenant_id = getattr(context, "tenant_id", None) if context else None
     for item in bind_list:
         if not isinstance(item, dict):
             continue
@@ -336,9 +343,34 @@ def sync_bind_info_accounts(
             row = DouyinAuthorizedAccount(
                 main_account_id=config.DY_MAIN_ACCOUNT_ID,
                 open_id=open_id,
+                merchant_id=merchant_id,
+                tenant_id=tenant_id,
                 created_at=_now(),
             )
             db.add(row)
+        elif merchant_id:
+            if not row.merchant_id:
+                row.merchant_id = merchant_id
+                row.tenant_id = tenant_id
+                backfilled_owner_count += 1
+            elif str(row.merchant_id) != str(merchant_id):
+                skipped_owner_conflict_count += 1
+                warning = {
+                    "code": "DOUYIN_ACCOUNT_OWNER_CONFLICT",
+                    "account_open_id": open_id,
+                    "owner_merchant_id": row.merchant_id,
+                    "request_merchant_id": merchant_id,
+                }
+                warnings.append(warning)
+                logger.warning(
+                    "Douyin bind-info sync skipped owner conflict: account_open_id=%s, owner_merchant_id=%s, request_merchant_id=%s",
+                    open_id,
+                    row.merchant_id,
+                    merchant_id,
+                )
+                continue
+            elif tenant_id and not row.tenant_id:
+                row.tenant_id = tenant_id
         row.user_id = _optional_str(item.get("user_id"))
         row.union_id = _optional_str(item.get("union_id"))
         row.account_name = _optional_str(item.get("account_name"))
@@ -362,6 +394,9 @@ def sync_bind_info_accounts(
         "upserted": upserted,
         "active_count": active_count,
         "inactive_count": inactive_count,
+        "backfilled_owner_count": backfilled_owner_count,
+        "skipped_owner_conflict_count": skipped_owner_conflict_count,
+        "warnings": warnings,
         "debug": result["debug"],
     }
 
