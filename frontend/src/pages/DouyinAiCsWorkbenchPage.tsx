@@ -735,14 +735,25 @@ export default function DouyinAiCsWorkbenchPage() {
                     <div className="text-[11px] text-slate-500">基于最新客户消息与 RAG 命中生成</div>
                   </div>
                 </div>
-                <button
-                  onClick={() => void generateReply()}
-                  disabled={!selectedConversation || !selectedAgent || generating}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {generating ? <LoaderIcon size={14} className="animate-spin" /> : <SparklesIcon size={14} />}
-                  生成回复建议
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {selectedConversation ? (
+                    <button
+                      onClick={() => openSendDialog()}
+                      disabled={!selectedAccount}
+                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      人工确认发送
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={() => void generateReply()}
+                    disabled={!selectedConversation || !selectedAgent || generating}
+                    className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {generating ? <LoaderIcon size={14} className="animate-spin" /> : <SparklesIcon size={14} />}
+                    生成回复建议
+                  </button>
+                </div>
               </div>
 
               <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -838,24 +849,6 @@ export default function DouyinAiCsWorkbenchPage() {
               ) : (
                 <EmptyState text="选择会话后点击生成回复建议。页面不会自动发送私信。" />
               )}
-
-              {selectedConversation ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] leading-5 text-amber-800">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>发送前请人工确认内容，后端会强制保持 auto_send=false。</span>
-                    <button
-                      onClick={() => openSendDialog()}
-                      disabled={!selectedAccount}
-                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      人工确认发送
-                    </button>
-                  </div>
-                  {!selectedConversation.conversation_short_id ? (
-                    <div className="mt-2 text-amber-700">当前会话缺少 conversation_short_id，确认发送时会提示原因。</div>
-                  ) : null}
-                </div>
-              ) : null}
             </div>
           </div>
         </section>
