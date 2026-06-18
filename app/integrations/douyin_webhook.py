@@ -23,7 +23,7 @@ from app.config import (
     DY_ALLOWED_DRIFT_SECONDS,
     DY_SECRET_KEY,
 )
-from app.models import DouyinLead, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
 
 logger = logging.getLogger("douyin_webhook")
@@ -317,24 +317,51 @@ def find_lead_by_source_id(db: Session, source_id: str) -> DouyinLead | None:
     )
 
 
+def find_lead_by_session(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_short_id: str,
+) -> DouyinLead | None:
+    """按 (account_open_id, conversation_short_id) 定位唯一会话线索。"""
+    return (
+        db.query(DouyinLead)
+        .filter(
+            DouyinLead.account_open_id == account_open_id,
+            DouyinLead.conversation_short_id == conversation_short_id,
+        )
+        .first()
+    )
+
+
 def upsert_lead_from_webhook(
     db: Session,
     payload: dict[str, Any],
     contact_result: ContactExtractResult,
     content: dict[str, Any] | None = None,
     message_text: str | None = None,
-) -> DouyinLead:
-    """从 webhook payload 创建或更新线索
+    *,
+    account_open_id: str | None = None,
+    conversation_short_id: str | None = None,
+    merchant_id: str | None = None,
+) -> tuple[DouyinLead, str]:
+    """从 webhook payload 创建或更新线索（会话维度归并）。
 
-    规则：
-    - 不存在 → 创建（status=pending）
-    - 已存在且 pending → 更新 customer_name/content/raw_data
-    - 已存在且非 pending → 不修改业务状态，仅返回
+    聚合键：(account_open_id, conversation_short_id)。
+    - 不存在 → 创建（status=pending），返回 action="created"
+    - 已存在且 pending → 更新 customer_name/content/raw_data/customer_contact，action="updated"
+    - 已存在且非 pending → 不修改业务状态，action="skipped"
+
+    source_id 继续保存客户 open_id（from_user_id），但不再作聚合主键。
+    merchant_id/account_open_id/conversation_short_id 来自调用方（反查企业号绑定结果）。
+    返回 (lead, action)。
     """
     content = content if content is not None else parse_content(payload.get("content"))
     from_user_id = payload.get("from_user_id") or ""
     if not from_user_id:
         raise ValueError("webhook payload 缺少 from_user_id")
+    if not account_open_id or not conversation_short_id:
+        raise ValueError("webhook 会话归并缺少 account_open_id 或 conversation_short_id")
 
     nick_name, _avatar = extract_user_profile(payload)
     message_text = message_text if message_text is not None else normalize_message_text(content)
@@ -356,13 +383,20 @@ def upsert_lead_from_webhook(
         },
     }
 
-    existing = find_lead_by_source_id(db, from_user_id)
+    existing = find_lead_by_session(
+        db,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+    )
 
     if existing is None:
-        # 新建线索
+        # 新建线索（会话归并）
         lead = DouyinLead(
             source="douyin",
             source_id=from_user_id,
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
             customer_name=nick_name or "未命名客户",
             customer_contact=customer_contact,
             content=message_text,
@@ -373,35 +407,37 @@ def upsert_lead_from_webhook(
         db.add(lead)
         db.flush()
         logger.info(
-            "webhook 新建线索: lead_id=%d, source_id=%s, customer_name=%s",
+            "webhook 新建线索(会话归并): lead_id=%d, account_open_id=%s, conv=%s, merchant_id=%s, customer_name=%s",
             lead.id,
-            from_user_id[:8] + "...",
+            account_open_id[:8] + "...",
+            conversation_short_id,
+            merchant_id,
             lead.customer_name,
         )
-        return lead
+        return lead, "created"
 
     if existing.status == "pending":
-        # 更新允许的字段
+        # 更新允许的字段（联系方式 best-effort：有则覆盖，无则保留历史留资）
         existing.customer_name = nick_name or existing.customer_name or "未命名客户"
-        existing.customer_contact = customer_contact
+        existing.customer_contact = customer_contact or existing.customer_contact
         existing.content = message_text or existing.content
         existing.raw_data = json.dumps(raw_data, ensure_ascii=False)
         db.flush()
         logger.info(
-            "webhook 更新线索: lead_id=%d, source_id=%s, status=pending",
+            "webhook 更新线索(会话归并): lead_id=%d, conv=%s, status=pending",
             existing.id,
-            from_user_id[:8] + "...",
+            conversation_short_id,
         )
-        return existing
+        return existing, "updated"
 
-    # 非 pending 状态，不覆盖
+    # 非 pending 状态，不覆盖业务状态
     logger.info(
-        "webhook 跳过线索: lead_id=%d, source_id=%s, status=%s",
+        "webhook 跳过线索(会话归并): lead_id=%d, conv=%s, status=%s",
         existing.id,
-        from_user_id[:8] + "...",
+        conversation_short_id,
         existing.status,
     )
-    return existing
+    return existing, "skipped"
 
 
 # ========== 主处理流程 ==========
@@ -452,49 +488,75 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
     is_new_lead = False
     lead_action = "not_lead_event"
 
-    # 只有 im_receive_msg 才写入线索
+    # 只有 im_receive_msg 才尝试生成/更新线索
     if event_type == "im_receive_msg":
-        existing = find_lead_by_source_id(db, from_user_id) if from_user_id else None
-        was_existing = existing is not None
         content = parse_content(payload.get("content"))
         message_text = normalize_message_text(content)
+        conversation_short_id = _optional_str(content.get("conversation_short_id"))
+        # 企业号 open_id = 私信接收方 to_user_id（非客户 from_user_id）
+        account_open_id = _optional_str(payload.get("to_user_id"))
+
+        # 反查企业号绑定 → 可信 merchant_id（来自 douyin_authorized_accounts，不来自 GMP/前端）
+        merchant_id: str | None = None
+        binding_state = "merchant_unresolved"
+        if account_open_id:
+            account = (
+                db.query(DouyinAuthorizedAccount)
+                .filter(
+                    DouyinAuthorizedAccount.open_id == account_open_id,
+                    DouyinAuthorizedAccount.bind_status == 1,
+                )
+                .first()
+            )
+            if account is None:
+                binding_state = "unbound_account"
+            elif not account.merchant_id:
+                binding_state = "merchant_unresolved"
+            else:
+                merchant_id = account.merchant_id
+                binding_state = "bound"
 
         if not is_text_message(content):
             lead_action = "invalid_contact"
             logger.info(
-                "webhook 非文本私信不生成线索: event=%s, source_id=%s, message_type=%s",
+                "webhook 非文本私信不生成线索: event=%s, account_open_id=%s, message_type=%s",
                 event_type,
-                from_user_id[:8] + "...",
+                (account_open_id or "")[:8] + "...",
                 content.get("message_type"),
+            )
+        elif binding_state != "bound":
+            # 未绑定 / 未解析商户：只记录原始事件，不进入任何商户线索
+            lead_action = binding_state
+            logger.info(
+                "webhook 跳过线索(%s): account_open_id=%s, conv=%s",
+                binding_state,
+                (account_open_id or "")[:8] + "...",
+                conversation_short_id,
+            )
+        elif not conversation_short_id:
+            lead_action = "missing_conversation"
+            logger.info(
+                "webhook 跳过线索(缺会话ID): account_open_id=%s",
+                (account_open_id or "")[:8] + "...",
             )
         else:
             contact_result = extract_contacts_from_text(message_text)
-            if contact_result.status == "matched" and (contact_result.phone or contact_result.wechat):
-                lead = upsert_lead_from_webhook(
-                    db,
-                    payload,
-                    contact_result=contact_result,
-                    content=content,
-                    message_text=message_text,
-                )
-                lead_id = lead.id
-
-                if not was_existing:
-                    is_new_lead = True
-                    lead_action = "created"
-                elif existing.status == "pending":
-                    lead_action = "updated"
-                else:
-                    lead_action = "skipped"
-            else:
-                lead_action = "invalid_contact"
-                logger.info(
-                    "webhook 未提取到联系方式，不生成线索: event=%s, source_id=%s, extract_status=%s, reason=%s",
-                    event_type,
-                    from_user_id[:8] + "...",
-                    contact_result.status,
-                    contact_result.failure_reason,
-                )
+            # 会话归并：已绑定企业号的文本消息总会话归并生成/更新线索；
+            # 联系方式提取为 best-effort，仅影响留资状态，不阻断线索创建。
+            lead, upsert_action = upsert_lead_from_webhook(
+                db,
+                payload,
+                contact_result=contact_result,
+                content=content,
+                message_text=message_text,
+                account_open_id=account_open_id,
+                conversation_short_id=conversation_short_id,
+                merchant_id=merchant_id,
+            )
+            lead_id = lead.id
+            lead_action = upsert_action
+            if upsert_action == "created":
+                is_new_lead = True
 
     # 首次收到的事件，写入事件日志
     event = persist_webhook_event(

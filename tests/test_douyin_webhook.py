@@ -27,8 +27,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base
+from app.database import Base, get_db
 from app.models import (
+    DouyinAuthorizedAccount,
     DouyinLead,
     DouyinWebhookEvent,
     SalesStaff,
@@ -67,12 +68,30 @@ def setup_module(module):
     db = _db()
     for key, value in DEFAULT_CONFIGS.items():
         db.add(CheckConfig(config_key=key, config_value=value, description=f"测试配置: {key}"))
+    # 预置企业号绑定：使 _sample_payload 的 to_user_id="test_account_001" 可反查 merchant_id
+    db.add(DouyinAuthorizedAccount(
+        main_account_id=1, open_id="test_account_001",
+        merchant_id="test_merchant_001", bind_status=1,
+    ))
     db.commit()
     db.close()
 
 
 def teardown_module(module):
     Base.metadata.drop_all(bind=test_engine)
+
+
+def setup_function(function):
+    """每个测试前清理线索/事件，保留企业号绑定与配置（module 级预置）。
+
+    会话维度归并后，固定 (account_open_id, conversation_short_id) 会跨测试串数据，
+    需逐用例清空 douyin_leads / douyin_webhook_events。
+    """
+    db = _db()
+    db.query(DouyinLead).delete()
+    db.query(DouyinWebhookEvent).delete()
+    db.commit()
+    db.close()
 
 
 # ========== 辅助函数 ==========
@@ -106,6 +125,27 @@ def _sample_payload(event="im_receive_msg", from_user_id="test_user_001", nick_n
             "text": message_text,
         }),
     }
+
+
+def _db_session():
+    """test_engine session 生成器（API 端点测试 override get_db 用）。"""
+    db = TestSession()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _api_client():
+    """API 端点测试客户端：override get_db 到 test_engine，共享 setup_module 预置的企业号绑定。
+
+    避免 API 端点测试写入生产文件 db（data/auto_wechat.db）。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    app = create_app()
+    app.dependency_overrides[get_db] = _db_session
+    return TestClient(app)
 
 
 # ========== 验签测试 ==========
@@ -383,15 +423,16 @@ def test_process_webhook_duplicate_event():
     db.close()
 
 
-def test_process_webhook_invalid_contact_writes_event_without_lead():
-    """im_receive_msg 文本无联系方式 → 仍写原始事件，不创建 douyin_leads"""
+def test_process_webhook_unbound_account_writes_event_without_lead():
+    """im_receive_msg 企业号未绑定 → 仍写原始事件，不创建 douyin_leads"""
     db = _db()
-    payload = _sample_payload(from_user_id="wh_no_contact_001", message_text="你好，我想咨询")
+    payload = _sample_payload(from_user_id="wh_no_contact_001", message_text="电话 13812345678")
+    payload["to_user_id"] = "unbound_account_001"
 
     result = process_webhook_event(db, payload)
     db.commit()
 
-    assert result["lead_action"] == "invalid_contact"
+    assert result["lead_action"] == "unbound_account"
     assert result["lead_id"] is None
     assert result["is_new_lead"] is False
 
@@ -446,7 +487,8 @@ def test_process_webhook_invalid_content_json_does_not_create_lead():
     result = process_webhook_event(db, payload)
     db.commit()
 
-    assert result["lead_action"] == "invalid_contact"
+    # content 解析失败 → conversation_short_id 缺失 → missing_conversation（不创建线索）
+    assert result["lead_action"] == "missing_conversation"
     assert result["lead_id"] is None
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_bad_content_001").first()
     assert lead is None
@@ -483,8 +525,11 @@ def test_process_webhook_non_text_message_does_not_create_lead():
     db.close()
 
 
-def test_process_webhook_ignores_top_level_phone_and_wechat():
-    """顶层有 phone/wechat 但私信文本无联系方式 → 不创建线索"""
+def test_process_webhook_text_without_contact_still_creates_lead_best_effort():
+    """已绑定企业号的文本消息（无联系方式）→ 仍创建线索（best-effort 留资为空）。
+
+    顶层 phone/wechat 不被当作留资，留资仅来自文本提取。
+    """
     db = _db()
     payload = _sample_payload(from_user_id="wh_top_contact_001", message_text="你好，想了解一下")
     payload["phone"] = "13812345678"
@@ -493,18 +538,20 @@ def test_process_webhook_ignores_top_level_phone_and_wechat():
     result = process_webhook_event(db, payload)
     db.commit()
 
-    assert result["lead_action"] == "invalid_contact"
-    assert result["lead_id"] is None
+    assert result["lead_action"] == "created"
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_top_contact_001").first()
-    assert lead is None
+    assert lead is not None
+    # 文本无联系方式 → customer_contact 为空（顶层 phone/wechat 不被采纳）
+    assert lead.customer_contact in (None, "")
 
+    db.delete(lead)
     db.query(DouyinWebhookEvent).delete()
     db.commit()
     db.close()
 
 
-def test_process_webhook_ignores_retain_consult_card_without_text_contact():
-    """retain_consult_card 存在但私信文本无联系方式 → 不创建线索"""
+def test_process_webhook_text_without_contact_creates_lead_ignoring_consult_card():
+    """retain_consult_card 存在但私信文本无联系方式 → 仍创建线索（consult_card 不被当作留资）"""
     db = _db()
     payload = _sample_payload(from_user_id="wh_card_001", message_text="你好，想了解一下")
     content = json.loads(payload["content"])
@@ -514,24 +561,26 @@ def test_process_webhook_ignores_retain_consult_card_without_text_contact():
     result = process_webhook_event(db, payload)
     db.commit()
 
-    assert result["lead_action"] == "invalid_contact"
-    assert result["lead_id"] is None
+    assert result["lead_action"] == "created"
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_card_001").first()
-    assert lead is None
+    assert lead is not None
+    assert lead.customer_contact in (None, "")
 
+    db.delete(lead)
     db.query(DouyinWebhookEvent).delete()
     db.commit()
     db.close()
 
 
-def test_process_webhook_empty_contact():
-    """无联系方式 → 只记录原始事件，不创建线索"""
+def test_process_webhook_empty_contact_creates_lead_with_default_name():
+    """已绑定企业号、无联系方式、nick_name 缺失 → 仍创建线索，customer_name 用默认值"""
     db = _db()
     payload = _sample_payload(from_user_id="wh_empty_001", nick_name=None, message_text="测试")
 
-    # nick_name 为 None 时应用默认值
+    # nick_name 为 None 时应用默认值；补 conversation_short_id 以满足会话归并
     payload["content"] = json.dumps({
         "create_time": int(time.time() * 1000),
+        "conversation_short_id": "conv_empty_001",
         "message_type": "text",
         "user_infos": [{"open_id": "wh_empty_001", "nick_name": None, "avatar": ""}],
     })
@@ -540,16 +589,13 @@ def test_process_webhook_empty_contact():
         result = process_webhook_event(db, payload)
     db.commit()
 
-    assert result["lead_action"] == "invalid_contact"
-    assert result["lead_id"] is None
-    assert result["is_new_lead"] is False
+    assert result["lead_action"] == "created"
+    assert result["is_new_lead"] is True
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_empty_001").first()
-    assert lead is None
+    assert lead is not None
+    assert lead.customer_name == "未命名客户"
 
-    event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.from_user_id == "wh_empty_001").first()
-    assert event is not None
-    assert event.lead_id is None
-
+    db.delete(lead)
     db.query(DouyinWebhookEvent).delete()
     db.commit()
     db.close()
@@ -567,6 +613,9 @@ def test_process_webhook_non_pending_no_overwrite():
     existing = DouyinLead(
         source="douyin",
         source_id="wh_assigned_001",
+        account_open_id="test_account_001",
+        conversation_short_id="conv_test_001",
+        merchant_id="test_merchant_001",
         customer_name="旧名称",
         content="旧内容",
         status="assigned",
@@ -608,6 +657,9 @@ def test_process_webhook_pending_update():
     existing = DouyinLead(
         source="douyin",
         source_id="wh_pending_001",
+        account_open_id="test_account_001",
+        conversation_short_id="conv_test_001",
+        merchant_id="test_merchant_001",
         customer_name="旧名称",
         content="旧内容",
         status="pending",
@@ -646,7 +698,7 @@ def test_process_webhook_content_as_object():
     payload = {
         "event": "im_receive_msg",
         "from_user_id": "wh_obj_001",
-        "to_user_id": "test_account",
+        "to_user_id": "test_account_001",
         # content 直接是 dict，不是 JSON 字符串
         "content": {
             "create_time": int(time.time() * 1000),
@@ -683,11 +735,7 @@ def test_process_webhook_content_as_object():
 
 def test_webhook_api_no_auth_success():
     """auth_required=false：POST /integrations/douyin/webhook 无签名合法 payload → 200"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     uid = f"noauth_{int(time.time())}"
     payload = _sample_payload(from_user_id=uid, nick_name="无鉴权测试", message_text="电话 13812345678")
@@ -710,11 +758,7 @@ def test_webhook_api_no_auth_success():
 
 def test_webhook_legacy_api_no_auth_success():
     """auth_required=false：POST /webhook/douyin 无签名合法 payload → 200，创建线索"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     uid = f"legacy_noauth_{int(time.time())}"
     payload = _sample_payload(from_user_id=uid, nick_name="兼容路径无鉴权", message_text="微信 abc123")
@@ -738,11 +782,7 @@ def test_webhook_legacy_api_no_auth_success():
 
 def test_webhook_legacy_and_main_path_idempotent_no_auth():
     """auth_required=false：同一事件跨两路径 → 只创建 1 条线索（共享幂等 event_key）"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     uid = f"cross_path_{int(time.time())}"
     payload = _sample_payload(from_user_id=uid, nick_name="跨路径幂等测试", message_text="电话 13812345678")
@@ -781,11 +821,7 @@ def test_webhook_legacy_and_main_path_idempotent_no_auth():
 
 def test_webhook_api_auth_required_success():
     """auth_required=true：正确签名 → 200"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     uid = f"authok_{int(time.time())}"
     payload = _sample_payload(from_user_id=uid, nick_name="鉴权通过测试", message_text="电话 13812345678")
@@ -812,11 +848,7 @@ def test_webhook_api_auth_required_success():
 
 def test_webhook_api_auth_required_no_signature():
     """auth_required=true：POST /integrations/douyin/webhook 无签名头 → 401"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
          patch("app.config.APP_ENV", "development"):
@@ -831,11 +863,7 @@ def test_webhook_api_auth_required_no_signature():
 
 def test_webhook_api_auth_required_wrong_signature():
     """auth_required=true：签名错误 → 401"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     payload = _sample_payload(from_user_id="wrong_sig_auth")
     body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -858,11 +886,7 @@ def test_webhook_api_auth_required_wrong_signature():
 
 def test_webhook_legacy_api_auth_required_no_signature():
     """auth_required=true：POST /webhook/douyin 无签名头 → 401"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
          patch("app.config.APP_ENV", "development"):
@@ -877,11 +901,7 @@ def test_webhook_legacy_api_auth_required_no_signature():
 
 def test_webhook_production_forces_auth_when_config_false():
     """production：即使 DOUYIN_WEBHOOK_AUTH_REQUIRED=false，无签名也必须拒绝"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     payload = _sample_payload(from_user_id=f"prod_noauth_{int(time.time())}")
     body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -899,11 +919,7 @@ def test_webhook_production_forces_auth_when_config_false():
 
 def test_webhook_production_missing_secret_rejects_request():
     """production：缺少 DY_SECRET_KEY 时不得静默放行 webhook 请求"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     payload = _sample_payload(from_user_id=f"prod_nosecret_{int(time.time())}")
     body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -926,11 +942,7 @@ def test_webhook_production_missing_secret_rejects_request():
 
 def test_webhook_both_paths_force_auth_in_production():
     """production：两个 webhook 路径都不能绕过验签"""
-    from fastapi.testclient import TestClient
-    from app.main import create_app
-
-    app = create_app()
-    client = TestClient(app)
+    client = _api_client()
 
     payload = _sample_payload(from_user_id=f"prod_paths_{int(time.time())}")
     body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

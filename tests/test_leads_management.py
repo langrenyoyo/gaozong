@@ -77,6 +77,7 @@ def _seed_staff_and_leads() -> dict:
             customer_contact="13812345678",
             content="想看车，预算十万，电话 13812345678",
             source_id="open-1",
+            merchant_id="merchant-a",
             status="pending",
             raw_data=retained_raw,
         ),
@@ -87,6 +88,7 @@ def _seed_staff_and_leads() -> dict:
             customer_contact=None,
             content="先了解一下",
             source_id="open-2",
+            merchant_id="merchant-a",
             status="assigned",
             assigned_staff_id=staff_a.id,
         ),
@@ -97,6 +99,7 @@ def _seed_staff_and_leads() -> dict:
             customer_contact="wx-qian",
             content="微信 wx-qian，问最低价格",
             source_id="open-3",
+            merchant_id="merchant-a",
             status="replied",
             assigned_staff_id=staff_b.id,
             raw_data=json.dumps(

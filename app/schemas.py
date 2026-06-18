@@ -406,6 +406,9 @@ class LeadOut(BaseModel):
     content: Optional[str] = None
     source_url: Optional[str] = None
     source_id: Optional[str] = None
+    merchant_id: Optional[str] = None
+    account_open_id: Optional[str] = None
+    conversation_short_id: Optional[str] = None
     assigned_staff_id: Optional[int] = None
     assigned_at: Optional[datetime] = None
     status: str
@@ -434,6 +437,9 @@ class LeadOut(BaseModel):
                 "content": getattr(value, "content", None),
                 "source_url": getattr(value, "source_url", None),
                 "source_id": getattr(value, "source_id", None),
+                "merchant_id": getattr(value, "merchant_id", None),
+                "account_open_id": getattr(value, "account_open_id", None),
+                "conversation_short_id": getattr(value, "conversation_short_id", None),
                 "city": getattr(value, "city", None),
                 "car_model": getattr(value, "car_model", None),
                 "budget": getattr(value, "budget", None),
@@ -529,6 +535,9 @@ class ReportSummary(BaseModel):
     lead_growth_rate: Optional[float] = None
     sales_response_rate: Optional[float] = None
     retained_contact_rate: Optional[float] = None
+    # 语义别名（D4）：与 retained_* 数值一致，便于前端语义化展示
+    converted_leads: int = 0
+    conversion_rate: Optional[float] = None
     high_intent_hint: Optional[str] = None
     replied_count: int = 0
     timeout_count: int = 0

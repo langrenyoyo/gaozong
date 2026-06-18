@@ -8,10 +8,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
 from app.integrations.douyin_webhook import process_webhook_event
-from app.models import DouyinLead
+from app.models import DouyinAuthorizedAccount, DouyinLead
 from app.routers.leads import router as leads_router
+
+# 测试固定商户：企业号绑定 / 请求上下文 / 直接创建的线索 merchant_id 必须一致
+MERCHANT_ID = "test_merchant_001"
 
 
 test_engine = create_engine(
@@ -25,6 +30,13 @@ TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 def setup_function():
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
+    # 预置企业号绑定，使 webhook to_user_id="account_001" 可反查 merchant_id
+    db = TestSession()
+    db.add(DouyinAuthorizedAccount(
+        main_account_id=1, open_id="account_001", merchant_id=MERCHANT_ID, bind_status=1,
+    ))
+    db.commit()
+    db.close()
 
 
 def _client() -> TestClient:
@@ -39,6 +51,14 @@ def _client() -> TestClient:
             db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
+    # 注入固定商户上下文（merchant_id 来自登录态，不来自前端）
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="test-user",
+        username="test-user",
+        merchant_id=MERCHANT_ID,
+        merchant_ids=[MERCHANT_ID],
+        permission_codes=["auto_wechat:leads"],
+    )
     return TestClient(app)
 
 
@@ -116,6 +136,7 @@ def test_leads_contact_fields_tolerate_legacy_raw_data_without_contact_extract()
         customer_contact="legacy_contact",
         content="旧线索内容",
         source_id="legacy_user_001",
+        merchant_id=MERCHANT_ID,
         raw_data=json.dumps({"legacy": True}, ensure_ascii=False),
         status="pending",
     )
@@ -135,17 +156,20 @@ def test_leads_contact_fields_tolerate_legacy_raw_data_without_contact_extract()
     assert item["original_message_text"] == "旧线索内容"
 
 
-def test_invalid_and_duplicate_events_do_not_add_extra_leads():
+def test_unbound_and_duplicate_events_do_not_add_extra_leads():
+    """未绑定企业号不建线索；重复事件不重复建线索。"""
     db = TestSession()
 
-    invalid_result = process_webhook_event(
-        db,
-        _payload(
-            from_user_id="lead_invalid_user_001",
-            text="我想了解一下",
-            server_message_id="invalid_msg_001",
-        ),
+    # 未绑定企业号 → 不创建线索（只记录原始事件）
+    unbound_payload = _payload(
+        from_user_id="lead_unbound_user_001",
+        text="电话 13812345678",
+        server_message_id="unbound_msg_001",
     )
+    unbound_payload["to_user_id"] = "unbound_account_001"
+    unbound_result = process_webhook_event(db, unbound_payload)
+
+    # 已绑定企业号首条 → 创建线索
     first_result = process_webhook_event(
         db,
         _payload(
@@ -154,6 +178,7 @@ def test_invalid_and_duplicate_events_do_not_add_extra_leads():
             server_message_id="dup_msg_001",
         ),
     )
+    # 同事件重复到达 → 不重复创建
     duplicate_result = process_webhook_event(
         db,
         _payload(
@@ -165,7 +190,7 @@ def test_invalid_and_duplicate_events_do_not_add_extra_leads():
     db.commit()
     db.close()
 
-    assert invalid_result["lead_action"] == "invalid_contact"
+    assert unbound_result["lead_action"] == "unbound_account"
     assert duplicate_result["lead_action"] == "duplicate_event"
 
     resp = _client().get("/leads")
@@ -184,6 +209,7 @@ def test_lead_payload_exposes_safe_derived_display_fields_and_status_label():
         customer_contact="13800000000",
         content="璇鋒鎴忓珌杞︽",
         source_id="open-safe-001",
+        merchant_id=MERCHANT_ID,
         source_url="https://example.com/leads/open-safe-001",
         raw_data=json.dumps(
             {

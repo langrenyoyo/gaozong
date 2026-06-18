@@ -39,11 +39,14 @@ def list_leads(
 ):
     """获取线索列表，默认返回数组以兼容旧前端。"""
     _auth(context)
+    # super_admin 可跨商户；非 super_admin 按当前商户过滤（merchant_id 来自 context，不来自前端）
+    merchant_id = None if context.super_admin else context.merchant_id
     query = LeadListQuery(
         keyword=keyword,
         source=source,
         status=status,
         assigned_staff_id=int(assigned_staff_id) if assigned_staff_id else None,
+        merchant_id=merchant_id,
         page=page,
         page_size=page_size,
     )
@@ -75,8 +78,7 @@ def get_lead(
     """获取单条线索详情。"""
     _auth(context)
     lead = lead_service.get_lead(db, lead_id)
-    if not lead:
-        raise HTTPException(404, "线索不存在")
+    lead_management_service.require_lead_ownership(lead, context)
     return lead_management_service.build_lead_payload(db, lead, include_detail=True)
 
 
@@ -89,6 +91,9 @@ def assign_lead(
 ):
     """分配或重新分配线索给销售，并记录分配备注。"""
     _auth(context)
+    # 先校验归属，避免跨商户分配（super_admin 可跨商户）
+    existing = lead_service.get_lead(db, lead_id)
+    lead_management_service.require_lead_ownership(existing, context)
     try:
         lead = assign_service.assign_lead(
             db,

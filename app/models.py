@@ -30,6 +30,13 @@ class SalesStaff(Base):
 class DouyinLead(Base):
     """抖音线索表"""
     __tablename__ = "douyin_leads"
+    __table_args__ = (
+        Index("idx_douyin_leads_merchant_account", "merchant_id", "account_open_id"),
+        UniqueConstraint(
+            "account_open_id", "conversation_short_id",
+            name="uk_douyin_leads_account_conv",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source = Column(String(20), default="douyin", comment="来源平台")
@@ -38,7 +45,10 @@ class DouyinLead(Base):
     customer_contact = Column(String(100), comment="联系方式")
     content = Column(Text, comment="线索内容")
     source_url = Column(String(500), comment="来源链接")
-    source_id = Column(String(100), comment="来源平台ID")
+    source_id = Column(String(100), comment="客户 open_id（from_user_id，保留不再作聚合主键）")
+    merchant_id = Column(String(128), index=True, comment="可信商户 ID，来自 RequestContext")
+    account_open_id = Column(String(255), index=True, comment="企业号 open_id（私信接收方 to_user_id）")
+    conversation_short_id = Column(String(255), index=True, comment="抖音会话短 ID，线索聚合主键")
     assigned_staff_id = Column(Integer, ForeignKey("sales_staff.id"), comment="分配的销售ID")
     assigned_at = Column(DateTime, comment="分配时间")
     status = Column(String(20), default="pending", comment="状态: pending/assigned/replied/timeout/closed")

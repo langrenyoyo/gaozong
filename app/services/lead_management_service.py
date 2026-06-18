@@ -48,6 +48,7 @@ class LeadListQuery:
     source: str | None = None
     status: str | None = None
     assigned_staff_id: int | None = None
+    merchant_id: str | None = None
     page: int = 1
     page_size: int = 50
 
@@ -141,6 +142,9 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
         "content": lead.content,
         "source_url": lead.source_url,
         "source_id": lead.source_id,
+        "merchant_id": lead.merchant_id,
+        "account_open_id": lead.account_open_id,
+        "conversation_short_id": lead.conversation_short_id,
         "assigned_staff_id": lead.assigned_staff_id,
         "assigned_at": lead.assigned_at,
         "status": lead.status,
@@ -188,6 +192,9 @@ def _staff_payload(staff: SalesStaff | None) -> dict[str, Any] | None:
 
 def _lead_query(db: Session, query: LeadListQuery):
     q = db.query(DouyinLead)
+    # 商户隔离：非空时按 merchant_id 过滤（super_admin 传 None 跳过）
+    if query.merchant_id:
+        q = q.filter(DouyinLead.merchant_id == query.merchant_id)
     if query.keyword:
         like = f"%{query.keyword.strip()}%"
         q = q.filter(
@@ -220,8 +227,12 @@ def list_leads(db: Session, query: LeadListQuery) -> list[DouyinLead]:
     return q.order_by(DouyinLead.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
 
-def summary(db: Session) -> dict[str, int]:
-    leads = db.query(DouyinLead).all()
+def summary(db: Session, merchant_id: str | None = None) -> dict[str, int]:
+    """返回留资 / 高意向计数（merchant_id 非空时按商户过滤）。"""
+    q = db.query(DouyinLead)
+    if merchant_id:
+        q = q.filter(DouyinLead.merchant_id == merchant_id)
+    leads = q.all()
     return {
         "retained_contact_count": sum(1 for lead in leads if has_retained_contact(lead)),
         "high_intent_count": sum(1 for lead in leads if is_high_intent(lead)),
@@ -285,8 +296,43 @@ def _timeline_item(
 
 
 def require_leads_context(context: RequestContext) -> None:
-    """P1 阶段仅做权限检查；merchant_id 待 douyin_leads 补字段后再强隔离。"""
-    if not context.has_permission("auto_wechat:leads"):
-        from fastapi import HTTPException
+    """权限 + 可信商户上下文校验。
 
-        raise HTTPException(status_code=403, detail={"code": "PERMISSION_DENIED", "message": "缺少权限 auto_wechat:leads"})
+    - 必须拥有 auto_wechat:leads 权限
+    - 非 super_admin 必须携带可信 merchant_id（来自 NewCarProject 登录态，不来自前端）
+    """
+    from fastapi import HTTPException
+
+    if not context.has_permission("auto_wechat:leads"):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PERMISSION_DENIED", "message": "缺少权限 auto_wechat:leads"},
+        )
+    # super_admin 可跨商户；非 super_admin 必须有可信商户上下文
+    if not context.super_admin and not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+
+
+def require_lead_ownership(lead: DouyinLead | None, context: RequestContext) -> None:
+    """校验线索归属当前商户（跨商户 / 历史 NULL 统一返回 404，不泄露存在性）。
+
+    - super_admin 可访问任意线索
+    - 非 super_admin：lead 必须存在且 lead.merchant_id == context.merchant_id
+    """
+    from fastapi import HTTPException
+
+    if lead is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LEAD_NOT_FOUND", "message": "线索不存在"},
+        )
+    if context.super_admin:
+        return
+    if not lead.merchant_id or lead.merchant_id != context.merchant_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LEAD_NOT_FOUND", "message": "线索不存在"},
+        )
