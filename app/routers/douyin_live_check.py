@@ -13,6 +13,8 @@ from app.routers.integrations import _handle_douyin_webhook
 from app.schemas import (
     DouyinBindInfoSyncRequest,
     DouyinBindInfoSyncResponse,
+    DouyinImageUploadRequest,
+    DouyinImageUploadResponse,
     DouyinLiveCheckAccountsResponse,
     DouyinLiveCheckAuthUrlResponse,
     DouyinLiveCheckObserveResponse,
@@ -22,6 +24,7 @@ from app.schemas import (
     DouyinResourceDownloadRequest,
     DouyinResourceDownloadResponse,
 )
+from app.services.douyin_image_upload_service import upload_douyin_image
 from app.services.douyin_live_check_service import (
     build_auth_url,
     fetch_auth_url,
@@ -136,6 +139,21 @@ def download_resource(
         url=request.url,
     )
     return DouyinResourceDownloadResponse(data=data)
+
+
+@router.post("/resources/upload-image", response_model=DouyinImageUploadResponse)
+def upload_image(
+    request: DouyinImageUploadRequest,
+    db: Session = Depends(get_db),
+) -> DouyinImageUploadResponse:
+    _ensure_enabled()
+    data = upload_douyin_image(
+        db,
+        file_name=request.file_name,
+        image_base64=request.image_base64,
+        open_id=request.open_id,
+    )
+    return DouyinImageUploadResponse(data=data)
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)

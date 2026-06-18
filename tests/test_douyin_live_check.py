@@ -25,6 +25,7 @@ from app.database import Base, get_db
 from app.main import create_app
 from app.models import (
     DouyinAuthorizedAccount,
+    DouyinImageUpload,
     DouyinLead,
     DouyinMessageResourceDownload,
     DouyinPrivateMessageSend,
@@ -233,6 +234,12 @@ def _insert_resource_event(
         db.commit()
     finally:
         db.close()
+
+
+def _image_base64(raw: bytes) -> str:
+    import base64
+
+    return base64.b64encode(raw).decode("ascii")
 
 
 def test_live_check_disabled_returns_clear_error():
@@ -1092,6 +1099,193 @@ def test_download_resource_upstream_business_error_persists_failed_record_withou
         record = db.query(DouyinMessageResourceDownload).one()
         assert record.resource_status == "failed"
         assert record.error_message == "download failed"
+    finally:
+        db.close()
+
+
+def test_upload_image_success_uses_signed_openapi_body_and_persists_sanitized_record():
+    client = _client()
+    png_base64 = _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "image_id": "@image_id_001==",
+                    "width": 111,
+                    "height": 222,
+                    "md5": "upstream-md5",
+                },
+            },
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/upload-image",
+            json={
+                "file_name": "test.png",
+                "image_base64": f"data:image/png;base64,{png_base64}",
+                "open_id": "customer_open_001",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["upload_status"] == "success"
+    assert data["image_id"] == "@image_id_001=="
+    assert data["width"] == 111
+    assert data["height"] == 222
+    assert data["md5"] == "upstream-md5"
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/upload_image_file"
+    )
+    assert "json" not in mock_post.call_args.kwargs
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body == {
+        "main_account_id": 123,
+        "image_base64": png_base64,
+        "file_name": "test.png",
+        "open_id": "customer_open_001",
+    }
+    assert mock_post.call_args.kwargs["headers"]["Authorization"]
+
+    db = TestSession()
+    try:
+        record = db.query(DouyinImageUpload).one()
+        assert record.upload_status == "success"
+        assert record.main_account_id == 123
+        assert record.open_id == "customer_open_001"
+        assert record.file_name == "test.png"
+        assert record.file_ext == "png"
+        assert record.mime_type == "image/png"
+        assert record.upstream_image_id == "@image_id_001=="
+        assert record.upstream_width == 111
+        assert record.upstream_height == 222
+        assert record.upstream_md5 == "upstream-md5"
+        assert png_base64 not in record.request_body_json
+        assert "image_base64_sha256" in record.request_body_json
+    finally:
+        db.close()
+
+
+def test_upload_image_accepts_jpeg_bmp_and_webp_headers():
+    cases = [
+        ("photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 12, "image/jpeg"),
+        ("photo.jpeg", b"\xff\xd8\xff\xe1" + b"\x00" * 12, "image/jpeg"),
+        ("bitmap.bmp", b"BM" + b"\x00" * 14, "image/bmp"),
+        ("asset.webp", b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 8, "image/webp"),
+    ]
+    for index, (file_name, raw, mime_type) in enumerate(cases):
+        setup_function()
+        client = _client()
+        with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+             patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+             patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+            mock_post.return_value = FakeUpstreamResponse(
+                200,
+                {"code": 0, "msg": "success", "data": {"image_id": f"img-{index}"}},
+            )
+            resp = client.post(
+                "/integrations/douyin/live-check/resources/upload-image",
+                json={"file_name": file_name, "image_base64": _image_base64(raw)},
+            )
+        assert resp.status_code == 200
+        db = TestSession()
+        try:
+            record = db.query(DouyinImageUpload).one()
+            assert record.mime_type == mime_type
+        finally:
+            db.close()
+
+
+def test_upload_image_rejects_invalid_inputs_without_calling_upstream():
+    invalid_cases = [
+        {"file_name": "", "image_base64": _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)},
+        {"file_name": "test.png", "image_base64": ""},
+        {"file_name": "test.png", "image_base64": "not-valid-base64!"},
+        {"file_name": "test.svg", "image_base64": _image_base64(b"<svg></svg>")},
+        {"file_name": "fake.png", "image_base64": _image_base64(b"not-a-png")},
+        {"file_name": "fake.jpg", "image_base64": _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)},
+        {"file_name": "huge.png", "image_base64": _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * (10 * 1024 * 1024 + 1))},
+    ]
+    for payload in invalid_cases:
+        setup_function()
+        client = _client()
+        with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+             patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+            resp = client.post(
+                "/integrations/douyin/live-check/resources/upload-image",
+                json=payload,
+            )
+        assert resp.status_code == 400
+        mock_post.assert_not_called()
+        db = TestSession()
+        try:
+            assert db.query(DouyinImageUpload).count() == 0
+        finally:
+            db.close()
+
+
+def test_upload_image_missing_image_id_persists_failed_record():
+    client = _client()
+    png_base64 = _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"width": 1, "height": 1}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/upload-image",
+            json={"file_name": "test.png", "image_base64": png_base64},
+        )
+
+    assert resp.status_code == 502
+    assert "image_id" in json.dumps(resp.json(), ensure_ascii=False)
+    db = TestSession()
+    try:
+        record = db.query(DouyinImageUpload).one()
+        assert record.upload_status == "failed"
+        assert record.error_message
+        assert png_base64 not in record.request_body_json
+    finally:
+        db.close()
+
+
+def test_upload_image_upstream_error_persists_failed_record_without_secret_or_base64():
+    client = _client()
+    png_base64 = _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(403, {"code": 1001, "msg": "sign failed"})
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/upload-image",
+            json={"file_name": "test.png", "image_base64": png_base64},
+        )
+
+    assert resp.status_code == 502
+    body_text = json.dumps(resp.json(), ensure_ascii=False)
+    assert "super-secret" not in body_text
+    assert png_base64 not in body_text
+    db = TestSession()
+    try:
+        record = db.query(DouyinImageUpload).one()
+        assert record.upload_status == "failed"
+        assert record.error_message
+        assert "super-secret" not in (record.response_body_json or "")
+        assert png_base64 not in (record.request_body_json or "")
+        assert png_base64 not in (record.response_body_json or "")
     finally:
         db.close()
 

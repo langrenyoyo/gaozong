@@ -274,3 +274,31 @@ class DouyinMessageResourceDownload(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     downloaded_at = Column(DateTime, comment="Sent when resource download succeeds")
+
+
+class DouyinImageUpload(Base):
+    """抖音 OpenAPI 图片上传尝试记录，不保存原始图片内容。"""
+    __tablename__ = "douyin_image_uploads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    main_account_id = Column(Integer, nullable=False, comment="GMP 主账号 id")
+    open_id = Column(String(255), comment="可选客户 open_id")
+    file_name = Column(String(255), nullable=False)
+    file_ext = Column(String(16), nullable=False)
+    mime_type = Column(String(64), nullable=False)
+    file_size_bytes = Column(Integer, nullable=False)
+    local_md5 = Column(String(64), nullable=False)
+    image_base64_sha256 = Column(String(64), nullable=False)
+    upstream_image_id = Column(String(255), comment="上游 data.image_id")
+    upstream_width = Column(Integer, comment="上游 data.width")
+    upstream_height = Column(Integer, comment="上游 data.height")
+    upstream_md5 = Column(String(255), comment="上游 data.md5")
+    upload_status = Column(String(20), nullable=False, default="pending", comment="pending/success/failed")
+    upstream_code = Column(String(64), comment="上游 code")
+    upstream_msg = Column(String(500), comment="上游 msg")
+    request_body_json = Column(Text, comment="脱敏后的上游请求 JSON")
+    response_body_json = Column(Text, comment="上游响应 JSON 或安全错误详情")
+    error_message = Column(String(500), comment="安全错误信息")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    uploaded_at = Column(DateTime, comment="上游上传成功时间")

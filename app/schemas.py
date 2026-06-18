@@ -240,6 +240,22 @@ class DouyinResourceDownloadResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinImageUploadRequest(BaseModel):
+    """抖音图片 base64 上传请求。"""
+
+    file_name: str
+    image_base64: str
+    open_id: Optional[str] = None
+
+
+class DouyinImageUploadResponse(BaseModel):
+    """抖音图片上传响应。"""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")
