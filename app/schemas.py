@@ -203,6 +203,25 @@ class DouyinBindInfoSyncResponse(BaseModel):
     message: str = "success"
 
 
+class DouyinPrivateMessageSendRequest(BaseModel):
+    """Manual-only Douyin private message send request."""
+
+    conversation_short_id: str = Field(..., min_length=1)
+    customer_open_id: Optional[str] = None
+    content: str = Field(..., min_length=1)
+    scene: Optional[str] = None
+    manual_confirmed: bool = False
+    operator_id: Optional[str] = None
+
+
+class DouyinPrivateMessageSendResponse(BaseModel):
+    """Manual-only Douyin private message send response."""
+
+    success: bool = True
+    data: dict
+    message: str = "success"
+
+
 class StaffCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="销售姓名")
     wechat_id: Optional[str] = Field(None, description="微信号")

@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import importlib
 import hashlib
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -22,7 +23,7 @@ from sqlalchemy.pool import StaticPool
 from app import config
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.douyin_live_check_service import (
     _openapi_endpoint_config,
     build_signed_openapi_request_body_and_headers,
@@ -126,6 +127,52 @@ def _insert_event_for_live_check_account(account_open_id: str) -> None:
                 from_user_id=payload["from_user_id"],
                 to_user_id=account_open_id,
                 event_key="event_" + account_open_id,
+                is_duplicate=0,
+                raw_body=json.dumps(payload, ensure_ascii=False),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_send_context_event(
+    *,
+    event: str = "im_receive_msg",
+    conversation_short_id: str = "send_conv_001",
+    server_message_id: str = "send_msg_001",
+    from_user_id: str = "send_customer_001",
+    to_user_id: str = "send_account_001",
+    message_create_time=None,
+) -> None:
+    db = TestSession()
+    try:
+        payload = {
+            "event": event,
+            "from_user_id": from_user_id,
+            "to_user_id": to_user_id,
+            "content": json.dumps(
+                {
+                    "create_time": 1710000000000,
+                    "conversation_short_id": conversation_short_id,
+                    "server_message_id": server_message_id,
+                    "message_type": "text",
+                    "text": "hello",
+                },
+                ensure_ascii=False,
+            ),
+        }
+        db.add(
+            DouyinWebhookEvent(
+                event=event,
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                conversation_short_id=conversation_short_id,
+                server_message_id=server_message_id,
+                message_type="text",
+                message_create_time=message_create_time,
+                parse_status="parsed",
+                event_key=f"send_context_{conversation_short_id}_{server_message_id}",
                 is_duplicate=0,
                 raw_body=json.dumps(payload, ensure_ascii=False),
             )
@@ -611,6 +658,196 @@ def test_sync_bind_info_upstream_business_error_does_not_write_db_or_leak_secret
     db = TestSession()
     try:
         assert db.query(DouyinAuthorizedAccount).count() == 0
+    finally:
+        db.close()
+
+
+def test_send_message_rejects_without_manual_confirmation_and_does_not_call_upstream():
+    _insert_send_context_event()
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "hello",
+                "manual_confirmed": False,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "manual_confirmed" in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinPrivateMessageSend).count() == 0
+    finally:
+        db.close()
+
+
+def test_send_message_rejects_empty_content_and_does_not_call_upstream():
+    _insert_send_context_event()
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "   ",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "content" in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+
+
+def test_send_message_rejects_missing_context_and_does_not_call_upstream():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "missing_conv",
+                "content": "hello",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 404
+    assert "context" in json.dumps(resp.json(), ensure_ascii=False).lower()
+    mock_post.assert_not_called()
+
+
+def test_send_message_success_uses_signed_openapi_body_and_persists_sent_record():
+    _insert_send_context_event()
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"msg_id": "upstream_sent_msg_001"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "人工确认后的回复",
+                "scene": "im_reply_msg",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "sent"
+    assert data["upstream_msg_id"] == "upstream_sent_msg_001"
+    assert data["conversation_short_id"] == "send_conv_001"
+    assert data["to_user_id"] == "send_customer_001"
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/send_msg"
+    )
+    assert "json" not in mock_post.call_args.kwargs
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body == {
+        "main_account_id": 123,
+        "scene": "im_reply_msg",
+        "content": "人工确认后的回复",
+        "msg_id": "send_msg_001",
+        "conversation_id": "send_conv_001",
+        "to_user_id": "send_customer_001",
+        "from_user_id": "send_account_001",
+    }
+    assert mock_post.call_args.kwargs["headers"]["Authorization"]
+
+    db = TestSession()
+    try:
+        record = db.query(DouyinPrivateMessageSend).one()
+        assert record.status == "sent"
+        assert record.manual_confirmed == 1
+        assert record.auto_send == 0
+        assert record.main_account_id == 123
+        assert record.upstream_msg_id == "upstream_sent_msg_001"
+        assert record.content == "人工确认后的回复"
+    finally:
+        db.close()
+
+
+def test_send_message_rejects_context_older_than_24_hours_and_does_not_call_upstream():
+    _insert_send_context_event(message_create_time=datetime.now() - timedelta(hours=25))
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "人工确认后的回复",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "24" in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinPrivateMessageSend).count() == 0
+    finally:
+        db.close()
+
+
+def test_send_message_upstream_business_error_persists_failed_record_without_secret():
+    _insert_send_context_event()
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 1001, "msg": "send failed"},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "人工确认后的回复",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 502
+    body_text = json.dumps(resp.json(), ensure_ascii=False)
+    assert "send failed" in body_text
+    assert "super-secret" not in body_text
+    db = TestSession()
+    try:
+        record = db.query(DouyinPrivateMessageSend).one()
+        assert record.status == "failed"
+        assert record.error_code == "1001"
+        assert record.error_message == "send failed"
+        assert record.manual_confirmed == 1
+        assert record.auto_send == 0
     finally:
         db.close()
 

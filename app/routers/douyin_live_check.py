@@ -17,6 +17,8 @@ from app.schemas import (
     DouyinLiveCheckAuthUrlResponse,
     DouyinLiveCheckObserveResponse,
     DouyinLiveCheckStatusResponse,
+    DouyinPrivateMessageSendRequest,
+    DouyinPrivateMessageSendResponse,
 )
 from app.services.douyin_live_check_service import (
     build_auth_url,
@@ -30,6 +32,7 @@ from app.services.douyin_live_check_service import (
 from app.services.douyin_workbench_conversation_service import (
     list_douyin_workbench_accounts_with_event_fallback,
 )
+from app.services.douyin_private_message_send_service import send_manual_private_message
 
 logger = logging.getLogger(__name__)
 LIVE_CHECK_OBSERVE_PATH = "/integrations/douyin/live-check/webhook-observe"
@@ -95,6 +98,24 @@ def sync_accounts_bind_info(
             name_or_open_id=request.name_or_open_id,
         )
     )
+
+
+@router.post("/messages/send", response_model=DouyinPrivateMessageSendResponse)
+def send_message(
+    request: DouyinPrivateMessageSendRequest,
+    db: Session = Depends(get_db),
+) -> DouyinPrivateMessageSendResponse:
+    _ensure_enabled()
+    data = send_manual_private_message(
+        db,
+        conversation_short_id=request.conversation_short_id,
+        customer_open_id=request.customer_open_id,
+        content=request.content,
+        scene=request.scene,
+        manual_confirmed=request.manual_confirmed,
+        operator_id=request.operator_id,
+    )
+    return DouyinPrivateMessageSendResponse(data=data)
 
 
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)
