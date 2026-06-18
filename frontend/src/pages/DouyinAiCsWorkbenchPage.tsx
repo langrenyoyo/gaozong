@@ -22,6 +22,7 @@ import {
   fetchDouyinLiveCheckAuthUrl,
   fetchDouyinLiveCheckStatus,
 } from "../api/douyinLiveCheck";
+import { formatDateTimeLocal } from "../lib/datetime";
 import type {
   DouyinLiveCheckAccount,
   DouyinLiveCheckAuthUrlData,
@@ -98,17 +99,7 @@ function liveCheckErrorMessage(err: unknown): string {
 }
 
 function formatTime(value?: string | null) {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value);
 }
 
 function statusText(value?: string | null) {

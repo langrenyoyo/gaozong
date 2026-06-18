@@ -14,6 +14,7 @@ import {
   fetchDouyinLiveCheckStatus,
 } from "../api/douyinLiveCheck";
 import { fetchWebhookEvents } from "../api/webhookEvents";
+import { formatDateTimeLocal } from "../lib/datetime";
 import type {
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
@@ -76,12 +77,13 @@ function liveCheckErrorMessage(err: unknown): string {
 }
 
 function formatTime(value?: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN");
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function boolText(value: boolean): string {

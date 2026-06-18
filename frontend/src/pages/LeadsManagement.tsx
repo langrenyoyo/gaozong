@@ -27,6 +27,7 @@ import { sendLeadToStaff } from "../api/notifications";
 import { fetchAgentStatus } from "../api/agent";
 import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { AgentStatusData, DouyinSyncResponse, Lead, ReportSummary, Staff, WechatDetectResponse, CheckRecord, WechatAutoDetectStatus, WebhookEvent } from "../api/types";
+import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 
 // ========== 状态配置（对齐 auto_wechat） ==========
 
@@ -104,8 +105,8 @@ function douyinDirection(event?: string | null) {
 
 function sortEventsAsc(items: WebhookEvent[]): WebhookEvent[] {
   return [...items].sort((a, b) => {
-    const left = a.created_at ? new Date(a.created_at).getTime() : 0;
-    const right = b.created_at ? new Date(b.created_at).getTime() : 0;
+    const left = apiDateTimeMs(a.created_at);
+    const right = apiDateTimeMs(b.created_at);
     if (left !== right) return left - right;
     return a.id - b.id;
   });
@@ -155,17 +156,7 @@ function agentDisabledReason(agentStatus: AgentStatusData): string {
 }
 
 function formatTime(value: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value);
 }
 
 function shortId(value?: string | null, head = 10, tail = 8): string {

@@ -13,6 +13,7 @@ import { toast } from "sonner";
 
 import { fetchWebhookEventDetail, fetchWebhookEvents } from "../api/webhookEvents";
 import type { WebhookEvent, WebhookEventDetail } from "../api/types";
+import { formatDateTimeLocal } from "../lib/datetime";
 
 const LEAD_ACTION_OPTIONS = [
   "duplicate_event",
@@ -86,17 +87,7 @@ const initialFilters: Filters = {
 };
 
 function formatTime(value: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value);
 }
 
 function valueOrDash(value: string | number | boolean | null | undefined): string {

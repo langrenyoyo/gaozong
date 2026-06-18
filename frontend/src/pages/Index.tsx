@@ -15,6 +15,7 @@ import { API_BASE_URL } from "../api/client";
 import { fetchLeads } from "../api/leads";
 import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
+import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import LeadsModulePage from "./LeadsModulePage";
 import WechatAgent from "./WechatAgent";
@@ -330,17 +331,7 @@ function getDouyinDisplayName(
 }
 
 function formatEventTime(value: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value);
 }
 
 function eventDescription(event?: string | null): string {
@@ -433,8 +424,8 @@ function buildConversations(events: WebhookEvent[], leads: Lead[] = []): {
 
   for (const [id, group] of groups) {
     const sorted = [...group.events].sort((a, b) => {
-      const left = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const right = b.created_at ? new Date(b.created_at).getTime() : 0;
+      const left = apiDateTimeMs(a.created_at);
+      const right = apiDateTimeMs(b.created_at);
       if (left !== right) return left - right;
       return a.id - b.id;
     });
@@ -495,7 +486,7 @@ function buildConversations(events: WebhookEvent[], leads: Lead[] = []): {
 }
 
 function groupLatestTime(events: WebhookEvent[]): number {
-  return Math.max(...events.map((event) => (event.created_at ? new Date(event.created_at).getTime() : 0)), 0);
+  return Math.max(...events.map((event) => apiDateTimeMs(event.created_at)), 0);
 }
 
 function DouyinAuthModal({

@@ -48,6 +48,7 @@ import { fetchNotificationRecords } from "../api/notifications";
 import { fetchChecks } from "../api/checks";
 import { fetchStaffList, createStaff } from "../api/staff";
 import { createLead, assignLead } from "../api/leads";
+import { formatDateTimeLocal } from "../lib/datetime";
 import type {
   WechatTask,
   PollAndExecuteResponse,
@@ -162,18 +163,13 @@ function taskStatusTone(status: string): string {
 }
 
 function formatTime(value: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function truncate(text: string | null, maxLen: number): string {

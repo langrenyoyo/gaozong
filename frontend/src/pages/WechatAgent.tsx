@@ -24,6 +24,7 @@ import {
   resumeAutomation,
 } from "../api/automation";
 import { syncDouyinLeads } from "../api/integrations";
+import { formatDateTimeLocal } from "../lib/datetime";
 import type { CheckRecord, Staff, WechatAutoDetectStatus, AutomationStatus, DouyinSyncResponse } from "../api/types";
 import type { WechatDebugResult } from "../api/wechat";
 
@@ -54,17 +55,7 @@ function checkStatusTone(status: string): string {
 }
 
 function formatTime(value: string | null): string {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
+  return formatDateTimeLocal(value);
 }
 
 // ========== 主页面 ==========
@@ -581,7 +572,13 @@ export default function WechatAgent() {
                 </div>
                 <p className="mt-1 text-[11px] text-red-600">
                   所有自动化操作已被拒绝。原因：{automationStatus.stop_reason ?? "手动停止"}
-                  {automationStatus.stopped_at ? ` · 停止于 ${new Date(automationStatus.stopped_at).toLocaleString("zh-CN")}` : ""}
+                  {automationStatus.stopped_at ? ` · 停止于 ${formatDateTimeLocal(automationStatus.stopped_at, {
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}` : ""}
                 </p>
                 <button
                   onClick={handleResumeAutomation}
@@ -618,7 +615,7 @@ export default function WechatAgent() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8b95a6]">上次检测</span>
-                    <span className="font-semibold text-[#374151]">{autoDetectStatus.last_detect_at ? new Date(autoDetectStatus.last_detect_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "-"}</span>
+                    <span className="font-semibold text-[#374151]">{formatDateTimeLocal(autoDetectStatus.last_detect_at, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#8b95a6]">上次结果</span>
