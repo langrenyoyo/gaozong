@@ -22,6 +22,7 @@ from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
 
 AUDI_A6_ALIASES = ("奥迪A6", "奥迪A6L", "A6", "A6L")
+AGENT_CONFIG_MISSING_FALLBACK = "agent_config_missing_fallback"
 
 SAME_CATEGORY_RECOMMENDATIONS = [
     RecommendedVehicle(vehicle_name="宝马5系", price=280000, category="精品BBA"),
@@ -35,12 +36,7 @@ def build_reply_suggestion(
 ) -> ReplySuggestionResponse:
     """生成回复建议，只返回建议文本，不自动发送私信。"""
     douyin_account_id = request.douyin_account_id or request.account_id
-    agent, agent_warnings = resolve_account_agent(
-        tenant_id=request.tenant_id,
-        merchant_id=request.merchant_id,
-        douyin_account_id=douyin_account_id,
-        agent_id=request.agent_id,
-    )
+    agent, agent_warnings = resolve_reply_agent(request, douyin_account_id)
     if not agent:
         return _build_agent_required_response(agent_warnings)
 
@@ -105,6 +101,37 @@ def build_reply_suggestion(
         auto_send=False,
         warnings=agent_warnings,
         **_agent_response_fields(agent),
+    )
+
+
+def resolve_reply_agent(
+    request: ReplySuggestionRequest,
+    douyin_account_id: int,
+) -> tuple[dict | None, list[str]]:
+    """解析回复建议使用的智能体上下文。
+
+    9000 转发的 agent_id 已完成企业号归属、授权、智能体归属和绑定关系校验；
+    9100 正式链路只消费该上下文，不再用 demo mock 绑定表二次拦截。
+    """
+    if request.agent_id:
+        return (
+            {
+                "agent_id": request.agent_id,
+                "agent_name": request.agent_id,
+                "agent_category": "bound_agent",
+                "system_prompt": None,
+                "reply_style": "",
+                "business_scope": "",
+                "is_active": True,
+            },
+            [AGENT_CONFIG_MISSING_FALLBACK],
+        )
+
+    return resolve_account_agent(
+        tenant_id=request.tenant_id,
+        merchant_id=request.merchant_id,
+        douyin_account_id=douyin_account_id,
+        agent_id=None,
     )
 
 

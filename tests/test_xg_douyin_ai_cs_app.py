@@ -161,10 +161,11 @@ def test_reply_suggestion_uses_explicit_bound_agent_and_never_auto_send(tmp_path
     assert response.status_code == 200
     data = response.json()
     assert data["agent_id"] == "agent_luxury_gap"
-    assert data["agent_name"] == "小高差价豪车客服"
-    assert data["agent_category"] == "精品差价豪车"
+    assert data["agent_name"] == "agent_luxury_gap"
+    assert data["agent_category"] == "bound_agent"
     assert data["manual_required"] is False
     assert data["auto_send"] is False
+    assert "agent_config_missing_fallback" in data["warnings"]
 
 
 def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, monkeypatch):
@@ -186,23 +187,25 @@ def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, mon
     assert data["auto_send"] is False
 
 
-def test_reply_suggestion_unbound_agent_requires_manual_review(tmp_path, monkeypatch):
+def test_reply_suggestion_with_trusted_agent_id_bypasses_mock_binding(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).post(
         "/douyin/conversations/1/reply-suggestion",
         json={
             "tenant_id": "demo_tenant",
             "merchant_id": "demo_bba",
-            "account_id": 1,
+            "account_id": 99,
             "latest_message": "我想要奥迪A6",
-            "agent_id": "agent_not_bound",
+            "agent_id": "agent_from_9000",
         },
     )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["manual_required"] is True
+    assert data["agent_id"] == "agent_from_9000"
+    assert data["manual_required"] is False
     assert data["auto_send"] is False
-    assert "agent_not_bound" in data["warnings"]
+    assert "agent_not_bound" not in data["warnings"]
+    assert "agent_config_missing_fallback" in data["warnings"]
 
 
 def test_reply_suggestion_without_agents_requires_manual_review(tmp_path, monkeypatch):
