@@ -1,13 +1,28 @@
-"""OpenAI-compatible client using the Python standard library."""
+"""OpenAI-compatible client using the Python standard library.
+
+职责边界：
+- chat() 走 XG_DOUYIN_AI_LLM_*（OpenAI / OpenRouter 兼容对话端点）；
+- embed() 为门面：未配置真实 embedding 时回落 mock_embedding()，
+  已配置火山方舟 Ark 时委托 ArkEmbeddingClient（见 ark_embedding_client.py）。
+  embedding 与 chat 的 base_url / api_key / model 完全独立。
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from apps.xg_douyin_ai_cs.llm.ark_embedding_client import (
+    ArkEmbeddingClient,
+    ArkEmbeddingError,
+)
 from apps.xg_douyin_ai_cs.llm.config import LLMConfig, load_llm_config
+from apps.xg_douyin_ai_cs.llm.embedding_config import load_embedding_config
+
+_logger = logging.getLogger(__name__)
 
 
 class LLMNotConfiguredError(RuntimeError):
@@ -21,6 +36,8 @@ class LLMRequestError(RuntimeError):
 class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig | None = None):
         self.config = config or load_llm_config()
+        # embedding 配置独立于 chat/LLM 配置，避免共用 base_url/api_key/model
+        self._embedding_config = load_embedding_config()
 
     def chat(self, messages: list[dict]) -> dict:
         if not self.config.configured:
@@ -42,24 +59,37 @@ class OpenAICompatibleClient:
         }
 
     def embed(self, text: str) -> dict:
-        if not self.config.real_embedding_configured:
+        """生成 embedding 的门面入口。
+
+        - 未配置真实 Ark embedding（enabled=false / key 空 / provider!=ark）
+          → mock_embedding 兜底；
+        - 已配置 → 委托 ArkEmbeddingClient，ArkEmbeddingError 统一转换为
+          LLMRequestError，保持对外契约不变（repository /
+          reply_decision_service 无需感知内部异常类型）。
+
+        返回结构固定为 {embedding, model, embedding_provider}，
+        repository.train_scope 仅读取 embedding / model，兼容无感。
+        """
+        cfg = self._embedding_config
+        if not cfg.real_enabled:
+            _logger.info(
+                "embedding branch=mock provider=%s model=mock_for_test_only "
+                "input_type=text text_len=%d reason=not_configured",
+                cfg.provider,
+                len(str(text or "")),
+            )
             return {
                 "embedding": mock_embedding(text),
                 "model": "mock_for_test_only",
                 "embedding_provider": "mock_for_test_only",
             }
-        data = self._post_json(
-            "/embeddings",
-            {"model": self.config.embedding_model, "input": text},
-        )
-        embedding = ((data.get("data") or [{}])[0].get("embedding")) or []
-        if not embedding:
-            raise LLMRequestError("embedding endpoint returned empty vector")
-        return {
-            "embedding": [float(item) for item in embedding],
-            "model": data.get("model") or self.config.embedding_model,
-            "embedding_provider": "openai_compatible",
-        }
+        try:
+            return ArkEmbeddingClient(cfg).embed_text(text)
+        except ArkEmbeddingError as exc:
+            _logger.warning(
+                "embedding branch=ark stage=delegated_error error=%s", exc
+            )
+            raise LLMRequestError(str(exc)) from exc
 
     def _post_json(self, path: str, payload: dict) -> dict:
         req = urllib_request.Request(
