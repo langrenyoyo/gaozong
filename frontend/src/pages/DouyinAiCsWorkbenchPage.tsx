@@ -13,28 +13,33 @@ import {
   RefreshCwIcon,
   SearchIcon,
   SparklesIcon,
+  Trash2Icon,
+  UnlinkIcon,
   XIcon,
   UserRoundIcon,
 } from "lucide-react";
 
 import {
-  fetchDouyinLiveCheckAccounts,
   fetchDouyinLiveCheckAuthUrl,
   fetchDouyinLiveCheckStatus,
 } from "../api/douyinLiveCheck";
 import { formatDateTimeLocal } from "../lib/datetime";
 import type {
-  DouyinLiveCheckAccount,
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
 } from "../api/types";
 import {
+  bindAgentToDouyinAccount,
+  cancelDouyinAccountAuthorization,
+  deleteDouyinAccount,
   downloadDouyinResource,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationMessages,
   getTrustedReplySuggestion,
+  listDouyinAccounts,
   sendDouyinManualMessage,
+  unbindAgentFromDouyinAccount,
   uploadDouyinImage,
   type DouyinAccountItem,
   type DouyinAgentItem,
@@ -108,34 +113,6 @@ function statusText(value?: string | null) {
   if (value === "captured") return "已留资";
   if (value === "new") return "新会话";
   return value || "未知";
-}
-
-function accountIdFromOpenId(openId: string): number {
-  let hash = 0;
-  for (let index = 0; index < openId.length; index += 1) {
-    hash = (hash * 31 + openId.charCodeAt(index)) >>> 0;
-  }
-  return hash || 1;
-}
-
-function mapAuthorizedAccount(item: DouyinLiveCheckAccount): DouyinAccountItem | null {
-  const openId = item.account_open_id || item.open_id;
-  if (!openId) return null;
-  const numericAccountId = typeof item.account_id === "number" ? item.account_id : null;
-  const id = item.douyin_account_id || item.id || numericAccountId || accountIdFromOpenId(openId);
-  return {
-    id,
-    tenant_id: TENANT_ID,
-    account_name: item.account_name || item.nickname || `已授权抖音号 ${openId.slice(-4)}`,
-    account_open_id: openId,
-    status: item.status || (item.is_active === false ? "inactive" : "active"),
-    avatar: item.avatar_url || item.avatar || null,
-    unread_count: item.unread_count || 0,
-    last_active_at: item.last_active_at || item.authorized_at || null,
-    source: item.source || null,
-    is_authorized: item.is_authorized,
-    has_events: item.has_events,
-  };
 }
 
 function EmptyState({ text }: { text: string }) {
@@ -269,6 +246,39 @@ function uploadImageResponseMessage(response: UploadDouyinImageResponse): string
   return response.message || "图片上传失败，请稍后重试";
 }
 
+function authorizationStatusText(value?: string | null): string {
+  if (value === "authorized") return "已授权";
+  if (value === "unauthorized") return "未授权";
+  if (value === "deleted") return "已删除";
+  if (value === "invalid") return "已失效";
+  return value || "未知";
+}
+
+function bindingStatusText(value?: string | null): string {
+  if (value === "active") return "已绑定";
+  if (value === "none") return "未绑定";
+  if (value === "invalid") return "绑定失效";
+  if (value === "deleted") return "绑定已删除";
+  if (value === "unbound") return "已解绑";
+  return value || "未绑定";
+}
+
+function agentStatusText(value?: string | null): string {
+  if (value === "active") return "已启用";
+  if (value === "inactive") return "未启用";
+  if (value === "deleted") return "已删除";
+  return value || "未知";
+}
+
+function hasActiveAgentBinding(account: DouyinAccountItem | null): boolean {
+  return Boolean(
+    account?.bound_agent_id &&
+      account.bound_agent_status === "active" &&
+      account.binding_status === "active" &&
+      account.authorization_status === "authorized",
+  );
+}
+
 export default function DouyinAiCsWorkbenchPage() {
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -279,6 +289,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [reply, setReply] = useState<ReplySuggestionResponse | null>(null);
   const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [bindingBusy, setBindingBusy] = useState(false);
+  const [bindingNotice, setBindingNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [draftReplyText, setDraftReplyText] = useState("");
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
@@ -314,6 +326,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
   const selectedAgent = agents.find((item) => item.agent_id === selectedAgentId) || null;
+  const boundAgent = selectedAccount?.bound_agent_id
+    ? agents.find((item) => item.agent_id === selectedAccount.bound_agent_id) || null
+    : null;
+  const activeBindingReady = hasActiveAgentBinding(selectedAccount);
   const authCallback = authStatus?.last_oauth_callback || null;
   const authAuthorized = Boolean(authCallback?.open_id);
   const latestMessage = useMemo(() => {
@@ -342,12 +358,10 @@ export default function DouyinAiCsWorkbenchPage() {
     setLoadingAccounts(true);
     setError(null);
     try {
-      const data = await fetchDouyinLiveCheckAccounts();
-      const mapped = data.data.items
-        .map(mapAuthorizedAccount)
-        .filter((item): item is DouyinAccountItem => Boolean(item));
+      const data = await listDouyinAccounts();
+      const mapped = data.items;
       setAccounts(mapped);
-      setAccountListSource(data.data.source || "live_check");
+      setAccountListSource("official_bindings");
       setSelectedAccountId((current) => {
         const preferred = preferredOpenId
           ? mapped.find((item) => item.account_open_id === preferredOpenId)
@@ -361,7 +375,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setAccounts([]);
       setSelectedAccountId(null);
       setAccountListSource(null);
-      setError(liveCheckErrorMessage(err));
+      setError(err instanceof Error ? err.message : "抖音企业号列表加载失败");
       return [];
     } finally {
       setLoadingAccounts(false);
@@ -398,19 +412,14 @@ export default function DouyinAiCsWorkbenchPage() {
       setAgents(data.items);
       if (!data.items.length) {
         setSelectedAgentId(null);
-        setAgentNotice("当前抖音号未配置 AI客服 Agent，请先配置后再生成回复建议。");
+        setAgentNotice("当前商户未配置可选智能体，请先配置后再绑定企业号。");
         return;
       }
-      const defaultAgent = data.default_agent_id
-        ? data.items.find((item) => item.agent_id === data.default_agent_id)
-        : null;
-      const nextAgent = defaultAgent || data.items[0];
-      setSelectedAgentId(nextAgent.agent_id);
-      setAgentNotice(defaultAgent ? null : "未配置默认 Agent，已临时使用第一个可用 Agent。");
+      setAgentNotice(null);
     } catch (err) {
       setAgents([]);
       setSelectedAgentId(null);
-      setAgentNotice(err instanceof Error ? err.message : "AI客服 Agent 加载失败");
+      setAgentNotice(err instanceof Error ? err.message : "智能体列表加载失败");
     } finally {
       setLoadingAgents(false);
     }
@@ -443,12 +452,15 @@ export default function DouyinAiCsWorkbenchPage() {
     if (selectedAccount) {
       void loadConversations(selectedAccount);
       void loadAccountAgents(selectedAccount.id);
+      setSelectedAgentId(selectedAccount.bound_agent_id || null);
+      setBindingNotice(null);
     } else {
       setConversations([]);
       setSelectedConversationId(null);
       setAgents([]);
       setSelectedAgentId(null);
       setAgentNotice(null);
+      setBindingNotice(null);
     }
   }, [loadAccountAgents, loadConversations, selectedAccount, selectedAccountId]);
 
@@ -540,7 +552,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
   useEffect(() => {
     setReply(null);
-  }, [selectedAgentId]);
+  }, [selectedAccount?.bound_agent_id]);
 
   useEffect(() => {
     setDraftReplyText(reply?.reply_text || "");
@@ -555,7 +567,11 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [reply?.reply_text, selectedConversationId]);
 
   async function generateReply() {
-    if (!selectedAccount || !selectedConversation || !selectedAgent || !latestMessage) return;
+    if (!selectedAccount || !selectedConversation || !latestMessage) return;
+    if (!activeBindingReady || !selectedAccount.bound_agent_id) {
+      setError("请先为当前企业号绑定已启用的智能体，再生成回复建议。");
+      return;
+    }
     setGenerating(true);
     setError(null);
     try {
@@ -563,7 +579,7 @@ export default function DouyinAiCsWorkbenchPage() {
         tenant_id: TENANT_ID,
         account_id: selectedAccount.id,
         douyin_account_id: selectedAccount.id,
-        agent_id: selectedAgent.agent_id,
+        agent_id: selectedAccount.bound_agent_id,
         latest_message: latestMessage,
       });
       setReply(data);
@@ -579,6 +595,100 @@ export default function DouyinAiCsWorkbenchPage() {
     await navigator.clipboard.writeText(reply.reply_text);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  async function refreshAccountsKeepingSelection(accountOpenId?: string | null) {
+    const refreshed = await loadAccounts(accountOpenId || selectedAccount?.account_open_id || null);
+    if (!accountOpenId && selectedAccount?.account_open_id) {
+      const next = refreshed.find((item) => item.account_open_id === selectedAccount.account_open_id);
+      setSelectedAgentId(next?.bound_agent_id || null);
+    }
+    return refreshed;
+  }
+
+  async function saveAgentBinding() {
+    if (!selectedAccount || !selectedAgentId) {
+      setBindingNotice("请选择要绑定的智能体后再保存。");
+      return;
+    }
+    setBindingBusy(true);
+    setBindingNotice(null);
+    setError(null);
+    try {
+      await bindAgentToDouyinAccount(selectedAccount.account_open_id, selectedAgentId);
+      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
+      setReply(null);
+      setBindingNotice("绑定已保存。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存绑定失败");
+    } finally {
+      setBindingBusy(false);
+    }
+  }
+
+  async function unbindAgent() {
+    if (!selectedAccount?.bound_agent_id) return;
+    setBindingBusy(true);
+    setBindingNotice(null);
+    setError(null);
+    try {
+      await unbindAgentFromDouyinAccount(selectedAccount.account_open_id);
+      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
+      setSelectedAgentId(null);
+      setReply(null);
+      setBindingNotice("已解绑当前企业号智能体。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "解绑失败");
+    } finally {
+      setBindingBusy(false);
+    }
+  }
+
+  async function cancelAuthorization() {
+    if (!selectedAccount) return;
+    const confirmed = window.confirm(`确认取消企业号“${selectedAccount.account_name}”的授权吗？取消后将禁用回复建议。`);
+    if (!confirmed) return;
+    setBindingBusy(true);
+    setBindingNotice(null);
+    setError(null);
+    try {
+      await cancelDouyinAccountAuthorization(selectedAccount.account_open_id);
+      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
+      setSelectedAgentId(null);
+      setReply(null);
+      setBindingNotice("企业号授权已取消，绑定状态已失效。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "取消授权失败");
+    } finally {
+      setBindingBusy(false);
+    }
+  }
+
+  async function deleteSelectedAccount() {
+    if (!selectedAccount) return;
+    const confirmed = window.confirm(`确认删除企业号“${selectedAccount.account_name}”吗？删除后当前会话和绑定展示会被清空。`);
+    if (!confirmed) return;
+    const deletingOpenId = selectedAccount.account_open_id;
+    setBindingBusy(true);
+    setBindingNotice(null);
+    setError(null);
+    try {
+      await deleteDouyinAccount(deletingOpenId);
+      const refreshed = await loadAccounts();
+      if (!refreshed.some((item) => item.account_open_id === deletingOpenId)) {
+        setConversations([]);
+        setSelectedConversationId(null);
+        setMessages([]);
+        setProfile(null);
+        setReply(null);
+        setSelectedAgentId(null);
+        setBindingNotice("企业号已删除。");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除企业号失败");
+    } finally {
+      setBindingBusy(false);
+    }
   }
 
   function openSendDialog() {
@@ -798,7 +908,7 @@ export default function DouyinAiCsWorkbenchPage() {
             <div>
               <div className="text-sm font-bold text-[#172033]">抖音号</div>
               <div className="text-[11px] text-slate-500">
-                {accountListSource ? "真实授权账号" : `${TENANT_ID} / ${MERCHANT_ID}`}
+                {accountListSource ? "正式企业号绑定" : `${TENANT_ID} / ${MERCHANT_ID}`}
               </div>
             </div>
             <button
@@ -816,7 +926,6 @@ export default function DouyinAiCsWorkbenchPage() {
             ) : null}
             {accounts.map((account) => {
               const active = account.id === selectedAccountId;
-              const isEventSource = account.source === "webhook_events";
               return (
                 <button
                   key={account.id}
@@ -834,13 +943,11 @@ export default function DouyinAiCsWorkbenchPage() {
                     <span className="block truncate text-sm font-semibold text-[#172033]">
                       {account.account_name}
                     </span>
-                    {isEventSource ? (
-                      <span className="mt-1 inline-flex max-w-full rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">
-                        事件来源
-                      </span>
-                    ) : null}
+                    <span className="mt-1 inline-flex max-w-full rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700">
+                      {authorizationStatusText(account.authorization_status)}
+                    </span>
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
-                      {isEventSource ? "来自历史私信事件" : `真实授权 · ${statusText(account.status)}`} · {formatTime(account.last_active_at)}
+                      {account.main_account_id || account.account_open_id} · {account.bound_agent_name || "未绑定智能体"}
                     </span>
                   </span>
                   {account.unread_count ? (
@@ -848,6 +955,15 @@ export default function DouyinAiCsWorkbenchPage() {
                       {account.unread_count}
                     </span>
                   ) : null}
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                      account.binding_status === "active"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {bindingStatusText(account.binding_status)}
+                  </span>
                 </button>
               );
             })}
@@ -1080,7 +1196,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   ) : null}
                   <button
                     onClick={() => void generateReply()}
-                    disabled={!selectedConversation || !selectedAgent || generating}
+                    disabled={!selectedConversation || !activeBindingReady || generating}
                     className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {generating ? <LoaderIcon size={14} className="animate-spin" /> : <SparklesIcon size={14} />}
@@ -1091,7 +1207,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
               <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-[#172033]">当前 AI客服</span>
+                  <span className="text-xs font-bold text-[#172033]">企业号绑定智能体</span>
                   {loadingAgents ? (
                     <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
                       <LoaderIcon size={12} className="animate-spin" />
@@ -1101,7 +1217,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <select
                     value={selectedAgentId || ""}
                     onChange={(event) => setSelectedAgentId(event.target.value || null)}
-                    disabled={!agents.length || loadingAgents}
+                    disabled={!selectedAccount || !agents.length || loadingAgents || bindingBusy}
                     className="h-8 min-w-[220px] rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     {!agents.length ? <option value="">未配置 Agent</option> : null}
@@ -1111,13 +1227,66 @@ export default function DouyinAiCsWorkbenchPage() {
                       </option>
                     ))}
                   </select>
+                  <button
+                    onClick={() => void saveAgentBinding()}
+                    disabled={!selectedAccount || !selectedAgentId || bindingBusy}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {bindingBusy ? <LoaderIcon size={13} className="animate-spin" /> : <CheckIcon size={13} />}
+                    保存绑定
+                  </button>
+                  <button
+                    onClick={() => void unbindAgent()}
+                    disabled={!selectedAccount?.bound_agent_id || bindingBusy}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UnlinkIcon size={13} />
+                    解绑
+                  </button>
+                  <button
+                    onClick={() => void cancelAuthorization()}
+                    disabled={!selectedAccount || bindingBusy || selectedAccount.authorization_status !== "authorized"}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <XIcon size={13} />
+                    取消授权
+                  </button>
+                  <button
+                    onClick={() => void deleteSelectedAccount()}
+                    disabled={!selectedAccount || bindingBusy}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Trash2Icon size={13} />
+                    删除企业号
+                  </button>
+                </div>
+                <div className="mt-2 grid gap-2 text-[11px] text-slate-600 md:grid-cols-3">
+                  <span>授权状态：{authorizationStatusText(selectedAccount?.authorization_status)}</span>
+                  <span>绑定状态：{bindingStatusText(selectedAccount?.binding_status)}</span>
+                  <span>智能体状态：{agentStatusText(selectedAccount?.bound_agent_status)}</span>
+                  <span className="md:col-span-3">
+                    当前绑定：
+                    {selectedAccount?.bound_agent_id
+                      ? `${selectedAccount.bound_agent_name || boundAgent?.agent_name || selectedAccount.bound_agent_id} / ${selectedAccount.bound_agent_id}`
+                      : "未绑定智能体"}
+                  </span>
                 </div>
                 {selectedAgent ? (
                   <div className="mt-2 grid gap-2 text-[11px] text-slate-600 md:grid-cols-3">
                     <span>分类：{selectedAgent.agent_category}</span>
                     <span>风格：{selectedAgent.reply_style}</span>
-                    <span>{selectedAgent.is_default ? "默认 Agent" : "手动选择 Agent"}</span>
+                    <span>{selectedAgent.agent_id === selectedAccount?.bound_agent_id ? "当前已绑定" : "待保存选择"}</span>
                     <span className="md:col-span-3">业务范围：{selectedAgent.business_scope}</span>
+                  </div>
+                ) : null}
+                {!activeBindingReady ? (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-800">
+                    当前企业号未绑定已启用智能体，生成回复建议已禁用。请选择智能体并点击“保存绑定”。
+                  </div>
+                ) : null}
+                {bindingNotice ? (
+                  <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] leading-5 text-emerald-800">
+                    {bindingNotice}
                   </div>
                 ) : null}
                 {agentNotice ? (

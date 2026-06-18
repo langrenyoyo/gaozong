@@ -21,16 +21,26 @@ export interface DouyinAiCsHealthResponse {
 
 export interface DouyinAccountItem {
   id: number;
-  tenant_id: string;
+  tenant_id?: string | null;
+  merchant_id?: string | null;
   account_name: string;
   account_open_id: string;
+  open_id?: string;
+  main_account_id?: string | null;
   status: string;
   avatar?: string | null;
+  avatar_url?: string | null;
   unread_count?: number;
   last_active_at?: string | null;
   source?: string | null;
   is_authorized?: boolean;
   has_events?: boolean;
+  bind_status?: number;
+  authorization_status?: string | null;
+  bound_agent_id?: string | null;
+  bound_agent_name?: string | null;
+  bound_agent_status?: string | null;
+  binding_status?: string | null;
 }
 
 export interface DouyinAccountListResponse {
@@ -50,6 +60,52 @@ export interface DouyinAgentItem {
 export interface DouyinAgentListResponse {
   items: DouyinAgentItem[];
   default_agent_id?: string | null;
+}
+
+export interface DouyinAuthorizedAccountListResponse {
+  success?: boolean;
+  data: {
+    items: DouyinAccountItem[];
+    total: number;
+  };
+  message?: string;
+}
+
+export interface DouyinAccountAgentBindingResponse {
+  success?: boolean;
+  data: {
+    id?: number;
+    account_open_id: string;
+    bound_agent_id?: string | null;
+    binding_status?: string | null;
+    is_default?: boolean;
+    updated_at?: string;
+    unbound_at?: string;
+  };
+  message?: string;
+}
+
+export interface DouyinAccountAuthorizationResponse {
+  success?: boolean;
+  data: {
+    account_open_id: string;
+    authorization_status?: string;
+    binding_status?: string;
+    invalidated_binding_count?: number;
+    upstream_cancel_supported?: boolean;
+  };
+  message?: string;
+}
+
+export interface DouyinAccountDeleteResponse {
+  success?: boolean;
+  data: {
+    account_open_id: string;
+    account_status?: string;
+    binding_status?: string;
+    deleted_binding_count?: number;
+  };
+  message?: string;
 }
 
 export interface DouyinConversationItem {
@@ -296,6 +352,22 @@ function getAutoWechatProxyErrorMessage(error: unknown): string {
   return "未知错误";
 }
 
+function businessErrorMessage(code: string): string {
+  const messages: Record<string, string> = {
+    AGENT_NOT_FOUND: "智能体不存在，请重新选择。",
+    AGENT_MERCHANT_DENIED: "该智能体不属于当前商户，不能绑定。",
+    AGENT_NOT_ACTIVE: "该智能体未启用，请先启用后再绑定。",
+    AGENT_BINDING_NOT_FOUND: "未找到可解绑的智能体绑定。",
+    DOUYIN_ACCOUNT_NOT_FOUND: "抖音企业号不存在或已被删除。",
+    DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED: "该抖音企业号不属于当前商户。",
+    DOUYIN_ACCOUNT_NOT_AUTHORIZED: "该抖音企业号未授权或授权已失效。",
+    DOUYIN_ACCOUNT_DELETED: "该抖音企业号已删除。",
+    DOUYIN_AGENT_BINDING_DENIED: "抖音企业号与智能体绑定校验失败。",
+    MERCHANT_CONTEXT_MISSING: "缺少可信商户上下文，请重新登录后再试。",
+  };
+  return messages[code] || code;
+}
+
 function extractResponseDetail(data: unknown): string {
   if (!data) {
     return "";
@@ -322,10 +394,22 @@ function extractResponseDetail(data: unknown): string {
     }
     if (detail && typeof detail === "object") {
       const detailRecord = detail as {
+        code?: unknown;
+        message?: unknown;
         safe_message?: unknown;
         upstream_msg?: unknown;
         detail?: unknown;
       };
+      if (typeof detailRecord.code === "string") {
+        const message =
+          typeof detailRecord.message === "string"
+            ? detailRecord.message
+            : businessErrorMessage(detailRecord.code);
+        return `${businessErrorMessage(detailRecord.code)}${message ? `（${message}）` : ""}`;
+      }
+      if (typeof detailRecord.message === "string") {
+        return detailRecord.message;
+      }
       if (typeof detailRecord.safe_message === "string") {
         return detailRecord.safe_message;
       }
@@ -352,6 +436,21 @@ function extractResponseDetail(data: unknown): string {
   return "";
 }
 
+function normalizeDouyinAccount(item: DouyinAccountItem): DouyinAccountItem {
+  const avatar = item.avatar || item.avatar_url || null;
+  const authorizationStatus =
+    item.authorization_status || (item.bind_status === 1 || item.is_authorized ? "authorized" : "unauthorized");
+  return {
+    ...item,
+    account_open_id: item.account_open_id || item.open_id || "",
+    status: item.status || authorizationStatus,
+    avatar,
+    avatar_url: item.avatar_url || avatar,
+    is_authorized: authorizationStatus === "authorized",
+    authorization_status: authorizationStatus,
+  };
+}
+
 async function requestDouyinAiCs<T>(request: Promise<{ data: T }>): Promise<T> {
   try {
     const response = await request;
@@ -375,6 +474,69 @@ export async function getDouyinAiCsVersion(): Promise<DouyinAiCsHealthResponse> 
 
 export async function getDouyinAccounts(): Promise<DouyinAccountListResponse> {
   return requestDouyinAiCs(douyinAiCsClient.get<DouyinAccountListResponse>("/douyin/accounts"));
+}
+
+export async function listDouyinAccounts(): Promise<DouyinAccountListResponse> {
+  try {
+    const response = (await apiClient.get(
+      "/integrations/douyin/accounts",
+    )) as unknown as DouyinAuthorizedAccountListResponse;
+    return {
+      items: (response.data?.items || []).map(normalizeDouyinAccount),
+    };
+  } catch (error) {
+    throw new Error(`抖音企业号列表加载失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
+}
+
+export async function bindAgentToDouyinAccount(
+  accountOpenId: string,
+  agentId: string,
+): Promise<DouyinAccountAgentBindingResponse> {
+  try {
+    return (await apiClient.put(
+      `/integrations/douyin/accounts/${encodeURIComponent(accountOpenId)}/agent-binding`,
+      { agent_id: agentId },
+    )) as unknown as DouyinAccountAgentBindingResponse;
+  } catch (error) {
+    throw new Error(`保存企业号智能体绑定失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
+}
+
+export async function unbindAgentFromDouyinAccount(
+  accountOpenId: string,
+): Promise<DouyinAccountAgentBindingResponse> {
+  try {
+    return (await apiClient.delete(
+      `/integrations/douyin/accounts/${encodeURIComponent(accountOpenId)}/agent-binding`,
+    )) as unknown as DouyinAccountAgentBindingResponse;
+  } catch (error) {
+    throw new Error(`解绑企业号智能体失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
+}
+
+export async function cancelDouyinAccountAuthorization(
+  accountOpenId: string,
+): Promise<DouyinAccountAuthorizationResponse> {
+  try {
+    return (await apiClient.post(
+      `/integrations/douyin/accounts/${encodeURIComponent(accountOpenId)}/cancel-authorization`,
+    )) as unknown as DouyinAccountAuthorizationResponse;
+  } catch (error) {
+    throw new Error(`取消抖音企业号授权失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
+}
+
+export async function deleteDouyinAccount(
+  accountOpenId: string,
+): Promise<DouyinAccountDeleteResponse> {
+  try {
+    return (await apiClient.delete(
+      `/integrations/douyin/accounts/${encodeURIComponent(accountOpenId)}`,
+    )) as unknown as DouyinAccountDeleteResponse;
+  } catch (error) {
+    throw new Error(`删除抖音企业号失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function getDouyinAccountAgents(
