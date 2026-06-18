@@ -17,6 +17,8 @@ from apps.xg_douyin_ai_cs.schemas import (
     ReplySuggestionRequest,
     ReplySuggestionResponse,
 )
+from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
+from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
 
 AUDI_A6_ALIASES = ("奥迪A6", "奥迪A6L", "A6", "A6L")
@@ -41,6 +43,14 @@ def build_reply_suggestion(
     )
     if not agent:
         return _build_agent_required_response(agent_warnings)
+
+    agent_warnings = _try_agent_runtime_or_fallback(
+        conversation_id=conversation_id,
+        request=request,
+        douyin_account_id=douyin_account_id,
+        agent=agent,
+        agent_warnings=agent_warnings,
+    )
 
     merchant_prompt = load_merchant_prompt(
         request.tenant_id,
@@ -96,6 +106,35 @@ def build_reply_suggestion(
         warnings=agent_warnings,
         **_agent_response_fields(agent),
     )
+
+
+def _try_agent_runtime_or_fallback(
+    *,
+    conversation_id: int,
+    request: ReplySuggestionRequest,
+    douyin_account_id: int,
+    agent: dict,
+    agent_warnings: list[str],
+) -> list[str]:
+    runtime = AgentRuntimeFacade()
+    if not runtime.is_enabled():
+        return agent_warnings
+
+    context = AgentContext(
+        tenant_id=request.tenant_id,
+        merchant_id=request.merchant_id,
+        douyin_account_id=douyin_account_id,
+        agent_id=agent.get("agent_id") or request.agent_id,
+        conversation_id=conversation_id,
+        customer_open_id=None,
+        latest_message=request.latest_message,
+        max_history_messages=request.max_history_messages,
+    )
+    try:
+        runtime.suggest_reply(context)
+    except Exception:
+        return [*agent_warnings, "agent_runtime_failed_fallback"]
+    return agent_warnings
 
 
 def load_merchant_prompt(tenant_id: str, merchant_id: str, douyin_account_id: int) -> dict:

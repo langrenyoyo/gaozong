@@ -81,6 +81,8 @@ services:
       XG_DOUYIN_AI_EMBEDDING_TIMEOUT_SECONDS: "${XG_DOUYIN_AI_EMBEDDING_TIMEOUT_SECONDS:-120}"
       XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS: "${XG_DOUYIN_AI_LLM_TIMEOUT_SECONDS:-30}"
       XG_DOUYIN_AI_LLM_TEMPERATURE: "${XG_DOUYIN_AI_LLM_TEMPERATURE:-0.3}"
+      # Agent Runtime / Tools 一期默认关闭；不安装 LangChain，不调用真实 tool。
+      XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED: "${XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED:-false}"
       PYTHONUNBUFFERED: "1"
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
     restart: "no"
