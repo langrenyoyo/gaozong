@@ -1482,3 +1482,43 @@ douyin_authorized_accounts
 5. `douyin_account_agent_bindings` 存在 active 绑定关系。
 
 Agent disabled 或 deleted 后不得继续生成回复建议。
+
+------
+
+## 26. P1-REQ-GAP-1 数据模型风险补充
+
+更新时间：2026-06-18
+
+本节基于 `docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md` 的一期需求差异探索结果补充，只记录设计风险，不代表已经批准数据库迁移。
+
+### 26.1 已具备商户字段的模型
+
+当前以下模型已经具备可信商户字段或预留租户字段：
+
+1. `douyin_authorized_accounts.merchant_id` / `tenant_id`：用于确认抖音企业号归属。
+2. `douyin_account_agent_bindings.merchant_id` / `tenant_id`：用于确认企业号与智能体绑定归属。
+3. `ai_agents.merchant_id`：用于确认智能体归属。
+4. `compute_accounts.merchant_id` / `tenant_id`：用于商户算力账户隔离。
+5. `compute_transactions.merchant_id` / `tenant_id`：用于算力流水隔离。
+
+### 26.2 P0 数据模型缺口
+
+`douyin_leads` 当前缺少 `merchant_id` / `tenant_id`，导致线索列表、线索详情、分配、重分配、报表和微信任务链路无法在数据库层形成强多商户隔离。
+
+`douyin_webhook_events` 当前也缺少明确商户归属字段，导致原始事件与有效线索之间的商户归属无法稳定追踪。
+
+### 26.3 建议设计方向
+
+后续 `P1-GAP-LEADS-TENANT-1` 必须先做设计，不要直接写 migration。建议设计项：
+
+1. 为 `douyin_leads` 补充 `merchant_id`、`tenant_id` 字段和按商户查询的组合索引。
+2. 为 `douyin_webhook_events` 补充 `merchant_id`，用于原始事件归属和排查。
+3. webhook 入库时优先通过抖音企业号 `account_open_id` 匹配 `douyin_authorized_accounts.open_id`，再取得可信 `merchant_id`。
+4. 历史数据回填必须区分可确定归属、开发演示归属和未知归属，不得默认把所有旧线索静默归给同一商户。
+5. 迁移前必须提供 dry-run、备份、回滚和多商户隔离测试。
+
+### 26.4 明确禁止
+
+1. 不得直接信任前端传入的 `merchant_id` 作为线索归属。
+2. 不得在未确认上游事件字段和 NewCarProject 商户映射前直接执行生产迁移。
+3. 不得把 `douyin_webhook_events` 物理表名强行重命名为 `lead_source_events`，该命名差异继续按既有文档解释处理。

@@ -2587,3 +2587,36 @@ React
 - RAG scope 当前仍偏 `tenant_id + merchant_id + douyin_account_id`，后续可升级为 `merchant_id + account_open_id + agent_id`。
 - 真实联调仍需要有效授权企业号、真实 `AiAgent`、真实会话数据。
 - 一期不建议继续扩展 LangChain、Agent tools 或自动发送。
+
+------
+
+# P1-REQ-GAP-1 一期需求差异探索与 P0 风险复核
+
+更新时间：2026-06-18
+
+正式差异报告已固化到：`docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md`。
+
+本轮只做文档固化和 P0 技术方案复核，不修改业务代码、不执行数据库迁移、不启动真实微信/抖音发送、不调用真实 LLM/Embedding、不接真实支付。
+
+## 1. 当前结论摘要
+
+1. `9000` 主后端已经具备线索、销售分配、微信任务、回复检测、抖音企业号绑定智能体、小高算力后端和 NewCarProject 鉴权门面的部分能力。
+2. `9100` 抖音 AI 客服已经具备 RAG/LLM 回复建议和多账号工作台底座，但 `auto_send=false` 必须保持，不是自动发送私信系统。
+3. `19000` 小高AI微信助手是 Windows 本地微信 UI 辅助与只读检测代理，不是完整规则引擎，也不是 LLM Agent。
+4. `frontend` 已有主要页面，但登录、路由级权限、小高算力前端、超管多数页面仍未形成真实闭环。
+
+## 2. P0 风险
+
+1. 登录与权限未完全真实接入 NewCarProject：`app/auth/newcar_client.py` 当前是门面和 mock，上游字段、token/cookie 规则、权限字典和过期时间仍待外部契约确认。
+2. 前端路由级权限隔离不足：`frontend/src/App.tsx` 只注册少量路由，多数页面仍依赖 `Index.tsx` 内部 `activeNav` 切换，`SideNav.tsx` 主要按本地 `role` 控制菜单。
+3. `douyin_leads` 缺 `merchant_id` / `tenant_id`：线索列表、详情、分配和报表无法形成强多商户隔离。相关设计必须先完成，不得直接写 migration。
+4. 小高算力后端已具备一期接口，但 `frontend/src/pages/ComputeCenter.tsx` 与 `frontend/src/pages/SuperComputeConfig.tsx` 仍是“真实接口暂未接入”占位。
+5. 超管功能多数未落后端：商户管理、禁用词、回访提示词、管理员账号等页面不能按页面存在判断为已实现。
+
+## 3. 当前安全边界
+
+1. 抖音 AI 客服继续保持 `auto_send=false`，所有 AI 回复只作为建议或人工确认来源。
+2. 微信链路继续保持 `sent=false`、`paste_only`、`read_only`、`task_id` 指定执行和人工确认边界。
+3. 小高算力继续不做真实支付；`/compute/recharge-orders` 当前只是 mock 订单，不实际到账。
+4. 9000 继续作为抖音企业号绑定和智能体配置的可信来源，不信任前端传入 `agent_config`。
+5. 生产 webhook、认证、权限、数据库迁移均属于高风险区，后续开工前必须先确认契约、迁移和回滚方案。

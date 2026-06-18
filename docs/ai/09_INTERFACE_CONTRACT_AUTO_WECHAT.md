@@ -1549,3 +1549,64 @@ P0-API-1 完成后，后续文档顺序：
 3. 引入 LangChain。
 4. 接 Agent tools。
 5. 让 9100 mock binding 成为正式绑定依据。
+
+------
+
+## 17. P1-REQ-GAP-1 接口契约待补齐点
+
+更新时间：2026-06-18
+
+本节基于 `docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md` 补充一期需求差异探索后的接口契约风险。以下内容是后续开发前置约束，不代表已经实现。
+
+### 17.1 NewCarProject 登录与权限契约
+
+当前 `app/auth/newcar_client.py` 只是 NewCarProject 登录态校验门面，`/auth/me` 和 `/auth/callback` 仍用于调试和占位。
+
+正式开工 `P1-GAP-LOGIN-1` 前，必须由 NewCarProject 明确以下字段和规则：
+
+1. `user_id`
+2. `username`
+3. `role` 或 `role_codes`
+4. `merchant_ids`
+5. 权限字典，至少覆盖 `auto_wechat` 相关功能码。
+6. token / cookie 名称、传递方式、过期时间和刷新规则。
+7. 商户禁用、套餐过期、无权限时的错误码。
+
+不得在 auto_wechat 中写死 NewCarProject 返回结构。后续应通过 adapter 将外部响应转换为 `RequestContext`。
+
+### 17.2 权限菜单与路由隔离契约
+
+当前前端 `SideNav.tsx` 主要按本地 `role` 控制菜单，`App.tsx` 只注册少量路由，不能作为完整权限边界。
+
+后续契约要求：
+
+1. `/auth/me` 稳定返回 `permission_codes`、`role_codes`、`merchant_ids`、`super_admin`。
+2. 前端菜单和路由守卫基于权限字典，不基于写死账号或本地 role 推断。
+3. 后端接口必须以 `RequestContext` 为准二次校验，前端隐藏菜单不能作为权限控制。
+4. 涉及商户数据的接口必须从可信上下文取 `merchant_id`，不得信任请求体或查询参数中的商户归属。
+
+### 17.3 线索商户隔离接口契约
+
+当前 `/leads` 已接入 `RequestContext`，但 `douyin_leads` 数据模型缺少商户字段，导致接口无法强制按商户隔离。
+
+后续契约要求：
+
+1. `GET /leads`、`GET /leads/{id}`、`POST /leads/{id}/assign` 等接口必须按 `RequestContext.merchant_id` 过滤。
+2. webhook 生成线索时必须能确定可信 `merchant_id`，推荐通过抖音企业号 `account_open_id` 映射 `douyin_authorized_accounts`。
+3. 无法确认商户归属的事件不得进入普通商户线索列表，应进入隔离区、invalid 原始事件或人工处理清单。
+4. super_admin 跨商户查看必须有明确权限和商户筛选参数。
+
+### 17.4 小高算力接口与前端接入边界
+
+当前后端已提供一期小高算力接口：
+
+1. 商户侧：`GET /compute/summary`、`GET /compute/transactions`、`GET /compute/packages`、`POST /compute/recharge-orders`。
+2. 管理员侧：`GET/POST/PUT /admin/compute/packages`、`POST /admin/merchants/{merchant_id}/compute/recharge`、`POST /admin/merchants/{merchant_id}/compute/grant-package`。
+3. 内部记账：`POST /internal/compute/usage`。
+
+当前前端 `ComputeCenter.tsx` 和 `SuperComputeConfig.tsx` 仍显示真实接口未接入。后续 `P1-GAP-COMPUTE-FE-1` 可以优先做前端接入，但必须保留：
+
+1. `POST /compute/recharge-orders` 仍是 mock 订单，不真实支付、不实际到账、不写流水。
+2. `/internal/compute/usage` 一期不做余额不足拦截。
+3. 管理员接口仅允许 `super_admin`。
+4. 生产环境内部 usage 必须配置 `COMPUTE_INTERNAL_TOKEN`，避免外部滥用。
