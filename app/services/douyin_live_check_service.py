@@ -1,19 +1,25 @@
 """In-memory Douyin live-check state for on-site integration observation."""
 
-import hashlib
 import json
 import logging
-import time
+import hashlib
 from datetime import datetime
 from threading import Lock
 from typing import Any
 
-import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
 from app.models import DouyinAuthorizedAccount
+from app.services.douyin_openapi_client import (
+    build_safe_openapi_error_detail,
+    call_douyin_openapi as _shared_call_douyin_openapi,
+    build_signed_openapi_request_body_and_headers,
+    openapi_endpoint_config,
+    preview,
+    requests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +49,7 @@ def _now() -> datetime:
 
 
 def _preview(value: str | None, head: int = 4, tail: int = 4) -> str | None:
-    if not value:
-        return None
-    if len(value) <= head + tail:
-        return value
-    return f"{value[:head]}...{value[-tail:]}"
+    return preview(value, head=head, tail=tail)
 
 
 def _content_info(payload: dict[str, Any]) -> dict[str, Any]:
@@ -149,40 +151,7 @@ def build_auth_payload() -> dict[str, Any]:
 
 
 def _openapi_endpoint_config() -> dict[str, Any]:
-    openapi_base_url = (getattr(config, "DY_OPENAPI_BASE_URL", "") or "").rstrip("/")
-    openapi_prefix = (getattr(config, "DY_OPENAPI_PREFIX", "") or "").strip()
-    legacy_base_url = (getattr(config, "DY_BASE_URL_LEGACY", "") or "").rstrip("/")
-    fallback_legacy_base_url = (getattr(config, "DY_BASE_URL", "") or "").rstrip("/")
-
-    if openapi_base_url and openapi_prefix:
-        return {
-            "base_url": openapi_base_url,
-            "prefix": openapi_prefix,
-            "upstream_base_url": f"{openapi_base_url}/{openapi_prefix.strip('/')}",
-            "legacy_base_url_used": False,
-            "legacy_base_url_present": bool(legacy_base_url),
-            "source": "openapi_base_url_prefix",
-        }
-
-    legacy_candidate = legacy_base_url or fallback_legacy_base_url
-    if legacy_candidate:
-        return {
-            "base_url": openapi_base_url,
-            "prefix": openapi_prefix,
-            "upstream_base_url": legacy_candidate,
-            "legacy_base_url_used": True,
-            "legacy_base_url_present": True,
-            "source": "legacy_dy_base_url",
-        }
-
-    return {
-        "base_url": openapi_base_url,
-        "prefix": openapi_prefix,
-        "upstream_base_url": "",
-        "legacy_base_url_used": False,
-        "legacy_base_url_present": False,
-        "source": "missing",
-    }
+    return openapi_endpoint_config()
 
 
 def _openapi_base_url() -> str:
@@ -192,24 +161,12 @@ def _openapi_base_url() -> str:
 def build_signed_openapi_request_body_and_headers(
     payload: dict[str, Any],
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
-    """Build canonical JSON body, OpenAPI signing headers, and safe debug fields."""
-    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    timestamp = str(int(time.time()))
-    canonical_string = body_text + "-" + timestamp
-    secret = config.DY_GMP_SECRET_KEY
-    signature = hashlib.sha256((secret + canonical_string).encode("utf-8")).hexdigest()
-    headers = {
-        "Content-Type": "application/json",
-        "X-Auth-Timestamp": timestamp,
-        "Authorization": signature,
-    }
-    debug = {
-        "secret_len": len(secret),
-        "secret_has_space": secret != secret.strip(),
-        "body_sha256": hashlib.sha256(body_text.encode("utf-8")).hexdigest(),
-        "canonical_string_sha256": hashlib.sha256(canonical_string.encode("utf-8")).hexdigest(),
-    }
-    return body_text, headers, debug
+    """兼容旧导入路径，实际使用统一 OpenAPI client。"""
+    from app.services.douyin_openapi_client import (
+        build_signed_openapi_request_body_and_headers as _shared_build,
+    )
+
+    return _shared_build(payload)
 
 
 def _extract_upstream_auth_url(payload: dict[str, Any]) -> str | None:
@@ -279,79 +236,41 @@ def _safe_upstream_error(
 
 
 def fetch_auth_url() -> dict[str, Any]:
-    """Fetch the final browser-openable Douyin auth URL via signed upstream POST."""
+    """Fetch the final browser-openable Douyin auth URL via the unified OpenAPI client."""
     base_data = _auth_url_base_data()
     if not base_data["configured"]:
         return base_data
 
     payload = build_auth_payload()
-    endpoint = _openapi_endpoint_config()
-    upstream_url = f"{endpoint['upstream_base_url']}/get_aweme_auth_url"
-    body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
-    debug.update(
-        {
-            "upstream_url": upstream_url,
-            "upstream_base_url": endpoint["upstream_base_url"],
-            "openapi_base_url": endpoint["base_url"],
-            "openapi_prefix": endpoint["prefix"],
-            "legacy_base_url_used": endpoint["legacy_base_url_used"],
-            "legacy_base_url_present": endpoint["legacy_base_url_present"],
-            "openapi_config_source": endpoint["source"],
-            "body_keys": sorted(payload.keys()),
-            "timestamp_format": "unix_seconds" if headers["X-Auth-Timestamp"].isdigit() else "unknown",
-            "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
-        }
-    )
-    timestamp = headers["X-Auth-Timestamp"]
-    signature = headers["Authorization"]
-    resp = None
     try:
-        resp = requests.post(
-            upstream_url,
-            data=body_text.encode("utf-8"),
-            headers=headers,
-            timeout=config.DY_HTTP_TIMEOUT_SECONDS,
-        )
-        resp.raise_for_status()
-        upstream_payload = resp.json()
-    except requests.RequestException as exc:
+        result = _shared_call_douyin_openapi("/get_aweme_auth_url", payload)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"detail": str(exc.detail)}
         logger.warning(
             "Douyin live-check auth-url upstream failed: status=%s, error_type=%s",
-            resp.status_code if resp is not None else None,
-            type(exc).__name__,
+            detail.get("upstream_status"),
+            detail.get("error_type"),
         )
-        raise HTTPException(
-            status_code=502,
-            detail=_safe_upstream_error(
-                resp,
-                type(exc).__name__,
-                payload=payload,
-                timestamp=timestamp,
-                signature=signature,
-                debug=debug,
-            ),
-        ) from exc
-    except ValueError as exc:
         raise HTTPException(
             status_code=502,
             detail={
-                "upstream_status": resp.status_code if resp is not None else None,
-                "upstream_code": None,
-                "upstream_msg": "non-json response",
-                "safe_message": "授权链接获取失败，上游返回非 JSON 响应。",
-                "error_type": type(exc).__name__,
+                **detail,
+                "safe_message": "授权链接获取失败，请检查抖音上游接口配置、签名密钥和请求头。",
             },
         ) from exc
 
+    upstream_payload = result["payload"]
     auth_url = _extract_upstream_auth_url(upstream_payload)
     if not auth_url:
         raise HTTPException(
             status_code=502,
             detail={
-                "upstream_status": resp.status_code,
+                **result["debug"],
+                "upstream_status": 200,
                 "upstream_code": upstream_payload.get("code") if isinstance(upstream_payload, dict) else None,
                 "upstream_msg": upstream_payload.get("msg") if isinstance(upstream_payload, dict) else None,
                 "safe_message": "授权链接获取失败，上游响应中没有 auth_url。",
+                "error_code": "invalid_upstream_response",
                 "error_type": "MissingAuthUrl",
             },
         )
@@ -360,89 +279,9 @@ def fetch_auth_url() -> dict[str, Any]:
         "auth_url": auth_url,
     }
 
-
 def call_douyin_openapi(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Call a signed Douyin OpenAPI endpoint using the shared P1-E signing helper."""
-    endpoint = _openapi_endpoint_config()
-    upstream_url = f"{endpoint['upstream_base_url']}/{path.strip('/')}"
-    body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
-    debug.update(
-        {
-            "upstream_url": upstream_url,
-            "upstream_base_url": endpoint["upstream_base_url"],
-            "openapi_base_url": endpoint["base_url"],
-            "openapi_prefix": endpoint["prefix"],
-            "legacy_base_url_used": endpoint["legacy_base_url_used"],
-            "legacy_base_url_present": endpoint["legacy_base_url_present"],
-            "openapi_config_source": endpoint["source"],
-        }
-    )
-    resp = None
-    try:
-        resp = requests.post(
-            upstream_url,
-            data=body_text.encode("utf-8"),
-            headers=headers,
-            timeout=config.DY_HTTP_TIMEOUT_SECONDS,
-        )
-        resp.raise_for_status()
-        upstream_payload = resp.json()
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=_safe_upstream_error(
-                resp,
-                type(exc).__name__,
-                payload=payload,
-                timestamp=headers["X-Auth-Timestamp"],
-                signature=headers["Authorization"],
-                debug=debug,
-            ),
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=_safe_upstream_error(
-                resp,
-                type(exc).__name__,
-                payload=payload,
-                timestamp=headers["X-Auth-Timestamp"],
-                signature=headers["Authorization"],
-                debug=debug,
-            ),
-        ) from exc
-
-    if not isinstance(upstream_payload, dict):
-        raise HTTPException(
-            status_code=502,
-            detail={
-                **debug,
-                "upstream_status": resp.status_code if resp is not None else None,
-                "upstream_code": None,
-                "upstream_msg": "invalid upstream response",
-                "body_keys": sorted(payload.keys()),
-                "timestamp_format": "unix_seconds",
-                "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
-                "error_type": "InvalidUpstreamResponse",
-            },
-        )
-
-    code = upstream_payload.get("code")
-    if code != 0:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                **debug,
-                "upstream_status": resp.status_code,
-                "upstream_code": code,
-                "upstream_msg": upstream_payload.get("msg") or upstream_payload.get("message"),
-                "body_keys": sorted(payload.keys()),
-                "timestamp_format": "unix_seconds",
-                "authorization_preview": _preview(headers["Authorization"], head=6, tail=4),
-                "error_type": "UpstreamBusinessError",
-            },
-        )
-    return {"payload": upstream_payload, "debug": debug}
+    """兼容旧导入路径，实际使用统一 OpenAPI client。"""
+    return _shared_call_douyin_openapi(path, payload)
 
 
 def sync_bind_info_accounts(

@@ -36,6 +36,7 @@ from app.services.douyin_live_check_service import (
     build_signed_openapi_request_body_and_headers,
     reset_live_check_state,
 )
+from app.services.douyin_openapi_client import call_douyin_openapi
 
 
 test_engine = create_engine(
@@ -54,6 +55,21 @@ class FakeUpstreamResponse:
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+
+class FakeNonJsonUpstreamResponse:
+    def __init__(self, status_code: int, text: str = "<html>error</html>"):
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        raise ValueError("not json")
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -87,7 +103,7 @@ def _live_receive_payload(
     from_user_id: str = "live_forward_user_001",
     server_message_id: str = "live_forward_msg_001",
     conversation_short_id: str = "live_forward_conv_001",
-    text: str = "测试线索0616，我的微信 wx_test_0616，手机号 13633624849",
+    text: str = "test lead wx_test_0616 phone 13633624849",
 ) -> dict:
     return {
         "event": "im_receive_msg",
@@ -283,7 +299,7 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
          patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg", "im_send_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
@@ -319,7 +335,7 @@ def test_auth_url_accepts_upstream_redirect_url_compatibility_field():
          patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"redirect_url": "https://open.douyin.com/auth/scan?ticket=redirect"}},
@@ -342,8 +358,8 @@ def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg", "im_send_msg"]), \
          patch("app.config.DY_SECRET_KEY", "webhook-secret"), \
          patch("app.config.DY_GMP_SECRET_KEY", "gmp-secret"), \
-         patch("app.services.douyin_live_check_service.time.time", return_value=1700000000), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.time.time", return_value=1700000000), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
@@ -385,7 +401,7 @@ def test_signed_openapi_request_uses_body_dash_timestamp_and_hex_authorization()
     }
 
     with patch("app.config.DY_GMP_SECRET_KEY", "gmp-secret"), \
-         patch("app.services.douyin_live_check_service.time.time", return_value=1700000000):
+         patch("app.services.douyin_openapi_client.time.time", return_value=1700000000):
         body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
 
     expected_body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -411,6 +427,72 @@ def test_signed_openapi_request_uses_body_dash_timestamp_and_hex_authorization()
     assert expected_signature not in json.dumps(debug, ensure_ascii=False)
 
 
+def test_unified_openapi_client_classifies_non_json_and_keeps_request_body_canonical():
+    payload = {"main_account_id": 123, "image_base64": _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)}
+
+    with patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeNonJsonUpstreamResponse(200)
+        try:
+            call_douyin_openapi("/upload_image_file", payload)
+        except Exception as exc:
+            detail = exc.detail
+        else:
+            raise AssertionError("call_douyin_openapi should reject non-json upstream response")
+
+    assert detail["error_code"] == "invalid_upstream_json"
+    assert payload["image_base64"] not in json.dumps(detail, ensure_ascii=False)
+    assert mock_post.call_args.kwargs["data"] == json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert "json" not in mock_post.call_args.kwargs
+
+
+def test_unified_openapi_client_classifies_http_500_and_masks_authorization():
+    with patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(500, {"code": 5000, "msg": "server failed"})
+        try:
+            call_douyin_openapi("/send_msg", {"main_account_id": 123, "content": "hello"})
+        except Exception as exc:
+            detail = exc.detail
+        else:
+            raise AssertionError("call_douyin_openapi should reject HTTP 500")
+
+    assert detail["error_code"] == "upstream_server_error"
+    assert detail["upstream_status"] == 500
+    assert detail["upstream_code"] == 5000
+    assert detail["upstream_msg"] == "server failed"
+    assert "..." in detail["authorization_preview"]
+    assert "Authorization" not in json.dumps(detail, ensure_ascii=False)
+    assert "super-secret" not in json.dumps(detail, ensure_ascii=False)
+
+
+def test_unified_openapi_client_classifies_business_error():
+    with patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(200, {"code": 1001, "msg": "business failed"})
+        try:
+            call_douyin_openapi("/list_bind_info", {"main_account_id": 123})
+        except Exception as exc:
+            detail = exc.detail
+        else:
+            raise AssertionError("call_douyin_openapi should reject business error")
+
+    assert detail["error_code"] == "upstream_business_error"
+    assert detail["upstream_status"] == 200
+    assert detail["upstream_code"] == 1001
+    assert detail["upstream_msg"] == "business failed"
+
+
 def test_auth_url_uses_openapi_base_url_and_prefix_when_legacy_base_url_absent():
     client = _client()
 
@@ -424,7 +506,7 @@ def test_auth_url_uses_openapi_base_url_and_prefix_when_legacy_base_url_absent()
          patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
@@ -451,7 +533,7 @@ def test_auth_url_prefers_openapi_base_and_prefix_when_legacy_base_url_also_exis
          patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
@@ -495,7 +577,7 @@ def test_auth_url_upstream_403_returns_safe_error_without_secret():
          patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
          patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             403,
             {"code": 403, "msg": "Invalid request headers", "access_token": "token-should-not-leak"},
@@ -544,8 +626,8 @@ def test_sync_bind_info_posts_signed_body_and_upserts_accounts():
          patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.time.time", return_value=1700000000), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.time.time", return_value=1700000000), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {
@@ -626,7 +708,7 @@ def test_sync_bind_info_updates_existing_account_without_duplicate():
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.side_effect = [upstream("First Name"), upstream("Updated Name")]
         first = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
         second = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
@@ -676,7 +758,7 @@ def test_sync_bind_info_persists_inactive_but_accounts_hides_it_by_default():
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {
@@ -708,7 +790,7 @@ def test_sync_bind_info_upstream_business_error_does_not_write_db_or_leak_secret
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(200, {"code": 1001, "msg": "business failed", "data": {}})
         resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
 
@@ -727,7 +809,7 @@ def test_send_message_rejects_without_manual_confirmation_and_does_not_call_upst
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/messages/send",
             json={
@@ -753,7 +835,7 @@ def test_send_message_rejects_empty_content_and_does_not_call_upstream():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/messages/send",
             json={
@@ -773,7 +855,7 @@ def test_send_message_rejects_missing_context_and_does_not_call_upstream():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/messages/send",
             json={
@@ -797,7 +879,7 @@ def test_send_message_success_uses_signed_openapi_body_and_persists_sent_record(
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
          patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
          patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"msg_id": "upstream_sent_msg_001"}},
@@ -853,7 +935,7 @@ def test_send_message_rejects_context_older_than_24_hours_and_does_not_call_upst
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/messages/send",
             json={
@@ -881,7 +963,7 @@ def test_send_message_upstream_business_error_persists_failed_record_without_sec
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 1001, "msg": "send failed"},
@@ -917,7 +999,7 @@ def test_download_resource_rejects_non_media_types_without_calling_upstream():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/resources/download",
             json={
@@ -942,7 +1024,7 @@ def test_download_resource_rejects_missing_url_without_calling_upstream():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         resp = client.post(
             "/integrations/douyin/live-check/resources/download",
             json={
@@ -966,7 +1048,7 @@ def test_download_resource_success_uses_signed_openapi_body_and_persists_record(
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
          patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
          patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {
@@ -1030,7 +1112,7 @@ def test_download_resource_supports_user_local_media_and_data_url_response():
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"url": "https://download.example.com/local-image.png"}},
@@ -1055,7 +1137,7 @@ def test_download_resource_supports_top_level_url_response_for_video():
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "url": "https://download.example.com/local-video.mp4"},
@@ -1080,7 +1162,7 @@ def test_download_resource_upstream_business_error_persists_failed_record_withou
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(200, {"code": 1001, "msg": "download failed"})
         resp = client.post(
             "/integrations/douyin/live-check/resources/download",
@@ -1112,7 +1194,7 @@ def test_upload_image_success_uses_signed_openapi_body_and_persists_sanitized_re
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
          patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
          patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {
@@ -1186,7 +1268,7 @@ def test_upload_image_accepts_jpeg_bmp_and_webp_headers():
         client = _client()
         with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
              patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
-             patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+             patch("app.services.douyin_openapi_client.requests.post") as mock_post:
             mock_post.return_value = FakeUpstreamResponse(
                 200,
                 {"code": 0, "msg": "success", "data": {"image_id": f"img-{index}"}},
@@ -1218,7 +1300,7 @@ def test_upload_image_rejects_invalid_inputs_without_calling_upstream():
         setup_function()
         client = _client()
         with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
-             patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+             patch("app.services.douyin_openapi_client.requests.post") as mock_post:
             resp = client.post(
                 "/integrations/douyin/live-check/resources/upload-image",
                 json=payload,
@@ -1238,7 +1320,7 @@ def test_upload_image_missing_image_id_persists_failed_record():
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(
             200,
             {"code": 0, "msg": "success", "data": {"width": 1, "height": 1}},
@@ -1267,7 +1349,7 @@ def test_upload_image_upstream_error_persists_failed_record_without_secret_or_ba
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
-         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
         mock_post.return_value = FakeUpstreamResponse(403, {"code": 1001, "msg": "sign failed"})
         resp = client.post(
             "/integrations/douyin/live-check/resources/upload-image",
@@ -1337,7 +1419,7 @@ def test_authorized_accounts_returns_oauth_callback_account_without_secret():
                 "code": "code-1234567890",
                 "state": "state-abc",
                 "open_id": "open-account-001",
-                "nick_name": "授权抖音号",
+                "nick_name": "Authorized Account",
                 "avatar": "https://avatar.example.com/a.png",
                 "access_token": "token-should-not-leak",
             },
@@ -1351,7 +1433,7 @@ def test_authorized_accounts_returns_oauth_callback_account_without_secret():
     account = data["items"][0]
     assert account["account_open_id"] == "open-account-001"
     assert account["open_id"] == "open-account-001"
-    assert account["account_name"] == "授权抖音号"
+    assert account["account_name"] == "Authorized Account"
     assert account["avatar_url"] == "https://avatar.example.com/a.png"
     assert account["status"] == "active"
     assert account["is_active"] is True
@@ -1563,7 +1645,7 @@ def test_webhook_observe_forward_enabled_duplicate_uses_formal_idempotency():
 
 def test_webhook_observe_forward_failure_keeps_200_and_masks_error():
     client = _client()
-    payload = _live_receive_payload(text="token-secret-value 手机号 13633624849")
+    payload = _live_receive_payload(text="token-secret-value phone 13633624849")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app import config
 from app.integrations.douyin_webhook import parse_content
 from app.models import DouyinMessageResourceDownload, DouyinWebhookEvent
-from app.services.douyin_live_check_service import call_douyin_openapi
+from app.services.douyin_openapi_client import call_douyin_openapi
 
 
 ALLOWED_MEDIA_TYPES = {"image", "video"}
@@ -255,5 +255,5 @@ def _safe_detail(detail: Any) -> dict[str, Any]:
 
 def _safe_message(detail: Any) -> str:
     if isinstance(detail, dict):
-        return _optional_str(detail.get("safe_message") or detail.get("upstream_msg") or detail.get("detail")) or "resource download failed"
+        return _optional_str(detail.get("upstream_msg") or detail.get("safe_message") or detail.get("detail")) or "resource download failed"
     return str(detail)

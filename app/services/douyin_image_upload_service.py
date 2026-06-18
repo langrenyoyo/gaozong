@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models import DouyinImageUpload
-from app.services.douyin_live_check_service import call_douyin_openapi
+from app.services.douyin_openapi_client import call_douyin_openapi
 
 
 MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024

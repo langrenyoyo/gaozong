@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models import DouyinPrivateMessageSend
-from app.services.douyin_live_check_service import call_douyin_openapi
+from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
 
 
