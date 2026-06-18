@@ -8,13 +8,17 @@ import {
   ImagePlusIcon,
   LoaderIcon,
   MessageSquareTextIcon,
+  PaperclipIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
   SearchIcon,
+  ShieldCheckIcon,
+  SmileIcon,
   SparklesIcon,
   Trash2Icon,
   UnlinkIcon,
+  VideoIcon,
   XIcon,
   UserRoundIcon,
 } from "lucide-react";
@@ -60,6 +64,7 @@ const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
+type ChatAssistMode = "ai_suggestion" | "manual_takeover";
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
@@ -135,6 +140,59 @@ function conversationTagText(tag: string) {
   if (tag === "retained_contact") return "已留资";
   if (tag === "follow_up") return "待回访";
   return tag;
+}
+
+function isCustomerMessage(message: DouyinMessageItem) {
+  return (
+    message.direction === "inbound" ||
+    message.sender_type === "customer" ||
+    message.sender_type === "user" ||
+    message.message_type === "customer" ||
+    message.message_type === "user"
+  );
+}
+
+function isManualMessage(message: DouyinMessageItem) {
+  return (
+    message.direction === "outbound" ||
+    message.sender_type === "staff" ||
+    message.sender_type === "manual" ||
+    message.message_type === "im_send_msg" ||
+    message.message_type === "manual"
+  );
+}
+
+function messageRoleLabel(message: DouyinMessageItem) {
+  if (isCustomerMessage(message)) return "客户";
+  if (isManualMessage(message)) return "人工客服";
+  return "系统";
+}
+
+function messageLayoutClass(message: DouyinMessageItem) {
+  if (isCustomerMessage(message)) return "justify-start";
+  if (isManualMessage(message)) return "justify-end";
+  return "justify-center";
+}
+
+function messageBubbleClass(message: DouyinMessageItem) {
+  if (isCustomerMessage(message)) return "bg-white text-slate-800";
+  if (isManualMessage(message)) return "bg-blue-600 text-white";
+  return "max-w-[82%] border border-slate-200 bg-slate-100 text-slate-500 shadow-none";
+}
+
+function messageMetaClass(message: DouyinMessageItem) {
+  if (isManualMessage(message)) return "text-blue-100";
+  return "text-slate-400";
+}
+
+function chatModeTitle(mode: ChatAssistMode) {
+  return mode === "manual_takeover" ? "人工接管中" : "AI正在根据车型和留资意向生成回复建议";
+}
+
+function chatModeSubtitle(mode: ChatAssistMode) {
+  return mode === "manual_takeover"
+    ? "客服确认后发送，AI建议仍可复制参考"
+    : "不会自动发送，需人工确认";
 }
 
 function profileFieldText(value?: string | number | null) {
@@ -357,6 +415,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
+  const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_suggestion");
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
@@ -962,9 +1021,9 @@ export default function DouyinAiCsWorkbenchPage() {
             多抖音号会话工作台，当前只生成 AI 回复建议，不自动发送私信。
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-          <CheckIcon size={14} />
-          auto_send=false
+        <div className="flex max-w-[460px] items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+          <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
+          <span>当前为安全建议模式：AI只生成回复建议，不会自动发送；所有发送必须由客服人工确认。</span>
         </div>
       </header>
 
@@ -1133,7 +1192,7 @@ export default function DouyinAiCsWorkbenchPage() {
         </aside>
 
         <section className="flex min-h-0 flex-col overflow-hidden border border-r-0 border-[#dfe5ee] bg-white">
-          <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-5">
+          <div className="flex min-h-20 items-center justify-between gap-4 border-b border-[#edf1f6] px-5 py-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-bold text-[#172033]">
                 {selectedConversation?.nickname || "请选择会话"}
@@ -1141,10 +1200,46 @@ export default function DouyinAiCsWorkbenchPage() {
               <div className="mt-0.5 truncate text-[11px] text-slate-500">
                 {selectedConversation ? profileSummary : "选择会话后查看客户画像"}
               </div>
+              <div
+                className={`mt-2 flex items-start gap-2 text-[11px] leading-5 ${
+                  chatAssistMode === "manual_takeover" ? "text-amber-700" : "text-blue-700"
+                }`}
+              >
+                <span
+                  className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                    chatAssistMode === "manual_takeover" ? "bg-amber-500" : "bg-blue-500"
+                  }`}
+                />
+                <span>
+                  <span className="font-bold">{chatModeTitle(chatAssistMode)}</span>
+                  <span className="ml-1 text-slate-500">{chatModeSubtitle(chatAssistMode)}</span>
+                </span>
+              </div>
             </div>
-            <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-              只读建议模式
-            </span>
+            <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
+              <button
+                type="button"
+                onClick={() => setChatAssistMode("ai_suggestion")}
+                className={`h-8 rounded px-3 text-[11px] font-semibold ${
+                  chatAssistMode === "ai_suggestion"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white"
+                }`}
+              >
+                AI建议模式
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatAssistMode("manual_takeover")}
+                className={`h-8 rounded px-3 text-[11px] font-semibold ${
+                  chatAssistMode === "manual_takeover"
+                    ? "bg-amber-500 text-white shadow-sm"
+                    : "text-slate-600 hover:bg-white"
+                }`}
+              >
+                人工接管
+              </button>
+            </div>
           </div>
 
           <div className="grid min-h-0 flex-1 grid-rows-[minmax(220px,1fr)_minmax(270px,42%)]">
@@ -1153,7 +1248,8 @@ export default function DouyinAiCsWorkbenchPage() {
               {!loadingMessages && messages.length === 0 ? <EmptyState text="暂无消息。" /> : null}
               <div className="space-y-3">
                 {messages.map((message) => {
-                  const isCustomer = message.direction === "inbound";
+                  const isCustomer = isCustomerMessage(message);
+                  const isManual = isManualMessage(message);
                   const mediaType = mediaTypeForDownload(message);
                   const downloadState = mediaDownloads[String(message.id)] || {};
                   const downloadableResource = Boolean(mediaType && message.downloadable_resource);
@@ -1165,13 +1261,20 @@ export default function DouyinAiCsWorkbenchPage() {
                   return (
                     <div
                       key={message.id}
-                      className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}
+                      className={`flex ${messageLayoutClass(message)}`}
                     >
                       <div
                         className={`max-w-[72%] rounded-lg px-3 py-2 text-sm leading-6 shadow-sm ${
-                          isCustomer ? "bg-white text-slate-800" : "bg-blue-600 text-white"
+                          messageBubbleClass(message)
                         }`}
                       >
+                        <div
+                          className={`mb-1 text-[10px] font-semibold ${
+                            isManual ? "text-blue-100" : isCustomer ? "text-slate-500" : "text-slate-400"
+                          }`}
+                        >
+                          {messageRoleLabel(message)}
+                        </div>
                         <div>{message.content}</div>
                         {mediaType ? (
                           <div
@@ -1231,8 +1334,8 @@ export default function DouyinAiCsWorkbenchPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        <div className={`mt-1 text-[10px] ${isCustomer ? "text-slate-400" : "text-blue-100"}`}>
-                          {isCustomer ? "客户" : "客服"} · {formatTime(message.created_at)}
+                        <div className={`mt-1 text-[10px] ${messageMetaClass(message)}`}>
+                          {messageRoleLabel(message)} · {formatTime(message.created_at)}
                         </div>
                       </div>
                     </div>
@@ -1252,7 +1355,16 @@ export default function DouyinAiCsWorkbenchPage() {
                     <div className="text-[11px] text-slate-500">基于最新客户消息与 RAG 命中生成</div>
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled
+                    title="表情暂未接入"
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
+                  >
+                    <SmileIcon size={14} />
+                    表情
+                  </button>
                   {selectedConversation ? (
                     <button
                       onClick={() => openUploadDialog()}
@@ -1260,9 +1372,27 @@ export default function DouyinAiCsWorkbenchPage() {
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <ImagePlusIcon size={14} />
-                      上传图片
+                      图片素材
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    disabled
+                    title="视频暂未接入"
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
+                  >
+                    <VideoIcon size={14} />
+                    视频
+                  </button>
+                  <button
+                    type="button"
+                    disabled
+                    title="文件暂未接入"
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
+                  >
+                    <PaperclipIcon size={14} />
+                    文件
+                  </button>
                   {selectedConversation ? (
                     <button
                       onClick={() => openSendDialog()}
@@ -1376,6 +1506,10 @@ export default function DouyinAiCsWorkbenchPage() {
 
               {reply ? (
                 <div className="space-y-3">
+                  <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                    <span className="font-bold">AI建议</span>
+                    <span className="ml-2">AI仅生成建议，不会自动发送。点击“人工确认发送”后仍会进入确认弹窗。</span>
+                  </div>
                   {reply.agent_id ? (
                     <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
                       Agent：{reply.agent_name || reply.agent_id}
@@ -1423,6 +1557,14 @@ export default function DouyinAiCsWorkbenchPage() {
                     >
                       <ClipboardIcon size={14} />
                       {copied ? "已复制" : "复制回复"}
+                    </button>
+                    <button
+                      onClick={() => openSendDialog()}
+                      disabled={!selectedConversation || !selectedAccount}
+                      className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <CheckIcon size={14} />
+                      人工确认发送
                     </button>
                   </div>
                 </div>
