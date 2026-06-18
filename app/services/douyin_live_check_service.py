@@ -99,9 +99,10 @@ def _optional_str(value: Any) -> str | None:
 
 def _auth_url_base_data() -> dict[str, Any]:
     missing: list[str] = []
-    upstream_base_url = _openapi_base_url()
+    endpoint = _openapi_endpoint_config()
+    upstream_base_url = endpoint["upstream_base_url"]
     if not upstream_base_url:
-        missing.append("DY_BASE_URL")
+        missing.append("DY_OPENAPI_BASE_URL/DY_OPENAPI_PREFIX or DY_BASE_URL")
     if not config.DY_GMP_SECRET_KEY:
         missing.append("DY_GMP_SECRET_KEY")
     if not config.DY_MAIN_ACCOUNT_ID:
@@ -145,15 +146,45 @@ def build_auth_payload() -> dict[str, Any]:
     return params
 
 
+def _openapi_endpoint_config() -> dict[str, Any]:
+    openapi_base_url = (getattr(config, "DY_OPENAPI_BASE_URL", "") or "").rstrip("/")
+    openapi_prefix = (getattr(config, "DY_OPENAPI_PREFIX", "") or "").strip()
+    legacy_base_url = (getattr(config, "DY_BASE_URL_LEGACY", "") or "").rstrip("/")
+    fallback_legacy_base_url = (getattr(config, "DY_BASE_URL", "") or "").rstrip("/")
+
+    if openapi_base_url and openapi_prefix:
+        return {
+            "base_url": openapi_base_url,
+            "prefix": openapi_prefix,
+            "upstream_base_url": f"{openapi_base_url}/{openapi_prefix.strip('/')}",
+            "legacy_base_url_used": False,
+            "legacy_base_url_present": bool(legacy_base_url),
+            "source": "openapi_base_url_prefix",
+        }
+
+    legacy_candidate = legacy_base_url or fallback_legacy_base_url
+    if legacy_candidate:
+        return {
+            "base_url": openapi_base_url,
+            "prefix": openapi_prefix,
+            "upstream_base_url": legacy_candidate,
+            "legacy_base_url_used": True,
+            "legacy_base_url_present": True,
+            "source": "legacy_dy_base_url",
+        }
+
+    return {
+        "base_url": openapi_base_url,
+        "prefix": openapi_prefix,
+        "upstream_base_url": "",
+        "legacy_base_url_used": False,
+        "legacy_base_url_present": False,
+        "source": "missing",
+    }
+
+
 def _openapi_base_url() -> str:
-    legacy_base_url = getattr(config, "DY_BASE_URL", "") or ""
-    if legacy_base_url:
-        return legacy_base_url.rstrip("/")
-    base_url = (getattr(config, "DY_OPENAPI_BASE_URL", "") or "").rstrip("/")
-    prefix = (getattr(config, "DY_OPENAPI_PREFIX", "") or "").strip()
-    if not base_url or not prefix:
-        return ""
-    return f"{base_url}/{prefix.strip('/')}"
+    return _openapi_endpoint_config()["upstream_base_url"]
 
 
 def build_signed_openapi_request_body_and_headers(
@@ -233,6 +264,13 @@ def _safe_upstream_error(
                 "secret_has_space": debug.get("secret_has_space"),
                 "body_sha256": debug.get("body_sha256"),
                 "canonical_string_sha256": debug.get("canonical_string_sha256"),
+                "upstream_url": debug.get("upstream_url"),
+                "upstream_base_url": debug.get("upstream_base_url"),
+                "openapi_base_url": debug.get("openapi_base_url"),
+                "openapi_prefix": debug.get("openapi_prefix"),
+                "legacy_base_url_used": debug.get("legacy_base_url_used"),
+                "legacy_base_url_present": debug.get("legacy_base_url_present"),
+                "openapi_config_source": debug.get("openapi_config_source"),
             }
         )
     return safe_error
@@ -245,13 +283,26 @@ def fetch_auth_url() -> dict[str, Any]:
         return base_data
 
     payload = build_auth_payload()
+    endpoint = _openapi_endpoint_config()
+    upstream_url = f"{endpoint['upstream_base_url']}/get_aweme_auth_url"
     body_text, headers, debug = build_signed_openapi_request_body_and_headers(payload)
+    debug.update(
+        {
+            "upstream_url": upstream_url,
+            "upstream_base_url": endpoint["upstream_base_url"],
+            "openapi_base_url": endpoint["base_url"],
+            "openapi_prefix": endpoint["prefix"],
+            "legacy_base_url_used": endpoint["legacy_base_url_used"],
+            "legacy_base_url_present": endpoint["legacy_base_url_present"],
+            "openapi_config_source": endpoint["source"],
+        }
+    )
     timestamp = headers["X-Auth-Timestamp"]
     signature = headers["Authorization"]
     resp = None
     try:
         resp = requests.post(
-            f"{_openapi_base_url()}/get_aweme_auth_url",
+            upstream_url,
             data=body_text.encode("utf-8"),
             headers=headers,
             timeout=config.DY_HTTP_TIMEOUT_SECONDS,

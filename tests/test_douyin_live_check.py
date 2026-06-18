@@ -24,6 +24,7 @@ from app.database import Base, get_db
 from app.main import create_app
 from app.models import DouyinLead, DouyinWebhookEvent
 from app.services.douyin_live_check_service import (
+    _openapi_endpoint_config,
     build_signed_openapi_request_body_and_headers,
     reset_live_check_state,
 )
@@ -132,6 +133,9 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://example.test/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
          patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
@@ -165,6 +169,9 @@ def test_auth_url_accepts_upstream_redirect_url_compatibility_field():
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://example.test/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
          patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
@@ -289,11 +296,58 @@ def test_auth_url_uses_openapi_base_url_and_prefix_when_legacy_base_url_absent()
     )
 
 
+def test_auth_url_prefers_openapi_base_and_prefix_when_legacy_base_url_also_exists():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_BASE_URL", "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
+         patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_live_check_service.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
+        )
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 200
+    assert mock_post.call_args.args[0] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/get_aweme_auth_url"
+    )
+
+
+def test_openapi_endpoint_config_falls_back_to_legacy_base_url_when_new_config_missing():
+    with patch("app.config.DY_BASE_URL", "https://legacy.example.com/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://legacy.example.com/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", ""), \
+         patch("app.config.DY_OPENAPI_PREFIX", ""):
+        endpoint = _openapi_endpoint_config()
+
+    assert endpoint == {
+        "base_url": "",
+        "prefix": "",
+        "upstream_base_url": "https://legacy.example.com/openapi",
+        "legacy_base_url_used": True,
+        "legacy_base_url_present": True,
+        "source": "legacy_dy_base_url",
+    }
+
+
 def test_auth_url_upstream_403_returns_safe_error_without_secret():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://example.test/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
          patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
          patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
          patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
@@ -327,6 +381,15 @@ def test_auth_url_upstream_403_returns_safe_error_without_secret():
     assert detail["canonical_string_sha256"]
     assert detail["secret_len"] == len("super-secret")
     assert detail["secret_has_space"] is False
+    assert detail["upstream_url"] == (
+        "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi/get_aweme_auth_url"
+    )
+    assert detail["upstream_base_url"] == "https://gmp.bytedanceapi.com/ai_chat_agent_test_api/v1/openapi"
+    assert detail["openapi_base_url"] == "https://gmp.bytedanceapi.com"
+    assert detail["openapi_prefix"] == "/ai_chat_agent_test_api/v1/openapi"
+    assert detail["legacy_base_url_used"] is False
+    assert detail["legacy_base_url_present"] is True
+    assert detail["openapi_config_source"] == "openapi_base_url_prefix"
     assert "授权链接获取失败" in detail["safe_message"]
     assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
     assert "token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
