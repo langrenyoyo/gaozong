@@ -110,6 +110,38 @@ def _bind_account(open_id="account-open-1", agent_id="agent-1", merchant_id="mer
         db.close()
 
 
+def _insert_webhook_event(
+    *,
+    event: str,
+    account_open_id: str,
+    customer_open_id: str,
+    event_key: str,
+    is_duplicate: int = 0,
+):
+    db = TestSession()
+    try:
+        content = {
+            "text": f"{event} from {customer_open_id}",
+            "account_open_id": account_open_id,
+            "open_id": customer_open_id,
+        }
+        row = DouyinWebhookEvent(
+            event=event,
+            event_key=event_key,
+            from_user_id=customer_open_id if event == "im_receive_msg" else account_open_id,
+            to_user_id=account_open_id if event == "im_receive_msg" else customer_open_id,
+            raw_body=json.dumps({"content": content}, ensure_ascii=False),
+            parsed_content_json=json.dumps(content, ensure_ascii=False),
+            is_duplicate=is_duplicate,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    finally:
+        db.close()
+
+
 def test_list_accounts_returns_binding_summary():
     _insert_account()
     _insert_agent()
@@ -130,6 +162,111 @@ def test_list_accounts_returns_binding_summary():
     assert item["bound_agent_name"] == "agent agent-1"
     assert item["bound_agent_status"] == "active"
     assert item["binding_status"] == "active"
+
+
+def test_list_accounts_unread_count_is_zero_before_read_state_when_no_webhook_messages():
+    _insert_account()
+    client = _client()
+
+    response = client.get("/integrations/douyin/accounts")
+
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["unread_count"] == 0
+
+
+def test_list_accounts_unread_count_before_read_state_counts_inbound_messages_only():
+    _insert_account()
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-open-1",
+        customer_open_id="customer-1",
+        event_key="inbound-1",
+    )
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-open-1",
+        customer_open_id="customer-2",
+        event_key="inbound-2",
+    )
+    _insert_webhook_event(
+        event="im_send_msg",
+        account_open_id="account-open-1",
+        customer_open_id="customer-1",
+        event_key="outbound-1",
+    )
+    client = _client()
+
+    response = client.get("/integrations/douyin/accounts")
+
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["unread_count"] == 2
+
+
+def test_list_accounts_unread_count_before_read_state_isolated_by_account_open_id():
+    _insert_account(open_id="account-open-1")
+    _insert_account(open_id="account-open-2")
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-open-1",
+        customer_open_id="customer-1",
+        event_key="account-1-inbound-1",
+    )
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-open-2",
+        customer_open_id="customer-2",
+        event_key="account-2-inbound-1",
+    )
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-open-2",
+        customer_open_id="customer-3",
+        event_key="account-2-inbound-2",
+    )
+    client = _client()
+
+    response = client.get("/integrations/douyin/accounts")
+
+    assert response.status_code == 200
+    items = {
+        item["account_open_id"]: item["unread_count"]
+        for item in response.json()["data"]["items"]
+    }
+    assert items == {"account-open-2": 2, "account-open-1": 1}
+
+
+def test_list_accounts_unread_count_before_read_state_uses_current_merchant_authorized_accounts_only():
+    _insert_account(open_id="account-current", merchant_id="merchant-1")
+    _insert_account(open_id="account-other", merchant_id="merchant-2")
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-current",
+        customer_open_id="customer-1",
+        event_key="current-inbound-1",
+    )
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-other",
+        customer_open_id="customer-2",
+        event_key="other-inbound-1",
+    )
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="event-only-account",
+        customer_open_id="customer-3",
+        event_key="event-only-inbound-1",
+    )
+    client = _client(_context("merchant-1"))
+
+    response = client.get("/integrations/douyin/accounts")
+
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["account_open_id"] == "account-current"
+    assert items[0]["unread_count"] == 1
 
 
 def test_put_rebinding_keeps_single_active_binding():

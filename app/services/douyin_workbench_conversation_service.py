@@ -83,6 +83,27 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
     return {"items": items}
 
 
+def get_account_unread_counts(
+    db: Session,
+    *,
+    account_open_ids: list[str],
+) -> dict[str, int]:
+    """当前未接已读状态前，按企业号聚合入站私信数量作为一期临时未读数。"""
+    requested_open_ids = {str(item) for item in account_open_ids if item}
+    if not requested_open_ids:
+        return {}
+
+    counts = {account_open_id: 0 for account_open_id in requested_open_ids}
+    messages = _load_messages(db)
+    for message in messages:
+        if message.event != "im_receive_msg":
+            continue
+        if message.account_open_id not in requested_open_ids:
+            continue
+        counts[message.account_open_id] += 1
+    return counts
+
+
 def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str, Any]:
     """Return persisted authorized accounts, then live-check memory, then event fallback."""
     persisted = list_persisted_authorized_accounts(db)

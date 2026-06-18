@@ -12,6 +12,7 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.models import DouyinAuthorizedAccount
+from app.services.douyin_workbench_conversation_service import get_account_unread_counts
 from app.services.douyin_account_agent_binding_service import (
     BindingValidationResult,
     bind_agent_to_account,
@@ -100,6 +101,7 @@ def list_douyin_accounts(
         .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
         .all()
     )
+    unread_counts = get_account_unread_counts(db, account_open_ids=[row.open_id for row in rows])
     items = []
     for row in rows:
         summary = get_binding_summary(db, account_open_id=row.open_id, merchant_id=merchant_id)
@@ -119,6 +121,7 @@ def list_douyin_accounts(
                 "binding_status": summary.binding_status,
                 "merchant_id": row.merchant_id,
                 "tenant_id": row.tenant_id,
+                "unread_count": unread_counts.get(row.open_id, 0),
             }
         )
     return {"success": True, "data": {"items": items, "total": len(items)}, "message": "success"}

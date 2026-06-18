@@ -446,6 +446,7 @@ function normalizeDouyinAccount(item: DouyinAccountItem): DouyinAccountItem {
     status: item.status || authorizationStatus,
     avatar,
     avatar_url: item.avatar_url || avatar,
+    unread_count: Number.isFinite(Number(item.unread_count)) ? Number(item.unread_count) : 0,
     is_authorized: authorizationStatus === "authorized",
     authorization_status: authorizationStatus,
   };
