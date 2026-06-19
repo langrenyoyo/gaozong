@@ -15,11 +15,15 @@ import { toast } from "sonner";
 import {
   AiAgent,
   AiAgentPayload,
+  KnowledgeCategory,
   createAiAgent,
   deleteAiAgent,
   fetchAiAgents,
+  getAgentKnowledgeCategories,
+  getKnowledgeCategories,
   trainingChat,
   updateAiAgent,
+  updateAgentKnowledgeCategories,
 } from "../api/aiAgents";
 import { formatDateTimeLocal } from "../lib/datetime";
 
@@ -41,12 +45,28 @@ const emptyDraft: AiAgentPayload = {
   knowledge_base_text: "",
 };
 
+const BASE_CATEGORY_KEY = "base";
+
 function promptPreview(prompt: string): string {
   return prompt.trim() || "暂无提示词";
 }
 
 function agentAvatar(agent: AiAgent) {
   return agent.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(agent.avatar_seed)}`;
+}
+
+function canSelectCategory(category: KnowledgeCategory): boolean {
+  return category.scope_type === "merchant" && category.category_key !== BASE_CATEGORY_KEY && category.is_active !== false && category.status !== "disabled";
+}
+
+function filterMerchantCategoryKeys(keys: string[], categories: KnowledgeCategory[]): string[] {
+  const selectableKeys = new Set(categories.filter(canSelectCategory).map((category) => category.category_key));
+  const seen = new Set<string>();
+  return keys.filter((key) => {
+    if (!selectableKeys.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function AgentEditor({
@@ -58,9 +78,14 @@ function AgentEditor({
   agent: AiAgent | null;
   saving: boolean;
   onClose: () => void;
-  onSave: (payload: AiAgentPayload) => void;
+  onSave: (payload: AiAgentPayload, categoryKeys: string[] | null) => void;
 }) {
   const [draft, setDraft] = useState<AiAgentPayload>(emptyDraft);
+  const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
+  const [selectedCategoryKeys, setSelectedCategoryKeys] = useState<string[]>([]);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [categoryLoadFailed, setCategoryLoadFailed] = useState(false);
+  const [bindingLoadFailed, setBindingLoadFailed] = useState(false);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -80,6 +105,58 @@ function AgentEditor({
     window.setTimeout(() => nameInputRef.current?.focus(), 0);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCategoryOptions() {
+      setCategoryLoading(true);
+      setCategoryLoadFailed(false);
+      setBindingLoadFailed(false);
+      setCategories([]);
+      setSelectedCategoryKeys([]);
+
+      try {
+        const items = await getKnowledgeCategories();
+        if (cancelled) return;
+        setCategories(items);
+
+        if (!agent) return;
+
+        try {
+          const binding = await getAgentKnowledgeCategories(agent.agent_id);
+          if (cancelled) return;
+          setSelectedCategoryKeys(filterMerchantCategoryKeys(binding.category_keys, items));
+        } catch (error) {
+          if (cancelled) return;
+          setBindingLoadFailed(true);
+          toast.warning("知识分类绑定加载失败，本次保存不会更新分类");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setCategoryLoadFailed(true);
+        toast.warning("知识分类加载失败，可先保存智能体基础信息");
+      } finally {
+        if (!cancelled) {
+          setCategoryLoading(false);
+        }
+      }
+    }
+
+    void loadCategoryOptions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agent]);
+
+  const selectableCategories = useMemo(() => categories.filter(canSelectCategory), [categories]);
+
+  const toggleCategory = (categoryKey: string) => {
+    setSelectedCategoryKeys((current) =>
+      current.includes(categoryKey) ? current.filter((key) => key !== categoryKey) : [...current, categoryKey],
+    );
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!draft.name.trim()) {
@@ -92,7 +169,7 @@ function AgentEditor({
       name: draft.name.trim(),
       prompt: draft.prompt || "",
       knowledge_base_text: draft.knowledge_base_text || "",
-    });
+    }, bindingLoadFailed || categoryLoadFailed ? null : filterMerchantCategoryKeys(selectedCategoryKeys, categories));
   };
 
   return (
@@ -147,6 +224,48 @@ function AgentEditor({
               placeholder="录入门店车型、服务、报价说明、检测报告说明等普通文本。"
             />
           </label>
+
+          <section className="grid gap-2 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] p-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold text-[#475569]">知识分类</span>
+              {categoryLoading ? (
+                <span className="inline-flex items-center gap-1 text-[#64748b]">
+                  <RefreshCwIcon size={12} className="animate-spin" />
+                  加载中
+                </span>
+              ) : null}
+            </div>
+
+            <label className="flex min-h-9 items-center justify-between rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#475569]">
+              <span className="font-medium">基础知识（默认启用）</span>
+              <input type="checkbox" checked disabled className="h-4 w-4 accent-[#2563eb]" />
+            </label>
+
+            {categoryLoadFailed ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">知识分类加载失败，本次可继续保存基础信息。</div>
+            ) : bindingLoadFailed ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">分类绑定加载失败，本次保存不会更新分类。</div>
+            ) : selectableCategories.length > 0 ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {selectableCategories.map((category) => (
+                  <label
+                    key={category.category_key}
+                    className="flex min-h-9 items-center justify-between gap-2 rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#475569] hover:border-[#bfdbfe]"
+                  >
+                    <span className="min-w-0 truncate font-medium">{category.name || category.category_key}</span>
+                    <input
+                      type="checkbox"
+                      checked={selectedCategoryKeys.includes(category.category_key)}
+                      onChange={() => toggleCategory(category.category_key)}
+                      className="h-4 w-4 shrink-0 accent-[#2563eb]"
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#8b95a6]">暂无可选商户分类。</div>
+            )}
+          </section>
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
@@ -287,11 +406,28 @@ export default function SuperMerchantAgent() {
     void loadAgents();
   }, []);
 
-  const saveAgent = async (payload: AiAgentPayload) => {
+  const saveAgent = async (payload: AiAgentPayload, categoryKeys: string[] | null) => {
     setSaving(true);
     try {
       const saved = editorAgent ? await updateAiAgent(editorAgent.agent_id, payload) : await createAiAgent(payload);
-      toast.success(editorAgent ? "智能体已更新" : "智能体已创建");
+      let categorySaveFailed = false;
+
+      if (categoryKeys !== null) {
+        try {
+          await updateAgentKnowledgeCategories(saved.agent_id, categoryKeys);
+        } catch (error) {
+          categorySaveFailed = true;
+          toast.warning(
+            editorAgent
+              ? "智能体已更新，但知识分类保存失败，请稍后重试"
+              : "智能体已创建，但知识分类保存失败，请稍后重试",
+          );
+        }
+      }
+
+      if (!categorySaveFailed) {
+        toast.success(editorAgent ? "智能体已更新" : "智能体已创建");
+      }
       setEditorAgent(undefined);
       await loadAgents();
       setSelectedAgentId(saved.agent_id);
@@ -419,7 +555,7 @@ export default function SuperMerchantAgent() {
           agent={editorAgent}
           saving={saving}
           onClose={() => setEditorAgent(undefined)}
-          onSave={(payload) => void saveAgent(payload)}
+          onSave={(payload, categoryKeys) => void saveAgent(payload, categoryKeys)}
         />
       ) : null}
     </section>

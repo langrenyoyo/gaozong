@@ -28,6 +28,21 @@ export interface AiAgentTrainingChatResult {
   knowledge_used: boolean;
 }
 
+export interface KnowledgeCategory {
+  category_key: string;
+  name: string;
+  scope_type: "system" | "merchant" | string;
+  is_base: boolean;
+  is_active?: boolean;
+  status?: string | null;
+}
+
+export interface AgentKnowledgeCategories {
+  agent_id: string;
+  category_keys: string[];
+  effective_category_keys: string[];
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -57,6 +72,23 @@ export async function deleteAiAgent(agentId: string): Promise<AiAgent> {
 export async function trainingChat(agentId: string, message: string): Promise<AiAgentTrainingChatResult> {
   const response = await apiClient.post<unknown, ApiResponse<AiAgentTrainingChatResult>>(`/agents/${agentId}/training-chat`, {
     message,
+  });
+  return response.data;
+}
+
+export async function getKnowledgeCategories(): Promise<KnowledgeCategory[]> {
+  const response = await apiClient.get<unknown, ApiResponse<KnowledgeCategory[]>>("/knowledge-categories");
+  return response.data;
+}
+
+export async function getAgentKnowledgeCategories(agentId: string): Promise<AgentKnowledgeCategories> {
+  const response = await apiClient.get<unknown, ApiResponse<AgentKnowledgeCategories>>(`/agents/${agentId}/knowledge-categories`);
+  return response.data;
+}
+
+export async function updateAgentKnowledgeCategories(agentId: string, categoryKeys: string[]): Promise<AgentKnowledgeCategories> {
+  const response = await apiClient.put<unknown, ApiResponse<AgentKnowledgeCategories>>(`/agents/${agentId}/knowledge-categories`, {
+    category_keys: categoryKeys,
   });
   return response.data;
 }
