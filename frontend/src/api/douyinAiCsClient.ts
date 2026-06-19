@@ -202,12 +202,10 @@ export interface DouyinConversationProfileResponse {
 }
 
 export interface CreateRagDocumentRequest {
-  tenant_id: string;
-  merchant_id: string;
-  douyin_account_id: number;
+  account_open_id: string;
   title: string;
   content: string;
-  source_type?: string;
+  category_key?: string;
   category?: string;
   brand?: string | null;
   vehicle_name?: string | null;
@@ -219,9 +217,9 @@ export interface CreateRagDocumentResponse {
 }
 
 export interface TrainRagRequest {
-  tenant_id: string;
-  merchant_id: string;
-  douyin_account_id: number;
+  account_open_id: string;
+  category_key?: string;
+  force_rebuild?: boolean;
 }
 
 export interface TrainRagResponse {
@@ -703,13 +701,35 @@ export async function getDouyinConversationProfile(
 export async function createRagDocument(
   payload: CreateRagDocumentRequest,
 ): Promise<CreateRagDocumentResponse> {
-  return requestDouyinAiCs(
-    douyinAiCsClient.post<CreateRagDocumentResponse>("/rag/documents", payload),
-  );
+  try {
+    const response = (await apiClient.post(
+      "/integrations/douyin-ai-cs/rag/documents",
+      payload,
+    )) as unknown as {
+      success?: boolean;
+      data: CreateRagDocumentResponse;
+      message?: string;
+    };
+    return response.data;
+  } catch (error) {
+    throw new Error(`9000 RAG 文档代理请求失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function trainRag(payload: TrainRagRequest): Promise<TrainRagResponse> {
-  return requestDouyinAiCs(douyinAiCsClient.post<TrainRagResponse>("/rag/train", payload));
+  try {
+    const response = (await apiClient.post(
+      "/integrations/douyin-ai-cs/rag/train",
+      payload,
+    )) as unknown as {
+      success?: boolean;
+      data: TrainRagResponse;
+      message?: string;
+    };
+    return response.data;
+  } catch (error) {
+    throw new Error(`9000 RAG 训练代理请求失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function searchRag(payload: SearchRagRequest): Promise<SearchRagResponse> {

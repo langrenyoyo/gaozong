@@ -290,6 +290,9 @@ export default function DouyinAiCsTestPage() {
             result={results.search}
             error={errors.search}
           >
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+              搜索仍为内部调试能力，不作为正式产品入口。
+            </div>
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="tenant_id" value={searchForm.tenant_id} onChange={(value) => setSearchForm({ ...searchForm, tenant_id: value })} />
               <Field label="merchant_id" value={searchForm.merchant_id} onChange={(value) => setSearchForm({ ...searchForm, merchant_id: value })} />
