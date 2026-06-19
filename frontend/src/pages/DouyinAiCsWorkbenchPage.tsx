@@ -7,7 +7,6 @@ import {
   DownloadIcon,
   ImagePlusIcon,
   LoaderIcon,
-  MessageSquareTextIcon,
   PaperclipIcon,
   PlusIcon,
   QrCodeIcon,
@@ -23,6 +22,7 @@ import {
   UserRoundIcon,
 } from "lucide-react";
 
+import { ReplyDecisionPanel } from "../components/douyin-ai-cs/ReplyDecisionPanel";
 import {
   bindAuthorizedOpenId,
   fetchDouyinLiveCheckAuthUrl,
@@ -1908,69 +1908,13 @@ export default function DouyinAiCsWorkbenchPage() {
               </div>
 
               {reply ? (
-                <div className="space-y-3">
-                  <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
-                    <span className="font-bold">AI建议</span>
-                    <span className="ml-2">AI仅生成建议，不会自动发送。点击“人工确认发送”后仍会进入确认弹窗。</span>
-                  </div>
-                  {reply.agent_id ? (
-                    <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      Agent：{reply.agent_name || reply.agent_id}
-                      {reply.agent_category ? ` · 分类：${reply.agent_category}` : ""}
-                    </div>
-                  ) : null}
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-800">
-                    {reply.reply_text || "暂无建议内容"}
-                  </div>
-                  <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
-                    <span>manual_required: {String(reply.manual_required)}</span>
-                    <span>llm_used: {String(reply.llm_used)}</span>
-                    <span>rag_used: {String(reply.rag_used)}</span>
-                    <span className="font-bold text-amber-700">auto_send: {String(reply.auto_send)}</span>
-                    <span>chunks: {reply.source_chunks?.length || 0}</span>
-                  </div>
-                  {reply.warnings?.length ? (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      {reply.warnings.join("，")}
-                    </div>
-                  ) : null}
-                  {reply.source_chunks?.length ? (
-                    <div className="rounded-md border border-slate-200">
-                      <div className="border-b border-slate-200 px-3 py-2 text-xs font-bold text-slate-600">
-                        来源知识
-                      </div>
-                      <div className="divide-y divide-slate-100">
-                        {reply.source_chunks.map((chunk, index) => (
-                          <div key={`${chunk.document_id}-${chunk.chunk_id}-${index}`} className="px-3 py-2 text-xs text-slate-600">
-                            #{chunk.chunk_id} · {chunk.title} · score {chunk.score}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-500">
-                      <MessageSquareTextIcon size={14} />
-                      暂无 RAG 来源 chunk。
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => void copyReply()}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      <ClipboardIcon size={14} />
-                      {copied ? "已复制" : "复制回复"}
-                    </button>
-                    <button
-                      onClick={() => openSendDialog()}
-                      disabled={!selectedConversation || !selectedAccount}
-                      className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <CheckIcon size={14} />
-                      人工确认发送
-                    </button>
-                  </div>
-                </div>
+                <ReplyDecisionPanel
+                  reply={reply}
+                  copied={copied}
+                  onCopy={() => void copyReply()}
+                  onManualSend={() => openSendDialog()}
+                  manualSendDisabled={!selectedConversation || !selectedAccount}
+                />
               ) : (
                 <EmptyState text="选择会话后点击生成回复建议。页面不会自动发送私信。" />
               )}
