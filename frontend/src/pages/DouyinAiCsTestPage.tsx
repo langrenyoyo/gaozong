@@ -130,17 +130,16 @@ export default function DouyinAiCsTestPage() {
   const [results, setResults] = useState<ResultMap>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [documentForm, setDocumentForm] = useState<CreateRagDocumentRequest>({
-    tenant_id: "demo_tenant",
-    merchant_id: "demo_bba",
-    douyin_account_id: 1,
+    account_open_id: "account-open-1",
     title: "精品BBA话术",
+    category_key: "base",
     category: "sales_script",
     content: DEFAULT_CONTENT,
   });
   const [trainForm, setTrainForm] = useState<TrainRagRequest>({
-    tenant_id: "demo_tenant",
-    merchant_id: "demo_bba",
-    douyin_account_id: 1,
+    account_open_id: "account-open-1",
+    category_key: "base",
+    force_rebuild: false,
   });
   const [searchForm, setSearchForm] = useState<SearchRagRequest>({
     tenant_id: "demo_tenant",
@@ -192,6 +191,9 @@ export default function DouyinAiCsTestPage() {
             <p className="mt-1 text-xs text-slate-500">
               内部调试面板，只验证 9100 RAG 与回复建议链路，不会自动发送私信。
             </p>
+            <p className="mt-1 text-xs text-slate-500">
+              RAG 写入/训练已通过 9000 可信代理，不再信任浏览器传租户、商户或抖音账号 scope 字段。
+            </p>
           </div>
           <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-semibold text-amber-700">
             auto_send 固定由后端控制为 false
@@ -221,14 +223,16 @@ export default function DouyinAiCsTestPage() {
             result={results.document}
             error={errors.document}
           >
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="tenant_id" value={documentForm.tenant_id} onChange={(value) => setDocumentForm({ ...documentForm, tenant_id: value })} />
-              <Field label="merchant_id" value={documentForm.merchant_id} onChange={(value) => setDocumentForm({ ...documentForm, merchant_id: value })} />
+            <div className="grid gap-3 sm:grid-cols-2">
               <Field
-                label="douyin_account_id"
-                type="number"
-                value={documentForm.douyin_account_id}
-                onChange={(value) => setDocumentForm({ ...documentForm, douyin_account_id: Number(value) || 0 })}
+                label="account_open_id"
+                value={documentForm.account_open_id}
+                onChange={(value) => setDocumentForm({ ...documentForm, account_open_id: value })}
+              />
+              <Field
+                label="category_key"
+                value={documentForm.category_key || ""}
+                onChange={(value) => setDocumentForm({ ...documentForm, category_key: value })}
               />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -256,13 +260,20 @@ export default function DouyinAiCsTestPage() {
             error={errors.train}
           >
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="tenant_id" value={trainForm.tenant_id} onChange={(value) => setTrainForm({ ...trainForm, tenant_id: value })} />
-              <Field label="merchant_id" value={trainForm.merchant_id} onChange={(value) => setTrainForm({ ...trainForm, merchant_id: value })} />
               <Field
-                label="douyin_account_id"
-                type="number"
-                value={trainForm.douyin_account_id}
-                onChange={(value) => setTrainForm({ ...trainForm, douyin_account_id: Number(value) || 0 })}
+                label="account_open_id"
+                value={trainForm.account_open_id}
+                onChange={(value) => setTrainForm({ ...trainForm, account_open_id: value })}
+              />
+              <Field
+                label="category_key"
+                value={trainForm.category_key || ""}
+                onChange={(value) => setTrainForm({ ...trainForm, category_key: value })}
+              />
+              <Field
+                label="force_rebuild"
+                value={trainForm.force_rebuild ? "true" : "false"}
+                onChange={(value) => setTrainForm({ ...trainForm, force_rebuild: value === "true" })}
               />
             </div>
             <ActionButton
