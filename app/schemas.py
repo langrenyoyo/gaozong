@@ -1106,3 +1106,67 @@ class ComputeRechargeOrderResponse(BaseModel):
     success: bool = True
     data: ComputeRechargeOrderOut
     message: str = "success"
+
+
+# ========== AI 回复决策日志 ==========
+
+
+class AiReplyDecisionLogListItem(BaseModel):
+    """AI 回复决策日志列表项。"""
+
+    id: int
+    merchant_id: str
+    account_open_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    latest_message_summary: Optional[str] = None
+    reply_text_summary: Optional[str] = None
+    intent: Optional[str] = None
+    lead_level: Optional[str] = None
+    confidence: Optional[float] = None
+    manual_required: bool
+    manual_required_reason: Optional[str] = None
+    risk_flags: list = Field(default_factory=list)
+    tags: list = Field(default_factory=list)
+    rag_used: bool
+    llm_used: bool
+    upstream_auto_send: bool
+    final_auto_send: bool
+    decision_version: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class AiReplyDecisionLogListData(BaseModel):
+    """AI 回复决策日志分页数据。"""
+
+    page: int
+    page_size: int
+    total: int
+    items: list[AiReplyDecisionLogListItem]
+
+
+class AiReplyDecisionLogListResponse(BaseModel):
+    """AI 回复决策日志列表响应。"""
+
+    success: bool = True
+    data: AiReplyDecisionLogListData
+    message: str = "success"
+
+
+class AiReplyDecisionLogDetail(AiReplyDecisionLogListItem):
+    """AI 回复决策日志详情。"""
+
+    latest_message: Optional[str] = None
+    reply_text: Optional[str] = None
+    rag_sources: list = Field(default_factory=list)
+    source_chunks: list = Field(default_factory=list)
+    allowed_category_keys: list = Field(default_factory=list)
+
+
+class AiReplyDecisionLogDetailResponse(BaseModel):
+    """AI 回复决策日志详情响应。"""
+
+    success: bool = True
+    data: AiReplyDecisionLogDetail
+    message: str = "success"

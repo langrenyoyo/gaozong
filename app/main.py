@@ -21,6 +21,7 @@ from app.routers import (
     douyin_live_check,
     auth,
     douyin_ai_cs_proxy,
+    ai_reply_decision_logs,
     douyin_accounts,
     agents,
     knowledge_categories,
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(douyin_live_check.router)
     app.include_router(auth.router)
     app.include_router(douyin_ai_cs_proxy.router)
+    app.include_router(ai_reply_decision_logs.router)
     app.include_router(douyin_accounts.router)
     app.include_router(agents.router)
     app.include_router(knowledge_categories.router)
