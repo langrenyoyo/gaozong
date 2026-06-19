@@ -2800,3 +2800,87 @@ reply-suggestion 当前可返回：
 5. Phase 7-E：极小范围自动发送试点，暂缓。
 
 后续在完成托管配置、dry-run、审计查询、频控、发送前二次读取最新消息、灰度和回滚机制前，不建议进入真实自动发送。
+
+------
+
+# P7-D 抖音AI客服 AI 回复记录闭环验收
+
+更新时间：2026-06-20
+
+验收文档：
+
+1. `docs/ai/P7_DY_AI_CS_REPLY_RECORDS_ACCEPTANCE.md`
+
+## 1. 当前完成结论
+
+Phase 7 已完成“AI 回复记录查询与商户侧只读页面”闭环：
+
+1. Phase 7-A 完成 AI 回复记录查询 API 落地前只读审计，确认 `ai_reply_decision_logs` 现有字段足够支撑第一版商户侧查询。
+2. Phase 7-B 在 9000 新增商户侧 AI 回复记录查询 API：`GET /ai-reply-decision-logs` 和 `GET /ai-reply-decision-logs/{log_id}`。
+3. Phase 7-B 查询 API 已覆盖权限校验、商户隔离、分页、筛选、关键词查询、时间范围、JSON 容错和基础脱敏。
+4. Phase 7-C-A 完成前端商户侧 AI 回复记录页面落地前只读审计，确定页面只读、挂在抖音AI客服模块附近。
+5. Phase 7-C-B 新增商户侧 `AI回复记录` 页面，展示 AI 回复建议日志列表和详情，不提供任何发送入口。
+6. Phase 7-D 完成闭环验收文档收口，归档 Phase 7-A 到 7-C-B 的 API、前端页面和安全边界。
+
+当前产品定位：
+
+```text
+结构化智能回复建议 + AI 回复记录审计 + 人工确认发送
+```
+
+当前仍不是自动发送系统，`auto_send=false` 继续作为强制安全边界。
+
+## 2. 当前真实调用链
+
+```text
+前端 AI回复记录页面
+  -> 9000 GET /ai-reply-decision-logs
+  -> 9000 校验 auto_wechat:douyin_ai_cs 权限
+  -> 9000 使用 RequestContext.merchant_id 做商户隔离
+  -> 查询 ai_reply_decision_logs
+  -> 返回脱敏摘要列表
+  -> 前端只读展示
+
+前端 AI回复记录详情
+  -> 9000 GET /ai-reply-decision-logs/{log_id}
+  -> 9000 校验权限和 merchant_id 隔离
+  -> 查询单条 ai_reply_decision_logs
+  -> 返回脱敏详情，不返回 raw_response_json
+  -> 前端只读详情弹窗
+```
+
+## 3. API 与页面边界
+
+商户侧 API：
+
+1. `GET /ai-reply-decision-logs`：列表查询，支持分页、关键词、`manual_required`、`intent`、`lead_level`、`rag_used`、`llm_used`、`risk_flag`、时间范围等筛选。
+2. `GET /ai-reply-decision-logs/{log_id}`：详情查询，返回 `latest_message`、`reply_text`、结构化字段、RAG 来源、分类权限等审计信息。
+3. 列表和详情均不返回 `raw_response_json` 给普通商户。
+4. 前端传入的 `merchant_id` 被忽略，后端只使用 `RequestContext.merchant_id`。
+
+商户侧页面：
+
+1. 页面路由为 `/douyin-ai-cs/reply-records`，导航 key 为 `douyin-ai-cs-reply-records`。
+2. 菜单名称为 `AI回复记录`，放在抖音AI小高客服附近。
+3. 页面只读展示列表、筛选、分页和详情弹窗。
+4. 详情弹窗只允许关闭类操作，不提供“发送”“使用该回复”“重新发送”“自动发送”等按钮。
+
+## 4. 当前安全边界
+
+1. 前端 AI 回复记录查询不传 `merchant_id`。
+2. 前端 AI 回复记录查询不传 `auto_send`。
+3. 前端 AI 回复记录查询不传 `allowed_category_keys`。
+4. 9000 查询 API 始终按 `RequestContext.merchant_id` 过滤，商户不能查看其他商户日志。
+5. 普通商户列表和详情均不展示 `raw_response_json`。
+6. AI 回复记录页面只读，不修改日志，不触发发送。
+7. 当前没有托管自动发送路径，没有自动发送按钮，没有自动发送 API 放开。
+8. 抖音AI客服回复建议链路仍保持 `auto_send=false`，人工发送仍必须走人工确认边界。
+
+## 5. 后续路线
+
+建议后续按以下顺序推进：
+
+1. 超管侧 AI 回复记录查询 API 和页面后置，避免第一版扩大权限面。
+2. AI 回复记录导出、有效/无效标记、人工反馈等增强后置。
+3. 托管 dry-run 后置，只记录“如果托管会如何决策”，不真实发送。
+4. 自动发送继续暂缓；只有在完成托管配置、频控、审计、灰度、回滚和发送前二次读取最新消息门禁后，才允许进入极小范围试点。
