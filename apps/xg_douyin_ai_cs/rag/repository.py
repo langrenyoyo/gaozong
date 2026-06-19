@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
 from dataclasses import dataclass
+from typing import Sequence
 
 from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
 from apps.xg_douyin_ai_cs.rag.chunker import chunk_text
@@ -21,6 +23,8 @@ from apps.xg_douyin_ai_cs.rag.models import (
 
 
 TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -139,7 +143,10 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
             raise
 
 
-def search(payload: RagSearchRequest) -> list[RagSearchItem]:
+def search(
+    payload: RagSearchRequest,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> list[RagSearchItem]:
     query_tokens = set(_tokens(payload.query))
     with connect() as conn:
         rows = conn.execute(
@@ -153,12 +160,100 @@ def search(payload: RagSearchRequest) -> list[RagSearchItem]:
             """,
             (payload.tenant_id, payload.merchant_id, payload.douyin_account_id),
         ).fetchall()
+
+    skipped_invalid_embedding = 0
+    vector_scored = []
+    try:
+        client = llm_client or OpenAICompatibleClient()
+        query_embedding_payload = client.embed(payload.query)
+        query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
+    except Exception as exc:
+        query_embedding = None
+        _logger.warning(
+            "rag_search strategy=lexical_fallback stage=query_embedding_failed "
+            "tenant_id=%s merchant_id=%s douyin_account_id=%s top_k=%d "
+            "candidate_count=%d skipped_invalid_embedding=%d error_type=%s",
+            payload.tenant_id,
+            payload.merchant_id,
+            payload.douyin_account_id,
+            payload.top_k,
+            len(rows),
+            skipped_invalid_embedding,
+            type(exc).__name__,
+        )
+
+    if query_embedding:
+        for row in rows:
+            chunk_embedding = _parse_embedding_json(row["embedding_json"])
+            if not chunk_embedding or len(chunk_embedding) != len(query_embedding):
+                skipped_invalid_embedding += 1
+                continue
+            score = cosine_similarity(query_embedding, chunk_embedding)
+            vector_scored.append((score, row))
+        if vector_scored:
+            vector_scored.sort(key=lambda item: item[0], reverse=True)
+            _logger.info(
+                "rag_search strategy=vector tenant_id=%s merchant_id=%s "
+                "douyin_account_id=%s top_k=%d candidate_count=%d "
+                "vector_result_count=%d skipped_invalid_embedding=%d",
+                payload.tenant_id,
+                payload.merchant_id,
+                payload.douyin_account_id,
+                payload.top_k,
+                len(rows),
+                len(vector_scored[: payload.top_k]),
+                skipped_invalid_embedding,
+            )
+            return _to_search_items(vector_scored[: payload.top_k])
+
+    if query_embedding is not None:
+        _logger.info(
+            "rag_search strategy=lexical_fallback stage=no_valid_vector_result "
+            "tenant_id=%s merchant_id=%s douyin_account_id=%s top_k=%d "
+            "candidate_count=%d skipped_invalid_embedding=%d",
+            payload.tenant_id,
+            payload.merchant_id,
+            payload.douyin_account_id,
+            payload.top_k,
+            len(rows),
+            skipped_invalid_embedding,
+        )
+
+    return _lexical_search(rows, query_tokens, payload.top_k)
+
+
+def cosine_similarity(
+    query_embedding: Sequence[float] | None,
+    chunk_embedding: Sequence[float] | None,
+) -> float:
+    query_vector = _coerce_embedding(query_embedding)
+    chunk_vector = _coerce_embedding(chunk_embedding)
+    if not query_vector or not chunk_vector or len(query_vector) != len(chunk_vector):
+        return 0.0
+    query_norm = math.sqrt(sum(item * item for item in query_vector))
+    chunk_norm = math.sqrt(sum(item * item for item in chunk_vector))
+    if query_norm <= 0 or chunk_norm <= 0:
+        return 0.0
+    return float(sum(a * b for a, b in zip(query_vector, chunk_vector)) / (query_norm * chunk_norm))
+
+
+def _lexical_search(rows: list[sqlite3.Row], query_tokens: set[str], top_k: int) -> list[RagSearchItem]:
     scored = []
     for row in rows:
         score = _score(query_tokens, str(row["chunk_text"] or ""))
         if score > 0:
             scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
+    _logger.info(
+        "rag_search strategy=lexical_fallback top_k=%d candidate_count=%d result_count=%d",
+        top_k,
+        len(rows),
+        len(scored[:top_k]),
+    )
+    return _to_search_items(scored[:top_k])
+
+
+def _to_search_items(scored_rows: list[tuple[float, sqlite3.Row]]) -> list[RagSearchItem]:
     return [
         RagSearchItem(
             chunk_id=int(row["id"]),
@@ -167,8 +262,30 @@ def search(payload: RagSearchRequest) -> list[RagSearchItem]:
             chunk_text=str(row["chunk_text"]),
             score=round(float(score), 4),
         )
-        for score, row in scored[: payload.top_k]
+        for score, row in scored_rows
     ]
+
+
+def _parse_embedding_json(value: object) -> list[float] | None:
+    if value is None:
+        return None
+    try:
+        raw = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return _coerce_embedding(raw)
+
+
+def _coerce_embedding(value: object) -> list[float] | None:
+    if value is None or isinstance(value, (str, bytes)):
+        return None
+    try:
+        vector = [float(item) for item in value]  # type: ignore[operator]
+    except (TypeError, ValueError):
+        return None
+    if not vector or any(not math.isfinite(item) for item in vector):
+        return None
+    return vector
 
 
 def log_llm_call(
