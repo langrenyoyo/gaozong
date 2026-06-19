@@ -5,6 +5,33 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class KnowledgeCategoryCreate(BaseModel):
+    tenant_id: str
+    merchant_id: str | None = None
+    category_key: str
+    name: str
+    scope_type: str = Field(pattern="^(system|merchant)$")
+    is_base: bool = False
+    is_active: bool = True
+    sort_order: int = 100
+
+
+class KnowledgeCategoryItem(BaseModel):
+    id: int
+    tenant_id: str
+    merchant_id: str | None = None
+    category_key: str
+    name: str
+    scope_type: str
+    is_base: bool
+    is_active: bool
+    sort_order: int
+
+
+class KnowledgeCategoryListResponse(BaseModel):
+    items: list[KnowledgeCategoryItem]
+
+
 class KnowledgeDocumentCreate(BaseModel):
     tenant_id: str
     merchant_id: str
@@ -13,6 +40,8 @@ class KnowledgeDocumentCreate(BaseModel):
     content: str
     source_type: str = "manual"
     category: str | None = None
+    category_id: int | None = None
+    category_key: str | None = None
     brand: str | None = None
     vehicle_name: str | None = None
 

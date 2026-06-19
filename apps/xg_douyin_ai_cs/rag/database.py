@@ -26,6 +26,25 @@ def connect() -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        CREATE TABLE IF NOT EXISTS knowledge_categories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id TEXT NOT NULL,
+          merchant_id TEXT,
+          category_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          scope_type TEXT NOT NULL,
+          is_base INTEGER NOT NULL DEFAULT 0,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          sort_order INTEGER NOT NULL DEFAULT 100,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK(scope_type IN ('system', 'merchant')),
+          CHECK(
+            (scope_type='system' AND merchant_id IS NULL)
+            OR (scope_type='merchant' AND merchant_id IS NOT NULL)
+          )
+        );
+
         CREATE TABLE IF NOT EXISTS knowledge_documents (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           tenant_id TEXT NOT NULL,
@@ -35,6 +54,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           content TEXT NOT NULL,
           source_type TEXT NOT NULL DEFAULT 'manual',
           category TEXT,
+          category_id INTEGER,
+          category_key TEXT,
           brand TEXT,
           vehicle_name TEXT,
           is_active INTEGER NOT NULL DEFAULT 1,
@@ -52,6 +73,8 @@ def init_db(conn: sqlite3.Connection) -> None:
           chunk_index INTEGER NOT NULL,
           embedding_json TEXT NOT NULL,
           embedding_model TEXT NOT NULL,
+          category_id INTEGER,
+          category_key TEXT,
           content_hash TEXT NOT NULL,
           is_active INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -89,6 +112,37 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_chunks_scope
         ON knowledge_chunks(tenant_id, merchant_id, douyin_account_id, is_active);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uk_categories_system_key
+        ON knowledge_categories(tenant_id, category_key, scope_type)
+        WHERE scope_type='system';
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uk_categories_merchant_key
+        ON knowledge_categories(tenant_id, merchant_id, category_key, scope_type)
+        WHERE scope_type='merchant';
+
+        CREATE INDEX IF NOT EXISTS idx_categories_visible
+        ON knowledge_categories(tenant_id, merchant_id, scope_type, is_active, sort_order);
+
+        """
+    )
+    _ensure_column(conn, "knowledge_documents", "category_id", "INTEGER")
+    _ensure_column(conn, "knowledge_documents", "category_key", "TEXT")
+    _ensure_column(conn, "knowledge_chunks", "category_id", "INTEGER")
+    _ensure_column(conn, "knowledge_chunks", "category_key", "TEXT")
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_documents_category
+        ON knowledge_documents(tenant_id, merchant_id, category_id, category_key, is_active);
+
+        CREATE INDEX IF NOT EXISTS idx_chunks_category
+        ON knowledge_chunks(tenant_id, merchant_id, category_id, category_key, is_active);
         """
     )
     conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in columns:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
