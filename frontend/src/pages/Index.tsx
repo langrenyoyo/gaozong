@@ -24,6 +24,7 @@ import LeadsModulePage from "./LeadsModulePage";
 import WechatAgent from "./WechatAgent";
 import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
+import AiReplyDecisionLogsPage from "./AiReplyDecisionLogsPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
@@ -736,6 +737,8 @@ export default function Index({
           </>
         ) : activeNav === "douyin-ai-cs" ? (
           <DouyinAiCsWorkbenchPage />
+        ) : activeNav === "douyin-ai-cs-reply-records" ? (
+          <AiReplyDecisionLogsPage />
         ) : activeNav === "leads" ? (
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (

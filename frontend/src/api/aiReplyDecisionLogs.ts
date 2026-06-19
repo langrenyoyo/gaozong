@@ -1,0 +1,119 @@
+import apiClient from "./client";
+
+export interface AiReplyDecisionLogListItem {
+  id: number;
+  merchant_id: string;
+  account_open_id?: string | null;
+  conversation_id?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  latest_message_summary?: string | null;
+  reply_text_summary?: string | null;
+  intent?: string | null;
+  lead_level?: string | null;
+  confidence?: number | null;
+  manual_required: boolean;
+  manual_required_reason?: string | null;
+  risk_flags?: string[] | null;
+  tags?: string[] | null;
+  rag_used: boolean;
+  llm_used: boolean;
+  upstream_auto_send: boolean;
+  final_auto_send: boolean;
+  decision_version?: string | null;
+  created_at?: string | null;
+}
+
+export interface AiReplyDecisionLogDetail extends AiReplyDecisionLogListItem {
+  latest_message?: string | null;
+  reply_text?: string | null;
+  rag_sources?: AiReplyDecisionSource[] | null;
+  source_chunks?: AiReplyDecisionSource[] | null;
+  allowed_category_keys?: string[] | null;
+}
+
+export interface AiReplyDecisionSource {
+  chunk_id?: number | string | null;
+  document_id?: number | string | null;
+  title?: string | null;
+  score?: number | null;
+  [key: string]: unknown;
+}
+
+export interface AiReplyDecisionLogListData {
+  page: number;
+  page_size: number;
+  total: number;
+  items: AiReplyDecisionLogListItem[];
+}
+
+export interface AiReplyDecisionLogQueryParams {
+  page?: number;
+  page_size?: number;
+  account_open_id?: string;
+  conversation_id?: string;
+  agent_id?: string | number;
+  manual_required?: boolean | null;
+  intent?: string;
+  lead_level?: string;
+  risk_flag?: string;
+  rag_used?: boolean | null;
+  llm_used?: boolean | null;
+  date_from?: string;
+  date_to?: string;
+  keyword?: string;
+}
+
+interface ApiResponse<T> {
+  success?: boolean;
+  data: T;
+  message?: string;
+}
+
+function appendString(params: URLSearchParams, key: string, value?: string | number | null) {
+  if (value === undefined || value === null) return;
+  const text = String(value).trim();
+  if (text) params.set(key, text);
+}
+
+function appendBoolean(params: URLSearchParams, key: string, value?: boolean | null) {
+  if (typeof value === "boolean") {
+    params.set(key, String(value));
+  }
+}
+
+function buildQueryParams(query: AiReplyDecisionLogQueryParams = {}): URLSearchParams {
+  const params = new URLSearchParams();
+  appendString(params, "page", query.page);
+  appendString(params, "page_size", query.page_size);
+  appendString(params, "account_open_id", query.account_open_id);
+  appendString(params, "conversation_id", query.conversation_id);
+  appendString(params, "agent_id", query.agent_id);
+  appendBoolean(params, "manual_required", query.manual_required);
+  appendString(params, "intent", query.intent);
+  appendString(params, "lead_level", query.lead_level);
+  appendString(params, "risk_flag", query.risk_flag);
+  appendBoolean(params, "rag_used", query.rag_used);
+  appendBoolean(params, "llm_used", query.llm_used);
+  appendString(params, "date_from", query.date_from);
+  appendString(params, "date_to", query.date_to);
+  appendString(params, "keyword", query.keyword);
+  return params;
+}
+
+export async function getAiReplyDecisionLogs(
+  query: AiReplyDecisionLogQueryParams = {},
+): Promise<AiReplyDecisionLogListData> {
+  const params = buildQueryParams(query);
+  const response = (await apiClient.get("/ai-reply-decision-logs", {
+    params,
+  })) as unknown as ApiResponse<AiReplyDecisionLogListData>;
+  return response.data;
+}
+
+export async function getAiReplyDecisionLogDetail(id: number | string): Promise<AiReplyDecisionLogDetail> {
+  const response = (await apiClient.get(
+    `/ai-reply-decision-logs/${encodeURIComponent(String(id))}`,
+  )) as unknown as ApiResponse<AiReplyDecisionLogDetail>;
+  return response.data;
+}
