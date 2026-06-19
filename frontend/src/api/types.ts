@@ -17,6 +17,10 @@ export interface Lead {
   content: string | null;
   source_url: string | null;
   source_id: string | null;
+  // 商户隔离 / 会话定位字段：后端 LeadOut 已返回，前端用于对话跟进跳转与会话归并
+  merchant_id?: string | null;
+  account_open_id?: string | null;
+  conversation_short_id?: string | null;
   assigned_staff_id: number | null;
   assigned_at: string | null;
   status: string;
@@ -303,6 +307,9 @@ export interface ReportSummary {
   lead_growth_rate?: number | null;
   sales_response_rate?: number | null;
   retained_contact_rate?: number | null;
+  // 转化口径语义别名：与 retained_contact_count / retained_contact_rate 等价，后端 ReportSummary 已返回
+  converted_leads?: number;
+  conversion_rate?: number | null;
   high_intent_hint?: string | null;
 }
 
