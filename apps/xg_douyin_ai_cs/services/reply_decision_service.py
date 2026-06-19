@@ -58,6 +58,22 @@ def build_reply_suggestion(
         douyin_account_id,
     )
     merchant_prompt = apply_agent_prompt(merchant_prompt, agent)
+    allowed_category_keys = _normalized_optional_list(
+        request.agent_config.allowed_category_keys if request.agent_config else None
+    )
+    allowed_category_ids = _normalized_optional_list(
+        request.agent_config.allowed_category_ids if request.agent_config else None
+    )
+    _logger.info(
+        "reply_suggestion_rag_filter tenant_id=%s merchant_id=%s douyin_account_id=%s "
+        "agent_id=%s allowed_category_keys_count=%d allowed_category_ids_count=%d",
+        request.tenant_id,
+        request.merchant_id,
+        douyin_account_id,
+        agent.get("agent_id"),
+        len(allowed_category_keys or []),
+        len(allowed_category_ids or []),
+    )
     source_chunks = search(
         RagSearchRequest(
             tenant_id=request.tenant_id,
@@ -65,6 +81,8 @@ def build_reply_suggestion(
             douyin_account_id=douyin_account_id,
             query=request.latest_message,
             top_k=5,
+            category_keys=allowed_category_keys,
+            category_ids=allowed_category_ids,
         )
     )
     if source_chunks:
@@ -443,6 +461,17 @@ def _agent_response_fields(agent: dict) -> dict:
         "agent_name": agent.get("agent_name"),
         "agent_category": agent.get("agent_category"),
     }
+
+
+def _normalized_optional_list(values: list[str] | None) -> list[str] | None:
+    if not values:
+        return None
+    normalized = []
+    for value in values:
+        text = str(value).strip()
+        if text:
+            normalized.append(text)
+    return normalized or None
 
 
 def _report_llm_usage(

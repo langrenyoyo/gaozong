@@ -99,6 +99,8 @@ class AgentConfig(BaseModel):
     prompt: str | None = None
     knowledge_base_text: str | None = None
     status: str | None = None
+    allowed_category_keys: list[str] | None = None
+    allowed_category_ids: list[str] | None = None
 
 
 class ReplySuggestionRequest(BaseModel):

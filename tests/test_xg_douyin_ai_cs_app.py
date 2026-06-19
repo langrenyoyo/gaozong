@@ -11,6 +11,101 @@ def _client(tmp_path, monkeypatch):
     return TestClient(create_app())
 
 
+def _seed_reply_suggestion_category_chunks():
+    from apps.xg_douyin_ai_cs.rag.database import connect
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate
+    from apps.xg_douyin_ai_cs.rag.repository import create_document
+
+    base_document_id = create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="demo_bba",
+            douyin_account_id=1,
+            title="base doc",
+            content="base allowed warranty",
+            category_key="base",
+        )
+    )
+    bba_document_id = create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="demo_bba",
+            douyin_account_id=1,
+            title="bba doc",
+            content="bba blocked policy",
+            category_key="bba",
+        )
+    )
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO knowledge_chunks(
+              document_id, tenant_id, merchant_id, douyin_account_id,
+              chunk_text, chunk_index, embedding_json, embedding_model,
+              category_id, category_key, content_hash, is_active
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
+            """,
+            (
+                base_document_id,
+                "demo_tenant",
+                "demo_bba",
+                1,
+                "base allowed warranty",
+                1,
+                "[1.0, 0.0]",
+                "test_embedding_model",
+                1,
+                "base",
+                "phase-3d-base",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_chunks(
+              document_id, tenant_id, merchant_id, douyin_account_id,
+              chunk_text, chunk_index, embedding_json, embedding_model,
+              category_id, category_key, content_hash, is_active
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
+            """,
+            (
+                bba_document_id,
+                "demo_tenant",
+                "demo_bba",
+                1,
+                "bba blocked policy",
+                1,
+                "[1.0, 0.0]",
+                "test_embedding_model",
+                2,
+                "bba",
+                "phase-3d-bba",
+            ),
+        )
+        conn.commit()
+
+
+def _patch_reply_suggestion_vector_and_chat(monkeypatch, reply_text):
+    def fake_embed(self, text):
+        return {"embedding": [1.0, 0.0], "model": "test_embedding_model"}
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": reply_text,
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+            "usage": None,
+        }
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.embed",
+        fake_embed,
+    )
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat",
+        fake_chat,
+    )
+
+
 def test_import_does_not_load_9000_19000_or_wechat_ui():
     for name in [
         "apps.xg_douyin_ai_cs.main",
@@ -195,6 +290,93 @@ def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tm
     assert data["manual_required"] is False
     assert data["auto_send"] is False
     assert "agent_config_missing_fallback" not in data["warnings"]
+
+
+def test_reply_suggestion_filters_rag_by_allowed_category_keys(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_reply_suggestion_category_chunks()
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_reply_suggestion_vector_and_chat(monkeypatch, "base reply")
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "category filter query",
+            "agent_id": "agent_from_9000",
+            "agent_config": {
+                "agent_id": "agent_from_9000",
+                "agent_name": "真实小高客服",
+                "status": "active",
+                "allowed_category_keys": ["base"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_send"] is False
+    assert data["rag_used"] is True
+    assert [item["title"] for item in data["source_chunks"]] == ["base doc"]
+
+
+def test_reply_suggestion_without_allowed_category_keys_keeps_rag_unfiltered(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_reply_suggestion_category_chunks()
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_reply_suggestion_vector_and_chat(monkeypatch, "unfiltered reply")
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "category filter query",
+            "agent_id": "agent_from_9000",
+            "agent_config": {
+                "agent_id": "agent_from_9000",
+                "agent_name": "真实小高客服",
+                "status": "active",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_send"] is False
+    assert sorted(item["title"] for item in data["source_chunks"]) == ["base doc", "bba doc"]
+
+
+def test_reply_suggestion_empty_allowed_category_keys_keeps_rag_unfiltered(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_reply_suggestion_category_chunks()
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    _patch_reply_suggestion_vector_and_chat(monkeypatch, "empty list reply")
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "category filter query",
+            "agent_id": "agent_from_9000",
+            "agent_config": {
+                "agent_id": "agent_from_9000",
+                "agent_name": "真实小高客服",
+                "status": "active",
+                "allowed_category_keys": [],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_send"] is False
+    assert sorted(item["title"] for item in data["source_chunks"]) == ["base doc", "bba doc"]
 
 
 def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, monkeypatch):
