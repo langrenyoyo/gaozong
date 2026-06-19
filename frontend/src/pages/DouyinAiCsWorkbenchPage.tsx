@@ -1831,7 +1831,7 @@ export default function DouyinAiCsWorkbenchPage() {
                     disabled={!selectedAccount || !agents.length || loadingAgents || bindingBusy}
                     className="h-8 min-w-[220px] rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   >
-                    {!agents.length ? <option value="">未配置 Agent</option> : null}
+                    <option value="">{agents.length ? "请选择 Agent" : "未配置 Agent"}</option>
                     {agents.map((agent) => (
                       <option key={agent.agent_id} value={agent.agent_id}>
                         {agent.agent_name} · {agent.agent_category || "默认客服"}
