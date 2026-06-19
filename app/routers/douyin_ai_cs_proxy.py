@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
+from app.services.agent_knowledge_category_service import list_agent_category_keys
 from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.douyin_account_agent_binding_service import (
@@ -27,6 +28,35 @@ from app.services.xg_douyin_ai_cs_client import (
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
 
 logger = logging.getLogger(__name__)
+
+
+def _build_allowed_category_keys(
+    *,
+    db: Session,
+    context: RequestContext,
+    agent_id: str,
+) -> list[str]:
+    """构造 9000 可信注入的 Agent 可用知识分类，读取失败时保底使用 base。"""
+    keys: list[str] = ["base"]
+    try:
+        keys.extend(list_agent_category_keys(db, context=context, agent_id=agent_id))
+    except Exception as exc:
+        logger.warning(
+            "douyin_ai_cs_allowed_categories_fallback agent_id=%s merchant_id=%s error=%s",
+            agent_id,
+            context.merchant_id,
+            exc,
+        )
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_key in keys:
+        key = str(raw_key).strip() if raw_key is not None else ""
+        if not key or key in seen:
+            continue
+        result.append(key)
+        seen.add(key)
+    return result or ["base"]
 
 
 class ReplySuggestionProxyRequest(BaseModel):
@@ -82,6 +112,12 @@ async def create_reply_suggestion_proxy(
             detail={"code": "AGENT_NOT_ACTIVE", "message": "智能体未启用"},
         )
 
+    allowed_category_keys = _build_allowed_category_keys(
+        db=db,
+        context=context,
+        agent_id=agent.agent_id,
+    )
+
     payload = {
         "tenant_id": context.source_system,
         "account_id": request.douyin_account_id,
@@ -94,6 +130,7 @@ async def create_reply_suggestion_proxy(
             "system_prompt": agent.prompt or "",
             "knowledge_base_text": agent.knowledge_base_text or "",
             "status": agent.status,
+            "allowed_category_keys": allowed_category_keys,
         },
         "latest_message": request.latest_message,
         "max_history_messages": request.max_history_messages,

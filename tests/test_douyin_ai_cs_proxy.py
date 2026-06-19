@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccount
+from app.models import AgentKnowledgeCategory, AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccount
 
 
 engine = create_engine(
@@ -87,6 +87,27 @@ def _insert_agent_and_binding(open_id="account-open-1", agent_id="agent-sales", 
         db.close()
 
 
+def _insert_agent_categories(agent_id="agent-sales", merchant_id="dev-merchant", category_keys=None):
+    db = TestSession()
+    try:
+        for key in category_keys or []:
+            db.add(
+                AgentKnowledgeCategory(
+                    merchant_id=merchant_id,
+                    agent_id=agent_id,
+                    category_key=key,
+                    scope_type="merchant",
+                    is_base=0,
+                    status="active",
+                    created_by="dev-user",
+                    updated_by="dev-user",
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+
 class FakeDouyinAiCsClient:
     def __init__(self):
         self.calls = []
@@ -156,13 +177,118 @@ def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
 
     assert response.status_code == 200
     agent_config = fake_client.calls[0]["request"]["agent_config"]
-    assert agent_config == {
-        "agent_id": "agent-sales",
-        "agent_name": "真实小高客服",
-        "system_prompt": "只回答真实库存，不承诺自动发送。",
-        "knowledge_base_text": "A6 暂无现车，可推荐同级车型。",
-        "status": "active",
-    }
+    assert agent_config["agent_id"] == "agent-sales"
+    assert agent_config["agent_name"] == "真实小高客服"
+    assert agent_config["system_prompt"] == "只回答真实库存，不承诺自动发送。"
+    assert agent_config["knowledge_base_text"] == "A6 暂无现车，可推荐同级车型。"
+    assert agent_config["status"] == "active"
+    assert agent_config["allowed_category_keys"] == ["base"]
+
+
+def test_proxy_injects_base_when_agent_has_no_category_binding(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
+
+
+def test_proxy_injects_base_then_active_agent_category_keys(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_agent_categories(category_keys=["premium_bba", "new_energy"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == [
+        "base",
+        "premium_bba",
+        "new_energy",
+    ]
+
+
+def test_proxy_deduplicates_allowed_category_keys_with_base_first(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_agent_categories(category_keys=["base", "premium_bba", "premium_bba", "finance"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == [
+        "base",
+        "premium_bba",
+        "finance",
+    ]
+
+
+def test_proxy_ignores_forged_allowed_category_keys_from_payload(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_agent_categories(category_keys=["premium_bba"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "agent_config": {"allowed_category_keys": ["fake"]},
+            "latest_message": "hello",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
+
+
+def test_proxy_falls_back_to_base_when_category_binding_read_fails(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+
+    def _fail_list_category_keys(*args, **kwargs):
+        raise RuntimeError("category service unavailable")
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "list_agent_category_keys", _fail_list_category_keys)
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
 
 
 def test_proxy_rejects_agent_from_other_merchant_before_calling_9100(monkeypatch):
