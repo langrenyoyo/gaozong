@@ -35,7 +35,7 @@ class KnowledgeCategoryListResponse(BaseModel):
 class KnowledgeDocumentCreate(BaseModel):
     tenant_id: str
     merchant_id: str
-    douyin_account_id: int
+    douyin_account_id: int | str
     title: str
     content: str
     source_type: str = "manual"
@@ -54,7 +54,7 @@ class KnowledgeDocumentCreated(BaseModel):
 class RagTrainRequest(BaseModel):
     tenant_id: str
     merchant_id: str
-    douyin_account_id: int
+    douyin_account_id: int | str
 
 
 class RagTrainResponse(BaseModel):
@@ -67,7 +67,7 @@ class RagTrainResponse(BaseModel):
 class RagSearchRequest(BaseModel):
     tenant_id: str
     merchant_id: str
-    douyin_account_id: int
+    douyin_account_id: int | str
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
     category_ids: list[str] | None = None

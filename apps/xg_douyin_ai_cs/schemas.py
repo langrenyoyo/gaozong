@@ -105,10 +105,10 @@ class AgentConfig(BaseModel):
 
 class ReplySuggestionRequest(BaseModel):
     tenant_id: str
-    account_id: int
+    account_id: int | str
     latest_message: str
     merchant_id: str = "demo_bba"
-    douyin_account_id: int | None = None
+    douyin_account_id: int | str | None = None
     agent_id: str | None = None
     agent_config: AgentConfig | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)

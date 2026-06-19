@@ -292,6 +292,34 @@ def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tm
     assert "agent_config_missing_fallback" not in data["warnings"]
 
 
+def test_reply_suggestion_accepts_account_open_id_string_from_proxy(tmp_path, monkeypatch):
+    """9000 正式代理向 9100 传入的是 account_open_id 字符串，不应被 9100 拒绝。"""
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "dev-merchant",
+            "account_id": "dev-merchant-p5-account",
+            "douyin_account_id": "dev-merchant-p5-account",
+            "latest_message": "预算20万以内，蓝色星河套餐适合我吗？",
+            "agent_id": "dev-merchant-p5-agent",
+            "agent_config": {
+                "agent_id": "dev-merchant-p5-agent",
+                "agent_name": "P5验收智能体",
+                "system_prompt": "只根据知识库回答，禁止自动发送。",
+                "knowledge_base_text": "",
+                "status": "active",
+                "allowed_category_keys": ["base", "p5_acceptance_test"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == "dev-merchant-p5-agent"
+    assert data["auto_send"] is False
+
+
 def test_reply_suggestion_filters_rag_by_allowed_category_keys(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _seed_reply_suggestion_category_chunks()

@@ -203,7 +203,7 @@ def build_reply_suggestion(
 
 def resolve_reply_agent(
     request: ReplySuggestionRequest,
-    douyin_account_id: int,
+    douyin_account_id: int | str,
 ) -> tuple[dict | None, list[str]]:
     """解析回复建议使用的智能体上下文。
 
@@ -251,7 +251,7 @@ def _try_agent_runtime_or_fallback(
     *,
     conversation_id: int,
     request: ReplySuggestionRequest,
-    douyin_account_id: int,
+    douyin_account_id: int | str,
     agent: dict,
     agent_warnings: list[str],
 ) -> list[str]:
@@ -276,7 +276,7 @@ def _try_agent_runtime_or_fallback(
     return agent_warnings
 
 
-def load_merchant_prompt(tenant_id: str, merchant_id: str, douyin_account_id: int) -> dict:
+def load_merchant_prompt(tenant_id: str, merchant_id: str, douyin_account_id: int | str) -> dict:
     """读取商户专属角色提示词；未配置时返回安全兜底提示词。"""
     prompt_dir = Path(__file__).resolve().parents[1] / "merchant_prompts"
     for path in prompt_dir.glob("*.json"):
@@ -284,7 +284,7 @@ def load_merchant_prompt(tenant_id: str, merchant_id: str, douyin_account_id: in
         if (
             data.get("tenant_id") == tenant_id
             and data.get("merchant_id") == merchant_id
-            and int(data.get("douyin_account_id") or 0) == int(douyin_account_id)
+            and _account_id_matches(data.get("douyin_account_id"), douyin_account_id)
         ):
             return data
     return {
@@ -316,6 +316,14 @@ def apply_agent_prompt(merchant_prompt: dict, agent: dict) -> dict:
         "reply_style": agent.get("reply_style"),
         "business_scope": agent.get("business_scope"),
     }
+
+
+def _account_id_matches(left: object, right: object) -> bool:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text or not right_text:
+        return False
+    return left_text == right_text
 
 
 def _build_llm_reply(

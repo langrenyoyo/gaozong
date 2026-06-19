@@ -378,6 +378,57 @@ def test_rag_documents_train_search_and_scope_isolation(tmp_path, monkeypatch):
     assert other_account_search.json()["items"] == []
 
 
+def test_rag_documents_train_search_accepts_account_open_id_string(tmp_path, monkeypatch):
+    """9000 可信代理会把 account_open_id 字符串传给 9100 的 douyin_account_id。"""
+    client = _client(tmp_path, monkeypatch)
+
+    created = client.post(
+        "/rag/documents",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "dev-merchant",
+            "douyin_account_id": "dev-merchant-p5-account",
+            "title": "P5验收知识文档",
+            "content": "P5专属验收答案是：蓝色星河套餐适合预算20万以内客户。",
+            "category_key": "p5_acceptance_test",
+        },
+    )
+
+    assert created.status_code == 200
+    document_id = created.json()["document_id"]
+
+    trained = client.post(
+        "/rag/train",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "dev-merchant",
+            "douyin_account_id": "dev-merchant-p5-account",
+        },
+    )
+
+    assert trained.status_code == 200
+    assert trained.json()["status"] == "completed"
+    assert trained.json()["document_count"] == 1
+    assert trained.json()["chunk_count"] >= 1
+
+    search = client.post(
+        "/rag/search",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "dev-merchant",
+            "douyin_account_id": "dev-merchant-p5-account",
+            "query": "预算20万以内蓝色星河套餐",
+            "top_k": 5,
+            "category_keys": ["p5_acceptance_test"],
+        },
+    )
+
+    assert search.status_code == 200
+    items = search.json()["items"]
+    assert items
+    assert items[0]["document_id"] == document_id
+
+
 def test_cosine_similarity_handles_valid_and_invalid_vectors():
     from apps.xg_douyin_ai_cs.rag.repository import cosine_similarity
 
