@@ -1,6 +1,6 @@
 # Phase 4-E 抖音AI客服 RAG 分类知识库部署前检查清单
 
-更新时间：2026-06-19
+更新时间：2026-06-20
 
 ## 1. 部署前总原则
 
@@ -117,16 +117,19 @@
 
 1. 创建或确认一个 active Agent。
 2. 确认 `GET /knowledge-categories` 返回 `base`。
-3. 给 Agent 绑定一个 merchant 分类。
-4. 打开 Agent 编辑页，确认 base 默认启用、merchant 分类已回显。
-5. 用当前商户企业号 `account_open_id` 创建一条 `base` 文档。
-6. 用同一账号创建一条 merchant 分类文档。
-7. 分别触发 `base` 和 merchant 分类训练。
-8. 给 Agent 只绑定 `base`，发起 reply-suggestion，确认不会召回未授权 merchant 分类内容。
-9. 给 Agent 追加 merchant 分类，再发起 reply-suggestion，确认可召回该分类内容。
-10. 确认 reply-suggestion 返回 `auto_send=false`。
+3. 通过“知识分类”页面或 `POST /knowledge-categories` 创建一个 merchant 分类；重复 `category_key` 应返回 409 或冲突语义。
+4. 通过“知识库”页面选择已授权企业号和分类，创建知识文档。
+5. 手动触发“训练当前分类”，确认训练完成。
+6. 打开 Agent 编辑页，确认 base 默认启用、merchant 分类可勾选并保存。
+7. 给 Agent 追加 merchant 分类，再发起 reply-suggestion，确认可召回该分类内容。
+8. 确认 reply-suggestion 请求不传 `allowed_category_keys`，由 9000 注入。
+9. 确认 reply-suggestion 返回 `auto_send=false`。
+10. 解绑企业号 Agent 后重新绑定，确认默认 Agent 可恢复。
 11. 尝试使用其他商户账号创建文档，应被拒绝。
 12. 尝试传不存在分类，应被拒绝。
+13. 如条件允许，创建未绑定分类写入知识并训练，确认未授权分类不进入 `allowed_category_keys`。
+
+Phase 5-E-F 已完成一次运行态正向 E2E，记录见 `docs/ai/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`。本次未单独执行未绑定分类负向运行态验收。
 
 ## 7. 自动化回归建议
 
@@ -178,4 +181,5 @@ python -m pytest tests/test_ai_agents.py tests/test_douyin_ai_cs_proxy.py -v
 5. `auto_send=false` 已复核。
 6. 前端不再向 documents/train 提交可信 scope 字段。
 7. 9000 和 9100 职责边界未被破坏。
-
+8. reply-suggestion 不接受前端传入的 `allowed_category_keys`，只使用 9000 注入值。
+9. conversation_id 类型契约已按目标环境确认；当前已知 9100 要求数字型 `conversation_id`。

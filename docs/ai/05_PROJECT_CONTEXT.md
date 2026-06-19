@@ -2623,14 +2623,15 @@ React
 
 ------
 
-# P4-E 抖音AI客服 RAG 分类知识库闭环验收与部署检查
+# P4-E / P5-E 抖音AI客服 RAG 分类知识库闭环验收与部署检查
 
-更新时间：2026-06-19
+更新时间：2026-06-20
 
 验收文档：
 
 1. `docs/ai/P4_DY_AI_CS_RAG_KNOWLEDGE_ACCEPTANCE.md`
 2. `docs/ai/P4_DY_AI_CS_RAG_DEPLOY_CHECKLIST.md`
+3. `docs/ai/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`
 
 ## 1. 当前完成结论
 
@@ -2644,6 +2645,10 @@ React
 8. 前端 Agent 编辑页已支持知识分类多选，base 默认启用且不可取消。
 9. `9000` 已提供 RAG 文档创建和训练可信代理：`POST /integrations/douyin-ai-cs/rag/documents`、`POST /integrations/douyin-ai-cs/rag/train`。
 10. 前端 RAG 文档创建和训练已改走 9000 可信代理，不再提交 `tenant_id` / `merchant_id` / `douyin_account_id`。
+11. `9000` 已提供 `knowledge_categories` 主表，`GET /knowledge-categories` 返回 base + 当前商户 active 分类，`POST /knowledge-categories` 支持创建 merchant 分类。
+12. 前端已新增“知识分类”页面，支持列表展示和创建 merchant 分类。
+13. 前端已新增“知识库”页面，支持创建知识文档和手动训练当前分类；暂不支持文档列表、编辑、删除。
+14. Phase 5-E-F 运行态 E2E 已通过：创建/复用分类、写入文档、训练、Agent 绑定分类、reply-suggestion 分类召回、`auto_send=false` 均已确认。
 
 ## 2. 当前真实闭环
 
@@ -2679,12 +2684,12 @@ React
 7. `19000` 小高AI微信助手不参与本链路。
 8. `auto_send=false` 必须保持，当前不是自动发送私信系统。
 
-## 4. 尚未完成
+## 4. 尚未完成 / 后续增强
 
-1. 正式知识库管理页面未完成。
-2. 分类创建 UI 未完成。
-3. 9000 是否需要正式 `knowledge_categories` 主表仍待后续设计。
-4. 生产环境迁移执行、备份和回滚验收未完成。
+1. 文档列表、详情、编辑、删除仍暂缓。
+2. chunk 展示和正式搜索入口仍暂缓。
+3. `p5_blocked_test` 负向分类边界运行态验收未单独执行。
+4. `9000` / `9100` conversation_id 数字型契约差异待后续收敛；字符串会话触发 reply-suggestion 时 9100 会返回 422，改用数字型 `conversation_id=1` 已通过。
 5. NewCarProject 菜单、权限、套餐消耗与知识库管理入口的最终契约未完成。
 
 ## 5. 部署前必读
