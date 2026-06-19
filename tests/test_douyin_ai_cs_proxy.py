@@ -7,6 +7,7 @@ from app.database import Base, get_db
 from app.models import (
     AgentKnowledgeCategory,
     AiAgent,
+    AiReplyDecisionLog,
     DouyinAccountAgentBinding,
     DouyinAuthorizedAccount,
     KnowledgeCategory,
@@ -933,6 +934,158 @@ def test_proxy_ignores_forged_auto_send_and_allowed_category_keys_in_upstream_pa
     assert "auto_send" not in upstream_payload
     assert "allowed_category_keys" not in upstream_payload
     assert upstream_payload["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
+
+
+def test_proxy_records_ai_reply_decision_log_with_raw_upstream_and_final_safety(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    class StructuredUnsafeClient(FakeDouyinAiCsClient):
+        def suggest_reply(self, *, context, conversation_id, request):
+            data = super().suggest_reply(
+                context=context,
+                conversation_id=conversation_id,
+                request=request,
+            )
+            data.update(
+                {
+                    "reply_text": "结构化建议回复",
+                    "confidence": 0.82,
+                    "manual_required": True,
+                    "manual_required_reason": "涉及价格，需要人工确认",
+                    "auto_send": True,
+                    "llm_used": True,
+                    "rag_used": True,
+                    "intent": "price",
+                    "lead_level": "high",
+                    "tags": ["price", "audi"],
+                    "risk_flags": ["llm_requested_auto_send"],
+                    "rag_sources": [{"chunk_id": "c1", "document_id": 1, "title": "A6知识", "score": 0.91}],
+                    "source_chunks": [{"chunk_id": "c1", "document_id": 1, "title": "A6知识", "score": 0.91}],
+                    "decision_version": "structured_v1",
+                }
+            )
+            return data
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: StructuredUnsafeClient())
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_agent_categories(category_keys=["premium_bba"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-123/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": "客户问A6最低优惠",
+            "auto_send": True,
+            "allowed_category_keys": ["forged"],
+            "agent_config": {"allowed_category_keys": ["forged_agent_config"]},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply_text"] == "结构化建议回复"
+    assert body["auto_send"] is False
+    assert body["risk_flags"] == ["llm_requested_auto_send", "proxy_forced_auto_send_false"]
+
+    db = TestSession()
+    try:
+        log = db.query(AiReplyDecisionLog).one()
+        assert log.merchant_id == "dev-merchant"
+        assert log.tenant_id == "new_car_project"
+        assert log.account_open_id == "account-open-1"
+        assert log.conversation_id == "conv-123"
+        assert log.agent_id == "agent-sales"
+        assert log.agent_name == "sales agent"
+        assert log.reply_text == "结构化建议回复"
+        assert log.intent == "price"
+        assert log.lead_level == "high"
+        assert log.confidence == 0.82
+        assert log.manual_required == 1
+        assert log.manual_required_reason == "涉及价格，需要人工确认"
+        assert log.llm_used == 1
+        assert log.rag_used == 1
+        assert log.upstream_auto_send == 1
+        assert log.final_auto_send == 0
+        assert log.decision_version == "structured_v1"
+        assert log.allowed_category_keys_json == '["base","premium_bba"]'
+        assert log.risk_flags_json == '["llm_requested_auto_send","proxy_forced_auto_send_false"]'
+        assert log.tags_json == '["price","audi"]'
+        assert '"title":"A6知识"' in log.rag_sources_json
+        assert '"title":"A6知识"' in log.source_chunks_json
+        assert '"auto_send":true' in log.raw_response_json
+        assert "proxy_forced_auto_send_false" not in log.raw_response_json
+    finally:
+        db.close()
+
+
+def test_proxy_log_failure_does_not_change_reply_response(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    def _fail_record(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "record_ai_reply_decision", _fail_record)
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply_text"] == "suggested reply"
+    assert body["auto_send"] is False
+    assert body.get("risk_flags") is None
+
+
+def test_record_ai_reply_decision_returns_false_when_db_write_fails():
+    from app.auth.context import RequestContext
+    from app.services.ai_reply_decision_log_service import record_ai_reply_decision
+
+    class FailingDb:
+        def __init__(self):
+            self.rolled_back = False
+
+        def add(self, _row):
+            raise RuntimeError("db write failed")
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def commit(self):
+            raise AssertionError("commit should not be reached")
+
+    db = FailingDb()
+    context = RequestContext(
+        user_id="u-1",
+        merchant_id="dev-merchant",
+        merchant_ids=["dev-merchant"],
+        permission_codes=["auto_wechat:douyin_ai_cs"],
+        source_system="new_car_project",
+    )
+
+    ok = record_ai_reply_decision(
+        db,
+        context=context,
+        conversation_id="conv-1",
+        account_open_id="account-open-1",
+        latest_message="hello",
+        agent_id="agent-sales",
+        agent_name="sales agent",
+        allowed_category_keys=["base"],
+        upstream_raw_result={"reply_text": object()},
+        final_result={"reply_text": "suggested reply", "auto_send": False},
+        upstream_auto_send=False,
+    )
+
+    assert ok is False
+    assert db.rolled_back is True
 
 
 def test_proxy_denies_when_binding_service_rejects_account(monkeypatch):

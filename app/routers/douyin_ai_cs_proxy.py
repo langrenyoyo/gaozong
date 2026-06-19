@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
@@ -26,6 +27,7 @@ from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
 )
+from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 
 
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
@@ -236,6 +238,7 @@ async def create_reply_suggestion_proxy(
             detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
         ) from exc
 
+    upstream_raw_result = deepcopy(result)
     upstream_requested_auto_send = result.get("auto_send") is True
     result["auto_send"] = False
     if upstream_requested_auto_send:
@@ -246,6 +249,19 @@ async def create_reply_suggestion_proxy(
     existing_warnings = result.get("warnings")
     warnings = existing_warnings if isinstance(existing_warnings, list) else []
     result["warnings"] = [*warnings, *binding_result.warnings]
+    record_ai_reply_decision(
+        db,
+        context=context,
+        conversation_id=conversation_id,
+        account_open_id=request.douyin_account_id,
+        latest_message=request.latest_message,
+        agent_id=agent.agent_id,
+        agent_name=agent.name,
+        allowed_category_keys=allowed_category_keys,
+        upstream_raw_result=upstream_raw_result,
+        final_result=result,
+        upstream_auto_send=upstream_requested_auto_send,
+    )
     return result
 
 

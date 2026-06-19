@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -306,6 +306,50 @@ class DouyinPrivateMessageSend(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     sent_at = Column(DateTime, comment="Sent time when upstream code=0")
+
+
+class AiReplyDecisionLog(Base):
+    """AI 回复建议决策日志，仅记录建议与安全后处理结果，不代表发送。"""
+
+    __tablename__ = "ai_reply_decision_logs"
+    __table_args__ = (
+        Index("idx_ai_reply_decision_logs_merchant_created", "merchant_id", "created_at"),
+        Index("idx_ai_reply_decision_logs_account_created", "account_open_id", "created_at"),
+        Index("idx_ai_reply_decision_logs_conversation_created", "conversation_id", "created_at"),
+        Index("idx_ai_reply_decision_logs_agent_created", "agent_id", "created_at"),
+        Index("idx_ai_reply_decision_logs_manual_created", "manual_required", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
+    tenant_id = Column(String(128), comment="可信租户 / 来源系统 ID，来自 RequestContext")
+    account_open_id = Column(String(255), comment="已校验的抖音企业号 open_id")
+    conversation_id = Column(String(255), comment="reply-suggestion 路由中的会话 ID")
+    conversation_short_id = Column(String(255), comment="抖音会话短 ID，当前与 conversation_id 同源")
+    open_id = Column(String(255), comment="客户 open_id，预留")
+    customer_open_id = Column(String(255), comment="客户 open_id，预留")
+    agent_id = Column(String(64), comment="真实智能体业务 ID")
+    agent_name = Column(String(100), comment="真实智能体名称")
+    latest_message = Column(Text, comment="触发本次建议的最新用户消息")
+    reply_text = Column(Text, comment="最终返回给前端的建议回复")
+    intent = Column(String(64), comment="结构化客户意图")
+    lead_level = Column(String(32), comment="结构化意向等级")
+    confidence = Column(Float, comment="模型置信度")
+    manual_required = Column(Integer, nullable=False, default=1, comment="最终是否需要人工确认 0/1")
+    manual_required_reason = Column(Text, comment="需要人工确认原因")
+    risk_flags_json = Column(Text, comment="最终风险标记 JSON")
+    tags_json = Column(Text, comment="客户标签 JSON")
+    rag_sources_json = Column(Text, comment="RAG 来源 JSON")
+    source_chunks_json = Column(Text, comment="旧版 source_chunks JSON")
+    allowed_category_keys_json = Column(Text, comment="9000 注入的可信知识分类 key JSON")
+    llm_used = Column(Integer, nullable=False, default=0, comment="是否使用 LLM 0/1")
+    rag_used = Column(Integer, nullable=False, default=0, comment="是否使用 RAG 0/1")
+    upstream_auto_send = Column(Integer, nullable=False, default=0, comment="9100 原始响应是否请求自动发送 0/1")
+    final_auto_send = Column(Integer, nullable=False, default=0, comment="9000 最终返回是否自动发送，必须为 0")
+    decision_version = Column(String(64), comment="决策版本")
+    raw_response_json = Column(Text, comment="9100 原始响应 JSON 副本")
+    error_message = Column(Text, comment="日志记录错误信息，预留")
+    created_at = Column(DateTime, default=datetime.now)
 
 
 class DouyinMessageResourceDownload(Base):
