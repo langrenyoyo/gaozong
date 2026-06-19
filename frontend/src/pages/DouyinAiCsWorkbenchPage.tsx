@@ -590,6 +590,13 @@ export default function DouyinAiCsWorkbenchPage() {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
   }, [selectedAccount?.account_open_id]);
 
+  // 智能体选择初始化：仅在企业号切换或绑定变化时同步为当前绑定值；
+  // 不依赖整个 selectedAccount 对象，避免账号列表刷新（如未读数回写）触发
+  // selectedAccount 引用变化而覆盖用户在下拉里手选的智能体。
+  useEffect(() => {
+    setSelectedAgentId(selectedAccount?.bound_agent_id || null);
+  }, [selectedAccount?.account_open_id, selectedAccount?.bound_agent_id]);
+
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
@@ -881,7 +888,6 @@ export default function DouyinAiCsWorkbenchPage() {
         background: Boolean(cachedConversations),
       });
       void loadAccountAgents(selectedAccount.account_open_id);
-      setSelectedAgentId(selectedAccount.bound_agent_id || null);
       setBindingNotice(null);
     } else {
       setConversations([]);
