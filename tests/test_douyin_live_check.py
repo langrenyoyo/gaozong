@@ -1224,6 +1224,126 @@ def test_send_message_upstream_business_error_persists_failed_record_without_sec
         db.close()
 
 
+def test_send_message_picks_im_receive_msg_over_im_send_msg_for_reply_msg_id():
+    """同会话混有 im_receive_msg（旧）与 im_send_msg（新）时，msg_id 必须取客户发来的 im_receive_msg。
+
+    回归上游 28003082「消息对象不匹配」：禁止把企业号自己发出的 im_send_msg.server_message_id
+    当作回复 msg_id。
+    """
+    _insert_send_context_event(
+        event="im_receive_msg",
+        conversation_short_id="mix_conv_001",
+        server_message_id="receive_msg_001",
+        from_user_id="customer_open_id",
+        to_user_id="account_open_id",
+        message_create_time=datetime.now() - timedelta(minutes=30),
+    )
+    _insert_send_context_event(
+        event="im_send_msg",
+        conversation_short_id="mix_conv_001",
+        server_message_id="send_msg_001",
+        from_user_id="account_open_id",
+        to_user_id="customer_open_id",
+        message_create_time=datetime.now() - timedelta(minutes=5),
+    )
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"msg_id": "upstream_mix_001"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "mix_conv_001",
+                "customer_open_id": "customer_open_id",
+                "content": "回复客户",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert mock_post.call_count == 1
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body["msg_id"] == "receive_msg_001"
+    assert sent_body["msg_id"] != "send_msg_001"
+    assert sent_body["conversation_id"] == "mix_conv_001"
+    assert sent_body["scene"] == "im_reply_msg"
+    assert sent_body["from_user_id"] == "account_open_id"
+    assert sent_body["to_user_id"] == "customer_open_id"
+
+
+def test_send_message_does_not_call_upstream_when_only_im_send_msg_exists():
+    """同会话只有 im_send_msg（企业号发出）时，不得调用上游，返回稳定不可回复错误码。"""
+    _insert_send_context_event(
+        event="im_send_msg",
+        conversation_short_id="only_send_conv_001",
+        server_message_id="only_send_msg_001",
+        from_user_id="account_open_id",
+        to_user_id="customer_open_id",
+    )
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "only_send_conv_001",
+                "content": "不应该发出",
+                "manual_confirmed": True,
+            },
+        )
+
+    mock_post.assert_not_called()
+    body_text = json.dumps(resp.json(), ensure_ascii=False)
+    assert resp.status_code >= 400
+    assert "send_context_unavailable" in body_text
+
+
+def test_send_message_ignores_frontend_scene_and_derives_from_event_type():
+    """前端传入错误 scene 时，后端据命中事件类型推导，忽略前端 scene。"""
+    _insert_send_context_event(
+        event="im_receive_msg",
+        conversation_short_id="scene_conv_001",
+        server_message_id="receive_msg_002",
+        from_user_id="customer_open_id",
+        to_user_id="account_open_id",
+    )
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"msg_id": "upstream_scene_001"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "scene_conv_001",
+                "customer_open_id": "customer_open_id",
+                "content": "回复",
+                "scene": "im_enter_direct_msg",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body["scene"] == "im_reply_msg"
+
+
 def test_download_resource_rejects_non_media_types_without_calling_upstream():
     _insert_resource_event(message_type="text", resource_url=None)
     client = _client()

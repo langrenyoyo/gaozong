@@ -268,10 +268,14 @@ def get_send_msg_context(
     if not conversation_short_id:
         return None
 
+    # 可回复前置事件只允许 im_receive_msg / im_enter_direct_msg；
+    # 排除 im_send_msg（企业号自己发出的私信回执），其 server_message_id 不能作为回复 msg_id，
+    # 否则上游 /send_msg 会返回 28003082「消息对象不匹配」。
     rows = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
         .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.event.in_(("im_receive_msg", "im_enter_direct_msg")))
         .order_by(
             DouyinWebhookEvent.message_create_time.desc(),
             DouyinWebhookEvent.created_at.desc(),
