@@ -120,6 +120,12 @@ def test_rebinding_same_account_keeps_one_active_default_binding():
         assert len(active_rows) == 1
         assert active_rows[0].agent_id == "agent-2"
         assert db.query(DouyinAccountAgentBinding).filter_by(status="unbound").count() == 1
+        old_binding = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", agent_id="agent-1")
+            .one()
+        )
+        assert old_binding.is_default is False
     finally:
         db.close()
 
@@ -134,8 +140,88 @@ def test_unbind_marks_active_binding_unbound():
         result = unbind_agent_from_account(db, account_open_id="account-open-1", context=_context())
 
         assert result.status == "unbound"
+        assert result.is_default is False
         assert result.unbound_at is not None
+        assert result.deleted_at is None
         assert get_binding_summary(db, account_open_id="account-open-1", merchant_id="merchant-1").binding_status == "unbound"
+    finally:
+        db.close()
+
+
+def test_rebinding_same_agent_revives_existing_unbound_binding_without_duplicate_history():
+    db = TestSession()
+    try:
+        _insert_account(db)
+        _insert_agent(db)
+
+        first = bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+        first_id = first.id
+        unbound = unbind_agent_from_account(db, account_open_id="account-open-1", context=_context())
+        rebound = bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+
+        rows = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", agent_id="agent-1")
+            .all()
+        )
+        assert unbound.id == first_id
+        assert rebound.id == first_id
+        assert len(rows) == 1
+        assert rows[0].status == "active"
+        assert rows[0].is_default is True
+        assert rows[0].unbound_at is None
+        assert rows[0].deleted_at is None
+    finally:
+        db.close()
+
+
+def test_rebinding_after_unbind_to_different_agent_has_one_active_default_and_old_not_default():
+    db = TestSession()
+    try:
+        _insert_account(db)
+        _insert_agent(db, agent_id="agent-1")
+        _insert_agent(db, agent_id="agent-2")
+
+        bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+        unbind_agent_from_account(db, account_open_id="account-open-1", context=_context())
+        bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-2", context=_context())
+
+        active_rows = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", status="active", is_default=True)
+            .all()
+        )
+        old_binding = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", agent_id="agent-1")
+            .one()
+        )
+        assert len(active_rows) == 1
+        assert active_rows[0].agent_id == "agent-2"
+        assert old_binding.status == "unbound"
+        assert old_binding.is_default is False
+    finally:
+        db.close()
+
+
+def test_rebinding_same_active_agent_does_not_create_multiple_active_default_bindings():
+    db = TestSession()
+    try:
+        _insert_account(db)
+        _insert_agent(db)
+
+        first = bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+        second = bind_agent_to_account(db, account_open_id="account-open-1", agent_id="agent-1", context=_context())
+
+        rows = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", agent_id="agent-1")
+            .all()
+        )
+        active_rows = [row for row in rows if row.status == "active" and row.is_default]
+        assert first.id == second.id
+        assert len(rows) == 1
+        assert len(active_rows) == 1
     finally:
         db.close()
 

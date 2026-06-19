@@ -178,11 +178,32 @@ def bind_agent_to_account(
     )
     for row in active_rows:
         row.status = "unbound"
+        row.is_default = False
         row.unbound_at = now
         row.updated_at = now
         row.updated_by = context.user_id
     if active_rows:
         db.flush()
+
+    binding = _find_historical_binding(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        agent_id=agent_id,
+    )
+    if binding is not None:
+        binding.tenant_id = getattr(account, "tenant_id", None)
+        binding.douyin_authorized_account_id = account.id if account else None
+        binding.status = ACTIVE_BINDING_STATUS
+        binding.is_default = True
+        binding.unbound_at = None
+        binding.deleted_at = None
+        binding.invalid_reason = None
+        binding.updated_at = now
+        binding.updated_by = context.user_id
+        db.commit()
+        db.refresh(binding)
+        return binding
 
     binding = DouyinAccountAgentBinding(
         merchant_id=merchant_id,
@@ -225,6 +246,7 @@ def unbind_agent_from_account(
 
     now = datetime.now()
     row.status = "unbound"
+    row.is_default = False
     row.unbound_at = now
     row.updated_at = now
     row.updated_by = context.user_id
@@ -470,6 +492,26 @@ def _find_active_binding(
             DouyinAccountAgentBinding.status == ACTIVE_BINDING_STATUS,
             DouyinAccountAgentBinding.is_default.is_(True),
             DouyinAccountAgentBinding.deleted_at.is_(None),
+        )
+        .order_by(DouyinAccountAgentBinding.id.desc())
+        .first()
+    )
+
+
+def _find_historical_binding(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    agent_id: str,
+) -> DouyinAccountAgentBinding | None:
+    return (
+        db.query(DouyinAccountAgentBinding)
+        .filter(
+            DouyinAccountAgentBinding.merchant_id == merchant_id,
+            DouyinAccountAgentBinding.account_open_id == account_open_id,
+            DouyinAccountAgentBinding.agent_id == agent_id,
+            DouyinAccountAgentBinding.status != ACTIVE_BINDING_STATUS,
         )
         .order_by(DouyinAccountAgentBinding.id.desc())
         .first()

@@ -305,6 +305,34 @@ def test_delete_binding_marks_unbound():
     assert response.json()["data"]["binding_status"] == "unbound"
 
 
+def test_delete_then_rebind_same_agent_revives_existing_binding():
+    _insert_account()
+    _insert_agent()
+    client = _client()
+
+    first = client.put("/integrations/douyin/accounts/account-open-1/agent-binding", json={"agent_id": "agent-1"})
+    delete_response = client.delete("/integrations/douyin/accounts/account-open-1/agent-binding")
+    rebound = client.put("/integrations/douyin/accounts/account-open-1/agent-binding", json={"agent_id": "agent-1"})
+
+    db = TestSession()
+    try:
+        rows = (
+            db.query(DouyinAccountAgentBinding)
+            .filter_by(merchant_id="merchant-1", account_open_id="account-open-1", agent_id="agent-1")
+            .all()
+        )
+        assert first.status_code == 200
+        assert delete_response.status_code == 200
+        assert rebound.status_code == 200
+        assert len(rows) == 1
+        assert rows[0].status == "active"
+        assert rows[0].is_default is True
+        assert rows[0].unbound_at is None
+        assert rows[0].deleted_at is None
+    finally:
+        db.close()
+
+
 def test_history_account_without_merchant_id_is_not_visible_or_bindable():
     _insert_account(merchant_id=None)
     _insert_agent()
