@@ -2696,3 +2696,107 @@ React
 3. 分类、账号归属、Agent 绑定、文档写入、训练、回复建议是否完成端到端验收。
 4. 前端是否仍不传可信 scope 字段。
 5. `auto_send=false` 是否在 9000 和 9100 双侧保持。
+
+------
+
+# P6-G 抖音AI客服结构化回复建议闭环验收
+
+更新时间：2026-06-19
+
+验收文档：
+
+1. `docs/ai/P6_DY_AI_CS_STRUCTURED_REPLY_ACCEPTANCE.md`
+
+## 1. 当前完成结论
+
+Phase 6 已完成“结构化智能回复建议 + 人工确认发送”闭环：
+
+1. Phase 6-A 完成 LLM + RAG 智能客服自动回复能力落地前只读审计，确认当前不适合直接自动发送。
+2. Phase 6-B 在 9100 实现 RAG + LLM 结构化回复决策，新增 `intent`、`lead_level`、`tags`、`manual_required_reason`、`risk_flags`、`rag_sources`、`decision_version` 等字段。
+3. Phase 6-C 在 9000 reply-suggestion 可信代理透传结构化字段，并继续强制 `auto_send=false`。
+4. Phase 6-D 在前端工作台展示结构化智能回复决策，保留复制回复和人工确认发送。
+5. Phase 6-E 完成托管模式 / 自动发送安全门禁只读审计，结论是不建议直接进入真实自动发送。
+6. Phase 6-F-B 新增 `ai_reply_decision_logs`，记录 9100 原始响应、9000 最终安全后处理、RAG 来源、风险标记和 Agent 分类权限。
+
+当前产品定位：
+
+```text
+结构化智能回复建议 + 人工确认发送
+```
+
+当前不是自动发送系统，`auto_send=false` 仍是强制安全边界。
+
+## 2. 当前真实调用链
+
+```text
+前端工作台 DouyinAiCsWorkbenchPage
+  -> 9000 reply-suggestion proxy
+  -> 9000 校验权限、商户上下文、企业号和 Agent 绑定
+  -> 9000 读取真实 AiAgent
+  -> 9000 注入真实 agent_config / allowed_category_keys
+  -> 9100 RAG + LLM
+  -> 9100 结构化回复决策
+  -> 9100 强制 auto_send=false
+  -> 9000 强制 auto_send=false
+  -> 9000 写 ai_reply_decision_logs
+  -> 前端展示结构化回复建议
+  -> 客服复制回复或人工确认发送
+```
+
+## 3. 当前结构化字段
+
+reply-suggestion 当前可返回：
+
+- `reply_text`
+- `intent`
+- `lead_level`
+- `tags`
+- `detected_vehicle`
+- `detected_contacts`
+- `manual_required`
+- `manual_required_reason`
+- `risk_flags`
+- `rag_sources`
+- `decision_version`
+- `llm_used`
+- `rag_used`
+- `auto_send=false`
+
+旧字段继续兼容：`confidence`、`source_chunks`、`warnings`、`agent_id`、`agent_name`、`agent_category` 等。
+
+## 4. 当前安全边界
+
+1. `9100` 只提供结构化建议，不决定真实自动发送。
+2. `9000` 是可信代理和最终安全边界，最终响应必须强制 `auto_send=false`。
+3. 前端不向 reply-suggestion 传 `auto_send`。
+4. 前端不向 reply-suggestion 传 `allowed_category_keys`。
+5. `allowed_category_keys` 只能由 9000 根据 Agent 分类绑定注入。
+6. `agent_config` 只能由 9000 基于真实 `AiAgent` 构造。
+7. 人工发送必须继续要求 `manual_confirmed=true`。
+8. AI 回复决策日志写入失败不影响主链路返回。
+9. 当前没有托管自动发送路径，没有自动发送按钮，没有自动发送接口放开。
+
+## 5. AI 回复决策日志
+
+`ai_reply_decision_logs` 用于后续 AI 回复记录查询、托管 dry-run、审计追溯和问题排查。
+
+日志记录重点：
+
+1. 9100 原始响应副本，便于追溯上游是否曾返回 `auto_send=true`。
+2. 9000 最终安全后处理结果，最终 `final_auto_send=false`。
+3. RAG 来源、风险标记、标签、人工确认原因和结构化决策版本。
+4. `allowed_category_keys_json`，来源于 9000 注入值，不来自前端或 9100 response。
+
+日志失败只能写 warning，不得污染用户响应。
+
+## 6. 后续路线
+
+建议后续按以下节奏推进：
+
+1. Phase 7-A：AI 回复记录查询 API。
+2. Phase 7-B：超级管理员 AI 回复记录页面。
+3. Phase 7-C：托管配置表只读审计。
+4. Phase 7-D：托管 dry-run，只记录将要发送的决策，不真实发送。
+5. Phase 7-E：极小范围自动发送试点，暂缓。
+
+后续在完成托管配置、dry-run、审计查询、频控、发送前二次读取最新消息、灰度和回滚机制前，不建议进入真实自动发送。
