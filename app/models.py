@@ -383,6 +383,40 @@ class AiAgent(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class AgentKnowledgeCategory(Base):
+    """9000 Agent 与知识分类的手动绑定表。"""
+
+    __tablename__ = "agent_knowledge_categories"
+    __table_args__ = (
+        Index(
+            "idx_agent_knowledge_categories_merchant_agent_status",
+            "merchant_id",
+            "agent_id",
+            "status",
+        ),
+        Index(
+            "idx_agent_knowledge_categories_merchant_key_status",
+            "merchant_id",
+            "category_key",
+            "status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
+    tenant_id = Column(String(128), comment="预留租户 ID")
+    agent_id = Column(String(64), nullable=False, comment="AI 智能体业务 ID")
+    category_key = Column(String(128), nullable=False, comment="9100 RAG 分类稳定标识")
+    scope_type = Column(String(20), nullable=False, default="merchant", comment="merchant/system")
+    is_base = Column(Integer, nullable=False, default=0, comment="是否 base 分类，0/1")
+    status = Column(String(20), nullable=False, default="active", comment="active/deleted")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    deleted_at = Column(DateTime)
+    created_by = Column(String(128))
+    updated_by = Column(String(128))
+
+
 class ComputeAccount(Base):
     """小高算力：商户 Token 账户表。
 
