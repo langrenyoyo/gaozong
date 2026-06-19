@@ -7,6 +7,9 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_any_permission
 from app.database import get_db
 from app.schemas import (
+    AgentKnowledgeCategoriesResponse,
+    AgentKnowledgeCategoriesOut,
+    AgentKnowledgeCategoriesUpdate,
     AiAgentCreate,
     AiAgentListResponse,
     AiAgentOut,
@@ -17,6 +20,11 @@ from app.schemas import (
     AiAgentUpdate,
 )
 from app.services import ai_agent_service
+from app.services.agent_knowledge_category_service import (
+    build_effective_category_keys,
+    list_agent_category_keys,
+    replace_agent_categories,
+)
 
 
 router = APIRouter(prefix="/agents", tags=["AI小高智能体"])
@@ -38,6 +46,13 @@ def _not_found() -> HTTPException:
 
 def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
+
+
+def _binding_not_found(exc: ValueError) -> HTTPException:
+    code = str(exc)
+    if code in {"AGENT_NOT_FOUND", "AGENT_NOT_ACTIVE"}:
+        return _not_found()
+    return _bad_request(code, "知识分类绑定参数无效")
 
 
 @router.get("", response_model=AiAgentListResponse)
@@ -107,6 +122,52 @@ def delete_agent(
         raise _not_found()
     agent = ai_agent_service.soft_delete_agent(db, agent)
     return {"success": True, "data": agent, "message": "success"}
+
+
+@router.get("/{agent_id}/knowledge-categories", response_model=AgentKnowledgeCategoriesResponse)
+def get_agent_knowledge_categories(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    context = _auth(context)
+    try:
+        category_keys = list_agent_category_keys(db, context=context, agent_id=agent_id)
+    except ValueError as exc:
+        raise _binding_not_found(exc) from exc
+    return {
+        "success": True,
+        "data": AgentKnowledgeCategoriesOut(
+            agent_id=agent_id,
+            category_keys=category_keys,
+            effective_category_keys=build_effective_category_keys(category_keys),
+        ),
+        "message": "success",
+    }
+
+
+@router.put("/{agent_id}/knowledge-categories", response_model=AgentKnowledgeCategoriesResponse)
+def update_agent_knowledge_categories(
+    agent_id: str,
+    payload: AgentKnowledgeCategoriesUpdate,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    context = _auth(context)
+    try:
+        replace_agent_categories(db, context=context, agent_id=agent_id, category_keys=payload.category_keys)
+        category_keys = list_agent_category_keys(db, context=context, agent_id=agent_id)
+    except ValueError as exc:
+        raise _binding_not_found(exc) from exc
+    return {
+        "success": True,
+        "data": AgentKnowledgeCategoriesOut(
+            agent_id=agent_id,
+            category_keys=category_keys,
+            effective_category_keys=build_effective_category_keys(category_keys),
+        ),
+        "message": "success",
+    }
 
 
 @router.post("/{agent_id}/training-chat", response_model=AiAgentTrainingChatResponse)

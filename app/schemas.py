@@ -181,6 +181,45 @@ class AiAgentTrainingChatResponse(BaseModel):
     message: str = "success"
 
 
+class KnowledgeCategoryOut(BaseModel):
+    """知识分类展示项。"""
+
+    category_key: str
+    name: str
+    scope_type: str
+    is_base: bool = False
+
+
+class KnowledgeCategoryListResponse(BaseModel):
+    """知识分类列表响应包装。"""
+
+    success: bool = True
+    data: list[KnowledgeCategoryOut]
+    message: str = "success"
+
+
+class AgentKnowledgeCategoriesUpdate(BaseModel):
+    """Agent 手动知识分类绑定替换请求。"""
+
+    category_keys: list[str] = Field(default_factory=list)
+
+
+class AgentKnowledgeCategoriesOut(BaseModel):
+    """Agent 知识分类绑定输出。"""
+
+    agent_id: str
+    category_keys: list[str]
+    effective_category_keys: list[str]
+
+
+class AgentKnowledgeCategoriesResponse(BaseModel):
+    """Agent 知识分类绑定响应包装。"""
+
+    success: bool = True
+    data: AgentKnowledgeCategoriesOut
+    message: str = "success"
+
+
 # ========== Agent status read-only query ==========
 
 
