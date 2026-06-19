@@ -34,14 +34,20 @@ def _seed_chunks(document_payload, chunks):
 
     document_id = create_document(KnowledgeDocumentCreate(**document_payload))
     with connect() as conn:
-        for index, (chunk_text, embedding_json) in enumerate(chunks, start=1):
+        for index, chunk_data in enumerate(chunks, start=1):
+            if len(chunk_data) == 2:
+                chunk_text, embedding_json = chunk_data
+                category_id = None
+                category_key = None
+            else:
+                chunk_text, embedding_json, category_id, category_key = chunk_data
             conn.execute(
                 """
                 INSERT INTO knowledge_chunks(
                   document_id, tenant_id, merchant_id, douyin_account_id,
                   chunk_text, chunk_index, embedding_json, embedding_model,
-                  content_hash, is_active
-                ) VALUES(?,?,?,?,?,?,?,?,?,1)
+                  category_id, category_key, content_hash, is_active
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
                 """,
                 (
                     document_id,
@@ -52,6 +58,8 @@ def _seed_chunks(document_payload, chunks):
                     index,
                     embedding_json,
                     "test_embedding_model",
+                    category_id,
+                    category_key,
                     f"test-hash-{document_id}-{index}",
                 ),
             )
@@ -481,3 +489,216 @@ def test_search_skips_invalid_chunk_embedding_without_exception(tmp_path, monkey
     )
 
     assert [item.chunk_text for item in results] == ["有效向量内容"]
+
+
+def test_search_without_category_filter_keeps_existing_behavior(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "未过滤分类知识",
+            "content": "宝马金融方案\n宝马置换方案",
+        },
+        [
+            ("宝马金融方案", "[1.0, 0.0]", 1, "finance"),
+            ("宝马置换方案", "[0.8, 0.2]", 2, "trade_in"),
+        ],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="宝马方案",
+            top_k=5,
+        ),
+        llm_client=_StaticEmbeddingClient({"宝马方案": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["宝马金融方案", "宝马置换方案"]
+
+
+def test_search_filters_by_category_id_in_sql_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "分类ID过滤知识",
+            "content": "新能源电池质保\n精品BBA保养政策",
+        },
+        [
+            ("新能源电池质保", "[1.0, 0.0]", 11, "new_energy"),
+            ("精品BBA保养政策", "[0.9, 0.1]", 22, "bba"),
+        ],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="保养政策",
+            top_k=5,
+            category_ids=["22"],
+        ),
+        llm_client=_StaticEmbeddingClient({"保养政策": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["精品BBA保养政策"]
+
+
+def test_search_filters_by_category_key_in_sql_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "分类Key过滤知识",
+            "content": "金融方案首付比例\n精品代步车保养",
+        },
+        [
+            ("金融方案首付比例", "[1.0, 0.0]", 31, "finance"),
+            ("精品代步车保养", "[0.9, 0.1]", 32, "commuter"),
+        ],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="保养",
+            top_k=5,
+            category_keys=["commuter"],
+        ),
+        llm_client=_StaticEmbeddingClient({"保养": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["精品代步车保养"]
+
+
+def test_search_same_category_key_does_not_cross_merchant_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant_a",
+            "douyin_account_id": 1,
+            "title": "商户A知识",
+            "content": "商户A的精品BBA政策",
+        },
+        [("商户A的精品BBA政策", "[1.0, 0.0]", 41, "bba")],
+    )
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant_b",
+            "douyin_account_id": 1,
+            "title": "商户B知识",
+            "content": "商户B的精品BBA政策",
+        },
+        [("商户B的精品BBA政策", "[1.0, 0.0]", 42, "bba")],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+            query="精品BBA",
+            top_k=5,
+            category_keys=["bba"],
+        ),
+        llm_client=_StaticEmbeddingClient({"精品BBA": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["商户A的精品BBA政策"]
+
+
+def test_search_category_filter_applies_to_lexical_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "文本兜底分类知识",
+            "content": "宝马金融方案\n宝马保养方案",
+        },
+        [
+            ("宝马金融方案", "[1.0, 0.0]", 51, "finance"),
+            ("宝马保养方案", "[0.0, 1.0]", 52, "maintenance"),
+        ],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="宝马方案",
+            top_k=5,
+            category_keys=["maintenance"],
+        ),
+        llm_client=_StaticEmbeddingClient({"宝马方案": RuntimeError("embedding down")}),
+    )
+
+    assert [item.chunk_text for item in results] == ["宝马保养方案"]
+
+
+def test_search_unknown_category_returns_empty_results(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag.repository import search
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "未知分类过滤知识",
+            "content": "宝马金融方案",
+        },
+        [("宝马金融方案", "[1.0, 0.0]", 61, "finance")],
+    )
+
+    results = search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="宝马金融",
+            top_k=5,
+            category_keys=["not_exists"],
+        ),
+        llm_client=_StaticEmbeddingClient({"宝马金融": [1.0, 0.0]}),
+    )
+
+    assert results == []

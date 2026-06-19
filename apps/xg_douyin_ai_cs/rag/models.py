@@ -70,6 +70,8 @@ class RagSearchRequest(BaseModel):
     douyin_account_id: int
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
+    category_ids: list[str] | None = None
+    category_keys: list[str] | None = None
 
 
 class RagSearchItem(BaseModel):

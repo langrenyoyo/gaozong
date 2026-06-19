@@ -209,18 +209,29 @@ def search(
     llm_client: OpenAICompatibleClient | None = None,
 ) -> list[RagSearchItem]:
     query_tokens = set(_tokens(payload.query))
+    category_ids = _normalize_filter_values(payload.category_ids)
+    category_keys = _normalize_filter_values(payload.category_keys)
+    category_filter_sql, category_filter_params = _build_category_filter(category_ids, category_keys)
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT c.*, d.title
             FROM knowledge_chunks c
             JOIN knowledge_documents d ON d.id=c.document_id
             WHERE c.tenant_id=? AND c.merchant_id=? AND c.douyin_account_id=?
               AND c.is_active=1 AND d.is_active=1
+              {category_filter_sql}
             ORDER BY c.id DESC
             """,
-            (payload.tenant_id, payload.merchant_id, payload.douyin_account_id),
+            (
+                payload.tenant_id,
+                payload.merchant_id,
+                payload.douyin_account_id,
+                *category_filter_params,
+            ),
         ).fetchall()
+
+    category_filter_enabled = bool(category_ids or category_keys)
 
     skipped_invalid_embedding = 0
     vector_scored = []
@@ -233,11 +244,15 @@ def search(
         _logger.warning(
             "rag_search strategy=lexical_fallback stage=query_embedding_failed "
             "tenant_id=%s merchant_id=%s douyin_account_id=%s top_k=%d "
+            "category_filter_enabled=%s category_id_count=%d category_key_count=%d "
             "candidate_count=%d skipped_invalid_embedding=%d error_type=%s",
             payload.tenant_id,
             payload.merchant_id,
             payload.douyin_account_id,
             payload.top_k,
+            category_filter_enabled,
+            len(category_ids),
+            len(category_keys),
             len(rows),
             skipped_invalid_embedding,
             type(exc).__name__,
@@ -256,12 +271,16 @@ def search(
             _logger.info(
                 "rag_search strategy=vector tenant_id=%s merchant_id=%s "
                 "douyin_account_id=%s top_k=%d candidate_count=%d "
+                "category_filter_enabled=%s category_id_count=%d category_key_count=%d "
                 "vector_result_count=%d skipped_invalid_embedding=%d",
                 payload.tenant_id,
                 payload.merchant_id,
                 payload.douyin_account_id,
                 payload.top_k,
                 len(rows),
+                category_filter_enabled,
+                len(category_ids),
+                len(category_keys),
                 len(vector_scored[: payload.top_k]),
                 skipped_invalid_embedding,
             )
@@ -271,16 +290,27 @@ def search(
         _logger.info(
             "rag_search strategy=lexical_fallback stage=no_valid_vector_result "
             "tenant_id=%s merchant_id=%s douyin_account_id=%s top_k=%d "
+            "category_filter_enabled=%s category_id_count=%d category_key_count=%d "
             "candidate_count=%d skipped_invalid_embedding=%d",
             payload.tenant_id,
             payload.merchant_id,
             payload.douyin_account_id,
             payload.top_k,
+            category_filter_enabled,
+            len(category_ids),
+            len(category_keys),
             len(rows),
             skipped_invalid_embedding,
         )
 
-    return _lexical_search(rows, query_tokens, payload.top_k)
+    return _lexical_search(
+        rows,
+        query_tokens,
+        payload.top_k,
+        category_filter_enabled=category_filter_enabled,
+        category_id_count=len(category_ids),
+        category_key_count=len(category_keys),
+    )
 
 
 def cosine_similarity(
@@ -298,7 +328,15 @@ def cosine_similarity(
     return float(sum(a * b for a, b in zip(query_vector, chunk_vector)) / (query_norm * chunk_norm))
 
 
-def _lexical_search(rows: list[sqlite3.Row], query_tokens: set[str], top_k: int) -> list[RagSearchItem]:
+def _lexical_search(
+    rows: list[sqlite3.Row],
+    query_tokens: set[str],
+    top_k: int,
+    *,
+    category_filter_enabled: bool = False,
+    category_id_count: int = 0,
+    category_key_count: int = 0,
+) -> list[RagSearchItem]:
     scored = []
     for row in rows:
         score = _score(query_tokens, str(row["chunk_text"] or ""))
@@ -306,12 +344,44 @@ def _lexical_search(rows: list[sqlite3.Row], query_tokens: set[str], top_k: int)
             scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)
     _logger.info(
-        "rag_search strategy=lexical_fallback top_k=%d candidate_count=%d result_count=%d",
+        "rag_search strategy=lexical_fallback top_k=%d "
+        "category_filter_enabled=%s category_id_count=%d category_key_count=%d "
+        "candidate_count=%d result_count=%d",
         top_k,
+        category_filter_enabled,
+        category_id_count,
+        category_key_count,
         len(rows),
         len(scored[:top_k]),
     )
     return _to_search_items(scored[:top_k])
+
+
+def _normalize_filter_values(values: Sequence[object] | None) -> list[str]:
+    if not values:
+        return []
+    normalized: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _build_category_filter(category_ids: list[str], category_keys: list[str]) -> tuple[str, list[str]]:
+    clauses: list[str] = []
+    params: list[str] = []
+    if category_ids:
+        placeholders = ",".join("?" for _ in category_ids)
+        clauses.append(f"CAST(c.category_id AS TEXT) IN ({placeholders})")
+        params.extend(category_ids)
+    if category_keys:
+        placeholders = ",".join("?" for _ in category_keys)
+        clauses.append(f"c.category_key IN ({placeholders})")
+        params.extend(category_keys)
+    if not clauses:
+        return "", []
+    return f"AND ({' OR '.join(clauses)})", params
 
 
 def _to_search_items(scored_rows: list[tuple[float, sqlite3.Row]]) -> list[RagSearchItem]:
