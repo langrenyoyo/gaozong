@@ -2620,3 +2620,79 @@ React
 3. 小高算力继续不做真实支付；`/compute/recharge-orders` 当前只是 mock 订单，不实际到账。
 4. 9000 继续作为抖音企业号绑定和智能体配置的可信来源，不信任前端传入 `agent_config`。
 5. 生产 webhook、认证、权限、数据库迁移均属于高风险区，后续开工前必须先确认契约、迁移和回滚方案。
+
+------
+
+# P4-E 抖音AI客服 RAG 分类知识库闭环验收与部署检查
+
+更新时间：2026-06-19
+
+验收文档：
+
+1. `docs/ai/P4_DY_AI_CS_RAG_KNOWLEDGE_ACCEPTANCE.md`
+2. `docs/ai/P4_DY_AI_CS_RAG_DEPLOY_CHECKLIST.md`
+
+## 1. 当前完成结论
+
+1. `9100` RAG 已完成真实向量检索：query embedding + `knowledge_chunks.embedding_json` 余弦相似度排序，lexical fallback 保留。
+2. `9100` 已具备 `knowledge_categories`、`knowledge_documents.category_key`、`knowledge_chunks.category_key` 分类数据模型。
+3. `9100` `/rag/search` 已支持 `category_ids` / `category_keys`，并在 SQL 候选读取层过滤。
+4. `9000` 已具备 `agent_knowledge_categories` 绑定模型和服务层能力。
+5. `9000` reply-suggestion 代理已可信注入 `agent_config.allowed_category_keys`，默认包含 `base`。
+6. `9100` reply-suggestion 已消费 `allowed_category_keys`，并用于 `RagSearchRequest(category_keys=...)`。
+7. `9000` 已提供 Agent 分类绑定 API：`GET /knowledge-categories`、`GET/PUT /agents/{agent_id}/knowledge-categories`。
+8. 前端 Agent 编辑页已支持知识分类多选，base 默认启用且不可取消。
+9. `9000` 已提供 RAG 文档创建和训练可信代理：`POST /integrations/douyin-ai-cs/rag/documents`、`POST /integrations/douyin-ai-cs/rag/train`。
+10. 前端 RAG 文档创建和训练已改走 9000 可信代理，不再提交 `tenant_id` / `merchant_id` / `douyin_account_id`。
+
+## 2. 当前真实闭环
+
+```text
+前端 Agent 分类多选
+  -> 9000 agent_knowledge_categories
+  -> 9000 reply-suggestion 注入 allowed_category_keys
+  -> 9100 reply-suggestion
+  -> RagSearchRequest(category_keys=...)
+  -> 9100 SQL 层过滤 knowledge_chunks.category_key
+  -> 向量检索 / lexical fallback
+  -> RAG context 注入 LLM
+  -> 返回 AI 回复建议 auto_send=false
+```
+
+```text
+前端 RAG 文档创建 / 训练
+  -> 9000 可信代理
+  -> 9000 校验 RequestContext.merchant_id、account_open_id 归属、category_key 可见性
+  -> 9000 显式构造 scope payload
+  -> 9100 /rag/documents 或 /rag/train
+  -> documents/chunks 写入 category_key
+```
+
+## 3. 当前边界
+
+1. `9000` 是企业号、Agent、商户、Agent 分类绑定的权威源。
+2. `9100` 只负责 RAG/LLM，不反查 9000 数据库。
+3. `9000` 不直连或反查 9100 SQLite。
+4. 前端不向 reply-suggestion 传 `allowed_category_keys`。
+5. 前端不向 RAG documents/train 传可信 scope 字段。
+6. `searchRag()` 如仍直连 9100，只能作为内部调试能力，不是正式产品入口。
+7. `19000` 小高AI微信助手不参与本链路。
+8. `auto_send=false` 必须保持，当前不是自动发送私信系统。
+
+## 4. 尚未完成
+
+1. 正式知识库管理页面未完成。
+2. 分类创建 UI 未完成。
+3. 9000 是否需要正式 `knowledge_categories` 主表仍待后续设计。
+4. 生产环境迁移执行、备份和回滚验收未完成。
+5. NewCarProject 菜单、权限、套餐消耗与知识库管理入口的最终契约未完成。
+
+## 5. 部署前必读
+
+部署前必须按 `docs/ai/P4_DY_AI_CS_RAG_DEPLOY_CHECKLIST.md` 检查：
+
+1. 9000 / 9100 数据库迁移是否已执行。
+2. 9000 / 9100 / frontend 配置是否指向正确环境。
+3. 分类、账号归属、Agent 绑定、文档写入、训练、回复建议是否完成端到端验收。
+4. 前端是否仍不传可信 scope 字段。
+5. `auto_send=false` 是否在 9000 和 9100 双侧保持。
