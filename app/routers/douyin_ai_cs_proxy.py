@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
-from app.services.agent_knowledge_category_service import list_agent_category_keys
+from app.services.agent_knowledge_category_service import (
+    list_agent_category_keys,
+    list_visible_knowledge_categories,
+)
 from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.douyin_account_agent_binding_service import (
@@ -28,6 +31,65 @@ from app.services.xg_douyin_ai_cs_client import (
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
 
 logger = logging.getLogger(__name__)
+
+
+def _trusted_tenant_id(context: RequestContext) -> str:
+    return context.source_system or "new_car_project"
+
+
+def _validate_rag_account_scope(
+    *,
+    db: Session,
+    context: RequestContext,
+    account_open_id: str,
+) -> None:
+    result = list_account_agents_for_merchant_account(
+        db=db,
+        context=context,
+        account_open_id=account_open_id,
+    )
+    if result.allowed:
+        return
+
+    status_code = 404 if result.reason_code == "DOUYIN_ACCOUNT_NOT_FOUND" else 403
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "code": result.reason_code or "DOUYIN_ACCOUNT_SCOPE_DENIED",
+            "message": "抖音企业号不属于当前商户或不可用",
+            "audit": result.audit,
+        },
+    )
+
+
+def _normalize_and_validate_category_key(
+    *,
+    db: Session,
+    context: RequestContext,
+    category_key: str | None,
+) -> str:
+    if category_key is None:
+        key = "base"
+    else:
+        key = str(category_key).strip()
+        if not key:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "CATEGORY_KEY_REQUIRED", "message": "知识分类不能为空"},
+            )
+
+    visible_categories = list_visible_knowledge_categories(db, context=context)
+    visible_keys = {
+        str(item.get("category_key")).strip()
+        for item in visible_categories
+        if item.get("category_key") is not None
+    }
+    if key not in visible_keys:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "CATEGORY_KEY_NOT_VISIBLE", "message": "知识分类不存在或不可用"},
+        )
+    return key
 
 
 def _build_allowed_category_keys(
@@ -66,6 +128,26 @@ class ReplySuggestionProxyRequest(BaseModel):
     agent_id: str | None = None
     latest_message: str
     max_history_messages: int = Field(default=20, ge=1, le=100)
+
+
+class RagDocumentProxyRequest(BaseModel):
+    """9000 RAG 文档可信代理允许浏览器提交的字段。"""
+
+    account_open_id: str
+    title: str
+    content: str
+    category_key: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    vehicle_name: str | None = None
+
+
+class RagTrainProxyRequest(BaseModel):
+    """9000 RAG 训练可信代理允许浏览器提交的字段。"""
+
+    account_open_id: str
+    category_key: str | None = None
+    force_rebuild: bool | None = None
 
 
 @router.post("/conversations/{conversation_id}/reply-suggestion")
@@ -153,6 +235,117 @@ async def create_reply_suggestion_proxy(
     warnings = existing_warnings if isinstance(existing_warnings, list) else []
     result["warnings"] = [*warnings, *binding_result.warnings]
     return result
+
+
+@router.post("/rag/documents")
+def create_rag_document_proxy(
+    request: RagDocumentProxyRequest,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """由 9000 注入可信 scope 后代理创建 9100 RAG 文档。"""
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+
+    account_open_id = str(request.account_open_id).strip()
+    _validate_rag_account_scope(db=db, context=context, account_open_id=account_open_id)
+    category_key = _normalize_and_validate_category_key(
+        db=db,
+        context=context,
+        category_key=request.category_key,
+    )
+
+    payload: dict[str, Any] = {
+        "tenant_id": _trusted_tenant_id(context),
+        "merchant_id": context.merchant_id,
+        "douyin_account_id": account_open_id,
+        "title": request.title,
+        "content": request.content,
+        "category_key": category_key,
+    }
+    if request.category is not None:
+        payload["category"] = request.category
+    if request.brand is not None:
+        payload["brand"] = request.brand
+    if request.vehicle_name is not None:
+        payload["vehicle_name"] = request.vehicle_name
+
+    logger.info(
+        "douyin_ai_cs_rag_document_proxy merchant_id=%s account_open_id=%s category_key=%s",
+        context.merchant_id,
+        account_open_id,
+        category_key,
+    )
+
+    try:
+        result = get_xg_douyin_ai_cs_client().create_rag_document(
+            context=context,
+            request=payload,
+        )
+    except XgDouyinAiCsClientError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+    return {"success": True, "data": result, "message": "success"}
+
+
+@router.post("/rag/train")
+def train_rag_proxy(
+    request: RagTrainProxyRequest,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """由 9000 注入可信 scope 后代理触发 9100 RAG 训练。"""
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+
+    account_open_id = str(request.account_open_id).strip()
+    _validate_rag_account_scope(db=db, context=context, account_open_id=account_open_id)
+    category_key = _normalize_and_validate_category_key(
+        db=db,
+        context=context,
+        category_key=request.category_key,
+    )
+
+    payload: dict[str, Any] = {
+        "tenant_id": _trusted_tenant_id(context),
+        "merchant_id": context.merchant_id,
+        "douyin_account_id": account_open_id,
+        "category_key": category_key,
+    }
+    if request.force_rebuild is not None:
+        payload["force_rebuild"] = request.force_rebuild
+
+    logger.info(
+        "douyin_ai_cs_rag_train_proxy merchant_id=%s account_open_id=%s category_key=%s force_rebuild=%s",
+        context.merchant_id,
+        account_open_id,
+        category_key,
+        request.force_rebuild,
+    )
+
+    try:
+        result = get_xg_douyin_ai_cs_client().train_rag(
+            context=context,
+            request=payload,
+        )
+    except XgDouyinAiCsClientError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+    return {"success": True, "data": result, "message": "success"}
 
 
 @router.get("/accounts/{account_open_id}/agents")

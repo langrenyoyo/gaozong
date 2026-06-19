@@ -83,6 +83,60 @@ class XgDouyinAiCsClient:
         except ValueError as exc:
             raise XgDouyinAiCsClientError("xg_douyin_ai_cs_invalid_json") from exc
 
+    def create_rag_document(
+        self,
+        *,
+        context: RequestContext,
+        request: dict,
+    ) -> dict:
+        """调用 9100 RAG 文档创建接口。"""
+        payload = {
+            **request,
+            "merchant_id": context.merchant_id,
+        }
+        return self._post_json("/rag/documents", payload)
+
+    def train_rag(
+        self,
+        *,
+        context: RequestContext,
+        request: dict,
+    ) -> dict:
+        """调用 9100 RAG 训练接口。"""
+        payload = {
+            **request,
+            "merchant_id": context.merchant_id,
+        }
+        return self._post_json("/rag/train", payload)
+
+    def _post_json(self, path: str, payload: dict) -> dict:
+        url = f"{self.base_url}{path}"
+        headers = {"Content-Type": "application/json"}
+        if self.service_token:
+            headers["X-Internal-Service-Token"] = self.service_token
+
+        try:
+            response = httpx.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_timeout") from exc
+        except httpx.HTTPStatusError as exc:
+            raise XgDouyinAiCsClientError(
+                f"xg_douyin_ai_cs_http_{exc.response.status_code}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_unavailable") from exc
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_invalid_json") from exc
+
 
 def get_xg_douyin_ai_cs_client() -> XgDouyinAiCsClient:
     """返回 9100 客户端实例，便于测试替换。"""

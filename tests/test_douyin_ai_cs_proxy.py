@@ -130,6 +130,226 @@ class FakeDouyinAiCsClient:
             "warnings": [],
         }
 
+    def create_rag_document(self, *, context, request):
+        self.calls.append(
+            {
+                "method": "create_rag_document",
+                "context": context,
+                "request": request,
+            }
+        )
+        return {"document_id": 101, "status": "created"}
+
+    def train_rag(self, *, context, request):
+        self.calls.append(
+            {
+                "method": "train_rag",
+                "context": context,
+                "request": request,
+            }
+        )
+        return {"training_run_id": 202, "status": "completed", "document_count": 1, "chunk_count": 2}
+
+
+def test_rag_document_proxy_ignores_forged_scope_and_builds_trusted_payload(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "account-open-1",
+            "tenant_id": "forged-tenant",
+            "merchant_id": "forged-merchant",
+            "douyin_account_id": 999,
+            "title": "精品BBA话术",
+            "content": "客户咨询宝马5系时，引导留下联系方式。",
+            "category_key": "base",
+            "category": "旧分类展示",
+            "brand": "宝马",
+            "vehicle_name": "5系",
+            "unknown_field": "should_not_forward",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["document_id"] == 101
+    call = fake_client.calls[0]
+    assert call["method"] == "create_rag_document"
+    assert call["context"].merchant_id == "dev-merchant"
+    assert call["request"] == {
+        "tenant_id": "new_car_project",
+        "merchant_id": "dev-merchant",
+        "douyin_account_id": "account-open-1",
+        "title": "精品BBA话术",
+        "content": "客户咨询宝马5系时，引导留下联系方式。",
+        "category": "旧分类展示",
+        "category_key": "base",
+        "brand": "宝马",
+        "vehicle_name": "5系",
+    }
+
+
+def test_rag_document_proxy_defaults_missing_category_key_to_base(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "account-open-1",
+            "title": "基础话术",
+            "content": "基础接待话术。",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["category_key"] == "base"
+
+
+def test_rag_document_proxy_rejects_empty_category_key(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "account-open-1",
+            "title": "空分类",
+            "content": "内容",
+            "category_key": "   ",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "CATEGORY_KEY_REQUIRED"
+    assert fake_client.calls == []
+
+
+def test_rag_document_proxy_allows_visible_merchant_category(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+    _insert_agent_and_binding(open_id="account-open-1")
+    _insert_agent_categories(category_keys=["精品BBA"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "account-open-1",
+            "title": "BBA话术",
+            "content": "精品BBA接待话术。",
+            "category_key": "精品BBA",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["category_key"] == "精品BBA"
+
+
+def test_rag_document_proxy_rejects_invisible_or_other_merchant_category(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+    _insert_agent_categories(agent_id="agent-other", merchant_id="other-merchant", category_keys=["精品BBA"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "account-open-1",
+            "title": "越权分类",
+            "content": "内容",
+            "category_key": "精品BBA",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "CATEGORY_KEY_NOT_VISIBLE"
+    assert fake_client.calls == []
+
+
+def test_rag_document_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="other-open", merchant_id="other-merchant")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/documents",
+        json={
+            "account_open_id": "other-open",
+            "title": "跨商户",
+            "content": "内容",
+            "category_key": "base",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert fake_client.calls == []
+
+
+def test_rag_train_proxy_validates_account_and_builds_trusted_payload(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/train",
+        json={
+            "account_open_id": "account-open-1",
+            "tenant_id": "forged-tenant",
+            "merchant_id": "forged-merchant",
+            "douyin_account_id": 999,
+            "category_key": "base",
+            "force_rebuild": True,
+            "unknown_field": "should_not_forward",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["training_run_id"] == 202
+    assert fake_client.calls[0]["request"] == {
+        "tenant_id": "new_car_project",
+        "merchant_id": "dev-merchant",
+        "douyin_account_id": "account-open-1",
+        "category_key": "base",
+        "force_rebuild": True,
+    }
+
+
+def test_rag_train_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="other-open", merchant_id="other-merchant")
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/rag/train",
+        json={"account_open_id": "other-open", "category_key": "base"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert fake_client.calls == []
+
 
 def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
