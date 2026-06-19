@@ -15,6 +15,8 @@ from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
 from apps.xg_douyin_ai_cs.rag.chunker import chunk_text
 from apps.xg_douyin_ai_cs.rag.database import connect
 from apps.xg_douyin_ai_cs.rag.models import (
+    KnowledgeCategoryCreate,
+    KnowledgeCategoryItem,
     KnowledgeDocumentCreate,
     RagSearchItem,
     RagSearchRequest,
@@ -34,6 +36,53 @@ class Scope:
     douyin_account_id: int
 
 
+def create_category(payload: KnowledgeCategoryCreate) -> KnowledgeCategoryItem:
+    _validate_category_scope(payload)
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO knowledge_categories(
+              tenant_id, merchant_id, category_key, name, scope_type,
+              is_base, is_active, sort_order
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                payload.tenant_id,
+                payload.merchant_id,
+                payload.category_key,
+                payload.name,
+                payload.scope_type,
+                1 if payload.is_base else 0,
+                1 if payload.is_active else 0,
+                payload.sort_order,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM knowledge_categories WHERE id=?",
+            (int(cur.lastrowid),),
+        ).fetchone()
+        return _to_category_item(row)
+
+
+def list_categories(tenant_id: str, merchant_id: str) -> list[KnowledgeCategoryItem]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM knowledge_categories
+            WHERE tenant_id=? AND is_active=1
+              AND (
+                scope_type='system'
+                OR (scope_type='merchant' AND merchant_id=?)
+              )
+            ORDER BY sort_order ASC, id ASC
+            """,
+            (tenant_id, merchant_id),
+        ).fetchall()
+    return [_to_category_item(row) for row in rows]
+
+
 def create_document(payload: KnowledgeDocumentCreate) -> int:
     if not payload.content.strip():
         raise ValueError("content must not be empty")
@@ -42,8 +91,8 @@ def create_document(payload: KnowledgeDocumentCreate) -> int:
             """
             INSERT INTO knowledge_documents(
               tenant_id, merchant_id, douyin_account_id, title, content,
-              source_type, category, brand, vehicle_name
-            ) VALUES(?,?,?,?,?,?,?,?,?)
+              source_type, category, category_id, category_key, brand, vehicle_name
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 payload.tenant_id,
@@ -53,6 +102,8 @@ def create_document(payload: KnowledgeDocumentCreate) -> int:
                 payload.content,
                 payload.source_type,
                 payload.category,
+                payload.category_id,
+                payload.category_key,
                 payload.brand,
                 payload.vehicle_name,
             ),
@@ -91,8 +142,8 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                         INSERT OR IGNORE INTO knowledge_chunks(
                           document_id, tenant_id, merchant_id, douyin_account_id,
                           chunk_text, chunk_index, embedding_json, embedding_model,
-                          content_hash, is_active
-                        ) VALUES(?,?,?,?,?,?,?,?,?,1)
+                          category_id, category_key, content_hash, is_active
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
                         """,
                         (
                             doc["id"],
@@ -103,16 +154,26 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                             index,
                             json.dumps(embedding["embedding"]),
                             embedding["model"],
+                            doc["category_id"],
+                            doc["category_key"],
                             digest,
                         ),
                     )
                     conn.execute(
                         """
                         UPDATE knowledge_chunks
-                        SET is_active=1, embedding_json=?, embedding_model=?, updated_at=CURRENT_TIMESTAMP
+                        SET is_active=1, embedding_json=?, embedding_model=?,
+                            category_id=?, category_key=?, updated_at=CURRENT_TIMESTAMP
                         WHERE document_id=? AND content_hash=?
                         """,
-                        (json.dumps(embedding["embedding"]), embedding["model"], doc["id"], digest),
+                        (
+                            json.dumps(embedding["embedding"]),
+                            embedding["model"],
+                            doc["category_id"],
+                            doc["category_key"],
+                            doc["id"],
+                            digest,
+                        ),
                     )
                     chunk_count += 1
             conn.execute(
@@ -319,6 +380,27 @@ def _create_training_run(conn: sqlite3.Connection, payload: RagTrainRequest) -> 
         (payload.tenant_id, payload.merchant_id, payload.douyin_account_id),
     )
     return int(cur.lastrowid)
+
+
+def _validate_category_scope(payload: KnowledgeCategoryCreate) -> None:
+    if payload.scope_type == "system" and payload.merchant_id is not None:
+        raise ValueError("system category merchant_id must be empty")
+    if payload.scope_type == "merchant" and not payload.merchant_id:
+        raise ValueError("merchant category merchant_id is required")
+
+
+def _to_category_item(row: sqlite3.Row) -> KnowledgeCategoryItem:
+    return KnowledgeCategoryItem(
+        id=int(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        merchant_id=row["merchant_id"],
+        category_key=str(row["category_key"]),
+        name=str(row["name"]),
+        scope_type=str(row["scope_type"]),
+        is_base=bool(row["is_base"]),
+        is_active=bool(row["is_active"]),
+        sort_order=int(row["sort_order"]),
+    )
 
 
 def _tokens(text: str) -> list[str]:

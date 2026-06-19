@@ -20,6 +20,13 @@ def _client(tmp_path, monkeypatch):
     return TestClient(create_app())
 
 
+def _db_rows(query, params=()):
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        return conn.execute(query, params).fetchall()
+
+
 def _seed_chunks(document_payload, chunks):
     from apps.xg_douyin_ai_cs.rag.database import connect
     from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate
@@ -65,6 +72,215 @@ def test_chunker_splits_short_long_and_rejects_empty_content():
 
     with pytest.raises(ValueError, match="content must not be empty"):
         chunk_text("   ")
+
+
+def test_can_create_system_base_category(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeCategoryCreate
+    from apps.xg_douyin_ai_cs.rag.repository import create_category, list_categories
+
+    category = create_category(
+        KnowledgeCategoryCreate(
+            tenant_id="demo_tenant",
+            merchant_id=None,
+            category_key="base",
+            name="基础知识",
+            scope_type="system",
+            is_base=True,
+            sort_order=1,
+        )
+    )
+
+    assert category.category_key == "base"
+    assert category.scope_type == "system"
+    assert category.merchant_id is None
+    assert category.is_base is True
+
+    categories = list_categories(tenant_id="demo_tenant", merchant_id="merchant_a")
+    assert [item.category_key for item in categories] == ["base"]
+
+
+def test_can_create_merchant_category_and_isolate_merchants(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeCategoryCreate
+    from apps.xg_douyin_ai_cs.rag.repository import create_category, list_categories
+
+    create_category(
+        KnowledgeCategoryCreate(
+            tenant_id="demo_tenant",
+            merchant_id=None,
+            category_key="base",
+            name="基础知识",
+            scope_type="system",
+            is_base=True,
+        )
+    )
+    create_category(
+        KnowledgeCategoryCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            category_key="bba",
+            name="精品BBA",
+            scope_type="merchant",
+            is_base=False,
+        )
+    )
+    create_category(
+        KnowledgeCategoryCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_b",
+            category_key="finance",
+            name="金融方案",
+            scope_type="merchant",
+            is_base=False,
+        )
+    )
+
+    merchant_a_keys = [item.category_key for item in list_categories("demo_tenant", "merchant_a")]
+    merchant_b_keys = [item.category_key for item in list_categories("demo_tenant", "merchant_b")]
+
+    assert merchant_a_keys == ["base", "bba"]
+    assert merchant_b_keys == ["base", "finance"]
+
+
+def test_create_category_rejects_invalid_scope_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeCategoryCreate
+    from apps.xg_douyin_ai_cs.rag.repository import create_category
+
+    with pytest.raises(ValueError, match="system category merchant_id must be empty"):
+        create_category(
+            KnowledgeCategoryCreate(
+                tenant_id="demo_tenant",
+                merchant_id="merchant_a",
+                category_key="base",
+                name="基础知识",
+                scope_type="system",
+                is_base=True,
+            )
+        )
+
+    with pytest.raises(ValueError, match="merchant category merchant_id is required"):
+        create_category(
+            KnowledgeCategoryCreate(
+                tenant_id="demo_tenant",
+                merchant_id=None,
+                category_key="bba",
+                name="精品BBA",
+                scope_type="merchant",
+            )
+        )
+
+
+def test_train_syncs_document_category_fields_to_chunks(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagTrainRequest
+    from apps.xg_douyin_ai_cs.rag.repository import create_document, train_scope
+
+    document_id = create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+            title="精品BBA话术",
+            content="宝马5系客户询价时，先确认预算和到店时间。",
+            category="旧分类文本",
+            category_id=7,
+            category_key="bba",
+        )
+    )
+
+    result = train_scope(
+        RagTrainRequest(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+        ),
+        llm_client=_StaticEmbeddingClient({"宝马5系客户询价时，先确认预算和到店时间。": [1.0, 0.0]}),
+    )
+
+    assert result["status"] == "completed"
+    rows = _db_rows(
+        """
+        SELECT category_id, category_key
+        FROM knowledge_chunks
+        WHERE document_id=?
+        """,
+        (document_id,),
+    )
+    assert [(row["category_id"], row["category_key"]) for row in rows] == [(7, "bba")]
+
+
+def test_rag_documents_api_accepts_category_id_and_key(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/rag/documents",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "merchant_a",
+            "douyin_account_id": 1,
+            "title": "新能源话术",
+            "content": "新能源客户关注电池和金融方案。",
+            "category": "旧分类文本",
+            "category_id": 9,
+            "category_key": "new_energy",
+        },
+    )
+
+    assert response.status_code == 200
+    rows = _db_rows(
+        """
+        SELECT category, category_id, category_key
+        FROM knowledge_documents
+        WHERE id=?
+        """,
+        (response.json()["document_id"],),
+    )
+    assert [(row["category"], row["category_id"], row["category_key"]) for row in rows] == [
+        ("旧分类文本", 9, "new_energy")
+    ]
+
+
+def test_document_without_category_still_trains_chunks(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagTrainRequest
+    from apps.xg_douyin_ai_cs.rag.repository import create_document, train_scope
+
+    document_id = create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+            title="无分类旧文档",
+            content="旧文档不传分类字段也必须可以训练。",
+        )
+    )
+
+    result = train_scope(
+        RagTrainRequest(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+        ),
+        llm_client=_StaticEmbeddingClient({"旧文档不传分类字段也必须可以训练。": [1.0, 0.0]}),
+    )
+
+    assert result["status"] == "completed"
+    rows = _db_rows(
+        """
+        SELECT category_id, category_key
+        FROM knowledge_chunks
+        WHERE document_id=?
+        """,
+        (document_id,),
+    )
+    assert [(row["category_id"], row["category_key"]) for row in rows] == [(None, None)]
 
 
 def test_rag_documents_train_search_and_scope_isolation(tmp_path, monkeypatch):
