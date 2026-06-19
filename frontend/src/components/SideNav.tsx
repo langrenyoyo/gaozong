@@ -1,5 +1,6 @@
 import {
   BotIcon,
+  BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CoinsIcon,
@@ -32,6 +33,7 @@ const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
   { id: "ai-agents", label: "智能体", expandedLabel: "AI小高智能体", path: "/ai-agents" },
   { id: "knowledge-categories", label: "分类", expandedLabel: "知识分类", path: "/knowledge-categories" },
+  { id: "knowledge-base", label: "知识", expandedLabel: "知识库", path: "/knowledge-base" },
   { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
   { id: "compute", label: "算力", expandedLabel: "小高算力", path: "/compute" },
 ];
@@ -49,6 +51,7 @@ const navIcons: Record<string, React.ReactNode> = {
   leads: <FilterIcon size={18} />,
   "ai-agents": <BotIcon size={18} />,
   "knowledge-categories": <TagsIcon size={18} />,
+  "knowledge-base": <BookOpenIcon size={18} />,
   "ai-agent": <ShieldCheckIcon size={18} />,
   compute: <CoinsIcon size={18} />,
   "merchant-agent": <BotIcon size={18} />,

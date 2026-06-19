@@ -18,6 +18,7 @@ import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "./ComputeCenter";
+import KnowledgeBasePage from "./KnowledgeBasePage";
 import KnowledgeCategoriesPage from "./KnowledgeCategoriesPage";
 import LeadsModulePage from "./LeadsModulePage";
 import WechatAgent from "./WechatAgent";
@@ -743,6 +744,8 @@ export default function Index({
           <SuperMerchantAgent />
         ) : activeNav === "knowledge-categories" ? (
           <KnowledgeCategoriesPage />
+        ) : activeNav === "knowledge-base" ? (
+          <KnowledgeBasePage />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
         ) : activeNav === "compute" ? (
