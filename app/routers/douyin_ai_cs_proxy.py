@@ -116,6 +116,17 @@ def _build_allowed_category_keys(
     return result or ["base"]
 
 
+def _normalize_risk_flags(raw_flags: Any) -> list[Any]:
+    """兼容 9100 返回的非标准 risk_flags，避免代理层兜底时 500。"""
+    if raw_flags is None:
+        return []
+    if isinstance(raw_flags, str):
+        return [raw_flags]
+    if isinstance(raw_flags, list):
+        return raw_flags
+    return []
+
+
 class ReplySuggestionProxyRequest(BaseModel):
     """9000 代理层允许浏览器提交的回复建议参数。"""
 
@@ -225,7 +236,13 @@ async def create_reply_suggestion_proxy(
             detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
         ) from exc
 
+    upstream_requested_auto_send = result.get("auto_send") is True
     result["auto_send"] = False
+    if upstream_requested_auto_send:
+        risk_flags = _normalize_risk_flags(result.get("risk_flags"))
+        if "proxy_forced_auto_send_false" not in risk_flags:
+            risk_flags.append("proxy_forced_auto_send_false")
+        result["risk_flags"] = risk_flags
     existing_warnings = result.get("warnings")
     warnings = existing_warnings if isinstance(existing_warnings, list) else []
     result["warnings"] = [*warnings, *binding_result.warnings]

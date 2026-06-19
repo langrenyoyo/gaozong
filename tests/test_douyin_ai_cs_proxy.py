@@ -520,6 +520,7 @@ def test_proxy_ignores_forged_allowed_category_keys_from_payload(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
+    assert fake_client.calls[0]["request"].get("allowed_category_keys") is None
 
 
 def test_proxy_falls_back_to_base_when_category_binding_read_fails(monkeypatch):
@@ -765,6 +766,173 @@ def test_proxy_forces_auto_send_false_even_if_9100_returns_true(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["auto_send"] is False
+    assert "proxy_forced_auto_send_false" in response.json()["risk_flags"]
+
+
+def test_proxy_passes_structured_reply_decision_fields(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    class StructuredClient(FakeDouyinAiCsClient):
+        def suggest_reply(self, *, context, conversation_id, request):
+            data = super().suggest_reply(
+                context=context,
+                conversation_id=conversation_id,
+                request=request,
+            )
+            data.update(
+                {
+                    "llm_used": True,
+                    "rag_used": True,
+                    "source_chunks": [
+                        {"chunk_id": "chunk-1", "document_id": 10, "title": "A6知识", "score": 0.91}
+                    ],
+                    "agent_id": "agent-sales",
+                    "agent_name": "sales agent",
+                    "agent_category": "sales",
+                    "intent": "price_inquiry",
+                    "lead_level": "high",
+                    "tags": ["price", "audi"],
+                    "detected_vehicle": "奥迪A6",
+                    "detected_contacts": {"phone": ["13800138000"], "wechat": ["wx_test"]},
+                    "manual_required_reason": "涉及价格，需要人工确认",
+                    "risk_flags": ["price_commitment"],
+                    "rag_sources": [
+                        {"chunk_id": "chunk-1", "document_id": 10, "title": "A6知识", "score": 0.91}
+                    ],
+                    "decision_version": "structured_v1",
+                }
+            )
+            return data
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: StructuredClient())
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply_text"] == "suggested reply"
+    assert body["confidence"] == 0.5
+    assert body["manual_required"] is False
+    assert body["auto_send"] is False
+    assert body["llm_used"] is True
+    assert body["rag_used"] is True
+    assert body["source_chunks"] == [
+        {"chunk_id": "chunk-1", "document_id": 10, "title": "A6知识", "score": 0.91}
+    ]
+    assert body["agent_id"] == "agent-sales"
+    assert body["agent_name"] == "sales agent"
+    assert body["agent_category"] == "sales"
+    assert body["intent"] == "price_inquiry"
+    assert body["lead_level"] == "high"
+    assert body["tags"] == ["price", "audi"]
+    assert body["detected_vehicle"] == "奥迪A6"
+    assert body["detected_contacts"] == {"phone": ["13800138000"], "wechat": ["wx_test"]}
+    assert body["manual_required_reason"] == "涉及价格，需要人工确认"
+    assert body["risk_flags"] == ["price_commitment"]
+    assert body["rag_sources"] == [
+        {"chunk_id": "chunk-1", "document_id": 10, "title": "A6知识", "score": 0.91}
+    ]
+    assert body["decision_version"] == "structured_v1"
+
+
+def test_proxy_preserves_upstream_risk_flags_when_forcing_auto_send_false(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    class UnsafeClient(FakeDouyinAiCsClient):
+        def suggest_reply(self, *, context, conversation_id, request):
+            data = super().suggest_reply(
+                context=context,
+                conversation_id=conversation_id,
+                request=request,
+            )
+            data["auto_send"] = True
+            data["risk_flags"] = ["llm_requested_auto_send"]
+            return data
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: UnsafeClient())
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["auto_send"] is False
+    assert response.json()["risk_flags"] == ["llm_requested_auto_send", "proxy_forced_auto_send_false"]
+
+
+def test_proxy_normalizes_invalid_risk_flags_when_forcing_auto_send_false(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    class UnsafeClient(FakeDouyinAiCsClient):
+        def __init__(self, risk_flags):
+            super().__init__()
+            self.risk_flags = risk_flags
+
+        def suggest_reply(self, *, context, conversation_id, request):
+            data = super().suggest_reply(
+                context=context,
+                conversation_id=conversation_id,
+                request=request,
+            )
+            data["auto_send"] = True
+            data["risk_flags"] = self.risk_flags
+            return data
+
+    for raw_value, expected in [
+        (None, ["proxy_forced_auto_send_false"]),
+        ("price_commitment", ["price_commitment", "proxy_forced_auto_send_false"]),
+        ({"bad": "shape"}, ["proxy_forced_auto_send_false"]),
+    ]:
+        client = UnsafeClient(raw_value)
+        monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda client=client: client)
+        _insert_account()
+        _insert_agent_and_binding()
+
+        response = _client(monkeypatch).post(
+            "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+            json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["auto_send"] is False
+        assert response.json()["risk_flags"] == expected
+        setup_function()
+
+
+def test_proxy_ignores_forged_auto_send_and_allowed_category_keys_in_upstream_payload(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_agent_categories(category_keys=["premium_bba"])
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": "hello",
+            "auto_send": True,
+            "allowed_category_keys": ["forged_top_level"],
+            "agent_config": {"allowed_category_keys": ["forged_agent_config"]},
+        },
+    )
+
+    assert response.status_code == 200
+    upstream_payload = fake_client.calls[0]["request"]
+    assert "auto_send" not in upstream_payload
+    assert "allowed_category_keys" not in upstream_payload
+    assert upstream_payload["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
 
 
 def test_proxy_denies_when_binding_service_rejects_account(monkeypatch):
