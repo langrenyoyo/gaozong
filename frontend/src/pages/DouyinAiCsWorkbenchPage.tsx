@@ -1,4 +1,4 @@
-import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircleIcon,
   BotIcon,
@@ -110,6 +110,59 @@ function liveCheckErrorMessage(err: unknown): string {
 
 function formatTime(value?: string | null) {
   return formatDateTimeLocal(value);
+}
+
+function timeValue(value?: string | null) {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function conversationCacheKey(accountOpenId: string | null | undefined, conversationId: string | number | null | undefined) {
+  if (!accountOpenId || conversationId === null || conversationId === undefined) return "";
+  return `${accountOpenId}::${String(conversationId)}`;
+}
+
+function conversationWatermark(conversation: DouyinConversationItem | null | undefined) {
+  if (!conversation) return "";
+  return [
+    conversation.last_message_at || "",
+    conversation.last_message || "",
+    conversation.conversation_short_id || "",
+    conversation.conversation_key || "",
+  ].join("|");
+}
+
+type ConversationReadWatermark = {
+  readAt: number;
+  lastMessageAt: string | null;
+  lastMessageWatermark: string;
+  unreadCount: number;
+};
+
+function applyReadWatermarks(
+  accountOpenId: string,
+  items: DouyinConversationItem[],
+  readWatermarks: Record<string, ConversationReadWatermark>,
+) {
+  return items.map((item) => {
+    const key = conversationCacheKey(accountOpenId, item.id);
+    const read = key ? readWatermarks[key] : undefined;
+    if (!read) return item;
+    const itemTime = timeValue(item.last_message_at);
+    const readTime = timeValue(read.lastMessageAt);
+    const sameWatermark = conversationWatermark(item) === read.lastMessageWatermark;
+    if (sameWatermark || itemTime <= readTime) {
+      return { ...item, unread_count: 0 };
+    }
+    return item;
+  });
+}
+
+function accountUnreadFromConversations(accountOpenId: string, items: DouyinConversationItem[]) {
+  return items
+    .filter((item) => (item.account_open_id || accountOpenId) === accountOpenId)
+    .reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
 }
 
 function statusText(value?: string | null) {
@@ -506,6 +559,17 @@ export default function DouyinAiCsWorkbenchPage() {
     tone: "success" | "error";
   } | null>(null);
   const [authRedirectHandled, setAuthRedirectHandled] = useState(false);
+  const conversationsCacheRef = useRef<Record<string, DouyinConversationItem[]>>({});
+  const agentsCacheRef = useRef<Record<string, DouyinAgentItem[]>>({});
+  const messagesCacheRef = useRef<Record<string, DouyinMessageItem[]>>({});
+  const profileCacheRef = useRef<Record<string, DouyinConversationProfile | null>>({});
+  const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
+  const selectedAccountOpenIdRef = useRef<string | null>(null);
+  const selectedConversationIdRef = useRef<string | number | null>(null);
+  const accountRequestSeqRef = useRef(0);
+  const conversationRequestSeqRef = useRef(0);
+  const agentsRequestSeqRef = useRef(0);
+  const detailRequestSeqRef = useRef(0);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
@@ -521,6 +585,15 @@ export default function DouyinAiCsWorkbenchPage() {
     const inbound = [...messages].reverse().find((item) => item.direction === "inbound");
     return inbound?.content || selectedConversation?.last_message || "";
   }, [messages, selectedConversation]);
+
+  useEffect(() => {
+    selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
+  }, [selectedAccount?.account_open_id]);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
   const filteredConversations = useMemo(() => {
     const keyword = conversationSearch.trim().toLowerCase();
     return conversations.filter((conversation) => {
@@ -555,10 +628,13 @@ export default function DouyinAiCsWorkbenchPage() {
       : "暂无客户画像";
 
   const loadAccounts = useCallback(async (preferredOpenId?: string | null) => {
+    const requestSeq = accountRequestSeqRef.current + 1;
+    accountRequestSeqRef.current = requestSeq;
     setLoadingAccounts(true);
     setError(null);
     try {
       const data = await listDouyinAccounts();
+      if (accountRequestSeqRef.current !== requestSeq) return data.items;
       const mapped = data.items;
       setAccounts(mapped);
       setAccountListSource("official_bindings");
@@ -572,50 +648,90 @@ export default function DouyinAiCsWorkbenchPage() {
       });
       return mapped;
     } catch (err) {
+      if (accountRequestSeqRef.current !== requestSeq) return [];
       setAccounts([]);
       setSelectedAccountId(null);
       setAccountListSource(null);
       setError(err instanceof Error ? err.message : "抖音企业号列表加载失败");
       return [];
     } finally {
-      setLoadingAccounts(false);
+      if (accountRequestSeqRef.current === requestSeq) setLoadingAccounts(false);
     }
   }, []);
 
   const loadConversations = useCallback(async (
     account: DouyinAccountItem,
-    options?: { skipDefaultSelection?: boolean },
+    options?: { skipDefaultSelection?: boolean; background?: boolean },
   ) => {
-    setLoadingConversations(true);
+    const accountOpenId = account.account_open_id;
+    const cached = conversationsCacheRef.current[accountOpenId];
+    const hasCached = Boolean(cached);
+    const requestSeq = conversationRequestSeqRef.current + 1;
+    conversationRequestSeqRef.current = requestSeq;
+    if (hasCached && !options?.background) {
+      setConversations(cached);
+    }
+    if (!options?.background && !hasCached) setLoadingConversations(true);
     setError(null);
     try {
       const data = await getDouyinAccountConversations(account.id, {
-        account_open_id: account.account_open_id,
+        account_open_id: accountOpenId,
       });
-      setConversations(data.items);
+      if (
+        conversationRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== accountOpenId
+      ) {
+        return data.items;
+      }
+      const mergedItems = applyReadWatermarks(accountOpenId, data.items, readWatermarksRef.current);
+      conversationsCacheRef.current[accountOpenId] = mergedItems;
+      setConversations(mergedItems);
+      setAccounts((current) =>
+        current.map((item) =>
+          item.account_open_id === accountOpenId
+            ? { ...item, unread_count: accountUnreadFromConversations(accountOpenId, mergedItems) }
+            : item,
+        ),
+      );
       if (!options?.skipDefaultSelection) {
         setSelectedConversationId((current) => {
-          if (current && data.items.some((item) => item.id === current)) return current;
-          return data.items[0]?.id || null;
+          if (current && mergedItems.some((item) => item.id === current)) return current;
+          return mergedItems[0]?.id || null;
         });
       }
-      return data.items;
+      return mergedItems;
     } catch (err) {
-      setConversations([]);
-      setSelectedConversationId(null);
+      if (
+        conversationRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== accountOpenId
+      ) {
+        return [];
+      }
+      if (!hasCached) {
+        setConversations([]);
+        setSelectedConversationId(null);
+      }
       setError(err instanceof Error ? err.message : "会话列表加载失败");
       return [];
     } finally {
-      setLoadingConversations(false);
+      if (conversationRequestSeqRef.current === requestSeq && selectedAccountOpenIdRef.current === accountOpenId) {
+        setLoadingConversations(false);
+      }
     }
   }, []);
 
   const loadAccountAgents = useCallback(async (accountOpenId: string) => {
-    setLoadingAgents(true);
+    const cached = agentsCacheRef.current[accountOpenId];
+    const requestSeq = agentsRequestSeqRef.current + 1;
+    agentsRequestSeqRef.current = requestSeq;
+    if (cached) setAgents(cached);
+    if (!cached) setLoadingAgents(true);
     setAgentNotice(null);
     setReply(null);
     try {
       const data = await getDouyinAccountAgents(accountOpenId);
+      if (agentsRequestSeqRef.current !== requestSeq || selectedAccountOpenIdRef.current !== accountOpenId) return;
+      agentsCacheRef.current[accountOpenId] = data.items;
       setAgents(data.items);
       if (!data.items.length) {
         setSelectedAgentId(null);
@@ -624,32 +740,72 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       setAgentNotice(null);
     } catch (err) {
-      setAgents([]);
-      setSelectedAgentId(null);
+      if (agentsRequestSeqRef.current !== requestSeq || selectedAccountOpenIdRef.current !== accountOpenId) return;
+      if (!cached) {
+        setAgents([]);
+        setSelectedAgentId(null);
+      }
       setAgentNotice(err instanceof Error ? err.message : "智能体列表加载失败");
     } finally {
-      setLoadingAgents(false);
+      if (agentsRequestSeqRef.current === requestSeq && selectedAccountOpenIdRef.current === accountOpenId) {
+        setLoadingAgents(false);
+      }
     }
   }, []);
 
-  const loadConversationDetail = useCallback(async (conversationId: string | number) => {
-    setLoadingMessages(true);
-    setLoadingProfile(true);
+  const loadConversationDetail = useCallback(async (
+    conversationId: string | number,
+    options?: { background?: boolean },
+  ) => {
+    const accountOpenId = selectedAccount?.account_open_id || null;
+    const cacheKey = conversationCacheKey(accountOpenId, conversationId);
+    const cachedMessages = cacheKey ? messagesCacheRef.current[cacheKey] : undefined;
+    const cachedProfile = cacheKey ? profileCacheRef.current[cacheKey] : undefined;
+    const requestSeq = detailRequestSeqRef.current + 1;
+    detailRequestSeqRef.current = requestSeq;
+    if (cachedMessages && !options?.background) setMessages(cachedMessages);
+    if (cachedProfile !== undefined && !options?.background) setProfile(cachedProfile);
+    if (!options?.background && !cachedMessages) setLoadingMessages(true);
+    if (!options?.background && cachedProfile === undefined) setLoadingProfile(true);
     setError(null);
     setProfileError(null);
-    setReply(null);
+    if (!options?.background) setReply(null);
     try {
       const messageData = await getDouyinConversationMessages(conversationId, {
-        account_open_id: selectedAccount?.account_open_id,
+        account_open_id: accountOpenId || undefined,
       });
+      if (
+        detailRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== accountOpenId ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
+      if (cacheKey) messagesCacheRef.current[cacheKey] = messageData.items;
       setMessages(messageData.items);
       if (selectedAccount) {
         try {
           const profileData = await getDouyinConversationProfileFrom9000(selectedAccount.id, conversationId, {
             account_open_id: selectedAccount.account_open_id,
           });
+          if (
+            detailRequestSeqRef.current !== requestSeq ||
+            selectedAccountOpenIdRef.current !== accountOpenId ||
+            selectedConversationIdRef.current !== conversationId
+          ) {
+            return;
+          }
+          if (cacheKey) profileCacheRef.current[cacheKey] = profileData;
           setProfile(profileData);
         } catch (profileErr) {
+          if (
+            detailRequestSeqRef.current !== requestSeq ||
+            selectedAccountOpenIdRef.current !== accountOpenId ||
+            selectedConversationIdRef.current !== conversationId
+          ) {
+            return;
+          }
+          if (cacheKey) profileCacheRef.current[cacheKey] = null;
           setProfile(null);
           setProfileError(profileErr instanceof Error ? profileErr.message : "客户画像加载失败");
         }
@@ -657,14 +813,58 @@ export default function DouyinAiCsWorkbenchPage() {
         setProfile(null);
       }
     } catch (err) {
-      setMessages([]);
-      setProfile(null);
+      if (
+        detailRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== accountOpenId ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
+      if (!cachedMessages) setMessages([]);
+      if (cachedProfile === undefined) setProfile(null);
       setError(err instanceof Error ? err.message : "聊天详情加载失败");
     } finally {
-      setLoadingMessages(false);
-      setLoadingProfile(false);
+      if (
+        detailRequestSeqRef.current === requestSeq &&
+        selectedAccountOpenIdRef.current === accountOpenId &&
+        selectedConversationIdRef.current === conversationId
+      ) {
+        setLoadingMessages(false);
+        setLoadingProfile(false);
+      }
     }
   }, [selectedAccount]);
+
+  const markConversationReadLocally = useCallback((conversation: DouyinConversationItem) => {
+    const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
+    if (!accountOpenId) return;
+    const cacheKey = conversationCacheKey(accountOpenId, conversation.id);
+    if (!cacheKey) return;
+    const unreadCount = Number(conversation.unread_count || 0);
+    const watermark = conversationWatermark(conversation);
+    const existing = readWatermarksRef.current[cacheKey];
+    if (unreadCount <= 0 && existing?.lastMessageWatermark === watermark) return;
+    readWatermarksRef.current[cacheKey] = {
+      readAt: Date.now(),
+      lastMessageAt: conversation.last_message_at || null,
+      lastMessageWatermark: watermark,
+      unreadCount,
+    };
+    setConversations((current) => {
+      const next = current.map((item) => (item.id === conversation.id ? { ...item, unread_count: 0 } : item));
+      conversationsCacheRef.current[accountOpenId] = next;
+      return next;
+    });
+    if (unreadCount > 0) {
+      setAccounts((current) =>
+        current.map((item) =>
+          item.account_open_id === accountOpenId
+            ? { ...item, unread_count: Math.max(0, Number(item.unread_count || 0) - unreadCount) }
+            : item,
+        ),
+      );
+    }
+  }, [selectedAccount?.account_open_id]);
 
   useEffect(() => {
     void loadAccounts();
@@ -672,8 +872,13 @@ export default function DouyinAiCsWorkbenchPage() {
 
   useEffect(() => {
     if (selectedAccount) {
+      const cachedConversations = conversationsCacheRef.current[selectedAccount.account_open_id];
+      const cachedAgents = agentsCacheRef.current[selectedAccount.account_open_id];
+      if (cachedConversations) setConversations(cachedConversations);
+      if (cachedAgents) setAgents(cachedAgents);
       void loadConversations(selectedAccount, {
         skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
+        background: Boolean(cachedConversations),
       });
       void loadAccountAgents(selectedAccount.account_open_id);
       setSelectedAgentId(selectedAccount.bound_agent_id || null);
@@ -725,15 +930,19 @@ export default function DouyinAiCsWorkbenchPage() {
 
   useEffect(() => {
     if (selectedConversationId) {
+      const target = conversations.find((item) => item.id === selectedConversationId);
+      if (target) markConversationReadLocally(target);
       void loadConversationDetail(selectedConversationId);
     } else {
-      setMessages([]);
-      setProfile(null);
+      if (!conversations.length) {
+        setMessages([]);
+        setProfile(null);
+      }
       setProfileError(null);
       setLoadingProfile(false);
       setReply(null);
     }
-  }, [loadConversationDetail, selectedConversationId]);
+  }, [conversations, loadConversationDetail, markConversationReadLocally, selectedConversationId]);
 
   useEffect(() => {
     if (conversationJumpParams && !conversationJumpHandled) return;
@@ -745,6 +954,37 @@ export default function DouyinAiCsWorkbenchPage() {
       setSelectedConversationId(filteredConversations[0].id);
     }
   }, [conversationJumpHandled, conversationJumpParams, filteredConversations, selectedConversationId]);
+
+  useEffect(() => {
+    if (!selectedAccount) return undefined;
+
+    const poll = async () => {
+      if (document.visibilityState !== "visible") return;
+      const currentAccount = selectedAccount;
+      const currentConversationId = selectedConversationIdRef.current;
+      const before = currentConversationId
+        ? conversationsCacheRef.current[currentAccount.account_open_id]?.find((item) => item.id === currentConversationId)
+        : null;
+      const beforeWatermark = conversationWatermark(before);
+      const beforeUnread = Number(before?.unread_count || 0);
+      const items = await loadConversations(currentAccount, {
+        skipDefaultSelection: true,
+        background: true,
+      });
+      if (selectedAccountOpenIdRef.current !== currentAccount.account_open_id || !currentConversationId) return;
+      const after = items.find((item) => item.id === currentConversationId) || null;
+      const afterWatermark = conversationWatermark(after);
+      const afterUnread = Number(after?.unread_count || 0);
+      if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread)) {
+        void loadConversationDetail(currentConversationId, { background: true });
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [loadConversationDetail, loadConversations, selectedAccount]);
 
   const refreshAuthStatus = useCallback(async () => {
     setAuthStatusLoading(true);
@@ -1299,7 +1539,7 @@ export default function DouyinAiCsWorkbenchPage() {
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
-            {loadingConversations ? <EmptyState text="正在加载会话..." /> : null}
+            {loadingConversations && conversations.length === 0 ? <EmptyState text="正在加载会话..." /> : null}
             {!loadingConversations && conversations.length === 0 ? <EmptyState text="该抖音号暂无私信会话。" /> : null}
             {!loadingConversations && conversations.length > 0 && filteredConversations.length === 0 ? (
               <EmptyState text="没有符合条件的会话。" />
@@ -1309,7 +1549,10 @@ export default function DouyinAiCsWorkbenchPage() {
               return (
                 <button
                   key={conversation.id}
-                  onClick={() => setSelectedConversationId(conversation.id)}
+                  onClick={() => {
+                    markConversationReadLocally(conversation);
+                    setSelectedConversationId(conversation.id);
+                  }}
                   className={`mb-2 w-full rounded-md border px-3 py-3 text-left transition ${
                     active ? "border-blue-200 bg-blue-50" : "border-transparent hover:bg-slate-50"
                   }`}
@@ -1404,7 +1647,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
           <div className="grid min-h-0 flex-1 grid-rows-[minmax(220px,1fr)_minmax(270px,42%)]">
             <div className="min-h-0 overflow-auto bg-[#f8fafc] px-5 py-4">
-              {loadingMessages ? <EmptyState text="正在加载聊天消息..." /> : null}
+              {loadingMessages && messages.length === 0 ? <EmptyState text="正在加载聊天消息..." /> : null}
               {!loadingMessages && messages.length === 0 ? <EmptyState text="暂无消息。" /> : null}
               <div className="space-y-3">
                 {messages.map((message) => {
