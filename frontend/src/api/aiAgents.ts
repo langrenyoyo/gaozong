@@ -35,6 +35,13 @@ export interface KnowledgeCategory {
   is_base: boolean;
   is_active?: boolean;
   status?: string | null;
+  sort_order?: number | null;
+}
+
+export interface CreateKnowledgeCategoryPayload {
+  category_key: string;
+  name: string;
+  sort_order?: number;
 }
 
 export interface AgentKnowledgeCategories {
@@ -78,6 +85,11 @@ export async function trainingChat(agentId: string, message: string): Promise<Ai
 
 export async function getKnowledgeCategories(): Promise<KnowledgeCategory[]> {
   const response = await apiClient.get<unknown, ApiResponse<KnowledgeCategory[]>>("/knowledge-categories");
+  return response.data;
+}
+
+export async function createKnowledgeCategory(payload: CreateKnowledgeCategoryPayload): Promise<KnowledgeCategory> {
+  const response = await apiClient.post<unknown, ApiResponse<KnowledgeCategory>>("/knowledge-categories", payload);
   return response.data;
 }
 

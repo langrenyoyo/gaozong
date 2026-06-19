@@ -18,6 +18,7 @@ import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "./ComputeCenter";
+import KnowledgeCategoriesPage from "./KnowledgeCategoriesPage";
 import LeadsModulePage from "./LeadsModulePage";
 import WechatAgent from "./WechatAgent";
 import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
@@ -740,6 +741,8 @@ export default function Index({
           <DouyinAiCsTestPage />
         ) : activeNav === "ai-agents" ? (
           <SuperMerchantAgent />
+        ) : activeNav === "knowledge-categories" ? (
+          <KnowledgeCategoriesPage />
         ) : activeNav === "ai-agent" ? (
           <WechatAgent />
         ) : activeNav === "compute" ? (
