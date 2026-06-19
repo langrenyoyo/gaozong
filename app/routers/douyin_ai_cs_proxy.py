@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +15,9 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
+from app.services.douyin_account_agent_binding_service import (
+    list_account_agents_for_merchant_account,
+)
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -20,6 +25,8 @@ from app.services.xg_douyin_ai_cs_client import (
 
 
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
+
+logger = logging.getLogger(__name__)
 
 
 class ReplySuggestionProxyRequest(BaseModel):
@@ -109,3 +116,56 @@ async def create_reply_suggestion_proxy(
     warnings = existing_warnings if isinstance(existing_warnings, list) else []
     result["warnings"] = [*warnings, *binding_result.warnings]
     return result
+
+
+@router.get("/accounts/{account_open_id}/agents")
+def list_account_agents_proxy(
+    account_open_id: str,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """由 9000 注入可信商户上下文后返回企业号可选智能体列表。
+
+    取代前端直连 9100 /douyin/accounts/{id}/agents 的 demo 链路：
+    智能体来源为当前商户真实 AiAgent 与 douyin_account_agent_bindings，
+    merchant_id 强制取自 RequestContext，不接受前端传值，不调用 9100 mock。
+    """
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+
+    result = list_account_agents_for_merchant_account(
+        db=db,
+        context=context,
+        account_open_id=account_open_id,
+    )
+    if not result.allowed:
+        # 账号不存在统一 404，其余归属/授权问题统一 403，与 douyin_accounts 路由风格一致
+        status_code = 404 if result.reason_code == "DOUYIN_ACCOUNT_NOT_FOUND" else 403
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": result.reason_code or "DOUYIN_AGENT_BINDING_DENIED",
+                "message": "抖音企业号或智能体不属于当前商户",
+                "audit": result.audit,
+            },
+        )
+
+    logger.info(
+        "douyin_ai_cs_agents_proxy account_open_id=%s merchant_id=%s default_agent_id=%s agent_count=%d",
+        account_open_id,
+        context.merchant_id,
+        result.default_agent_id,
+        len(result.agents),
+    )
+    return {
+        "success": True,
+        "data": {
+            "items": [asdict(agent) for agent in result.agents],
+            "default_agent_id": result.default_agent_id,
+        },
+        "message": "success",
+    }

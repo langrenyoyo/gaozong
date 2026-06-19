@@ -56,8 +56,6 @@ import {
   type UploadDouyinImageResponse,
 } from "../api/douyinAiCsClient";
 
-const TENANT_ID = "demo_tenant";
-const MERCHANT_ID = "demo_bba";
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
 const ALLOWED_UPLOAD_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"];
@@ -612,15 +610,12 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const loadAccountAgents = useCallback(async (accountId: number) => {
+  const loadAccountAgents = useCallback(async (accountOpenId: string) => {
     setLoadingAgents(true);
     setAgentNotice(null);
     setReply(null);
     try {
-      const data = await getDouyinAccountAgents(accountId, {
-        tenant_id: TENANT_ID,
-        merchant_id: MERCHANT_ID,
-      });
+      const data = await getDouyinAccountAgents(accountOpenId);
       setAgents(data.items);
       if (!data.items.length) {
         setSelectedAgentId(null);
@@ -680,7 +675,7 @@ export default function DouyinAiCsWorkbenchPage() {
       void loadConversations(selectedAccount, {
         skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
       });
-      void loadAccountAgents(selectedAccount.id);
+      void loadAccountAgents(selectedAccount.account_open_id);
       setSelectedAgentId(selectedAccount.bound_agent_id || null);
       setBindingNotice(null);
     } else {
@@ -869,7 +864,6 @@ export default function DouyinAiCsWorkbenchPage() {
     setError(null);
     try {
       const data = await getTrustedReplySuggestion(selectedAccount.id, {
-        tenant_id: TENANT_ID,
         account_id: selectedAccount.id,
         douyin_account_id: selectedAccount.id,
         agent_id: selectedAccount.bound_agent_id,
@@ -1201,7 +1195,7 @@ export default function DouyinAiCsWorkbenchPage() {
             <div>
               <div className="text-sm font-bold text-[#172033]">抖音号</div>
               <div className="text-[11px] text-slate-500">
-                {accountListSource ? "正式企业号绑定" : `${TENANT_ID} / ${MERCHANT_ID}`}
+                {accountListSource ? "正式企业号绑定" : "企业号绑定"}
               </div>
             </div>
             <button
@@ -1597,7 +1591,7 @@ export default function DouyinAiCsWorkbenchPage() {
                     {!agents.length ? <option value="">未配置 Agent</option> : null}
                     {agents.map((agent) => (
                       <option key={agent.agent_id} value={agent.agent_id}>
-                        {agent.agent_name} · {agent.agent_category}
+                        {agent.agent_name} · {agent.agent_category || "默认客服"}
                       </option>
                     ))}
                   </select>

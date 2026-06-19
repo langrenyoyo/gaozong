@@ -262,6 +262,15 @@ export interface ReplySuggestionRequest {
   max_history_messages?: number;
 }
 
+/** 9000 可信代理回复建议入参：tenant_id / merchant_id 由 9000 从 RequestContext 注入，前端不传，避免误导。 */
+export interface TrustedReplySuggestionRequest {
+  account_id: number;
+  douyin_account_id?: number;
+  agent_id?: string;
+  latest_message: string;
+  max_history_messages?: number;
+}
+
 export interface ReplySourceChunk {
   chunk_id: number;
   document_id: number;
@@ -581,15 +590,22 @@ export async function deleteDouyinAccount(
 }
 
 export async function getDouyinAccountAgents(
-  accountId: string | number,
-  params?: { tenant_id?: string; merchant_id?: string },
+  accountOpenId: string,
 ): Promise<DouyinAgentListResponse> {
-  return requestDouyinAiCs(
-    douyinAiCsClient.get<DouyinAgentListResponse>(
-      `/douyin/accounts/${encodeURIComponent(String(accountId))}/agents`,
-      { params },
-    ),
-  );
+  // 改走 9000 可信代理：merchant_id 由 RequestContext 注入，前端只传 account_open_id，
+  // 不再传 tenant_id / merchant_id，不再直连 9100 mock 接口。
+  try {
+    const response = (await apiClient.get(
+      `/integrations/douyin-ai-cs/accounts/${encodeURIComponent(accountOpenId)}/agents`,
+    )) as unknown as {
+      success?: boolean;
+      data: DouyinAgentListResponse;
+      message?: string;
+    };
+    return response.data;
+  } catch (error) {
+    throw new Error(`企业号智能体列表加载失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function getDouyinAccountConversations(
@@ -714,7 +730,7 @@ export async function getReplySuggestion(
 
 export async function getTrustedReplySuggestion(
   conversationId: string | number,
-  payload: ReplySuggestionRequest,
+  payload: TrustedReplySuggestionRequest,
 ): Promise<ReplySuggestionResponse> {
   try {
     return (await apiClient.post(

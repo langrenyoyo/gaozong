@@ -40,6 +40,31 @@ class BindingSummary:
     binding_id: int | None = None
 
 
+@dataclass
+class AccountAgentView:
+    """工作台智能体列表项，兼容前端 DouyinAgentItem 契约。"""
+
+    agent_id: str
+    agent_name: str
+    # AiAgent 模型暂无分类 / 回复风格 / 业务范围维度，预留空串保持前端契约兼容
+    agent_category: str
+    reply_style: str
+    business_scope: str
+    is_default: bool
+    is_active: bool
+
+
+@dataclass
+class MerchantAccountAgentsResult:
+    """企业号可选智能体列表读取结果（只读，供 9000 可信代理使用）。"""
+
+    allowed: bool
+    agents: list[AccountAgentView] = field(default_factory=list)
+    default_agent_id: str | None = None
+    reason_code: str | None = None
+    audit: dict[str, Any] = field(default_factory=dict)
+
+
 def get_binding_summary(db: Session, *, account_open_id: str, merchant_id: str) -> BindingSummary:
     """读取当前商户下企业号的 active 默认绑定摘要。"""
     account = _find_account_by_open_id(db, account_open_id)
@@ -63,6 +88,58 @@ def get_binding_summary(db: Session, *, account_open_id: str, merchant_id: str) 
         bound_agent_status=agent.status if agent else "missing",
         binding_status=row.status,
         binding_id=row.id,
+    )
+
+
+def list_account_agents_for_merchant_account(
+    db: Session,
+    *,
+    context: RequestContext,
+    account_open_id: str,
+) -> MerchantAccountAgentsResult:
+    """返回当前商户可选 active 智能体，以及该企业号当前绑定的智能体 ID。
+
+    仅供 9000 可信代理读取工作台智能体列表，替代前端直连 9100 mock 链路；
+    智能体来源为真实 AiAgent（当前商户）与 douyin_account_agent_bindings，
+    merchant_id 强制取自 RequestContext，不读取请求体。
+    """
+    base = _validate_account_context(db=db, context=context, account_open_id=account_open_id)
+    if not base.allowed:
+        return MerchantAccountAgentsResult(
+            allowed=False,
+            reason_code=base.reason_code,
+            audit=base.audit,
+        )
+
+    merchant_id = context.merchant_id or ""
+    agent_rows = (
+        db.query(AiAgent)
+        .filter(
+            AiAgent.merchant_id == merchant_id,
+            AiAgent.status == "active",
+        )
+        .order_by(AiAgent.id.desc())
+        .all()
+    )
+    binding = _find_active_binding(db, merchant_id=merchant_id, account_open_id=account_open_id)
+    default_agent_id = binding.agent_id if binding else None
+    agents = [
+        AccountAgentView(
+            agent_id=row.agent_id,
+            agent_name=row.name,
+            agent_category="",
+            reply_style="",
+            business_scope="",
+            is_default=default_agent_id is not None and row.agent_id == default_agent_id,
+            is_active=True,
+        )
+        for row in agent_rows
+    ]
+    return MerchantAccountAgentsResult(
+        allowed=True,
+        agents=agents,
+        default_agent_id=default_agent_id,
+        audit=base.audit,
     )
 
 

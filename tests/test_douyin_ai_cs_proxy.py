@@ -479,3 +479,133 @@ def test_proxy_does_not_use_payload_merchant_id_for_binding(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["merchant_id"] == "dev-merchant"
+
+
+def _insert_active_agent(agent_id="agent-free", merchant_id="dev-merchant", name="free agent"):
+    db = TestSession()
+    try:
+        db.add(
+            AiAgent(
+                agent_id=agent_id,
+                merchant_id=merchant_id,
+                name=name,
+                avatar_seed="seed-free",
+                prompt="",
+                knowledge_base_text="",
+                status="active",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_agents_proxy_returns_merchant_active_agents_with_default_marker(monkeypatch):
+    """已绑定：返回当前商户 active 智能体，default_agent_id 指向当前绑定，is_default 仅标记该项。"""
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_active_agent(agent_id="agent-other-active", name="other active")
+
+    response = _client(monkeypatch).get("/integrations/douyin-ai-cs/accounts/account-open-1/agents")
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    agent_ids = {item["agent_id"] for item in body["items"]}
+    assert agent_ids == {"agent-sales", "agent-other-active"}
+    assert body["default_agent_id"] == "agent-sales"
+    # 返回真实 AiAgent 名称（sales agent），而非 9100 mock 数据，证明未走 9100 agents 接口
+    default_item = next(item for item in body["items"] if item["agent_id"] == "agent-sales")
+    assert default_item["agent_name"] == "sales agent"
+    assert default_item["is_default"] is True
+    assert default_item["is_active"] is True
+    other_item = next(item for item in body["items"] if item["agent_id"] == "agent-other-active")
+    assert other_item["is_default"] is False
+
+
+def test_agents_proxy_unbound_account_returns_agents_without_default(monkeypatch):
+    """未绑定：仍返回当前商户 active 智能体，default_agent_id=None，所有项 is_default=False。"""
+    _insert_account()
+    _insert_active_agent(agent_id="agent-free", name="free agent")
+
+    response = _client(monkeypatch).get("/integrations/douyin-ai-cs/accounts/account-open-1/agents")
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["default_agent_id"] is None
+    assert len(body["items"]) == 1
+    assert body["items"][0]["is_default"] is False
+
+
+def test_agents_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
+    """账号属于其他商户：403，不返回绑定。"""
+    _insert_account(open_id="other-open", merchant_id="other-merchant")
+
+    response = _client(monkeypatch).get("/integrations/douyin-ai-cs/accounts/other-open/agents")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+
+
+def test_agents_proxy_returns_404_for_missing_account(monkeypatch):
+    """账号不存在：404，不泄露绑定信息。"""
+    response = _client(monkeypatch).get("/integrations/douyin-ai-cs/accounts/missing-open/agents")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_NOT_FOUND"
+
+
+def test_agents_proxy_denies_missing_douyin_ai_cs_permission(monkeypatch):
+    """缺权限：403 PERMISSION_DENIED。"""
+    from app.auth.context import RequestContext
+    from app.auth.dependencies import get_request_context_required
+
+    _insert_account()
+    client = _client(monkeypatch)
+    client.app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="u-1",
+        merchant_id="dev-merchant",
+        merchant_ids=["dev-merchant"],
+        permission_codes=["auto_wechat:leads"],
+    )
+
+    response = client.get("/integrations/douyin-ai-cs/accounts/account-open-1/agents")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_agents_proxy_denies_missing_merchant_context(monkeypatch):
+    """缺 merchant_id：403 MERCHANT_CONTEXT_MISSING。"""
+    from app.auth.context import RequestContext
+    from app.auth.dependencies import get_request_context_required
+
+    _insert_account()
+    client = _client(monkeypatch)
+    client.app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="u-1",
+        merchant_id=None,
+        merchant_ids=[],
+        permission_codes=["auto_wechat:douyin_ai_cs"],
+    )
+
+    response = client.get("/integrations/douyin-ai-cs/accounts/account-open-1/agents")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "MERCHANT_CONTEXT_MISSING"
+
+
+def test_agents_proxy_ignores_forged_merchant_id_query_param(monkeypatch):
+    """伪造 query merchant_id / tenant_id 不生效：仍按 RequestContext.merchant_id 过滤。"""
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_active_agent(agent_id="agent-forged", merchant_id="forged-merchant", name="forged")
+
+    response = _client(monkeypatch).get(
+        "/integrations/douyin-ai-cs/accounts/account-open-1/agents",
+        params={"merchant_id": "forged-merchant", "tenant_id": "forged-tenant"},
+    )
+
+    assert response.status_code == 200
+    agent_ids = {item["agent_id"] for item in response.json()["data"]["items"]}
+    assert "agent-forged" not in agent_ids
+    assert "agent-sales" in agent_ids
