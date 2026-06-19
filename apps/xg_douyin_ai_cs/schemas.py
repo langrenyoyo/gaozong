@@ -137,3 +137,12 @@ class ReplySuggestionResponse(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     agent_category: str | None = None
+    intent: str | None = None
+    lead_level: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    detected_vehicle: str | None = None
+    detected_contacts: dict | None = None
+    manual_required_reason: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    rag_sources: list[dict] = Field(default_factory=list)
+    decision_version: str | None = None
