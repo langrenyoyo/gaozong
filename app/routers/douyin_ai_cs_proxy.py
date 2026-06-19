@@ -15,8 +15,8 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.services.agent_knowledge_category_service import (
     list_agent_category_keys,
-    list_visible_knowledge_categories,
 )
+from app.services.knowledge_category_service import ensure_category_usable_for_merchant
 from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.douyin_account_agent_binding_service import (
@@ -68,29 +68,24 @@ def _normalize_and_validate_category_key(
     context: RequestContext,
     category_key: str | None,
 ) -> str:
-    if category_key is None:
-        key = "base"
-    else:
-        key = str(category_key).strip()
-        if not key:
+    try:
+        return ensure_category_usable_for_merchant(
+            db,
+            context=context,
+            category_key=category_key,
+            default_base=True,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "CATEGORY_KEY_REQUIRED":
             raise HTTPException(
                 status_code=400,
                 detail={"code": "CATEGORY_KEY_REQUIRED", "message": "知识分类不能为空"},
-            )
-
-    visible_categories = list_visible_knowledge_categories(db, context=context)
-    visible_keys = {
-        str(item.get("category_key")).strip()
-        for item in visible_categories
-        if item.get("category_key") is not None
-    }
-    if key not in visible_keys:
+            ) from exc
         raise HTTPException(
             status_code=400,
             detail={"code": "CATEGORY_KEY_NOT_VISIBLE", "message": "知识分类不存在或不可用"},
-        )
-    return key
-
+        ) from exc
 
 def _build_allowed_category_keys(
     *,

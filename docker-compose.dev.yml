@@ -30,15 +30,22 @@ services:
       # 9000 SQLite 数据持久化（覆盖上面的 /workspace/data，避免与本地 data/ 冲突）
       - ./docker-data/auto_wechat_9000:/workspace/data
     environment:
-      - DY_GMP_SECRET_KEY=${DY_GMP_SECRET_KEY:-}
-      - DY_OPENAPI_BASE_URL=${DY_OPENAPI_BASE_URL:-https://gmp.bytedanceapi.com}
-      - DY_OPENAPI_PREFIX=${DY_OPENAPI_PREFIX:-/ai_chat_agent_api/v1/openapi}
-      - DY_MAIN_ACCOUNT_ID=${DY_MAIN_ACCOUNT_ID:-}
-      - DY_ACCOUNT_NAME=${DY_ACCOUNT_NAME:-}
-      - DY_CALLBACK_URL=${DY_CALLBACK_URL:-}
-      - DY_AUTH_REDIRECT_URL=${DY_AUTH_REDIRECT_URL:-}
-      - DY_CALLBACK_EVENTS=${DY_CALLBACK_EVENTS:-im_receive_msg,im_send_msg,im_enter_direct_msg}
-      - APP_ENV=development
+      APP_ENV: "${APP_ENV:-development}"
+      DOUYIN_WEBHOOK_AUTH_REQUIRED: "${DOUYIN_WEBHOOK_AUTH_REQUIRED:-false}"
+      DY_SECRET_KEY: "${DY_SECRET_KEY:-}"
+      DY_GMP_SECRET_KEY: "${DY_GMP_SECRET_KEY:-}"
+      DY_OPENAPI_BASE_URL: "${DY_OPENAPI_BASE_URL:-https://gmp.bytedanceapi.com}"
+      DY_OPENAPI_PREFIX: "${DY_OPENAPI_PREFIX:-/ai_chat_agent_api/v1/openapi}"
+      DY_MAIN_ACCOUNT_ID: "${DY_MAIN_ACCOUNT_ID:-}"
+      DY_ACCOUNT_NAME: "${DY_ACCOUNT_NAME:-}"
+      DY_CALLBACK_URL: "${DY_CALLBACK_URL:-}"
+      DY_AUTH_REDIRECT_URL: "${DY_AUTH_REDIRECT_URL:-}"
+      DY_AUTH_REDIRECT_FRONTEND_URL: "${DY_AUTH_REDIRECT_FRONTEND_URL:-}"
+      DY_CALLBACK_EVENTS: "${DY_CALLBACK_EVENTS:-im_receive_msg,im_send_msg,im_enter_direct_msg}"
+      XG_DOUYIN_AI_CS_BASE_URL: "${XG_DOUYIN_AI_CS_BASE_URL:-http://xg-douyin-ai-cs:9100}"
+      XG_DOUYIN_AI_CS_SERVICE_TOKEN: "${XG_DOUYIN_AI_CS_SERVICE_TOKEN:-}"
+      XG_DOUYIN_AI_CS_TIMEOUT_SECONDS: "${XG_DOUYIN_AI_CS_TIMEOUT_SECONDS:-10}"
+      COMPUTE_INTERNAL_TOKEN: "${COMPUTE_INTERNAL_TOKEN:-}"
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
     restart: "no"
 
@@ -83,6 +90,9 @@ services:
       XG_DOUYIN_AI_LLM_TEMPERATURE: "${XG_DOUYIN_AI_LLM_TEMPERATURE:-0.3}"
       # Agent Runtime / Tools 一期默认关闭；不安装 LangChain，不调用真实 tool。
       XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED: "${XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED:-false}"
+      AUTO_WECHAT_9000_BASE_URL: "${AUTO_WECHAT_9000_BASE_URL:-http://auto-wechat-api:9000}"
+      COMPUTE_INTERNAL_TOKEN: "${COMPUTE_INTERNAL_TOKEN:-}"
+      COMPUTE_USAGE_TIMEOUT_SECONDS: "${COMPUTE_USAGE_TIMEOUT_SECONDS:-3}"
       PYTHONUNBUFFERED: "1"
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
     restart: "no"

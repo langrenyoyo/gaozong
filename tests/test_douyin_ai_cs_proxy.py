@@ -4,7 +4,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import AgentKnowledgeCategory, AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccount
+from app.models import (
+    AgentKnowledgeCategory,
+    AiAgent,
+    DouyinAccountAgentBinding,
+    DouyinAuthorizedAccount,
+    KnowledgeCategory,
+)
 
 
 engine = create_engine(
@@ -103,6 +109,31 @@ def _insert_agent_categories(agent_id="agent-sales", merchant_id="dev-merchant",
                     updated_by="dev-user",
                 )
             )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_knowledge_category(
+    merchant_id="dev-merchant",
+    category_key="premium_bba",
+    name="精品BBA",
+    status="active",
+):
+    db = TestSession()
+    try:
+        db.add(
+            KnowledgeCategory(
+                merchant_id=merchant_id,
+                tenant_id=None,
+                category_key=category_key,
+                name=name,
+                scope_type="merchant",
+                is_base=0,
+                status=status,
+                sort_order=100,
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -242,6 +273,7 @@ def test_rag_document_proxy_allows_visible_merchant_category(monkeypatch):
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
     _insert_account(open_id="account-open-1")
     _insert_agent_and_binding(open_id="account-open-1")
+    _insert_knowledge_category(category_key="精品BBA", name="精品BBA")
     _insert_agent_categories(category_keys=["精品BBA"])
 
     response = _client(monkeypatch).post(
@@ -264,6 +296,7 @@ def test_rag_document_proxy_rejects_invisible_or_other_merchant_category(monkeyp
     fake_client = FakeDouyinAiCsClient()
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
     _insert_account(open_id="account-open-1")
+    _insert_knowledge_category(merchant_id="other-merchant", category_key="精品BBA", name="其他商户BBA")
     _insert_agent_categories(agent_id="agent-other", merchant_id="other-merchant", category_keys=["精品BBA"])
 
     response = _client(monkeypatch).post(

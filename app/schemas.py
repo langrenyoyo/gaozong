@@ -190,6 +190,13 @@ class KnowledgeCategoryOut(BaseModel):
     is_base: bool = False
 
 
+class KnowledgeCategoryCreate(BaseModel):
+    """知识分类创建请求。"""
+
+    category_key: str
+    name: str
+
+
 class KnowledgeCategoryListResponse(BaseModel):
     """知识分类列表响应包装。"""
 

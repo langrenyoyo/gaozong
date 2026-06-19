@@ -417,6 +417,42 @@ class AgentKnowledgeCategory(Base):
     updated_by = Column(String(128))
 
 
+class KnowledgeCategory(Base):
+    """9000 知识分类主数据表。"""
+
+    __tablename__ = "knowledge_categories"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "category_key", name="uk_knowledge_categories_merchant_key"),
+        Index(
+            "idx_knowledge_categories_merchant_status_sort",
+            "merchant_id",
+            "status",
+            "sort_order",
+        ),
+        Index(
+            "idx_knowledge_categories_merchant_key_status",
+            "merchant_id",
+            "category_key",
+            "status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(128), comment="预留租户 ID")
+    merchant_id = Column(String(128), comment="商户 ID；merchant 分类必填，system 分类为空")
+    category_key = Column(String(128), nullable=False, comment="知识分类稳定标识")
+    name = Column(String(100), nullable=False, comment="知识分类展示名称")
+    scope_type = Column(String(20), nullable=False, default="merchant", comment="system/merchant")
+    is_base = Column(Integer, nullable=False, default=0, comment="是否 base 分类，0/1")
+    status = Column(String(20), nullable=False, default="active", comment="active/disabled/deleted")
+    sort_order = Column(Integer, nullable=False, default=100, comment="排序值")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    deleted_at = Column(DateTime)
+    created_by = Column(String(128))
+    updated_by = Column(String(128))
+
+
 class ComputeAccount(Base):
     """小高算力：商户 Token 账户表。
 

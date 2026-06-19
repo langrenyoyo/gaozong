@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AgentKnowledgeCategory, AiAgent
+from app.models import AgentKnowledgeCategory, AiAgent, KnowledgeCategory
 
 
 engine = create_engine(
@@ -84,7 +84,7 @@ def _insert_category_binding(
     *,
     agent_id: str = "agent-a",
     merchant_id: str = "merchant-a",
-    category_key: str = "精品BBA",
+    category_key: str = "premium_bba",
     status: str = "active",
     deleted_at: datetime | None = None,
 ) -> None:
@@ -106,12 +106,38 @@ def _insert_category_binding(
         db.close()
 
 
-def test_get_knowledge_categories_returns_base_and_current_merchant_active_keys():
+def _insert_knowledge_category(
+    *,
+    merchant_id: str = "merchant-a",
+    category_key: str = "premium_bba",
+    name: str = "精品BBA",
+    status: str = "active",
+) -> None:
+    db = TestSession()
+    try:
+        db.add(
+            KnowledgeCategory(
+                merchant_id=merchant_id,
+                tenant_id=None,
+                category_key=category_key,
+                name=name,
+                scope_type="merchant",
+                is_base=0,
+                status=status,
+                sort_order=100,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_get_knowledge_categories_returns_base_and_current_merchant_active_categories():
     _insert_agent(agent_id="agent-a", merchant_id="merchant-a")
-    _insert_agent(agent_id="agent-b", merchant_id="merchant-b")
-    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="精品BBA")
-    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="新能源")
-    _insert_category_binding(agent_id="agent-b", merchant_id="merchant-b", category_key="精品BBA")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="new_energy", name="新能源")
+    _insert_knowledge_category(merchant_id="merchant-b", category_key="premium_bba", name="商户B-BBA")
+    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="legacy_binding_only")
 
     client = _client(_context(merchant_id="merchant-a"))
 
@@ -119,7 +145,8 @@ def test_get_knowledge_categories_returns_base_and_current_merchant_active_keys(
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert [item["category_key"] for item in data] == ["base", "精品BBA", "新能源"]
+    assert [item["category_key"] for item in data] == ["base", "premium_bba", "new_energy"]
+    assert "legacy_binding_only" not in [item["category_key"] for item in data]
     assert data[0] == {
         "category_key": "base",
         "name": "基础知识",
@@ -127,6 +154,64 @@ def test_get_knowledge_categories_returns_base_and_current_merchant_active_keys(
         "is_base": True,
     }
     assert all(item["scope_type"] in {"system", "merchant"} for item in data)
+
+
+def test_create_knowledge_category_creates_current_merchant_category_and_ignores_forged_merchant_id():
+    client = _client(_context(merchant_id="merchant-a"))
+
+    response = client.post(
+        "/knowledge-categories",
+        json={"merchant_id": "merchant-b", "category_key": " premium_bba ", "name": " 精品BBA "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["category_key"] == "premium_bba"
+    assert response.json()["data"]["name"] == "精品BBA"
+
+    db = TestSession()
+    try:
+        row = db.query(KnowledgeCategory).filter_by(category_key="premium_bba").one()
+        assert row.merchant_id == "merchant-a"
+        assert row.scope_type == "merchant"
+        assert row.is_base == 0
+        assert row.status == "active"
+    finally:
+        db.close()
+
+
+def test_create_knowledge_category_rejects_base_and_duplicate_key():
+    client = _client(_context(merchant_id="merchant-a"))
+
+    base_response = client.post("/knowledge-categories", json={"category_key": "base", "name": "基础知识"})
+    assert base_response.status_code == 400
+    assert base_response.json()["detail"]["code"] == "BASE_CATEGORY_READONLY"
+
+    first_response = client.post(
+        "/knowledge-categories",
+        json={"category_key": "premium_bba", "name": "精品BBA"},
+    )
+    duplicate_response = client.post(
+        "/knowledge-categories",
+        json={"category_key": "premium_bba", "name": "重复BBA"},
+    )
+
+    assert first_response.status_code == 200
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CONFLICT"
+
+
+def test_same_category_key_isolated_between_merchants():
+    client_a = _client(_context(merchant_id="merchant-a"))
+    client_b = _client(_context(merchant_id="merchant-b"))
+
+    assert client_a.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "A-BBA"}).status_code == 200
+    assert client_b.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "B-BBA"}).status_code == 200
+
+    data_a = client_a.get("/knowledge-categories").json()["data"]
+    data_b = client_b.get("/knowledge-categories").json()["data"]
+
+    assert [item["name"] for item in data_a if item["category_key"] == "premium_bba"] == ["A-BBA"]
+    assert [item["name"] for item in data_b if item["category_key"] == "premium_bba"] == ["B-BBA"]
 
 
 def test_get_knowledge_categories_rejects_missing_merchant_context():
@@ -140,7 +225,8 @@ def test_get_knowledge_categories_rejects_missing_merchant_context():
 
 def test_get_agent_knowledge_categories_returns_manual_and_effective_keys():
     _insert_agent(agent_id="agent-a", merchant_id="merchant-a")
-    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="精品BBA")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
+    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="premium_bba")
 
     client = _client(_context(merchant_id="merchant-a"))
 
@@ -149,26 +235,28 @@ def test_get_agent_knowledge_categories_returns_manual_and_effective_keys():
     assert response.status_code == 200
     assert response.json()["data"] == {
         "agent_id": "agent-a",
-        "category_keys": ["精品BBA"],
-        "effective_category_keys": ["base", "精品BBA"],
+        "category_keys": ["premium_bba"],
+        "effective_category_keys": ["base", "premium_bba"],
     }
 
 
 def test_put_agent_knowledge_categories_replaces_bindings_and_does_not_save_base():
     _insert_agent(agent_id="agent-a", merchant_id="merchant-a")
-    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="旧分类")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="new_energy", name="新能源")
+    _insert_category_binding(agent_id="agent-a", merchant_id="merchant-a", category_key="old_category")
     client = _client(_context(merchant_id="merchant-a"))
 
     response = client.put(
         "/agents/agent-a/knowledge-categories",
-        json={"category_keys": ["base", " 精品BBA ", "精品BBA", "新能源"]},
+        json={"category_keys": ["base", " premium_bba ", "premium_bba", "new_energy"]},
     )
 
     assert response.status_code == 200
     assert response.json()["data"] == {
         "agent_id": "agent-a",
-        "category_keys": ["精品BBA", "新能源"],
-        "effective_category_keys": ["base", "精品BBA", "新能源"],
+        "category_keys": ["premium_bba", "new_energy"],
+        "effective_category_keys": ["base", "premium_bba", "new_energy"],
     }
 
     db = TestSession()
@@ -182,22 +270,42 @@ def test_put_agent_knowledge_categories_replaces_bindings_and_does_not_save_base
         ]
         deleted_old = (
             db.query(AgentKnowledgeCategory)
-            .filter_by(merchant_id="merchant-a", agent_id="agent-a", category_key="旧分类")
+            .filter_by(merchant_id="merchant-a", agent_id="agent-a", category_key="old_category")
             .one()
         )
-        assert active_keys == ["精品BBA", "新能源"]
+        assert active_keys == ["premium_bba", "new_energy"]
         assert "base" not in active_keys
         assert deleted_old.deleted_at is not None
     finally:
         db.close()
 
 
+def test_put_agent_knowledge_categories_rejects_missing_disabled_deleted_and_other_merchant_categories():
+    _insert_agent(agent_id="agent-a", merchant_id="merchant-a")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="disabled_key", name="禁用分类", status="disabled")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="deleted_key", name="删除分类", status="deleted")
+    _insert_knowledge_category(merchant_id="merchant-b", category_key="other_key", name="其他商户分类")
+    client = _client(_context(merchant_id="merchant-a"))
+
+    missing_response = client.put("/agents/agent-a/knowledge-categories", json={"category_keys": ["missing_key"]})
+    disabled_response = client.put("/agents/agent-a/knowledge-categories", json={"category_keys": ["disabled_key"]})
+    deleted_response = client.put("/agents/agent-a/knowledge-categories", json={"category_keys": ["deleted_key"]})
+    other_response = client.put("/agents/agent-a/knowledge-categories", json={"category_keys": ["other_key"]})
+
+    assert missing_response.status_code == 404
+    assert disabled_response.status_code == 404
+    assert deleted_response.status_code == 404
+    assert other_response.status_code == 404
+    assert missing_response.json()["detail"]["code"] == "CATEGORY_NOT_USABLE"
+
+
 def test_cross_merchant_agent_knowledge_categories_are_rejected():
     _insert_agent(agent_id="agent-b", merchant_id="merchant-b")
+    _insert_knowledge_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
     client = _client(_context(merchant_id="merchant-a"))
 
     get_response = client.get("/agents/agent-b/knowledge-categories")
-    put_response = client.put("/agents/agent-b/knowledge-categories", json={"category_keys": ["精品BBA"]})
+    put_response = client.put("/agents/agent-b/knowledge-categories", json={"category_keys": ["premium_bba"]})
 
     assert get_response.status_code == 404
     assert put_response.status_code == 404

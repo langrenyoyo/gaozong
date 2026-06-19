@@ -195,6 +195,15 @@ class MigrationPlan:
     errors: list[tuple[ParsedStmt, str]] = field(default_factory=list)  # (stmt, reason)
 
 
+@dataclass(frozen=True)
+class MigrationFile:
+    """单个版本迁移文件。"""
+
+    version: str
+    path: Path
+    description: str
+
+
 def plan_migration(
     conn: sqlite3.Connection, stmts: list[ParsedStmt], version: str
 ) -> MigrationPlan:
@@ -223,6 +232,78 @@ def plan_migration(
         else:
             plan.will_run.append(s)
     return plan
+
+
+def discover_migrations(versions_dir: str | os.PathLike = VERSIONS_DIR) -> list[MigrationFile]:
+    """扫描 versions 目录并按版本号升序返回迁移文件。"""
+    root = Path(versions_dir)
+    migrations: list[MigrationFile] = []
+    for path in root.glob("*.sql"):
+        match = re.match(r"^(\d{4})_(.+)\.sql$", path.name)
+        if not match:
+            continue
+        migrations.append(
+            MigrationFile(
+                version=match.group(1),
+                path=path,
+                description=match.group(2).replace("_", " "),
+            )
+        )
+    migrations.sort(key=lambda item: item.version)
+    return migrations
+
+
+def plan_all_migrations(
+    conn: sqlite3.Connection,
+    migrations: list[MigrationFile] | None = None,
+) -> list[MigrationPlan]:
+    """规划全部版本迁移；只读，不修改数据库。"""
+    result: list[MigrationPlan] = []
+    for migration in migrations or discover_migrations():
+        stmts = _load_stmts(migration.path)
+        result.append(plan_migration(conn, stmts, migration.version))
+    return result
+
+
+def apply_all_migrations(
+    conn: sqlite3.Connection,
+    migrations: list[MigrationFile] | None = None,
+) -> list[MigrationPlan]:
+    """按版本顺序显式执行所有未应用迁移。"""
+    result: list[MigrationPlan] = []
+    for migration in migrations or discover_migrations():
+        stmts = _load_stmts(migration.path)
+        plan = apply_migration(conn, stmts, migration.version, migration.description)
+        result.append(plan)
+    return result
+
+
+def get_migration_status(
+    conn: sqlite3.Connection,
+    migrations: list[MigrationFile] | None = None,
+) -> dict:
+    """返回已执行版本和待执行版本。"""
+    all_migrations = migrations or discover_migrations()
+    known_versions = [item.version for item in all_migrations]
+    applied_versions: list[str] = []
+    if table_exists(conn, "schema_migrations"):
+        applied_versions = [
+            row[0]
+            for row in conn.execute(
+                "SELECT version_num FROM schema_migrations ORDER BY version_num"
+            )
+        ]
+    applied_set = set(applied_versions)
+    pending_versions = [version for version in known_versions if version not in applied_set]
+    unknown_applied_versions = [
+        version for version in applied_versions if version not in set(known_versions)
+    ]
+    return {
+        "known_versions": known_versions,
+        "applied_versions": applied_versions,
+        "pending_versions": pending_versions,
+        "unknown_applied_versions": unknown_applied_versions,
+    }
 
 
 def apply_migration(
@@ -392,6 +473,26 @@ def _print_verify(result: dict) -> None:
     print("[verify] sales_staff_columns =", result["sales_staff_columns"])
 
 
+def _print_all_plans(plans: list[MigrationPlan]) -> None:
+    print("[all] versions =", [plan.version for plan in plans])
+    for plan in plans:
+        status = "applied" if plan.already_applied else "pending"
+        print(
+            f"[all] {plan.version} status={status} "
+            f"will_run={len(plan.will_run)} skipped={len(plan.skipped)} errors={len(plan.errors)}"
+        )
+        if plan.errors:
+            for stmt, reason in plan.errors:
+                print(f"  ! [{stmt.kind}] {reason}: {_one_line(stmt.raw)}")
+
+
+def _print_status(status: dict) -> None:
+    print("[status] known_versions =", status["known_versions"])
+    print("[status] applied_versions =", status["applied_versions"])
+    print("[status] pending_versions =", status["pending_versions"])
+    print("[status] unknown_applied_versions =", status["unknown_applied_versions"])
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -410,6 +511,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="只打印，不写库（默认）")
     p.add_argument("--apply", action="store_true", help="实际写库（单一事务）")
     p.add_argument("--verify", action="store_true", help="只读验证迁移结果")
+    p.add_argument("--all", action="store_true", help="按 versions 目录顺序 dry-run/apply 所有迁移")
+    p.add_argument("--status", action="store_true", help="只读输出已执行版本和待执行版本")
     p.add_argument("--backup-src", help="副本生成：源库路径（使用 backup API）")
     p.add_argument("--backup-dst", help="副本生成：目标副本路径")
     return p
@@ -435,6 +538,31 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     assert_not_mainline(args.db_path, args.allow_mainline)
+
+    if args.status:
+        conn = connect_readonly(args.db_path)
+        try:
+            _print_status(get_migration_status(conn))
+        finally:
+            conn.close()
+        return 0
+
+    if args.all:
+        if args.apply:
+            conn = connect_readwrite(args.db_path)
+            try:
+                _print_all_plans(apply_all_migrations(conn))
+            finally:
+                conn.close()
+            return 0
+
+        conn = connect_readonly(args.db_path)
+        try:
+            _print_all_plans(plan_all_migrations(conn))
+        finally:
+            conn.close()
+        return 0
+
     stmts = _load_stmts(args.sql_file)
 
     if args.verify:

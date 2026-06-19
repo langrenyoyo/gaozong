@@ -8,47 +8,20 @@ from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.models import AgentKnowledgeCategory, AiAgent
+from app.services.knowledge_category_service import (
+    ACTIVE_STATUS,
+    BASE_CATEGORY_KEY,
+    build_effective_category_keys,
+    ensure_category_usable_for_merchant,
+    list_visible_knowledge_categories,
+    manual_category_keys,
+    normalize_category_key,
+    normalize_category_keys,
+    require_context_merchant,
+)
 
 
-ACTIVE_STATUS = "active"
 DELETED_STATUS = "deleted"
-BASE_CATEGORY_KEY = "base"
-BASE_CATEGORY_NAME = "基础知识"
-
-
-def _require_context_merchant(context: RequestContext) -> str:
-    if not context.merchant_id:
-        raise ValueError("MERCHANT_ID_REQUIRED")
-    return context.merchant_id
-
-
-def _normalize_category_keys(category_keys: list[str]) -> list[str]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw_key in category_keys:
-        key = str(raw_key).strip() if raw_key is not None else ""
-        if not key:
-            raise ValueError("CATEGORY_KEY_REQUIRED")
-        if key in seen:
-            continue
-        normalized.append(key)
-        seen.add(key)
-    return normalized
-
-
-def _manual_category_keys(category_keys: list[str]) -> list[str]:
-    """过滤系统 base，仅保留需要落表的商户手动分类。"""
-    return [key for key in _normalize_category_keys(category_keys) if key != BASE_CATEGORY_KEY]
-
-
-def build_effective_category_keys(category_keys: list[str]) -> list[str]:
-    """构造实际生效分类，base 永远在第一位且不重复。"""
-    effective = [BASE_CATEGORY_KEY]
-    for key in _normalize_category_keys(category_keys):
-        if key == BASE_CATEGORY_KEY or key in effective:
-            continue
-        effective.append(key)
-    return effective
 
 
 def _get_active_agent(db: Session, *, merchant_id: str, agent_id: str) -> AiAgent:
@@ -96,13 +69,14 @@ def bind_agent_categories(
     category_keys: list[str],
 ) -> list[AgentKnowledgeCategory]:
     """为当前商户 Agent 绑定一个或多个 merchant 分类，重复绑定保持幂等。"""
-    merchant_id = _require_context_merchant(context)
-    keys = _normalize_category_keys(category_keys)
+    merchant_id = require_context_merchant(context)
+    keys = manual_category_keys(category_keys)
     _get_active_agent(db, merchant_id=merchant_id, agent_id=agent_id)
 
     now = datetime.now()
     rows: list[AgentKnowledgeCategory] = []
     for key in keys:
+        ensure_category_usable_for_merchant(db, context=context, category_key=key)
         row = _query_active_binding(
             db,
             merchant_id=merchant_id,
@@ -140,7 +114,7 @@ def list_agent_category_keys(
     agent_id: str,
 ) -> list[str]:
     """列出当前商户 Agent 的 active 手动绑定分类，不自动追加 base。"""
-    merchant_id = _require_context_merchant(context)
+    merchant_id = require_context_merchant(context)
     _get_active_agent(db, merchant_id=merchant_id, agent_id=agent_id)
     rows = (
         db.query(AgentKnowledgeCategory)
@@ -164,9 +138,11 @@ def replace_agent_categories(
     category_keys: list[str],
 ) -> list[AgentKnowledgeCategory]:
     """替换当前商户 Agent 的手动分类绑定，移除项使用软删。"""
-    merchant_id = _require_context_merchant(context)
-    keys = _manual_category_keys(category_keys)
+    merchant_id = require_context_merchant(context)
+    keys = manual_category_keys(category_keys)
     _get_active_agent(db, merchant_id=merchant_id, agent_id=agent_id)
+    for key in keys:
+        ensure_category_usable_for_merchant(db, context=context, category_key=key)
 
     now = datetime.now()
     keep = set(keys)
@@ -190,45 +166,6 @@ def replace_agent_categories(
     return bind_agent_categories(db, context=context, agent_id=agent_id, category_keys=keys)
 
 
-def list_visible_knowledge_categories(db: Session, *, context: RequestContext) -> list[dict]:
-    """列出当前商户可见分类：固定 base + 当前商户已绑定过的 active 商户分类。"""
-    merchant_id = _require_context_merchant(context)
-    rows = (
-        db.query(AgentKnowledgeCategory.category_key)
-        .filter(
-            AgentKnowledgeCategory.merchant_id == merchant_id,
-            AgentKnowledgeCategory.status == ACTIVE_STATUS,
-            AgentKnowledgeCategory.deleted_at.is_(None),
-            AgentKnowledgeCategory.category_key != BASE_CATEGORY_KEY,
-        )
-        .order_by(AgentKnowledgeCategory.id.asc())
-        .all()
-    )
-
-    categories = [
-        {
-            "category_key": BASE_CATEGORY_KEY,
-            "name": BASE_CATEGORY_NAME,
-            "scope_type": "system",
-            "is_base": True,
-        }
-    ]
-    seen = {BASE_CATEGORY_KEY}
-    for (category_key,) in rows:
-        if category_key in seen:
-            continue
-        categories.append(
-            {
-                "category_key": category_key,
-                "name": category_key,
-                "scope_type": "merchant",
-                "is_base": False,
-            }
-        )
-        seen.add(category_key)
-    return categories
-
-
 def unbind_agent_category(
     db: Session,
     *,
@@ -237,8 +174,8 @@ def unbind_agent_category(
     category_key: str,
 ) -> AgentKnowledgeCategory:
     """软删当前商户 Agent 的单个分类绑定。"""
-    merchant_id = _require_context_merchant(context)
-    key = _normalize_category_keys([category_key])[0]
+    merchant_id = require_context_merchant(context)
+    key = normalize_category_key(category_key)
     _get_active_agent(db, merchant_id=merchant_id, agent_id=agent_id)
     row = _query_active_binding(
         db,

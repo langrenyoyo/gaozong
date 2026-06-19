@@ -5,7 +5,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.context import RequestContext
 from app.database import Base
-from app.models import AiAgent, AgentKnowledgeCategory
+from app.models import AiAgent, AgentKnowledgeCategory, KnowledgeCategory
 from app.services.agent_knowledge_category_service import (
     bind_agent_categories,
     list_agent_category_keys,
@@ -59,10 +59,36 @@ def _insert_agent(
     return row
 
 
+def _insert_knowledge_category(
+    db,
+    *,
+    merchant_id: str = "merchant-a",
+    category_key: str = "premium_bba",
+    name: str = "精品BBA",
+    status: str = "active",
+) -> KnowledgeCategory:
+    row = KnowledgeCategory(
+        merchant_id=merchant_id,
+        tenant_id=None,
+        category_key=category_key,
+        name=name,
+        scope_type="merchant",
+        is_base=0,
+        status=status,
+        sort_order=100,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def test_bind_agent_categories_allows_multiple_keys_for_same_merchant_agent():
     db = TestSession()
     try:
         _insert_agent(db)
+        _insert_knowledge_category(db, category_key="精品BBA")
+        _insert_knowledge_category(db, category_key="新能源", name="新能源")
 
         rows = bind_agent_categories(
             db,
@@ -86,6 +112,7 @@ def test_bind_agent_categories_is_idempotent_and_normalizes_whitespace_without_l
     db = TestSession()
     try:
         _insert_agent(db)
+        _insert_knowledge_category(db, category_key="精品BBA")
 
         bind_agent_categories(
             db,
@@ -105,7 +132,7 @@ def test_bind_agent_categories_is_idempotent_and_normalizes_whitespace_without_l
             .filter_by(merchant_id="merchant-a", agent_id="agent-a", status="active")
             .all()
         )
-        assert [row.category_key for row in active_rows] == ["精品BBA", "base"]
+        assert [row.category_key for row in active_rows] == ["精品BBA"]
     finally:
         db.close()
 
@@ -114,6 +141,9 @@ def test_replace_agent_categories_soft_deletes_removed_keys_and_keeps_existing_k
     db = TestSession()
     try:
         _insert_agent(db)
+        _insert_knowledge_category(db, category_key="精品BBA")
+        _insert_knowledge_category(db, category_key="新能源", name="新能源")
+        _insert_knowledge_category(db, category_key="金融方案", name="金融方案")
         bind_agent_categories(
             db,
             context=_context("merchant-a"),
@@ -160,6 +190,26 @@ def test_bind_agent_categories_rejects_cross_merchant_agent_from_context():
         db.close()
 
 
+def test_bind_agent_categories_rejects_missing_disabled_deleted_and_other_merchant_category():
+    db = TestSession()
+    try:
+        _insert_agent(db)
+        _insert_knowledge_category(db, merchant_id="merchant-a", category_key="disabled_key", status="disabled")
+        _insert_knowledge_category(db, merchant_id="merchant-a", category_key="deleted_key", status="deleted")
+        _insert_knowledge_category(db, merchant_id="merchant-b", category_key="other_key")
+
+        for key in ["missing_key", "disabled_key", "deleted_key", "other_key"]:
+            with pytest.raises(ValueError, match="CATEGORY_NOT_USABLE"):
+                bind_agent_categories(
+                    db,
+                    context=_context("merchant-a"),
+                    agent_id="agent-a",
+                    category_keys=[key],
+                )
+    finally:
+        db.close()
+
+
 def test_bind_agent_categories_rejects_disabled_and_deleted_agent():
     db = TestSession()
     try:
@@ -188,6 +238,8 @@ def test_list_agent_category_keys_only_returns_active_rows():
     db = TestSession()
     try:
         _insert_agent(db)
+        _insert_knowledge_category(db, category_key="精品BBA")
+        _insert_knowledge_category(db, category_key="新能源", name="新能源")
         bind_agent_categories(
             db,
             context=_context("merchant-a"),

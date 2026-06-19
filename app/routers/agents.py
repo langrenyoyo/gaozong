@@ -50,6 +50,8 @@ def _bad_request(code: str, message: str) -> HTTPException:
 
 def _binding_not_found(exc: ValueError) -> HTTPException:
     code = str(exc)
+    if code == "CATEGORY_NOT_USABLE":
+        return HTTPException(status_code=404, detail={"code": code, "message": "知识分类不存在或不可用"})
     if code in {"AGENT_NOT_FOUND", "AGENT_NOT_ACTIVE"}:
         return _not_found()
     return _bad_request(code, "知识分类绑定参数无效")
