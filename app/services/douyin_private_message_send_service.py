@@ -60,8 +60,39 @@ def send_manual_private_message(
     if _is_context_expired(context.get("message_create_time")):
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
 
-    # scene 由后端根据命中事件类型严格推导，不信任前端传入的 scene：
-    # im_receive_msg → im_reply_msg；im_enter_direct_msg → im_enter_direct_msg。
+    return _send_private_message_with_context(
+        db,
+        content=content_text,
+        send_context=context,
+        manual_confirmed=True,
+        auto_send=False,
+        send_source="manual",
+        operator_id=operator_id,
+    )
+
+
+def _send_private_message_with_context(
+    db: Session,
+    *,
+    content: str,
+    send_context: dict[str, Any],
+    manual_confirmed: bool,
+    auto_send: bool,
+    send_source: str,
+    operator_id: str | None = None,
+    decision_log_id: int | None = None,
+    auto_reply_run_id: int | None = None,
+) -> dict[str, Any]:
+    """基于已校验的 send_msg context 发送私信，并写入统一发送流水。"""
+    content_text = (content or "").strip()
+    if not content_text:
+        raise HTTPException(status_code=400, detail="content must not be empty")
+    if not send_context.get("conversation_id") or not send_context.get("msg_id"):
+        raise HTTPException(status_code=400, detail="send_msg context missing conversation_id or msg_id")
+    if _is_context_expired(send_context.get("message_create_time")):
+        raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
+
+    context = send_context
     send_scene = _default_scene(context)
     request_payload = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,
@@ -104,8 +135,11 @@ def send_manual_private_message(
         content=content_text,
         request_body_json=json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")),
         status="pending",
-        manual_confirmed=1,
-        auto_send=0,
+        manual_confirmed=1 if manual_confirmed else 0,
+        auto_send=1 if auto_send else 0,
+        decision_log_id=decision_log_id,
+        auto_reply_run_id=auto_reply_run_id,
+        send_source=send_source,
         operator_id=operator_id,
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -143,8 +177,8 @@ def send_manual_private_message(
         "to_user_id": context["customer_open_id"],
         "from_user_id": context["account_open_id"],
         "scene": send_scene,
-        "auto_send": False,
-        "manual_confirmed": True,
+        "auto_send": bool(auto_send),
+        "manual_confirmed": bool(manual_confirmed),
     }
 
 

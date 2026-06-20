@@ -85,3 +85,38 @@ def mark_manual_takeover(
     db.commit()
     db.refresh(state)
     return state
+
+
+def mark_ai_replied(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_short_id: str,
+    customer_open_id: str | None = None,
+    now: datetime | None = None,
+) -> ConversationAutopilotState:
+    """记录 AI 已自动回复，保持会话处于 AI 托管模式。"""
+    current_time = now or datetime.now()
+    state = get_conversation_autopilot_state(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+    )
+    if state is None:
+        state = ConversationAutopilotState(
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
+            created_at=current_time,
+        )
+        db.add(state)
+
+    state.customer_open_id = customer_open_id or state.customer_open_id
+    state.mode = "ai"
+    state.last_ai_reply_at = current_time
+    state.updated_at = current_time
+    db.commit()
+    db.refresh(state)
+    return state

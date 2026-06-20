@@ -1153,6 +1153,7 @@ def test_send_message_success_uses_signed_openapi_body_and_persists_sent_record(
         assert record.status == "sent"
         assert record.manual_confirmed == 1
         assert record.auto_send == 0
+        assert record.send_source == "manual"
         assert record.main_account_id == 123
         assert record.upstream_msg_id == "upstream_sent_msg_001"
         assert record.content == "人工确认后的回复"
@@ -1220,6 +1221,7 @@ def test_send_message_upstream_business_error_persists_failed_record_without_sec
         assert record.error_message == "send failed"
         assert record.manual_confirmed == 1
         assert record.auto_send == 0
+        assert record.send_source == "manual"
     finally:
         db.close()
 

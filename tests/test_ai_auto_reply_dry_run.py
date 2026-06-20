@@ -544,6 +544,96 @@ def test_dry_run_never_calls_send_msg():
     send_mock.assert_not_called()
 
 
+def test_send_enabled_false_does_not_call_auto_send_service():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-send-disabled-no-auto")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=False)
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "decided"
+
+
+def test_send_enabled_true_and_decided_calls_auto_send_service():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-send-enabled-auto")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_called_once()
+    args, kwargs = auto_send_mock.call_args
+    assert kwargs["run_id"] == _latest_run().id
+
+
+def test_blocked_run_does_not_call_auto_send_service():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-blocked-no-auto")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "请人工处理",
+        "manual_required": True,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": False,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "manual_required"
+
+
+def test_9100_auto_send_true_blocks_and_does_not_call_auto_send_service():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-upstream-auto-no-send")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "上游想自动发",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "upstream_auto_send_requested"
+
+
 def test_no_autoreply_settings_skips_without_calling_9100():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 

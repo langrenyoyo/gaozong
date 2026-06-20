@@ -15,6 +15,7 @@ from app.integrations.douyin_webhook import normalize_message_text, parse_conten
 from app.models import AiAutoReplyRun, DouyinWebhookEvent
 from app.services.agent_knowledge_category_service import list_agent_category_keys
 from app.services.ai_reply_decision_log_service import record_ai_reply_decision
+from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
 from app.services.douyin_account_agent_binding_service import resolve_webhook_bound_agent
 from app.services.douyin_autoreply_gate_service import evaluate_post_llm_gates, evaluate_pre_llm_gates
 from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
@@ -263,6 +264,8 @@ def _run_with_session(db, *, event_id: int) -> None:
             "post_llm": post_gate.gate_results or {},
         },
     )
+    if status == "decided" and settings.send_enabled is True:
+        send_ai_auto_reply_for_run(db, run_id=run.id)
 
 
 def _existing_run(db, event_key: str | None) -> AiAutoReplyRun | None:
