@@ -23,6 +23,7 @@ from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_bind
 from app.services.douyin_account_agent_binding_service import (
     list_account_agents_for_merchant_account,
 )
+from app.services.douyin_conversation_history_service import build_conversation_history
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -129,6 +130,20 @@ def _normalize_risk_flags(raw_flags: Any) -> list[Any]:
     return []
 
 
+def _trusted_account_open_id_from_binding(
+    *,
+    binding_audit: dict[str, Any],
+    fallback: int | str,
+) -> str:
+    """从绑定校验结果读取可信企业号 open_id，兼容历史审计字段缺失。"""
+    value = (
+        binding_audit.get("authorized_account_open_id")
+        or binding_audit.get("account_open_id")
+        or fallback
+    )
+    return str(value).strip()
+
+
 class ReplySuggestionProxyRequest(BaseModel):
     """9000 代理层允许浏览器提交的回复建议参数。"""
 
@@ -207,6 +222,27 @@ async def create_reply_suggestion_proxy(
         context=context,
         agent_id=agent.agent_id,
     )
+    account_open_id = _trusted_account_open_id_from_binding(
+        binding_audit=binding_result.audit,
+        fallback=request.douyin_account_id,
+    )
+    try:
+        conversation_history = build_conversation_history(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=conversation_id,
+            latest_message=request.latest_message,
+            limit=10,
+        )
+    except Exception as exc:
+        logger.warning(
+            "douyin_ai_cs_conversation_history_fallback merchant_id=%s account_open_id=%s conversation_id=%s error=%s",
+            context.merchant_id,
+            account_open_id,
+            conversation_id,
+            exc,
+        )
+        conversation_history = []
 
     payload = {
         "tenant_id": context.source_system,
@@ -224,6 +260,7 @@ async def create_reply_suggestion_proxy(
         },
         "latest_message": request.latest_message,
         "max_history_messages": request.max_history_messages,
+        "conversation_history": conversation_history,
     }
 
     try:
@@ -253,7 +290,7 @@ async def create_reply_suggestion_proxy(
         db,
         context=context,
         conversation_id=conversation_id,
-        account_open_id=request.douyin_account_id,
+        account_open_id=account_open_id,
         latest_message=request.latest_message,
         agent_id=agent.agent_id,
         agent_name=agent.name,

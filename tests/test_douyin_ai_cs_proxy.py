@@ -1,3 +1,6 @@
+import json
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,6 +13,7 @@ from app.models import (
     AiReplyDecisionLog,
     DouyinAccountAgentBinding,
     DouyinAuthorizedAccount,
+    DouyinWebhookEvent,
     KnowledgeCategory,
 )
 
@@ -136,6 +140,58 @@ def _insert_knowledge_category(
             )
         )
         db.commit()
+    finally:
+        db.close()
+
+
+def _insert_webhook_event(
+    *,
+    event: str = "im_receive_msg",
+    account_open_id: str = "account-open-1",
+    open_id: str = "customer-open-1",
+    conversation_short_id: str = "conv-history",
+    text: str = "hello",
+    event_key: str = "event-history-1",
+    server_message_id: str = "msg-history-1",
+    created_at: datetime | None = None,
+    is_duplicate: int = 0,
+) -> int:
+    db = TestSession()
+    try:
+        from_user_id = open_id if event == "im_receive_msg" else account_open_id
+        to_user_id = account_open_id if event == "im_receive_msg" else open_id
+        content = {
+            "create_time": 1710000000000,
+            "server_message_id": server_message_id,
+            "message_type": "text",
+            "conversation_short_id": conversation_short_id,
+            "open_id": open_id,
+            "account_open_id": account_open_id,
+            "text": text,
+        }
+        payload = {
+            "event": event,
+            "from_user_id": from_user_id,
+            "to_user_id": to_user_id,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        row = DouyinWebhookEvent(
+            event=event,
+            from_user_id=from_user_id,
+            to_user_id=to_user_id,
+            conversation_short_id=conversation_short_id,
+            server_message_id=server_message_id,
+            message_type="text",
+            parsed_content_json=json.dumps(content, ensure_ascii=False),
+            event_key=event_key,
+            is_duplicate=is_duplicate,
+            raw_body=json.dumps(payload, ensure_ascii=False),
+            created_at=created_at or datetime.now(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
     finally:
         db.close()
 
@@ -454,6 +510,133 @@ def test_proxy_injects_base_when_agent_has_no_category_binding(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
+
+
+def test_proxy_builds_trusted_conversation_history_for_9100(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account(open_id="account-open-1")
+    _insert_agent_and_binding(open_id="account-open-1")
+    base_time = datetime.now() - timedelta(minutes=20)
+
+    _insert_webhook_event(
+        text="重复问一句",
+        event_key="history_same_old",
+        server_message_id="msg_same_old",
+        created_at=base_time,
+    )
+    _insert_webhook_event(
+        event="im_send_msg",
+        text="您好，我是小高客服",
+        event_key="history_agent",
+        server_message_id="msg_agent",
+        created_at=base_time + timedelta(minutes=1),
+    )
+    _insert_webhook_event(
+        account_open_id="other-account",
+        text="其他企业号消息",
+        event_key="history_other_account",
+        server_message_id="msg_other_account",
+        created_at=base_time + timedelta(minutes=2),
+    )
+    _insert_webhook_event(
+        conversation_short_id="other-conversation",
+        text="其他会话消息",
+        event_key="history_other_conversation",
+        server_message_id="msg_other_conversation",
+        created_at=base_time + timedelta(minutes=3),
+    )
+    _insert_webhook_event(
+        text="重复事件不应进入上下文",
+        event_key="history_duplicate",
+        server_message_id="msg_duplicate",
+        created_at=base_time + timedelta(minutes=4),
+        is_duplicate=1,
+    )
+    _insert_webhook_event(
+        text="   ",
+        event_key="history_empty",
+        server_message_id="msg_empty",
+        created_at=base_time + timedelta(minutes=5),
+    )
+    _insert_webhook_event(
+        text="重复问一句",
+        event_key="history_latest",
+        server_message_id="msg_latest",
+        created_at=base_time + timedelta(minutes=6),
+    )
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-history/reply-suggestion",
+        json={
+            "douyin_account_id": 123,
+            "agent_id": "agent-sales",
+            "latest_message": "重复问一句",
+            "conversation_history": [
+                {"role": "customer", "content": "前端伪造历史"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["auto_send"] is False
+    history = fake_client.calls[0]["request"]["conversation_history"]
+    assert history == [
+        {
+            "role": "customer",
+            "content": "重复问一句",
+            "created_at": base_time.isoformat(),
+            "message_id": "msg_same_old",
+        },
+        {
+            "role": "agent",
+            "content": "您好，我是小高客服",
+            "created_at": (base_time + timedelta(minutes=1)).isoformat(),
+            "message_id": "msg_agent",
+        },
+    ]
+
+
+def test_proxy_passes_empty_conversation_history_when_no_history(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/no-history/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert fake_client.calls[0]["request"]["conversation_history"] == []
+
+
+def test_proxy_falls_back_to_empty_conversation_history_when_history_query_fails(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+
+    def _fail_history(*args, **kwargs):
+        raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr(douyin_ai_cs_proxy, "build_conversation_history", _fail_history)
+    _insert_account()
+    _insert_agent_and_binding()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-history/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["auto_send"] is False
+    assert fake_client.calls[0]["request"]["conversation_history"] == []
 
 
 def test_proxy_injects_base_then_active_agent_category_keys(monkeypatch):
