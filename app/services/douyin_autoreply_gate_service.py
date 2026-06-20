@@ -1,0 +1,189 @@
+"""抖音自动回复 dry-run 门禁服务。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.models import AiAutoReplyRun, DouyinAccountAutoreplySetting
+from app.services.conversation_autopilot_state_service import is_conversation_manual_takeover
+from app.services.douyin_autoreply_settings_service import (
+    parse_allowed_intents,
+    parse_blocked_risk_flags,
+)
+
+COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
+
+
+@dataclass(frozen=True)
+class GateDecision:
+    """门禁评估结果。"""
+
+    passed: bool
+    status: str | None = None
+    reason: str | None = None
+    gate_results: dict[str, Any] | None = None
+
+
+def evaluate_pre_llm_gates(
+    db: Session,
+    *,
+    settings: DouyinAccountAutoreplySetting | None,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_short_id: str | None,
+    latest_message: str | None,
+    latest_message_state: dict[str, Any] | None,
+    now: datetime | None = None,
+) -> GateDecision:
+    """评估调用 9100 前的配置、接管、频控和最新消息门禁。"""
+    current_time = now or datetime.now()
+    gate_results: dict[str, Any] = {
+        "settings": _settings_snapshot(settings),
+        "latest_message_state": latest_message_state or {},
+    }
+    if settings is None:
+        return GateDecision(False, "skipped", "no_autoreply_settings", gate_results)
+    if settings.enabled is not True:
+        return GateDecision(False, "skipped", "autoreply_disabled", gate_results)
+    if settings.dry_run_enabled is not True:
+        return GateDecision(False, "skipped", "dry_run_disabled", gate_results)
+    if not str(latest_message or "").strip():
+        return GateDecision(False, "skipped", "empty_message", gate_results)
+    if not conversation_short_id:
+        return GateDecision(False, "skipped", "conversation_missing", gate_results)
+    if is_conversation_manual_takeover(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        now=current_time,
+    ):
+        return GateDecision(False, "blocked", "manual_takeover", gate_results)
+
+    if latest_message_state and latest_message_state.get("latest_is_customer_message") is False:
+        return GateDecision(False, "blocked", "latest_message_not_customer", gate_results)
+
+    frequency = _frequency_snapshot(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        since=current_time - timedelta(hours=1),
+    )
+    gate_results["frequency"] = frequency
+    if frequency["conversation_count"] >= int(settings.max_replies_per_conversation_per_hour or 0):
+        return GateDecision(False, "blocked", "frequency_conversation_exceeded", gate_results)
+    if frequency["account_count"] >= int(settings.max_replies_per_account_per_hour or 0):
+        return GateDecision(False, "blocked", "frequency_account_exceeded", gate_results)
+    return GateDecision(True, gate_results=gate_results)
+
+
+def evaluate_post_llm_gates(
+    *,
+    settings: DouyinAccountAutoreplySetting,
+    result: dict[str, Any],
+    upstream_auto_send: bool,
+) -> GateDecision:
+    """评估 9100 决策后的安全门禁。"""
+    allowed_intents = parse_allowed_intents(settings)
+    blocked_risk_flags = parse_blocked_risk_flags(settings)
+    risk_flags = _string_list(result.get("risk_flags"))
+    rag_sources = result.get("rag_sources") or []
+    confidence = _float_or_zero(result.get("confidence"))
+    intent = str(result.get("intent") or "").strip()
+    gate_results = {
+        "send_disabled": settings.send_enabled is not True,
+        "manual_required": result.get("manual_required"),
+        "risk_flags": risk_flags,
+        "blocked_risk_flags": blocked_risk_flags,
+        "require_rag": settings.require_rag is True,
+        "rag_used": result.get("rag_used"),
+        "require_rag_sources": settings.require_rag_sources is True,
+        "rag_sources_count": len(rag_sources) if isinstance(rag_sources, list) else 0,
+        "confidence": confidence,
+        "min_confidence": float(settings.min_confidence or 0),
+        "intent": intent,
+        "allowed_intents": allowed_intents,
+        "upstream_auto_send": upstream_auto_send,
+        "final_auto_send": False,
+    }
+
+    if upstream_auto_send:
+        return GateDecision(False, "blocked", "upstream_auto_send_requested", gate_results)
+    if result.get("manual_required") is True:
+        return GateDecision(False, "blocked", "manual_required", gate_results)
+    if risk_flags and (not blocked_risk_flags or any(flag in blocked_risk_flags for flag in risk_flags)):
+        return GateDecision(False, "blocked", "risk_flags", gate_results)
+    if settings.require_rag is True and result.get("rag_used") is not True:
+        return GateDecision(False, "blocked", "rag_not_used", gate_results)
+    if settings.require_rag_sources is True and not rag_sources:
+        return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
+    if confidence < float(settings.min_confidence or 0):
+        return GateDecision(False, "blocked", "confidence_low", gate_results)
+    if allowed_intents and intent not in allowed_intents:
+        return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
+    return GateDecision(True, "decided", None, gate_results)
+
+
+def _frequency_snapshot(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_short_id: str,
+    since: datetime,
+) -> dict[str, int]:
+    query = (
+        db.query(AiAutoReplyRun)
+        .filter(AiAutoReplyRun.merchant_id == merchant_id)
+        .filter(AiAutoReplyRun.account_open_id == account_open_id)
+        .filter(AiAutoReplyRun.status.in_(COUNTED_RUN_STATUSES))
+        .filter(AiAutoReplyRun.created_at >= since)
+    )
+    account_count = query.count()
+    conversation_count = query.filter(AiAutoReplyRun.conversation_short_id == conversation_short_id).count()
+    return {
+        "counted_statuses": list(COUNTED_RUN_STATUSES),
+        "conversation_count": conversation_count,
+        "account_count": account_count,
+    }
+
+
+def _settings_snapshot(settings: DouyinAccountAutoreplySetting | None) -> dict[str, Any]:
+    if settings is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "enabled": bool(settings.enabled),
+        "dry_run_enabled": bool(settings.dry_run_enabled),
+        "send_enabled": bool(settings.send_enabled),
+        "min_confidence": float(settings.min_confidence or 0),
+        "require_rag": bool(settings.require_rag),
+        "require_rag_sources": bool(settings.require_rag_sources),
+        "allowed_intents": parse_allowed_intents(settings),
+        "blocked_risk_flags": parse_blocked_risk_flags(settings),
+        "max_replies_per_conversation_per_hour": settings.max_replies_per_conversation_per_hour,
+        "max_replies_per_account_per_hour": settings.max_replies_per_account_per_hour,
+    }
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0

@@ -304,6 +304,71 @@ def get_send_msg_context(
     return None
 
 
+def get_latest_private_message_state(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_short_id: str,
+    customer_open_id: str | None = None,
+    trigger_server_message_id: str | None = None,
+) -> dict[str, Any]:
+    """只读获取会话最新私信状态，供自动回复门禁使用。"""
+    result = {
+        "latest_event": None,
+        "latest_direction": None,
+        "latest_server_message_id": None,
+        "latest_created_at": None,
+        "latest_is_customer_message": False,
+        "has_outbound_after_trigger": False,
+    }
+    if not account_open_id or not conversation_short_id:
+        return result
+
+    rows = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
+        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
+        .order_by(
+            DouyinWebhookEvent.message_create_time.desc(),
+            DouyinWebhookEvent.created_at.desc(),
+            DouyinWebhookEvent.id.desc(),
+        )
+        .all()
+    )
+    filtered: list[DouyinWebhookEvent] = []
+    for row in rows:
+        row_account_open_id, row_customer_open_id = _send_msg_participants(row)
+        if row_account_open_id != account_open_id:
+            continue
+        if customer_open_id and row_customer_open_id != customer_open_id:
+            continue
+        filtered.append(row)
+
+    latest = filtered[0] if filtered else None
+    if latest is not None:
+        result.update(
+            {
+                "latest_event": latest.event,
+                "latest_direction": _direction(latest.event or ""),
+                "latest_server_message_id": latest.server_message_id,
+                "latest_created_at": latest.message_create_time or latest.created_at,
+                "latest_is_customer_message": latest.event == "im_receive_msg",
+            }
+        )
+
+    if trigger_server_message_id:
+        seen_trigger = False
+        for row in reversed(filtered):
+            if row.server_message_id == trigger_server_message_id:
+                seen_trigger = True
+                continue
+            if seen_trigger and row.event == "im_send_msg":
+                result["has_outbound_after_trigger"] = True
+                break
+    return result
+
+
 def _send_msg_participants(row: DouyinWebhookEvent) -> tuple[str | None, str | None]:
     if row.event == "im_send_msg":
         return row.from_user_id, row.to_user_id

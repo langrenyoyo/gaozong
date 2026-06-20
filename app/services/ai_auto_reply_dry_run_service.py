@@ -16,7 +16,10 @@ from app.models import AiAutoReplyRun, DouyinWebhookEvent
 from app.services.agent_knowledge_category_service import list_agent_category_keys
 from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 from app.services.douyin_account_agent_binding_service import resolve_webhook_bound_agent
+from app.services.douyin_autoreply_gate_service import evaluate_post_llm_gates, evaluate_pre_llm_gates
+from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
 from app.services.douyin_conversation_history_service import build_conversation_history
+from app.services.douyin_workbench_conversation_service import get_latest_private_message_state
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -100,6 +103,52 @@ def _run_with_session(db, *, event_id: int) -> None:
         )
         return
 
+    settings = get_account_autoreply_settings(
+        db,
+        merchant_id=binding.merchant_id or "",
+        account_open_id=account_open_id,
+    )
+    latest_message_state = get_latest_private_message_state(
+        db,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        customer_open_id=customer_open_id,
+        trigger_server_message_id=event.server_message_id,
+    )
+    pre_gate = evaluate_pre_llm_gates(
+        db,
+        settings=settings,
+        merchant_id=binding.merchant_id or "",
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        latest_message=latest_message,
+        latest_message_state=latest_message_state,
+    )
+    if not pre_gate.passed:
+        terminal_base = {
+            **base,
+            "merchant_id": binding.merchant_id or "",
+            "account_open_id": account_open_id,
+            "agent_id": binding.agent.agent_id,
+        }
+        if pre_gate.status == "blocked":
+            _insert_terminal_run(
+                db,
+                terminal_base,
+                status="blocked",
+                block_reason=pre_gate.reason,
+                gate_results={"pre_llm": pre_gate.gate_results or {}},
+            )
+        else:
+            _insert_terminal_run(
+                db,
+                terminal_base,
+                status="skipped",
+                skip_reason=pre_gate.reason,
+                gate_results={"pre_llm": pre_gate.gate_results or {}},
+            )
+        return
+
     context = RequestContext(
         user_id="webhook_auto_reply_dry_run",
         merchant_id=binding.merchant_id,
@@ -152,7 +201,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             "account_open_id": account_open_id,
             "agent_id": binding.agent.agent_id,
             "status": "running",
-            "gate_results_json": _json_dumps({"history": history_gate}),
+            "gate_results_json": _json_dumps({"pre_llm": pre_gate.gate_results or {}, "history": history_gate}),
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
         }
@@ -179,7 +228,13 @@ def _run_with_session(db, *, event_id: int) -> None:
     final_result = dict(upstream_result)
     upstream_auto_send = final_result.get("auto_send") is True
     final_result["auto_send"] = False
-    status, block_reason = _decision_status(final_result, upstream_auto_send=upstream_auto_send)
+    post_gate = evaluate_post_llm_gates(
+        settings=settings,
+        result=final_result,
+        upstream_auto_send=upstream_auto_send,
+    )
+    status = post_gate.status or ("decided" if post_gate.passed else "blocked")
+    block_reason = post_gate.reason
     decision_log_id = record_ai_reply_decision(
         db,
         context=context,
@@ -203,16 +258,9 @@ def _run_with_session(db, *, event_id: int) -> None:
         decision_log_id=decision_log_id,
         would_send_content=final_result.get("reply_text") if status == "decided" else None,
         gate_results={
+            "pre_llm": pre_gate.gate_results or {},
             "history": history_gate,
-            "decision": {
-                "manual_required": final_result.get("manual_required"),
-                "risk_flags": final_result.get("risk_flags"),
-                "rag_used": final_result.get("rag_used"),
-                "rag_sources_count": len(final_result.get("rag_sources") or []),
-                "confidence": final_result.get("confidence"),
-                "upstream_auto_send": upstream_auto_send,
-                "final_auto_send": False,
-            },
+            "post_llm": post_gate.gate_results or {},
         },
     )
 
@@ -267,12 +315,14 @@ def _insert_terminal_run(
     *,
     status: str,
     skip_reason: str | None = None,
+    block_reason: str | None = None,
     gate_results: dict[str, Any] | None = None,
 ) -> None:
     run = AiAutoReplyRun(
         **base,
         status=status,
         skip_reason=skip_reason,
+        block_reason=block_reason,
         gate_results_json=_json_dumps(gate_results or {}),
         created_at=datetime.now(),
         updated_at=datetime.now(),

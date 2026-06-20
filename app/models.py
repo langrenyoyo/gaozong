@@ -389,6 +389,67 @@ class AiAutoReplyRun(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DouyinAccountAutoreplySetting(Base):
+    """抖音企业号自动回复配置。"""
+
+    __tablename__ = "douyin_account_autoreply_settings"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "account_open_id", name="uk_douyin_autoreply_settings_merchant_account"),
+        Index("idx_douyin_autoreply_settings_account", "account_open_id"),
+        Index(
+            "idx_douyin_autoreply_settings_switches",
+            "enabled",
+            "dry_run_enabled",
+            "send_enabled",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False)
+    account_open_id = Column(String(255), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+    dry_run_enabled = Column(Boolean, nullable=False, default=False)
+    send_enabled = Column(Boolean, nullable=False, default=False)
+    min_confidence = Column(Float, nullable=False, default=0.85)
+    require_rag = Column(Boolean, nullable=False, default=True)
+    require_rag_sources = Column(Boolean, nullable=False, default=True)
+    allowed_intents_json = Column(Text)
+    blocked_risk_flags_json = Column(Text)
+    max_replies_per_conversation_per_hour = Column(Integer, nullable=False, default=3)
+    max_replies_per_account_per_hour = Column(Integer, nullable=False, default=30)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ConversationAutopilotState(Base):
+    """抖音私信会话托管状态。"""
+
+    __tablename__ = "conversation_autopilot_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "account_open_id",
+            "conversation_short_id",
+            name="uk_conversation_autopilot_states_scope",
+        ),
+        Index("idx_conversation_autopilot_states_merchant_account", "merchant_id", "account_open_id"),
+        Index("idx_conversation_autopilot_states_mode", "mode"),
+        Index("idx_conversation_autopilot_states_takeover_until", "manual_takeover_until"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False)
+    account_open_id = Column(String(255), nullable=False)
+    conversation_short_id = Column(String(255), nullable=False)
+    customer_open_id = Column(String(255))
+    mode = Column(String(32), nullable=False, default="ai")
+    manual_takeover_until = Column(DateTime)
+    last_human_message_at = Column(DateTime)
+    last_ai_reply_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DouyinMessageResourceDownload(Base):
     """Manual resource download record for Douyin media."""
     __tablename__ = "douyin_message_resource_downloads"
