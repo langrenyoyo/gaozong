@@ -103,6 +103,13 @@ class AgentConfig(BaseModel):
     allowed_category_ids: list[str] | None = None
 
 
+class ConversationHistoryItem(BaseModel):
+    role: str
+    content: str
+    created_at: str | None = None
+    message_id: str | None = None
+
+
 class ReplySuggestionRequest(BaseModel):
     tenant_id: str
     account_id: int | str
@@ -112,6 +119,7 @@ class ReplySuggestionRequest(BaseModel):
     agent_id: str | None = None
     agent_config: AgentConfig | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)
+    conversation_history: list[ConversationHistoryItem] | None = None
 
 
 class RecommendedVehicle(BaseModel):
