@@ -816,6 +816,66 @@ def test_webhook_legacy_and_main_path_idempotent_no_auth():
     assert data1["event_id"] != data2["event_id"]
 
 
+def test_webhook_first_receive_msg_adds_dry_run_background_task():
+    """首次 im_receive_msg commit 后提交 dry-run 后台任务，且只传 event_id。"""
+    from app.routers import integrations
+
+    client = _api_client()
+    payload = _sample_payload(
+        from_user_id=f"dryrun_first_{int(time.time())}",
+        nick_name="dryrun首次",
+        message_text="想了解一下A6",
+    )
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    submitted_event_ids = []
+
+    def fake_run(event_id):
+        submitted_event_ids.append(event_id)
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"), \
+         patch.object(integrations, "run_ai_auto_reply_dry_run", fake_run):
+        resp = client.post(
+            "/webhook/douyin",
+            data=body_text.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_duplicate"] is False
+    assert submitted_event_ids == [data["event_id"]]
+
+
+def test_webhook_duplicate_receive_msg_does_not_add_dry_run_background_task():
+    """重复 webhook 不提交 dry-run 后台任务。"""
+    from app.routers import integrations
+
+    client = _api_client()
+    payload = _sample_payload(
+        from_user_id=f"dryrun_dup_{int(time.time())}",
+        nick_name="dryrun重复",
+        message_text="想了解一下A6",
+    )
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    submitted_event_ids = []
+
+    def fake_run(event_id):
+        submitted_event_ids.append(event_id)
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"), \
+         patch.object(integrations, "run_ai_auto_reply_dry_run", fake_run):
+        resp1 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+        submitted_event_ids.clear()
+        resp2 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    assert resp2.json()["is_duplicate"] is True
+    assert submitted_event_ids == []
+
+
 # ---------- 鉴权开启场景（DOUYIN_WEBHOOK_AUTH_REQUIRED=true） ----------
 
 

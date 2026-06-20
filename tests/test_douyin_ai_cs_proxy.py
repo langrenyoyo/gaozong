@@ -1227,7 +1227,7 @@ def test_proxy_log_failure_does_not_change_reply_response(monkeypatch):
     assert body.get("risk_flags") is None
 
 
-def test_record_ai_reply_decision_returns_false_when_db_write_fails():
+def test_record_ai_reply_decision_returns_none_when_db_write_fails():
     from app.auth.context import RequestContext
     from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 
@@ -1253,7 +1253,7 @@ def test_record_ai_reply_decision_returns_false_when_db_write_fails():
         source_system="new_car_project",
     )
 
-    ok = record_ai_reply_decision(
+    log_id = record_ai_reply_decision(
         db,
         context=context,
         conversation_id="conv-1",
@@ -1267,7 +1267,7 @@ def test_record_ai_reply_decision_returns_false_when_db_write_fails():
         upstream_auto_send=False,
     )
 
-    assert ok is False
+    assert log_id is None
     assert db.rolled_back is True
 
 

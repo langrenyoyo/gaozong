@@ -65,6 +65,20 @@ class MerchantAccountAgentsResult:
     audit: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class WebhookBoundAgentResult:
+    """Webhook 场景下的企业号默认智能体解析结果。"""
+
+    allowed: bool
+    reason_code: str | None = None
+    account: DouyinAuthorizedAccount | None = None
+    binding: DouyinAccountAgentBinding | None = None
+    agent: AiAgent | None = None
+    merchant_id: str | None = None
+    tenant_id: str | None = None
+    audit: dict[str, Any] = field(default_factory=dict)
+
+
 def get_binding_summary(db: Session, *, account_open_id: str, merchant_id: str) -> BindingSummary:
     """读取当前商户下企业号的 active 默认绑定摘要。"""
     account = _find_account_by_open_id(db, account_open_id)
@@ -382,6 +396,101 @@ def validate_douyin_agent_binding(
     return BindingValidationResult(
         allowed=True,
         audit={**base.audit, "agent_id": agent_id, "agent_status": agent.status},
+    )
+
+
+def resolve_webhook_bound_agent(
+    db: Session,
+    *,
+    account_open_id: str,
+) -> WebhookBoundAgentResult:
+    """解析 webhook 企业号绑定的 active 默认智能体，不依赖前端 RequestContext。"""
+    normalized_account_open_id = str(account_open_id or "").strip()
+    audit: dict[str, Any] = {"account_open_id": normalized_account_open_id}
+    if not normalized_account_open_id:
+        return WebhookBoundAgentResult(
+            allowed=False,
+            reason_code="account_open_id_missing",
+            audit=audit,
+        )
+
+    account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(
+            DouyinAuthorizedAccount.open_id == normalized_account_open_id,
+            DouyinAuthorizedAccount.bind_status == 1,
+        )
+        .first()
+    )
+    if account is None:
+        return WebhookBoundAgentResult(
+            allowed=False,
+            reason_code="account_not_authorized",
+            audit=audit,
+        )
+    merchant_id = str(account.merchant_id or "").strip()
+    tenant_id = str(account.tenant_id or "").strip() or None
+    audit = {
+        **audit,
+        "authorized_account_id": account.id,
+        "merchant_id": merchant_id,
+        "tenant_id": tenant_id,
+        "bind_status": account.bind_status,
+    }
+    if not merchant_id:
+        return WebhookBoundAgentResult(
+            allowed=False,
+            reason_code="merchant_context_missing",
+            account=account,
+            audit=audit,
+        )
+
+    binding = _find_active_binding(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=normalized_account_open_id,
+    )
+    if binding is None:
+        return WebhookBoundAgentResult(
+            allowed=False,
+            reason_code="agent_binding_not_found",
+            account=account,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            audit=audit,
+        )
+
+    agent = _find_agent_any_status(db, merchant_id=merchant_id, agent_id=binding.agent_id)
+    if agent is None or agent.status != "active":
+        return WebhookBoundAgentResult(
+            allowed=False,
+            reason_code="agent_inactive",
+            account=account,
+            binding=binding,
+            agent=agent,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            audit={
+                **audit,
+                "binding_id": binding.id,
+                "agent_id": binding.agent_id,
+                "agent_status": getattr(agent, "status", None),
+            },
+        )
+
+    return WebhookBoundAgentResult(
+        allowed=True,
+        account=account,
+        binding=binding,
+        agent=agent,
+        merchant_id=merchant_id,
+        tenant_id=tenant_id,
+        audit={
+            **audit,
+            "binding_id": binding.id,
+            "agent_id": agent.agent_id,
+            "agent_status": agent.status,
+        },
     )
 
 

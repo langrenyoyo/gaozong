@@ -352,6 +352,43 @@ class AiReplyDecisionLog(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class AiAutoReplyRun(Base):
+    """Webhook 自动回复 dry-run 运行记录，不代表真实发送。"""
+
+    __tablename__ = "ai_auto_reply_runs"
+    __table_args__ = (
+        Index("idx_ai_auto_reply_runs_merchant", "merchant_id"),
+        Index("idx_ai_auto_reply_runs_account", "account_open_id"),
+        Index("idx_ai_auto_reply_runs_conversation", "conversation_short_id"),
+        Index("idx_ai_auto_reply_runs_customer", "customer_open_id"),
+        Index("idx_ai_auto_reply_runs_trigger_event", "trigger_event_id"),
+        Index("idx_ai_auto_reply_runs_agent", "agent_id"),
+        Index("idx_ai_auto_reply_runs_decision_log", "decision_log_id"),
+        Index("idx_ai_auto_reply_runs_created", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False)
+    account_open_id = Column(String(255), nullable=False)
+    conversation_short_id = Column(String(255))
+    customer_open_id = Column(String(255))
+    trigger_event_id = Column(Integer, nullable=False)
+    trigger_event_key = Column(String(255), nullable=False, unique=True)
+    trigger_server_message_id = Column(String(255))
+    latest_message = Column(Text)
+    agent_id = Column(String(64))
+    mode = Column(String(32), nullable=False, default="dry_run")
+    status = Column(String(32), nullable=False)
+    skip_reason = Column(String(128))
+    block_reason = Column(String(128))
+    gate_results_json = Column(Text)
+    decision_log_id = Column(Integer)
+    would_send_content = Column(Text)
+    error_message = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DouyinMessageResourceDownload(Base):
     """Manual resource download record for Douyin media."""
     __tablename__ = "douyin_message_resource_downloads"

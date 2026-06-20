@@ -28,8 +28,8 @@ def record_ai_reply_decision(
     upstream_raw_result: dict[str, Any],
     final_result: dict[str, Any],
     upstream_auto_send: bool,
-) -> bool:
-    """记录 AI 回复建议决策日志，失败时不影响主链路。"""
+) -> int | None:
+    """记录 AI 回复建议决策日志，成功返回日志 ID，失败不影响主链路。"""
     try:
         log = AiReplyDecisionLog(
             merchant_id=str(context.merchant_id or ""),
@@ -63,7 +63,8 @@ def record_ai_reply_decision(
         )
         db.add(log)
         db.commit()
-        return True
+        db.refresh(log)
+        return log.id
     except Exception as exc:
         db.rollback()
         logger.warning(
@@ -73,7 +74,7 @@ def record_ai_reply_decision(
             agent_id,
             type(exc).__name__,
         )
-        return False
+        return None
 
 
 def _json_dumps(value: Any) -> str:

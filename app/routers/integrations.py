@@ -3,7 +3,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app import config
@@ -14,6 +14,7 @@ from app.integrations.douyin_webhook import (
     verify_signature,
 )
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
+from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
     get_conversation_profile,
@@ -35,6 +36,7 @@ async def _handle_douyin_webhook(
     authorization: str | None,
     db: Session,
     source_path: str,
+    background_tasks: BackgroundTasks | None = None,
     skip_signature_verification: bool = False,
 ) -> WebhookResponse:
     """抖音 GMP Webhook 共享处理逻辑
@@ -96,6 +98,13 @@ async def _handle_douyin_webhook(
     # 处理事件（幂等、解析、线索写入）
     result = process_webhook_event(db, payload)
     db.commit()
+    if (
+        background_tasks is not None
+        and payload.get("event") == "im_receive_msg"
+        and result.get("is_duplicate") is not True
+        and result.get("event_id") is not None
+    ):
+        background_tasks.add_task(run_ai_auto_reply_dry_run, result["event_id"])
 
     return WebhookResponse(
         code=0,
@@ -187,6 +196,7 @@ def get_douyin_conversation_messages_by_query(
 @router.post("/webhook", response_model=WebhookResponse)
 async def douyin_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     x_auth_timestamp: str | None = Header(None, alias="X-Auth-Timestamp"),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -201,12 +211,14 @@ async def douyin_webhook(
     return await _handle_douyin_webhook(
         body, x_auth_timestamp, authorization, db,
         source_path="/integrations/douyin/webhook",
+        background_tasks=background_tasks,
     )
 
 
 @legacy_webhook_router.post("/douyin", response_model=WebhookResponse)
 async def douyin_webhook_legacy(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     x_auth_timestamp: str | None = Header(None, alias="X-Auth-Timestamp"),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -221,4 +233,5 @@ async def douyin_webhook_legacy(
     return await _handle_douyin_webhook(
         body, x_auth_timestamp, authorization, db,
         source_path="/webhook/douyin",
+        background_tasks=background_tasks,
     )
