@@ -1170,3 +1170,142 @@ class AiReplyDecisionLogDetailResponse(BaseModel):
     success: bool = True
     data: AiReplyDecisionLogDetail
     message: str = "success"
+
+
+# ========== 抖音自动回复配置 ==========
+
+
+class DouyinAutoreplySettingsUpdate(BaseModel):
+    """抖音企业号自动回复配置更新请求。"""
+
+    enabled: Optional[bool] = None
+    dry_run_enabled: Optional[bool] = None
+    send_enabled: Optional[bool] = None
+    min_confidence: Optional[float] = Field(None, ge=0, le=1)
+    require_rag: Optional[bool] = None
+    require_rag_sources: Optional[bool] = None
+    allowed_intents: Optional[list[str]] = None
+    blocked_risk_flags: Optional[list[str]] = None
+    max_replies_per_conversation_per_hour: Optional[int] = Field(None, ge=0, le=1000)
+    max_replies_per_account_per_hour: Optional[int] = Field(None, ge=0, le=1000)
+
+    model_config = {"extra": "forbid"}
+
+
+class DouyinAutoreplySettingsItem(BaseModel):
+    """抖音企业号自动回复配置视图。"""
+
+    account_open_id: str
+    account_name: Optional[str] = None
+    bind_status: Optional[int] = None
+    bound_agent_id: Optional[str] = None
+    bound_agent_name: Optional[str] = None
+    enabled: bool = False
+    dry_run_enabled: bool = False
+    send_enabled: bool = False
+    min_confidence: float = 0.85
+    require_rag: bool = True
+    require_rag_sources: bool = True
+    allowed_intents: list[str] = Field(default_factory=list)
+    blocked_risk_flags: list[str] = Field(default_factory=list)
+    max_replies_per_conversation_per_hour: int = 3
+    max_replies_per_account_per_hour: int = 30
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class DouyinAutoreplySettingsListData(BaseModel):
+    """抖音企业号自动回复配置列表数据。"""
+
+    total: int
+    items: list[DouyinAutoreplySettingsItem]
+
+
+class DouyinAutoreplySettingsListResponse(BaseModel):
+    """抖音企业号自动回复配置列表响应。"""
+
+    success: bool = True
+    data: DouyinAutoreplySettingsListData
+    message: str = "success"
+
+
+class DouyinAutoreplySettingsResponse(BaseModel):
+    """抖音企业号自动回复配置详情响应。"""
+
+    success: bool = True
+    data: DouyinAutoreplySettingsItem
+    message: str = "success"
+
+
+# ========== 抖音自动回复运行记录 ==========
+
+
+class AiAutoReplyRunListItem(BaseModel):
+    """自动回复运行记录列表项。"""
+
+    id: int
+    merchant_id: str
+    account_open_id: str
+    conversation_short_id: Optional[str] = None
+    customer_open_id: Optional[str] = None
+    trigger_event_id: int
+    trigger_event_key: str
+    trigger_server_message_id: Optional[str] = None
+    latest_message_summary: Optional[str] = None
+    agent_id: Optional[str] = None
+    mode: str
+    status: str
+    skip_reason: Optional[str] = None
+    block_reason: Optional[str] = None
+    decision_log_id: Optional[int] = None
+    would_send_content_summary: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AiAutoReplyRunListData(BaseModel):
+    """自动回复运行记录分页数据。"""
+
+    page: int
+    page_size: int
+    total: int
+    items: list[AiAutoReplyRunListItem]
+
+
+class AiAutoReplyRunListResponse(BaseModel):
+    """自动回复运行记录列表响应。"""
+
+    success: bool = True
+    data: AiAutoReplyRunListData
+    message: str = "success"
+
+
+class AiAutoReplySendRecord(BaseModel):
+    """自动回复关联发送流水摘要。"""
+
+    id: int
+    send_status: str
+    send_source: str
+    auto_send: bool
+    manual_confirmed: bool
+    upstream_msg_id: Optional[str] = None
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+
+
+class AiAutoReplyRunDetail(AiAutoReplyRunListItem):
+    """自动回复运行记录详情。"""
+
+    latest_message: Optional[str] = None
+    would_send_content: Optional[str] = None
+    gate_results: dict = Field(default_factory=dict)
+    send_record: Optional[AiAutoReplySendRecord] = None
+
+
+class AiAutoReplyRunDetailResponse(BaseModel):
+    """自动回复运行记录详情响应。"""
+
+    success: bool = True
+    data: AiAutoReplyRunDetail
+    message: str = "success"
