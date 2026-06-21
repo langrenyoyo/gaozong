@@ -12,7 +12,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
-from app.models import DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.services.conversation_autopilot_state_service import mark_manual_takeover
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
 
@@ -60,7 +61,7 @@ def send_manual_private_message(
     if _is_context_expired(context.get("message_create_time")):
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
 
-    return _send_private_message_with_context(
+    result = _send_private_message_with_context(
         db,
         content=content_text,
         send_context=context,
@@ -69,6 +70,8 @@ def send_manual_private_message(
         send_source="manual",
         operator_id=operator_id,
     )
+    _mark_manual_takeover_after_send(db, context)
+    return result
 
 
 def _send_private_message_with_context(
@@ -207,6 +210,39 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _mark_manual_takeover_after_send(db: Session, context: dict[str, Any]) -> None:
+    account_open_id = _optional_str(context.get("account_open_id"))
+    conversation_short_id = _optional_str(context.get("conversation_short_id"))
+    customer_open_id = _optional_str(context.get("customer_open_id"))
+    if not account_open_id or not conversation_short_id:
+        logger.warning(
+            "manual_takeover_skip stage=manual_send_success reason=missing_context account_open_id_sha8=%s conversation_sha8=%s",
+            _hash_prefix(account_open_id),
+            _hash_prefix(conversation_short_id),
+        )
+        return
+
+    merchant_id = _resolve_merchant_id_for_account(db, account_open_id) or "unknown_merchant"
+    mark_manual_takeover(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        customer_open_id=customer_open_id,
+    )
+
+
+def _resolve_merchant_id_for_account(db: Session, account_open_id: str) -> str | None:
+    account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
+        .filter(DouyinAuthorizedAccount.bind_status == 1)
+        .order_by(DouyinAuthorizedAccount.id.desc())
+        .first()
+    )
+    return _optional_str(account.merchant_id) if account is not None else None
 
 
 def _safe_detail(detail: Any) -> dict[str, Any]:

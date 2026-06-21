@@ -188,3 +188,25 @@ def test_mark_manual_takeover_creates_or_updates_state():
         assert loaded.manual_takeover_until is None
     finally:
         db.close()
+
+
+def test_mark_manual_takeover_defaults_to_30_minutes():
+    from app.services.conversation_autopilot_state_service import mark_manual_takeover
+
+    now = datetime.now()
+    db = TestSession()
+    try:
+        state = mark_manual_takeover(
+            db,
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-1",
+            customer_open_id="customer-open-1",
+            now=now,
+        )
+
+        assert state.mode == "manual"
+        assert state.last_human_message_at == now
+        assert state.manual_takeover_until == now + timedelta(minutes=30)
+    finally:
+        db.close()

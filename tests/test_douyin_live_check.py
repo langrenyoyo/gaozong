@@ -29,6 +29,7 @@ from app.auth.dependencies import (
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import (
+    ConversationAutopilotState,
     DouyinAuthorizedAccount,
     DouyinImageUpload,
     DouyinLead,
@@ -161,6 +162,22 @@ def _live_receive_payload(
             ensure_ascii=False,
         ),
     }
+
+
+def _insert_live_forward_account_binding() -> None:
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=1,
+                open_id="live_forward_account_001",
+                merchant_id="merchant-1",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def _insert_event_for_live_check_account(account_open_id: str) -> None:
@@ -1157,6 +1174,13 @@ def test_send_message_success_uses_signed_openapi_body_and_persists_sent_record(
         assert record.main_account_id == 123
         assert record.upstream_msg_id == "upstream_sent_msg_001"
         assert record.content == "人工确认后的回复"
+        state = db.query(ConversationAutopilotState).one()
+        assert state.mode == "manual"
+        assert state.account_open_id == "send_account_001"
+        assert state.customer_open_id == "send_customer_001"
+        assert state.conversation_short_id == "send_conv_001"
+        assert state.last_human_message_at is not None
+        assert state.manual_takeover_until is not None
     finally:
         db.close()
 
@@ -1222,6 +1246,7 @@ def test_send_message_upstream_business_error_persists_failed_record_without_sec
         assert record.manual_confirmed == 1
         assert record.auto_send == 0
         assert record.send_source == "manual"
+        assert db.query(ConversationAutopilotState).count() == 0
     finally:
         db.close()
 
@@ -1971,6 +1996,7 @@ def test_webhook_observe_forward_disabled_does_not_write_formal_event():
 
 def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead():
     client = _client()
+    _insert_live_forward_account_binding()
     payload = _live_receive_payload(from_user_id="live_forward_create_001")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
@@ -2003,6 +2029,7 @@ def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead
 
 def test_webhook_observe_forward_enabled_duplicate_uses_formal_idempotency():
     client = _client()
+    _insert_live_forward_account_binding()
     payload = _live_receive_payload(from_user_id="live_forward_dup_001")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
@@ -2172,6 +2199,7 @@ def test_config_openapi_base_and_prefix_fall_back_when_environment_values_are_bl
 def test_live_check_callback_accepts_im_receive_msg_and_forwards_to_formal():
     """callback 收到 im_receive_msg 时按 webhook 事件处理并创建线索。"""
     client = _client()
+    _insert_live_forward_account_binding()
     payload = _live_receive_payload(from_user_id="callback_forward_create_001")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \

@@ -29,8 +29,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.models import (
+    ConversationAutopilotState,
     DouyinAuthorizedAccount,
     DouyinLead,
+    DouyinPrivateMessageSend,
     DouyinWebhookEvent,
     SalesStaff,
     CheckConfig,
@@ -88,6 +90,8 @@ def setup_function(function):
     需逐用例清空 douyin_leads / douyin_webhook_events。
     """
     db = _db()
+    db.query(ConversationAutopilotState).delete()
+    db.query(DouyinPrivateMessageSend).delete()
     db.query(DouyinLead).delete()
     db.query(DouyinWebhookEvent).delete()
     db.commit()
@@ -146,6 +150,39 @@ def _api_client():
     app = create_app()
     app.dependency_overrides[get_db] = _db_session
     return TestClient(app)
+
+
+def _insert_ai_auto_send_record(
+    *,
+    upstream_msg_id: str = "msg_test_001",
+    conversation_short_id: str = "conv_test_001",
+    account_open_id: str = "test_account_001",
+    customer_open_id: str = "ai_callback_customer_001",
+    content: str = "AI auto reply",
+) -> None:
+    db = _db()
+    try:
+        db.add(
+            DouyinPrivateMessageSend(
+                main_account_id=1,
+                conversation_short_id=conversation_short_id,
+                server_message_id="trigger-msg-1",
+                from_user_id=account_open_id,
+                to_user_id=customer_open_id,
+                account_open_id=account_open_id,
+                customer_open_id=customer_open_id,
+                scene="im_reply_msg",
+                content=content,
+                status="sent",
+                manual_confirmed=0,
+                auto_send=1,
+                send_source="ai_auto",
+                upstream_msg_id=upstream_msg_id,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 # ========== 验签测试 ==========
@@ -1019,3 +1056,143 @@ def test_webhook_both_paths_force_auth_in_production():
 
     assert legacy_resp.status_code == 401
     assert main_resp.status_code == 401
+
+
+def test_webhook_im_send_msg_matching_ai_auto_send_does_not_mark_manual_takeover():
+    """AI 自动发送产生的 im_send_msg 回调不得进入人工接管。"""
+    from app.routers import integrations
+
+    client = _api_client()
+    _insert_ai_auto_send_record(
+        upstream_msg_id="msg_test_001",
+        customer_open_id="ai_callback_customer_001",
+        content="AI auto reply",
+    )
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text="AI auto reply",
+    )
+    payload["to_user_id"] = "ai_callback_customer_001"
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    submitted_event_ids = []
+
+    def fake_run(event_id):
+        submitted_event_ids.append(event_id)
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"), \
+         patch.object(integrations, "run_ai_auto_reply_dry_run", fake_run):
+        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    assert submitted_event_ids == []
+    db = _db()
+    try:
+        assert db.query(ConversationAutopilotState).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_im_send_msg_not_matching_ai_auto_send_marks_manual_takeover():
+    """无法匹配 AI 自动发送流水的 im_send_msg 视为人工发出并进入接管。"""
+    from app.routers import integrations
+
+    client = _api_client()
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text="manual reply",
+    )
+    payload["to_user_id"] = "manual_customer_001"
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    submitted_event_ids = []
+
+    def fake_run(event_id):
+        submitted_event_ids.append(event_id)
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"), \
+         patch.object(integrations, "run_ai_auto_reply_dry_run", fake_run):
+        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    assert submitted_event_ids == []
+    db = _db()
+    try:
+        state = db.query(ConversationAutopilotState).one()
+        assert state.mode == "manual"
+        assert state.account_open_id == "test_account_001"
+        assert state.customer_open_id == "manual_customer_001"
+        assert state.conversation_short_id == "conv_test_001"
+        assert state.manual_takeover_until is not None
+    finally:
+        db.close()
+
+
+def test_webhook_duplicate_im_send_msg_does_not_repeat_manual_takeover():
+    """重复 im_send_msg 只入库 duplicate，不重复执行人工接管后置处理。"""
+    client = _api_client()
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text="manual reply",
+    )
+    payload["to_user_id"] = "dup_manual_customer_001"
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"):
+        resp1 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+        db = _db()
+        try:
+            state = db.query(ConversationAutopilotState).one()
+            first_human_at = state.last_human_message_at
+        finally:
+            db.close()
+        resp2 = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    assert resp2.json()["is_duplicate"] is True
+    db = _db()
+    try:
+        state = db.query(ConversationAutopilotState).one()
+        assert state.last_human_message_at == first_human_at
+    finally:
+        db.close()
+
+
+def test_webhook_im_send_msg_post_process_error_does_not_affect_response():
+    """im_send_msg 后置识别异常只 warning，不影响 webhook 响应和事件入库。"""
+    client = _api_client()
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text="manual reply",
+    )
+    payload["to_user_id"] = "error_customer_001"
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"), \
+         patch(
+             "app.integrations.douyin_webhook.is_ai_auto_sent_message_event",
+             side_effect=RuntimeError("matcher failed"),
+         ):
+        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_duplicate"] is False
+    db = _db()
+    try:
+        event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == data["event_id"]).one()
+        assert event.event == "im_send_msg"
+        assert db.query(ConversationAutopilotState).count() == 0
+    finally:
+        db.close()

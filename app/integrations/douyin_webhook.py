@@ -24,7 +24,9 @@ from app.config import (
     DY_SECRET_KEY,
 )
 from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
+from app.services.ai_auto_sent_message_matcher import is_ai_auto_sent_message_event
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
+from app.services.conversation_autopilot_state_service import mark_manual_takeover
 
 logger = logging.getLogger("douyin_webhook")
 
@@ -564,6 +566,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         event_key=event_key,
         lead_id=lead_id,
     )
+    _post_process_im_send_msg(db, event)
 
     logger.info(
         "webhook 处理完成: event_id=%d, event=%s, is_duplicate=false, lead_action=%s, lead_id=%s",
@@ -580,3 +583,56 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         "is_duplicate": False,
         "lead_action": lead_action,
     }
+
+
+def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
+    """im_send_msg 入库后的轻量后置处理，异常不影响 webhook 主链路。"""
+    if event.event != "im_send_msg" or event.is_duplicate == 1:
+        return
+    try:
+        if is_ai_auto_sent_message_event(db, event=event):
+            logger.info(
+                "webhook im_send_msg matched ai_auto send: event_id=%s, conversation=%s",
+                event.id,
+                event.conversation_short_id,
+            )
+            return
+        account_open_id, customer_open_id = _im_send_msg_participants(event)
+        if not account_open_id or not event.conversation_short_id:
+            logger.warning(
+                "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=missing_context",
+                event.id,
+            )
+            return
+        merchant_id = _resolve_merchant_id_by_account(db, account_open_id) or "unknown_merchant"
+        mark_manual_takeover(
+            db,
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=event.conversation_short_id,
+            customer_open_id=customer_open_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "webhook im_send_msg post_process_failed: event_id=%s, error_type=%s",
+            event.id,
+            type(exc).__name__,
+        )
+
+
+def _im_send_msg_participants(event: DouyinWebhookEvent) -> tuple[str | None, str | None]:
+    """按现有工作台方向解析 im_send_msg：企业号 -> 客户。"""
+    return _optional_str(event.from_user_id), _optional_str(event.to_user_id)
+
+
+def _resolve_merchant_id_by_account(db: Session, account_open_id: str) -> str | None:
+    account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(
+            DouyinAuthorizedAccount.open_id == account_open_id,
+            DouyinAuthorizedAccount.bind_status == 1,
+        )
+        .order_by(DouyinAuthorizedAccount.id.desc())
+        .first()
+    )
+    return _optional_str(account.merchant_id) if account is not None else None

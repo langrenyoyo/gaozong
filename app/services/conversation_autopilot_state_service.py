@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.models import ConversationAutopilotState
+
+
+_DEFAULT_UNTIL = object()
 
 
 def get_conversation_autopilot_state(
@@ -57,8 +60,9 @@ def mark_manual_takeover(
     account_open_id: str,
     conversation_short_id: str,
     customer_open_id: str | None = None,
-    until: datetime | None = None,
+    until: datetime | None | object = _DEFAULT_UNTIL,
     now: datetime | None = None,
+    takeover_minutes: int = 30,
 ) -> ConversationAutopilotState:
     """标记会话进入人工接管，供后续人工发送链路接入。"""
     current_time = now or datetime.now()
@@ -79,7 +83,10 @@ def mark_manual_takeover(
 
     state.customer_open_id = customer_open_id or state.customer_open_id
     state.mode = "manual"
-    state.manual_takeover_until = until
+    if until is _DEFAULT_UNTIL:
+        state.manual_takeover_until = current_time + timedelta(minutes=takeover_minutes)
+    else:
+        state.manual_takeover_until = until
     state.last_human_message_at = current_time
     state.updated_at = current_time
     db.commit()
