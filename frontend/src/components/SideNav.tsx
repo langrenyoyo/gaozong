@@ -9,6 +9,7 @@ import {
   LogOutIcon,
   MessageCircleMoreIcon,
   MessageSquareIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   TagsIcon,
   UserCogIcon,
@@ -30,6 +31,7 @@ interface SideNavProps {
 const navItems: Array<NavItem & { expandedLabel: string }> = [
   { id: "douyin-ai-cs", label: "客服", expandedLabel: "抖音AI小高客服", path: "/douyin-ai-cs" },
   { id: "douyin-ai-cs-reply-records", label: "记录", expandedLabel: "AI回复记录", path: "/douyin-ai-cs/reply-records" },
+  { id: "douyin-ai-cs-auto-reply-settings", label: "配置", expandedLabel: "AI自动回复配置", path: "/douyin-ai-cs/auto-reply-settings" },
   { id: "douyin-ai-cs-test", label: "测试", expandedLabel: "抖音AI客服测试", path: "/douyin-ai-cs-test" },
   { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
   { id: "ai-agents", label: "智能体", expandedLabel: "AI小高智能体", path: "/ai-agents" },
@@ -49,6 +51,7 @@ const superNavItems: Array<NavItem & { expandedLabel: string }> = [
 const navIcons: Record<string, React.ReactNode> = {
   "douyin-ai-cs": <MessageCircleMoreIcon size={18} />,
   "douyin-ai-cs-reply-records": <MessageSquareIcon size={18} />,
+  "douyin-ai-cs-auto-reply-settings": <SettingsIcon size={18} />,
   "douyin-ai-cs-test": <WrenchIcon size={18} />,
   leads: <FilterIcon size={18} />,
   "ai-agents": <BotIcon size={18} />,

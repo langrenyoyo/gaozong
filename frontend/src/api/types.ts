@@ -670,3 +670,66 @@ export interface ComputeTransactionQuery {
   page?: number;
   page_size?: number;
 }
+
+// ========== Douyin auto reply settings ==========
+
+export interface DouyinAutoReplySettingItem {
+  account_open_id: string;
+  account_name?: string | null;
+  nickname?: string | null;
+  bind_status?: number | string | null;
+  bound_agent_id?: string | null;
+  bound_agent_name?: string | null;
+  bound_agent_status?: string | null;
+  enabled: boolean;
+  dry_run_enabled: boolean;
+  send_enabled: boolean;
+  min_confidence: number;
+  require_rag: boolean;
+  require_rag_sources: boolean;
+  allowed_intents: string[];
+  blocked_risk_flags: string[];
+  max_replies_per_conversation_per_hour: number;
+  max_replies_per_account_per_hour: number;
+  updated_at?: string | null;
+}
+
+export interface DouyinAutoReplySettingUpdateRequest {
+  enabled: boolean;
+  dry_run_enabled: boolean;
+  send_enabled: boolean;
+  min_confidence: number;
+  require_rag: boolean;
+  require_rag_sources: boolean;
+  allowed_intents: string[];
+  blocked_risk_flags: string[];
+  max_replies_per_conversation_per_hour: number;
+  max_replies_per_account_per_hour: number;
+}
+
+export interface DouyinAutoReplySettingsListResponse {
+  success?: boolean;
+  data: {
+    items: DouyinAutoReplySettingItem[];
+    total?: number;
+  };
+  message?: string;
+}
+
+export interface DouyinAutoReplySettingResponse {
+  success?: boolean;
+  data: DouyinAutoReplySettingItem;
+  message?: string;
+}
+
+export interface AllowedIntentOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface BlockedRiskFlagOption {
+  value: string;
+  label: string;
+  description?: string;
+}

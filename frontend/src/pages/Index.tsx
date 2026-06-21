@@ -25,6 +25,7 @@ import WechatAgent from "./WechatAgent";
 import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
 import AiReplyDecisionLogsPage from "./AiReplyDecisionLogsPage";
+import DouyinAutoReplySettingsPage from "./DouyinAutoReplySettingsPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
@@ -739,6 +740,8 @@ export default function Index({
           <DouyinAiCsWorkbenchPage />
         ) : activeNav === "douyin-ai-cs-reply-records" ? (
           <AiReplyDecisionLogsPage />
+        ) : activeNav === "douyin-ai-cs-auto-reply-settings" ? (
+          <DouyinAutoReplySettingsPage />
         ) : activeNav === "leads" ? (
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (
