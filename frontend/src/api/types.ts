@@ -733,3 +733,85 @@ export interface BlockedRiskFlagOption {
   label: string;
   description?: string;
 }
+
+// ========== Douyin auto reply runs ==========
+
+export type AiAutoReplyRunStatus =
+  | "skipped"
+  | "blocked"
+  | "decided"
+  | "failed"
+  | "sent"
+  | "send_failed"
+  | "send_skipped";
+
+export interface AiAutoReplyRunSendRecord {
+  id: number;
+  send_status?: string | null;
+  send_source?: string | null;
+  auto_send?: boolean | number | null;
+  manual_confirmed?: boolean | number | null;
+  upstream_msg_id?: string | null;
+  error_message?: string | null;
+  sent_at?: string | null;
+}
+
+export interface AiAutoReplyRunListItem {
+  id: number;
+  account_open_id?: string | null;
+  conversation_short_id?: string | null;
+  customer_open_id?: string | null;
+  trigger_event_id?: number | null;
+  trigger_event_key?: string | null;
+  trigger_server_message_id?: string | null;
+  latest_message_summary?: string | null;
+  agent_id?: string | number | null;
+  mode?: string | null;
+  status: AiAutoReplyRunStatus | string;
+  skip_reason?: string | null;
+  block_reason?: string | null;
+  decision_log_id?: number | null;
+  would_send_content_summary?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AiAutoReplyRunDetail extends AiAutoReplyRunListItem {
+  latest_message?: string | null;
+  would_send_content?: string | null;
+  gate_results?: Record<string, unknown> | unknown[] | null;
+  send_record?: AiAutoReplyRunSendRecord | null;
+}
+
+export interface AiAutoReplyRunListData {
+  page: number;
+  page_size: number;
+  total: number;
+  items: AiAutoReplyRunListItem[];
+}
+
+export interface AiAutoReplyRunQueryParams {
+  page?: number;
+  page_size?: number;
+  account_open_id?: string;
+  conversation_short_id?: string;
+  customer_open_id?: string;
+  agent_id?: string | number;
+  status?: string;
+  created_from?: string;
+  created_to?: string;
+  keyword?: string;
+}
+
+export interface AiAutoReplyRunListResponse {
+  success?: boolean;
+  data: AiAutoReplyRunListData;
+  message?: string;
+}
+
+export interface AiAutoReplyRunDetailResponse {
+  success?: boolean;
+  data: AiAutoReplyRunDetail;
+  message?: string;
+}

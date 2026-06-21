@@ -26,6 +26,7 @@ import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
 import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
 import AiReplyDecisionLogsPage from "./AiReplyDecisionLogsPage";
 import DouyinAutoReplySettingsPage from "./DouyinAutoReplySettingsPage";
+import DouyinAutoReplyRunsPage from "./DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "./SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
@@ -742,6 +743,8 @@ export default function Index({
           <AiReplyDecisionLogsPage />
         ) : activeNav === "douyin-ai-cs-auto-reply-settings" ? (
           <DouyinAutoReplySettingsPage />
+        ) : activeNav === "douyin-ai-cs-auto-reply-runs" ? (
+          <DouyinAutoReplyRunsPage />
         ) : activeNav === "leads" ? (
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (
