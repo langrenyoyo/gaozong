@@ -36,6 +36,7 @@ import {
   getAiAutoReplyRunDetail,
   getAiAutoReplyRuns,
   getDouyinAutoReplySetting,
+  getDouyinConversationAutopilot,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationProfileFrom9000,
@@ -52,6 +53,7 @@ import {
   type DouyinConversationProfile,
   type DouyinMessageItem,
   type DouyinAutoReplyMode,
+  type DouyinConversationAutopilotState,
   type AiAutoReplyRunDetail,
   type AiAutoReplyRunListItem,
   type UploadDouyinImageResponse,
@@ -65,6 +67,7 @@ const UPLOAD_IMAGE_VALIDATION_MESSAGE =
 const AUTH_POLLING_INTERVAL_MS = 2000;
 const AUTH_POLLING_TIMEOUT_MS = 120000;
 const AUTH_SUCCESS_AUTO_CLOSE_MS = 1500;
+const AUTO_REPLY_RUN_POLLING_INTERVAL_MS = 4000;
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
 type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
@@ -283,6 +286,15 @@ function chatModeSubtitle(mode: ChatAssistMode) {
   return mode === "manual_takeover"
     ? "人工接管后可手动发送消息"
     : "AI 托管中，如需人工发送请先切换到人工接管";
+}
+
+function conversationAutopilotText(state: DouyinConversationAutopilotState | null) {
+  if (!state) return "";
+  if (state.mode === "manual") {
+    const until = state.manual_takeover_until ? formatTime(state.manual_takeover_until) : "未设置截止时间";
+    return `当前会话人工接管中，AI 新消息会被阻断至 ${until}。`;
+  }
+  return "当前会话未处于人工接管。";
 }
 
 function chatModeFromAccountMode(mode?: DouyinAutoReplyMode | null): ChatAssistMode {
@@ -657,6 +669,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [savingAccountMode, setSavingAccountMode] = useState(false);
   const [accountModeError, setAccountModeError] = useState<string | null>(null);
   const [accountModeMessage, setAccountModeMessage] = useState<string | null>(null);
+  const [conversationAutopilotState, setConversationAutopilotState] =
+    useState<DouyinConversationAutopilotState | null>(null);
+  const [loadingConversationAutopilot, setLoadingConversationAutopilot] = useState(false);
+  const [conversationAutopilotError, setConversationAutopilotError] = useState<string | null>(null);
   const [agentConfigAccount, setAgentConfigAccount] = useState<DouyinAccountItem | null>(null);
   const [agentOptions, setAgentOptions] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentIdForConfig, setSelectedAgentIdForConfig] = useState<string>("");
@@ -686,6 +702,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const autoReplyRunRequestSeqRef = useRef(0);
   const autoReplyRunCacheRef = useRef<Record<string, AutoReplyRunViewItem | null>>({});
   const autoReplyRunActiveKeyRef = useRef<string | null>(null);
+  const conversationAutopilotRequestSeqRef = useRef(0);
   const accountModeRequestSeqRef = useRef(0);
   const conversationAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
@@ -693,6 +710,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const messageInFlightRef = useRef<Record<string, Promise<DouyinMessageItem[]>>>({});
   const profileInFlightRef = useRef<Record<string, Promise<DouyinConversationProfile | null>>>({});
   const pollInFlightRef = useRef(false);
+  const autoReplyRunPollInFlightRef = useRef(false);
   const authPollingStartedAtRef = useRef<number>(0);
   const authAutoCloseTimerRef = useRef<number | null>(null);
 
@@ -1099,6 +1117,53 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
+  const loadConversationAutopilotState = useCallback(async (
+    conversation: DouyinConversationItem | null,
+    account: DouyinAccountItem | null,
+  ) => {
+    const requestSeq = conversationAutopilotRequestSeqRef.current + 1;
+    conversationAutopilotRequestSeqRef.current = requestSeq;
+    setConversationAutopilotError(null);
+    if (!conversation || !account?.account_open_id || !conversation.conversation_short_id) {
+      setConversationAutopilotState(null);
+      setLoadingConversationAutopilot(false);
+      return;
+    }
+    setLoadingConversationAutopilot(true);
+    try {
+      const state = await getDouyinConversationAutopilot(
+        account.account_open_id,
+        conversation.conversation_short_id,
+      );
+      if (
+        conversationAutopilotRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== account.account_open_id ||
+        selectedConversationIdRef.current !== conversation.id
+      ) {
+        return;
+      }
+      setConversationAutopilotState(state);
+    } catch (err) {
+      if (
+        conversationAutopilotRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== account.account_open_id ||
+        selectedConversationIdRef.current !== conversation.id
+      ) {
+        return;
+      }
+      setConversationAutopilotState(null);
+      setConversationAutopilotError(err instanceof Error ? err.message : "会话托管状态加载失败");
+    } finally {
+      if (
+        conversationAutopilotRequestSeqRef.current === requestSeq &&
+        selectedAccountOpenIdRef.current === account.account_open_id &&
+        selectedConversationIdRef.current === conversation.id
+      ) {
+        setLoadingConversationAutopilot(false);
+      }
+    }
+  }, []);
+
   const markConversationReadLocally = useCallback((conversation: DouyinConversationItem) => {
     const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
     if (!accountOpenId) return;
@@ -1196,8 +1261,12 @@ export default function DouyinAiCsWorkbenchPage() {
         Boolean(nextAutoReplyKey) && autoReplyRunActiveKeyRef.current === nextAutoReplyKey;
       autoReplyRunActiveKeyRef.current = nextAutoReplyKey;
       void loadLatestAutoReplyRun(target || null, selectedAccount, { background: backgroundAutoReplyRefresh });
+      void loadConversationAutopilotState(target || null, selectedAccount);
     } else {
       autoReplyRunActiveKeyRef.current = null;
+      setConversationAutopilotState(null);
+      setConversationAutopilotError(null);
+      setLoadingConversationAutopilot(false);
       if (!conversations.length) {
         setMessages([]);
         setProfile(null);
@@ -1208,7 +1277,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setProfileError(null);
       setLoadingProfile(false);
     }
-  }, [conversations, loadConversationDetail, loadLatestAutoReplyRun, markConversationReadLocally, selectedAccount, selectedConversationId]);
+  }, [conversations, loadConversationAutopilotState, loadConversationDetail, loadLatestAutoReplyRun, markConversationReadLocally, selectedAccount, selectedConversationId]);
 
   useEffect(() => {
     if (conversationJumpParams && !conversationJumpHandled) return;
@@ -1258,6 +1327,26 @@ export default function DouyinAiCsWorkbenchPage() {
     }, 8000);
     return () => window.clearInterval(timer);
   }, [loadConversationDetail, loadConversations, loadLatestAutoReplyRun, loadingConversations, loadingMessages, selectedAccount]);
+
+  useEffect(() => {
+    if (!selectedAccount || !selectedConversation?.conversation_short_id) return undefined;
+
+    const poll = async () => {
+      if (document.visibilityState !== "visible") return;
+      if (autoReplyRunPollInFlightRef.current) return;
+      autoReplyRunPollInFlightRef.current = true;
+      try {
+        await loadLatestAutoReplyRun(selectedConversation, selectedAccount, { background: true });
+      } finally {
+        autoReplyRunPollInFlightRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, AUTO_REPLY_RUN_POLLING_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [loadLatestAutoReplyRun, selectedAccount, selectedConversation]);
 
   const refreshAuthStatus = useCallback(async () => {
     if (
@@ -1449,11 +1538,13 @@ export default function DouyinAiCsWorkbenchPage() {
         setSendError(null);
         if (selectedConversation?.conversation_short_id) {
           try {
-            await resumeDouyinConversationAutopilot(
+            const resumedState = await resumeDouyinConversationAutopilot(
               accountOpenId,
               selectedConversation.conversation_short_id,
               selectedConversation.customer_open_id || selectedConversation.open_id || null,
             );
+            setConversationAutopilotState(resumedState);
+            setConversationAutopilotError(null);
             if (
               selectedAccountOpenIdRef.current === accountOpenId &&
               selectedConversationIdRef.current === selectedConversation.id
@@ -2012,6 +2103,18 @@ export default function DouyinAiCsWorkbenchPage() {
               ) : null}
               {accountModeMessage ? (
                 <div className="mt-1 text-[11px] leading-5 text-emerald-700">{accountModeMessage}</div>
+              ) : null}
+              {selectedConversation &&
+              (loadingConversationAutopilot || conversationAutopilotError || conversationAutopilotState) ? (
+                <div
+                  className={`mt-1 text-[11px] leading-5 ${
+                    conversationAutopilotState?.mode === "manual" ? "text-amber-700" : "text-slate-500"
+                  }`}
+                >
+                  {loadingConversationAutopilot
+                    ? "正在读取当前会话托管状态..."
+                    : conversationAutopilotError || conversationAutopilotText(conversationAutopilotState)}
+                </div>
               ) : null}
             </div>
             <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">

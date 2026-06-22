@@ -846,6 +846,37 @@ def test_manual_takeover_blocks_before_calling_9100():
     assert fake_client.calls == []
 
 
+def test_resumed_ai_autopilot_allows_next_customer_message_to_pass_manual_gate():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+    from app.services.conversation_autopilot_state_service import resume_ai_autopilot
+
+    event_id = _insert_event(event_key="event-resumed-autopilot")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings()
+    _insert_manual_takeover()
+    db = TestSession()
+    try:
+        resume_ai_autopilot(
+            db,
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-1",
+            customer_open_id="customer-open-1",
+        )
+    finally:
+        db.close()
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    run = _latest_run()
+    assert run.status == "decided"
+    assert run.block_reason is None
+    assert fake_client.calls
+
+
 def test_frequency_counts_non_skipped_runs_only():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 

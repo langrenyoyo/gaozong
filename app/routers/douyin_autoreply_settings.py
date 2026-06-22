@@ -20,7 +20,10 @@ from app.schemas import (
     DouyinAutoreplySettingsResponse,
     DouyinAutoreplySettingsUpdate,
 )
-from app.services.conversation_autopilot_state_service import resume_ai_autopilot
+from app.services.conversation_autopilot_state_service import (
+    get_conversation_autopilot_state,
+    resume_ai_autopilot,
+)
 from app.services.douyin_autoreply_settings_service import (
     build_account_autoreply_settings_view,
     get_account_autoreply_settings,
@@ -178,6 +181,37 @@ def resume_conversation_autopilot(
             "manual_takeover_until": state.manual_takeover_until,
             "last_human_message_at": state.last_human_message_at,
             "updated_at": state.updated_at,
+        },
+        "message": "success",
+    }
+
+
+@router.get(
+    "/{account_open_id}/conversations/{conversation_short_id}/autopilot",
+    response_model=DouyinConversationAutopilotStateResponse,
+)
+def get_conversation_autopilot(
+    account_open_id: str,
+    conversation_short_id: str,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """查询当前会话托管状态；无状态记录时按 AI 托管展示，不创建数据。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    state = get_conversation_autopilot_state(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+    )
+    return {
+        "success": True,
+        "data": {
+            "mode": state.mode if state is not None else "auto",
+            "manual_takeover_until": state.manual_takeover_until if state is not None else None,
+            "last_human_message_at": state.last_human_message_at if state is not None else None,
+            "updated_at": state.updated_at if state is not None else None,
         },
         "message": "success",
     }

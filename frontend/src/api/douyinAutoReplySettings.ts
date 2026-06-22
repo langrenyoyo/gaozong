@@ -78,6 +78,18 @@ export async function updateDouyinAutoReplyMode(
   return response.data;
 }
 
+export async function getDouyinConversationAutopilot(
+  accountOpenId: string,
+  conversationShortId: string | number,
+): Promise<DouyinConversationAutopilotState> {
+  const response = (await apiClient.get(
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversations/${encodeURIComponent(
+      String(conversationShortId),
+    )}/autopilot`,
+  )) as unknown as DouyinConversationAutopilotStateResponse;
+  return response.data;
+}
+
 export async function resumeDouyinConversationAutopilot(
   accountOpenId: string,
   conversationShortId: string | number,

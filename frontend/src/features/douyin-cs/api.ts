@@ -26,6 +26,7 @@ export {
 } from "../../api/aiReplyDecisionLogs";
 
 export {
+  getDouyinConversationAutopilot,
   getDouyinAutoReplySetting,
   getDouyinAutoReplySettings,
   resumeDouyinConversationAutopilot,

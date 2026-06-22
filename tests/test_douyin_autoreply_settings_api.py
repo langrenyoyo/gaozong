@@ -329,6 +329,51 @@ def test_resume_conversation_autopilot_clears_manual_takeover_and_checks_account
     assert cross.status_code == 403
 
 
+def test_get_conversation_autopilot_state_returns_current_state_without_creating_missing_row():
+    _insert_account(merchant_id="merchant-a", account_open_id="account-a")
+    _insert_account(merchant_id="merchant-b", account_open_id="account-b")
+    now = datetime.now()
+    db = TestSession()
+    try:
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-a",
+                account_open_id="account-a",
+                conversation_short_id="conv-1",
+                customer_open_id="customer-1",
+                mode="manual",
+                manual_takeover_until=now + timedelta(minutes=30),
+                last_human_message_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().get("/douyin-autoreply/settings/account-a/conversations/conv-1/autopilot")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["mode"] == "manual"
+    assert data["manual_takeover_until"] is not None
+    assert data["last_human_message_at"] is not None
+
+    missing = _client().get("/douyin-autoreply/settings/account-a/conversations/conv-new/autopilot")
+    assert missing.status_code == 200
+    assert missing.json()["data"]["mode"] == "auto"
+    assert missing.json()["data"]["manual_takeover_until"] is None
+
+    db = TestSession()
+    try:
+        assert db.query(ConversationAutopilotState).count() == 1
+    finally:
+        db.close()
+
+    cross = _client().get("/douyin-autoreply/settings/account-b/conversations/conv-1/autopilot")
+    assert cross.status_code == 403
+
+
 def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
     _insert_account(account_open_id="account-a")
 

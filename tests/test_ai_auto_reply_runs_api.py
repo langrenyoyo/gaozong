@@ -276,6 +276,50 @@ def test_list_runs_includes_decision_summary_for_workbench_visibility():
     assert item["decision_version"] == "direct_llm_structured_v1"
 
 
+def test_list_runs_returns_latest_run_for_current_workbench_conversation():
+    older_time = datetime(2026, 6, 22, 10, 0, 0)
+    newer_time = datetime(2026, 6, 22, 10, 1, 0)
+    _insert_run(
+        trigger_event_key="older-run",
+        conversation_short_id="conv-1",
+        status="blocked",
+        block_reason="manual_takeover",
+        decision_log_id=None,
+        would_send_content=None,
+        created_at=older_time,
+    )
+    _insert_run(
+        trigger_event_key="newer-run",
+        conversation_short_id="conv-1",
+        status="send_skipped",
+        block_reason="auto_send_disabled_by_decision",
+        created_at=newer_time,
+    )
+    _insert_run(
+        trigger_event_key="other-conversation",
+        conversation_short_id="conv-2",
+        created_at=datetime(2026, 6, 22, 10, 2, 0),
+    )
+
+    response = _client().get(
+        "/ai-auto-reply-runs",
+        params={
+            "account_open_id": "account-1",
+            "conversation_short_id": "conv-1",
+            "page_size": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 2
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["trigger_event_key"] == "newer-run"
+    assert item["status"] == "send_skipped"
+    assert item["block_reason"] == "auto_send_disabled_by_decision"
+
+
 def test_list_runs_does_not_expose_other_merchant_decision_log():
     _insert_decision_log(log_id=88, merchant_id="merchant-b")
     _insert_run(

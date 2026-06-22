@@ -43,6 +43,8 @@ export type {
   DouyinAutoReplySettingResponse,
   DouyinAutoReplySettingUpdateRequest,
   DouyinAutoReplySettingsListResponse,
+  DouyinConversationAutopilotState,
+  DouyinConversationAutopilotStateResponse,
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
   WebhookEvent,
