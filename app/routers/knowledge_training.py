@@ -1,14 +1,20 @@
-"""小高知识库训练可信代理接口。"""
+"""小高知识库内部训练代理接口。"""
 
 from __future__ import annotations
 
+import ipaddress
+import os
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required, require_permission
+from app.config import (
+    KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID,
+    KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID,
+    KNOWLEDGE_TRAINING_IP_WHITELIST,
+    KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS,
+)
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -18,7 +24,7 @@ router = APIRouter(prefix="/knowledge-training", tags=["小高知识库训练"])
 
 
 class KnowledgeTrainingAskRequest(BaseModel):
-    """浏览器允许提交的训练问答字段，商户身份一律来自 RequestContext。"""
+    """内部训练问答请求，训练上下文由服务端固定。"""
 
     question: str = Field(..., min_length=1, max_length=1000)
     prompt: str | None = Field(default=None, max_length=4000)
@@ -27,7 +33,7 @@ class KnowledgeTrainingAskRequest(BaseModel):
 
 
 class KnowledgeTrainingFeedbackRequest(BaseModel):
-    """训练反馈，wrong 仅进入待审核素材池。"""
+    """训练反馈请求，wrong 仅进入待审核素材池。"""
 
     rating: Literal["useful", "normal", "wrong"]
     comment: str | None = Field(default=None, max_length=2000)
@@ -50,14 +56,76 @@ FEEDBACK_PUBLIC_FIELDS = {
 }
 
 
-def _require_context(context: RequestContext) -> RequestContext:
-    require_permission("auto_wechat:knowledge_training")(context)
-    if not context.merchant_id:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
-        )
-    return context
+def _knowledge_training_whitelist_items() -> list[str]:
+    raw = os.getenv("KNOWLEDGE_TRAINING_IP_WHITELIST", KNOWLEDGE_TRAINING_IP_WHITELIST)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _trust_proxy_headers() -> bool:
+    raw = os.getenv("KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS")
+    if raw is None:
+        return KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS
+    return raw.strip().lower() == "true"
+
+
+def _client_ip_from_request(request: Request) -> str | None:
+    if _trust_proxy_headers():
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        if forwarded_for:
+            return forwarded_for.split(",", 1)[0].strip()
+        real_ip = request.headers.get("x-real-ip", "")
+        if real_ip:
+            return real_ip.strip()
+    if request.client:
+        return request.client.host
+    return None
+
+
+def _is_ip_allowed(client_ip: str | None) -> bool:
+    if not client_ip:
+        return False
+
+    for item in _knowledge_training_whitelist_items():
+        if client_ip == item:
+            return True
+        if item == "localhost" and client_ip in {"127.0.0.1", "::1"}:
+            return True
+
+        try:
+            parsed_client_ip = ipaddress.ip_address(client_ip)
+        except ValueError:
+            continue
+
+        try:
+            if "/" in item and parsed_client_ip in ipaddress.ip_network(item, strict=False):
+                return True
+            if "/" not in item and parsed_client_ip == ipaddress.ip_address(item):
+                return True
+        except ValueError:
+            continue
+
+    return False
+
+
+def require_knowledge_training_ip_whitelist(request: Request) -> None:
+    client_ip = _client_ip_from_request(request)
+    if _is_ip_allowed(client_ip):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "KNOWLEDGE_TRAINING_IP_FORBIDDEN",
+            "message": "当前来源不允许访问小高知识库训练接口",
+        },
+    )
+
+
+def _training_tenant_id() -> str:
+    return os.getenv("KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID", KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID).strip()
+
+
+def _training_merchant_id() -> str:
+    return os.getenv("KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID", KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID).strip()
 
 
 def _public_payload(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
@@ -78,10 +146,9 @@ def _raise_upstream_error(exc: XgDouyinAiCsClientError) -> None:
 @router.post("/ask")
 def ask(
     request: KnowledgeTrainingAskRequest,
-    context: RequestContext = Depends(get_request_context_required),
+    _: None = Depends(require_knowledge_training_ip_whitelist),
 ) -> dict[str, Any]:
-    """使用当前商户上下文调用小高知识库训练问答。"""
-    context = _require_context(context)
+    """使用统一系统级小高知识库上下文调用训练问答。"""
     payload: dict[str, Any] = {
         "question": request.question,
         "prompt": request.prompt,
@@ -92,7 +159,8 @@ def ask(
 
     try:
         result = get_xg_douyin_ai_cs_client().knowledge_training_ask(
-            context=context,
+            tenant_id=_training_tenant_id(),
+            merchant_id=_training_merchant_id(),
             request=payload,
         )
     except XgDouyinAiCsClientError as exc:
@@ -105,13 +173,13 @@ def ask(
 def feedback(
     training_id: str,
     request: KnowledgeTrainingFeedbackRequest,
-    context: RequestContext = Depends(get_request_context_required),
+    _: None = Depends(require_knowledge_training_ip_whitelist),
 ) -> dict[str, Any]:
-    """提交训练反馈到素材池，不直接污染可检索知识库。"""
-    context = _require_context(context)
+    """提交训练反馈，仍由 9100 校验训练会话归属。"""
     try:
         result = get_xg_douyin_ai_cs_client().knowledge_training_feedback(
-            context=context,
+            tenant_id=_training_tenant_id(),
+            merchant_id=_training_merchant_id(),
             training_id=training_id,
             request={"rating": request.rating, "comment": request.comment},
         )
