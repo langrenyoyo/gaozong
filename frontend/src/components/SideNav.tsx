@@ -1,7 +1,6 @@
 import {
   BotIcon,
   BookOpenIcon,
-  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CoinsIcon,
@@ -126,31 +125,12 @@ export default function SideNav({
                     >
                       <span className="shrink-0">{centerIcons[center.id]}</span>
                       <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? center.title : center.shortLabel}</span>
-                      {expanded && isCenterActive ? <ChevronDownIcon className="ml-auto" size={14} /> : null}
                       {center.id === "douyin-cs" && showSalesBadge ? (
                         <span className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${expanded ? "" : "absolute right-1.5 top-1.5"}`}>
                           6
                         </span>
                       ) : null}
                     </button>
-                    {expanded && isCenterActive ? (
-                      <div className="ml-8 mt-1 flex flex-col gap-1 border-l border-white/10 pl-2">
-                        {center.children.map((item) => {
-                          const isActive = activeNav === item.id;
-                          return (
-                            <button
-                              key={item.id}
-                              onClick={() => onNavChange(item.id)}
-                              className={`h-8 rounded-lg px-2 text-left text-[11px] font-semibold transition-smooth ${
-                                isActive ? "bg-white/12 text-white" : "text-slate-500 hover:bg-white/8 hover:text-slate-200"
-                              }`}
-                            >
-                              <span className="block truncate">{item.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
                   </div>
                 );
               })}

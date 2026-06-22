@@ -17,7 +17,7 @@ export interface Lead {
   content: string | null;
   source_url: string | null;
   source_id: string | null;
-  // 商户隔离 / 会话定位字段：后端 LeadOut 已返回，前端用于对话跟进跳转与会话归并
+  // 商户隔离 / 会话定位字段：后端 LeadOut 已返回，前端用于会话归并与私信摘要展示
   merchant_id?: string | null;
   account_open_id?: string | null;
   conversation_short_id?: string | null;

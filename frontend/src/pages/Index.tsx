@@ -657,9 +657,9 @@ export default function Index({
   const selectedMessages = selectedContact ? conversations.messages[selectedContact.id] || [] : [];
   const navColumn = isNavExpanded ? "220px" : "88px";
   const isAdminUser = user.role !== "merchant";
-  const isLeadConversationNav = activeNav === "chat" || activeNav === "lead-conversations";
+  const isLeadConversationNav = activeNav === "chat";
   const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
-  const isLeadsModuleNav = activeNav === "leads" || activeNav === "lead-board" || activeNav === "lead-detail";
+  const isLeadsModuleNav = activeNav === "leads";
   const isAgentModuleNav =
     activeNav === "ai-agents" ||
     activeNav === "agent-create" ||

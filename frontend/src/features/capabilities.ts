@@ -8,20 +8,17 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     path: "/douyin-cs/workbench",
     defaultNavId: "douyin-ai-cs",
     children: [
-      { id: "douyin-ai-cs", label: "客服工作台", path: "/douyin-cs/workbench" },
+      { id: "douyin-ai-cs", label: "抖音AI小高客服", path: "/douyin-cs/workbench" },
     ],
   },
   {
     id: "leads-center",
     title: "AI小高线索",
     shortLabel: "线索",
-    path: "/leads/list",
+    path: "/leads",
     defaultNavId: "leads",
     children: [
-      { id: "leads", label: "线索列表", path: "/leads/list" },
-      { id: "lead-board", label: "线索看板", path: "/leads/board" },
-      { id: "lead-detail", label: "线索详情", path: "/leads/detail" },
-      { id: "lead-conversations", label: "对话跟进", path: "/leads/conversations" },
+      { id: "leads", label: "AI小高线索", path: "/leads" },
     ],
   },
   {
