@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from app.services.douyin_workbench_conversation_service import (
     list_account_conversations,
     list_conversation_messages,
 )
+from packages.clients.leads_client import LeadsClient, LeadsClientError
 
 logger = logging.getLogger("integrations_router")
 
@@ -28,6 +30,93 @@ router = APIRouter(prefix="/integrations/douyin", tags=["外部系统集成"])
 
 # 兼容旧路径 /webhook/douyin（GMP 已配置的回调地址，保持不变）
 legacy_webhook_router = APIRouter(prefix="/webhook", tags=["抖音Webhook兼容路径"])
+
+_WEBHOOK_RESULT_FIELDS = {
+    "event_id",
+    "lead_id",
+    "is_new_lead",
+    "is_duplicate",
+    "lead_action",
+}
+
+
+def _normalize_webhook_result(result: dict) -> dict:
+    """归一化 webhook 处理结果，保证可映射到 WebhookResponse。"""
+    missing = [field for field in _WEBHOOK_RESULT_FIELDS if field not in result]
+    if missing:
+        raise LeadsClientError("leads_invalid_response", f"internal webhook 响应缺少字段: {','.join(sorted(missing))}")
+    return {
+        "code": int(result.get("code", 0) or 0),
+        "msg": str(result.get("msg") or "success"),
+        "event_id": result.get("event_id"),
+        "lead_id": result.get("lead_id"),
+        "is_new_lead": bool(result.get("is_new_lead")),
+        "is_duplicate": bool(result.get("is_duplicate")),
+        "lead_action": str(result.get("lead_action") or "not_lead_event"),
+    }
+
+
+def _process_webhook_locally(db: Session, payload: dict) -> dict:
+    """使用 9000 本地旧逻辑处理 webhook。"""
+    result = process_webhook_event(db, payload)
+    db.commit()
+    return _normalize_webhook_result(result)
+
+
+def _process_webhook_with_internal(
+    db: Session,
+    payload: dict,
+    *,
+    source_path: str,
+) -> dict:
+    """按配置调用 9202 internal webhook，失败时可回退本地旧逻辑。"""
+    try:
+        result = LeadsClient.from_env().create_internal_webhook_event(
+            payload=payload,
+            source_path=source_path,
+            signature_verified=True,
+            received_at=datetime.now().isoformat(),
+            gateway_app_env=config.APP_ENV,
+        )
+        normalized = _normalize_webhook_result(result)
+        logger.info(
+            "leads_internal_webhook_forward stage=leads_internal_webhook_forward "
+            "source_path=%s event=%s event_id=%s lead_id=%s lead_action=%s is_duplicate=%s",
+            source_path,
+            payload.get("event"),
+            normalized.get("event_id"),
+            normalized.get("lead_id"),
+            normalized.get("lead_action"),
+            normalized.get("is_duplicate"),
+        )
+        return normalized
+    except LeadsClientError as exc:
+        if config.LEADS_WEBHOOK_FALLBACK_LOCAL:
+            logger.warning(
+                "leads_internal_webhook_fallback stage=leads_internal_webhook_fallback "
+                "failure_stage=%s source_path=%s event=%s error=%s",
+                exc.code,
+                source_path,
+                payload.get("event"),
+                exc.message,
+            )
+            return _process_webhook_locally(db, payload)
+        logger.error(
+            "leads_internal_webhook_failed stage=leads_internal_webhook_failed "
+            "failure_stage=%s source_path=%s event=%s error=%s",
+            exc.code,
+            source_path,
+            payload.get("event"),
+            exc.message,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "LEADS_INTERNAL_WEBHOOK_UNAVAILABLE",
+                "message": "线索 internal webhook 服务不可用",
+                "failure_stage": exc.code,
+            },
+        ) from exc
 
 
 async def _handle_douyin_webhook(
@@ -96,8 +185,10 @@ async def _handle_douyin_webhook(
     )
 
     # 处理事件（幂等、解析、线索写入）
-    result = process_webhook_event(db, payload)
-    db.commit()
+    if config.LEADS_WEBHOOK_INTERNAL_ENABLED:
+        result = _process_webhook_with_internal(db, payload, source_path=source_path)
+    else:
+        result = _process_webhook_locally(db, payload)
     if (
         background_tasks is not None
         and payload.get("event") == "im_receive_msg"
@@ -107,8 +198,8 @@ async def _handle_douyin_webhook(
         background_tasks.add_task(run_ai_auto_reply_dry_run, result["event_id"])
 
     return WebhookResponse(
-        code=0,
-        msg="success",
+        code=result["code"],
+        msg=result["msg"],
         event_id=result["event_id"],
         lead_id=result["lead_id"],
         is_new_lead=result["is_new_lead"],

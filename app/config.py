@@ -112,6 +112,14 @@ XG_DOUYIN_AI_CS_BASE_URL = os.getenv("XG_DOUYIN_AI_CS_BASE_URL", "http://localho
 XG_DOUYIN_AI_CS_SERVICE_TOKEN = os.getenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "").strip()
 XG_DOUYIN_AI_CS_TIMEOUT_SECONDS = int(os.getenv("XG_DOUYIN_AI_CS_TIMEOUT_SECONDS", "10"))
 
+# ---------- 9000 调用 9202 AI小高线索 internal webhook 配置 ----------
+# 默认关闭，确保正式 webhook 行为与旧链路一致。
+LEADS_WEBHOOK_INTERNAL_ENABLED = os.getenv("LEADS_WEBHOOK_INTERNAL_ENABLED", "false").lower() == "true"
+LEADS_WEBHOOK_FALLBACK_LOCAL = os.getenv("LEADS_WEBHOOK_FALLBACK_LOCAL", "true").lower() == "true"
+LEADS_SERVICE_BASE_URL = os.getenv("LEADS_SERVICE_BASE_URL", "http://127.0.0.1:9202").strip().rstrip("/")
+LEADS_INTERNAL_TOKEN = os.getenv("LEADS_INTERNAL_TOKEN", "").strip()
+LEADS_CLIENT_TIMEOUT_SECONDS = float(os.getenv("LEADS_CLIENT_TIMEOUT_SECONDS", "5") or 5)
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"
