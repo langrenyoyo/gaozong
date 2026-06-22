@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from urllib.parse import quote
@@ -315,15 +315,17 @@ def upload_image(
 @router.post("/webhook-observe", response_model=DouyinLiveCheckObserveResponse)
 async def webhook_observe(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> DouyinLiveCheckObserveResponse:
     _ensure_enabled()
-    return await _handle_live_check_event(request, db, LIVE_CHECK_OBSERVE_PATH)
+    return await _handle_live_check_event(request, db, LIVE_CHECK_OBSERVE_PATH, background_tasks)
 
 
 @router.post("/callback", response_model=DouyinLiveCheckObserveResponse)
 async def live_check_callback(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> DouyinLiveCheckObserveResponse:
     """抖音私信事件回调兼容入口。
@@ -334,13 +336,14 @@ async def live_check_callback(
     不调用 record_oauth_callback（OAuth 观察另走 oauth-callback）。
     """
     _ensure_enabled()
-    return await _handle_live_check_event(request, db, LIVE_CHECK_CALLBACK_PATH)
+    return await _handle_live_check_event(request, db, LIVE_CHECK_CALLBACK_PATH, background_tasks)
 
 
 async def _handle_live_check_event(
     request: Request,
     db: Session,
     source_path: str,
+    background_tasks: BackgroundTasks,
 ) -> DouyinLiveCheckObserveResponse:
     """统一处理抖音私信事件回调（webhook-observe 与 callback 复用）。
 
@@ -366,7 +369,7 @@ async def _handle_live_check_event(
 
     data = record_webhook_observe(dict(request.headers), payload)
     forward_result = await _maybe_forward_to_formal(
-        request, body, payload, db, source_path=source_path
+        request, body, payload, db, source_path=source_path, background_tasks=background_tasks
     )
     data.update(forward_result)
     update_webhook_observe_forward_result(forward_result)
@@ -402,6 +405,7 @@ async def _maybe_forward_to_formal(
     db: Session,
     *,
     source_path: str = LIVE_CHECK_OBSERVE_PATH,
+    background_tasks: BackgroundTasks | None = None,
 ) -> dict[str, Any]:
     if not config.DY_LIVE_CHECK_FORWARD_TO_FORMAL:
         logger.info(
@@ -418,6 +422,7 @@ async def _maybe_forward_to_formal(
             authorization=request.headers.get("Authorization"),
             db=db,
             source_path=source_path,
+            background_tasks=background_tasks,
             skip_signature_verification=True,
         )
     except Exception as exc:

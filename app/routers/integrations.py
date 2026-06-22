@@ -15,7 +15,7 @@ from app.integrations.douyin_webhook import (
     verify_signature,
 )
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
-from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run, run_ai_auto_reply_job
+from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
     get_conversation_profile,
@@ -119,6 +119,89 @@ def _process_webhook_with_internal(
         ) from exc
 
 
+def _extract_auto_reply_account_open_id(payload: dict) -> str | None:
+    event = payload.get("event")
+    if event in {"im_receive_msg", "im_enter_direct_msg"}:
+        return payload.get("to_user_id")
+    if event == "im_send_msg":
+        return payload.get("from_user_id")
+    return payload.get("to_user_id")
+
+
+def maybe_schedule_ai_auto_reply(
+    *,
+    background_tasks: BackgroundTasks | None,
+    event_id: int | None,
+    payload: dict,
+    is_duplicate: bool,
+    source_path: str,
+) -> None:
+    """按 webhook 事件结果统一调度自动回复任务。
+
+    调度阶段只判断事件是否适合作为触发源；账号授权、Agent 绑定、
+    自动回复配置和真实发送门禁都交给 run_ai_auto_reply_job 记录 run 与 gate。
+    """
+    event = payload.get("event")
+    account_open_id = _extract_auto_reply_account_open_id(payload)
+    log_extra = {
+        "event_id": event_id,
+        "event": event,
+        "source_path": source_path,
+        "account_open_id": account_open_id,
+    }
+    if background_tasks is None:
+        logger.info(
+            "ai_auto_reply_schedule_skipped reason=background_tasks_missing "
+            "event_id=%s event=%s source_path=%s account_open_id=%s",
+            log_extra["event_id"],
+            log_extra["event"],
+            log_extra["source_path"],
+            log_extra["account_open_id"],
+        )
+        return
+    if event_id is None:
+        logger.info(
+            "ai_auto_reply_schedule_skipped reason=event_id_missing "
+            "event_id=%s event=%s source_path=%s account_open_id=%s",
+            log_extra["event_id"],
+            log_extra["event"],
+            log_extra["source_path"],
+            log_extra["account_open_id"],
+        )
+        return
+    if is_duplicate:
+        logger.info(
+            "ai_auto_reply_schedule_skipped reason=duplicate_event "
+            "event_id=%s event=%s source_path=%s account_open_id=%s",
+            log_extra["event_id"],
+            log_extra["event"],
+            log_extra["source_path"],
+            log_extra["account_open_id"],
+        )
+        return
+    if event not in {"im_receive_msg", "im_enter_direct_msg"}:
+        reason = "send_message_event" if event == "im_send_msg" else "unsupported_event"
+        logger.info(
+            "ai_auto_reply_schedule_skipped reason=%s "
+            "event_id=%s event=%s source_path=%s account_open_id=%s",
+            reason,
+            log_extra["event_id"],
+            log_extra["event"],
+            log_extra["source_path"],
+            log_extra["account_open_id"],
+        )
+        return
+
+    background_tasks.add_task(run_ai_auto_reply_dry_run, event_id)
+    logger.info(
+        "ai_auto_reply_schedule_added event_id=%s event=%s source_path=%s account_open_id=%s",
+        log_extra["event_id"],
+        log_extra["event"],
+        log_extra["source_path"],
+        log_extra["account_open_id"],
+    )
+
+
 async def _handle_douyin_webhook(
     body: bytes,
     x_auth_timestamp: str | None,
@@ -189,13 +272,13 @@ async def _handle_douyin_webhook(
         result = _process_webhook_with_internal(db, payload, source_path=source_path)
     else:
         result = _process_webhook_locally(db, payload)
-    if (
-        background_tasks is not None
-        and payload.get("event") in {"im_receive_msg", "im_enter_direct_msg"}
-        and result.get("is_duplicate") is not True
-        and result.get("event_id") is not None
-    ):
-        background_tasks.add_task(run_ai_auto_reply_job, result["event_id"])
+    maybe_schedule_ai_auto_reply(
+        background_tasks=background_tasks,
+        event_id=result.get("event_id"),
+        payload=payload,
+        is_duplicate=result.get("is_duplicate") is True,
+        source_path=source_path,
+    )
 
     return WebhookResponse(
         code=result["code"],

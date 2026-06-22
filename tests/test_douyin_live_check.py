@@ -29,7 +29,11 @@ from app.auth.dependencies import (
 from app.database import Base, get_db
 from app.main import create_app
 from app.models import (
+    AiAgent,
+    AiAutoReplyRun,
     ConversationAutopilotState,
+    DouyinAccountAgentBinding,
+    DouyinAccountAutoreplySetting,
     DouyinAuthorizedAccount,
     DouyinImageUpload,
     DouyinLead,
@@ -173,6 +177,64 @@ def _insert_live_forward_account_binding() -> None:
                 open_id="live_forward_account_001",
                 merchant_id="merchant-1",
                 bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_live_auto_reply_binding(
+    *,
+    account_open_id: str = "live_forward_account_001",
+    merchant_id: str = "merchant-1",
+    tenant_id: str = "tenant-1",
+    agent_id: str = "agent-live-1",
+) -> None:
+    db = TestSession()
+    try:
+        account = DouyinAuthorizedAccount(
+            main_account_id=1,
+            open_id=account_open_id,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            bind_status=1,
+            account_name="自动回复测试企业号",
+        )
+        db.add(account)
+        db.flush()
+        db.add(
+            AiAgent(
+                agent_id=agent_id,
+                merchant_id=merchant_id,
+                name="自动回复测试智能体",
+                avatar_seed="seed",
+                prompt="只基于知识库回复。",
+                knowledge_base_text="A6 可以介绍配置和到店咨询。",
+                status="active",
+            )
+        )
+        db.add(
+            DouyinAccountAgentBinding(
+                merchant_id=merchant_id,
+                tenant_id=tenant_id,
+                account_open_id=account_open_id,
+                douyin_authorized_account_id=account.id,
+                agent_id=agent_id,
+                is_default=True,
+                status="active",
+            )
+        )
+        db.add(
+            DouyinAccountAutoreplySetting(
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                enabled=True,
+                dry_run_enabled=True,
+                send_enabled=False,
+                min_confidence=0.85,
+                require_rag=True,
+                require_rag_sources=True,
             )
         )
         db.commit()
@@ -2154,6 +2216,136 @@ def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead
         assert lead is not None
         assert lead.source_id == "live_forward_create_001"
         assert lead.customer_contact == "13633624849"
+    finally:
+        db.close()
+
+
+def test_live_check_callback_schedules_ai_auto_reply_run_for_authorized_receive_msg():
+    """callback 转正式管线后，客户文本消息必须创建自动回复 run。"""
+    client = _client()
+    account_open_id = "_000z2UEFJTQ_bLx4ps8Q7KuYJ4aVD-Ue5Mu"
+    _insert_live_auto_reply_binding(account_open_id=account_open_id)
+    payload = _live_receive_payload(
+        from_user_id="_000xD2OGaawMUpsYguVI8g_iQnIuhW3OeLU",
+        server_message_id="live_callback_auto_reply_msg_001",
+        conversation_short_id="live_callback_auto_reply_conv_001",
+        text="测试自动回复 0622",
+    )
+    payload["to_user_id"] = account_open_id
+
+    class _FakeClient:
+        def suggest_reply(self, *, context, conversation_id, request):
+            return {
+                "reply_text": "您好，已收到。",
+                "manual_required": False,
+                "risk_flags": [],
+                "rag_used": True,
+                "rag_sources": [{"title": "基础知识", "content": "已收到"}],
+                "confidence": 0.91,
+                "auto_send": False,
+                "llm_used": True,
+            }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: _FakeClient()):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["forward_to_formal_success"] is True
+    assert data["forward_to_formal_event_id"] is not None
+
+    db = TestSession()
+    try:
+        run = (
+            db.query(AiAutoReplyRun)
+            .filter(AiAutoReplyRun.trigger_event_id == data["forward_to_formal_event_id"])
+            .first()
+        )
+        assert run is not None
+        assert run.account_open_id == account_open_id
+        assert run.latest_message == "测试自动回复 0622"
+        assert run.status in {"decided", "blocked"}
+    finally:
+        db.close()
+
+
+def test_live_check_callback_does_not_schedule_ai_auto_reply_for_im_send_msg():
+    """im_send_msg 只入库，不得成为自动回复触发源。"""
+    client = _client()
+    payload = {
+        "event": "im_send_msg",
+        "from_user_id": "callback_send_account_no_schedule",
+        "to_user_id": "callback_send_customer_no_schedule",
+        "content": json.dumps(
+            {
+                "conversation_short_id": "callback_send_no_schedule_conv",
+                "server_message_id": "callback_send_no_schedule_msg",
+                "message_type": "text",
+                "text": "send event body",
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["forward_to_formal_lead_action"] == "not_lead_event"
+
+    db = TestSession()
+    try:
+        assert db.query(AiAutoReplyRun).count() == 0
+    finally:
+        db.close()
+
+
+def test_live_check_callback_duplicate_event_does_not_create_second_ai_auto_reply_run():
+    """重复 webhook 事件不应重复创建自动回复 run。"""
+    client = _client()
+    account_open_id = "_000z2UEFJTQ_bLx4ps8Q7KuYJ4aVD-Ue5Mu"
+    _insert_live_auto_reply_binding(account_open_id=account_open_id)
+    payload = _live_receive_payload(
+        from_user_id="live_callback_duplicate_customer_001",
+        server_message_id="live_callback_duplicate_msg_001",
+        conversation_short_id="live_callback_duplicate_conv_001",
+        text="测试自动回复重复事件",
+    )
+    payload["to_user_id"] = account_open_id
+
+    class _FakeClient:
+        def suggest_reply(self, *, context, conversation_id, request):
+            return {
+                "reply_text": "您好，已收到。",
+                "manual_required": False,
+                "risk_flags": [],
+                "rag_used": True,
+                "rag_sources": [{"title": "基础知识", "content": "已收到"}],
+                "confidence": 0.91,
+                "auto_send": False,
+                "llm_used": True,
+            }
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: _FakeClient()):
+        first = client.post("/integrations/douyin/live-check/callback", json=payload)
+        second = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["data"]["forward_to_formal_lead_action"] == "created"
+    assert second.json()["data"]["forward_to_formal_lead_action"] == "duplicate_event"
+
+    db = TestSession()
+    try:
+        assert db.query(AiAutoReplyRun).count() == 1
     finally:
         db.close()
 
