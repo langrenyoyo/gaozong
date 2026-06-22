@@ -279,22 +279,23 @@ function messageMetaClass(message: DouyinMessageItem) {
 }
 
 function chatModeTitle(mode: ChatAssistMode) {
-  return mode === "manual_takeover" ? "人工接管中" : "AI自动回复中";
+  return mode === "manual_takeover"
+    ? "人工接管中，AI 不会自动回复。"
+    : "AI 托管中，后续客户新消息将由 AI 处理。";
 }
 
 function chatModeSubtitle(mode: ChatAssistMode) {
   return mode === "manual_takeover"
-    ? "人工接管后可手动发送消息"
-    : "AI 托管中，如需人工发送请先切换到人工接管";
+    ? "人工接管后可手动发送消息。"
+    : "如需人工发送请先切换到人工接管。";
 }
 
 function conversationAutopilotText(state: DouyinConversationAutopilotState | null) {
   if (!state) return "";
   if (state.mode === "manual") {
-    const until = state.manual_takeover_until ? formatTime(state.manual_takeover_until) : "未设置截止时间";
-    return `当前会话人工接管中，AI 新消息会被阻断至 ${until}。`;
+    return "人工接管中，AI 不会自动回复。";
   }
-  return "当前会话未处于人工接管。";
+  return "";
 }
 
 function chatModeFromAccountMode(mode?: DouyinAutoReplyMode | null): ChatAssistMode {
@@ -356,10 +357,30 @@ function ErrorBanner({ message }: { message: string | null }) {
 }
 
 function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
+  const riskFlags = Array.isArray(run?.risk_flags) ? run.risk_flags : [];
+  if (riskFlags.includes("inventory_or_model_specific")) {
+    return "该回复涉及具体车型/库存信息，需人工确认后发送。";
+  }
+  if (riskFlags.includes("inventory_claim")) {
+    return "该回复包含库存/现车承诺，需人工确认。";
+  }
+  if (riskFlags.includes("contact_request")) {
+    return "该回复涉及联系方式或留资引导，需人工确认。";
+  }
+  if (riskFlags.includes("price_or_discount")) {
+    return "该回复涉及价格或优惠信息，需人工确认。";
+  }
+  if (riskFlags.includes("finance_or_loan")) {
+    return "该回复涉及金融/贷款信息，需人工确认。";
+  }
+  if (riskFlags.includes("vehicle_condition_specific")) {
+    return "该回复涉及具体车况信息，需人工确认。";
+  }
+
   const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
   const key = `${run?.status || ""}:${reason}`;
   const exact: Record<string, string> = {
-    "send_skipped:auto_send_disabled_by_decision": "当前自动发送策略未允许，需人工确认后发送。",
+    "send_skipped:auto_send_disabled_by_decision": "当前 Direct LLM 自动发送尚未开放，需人工确认后发送。",
     "send_skipped:manual_takeover_blocked": "当前会话处于人工接管状态，未自动发送。",
     "send_skipped:outbound_after_trigger": "检测到客户消息后已有人工或企业号回复，未自动发送。",
     "blocked:manual_takeover": "当前会话处于人工接管状态，AI 未自动回复。",
@@ -370,6 +391,9 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
     "skipped:empty_message": "本次消息为空或非文本消息，未触发自动回复。",
   };
   if (exact[key]) return exact[key];
+  if (!riskFlags.length && run?.upstream_auto_send === false && run?.final_auto_send === false) {
+    return "当前 Direct LLM 自动发送尚未开放，需人工确认后发送。";
+  }
   if (reason) return reason;
   if (run?.status === "send_skipped") return "发送前安全检查未通过。";
   if (run?.status === "blocked") return "自动回复被安全门禁阻断。";
@@ -377,6 +401,24 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   if (run?.status === "sent") return "AI 自动回复已发送。";
   if (run?.status === "decided") return "AI 已生成回复建议。";
   return "暂无自动回复运行结果。";
+}
+
+function autoReplyRunHasRiskFlags(run: AutoReplyRunViewItem | null) {
+  return Array.isArray(run?.risk_flags) && run.risk_flags.length > 0;
+}
+
+function isSameConversationAutopilotState(
+  prev: DouyinConversationAutopilotState | null,
+  next: DouyinConversationAutopilotState | null,
+) {
+  if (!prev && !next) return true;
+  if (!prev || !next) return false;
+  return (
+    prev.mode === next.mode &&
+    prev.manual_takeover_until === next.manual_takeover_until &&
+    prev.last_human_message_at === next.last_human_message_at &&
+    prev.updated_at === next.updated_at
+  );
 }
 
 function autoReplyRunTitle(run: AutoReplyRunViewItem | null) {
@@ -412,6 +454,12 @@ function isSameAutoReplyRun(prev: AutoReplyRunViewItem | null, next: AutoReplyRu
     prev.decision_log_id === next.decision_log_id &&
     prev.would_send_content_summary === next.would_send_content_summary &&
     prev.would_send_content === next.would_send_content &&
+    prev.manual_required === next.manual_required &&
+    prev.manual_required_reason === next.manual_required_reason &&
+    JSON.stringify(prev.risk_flags || []) === JSON.stringify(next.risk_flags || []) &&
+    prev.upstream_auto_send === next.upstream_auto_send &&
+    prev.final_auto_send === next.final_auto_send &&
+    prev.decision_version === next.decision_version &&
     prev.error_message === next.error_message &&
     prev.updated_at === next.updated_at
   );
@@ -702,6 +750,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const autoReplyRunRequestSeqRef = useRef(0);
   const autoReplyRunCacheRef = useRef<Record<string, AutoReplyRunViewItem | null>>({});
   const autoReplyRunActiveKeyRef = useRef<string | null>(null);
+  const conversationAutopilotCacheRef = useRef<Record<string, DouyinConversationAutopilotState | null>>({});
+  const conversationAutopilotActiveKeyRef = useRef<string | null>(null);
   const conversationAutopilotRequestSeqRef = useRef(0);
   const accountModeRequestSeqRef = useRef(0);
   const conversationAbortRef = useRef<AbortController | null>(null);
@@ -1120,16 +1170,30 @@ export default function DouyinAiCsWorkbenchPage() {
   const loadConversationAutopilotState = useCallback(async (
     conversation: DouyinConversationItem | null,
     account: DouyinAccountItem | null,
+    options: { background?: boolean } = {},
   ) => {
     const requestSeq = conversationAutopilotRequestSeqRef.current + 1;
     conversationAutopilotRequestSeqRef.current = requestSeq;
-    setConversationAutopilotError(null);
+    const background = Boolean(options.background);
     if (!conversation || !account?.account_open_id || !conversation.conversation_short_id) {
       setConversationAutopilotState(null);
       setLoadingConversationAutopilot(false);
       return;
     }
-    setLoadingConversationAutopilot(true);
+    const cacheKey = conversationCacheKey(account.account_open_id, conversation.conversation_short_id);
+    const cachedState = cacheKey ? conversationAutopilotCacheRef.current[cacheKey] : undefined;
+    if (!background) {
+      setConversationAutopilotError(null);
+      if (cachedState !== undefined) {
+        setConversationAutopilotState((current) =>
+          isSameConversationAutopilotState(current, cachedState) ? current : cachedState,
+        );
+        setLoadingConversationAutopilot(false);
+      } else {
+        setConversationAutopilotState(null);
+        setLoadingConversationAutopilot(true);
+      }
+    }
     try {
       const state = await getDouyinConversationAutopilot(
         account.account_open_id,
@@ -1142,7 +1206,13 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setConversationAutopilotState(state);
+      if (cacheKey) {
+        conversationAutopilotCacheRef.current[cacheKey] = state;
+      }
+      setConversationAutopilotState((current) =>
+        isSameConversationAutopilotState(current, state) ? current : state,
+      );
+      setConversationAutopilotError(null);
     } catch (err) {
       if (
         conversationAutopilotRequestSeqRef.current !== requestSeq ||
@@ -1151,7 +1221,6 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setConversationAutopilotState(null);
       setConversationAutopilotError(err instanceof Error ? err.message : "会话托管状态加载失败");
     } finally {
       if (
@@ -1260,10 +1329,20 @@ export default function DouyinAiCsWorkbenchPage() {
       const backgroundAutoReplyRefresh =
         Boolean(nextAutoReplyKey) && autoReplyRunActiveKeyRef.current === nextAutoReplyKey;
       autoReplyRunActiveKeyRef.current = nextAutoReplyKey;
+      const nextAutopilotKey = conversationCacheKey(
+        selectedAccount?.account_open_id,
+        target?.conversation_short_id,
+      );
+      const backgroundAutopilotRefresh =
+        Boolean(nextAutopilotKey) && conversationAutopilotActiveKeyRef.current === nextAutopilotKey;
+      conversationAutopilotActiveKeyRef.current = nextAutopilotKey || null;
       void loadLatestAutoReplyRun(target || null, selectedAccount, { background: backgroundAutoReplyRefresh });
-      void loadConversationAutopilotState(target || null, selectedAccount);
+      void loadConversationAutopilotState(target || null, selectedAccount, {
+        background: backgroundAutopilotRefresh,
+      });
     } else {
       autoReplyRunActiveKeyRef.current = null;
+      conversationAutopilotActiveKeyRef.current = null;
       setConversationAutopilotState(null);
       setConversationAutopilotError(null);
       setLoadingConversationAutopilot(false);
@@ -2105,7 +2184,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 <div className="mt-1 text-[11px] leading-5 text-emerald-700">{accountModeMessage}</div>
               ) : null}
               {selectedConversation &&
-              (loadingConversationAutopilot || conversationAutopilotError || conversationAutopilotState) ? (
+              (loadingConversationAutopilot || conversationAutopilotError || conversationAutopilotText(conversationAutopilotState)) ? (
                 <div
                   className={`mt-1 text-[11px] leading-5 ${
                     conversationAutopilotState?.mode === "manual" ? "text-amber-700" : "text-slate-500"
@@ -2332,6 +2411,11 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="whitespace-pre-wrap text-slate-800">
                             {autoReplyGeneratedContent(autoReplyRun)}
                           </div>
+                          {autoReplyRunHasRiskFlags(autoReplyRun) ? (
+                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
+                              该内容仅供人工参考，发送前请确认库存、价格、联系方式等信息。
+                            </div>
+                          ) : null}
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
@@ -2340,6 +2424,13 @@ export default function DouyinAiCsWorkbenchPage() {
                             >
                               <ClipboardIcon size={13} />
                               {autoReplyCopied ? "已复制" : "复制"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => useAutoReplyAsManualDraft()}
+                              className="inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-white px-2.5 font-semibold text-blue-700 hover:bg-blue-50"
+                            >
+                              填入人工草稿
                             </button>
                           </div>
                         </div>
@@ -2405,6 +2496,11 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="whitespace-pre-wrap text-slate-800">
                             {autoReplyGeneratedContent(autoReplyRun)}
                           </div>
+                          {autoReplyRunHasRiskFlags(autoReplyRun) ? (
+                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
+                              该内容仅供人工参考，发送前请确认库存、价格、联系方式等信息。
+                            </div>
+                          ) : null}
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
