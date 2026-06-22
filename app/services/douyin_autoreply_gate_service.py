@@ -8,11 +8,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app import config
 from app.models import AiAutoReplyRun, DouyinAccountAutoreplySetting
 from app.services.conversation_autopilot_state_service import is_conversation_manual_takeover
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
     parse_blocked_risk_flags,
+    parse_conversation_whitelist_ids,
+    parse_customer_whitelist_open_ids,
 )
 
 COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
@@ -129,6 +132,95 @@ def evaluate_post_llm_gates(
     return GateDecision(True, "decided", None, gate_results)
 
 
+def evaluate_real_send_gates(
+    db: Session,
+    *,
+    settings: DouyinAccountAutoreplySetting | None,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str | None,
+    conversation_short_id: str | None,
+    now: datetime | None = None,
+) -> GateDecision:
+    """集中评估真实自动发送门禁；任一失败都返回稳定 reason code。"""
+    current_time = now or datetime.now()
+    gate_results: dict[str, Any] = {
+        "global": {
+            "auto_reply_enabled": bool(config.DOUYIN_AUTO_REPLY_ENABLED),
+            "real_send_enabled": bool(config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED),
+            "account_whitelist_hit": account_open_id in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET,
+            "customer_whitelist_hit": bool(
+                customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET
+            ),
+            "conversation_whitelist_hit": bool(
+                conversation_short_id
+                and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
+            ),
+        },
+        "settings": _settings_snapshot(settings),
+    }
+    if config.DOUYIN_AUTO_REPLY_ENABLED is not True:
+        return GateDecision(False, "blocked", "global_auto_reply_disabled", gate_results)
+    if config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED is not True:
+        return GateDecision(False, "blocked", "global_real_send_disabled", gate_results)
+    if account_open_id not in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET:
+        return GateDecision(False, "blocked", "global_account_whitelist_miss", gate_results)
+    if not (
+        (customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET)
+        or (
+            conversation_short_id
+            and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
+        )
+    ):
+        return GateDecision(False, "blocked", "global_customer_conversation_whitelist_miss", gate_results)
+    if settings is None:
+        return GateDecision(False, "blocked", "no_autoreply_settings", gate_results)
+    if settings.enabled is not True:
+        return GateDecision(False, "blocked", "autoreply_disabled", gate_results)
+    if settings.dry_run_enabled is not True:
+        return GateDecision(False, "blocked", "dry_run_disabled", gate_results)
+    if settings.send_enabled is not True:
+        return GateDecision(False, "blocked", "send_disabled", gate_results)
+
+    customer_whitelist = parse_customer_whitelist_open_ids(settings)
+    conversation_whitelist = parse_conversation_whitelist_ids(settings)
+    gate_results["account_level_whitelist"] = {
+        "customer_configured": bool(customer_whitelist),
+        "conversation_configured": bool(conversation_whitelist),
+        "customer_hit": bool(customer_open_id and customer_open_id in customer_whitelist),
+        "conversation_hit": bool(conversation_short_id and conversation_short_id in conversation_whitelist),
+    }
+    if customer_whitelist and customer_open_id not in customer_whitelist:
+        return GateDecision(False, "blocked", "account_customer_whitelist_miss", gate_results)
+    if conversation_whitelist and conversation_short_id not in conversation_whitelist:
+        return GateDecision(False, "blocked", "account_conversation_whitelist_miss", gate_results)
+
+    limits = _real_send_frequency_snapshot(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        customer_open_id=customer_open_id,
+        conversation_short_id=conversation_short_id,
+        current_time=current_time,
+    )
+    min_interval_seconds = max(0, int(settings.min_interval_seconds or 0))
+    daily_limit = max(0, int(settings.max_auto_replies_per_conversation_per_day or 0))
+    gate_results["real_send_limits"] = {
+        **limits,
+        "min_interval_seconds": min_interval_seconds,
+        "max_auto_replies_per_conversation_per_day": daily_limit,
+    }
+    last_sent_at = limits.get("last_sent_at")
+    if isinstance(last_sent_at, datetime) and min_interval_seconds > 0:
+        elapsed = (current_time - last_sent_at).total_seconds()
+        if elapsed < min_interval_seconds:
+            return GateDecision(False, "blocked", "min_interval_limited", gate_results)
+    if daily_limit > 0 and int(limits["conversation_day_count"]) >= daily_limit:
+        return GateDecision(False, "blocked", "daily_conversation_limit_exceeded", gate_results)
+
+    return GateDecision(True, "sending", None, gate_results)
+
+
 def _frequency_snapshot(
     db: Session,
     *,
@@ -166,8 +258,44 @@ def _settings_snapshot(settings: DouyinAccountAutoreplySetting | None) -> dict[s
         "require_rag_sources": bool(settings.require_rag_sources),
         "allowed_intents": parse_allowed_intents(settings),
         "blocked_risk_flags": parse_blocked_risk_flags(settings),
+        "customer_whitelist_open_ids": parse_customer_whitelist_open_ids(settings),
+        "conversation_whitelist_ids": parse_conversation_whitelist_ids(settings),
+        "min_interval_seconds": settings.min_interval_seconds,
+        "max_auto_replies_per_conversation_per_day": settings.max_auto_replies_per_conversation_per_day,
         "max_replies_per_conversation_per_hour": settings.max_replies_per_conversation_per_hour,
         "max_replies_per_account_per_hour": settings.max_replies_per_account_per_hour,
+    }
+
+
+def _real_send_frequency_snapshot(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str | None,
+    conversation_short_id: str | None,
+    current_time: datetime,
+) -> dict[str, Any]:
+    from app.models import DouyinPrivateMessageSend
+
+    query = (
+        db.query(DouyinPrivateMessageSend)
+        .filter(DouyinPrivateMessageSend.send_source == "ai_auto")
+        .filter(DouyinPrivateMessageSend.status == "sent")
+        .filter(DouyinPrivateMessageSend.account_open_id == account_open_id)
+    )
+    if customer_open_id:
+        query = query.filter(DouyinPrivateMessageSend.customer_open_id == customer_open_id)
+    if conversation_short_id:
+        query = query.filter(DouyinPrivateMessageSend.conversation_short_id == conversation_short_id)
+
+    last = query.order_by(DouyinPrivateMessageSend.sent_at.desc(), DouyinPrivateMessageSend.id.desc()).first()
+    day_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    conversation_day_count = query.filter(DouyinPrivateMessageSend.sent_at >= day_start).count()
+    return {
+        "merchant_id": merchant_id,
+        "last_sent_at": last.sent_at if last is not None else None,
+        "conversation_day_count": conversation_day_count,
     }
 
 

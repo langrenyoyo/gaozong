@@ -24,6 +24,10 @@ DEFAULT_AUTOREPLY_SETTINGS = {
     "require_rag_sources": True,
     "allowed_intents": [],
     "blocked_risk_flags": [],
+    "customer_whitelist_open_ids": [],
+    "conversation_whitelist_ids": [],
+    "min_interval_seconds": 60,
+    "max_auto_replies_per_conversation_per_day": 20,
     "max_replies_per_conversation_per_hour": 3,
     "max_replies_per_account_per_hour": 30,
 }
@@ -133,6 +137,10 @@ def build_account_autoreply_settings_view(
             "require_rag_sources": bool(settings.require_rag_sources),
             "allowed_intents": parse_allowed_intents(settings),
             "blocked_risk_flags": parse_blocked_risk_flags(settings),
+            "customer_whitelist_open_ids": parse_customer_whitelist_open_ids(settings),
+            "conversation_whitelist_ids": parse_conversation_whitelist_ids(settings),
+            "min_interval_seconds": settings.min_interval_seconds,
+            "max_auto_replies_per_conversation_per_day": settings.max_auto_replies_per_conversation_per_day,
             "max_replies_per_conversation_per_hour": settings.max_replies_per_conversation_per_hour,
             "max_replies_per_account_per_hour": settings.max_replies_per_account_per_hour,
             "created_at": settings.created_at,
@@ -169,6 +177,8 @@ def upsert_account_autoreply_settings(
         "min_confidence",
         "require_rag",
         "require_rag_sources",
+        "min_interval_seconds",
+        "max_auto_replies_per_conversation_per_day",
         "max_replies_per_conversation_per_hour",
         "max_replies_per_account_per_hour",
     ]
@@ -179,6 +189,16 @@ def upsert_account_autoreply_settings(
         settings.allowed_intents_json = json.dumps(_unique_strings(values["allowed_intents"]), ensure_ascii=False)
     if "blocked_risk_flags" in values and values["blocked_risk_flags"] is not None:
         settings.blocked_risk_flags_json = json.dumps(_unique_strings(values["blocked_risk_flags"]), ensure_ascii=False)
+    if "customer_whitelist_open_ids" in values and values["customer_whitelist_open_ids"] is not None:
+        settings.customer_whitelist_open_ids = json.dumps(
+            _unique_strings(values["customer_whitelist_open_ids"]),
+            ensure_ascii=False,
+        )
+    if "conversation_whitelist_ids" in values and values["conversation_whitelist_ids"] is not None:
+        settings.conversation_whitelist_ids = json.dumps(
+            _unique_strings(values["conversation_whitelist_ids"]),
+            ensure_ascii=False,
+        )
     db.commit()
     db.refresh(settings)
     return settings
@@ -196,6 +216,20 @@ def parse_blocked_risk_flags(settings: DouyinAccountAutoreplySetting | None) -> 
     if settings is None:
         return []
     return _parse_string_list(settings.blocked_risk_flags_json)
+
+
+def parse_customer_whitelist_open_ids(settings: DouyinAccountAutoreplySetting | None) -> list[str]:
+    """解析账号级客户 open_id 白名单。"""
+    if settings is None:
+        return []
+    return _parse_string_list(settings.customer_whitelist_open_ids)
+
+
+def parse_conversation_whitelist_ids(settings: DouyinAccountAutoreplySetting | None) -> list[str]:
+    """解析账号级会话白名单。"""
+    if settings is None:
+        return []
+    return _parse_string_list(settings.conversation_whitelist_ids)
 
 
 def _parse_string_list(raw_value: Any) -> list[str]:

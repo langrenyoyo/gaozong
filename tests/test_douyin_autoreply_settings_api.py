@@ -91,6 +91,8 @@ def _insert_settings(
     send_enabled: bool = False,
     allowed_intents: list[str] | None = None,
     blocked_risk_flags: list[str] | None = None,
+    customer_whitelist_open_ids: list[str] | None = None,
+    conversation_whitelist_ids: list[str] | None = None,
 ):
     db = TestSession()
     try:
@@ -105,8 +107,12 @@ def _insert_settings(
             require_rag_sources=True,
             allowed_intents_json=json.dumps(allowed_intents or ["greeting"], ensure_ascii=False),
             blocked_risk_flags_json=json.dumps(blocked_risk_flags or ["prompt_injection"], ensure_ascii=False),
+            customer_whitelist_open_ids=json.dumps(customer_whitelist_open_ids or ["customer-1"], ensure_ascii=False),
+            conversation_whitelist_ids=json.dumps(conversation_whitelist_ids or ["conv-1"], ensure_ascii=False),
             max_replies_per_conversation_per_hour=1,
             max_replies_per_account_per_hour=5,
+            min_interval_seconds=90,
+            max_auto_replies_per_conversation_per_day=8,
         )
         db.add(row)
         db.commit()
@@ -148,6 +154,10 @@ def test_list_settings_returns_current_merchant_accounts_with_default_view_witho
     assert item["blocked_risk_flags"] == []
     assert item["max_replies_per_conversation_per_hour"] == 3
     assert item["max_replies_per_account_per_hour"] == 30
+    assert item["customer_whitelist_open_ids"] == []
+    assert item["conversation_whitelist_ids"] == []
+    assert item["min_interval_seconds"] == 60
+    assert item["max_auto_replies_per_conversation_per_day"] == 20
 
     db = TestSession()
     try:
@@ -168,6 +178,10 @@ def test_get_settings_detail_cannot_cross_merchant_and_returns_existing_values()
     assert data["enabled"] is True
     assert data["allowed_intents"] == ["basic_info"]
     assert data["blocked_risk_flags"] == ["price_commitment"]
+    assert data["customer_whitelist_open_ids"] == ["customer-1"]
+    assert data["conversation_whitelist_ids"] == ["conv-1"]
+    assert data["min_interval_seconds"] == 90
+    assert data["max_auto_replies_per_conversation_per_day"] == 8
 
     denied = _client().get("/douyin-autoreply/settings/account-b")
     assert denied.status_code == 403
@@ -194,8 +208,12 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
             "require_rag_sources": True,
             "allowed_intents": ["greeting", "basic_info", "greeting"],
             "blocked_risk_flags": ["prompt_injection"],
+            "customer_whitelist_open_ids": ["customer-a", "customer-a", "customer-b"],
+            "conversation_whitelist_ids": ["conv-a"],
             "max_replies_per_conversation_per_hour": 1,
             "max_replies_per_account_per_hour": 4,
+            "min_interval_seconds": 120,
+            "max_auto_replies_per_conversation_per_day": 6,
         },
     )
 
@@ -205,12 +223,17 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
     assert data["send_enabled"] is True
     assert data["allowed_intents"] == ["greeting", "basic_info"]
     assert data["blocked_risk_flags"] == ["prompt_injection"]
+    assert data["customer_whitelist_open_ids"] == ["customer-a", "customer-b"]
+    assert data["conversation_whitelist_ids"] == ["conv-a"]
+    assert data["min_interval_seconds"] == 120
+    assert data["max_auto_replies_per_conversation_per_day"] == 6
 
     db = TestSession()
     try:
         row = db.query(DouyinAccountAutoreplySetting).one()
         assert row.merchant_id == "merchant-a"
         assert json.loads(row.allowed_intents_json) == ["greeting", "basic_info"]
+        assert json.loads(row.customer_whitelist_open_ids) == ["customer-a", "customer-b"]
     finally:
         db.close()
 
@@ -227,6 +250,15 @@ def test_put_settings_validates_ranges_and_account_ownership():
         json={"max_replies_per_conversation_per_hour": 1001},
     )
     assert bad_rate.status_code == 422
+
+    bad_interval = _client().put("/douyin-autoreply/settings/account-a", json={"min_interval_seconds": -1})
+    assert bad_interval.status_code == 422
+
+    bad_daily_limit = _client().put(
+        "/douyin-autoreply/settings/account-a",
+        json={"max_auto_replies_per_conversation_per_day": 1001},
+    )
+    assert bad_daily_limit.status_code == 422
 
     cross = _client().put("/douyin-autoreply/settings/account-b", json={"enabled": True})
     assert cross.status_code == 403

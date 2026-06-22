@@ -107,6 +107,17 @@ function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplyS
       typeof item?.max_replies_per_account_per_hour === "number"
         ? item.max_replies_per_account_per_hour
         : 3,
+    customer_whitelist_open_ids: Array.isArray(item?.customer_whitelist_open_ids)
+      ? item.customer_whitelist_open_ids
+      : [],
+    conversation_whitelist_ids: Array.isArray(item?.conversation_whitelist_ids)
+      ? item.conversation_whitelist_ids
+      : [],
+    min_interval_seconds: typeof item?.min_interval_seconds === "number" ? item.min_interval_seconds : 60,
+    max_auto_replies_per_conversation_per_day:
+      typeof item?.max_auto_replies_per_conversation_per_day === "number"
+        ? item.max_auto_replies_per_conversation_per_day
+        : 20,
   };
 }
 

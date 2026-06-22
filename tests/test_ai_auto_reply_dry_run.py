@@ -231,7 +231,7 @@ def test_non_receive_event_is_skipped():
 
     run = _latest_run()
     assert run.status == "skipped"
-    assert run.skip_reason == "not_im_receive_msg"
+    assert run.skip_reason == "not_customer_message_event"
 
 
 def test_duplicate_event_is_skipped():

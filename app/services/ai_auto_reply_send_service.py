@@ -15,6 +15,7 @@ from app.services.conversation_autopilot_state_service import (
     mark_ai_replied,
 )
 from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
+from app.services.douyin_autoreply_gate_service import evaluate_real_send_gates
 from app.services.douyin_private_message_send_service import (
     _is_context_expired,
     _send_private_message_with_context,
@@ -55,18 +56,22 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         merchant_id=run.merchant_id,
         account_open_id=run.account_open_id,
     )
-    if settings is None:
-        _mark_send_skipped(db, run, "no_autoreply_settings")
-        return {"status": "send_skipped", "reason": "no_autoreply_settings"}
-    if settings.enabled is not True:
-        _mark_send_skipped(db, run, "autoreply_disabled")
-        return {"status": "send_skipped", "reason": "autoreply_disabled"}
-    if settings.dry_run_enabled is not True:
-        _mark_send_skipped(db, run, "dry_run_disabled")
-        return {"status": "send_skipped", "reason": "dry_run_disabled"}
-    if settings.send_enabled is not True:
-        _mark_send_skipped(db, run, "send_disabled")
-        return {"status": "send_skipped", "reason": "send_disabled"}
+    real_send_gate = evaluate_real_send_gates(
+        db,
+        settings=settings,
+        merchant_id=run.merchant_id,
+        account_open_id=run.account_open_id,
+        customer_open_id=run.customer_open_id,
+        conversation_short_id=run.conversation_short_id,
+    )
+    if not real_send_gate.passed:
+        _mark_send_skipped(db, run, real_send_gate.reason or "real_send_gate_blocked")
+        logger.info(
+            "ai_auto_reply_real_send_blocked stage=real_send_gate run_id=%s reason=%s",
+            run.id,
+            real_send_gate.reason,
+        )
+        return {"status": "send_skipped", "reason": real_send_gate.reason}
 
     if is_conversation_manual_takeover(
         db,

@@ -689,6 +689,10 @@ export interface DouyinAutoReplySettingItem {
   require_rag_sources: boolean;
   allowed_intents: string[];
   blocked_risk_flags: string[];
+  customer_whitelist_open_ids: string[];
+  conversation_whitelist_ids: string[];
+  min_interval_seconds: number;
+  max_auto_replies_per_conversation_per_day: number;
   max_replies_per_conversation_per_hour: number;
   max_replies_per_account_per_hour: number;
   updated_at?: string | null;
@@ -703,6 +707,10 @@ export interface DouyinAutoReplySettingUpdateRequest {
   require_rag_sources: boolean;
   allowed_intents: string[];
   blocked_risk_flags: string[];
+  customer_whitelist_open_ids: string[];
+  conversation_whitelist_ids: string[];
+  min_interval_seconds: number;
+  max_auto_replies_per_conversation_per_day: number;
   max_replies_per_conversation_per_hour: number;
   max_replies_per_account_per_hour: number;
 }

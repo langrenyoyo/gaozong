@@ -1186,6 +1186,10 @@ class DouyinAutoreplySettingsUpdate(BaseModel):
     require_rag_sources: Optional[bool] = None
     allowed_intents: Optional[list[str]] = None
     blocked_risk_flags: Optional[list[str]] = None
+    customer_whitelist_open_ids: Optional[list[str]] = None
+    conversation_whitelist_ids: Optional[list[str]] = None
+    min_interval_seconds: Optional[int] = Field(None, ge=0, le=86400)
+    max_auto_replies_per_conversation_per_day: Optional[int] = Field(None, ge=0, le=1000)
     max_replies_per_conversation_per_hour: Optional[int] = Field(None, ge=0, le=1000)
     max_replies_per_account_per_hour: Optional[int] = Field(None, ge=0, le=1000)
 
@@ -1208,6 +1212,10 @@ class DouyinAutoreplySettingsItem(BaseModel):
     require_rag_sources: bool = True
     allowed_intents: list[str] = Field(default_factory=list)
     blocked_risk_flags: list[str] = Field(default_factory=list)
+    customer_whitelist_open_ids: list[str] = Field(default_factory=list)
+    conversation_whitelist_ids: list[str] = Field(default_factory=list)
+    min_interval_seconds: int = 60
+    max_auto_replies_per_conversation_per_day: int = 20
     max_replies_per_conversation_per_hour: int = 3
     max_replies_per_account_per_hour: int = 30
     created_at: Optional[datetime] = None

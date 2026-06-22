@@ -15,7 +15,7 @@ from app.integrations.douyin_webhook import (
     verify_signature,
 )
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
-from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run, run_ai_auto_reply_job
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
     get_conversation_profile,
@@ -191,11 +191,11 @@ async def _handle_douyin_webhook(
         result = _process_webhook_locally(db, payload)
     if (
         background_tasks is not None
-        and payload.get("event") == "im_receive_msg"
+        and payload.get("event") in {"im_receive_msg", "im_enter_direct_msg"}
         and result.get("is_duplicate") is not True
         and result.get("event_id") is not None
     ):
-        background_tasks.add_task(run_ai_auto_reply_dry_run, result["event_id"])
+        background_tasks.add_task(run_ai_auto_reply_job, result["event_id"])
 
     return WebhookResponse(
         code=result["code"],

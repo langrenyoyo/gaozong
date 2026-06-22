@@ -34,6 +34,23 @@ _load_env_file(ENV_FILE)
 def _env_str(name: str, default: str = "") -> str:
     return os.getenv(name, "").strip() or default
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() == "true"
+
+
+def _env_csv_set(name: str) -> set[str]:
+    """解析逗号分隔白名单，自动忽略空值和多余空格。"""
+    result: set[str] = set()
+    for item in os.getenv(name, "").split(","):
+        text = item.strip()
+        if text:
+            result.add(text)
+    return result
+
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -111,6 +128,31 @@ NEWCAR_AUTH_TIMEOUT_SECONDS = int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5"))
 XG_DOUYIN_AI_CS_BASE_URL = os.getenv("XG_DOUYIN_AI_CS_BASE_URL", "http://localhost:9100").strip().rstrip("/")
 XG_DOUYIN_AI_CS_SERVICE_TOKEN = os.getenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "").strip()
 XG_DOUYIN_AI_CS_TIMEOUT_SECONDS = int(os.getenv("XG_DOUYIN_AI_CS_TIMEOUT_SECONDS", "10"))
+
+# ---------- 小高知识库内部训练接口配置 ----------
+KNOWLEDGE_TRAINING_IP_WHITELIST = os.getenv(
+    "KNOWLEDGE_TRAINING_IP_WHITELIST",
+    "127.0.0.1,::1,localhost",
+).strip()
+KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID = os.getenv(
+    "KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID",
+    "xiaogao_system",
+).strip()
+KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID = os.getenv(
+    "KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID",
+    "xiaogao_base",
+).strip()
+KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS = (
+    os.getenv("KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS", "false").strip().lower() == "true"
+)
+
+# ---------- 抖音 AI 客服真实自动回复门禁 ----------
+# 默认全部关闭；真实发送必须同时打开总开关和真实发送开关，并命中后端白名单。
+DOUYIN_AUTO_REPLY_ENABLED = _env_bool("DOUYIN_AUTO_REPLY_ENABLED", False)
+DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED = _env_bool("DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", False)
+DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET = _env_csv_set("DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST")
+DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET = _env_csv_set("DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST")
+DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET = _env_csv_set("DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST")
 
 # ---------- 9000 调用 9202 AI小高线索 internal webhook 配置 ----------
 # 默认关闭，确保正式 webhook 行为与旧链路一致。

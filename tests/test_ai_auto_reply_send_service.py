@@ -33,7 +33,23 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
-def _insert_settings(*, send_enabled: bool = True) -> None:
+@pytest.fixture(autouse=True)
+def _enable_real_send_test_gate(monkeypatch):
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+
+def _insert_settings(
+    *,
+    send_enabled: bool = True,
+    customer_whitelist_open_ids: list[str] | None = None,
+    conversation_whitelist_ids: list[str] | None = None,
+    min_interval_seconds: int = 60,
+    max_auto_replies_per_conversation_per_day: int = 20,
+) -> None:
     db = TestSession()
     try:
         db.add(
@@ -43,6 +59,10 @@ def _insert_settings(*, send_enabled: bool = True) -> None:
                 enabled=True,
                 dry_run_enabled=True,
                 send_enabled=send_enabled,
+                customer_whitelist_open_ids=json.dumps(customer_whitelist_open_ids or [], ensure_ascii=False),
+                conversation_whitelist_ids=json.dumps(conversation_whitelist_ids or [], ensure_ascii=False),
+                min_interval_seconds=min_interval_seconds,
+                max_auto_replies_per_conversation_per_day=max_auto_replies_per_conversation_per_day,
             )
         )
         db.commit()
@@ -178,6 +198,104 @@ def test_send_enabled_false_does_not_send():
     assert result["reason"] == "send_disabled"
     assert _get_run(run_id).status == "send_skipped"
     openapi_mock.assert_not_called()
+
+
+def test_global_auto_reply_disabled_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", False)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "global_auto_reply_disabled"
+    openapi_mock.assert_not_called()
+
+
+def test_global_real_send_disabled_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", False)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "global_real_send_disabled"
+
+
+def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"other-account"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "global_account_whitelist_miss"
+
+
+def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"other-customer"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", {"other-conv"})
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "global_customer_conversation_whitelist_miss"
+
+
+def test_account_level_customer_whitelist_miss_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(customer_whitelist_open_ids=["other-customer"])
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "account_customer_whitelist_miss"
+
+
+def test_account_level_conversation_whitelist_miss_does_not_send(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(conversation_whitelist_ids=["other-conv"])
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "account_conversation_whitelist_miss"
 
 
 def test_non_decided_run_does_not_send():
@@ -337,6 +455,84 @@ def test_openapi_success_marks_sent_and_writes_ai_auto_send_record():
         assert state.mode == "ai"
     finally:
         db.close()
+
+
+def test_min_interval_seconds_blocks_recent_sent_auto_reply(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(min_interval_seconds=120)
+    _insert_event()
+    db = TestSession()
+    try:
+        db.add(
+            DouyinPrivateMessageSend(
+                main_account_id=123,
+                conversation_short_id="conv-1",
+                server_message_id="server-msg-old",
+                from_user_id="account-open-1",
+                to_user_id="customer-open-1",
+                customer_open_id="customer-open-1",
+                account_open_id="account-open-1",
+                content="上一条自动回复",
+                scene="im_reply_msg",
+                status="sent",
+                manual_confirmed=0,
+                auto_send=1,
+                send_source="ai_auto",
+                sent_at=datetime.now() - timedelta(seconds=30),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "min_interval_limited"
+
+
+def test_daily_conversation_limit_blocks_auto_reply(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(max_auto_replies_per_conversation_per_day=1)
+    _insert_event()
+    db = TestSession()
+    try:
+        db.add(
+            DouyinPrivateMessageSend(
+                main_account_id=123,
+                conversation_short_id="conv-1",
+                server_message_id="server-msg-old",
+                from_user_id="account-open-1",
+                to_user_id="customer-open-1",
+                customer_open_id="customer-open-1",
+                account_open_id="account-open-1",
+                content="今日自动回复",
+                scene="im_reply_msg",
+                status="sent",
+                manual_confirmed=0,
+                auto_send=1,
+                send_source="ai_auto",
+                sent_at=datetime.now() - timedelta(hours=1),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "daily_conversation_limit_exceeded"
 
 
 def test_openapi_failure_marks_send_failed_without_retry():

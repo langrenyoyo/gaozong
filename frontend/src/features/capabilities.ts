@@ -9,9 +9,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     defaultNavId: "douyin-ai-cs",
     children: [
       { id: "douyin-ai-cs", label: "客服工作台", path: "/douyin-cs/workbench" },
-      { id: "douyin-ai-cs-reply-records", label: "AI回复记录", path: "/douyin-cs/reply-records" },
-      { id: "douyin-ai-cs-auto-reply-settings", label: "AI自动回复配置", path: "/douyin-cs/auto-reply-settings" },
-      { id: "douyin-ai-cs-auto-reply-runs", label: "自动回复运行记录", path: "/douyin-cs/auto-reply-runs" },
     ],
   },
   {
@@ -34,9 +31,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     path: "/agents",
     defaultNavId: "ai-agents",
     children: [
-      { id: "ai-agents", label: "智能体列表", path: "/agents" },
-      { id: "agent-create", label: "创建智能体", path: "/agents/new" },
-      { id: "agent-edit", label: "编辑智能体", path: "/agents/edit" },
+      { id: "ai-agents", label: "智能体管理", path: "/agents" },
     ],
   },
   {

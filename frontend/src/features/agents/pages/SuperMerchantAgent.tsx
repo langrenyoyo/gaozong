@@ -81,7 +81,6 @@ function AgentEditor({
   onSave: (payload: AiAgentPayload, categoryKeys: string[] | null) => void;
 }) {
   const [draft, setDraft] = useState<AiAgentPayload>(emptyDraft);
-  const [useKnowledgeBase, setUseKnowledgeBase] = useState(true);
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
   const [selectedCategoryKeys, setSelectedCategoryKeys] = useState<string[]>([]);
   const [categoryLoading, setCategoryLoading] = useState(false);
@@ -90,7 +89,6 @@ function AgentEditor({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setUseKnowledgeBase(agent ? Boolean(agent.knowledge_base_text) : true);
     setDraft(
       agent
         ? {
@@ -113,7 +111,6 @@ function AgentEditor({
     setCategoryLoading(false);
     setCategoryLoadFailed(false);
     setBindingLoadFailed(false);
-    return;
 
     let cancelled = false;
 
@@ -129,7 +126,10 @@ function AgentEditor({
         if (cancelled) return;
         setCategories(items);
 
-        if (!agent) return;
+        if (!agent) {
+          setSelectedCategoryKeys([]);
+          return;
+        }
 
         try {
           const binding = await getAgentKnowledgeCategories(agent.agent_id);
@@ -177,8 +177,8 @@ function AgentEditor({
       ...draft,
       name: draft.name.trim(),
       prompt: draft.prompt || "",
-      knowledge_base_text: useKnowledgeBase ? "小高知识库" : "",
-    }, null);
+      knowledge_base_text: draft.knowledge_base_text || "",
+    }, [BASE_CATEGORY_KEY, ...selectedCategoryKeys]);
   };
 
   return (
@@ -194,7 +194,7 @@ function AgentEditor({
             </div>
             <div>
               <h2 className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
-              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、使用场景、提示词和小高知识库开关。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词、知识库提示词和知识库范围。</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
@@ -210,7 +210,7 @@ function AgentEditor({
               value={draft.name}
               onChange={(event) => setDraft({ ...draft, name: event.target.value })}
               className="h-10 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 text-sm text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="例如：精品车接待顾问"
+              placeholder="请输入智能体名称，例如精品 BBA 销售顾问"
             />
           </label>
 
@@ -220,19 +220,49 @@ function AgentEditor({
               value={draft.prompt}
               onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
               className="min-h-[150px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="描述智能体身份、语气、接待策略和留资引导方式。"
+              placeholder="请填写智能体的人设、语气、角色定位和销售风格，例如你是一名专业二手车销售顾问，语气热情、专业、不过度承诺。"
             />
           </label>
 
-          <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-2 text-xs">
-            <span className="font-semibold text-[#475569]">启用小高知识库</span>
-            <input
-              type="checkbox"
-              checked={useKnowledgeBase}
-              onChange={(event) => setUseKnowledgeBase(event.target.checked)}
-              className="h-4 w-4 accent-[#2563eb]"
+          <label className="grid gap-1.5 text-xs">
+            <span className="font-semibold text-[#475569]">智能体知识库提示词</span>
+            <textarea
+              value={draft.knowledge_base_text}
+              onChange={(event) => setDraft({ ...draft, knowledge_base_text: event.target.value })}
+              className="min-h-[120px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              placeholder="请填写该智能体在使用知识和组织答案时需要遵循的规则，例如优先回答车型、价格、车况、门店位置；客户有购车意向时，引导留下手机号或微信；不确定的信息不要编造。"
             />
           </label>
+
+          <section className="rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#475569]">智能体知识库</span>
+              {categoryLoading ? <span className="text-[11px] text-[#8b95a6]">加载中...</span> : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-[#2563eb]">
+                <input type="checkbox" checked readOnly className="h-4 w-4 accent-[#2563eb]" />
+                公共知识库 base
+              </label>
+              {selectableCategories.map((category) => (
+                <label
+                  key={category.category_key}
+                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#dfe5ee] bg-white px-3 text-xs font-semibold text-[#475569]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedCategoryKeys.includes(category.category_key)}
+                    onChange={() => toggleCategory(category.category_key)}
+                    className="h-4 w-4 accent-[#2563eb]"
+                  />
+                  {category.name || category.category_key}
+                </label>
+              ))}
+            </div>
+            {categoryLoadFailed || bindingLoadFailed ? (
+              <p className="mt-2 text-[11px] text-amber-600">知识库分类加载不完整，本次保存会保留已加载的选择。</p>
+            ) : null}
+          </section>
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
@@ -474,9 +504,12 @@ export default function SuperMerchantAgent() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <img src={agentAvatar(agent)} alt={agent.name} className="h-12 w-12 rounded-full bg-[#eff6ff] ring-4 ring-[#f8fafc]" />
-                    <span className="rounded-full bg-[#f1f5f9] px-2.5 py-1 text-[11px] font-semibold text-[#64748b]">
-                      {agent.status === "active" ? "启用" : "停用"}
-                    </span>
+                    <span
+                      className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                        agent.status === "active" ? "bg-emerald-500" : "bg-slate-300"
+                      }`}
+                      title={agent.status === "active" ? "当前可用" : "当前不可用"}
+                    />
                   </div>
                   <h2 className="mt-4 truncate text-sm font-bold text-[#1a1f2e]">{agent.name}</h2>
                   <p className="mt-3 line-clamp-2 min-h-10 text-xs leading-5 text-[#64748b]">{promptPreview(agent.prompt)}</p>

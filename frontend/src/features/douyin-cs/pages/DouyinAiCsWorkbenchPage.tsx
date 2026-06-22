@@ -14,7 +14,6 @@ import {
   SearchIcon,
   ShieldCheckIcon,
   SmileIcon,
-  SparklesIcon,
   Trash2Icon,
   UnlinkIcon,
   VideoIcon,
@@ -22,7 +21,6 @@ import {
   UserRoundIcon,
 } from "lucide-react";
 
-import { ReplyDecisionPanel } from "../components/ReplyDecisionPanel";
 import {
   bindAuthorizedOpenId,
   fetchDouyinLiveCheckAuthUrl,
@@ -42,7 +40,6 @@ import {
   getDouyinAccountConversations,
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
-  getTrustedReplySuggestion,
   listDouyinAccounts,
   sendDouyinManualMessage,
   unbindAgentFromDouyinAccount,
@@ -52,7 +49,6 @@ import {
   type DouyinConversationItem,
   type DouyinConversationProfile,
   type DouyinMessageItem,
-  type ReplySuggestionResponse,
   type UploadDouyinImageResponse,
 } from "../api";
 
@@ -63,7 +59,7 @@ const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
-type ChatAssistMode = "ai_suggestion" | "manual_takeover";
+type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
@@ -238,13 +234,13 @@ function messageMetaClass(message: DouyinMessageItem) {
 }
 
 function chatModeTitle(mode: ChatAssistMode) {
-  return mode === "manual_takeover" ? "人工接管中" : "AI正在根据车型和留资意向生成回复建议";
+  return mode === "manual_takeover" ? "人工接管中" : "AI自动回复";
 }
 
 function chatModeSubtitle(mode: ChatAssistMode) {
   return mode === "manual_takeover"
-    ? "客服确认后发送，AI建议仍可复制参考"
-    : "不会自动发送，需人工确认";
+    ? "人工接管后可手动发送消息"
+    : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。";
 }
 
 function profileFieldText(value?: string | number | null) {
@@ -511,12 +507,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(null);
   const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
   const [profile, setProfile] = useState<DouyinConversationProfile | null>(null);
-  const [reply, setReply] = useState<ReplySuggestionResponse | null>(null);
   const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [bindingNotice, setBindingNotice] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [draftReplyText, setDraftReplyText] = useState("");
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -535,7 +529,6 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountListSource, setAccountListSource] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
@@ -548,7 +541,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
-  const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_suggestion");
+  const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_auto_reply");
   const [conversationJumpParams] = useState(() => readConversationJumpParams());
   const [conversationJumpHandled, setConversationJumpHandled] = useState(false);
   // auth-redirect 302 回跳（?auth=success&open_id=xxx）触发的自动绑定状态
@@ -581,11 +574,6 @@ export default function DouyinAiCsWorkbenchPage() {
   const activeBindingReady = hasActiveAgentBinding(selectedAccount);
   const authCallback = authStatus?.last_oauth_callback || null;
   const authAuthorized = Boolean(authCallback?.open_id);
-  const latestMessage = useMemo(() => {
-    const inbound = [...messages].reverse().find((item) => item.direction === "inbound");
-    return inbound?.content || selectedConversation?.last_message || "";
-  }, [messages, selectedConversation]);
-
   useEffect(() => {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
   }, [selectedAccount?.account_open_id]);
@@ -734,7 +722,6 @@ export default function DouyinAiCsWorkbenchPage() {
     if (cached) setAgents(cached);
     if (!cached) setLoadingAgents(true);
     setAgentNotice(null);
-    setReply(null);
     try {
       const data = await getDouyinAccountAgents(accountOpenId);
       if (agentsRequestSeqRef.current !== requestSeq || selectedAccountOpenIdRef.current !== accountOpenId) return;
@@ -776,7 +763,6 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!options?.background && cachedProfile === undefined) setLoadingProfile(true);
     setError(null);
     setProfileError(null);
-    if (!options?.background) setReply(null);
     try {
       const messageData = await getDouyinConversationMessages(conversationId, {
         account_open_id: accountOpenId || undefined,
@@ -946,7 +932,6 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       setProfileError(null);
       setLoadingProfile(false);
-      setReply(null);
     }
   }, [conversations, loadConversationDetail, markConversationReadLocally, selectedConversationId]);
 
@@ -1085,11 +1070,7 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [authRedirectHandled, authRedirectParams, loadAccounts]);
 
   useEffect(() => {
-    setReply(null);
-  }, [selectedAccount?.bound_agent_id]);
-
-  useEffect(() => {
-    setDraftReplyText(reply?.reply_text || "");
+    setDraftReplyText("");
     setSendError(null);
     setSendDialogOpen(false);
     setMediaDownloads({});
@@ -1098,37 +1079,7 @@ export default function DouyinAiCsWorkbenchPage() {
     setUploadError(null);
     setUploadResult(null);
     setUploadImageIdCopied(false);
-  }, [reply?.reply_text, selectedConversationId]);
-
-  async function generateReply() {
-    if (!selectedAccount || !selectedConversation || !latestMessage) return;
-    if (!activeBindingReady || !selectedAccount.bound_agent_id) {
-      setError("请先为当前企业号绑定已启用的智能体，再生成回复建议。");
-      return;
-    }
-    setGenerating(true);
-    setError(null);
-    try {
-      const data = await getTrustedReplySuggestion(selectedAccount.id, {
-        account_id: selectedAccount.id,
-        douyin_account_id: selectedAccount.id,
-        agent_id: selectedAccount.bound_agent_id,
-        latest_message: latestMessage,
-      });
-      setReply(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "生成回复建议失败");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function copyReply() {
-    if (!reply?.reply_text) return;
-    await navigator.clipboard.writeText(reply.reply_text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
-  }
+  }, [selectedConversationId]);
 
   async function refreshAccountsKeepingSelection(accountOpenId?: string | null) {
     const refreshed = await loadAccounts(accountOpenId || selectedAccount?.account_open_id || null);
@@ -1150,7 +1101,6 @@ export default function DouyinAiCsWorkbenchPage() {
     try {
       await bindAgentToDouyinAccount(selectedAccount.account_open_id, selectedAgentId);
       await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
-      setReply(null);
       setBindingNotice("绑定已保存。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存绑定失败");
@@ -1168,7 +1118,6 @@ export default function DouyinAiCsWorkbenchPage() {
       await unbindAgentFromDouyinAccount(selectedAccount.account_open_id);
       await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
       setSelectedAgentId(null);
-      setReply(null);
       setBindingNotice("已解绑当前企业号智能体。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "解绑失败");
@@ -1179,7 +1128,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
   async function cancelAuthorization() {
     if (!selectedAccount) return;
-    const confirmed = window.confirm(`确认取消企业号“${selectedAccount.account_name}”的授权吗？取消后将禁用回复建议。`);
+    const confirmed = window.confirm(`确认取消企业号“${selectedAccount.account_name}”的授权吗？取消后将停用 AI 自动回复。`);
     if (!confirmed) return;
     setBindingBusy(true);
     setBindingNotice(null);
@@ -1188,7 +1137,6 @@ export default function DouyinAiCsWorkbenchPage() {
       await cancelDouyinAccountAuthorization(selectedAccount.account_open_id);
       await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
       setSelectedAgentId(null);
-      setReply(null);
       setBindingNotice("企业号授权已取消，绑定状态已失效。");
     } catch (err) {
       setError(err instanceof Error ? err.message : "取消授权失败");
@@ -1213,7 +1161,6 @@ export default function DouyinAiCsWorkbenchPage() {
         setSelectedConversationId(null);
         setMessages([]);
         setProfile(null);
-        setReply(null);
         setSelectedAgentId(null);
         setBindingNotice("企业号已删除。");
       }
@@ -1227,7 +1174,7 @@ export default function DouyinAiCsWorkbenchPage() {
   function openSendDialog() {
     if (!selectedConversation || !selectedAccount) return;
     setSendError(null);
-    setDraftReplyText((current) => current || reply?.reply_text || "");
+    setDraftReplyText((current) => current || "");
     setSendDialogOpen(true);
   }
 
@@ -1424,12 +1371,12 @@ export default function DouyinAiCsWorkbenchPage() {
         <div>
           <h1 className="text-base font-bold text-[#172033]">抖音AI小高客服</h1>
           <p className="mt-1 text-xs text-[#7b8798]">
-            多抖音号会话工作台，当前只生成 AI 回复建议，不自动发送私信。
+            多抖音号会话工作台，当前支持测试白名单内的 AI 自动回复闭环。
           </p>
         </div>
         <div className="flex max-w-[460px] items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
           <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
-          <span>当前为安全建议模式：AI只生成回复建议，不会自动发送；所有发送必须由客服人工确认。</span>
+          <span>当前为 AI 自动回复模式：真实发送仅受后端开关、账号配置和测试白名单控制；人工接管后可手动发送。</span>
         </div>
       </header>
 
@@ -1628,14 +1575,14 @@ export default function DouyinAiCsWorkbenchPage() {
             <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
               <button
                 type="button"
-                onClick={() => setChatAssistMode("ai_suggestion")}
+                onClick={() => setChatAssistMode("ai_auto_reply")}
                 className={`h-8 rounded px-3 text-[11px] font-semibold ${
-                  chatAssistMode === "ai_suggestion"
+                  chatAssistMode === "ai_auto_reply"
                     ? "bg-blue-600 text-white shadow-sm"
                     : "text-slate-600 hover:bg-white"
                 }`}
               >
-                AI建议模式
+                AI自动回复
               </button>
               <button
                 type="button"
@@ -1760,66 +1707,64 @@ export default function DouyinAiCsWorkbenchPage() {
                     <BotIcon size={16} />
                   </span>
                   <div>
-                    <div className="text-sm font-bold text-[#172033]">AI 回复建议</div>
-                    <div className="text-[11px] text-slate-500">基于最新客户消息与 RAG 命中生成</div>
+                    <div className="text-sm font-bold text-[#172033]">AI 自动回复</div>
+                    <div className="text-[11px] text-slate-500">
+                      {chatAssistMode === "manual_takeover"
+                        ? "人工接管状态下可手动发送消息"
+                        : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。"}
+                    </div>
                   </div>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    disabled
-                    title="表情暂未接入"
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
-                  >
-                    <SmileIcon size={14} />
-                    表情
-                  </button>
-                  {selectedConversation ? (
+                {chatAssistMode === "manual_takeover" ? (
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                     <button
-                      onClick={() => openUploadDialog()}
-                      disabled={!selectedAccount}
-                      className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      type="button"
+                      disabled
+                      title="表情暂未接入"
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
                     >
-                      <ImagePlusIcon size={14} />
-                      图片素材
+                      <SmileIcon size={14} />
+                      表情
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled
-                    title="视频暂未接入"
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
-                  >
-                    <VideoIcon size={14} />
-                    视频
-                  </button>
-                  <button
-                    type="button"
-                    disabled
-                    title="文件暂未接入"
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
-                  >
-                    <PaperclipIcon size={14} />
-                    文件
-                  </button>
-                  {selectedConversation ? (
+                    {selectedConversation ? (
+                      <button
+                        onClick={() => openUploadDialog()}
+                        disabled={!selectedAccount}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        <ImagePlusIcon size={14} />
+                        图片素材
+                      </button>
+                    ) : null}
                     <button
-                      onClick={() => openSendDialog()}
-                      disabled={!selectedAccount}
-                      className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      type="button"
+                      disabled
+                      title="视频暂未接入"
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
                     >
-                      人工确认发送
+                      <VideoIcon size={14} />
+                      视频
                     </button>
-                  ) : null}
-                  <button
-                    onClick={() => void generateReply()}
-                    disabled={!selectedConversation || !activeBindingReady || generating}
-                    className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {generating ? <LoaderIcon size={14} className="animate-spin" /> : <SparklesIcon size={14} />}
-                    生成回复建议
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      disabled
+                      title="文件暂未接入"
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-400"
+                    >
+                      <PaperclipIcon size={14} />
+                      文件
+                    </button>
+                    {selectedConversation ? (
+                      <button
+                        onClick={() => openSendDialog()}
+                        disabled={!selectedAccount}
+                        className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        人工确认发送
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1898,7 +1843,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 ) : null}
                 {!activeBindingReady ? (
                   <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-800">
-                    当前企业号未绑定已启用智能体，生成回复建议已禁用。请选择智能体并点击“保存绑定”。
+                    当前企业号未绑定已启用智能体，AI 自动回复已禁用。请选择智能体并点击“保存绑定”。
                   </div>
                 ) : null}
                 {bindingNotice ? (
@@ -1913,17 +1858,11 @@ export default function DouyinAiCsWorkbenchPage() {
                 ) : null}
               </div>
 
-              {reply ? (
-                <ReplyDecisionPanel
-                  reply={reply}
-                  copied={copied}
-                  onCopy={() => void copyReply()}
-                  onManualSend={() => openSendDialog()}
-                  manualSendDisabled={!selectedConversation || !selectedAccount}
-                />
-              ) : (
-                <EmptyState text="选择会话后点击生成回复建议。页面不会自动发送私信。" />
-              )}
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
+                {chatAssistMode === "manual_takeover"
+                  ? "当前为人工接管状态，自动回复已停止。可通过上方人工入口手动发送消息。"
+                  : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。"}
+              </div>
             </div>
           </div>
         </section>

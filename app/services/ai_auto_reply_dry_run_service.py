@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.context import RequestContext
+from app import config
 from app.database import SessionLocal
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
 from app.models import AiAutoReplyRun, DouyinWebhookEvent
@@ -29,7 +30,7 @@ from app.services.xg_douyin_ai_cs_client import (
 logger = logging.getLogger(__name__)
 
 
-def run_ai_auto_reply_dry_run(event_id: int) -> None:
+def run_ai_auto_reply_job(event_id: int) -> None:
     """后台执行 webhook 自动回复 dry-run，只记录决策，不发送消息。"""
     db = SessionLocal()
     try:
@@ -43,6 +44,11 @@ def run_ai_auto_reply_dry_run(event_id: int) -> None:
         )
     finally:
         db.close()
+
+
+def run_ai_auto_reply_dry_run(event_id: int) -> None:
+    """兼容旧调用名；实际执行受控自动回复任务。"""
+    run_ai_auto_reply_job(event_id)
 
 
 def _run_with_session(db, *, event_id: int) -> None:
@@ -73,8 +79,8 @@ def _run_with_session(db, *, event_id: int) -> None:
         latest_message=latest_message,
     )
 
-    if event.event != "im_receive_msg":
-        _insert_terminal_run(db, base, status="skipped", skip_reason="not_im_receive_msg")
+    if event.event not in {"im_receive_msg", "im_enter_direct_msg"}:
+        _insert_terminal_run(db, base, status="skipped", skip_reason="not_customer_message_event")
         return
     if int(event.is_duplicate or 0) == 1:
         _insert_terminal_run(db, base, status="skipped", skip_reason="duplicate_event")
@@ -308,7 +314,9 @@ def _base_run(
         "trigger_event_key": event.event_key or f"missing:{event.id}",
         "trigger_server_message_id": event.server_message_id,
         "latest_message": latest_message,
-        "mode": "dry_run",
+        "mode": "real_send_candidate"
+        if (config.DOUYIN_AUTO_REPLY_ENABLED and config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED)
+        else "dry_run",
     }
 
 
@@ -413,7 +421,7 @@ def _build_allowed_category_keys(db, *, context: RequestContext, agent_id: str) 
 
 
 def _account_open_id(event: DouyinWebhookEvent) -> str | None:
-    if event.event == "im_receive_msg":
+    if event.event in {"im_receive_msg", "im_enter_direct_msg"}:
         return _optional_str(event.to_user_id)
     if event.event == "im_send_msg":
         return _optional_str(event.from_user_id)
@@ -421,7 +429,7 @@ def _account_open_id(event: DouyinWebhookEvent) -> str | None:
 
 
 def _customer_open_id(event: DouyinWebhookEvent) -> str | None:
-    if event.event == "im_receive_msg":
+    if event.event in {"im_receive_msg", "im_enter_direct_msg"}:
         return _optional_str(event.from_user_id)
     if event.event == "im_send_msg":
         return _optional_str(event.to_user_id)
