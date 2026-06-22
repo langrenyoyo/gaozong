@@ -222,6 +222,17 @@ def test_admin_recharge_merchant():
     assert data["merchant_id"] == "merchant-a"
 
 
+def test_admin_compute_accounts_recharge_alias():
+    """Phase 3-B 兼容目标路径 /admin/compute/accounts/{merchant_id}/recharge。"""
+    admin = _client(_context(super_admin=True))
+    resp = admin.post(
+        "/admin/compute/accounts/merchant-a/recharge",
+        json={"tokens": 1000, "remark": "路径兼容"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["balance_tokens"] == 1000
+
+
 def test_admin_recharge_rejects_non_positive():
     """tokens=0 由 Pydantic gt=0 在 schema 阶段拦截（422）；service 层 ValueError 为防御性冗余，由 test_compute_service 直接验证。"""
     admin = _client(_context(super_admin=True))
@@ -234,6 +245,19 @@ def test_admin_grant_package():
     admin.post("/admin/compute/packages", json={"name": "标准版", "price_yuan": 299, "token_amount": 350000})
 
     resp = admin.post("/admin/merchants/merchant-a/compute/grant-package", json={"package_id": 1})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["balance_tokens"] == 350000
+
+
+def test_admin_compute_accounts_grant_package_alias():
+    """Phase 3-B 兼容目标路径 /admin/compute/accounts/{merchant_id}/grant-package。"""
+    admin = _client(_context(super_admin=True))
+    admin.post("/admin/compute/packages", json={"name": "标准版", "price_yuan": 299, "token_amount": 350000})
+
+    resp = admin.post(
+        "/admin/compute/accounts/merchant-a/grant-package",
+        json={"package_id": 1},
+    )
     assert resp.status_code == 200
     assert resp.json()["data"]["balance_tokens"] == 350000
 
