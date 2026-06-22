@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
@@ -13,6 +14,8 @@ from app.config import (
     XG_DOUYIN_AI_CS_SERVICE_TOKEN,
     XG_DOUYIN_AI_CS_TIMEOUT_SECONDS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class XgDouyinAiCsClientError(Exception):
@@ -56,8 +59,9 @@ class XgDouyinAiCsClient:
         payload = {
             **request,
             "merchant_id": context.merchant_id,
+            "conversation_short_id": conversation_id,
         }
-        return self._post_json(f"/douyin/conversations/{conversation_id}/reply-suggestion", payload)
+        return self._post_json("/douyin/reply-suggestion", payload)
 
     def create_rag_document(
         self,
@@ -152,6 +156,12 @@ def _build_status_error(exc: httpx.HTTPStatusError) -> XgDouyinAiCsClientError:
     status_code = exc.response.status_code
     detail = _extract_error_detail(exc.response)
     if status_code in {400, 403, 404, 422}:
+        logger.warning(
+            "xg_douyin_ai_cs_http_error status_code=%s detail=%s",
+            status_code,
+            _redact_error_detail(detail),
+        )
+    if status_code in {400, 403, 404, 422}:
         return XgDouyinAiCsClientError(
             f"xg_douyin_ai_cs_http_{status_code}",
             status_code=status_code,
@@ -173,3 +183,28 @@ def _extract_error_detail(response: httpx.Response) -> dict | None:
     if isinstance(detail, str):
         return {"code": detail, "message": detail}
     return payload
+
+
+def _redact_error_detail(detail: dict | None) -> dict | None:
+    if detail is None:
+        return None
+    redacted = _redact_value(detail)
+    text = str(redacted)
+    if len(text) <= 1000:
+        return redacted if isinstance(redacted, dict) else {"detail": redacted}
+    return {"truncated": text[:1000]}
+
+
+def _redact_value(value):
+    sensitive_keys = {"open_id", "account_open_id", "customer_open_id", "token", "authorization", "secret"}
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if str(key).lower() in sensitive_keys:
+                result[key] = "***"
+            else:
+                result[key] = _redact_value(item)
+        return result
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    return value

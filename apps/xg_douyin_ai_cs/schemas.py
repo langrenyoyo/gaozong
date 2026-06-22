@@ -120,6 +120,9 @@ class ReplySuggestionRequest(BaseModel):
     agent_config: AgentConfig | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)
     conversation_history: list[ConversationHistoryItem] | None = None
+    conversation_short_id: str | None = None
+    customer_open_id: str | None = None
+    account_open_id: str | None = None
 
 
 class RecommendedVehicle(BaseModel):

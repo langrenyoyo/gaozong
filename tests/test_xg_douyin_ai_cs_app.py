@@ -517,6 +517,38 @@ def test_reply_suggestion_accepts_account_open_id_string_from_proxy(tmp_path, mo
     assert data["auto_send"] is False
 
 
+def test_reply_suggestion_body_endpoint_accepts_douyin_conversation_short_id(tmp_path, monkeypatch):
+    conversation_short_id = "@9VxWzqPHW8E4PX2vc4woV87902DrPvyDPp1zr/AuvL1gSaff960zdRmYqig357zEBSv8+UZgSU1E4RlkHQS3tJA=="
+
+    response = _client(tmp_path, monkeypatch).post(
+        "/douyin/reply-suggestion",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "dev-merchant",
+            "account_id": "dev-merchant-p5-account",
+            "douyin_account_id": "dev-merchant-p5-account",
+            "conversation_short_id": conversation_short_id,
+            "customer_open_id": "customer-open-1",
+            "account_open_id": "dev-merchant-p5-account",
+            "latest_message": "想了解一下A6",
+            "agent_id": "dev-merchant-p5-agent",
+            "agent_config": {
+                "agent_id": "dev-merchant-p5-agent",
+                "agent_name": "P5验收智能体",
+                "system_prompt": "只根据知识库回答，禁止自动发送。",
+                "knowledge_base_text": "",
+                "status": "active",
+                "allowed_category_keys": ["base"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_id"] == "dev-merchant-p5-agent"
+    assert data["auto_send"] is False
+
+
 def test_reply_suggestion_filters_rag_by_allowed_category_keys(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _seed_reply_suggestion_category_chunks()

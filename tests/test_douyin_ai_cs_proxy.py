@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -237,6 +238,94 @@ class FakeDouyinAiCsClient:
             }
         )
         return {"training_run_id": 202, "status": "completed", "document_count": 1, "chunk_count": 2}
+
+
+def test_9000_client_uses_body_endpoint_for_douyin_conversation_short_id(monkeypatch):
+    from app.auth.context import RequestContext
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient
+
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return httpx.Response(
+            200,
+            json={
+                "reply_text": "ok",
+                "match_level": "clarify",
+                "lead_capture_required": False,
+                "confidence": 0.5,
+                "manual_required": False,
+                "auto_send": False,
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", fake_post)
+    client = XgDouyinAiCsClient(base_url="http://xg-ai", service_token="", timeout_seconds=3)
+    conversation_short_id = "@9VxWzqPHW8E4PX2vc4woV87902DrPvyDPp1zr/AuvL1gSaff960zdRmYqig357zEBSv8+UZgSU1E4RlkHQS3tJA=="
+
+    client.suggest_reply(
+        context=RequestContext(user_id="u1", merchant_id="merchant-1"),
+        conversation_id=conversation_short_id,
+        request={
+            "tenant_id": "tenant-1",
+            "account_id": "account-open-1",
+            "latest_message": "hello",
+        },
+    )
+
+    assert captured["url"] == "http://xg-ai/douyin/reply-suggestion"
+    assert conversation_short_id not in captured["url"]
+    assert captured["json"]["conversation_short_id"] == conversation_short_id
+    assert captured["json"]["merchant_id"] == "merchant-1"
+
+
+def test_9000_client_error_keeps_9100_response_body_detail(monkeypatch):
+    from app.auth.context import RequestContext
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient, XgDouyinAiCsClientError
+
+    def fake_post(url, *, json, headers, timeout):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "type": "int_parsing",
+                        "loc": ["path", "conversation_id"],
+                        "msg": "Input should be a valid integer",
+                    }
+                ]
+            },
+            request=request,
+        )
+        raise httpx.HTTPStatusError("422", request=request, response=response)
+
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", fake_post)
+    client = XgDouyinAiCsClient(base_url="http://xg-ai", service_token="", timeout_seconds=3)
+
+    try:
+        client.suggest_reply(
+            context=RequestContext(user_id="u1", merchant_id="merchant-1"),
+            conversation_id="conv-1",
+            request={"tenant_id": "tenant-1", "account_id": "account-open-1", "latest_message": "hello"},
+        )
+    except XgDouyinAiCsClientError as exc:
+        assert str(exc) == "xg_douyin_ai_cs_http_422"
+        assert exc.status_code == 422
+        assert exc.detail == {
+            "detail": [
+                {
+                    "type": "int_parsing",
+                    "loc": ["path", "conversation_id"],
+                    "msg": "Input should be a valid integer",
+                }
+            ]
+        }
+    else:
+        raise AssertionError("expected XgDouyinAiCsClientError")
 
 
 def test_rag_document_proxy_ignores_forged_scope_and_builds_trusted_payload(monkeypatch):

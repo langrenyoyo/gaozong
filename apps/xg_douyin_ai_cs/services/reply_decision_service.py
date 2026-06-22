@@ -84,7 +84,7 @@ SAME_CATEGORY_RECOMMENDATIONS = [
 
 
 def build_reply_suggestion(
-    conversation_id: int,
+    conversation_id: int | str,
     request: ReplySuggestionRequest,
 ) -> ReplySuggestionResponse:
     """生成回复建议，只返回建议文本，不自动发送私信。"""
@@ -260,7 +260,7 @@ def resolve_reply_agent(
 
 def _try_agent_runtime_or_fallback(
     *,
-    conversation_id: int,
+    conversation_id: int | str,
     request: ReplySuggestionRequest,
     douyin_account_id: int | str,
     agent: dict,
@@ -338,7 +338,7 @@ def _account_id_matches(left: object, right: object) -> bool:
 
 
 def _build_llm_reply(
-    conversation_id: int,
+    conversation_id: int | str,
     request: ReplySuggestionRequest,
     merchant_prompt: dict,
     source_chunks,
@@ -875,7 +875,7 @@ def _report_llm_usage(
     *,
     request: ReplySuggestionRequest,
     agent: dict,
-    conversation_id: int,
+    conversation_id: int | str,
     result: dict,
 ) -> None:
     """P1-COMPUTE-USAGE-1：LLM 成功路径上报算力消耗到 9000。
