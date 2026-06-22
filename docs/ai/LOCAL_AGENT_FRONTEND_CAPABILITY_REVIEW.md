@@ -30,6 +30,61 @@
 - 未启动真实微信自动操作。
 - 未做虚拟机 / Windows 10 真机验收。
 
+受控构建结果（2026-06-23）：
+
+- 构建命令：`powershell -ExecutionPolicy Bypass -File scripts/build_local_agent_exe.ps1 -PythonExe "C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe" -ServerUrl "http://192.168.110.113:9000"`。
+- 构建成功，产物：`dist/local-agent/小高AI微信助手.exe`。
+- 构建版本：`P0-LOCAL-AGENT-EXE-1`。
+- 构建时间：`2026-06-23 00:00:21`。
+- 构建 commit：`98c37e6`。
+- SHA256：`D53756F925F1193B9125928D8B212F96F40637E690DB2A221E9B0D17DA11C662`。
+- 构建脚本内置烟测通过：`/health` OK，`/agent/version` OK。
+- 产物 `.env` 已写入 `AUTO_WECHAT_SERVER_URL=http://192.168.110.113:9000`。
+- 产物包含 `models/easyocr`、`logs/`、`停止小高AI微信助手.ps1`。
+
+受控构建后基础运行验收（2026-06-23）：
+
+- 手动启动构建后的 exe 后，`GET http://127.0.0.1:19000/health` 返回 `success=true`、`wechat_agent=true`。
+- `GET http://127.0.0.1:19000/agent/version` 返回 `build_time=2026-06-23 00:00:21`、`git_commit=98c37e6`，路由包含 `/agent/tasks/poll-and-execute`、`/agent/tasks/poll-and-detect`、`/agent/wechat/search-result-debug`。
+- `GET http://127.0.0.1:19000/agent/tasks/server-url` 返回 `server_url=http://192.168.110.113:9000`、`configured=true`。
+- 9000 `GET /agent/status` 已收到心跳，返回 `agent_online=true`、`wechat_status=ready`、`wechat_available=available`、`can_run_wechat_action=true`、`status_source=heartbeat`。
+- 验收后已停止临时启动的 19000 exe 进程。
+
+恢复审计补充（2026-06-23）：
+
+- 恢复检查时，构建产物 `dist/local-agent/小高AI微信助手.exe` 仍存在，大小 `35656993` 字节，`.env` 仍指向 `http://192.168.110.113:9000`。
+- 初始状态下 19000 未监听，9000 `/agent/status` 显示 `agent_online=false`、`status_source=heartbeat_expired`，符合 Agent 未启动后的心跳过期表现。
+- 短暂启动构建后的 exe 后，`/health` 返回 `success=true`、`wechat_agent=true`，`/agent/tasks/server-url` 返回 `server_url=http://192.168.110.113:9000`、`configured=true`。
+- 等待心跳后，9000 `/agent/status` 恢复为 `agent_online=true`、`wechat_status=ready`、`wechat_available=available`、`can_run_wechat_action=true`、`status_source=heartbeat`。
+- 恢复审计后已停止临时 exe 进程，`127.0.0.1:19000` 未继续监听。
+
+真实任务验收前置检查（2026-06-23）：
+
+- 当前构建产物仍存在：`dist/local-agent/小高AI微信助手.exe`，大小 `35656993` 字节。
+- 当前 `.env` 仍存在，大小 `241` 字节，主系统地址为 `http://192.168.110.113:9000`。
+- 当前 OCR 模型存在：`craft_mlt_25k.pth`、`zh_sim_g2.pth`。
+- 当前 19000 未监听；进入真实任务验收前需要启动 `小高AI微信助手.exe`。
+- 当前 9000 `/agent/status` 返回 `agent_online=false`、`status_source=heartbeat_expired`，原因是 Agent 未运行。
+- 9000 OpenAPI 已确认存在任务与心跳接口：`/agent/status`、`/agent/heartbeat`、`/wechat-tasks`、`/wechat-tasks/pending`、`/wechat-tasks/{task_id}`、`/wechat-tasks/{task_id}/result`。
+- 本次检查未创建任务、未执行 `poll-and-execute`、未执行 `poll-and-detect`，未触发微信自动化。
+
+仍未执行项：
+
+- 未执行真实 `poll-and-execute` 微信粘贴任务。
+- 未执行真实 `poll-and-detect` 微信回复检测任务。
+- 未在 Windows 11 虚拟机 / Windows 10 测试电脑做跨机器验收。
+- 未验证 React 页面真实展示，因为本轮未启动前端 dev server。
+
+构建前审计结果（2026-06-22）：
+
+- `scripts/build_local_agent_exe.ps1` 默认 `ServerUrl=https://callback.misanduo.com`，局域网验收必须显式传入 `-ServerUrl "http://192.168.110.113:9000"`。
+- 构建脚本会写入 `app/local_agent_build_info.py`，因此实际构建会产生源码区生成文件变更。
+- 构建脚本会调用 PyInstaller，并启动构建后的 exe 做 `/health` 与 `/agent/version` 烟测；这会短暂启动 19000，但不会触发微信任务执行。
+- 构建脚本会复制 `resources/easyocr_models` 到 `dist/local-agent/models/easyocr`，当前模型目录存在且包含模型文件。
+- 默认 `python` 环境缺少 `easyocr`，不能直接用于构建。
+- `C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe` 已验证具备构建依赖：PyInstaller 6.20.0、easyocr 1.7.2、torch 2.12.0+cpu、cv2 4.13.0。
+- exe 入口会读取工作目录或 exe 同目录 `.env`，构建脚本写入的 `AUTO_WECHAT_SERVER_URL` 会成为心跳、任务拉取和结果回写的默认主系统地址。
+
 ## 一、当前前端功能清单
 
 ### 1. 页面入口
@@ -670,7 +725,7 @@ app/local_agent_build_info.py
 若上述最小缺口确认完成，建议使用类似命令进入构建：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build_local_agent_exe.ps1 -ServerUrl "http://192.168.110.113:9000"
+powershell -ExecutionPolicy Bypass -File scripts/build_local_agent_exe.ps1 -PythonExe "C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe" -ServerUrl "http://192.168.110.113:9000"
 ```
 
 预期产物：
@@ -701,6 +756,53 @@ dist/local-agent/小高AI微信助手.exe
 8. 验证任务结果 `pasted=true`、`sent=false`。
 9. 创建/执行 `detect_reply` 任务。
 10. 验证结果回写 `detected_status`、`detect_count`，且 `sent=false`、`pasted=false`。
+
+### 受控构建与验收清单
+
+构建前门禁：
+
+1. 确认当前轮允许构建 exe，并接受脚本写入 `app/local_agent_build_info.py`。
+2. 确认 9000 主后端将使用局域网地址 `http://192.168.110.113:9000`，而不是默认公网 callback。
+3. 确认当前机器没有旧的 `小高AI微信助手.exe` 占用 `127.0.0.1:19000`。
+4. 确认构建解释器使用 `C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe`。
+5. 确认 `resources/easyocr_models` 存在，且构建后必须复制完整 `dist/local-agent` 目录，不允许只复制 exe。
+
+构建后产物检查：
+
+1. `dist/local-agent/小高AI微信助手.exe` 存在。
+2. `dist/local-agent/.env` 中 `AUTO_WECHAT_SERVER_URL=http://192.168.110.113:9000`。
+3. `dist/local-agent/models/easyocr` 存在模型文件。
+4. `dist/local-agent/logs` 存在且可写。
+5. `dist/local-agent/停止小高AI微信助手.ps1` 存在。
+6. 构建脚本输出 SHA256，可记录到验收结果。
+
+非发送运行验收：
+
+1. 启动 exe 后调用 `GET http://127.0.0.1:19000/health`，预期 `success=true`、`wechat_agent=true`。
+2. 调用 `GET http://127.0.0.1:19000/agent/version`，预期路由包含 `/agent/tasks/poll-and-execute`、`/agent/tasks/poll-and-detect`、`/agent/wechat/search-result-debug`。
+3. 调用 `GET http://127.0.0.1:19000/agent/tasks/server-url`，预期 server_url 指向 `http://192.168.110.113:9000`。
+4. 等待至少一次心跳后，调用 9000 `GET /agent/status`，预期 `agent_online=true`；微信窗口可见时 `wechat_status=ready`。
+5. 在 React 页面确认 Local Agent 在线；若前端显示离线，先检查浏览器所在电脑是否就是 exe 所在电脑。
+
+任务闭环验收：
+
+1. 通过前端创建 Aw3 `notify_sales` + `paste_only` 任务。
+2. 前端必须把新建任务的 `task_id` 传给 19000 `/agent/tasks/poll-and-execute`。
+3. 验证执行结果写回 9000：`pasted=true`、`sent=false`。
+4. 验证 9000 自动创建或绑定 `detect_reply` 任务。
+5. 通过前端按 `task_id` 调用 19000 `/agent/tasks/poll-and-detect`。
+6. 验证检测链路只读：`action.sent=false`、`action.pasted=false`。
+7. 销售回复后验证 `detected_status`、`detect_count` 回写，前端展示成功或明确失败原因。
+
+失败排查顺序：
+
+1. `/health` 不通：检查 exe 是否启动、19000 是否被旧进程占用、日志 `logs/local_agent.log`。
+2. 9000 未收到心跳：检查 `.env` 的 `AUTO_WECHAT_SERVER_URL`、局域网访问、防火墙和 9000 是否启动。
+3. 前端显示离线：确认 React 页面调用的是浏览器所在电脑的 `127.0.0.1:19000`。
+4. `wechat_status=unavailable`：确认微信由人工打开、未最小化、未托盘隐藏，并与 exe 权限一致。
+5. `poll-and-execute` 失败：优先看 `failure_stage`，确认任务类型为 `notify_sales`、目标为 Aw3、模式为 `paste_only`。
+6. `poll-and-detect` 失败：确认任务类型为 `detect_reply`，且检测链路没有调用输入框或发送动作。
+7. 任何结果出现 `sent=true`：立即停止验收并回滚，不允许作为一期通过结果。
 
 ## 附：文档陈旧点
 
