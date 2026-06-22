@@ -142,6 +142,27 @@ class LeadsClient:
             super_admin=super_admin,
         )
 
+    def create_lead(
+        self,
+        *,
+        payload: dict[str, Any],
+        merchant_id: str | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        super_admin: bool = False,
+    ) -> dict[str, Any]:
+        """创建当前可信上下文内的有效线索。"""
+        return self._request(
+            "POST",
+            "/api/leads",
+            payload=payload,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            permission_codes=["auto_wechat:leads"],
+            super_admin=super_admin,
+        )
+
     def get_lead(
         self,
         *,
@@ -155,6 +176,29 @@ class LeadsClient:
         return self._request(
             "GET",
             f"/api/leads/{lead_id}",
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            permission_codes=["auto_wechat:leads"],
+            super_admin=super_admin,
+        )
+
+    def assign_lead(
+        self,
+        *,
+        lead_id: int,
+        staff_id: int,
+        remark: str | None = None,
+        merchant_id: str | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        super_admin: bool = False,
+    ) -> dict[str, Any]:
+        """分配当前可信上下文内的有效线索。"""
+        return self._request(
+            "POST",
+            f"/api/leads/{lead_id}/assign",
+            payload={"staff_id": staff_id, "remark": remark},
             merchant_id=merchant_id,
             tenant_id=tenant_id,
             user_id=user_id,

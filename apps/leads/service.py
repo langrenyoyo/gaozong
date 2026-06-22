@@ -6,4 +6,4 @@ META = CapabilityMeta(
     description="AI小高线索能力服务边界。",
 )
 
-from apps.leads.services import get_lead, get_summary, list_leads  # noqa: E402,F401
+from apps.leads.services import assign_lead, create_lead, get_lead, get_summary, list_leads  # noqa: E402,F401

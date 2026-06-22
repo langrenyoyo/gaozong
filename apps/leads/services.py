@@ -8,8 +8,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.schemas import LeadListResponse
-from app.services import lead_management_service, lead_service, report_service
+from app.schemas import LeadAssign, LeadCreate, LeadListResponse
+from app.services import assign_service, lead_management_service, lead_service, report_service
 from app.services.lead_management_service import LeadListQuery
 
 
@@ -56,10 +56,32 @@ def list_leads(
     return items
 
 
+def create_lead(db: Session, context: RequestContext, data: LeadCreate):
+    """创建有效线索，商户归属只取可信 gateway 上下文。"""
+    payload = data.model_dump()
+    payload["merchant_id"] = context.merchant_id
+    lead = lead_service.create_lead(db, **payload)
+    return lead_management_service.build_lead_payload(db, lead)
+
+
 def get_lead(db: Session, context: RequestContext, lead_id: int):
     """复用旧详情查询，并保持商户归属校验。"""
     lead = lead_service.get_lead(db, lead_id)
     lead_management_service.require_lead_ownership(lead, context)
+    return lead_management_service.build_lead_payload(db, lead, include_detail=True)
+
+
+def assign_lead(db: Session, context: RequestContext, lead_id: int, data: LeadAssign):
+    """分配当前商户有效线索，保持旧服务的 ReplyCheck 与跟进记录行为。"""
+    existing = lead_service.get_lead(db, lead_id)
+    lead_management_service.require_lead_ownership(existing, context)
+    lead = assign_service.assign_lead(
+        db,
+        lead_id,
+        data.staff_id,
+        remark=data.remark,
+        operator_id=context.user_id,
+    )
     return lead_management_service.build_lead_payload(db, lead, include_detail=True)
 
 

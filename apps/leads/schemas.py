@@ -3,9 +3,11 @@
 本阶段保持与 9000 旧接口响应兼容，直接复用现有只读 DTO。
 """
 
-from app.schemas import LeadListData, LeadListResponse, LeadOut, ReportSummary, StaffStatItem
+from app.schemas import LeadAssign, LeadCreate, LeadListData, LeadListResponse, LeadOut, ReportSummary, StaffStatItem
 
 __all__ = [
+    "LeadAssign",
+    "LeadCreate",
     "LeadListData",
     "LeadListResponse",
     "LeadOut",

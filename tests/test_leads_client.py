@@ -79,6 +79,44 @@ def test_leads_client_gets_detail_and_summary(monkeypatch):
     assert seen[1] == {"url": "http://leads.test/api/leads/reports/summary", "method": "GET", "data": None}
 
 
+def test_leads_client_creates_and_assigns_lead(monkeypatch):
+    seen = []
+
+    def fake_urlopen(req, timeout):
+        body = req.data.decode("utf-8") if req.data else None
+        seen.append({"url": req.full_url, "method": req.method, "data": json.loads(body) if body else None})
+        return _FakeResponse(body='{"id": 1}')
+
+    monkeypatch.setattr("packages.clients.leads_client.urllib_request.urlopen", fake_urlopen)
+
+    client = LeadsClient(base_url="http://leads.test")
+    client.create_lead(
+        merchant_id="merchant-a",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        payload={"customer_name": "新客户", "merchant_id": "forged"},
+    )
+    client.assign_lead(
+        merchant_id="merchant-a",
+        lead_id=1,
+        staff_id=2,
+        remark="分配备注",
+    )
+
+    assert seen == [
+        {
+            "url": "http://leads.test/api/leads",
+            "method": "POST",
+            "data": {"customer_name": "新客户", "merchant_id": "forged"},
+        },
+        {
+            "url": "http://leads.test/api/leads/1/assign",
+            "method": "POST",
+            "data": {"staff_id": 2, "remark": "分配备注"},
+        },
+    ]
+
+
 def test_leads_client_maps_http_network_and_json_errors(monkeypatch):
     def bad_status(req, timeout):
         return _FakeResponse(status=500, body='{"detail": "bad"}')

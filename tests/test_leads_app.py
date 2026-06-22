@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401 触发 ORM 注册
 from app.database import Base, get_db
-from app.models import DouyinLead, SalesStaff
+from app.models import DouyinLead, LeadFollowupRecord, ReplyCheck, SalesStaff
 
 
 engine = create_engine(
@@ -79,7 +79,7 @@ def _seed_leads() -> dict[str, int]:
         )
         db.add_all([lead_a, lead_b])
         db.commit()
-        return {"lead_a": lead_a.id, "lead_b": lead_b.id}
+        return {"lead_a": lead_a.id, "lead_b": lead_b.id, "staff_a": staff.id}
     finally:
         db.close()
 
@@ -116,6 +116,72 @@ def test_leads_app_root_health_openapi_and_read_only_routes():
     assert summary.status_code == 200
     assert summary.json()["total_leads"] == 1
     assert summary.json()["replied_count"] == 1
+
+
+def test_leads_app_can_create_lead_with_gateway_merchant_context():
+    client = _client()
+
+    response = client.post(
+        "/api/leads",
+        json={
+            "source": "manual",
+            "lead_type": "私信",
+            "customer_name": "新客户",
+            "customer_contact": "13900000000",
+            "content": "想了解车型",
+            "source_id": "manual-001",
+            "merchant_id": "forged-merchant",
+            "tenant_id": "forged-tenant",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["customer_name"] == "新客户"
+    assert data["merchant_id"] == "merchant-a"
+    db = TestSession()
+    try:
+        lead = db.query(DouyinLead).filter(DouyinLead.id == data["id"]).first()
+        assert lead is not None
+        assert lead.merchant_id == "merchant-a"
+        assert lead.status == "pending"
+    finally:
+        db.close()
+
+
+def test_leads_app_can_assign_owned_lead_and_blocks_cross_merchant_assignment():
+    ids = _seed_leads()
+    client = _client()
+
+    assign = client.post(
+        f"/api/leads/{ids['lead_a']}/assign",
+        json={"staff_id": ids["staff_a"], "remark": "9202 分配备注", "merchant_id": "forged"},
+    )
+    blocked = client.post(
+        f"/api/leads/{ids['lead_b']}/assign",
+        json={"staff_id": ids["staff_a"], "remark": "跨商户分配"},
+    )
+
+    assert assign.status_code == 200
+    assigned = assign.json()
+    assert assigned["assigned_staff_id"] == ids["staff_a"]
+    assert assigned["status"] == "assigned"
+    assert blocked.status_code == 404
+    assert blocked.json()["detail"]["code"] == "LEAD_NOT_FOUND"
+
+    db = TestSession()
+    try:
+        followups = (
+            db.query(LeadFollowupRecord)
+            .filter(LeadFollowupRecord.lead_id == ids["lead_a"])
+            .order_by(LeadFollowupRecord.id)
+            .all()
+        )
+        checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == ids["lead_a"]).all()
+        assert [(item.record_type, item.content) for item in followups] == [("reassign", "9202 分配备注")]
+        assert len(checks) == 1
+    finally:
+        db.close()
 
 
 def test_leads_app_blocks_cross_merchant_detail_and_requires_permission():

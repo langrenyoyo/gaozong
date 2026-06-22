@@ -20,9 +20,16 @@ def _auth(context: RequestContext) -> RequestContext:
 
 
 @router.post("", response_model=LeadOut)
-def create_lead(data: LeadCreate, db: Session = Depends(get_db)):
-    """创建线索。"""
-    return lead_service.create_lead(db, **data.model_dump())
+def create_lead(
+    data: LeadCreate,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """创建线索，商户归属只来自可信 RequestContext。"""
+    _auth(context)
+    payload = data.model_dump()
+    payload["merchant_id"] = context.merchant_id
+    return lead_service.create_lead(db, **payload)
 
 
 @router.get("", response_model=list[LeadOut] | LeadListResponse)

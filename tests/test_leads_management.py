@@ -167,6 +167,35 @@ def test_list_leads_can_return_paginated_total_without_breaking_array_response()
     assert [item["id"] for item in body["data"]["items"]] == list(reversed(ids["lead_ids"]))[:2]
 
 
+def test_create_lead_uses_request_context_merchant_and_ignores_forged_scope():
+    client = _client()
+
+    response = client.post(
+        "/leads",
+        json={
+            "source": "manual",
+            "lead_type": "私信",
+            "customer_name": "旧接口创建客户",
+            "customer_contact": "13911112222",
+            "content": "想咨询",
+            "source_id": "legacy-create-001",
+            "merchant_id": "forged-merchant",
+            "tenant_id": "forged-tenant",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["merchant_id"] == "merchant-a"
+    db = TestSession()
+    try:
+        lead = db.query(DouyinLead).filter(DouyinLead.id == data["id"]).first()
+        assert lead is not None
+        assert lead.merchant_id == "merchant-a"
+    finally:
+        db.close()
+
+
 def test_reports_summary_returns_retained_and_high_intent_counts():
     _seed_staff_and_leads()
     client = _client()

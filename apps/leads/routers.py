@@ -1,15 +1,19 @@
 """AI小高线索能力服务业务路由。"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from apps.leads import services as leads_service
 from apps.leads.dependencies import GatewayContext, get_gateway_context, require_leads_context
-from apps.leads.schemas import LeadListResponse, LeadOut, ReportSummary
+from apps.leads.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut, ReportSummary
 
 
 router = APIRouter(prefix="/api/leads", tags=["AI小高线索"])
+
+
+def _bad_request(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"code": "LEAD_OPERATION_FAILED", "message": message})
 
 
 @router.get("/reports/summary", response_model=ReportSummary)
@@ -49,6 +53,17 @@ def list_leads(
     )
 
 
+@router.post("", response_model=LeadOut)
+def create_lead(
+    data: LeadCreate,
+    db: Session = Depends(get_db),
+    gateway_context: GatewayContext = Depends(get_gateway_context),
+):
+    """创建当前可信商户上下文内的有效线索。"""
+    context = require_leads_context(gateway_context)
+    return leads_service.create_lead(db, context, data)
+
+
 @router.get("/{lead_id}", response_model=LeadOut)
 def get_lead(
     lead_id: int,
@@ -58,3 +73,18 @@ def get_lead(
     """获取当前可信上下文内的线索详情。"""
     context = require_leads_context(gateway_context)
     return leads_service.get_lead(db, context, lead_id)
+
+
+@router.post("/{lead_id}/assign", response_model=LeadOut)
+def assign_lead(
+    lead_id: int,
+    data: LeadAssign,
+    db: Session = Depends(get_db),
+    gateway_context: GatewayContext = Depends(get_gateway_context),
+):
+    """分配当前可信商户上下文内的有效线索。"""
+    context = require_leads_context(gateway_context)
+    try:
+        return leads_service.assign_lead(db, context, lead_id, data)
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from exc
