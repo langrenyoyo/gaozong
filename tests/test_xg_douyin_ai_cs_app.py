@@ -455,7 +455,8 @@ def test_reply_suggestion_uses_explicit_bound_agent_and_never_auto_send(tmp_path
     assert data["agent_id"] == "agent_luxury_gap"
     assert data["agent_name"] == "agent_luxury_gap"
     assert data["agent_category"] == "bound_agent"
-    assert data["manual_required"] is False
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
     assert data["auto_send"] is False
     assert "agent_config_missing_fallback" in data["warnings"]
 
@@ -467,7 +468,7 @@ def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tm
             "tenant_id": "demo_tenant",
             "merchant_id": "demo_bba",
             "account_id": 99,
-            "latest_message": "鎴戞兂瑕佸ゥ杩狝6",
+            "latest_message": "我想要奥迪A6",
             "agent_id": "agent_from_9000",
             "agent_config": {
                 "agent_id": "agent_from_9000",
@@ -484,7 +485,8 @@ def test_reply_suggestion_uses_injected_agent_config_without_fallback_warning(tm
     assert data["agent_id"] == "agent_from_9000"
     assert data["agent_name"] == "真实小高客服"
     assert data["agent_category"] == "bound_agent"
-    assert data["manual_required"] is False
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
     assert data["auto_send"] is False
     assert "agent_config_missing_fallback" not in data["warnings"]
 
@@ -670,7 +672,8 @@ def test_reply_suggestion_with_trusted_agent_id_bypasses_mock_binding(tmp_path, 
     assert response.status_code == 200
     data = response.json()
     assert data["agent_id"] == "agent_from_9000"
-    assert data["manual_required"] is False
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
     assert data["auto_send"] is False
     assert "agent_not_bound" not in data["warnings"]
     assert "agent_config_missing_fallback" in data["warnings"]
@@ -712,7 +715,9 @@ def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_p
     assert data["match_level"] == "same_category"
     assert data["auto_send"] is False
     assert data["lead_capture_required"] is False
-    assert data["manual_required"] is False
+    assert data["manual_required"] is True
+    assert data["manual_required_reason"] == "specific_model_or_inventory_requires_human_confirmation"
+    assert "inventory_or_model_specific" in data["risk_flags"]
     assert [item["vehicle_name"] for item in data["recommended_vehicles"]] == [
         "宝马5系",
         "奔驰E级",

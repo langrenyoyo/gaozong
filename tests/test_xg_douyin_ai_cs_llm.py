@@ -188,6 +188,8 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
 
     def fake_chat(self, messages):
         assert "只能返回 JSON" in messages[0]["content"]
+        assert "自然引导留资" not in messages[0]["content"]
+        assert "引导客户留下联系方式" not in messages[0]["content"]
         assert "manual_required_reason" in messages[1]["content"]
         return {
             "reply_text": json.dumps(
@@ -542,16 +544,230 @@ def test_reply_suggestion_no_rag_uses_direct_llm_when_configured(tmp_path, monke
 
     assert response.status_code == 200
     data = response.json()
-    assert data["reply_text"].startswith("宝马3系可以先按预算")
+    assert "具体在库车源会实时变化" in data["reply_text"]
     assert data["match_level"] == "direct_llm_reply"
     assert data["llm_used"] is True
     assert data["rag_used"] is False
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
     assert data["source_chunks"] == []
     assert data["rag_sources"] == []
     assert data["decision_version"] == "direct_llm_structured_v1"
     assert data["auto_send"] is False
     assert seen["messages"][0]["role"] == "system"
     assert "不要虚构库存、价格、优惠、金融方案、联系方式" in seen["messages"][0]["content"]
+
+
+def test_direct_llm_specific_model_question_requires_manual_and_sanitizes_risky_claims(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "宝马5系现车挺多的，3系、5系、X3、X5都有现车，我把最新库存表发给您，方便留个微信或电话吗？",
+                    "intent": "vehicle_consult",
+                    "lead_level": "high",
+                    "tags": ["vehicle_interest"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.84,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "宝马5系",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is True
+    assert data["rag_used"] is False
+    assert data["manual_required"] is True
+    assert data["manual_required_reason"] == "specific_model_or_inventory_requires_human_confirmation"
+    assert data["auto_send"] is False
+    assert "inventory_or_model_specific" in data["risk_flags"]
+    assert "inventory_claim" in data["risk_flags"]
+    assert "contact_request" in data["risk_flags"]
+    for forbidden in ["现车挺多", "都有现车", "库存表", "留个微信", "留个电话"]:
+        assert forbidden not in data["reply_text"]
+    assert "具体在库车源会实时变化" in data["reply_text"]
+
+
+def test_direct_llm_brand_series_question_requires_manual_without_inventory_promise(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "我们宝马车系很全，3系、5系、X3、X5都有现车。",
+                    "intent": "vehicle_consult",
+                    "lead_level": "medium",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.7,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有什么宝马车系",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is True
+    assert data["auto_send"] is False
+    assert "inventory_or_model_specific" in data["risk_flags"]
+    assert "都有现车" not in data["reply_text"]
+    assert "具体在库车源会实时变化" in data["reply_text"]
+
+
+def test_direct_llm_general_intro_keeps_safe_generic_reply(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "我们主要经营奔驰、宝马、奥迪等精品二手车。具体车源会实时变化，您可以告诉我预算和偏好，我帮您整理需求后由顾问确认当前库存。",
+                    "intent": "service_general_intro",
+                    "lead_level": "low",
+                    "tags": ["service_intro"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.78,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好，帮我介绍一下你们主营什么车",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "service_general_intro"
+    assert data["manual_required"] is False
+    assert data["auto_send"] is False
+    assert data["risk_flags"] == []
+    assert "具体车源会实时变化" in data["reply_text"]
+    assert "加微信" not in data["reply_text"]
+    assert "电话" not in data["reply_text"]
+
+
+def test_direct_llm_price_and_contact_inputs_are_flagged(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        user_payload = json.loads(messages[1]["content"])
+        message = user_payload["latest_customer_message"]
+        if "微信" in message:
+            reply = "方便的话留个微信，我安排顾问联系您。"
+            intent = "contact_request"
+        else:
+            reply = "价格是20万左右，还可以优惠。"
+            intent = "price"
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": reply,
+                    "intent": intent,
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.7,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    price = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "多少钱",
+        },
+    ).json()
+    contact = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "加微信",
+        },
+    ).json()
+
+    assert price["manual_required"] is True
+    assert price["auto_send"] is False
+    assert "price_or_discount" in price["risk_flags"]
+    assert "价格是" not in price["reply_text"]
+    assert "可以优惠" not in price["reply_text"]
+
+    assert contact["manual_required"] is True
+    assert contact["auto_send"] is False
+    assert "contact_request" in contact["risk_flags"]
+    assert "留个微信" not in contact["reply_text"]
 
 
 def test_reply_suggestion_no_rag_llm_not_configured_warns_and_falls_back(tmp_path, monkeypatch):
@@ -574,7 +790,9 @@ def test_reply_suggestion_no_rag_llm_not_configured_warns_and_falls_back(tmp_pat
     assert data["rag_used"] is False
     assert "llm_not_configured" in data["warnings"]
     assert "direct_llm_fallback" in data["warnings"]
-    assert data["reply_text"] == "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。"
+    assert "具体在库车源会实时变化" in data["reply_text"]
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
 
 
 def test_reply_suggestion_no_rag_llm_failure_warns_and_falls_back(tmp_path, monkeypatch):
@@ -604,7 +822,9 @@ def test_reply_suggestion_no_rag_llm_failure_warns_and_falls_back(tmp_path, monk
     assert data["rag_used"] is False
     assert "llm_call_failed" in data["warnings"]
     assert "direct_llm_fallback" in data["warnings"]
-    assert data["reply_text"] == "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。"
+    assert "具体在库车源会实时变化" in data["reply_text"]
+    assert data["manual_required"] is True
+    assert "inventory_or_model_specific" in data["risk_flags"]
 
 
 def test_reply_suggestion_no_rag_different_inputs_return_different_direct_llm_replies(

@@ -35,29 +35,99 @@ JSON_PARSE_FAILED_REASON = "LLM结构化输出解析失败，需要人工确认"
 EMPTY_LLM_REASON = "LLM未返回有效内容，需要人工确认"
 RISKY_NO_RAG_REASON = "客户问题涉及高风险事项且知识库无命中，需要人工确认"
 SAFETY_REVIEW_REASON = "命中高风险客服场景，需要人工确认"
+SPECIFIC_MODEL_REASON = "specific_model_or_inventory_requires_human_confirmation"
 
 RISKY_MANUAL_KEYWORDS = (
     "价格",
+    "多少钱",
+    "报价",
     "优惠",
     "最低",
     "现车",
+    "库存",
+    "在库",
     "贷款",
+    "首付",
     "利率",
     "保险",
     "置换",
     "投诉",
     "举报",
     "退款",
+    "纠纷",
     "加微信",
+    "微信",
     "电话",
     "手机号",
+    "联系你",
     "预约试驾",
     "到店",
 )
-PRICE_OR_INVENTORY_KEYWORDS = ("价格", "优惠", "最低", "现车", "贷款", "利率", "保险", "置换")
-CONTACT_KEYWORDS = ("加微信", "电话", "手机号", "联系方式")
-COMPLAINT_KEYWORDS = ("投诉", "举报", "退款")
-HIGH_INTENT_KEYWORDS = ("预约试驾", "到店")
+LOW_RISK_DIRECT_INTENTS = {
+    "greeting",
+    "general_inquiry",
+    "service_general_intro",
+    "need_clarification",
+    "brand_general_intro",
+}
+PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低", "便宜", "落地价", "裸车价")
+FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
+INVENTORY_KEYWORDS = ("现车", "库存", "在库", "车源", "有吗", "有没有")
+CONTACT_KEYWORDS = ("加微信", "微信", "电话", "手机号", "联系方式", "联系你", "留个联系方式")
+VEHICLE_CONDITION_KEYWORDS = ("车况", "无事故", "精品车况", "原版原漆", "泡水", "火烧", "公里数", "里程")
+LEGAL_OR_TRANSFER_KEYWORDS = ("过户", "手续", "上牌", "抵押", "违章", "合同", "发票")
+COMPLAINT_KEYWORDS = ("投诉", "举报", "退款", "退订", "纠纷", "维权", "售后")
+HIGH_INTENT_KEYWORDS = ("预约试驾", "到店", "看车时间")
+MODEL_OR_BRAND_KEYWORDS = (
+    "宝马",
+    "奔驰",
+    "奥迪",
+    "大众",
+    "丰田",
+    "本田",
+    "日产",
+    "雷克萨斯",
+    "凯迪拉克",
+    "保时捷",
+    "路虎",
+    "沃尔沃",
+    "特斯拉",
+    "比亚迪",
+    "理想",
+    "问界",
+    "凯美瑞",
+    "雅阁",
+    "思域",
+    "帕萨特",
+    "迈腾",
+    "汉兰达",
+    "卡罗拉",
+    "轩逸",
+    "A6",
+    "A6L",
+    "3系",
+    "5系",
+    "X3",
+    "X5",
+)
+INVENTORY_CLAIM_KEYWORDS = (
+    "现车挺多",
+    "现车很多",
+    "都有现车",
+    "有现车",
+    "库存很全",
+    "车系很全",
+    "最新库存表",
+    "库存表",
+    "这台车在库",
+    "我帮您查到",
+)
+UNSUPPORTED_PROMISE_KEYWORDS = (
+    "我把资料发给您",
+    "把资料发给您",
+    "我把最新库存表发给您",
+    "安排顾问联系您",
+)
 PROMPT_INJECTION_KEYWORDS = (
     "忽略之前",
     "忽略以上",
@@ -526,9 +596,10 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "你是该商户的抖音私信销售客服。",
             "你只能根据商户知识库和商户主营范围回答。",
             "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
-            "如果客户咨询主营车型，应自然引导留资。",
+            "如果客户咨询主营车型，只能引导客户在当前对话内补充预算、年份、里程或配置偏好。",
             "如果客户咨询非主营车型，应说明暂不主做该车型，并介绍主营车型。",
-            "如果知识库没有相关信息，应要求人工确认或引导客户留下联系方式。",
+            "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
+            "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
             "不要承诺一定有现车。",
             "不要自动发送真实私信。",
             "你只能返回 JSON，不要输出 JSON 之外的任何文本。",
@@ -543,10 +614,11 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     if merchant_prompt.get("system_prompt"):
         system_prompt = "\n".join(
             [
-                str(merchant_prompt["system_prompt"]),
+                _sanitize_merchant_system_prompt(merchant_prompt["system_prompt"]),
                 "你只能根据商户知识库和当前 Agent 的业务边界回答。",
                 "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
-                "如果知识库没有相关信息，应要求人工确认或引导客户留下联系方式。",
+                "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
+                "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
                 "不要自动发送真实私信。",
                 "你只能返回 JSON，不要输出 JSON 之外的任何文本。",
                 "JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、manual_required_reason、risk_flags、confidence、auto_send。",
@@ -613,6 +685,20 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def _sanitize_merchant_system_prompt(value: object) -> str:
+    text = str(value or "")
+    replacements = {
+        "自然引导客户留资": "引导客户在当前对话内补充预算、年份、里程或配置偏好",
+        "自然引导留资": "引导客户在当前对话内补充预算、年份、里程或配置偏好",
+        "引导客户留下联系方式": "引导客户继续在当前对话内补充需求",
+        "优先确认车型、预算和联系方式": "优先确认车型、预算和配置偏好",
+        "留下联系方式": "继续在当前对话内补充需求",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
 
 
 def _is_audi_a6(message: str) -> bool:
@@ -758,6 +844,9 @@ def _apply_safety_postprocess(
     risk_flags = list(decision.get("risk_flags") or [])
     reason = str(decision.get("manual_required_reason") or "")
     text = str(latest_message or "")
+    reply_text = str(decision.get("reply_text") or "")
+    combined_text = f"{text}\n{reply_text}"
+    original_intent = _optional_text(decision.get("intent"))
 
     if llm_raw_auto_send:
         risk_flags.append("llm_requested_auto_send")
@@ -773,23 +862,53 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if _contains_any(text, PRICE_OR_INVENTORY_KEYWORDS):
+    if not rag_used and _is_specific_model_or_inventory_question(text):
+        risk_flags.append("inventory_or_model_specific")
+        risk_flags.append("price_or_inventory_sensitive")
+        decision["manual_required"] = True
+        reason = reason or SPECIFIC_MODEL_REASON
+        if not original_intent or original_intent not in LOW_RISK_DIRECT_INTENTS:
+            decision["intent"] = "consult_specific_model"
+
+    if not rag_used and _contains_any(combined_text, INVENTORY_CLAIM_KEYWORDS):
+        risk_flags.append("inventory_claim")
+        risk_flags.append("price_or_inventory_sensitive")
+        decision["manual_required"] = True
+        reason = reason or SPECIFIC_MODEL_REASON
+
+    if not rag_used and _contains_any(combined_text, PRICE_OR_DISCOUNT_KEYWORDS):
+        risk_flags.append("price_or_discount")
         risk_flags.append("price_or_inventory_sensitive")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if _contains_any(text, CONTACT_KEYWORDS):
+    if not rag_used and _contains_any(combined_text, FINANCE_OR_LOAN_KEYWORDS):
+        risk_flags.append("finance_or_loan")
+        decision["manual_required"] = True
+        reason = reason or SAFETY_REVIEW_REASON
+
+    if not rag_used and _contains_any(combined_text, VEHICLE_CONDITION_KEYWORDS):
+        risk_flags.append("vehicle_condition_specific")
+        decision["manual_required"] = True
+        reason = reason or SAFETY_REVIEW_REASON
+
+    if not rag_used and _contains_any(combined_text, LEGAL_OR_TRANSFER_KEYWORDS):
+        risk_flags.append("legal_or_transfer")
+        decision["manual_required"] = True
+        reason = reason or SAFETY_REVIEW_REASON
+
+    if not rag_used and _contains_any(combined_text, CONTACT_KEYWORDS):
         risk_flags.append("contact_request")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if _contains_any(text, COMPLAINT_KEYWORDS):
-        risk_flags.append("complaint_or_refund")
+    if not rag_used and _contains_any(combined_text, COMPLAINT_KEYWORDS):
+        risk_flags.append("after_sales_or_complaint")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if _contains_any(text, HIGH_INTENT_KEYWORDS):
-        risk_flags.append("high_intent")
+    if not rag_used and _contains_any(text, HIGH_INTENT_KEYWORDS):
+        risk_flags.append("appointment_or_visit_specific")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
@@ -798,10 +917,100 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or RISKY_NO_RAG_REASON
 
+    if not rag_used and original_intent and original_intent not in LOW_RISK_DIRECT_INTENTS:
+        decision["manual_required"] = True
+        reason = reason or SAFETY_REVIEW_REASON
+
+    risk_flags = _dedupe(risk_flags)
+    if risk_flags:
+        decision["manual_required"] = True
+        reason = reason or SAFETY_REVIEW_REASON
+    if not rag_used and _needs_safe_direct_reply_override(reply_text, risk_flags):
+        decision["reply_text"] = _build_safe_direct_reply(
+            latest_message=text,
+            risk_flags=risk_flags,
+            intent=_optional_text(decision.get("intent")),
+        )
+
     decision["manual_required_reason"] = reason
-    decision["risk_flags"] = _dedupe(risk_flags)
+    decision["risk_flags"] = risk_flags
     decision["auto_send"] = False
     return decision
+
+
+def _is_specific_model_or_inventory_question(text: str) -> bool:
+    if not text:
+        return False
+    if _contains_any(text, INVENTORY_KEYWORDS):
+        return True
+    if _contains_any(text, MODEL_OR_BRAND_KEYWORDS):
+        return True
+    if re.search(r"\b[A-Z]\d{1,2}L?\b", text.upper()):
+        return True
+    return False
+
+
+def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) -> bool:
+    if not reply_text:
+        return False
+    if _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS):
+        return True
+    if _contains_any(reply_text, UNSUPPORTED_PROMISE_KEYWORDS):
+        return True
+    if _contains_any(reply_text, CONTACT_KEYWORDS):
+        return True
+    if _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS):
+        return True
+    if _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS):
+        return True
+    if _contains_any(reply_text, VEHICLE_CONDITION_KEYWORDS):
+        return True
+    return any(
+        flag in risk_flags
+        for flag in (
+            "inventory_or_model_specific",
+            "inventory_claim",
+            "contact_request",
+            "price_or_discount",
+            "finance_or_loan",
+            "vehicle_condition_specific",
+            "legal_or_transfer",
+            "after_sales_or_complaint",
+        )
+    )
+
+
+def _build_safe_direct_reply(
+    *,
+    latest_message: str,
+    risk_flags: list[str],
+    intent: str | None,
+) -> str:
+    if "inventory_or_model_specific" in risk_flags or "inventory_claim" in risk_flags:
+        vehicle = _extract_vehicle_hint(latest_message)
+        subject = f"{vehicle}是比较热门的车型。" if vehicle else "具体车型和车系需要结合实时车源确认。"
+        return f"{subject}具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。"
+    if "contact_request" in risk_flags:
+        return "您也可以继续在这里告诉我预算和车型偏好，我先帮您整理需求。涉及联系方式或进一步沟通方式，建议由顾问人工确认后回复。"
+    if "price_or_discount" in risk_flags or "finance_or_loan" in risk_flags:
+        return "价格和金融方案会受车况、年份、里程和实时政策影响，建议由顾问人工确认后回复。您可以先说下预算、车型和配置偏好，我帮您整理需求。"
+    if "vehicle_condition_specific" in risk_flags:
+        return "车况、事故记录、里程和手续信息需要结合具体车辆核验，建议由顾问人工确认后回复。您可以先说下关注的车型、预算和配置偏好，我帮您整理需求。"
+    if "legal_or_transfer" in risk_flags or "after_sales_or_complaint" in risk_flags:
+        return "这个问题涉及手续或售后处理，需要顾问人工确认后回复。您可以先把具体情况发在这里，我帮您整理给顾问跟进。"
+    if intent not in LOW_RISK_DIRECT_INTENTS:
+        return "这个问题需要顾问结合实际情况人工确认。您可以先补充预算、车型偏好或具体需求，我帮您整理后交给顾问跟进。"
+    return "我们主要经营奔驰、宝马、奥迪等精品二手车。具体车源会实时变化，您可以告诉我预算和偏好，我帮您整理需求后由顾问确认当前库存。"
+
+
+def _extract_vehicle_hint(text: str) -> str | None:
+    for keyword in MODEL_OR_BRAND_KEYWORDS:
+        if keyword in text:
+            return keyword
+    match = re.search(r"\b([A-Z]\d{1,2}L?)\b", text.upper())
+    if match:
+        return match.group(1)
+    return None
 
 
 def _safe_fallback_reply_text(value: object, limit: int = 500) -> str:
