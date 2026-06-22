@@ -97,6 +97,91 @@ services:
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
     restart: "no"
 
+  # ===== 能力中心独立服务骨架（第一阶段：健康检查 + OpenAPI）=====
+  douyin-cs-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9201:9201"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.douyin_cs.main:app", "--host", "0.0.0.0", "--port", "9201"]
+    restart: "no"
+
+  leads-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9202:9202"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.leads.main:app", "--host", "0.0.0.0", "--port", "9202"]
+    restart: "no"
+
+  agents-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9203:9203"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.agents.main:app", "--host", "0.0.0.0", "--port", "9203"]
+    restart: "no"
+
+  wechat-assistant-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9204:9204"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.wechat_assistant.main:app", "--host", "0.0.0.0", "--port", "9204"]
+    restart: "no"
+
+  compute-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9205:9205"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.compute.main:app", "--host", "0.0.0.0", "--port", "9205"]
+    restart: "no"
+
+  knowledge-service:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    ports:
+      - "9206:9206"
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    command: ["python", "-m", "uvicorn", "apps.knowledge.main:app", "--host", "0.0.0.0", "--port", "9206"]
+    restart: "no"
+
   # ===== frontend 前端（React + Vite，5173）=====
   auto-wechat-frontend:
     build:

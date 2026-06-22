@@ -54,7 +54,7 @@ import {
   type DouyinMessageItem,
   type ReplySuggestionResponse,
   type UploadDouyinImageResponse,
-} from "../api/douyinAiCsClient";
+} from "../api/douyinCs";
 
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];

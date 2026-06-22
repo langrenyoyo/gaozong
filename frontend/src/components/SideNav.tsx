@@ -1,22 +1,19 @@
 import {
   BotIcon,
   BookOpenIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CoinsIcon,
   CpuIcon,
+  DatabaseIcon,
   FilterIcon,
   LogOutIcon,
   MessageCircleMoreIcon,
-  MessageSquareIcon,
-  SettingsIcon,
   ShieldCheckIcon,
-  TagsIcon,
-  UserCogIcon,
-  WrenchIcon,
 } from "lucide-react";
 import { AppUser } from "../App";
-import { NavItem } from "../types";
+import { capabilityNavCenters, findCapabilityByNavId } from "../navigation/capabilityNav";
 
 interface SideNavProps {
   activeNav?: string;
@@ -28,43 +25,27 @@ interface SideNavProps {
   user?: AppUser;
 }
 
-const navItems: Array<NavItem & { expandedLabel: string }> = [
-  { id: "douyin-ai-cs", label: "客服", expandedLabel: "抖音AI小高客服", path: "/douyin-ai-cs" },
-  { id: "douyin-ai-cs-reply-records", label: "记录", expandedLabel: "AI回复记录", path: "/douyin-ai-cs/reply-records" },
-  { id: "douyin-ai-cs-auto-reply-settings", label: "配置", expandedLabel: "AI自动回复配置", path: "/douyin-ai-cs/auto-reply-settings" },
-  { id: "douyin-ai-cs-auto-reply-runs", label: "运行", expandedLabel: "自动回复运行记录", path: "/douyin-ai-cs/auto-reply-runs" },
-  { id: "douyin-ai-cs-test", label: "测试", expandedLabel: "抖音AI客服测试", path: "/douyin-ai-cs-test" },
-  { id: "leads", label: "线索", expandedLabel: "AI小高线索", path: "/leads" },
-  { id: "ai-agents", label: "智能体", expandedLabel: "AI小高智能体", path: "/ai-agents" },
-  { id: "knowledge-categories", label: "分类", expandedLabel: "知识分类", path: "/knowledge-categories" },
-  { id: "knowledge-base", label: "知识", expandedLabel: "知识库", path: "/knowledge-base" },
-  { id: "ai-agent", label: "助手", expandedLabel: "小高AI微信助手", path: "/ai-agent" },
-  { id: "compute", label: "算力", expandedLabel: "小高算力", path: "/compute" },
+const centerIcons: Record<string, React.ReactNode> = {
+  "douyin-cs": <MessageCircleMoreIcon size={18} />,
+  "leads-center": <FilterIcon size={18} />,
+  "agents-center": <BotIcon size={18} />,
+  "wechat-assistant": <ShieldCheckIcon size={18} />,
+  "compute-center": <CoinsIcon size={18} />,
+  "knowledge-center": <BookOpenIcon size={18} />,
+};
+
+const adminItems = [
+  { id: "merchant-agent", label: "智能体", expandedLabel: "AI小高智能体" },
+  { id: "ai-reply-records", label: "回复", expandedLabel: "AI回复记录" },
+  { id: "admin-compute", label: "算力", expandedLabel: "算力配置" },
+  { id: "admin-accounts", label: "账号", expandedLabel: "管理员账号" },
 ];
 
-const superNavItems: Array<NavItem & { expandedLabel: string }> = [
-  { id: "merchant-agent", label: "智能体", expandedLabel: "AI小高智能体", path: "/merchant-agent" },
-  { id: "ai-reply-records", label: "回复", expandedLabel: "AI回复记录", path: "/ai-reply-records" },
-  { id: "admin-compute", label: "算力", expandedLabel: "算力配置", path: "/admin-compute" },
-  { id: "admin-accounts", label: "账号", expandedLabel: "管理员账号", path: "/admin-accounts" },
-];
-
-const navIcons: Record<string, React.ReactNode> = {
-  "douyin-ai-cs": <MessageCircleMoreIcon size={18} />,
-  "douyin-ai-cs-reply-records": <MessageSquareIcon size={18} />,
-  "douyin-ai-cs-auto-reply-settings": <SettingsIcon size={18} />,
-  "douyin-ai-cs-auto-reply-runs": <ShieldCheckIcon size={18} />,
-  "douyin-ai-cs-test": <WrenchIcon size={18} />,
-  leads: <FilterIcon size={18} />,
-  "ai-agents": <BotIcon size={18} />,
-  "knowledge-categories": <TagsIcon size={18} />,
-  "knowledge-base": <BookOpenIcon size={18} />,
-  "ai-agent": <ShieldCheckIcon size={18} />,
-  compute: <CoinsIcon size={18} />,
+const adminIcons: Record<string, React.ReactNode> = {
   "merchant-agent": <BotIcon size={18} />,
-  "ai-reply-records": <MessageSquareIcon size={18} />,
+  "ai-reply-records": <MessageCircleMoreIcon size={18} />,
   "admin-compute": <CpuIcon size={18} />,
-  "admin-accounts": <UserCogIcon size={18} />,
+  "admin-accounts": <DatabaseIcon size={18} />,
 };
 
 export default function SideNav({
@@ -77,7 +58,7 @@ export default function SideNav({
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
 }: SideNavProps) {
   const isAdminUser = user.role !== "merchant";
-  const visibleNavItems = isAdminUser ? superNavItems : navItems;
+  const activeCenter = findCapabilityByNavId(activeNav);
 
   return (
     <aside className="relative h-full">
@@ -89,53 +70,90 @@ export default function SideNav({
         <div className={`flex w-full items-center border-b border-white/10 py-5 ${expanded ? "justify-between px-4" : "justify-center"}`}>
           <button
             onClick={() => onExpandedChange(!expanded)}
-            className={`flex min-w-0 items-center rounded-2xl text-left transition-smooth ${expanded ? "gap-3" : "hover:scale-105"}`}
+            className={`flex min-w-0 items-center rounded-xl text-left transition-smooth ${expanded ? "gap-3" : "hover:scale-105"}`}
             aria-label={expanded ? "收起导航" : "展开导航"}
           >
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-[#2563eb] text-white shadow-[0_12px_30px_rgba(37,99,235,0.34)]">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#2563eb] text-white shadow-[0_12px_30px_rgba(37,99,235,0.34)]">
               <BotIcon size={19} />
             </div>
             {expanded ? (
               <div className="min-w-0">
                 <div className="truncate text-sm font-bold text-white">小高AI系统</div>
-                <div className="mt-0.5 truncate text-[10px] text-slate-500">AI工作台</div>
+                <div className="mt-0.5 truncate text-[10px] text-slate-500">能力中心</div>
               </div>
             ) : null}
           </button>
         </div>
 
-        <nav className={`flex flex-1 flex-col gap-1.5 pt-4 ${expanded ? "px-3" : "items-center"}`}>
-          {visibleNavItems.map((item) => {
-            const isActive = activeNav === item.id;
-            const badge = item.id === "douyin-ai-cs" && showSalesBadge ? 6 : item.badge;
-            return (
-              <button
-                key={item.id}
-                onClick={() => onNavChange(item.id)}
-                className={`relative flex transition-smooth ${
-                  expanded
-                    ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
-                    : "w-16 flex-col items-center gap-1 rounded-2xl py-2.5 text-[10px]"
-                } ${
-                  isActive
-                    ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
-                    : "text-slate-400 hover:bg-white/8 hover:text-white"
-                }`}
-              >
-                <span className="shrink-0">{navIcons[item.id]}</span>
-                <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? item.expandedLabel : item.label}</span>
-                {badge ? (
-                  <span
-                    className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${
-                      expanded ? "ml-auto" : "absolute right-1.5 top-1.5"
+        <nav className={`flex flex-1 flex-col gap-1.5 overflow-y-auto pt-4 ${expanded ? "px-3" : "items-center"}`}>
+          {isAdminUser
+            ? adminItems.map((item) => {
+                const isActive = activeNav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => onNavChange(item.id)}
+                    className={`relative flex transition-smooth ${
+                      expanded
+                        ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
+                        : "w-16 flex-col items-center gap-1 rounded-xl py-2.5 text-[10px]"
+                    } ${
+                      isActive
+                        ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
+                        : "text-slate-400 hover:bg-white/8 hover:text-white"
                     }`}
                   >
-                    {badge}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
+                    <span className="shrink-0">{adminIcons[item.id]}</span>
+                    <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? item.expandedLabel : item.label}</span>
+                  </button>
+                );
+              })
+            : capabilityNavCenters.map((center) => {
+                const isCenterActive = activeCenter.id === center.id;
+                return (
+                  <div key={center.id} className={expanded ? "w-full" : ""}>
+                    <button
+                      onClick={() => onNavChange(center.defaultNavId)}
+                      className={`relative flex transition-smooth ${
+                        expanded
+                          ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
+                          : "w-16 flex-col items-center gap-1 rounded-xl py-2.5 text-[10px]"
+                      } ${
+                        isCenterActive
+                          ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
+                          : "text-slate-400 hover:bg-white/8 hover:text-white"
+                      }`}
+                    >
+                      <span className="shrink-0">{centerIcons[center.id]}</span>
+                      <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? center.title : center.shortLabel}</span>
+                      {expanded && isCenterActive ? <ChevronDownIcon className="ml-auto" size={14} /> : null}
+                      {center.id === "douyin-cs" && showSalesBadge ? (
+                        <span className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${expanded ? "" : "absolute right-1.5 top-1.5"}`}>
+                          6
+                        </span>
+                      ) : null}
+                    </button>
+                    {expanded && isCenterActive ? (
+                      <div className="ml-8 mt-1 flex flex-col gap-1 border-l border-white/10 pl-2">
+                        {center.children.map((item) => {
+                          const isActive = activeNav === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => onNavChange(item.id)}
+                              className={`h-8 rounded-lg px-2 text-left text-[11px] font-semibold transition-smooth ${
+                                isActive ? "bg-white/12 text-white" : "text-slate-500 hover:bg-white/8 hover:text-slate-200"
+                              }`}
+                            >
+                              <span className="block truncate">{item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
         </nav>
 
         <div className={`flex flex-col gap-2 pb-4 ${expanded ? "px-3" : "items-center"}`}>

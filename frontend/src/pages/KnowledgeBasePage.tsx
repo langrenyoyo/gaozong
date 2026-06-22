@@ -11,12 +11,12 @@ import { toast } from "sonner";
 import { KnowledgeCategory, getKnowledgeCategories } from "../api/aiAgents";
 import {
   CreateRagDocumentResponse,
-  DouyinAccountItem,
   TrainRagResponse,
   createRagDocument,
   listDouyinAccounts,
   trainRag,
-} from "../api/douyinAiCsClient";
+} from "../api/knowledge";
+import type { DouyinAccountItem } from "../api/douyinCs";
 
 interface DocumentDraft {
   title: string;

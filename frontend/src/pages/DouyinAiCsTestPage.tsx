@@ -10,16 +10,18 @@ import {
 } from "lucide-react";
 
 import {
-  createRagDocument,
   getDouyinAiCsHealth,
   getReplySuggestion,
+  type ReplySuggestionRequest,
+} from "../api/douyinCs";
+import {
+  createRagDocument,
   searchRag,
   trainRag,
   type CreateRagDocumentRequest,
-  type ReplySuggestionRequest,
   type SearchRagRequest,
   type TrainRagRequest,
-} from "../api/douyinAiCsClient";
+} from "../api/knowledge";
 
 const DEFAULT_CONTENT =
   "我们主要做宝马、奔驰、奥迪等精品BBA车型。客户咨询奥迪A6、宝马5系、奔驰E级时，应引导客户留下联系方式，由顾问发送近期车源和价格参考。客户咨询丰田、本田、比亚迪等非主营车型时，应礼貌说明暂不主做该车型。";

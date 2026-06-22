@@ -201,55 +201,6 @@ export interface DouyinConversationProfileResponse {
   message?: string;
 }
 
-export interface CreateRagDocumentRequest {
-  account_open_id: string;
-  title: string;
-  content: string;
-  category_key?: string;
-  category?: string;
-  brand?: string | null;
-  vehicle_name?: string | null;
-}
-
-export interface CreateRagDocumentResponse {
-  document_id: number;
-  status: string;
-}
-
-export interface TrainRagRequest {
-  account_open_id: string;
-  category_key?: string;
-  force_rebuild?: boolean;
-}
-
-export interface TrainRagResponse {
-  training_run_id: number;
-  status: string;
-  document_count: number;
-  chunk_count: number;
-  error?: string | null;
-}
-
-export interface SearchRagRequest {
-  tenant_id: string;
-  merchant_id: string;
-  douyin_account_id: number;
-  query: string;
-  top_k?: number;
-}
-
-export interface RagSearchItem {
-  chunk_id: number;
-  document_id: number;
-  title: string;
-  chunk_text: string;
-  score: number;
-}
-
-export interface SearchRagResponse {
-  items: RagSearchItem[];
-}
-
 export interface ReplySuggestionRequest {
   tenant_id: string;
   merchant_id?: string;
@@ -707,44 +658,6 @@ export async function getDouyinConversationProfile(
       `/douyin/conversations/${encodeURIComponent(String(conversationId))}/profile`,
     ),
   );
-}
-
-export async function createRagDocument(
-  payload: CreateRagDocumentRequest,
-): Promise<CreateRagDocumentResponse> {
-  try {
-    const response = (await apiClient.post(
-      "/integrations/douyin-ai-cs/rag/documents",
-      payload,
-    )) as unknown as {
-      success?: boolean;
-      data: CreateRagDocumentResponse;
-      message?: string;
-    };
-    return response.data;
-  } catch (error) {
-    throw new Error(`9000 RAG 文档代理请求失败：${getAutoWechatProxyErrorMessage(error)}`);
-  }
-}
-
-export async function trainRag(payload: TrainRagRequest): Promise<TrainRagResponse> {
-  try {
-    const response = (await apiClient.post(
-      "/integrations/douyin-ai-cs/rag/train",
-      payload,
-    )) as unknown as {
-      success?: boolean;
-      data: TrainRagResponse;
-      message?: string;
-    };
-    return response.data;
-  } catch (error) {
-    throw new Error(`9000 RAG 训练代理请求失败：${getAutoWechatProxyErrorMessage(error)}`);
-  }
-}
-
-export async function searchRag(payload: SearchRagRequest): Promise<SearchRagResponse> {
-  return requestDouyinAiCs(douyinAiCsClient.post<SearchRagResponse>("/rag/search", payload));
 }
 
 export async function getReplySuggestion(

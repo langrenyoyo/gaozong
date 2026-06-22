@@ -658,6 +658,29 @@ export default function Index({
   const selectedMessages = selectedContact ? conversations.messages[selectedContact.id] || [] : [];
   const navColumn = isNavExpanded ? "220px" : "88px";
   const isAdminUser = user.role !== "merchant";
+  const isLeadConversationNav = activeNav === "chat" || activeNav === "lead-conversations";
+  const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs" || activeNav === "douyin-accounts";
+  const isLeadsModuleNav = activeNav === "leads" || activeNav === "lead-board" || activeNav === "lead-detail";
+  const isAgentModuleNav =
+    activeNav === "ai-agents" ||
+    activeNav === "agent-create" ||
+    activeNav === "agent-edit" ||
+    activeNav === "agent-knowledge-categories";
+  const isWechatAssistantNav =
+    activeNav === "ai-agent" ||
+    activeNav === "wechat-config" ||
+    activeNav === "wechat-tasks" ||
+    activeNav === "wechat-download-test";
+  const isComputeNav =
+    activeNav === "compute" ||
+    activeNav === "compute-token-transactions" ||
+    activeNav === "compute-recharge-orders" ||
+    activeNav === "compute-packages";
+  const isKnowledgeBaseNav =
+    activeNav === "knowledge-base" ||
+    activeNav === "knowledge-doc-training" ||
+    activeNav === "knowledge-rag-search" ||
+    activeNav === "knowledge-training-chat";
 
   const loadChatEvents = useCallback(async () => {
     setChatLoading(true);
@@ -696,7 +719,7 @@ export default function Index({
         className={`grid h-full min-h-0 overflow-hidden ${
           isAdminUser
             ? "grid-cols-[var(--nav-width)_minmax(900px,1fr)]"
-            : activeNav === "chat"
+            : isLeadConversationNav
             ? "grid-cols-[var(--nav-width)_minmax(270px,320px)_minmax(520px,1fr)_240px] max-[1180px]:grid-cols-[var(--nav-width)_minmax(260px,300px)_minmax(460px,1fr)]"
             : "grid-cols-[var(--nav-width)_minmax(900px,1fr)]"
         }`}
@@ -721,7 +744,7 @@ export default function Index({
           ) : (
             <SuperMerchantAgent />
           )
-        ) : activeNav === "chat" ? (
+        ) : isLeadConversationNav ? (
           <>
             <ContactList
               selectedId={selectedContact?.id || ""}
@@ -737,7 +760,7 @@ export default function Index({
               <ContactInfo contact={selectedContact} />
             </div>
           </>
-        ) : activeNav === "douyin-ai-cs" ? (
+        ) : isDouyinWorkbenchNav ? (
           <DouyinAiCsWorkbenchPage />
         ) : activeNav === "douyin-ai-cs-reply-records" ? (
           <AiReplyDecisionLogsPage />
@@ -745,19 +768,19 @@ export default function Index({
           <DouyinAutoReplySettingsPage />
         ) : activeNav === "douyin-ai-cs-auto-reply-runs" ? (
           <DouyinAutoReplyRunsPage />
-        ) : activeNav === "leads" ? (
+        ) : isLeadsModuleNav ? (
           <LeadsModulePage />
         ) : activeNav === "douyin-ai-cs-test" ? (
           <DouyinAiCsTestPage />
-        ) : activeNav === "ai-agents" ? (
+        ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
         ) : activeNav === "knowledge-categories" ? (
           <KnowledgeCategoriesPage />
-        ) : activeNav === "knowledge-base" ? (
+        ) : isKnowledgeBaseNav ? (
           <KnowledgeBasePage />
-        ) : activeNav === "ai-agent" ? (
+        ) : isWechatAssistantNav ? (
           <WechatAgent />
-        ) : activeNav === "compute" ? (
+        ) : isComputeNav ? (
           <ComputeCenter />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
