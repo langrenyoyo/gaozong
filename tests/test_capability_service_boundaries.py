@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 
 CAPABILITY_APPS = [
@@ -48,3 +49,24 @@ def test_gateway_exposes_capability_health_prefixes_and_keeps_legacy_root():
     legacy_root = client.get("/")
     assert legacy_root.status_code == 200
     assert legacy_root.json()["docs"] == "/docs"
+
+
+def test_knowledge_service_does_not_import_other_capability_business_services():
+    """knowledge 能力服务禁止直接 import agents / douyin-cs 业务 service。"""
+    knowledge_files = [
+        Path("apps/knowledge/routers.py"),
+        Path("apps/knowledge/services.py"),
+        Path("apps/knowledge/dependencies.py"),
+    ]
+    forbidden_imports = [
+        "app.services.ai_agent_service",
+        "app.services.agent_knowledge_category_service",
+        "app.services.douyin_ai_cs_binding_service",
+        "app.services.douyin_account_agent_binding_service",
+        "app.services.douyin_conversation_history_service",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in knowledge_files)
+
+    for forbidden in forbidden_imports:
+        assert forbidden not in combined
