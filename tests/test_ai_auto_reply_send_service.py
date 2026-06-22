@@ -12,8 +12,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import (
+    AiAgent,
     AiAutoReplyRun,
     ConversationAutopilotState,
+    DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
@@ -48,6 +50,7 @@ def _insert_settings(
     enabled: bool = True,
     dry_run_enabled: bool = True,
     send_enabled: bool = True,
+    bind_agent: bool = True,
     customer_whitelist_open_ids: list[str] | None = None,
     conversation_whitelist_ids: list[str] | None = None,
     min_interval_seconds: int = 60,
@@ -68,6 +71,27 @@ def _insert_settings(
                 max_auto_replies_per_conversation_per_day=max_auto_replies_per_conversation_per_day,
             )
         )
+        if bind_agent:
+            db.add(
+                AiAgent(
+                    agent_id="agent-1",
+                    merchant_id="merchant-1",
+                    name="测试智能体",
+                    avatar_seed="agent-1",
+                    prompt="",
+                    knowledge_base_text="",
+                    status="active",
+                )
+            )
+            db.add(
+                DouyinAccountAgentBinding(
+                    merchant_id="merchant-1",
+                    account_open_id="account-open-1",
+                    agent_id="agent-1",
+                    is_default=True,
+                    status="active",
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -199,6 +223,23 @@ def test_send_enabled_false_does_not_send():
 
     assert result["status"] == "send_skipped"
     assert result["reason"] == "account_send_disabled"
+    assert _get_run(run_id).status == "send_skipped"
+    openapi_mock.assert_not_called()
+
+
+def test_send_enabled_true_without_bound_agent_does_not_send():
+    run_id = _insert_run()
+    _insert_settings(send_enabled=True, bind_agent=False)
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "no_bound_agent"
     assert _get_run(run_id).status == "send_skipped"
     openapi_mock.assert_not_called()
 

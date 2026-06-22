@@ -15,6 +15,7 @@ import {
   ShieldCheckIcon,
   SmileIcon,
   VideoIcon,
+  WrenchIcon,
   XIcon,
   UserRoundIcon,
 } from "lucide-react";
@@ -30,16 +31,20 @@ import type {
   DouyinLiveCheckStatusData,
 } from "../types";
 import {
+  bindAgentToDouyinAccount,
   downloadDouyinResource,
   getDouyinAutoReplySetting,
+  getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   listDouyinAccounts,
   sendDouyinManualMessage,
+  unbindAgentFromDouyinAccount,
   updateDouyinAutoReplyMode,
   uploadDouyinImage,
   type DouyinAccountItem,
+  type DouyinAgentItem,
   type DouyinConversationItem,
   type DouyinConversationProfile,
   type DouyinMessageItem,
@@ -526,6 +531,12 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingAccountMode, setLoadingAccountMode] = useState(false);
   const [savingAccountMode, setSavingAccountMode] = useState(false);
   const [accountModeError, setAccountModeError] = useState<string | null>(null);
+  const [agentConfigAccount, setAgentConfigAccount] = useState<DouyinAccountItem | null>(null);
+  const [agentOptions, setAgentOptions] = useState<DouyinAgentItem[]>([]);
+  const [selectedAgentIdForConfig, setSelectedAgentIdForConfig] = useState<string>("");
+  const [loadingAgentConfig, setLoadingAgentConfig] = useState(false);
+  const [savingAgentConfig, setSavingAgentConfig] = useState(false);
+  const [agentConfigError, setAgentConfigError] = useState<string | null>(null);
   const [conversationJumpParams] = useState(() => readConversationJumpParams());
   const [conversationJumpHandled, setConversationJumpHandled] = useState(false);
   // auth-redirect 302 回跳（?auth=success&open_id=xxx）触发的自动绑定状态
@@ -558,6 +569,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
   const activeBindingReady = hasActiveAgentBinding(selectedAccount);
+  const effectiveChatAssistMode: ChatAssistMode = activeBindingReady ? chatAssistMode : "manual_takeover";
   const authCallback = authStatus?.last_oauth_callback || null;
   const authAuthorized = Boolean(authCallback?.open_id);
   useEffect(() => {
@@ -1129,6 +1141,10 @@ export default function DouyinAiCsWorkbenchPage() {
   async function changeAccountMode(nextMode: ChatAssistMode) {
     const accountOpenId = selectedAccount?.account_open_id;
     if (!accountOpenId || savingAccountMode || nextMode === chatAssistMode) return;
+    if (nextMode === "ai_auto_reply" && !activeBindingReady) {
+      setAccountModeError("请先为该抖音号配置智能体");
+      return;
+    }
     const previousMode = chatAssistMode;
     setSavingAccountMode(true);
     setAccountModeError(null);
@@ -1154,6 +1170,93 @@ export default function DouyinAiCsWorkbenchPage() {
       if (selectedAccountOpenIdRef.current === accountOpenId) {
         setSavingAccountMode(false);
       }
+    }
+  }
+
+  async function openAgentConfig(account: DouyinAccountItem) {
+    setAgentConfigAccount(account);
+    setAgentOptions([]);
+    setSelectedAgentIdForConfig(account.bound_agent_id || "");
+    setAgentConfigError(null);
+    setLoadingAgentConfig(true);
+    try {
+      const data = await getDouyinAccountAgents(account.account_open_id);
+      setAgentOptions(data.items || []);
+      setSelectedAgentIdForConfig(data.default_agent_id || account.bound_agent_id || "");
+    } catch (err) {
+      setAgentConfigError(err instanceof Error ? err.message : "智能体列表加载失败");
+    } finally {
+      setLoadingAgentConfig(false);
+    }
+  }
+
+  function closeAgentConfig() {
+    if (savingAgentConfig) return;
+    setAgentConfigAccount(null);
+    setAgentOptions([]);
+    setSelectedAgentIdForConfig("");
+    setAgentConfigError(null);
+  }
+
+  function updateAccountAgentState(
+    accountOpenId: string,
+    patch: Pick<DouyinAccountItem, "bound_agent_id" | "bound_agent_name" | "bound_agent_status" | "binding_status">,
+  ) {
+    setAccounts((current) =>
+      current.map((item) =>
+        item.account_open_id === accountOpenId
+          ? { ...item, ...patch }
+          : item,
+      ),
+    );
+    setAgentConfigAccount((current) =>
+      current && current.account_open_id === accountOpenId
+        ? { ...current, ...patch }
+        : current,
+    );
+  }
+
+  async function saveAgentConfig() {
+    if (!agentConfigAccount || !selectedAgentIdForConfig || savingAgentConfig) return;
+    const selectedAgent = agentOptions.find((item) => item.agent_id === selectedAgentIdForConfig);
+    setSavingAgentConfig(true);
+    setAgentConfigError(null);
+    try {
+      await bindAgentToDouyinAccount(agentConfigAccount.account_open_id, selectedAgentIdForConfig);
+      updateAccountAgentState(agentConfigAccount.account_open_id, {
+        bound_agent_id: selectedAgentIdForConfig,
+        bound_agent_name: selectedAgent?.agent_name || selectedAgentIdForConfig,
+        bound_agent_status: "active",
+        binding_status: "active",
+      });
+    } catch (err) {
+      setAgentConfigError(err instanceof Error ? err.message : "智能体绑定保存失败");
+    } finally {
+      setSavingAgentConfig(false);
+    }
+  }
+
+  async function unbindAgentConfig() {
+    if (!agentConfigAccount || savingAgentConfig) return;
+    setSavingAgentConfig(true);
+    setAgentConfigError(null);
+    try {
+      await unbindAgentFromDouyinAccount(agentConfigAccount.account_open_id);
+      updateAccountAgentState(agentConfigAccount.account_open_id, {
+        bound_agent_id: null,
+        bound_agent_name: null,
+        bound_agent_status: null,
+        binding_status: "unbound",
+      });
+      if (selectedAccountOpenIdRef.current === agentConfigAccount.account_open_id) {
+        setChatAssistMode("manual_takeover");
+        setAccountModeError("当前抖音号已解绑智能体，请重新配置后再开启 AI 自动回复");
+      }
+      setSelectedAgentIdForConfig("");
+    } catch (err) {
+      setAgentConfigError(err instanceof Error ? err.message : "智能体解绑失败");
+    } finally {
+      setSavingAgentConfig(false);
     }
   }
 
@@ -1202,7 +1305,7 @@ export default function DouyinAiCsWorkbenchPage() {
   }
 
   async function confirmManualSend() {
-    if (chatAssistMode !== "manual_takeover") return;
+    if (effectiveChatAssistMode !== "manual_takeover") return;
     if (!selectedConversation || !selectedAccount) return;
     const content = draftReplyText.trim();
     if (!content) {
@@ -1349,7 +1452,7 @@ export default function DouyinAiCsWorkbenchPage() {
         <div className="flex max-w-[460px] items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
           <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
           <span>
-            {chatAssistMode === "manual_takeover"
+            {effectiveChatAssistMode === "manual_takeover"
               ? "当前企业号为人工接管：AI 不会自动真实发送，人工发送仍走确认安全链路。"
               : "当前企业号为 AI 自动回复：真实发送仍受后端总开关、账号配置和测试白名单控制。"}
           </span>
@@ -1382,11 +1485,20 @@ export default function DouyinAiCsWorkbenchPage() {
             ) : null}
             {accounts.map((account) => {
               const active = account.id === selectedAccountId;
+              const accountHasAgent = hasActiveAgentBinding(account);
               return (
-                <button
+                <div
                   key={account.id}
                   onClick={() => setSelectedAccountId(account.id)}
-                  className={`mb-2 flex w-full items-center gap-3 rounded-md border px-3 py-3 text-left transition ${
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedAccountId(account.id);
+                    }
+                  }}
+                  className={`mb-2 flex w-full cursor-pointer items-center gap-3 rounded-md border px-3 py-3 text-left transition ${
                     active ? "border-blue-200 bg-blue-50" : "border-transparent hover:bg-slate-50"
                   }`}
                 >
@@ -1405,13 +1517,38 @@ export default function DouyinAiCsWorkbenchPage() {
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
                       {account.main_account_id || account.account_open_id}
                     </span>
+                    <span
+                      className={`mt-1 inline-flex max-w-full rounded px-1.5 py-0.5 text-[11px] font-semibold ${
+                        accountHasAgent
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-amber-50 text-amber-700"
+                      }`}
+                    >
+                      {accountHasAgent ? `智能体：${account.bound_agent_name || "已配置"}` : "未配置智能体"}
+                    </span>
                   </span>
                   {account.unread_count ? (
                     <span className="grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
                       {account.unread_count}
                     </span>
                   ) : null}
-                </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void openAgentConfig(account);
+                    }}
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${
+                      accountHasAgent
+                        ? "text-slate-500 hover:bg-white"
+                        : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                    }`}
+                    aria-label={`配置 ${account.account_name} 智能体`}
+                    title="配置智能体"
+                  >
+                    <WrenchIcon size={15} />
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -1525,17 +1662,21 @@ export default function DouyinAiCsWorkbenchPage() {
               </div>
               <div
                 className={`mt-2 flex items-start gap-2 text-[11px] leading-5 ${
-                  chatAssistMode === "manual_takeover" ? "text-amber-700" : "text-blue-700"
+                  effectiveChatAssistMode === "manual_takeover" ? "text-amber-700" : "text-blue-700"
                 }`}
               >
                 <span
                   className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
-                    chatAssistMode === "manual_takeover" ? "bg-amber-500" : "bg-blue-500"
+                    effectiveChatAssistMode === "manual_takeover" ? "bg-amber-500" : "bg-blue-500"
                   }`}
                 />
                 <span>
-                  <span className="font-bold">{chatModeTitle(chatAssistMode)}</span>
-                  <span className="ml-1 text-slate-500">{chatModeSubtitle(chatAssistMode)}</span>
+                  <span className="font-bold">{chatModeTitle(effectiveChatAssistMode)}</span>
+                  <span className="ml-1 text-slate-500">
+                    {activeBindingReady
+                      ? chatModeSubtitle(effectiveChatAssistMode)
+                      : "当前抖音号未配置智能体，请先在左侧账号列表点击配置后再开启 AI 自动回复"}
+                  </span>
                   {loadingAccountMode ? <span className="ml-1 text-slate-400">正在同步企业号模式...</span> : null}
                 </span>
               </div>
@@ -1547,12 +1688,13 @@ export default function DouyinAiCsWorkbenchPage() {
               <button
                 type="button"
                 onClick={() => void changeAccountMode("ai_auto_reply")}
-                disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
+                disabled={!selectedAccount || !activeBindingReady || savingAccountMode || loadingAccountMode}
                 className={`h-8 rounded px-3 text-[11px] font-semibold ${
-                  chatAssistMode === "ai_auto_reply"
+                  effectiveChatAssistMode === "ai_auto_reply"
                     ? "bg-blue-600 text-white shadow-sm"
                     : "text-slate-600 hover:bg-white disabled:text-slate-400"
                 }`}
+                title={!activeBindingReady ? "请先为该抖音号配置智能体" : undefined}
               >
                 {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI自动回复"}
               </button>
@@ -1561,7 +1703,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 onClick={() => void changeAccountMode("manual_takeover")}
                 disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
                 className={`h-8 rounded px-3 text-[11px] font-semibold ${
-                  chatAssistMode === "manual_takeover"
+                  effectiveChatAssistMode === "manual_takeover"
                     ? "bg-amber-500 text-white shadow-sm"
                     : "text-slate-600 hover:bg-white disabled:text-slate-400"
                 }`}
@@ -1681,16 +1823,16 @@ export default function DouyinAiCsWorkbenchPage() {
                   </span>
                   <div>
                     <div className="text-sm font-bold text-[#172033]">
-                      {chatAssistMode === "manual_takeover" ? "人工客服" : "AI 自动回复"}
+                      {effectiveChatAssistMode === "manual_takeover" ? "人工客服" : "AI 自动回复"}
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      {chatAssistMode === "manual_takeover"
+                      {effectiveChatAssistMode === "manual_takeover"
                         ? "人工接管状态下可手动发送消息"
                         : "AI 托管中，如需人工发送请先切换到人工接管。"}
                     </div>
                   </div>
                 </div>
-                {chatAssistMode === "manual_takeover" ? (
+                {effectiveChatAssistMode === "manual_takeover" ? (
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
@@ -1733,7 +1875,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 ) : null}
               </div>
 
-              {chatAssistMode === "manual_takeover" ? (
+              {effectiveChatAssistMode === "manual_takeover" ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <textarea
                     value={draftReplyText}
@@ -1927,6 +2069,141 @@ export default function DouyinAiCsWorkbenchPage() {
           )}
         </aside>
       </div>
+
+      {agentConfigAccount ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-amber-50 text-amber-600">
+                  <WrenchIcon size={18} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-[#172033]">配置智能体</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {agentConfigAccount.account_name} · {compactOpenId(agentConfigAccount.account_open_id)}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => closeAgentConfig()}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                aria-label="关闭智能体配置弹窗"
+              >
+                <XIcon size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5 text-xs">
+              <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-slate-600">
+                <div className="flex items-center justify-between gap-3">
+                  <span>当前抖音号</span>
+                  <span className="truncate text-right font-semibold text-[#172033]">
+                    {agentConfigAccount.account_name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>当前智能体</span>
+                  <span className="truncate text-right font-semibold text-[#172033]">
+                    {hasActiveAgentBinding(agentConfigAccount)
+                      ? agentConfigAccount.bound_agent_name || agentConfigAccount.bound_agent_id
+                      : "未配置"}
+                  </span>
+                </div>
+              </div>
+
+              {agentConfigError ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 leading-5 text-red-700">
+                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                  <span>{agentConfigError}</span>
+                </div>
+              ) : null}
+
+              <div>
+                <div className="mb-2 font-bold text-[#172033]">选择智能体</div>
+                <div className="max-h-64 overflow-auto rounded-md border border-slate-200">
+                  {loadingAgentConfig ? (
+                    <div className="grid min-h-32 place-items-center text-slate-500">
+                      <span className="inline-flex items-center gap-2">
+                        <LoaderIcon size={15} className="animate-spin" />
+                        正在加载智能体...
+                      </span>
+                    </div>
+                  ) : null}
+                  {!loadingAgentConfig && agentOptions.length === 0 ? (
+                    <div className="grid min-h-32 place-items-center px-6 text-center leading-5 text-slate-500">
+                      当前商户暂无可用 active 智能体，请先在智能体管理中创建并启用。
+                    </div>
+                  ) : null}
+                  {!loadingAgentConfig && agentOptions.map((agent) => (
+                    <label
+                      key={agent.agent_id}
+                      className={`flex cursor-pointer items-start gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0 ${
+                        selectedAgentIdForConfig === agent.agent_id ? "bg-blue-50" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="douyin-account-agent"
+                        checked={selectedAgentIdForConfig === agent.agent_id}
+                        onChange={() => setSelectedAgentIdForConfig(agent.agent_id)}
+                        className="mt-1"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-[#172033]">
+                          {agent.agent_name}
+                        </span>
+                        <span className="mt-1 block truncate text-[11px] text-slate-500">
+                          {agent.agent_id}
+                        </span>
+                      </span>
+                      {agent.is_default ? (
+                        <span className="rounded bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700">
+                          当前
+                        </span>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 leading-5 text-amber-800">
+                未配置智能体的抖音号不能开启 AI 自动回复；人工发送不受智能体绑定限制，但仍需要人工确认。
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => void unbindAgentConfig()}
+                  disabled={savingAgentConfig || !hasActiveAgentBinding(agentConfigAccount)}
+                  className="h-9 rounded-md border border-red-200 bg-white px-3 font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  解绑
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => closeAgentConfig()}
+                    disabled={savingAgentConfig}
+                    className="h-9 rounded-md border border-slate-200 bg-white px-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveAgentConfig()}
+                    disabled={savingAgentConfig || loadingAgentConfig || !selectedAgentIdForConfig}
+                    className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {savingAgentConfig ? <LoaderIcon size={14} className="animate-spin" /> : <CheckIcon size={14} />}
+                    保存
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {authModalOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">

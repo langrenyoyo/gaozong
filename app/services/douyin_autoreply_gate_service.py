@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app import config
-from app.models import AiAutoReplyRun, DouyinAccountAutoreplySetting
+from app.models import AiAgent, AiAutoReplyRun, DouyinAccountAgentBinding, DouyinAccountAutoreplySetting
 from app.services.conversation_autopilot_state_service import is_conversation_manual_takeover
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
@@ -184,6 +184,15 @@ def evaluate_real_send_gates(
     if settings.send_enabled is not True:
         return GateDecision(False, "blocked", "account_send_disabled", gate_results)
 
+    agent_binding = _agent_binding_snapshot(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+    )
+    gate_results["agent_binding"] = agent_binding
+    if agent_binding["has_active_agent"] is not True:
+        return GateDecision(False, "blocked", "no_bound_agent", gate_results)
+
     customer_whitelist = parse_customer_whitelist_open_ids(settings)
     conversation_whitelist = parse_conversation_whitelist_ids(settings)
     gate_results["account_level_whitelist"] = {
@@ -223,6 +232,45 @@ def evaluate_real_send_gates(
         return GateDecision(False, "blocked", "daily_conversation_limit_blocked", gate_results)
 
     return GateDecision(True, "sending", None, gate_results)
+
+
+def _agent_binding_snapshot(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+) -> dict[str, Any]:
+    binding = (
+        db.query(DouyinAccountAgentBinding)
+        .filter(
+            DouyinAccountAgentBinding.merchant_id == merchant_id,
+            DouyinAccountAgentBinding.account_open_id == account_open_id,
+            DouyinAccountAgentBinding.status == "active",
+            DouyinAccountAgentBinding.is_default.is_(True),
+            DouyinAccountAgentBinding.deleted_at.is_(None),
+        )
+        .order_by(DouyinAccountAgentBinding.id.desc())
+        .first()
+    )
+    if binding is None:
+        return {"has_binding": False, "has_active_agent": False, "reason": "binding_missing"}
+
+    agent = (
+        db.query(AiAgent)
+        .filter(
+            AiAgent.merchant_id == merchant_id,
+            AiAgent.agent_id == binding.agent_id,
+            AiAgent.status != "deleted",
+        )
+        .first()
+    )
+    return {
+        "has_binding": True,
+        "binding_status": binding.status,
+        "is_default": bool(binding.is_default),
+        "agent_status": getattr(agent, "status", None),
+        "has_active_agent": agent is not None and agent.status == "active",
+    }
 
 
 def _frequency_snapshot(
