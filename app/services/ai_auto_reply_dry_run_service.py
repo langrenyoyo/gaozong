@@ -280,7 +280,10 @@ def _run_with_session(db, *, event_id: int) -> None:
         },
     )
     if status == "decided" and run.mode == "real_send_candidate":
-        send_ai_auto_reply_for_run(db, run_id=run.id)
+        if final_result.get("auto_send") is True:
+            send_ai_auto_reply_for_run(db, run_id=run.id)
+        else:
+            _mark_send_skipped_by_decision(db, run)
 
 
 def _existing_run(db, event_key: str | None) -> AiAutoReplyRun | None:
@@ -394,6 +397,17 @@ def _finish_run(
         run.gate_results_json = _json_dumps(gate_results)
     run.updated_at = datetime.now()
     db.commit()
+
+
+def _mark_send_skipped_by_decision(db, run: AiAutoReplyRun) -> None:
+    run.status = "send_skipped"
+    run.block_reason = "auto_send_disabled_by_decision"
+    run.updated_at = datetime.now()
+    db.commit()
+    logger.info(
+        "ai_auto_reply_send_skipped stage=decision_gate run_id=%s reason=auto_send_disabled_by_decision",
+        run.id,
+    )
 
 
 def _decision_status(result: dict[str, Any], *, upstream_auto_send: bool) -> tuple[str, str | None]:

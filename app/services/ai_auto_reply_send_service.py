@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
+from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
 from app.services.conversation_autopilot_state_service import (
     is_conversation_manual_takeover,
     mark_ai_replied,
@@ -46,6 +46,15 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
             _hash_prefix(run.account_open_id),
         )
         return {"status": "send_skipped", "reason": "dry_run_mode"}
+    if not _decision_allows_auto_send(db, run):
+        _mark_send_skipped(db, run, "auto_send_disabled_by_decision")
+        logger.info(
+            "ai_auto_reply_send_skipped stage=decision_gate run_id=%s reason=auto_send_disabled_by_decision "
+            "decision_log_id=%s",
+            run.id,
+            run.decision_log_id,
+        )
+        return {"status": "send_skipped", "reason": "auto_send_disabled_by_decision"}
 
     existing_send = (
         db.query(DouyinPrivateMessageSend)
@@ -189,6 +198,13 @@ def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> None:
     run.block_reason = reason
     run.updated_at = datetime.now()
     db.commit()
+
+
+def _decision_allows_auto_send(db: Session, run: AiAutoReplyRun) -> bool:
+    if not run.decision_log_id:
+        return False
+    decision = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).first()
+    return bool(decision is not None and decision.final_auto_send == 1)
 
 
 def _safe_error(detail: Any) -> str:

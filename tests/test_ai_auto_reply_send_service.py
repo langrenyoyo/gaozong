@@ -14,6 +14,7 @@ from app.database import Base
 from app.models import (
     AiAgent,
     AiAutoReplyRun,
+    AiReplyDecisionLog,
     ConversationAutopilotState,
     DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
@@ -104,6 +105,7 @@ def _insert_run(
     content: str | None = "您好，可以介绍一下您的预算和关注车型。",
     trigger_server_message_id: str = "server-msg-1",
     decision_log_id: int | None = 101,
+    final_auto_send: int | None = 1,
 ) -> int:
     db = TestSession()
     try:
@@ -127,9 +129,12 @@ def _insert_run(
         db.add(run)
         db.commit()
         db.refresh(run)
-        return run.id
+        run_id = run.id
     finally:
         db.close()
+    if decision_log_id is not None and final_auto_send is not None:
+        _insert_decision_log(log_id=decision_log_id, final_auto_send=final_auto_send)
+    return run_id
 
 
 def _insert_event(
@@ -172,6 +177,37 @@ def _insert_event(
                 ),
                 created_at=created_at or datetime.now(),
                 message_create_time=message_create_time or created_at or datetime.now(),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_decision_log(*, log_id: int, final_auto_send: int) -> None:
+    db = TestSession()
+    try:
+        db.add(
+            AiReplyDecisionLog(
+                id=log_id,
+                merchant_id="merchant-1",
+                tenant_id="tenant-1",
+                account_open_id="account-open-1",
+                conversation_id="conv-1",
+                conversation_short_id="conv-1",
+                customer_open_id="customer-open-1",
+                agent_id="agent-1",
+                agent_name="测试智能体",
+                latest_message="想了解 A6",
+                reply_text="您好，可以介绍一下主营车型。",
+                manual_required=0,
+                risk_flags_json="[]",
+                llm_used=1,
+                rag_used=0,
+                upstream_auto_send=0,
+                final_auto_send=final_auto_send,
+                raw_response_json=json.dumps({"auto_send": bool(final_auto_send)}, ensure_ascii=False),
+                created_at=datetime.now(),
             )
         )
         db.commit()
@@ -238,6 +274,22 @@ def test_dry_run_mode_does_not_send_even_when_send_enabled_true():
 
     assert result["status"] == "send_skipped"
     assert result["reason"] == "dry_run_mode"
+    openapi_mock.assert_not_called()
+
+
+def test_decision_final_auto_send_false_does_not_send():
+    run_id = _insert_run(decision_log_id=301, final_auto_send=0)
+    _insert_settings(send_enabled=True, dry_run_enabled=False)
+    _insert_event()
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "auto_send_disabled_by_decision"
+    run = _get_run(run_id)
+    assert run.status == "send_skipped"
+    assert run.block_reason == "auto_send_disabled_by_decision"
     openapi_mock.assert_not_called()
 
 

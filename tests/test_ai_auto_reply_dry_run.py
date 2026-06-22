@@ -571,7 +571,7 @@ def test_send_enabled_false_does_not_call_auto_send_service():
     assert run.status == "decided"
 
 
-def test_real_send_mode_with_dry_run_disabled_calls_auto_send_service(monkeypatch):
+def test_real_send_mode_with_final_auto_send_false_skips_without_calling_send_service(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     _enable_real_send_config(monkeypatch)
@@ -585,11 +585,11 @@ def test_real_send_mode_with_dry_run_disabled_calls_auto_send_service(monkeypatc
          patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
-    auto_send_mock.assert_called_once()
-    args, kwargs = auto_send_mock.call_args
+    auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert kwargs["run_id"] == run.id
     assert run.mode == "real_send_candidate"
+    assert run.status == "send_skipped"
+    assert run.block_reason == "auto_send_disabled_by_decision"
     assert run.skip_reason != "dry_run_disabled"
 
 
@@ -713,7 +713,8 @@ def test_autoreply_disabled_skips_but_dry_run_disabled_continues_to_decision(mon
         runs = {run.trigger_event_key: run for run in db.query(AiAutoReplyRun).all()}
         assert runs["event-disabled"].status == "skipped"
         assert runs["event-disabled"].skip_reason == "autoreply_disabled"
-        assert runs["event-dry-disabled"].status == "decided"
+        assert runs["event-dry-disabled"].status == "send_skipped"
+        assert runs["event-dry-disabled"].block_reason == "auto_send_disabled_by_decision"
         assert runs["event-dry-disabled"].skip_reason is None
         assert runs["event-dry-disabled"].mode == "real_send_candidate"
         assert len(fake_client.calls) == 1
