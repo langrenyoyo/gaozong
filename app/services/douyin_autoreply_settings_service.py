@@ -15,6 +15,11 @@ from app.models import (
 )
 
 
+DEFAULT_MIN_INTERVAL_SECONDS = 10
+DEFAULT_MAX_AUTO_REPLIES_PER_CONVERSATION_PER_DAY = 80
+DEFAULT_MAX_REPLIES_PER_CONVERSATION_PER_HOUR = 20
+DEFAULT_MAX_REPLIES_PER_ACCOUNT_PER_HOUR = 300
+
 DEFAULT_AUTOREPLY_SETTINGS = {
     "mode": "manual_takeover",
     "enabled": False,
@@ -27,10 +32,10 @@ DEFAULT_AUTOREPLY_SETTINGS = {
     "blocked_risk_flags": [],
     "customer_whitelist_open_ids": [],
     "conversation_whitelist_ids": [],
-    "min_interval_seconds": 60,
-    "max_auto_replies_per_conversation_per_day": 20,
-    "max_replies_per_conversation_per_hour": 3,
-    "max_replies_per_account_per_hour": 30,
+    "min_interval_seconds": DEFAULT_MIN_INTERVAL_SECONDS,
+    "max_auto_replies_per_conversation_per_day": DEFAULT_MAX_AUTO_REPLIES_PER_CONVERSATION_PER_DAY,
+    "max_replies_per_conversation_per_hour": DEFAULT_MAX_REPLIES_PER_CONVERSATION_PER_HOUR,
+    "max_replies_per_account_per_hour": DEFAULT_MAX_REPLIES_PER_ACCOUNT_PER_HOUR,
 }
 
 AUTOREPLY_MODE_AI_AUTO = "ai_auto"

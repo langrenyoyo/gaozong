@@ -152,12 +152,12 @@ def test_list_settings_returns_current_merchant_accounts_with_default_view_witho
     assert item["require_rag_sources"] is True
     assert item["allowed_intents"] == []
     assert item["blocked_risk_flags"] == []
-    assert item["max_replies_per_conversation_per_hour"] == 3
-    assert item["max_replies_per_account_per_hour"] == 30
+    assert item["max_replies_per_conversation_per_hour"] == 20
+    assert item["max_replies_per_account_per_hour"] == 300
     assert item["customer_whitelist_open_ids"] == []
     assert item["conversation_whitelist_ids"] == []
-    assert item["min_interval_seconds"] == 60
-    assert item["max_auto_replies_per_conversation_per_day"] == 20
+    assert item["min_interval_seconds"] == 10
+    assert item["max_auto_replies_per_conversation_per_day"] == 80
 
     db = TestSession()
     try:
@@ -179,6 +179,29 @@ def test_settings_view_includes_account_mode_from_send_enabled():
     assert response_a.json()["data"]["mode"] == "ai_auto"
     assert response_b.status_code == 200
     assert response_b.json()["data"]["mode"] == "manual_takeover"
+
+
+def test_put_settings_mode_creates_new_row_with_current_frequency_defaults():
+    _insert_account(account_open_id="account-a")
+
+    response = _client().put("/douyin-autoreply/settings/account-a/mode", json={"mode": "ai_auto"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["min_interval_seconds"] == 10
+    assert data["max_auto_replies_per_conversation_per_day"] == 80
+    assert data["max_replies_per_conversation_per_hour"] == 20
+    assert data["max_replies_per_account_per_hour"] == 300
+
+    db = TestSession()
+    try:
+        row = db.query(DouyinAccountAutoreplySetting).one()
+        assert row.min_interval_seconds == 10
+        assert row.max_auto_replies_per_conversation_per_day == 80
+        assert row.max_replies_per_conversation_per_hour == 20
+        assert row.max_replies_per_account_per_hour == 300
+    finally:
+        db.close()
 
 
 def test_get_settings_detail_cannot_cross_merchant_and_returns_existing_values():

@@ -53,8 +53,8 @@ def _insert_settings(
     bind_agent: bool = True,
     customer_whitelist_open_ids: list[str] | None = None,
     conversation_whitelist_ids: list[str] | None = None,
-    min_interval_seconds: int = 60,
-    max_auto_replies_per_conversation_per_day: int = 20,
+    min_interval_seconds: int = 10,
+    max_auto_replies_per_conversation_per_day: int = 80,
 ) -> None:
     db = TestSession()
     try:

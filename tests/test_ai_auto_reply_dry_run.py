@@ -151,8 +151,8 @@ def _insert_autoreply_settings(
     require_rag_sources: bool = True,
     allowed_intents_json: str | None = None,
     blocked_risk_flags_json: str | None = None,
-    max_replies_per_conversation_per_hour: int = 3,
-    max_replies_per_account_per_hour: int = 30,
+    max_replies_per_conversation_per_hour: int = 20,
+    max_replies_per_account_per_hour: int = 300,
 ) -> None:
     db = TestSession()
     try:

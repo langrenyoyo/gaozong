@@ -1223,10 +1223,10 @@ class DouyinAutoreplySettingsItem(BaseModel):
     blocked_risk_flags: list[str] = Field(default_factory=list)
     customer_whitelist_open_ids: list[str] = Field(default_factory=list)
     conversation_whitelist_ids: list[str] = Field(default_factory=list)
-    min_interval_seconds: int = 60
-    max_auto_replies_per_conversation_per_day: int = 20
-    max_replies_per_conversation_per_hour: int = 3
-    max_replies_per_account_per_hour: int = 30
+    min_interval_seconds: int = 10
+    max_auto_replies_per_conversation_per_day: int = 80
+    max_replies_per_conversation_per_hour: int = 20
+    max_replies_per_account_per_hour: int = 300
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
