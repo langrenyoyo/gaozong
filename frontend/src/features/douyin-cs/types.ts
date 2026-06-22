@@ -37,6 +37,7 @@ export type {
   AiAutoReplyRunSendRecord,
   AllowedIntentOption,
   BlockedRiskFlagOption,
+  DirectLlmPolicy,
   DouyinAutoReplyMode,
   DouyinAutoReplySettingItem,
   DouyinAutoReplyModeUpdateRequest,
