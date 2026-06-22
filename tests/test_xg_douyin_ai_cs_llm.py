@@ -705,6 +705,100 @@ def test_direct_llm_general_intro_keeps_safe_generic_reply(tmp_path, monkeypatch
     assert "电话" not in data["reply_text"]
 
 
+def test_direct_llm_general_intro_sanitizes_promise_copy(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，我们主营奔驰、宝马、奥迪等精品二手BBA车型，车源都是精挑细选的，品质有保障，可以放心购买。",
+                    "intent": "service_general_intro",
+                    "lead_level": "low",
+                    "tags": ["service_intro"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.78,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好，介绍一下你们主营什么车？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "service_general_intro"
+    assert data["manual_required"] is False
+    assert data["auto_send"] is False
+    assert data["risk_flags"] == []
+    assert "主要经营奔驰、宝马、奥迪等精品二手BBA车型" in data["reply_text"]
+    assert "选车方向" in data["reply_text"]
+    for forbidden in ("品质有保障", "精挑细选", "放心购买", "现车", "库存表", "微信", "电话", "价格", "贷款"):
+        assert forbidden not in data["reply_text"]
+
+
+def test_direct_llm_greeting_does_not_request_contact_or_make_promises(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，我是小高汽车销售顾问，方便留个微信或电话吗？我们的车况有保障。",
+                    "intent": "greeting",
+                    "lead_level": "low",
+                    "tags": ["greeting"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.8,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "greeting"
+    assert data["auto_send"] is False
+    assert "微信" not in data["reply_text"]
+    assert "电话" not in data["reply_text"]
+    assert "车况有保障" not in data["reply_text"]
+    assert "请问您想了解哪个品牌或车型" in data["reply_text"]
+
+
 def test_direct_llm_price_and_contact_inputs_are_flagged(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")

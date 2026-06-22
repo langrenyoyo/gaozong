@@ -128,6 +128,33 @@ UNSUPPORTED_PROMISE_KEYWORDS = (
     "我把最新库存表发给您",
     "安排顾问联系您",
 )
+DIRECT_LLM_PROMISE_KEYWORDS = (
+    "品质有保障",
+    "车况有保障",
+    "车况精品",
+    "精挑细选",
+    "放心购买",
+    "保证无事故",
+    "保证车况",
+    "真实车源",
+    "现车充足",
+    "库存充足",
+    "车源很多",
+    "都有现车",
+    "最新库存",
+    "库存表",
+    "资料发给您",
+    "加微信",
+    "留电话",
+    "方便留个微信",
+    "首付",
+    "月供",
+    "贷款方案",
+    "价格优惠",
+    "可以优惠",
+    "包过户",
+    "包上牌",
+)
 PROMPT_INJECTION_KEYWORDS = (
     "忽略之前",
     "忽略以上",
@@ -931,6 +958,11 @@ def _apply_safety_postprocess(
             risk_flags=risk_flags,
             intent=_optional_text(decision.get("intent")),
         )
+    elif not rag_used:
+        decision["reply_text"] = sanitize_direct_llm_reply_text(
+            reply_text,
+            intent=_optional_text(decision.get("intent")),
+        )
 
     decision["manual_required_reason"] = reason
     decision["risk_flags"] = risk_flags
@@ -953,6 +985,8 @@ def _is_specific_model_or_inventory_question(text: str) -> bool:
 def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) -> bool:
     if not reply_text:
         return False
+    if _contains_any(reply_text, DIRECT_LLM_PROMISE_KEYWORDS):
+        return True
     if _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS):
         return True
     if _contains_any(reply_text, UNSUPPORTED_PROMISE_KEYWORDS):
@@ -986,6 +1020,8 @@ def _build_safe_direct_reply(
     risk_flags: list[str],
     intent: str | None,
 ) -> str:
+    if intent == "greeting":
+        return _safe_low_risk_direct_reply(intent)
     if "inventory_or_model_specific" in risk_flags or "inventory_claim" in risk_flags:
         vehicle = _extract_vehicle_hint(latest_message)
         subject = f"{vehicle}是比较热门的车型。" if vehicle else "具体车型和车系需要结合实时车源确认。"
@@ -1000,7 +1036,19 @@ def _build_safe_direct_reply(
         return "这个问题涉及手续或售后处理，需要顾问人工确认后回复。您可以先把具体情况发在这里，我帮您整理给顾问跟进。"
     if intent not in LOW_RISK_DIRECT_INTENTS:
         return "这个问题需要顾问结合实际情况人工确认。您可以先补充预算、车型偏好或具体需求，我帮您整理后交给顾问跟进。"
-    return "我们主要经营奔驰、宝马、奥迪等精品二手车。具体车源会实时变化，您可以告诉我预算和偏好，我帮您整理需求后由顾问确认当前库存。"
+    return _safe_low_risk_direct_reply(intent)
+
+
+def sanitize_direct_llm_reply_text(reply_text: str, *, intent: str | None) -> str:
+    if not _contains_any(reply_text, DIRECT_LLM_PROMISE_KEYWORDS):
+        return reply_text
+    return _safe_low_risk_direct_reply(intent)
+
+
+def _safe_low_risk_direct_reply(intent: str | None) -> str:
+    if intent == "greeting":
+        return "您好，我是小高汽车销售顾问。请问您想了解哪个品牌或车型？也可以告诉我预算和用途，我帮您整理选车方向。"
+    return "您好！我们小高汽车主要经营奔驰、宝马、奥迪等精品二手BBA车型。具体车源会实时变化，您可以告诉我更关注轿车还是SUV，以及大概预算和用途，我先帮您整理选车方向。"
 
 
 def _extract_vehicle_hint(text: str) -> str | None:
