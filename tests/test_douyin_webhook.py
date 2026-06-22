@@ -1095,6 +1095,68 @@ def test_webhook_im_send_msg_matching_ai_auto_send_does_not_mark_manual_takeover
         db.close()
 
 
+def test_webhook_im_send_msg_notice_without_text_does_not_mark_manual_takeover():
+    """im_send_msg 的系统 notice/空文本回执不得进入人工接管。"""
+    client = _api_client()
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text=None,
+    )
+    payload["to_user_id"] = "notice_customer_001"
+    content = json.loads(payload["content"])
+    content["message_type"] = "notice"
+    content["text"] = None
+    payload["content"] = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"):
+        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    db = _db()
+    try:
+        event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == resp.json()["event_id"]).one()
+        assert event.event == "im_send_msg"
+        assert event.message_type == "notice"
+        assert db.query(ConversationAutopilotState).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_im_send_msg_empty_type_and_empty_text_does_not_mark_manual_takeover():
+    """im_send_msg 没有明确文本内容时不得按人工客服消息处理。"""
+    client = _api_client()
+    payload = _sample_payload(
+        event="im_send_msg",
+        from_user_id="test_account_001",
+        nick_name="account",
+        message_text=None,
+    )
+    payload["to_user_id"] = "empty_customer_001"
+    content = json.loads(payload["content"])
+    content["message_type"] = ""
+    content["text"] = None
+    payload["content"] = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
+         patch("app.config.APP_ENV", "development"):
+        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    db = _db()
+    try:
+        event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == resp.json()["event_id"]).one()
+        assert event.event == "im_send_msg"
+        assert event.message_type is None
+        assert db.query(ConversationAutopilotState).count() == 0
+    finally:
+        db.close()
+
+
 def test_webhook_im_send_msg_not_matching_ai_auto_send_marks_manual_takeover():
     """无法匹配 AI 自动发送流水的 im_send_msg 视为人工发出并进入接管。"""
     from app.routers import integrations

@@ -590,6 +590,17 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
     if event.event != "im_send_msg" or event.is_duplicate == 1:
         return
     try:
+        skip_reason = _im_send_msg_manual_takeover_skip_reason(event)
+        if skip_reason:
+            logger.info(
+                "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=%s, "
+                "message_type=%s, conversation=%s",
+                event.id,
+                skip_reason,
+                event.message_type,
+                event.conversation_short_id,
+            )
+            return
         if is_ai_auto_sent_message_event(db, event=event):
             logger.info(
                 "webhook im_send_msg matched ai_auto send: event_id=%s, conversation=%s",
@@ -618,6 +629,28 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
             event.id,
             type(exc).__name__,
         )
+
+
+def _im_send_msg_manual_takeover_skip_reason(event: DouyinWebhookEvent) -> str | None:
+    """判断 im_send_msg 是否缺少“人工文本回复”特征，返回跳过原因。"""
+    message_type = (event.message_type or "").strip().lower()
+    if message_type == "notice":
+        return "notice_message"
+    content = _parsed_event_content(event)
+    if not normalize_message_text(content):
+        return "empty_text"
+    return None
+
+
+def _parsed_event_content(event: DouyinWebhookEvent) -> dict[str, Any]:
+    if event.parsed_content_json:
+        try:
+            parsed = json.loads(event.parsed_content_json)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
 
 
 def _im_send_msg_participants(event: DouyinWebhookEvent) -> tuple[str | None, str | None]:
