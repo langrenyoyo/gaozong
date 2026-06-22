@@ -109,6 +109,35 @@ class XgDouyinAiCsClient:
         }
         return self._post_json("/rag/train", payload)
 
+    def knowledge_training_ask(
+        self,
+        *,
+        context: RequestContext,
+        request: dict,
+    ) -> dict:
+        """调用 9100 小高知识库训练问答接口。"""
+        payload = {
+            **request,
+            "tenant_id": context.source_system,
+            "merchant_id": context.merchant_id,
+        }
+        return self._post_json("/knowledge-training/ask", payload)
+
+    def knowledge_training_feedback(
+        self,
+        *,
+        context: RequestContext,
+        training_id: str,
+        request: dict,
+    ) -> dict:
+        """调用 9100 小高知识库训练反馈接口。"""
+        payload = {
+            **request,
+            "tenant_id": context.source_system,
+            "merchant_id": context.merchant_id,
+        }
+        return self._post_json(f"/knowledge-training/{training_id}/feedback", payload)
+
     def _post_json(self, path: str, payload: dict) -> dict:
         url = f"{self.base_url}{path}"
         headers = {"Content-Type": "application/json"}

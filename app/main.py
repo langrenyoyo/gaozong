@@ -27,6 +27,7 @@ from app.routers import (
     douyin_accounts,
     agents,
     knowledge_categories,
+    knowledge_training,
     compute,
     capability_gateway,
 )
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(douyin_accounts.router)
     app.include_router(agents.router)
     app.include_router(knowledge_categories.router)
+    app.include_router(knowledge_training.router)
     app.include_router(compute.router)
     app.include_router(compute.admin_router)
     app.include_router(compute.internal_router)

@@ -106,6 +106,112 @@ def _patch_reply_suggestion_vector_and_chat(monkeypatch, reply_text):
     )
 
 
+def _seed_training_base_knowledge():
+    from apps.xg_douyin_ai_cs.rag.database import connect
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate
+    from apps.xg_douyin_ai_cs.rag.repository import create_document
+
+    document_id = create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="new_car_project",
+            merchant_id="merchant-real",
+            douyin_account_id=1,
+            title="门店优势",
+            content="门店支持到店看车、检测报告说明和金融方案咨询。",
+            category_key="base",
+        )
+    )
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO knowledge_chunks(
+              document_id, tenant_id, merchant_id, douyin_account_id,
+              chunk_text, chunk_index, embedding_json, embedding_model,
+              category_key, content_hash, is_active
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,1)
+            """,
+            (
+                document_id,
+                "new_car_project",
+                "merchant-real",
+                1,
+                "门店支持到店看车、检测报告说明和金融方案咨询。",
+                1,
+                "[1.0, 0.0]",
+                "test_embedding_model",
+                "base",
+                "training-base-1",
+            ),
+        )
+        conn.commit()
+
+
+def test_knowledge_training_ask_feedback_flow(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_training_base_knowledge()
+
+    def fake_embed(self, text):
+        return {"embedding": [1.0, 0.0], "model": "test_embedding_model"}
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": "可以回复：我们支持到店看车，并提供检测报告说明。",
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+            "usage": None,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.embed", fake_embed)
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    ask_response = client.post(
+        "/knowledge-training/ask",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+            "question": "客户问门店优势怎么答？",
+            "use_xiaogao_knowledge_base": True,
+        },
+    )
+
+    assert ask_response.status_code == 200
+    ask_data = ask_response.json()
+    assert ask_data["question"] == "客户问门店优势怎么答？"
+    assert ask_data["answer"] == "可以回复：我们支持到店看车，并提供检测报告说明。"
+    assert ask_data["used_knowledge_base"] is True
+    assert ask_data["knowledge_base_name"] == "小高知识库"
+    assert ask_data["status"] == "answered"
+
+    feedback_response = client.post(
+        f"/knowledge-training/{ask_data['training_id']}/feedback",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "rating": "wrong",
+            "comment": "回答不准，待人工整理",
+        },
+    )
+
+    assert feedback_response.status_code == 200
+    assert feedback_response.json()["status"] == "pending_review"
+
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        feedback = conn.execute(
+            "SELECT status FROM knowledge_training_feedbacks WHERE training_id=?",
+            (ask_data["training_id"],),
+        ).fetchone()
+        document_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM knowledge_documents WHERE title=?",
+            ("回答不准，待人工整理",),
+        ).fetchone()["count"]
+
+    assert feedback["status"] == "pending_review"
+    assert document_count == 0
+
+
 def test_import_does_not_load_9000_19000_or_wechat_ui():
     for name in [
         "apps.xg_douyin_ai_cs.main",

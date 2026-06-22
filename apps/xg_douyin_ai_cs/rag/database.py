@@ -107,6 +107,31 @@ def init_db(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS knowledge_training_sessions (
+          training_id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          merchant_id TEXT NOT NULL,
+          douyin_account_id INTEGER NOT NULL DEFAULT 0,
+          question TEXT NOT NULL,
+          answer TEXT NOT NULL,
+          used_knowledge_base INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_training_feedbacks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          training_id TEXT NOT NULL,
+          tenant_id TEXT NOT NULL,
+          merchant_id TEXT NOT NULL,
+          rating TEXT NOT NULL,
+          comment TEXT,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK(rating IN ('useful', 'normal', 'wrong')),
+          CHECK(status IN ('submitted', 'pending_review'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_documents_scope
         ON knowledge_documents(tenant_id, merchant_id, douyin_account_id, is_active);
 
@@ -123,6 +148,9 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_categories_visible
         ON knowledge_categories(tenant_id, merchant_id, scope_type, is_active, sort_order);
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_training_feedbacks_scope
+        ON knowledge_training_feedbacks(tenant_id, merchant_id, training_id, status);
 
         """
     )
