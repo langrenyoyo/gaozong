@@ -20,6 +20,23 @@ DEFAULT_MAX_AUTO_REPLIES_PER_CONVERSATION_PER_DAY = 80
 DEFAULT_MAX_REPLIES_PER_CONVERSATION_PER_HOUR = 20
 DEFAULT_MAX_REPLIES_PER_ACCOUNT_PER_HOUR = 300
 
+DEFAULT_DIRECT_LLM_POLICY: dict[str, Any] = {
+    "direct_llm_auto_send_enabled": False,
+    "policy_level": "conservative",
+    "allow_greeting_auto_send": False,
+    "allow_general_intro_auto_send": False,
+    "allow_need_clarification_auto_send": False,
+    "allow_brand_general_intro_auto_send": False,
+    "specific_model_strategy": "manual_confirm",
+    "contact_guidance_level": "none",
+    "require_rag_for_specific_inventory": True,
+    "forbid_inventory_claim": True,
+    "forbid_price_claim": True,
+    "forbid_finance_claim": True,
+    "forbid_vehicle_condition_claim": True,
+    "min_confidence_for_direct_send": 0.85,
+}
+
 DEFAULT_AUTOREPLY_SETTINGS = {
     "mode": "manual_takeover",
     "enabled": False,
@@ -36,6 +53,7 @@ DEFAULT_AUTOREPLY_SETTINGS = {
     "max_auto_replies_per_conversation_per_day": DEFAULT_MAX_AUTO_REPLIES_PER_CONVERSATION_PER_DAY,
     "max_replies_per_conversation_per_hour": DEFAULT_MAX_REPLIES_PER_CONVERSATION_PER_HOUR,
     "max_replies_per_account_per_hour": DEFAULT_MAX_REPLIES_PER_ACCOUNT_PER_HOUR,
+    "direct_llm_policy": dict(DEFAULT_DIRECT_LLM_POLICY),
 }
 
 AUTOREPLY_MODE_AI_AUTO = "ai_auto"
@@ -153,6 +171,7 @@ def build_account_autoreply_settings_view(
             "max_auto_replies_per_conversation_per_day": settings.max_auto_replies_per_conversation_per_day,
             "max_replies_per_conversation_per_hour": settings.max_replies_per_conversation_per_hour,
             "max_replies_per_account_per_hour": settings.max_replies_per_account_per_hour,
+            "direct_llm_policy": parse_direct_llm_policy(settings),
             "created_at": settings.created_at,
             "updated_at": settings.updated_at,
         }
@@ -209,6 +228,12 @@ def upsert_account_autoreply_settings(
             _unique_strings(values["conversation_whitelist_ids"]),
             ensure_ascii=False,
         )
+    if "direct_llm_policy" in values and values["direct_llm_policy"] is not None:
+        settings.direct_llm_policy_json = json.dumps(
+            normalize_direct_llm_policy(values["direct_llm_policy"]),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     db.commit()
     db.refresh(settings)
     return settings
@@ -256,6 +281,52 @@ def parse_conversation_whitelist_ids(settings: DouyinAccountAutoreplySetting | N
     if settings is None:
         return []
     return _parse_string_list(settings.conversation_whitelist_ids)
+
+
+def parse_direct_llm_policy(settings: DouyinAccountAutoreplySetting | None) -> dict[str, Any]:
+    if settings is None:
+        return dict(DEFAULT_DIRECT_LLM_POLICY)
+    raw_value = getattr(settings, "direct_llm_policy_json", None)
+    try:
+        parsed = json.loads(raw_value) if raw_value else {}
+    except (TypeError, ValueError):
+        parsed = {}
+    return normalize_direct_llm_policy(parsed)
+
+
+def normalize_direct_llm_policy(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    if not isinstance(value, dict):
+        value = {}
+    policy = dict(DEFAULT_DIRECT_LLM_POLICY)
+    bool_fields = {
+        "direct_llm_auto_send_enabled",
+        "allow_greeting_auto_send",
+        "allow_general_intro_auto_send",
+        "allow_need_clarification_auto_send",
+        "allow_brand_general_intro_auto_send",
+        "require_rag_for_specific_inventory",
+        "forbid_inventory_claim",
+        "forbid_price_claim",
+        "forbid_finance_claim",
+        "forbid_vehicle_condition_claim",
+    }
+    for field in bool_fields:
+        if field in value:
+            policy[field] = bool(value[field])
+    if value.get("policy_level") in {"conservative", "standard", "aggressive"}:
+        policy["policy_level"] = value["policy_level"]
+    if value.get("specific_model_strategy") in {"manual_confirm", "safe_clarify"}:
+        policy["specific_model_strategy"] = value["specific_model_strategy"]
+    if value.get("contact_guidance_level") in {"none", "customer_initiated_only", "soft_guidance"}:
+        policy["contact_guidance_level"] = value["contact_guidance_level"]
+    try:
+        confidence = float(value.get("min_confidence_for_direct_send", policy["min_confidence_for_direct_send"]))
+    except (TypeError, ValueError):
+        confidence = float(policy["min_confidence_for_direct_send"])
+    policy["min_confidence_for_direct_send"] = min(1.0, max(0.0, confidence))
+    return policy
 
 
 def _parse_string_list(raw_value: Any) -> list[str]:

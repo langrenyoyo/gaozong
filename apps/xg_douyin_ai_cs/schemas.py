@@ -123,6 +123,7 @@ class ReplySuggestionRequest(BaseModel):
     conversation_short_id: str | None = None
     customer_open_id: str | None = None
     account_open_id: str | None = None
+    direct_llm_policy: dict | None = None
 
 
 class RecommendedVehicle(BaseModel):

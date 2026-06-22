@@ -1049,6 +1049,244 @@ def test_reply_suggestion_llm_requested_auto_send_is_forced_false(tmp_path, monk
     assert "llm_requested_auto_send" in data["risk_flags"]
 
 
+def test_direct_llm_without_policy_keeps_auto_send_false(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，我是小高汽车销售顾问。请问您想了解哪个品牌或车型？也可以告诉我预算和用途，我帮您整理选车方向。",
+                    "intent": "greeting",
+                    "lead_level": "low",
+                    "tags": ["greeting"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.96,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is False
+    assert data["risk_flags"] == []
+    assert data["auto_send"] is False
+
+
+def test_direct_llm_standard_policy_allows_low_risk_auto_send(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，我是小高汽车销售顾问。请问您想了解哪个品牌或车型？也可以告诉我预算和用途，我帮您整理选车方向。",
+                    "intent": "greeting",
+                    "lead_level": "low",
+                    "tags": ["greeting"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.96,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "allow_greeting_auto_send": True,
+                "min_confidence_for_direct_send": 0.85,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "greeting"
+    assert data["manual_required"] is False
+    assert data["risk_flags"] == []
+    assert data["auto_send"] is True
+
+
+def test_direct_llm_conservative_policy_blocks_low_risk_auto_send(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，可以告诉我预算和用途，我帮您整理选车方向。",
+                    "intent": "need_clarification",
+                    "lead_level": "low",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.95,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "介绍一下",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "conservative",
+                "allow_need_clarification_auto_send": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["auto_send"] is False
+
+
+def test_direct_llm_safe_clarify_policy_allows_specific_model_safe_reply(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "宝马5系可以先按预算、年份、里程或配置偏好筛选，我帮您整理需求。",
+                    "intent": "consult_specific_model",
+                    "lead_level": "medium",
+                    "tags": ["model"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.93,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "宝马5系",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "specific_model_strategy": "safe_clarify",
+                "min_confidence_for_direct_send": 0.85,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is False
+    assert data["risk_flags"] == []
+    assert data["auto_send"] is True
+    assert "宝马5系" in data["reply_text"]
+    for forbidden in ("现车", "库存表", "微信", "电话", "价格", "贷款"):
+        assert forbidden not in data["reply_text"]
+
+
+def test_direct_llm_standard_policy_blocks_hard_price_risk(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "价格是20万左右，还可以优惠。",
+                    "intent": "price",
+                    "lead_level": "high",
+                    "tags": ["price"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.96,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "多少钱？",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "min_confidence_for_direct_send": 0.85,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_send"] is False
+    assert data["manual_required"] is True
+    assert "price_or_discount" in data["risk_flags"]
+
+
 def test_reply_decision_service_source_has_readable_chinese_copy():
     source = (
         __import__("pathlib")

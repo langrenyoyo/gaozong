@@ -16,6 +16,7 @@ from app.services.douyin_autoreply_settings_service import (
     parse_blocked_risk_flags,
     parse_conversation_whitelist_ids,
     parse_customer_whitelist_open_ids,
+    parse_direct_llm_policy,
 )
 
 COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
@@ -113,15 +114,15 @@ def evaluate_post_llm_gates(
         "final_auto_send": False,
     }
 
-    if upstream_auto_send:
-        return GateDecision(False, "blocked", "upstream_auto_send_requested", gate_results)
+    if not upstream_auto_send:
+        return GateDecision(False, "blocked", "upstream_auto_send_disabled", gate_results)
     if result.get("manual_required") is True:
         return GateDecision(False, "blocked", "manual_required", gate_results)
     if risk_flags and (not blocked_risk_flags or any(flag in blocked_risk_flags for flag in risk_flags)):
         return GateDecision(False, "blocked", "risk_flags", gate_results)
-    if settings.require_rag is True and result.get("rag_used") is not True:
+    if settings.require_rag is True and result.get("rag_used") is not True and not _allows_direct_llm_without_rag(settings, intent):
         return GateDecision(False, "blocked", "rag_not_used", gate_results)
-    if settings.require_rag_sources is True and not rag_sources:
+    if settings.require_rag_sources is True and not rag_sources and not _allows_direct_llm_without_rag(settings, intent):
         return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
     if confidence < float(settings.min_confidence or 0):
         return GateDecision(False, "blocked", "confidence_low", gate_results)
@@ -312,6 +313,24 @@ def _settings_snapshot(settings: DouyinAccountAutoreplySetting | None) -> dict[s
         "max_auto_replies_per_conversation_per_day": settings.max_auto_replies_per_conversation_per_day,
         "max_replies_per_conversation_per_hour": settings.max_replies_per_conversation_per_hour,
         "max_replies_per_account_per_hour": settings.max_replies_per_account_per_hour,
+        "direct_llm_policy": parse_direct_llm_policy(settings),
+    }
+
+
+def _allows_direct_llm_without_rag(settings: DouyinAccountAutoreplySetting, intent: str) -> bool:
+    policy = parse_direct_llm_policy(settings)
+    if policy.get("direct_llm_auto_send_enabled") is not True:
+        return False
+    if policy.get("policy_level") not in {"standard", "aggressive"}:
+        return False
+    return intent in {
+        "greeting",
+        "general_inquiry",
+        "service_general_intro",
+        "need_clarification",
+        "brand_general_intro",
+        "consult_specific_model",
+        "consult_inventory",
     }
 
 

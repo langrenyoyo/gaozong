@@ -1175,6 +1175,25 @@ class AiReplyDecisionLogDetailResponse(BaseModel):
 # ========== 抖音自动回复配置 ==========
 
 
+class DirectLlmPolicyConfig(BaseModel):
+    direct_llm_auto_send_enabled: bool = False
+    policy_level: Literal["conservative", "standard", "aggressive"] = "conservative"
+    allow_greeting_auto_send: bool = False
+    allow_general_intro_auto_send: bool = False
+    allow_need_clarification_auto_send: bool = False
+    allow_brand_general_intro_auto_send: bool = False
+    specific_model_strategy: Literal["manual_confirm", "safe_clarify"] = "manual_confirm"
+    contact_guidance_level: Literal["none", "customer_initiated_only", "soft_guidance"] = "none"
+    require_rag_for_specific_inventory: bool = True
+    forbid_inventory_claim: bool = True
+    forbid_price_claim: bool = True
+    forbid_finance_claim: bool = True
+    forbid_vehicle_condition_claim: bool = True
+    min_confidence_for_direct_send: float = Field(0.85, ge=0, le=1)
+
+    model_config = {"extra": "forbid"}
+
+
 class DouyinAutoreplySettingsUpdate(BaseModel):
     """抖音企业号自动回复配置更新请求。"""
 
@@ -1192,6 +1211,7 @@ class DouyinAutoreplySettingsUpdate(BaseModel):
     max_auto_replies_per_conversation_per_day: Optional[int] = Field(None, ge=0, le=1000)
     max_replies_per_conversation_per_hour: Optional[int] = Field(None, ge=0, le=1000)
     max_replies_per_account_per_hour: Optional[int] = Field(None, ge=0, le=1000)
+    direct_llm_policy: Optional[DirectLlmPolicyConfig] = None
 
     model_config = {"extra": "forbid"}
 
@@ -1227,6 +1247,7 @@ class DouyinAutoreplySettingsItem(BaseModel):
     max_auto_replies_per_conversation_per_day: int = 80
     max_replies_per_conversation_per_hour: int = 20
     max_replies_per_account_per_hour: int = 300
+    direct_llm_policy: DirectLlmPolicyConfig = Field(default_factory=DirectLlmPolicyConfig)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

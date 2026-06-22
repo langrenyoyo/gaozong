@@ -13,6 +13,7 @@ from app.models import (
     AiAgent,
     AiReplyDecisionLog,
     DouyinAccountAgentBinding,
+    DouyinAccountAutoreplySetting,
     DouyinAuthorizedAccount,
     DouyinWebhookEvent,
     KnowledgeCategory,
@@ -115,6 +116,29 @@ def _insert_agent_categories(agent_id="agent-sales", merchant_id="dev-merchant",
                     updated_by="dev-user",
                 )
             )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_autoreply_settings(
+    *,
+    account_open_id="account-open-1",
+    merchant_id="dev-merchant",
+    direct_llm_policy=None,
+):
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAccountAutoreplySetting(
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                enabled=True,
+                dry_run_enabled=False,
+                send_enabled=True,
+                direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -599,6 +623,39 @@ def test_proxy_injects_base_when_agent_has_no_category_binding(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
+
+
+def test_proxy_injects_account_direct_llm_policy(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    _insert_autoreply_settings(
+        direct_llm_policy={
+            "direct_llm_auto_send_enabled": True,
+            "policy_level": "standard",
+            "allow_greeting_auto_send": True,
+            "specific_model_strategy": "safe_clarify",
+            "contact_guidance_level": "none",
+            "min_confidence_for_direct_send": 0.86,
+        }
+    )
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/123/reply-suggestion",
+        json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "你好"},
+    )
+
+    assert response.status_code == 200
+    policy = fake_client.calls[0]["request"]["direct_llm_policy"]
+    assert policy["direct_llm_auto_send_enabled"] is True
+    assert policy["policy_level"] == "standard"
+    assert policy["allow_greeting_auto_send"] is True
+    assert policy["specific_model_strategy"] == "safe_clarify"
+    assert policy["contact_guidance_level"] == "none"
+    assert policy["min_confidence_for_direct_send"] == 0.86
 
 
 def test_proxy_builds_trusted_conversation_history_for_9100(monkeypatch):

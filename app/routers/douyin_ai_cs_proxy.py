@@ -29,6 +29,10 @@ from app.services.xg_douyin_ai_cs_client import (
     get_xg_douyin_ai_cs_client,
 )
 from app.services.ai_reply_decision_log_service import record_ai_reply_decision
+from app.services.douyin_autoreply_settings_service import (
+    get_account_autoreply_settings,
+    parse_direct_llm_policy,
+)
 
 
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
@@ -226,6 +230,12 @@ async def create_reply_suggestion_proxy(
         binding_audit=binding_result.audit,
         fallback=request.douyin_account_id,
     )
+    autoreply_settings = get_account_autoreply_settings(
+        db,
+        merchant_id=context.merchant_id,
+        account_open_id=account_open_id,
+    )
+    direct_llm_policy = parse_direct_llm_policy(autoreply_settings)
     try:
         conversation_history = build_conversation_history(
             db,
@@ -261,6 +271,7 @@ async def create_reply_suggestion_proxy(
         "latest_message": request.latest_message,
         "max_history_messages": request.max_history_messages,
         "conversation_history": conversation_history,
+        "direct_llm_policy": direct_llm_policy,
     }
 
     try:

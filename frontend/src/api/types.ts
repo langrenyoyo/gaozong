@@ -681,6 +681,27 @@ export interface ComputeTransactionQuery {
 
 export type DouyinAutoReplyMode = "ai_auto" | "manual_takeover";
 
+export type DirectLlmPolicyLevel = "conservative" | "standard" | "aggressive";
+export type DirectLlmSpecificModelStrategy = "manual_confirm" | "safe_clarify";
+export type DirectLlmContactGuidanceLevel = "none" | "customer_initiated_only" | "soft_guidance";
+
+export interface DirectLlmPolicy {
+  direct_llm_auto_send_enabled: boolean;
+  policy_level: DirectLlmPolicyLevel;
+  allow_greeting_auto_send: boolean;
+  allow_general_intro_auto_send: boolean;
+  allow_need_clarification_auto_send: boolean;
+  allow_brand_general_intro_auto_send: boolean;
+  specific_model_strategy: DirectLlmSpecificModelStrategy;
+  contact_guidance_level: DirectLlmContactGuidanceLevel;
+  require_rag_for_specific_inventory: boolean;
+  forbid_inventory_claim: boolean;
+  forbid_price_claim: boolean;
+  forbid_finance_claim: boolean;
+  forbid_vehicle_condition_claim: boolean;
+  min_confidence_for_direct_send: number;
+}
+
 export interface DouyinAutoReplySettingItem {
   account_open_id: string;
   mode?: DouyinAutoReplyMode;
@@ -704,6 +725,7 @@ export interface DouyinAutoReplySettingItem {
   max_auto_replies_per_conversation_per_day: number;
   max_replies_per_conversation_per_hour: number;
   max_replies_per_account_per_hour: number;
+  direct_llm_policy: DirectLlmPolicy;
   updated_at?: string | null;
 }
 
@@ -722,6 +744,7 @@ export interface DouyinAutoReplySettingUpdateRequest {
   max_auto_replies_per_conversation_per_day: number;
   max_replies_per_conversation_per_hour: number;
   max_replies_per_account_per_hour: number;
+  direct_llm_policy: DirectLlmPolicy;
 }
 
 export interface DouyinConversationAutopilotState {

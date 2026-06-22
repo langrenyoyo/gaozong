@@ -18,7 +18,10 @@ from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
 from app.services.douyin_account_agent_binding_service import resolve_webhook_bound_agent
 from app.services.douyin_autoreply_gate_service import evaluate_post_llm_gates, evaluate_pre_llm_gates
-from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
+from app.services.douyin_autoreply_settings_service import (
+    get_account_autoreply_settings,
+    parse_direct_llm_policy,
+)
 from app.services.douyin_conversation_history_service import build_conversation_history
 from app.services.douyin_workbench_conversation_service import get_latest_private_message_state
 from app.services.xg_douyin_ai_cs_client import (
@@ -114,6 +117,7 @@ def _run_with_session(db, *, event_id: int) -> None:
         merchant_id=binding.merchant_id or "",
         account_open_id=account_open_id,
     )
+    direct_llm_policy = parse_direct_llm_policy(settings)
     run_mode = _select_run_mode(settings)
     base["mode"] = run_mode
     logger.info(
@@ -209,6 +213,7 @@ def _run_with_session(db, *, event_id: int) -> None:
         "latest_message": latest_message,
         "conversation_history": conversation_history,
         "max_history_messages": 10,
+        "direct_llm_policy": direct_llm_policy,
     }
     run = AiAutoReplyRun(
         **{
@@ -243,12 +248,12 @@ def _run_with_session(db, *, event_id: int) -> None:
 
     final_result = dict(upstream_result)
     upstream_auto_send = final_result.get("auto_send") is True
-    final_result["auto_send"] = False
     post_gate = evaluate_post_llm_gates(
         settings=settings,
         result=final_result,
         upstream_auto_send=upstream_auto_send,
     )
+    final_result["auto_send"] = bool(upstream_auto_send and post_gate.passed)
     status = post_gate.status or ("decided" if post_gate.passed else "blocked")
     block_reason = post_gate.reason
     decision_log_id = record_ai_reply_decision(

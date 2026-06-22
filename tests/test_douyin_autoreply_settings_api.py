@@ -400,6 +400,17 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
             "max_replies_per_account_per_hour": 4,
             "min_interval_seconds": 120,
             "max_auto_replies_per_conversation_per_day": 6,
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "allow_greeting_auto_send": True,
+                "allow_general_intro_auto_send": True,
+                "allow_need_clarification_auto_send": True,
+                "allow_brand_general_intro_auto_send": True,
+                "specific_model_strategy": "safe_clarify",
+                "contact_guidance_level": "customer_initiated_only",
+                "min_confidence_for_direct_send": 0.88,
+            },
         },
     )
 
@@ -413,6 +424,11 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
     assert data["conversation_whitelist_ids"] == ["conv-a"]
     assert data["min_interval_seconds"] == 120
     assert data["max_auto_replies_per_conversation_per_day"] == 6
+    assert data["direct_llm_policy"]["direct_llm_auto_send_enabled"] is True
+    assert data["direct_llm_policy"]["policy_level"] == "standard"
+    assert data["direct_llm_policy"]["specific_model_strategy"] == "safe_clarify"
+    assert data["direct_llm_policy"]["contact_guidance_level"] == "customer_initiated_only"
+    assert data["direct_llm_policy"]["min_confidence_for_direct_send"] == 0.88
 
     db = TestSession()
     try:
@@ -420,8 +436,38 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
         assert row.merchant_id == "merchant-a"
         assert json.loads(row.allowed_intents_json) == ["greeting", "basic_info"]
         assert json.loads(row.customer_whitelist_open_ids) == ["customer-a", "customer-b"]
+        assert json.loads(row.direct_llm_policy_json)["policy_level"] == "standard"
     finally:
         db.close()
+
+
+def test_get_settings_defaults_direct_llm_policy_to_conservative():
+    _insert_account(account_open_id="account-a")
+
+    response = _client().get("/douyin-autoreply/settings/account-a")
+
+    assert response.status_code == 200
+    policy = response.json()["data"]["direct_llm_policy"]
+    assert policy["direct_llm_auto_send_enabled"] is False
+    assert policy["policy_level"] == "conservative"
+    assert policy["specific_model_strategy"] == "manual_confirm"
+    assert policy["contact_guidance_level"] == "none"
+
+
+def test_put_settings_rejects_invalid_direct_llm_policy_values():
+    _insert_account(account_open_id="account-a")
+
+    bad_policy = _client().put(
+        "/douyin-autoreply/settings/account-a",
+        json={"direct_llm_policy": {"policy_level": "unsafe"}},
+    )
+    assert bad_policy.status_code == 422
+
+    bad_confidence = _client().put(
+        "/douyin-autoreply/settings/account-a",
+        json={"direct_llm_policy": {"min_confidence_for_direct_send": 1.5}},
+    )
+    assert bad_confidence.status_code == 422
 
 
 def test_put_settings_validates_ranges_and_account_ownership():

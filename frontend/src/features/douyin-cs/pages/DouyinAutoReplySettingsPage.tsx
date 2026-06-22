@@ -20,12 +20,30 @@ import {
 import type {
   AllowedIntentOption,
   BlockedRiskFlagOption,
+  DirectLlmPolicy,
   DouyinAutoReplySettingItem,
   DouyinAutoReplySettingUpdateRequest,
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 
 const SEND_ENABLE_CONFIRM_TEXT = "确认开启自动回复";
+
+const DEFAULT_DIRECT_LLM_POLICY: DirectLlmPolicy = {
+  direct_llm_auto_send_enabled: false,
+  policy_level: "conservative",
+  allow_greeting_auto_send: false,
+  allow_general_intro_auto_send: false,
+  allow_need_clarification_auto_send: false,
+  allow_brand_general_intro_auto_send: false,
+  specific_model_strategy: "manual_confirm",
+  contact_guidance_level: "none",
+  require_rag_for_specific_inventory: true,
+  forbid_inventory_claim: true,
+  forbid_price_claim: true,
+  forbid_finance_claim: true,
+  forbid_vehicle_condition_claim: true,
+  min_confidence_for_direct_send: 0.85,
+};
 
 const ALLOWED_INTENT_OPTIONS: AllowedIntentOption[] = [
   { value: "greeting", label: "问候" },
@@ -101,6 +119,10 @@ function textToList(value: string): string[] {
 }
 
 function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplySettingUpdateRequest {
+  const directLlmPolicy = {
+    ...DEFAULT_DIRECT_LLM_POLICY,
+    ...(item?.direct_llm_policy || {}),
+  };
   return {
     enabled: Boolean(item?.enabled),
     dry_run_enabled: Boolean(item?.dry_run_enabled),
@@ -129,6 +151,22 @@ function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplyS
       typeof item?.max_auto_replies_per_conversation_per_day === "number"
         ? item.max_auto_replies_per_conversation_per_day
         : 20,
+    direct_llm_policy: directLlmPolicy,
+  };
+}
+
+function updateDirectLlmPolicy<K extends keyof DirectLlmPolicy>(
+  current: DouyinAutoReplySettingUpdateRequest,
+  key: K,
+  value: DirectLlmPolicy[K],
+): DouyinAutoReplySettingUpdateRequest {
+  return {
+    ...current,
+    direct_llm_policy: {
+      ...DEFAULT_DIRECT_LLM_POLICY,
+      ...current.direct_llm_policy,
+      [key]: value,
+    },
   };
 }
 
@@ -345,6 +383,10 @@ export default function DouyinAutoReplySettingsPage() {
     value: DouyinAutoReplySettingUpdateRequest[K],
   ) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updatePolicy<K extends keyof DirectLlmPolicy>(key: K, value: DirectLlmPolicy[K]) {
+    setForm((current) => updateDirectLlmPolicy(current, key, value));
   }
 
   async function saveSettings(payload: DouyinAutoReplySettingUpdateRequest) {
@@ -649,6 +691,119 @@ export default function DouyinAutoReplySettingsPage() {
                       />
                     </label>
                   </div>
+
+                  <section className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">Direct LLM 自动回复策略</div>
+                        <div className="mt-1 text-[11px] leading-5 text-slate-500">
+                          控制未命中知识库时的低风险回复尺度；系统始终禁止自动承诺库存、价格、车况、金融、过户、质保等事实信息。
+                        </div>
+                      </div>
+                      <label className="flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={form.direct_llm_policy.direct_llm_auto_send_enabled}
+                          onChange={(event) =>
+                            updatePolicy("direct_llm_auto_send_enabled", event.target.checked)
+                          }
+                          className="h-4 w-4"
+                        />
+                        允许低风险自动发送
+                      </label>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                      <label className="block">
+                        <span className="text-xs font-bold text-slate-700">自动发送策略</span>
+                        <select
+                          value={form.direct_llm_policy.policy_level}
+                          onChange={(event) =>
+                            updatePolicy("policy_level", event.target.value as DirectLlmPolicy["policy_level"])
+                          }
+                          className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                        >
+                          <option value="conservative">保守：只生成建议</option>
+                          <option value="standard">标准：低风险场景可自动回复</option>
+                          <option value="aggressive">积极：允许更多引导式回复</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-bold text-slate-700">具体车型/品牌咨询</span>
+                        <select
+                          value={form.direct_llm_policy.specific_model_strategy}
+                          onChange={(event) =>
+                            updatePolicy(
+                              "specific_model_strategy",
+                              event.target.value as DirectLlmPolicy["specific_model_strategy"],
+                            )
+                          }
+                          className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                        >
+                          <option value="manual_confirm">必须人工确认</option>
+                          <option value="safe_clarify">自动发送安全澄清话术</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-bold text-slate-700">联系方式引导</span>
+                        <select
+                          value={form.direct_llm_policy.contact_guidance_level}
+                          onChange={(event) =>
+                            updatePolicy(
+                              "contact_guidance_level",
+                              event.target.value as DirectLlmPolicy["contact_guidance_level"],
+                            )
+                          }
+                          className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                        >
+                          <option value="none">不主动索要</option>
+                          <option value="customer_initiated_only">仅客户主动要求联系时引导</option>
+                          <option value="soft_guidance">允许温和引导留资</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 lg:grid-cols-4">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={form.direct_llm_policy.allow_greeting_auto_send}
+                          onChange={(event) => updatePolicy("allow_greeting_auto_send", event.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        问候可自动回复
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={form.direct_llm_policy.allow_general_intro_auto_send}
+                          onChange={(event) => updatePolicy("allow_general_intro_auto_send", event.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        主营介绍可自动回复
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={form.direct_llm_policy.allow_need_clarification_auto_send}
+                          onChange={(event) => updatePolicy("allow_need_clarification_auto_send", event.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        需求澄清可自动回复
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={form.direct_llm_policy.allow_brand_general_intro_auto_send}
+                          onChange={(event) =>
+                            updatePolicy("allow_brand_general_intro_auto_send", event.target.checked)
+                          }
+                          className="h-4 w-4"
+                        />
+                        品牌泛咨询可自动回复
+                      </label>
+                    </div>
+                  </section>
 
                   <div>
                     <div className="mb-2 text-xs font-bold text-slate-700">允许意图</div>

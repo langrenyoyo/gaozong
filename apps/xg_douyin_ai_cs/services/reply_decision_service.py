@@ -70,6 +70,44 @@ LOW_RISK_DIRECT_INTENTS = {
     "need_clarification",
     "brand_general_intro",
 }
+DIRECT_LLM_POLICY_DEFAULT = {
+    "direct_llm_auto_send_enabled": False,
+    "policy_level": "conservative",
+    "allow_greeting_auto_send": False,
+    "allow_general_intro_auto_send": False,
+    "allow_need_clarification_auto_send": False,
+    "allow_brand_general_intro_auto_send": False,
+    "specific_model_strategy": "manual_confirm",
+    "contact_guidance_level": "none",
+    "require_rag_for_specific_inventory": True,
+    "forbid_inventory_claim": True,
+    "forbid_price_claim": True,
+    "forbid_finance_claim": True,
+    "forbid_vehicle_condition_claim": True,
+    "min_confidence_for_direct_send": 0.85,
+}
+DIRECT_LLM_INTENT_POLICY_FIELDS = {
+    "greeting": "allow_greeting_auto_send",
+    "general_inquiry": "allow_general_intro_auto_send",
+    "service_general_intro": "allow_general_intro_auto_send",
+    "need_clarification": "allow_need_clarification_auto_send",
+    "brand_general_intro": "allow_brand_general_intro_auto_send",
+}
+DIRECT_LLM_HARD_RISK_FLAGS = {
+    "inventory_claim",
+    "price_or_discount",
+    "finance_or_loan",
+    "vehicle_condition_specific",
+    "legal_or_transfer",
+    "after_sales_or_complaint",
+    "refund_or_dispute",
+    "unsupported_business_promise",
+    "prompt_injection",
+    "llm_json_parse_failed",
+    "llm_empty_output",
+    "llm_not_configured",
+    "llm_call_failed",
+}
 PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低", "便宜", "落地价", "裸车价")
 FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
 INVENTORY_KEYWORDS = ("现车", "库存", "在库", "车源", "有吗", "有没有")
@@ -270,6 +308,7 @@ def build_reply_suggestion(
             conversation_history=request.conversation_history,
             rag_used=False,
             llm_raw_auto_send=False,
+            direct_llm_policy=request.direct_llm_policy,
         )
         return ReplySuggestionResponse(
             reply_text=decision["reply_text"],
@@ -280,7 +319,7 @@ def build_reply_suggestion(
             lead_capture_required=False,
             confidence=decision["confidence"],
             manual_required=decision["manual_required"],
-            auto_send=False,
+            auto_send=bool(decision.get("auto_send")),
             warnings=agent_warnings,
             intent=decision.get("intent"),
             lead_level=decision.get("lead_level"),
@@ -302,6 +341,7 @@ def build_reply_suggestion(
         conversation_history=request.conversation_history,
         rag_used=False,
         llm_raw_auto_send=False,
+        direct_llm_policy=request.direct_llm_policy,
     )
     return ReplySuggestionResponse(
         reply_text=decision["reply_text"],
@@ -312,7 +352,7 @@ def build_reply_suggestion(
         lead_capture_required=False,
         confidence=decision["confidence"],
         manual_required=decision["manual_required"],
-        auto_send=False,
+        auto_send=bool(decision.get("auto_send")),
         warnings=agent_warnings,
         intent=decision.get("intent"),
         lead_level=decision.get("lead_level"),
@@ -571,6 +611,7 @@ def _build_llm_reply(
         conversation_history=request.conversation_history,
         rag_used=rag_used,
         llm_raw_auto_send=decision.get("llm_raw_auto_send"),
+        direct_llm_policy=request.direct_llm_policy,
     )
     reply_text = decision["reply_text"]
     log_llm_call(
@@ -598,7 +639,7 @@ def _build_llm_reply(
         lead_capture_required=_mentions_main_scope(request.latest_message, merchant_prompt),
         confidence=decision["confidence"],
         manual_required=decision["manual_required"],
-        auto_send=False,
+        auto_send=bool(decision.get("auto_send")),
         llm_used=True,
         rag_used=rag_used,
         source_chunks=source_payload,
@@ -867,13 +908,20 @@ def _apply_safety_postprocess(
     rag_used: bool,
     llm_raw_auto_send: object,
     conversation_history: object = None,
+    direct_llm_policy: object = None,
 ) -> dict[str, Any]:
+    policy = _normalize_direct_llm_policy(direct_llm_policy)
     risk_flags = list(decision.get("risk_flags") or [])
     reason = str(decision.get("manual_required_reason") or "")
     text = str(latest_message or "")
     reply_text = str(decision.get("reply_text") or "")
     combined_text = f"{text}\n{reply_text}"
     original_intent = _optional_text(decision.get("intent"))
+    allow_specific_safe_clarify = (
+        not rag_used
+        and policy.get("specific_model_strategy") == "safe_clarify"
+        and policy.get("policy_level") in {"standard", "aggressive"}
+    )
 
     if llm_raw_auto_send:
         risk_flags.append("llm_requested_auto_send")
@@ -890,12 +938,18 @@ def _apply_safety_postprocess(
         reason = reason or SAFETY_REVIEW_REASON
 
     if not rag_used and _is_specific_model_or_inventory_question(text):
-        risk_flags.append("inventory_or_model_specific")
-        risk_flags.append("price_or_inventory_sensitive")
-        decision["manual_required"] = True
-        reason = reason or SPECIFIC_MODEL_REASON
         if not original_intent or original_intent not in LOW_RISK_DIRECT_INTENTS:
             decision["intent"] = "consult_specific_model"
+        if allow_specific_safe_clarify:
+            decision["manual_required"] = False
+            decision["reply_text"] = _build_specific_model_safe_clarify_reply(text)
+            reply_text = str(decision.get("reply_text") or "")
+            combined_text = f"{text}\n{reply_text}"
+        else:
+            risk_flags.append("inventory_or_model_specific")
+            risk_flags.append("price_or_inventory_sensitive")
+            decision["manual_required"] = True
+            reason = reason or SPECIFIC_MODEL_REASON
 
     if not rag_used and _contains_any(combined_text, INVENTORY_CLAIM_KEYWORDS):
         risk_flags.append("inventory_claim")
@@ -944,7 +998,13 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or RISKY_NO_RAG_REASON
 
-    if not rag_used and original_intent and original_intent not in LOW_RISK_DIRECT_INTENTS:
+    current_intent = _optional_text(decision.get("intent"))
+    if (
+        not rag_used
+        and current_intent
+        and current_intent not in LOW_RISK_DIRECT_INTENTS
+        and not (allow_specific_safe_clarify and current_intent in {"consult_specific_model", "consult_inventory"})
+    ):
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
@@ -966,7 +1026,11 @@ def _apply_safety_postprocess(
 
     decision["manual_required_reason"] = reason
     decision["risk_flags"] = risk_flags
-    decision["auto_send"] = False
+    decision["auto_send"] = _direct_llm_auto_send_allowed(
+        decision,
+        rag_used=rag_used,
+        direct_llm_policy=policy,
+    )
     return decision
 
 
@@ -980,6 +1044,103 @@ def _is_specific_model_or_inventory_question(text: str) -> bool:
     if re.search(r"\b[A-Z]\d{1,2}L?\b", text.upper()):
         return True
     return False
+
+
+def _normalize_direct_llm_policy(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        value = {}
+    policy = dict(DIRECT_LLM_POLICY_DEFAULT)
+    bool_fields = {
+        "direct_llm_auto_send_enabled",
+        "allow_greeting_auto_send",
+        "allow_general_intro_auto_send",
+        "allow_need_clarification_auto_send",
+        "allow_brand_general_intro_auto_send",
+        "require_rag_for_specific_inventory",
+        "forbid_inventory_claim",
+        "forbid_price_claim",
+        "forbid_finance_claim",
+        "forbid_vehicle_condition_claim",
+    }
+    for field in bool_fields:
+        if field in value:
+            policy[field] = bool(value[field])
+    if value.get("policy_level") in {"conservative", "standard", "aggressive"}:
+        policy["policy_level"] = value["policy_level"]
+    if value.get("specific_model_strategy") in {"manual_confirm", "safe_clarify"}:
+        policy["specific_model_strategy"] = value["specific_model_strategy"]
+    if value.get("contact_guidance_level") in {"none", "customer_initiated_only", "soft_guidance"}:
+        policy["contact_guidance_level"] = value["contact_guidance_level"]
+    try:
+        confidence = float(value.get("min_confidence_for_direct_send", policy["min_confidence_for_direct_send"]))
+    except (TypeError, ValueError):
+        confidence = float(policy["min_confidence_for_direct_send"])
+    policy["min_confidence_for_direct_send"] = min(1.0, max(0.0, confidence))
+    return policy
+
+
+def _build_specific_model_safe_clarify_reply(latest_message: str) -> str:
+    vehicle = _extract_vehicle_hint(latest_message)
+    if vehicle:
+        return (
+            f"{vehicle}属于比较热门的车型。具体车源会实时变化，"
+            "您可以先说下预算、年份或配置偏好，我帮您整理需求，再由顾问确认当前车源。"
+        )
+    return (
+        "这个品牌或车型可以先按预算、年份或配置偏好来筛选。"
+        "具体车源会实时变化，我先帮您整理需求，再由顾问确认当前车源。"
+    )
+
+
+def _direct_llm_auto_send_allowed(
+    decision: dict[str, Any],
+    *,
+    rag_used: bool,
+    direct_llm_policy: dict[str, Any],
+) -> bool:
+    if rag_used:
+        return False
+    if direct_llm_policy.get("direct_llm_auto_send_enabled") is not True:
+        return False
+    if direct_llm_policy.get("policy_level") not in {"standard", "aggressive"}:
+        return False
+    if decision.get("manual_required") is True:
+        return False
+    risk_flags = list(decision.get("risk_flags") or [])
+    if risk_flags:
+        return False
+    intent = _optional_text(decision.get("intent")) or ""
+    if intent in DIRECT_LLM_INTENT_POLICY_FIELDS:
+        if direct_llm_policy.get(DIRECT_LLM_INTENT_POLICY_FIELDS[intent]) is not True:
+            return False
+    elif intent in {"consult_specific_model", "consult_inventory"}:
+        if direct_llm_policy.get("specific_model_strategy") != "safe_clarify":
+            return False
+    else:
+        return False
+    try:
+        confidence = float(decision.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < float(direct_llm_policy.get("min_confidence_for_direct_send") or 0.85):
+        return False
+    return _direct_llm_reply_text_is_safe_for_auto_send(str(decision.get("reply_text") or ""))
+
+
+def _direct_llm_reply_text_is_safe_for_auto_send(reply_text: str) -> bool:
+    if not reply_text.strip():
+        return False
+    unsafe_keyword_groups = (
+        DIRECT_LLM_PROMISE_KEYWORDS,
+        INVENTORY_CLAIM_KEYWORDS,
+        UNSUPPORTED_PROMISE_KEYWORDS,
+        CONTACT_KEYWORDS,
+        PRICE_OR_DISCOUNT_KEYWORDS,
+        FINANCE_OR_LOAN_KEYWORDS,
+        VEHICLE_CONDITION_KEYWORDS,
+        LEGAL_OR_TRANSFER_KEYWORDS,
+    )
+    return not any(_contains_any(reply_text, keywords) for keywords in unsafe_keyword_groups)
 
 
 def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) -> bool:
@@ -1052,6 +1213,9 @@ def _safe_low_risk_direct_reply(intent: str | None) -> str:
 
 
 def _extract_vehicle_hint(text: str) -> str | None:
+    model_match = re.search(r"(宝马|奔驰|奥迪)\s*([3457]系|X[1357]|[A-Z]?\d{1,2}L?)", text, re.IGNORECASE)
+    if model_match:
+        return f"{model_match.group(1)}{model_match.group(2).upper()}"
     for keyword in MODEL_OR_BRAND_KEYWORDS:
         if keyword in text:
             return keyword

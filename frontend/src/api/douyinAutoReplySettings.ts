@@ -37,6 +37,7 @@ function buildUpdatePayload(
     max_auto_replies_per_conversation_per_day: Number(payload.max_auto_replies_per_conversation_per_day),
     max_replies_per_conversation_per_hour: Number(payload.max_replies_per_conversation_per_hour),
     max_replies_per_account_per_hour: Number(payload.max_replies_per_account_per_hour),
+    direct_llm_policy: payload.direct_llm_policy,
   };
 }
 
