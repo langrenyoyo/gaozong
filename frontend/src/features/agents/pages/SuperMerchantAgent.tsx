@@ -56,10 +56,10 @@ function agentAvatar(agent: AiAgent) {
 }
 
 function canSelectCategory(category: KnowledgeCategory): boolean {
-  return category.scope_type === "merchant" && category.category_key !== BASE_CATEGORY_KEY && category.is_active !== false && category.status !== "disabled";
+  return (category.scope_type === "merchant" || category.category_key === BASE_CATEGORY_KEY) && category.is_active !== false && category.status !== "disabled";
 }
 
-function filterMerchantCategoryKeys(keys: string[], categories: KnowledgeCategory[]): string[] {
+function filterSelectableCategoryKeys(keys: string[], categories: KnowledgeCategory[]): string[] {
   const selectableKeys = new Set(categories.filter(canSelectCategory).map((category) => category.category_key));
   const seen = new Set<string>();
   return keys.filter((key) => {
@@ -134,7 +134,7 @@ function AgentEditor({
         try {
           const binding = await getAgentKnowledgeCategories(agent.agent_id);
           if (cancelled) return;
-          setSelectedCategoryKeys(filterMerchantCategoryKeys(binding.category_keys, items));
+          setSelectedCategoryKeys(filterSelectableCategoryKeys(binding.category_keys, items));
         } catch (error) {
           if (cancelled) return;
           setBindingLoadFailed(true);
@@ -178,7 +178,7 @@ function AgentEditor({
       name: draft.name.trim(),
       prompt: draft.prompt || "",
       knowledge_base_text: draft.knowledge_base_text || "",
-    }, [BASE_CATEGORY_KEY, ...selectedCategoryKeys]);
+    }, selectedCategoryKeys);
   };
 
   return (
@@ -240,10 +240,6 @@ function AgentEditor({
               {categoryLoading ? <span className="text-[11px] text-[#8b95a6]">加载中...</span> : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-[#2563eb]">
-                <input type="checkbox" checked readOnly className="h-4 w-4 accent-[#2563eb]" />
-                公共知识库 base
-              </label>
               {selectableCategories.map((category) => (
                 <label
                   key={category.category_key}
@@ -255,7 +251,7 @@ function AgentEditor({
                     onChange={() => toggleCategory(category.category_key)}
                     className="h-4 w-4 accent-[#2563eb]"
                   />
-                  {category.name || category.category_key}
+                  {category.category_key === BASE_CATEGORY_KEY ? "小高知识库" : category.name || category.category_key}
                 </label>
               ))}
             </div>

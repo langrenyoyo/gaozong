@@ -1243,7 +1243,7 @@ def test_webhook_im_send_msg_post_process_error_does_not_affect_response():
     with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", False), \
          patch("app.config.APP_ENV", "development"), \
          patch(
-             "app.integrations.douyin_webhook.is_ai_auto_sent_message_event",
+             "app.integrations.douyin_webhook.is_effective_human_outbound_message",
              side_effect=RuntimeError("matcher failed"),
          ):
         resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})

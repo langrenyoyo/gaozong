@@ -144,6 +144,8 @@ def _insert_event(
     created_at: datetime | None = None,
     message_create_time: datetime | None = None,
     event_key: str | None = None,
+    message_type: str | None = "text",
+    text: str | None = None,
 ) -> None:
     db = TestSession()
     try:
@@ -152,7 +154,7 @@ def _insert_event(
         content = {
             "conversation_short_id": "conv-1",
             "server_message_id": server_message_id,
-            "message_type": "text",
+            "message_type": message_type,
             "text": "想了解 A6",
         }
         db.add(
@@ -162,7 +164,7 @@ def _insert_event(
                 to_user_id=to_user_id,
                 conversation_short_id="conv-1",
                 server_message_id=server_message_id,
-                message_type="text",
+                message_type=message_type,
                 parsed_content_json=json.dumps(content, ensure_ascii=False),
                 event_key=event_key or f"event-{server_message_id}-{event}",
                 is_duplicate=0,
@@ -587,6 +589,92 @@ def test_outbound_after_trigger_is_send_skipped():
 
     assert result["status"] == "send_skipped"
     assert result["reason"] == "outbound_after_trigger"
+
+
+def test_notice_im_send_msg_after_trigger_does_not_count_as_outbound():
+    base_time = datetime.now() - timedelta(minutes=3)
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event(server_message_id="server-msg-1", created_at=base_time)
+    _insert_event(
+        event="im_send_msg",
+        server_message_id="server-msg-notice",
+        created_at=base_time + timedelta(seconds=1),
+        message_type="notice",
+        event_key="event-server-msg-notice",
+    )
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+
+
+def test_human_text_im_send_msg_after_trigger_still_counts_as_outbound():
+    base_time = datetime.now() - timedelta(minutes=3)
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event(server_message_id="server-msg-1", created_at=base_time)
+    _insert_event(
+        event="im_send_msg",
+        server_message_id="server-msg-human",
+        created_at=base_time + timedelta(seconds=1),
+        event_key="event-server-msg-human",
+    )
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "outbound_after_trigger"
+
+
+def test_ai_auto_send_receipt_after_trigger_does_not_count_as_outbound():
+    base_time = datetime.now() - timedelta(minutes=3)
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event(server_message_id="server-msg-1", created_at=base_time)
+    db = TestSession()
+    try:
+        db.add(
+            DouyinPrivateMessageSend(
+                main_account_id=123,
+                conversation_short_id="conv-1",
+                server_message_id="server-msg-1",
+                from_user_id="account-open-1",
+                to_user_id="customer-open-1",
+                customer_open_id="customer-open-1",
+                account_open_id="account-open-1",
+                content="鎯充簡瑙?A6",
+                scene="im_reply_msg",
+                upstream_msg_id="server-msg-ai-receipt",
+                status="sent",
+                manual_confirmed=0,
+                auto_send=1,
+                send_source="ai_auto",
+                auto_reply_run_id=999,
+                sent_at=base_time + timedelta(seconds=1),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    _insert_event(
+        event="im_send_msg",
+        server_message_id="server-msg-ai-receipt",
+        created_at=base_time + timedelta(seconds=1),
+        event_key="event-server-msg-ai-receipt",
+    )
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
 
 
 def test_send_context_unavailable_is_send_skipped():

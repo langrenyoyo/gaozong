@@ -193,6 +193,10 @@ function conversationTagText(tag: string) {
   return tag;
 }
 
+function visibleConversationTags(tags?: string[] | null) {
+  return (tags || []).filter((tag) => tag !== "retained_contact");
+}
+
 function isCustomerMessage(message: DouyinMessageItem) {
   return (
     message.direction === "inbound" ||
@@ -1571,7 +1575,7 @@ export default function DouyinAiCsWorkbenchPage() {
                           : "bg-amber-50 text-amber-700"
                       }`}
                     >
-                      {accountHasAgent ? `智能体：${account.bound_agent_name || "已配置"}` : "未配置智能体"}
+                      {accountHasAgent ? account.bound_agent_name || "已配置" : "未配置智能体"}
                     </span>
                   </span>
                   {account.unread_count ? (
@@ -1650,6 +1654,7 @@ export default function DouyinAiCsWorkbenchPage() {
             ) : null}
             {filteredConversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;
+              const tags = visibleConversationTags(conversation.tags);
               return (
                 <button
                   key={conversation.id}
@@ -1670,9 +1675,9 @@ export default function DouyinAiCsWorkbenchPage() {
                     </span>
                   </div>
                   <div className="mt-1 truncate text-xs text-slate-500">{conversation.last_message}</div>
-                  {conversation.tags?.length ? (
+                  {tags.length ? (
                     <div className="mt-2 flex flex-wrap gap-1">
-                      {conversation.tags.map((tag) => (
+                      {tags.map((tag) => (
                         <span
                           key={tag}
                           className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700"

@@ -21,6 +21,7 @@ from app.services.douyin_live_check_service import (
     list_authorized_accounts,
     list_persisted_authorized_accounts,
 )
+from app.services.douyin_outbound_message_classifier import is_effective_human_outbound_message
 from app.services.lead_management_service import (
     has_retained_contact as lead_has_retained_contact,
     lead_score as compute_lead_score,
@@ -409,6 +410,8 @@ def get_latest_private_message_state(
             continue
         if customer_open_id and row_customer_open_id != customer_open_id:
             continue
+        if row.event == "im_send_msg" and not is_effective_human_outbound_message(db, row):
+            continue
         filtered.append(row)
 
     latest = filtered[0] if filtered else None
@@ -429,7 +432,7 @@ def get_latest_private_message_state(
             if row.server_message_id == trigger_server_message_id:
                 seen_trigger = True
                 continue
-            if seen_trigger and row.event == "im_send_msg":
+            if seen_trigger and row.event == "im_send_msg" and is_effective_human_outbound_message(db, row):
                 result["has_outbound_after_trigger"] = True
                 break
     return result

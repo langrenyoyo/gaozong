@@ -24,9 +24,13 @@ from app.config import (
     DY_SECRET_KEY,
 )
 from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
-from app.services.ai_auto_sent_message_matcher import is_ai_auto_sent_message_event
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
+from app.services.douyin_outbound_message_classifier import (
+    im_send_msg_participants,
+    is_effective_human_outbound_message,
+    outbound_skip_reason,
+)
 
 logger = logging.getLogger("douyin_webhook")
 
@@ -590,7 +594,7 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
     if event.event != "im_send_msg" or event.is_duplicate == 1:
         return
     try:
-        skip_reason = _im_send_msg_manual_takeover_skip_reason(event)
+        skip_reason = outbound_skip_reason(event)
         if skip_reason:
             logger.info(
                 "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=%s, "
@@ -601,14 +605,14 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
                 event.conversation_short_id,
             )
             return
-        if is_ai_auto_sent_message_event(db, event=event):
+        if not is_effective_human_outbound_message(db, event):
             logger.info(
                 "webhook im_send_msg matched ai_auto send: event_id=%s, conversation=%s",
                 event.id,
                 event.conversation_short_id,
             )
             return
-        account_open_id, customer_open_id = _im_send_msg_participants(event)
+        account_open_id, customer_open_id = im_send_msg_participants(event)
         if not account_open_id or not event.conversation_short_id:
             logger.warning(
                 "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=missing_context",
