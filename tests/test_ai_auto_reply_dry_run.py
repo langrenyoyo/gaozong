@@ -34,6 +34,15 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
+def _enable_real_send_config(monkeypatch) -> None:
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+
 def _insert_event(
     *,
     event: str = "im_receive_msg",
@@ -562,12 +571,13 @@ def test_send_enabled_false_does_not_call_auto_send_service():
     assert run.status == "decided"
 
 
-def test_send_enabled_true_and_decided_calls_auto_send_service():
+def test_real_send_mode_with_dry_run_disabled_calls_auto_send_service(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
-    event_id = _insert_event(event_key="event-send-enabled-auto")
+    _enable_real_send_config(monkeypatch)
+    event_id = _insert_event(event_key="event-real-send-candidate")
     _insert_account_agent_binding()
-    _insert_autoreply_settings(send_enabled=True)
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
     fake_client = FakeAiCsClient()
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
@@ -577,7 +587,30 @@ def test_send_enabled_true_and_decided_calls_auto_send_service():
 
     auto_send_mock.assert_called_once()
     args, kwargs = auto_send_mock.call_args
-    assert kwargs["run_id"] == _latest_run().id
+    run = _latest_run()
+    assert kwargs["run_id"] == run.id
+    assert run.mode == "real_send_candidate"
+    assert run.skip_reason != "dry_run_disabled"
+
+
+def test_dry_run_mode_with_dry_run_enabled_does_not_call_auto_send_service(monkeypatch):
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _enable_real_send_config(monkeypatch)
+    event_id = _insert_event(event_key="event-dry-run-mode")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "decided"
+    assert run.mode == "dry_run"
 
 
 def test_blocked_run_does_not_call_auto_send_service():
@@ -651,20 +684,27 @@ def test_no_autoreply_settings_skips_without_calling_9100():
     assert fake_client.calls == []
 
 
-def test_autoreply_disabled_and_dry_run_disabled_have_distinct_skip_reasons():
+def test_autoreply_disabled_skips_but_dry_run_disabled_continues_to_decision(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    _enable_real_send_config(monkeypatch)
     event_id_1 = _insert_event(account_open_id="account-disabled", event_key="event-disabled")
     _insert_account_agent_binding(account_open_id="account-disabled", agent_id="agent-disabled")
     _insert_autoreply_settings(account_open_id="account-disabled", enabled=False, dry_run_enabled=True)
 
     event_id_2 = _insert_event(account_open_id="account-dry-disabled", event_key="event-dry-disabled")
     _insert_account_agent_binding(account_open_id="account-dry-disabled", agent_id="agent-dry-disabled")
-    _insert_autoreply_settings(account_open_id="account-dry-disabled", enabled=True, dry_run_enabled=False)
+    _insert_autoreply_settings(
+        account_open_id="account-dry-disabled",
+        enabled=True,
+        send_enabled=True,
+        dry_run_enabled=False,
+    )
     fake_client = FakeAiCsClient()
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
-         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run"):
         run_ai_auto_reply_dry_run(event_id_1)
         run_ai_auto_reply_dry_run(event_id_2)
 
@@ -673,9 +713,10 @@ def test_autoreply_disabled_and_dry_run_disabled_have_distinct_skip_reasons():
         runs = {run.trigger_event_key: run for run in db.query(AiAutoReplyRun).all()}
         assert runs["event-disabled"].status == "skipped"
         assert runs["event-disabled"].skip_reason == "autoreply_disabled"
-        assert runs["event-dry-disabled"].status == "skipped"
-        assert runs["event-dry-disabled"].skip_reason == "dry_run_disabled"
-        assert fake_client.calls == []
+        assert runs["event-dry-disabled"].status == "decided"
+        assert runs["event-dry-disabled"].skip_reason is None
+        assert runs["event-dry-disabled"].mode == "real_send_candidate"
+        assert len(fake_client.calls) == 1
     finally:
         db.close()
 

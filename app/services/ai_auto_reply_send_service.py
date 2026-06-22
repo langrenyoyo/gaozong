@@ -37,6 +37,15 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         return {"status": "skipped", "reason": "run_not_found"}
     if run.status != "decided":
         return {"status": "skipped", "reason": "run_not_decided"}
+    if run.mode != "real_send_candidate":
+        _mark_send_skipped(db, run, "dry_run_mode")
+        logger.info(
+            "ai_auto_reply_send_skipped stage=mode_check run_id=%s reason=dry_run_mode mode=%s account_open_id_sha8=%s",
+            run.id,
+            run.mode,
+            _hash_prefix(run.account_open_id),
+        )
+        return {"status": "send_skipped", "reason": "dry_run_mode"}
 
     existing_send = (
         db.query(DouyinPrivateMessageSend)
@@ -45,11 +54,13 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     )
     if existing_send is not None:
         _mark_send_skipped(db, run, "already_sent")
+        logger.info("ai_auto_reply_send_skipped stage=dedupe run_id=%s reason=already_sent", run.id)
         return {"status": "send_skipped", "reason": "already_sent", "record_id": existing_send.id}
 
     content = (run.would_send_content or "").strip()
     if not content:
         _mark_send_skipped(db, run, "empty_content")
+        logger.info("ai_auto_reply_send_skipped stage=content_check run_id=%s reason=empty_content", run.id)
         return {"status": "send_skipped", "reason": "empty_content"}
 
     settings = get_account_autoreply_settings(
@@ -68,7 +79,7 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     if not real_send_gate.passed:
         _mark_send_skipped(db, run, real_send_gate.reason or "real_send_gate_blocked")
         logger.info(
-            "douyin_autoreply_gate_blocked stage=real_send_gate run_id=%s account_open_id_sha8=%s "
+            "ai_auto_reply_gate_blocked stage=real_send_gate run_id=%s account_open_id_sha8=%s "
             "blocked_by=%s send_enabled=%s",
             run.id,
             _hash_prefix(run.account_open_id),
@@ -84,6 +95,7 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         conversation_short_id=run.conversation_short_id or "",
     ):
         _mark_send_skipped(db, run, "manual_takeover_blocked")
+        logger.info("ai_auto_reply_send_skipped stage=manual_takeover run_id=%s reason=manual_takeover_blocked", run.id)
         return {"status": "send_skipped", "reason": "manual_takeover_blocked"}
 
     latest_state = get_latest_private_message_state(
@@ -95,12 +107,15 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     )
     if latest_state.get("has_outbound_after_trigger") is True:
         _mark_send_skipped(db, run, "outbound_after_trigger")
+        logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=outbound_after_trigger", run.id)
         return {"status": "send_skipped", "reason": "outbound_after_trigger"}
     if latest_state.get("latest_is_customer_message") is not True:
         _mark_send_skipped(db, run, "latest_message_not_customer")
+        logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_not_customer", run.id)
         return {"status": "send_skipped", "reason": "latest_message_not_customer"}
     if latest_state.get("latest_server_message_id") != run.trigger_server_message_id:
         _mark_send_skipped(db, run, "latest_message_changed")
+        logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_changed", run.id)
         return {"status": "send_skipped", "reason": "latest_message_changed"}
 
     send_context = get_send_msg_context(
@@ -110,18 +125,23 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     )
     if send_context is None:
         _mark_send_skipped(db, run, "send_context_unavailable")
+        logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_unavailable", run.id)
         return {"status": "send_skipped", "reason": "send_context_unavailable"}
     if send_context.get("server_message_id") != run.trigger_server_message_id:
         _mark_send_skipped(db, run, "send_context_message_changed")
+        logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_message_changed", run.id)
         return {"status": "send_skipped", "reason": "send_context_message_changed"}
     if send_context.get("account_open_id") != run.account_open_id:
         _mark_send_skipped(db, run, "send_context_account_mismatch")
+        logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_account_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_account_mismatch"}
     if send_context.get("customer_open_id") != run.customer_open_id:
         _mark_send_skipped(db, run, "send_context_customer_mismatch")
+        logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_customer_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_customer_mismatch"}
     if _is_context_expired(send_context.get("message_create_time")):
         _mark_send_skipped(db, run, "context_expired")
+        logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
     try:

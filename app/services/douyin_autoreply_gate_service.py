@@ -52,8 +52,6 @@ def evaluate_pre_llm_gates(
         return GateDecision(False, "skipped", "no_autoreply_settings", gate_results)
     if settings.enabled is not True:
         return GateDecision(False, "skipped", "autoreply_disabled", gate_results)
-    if settings.dry_run_enabled is not True:
-        return GateDecision(False, "skipped", "dry_run_disabled", gate_results)
     if not str(latest_message or "").strip():
         return GateDecision(False, "skipped", "empty_message", gate_results)
     if not conversation_short_id:
@@ -179,8 +177,6 @@ def evaluate_real_send_gates(
         return GateDecision(False, "blocked", "no_autoreply_settings", gate_results)
     if settings.enabled is not True:
         return GateDecision(False, "blocked", "account_settings_disabled", gate_results)
-    if settings.dry_run_enabled is not True:
-        return GateDecision(False, "blocked", "dry_run_disabled", gate_results)
     if settings.send_enabled is not True:
         return GateDecision(False, "blocked", "account_send_disabled", gate_results)
 

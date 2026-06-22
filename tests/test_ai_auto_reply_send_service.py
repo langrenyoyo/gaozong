@@ -100,6 +100,7 @@ def _insert_settings(
 def _insert_run(
     *,
     status: str = "decided",
+    mode: str = "real_send_candidate",
     content: str | None = "您好，可以介绍一下您的预算和关注车型。",
     trigger_server_message_id: str = "server-msg-1",
     decision_log_id: int | None = 101,
@@ -116,7 +117,7 @@ def _insert_run(
             trigger_server_message_id=trigger_server_message_id,
             latest_message="想了解 A6",
             agent_id="agent-1",
-            mode="dry_run",
+            mode=mode,
             status=status,
             decision_log_id=decision_log_id,
             would_send_content=content,
@@ -224,6 +225,19 @@ def test_send_enabled_false_does_not_send():
     assert result["status"] == "send_skipped"
     assert result["reason"] == "account_send_disabled"
     assert _get_run(run_id).status == "send_skipped"
+    openapi_mock.assert_not_called()
+
+
+def test_dry_run_mode_does_not_send_even_when_send_enabled_true():
+    run_id = _insert_run(mode="dry_run")
+    _insert_settings(send_enabled=True, dry_run_enabled=True)
+    _insert_event()
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "dry_run_mode"
     openapi_mock.assert_not_called()
 
 
@@ -752,7 +766,7 @@ def test_run_missing_returns_skipped():
 
 @pytest.mark.parametrize(
     "enabled,dry_run_enabled,reason",
-    [(False, True, "account_settings_disabled"), (True, False, "dry_run_disabled")],
+    [(False, True, "account_settings_disabled")],
 )
 def test_disabled_settings_are_send_skipped(enabled, dry_run_enabled, reason):
     run_id = _insert_run()

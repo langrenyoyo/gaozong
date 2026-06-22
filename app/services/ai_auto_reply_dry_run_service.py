@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.context import RequestContext
-from app import config
 from app.database import SessionLocal
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
 from app.models import AiAutoReplyRun, DouyinWebhookEvent
@@ -114,6 +113,16 @@ def _run_with_session(db, *, event_id: int) -> None:
         db,
         merchant_id=binding.merchant_id or "",
         account_open_id=account_open_id,
+    )
+    run_mode = _select_run_mode(settings)
+    base["mode"] = run_mode
+    logger.info(
+        "ai_auto_reply_mode_selected mode=%s event_id=%s account_open_id=%s send_enabled=%s dry_run_enabled=%s",
+        run_mode,
+        event.id,
+        _short(account_open_id),
+        getattr(settings, "send_enabled", None),
+        getattr(settings, "dry_run_enabled", None),
     )
     latest_message_state = get_latest_private_message_state(
         db,
@@ -270,7 +279,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             "post_llm": post_gate.gate_results or {},
         },
     )
-    if status == "decided" and settings.send_enabled is True:
+    if status == "decided" and run.mode == "real_send_candidate":
         send_ai_auto_reply_for_run(db, run_id=run.id)
 
 
@@ -314,10 +323,19 @@ def _base_run(
         "trigger_event_key": event.event_key or f"missing:{event.id}",
         "trigger_server_message_id": event.server_message_id,
         "latest_message": latest_message,
-        "mode": "real_send_candidate"
-        if (config.DOUYIN_AUTO_REPLY_ENABLED and config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED)
-        else "dry_run",
+        "mode": "dry_run",
     }
+
+
+def _select_run_mode(settings) -> str:
+    if (
+        settings is not None
+        and settings.enabled is True
+        and settings.send_enabled is True
+        and settings.dry_run_enabled is not True
+    ):
+        return "real_send_candidate"
+    return "dry_run"
 
 
 def _insert_terminal_run(
