@@ -1,4 +1,4 @@
-"""NewCarProject 登录态校验门面。"""
+"""NewCarProject 外部登录态校验门面。"""
 
 from __future__ import annotations
 
@@ -22,14 +22,13 @@ class NewCarAuthError(Exception):
 
 @dataclass
 class NewCarProjectAuthClient:
-    """NewCarProject 认证门面。
-
-    P0 阶段不直接绑定真实字段契约。正式接口确认后，只替换本类解析逻辑。
-    """
+    """NewCarProject 外部认证门面。"""
 
     auth_enabled: bool
     mock_enabled: bool
-    introspect_url: str = ""
+    base_url: str = ""
+    exchange_code_url: str = ""
+    me_url: str = ""
     login_url: str = ""
     service_token: str = ""
     timeout_seconds: int = 5
@@ -40,7 +39,9 @@ class NewCarProjectAuthClient:
         return cls(
             auth_enabled=os.getenv("NEWCAR_AUTH_ENABLED", "false").lower() == "true",
             mock_enabled=os.getenv("NEWCAR_AUTH_MOCK_ENABLED", "true").lower() == "true",
-            introspect_url=os.getenv("NEWCAR_AUTH_INTROSPECT_URL", "").strip(),
+            base_url=os.getenv("NEWCAR_AUTH_BASE_URL", "").strip().rstrip("/"),
+            exchange_code_url=os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip(),
+            me_url=os.getenv("NEWCAR_AUTH_ME_URL", "").strip(),
             login_url=os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip(),
             service_token=os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip(),
             timeout_seconds=int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5")),
@@ -52,7 +53,8 @@ class NewCarProjectAuthClient:
             raise NewCarAuthError("TOKEN_MISSING", "missing code")
         if self.mock_enabled:
             return self.build_mock_context(session_id=f"code:{code}")
-        return self._introspect("code", code)
+        token = self._exchange_code(code)
+        return self._load_me(token)
 
     def introspect_token(self, token: str) -> RequestContext:
         """校验 token 并返回请求上下文。"""
@@ -60,7 +62,7 @@ class NewCarProjectAuthClient:
             raise NewCarAuthError("TOKEN_MISSING", "missing token")
         if self.mock_enabled:
             return self.build_mock_context(session_id=f"token:{token}")
-        return self._introspect("token", token)
+        return self._load_me(token)
 
     def introspect_cookie(self, cookie: str) -> RequestContext:
         """校验 cookie 并返回请求上下文。"""
@@ -68,44 +70,115 @@ class NewCarProjectAuthClient:
             raise NewCarAuthError("TOKEN_MISSING", "missing cookie")
         if self.mock_enabled:
             return self.build_mock_context(session_id="cookie")
-        return self._introspect("cookie", cookie)
+        return self._load_me(cookie)
 
-    def _introspect(self, credential_type: str, credential: str) -> RequestContext:
-        """调用 NewCarProject 登录态校验接口并生成可信上下文。"""
-        if not self.introspect_url:
-            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject introspect url is not configured")
-
-        headers: dict[str, str] = {}
-        if self.service_token:
-            headers["X-NewCar-Service-Token"] = self.service_token
+    def _exchange_code(self, code: str) -> str:
+        """使用一次性 code 换取外部 token。"""
+        url = self._external_auth_url("exchange-code")
+        headers = self._service_headers()
 
         try:
             response = httpx.post(
-                self.introspect_url,
-                json={"credential_type": credential_type, "credential": credential},
+                url,
+                json={"code": code, "platform": "auto_wechat", "device_name": "auto_wechat_backend"},
                 headers=headers,
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
             payload = response.json()
         except httpx.TimeoutException as exc:
-            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject introspect timeout") from exc
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject exchange-code timeout") from exc
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 403:
-                raise NewCarAuthError("PERMISSION_DENIED", "NewCarProject permission denied") from exc
-            raise NewCarAuthError("TOKEN_INVALID", "NewCarProject token invalid") from exc
+            raise self._auth_error_from_response(exc.response, default_code="TOKEN_INVALID") from exc
         except httpx.HTTPError as exc:
-            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject introspect request failed") from exc
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject exchange-code request failed") from exc
         except ValueError as exc:
-            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject introspect response is not json") from exc
+            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject exchange-code response is not json") from exc
+
+        data = self._unwrap_payload(payload)
+        token = _first_str(data, "token", "access_token", "accessToken")
+        if not token:
+            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject exchange-code response missing token")
+        return token
+
+    def _load_me(self, token: str) -> RequestContext:
+        """调用 NewCarProject 外部登录态接口并生成可信上下文。"""
+        url = self._external_auth_url("me")
+        headers = {"Authorization": f"Bearer {token}"}
+        headers.update(self._service_headers())
+
+        try:
+            response = httpx.get(
+                url,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.TimeoutException as exc:
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject external-auth/me timeout") from exc
+        except httpx.HTTPStatusError as exc:
+            raise self._auth_error_from_response(exc.response, default_code="TOKEN_INVALID") from exc
+        except httpx.HTTPError as exc:
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject external-auth/me request failed") from exc
+        except ValueError as exc:
+            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject external-auth/me response is not json") from exc
 
         return self._context_from_payload(self._unwrap_payload(payload))
+
+    def _external_auth_url(self, endpoint: str) -> str:
+        if endpoint == "exchange-code" and self.exchange_code_url:
+            return self.exchange_code_url
+        if endpoint == "me" and self.me_url:
+            return self.me_url
+        if not self.base_url:
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject auth base url is not configured")
+        return f"{self.base_url}/api/external-auth/{endpoint}"
+
+    def _service_headers(self) -> dict[str, str]:
+        if not self.service_token:
+            return {}
+        return {"X-NewCar-Service-Token": self.service_token}
+
+    def _auth_error_from_response(self, response: httpx.Response, *, default_code: str) -> NewCarAuthError:
+        code = default_code
+        message = f"NewCarProject auth failed with status {response.status_code}"
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+            if isinstance(detail, dict):
+                code = str(detail.get("code") or detail.get("error_code") or code)
+                message = str(detail.get("message") or detail.get("detail") or message)
+            elif detail:
+                message = str(detail)
+            else:
+                code = str(payload.get("code") or payload.get("error_code") or code)
+                message = str(payload.get("message") or message)
+
+        lowered = message.lower()
+        if response.status_code == 403 and code == default_code:
+            code = "PERMISSION_DENIED"
+        if response.status_code == 401 and ("过期" in message or "expired" in lowered):
+            code = "TOKEN_EXPIRED"
+        if "session_expired" in lowered:
+            code = "SESSION_EXPIRED"
+        if response.status_code >= 500:
+            code = "NEWCAR_AUTH_UNAVAILABLE"
+        return NewCarAuthError(code, message)
 
     def _unwrap_payload(self, payload: Any) -> dict[str, Any]:
         """兼容直接对象、data 对象和 result 对象三类响应。"""
         if not isinstance(payload, dict):
-            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject introspect response must be object")
+            raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject auth response must be object")
 
+        if payload.get("ok") is False:
+            code = str(payload.get("code") or payload.get("error_code") or "TOKEN_INVALID")
+            message = str(payload.get("message") or payload.get("detail") or "NewCarProject auth failed")
+            raise NewCarAuthError(code, message)
         if payload.get("success") is False:
             code = str(payload.get("code") or payload.get("error_code") or "TOKEN_INVALID")
             message = str(payload.get("message") or "NewCarProject auth failed")
@@ -123,7 +196,8 @@ class NewCarProjectAuthClient:
         return payload
 
     def _context_from_payload(self, data: dict[str, Any]) -> RequestContext:
-        user_id = _first_str(data, "user_id", "userId", "id")
+        user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        user_id = _first_str(user, "id", "user_id", "userId") or _first_str(data, "user_id", "userId", "id")
         if not user_id:
             raise NewCarAuthError("NEWCAR_AUTH_INVALID_RESPONSE", "NewCarProject response missing user_id")
 
@@ -132,16 +206,30 @@ class NewCarProjectAuthClient:
         if merchant_id and merchant_id not in merchant_ids:
             merchant_ids.insert(0, merchant_id)
 
+        permission_codes = _list_str(
+            data.get("permission_codes") or data.get("permissionCodes") or data.get("permissions")
+        )
+        if "auto_wechat:use" not in permission_codes:
+            raise NewCarAuthError("PERMISSION_DENIED", "缺少权限 auto_wechat:use")
+
+        user_status = _first_str(user, "status")
+        if user_status and user_status != "active":
+            raise NewCarAuthError("MERCHANT_DISABLED", "NewCarProject external account is disabled")
+
+        account_scope = _first_str(data, "account_scope", "accountScope") or _first_str(user, "account_scope", "accountScope")
+        if account_scope and account_scope != "external":
+            raise NewCarAuthError("PERMISSION_DENIED", "NewCarProject account scope is not external")
+
         return RequestContext(
             user_id=user_id,
-            username=_first_str(data, "username", "account", "login_name", "loginName"),
-            display_name=_first_str(data, "display_name", "displayName", "name", "nickname"),
+            username=_first_str(user, "account", "username", "login_name", "loginName")
+            or _first_str(data, "username", "account", "login_name", "loginName"),
+            display_name=_first_str(user, "name", "display_name", "displayName", "nickname")
+            or _first_str(data, "display_name", "displayName", "name", "nickname"),
             merchant_id=merchant_id,
             merchant_ids=merchant_ids,
             role_codes=_list_str(data.get("role_codes") or data.get("roleCodes") or data.get("roles")),
-            permission_codes=_list_str(
-                data.get("permission_codes") or data.get("permissionCodes") or data.get("permissions")
-            ),
+            permission_codes=permission_codes,
             super_admin=bool(data.get("super_admin") or data.get("superAdmin") or False),
             merchant_status=_first_str(data, "merchant_status", "merchantStatus"),
             session_id=_first_str(data, "session_id", "sessionId", "sid"),

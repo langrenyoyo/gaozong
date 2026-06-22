@@ -52,7 +52,7 @@ async def get_request_context_required(request: Request) -> RequestContext:
         return _resolve_required_context(request, client)
     except NewCarAuthError as exc:
         status_code = 401
-        if exc.code in {"MERCHANT_DISABLED", "PACKAGE_EXPIRED"}:
+        if exc.code in {"PERMISSION_DENIED", "MERCHANT_DISABLED", "PACKAGE_EXPIRED"}:
             status_code = 403
         raise _auth_error(status_code, exc.code, exc.message) from exc
 
@@ -100,4 +100,3 @@ def require_merchant_access(merchant_id: str, context: RequestContext) -> Reques
     if not context.has_merchant_access(merchant_id):
         raise _auth_error(403, "PERMISSION_DENIED", "无权访问该商户")
     return context
-

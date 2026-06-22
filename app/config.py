@@ -119,7 +119,9 @@ DY_AUTH_REDIRECT_FRONTEND_URL = os.getenv("DY_AUTH_REDIRECT_FRONTEND_URL", "").s
 # P0 默认不强制拦截既有业务接口，mock 仅用于本地开发和测试。
 NEWCAR_AUTH_ENABLED = os.getenv("NEWCAR_AUTH_ENABLED", "false").lower() == "true"
 NEWCAR_AUTH_MOCK_ENABLED = os.getenv("NEWCAR_AUTH_MOCK_ENABLED", "true").lower() == "true"
-NEWCAR_AUTH_INTROSPECT_URL = os.getenv("NEWCAR_AUTH_INTROSPECT_URL", "").strip()
+NEWCAR_AUTH_BASE_URL = os.getenv("NEWCAR_AUTH_BASE_URL", "").strip().rstrip("/")
+NEWCAR_AUTH_EXCHANGE_CODE_URL = os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip()
+NEWCAR_AUTH_ME_URL = os.getenv("NEWCAR_AUTH_ME_URL", "").strip()
 NEWCAR_AUTH_LOGIN_URL = os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip()
 NEWCAR_AUTH_SERVICE_TOKEN = os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip()
 NEWCAR_AUTH_TIMEOUT_SECONDS = int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5"))
