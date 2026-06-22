@@ -30,6 +30,7 @@ _logger = logging.getLogger(__name__)
 AUDI_A6_ALIASES = ("奥迪A6", "奥迪A6L", "A6", "A6L")
 AGENT_CONFIG_MISSING_FALLBACK = "agent_config_missing_fallback"
 DECISION_VERSION = "structured_v1"
+DIRECT_LLM_DECISION_VERSION = "direct_llm_structured_v1"
 JSON_PARSE_FAILED_REASON = "LLM结构化输出解析失败，需要人工确认"
 EMPTY_LLM_REASON = "LLM未返回有效内容，需要人工确认"
 RISKY_NO_RAG_REASON = "客户问题涉及高风险事项且知识库无命中，需要人工确认"
@@ -144,6 +145,22 @@ def build_reply_suggestion(
             agent_warnings=agent_warnings,
         )
 
+    direct_llm_response = _build_llm_reply(
+        conversation_id,
+        request,
+        merchant_prompt,
+        [],
+        agent=agent,
+        agent_warnings=agent_warnings,
+        rag_used=False,
+        success_match_level="direct_llm_reply",
+        manual_match_level="direct_llm_manual_required",
+        decision_version=DIRECT_LLM_DECISION_VERSION,
+    )
+    if direct_llm_response.llm_used:
+        return direct_llm_response
+
+    agent_warnings = [*direct_llm_response.warnings, "direct_llm_fallback"]
     message = request.latest_message or ""
     if _is_audi_a6(message):
         decision = _apply_safety_postprocess(
@@ -281,9 +298,19 @@ def _try_agent_runtime_or_fallback(
         max_history_messages=request.max_history_messages,
     )
     try:
-        runtime.suggest_reply(context)
+        result = runtime.suggest_reply(context)
     except Exception:
         return [*agent_warnings, "agent_runtime_failed_fallback"]
+    if result:
+        _logger.warning(
+            "agent_runtime_result_ignored stage=reply_suggestion_fallback "
+            "tenant_id=%s merchant_id=%s douyin_account_id=%s agent_id=%s",
+            request.tenant_id,
+            request.merchant_id,
+            douyin_account_id,
+            agent.get("agent_id") or request.agent_id,
+        )
+        return [*agent_warnings, "agent_runtime_result_ignored"]
     return agent_warnings
 
 
@@ -345,6 +372,10 @@ def _build_llm_reply(
     *,
     agent: dict,
     agent_warnings: list[str],
+    rag_used: bool = True,
+    success_match_level: str = "rag_llm_reply",
+    manual_match_level: str = "rag_manual_required",
+    decision_version: str = DECISION_VERSION,
 ) -> ReplySuggestionResponse:
     source_payload = [
         {
@@ -360,6 +391,14 @@ def _build_llm_reply(
     try:
         result = client.chat(messages)
     except LLMNotConfiguredError:
+        _logger.warning(
+            "reply_suggestion_llm_unavailable stage=llm_chat reason=llm_not_configured "
+            "tenant_id=%s merchant_id=%s conversation_id=%s rag_used=%s",
+            request.tenant_id,
+            request.merchant_id,
+            conversation_id,
+            rag_used,
+        )
         log_llm_call(
             tenant_id=request.tenant_id,
             merchant_id=request.merchant_id,
@@ -370,7 +409,7 @@ def _build_llm_reply(
         )
         return ReplySuggestionResponse(
             reply_text="AI 模型暂未配置，请人工确认回复。",
-            match_level="rag_manual_required",
+            match_level=manual_match_level,
             target_category=merchant_prompt.get("category"),
             target_vehicle_name=_detect_vehicle(request.latest_message, merchant_prompt),
             recommended_vehicles=[],
@@ -379,27 +418,37 @@ def _build_llm_reply(
             manual_required=True,
             auto_send=False,
             llm_used=False,
-            rag_used=True,
+            rag_used=rag_used,
             source_chunks=source_payload,
             rag_sources=source_payload,
             warnings=[*agent_warnings, "llm_not_configured"],
             manual_required_reason="LLM未配置，需要人工确认",
             risk_flags=["llm_not_configured"],
-            decision_version=DECISION_VERSION,
+            decision_version=decision_version,
             **_agent_response_fields(agent),
         )
     except LLMRequestError as exc:
+        error_summary = _safe_error_summary(exc)
+        _logger.warning(
+            "reply_suggestion_llm_unavailable stage=llm_chat reason=llm_call_failed "
+            "tenant_id=%s merchant_id=%s conversation_id=%s rag_used=%s error=%s",
+            request.tenant_id,
+            request.merchant_id,
+            conversation_id,
+            rag_used,
+            error_summary,
+        )
         log_llm_call(
             tenant_id=request.tenant_id,
             merchant_id=request.merchant_id,
             conversation_id=conversation_id,
             model="",
             status="failed",
-            error_summary=str(exc),
+            error_summary=error_summary,
         )
         return ReplySuggestionResponse(
             reply_text="AI 模型调用失败，请人工确认回复。",
-            match_level="rag_manual_required",
+            match_level=manual_match_level,
             target_category=merchant_prompt.get("category"),
             target_vehicle_name=_detect_vehicle(request.latest_message, merchant_prompt),
             recommended_vehicles=[],
@@ -408,13 +457,13 @@ def _build_llm_reply(
             manual_required=True,
             auto_send=False,
             llm_used=False,
-            rag_used=True,
+            rag_used=rag_used,
             source_chunks=source_payload,
             rag_sources=source_payload,
             warnings=[*agent_warnings, "llm_call_failed"],
             manual_required_reason="LLM调用失败，需要人工确认",
             risk_flags=["llm_call_failed"],
-            decision_version=DECISION_VERSION,
+            decision_version=decision_version,
             **_agent_response_fields(agent),
         )
 
@@ -423,7 +472,7 @@ def _build_llm_reply(
         decision,
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
-        rag_used=True,
+        rag_used=rag_used,
         llm_raw_auto_send=decision.get("llm_raw_auto_send"),
     )
     reply_text = decision["reply_text"]
@@ -444,7 +493,7 @@ def _build_llm_reply(
     )
     return ReplySuggestionResponse(
         reply_text=reply_text,
-        match_level="rag_llm_reply",
+        match_level=success_match_level,
         target_category=merchant_prompt.get("category"),
         target_vehicle_name=decision.get("detected_vehicle")
         or _detect_vehicle(request.latest_message, merchant_prompt),
@@ -454,7 +503,7 @@ def _build_llm_reply(
         manual_required=decision["manual_required"],
         auto_send=False,
         llm_used=True,
-        rag_used=True,
+        rag_used=rag_used,
         source_chunks=source_payload,
         rag_sources=source_payload,
         warnings=agent_warnings,
@@ -465,7 +514,7 @@ def _build_llm_reply(
         detected_contacts=decision.get("detected_contacts"),
         manual_required_reason=decision.get("manual_required_reason"),
         risk_flags=decision["risk_flags"],
-        decision_version=DECISION_VERSION,
+        decision_version=decision_version,
         **_agent_response_fields(agent),
     )
 
@@ -476,7 +525,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         [
             "你是该商户的抖音私信销售客服。",
             "你只能根据商户知识库和商户主营范围回答。",
-            "不要虚构库存、价格、车况、到店时间。",
+            "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
             "如果客户咨询主营车型，应自然引导留资。",
             "如果客户咨询非主营车型，应说明暂不主做该车型，并介绍主营车型。",
             "如果知识库没有相关信息，应要求人工确认或引导客户留下联系方式。",
@@ -496,7 +545,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             [
                 str(merchant_prompt["system_prompt"]),
                 "你只能根据商户知识库和当前 Agent 的业务边界回答。",
-                "不要虚构库存、价格、车况、到店时间。",
+                "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
                 "如果知识库没有相关信息，应要求人工确认或引导客户留下联系方式。",
                 "不要自动发送真实私信。",
                 "你只能返回 JSON，不要输出 JSON 之外的任何文本。",
@@ -758,6 +807,15 @@ def _apply_safety_postprocess(
 def _safe_fallback_reply_text(value: object, limit: int = 500) -> str:
     text = str(value or "").strip()
     text = re.sub(r"\s+", " ", text)
+    if len(text) > limit:
+        return text[:limit].rstrip()
+    return text
+
+
+def _safe_error_summary(error: BaseException, limit: int = 300) -> str:
+    text = re.sub(r"\s+", " ", str(error or "")).strip()
+    text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-***", text)
+    text = re.sub(r"(?i)(token|api[_-]?key|authorization)[=: ]+[A-Za-z0-9._~+/=-]{6,}", r"\1=***", text)
     if len(text) > limit:
         return text[:limit].rstrip()
     return text

@@ -494,6 +494,185 @@ def test_reply_suggestion_risky_price_without_rag_requires_manual(tmp_path, monk
     assert data["auto_send"] is False
 
 
+def test_reply_suggestion_no_rag_uses_direct_llm_when_configured(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    seen = {}
+
+    def fake_chat(self, messages):
+        seen["messages"] = messages
+        user_payload = json.loads(messages[1]["content"])
+        assert user_payload["rag_results"] == []
+        assert user_payload["latest_customer_message"] == "我想看看宝马3系，预算20万以内"
+        assert user_payload["agent"]["agent_name"]
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "宝马3系可以先按预算和车况筛选，我帮您记录需求后再确认具体车源。",
+                    "intent": "vehicle_consult",
+                    "lead_level": "medium",
+                    "tags": ["budget", "vehicle_interest"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.76,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我想看看宝马3系，预算20万以内",
+            "conversation_history": [
+                {"role": "customer", "content": "之前看过3系"},
+                {"role": "agent", "content": "可以，您更关注年份还是配置？"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reply_text"].startswith("宝马3系可以先按预算")
+    assert data["match_level"] == "direct_llm_reply"
+    assert data["llm_used"] is True
+    assert data["rag_used"] is False
+    assert data["source_chunks"] == []
+    assert data["rag_sources"] == []
+    assert data["decision_version"] == "direct_llm_structured_v1"
+    assert data["auto_send"] is False
+    assert seen["messages"][0]["role"] == "system"
+    assert "不要虚构库存、价格、优惠、金融方案、联系方式" in seen["messages"][0]["content"]
+
+
+def test_reply_suggestion_no_rag_llm_not_configured_warns_and_falls_back(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.delenv("XG_DOUYIN_AI_LLM_API_KEY", raising=False)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们可以介绍一下宝马3系吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is False
+    assert data["rag_used"] is False
+    assert "llm_not_configured" in data["warnings"]
+    assert "direct_llm_fallback" in data["warnings"]
+    assert data["reply_text"] == "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。"
+
+
+def test_reply_suggestion_no_rag_llm_failure_warns_and_falls_back(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    from apps.xg_douyin_ai_cs.llm.client import LLMRequestError
+
+    def fake_chat(self, messages):
+        raise LLMRequestError("upstream timeout with token secret")
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们可以介绍一下宝马3系吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["llm_used"] is False
+    assert data["rag_used"] is False
+    assert "llm_call_failed" in data["warnings"]
+    assert "direct_llm_fallback" in data["warnings"]
+    assert data["reply_text"] == "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。"
+
+
+def test_reply_suggestion_no_rag_different_inputs_return_different_direct_llm_replies(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        user_payload = json.loads(messages[1]["content"])
+        message = user_payload["latest_customer_message"]
+        if "宝马3系" in message:
+            reply = "宝马3系我可以先按20万以内预算帮您梳理年份和配置，再确认车源。"
+        else:
+            reply = "门店地址和微信建议由人工客服确认后发您，我先帮您登记看车需求。"
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": reply,
+                    "intent": "vehicle_consult",
+                    "lead_level": "medium",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.72,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    first = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我想买宝马3系，预算20万以内，有没有现车？",
+        },
+    ).json()
+    second = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们店在哪里？可以加微信看车吗？",
+        },
+    ).json()
+
+    assert first["reply_text"] != second["reply_text"]
+    assert first["llm_used"] is True
+    assert second["llm_used"] is True
+    assert first["rag_used"] is False
+    assert second["rag_used"] is False
+    assert first["auto_send"] is False
+    assert second["auto_send"] is False
+    assert first["manual_required"] is True
+    assert second["manual_required"] is True
+    assert "price_or_inventory_sensitive" in first["risk_flags"]
+    assert "contact_request" in second["risk_flags"]
+
+
 def test_reply_suggestion_prompt_injection_requires_manual(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).post(
         "/douyin/conversations/1/reply-suggestion",
