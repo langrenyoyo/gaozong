@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -10,18 +13,23 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.models import DouyinAuthorizedAccount
 from app.schemas import (
+    DouyinAutoreplyModeUpdate,
     DouyinAutoreplySettingsListResponse,
     DouyinAutoreplySettingsResponse,
     DouyinAutoreplySettingsUpdate,
 )
 from app.services.douyin_autoreply_settings_service import (
     build_account_autoreply_settings_view,
+    get_account_autoreply_settings,
     list_account_autoreply_settings_views,
+    mode_from_settings,
     upsert_account_autoreply_settings,
+    values_for_mode,
 )
 
 
 router = APIRouter(prefix="/douyin-autoreply/settings", tags=["抖音自动回复配置"])
+logger = logging.getLogger(__name__)
 
 
 def _require_douyin_ai_cs_merchant(context: RequestContext) -> str:
@@ -93,6 +101,45 @@ def get_settings(
     return {"success": True, "data": data, "message": "success"}
 
 
+@router.put("/{account_open_id}/mode", response_model=DouyinAutoreplySettingsResponse)
+def put_settings_mode(
+    account_open_id: str,
+    request: DouyinAutoreplyModeUpdate,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """保存当前商户企业号托管模式；只映射到现有 enabled/send_enabled 字段。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    account = _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    old_settings = get_account_autoreply_settings(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+    )
+    old_mode = mode_from_settings(old_settings)
+    upsert_account_autoreply_settings(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        values=values_for_mode(request.mode),
+    )
+    data = build_account_autoreply_settings_view(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        account=account,
+    )
+    logger.info(
+        "douyin_autoreply_mode_change merchant_id=%s account_open_id_sha8=%s old_mode=%s new_mode=%s operator=%s",
+        trusted_merchant_id,
+        _hash_prefix(account_open_id),
+        old_mode,
+        data["mode"],
+        context.user_id,
+    )
+    return {"success": True, "data": data, "message": "success"}
+
+
 @router.put("/{account_open_id}", response_model=DouyinAutoreplySettingsResponse)
 def put_settings(
     account_open_id: str,
@@ -117,3 +164,11 @@ def put_settings(
         account=account,
     )
     return {"success": True, "data": data, "message": "success"}
+
+
+def _hash_prefix(value: str | None) -> str:
+    """记录账号标识哈希前缀，避免日志输出 open_id 明文。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]

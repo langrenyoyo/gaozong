@@ -600,10 +600,14 @@ export async function getDouyinConversationProfileFrom9000(
 ): Promise<DouyinConversationProfile> {
   try {
     const response = (await apiClient.get(
-      `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations/${encodeURIComponent(
-        String(conversationKey),
-      )}/profile`,
-      { params: { account_open_id: params?.account_open_id }, signal: params?.signal },
+      `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversation-profile`,
+      {
+        params: {
+          conversation_id: String(conversationKey),
+          account_open_id: params?.account_open_id,
+        },
+        signal: params?.signal,
+      },
     )) as unknown as DouyinConversationProfileResponse;
     return response.data;
   } catch (error) {

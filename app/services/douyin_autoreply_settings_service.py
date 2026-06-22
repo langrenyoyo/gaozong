@@ -16,6 +16,7 @@ from app.models import (
 
 
 DEFAULT_AUTOREPLY_SETTINGS = {
+    "mode": "manual_takeover",
     "enabled": False,
     "dry_run_enabled": False,
     "send_enabled": False,
@@ -31,6 +32,9 @@ DEFAULT_AUTOREPLY_SETTINGS = {
     "max_replies_per_conversation_per_hour": 3,
     "max_replies_per_account_per_hour": 30,
 }
+
+AUTOREPLY_MODE_AI_AUTO = "ai_auto"
+AUTOREPLY_MODE_MANUAL_TAKEOVER = "manual_takeover"
 
 
 def get_account_autoreply_settings(
@@ -129,6 +133,7 @@ def build_account_autoreply_settings_view(
 
     data.update(
         {
+            "mode": mode_from_settings(settings),
             "enabled": bool(settings.enabled),
             "dry_run_enabled": bool(settings.dry_run_enabled),
             "send_enabled": bool(settings.send_enabled),
@@ -202,6 +207,22 @@ def upsert_account_autoreply_settings(
     db.commit()
     db.refresh(settings)
     return settings
+
+
+def mode_from_settings(settings: DouyinAccountAutoreplySetting | None) -> str:
+    """按现有配置派生企业号托管模式。"""
+    if settings is not None and settings.enabled is True and settings.send_enabled is True:
+        return AUTOREPLY_MODE_AI_AUTO
+    return AUTOREPLY_MODE_MANUAL_TAKEOVER
+
+
+def values_for_mode(mode: str) -> dict[str, bool]:
+    """把企业号托管模式映射到现有自动回复配置字段。"""
+    if mode == AUTOREPLY_MODE_AI_AUTO:
+        return {"enabled": True, "send_enabled": True}
+    if mode == AUTOREPLY_MODE_MANUAL_TAKEOVER:
+        return {"enabled": True, "send_enabled": False}
+    raise ValueError(f"unsupported autoreply mode: {mode}")
 
 
 def parse_allowed_intents(settings: DouyinAccountAutoreplySetting | None) -> list[str]:

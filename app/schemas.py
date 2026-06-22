@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -1196,10 +1196,19 @@ class DouyinAutoreplySettingsUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class DouyinAutoreplyModeUpdate(BaseModel):
+    """抖音企业号托管模式更新请求。"""
+
+    mode: Literal["ai_auto", "manual_takeover"]
+
+    model_config = {"extra": "forbid"}
+
+
 class DouyinAutoreplySettingsItem(BaseModel):
     """抖音企业号自动回复配置视图。"""
 
     account_open_id: str
+    mode: Literal["ai_auto", "manual_takeover"] = "manual_takeover"
     account_name: Optional[str] = None
     bind_status: Optional[int] = None
     bound_agent_id: Optional[str] = None

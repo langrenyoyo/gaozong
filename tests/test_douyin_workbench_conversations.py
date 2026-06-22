@@ -519,6 +519,71 @@ def test_conversation_profile_returns_customer_fields_from_webhook_and_lead_raw_
     assert data["lead"]["customer_contact"] == "13800001111"
 
 
+def test_conversation_profile_query_route_accepts_slash_in_conversation_id():
+    conversation_id = "conv/open/id"
+    _insert_event(
+        open_id="customer_profile_slash",
+        account_open_id="account_profile_slash",
+        text="想看车",
+        conversation_short_id=conversation_id,
+        event_key="profile_slash_event",
+        server_message_id="profile_slash_msg",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile_slash/conversation-profile",
+        params={
+            "conversation_id": conversation_id,
+            "account_open_id": "account_profile_slash",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["conversation_id"] == conversation_id
+    assert data["account_open_id"] == "account_profile_slash"
+
+
+def test_conversation_profile_query_route_accepts_plus_equal_and_at_in_conversation_id():
+    conversation_id = "conv+token=@customer"
+    _insert_event(
+        open_id="customer_profile_symbols",
+        account_open_id="account_profile_symbols",
+        text="怎么联系",
+        conversation_short_id=conversation_id,
+        event_key="profile_symbols_event",
+        server_message_id="profile_symbols_msg",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile_symbols/conversation-profile",
+        params={
+            "conversation_id": conversation_id,
+            "account_open_id": "account_profile_symbols",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["conversation_id"] == conversation_id
+    assert data["account_open_id"] == "account_profile_symbols"
+
+
+def test_frontend_profile_url_uses_query_route_and_keeps_manual_send_boundary():
+    source = "frontend/src/api/douyinAiCsClient.ts"
+    content = open(source, encoding="utf-8").read()
+    profile_fn = content.split("export async function getDouyinConversationProfileFrom9000", 1)[1].split(
+        "export async function sendDouyinManualMessage",
+        1,
+    )[0]
+
+    assert "/conversation-profile" in profile_fn
+    assert "conversation_id: String(conversationKey)" in profile_fn
+    assert "/conversations/" not in profile_fn
+    assert '"/integrations/douyin/live-check/messages/send"' in content
+    assert "manual_confirmed: true" in content
+
+
 def test_conversation_profile_returns_404_when_conversation_not_found_in_account_scope():
     _insert_event(
         open_id="customer_profile_scope",

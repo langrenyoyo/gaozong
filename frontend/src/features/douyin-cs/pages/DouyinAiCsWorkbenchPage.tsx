@@ -31,16 +31,19 @@ import type {
 } from "../types";
 import {
   downloadDouyinResource,
+  getDouyinAutoReplySetting,
   getDouyinAccountConversations,
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   listDouyinAccounts,
   sendDouyinManualMessage,
+  updateDouyinAutoReplyMode,
   uploadDouyinImage,
   type DouyinAccountItem,
   type DouyinConversationItem,
   type DouyinConversationProfile,
   type DouyinMessageItem,
+  type DouyinAutoReplyMode,
   type UploadDouyinImageResponse,
 } from "../api";
 
@@ -226,13 +229,21 @@ function messageMetaClass(message: DouyinMessageItem) {
 }
 
 function chatModeTitle(mode: ChatAssistMode) {
-  return mode === "manual_takeover" ? "人工接管中" : "AI自动回复";
+  return mode === "manual_takeover" ? "人工接管中" : "AI自动回复中";
 }
 
 function chatModeSubtitle(mode: ChatAssistMode) {
   return mode === "manual_takeover"
     ? "人工接管后可手动发送消息"
-    : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。";
+    : "AI 托管中，如需人工发送请先切换到人工接管";
+}
+
+function chatModeFromAccountMode(mode?: DouyinAutoReplyMode | null): ChatAssistMode {
+  return mode === "ai_auto" ? "ai_auto_reply" : "manual_takeover";
+}
+
+function accountModeFromChatMode(mode: ChatAssistMode): DouyinAutoReplyMode {
+  return mode === "ai_auto_reply" ? "ai_auto" : "manual_takeover";
 }
 
 function profileFieldText(value?: string | number | null) {
@@ -511,7 +522,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
-  const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("ai_auto_reply");
+  const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("manual_takeover");
+  const [loadingAccountMode, setLoadingAccountMode] = useState(false);
+  const [savingAccountMode, setSavingAccountMode] = useState(false);
+  const [accountModeError, setAccountModeError] = useState<string | null>(null);
   const [conversationJumpParams] = useState(() => readConversationJumpParams());
   const [conversationJumpHandled, setConversationJumpHandled] = useState(false);
   // auth-redirect 302 回跳（?auth=success&open_id=xxx）触发的自动绑定状态
@@ -528,9 +542,11 @@ export default function DouyinAiCsWorkbenchPage() {
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
   const selectedAccountOpenIdRef = useRef<string | null>(null);
   const selectedConversationIdRef = useRef<string | number | null>(null);
+  const accountModeCacheRef = useRef<Record<string, ChatAssistMode>>({});
   const accountRequestSeqRef = useRef(0);
   const conversationRequestSeqRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
+  const accountModeRequestSeqRef = useRef(0);
   const conversationAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
   const conversationInFlightRef = useRef<Record<string, Promise<DouyinConversationItem[]>>>({});
@@ -546,6 +562,52 @@ export default function DouyinAiCsWorkbenchPage() {
   const authAuthorized = Boolean(authCallback?.open_id);
   useEffect(() => {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
+  }, [selectedAccount?.account_open_id]);
+
+  useEffect(() => {
+    const accountOpenId = selectedAccount?.account_open_id || null;
+    const requestSeq = accountModeRequestSeqRef.current + 1;
+    accountModeRequestSeqRef.current = requestSeq;
+    setAccountModeError(null);
+    if (!accountOpenId) {
+      setChatAssistMode("manual_takeover");
+      setLoadingAccountMode(false);
+      return;
+    }
+    const cachedMode = accountModeCacheRef.current[accountOpenId];
+    if (cachedMode) setChatAssistMode(cachedMode);
+    setLoadingAccountMode(!cachedMode);
+
+    void getDouyinAutoReplySetting(accountOpenId)
+      .then((setting) => {
+        if (
+          accountModeRequestSeqRef.current !== requestSeq ||
+          selectedAccountOpenIdRef.current !== accountOpenId
+        ) {
+          return;
+        }
+        const nextMode = chatModeFromAccountMode(setting.mode);
+        accountModeCacheRef.current[accountOpenId] = nextMode;
+        setChatAssistMode(nextMode);
+      })
+      .catch((err) => {
+        if (
+          accountModeRequestSeqRef.current !== requestSeq ||
+          selectedAccountOpenIdRef.current !== accountOpenId
+        ) {
+          return;
+        }
+        setAccountModeError(err instanceof Error ? err.message : "企业号托管模式加载失败");
+        if (!cachedMode) setChatAssistMode("manual_takeover");
+      })
+      .finally(() => {
+        if (
+          accountModeRequestSeqRef.current === requestSeq &&
+          selectedAccountOpenIdRef.current === accountOpenId
+        ) {
+          setLoadingAccountMode(false);
+        }
+      });
   }, [selectedAccount?.account_open_id]);
 
   useEffect(() => {
@@ -746,8 +808,8 @@ export default function DouyinAiCsWorkbenchPage() {
     if (messageKey) messageInFlightRef.current[messageKey] = messageRequest;
 
     const profileRequest =
-      accountId === null
-        ? Promise.resolve(null)
+      accountId === null || cachedProfile !== undefined
+        ? Promise.resolve(cachedProfile ?? null)
         : (profileKey && profileInFlightRef.current[profileKey]) ||
           getDouyinConversationProfileFrom9000(accountId, conversationId, {
             account_open_id: accountOpenId || undefined,
@@ -1064,6 +1126,37 @@ export default function DouyinAiCsWorkbenchPage() {
     setUploadImageIdCopied(false);
   }
 
+  async function changeAccountMode(nextMode: ChatAssistMode) {
+    const accountOpenId = selectedAccount?.account_open_id;
+    if (!accountOpenId || savingAccountMode || nextMode === chatAssistMode) return;
+    const previousMode = chatAssistMode;
+    setSavingAccountMode(true);
+    setAccountModeError(null);
+    setChatAssistMode(nextMode);
+    accountModeCacheRef.current[accountOpenId] = nextMode;
+    try {
+      const updated = await updateDouyinAutoReplyMode(accountOpenId, accountModeFromChatMode(nextMode));
+      if (selectedAccountOpenIdRef.current !== accountOpenId) return;
+      const savedMode = chatModeFromAccountMode(updated.mode);
+      accountModeCacheRef.current[accountOpenId] = savedMode;
+      setChatAssistMode(savedMode);
+      if (savedMode === "ai_auto_reply") {
+        setDraftReplyText("");
+        setSendError(null);
+      }
+    } catch (err) {
+      accountModeCacheRef.current[accountOpenId] = previousMode;
+      if (selectedAccountOpenIdRef.current === accountOpenId) {
+        setChatAssistMode(previousMode);
+        setAccountModeError(err instanceof Error ? err.message : "企业号托管模式保存失败");
+      }
+    } finally {
+      if (selectedAccountOpenIdRef.current === accountOpenId) {
+        setSavingAccountMode(false);
+      }
+    }
+  }
+
   function handleUploadFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] || null;
     const errorMessage = validateUploadImageFile(file);
@@ -1255,7 +1348,11 @@ export default function DouyinAiCsWorkbenchPage() {
         </div>
         <div className="flex max-w-[460px] items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
           <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
-          <span>当前为 AI 自动回复模式：真实发送仅受后端开关、账号配置和测试白名单控制；人工接管后可手动发送。</span>
+          <span>
+            {chatAssistMode === "manual_takeover"
+              ? "当前企业号为人工接管：AI 不会自动真实发送，人工发送仍走确认安全链路。"
+              : "当前企业号为 AI 自动回复：真实发送仍受后端总开关、账号配置和测试白名单控制。"}
+          </span>
         </div>
       </header>
 
@@ -1439,31 +1536,37 @@ export default function DouyinAiCsWorkbenchPage() {
                 <span>
                   <span className="font-bold">{chatModeTitle(chatAssistMode)}</span>
                   <span className="ml-1 text-slate-500">{chatModeSubtitle(chatAssistMode)}</span>
+                  {loadingAccountMode ? <span className="ml-1 text-slate-400">正在同步企业号模式...</span> : null}
                 </span>
               </div>
+              {accountModeError ? (
+                <div className="mt-1 text-[11px] leading-5 text-red-600">{accountModeError}</div>
+              ) : null}
             </div>
             <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
               <button
                 type="button"
-                onClick={() => setChatAssistMode("ai_auto_reply")}
+                onClick={() => void changeAccountMode("ai_auto_reply")}
+                disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
                 className={`h-8 rounded px-3 text-[11px] font-semibold ${
                   chatAssistMode === "ai_auto_reply"
                     ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-white"
+                    : "text-slate-600 hover:bg-white disabled:text-slate-400"
                 }`}
               >
-                AI自动回复
+                {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI自动回复"}
               </button>
               <button
                 type="button"
-                onClick={() => setChatAssistMode("manual_takeover")}
+                onClick={() => void changeAccountMode("manual_takeover")}
+                disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
                 className={`h-8 rounded px-3 text-[11px] font-semibold ${
                   chatAssistMode === "manual_takeover"
                     ? "bg-amber-500 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-white"
+                    : "text-slate-600 hover:bg-white disabled:text-slate-400"
                 }`}
               >
-                人工接管
+                {savingAccountMode && chatAssistMode === "manual_takeover" ? "保存中..." : "人工接管"}
               </button>
             </div>
           </div>
@@ -1577,11 +1680,13 @@ export default function DouyinAiCsWorkbenchPage() {
                     <BotIcon size={16} />
                   </span>
                   <div>
-                    <div className="text-sm font-bold text-[#172033]">AI 自动回复</div>
+                    <div className="text-sm font-bold text-[#172033]">
+                      {chatAssistMode === "manual_takeover" ? "人工客服" : "AI 自动回复"}
+                    </div>
                     <div className="text-[11px] text-slate-500">
                       {chatAssistMode === "manual_takeover"
                         ? "人工接管状态下可手动发送消息"
-                        : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。"}
+                        : "AI 托管中，如需人工发送请先切换到人工接管。"}
                     </div>
                   </div>
                 </div>
@@ -1664,7 +1769,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 </div>
               ) : (
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
-                  当前为 AI 自动回复。人工接管后可手动发送消息。
+                  AI 托管中，如需人工发送请先切换到人工接管。
                   {!activeBindingReady ? " 当前企业号暂未满足自动回复启用条件。" : ""}
                 </div>
               )}

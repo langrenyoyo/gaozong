@@ -166,6 +166,21 @@ def test_list_settings_returns_current_merchant_accounts_with_default_view_witho
         db.close()
 
 
+def test_settings_view_includes_account_mode_from_send_enabled():
+    _insert_account(account_open_id="account-a")
+    _insert_account(account_open_id="account-b")
+    _insert_settings(account_open_id="account-a", enabled=True, send_enabled=True)
+    _insert_settings(account_open_id="account-b", enabled=True, send_enabled=False)
+
+    response_a = _client().get("/douyin-autoreply/settings/account-a")
+    response_b = _client().get("/douyin-autoreply/settings/account-b")
+
+    assert response_a.status_code == 200
+    assert response_a.json()["data"]["mode"] == "ai_auto"
+    assert response_b.status_code == 200
+    assert response_b.json()["data"]["mode"] == "manual_takeover"
+
+
 def test_get_settings_detail_cannot_cross_merchant_and_returns_existing_values():
     _insert_account(merchant_id="merchant-a", account_open_id="account-a")
     _insert_account(merchant_id="merchant-b", account_open_id="account-b")
@@ -186,6 +201,54 @@ def test_get_settings_detail_cannot_cross_merchant_and_returns_existing_values()
     denied = _client().get("/douyin-autoreply/settings/account-b")
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+
+
+def test_put_settings_mode_switch_maps_to_existing_account_settings_independently():
+    _insert_account(account_open_id="account-a")
+    _insert_account(account_open_id="account-b")
+    _insert_settings(account_open_id="account-b", enabled=True, send_enabled=False)
+
+    ai_response = _client().put("/douyin-autoreply/settings/account-a/mode", json={"mode": "ai_auto"})
+    manual_response = _client().put(
+        "/douyin-autoreply/settings/account-b/mode",
+        json={"mode": "manual_takeover"},
+    )
+
+    assert ai_response.status_code == 200
+    assert ai_response.json()["data"]["mode"] == "ai_auto"
+    assert ai_response.json()["data"]["enabled"] is True
+    assert ai_response.json()["data"]["send_enabled"] is True
+
+    assert manual_response.status_code == 200
+    assert manual_response.json()["data"]["mode"] == "manual_takeover"
+    assert manual_response.json()["data"]["enabled"] is True
+    assert manual_response.json()["data"]["send_enabled"] is False
+
+    db = TestSession()
+    try:
+        rows = {
+            row.account_open_id: row
+            for row in db.query(DouyinAccountAutoreplySetting).order_by(
+                DouyinAccountAutoreplySetting.account_open_id
+            )
+        }
+        assert rows["account-a"].enabled is True
+        assert rows["account-a"].send_enabled is True
+        assert rows["account-b"].enabled is True
+        assert rows["account-b"].send_enabled is False
+    finally:
+        db.close()
+
+
+def test_put_settings_mode_rejects_invalid_mode_and_cross_merchant_account():
+    _insert_account(merchant_id="merchant-a", account_open_id="account-a")
+    _insert_account(merchant_id="merchant-b", account_open_id="account-b")
+
+    invalid = _client().put("/douyin-autoreply/settings/account-a/mode", json={"mode": "disabled"})
+    cross = _client().put("/douyin-autoreply/settings/account-b/mode", json={"mode": "ai_auto"})
+
+    assert invalid.status_code == 422
+    assert cross.status_code == 403
 
 
 def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
