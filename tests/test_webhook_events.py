@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base, get_db
 from app.integrations.douyin_webhook import process_webhook_event
 from app.main import create_app
-from app.models import DouyinLead, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 
 
 test_engine = create_engine(
@@ -126,6 +126,25 @@ def _insert_lead() -> int:
         db.commit()
         db.refresh(lead)
         return lead.id
+    finally:
+        db.close()
+
+
+def _insert_authorized_account(*, open_id: str = "account_001", merchant_id: str = "test_merchant") -> int:
+    db = TestSession()
+    try:
+        account = DouyinAuthorizedAccount(
+            merchant_id=merchant_id,
+            tenant_id="test_tenant",
+            main_account_id=1001,
+            open_id=open_id,
+            account_name="测试企业号",
+            bind_status=1,
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+        return account.id
     finally:
         db.close()
 
@@ -303,6 +322,7 @@ def test_list_webhook_events_filters_is_duplicate():
 
 
 def test_list_webhook_events_shows_real_duplicate_from_webhook_flow():
+    _insert_authorized_account(open_id="account_001")
     payload = _payload(
         from_user_id="real_dup_user",
         content=_content(
