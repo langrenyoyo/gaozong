@@ -18,7 +18,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base
+from app.database import Base, get_db
 from app.models import DouyinLead, SalesStaff, CheckConfig, ReplyCheck
 from app.config import DEFAULT_CONFIGS
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse
@@ -38,6 +38,15 @@ TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 def _db():
     """创建测试用数据库会话"""
     return TestSession()
+
+
+def _db_session():
+    """API 测试专用数据库会话，避免误连默认开发库。"""
+    db = TestSession()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def setup_module(module):
@@ -226,6 +235,7 @@ def test_douyin_sync_api():
     from app.main import create_app
 
     app = create_app()
+    app.dependency_overrides[get_db] = _db_session
     client = TestClient(app)
 
     with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
