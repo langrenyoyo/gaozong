@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.database import engine, Base
 from app.routers import (
@@ -69,6 +70,23 @@ def create_app() -> FastAPI:
         description="实现 抖音线索→分配销售→录入回复→检测有效性→超时判断→报表统计 的 MVP 闭环",
         default_response_class=UTF8JSONResponse,
     )
+
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    async def sqlalchemy_timeout_handler(request, exc):
+        logger.error(
+            "db_pool_timeout stage=db_pool_timeout endpoint=%s method=%s error_type=%s",
+            request.url.path,
+            request.method,
+            type(exc).__name__,
+        )
+        return UTF8JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "数据库连接繁忙，请稍后重试",
+                "code": "DB_POOL_TIMEOUT",
+            },
+        )
 
     # 开发环境 CORS：允许本机和局域网 React 开发服务器跨域访问
     # 注意：局域网地址和主机名仅用于临时开发测试，上线前需移除

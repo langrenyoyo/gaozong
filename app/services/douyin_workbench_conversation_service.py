@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import desc
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
@@ -24,6 +28,11 @@ from app.services.lead_management_service import (
 
 
 PRIVATE_MESSAGE_EVENTS = {"im_receive_msg", "im_send_msg"}
+WORKBENCH_CONVERSATION_EVENT_LIMIT = max(100, int(os.getenv("DOUYIN_WORKBENCH_CONVERSATION_EVENT_LIMIT", "2000")))
+WORKBENCH_CONVERSATION_LOOKBACK_DAYS = max(1, int(os.getenv("DOUYIN_WORKBENCH_CONVERSATION_LOOKBACK_DAYS", "7")))
+WORKBENCH_MESSAGE_LIMIT = max(20, int(os.getenv("DOUYIN_WORKBENCH_MESSAGE_LIMIT", "200")))
+WORKBENCH_UNREAD_EVENT_LIMIT = max(100, int(os.getenv("DOUYIN_WORKBENCH_UNREAD_EVENT_LIMIT", "5000")))
+logger = logging.getLogger(__name__)
 RESOURCE_URL_KEYS = (
     "file_Url",
     "file_url",
@@ -67,7 +76,14 @@ class WorkbenchMessage:
 
 
 def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str, Any]:
-    messages = _load_messages(db, account_open_id=account_open_id)
+    start = time.perf_counter()
+    messages = _load_messages(
+        db,
+        account_open_id=account_open_id,
+        limit=WORKBENCH_CONVERSATION_EVENT_LIMIT,
+        lookback_days=WORKBENCH_CONVERSATION_LOOKBACK_DAYS,
+        operation="list_account_conversations",
+    )
     grouped: dict[str, list[WorkbenchMessage]] = {}
     for message in messages:
         grouped.setdefault(message.conversation_key, []).append(message)
@@ -97,6 +113,14 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
         )
 
     items.sort(key=lambda item: item["last_message_at"] or datetime.min, reverse=True)
+    logger.info(
+        "douyin_workbench_query stage=finish operation=list_account_conversations account_open_id=%s "
+        "message_count=%s result_count=%s elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        len(messages),
+        len(items),
+        _elapsed_ms(start),
+    )
     return {"items": items}
 
 
@@ -111,7 +135,14 @@ def get_account_unread_counts(
         return {}
 
     counts = {account_open_id: 0 for account_open_id in requested_open_ids}
-    messages = _load_messages(db)
+    messages = _load_messages(
+        db,
+        account_open_ids=list(requested_open_ids),
+        events={"im_receive_msg"},
+        limit=WORKBENCH_UNREAD_EVENT_LIMIT,
+        lookback_days=WORKBENCH_CONVERSATION_LOOKBACK_DAYS,
+        operation="get_account_unread_counts",
+    )
     for message in messages:
         if message.event != "im_receive_msg":
             continue
@@ -186,7 +217,14 @@ def list_conversation_messages(
     conversation_key: str,
     account_open_id: str | None = None,
 ) -> dict[str, Any]:
-    messages = _load_messages(db, account_open_id=account_open_id)
+    start = time.perf_counter()
+    messages = _load_messages(
+        db,
+        account_open_id=account_open_id,
+        conversation_key=conversation_key,
+        limit=WORKBENCH_MESSAGE_LIMIT,
+        operation="list_conversation_messages",
+    )
     items = []
     for message in _sort_messages([item for item in messages if item.conversation_key == conversation_key]):
         direction = _direction(message.event)
@@ -212,6 +250,15 @@ def list_conversation_messages(
                 "server_message_id": message.server_message_id,
             }
         )
+    logger.info(
+        "douyin_workbench_query stage=finish operation=list_conversation_messages account_open_id=%s "
+        "conversation_key=%s message_count=%s result_count=%s elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        len(messages),
+        len(items),
+        _elapsed_ms(start),
+    )
     return {"items": items}
 
 
@@ -221,14 +268,24 @@ def get_conversation_profile(
     account_open_id: str,
     conversation_key: str,
 ) -> dict[str, Any] | None:
+    start = time.perf_counter()
     messages = _sort_messages(
-        [
-            item
-            for item in _load_messages(db, account_open_id=account_open_id)
-            if item.conversation_key == conversation_key
-        ]
+        _load_messages(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=conversation_key,
+            limit=WORKBENCH_MESSAGE_LIMIT,
+            operation="get_conversation_profile",
+        )
     )
     if not messages:
+        logger.info(
+            "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
+            "conversation_key=%s message_count=0 result_count=0 elapsed_ms=%s",
+            _mask_open_id(account_open_id),
+            _mask_open_id(conversation_key),
+            _elapsed_ms(start),
+        )
         return None
 
     first = messages[0]
@@ -237,7 +294,7 @@ def get_conversation_profile(
     raw_data = _safe_lead_raw_data(lead)
     trace_message = latest or first
 
-    return {
+    result = {
         "conversation_id": first.conversation_key,
         "conversation_key": first.conversation_key,
         "conversation_short_id": first.conversation_short_id,
@@ -256,6 +313,15 @@ def get_conversation_profile(
         "trace": _profile_trace(db, trace_message),
         "lead": _profile_lead_payload(lead),
     }
+    logger.info(
+        "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
+        "conversation_key=%s message_count=%s result_count=1 elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        len(messages),
+        _elapsed_ms(start),
+    )
+    return result
 
 
 def get_send_msg_context(
@@ -375,14 +441,29 @@ def _send_msg_participants(row: DouyinWebhookEvent) -> tuple[str | None, str | N
     return row.to_user_id, row.from_user_id
 
 
-def _load_messages(db: Session, *, account_open_id: str | None = None) -> list[WorkbenchMessage]:
-    rows = (
-        db.query(DouyinWebhookEvent)
-        .filter(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
-        .order_by(DouyinWebhookEvent.created_at.asc(), DouyinWebhookEvent.id.asc())
-        .all()
+def _load_messages(
+    db: Session,
+    *,
+    account_open_id: str | None = None,
+    account_open_ids: list[str] | None = None,
+    conversation_key: str | None = None,
+    events: set[str] | None = None,
+    limit: int | None = None,
+    lookback_days: int | None = None,
+    operation: str = "load_messages",
+) -> list[WorkbenchMessage]:
+    query_start = time.perf_counter()
+    rows = _query_message_rows(
+        db,
+        account_open_id=account_open_id,
+        account_open_ids=account_open_ids,
+        conversation_key=conversation_key,
+        events=events or PRIVATE_MESSAGE_EVENTS,
+        limit=limit,
+        lookback_days=lookback_days,
     )
+    query_elapsed = _elapsed_ms(query_start)
+    parse_start = time.perf_counter()
     messages: list[WorkbenchMessage] = []
     for row in rows:
         message = _row_to_message(row)
@@ -390,8 +471,103 @@ def _load_messages(db: Session, *, account_open_id: str | None = None) -> list[W
             continue
         if account_open_id and message.account_open_id != account_open_id:
             continue
+        if account_open_ids and message.account_open_id not in set(account_open_ids):
+            continue
+        if conversation_key and message.conversation_key != conversation_key:
+            continue
         messages.append(message)
+    logger.info(
+        "douyin_workbench_query stage=load_messages operation=%s account_open_id=%s conversation_key=%s "
+        "db_row_count=%s message_count=%s query_ms=%s parse_aggregate_ms=%s",
+        operation,
+        _mask_open_id(account_open_id or ",".join(account_open_ids or [])),
+        _mask_open_id(conversation_key),
+        len(rows),
+        len(messages),
+        query_elapsed,
+        _elapsed_ms(parse_start),
+    )
     return messages
+
+
+def _query_message_rows(
+    db: Session,
+    *,
+    account_open_id: str | None,
+    account_open_ids: list[str] | None,
+    conversation_key: str | None,
+    events: set[str],
+    limit: int | None,
+    lookback_days: int | None,
+) -> list[SimpleNamespace]:
+    stmt = (
+        select(
+            DouyinWebhookEvent.id,
+            DouyinWebhookEvent.event,
+            DouyinWebhookEvent.from_user_id,
+            DouyinWebhookEvent.to_user_id,
+            DouyinWebhookEvent.conversation_short_id,
+            DouyinWebhookEvent.server_message_id,
+            DouyinWebhookEvent.message_type,
+            DouyinWebhookEvent.parsed_content_json,
+            DouyinWebhookEvent.lead_id,
+            DouyinWebhookEvent.raw_body,
+            DouyinWebhookEvent.created_at,
+        )
+        .where(DouyinWebhookEvent.event.in_(events))
+        .where(DouyinWebhookEvent.is_duplicate == 0)
+    )
+    account_values = [item for item in ([account_open_id] if account_open_id else []) + (account_open_ids or []) if item]
+    if account_values:
+        stmt = stmt.where(
+            or_(
+                DouyinWebhookEvent.to_user_id.in_(account_values),
+                DouyinWebhookEvent.from_user_id.in_(account_values),
+            )
+        )
+    if conversation_key:
+        pair_account, pair_customer = _conversation_pair_from_key(conversation_key, account_open_id)
+        if pair_account and pair_customer:
+            stmt = stmt.where(
+                or_(
+                    DouyinWebhookEvent.conversation_short_id == conversation_key,
+                    DouyinWebhookEvent.raw_body.like(f"%{conversation_key}%"),
+                    (
+                        (DouyinWebhookEvent.from_user_id == pair_customer)
+                        & (DouyinWebhookEvent.to_user_id == pair_account)
+                    ),
+                    (
+                        (DouyinWebhookEvent.from_user_id == pair_account)
+                        & (DouyinWebhookEvent.to_user_id == pair_customer)
+                    ),
+                )
+            )
+        else:
+            stmt = stmt.where(
+                or_(
+                    DouyinWebhookEvent.conversation_short_id == conversation_key,
+                    DouyinWebhookEvent.raw_body.like(f"%{conversation_key}%"),
+                )
+            )
+    if lookback_days:
+        stmt = stmt.where(DouyinWebhookEvent.created_at >= datetime.now() - timedelta(days=lookback_days))
+    stmt = stmt.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
+    if limit:
+        stmt = stmt.limit(limit)
+    rows = db.execute(stmt).mappings().all()
+    db.rollback()
+    result = [SimpleNamespace(**dict(row)) for row in rows]
+    result.reverse()
+    return result
+
+
+def _conversation_pair_from_key(conversation_key: str, account_open_id: str | None) -> tuple[str | None, str | None]:
+    if ":" not in conversation_key:
+        return None, None
+    account, customer = conversation_key.split(":", 1)
+    if account_open_id and account != account_open_id:
+        return None, None
+    return account or None, customer or None
 
 
 def _event_derived_accounts(db: Session) -> list[dict[str, Any]]:
@@ -871,6 +1047,19 @@ def _stable_numeric_id(value: str) -> int:
     for char in value:
         total = (total * 31 + ord(char)) & 0xFFFFFFFF
     return total or 1
+
+
+def _elapsed_ms(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)
+
+
+def _mask_open_id(value: str | None) -> str:
+    if not value:
+        return "-"
+    text = str(value)
+    if len(text) <= 12:
+        return text
+    return f"{text[:6]}...{text[-4:]}"
 
 
 def _optional_str(value: Any) -> str | None:

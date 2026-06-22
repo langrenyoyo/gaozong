@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -288,6 +289,31 @@ def test_list_webhook_events_pagination():
     assert data["total"] == 2
     assert len(data["items"]) == 1
     assert data["items"][0]["event_key"] == "page_newer"
+
+
+def test_list_webhook_events_only_enriches_current_page():
+    for index in range(12):
+        _insert_event(
+            event_key=f"page_perf_{index:02d}",
+            from_user_id=f"user_perf_{index:02d}",
+            created_at=datetime.now() - timedelta(minutes=index),
+        )
+
+    from app.services import webhook_event_service as service
+
+    enriched_ids: list[int] = []
+    original = service._to_event_dict
+
+    def _tracking_to_event_dict(row, *, include_raw_body):
+        enriched_ids.append(row.id)
+        return original(row, include_raw_body=include_raw_body)
+
+    with patch.object(service, "_to_event_dict", side_effect=_tracking_to_event_dict):
+        data = _client().get("/webhook-events?page=1&page_size=5").json()["data"]
+
+    assert len(data["items"]) == 5
+    assert data["total"] == 12
+    assert len(enriched_ids) == 5
 
 
 def test_list_webhook_events_filters_event():

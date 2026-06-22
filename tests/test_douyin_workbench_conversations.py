@@ -730,6 +730,90 @@ def test_query_conversation_messages_keeps_account_open_id_isolation():
     assert [item["content"] for item in messages] == ["account b query message"]
 
 
+def test_query_conversation_messages_does_not_parse_unrelated_events():
+    conversation_key = "target_perf_conv"
+    target_id = _insert_event(
+        open_id="customer_perf_target",
+        account_open_id="account_perf_target",
+        text="target message",
+        conversation_short_id=conversation_key,
+        event_key="perf_target",
+    )
+    unrelated_ids = [
+        _insert_event(
+            open_id=f"customer_perf_other_{index}",
+            account_open_id="account_perf_other",
+            text=f"other message {index}",
+            conversation_short_id=f"other_perf_conv_{index}",
+            event_key=f"perf_other_{index}",
+        )
+        for index in range(8)
+    ]
+
+    parsed_event_ids: list[int] = []
+
+    from app.services import douyin_workbench_conversation_service as service
+
+    original = service._row_to_message
+
+    def _tracking_row_to_message(row):
+        parsed_event_ids.append(row.id)
+        return original(row)
+
+    with patch.object(service, "_row_to_message", side_effect=_tracking_row_to_message):
+        messages = _client().get(
+            "/integrations/douyin/conversation-messages",
+            params={
+                "conversation_key": conversation_key,
+                "account_open_id": "account_perf_target",
+            },
+        ).json()["items"]
+
+    assert [item["content"] for item in messages] == ["target message"]
+    assert parsed_event_ids == [target_id]
+    assert not set(parsed_event_ids).intersection(unrelated_ids)
+
+
+def test_account_conversations_does_not_parse_unrelated_account_events():
+    target_id = _insert_event(
+        open_id="customer_account_perf_target",
+        account_open_id="account_conversation_perf_target",
+        text="target account message",
+        conversation_short_id="account_perf_conv",
+        event_key="account_perf_target",
+    )
+    unrelated_ids = [
+        _insert_event(
+            open_id=f"customer_account_perf_other_{index}",
+            account_open_id="account_conversation_perf_other",
+            text=f"other account message {index}",
+            conversation_short_id=f"account_other_perf_conv_{index}",
+            event_key=f"account_perf_other_{index}",
+        )
+        for index in range(8)
+    ]
+
+    parsed_event_ids: list[int] = []
+
+    from app.services import douyin_workbench_conversation_service as service
+
+    original = service._row_to_message
+
+    def _tracking_row_to_message(row):
+        parsed_event_ids.append(row.id)
+        return original(row)
+
+    with patch.object(service, "_row_to_message", side_effect=_tracking_row_to_message):
+        items = _client().get(
+            "/integrations/douyin/accounts/account_conversation_perf_target/conversations",
+            params={"account_open_id": "account_conversation_perf_target"},
+        ).json()["items"]
+
+    assert [item["last_message"] for item in items] == ["target account message"]
+    assert parsed_event_ids == [target_id]
+    assert not set(parsed_event_ids).intersection(unrelated_ids)
+
+
 def test_query_conversation_messages_keeps_contact_not_found_message_visible():
     _insert_event(
         open_id="customer_query_no_contact",

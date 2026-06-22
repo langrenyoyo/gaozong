@@ -569,17 +569,17 @@ export async function getDouyinAccountAgents(
 
 export async function getDouyinAccountConversations(
   accountId: string | number,
-  params?: { account_open_id?: string },
+  params?: { account_open_id?: string; signal?: AbortSignal },
 ): Promise<DouyinConversationListResponse> {
   return apiClient.get(
     `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
-    { params },
+    { params: { account_open_id: params?.account_open_id }, signal: params?.signal },
   ) as unknown as Promise<DouyinConversationListResponse>;
 }
 
 export async function getDouyinConversationMessages(
   conversationId: string | number,
-  params?: { account_open_id?: string },
+  params?: { account_open_id?: string; signal?: AbortSignal },
 ): Promise<DouyinMessageListResponse> {
   return apiClient.get(
     "/integrations/douyin/conversation-messages",
@@ -588,6 +588,7 @@ export async function getDouyinConversationMessages(
         conversation_key: String(conversationId),
         account_open_id: params?.account_open_id,
       },
+      signal: params?.signal,
     },
   ) as unknown as Promise<DouyinMessageListResponse>;
 }
@@ -595,14 +596,14 @@ export async function getDouyinConversationMessages(
 export async function getDouyinConversationProfileFrom9000(
   accountId: string | number,
   conversationKey: string | number,
-  params?: { account_open_id?: string },
+  params?: { account_open_id?: string; signal?: AbortSignal },
 ): Promise<DouyinConversationProfile> {
   try {
     const response = (await apiClient.get(
       `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations/${encodeURIComponent(
         String(conversationKey),
       )}/profile`,
-      { params },
+      { params: { account_open_id: params?.account_open_id }, signal: params?.signal },
     )) as unknown as DouyinConversationProfileResponse;
     return response.data;
   } catch (error) {

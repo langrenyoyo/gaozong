@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 # 确保 data 目录存在
 os.makedirs(DATABASE_DIR, exist_ok=True)
 
+SQLALCHEMY_POOL_SIZE = int(os.getenv("SQLALCHEMY_POOL_SIZE", "10"))
+SQLALCHEMY_MAX_OVERFLOW = int(os.getenv("SQLALCHEMY_MAX_OVERFLOW", "20"))
+SQLALCHEMY_POOL_TIMEOUT = int(os.getenv("SQLALCHEMY_POOL_TIMEOUT", "30"))
+SQLALCHEMY_POOL_PRE_PING = os.getenv("SQLALCHEMY_POOL_PRE_PING", "true").lower() in {"1", "true", "yes", "on"}
+
 # SQLite 多线程安全配置：
 # - check_same_thread=False：允许跨线程使用连接
 # - timeout=30：写锁等待 30 秒而非立即 SQLITE_BUSY
@@ -23,6 +28,19 @@ engine = create_engine(
         "check_same_thread": False,
         "timeout": 30,
     },
+    pool_size=SQLALCHEMY_POOL_SIZE,
+    max_overflow=SQLALCHEMY_MAX_OVERFLOW,
+    pool_timeout=SQLALCHEMY_POOL_TIMEOUT,
+    pool_pre_ping=SQLALCHEMY_POOL_PRE_PING,
+)
+
+logger.info(
+    "db_engine_config stage=create_engine url=%s pool_size=%s max_overflow=%s pool_timeout=%s pool_pre_ping=%s",
+    DATABASE_URL.split("://", 1)[0],
+    SQLALCHEMY_POOL_SIZE,
+    SQLALCHEMY_MAX_OVERFLOW,
+    SQLALCHEMY_POOL_TIMEOUT,
+    SQLALCHEMY_POOL_PRE_PING,
 )
 
 

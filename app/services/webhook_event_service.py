@@ -1,6 +1,8 @@
 """抖音原始 webhook 事件的只读服务"""
 
 import json
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -11,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.integrations.douyin_webhook import is_text_message, normalize_message_text, parse_content
 from app.models import DouyinWebhookEvent
 from app.services.contact_extractor import extract_contacts_from_text
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -30,13 +34,39 @@ class WebhookEventFilters:
 
 def list_webhook_events(db: Session, filters: WebhookEventFilters) -> dict[str, Any]:
     """List raw webhook events with compatibility inference."""
+    start = time.perf_counter()
     page = max(filters.page, 1)
     page_size = min(max(filters.page_size, 1), 100)
 
     query = db.query(DouyinWebhookEvent)
     query = _apply_db_filters(query, filters)
+    requires_post_filter = bool(filters.lead_action or filters.open_id)
 
-    rows = query.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc()).all()
+    if not requires_post_filter:
+        total = query.count()
+        rows = (
+            query.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        enriched = [_to_event_dict(row, include_raw_body=False) for row in rows]
+        logger.info(
+            "webhook_events_query stage=finish mode=db_page page=%s page_size=%s total=%s result_count=%s elapsed_ms=%s",
+            page,
+            page_size,
+            total,
+            len(enriched),
+            _elapsed_ms(start),
+        )
+        return {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "items": enriched,
+        }
+
+    rows = query.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc()).limit(1000).all()
     if filters.open_id:
         rows = [row for row in rows if _row_matches_open_id(row, filters.open_id)]
     enriched = [_to_event_dict(row, include_raw_body=False) for row in rows]
@@ -51,13 +81,21 @@ def list_webhook_events(db: Session, filters: WebhookEventFilters) -> dict[str, 
         ]
 
     total = len(enriched)
-    start = (page - 1) * page_size
-    end = start + page_size
+    page_start = (page - 1) * page_size
+    page_end = page_start + page_size
+    logger.info(
+        "webhook_events_query stage=finish mode=post_filter page=%s page_size=%s total=%s result_count=%s elapsed_ms=%s",
+        page,
+        page_size,
+        total,
+        len(enriched[page_start:page_end]),
+        _elapsed_ms(start),
+    )
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": enriched[start:end],
+        "items": enriched[page_start:page_end],
     }
 
 
@@ -83,6 +121,14 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
         query = query.filter(or_(DouyinWebhookEvent.event_key.like(like), DouyinWebhookEvent.raw_body.like(like)))
     if filters.lead_id is not None:
         query = query.filter(DouyinWebhookEvent.lead_id == filters.lead_id)
+    if filters.conversation_short_id:
+        like = f"%{filters.conversation_short_id}%"
+        query = query.filter(
+            or_(
+                DouyinWebhookEvent.conversation_short_id == filters.conversation_short_id,
+                DouyinWebhookEvent.raw_body.like(like),
+            )
+        )
     if filters.open_id:
         like = f"%{filters.open_id}%"
         query = query.filter(
@@ -93,6 +139,10 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
             )
         )
     return query
+
+
+def _elapsed_ms(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)
 
 
 def _to_event_dict(row: DouyinWebhookEvent, *, include_raw_body: bool) -> dict[str, Any]:
