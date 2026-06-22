@@ -6,7 +6,29 @@
 
 核对范围：前端“小高AI微信助手”相关页面/API/组件、9000 主后端 Local Agent 与任务接口、19000 Local Agent 源码能力、打包脚本与测试覆盖。
 
-本轮边界：只做代码、接口、文档级核对；不修改业务代码；不构建 exe；不改 DB migration；不改 9100；不改自动发送策略；不启动真实微信自动操作。
+本轮边界：先完成代码、接口、文档级核对；随后按确认后的最小补齐方案修复构建前阻塞缺口。未构建 exe；未改 DB migration；未改 9100；未改自动发送策略；未启动真实微信自动操作。
+
+补齐记录（2026-06-22）：
+
+- 19000 Local Agent 心跳不再固定上报 `wechat_status=unknown`，已改为轻量微信窗口发现：找到窗口上报 `ready`，找不到上报 `unavailable`，探测异常上报 `unknown` 并记录 warning。
+- 心跳探测不触发 OCR、不切换前台、不搜索联系人、不粘贴、不发送。
+- 前端“小高AI微信助手”页补充“构建与分发说明”，明确当前页面不提供在线下载，验收使用 `dist/local-agent/小高AI微信助手.exe` 完整目录或人工分发包。
+- 自动发送安全边界保持不变：`notify_sales` 只允许 `paste_only`，`detect_reply` 只读检测，`sent=false`。
+
+本轮验证结果（2026-06-22）：
+
+- `python -m py_compile app/local_agent_main.py`：通过。
+- `python -m pytest tests/test_local_agent_heartbeat.py tests/test_agent_status.py -v`：18 passed，5 warnings。
+- `python -m pytest tests/test_p0_main_5b_poll_and_execute.py -v`：37 passed，1 warning。
+- `python -m pytest tests/test_p1_auto_1c_poll_and_detect.py tests/test_p1_auto_1d_fix4_safe_json.py -v`：43 passed，1 warning。
+- `cd frontend && npm run build`：通过；保留既有 `/fonts/Barlow-Regular_2.ttf` 运行时解析警告和 chunk 大小警告。
+
+未执行项：
+
+- 未构建 exe。
+- 未启动 9000 / 19000 长运行服务。
+- 未启动真实微信自动操作。
+- 未做虚拟机 / Windows 10 真机验收。
 
 ## 一、当前前端功能清单
 
@@ -71,7 +93,9 @@
 - `disabled_reason`
 - `status_source`
 
-当前风险：19000 心跳上报的 `wechat_status` 当前为 `unknown`，而 9000 的 `can_run_wechat_action` 依赖微信状态可用口径。前端又同时以 19000 `/health` 判断本机 Agent 在线，导致“Agent 在线”和“9000 判断可执行微信动作”可能出现口径不一致。
+已补齐：19000 心跳已从固定 `unknown` 改为轻量微信窗口状态上报。找到微信窗口时上报 `ready`，9000 可据此把 `wechat_available` 归一为 `available`，从而支撑前端状态卡展示“Agent 在线 / 微信自动化可用”的一期验收口径。
+
+剩余风险：该状态仅代表“发现微信窗口”，不代表 OCR、联系人搜索、粘贴和回复检测全部可用；这些能力仍应通过 `/agent/wechat/windows`、`/agent/ocr/status`、`poll-and-execute`、`poll-and-detect` 分别验收。
 
 ### 4. 按钮与前端动作
 
@@ -144,9 +168,9 @@
 
 ### 7. 是否有下载 exe 入口
 
-结论：有“下载/测试”导航入口，但没有发现真实下载 exe 按钮、下载 API、版本包列表 API 或产物路径展示。
+结论：有“下载/测试”导航入口；补齐后页面已明确展示构建产物路径、局域网构建参数和人工分发边界。
 
-如果本阶段验收要求“客户从前端下载或获取小高AI微信助手.exe”，当前前端不满足。
+当前未实现在线下载 exe 服务。本期按“构建产物或人工分发完整目录”验收，不把前端下载服务作为一期阻塞。
 
 ### 8. 是否依赖任务状态
 
@@ -454,13 +478,21 @@ GET {server_url}/wechat-tasks/pending?task_type=detect_reply&limit=1
 
 ### 6. 心跳能力风险
 
-19000 支持向 9000 心跳，但当前 `wechat_status` 上报口径仍为 `unknown`，未与微信窗口 readiness、OCR ready、foreground 可用性形成统一可执行状态。
+19000 支持向 9000 心跳，当前 `wechat_status` 已最小补齐为轻量窗口状态：
 
-影响：
+- `ready`：找到微信窗口。
+- `unavailable`：未找到微信窗口。
+- `unknown`：窗口探测异常。
 
-- 9000 `/agent/status` 可能显示 Agent 在线但 `can_run_wechat_action=false`
-- 前端 19000 `/health` 可能显示在线，但 9000 状态卡仍提示不可运行微信动作
-- 构建 exe 后若验收依赖 9000 状态卡判断“微信助手可用”，会产生歧义
+边界：
+
+- 不调用 OCR。
+- 不切换前台。
+- 不搜索联系人。
+- 不粘贴。
+- 不发送。
+
+影响：9000 `/agent/status` 与前端状态卡已具备更一致的一期在线/可用展示口径；但 `ready` 仍不等于完整自动化链路可执行，构建后仍需跑任务级验收。
 
 ### 7. 打包脚本状态
 
@@ -512,7 +544,7 @@ http://192.168.110.113:9000
 | 前端功能 | 前端接口 | 9000 是否支持 | 19000 是否支持 | 测试是否覆盖 | 是否阻塞构建 | 备注 |
 |---|---|---|---|---|---|---|
 | 本机 Agent 在线检测 | 19000 `/health` | 不涉及 | 支持 | 有 | 否 | 浏览器直连 127.0.0.1:19000 |
-| 主后端 Agent 状态卡 | 9000 `/agent/status` | 支持 | 通过心跳间接支持 | 有 | 部分阻塞 | 心跳 `wechat_status=unknown`，状态口径不统一 |
+| 主后端 Agent 状态卡 | 9000 `/agent/status` | 支持 | 通过心跳间接支持 | 有 | 否 | 心跳已最小补齐窗口状态：ready/unavailable/unknown |
 | Local Agent 心跳 | 19000 → 9000 `/agent/heartbeat` | 支持 | 支持 | 有 | 否 | 单机演示可用 |
 | 创建通知销售任务 | 9000 `/wechat-tasks` | 支持 | 不涉及 | 有 | 否 | 只允许 Aw3 + paste_only |
 | 执行通知销售任务 | 19000 `/agent/tasks/poll-and-execute` | 支持任务查询/回写 | 支持 | 有 | 否 | 支持 `task_id`，sent=false |
@@ -524,7 +556,7 @@ http://192.168.110.113:9000
 | 搜索诊断 | 19000 `/agent/wechat/search-debug` | 不涉及 | 支持 | 有 | 否 | 已有安全 JSON 序列化测试 |
 | OCR 状态/预热 | 19000 `/agent/ocr/status`、`/agent/ocr/warmup` | 不涉及 | 支持 | 有 | 否 | exe 需携带模型 |
 | Aw3 测试链路 | 19000 `/agent/wechat/test` | 不涉及 | 支持 | 有 | 否 | 当前已自动定位 Aw3 + paste_only + sent=false |
-| 下载 exe | 前端“下载/测试”入口 | 未发现下载接口 | 有打包产物路径但无前端下载契约 | 未发现 | 是，若验收要求页面下载 | 当前只有导航入口，没有真实下载按钮/API |
+| 下载 exe | 前端“下载/测试”入口 | 未提供下载接口 | 有打包产物路径，前端已展示人工分发契约 | 前端构建验证 | 否，按人工分发验收 | 当前不做在线下载服务 |
 | 商户/权限隔离 | 状态与任务接口 | 未支持 | 未支持 | 未见 | 生产阻塞，演示非阻塞 | 多客户产品化前必须补 |
 | 错误回传 | 任务 result | 支持 | 支持 | 有 | 否 | 有 `error_code`、`failure_stage`、`message` |
 | 日志路径 | 前端不直接依赖 | 不涉及 | 支持 | 部分 | 否 | 默认 `logs/local_agent.log` |
@@ -532,7 +564,7 @@ http://192.168.110.113:9000
 
 ## 五、构建前阻塞项
 
-### 阻塞项 1：前端有“下载/测试”入口，但无真实下载 exe 能力
+### 阻塞项 1：前端有“下载/测试”入口，但无真实下载 exe 能力（已降级为非阻塞）
 
 当前存在 `/wechat-assistant/download-test` 导航入口，但实际仍渲染同一个 `WechatAgent` 页面，未发现：
 
@@ -542,20 +574,13 @@ http://192.168.110.113:9000
 - 构建产物路径展示
 - 安装/运行前置条件说明
 
-如果本阶段验收包含“从前端下载/获取小高AI微信助手.exe”，则该项阻塞构建验收。
+补齐后当前口径：本期不提供在线下载服务，页面明确说明使用构建产物或人工分发完整目录。因此该项不再阻塞一期 exe 构建验收。
 
-### 阻塞项 2：9000 状态卡与 19000 本机能力状态口径不统一
+### 阻塞项 2：9000 状态卡与 19000 本机能力状态口径不统一（已最小补齐）
 
-19000 能向 9000 心跳，但当前 `wechat_status=unknown`。9000 `/agent/status` 会据此影响 `can_run_wechat_action`。
+19000 能向 9000 心跳，且已上报轻量微信窗口状态。9000 `/agent/status` 可据此展示 `wechat_available=available` 与 `can_run_wechat_action=true`。
 
-风险表现：
-
-- 19000 `/health` 显示在线
-- 19000 诊断接口可能可用
-- 9000 `/agent/status` 仍可能显示微信不可运行
-- 前端用户无法判断到底是否可验收
-
-如果构建验收要求状态卡准确反映“本机微信可操作”，则该项构建前必须修。
+剩余边界：该状态只证明本机可发现微信窗口，不证明 OCR、联系人验证、粘贴和回复检测全部成功。
 
 ### 阻塞项 3：构建脚本默认 ServerUrl 不适合局域网验收
 
@@ -628,20 +653,19 @@ app/local_agent_build_info.py
 
 ## 七、是否建议开始构建 exe
 
-结论：不建议直接进入最终 Local Agent exe 构建。
+结论：可以进入 Local Agent exe 构建前的受控构建与非发送验收，但不建议跳过构建后任务级验收直接宣称可交付。
 
 原因：
 
-1. 前端已有“下载/测试”入口，但没有真实下载 exe 契约；如果验收者从页面寻找安装包，会无法完成验收。
-2. 9000 状态卡和 19000 本机能力状态口径不统一，`wechat_status=unknown` 会造成“本机 Agent 在线但主后端状态不可执行”的歧义。
-3. 打包脚本默认 ServerUrl 指向公网 callback，不适合局域网验收；必须先固定构建参数。
+1. 前端下载/测试入口已明确人工分发边界，不再要求在线下载。
+2. 19000 心跳状态已最小补齐，可支撑 9000 状态卡展示。
+3. 打包脚本默认 ServerUrl 指向公网 callback，不适合局域网验收；构建时仍必须显式固定构建参数。
 
-可以进入的下一步不是“最终构建”，而是“构建前最小补齐/确认”：
+可以进入的下一步：
 
-- 明确下载入口是否本期必需。
-- 修正或明确 Agent 状态口径。
 - 固定局域网构建命令。
 - 明确构建会生成/修改 `app/local_agent_build_info.py`。
+- 构建后执行 `/health`、`/agent/version`、心跳、`poll-and-execute`、`poll-and-detect` 的非发送验收。
 
 若上述最小缺口确认完成，建议使用类似命令进入构建：
 

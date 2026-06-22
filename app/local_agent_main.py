@@ -181,14 +181,27 @@ def _is_wechat_task_busy() -> bool:
     return True
 
 
+def _probe_wechat_status_for_heartbeat() -> str:
+    """心跳只做微信窗口发现，不执行前台切换、OCR、搜索或粘贴。"""
+    try:
+        window = find_wechat_window()
+    except Exception as exc:
+        logger.warning(
+            "heartbeat wechat status probe failed: stage=find_wechat_window error=%s",
+            exc,
+        )
+        return "unknown"
+    return "ready" if window is not None else "unavailable"
+
+
 def _build_agent_heartbeat_payload() -> dict:
-    """构造 Local Agent 心跳；本阶段不探测微信可用性。"""
+    """构造 Local Agent 心跳；只上报轻量窗口状态，不触发微信自动化动作。"""
     return {
         "agent_client_id": os.getenv("AUTO_WECHAT_AGENT_CLIENT_ID", AGENT_CLIENT_ID),
         "agent_name": os.getenv("AUTO_WECHAT_AGENT_NAME", AGENT_DISPLAY_NAME),
         "host_name": socket.gethostname(),
         "agent_status": "busy" if _is_wechat_task_busy() else "idle",
-        "wechat_status": "unknown",
+        "wechat_status": _probe_wechat_status_for_heartbeat(),
         "current_task_id": None,
         "current_task_type": None,
         "version": BUILD_VERSION,

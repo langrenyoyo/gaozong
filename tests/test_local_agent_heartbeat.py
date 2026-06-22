@@ -6,21 +6,46 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 
-def test_heartbeat_payload_reports_idle_without_wechat_probe():
+def test_heartbeat_payload_reports_idle_with_wechat_ready_status():
     from app import local_agent_main
 
-    with patch("app.local_agent_main.check_wechat_ready_for_automation") as mock_ready:
+    with patch("app.local_agent_main.find_wechat_window") as mock_find:
+        mock_find.return_value = object()
         payload = local_agent_main._build_agent_heartbeat_payload()
 
     assert payload["agent_client_id"] == "local-agent-default"
     assert payload["agent_name"] == "小高AI微信助手"
     assert payload["host_name"]
     assert payload["agent_status"] == "idle"
-    assert payload["wechat_status"] == "unknown"
+    assert payload["wechat_status"] == "ready"
     assert payload["current_task_id"] is None
     assert payload["current_task_type"] is None
     assert payload["version"]
-    mock_ready.assert_not_called()
+    mock_find.assert_called_once()
+
+
+def test_heartbeat_payload_reports_unavailable_when_wechat_window_missing():
+    from app import local_agent_main
+
+    with patch("app.local_agent_main.find_wechat_window") as mock_find:
+        mock_find.return_value = None
+        payload = local_agent_main._build_agent_heartbeat_payload()
+
+    assert payload["agent_status"] == "idle"
+    assert payload["wechat_status"] == "unavailable"
+
+
+def test_heartbeat_payload_reports_unknown_when_wechat_probe_errors(caplog):
+    from app import local_agent_main
+
+    with patch("app.local_agent_main.find_wechat_window") as mock_find:
+        mock_find.side_effect = RuntimeError("uia unavailable")
+        with caplog.at_level(logging.WARNING):
+            payload = local_agent_main._build_agent_heartbeat_payload()
+
+    assert payload["agent_status"] == "idle"
+    assert payload["wechat_status"] == "unknown"
+    assert "heartbeat wechat status probe failed" in caplog.text
 
 
 def test_heartbeat_payload_reads_agent_identity_from_environment(monkeypatch):
@@ -46,7 +71,7 @@ def test_heartbeat_payload_reports_busy_when_task_lock_is_held():
         local_agent_main._wechat_task_lock.release()
 
     assert payload["agent_status"] == "busy"
-    assert payload["wechat_status"] == "unknown"
+    assert payload["wechat_status"] in {"ready", "unavailable", "unknown"}
 
 
 @patch("app.local_agent_main._http_post_json")
@@ -68,7 +93,7 @@ def test_send_agent_heartbeat_once_posts_to_server(mock_post):
     assert url == "http://127.0.0.1:9000/agent/heartbeat"
     assert payload["agent_client_id"] == "local-agent-default"
     assert payload["agent_status"] in {"idle", "busy"}
-    assert payload["wechat_status"] == "unknown"
+    assert payload["wechat_status"] in {"ready", "unavailable", "unknown"}
 
 
 @patch("app.local_agent_main._http_post_json")

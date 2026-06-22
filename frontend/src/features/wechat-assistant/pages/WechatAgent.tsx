@@ -257,6 +257,24 @@ export default function WechatAgent() {
           <div>宝塔服务器不能运行 19000；微信助手依赖本机微信窗口，任务执行前需要 Local Agent 在线。</div>
         </div>
 
+        <div className="mt-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs leading-6 text-slate-700">
+          <div className="font-bold text-slate-900">构建与分发说明</div>
+          <div>当前页面不提供在线下载；一期验收请使用构建产物或人工分发的完整目录。</div>
+          <div>
+            产物路径：
+            <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
+              dist/local-agent/小高AI微信助手.exe
+            </span>
+          </div>
+          <div>
+            局域网构建需指定主系统地址：
+            <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
+              -ServerUrl http://192.168.110.113:9000
+            </span>
+          </div>
+          <div className="font-semibold text-amber-700">安全边界：notify_sales 只允许 paste_only，detect_reply 只读检测，结果必须保持 sent=false。</div>
+        </div>
+
         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
             <div className="flex items-center gap-2 border-b border-[#edf1f6] px-4 py-3">
