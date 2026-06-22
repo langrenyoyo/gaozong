@@ -158,3 +158,134 @@ def test_auth_me_required_mode_accepts_bearer_token(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data"]["session_id"] == "token:test-token"
+
+
+def test_real_introspect_token_builds_trusted_context(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+    monkeypatch.setenv("NEWCAR_AUTH_SERVICE_TOKEN", "svc-token")
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "success": True,
+                "data": {
+                    "user_id": "u-100",
+                    "username": "merchant-user",
+                    "display_name": "商户用户",
+                    "merchant_id": "merchant-real",
+                    "permission_codes": ["auto_wechat:use", "auto_wechat:leads"],
+                    "role_codes": ["merchant_admin"],
+                    "session_id": "sess-real",
+                },
+            }
+
+    def fake_post(url, *, json, headers, timeout):
+        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", fake_post)
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get(
+        "/auth/me",
+        params={"merchant_id": "forged-merchant"},
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["user_id"] == "u-100"
+    assert data["merchant_id"] == "merchant-real"
+    assert data["merchant_ids"] == ["merchant-real"]
+    assert data["source_system"] == "new_car_project"
+    assert data["permission_codes"] == ["auto_wechat:use", "auto_wechat:leads"]
+    assert calls == [
+        {
+            "url": "https://newcar.example.test/auth/introspect",
+            "json": {"credential_type": "token", "credential": "real-token"},
+            "headers": {"X-NewCar-Service-Token": "svc-token"},
+            "timeout": 5,
+        }
+    ]
+
+
+def test_real_introspect_cookie_accepts_direct_payload(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "user_id": "u-cookie",
+                "merchant_id": "merchant-cookie",
+                "merchant_ids": ["merchant-cookie", "merchant-extra"],
+                "permission_codes": ["auto_wechat:compute"],
+                "source_system": "new_car_project",
+            }
+
+    def fake_post(url, *, json, headers, timeout):
+        assert json == {"credential_type": "cookie", "credential": "cookie-value"}
+        assert headers == {}
+        return FakeResponse()
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", fake_post)
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get(
+        "/auth/me",
+        cookies={"newcar_session": "cookie-value"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["user_id"] == "u-cookie"
+    assert data["merchant_id"] == "merchant-cookie"
+    assert data["merchant_ids"] == ["merchant-cookie", "merchant-extra"]
+    assert data["permission_codes"] == ["auto_wechat:compute"]
+
+
+def test_real_introspect_rejects_missing_user_id(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "data": {"merchant_id": "merchant-real"}}
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "NEWCAR_AUTH_INVALID_RESPONSE"
