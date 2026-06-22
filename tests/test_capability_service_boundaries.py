@@ -92,3 +92,28 @@ def test_agents_service_does_not_import_other_capability_business_services():
 
     for forbidden in forbidden_imports:
         assert forbidden not in combined
+
+
+def test_leads_service_does_not_import_douyin_cs_or_wechat_assistant_business_services():
+    """leads 能力服务本阶段只迁移只读查询，禁止直接 import 客服/微信助手业务 service。"""
+    leads_files = [
+        Path("apps/leads/routers.py"),
+        Path("apps/leads/services.py"),
+        Path("apps/leads/dependencies.py"),
+    ]
+    forbidden_imports = [
+        "app.services.douyin_ai_cs_binding_service",
+        "app.services.douyin_account_agent_binding_service",
+        "app.services.douyin_private_message_send_service",
+        "app.services.douyin_sync_service",
+        "app.integrations.douyin_webhook",
+        "app.services.notification_service",
+        "app.services.wechat",
+        "app.wechat_ui",
+        "input_writer",
+    ]
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in leads_files if path.exists())
+
+    for forbidden in forbidden_imports:
+        assert forbidden not in combined
