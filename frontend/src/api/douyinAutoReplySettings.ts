@@ -2,6 +2,8 @@ import apiClient from "./client";
 import type {
   DouyinAutoReplySettingItem,
   DouyinAutoReplyMode,
+  DouyinConversationAutopilotState,
+  DouyinConversationAutopilotStateResponse,
   DouyinAutoReplySettingResponse,
   DouyinAutoReplySettingsListResponse,
   DouyinAutoReplySettingUpdateRequest,
@@ -73,5 +75,19 @@ export async function updateDouyinAutoReplyMode(
     `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/mode`,
     { mode },
   )) as unknown as ApiResponse<DouyinAutoReplySettingItem>;
+  return response.data;
+}
+
+export async function resumeDouyinConversationAutopilot(
+  accountOpenId: string,
+  conversationShortId: string | number,
+  customerOpenId?: string | null,
+): Promise<DouyinConversationAutopilotState> {
+  const response = (await apiClient.post(
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversations/${encodeURIComponent(
+      String(conversationShortId),
+    )}/autopilot/resume`,
+    { customer_open_id: customerOpenId || undefined },
+  )) as unknown as DouyinConversationAutopilotStateResponse;
   return response.data;
 }

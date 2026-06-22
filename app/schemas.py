@@ -1257,6 +1257,31 @@ class DouyinAutoreplySettingsResponse(BaseModel):
 # ========== 抖音自动回复运行记录 ==========
 
 
+class DouyinConversationAutopilotResumeRequest(BaseModel):
+    """当前会话恢复 AI 托管请求。"""
+
+    customer_open_id: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class DouyinConversationAutopilotStateItem(BaseModel):
+    """当前会话托管状态。"""
+
+    mode: str
+    manual_takeover_until: Optional[datetime] = None
+    last_human_message_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class DouyinConversationAutopilotStateResponse(BaseModel):
+    """当前会话托管状态响应。"""
+
+    success: bool = True
+    data: DouyinConversationAutopilotStateItem
+    message: str = "success"
+
+
 class AiAutoReplyRunListItem(BaseModel):
     """自动回复运行记录列表项。"""
 

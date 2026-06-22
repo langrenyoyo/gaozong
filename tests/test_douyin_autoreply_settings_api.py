@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -9,7 +10,12 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AiAutoReplyRun, DouyinAccountAutoreplySetting, DouyinAuthorizedAccount
+from app.models import (
+    AiAutoReplyRun,
+    ConversationAutopilotState,
+    DouyinAccountAutoreplySetting,
+    DouyinAuthorizedAccount,
+)
 
 
 engine = create_engine(
@@ -271,6 +277,55 @@ def test_put_settings_mode_rejects_invalid_mode_and_cross_merchant_account():
     cross = _client().put("/douyin-autoreply/settings/account-b/mode", json={"mode": "ai_auto"})
 
     assert invalid.status_code == 422
+    assert cross.status_code == 403
+
+
+def test_resume_conversation_autopilot_clears_manual_takeover_and_checks_account_owner():
+    _insert_account(merchant_id="merchant-a", account_open_id="account-a")
+    _insert_account(merchant_id="merchant-b", account_open_id="account-b")
+    now = datetime.now()
+    db = TestSession()
+    try:
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-a",
+                account_open_id="account-a",
+                conversation_short_id="conv-1",
+                customer_open_id="customer-1",
+                mode="manual",
+                manual_takeover_until=now + timedelta(minutes=30),
+                last_human_message_at=now,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().post(
+        "/douyin-autoreply/settings/account-a/conversations/conv-1/autopilot/resume",
+        json={"customer_open_id": "customer-1"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["mode"] == "auto"
+    assert data["manual_takeover_until"] is None
+    assert data["last_human_message_at"] is None
+    assert data["updated_at"] is not None
+
+    db = TestSession()
+    try:
+        state = db.query(ConversationAutopilotState).one()
+        assert state.mode == "auto"
+        assert state.manual_takeover_until is None
+        assert state.last_human_message_at is None
+    finally:
+        db.close()
+
+    cross = _client().post(
+        "/douyin-autoreply/settings/account-b/conversations/conv-1/autopilot/resume",
+        json={"customer_open_id": "customer-1"},
+    )
     assert cross.status_code == 403
 
 

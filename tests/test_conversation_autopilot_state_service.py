@@ -210,3 +210,87 @@ def test_mark_manual_takeover_defaults_to_30_minutes():
         assert state.manual_takeover_until == now + timedelta(minutes=30)
     finally:
         db.close()
+
+
+def test_resume_ai_autopilot_clears_manual_takeover_for_single_conversation():
+    from app.services.conversation_autopilot_state_service import (
+        get_conversation_autopilot_state,
+        resume_ai_autopilot,
+    )
+
+    now = datetime.now()
+    db = TestSession()
+    try:
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                conversation_short_id="conv-1",
+                customer_open_id="customer-open-1",
+                mode="manual",
+                manual_takeover_until=now + timedelta(minutes=30),
+                last_human_message_at=now,
+            )
+        )
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                conversation_short_id="conv-2",
+                customer_open_id="customer-open-2",
+                mode="manual",
+                manual_takeover_until=now + timedelta(minutes=30),
+                last_human_message_at=now,
+            )
+        )
+        db.commit()
+
+        state = resume_ai_autopilot(
+            db,
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-1",
+            customer_open_id="customer-open-1",
+            now=now + timedelta(minutes=1),
+        )
+
+        assert state.mode == "auto"
+        assert state.customer_open_id == "customer-open-1"
+        assert state.manual_takeover_until is None
+        assert state.last_human_message_at is None
+        assert state.updated_at == now + timedelta(minutes=1)
+
+        untouched = get_conversation_autopilot_state(
+            db,
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-2",
+        )
+        assert untouched.mode == "manual"
+        assert untouched.manual_takeover_until == now + timedelta(minutes=30)
+    finally:
+        db.close()
+
+
+def test_resume_ai_autopilot_creates_auto_state_when_missing():
+    from app.services.conversation_autopilot_state_service import resume_ai_autopilot
+
+    now = datetime.now()
+    db = TestSession()
+    try:
+        state = resume_ai_autopilot(
+            db,
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-new",
+            now=now,
+        )
+
+        assert state.mode == "auto"
+        assert state.conversation_short_id == "conv-new"
+        assert state.manual_takeover_until is None
+        assert state.last_human_message_at is None
+        assert state.created_at == now
+        assert state.updated_at == now
+    finally:
+        db.close()

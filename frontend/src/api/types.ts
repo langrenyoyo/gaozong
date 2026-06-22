@@ -724,6 +724,19 @@ export interface DouyinAutoReplySettingUpdateRequest {
   max_replies_per_account_per_hour: number;
 }
 
+export interface DouyinConversationAutopilotState {
+  mode: string;
+  manual_takeover_until?: string | null;
+  last_human_message_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DouyinConversationAutopilotStateResponse {
+  success?: boolean;
+  data: DouyinConversationAutopilotState;
+  message?: string;
+}
+
 export interface DouyinAutoReplyModeUpdateRequest {
   mode: DouyinAutoReplyMode;
 }

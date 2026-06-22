@@ -41,6 +41,7 @@ import {
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   listDouyinAccounts,
+  resumeDouyinConversationAutopilot,
   sendDouyinManualMessage,
   unbindAgentFromDouyinAccount,
   updateDouyinAutoReplyMode,
@@ -655,6 +656,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingAccountMode, setLoadingAccountMode] = useState(false);
   const [savingAccountMode, setSavingAccountMode] = useState(false);
   const [accountModeError, setAccountModeError] = useState<string | null>(null);
+  const [accountModeMessage, setAccountModeMessage] = useState<string | null>(null);
   const [agentConfigAccount, setAgentConfigAccount] = useState<DouyinAccountItem | null>(null);
   const [agentOptions, setAgentOptions] = useState<DouyinAgentItem[]>([]);
   const [selectedAgentIdForConfig, setSelectedAgentIdForConfig] = useState<string>("");
@@ -1382,6 +1384,7 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     setDraftReplyText("");
     setSendError(null);
+    setAccountModeMessage(null);
     setMediaDownloads({});
     setUploadDialogOpen(false);
     setUploadFile(null);
@@ -1432,6 +1435,7 @@ export default function DouyinAiCsWorkbenchPage() {
     const previousMode = chatAssistMode;
     setSavingAccountMode(true);
     setAccountModeError(null);
+    setAccountModeMessage(null);
     setChatAssistMode(nextMode);
     accountModeCacheRef.current[accountOpenId] = nextMode;
     try {
@@ -1443,6 +1447,32 @@ export default function DouyinAiCsWorkbenchPage() {
       if (savedMode === "ai_auto_reply") {
         setDraftReplyText("");
         setSendError(null);
+        if (selectedConversation?.conversation_short_id) {
+          try {
+            await resumeDouyinConversationAutopilot(
+              accountOpenId,
+              selectedConversation.conversation_short_id,
+              selectedConversation.customer_open_id || selectedConversation.open_id || null,
+            );
+            if (
+              selectedAccountOpenIdRef.current === accountOpenId &&
+              selectedConversationIdRef.current === selectedConversation.id
+            ) {
+              setAccountModeMessage("已切换为 AI 自动回复，后续客户新消息将由 AI 处理。");
+            }
+          } catch {
+            if (
+              selectedAccountOpenIdRef.current === accountOpenId &&
+              selectedConversationIdRef.current === selectedConversation.id
+            ) {
+              setAccountModeError("AI 自动回复模式已保存，但当前会话人工接管解除失败，请刷新或重试。");
+            }
+          }
+        } else {
+          setAccountModeMessage("已切换为 AI 自动回复。");
+        }
+      } else {
+        setAccountModeMessage("已切换为人工接管。");
       }
     } catch (err) {
       accountModeCacheRef.current[accountOpenId] = previousMode;
@@ -1980,6 +2010,9 @@ export default function DouyinAiCsWorkbenchPage() {
               {accountModeError ? (
                 <div className="mt-1 text-[11px] leading-5 text-red-600">{accountModeError}</div>
               ) : null}
+              {accountModeMessage ? (
+                <div className="mt-1 text-[11px] leading-5 text-emerald-700">{accountModeMessage}</div>
+              ) : null}
             </div>
             <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
               <button
@@ -2277,14 +2310,6 @@ export default function DouyinAiCsWorkbenchPage() {
                             >
                               <ClipboardIcon size={13} />
                               {autoReplyCopied ? "已复制" : "复制"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => useAutoReplyAsManualDraft()}
-                              className="inline-flex h-8 items-center gap-2 rounded-md bg-blue-600 px-2.5 font-semibold text-white hover:bg-blue-700"
-                            >
-                              <CheckIcon size={13} />
-                              填入人工发送
                             </button>
                           </div>
                         </div>

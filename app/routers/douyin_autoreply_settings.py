@@ -13,11 +13,14 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.models import DouyinAuthorizedAccount
 from app.schemas import (
+    DouyinConversationAutopilotResumeRequest,
+    DouyinConversationAutopilotStateResponse,
     DouyinAutoreplyModeUpdate,
     DouyinAutoreplySettingsListResponse,
     DouyinAutoreplySettingsResponse,
     DouyinAutoreplySettingsUpdate,
 )
+from app.services.conversation_autopilot_state_service import resume_ai_autopilot
 from app.services.douyin_autoreply_settings_service import (
     build_account_autoreply_settings_view,
     get_account_autoreply_settings,
@@ -138,6 +141,46 @@ def put_settings_mode(
         context.user_id,
     )
     return {"success": True, "data": data, "message": "success"}
+
+
+@router.post(
+    "/{account_open_id}/conversations/{conversation_short_id}/autopilot/resume",
+    response_model=DouyinConversationAutopilotStateResponse,
+)
+def resume_conversation_autopilot(
+    account_open_id: str,
+    conversation_short_id: str,
+    request: DouyinConversationAutopilotResumeRequest,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """恢复当前会话 AI 托管，只清除当前会话人工接管状态。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    state = resume_ai_autopilot(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        customer_open_id=request.customer_open_id,
+    )
+    logger.info(
+        "douyin_conversation_autopilot_resume merchant_id=%s account_open_id_sha8=%s conversation_sha8=%s operator=%s",
+        trusted_merchant_id,
+        _hash_prefix(account_open_id),
+        _hash_prefix(conversation_short_id),
+        context.user_id,
+    )
+    return {
+        "success": True,
+        "data": {
+            "mode": state.mode,
+            "manual_takeover_until": state.manual_takeover_until,
+            "last_human_message_at": state.last_human_message_at,
+            "updated_at": state.updated_at,
+        },
+        "message": "success",
+    }
 
 
 @router.put("/{account_open_id}", response_model=DouyinAutoreplySettingsResponse)
