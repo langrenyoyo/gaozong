@@ -33,6 +33,7 @@ import type {
 import {
   bindAgentToDouyinAccount,
   downloadDouyinResource,
+  getAiAutoReplyRuns,
   getDouyinAutoReplySetting,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
@@ -49,6 +50,7 @@ import {
   type DouyinConversationProfile,
   type DouyinMessageItem,
   type DouyinAutoReplyMode,
+  type AiAutoReplyRunListItem,
   type UploadDouyinImageResponse,
 } from "../api";
 
@@ -193,8 +195,37 @@ function conversationTagText(tag: string) {
   return tag;
 }
 
+const LEAD_CAPTURE_TAG_VALUES = new Set([
+  "retained_contact",
+  "captured_lead",
+  "captured",
+  "has_lead",
+  "lead_captured",
+  "已留资",
+]);
+
+function isLeadCaptureTag(tag?: string | null) {
+  const value = String(tag || "").trim();
+  return LEAD_CAPTURE_TAG_VALUES.has(value);
+}
+
 function visibleConversationTags(tags?: string[] | null) {
-  return (tags || []).filter((tag) => tag !== "retained_contact");
+  return (tags || []).filter((tag) => !isLeadCaptureTag(tag));
+}
+
+function isCapturedLeadStatus(value?: string | null) {
+  const normalized = String(value || "").trim();
+  return normalized === "captured" || normalized === "已留资";
+}
+
+function conversationLeadStatusForList(
+  conversation: DouyinConversationItem,
+  accountOpenId: string | null | undefined,
+  profileCache: Record<string, DouyinConversationProfile | null>,
+) {
+  const cacheKey = conversationCacheKey(accountOpenId || conversation.account_open_id, conversation.id);
+  const cachedProfile = cacheKey ? profileCache[cacheKey] : null;
+  return cachedProfile?.lead?.status || conversation.lead_status || null;
 }
 
 function isCustomerMessage(message: DouyinMessageItem) {
@@ -306,6 +337,50 @@ function ErrorBanner({ message }: { message: string | null }) {
       <span>{message}</span>
     </div>
   );
+}
+
+function autoReplyRunReasonText(run: AiAutoReplyRunListItem | null) {
+  const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
+  const key = `${run?.status || ""}:${reason}`;
+  const exact: Record<string, string> = {
+    "send_skipped:auto_send_disabled_by_decision": "当前自动发送策略未允许，需人工确认后发送。",
+    "send_skipped:manual_takeover_blocked": "当前会话处于人工接管状态，未自动发送。",
+    "send_skipped:outbound_after_trigger": "检测到客户消息后已有人工或企业号回复，未自动发送。",
+    "blocked:manual_takeover": "当前会话处于人工接管状态，AI 未自动回复。",
+    "blocked:frequency_conversation_exceeded": "当前会话触发频控限制，AI 未自动回复。",
+    "blocked:rag_not_used": "当前账号要求知识库命中，但本次未命中知识库，AI 未自动发送。",
+    "failed:xg_douyin_ai_cs_timeout": "AI 服务响应超时，本次未自动回复。",
+    "failed:xg_douyin_ai_cs_http_422": "AI 服务请求参数异常，本次未自动回复。",
+    "skipped:empty_message": "本次消息为空或非文本消息，未触发自动回复。",
+  };
+  if (exact[key]) return exact[key];
+  if (reason) return reason;
+  if (run?.status === "send_skipped") return "发送前安全检查未通过。";
+  if (run?.status === "blocked") return "自动回复被安全门禁阻断。";
+  if (run?.status === "failed" || run?.status === "send_failed") return "自动回复执行失败。";
+  if (run?.status === "sent") return "AI 自动回复已发送。";
+  if (run?.status === "decided") return "AI 已生成回复建议。";
+  return "暂无自动回复运行结果。";
+}
+
+function autoReplyRunTitle(run: AiAutoReplyRunListItem | null) {
+  if (!run) return "AI 自动回复状态：暂无记录";
+  if (run.status === "send_skipped" && (run.would_send_content_summary || run.reply_text)) {
+    return "AI 已生成回复，但未自动发送";
+  }
+  if (run.status === "blocked") return "AI 自动回复已阻断";
+  if (run.status === "failed" || run.status === "send_failed") return "AI 自动回复失败";
+  if (run.status === "sent") return "AI 自动回复已发送";
+  if (run.status === "skipped") return "本次消息未触发自动回复";
+  return "AI 自动回复状态";
+}
+
+function autoReplyGeneratedContent(run: AiAutoReplyRunListItem | null) {
+  return run?.would_send_content_summary || run?.reply_text || "";
+}
+
+function shouldShowAutoReplyRunCard(run: AiAutoReplyRunListItem | null, loading: boolean, error: string | null) {
+  return loading || Boolean(error) || Boolean(run);
 }
 
 type MediaDownloadState = {
@@ -509,6 +584,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [draftReplyText, setDraftReplyText] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [autoReplyRun, setAutoReplyRun] = useState<AiAutoReplyRunListItem | null>(null);
+  const [loadingAutoReplyRun, setLoadingAutoReplyRun] = useState(false);
+  const [autoReplyRunError, setAutoReplyRunError] = useState<string | null>(null);
+  const [autoReplyCopied, setAutoReplyCopied] = useState(false);
   const composingReplyRef = useRef(false);
   const [mediaDownloads, setMediaDownloads] = useState<Record<string, MediaDownloadState>>({});
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
@@ -565,6 +644,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const accountRequestSeqRef = useRef(0);
   const conversationRequestSeqRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
+  const autoReplyRunRequestSeqRef = useRef(0);
   const accountModeRequestSeqRef = useRef(0);
   const conversationAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
@@ -892,6 +972,55 @@ export default function DouyinAiCsWorkbenchPage() {
     await Promise.allSettled([messageTask, profileTask]);
   }, [selectedAccount]);
 
+  const loadLatestAutoReplyRun = useCallback(async (
+    conversation: DouyinConversationItem | null,
+    account: DouyinAccountItem | null,
+  ) => {
+    const requestSeq = autoReplyRunRequestSeqRef.current + 1;
+    autoReplyRunRequestSeqRef.current = requestSeq;
+    setAutoReplyRunError(null);
+    setAutoReplyCopied(false);
+    if (!conversation || !account?.account_open_id || !conversation.conversation_short_id) {
+      setAutoReplyRun(null);
+      setLoadingAutoReplyRun(false);
+      return;
+    }
+    setLoadingAutoReplyRun(true);
+    try {
+      const data = await getAiAutoReplyRuns({
+        account_open_id: account.account_open_id,
+        conversation_short_id: String(conversation.conversation_short_id),
+        page_size: 1,
+      });
+      if (
+        autoReplyRunRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== account.account_open_id ||
+        selectedConversationIdRef.current !== conversation.id
+      ) {
+        return;
+      }
+      setAutoReplyRun(data.items[0] || null);
+    } catch (err) {
+      if (
+        autoReplyRunRequestSeqRef.current !== requestSeq ||
+        selectedAccountOpenIdRef.current !== account.account_open_id ||
+        selectedConversationIdRef.current !== conversation.id
+      ) {
+        return;
+      }
+      setAutoReplyRun(null);
+      setAutoReplyRunError(err instanceof Error ? err.message : "自动回复状态加载失败");
+    } finally {
+      if (
+        autoReplyRunRequestSeqRef.current === requestSeq &&
+        selectedAccountOpenIdRef.current === account.account_open_id &&
+        selectedConversationIdRef.current === conversation.id
+      ) {
+        setLoadingAutoReplyRun(false);
+      }
+    }
+  }, []);
+
   const markConversationReadLocally = useCallback((conversation: DouyinConversationItem) => {
     const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
     if (!accountOpenId) return;
@@ -981,15 +1110,19 @@ export default function DouyinAiCsWorkbenchPage() {
       const target = conversations.find((item) => item.id === selectedConversationId);
       if (target) markConversationReadLocally(target);
       void loadConversationDetail(selectedConversationId);
+      void loadLatestAutoReplyRun(target || null, selectedAccount);
     } else {
       if (!conversations.length) {
         setMessages([]);
         setProfile(null);
       }
+      setAutoReplyRun(null);
+      setAutoReplyRunError(null);
+      setLoadingAutoReplyRun(false);
       setProfileError(null);
       setLoadingProfile(false);
     }
-  }, [conversations, loadConversationDetail, markConversationReadLocally, selectedConversationId]);
+  }, [conversations, loadConversationDetail, loadLatestAutoReplyRun, markConversationReadLocally, selectedAccount, selectedConversationId]);
 
   useEffect(() => {
     if (conversationJumpParams && !conversationJumpHandled) return;
@@ -1027,6 +1160,7 @@ export default function DouyinAiCsWorkbenchPage() {
         const afterUnread = Number(after?.unread_count || 0);
         if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread)) {
           void loadConversationDetail(currentConversationId, { background: true });
+          void loadLatestAutoReplyRun(after, currentAccount);
         }
       } finally {
         pollInFlightRef.current = false;
@@ -1655,6 +1789,12 @@ export default function DouyinAiCsWorkbenchPage() {
             {filteredConversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;
               const tags = visibleConversationTags(conversation.tags);
+              const leadStatus = conversationLeadStatusForList(
+                conversation,
+                selectedAccount?.account_open_id,
+                profileCacheRef.current,
+              );
+              const captured = isCapturedLeadStatus(leadStatus);
               return (
                 <button
                   key={conversation.id}
@@ -1688,9 +1828,15 @@ export default function DouyinAiCsWorkbenchPage() {
                     </div>
                   ) : null}
                   <div className="mt-2 flex items-center justify-between">
-                    <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
-                      {statusText(conversation.lead_status)}
-                    </span>
+                    {captured ? (
+                      <span className="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                        已留资
+                      </span>
+                    ) : (
+                      <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                        {statusText(leadStatus)}
+                      </span>
+                    )}
                     {conversation.unread_count ? (
                       <span className="text-[11px] font-semibold text-red-500">
                         {conversation.unread_count} 未读
