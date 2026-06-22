@@ -89,7 +89,7 @@ class NewCarProjectAuthClient:
             response.raise_for_status()
             payload = response.json()
         except httpx.TimeoutException as exc:
-            raise NewCarAuthError("NEWCAR_AUTH_TIMEOUT", "NewCarProject introspect timeout") from exc
+            raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject introspect timeout") from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
                 raise NewCarAuthError("PERMISSION_DENIED", "NewCarProject permission denied") from exc
@@ -163,7 +163,9 @@ class NewCarProjectAuthClient:
             "auto_wechat:agent",
             "auto_wechat:ai_agents",
             "auto_wechat:douyin_ai_cs",
+            "auto_wechat:wechat_assistant",
             "auto_wechat:compute",
+            "auto_wechat:admin:compute_config",
             "auto_wechat:knowledge",
             "auto_wechat:knowledge_training",
             "auto_wechat:wechat_agent",

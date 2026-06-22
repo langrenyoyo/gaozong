@@ -212,6 +212,59 @@ def test_knowledge_training_ask_feedback_flow(tmp_path, monkeypatch):
     assert document_count == 0
 
 
+def test_knowledge_training_feedback_rejects_missing_session(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/knowledge-training/kt-missing/feedback",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "rating": "useful",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "TRAINING_SESSION_NOT_FOUND"
+
+
+def test_knowledge_training_feedback_rejects_cross_merchant(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_training_base_knowledge()
+
+    def fake_embed(self, text):
+        return {"embedding": [1.0, 0.0], "model": "test_embedding_model"}
+
+    def fake_chat(self, messages):
+        return {"reply_text": "ok", "model": "mock-chat", "elapsed_ms": 1, "usage": None}
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.embed", fake_embed)
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    ask_response = client.post(
+        "/knowledge-training/ask",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+            "question": "跨商户测试",
+        },
+    )
+    assert ask_response.status_code == 200
+
+    response = client.post(
+        f"/knowledge-training/{ask_response.json()['training_id']}/feedback",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-other",
+            "rating": "normal",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "TRAINING_SESSION_FORBIDDEN"
+
+
 def test_import_does_not_load_9000_19000_or_wechat_ui():
     for name in [
         "apps.xg_douyin_ai_cs.main",

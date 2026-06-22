@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.auth.context import RequestContext
@@ -148,3 +149,61 @@ def test_feedback_submits_wrong_rating_for_review(monkeypatch):
     }
     assert seen["json"]["merchant_id"] == "merchant-real"
     assert seen["json"]["rating"] == "wrong"
+
+
+def test_feedback_preserves_training_session_not_found(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            404,
+            request=request,
+            json={"detail": {"code": "TRAINING_SESSION_NOT_FOUND", "message": "训练会话不存在"}},
+        )
+
+        class WrappedResponse:
+            def raise_for_status(self):
+                raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+            def json(self):
+                return response.json()
+
+        return WrappedResponse()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client(_context()).post(
+        "/knowledge-training/kt-missing/feedback",
+        json={"rating": "useful"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "TRAINING_SESSION_NOT_FOUND"
+
+
+def test_feedback_preserves_training_session_forbidden(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            403,
+            request=request,
+            json={"detail": {"code": "TRAINING_SESSION_FORBIDDEN", "message": "无权反馈该训练会话"}},
+        )
+
+        class WrappedResponse:
+            def raise_for_status(self):
+                raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+
+            def json(self):
+                return response.json()
+
+        return WrappedResponse()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client(_context()).post(
+        "/knowledge-training/kt-other/feedback",
+        json={"rating": "normal"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "TRAINING_SESSION_FORBIDDEN"

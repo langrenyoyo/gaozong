@@ -66,6 +66,15 @@ def _public_payload(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
     return payload
 
 
+def _raise_upstream_error(exc: XgDouyinAiCsClientError) -> None:
+    if exc.status_code and exc.detail:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    raise HTTPException(
+        status_code=502,
+        detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
+    ) from exc
+
+
 @router.post("/ask")
 def ask(
     request: KnowledgeTrainingAskRequest,
@@ -87,10 +96,7 @@ def ask(
             request=payload,
         )
     except XgDouyinAiCsClientError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
-        ) from exc
+        _raise_upstream_error(exc)
 
     return _public_payload(result, ASK_PUBLIC_FIELDS)
 
@@ -110,9 +116,6 @@ def feedback(
             request={"rating": request.rating, "comment": request.comment},
         )
     except XgDouyinAiCsClientError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
-        ) from exc
+        _raise_upstream_error(exc)
 
     return _public_payload(result, FEEDBACK_PUBLIC_FIELDS)

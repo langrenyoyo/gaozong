@@ -36,6 +36,14 @@ class KnowledgeTrainingFeedbackInput:
     comment: str | None = None
 
 
+class TrainingSessionNotFoundError(ValueError):
+    """训练会话不存在。"""
+
+
+class TrainingSessionForbiddenError(ValueError):
+    """训练会话不属于当前商户或租户。"""
+
+
 def ask(payload: KnowledgeTrainingAskInput) -> dict:
     account_id = _normalize_account_id(payload.douyin_account_id)
     source_chunks = []
@@ -91,6 +99,19 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
         raise ValueError("INVALID_RATING")
     status = "pending_review" if payload.rating == "wrong" else "submitted"
     with connect() as conn:
+        session = conn.execute(
+            """
+            SELECT tenant_id, merchant_id
+            FROM knowledge_training_sessions
+            WHERE training_id=?
+            """,
+            (payload.training_id,),
+        ).fetchone()
+        if session is None:
+            raise TrainingSessionNotFoundError("TRAINING_SESSION_NOT_FOUND")
+        if session["tenant_id"] != payload.tenant_id or session["merchant_id"] != payload.merchant_id:
+            raise TrainingSessionForbiddenError("TRAINING_SESSION_FORBIDDEN")
+
         conn.execute(
             """
             INSERT INTO knowledge_training_feedbacks(

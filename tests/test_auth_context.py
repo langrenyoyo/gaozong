@@ -77,6 +77,26 @@ def test_mock_newcar_client_returns_context():
     assert context.has_permission("auto_wechat:agent") is True
 
 
+def test_mock_newcar_client_default_permissions_cover_current_features():
+    from app.auth.newcar_client import NewCarProjectAuthClient
+
+    client = NewCarProjectAuthClient(auth_enabled=False, mock_enabled=True)
+    context = client.build_mock_context()
+
+    assert set(context.permission_codes) >= {
+        "auto_wechat:use",
+        "auto_wechat:leads",
+        "auto_wechat:douyin_ai_cs",
+        "auto_wechat:wechat_assistant",
+        "auto_wechat:agent",
+        "auto_wechat:ai_agents",
+        "auto_wechat:knowledge_training",
+        "auto_wechat:knowledge",
+        "auto_wechat:compute",
+        "auto_wechat:admin:compute_config",
+    }
+
+
 def test_required_context_missing_token_returns_401(monkeypatch):
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
@@ -261,6 +281,90 @@ def test_real_introspect_cookie_accepts_direct_payload(monkeypatch):
     assert data["merchant_id"] == "merchant-cookie"
     assert data["merchant_ids"] == ["merchant-cookie", "merchant-extra"]
     assert data["permission_codes"] == ["auto_wechat:compute"]
+
+
+def test_real_introspect_code_uses_code_credential(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "data": {"user_id": "u-code", "merchant_id": "merchant-code"}}
+
+    def fake_post(url, *, json, headers, timeout):
+        seen["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", fake_post)
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/auth/me", params={"code": "login-code"})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user_id"] == "u-code"
+    assert seen["json"] == {"credential_type": "code", "credential": "login-code"}
+
+
+def test_real_introspect_plain_authorization_is_token(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "data": {"user_id": "u-token", "merchant_id": "merchant-token"}}
+
+    def fake_post(url, *, json, headers, timeout):
+        seen["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", fake_post)
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/auth/me", headers={"Authorization": "plain-token"})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user_id"] == "u-token"
+    assert seen["json"] == {"credential_type": "token", "credential": "plain-token"}
+
+
+def test_real_introspect_timeout_returns_unavailable(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_INTROSPECT_URL", "https://newcar.example.test/auth/introspect")
+
+    import httpx
+
+    def fake_post(*args, **kwargs):
+        raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", fake_post)
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/auth/me", headers={"Authorization": "Bearer real-token"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "NEWCAR_AUTH_UNAVAILABLE"
 
 
 def test_real_introspect_rejects_missing_user_id(monkeypatch):

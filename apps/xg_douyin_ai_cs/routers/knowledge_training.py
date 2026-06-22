@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from apps.xg_douyin_ai_cs.services.knowledge_training_service import (
     KnowledgeTrainingAskInput,
     KnowledgeTrainingFeedbackInput,
+    TrainingSessionForbiddenError,
+    TrainingSessionNotFoundError,
     ask as ask_training,
     submit_feedback,
 )
@@ -60,4 +62,14 @@ def feedback(training_id: str, request: KnowledgeTrainingFeedbackRequest) -> dic
             )
         )
     except ValueError as exc:
+        if isinstance(exc, TrainingSessionNotFoundError):
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "TRAINING_SESSION_NOT_FOUND", "message": "训练会话不存在"},
+            ) from exc
+        if isinstance(exc, TrainingSessionForbiddenError):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "TRAINING_SESSION_FORBIDDEN", "message": "无权反馈该训练会话"},
+            ) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
