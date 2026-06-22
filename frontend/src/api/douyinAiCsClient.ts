@@ -260,7 +260,6 @@ export interface SendDouyinManualMessageRequest {
   conversation_short_id: string;
   customer_open_id?: string;
   content: string;
-  scene?: "im_reply_msg";
   manual_confirmed: true;
   operator_id?: string;
 }

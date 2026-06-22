@@ -14,8 +14,6 @@ import {
   SearchIcon,
   ShieldCheckIcon,
   SmileIcon,
-  Trash2Icon,
-  UnlinkIcon,
   VideoIcon,
   XIcon,
   UserRoundIcon,
@@ -32,20 +30,14 @@ import type {
   DouyinLiveCheckStatusData,
 } from "../types";
 import {
-  bindAgentToDouyinAccount,
-  cancelDouyinAccountAuthorization,
-  deleteDouyinAccount,
   downloadDouyinResource,
-  getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   listDouyinAccounts,
   sendDouyinManualMessage,
-  unbindAgentFromDouyinAccount,
   uploadDouyinImage,
   type DouyinAccountItem,
-  type DouyinAgentItem,
   type DouyinConversationItem,
   type DouyinConversationProfile,
   type DouyinMessageItem,
@@ -394,22 +386,6 @@ function authorizationStatusText(value?: string | null): string {
   return value || "未知";
 }
 
-function bindingStatusText(value?: string | null): string {
-  if (value === "active") return "已绑定";
-  if (value === "none") return "未绑定";
-  if (value === "invalid") return "绑定失效";
-  if (value === "deleted") return "绑定已删除";
-  if (value === "unbound") return "已解绑";
-  return value || "未绑定";
-}
-
-function agentStatusText(value?: string | null): string {
-  if (value === "active") return "已启用";
-  if (value === "inactive") return "未启用";
-  if (value === "deleted") return "已删除";
-  return value || "未知";
-}
-
 function hasActiveAgentBinding(account: DouyinAccountItem | null): boolean {
   return Boolean(
     account?.bound_agent_id &&
@@ -507,14 +483,10 @@ export default function DouyinAiCsWorkbenchPage() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(null);
   const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
   const [profile, setProfile] = useState<DouyinConversationProfile | null>(null);
-  const [agents, setAgents] = useState<DouyinAgentItem[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [bindingBusy, setBindingBusy] = useState(false);
-  const [bindingNotice, setBindingNotice] = useState<string | null>(null);
   const [draftReplyText, setDraftReplyText] = useState("");
-  const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const composingReplyRef = useRef(false);
   const [mediaDownloads, setMediaDownloads] = useState<Record<string, MediaDownloadState>>({});
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -525,10 +497,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [loadingAgents, setLoadingAgents] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
-  const [agentNotice, setAgentNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accountListSource, setAccountListSource] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
@@ -553,7 +523,6 @@ export default function DouyinAiCsWorkbenchPage() {
   } | null>(null);
   const [authRedirectHandled, setAuthRedirectHandled] = useState(false);
   const conversationsCacheRef = useRef<Record<string, DouyinConversationItem[]>>({});
-  const agentsCacheRef = useRef<Record<string, DouyinAgentItem[]>>({});
   const messagesCacheRef = useRef<Record<string, DouyinMessageItem[]>>({});
   const profileCacheRef = useRef<Record<string, DouyinConversationProfile | null>>({});
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
@@ -561,29 +530,17 @@ export default function DouyinAiCsWorkbenchPage() {
   const selectedConversationIdRef = useRef<string | number | null>(null);
   const accountRequestSeqRef = useRef(0);
   const conversationRequestSeqRef = useRef(0);
-  const agentsRequestSeqRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
-  const selectedAgent = agents.find((item) => item.agent_id === selectedAgentId) || null;
-  const boundAgent = selectedAccount?.bound_agent_id
-    ? agents.find((item) => item.agent_id === selectedAccount.bound_agent_id) || null
-    : null;
   const activeBindingReady = hasActiveAgentBinding(selectedAccount);
   const authCallback = authStatus?.last_oauth_callback || null;
   const authAuthorized = Boolean(authCallback?.open_id);
   useEffect(() => {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
   }, [selectedAccount?.account_open_id]);
-
-  // 智能体选择初始化：仅在企业号切换或绑定变化时同步为当前绑定值；
-  // 不依赖整个 selectedAccount 对象，避免账号列表刷新（如未读数回写）触发
-  // selectedAccount 引用变化而覆盖用户在下拉里手选的智能体。
-  useEffect(() => {
-    setSelectedAgentId(selectedAccount?.bound_agent_id || null);
-  }, [selectedAccount?.account_open_id, selectedAccount?.bound_agent_id]);
 
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
@@ -715,38 +672,6 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const loadAccountAgents = useCallback(async (accountOpenId: string) => {
-    const cached = agentsCacheRef.current[accountOpenId];
-    const requestSeq = agentsRequestSeqRef.current + 1;
-    agentsRequestSeqRef.current = requestSeq;
-    if (cached) setAgents(cached);
-    if (!cached) setLoadingAgents(true);
-    setAgentNotice(null);
-    try {
-      const data = await getDouyinAccountAgents(accountOpenId);
-      if (agentsRequestSeqRef.current !== requestSeq || selectedAccountOpenIdRef.current !== accountOpenId) return;
-      agentsCacheRef.current[accountOpenId] = data.items;
-      setAgents(data.items);
-      if (!data.items.length) {
-        setSelectedAgentId(null);
-        setAgentNotice("当前商户未配置可选智能体，请先配置后再绑定企业号。");
-        return;
-      }
-      setAgentNotice(null);
-    } catch (err) {
-      if (agentsRequestSeqRef.current !== requestSeq || selectedAccountOpenIdRef.current !== accountOpenId) return;
-      if (!cached) {
-        setAgents([]);
-        setSelectedAgentId(null);
-      }
-      setAgentNotice(err instanceof Error ? err.message : "智能体列表加载失败");
-    } finally {
-      if (agentsRequestSeqRef.current === requestSeq && selectedAccountOpenIdRef.current === accountOpenId) {
-        setLoadingAgents(false);
-      }
-    }
-  }, []);
-
   const loadConversationDetail = useCallback(async (
     conversationId: string | number,
     options?: { background?: boolean },
@@ -866,24 +791,16 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     if (selectedAccount) {
       const cachedConversations = conversationsCacheRef.current[selectedAccount.account_open_id];
-      const cachedAgents = agentsCacheRef.current[selectedAccount.account_open_id];
       if (cachedConversations) setConversations(cachedConversations);
-      if (cachedAgents) setAgents(cachedAgents);
       void loadConversations(selectedAccount, {
         skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
         background: Boolean(cachedConversations),
       });
-      void loadAccountAgents(selectedAccount.account_open_id);
-      setBindingNotice(null);
     } else {
       setConversations([]);
       setSelectedConversationId(null);
-      setAgents([]);
-      setSelectedAgentId(null);
-      setAgentNotice(null);
-      setBindingNotice(null);
     }
-  }, [conversationJumpHandled, conversationJumpParams, loadAccountAgents, loadConversations, selectedAccount, selectedAccountId]);
+  }, [conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccount, selectedAccountId]);
 
   useEffect(() => {
     if (!conversationJumpParams || conversationJumpHandled || loadingAccounts) return;
@@ -1072,7 +989,6 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     setDraftReplyText("");
     setSendError(null);
-    setSendDialogOpen(false);
     setMediaDownloads({});
     setUploadDialogOpen(false);
     setUploadFile(null);
@@ -1080,103 +996,6 @@ export default function DouyinAiCsWorkbenchPage() {
     setUploadResult(null);
     setUploadImageIdCopied(false);
   }, [selectedConversationId]);
-
-  async function refreshAccountsKeepingSelection(accountOpenId?: string | null) {
-    const refreshed = await loadAccounts(accountOpenId || selectedAccount?.account_open_id || null);
-    if (!accountOpenId && selectedAccount?.account_open_id) {
-      const next = refreshed.find((item) => item.account_open_id === selectedAccount.account_open_id);
-      setSelectedAgentId(next?.bound_agent_id || null);
-    }
-    return refreshed;
-  }
-
-  async function saveAgentBinding() {
-    if (!selectedAccount || !selectedAgentId) {
-      setBindingNotice("请选择要绑定的智能体后再保存。");
-      return;
-    }
-    setBindingBusy(true);
-    setBindingNotice(null);
-    setError(null);
-    try {
-      await bindAgentToDouyinAccount(selectedAccount.account_open_id, selectedAgentId);
-      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
-      setBindingNotice("绑定已保存。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存绑定失败");
-    } finally {
-      setBindingBusy(false);
-    }
-  }
-
-  async function unbindAgent() {
-    if (!selectedAccount?.bound_agent_id) return;
-    setBindingBusy(true);
-    setBindingNotice(null);
-    setError(null);
-    try {
-      await unbindAgentFromDouyinAccount(selectedAccount.account_open_id);
-      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
-      setSelectedAgentId(null);
-      setBindingNotice("已解绑当前企业号智能体。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "解绑失败");
-    } finally {
-      setBindingBusy(false);
-    }
-  }
-
-  async function cancelAuthorization() {
-    if (!selectedAccount) return;
-    const confirmed = window.confirm(`确认取消企业号“${selectedAccount.account_name}”的授权吗？取消后将停用 AI 自动回复。`);
-    if (!confirmed) return;
-    setBindingBusy(true);
-    setBindingNotice(null);
-    setError(null);
-    try {
-      await cancelDouyinAccountAuthorization(selectedAccount.account_open_id);
-      await refreshAccountsKeepingSelection(selectedAccount.account_open_id);
-      setSelectedAgentId(null);
-      setBindingNotice("企业号授权已取消，绑定状态已失效。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "取消授权失败");
-    } finally {
-      setBindingBusy(false);
-    }
-  }
-
-  async function deleteSelectedAccount() {
-    if (!selectedAccount) return;
-    const confirmed = window.confirm(`确认删除企业号“${selectedAccount.account_name}”吗？删除后当前会话和绑定展示会被清空。`);
-    if (!confirmed) return;
-    const deletingOpenId = selectedAccount.account_open_id;
-    setBindingBusy(true);
-    setBindingNotice(null);
-    setError(null);
-    try {
-      await deleteDouyinAccount(deletingOpenId);
-      const refreshed = await loadAccounts();
-      if (!refreshed.some((item) => item.account_open_id === deletingOpenId)) {
-        setConversations([]);
-        setSelectedConversationId(null);
-        setMessages([]);
-        setProfile(null);
-        setSelectedAgentId(null);
-        setBindingNotice("企业号已删除。");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "删除企业号失败");
-    } finally {
-      setBindingBusy(false);
-    }
-  }
-
-  function openSendDialog() {
-    if (!selectedConversation || !selectedAccount) return;
-    setSendError(null);
-    setDraftReplyText((current) => current || "");
-    setSendDialogOpen(true);
-  }
 
   function openUploadDialog() {
     if (!selectedConversation || !selectedAccount) return;
@@ -1240,6 +1059,7 @@ export default function DouyinAiCsWorkbenchPage() {
   }
 
   async function confirmManualSend() {
+    if (chatAssistMode !== "manual_takeover") return;
     if (!selectedConversation || !selectedAccount) return;
     const content = draftReplyText.trim();
     if (!content) {
@@ -1259,9 +1079,8 @@ export default function DouyinAiCsWorkbenchPage() {
         customer_open_id: selectedConversation.open_id,
         content,
         manual_confirmed: true,
-        scene: "im_reply_msg",
       });
-      setSendDialogOpen(false);
+      setDraftReplyText("");
       await loadConversationDetail(selectedConversation.id);
       await loadConversations(selectedAccount);
     } catch (err) {
@@ -1272,6 +1091,16 @@ export default function DouyinAiCsWorkbenchPage() {
       setSendError(message);
     } finally {
       setSendingMessage(false);
+    }
+  }
+
+  function handleManualReplyKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || composingReplyRef.current || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    if (!sendingMessage && draftReplyText.trim()) {
+      void confirmManualSend();
     }
   }
 
@@ -1427,7 +1256,7 @@ export default function DouyinAiCsWorkbenchPage() {
                       {authorizationStatusText(account.authorization_status)}
                     </span>
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
-                      {account.main_account_id || account.account_open_id} · {account.bound_agent_name || "未绑定智能体"}
+                      {account.main_account_id || account.account_open_id}
                     </span>
                   </span>
                   {account.unread_count ? (
@@ -1435,15 +1264,6 @@ export default function DouyinAiCsWorkbenchPage() {
                       {account.unread_count}
                     </span>
                   ) : null}
-                  <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                      account.binding_status === "active"
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-slate-100 text-slate-500"
-                    }`}
-                  >
-                    {bindingStatusText(account.binding_status)}
-                  </span>
                 </button>
               );
             })}
@@ -1754,115 +1574,50 @@ export default function DouyinAiCsWorkbenchPage() {
                       <PaperclipIcon size={14} />
                       文件
                     </button>
-                    {selectedConversation ? (
-                      <button
-                        onClick={() => openSendDialog()}
-                        disabled={!selectedAccount}
-                        className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                      >
-                        人工确认发送
-                      </button>
-                    ) : null}
                   </div>
                 ) : null}
               </div>
 
-              <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-[#172033]">企业号绑定智能体</span>
-                  {loadingAgents ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
-                      <LoaderIcon size={12} className="animate-spin" />
-                      加载中
-                    </span>
+              {chatAssistMode === "manual_takeover" ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <textarea
+                    value={draftReplyText}
+                    onChange={(event) => setDraftReplyText(event.target.value)}
+                    onKeyDown={handleManualReplyKeyDown}
+                    onCompositionStart={() => {
+                      composingReplyRef.current = true;
+                    }}
+                    onCompositionEnd={() => {
+                      composingReplyRef.current = false;
+                    }}
+                    rows={3}
+                    className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300"
+                    placeholder="输入人工回复内容，Enter 发送，Shift + Enter 换行"
+                  />
+                  {sendError ? (
+                    <div className="mt-2 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+                      <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+                      <span>{sendError}</span>
+                    </div>
                   ) : null}
-                  <select
-                    value={selectedAgentId || ""}
-                    onChange={(event) => setSelectedAgentId(event.target.value || null)}
-                    disabled={!selectedAccount || !agents.length || loadingAgents || bindingBusy}
-                    className="h-8 min-w-[220px] rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    <option value="">{agents.length ? "请选择 Agent" : "未配置 Agent"}</option>
-                    {agents.map((agent) => (
-                      <option key={agent.agent_id} value={agent.agent_id}>
-                        {agent.agent_name} · {agent.agent_category || "默认客服"}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => void saveAgentBinding()}
-                    disabled={!selectedAccount || !selectedAgentId || bindingBusy}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {bindingBusy ? <LoaderIcon size={13} className="animate-spin" /> : <CheckIcon size={13} />}
-                    保存绑定
-                  </button>
-                  <button
-                    onClick={() => void unbindAgent()}
-                    disabled={!selectedAccount?.bound_agent_id || bindingBusy}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <UnlinkIcon size={13} />
-                    解绑
-                  </button>
-                  <button
-                    onClick={() => void cancelAuthorization()}
-                    disabled={!selectedAccount || bindingBusy || selectedAccount.authorization_status !== "authorized"}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <XIcon size={13} />
-                    取消授权
-                  </button>
-                  <button
-                    onClick={() => void deleteSelectedAccount()}
-                    disabled={!selectedAccount || bindingBusy}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Trash2Icon size={13} />
-                    删除企业号
-                  </button>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-slate-500">发送前会继续走人工确认安全链路。</span>
+                    <button
+                      onClick={() => void confirmManualSend()}
+                      disabled={sendingMessage || !selectedAccount || !selectedConversation || !draftReplyText.trim()}
+                      className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {sendingMessage ? <LoaderIcon size={14} className="animate-spin" /> : <CheckIcon size={14} />}
+                      发送
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-2 grid gap-2 text-[11px] text-slate-600 md:grid-cols-3">
-                  <span>授权状态：{authorizationStatusText(selectedAccount?.authorization_status)}</span>
-                  <span>绑定状态：{bindingStatusText(selectedAccount?.binding_status)}</span>
-                  <span>智能体状态：{agentStatusText(selectedAccount?.bound_agent_status)}</span>
-                  <span className="md:col-span-3">
-                    当前绑定：
-                    {selectedAccount?.bound_agent_id
-                      ? `${selectedAccount.bound_agent_name || boundAgent?.agent_name || selectedAccount.bound_agent_id} / ${selectedAccount.bound_agent_id}`
-                      : "未绑定智能体"}
-                  </span>
+              ) : (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
+                  当前为 AI 自动回复。人工接管后可手动发送消息。
+                  {!activeBindingReady ? " 当前企业号暂未满足自动回复启用条件。" : ""}
                 </div>
-                {selectedAgent ? (
-                  <div className="mt-2 grid gap-2 text-[11px] text-slate-600 md:grid-cols-3">
-                    <span>分类：{selectedAgent.agent_category}</span>
-                    <span>风格：{selectedAgent.reply_style}</span>
-                    <span>{selectedAgent.agent_id === selectedAccount?.bound_agent_id ? "当前已绑定" : "待保存选择"}</span>
-                    <span className="md:col-span-3">业务范围：{selectedAgent.business_scope}</span>
-                  </div>
-                ) : null}
-                {!activeBindingReady ? (
-                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-800">
-                    当前企业号未绑定已启用智能体，AI 自动回复已禁用。请选择智能体并点击“保存绑定”。
-                  </div>
-                ) : null}
-                {bindingNotice ? (
-                  <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] leading-5 text-emerald-800">
-                    {bindingNotice}
-                  </div>
-                ) : null}
-                {agentNotice ? (
-                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] leading-5 text-amber-800">
-                    {agentNotice}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
-                {chatAssistMode === "manual_takeover"
-                  ? "当前为人工接管状态，自动回复已停止。可通过上方人工入口手动发送消息。"
-                  : "当前为 AI 自动回复，系统会根据客户消息自动回复。人工接管后可手动发送消息。"}
-              </div>
+              )}
             </div>
           </div>
         </section>
@@ -2173,78 +1928,6 @@ export default function DouyinAiCsWorkbenchPage() {
                     </button>
                   </div>
                 </aside>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {sendDialogOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
-          <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
-              <div>
-                <h2 className="text-sm font-bold text-[#172033]">人工确认发送</h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  仅在你确认后发送，后端会强制按人工确认链路处理。
-                </p>
-              </div>
-              <button
-                onClick={() => setSendDialogOpen(false)}
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
-                aria-label="关闭发送确认弹窗"
-              >
-                <XIcon size={16} />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-5">
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
-                <div className="font-semibold text-slate-700">
-                  {selectedConversation?.nickname || "-"} · {selectedConversation?.open_id || "-"}
-                </div>
-                <div className="mt-1">
-                  conversation_short_id：{selectedConversation?.conversation_short_id ? String(selectedConversation.conversation_short_id) : "缺失"}
-                </div>
-              </div>
-
-              <label className="block">
-                <div className="mb-2 text-xs font-semibold text-slate-700">发送内容</div>
-                <textarea
-                  value={draftReplyText}
-                  onChange={(event) => setDraftReplyText(event.target.value)}
-                  rows={7}
-                  className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none ring-0 placeholder:text-slate-400 focus:border-blue-300"
-                  placeholder="请输入要发送的文本内容"
-                />
-              </label>
-
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                发送动作由人工触发，不会携带 auto_send 字段。
-              </div>
-
-              {sendError ? (
-                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
-                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
-                  <span>{sendError}</span>
-                </div>
-              ) : null}
-
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  onClick={() => setSendDialogOpen(false)}
-                  className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={() => void confirmManualSend()}
-                  disabled={sendingMessage}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {sendingMessage ? <LoaderIcon size={14} className="animate-spin" /> : null}
-                  确认发送
-                </button>
               </div>
             </div>
           </div>

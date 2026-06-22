@@ -1,6 +1,5 @@
 import {
   BotIcon,
-  BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CoinsIcon,
@@ -30,7 +29,6 @@ const centerIcons: Record<string, React.ReactNode> = {
   "agents-center": <BotIcon size={18} />,
   "wechat-assistant": <ShieldCheckIcon size={18} />,
   "compute-center": <CoinsIcon size={18} />,
-  "knowledge-center": <BookOpenIcon size={18} />,
 };
 
 const adminItems = [

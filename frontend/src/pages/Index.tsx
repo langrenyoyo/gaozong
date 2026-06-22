@@ -18,8 +18,6 @@ import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
-import KnowledgeBasePage from "../features/knowledge/pages/KnowledgeBasePage";
-import KnowledgeCategoriesPage from "../features/knowledge/pages/KnowledgeCategoriesPage";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
@@ -674,9 +672,6 @@ export default function Index({
     activeNav === "compute-token-transactions" ||
     activeNav === "compute-recharge-orders" ||
     activeNav === "compute-packages";
-  const isKnowledgeBaseNav =
-    activeNav === "knowledge-base";
-
   const loadChatEvents = useCallback(async () => {
     setChatLoading(true);
     setChatError(null);
@@ -767,10 +762,6 @@ export default function Index({
           <LeadsModulePage />
         ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
-        ) : activeNav === "knowledge-categories" ? (
-          <KnowledgeCategoriesPage />
-        ) : isKnowledgeBaseNav ? (
-          <KnowledgeBasePage />
         ) : isWechatAssistantNav ? (
           <WechatAgent />
         ) : isComputeNav ? (

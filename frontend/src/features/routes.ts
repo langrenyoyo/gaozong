@@ -1,7 +1,6 @@
 import { agentsRoutes } from "./agents/routes";
 import { computeRoutes } from "./compute/routes";
 import { douyinCsRoutes } from "./douyin-cs/routes";
-import { knowledgeRoutes } from "./knowledge/routes";
 import { leadsRoutes } from "./leads/routes";
 import { wechatAssistantRoutes } from "./wechat-assistant/routes";
 import type { CapabilityRoute, LegacyRouteRedirect } from "./types";
@@ -12,7 +11,6 @@ export const capabilityRoutes: CapabilityRoute[] = [
   ...agentsRoutes,
   ...wechatAssistantRoutes,
   ...computeRoutes,
-  ...knowledgeRoutes,
 ];
 
 export const legacyRouteRedirects: LegacyRouteRedirect[] = [
@@ -33,6 +31,8 @@ export const legacyRouteRedirects: LegacyRouteRedirect[] = [
   { from: "/agents/edit", to: "/agents" },
   { from: "/agents/knowledge-categories", to: "/agents" },
   { from: "/compute", to: "/compute/center" },
-  { from: "/knowledge-base", to: "/knowledge/base" },
-  { from: "/knowledge-categories", to: "/knowledge/base" },
+  { from: "/knowledge-base", to: "/douyin-cs/workbench" },
+  { from: "/knowledge-categories", to: "/douyin-cs/workbench" },
+  { from: "/knowledge/base", to: "/douyin-cs/workbench" },
+  { from: "/knowledge/categories", to: "/douyin-cs/workbench" },
 ];

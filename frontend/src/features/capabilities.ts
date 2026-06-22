@@ -57,16 +57,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "compute-packages", label: "套餐配置", path: "/compute/packages" },
     ],
   },
-  {
-    id: "knowledge-center",
-    title: "小高知识库",
-    shortLabel: "知识",
-    path: "/knowledge/base",
-    defaultNavId: "knowledge-base",
-    children: [
-      { id: "knowledge-base", label: "小高知识库", path: "/knowledge/base" },
-    ],
-  },
 ];
 
 export const merchantNavItems = capabilityNavCenters.flatMap((center) => center.children);
