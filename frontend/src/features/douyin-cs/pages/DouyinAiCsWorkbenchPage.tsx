@@ -33,6 +33,7 @@ import type {
 import {
   bindAgentToDouyinAccount,
   downloadDouyinResource,
+  getAiAutoReplyRunDetail,
   getAiAutoReplyRuns,
   getDouyinAutoReplySetting,
   getDouyinAccountAgents,
@@ -50,6 +51,7 @@ import {
   type DouyinConversationProfile,
   type DouyinMessageItem,
   type DouyinAutoReplyMode,
+  type AiAutoReplyRunDetail,
   type AiAutoReplyRunListItem,
   type UploadDouyinImageResponse,
 } from "../api";
@@ -65,6 +67,7 @@ const AUTH_SUCCESS_AUTO_CLOSE_MS = 1500;
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
 type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
+type AutoReplyRunViewItem = AiAutoReplyRunListItem & Pick<Partial<AiAutoReplyRunDetail>, "would_send_content">;
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
@@ -339,7 +342,7 @@ function ErrorBanner({ message }: { message: string | null }) {
   );
 }
 
-function autoReplyRunReasonText(run: AiAutoReplyRunListItem | null) {
+function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
   const key = `${run?.status || ""}:${reason}`;
   const exact: Record<string, string> = {
@@ -363,7 +366,7 @@ function autoReplyRunReasonText(run: AiAutoReplyRunListItem | null) {
   return "暂无自动回复运行结果。";
 }
 
-function autoReplyRunTitle(run: AiAutoReplyRunListItem | null) {
+function autoReplyRunTitle(run: AutoReplyRunViewItem | null) {
   if (!run) return "AI 自动回复状态：暂无记录";
   if (run.status === "send_skipped" && (run.would_send_content_summary || run.reply_text)) {
     return "AI 已生成回复，但未自动发送";
@@ -375,11 +378,45 @@ function autoReplyRunTitle(run: AiAutoReplyRunListItem | null) {
   return "AI 自动回复状态";
 }
 
-function autoReplyGeneratedContent(run: AiAutoReplyRunListItem | null) {
-  return run?.would_send_content_summary || run?.reply_text || "";
+function autoReplyGeneratedContent(run: AutoReplyRunViewItem | null) {
+  return run?.would_send_content || run?.would_send_content_summary || run?.reply_text || "";
 }
 
-function shouldShowAutoReplyRunCard(run: AiAutoReplyRunListItem | null, loading: boolean, error: string | null) {
+function autoReplyRunCacheKey(accountOpenId?: string | null, conversationShortId?: string | number | null) {
+  if (!accountOpenId || conversationShortId === undefined || conversationShortId === null) return null;
+  const conversationKey = String(conversationShortId).trim();
+  return conversationKey ? `${accountOpenId}:${conversationKey}` : null;
+}
+
+function isSameAutoReplyRun(prev: AutoReplyRunViewItem | null, next: AutoReplyRunViewItem | null) {
+  if (!prev && !next) return true;
+  if (!prev || !next) return false;
+  return (
+    prev.id === next.id &&
+    prev.status === next.status &&
+    prev.skip_reason === next.skip_reason &&
+    prev.block_reason === next.block_reason &&
+    prev.decision_log_id === next.decision_log_id &&
+    prev.would_send_content_summary === next.would_send_content_summary &&
+    prev.would_send_content === next.would_send_content &&
+    prev.error_message === next.error_message &&
+    prev.updated_at === next.updated_at
+  );
+}
+
+function shouldLoadAutoReplyRunDetail(
+  latestRun: AutoReplyRunViewItem | null,
+  cachedRun: AutoReplyRunViewItem | null | undefined,
+) {
+  if (!latestRun?.id || !latestRun.would_send_content_summary) return false;
+  return !(
+    cachedRun?.id === latestRun.id &&
+    cachedRun.updated_at === latestRun.updated_at &&
+    Boolean(cachedRun.would_send_content)
+  );
+}
+
+function shouldShowAutoReplyRunCard(run: AutoReplyRunViewItem | null, loading: boolean, error: string | null) {
   return loading || Boolean(error) || Boolean(run);
 }
 
@@ -584,7 +621,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [draftReplyText, setDraftReplyText] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [autoReplyRun, setAutoReplyRun] = useState<AiAutoReplyRunListItem | null>(null);
+  const [autoReplyRun, setAutoReplyRun] = useState<AutoReplyRunViewItem | null>(null);
   const [loadingAutoReplyRun, setLoadingAutoReplyRun] = useState(false);
   const [autoReplyRunError, setAutoReplyRunError] = useState<string | null>(null);
   const [autoReplyCopied, setAutoReplyCopied] = useState(false);
@@ -645,6 +682,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const conversationRequestSeqRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
   const autoReplyRunRequestSeqRef = useRef(0);
+  const autoReplyRunCacheRef = useRef<Record<string, AutoReplyRunViewItem | null>>({});
+  const autoReplyRunActiveKeyRef = useRef<string | null>(null);
   const accountModeRequestSeqRef = useRef(0);
   const conversationAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
@@ -975,17 +1014,29 @@ export default function DouyinAiCsWorkbenchPage() {
   const loadLatestAutoReplyRun = useCallback(async (
     conversation: DouyinConversationItem | null,
     account: DouyinAccountItem | null,
+    options: { background?: boolean } = {},
   ) => {
     const requestSeq = autoReplyRunRequestSeqRef.current + 1;
     autoReplyRunRequestSeqRef.current = requestSeq;
-    setAutoReplyRunError(null);
-    setAutoReplyCopied(false);
+    const background = Boolean(options.background);
     if (!conversation || !account?.account_open_id || !conversation.conversation_short_id) {
       setAutoReplyRun(null);
       setLoadingAutoReplyRun(false);
+      setAutoReplyRunError(null);
       return;
     }
-    setLoadingAutoReplyRun(true);
+    const cacheKey = autoReplyRunCacheKey(account.account_open_id, conversation.conversation_short_id);
+    const cachedRun = cacheKey ? autoReplyRunCacheRef.current[cacheKey] : undefined;
+    if (!background) {
+      setAutoReplyRunError(null);
+      setAutoReplyCopied(false);
+      if (cachedRun !== undefined) {
+        setAutoReplyRun((current) => (isSameAutoReplyRun(current, cachedRun) ? current : cachedRun));
+        setLoadingAutoReplyRun(false);
+      } else {
+        setLoadingAutoReplyRun(true);
+      }
+    }
     try {
       const data = await getAiAutoReplyRuns({
         account_open_id: account.account_open_id,
@@ -999,7 +1050,33 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setAutoReplyRun(data.items[0] || null);
+      let latestRun: AutoReplyRunViewItem | null = data.items[0] || null;
+      if (shouldLoadAutoReplyRunDetail(latestRun, cachedRun)) {
+        try {
+          const detail = await getAiAutoReplyRunDetail(latestRun.id);
+          latestRun = {
+            ...latestRun,
+            would_send_content: detail.would_send_content,
+          };
+        } catch {
+          // 详情加载失败不影响状态卡片展示，保留列表摘要。
+        }
+      } else if (
+        latestRun &&
+        cachedRun?.id === latestRun.id &&
+        cachedRun.updated_at === latestRun.updated_at &&
+        cachedRun.would_send_content
+      ) {
+        latestRun = {
+          ...latestRun,
+          would_send_content: cachedRun.would_send_content,
+        };
+      }
+      if (cacheKey) {
+        autoReplyRunCacheRef.current[cacheKey] = latestRun;
+      }
+      setAutoReplyRun((current) => (isSameAutoReplyRun(current, latestRun) ? current : latestRun));
+      setAutoReplyRunError(null);
     } catch (err) {
       if (
         autoReplyRunRequestSeqRef.current !== requestSeq ||
@@ -1008,7 +1085,6 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setAutoReplyRun(null);
       setAutoReplyRunError(err instanceof Error ? err.message : "自动回复状态加载失败");
     } finally {
       if (
@@ -1110,8 +1186,16 @@ export default function DouyinAiCsWorkbenchPage() {
       const target = conversations.find((item) => item.id === selectedConversationId);
       if (target) markConversationReadLocally(target);
       void loadConversationDetail(selectedConversationId);
-      void loadLatestAutoReplyRun(target || null, selectedAccount);
+      const nextAutoReplyKey = autoReplyRunCacheKey(
+        selectedAccount?.account_open_id,
+        target?.conversation_short_id,
+      );
+      const backgroundAutoReplyRefresh =
+        Boolean(nextAutoReplyKey) && autoReplyRunActiveKeyRef.current === nextAutoReplyKey;
+      autoReplyRunActiveKeyRef.current = nextAutoReplyKey;
+      void loadLatestAutoReplyRun(target || null, selectedAccount, { background: backgroundAutoReplyRefresh });
     } else {
+      autoReplyRunActiveKeyRef.current = null;
       if (!conversations.length) {
         setMessages([]);
         setProfile(null);
@@ -1160,7 +1244,7 @@ export default function DouyinAiCsWorkbenchPage() {
         const afterUnread = Number(after?.unread_count || 0);
         if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread)) {
           void loadConversationDetail(currentConversationId, { background: true });
-          void loadLatestAutoReplyRun(after, currentAccount);
+          void loadLatestAutoReplyRun(after, currentAccount, { background: true });
         }
       } finally {
         pollInFlightRef.current = false;
