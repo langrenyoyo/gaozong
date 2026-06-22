@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from datetime import datetime
 from typing import Any
 
@@ -67,10 +68,12 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     if not real_send_gate.passed:
         _mark_send_skipped(db, run, real_send_gate.reason or "real_send_gate_blocked")
         logger.info(
-            "ai_auto_reply_real_send_blocked stage=real_send_gate run_id=%s reason=%s gate_results=%s",
+            "douyin_autoreply_gate_blocked stage=real_send_gate run_id=%s account_open_id_sha8=%s "
+            "blocked_by=%s send_enabled=%s",
             run.id,
+            _hash_prefix(run.account_open_id),
             real_send_gate.reason,
-            real_send_gate.gate_results,
+            _settings_send_enabled(real_send_gate.gate_results),
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
@@ -172,3 +175,21 @@ def _safe_error(detail: Any) -> str:
     if isinstance(detail, dict):
         return str(detail.get("upstream_msg") or detail.get("safe_message") or detail.get("detail") or "send failed")
     return str(detail)
+
+
+def _hash_prefix(value: str | None) -> str:
+    """记录字段哈希前 8 位，避免日志输出 open_id 明文。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _settings_send_enabled(gate_results: dict[str, Any] | None) -> bool | None:
+    """从门禁结果里提取 send_enabled 摘要，避免记录完整白名单。"""
+    if not isinstance(gate_results, dict):
+        return None
+    settings = gate_results.get("settings")
+    if not isinstance(settings, dict) or settings.get("exists") is not True:
+        return None
+    return bool(settings.get("send_enabled"))

@@ -1,6 +1,7 @@
 import apiClient from "./client";
 import type {
   DouyinAutoReplySettingItem,
+  DouyinAutoReplyMode,
   DouyinAutoReplySettingResponse,
   DouyinAutoReplySettingsListResponse,
   DouyinAutoReplySettingUpdateRequest,
@@ -60,6 +61,17 @@ export async function updateDouyinAutoReplySetting(
   const response = (await apiClient.put(
     `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}`,
     buildUpdatePayload(payload),
+  )) as unknown as ApiResponse<DouyinAutoReplySettingItem>;
+  return response.data;
+}
+
+export async function updateDouyinAutoReplyMode(
+  accountOpenId: string,
+  mode: DouyinAutoReplyMode,
+): Promise<DouyinAutoReplySettingItem> {
+  const response = (await apiClient.put(
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/mode`,
+    { mode },
   )) as unknown as ApiResponse<DouyinAutoReplySettingItem>;
   return response.data;
 }

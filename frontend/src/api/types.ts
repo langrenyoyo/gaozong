@@ -673,8 +673,11 @@ export interface ComputeTransactionQuery {
 
 // ========== Douyin auto reply settings ==========
 
+export type DouyinAutoReplyMode = "ai_auto" | "manual_takeover";
+
 export interface DouyinAutoReplySettingItem {
   account_open_id: string;
+  mode?: DouyinAutoReplyMode;
   account_name?: string | null;
   nickname?: string | null;
   bind_status?: number | string | null;
@@ -713,6 +716,10 @@ export interface DouyinAutoReplySettingUpdateRequest {
   max_auto_replies_per_conversation_per_day: number;
   max_replies_per_conversation_per_hour: number;
   max_replies_per_account_per_hour: number;
+}
+
+export interface DouyinAutoReplyModeUpdateRequest {
+  mode: DouyinAutoReplyMode;
 }
 
 export interface DouyinAutoReplySettingsListResponse {

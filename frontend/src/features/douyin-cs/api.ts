@@ -28,6 +28,7 @@ export {
 export {
   getDouyinAutoReplySetting,
   getDouyinAutoReplySettings,
+  updateDouyinAutoReplyMode,
   updateDouyinAutoReplySetting,
 } from "../../api/douyinAutoReplySettings";
 

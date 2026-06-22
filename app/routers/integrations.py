@@ -245,14 +245,15 @@ def get_douyin_conversation_messages(
     )
 
 
-@router.get("/accounts/{account_id}/conversations/{conversation_key}/profile")
-def get_douyin_conversation_profile(
+def _get_douyin_conversation_profile_response(
     account_id: str,
     conversation_key: str,
     account_open_id: str | None = None,
-    db: Session = Depends(get_db),
+    db: Session | None = None,
 ) -> dict:
     """Return a read-only customer profile aggregated from 9000 local data."""
+    if db is None:
+        raise HTTPException(status_code=500, detail="db session is required")
     resolved_account_open_id = account_open_id or account_id
     data = get_conversation_profile(
         db,
@@ -268,6 +269,38 @@ def get_douyin_conversation_profile(
             },
         )
     return {"success": True, "data": data, "message": "success"}
+
+
+@router.get("/accounts/{account_id}/conversation-profile")
+def get_douyin_conversation_profile_by_query(
+    account_id: str,
+    conversation_id: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return customer profile without putting conversation_id in the path."""
+    return _get_douyin_conversation_profile_response(
+        account_id=account_id,
+        conversation_key=conversation_id,
+        account_open_id=account_open_id,
+        db=db,
+    )
+
+
+@router.get("/accounts/{account_id}/conversations/{conversation_key}/profile")
+def get_douyin_conversation_profile(
+    account_id: str,
+    conversation_key: str,
+    account_open_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return a read-only customer profile aggregated from 9000 local data."""
+    return _get_douyin_conversation_profile_response(
+        account_id=account_id,
+        conversation_key=conversation_key,
+        account_open_id=account_open_id,
+        db=db,
+    )
 
 
 @router.get("/conversation-messages")
