@@ -60,6 +60,7 @@ class LeadsClient:
         user_id: str | None = None,
         permission_codes: list[str] | None = None,
         super_admin: bool = False,
+        gateway_source_system: str = "new_car_project",
     ) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         if self.internal_token:
@@ -74,7 +75,7 @@ class LeadsClient:
             headers["X-Gateway-Permissions"] = ",".join(permission_codes)
         if super_admin:
             headers["X-Gateway-Super-Admin"] = "true"
-        headers["X-Gateway-Source-System"] = "new_car_project"
+        headers["X-Gateway-Source-System"] = gateway_source_system
 
         body = None
         if payload is not None:
@@ -161,6 +162,32 @@ class LeadsClient:
             user_id=user_id,
             permission_codes=["auto_wechat:leads"],
             super_admin=super_admin,
+        )
+
+    def create_internal_webhook_event(
+        self,
+        *,
+        payload: dict[str, Any],
+        source_path: str,
+        signature_verified: bool,
+        received_at: str | None = None,
+        gateway_request_id: str | None = None,
+        gateway_app_env: str | None = None,
+    ) -> dict[str, Any]:
+        """转发 9000 已验签 webhook payload 到 9202 internal 接口。"""
+        body = {
+            "source_path": source_path,
+            "payload": payload,
+            "signature_verified": signature_verified,
+            "received_at": received_at,
+            "gateway_request_id": gateway_request_id,
+            "gateway_app_env": gateway_app_env,
+        }
+        return self._request(
+            "POST",
+            "/api/leads/internal/webhook-events",
+            payload={key: value for key, value in body.items() if value is not None},
+            gateway_source_system="auto_wechat_gateway",
         )
 
     def get_lead(

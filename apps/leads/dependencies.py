@@ -6,15 +6,24 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fastapi import Header
+from fastapi import Header, HTTPException, Request
 
 from app.auth.context import RequestContext
 from app.services import lead_management_service
 
 
 GatewayContext = dict[str, Any]
+
+
+def get_leads_internal_token() -> str:
+    """读取 9202 内部调用令牌。
+
+    生产前必须配置 LEADS_INTERNAL_TOKEN；测试可通过依赖覆盖注入。
+    """
+    return os.getenv("LEADS_INTERNAL_TOKEN", "").strip()
 
 
 def get_gateway_context(
@@ -39,6 +48,25 @@ def get_gateway_context(
         "super_admin": x_gateway_super_admin == "true",
         "source_system": x_gateway_source_system or "new_car_project",
     }
+
+
+def require_internal_webhook_context(
+    request: Request,
+    expected_token: str = "",
+) -> None:
+    """校验 internal webhook-events 调用来源。"""
+    provided = request.headers.get("X-Internal-Token", "").strip()
+    source_system = request.headers.get("X-Gateway-Source-System", "").strip()
+    if not expected_token or not provided or provided != expected_token:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "INTERNAL_TOKEN_INVALID", "message": "内部调用令牌无效"},
+        )
+    if source_system != "auto_wechat_gateway":
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "GATEWAY_SOURCE_INVALID", "message": "内部网关来源无效"},
+        )
 
 
 def require_leads_context(context: GatewayContext) -> RequestContext:

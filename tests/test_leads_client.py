@@ -117,6 +117,45 @@ def test_leads_client_creates_and_assigns_lead(monkeypatch):
     ]
 
 
+def test_leads_client_posts_internal_webhook_event_with_gateway_headers(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        body = req.data.decode("utf-8") if req.data else None
+        seen["url"] = req.full_url
+        seen["method"] = req.method
+        seen["headers"] = dict(req.header_items())
+        seen["data"] = json.loads(body) if body else None
+        seen["timeout"] = timeout
+        return _FakeResponse(body='{"event_id": 1, "lead_id": 2, "is_duplicate": false}')
+
+    monkeypatch.setattr("packages.clients.leads_client.urllib_request.urlopen", fake_urlopen)
+
+    client = LeadsClient(base_url="http://leads.test", internal_token="secret-token", timeout_seconds=4)
+    result = client.create_internal_webhook_event(
+        payload={"event": "im_receive_msg"},
+        source_path="/webhook/douyin",
+        signature_verified=True,
+        gateway_request_id="req-001",
+        gateway_app_env="production",
+    )
+
+    assert seen["url"] == "http://leads.test/api/leads/internal/webhook-events"
+    assert seen["method"] == "POST"
+    assert seen["timeout"] == 4
+    header_map = {str(k).lower(): v for k, v in seen["headers"].items()}
+    assert header_map["x-internal-token"] == "secret-token"
+    assert header_map["x-gateway-source-system"] == "auto_wechat_gateway"
+    assert seen["data"] == {
+        "source_path": "/webhook/douyin",
+        "payload": {"event": "im_receive_msg"},
+        "signature_verified": True,
+        "gateway_request_id": "req-001",
+        "gateway_app_env": "production",
+    }
+    assert result["event_id"] == 1
+
+
 def test_leads_client_maps_http_network_and_json_errors(monkeypatch):
     def bad_status(req, timeout):
         return _FakeResponse(status=500, body='{"detail": "bad"}')

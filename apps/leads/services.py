@@ -11,6 +11,8 @@ from app.auth.context import RequestContext
 from app.schemas import LeadAssign, LeadCreate, LeadListResponse
 from app.services import assign_service, lead_management_service, lead_service, report_service
 from app.services.lead_management_service import LeadListQuery
+from apps.leads.schemas import InternalWebhookEventRequest, InternalWebhookEventResponse
+from apps.leads.webhook_events import process_internal_webhook_event
 
 
 def _merchant_scope(context: RequestContext) -> str | None:
@@ -88,3 +90,24 @@ def assign_lead(db: Session, context: RequestContext, lead_id: int, data: LeadAs
 def get_summary(db: Session, context: RequestContext):
     """复用旧报表统计，按可信商户上下文过滤。"""
     return report_service.get_summary(db, merchant_id=_merchant_scope(context))
+
+
+def create_internal_webhook_event(db: Session, request: InternalWebhookEventRequest) -> InternalWebhookEventResponse:
+    """处理 9000 已验签转入的 internal webhook payload。"""
+    if not request.signature_verified:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "WEBHOOK_SIGNATURE_NOT_VERIFIED", "message": "webhook 尚未由网关验签"},
+        )
+
+    result = process_internal_webhook_event(db, request.payload)
+    db.commit()
+    return InternalWebhookEventResponse(
+        event_id=result.get("event_id"),
+        lead_id=result.get("lead_id"),
+        is_new_lead=bool(result.get("is_new_lead")),
+        is_duplicate=bool(result.get("is_duplicate")),
+        lead_action=str(result.get("lead_action") or "not_lead_event"),
+    )

@@ -1,12 +1,26 @@
 """AI小高线索能力服务业务路由。"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from apps.leads import services as leads_service
-from apps.leads.dependencies import GatewayContext, get_gateway_context, require_leads_context
-from apps.leads.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut, ReportSummary
+from apps.leads.dependencies import (
+    GatewayContext,
+    get_gateway_context,
+    get_leads_internal_token,
+    require_internal_webhook_context,
+    require_leads_context,
+)
+from apps.leads.schemas import (
+    InternalWebhookEventRequest,
+    InternalWebhookEventResponse,
+    LeadAssign,
+    LeadCreate,
+    LeadListResponse,
+    LeadOut,
+    ReportSummary,
+)
 
 
 router = APIRouter(prefix="/api/leads", tags=["AI小高线索"])
@@ -14,6 +28,18 @@ router = APIRouter(prefix="/api/leads", tags=["AI小高线索"])
 
 def _bad_request(message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": "LEAD_OPERATION_FAILED", "message": message})
+
+
+@router.post("/internal/webhook-events", response_model=InternalWebhookEventResponse)
+def create_internal_webhook_event(
+    data: InternalWebhookEventRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    internal_token: str = Depends(get_leads_internal_token),
+):
+    """接收 9000 已验签转发的 internal webhook payload。"""
+    require_internal_webhook_context(request, internal_token)
+    return leads_service.create_internal_webhook_event(db, data)
 
 
 @router.get("/reports/summary", response_model=ReportSummary)
