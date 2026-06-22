@@ -696,17 +696,83 @@ def update_webhook_observe_forward_result(result: dict[str, Any]) -> dict[str, A
         return dict(_last_webhook_observe)
 
 
-def get_live_check_status() -> dict[str, Any]:
+def _datetime_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _pending_auth_polling_status() -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "open_id": None,
+        "nickname": None,
+        "received_at": None,
+    }
+
+
+def _auth_polling_status(
+    db: Session | None,
+    context: RequestContext | None,
+    oauth_callback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if oauth_callback and oauth_callback.get("error"):
+        return {
+            "status": "failed",
+            "open_id": oauth_callback.get("open_id"),
+            "nickname": oauth_callback.get("nick_name"),
+            "received_at": _datetime_text(oauth_callback.get("received_at")),
+        }
+
+    merchant_id = context.merchant_id if context and context.merchant_id else None
+    if db is not None and merchant_id:
+        row = (
+            db.query(DouyinAuthorizedAccount)
+            .filter(
+                DouyinAuthorizedAccount.merchant_id == merchant_id,
+                DouyinAuthorizedAccount.bind_status == 1,
+            )
+            .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
+            .first()
+        )
+        if row is not None:
+            return {
+                "status": "authorized",
+                "open_id": row.open_id,
+                "nickname": row.account_name,
+                "received_at": _datetime_text(row.last_synced_at or row.updated_at or row.created_at),
+            }
+        return _pending_auth_polling_status()
+
+    if oauth_callback and oauth_callback.get("open_id"):
+        return {
+            "status": "authorized",
+            "open_id": oauth_callback.get("open_id"),
+            "nickname": oauth_callback.get("nick_name"),
+            "received_at": _datetime_text(oauth_callback.get("received_at")),
+        }
+
+    return _pending_auth_polling_status()
+
+
+def get_live_check_status(
+    db: Session | None = None,
+    context: RequestContext | None = None,
+) -> dict[str, Any]:
     with _state_lock:
         oauth_callback = dict(_last_oauth_callback) if _last_oauth_callback else None
         webhook_observe = dict(_last_webhook_observe) if _last_webhook_observe else None
     auth_url_info = build_auth_url()
+    auth_polling = _auth_polling_status(db, context, oauth_callback)
     return {
         "enabled": config.DY_LIVE_CHECK_ENABLED,
         "auth_url_configured": auth_url_info["configured"],
         "missing_config": auth_url_info["missing"],
         "auth_redirect_url": auth_url_info["auth_redirect_url"],
         "webhook_observe_url": auth_url_info["callback_url"],
+        "auth_polling": auth_polling,
         "last_oauth_callback": oauth_callback,
         "last_webhook_observe": webhook_observe,
     }

@@ -1806,6 +1806,137 @@ def test_oauth_callback_records_summary_without_sensitive_values():
     assert "token-should-not-leak" not in json.dumps(status_resp.json(), ensure_ascii=False)
 
 
+def test_auth_status_reads_latest_authorized_account_from_db_for_current_merchant():
+    client = _client_with_context("merchant-auth")
+    synced_at = datetime(2026, 6, 22, 10, 30, 0)
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_auth_poll_1",
+                merchant_id="merchant-auth",
+                bind_status=1,
+                account_name="授权企业号",
+                last_synced_at=synced_at,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    polling = resp.json()["data"]["auth_polling"]
+    assert polling["status"] == "authorized"
+    assert polling["open_id"] == "account_auth_poll_1"
+    assert polling["nickname"] == "授权企业号"
+    assert polling["received_at"].startswith("2026-06-22T10:30:00")
+
+
+def test_auth_status_returns_pending_before_authorization():
+    client = _client_with_context("merchant-auth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    polling = resp.json()["data"]["auth_polling"]
+    assert polling == {
+        "status": "pending",
+        "open_id": None,
+        "nickname": None,
+        "received_at": None,
+    }
+
+
+def test_auth_status_does_not_read_other_merchant_authorization():
+    client = _client_with_context("merchant-auth")
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id="account_other_merchant",
+                merchant_id="merchant-other",
+                bind_status=1,
+                account_name="其他商户企业号",
+                last_synced_at=datetime(2026, 6, 22, 11, 0, 0),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    polling = resp.json()["data"]["auth_polling"]
+    assert polling["status"] == "pending"
+    assert polling["open_id"] is None
+    assert "account_other_merchant" not in json.dumps(resp.json(), ensure_ascii=False)
+
+
+def test_auth_status_with_merchant_context_ignores_memory_callback_without_db_binding():
+    client = _client_with_context("merchant-auth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        client.get(
+            "/integrations/douyin/live-check/oauth-callback",
+            params={
+                "open_id": "memory_only_account",
+                "nick_name": "内存账号",
+            },
+        )
+        resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 200
+    polling = resp.json()["data"]["auth_polling"]
+    assert polling["status"] == "pending"
+    assert polling["open_id"] is None
+    assert "memory_only_account" in json.dumps(resp.json()["data"]["last_oauth_callback"], ensure_ascii=False)
+    assert "memory_only_account" not in json.dumps(polling, ensure_ascii=False)
+
+
+def test_auth_redirect_success_writes_db_and_status_can_poll_authorized_account():
+    client = _client_with_context("merchant-auth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            _bind_info_payload(open_id="account_auth_redirect_1", account_name="回跳企业号"),
+        )
+        redirect_resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_auth_redirect_1", "nick_name": "回跳企业号"},
+            follow_redirects=False,
+        )
+        status_resp = client.get("/integrations/douyin/live-check/status")
+
+    assert redirect_resp.status_code == 302
+    assert "auth=success" in redirect_resp.headers["location"]
+    db = TestSession()
+    try:
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id="account_auth_redirect_1").one()
+        assert row.merchant_id == "merchant-auth"
+        assert row.bind_status == 1
+        assert row.account_name == "回跳企业号"
+    finally:
+        db.close()
+    polling = status_resp.json()["data"]["auth_polling"]
+    assert polling["status"] == "authorized"
+    assert polling["open_id"] == "account_auth_redirect_1"
+    assert polling["nickname"] == "回跳企业号"
+    assert polling["received_at"]
+
+
 def test_authorized_accounts_empty_before_oauth_callback():
     client = _client()
 

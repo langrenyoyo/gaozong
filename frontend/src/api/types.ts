@@ -222,6 +222,12 @@ export interface DouyinLiveCheckStatusData {
   missing_config: string[];
   auth_redirect_url: string | null;
   webhook_observe_url: string | null;
+  auth_polling?: {
+    status: "pending" | "authorized" | "expired" | "failed" | string;
+    open_id: string | null;
+    nickname: string | null;
+    received_at: string | null;
+  };
   last_oauth_callback: DouyinLiveCheckOAuthCallback | null;
   last_webhook_observe: DouyinLiveCheckWebhookObserve | null;
 }

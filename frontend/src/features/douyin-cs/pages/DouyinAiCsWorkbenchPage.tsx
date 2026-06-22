@@ -57,6 +57,9 @@ const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp",
 const ALLOWED_UPLOAD_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"];
 const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
+const AUTH_POLLING_INTERVAL_MS = 2000;
+const AUTH_POLLING_TIMEOUT_MS = 120000;
+const AUTH_SUCCESS_AUTO_CLOSE_MS = 1500;
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
 type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
@@ -527,6 +530,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
+  const [authPollingTimedOut, setAuthPollingTimedOut] = useState(false);
   const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("manual_takeover");
   const [loadingAccountMode, setLoadingAccountMode] = useState(false);
   const [savingAccountMode, setSavingAccountMode] = useState(false);
@@ -564,14 +568,27 @@ export default function DouyinAiCsWorkbenchPage() {
   const messageInFlightRef = useRef<Record<string, Promise<DouyinMessageItem[]>>>({});
   const profileInFlightRef = useRef<Record<string, Promise<DouyinConversationProfile | null>>>({});
   const pollInFlightRef = useRef(false);
+  const authPollingStartedAtRef = useRef<number>(0);
+  const authAutoCloseTimerRef = useRef<number | null>(null);
 
   const selectedAccount = accounts.find((item) => item.id === selectedAccountId) || null;
   const selectedConversation =
     conversations.find((item) => item.id === selectedConversationId) || null;
   const activeBindingReady = hasActiveAgentBinding(selectedAccount);
   const effectiveChatAssistMode: ChatAssistMode = activeBindingReady ? chatAssistMode : "manual_takeover";
+  const authPolling = authStatus?.auth_polling || null;
   const authCallback = authStatus?.last_oauth_callback || null;
-  const authAuthorized = Boolean(authCallback?.open_id);
+  const authOpenId = authPolling ? authPolling.open_id : authCallback?.open_id || null;
+  const authNickname = authPolling ? authPolling.nickname : authCallback?.nick_name || null;
+  const authReceivedAt = authPolling ? authPolling.received_at : authCallback?.received_at || null;
+  const authAuthorized = authPolling ? authPolling.status === "authorized" : Boolean(authOpenId);
+  const authStatusText = authPollingTimedOut
+    ? "授权超时"
+    : authPolling?.status === "failed" || authCallback?.error
+      ? "授权失败"
+      : authAuthorized
+        ? "授权成功"
+        : "授权中";
   useEffect(() => {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
   }, [selectedAccount?.account_open_id]);
@@ -1019,11 +1036,21 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [loadConversationDetail, loadConversations, loadingConversations, loadingMessages, selectedAccount]);
 
   const refreshAuthStatus = useCallback(async () => {
+    if (
+      authPollingStartedAtRef.current &&
+      Date.now() - authPollingStartedAtRef.current >= AUTH_POLLING_TIMEOUT_MS
+    ) {
+      setAuthPollingTimedOut(true);
+      setAuthError("授权超时，请重新扫码");
+      return null;
+    }
     setAuthStatusLoading(true);
     try {
       const result = await fetchDouyinLiveCheckStatus();
       setAuthStatus(result.data);
-      if (result.data.last_oauth_callback?.error) {
+      if (result.data.auth_polling?.status === "failed") {
+        setAuthError("授权失败，请重新扫码");
+      } else if (result.data.last_oauth_callback?.error) {
         setAuthError(result.data.last_oauth_callback.error_description || result.data.last_oauth_callback.error);
       } else {
         setAuthError(null);
@@ -1046,6 +1073,12 @@ export default function DouyinAiCsWorkbenchPage() {
     setAuthStatus(null);
     setAuthFrameFailed(false);
     setAuthAccountRefreshDone(false);
+    setAuthPollingTimedOut(false);
+    authPollingStartedAtRef.current = Date.now();
+    if (authAutoCloseTimerRef.current) {
+      window.clearTimeout(authAutoCloseTimerRef.current);
+      authAutoCloseTimerRef.current = null;
+    }
     try {
       const [authUrlResult] = await Promise.all([
         fetchDouyinLiveCheckAuthUrl(),
@@ -1067,21 +1100,35 @@ export default function DouyinAiCsWorkbenchPage() {
   }
 
   async function refreshAccountsAfterAuth() {
-    await loadAccounts(authCallback?.open_id);
+    await loadAccounts(authOpenId);
     setAuthAccountRefreshDone(true);
   }
 
   useEffect(() => {
-    if (!authModalOpen) return undefined;
+    if (!authModalOpen || authAuthorized || authPollingTimedOut) return undefined;
     const timer = window.setInterval(() => {
       void refreshAuthStatus();
-    }, 3500);
+    }, AUTH_POLLING_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [authModalOpen, refreshAuthStatus]);
+  }, [authAuthorized, authModalOpen, authPollingTimedOut, refreshAuthStatus]);
 
   useEffect(() => {
     if (!authModalOpen || !authAuthorized || authAccountRefreshDone) return;
     void refreshAccountsAfterAuth();
+  }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
+
+  useEffect(() => {
+    if (!authModalOpen || !authAuthorized || !authAccountRefreshDone) return undefined;
+    authAutoCloseTimerRef.current = window.setTimeout(() => {
+      setAuthModalOpen(false);
+      authAutoCloseTimerRef.current = null;
+    }, AUTH_SUCCESS_AUTO_CLOSE_MS);
+    return () => {
+      if (authAutoCloseTimerRef.current) {
+        window.clearTimeout(authAutoCloseTimerRef.current);
+        authAutoCloseTimerRef.current = null;
+      }
+    };
   }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
 
   // 授权成功后（auth-redirect 302 回跳带 ?auth=success&open_id=xxx），
@@ -2239,8 +2286,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
               {authAuthorized ? (
                 <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
-                  已检测到授权回调：{authCallback?.nick_name || "未返回昵称"} / {authCallback?.open_id}
-                  {authAccountRefreshDone ? "。抖音号列表已刷新。" : "。正在刷新抖音号列表..."}
+                  授权成功，{authAccountRefreshDone ? "抖音号列表已刷新，即将关闭弹窗。" : "正在刷新抖音号列表..."}
                 </div>
               ) : null}
 
@@ -2303,26 +2349,28 @@ export default function DouyinAiCsWorkbenchPage() {
                     <div className="flex items-center justify-between gap-3">
                       <span>状态轮询</span>
                       <span className="inline-flex items-center gap-1 font-semibold">
-                        {authStatusLoading ? <LoaderIcon size={12} className="animate-spin" /> : null}
-                        {authAuthorized ? "已授权" : "授权中"}
+                        {authStatusLoading && !authAuthorized && !authPollingTimedOut ? (
+                          <LoaderIcon size={12} className="animate-spin" />
+                        ) : null}
+                        {authStatusText}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <span>open_id</span>
                       <span className="max-w-[132px] truncate text-right font-mono">
-                        {authCallback?.open_id || "-"}
+                        {compactOpenId(authOpenId)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <span>昵称</span>
                       <span className="max-w-[132px] truncate text-right">
-                        {authCallback?.nick_name || "-"}
+                        {authNickname || "-"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <span>接收时间</span>
                       <span className="max-w-[132px] text-right">
-                        {formatTime(authCallback?.received_at)}
+                        {formatTime(authReceivedAt)}
                       </span>
                     </div>
                   </div>

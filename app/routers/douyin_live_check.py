@@ -190,9 +190,12 @@ def auth_redirect(
 
 
 @router.get("/status", response_model=DouyinLiveCheckStatusResponse)
-def status() -> DouyinLiveCheckStatusResponse:
+def status(
+    context: RequestContext | None = Depends(get_request_context_optional),
+    db: Session = Depends(get_db),
+) -> DouyinLiveCheckStatusResponse:
     _ensure_enabled()
-    return DouyinLiveCheckStatusResponse(data=get_live_check_status())
+    return DouyinLiveCheckStatusResponse(data=get_live_check_status(db=db, context=context))
 
 
 @router.get("/accounts", response_model=DouyinLiveCheckAccountsResponse)
