@@ -1171,7 +1171,7 @@ export default function DouyinAiCsWorkbenchPage() {
       void poll();
     }, 8000);
     return () => window.clearInterval(timer);
-  }, [loadConversationDetail, loadConversations, loadingConversations, loadingMessages, selectedAccount]);
+  }, [loadConversationDetail, loadConversations, loadLatestAutoReplyRun, loadingConversations, loadingMessages, selectedAccount]);
 
   const refreshAuthStatus = useCallback(async () => {
     if (
@@ -1321,6 +1321,21 @@ export default function DouyinAiCsWorkbenchPage() {
     setUploadError(null);
     setUploadResult(null);
     setUploadImageIdCopied(false);
+  }
+
+  async function copyAutoReplyContent() {
+    const content = autoReplyGeneratedContent(autoReplyRun);
+    if (!content) return;
+    await navigator.clipboard.writeText(content);
+    setAutoReplyCopied(true);
+    window.setTimeout(() => setAutoReplyCopied(false), 1600);
+  }
+
+  function useAutoReplyAsManualDraft() {
+    const content = autoReplyGeneratedContent(autoReplyRun);
+    if (!content) return;
+    setDraftReplyText(content);
+    setSendError(null);
   }
 
   async function changeAccountMode(nextMode: ChatAssistMode) {
@@ -2074,7 +2089,45 @@ export default function DouyinAiCsWorkbenchPage() {
               </div>
 
               {effectiveChatAssistMode === "manual_takeover" ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="space-y-3">
+                  {shouldShowAutoReplyRunCard(autoReplyRun, loadingAutoReplyRun, autoReplyRunError) ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-bold text-amber-950">
+                            {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
+                          </div>
+                          <div className="mt-1">
+                            原因：{autoReplyRunError ? "自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                          </div>
+                        </div>
+                        {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
+                      </div>
+                      {autoReplyRunError ? (
+                        <div className="mt-2 text-amber-800">{autoReplyRunError}</div>
+                      ) : null}
+                      {autoReplyGeneratedContent(autoReplyRun) ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-white/75 p-3">
+                          <div className="mb-1 font-semibold text-amber-950">AI 已生成的回复内容</div>
+                          <div className="whitespace-pre-wrap text-slate-800">
+                            {autoReplyGeneratedContent(autoReplyRun)}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void copyAutoReplyContent()}
+                              className="inline-flex h-8 items-center gap-2 rounded-md border border-amber-200 bg-white px-2.5 font-semibold text-amber-800 hover:bg-amber-100"
+                            >
+                              <ClipboardIcon size={13} />
+                              {autoReplyCopied ? "已复制" : "复制"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <textarea
                     value={draftReplyText}
                     onChange={(event) => setDraftReplyText(event.target.value)}
@@ -2107,10 +2160,57 @@ export default function DouyinAiCsWorkbenchPage() {
                     </button>
                   </div>
                 </div>
+                </div>
               ) : (
-                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
-                  AI 托管中，如需人工发送请先切换到人工接管。
-                  {!activeBindingReady ? " 当前企业号暂未满足自动回复启用条件。" : ""}
+                <div className="space-y-3">
+                  {shouldShowAutoReplyRunCard(autoReplyRun, loadingAutoReplyRun, autoReplyRunError) ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-bold text-amber-950">
+                            {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
+                          </div>
+                          <div className="mt-1">
+                            原因：{autoReplyRunError ? "自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                          </div>
+                        </div>
+                        {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
+                      </div>
+                      {autoReplyRunError ? (
+                        <div className="mt-2 text-amber-800">{autoReplyRunError}</div>
+                      ) : null}
+                      {autoReplyGeneratedContent(autoReplyRun) ? (
+                        <div className="mt-3 rounded-md border border-amber-200 bg-white/75 p-3">
+                          <div className="mb-1 font-semibold text-amber-950">AI 已生成的回复内容</div>
+                          <div className="whitespace-pre-wrap text-slate-800">
+                            {autoReplyGeneratedContent(autoReplyRun)}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void copyAutoReplyContent()}
+                              className="inline-flex h-8 items-center gap-2 rounded-md border border-amber-200 bg-white px-2.5 font-semibold text-amber-800 hover:bg-amber-100"
+                            >
+                              <ClipboardIcon size={13} />
+                              {autoReplyCopied ? "已复制" : "复制"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => useAutoReplyAsManualDraft()}
+                              className="inline-flex h-8 items-center gap-2 rounded-md bg-blue-600 px-2.5 font-semibold text-white hover:bg-blue-700"
+                            >
+                              <CheckIcon size={13} />
+                              填入人工发送
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
+                    AI 托管中，如需人工发送请先切换到人工接管。
+                    {!activeBindingReady ? " 当前企业号暂未满足自动回复启用条件。" : ""}
+                  </div>
                 </div>
               )}
             </div>

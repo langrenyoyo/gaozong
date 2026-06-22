@@ -794,6 +794,15 @@ export interface AiAutoReplyRunListItem {
   decision_log_id?: number | null;
   would_send_content_summary?: string | null;
   error_message?: string | null;
+  reply_text?: string | null;
+  manual_required?: boolean | null;
+  manual_required_reason?: string | null;
+  risk_flags?: string[];
+  llm_used?: boolean | null;
+  rag_used?: boolean | null;
+  upstream_auto_send?: boolean | null;
+  final_auto_send?: boolean | null;
+  decision_version?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }

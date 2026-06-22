@@ -1277,6 +1277,15 @@ class AiAutoReplyRunListItem(BaseModel):
     decision_log_id: Optional[int] = None
     would_send_content_summary: Optional[str] = None
     error_message: Optional[str] = None
+    reply_text: Optional[str] = None
+    manual_required: Optional[bool] = None
+    manual_required_reason: Optional[str] = None
+    risk_flags: list = Field(default_factory=list)
+    llm_used: Optional[bool] = None
+    rag_used: Optional[bool] = None
+    upstream_auto_send: Optional[bool] = None
+    final_auto_send: Optional[bool] = None
+    decision_version: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

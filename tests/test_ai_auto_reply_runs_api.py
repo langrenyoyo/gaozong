@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
+from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
 
 
 engine = create_engine(
@@ -138,6 +138,39 @@ def _insert_send_record(*, run_id: int, decision_log_id: int | None = 10):
         db.close()
 
 
+def _insert_decision_log(*, log_id: int = 10, merchant_id: str = "merchant-a"):
+    db = TestSession()
+    try:
+        row = AiReplyDecisionLog(
+            id=log_id,
+            merchant_id=merchant_id,
+            tenant_id="tenant-a",
+            account_open_id="account-1",
+            conversation_id="conv-1",
+            conversation_short_id="conv-1",
+            customer_open_id="customer-1",
+            agent_id="agent-1",
+            agent_name="销售智能体",
+            latest_message="客户想了解主营车型",
+            reply_text="您好！我们主营奔驰、宝马、奥迪等精品二手车。",
+            manual_required=0,
+            manual_required_reason=None,
+            risk_flags_json='["no_rag_risky_question"]',
+            tags_json='["intro"]',
+            llm_used=1,
+            rag_used=0,
+            upstream_auto_send=0,
+            final_auto_send=0,
+            decision_version="direct_llm_structured_v1",
+            created_at=datetime.now(),
+        )
+        db.add(row)
+        db.commit()
+        return row.id
+    finally:
+        db.close()
+
+
 def test_runs_api_requires_permission_and_merchant_context():
     denied = _client(_context(permission_codes=["auto_wechat:leads"])).get("/ai-auto-reply-runs")
     assert denied.status_code == 403
@@ -209,6 +242,57 @@ def test_list_runs_filters_and_limits_page_size():
     assert data["page_size"] == 100
     assert data["total"] == 1
     assert data["items"][0]["trigger_event_key"] == "match"
+
+
+def test_list_runs_includes_decision_summary_for_workbench_visibility():
+    _insert_decision_log()
+    _insert_run(
+        status="send_skipped",
+        block_reason="auto_send_disabled_by_decision",
+        decision_log_id=10,
+        would_send_content="您好！我们主营奔驰、宝马、奥迪等精品二手车。",
+    )
+
+    response = _client().get(
+        "/ai-auto-reply-runs",
+        params={
+            "account_open_id": "account-1",
+            "conversation_short_id": "conv-1",
+            "page_size": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["status"] == "send_skipped"
+    assert item["block_reason"] == "auto_send_disabled_by_decision"
+    assert item["reply_text"] == "您好！我们主营奔驰、宝马、奥迪等精品二手车。"
+    assert item["manual_required"] is False
+    assert item["risk_flags"] == ["no_rag_risky_question"]
+    assert item["llm_used"] is True
+    assert item["rag_used"] is False
+    assert item["upstream_auto_send"] is False
+    assert item["final_auto_send"] is False
+    assert item["decision_version"] == "direct_llm_structured_v1"
+
+
+def test_list_runs_does_not_expose_other_merchant_decision_log():
+    _insert_decision_log(log_id=88, merchant_id="merchant-b")
+    _insert_run(
+        merchant_id="merchant-a",
+        trigger_event_key="event-cross-merchant-decision",
+        decision_log_id=88,
+    )
+
+    response = _client().get("/ai-auto-reply-runs", params={"page_size": 1})
+
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert item["merchant_id"] == "merchant-a"
+    assert item["decision_log_id"] == 88
+    assert item["reply_text"] is None
+    assert item["risk_flags"] == []
+    assert item["final_auto_send"] is None
 
 
 def test_detail_returns_gate_results_and_send_record_without_raw_response_or_plain_phone():

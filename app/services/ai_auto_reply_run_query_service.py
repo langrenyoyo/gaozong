@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
-from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
+from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
 
 
 SUMMARY_LIMIT = 120
@@ -47,11 +47,12 @@ def list_ai_auto_reply_runs(db: Session, query: AiAutoReplyRunQuery) -> dict[str
         .limit(page_size)
         .all()
     )
+    decision_logs = _load_decision_logs(db, rows, merchant_id=query.merchant_id)
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": [_build_list_item(row) for row in rows],
+        "items": [_build_list_item(row, decision_logs.get(row.decision_log_id)) for row in rows],
     }
 
 
@@ -71,7 +72,8 @@ def get_ai_auto_reply_run_detail(
     if row is None:
         return None
 
-    data = _build_list_item(row)
+    decision = _load_decision_logs(db, [row], merchant_id=merchant_id).get(row.decision_log_id)
+    data = _build_list_item(row, decision)
     data.update(
         {
             "latest_message": _mask_sensitive_text(row.latest_message),
@@ -112,8 +114,26 @@ def _apply_filters(query: Query, params: AiAutoReplyRunQuery) -> Query:
     return query
 
 
-def _build_list_item(row: AiAutoReplyRun) -> dict[str, Any]:
-    return {
+def _load_decision_logs(
+    db: Session,
+    rows: list[AiAutoReplyRun],
+    *,
+    merchant_id: str,
+) -> dict[int, AiReplyDecisionLog]:
+    decision_ids = sorted({row.decision_log_id for row in rows if row.decision_log_id})
+    if not decision_ids:
+        return {}
+    records = (
+        db.query(AiReplyDecisionLog)
+        .filter(AiReplyDecisionLog.id.in_(decision_ids))
+        .filter(AiReplyDecisionLog.merchant_id == merchant_id)
+        .all()
+    )
+    return {record.id: record for record in records}
+
+
+def _build_list_item(row: AiAutoReplyRun, decision: AiReplyDecisionLog | None = None) -> dict[str, Any]:
+    data = {
         "id": row.id,
         "merchant_id": row.merchant_id,
         "account_open_id": row.account_open_id,
@@ -133,6 +153,37 @@ def _build_list_item(row: AiAutoReplyRun) -> dict[str, Any]:
         "error_message": row.error_message,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+    }
+    if decision is None:
+        data.update(_empty_decision_fields())
+        return data
+    data.update(
+        {
+            "reply_text": _mask_sensitive_text(decision.reply_text),
+            "manual_required": bool(decision.manual_required),
+            "manual_required_reason": decision.manual_required_reason,
+            "risk_flags": _json_list(decision.risk_flags_json),
+            "llm_used": bool(decision.llm_used),
+            "rag_used": bool(decision.rag_used),
+            "upstream_auto_send": bool(decision.upstream_auto_send),
+            "final_auto_send": bool(decision.final_auto_send),
+            "decision_version": decision.decision_version,
+        }
+    )
+    return data
+
+
+def _empty_decision_fields() -> dict[str, Any]:
+    return {
+        "reply_text": None,
+        "manual_required": None,
+        "manual_required_reason": None,
+        "risk_flags": [],
+        "llm_used": None,
+        "rag_used": None,
+        "upstream_auto_send": None,
+        "final_auto_send": None,
+        "decision_version": None,
     }
 
 
@@ -164,6 +215,16 @@ def _json_object(raw_value: str | None) -> dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(raw_value: str | None) -> list[Any]:
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _summary(value: str | None) -> str | None:
