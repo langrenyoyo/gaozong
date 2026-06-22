@@ -13,7 +13,7 @@ import {
   ShieldCheckIcon,
 } from "lucide-react";
 import { AppUser } from "../App";
-import { capabilityNavCenters, findCapabilityByNavId } from "../navigation/capabilityNav";
+import { capabilityNavCenters, findCapabilityByNavId } from "../features/capabilities";
 
 interface SideNavProps {
   activeNav?: string;

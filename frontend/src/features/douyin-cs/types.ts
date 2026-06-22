@@ -1,0 +1,47 @@
+export type {
+  DouyinAccountItem,
+  DouyinAccountListResponse,
+  DouyinAgentItem,
+  DouyinAgentListResponse,
+  DouyinConversationItem,
+  DouyinConversationListResponse,
+  DouyinConversationProfile,
+  DouyinMessageItem,
+  DouyinMessageListResponse,
+  DownloadDouyinResourceRequest,
+  DownloadDouyinResourceResponse,
+  ReplySuggestionRequest,
+  ReplySuggestionResponse,
+  SendDouyinManualMessageRequest,
+  SendDouyinManualMessageResponse,
+  TrustedReplySuggestionRequest,
+  UploadDouyinImageRequest,
+  UploadDouyinImageResponse,
+} from "../../api/douyinAiCsClient";
+
+export type {
+  AiReplyDecisionLogDetail,
+  AiReplyDecisionLogListData,
+  AiReplyDecisionLogListItem,
+  AiReplyDecisionLogQueryParams,
+  AiReplyDecisionSource,
+} from "../../api/aiReplyDecisionLogs";
+
+export type {
+  AiAutoReplyRunDetail,
+  AiAutoReplyRunDetailResponse,
+  AiAutoReplyRunListData,
+  AiAutoReplyRunListItem,
+  AiAutoReplyRunListResponse,
+  AiAutoReplyRunQueryParams,
+  AiAutoReplyRunSendRecord,
+  AllowedIntentOption,
+  BlockedRiskFlagOption,
+  DouyinAutoReplySettingItem,
+  DouyinAutoReplySettingResponse,
+  DouyinAutoReplySettingUpdateRequest,
+  DouyinAutoReplySettingsListResponse,
+  DouyinLiveCheckAuthUrlData,
+  DouyinLiveCheckStatusData,
+  WebhookEvent,
+} from "../../api/types";

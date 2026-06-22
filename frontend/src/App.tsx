@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
-import { capabilityRoutes, legacyRouteRedirects } from "./navigation/capabilityRoutes";
+import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 
 const queryClient = new QueryClient();
 

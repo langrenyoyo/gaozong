@@ -7,9 +7,9 @@ import {
   RefreshCwIcon,
   XIcon,
 } from "lucide-react";
-import ChatPanel from "../components/ChatPanel";
-import ContactInfo from "../components/ContactInfo";
-import ContactList from "../components/ContactList";
+import ChatPanel from "../features/leads/components/ChatPanel";
+import ContactInfo from "../features/leads/components/ContactInfo";
+import ContactList from "../features/leads/components/ContactList";
 import SideNav from "../components/SideNav";
 import { API_BASE_URL } from "../api/client";
 import { fetchLeads } from "../api/leads";
@@ -17,21 +17,21 @@ import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
-import ComputeCenter from "./ComputeCenter";
-import KnowledgeBasePage from "./KnowledgeBasePage";
-import KnowledgeCategoriesPage from "./KnowledgeCategoriesPage";
-import LeadsModulePage from "./LeadsModulePage";
-import WechatAgent from "./WechatAgent";
-import DouyinAiCsWorkbenchPage from "./DouyinAiCsWorkbenchPage";
-import DouyinAiCsTestPage from "./DouyinAiCsTestPage";
-import AiReplyDecisionLogsPage from "./AiReplyDecisionLogsPage";
-import DouyinAutoReplySettingsPage from "./DouyinAutoReplySettingsPage";
-import DouyinAutoReplyRunsPage from "./DouyinAutoReplyRunsPage";
+import ComputeCenter from "../features/compute/pages/ComputeCenter";
+import KnowledgeBasePage from "../features/knowledge/pages/KnowledgeBasePage";
+import KnowledgeCategoriesPage from "../features/knowledge/pages/KnowledgeCategoriesPage";
+import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
+import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
+import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
+import DouyinAiCsTestPage from "../features/douyin-cs/pages/DouyinAiCsTestPage";
+import AiReplyDecisionLogsPage from "../features/douyin-cs/pages/AiReplyDecisionLogsPage";
+import DouyinAutoReplySettingsPage from "../features/douyin-cs/pages/DouyinAutoReplySettingsPage";
+import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
-import SuperMerchantAgent from "./SuperMerchantAgent";
+import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import SuperAdminAccounts from "./SuperAdminAccounts";
-import SuperComputeConfig from "./SuperComputeConfig";
+import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
 
 interface DouyinAccount {
   name: string;
