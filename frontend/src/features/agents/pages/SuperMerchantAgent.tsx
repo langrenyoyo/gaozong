@@ -81,6 +81,7 @@ function AgentEditor({
   onSave: (payload: AiAgentPayload, categoryKeys: string[] | null) => void;
 }) {
   const [draft, setDraft] = useState<AiAgentPayload>(emptyDraft);
+  const [useKnowledgeBase, setUseKnowledgeBase] = useState(true);
   const [categories, setCategories] = useState<KnowledgeCategory[]>([]);
   const [selectedCategoryKeys, setSelectedCategoryKeys] = useState<string[]>([]);
   const [categoryLoading, setCategoryLoading] = useState(false);
@@ -89,6 +90,7 @@ function AgentEditor({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    setUseKnowledgeBase(agent ? Boolean(agent.knowledge_base_text) : true);
     setDraft(
       agent
         ? {
@@ -106,6 +108,13 @@ function AgentEditor({
   }, []);
 
   useEffect(() => {
+    setCategories([]);
+    setSelectedCategoryKeys([]);
+    setCategoryLoading(false);
+    setCategoryLoadFailed(false);
+    setBindingLoadFailed(false);
+    return;
+
     let cancelled = false;
 
     async function loadCategoryOptions() {
@@ -168,8 +177,8 @@ function AgentEditor({
       ...draft,
       name: draft.name.trim(),
       prompt: draft.prompt || "",
-      knowledge_base_text: draft.knowledge_base_text || "",
-    }, bindingLoadFailed || categoryLoadFailed ? null : filterMerchantCategoryKeys(selectedCategoryKeys, categories));
+      knowledge_base_text: useKnowledgeBase ? "小高知识库" : "",
+    }, null);
   };
 
   return (
@@ -185,7 +194,7 @@ function AgentEditor({
             </div>
             <div>
               <h2 className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
-              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词和普通文本知识库。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、使用场景、提示词和小高知识库开关。</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
@@ -215,57 +224,15 @@ function AgentEditor({
             />
           </label>
 
-          <label className="grid gap-1.5 text-xs">
-            <span className="font-semibold text-[#475569]">智能体知识库</span>
-            <textarea
-              value={draft.knowledge_base_text}
-              onChange={(event) => setDraft({ ...draft, knowledge_base_text: event.target.value })}
-              className="min-h-[150px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="录入门店车型、服务、报价说明、检测报告说明等普通文本。"
+          <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-2 text-xs">
+            <span className="font-semibold text-[#475569]">启用小高知识库</span>
+            <input
+              type="checkbox"
+              checked={useKnowledgeBase}
+              onChange={(event) => setUseKnowledgeBase(event.target.checked)}
+              className="h-4 w-4 accent-[#2563eb]"
             />
           </label>
-
-          <section className="grid gap-2 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] p-3 text-xs">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-semibold text-[#475569]">知识分类</span>
-              {categoryLoading ? (
-                <span className="inline-flex items-center gap-1 text-[#64748b]">
-                  <RefreshCwIcon size={12} className="animate-spin" />
-                  加载中
-                </span>
-              ) : null}
-            </div>
-
-            <label className="flex min-h-9 items-center justify-between rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#475569]">
-              <span className="font-medium">基础知识（默认启用）</span>
-              <input type="checkbox" checked disabled className="h-4 w-4 accent-[#2563eb]" />
-            </label>
-
-            {categoryLoadFailed ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">知识分类加载失败，本次可继续保存基础信息。</div>
-            ) : bindingLoadFailed ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">分类绑定加载失败，本次保存不会更新分类。</div>
-            ) : selectableCategories.length > 0 ? (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {selectableCategories.map((category) => (
-                  <label
-                    key={category.category_key}
-                    className="flex min-h-9 items-center justify-between gap-2 rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#475569] hover:border-[#bfdbfe]"
-                  >
-                    <span className="min-w-0 truncate font-medium">{category.name || category.category_key}</span>
-                    <input
-                      type="checkbox"
-                      checked={selectedCategoryKeys.includes(category.category_key)}
-                      onChange={() => toggleCategory(category.category_key)}
-                      className="h-4 w-4 shrink-0 accent-[#2563eb]"
-                    />
-                  </label>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-[#dbe3ee] bg-white px-3 py-2 text-[#8b95a6]">暂无可选商户分类。</div>
-            )}
-          </section>
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">

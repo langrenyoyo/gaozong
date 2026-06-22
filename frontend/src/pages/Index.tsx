@@ -23,7 +23,6 @@ import KnowledgeCategoriesPage from "../features/knowledge/pages/KnowledgeCatego
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
-import DouyinAiCsTestPage from "../features/douyin-cs/pages/DouyinAiCsTestPage";
 import AiReplyDecisionLogsPage from "../features/douyin-cs/pages/AiReplyDecisionLogsPage";
 import DouyinAutoReplySettingsPage from "../features/douyin-cs/pages/DouyinAutoReplySettingsPage";
 import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
@@ -659,13 +658,12 @@ export default function Index({
   const navColumn = isNavExpanded ? "220px" : "88px";
   const isAdminUser = user.role !== "merchant";
   const isLeadConversationNav = activeNav === "chat" || activeNav === "lead-conversations";
-  const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs" || activeNav === "douyin-accounts";
+  const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
   const isLeadsModuleNav = activeNav === "leads" || activeNav === "lead-board" || activeNav === "lead-detail";
   const isAgentModuleNav =
     activeNav === "ai-agents" ||
     activeNav === "agent-create" ||
-    activeNav === "agent-edit" ||
-    activeNav === "agent-knowledge-categories";
+    activeNav === "agent-edit";
   const isWechatAssistantNav =
     activeNav === "ai-agent" ||
     activeNav === "wechat-config" ||
@@ -677,10 +675,7 @@ export default function Index({
     activeNav === "compute-recharge-orders" ||
     activeNav === "compute-packages";
   const isKnowledgeBaseNav =
-    activeNav === "knowledge-base" ||
-    activeNav === "knowledge-doc-training" ||
-    activeNav === "knowledge-rag-search" ||
-    activeNav === "knowledge-training-chat";
+    activeNav === "knowledge-base";
 
   const loadChatEvents = useCallback(async () => {
     setChatLoading(true);
@@ -770,8 +765,6 @@ export default function Index({
           <DouyinAutoReplyRunsPage />
         ) : isLeadsModuleNav ? (
           <LeadsModulePage />
-        ) : activeNav === "douyin-ai-cs-test" ? (
-          <DouyinAiCsTestPage />
         ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
         ) : activeNav === "knowledge-categories" ? (

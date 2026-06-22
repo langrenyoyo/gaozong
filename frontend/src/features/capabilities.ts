@@ -12,8 +12,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "douyin-ai-cs-reply-records", label: "AI回复记录", path: "/douyin-cs/reply-records" },
       { id: "douyin-ai-cs-auto-reply-settings", label: "AI自动回复配置", path: "/douyin-cs/auto-reply-settings" },
       { id: "douyin-ai-cs-auto-reply-runs", label: "自动回复运行记录", path: "/douyin-cs/auto-reply-runs" },
-      { id: "douyin-ai-cs-test", label: "抖音客服测试", path: "/douyin-cs/test" },
-      { id: "douyin-accounts", label: "抖音企业号管理", path: "/douyin-cs/accounts" },
     ],
   },
   {
@@ -39,7 +37,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "ai-agents", label: "智能体列表", path: "/agents" },
       { id: "agent-create", label: "创建智能体", path: "/agents/new" },
       { id: "agent-edit", label: "编辑智能体", path: "/agents/edit" },
-      { id: "agent-knowledge-categories", label: "智能体知识分类绑定", path: "/agents/knowledge-categories" },
     ],
   },
   {
@@ -70,16 +67,12 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
   },
   {
     id: "knowledge-center",
-    title: "统一知识库训练",
+    title: "小高知识库",
     shortLabel: "知识",
     path: "/knowledge/base",
     defaultNavId: "knowledge-base",
     children: [
-      { id: "knowledge-base", label: "知识库", path: "/knowledge/base" },
-      { id: "knowledge-categories", label: "知识分类", path: "/knowledge/categories" },
-      { id: "knowledge-doc-training", label: "文档训练", path: "/knowledge/doc-training" },
-      { id: "knowledge-rag-search", label: "RAG搜索测试", path: "/knowledge/rag-search" },
-      { id: "knowledge-training-chat", label: "训练对话", path: "/knowledge/training-chat" },
+      { id: "knowledge-base", label: "小高知识库", path: "/knowledge/base" },
     ],
   },
 ];

@@ -799,24 +799,6 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
           })}
         </div>
 
-        <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
-          <p className="mb-2 text-xs font-semibold text-[#1a1f2e]">溯源信息</p>
-          {traceItems.length > 0 ? (
-            <div className="grid gap-2 text-[11px]">
-              {traceItems.map((item) => (
-                <div key={item.label} className="flex min-w-0 justify-between gap-3">
-                  <span className="shrink-0 text-[#8b95a6]">{item.label}</span>
-                  <strong className="min-w-0 truncate text-right font-semibold text-[#374151]" title={item.title}>
-                    {item.value}
-                  </strong>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[11px] text-[#8b95a6]">暂无溯源信息</p>
-          )}
-        </div>
-
         {lead.content ? (
           <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
             <p className="mb-1 text-xs font-semibold text-[#1a1f2e]">线索内容</p>
@@ -1565,13 +1547,12 @@ export default function LeadsManagement() {
             <table className="w-full table-fixed text-left text-xs">
               <thead className="bg-[#f8fafc] text-[#64748b]">
                 <tr>
-                  <th className="w-[14%] px-4 py-3 font-semibold">联系人</th>
-                  <th className="w-[14%] px-4 py-3 font-semibold">线索信息</th>
+                  <th className="w-[16%] px-4 py-3 font-semibold">联系人</th>
+                  <th className="w-[18%] px-4 py-3 font-semibold">线索信息</th>
                   <th className="w-[15%] px-4 py-3 font-semibold">联系电话</th>
-                  <th className="w-[17%] px-4 py-3 font-semibold">溯源信息</th>
                   <th className="w-[10%] px-4 py-3 font-semibold">状态</th>
                   <th className="w-[10%] px-4 py-3 font-semibold">分配销售</th>
-                  <th className="w-[20%] px-4 py-3 font-semibold">操作</th>
+                  <th className="w-[31%] px-4 py-3 font-semibold">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -1580,7 +1561,6 @@ export default function LeadsManagement() {
                   const city = leadDerivedValue(lead, "city") || "城市未提供";
                   const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
                   const budget = leadDerivedValue(lead, "budget") || "预算未提供";
-                  const traceItems = leadTraceItems(lead);
                   const jumpUrl = conversationJumpUrl(lead);
                   return (
                     <tr
@@ -1621,7 +1601,7 @@ export default function LeadsManagement() {
                           {!lead.phone && !lead.wechat ? (
                             <div className="truncate">
                               {getLeadContactValues(lead)[0]
-                                ? `原始联系方式：${getLeadContactValues(lead)[0]}`
+                                ? `联系方式：${getLeadContactValues(lead)[0]}`
                                 : "-"}
                             </div>
                           ) : null}
@@ -1629,19 +1609,6 @@ export default function LeadsManagement() {
                             状态：{contactStatusLabel(lead.contact_extract_status)}
                           </div>
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {traceItems.length > 0 ? (
-                          <div className="space-y-1 text-[10px] text-[#64748b]">
-                            {traceItems.map((item) => (
-                              <div key={item.label} className="truncate" title={item.title}>
-                                {item.label}：{item.value}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-[#8b95a6]">未提供</span>
-                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusClass(lead.status)}`}>

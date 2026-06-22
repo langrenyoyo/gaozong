@@ -323,7 +323,7 @@ export default function WechatAgent() {
             </div>
             <div>
               <h1 className="text-[15px] font-bold text-[#1a1f2e]">小高AI微信助手</h1>
-              <p className="mt-1 text-xs text-[#8b95a6]">下载并启动微信客户端，配置自动执行规则</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置销售微信、查看本机 Agent 状态、执行安全测试和查看任务记录</p>
               <span className="mt-2 inline-flex rounded-lg bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#64748b]">
                 建议安装路径：C:\Program Files\Tencent\WeChat
               </span>
@@ -402,9 +402,9 @@ export default function WechatAgent() {
                   <MessageCircleIcon size={22} />
                 </div>
                 <div>
-                  <h2 className="text-[15px] font-bold text-[#1a1f2e]">回复检测记录</h2>
+              <h2 className="text-[15px] font-bold text-[#1a1f2e]">回复检测记录</h2>
                   <p className="mt-2 text-xs text-[#64748b]">
-                    微信助手规则配置暂未接入真实接口；当前仅展示真实检测记录、任务队列和本机微信助手联调能力。
+                    展示销售回复检测结果和执行状态；发送动作仍需明确确认。
                   </p>
                 </div>
               </div>
@@ -469,171 +469,6 @@ export default function WechatAgent() {
                 ) : null}
               </div>
             ) : null}
-          </div>
-
-          {/* 自动同步派单面板（P8-3） */}
-          <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="grid h-8 w-8 place-items-center rounded-lg bg-violet-50 text-violet-600">
-                  <RefreshCwIcon size={16} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-[#1a1f2e]">自动同步派单</h3>
-                  <p className="text-[11px] text-[#8b95a6]">每 30 秒从 douyinAPI 拉取新线索，自动分配并通知销售</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {autoSyncEnabled ? (
-                  <button
-                    onClick={stopAutoSync}
-                    className="flex h-9 items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100"
-                  >
-                    <PauseIcon size={14} />
-                    停止自动同步
-                  </button>
-                ) : (
-                  <button
-                    onClick={startAutoSync}
-                    disabled={automationStatus?.emergency_stopped === true}
-                    className="flex h-9 items-center gap-1.5 rounded-xl bg-violet-600 px-3 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(139,92,246,0.22)] transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {autoSyncLoading ? (
-                      <RefreshCwIcon size={14} className="animate-spin" />
-                    ) : (
-                      <PlayIcon size={14} />
-                    )}
-                    启动自动同步
-                  </button>
-                )}
-                {automationStatus?.emergency_stopped && (
-                  <span className="text-[11px] text-red-600">⚠ 自动化已停止，无法启动</span>
-                )}
-              </div>
-            </div>
-
-            {/* 同步状态信息 */}
-            {lastSyncResult ? (
-              <div className="mt-3 grid grid-cols-5 gap-2">
-                <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-[#1a1f2e]">{lastSyncResult.created}</div>
-                  <div className="text-[10px] text-[#8b95a6]">新建</div>
-                </div>
-                <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-[#1a1f2e]">{lastSyncResult.updated}</div>
-                  <div className="text-[10px] text-[#8b95a6]">更新</div>
-                </div>
-                <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-[#1a1f2e]">{lastSyncResult.skipped}</div>
-                  <div className="text-[10px] text-[#8b95a6]">跳过</div>
-                </div>
-                <div className="rounded-lg bg-blue-50 px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-blue-700">{lastSyncResult.assigned}</div>
-                  <div className="text-[10px] text-blue-600">已分配</div>
-                </div>
-                <div className="rounded-lg bg-emerald-50 px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-emerald-700">{lastSyncResult.notified}</div>
-                  <div className="text-[10px] text-emerald-600">已通知</div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="mt-2 flex items-center justify-between text-[11px] text-[#8b95a6]">
-              <span>
-                {autoSyncEnabled ? (
-                  <span className="flex items-center gap-1 font-semibold text-emerald-600">
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
-                    运行中 — 每 30 秒同步
-                  </span>
-                ) : (
-                  "未启动"
-                )}
-              </span>
-              {lastSyncTime && (
-                <span>上次同步：{lastSyncTime}</span>
-              )}
-            </div>
-          </div>
-
-          {/* 自动检测状态面板 */}
-          <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white p-4">
-            <div className="flex items-center gap-2">
-              <div className="grid h-8 w-8 place-items-center rounded-lg bg-blue-50 text-blue-600">
-                <MessageCircleIcon size={16} />
-              </div>
-              <h3 className="text-sm font-bold text-[#1a1f2e]">自动检测</h3>
-            </div>
-            {/* 紧急停止警告 */}
-            {automationStatus?.emergency_stopped ? (
-              <div className="mt-3 rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3">
-                <div className="flex items-center gap-2 text-xs font-bold text-red-700">
-                  <OctagonAlertIcon size={16} />
-                  自动化已紧急停止
-                </div>
-                <p className="mt-1 text-[11px] text-red-600">
-                  所有自动化操作已被拒绝。原因：{automationStatus.stop_reason ?? "手动停止"}
-                  {automationStatus.stopped_at ? ` · 停止于 ${formatDateTimeLocal(automationStatus.stopped_at, {
-                    month: "2-digit",
-                    day: "2-digit",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}` : ""}
-                </p>
-                <button
-                  onClick={handleResumeAutomation}
-                  disabled={automationLoading}
-                  className="mt-2 flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                >
-                  <PlayIcon size={12} />
-                  恢复自动化
-                </button>
-              </div>
-            ) : null}
-            {autoDetectStatus?.active_check_id ? (
-              <div className="mt-3 grid gap-2 text-xs">
-                <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11px]">
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">当前目标</span>
-                    <span className="font-semibold text-[#374151]">
-                      线索 #{autoDetectStatus.lead_id ?? "-"} · {autoDetectStatus.customer_name ?? "-"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">销售</span>
-                    <span className="font-semibold text-[#374151]">{autoDetectStatus.staff_name ?? "-"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">状态</span>
-                    <span className={`font-semibold ${autoDetectStatus.check_status === "pending" ? "text-amber-600" : "text-emerald-600"}`}>
-                      {autoDetectStatus.check_status === "pending" ? "监听中" : autoDetectStatus.check_status === "replied" ? "已跟进" : autoDetectStatus.check_status ?? "-"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">间隔</span>
-                    <span className="font-semibold text-[#374151]">每 {autoDetectStatus.interval_seconds} 秒</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">上次检测</span>
-                    <span className="font-semibold text-[#374151]">{formatDateTimeLocal(autoDetectStatus.last_detect_at, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#8b95a6]">上次结果</span>
-                    <span className="font-semibold text-[#374151]">{autoDetectStatus.last_result ?? "-"}</span>
-                  </div>
-                </div>
-                {autoDetectStatus.warning ? (
-                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
-                    ⚠ {autoDetectStatus.warning}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="mt-3 text-xs text-[#8b95a6]">
-                <p>未设置自动检测目标</p>
-                <p className="mt-1 text-[11px]">请在线索管理页选择一条 assigned 线索，点击「设为自动检测目标」即可开始自动检测。</p>
-              </div>
-            )}
           </div>
 
           {/* 检测记录列表 */}

@@ -1203,21 +1203,15 @@ export default function WechatTaskPanel() {
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">关联线索</span>
+                          <span className="text-[#8b95a6]">线索</span>
                           <span className="font-semibold text-[#374151]">
                             {task.lead_id ?? "-"}
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">关联销售</span>
+                          <span className="text-[#8b95a6]">销售微信</span>
                           <span className="font-semibold text-[#374151]">
                             {task.staff_id ?? "-"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">关联检测</span>
-                          <span className="font-semibold text-[#374151]">
-                            {task.reply_check_id ?? "-"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -1237,25 +1231,19 @@ export default function WechatTaskPanel() {
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">失败阶段</span>
+                          <span className="text-[#8b95a6]">失败原因</span>
                           <span className="font-semibold text-[#374151]">
                             {task.failure_stage || "-"}
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">执行主机</span>
+                          <span className="text-[#8b95a6]">执行电脑</span>
                           <span className="font-semibold text-[#374151]">
                             {task.agent_hostname || "-"}
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">Agent PID</span>
-                          <span className="font-semibold text-[#374151]">
-                            {task.agent_pid ?? "-"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">粘贴时间</span>
+                          <span className="text-[#8b95a6]">执行时间</span>
                           <span className="font-semibold text-[#374151]">
                             {formatTime(task.pasted_at)}
                           </span>
@@ -1263,7 +1251,7 @@ export default function WechatTaskPanel() {
                         <div className="flex justify-between">
                           <span className="text-[#8b95a6]">发送时间</span>
                           <span className="font-semibold text-[#374151]">
-                            {task.sent_at ? formatTime(task.sent_at) : "null（禁止发送）"}
+                            {task.sent_at ? formatTime(task.sent_at) : "未发送"}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -1290,21 +1278,11 @@ export default function WechatTaskPanel() {
                         </div>
                       )}
 
-                      {/* 原始结果 */}
-                      {task.raw_result ? (
-                        <div className="mt-3">
-                          <div className="text-[11px] font-semibold text-[#8b95a6]">
-                            原始结果（摘要: {rawResultSummary(task.raw_result)}）
-                          </div>
-                          <div className="mt-1 rounded-lg bg-[#f8fafc] p-2 text-[11px] font-mono text-[#374151] whitespace-pre-wrap break-all">
-                            {task.raw_result}
-                          </div>
-                        </div>
-                      ) : (
+                      {task.failure_stage ? (
                         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
-                          raw_result 为空（任务尚未执行或 Agent 未回写结果）
+                          失败原因：{task.failure_stage}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>

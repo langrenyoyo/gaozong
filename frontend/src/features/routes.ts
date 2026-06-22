@@ -20,9 +20,9 @@ export const legacyRouteRedirects: LegacyRouteRedirect[] = [
   { from: "/douyin-ai-cs/reply-records", to: "/douyin-cs/reply-records" },
   { from: "/douyin-ai-cs/auto-reply-settings", to: "/douyin-cs/auto-reply-settings" },
   { from: "/douyin-ai-cs/auto-reply-runs", to: "/douyin-cs/auto-reply-runs" },
-  { from: "/douyin-ai-cs-test", to: "/douyin-cs/test" },
+  { from: "/douyin-ai-cs-test", to: "/douyin-cs/workbench" },
   { from: "/ai-agent", to: "/wechat-assistant" },
   { from: "/compute", to: "/compute/center" },
   { from: "/knowledge-base", to: "/knowledge/base" },
-  { from: "/knowledge-categories", to: "/knowledge/categories" },
+  { from: "/knowledge-categories", to: "/knowledge/base" },
 ];
