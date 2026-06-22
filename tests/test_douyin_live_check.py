@@ -2091,6 +2091,7 @@ def test_config_loads_env_file_values(tmp_path, monkeypatch):
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
                 "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
                 "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
+                "DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT=true",
             ]
         ),
         encoding="utf-8",
@@ -2102,6 +2103,7 @@ def test_config_loads_env_file_values(tmp_path, monkeypatch):
         "PUBLIC_BASE_URL",
         "DY_AUTH_REDIRECT_URL",
         "DY_CALLBACK_URL",
+        "DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -2113,6 +2115,7 @@ def test_config_loads_env_file_values(tmp_path, monkeypatch):
     assert os.environ["PUBLIC_BASE_URL"] == "https://callback.misanduo.com"
     assert os.environ["DY_AUTH_REDIRECT_URL"] == "https://callback.misanduo.com/oauth-callback"
     assert os.environ["DY_CALLBACK_URL"] == "https://callback.misanduo.com/webhook-observe"
+    assert os.environ["DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT"] == "true"
 
 
 def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkeypatch):
@@ -2126,6 +2129,7 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
                 "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
                 "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
+                "DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT=true",
             ]
         ),
         encoding="utf-8",
@@ -2136,6 +2140,7 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://env.example.com")
     monkeypatch.setenv("DY_AUTH_REDIRECT_URL", "https://env.example.com/oauth")
     monkeypatch.setenv("DY_CALLBACK_URL", "https://env.example.com/callback")
+    monkeypatch.setenv("DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", "false")
 
     config._load_env_file(env_file)
 
@@ -2145,6 +2150,7 @@ def test_config_env_file_does_not_override_explicit_environment(tmp_path, monkey
     assert os.environ["PUBLIC_BASE_URL"] == "https://env.example.com"
     assert os.environ["DY_AUTH_REDIRECT_URL"] == "https://env.example.com/oauth"
     assert os.environ["DY_CALLBACK_URL"] == "https://env.example.com/callback"
+    assert os.environ["DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT"] == "false"
 
 
 def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
@@ -2158,6 +2164,7 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
                 "PUBLIC_BASE_URL=https://callback.misanduo.com",
                 "DY_AUTH_REDIRECT_URL=https://callback.misanduo.com/oauth-callback",
                 "DY_CALLBACK_URL=https://callback.misanduo.com/webhook-observe",
+                "DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT=true",
             ]
         ),
         encoding="utf-8",
@@ -2169,6 +2176,7 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
         "PUBLIC_BASE_URL",
         "DY_AUTH_REDIRECT_URL",
         "DY_CALLBACK_URL",
+        "DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT",
     ]:
         monkeypatch.delenv(key, raising=False)
 
@@ -2182,6 +2190,7 @@ def test_config_constants_reflect_loaded_env_values(tmp_path, monkeypatch):
     assert reloaded.PUBLIC_BASE_URL == "https://callback.misanduo.com"
     assert reloaded.DY_AUTH_REDIRECT_URL == "https://callback.misanduo.com/oauth-callback"
     assert reloaded.DY_CALLBACK_URL == "https://callback.misanduo.com/webhook-observe"
+    assert reloaded.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT is True
 
 
 def test_config_openapi_base_and_prefix_fall_back_when_environment_values_are_blank(monkeypatch):
@@ -2194,6 +2203,14 @@ def test_config_openapi_base_and_prefix_fall_back_when_environment_values_are_bl
     assert reloaded.DY_OPENAPI_BASE_URL == "https://gmp.bytedanceapi.com"
     assert reloaded.DY_OPENAPI_PREFIX == "/ai_chat_agent_api/v1/openapi"
     assert reloaded.DY_BASE_URL == "https://gmp.bytedanceapi.com/ai_chat_agent_api/v1/openapi"
+
+
+def test_config_auto_reply_full_rollout_defaults_disabled(monkeypatch):
+    monkeypatch.delenv("DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", raising=False)
+
+    reloaded = importlib.reload(config)
+
+    assert reloaded.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT is False
 
 
 def test_live_check_callback_accepts_im_receive_msg_and_forwards_to_formal():

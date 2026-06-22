@@ -67,9 +67,10 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     if not real_send_gate.passed:
         _mark_send_skipped(db, run, real_send_gate.reason or "real_send_gate_blocked")
         logger.info(
-            "ai_auto_reply_real_send_blocked stage=real_send_gate run_id=%s reason=%s",
+            "ai_auto_reply_real_send_blocked stage=real_send_gate run_id=%s reason=%s gate_results=%s",
             run.id,
             real_send_gate.reason,
+            real_send_gate.gate_results,
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
@@ -79,8 +80,8 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         account_open_id=run.account_open_id,
         conversation_short_id=run.conversation_short_id or "",
     ):
-        _mark_send_skipped(db, run, "manual_takeover")
-        return {"status": "send_skipped", "reason": "manual_takeover"}
+        _mark_send_skipped(db, run, "manual_takeover_blocked")
+        return {"status": "send_skipped", "reason": "manual_takeover_blocked"}
 
     latest_state = get_latest_private_message_state(
         db,

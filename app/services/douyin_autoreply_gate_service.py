@@ -144,18 +144,26 @@ def evaluate_real_send_gates(
 ) -> GateDecision:
     """集中评估真实自动发送门禁；任一失败都返回稳定 reason code。"""
     current_time = now or datetime.now()
+    allow_full_rollout = config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT is True
+    global_account_hit = account_open_id in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET
+    global_customer_hit = bool(
+        customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET
+    )
+    global_conversation_hit = bool(
+        conversation_short_id
+        and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
+    )
     gate_results: dict[str, Any] = {
         "global": {
             "auto_reply_enabled": bool(config.DOUYIN_AUTO_REPLY_ENABLED),
             "real_send_enabled": bool(config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED),
-            "account_whitelist_hit": account_open_id in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET,
-            "customer_whitelist_hit": bool(
-                customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET
-            ),
-            "conversation_whitelist_hit": bool(
-                conversation_short_id
-                and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
-            ),
+            "allow_full_rollout": allow_full_rollout,
+            "mode": "full_rollout" if allow_full_rollout else "whitelist",
+            "account_whitelist_required": not allow_full_rollout,
+            "customer_or_conversation_whitelist_required": not allow_full_rollout,
+            "account_whitelist_hit": global_account_hit,
+            "customer_whitelist_hit": global_customer_hit,
+            "conversation_whitelist_hit": global_conversation_hit,
         },
         "settings": _settings_snapshot(settings),
     }
@@ -163,37 +171,33 @@ def evaluate_real_send_gates(
         return GateDecision(False, "blocked", "global_auto_reply_disabled", gate_results)
     if config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED is not True:
         return GateDecision(False, "blocked", "global_real_send_disabled", gate_results)
-    if account_open_id not in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET:
-        return GateDecision(False, "blocked", "global_account_whitelist_miss", gate_results)
-    if not (
-        (customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET)
-        or (
-            conversation_short_id
-            and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
-        )
-    ):
-        return GateDecision(False, "blocked", "global_customer_conversation_whitelist_miss", gate_results)
+    if not allow_full_rollout and not global_account_hit:
+        return GateDecision(False, "blocked", "global_account_whitelist_missed", gate_results)
+    if not allow_full_rollout and not (global_customer_hit or global_conversation_hit):
+        return GateDecision(False, "blocked", "global_customer_or_conversation_whitelist_missed", gate_results)
     if settings is None:
         return GateDecision(False, "blocked", "no_autoreply_settings", gate_results)
     if settings.enabled is not True:
-        return GateDecision(False, "blocked", "autoreply_disabled", gate_results)
+        return GateDecision(False, "blocked", "account_settings_disabled", gate_results)
     if settings.dry_run_enabled is not True:
         return GateDecision(False, "blocked", "dry_run_disabled", gate_results)
     if settings.send_enabled is not True:
-        return GateDecision(False, "blocked", "send_disabled", gate_results)
+        return GateDecision(False, "blocked", "account_send_disabled", gate_results)
 
     customer_whitelist = parse_customer_whitelist_open_ids(settings)
     conversation_whitelist = parse_conversation_whitelist_ids(settings)
     gate_results["account_level_whitelist"] = {
         "customer_configured": bool(customer_whitelist),
         "conversation_configured": bool(conversation_whitelist),
+        "required": bool(customer_whitelist or conversation_whitelist),
+        "mode": "optional_narrowing" if allow_full_rollout else "required_narrowing",
         "customer_hit": bool(customer_open_id and customer_open_id in customer_whitelist),
         "conversation_hit": bool(conversation_short_id and conversation_short_id in conversation_whitelist),
     }
     if customer_whitelist and customer_open_id not in customer_whitelist:
-        return GateDecision(False, "blocked", "account_customer_whitelist_miss", gate_results)
+        return GateDecision(False, "blocked", "account_level_whitelist_missed", gate_results)
     if conversation_whitelist and conversation_short_id not in conversation_whitelist:
-        return GateDecision(False, "blocked", "account_conversation_whitelist_miss", gate_results)
+        return GateDecision(False, "blocked", "account_level_whitelist_missed", gate_results)
 
     limits = _real_send_frequency_snapshot(
         db,
@@ -214,9 +218,9 @@ def evaluate_real_send_gates(
     if isinstance(last_sent_at, datetime) and min_interval_seconds > 0:
         elapsed = (current_time - last_sent_at).total_seconds()
         if elapsed < min_interval_seconds:
-            return GateDecision(False, "blocked", "min_interval_limited", gate_results)
+            return GateDecision(False, "blocked", "min_interval_blocked", gate_results)
     if daily_limit > 0 and int(limits["conversation_day_count"]) >= daily_limit:
-        return GateDecision(False, "blocked", "daily_conversation_limit_exceeded", gate_results)
+        return GateDecision(False, "blocked", "daily_conversation_limit_blocked", gate_results)
 
     return GateDecision(True, "sending", None, gate_results)
 

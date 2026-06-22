@@ -89,6 +89,17 @@ function hasActiveAgent(item: DouyinAutoReplySettingItem | null): boolean {
   return Boolean(item?.bound_agent_id && item.bound_agent_status === "active");
 }
 
+function listToText(value: string[] | null | undefined): string {
+  return Array.isArray(value) ? value.join("\n") : "";
+}
+
+function textToList(value: string): string[] {
+  return value
+    .split(/[\n,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplySettingUpdateRequest {
   return {
     enabled: Boolean(item?.enabled),
@@ -225,15 +236,15 @@ function SendEnableConfirmModal({
             <div>
               <h2 className="text-sm font-bold text-amber-900">确认开启真实自动回复</h2>
               <p className="mt-1 text-xs leading-5 text-amber-800">
-                开启后，该企业号在收到新的客户私信时，可能由系统自动回复客户。
+                开启后，该企业号在满足系统全局开关、人工接管、频控和安全上下文条件时，将自动回复客户私信。
               </p>
             </div>
           </div>
         </div>
         <div className="space-y-3 px-5 py-5 text-xs leading-6 text-slate-600">
-          <p>建议先完成 dry-run 验收，再只对测试企业号开启真实自动回复。</p>
+          <p>注意：开启自动回复会真实发送抖音私信。请确认智能体话术、频控和人工接管策略已配置完成。</p>
           <p>
-            后端仍会执行 RAG、置信度、风险标记、人工接管、24小时窗口、最新消息二次读取等门禁。
+            若客户 / 会话白名单为空，则在系统允许全量模式时对该企业号全部客户生效。
           </p>
           <label className="block">
             <span className="font-semibold text-slate-700">
@@ -447,8 +458,9 @@ export default function DouyinAutoReplySettingsPage() {
               <ShieldCheckIcon size={17} className="mt-0.5 shrink-0 text-blue-600" />
               <div className="text-xs leading-6 text-blue-800">
                 <div className="font-bold">此页面只保存配置，不会立即发送消息。</div>
-                <div>真实自动回复只会在新客户私信进入 webhook 后，经后端门禁通过才可能发送。</div>
-                <div>建议先开启 dry-run，验收后再开启真实自动回复。</div>
+                <div>开启后，该企业号在满足系统全局开关、人工接管、频控和安全上下文条件时，将自动回复客户私信。</div>
+                <div>若客户 / 会话白名单为空，则在系统允许全量模式时对该企业号全部客户生效。</div>
+                <div>注意：开启自动回复会真实发送抖音私信。请确认智能体话术、频控和人工接管策略已配置完成。</div>
               </div>
             </div>
           </div>
@@ -506,7 +518,7 @@ export default function DouyinAutoReplySettingsPage() {
                       checked={form.send_enabled}
                       onChange={(checked) => updateForm("send_enabled", checked)}
                       label="允许真实自动回复"
-                      description="只保存开关，新私信进入后仍需通过全部后端门禁。"
+                      description="新私信进入后仍需通过全局开关、人工接管、频控和安全上下文门禁。"
                       tone="amber"
                     />
                   </div>
@@ -546,6 +558,65 @@ export default function DouyinAutoReplySettingsPage() {
                         value={form.max_replies_per_account_per_hour}
                         onChange={(event) =>
                           updateForm("max_replies_per_account_per_hour", Number(event.target.value))
+                        }
+                        className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-6 text-amber-800">
+                    <div className="font-bold">客户 / 会话白名单</div>
+                    <div>
+                      可选。填写后仅对白名单客户或会话自动回复；留空则按当前账号自动回复开关全量生效。
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">客户 open_id 白名单</span>
+                      <textarea
+                        value={listToText(form.customer_whitelist_open_ids)}
+                        onChange={(event) =>
+                          updateForm("customer_whitelist_open_ids", textToList(event.target.value))
+                        }
+                        placeholder="每行一个客户 open_id，留空表示不按客户限制"
+                        className="mt-2 min-h-[96px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">会话 ID 白名单</span>
+                      <textarea
+                        value={listToText(form.conversation_whitelist_ids)}
+                        onChange={(event) =>
+                          updateForm("conversation_whitelist_ids", textToList(event.target.value))
+                        }
+                        placeholder="每行一个 conversation_short_id，留空表示不按会话限制"
+                        className="mt-2 min-h-[96px] w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">最小自动回复间隔（秒）</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={form.min_interval_seconds}
+                        onChange={(event) => updateForm("min_interval_seconds", Number(event.target.value))}
+                        className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">单会话每日自动回复上限</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={form.max_auto_replies_per_conversation_per_day}
+                        onChange={(event) =>
+                          updateForm("max_auto_replies_per_conversation_per_day", Number(event.target.value))
                         }
                         className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
                       />

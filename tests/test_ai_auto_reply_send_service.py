@@ -37,6 +37,7 @@ def setup_function():
 def _enable_real_send_test_gate(monkeypatch):
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", False)
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"account-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
@@ -44,6 +45,8 @@ def _enable_real_send_test_gate(monkeypatch):
 
 def _insert_settings(
     *,
+    enabled: bool = True,
+    dry_run_enabled: bool = True,
     send_enabled: bool = True,
     customer_whitelist_open_ids: list[str] | None = None,
     conversation_whitelist_ids: list[str] | None = None,
@@ -56,8 +59,8 @@ def _insert_settings(
             DouyinAccountAutoreplySetting(
                 merchant_id="merchant-1",
                 account_open_id="account-open-1",
-                enabled=True,
-                dry_run_enabled=True,
+                enabled=enabled,
+                dry_run_enabled=dry_run_enabled,
                 send_enabled=send_enabled,
                 customer_whitelist_open_ids=json.dumps(customer_whitelist_open_ids or [], ensure_ascii=False),
                 conversation_whitelist_ids=json.dumps(conversation_whitelist_ids or [], ensure_ascii=False),
@@ -195,7 +198,7 @@ def test_send_enabled_false_does_not_send():
         result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "send_disabled"
+    assert result["reason"] == "account_send_disabled"
     assert _get_run(run_id).status == "send_skipped"
     openapi_mock.assert_not_called()
 
@@ -247,7 +250,7 @@ def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "global_account_whitelist_miss"
+    assert result["reason"] == "global_account_whitelist_missed"
 
 
 def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypatch):
@@ -263,7 +266,7 @@ def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypa
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "global_customer_conversation_whitelist_miss"
+    assert result["reason"] == "global_customer_or_conversation_whitelist_missed"
 
 
 def test_account_level_customer_whitelist_miss_does_not_send(monkeypatch):
@@ -279,7 +282,7 @@ def test_account_level_customer_whitelist_miss_does_not_send(monkeypatch):
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "account_customer_whitelist_miss"
+    assert result["reason"] == "account_level_whitelist_missed"
 
 
 def test_account_level_conversation_whitelist_miss_does_not_send(monkeypatch):
@@ -295,7 +298,106 @@ def test_account_level_conversation_whitelist_miss_does_not_send(monkeypatch):
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "account_conversation_whitelist_miss"
+    assert result["reason"] == "account_level_whitelist_missed"
+
+
+def test_full_rollout_allows_send_without_global_whitelists(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+
+
+def test_full_rollout_still_requires_account_settings_enabled(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(enabled=False)
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "account_settings_disabled"
+
+
+def test_full_rollout_still_requires_account_send_enabled(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(send_enabled=False)
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "account_send_disabled"
+
+
+def test_full_rollout_empty_account_level_whitelist_does_not_limit(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(customer_whitelist_open_ids=[], conversation_whitelist_ids=[])
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+
+
+def test_full_rollout_account_level_whitelist_miss_blocks(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(customer_whitelist_open_ids=["other-customer"])
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "account_level_whitelist_missed"
+
+
+def test_full_rollout_account_level_whitelist_hit_allows(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings(customer_whitelist_open_ids=["customer-open-1"])
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
 
 
 def test_non_decided_run_does_not_send():
@@ -330,7 +432,7 @@ def test_manual_takeover_is_send_skipped():
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "manual_takeover"
+    assert result["reason"] == "manual_takeover_blocked"
 
 
 def test_latest_message_not_customer_is_send_skipped():
@@ -493,7 +595,7 @@ def test_min_interval_seconds_blocks_recent_sent_auto_reply(monkeypatch):
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "min_interval_limited"
+    assert result["reason"] == "min_interval_blocked"
 
 
 def test_daily_conversation_limit_blocks_auto_reply(monkeypatch):
@@ -532,7 +634,7 @@ def test_daily_conversation_limit_blocks_auto_reply(monkeypatch):
     result = _send(run_id)
 
     assert result["status"] == "send_skipped"
-    assert result["reason"] == "daily_conversation_limit_exceeded"
+    assert result["reason"] == "daily_conversation_limit_blocked"
 
 
 def test_openapi_failure_marks_send_failed_without_retry():
@@ -607,7 +709,10 @@ def test_run_missing_returns_skipped():
     assert result["reason"] == "run_not_found"
 
 
-@pytest.mark.parametrize("enabled,dry_run_enabled,reason", [(False, True, "autoreply_disabled"), (True, False, "dry_run_disabled")])
+@pytest.mark.parametrize(
+    "enabled,dry_run_enabled,reason",
+    [(False, True, "account_settings_disabled"), (True, False, "dry_run_disabled")],
+)
 def test_disabled_settings_are_send_skipped(enabled, dry_run_enabled, reason):
     run_id = _insert_run()
     _insert_event()
