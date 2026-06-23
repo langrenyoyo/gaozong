@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -218,6 +219,26 @@ ALLOWED_HISTORY_ROLES = {"customer", "agent", "system"}
 MAX_HISTORY_ITEMS = 10
 MAX_HISTORY_ITEM_CHARS = 300
 MAX_HISTORY_TOTAL_CHARS = 2500
+REPEAT_REPLY_TEXTS = (
+    "具体车型和车系需要结合实时车源确认。具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+    "车况、事故记录、里程和手续信息需要结合具体车辆核验，建议由顾问人工确认后回复。您可以先说下关注的车型、预算和配置偏好，我帮您整理需求。",
+    "您也可以继续在这里告诉我预算和车型偏好，我先帮您整理需求。涉及联系方式或进一步沟通方式，建议由顾问人工确认后回复。",
+)
+CUSTOMER_DISSATISFACTION_KEYWORDS = (
+    "机器人",
+    "复读",
+    "你没看",
+    "不看消息",
+    "没诚意",
+    "找别家",
+    "算了",
+    "无语",
+    "到底有没有活人",
+)
+HUMAN_FOLLOWUP_MARKERS = ("不好意思，刚才", "后续由顾问", "稍后由顾问", "我先不再重复询问")
+CONCERN_KEYWORDS = ("现车", "价格", "报价", "车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告", "合作沟通")
+CITY_KEYWORDS = ("广州",)
+USAGE_KEYWORDS = ("商务兼家用", "商务", "家用")
 
 SAME_CATEGORY_RECOMMENDATIONS = [
     RecommendedVehicle(vehicle_name="宝马5系", price=280000, category="精品BBA"),
@@ -685,6 +706,11 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "如果客户咨询非主营车型，应说明暂不主做该车型，并介绍主营车型。",
             "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
             "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
+            "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
+            "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
+            "不得连续复读相同模板；如果上一轮 AI 已说过类似内容，必须换成更贴合最新问题的回复。",
+            "客户质疑机器人、复读或不看消息时，必须先道歉，复述已记录需求，并交由顾问核对后跟进。",
+            "车型字符串必须保留原文，例如 530Li、525Li、宝马5系、奥迪A6L、奔驰E级，不得截断成宝马53。",
             "不要承诺一定有现车。",
             "不要自动发送真实私信。",
             "你只能返回 JSON，不要输出 JSON 之外的任何文本。",
@@ -704,6 +730,11 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
                 "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
                 "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
                 "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
+                "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
+                "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
+                "不得连续复读相同模板；如果上一轮 AI 已说过类似内容，必须换成更贴合最新问题的回复。",
+                "客户质疑机器人、复读或不看消息时，必须先道歉，复述已记录需求，并交由顾问核对后跟进。",
+                "车型字符串必须保留原文，例如 530Li、525Li、宝马5系、奥迪A6L、奔驰E级，不得截断成宝马53。",
                 "不要自动发送真实私信。",
                 "你只能返回 JSON，不要输出 JSON 之外的任何文本。",
                 "JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、manual_required_reason、risk_flags、confidence、auto_send。",
@@ -715,6 +746,10 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             ]
         )
     conversation_history = _sanitize_conversation_history(request.conversation_history)
+    known_requirements = _extract_customer_requirements(
+        latest_message=request.latest_message,
+        conversation_history=request.conversation_history,
+    )
     user_prompt = json.dumps(
         {
             "merchant": {
@@ -740,6 +775,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "customer_message": request.latest_message,
             "conversation_history": conversation_history,
             "conversation_history_policy": CONVERSATION_HISTORY_POLICY,
+            "known_customer_requirements": known_requirements,
             "rag_results": [
                 {
                     "title": item.title,
@@ -1052,6 +1088,12 @@ def _apply_safety_postprocess(
         rag_used=rag_used,
         direct_llm_policy=policy,
     )
+    decision = _apply_relevance_postprocess(
+        decision,
+        latest_message=text,
+        conversation_history=conversation_history,
+        rag_used=rag_used,
+    )
     return decision
 
 
@@ -1065,6 +1107,256 @@ def _is_specific_model_or_inventory_question(text: str) -> bool:
     if re.search(r"\b[A-Z]\d{1,2}L?\b", text.upper()):
         return True
     return False
+
+
+def _apply_relevance_postprocess(
+    decision: dict[str, Any],
+    *,
+    latest_message: str,
+    conversation_history: object,
+    rag_used: bool,
+) -> dict[str, Any]:
+    """根据最近对话修正复读、漏读客户信息和车型截断问题。"""
+    if rag_used:
+        return decision
+
+    slots = _extract_customer_requirements(
+        latest_message=latest_message,
+        conversation_history=conversation_history,
+    )
+    recent_ai_replies = _recent_ai_replies(conversation_history)
+    reply_text = str(decision.get("reply_text") or "")
+    is_dissatisfied = _is_customer_dissatisfied(latest_message)
+
+    if is_dissatisfied and _recent_human_followup_sent(recent_ai_replies):
+        decision["reply_text"] = ""
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = "客户已表达不满且近期已人工跟进，请停止自动回复"
+        decision["auto_send"] = False
+        decision["risk_flags"] = _dedupe([*(decision.get("risk_flags") or []), "customer_dissatisfied_stop_auto_reply"])
+        return decision
+
+    needs_contextual_rewrite = (
+        is_dissatisfied
+        or _is_reply_reasking_known_slots(reply_text, slots)
+        or _is_similar_to_recent_ai_reply(reply_text, recent_ai_replies)
+        or _is_repeat_template(reply_text)
+        or _has_model_truncation(reply_text, slots)
+        or (_is_plain_greeting(latest_message) and _has_actionable_requirement(slots))
+    )
+    if not needs_contextual_rewrite:
+        return decision
+
+    if is_dissatisfied:
+        rewritten = _build_human_followup_reply(slots, apology=True)
+        decision["risk_flags"] = _dedupe([*(decision.get("risk_flags") or []), "customer_dissatisfied"])
+    else:
+        rewritten = _build_contextual_customer_reply(
+            latest_message=latest_message,
+            slots=slots,
+            fallback_to_human=_is_similar_to_recent_ai_reply(reply_text, recent_ai_replies)
+            or _is_repeat_template(reply_text)
+            or _is_reply_reasking_known_slots(reply_text, slots),
+        )
+
+    decision["reply_text"] = rewritten
+    if rewritten:
+        decision["manual_required"] = False
+        decision["manual_required_reason"] = ""
+        decision["auto_send"] = True
+    else:
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = "需要顾问人工跟进"
+        decision["auto_send"] = False
+    return decision
+
+
+def _extract_customer_requirements(
+    *,
+    latest_message: str,
+    conversation_history: object,
+) -> dict[str, Any]:
+    customer_texts = [
+        item["content"]
+        for item in _sanitize_conversation_history(conversation_history)
+        if item.get("role") == "customer"
+    ]
+    if latest_message:
+        customer_texts.append(str(latest_message))
+    text = "\n".join(customer_texts)
+
+    budget = _extract_budget(text)
+    years = _extract_years(text)
+    model = _extract_vehicle_hint(text)
+    brand = _extract_brand(text, model)
+    concerns = [keyword for keyword in CONCERN_KEYWORDS if keyword in text]
+    if "泡水" in concerns and "水泡" not in concerns:
+        concerns.append("水泡")
+    usage = next((keyword for keyword in USAGE_KEYWORDS if keyword in text), None)
+    city = next((keyword for keyword in CITY_KEYWORDS if keyword in text), None)
+    return {
+        "budget": budget,
+        "brand": brand,
+        "model": model,
+        "years": years,
+        "usage": usage,
+        "city": city,
+        "concerns": _dedupe(concerns),
+    }
+
+
+def _extract_budget(text: str) -> str | None:
+    match = re.search(r"(\d{1,3})\s*万\s*(?:左右|以内|以上|上下|多)?", text)
+    if not match:
+        return None
+    suffix_match = re.search(rf"{re.escape(match.group(1))}\s*万\s*(左右|以内|以上|上下|多)?", text)
+    suffix = suffix_match.group(1) if suffix_match and suffix_match.group(1) else ""
+    return f"{match.group(1)}万{suffix}"
+
+
+def _extract_years(text: str) -> str | None:
+    pair = re.search(r"(\d{2})\s*(?:/|或|或者|、|和)\s*(\d{2})\s*款", text)
+    if pair:
+        return f"{pair.group(1)}或{pair.group(2)}款"
+    pair_with_suffix = re.search(r"(\d{2})\s*款\s*(?:/|或|或者|、|和)\s*(\d{2})\s*款", text)
+    if pair_with_suffix:
+        return f"{pair_with_suffix.group(1)}或{pair_with_suffix.group(2)}款"
+    values = re.findall(r"(\d{2})\s*款", text)
+    if len(values) >= 2:
+        return f"{values[-2]}或{values[-1]}款"
+    if values:
+        return f"{values[-1]}款"
+    return None
+
+
+def _extract_brand(text: str, model: str | None) -> str | None:
+    if model:
+        for brand in ("宝马", "奥迪", "奔驰"):
+            if brand in model:
+                return brand
+    for brand in ("宝马", "奥迪", "奔驰"):
+        if brand in text:
+            return brand
+    return None
+
+
+def _recent_ai_replies(history: object) -> list[str]:
+    items = _sanitize_conversation_history(history)
+    return [item["content"] for item in items if item.get("role") == "agent"][-3:]
+
+
+def _recent_human_followup_sent(recent_ai_replies: list[str]) -> bool:
+    return any(_contains_any(reply, HUMAN_FOLLOWUP_MARKERS) for reply in recent_ai_replies)
+
+
+def _is_customer_dissatisfied(text: str) -> bool:
+    return _contains_any(str(text or ""), CUSTOMER_DISSATISFACTION_KEYWORDS)
+
+
+def _is_plain_greeting(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？!?,.]", "", str(text or ""))
+    return normalized in {"你好", "您好", "在吗", "老板你好", "老板您好"}
+
+
+def _has_actionable_requirement(slots: dict[str, Any]) -> bool:
+    return any(slots.get(key) for key in ("budget", "model", "years", "usage", "city")) or bool(slots.get("concerns"))
+
+
+def _is_reply_reasking_known_slots(reply_text: str, slots: dict[str, Any]) -> bool:
+    if not reply_text:
+        return False
+    checks = (
+        ("budget", ("说下预算", "告诉我预算", "补充预算", "预算和")),
+        ("model", ("说下车型", "车型偏好", "具体车型", "关注的车型")),
+        ("years", ("说下年份", "年份、", "年份或")),
+        ("usage", ("告诉我用途", "预算和用途")),
+    )
+    return any(slots.get(slot) and _contains_any(reply_text, keywords) for slot, keywords in checks)
+
+
+def _is_repeat_template(reply_text: str) -> bool:
+    return any(_similar_text(reply_text, template) >= 0.82 for template in REPEAT_REPLY_TEXTS)
+
+
+def _is_similar_to_recent_ai_reply(reply_text: str, recent_ai_replies: list[str]) -> bool:
+    if not reply_text:
+        return False
+    return any(_similar_text(reply_text, old_reply) >= 0.82 for old_reply in recent_ai_replies)
+
+
+def _similar_text(left: str, right: str) -> float:
+    left_norm = re.sub(r"[\s，。！？!?,.；;、]", "", str(left or ""))
+    right_norm = re.sub(r"[\s，。！？!?,.；;、]", "", str(right or ""))
+    if not left_norm or not right_norm:
+        return 0.0
+    return SequenceMatcher(None, left_norm, right_norm).ratio()
+
+
+def _has_model_truncation(reply_text: str, slots: dict[str, Any]) -> bool:
+    model = str(slots.get("model") or "")
+    if model in {"宝马530Li", "530Li"} and "宝马53" in reply_text and "530Li" not in reply_text:
+        return True
+    if model in {"宝马525Li", "525Li"} and "宝马52" in reply_text and "525Li" not in reply_text:
+        return True
+    return False
+
+
+def _build_contextual_customer_reply(
+    *,
+    latest_message: str,
+    slots: dict[str, Any],
+    fallback_to_human: bool,
+) -> str:
+    if _is_plain_greeting(latest_message) and _has_actionable_requirement(slots):
+        return f"您好，我记得您前面关注的是{_format_requirement_summary(slots)}。您是想继续了解现车和报价，还是更关注车况和检测报告？"
+
+    if fallback_to_human and _has_actionable_requirement(slots):
+        return _build_human_followup_reply(slots, apology=False)
+
+    if _contains_any(latest_message, ("现车", "库存", "价格", "报价", "车况", "检测报告", "事故", "水泡", "泡水")):
+        subject = _format_requirement_summary(slots)
+        prefix = f"收到，您关注的是{subject}。" if subject else "收到，您是在问现车、价格和车况信息。"
+        detail_parts = []
+        if _contains_any(latest_message, ("现车", "库存")):
+            detail_parts.append("现车")
+        if _contains_any(latest_message, ("价格", "报价")):
+            detail_parts.append("价格")
+        if _contains_any(latest_message, ("车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告")):
+            detail_parts.append("车况和检测报告")
+        detail = "、".join(_dedupe(detail_parts)) or "现车和报价"
+        return f"{prefix}您这次主要问的是{detail}，这些需要顾问核对实时车源后给您准确答复；如果有符合的车源，可以优先按年份、里程、车况和检测报告给您整理。"
+
+    if _has_actionable_requirement(slots):
+        return f"收到，{_format_requirement_summary(slots)}。这个需求比较明确，后续可以重点核对年份、里程、配置、车况和检测报告；现车与报价需要顾问按实时库存确认后回复您。"
+
+    return "不好意思，刚才没有接住您的问题。我先把您的需求记录下来，现车和价格需要顾问核对后给您准确答复，稍后由顾问继续跟进。"
+
+
+def _build_human_followup_reply(slots: dict[str, Any], *, apology: bool) -> str:
+    summary = _format_requirement_summary(slots)
+    lead = "不好意思，刚才回复没有接住您的问题。" if apology else "我先把您的需求记录下来。"
+    if summary:
+        return f"{lead}您已经说得很清楚：{summary}。我先不再重复询问，现车和价格需要顾问核对后给您准确答复，后续由顾问继续跟进。"
+    return f"{lead}我先不再重复询问，现车和价格需要顾问核对后给您准确答复，后续由顾问继续跟进。"
+
+
+def _format_requirement_summary(slots: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if slots.get("budget"):
+        parts.append(str(slots["budget"]))
+    year_model = "、".join(part for part in (slots.get("years"), slots.get("model")) if part)
+    if year_model:
+        parts.append(year_model)
+    elif slots.get("brand"):
+        parts.append(str(slots["brand"]))
+    if slots.get("usage"):
+        parts.append(str(slots["usage"]))
+    if slots.get("city"):
+        parts.append(str(slots["city"]))
+    concerns = [str(item) for item in slots.get("concerns") or []]
+    if concerns:
+        parts.append(f"关注{'、'.join(_dedupe(concerns))}")
+    return "、".join(parts)
 
 
 def _normalize_direct_llm_policy(value: object) -> dict[str, Any]:
@@ -1228,6 +1520,33 @@ def _safe_low_risk_direct_reply(intent: str | None) -> str:
 
 
 def _extract_vehicle_hint(text: str) -> str | None:
+    protected_patterns = (
+        r"(宝马)\s*(530Li|525Li|520Li|320Li|325Li|330Li)",
+        r"(奥迪)\s*(A6L|A6|A4L|Q5L)",
+        r"(奔驰)\s*(E级|C级|GLC)",
+    )
+    for pattern in protected_patterns:
+        protected_match = re.search(pattern, text, re.IGNORECASE)
+        if protected_match:
+            return f"{protected_match.group(1)}{protected_match.group(2)}"
+
+    standalone_match = re.search(
+        r"(?<![A-Za-z0-9])(530Li|525Li|520Li|320Li|325Li|330Li|A6L|A4L|Q5L)(?![A-Za-z0-9])",
+        text,
+        re.IGNORECASE,
+    )
+    if standalone_match:
+        model = standalone_match.group(1)
+        if model.lower().endswith("li") and "宝马" in text:
+            return f"宝马{model}"
+        if model.upper().startswith("A") and "奥迪" in text:
+            return f"奥迪{model}"
+        return model
+
+    bmw_series_match = re.search(r"(宝马)\s*(5系|3系|X3|X5)", text, re.IGNORECASE)
+    if bmw_series_match:
+        return f"{bmw_series_match.group(1)}{bmw_series_match.group(2)}"
+
     model_match = re.search(r"(宝马|奔驰|奥迪)\s*([3457]系|X[1357]|[A-Z]?\d{1,2}L?)", text, re.IGNORECASE)
     if model_match:
         return f"{model_match.group(1)}{model_match.group(2).upper()}"
