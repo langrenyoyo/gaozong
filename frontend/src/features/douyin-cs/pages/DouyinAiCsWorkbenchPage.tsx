@@ -210,13 +210,50 @@ const LEAD_CAPTURE_TAG_VALUES = new Set([
   "已留资",
 ]);
 
+const STATUS_DUPLICATE_TAG_VALUES = new Set([
+  "待跟进",
+  "已留资",
+  "高意向",
+  "需人工",
+  "pending",
+  "follow_up",
+  "need_followup",
+  "retained_contact",
+  "captured_lead",
+  "captured",
+  "has_lead",
+  "lead_captured",
+  "manual_required",
+  "high_intent",
+]);
+
 function isLeadCaptureTag(tag?: string | null) {
   const value = String(tag || "").trim();
   return LEAD_CAPTURE_TAG_VALUES.has(value);
 }
 
-function visibleConversationTags(tags?: string[] | null) {
-  return (tags || []).filter((tag) => !isLeadCaptureTag(tag));
+function isStatusDuplicateTag(tag?: string | null, leadStatus?: string | null) {
+  const value = String(tag || "").trim();
+  if (!value) return true;
+  if (isLeadCaptureTag(value)) return true;
+  if (!STATUS_DUPLICATE_TAG_VALUES.has(value)) return false;
+  const tagText = conversationTagText(value);
+  const status = statusText(leadStatus);
+  return tagText === status || value === leadStatus || STATUS_DUPLICATE_TAG_VALUES.has(value);
+}
+
+function visibleConversationTags(tags?: string[] | null, leadStatus?: string | null) {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  (tags || []).forEach((tag) => {
+    const value = String(tag || "").trim();
+    if (!value || isStatusDuplicateTag(value, leadStatus)) return;
+    const label = conversationTagText(value);
+    if (seen.has(label)) return;
+    seen.add(label);
+    result.push(value);
+  });
+  return result;
 }
 
 function isCapturedLeadStatus(value?: string | null) {
@@ -2092,12 +2129,12 @@ export default function DouyinAiCsWorkbenchPage() {
             ) : null}
             {filteredConversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;
-              const tags = visibleConversationTags(conversation.tags);
               const leadStatus = conversationLeadStatusForList(
                 conversation,
                 selectedAccount?.account_open_id,
                 profileCacheRef.current,
               );
+              const tags = visibleConversationTags(conversation.tags, leadStatus);
               const captured = isCapturedLeadStatus(leadStatus);
               return (
                 <button

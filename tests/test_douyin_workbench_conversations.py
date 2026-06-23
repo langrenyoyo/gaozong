@@ -576,6 +576,83 @@ def test_conversation_profile_returns_customer_fields_from_webhook_and_lead_raw_
     assert data["lead"]["customer_contact"] == "13800001111"
 
 
+def test_conversation_profile_extracts_vehicle_budget_year_and_city_from_customer_messages_only():
+    base_time = datetime.now() - timedelta(minutes=10)
+    conversation_id = "profile_fields_from_messages"
+    _insert_event(
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="宝马5系",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_1",
+        server_message_id="profile_fields_msg_1",
+        created_at=base_time,
+    )
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="AI 自动回复里提到18万预算、宝马3系、深圳，这些不能写入画像。",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_ai",
+        server_message_id="profile_fields_ai_msg",
+        created_at=base_time + timedelta(minutes=1),
+    )
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="你收到一条新消息，请打开抖音app查看",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_notice",
+        server_message_id="profile_fields_notice_msg",
+        created_at=base_time + timedelta(minutes=2),
+    )
+    _insert_event(
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="我预算差不多30万左右吧，主要看20款或者21款的530Li。",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_2",
+        server_message_id="profile_fields_msg_2",
+        created_at=base_time + timedelta(minutes=3),
+    )
+    _insert_event(
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="广州",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_3",
+        server_message_id="profile_fields_msg_3",
+        created_at=base_time + timedelta(minutes=4),
+    )
+    _insert_event(
+        open_id="customer_profile_fields",
+        account_open_id="account_profile_fields",
+        text="主要商务，但也考虑家用",
+        conversation_short_id=conversation_id,
+        event_key="profile_fields_4",
+        server_message_id="profile_fields_msg_4",
+        created_at=base_time + timedelta(minutes=5),
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_profile_fields/conversations/profile_fields_from_messages/profile"
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["source_channel"] == "douyin"
+    assert data["intent_car"] in {"宝马530Li", "530Li"}
+    assert data["car_year"] == "20款 / 21款"
+    assert data["budget"] == "30万左右"
+    assert data["city"] == "广州"
+    assert "18万" not in json.dumps(data, ensure_ascii=False)
+    assert "深圳" not in json.dumps(data, ensure_ascii=False)
+    assert "purpose" not in data
+    assert "usage" not in data
+
+
 def test_conversation_profile_query_route_accepts_slash_in_conversation_id():
     conversation_id = "conv/open/id"
     _insert_event(
@@ -639,6 +716,17 @@ def test_frontend_profile_url_uses_query_route_and_keeps_manual_send_boundary():
     assert "/conversations/" not in profile_fn
     assert '"/integrations/douyin/live-check/messages/send"' in content
     assert "manual_confirmed: true" in content
+
+
+def test_frontend_workbench_filters_duplicate_status_tags_without_hiding_status_badge():
+    source = "frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx"
+    content = open(source, encoding="utf-8").read()
+
+    assert "STATUS_DUPLICATE_TAG_VALUES" in content
+    assert "visibleConversationTags(conversation.tags, leadStatus)" in content
+    assert "conversationLeadStatusForList(" in content
+    assert "待跟进" in content
+    assert "retained_contact" in content
 
 
 def test_conversation_profile_returns_404_when_conversation_not_found_in_account_scope():
@@ -878,9 +966,9 @@ def test_query_conversation_messages_does_not_parse_unrelated_events():
 
     original = service._row_to_message
 
-    def _tracking_row_to_message(row):
+    def _tracking_row_to_message(db, row):
         parsed_event_ids.append(row.id)
-        return original(row)
+        return original(db, row)
 
     with patch.object(service, "_row_to_message", side_effect=_tracking_row_to_message):
         messages = _client().get(
@@ -921,9 +1009,9 @@ def test_account_conversations_does_not_parse_unrelated_account_events():
 
     original = service._row_to_message
 
-    def _tracking_row_to_message(row):
+    def _tracking_row_to_message(db, row):
         parsed_event_ids.append(row.id)
-        return original(row)
+        return original(db, row)
 
     with patch.object(service, "_row_to_message", side_effect=_tracking_row_to_message):
         items = _client().get(
