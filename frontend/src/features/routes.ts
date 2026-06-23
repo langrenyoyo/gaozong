@@ -16,10 +16,9 @@ export const capabilityRoutes: CapabilityRoute[] = [
 export const legacyRouteRedirects: LegacyRouteRedirect[] = [
   { from: "/douyin-ai-cs", to: "/douyin-cs/workbench" },
   { from: "/douyin-ai-cs/reply-records", to: "/douyin-cs/workbench" },
-  { from: "/douyin-ai-cs/auto-reply-settings", to: "/douyin-cs/workbench" },
+  { from: "/douyin-ai-cs/auto-reply-settings", to: "/douyin-cs/auto-reply-settings" },
   { from: "/douyin-ai-cs/auto-reply-runs", to: "/douyin-cs/workbench" },
   { from: "/douyin-cs/reply-records", to: "/douyin-cs/workbench" },
-  { from: "/douyin-cs/auto-reply-settings", to: "/douyin-cs/workbench" },
   { from: "/douyin-cs/auto-reply-runs", to: "/douyin-cs/workbench" },
   { from: "/douyin-ai-cs-test", to: "/douyin-cs/workbench" },
   { from: "/leads/list", to: "/leads" },

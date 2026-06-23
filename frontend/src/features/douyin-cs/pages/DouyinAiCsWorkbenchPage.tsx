@@ -19,6 +19,7 @@ import {
   XIcon,
   UserRoundIcon,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import {
   bindAuthorizedOpenId,
@@ -673,6 +674,7 @@ function matchDeepLinkedConversation(
 }
 
 export default function DouyinAiCsWorkbenchPage() {
+  const navigate = useNavigate();
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [conversations, setConversations] = useState<DouyinConversationItem[]>([]);
@@ -1924,6 +1926,13 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }
 
+  function openAutoReplySettings() {
+    if (!selectedAccount?.account_open_id) return;
+    navigate(
+      `/douyin-cs/auto-reply-settings?account_open_id=${encodeURIComponent(selectedAccount.account_open_id)}`,
+    );
+  }
+
   return (
     <section className="flex h-full min-w-0 flex-col overflow-hidden bg-[#f3f6fa]">
       <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
@@ -2196,32 +2205,42 @@ export default function DouyinAiCsWorkbenchPage() {
                 </div>
               ) : null}
             </div>
-            <div className="flex shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onClick={() => void changeAccountMode("ai_auto_reply")}
-                disabled={!selectedAccount || !activeBindingReady || savingAccountMode || loadingAccountMode}
-                className={`h-8 rounded px-3 text-[11px] font-semibold ${
-                  effectiveChatAssistMode === "ai_auto_reply"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-white disabled:text-slate-400"
-                }`}
-                title={!activeBindingReady ? "请先为该抖音号配置智能体" : undefined}
+                onClick={openAutoReplySettings}
+                disabled={!selectedAccount?.account_open_id}
+                className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
               >
-                {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI自动回复"}
+                自动回复策略
               </button>
-              <button
-                type="button"
-                onClick={() => void changeAccountMode("manual_takeover")}
-                disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
-                className={`h-8 rounded px-3 text-[11px] font-semibold ${
-                  effectiveChatAssistMode === "manual_takeover"
-                    ? "bg-amber-500 text-white shadow-sm"
-                    : "text-slate-600 hover:bg-white disabled:text-slate-400"
-                }`}
-              >
-                {savingAccountMode && chatAssistMode === "manual_takeover" ? "保存中..." : "人工接管"}
-              </button>
+              <div className="flex overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => void changeAccountMode("ai_auto_reply")}
+                  disabled={!selectedAccount || !activeBindingReady || savingAccountMode || loadingAccountMode}
+                  className={`h-8 rounded px-3 text-[11px] font-semibold ${
+                    effectiveChatAssistMode === "ai_auto_reply"
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-white disabled:text-slate-400"
+                  }`}
+                  title={!activeBindingReady ? "请先为该抖音号配置智能体" : undefined}
+                >
+                  {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI自动回复"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void changeAccountMode("manual_takeover")}
+                  disabled={!selectedAccount || savingAccountMode || loadingAccountMode}
+                  className={`h-8 rounded px-3 text-[11px] font-semibold ${
+                    effectiveChatAssistMode === "manual_takeover"
+                      ? "bg-amber-500 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-white disabled:text-slate-400"
+                  }`}
+                >
+                  {savingAccountMode && chatAssistMode === "manual_takeover" ? "保存中..." : "人工接管"}
+                </button>
+              </div>
             </div>
           </div>
 

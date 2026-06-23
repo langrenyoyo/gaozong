@@ -10,6 +10,7 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import {
@@ -320,6 +321,8 @@ function SendEnableConfirmModal({
 }
 
 export default function DouyinAutoReplySettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryAccountOpenId = searchParams.get("account_open_id")?.trim() || "";
   const [items, setItems] = useState<DouyinAutoReplySettingItem[]>([]);
   const [selectedAccountOpenId, setSelectedAccountOpenId] = useState<string>("");
   const [form, setForm] = useState<DouyinAutoReplySettingUpdateRequest>(defaultForm());
@@ -343,14 +346,14 @@ export default function DouyinAutoReplySettingsPage() {
     try {
       const nextItems = await getDouyinAutoReplySettings();
       setItems(nextItems);
-      setSelectedAccountOpenId((current) => current || nextItems[0]?.account_open_id || "");
+      setSelectedAccountOpenId((current) => current || queryAccountOpenId || nextItems[0]?.account_open_id || "");
     } catch (err) {
       setItems([]);
       setError(resolveErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [queryAccountOpenId]);
 
   useEffect(() => {
     void loadSettings();
@@ -400,8 +403,8 @@ export default function DouyinAutoReplySettingsPage() {
       );
       setForm(defaultForm(updated));
       setSavedSendEnabled(Boolean(updated.send_enabled));
-      setNotice("配置已保存。保存配置不会立即发送消息。");
-      toast.success("AI自动回复配置已保存");
+      setNotice("自动回复策略已保存。策略只影响后续新客户消息，不会重跑历史自动回复记录。");
+      toast.success("自动回复策略已保存");
     } catch (err) {
       const message = resolveErrorMessage(err);
       setError(message);
@@ -423,13 +426,18 @@ export default function DouyinAutoReplySettingsPage() {
     void saveSettings(form);
   }
 
+  function handleSelectAccount(accountOpenId: string) {
+    setSelectedAccountOpenId(accountOpenId);
+    setSearchParams({ account_open_id: accountOpenId });
+  }
+
   const accountCards = items.map((item) => {
     const active = item.account_open_id === selectedAccountOpenId;
     return (
       <button
         key={item.account_open_id}
         type="button"
-        onClick={() => setSelectedAccountOpenId(item.account_open_id)}
+        onClick={() => handleSelectAccount(item.account_open_id)}
         className={`w-full rounded-md border px-3 py-3 text-left transition-colors ${
           active ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"
         }`}
