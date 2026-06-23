@@ -27,6 +27,9 @@ export interface Lead {
   display_status?: string | null;
   status_label?: string | null;
   status_reason?: string | null;
+  // 销售跟进状态（纯派生）：no_feedback 未反馈 / contacted 已联系 / contact_invalid 联系方式错误
+  sales_followup_status?: string | null;
+  sales_followup_label?: string | null;
   lead_score?: {
     score?: number;
     level?: string;

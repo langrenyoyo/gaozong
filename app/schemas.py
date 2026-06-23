@@ -462,6 +462,9 @@ class LeadOut(BaseModel):
     status_label: Optional[str] = None
     status_reason: Optional[str] = None
     lead_score: Optional[dict] = None
+    # 销售跟进状态（纯派生）：no_feedback 未反馈 / contacted 已联系 / contact_invalid 联系方式错误
+    sales_followup_status: Optional[str] = None
+    sales_followup_label: Optional[str] = None
     assigned_staff: Optional[dict] = None
     timeline: list[dict] = Field(default_factory=list)
     raw_data: Optional[str] = None
@@ -496,6 +499,8 @@ class LeadOut(BaseModel):
                 "status_label": getattr(value, "status_label", None),
                 "status_reason": getattr(value, "status_reason", None),
                 "lead_score": getattr(value, "lead_score", None),
+                "sales_followup_status": getattr(value, "sales_followup_status", None),
+                "sales_followup_label": getattr(value, "sales_followup_label", None),
                 "assigned_staff": getattr(value, "assigned_staff", None),
                 "timeline": getattr(value, "timeline", []),
                 "raw_data": getattr(value, "raw_data", None),

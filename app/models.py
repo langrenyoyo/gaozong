@@ -193,7 +193,7 @@ class WechatTask(Base):
     mode = Column(String(20), nullable=False, default="paste_only",
                   comment="执行模式: paste_only / single_send")
     status = Column(String(20), nullable=False, default="pending",
-                    comment="任务状态: pending / running / pasted / failed / blocked / cancelled")
+                    comment="任务状态: pending / running / pasted / sent / failed / blocked / cancelled")
     failure_stage = Column(String(100), comment="失败阶段标识")
     raw_result = Column(Text, comment="Agent 返回的原始结果 JSON")
     agent_hostname = Column(String(100), comment="执行 Agent 的主机名")

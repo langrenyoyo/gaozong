@@ -85,6 +85,12 @@ def auto_assign_next(db: Session, lead_id: int) -> DouyinLead:
     if not lead:
         raise ValueError(f"线索不存在: {lead_id}")
 
+    # 只分配一次：已分配的线索不自动重复分配（P0-DY-LEAD-CAPTURE 状态口径修正）。
+    # 自动分配只允许首次进入销售链路；未反馈/已联系/联系方式错误均不触发重新分配。
+    # 如需改派请走 assign_lead（手动指定销售）。
+    if lead.assigned_staff_id is not None:
+        raise ValueError("线索已分配销售，不自动重复分配")
+
     if not lead.merchant_id:
         raise ValueError("线索未归属商户，无法按商户隔离分配")
 

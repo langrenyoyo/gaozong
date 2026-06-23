@@ -27,8 +27,13 @@ def analyze_reply(db, reply_content: str) -> tuple[bool, str]:
 
     effective_kw_str = get_config_value(db, "effective_keywords",
                                          "收到,已添加,已联系,已通过,通过了,OK,好的,正在处理")
-    invalid_kw_str = get_config_value(db, "invalid_keywords",
-                                       "不知道,不清楚,等下再说,没空,无法处理")
+    # invalid_keywords 默认值含「联系方式错误」类关键词（P0-DY-LEAD-CAPTURE 状态口径修正），
+    # 使销售反馈空号/打不通/加不上等能被判为 invalid（而非默认有效），与 sales_followup_service 派生口径统一。
+    invalid_kw_str = get_config_value(
+        db,
+        "invalid_keywords",
+        "不知道,不清楚,等下再说,没空,无法处理,空号,打不通,加不上,号码错误,微信错误,联系方式错误,号码不存在,号码无效",
+    )
 
     effective_keywords = [k.strip() for k in effective_kw_str.split(",") if k.strip()]
     invalid_keywords = [k.strip() for k in invalid_kw_str.split(",") if k.strip()]

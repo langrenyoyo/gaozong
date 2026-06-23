@@ -34,12 +34,14 @@ from app.models import (
     DouyinLead,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
+    LeadNotification,
     SalesStaff,
     CheckConfig,
     WechatTask,
     ReplyCheck,
 )
 from app.config import DEFAULT_CONFIGS
+from app.services.contact_extractor import extract_contacts_from_text
 from app.integrations.douyin_webhook import (
     WebhookSignatureError,
     verify_signature,
@@ -48,6 +50,7 @@ from app.integrations.douyin_webhook import (
     normalize_message_text,
     build_event_key,
     process_webhook_event,
+    _dispatch_lead_after_create,
 )
 
 # 测试用签名密钥
@@ -1519,6 +1522,94 @@ def test_webhook_dispatch_no_contact_does_not_dispatch():
         assert lead.assigned_staff_id is None
         tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
         assert len(tasks) == 0
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_id])
+
+
+def test_webhook_dispatch_skips_already_assigned():
+    """场景 2（只分配一次）：lead 已 assigned → dispatch 前置守卫拦截（already_assigned），
+    不重新分配、不重复建任务。未反馈/已联系/联系方式错误均不触发重新分配。"""
+    staff_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="已分配守卫销售",
+        wechat_nickname="已分配守卫微信",
+    )
+    try:
+        db = _db()
+        # 先用 webhook 正常派单一次（lead 进入 assigned + 建任务）
+        payload = _sample_payload(
+            from_user_id="wh_assigned_001",
+            nick_name="已分配客户",
+            message_text="手机 13800002222",
+        )
+        with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+            process_webhook_event(db, payload)
+        db.commit()
+        lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_assigned_001").one()
+        assert lead.assigned_staff_id == staff_id
+        tasks_before = db.query(WechatTask).filter(
+            WechatTask.lead_id == lead.id, WechatTask.task_type == "notify_sales"
+        ).count()
+        assert tasks_before == 1
+
+        # 直接对已 assigned lead 再次 dispatch → 前置守卫拦截，不新建任务
+        contact_result = extract_contacts_from_text("手机 13800002222")
+        diag = _dispatch_lead_after_create(db, lead, contact_result, "test_merchant_001")
+        db.commit()
+        assert diag["assign_reason"] == "already_assigned"
+        tasks_after = db.query(WechatTask).filter(
+            WechatTask.lead_id == lead.id, WechatTask.task_type == "notify_sales"
+        ).count()
+        assert tasks_after == 1  # 未重复建任务
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_id])
+
+
+def test_webhook_dispatch_skips_existing_sent_notification():
+    """场景 3 扩展（只分配一次）：lead 已有 sent 通知记录 → dispatch 前置守卫拦截
+    （notification_exists），不分配、不重复建任务。"""
+    staff_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="通知守卫销售",
+        wechat_nickname="通知守卫微信",
+    )
+    try:
+        db = _db()
+        # 手动构造一条 pending lead（无 assigned）+ 一条已发送销售通知
+        lead = DouyinLead(
+            source="douyin",
+            lead_type="私信",
+            customer_name="通知守卫客户",
+            source_id="wh_notif_001",
+            merchant_id="test_merchant_001",
+            status="pending",
+            account_open_id="test_account_001",
+            conversation_short_id="conv_notif_001",
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        db.add(
+            LeadNotification(
+                lead_id=lead.id,
+                staff_id=staff_id,
+                send_status="sent",
+                notification_text="历史通知",
+            )
+        )
+        db.commit()
+
+        contact_result = extract_contacts_from_text("手机 13800003333")
+        diag = _dispatch_lead_after_create(db, lead, contact_result, "test_merchant_001")
+        db.commit()
+        assert diag["task_reason"].startswith("notification_exists")
+        # 不建任务、不分配
+        tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
+        assert len(tasks) == 0
+        db.refresh(lead)
+        assert lead.assigned_staff_id is None
         db.close()
     finally:
         _cleanup_staff_and_related([staff_id])

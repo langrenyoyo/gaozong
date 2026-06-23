@@ -173,13 +173,10 @@ function deriveOperationalTags(
   if (lead.status === "timeout" || relatedChecks.some((item) => item.check_status === "timeout")) {
     reasons.follow_up.push("销售跟进检测已超时，建议抖音私信二次提醒");
   }
-  if (
-    hasRetainedContact(lead) &&
-    lead.assigned_staff_id &&
-    relatedNotifications.some(notificationSentToStaff) &&
-    !relatedChecks.some((item) => item.check_status === "replied")
-  ) {
-    reasons.follow_up.push("已留资并进入销售跟进链路，尚未检测到有效回复");
+  // 联系方式错误 → 待回访（销售反馈号码无效，需抖音私信向客户核实）
+  // 注：「已分配+已通知+暂无反馈」属于销售跟进状态 no_feedback（未反馈），不再归为待回访
+  if (lead.sales_followup_status === "contact_invalid") {
+    reasons.follow_up.push("销售反馈联系方式错误，建议抖音私信向客户核实");
   }
 
   if (hasRetainedContact(lead)) {
@@ -1070,15 +1067,33 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
             <MoreHorizontalIcon size={15} />
           </button>
         </div>
-        {/* 已跟进状态提示 */}
-        {lead.status === "replied" ? (
+        {/* 销售跟进状态提示：未反馈 / 已联系 / 联系方式错误（纯派生，P0-DY-LEAD-CAPTURE 状态口径） */}
+        {lead.sales_followup_status === "contacted" ? (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-xs">
             <div className="flex items-center gap-2">
               <CheckCircleIcon size={14} className="text-emerald-600" />
-              <span className="font-semibold text-emerald-700">已跟进</span>
+              <span className="font-semibold text-emerald-700">已联系</span>
             </div>
-            <p className="mt-1.5 text-[11px] text-emerald-600">
-              可在微信助手页查看检测记录
+            <p className="mt-1.5 text-[11px] text-emerald-600">已检测到销售有效回复</p>
+          </div>
+        ) : lead.sales_followup_status === "no_feedback" ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircleIcon size={14} className="text-amber-600" />
+              <span className="font-semibold text-amber-700">未反馈</span>
+            </div>
+            <p className="mt-1.5 text-[11px] text-amber-600">
+              已分配销售并发送通知，暂无销售反馈（不会重新分配）
+            </p>
+          </div>
+        ) : lead.sales_followup_status === "contact_invalid" ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircleIcon size={14} className="text-rose-600" />
+              <span className="font-semibold text-rose-700">联系方式错误</span>
+            </div>
+            <p className="mt-1.5 text-[11px] text-rose-600">
+              销售反馈号码无效，建议抖音私信向客户核实
             </p>
           </div>
         ) : null}

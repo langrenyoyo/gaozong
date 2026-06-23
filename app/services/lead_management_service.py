@@ -19,6 +19,7 @@ from app.models import (
     ReplyCheck,
     SalesStaff,
 )
+from app.services import sales_followup_service
 
 
 HIGH_INTENT_KEYWORDS = ("价格", "多少钱", "报价", "最低", "预算", "看车", "到店", "电话", "微信", "联系")
@@ -133,6 +134,8 @@ def lead_score(lead: DouyinLead) -> dict[str, Any]:
 
 def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = False) -> dict[str, Any]:
     """构造兼容旧 LeadOut 的响应字典，并追加展示字段。"""
+    # 销售跟进状态（纯派生：未反馈/已联系/联系方式错误），供前端 AI小高线索页面展示
+    followup_status = sales_followup_service.derive_sales_followup_status(db, lead)
     payload = {
         "id": lead.id,
         "source": lead.source,
@@ -155,6 +158,8 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
         "status_label": status_label(lead.status),
         "status_reason": _status_reason(lead),
         "lead_score": lead_score(lead),
+        "sales_followup_status": followup_status,
+        "sales_followup_label": sales_followup_service.sales_followup_label(followup_status),
     }
     if include_detail:
         staff = db.get(SalesStaff, lead.assigned_staff_id) if lead.assigned_staff_id else None
@@ -169,7 +174,7 @@ def _status_reason(lead: DouyinLead) -> str:
     if lead.status == "assigned":
         return "销售跟进中"
     if lead.status == "replied":
-        return "已检测到销售回复或客户已留资"
+        return "已检测到销售有效回复"
     if lead.status == "timeout":
         return "超过跟进时限"
     if lead.status == "closed":

@@ -27,6 +27,7 @@ from app.models import (
     DouyinAuthorizedAccount,
     DouyinLead,
     DouyinWebhookEvent,
+    LeadNotification,
     ReplyCheck,
     SalesStaff,
     WechatTask,
@@ -509,6 +510,57 @@ def _dispatch_lead_after_create(
     if not lead.merchant_id:
         diag["assign_reason"] = "no_merchant"
         logger.info("webhook 留资派单跳过(no_merchant): lead_id=%d", lead.id)
+        return diag
+
+    # 前置守卫：自动分配只允许首次进入销售链路（P0-DY-LEAD-CAPTURE 状态口径修正）。
+    # 以下情况直接跳过分配/建任务，不因「未反馈/已联系/联系方式错误」重复分配：
+    #   1. lead 已有 assigned_staff_id
+    #   2. lead.status 非 pending（assigned/replied/timeout/closed）
+    #   3. 已存在任意状态的 notify_sales 任务
+    #   4. 已存在已发送的销售通知记录
+    if lead.assigned_staff_id is not None:
+        diag["assign_reason"] = "already_assigned"
+        logger.info(
+            "webhook 留资派单跳过(already_assigned): lead_id=%d, staff_id=%s",
+            lead.id, lead.assigned_staff_id,
+        )
+        return diag
+    if lead.status != "pending":
+        diag["assign_reason"] = f"status_not_pending:{lead.status}"
+        logger.info(
+            "webhook 留资派单跳过(status_not_pending): lead_id=%d, status=%s",
+            lead.id, lead.status,
+        )
+        return diag
+    existing_any_task = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.lead_id == lead.id,
+            WechatTask.task_type == "notify_sales",
+        )
+        .first()
+    )
+    if existing_any_task:
+        diag["task_reason"] = f"task_exists:{existing_any_task.id}"
+        logger.info(
+            "webhook 留资派单跳过(task_exists): lead_id=%d, task_id=%d, status=%s",
+            lead.id, existing_any_task.id, existing_any_task.status,
+        )
+        return diag
+    existing_notification = (
+        db.query(LeadNotification)
+        .filter(
+            LeadNotification.lead_id == lead.id,
+            LeadNotification.send_status == "sent",
+        )
+        .first()
+    )
+    if existing_notification:
+        diag["task_reason"] = f"notification_exists:{existing_notification.id}"
+        logger.info(
+            "webhook 留资派单跳过(notification_exists): lead_id=%d, notification_id=%d",
+            lead.id, existing_notification.id,
+        )
         return diag
 
     # 1. 按商户隔离分配销售
