@@ -264,6 +264,7 @@ async def create_reply_suggestion_proxy(
             "agent_id": agent.agent_id,
             "agent_name": agent.name,
             "system_prompt": agent.prompt or "",
+            "prompt": agent.prompt or "",
             "knowledge_base_text": agent.knowledge_base_text or "",
             "status": agent.status,
             "allowed_category_keys": allowed_category_keys,

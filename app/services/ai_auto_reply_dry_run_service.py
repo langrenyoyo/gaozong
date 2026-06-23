@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 from datetime import datetime
 from typing import Any
 
@@ -181,6 +182,11 @@ def _run_with_session(db, *, event_id: int) -> None:
         source_system=binding.tenant_id or "douyin_webhook",
     )
     allowed_category_keys = _build_allowed_category_keys(db, context=context, agent_id=binding.agent.agent_id)
+    agent_gate = _build_agent_gate_result(
+        agent_id=binding.agent.agent_id,
+        agent_name=binding.agent.name,
+        prompt=binding.agent.prompt or "",
+    )
     history_gate: dict[str, Any] = {"status": "ok"}
     try:
         conversation_history = build_conversation_history(
@@ -211,6 +217,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             "agent_id": binding.agent.agent_id,
             "agent_name": binding.agent.name,
             "system_prompt": binding.agent.prompt or "",
+            "prompt": binding.agent.prompt or "",
             "knowledge_base_text": binding.agent.knowledge_base_text or "",
             "status": binding.agent.status,
             "allowed_category_keys": allowed_category_keys,
@@ -227,7 +234,11 @@ def _run_with_session(db, *, event_id: int) -> None:
             "account_open_id": account_open_id,
             "agent_id": binding.agent.agent_id,
             "status": "running",
-            "gate_results_json": _json_dumps({"pre_llm": pre_gate.gate_results or {}, "history": history_gate}),
+            "gate_results_json": _json_dumps({
+                "pre_llm": pre_gate.gate_results or {},
+                "history": history_gate,
+                "agent": agent_gate,
+            }),
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
         }
@@ -247,7 +258,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             run,
             status="failed",
             error_message=str(exc),
-            gate_results={"history": history_gate, "llm": {"status": "failed", "error": str(exc)}},
+            gate_results={"history": history_gate, "agent": agent_gate, "llm": {"status": "failed", "error": str(exc)}},
         )
         return
 
@@ -286,6 +297,7 @@ def _run_with_session(db, *, event_id: int) -> None:
         gate_results={
             "pre_llm": pre_gate.gate_results or {},
             "history": history_gate,
+            "agent": agent_gate,
             "post_llm": post_gate.gate_results or {},
         },
     )
@@ -300,6 +312,17 @@ def _existing_run(db, event_key: str | None) -> AiAutoReplyRun | None:
     if not event_key:
         return None
     return db.query(AiAutoReplyRun).filter(AiAutoReplyRun.trigger_event_key == event_key).first()
+
+
+def _build_agent_gate_result(*, agent_id: str | None, agent_name: str | None, prompt: str) -> dict[str, Any]:
+    prompt_text = str(prompt or "")
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "prompt_chars": len(prompt_text),
+        "prompt_sha256": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest() if prompt_text else "",
+    }
 
 
 def _event_content(event: DouyinWebhookEvent) -> dict[str, Any]:

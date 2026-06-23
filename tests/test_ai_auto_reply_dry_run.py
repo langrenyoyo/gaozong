@@ -99,6 +99,7 @@ def _insert_account_agent_binding(
     bind_status: int = 1,
     binding_status: str = "active",
     agent_status: str = "active",
+    agent_prompt: str = "只按知识库回答，不承诺价格。",
 ) -> None:
     db = TestSession()
     try:
@@ -118,7 +119,7 @@ def _insert_account_agent_binding(
                 merchant_id=merchant_id,
                 name="测试智能体",
                 avatar_seed="seed",
-                prompt="只按知识库回答，不承诺价格。",
+                prompt=agent_prompt,
                 knowledge_base_text="A6 可介绍配置和到店咨询。",
                 status=agent_status,
             )
@@ -557,6 +558,41 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         assert run.decision_log_id is not None
         log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
         assert log.final_auto_send == 1
+    finally:
+        db.close()
+
+
+def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    agent_prompt = "唯一指令：每次回复都要自然引导客户留手机号。"
+    event_id = _insert_event(
+        text="这俩我都关注。要是有现车，能先把检测报告和最低价发我看看吗？",
+        event_key="event-bound-agent-prompt",
+        server_message_id="latest-bound-agent-msg",
+    )
+    _insert_account_agent_binding(agent_prompt=agent_prompt)
+    _insert_autoreply_settings()
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    assert len(fake_client.calls) == 1
+    payload = fake_client.calls[0]["request"]
+    assert payload["agent_config"]["system_prompt"] == agent_prompt
+    assert payload["agent_config"]["prompt"] == agent_prompt
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).one()
+        gate_results = json.loads(run.gate_results_json)
+        assert gate_results["agent"]["status"] == "ok"
+        assert gate_results["agent"]["agent_id"] == "agent-1"
+        assert gate_results["agent"]["agent_name"] == "测试智能体"
+        assert gate_results["agent"]["prompt_chars"] == len(agent_prompt)
+        assert len(gate_results["agent"]["prompt_sha256"]) == 64
     finally:
         db.close()
 

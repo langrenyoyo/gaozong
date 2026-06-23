@@ -119,6 +119,9 @@ PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低
 FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
 INVENTORY_KEYWORDS = ("现车", "现车猫", "库存", "在库", "车源", "有吗", "有没有")
 CONTACT_KEYWORDS = ("加微信", "微信", "电话", "手机号", "联系方式", "联系你", "留个联系方式")
+PHONE_LEAD_CAPTURE_KEYWORDS = ("手机号", "留电话", "留个电话", "留下电话", "留资", "留联系方式", "手机发送", "发您手机")
+PHONE_CONTACT_KEYWORDS = ("电话", "手机号", "留电话", "留个电话", "留下电话", "发您手机", "手机上")
+WECHAT_CONTACT_KEYWORDS = ("加微信", "微信", "个人号")
 VEHICLE_CONDITION_KEYWORDS = ("车况", "无事故", "精品车况", "原版原漆", "泡水", "火烧", "公里数")
 LEGAL_OR_TRANSFER_KEYWORDS = ("过户", "手续", "上牌", "抵押", "违章", "合同", "发票")
 COMPLAINT_KEYWORDS = ("投诉", "举报", "退款", "退订", "纠纷", "维权", "售后")
@@ -286,6 +289,7 @@ def build_reply_suggestion(
         douyin_account_id,
     )
     merchant_prompt = apply_agent_prompt(merchant_prompt, agent)
+    agent_phone_goal = _agent_requires_phone_lead_capture(agent)
     allowed_category_keys = _normalized_optional_list(
         request.agent_config.allowed_category_keys if request.agent_config else None
     )
@@ -346,7 +350,12 @@ def build_reply_suggestion(
     if _is_audi_a6(message):
         decision = _apply_safety_postprocess(
             _default_rule_decision(
-                reply_text="目前奥迪A6暂时没有现车，可以看看同级别的宝马5系和奔驰E级。",
+                reply_text=_build_agent_phone_goal_fallback_reply(
+                    latest_message=request.latest_message,
+                    conversation_history=request.conversation_history,
+                )
+                if agent_phone_goal
+                else "目前奥迪A6暂时没有现车，可以看看同级别的宝马5系和奔驰E级。",
                 confidence=0.82,
                 detected_vehicle="奥迪A6",
             ),
@@ -355,6 +364,7 @@ def build_reply_suggestion(
             rag_used=False,
             llm_raw_auto_send=False,
             direct_llm_policy=request.direct_llm_policy,
+            allow_phone_lead_capture=agent_phone_goal,
         )
         if direct_llm_unavailable:
             decision["manual_required"] = True
@@ -384,7 +394,12 @@ def build_reply_suggestion(
 
     decision = _apply_safety_postprocess(
         _default_rule_decision(
-            reply_text="请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。",
+            reply_text=_build_agent_phone_goal_fallback_reply(
+                latest_message=request.latest_message,
+                conversation_history=request.conversation_history,
+            )
+            if agent_phone_goal
+            else "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。",
             confidence=0.5,
         ),
         latest_message=request.latest_message,
@@ -392,6 +407,7 @@ def build_reply_suggestion(
         rag_used=False,
         llm_raw_auto_send=False,
         direct_llm_policy=request.direct_llm_policy,
+        allow_phone_lead_capture=agent_phone_goal,
     )
     if direct_llm_unavailable:
         decision["manual_required"] = True
@@ -579,6 +595,7 @@ def _build_llm_reply(
     ]
     messages = build_llm_messages(request, merchant_prompt, source_chunks)
     client = OpenAICompatibleClient()
+    agent_phone_goal = _agent_requires_phone_lead_capture(agent)
     try:
         result = client.chat(messages)
     except LLMNotConfiguredError:
@@ -696,6 +713,33 @@ def _build_llm_reply(
                 confidence=0.5,
             )
             retry_warnings.append("llm_retry_failed_used_natural_fallback")
+    if agent_phone_goal and not _reply_has_phone_lead_capture(str(decision.get("reply_text") or "")):
+        retry_messages = _build_llm_phone_goal_retry_messages(
+            messages,
+            known_customer_info=known_customer_info,
+            bad_reply=str(decision.get("reply_text") or ""),
+        )
+        try:
+            result = client.chat(retry_messages)
+            decision = _parse_structured_llm_decision(result.get("reply_text"))
+            retry_warnings.append("llm_retry_for_agent_phone_goal")
+        except (LLMNotConfiguredError, LLMRequestError) as exc:
+            _logger.warning(
+                "reply_suggestion_llm_retry_failed stage=llm_retry_agent_phone_goal "
+                "tenant_id=%s merchant_id=%s conversation_id=%s error=%s",
+                request.tenant_id,
+                request.merchant_id,
+                conversation_id,
+                _safe_error_summary(exc),
+            )
+            decision = _default_rule_decision(
+                reply_text=_build_agent_phone_goal_fallback_reply(
+                    latest_message=request.latest_message,
+                    conversation_history=request.conversation_history,
+                ),
+                confidence=0.5,
+            )
+            retry_warnings.append("llm_retry_failed_used_agent_goal_fallback")
     decision = _apply_safety_postprocess(
         decision,
         latest_message=request.latest_message,
@@ -703,6 +747,7 @@ def _build_llm_reply(
         rag_used=rag_used,
         llm_raw_auto_send=decision.get("llm_raw_auto_send"),
         direct_llm_policy=request.direct_llm_policy,
+        allow_phone_lead_capture=agent_phone_goal,
     )
     reply_text = decision["reply_text"]
     log_llm_call(
@@ -750,6 +795,10 @@ def _build_llm_reply(
 
 def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks) -> list[dict]:
     """拼装发送给大模型的 system prompt 和 user prompt。"""
+    agent_phone_goal = (
+        merchant_prompt.get("agent_category") == "bound_agent"
+        and _agent_prompt_requires_phone_lead_capture(merchant_prompt.get("system_prompt"))
+    )
     system_prompt = "\n".join(
         [
             "你是该商户的抖音私信销售客服。",
@@ -778,13 +827,18 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         ]
     )
     if merchant_prompt.get("system_prompt"):
-        system_prompt = "\n".join(
-            [
+        system_parts = [
                 _sanitize_merchant_system_prompt(merchant_prompt["system_prompt"]),
                 "你只能根据商户知识库和当前 Agent 的业务边界回答。",
                 "不要虚构库存、价格、优惠、金融方案、联系方式、车况、到店时间。",
                 "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
-                "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
+        ]
+        if agent_phone_goal:
+            system_parts.append("不要引导加微信或个人号；如果当前 Agent 提示词要求留资，可以自然引导客户留下手机号或电话。")
+        else:
+            system_parts.append("Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。")
+        system_parts.extend(
+            [
                 "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
                 "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
                 "已知客户信息会通过 known_customer_info 提供，请作为上下文使用，不要机械复述成槽位列表。",
@@ -802,6 +856,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
                 CONVERSATION_HISTORY_POLICY,
             ]
         )
+        system_prompt = "\n".join(system_parts)
     conversation_history = _sanitize_conversation_history(request.conversation_history)
     known_requirements = _extract_customer_requirements(
         latest_message=request.latest_message,
@@ -831,6 +886,12 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
                 "agent_category": merchant_prompt.get("agent_category"),
                 "reply_style": merchant_prompt.get("reply_style"),
                 "business_scope": merchant_prompt.get("business_scope"),
+                "lead_capture_goal": {
+                    "enabled": agent_phone_goal,
+                    "channel": "phone" if agent_phone_goal else None,
+                    "reason": "当前绑定 Agent 提示词要求自然引导手机号留资" if agent_phone_goal else None,
+                    "forbidden_channels": ["微信", "个人号"],
+                },
             },
             "latest_customer_message": request.latest_message,
             "customer_message": request.latest_message,
@@ -884,6 +945,28 @@ def _build_llm_retry_messages(
         "known_customer_info": known_customer_info["known_customer_info"],
         "must_not_ask_again": known_customer_info["must_not_ask_again"],
         "instruction": "请重新生成 1 到 3 句话的自然销售回复，优先接住客户最新问题，不要再问 must_not_ask_again 中的信息。",
+    }
+    return [
+        *messages,
+        {"role": "user", "content": json.dumps(retry_payload, ensure_ascii=False)},
+    ]
+
+
+def _build_llm_phone_goal_retry_messages(
+    messages: list[dict],
+    *,
+    known_customer_info: dict[str, Any],
+    bad_reply: str,
+) -> list[dict]:
+    retry_payload = {
+        "retry_reason": "当前绑定 Agent 的目标是引导客户留下手机号，上一版回复没有自然引导手机号。",
+        "bad_reply": bad_reply,
+        "known_customer_info": known_customer_info["known_customer_info"],
+        "instruction": (
+            "请重新生成 1 到 3 句话的自然销售回复，接住客户最新问题；"
+            "不要编造库存、价格或检测结论；不要提微信或个人号；"
+            "请结合客户要检测报告、报价、车源资料等诉求，自然加入手机号留资理由。"
+        ),
     }
     return [
         *messages,
@@ -1045,6 +1128,7 @@ def _apply_safety_postprocess(
     llm_raw_auto_send: object,
     conversation_history: object = None,
     direct_llm_policy: object = None,
+    allow_phone_lead_capture: bool = False,
 ) -> dict[str, Any]:
     policy = _normalize_direct_llm_policy(direct_llm_policy)
     risk_flags = list(decision.get("risk_flags") or [])
@@ -1114,7 +1198,10 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(combined_text, CONTACT_KEYWORDS):
+    contact_risky = _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS)
+    if not contact_risky and not allow_phone_lead_capture:
+        contact_risky = _contains_any(combined_text, CONTACT_KEYWORDS)
+    if not rag_used and contact_risky:
         risk_flags.append("contact_request")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
@@ -1148,7 +1235,11 @@ def _apply_safety_postprocess(
     if risk_flags:
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
-    if not rag_used and _needs_safe_direct_reply_override(reply_text, risk_flags):
+    if not rag_used and _needs_safe_direct_reply_override(
+        reply_text,
+        risk_flags,
+        allow_phone_lead_capture=allow_phone_lead_capture,
+    ):
         decision["reply_text"] = _build_safe_direct_reply(
             latest_message=text,
             risk_flags=risk_flags,
@@ -1315,6 +1406,50 @@ def _extract_customer_requirements(
         "city": slots.get("city"),
         "concerns": _dedupe(concerns),
     }
+
+
+def _agent_requires_phone_lead_capture(agent: dict | None) -> bool:
+    if not isinstance(agent, dict):
+        return False
+    if agent.get("agent_category") != "bound_agent":
+        return False
+    prompt_parts = [
+        agent.get("system_prompt"),
+        agent.get("business_scope"),
+        agent.get("reply_style"),
+    ]
+    return _agent_prompt_requires_phone_lead_capture("\n".join(str(part or "") for part in prompt_parts))
+
+
+def _agent_prompt_requires_phone_lead_capture(prompt: object) -> bool:
+    text = str(prompt or "")
+    return _contains_any(text, PHONE_LEAD_CAPTURE_KEYWORDS)
+
+
+def _reply_has_phone_lead_capture(reply_text: str) -> bool:
+    text = str(reply_text or "")
+    return _contains_any(text, PHONE_CONTACT_KEYWORDS) and not _contains_any(text, WECHAT_CONTACT_KEYWORDS)
+
+
+def _build_agent_phone_goal_fallback_reply(
+    *,
+    latest_message: str,
+    conversation_history: object,
+) -> str:
+    slots = _extract_customer_requirements(
+        latest_message=latest_message,
+        conversation_history=conversation_history,
+    )
+    subject = _format_natural_requirement_sentence(slots)
+    if subject:
+        return (
+            f"我先按{subject}这个条件让顾问核现车和检测报告。"
+            "您方便留个手机号吗？有符合的车源，我把车况、检测报告和报价发您手机上。"
+        )
+    return (
+        "我先让顾问按您说的条件核现车、车况和检测报告。"
+        "您方便留个手机号吗？有合适车源我把检测报告和报价发您手机上。"
+    )
 
 
 def _build_known_customer_context(
@@ -1697,7 +1832,12 @@ def _direct_llm_reply_text_is_safe_for_auto_send(reply_text: str) -> bool:
     return not any(_contains_any(reply_text, keywords) for keywords in unsafe_keyword_groups)
 
 
-def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) -> bool:
+def _needs_safe_direct_reply_override(
+    reply_text: str,
+    risk_flags: list[str],
+    *,
+    allow_phone_lead_capture: bool = False,
+) -> bool:
     if not reply_text:
         return False
     if _contains_any(reply_text, DIRECT_LLM_PROMISE_KEYWORDS):
@@ -1706,7 +1846,9 @@ def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) ->
         return True
     if _contains_any(reply_text, UNSUPPORTED_PROMISE_KEYWORDS):
         return True
-    if _contains_any(reply_text, CONTACT_KEYWORDS):
+    if _contains_any(reply_text, WECHAT_CONTACT_KEYWORDS):
+        return True
+    if not allow_phone_lead_capture and _contains_any(reply_text, CONTACT_KEYWORDS):
         return True
     if re.search(r"(价格|报价|最低价|落地价|裸车价)\s*(是|在|大概|差不多)?\s*\d", reply_text):
         return True
