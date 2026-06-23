@@ -8,9 +8,16 @@
 5. 已存在字段不会重复添加
 6. 不存在目标表时能安全失败并给出清晰错误
 7. 不会修改非目标表
-8. 不需要修改 app/models.py
+8. models.py 与迁移列对齐（P0-DY-LEAD-CAPTURE 修订，见下文）
 
 另覆盖：SQL 解析、backup API 副本一致性、主线路径防护。
+
+阶段演进说明：
+- P2-A 阶段：迁移骨架先行，约束 models.py 不含留资字段（迁移 0001 在历史库补列）。
+- P0-DY-LEAD-CAPTURE 阶段：DouyinLead 正式映射留资字段（raw_message_text 等），
+  以接通抖音 Webhook 留资 → 销售通知链路。此为本阶段的合法突破。
+- 因此验收 5/8 的部分断言改为「models 已映射 + 迁移幂等补列」口径，
+  而非「models 不含新列」的旧口径。
 """
 
 import sqlite3
@@ -131,11 +138,11 @@ def test_dry_run_does_not_write(baseline_db):
     assert len(plan.will_run) > 0
     assert len(plan.errors) == 0
 
-    # 但只读 dry-run 后库未变：无 schema_migrations、无新列
+    # 但只读 dry-run 后库未变：无 schema_migrations（dry-run 真正的副作用边界）
+    # 注：baseline_db 经 create_all 已建出 models 映射的留资字段（P0-DY-LEAD-CAPTURE 后），
+    # dry-run 不应再额外创建 schema_migrations 表，列集保持稳定。
     conn = connect_readonly(baseline_db)
     assert table_exists(conn, "schema_migrations") is False
-    lead_cols = get_columns(conn, "douyin_leads")
-    assert not (LEAD_NEW_COLUMNS & lead_cols)
     conn.close()
 
 
@@ -226,9 +233,12 @@ def test_apply_idempotent_repeated(baseline_db):
 
 
 def test_existing_column_not_re_added(baseline_db):
-    # 模拟已部分迁移：手动加 raw_message_text，但版本未记录
-    conn = connect_readwrite(baseline_db)
-    conn.execute("ALTER TABLE douyin_leads ADD COLUMN raw_message_text TEXT")
+    # P0-DY-LEAD-CAPTURE 后 models 已映射 raw_message_text，
+    # baseline_db 经 create_all 已建出该列（相当于「已部分迁移」的等价状态），版本未记录。
+    # 直接验证迁移工具检测到列已存在时跳过，不抛 duplicate column 错误。
+    conn = connect_readonly(baseline_db)
+    pre_cols = get_columns(conn, "douyin_leads")
+    assert "raw_message_text" in pre_cols
     conn.close()
 
     # apply 不应抛 duplicate column 错误
@@ -290,16 +300,21 @@ def test_non_target_tables_untouched(baseline_db):
 
 
 # ---------------------------------------------------------------------------
-# 验收 8：不需要修改 app/models.py
+# 验收 8：models.py 与迁移列对齐（P0-DY-LEAD-CAPTURE 修订）
 # ---------------------------------------------------------------------------
 
 
-def test_does_not_require_models_change(baseline_db):
-    # P2-A 阶段 models.py 不含新字段
-    for col in ("raw_message_text", "extracted_phone", "reassign_count"):
-        assert not hasattr(DouyinLead, col), f"models.py 不应在 P2-A 阶段新增 {col}"
+def test_models_aligned_with_migration_columns(baseline_db):
+    """验收 8（P0-DY-LEAD-CAPTURE 修订）：models.py 已映射留资字段，与迁移 0001 对齐。
 
-    # 但迁移仍能在副本上成功加列（不依赖 SQLAlchemy 模型）
+    P2-A 阶段曾约束 models 不含留资列（迁移骨架先行）；
+    P0-DY-LEAD-CAPTURE 接通抖音留资销售通知链路后，DouyinLead 正式映射这些字段。
+    新库经 create_all 建出这些列；历史库经迁移 0001 补列；两者口径一致。
+    """
+    for col in ("raw_message_text", "extracted_phone", "reassign_count"):
+        assert hasattr(DouyinLead, col), f"models.py 应映射留资字段 {col}"
+
+    # 迁移仍能在历史库副本上成功加列（对 P2-A 历史库补列、对新库幂等跳过）
     conn = connect_readwrite(baseline_db)
     apply_migration(conn, _stmts(), CURRENT_VERSION, CURRENT_DESCRIPTION)
     conn.close()

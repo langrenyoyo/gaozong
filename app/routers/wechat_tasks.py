@@ -18,9 +18,10 @@ router = APIRouter(prefix="/wechat-tasks", tags=["微信任务队列"])
 def create_wechat_task(data: WechatTaskCreateRequest, db: Session = Depends(get_db)):
     """创建微信任务。
 
-    P0-5A 约束：
-    - 只允许 target_nickname=Aw3
-    - 只允许 mode=paste_only
+    约束（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后）：
+    - target_nickname 必须非空（真实销售微信昵称）
+    - notify_sales: mode=paste_only / single_send
+    - detect_reply: mode=read_only / paste_only
     """
     try:
         return wechat_task_service.create_wechat_task(

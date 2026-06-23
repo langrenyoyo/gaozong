@@ -44,12 +44,13 @@ def _setup_db():
     resume_automation()
 
 
-def _create_staff(db, name="测试销售", wechat_nickname="测试微信昵称"):
+def _create_staff(db, name="测试销售", wechat_nickname="测试微信昵称", merchant_id=None):
     """创建销售"""
     staff = SalesStaff(
         name=name,
         wechat_nickname=wechat_nickname,
         status="active",
+        merchant_id=merchant_id,
     )
     db.add(staff)
     db.commit()
@@ -150,7 +151,7 @@ class TestAutoNotifyAssignedLead:
         from app.services.notification_service import auto_notify_assigned_lead
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
 
             request_emergency_stop("test")
@@ -187,7 +188,7 @@ class TestAutoNotifyAssignedLead:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             check = _create_pending_check(db, lead, staff)
 
@@ -236,7 +237,7 @@ class TestSyncAutoNotify:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             db.close()
 
             response = client.post("/integrations/douyin/sync-leads", json={
@@ -267,6 +268,7 @@ class TestSyncAutoNotify:
                 "display_name": "通知客户",
                 "last_interaction_record": "咨询产品",
                 "lead_status": "pending",
+                "merchant_id": "sync_notify_merchant",
             }],
         }
         mock_search.return_value = {"success": True, "chat_title": "测试微信昵称", "chat_verified": True, "window_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700}}
@@ -281,7 +283,7 @@ class TestSyncAutoNotify:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             db.close()
 
             response = client.post("/integrations/douyin/sync-leads", json={
@@ -311,13 +313,14 @@ class TestSyncAutoNotify:
                 "open_id": "sync_notify_fail_001",
                 "display_name": "搜索失败客户",
                 "lead_status": "pending",
+                "merchant_id": "sync_notify_merchant",
             }],
         }
         mock_search.return_value = {"success": False, "message": "搜索超时"}
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             db.close()
 
             response = client.post("/integrations/douyin/sync-leads", json={
@@ -379,7 +382,7 @@ class TestSendPendingAssigned:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead1 = _create_assigned_lead(db, staff)
             lead2 = _create_assigned_lead(db, staff)
             _create_pending_check(db, lead1, staff)
@@ -405,7 +408,7 @@ class TestSendPendingAssigned:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
 
             # 已有一条成功发送的通知记录
@@ -468,7 +471,7 @@ class TestPastedOnlyStatus:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             check = _create_pending_check(db, lead, staff)
 
@@ -527,7 +530,7 @@ class TestPastedOnlyStatus:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             check = _create_pending_check(db, lead, staff)
 
@@ -575,7 +578,7 @@ class TestPastedOnlyStatus:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             _create_pending_check(db, lead, staff)
             lead_id = lead.id
@@ -639,7 +642,7 @@ class TestPastedOnlyStatus:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
 
             result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
@@ -692,7 +695,7 @@ class TestChatVerifiedBypassOCR:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             check = _create_pending_check(db, lead, staff)
 
@@ -744,7 +747,7 @@ class TestChatVerifiedBypassOCR:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
 
             result = auto_notify_assigned_lead(db, lead.id, auto_send=False)
@@ -796,7 +799,7 @@ class TestChatVerifiedBypassOCR:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             _create_pending_check(db, lead, staff)
             lead_id = lead.id
@@ -855,7 +858,7 @@ class TestChatVerifiedBypassOCR:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
             _create_pending_check(db, lead, staff)
             lead_id = lead.id
@@ -921,7 +924,7 @@ class TestChatVerifiedBypassOCR:
 
         db = SessionLocal()
         try:
-            staff = _create_staff(db)
+            staff = _create_staff(db, merchant_id="sync_notify_merchant")
             lead = _create_assigned_lead(db, staff)
 
             result = auto_notify_assigned_lead(db, lead.id, auto_send=False)

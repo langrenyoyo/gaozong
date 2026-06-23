@@ -1120,11 +1120,11 @@ def create_local_agent_app(
 
         安全约束：
         - 只处理 notify_sales 任务
-        - 只允许 target_nickname=Aw3
-        - 只允许 mode=paste_only
-        - 不按 Enter，不发送
+        - target_nickname 使用任务携带的真实销售微信昵称（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁）
+        - mode 由任务决定：paste_only 只粘贴不发送，single_send 粘贴并回车发送
         - 每次只执行一条任务
         - 不后台轮询
+        - OCR 联系人验证为硬门禁：partial_match / manual_review / 未通过均不执行
         """
         result = {
             "success": False,
@@ -1230,18 +1230,20 @@ def create_local_agent_app(
                 result["message"] = f"任务类型 {task_type} 不被支持，只支持 notify_sales"
                 return result
 
-            if target_nickname != ONLY_ALLOWED_NICKNAME:
+            # P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 Aw3 门禁，使用任务携带的真实昵称
+            if not target_nickname:
                 _write_back_task_result(result, server_url, task_id,
-                                        success=False, failure_stage="target_nickname_not_aw3",
+                                        success=False, failure_stage="target_nickname_empty",
                                         raw_result={"rejected_task": result["task"]})
-                result["message"] = f"目标联系人 {target_nickname} 不被允许，只允许 {ONLY_ALLOWED_NICKNAME}"
+                result["message"] = "任务未携带目标联系人昵称，不允许执行"
                 return result
 
-            if mode != "paste_only":
+            # 允许 paste_only（仅粘贴）和 single_send（粘贴并回车发送）
+            if mode not in ("paste_only", "single_send"):
                 _write_back_task_result(result, server_url, task_id,
-                                        success=False, failure_stage="mode_not_paste_only",
+                                        success=False, failure_stage="mode_not_supported",
                                         raw_result={"rejected_task": result["task"]})
-                result["message"] = f"执行模式 {mode} 不被支持，只支持 paste_only"
+                result["message"] = f"执行模式 {mode} 不被支持，只支持 paste_only / single_send"
                 return result
 
             if not message or not message.strip():
@@ -1376,11 +1378,13 @@ def create_local_agent_app(
                     result["message"] = foreground_guard.get("message", "粘贴前前台焦点丢失")
                     return result
 
-            # 11. paste_only
+            # 11. 写入消息：single_send 粘贴并回车发送（require_confirm=False），
+            #     paste_only 仅粘贴（require_confirm=True）
+            require_confirm = mode == "paste_only"
             write_result = write_text_to_input(
                 window,
                 message.strip(),
-                require_confirm=True,
+                require_confirm=require_confirm,
                 debug_prefix="poll_and_execute",
             )
 
@@ -1392,10 +1396,13 @@ def create_local_agent_app(
                 result["message"] = f"粘贴失败: {write_result.get('message', '')}"
                 return result
 
-            # 12. 成功 — 回写结果
+            # 12. 成功 — 回写结果（sent 由执行模式决定）
+            sent_flag = mode == "single_send"
             execution_summary = {
                 "pasted": True,
-                "sent": False,
+                "sent": sent_flag,
+                "mode": mode,
+                "write_action": write_result.get("action"),
                 "contact_verified": True,
                 "contact_verified_strategy": verify_result.get("strategy"),
                 "already_on_target": _already_on_target,
@@ -1404,10 +1411,10 @@ def create_local_agent_app(
             result["execution"] = execution_summary
 
             _write_back_task_result(result, server_url, task_id,
-                                    success=True, pasted=True, sent=False,
+                                    success=True, pasted=True, sent=sent_flag,
                                     verified=True, raw_result=execution_summary)
             result["success"] = True
-            result["message"] = "任务执行成功（paste_only）"
+            result["message"] = f"任务执行成功（{mode}）"
             return result
         except Exception as exc:
             # P0-MAIN-5B-1: 安全网 — 任何未预期异常都返回结构化 JSON 并回写失败
@@ -1560,15 +1567,15 @@ def create_local_agent_app(
                 result["message"] = f"任务类型 {task_type} 不被支持，只支持 detect_reply"
                 return result
 
-            # 4. 联系人安全验证
-            if target_nickname != ONLY_ALLOWED_NICKNAME:
+            # 4. 联系人安全验证：放开 Aw3 门禁，使用任务携带的真实昵称（非空即可）
+            if not target_nickname:
                 _write_back_task_result(
                     result, server_url, task_id,
                     success=False,
-                    failure_stage="target_nickname_not_aw3",
+                    failure_stage="target_nickname_empty",
                     raw_result={"rejected_task": result["task"]},
                 )
-                result["message"] = f"目标联系人 {target_nickname} 不被允许"
+                result["message"] = "任务未携带目标联系人昵称，不允许检测"
                 return result
 
             # 5. 紧急停止检查
@@ -1671,7 +1678,7 @@ def create_local_agent_app(
         安全约束：
         - 只读取消息，不写入输入框，不发送，不按 Enter
         - 不调用 input_writer
-        - 只允许 target_nickname=Aw3
+        - target_nickname 使用请求携带的真实昵称（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁）
         - OCR 验证失败 → blocked
         - open_chat 失败 → 不继续检测
         - sent=false, pasted=false（本接口不做任何写入操作）
@@ -1695,10 +1702,10 @@ def create_local_agent_app(
             result["message"] = "未配置主系统地址，请启动时传入 --server-url 参数"
             return result
 
-        # 2. 只允许 Aw3
-        if request.target_nickname != ONLY_ALLOWED_NICKNAME:
-            result["failure_stage"] = "target_nickname_not_aw3"
-            result["message"] = f"目标联系人 {request.target_nickname} 不被允许，只允许 {ONLY_ALLOWED_NICKNAME}"
+        # 2. 联系人昵称校验：放开 Aw3 门禁，使用请求携带的真实昵称（非空即可）
+        if not request.target_nickname:
+            result["failure_stage"] = "target_nickname_empty"
+            result["message"] = "未提供目标联系人昵称，不允许检测"
             return result
 
         # 3. 紧急停止检查

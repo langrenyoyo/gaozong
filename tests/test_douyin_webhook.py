@@ -36,6 +36,8 @@ from app.models import (
     DouyinWebhookEvent,
     SalesStaff,
     CheckConfig,
+    WechatTask,
+    ReplyCheck,
 )
 from app.config import DEFAULT_CONFIGS
 from app.integrations.douyin_webhook import (
@@ -1317,3 +1319,206 @@ def test_webhook_im_send_msg_post_process_error_does_not_affect_response():
         assert db.query(ConversationAutopilotState).count() == 0
     finally:
         db.close()
+
+
+# ========== P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：webhook 留资派单链路 ==========
+
+
+def _preset_active_staff(*, merchant_id: str, name: str, wechat_nickname: str) -> int:
+    """预置一个活跃销售（指定商户），返回 staff_id。调用方负责清理。"""
+    db = _db()
+    staff = SalesStaff(
+        name=name,
+        wechat_nickname=wechat_nickname,
+        status="active",
+        merchant_id=merchant_id,
+    )
+    db.add(staff)
+    db.commit()
+    staff_id = staff.id
+    db.close()
+    return staff_id
+
+
+def _cleanup_staff_and_related(staff_ids: list[int]) -> None:
+    """清理销售及其关联任务/检测/线索，避免跨测试污染。"""
+    db = _db()
+    try:
+        for staff_id in staff_ids:
+            db.query(WechatTask).filter(WechatTask.staff_id == staff_id).delete(synchronize_session=False)
+            db.query(ReplyCheck).filter(ReplyCheck.staff_id == staff_id).delete(synchronize_session=False)
+            db.query(DouyinLead).filter(DouyinLead.assigned_staff_id == staff_id).delete(synchronize_session=False)
+            db.query(SalesStaff).filter(SalesStaff.id == staff_id).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_webhook_dispatch_assigns_and_creates_notify_task():
+    """场景 1：留资线索 → 按商户分配销售 → 创建 notify_sales 任务（single_send，真实昵称）+ 留资字段回填。"""
+    staff_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="派单销售",
+        wechat_nickname="派单销售微信",
+    )
+    try:
+        db = _db()
+        payload = _sample_payload(
+            from_user_id="wh_dispatch_001",
+            nick_name="留资客户",
+            message_text="我的手机号是13800007777",
+        )
+        with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+            result = process_webhook_event(db, payload)
+        db.commit()
+
+        assert result["lead_action"] == "created"
+        lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_dispatch_001").one()
+        # 分配成功
+        assert lead.status == "assigned"
+        assert lead.assigned_staff_id == staff_id
+        assert lead.merchant_id == "test_merchant_001"
+        # 留资字段回填
+        assert lead.extracted_phone == "13800007777"
+        assert lead.contact_extract_status == "matched"
+
+        # notify_sales 任务已创建
+        task = db.query(WechatTask).filter(
+            WechatTask.lead_id == lead.id,
+            WechatTask.task_type == "notify_sales",
+        ).one()
+        assert task.status == "pending"
+        assert task.mode == "single_send"
+        assert task.target_nickname == "派单销售微信"
+        assert task.sent_at is None
+        # 关联 reply_check
+        assert task.reply_check_id is not None
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_id])
+
+
+def test_webhook_dispatch_idempotent_no_duplicate_task():
+    """场景 2：重复事件 → 不重复建任务（幂等）。"""
+    staff_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="幂等销售",
+        wechat_nickname="幂等销售微信",
+    )
+    try:
+        db = _db()
+        payload = _sample_payload(
+            from_user_id="wh_idem_001",
+            nick_name="幂等客户",
+            message_text="微信 wxid_idem",
+        )
+        with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+            result1 = process_webhook_event(db, payload)
+            result2 = process_webhook_event(db, payload)
+        db.commit()
+
+        assert result1["lead_action"] == "created"
+        assert result2["is_duplicate"] is True
+        assert result2["lead_action"] == "duplicate_event"
+
+        lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_idem_001").one()
+        tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
+        # 仅一个 notify_sales 任务，重复事件不重复建
+        assert len(tasks) == 1
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_id])
+
+
+def test_webhook_dispatch_merchant_isolation():
+    """场景 3：商户隔离 — 线索只分配给同 merchant_id 的销售，不跨商户。"""
+    staff_a_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="商户A销售",
+        wechat_nickname="商户A微信",
+    )
+    staff_b_id = _preset_active_staff(
+        merchant_id="other_merchant",
+        name="商户B销售",
+        wechat_nickname="商户B微信",
+    )
+    try:
+        db = _db()
+        # payload 的 to_user_id=test_account_001 → 反查 merchant_id=test_merchant_001
+        payload = _sample_payload(
+            from_user_id="wh_iso_001",
+            nick_name="隔离客户",
+            message_text="手机 13800008888",
+        )
+        with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+            result = process_webhook_event(db, payload)
+        db.commit()
+
+        assert result["lead_action"] == "created"
+        lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_iso_001").one()
+        # 分配给商户 A 销售，绝不跨商户分配给商户 B
+        assert lead.assigned_staff_id == staff_a_id
+        assert lead.merchant_id == "test_merchant_001"
+        task = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).one()
+        assert task.target_nickname == "商户A微信"
+        assert task.staff_id == staff_a_id
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_a_id, staff_b_id])
+
+
+def test_webhook_dispatch_no_active_staff_keeps_pending():
+    """场景 4：商户有绑定但无活跃销售 → lead 保持 pending，不建任务（no_active_staff 不阻断主链路）。"""
+    db = _db()
+    # 前置清理：确保 test_merchant_001 无活跃销售（避免前序测试残留干扰）
+    db.query(SalesStaff).filter(SalesStaff.merchant_id == "test_merchant_001").delete(synchronize_session=False)
+    db.commit()
+    db.close()
+
+    db = _db()
+    payload = _sample_payload(
+        from_user_id="wh_nostaff_001",
+        nick_name="无销售客户",
+        message_text="手机 13800009999",
+    )
+    with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+        result = process_webhook_event(db, payload)
+    db.commit()
+
+    assert result["lead_action"] == "created"
+    lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_nostaff_001").one()
+    assert lead.status == "pending"
+    assert lead.assigned_staff_id is None
+    tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
+    assert len(tasks) == 0
+    db.close()
+
+
+def test_webhook_dispatch_no_contact_does_not_dispatch():
+    """场景 5：文本无联系方式 → 创建 lead 但不触发分配/建任务。"""
+    staff_id = _preset_active_staff(
+        merchant_id="test_merchant_001",
+        name="无联系销售",
+        wechat_nickname="无联系微信",
+    )
+    try:
+        db = _db()
+        payload = _sample_payload(
+            from_user_id="wh_nocontact_001",
+            nick_name="纯文本客户",
+            message_text="你好，想咨询一下",
+        )
+        with patch("app.integrations.douyin_webhook.DY_SECRET_KEY", TEST_SECRET):
+            result = process_webhook_event(db, payload)
+        db.commit()
+
+        assert result["lead_action"] == "created"
+        lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_nocontact_001").one()
+        # 无联系方式 → 不派单
+        assert lead.status == "pending"
+        assert lead.assigned_staff_id is None
+        tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
+        assert len(tasks) == 0
+        db.close()
+    finally:
+        _cleanup_staff_and_related([staff_id])

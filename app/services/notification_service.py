@@ -28,6 +28,7 @@ from app.models import (
     DouyinLead, SalesStaff, ReplyCheck, LeadNotification, CheckConfig,
 )
 from app.services.automation_control import is_automation_allowed, BLOCKED_MESSAGE, set_action_in_progress
+from app.services.notification_template import DEFAULT_TEMPLATE, compose_notification_text
 from app.wechat_ui.contact_searcher import open_chat_by_nickname
 from app.wechat_ui.contact_verifier import verify_current_chat_contact
 from app.wechat_ui.input_writer import write_text_to_input
@@ -39,23 +40,14 @@ from app.wechat_ui.window_locator import (
 
 logger = logging.getLogger(__name__)
 
-# 默认通知模板（与 lead_notifications 路由保持一致）
-DEFAULT_TEMPLATE = """【新线索分配】
-客户：{customer_name}
-来源：{source}
-内容：{content}
-联系方式：{customer_contact}
-请尽快添加客户微信，并在处理完成后回复确认消息。"""
+# 默认通知模板与文本生成统一委托给 notification_template（纯文本模块，无 Windows 依赖）。
+# 此处保留 DEFAULT_TEMPLATE / _compose_notification_text 旧名，兼容既有调用方。
+# 模板内容与 lead_notifications 路由保持一致。
 
 
 def _compose_notification_text(lead: DouyinLead) -> str:
-    """根据线索生成通知文本"""
-    return DEFAULT_TEMPLATE.format(
-        customer_name=lead.customer_name or "未知客户",
-        source=lead.source or "未知来源",
-        content=lead.content or "（无内容）",
-        customer_contact=lead.customer_contact or "（未提供）",
-    )
+    """根据线索生成通知文本（委托给 notification_template，保留旧名兼容既有调用方）。"""
+    return compose_notification_text(lead)
 
 
 def auto_notify_assigned_lead(

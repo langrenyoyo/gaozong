@@ -20,6 +20,7 @@ class SalesStaff(Base):
     wechat_nickname = Column(String(100), comment="微信昵称")
     phone = Column(String(20), comment="手机号")
     status = Column(String(20), default="active", comment="状态: active/inactive")
+    merchant_id = Column(String(128), index=True, comment="所属商户 ID（商户隔离分配依据）")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -53,6 +54,16 @@ class DouyinLead(Base):
     assigned_at = Column(DateTime, comment="分配时间")
     status = Column(String(20), default="pending", comment="状态: pending/assigned/replied/timeout/closed")
     raw_data = Column(Text, comment="原始数据JSON")
+    # 以下字段对齐迁移 0001（列已存在），ORM 补齐属性以便 webhook 留资回填
+    raw_message_text = Column(Text, comment="原始消息文本（迁移 0001）")
+    extracted_phone = Column(Text, comment="提取的手机号（迁移 0001）")
+    extracted_wechat = Column(Text, comment="提取的微信号（迁移 0001）")
+    all_extracted_contacts = Column(Text, comment="全部提取到的联系方式 JSON（迁移 0001）")
+    contact_extract_status = Column(Text, comment="联系方式提取状态（迁移 0001）")
+    contact_extract_reason = Column(Text, comment="联系方式提取原因/失败说明（迁移 0001）")
+    reassign_count = Column(Integer, nullable=False, default=0, server_default="0", comment="超时重分配次数（迁移 0001，对齐 migration DEFAULT 0）")
+    customer_id = Column(Text, comment="内部客户 ID 预留（迁移 0001）")
+    external_customer_id = Column(Text, comment="外部客户 ID 预留（迁移 0001）")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

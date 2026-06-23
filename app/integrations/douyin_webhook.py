@@ -23,7 +23,15 @@ from app.config import (
     DY_ALLOWED_DRIFT_SECONDS,
     DY_SECRET_KEY,
 )
-from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
+from app.models import (
+    DouyinAuthorizedAccount,
+    DouyinLead,
+    DouyinWebhookEvent,
+    ReplyCheck,
+    SalesStaff,
+    WechatTask,
+)
+from app.services import assign_service, wechat_task_service
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
 from app.services.douyin_outbound_message_classifier import (
@@ -31,6 +39,7 @@ from app.services.douyin_outbound_message_classifier import (
     is_effective_human_outbound_message,
     outbound_skip_reason,
 )
+from app.services.notification_template import compose_notification_text
 
 logger = logging.getLogger("douyin_webhook")
 
@@ -372,6 +381,12 @@ def upsert_lead_from_webhook(
     nick_name, _avatar = extract_user_profile(payload)
     message_text = message_text if message_text is not None else normalize_message_text(content)
     customer_contact = contact_result.phone or contact_result.wechat
+    # 留资字段回填（对齐迁移 0001，P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1）
+    extracted_contacts_json = json.dumps({
+        "phones": contact_result.phones,
+        "wechats": contact_result.wechats,
+        "all": contact_result.all_contacts,
+    }, ensure_ascii=False)
 
     # 构造 raw_data：保存 payload + 解析后的 content
     raw_data = {
@@ -409,6 +424,12 @@ def upsert_lead_from_webhook(
             lead_type="私信",
             raw_data=json.dumps(raw_data, ensure_ascii=False),
             status="pending",
+            raw_message_text=message_text,
+            extracted_phone=contact_result.phone,
+            extracted_wechat=contact_result.wechat,
+            all_extracted_contacts=extracted_contacts_json,
+            contact_extract_status=contact_result.status,
+            contact_extract_reason=contact_result.failure_reason,
         )
         db.add(lead)
         db.flush()
@@ -428,6 +449,14 @@ def upsert_lead_from_webhook(
         existing.customer_contact = customer_contact or existing.customer_contact
         existing.content = message_text or existing.content
         existing.raw_data = json.dumps(raw_data, ensure_ascii=False)
+        # 留资字段回填（best-effort：本次有提取则覆盖，否则保留历史值）
+        existing.raw_message_text = message_text or existing.raw_message_text
+        existing.extracted_phone = contact_result.phone or existing.extracted_phone
+        existing.extracted_wechat = contact_result.wechat or existing.extracted_wechat
+        if contact_result.phone or contact_result.wechat:
+            existing.all_extracted_contacts = extracted_contacts_json
+            existing.contact_extract_status = contact_result.status
+            existing.contact_extract_reason = contact_result.failure_reason
         db.flush()
         logger.info(
             "webhook 更新线索(会话归并): lead_id=%d, conv=%s, status=pending",
@@ -447,6 +476,153 @@ def upsert_lead_from_webhook(
 
 
 # ========== 主处理流程 ==========
+
+
+def _dispatch_lead_after_create(
+    db: Session,
+    lead: DouyinLead,
+    contact_result: ContactExtractResult,
+    merchant_id: str | None,
+) -> dict[str, Any]:
+    """webhook 新建线索后，尝试按商户分配销售并创建 notify_sales 任务。
+
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：接通 webhook → 分配 → 任务链路。
+    任务创建后由本地 19000 Local Agent 轮询执行，本函数不调用微信自动化。
+
+    幂等 / 跳过条件：
+      1. lead.merchant_id 为空 → 不分配（reason=no_merchant）
+      2. 无活跃销售 → 不创建任务（reason=no_active_staff），不抛异常
+      3. 销售无微信昵称 → 不创建任务（reason=staff_no_wechat_nickname）
+      4. 同 lead+staff 已有 pending/pasted/sent 的 notify_sales task → 不重复创建（reason=task_exists）
+      5. 分配/建任务异常 → 记录失败原因，不阻断 webhook 主链路
+
+    返回诊断 dict（仅供日志，不影响 process_webhook_event 返回值）。
+    """
+    diag: dict[str, Any] = {
+        "triggered": True,
+        "assign_reason": None,
+        "task_reason": None,
+        "staff_id": None,
+        "task_id": None,
+    }
+
+    if not lead.merchant_id:
+        diag["assign_reason"] = "no_merchant"
+        logger.info("webhook 留资派单跳过(no_merchant): lead_id=%d", lead.id)
+        return diag
+
+    # 1. 按商户隔离分配销售
+    try:
+        assign_service.auto_assign_next(db, lead.id)
+    except ValueError as exc:
+        msg = str(exc)
+        if "没有可用的活跃销售人员" in msg:
+            diag["assign_reason"] = "no_active_staff"
+            logger.info(
+                "webhook 留资派单跳过(no_active_staff): lead_id=%d, merchant_id=%s",
+                lead.id, lead.merchant_id,
+            )
+        else:
+            diag["assign_reason"] = f"assign_failed: {msg}"
+            logger.warning(
+                "webhook 留资派单分配失败: lead_id=%d, %s", lead.id, msg,
+            )
+        return diag
+    except Exception as exc:
+        diag["assign_reason"] = f"assign_exception: {type(exc).__name__}"
+        logger.error(
+            "webhook 留资派单分配异常: lead_id=%d, error_type=%s, %s",
+            lead.id, type(exc).__name__, exc, exc_info=True,
+        )
+        return diag
+
+    # 重新加载 lead 获取 assigned_staff_id（auto_assign_next 内部已 commit）
+    db.refresh(lead)
+    if not lead.assigned_staff_id:
+        diag["assign_reason"] = "assign_no_staff_id"
+        logger.warning(
+            "webhook 留资派单分配后无 staff_id: lead_id=%d", lead.id,
+        )
+        return diag
+
+    staff = db.query(SalesStaff).filter(SalesStaff.id == lead.assigned_staff_id).first()
+    if not staff:
+        diag["task_reason"] = "staff_not_found"
+        logger.warning(
+            "webhook 留资派单: 销售记录不存在 staff_id=%d, lead_id=%d",
+            lead.assigned_staff_id, lead.id,
+        )
+        return diag
+    diag["staff_id"] = staff.id
+
+    if not staff.wechat_nickname:
+        diag["task_reason"] = "staff_no_wechat_nickname"
+        logger.info(
+            "webhook 留资派单跳过(staff_no_wechat_nickname): lead_id=%d, staff='%s'",
+            lead.id, staff.name,
+        )
+        return diag
+
+    # 2. 幂等：同 lead+staff 已有未完成 notify_sales task → 跳过
+    existing_task = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.lead_id == lead.id,
+            WechatTask.staff_id == staff.id,
+            WechatTask.task_type == "notify_sales",
+            WechatTask.status.in_(["pending", "pasted", "sent"]),
+        )
+        .first()
+    )
+    if existing_task:
+        diag["task_reason"] = f"task_exists:{existing_task.id}"
+        logger.info(
+            "webhook 留资派单跳过(task_exists): lead_id=%d, task_id=%d, status=%s",
+            lead.id, existing_task.id, existing_task.status,
+        )
+        return diag
+
+    # 3. 查找 assign_lead 已创建的 pending reply_check
+    reply_check_id = None
+    latest_check = (
+        db.query(ReplyCheck)
+        .filter(
+            ReplyCheck.lead_id == lead.id,
+            ReplyCheck.staff_id == staff.id,
+            ReplyCheck.check_status == "pending",
+        )
+        .order_by(ReplyCheck.id.desc())
+        .first()
+    )
+    if latest_check:
+        reply_check_id = latest_check.id
+
+    # 4. 创建 notify_sales 任务（single_send，真实昵称）
+    message = compose_notification_text(lead)
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            reply_check_id=reply_check_id,
+            target_nickname=staff.wechat_nickname,
+            message=message,
+            mode="single_send",
+        )
+        diag["task_id"] = task.id
+        logger.info(
+            "webhook 留资派单已建任务: lead_id=%d, staff_id=%d, task_id=%d, nickname='%s', mode=single_send",
+            lead.id, staff.id, task.id, staff.wechat_nickname,
+        )
+    except Exception as exc:
+        diag["task_reason"] = f"create_task_failed: {type(exc).__name__}"
+        logger.error(
+            "webhook 留资派单建任务失败: lead_id=%d, staff_id=%d, error_type=%s, %s",
+            lead.id, staff.id, type(exc).__name__, exc, exc_info=True,
+        )
+
+    return diag
 
 
 def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -563,6 +739,21 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             lead_action = upsert_action
             if upsert_action == "created":
                 is_new_lead = True
+                # P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：新建线索且有联系方式
+                # → 按商户分配销售 + 创建 notify_sales 任务（供 19000 轮询执行）
+                if contact_result.phone or contact_result.wechat:
+                    try:
+                        _dispatch_lead_after_create(db, lead, contact_result, merchant_id)
+                    except Exception as exc:
+                        logger.error(
+                            "webhook 留资派单异常(不影响主链路): lead_id=%d, error_type=%s, %s",
+                            lead.id, type(exc).__name__, exc, exc_info=True,
+                        )
+                else:
+                    logger.info(
+                        "webhook 留资派单跳过(无联系方式): lead_id=%d, conv=%s",
+                        lead.id, conversation_short_id,
+                    )
 
     # 首次收到的事件，写入事件日志
     event = persist_webhook_event(

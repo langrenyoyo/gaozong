@@ -60,26 +60,36 @@ def test_create_wechat_task_success():
     assert data["pasted_at"] is None
 
 
-def test_create_wechat_task_rejects_non_aw3():
-    """非 Aw3 昵称应被拒绝。"""
+def test_create_wechat_task_accepts_non_aw3_nickname():
+    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 Aw3 门禁，任意非空昵称都接受。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "啊东、",
         "message": "test",
         "mode": "paste_only",
     })
-    assert resp.status_code == 400
-    assert "Aw3" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert resp.json()["target_nickname"] == "啊东、"
 
 
-def test_create_wechat_task_rejects_non_paste_only():
-    """非 paste_only 模式应被拒绝。"""
+def test_create_wechat_task_rejects_empty_nickname():
+    """空昵称仍应被拒绝（target_nickname 必须非空）。"""
+    resp = client.post("/wechat-tasks", json={
+        "target_nickname": "",
+        "message": "test",
+        "mode": "paste_only",
+    })
+    assert resp.status_code == 422
+
+
+def test_create_wechat_task_accepts_single_send_mode():
+    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 paste_only 门禁，single_send 接受。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "Aw3",
         "message": "test",
         "mode": "single_send",
     })
-    assert resp.status_code == 400
-    assert "paste_only" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert resp.json()["mode"] == "single_send"
 
 
 # ========== 查询任务 ==========
@@ -159,12 +169,12 @@ def test_submit_result_pasted_success():
     assert data["failure_stage"] is None
 
 
-def test_submit_result_rejects_sent_true():
-    """sent=true 必须被拒绝。"""
+def test_submit_result_sent_true_marks_sent():
+    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 sent 门禁，sent=true + verified → status=sent。"""
     create_resp = client.post("/wechat-tasks", json={
         "target_nickname": "Aw3",
-        "message": "sent-reject",
-        "mode": "paste_only",
+        "message": "sent-ok",
+        "mode": "single_send",
     })
     task_id = create_resp.json()["id"]
 
@@ -173,11 +183,14 @@ def test_submit_result_rejects_sent_true():
         "verified": True,
         "pasted": True,
         "sent": True,
+        "agent_hostname": "TEST-HOST",
     })
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "failed"
-    assert data["failure_stage"] == "sent_not_allowed_for_p0_5a"
+    assert data["status"] == "sent"
+    assert data["sent_at"] is not None
+    assert data["pasted_at"] is not None
+    assert data["failure_stage"] is None
 
 
 def test_submit_result_blocks_verified_false():
@@ -558,8 +571,8 @@ def test_submit_blocked_creates_lead_notification_blocked():
         db.close()
 
 
-def test_submit_sent_true_creates_failed_notification():
-    """P0-MAIN-5A：sent=true → task failed + lead_notification.send_status=failed。"""
+def test_submit_sent_true_creates_sent_notification():
+    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：sent=true → task sent + lead_notification.send_status=sent。"""
     db = SessionLocal()
     try:
         staff, lead, _ = _create_staff_and_lead(db)
@@ -568,7 +581,7 @@ def test_submit_sent_true_creates_failed_notification():
             "task_type": "notify_sales",
             "target_nickname": "Aw3",
             "message": "sent true 测试",
-            "mode": "paste_only",
+            "mode": "single_send",
             "lead_id": lead.id,
             "staff_id": staff.id,
         })
@@ -581,15 +594,15 @@ def test_submit_sent_true_creates_failed_notification():
             "sent": True,
         })
         data = resp.json()
-        assert data["status"] == "failed"
-        assert data["failure_stage"] == "sent_not_allowed_for_p0_5a"
+        assert data["status"] == "sent"
+        assert data["sent_at"] is not None
 
         notif = db.query(LeadNotification).filter(
             LeadNotification.lead_id == lead.id,
         ).first()
         assert notif is not None
-        assert notif.send_status == "failed"
-        assert "sent=true" in (notif.error_message or "")
+        assert notif.send_status == "sent"
+        assert notif.sent_at is not None
     finally:
         db.close()
 

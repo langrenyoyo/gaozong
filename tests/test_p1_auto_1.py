@@ -12,7 +12,7 @@
 9. detect_reply 不产生 lead_notification
 10. 不允许重复创建 detect_reply task
 11. check 已结束时 detect_reply 自动停止
-12. sent=true 仍被全局拒绝
+12. detect_reply 忽略 sent 字段（专用分支只读检测，不写入/发送）
 """
 
 import pytest
@@ -88,15 +88,30 @@ class TestDetectReplyTaskCreation:
         })
         assert resp.status_code == 400
 
-    def test_create_detect_reply_rejects_non_aw3(self):
-        """detect_reply 只允许 target_nickname=Aw3"""
+    def test_create_detect_reply_accepts_non_aw3_nickname(self):
+        """detect_reply 接受任意非空 target_nickname。
+
+        P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
+        detect_reply 不再硬编码 Aw3，只要昵称非空即可创建。
+        """
         resp = client.post("/wechat-tasks", json={
             "task_type": "detect_reply",
             "target_nickname": "Other",
             "message": "",
             "mode": "read_only",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        assert resp.json()["target_nickname"] == "Other"
+
+    def test_create_detect_reply_rejects_empty_nickname(self):
+        """detect_reply 拒绝空 target_nickname（Pydantic min_length=1 → 422）"""
+        resp = client.post("/wechat-tasks", json={
+            "task_type": "detect_reply",
+            "target_nickname": "",
+            "message": "",
+            "mode": "read_only",
+        })
+        assert resp.status_code == 422
 
     def test_create_detect_reply_with_full_association(self):
         """创建带 lead_id/staff_id/reply_check_id 的 detect_reply task"""
@@ -261,8 +276,13 @@ class TestDetectReplyResultSubmit:
         assert data["status"] == "completed"
         assert "check_already_replied" in data["failure_stage"]
 
-    def test_sent_true_still_rejected(self):
-        """detect_reply 也不允许 sent=true（全局安全约束）"""
+    def test_sent_true_ignored_for_detect_reply(self):
+        """detect_reply 专用分支忽略 sent 字段，按 detected_status 处理。
+
+        P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 移除 sent 全局拒绝后，
+        detect_reply submit 即便携带 sent=true 也不影响结果
+        （detect_reply 是只读检测，不做任何写入/发送，sent 字段无意义）。
+        """
         task_id, _ = self._create_detect_task_with_check()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
@@ -272,8 +292,8 @@ class TestDetectReplyResultSubmit:
             "sent": True,
         })
         data = resp.json()
-        assert data["status"] == "failed"
-        assert "sent_not_allowed" in data["failure_stage"]
+        # detect_reply 专用分支忽略 sent，按 detected_status=replied → completed
+        assert data["status"] == "completed"
 
     def test_verified_false_blocked(self):
         """detect_reply verified=false → blocked"""

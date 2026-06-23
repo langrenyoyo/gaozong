@@ -95,12 +95,16 @@ def test_poll_and_execute_rejects_non_notify_sales(mock_get, mock_post):
 
 @patch("app.local_agent_main._http_post_json")
 @patch("app.local_agent_main._http_get")
-def test_poll_and_execute_rejects_non_paste_only(mock_get, mock_post):
-    """mode 非 paste_only → blocked 并回写。"""
+def test_poll_and_execute_rejects_unsupported_mode(mock_get, mock_post):
+    """mode 非 paste_only/single_send → blocked 并回写。
+
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开门禁后允许 single_send，
+    仅拒绝 paste_only/single_send 之外的非法 mode。
+    """
     mock_get.return_value = {
         "ok": True, "status": 200,
         "json": [{"id": 2, "task_type": "notify_sales", "target_nickname": "Aw3",
-                   "mode": "single_send", "message": "test"}],
+                   "mode": "triple_send", "message": "test"}],
         "error": None,
     }
     mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
@@ -108,16 +112,20 @@ def test_poll_and_execute_rejects_non_paste_only(mock_get, mock_post):
     resp = client_with_server.post("/agent/tasks/poll-and-execute")
     data = resp.json()
     assert data["success"] is False
-    assert "mode_not_paste_only" in data["failure_stage"]
+    assert "mode_not_supported" in data["failure_stage"]
 
 
 @patch("app.local_agent_main._http_post_json")
 @patch("app.local_agent_main._http_get")
-def test_poll_and_execute_rejects_non_aw3(mock_get, mock_post):
-    """target_nickname 非 Aw3 → blocked 并回写。"""
+def test_poll_and_execute_rejects_empty_nickname(mock_get, mock_post):
+    """target_nickname 为空 → blocked 并回写。
+
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
+    只要昵称非空即可（啊东、等真实昵称被接受），仅拒绝空昵称。
+    """
     mock_get.return_value = {
         "ok": True, "status": 200,
-        "json": [{"id": 3, "task_type": "notify_sales", "target_nickname": "啊东、",
+        "json": [{"id": 3, "task_type": "notify_sales", "target_nickname": "",
                    "mode": "paste_only", "message": "test"}],
         "error": None,
     }
@@ -126,7 +134,7 @@ def test_poll_and_execute_rejects_non_aw3(mock_get, mock_post):
     resp = client_with_server.post("/agent/tasks/poll-and-execute")
     data = resp.json()
     assert data["success"] is False
-    assert "target_nickname_not_aw3" in data["failure_stage"]
+    assert "target_nickname_empty" in data["failure_stage"]
 
 
 @patch("app.local_agent_main._http_post_json")

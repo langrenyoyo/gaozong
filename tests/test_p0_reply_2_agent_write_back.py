@@ -324,18 +324,22 @@ class TestAgentReplyDetectRoute:
         data = resp.json()
         assert "/agent/replies/detect" in data.get("routes", [])
 
-    def test_replies_detect_rejects_non_aw3(self):
-        """拒绝非 Aw3 目标"""
+    def test_replies_detect_rejects_empty_nickname(self):
+        """拒绝空目标昵称。
+
+        P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
+        啊东、等真实昵称被接受，仅拒绝空昵称。
+        """
         client = self._make_client()
         resp = client.post("/agent/replies/detect", json={
             "lead_id": 1,
             "staff_id": 1,
-            "target_nickname": "啊东、",
+            "target_nickname": "",
         })
         data = resp.json()
         assert data["success"] is False
         assert data["detected_status"] == "failed"
-        assert data["failure_stage"] == "target_nickname_not_aw3"
+        assert data["failure_stage"] == "target_nickname_empty"
 
     def test_replies_detect_rejects_no_server_url(self):
         """server_url 未配置时返回 failed"""

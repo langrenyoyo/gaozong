@@ -73,21 +73,31 @@ def assign_lead(
 
 
 def auto_assign_next(db: Session, lead_id: int) -> DouyinLead:
-    """自动轮询分配：找到下一个活跃销售"""
+    """自动轮询分配：找到下一个活跃销售（按商户隔离）。
+
+    商户隔离规则（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1）：
+      - 线索只能分配给 SalesStaff.merchant_id == lead.merchant_id 的活跃销售
+      - lead.merchant_id 为空 → 抛 ValueError，调用方应记 no_merchant
+      - 同商户无活跃销售 → 抛 ValueError（含 merchant_id），调用方记 no_active_staff
+      - merchant_id 为空的历史销售不会被任何有 merchant_id 的线索选中
+    """
     lead = db.query(DouyinLead).filter(DouyinLead.id == lead_id).first()
     if not lead:
         raise ValueError(f"线索不存在: {lead_id}")
 
-    # 找到所有活跃销售，按 ID 排序做简单轮询
+    if not lead.merchant_id:
+        raise ValueError("线索未归属商户，无法按商户隔离分配")
+
+    # 找到同商户所有活跃销售，按 ID 排序做简单轮询
     active_staff = db.query(SalesStaff).filter(
-        SalesStaff.status == "active"
+        SalesStaff.status == "active",
+        SalesStaff.merchant_id == lead.merchant_id,
     ).order_by(SalesStaff.id).all()
 
     if not active_staff:
-        raise ValueError("没有可用的活跃销售人员")
+        raise ValueError(f"没有可用的活跃销售人员(merchant_id={lead.merchant_id})")
 
     # 简单轮询：找到当前分配数最少的销售
-    from sqlalchemy import func
     staff_counts = {}
     for s in active_staff:
         count = db.query(DouyinLead).filter(

@@ -8,7 +8,7 @@ P4-3：支持 dry_run + auto_assign 联动。
 
 P0-5A-2：支持 auto_create_wechat_task 联动。
 - auto_create_wechat_task=true 且分配成功后创建 WechatTask(status=pending)
-- 只允许 Aw3，非 Aw3 跳过
+- 使用销售真实微信昵称，mode=single_send（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3/paste_only 门禁）
 - 不调用微信自动化，不调用 Local Agent
 """
 
@@ -25,9 +25,12 @@ from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem, W
 from app.services import assign_service
 from app.services import wechat_task_service
 
+# 通知文本模板无 Windows 依赖，直接导入（供任务消息生成使用）
+from app.services.notification_template import compose_notification_text
+
 # 延迟导入：notification_service 依赖 wechat_ui（Windows 专用），Linux/Docker 环境不可用
 try:
-    from app.services.notification_service import auto_notify_assigned_lead, _compose_notification_text
+    from app.services.notification_service import auto_notify_assigned_lead
     _NOTIFICATION_AVAILABLE = True
 except ImportError:
     _NOTIFICATION_AVAILABLE = False
@@ -44,6 +47,7 @@ def _map_lead_item(raw_item: dict[str, Any]) -> dict[str, Any]:
         last_interaction_record → content，空值用空字符串
         phone → customer_contact，phone 为空时 fallback 到 wechat
         lead_type → lead_type，空值用 "私信"
+        merchant_id → merchant_id（商户隔离分配依据，上游未提供则为 None）
         source 固定为 "douyin"
     """
     return {
@@ -53,6 +57,7 @@ def _map_lead_item(raw_item: dict[str, Any]) -> dict[str, Any]:
         "source": "douyin",
         "lead_type": raw_item.get("lead_type") or "私信",
         "customer_contact": raw_item.get("phone") or raw_item.get("wechat") or None,
+        "merchant_id": raw_item.get("merchant_id") or None,
         "raw_data": raw_item,
     }
 
@@ -100,6 +105,7 @@ def _execute_create(db: Session, mapped: dict[str, Any]) -> DouyinLead:
         customer_contact=mapped["customer_contact"],
         content=mapped["content"],
         lead_type=mapped["lead_type"],
+        merchant_id=mapped.get("merchant_id"),
         raw_data=json.dumps(mapped["raw_data"], ensure_ascii=False),
         status="pending",
     )
@@ -167,21 +173,18 @@ def _try_auto_notify(db: Session, lead_id: int) -> dict:
 
 
 def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
-    """P0-5A-2：分配成功后尝试创建 WechatTask(pending)
+    """分配成功后尝试创建 notify_sales WechatTask(pending)。
 
-    只允许 Aw3，非 Aw3 跳过并记录 reason。
-    不调用微信自动化，不调用 Local Agent。
-    复用 notification_service._compose_notification_text 生成消息内容。
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后：
+    - target_nickname 使用销售真实微信昵称（不再硬编码 Aw3）
+    - mode 使用 single_send（不再强制 paste_only）
+    - 消息文本由 notification_template 生成（无 Windows 依赖，Linux/Docker 可用）
+    - 不调用微信自动化，不调用 Local Agent
 
     Returns:
         {"created": bool, "task_id": int | None, "reason": str | None}
     """
     result = {"created": False, "task_id": None, "reason": None}
-
-    # Linux/Docker 环境跳过：通知模板依赖 Windows 专用模块
-    if not _NOTIFICATION_AVAILABLE:
-        result["reason"] = "跳过：通知模板依赖 Windows 环境，当前平台不可用"
-        return result
 
     # 获取分配的销售信息
     if not lead.assigned_staff_id:
@@ -193,19 +196,19 @@ def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
         result["reason"] = "staff_not_found"
         return result
 
-    # P0-5A 安全门禁：只允许 Aw3
-    if staff.wechat_nickname != "Aw3":
-        result["reason"] = f"only_aw3_allowed_for_p0_5a (staff_nickname={staff.wechat_nickname})"
+    # 销售必须配置微信昵称，否则无法搜索聊天窗口
+    if not staff.wechat_nickname:
+        result["reason"] = "staff_no_wechat_nickname"
         logger.info(
-            "WechatTask 跳过: lead_id=%d, staff='%s', nickname='%s' != 'Aw3'",
-            lead.id, staff.name, staff.wechat_nickname,
+            "WechatTask 跳过: lead_id=%d, staff='%s' 未设置微信昵称",
+            lead.id, staff.name,
         )
         return result
 
-    # 复用通知模板生成消息（纯函数，不发送）
-    message = _compose_notification_text(lead)
+    # 复用通知模板生成消息（纯函数，不发送，无 Windows 依赖）
+    message = compose_notification_text(lead)
 
-    # P0-MAIN-5A：查找该 lead+staff 最新的 pending reply_check，填入 reply_check_id
+    # 查找该 lead+staff 最新的 pending reply_check，填入 reply_check_id
     reply_check_id = None
     latest_check = db.query(ReplyCheck).filter(
         ReplyCheck.lead_id == lead.id,
@@ -222,15 +225,15 @@ def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
             lead_id=lead.id,
             staff_id=staff.id,
             reply_check_id=reply_check_id,
-            target_nickname="Aw3",
+            target_nickname=staff.wechat_nickname,
             message=message,
-            mode="paste_only",
+            mode="single_send",
         )
         result["created"] = True
         result["task_id"] = task.id
         logger.info(
-            "WechatTask 已创建: task_id=%d, lead_id=%d, staff_id=%d",
-            task.id, lead.id, staff.id,
+            "WechatTask 已创建: task_id=%d, lead_id=%d, staff_id=%d, nickname='%s', mode=single_send",
+            task.id, lead.id, staff.id, staff.wechat_nickname,
         )
     except Exception as exc:
         result["reason"] = f"create_failed: {exc}"
@@ -254,7 +257,7 @@ def preview_sync_leads(
 
     P0-5A-2：
     auto_create_wechat_task=true + 分配成功 → 创建 WechatTask(pending)
-    只允许 Aw3，非 Aw3 跳过并记录 reason
+    使用销售真实微信昵称，mode=single_send
     """
     # 从上游拉取线索
     try:

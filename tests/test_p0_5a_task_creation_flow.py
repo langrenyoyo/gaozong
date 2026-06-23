@@ -3,7 +3,7 @@
 验证：
 - auto_create_wechat_task 默认不创建任务
 - 分配给 Aw3 时创建 pending 任务
-- 分配给非 Aw3 时跳过
+- 分配给非 Aw3 真实昵称时也创建任务（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁）
 - 不调用 notification_service 的发送函数
 - 不调用 local agent
 - sync response 包含任务统计
@@ -63,6 +63,7 @@ MOCK_AW3_STAFF_LEAD = {
             "phone": "13800001111",
             "last_interaction_record": "我想买车",
             "lead_type": "私信",
+            "merchant_id": "p05a_merchant",
         }
     ],
     "total": 1,
@@ -78,6 +79,7 @@ MOCK_NON_AW3_STAFF_LEAD = {
             "phone": "13800002222",
             "last_interaction_record": "咨询价格",
             "lead_type": "私信",
+            "merchant_id": "p05a_merchant",
         }
     ],
     "total": 1,
@@ -93,7 +95,7 @@ def test_sync_leads_does_not_create_wechat_task_by_default():
     """1. 默认不创建 WechatTask。"""
     db = _db()
     # 预置 Aw3 销售
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -128,7 +130,7 @@ def test_sync_leads_does_not_create_wechat_task_by_default():
 def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3():
     """2. auto_create_wechat_task=true + 分配给 Aw3 → 创建 WechatTask。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -155,7 +157,7 @@ def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3
     assert task is not None
     assert task.status == "pending"
     assert task.target_nickname == "Aw3"
-    assert task.mode == "paste_only"
+    assert task.mode == "single_send"
     assert task.sent_at is None
     assert "Aw3测试客户" in task.message or "未知客户" in task.message
 
@@ -172,10 +174,14 @@ def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3
     db.close()
 
 
-def test_sync_leads_skips_wechat_task_when_staff_not_aw3():
-    """3. auto_create_wechat_task=true + 分配给非 Aw3 → 跳过任务。"""
+def test_sync_leads_create_wechat_task_when_staff_not_aw3():
+    """3. auto_create_wechat_task=true + 非 Aw3 真实昵称 → 创建 WechatTask。
+
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
+    使用销售真实微信昵称（啊东、）建任务，不再跳过。
+    """
     db = _db()
-    staff = SalesStaff(name="其他销售", wechat_nickname="啊东、", status="active")
+    staff = SalesStaff(name="其他销售", wechat_nickname="啊东、", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -192,21 +198,23 @@ def test_sync_leads_skips_wechat_task_when_staff_not_aw3():
     assert result.success is True
     assert result.assigned == 1
     assert result.wechat_tasks is not None
-    assert result.wechat_tasks.created_count == 0
-    assert result.wechat_tasks.skipped_count == 1
-    assert len(result.wechat_tasks.task_ids) == 0
-    assert len(result.wechat_tasks.skipped) == 1
-    assert "only_aw3_allowed_for_p0_5a" in result.wechat_tasks.skipped[0]["reason"]
+    assert result.wechat_tasks.created_count == 1
+    assert result.wechat_tasks.skipped_count == 0
+    assert len(result.wechat_tasks.task_ids) == 1
 
-    # 确认没有创建 WechatTask
-    tasks = db.query(WechatTask).all()
-    assert len(tasks) == 0
+    # 确认 WechatTask 已创建，使用销售真实昵称
+    task = db.query(WechatTask).first()
+    assert task is not None
+    assert task.status == "pending"
+    assert task.target_nickname == "啊东、"
+    assert task.mode == "single_send"
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_non_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
+    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -217,7 +225,7 @@ def test_sync_leads_skips_wechat_task_when_staff_not_aw3():
 def test_sync_leads_auto_create_task_does_not_call_notification_service_send():
     """4. auto_create_wechat_task=true 不调用 notification_service 的发送函数。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -257,7 +265,7 @@ def test_sync_leads_auto_create_task_does_not_call_notification_service_send():
 def test_sync_leads_auto_create_task_does_not_call_local_agent():
     """5. auto_create_wechat_task=true 不调用 Local Agent。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -298,7 +306,7 @@ def test_sync_leads_auto_create_task_does_not_call_local_agent():
 def test_sync_response_includes_wechat_task_stats():
     """6. sync response 包含 wechat_tasks 统计字段。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -338,7 +346,7 @@ def test_sync_response_includes_wechat_task_stats():
 def test_created_wechat_task_status_is_pending():
     """7. 创建的任务 status 必须是 pending。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -367,10 +375,10 @@ def test_created_wechat_task_status_is_pending():
     db.close()
 
 
-def test_created_wechat_task_mode_is_paste_only():
-    """8. 创建的任务 mode 必须是 paste_only。"""
+def test_created_wechat_task_mode_is_single_send():
+    """8. 创建的任务 mode 必须是 single_send。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
@@ -384,7 +392,7 @@ def test_created_wechat_task_mode_is_paste_only():
 
     task = db.query(WechatTask).first()
     assert task is not None
-    assert task.mode == "paste_only"
+    assert task.mode == "single_send"
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
@@ -402,7 +410,7 @@ def test_created_wechat_task_mode_is_paste_only():
 def test_created_wechat_task_sent_at_is_none():
     """9. 创建的任务 sent_at 必须是 None。"""
     db = _db()
-    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 

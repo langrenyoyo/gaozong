@@ -842,7 +842,7 @@ class WechatTaskCreateRequest(BaseModel):
     task_type: str = Field("notify_sales", description="任务类型: notify_sales / detect_reply")
     target_nickname: str = Field(..., min_length=1, description="目标微信联系人昵称")
     message: str = Field("", description="要粘贴/发送的消息内容")
-    mode: str = Field("paste_only", description="执行模式: paste_only")
+    mode: str = Field("paste_only", description="执行模式: notify_sales=paste_only/single_send, detect_reply=read_only/paste_only")
 
 
 class WechatTaskResultRequest(BaseModel):

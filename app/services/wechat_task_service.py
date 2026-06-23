@@ -17,8 +17,10 @@ from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck
 
 logger = logging.getLogger(__name__)
 
-# 安全约束：只允许 Aw3
-_ONLY_ALLOWED_NICKNAME = "Aw3"
+# notify_sales 允许的执行模式（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后）
+# - paste_only：仅粘贴到输入框，不发送（require_confirm）
+# - single_send：粘贴并回车发送
+_NOTIFY_SALES_ALLOWED_MODES = {"paste_only", "single_send"}
 
 # P1-AUTO-1：detect_reply 任务允许的模式
 _DETECT_REPLY_ALLOWED_MODES = {"read_only", "paste_only"}
@@ -34,33 +36,31 @@ def create_wechat_task(
     lead_id: int | None = None,
     staff_id: int | None = None,
     reply_check_id: int | None = None,
-    target_nickname: str = "Aw3",
+    target_nickname: str = "",
     message: str = "",
-    mode: str = "paste_only",
+    mode: str = "single_send",
 ) -> WechatTask:
     """创建微信任务。
 
-    创建规则：
-    1. notify_sales：只允许 target_nickname=Aw3，只允许 mode=paste_only。
-    2. detect_reply（P1-AUTO-1）：只允许 target_nickname=Aw3，允许 mode=read_only。
+    创建规则（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后）：
+    1. notify_sales：target_nickname 必须非空（真实销售微信昵称），
+       允许 mode=paste_only / single_send。
+    2. detect_reply（P1-AUTO-1）：允许 mode=read_only / paste_only。
     3. status 初始为 pending。
-    4. sent_at 初始为 None。
+    4. sent_at 初始为 None（由 19000 回写 sent 成功后填充）。
     """
-    if target_nickname != _ONLY_ALLOWED_NICKNAME:
-        raise ValueError(
-            f"只允许 target_nickname={_ONLY_ALLOWED_NICKNAME}，"
-            f"当前值: {target_nickname}"
-        )
+    if not target_nickname or not target_nickname.strip():
+        raise ValueError("target_nickname 不能为空（需传入真实销售微信昵称）")
 
     if task_type == "notify_sales":
-        if mode != "paste_only":
+        if mode not in _NOTIFY_SALES_ALLOWED_MODES:
             raise ValueError(
-                f"notify_sales 只允许 mode=paste_only，当前值: {mode}"
+                f"notify_sales 只允许 mode={sorted(_NOTIFY_SALES_ALLOWED_MODES)}，当前值: {mode}"
             )
     elif task_type == "detect_reply":
         if mode not in _DETECT_REPLY_ALLOWED_MODES:
             raise ValueError(
-                f"detect_reply 只允许 mode={_DETECT_REPLY_ALLOWED_MODES}，当前值: {mode}"
+                f"detect_reply 只允许 mode={sorted(_DETECT_REPLY_ALLOWED_MODES)}，当前值: {mode}"
             )
     else:
         raise ValueError(f"不支持的 task_type: {task_type}")
@@ -155,19 +155,6 @@ def submit_wechat_task_result(
     # 保存 raw_result（通用规则）
     task.raw_result = json.dumps(raw_result, ensure_ascii=False) if raw_result else task.raw_result
 
-    # sent=true 全局禁止（P0 安全约束，所有类型通用）
-    if sent:
-        task.status = "failed"
-        task.failure_stage = "sent_not_allowed_for_p0_5a"
-        task.agent_hostname = agent_hostname
-        task.agent_pid = agent_pid
-        db.commit()
-        db.refresh(task)
-        _update_linked_notification(db, task, send_status="failed",
-                                    error_message="sent=true 被 P0 安全门禁拒绝")
-        logger.warning("WechatTask %s: sent=true 被拒绝（安全门禁）", task.id)
-        return task
-
     # 记录 Agent 信息
     task.agent_hostname = agent_hostname
     task.agent_pid = agent_pid
@@ -238,7 +225,7 @@ def submit_wechat_task_result(
         task.status = "pasted"
         task.pasted_at = datetime.now()
         task.failure_stage = None
-        # sent_at 必须保持 None
+        # paste_only：未发送，sent_at 保持 None
         task.sent_at = None
         db.commit()
         db.refresh(task)
@@ -249,6 +236,26 @@ def submit_wechat_task_result(
         # P1-AUTO-1：notify_sales pasted 成功后自动创建 detect_reply task
         _auto_create_detect_reply_task(db, task)
         logger.info("WechatTask %s: paste_only 完成", task.id)
+        return task
+
+    # sent=true && verified=true → status=sent（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 新增）
+    # single_send 模式下 19000 粘贴并回车发送，回写 sent=true。
+    if sent and verified:
+        sent_now = datetime.now()
+        task.status = "sent"
+        task.sent_at = sent_now
+        if not task.pasted_at:
+            task.pasted_at = sent_now
+        task.failure_stage = None
+        db.commit()
+        db.refresh(task)
+        # 联动 lead_notifications：send_status=sent 并回填 sent_at
+        _update_linked_notification(db, task, send_status="sent", sent_at=sent_now)
+        # 设置自动检测目标
+        _try_set_auto_detect_target(db, task)
+        # sent 后同样需要后续回复检测
+        _auto_create_detect_reply_task(db, task)
+        logger.info("WechatTask %s: single_send 发送完成", task.id)
         return task
 
     # 未匹配任何规则，标记为 blocked
@@ -268,6 +275,7 @@ def _update_linked_notification(
     *,
     send_status: str,
     error_message: str | None = None,
+    sent_at: datetime | None = None,
 ) -> LeadNotification | None:
     """P0-MAIN-5A：任务结果回写时联动更新 lead_notifications。
 
@@ -295,7 +303,7 @@ def _update_linked_notification(
     if existing:
         existing.send_status = send_status
         existing.error_message = error_message
-        existing.sent_at = None  # P0 阶段 sent_at 始终为 None
+        existing.sent_at = sent_at  # sent 时传入 now，pasted/failed/blocked 传 None
         db.commit()
         db.refresh(existing)
         logger.info(
@@ -312,7 +320,7 @@ def _update_linked_notification(
         send_status=send_status,
         send_mode="wechat_task",
         error_message=error_message,
-        sent_at=None,
+        sent_at=sent_at,
     )
     db.add(record)
     db.commit()
@@ -706,7 +714,8 @@ def _auto_create_detect_reply_task(db: Session, notify_task: WechatTask) -> Wech
     # 条件 1-3 检查
     if notify_task.task_type != "notify_sales":
         return None
-    if notify_task.status != "pasted":
+    # notify_sales 完成发送（sent）或完成粘贴（pasted）后均需后续回复检测
+    if notify_task.status not in ("pasted", "sent"):
         return None
     if not notify_task.lead_id or not notify_task.staff_id:
         return None
@@ -757,7 +766,7 @@ def _auto_create_detect_reply_task(db: Session, notify_task: WechatTask) -> Wech
             lead_id=notify_task.lead_id,
             staff_id=notify_task.staff_id,
             reply_check_id=check.id,
-            target_nickname=notify_task.target_nickname or _ONLY_ALLOWED_NICKNAME,
+            target_nickname=notify_task.target_nickname or "",
             message="",  # detect_reply 不写入任何内容
             mode="read_only",
             status="pending",

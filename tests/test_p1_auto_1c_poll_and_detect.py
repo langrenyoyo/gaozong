@@ -302,16 +302,20 @@ def test_poll_and_detect_emergency_stop(mock_get, mock_auto, mock_post):
     assert data["failure_stage"] == "emergency_stop"
 
 
-# ========== 7. target_nickname 非 Aw3 ==========
+# ========== 7. target_nickname 为空 ==========
 
 @patch("app.local_agent_main._http_post_json")
 @patch("app.local_agent_main._http_get")
-def test_poll_and_detect_rejects_non_aw3(mock_get, mock_post):
-    """target_nickname 非 Aw3 → blocked。"""
+def test_poll_and_detect_rejects_empty_nickname(mock_get, mock_post):
+    """target_nickname 为空 → blocked。
+
+    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
+    啊东、等真实昵称被接受，仅拒绝空昵称。
+    """
     mock_get.return_value = {
         "ok": True, "status": 200,
         "json": [{
-            "id": 400, "task_type": "detect_reply", "target_nickname": "啊东、",
+            "id": 400, "task_type": "detect_reply", "target_nickname": "",
             "mode": "read_only",
         }],
         "error": None,
@@ -321,7 +325,7 @@ def test_poll_and_detect_rejects_non_aw3(mock_get, mock_post):
     resp = client_with_server.post("/agent/tasks/poll-and-detect")
     data = resp.json()
     assert data["success"] is False
-    assert "target_nickname_not_aw3" in data["failure_stage"]
+    assert "target_nickname_empty" in data["failure_stage"]
 
 
 # ========== 8. 内部异常 → 安全网 ==========

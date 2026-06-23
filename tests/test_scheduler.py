@@ -155,7 +155,7 @@ def test_sync_creates_checks_then_scheduler_runs():
     db = _db()
 
     # 创建活跃销售
-    staff = SalesStaff(name="调度器测试销售", status="active")
+    staff = SalesStaff(name="调度器测试销售", status="active", merchant_id="sched_merchant")
     db.add(staff)
     db.commit()
 
@@ -168,6 +168,7 @@ def test_sync_creates_checks_then_scheduler_runs():
                     "phone": None,
                     "last_interaction_record": "测试",
                     "lead_type": "私信",
+                    "merchant_id": "sched_merchant",
                 }
             ],
             "total": 1,

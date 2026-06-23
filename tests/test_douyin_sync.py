@@ -622,6 +622,7 @@ def test_douyin_sync_auto_assign_ignored_in_p4_2():
                     "phone": None,
                     "last_interaction_record": "测试",
                     "lead_type": "私信",
+                    "merchant_id": "sync_merchant",
                 }
             ],
             "total": 1,
@@ -657,7 +658,7 @@ def test_douyin_sync_auto_assign_created_lead():
     db = _db()
 
     # 预置活跃销售
-    staff = SalesStaff(name="自动分配销售", status="active")
+    staff = SalesStaff(name="自动分配销售", status="active", merchant_id="sync_merchant")
     db.add(staff)
     db.commit()
 
@@ -670,6 +671,7 @@ def test_douyin_sync_auto_assign_created_lead():
                     "phone": "13800005555",
                     "last_interaction_record": "请分配",
                     "lead_type": "私信",
+                    "merchant_id": "sync_merchant",
                 }
             ],
             "total": 1,
@@ -713,7 +715,7 @@ def test_douyin_sync_auto_assign_only_new_created():
     db = _db()
 
     # 预置活跃销售
-    staff = SalesStaff(name="选择性分配销售", status="active")
+    staff = SalesStaff(name="选择性分配销售", status="active", merchant_id="sync_merchant")
     db.add(staff)
     db.commit()
 
@@ -745,6 +747,7 @@ def test_douyin_sync_auto_assign_only_new_created():
                     "phone": None,
                     "last_interaction_record": "新消息",
                     "lead_type": "私信",
+                    "merchant_id": "sync_merchant",
                 },
                 # pending 更新 → 不自动分配
                 {
@@ -812,6 +815,7 @@ def test_douyin_sync_auto_assign_no_active_staff():
                     "phone": None,
                     "last_interaction_record": "测试",
                     "lead_type": "私信",
+                    "merchant_id": "sync_merchant",
                 }
             ],
             "total": 1,
