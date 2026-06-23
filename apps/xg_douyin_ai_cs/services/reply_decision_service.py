@@ -1366,7 +1366,7 @@ def _build_contextual_customer_reply(
         return f"您好，我记得您前面关注的是{_format_requirement_summary(slots)}。您是想继续了解现车和报价，还是更关注车况和检测报告？"
 
     if _contains_any(latest_message, ("现车", "现车猫", "库存", "价格", "报价", "价位", "车况", "检测报告", "事故", "水泡", "泡水", "公里数", "里程")):
-        subject = _format_requirement_summary(slots)
+        subject = _format_natural_requirement_sentence(slots)
         prefix = f"收到，{subject}。" if subject else "可以的，您是在问现车和价格。"
         detail_parts = []
         if _contains_any(latest_message, ("现车", "现车猫", "库存")):
@@ -1395,6 +1395,37 @@ def _build_human_followup_reply(slots: dict[str, Any], *, apology: bool) -> str:
     if summary:
         return f"收到，{summary}。我帮您按这个方向核现车和价格，有合适的再把关键车况信息发您看。"
     return "我帮您核一下现车和价格，有合适的再把关键车况信息发您看。"
+
+
+def _format_natural_requirement_sentence(slots: dict[str, Any]) -> str:
+    vehicle_parts = [str(part) for part in (slots.get("years"), slots.get("model")) if part]
+    vehicle_text = "".join(vehicle_parts) if vehicle_parts else str(slots.get("brand") or "")
+    budget = str(slots.get("budget") or "")
+    clauses: list[str] = []
+    if budget and vehicle_text:
+        clauses.append(f"您主要看{budget}的{vehicle_text}")
+    elif vehicle_text:
+        clauses.append(f"您主要看{vehicle_text}")
+    elif budget:
+        clauses.append(f"您预算在{budget}")
+
+    concerns = [str(item) for item in slots.get("concerns") or []]
+    if any(item in concerns for item in ("公里数", "里程")):
+        clauses.append("公里数别太高")
+    if "车况" in concerns:
+        clauses.append("车况要精神")
+
+    worry_items: list[str] = []
+    if "事故" in concerns:
+        worry_items.append("事故")
+    if "水泡" in concerns or "泡水" in concerns:
+        worry_items.append("水泡")
+    if worry_items or "检测报告" in concerns:
+        if "检测报告" not in worry_items:
+            worry_items.append("检测报告")
+        clauses.append(f"也比较在意{'、'.join(_dedupe(worry_items))}")
+
+    return "，".join(clauses)
 
 
 def _format_requirement_summary(slots: dict[str, Any]) -> str:

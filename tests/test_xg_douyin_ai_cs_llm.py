@@ -1195,6 +1195,66 @@ def test_reply_suggestion_treats_inventory_cat_typo_as_inventory_question(
     assert "现车猫" not in text
 
 
+def test_reply_suggestion_rephrases_slots_as_natural_sales_sentence(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "具体车型和车系需要结合实时车源确认。具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+                    "intent": "consult_inventory",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.82,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我预算差不多30万左右，主要看20款或者21款的530Li。公里数别太高，车况得精神，最怕买到事故车或者水泡车了。你们店里现在有符合的现车嘛",
+            "conversation_history": [
+                {"role": "customer", "content": "之前看过23万左右的车"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.json()["reply_text"]
+    assert "30万左右" in text
+    assert "20或21款" in text or "20/21款" in text
+    assert "530Li" in text
+    assert "里程" in text or "公里数" in text
+    assert "车况" in text
+    assert "事故" in text
+    assert "水泡" in text
+    assert "检测报告" in text
+    assert "30万左右、20或21款、530Li、关注现车、车况、事故、水泡、公里数" not in text
+    assert "23万" not in text
+    assert "宝马53" not in text
+    assert "先说下预算" not in text
+    assert "说下车型" not in text
+    assert "您主要看" in text or "主要看" in text
+    assert "比较在意" in text or "重点" in text
+
+
 def test_reply_suggestion_plain_inventory_question_does_not_use_apology_template(
     tmp_path, monkeypatch
 ):
