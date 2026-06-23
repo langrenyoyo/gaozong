@@ -157,7 +157,7 @@ def _insert_event(
             "conversation_short_id": "conv-1",
             "server_message_id": server_message_id,
             "message_type": message_type,
-            "text": "想了解 A6",
+            "text": "想了解 A6" if text is None else text,
         }
         db.add(
             DouyinWebhookEvent(
@@ -234,6 +234,25 @@ def _insert_manual_takeover() -> None:
                 conversation_short_id="conv-1",
                 customer_open_id="customer-open-1",
                 mode="manual",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_manual_takeover_from_notice(notice_time: datetime) -> None:
+    db = TestSession()
+    try:
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                conversation_short_id="conv-1",
+                customer_open_id="customer-open-1",
+                mode="manual",
+                last_human_message_at=notice_time,
+                updated_at=notice_time,
             )
         )
         db.commit()
@@ -618,6 +637,34 @@ def test_notice_im_send_msg_after_trigger_does_not_count_as_outbound():
         result = _send(run_id)
 
     assert result["status"] == "sent"
+
+
+def test_notice_sourced_manual_takeover_does_not_block_real_send():
+    notice_time = datetime.now() - timedelta(seconds=30)
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event(server_message_id="server-msg-1", created_at=notice_time - timedelta(seconds=10))
+    _insert_event(
+        event="im_send_msg",
+        server_message_id="server-msg-notice-text",
+        created_at=notice_time,
+        message_type="text",
+        text="你收到一条新消息，请打开抖音app查看",
+        event_key="event-server-msg-notice-text",
+    )
+    _insert_manual_takeover_from_notice(notice_time)
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+    run = _get_run(run_id)
+    gate_results = json.loads(run.gate_results_json)
+    assert gate_results["real_send"]["manual_takeover"]["blocked"] is False
+    assert gate_results["real_send"]["manual_takeover"]["ignored_reason"] == "notice_or_system_message"
 
 
 def test_human_text_im_send_msg_after_trigger_still_counts_as_outbound():

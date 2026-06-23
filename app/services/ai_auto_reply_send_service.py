@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
 from app.services.conversation_autopilot_state_service import (
-    is_conversation_manual_takeover,
+    evaluate_manual_takeover_gate,
     mark_ai_replied,
 )
 from app.services.douyin_autoreply_settings_service import get_account_autoreply_settings
@@ -98,12 +98,14 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
-    if is_conversation_manual_takeover(
+    manual_takeover = evaluate_manual_takeover_gate(
         db,
         merchant_id=run.merchant_id,
         account_open_id=run.account_open_id,
         conversation_short_id=run.conversation_short_id or "",
-    ):
+    )
+    _merge_run_gate_results(db, run, "real_send", {"manual_takeover": manual_takeover})
+    if manual_takeover.get("blocked") is True:
         _mark_send_skipped(db, run, "manual_takeover_blocked")
         logger.info("ai_auto_reply_send_skipped stage=manual_takeover run_id=%s reason=manual_takeover_blocked", run.id)
         return {"status": "send_skipped", "reason": "manual_takeover_blocked"}
@@ -222,6 +224,17 @@ def _sync_final_auto_send_after_success(db: Session, run: AiAutoReplyRun) -> Non
         run.id,
         run.decision_log_id,
     )
+
+
+def _merge_run_gate_results(db: Session, run: AiAutoReplyRun, section: str, value: dict[str, Any]) -> None:
+    gate_results = _json_object(run.gate_results_json)
+    current = gate_results.get(section)
+    if not isinstance(current, dict):
+        current = {}
+    current.update(value)
+    gate_results[section] = current
+    run.gate_results_json = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"), default=str)
+    db.commit()
 
 
 def _json_object(raw: str | None) -> dict[str, Any]:

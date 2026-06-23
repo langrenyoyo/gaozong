@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models import AiAgent, AiAutoReplyRun, DouyinAccountAgentBinding, DouyinAccountAutoreplySetting
-from app.services.conversation_autopilot_state_service import is_conversation_manual_takeover
+from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
     parse_blocked_risk_flags,
@@ -57,13 +57,15 @@ def evaluate_pre_llm_gates(
         return GateDecision(False, "skipped", "empty_message", gate_results)
     if not conversation_short_id:
         return GateDecision(False, "skipped", "conversation_missing", gate_results)
-    if is_conversation_manual_takeover(
+    manual_takeover = evaluate_manual_takeover_gate(
         db,
         merchant_id=merchant_id,
         account_open_id=account_open_id,
         conversation_short_id=conversation_short_id,
         now=current_time,
-    ):
+    )
+    gate_results["manual_takeover"] = manual_takeover
+    if manual_takeover.get("blocked") is True:
         return GateDecision(False, "blocked", "manual_takeover", gate_results)
 
     if latest_message_state and latest_message_state.get("latest_is_customer_message") is False:

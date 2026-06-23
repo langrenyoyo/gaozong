@@ -147,6 +147,10 @@ export interface DouyinMessageItem {
   created_at: string;
   raw_event_id?: number;
   server_message_id?: string | null;
+  send_source?: string | null;
+  operator_id?: string | null;
+  auto_send?: boolean | number | null;
+  auto_reply_run_id?: number | null;
 }
 
 export interface DouyinMessageListResponse {

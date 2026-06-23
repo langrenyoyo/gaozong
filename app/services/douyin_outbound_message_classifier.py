@@ -9,6 +9,11 @@ from app.models import DouyinWebhookEvent
 from app.services.ai_auto_sent_message_matcher import is_ai_auto_sent_message_event
 
 
+SYSTEM_NOTICE_TEXTS = {
+    "你收到一条新消息，请打开抖音app查看",
+}
+
+
 def is_effective_human_outbound_message(db: Session, event: DouyinWebhookEvent) -> bool:
     if event.event != "im_send_msg" or event.is_duplicate == 1:
         return False
@@ -23,9 +28,17 @@ def outbound_skip_reason(event: DouyinWebhookEvent) -> str | None:
     message_type = (event.message_type or "").strip().lower()
     if message_type == "notice":
         return "notice_message"
-    if not _normalize_message_text(_parsed_event_content(event)):
+    text = _normalize_message_text(_parsed_event_content(event))
+    if not text:
         return "empty_text"
+    if is_system_notice_text(text):
+        return "system_notice_message"
     return None
+
+
+def is_system_notice_text(text: str | None) -> bool:
+    normalized = str(text or "").strip()
+    return normalized in SYSTEM_NOTICE_TEXTS
 
 
 def im_send_msg_participants(event: DouyinWebhookEvent) -> tuple[str | None, str | None]:

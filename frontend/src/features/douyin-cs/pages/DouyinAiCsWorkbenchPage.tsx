@@ -254,8 +254,19 @@ function isManualMessage(message: DouyinMessageItem) {
   );
 }
 
+function isAiAutoReplyMessage(message: DouyinMessageItem) {
+  return (
+    message.send_source === "ai_auto" ||
+    message.operator_id === "ai_auto_reply" ||
+    message.auto_send === true ||
+    message.auto_send === 1 ||
+    Boolean(message.auto_reply_run_id)
+  );
+}
+
 function messageRoleLabel(message: DouyinMessageItem) {
   if (isCustomerMessage(message)) return "客户";
+  if (isAiAutoReplyMessage(message)) return "AI 自动回复";
   if (isManualMessage(message)) return "人工客服";
   return "系统";
 }

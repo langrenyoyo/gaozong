@@ -185,6 +185,8 @@ def _insert_manual_takeover(
     account_open_id: str = "account-open-1",
     conversation_short_id: str = "conv-1",
     manual_takeover_until: datetime | None = None,
+    customer_open_id: str | None = None,
+    last_human_message_at: datetime | None = None,
 ) -> None:
     db = TestSession()
     try:
@@ -193,8 +195,11 @@ def _insert_manual_takeover(
                 merchant_id=merchant_id,
                 account_open_id=account_open_id,
                 conversation_short_id=conversation_short_id,
+                customer_open_id=customer_open_id,
                 mode="manual",
                 manual_takeover_until=manual_takeover_until,
+                last_human_message_at=last_human_message_at,
+                updated_at=last_human_message_at,
             )
         )
         db.commit()
@@ -1034,6 +1039,39 @@ def test_resumed_ai_autopilot_allows_next_customer_message_to_pass_manual_gate()
     assert run.status == "decided"
     assert run.block_reason is None
     assert fake_client.calls
+
+
+def test_notice_sourced_manual_takeover_is_ignored_for_next_customer_message():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    notice_time = datetime.now() - timedelta(seconds=30)
+    event_id = _insert_event(event_key="event-after-notice-manual")
+    _insert_event(
+        event="im_send_msg",
+        text="你收到一条新消息，请打开抖音app查看",
+        event_key="event-system-notice-manual",
+        server_message_id="server-msg-system-notice",
+        created_at=notice_time,
+    )
+    _insert_account_agent_binding()
+    _insert_autoreply_settings()
+    _insert_manual_takeover(
+        customer_open_id="customer-open-1",
+        last_human_message_at=notice_time,
+    )
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    run = _latest_run()
+    gate_results = json.loads(run.gate_results_json)
+    assert run.status == "decided"
+    assert run.block_reason is None
+    assert fake_client.calls
+    assert gate_results["pre_llm"]["manual_takeover"]["blocked"] is False
+    assert gate_results["pre_llm"]["manual_takeover"]["ignored_reason"] == "notice_or_system_message"
 
 
 def test_frequency_counts_non_skipped_runs_only():

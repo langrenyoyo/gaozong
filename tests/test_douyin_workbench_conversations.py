@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import DouyinWebhookEvent
+from app.models import DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.models import DouyinLead
 from app.services.douyin_live_check_service import record_oauth_callback, reset_live_check_state
 
@@ -159,6 +159,40 @@ def _insert_event(
         db.close()
 
 
+def _insert_ai_auto_send_record(
+    *,
+    conversation_short_id: str = "conv_ai_auto",
+    account_open_id: str = "account_ai",
+    customer_open_id: str = "customer_ai",
+    upstream_msg_id: str = "msg_ai_auto",
+) -> None:
+    db = TestSession()
+    try:
+        db.add(
+            DouyinPrivateMessageSend(
+                main_account_id=1,
+                conversation_short_id=conversation_short_id,
+                server_message_id="trigger-msg",
+                from_user_id=account_open_id,
+                to_user_id=customer_open_id,
+                customer_open_id=customer_open_id,
+                account_open_id=account_open_id,
+                scene="im_reply_msg",
+                content="您好，可以继续沟通。",
+                status="sent",
+                manual_confirmed=0,
+                auto_send=1,
+                send_source="ai_auto",
+                operator_id="ai_auto_reply",
+                auto_reply_run_id=123,
+                upstream_msg_id=upstream_msg_id,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def _insert_lead(
     *,
     open_id: str = "customer_001",
@@ -246,6 +280,29 @@ def test_customer_private_message_aggregates_to_conversation_without_contact():
     assert data["items"][0]["open_id"] == "customer_no_contact"
     assert data["items"][0]["last_message"] == "hello"
     assert data["items"][0]["lead_status"] == "contact_not_found"
+
+
+def test_ai_auto_sent_message_exposes_ai_source_metadata():
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_ai",
+        account_open_id="account_ai",
+        text="您好，可以继续沟通。",
+        conversation_short_id="conv_ai_auto",
+        server_message_id="msg_ai_auto",
+        event_key="event_ai_auto_msg",
+    )
+    _insert_ai_auto_send_record()
+
+    data = _client().get(
+        "/integrations/douyin/conversations/conv_ai_auto/messages",
+        params={"account_open_id": "account_ai"},
+    ).json()
+
+    assert data["items"][0]["send_source"] == "ai_auto"
+    assert data["items"][0]["operator_id"] == "ai_auto_reply"
+    assert data["items"][0]["auto_send"] is True
+    assert data["items"][0]["auto_reply_run_id"] == 123
 
 
 def test_conversation_tags_are_empty_when_no_deterministic_signal_exists():

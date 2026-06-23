@@ -15,7 +15,7 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
-from app.models import DouyinLead, DouyinWebhookEvent
+from app.models import DouyinLead, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.contact_extractor import extract_contacts_from_text
 from app.services.douyin_live_check_service import (
     list_authorized_accounts,
@@ -74,6 +74,10 @@ class WorkbenchMessage:
     nick_name: str | None
     avatar: str | None
     lead_id: int | None
+    send_source: str | None = None
+    operator_id: str | None = None
+    auto_send: bool | None = None
+    auto_reply_run_id: int | None = None
 
 
 def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str, Any]:
@@ -249,6 +253,10 @@ def list_conversation_messages(
                 else "resource_url_not_found",
                 "created_at": message.created_at,
                 "server_message_id": message.server_message_id,
+                "send_source": message.send_source,
+                "operator_id": message.operator_id,
+                "auto_send": message.auto_send,
+                "auto_reply_run_id": message.auto_reply_run_id,
             }
         )
     logger.info(
@@ -469,7 +477,7 @@ def _load_messages(
     parse_start = time.perf_counter()
     messages: list[WorkbenchMessage] = []
     for row in rows:
-        message = _row_to_message(row)
+        message = _row_to_message(db, row)
         if message is None:
             continue
         if account_open_id and message.account_open_id != account_open_id:
@@ -636,7 +644,7 @@ def _event_derived_accounts(db: Session) -> list[dict[str, Any]]:
     )
 
 
-def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
+def _row_to_message(db: Session, row: DouyinWebhookEvent) -> WorkbenchMessage | None:
     payload = _parse_raw_body(row.raw_body)
     if payload is None:
         return None
@@ -655,6 +663,7 @@ def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
     conversation_short_id = _optional_str(content.get("conversation_short_id"))
     conversation_key = conversation_short_id or f"{account_open_id}:{open_id}"
     profile = _profile_for_customer(row, payload, content, open_id)
+    send_record = _find_message_send_record(db, row, account_open_id=account_open_id, open_id=open_id)
     return WorkbenchMessage(
         event_id=row.id,
         event=row.event or "",
@@ -671,6 +680,46 @@ def _row_to_message(row: DouyinWebhookEvent) -> WorkbenchMessage | None:
         nick_name=profile.get("nick_name"),
         avatar=profile.get("avatar"),
         lead_id=row.lead_id,
+        send_source=getattr(send_record, "send_source", None),
+        operator_id=getattr(send_record, "operator_id", None),
+        auto_send=bool(send_record.auto_send) if send_record is not None else None,
+        auto_reply_run_id=getattr(send_record, "auto_reply_run_id", None),
+    )
+
+
+def _find_message_send_record(
+    db: Session,
+    row: DouyinWebhookEvent,
+    *,
+    account_open_id: str,
+    open_id: str,
+) -> DouyinPrivateMessageSend | None:
+    if row.event != "im_send_msg":
+        return None
+    payload = _parse_raw_body(row.raw_body) or {}
+    content = _payload_content(row, payload)
+    conversation_short_id = row.conversation_short_id or _optional_str(content.get("conversation_short_id"))
+    base_query = (
+        db.query(DouyinPrivateMessageSend)
+        .filter(DouyinPrivateMessageSend.account_open_id == account_open_id)
+        .filter(DouyinPrivateMessageSend.customer_open_id == open_id)
+        .filter(DouyinPrivateMessageSend.conversation_short_id == conversation_short_id)
+        .filter(DouyinPrivateMessageSend.status == "sent")
+    )
+    if row.server_message_id:
+        matched = (
+            base_query
+            .filter(DouyinPrivateMessageSend.upstream_msg_id == row.server_message_id)
+            .order_by(DouyinPrivateMessageSend.id.desc())
+            .first()
+        )
+        if matched is not None:
+            return matched
+    return (
+        base_query
+        .filter(DouyinPrivateMessageSend.content == normalize_message_text(content))
+        .order_by(DouyinPrivateMessageSend.id.desc())
+        .first()
     )
 
 
