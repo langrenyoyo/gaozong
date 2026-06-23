@@ -808,6 +808,60 @@ def test_openapi_success_marks_sent_and_writes_ai_auto_send_record():
         db.close()
 
 
+def test_send_service_cleans_polluted_fenced_json_before_openapi():
+    run_id = _insert_run(
+        decision_log_id=204,
+        content='```json\n{"reply_text":"你好","manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}\n```',
+    )
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-clean"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        record = db.query(DouyinPrivateMessageSend).one()
+        assert result["status"] == "sent"
+        assert run.status == "sent"
+        assert record.content == "你好"
+        assert "```json" not in record.content
+        assert "manual_required" not in record.content
+        payload = openapi_mock.call_args.args[1]
+        assert payload["content"] == "你好"
+    finally:
+        db.close()
+
+
+def test_send_service_blocks_json_without_reply_text_before_openapi():
+    run_id = _insert_run(
+        decision_log_id=205,
+        content='{"manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}',
+    )
+    _insert_settings()
+    _insert_event()
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert result["status"] == "send_skipped"
+        assert result["reason"] == "format_invalid"
+        assert run.status == "send_skipped"
+        assert run.block_reason == "format_invalid"
+        assert run.error_message == "llm_reply_json_parse_failed"
+        assert db.query(DouyinPrivateMessageSend).count() == 0
+        openapi_mock.assert_not_called()
+    finally:
+        db.close()
+
+
 def test_openapi_success_syncs_final_auto_send_when_risk_flags_exist():
     stale_gate_results = {
         "pre_llm": {"passed": True},

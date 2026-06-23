@@ -649,6 +649,61 @@ def test_9100_risk_flags_do_not_block_run():
     assert run.would_send_content == "风险回复"
 
 
+def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-fenced-json")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings()
+    fake_client = FakeAiCsClient(result={
+        "reply_text": '```json\n{"reply_text":"你好","manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}\n```',
+        "manual_required": True,
+        "risk_flags": ["llm_json_parse_failed"],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": False,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    run = _latest_run()
+    assert run.status == "decided"
+    assert run.block_reason is None
+    assert run.would_send_content == "你好"
+    assert "```json" not in (run.would_send_content or "")
+    assert "manual_required" not in (run.would_send_content or "")
+
+
+def test_json_without_reply_text_is_blocked_before_run_content():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-json-without-reply")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings()
+    fake_client = FakeAiCsClient(result={
+        "reply_text": '{"manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}',
+        "manual_required": True,
+        "risk_flags": ["llm_json_parse_failed"],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": False,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "format_invalid"
+    assert run.error_message == "llm_reply_json_parse_failed"
+    assert run.would_send_content is None
+
+
 def test_9100_rag_and_confidence_gates_do_not_block_run():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
+from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import (
     evaluate_manual_takeover_gate,
     mark_ai_replied,
@@ -67,11 +68,24 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         logger.info("ai_auto_reply_send_skipped stage=dedupe run_id=%s reason=already_sent", run.id)
         return {"status": "send_skipped", "reason": "already_sent", "record_id": existing_send.id}
 
-    content = (run.would_send_content or "").strip()
+    content_check = sanitize_ai_reply_content(run.would_send_content)
+    if content_check.format_invalid:
+        _mark_format_invalid(db, run, content_check.reason or "llm_reply_json_parse_failed")
+        logger.warning(
+            "ai_auto_reply_send_skipped stage=content_format run_id=%s reason=format_invalid failure_stage=reply_content_sanitize",
+            run.id,
+        )
+        return {"status": "send_skipped", "reason": "format_invalid"}
+
+    content = (content_check.content or "").strip()
     if not content:
         _mark_send_skipped(db, run, "empty_content")
         logger.info("ai_auto_reply_send_skipped stage=content_check run_id=%s reason=empty_content", run.id)
         return {"status": "send_skipped", "reason": "empty_content"}
+    if content != (run.would_send_content or "").strip():
+        run.would_send_content = content
+        run.updated_at = datetime.now()
+        db.commit()
 
     settings = get_account_autoreply_settings(
         db,
@@ -200,6 +214,14 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
 def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> None:
     run.status = "send_skipped"
     run.block_reason = reason
+    run.updated_at = datetime.now()
+    db.commit()
+
+
+def _mark_format_invalid(db: Session, run: AiAutoReplyRun, error_message: str) -> None:
+    run.status = "send_skipped"
+    run.block_reason = "format_invalid"
+    run.error_message = error_message
     run.updated_at = datetime.now()
     db.commit()
 

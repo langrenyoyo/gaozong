@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
@@ -87,7 +88,10 @@ def _send_private_message_with_context(
     auto_reply_run_id: int | None = None,
 ) -> dict[str, Any]:
     """基于已校验的 send_msg context 发送私信，并写入统一发送流水。"""
-    content_text = (content or "").strip()
+    content_check = sanitize_ai_reply_content(content)
+    if content_check.format_invalid:
+        raise HTTPException(status_code=400, detail="llm_reply_json_parse_failed")
+    content_text = (content_check.content or "").strip()
     if not content_text:
         raise HTTPException(status_code=400, detail="content must not be empty")
     if not send_context.get("conversation_id") or not send_context.get("msg_id"):

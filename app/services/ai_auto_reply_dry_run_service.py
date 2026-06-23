@@ -14,6 +14,7 @@ from app.auth.context import RequestContext
 from app.database import SessionLocal
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
 from app.models import AiAutoReplyRun, DouyinWebhookEvent
+from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.agent_knowledge_category_service import list_agent_category_keys
 from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
@@ -263,15 +264,26 @@ def _run_with_session(db, *, event_id: int) -> None:
         return
 
     final_result = dict(upstream_result)
+    content_check = sanitize_ai_reply_content(final_result.get("reply_text"))
+    format_invalid = content_check.format_invalid
+    if content_check.content is not None:
+        final_result["reply_text"] = content_check.content
+    elif format_invalid:
+        final_result["reply_text"] = ""
+        final_result["format_invalid"] = True
+        final_result["format_invalid_reason"] = content_check.reason or "llm_reply_json_parse_failed"
     upstream_auto_send = final_result.get("auto_send") is True
     post_gate = evaluate_post_llm_gates(
         settings=settings,
         result=final_result,
         upstream_auto_send=upstream_auto_send,
     )
-    final_result["auto_send"] = bool(post_gate.passed and str(final_result.get("reply_text") or "").strip())
-    status = post_gate.status or ("decided" if post_gate.passed else "blocked")
-    block_reason = post_gate.reason
+    final_result["auto_send"] = bool(
+        post_gate.passed and not format_invalid and str(final_result.get("reply_text") or "").strip()
+    )
+    status = "blocked" if format_invalid else (post_gate.status or ("decided" if post_gate.passed else "blocked"))
+    block_reason = "format_invalid" if format_invalid else post_gate.reason
+    error_message = content_check.reason if format_invalid else None
     decision_log_id = record_ai_reply_decision(
         db,
         context=context,
@@ -294,11 +306,19 @@ def _run_with_session(db, *, event_id: int) -> None:
         block_reason=block_reason,
         decision_log_id=decision_log_id,
         would_send_content=final_result.get("reply_text") if status == "decided" else None,
+        error_message=error_message,
         gate_results={
             "pre_llm": pre_gate.gate_results or {},
             "history": history_gate,
             "agent": agent_gate,
-            "post_llm": post_gate.gate_results or {},
+            "post_llm": {
+                **(post_gate.gate_results or {}),
+                **(
+                    {"format_invalid": True, "format_invalid_reason": error_message}
+                    if format_invalid
+                    else {}
+                ),
+            },
         },
     )
     if status == "decided" and run.mode == "real_send_candidate":

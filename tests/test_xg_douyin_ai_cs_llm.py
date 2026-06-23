@@ -241,6 +241,66 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
     assert data["auto_send"] is False
 
 
+def test_reply_suggestion_extracts_reply_text_from_fenced_json(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": '```json\n{"reply_text":"你好","intent":"clarify","lead_level":"unknown","tags":[],"manual_required":false,"risk_flags":[],"confidence":0.9,"auto_send":false}\n```',
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reply_text"] == "你好"
+    assert "```json" not in data["reply_text"]
+
+
+def test_reply_suggestion_extracts_reply_text_from_inline_fenced_json(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": '```json { "reply_text": "你好" } ```',
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reply_text"] == "你好"
+    assert "reply_text" not in data["reply_text"]
+
+
 def test_reply_suggestion_prompt_includes_sanitized_conversation_history(
     tmp_path, monkeypatch
 ):

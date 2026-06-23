@@ -1068,11 +1068,27 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
             "llm_raw_auto_send": False,
         }
 
+    sanitized = _sanitize_structured_llm_reply_content(text)
+    parse_text = _strip_structured_llm_json_fence(text)
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(parse_text)
     except json.JSONDecodeError:
+        if sanitized.extracted_from_structured and sanitized.content:
+            return {
+                "reply_text": sanitized.content,
+                "intent": None,
+                "lead_level": "unknown",
+                "tags": [],
+                "detected_vehicle": None,
+                "detected_contacts": None,
+                "manual_required": True,
+                "manual_required_reason": JSON_PARSE_FAILED_REASON,
+                "risk_flags": ["llm_json_parse_failed"],
+                "confidence": 0.0,
+                "llm_raw_auto_send": False,
+            }
         return {
-            "reply_text": _safe_fallback_reply_text(text),
+            "reply_text": "" if sanitized.format_invalid else _safe_fallback_reply_text(text),
             "intent": None,
             "lead_level": "unknown",
             "tags": [],
@@ -1087,7 +1103,7 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
 
     if not isinstance(parsed, dict):
         return {
-            "reply_text": _safe_fallback_reply_text(text),
+            "reply_text": "" if sanitized.format_invalid else _safe_fallback_reply_text(text),
             "intent": None,
             "lead_level": "unknown",
             "tags": [],
@@ -1100,7 +1116,8 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
             "llm_raw_auto_send": False,
         }
 
-    reply_text = _safe_fallback_reply_text(parsed.get("reply_text"))
+    parsed_reply = _sanitize_structured_llm_reply_content(parsed.get("reply_text"))
+    reply_text = parsed_reply.content or ""
     if not reply_text:
         reply_text = "AI 未返回有效文本，请人工确认回复。"
     return {
@@ -1118,6 +1135,81 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
         "confidence": _normalize_confidence(parsed.get("confidence")),
         "llm_raw_auto_send": bool(parsed.get("auto_send")),
     }
+
+
+def _strip_structured_llm_json_fence(text: str) -> str:
+    match = re.match(r"^```\s*(?:json)?\s*(.*?)\s*```$", text.strip(), flags=re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else text
+
+
+class _StructuredReplyContent:
+    def __init__(
+        self,
+        *,
+        content: str | None,
+        format_invalid: bool = False,
+        extracted_from_structured: bool = False,
+    ) -> None:
+        self.content = content
+        self.format_invalid = format_invalid
+        self.extracted_from_structured = extracted_from_structured
+
+
+def _sanitize_structured_llm_reply_content(value: object) -> _StructuredReplyContent:
+    text = str(value or "").strip()
+    if not text:
+        return _StructuredReplyContent(content=None)
+
+    candidate = _strip_structured_llm_json_fence(text)
+    is_structured = candidate != text or _looks_like_structured_json(candidate) or '"reply_text"' in candidate
+    if not is_structured:
+        return _StructuredReplyContent(content=text)
+
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        reply_text = _extract_reply_text_loose(candidate)
+        if reply_text:
+            return _StructuredReplyContent(content=reply_text, extracted_from_structured=True)
+        return _StructuredReplyContent(content=None, format_invalid=True, extracted_from_structured=True)
+
+    if not isinstance(parsed, dict):
+        return _StructuredReplyContent(content=None, format_invalid=True, extracted_from_structured=True)
+
+    reply_text = _clean_structured_reply_text(parsed.get("reply_text"))
+    if reply_text:
+        return _StructuredReplyContent(content=reply_text, extracted_from_structured=True)
+    return _StructuredReplyContent(content=None, format_invalid=True, extracted_from_structured=True)
+
+
+def _looks_like_structured_json(text: str) -> bool:
+    stripped = text.strip()
+    return (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith("[") and stripped.endswith("]")
+    )
+
+
+def _extract_reply_text_loose(text: str) -> str | None:
+    match = re.search(r'"reply_text"\s*:\s*"((?:\\.|[^"\\])*)"', text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        value = json.loads(f'"{match.group(1)}"')
+    except (TypeError, ValueError):
+        value = match.group(1)
+    return _clean_structured_reply_text(value)
+
+
+def _clean_structured_reply_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    nested = _strip_structured_llm_json_fence(text)
+    if nested != text or (_looks_like_structured_json(nested) and '"reply_text"' in nested):
+        return _sanitize_structured_llm_reply_content(nested).content
+    if _looks_like_structured_json(text):
+        return None
+    return text
 
 
 def _apply_safety_postprocess(
@@ -1268,6 +1360,17 @@ def _apply_safety_postprocess(
         conversation_history=conversation_history,
         rag_used=rag_used,
     )
+    final_risk_flags = list(decision.get("risk_flags") or [])
+    no_rag_specific_floor_price = (
+        not rag_used
+        and "no_rag_risky_question" in final_risk_flags
+        and _is_specific_model_or_inventory_question(text)
+        and _contains_any(text, ("最低", "底价", "优惠"))
+    )
+    if not rag_used and ("prompt_injection" in final_risk_flags or no_rag_specific_floor_price):
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = decision.get("manual_required_reason") or SAFETY_REVIEW_REASON
+        decision["auto_send"] = False
     return decision
 
 
