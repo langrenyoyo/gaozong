@@ -35,9 +35,6 @@ from sqlalchemy.orm import Session
 
 from app.models import ReplyCheck, DouyinLead, CheckConfig, LeadNotification
 from app.services.reply_analyzer import analyze_reply, get_config_value
-from app.wechat_ui.exceptions import WechatUIError
-from app.wechat_ui.window_locator import find_wechat_window, find_message_list, find_current_chat_title
-from app.wechat_ui.current_chat_reader import read_recent_messages
 from app.wechat_ui.reply_detector import find_self_messages, find_fallback_messages, find_effective_reply
 
 logger = logging.getLogger(__name__)
@@ -86,6 +83,10 @@ def detect_reply_from_wechat(
     }
 
     try:
+        from app.wechat_ui.exceptions import WechatUIError
+        from app.wechat_ui.window_locator import find_wechat_window, find_message_list, find_current_chat_title
+        from app.wechat_ui.current_chat_reader import read_recent_messages
+
         # --- 第1步：定位微信窗口 ---
         try:
             window = find_wechat_window()

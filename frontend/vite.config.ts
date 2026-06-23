@@ -14,6 +14,16 @@ const lucideIconNames = Object.keys(lucide).filter(
   (k) => /^[A-Z]/.test(k) && k.endsWith("Icon")
 );
 
+const apiProxyTarget =
+  process.env.VITE_DEV_API_PROXY_TARGET ||
+  process.env.AUTO_WECHAT_API_PROXY_TARGET ||
+  "http://127.0.0.1:9000";
+
+const douyinAiCsProxyTarget =
+  process.env.VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET ||
+  process.env.DOUYIN_AI_CS_PROXY_TARGET ||
+  "http://127.0.0.1:9100";
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -38,6 +48,22 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  server: {
+    proxy: {
+      // Docker 前端容器可把浏览器侧 /api 转发到 9000，避免 Vite 返回 index.html。
+      "/api": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        rewrite: (value) => value.replace(/^\/api/, ""),
+      },
+      // 抖音 AI 客服独立服务的开发代理，保持与 /api 同一套浏览器侧前缀策略。
+      "/ai-cs-api": {
+        target: douyinAiCsProxyTarget,
+        changeOrigin: true,
+        rewrite: (value) => value.replace(/^\/ai-cs-api/, ""),
+      },
     },
   },
 });

@@ -182,16 +182,16 @@ def _is_wechat_task_busy() -> bool:
 
 
 def _probe_wechat_status_for_heartbeat() -> str:
-    """心跳只做微信窗口发现，不执行前台切换、OCR、搜索或粘贴。"""
+    """心跳只做微信窗口诊断，不执行前台切换、OCR、搜索或粘贴。"""
     try:
-        window = find_wechat_window()
+        diagnostics = collect_wechat_window_diagnostics()
     except Exception as exc:
         logger.warning(
-            "heartbeat wechat status probe failed: stage=find_wechat_window error=%s",
+            "heartbeat wechat status probe failed: stage=collect_wechat_window_diagnostics error=%s",
             exc,
         )
         return "unknown"
-    return "ready" if window is not None else "unavailable"
+    return "ready" if diagnostics.get("wechat_detected") else "unavailable"
 
 
 def _build_agent_heartbeat_payload() -> dict:

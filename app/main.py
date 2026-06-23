@@ -31,15 +31,16 @@ from app.routers import (
     knowledge_training,
     compute,
     capability_gateway,
+    replies,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
 try:
-    from app.routers import replies, feedback, lead_notifications
+    from app.routers import feedback, lead_notifications
     _WINDOWS_ROUTERS_AVAILABLE = True
 except ImportError:
     _WINDOWS_ROUTERS_AVAILABLE = False
-    logger.warning("Windows 专用路由（replies/feedback/lead_notifications）导入跳过，当前平台不支持微信 UI 自动化")
+    logger.warning("Windows 专用路由（feedback/lead_notifications）导入跳过，当前平台不支持微信 UI 自动化")
 from app.scheduler.check_scheduler import scheduler
 from app.scheduler.wechat_auto_detect_scheduler import wechat_auto_detect_scheduler
 
@@ -128,10 +129,10 @@ def create_app() -> FastAPI:
     app.include_router(compute.admin_router)
     app.include_router(compute.internal_router)
     app.include_router(capability_gateway.router)
+    app.include_router(replies.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:
-        app.include_router(replies.router)
         app.include_router(feedback.router)
         app.include_router(lead_notifications.router)
 

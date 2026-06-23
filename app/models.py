@@ -418,6 +418,7 @@ class DouyinAccountAutoreplySetting(Base):
     require_rag_sources = Column(Boolean, nullable=False, default=True)
     allowed_intents_json = Column(Text)
     blocked_risk_flags_json = Column(Text)
+    direct_llm_policy_json = Column(Text)
     customer_whitelist_open_ids = Column(Text)
     conversation_whitelist_ids = Column(Text)
     min_interval_seconds = Column(Integer, nullable=False, default=10)

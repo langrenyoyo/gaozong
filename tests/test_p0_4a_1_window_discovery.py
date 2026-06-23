@@ -62,6 +62,28 @@ def test_find_wechat_window_excludes_browser_with_wechat_title():
     assert _select_best_wechat_window_info([browser, wechat])["hwnd"] == 2
 
 
+def test_find_wechat_window_excludes_xshell_auto_wechat_title():
+    from app.wechat_ui.window_locator import _is_wechat_window_info, _select_best_wechat_window_info
+
+    xshell = _info(
+        hwnd=1,
+        title="bcta_root - root@iZ7xvfr1yyocxr9qilzuu2Z: /www/wwwroot/auto_wechat - Xshell 7",
+        class_name="Xshell7::MainFrame_0",
+        process_name="Xshell.exe",
+        rect={"left": 352, "top": 90, "right": 1352, "bottom": 1048},
+    )
+    wechat = _info(
+        hwnd=2,
+        title="微信",
+        class_name="Qt51514QWindowIcon",
+        process_name="Weixin.exe",
+        rect={"left": 0, "top": 0, "right": 900, "bottom": 700},
+    )
+
+    assert _is_wechat_window_info(xshell) is False
+    assert _select_best_wechat_window_info([xshell, wechat])["hwnd"] == 2
+
+
 def test_find_wechat_window_excludes_autowechat_overlay():
     from app.wechat_ui.window_locator import _is_wechat_window_info, _select_best_wechat_window_info
 
@@ -138,6 +160,75 @@ def test_find_wechat_window_prefers_largest_visible_window():
     ])
 
     assert selected["hwnd"] == 2
+
+
+class _FakeRect:
+    def __init__(self, left, top, right, bottom):
+        self.left = left
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+
+    def width(self):
+        return self.right - self.left
+
+    def height(self):
+        return self.bottom - self.top
+
+
+class _MissingNamedList:
+    def Exists(self, maxSearchSeconds=0):
+        return False
+
+
+class _FakeControl:
+    def __init__(
+        self,
+        *,
+        name="",
+        control_type="PaneControl",
+        rect=None,
+        children=None,
+    ):
+        self.Name = name
+        self.ControlTypeName = control_type
+        self.BoundingRectangle = rect or _FakeRect(0, 0, 0, 0)
+        self._children = list(children or [])
+
+    def ListControl(self, Name="", searchDepth=0):
+        return _MissingNamedList()
+
+    def GetChildren(self):
+        return list(self._children)
+
+    def Exists(self, maxSearchSeconds=0):
+        return True
+
+
+def test_find_message_list_falls_back_to_right_chat_area_list():
+    from app.wechat_ui.window_locator import find_message_list
+
+    left_conversation_list = _FakeControl(
+        name="会话",
+        control_type="ListControl",
+        rect=_FakeRect(60, 80, 300, 680),
+        children=[_FakeControl(name="Aw3", control_type="ListItemControl")],
+    )
+    chat_message_list = _FakeControl(
+        name="",
+        control_type="ListControl",
+        rect=_FakeRect(320, 80, 850, 430),
+        children=[
+            _FakeControl(name="上一条消息", control_type="ListItemControl"),
+            _FakeControl(name="当前消息", control_type="ListItemControl"),
+        ],
+    )
+    window = _FakeControl(
+        rect=_FakeRect(0, 0, 880, 700),
+        children=[left_conversation_list, chat_message_list],
+    )
+
+    assert find_message_list(window, timeout=0) is chat_message_list
 
 
 def test_find_wechat_window_uses_win32_candidate_before_uia_desktop():

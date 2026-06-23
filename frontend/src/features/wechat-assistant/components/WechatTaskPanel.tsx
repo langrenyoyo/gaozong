@@ -162,6 +162,20 @@ function taskStatusTone(status: string): string {
   return TASK_STATUS_TONES[status] || "bg-slate-100 text-slate-700";
 }
 
+const TASK_FAILURE_STATUSES = new Set(["failed", "blocked", "timeout"]);
+
+function shouldShowFailureReason(task: WechatTask): boolean {
+  return Boolean(task.failure_stage && TASK_FAILURE_STATUSES.has(task.status));
+}
+
+function taskStageLabel(task: WechatTask): string {
+  return shouldShowFailureReason(task) ? "失败原因" : "系统提示";
+}
+
+function taskStageTone(task: WechatTask): string {
+  return shouldShowFailureReason(task) ? "text-amber-700" : "text-[#64748b]";
+}
+
 function formatTime(value: string | null): string {
   return formatDateTimeLocal(value, {
     month: "2-digit",
@@ -759,7 +773,10 @@ export default function WechatTaskPanel() {
               </div>
               <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#64748b]">
                 <div>
-                  failure_stage: <span className="font-semibold text-[#334155]">{latestTask.failure_stage || "-"}</span>
+                  {taskStageLabel(latestTask)}:{" "}
+                  <span className={`font-semibold ${taskStageTone(latestTask)}`}>
+                    {latestTask.failure_stage || "-"}
+                  </span>
                 </div>
                 <div>
                   agent: <span className="font-semibold text-[#334155]">{latestTask.agent_hostname || "-"} (PID {latestTask.agent_pid ?? "-"})</span>
@@ -1044,8 +1061,10 @@ export default function WechatTaskPanel() {
                       </span>
                     </div>
                     {t.failure_stage && (
-                      <div className="mt-1 text-[10px] text-red-600">
-                        failure_stage: {t.failure_stage}
+                      <div className={`mt-1 text-[10px] ${
+                        shouldShowFailureReason(t) ? "text-red-600" : "text-slate-500"
+                      }`}>
+                        {taskStageLabel(t)}: {t.failure_stage}
                       </div>
                     )}
                     {/* raw_result 展示 */}
@@ -1231,8 +1250,8 @@ export default function WechatTaskPanel() {
                           </span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-[#8b95a6]">失败原因</span>
-                          <span className="font-semibold text-[#374151]">
+                          <span className="text-[#8b95a6]">{taskStageLabel(task)}</span>
+                          <span className={`font-semibold ${taskStageTone(task)}`}>
                             {task.failure_stage || "-"}
                           </span>
                         </div>
@@ -1279,8 +1298,12 @@ export default function WechatTaskPanel() {
                       )}
 
                       {task.failure_stage ? (
-                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
-                          失败原因：{task.failure_stage}
+                        <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${
+                          shouldShowFailureReason(task)
+                            ? "border-amber-200 bg-amber-50 text-amber-700"
+                            : "border-slate-200 bg-slate-50 text-slate-600"
+                        }`}>
+                          {taskStageLabel(task)}：{task.failure_stage}
                         </div>
                       ) : null}
                     </div>

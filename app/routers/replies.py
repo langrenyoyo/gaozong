@@ -12,11 +12,17 @@ from app.schemas import (
 )
 from app.services import reply_checker
 from app.services import wechat_ui_reply_service
-from app.wechat_ui.window_locator import list_suspected_windows, find_wechat_window, find_message_list
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/replies", tags=["回复管理"])
+
+
+def _load_wechat_window_tools():
+    """按需加载微信 UI 定位工具，避免 Docker 9000 跳过纯回写接口。"""
+    from app.wechat_ui.window_locator import list_suspected_windows, find_wechat_window, find_message_list
+
+    return list_suspected_windows, find_wechat_window, find_message_list
 
 
 @router.post("/manual", response_model=CheckOut)
@@ -89,6 +95,7 @@ def debug_windows():
     返回候选窗口列表，包含 Name、ClassName、HWND 等信息。
     """
     try:
+        list_suspected_windows, _, _ = _load_wechat_window_tools()
         windows = list_suspected_windows()
         return {
             "count": len(windows),
@@ -111,6 +118,7 @@ def debug_messages(max_messages: int = Query(10, ge=1, le=50, description="最�
     返回每条消息的子控件详情和各级识别策略结果。
     """
     try:
+        _, find_wechat_window, find_message_list = _load_wechat_window_tools()
         # 定位微信窗口
         window = find_wechat_window()
         # 定位消息列表
@@ -323,6 +331,7 @@ def debug_raw_tree(max_messages: int = Query(5, ge=1, le=20)):
     import uiautomation as uia
 
     try:
+        _, find_wechat_window, find_message_list = _load_wechat_window_tools()
         window = find_wechat_window()
         msg_list = find_message_list(window, timeout=5)
         list_rect = msg_list.BoundingRectangle
@@ -473,6 +482,7 @@ def debug_sender_experiment(data: dict):
     known_self = data.get("known_self_text", "")
 
     try:
+        _, find_wechat_window, find_message_list = _load_wechat_window_tools()
         window = find_wechat_window()
         msg_list = find_message_list(window, timeout=5)
         list_rect = msg_list.BoundingRectangle

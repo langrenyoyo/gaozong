@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 def test_heartbeat_payload_reports_idle_with_wechat_ready_status():
     from app import local_agent_main
 
-    with patch("app.local_agent_main.find_wechat_window") as mock_find:
-        mock_find.return_value = object()
+    with patch("app.local_agent_main.collect_wechat_window_diagnostics") as mock_diagnostics:
+        mock_diagnostics.return_value = {"wechat_detected": True}
         payload = local_agent_main._build_agent_heartbeat_payload()
 
     assert payload["agent_client_id"] == "local-agent-default"
@@ -21,14 +21,37 @@ def test_heartbeat_payload_reports_idle_with_wechat_ready_status():
     assert payload["current_task_id"] is None
     assert payload["current_task_type"] is None
     assert payload["version"]
-    mock_find.assert_called_once()
+    mock_diagnostics.assert_called_once()
 
 
 def test_heartbeat_payload_reports_unavailable_when_wechat_window_missing():
     from app import local_agent_main
 
-    with patch("app.local_agent_main.find_wechat_window") as mock_find:
-        mock_find.return_value = None
+    with patch("app.local_agent_main.collect_wechat_window_diagnostics") as mock_diagnostics:
+        mock_diagnostics.return_value = {"wechat_detected": False, "wechat_candidates": []}
+        payload = local_agent_main._build_agent_heartbeat_payload()
+
+    assert payload["agent_status"] == "idle"
+    assert payload["wechat_status"] == "unavailable"
+    mock_diagnostics.assert_called_once()
+
+
+def test_heartbeat_payload_reports_unavailable_when_wechat_window_minimized():
+    from app import local_agent_main
+
+    with patch("app.local_agent_main.collect_wechat_window_diagnostics") as mock_diagnostics:
+        mock_diagnostics.return_value = {
+            "wechat_detected": False,
+            "wechat_candidates": [
+                {
+                    "title": "微信",
+                    "process_name": "Weixin.exe",
+                    "visible": True,
+                    "iconic": True,
+                }
+            ],
+            "notes": ["检测到疑似微信窗口处于最小化状态"],
+        }
         payload = local_agent_main._build_agent_heartbeat_payload()
 
     assert payload["agent_status"] == "idle"
@@ -38,8 +61,8 @@ def test_heartbeat_payload_reports_unavailable_when_wechat_window_missing():
 def test_heartbeat_payload_reports_unknown_when_wechat_probe_errors(caplog):
     from app import local_agent_main
 
-    with patch("app.local_agent_main.find_wechat_window") as mock_find:
-        mock_find.side_effect = RuntimeError("uia unavailable")
+    with patch("app.local_agent_main.collect_wechat_window_diagnostics") as mock_diagnostics:
+        mock_diagnostics.side_effect = RuntimeError("uia unavailable")
         with caplog.at_level(logging.WARNING):
             payload = local_agent_main._build_agent_heartbeat_payload()
 

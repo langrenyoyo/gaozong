@@ -42,7 +42,7 @@ WECHAT_EXCLUDED_PROCESS_NAMES = {
     "360chrome.exe",
 }
 WECHAT_EXCLUDED_CLASS_CONTAINS = ["Chrome_WidgetWin", "MozillaWindowClass"]
-WECHAT_EXCLUDED_TITLE_CONTAINS = ["AutoWeChat Status", "AutoWeChat"]
+WECHAT_EXCLUDED_TITLE_CONTAINS = ["AutoWeChat Status", "AutoWeChat", "auto_wechat"]
 LOCAL_AGENT_EXCLUDED_TITLE_CONTAINS = ["小高AI微信助手", "微信助手"]
 LOCAL_AGENT_EXCLUDED_PROCESS_CONTAINS = ["小高AI微信助手"]
 WECHAT_CLASS_CONTAINS = [
@@ -127,6 +127,55 @@ def _has_message_list(ctrl: uia.Control) -> bool:
         return msg_list.Exists(maxSearchSeconds=1)
     except Exception:
         return False
+
+
+def _is_right_chat_area_list(ctrl: uia.Control, window_rect) -> bool:
+    """判断控件是否像当前聊天区消息列表。"""
+    try:
+        if getattr(ctrl, "ControlTypeName", "") != "ListControl":
+            return False
+        rect = ctrl.BoundingRectangle
+        window_width = max(1, window_rect.right - window_rect.left)
+        window_height = max(1, window_rect.bottom - window_rect.top)
+        left_ratio = (rect.left - window_rect.left) / window_width
+        width_ratio = (rect.right - rect.left) / window_width
+        height_ratio = (rect.bottom - rect.top) / window_height
+        if left_ratio < 0.30 or width_ratio < 0.35 or height_ratio < 0.20:
+            return False
+        return len(ctrl.GetChildren()) > 0
+    except Exception:
+        return False
+
+
+def _find_message_list_fallback(window: uia.Control) -> uia.Control | None:
+    """新版微信不暴露固定名称时，从右侧聊天区兜底定位消息列表。"""
+    try:
+        window_rect = window.BoundingRectangle
+        stack = list(window.GetChildren())
+    except Exception:
+        return None
+
+    candidates: list[uia.Control] = []
+    while stack:
+        ctrl = stack.pop(0)
+        if _is_right_chat_area_list(ctrl, window_rect):
+            candidates.append(ctrl)
+        try:
+            stack.extend(ctrl.GetChildren())
+        except Exception:
+            pass
+
+    if not candidates:
+        return None
+
+    def _area(ctrl: uia.Control) -> int:
+        try:
+            rect = ctrl.BoundingRectangle
+            return max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+        except Exception:
+            return 0
+
+    return max(candidates, key=_area)
 
 
 def _rect_to_dict(rect: ctypes.wintypes.RECT) -> dict:
@@ -573,6 +622,11 @@ def find_message_list(window: uia.Control, timeout: int = 3) -> uia.Control:
     msg_list = window.ListControl(Name="消息", searchDepth=15)
     if msg_list.Exists(maxSearchSeconds=timeout):
         return msg_list
+
+    fallback = _find_message_list_fallback(window)
+    if fallback is not None:
+        logger.info("消息列表通过右侧聊天区兜底定位成功")
+        return fallback
 
     raise ChatWindowNotFoundError(
         "未找到当前聊天窗口的消息列表。"

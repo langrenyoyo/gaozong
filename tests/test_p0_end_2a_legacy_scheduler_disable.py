@@ -147,3 +147,30 @@ class TestAppCreation:
         assert "/wechat-tasks" in routes
         assert "/checks" in routes
         assert "/automation/status" in routes
+
+    def test_replies_router_registered_when_windows_optional_routers_unavailable(self, monkeypatch):
+        """Windows 可选路由不可导入时，仍必须注册 Local Agent 回写入口。"""
+        import builtins
+        import importlib
+        import sys
+
+        original_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            requested = set(fromlist or [])
+            if name == "app.routers" and {"feedback", "lead_notifications"} & requested:
+                raise ImportError("simulated windows-only routers unavailable")
+            return original_import(name, globals, locals, fromlist, level)
+
+        sys.modules.pop("app.main", None)
+        with monkeypatch.context() as ctx:
+            ctx.setattr(builtins, "__import__", fake_import)
+            main = importlib.import_module("app.main")
+            app = main.create_app()
+            routes = [r.path for r in app.routes if hasattr(r, "path")]
+
+        sys.modules.pop("app.main", None)
+        importlib.import_module("app.main")
+
+        assert "/replies/agent-write-back" in routes
+        assert "/replies/manual" in routes
