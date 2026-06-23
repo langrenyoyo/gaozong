@@ -76,7 +76,7 @@ type AutoReplyRunViewItem = AiAutoReplyRunListItem & Pick<Partial<AiAutoReplyRun
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
-  { key: "manual_required", label: "需人工" },
+  { key: "manual_required", label: "待跟进" },
   { key: "high_intent", label: "高意向" },
   { key: "retained_contact", label: "已留资" },
   { key: "follow_up", label: "待回访" },
@@ -196,7 +196,7 @@ function conversationMatchesFilter(conversation: DouyinConversationItem, filter:
 }
 
 function conversationTagText(tag: string) {
-  if (tag === "manual_required") return "需人工";
+  if (tag === "manual_required") return "待跟进";
   if (tag === "high_intent") return "高意向";
   if (tag === "retained_contact") return "已留资";
   if (tag === "follow_up") return "待回访";
@@ -282,7 +282,7 @@ function messageMetaClass(message: DouyinMessageItem) {
 function chatModeTitle(mode: ChatAssistMode) {
   return mode === "manual_takeover"
     ? "人工接管中，AI 不会自动回复。"
-    : "AI 托管中，后续客户新消息将由 AI 处理。";
+    : "AI 自动回复已开启，客户新消息将由 AI 自动回复。";
 }
 
 function chatModeSubtitle(mode: ChatAssistMode) {
@@ -361,33 +361,42 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
   const key = `${run?.status || ""}:${reason}`;
   const exact: Record<string, string> = {
-    "send_skipped:manual_takeover_blocked": "当前会话处于人工接管状态，未自动发送。",
-    "send_skipped:send_context_unavailable": "发送上下文不可用，未自动发送。",
-    "send_skipped:outbound_after_trigger": "检测到客户消息后已有人工或企业号回复，未自动发送。",
-    "blocked:manual_takeover": "当前会话处于人工接管状态，AI 未自动回复。",
-    "blocked:autoreply_disabled": "企业号未开启自动回复，AI 未自动回复。",
-    "blocked:agent_not_bound": "企业号未绑定 Agent，AI 未自动回复。",
-    "blocked:no_bound_agent": "企业号未绑定 Agent，AI 未自动回复。",
-    "blocked:frequency_conversation_exceeded": "当前会话触发频控限制，AI 未自动回复。",
-    "failed:xg_douyin_ai_cs_timeout": "AI 服务响应超时，本次未自动回复。",
-    "failed:xg_douyin_ai_cs_http_422": "AI 服务请求参数异常，本次未自动回复。",
-    "failed:send_context_unavailable": "发送上下文不可用，未自动发送。",
-    "failed:upstream_send_failed": "抖音接口发送失败。",
-    "failed:douyin_api_error": "抖音接口发送失败。",
-    "failed:send_msg_failed": "抖音接口发送失败。",
-    "send_failed:upstream_send_failed": "抖音接口发送失败。",
-    "send_failed:douyin_api_error": "抖音接口发送失败。",
-    "send_failed:send_msg_failed": "抖音接口发送失败。",
-    "skipped:empty_message": "本次消息为空或非文本消息，未触发自动回复。",
-    "skipped:autoreply_disabled": "企业号未开启自动回复，AI 未自动回复。",
+    "send_skipped:manual_takeover_blocked": "未发送：当前会话处于人工接管",
+    "send_skipped:manual_takeover": "未发送：当前会话处于人工接管",
+    "send_skipped:autoreply_disabled": "未发送：AI 自动回复未开启",
+    "send_skipped:agent_not_bound": "未发送：企业号未绑定智能体",
+    "send_skipped:no_bound_agent": "未发送：企业号未绑定智能体",
+    "send_skipped:send_context_unavailable": "未发送：发送上下文不可用",
+    "send_skipped:upstream_send_failed": "未发送：抖音接口发送失败",
+    "send_skipped:douyin_api_error": "未发送：抖音接口发送失败",
+    "send_skipped:send_msg_failed": "未发送：抖音接口发送失败",
+    "blocked:manual_takeover": "未发送：当前会话处于人工接管",
+    "blocked:manual_takeover_blocked": "未发送：当前会话处于人工接管",
+    "blocked:autoreply_disabled": "未发送：AI 自动回复未开启",
+    "blocked:agent_not_bound": "未发送：企业号未绑定智能体",
+    "blocked:no_bound_agent": "未发送：企业号未绑定智能体",
+    "failed:send_context_unavailable": "未发送：发送上下文不可用",
+    "failed:upstream_send_failed": "未发送：抖音接口发送失败",
+    "failed:douyin_api_error": "未发送：抖音接口发送失败",
+    "failed:send_msg_failed": "未发送：抖音接口发送失败",
+    "send_failed:upstream_send_failed": "未发送：抖音接口发送失败",
+    "send_failed:douyin_api_error": "未发送：抖音接口发送失败",
+    "send_failed:send_msg_failed": "未发送：抖音接口发送失败",
+    "skipped:autoreply_disabled": "未发送：AI 自动回复未开启",
   };
   if (exact[key]) return exact[key];
+  if (reason === "manual_takeover" || reason === "manual_takeover_blocked") return "未发送：当前会话处于人工接管";
+  if (reason === "autoreply_disabled") return "未发送：AI 自动回复未开启";
+  if (reason === "agent_not_bound" || reason === "no_bound_agent") return "未发送：企业号未绑定智能体";
+  if (reason === "send_context_unavailable") return "未发送：发送上下文不可用";
+  if (reason === "upstream_send_failed" || reason === "douyin_api_error" || reason === "send_msg_failed") {
+    return "未发送：抖音接口发送失败";
+  }
   if (reason) return reason;
-  if (run?.status === "send_skipped") return "未自动发送。";
-  if (run?.status === "blocked") return "基础条件未满足，AI 未自动回复。";
-  if (run?.status === "failed" || run?.status === "send_failed") return "自动回复执行失败。";
+  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return "未发送：基础条件未满足";
+  if (run?.status === "failed" || run?.status === "send_failed") return "未发送：抖音接口发送失败";
   if (run?.status === "sent") return "AI 已自动回复。";
-  if (run?.status === "decided") return "AI 已生成回复建议。";
+  if (run?.status === "decided") return "AI 已生成回复。";
   return "暂无自动回复运行结果。";
 }
 
@@ -408,12 +417,12 @@ function isSameConversationAutopilotState(
 function autoReplyRunTitle(run: AutoReplyRunViewItem | null) {
   if (!run) return "AI 自动回复状态：暂无记录";
   if (run.status === "send_skipped" && (run.would_send_content_summary || run.reply_text)) {
-    return "AI 已生成回复";
+    return "AI 自动回复未发送";
   }
-  if (run.status === "blocked") return "AI 自动回复未执行";
-  if (run.status === "failed" || run.status === "send_failed") return "AI 自动回复失败";
+  if (run.status === "blocked" || run.status === "skipped") return "AI 自动回复未发送";
+  if (run.status === "failed" || run.status === "send_failed") return "AI 自动回复未发送";
   if (run.status === "sent") return "AI 已自动回复";
-  if (run.status === "skipped") return "本次消息未触发自动回复";
+  if (run.status === "decided") return "AI 已生成回复";
   return "AI 自动回复状态";
 }
 
@@ -2399,7 +2408,7 @@ export default function DouyinAiCsWorkbenchPage() {
                             {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
                           </div>
                           <div className="mt-1">
-                            原因：{autoReplyRunError ? "自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                            {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
                           </div>
                         </div>
                         {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
@@ -2479,7 +2488,7 @@ export default function DouyinAiCsWorkbenchPage() {
                             {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
                           </div>
                           <div className="mt-1">
-                            原因：{autoReplyRunError ? "自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                            {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
                           </div>
                         </div>
                         {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
