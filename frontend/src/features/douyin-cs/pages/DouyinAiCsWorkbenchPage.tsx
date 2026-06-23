@@ -381,7 +381,7 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
   const key = `${run?.status || ""}:${reason}`;
   const exact: Record<string, string> = {
-    "send_skipped:auto_send_disabled_by_decision": "当前 Direct LLM 自动发送尚未开放，需人工确认后发送。",
+    "send_skipped:auto_send_disabled_by_decision": "当前策略设置为人工确认，因此未自动发送。",
     "send_skipped:manual_takeover_blocked": "当前会话处于人工接管状态，未自动发送。",
     "send_skipped:outbound_after_trigger": "检测到客户消息后已有人工或企业号回复，未自动发送。",
     "blocked:manual_takeover": "当前会话处于人工接管状态，AI 未自动回复。",
@@ -393,7 +393,7 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   };
   if (exact[key]) return exact[key];
   if (!riskFlags.length && run?.upstream_auto_send === false && run?.final_auto_send === false) {
-    return "当前 Direct LLM 自动发送尚未开放，需人工确认后发送。";
+    return "当前策略设置为人工确认，因此未自动发送。";
   }
   if (reason) return reason;
   if (run?.status === "send_skipped") return "发送前安全检查未通过。";
@@ -425,7 +425,8 @@ function isSameConversationAutopilotState(
 function autoReplyRunTitle(run: AutoReplyRunViewItem | null) {
   if (!run) return "AI 自动回复状态：暂无记录";
   if (run.status === "send_skipped" && (run.would_send_content_summary || run.reply_text)) {
-    return "AI 已生成回复，但未自动发送";
+    if (!autoReplyRunHasRiskFlags(run)) return "AI 已生成安全回复";
+    return "AI 自动回复已阻断";
   }
   if (run.status === "blocked") return "AI 自动回复已阻断";
   if (run.status === "failed" || run.status === "send_failed") return "AI 自动回复失败";

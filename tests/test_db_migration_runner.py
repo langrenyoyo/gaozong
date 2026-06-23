@@ -128,3 +128,159 @@ def test_get_migration_status_reports_applied_and_pending(tmp_path):
 
     assert status["applied_versions"] == ["0001"]
     assert status["pending_versions"] == ["0002"]
+
+
+def _create_autoreply_settings_base_schema(conn):
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version_num VARCHAR(32) PRIMARY KEY, "
+        "applied_at DATETIME NOT NULL, "
+        "description VARCHAR(200));"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS douyin_account_autoreply_settings ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "merchant_id TEXT NOT NULL, "
+        "account_open_id TEXT NOT NULL);"
+    )
+
+
+def test_single_sql_file_infers_0020_version_and_description(tmp_path):
+    db_path = tmp_path / "single_0020.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _create_autoreply_settings_base_schema(conn)
+    finally:
+        conn.close()
+
+    exit_code = migrate_sqlite.main(
+        [
+            "--db-path",
+            str(db_path),
+            "--sql-file",
+            str(migrate_sqlite.VERSIONS_DIR / "0020_direct_llm_policy_json.sql"),
+            "--apply",
+        ]
+    )
+
+    assert exit_code == 0
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert "direct_llm_policy_json" in migrate_sqlite.get_columns(
+            conn, "douyin_account_autoreply_settings"
+        )
+        row = conn.execute(
+            "SELECT version_num, description FROM schema_migrations WHERE version_num=?",
+            ("0020",),
+        ).fetchone()
+        assert row == ("0020", "direct llm policy json")
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0020'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_actual_0016_then_0020_creates_direct_llm_policy_column(tmp_path):
+    db_path = tmp_path / "fresh_to_0020.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version_num VARCHAR(32) PRIMARY KEY, "
+            "applied_at DATETIME NOT NULL, "
+            "description VARCHAR(200));"
+        )
+        for version in ("0016", "0020"):
+            migration = next(
+                item
+                for item in migrate_sqlite.discover_migrations()
+                if item.version == version
+            )
+            migrate_sqlite.apply_migration(
+                conn,
+                migrate_sqlite._load_stmts(migration.path),
+                migration.version,
+                migration.description,
+            )
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert "direct_llm_policy_json" in migrate_sqlite.get_columns(
+            conn, "douyin_account_autoreply_settings"
+        )
+        row = conn.execute(
+            "SELECT description FROM schema_migrations WHERE version_num='0020'"
+        ).fetchone()
+        assert row[0] == "direct llm policy json"
+    finally:
+        conn.close()
+
+
+def test_applied_0020_repairs_missing_direct_llm_policy_column(tmp_path):
+    db_path = tmp_path / "repair_0020.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _create_autoreply_settings_base_schema(conn)
+        conn.execute(
+            "INSERT INTO schema_migrations (version_num, applied_at, description) "
+            "VALUES ('0020', '2026-06-23 00:00:00', 'PRD 基础字段')"
+        )
+        stmts = migrate_sqlite._load_stmts(
+            migrate_sqlite.VERSIONS_DIR / "0020_direct_llm_policy_json.sql"
+        )
+
+        plan = migrate_sqlite.apply_migration(
+            conn, stmts, "0020", "direct llm policy json"
+        )
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert plan.already_applied is True
+        assert "direct_llm_policy_json" in migrate_sqlite.get_columns(
+            conn, "douyin_account_autoreply_settings"
+        )
+        row = conn.execute(
+            "SELECT description FROM schema_migrations WHERE version_num='0020'"
+        ).fetchone()
+        assert row[0] == "direct llm policy json"
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0020'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_0020_is_idempotent_when_direct_llm_policy_column_exists(tmp_path):
+    db_path = tmp_path / "idempotent_0020.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _create_autoreply_settings_base_schema(conn)
+        stmts = migrate_sqlite._load_stmts(
+            migrate_sqlite.VERSIONS_DIR / "0020_direct_llm_policy_json.sql"
+        )
+        first = migrate_sqlite.apply_migration(
+            conn, stmts, "0020", "direct llm policy json"
+        )
+        second = migrate_sqlite.apply_migration(
+            conn, stmts, "0020", "direct llm policy json"
+        )
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert first.already_applied is False
+        assert second.already_applied is True
+        assert "direct_llm_policy_json" in migrate_sqlite.get_columns(
+            conn, "douyin_account_autoreply_settings"
+        )
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0020'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()

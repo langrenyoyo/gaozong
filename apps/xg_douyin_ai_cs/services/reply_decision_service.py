@@ -112,7 +112,7 @@ PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低
 FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
 INVENTORY_KEYWORDS = ("现车", "库存", "在库", "车源", "有吗", "有没有")
 CONTACT_KEYWORDS = ("加微信", "微信", "电话", "手机号", "联系方式", "联系你", "留个联系方式")
-VEHICLE_CONDITION_KEYWORDS = ("车况", "无事故", "精品车况", "原版原漆", "泡水", "火烧", "公里数", "里程")
+VEHICLE_CONDITION_KEYWORDS = ("车况", "无事故", "精品车况", "原版原漆", "泡水", "火烧", "公里数")
 LEGAL_OR_TRANSFER_KEYWORDS = ("过户", "手续", "上牌", "抵押", "违章", "合同", "发票")
 COMPLAINT_KEYWORDS = ("投诉", "举报", "退款", "退订", "纠纷", "维权", "售后")
 HIGH_INTENT_KEYWORDS = ("预约试驾", "到店", "看车时间")
@@ -1082,6 +1082,21 @@ def _normalize_direct_llm_policy(value: object) -> dict[str, Any]:
 def _build_specific_model_safe_clarify_reply(latest_message: str) -> str:
     vehicle = _extract_vehicle_hint(latest_message)
     if vehicle:
+        if vehicle in {"奥迪", "宝马", "奔驰"}:
+            common_models = {
+                "奥迪": "A4L、A6L、Q5L",
+                "宝马": "3系、5系、X3、X5",
+                "奔驰": "C级、E级、GLC",
+            }.get(vehicle, "常见车型")
+            return (
+                f"{vehicle}是我们常见经营品牌之一。您更关注 {common_models} 这类车型，还是其他款？"
+                "也可以告诉我预算和用途，我帮您先整理需求。"
+            )
+        if vehicle == "宝马5系":
+            return (
+                "宝马5系属于比较热门的中大型轿车。"
+                "您可以先说下预算、年份、里程或配置偏好，我帮您整理需求，再由顾问为您确认当前车源。"
+            )
         return (
             f"{vehicle}属于比较热门的车型。具体车源会实时变化，"
             "您可以先说下预算、年份或配置偏好，我帮您整理需求，再由顾问确认当前车源。"

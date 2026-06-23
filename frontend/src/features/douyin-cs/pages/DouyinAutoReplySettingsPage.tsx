@@ -28,6 +28,7 @@ import type {
 import { formatDateTimeLocal } from "../../../lib/datetime";
 
 const SEND_ENABLE_CONFIRM_TEXT = "确认开启自动回复";
+type SimpleReplyMode = "safe" | "recommended" | "active";
 
 const DEFAULT_DIRECT_LLM_POLICY: DirectLlmPolicy = {
   direct_llm_auto_send_enabled: false,
@@ -45,6 +46,63 @@ const DEFAULT_DIRECT_LLM_POLICY: DirectLlmPolicy = {
   forbid_vehicle_condition_claim: true,
   min_confidence_for_direct_send: 0.85,
 };
+
+const SIMPLE_MODE_POLICIES: Record<SimpleReplyMode, DirectLlmPolicy> = {
+  safe: {
+    ...DEFAULT_DIRECT_LLM_POLICY,
+    direct_llm_auto_send_enabled: true,
+    policy_level: "conservative",
+    allow_greeting_auto_send: true,
+    allow_general_intro_auto_send: true,
+    allow_need_clarification_auto_send: false,
+    allow_brand_general_intro_auto_send: false,
+    specific_model_strategy: "manual_confirm",
+    contact_guidance_level: "none",
+    min_confidence_for_direct_send: 0.85,
+  },
+  recommended: {
+    ...DEFAULT_DIRECT_LLM_POLICY,
+    direct_llm_auto_send_enabled: true,
+    policy_level: "standard",
+    allow_greeting_auto_send: true,
+    allow_general_intro_auto_send: true,
+    allow_need_clarification_auto_send: true,
+    allow_brand_general_intro_auto_send: true,
+    specific_model_strategy: "safe_clarify",
+    contact_guidance_level: "none",
+    min_confidence_for_direct_send: 0.85,
+  },
+  active: {
+    ...DEFAULT_DIRECT_LLM_POLICY,
+    direct_llm_auto_send_enabled: true,
+    policy_level: "aggressive",
+    allow_greeting_auto_send: true,
+    allow_general_intro_auto_send: true,
+    allow_need_clarification_auto_send: true,
+    allow_brand_general_intro_auto_send: true,
+    specific_model_strategy: "safe_clarify",
+    contact_guidance_level: "soft_guidance",
+    min_confidence_for_direct_send: 0.8,
+  },
+};
+
+const SIMPLE_MODE_OPTIONS: Array<{ value: SimpleReplyMode; label: string; description: string }> = [
+  {
+    value: "safe",
+    label: "稳妥模式",
+    description: "AI 主要回复问候、主营介绍和简单需求澄清。涉及车型、价格、车况时转人工确认。",
+  },
+  {
+    value: "recommended",
+    label: "推荐模式",
+    description: "适合大多数商户。AI 可自动回复问候、主营介绍、品牌咨询、车型安全澄清，不承诺库存、价格、车况、金融。",
+  },
+  {
+    value: "active",
+    label: "积极模式",
+    description: "AI 会更主动引导客户补充预算、车型、用途和联系方式，但仍不自动承诺库存、价格、车况、金融。",
+  },
+];
 
 const ALLOWED_INTENT_OPTIONS: AllowedIntentOption[] = [
   { value: "greeting", label: "问候" },
@@ -168,6 +226,49 @@ function updateDirectLlmPolicy<K extends keyof DirectLlmPolicy>(
       ...current.direct_llm_policy,
       [key]: value,
     },
+  };
+}
+
+function inferSimpleReplyMode(policy: DirectLlmPolicy): SimpleReplyMode {
+  if (policy.policy_level === "aggressive") return "active";
+  if (policy.direct_llm_auto_send_enabled && policy.policy_level === "conservative") return "safe";
+  return "recommended";
+}
+
+function applySimpleReplyMode(
+  current: DouyinAutoReplySettingUpdateRequest,
+  mode: SimpleReplyMode,
+  enabled = current.direct_llm_policy.direct_llm_auto_send_enabled,
+): DouyinAutoReplySettingUpdateRequest {
+  return {
+    ...current,
+    direct_llm_policy: {
+      ...SIMPLE_MODE_POLICIES[mode],
+      direct_llm_auto_send_enabled: enabled,
+    },
+  };
+}
+
+function applyAiAutoReplyEnabled(
+  current: DouyinAutoReplySettingUpdateRequest,
+  enabled: boolean,
+): DouyinAutoReplySettingUpdateRequest {
+  if (!enabled) {
+    return {
+      ...current,
+      enabled: false,
+      send_enabled: false,
+      direct_llm_policy: {
+        ...current.direct_llm_policy,
+        direct_llm_auto_send_enabled: false,
+      },
+    };
+  }
+  return {
+    ...applySimpleReplyMode(current, inferSimpleReplyMode(current.direct_llm_policy), true),
+    enabled: true,
+    dry_run_enabled: true,
+    send_enabled: true,
   };
 }
 
@@ -339,6 +440,9 @@ export default function DouyinAutoReplySettingsPage() {
     () => items.find((item) => item.account_open_id === selectedAccountOpenId) || null,
     [items, selectedAccountOpenId],
   );
+  const aiAutoReplyEnabled =
+    form.enabled && form.send_enabled && form.direct_llm_policy.direct_llm_auto_send_enabled;
+  const simpleReplyMode = inferSimpleReplyMode(form.direct_llm_policy);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -346,7 +450,10 @@ export default function DouyinAutoReplySettingsPage() {
     try {
       const nextItems = await getDouyinAutoReplySettings();
       setItems(nextItems);
-      setSelectedAccountOpenId((current) => current || queryAccountOpenId || nextItems[0]?.account_open_id || "");
+      setSelectedAccountOpenId((current) => {
+        if (queryAccountOpenId) return queryAccountOpenId;
+        return current || nextItems[0]?.account_open_id || "";
+      });
     } catch (err) {
       setItems([]);
       setError(resolveErrorMessage(err));
@@ -390,6 +497,14 @@ export default function DouyinAutoReplySettingsPage() {
 
   function updatePolicy<K extends keyof DirectLlmPolicy>(key: K, value: DirectLlmPolicy[K]) {
     setForm((current) => updateDirectLlmPolicy(current, key, value));
+  }
+
+  function handleAiAutoReplyEnabledChange(checked: boolean) {
+    setForm((current) => applyAiAutoReplyEnabled(current, checked));
+  }
+
+  function handleSimpleReplyModeChange(mode: SimpleReplyMode) {
+    setForm((current) => applySimpleReplyMode(current, mode, true));
   }
 
   async function saveSettings(payload: DouyinAutoReplySettingUpdateRequest) {
@@ -550,6 +665,72 @@ export default function DouyinAutoReplySettingsPage() {
                 </div>
 
                 <div className="space-y-5 p-4">
+                  <section className="rounded-md border border-blue-200 bg-blue-50 px-4 py-4">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-bold text-slate-900">AI 自动回复</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-600">
+                          开启后仅影响后续新客户消息，不会重跑历史自动回复记录。
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3">
+                        <span className="text-xs font-bold text-slate-800">
+                          {aiAutoReplyEnabled ? "开" : "关"}
+                        </span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={aiAutoReplyEnabled}
+                          onClick={() => handleAiAutoReplyEnabledChange(!aiAutoReplyEnabled)}
+                          className={`relative h-7 w-14 rounded-full transition-colors ${
+                            aiAutoReplyEnabled ? "bg-emerald-500" : "bg-slate-300"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                              aiAutoReplyEnabled ? "translate-x-8" : "translate-x-1"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="mb-2 text-xs font-bold text-slate-800">回复模式</div>
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        {SIMPLE_MODE_OPTIONS.map((option) => {
+                          const active = simpleReplyMode === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => handleSimpleReplyModeChange(option.value)}
+                              className={`rounded-md border px-3 py-3 text-left transition-colors ${
+                                active
+                                  ? "border-blue-300 bg-white text-blue-900 shadow-sm"
+                                  : "border-blue-100 bg-white/70 text-slate-700 hover:bg-white"
+                              }`}
+                            >
+                              <span className="block text-xs font-bold">{option.label}</span>
+                              <span className="mt-2 block text-[11px] leading-5 text-slate-600">
+                                {option.description}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                      系统始终禁止自动承诺库存、价格、车况、金融、过户、质保等事实信息。
+                    </div>
+                  </section>
+
+                  <details className="rounded-md border border-slate-200 bg-white">
+                    <summary className="cursor-pointer px-4 py-3 text-xs font-bold text-slate-800">
+                      高级设置（一般无需修改）
+                    </summary>
+                    <div className="space-y-5 border-t border-slate-200 p-4">
                   <div className="grid gap-3 lg:grid-cols-3">
                     <Toggle
                       checked={form.enabled}
@@ -830,6 +1011,8 @@ export default function DouyinAutoReplySettingsPage() {
                       onChange={(value) => updateForm("blocked_risk_flags", value)}
                     />
                   </div>
+                    </div>
+                  </details>
 
                   <div className="flex justify-end border-t border-slate-200 pt-4">
                     <button

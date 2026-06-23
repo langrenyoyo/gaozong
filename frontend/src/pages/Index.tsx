@@ -20,6 +20,7 @@ import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
+import WechatTaskPanel from "../features/wechat-assistant/components/WechatTaskPanel";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
 import AiReplyDecisionLogsPage from "../features/douyin-cs/pages/AiReplyDecisionLogsPage";
 import DouyinAutoReplySettingsPage from "../features/douyin-cs/pages/DouyinAutoReplySettingsPage";
@@ -655,6 +656,11 @@ export default function Index({
   const selectedMessages = selectedContact ? conversations.messages[selectedContact.id] || [] : [];
   const navColumn = isNavExpanded ? "220px" : "88px";
   const isAdminUser = user.role !== "merchant";
+
+  useEffect(() => {
+    setActiveNav((current) => (current === initialActiveNav ? current : initialActiveNav));
+  }, [initialActiveNav]);
+
   const isLeadConversationNav = activeNav === "chat";
   const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
   const isLeadsModuleNav = activeNav === "leads";
@@ -762,6 +768,8 @@ export default function Index({
           <LeadsModulePage />
         ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
+        ) : activeNav === "wechat-tasks" ? (
+          <WechatTaskPanel />
         ) : isWechatAssistantNav ? (
           <WechatAgent />
         ) : isComputeNav ? (

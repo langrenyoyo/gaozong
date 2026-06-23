@@ -1187,6 +1187,112 @@ def test_direct_llm_conservative_policy_blocks_low_risk_auto_send(tmp_path, monk
     assert response.json()["auto_send"] is False
 
 
+def test_direct_llm_recommended_policy_allows_safe_business_intro_auto_send(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，我们主要经营奔驰、宝马、奥迪等二手车。您更关注轿车、SUV，还是某个具体品牌？也可以告诉我预算和用途，我帮您先整理选车方向。",
+                    "intent": "service_general_intro",
+                    "lead_level": "low",
+                    "tags": ["service_intro"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.94,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们主营什么车",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "allow_general_intro_auto_send": True,
+                "min_confidence_for_direct_send": 0.85,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "service_general_intro"
+    assert data["manual_required"] is False
+    assert data["risk_flags"] == []
+    assert data["auto_send"] is True
+    assert "inventory_claim" not in data["risk_flags"]
+    for forbidden in ("现车", "库存表", "微信", "电话", "价格", "贷款", "品质有保障"):
+        assert forbidden not in data["reply_text"]
+
+
+def test_direct_llm_recommended_policy_allows_brand_safe_clarify_auto_send(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "奥迪相关车型可以先按预算和用途筛选，我帮您整理需求。",
+                    "intent": "consult_inventory",
+                    "lead_level": "medium",
+                    "tags": ["brand"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.92,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "有奥迪的车吗",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "standard",
+                "specific_model_strategy": "safe_clarify",
+                "min_confidence_for_direct_send": 0.85,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is False
+    assert data["risk_flags"] == []
+    assert data["auto_send"] is True
+    assert "奥迪" in data["reply_text"]
+    assert "A4L" in data["reply_text"]
+    for forbidden in ("现车很多", "有现车", "库存表", "微信", "电话", "价格", "贷款"):
+        assert forbidden not in data["reply_text"]
+
+
 def test_direct_llm_safe_clarify_policy_allows_specific_model_safe_reply(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
@@ -1285,6 +1391,77 @@ def test_direct_llm_standard_policy_blocks_hard_price_risk(tmp_path, monkeypatch
     assert data["auto_send"] is False
     assert data["manual_required"] is True
     assert "price_or_discount" in data["risk_flags"]
+
+
+def test_direct_llm_standard_policy_blocks_finance_and_contact_risks(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        user_payload = json.loads(messages[1]["content"])
+        latest_message = user_payload["latest_customer_message"]
+        if "贷款" in latest_message:
+            reply = "贷款方案可以按首付和月供来算。"
+            intent = "finance"
+        else:
+            reply = "您可以加微信沟通。"
+            intent = "contact_request"
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": reply,
+                    "intent": intent,
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.94,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+    policy = {
+        "direct_llm_auto_send_enabled": True,
+        "policy_level": "standard",
+        "specific_model_strategy": "safe_clarify",
+        "contact_guidance_level": "none",
+        "min_confidence_for_direct_send": 0.85,
+    }
+
+    finance = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "贷款怎么算",
+            "direct_llm_policy": policy,
+        },
+    ).json()
+    contact = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "加微信",
+            "direct_llm_policy": policy,
+        },
+    ).json()
+
+    assert finance["auto_send"] is False
+    assert finance["manual_required"] is True
+    assert "finance_or_loan" in finance["risk_flags"]
+
+    assert contact["auto_send"] is False
+    assert contact["manual_required"] is True
+    assert "contact_request" in contact["risk_flags"]
 
 
 def test_reply_decision_service_source_has_readable_chinese_copy():

@@ -210,15 +210,11 @@ def plan_migration(
     """规划迁移：决定每条语句执行 / 跳过 / 报错。不写库。"""
     plan = MigrationPlan(version=version, already_applied=version_applied(conn, version))
 
-    if plan.already_applied:
-        # 版本已应用：整体跳过（但仍返回 plan 供 dry-run 展示）
-        for s in stmts:
-            plan.skipped.append((s, "version_already_applied"))
-        return plan
-
     for s in stmts:
         if s.kind == "create_table":
-            if s.table and table_exists(conn, s.table):
+            if plan.already_applied:
+                plan.skipped.append((s, "version_already_applied"))
+            elif s.table and table_exists(conn, s.table):
                 plan.skipped.append((s, "table_exists"))
             else:
                 plan.will_run.append(s)
@@ -228,9 +224,13 @@ def plan_migration(
             elif s.column and s.column in get_columns(conn, s.table):
                 plan.skipped.append((s, "column_exists"))
             else:
+                # 已登记版本仍允许补偿缺失列，用于修复历史迁移登记与实际 schema 不一致。
                 plan.will_run.append(s)
         else:
-            plan.will_run.append(s)
+            if plan.already_applied:
+                plan.skipped.append((s, "version_already_applied"))
+            else:
+                plan.will_run.append(s)
     return plan
 
 
@@ -251,6 +251,34 @@ def discover_migrations(versions_dir: str | os.PathLike = VERSIONS_DIR) -> list[
         )
     migrations.sort(key=lambda item: item.version)
     return migrations
+
+
+def infer_migration_metadata(
+    sql_file: str | os.PathLike,
+    version: str | None = None,
+) -> MigrationFile:
+    """从版本文件名推导单文件迁移元数据，避免误复用 0001 默认描述。"""
+    path = Path(sql_file)
+    if path.resolve() == DEFAULT_SQL_FILE.resolve():
+        return MigrationFile(
+            version=version or CURRENT_VERSION,
+            path=path,
+            description=CURRENT_DESCRIPTION,
+        )
+
+    match = re.match(r"^(\d{4})_(.+)\.sql$", path.name)
+    if match:
+        return MigrationFile(
+            version=version or match.group(1),
+            path=path,
+            description=match.group(2).replace("_", " "),
+        )
+
+    return MigrationFile(
+        version=version or CURRENT_VERSION,
+        path=path,
+        description=CURRENT_DESCRIPTION,
+    )
 
 
 def plan_all_migrations(
@@ -325,8 +353,34 @@ def apply_migration(
         )
 
     if plan.already_applied:
-        logger.info("版本 %s 已应用，整体跳过（执行 0 条，跳过 %d 条）",
-                    version, len(plan.skipped))
+        current_description = _get_migration_description(conn, version)
+        should_update_description = current_description != description
+        if not plan.will_run and not should_update_description:
+            logger.info("版本 %s 已应用，整体跳过（执行 0 条，跳过 %d 条）",
+                        version, len(plan.skipped))
+            return plan
+
+        logger.warning(
+            "版本 %s 已登记但需要补偿：执行 %d 条，更新描述=%s",
+            version,
+            len(plan.will_run),
+            should_update_description,
+        )
+        try:
+            conn.execute("BEGIN")
+            for s in plan.will_run:
+                logger.warning("补偿执行 DDL: %s", _one_line(s.raw))
+                conn.execute(s.raw)
+            if should_update_description:
+                conn.execute(
+                    "UPDATE schema_migrations SET description=? WHERE version_num=?",
+                    (description, version),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            logger.exception("补偿 apply 失败，已回滚")
+            raise
         return plan
 
     logger.info("apply 版本 %s：将执行 %d 条，跳过 %d 条",
@@ -350,6 +404,17 @@ def apply_migration(
 
     logger.info("apply 完成：版本 %s 已记录", version)
     return plan
+
+
+def _get_migration_description(conn: sqlite3.Connection, version: str) -> str | None:
+    """读取已登记迁移描述；schema_migrations 不存在时返回空。"""
+    if not table_exists(conn, "schema_migrations"):
+        return None
+    row = conn.execute(
+        "SELECT description FROM schema_migrations WHERE version_num=?",
+        (version,),
+    ).fetchone()
+    return row[0] if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +570,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db-path", help="目标数据库路径（应为副本）")
     p.add_argument("--sql-file", default=str(DEFAULT_SQL_FILE),
                    help=f"版本 SQL 文件（默认 {DEFAULT_SQL_FILE}）")
-    p.add_argument("--version", default=CURRENT_VERSION, help="迁移版本号")
+    p.add_argument("--version", default=None, help="迁移版本号；默认从 SQL 文件名推导")
     p.add_argument("--allow-mainline", action="store_true",
                    help="允许直接迁移主线库（P2-A 不使用，P2-C 阶段才用）")
     p.add_argument("--dry-run", action="store_true", help="只打印，不写库（默认）")
@@ -563,7 +628,8 @@ def main(argv: list[str] | None = None) -> int:
             conn.close()
         return 0
 
-    stmts = _load_stmts(args.sql_file)
+    migration = infer_migration_metadata(args.sql_file, args.version)
+    stmts = _load_stmts(migration.path)
 
     if args.verify:
         conn = connect_readonly(args.db_path)
@@ -576,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply:
         conn = connect_readwrite(args.db_path)
         try:
-            apply_migration(conn, stmts, args.version, CURRENT_DESCRIPTION)
+            apply_migration(conn, stmts, migration.version, migration.description)
         finally:
             conn.close()
         return 0
@@ -584,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
     # 默认 dry-run
     conn = connect_readonly(args.db_path)
     try:
-        _print_plan(plan_migration(conn, stmts, args.version))
+        _print_plan(plan_migration(conn, stmts, migration.version))
     finally:
         conn.close()
     return 0
