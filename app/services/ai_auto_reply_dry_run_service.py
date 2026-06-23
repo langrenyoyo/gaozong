@@ -82,7 +82,11 @@ def _run_with_session(db, *, event_id: int) -> None:
     )
 
     if event.event not in {"im_receive_msg", "im_enter_direct_msg"}:
-        _insert_terminal_run(db, base, status="skipped", skip_reason="not_customer_message_event")
+        logger.info(
+            "ai_auto_reply_dry_run_ignored stage=event_type_gate event_id=%s event=%s reason=not_customer_message_event",
+            event.id,
+            event.event,
+        )
         return
     if int(event.is_duplicate or 0) == 1:
         _insert_terminal_run(db, base, status="skipped", skip_reason="duplicate_event")
@@ -99,6 +103,7 @@ def _run_with_session(db, *, event_id: int) -> None:
 
     binding = resolve_webhook_bound_agent(db, account_open_id=account_open_id)
     if not binding.allowed or binding.agent is None:
+        block_reason = _binding_block_reason(binding.reason_code)
         _insert_terminal_run(
             db,
             {
@@ -106,8 +111,8 @@ def _run_with_session(db, *, event_id: int) -> None:
                 "merchant_id": binding.merchant_id or base["merchant_id"],
                 "agent_id": getattr(binding.binding, "agent_id", None),
             },
-            status="skipped",
-            skip_reason=binding.reason_code or "agent_binding_denied",
+            status="blocked",
+            block_reason=block_reason,
             gate_results={"binding": binding.audit},
         )
         return
@@ -413,6 +418,13 @@ def _mark_send_skipped_by_decision(db, run: AiAutoReplyRun) -> None:
         "ai_auto_reply_send_skipped stage=decision_gate run_id=%s reason=auto_send_disabled_by_decision",
         run.id,
     )
+
+
+def _binding_block_reason(reason_code: str | None) -> str:
+    """把绑定服务内部原因映射为自动回复 run 的稳定阻断原因。"""
+    if reason_code == "agent_binding_not_found":
+        return "agent_not_bound"
+    return reason_code or "agent_binding_denied"
 
 
 def _decision_status(result: dict[str, Any], *, upstream_auto_send: bool) -> tuple[str, str | None]:

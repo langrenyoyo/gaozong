@@ -151,6 +151,7 @@ def _insert_autoreply_settings(
     require_rag_sources: bool = True,
     allowed_intents_json: str | None = None,
     blocked_risk_flags_json: str | None = None,
+    direct_llm_policy: dict | None = None,
     max_replies_per_conversation_per_hour: int = 20,
     max_replies_per_account_per_hour: int = 300,
 ) -> None:
@@ -168,6 +169,7 @@ def _insert_autoreply_settings(
                 require_rag_sources=require_rag_sources,
                 allowed_intents_json=allowed_intents_json,
                 blocked_risk_flags_json=blocked_risk_flags_json,
+                direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
                 max_replies_per_conversation_per_hour=max_replies_per_conversation_per_hour,
                 max_replies_per_account_per_hour=max_replies_per_account_per_hour,
             )
@@ -230,7 +232,7 @@ class FakeAiCsClient:
         return dict(self.result)
 
 
-def test_non_receive_event_is_skipped():
+def test_non_receive_event_does_not_create_auto_reply_run():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event="im_send_msg", event_key="event-send")
@@ -238,9 +240,11 @@ def test_non_receive_event_is_skipped():
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession):
         run_ai_auto_reply_dry_run(event_id)
 
-    run = _latest_run()
-    assert run.status == "skipped"
-    assert run.skip_reason == "not_customer_message_event"
+    db = TestSession()
+    try:
+        assert db.query(AiAutoReplyRun).count() == 0
+    finally:
+        db.close()
 
 
 def test_duplicate_event_is_skipped():
@@ -299,7 +303,7 @@ def test_empty_latest_message_is_skipped():
     assert run.skip_reason == "empty_message"
 
 
-def test_unauthorized_account_is_skipped():
+def test_unauthorized_account_is_blocked():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-no-account")
@@ -308,11 +312,11 @@ def test_unauthorized_account_is_skipped():
         run_ai_auto_reply_dry_run(event_id)
 
     run = _latest_run()
-    assert run.status == "skipped"
-    assert run.skip_reason == "account_not_authorized"
+    assert run.status == "blocked"
+    assert run.block_reason == "account_not_authorized"
 
 
-def test_unbound_agent_is_skipped():
+def test_unbound_agent_is_blocked_without_calling_9100():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-no-binding")
@@ -331,12 +335,162 @@ def test_unbound_agent_is_skipped():
     finally:
         db.close()
 
-    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession):
+    fake_client = FakeAiCsClient()
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "agent_not_bound"
+    assert fake_client.calls == []
+
+
+def test_multi_account_webhook_uses_each_account_agent_and_policy():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id_a = _insert_event(
+        account_open_id="account-a",
+        customer_open_id="customer-a",
+        conversation_short_id="conv-a",
+        event_key="event-account-a",
+        server_message_id="msg-account-a",
+        text="你好",
+    )
+    event_id_b = _insert_event(
+        account_open_id="account-b",
+        customer_open_id="customer-b",
+        conversation_short_id="conv-b",
+        event_key="event-account-b",
+        server_message_id="msg-account-b",
+        text="你好，介绍一下主营",
+    )
+    _insert_account_agent_binding(
+        account_open_id="account-a",
+        merchant_id="merchant-same",
+        tenant_id="tenant-same",
+        agent_id="agent-a",
+    )
+    _insert_account_agent_binding(
+        account_open_id="account-b",
+        merchant_id="merchant-same",
+        tenant_id="tenant-same",
+        agent_id="agent-b",
+    )
+    _insert_autoreply_settings(
+        merchant_id="merchant-same",
+        account_open_id="account-a",
+        direct_llm_policy={
+            "direct_llm_auto_send_enabled": False,
+            "policy_level": "conservative",
+            "specific_model_strategy": "manual_confirm",
+        },
+    )
+    _insert_autoreply_settings(
+        merchant_id="merchant-same",
+        account_open_id="account-b",
+        direct_llm_policy={
+            "direct_llm_auto_send_enabled": True,
+            "policy_level": "standard",
+            "specific_model_strategy": "safe_clarify",
+        },
+    )
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id_a)
+        run_ai_auto_reply_dry_run(event_id_b)
+
+    assert len(fake_client.calls) == 2
+    payloads = {call["request"]["account_id"]: call["request"] for call in fake_client.calls}
+    assert payloads["account-a"]["agent_id"] == "agent-a"
+    assert payloads["account-a"]["agent_config"]["agent_id"] == "agent-a"
+    assert payloads["account-a"]["direct_llm_policy"]["policy_level"] == "conservative"
+    assert payloads["account-a"]["direct_llm_policy"]["direct_llm_auto_send_enabled"] is False
+    assert payloads["account-b"]["agent_id"] == "agent-b"
+    assert payloads["account-b"]["agent_config"]["agent_id"] == "agent-b"
+    assert payloads["account-b"]["direct_llm_policy"]["policy_level"] == "standard"
+    assert payloads["account-b"]["direct_llm_policy"]["specific_model_strategy"] == "safe_clarify"
+
+    db = TestSession()
+    try:
+        runs = {run.account_open_id: run for run in db.query(AiAutoReplyRun).all()}
+        assert runs["account-a"].merchant_id == "merchant-same"
+        assert runs["account-a"].agent_id == "agent-a"
+        assert runs["account-a"].customer_open_id == "customer-a"
+        assert runs["account-b"].merchant_id == "merchant-same"
+        assert runs["account-b"].agent_id == "agent-b"
+        assert runs["account-b"].customer_open_id == "customer-b"
+    finally:
+        db.close()
+
+
+def test_webhook_for_account_b_ignores_account_a_frontend_context():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _insert_account_agent_binding(
+        account_open_id="account-a",
+        merchant_id="merchant-same",
+        tenant_id="tenant-same",
+        agent_id="agent-a",
+    )
+    _insert_autoreply_settings(
+        merchant_id="merchant-same",
+        account_open_id="account-a",
+        direct_llm_policy={"policy_level": "conservative"},
+    )
+    _insert_account_agent_binding(
+        account_open_id="account-b",
+        merchant_id="merchant-same",
+        tenant_id="tenant-same",
+        agent_id="agent-b",
+    )
+    _insert_autoreply_settings(
+        merchant_id="merchant-same",
+        account_open_id="account-b",
+        direct_llm_policy={"policy_level": "standard", "specific_model_strategy": "safe_clarify"},
+    )
+    event_id = _insert_event(
+        account_open_id="account-b",
+        customer_open_id="customer-b",
+        conversation_short_id="conv-b-only",
+        event_key="event-b-only",
+        server_message_id="msg-b-only",
+    )
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    assert len(fake_client.calls) == 1
+    payload = fake_client.calls[0]["request"]
+    assert payload["account_id"] == "account-b"
+    assert payload["agent_id"] == "agent-b"
+    assert payload["direct_llm_policy"]["policy_level"] == "standard"
+
+    run = _latest_run()
+    assert run.account_open_id == "account-b"
+    assert run.agent_id == "agent-b"
+
+
+def test_autoreply_disabled_does_not_call_9100_and_records_reason():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(account_open_id="account-disabled-only", event_key="event-disabled-only")
+    _insert_account_agent_binding(account_open_id="account-disabled-only", agent_id="agent-disabled-only")
+    _insert_autoreply_settings(account_open_id="account-disabled-only", enabled=False)
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
         run_ai_auto_reply_dry_run(event_id)
 
     run = _latest_run()
     assert run.status == "skipped"
-    assert run.skip_reason == "agent_binding_not_found"
+    assert run.skip_reason == "autoreply_disabled"
+    assert fake_client.calls == []
 
 
 def test_active_binding_calls_9100_with_history_and_records_decision_log():
@@ -486,7 +640,7 @@ def test_9100_rag_and_confidence_gates_block_run():
         assert run.block_reason == expected_reason
 
 
-def test_9100_auto_send_true_is_forced_false_and_blocked():
+def test_9100_auto_send_true_is_blocked_when_account_send_disabled():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-autosend")
@@ -510,7 +664,7 @@ def test_9100_auto_send_true_is_forced_false_and_blocked():
     try:
         run = db.query(AiAutoReplyRun).one()
         assert run.status == "blocked"
-        assert run.block_reason == "upstream_auto_send_requested"
+        assert run.block_reason == "account_send_disabled"
         assert run.would_send_content is None
         log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
         assert log.upstream_auto_send == 1
@@ -640,7 +794,7 @@ def test_blocked_run_does_not_call_auto_send_service():
     assert run.block_reason == "manual_required"
 
 
-def test_9100_auto_send_true_blocks_and_does_not_call_auto_send_service():
+def test_9100_auto_send_true_in_dry_run_mode_does_not_call_auto_send_service():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-upstream-auto-no-send")
@@ -663,8 +817,8 @@ def test_9100_auto_send_true_blocks_and_does_not_call_auto_send_service():
 
     auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert run.status == "blocked"
-    assert run.block_reason == "upstream_auto_send_requested"
+    assert run.status == "decided"
+    assert run.block_reason is None
 
 
 def test_no_autoreply_settings_skips_without_calling_9100():

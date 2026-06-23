@@ -114,8 +114,6 @@ def evaluate_post_llm_gates(
         "final_auto_send": False,
     }
 
-    if not upstream_auto_send:
-        return GateDecision(False, "blocked", "upstream_auto_send_disabled", gate_results)
     if result.get("manual_required") is True:
         return GateDecision(False, "blocked", "manual_required", gate_results)
     if risk_flags and (not blocked_risk_flags or any(flag in blocked_risk_flags for flag in risk_flags)):
@@ -128,6 +126,10 @@ def evaluate_post_llm_gates(
         return GateDecision(False, "blocked", "confidence_low", gate_results)
     if allowed_intents and intent not in allowed_intents:
         return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
+    if not upstream_auto_send:
+        return GateDecision(True, "decided", None, gate_results)
+    if settings.send_enabled is not True:
+        return GateDecision(False, "blocked", "account_send_disabled", gate_results)
     return GateDecision(True, "decided", None, gate_results)
 
 
