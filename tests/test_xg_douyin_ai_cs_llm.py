@@ -1043,6 +1043,205 @@ def test_reply_suggestion_reuses_budget_and_model_after_customer_provided_them(
     assert "宝马53是" not in data["reply_text"]
 
 
+def test_reply_suggestion_does_not_inject_stale_budget_for_new_inventory_question(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "具体车型和车系需要结合实时车源确认。具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+                    "intent": "consult_inventory",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.82,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "老板，刚好我最近想看台车。你们店里现在有20款或者21款的宝马5系现车吗，大概什么价位",
+            "conversation_history": [
+                {"role": "customer", "content": "我之前预算23万，主要商务用"},
+                {"role": "agent", "content": "您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.json()["reply_text"]
+    assert "23万" not in text
+    assert "商务" not in text
+    assert "20或21款" in text
+    assert "宝马5系" in text
+    assert "预算" in text
+    assert "您已经说得很清楚" not in text
+    assert "我先把您的需求记录下来" not in text
+
+
+def test_reply_suggestion_latest_budget_overrides_stale_history_budget(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+                    "intent": "need_clarification",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.81,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我预算差不多30万左右，主要看20款或者21款的530Li。",
+            "conversation_history": [
+                {"role": "customer", "content": "之前看过23万左右的车"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.json()["reply_text"]
+    assert "30万左右" in text
+    assert "20或21款" in text or "20/21款" in text
+    assert "530Li" in text
+    assert "23万" not in text
+    assert "宝马53" not in text
+    assert "您已经说得很清楚" not in text
+
+
+def test_reply_suggestion_treats_inventory_cat_typo_as_inventory_question(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+                    "intent": "need_clarification",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.81,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们店里现在有符合的现车猫",
+            "conversation_history": [
+                {"role": "customer", "content": "30万左右，20款或者21款的530Li"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.json()["reply_text"]
+    assert "现车" in text
+    assert "核" in text or "确认" in text
+    assert "现车猫" not in text
+
+
+def test_reply_suggestion_plain_inventory_question_does_not_use_apology_template(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "具体车型和车系需要结合实时车源确认。具体在库车源会实时变化，建议由顾问为您确认当前库存。您可以先说下预算、年份、里程或配置偏好，我帮您整理需求。",
+                    "intent": "consult_inventory",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.82,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们店里现在有20款或者21款的宝马5系现车吗，大概什么价位",
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.json()["reply_text"]
+    assert "不好意思" not in text
+    assert "刚才没有接住您的问题" not in text
+    assert "我先不再重复询问" not in text
+    assert "您已经说得很清楚" not in text
+    assert "我先把您的需求记录下来" not in text
+
+
 def test_reply_suggestion_followup_inventory_price_uses_known_needs_without_reasking(
     tmp_path, monkeypatch
 ):

@@ -117,7 +117,7 @@ DIRECT_LLM_GENERATION_FAILURE_FLAGS = {
 }
 PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低", "便宜", "落地价", "裸车价")
 FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
-INVENTORY_KEYWORDS = ("现车", "库存", "在库", "车源", "有吗", "有没有")
+INVENTORY_KEYWORDS = ("现车", "现车猫", "库存", "在库", "车源", "有吗", "有没有")
 CONTACT_KEYWORDS = ("加微信", "微信", "电话", "手机号", "联系方式", "联系你", "留个联系方式")
 VEHICLE_CONDITION_KEYWORDS = ("车况", "无事故", "精品车况", "原版原漆", "泡水", "火烧", "公里数")
 LEGAL_OR_TRANSFER_KEYWORDS = ("过户", "手续", "上牌", "抵押", "违章", "合同", "发票")
@@ -235,7 +235,7 @@ CUSTOMER_DISSATISFACTION_KEYWORDS = (
     "无语",
     "到底有没有活人",
 )
-HUMAN_FOLLOWUP_MARKERS = ("不好意思，刚才", "后续由顾问", "稍后由顾问", "我先不再重复询问")
+HUMAN_FOLLOWUP_MARKERS = ("不好意思", "刚才", "后续由顾问", "稍后由顾问", "不再重复")
 CONCERN_KEYWORDS = ("现车", "价格", "报价", "车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告", "合作沟通")
 CITY_KEYWORDS = ("广州",)
 USAGE_KEYWORDS = ("商务兼家用", "商务", "家用")
@@ -1176,20 +1176,66 @@ def _extract_customer_requirements(
     latest_message: str,
     conversation_history: object,
 ) -> dict[str, Any]:
+    latest_slots = _extract_requirement_slots_from_text(str(latest_message or ""))
     customer_texts = [
         item["content"]
         for item in _sanitize_conversation_history(conversation_history)
         if item.get("role") == "customer"
     ]
-    if latest_message:
-        customer_texts.append(str(latest_message))
-    text = "\n".join(customer_texts)
+    recent_history_slots = [
+        _extract_requirement_slots_from_text(text)
+        for text in customer_texts[-3:]
+    ]
+    older_history_slots = [
+        _extract_requirement_slots_from_text(text)
+        for text in customer_texts[:-3]
+    ]
 
+    slots = dict(latest_slots)
+    latest_has_current_vehicle_need = bool(
+        latest_slots.get("model")
+        or latest_slots.get("brand")
+        or latest_slots.get("years")
+    )
+    latest_can_continue_history = (
+        _is_plain_greeting(latest_message)
+        or (
+            not latest_has_current_vehicle_need
+            and _contains_any(str(latest_message or ""), INVENTORY_KEYWORDS + PRICE_OR_DISCOUNT_KEYWORDS + VEHICLE_CONDITION_KEYWORDS)
+        )
+        or not any(latest_slots.get(key) for key in ("budget", "brand", "model", "years", "usage", "city", "concerns"))
+    )
+
+    if latest_can_continue_history:
+        for history_slots in reversed(recent_history_slots):
+            slots = _merge_requirement_slots(slots, history_slots)
+
+    if not any(slots.get(key) for key in ("budget", "brand", "model", "years", "usage", "city", "concerns")):
+        for history_slots in reversed(older_history_slots):
+            slots = _merge_requirement_slots(slots, history_slots)
+
+    model = slots.get("model")
+    brand = slots.get("brand") or _extract_brand(str(latest_message or ""), model)
+    concerns = list(slots.get("concerns") or [])
+    return {
+        "budget": slots.get("budget"),
+        "brand": brand,
+        "model": model,
+        "years": slots.get("years"),
+        "usage": slots.get("usage"),
+        "city": slots.get("city"),
+        "concerns": _dedupe(concerns),
+    }
+
+
+def _extract_requirement_slots_from_text(text: str) -> dict[str, Any]:
     budget = _extract_budget(text)
     years = _extract_years(text)
     model = _extract_vehicle_hint(text)
     brand = _extract_brand(text, model)
     concerns = [keyword for keyword in CONCERN_KEYWORDS if keyword in text]
+    if "现车猫" in text and "现车" not in concerns:
+        concerns.append("现车")
     if "泡水" in concerns and "水泡" not in concerns:
         concerns.append("水泡")
     usage = next((keyword for keyword in USAGE_KEYWORDS if keyword in text), None)
@@ -1205,12 +1251,21 @@ def _extract_customer_requirements(
     }
 
 
+def _merge_requirement_slots(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key in ("budget", "brand", "model", "years", "usage", "city"):
+        if not merged.get(key) and fallback.get(key):
+            merged[key] = fallback[key]
+    merged["concerns"] = _dedupe([*(merged.get("concerns") or []), *(fallback.get("concerns") or [])])
+    return merged
+
+
 def _extract_budget(text: str) -> str | None:
-    match = re.search(r"(\d{1,3})\s*万\s*(?:左右|以内|以上|上下|多)?", text)
-    if not match:
+    matches = list(re.finditer(r"(\d{1,3})\s*万\s*(左右|以内|以上|上下|多)?", text))
+    if not matches:
         return None
-    suffix_match = re.search(rf"{re.escape(match.group(1))}\s*万\s*(左右|以内|以上|上下|多)?", text)
-    suffix = suffix_match.group(1) if suffix_match and suffix_match.group(1) else ""
+    match = matches[-1]
+    suffix = match.group(2) or ""
     return f"{match.group(1)}万{suffix}"
 
 
@@ -1310,34 +1365,36 @@ def _build_contextual_customer_reply(
     if _is_plain_greeting(latest_message) and _has_actionable_requirement(slots):
         return f"您好，我记得您前面关注的是{_format_requirement_summary(slots)}。您是想继续了解现车和报价，还是更关注车况和检测报告？"
 
-    if fallback_to_human and _has_actionable_requirement(slots):
-        return _build_human_followup_reply(slots, apology=False)
-
-    if _contains_any(latest_message, ("现车", "库存", "价格", "报价", "车况", "检测报告", "事故", "水泡", "泡水")):
+    if _contains_any(latest_message, ("现车", "现车猫", "库存", "价格", "报价", "价位", "车况", "检测报告", "事故", "水泡", "泡水", "公里数", "里程")):
         subject = _format_requirement_summary(slots)
-        prefix = f"收到，您关注的是{subject}。" if subject else "收到，您是在问现车、价格和车况信息。"
+        prefix = f"收到，{subject}。" if subject else "可以的，您是在问现车和价格。"
         detail_parts = []
-        if _contains_any(latest_message, ("现车", "库存")):
+        if _contains_any(latest_message, ("现车", "现车猫", "库存")):
             detail_parts.append("现车")
-        if _contains_any(latest_message, ("价格", "报价")):
+        if _contains_any(latest_message, ("价格", "报价", "价位")):
             detail_parts.append("价格")
         if _contains_any(latest_message, ("车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告")):
             detail_parts.append("车况和检测报告")
         detail = "、".join(_dedupe(detail_parts)) or "现车和报价"
-        return f"{prefix}您这次主要问的是{detail}，这些需要顾问核对实时车源后给您准确答复；如果有符合的车源，可以优先按年份、里程、车况和检测报告给您整理。"
+        if slots.get("budget"):
+            return f"{prefix}您这个需求挺明确，我让顾问按这个方向核对一下实时库存和{detail}；有合适的车源，再重点看年份、里程、配置、价格和检测情况。"
+        return f"{prefix}现车和报价要让顾问按当天库存确认，您大概预算范围是多少？我好按年份、配置和车况帮您缩小范围。"
 
     if _has_actionable_requirement(slots):
-        return f"收到，{_format_requirement_summary(slots)}。这个需求比较明确，后续可以重点核对年份、里程、配置、车况和检测报告；现车与报价需要顾问按实时库存确认后回复您。"
+        return f"收到，{_format_requirement_summary(slots)}。您这个需求挺明确，我让顾问按年份、里程、配置、车况和检测报告这个方向核一下。"
 
-    return "不好意思，刚才没有接住您的问题。我先把您的需求记录下来，现车和价格需要顾问核对后给您准确答复，稍后由顾问继续跟进。"
+    return "可以的，我让顾问按当天库存核一下。您先说下大概预算和想看的车型，我好帮您缩小范围。"
 
 
 def _build_human_followup_reply(slots: dict[str, Any], *, apology: bool) -> str:
     summary = _format_requirement_summary(slots)
-    lead = "不好意思，刚才回复没有接住您的问题。" if apology else "我先把您的需求记录下来。"
+    if apology and summary:
+        return f"不好意思，刚才回复确实没有接住您的问题。您看的是{summary}，我这边不再重复问预算车型，先让顾问按这个条件核现车和价格。"
+    if apology:
+        return "不好意思，刚才回复确实没有接住您的问题。我这边先让顾问核一下现车和价格，避免继续重复问您。"
     if summary:
-        return f"{lead}您已经说得很清楚：{summary}。我先不再重复询问，现车和价格需要顾问核对后给您准确答复，后续由顾问继续跟进。"
-    return f"{lead}我先不再重复询问，现车和价格需要顾问核对后给您准确答复，后续由顾问继续跟进。"
+        return f"收到，{summary}。我帮您按这个方向核现车和价格，有合适的再把关键车况信息发您看。"
+    return "我帮您核一下现车和价格，有合适的再把关键车况信息发您看。"
 
 
 def _format_requirement_summary(slots: dict[str, Any]) -> str:
