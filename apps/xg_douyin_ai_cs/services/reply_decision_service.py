@@ -229,6 +229,7 @@ CUSTOMER_DISSATISFACTION_KEYWORDS = (
     "复读",
     "你没看",
     "不看消息",
+    "不看记录",
     "没诚意",
     "找别家",
     "算了",
@@ -236,7 +237,22 @@ CUSTOMER_DISSATISFACTION_KEYWORDS = (
     "到底有没有活人",
 )
 HUMAN_FOLLOWUP_MARKERS = ("不好意思", "刚才", "后续由顾问", "稍后由顾问", "不再重复")
-CONCERN_KEYWORDS = ("现车", "价格", "报价", "车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告", "合作沟通")
+CONCERN_KEYWORDS = (
+    "现车",
+    "价格",
+    "报价",
+    "最低价",
+    "车况",
+    "事故",
+    "水泡",
+    "泡水",
+    "公里数",
+    "里程",
+    "检测报告",
+    "第三方检测",
+    "第三方检测报告",
+    "合作沟通",
+)
 CITY_KEYWORDS = ("广州",)
 USAGE_KEYWORDS = ("商务兼家用", "商务", "家用")
 
@@ -642,7 +658,44 @@ def _build_llm_reply(
             **_agent_response_fields(agent),
         )
 
+    retry_warnings: list[str] = []
     decision = _parse_structured_llm_decision(result.get("reply_text"))
+    known_customer_info = _build_known_customer_context(
+        latest_message=request.latest_message,
+        conversation_history=request.conversation_history,
+    )
+    slots = _extract_customer_requirements(
+        latest_message=request.latest_message,
+        conversation_history=request.conversation_history,
+    )
+    if _is_reply_reasking_known_slots(str(decision.get("reply_text") or ""), slots):
+        retry_messages = _build_llm_retry_messages(
+            messages,
+            known_customer_info=known_customer_info,
+            bad_reply=str(decision.get("reply_text") or ""),
+        )
+        try:
+            result = client.chat(retry_messages)
+            decision = _parse_structured_llm_decision(result.get("reply_text"))
+            retry_warnings.append("llm_retry_for_known_customer_info")
+        except (LLMNotConfiguredError, LLMRequestError) as exc:
+            _logger.warning(
+                "reply_suggestion_llm_retry_failed stage=llm_retry_known_info "
+                "tenant_id=%s merchant_id=%s conversation_id=%s error=%s",
+                request.tenant_id,
+                request.merchant_id,
+                conversation_id,
+                _safe_error_summary(exc),
+            )
+            decision = _default_rule_decision(
+                reply_text=_build_contextual_customer_reply(
+                    latest_message=request.latest_message,
+                    slots=slots,
+                    fallback_to_human=False,
+                ),
+                confidence=0.5,
+            )
+            retry_warnings.append("llm_retry_failed_used_natural_fallback")
     decision = _apply_safety_postprocess(
         decision,
         latest_message=request.latest_message,
@@ -682,7 +735,7 @@ def _build_llm_reply(
         rag_used=rag_used,
         source_chunks=source_payload,
         rag_sources=source_payload,
-        warnings=agent_warnings,
+        warnings=[*agent_warnings, *retry_warnings],
         intent=decision.get("intent"),
         lead_level=decision.get("lead_level"),
         tags=decision["tags"],
@@ -708,6 +761,8 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
             "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
             "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
+            "已知客户信息会通过 known_customer_info 提供，请作为上下文使用，不要机械复述成槽位列表。",
+            "回复要像正常二手车销售接话，1 到 3 句话，不要输出“收到，预算、车型、关注点...”这种系统总结。",
             "不得连续复读相同模板；如果上一轮 AI 已说过类似内容，必须换成更贴合最新问题的回复。",
             "客户质疑机器人、复读或不看消息时，必须先道歉，复述已记录需求，并交由顾问核对后跟进。",
             "车型字符串必须保留原文，例如 530Li、525Li、宝马5系、奥迪A6L、奔驰E级，不得截断成宝马53。",
@@ -732,6 +787,8 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
                 "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
                 "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
                 "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
+                "已知客户信息会通过 known_customer_info 提供，请作为上下文使用，不要机械复述成槽位列表。",
+                "回复要像正常二手车销售接话，1 到 3 句话，不要输出“收到，预算、车型、关注点...”这种系统总结。",
                 "不得连续复读相同模板；如果上一轮 AI 已说过类似内容，必须换成更贴合最新问题的回复。",
                 "客户质疑机器人、复读或不看消息时，必须先道歉，复述已记录需求，并交由顾问核对后跟进。",
                 "车型字符串必须保留原文，例如 530Li、525Li、宝马5系、奥迪A6L、奔驰E级，不得截断成宝马53。",
@@ -747,6 +804,10 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         )
     conversation_history = _sanitize_conversation_history(request.conversation_history)
     known_requirements = _extract_customer_requirements(
+        latest_message=request.latest_message,
+        conversation_history=request.conversation_history,
+    )
+    known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
     )
@@ -776,6 +837,9 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "conversation_history": conversation_history,
             "conversation_history_policy": CONVERSATION_HISTORY_POLICY,
             "known_customer_requirements": known_requirements,
+            "known_customer_info": known_customer_context["known_customer_info"],
+            "conversation_task": known_customer_context["conversation_task"],
+            "must_not_ask_again": known_customer_context["must_not_ask_again"],
             "rag_results": [
                 {
                     "title": item.title,
@@ -805,6 +869,25 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
+    ]
+
+
+def _build_llm_retry_messages(
+    messages: list[dict],
+    *,
+    known_customer_info: dict[str, Any],
+    bad_reply: str,
+) -> list[dict]:
+    retry_payload = {
+        "retry_reason": "上一版回复询问了客户已经提供的信息，不能直接发送。",
+        "bad_reply": bad_reply,
+        "known_customer_info": known_customer_info["known_customer_info"],
+        "must_not_ask_again": known_customer_info["must_not_ask_again"],
+        "instruction": "请重新生成 1 到 3 句话的自然销售回复，优先接住客户最新问题，不要再问 must_not_ask_again 中的信息。",
+    }
+    return [
+        *messages,
+        {"role": "user", "content": json.dumps(retry_payload, ensure_ascii=False)},
     ]
 
 
@@ -1201,7 +1284,13 @@ def _extract_customer_requirements(
         _is_plain_greeting(latest_message)
         or (
             not latest_has_current_vehicle_need
-            and _contains_any(str(latest_message or ""), INVENTORY_KEYWORDS + PRICE_OR_DISCOUNT_KEYWORDS + VEHICLE_CONDITION_KEYWORDS)
+            and _contains_any(
+                str(latest_message or ""),
+                INVENTORY_KEYWORDS
+                + PRICE_OR_DISCOUNT_KEYWORDS
+                + VEHICLE_CONDITION_KEYWORDS
+                + CONCERN_KEYWORDS,
+            )
         )
         or not any(latest_slots.get(key) for key in ("budget", "brand", "model", "years", "usage", "city", "concerns"))
     )
@@ -1228,6 +1317,70 @@ def _extract_customer_requirements(
     }
 
 
+def _build_known_customer_context(
+    *,
+    latest_message: str,
+    conversation_history: object,
+) -> dict[str, Any]:
+    latest_slots = _extract_requirement_slots_from_text(str(latest_message or ""))
+    merged = _extract_customer_requirements(
+        latest_message=latest_message,
+        conversation_history=conversation_history,
+    )
+
+    def field(name: str, label: str | None = None) -> dict[str, Any]:
+        value = merged.get(name)
+        latest_value = latest_slots.get(name)
+        from_latest = bool(value and latest_value == value)
+        return {
+            "value": value,
+            "source": "latest" if from_latest else ("history" if value else None),
+            "updated_from_latest_message": from_latest,
+            "label": label or name,
+        }
+
+    concerns = list(merged.get("concerns") or [])
+    concern_aliases = {
+        "第三方检测": "检测报告",
+        "第三方检测报告": "检测报告",
+        "泡水": "水泡",
+    }
+    normalized_concerns = _dedupe([concern_aliases.get(item, item) for item in concerns])
+    must_not_ask_again = []
+    if merged.get("budget"):
+        must_not_ask_again.append("预算")
+    if merged.get("model") or merged.get("brand"):
+        must_not_ask_again.append("车型")
+    if merged.get("years"):
+        must_not_ask_again.append("年份")
+
+    return {
+        "known_customer_info": {
+            "budget": field("budget", "预算"),
+            "brand": field("brand", "品牌"),
+            "model": field("model", "车型"),
+            "year": {
+                **field("years", "年份"),
+                "value": merged.get("years"),
+            },
+            "city": field("city", "城市"),
+            "concerns": normalized_concerns,
+        },
+        "conversation_task": _build_conversation_task(latest_message, merged),
+        "must_not_ask_again": must_not_ask_again,
+    }
+
+
+def _build_conversation_task(latest_message: str, slots: dict[str, Any]) -> str:
+    if _is_customer_dissatisfied(latest_message):
+        return "客户正在质疑没有读取历史记录；回复时要先道歉，并沿用已知预算、车型和年份。"
+    if _contains_any(str(latest_message or ""), INVENTORY_KEYWORDS + PRICE_OR_DISCOUNT_KEYWORDS):
+        return "客户正在追问现车、价格、检测报告和车况真实性；回复时要接住最新问题，并沿用已知预算和车型。"
+    if slots.get("concerns"):
+        return "客户正在补充车况和检测关注点；回复时要沿用已知预算、车型和年份，并说明让顾问按条件核对。"
+    return "客户正在咨询车辆需求；回复时要优先接住最新问题，并使用已知客户信息。"
+
+
 def _extract_requirement_slots_from_text(text: str) -> dict[str, Any]:
     budget = _extract_budget(text)
     years = _extract_years(text)
@@ -1236,6 +1389,12 @@ def _extract_requirement_slots_from_text(text: str) -> dict[str, Any]:
     concerns = [keyword for keyword in CONCERN_KEYWORDS if keyword in text]
     if "现车猫" in text and "现车" not in concerns:
         concerns.append("现车")
+    if "最低价" in text and "价格" not in concerns:
+        concerns.append("价格")
+    if "第三方检测" in text and "检测报告" not in concerns:
+        concerns.append("检测报告")
+    if "没事故" in text and "事故" not in concerns:
+        concerns.append("事故")
     if "泡水" in concerns and "水泡" not in concerns:
         concerns.append("水泡")
     usage = next((keyword for keyword in USAGE_KEYWORDS if keyword in text), None)
@@ -1321,8 +1480,8 @@ def _is_reply_reasking_known_slots(reply_text: str, slots: dict[str, Any]) -> bo
     if not reply_text:
         return False
     checks = (
-        ("budget", ("说下预算", "告诉我预算", "补充预算", "预算和")),
-        ("model", ("说下车型", "车型偏好", "具体车型", "关注的车型")),
+        ("budget", ("说下预算", "告诉我预算", "补充预算", "预算和", "预算范围是多少", "预算大概多少", "大概预算", "多少预算")),
+        ("model", ("说下车型", "车型偏好", "具体车型", "关注的车型", "想看什么车型", "看什么车")),
         ("years", ("说下年份", "年份、", "年份或")),
         ("usage", ("告诉我用途", "预算和用途")),
     )
@@ -1549,25 +1708,13 @@ def _needs_safe_direct_reply_override(reply_text: str, risk_flags: list[str]) ->
         return True
     if _contains_any(reply_text, CONTACT_KEYWORDS):
         return True
-    if _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS):
+    if re.search(r"(价格|报价|最低价|落地价|裸车价)\s*(是|在|大概|差不多)?\s*\d", reply_text):
         return True
     if _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS):
         return True
-    if _contains_any(reply_text, VEHICLE_CONDITION_KEYWORDS):
+    if _contains_any(reply_text, ("保证无事故", "保证车况", "精品车况", "原版原漆", "不是事故车", "不是水泡车")):
         return True
-    return any(
-        flag in risk_flags
-        for flag in (
-            "inventory_or_model_specific",
-            "inventory_claim",
-            "contact_request",
-            "price_or_discount",
-            "finance_or_loan",
-            "vehicle_condition_specific",
-            "legal_or_transfer",
-            "after_sales_or_complaint",
-        )
-    )
+    return False
 
 
 def _build_safe_direct_reply(
