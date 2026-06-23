@@ -23,9 +23,11 @@ import { detectWechatReply } from "../api";
 import { fetchChecks } from "../api";
 import { setWechatAutoDetectTarget, fetchWechatAutoDetectStatus, clearWechatAutoDetectTarget } from "../api";
 import { sendLeadToStaff } from "../api";
+import { fetchNotificationRecords } from "../../../api/notifications";
 import { fetchAgentStatus } from "../api";
 import { fetchWebhookEvents } from "../api";
 import type { AgentStatusData, DouyinSyncResponse, Lead, ReportSummary, Staff, WechatDetectResponse, CheckRecord, WechatAutoDetectStatus, WebhookEvent } from "../types";
+import type { NotificationRecord } from "../../../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../../../lib/datetime";
 
 // ========== 状态配置（对齐 auto_wechat） ==========
@@ -37,7 +39,7 @@ const SOURCE_OPTIONS = ["douyin", "douyin_live"] as const;
 const STATUS_LABELS: Record<string, string> = {
   pending: "新线索",
   assigned: "跟进中",
-  replied: "已留资",
+  replied: "已回复",
   timeout: "已失效",
   closed: "已成交",
 };
@@ -79,6 +81,133 @@ function contactStatusLabel(status?: string | null): string {
 function getLeadContactValues(lead: Lead): string[] {
   const values = [lead.phone, lead.wechat, ...(lead.all_extracted_contacts || []), lead.customer_contact];
   return values.filter((value, index): value is string => Boolean(value) && values.indexOf(value) === index);
+}
+
+type OperationalTagKey = "manual_required" | "follow_up" | "retained_contact" | "high_intent";
+
+interface OperationalTag {
+  key: OperationalTagKey;
+  label: string;
+  tone: string;
+  reasons: string[];
+  cautious?: boolean;
+}
+
+const HIGH_INTENT_KEYWORDS = ["现车", "价格", "检测报告", "车况", "底价", "预算", "看车", "到店", "多少钱", "报价"];
+
+const OPERATIONAL_TAG_META: Record<OperationalTagKey, { label: string; tone: string }> = {
+  manual_required: { label: "需人工", tone: "bg-rose-50 text-rose-700 ring-rose-200" },
+  follow_up: { label: "待回访", tone: "bg-sky-50 text-sky-700 ring-sky-200" },
+  retained_contact: { label: "已留资", tone: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+  high_intent: { label: "高意向", tone: "bg-amber-50 text-amber-700 ring-amber-200" },
+};
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  values.forEach((item) => {
+    const value = String(item || "").trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    result.push(value);
+  });
+  return result;
+}
+
+function hasRetainedContact(lead: Lead): boolean {
+  return getLeadContactValues(lead).length > 0;
+}
+
+function isHighIntentLead(lead: Lead): boolean {
+  const level = String(lead.lead_score?.level || "").trim();
+  if (level === "高意向") return true;
+  if ((lead.lead_score?.reasons || []).some((reason) => reason.includes("高意向"))) return true;
+  const text = uniqueStrings([
+    lead.content,
+    lead.original_message_text,
+    leadDerivedValue(lead, "car_model"),
+    leadDerivedValue(lead, "budget"),
+    leadDerivedValue(lead, "city"),
+  ]).join(" ");
+  return HIGH_INTENT_KEYWORDS.some((keyword) => text.includes(keyword));
+}
+
+function hasProblematicContactExtract(lead: Lead): boolean {
+  return ["parse_failed", "failed"].includes(String(lead.contact_extract_status || ""));
+}
+
+function notificationNeedsManual(record: NotificationRecord): boolean {
+  const status = String(record.send_status || "").toLowerCase();
+  return ["failed", "blocked", "skipped"].includes(status) || Boolean(record.error_message);
+}
+
+function notificationSentToStaff(record: NotificationRecord): boolean {
+  const status = String(record.send_status || "").toLowerCase();
+  return ["pasted", "sent", "replied"].includes(status) || Boolean(record.sent_at);
+}
+
+function deriveOperationalTags(
+  lead: Lead,
+  checks: CheckRecord[] = [],
+  notificationRecords: NotificationRecord[] = [],
+): OperationalTag[] {
+  const relatedChecks = checks.filter((item) => item.lead_id === lead.id);
+  const relatedNotifications = notificationRecords.filter((item) => item.lead_id === lead.id);
+  const reasons: Record<OperationalTagKey, string[]> = {
+    manual_required: [],
+    follow_up: [],
+    retained_contact: [],
+    high_intent: [],
+  };
+
+  if (hasProblematicContactExtract(lead) && !hasRetainedContact(lead)) {
+    reasons.manual_required.push("联系方式提取失败，需要人工复核");
+  }
+  if (relatedChecks.some((item) => ["manual_review", "failed", "blocked", "invalid"].includes(item.check_status))) {
+    reasons.manual_required.push("回复检测需要人工复核");
+  }
+  if (relatedNotifications.some(notificationNeedsManual)) {
+    reasons.manual_required.push("微信通知销售失败或被阻断");
+  }
+
+  if (lead.status === "timeout" || relatedChecks.some((item) => item.check_status === "timeout")) {
+    reasons.follow_up.push("销售跟进检测已超时，建议抖音私信二次提醒");
+  }
+  if (
+    hasRetainedContact(lead) &&
+    lead.assigned_staff_id &&
+    relatedNotifications.some(notificationSentToStaff) &&
+    !relatedChecks.some((item) => item.check_status === "replied")
+  ) {
+    reasons.follow_up.push("已留资并进入销售跟进链路，尚未检测到有效回复");
+  }
+
+  if (hasRetainedContact(lead)) {
+    reasons.retained_contact.push("已提取手机号、微信号或其他联系方式");
+  }
+  if (isHighIntentLead(lead)) {
+    reasons.high_intent.push("命中车型、预算、价格或看车等意向信号");
+  }
+
+  return (["manual_required", "follow_up", "retained_contact", "high_intent"] as OperationalTagKey[])
+    .filter((key) => reasons[key].length > 0)
+    .map((key) => ({
+      key,
+      label: OPERATIONAL_TAG_META[key].label,
+      tone: OPERATIONAL_TAG_META[key].tone,
+      reasons: reasons[key],
+      cautious: key === "follow_up" && !relatedNotifications.length,
+    }));
+}
+
+function buildDouyinConversationUrl(lead: Lead): string | null {
+  if (!lead.account_open_id || !lead.conversation_short_id || !lead.source_id) return null;
+  const params = new URLSearchParams({
+    account_open_id: lead.account_open_id,
+    conversation_short_id: lead.conversation_short_id,
+    open_id: lead.source_id,
+  });
+  return `/douyin-ai-cs?${params.toString()}`;
 }
 
 function parseLeadRawData(lead: Lead): Record<string, unknown> {
@@ -138,6 +267,11 @@ function leadScorePercent(lead: Lead): number | null {
   const score = lead.lead_score?.score;
   if (typeof score !== "number") return null;
   return Math.max(0, Math.min(100, score));
+}
+
+function leadScoreLevelLabel(level?: string | null): string {
+  if (level === "待跟进") return "低意向";
+  return level || "低意向";
 }
 
 const DOUYIN_EVENT_DIRECTION: Record<string, { label: string; tone: string; align: string }> = {
@@ -524,6 +658,9 @@ interface LeadDetailProps {
   lead: Lead;
   staffName: string;
   staffList: Staff[];
+  checks: CheckRecord[];
+  notificationRecords: NotificationRecord[];
+  loadingNotifications: boolean;
   assignSubmitting: boolean;
   detectLoading: boolean;
   detectResult: WechatDetectResponse | null;
@@ -668,7 +805,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
+function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, loadingNotifications, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
@@ -677,6 +814,9 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
   const budget = leadDerivedValue(lead, "budget") || "未提供";
   const traceItems = leadTraceItems(lead);
   const currentStaffName = lead.assigned_staff?.name || staffName || "未分配";
+  const operationalTags = deriveOperationalTags(lead, checks, notificationRecords);
+  const followUpTag = operationalTags.find((tag) => tag.key === "follow_up");
+  const conversationUrl = buildDouyinConversationUrl(lead);
 
   // 检测按钮可用条件
   const agentReason = agentDisabledReason(agentStatus);
@@ -737,6 +877,52 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
           })}
         </div>
 
+        <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-[#1a1f2e]">运营标签</p>
+            {loadingNotifications ? <span className="text-[10px] text-[#8b95a6]">正在读取跟进状态...</span> : null}
+          </div>
+          {operationalTags.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {operationalTags.map((tag) => (
+                <span
+                  key={tag.key}
+                  title={tag.reasons.join("；")}
+                  className={`rounded-md px-2 py-1 text-[11px] font-semibold ring-1 ${tag.tone}`}
+                >
+                  {tag.cautious ? `可能${tag.label}` : tag.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-[11px] text-[#8b95a6]">暂无明确运营标签</p>
+          )}
+          {followUpTag ? (
+            <div className="mt-2 rounded-lg bg-[#f8fafc] px-3 py-2 text-[11px] leading-5 text-[#64748b]">
+              <div className="font-semibold text-[#374151]">{followUpTag.cautious ? "可能待回访依据" : "待回访依据"}</div>
+              {followUpTag.reasons.map((reason) => (
+                <div key={reason}>- {reason}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-3">
+          {conversationUrl ? (
+            <a
+              href={conversationUrl}
+              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <MessageCircleIcon size={14} />
+              查看抖音会话
+            </a>
+          ) : (
+            <div className="rounded-xl border border-dashed border-[#e4e8f0] bg-[#f8fafc] px-3 py-2 text-center text-[11px] text-[#8b95a6]">
+              暂无可跳转的抖音会话
+            </div>
+          )}
+        </div>
+
         {lead.content ? (
           <div className="mt-4 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
             <p className="mb-1 text-xs font-semibold text-[#1a1f2e]">线索内容</p>
@@ -749,7 +935,7 @@ function LeadDetail({ lead, staffName, staffList, assignSubmitting, detectLoadin
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-[#1a1f2e]">线索评分</p>
               <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                {lead.lead_score.level || "待跟进"} · {scorePercent}%
+                {leadScoreLevelLabel(lead.lead_score.level)} · {scorePercent}%
               </span>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e5e7eb]">
@@ -966,6 +1152,8 @@ export default function LeadsManagement() {
   const [checksData, setChecksData] = useState<CheckRecord[]>([]);
   const [autoDetectStatus, setAutoDetectStatus] = useState<WechatAutoDetectStatus | null>(null);
   const [notifyLoading, setNotifyLoading] = useState(false);
+  const [notificationRecords, setNotificationRecords] = useState<NotificationRecord[]>([]);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatusData>(AGENT_STATUS_FALLBACK);
 
   // 筛选与分页
@@ -1053,6 +1241,38 @@ export default function LeadsManagement() {
     }
 
     void loadSelectedLeadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setNotificationRecords([]);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadNotificationRecords() {
+      setLoadingNotifications(true);
+      try {
+        const result = await fetchNotificationRecords({ lead_id: selectedId, limit: 20 });
+        if (!cancelled) {
+          setNotificationRecords(result.records || []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setNotificationRecords([]);
+          toast.error(err instanceof Error ? err.message : "线索通知记录加载失败");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingNotifications(false);
+        }
+      }
+    }
+
+    void loadNotificationRecords();
     return () => {
       cancelled = true;
     };
@@ -1465,12 +1685,13 @@ export default function LeadsManagement() {
             <table className="w-full table-fixed text-left text-xs">
               <thead className="bg-[#f8fafc] text-[#64748b]">
                 <tr>
-                  <th className="w-[16%] px-4 py-3 font-semibold">联系人</th>
-                  <th className="w-[18%] px-4 py-3 font-semibold">线索信息</th>
-                  <th className="w-[15%] px-4 py-3 font-semibold">联系电话</th>
-                  <th className="w-[10%] px-4 py-3 font-semibold">状态</th>
+                  <th className="w-[15%] px-4 py-3 font-semibold">联系人</th>
+                  <th className="w-[17%] px-4 py-3 font-semibold">线索信息</th>
+                  <th className="w-[14%] px-4 py-3 font-semibold">联系电话</th>
+                  <th className="w-[10%] px-4 py-3 font-semibold">线索状态</th>
+                  <th className="w-[16%] px-4 py-3 font-semibold">运营标签</th>
                   <th className="w-[10%] px-4 py-3 font-semibold">分配销售</th>
-                  <th className="w-[31%] px-4 py-3 font-semibold">操作</th>
+                  <th className="w-[18%] px-4 py-3 font-semibold">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -1479,6 +1700,8 @@ export default function LeadsManagement() {
                   const city = leadDerivedValue(lead, "city") || "城市未提供";
                   const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
                   const budget = leadDerivedValue(lead, "budget") || "预算未提供";
+                  const tags = deriveOperationalTags(lead, checksData);
+                  const conversationUrl = buildDouyinConversationUrl(lead);
                   return (
                     <tr
                       key={lead.id}
@@ -1532,9 +1755,35 @@ export default function LeadsManagement() {
                           {leadStatusLabel(lead)}
                         </span>
                       </td>
+                      <td className="px-4 py-3">
+                        {tags.length ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {tags.map((tag) => (
+                              <span
+                                key={tag.key}
+                                title={tag.reasons.join("；")}
+                                className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${tag.tone}`}
+                              >
+                                {tag.cautious ? `可能${tag.label}` : tag.label}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-[#8b95a6]">-</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-[#374151]">{getStaffName(lead.assigned_staff_id)}</td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">
+                          {conversationUrl ? (
+                            <a
+                              href={conversationUrl}
+                              onClick={(event) => event.stopPropagation()}
+                              className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+                            >
+                              查看抖音会话
+                            </a>
+                          ) : null}
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
@@ -1619,6 +1868,9 @@ export default function LeadsManagement() {
             lead={selectedLead}
             staffName={getStaffName(selectedLead.assigned_staff_id)}
             staffList={staffList}
+            checks={checksData}
+            notificationRecords={notificationRecords}
+            loadingNotifications={loadingNotifications}
             assignSubmitting={assignSubmitting}
             detectLoading={detectLoading}
             detectResult={detectResult}

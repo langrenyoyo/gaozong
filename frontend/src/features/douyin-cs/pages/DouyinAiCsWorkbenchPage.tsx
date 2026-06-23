@@ -74,7 +74,7 @@ type AutoReplyRunViewItem = AiAutoReplyRunListItem & Pick<Partial<AiAutoReplyRun
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
-  { key: "manual_required", label: "待跟进" },
+  { key: "manual_required", label: "需人工" },
   { key: "high_intent", label: "高意向" },
   { key: "retained_contact", label: "已留资" },
   { key: "follow_up", label: "待回访" },
@@ -174,7 +174,11 @@ function accountUnreadFromConversations(accountOpenId: string, items: DouyinConv
 
 function statusText(value?: string | null) {
   if (value === "active") return "在线";
-  if (value === "pending") return "待跟进";
+  if (value === "pending") return "新线索";
+  if (value === "assigned") return "跟进中";
+  if (value === "replied") return "已回复";
+  if (value === "timeout") return "已失效";
+  if (value === "closed") return "已成交";
   if (value === "captured") return "已留资";
   if (value === "new") return "新会话";
   return value || "未知";
@@ -188,16 +192,13 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-function conversationMatchesFilter(conversation: DouyinConversationItem, filter: ConversationFilterKey) {
-  if (filter === "all") return true;
-  return Array.isArray(conversation.tags) && conversation.tags.includes(filter);
-}
-
 function conversationTagText(tag: string) {
-  if (tag === "manual_required") return "待跟进";
+  if (tag === "manual_required") return "需人工";
   if (tag === "high_intent") return "高意向";
   if (tag === "retained_contact") return "已留资";
   if (tag === "follow_up") return "待回访";
+  if (tag === "need_followup") return "待回访";
+  if (tag === "captured" || tag === "captured_lead" || tag === "has_lead" || tag === "lead_captured") return "已留资";
   return tag;
 }
 
@@ -235,11 +236,12 @@ function isLeadCaptureTag(tag?: string | null) {
 function isStatusDuplicateTag(tag?: string | null, leadStatus?: string | null) {
   const value = String(tag || "").trim();
   if (!value) return true;
-  if (isLeadCaptureTag(value)) return true;
+  if (isLeadCaptureTag(value)) return isCapturedLeadStatus(leadStatus);
+  if (value === "pending") return true;
   if (!STATUS_DUPLICATE_TAG_VALUES.has(value)) return false;
   const tagText = conversationTagText(value);
   const status = statusText(leadStatus);
-  return tagText === status || value === leadStatus || STATUS_DUPLICATE_TAG_VALUES.has(value);
+  return tagText === status || value === leadStatus;
 }
 
 function visibleConversationTags(tags?: string[] | null, leadStatus?: string | null) {
@@ -259,6 +261,20 @@ function visibleConversationTags(tags?: string[] | null, leadStatus?: string | n
 function isCapturedLeadStatus(value?: string | null) {
   const normalized = String(value || "").trim();
   return normalized === "captured" || normalized === "已留资";
+}
+
+const CONVERSATION_FILTER_TAG_VALUES: Record<Exclude<ConversationFilterKey, "all">, Set<string>> = {
+  manual_required: new Set(["manual_required", "need_human", "需人工"]),
+  high_intent: new Set(["high_intent", "高意向"]),
+  retained_contact: LEAD_CAPTURE_TAG_VALUES,
+  follow_up: new Set(["follow_up", "need_followup", "待回访"]),
+};
+
+function conversationMatchesFilter(conversation: DouyinConversationItem, filter: ConversationFilterKey) {
+  if (filter === "all") return true;
+  if (filter === "retained_contact" && isCapturedLeadStatus(conversation.lead_status)) return true;
+  const values = CONVERSATION_FILTER_TAG_VALUES[filter];
+  return (conversation.tags || []).some((tag) => values.has(String(tag || "").trim()));
 }
 
 function conversationLeadStatusForList(
@@ -2683,7 +2699,7 @@ export default function DouyinAiCsWorkbenchPage() {
                     </div>
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">状态</span>
-                      <span className="text-right">{profileFieldText(profile?.lead?.status || selectedConversation.lead_status)}</span>
+                      <span className="text-right">{statusText(profile?.lead?.status || selectedConversation.lead_status)}</span>
                     </div>
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">联系方式</span>
