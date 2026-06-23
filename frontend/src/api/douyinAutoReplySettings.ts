@@ -84,9 +84,20 @@ export async function getDouyinConversationAutopilot(
   conversationShortId: string | number,
 ): Promise<DouyinConversationAutopilotState> {
   const response = (await apiClient.get(
-    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversations/${encodeURIComponent(
-      String(conversationShortId),
-    )}/autopilot`,
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversation-autopilot`,
+    { params: { conversation_id: String(conversationShortId) } },
+  )) as unknown as DouyinConversationAutopilotStateResponse;
+  return response.data;
+}
+
+export async function pauseDouyinConversationAutopilot(
+  accountOpenId: string,
+  conversationShortId: string | number,
+): Promise<DouyinConversationAutopilotState> {
+  const response = (await apiClient.post(
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversation-autopilot/pause`,
+    undefined,
+    { params: { conversation_id: String(conversationShortId) } },
   )) as unknown as DouyinConversationAutopilotStateResponse;
   return response.data;
 }
@@ -97,10 +108,9 @@ export async function resumeDouyinConversationAutopilot(
   customerOpenId?: string | null,
 ): Promise<DouyinConversationAutopilotState> {
   const response = (await apiClient.post(
-    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversations/${encodeURIComponent(
-      String(conversationShortId),
-    )}/autopilot/resume`,
+    `/douyin-autoreply/settings/${encodeURIComponent(accountOpenId)}/conversation-autopilot/resume`,
     { customer_open_id: customerOpenId || undefined },
+    { params: { conversation_id: String(conversationShortId) } },
   )) as unknown as DouyinConversationAutopilotStateResponse;
   return response.data;
 }

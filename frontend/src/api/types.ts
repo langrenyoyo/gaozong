@@ -700,6 +700,7 @@ export interface DirectLlmPolicy {
   forbid_finance_claim: boolean;
   forbid_vehicle_condition_claim: boolean;
   min_confidence_for_direct_send: number;
+  content_gates_enabled?: boolean;
 }
 
 export interface DouyinAutoReplySettingItem {

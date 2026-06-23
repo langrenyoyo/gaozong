@@ -716,7 +716,7 @@ def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_p
     assert data["auto_send"] is False
     assert data["lead_capture_required"] is False
     assert data["manual_required"] is True
-    assert data["manual_required_reason"] == "specific_model_or_inventory_requires_human_confirmation"
+    assert data["manual_required_reason"] == "LLM未配置，需要人工确认"
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert [item["vehicle_name"] for item in data["recommended_vehicles"]] == [
         "宝马5系",

@@ -374,6 +374,96 @@ def test_get_conversation_autopilot_state_returns_current_state_without_creating
     assert cross.status_code == 403
 
 
+def test_query_conversation_autopilot_state_accepts_conversation_id_with_slash_and_keeps_scope():
+    _insert_account(merchant_id="merchant-a", account_open_id="account-a")
+    _insert_account(merchant_id="merchant-b", account_open_id="account-b")
+    conversation_id = "open/id/with/slash"
+    now = datetime.now()
+    db = TestSession()
+    try:
+        db.add(
+            ConversationAutopilotState(
+                merchant_id="merchant-a",
+                account_open_id="account-a",
+                conversation_short_id=conversation_id,
+                customer_open_id="customer-1",
+                mode="manual",
+                manual_takeover_until=now + timedelta(minutes=30),
+                last_human_message_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().get(
+        "/douyin-autoreply/settings/account-a/conversation-autopilot",
+        params={"conversation_id": conversation_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["mode"] == "manual"
+
+    cross = _client().get(
+        "/douyin-autoreply/settings/account-b/conversation-autopilot",
+        params={"conversation_id": conversation_id},
+    )
+    assert cross.status_code == 403
+    assert cross.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+
+    denied = _client(_context(permission_codes=["auto_wechat:leads"])).get(
+        "/douyin-autoreply/settings/account-a/conversation-autopilot",
+        params={"conversation_id": conversation_id},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_query_conversation_autopilot_pause_resume_accept_conversation_id_with_slash():
+    _insert_account(merchant_id="merchant-a", account_open_id="account-a")
+    conversation_id = "open/id/with/slash"
+
+    pause = _client().post(
+        "/douyin-autoreply/settings/account-a/conversation-autopilot/pause",
+        params={"conversation_id": conversation_id},
+    )
+
+    assert pause.status_code == 200
+    assert pause.json()["data"]["mode"] == "manual"
+    assert pause.json()["data"]["manual_takeover_until"] is not None
+
+    resume = _client().post(
+        "/douyin-autoreply/settings/account-a/conversation-autopilot/resume",
+        params={"conversation_id": conversation_id},
+        json={"customer_open_id": "customer-1"},
+    )
+
+    assert resume.status_code == 200
+    assert resume.json()["data"]["mode"] == "auto"
+    assert resume.json()["data"]["manual_takeover_until"] is None
+
+    db = TestSession()
+    try:
+        state = db.query(ConversationAutopilotState).one()
+        assert state.conversation_short_id == conversation_id
+        assert state.mode == "auto"
+    finally:
+        db.close()
+
+
+def test_query_conversation_autopilot_does_not_affect_account_settings_endpoint():
+    _insert_account(account_open_id="account-a")
+    _insert_settings(account_open_id="account-a", enabled=True, send_enabled=False)
+
+    response = _client().get("/douyin-autoreply/settings/account-a")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_open_id"] == "account-a"
+    assert data["mode"] == "manual_takeover"
+
+
 def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
     _insert_account(account_open_id="account-a")
 

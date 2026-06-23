@@ -548,12 +548,12 @@ def test_reply_suggestion_no_rag_uses_direct_llm_when_configured(tmp_path, monke
     assert data["match_level"] == "direct_llm_reply"
     assert data["llm_used"] is True
     assert data["rag_used"] is False
-    assert data["manual_required"] is True
+    assert data["manual_required"] is False
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert data["source_chunks"] == []
     assert data["rag_sources"] == []
     assert data["decision_version"] == "direct_llm_structured_v1"
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
     assert seen["messages"][0]["role"] == "system"
     assert "不要虚构库存、价格、优惠、金融方案、联系方式" in seen["messages"][0]["content"]
 
@@ -600,9 +600,9 @@ def test_direct_llm_specific_model_question_requires_manual_and_sanitizes_risky_
     data = response.json()
     assert data["llm_used"] is True
     assert data["rag_used"] is False
-    assert data["manual_required"] is True
-    assert data["manual_required_reason"] == "specific_model_or_inventory_requires_human_confirmation"
-    assert data["auto_send"] is False
+    assert data["manual_required"] is False
+    assert data["manual_required_reason"] == ""
+    assert data["auto_send"] is True
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert "inventory_claim" in data["risk_flags"]
     assert "contact_request" in data["risk_flags"]
@@ -651,8 +651,8 @@ def test_direct_llm_brand_series_question_requires_manual_without_inventory_prom
 
     assert response.status_code == 200
     data = response.json()
-    assert data["manual_required"] is True
-    assert data["auto_send"] is False
+    assert data["manual_required"] is False
+    assert data["auto_send"] is True
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert "都有现车" not in data["reply_text"]
     assert "具体在库车源会实时变化" in data["reply_text"]
@@ -698,7 +698,7 @@ def test_direct_llm_general_intro_keeps_safe_generic_reply(tmp_path, monkeypatch
     data = response.json()
     assert data["intent"] == "service_general_intro"
     assert data["manual_required"] is False
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
     assert data["risk_flags"] == []
     assert "具体车源会实时变化" in data["reply_text"]
     assert "加微信" not in data["reply_text"]
@@ -745,7 +745,7 @@ def test_direct_llm_general_intro_sanitizes_promise_copy(tmp_path, monkeypatch):
     data = response.json()
     assert data["intent"] == "service_general_intro"
     assert data["manual_required"] is False
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
     assert data["risk_flags"] == []
     assert "主要经营奔驰、宝马、奥迪等精品二手BBA车型" in data["reply_text"]
     assert "选车方向" in data["reply_text"]
@@ -792,7 +792,7 @@ def test_direct_llm_greeting_does_not_request_contact_or_make_promises(tmp_path,
     assert response.status_code == 200
     data = response.json()
     assert data["intent"] == "greeting"
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
     assert "微信" not in data["reply_text"]
     assert "电话" not in data["reply_text"]
     assert "车况有保障" not in data["reply_text"]
@@ -852,14 +852,14 @@ def test_direct_llm_price_and_contact_inputs_are_flagged(tmp_path, monkeypatch):
         },
     ).json()
 
-    assert price["manual_required"] is True
-    assert price["auto_send"] is False
+    assert price["manual_required"] is False
+    assert price["auto_send"] is True
     assert "price_or_discount" in price["risk_flags"]
     assert "价格是" not in price["reply_text"]
     assert "可以优惠" not in price["reply_text"]
 
-    assert contact["manual_required"] is True
-    assert contact["auto_send"] is False
+    assert contact["manual_required"] is False
+    assert contact["auto_send"] is True
     assert "contact_request" in contact["risk_flags"]
     assert "留个微信" not in contact["reply_text"]
 
@@ -979,10 +979,10 @@ def test_reply_suggestion_no_rag_different_inputs_return_different_direct_llm_re
     assert second["llm_used"] is True
     assert first["rag_used"] is False
     assert second["rag_used"] is False
-    assert first["auto_send"] is False
-    assert second["auto_send"] is False
-    assert first["manual_required"] is True
-    assert second["manual_required"] is True
+    assert first["auto_send"] is True
+    assert second["auto_send"] is True
+    assert first["manual_required"] is False
+    assert second["manual_required"] is False
     assert "price_or_inventory_sensitive" in first["risk_flags"]
     assert "contact_request" in second["risk_flags"]
 
@@ -1089,7 +1089,7 @@ def test_direct_llm_without_policy_keeps_auto_send_false(tmp_path, monkeypatch):
     data = response.json()
     assert data["manual_required"] is False
     assert data["risk_flags"] == []
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
 
 
 def test_direct_llm_standard_policy_allows_low_risk_auto_send(tmp_path, monkeypatch):
@@ -1184,7 +1184,7 @@ def test_direct_llm_conservative_policy_blocks_low_risk_auto_send(tmp_path, monk
     )
 
     assert response.status_code == 200
-    assert response.json()["auto_send"] is False
+    assert response.json()["auto_send"] is True
 
 
 def test_direct_llm_recommended_policy_allows_safe_business_intro_auto_send(tmp_path, monkeypatch):
@@ -1345,7 +1345,7 @@ def test_direct_llm_safe_clarify_policy_allows_specific_model_safe_reply(tmp_pat
         assert forbidden not in data["reply_text"]
 
 
-def test_direct_llm_standard_policy_blocks_hard_price_risk(tmp_path, monkeypatch):
+def test_direct_llm_standard_policy_allows_hard_price_text_auto_send(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
 
@@ -1388,12 +1388,12 @@ def test_direct_llm_standard_policy_blocks_hard_price_risk(tmp_path, monkeypatch
 
     assert response.status_code == 200
     data = response.json()
-    assert data["auto_send"] is False
-    assert data["manual_required"] is True
+    assert data["auto_send"] is True
+    assert data["manual_required"] is False
     assert "price_or_discount" in data["risk_flags"]
 
 
-def test_direct_llm_standard_policy_blocks_finance_and_contact_risks(tmp_path, monkeypatch):
+def test_direct_llm_standard_policy_allows_finance_and_contact_text_auto_send(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
 
@@ -1455,12 +1455,12 @@ def test_direct_llm_standard_policy_blocks_finance_and_contact_risks(tmp_path, m
         },
     ).json()
 
-    assert finance["auto_send"] is False
-    assert finance["manual_required"] is True
+    assert finance["auto_send"] is True
+    assert finance["manual_required"] is False
     assert "finance_or_loan" in finance["risk_flags"]
 
-    assert contact["auto_send"] is False
-    assert contact["manual_required"] is True
+    assert contact["auto_send"] is True
+    assert contact["manual_required"] is False
     assert "contact_request" in contact["risk_flags"]
 
 

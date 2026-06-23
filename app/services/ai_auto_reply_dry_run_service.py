@@ -258,7 +258,7 @@ def _run_with_session(db, *, event_id: int) -> None:
         result=final_result,
         upstream_auto_send=upstream_auto_send,
     )
-    final_result["auto_send"] = bool(upstream_auto_send and post_gate.passed)
+    final_result["auto_send"] = bool(post_gate.passed and str(final_result.get("reply_text") or "").strip())
     status = post_gate.status or ("decided" if post_gate.passed else "blocked")
     block_reason = post_gate.reason
     decision_log_id = record_ai_reply_decision(

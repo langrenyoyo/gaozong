@@ -90,17 +90,17 @@ const SIMPLE_MODE_OPTIONS: Array<{ value: SimpleReplyMode; label: string; descri
   {
     value: "safe",
     label: "稳妥模式",
-    description: "AI 主要回复问候、主营介绍和简单需求澄清。涉及车型、价格、车况时转人工确认。",
+    description: "当前仅作为后续策略预设保留，客户确认前不影响自动发送。",
   },
   {
     value: "recommended",
     label: "推荐模式",
-    description: "适合大多数商户。AI 可自动回复问候、主营介绍、品牌咨询、车型安全澄清，不承诺库存、价格、车况、金融。",
+    description: "默认推荐。当前 AI 生成有效回复后会自动发送。",
   },
   {
     value: "active",
     label: "积极模式",
-    description: "AI 会更主动引导客户补充预算、车型、用途和联系方式，但仍不自动承诺库存、价格、车况、金融。",
+    description: "当前仅作为后续策略预设保留，客户确认后再启用差异。",
   },
 ];
 
@@ -696,7 +696,10 @@ export default function DouyinAutoReplySettingsPage() {
                     </div>
 
                     <div className="mt-4">
-                      <div className="mb-2 text-xs font-bold text-slate-800">回复模式</div>
+                      <div className="mb-1 text-xs font-bold text-slate-800">回复模式</div>
+                      <div className="mb-2 text-[11px] leading-5 text-slate-500">
+                        当前为客户确认前的简化模式，回复模式仅保留为后续策略预设，暂不影响是否发送。
+                      </div>
                       <div className="grid gap-3 lg:grid-cols-3">
                         {SIMPLE_MODE_OPTIONS.map((option) => {
                           const active = simpleReplyMode === option.value;
@@ -722,15 +725,18 @@ export default function DouyinAutoReplySettingsPage() {
                     </div>
 
                     <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                      系统始终禁止自动承诺库存、价格、车况、金融、过户、质保等事实信息。
+                      当前为客户确认前的简化模式：AI 生成回复后会自动发送。后续可根据需要增加价格、库存、金融、车况等拦截规则。
                     </div>
                   </section>
 
                   <details className="rounded-md border border-slate-200 bg-white">
                     <summary className="cursor-pointer px-4 py-3 text-xs font-bold text-slate-800">
-                      高级设置（一般无需修改）
+                      高级设置（暂不生效，待客户确认后启用）
                     </summary>
                     <div className="space-y-5 border-t border-slate-200 p-4">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600">
+                    高级策略暂不生效，待客户确认后启用。当前只保留企业号授权、总开关、Agent 绑定、AI 托管、幂等和发送上下文等基础条件。
+                  </div>
                   <div className="grid gap-3 lg:grid-cols-3">
                     <Toggle
                       checked={form.enabled}
@@ -858,7 +864,7 @@ export default function DouyinAutoReplySettingsPage() {
                     <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
                       <span>
                         <span className="block text-xs font-bold text-slate-700">要求 RAG 命中</span>
-                        <span className="mt-1 block text-[11px] text-slate-500">未命中知识库时阻断真实回复。</span>
+                        <span className="mt-1 block text-[11px] text-slate-500">暂不作为自动发送门禁。</span>
                       </span>
                       <input
                         type="checkbox"
@@ -870,7 +876,7 @@ export default function DouyinAutoReplySettingsPage() {
                     <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
                       <span>
                         <span className="block text-xs font-bold text-slate-700">要求 RAG 来源</span>
-                        <span className="mt-1 block text-[11px] text-slate-500">没有可追溯知识来源时阻断真实回复。</span>
+                        <span className="mt-1 block text-[11px] text-slate-500">暂不作为自动发送门禁。</span>
                       </span>
                       <input
                         type="checkbox"
@@ -886,7 +892,7 @@ export default function DouyinAutoReplySettingsPage() {
                       <div>
                         <div className="text-xs font-bold text-slate-800">Direct LLM 自动回复策略</div>
                         <div className="mt-1 text-[11px] leading-5 text-slate-500">
-                          控制未命中知识库时的低风险回复尺度；系统始终禁止自动承诺库存、价格、车况、金融、过户、质保等事实信息。
+                          高级策略暂不生效，待客户确认后启用；当前 AI 生成有效回复后会自动发送。
                         </div>
                       </div>
                       <label className="flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-700">
@@ -898,7 +904,7 @@ export default function DouyinAutoReplySettingsPage() {
                           }
                           className="h-4 w-4"
                         />
-                        允许低风险自动发送
+                        历史低风险开关（暂不生效）
                       </label>
                     </div>
 
@@ -1004,7 +1010,7 @@ export default function DouyinAutoReplySettingsPage() {
                   </div>
 
                   <div>
-                    <div className="mb-2 text-xs font-bold text-slate-700">阻断风险标记</div>
+                    <div className="mb-2 text-xs font-bold text-slate-700">阻断风险标记（暂不生效）</div>
                     <MultiSelectChips
                       options={BLOCKED_RISK_FLAG_OPTIONS}
                       value={form.blocked_risk_flags}

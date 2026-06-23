@@ -90,7 +90,7 @@ def evaluate_post_llm_gates(
     result: dict[str, Any],
     upstream_auto_send: bool,
 ) -> GateDecision:
-    """评估 9100 决策后的安全门禁。"""
+    """评估 9100 返回后的基础发送资格；内容风险只记录，不拦截。"""
     allowed_intents = parse_allowed_intents(settings)
     blocked_risk_flags = parse_blocked_risk_flags(settings)
     risk_flags = _string_list(result.get("risk_flags"))
@@ -112,24 +112,11 @@ def evaluate_post_llm_gates(
         "allowed_intents": allowed_intents,
         "upstream_auto_send": upstream_auto_send,
         "final_auto_send": False,
+        "content_gates_effective": False,
     }
 
-    if result.get("manual_required") is True:
-        return GateDecision(False, "blocked", "manual_required", gate_results)
-    if risk_flags and (not blocked_risk_flags or any(flag in blocked_risk_flags for flag in risk_flags)):
-        return GateDecision(False, "blocked", "risk_flags", gate_results)
-    if settings.require_rag is True and result.get("rag_used") is not True and not _allows_direct_llm_without_rag(settings, intent):
-        return GateDecision(False, "blocked", "rag_not_used", gate_results)
-    if settings.require_rag_sources is True and not rag_sources and not _allows_direct_llm_without_rag(settings, intent):
-        return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
-    if confidence < float(settings.min_confidence or 0):
-        return GateDecision(False, "blocked", "confidence_low", gate_results)
-    if allowed_intents and intent not in allowed_intents:
-        return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
-    if not upstream_auto_send:
-        return GateDecision(True, "decided", None, gate_results)
-    if settings.send_enabled is not True:
-        return GateDecision(False, "blocked", "account_send_disabled", gate_results)
+    if not str(result.get("reply_text") or "").strip():
+        return GateDecision(False, "blocked", "empty_reply_text", gate_results)
     return GateDecision(True, "decided", None, gate_results)
 
 

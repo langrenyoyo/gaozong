@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
@@ -22,6 +22,7 @@ from app.schemas import (
 )
 from app.services.conversation_autopilot_state_service import (
     get_conversation_autopilot_state,
+    mark_manual_takeover,
     resume_ai_autopilot,
 )
 from app.services.douyin_autoreply_settings_service import (
@@ -146,6 +147,102 @@ def put_settings_mode(
     return {"success": True, "data": data, "message": "success"}
 
 
+def _conversation_autopilot_response(state) -> dict:
+    """统一组装会话托管状态响应。"""
+    return {
+        "success": True,
+        "data": {
+            "mode": state.mode if state is not None else "auto",
+            "manual_takeover_until": state.manual_takeover_until if state is not None else None,
+            "last_human_message_at": state.last_human_message_at if state is not None else None,
+            "updated_at": state.updated_at if state is not None else None,
+        },
+        "message": "success",
+    }
+
+
+@router.get(
+    "/{account_open_id}/conversation-autopilot",
+    response_model=DouyinConversationAutopilotStateResponse,
+)
+def get_conversation_autopilot_by_query(
+    account_open_id: str,
+    conversation_id: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """通过 query 参数查询当前会话托管状态，避免 open_id 中的 / 破坏路由。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    state = get_conversation_autopilot_state(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_id,
+    )
+    return _conversation_autopilot_response(state)
+
+
+@router.post(
+    "/{account_open_id}/conversation-autopilot/pause",
+    response_model=DouyinConversationAutopilotStateResponse,
+)
+def pause_conversation_autopilot_by_query(
+    account_open_id: str,
+    conversation_id: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """通过 query 参数暂停当前会话 AI 托管，避免会话标识进入 path。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    state = mark_manual_takeover(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_id,
+    )
+    logger.info(
+        "douyin_conversation_autopilot_pause merchant_id=%s account_open_id_sha8=%s conversation_sha8=%s operator=%s",
+        trusted_merchant_id,
+        _hash_prefix(account_open_id),
+        _hash_prefix(conversation_id),
+        context.user_id,
+    )
+    return _conversation_autopilot_response(state)
+
+
+@router.post(
+    "/{account_open_id}/conversation-autopilot/resume",
+    response_model=DouyinConversationAutopilotStateResponse,
+)
+def resume_conversation_autopilot_by_query(
+    account_open_id: str,
+    conversation_id: str = Query(..., min_length=1),
+    request: DouyinConversationAutopilotResumeRequest | None = None,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """通过 query 参数恢复当前会话 AI 托管，避免会话标识进入 path。"""
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    _get_owned_account(db, merchant_id=trusted_merchant_id, account_open_id=account_open_id)
+    state = resume_ai_autopilot(
+        db,
+        merchant_id=trusted_merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_id,
+        customer_open_id=request.customer_open_id if request else None,
+    )
+    logger.info(
+        "douyin_conversation_autopilot_resume merchant_id=%s account_open_id_sha8=%s conversation_sha8=%s operator=%s",
+        trusted_merchant_id,
+        _hash_prefix(account_open_id),
+        _hash_prefix(conversation_id),
+        context.user_id,
+    )
+    return _conversation_autopilot_response(state)
+
+
 @router.post(
     "/{account_open_id}/conversations/{conversation_short_id}/autopilot/resume",
     response_model=DouyinConversationAutopilotStateResponse,
@@ -174,16 +271,7 @@ def resume_conversation_autopilot(
         _hash_prefix(conversation_short_id),
         context.user_id,
     )
-    return {
-        "success": True,
-        "data": {
-            "mode": state.mode,
-            "manual_takeover_until": state.manual_takeover_until,
-            "last_human_message_at": state.last_human_message_at,
-            "updated_at": state.updated_at,
-        },
-        "message": "success",
-    }
+    return _conversation_autopilot_response(state)
 
 
 @router.get(
@@ -205,16 +293,7 @@ def get_conversation_autopilot(
         account_open_id=account_open_id,
         conversation_short_id=conversation_short_id,
     )
-    return {
-        "success": True,
-        "data": {
-            "mode": state.mode if state is not None else "auto",
-            "manual_takeover_until": state.manual_takeover_until if state is not None else None,
-            "last_human_message_at": state.last_human_message_at if state is not None else None,
-            "updated_at": state.updated_at if state is not None else None,
-        },
-        "message": "success",
-    }
+    return _conversation_autopilot_response(state)
 
 
 @router.put("/{account_open_id}", response_model=DouyinAutoreplySettingsResponse)

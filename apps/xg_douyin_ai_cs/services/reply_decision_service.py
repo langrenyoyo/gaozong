@@ -108,6 +108,12 @@ DIRECT_LLM_HARD_RISK_FLAGS = {
     "llm_not_configured",
     "llm_call_failed",
 }
+DIRECT_LLM_GENERATION_FAILURE_FLAGS = {
+    "llm_json_parse_failed",
+    "llm_empty_output",
+    "llm_not_configured",
+    "llm_call_failed",
+}
 PRICE_OR_DISCOUNT_KEYWORDS = ("价格", "多少钱", "报价", "优惠", "最低", "便宜", "落地价", "裸车价")
 FINANCE_OR_LOAN_KEYWORDS = ("贷款", "首付", "月供", "利率", "金融", "分期", "保险")
 INVENTORY_KEYWORDS = ("现车", "库存", "在库", "车源", "有吗", "有没有")
@@ -296,6 +302,9 @@ def build_reply_suggestion(
         return direct_llm_response
 
     agent_warnings = [*direct_llm_response.warnings, "direct_llm_fallback"]
+    direct_llm_unavailable = any(
+        flag in agent_warnings for flag in ("llm_not_configured", "llm_call_failed")
+    )
     message = request.latest_message or ""
     if _is_audi_a6(message):
         decision = _apply_safety_postprocess(
@@ -310,6 +319,10 @@ def build_reply_suggestion(
             llm_raw_auto_send=False,
             direct_llm_policy=request.direct_llm_policy,
         )
+        if direct_llm_unavailable:
+            decision["manual_required"] = True
+            decision["manual_required_reason"] = direct_llm_response.manual_required_reason
+            decision["auto_send"] = False
         return ReplySuggestionResponse(
             reply_text=decision["reply_text"],
             match_level="same_category",
@@ -343,6 +356,10 @@ def build_reply_suggestion(
         llm_raw_auto_send=False,
         direct_llm_policy=request.direct_llm_policy,
     )
+    if direct_llm_unavailable:
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = direct_llm_response.manual_required_reason
+        decision["auto_send"] = False
     return ReplySuggestionResponse(
         reply_text=decision["reply_text"],
         match_level="clarify",
@@ -1026,6 +1043,10 @@ def _apply_safety_postprocess(
 
     decision["manual_required_reason"] = reason
     decision["risk_flags"] = risk_flags
+    if not rag_used and not any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags):
+        if str(decision.get("reply_text") or "").strip():
+            decision["manual_required"] = False
+            decision["manual_required_reason"] = ""
     decision["auto_send"] = _direct_llm_auto_send_allowed(
         decision,
         rag_used=rag_used,
@@ -1115,31 +1136,10 @@ def _direct_llm_auto_send_allowed(
 ) -> bool:
     if rag_used:
         return False
-    if direct_llm_policy.get("direct_llm_auto_send_enabled") is not True:
-        return False
-    if direct_llm_policy.get("policy_level") not in {"standard", "aggressive"}:
-        return False
-    if decision.get("manual_required") is True:
-        return False
     risk_flags = list(decision.get("risk_flags") or [])
-    if risk_flags:
+    if any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags):
         return False
-    intent = _optional_text(decision.get("intent")) or ""
-    if intent in DIRECT_LLM_INTENT_POLICY_FIELDS:
-        if direct_llm_policy.get(DIRECT_LLM_INTENT_POLICY_FIELDS[intent]) is not True:
-            return False
-    elif intent in {"consult_specific_model", "consult_inventory"}:
-        if direct_llm_policy.get("specific_model_strategy") != "safe_clarify":
-            return False
-    else:
-        return False
-    try:
-        confidence = float(decision.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < float(direct_llm_policy.get("min_confidence_for_direct_send") or 0.85):
-        return False
-    return _direct_llm_reply_text_is_safe_for_auto_send(str(decision.get("reply_text") or ""))
+    return bool(str(decision.get("reply_text") or "").strip())
 
 
 def _direct_llm_reply_text_is_safe_for_auto_send(reply_text: str) -> bool:

@@ -358,54 +358,37 @@ function ErrorBanner({ message }: { message: string | null }) {
 }
 
 function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
-  const riskFlags = Array.isArray(run?.risk_flags) ? run.risk_flags : [];
-  if (riskFlags.includes("inventory_or_model_specific")) {
-    return "该回复涉及具体车型/库存信息，需人工确认后发送。";
-  }
-  if (riskFlags.includes("inventory_claim")) {
-    return "该回复包含库存/现车承诺，需人工确认。";
-  }
-  if (riskFlags.includes("contact_request")) {
-    return "该回复涉及联系方式或留资引导，需人工确认。";
-  }
-  if (riskFlags.includes("price_or_discount")) {
-    return "该回复涉及价格或优惠信息，需人工确认。";
-  }
-  if (riskFlags.includes("finance_or_loan")) {
-    return "该回复涉及金融/贷款信息，需人工确认。";
-  }
-  if (riskFlags.includes("vehicle_condition_specific")) {
-    return "该回复涉及具体车况信息，需人工确认。";
-  }
-
   const reason = run?.block_reason || run?.skip_reason || run?.error_message || "";
   const key = `${run?.status || ""}:${reason}`;
   const exact: Record<string, string> = {
-    "send_skipped:auto_send_disabled_by_decision": "当前策略设置为人工确认，因此未自动发送。",
     "send_skipped:manual_takeover_blocked": "当前会话处于人工接管状态，未自动发送。",
+    "send_skipped:send_context_unavailable": "发送上下文不可用，未自动发送。",
     "send_skipped:outbound_after_trigger": "检测到客户消息后已有人工或企业号回复，未自动发送。",
     "blocked:manual_takeover": "当前会话处于人工接管状态，AI 未自动回复。",
+    "blocked:autoreply_disabled": "企业号未开启自动回复，AI 未自动回复。",
+    "blocked:agent_not_bound": "企业号未绑定 Agent，AI 未自动回复。",
+    "blocked:no_bound_agent": "企业号未绑定 Agent，AI 未自动回复。",
     "blocked:frequency_conversation_exceeded": "当前会话触发频控限制，AI 未自动回复。",
-    "blocked:rag_not_used": "当前账号要求知识库命中，但本次未命中知识库，AI 未自动发送。",
     "failed:xg_douyin_ai_cs_timeout": "AI 服务响应超时，本次未自动回复。",
     "failed:xg_douyin_ai_cs_http_422": "AI 服务请求参数异常，本次未自动回复。",
+    "failed:send_context_unavailable": "发送上下文不可用，未自动发送。",
+    "failed:upstream_send_failed": "抖音接口发送失败。",
+    "failed:douyin_api_error": "抖音接口发送失败。",
+    "failed:send_msg_failed": "抖音接口发送失败。",
+    "send_failed:upstream_send_failed": "抖音接口发送失败。",
+    "send_failed:douyin_api_error": "抖音接口发送失败。",
+    "send_failed:send_msg_failed": "抖音接口发送失败。",
     "skipped:empty_message": "本次消息为空或非文本消息，未触发自动回复。",
+    "skipped:autoreply_disabled": "企业号未开启自动回复，AI 未自动回复。",
   };
   if (exact[key]) return exact[key];
-  if (!riskFlags.length && run?.upstream_auto_send === false && run?.final_auto_send === false) {
-    return "当前策略设置为人工确认，因此未自动发送。";
-  }
   if (reason) return reason;
-  if (run?.status === "send_skipped") return "发送前安全检查未通过。";
-  if (run?.status === "blocked") return "自动回复被安全门禁阻断。";
+  if (run?.status === "send_skipped") return "未自动发送。";
+  if (run?.status === "blocked") return "基础条件未满足，AI 未自动回复。";
   if (run?.status === "failed" || run?.status === "send_failed") return "自动回复执行失败。";
-  if (run?.status === "sent") return "AI 自动回复已发送。";
+  if (run?.status === "sent") return "AI 已自动回复。";
   if (run?.status === "decided") return "AI 已生成回复建议。";
   return "暂无自动回复运行结果。";
-}
-
-function autoReplyRunHasRiskFlags(run: AutoReplyRunViewItem | null) {
-  return Array.isArray(run?.risk_flags) && run.risk_flags.length > 0;
 }
 
 function isSameConversationAutopilotState(
@@ -425,12 +408,11 @@ function isSameConversationAutopilotState(
 function autoReplyRunTitle(run: AutoReplyRunViewItem | null) {
   if (!run) return "AI 自动回复状态：暂无记录";
   if (run.status === "send_skipped" && (run.would_send_content_summary || run.reply_text)) {
-    if (!autoReplyRunHasRiskFlags(run)) return "AI 已生成安全回复";
-    return "AI 自动回复已阻断";
+    return "AI 已生成回复";
   }
-  if (run.status === "blocked") return "AI 自动回复已阻断";
+  if (run.status === "blocked") return "AI 自动回复未执行";
   if (run.status === "failed" || run.status === "send_failed") return "AI 自动回复失败";
-  if (run.status === "sent") return "AI 自动回复已发送";
+  if (run.status === "sent") return "AI 已自动回复";
   if (run.status === "skipped") return "本次消息未触发自动回复";
   return "AI 自动回复状态";
 }
@@ -2431,11 +2413,6 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="whitespace-pre-wrap text-slate-800">
                             {autoReplyGeneratedContent(autoReplyRun)}
                           </div>
-                          {autoReplyRunHasRiskFlags(autoReplyRun) ? (
-                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
-                              该内容仅供人工参考，发送前请确认库存、价格、联系方式等信息。
-                            </div>
-                          ) : null}
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
@@ -2516,11 +2493,6 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="whitespace-pre-wrap text-slate-800">
                             {autoReplyGeneratedContent(autoReplyRun)}
                           </div>
-                          {autoReplyRunHasRiskFlags(autoReplyRun) ? (
-                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
-                              该内容仅供人工参考，发送前请确认库存、价格、联系方式等信息。
-                            </div>
-                          ) : null}
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"

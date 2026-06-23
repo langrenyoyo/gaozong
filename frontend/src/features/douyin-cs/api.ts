@@ -29,6 +29,7 @@ export {
   getDouyinConversationAutopilot,
   getDouyinAutoReplySetting,
   getDouyinAutoReplySettings,
+  pauseDouyinConversationAutopilot,
   resumeDouyinConversationAutopilot,
   updateDouyinAutoReplyMode,
   updateDouyinAutoReplySetting,
