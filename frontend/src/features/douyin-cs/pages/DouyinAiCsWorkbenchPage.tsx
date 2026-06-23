@@ -12,14 +12,12 @@ import {
   QrCodeIcon,
   RefreshCwIcon,
   SearchIcon,
-  ShieldCheckIcon,
   SmileIcon,
   VideoIcon,
   WrenchIcon,
   XIcon,
   UserRoundIcon,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 
 import {
   bindAuthorizedOpenId,
@@ -83,7 +81,7 @@ const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }>
 ];
 
 const LIVE_CHECK_DISABLED_MESSAGE =
-  "抖音授权联调未开启，请在后端配置 DY_LIVE_CHECK_ENABLED=true 后重启服务。";
+  "抖音授权联调未开启，请在后端设置 DY_LIVE_CHECK_ENABLED=true 后重启服务。";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -106,7 +104,7 @@ function liveCheckErrorMessage(err: unknown): string {
     return LIVE_CHECK_DISABLED_MESSAGE;
   }
   if (status === 400 && detail) {
-    return `抖音授权配置不完整：${detail}`;
+    return `抖音授权信息不完整：${detail}`;
   }
   if (status === 502 && detail) {
     return `抖音授权上游接口失败：${detail}`;
@@ -279,7 +277,8 @@ function messageMetaClass(message: DouyinMessageItem) {
   return "text-slate-400";
 }
 
-function chatModeTitle(mode: ChatAssistMode) {
+function chatModeTitle(mode: ChatAssistMode, enabled: boolean) {
+  if (!enabled) return "AI 自动回复未开启。";
   return mode === "manual_takeover"
     ? "人工接管中，AI 不会自动回复。"
     : "AI 自动回复已开启，客户新消息将由 AI 自动回复。";
@@ -392,11 +391,11 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   if (reason === "upstream_send_failed" || reason === "douyin_api_error" || reason === "send_msg_failed") {
     return "未发送：抖音接口发送失败";
   }
-  if (reason) return reason;
-  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return "未发送：基础条件未满足";
+  if (reason) return "未发送：发送上下文不可用";
+  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return "未发送：发送上下文不可用";
   if (run?.status === "failed" || run?.status === "send_failed") return "未发送：抖音接口发送失败";
-  if (run?.status === "sent") return "AI 已自动回复。";
-  if (run?.status === "decided") return "AI 已生成回复。";
+  if (run?.status === "sent") return "AI 已自动回复";
+  if (run?.status === "decided") return "未发送：发送上下文不可用";
   return "暂无自动回复运行结果。";
 }
 
@@ -430,6 +429,16 @@ function autoReplyGeneratedContent(run: AutoReplyRunViewItem | null) {
   return run?.would_send_content || run?.would_send_content_summary || run?.reply_text || "";
 }
 
+function shouldShowAutoReplyRunReason(run: AutoReplyRunViewItem | null, hasError: boolean) {
+  if (hasError) return true;
+  return Boolean(run && run.status !== "sent");
+}
+
+function visibleAutoReplyGeneratedContent(run: AutoReplyRunViewItem | null) {
+  if (run?.status === "sent") return "";
+  return autoReplyGeneratedContent(run);
+}
+
 function autoReplyRunCacheKey(accountOpenId?: string | null, conversationShortId?: string | number | null) {
   if (!accountOpenId || conversationShortId === undefined || conversationShortId === null) return null;
   const conversationKey = String(conversationShortId).trim();
@@ -447,9 +456,6 @@ function isSameAutoReplyRun(prev: AutoReplyRunViewItem | null, next: AutoReplyRu
     prev.decision_log_id === next.decision_log_id &&
     prev.would_send_content_summary === next.would_send_content_summary &&
     prev.would_send_content === next.would_send_content &&
-    prev.manual_required === next.manual_required &&
-    prev.manual_required_reason === next.manual_required_reason &&
-    JSON.stringify(prev.risk_flags || []) === JSON.stringify(next.risk_flags || []) &&
     prev.upstream_auto_send === next.upstream_auto_send &&
     prev.final_auto_send === next.final_auto_send &&
     prev.decision_version === next.decision_version &&
@@ -666,7 +672,6 @@ function matchDeepLinkedConversation(
 }
 
 export default function DouyinAiCsWorkbenchPage() {
-  const navigate = useNavigate();
   const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [conversations, setConversations] = useState<DouyinConversationItem[]>([]);
@@ -1474,7 +1479,7 @@ export default function DouyinAiCsWorkbenchPage() {
       if (!authUrlResult.data.configured || !authUrlResult.data.auth_url) {
         setAuthError(
           authUrlResult.data.missing.length
-            ? `抖音授权配置不完整：${authUrlResult.data.missing.join("，")}`
+            ? `抖音授权信息不完整：${authUrlResult.data.missing.join("，")}`
             : "未返回可用的抖音授权 URL。",
         );
       }
@@ -1591,7 +1596,7 @@ export default function DouyinAiCsWorkbenchPage() {
     const accountOpenId = selectedAccount?.account_open_id;
     if (!accountOpenId || savingAccountMode || nextMode === chatAssistMode) return;
     if (nextMode === "ai_auto_reply" && !activeBindingReady) {
-      setAccountModeError("请先为该抖音号配置智能体");
+      setAccountModeError("请先为该抖音号绑定智能体");
       return;
     }
     const previousMode = chatAssistMode;
@@ -1728,7 +1733,7 @@ export default function DouyinAiCsWorkbenchPage() {
       });
       if (selectedAccountOpenIdRef.current === agentConfigAccount.account_open_id) {
         setChatAssistMode("manual_takeover");
-        setAccountModeError("当前抖音号已解绑智能体，请重新配置后再开启 AI 自动回复");
+        setAccountModeError("当前抖音号已解绑智能体，请重新绑定后再开启 AI 自动回复");
       }
       setSelectedAgentIdForConfig("");
     } catch (err) {
@@ -1918,13 +1923,6 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }
 
-  function openAutoReplySettings() {
-    if (!selectedAccount?.account_open_id) return;
-    navigate(
-      `/douyin-cs/auto-reply-settings?account_open_id=${encodeURIComponent(selectedAccount.account_open_id)}`,
-    );
-  }
-
   return (
     <section className="flex h-full min-w-0 flex-col overflow-hidden bg-[#f3f6fa]">
       <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
@@ -1934,13 +1932,8 @@ export default function DouyinAiCsWorkbenchPage() {
             多抖音号会话工作台，当前支持测试白名单内的 AI 自动回复闭环。
           </p>
         </div>
-        <div className="flex max-w-[460px] items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-          <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
-          <span>
-            {effectiveChatAssistMode === "manual_takeover"
-              ? "当前企业号为人工接管：AI 不会自动真实发送，人工发送仍走确认安全链路。"
-              : "当前企业号为 AI 自动回复：真实发送仍受后端总开关、账号配置和测试白名单控制。"}
-          </span>
+        <div className="max-w-[420px] rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold leading-5 text-blue-700">
+          {chatModeTitle(effectiveChatAssistMode, activeBindingReady)}
         </div>
       </header>
 
@@ -2009,7 +2002,7 @@ export default function DouyinAiCsWorkbenchPage() {
                           : "bg-amber-50 text-amber-700"
                       }`}
                     >
-                      {accountHasAgent ? account.bound_agent_name || "已配置" : "未配置智能体"}
+                      {accountHasAgent ? account.bound_agent_name || "已绑定" : "未绑定智能体"}
                     </span>
                   </span>
                   {account.unread_count ? (
@@ -2028,8 +2021,8 @@ export default function DouyinAiCsWorkbenchPage() {
                         ? "text-slate-500 hover:bg-white"
                         : "bg-amber-100 text-amber-700 hover:bg-amber-200"
                     }`}
-                    aria-label={`配置 ${account.account_name} 智能体`}
-                    title="配置智能体"
+                    aria-label={`绑定 ${account.account_name} 智能体`}
+                    title="绑定智能体"
                   >
                     <WrenchIcon size={15} />
                   </button>
@@ -2169,11 +2162,11 @@ export default function DouyinAiCsWorkbenchPage() {
                   }`}
                 />
                 <span>
-                  <span className="font-bold">{chatModeTitle(effectiveChatAssistMode)}</span>
+                  <span className="font-bold">{chatModeTitle(effectiveChatAssistMode, activeBindingReady)}</span>
                   <span className="ml-1 text-slate-500">
                     {activeBindingReady
                       ? chatModeSubtitle(effectiveChatAssistMode)
-                      : "当前抖音号未配置智能体，请先在左侧账号列表点击配置后再开启 AI 自动回复"}
+                      : "当前抖音号未绑定智能体，请先在左侧账号列表点击绑定后再开启 AI 自动回复"}
                   </span>
                   {loadingAccountMode ? <span className="ml-1 text-slate-400">正在同步企业号模式...</span> : null}
                 </span>
@@ -2198,14 +2191,6 @@ export default function DouyinAiCsWorkbenchPage() {
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={openAutoReplySettings}
-                disabled={!selectedAccount?.account_open_id}
-                className="h-9 rounded-md border border-blue-200 bg-blue-50 px-3 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
-              >
-                自动回复策略
-              </button>
               <div className="flex overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-1">
                 <button
                   type="button"
@@ -2216,9 +2201,9 @@ export default function DouyinAiCsWorkbenchPage() {
                       ? "bg-blue-600 text-white shadow-sm"
                       : "text-slate-600 hover:bg-white disabled:text-slate-400"
                   }`}
-                  title={!activeBindingReady ? "请先为该抖音号配置智能体" : undefined}
+                  title={!activeBindingReady ? "请先为该抖音号绑定智能体" : undefined}
                 >
-                  {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI自动回复"}
+                  {savingAccountMode && chatAssistMode === "ai_auto_reply" ? "保存中..." : "AI 自动回复"}
                 </button>
                 <button
                   type="button"
@@ -2407,20 +2392,22 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="font-bold text-amber-950">
                             {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
                           </div>
-                          <div className="mt-1">
-                            {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
-                          </div>
+                          {shouldShowAutoReplyRunReason(autoReplyRun, Boolean(autoReplyRunError)) ? (
+                            <div className="mt-1">
+                              {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                            </div>
+                          ) : null}
                         </div>
                         {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
                       </div>
                       {autoReplyRunError ? (
                         <div className="mt-2 text-amber-800">{autoReplyRunError}</div>
                       ) : null}
-                      {autoReplyGeneratedContent(autoReplyRun) ? (
+                      {visibleAutoReplyGeneratedContent(autoReplyRun) ? (
                         <div className="mt-3 rounded-md border border-amber-200 bg-white/75 p-3">
                           <div className="mb-1 font-semibold text-amber-950">AI 已生成的回复内容</div>
                           <div className="whitespace-pre-wrap text-slate-800">
-                            {autoReplyGeneratedContent(autoReplyRun)}
+                            {visibleAutoReplyGeneratedContent(autoReplyRun)}
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
@@ -2487,20 +2474,22 @@ export default function DouyinAiCsWorkbenchPage() {
                           <div className="font-bold text-amber-950">
                             {loadingAutoReplyRun ? "正在加载 AI 自动回复状态..." : autoReplyRunTitle(autoReplyRun)}
                           </div>
-                          <div className="mt-1">
-                            {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
-                          </div>
+                          {shouldShowAutoReplyRunReason(autoReplyRun, Boolean(autoReplyRunError)) ? (
+                            <div className="mt-1">
+                              {autoReplyRunError ? "未发送：自动回复状态加载失败" : autoReplyRunReasonText(autoReplyRun)}
+                            </div>
+                          ) : null}
                         </div>
                         {loadingAutoReplyRun ? <LoaderIcon size={14} className="mt-0.5 shrink-0 animate-spin" /> : null}
                       </div>
                       {autoReplyRunError ? (
                         <div className="mt-2 text-amber-800">{autoReplyRunError}</div>
                       ) : null}
-                      {autoReplyGeneratedContent(autoReplyRun) ? (
+                      {visibleAutoReplyGeneratedContent(autoReplyRun) ? (
                         <div className="mt-3 rounded-md border border-amber-200 bg-white/75 p-3">
                           <div className="mb-1 font-semibold text-amber-950">AI 已生成的回复内容</div>
                           <div className="whitespace-pre-wrap text-slate-800">
-                            {autoReplyGeneratedContent(autoReplyRun)}
+                            {visibleAutoReplyGeneratedContent(autoReplyRun)}
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
@@ -2686,7 +2675,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <WrenchIcon size={18} />
                 </span>
                 <div>
-                  <h2 className="text-sm font-bold text-[#172033]">配置智能体</h2>
+                  <h2 className="text-sm font-bold text-[#172033]">绑定智能体</h2>
                   <p className="mt-1 text-xs text-slate-500">
                     {agentConfigAccount.account_name} · {compactOpenId(agentConfigAccount.account_open_id)}
                   </p>
@@ -2695,7 +2684,7 @@ export default function DouyinAiCsWorkbenchPage() {
               <button
                 onClick={() => closeAgentConfig()}
                 className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
-                aria-label="关闭智能体配置弹窗"
+                aria-label="关闭智能体绑定弹窗"
               >
                 <XIcon size={16} />
               </button>
@@ -2714,7 +2703,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <span className="truncate text-right font-semibold text-[#172033]">
                     {hasActiveAgentBinding(agentConfigAccount)
                       ? agentConfigAccount.bound_agent_name || agentConfigAccount.bound_agent_id
-                      : "未配置"}
+                      : "未绑定"}
                   </span>
                 </div>
               </div>
@@ -2775,7 +2764,7 @@ export default function DouyinAiCsWorkbenchPage() {
               </div>
 
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 leading-5 text-amber-800">
-                未配置智能体的抖音号不能开启 AI 自动回复；人工发送不受智能体绑定限制，但仍需要人工确认。
+                未绑定智能体的抖音号不能开启 AI 自动回复；人工发送不受智能体绑定限制，但仍需要人工确认。
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2898,7 +2887,7 @@ export default function DouyinAiCsWorkbenchPage() {
                     </>
                   ) : (
                     <div className="grid h-[420px] place-items-center px-6 text-center text-xs leading-6 text-slate-500">
-                      暂无可展示的授权页面，请检查 9000 授权配置。
+                      暂无可展示的授权页面，请检查 9000 授权信息。
                     </div>
                   )}
                 </div>

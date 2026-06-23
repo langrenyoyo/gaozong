@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import json
 from datetime import datetime
 from typing import Any
 
@@ -177,6 +178,7 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         )
         return {"status": "send_failed", "reason": "send_msg_failed"}
 
+    _sync_final_auto_send_after_success(db, run)
     run.status = "sent"
     run.block_reason = None
     run.skip_reason = None
@@ -198,6 +200,38 @@ def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> None:
     run.block_reason = reason
     run.updated_at = datetime.now()
     db.commit()
+
+
+def _sync_final_auto_send_after_success(db: Session, run: AiAutoReplyRun) -> None:
+    """发送成功后以真实发送结果为准，同步 run 快照和决策日志。"""
+    gate_results = _json_object(run.gate_results_json)
+    post_llm = gate_results.get("post_llm")
+    if not isinstance(post_llm, dict):
+        post_llm = {}
+    post_llm["final_auto_send"] = True
+    gate_results["post_llm"] = post_llm
+    run.gate_results_json = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"))
+
+    if run.decision_log_id:
+        decision = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).first()
+        if decision is not None:
+            decision.final_auto_send = 1
+
+    logger.info(
+        "ai_auto_reply_send_finalized stage=send_success run_id=%s decision_log_id=%s final_auto_send=True",
+        run.id,
+        run.decision_log_id,
+    )
+
+
+def _json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _decision_allows_auto_send(db: Session, run: AiAutoReplyRun) -> bool:

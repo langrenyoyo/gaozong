@@ -9,7 +9,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     defaultNavId: "douyin-ai-cs",
     children: [
       { id: "douyin-ai-cs", label: "抖音AI小高客服", path: "/douyin-cs/workbench" },
-      { id: "douyin-ai-cs-auto-reply-settings", label: "自动回复策略", path: "/douyin-cs/auto-reply-settings" },
     ],
   },
   {

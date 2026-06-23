@@ -106,6 +106,7 @@ def _insert_run(
     trigger_server_message_id: str = "server-msg-1",
     decision_log_id: int | None = 101,
     final_auto_send: int | None = 1,
+    gate_results_json: str | None = None,
 ) -> int:
     db = TestSession()
     try:
@@ -122,6 +123,7 @@ def _insert_run(
             mode=mode,
             status=status,
             decision_log_id=decision_log_id,
+            gate_results_json=gate_results_json,
             would_send_content=content,
             created_at=datetime.now(),
             updated_at=datetime.now(),
@@ -186,7 +188,12 @@ def _insert_event(
         db.close()
 
 
-def _insert_decision_log(*, log_id: int, final_auto_send: int) -> None:
+def _insert_decision_log(
+    *,
+    log_id: int,
+    final_auto_send: int,
+    risk_flags_json: str = "[]",
+) -> None:
     db = TestSession()
     try:
         db.add(
@@ -203,7 +210,7 @@ def _insert_decision_log(*, log_id: int, final_auto_send: int) -> None:
                 latest_message="想了解 A6",
                 reply_text="您好，可以介绍一下主营车型。",
                 manual_required=0,
-                risk_flags_json="[]",
+                risk_flags_json=risk_flags_json,
                 llm_used=1,
                 rag_used=0,
                 upstream_auto_send=0,
@@ -750,6 +757,52 @@ def test_openapi_success_marks_sent_and_writes_ai_auto_send_record():
         assert record.decision_log_id == 202
         assert state.last_ai_reply_at is not None
         assert state.mode == "ai"
+    finally:
+        db.close()
+
+
+def test_openapi_success_syncs_final_auto_send_when_risk_flags_exist():
+    stale_gate_results = {
+        "pre_llm": {"passed": True},
+        "post_llm": {
+            "final_auto_send": False,
+            "risk_flags": ["price_or_discount"],
+            "content_gates_effective": False,
+        },
+    }
+    run_id = _insert_run(
+        decision_log_id=203,
+        final_auto_send=None,
+        gate_results_json=json.dumps(stale_gate_results, ensure_ascii=False),
+    )
+    _insert_decision_log(
+        log_id=203,
+        final_auto_send=1,
+        risk_flags_json='["price_or_discount"]',
+    )
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-risk"}}},
+    ):
+        result = _send(run_id)
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        decision = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == 203).one()
+        record = db.query(DouyinPrivateMessageSend).one()
+        gate_results = json.loads(run.gate_results_json)
+        assert result["status"] == "sent"
+        assert run.status == "sent"
+        assert record.auto_send == 1
+        assert record.send_source == "ai_auto"
+        assert gate_results["post_llm"]["final_auto_send"] is True
+        assert gate_results["post_llm"]["risk_flags"] == ["price_or_discount"]
+        assert decision.final_auto_send == 1
+        assert json.loads(decision.risk_flags_json) == ["price_or_discount"]
     finally:
         db.close()
 

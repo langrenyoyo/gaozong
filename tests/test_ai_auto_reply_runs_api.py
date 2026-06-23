@@ -138,7 +138,13 @@ def _insert_send_record(*, run_id: int, decision_log_id: int | None = 10):
         db.close()
 
 
-def _insert_decision_log(*, log_id: int = 10, merchant_id: str = "merchant-a"):
+def _insert_decision_log(
+    *,
+    log_id: int = 10,
+    merchant_id: str = "merchant-a",
+    final_auto_send: int = 0,
+    risk_flags_json: str = '["no_rag_risky_question"]',
+):
     db = TestSession()
     try:
         row = AiReplyDecisionLog(
@@ -155,12 +161,12 @@ def _insert_decision_log(*, log_id: int = 10, merchant_id: str = "merchant-a"):
             reply_text="您好！我们主营奔驰、宝马、奥迪等精品二手车。",
             manual_required=0,
             manual_required_reason=None,
-            risk_flags_json='["no_rag_risky_question"]',
+            risk_flags_json=risk_flags_json,
             tags_json='["intro"]',
             llm_used=1,
             rag_used=0,
             upstream_auto_send=0,
-            final_auto_send=0,
+            final_auto_send=final_auto_send,
             decision_version="direct_llm_structured_v1",
             created_at=datetime.now(),
         )
@@ -358,6 +364,40 @@ def test_detail_returns_gate_results_and_send_record_without_raw_response_or_pla
     assert "raw_response_json" not in data
     assert "raw_response" not in data
     assert "13812345678" not in json.dumps(data, ensure_ascii=False)
+
+
+def test_sent_run_returns_auto_replied_state_without_content_gate_blocking():
+    _insert_decision_log(
+        log_id=90,
+        final_auto_send=1,
+        risk_flags_json='["price_or_discount"]',
+    )
+    run_id = _insert_run(
+        status="sent",
+        block_reason=None,
+        decision_log_id=90,
+        gate_results_json=json.dumps(
+            {"post_llm": {"final_auto_send": True, "risk_flags": ["price_or_discount"]}},
+            ensure_ascii=False,
+        ),
+        would_send_content="auto reply content",
+    )
+    _insert_send_record(run_id=run_id, decision_log_id=90)
+
+    list_response = _client().get("/ai-auto-reply-runs", params={"status": "sent", "page_size": 1})
+    detail_response = _client().get(f"/ai-auto-reply-runs/{run_id}")
+
+    assert list_response.status_code == 200
+    item = list_response.json()["data"]["items"][0]
+    assert item["status"] == "sent"
+    assert item["block_reason"] is None
+    assert item["risk_flags"] == ["price_or_discount"]
+    assert item["final_auto_send"] is True
+    assert detail_response.status_code == 200
+    send_record = detail_response.json()["data"]["send_record"]
+    assert send_record["send_status"] == "sent"
+    assert send_record["send_source"] == "ai_auto"
+    assert send_record["auto_send"] is True
 
 
 def test_detail_cannot_read_other_merchant_run():
