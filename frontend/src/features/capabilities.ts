@@ -8,7 +8,8 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     path: "/douyin-cs/workbench",
     defaultNavId: "douyin-ai-cs",
     children: [
-      { id: "douyin-ai-cs", label: "抖音AI小高客服", path: "/douyin-cs/workbench" },
+      { id: "douyin-ai-cs", label: "客服工作台", path: "/douyin-cs/workbench" },
+      { id: "douyin-auto-reply-diagnostics", label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
     ],
   },
   {

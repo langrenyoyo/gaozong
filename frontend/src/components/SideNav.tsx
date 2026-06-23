@@ -10,6 +10,7 @@ import {
   MessageCircleMoreIcon,
   ShieldCheckIcon,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { AppUser } from "../App";
 import { capabilityNavCenters, findCapabilityByNavId } from "../features/capabilities";
 
@@ -56,6 +57,12 @@ export default function SideNav({
 }: SideNavProps) {
   const isAdminUser = user.role !== "merchant";
   const activeCenter = findCapabilityByNavId(activeNav);
+  const navigate = useNavigate();
+
+  const navigateMerchantItem = (id: string, path: string) => {
+    onNavChange(id);
+    navigate(path);
+  };
 
   return (
     <aside className="relative h-full">
@@ -107,10 +114,11 @@ export default function SideNav({
               })
             : capabilityNavCenters.map((center) => {
                 const isCenterActive = activeCenter.id === center.id;
+                const showChildren = expanded && isCenterActive && center.children.length > 1;
                 return (
                   <div key={center.id} className={expanded ? "w-full" : ""}>
                     <button
-                      onClick={() => onNavChange(center.defaultNavId)}
+                      onClick={() => navigateMerchantItem(center.defaultNavId, center.path)}
                       className={`relative flex transition-smooth ${
                         expanded
                           ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
@@ -129,6 +137,26 @@ export default function SideNav({
                         </span>
                       ) : null}
                     </button>
+                    {showChildren ? (
+                      <div className="mt-1.5 space-y-1 pl-8">
+                        {center.children.map((item) => {
+                          const isChildActive = activeNav === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => navigateMerchantItem(item.id, item.path)}
+                              className={`h-8 w-full rounded-lg px-3 text-left text-[11px] font-semibold transition-smooth ${
+                                isChildActive
+                                  ? "bg-white/12 text-white"
+                                  : "text-slate-500 hover:bg-white/8 hover:text-slate-200"
+                              }`}
+                            >
+                              <span className="block truncate">{item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

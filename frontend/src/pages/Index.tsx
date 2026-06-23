@@ -22,6 +22,7 @@ import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import WechatTaskPanel from "../features/wechat-assistant/components/WechatTaskPanel";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
+import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
 import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
@@ -660,6 +661,7 @@ export default function Index({
 
   const isLeadConversationNav = activeNav === "chat";
   const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
+  const isDouyinAutoReplyDiagnosticsNav = activeNav === "douyin-auto-reply-diagnostics";
   const isLeadsModuleNav = activeNav === "leads";
   const isAgentModuleNav =
     activeNav === "ai-agents" ||
@@ -755,6 +757,8 @@ export default function Index({
           </>
         ) : isDouyinWorkbenchNav ? (
           <DouyinAiCsWorkbenchPage />
+        ) : isDouyinAutoReplyDiagnosticsNav ? (
+          <DouyinAutoReplyRunsPage />
         ) : isLeadsModuleNav ? (
           <LeadsModulePage />
         ) : isAgentModuleNav ? (

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route, useLocation } from "react-router-dom";
 import { useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
@@ -11,6 +11,11 @@ export interface AppUser {
   account: string;
   role: "merchant" | "super_admin" | "operation_admin" | "finance_admin";
   roleLabel: string;
+}
+
+function LegacyRedirect({ to }: { to: string }) {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search || ""}`} replace />;
 }
 
 const App = () => {
@@ -40,7 +45,7 @@ const App = () => {
             <Route key={route.path} path={route.path} element={renderIndex(route.navId)} />
           ))}
           {legacyRouteRedirects.map((route) => (
-            <Route key={route.from} path={route.from} element={<Navigate to={route.to} replace />} />
+            <Route key={route.from} path={route.from} element={<LegacyRedirect to={route.to} />} />
           ))}
           <Route path="*" element={<Navigate to={user ? "/douyin-cs/workbench" : "/"} replace />} />
         </Routes>
