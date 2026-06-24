@@ -52,6 +52,10 @@ CLAUDE.md
 test_cors_leads.json
 test_wechat_debug.json
 
+# pytest 运行临时目录（本地运行残留，不应提交）
+.pytest_tmp_*/
+tmp_pytest/
+
 # Frontend（React/Vite 构建产物与缓存）
 node_modules/
 .vite/
