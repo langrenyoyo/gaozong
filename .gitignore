@@ -58,5 +58,9 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 
+# TypeScript 声明产物（tsc -b / emitDeclarationOnly 生成，不应提交）
+frontend/*.d.ts
+frontend/tsconfig.tsbuildinfo
+
 # Docker 本地开发运行数据（容器 SQLite 持久化，不应提交）
 docker-data/
