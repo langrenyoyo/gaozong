@@ -189,6 +189,22 @@ class TestWriteTextRetry:
         assert result["success"] is False
         assert result["attempts"] == 0
 
+    def test_fallback_input_click_point_uses_chat_input_safe_area(self):
+        from app.wechat_ui.input_writer import _fallback_input_click_point
+
+        rect = MagicMock()
+        rect.left = 0
+        rect.top = 0
+        rect.right = 880
+        rect.bottom = 700
+        rect.width.return_value = 880
+        rect.height.return_value = 700
+
+        x, y = _fallback_input_click_point(rect)
+
+        assert x == 572
+        assert y == 630
+
     def test_retry_on_input_box_not_found(self):
         from app.wechat_ui.input_writer import write_text_to_input
         call_count = [0]

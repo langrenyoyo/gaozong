@@ -2639,6 +2639,28 @@ def locate_search_result_click_point(win_rect: dict, nickname: str) -> dict:
     }
 
 
+def _search_result_click_from_rect(rect: dict) -> dict:
+    """结果行点击点：优先点首行靠上安全区，避免 OCR 框跨行时误点第二行。"""
+    left = int(rect["left"])
+    top = int(rect["top"])
+    bottom = int(rect["bottom"])
+    row_height = max(1, bottom - top)
+    safe_y_offset = min(26, max(18, int(row_height * 0.28)))
+    return {
+        "x": int(left + 70),
+        "y": int(top + safe_y_offset),
+    }
+
+
+def _first_search_result_click_point(region: dict) -> dict:
+    """第一条搜索结果的保守点击点；只用于已确认搜索词后，避免跟随下方 OCR 文本误点。"""
+    width = int(region["right"]) - int(region["left"])
+    return {
+        "x": int(region["left"] + _clamp(width * 0.55, 150, 190)),
+        "y": int(region["top"] + 36),
+    }
+
+
 def _search_result_region(win_rect: dict) -> dict:
     width = int(win_rect["right"]) - int(win_rect["left"])
     height = int(win_rect["bottom"]) - int(win_rect["top"])
@@ -2764,10 +2786,7 @@ def _detect_single_visible_result_row(hwnd: int, win_rect: dict, nickname: str) 
             "nickname": nickname,
             "method": "single_visible_result_row_fallback",
             "rect": rect,
-            "click_point": {
-                "x": int(rect["left"] + 70),
-                "y": int((rect["top"] + rect["bottom"]) / 2),
-            },
+            "click_point": _first_search_result_click_point(region),
             "confidence": 0.45,
         }
     except Exception as exc:
@@ -2811,13 +2830,19 @@ def detect_search_result(hwnd: int, win_rect: dict, nickname: str) -> dict:
                 continue
             xs = [float(p[0]) for p in box]
             ys = [float(p[1]) for p in box]
+            ocr_top = int(region["top"] + min(ys))
+            # 只允许第一条结果安全带内的 OCR 文本作为点击来源。
+            # 下方“包含 xxx”等文本可能也匹配昵称，但不应带动鼠标点击第二个联系人。
+            if ocr_top > int(region["top"] + 78):
+                base["notes"].append(f"ignored_lower_matching_ocr_text: top={ocr_top}, text={text}")
+                continue
             rect = {
                 "left": int(region["left"] + min(xs) - 55),
                 "top": int(region["top"] + min(ys) - 14),
                 "right": int(region["left"] + max(xs) + 120),
                 "bottom": int(region["top"] + max(ys) + 18),
             }
-            click = {"x": int(rect["left"] + 70), "y": int((rect["top"] + rect["bottom"]) / 2)}
+            click = _search_result_click_from_rect(rect)
             candidate = {
                 "success": True,
                 "search_result_detected": True,
@@ -2827,11 +2852,12 @@ def detect_search_result(hwnd: int, win_rect: dict, nickname: str) -> dict:
                 "click_point": click,
                 "confidence": conf,
                 "ocr_text": text,
+                "ocr_top": ocr_top,
                 "failure_stage": None,
                 "screenshots": screenshots,
                 "notes": [],
             }
-            if best is None or conf > best.get("confidence", 0):
+            if best is None or (candidate["ocr_top"], -conf) < (best.get("ocr_top", 999999), -best.get("confidence", 0)):
                 best = candidate
         if best:
             best["screenshots"]["overlay"] = _save_search_result_overlay(hwnd, win_rect, nickname, best, "overlay")

@@ -48,6 +48,15 @@ logger = logging.getLogger(__name__)
 MAX_WRITE_ATTEMPTS = 2
 
 
+def _fallback_input_click_point(win_rect) -> tuple[int, int]:
+    """Qt5 输入框兜底点：落在右侧聊天输入区中下部，避开左侧会话栏和工具栏。"""
+    width = win_rect.width()
+    height = win_rect.height()
+    click_x = int(win_rect.left + width * 0.65)
+    click_y = int(win_rect.top + height * 0.90)
+    return click_x, click_y
+
+
 def _get_foreground_hwnd() -> int:
     """获取当前前台窗口句柄"""
     return ctypes.windll.user32.GetForegroundWindow()
@@ -133,8 +142,7 @@ def find_input_box(window: uia.Control) -> uia.Control:
     # 策略3：坐标兜底 - 点击窗口下方中央区域
     try:
         win_rect = window.BoundingRectangle
-        click_x = (win_rect.left + win_rect.right) // 2
-        click_y = win_rect.bottom - win_rect.height() // 5
+        click_x, click_y = _fallback_input_click_point(win_rect)
         logger.warning("未找到输入框控件，尝试坐标兜底点击: (%d, %d)", click_x, click_y)
 
         ctypes.windll.user32.SetCursorPos(click_x, click_y)

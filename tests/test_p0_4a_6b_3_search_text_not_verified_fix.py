@@ -669,6 +669,115 @@ def test_detect_search_result_passes_numpy_ndarray_to_readtext():
     assert isinstance(first_arg, np.ndarray), f"detect_search_result readtext 入参类型={type(first_arg)}，期望 numpy.ndarray"
 
 
+def test_detect_search_result_click_point_stays_in_first_row_when_ocr_box_is_tall():
+    """OCR 框偏高或跨行时，点击点应落在第一行安全区域，避免误点第二个联系人。"""
+    from app.wechat_ui.contact_searcher import detect_search_result
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.return_value = [
+        (
+            [[20, 20], [260, 20], [260, 128], [20, 128]],
+            "A张生177020658",
+            0.88,
+        ),
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (400, 300), color=(255, 255, 255))
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_result_region_screenshot", return_value="result.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_result_overlay", return_value="overlay.png"):
+        result = detect_search_result(123, win_rect, "A张生177020658")
+
+    assert result["search_result_detected"] is True
+    assert result["rect"]["top"] == 106
+    assert result["click_point"]["y"] <= 132
+
+
+def test_detect_search_result_prefers_topmost_matching_row_over_lower_high_confidence_text():
+    """多个 OCR 块都匹配昵称时，应选择最靠上的联系人行，不被下方高置信度文本带偏。"""
+    from app.wechat_ui.contact_searcher import detect_search_result
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.return_value = [
+        (
+            [[58, 18], [245, 18], [245, 42], [58, 42]],
+            "A张生177020658",
+            0.72,
+        ),
+        (
+            [[58, 112], [265, 112], [265, 140], [58, 140]],
+            "包含;A张生177020658",
+            0.96,
+        ),
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (400, 300), color=(255, 255, 255))
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_result_region_screenshot", return_value="result.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_result_overlay", return_value="overlay.png"):
+        result = detect_search_result(123, win_rect, "A张生177020658")
+
+    assert result["search_result_detected"] is True
+    assert result["ocr_text"] == "A张生177020658"
+    assert result["rect"]["top"] == 104
+    assert result["click_point"]["y"] <= 130
+
+
+def test_detect_search_result_ignores_lower_only_matching_text():
+    """如果只有下方文本匹配昵称，应阻止 OCR 坐标点击，避免误点第二个联系人。"""
+    from app.wechat_ui.contact_searcher import detect_search_result
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.return_value = [
+        (
+            [[58, 112], [265, 112], [265, 140], [58, 140]],
+            "包含;A张生177020658",
+            0.96,
+        ),
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    from PIL import Image
+    fake_image = Image.new("RGB", (400, 300), color=(255, 255, 255))
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image), \
+         patch("app.wechat_ui.contact_searcher._save_result_region_screenshot", return_value="result.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_result_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.contact_searcher._detect_single_visible_result_row",
+               return_value={"success": False, "reason": "not_single_row"}):
+        result = detect_search_result(123, win_rect, "A张生177020658")
+
+    assert result["search_result_detected"] is False
+    assert any("ignored_lower_matching_ocr_text" in note for note in result["notes"])
+
+
+def test_single_visible_result_row_fallback_clicks_first_result_safe_point():
+    """可见行 fallback 也应使用第一条结果安全点，不再点击大块区域中心。"""
+    from app.wechat_ui.contact_searcher import _detect_single_visible_result_row
+
+    from PIL import Image, ImageDraw
+    fake_image = Image.new("RGB", (325, 280), color=(255, 255, 255))
+    draw = ImageDraw.Draw(fake_image)
+    draw.rectangle((40, 105, 250, 150), fill=(80, 80, 80))
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+
+    with patch("app.wechat_ui.contact_searcher.grab_screen", return_value=fake_image):
+        result = _detect_single_visible_result_row(123, win_rect, "A张生177020658")
+
+    assert result["success"] is True
+    assert result["click_point"]["y"] == 136
+    assert result["click_point"]["x"] == 189
+
+
 # =====================================================
 # 15. P0-4A-6B-3T-D: OCR 异常时仍安全失败，不进入成功
 # =====================================================
