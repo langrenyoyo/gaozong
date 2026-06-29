@@ -68,6 +68,7 @@ REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://douyinapi.misanduo.com",
 ]
 
 # P1-AUTO-1C：运行锁，确保同一时间只有一个微信 UI 任务
