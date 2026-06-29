@@ -299,6 +299,48 @@ def test_search_text_verified_uses_result_area_evidence_in_do_search_once():
     assert result["search_text_debug"]["result_area_contains_expected"] is True
 
 
+def test_search_text_verified_uses_digit_anchor_for_chinese_nickname_result_area():
+    """长中文昵称 OCR 漏字时，结果区数字锚点完整命中 + 中文局部证据应可通过。"""
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_reader = MagicMock()
+    mock_reader.readtext.side_effect = [
+        [],
+        [(
+            [[10, 10], [460, 10], [460, 40], [10, 40]],
+            "A生177020658 搜n网绛结果 4张生177020558 群职 高总内部系巯定制内部群 包含;4张生177020658",
+            0.82,
+        )],
+    ]
+    _easyocr().Reader.return_value = mock_reader
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl",
+               side_effect=Exception("Qt5 UIA fail")), \
+         patch("app.wechat_ui.contact_searcher.grab_screen", return_value=MagicMock()), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_crop", return_value="crop.png"), \
+         patch("app.wechat_ui.contact_searcher._save_search_text_debug_overlay", return_value="overlay.png"), \
+         patch("app.wechat_ui.ocr_matcher.match_ocr_text_to_nickname",
+               return_value={"matched": False}), \
+         patch("app.wechat_ui.contact_searcher._search_result_region",
+               return_value={"left": 50, "top": 120, "right": 500, "bottom": 500}):
+        result = verify_search_text_in_search_box(
+            hwnd=123, win_rect=win_rect, expected_text="A张生177020658", click_point=click_point,
+        )
+
+    match = result["search_text_debug"]["result_area_match"]
+    assert result["search_text_verified"] is True
+    assert result["success"] is True
+    assert result["search_text_debug"]["result_area_contains_expected"] is True
+    assert match["matched"] is True
+    assert match["level"] == "strong"
+    assert match["evidence"]["digits_full_match"] is True
+
+
 # =====================================================
 # 6. 结果区不包含 expected 时阻止
 # =====================================================
@@ -821,6 +863,35 @@ def test_ocr_items_bbox_is_python_int_not_numpy():
 # =====================================================
 # 20. P0-4A-6B-3U-D: _json_safe_debug_value 处理 numpy 标量
 # =====================================================
+
+
+def test_evaluate_search_keyword_match_handles_chinese_digit_ocr_confusion():
+    """长中文昵称在结果区 OCR 出现漏字和 A/4 混淆时，数字锚点 + 中文部分证据应可通过。"""
+    from app.wechat_ui.contact_searcher import evaluate_search_keyword_match
+
+    result = evaluate_search_keyword_match(
+        expected_text="A张生177020658",
+        ocr_text="A生177020658 搜n网绛结果 4张生177020558 群职 高总内部系巯定制内部群 包含;4张生177020658",
+    )
+
+    assert result["matched"] is True
+    assert result["level"] == "strong"
+    assert result["evidence"]["digits_full_match"] is True
+    assert result["evidence"]["chinese_core_match_count"] >= 1
+    assert result["evidence"]["prefix_confusable_match"] is True
+
+
+def test_evaluate_search_keyword_match_rejects_wrong_digit_anchor():
+    """数字锚点不一致时，即使中文局部相似也不能强行通过。"""
+    from app.wechat_ui.contact_searcher import evaluate_search_keyword_match
+
+    result = evaluate_search_keyword_match(
+        expected_text="A张生177020658",
+        ocr_text="A张生177020558 搜索结果",
+    )
+
+    assert result["matched"] is False
+    assert result["level"] in {"weak", "none"}
 
 
 def test_json_safe_debug_value_handles_numpy_scalars():

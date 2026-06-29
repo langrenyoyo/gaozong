@@ -1996,7 +1996,99 @@ def save_search_box_overlay(hwnd: int, click_point: dict | None, safe_nick: str,
 
 def _normalize_text(text: str) -> str:
     """文本归一化：trim、lower、去空格，用于 OCR 结果匹配。"""
-    return (text or "").strip().lower().replace(" ", "")
+    normalized = (text or "").strip().lower()
+    for ch in (" ", "\t", "\r", "\n", "　", ";", "；", ":", "：", ",", "，"):
+        normalized = normalized.replace(ch, "")
+    return normalized
+
+
+def _extract_digit_runs(text: str) -> list[str]:
+    import re
+
+    return re.findall(r"\d+", text or "")
+
+
+def _extract_chinese_chars(text: str) -> list[str]:
+    return [ch for ch in (text or "") if "\u4e00" <= ch <= "\u9fff"]
+
+
+def _normalize_ocr_confusable_text(text: str) -> str:
+    normalized = _normalize_text(text)
+    table = str.maketrans({
+        "ａ": "a",
+        "Ａ": "a",
+        "4": "a",
+        "０": "0",
+        "ｏ": "o",
+        "Ｏ": "o",
+        "１": "1",
+        "ｌ": "1",
+        "ｉ": "1",
+        "｜": "1",
+    })
+    return normalized.translate(table)
+
+
+def evaluate_search_keyword_match(expected_text: str, ocr_text: str) -> dict:
+    """评估搜索关键词与 OCR 文本的匹配证据。只有强证据才允许继续搜索动作。"""
+    expected = expected_text or ""
+    ocr = ocr_text or ""
+    normalized_expected = _normalize_text(expected)
+    normalized_ocr = _normalize_text(ocr)
+    confusable_expected = _normalize_ocr_confusable_text(expected)
+    confusable_ocr = _normalize_ocr_confusable_text(ocr)
+    digit_runs = _extract_digit_runs(expected)
+    longest_digit = max(digit_runs, key=len) if digit_runs else ""
+    digit_tail = longest_digit[-6:] if len(longest_digit) >= 6 else longest_digit
+    chinese_chars = _extract_chinese_chars(expected)
+    chinese_core_match_count = sum(1 for ch in set(chinese_chars) if ch in ocr)
+    full_match = bool(normalized_expected and normalized_expected in normalized_ocr)
+    confusable_full_match = bool(confusable_expected and confusable_expected in confusable_ocr)
+    digits_full_match = bool(longest_digit and longest_digit in normalized_ocr)
+    digit_tail_match = bool(digit_tail and digit_tail in normalized_ocr)
+    prefix = normalized_expected[:1]
+    prefix_confusable_match = bool(prefix and _normalize_ocr_confusable_text(prefix) in confusable_ocr)
+
+    evidence = {
+        "normalized_expected": normalized_expected,
+        "normalized_ocr": normalized_ocr,
+        "confusable_expected": confusable_expected,
+        "confusable_ocr": confusable_ocr,
+        "full_match": full_match,
+        "confusable_full_match": confusable_full_match,
+        "digits_full_match": digits_full_match,
+        "digit_tail_match": digit_tail_match,
+        "longest_digit": longest_digit,
+        "digit_tail": digit_tail,
+        "chinese_core": "".join(chinese_chars),
+        "chinese_core_match_count": chinese_core_match_count,
+        "prefix_confusable_match": prefix_confusable_match,
+    }
+
+    if full_match or confusable_full_match:
+        return {"matched": True, "level": "strong", "score": 1.0, "reason": "full_match", "evidence": evidence}
+
+    has_strong_digit_anchor = len(longest_digit) >= 6 and digits_full_match
+    has_chinese_support = not chinese_chars or chinese_core_match_count >= 1
+    if has_strong_digit_anchor and has_chinese_support:
+        return {
+            "matched": True,
+            "level": "strong",
+            "score": 0.9,
+            "reason": "digits_full_match_with_chinese_partial",
+            "evidence": evidence,
+        }
+
+    if digit_tail_match and has_chinese_support:
+        return {
+            "matched": False,
+            "level": "weak",
+            "score": 0.55,
+            "reason": "digit_tail_match_requires_manual_review",
+            "evidence": evidence,
+        }
+
+    return {"matched": False, "level": "none", "score": 0.0, "reason": "insufficient_evidence", "evidence": evidence}
 
 
 def _save_search_text_debug_crop(image, nickname: str, stage: str) -> str | None:
@@ -2190,7 +2282,9 @@ def verify_search_text_in_search_box(
             result["search_text_debug"]["normalized_ocr_text"] = normalized_ocr
 
             # 归一化匹配：允许 "Aw3", "AW3", "aw3", "A w3", "Aw 3"
-            if normalized_expected and normalized_expected in normalized_ocr:
+            search_box_match = evaluate_search_keyword_match(expected_text, ocr_text)
+            result["search_text_debug"]["search_box_match"] = search_box_match
+            if search_box_match.get("matched"):
                 result.update({
                     "search_text_verified": True,
                     "text_pasted_into_search_box": True,
@@ -2199,10 +2293,10 @@ def verify_search_text_in_search_box(
                     "failure_stage": None,
                     "manual": False,
                     "manual_review_required": False,
-                    "reason": "ocr_expanded_search_box_normalized",
+                    "reason": search_box_match.get("reason") or "ocr_expanded_search_box_evidence",
                 })
                 result["search_text_debug"]["verified"] = True
-                result["search_text_debug"]["method"] = "ocr_expanded_search_box_normalized"
+                result["search_text_debug"]["method"] = "ocr_expanded_search_box_evidence"
                 return result
 
             # 原始匹配兜底
@@ -2256,11 +2350,11 @@ def verify_search_text_in_search_box(
 
             # 记录结果区 OCR 证据
             result["search_text_debug"]["result_area_ocr_text"] = result_ocr
-            result["search_text_debug"]["result_area_contains_expected"] = (
-                bool(normalized_expected) and normalized_expected in normalized_result_ocr
-            )
+            result_area_match = evaluate_search_keyword_match(expected_text, result_ocr)
+            result["search_text_debug"]["result_area_match"] = result_area_match
+            result["search_text_debug"]["result_area_contains_expected"] = bool(result_area_match.get("matched"))
 
-            if normalized_expected and normalized_expected in normalized_result_ocr:
+            if result_area_match.get("matched"):
                 # 组合证据通过：
                 # 1. click_point 定位成功（搜索框被点击过） ✓
                 # 2. 搜索结果区域包含关键词 ✓
@@ -2280,7 +2374,8 @@ def verify_search_text_in_search_box(
                 result["search_text_debug"]["ocr_text"] = result_ocr
                 result["search_text_debug"]["normalized_ocr_text"] = normalized_result_ocr
                 result["search_text_debug"]["reason"] = (
-                    "search_box_ocr_failed_but_result_area_contains_keyword_with_no_leak"
+                    "search_box_ocr_failed_but_result_area_has_strong_evidence: "
+                    f"{result_area_match.get('reason')}"
                 )
                 logger.info(
                     "search_text_verified 通过组合证据: expected='%s', result_area_ocr='%s', "
