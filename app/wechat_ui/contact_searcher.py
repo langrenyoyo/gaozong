@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -2661,6 +2662,21 @@ def _first_search_result_click_point(region: dict) -> dict:
     }
 
 
+def _choose_search_result_selection_sequence() -> list[str]:
+    """优先用键盘选择搜索结果，坐标点击只做最后兜底。"""
+    return ["enter", "down_enter", "first_row_click"]
+
+
+def normalize_wechat_search_keyword(nickname: str) -> list[str]:
+    """生成微信搜索关键词候选，优先使用去标点版本，再保留原文兜底。"""
+    raw = (nickname or "").strip()
+    if not raw:
+        return []
+    no_punct = "".join(ch for ch in raw if not unicodedata.category(ch).startswith("P")).strip()
+    candidates = [no_punct, raw]
+    return list(dict.fromkeys(item for item in candidates if item))
+
+
 def _search_result_region(win_rect: dict) -> dict:
     width = int(win_rect["right"]) - int(win_rect["left"])
     height = int(win_rect["bottom"]) - int(win_rect["top"])
@@ -3189,10 +3205,13 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
         return result
 
     nickname = nickname.strip()
-    safe_nick = "".join(c if c.isalnum() or c in "_-" else "_" for c in nickname)
+    search_keywords = normalize_wechat_search_keyword(nickname)
+    result["search_keywords"] = search_keywords
 
     for attempt in range(1, max_attempts + 1):
         result["attempts"] = attempt
+        search_keyword = search_keywords[min(attempt - 1, len(search_keywords) - 1)] if search_keywords else nickname
+        safe_search_keyword = "".join(c if c.isalnum() or c in "_-" else "_" for c in search_keyword)
 
         if not is_automation_allowed():
             result["failure_stage"] = "emergency_stop"
@@ -3203,7 +3222,7 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
         logger.info("搜索联系人: nickname='%s', 尝试 %d/%d", nickname, attempt, max_attempts)
 
         try:
-            attempt_result = _do_search_once(nickname, attempt, safe_nick)
+            attempt_result = _do_search_once(search_keyword, attempt, safe_search_keyword)
             result["debug_steps"].extend(attempt_result.get("debug_steps", []))
             result["debug_screenshots"].extend(attempt_result.get("debug_screenshots", []))
 
@@ -3218,6 +3237,9 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
                               "stages", "search_result", "screenshots")
                     if k in attempt_result
                 })
+                result["nickname"] = nickname
+                result["search_keyword"] = attempt_result.get("search_keyword") or search_keyword
+                result["search_keywords"] = search_keywords
                 result["attempts"] = attempt
                 result["failure_stage"] = None
                 set_action_in_progress(False)
@@ -3232,6 +3254,9 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
             ):
                 if key in attempt_result:
                     result[key] = attempt_result[key]
+            result["nickname"] = nickname
+            result["search_keyword"] = attempt_result.get("search_keyword") or search_keyword
+            result["search_keywords"] = search_keywords
             logger.warning(
                 "搜索失败（尝试 %d/%d）: stage=%s, msg=%s",
                 attempt, max_attempts,
@@ -3633,9 +3658,9 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     )
     steps.append(step.to_dict())
 
-    # P0-4A-6B：点击 OCR 检测到的结果行
-    click_step = _DebugStep("search_result_clicked", attempt)
-    click_point = detected.get("click_point")
+    # P0-LOCAL-AGENT：检测到结果后优先用键盘选择，坐标只做兜底。
+    click_step = _DebugStep("search_result_selected", attempt)
+    click_point = detected.get("click_point") or _first_search_result_click_point(_search_result_region(win_rect))
     if not click_point or click_point.get("x") is None or click_point.get("y") is None:
         click_step.fail("搜索结果行缺少点击坐标", strategy=detected.get("method"))
         steps.append(click_step.to_dict())
@@ -3647,28 +3672,49 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         set_action_in_progress(False)
         return result
 
-    guard = ensure_wechat_foreground(hwnd, reason="before_click_search_result")
-    if not guard.get("success"):
-        click_step.fail(f"点击搜索结果前微信不在前台: {guard.get('message')}", strategy="foreground_guard")
+    selected_by = None
+    selection_errors = []
+    for method in _choose_search_result_selection_sequence():
+        guard = ensure_wechat_foreground(hwnd, reason=f"before_select_search_result_{method}")
+        if not guard.get("success"):
+            selection_errors.append({"method": method, "reason": guard.get("message")})
+            continue
+        if method == "enter":
+            uia.SendKeys("{Enter}", waitTime=0.08)
+        elif method == "down_enter":
+            uia.SendKeys("{Down}", waitTime=0.08)
+            uia.SendKeys("{Enter}", waitTime=0.08)
+        elif method == "first_row_click":
+            _click_left_button(int(click_point["x"]), int(click_point["y"]))
+        else:
+            selection_errors.append({"method": method, "reason": "unknown_method"})
+            continue
+        selected_by = method
+        break
+
+    if not selected_by:
+        click_step.fail("搜索结果选择失败", strategy="keyboard_then_click_fallback", errors=selection_errors)
         steps.append(click_step.to_dict())
-        result["failure_stage"] = "foreground_lost_before_search_result_click"
-        result["message"] = click_step.message
+        result["failure_stage"] = "search_result_select_failed"
+        result["message"] = "搜索结果选择失败，已阻止继续操作"
         result["debug_steps"] = steps
         result["debug_screenshots"] = screenshots
         _restore_clipboard(old_clipboard)
-        _save_failure_screenshot(safe_nick, "foreground_lost_before_search_result_click")
-        _trigger_emergency_stop("点击搜索结果前台焦点丢失")
+        _save_failure_screenshot(safe_nick, "search_result_select_failed")
+        set_action_in_progress(False)
         return result
-
-    _click_left_button(int(click_point["x"]), int(click_point["y"]))
     time.sleep(0.5)
     stages["search_result_selected"] = True
-    logger.info("已点击搜索结果: nickname='%s', point=(%s, %s), method=%s",
-                nickname, click_point["x"], click_point["y"], detected.get("method"))
+    result["search_result"]["selected_by"] = selected_by
+    result["search_result"]["select_method"] = selected_by
+    result["search_result"]["focus_after_select"] = "wechat_auto_focus_expected"
+    result["opened_by"] = selected_by
+    logger.info("已选择搜索结果: nickname='%s', select_method=%s, fallback_point=(%s, %s), method=%s",
+                nickname, selected_by, click_point["x"], click_point["y"], detected.get("method"))
 
     click_step.ok(
-        strategy=detected.get("method"),
-        message="点击搜索结果",
+        strategy=selected_by,
+        message="已选择搜索结果",
         position={"x": click_point["x"], "y": click_point["y"]},
     )
     steps.append(click_step.to_dict())

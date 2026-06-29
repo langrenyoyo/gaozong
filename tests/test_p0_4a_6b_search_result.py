@@ -155,6 +155,37 @@ def test_search_result_debug_returns_result_overlay():
 
 
 # =====================================================
+# 4B. search-result 选择顺序
+# =====================================================
+
+
+def test_search_result_selection_sequence_prefers_keyboard():
+    from app.wechat_ui.contact_searcher import _choose_search_result_selection_sequence
+
+    assert _choose_search_result_selection_sequence() == ["enter", "down_enter", "first_row_click"]
+
+
+def test_normalize_wechat_search_keyword_removes_trailing_punctuation():
+    from app.wechat_ui.contact_searcher import normalize_wechat_search_keyword
+
+    assert normalize_wechat_search_keyword(" 啊东、 ") == ["啊东", "啊东、"]
+
+
+def test_open_chat_uses_normalized_keyword_before_original_nickname():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    with patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher.set_action_in_progress"), \
+         patch("app.wechat_ui.contact_searcher._do_search_once",
+               return_value=_open_chat(nickname="啊东", search_keyword="啊东")) as mock_search:
+        result = open_chat_by_nickname("啊东、", max_attempts=1)
+
+    assert mock_search.call_args.args[0] == "啊东"
+    assert result["nickname"] == "啊东、"
+    assert result["search_keyword"] == "啊东"
+
+
+# =====================================================
 # 5. open_chat 需要 search_text_verified 才点击结果
 # =====================================================
 
@@ -187,6 +218,84 @@ def test_open_chat_requires_search_text_verified_before_result_click():
     assert result["failure_stage"] == "search_text_not_verified"
     # detect_search_result 不应被调用（search_text_verified=false 时不会走到结果检测阶段）
     mock_detect.assert_not_called()
+
+
+def test_open_chat_tries_keyboard_before_result_click():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700}, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.capture_wechat_region"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+               return_value={"success": True, "x": 120, "y": 95, "strategy": "uia_search_edit", "confidence": 0.9}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+               return_value={"verified": True, "focused": True, "clicked": True, "text_leaked_to_chat_input": False}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+               return_value={"search_text_verified": True, "text_pasted_into_search_box": True}), \
+         patch("app.wechat_ui.contact_searcher.detect_search_result",
+               return_value={"success": True, "search_result_detected": True,
+                             "method": "ocr_result_area", "click_point": {"x": 180, "y": 155},
+                             "confidence": 0.8, "screenshots": {}, "notes": [],
+                             "rect": {"left": 100, "top": 130, "right": 300, "bottom": 180}}), \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher._click_left_button") as mock_click, \
+         patch("app.wechat_ui.contact_searcher._set_clipboard"), \
+         patch("app.wechat_ui.contact_searcher._restore_clipboard"), \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["success"] is True
+    key_values = [call.args[0] for call in mock_keys.call_args_list]
+    assert "{Enter}" in key_values
+    assert result["search_result"]["select_method"] == "enter"
+    assert result["search_result"]["focus_after_select"] == "wechat_auto_focus_expected"
+    assert mock_click.call_count >= 0
+
+
+def test_open_chat_falls_back_to_down_enter_when_enter_guard_fails():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    def guard_by_reason(_hwnd, reason=None):
+        if reason == "before_select_search_result_enter":
+            return {"success": False, "message": "enter guard failed"}
+        return {"success": True, "message": "OK"}
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700}, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.capture_wechat_region"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground", side_effect=guard_by_reason), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+               return_value={"success": True, "x": 120, "y": 95, "strategy": "uia_search_edit", "confidence": 0.9}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+               return_value={"verified": True, "focused": True, "clicked": True, "text_leaked_to_chat_input": False}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+               return_value={"search_text_verified": True, "text_pasted_into_search_box": True}), \
+         patch("app.wechat_ui.contact_searcher.detect_search_result",
+               return_value={"success": True, "search_result_detected": True,
+                             "method": "ocr_result_area", "click_point": {"x": 180, "y": 155},
+                             "confidence": 0.8, "screenshots": {}, "notes": [],
+                             "rect": {"left": 100, "top": 130, "right": 300, "bottom": 180}}), \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher._click_left_button"), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard"), \
+         patch("app.wechat_ui.contact_searcher._restore_clipboard"), \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["success"] is True
+    assert result["search_result"]["select_method"] == "down_enter"
+    key_values = [call.args[0] for call in mock_keys.call_args_list]
+    assert "{Down}" in key_values
+    assert "{Enter}" in key_values
 
 
 # =====================================================
@@ -234,7 +343,7 @@ def test_open_chat_blocks_when_search_result_not_detected():
 # =====================================================
 
 
-def test_open_chat_clicks_result_row_when_detected():
+def test_open_chat_selects_result_with_enter_when_detected():
     from app.wechat_ui.contact_searcher import open_chat_by_nickname
 
     detected_result = {
@@ -265,17 +374,20 @@ def test_open_chat_clicks_result_row_when_detected():
          patch("app.wechat_ui.contact_searcher.detect_search_result", return_value=detected_result), \
          patch("app.wechat_ui.contact_searcher._click_left_button") as mock_click, \
          patch("app.wechat_ui.contact_searcher._set_clipboard"), \
-         patch("app.wechat_ui.contact_searcher.uia.SendKeys"), \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
          patch("app.wechat_ui.contact_searcher.ctypes"), \
          patch("app.wechat_ui.contact_searcher.time.sleep"):
         result = open_chat_by_nickname("Aw3", max_attempts=1)
 
     assert result["success"] is True
     assert result["search_result"]["method"] == "ocr_result_area"
+    assert result["search_result"]["select_method"] == "enter"
+    key_values = [call.args[0] for call in mock_keys.call_args_list]
+    assert "{Enter}" in key_values
     # _click_left_button 应被调用且坐标来自 OCR 检测结果
     click_calls = [call.args for call in mock_click.call_args_list]
-    assert any(call[0] == 180 and call[1] == 155 for call in click_calls), \
-        f"Expected click at (180, 155), got calls: {click_calls}"
+    assert not any(call[0] == 180 and call[1] == 155 for call in click_calls), \
+        f"Result row should not be clicked on keyboard path, got calls: {click_calls}"
 
 
 # =====================================================

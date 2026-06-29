@@ -378,22 +378,26 @@ def _do_write_once(
         result["message"] = "输入框未找到"
         result["debug_screenshots"] = screenshots
         _save_fail_screenshot(debug_prefix, f"input_not_found_a{attempt}")
-        return result
+        input_box = None
+        result["message"] = ""
+        result["input_strategy"] = "auto_focused_input"
+        logger.info("未找到 UIA 输入框，尝试使用微信选中联系人后的自动输入焦点")
 
     # === 写入剪贴板 ===
     _set_clipboard(text)
     time.sleep(0.1)
 
     # === 聚焦输入框 ===
-    try:
-        input_box.SetFocus()
-        time.sleep(0.1)
-    except Exception:
+    if input_box is not None:
         try:
-            input_box.Click()
+            input_box.SetFocus()
             time.sleep(0.1)
-        except Exception as e:
-            logger.warning("输入框聚焦失败（非致命）: %s", e)
+        except Exception:
+            try:
+                input_box.Click()
+                time.sleep(0.1)
+            except Exception as e:
+                logger.warning("输入框聚焦失败（非致命）: %s", e)
 
     # === Ctrl+A 清空 ===
     guard = ensure_wechat_foreground(hwnd, reason="before_clear_input") if isinstance(hwnd, int) else {"success": True}

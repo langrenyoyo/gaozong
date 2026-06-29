@@ -229,7 +229,29 @@ class TestWriteTextRetry:
             result = write_text_to_input(MagicMock(), "测试文本")
 
         assert result["success"] is True
-        assert result["attempts"] == 2
+        assert result["attempts"] == 1
+        assert result["input_strategy"] == "auto_focused_input"
+
+    def test_write_text_uses_auto_focused_input_before_click_fallback(self):
+        from app.wechat_ui.input_writer import write_text_to_input
+        from app.wechat_ui.exceptions import WechatUIError
+
+        with patch("app.wechat_ui.window_locator.ensure_wechat_workspace_layout",
+                    return_value={"layout_ok": True}), \
+             patch("app.wechat_ui.input_writer.find_input_box", side_effect=WechatUIError("no input control")), \
+             patch("app.wechat_ui.input_writer._save_clipboard", return_value=None), \
+             patch("app.wechat_ui.input_writer._set_clipboard"), \
+             patch("app.wechat_ui.input_writer._restore_clipboard"), \
+             patch("app.wechat_ui.input_writer._is_wechat_foreground", return_value=True), \
+             patch("app.wechat_ui.input_writer.ensure_wechat_foreground",
+                   return_value={"success": True, "message": "OK"}), \
+             patch("app.wechat_ui.screenshot_debug.save_debug_screenshot", return_value="test.png"), \
+             patch("app.wechat_ui.input_writer.uia.SendKeys") as mock_keys:
+            result = write_text_to_input(MagicMock(), "测试消息", require_confirm=True, max_attempts=1)
+
+        assert result["success"] is True
+        assert result["input_strategy"] == "auto_focused_input"
+        assert "{Ctrl}v" in [call.args[0] for call in mock_keys.call_args_list]
 
     def test_returns_attempts_and_strategy(self):
         from app.wechat_ui.input_writer import write_text_to_input
