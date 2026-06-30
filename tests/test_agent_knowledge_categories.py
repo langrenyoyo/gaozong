@@ -132,7 +132,7 @@ def test_bind_agent_categories_is_idempotent_and_normalizes_whitespace_without_l
             .filter_by(merchant_id="merchant-a", agent_id="agent-a", status="active")
             .all()
         )
-        assert [row.category_key for row in active_rows] == ["精品BBA"]
+        assert [row.category_key for row in active_rows] == ["精品BBA", "base"]
     finally:
         db.close()
 

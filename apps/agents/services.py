@@ -148,16 +148,16 @@ def normalize_category_keys(category_keys: list[str]) -> list[str]:
 
 
 def manual_category_keys(category_keys: list[str]) -> list[str]:
-    """过滤 base 分类，base 是默认有效分类，不落手动绑定。"""
-    return [key for key in normalize_category_keys(category_keys) if key != BASE_CATEGORY_KEY]
+    """返回用户显式选择的分类，base 也按真实绑定保存。"""
+    return normalize_category_keys(category_keys)
 
 
 def build_effective_category_keys(category_keys: list[str]) -> list[str]:
-    """构造实际可用分类：base 永远默认可见。"""
-    keys = [BASE_CATEGORY_KEY]
+    """构造实际可用分类；base 只有被显式选择时才生效。"""
+    keys: list[str] = []
     for key in category_keys:
         normalized = normalize_category_key(key)
-        if normalized != BASE_CATEGORY_KEY and normalized not in keys:
+        if normalized not in keys:
             keys.append(normalized)
     return keys
 
@@ -231,7 +231,7 @@ def bind_agent_categories(
     agent_id: str,
     category_keys: list[str],
 ) -> list[AgentKnowledgeCategory]:
-    """为当前商户 Agent 绑定 merchant 分类，重复绑定保持幂等。"""
+    """为当前商户 Agent 绑定知识分类，重复绑定保持幂等。"""
     merchant_id = require_context_merchant(context)
     keys = manual_category_keys(category_keys)
     _get_active_agent(db, merchant_id=merchant_id, agent_id=agent_id)
@@ -252,8 +252,8 @@ def bind_agent_categories(
                 tenant_id=None,
                 agent_id=agent_id,
                 category_key=key,
-                scope_type="merchant",
-                is_base=0,
+                scope_type="system" if key == BASE_CATEGORY_KEY else "merchant",
+                is_base=1 if key == BASE_CATEGORY_KEY else 0,
                 status=ACTIVE_STATUS,
                 created_at=now,
                 updated_at=now,

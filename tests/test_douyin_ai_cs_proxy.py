@@ -605,10 +605,10 @@ def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
     assert agent_config["system_prompt"] == "只回答真实库存，不承诺自动发送。"
     assert agent_config["knowledge_base_text"] == "A6 暂无现车，可推荐同级车型。"
     assert agent_config["status"] == "active"
-    assert agent_config["allowed_category_keys"] == ["base"]
+    assert agent_config["allowed_category_keys"] == []
 
 
-def test_proxy_injects_base_when_agent_has_no_category_binding(monkeypatch):
+def test_proxy_does_not_inject_base_when_agent_has_no_category_binding(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -622,7 +622,7 @@ def test_proxy_injects_base_when_agent_has_no_category_binding(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == []
 
 
 def test_proxy_injects_account_direct_llm_policy(monkeypatch):
@@ -785,7 +785,7 @@ def test_proxy_falls_back_to_empty_conversation_history_when_history_query_fails
     assert fake_client.calls[0]["request"]["conversation_history"] == []
 
 
-def test_proxy_injects_base_then_active_agent_category_keys(monkeypatch):
+def test_proxy_injects_active_agent_category_keys(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -800,11 +800,7 @@ def test_proxy_injects_base_then_active_agent_category_keys(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == [
-        "base",
-        "premium_bba",
-        "new_energy",
-    ]
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["premium_bba", "new_energy"]
 
 
 def test_proxy_deduplicates_allowed_category_keys_with_base_first(monkeypatch):
@@ -849,11 +845,11 @@ def test_proxy_ignores_forged_allowed_category_keys_from_payload(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["premium_bba"]
     assert fake_client.calls[0]["request"].get("allowed_category_keys") is None
 
 
-def test_proxy_falls_back_to_base_when_category_binding_read_fails(monkeypatch):
+def test_proxy_uses_empty_categories_when_category_binding_read_fails(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -872,7 +868,7 @@ def test_proxy_falls_back_to_base_when_category_binding_read_fails(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["base"]
+    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == []
 
 
 def test_proxy_rejects_agent_from_other_merchant_before_calling_9100(monkeypatch):
@@ -1262,7 +1258,7 @@ def test_proxy_ignores_forged_auto_send_and_allowed_category_keys_in_upstream_pa
     upstream_payload = fake_client.calls[0]["request"]
     assert "auto_send" not in upstream_payload
     assert "allowed_category_keys" not in upstream_payload
-    assert upstream_payload["agent_config"]["allowed_category_keys"] == ["base", "premium_bba"]
+    assert upstream_payload["agent_config"]["allowed_category_keys"] == ["premium_bba"]
 
 
 def test_proxy_records_ai_reply_decision_log_with_raw_upstream_and_final_safety(monkeypatch):
@@ -1338,7 +1334,7 @@ def test_proxy_records_ai_reply_decision_log_with_raw_upstream_and_final_safety(
         assert log.upstream_auto_send == 1
         assert log.final_auto_send == 0
         assert log.decision_version == "structured_v1"
-        assert log.allowed_category_keys_json == '["base","premium_bba"]'
+        assert log.allowed_category_keys_json == '["premium_bba"]'
         assert log.risk_flags_json == '["llm_requested_auto_send","proxy_forced_auto_send_false"]'
         assert log.tags_json == '["price","audi"]'
         assert '"title":"A6知识"' in log.rag_sources_json

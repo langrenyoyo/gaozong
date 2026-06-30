@@ -5,6 +5,7 @@ export {
   fetchAiAgents,
   getAgentKnowledgeCategories,
   getKnowledgeCategories,
+  previewAiAgent,
   trainingChat,
   updateAgentKnowledgeCategories,
   updateAiAgent,

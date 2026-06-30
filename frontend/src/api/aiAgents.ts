@@ -28,6 +28,28 @@ export interface AiAgentTrainingChatResult {
   knowledge_used: boolean;
 }
 
+export interface AiAgentPreviewPayload {
+  agent_id?: string | null;
+  name: string;
+  persona_prompt: string;
+  knowledge_prompt: string;
+  knowledge_category_keys: string[];
+  message: string;
+}
+
+export interface AiAgentPreviewResult {
+  reply_text: string;
+  source: string;
+  used_category_keys: string[];
+  source_chunks: Record<string, unknown>[];
+  manual_required: boolean;
+  error?: string | null;
+  llm_used: boolean;
+  rag_used: boolean;
+  auto_send: boolean;
+  warnings: string[];
+}
+
 export interface KnowledgeCategory {
   category_key: string;
   name: string;
@@ -80,6 +102,11 @@ export async function trainingChat(agentId: string, message: string): Promise<Ai
   const response = await apiClient.post<unknown, ApiResponse<AiAgentTrainingChatResult>>(`/agents/${agentId}/training-chat`, {
     message,
   });
+  return response.data;
+}
+
+export async function previewAiAgent(payload: AiAgentPreviewPayload): Promise<AiAgentPreviewResult> {
+  const response = await apiClient.post<unknown, ApiResponse<AiAgentPreviewResult>>("/agents/preview", payload);
   return response.data;
 }
 

@@ -176,3 +176,109 @@ def test_training_chat_rejects_empty_message():
     response = client.post(f"/agents/{agent['agent_id']}/training-chat", json={"message": "   "})
 
     assert response.status_code in {400, 422}
+
+
+def test_agent_base_knowledge_category_can_be_saved_and_unchecked():
+    client = _client(_context())
+    agent = _create_agent(client)
+
+    saved = client.put(
+        f"/agents/{agent['agent_id']}/knowledge-categories",
+        json={"category_keys": ["base"]},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["data"]["category_keys"] == ["base"]
+    assert saved.json()["data"]["effective_category_keys"] == ["base"]
+
+    detail = client.get(f"/agents/{agent['agent_id']}/knowledge-categories")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["category_keys"] == ["base"]
+
+    unchecked = client.put(
+        f"/agents/{agent['agent_id']}/knowledge-categories",
+        json={"category_keys": []},
+    )
+    assert unchecked.status_code == 200
+    assert unchecked.json()["data"]["category_keys"] == []
+    assert unchecked.json()["data"]["effective_category_keys"] == []
+
+
+def test_agent_preview_uses_draft_config_and_forces_auto_send_false(monkeypatch):
+    from app.routers import agents
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def suggest_reply(self, *, context, conversation_id, request):
+            self.calls.append({"context": context, "conversation_id": conversation_id, "request": request})
+            return {
+                "reply_text": "draft reply",
+                "match_level": "llm",
+                "lead_capture_required": False,
+                "confidence": 0.88,
+                "manual_required": False,
+                "auto_send": True,
+                "llm_used": True,
+                "rag_used": True,
+                "source_chunks": [{"chunk_id": "c1"}],
+                "warnings": [],
+            }
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(agents, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    client = _client(_context())
+    agent = _create_agent(client)
+
+    response = client.post(
+        "/agents/preview",
+        json={
+            "agent_id": agent["agent_id"],
+            "name": "草稿智能体",
+            "persona_prompt": "只使用草稿人设",
+            "knowledge_prompt": "只使用草稿知识库提示词",
+            "knowledge_category_keys": ["base"],
+            "message": "客户问预算10万买什么",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["reply_text"] == "draft reply"
+    assert data["source"] == "llm"
+    assert data["used_category_keys"] == ["base"]
+    assert data["manual_required"] is False
+    assert data["error"] is None
+    assert data["auto_send"] is False
+
+    call = fake_client.calls[0]
+    assert call["context"].merchant_id == "merchant-a"
+    assert call["conversation_id"] == "agent-preview"
+    payload = call["request"]
+    assert payload["merchant_id"] == "merchant-a"
+    assert payload["latest_message"] == "客户问预算10万买什么"
+    assert payload["agent_config"]["agent_id"] == agent["agent_id"]
+    assert payload["agent_config"]["agent_name"] == "草稿智能体"
+    assert payload["agent_config"]["prompt"] == "只使用草稿人设"
+    assert payload["agent_config"]["knowledge_base_text"] == "只使用草稿知识库提示词"
+    assert payload["agent_config"]["allowed_category_keys"] == ["base"]
+
+
+def test_agent_preview_rejects_cross_merchant_agent(monkeypatch):
+    client_a = _client(_context(merchant_id="merchant-a"))
+    agent = _create_agent(client_a)
+    client_b = _client(_context(merchant_id="merchant-b"))
+
+    response = client_b.post(
+        "/agents/preview",
+        json={
+            "agent_id": agent["agent_id"],
+            "name": "草稿智能体",
+            "persona_prompt": "",
+            "knowledge_prompt": "",
+            "knowledge_category_keys": [],
+            "message": "hello",
+        },
+    )
+
+    assert response.status_code == 404

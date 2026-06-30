@@ -180,14 +180,14 @@ def test_agents_app_training_chat_and_knowledge_categories_keep_existing_behavio
     get_empty = client.get(f"/api/agents/{agent['agent_id']}/knowledge-categories")
     assert get_empty.status_code == 200
     assert get_empty.json()["data"]["category_keys"] == []
-    assert get_empty.json()["data"]["effective_category_keys"] == ["base"]
+    assert get_empty.json()["data"]["effective_category_keys"] == []
 
     bind = client.put(
         f"/api/agents/{agent['agent_id']}/knowledge-categories",
         json={"category_keys": ["base", "premium_bba"]},
     )
     assert bind.status_code == 200
-    assert bind.json()["data"]["category_keys"] == ["premium_bba"]
+    assert bind.json()["data"]["category_keys"] == ["base", "premium_bba"]
     assert bind.json()["data"]["effective_category_keys"] == ["base", "premium_bba"]
 
     rejected = client.put(

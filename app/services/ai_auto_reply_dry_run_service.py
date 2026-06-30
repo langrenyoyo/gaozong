@@ -491,7 +491,7 @@ def _decision_status(result: dict[str, Any], *, upstream_auto_send: bool) -> tup
 
 
 def _build_allowed_category_keys(db, *, context: RequestContext, agent_id: str) -> list[str]:
-    keys = ["base"]
+    keys: list[str] = []
     try:
         keys.extend(list_agent_category_keys(db, context=context, agent_id=agent_id))
     except Exception as exc:
@@ -509,7 +509,7 @@ def _build_allowed_category_keys(db, *, context: RequestContext, agent_id: str) 
             continue
         result.append(key)
         seen.add(key)
-    return result or ["base"]
+    return result
 
 
 def _account_open_id(event: DouyinWebhookEvent) -> str | None:

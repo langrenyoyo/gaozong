@@ -181,6 +181,40 @@ class AiAgentTrainingChatResponse(BaseModel):
     message: str = "success"
 
 
+class AiAgentPreviewRequest(BaseModel):
+    """AI小高智能体草稿预览请求。"""
+
+    agent_id: Optional[str] = None
+    name: str = Field("", max_length=100)
+    persona_prompt: str = ""
+    knowledge_prompt: str = ""
+    knowledge_category_keys: list[str] = Field(default_factory=list)
+    message: str = Field(..., min_length=1)
+
+
+class AiAgentPreviewResponseData(BaseModel):
+    """AI小高智能体草稿预览结果。"""
+
+    reply_text: str = ""
+    source: str = "llm"
+    used_category_keys: list[str] = Field(default_factory=list)
+    source_chunks: list[dict] = Field(default_factory=list)
+    manual_required: bool = False
+    error: Optional[str] = None
+    llm_used: bool = False
+    rag_used: bool = False
+    auto_send: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AiAgentPreviewResponse(BaseModel):
+    """AI小高智能体草稿预览响应包装。"""
+
+    success: bool = True
+    data: AiAgentPreviewResponseData
+    message: str = "success"
+
+
 class KnowledgeCategoryOut(BaseModel):
     """知识分类展示项。"""
 

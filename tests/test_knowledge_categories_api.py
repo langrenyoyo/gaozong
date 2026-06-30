@@ -236,11 +236,11 @@ def test_get_agent_knowledge_categories_returns_manual_and_effective_keys():
     assert response.json()["data"] == {
         "agent_id": "agent-a",
         "category_keys": ["premium_bba"],
-        "effective_category_keys": ["base", "premium_bba"],
+        "effective_category_keys": ["premium_bba"],
     }
 
 
-def test_put_agent_knowledge_categories_replaces_bindings_and_does_not_save_base():
+def test_put_agent_knowledge_categories_replaces_bindings_and_saves_base():
     _insert_agent(agent_id="agent-a", merchant_id="merchant-a")
     _insert_knowledge_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
     _insert_knowledge_category(merchant_id="merchant-a", category_key="new_energy", name="新能源")
@@ -255,7 +255,7 @@ def test_put_agent_knowledge_categories_replaces_bindings_and_does_not_save_base
     assert response.status_code == 200
     assert response.json()["data"] == {
         "agent_id": "agent-a",
-        "category_keys": ["premium_bba", "new_energy"],
+        "category_keys": ["base", "premium_bba", "new_energy"],
         "effective_category_keys": ["base", "premium_bba", "new_energy"],
     }
 
@@ -273,8 +273,7 @@ def test_put_agent_knowledge_categories_replaces_bindings_and_does_not_save_base
             .filter_by(merchant_id="merchant-a", agent_id="agent-a", category_key="old_category")
             .one()
         )
-        assert active_keys == ["premium_bba", "new_energy"]
-        assert "base" not in active_keys
+        assert active_keys == ["base", "premium_bba", "new_energy"]
         assert deleted_old.deleted_at is not None
     finally:
         db.close()

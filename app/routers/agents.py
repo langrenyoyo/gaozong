@@ -1,5 +1,7 @@
 """AI小高智能体管理接口。"""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,9 @@ from app.schemas import (
     AiAgentCreate,
     AiAgentListResponse,
     AiAgentOut,
+    AiAgentPreviewRequest,
+    AiAgentPreviewResponse,
+    AiAgentPreviewResponseData,
     AiAgentResponse,
     AiAgentTrainingChatRequest,
     AiAgentTrainingChatResponse,
@@ -22,12 +27,19 @@ from app.schemas import (
 from app.services import ai_agent_service
 from app.services.agent_knowledge_category_service import (
     build_effective_category_keys,
+    ensure_category_usable_for_merchant,
     list_agent_category_keys,
+    normalize_category_keys,
     replace_agent_categories,
+)
+from app.services.xg_douyin_ai_cs_client import (
+    XgDouyinAiCsClientError,
+    get_xg_douyin_ai_cs_client,
 )
 
 
 router = APIRouter(prefix="/agents", tags=["AI小高智能体"])
+logger = logging.getLogger(__name__)
 
 
 def _auth(context: RequestContext) -> RequestContext:
@@ -167,6 +179,101 @@ def update_agent_knowledge_categories(
             agent_id=agent_id,
             category_keys=category_keys,
             effective_category_keys=build_effective_category_keys(category_keys),
+        ),
+        "message": "success",
+    }
+
+
+@router.post("/preview", response_model=AiAgentPreviewResponse)
+def preview_agent(
+    payload: AiAgentPreviewRequest,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    context = _auth(context)
+    if not context.merchant_id:
+        raise _bad_request("MERCHANT_ID_REQUIRED", "缺少可信商户上下文")
+
+    text = payload.message.strip()
+    if not text:
+        raise _bad_request("MESSAGE_REQUIRED", "预览问题不能为空")
+
+    agent_id = (payload.agent_id or "draft-agent").strip() or "draft-agent"
+    if payload.agent_id:
+        agent = ai_agent_service.get_agent(db, context, payload.agent_id)
+        if not agent:
+            raise _not_found()
+
+    try:
+        category_keys = normalize_category_keys(payload.knowledge_category_keys)
+        for key in category_keys:
+            ensure_category_usable_for_merchant(db, context=context, category_key=key)
+    except ValueError as exc:
+        raise _binding_not_found(exc) from exc
+
+    name = payload.name.strip() or "AI小高智能体"
+    request_payload = {
+        "tenant_id": context.source_system or "new_car_project",
+        "account_id": "agent-preview",
+        "douyin_account_id": "agent-preview",
+        "merchant_id": context.merchant_id,
+        "agent_id": agent_id,
+        "agent_config": {
+            "agent_id": agent_id,
+            "agent_name": name,
+            "system_prompt": payload.persona_prompt or "",
+            "prompt": payload.persona_prompt or "",
+            "knowledge_base_text": payload.knowledge_prompt or "",
+            "status": "active",
+            "allowed_category_keys": category_keys,
+        },
+        "latest_message": text,
+        "max_history_messages": 1,
+        "conversation_history": [],
+    }
+
+    try:
+        result = get_xg_douyin_ai_cs_client().suggest_reply(
+            context=context,
+            conversation_id="agent-preview",
+            request=request_payload,
+        )
+    except XgDouyinAiCsClientError as exc:
+        logger.warning(
+            "agent_preview_llm_failed merchant_id=%s agent_id=%s error=%s",
+            context.merchant_id,
+            agent_id,
+            exc,
+        )
+        return {
+            "success": True,
+            "data": AiAgentPreviewResponseData(
+                reply_text="",
+                source="error",
+                used_category_keys=category_keys,
+                manual_required=True,
+                error="AI 预览暂时不可用，请稍后重试",
+                warnings=[str(exc)],
+            ),
+            "message": "success",
+        }
+
+    raw_warnings = result.get("warnings")
+    warnings = raw_warnings if isinstance(raw_warnings, list) else []
+    source_chunks = result.get("source_chunks")
+    return {
+        "success": True,
+        "data": AiAgentPreviewResponseData(
+            reply_text=str(result.get("reply_text") or ""),
+            source="llm" if result.get("llm_used") else "direct",
+            used_category_keys=category_keys,
+            source_chunks=source_chunks if isinstance(source_chunks, list) else [],
+            manual_required=bool(result.get("manual_required")),
+            error=None,
+            llm_used=bool(result.get("llm_used")),
+            rag_used=bool(result.get("rag_used")),
+            auto_send=False,
+            warnings=warnings,
         ),
         "message": "success",
     }

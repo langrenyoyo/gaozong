@@ -100,8 +100,8 @@ def _build_allowed_category_keys(
     context: RequestContext,
     agent_id: str,
 ) -> list[str]:
-    """构造 9000 可信注入的 Agent 可用知识分类，读取失败时保底使用 base。"""
-    keys: list[str] = ["base"]
+    """构造 9000 可信注入的 Agent 可用知识分类。"""
+    keys: list[str] = []
     try:
         keys.extend(list_agent_category_keys(db, context=context, agent_id=agent_id))
     except Exception as exc:
@@ -120,7 +120,7 @@ def _build_allowed_category_keys(
             continue
         result.append(key)
         seen.add(key)
-    return result or ["base"]
+    return result
 
 
 def _normalize_risk_flags(raw_flags: Any) -> list[Any]:
