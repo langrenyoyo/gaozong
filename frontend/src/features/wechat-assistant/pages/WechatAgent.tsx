@@ -170,7 +170,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   const [testing, setTesting] = useState(false);
   const [testNickname, setTestNickname] = useState(DEFAULT_TEST_NICKNAME);
   const [testMessage, setTestMessage] = useState("小高AI微信助手测试消息");
-  const [realSendRequested, setRealSendRequested] = useState(false);
+  const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
   const [testResult, setTestResult] = useState<{
     createdTaskId?: number;
     localAgentOnline?: boolean;
@@ -417,13 +417,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       return;
     }
 
-    if (realSendRequested) {
-      const confirmed = window.confirm(
-        "当前版本仍受安全门禁保护：只会执行 paste_only 演练并保持 sent=false，不会自动按 Enter 真实发送微信消息。确认继续？",
-      );
-      if (!confirmed) return;
-    }
-
     setTesting(true);
     setTestResult(null);
     try {
@@ -630,58 +623,71 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
         {activeTab === "download-test" ? (
           <>
-            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
-              <div className="font-bold">启动说明</div>
-              <div>请在当前使用微信的 Windows 电脑启动 小高AI微信助手。网页按钮会调用当前电脑的 127.0.0.1:19000。</div>
-              <div>宝塔服务器不能运行 19000；微信助手依赖本机微信窗口，任务执行前需要 Local Agent 在线。</div>
-              <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                <div className="rounded-md bg-white/75 p-3">
-                  <div className="mb-1 font-semibold text-blue-900">源码启动命令</div>
-                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-blue-900">{SOURCE_START_COMMAND}</pre>
+            <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+                <div>
+                  <div className="text-sm font-bold text-[#1a1f2e]">启动说明</div>
+                  <div className="mt-1 text-xs text-slate-500">浏览器不能直接启动本机 exe。请手动启动 Local Agent，启动后重新检测连接。</div>
+                </div>
+                <button
+                  onClick={() => void handleRefreshRuntime()}
+                  disabled={runtimeLoading}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <RefreshCwIcon size={14} className={runtimeLoading ? "animate-spin" : ""} />
+                  重新检测连接
+                </button>
+              </div>
+              <div className="space-y-3 p-4 text-xs leading-6 text-slate-700">
+                <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
+                  {localOnline ? "已检测到本机 Local Agent 在线。" : "Local Agent 未启动。请先启动本机助手，然后点击重新检测连接。"}
+                </div>
+                <div>网页按钮会调用当前电脑的 127.0.0.1:19000；宝塔服务器不能运行 19000。</div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-1 font-semibold text-slate-900">源码启动命令</div>
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-slate-800">{SOURCE_START_COMMAND}</pre>
                   <button
                     onClick={() => void handleCopyCommand(SOURCE_START_COMMAND)}
-                    className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-white px-2 text-[11px] font-semibold text-blue-800"
+                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700"
                   >
                     <CopyIcon size={13} />
-                    复制源码命令
+                      复制源码启动命令
                   </button>
                 </div>
-                <div className="rounded-md bg-white/75 p-3">
-                  <div className="mb-1 font-semibold text-blue-900">exe 启动命令</div>
-                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-blue-900">{EXE_START_COMMAND}</pre>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-1 font-semibold text-slate-900">exe 启动命令</div>
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-slate-800">{EXE_START_COMMAND}</pre>
                   <button
                     onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
-                    className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-white px-2 text-[11px] font-semibold text-blue-800"
+                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700"
                   >
                     <CopyIcon size={13} />
-                    复制 exe 命令
+                      复制 exe 启动命令
                   </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs leading-6 text-slate-700">
-              <div className="font-bold text-slate-900">构建与分发说明</div>
-              <div>当前页面不提供在线下载；一期验收请使用构建产物或人工分发的完整目录。</div>
-              <div>
-                产物路径：
-                <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
-                  dist/local-agent/小高AI微信助手.exe
-                </span>
+            <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
+              <div className="border-b border-[#edf1f6] px-4 py-3">
+                <div className="text-sm font-bold text-[#1a1f2e]">安装包下载</div>
+                <div className="mt-1 text-xs text-slate-500">当前没有真实下载接口，不提供假下载入口。</div>
               </div>
-              <div>
-                局域网构建需指定主系统地址：
-                <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
-                  -ServerUrl http://192.168.110.113:9000
-                </span>
+              <div className="p-4 text-xs leading-6 text-slate-700">
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="font-bold text-slate-900">安装包下载暂未开放</div>
+                  <div className="mt-1">当前请使用本机已部署的 exe 或源码方式启动。</div>
+                  <div className="mt-1">版本 / 模式：{runtimeStatus ? `${runtimeStatus.version} / ${runtimeStatus.mode}` : "未检测"}</div>
+                </div>
               </div>
-              <div className="font-semibold text-amber-700">安全边界：notify_sales 只允许 paste_only，detect_reply 只读检测，结果必须保持 sent=false。</div>
-            </div>
+            </section>
           </>
         ) : null}
 
-        {activeTab === "config" || activeTab === "download-test" ? (
-        <div className={activeTab === "config" ? "mt-5 grid gap-5" : "mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]"}>
+        {activeTab === "config" ? (
+        <div className="mt-5 grid gap-5">
           {activeTab === "config" ? (
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
@@ -859,68 +865,99 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           </section>
           ) : null}
 
-          {activeTab === "download-test" ? (
-          <section className="rounded-lg border border-[#dfe5ee] bg-white">
+        </div>
+        ) : null}
+
+        {activeTab === "download-test" ? (
+          <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
             <div className="flex items-center gap-2 border-b border-[#edf1f6] px-4 py-3">
               <ShieldCheckIcon size={16} className="text-emerald-600" />
-              <h2 className="text-sm font-bold text-[#1a1f2e]">测试</h2>
+              <div>
+                <h2 className="text-sm font-bold text-[#1a1f2e]">测试任务</h2>
+                <div className="mt-1 text-xs text-slate-500">测试任务默认只粘贴不发送，用于验证联系人搜索、聊天窗口定位和输入框写入。不会自动回车发送。</div>
+              </div>
             </div>
             <div className="space-y-3 p-4">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                执行测试会操作本机微信窗口，请确保微信已登录且窗口可见。本次测试只粘贴消息，不会自动发送。
+              </div>
               <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                 <input
                   value={testNickname}
                   onChange={(event) => setTestNickname(event.target.value)}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
-                  placeholder="微信昵称，可选"
+                  placeholder="测试销售微信昵称"
                 />
                 <input
                   value={testMessage}
                   onChange={(event) => setTestMessage(event.target.value)}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
-                  placeholder="测试内容，必填"
+                  placeholder="测试消息，必填"
                 />
               </div>
-              <label className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-                <span>
-                  <span className="block font-bold">是否真实发送</span>
-                  <span className="mt-1 block">当前安全门禁不开放自动真实发送；开启后仍只执行 paste_only 演练。</span>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={realSendRequested}
-                  onChange={(event) => setRealSendRequested(event.target.checked)}
-                  className="h-4 w-4"
-                />
-              </label>
-              <div className="flex justify-end">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs font-semibold text-slate-600">执行模式：paste_only，仅粘贴，不发送。</div>
                 <button
                   onClick={() => void handleRunTest()}
                   disabled={testing || !testMessage.trim()}
                   className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {testing ? <Loader2Icon size={14} className="animate-spin" /> : <PlayIcon size={14} />}
-                  开始测试
+                  执行粘贴测试
                 </button>
               </div>
               {testResult ? (
-                <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 sm:grid-cols-2">
-                  <div>Local Agent：{testResult.localAgentOnline ? "在线" : "离线"}</div>
-                  <div>任务：{testResult.createdTaskId ? `#${testResult.createdTaskId}` : "未创建"}</div>
-                  <div>执行：{testResult.executed ? "已执行" : "未执行"}</div>
-                  <div>发送：{testResult.pollResult?.action?.sent ? "已发送" : "未发送"}</div>
-                  <div className="sm:col-span-2">结果：{testResult.message}</div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div>Local Agent：{testResult.localAgentOnline ? "在线" : "离线"}</div>
+                    <div>任务：{testResult.createdTaskId ? `#${testResult.createdTaskId}` : "未创建"}</div>
+                    <div>执行：{testResult.executed ? "已执行" : "未执行"}</div>
+                    <div>粘贴：{testResult.pollResult?.action?.pasted ? "已粘贴" : "未粘贴"}</div>
+                    <div>发送：{testResult.pollResult?.action?.sent ? "已发送" : "未发送"}</div>
+                    <div>联系人验证：{testResult.pollResult?.raw_result?.contact_verified ? "通过" : "-"}</div>
+                    <div className="sm:col-span-3">failure_stage：{testResult.pollResult?.failure_stage || "-"}</div>
+                    <div className="sm:col-span-3">结果：{testResult.message}</div>
+                  </div>
+                  <details className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <summary className="cursor-pointer font-semibold text-slate-700">查看 raw_result</summary>
+                    <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700">
+                      {testResult.pollResult ? JSON.stringify(testResult.pollResult, null, 2) : "-"}
+                    </pre>
+                  </details>
                 </div>
               ) : null}
             </div>
           </section>
-          ) : null}
-        </div>
         ) : null}
 
         {activeTab === "download-test" ? (
-          <div className="mt-5">
-            <LocalWechatAgentTestPanel />
-          </div>
+          <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+              <div>
+                <div className="text-sm font-bold text-[#1a1f2e]">高级诊断</div>
+                <div className="mt-1 text-xs text-slate-500">高级诊断用于排查微信窗口、OCR、搜索框、前台焦点等问题。普通使用无需操作。</div>
+              </div>
+              <button
+                onClick={() => setAdvancedDiagnosticsOpen((value) => !value)}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <EyeIcon size={14} />
+                {advancedDiagnosticsOpen ? "收起诊断工具" : "展开诊断工具"}
+              </button>
+            </div>
+            {advancedDiagnosticsOpen ? (
+              <div className="p-4">
+                <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  仅排查问题时使用。诊断操作可能切换微信窗口、读取 OCR 状态或执行搜索检查，不会绕过联系人验证和安全门禁。
+                </div>
+                <LocalWechatAgentTestPanel />
+              </div>
+            ) : (
+              <div className="px-4 py-6 text-center text-xs text-slate-500">
+                高级诊断默认折叠，排查问题时再展开。
+              </div>
+            )}
+          </section>
         ) : null}
 
         {activeTab === "tasks" ? (
