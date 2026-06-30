@@ -16,6 +16,7 @@ export type {
 export type { WechatDebugResult } from "../../api/wechat";
 export type {
   LocalAgentHealth,
+  LocalAgentRuntimeStatus,
   LocalAgentVersion,
   LocalWechatForegroundDebugResult,
   LocalWechatOcrStatus,
