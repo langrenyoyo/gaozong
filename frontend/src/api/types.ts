@@ -558,6 +558,7 @@ export interface NotificationRecord {
   created_at: string | null;
   customer_name: string | null;
   staff_name: string | null;
+  staff_wechat_nickname?: string | null;
 }
 
 export interface NotificationRecordsResponse {

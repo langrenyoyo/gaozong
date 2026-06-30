@@ -825,6 +825,7 @@ class NotificationRecordOut(BaseModel):
     # 关联信息
     customer_name: Optional[str] = None
     staff_name: Optional[str] = None
+    staff_wechat_nickname: Optional[str] = None
 
 
 class NotificationRecordsResponse(BaseModel):

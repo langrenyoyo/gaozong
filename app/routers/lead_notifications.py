@@ -2,13 +2,12 @@
 
 P7 Demo：
   POST /lead-notifications/send-to-staff — 发送线索给销售（自动搜索+发送）
-  GET  /lead-notifications/records       — 查询通知记录
 """
 
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -17,7 +16,6 @@ from app.models import (
 )
 from app.schemas import (
     SendToStaffRequest, SendToStaffResponse,
-    NotificationRecordOut, NotificationRecordsResponse,
     OpenChatRequest, OpenChatResponse,
 )
 from app.wechat_ui.contact_searcher import open_chat_by_nickname
@@ -299,53 +297,6 @@ def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
         result.success = True
 
     return result
-
-
-@router.get("/records", response_model=NotificationRecordsResponse)
-def list_notification_records(
-    lead_id: int = Query(None, description="按线索 ID 过滤"),
-    staff_id: int = Query(None, description="按销售 ID 过滤"),
-    send_status: str = Query(None, description="按发送状态过滤"),
-    limit: int = Query(20, ge=1, le=100, description="返回条数上限"),
-    db: Session = Depends(get_db),
-):
-    """查询通知记录列表"""
-    query = db.query(LeadNotification)
-
-    if lead_id:
-        query = query.filter(LeadNotification.lead_id == lead_id)
-    if staff_id:
-        query = query.filter(LeadNotification.staff_id == staff_id)
-    if send_status:
-        query = query.filter(LeadNotification.send_status == send_status)
-
-    query = query.order_by(LeadNotification.id.desc())
-    total = query.count()
-    records = query.limit(limit).all()
-
-    out_records = []
-    for r in records:
-        # 补充关联信息
-        lead = db.query(DouyinLead).filter(DouyinLead.id == r.lead_id).first()
-        staff = db.query(SalesStaff).filter(SalesStaff.id == r.staff_id).first()
-
-        out_records.append(NotificationRecordOut(
-            id=r.id,
-            lead_id=r.lead_id,
-            staff_id=r.staff_id,
-            check_id=r.check_id,
-            notification_text=r.notification_text,
-            send_status=r.send_status,
-            send_mode=r.send_mode,
-            chat_title=r.chat_title,
-            error_message=r.error_message,
-            sent_at=r.sent_at.isoformat() if r.sent_at else None,
-            created_at=r.created_at.isoformat() if r.created_at else None,
-            customer_name=lead.customer_name if lead else None,
-            staff_name=staff.name if staff else None,
-        ))
-
-    return NotificationRecordsResponse(total=total, records=out_records)
 
 
 @router.post("/open-chat", response_model=OpenChatResponse)

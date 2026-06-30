@@ -32,6 +32,7 @@ from app.routers import (
     compute,
     capability_gateway,
     replies,
+    lead_notification_records,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(compute.internal_router)
     app.include_router(capability_gateway.router)
     app.include_router(replies.router)
+    app.include_router(lead_notification_records.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:

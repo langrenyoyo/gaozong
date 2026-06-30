@@ -43,6 +43,7 @@ def _setup_assigned_lead(db, has_nickname=True, has_check=True):
         name=f"notif_test_staff_{suffix}",
         status="active",
         wechat_nickname=f"测试昵称_{suffix}" if has_nickname else None,
+        merchant_id="dev-merchant",
     )
     db.add(staff)
     db.flush()
@@ -55,6 +56,7 @@ def _setup_assigned_lead(db, has_nickname=True, has_check=True):
         assigned_at=datetime.now(),
         content="测试线索内容",
         customer_contact="13800138000",
+        merchant_id="dev-merchant",
     )
     db.add(lead)
     db.flush()
