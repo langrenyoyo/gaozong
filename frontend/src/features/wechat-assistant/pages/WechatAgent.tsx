@@ -193,6 +193,13 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     phone: "",
     status: "active",
   });
+  const [editStaffForm, setEditStaffForm] = useState({
+    name: "",
+    wechat_nickname: "",
+    wechat_id: "",
+    phone: "",
+    status: "active",
+  });
 
   const activeStaff = useMemo(
     () => staffList.filter((staff) => staff.status === "active"),
@@ -330,8 +337,18 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   }
 
   function resetStaffForm() {
-    setEditingStaffId(null);
     setStaffForm({
+      name: "",
+      wechat_nickname: "",
+      wechat_id: "",
+      phone: "",
+      status: "active",
+    });
+  }
+
+  function closeEditStaffDialog() {
+    setEditingStaffId(null);
+    setEditStaffForm({
       name: "",
       wechat_nickname: "",
       wechat_id: "",
@@ -342,7 +359,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
   function handleEditStaff(staff: Staff) {
     setEditingStaffId(staff.id);
-    setStaffForm({
+    setEditStaffForm({
       name: staff.name || "",
       wechat_nickname: staff.wechat_nickname || "",
       wechat_id: staff.wechat_id || "",
@@ -366,16 +383,36 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         wechat_id: staffForm.wechat_id.trim() || undefined,
         phone: staffForm.phone.trim() || undefined,
       };
-      if (editingStaffId) {
-        await updateStaff(editingStaffId, {
-          ...payload,
-          status: staffForm.status as "active" | "disabled",
-        });
-      } else {
-        await createStaff(payload);
-      }
+      await createStaff(payload);
       resetStaffForm();
-      toast.success(editingStaffId ? "销售微信已更新" : "销售微信已保存");
+      toast.success("销售微信已保存");
+      await loadStaffList();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存销售微信失败");
+    } finally {
+      setSavingStaff(false);
+    }
+  }
+
+  async function handleSaveEditStaff() {
+    if (!editingStaffId) return;
+    const name = editStaffForm.name.trim();
+    const wechatNickname = editStaffForm.wechat_nickname.trim();
+    if (!name || !wechatNickname) {
+      toast.warning("请填写销售姓名和微信昵称");
+      return;
+    }
+    setSavingStaff(true);
+    try {
+      await updateStaff(editingStaffId, {
+        name,
+        wechat_nickname: wechatNickname,
+        wechat_id: editStaffForm.wechat_id.trim() || undefined,
+        phone: editStaffForm.phone.trim() || undefined,
+        status: editStaffForm.status as "active" | "disabled",
+      });
+      closeEditStaffDialog();
+      toast.success("销售微信已更新");
       await loadStaffList();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "保存销售微信失败");
@@ -386,7 +423,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
   async function handleStaffStatusAction(staff: Staff, action: "enable" | "disable" | "delete") {
     if (action === "delete") {
-      const confirmed = window.confirm("删除后不再参与分配，历史记录保留。确认删除？");
+      const confirmed = window.confirm("删除后该销售将不再显示，也不会参与后续线索分配，历史任务和线索记录会保留。确认删除？");
       if (!confirmed) return;
     }
     setStaffActionId(staff.id);
@@ -688,46 +725,12 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
         {activeTab === "config" ? (
         <div className="mt-5 grid gap-5">
-          {activeTab === "config" ? (
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
-              <div className="flex items-center gap-2">
-                <UserPlusIcon size={16} className="text-blue-600" />
-                <h2 className="text-sm font-bold text-[#1a1f2e]">销售微信配置</h2>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative">
-                  <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    value={staffKeyword}
-                    onChange={(event) => setStaffKeyword(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void loadStaffList();
-                    }}
-                    className="h-9 w-48 rounded-md border border-slate-200 pl-8 pr-3 text-xs outline-none focus:border-blue-300"
-                    placeholder="姓名 / 昵称 / 微信号 / 手机"
-                  />
-                </div>
-                <select
-                  value={staffStatusFilter}
-                  onChange={(event) => {
-                    const nextStatus = event.target.value as "all" | "active" | "disabled";
-                    setStaffStatusFilter(nextStatus);
-                    void loadStaffList(nextStatus, staffKeyword);
-                  }}
-                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
-                >
-                  <option value="all">全部</option>
-                  <option value="active">启用</option>
-                  <option value="disabled">停用</option>
-                </select>
-                <button
-                  onClick={() => void loadStaffList()}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  <RefreshCwIcon size={13} />
-                  刷新
-                </button>
+            <div className="flex items-center gap-2 border-b border-[#edf1f6] px-4 py-3">
+              <UserPlusIcon size={16} className="text-blue-600" />
+              <div>
+                <h2 className="text-sm font-bold text-[#1a1f2e]">新增销售</h2>
+                <div className="mt-1 text-xs text-slate-500">配置销售微信昵称后，系统会按分配规则生成微信通知任务。</div>
               </div>
             </div>
             <div className="space-y-3 p-4">
@@ -756,34 +759,63 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="手机号"
                 />
-                <select
-                  value={staffForm.status}
-                  onChange={(event) => setStaffForm((prev) => ({ ...prev, status: event.target.value }))}
-                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-300"
-                >
-                  <option value="active">启用</option>
-                  <option value="disabled">停用</option>
-                </select>
-              </div>
-              <div className="flex flex-wrap justify-end gap-2">
-                {editingStaffId ? (
-                  <button
-                    onClick={resetStaffForm}
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    <XIcon size={14} />
-                    取消编辑
-                  </button>
-                ) : null}
                 <button
                   onClick={() => void handleSaveStaff()}
                   disabled={savingStaff}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
                 >
                   {savingStaff ? <Loader2Icon size={14} className="animate-spin" /> : <CheckCircle2Icon size={14} />}
-                  {editingStaffId ? "保存修改" : "新增销售"}
+                  新增销售
                 </button>
               </div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-[#dfe5ee] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+              <div className="min-w-[240px] flex-1">
+                <h2 className="text-sm font-bold text-[#1a1f2e]">销售列表</h2>
+                <div className="mt-1 text-xs text-slate-500">已配置的销售微信账号。启用状态的销售会参与线索分配，停用或删除后不再参与新线索分配。</div>
+              </div>
+              <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+                <div className="relative w-full sm:w-64">
+                  <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={staffKeyword}
+                    onChange={(event) => setStaffKeyword(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void loadStaffList();
+                    }}
+                    className="h-9 w-full rounded-md border border-slate-200 pl-8 pr-3 text-xs outline-none focus:border-blue-300"
+                    placeholder="姓名 / 昵称 / 微信号 / 手机"
+                  />
+                </div>
+                <select
+                  value={staffStatusFilter}
+                  onChange={(event) => {
+                    const nextStatus = event.target.value as "all" | "active" | "disabled";
+                    setStaffStatusFilter(nextStatus);
+                    void loadStaffList(nextStatus, staffKeyword);
+                  }}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+                >
+                  <option value="all">全部</option>
+                  <option value="active">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+                <button
+                  onClick={() => void loadStaffList()}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCwIcon size={13} />
+                  刷新
+                </button>
+                <div className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  当前 {staffList.length} 条
+                </div>
+              </div>
+            </div>
+            <div className="p-4">
               <div className="overflow-auto rounded-md border border-slate-200">
                 <table className="w-full min-w-[760px] text-left text-xs">
                   <thead className="bg-slate-50 text-slate-500">
@@ -863,7 +895,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </div>
             </div>
           </section>
-          ) : null}
 
         </div>
         ) : null}
@@ -1128,6 +1159,92 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             </div>
           </div>
         </section>
+        ) : null}
+
+        {editingStaffId ? (
+          <div className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
+            <div className="w-full max-w-xl overflow-hidden rounded-lg border border-[#dfe5ee] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
+              <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
+                <div>
+                  <div className="text-sm font-bold text-[#1a1f2e]">编辑销售</div>
+                  <div className="mt-1 text-xs text-[#8b95a6]">修改销售微信配置后会影响后续新线索分配。</div>
+                </div>
+                <button
+                  onClick={closeEditStaffDialog}
+                  className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                >
+                  <XIcon size={16} />
+                </button>
+              </div>
+              <div className="space-y-3 p-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    销售姓名
+                    <input
+                      value={editStaffForm.name}
+                      onChange={(event) => setEditStaffForm((prev) => ({ ...prev, name: event.target.value }))}
+                      className="mt-1 h-10 w-full rounded-md border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-300"
+                      placeholder="销售姓名"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    微信昵称
+                    <input
+                      value={editStaffForm.wechat_nickname}
+                      onChange={(event) => setEditStaffForm((prev) => ({ ...prev, wechat_nickname: event.target.value }))}
+                      className="mt-1 h-10 w-full rounded-md border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-300"
+                      placeholder="微信昵称"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    微信号
+                    <input
+                      value={editStaffForm.wechat_id}
+                      onChange={(event) => setEditStaffForm((prev) => ({ ...prev, wechat_id: event.target.value }))}
+                      className="mt-1 h-10 w-full rounded-md border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-300"
+                      placeholder="微信号"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">
+                    手机号
+                    <input
+                      value={editStaffForm.phone}
+                      onChange={(event) => setEditStaffForm((prev) => ({ ...prev, phone: event.target.value }))}
+                      className="mt-1 h-10 w-full rounded-md border border-slate-200 px-3 text-sm font-normal text-slate-800 outline-none focus:border-blue-300"
+                      placeholder="手机号"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
+                    状态
+                    <select
+                      value={editStaffForm.status}
+                      onChange={(event) => setEditStaffForm((prev) => ({ ...prev, status: event.target.value }))}
+                      className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-normal text-slate-700 outline-none focus:border-blue-300"
+                    >
+                      <option value="active">启用</option>
+                      <option value="disabled">停用</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 border-t border-[#edf1f6] pt-3">
+                  <button
+                    onClick={closeEditStaffDialog}
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={() => void handleSaveEditStaff()}
+                    disabled={savingStaff}
+                    className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {savingStaff ? <Loader2Icon size={14} className="animate-spin" /> : <CheckCircle2Icon size={14} />}
+                    保存修改
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {selectedTask ? (
