@@ -251,13 +251,15 @@ def verify_current_chat_contact(
                     result["verified"] = False
                     result["manual_review_required"] = True
                     result["failure_stage"] = "manual_review_required"
+                    result["verify_method"] = "ocr_title_normalized_fallback_ambiguous"
                     result["verify_result"] = "manual_review_required"
-                    result["manual_review_reason"] = "ambiguous_normalized_fallback_title"
+                    result["manual_review_reason"] = "normalized_fallback_requires_strong_exact_title"
                     result["message"] = "标准化兜底候选只取得去标点标题，需人工复核"
                     return result
                 result["verified"] = True
                 result["manual_review_required"] = False
                 result["failure_stage"] = None
+                result["verify_method"] = _ocr_title_verify_method(ocr_result.get("match_method"))
                 result["verify_result"] = ocr_result.get("match_method") or "ocr_verified"
                 result["message"] = f"OCR 顶部标题确认成功: {ocr_result.get('ocr_text')}"
                 return result
@@ -518,6 +520,14 @@ def _is_ambiguous_normalized_fallback(
     if not expected or actual == expected:
         return False
     return normalize_wechat_contact_name(expected) != expected
+
+
+def _ocr_title_verify_method(match_method: str | None) -> str:
+    if match_method in {"exact_match", "exact_case_insensitive_match"}:
+        return "ocr_title_exact"
+    if match_method == "exact_normalized_match":
+        return "ocr_title_normalized_exact"
+    return "ocr_top_title"
 
 
 def _match_contact_text(actual: str, expected_aliases: list[str]) -> dict:

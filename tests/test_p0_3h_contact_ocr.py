@@ -89,6 +89,44 @@ def test_ocr_matcher_low_confidence_requires_manual_review():
     assert result["failure_stage"] == "low_confidence"
 
 
+def test_ocr_top_title_exact_match_ignores_low_confidence():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_result
+
+    result = build_ocr_result(
+        expected_nickname="A张生177020658",
+        region="top_title",
+        ocr_text="A张生177020658",
+        confidence=0.68,
+        screenshot_path="full.png",
+        engine="easyocr",
+    )
+
+    assert result["matched"] is True
+    assert result["verified"] is True
+    assert result["manual_review_required"] is False
+    assert result["failure_stage"] is None
+    assert result["match_method"] == "exact_match"
+
+
+def test_ocr_top_title_normalized_exact_match_ignores_low_confidence():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_result
+
+    result = build_ocr_result(
+        expected_nickname="啊东、",
+        region="top_title",
+        ocr_text="啊东",
+        confidence=0.68,
+        screenshot_path="full.png",
+        engine="easyocr",
+    )
+
+    assert result["matched"] is True
+    assert result["verified"] is True
+    assert result["manual_review_required"] is False
+    assert result["failure_stage"] is None
+    assert result["match_method"] == "exact_normalized_match"
+
+
 def test_contact_verifier_uses_ocr_after_uia_title_failed():
     from app.wechat_ui.contact_verifier import verify_current_chat_contact
 
@@ -232,6 +270,7 @@ def test_contact_verifier_accepts_ocr_normalized_exact_match():
     assert result["verified"] is True
     assert result["partial_match"] is False
     assert result["manual_review_required"] is False
+    assert result["verify_method"] == "ocr_title_normalized_exact"
     assert result["verify_result"] == "exact_normalized_match"
 
 
@@ -267,10 +306,94 @@ def test_contact_verifier_ocr_title_has_structured_candidates():
         result = verify_current_chat_contact("谭德贤")
 
     assert result["verified"] is True
-    assert result["verify_method"] == "ocr_top_title"
+    assert result["verify_method"] == "ocr_title_exact"
     assert result["verify_result"] == "exact_match"
     assert result["ocr_title_candidates"] == ["谭德贤"]
     assert result["normalized_ocr_title_candidates"] == ["谭德贤"]
+
+
+def test_contact_verifier_accepts_low_confidence_ocr_title_exact_match():
+    from app.wechat_ui.contact_verifier import verify_current_chat_contact
+
+    window = MagicMock()
+    window.NativeWindowHandle = 123
+    ocr_result = {
+        "verified": True,
+        "strategy": "ocr_top_title",
+        "expected_nickname": "A张生177020658",
+        "ocr_text": "A张生177020658",
+        "matched": True,
+        "matched_text": "A张生177020658",
+        "match_method": "exact_match",
+        "partial_match": False,
+        "confidence": 0.68,
+        "manual_review_required": False,
+        "failure_stage": None,
+        "screenshot_path": "full.png",
+        "cropped_path": "crop.png",
+        "preprocessed_path": "pre.png",
+        "engine": "easyocr",
+    }
+
+    with patch("app.wechat_ui.contact_verifier.find_wechat_window", return_value=window), \
+         patch("app.wechat_ui.contact_verifier.check_wechat_ready_for_automation",
+               return_value={"success": True}), \
+         patch("app.wechat_ui.contact_verifier.find_current_chat_title", return_value=None), \
+         patch("app.wechat_ui.contact_verifier.verify_contact_by_top_title_ocr",
+               return_value=ocr_result):
+        result = verify_current_chat_contact("A张生177020658")
+
+    assert result["verified"] is True
+    assert result["manual_review_required"] is False
+    assert result["failure_stage"] is None
+    assert result["matched_text"] == "A张生177020658"
+    assert result["confidence"] == 0.68
+    assert result["verify_method"] == "ocr_title_exact"
+    assert result["verify_result"] == "exact_match"
+
+
+def test_contact_verifier_blocks_ocr_normalized_match_for_normalized_fallback_candidate():
+    from app.wechat_ui.contact_verifier import verify_current_chat_contact
+
+    window = MagicMock()
+    window.NativeWindowHandle = 123
+    ocr_result = {
+        "verified": True,
+        "strategy": "ocr_top_title",
+        "expected_nickname": "趣多多.",
+        "ocr_text": "趣多多",
+        "matched": True,
+        "matched_text": "趣多多",
+        "match_method": "exact_normalized_match",
+        "partial_match": False,
+        "confidence": 0.94,
+        "manual_review_required": False,
+        "failure_stage": None,
+        "screenshot_path": "full.png",
+        "cropped_path": "crop.png",
+        "preprocessed_path": "pre.png",
+        "engine": "easyocr",
+    }
+
+    with patch("app.wechat_ui.contact_verifier.find_wechat_window", return_value=window), \
+         patch("app.wechat_ui.contact_verifier.check_wechat_ready_for_automation",
+               return_value={"success": True}), \
+         patch("app.wechat_ui.contact_verifier.find_current_chat_title", return_value=None), \
+         patch("app.wechat_ui.contact_verifier.verify_contact_by_top_title_ocr",
+               return_value=ocr_result):
+        result = verify_current_chat_contact(
+            "趣多多.",
+            search_keyword_used="趣多多",
+            candidate_source="target_normalized",
+            candidate_is_normalized_fallback=True,
+        )
+
+    assert result["verified"] is False
+    assert result["manual_review_required"] is True
+    assert result["failure_stage"] == "manual_review_required"
+    assert result["verify_method"] == "ocr_title_normalized_fallback_ambiguous"
+    assert result["manual_review_reason"] == "normalized_fallback_requires_strong_exact_title"
+    assert result["matched_text"] == "趣多多"
 
 
 def test_contact_verifier_does_not_verify_partial_match():

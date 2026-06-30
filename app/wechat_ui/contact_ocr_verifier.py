@@ -210,6 +210,22 @@ def build_ocr_result(
         confidence=confidence,
         min_confidence=min_confidence,
     )
+    strong_title_match = (
+        region == "top_title"
+        and match.get("matched")
+        and match.get("match_method") in {
+            "exact_match",
+            "exact_case_insensitive_match",
+            "exact_normalized_match",
+        }
+        and not failure_stage
+    )
+    if strong_title_match:
+        match.update({
+            "verified": True,
+            "manual_review_required": False,
+            "failure_stage": None,
+        })
     if failure_stage:
         match.update({
             "verified": False,
