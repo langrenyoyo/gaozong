@@ -386,6 +386,168 @@ def test_search_text_verified_blocks_when_result_area_missing_expected():
 
 
 # =====================================================
+# 7B. search_text_not_verified 但 search_result_seen=true 时不应直接阻断 open_chat
+# =====================================================
+
+
+def test_open_chat_continues_when_search_text_not_verified_but_result_seen():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    def _search_text_result(*args, **kwargs):
+        return {
+            "located": True,
+            "focused": True,
+            "search_text_verified": False,
+            "text_pasted_into_search_box": True,
+            "text_leaked_to_chat_input": False,
+            "verified": False,
+            "success": False,
+            "failure_stage": "search_text_not_verified",
+            "manual": True,
+            "manual_review_required": True,
+            "click_point": {"success": True, "x": 120, "y": 95},
+            "strategy": "uia_search_edit",
+            "confidence": 0.9,
+            "screenshots": {"after_paste": "after.png"},
+            "reason": "ocr_search_text_not_matched",
+            "search_result_seen": True,
+            "search_result_ocr_text": "Aw3",
+            "search_text_debug": {
+                "expected": "Aw3",
+                "actual_search_text": "Aw3",
+                "search_keyword_used": "Aw3",
+                "search_keyword_candidates": ["Aw3"],
+                "normalized_target_nickname": "aw3",
+                "normalized_search_keyword_used": "aw3",
+                "normalized_actual_search_text": "aw3",
+                "search_result_seen": True,
+                "search_result_ocr_text": "Aw3",
+                "search_text_verify_result": "search_result_seen",
+                "search_text_verify_reason": "result_seen_but_text_not_verified",
+                "result_area_ocr_text": "Aw3",
+                "result_area_contains_expected": False,
+                "verified": False,
+                "method": None,
+                "reason": "result_seen_but_text_not_verified",
+            },
+        }
+
+    detected_result = {
+        "success": True,
+        "search_result_detected": True,
+        "nickname": "Aw3",
+        "method": "ocr_result_area",
+        "rect": {"left": 100, "top": 130, "right": 300, "bottom": 180},
+        "click_point": {"x": 180, "y": 155},
+        "confidence": 0.85,
+        "screenshots": {},
+        "notes": [],
+    }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700}, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.capture_wechat_region"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+               return_value={"success": True, "x": 120, "y": 95, "strategy": "uia_search_edit", "confidence": 0.9}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+               return_value={"verified": True, "focused": True, "clicked": True, "text_leaked_to_chat_input": False}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+               side_effect=_search_text_result), \
+         patch("app.wechat_ui.contact_searcher.detect_search_result", return_value=detected_result), \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys") as mock_keys, \
+         patch("app.wechat_ui.contact_searcher._click_left_button"), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard"), \
+         patch("app.wechat_ui.contact_searcher._restore_clipboard"), \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["success"] is True
+    assert result["search_focus"]["search_result_seen"] is True
+    assert result["search_focus"]["search_text_verified"] is False
+    assert result["search_result"]["select_method"] == "enter"
+    assert "{Enter}" in [call.args[0] for call in mock_keys.call_args_list]
+
+
+# =====================================================
+# 7C. search_text_not_verified 且 search_result_seen=false 时应阻断 open_chat
+# =====================================================
+
+
+def test_open_chat_blocks_when_search_text_not_verified_and_result_not_seen():
+    from app.wechat_ui.contact_searcher import open_chat_by_nickname
+
+    def _search_text_result(*args, **kwargs):
+        return {
+            "located": True,
+            "focused": True,
+            "search_text_verified": False,
+            "text_pasted_into_search_box": True,
+            "text_leaked_to_chat_input": False,
+            "verified": False,
+            "success": False,
+            "failure_stage": "search_text_not_verified",
+            "manual": True,
+            "manual_review_required": True,
+            "click_point": {"success": True, "x": 120, "y": 95},
+            "strategy": "uia_search_edit",
+            "confidence": 0.9,
+            "screenshots": {"after_paste": "after.png"},
+            "reason": "ocr_search_text_not_matched",
+            "search_result_seen": False,
+            "search_result_ocr_text": "",
+            "search_text_debug": {
+                "expected": "Aw3",
+                "actual_search_text": "Aw3",
+                "search_keyword_used": "Aw3",
+                "search_keyword_candidates": ["Aw3"],
+                "normalized_target_nickname": "aw3",
+                "normalized_search_keyword_used": "aw3",
+                "normalized_actual_search_text": "aw3",
+                "search_result_seen": False,
+                "search_result_ocr_text": "",
+                "search_text_verify_result": "search_text_not_verified",
+                "search_text_verify_reason": "result_not_seen",
+                "result_area_ocr_text": "",
+                "result_area_contains_expected": False,
+                "verified": False,
+                "method": None,
+                "reason": "result_not_seen",
+            },
+        }
+
+    with patch("app.wechat_ui.contact_searcher._check_preconditions",
+               return_value=(True, "OK", {"hwnd": 123, "win_rect": {"left": 0, "top": 0, "right": 880, "bottom": 700}, "window": _window()})), \
+         patch("app.wechat_ui.contact_searcher.save_debug_screenshot", return_value="shot.png"), \
+         patch("app.wechat_ui.contact_searcher.capture_wechat_region"), \
+         patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._ensure_wechat_foreground", return_value=(True, "OK")), \
+         patch("app.wechat_ui.contact_searcher.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.wechat_ui.contact_searcher.locate_search_box_click_point",
+               return_value={"success": True, "x": 120, "y": 95, "strategy": "uia_search_edit", "confidence": 0.9}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_box_focus",
+               return_value={"verified": True, "focused": True, "clicked": True, "text_leaked_to_chat_input": False}), \
+         patch("app.wechat_ui.contact_searcher.verify_search_text_in_search_box",
+               side_effect=_search_text_result), \
+         patch("app.wechat_ui.contact_searcher.detect_search_result") as mock_detect, \
+         patch("app.wechat_ui.contact_searcher.uia.SendKeys"), \
+         patch("app.wechat_ui.contact_searcher._click_left_button"), \
+         patch("app.wechat_ui.contact_searcher._set_clipboard"), \
+         patch("app.wechat_ui.contact_searcher._restore_clipboard"), \
+         patch("app.wechat_ui.contact_searcher.ctypes"), \
+         patch("app.wechat_ui.contact_searcher.time.sleep"):
+        result = open_chat_by_nickname("Aw3", max_attempts=1)
+
+    assert result["success"] is False
+    assert result["failure_stage"] == "search_text_not_verified"
+    mock_detect.assert_not_called()
+
+
+# =====================================================
 # 7. text_leaked_to_chat_input 时阻止
 # =====================================================
 

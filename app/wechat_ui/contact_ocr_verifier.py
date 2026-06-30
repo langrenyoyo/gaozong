@@ -229,6 +229,7 @@ def build_ocr_result(
         "raw_results": raw_results or [],
         "matched": match["matched"],
         "matched_text": match.get("matched_text") or (ocr_text if match["matched"] else None),
+        "match_method": match.get("match_method"),
         "partial_match": match["partial_match"],
         "confidence": float(confidence or 0),
         "manual_review_required": match["manual_review_required"],

@@ -27,6 +27,7 @@ except Exception:
     GIT_COMMIT = "unknown"
 from app.wechat_ui.contact_searcher import (
     calibrate_search_box,
+    normalize_wechat_search_keyword,
     open_chat_by_nickname,
     run_search_box_debug,
     run_search_result_debug,
@@ -549,6 +550,151 @@ def _normalize_open_chat_result(open_result: dict | None, nickname: str) -> dict
     }
 
 
+def _build_search_candidate_entries(
+    target_nickname: str,
+    *,
+    wechat_id: str | None = None,
+    remark: str | None = None,
+    wechat_search_keyword: str | None = None,
+    search_alias: str | None = None,
+) -> list[dict]:
+    candidates = [
+        ("wechat_search_keyword", wechat_search_keyword),
+        ("wechat_id", wechat_id),
+        ("remark", remark),
+        ("search_alias", search_alias),
+        ("target_original", target_nickname),
+    ]
+    for keyword in normalize_wechat_search_keyword(target_nickname):
+        if keyword != (target_nickname or "").strip():
+            candidates.append(("target_normalized", keyword))
+    entries = []
+    seen = set()
+    for source, keyword in candidates:
+        keyword = (keyword or "").strip()
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        entries.append({
+            "keyword": keyword,
+            "candidate_source": source,
+            "candidate_is_normalized_fallback": source == "target_normalized",
+        })
+        if len(entries) >= 3:
+            break
+    return entries
+
+
+def _verify_failure_stage(verify_result: dict) -> str:
+    if verify_result.get("partial_match"):
+        return "partial_match_blocked"
+    if verify_result.get("manual_review_required"):
+        return "manual_review_required_blocked"
+    if not verify_result.get("verified"):
+        return verify_result.get("failure_stage") or "contact_not_verified"
+    return ""
+
+
+def _open_and_verify_contact_with_candidates(
+    target_nickname: str,
+    *,
+    wechat_id: str | None = None,
+    remark: str | None = None,
+    wechat_search_keyword: str | None = None,
+    search_alias: str | None = None,
+) -> dict:
+    entries = _build_search_candidate_entries(
+        target_nickname,
+        wechat_id=wechat_id,
+        remark=remark,
+        wechat_search_keyword=wechat_search_keyword,
+        search_alias=search_alias,
+    )
+    search_attempts = []
+    last_open_result = None
+    last_verify_result = None
+    last_failure_stage = "open_chat_failed"
+    for index, entry in enumerate(entries, start=1):
+        keyword = entry["keyword"]
+        try:
+            open_result = open_chat_by_nickname(
+                target_nickname,
+                max_attempts=1,
+                search_keywords=[keyword],
+            )
+        except Exception as exc:
+            return {
+                "success": False,
+                "failure_stage": "open_chat_exception",
+                "message": f"打开聊天异常: {exc}",
+                "exception": str(exc),
+                "search_attempts": search_attempts,
+            }
+        last_open_result = open_result
+        search_result = open_result.get("search_result") or {}
+        attempt = {
+            "keyword": keyword,
+            "candidate_source": entry["candidate_source"],
+            "current_attempt_index": index,
+            "search_keyword_used": open_result.get("search_keyword") or keyword,
+            "select_method": search_result.get("select_method"),
+            "focus_after_select": search_result.get("focus_after_select"),
+            "candidate_is_normalized_fallback": bool(entry.get("candidate_is_normalized_fallback")),
+        }
+        if not open_result.get("success"):
+            last_failure_stage = open_result.get("failure_stage") or "open_chat_failed"
+            attempt.update({
+                "verify_result": "not_run",
+                "failure_stage": last_failure_stage,
+                "open_result": open_result,
+            })
+            search_attempts.append(attempt)
+            continue
+
+        verify_result = verify_current_chat_contact(
+            target_nickname,
+            win_rect=open_result.get("window_rect"),
+            search_keyword_used=open_result.get("search_keyword"),
+            select_method=search_result.get("select_method"),
+            focus_after_select=search_result.get("focus_after_select"),
+            candidate_source=entry["candidate_source"],
+            candidate_is_normalized_fallback=bool(entry.get("candidate_is_normalized_fallback")),
+        )
+        last_verify_result = verify_result
+        failure_stage = _verify_failure_stage(verify_result)
+        attempt.update({
+            "verify_result": "verified" if not failure_stage else "failed",
+            "failure_stage": failure_stage or None,
+        })
+        search_attempts.append(attempt)
+        if not failure_stage:
+            return {
+                "success": True,
+                "open_result": open_result,
+                "verify_result": verify_result,
+                "search_attempts": search_attempts,
+                "current_attempt_index": index,
+                "search_keyword_used": open_result.get("search_keyword") or keyword,
+                "candidate_source": entry["candidate_source"],
+                "candidate_is_normalized_fallback": bool(entry.get("candidate_is_normalized_fallback")),
+            }
+        last_failure_stage = failure_stage
+
+    return {
+        "success": False,
+        "failure_stage": last_failure_stage,
+        "open_result": last_open_result,
+        "verify_result": last_verify_result,
+        "search_attempts": search_attempts,
+        "current_attempt_index": len(search_attempts),
+        "search_keyword_used": (search_attempts[-1] or {}).get("search_keyword_used") if search_attempts else None,
+        "candidate_source": (search_attempts[-1] or {}).get("candidate_source") if search_attempts else None,
+        "candidate_is_normalized_fallback": (
+            (search_attempts[-1] or {}).get("candidate_is_normalized_fallback") if search_attempts else None
+        ),
+    }
+
+
 def _foreground_debug_response(position: str = "right") -> dict:
     result = {
         "success": False,
@@ -678,8 +824,14 @@ def _detect_reply_for_task(
                 return result
 
             # 5. OCR 验证联系人
-            verify_result = verify_current_chat_contact(target_nickname,
-                                                         win_rect=open_result.get("window_rect"))
+            search_result = open_result.get("search_result") or {}
+            verify_result = verify_current_chat_contact(
+                target_nickname,
+                win_rect=open_result.get("window_rect"),
+                search_keyword_used=open_result.get("search_keyword"),
+                select_method=search_result.get("select_method"),
+                focus_after_select=search_result.get("focus_after_select"),
+            )
             result["verify"] = {
                 "verified": bool(verify_result.get("verified")),
                 "strategy": verify_result.get("strategy"),
@@ -1316,7 +1468,24 @@ def create_local_agent_app(
             else:
                 # 7. 执行 open_chat_by_nickname
                 try:
-                    open_result = open_chat_by_nickname(target_nickname)
+                    contact_open = _open_and_verify_contact_with_candidates(
+                        target_nickname,
+                        wechat_id=task_data.get("wechat_id"),
+                        remark=task_data.get("remark"),
+                        wechat_search_keyword=task_data.get("wechat_search_keyword"),
+                        search_alias=task_data.get("search_alias"),
+                    )
+                    result["execution"] = {
+                        "search_attempts": contact_open.get("search_attempts") or [],
+                        "current_attempt_index": contact_open.get("current_attempt_index"),
+                        "search_keyword_used": contact_open.get("search_keyword_used"),
+                        "candidate_source": contact_open.get("candidate_source"),
+                        "candidate_is_normalized_fallback": contact_open.get("candidate_is_normalized_fallback"),
+                    }
+                    if contact_open.get("failure_stage") == "open_chat_exception":
+                        raise RuntimeError(contact_open.get("exception") or contact_open.get("message") or "open_chat_exception")
+                    open_result = contact_open.get("open_result") or {}
+                    verify_result = contact_open.get("verify_result") or {}
                 except Exception as exc:
                     _write_back_task_result(result, server_url, task_id,
                                             success=False, failure_stage="open_chat_exception",
@@ -1328,20 +1497,36 @@ def create_local_agent_app(
                 if not open_result.get("success"):
                     _write_back_task_result(result, server_url, task_id,
                                             success=False, failure_stage=open_result.get("failure_stage", "open_chat_failed"),
-                                            raw_result={"open_result": open_result})
+                                            raw_result={
+                                                "open_result": open_result,
+                                                "search_attempts": (result.get("execution") or {}).get("search_attempts") or [],
+                                            })
                     result["message"] = f"打开聊天失败: {open_result.get('message', '')}"
                     result["execution"] = {"open_chat_failed": True, "open_result": open_result}
                     return result
 
                 # 8. OCR 联系人验证
-                verify_result = verify_current_chat_contact(target_nickname,
-                                                             win_rect=open_result.get("window_rect"))
+                search_result = open_result.get("search_result") or {}
+                verify_result = verify_result or verify_current_chat_contact(
+                    target_nickname,
+                    win_rect=open_result.get("window_rect"),
+                    search_keyword_used=open_result.get("search_keyword"),
+                    select_method=search_result.get("select_method"),
+                    focus_after_select=search_result.get("focus_after_select"),
+                    candidate_source=(result.get("execution") or {}).get("candidate_source"),
+                    candidate_is_normalized_fallback=bool(
+                        (result.get("execution") or {}).get("candidate_is_normalized_fallback")
+                    ),
+                )
 
                 if verify_result.get("partial_match"):
                     _write_back_task_result(result, server_url, task_id,
                                             success=False, failure_stage="partial_match_blocked",
                                             verified=False, partial_match=True,
-                                            raw_result={"verify_result": verify_result})
+                                            raw_result={
+                                                "verify_result": verify_result,
+                                                "search_attempts": (result.get("execution") or {}).get("search_attempts") or [],
+                                            })
                     result["message"] = f"联系人部分匹配，不允许执行: {target_nickname}"
                     return result
 
@@ -1349,7 +1534,10 @@ def create_local_agent_app(
                     _write_back_task_result(result, server_url, task_id,
                                             success=False, failure_stage="manual_review_required_blocked",
                                             verified=False, manual_review_required=True,
-                                            raw_result={"verify_result": verify_result})
+                                            raw_result={
+                                                "verify_result": verify_result,
+                                                "search_attempts": (result.get("execution") or {}).get("search_attempts") or [],
+                                            })
                     result["message"] = "联系人验证需要人工复核，不允许执行"
                     return result
 
@@ -1357,7 +1545,10 @@ def create_local_agent_app(
                     _write_back_task_result(result, server_url, task_id,
                                             success=False, failure_stage="contact_not_verified",
                                             verified=False,
-                                            raw_result={"verify_result": verify_result})
+                                            raw_result={
+                                                "verify_result": verify_result,
+                                                "search_attempts": (result.get("execution") or {}).get("search_attempts") or [],
+                                            })
                     result["message"] = f"联系人验证未通过: {verify_result.get('message', '')}"
                     return result
 
@@ -1399,6 +1590,7 @@ def create_local_agent_app(
 
             # 12. 成功 — 回写结果（sent 由执行模式决定）
             sent_flag = mode == "single_send"
+            previous_execution = result.get("execution") or {}
             execution_summary = {
                 "pasted": True,
                 "sent": sent_flag,
@@ -1408,6 +1600,11 @@ def create_local_agent_app(
                 "contact_verified_strategy": verify_result.get("strategy"),
                 "already_on_target": _already_on_target,
                 "open_chat_skipped": _already_on_target,
+                "search_attempts": previous_execution.get("search_attempts") or [],
+                "current_attempt_index": previous_execution.get("current_attempt_index"),
+                "search_keyword_used": previous_execution.get("search_keyword_used"),
+                "candidate_source": previous_execution.get("candidate_source"),
+                "candidate_is_normalized_fallback": previous_execution.get("candidate_is_normalized_fallback"),
             }
             result["execution"] = execution_summary
 
@@ -1774,9 +1971,13 @@ def create_local_agent_app(
                     return result
 
                 # 8. OCR 验证联系人
+                search_result = open_result.get("search_result") or {}
                 verify_result = verify_current_chat_contact(
                     request.target_nickname,
                     win_rect=open_result.get("window_rect"),
+                    search_keyword_used=open_result.get("search_keyword"),
+                    select_method=search_result.get("select_method"),
+                    focus_after_select=search_result.get("focus_after_select"),
                 )
 
                 if verify_result.get("partial_match"):

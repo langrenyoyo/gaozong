@@ -168,21 +168,42 @@ def test_search_result_selection_sequence_prefers_keyboard():
 def test_normalize_wechat_search_keyword_removes_trailing_punctuation():
     from app.wechat_ui.contact_searcher import normalize_wechat_search_keyword
 
-    assert normalize_wechat_search_keyword(" 啊东、 ") == ["啊东", "啊东、"]
+    assert normalize_wechat_search_keyword(" 啊东、 ") == ["啊东、", "啊东"]
+    assert normalize_wechat_search_keyword(" 趣多多. ") == ["趣多多.", "趣多多"]
+    assert normalize_wechat_search_keyword(" 廖总 ") == ["廖总"]
 
 
-def test_open_chat_uses_normalized_keyword_before_original_nickname():
+def test_evaluate_search_keyword_match_accepts_normalized_exact_alias():
+    from app.wechat_ui.contact_searcher import evaluate_search_keyword_match
+
+    result = evaluate_search_keyword_match("趣多多.", "趣多多")
+
+    assert result["matched"] is True
+    assert result["level"] == "strong"
+    assert result["reason"] == "exact_normalized_match"
+
+
+def test_evaluate_search_keyword_match_rejects_single_character_contains():
+    from app.wechat_ui.contact_searcher import evaluate_search_keyword_match
+
+    result = evaluate_search_keyword_match("张三", "张")
+
+    assert result["matched"] is False
+    assert result["reason"] == "insufficient_evidence"
+
+
+def test_open_chat_uses_original_keyword_before_normalized_nickname():
     from app.wechat_ui.contact_searcher import open_chat_by_nickname
 
     with patch("app.wechat_ui.contact_searcher.is_automation_allowed", return_value=True), \
          patch("app.wechat_ui.contact_searcher.set_action_in_progress"), \
          patch("app.wechat_ui.contact_searcher._do_search_once",
-               return_value=_open_chat(nickname="啊东", search_keyword="啊东")) as mock_search:
+               return_value=_open_chat(nickname="啊东、", search_keyword="啊东、")) as mock_search:
         result = open_chat_by_nickname("啊东、", max_attempts=1)
 
-    assert mock_search.call_args.args[0] == "啊东"
+    assert mock_search.call_args.args[0] == "啊东、"
     assert result["nickname"] == "啊东、"
-    assert result["search_keyword"] == "啊东"
+    assert result["search_keyword"] == "啊东、"
 
 
 # =====================================================

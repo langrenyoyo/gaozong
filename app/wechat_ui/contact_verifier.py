@@ -46,6 +46,10 @@ from app.wechat_ui.window_locator import (
 )
 from app.wechat_ui.screenshot_debug import save_debug_screenshot
 from app.wechat_ui.contact_ocr_verifier import verify_contact_by_top_title_ocr
+from app.wechat_ui.ocr_matcher import (
+    build_contact_aliases,
+    normalize_wechat_contact_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,13 @@ logger = logging.getLogger(__name__)
 def verify_current_chat_contact(
     expected_nickname: str,
     win_rect: dict = None,
+    wechat_id: str | None = None,
+    remark: str | None = None,
+    search_keyword_used: str | None = None,
+    select_method: str | None = None,
+    focus_after_select: str | None = None,
+    candidate_source: str | None = None,
+    candidate_is_normalized_fallback: bool = False,
 ) -> dict:
     """
     确认当前微信聊天窗口的联系人是否为目标微信昵称。
@@ -88,6 +99,23 @@ def verify_current_chat_contact(
         "ocr_text": None,
         "partial_match": False,
         "evidence": {},
+        "target_nickname": expected_nickname,
+        "search_keyword_used": search_keyword_used,
+        "expected_aliases": [],
+        "normalized_expected_aliases": [],
+        "observed_contact_texts": [],
+        "normalized_observed_contact_texts": [],
+        "select_method": select_method,
+        "focus_after_select": focus_after_select,
+        "candidate_source": candidate_source,
+        "candidate_is_normalized_fallback": bool(candidate_is_normalized_fallback),
+        "verify_method": None,
+        "verify_result": None,
+        "manual_review_reason": None,
+        "uia_title_candidates": [],
+        "normalized_uia_title_candidates": [],
+        "ocr_title_candidates": [],
+        "normalized_ocr_title_candidates": [],
     }
 
     if not expected_nickname or not expected_nickname.strip():
@@ -96,6 +124,17 @@ def verify_current_chat_contact(
         return result
 
     expected_nickname = expected_nickname.strip()
+    expected_aliases = build_contact_aliases(
+        expected_nickname,
+        wechat_id=wechat_id,
+        remark=remark,
+        search_keyword_used=search_keyword_used,
+    )
+    normalized_expected_aliases = list(dict.fromkeys(
+        item for item in (normalize_wechat_contact_name(alias) for alias in expected_aliases) if item
+    ))
+    result["expected_aliases"] = expected_aliases
+    result["normalized_expected_aliases"] = normalized_expected_aliases
 
     hwnd = None
     try:
@@ -121,17 +160,36 @@ def verify_current_chat_contact(
     logger.info("联系人确认 策略A: 读取顶部标题, expected='%s'", expected_nickname)
 
     try:
-        chat_title = find_current_chat_title(window)
+        uia_title_result = get_current_chat_title_by_uia(window)
+        result["uia_title_candidates"] = uia_title_result.get("candidates") or []
+        result["normalized_uia_title_candidates"] = _normalized_texts(result["uia_title_candidates"])
+        chat_title = uia_title_result.get("title")
 
         if chat_title:
             logger.info("策略A: 读取到标题='%s'", chat_title)
+            _add_observed_text(result, chat_title)
 
-            # 检查标题是否匹配（支持子串匹配，如 "Aw3" 在标题中）
-            if _nickname_matches(expected_nickname, chat_title):
+            title_match = _match_contact_text(chat_title, expected_aliases)
+            if title_match.get("matched"):
+                if _is_ambiguous_normalized_fallback(
+                    title_match,
+                    chat_title,
+                    expected_nickname,
+                    candidate_is_normalized_fallback,
+                ):
+                    result["strategy"] = "uia_chat_title"
+                    result["verify_method"] = "uia_chat_title"
+                    result["verify_result"] = "manual_review_required"
+                    result["manual_review_reason"] = "ambiguous_normalized_fallback_title"
+                    result["failure_stage"] = "manual_review_required"
+                    result["message"] = "标准化兜底候选只取得去标点标题，需人工复核"
+                    return result
                 result["verified"] = True
                 result["matched_text"] = chat_title
-                result["strategy"] = "top_title"
+                result["strategy"] = "uia_chat_title"
                 result["manual_review_required"] = False
+                result["verify_method"] = "uia_chat_title"
+                result["verify_result"] = title_match.get("method")
                 result["message"] = f"策略A成功: 标题'{chat_title}'匹配'{expected_nickname}'"
                 logger.info("策略A成功: title='%s' 匹配 '%s'", chat_title, expected_nickname)
                 return result
@@ -150,7 +208,7 @@ def verify_current_chat_contact(
     # =====================================================
     if isinstance(hwnd, int):
         try:
-            ocr_result = verify_contact_by_top_title_ocr(
+            ocr_result = get_current_chat_title_by_ocr_title_region(
                 expected_nickname=expected_nickname,
                 hwnd=hwnd,
                 position="right",
@@ -163,6 +221,16 @@ def verify_current_chat_contact(
             result["matched_text"] = ocr_result.get("matched_text") or ocr_result.get("ocr_text")
             result["manual_review_required"] = bool(ocr_result.get("manual_review_required", True))
             result["failure_stage"] = ocr_result.get("failure_stage")
+            result["verify_method"] = result["strategy"]
+            result["verify_result"] = ocr_result.get("match_method")
+            ocr_candidates = [
+                value for value in (ocr_result.get("ocr_text"), ocr_result.get("matched_text"))
+                if (value or "").strip()
+            ]
+            result["ocr_title_candidates"] = list(dict.fromkeys(ocr_candidates))
+            result["normalized_ocr_title_candidates"] = _normalized_texts(result["ocr_title_candidates"])
+            _add_observed_text(result, ocr_result.get("ocr_text"))
+            _add_observed_text(result, ocr_result.get("matched_text"))
             result["evidence"] = {
                 "screenshot_path": ocr_result.get("screenshot_path"),
                 "cropped_path": ocr_result.get("cropped_path"),
@@ -174,21 +242,44 @@ def verify_current_chat_contact(
                     result["debug_screenshots"].append(path)
 
             if ocr_result.get("verified"):
+                if _is_ambiguous_normalized_fallback(
+                    {"method": ocr_result.get("match_method")},
+                    ocr_result.get("matched_text") or ocr_result.get("ocr_text") or "",
+                    expected_nickname,
+                    candidate_is_normalized_fallback,
+                ):
+                    result["verified"] = False
+                    result["manual_review_required"] = True
+                    result["failure_stage"] = "manual_review_required"
+                    result["verify_result"] = "manual_review_required"
+                    result["manual_review_reason"] = "ambiguous_normalized_fallback_title"
+                    result["message"] = "标准化兜底候选只取得去标点标题，需人工复核"
+                    return result
                 result["verified"] = True
                 result["manual_review_required"] = False
                 result["failure_stage"] = None
+                result["verify_result"] = ocr_result.get("match_method") or "ocr_verified"
                 result["message"] = f"OCR 顶部标题确认成功: {ocr_result.get('ocr_text')}"
                 return result
 
             result["verified"] = False
+            result["manual_review_reason"] = "title_evidence_not_matched"
             result["warning"] = "OCR 顶部标题未能确认联系人，已阻止后续自动发送"
             result["message"] = "OCR 顶部标题未能确认联系人，需要人工复核"
+            result["verify_result"] = (
+                "partial_match"
+                if result["partial_match"]
+                else "manual_review_required"
+                if result["manual_review_required"]
+                else "unverified"
+            )
             return result
         except Exception as e:
             logger.warning("策略B OCR 顶部标题异常: %s", e)
             result["strategy"] = "ocr_top_title"
             result["failure_stage"] = "ocr_top_title_exception"
             result["manual_review_required"] = True
+            result["manual_review_reason"] = "ocr_title_exception"
             result["message"] = f"OCR 顶部标题异常，需要人工复核: {e}"
             return result
 
@@ -240,11 +331,15 @@ def verify_current_chat_contact(
                 result["message"] = close_result.get("message")
                 return result
 
-            if card_text and _nickname_matches(expected_nickname, card_text):
+            _add_observed_text(result, card_text)
+            card_match = _match_contact_text(card_text or "", expected_aliases)
+            if card_match.get("matched"):
                 result["verified"] = True
                 result["matched_text"] = card_text
                 result["strategy"] = "title_profile_card"
                 result["manual_review_required"] = False
+                result["verify_method"] = "title_profile_card"
+                result["verify_result"] = card_match.get("method")
                 result["message"] = f"策略B成功: 资料卡文本'{card_text}'匹配'{expected_nickname}'"
                 logger.info("策略B成功: card_text='%s'", card_text)
                 return result
@@ -300,11 +395,15 @@ def verify_current_chat_contact(
                 result["message"] = close_result.get("message")
                 return result
 
-            if card_text and _nickname_matches(expected_nickname, card_text):
+            _add_observed_text(result, card_text)
+            card_match = _match_contact_text(card_text or "", expected_aliases)
+            if card_match.get("matched"):
                 result["verified"] = True
                 result["matched_text"] = card_text
                 result["strategy"] = "avatar_profile_card"
                 result["manual_review_required"] = False
+                result["verify_method"] = "avatar_profile_card"
+                result["verify_result"] = card_match.get("method")
                 result["message"] = f"策略C成功: 资料卡文本'{card_text}'匹配'{expected_nickname}'"
                 logger.info("策略C成功: card_text='%s'", card_text)
                 return result
@@ -324,6 +423,8 @@ def verify_current_chat_contact(
     # 三种策略都无法确认 → 不允许发送
     # =====================================================
     result["failure_stage"] = "contact_not_verified"
+    result["verify_result"] = "manual_review_required"
+    result["manual_review_reason"] = "title_evidence_not_matched"
     result["warning"] = f"无法确认当前聊天对象为目标销售 '{expected_nickname}'，已阻止自动发送"
     result["message"] = (
         f"三种确认策略均无法验证联系人 '{expected_nickname}'。"
@@ -336,25 +437,109 @@ def verify_current_chat_contact(
     return result
 
 
-def _nickname_matches(expected: str, actual: str) -> bool:
-    """
-    判断实际文本是否匹配期望昵称。
+def get_current_chat_title_by_uia(window=None) -> dict:
+    """结构化读取当前聊天标题，失败只返回诊断。"""
+    raw = {}
+    try:
+        if window is None:
+            window = find_wechat_window()
+        title = (find_current_chat_title(window) or "").strip()
+        raw = {
+            "window_name": getattr(window, "Name", None),
+            "window_class": getattr(window, "ClassName", None),
+            "window_control_type": getattr(window, "ControlTypeName", None),
+        }
+        return {
+            "ok": bool(title),
+            "title": title or None,
+            "method": "uia_chat_title",
+            "candidates": [title] if title else [],
+            "raw": raw,
+            "reason": None if title else "uia_title_not_found",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "title": None,
+            "method": "uia_chat_title",
+            "candidates": [],
+            "raw": raw,
+            "reason": "uia_title_exception",
+            "error": str(exc),
+        }
 
-    匹配规则：
-      - 精确匹配
-      - 子串匹配（期望昵称是实际文本的子串，或实际文本是期望昵称的子串）
-    """
-    if not expected or not actual:
+
+def get_current_chat_title_by_ocr_title_region(
+    expected_nickname: str,
+    hwnd: int,
+    position: str = "right",
+    engine: str = "easyocr",
+) -> dict:
+    """只识别微信顶部标题区域的 OCR 兜底。"""
+    return verify_contact_by_top_title_ocr(
+        expected_nickname=expected_nickname,
+        hwnd=hwnd,
+        position=position,
+        engine=engine,
+    )
+
+
+def _add_observed_text(result: dict, text: str | None) -> None:
+    text = (text or "").strip()
+    if not text:
+        return
+    if text not in result["observed_contact_texts"]:
+        result["observed_contact_texts"].append(text)
+    normalized = normalize_wechat_contact_name(text)
+    if normalized and normalized not in result["normalized_observed_contact_texts"]:
+        result["normalized_observed_contact_texts"].append(normalized)
+
+
+def _normalized_texts(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(
+        normalized
+        for normalized in (normalize_wechat_contact_name(value) for value in values)
+        if normalized
+    ))
+
+
+def _is_ambiguous_normalized_fallback(
+    match: dict,
+    actual: str,
+    expected_nickname: str,
+    candidate_is_normalized_fallback: bool,
+) -> bool:
+    if not candidate_is_normalized_fallback:
         return False
-    expected = expected.strip()
-    actual = actual.strip()
-    # 精确匹配
-    if expected == actual:
-        return True
-    # 子串匹配（任一方包含另一方）
-    if expected in actual or actual in expected:
-        return True
-    return False
+    if match.get("method") != "exact_normalized_match":
+        return False
+    expected = (expected_nickname or "").strip()
+    actual = (actual or "").strip()
+    if not expected or actual == expected:
+        return False
+    return normalize_wechat_contact_name(expected) != expected
+
+
+def _match_contact_text(actual: str, expected_aliases: list[str]) -> dict:
+    """只允许原文或标准化后的完全匹配，不做包含匹配。"""
+    actual = (actual or "").strip()
+    if not actual:
+        return {"matched": False, "method": None}
+    for alias in expected_aliases:
+        if actual == alias:
+            return {"matched": True, "method": "exact_match", "alias": alias}
+        if actual.isascii() and alias.isascii() and actual.lower() == alias.lower():
+            return {"matched": True, "method": "exact_case_insensitive_match", "alias": alias}
+        normalized_actual = normalize_wechat_contact_name(actual)
+        normalized_alias = normalize_wechat_contact_name(alias)
+        if normalized_actual and normalized_actual == normalized_alias:
+            return {"matched": True, "method": "exact_normalized_match", "alias": alias}
+    return {"matched": False, "method": None}
+
+
+def _nickname_matches(expected: str, actual: str) -> bool:
+    """兼容旧测试入口，内部使用安全的精确/标准化精确匹配。"""
+    return bool(_match_contact_text(actual, build_contact_aliases(expected)).get("matched"))
 
 
 def _try_read_profile_card_text(expected_nickname: str) -> str | None:

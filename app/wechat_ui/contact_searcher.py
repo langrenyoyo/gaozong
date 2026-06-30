@@ -1997,7 +1997,9 @@ def save_search_box_overlay(hwnd: int, click_point: dict | None, safe_nick: str,
 
 def _normalize_text(text: str) -> str:
     """文本归一化：trim、lower、去空格，用于 OCR 结果匹配。"""
-    normalized = (text or "").strip().lower()
+    from app.wechat_ui.ocr_matcher import normalize_wechat_contact_name
+
+    normalized = normalize_wechat_contact_name(text).lower()
     for ch in (" ", "\t", "\r", "\n", "　", ";", "；", ":", "：", ",", "，"):
         normalized = normalized.replace(ch, "")
     return normalized
@@ -2043,8 +2045,8 @@ def evaluate_search_keyword_match(expected_text: str, ocr_text: str) -> dict:
     digit_tail = longest_digit[-6:] if len(longest_digit) >= 6 else longest_digit
     chinese_chars = _extract_chinese_chars(expected)
     chinese_core_match_count = sum(1 for ch in set(chinese_chars) if ch in ocr)
-    full_match = bool(normalized_expected and normalized_expected in normalized_ocr)
-    confusable_full_match = bool(confusable_expected and confusable_expected in confusable_ocr)
+    full_match = bool(normalized_expected and normalized_expected == normalized_ocr)
+    confusable_full_match = bool(confusable_expected and confusable_expected == confusable_ocr)
     digits_full_match = bool(longest_digit and longest_digit in normalized_ocr)
     digit_tail_match = bool(digit_tail and digit_tail in normalized_ocr)
     prefix = normalized_expected[:1]
@@ -2067,7 +2069,13 @@ def evaluate_search_keyword_match(expected_text: str, ocr_text: str) -> dict:
     }
 
     if full_match or confusable_full_match:
-        return {"matched": True, "level": "strong", "score": 1.0, "reason": "full_match", "evidence": evidence}
+        return {
+            "matched": True,
+            "level": "strong",
+            "score": 1.0,
+            "reason": "exact_normalized_match" if normalized_expected == normalized_ocr else "full_match",
+            "evidence": evidence,
+        }
 
     has_strong_digit_anchor = len(longest_digit) >= 6 and digits_full_match
     has_chinese_support = not chinese_chars or chinese_core_match_count >= 1
@@ -2149,6 +2157,8 @@ def verify_search_text_in_search_box(
     expected_text: str,
     click_point: dict | None = None,
     screenshot_path: str | None = None,
+    target_nickname: str | None = None,
+    search_keyword_candidates: list[str] | None = None,
 ) -> dict:
     """确认搜索关键词已出现在搜索框中。
 
@@ -2158,13 +2168,21 @@ def verify_search_text_in_search_box(
     策略 A2：搜索框区域 OCR（扩大裁剪 + 文本归一化）
     策略 B：组合证据（焦点在搜索框 + 结果区包含关键词 + 未泄漏到聊天输入框）
     """
+    target_nickname = target_nickname or expected_text
+    search_keyword_candidates = search_keyword_candidates or normalize_wechat_search_keyword(target_nickname)
     normalized_expected = _normalize_text(expected_text)
+    normalized_target = _normalize_text(target_nickname)
+    normalized_candidates = list(dict.fromkeys(
+        item for item in (_normalize_text(candidate) for candidate in search_keyword_candidates) if item
+    ))
     result = {
         "located": bool(click_point and click_point.get("success")),
         "focused": False,
         "search_text_verified": False,
         "text_pasted_into_search_box": False,
         "text_leaked_to_chat_input": False,
+        "search_result_seen": False,
+        "search_result_ocr_text": "",
         "verified": False,
         "success": False,
         "failure_stage": "search_text_not_verified",
@@ -2177,6 +2195,7 @@ def verify_search_text_in_search_box(
         "reason": None,
         "search_text_debug": {
             "expected": expected_text,
+            "target_nickname": target_nickname,
             "verified": False,
             "method": None,
             "search_box_crop_path": None,
@@ -2185,12 +2204,22 @@ def verify_search_text_in_search_box(
             "ocr_items": [],
             "normalized_expected": normalized_expected,
             "normalized_ocr_text": "",
+            "normalized_target_nickname": normalized_target,
+            "normalized_search_keyword_used": normalized_expected,
+            "actual_search_text": "",
+            "normalized_actual_search_text": "",
+            "search_keyword_used": expected_text,
+            "search_keyword_candidates": search_keyword_candidates,
+            "normalized_search_keyword_candidates": normalized_candidates,
             "crop_rect": None,
             "reason": None,
             "result_area_ocr_text": None,
             "result_area_contains_expected": None,
             "result_area_crop_path": None,
             "result_area_overlay_path": None,
+            "search_result_seen": False,
+            "search_text_verify_result": None,
+            "search_text_verify_reason": None,
             "click_point_inside_search_box": bool(click_point and click_point.get("success")),
             "text_leaked_to_chat_input": False,
         },
@@ -2219,7 +2248,17 @@ def verify_search_text_in_search_box(
             except Exception:
                 continue
         joined = " ".join(text_values)
-        if expected_text and expected_text.lower() in joined.lower():
+        normalized_joined = _normalize_text(joined)
+        result["search_text_debug"]["actual_search_text"] = joined
+        result["search_text_debug"]["normalized_actual_search_text"] = normalized_joined
+        result["search_text_debug"]["normalized_ocr_text"] = normalized_joined
+        if (
+            joined.strip() == expected_text
+            or normalized_joined == normalized_expected
+            or normalized_joined == normalized_target
+            or joined.strip() in search_keyword_candidates
+            or normalized_joined in normalized_candidates
+        ):
             result.update({
                 "search_text_verified": True,
                 "text_pasted_into_search_box": True,
@@ -2232,6 +2271,8 @@ def verify_search_text_in_search_box(
             })
             result["search_text_debug"]["verified"] = True
             result["search_text_debug"]["method"] = "uia_focused_control_text"
+            result["search_text_debug"]["search_text_verify_result"] = "search_text_verified"
+            result["search_text_debug"]["search_text_verify_reason"] = "uia_exact_or_normalized_match"
             return result
     except Exception as exc:
         result["reason"] = f"uia_check_failed: {exc}"
@@ -2281,6 +2322,8 @@ def verify_search_text_in_search_box(
             result["search_text_debug"]["ocr_text"] = ocr_text
             result["search_text_debug"]["ocr_items"] = ocr_items
             result["search_text_debug"]["normalized_ocr_text"] = normalized_ocr
+            result["search_text_debug"]["actual_search_text"] = ocr_text
+            result["search_text_debug"]["normalized_actual_search_text"] = normalized_ocr
 
             # 归一化匹配：允许 "Aw3", "AW3", "aw3", "A w3", "Aw 3"
             search_box_match = evaluate_search_keyword_match(expected_text, ocr_text)
@@ -2298,6 +2341,8 @@ def verify_search_text_in_search_box(
                 })
                 result["search_text_debug"]["verified"] = True
                 result["search_text_debug"]["method"] = "ocr_expanded_search_box_evidence"
+                result["search_text_debug"]["search_text_verify_result"] = "search_text_verified"
+                result["search_text_debug"]["search_text_verify_reason"] = search_box_match.get("reason")
                 return result
 
             # 原始匹配兜底
@@ -2315,15 +2360,21 @@ def verify_search_text_in_search_box(
                 })
                 result["search_text_debug"]["verified"] = True
                 result["search_text_debug"]["method"] = "ocr_expanded_search_box"
+                result["search_text_debug"]["search_text_verify_result"] = "search_text_verified"
+                result["search_text_debug"]["search_text_verify_reason"] = "ocr_expanded_search_box"
                 return result
 
             result["reason"] = "ocr_search_text_not_matched"
             result["search_text_debug"]["reason"] = (
                 f"ocr_text='{ocr_text}' does not contain '{expected_text}'"
             )
+            result["search_text_debug"]["search_text_verify_result"] = "search_text_not_verified"
+            result["search_text_debug"]["search_text_verify_reason"] = result["search_text_debug"]["reason"]
         except Exception as exc:
             result["reason"] = result.get("reason") or f"ocr_check_failed: {exc}"
             result["search_text_debug"]["reason"] = f"ocr_check_failed: {exc}"
+            result["search_text_debug"]["search_text_verify_result"] = "search_text_not_verified"
+            result["search_text_debug"]["search_text_verify_reason"] = result["search_text_debug"]["reason"]
 
     # ========== 策略 B：组合证据（焦点在搜索框 + 结果区包含关键词 + 未泄漏） ==========
     # ========== 策略 B：组合证据（不依赖 UIA focused） ==========
@@ -2354,6 +2405,9 @@ def verify_search_text_in_search_box(
             result_area_match = evaluate_search_keyword_match(expected_text, result_ocr)
             result["search_text_debug"]["result_area_match"] = result_area_match
             result["search_text_debug"]["result_area_contains_expected"] = bool(result_area_match.get("matched"))
+            result["search_result_seen"] = bool(result_ocr.strip() or result_area_match.get("matched"))
+            result["search_result_ocr_text"] = result_ocr
+            result["search_text_debug"]["search_result_seen"] = result["search_result_seen"]
 
             if result_area_match.get("matched"):
                 # 组合证据通过：
@@ -2374,6 +2428,8 @@ def verify_search_text_in_search_box(
                 result["search_text_debug"]["method"] = "focused_search_box_with_result_aw3"
                 result["search_text_debug"]["ocr_text"] = result_ocr
                 result["search_text_debug"]["normalized_ocr_text"] = normalized_result_ocr
+                result["search_text_debug"]["search_text_verify_result"] = "search_result_seen"
+                result["search_text_debug"]["search_text_verify_reason"] = result_area_match.get("reason")
                 result["search_text_debug"]["reason"] = (
                     "search_box_ocr_failed_but_result_area_has_strong_evidence: "
                     f"{result_area_match.get('reason')}"
@@ -2389,13 +2445,21 @@ def verify_search_text_in_search_box(
                     f"combined_evidence_failed: located={result['located']}, "
                     f"result_area_ocr='{result_ocr}' does not contain '{expected_text}'"
                 )
+                result["search_text_debug"]["search_text_verify_result"] = "search_text_not_verified"
+                result["search_text_debug"]["search_text_verify_reason"] = result["search_text_debug"]["reason"]
         except Exception as exc:
             result["search_text_debug"]["reason"] = f"combined_evidence_check_failed: {exc}"
+            result["search_text_debug"]["search_text_verify_result"] = "search_text_not_verified"
+            result["search_text_debug"]["search_text_verify_reason"] = result["search_text_debug"]["reason"]
 
     if not result["search_text_verified"]:
         result["search_text_debug"]["reason"] = (
             result["search_text_debug"]["reason"] or result.get("reason") or "all_strategies_failed"
         )
+        if not result["search_text_debug"].get("search_text_verify_result"):
+            result["search_text_debug"]["search_text_verify_result"] = "search_text_not_verified"
+        if not result["search_text_debug"].get("search_text_verify_reason"):
+            result["search_text_debug"]["search_text_verify_reason"] = result["search_text_debug"]["reason"]
 
     return result
 
@@ -2410,6 +2474,22 @@ def _apply_search_text_failure(result: dict, focus: dict, steps: list | None = N
     result["pasted"] = False
     result["sent"] = False
     result["search_focus"] = focus
+    if steps is not None:
+        result["debug_steps"] = steps
+    if screenshots is not None:
+        result["debug_screenshots"] = screenshots
+    return result
+
+
+def _apply_search_text_warning(result: dict, focus: dict, search_result: dict | None = None,
+                               steps: list | None = None, screenshots: list | None = None,
+                               message: str | None = None) -> dict:
+    result["success"] = True
+    result["failure_stage"] = None
+    result["warning"] = message or "搜索框文本未完全确认，但已检测到搜索结果，继续后续选择"
+    result["message"] = result["warning"]
+    result["search_focus"] = focus
+    result["search_result"] = search_result or result.get("search_result")
     if steps is not None:
         result["debug_steps"] = steps
     if screenshots is not None:
@@ -2673,8 +2753,8 @@ def normalize_wechat_search_keyword(nickname: str) -> list[str]:
     if not raw:
         return []
     no_punct = "".join(ch for ch in raw if not unicodedata.category(ch).startswith("P")).strip()
-    candidates = [no_punct, raw]
-    return list(dict.fromkeys(item for item in candidates if item))
+    candidates = [raw, no_punct]
+    return list(dict.fromkeys(item for item in candidates if item))[:3]
 
 
 def _search_result_region(win_rect: dict) -> dict:
@@ -3154,7 +3234,11 @@ def calibrate_search_box(countdown_seconds: int = 5) -> dict:
 
 # ========== 主搜索函数 ==========
 
-def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> dict:
+def open_chat_by_nickname(
+    nickname: str,
+    max_attempts: int = MAX_ATTEMPTS,
+    search_keywords: list[str] | None = None,
+) -> dict:
     """
     根据昵称搜索并打开微信聊天窗口。
 
@@ -3205,10 +3289,14 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
         return result
 
     nickname = nickname.strip()
-    search_keywords = normalize_wechat_search_keyword(nickname)
+    search_keywords = list(dict.fromkeys(
+        item.strip() for item in (search_keywords or normalize_wechat_search_keyword(nickname))
+        if item and item.strip()
+    ))[:3]
     result["search_keywords"] = search_keywords
 
-    for attempt in range(1, max_attempts + 1):
+    attempt_limit = max_attempts if len(search_keywords) <= 1 else min(max_attempts, len(search_keywords))
+    for attempt in range(1, attempt_limit + 1):
         result["attempts"] = attempt
         search_keyword = search_keywords[min(attempt - 1, len(search_keywords) - 1)] if search_keywords else nickname
         safe_search_keyword = "".join(c if c.isalnum() or c in "_-" else "_" for c in search_keyword)
@@ -3222,7 +3310,7 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
         logger.info("搜索联系人: nickname='%s', 尝试 %d/%d", nickname, attempt, max_attempts)
 
         try:
-            attempt_result = _do_search_once(search_keyword, attempt, safe_search_keyword)
+            attempt_result = _do_search_once(search_keyword, attempt, safe_search_keyword, nickname, search_keywords)
             result["debug_steps"].extend(attempt_result.get("debug_steps", []))
             result["debug_screenshots"].extend(attempt_result.get("debug_screenshots", []))
 
@@ -3286,7 +3374,13 @@ def open_chat_by_nickname(nickname: str, max_attempts: int = MAX_ATTEMPTS) -> di
     return result
 
 
-def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
+def _do_search_once(
+    nickname: str,
+    attempt: int,
+    safe_nick: str,
+    target_nickname: str | None = None,
+    search_keywords: list[str] | None = None,
+) -> dict:
     """执行一次完整搜索流程"""
     steps = []
     screenshots = []
@@ -3559,7 +3653,15 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
     if ss_path:
         screenshots.append(ss_path)
 
-    text_check = verify_search_text_in_search_box(hwnd, win_rect, nickname, click_point, ss_path)
+    text_check = verify_search_text_in_search_box(
+        hwnd,
+        win_rect,
+        nickname,
+        click_point,
+        ss_path,
+        target_nickname=target_nickname or nickname,
+        search_keyword_candidates=search_keywords,
+    )
     result["search_focus"] = {
         **focus,
         **text_check,
@@ -3572,12 +3674,27 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
             screenshot=ss_path,
         )
         steps.append(step.to_dict())
-        _restore_clipboard(old_clipboard)
-        _apply_search_text_failure(result, result["search_focus"], steps, screenshots)
         result["current_stage"] = "search_text_verified"
-        _save_failure_screenshot(safe_nick, "search_text_not_verified")
-        set_action_in_progress(False)
-        return result
+        if not text_check.get("search_result_seen"):
+            _restore_clipboard(old_clipboard)
+            _apply_search_text_failure(result, result["search_focus"], steps, screenshots)
+            _save_failure_screenshot(safe_nick, "search_text_not_verified")
+            set_action_in_progress(False)
+            return result
+        _apply_search_text_warning(
+            result,
+            result["search_focus"],
+            search_result={
+                "seen": True,
+                "ocr_text": text_check.get("search_result_ocr_text"),
+                "select_method": None,
+                "focus_after_select": None,
+            },
+            steps=steps,
+            screenshots=screenshots,
+            message=f"搜索关键词未完全确认，但已检测到搜索结果，继续选择第一条: {text_check.get('reason')}",
+        )
+        logger.warning("搜索关键词未完全确认但搜索结果已出现，继续后续选择: %s", text_check.get("reason"))
 
     step.ok(
         strategy="search_text_guard",
@@ -3627,6 +3744,8 @@ def _do_search_once(nickname: str, attempt: int, safe_nick: str) -> dict:
         "rect": detected.get("rect"),
         "click_point": detected.get("click_point"),
         "confidence": detected.get("confidence"),
+        "select_method": None,
+        "focus_after_select": None,
     }
     # 合并截图
     detected_shots = detected.get("screenshots") or {}

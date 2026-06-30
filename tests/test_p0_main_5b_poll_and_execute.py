@@ -645,9 +645,13 @@ def test_raw_result_saved_on_verify_failed(mock_get, mock_auto, mock_ocr, mock_f
     resp = client_with_server.post("/agent/tasks/poll-and-execute")
     assert resp.status_code == 200
 
-    # 验证 raw_result 包含 verify_result
-    mock_post.assert_called_once()
-    payload = mock_post.call_args[0][1]
+    # 验证 raw_result 包含 verify_result；同一 HTTP helper 也会发送心跳。
+    result_calls = [
+        call for call in mock_post.call_args_list
+        if "/wechat-tasks/22/result" in call.args[0]
+    ]
+    assert len(result_calls) == 1
+    payload = result_calls[0].args[1]
     assert payload["raw_result"] is not None
     assert "verify_result" in payload["raw_result"]
     assert payload["raw_result"]["verify_result"]["ocr_text"] == "Unknown"
@@ -793,10 +797,174 @@ def test_pre_verify_false_falls_through_to_open_chat(mock_get, mock_auto, mock_o
 
     data = resp.json()
     assert data["success"] is True
-    # 验证 open_chat 被调用了（因为 pre_verify 失败）
-    mock_open.assert_called_once_with("Aw3")
+    # 验证 open_chat 被调用了（因为 pre_verify 失败），且使用单候选搜索。
+    mock_open.assert_called_once()
+    assert mock_open.call_args.args[0] == "Aw3"
+    assert mock_open.call_args.kwargs["search_keywords"] == ["Aw3"]
     # 验证 verify 被调用了 2 次（pre_verify + post-open verify）
     assert mock_verify.call_count == 2
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main.write_text_to_input")
+@patch("app.local_agent_main.open_chat_by_nickname")
+@patch("app.local_agent_main.verify_current_chat_contact")
+@patch("app.local_agent_main.ensure_wechat_foreground")
+@patch("app.local_agent_main.check_wechat_ready_for_automation")
+@patch("app.local_agent_main.find_wechat_window")
+@patch("app.local_agent_main._check_ocr_ready_for_agent_test")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_retries_next_search_candidate_after_manual_review(
+    mock_get, mock_auto, mock_ocr, mock_find, mock_ready, mock_fg,
+    mock_verify, mock_open, mock_write, mock_post,
+):
+    """第一个候选词验证失败时不粘贴，继续尝试下一个候选词。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": [{"id": 35, "task_type": "notify_sales", "target_nickname": "趣多多.",
+                   "mode": "paste_only", "message": "hello"}],
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_ocr.return_value = None
+    mock_find.return_value = MagicMock(NativeWindowHandle=12345)
+    mock_ready.return_value = {"success": True}
+    mock_fg.return_value = {"success": True}
+    mock_open.side_effect = [
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多.",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+    ]
+    mock_verify.side_effect = [
+        {"verified": False, "partial_match": False, "manual_review_required": True},  # pre_verify
+        {"verified": False, "partial_match": False, "manual_review_required": True,
+         "failure_stage": "manual_review_required"},
+        {"verified": True, "partial_match": False, "manual_review_required": False,
+         "strategy": "uia_title", "ocr_text": "趣多多."},
+    ]
+    mock_write.return_value = {"success": True, "pasted": True, "sent": False, "message": "ok"}
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    data = resp.json()
+
+    assert data["success"] is True
+    assert mock_open.call_count == 2
+    assert mock_open.call_args_list[0].kwargs["search_keywords"] == ["趣多多."]
+    assert mock_open.call_args_list[1].kwargs["search_keywords"] == ["趣多多"]
+    mock_write.assert_called_once()
+    attempts = data["execution"]["search_attempts"]
+    assert attempts[0]["failure_stage"] == "manual_review_required_blocked"
+    assert attempts[1]["verify_result"] == "verified"
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main.write_text_to_input")
+@patch("app.local_agent_main.open_chat_by_nickname")
+@patch("app.local_agent_main.verify_current_chat_contact")
+@patch("app.local_agent_main.ensure_wechat_foreground")
+@patch("app.local_agent_main.check_wechat_ready_for_automation")
+@patch("app.local_agent_main.find_wechat_window")
+@patch("app.local_agent_main._check_ocr_ready_for_agent_test")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_marks_normalized_fallback_candidate(
+    mock_get, mock_auto, mock_ocr, mock_find, mock_ready, mock_fg,
+    mock_verify, mock_open, mock_write, mock_post,
+):
+    """去标点候选必须带 normalized_fallback 标记，供验证诊断和强证据门禁使用。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": [{"id": 37, "task_type": "notify_sales", "target_nickname": "趣多多.",
+                   "mode": "paste_only", "message": "hello"}],
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_ocr.return_value = None
+    mock_find.return_value = MagicMock(NativeWindowHandle=12345)
+    mock_ready.return_value = {"success": True}
+    mock_fg.return_value = {"success": True}
+    mock_open.side_effect = [
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多.",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+    ]
+    mock_verify.side_effect = [
+        {"verified": False, "partial_match": False, "manual_review_required": True},
+        {"verified": False, "partial_match": False, "manual_review_required": True,
+         "failure_stage": "manual_review_required"},
+        {"verified": True, "partial_match": False, "manual_review_required": False,
+         "strategy": "uia_chat_title"},
+    ]
+    mock_write.return_value = {"success": True, "pasted": True, "sent": False, "message": "ok"}
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    data = resp.json()
+
+    assert data["success"] is True
+    attempts = data["execution"]["search_attempts"]
+    assert attempts[0]["candidate_is_normalized_fallback"] is False
+    assert attempts[1]["candidate_is_normalized_fallback"] is True
+    assert mock_verify.call_args_list[2].kwargs["candidate_is_normalized_fallback"] is True
+
+
+@patch("app.local_agent_main._http_post_json")
+@patch("app.local_agent_main.write_text_to_input")
+@patch("app.local_agent_main.open_chat_by_nickname")
+@patch("app.local_agent_main.verify_current_chat_contact")
+@patch("app.local_agent_main.ensure_wechat_foreground")
+@patch("app.local_agent_main.check_wechat_ready_for_automation")
+@patch("app.local_agent_main.find_wechat_window")
+@patch("app.local_agent_main._check_ocr_ready_for_agent_test")
+@patch("app.local_agent_main.is_automation_allowed")
+@patch("app.local_agent_main._http_get")
+def test_poll_and_execute_blocks_after_all_search_candidates_fail(
+    mock_get, mock_auto, mock_ocr, mock_find, mock_ready, mock_fg,
+    mock_verify, mock_open, mock_write, mock_post,
+):
+    """所有候选词验证失败后才 blocked，且不粘贴不发送。"""
+    mock_get.return_value = {
+        "ok": True, "status": 200,
+        "json": [{"id": 36, "task_type": "notify_sales", "target_nickname": "趣多多.",
+                   "mode": "paste_only", "message": "hello"}],
+        "error": None,
+    }
+    mock_auto.return_value = True
+    mock_ocr.return_value = None
+    mock_find.return_value = MagicMock(NativeWindowHandle=12345)
+    mock_ready.return_value = {"success": True}
+    mock_fg.return_value = {"success": True}
+    mock_open.side_effect = [
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多.",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+        {"success": True, "window_rect": {}, "search_keyword": "趣多多",
+         "search_result": {"select_method": "enter", "focus_after_select": "wechat_auto_focus_expected"}},
+    ]
+    mock_verify.side_effect = [
+        {"verified": False, "partial_match": False, "manual_review_required": True},  # pre_verify
+        {"verified": False, "partial_match": False, "manual_review_required": True,
+         "failure_stage": "manual_review_required"},
+        {"verified": False, "partial_match": True, "manual_review_required": False,
+         "failure_stage": "partial_match"},
+    ]
+    mock_post.return_value = {"ok": True, "status": 200, "json": {}, "error": None}
+
+    resp = client_with_server.post("/agent/tasks/poll-and-execute")
+    data = resp.json()
+
+    assert data["success"] is False
+    assert data["failure_stage"] == "partial_match_blocked"
+    assert mock_open.call_count == 2
+    mock_write.assert_not_called()
+    payload = mock_post.call_args[0][1]
+    assert payload["success"] is False
+    assert payload["pasted"] is False
+    assert payload["sent"] is False
+    assert len(payload["raw_result"]["search_attempts"]) == 2
 
 
 @patch("app.local_agent_main._http_post_json")
@@ -844,9 +1012,13 @@ def test_open_chat_failed_has_execution_and_raw_result(mock_get, mock_auto, mock
     assert data["execution"]["open_chat_failed"] is True
     assert "open_result" in data["execution"]
 
-    # raw_result 不应为 null
-    mock_post.assert_called_once()
-    payload = mock_post.call_args[0][1]
+    # raw_result 不应为 null；同一 HTTP helper 也会发送心跳，所以只检查任务回写调用。
+    result_calls = [
+        call for call in mock_post.call_args_list
+        if "/wechat-tasks/33/result" in call.args[0]
+    ]
+    assert len(result_calls) == 1
+    payload = result_calls[0].args[1]
     assert payload["raw_result"] is not None
     assert "open_result" in payload["raw_result"]
 

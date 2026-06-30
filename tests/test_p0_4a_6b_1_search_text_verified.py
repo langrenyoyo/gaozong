@@ -88,6 +88,78 @@ def test_strategy_a1_uia_hit():
     assert result["search_text_debug"]["method"] == "uia_focused_control_text"
 
 
+def test_strategy_a1_uia_hit_with_normalized_target_alias_a_dong():
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_control = MagicMock()
+    mock_control.Name = "啊东"
+    mock_control.Value = ""
+    mock_control.LegacyIAccessibleValue = ""
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl", return_value=mock_control), \
+         patch("app.wechat_ui.contact_searcher._control_rect_to_dict",
+               return_value={"left": 100, "top": 85, "right": 300, "bottom": 110}), \
+         patch("app.wechat_ui.contact_searcher._rect_in_search_region", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._rect_in_chat_input_region", return_value=False):
+        result = verify_search_text_in_search_box(
+            hwnd=123,
+            win_rect=win_rect,
+            expected_text="啊东",
+            click_point=click_point,
+            target_nickname="啊东、",
+            search_keyword_candidates=["啊东", "啊东、"],
+        )
+
+    assert result["search_text_verified"] is True
+    debug = result["search_text_debug"]
+    assert debug["target_nickname"] == "啊东、"
+    assert debug["search_keyword_used"] == "啊东"
+    assert debug["actual_search_text"] == "啊东"
+    assert debug["normalized_target_nickname"] == "啊东"
+    assert debug["normalized_actual_search_text"] == "啊东"
+
+
+def test_strategy_a1_uia_hit_with_normalized_target_alias_quduoduo():
+    from app.wechat_ui.contact_searcher import verify_search_text_in_search_box
+
+    mock_control = MagicMock()
+    mock_control.Name = "趣多多"
+    mock_control.Value = ""
+    mock_control.LegacyIAccessibleValue = ""
+
+    win_rect = {"left": 0, "top": 0, "right": 880, "bottom": 700}
+    click_point = {"success": True, "x": 120, "y": 95, "search_box_rect": {
+        "left": 100, "top": 85, "right": 300, "bottom": 110,
+    }}
+
+    with patch("app.wechat_ui.contact_searcher.uia.GetFocusedControl", return_value=mock_control), \
+         patch("app.wechat_ui.contact_searcher._control_rect_to_dict",
+               return_value={"left": 100, "top": 85, "right": 300, "bottom": 110}), \
+         patch("app.wechat_ui.contact_searcher._rect_in_search_region", return_value=True), \
+         patch("app.wechat_ui.contact_searcher._rect_in_chat_input_region", return_value=False):
+        result = verify_search_text_in_search_box(
+            hwnd=123,
+            win_rect=win_rect,
+            expected_text="趣多多",
+            click_point=click_point,
+            target_nickname="趣多多.",
+            search_keyword_candidates=["趣多多", "趣多多."],
+        )
+
+    assert result["search_text_verified"] is True
+    debug = result["search_text_debug"]
+    assert debug["target_nickname"] == "趣多多."
+    assert debug["search_keyword_used"] == "趣多多"
+    assert debug["actual_search_text"] == "趣多多"
+    assert debug["normalized_target_nickname"] == "趣多多"
+    assert debug["normalized_actual_search_text"] == "趣多多"
+
+
 # =====================================================
 # 3. 策略 A2 扩大裁剪 + 归一化匹配命中
 # =====================================================
@@ -128,9 +200,9 @@ def test_strategy_a2_expanded_ocr_normalized_hit():
 
     assert result["search_text_verified"] is True
     assert result["success"] is True
-    assert result["reason"] == "ocr_expanded_search_box_normalized"
+    assert result["reason"] == "exact_normalized_match"
     assert result["search_text_debug"]["verified"] is True
-    assert result["search_text_debug"]["method"] == "ocr_expanded_search_box_normalized"
+    assert result["search_text_debug"]["method"] == "ocr_expanded_search_box_evidence"
     assert result["search_text_debug"]["normalized_ocr_text"] == "aw3"
 
 
