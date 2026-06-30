@@ -295,7 +295,8 @@ export interface Staff {
   wechat_id: string | null;
   wechat_nickname: string | null;
   phone: string | null;
-  status: string;
+  status: "active" | "disabled" | "inactive" | "deleted" | string;
+  merchant_id?: string | null;
   created_at: string;
   updated_at: string;
 }

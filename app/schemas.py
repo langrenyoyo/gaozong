@@ -401,7 +401,7 @@ class StaffUpdate(BaseModel):
     wechat_id: Optional[str] = None
     wechat_nickname: Optional[str] = None
     phone: Optional[str] = None
-    status: Optional[str] = Field(None, pattern="^(active|inactive)$")
+    status: Optional[str] = Field(None, pattern="^(active|disabled|deleted)$")
 
 
 class StaffOut(BaseModel):
@@ -411,6 +411,7 @@ class StaffOut(BaseModel):
     wechat_nickname: Optional[str] = None
     phone: Optional[str] = None
     status: str
+    merchant_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

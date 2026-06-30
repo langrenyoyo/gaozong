@@ -2,15 +2,20 @@ import {
   CheckCircle2Icon,
   ClockIcon,
   CopyIcon,
+  BanIcon,
+  PencilIcon,
   Loader2Icon,
   MessageCircleIcon,
   PauseIcon,
   PlayIcon,
   PowerIcon,
   RefreshCwIcon,
+  SearchIcon,
   SendIcon,
   ShieldCheckIcon,
+  Trash2Icon,
   UserPlusIcon,
+  XIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -22,12 +27,16 @@ import {
   checkLocalAgentHealth,
   createStaff,
   createWechatTask,
+  deleteStaff,
   disableLocalAgentTaskPolling,
+  disableStaff,
+  enableStaff,
   enableLocalAgentTaskPolling,
   fetchPendingWechatTasks,
   fetchLocalAgentRuntimeStatus,
   fetchStaffList,
   pollAndExecuteWechatTask,
+  updateStaff,
 } from "../api";
 import type { LocalAgentRuntimeStatus, PollAndExecuteResponse, Staff, WechatTask } from "../types";
 
@@ -67,6 +76,19 @@ function agentOnlineText(status: AgentStatusData | null, localOnline: boolean | 
   return "离线";
 }
 
+function staffStatusText(status?: string | null): string {
+  if (status === "active") return "启用";
+  if (status === "disabled" || status === "inactive") return "停用";
+  if (status === "deleted") return "已删除";
+  return status || "-";
+}
+
+function staffStatusClass(status?: string | null): string {
+  if (status === "active") return "bg-emerald-50 text-emerald-700";
+  if (status === "deleted") return "bg-slate-100 text-slate-500";
+  return "bg-amber-50 text-amber-700";
+}
+
 export default function WechatAgent() {
   const [agentStatus, setAgentStatus] = useState<AgentStatusData | null>(null);
   const [localOnline, setLocalOnline] = useState<boolean | null>(null);
@@ -75,7 +97,8 @@ export default function WechatAgent() {
   const [pendingTasks, setPendingTasks] = useState<WechatTask[]>([]);
   const [loading, setLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
-  const [creatingStaff, setCreatingStaff] = useState(false);
+  const [savingStaff, setSavingStaff] = useState(false);
+  const [staffActionId, setStaffActionId] = useState<number | null>(null);
   const [testing, setTesting] = useState(false);
   const [testNickname, setTestNickname] = useState(DEFAULT_TEST_NICKNAME);
   const [testMessage, setTestMessage] = useState("小高AI微信助手测试消息");
@@ -87,14 +110,32 @@ export default function WechatAgent() {
     pollResult?: PollAndExecuteResponse | null;
     message: string;
   } | null>(null);
-  const [newStaffName, setNewStaffName] = useState("");
-  const [newWechatNickname, setNewWechatNickname] = useState("");
-  const [newStaffRemark, setNewStaffRemark] = useState("");
+  const [staffKeyword, setStaffKeyword] = useState("");
+  const [staffStatusFilter, setStaffStatusFilter] = useState<"all" | "active" | "disabled">("all");
+  const [editingStaffId, setEditingStaffId] = useState<number | null>(null);
+  const [staffForm, setStaffForm] = useState({
+    name: "",
+    wechat_nickname: "",
+    wechat_id: "",
+    phone: "",
+    status: "active",
+  });
 
   const activeStaff = useMemo(
     () => staffList.filter((staff) => staff.status === "active"),
     [staffList],
   );
+
+  async function loadStaffList(
+    status = staffStatusFilter,
+    keyword = staffKeyword,
+  ) {
+    const staffs = await fetchStaffList({
+      status,
+      keyword: keyword.trim() || undefined,
+    });
+    setStaffList(staffs);
+  }
 
   async function refreshPage() {
     setLoading(true);
@@ -103,7 +144,10 @@ export default function WechatAgent() {
         fetchAgentStatus().catch(() => null),
         checkLocalAgentHealth().catch(() => null),
         fetchLocalAgentRuntimeStatus().catch(() => null),
-        fetchStaffList("active"),
+        fetchStaffList({
+          status: staffStatusFilter,
+          keyword: staffKeyword.trim() || undefined,
+        }),
         fetchPendingWechatTasks({ limit: 20 }),
       ]);
       setAgentStatus(statusResponse?.data || null);
@@ -176,28 +220,83 @@ export default function WechatAgent() {
     }
   }
 
-  async function handleCreateStaff() {
-    const name = newStaffName.trim();
-    const wechatNickname = newWechatNickname.trim();
+  function resetStaffForm() {
+    setEditingStaffId(null);
+    setStaffForm({
+      name: "",
+      wechat_nickname: "",
+      wechat_id: "",
+      phone: "",
+      status: "active",
+    });
+  }
+
+  function handleEditStaff(staff: Staff) {
+    setEditingStaffId(staff.id);
+    setStaffForm({
+      name: staff.name || "",
+      wechat_nickname: staff.wechat_nickname || "",
+      wechat_id: staff.wechat_id || "",
+      phone: staff.phone || "",
+      status: staff.status === "disabled" || staff.status === "inactive" ? "disabled" : "active",
+    });
+  }
+
+  async function handleSaveStaff() {
+    const name = staffForm.name.trim();
+    const wechatNickname = staffForm.wechat_nickname.trim();
     if (!name || !wechatNickname) {
-      toast.warning("请填写销售名称和微信昵称");
+      toast.warning("请填写销售姓名和微信昵称");
       return;
     }
-    setCreatingStaff(true);
+    setSavingStaff(true);
     try {
-      await createStaff({
+      const payload = {
         name,
         wechat_nickname: wechatNickname,
-      });
-      setNewStaffName("");
-      setNewWechatNickname("");
-      setNewStaffRemark("");
-      toast.success("销售微信已保存");
-      await refreshPage();
+        wechat_id: staffForm.wechat_id.trim() || undefined,
+        phone: staffForm.phone.trim() || undefined,
+      };
+      if (editingStaffId) {
+        await updateStaff(editingStaffId, {
+          ...payload,
+          status: staffForm.status as "active" | "disabled",
+        });
+      } else {
+        await createStaff(payload);
+      }
+      resetStaffForm();
+      toast.success(editingStaffId ? "销售微信已更新" : "销售微信已保存");
+      await loadStaffList();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "保存销售微信失败");
     } finally {
-      setCreatingStaff(false);
+      setSavingStaff(false);
+    }
+  }
+
+  async function handleStaffStatusAction(staff: Staff, action: "enable" | "disable" | "delete") {
+    if (action === "delete") {
+      const confirmed = window.confirm("删除后不再参与分配，历史记录保留。确认删除？");
+      if (!confirmed) return;
+    }
+    setStaffActionId(staff.id);
+    try {
+      if (action === "enable") {
+        await enableStaff(staff.id);
+        toast.success("销售已启用");
+      } else if (action === "disable") {
+        await disableStaff(staff.id);
+        toast.success("销售已停用");
+      } else {
+        await deleteStaff(staff.id);
+        toast.success("销售已删除");
+      }
+      await loadStaffList();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "销售状态更新失败");
+    } finally {
+      setStaffActionId(null);
     }
   }
 
@@ -444,62 +543,172 @@ export default function WechatAgent() {
 
         <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
-            <div className="flex items-center gap-2 border-b border-[#edf1f6] px-4 py-3">
-              <UserPlusIcon size={16} className="text-blue-600" />
-              <h2 className="text-sm font-bold text-[#1a1f2e]">配置销售微信</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+              <div className="flex items-center gap-2">
+                <UserPlusIcon size={16} className="text-blue-600" />
+                <h2 className="text-sm font-bold text-[#1a1f2e]">销售微信配置</h2>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={staffKeyword}
+                    onChange={(event) => setStaffKeyword(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void loadStaffList();
+                    }}
+                    className="h-9 w-48 rounded-md border border-slate-200 pl-8 pr-3 text-xs outline-none focus:border-blue-300"
+                    placeholder="姓名 / 昵称 / 微信号 / 手机"
+                  />
+                </div>
+                <select
+                  value={staffStatusFilter}
+                  onChange={(event) => {
+                    const nextStatus = event.target.value as "all" | "active" | "disabled";
+                    setStaffStatusFilter(nextStatus);
+                    void loadStaffList(nextStatus, staffKeyword);
+                  }}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+                >
+                  <option value="all">全部</option>
+                  <option value="active">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+                <button
+                  onClick={() => void loadStaffList()}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCwIcon size={13} />
+                  刷新
+                </button>
+              </div>
             </div>
             <div className="space-y-3 p-4">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <input
-                  value={newStaffName}
-                  onChange={(event) => setNewStaffName(event.target.value)}
+                  value={staffForm.name}
+                  onChange={(event) => setStaffForm((prev) => ({ ...prev, name: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
-                  placeholder="销售名称"
+                  placeholder="销售姓名"
                 />
                 <input
-                  value={newWechatNickname}
-                  onChange={(event) => setNewWechatNickname(event.target.value)}
+                  value={staffForm.wechat_nickname}
+                  onChange={(event) => setStaffForm((prev) => ({ ...prev, wechat_nickname: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="微信昵称"
                 />
                 <input
-                  value={newStaffRemark}
-                  onChange={(event) => setNewStaffRemark(event.target.value)}
+                  value={staffForm.wechat_id}
+                  onChange={(event) => setStaffForm((prev) => ({ ...prev, wechat_id: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
-                  placeholder="备注（仅页面记录）"
+                  placeholder="微信号"
                 />
+                <input
+                  value={staffForm.phone}
+                  onChange={(event) => setStaffForm((prev) => ({ ...prev, phone: event.target.value }))}
+                  className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
+                  placeholder="手机号"
+                />
+                <select
+                  value={staffForm.status}
+                  onChange={(event) => setStaffForm((prev) => ({ ...prev, status: event.target.value }))}
+                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-300"
+                >
+                  <option value="active">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
               </div>
-              <div className="flex justify-end">
+              <div className="flex flex-wrap justify-end gap-2">
+                {editingStaffId ? (
+                  <button
+                    onClick={resetStaffForm}
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <XIcon size={14} />
+                    取消编辑
+                  </button>
+                ) : null}
                 <button
-                  onClick={() => void handleCreateStaff()}
-                  disabled={creatingStaff}
+                  onClick={() => void handleSaveStaff()}
+                  disabled={savingStaff}
                   className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
                 >
-                  {creatingStaff ? <Loader2Icon size={14} className="animate-spin" /> : <CheckCircle2Icon size={14} />}
-                  保存销售微信
+                  {savingStaff ? <Loader2Icon size={14} className="animate-spin" /> : <CheckCircle2Icon size={14} />}
+                  {editingStaffId ? "保存修改" : "新增销售"}
                 </button>
               </div>
-              <div className="overflow-hidden rounded-md border border-slate-200">
-                <table className="w-full text-left text-xs">
+              <div className="overflow-auto rounded-md border border-slate-200">
+                <table className="w-full min-w-[760px] text-left text-xs">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
-                      <th className="px-3 py-2 font-semibold">销售名称</th>
+                      <th className="px-3 py-2 font-semibold">销售姓名</th>
                       <th className="px-3 py-2 font-semibold">微信昵称</th>
+                      <th className="px-3 py-2 font-semibold">微信号</th>
+                      <th className="px-3 py-2 font-semibold">手机号</th>
                       <th className="px-3 py-2 font-semibold">状态</th>
+                      <th className="px-3 py-2 font-semibold">更新时间</th>
+                      <th className="px-3 py-2 text-right font-semibold">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {activeStaff.length ? (
-                      activeStaff.map((staff) => (
+                    {staffList.length ? (
+                      staffList.map((staff) => (
                         <tr key={staff.id} className="bg-white">
                           <td className="px-3 py-2 font-semibold text-slate-800">{staff.name}</td>
                           <td className="px-3 py-2 text-slate-600">{staff.wechat_nickname || "-"}</td>
-                          <td className="px-3 py-2 text-emerald-600">启用</td>
+                          <td className="px-3 py-2 text-slate-600">{staff.wechat_id || "-"}</td>
+                          <td className="px-3 py-2 text-slate-600">{staff.phone || "-"}</td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded-md px-2 py-1 font-semibold ${staffStatusClass(staff.status)}`}>
+                              {staffStatusText(staff.status)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-slate-600">{formatTime(staff.updated_at || staff.created_at)}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => handleEditStaff(staff)}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+                                title="编辑"
+                              >
+                                <PencilIcon size={13} />
+                              </button>
+                              {staff.status === "active" ? (
+                                <button
+                                  onClick={() => void handleStaffStatusAction(staff, "disable")}
+                                  disabled={staffActionId === staff.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                                  title="停用"
+                                >
+                                  <BanIcon size={13} />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => void handleStaffStatusAction(staff, "enable")}
+                                  disabled={staffActionId === staff.id}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                  title="启用"
+                                >
+                                  <PlayIcon size={13} />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => void handleStaffStatusAction(staff, "delete")}
+                                disabled={staffActionId === staff.id}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                                title="删除"
+                              >
+                                <Trash2Icon size={13} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={3} className="px-3 py-8 text-center text-slate-500">暂无销售微信配置</td>
+                        <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                          暂无销售微信配置，请先新增销售微信。
+                        </td>
                       </tr>
                     )}
                   </tbody>

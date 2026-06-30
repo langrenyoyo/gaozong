@@ -34,7 +34,14 @@ export {
   warmupLocalWechatOcr,
 } from "../../api/localWechatAgent";
 export { fetchChecks } from "../../api/checks";
-export { fetchStaffList, createStaff } from "../../api/staff";
+export {
+  createStaff,
+  deleteStaff,
+  disableStaff,
+  enableStaff,
+  fetchStaffList,
+  updateStaff,
+} from "../../api/staff";
 export { assignLead, createLead } from "../../api/leads";
 export { syncDouyinLeads } from "../../api/integrations";
 export { fetchNotificationRecords } from "../../api/notifications";
