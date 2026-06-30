@@ -821,14 +821,18 @@ class WechatAutoDetectStatusResponse(BaseModel):
 class SendToStaffRequest(BaseModel):
     """发送线索给销售请求"""
     lead_id: int = Field(..., description="线索 ID")
+    staff_id: Optional[int] = Field(None, description="可选销售 ID；必须与线索当前分配销售一致")
+    message: Optional[str] = Field(None, description="可选通知文本；为空时使用后端模板")
     auto_send: bool = Field(True, description="是否自动发送（Demo 默认 True）")
 
 
 class SendToStaffResponse(BaseModel):
     """发送线索给销售响应"""
     success: bool = True
+    status: Optional[str] = Field(None, description="任务创建状态: created/existing_pending/already_sent")
     message: str = ""
     notification_id: Optional[int] = Field(None, description="通知记录 ID")
+    task_id: Optional[int] = Field(None, description="微信通知任务 ID")
     lead_id: int = Field(..., description="线索 ID")
     staff_id: Optional[int] = Field(None, description="销售 ID")
     staff_name: Optional[str] = Field(None, description="销售姓名")

@@ -2,7 +2,7 @@
  * 线索通知 API
  *
  * 对应 auto_wechat 路由：
- *   POST /lead-notifications/send-to-staff → 发送线索给销售
+ *   POST /lead-notifications/send-to-staff → 创建通知销售的微信任务
  *   GET  /lead-notifications/records       → 查询通知记录
  */
 
@@ -12,10 +12,10 @@ import type {
   NotificationRecordsResponse,
 } from "./types";
 
-/** 发送线索给销售（自动搜索 + 发送 + 设置自动检测） */
+/** 创建通知销售的微信任务（9000 不直接操作微信） */
 export async function sendLeadToStaff(
   leadId: number,
-  autoSend: boolean = true,
+  autoSend: boolean = false,
 ): Promise<SendToStaffResponse> {
   return apiClient.post("/lead-notifications/send-to-staff", {
     lead_id: leadId,

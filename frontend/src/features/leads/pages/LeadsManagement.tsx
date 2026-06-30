@@ -805,7 +805,7 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
   const agentReason = agentDisabledReason(agentStatus);
   const canDetect = lead.status === "assigned" && lead.assigned_staff_id !== null && !detectLoading && agentStatus.can_run_wechat_action;
   const canSetAutoDetect = Boolean(pendingCheckId) && agentStatus.can_run_wechat_action;
-  const canSendToStaff = lead.status === "assigned" && lead.assigned_staff_id !== null && !notifyLoading && agentStatus.can_run_wechat_action;
+  const canSendToStaff = lead.status === "assigned" && lead.assigned_staff_id !== null && !notifyLoading;
 
   // 检测按钮禁用提示
   let detectDisabledReason = "";
@@ -1035,10 +1035,10 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
             <button
               onClick={onSendToStaff}
               disabled={!canSendToStaff}
-              title={!agentStatus.can_run_wechat_action ? agentReason : "自动搜索销售微信并发送线索通知"}
+              title="创建微信通知任务，Local Agent 在线后将自动执行"
               className="h-9 w-full rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-xs font-semibold text-white shadow-[0_4px_12px_rgba(37,99,235,0.3)] disabled:cursor-not-allowed disabled:opacity-50 hover:from-blue-700 hover:to-indigo-700"
             >
-              {notifyLoading ? "发送中..." : "发送线索给销售"}
+              {notifyLoading ? "创建中..." : "通知销售"}
             </button>
           </div>
         ) : null}
@@ -1209,6 +1209,11 @@ export default function LeadsManagement() {
     setAgentStatus(agentStatusRes?.success ? agentStatusRes.data : AGENT_STATUS_FALLBACK);
   }, [assignedStaffFilter, keyword, page, pageSize, source, status]);
 
+  const loadNotificationRecordsForLead = useCallback(async (leadId: number) => {
+    const result = await fetchNotificationRecords({ lead_id: leadId, limit: 20 });
+    return result.records || [];
+  }, []);
+
   // 页面加载时拉取数据
   useEffect(() => {
     async function loadData() {
@@ -1257,9 +1262,9 @@ export default function LeadsManagement() {
     async function loadNotificationRecords() {
       setLoadingNotifications(true);
       try {
-        const result = await fetchNotificationRecords({ lead_id: selectedId, limit: 20 });
+        const records = await loadNotificationRecordsForLead(selectedId);
         if (!cancelled) {
-          setNotificationRecords(result.records || []);
+          setNotificationRecords(records);
         }
       } catch (err) {
         if (!cancelled) {
@@ -1277,7 +1282,7 @@ export default function LeadsManagement() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [loadNotificationRecordsForLead, selectedId]);
 
   // ========== 同步流程 ==========
 
@@ -1472,31 +1477,34 @@ export default function LeadsManagement() {
     }
   };
 
-  // 发送线索给销售（自动搜索 + 发送 + 设置自动检测）
+  // 通知销售：只在 9000 创建微信任务，由 Local Agent 后续拉取执行
   const handleSendToStaff = async () => {
     if (!selectedLead || !selectedLead.assigned_staff_id) return;
-    if (!agentStatus.can_run_wechat_action) {
-      toast.warning(agentDisabledReason(agentStatus));
-      return;
-    }
 
     const confirmed = window.confirm(
-      `将自动搜索销售微信并发送线索通知。\n系统将自动打开销售聊天窗口并粘贴消息。`,
+      `将为当前线索创建微信通知任务。\n小高AI微信助手开始接收任务后会自动执行。`,
     );
     if (!confirmed) return;
 
     setNotifyLoading(true);
     try {
-      const result = await sendLeadToStaff(selectedLead.id, true);
+      const result = await sendLeadToStaff(selectedLead.id, false);
       if (result.success) {
-        toast.success(result.message || "线索已发送给销售，正在等待回复");
-        // 刷新数据
-        refreshData();
+        const statusMessage: Record<string, string> = {
+          created: "已创建微信通知任务",
+          existing_pending: "已有待执行任务",
+          already_sent: "该销售已通知",
+        };
+        toast.success(statusMessage[result.status || ""] || result.message || "已创建微信通知任务");
+        await Promise.all([
+          refreshData(),
+          loadNotificationRecordsForLead(selectedLead.id).then(setNotificationRecords),
+        ]);
       } else {
-        toast.error(result.message || "发送失败");
+        toast.error(result.message || "创建通知任务失败");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "发送线索通知失败");
+      toast.error(err instanceof Error ? err.message : "创建通知任务失败");
     } finally {
       setNotifyLoading(false);
     }

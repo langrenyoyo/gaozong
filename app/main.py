@@ -32,6 +32,7 @@ from app.routers import (
     compute,
     capability_gateway,
     replies,
+    lead_notification_actions,
     lead_notification_records,
 )
 
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(compute.internal_router)
     app.include_router(capability_gateway.router)
     app.include_router(replies.router)
+    app.include_router(lead_notification_actions.router)
     app.include_router(lead_notification_records.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）

@@ -534,10 +534,12 @@ export interface PollAndExecuteResponse {
 
 export interface SendToStaffResponse {
   success: boolean;
+  status?: "created" | "existing_pending" | "already_sent" | string | null;
   message: string;
   lead_id: number;
-  staff_id: number;
-  notification_id?: number;
+  staff_id?: number | null;
+  task_id?: number | null;
+  notification_id?: number | null;
   send_status?: string;
   chat_title?: string;
   failure_stage?: string;
