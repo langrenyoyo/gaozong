@@ -3,6 +3,7 @@
  *
  * 对应 auto_wechat 路由：
  *   POST /wechat-tasks            → 创建微信任务
+ *   GET  /wechat-tasks            → 分页查询任务历史
  *   GET  /wechat-tasks/pending    → 查询 pending 任务列表
  *   GET  /wechat-tasks/{task_id}  → 查询任务详情
  *
@@ -11,7 +12,12 @@
  */
 
 import apiClient from "./client";
-import type { WechatTask, WechatTaskCreateRequest } from "./types";
+import type {
+  WechatTask,
+  WechatTaskCreateRequest,
+  WechatTaskHistoryParams,
+  WechatTaskHistoryResponse,
+} from "./types";
 
 /** 创建微信任务（P0-FE-MAIN-1） */
 export async function createWechatTask(payload: WechatTaskCreateRequest): Promise<WechatTask> {
@@ -25,7 +31,16 @@ export async function fetchPendingWechatTasks(
   return apiClient.get("/wechat-tasks/pending", { params });
 }
 
+/** 分页查询微信任务历史列表，列表只返回 raw_result 摘要 */
+export async function fetchWechatTaskHistory(
+  params?: WechatTaskHistoryParams,
+): Promise<WechatTaskHistoryResponse> {
+  return apiClient.get("/wechat-tasks", { params });
+}
+
 /** 查询单条微信任务详情 */
 export async function fetchWechatTask(taskId: number): Promise<WechatTask> {
   return apiClient.get(`/wechat-tasks/${taskId}`);
 }
+
+export const fetchWechatTaskDetail = fetchWechatTask;

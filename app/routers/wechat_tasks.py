@@ -4,14 +4,29 @@
 本阶段不调用微信自动化，不调用 Local Agent。
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required
 from app.database import get_db
-from app.schemas import WechatTaskCreateRequest, WechatTaskResultRequest, WechatTaskResponse
+from app.schemas import (
+    WechatTaskCreateRequest,
+    WechatTaskHistoryPage,
+    WechatTaskResultRequest,
+    WechatTaskResponse,
+)
 from app.services import wechat_task_service
 
 router = APIRouter(prefix="/wechat-tasks", tags=["微信任务队列"])
+
+
+def _merchant_id(context: RequestContext) -> str:
+    if not context.merchant_id:
+        raise HTTPException(400, "当前登录态缺少商户 ID")
+    return context.merchant_id
 
 
 @router.post("", response_model=WechatTaskResponse)
@@ -38,6 +53,36 @@ def create_wechat_task(data: WechatTaskCreateRequest, db: Session = Depends(get_
         raise HTTPException(400, str(e))
 
 
+@router.get("", response_model=WechatTaskHistoryPage)
+def list_wechat_tasks(
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    task_type: str | None = None,
+    mode: str | None = None,
+    keyword: str | None = None,
+    failure_stage: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """分页查询当前商户微信任务历史，列表不返回完整 raw_result。"""
+    return wechat_task_service.list_wechat_task_history(
+        db,
+        merchant_id=_merchant_id(context),
+        page=page,
+        page_size=page_size,
+        status=status,
+        task_type=task_type,
+        mode=mode,
+        keyword=keyword,
+        failure_stage=failure_stage,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
 @router.get("/pending", response_model=list[WechatTaskResponse])
 def get_pending_wechat_tasks(
     limit: int = 20,
@@ -55,10 +100,19 @@ def get_pending_wechat_tasks(
 
 
 @router.get("/{task_id}", response_model=WechatTaskResponse)
-def get_wechat_task(task_id: int, db: Session = Depends(get_db)):
+def get_wechat_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
     """查询微信任务详情。"""
     task = wechat_task_service.get_wechat_task(db, task_id)
-    if not task:
+    allow_dev_orphan = context.session_id == "dev-session"
+    if not task or not wechat_task_service.task_belongs_to_merchant(
+        task,
+        _merchant_id(context),
+        allow_dev_orphan=allow_dev_orphan,
+    ):
         raise HTTPException(404, "微信任务不存在")
     return task
 

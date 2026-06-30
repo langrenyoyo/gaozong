@@ -35,12 +35,20 @@ import {
   enableLocalAgentTaskPolling,
   fetchPendingWechatTasks,
   fetchLocalAgentRuntimeStatus,
+  fetchWechatTaskHistory,
   fetchWechatTask,
   fetchStaffList,
   pollAndExecuteWechatTask,
   updateStaff,
 } from "../api";
-import type { LocalAgentRuntimeStatus, PollAndExecuteResponse, Staff, WechatTask } from "../types";
+import type {
+  LocalAgentRuntimeStatus,
+  PollAndExecuteResponse,
+  Staff,
+  WechatTask,
+  WechatTaskHistoryItem,
+  WechatTaskRawResultSummary,
+} from "../types";
 import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
 
 const DEFAULT_TEST_NICKNAME = "Aw3";
@@ -60,7 +68,7 @@ const TAB_META: Record<WechatAgentTab, { title: string; description: string }> =
   },
   tasks: {
     title: "任务记录",
-    description: "第一版仅展示待执行任务和单任务详情，历史任务列表后续开放。",
+    description: "查询微信任务历史、执行状态和失败阶段，完整 raw_result 仅在详情中查看。",
   },
   "download-test": {
     title: "下载/测试",
@@ -75,11 +83,20 @@ function formatTime(value?: string | null): string {
 function taskStatusText(status?: string | null): string {
   if (status === "pending") return "待处理";
   if (status === "running") return "执行中";
-  if (status === "pasted") return "已完成";
+  if (status === "pasted") return "已粘贴";
+  if (status === "sent") return "已发送";
   if (status === "blocked") return "已阻断";
   if (status === "failed") return "失败";
   if (status === "completed") return "已完成";
   return status || "-";
+}
+
+function taskStatusClass(status?: string | null): string {
+  if (status === "sent" || status === "completed") return "bg-emerald-50 text-emerald-700";
+  if (status === "pasted") return "bg-blue-50 text-blue-700";
+  if (status === "blocked") return "bg-amber-50 text-amber-700";
+  if (status === "failed") return "bg-rose-50 text-rose-700";
+  return "bg-slate-100 text-slate-600";
 }
 
 function taskTypeText(taskType?: string | null): string {
@@ -99,6 +116,19 @@ function shortText(value?: string | null, max = 42): string {
   const text = (value || "").trim();
   if (!text) return "-";
   return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function rawSummaryText(summary?: WechatTaskRawResultSummary | null): string {
+  if (!summary || Object.keys(summary).length === 0) return "-";
+  const parts = [
+    typeof summary.contact_verified === "boolean" ? `验证:${summary.contact_verified ? "是" : "否"}` : "",
+    typeof summary.sent === "boolean" ? `发送:${summary.sent ? "是" : "否"}` : "",
+    summary.write_action ? `动作:${summary.write_action}` : "",
+    summary.verify_strategy ? `策略:${summary.verify_strategy}` : "",
+    summary.manual_review_reason ? `复核:${summary.manual_review_reason}` : "",
+    summary.failure_stage ? `阶段:${summary.failure_stage}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : "-";
 }
 
 function agentOnlineText(status: AgentStatusData | null, localOnline: boolean | null): string {
@@ -126,6 +156,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   const [runtimeStatus, setRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [pendingTasks, setPendingTasks] = useState<WechatTask[]>([]);
+  const [taskHistory, setTaskHistory] = useState<WechatTaskHistoryItem[]>([]);
+  const [taskHistoryTotal, setTaskHistoryTotal] = useState(0);
+  const [taskHistoryPage, setTaskHistoryPage] = useState(1);
+  const [taskHistoryPageSize] = useState(20);
+  const [taskHistoryLoading, setTaskHistoryLoading] = useState(false);
   const [selectedTask, setSelectedTask] = useState<WechatTask | null>(null);
   const [loading, setLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
@@ -145,6 +180,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   } | null>(null);
   const [staffKeyword, setStaffKeyword] = useState("");
   const [staffStatusFilter, setStaffStatusFilter] = useState<"all" | "active" | "disabled">("all");
+  const [taskStatusFilter, setTaskStatusFilter] = useState("all");
+  const [taskTypeFilter, setTaskTypeFilter] = useState("all");
+  const [taskModeFilter, setTaskModeFilter] = useState("all");
+  const [taskKeyword, setTaskKeyword] = useState("");
+  const [taskFailureStage, setTaskFailureStage] = useState("");
   const [editingStaffId, setEditingStaffId] = useState<number | null>(null);
   const [staffForm, setStaffForm] = useState({
     name: "",
@@ -170,10 +210,32 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     setStaffList(staffs);
   }
 
+  async function loadTaskHistory(page = taskHistoryPage) {
+    setTaskHistoryLoading(true);
+    try {
+      const history = await fetchWechatTaskHistory({
+        page,
+        page_size: taskHistoryPageSize,
+        status: taskStatusFilter !== "all" ? taskStatusFilter : undefined,
+        task_type: taskTypeFilter !== "all" ? taskTypeFilter : undefined,
+        mode: taskModeFilter !== "all" ? taskModeFilter : undefined,
+        keyword: taskKeyword.trim() || undefined,
+        failure_stage: taskFailureStage.trim() || undefined,
+      });
+      setTaskHistory(history.items);
+      setTaskHistoryTotal(history.total);
+      setTaskHistoryPage(history.page);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "任务历史加载失败");
+    } finally {
+      setTaskHistoryLoading(false);
+    }
+  }
+
   async function refreshPage() {
     setLoading(true);
     try {
-      const [statusResponse, health, runtime, staffs, tasks] = await Promise.all([
+      const [statusResponse, health, runtime, staffs, tasks, history] = await Promise.all([
         fetchAgentStatus().catch(() => null),
         checkLocalAgentHealth().catch(() => null),
         fetchLocalAgentRuntimeStatus().catch(() => null),
@@ -182,12 +244,26 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           keyword: staffKeyword.trim() || undefined,
         }),
         fetchPendingWechatTasks({ limit: 20 }),
+        fetchWechatTaskHistory({
+          page: taskHistoryPage,
+          page_size: taskHistoryPageSize,
+          status: taskStatusFilter !== "all" ? taskStatusFilter : undefined,
+          task_type: taskTypeFilter !== "all" ? taskTypeFilter : undefined,
+          mode: taskModeFilter !== "all" ? taskModeFilter : undefined,
+          keyword: taskKeyword.trim() || undefined,
+          failure_stage: taskFailureStage.trim() || undefined,
+        }).catch(() => null),
       ]);
       setAgentStatus(statusResponse?.data || null);
       setLocalOnline(Boolean(health?.success));
       setRuntimeStatus(runtime);
       setStaffList(staffs);
       setPendingTasks(tasks);
+      if (history) {
+        setTaskHistory(history.items);
+        setTaskHistoryTotal(history.total);
+        setTaskHistoryPage(history.page);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "微信助手数据加载失败");
     } finally {
@@ -390,9 +466,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     }
   }
 
-  async function handleOpenTaskDetail(task: WechatTask) {
+  async function handleOpenTaskDetail(task: { id: number }) {
     setTaskDetailLoading(true);
-    setSelectedTask(task);
+    setSelectedTask(null);
     try {
       const detail = await fetchWechatTask(task.id);
       setSelectedTask(detail);
@@ -849,48 +925,127 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
         {activeTab === "tasks" ? (
         <section className="mt-5 rounded-lg border border-[#dfe5ee] bg-white">
-          <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
             <div className="flex items-center gap-2">
               <SendIcon size={16} className="text-blue-600" />
               <h2 className="text-sm font-bold text-[#1a1f2e]">任务记录</h2>
             </div>
             <span className="text-xs text-[#8b95a6]">待处理任务 {pendingTasks.length} 条</span>
           </div>
-          <div className="border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs leading-5 text-blue-800">
-            当前仅展示待执行任务，历史任务记录将在后续版本开放。
+          <div className="grid gap-3 border-b border-[#edf1f6] bg-slate-50 px-4 py-3 lg:grid-cols-[130px_150px_150px_minmax(180px,1fr)_180px_auto]">
+            <select
+              value={taskTypeFilter}
+              onChange={(event) => {
+                setTaskTypeFilter(event.target.value);
+                setTaskHistoryPage(1);
+              }}
+              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+            >
+              <option value="all">全部类型</option>
+              <option value="notify_sales">通知销售</option>
+              <option value="detect_reply">检测回复</option>
+            </select>
+            <select
+              value={taskStatusFilter}
+              onChange={(event) => {
+                setTaskStatusFilter(event.target.value);
+                setTaskHistoryPage(1);
+              }}
+              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+            >
+              <option value="all">全部状态</option>
+              <option value="pending">待执行</option>
+              <option value="pasted">已粘贴</option>
+              <option value="sent">已发送</option>
+              <option value="failed">失败</option>
+              <option value="blocked">已阻断</option>
+            </select>
+            <select
+              value={taskModeFilter}
+              onChange={(event) => {
+                setTaskModeFilter(event.target.value);
+                setTaskHistoryPage(1);
+              }}
+              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
+            >
+              <option value="all">全部模式</option>
+              <option value="paste_only">paste_only</option>
+              <option value="single_send">single_send</option>
+              <option value="read_only">read_only</option>
+            </select>
+            <div className="relative">
+              <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={taskKeyword}
+                onChange={(event) => {
+                  setTaskKeyword(event.target.value);
+                  setTaskHistoryPage(1);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void loadTaskHistory(1);
+                }}
+                className="h-9 w-full rounded-md border border-slate-200 pl-8 pr-3 text-xs outline-none focus:border-blue-300"
+                placeholder="销售昵称 / 客户联系方式"
+              />
+            </div>
+            <input
+              value={taskFailureStage}
+              onChange={(event) => {
+                setTaskFailureStage(event.target.value);
+                setTaskHistoryPage(1);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void loadTaskHistory(1);
+              }}
+              className="h-9 rounded-md border border-slate-200 px-3 text-xs outline-none focus:border-blue-300"
+              placeholder="failure_stage"
+            />
+            <button
+              onClick={() => void loadTaskHistory(1)}
+              disabled={taskHistoryLoading}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCwIcon size={13} className={taskHistoryLoading ? "animate-spin" : ""} />
+              查询
+            </button>
           </div>
           <div className="overflow-auto">
             <table className="w-full min-w-[980px] text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">创建时间</th>
-                  <th className="px-4 py-3 font-semibold">微信昵称</th>
+                  <th className="px-4 py-3 font-semibold">任务ID</th>
                   <th className="px-4 py-3 font-semibold">任务类型</th>
+                  <th className="px-4 py-3 font-semibold">目标销售</th>
                   <th className="px-4 py-3 font-semibold">模式</th>
-                  <th className="px-4 py-3 font-semibold">内容摘要</th>
                   <th className="px-4 py-3 font-semibold">状态</th>
+                  <th className="px-4 py-3 font-semibold">失败阶段</th>
+                  <th className="px-4 py-3 font-semibold">发送时间</th>
                   <th className="px-4 py-3 font-semibold">更新时间</th>
-                  <th className="px-4 py-3 font-semibold">failure_stage</th>
+                  <th className="px-4 py-3 font-semibold">摘要</th>
                   <th className="px-4 py-3 text-right font-semibold">详情</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {pendingTasks.length ? (
-                  pendingTasks.map((task) => (
+                {taskHistory.length ? (
+                  taskHistory.map((task) => (
                     <tr key={task.id} className="bg-white">
-                      <td className="px-4 py-3 text-slate-600">{formatTime(task.created_at)}</td>
-                      <td className="px-4 py-3 font-semibold text-slate-800">{task.target_nickname || "-"}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800">#{task.id}</td>
                       <td className="px-4 py-3 text-slate-600">{taskTypeText(task.task_type)}</td>
-                      <td className="px-4 py-3 text-slate-600">{taskModeText(task.mode)}</td>
-                      <td className="px-4 py-3 text-slate-600">{shortText(task.message)}</td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 font-semibold text-amber-700">
-                          <ClockIcon size={12} />
+                        <div className="font-semibold text-slate-800">{task.staff_wechat_nickname || task.target_nickname || "-"}</div>
+                        <div className="mt-0.5 text-[11px] text-slate-500">{task.staff_name || "-"}</div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{taskModeText(task.mode)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold ${taskStatusClass(task.status)}`}>
+                          {task.status === "pending" ? <ClockIcon size={12} /> : null}
                           {taskStatusText(task.status)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-600">{formatTime(task.updated_at || task.pasted_at || task.sent_at)}</td>
                       <td className="px-4 py-3 text-slate-600">{task.failure_stage || "-"}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatTime(task.sent_at)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatTime(task.updated_at)}</td>
+                      <td className="px-4 py-3 text-slate-600">{shortText(rawSummaryText(task.raw_result_summary), 80)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end">
                           <button
@@ -906,11 +1061,34 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-slate-500">暂无待处理任务</td>
+                    <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
+                      {taskHistoryLoading ? "正在加载任务历史" : "暂无任务记录"}
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#edf1f6] px-4 py-3 text-xs text-slate-600">
+            <div>
+              共 {taskHistoryTotal} 条，当前第 {taskHistoryPage} 页，每页 {taskHistoryPageSize} 条
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => void loadTaskHistory(Math.max(1, taskHistoryPage - 1))}
+                disabled={taskHistoryLoading || taskHistoryPage <= 1}
+                className="h-8 rounded-md border border-slate-200 bg-white px-3 font-semibold text-slate-700 disabled:opacity-50"
+              >
+                上一页
+              </button>
+              <button
+                onClick={() => void loadTaskHistory(taskHistoryPage + 1)}
+                disabled={taskHistoryLoading || taskHistoryPage * taskHistoryPageSize >= taskHistoryTotal}
+                className="h-8 rounded-md border border-slate-200 bg-white px-3 font-semibold text-slate-700 disabled:opacity-50"
+              >
+                下一页
+              </button>
+            </div>
           </div>
         </section>
         ) : null}

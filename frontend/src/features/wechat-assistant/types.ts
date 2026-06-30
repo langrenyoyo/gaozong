@@ -11,6 +11,10 @@ export type {
   WechatAutoDetectStatus,
   WechatTask,
   WechatTaskCreateRequest,
+  WechatTaskHistoryItem,
+  WechatTaskHistoryParams,
+  WechatTaskHistoryResponse,
+  WechatTaskRawResultSummary,
 } from "../../api/types";
 
 export type { WechatDebugResult } from "../../api/wechat";

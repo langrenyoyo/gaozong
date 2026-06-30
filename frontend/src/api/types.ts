@@ -440,6 +440,51 @@ export interface WechatTask {
   updated_at: string | null;
 }
 
+export interface WechatTaskRawResultSummary {
+  contact_verified?: boolean;
+  sent?: boolean;
+  write_action?: string;
+  failure_stage?: string;
+  verify_strategy?: string;
+  manual_review_reason?: string;
+}
+
+export interface WechatTaskHistoryItem {
+  id: number;
+  lead_id: number | null;
+  staff_id: number | null;
+  staff_name: string | null;
+  staff_wechat_nickname: string | null;
+  task_type: string;
+  target_nickname: string | null;
+  mode: string;
+  status: string;
+  sent_at: string | null;
+  failure_stage: string | null;
+  raw_result_summary: WechatTaskRawResultSummary;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface WechatTaskHistoryParams {
+  page?: number;
+  page_size?: number;
+  status?: string;
+  task_type?: string;
+  mode?: string;
+  keyword?: string;
+  failure_stage?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface WechatTaskHistoryResponse {
+  items: WechatTaskHistoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 /** WeChat task create request. */
 export interface WechatTaskCreateRequest {
   lead_id?: number;

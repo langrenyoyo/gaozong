@@ -10,10 +10,12 @@ P1-AUTO-1：支持 detect_reply 任务类型，notify_sales pasted 后自动创�
 import json
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload
 
-from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck
+from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck, DouyinLead, SalesStaff
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,142 @@ def get_pending_wechat_tasks(
 def get_wechat_task(db: Session, task_id: int) -> WechatTask | None:
     """查询单条任务详情。"""
     return db.query(WechatTask).filter(WechatTask.id == task_id).first()
+
+
+def task_belongs_to_merchant(
+    task: WechatTask,
+    merchant_id: str,
+    *,
+    allow_dev_orphan: bool = False,
+) -> bool:
+    """判断任务是否归属当前商户。
+
+    仅以任务关联的 lead 或 staff 为依据；孤立测试任务不暴露给普通商户。
+    """
+    if allow_dev_orphan and task.lead_id is None and task.staff_id is None:
+        return True
+    if task.lead and task.lead.merchant_id == merchant_id:
+        return True
+    if task.staff and task.staff.merchant_id == merchant_id:
+        return True
+    return False
+
+
+def list_wechat_task_history(
+    db: Session,
+    *,
+    merchant_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    task_type: str | None = None,
+    mode: str | None = None,
+    keyword: str | None = None,
+    failure_stage: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> dict[str, Any]:
+    """分页查询当前商户微信任务历史。
+
+    商户隔离规则：任务必须关联当前商户的 lead 或 staff；无归属的孤立测试任务不返回。
+    """
+    safe_page = max(page, 1)
+    safe_page_size = min(max(page_size, 1), 100)
+
+    query = (
+        db.query(WechatTask)
+        .outerjoin(DouyinLead, WechatTask.lead_id == DouyinLead.id)
+        .outerjoin(SalesStaff, WechatTask.staff_id == SalesStaff.id)
+        .options(joinedload(WechatTask.lead), joinedload(WechatTask.staff))
+        .filter(or_(DouyinLead.merchant_id == merchant_id, SalesStaff.merchant_id == merchant_id))
+    )
+
+    normalized_status = (status or "").strip()
+    if normalized_status and normalized_status != "all":
+        query = query.filter(WechatTask.status == normalized_status)
+
+    normalized_type = (task_type or "").strip()
+    if normalized_type and normalized_type != "all":
+        query = query.filter(WechatTask.task_type == normalized_type)
+
+    normalized_mode = (mode or "").strip()
+    if normalized_mode and normalized_mode != "all":
+        query = query.filter(WechatTask.mode == normalized_mode)
+
+    if failure_stage and failure_stage.strip():
+        query = query.filter(WechatTask.failure_stage == failure_stage.strip())
+
+    if date_from:
+        query = query.filter(WechatTask.created_at >= date_from)
+    if date_to:
+        query = query.filter(WechatTask.created_at <= date_to)
+
+    stripped_keyword = keyword.strip() if keyword else ""
+    if stripped_keyword:
+        like = f"%{stripped_keyword}%"
+        query = query.filter(
+            or_(
+                WechatTask.target_nickname.like(like),
+                SalesStaff.name.like(like),
+                SalesStaff.wechat_nickname.like(like),
+                DouyinLead.customer_contact.like(like),
+            )
+        )
+
+    total = query.count()
+    tasks = (
+        query.order_by(WechatTask.id.desc())
+        .offset((safe_page - 1) * safe_page_size)
+        .limit(safe_page_size)
+        .all()
+    )
+    return {
+        "items": [_history_item(task) for task in tasks],
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_page_size,
+    }
+
+
+def _history_item(task: WechatTask) -> dict[str, Any]:
+    staff = task.staff
+    return {
+        "id": task.id,
+        "lead_id": task.lead_id,
+        "staff_id": task.staff_id,
+        "staff_name": staff.name if staff else None,
+        "staff_wechat_nickname": staff.wechat_nickname if staff else None,
+        "task_type": task.task_type,
+        "target_nickname": task.target_nickname,
+        "mode": task.mode,
+        "status": task.status,
+        "sent_at": task.sent_at,
+        "failure_stage": task.failure_stage,
+        "raw_result_summary": _raw_result_summary(task.raw_result),
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+    }
+
+
+def _raw_result_summary(raw_result: str | None) -> dict[str, Any]:
+    if not raw_result:
+        return {}
+    try:
+        data = json.loads(raw_result)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    keys = (
+        "contact_verified",
+        "sent",
+        "write_action",
+        "failure_stage",
+        "verify_strategy",
+        "manual_review_reason",
+    )
+    return {key: data[key] for key in keys if key in data}
 
 
 def submit_wechat_task_result(

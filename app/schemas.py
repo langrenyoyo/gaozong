@@ -891,6 +891,32 @@ class WechatTaskResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WechatTaskHistoryItem(BaseModel):
+    """微信任务历史列表项，不返回完整 raw_result。"""
+    id: int
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    staff_name: Optional[str] = None
+    staff_wechat_nickname: Optional[str] = None
+    task_type: str
+    target_nickname: Optional[str] = None
+    mode: str
+    status: str
+    sent_at: Optional[datetime] = None
+    failure_stage: Optional[str] = None
+    raw_result_summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class WechatTaskHistoryPage(BaseModel):
+    """微信任务历史分页响应。"""
+    items: list[WechatTaskHistoryItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class OpenChatResponse(BaseModel):
     """打开聊天窗口响应"""
     success: bool = True
