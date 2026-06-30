@@ -20,7 +20,7 @@ import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
-import WechatTaskPanel from "../features/wechat-assistant/components/WechatTaskPanel";
+import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
 import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
@@ -677,6 +677,14 @@ export default function Index({
     activeNav === "compute-token-transactions" ||
     activeNav === "compute-recharge-orders" ||
     activeNav === "compute-packages";
+  const activeWechatTab: WechatAgentTab =
+    activeNav === "wechat-config"
+      ? "config"
+      : activeNav === "wechat-tasks"
+        ? "tasks"
+        : activeNav === "wechat-download-test"
+          ? "download-test"
+          : "status";
   const loadChatEvents = useCallback(async () => {
     setChatLoading(true);
     setChatError(null);
@@ -763,10 +771,8 @@ export default function Index({
           <LeadsModulePage />
         ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
-        ) : activeNav === "wechat-tasks" ? (
-          <WechatTaskPanel />
         ) : isWechatAssistantNav ? (
-          <WechatAgent />
+          <WechatAgent activeTab={activeWechatTab} />
         ) : isComputeNav ? (
           <ComputeCenter />
         ) : (

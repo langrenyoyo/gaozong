@@ -3,6 +3,7 @@ import {
   ClockIcon,
   CopyIcon,
   BanIcon,
+  EyeIcon,
   PencilIcon,
   Loader2Icon,
   MessageCircleIcon,
@@ -34,15 +35,38 @@ import {
   enableLocalAgentTaskPolling,
   fetchPendingWechatTasks,
   fetchLocalAgentRuntimeStatus,
+  fetchWechatTask,
   fetchStaffList,
   pollAndExecuteWechatTask,
   updateStaff,
 } from "../api";
 import type { LocalAgentRuntimeStatus, PollAndExecuteResponse, Staff, WechatTask } from "../types";
+import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
 
 const DEFAULT_TEST_NICKNAME = "Aw3";
 const SOURCE_START_COMMAND = "cd E:\\work\\project\\auto_wechat\npython app\\local_agent_main.py --host 127.0.0.1 --port 19000 --server-url http://127.0.0.1:9000";
 const EXE_START_COMMAND = 'Start-Process ".\\dist\\local-agent\\小高AI微信助手.exe"';
+
+export type WechatAgentTab = "status" | "config" | "tasks" | "download-test";
+
+const TAB_META: Record<WechatAgentTab, { title: string; description: string }> = {
+  status: {
+    title: "Local Agent状态",
+    description: "查看本机实时连接、接收任务开关和 9000 服务端心跳记录。",
+  },
+  config: {
+    title: "微信配置",
+    description: "管理销售微信配置，启用状态会影响后续线索分配。",
+  },
+  tasks: {
+    title: "任务记录",
+    description: "第一版仅展示待执行任务和单任务详情，历史任务列表后续开放。",
+  },
+  "download-test": {
+    title: "下载/测试",
+    description: "查看启动说明、复制命令，并使用本机 Agent 测试与诊断工具。",
+  },
+};
 
 function formatTime(value?: string | null): string {
   return formatDateTimeLocal(value || null);
@@ -62,6 +86,13 @@ function taskTypeText(taskType?: string | null): string {
   if (taskType === "notify_sales") return "通知销售";
   if (taskType === "detect_reply") return "回复检测";
   return taskType || "-";
+}
+
+function taskModeText(mode?: string | null): string {
+  if (mode === "paste_only") return "仅粘贴";
+  if (mode === "single_send") return "单条发送";
+  if (mode === "read_only") return "只读检测";
+  return mode || "-";
 }
 
 function shortText(value?: string | null, max = 42): string {
@@ -89,14 +120,16 @@ function staffStatusClass(status?: string | null): string {
   return "bg-amber-50 text-amber-700";
 }
 
-export default function WechatAgent() {
+export default function WechatAgent({ activeTab = "status" }: { activeTab?: WechatAgentTab }) {
   const [agentStatus, setAgentStatus] = useState<AgentStatusData | null>(null);
   const [localOnline, setLocalOnline] = useState<boolean | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [pendingTasks, setPendingTasks] = useState<WechatTask[]>([]);
+  const [selectedTask, setSelectedTask] = useState<WechatTask | null>(null);
   const [loading, setLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false);
   const [savingStaff, setSavingStaff] = useState(false);
   const [staffActionId, setStaffActionId] = useState<number | null>(null);
   const [testing, setTesting] = useState(false);
@@ -357,7 +390,21 @@ export default function WechatAgent() {
     }
   }
 
+  async function handleOpenTaskDetail(task: WechatTask) {
+    setTaskDetailLoading(true);
+    setSelectedTask(task);
+    try {
+      const detail = await fetchWechatTask(task.id);
+      setSelectedTask(detail);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "任务详情加载失败");
+    } finally {
+      setTaskDetailLoading(false);
+    }
+  }
+
   const onlineText = agentOnlineText(agentStatus, localOnline);
+  const pageMeta = TAB_META[activeTab];
   const todayTaskCount = pendingTasks.filter((task) => {
     const created = task.created_at ? new Date(task.created_at) : null;
     if (!created || Number.isNaN(created.getTime())) return false;
@@ -376,7 +423,7 @@ export default function WechatAgent() {
             <div>
               <h1 className="text-[15px] font-bold text-[#1a1f2e]">小高AI微信助手</h1>
               <p className="mt-1 text-xs text-[#8b95a6]">
-                配置销售微信、查看本机 Agent 状态、执行测试和查看任务记录。
+                {pageMeta.description}
               </p>
             </div>
           </div>
@@ -392,6 +439,11 @@ export default function WechatAgent() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto p-5">
+        <div className="mb-4 rounded-lg border border-[#dfe5ee] bg-white px-4 py-3">
+          <div className="text-sm font-bold text-[#1a1f2e]">{pageMeta.title}</div>
+          <div className="mt-1 text-xs leading-5 text-[#64748b]">{pageMeta.description}</div>
+        </div>
+
         <div className="grid gap-4 xl:grid-cols-4">
           <div className="rounded-lg border border-[#dfe5ee] bg-white p-4">
             <div className="text-xs font-semibold text-[#64748b]">Local Agent</div>
@@ -417,6 +469,7 @@ export default function WechatAgent() {
           </div>
         </div>
 
+        {activeTab === "status" ? (
         <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
             <div className="flex items-center gap-2">
@@ -483,65 +536,77 @@ export default function WechatAgent() {
             <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800" : "rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-6 text-rose-800"}>
               <div className="font-bold">{localOnline ? "Local Agent 在线" : "Local Agent 未启动"}</div>
               <div>浏览器只能检测当前电脑的 127.0.0.1:19000，不能直接保证启动 exe。启动后点击“检测连接”刷新状态。</div>
-              {!localOnline ? (
-                <div className="mt-3 space-y-2">
-                  <div className="rounded bg-white/70 p-2">
-                    <div className="mb-1 font-semibold">源码启动</div>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5">{SOURCE_START_COMMAND}</pre>
-                    <button
-                      onClick={() => void handleCopyCommand(SOURCE_START_COMMAND)}
-                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-800"
-                    >
-                      <CopyIcon size={13} />
-                      复制源码命令
-                    </button>
-                  </div>
-                  <div className="rounded bg-white/70 p-2">
-                    <div className="mb-1 font-semibold">exe 启动</div>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5">{EXE_START_COMMAND}</pre>
-                    <button
-                      onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
-                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-800"
-                    >
-                      <CopyIcon size={13} />
-                      复制 exe 命令
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-3 rounded bg-white/70 p-2 text-emerald-900">
-                  最近任务结果：{runtimeStatus?.last_task_result ? shortText(JSON.stringify(runtimeStatus.last_task_result), 120) : "-"}
-                </div>
-              )}
+              <div className="mt-3 rounded bg-white/70 p-2">
+                <div className="font-semibold">本机实时检测</div>
+                <div>{localOnline ? "来自 127.0.0.1:19000，当前浏览器所在电脑已连通。" : "来自 127.0.0.1:19000，当前浏览器所在电脑未连通。"}</div>
+              </div>
+              <div className="mt-2 rounded bg-white/70 p-2">
+                <div className="font-semibold">服务端心跳记录</div>
+                <div>来自 9000 /agent/status：{agentStatus?.agent_online ? "服务端记录最近在线" : "服务端未记录在线心跳"}，最近心跳 {formatTime(agentStatus?.last_heartbeat_at)}。</div>
+              </div>
+              <div className="mt-2 rounded bg-white/70 p-2">
+                最近任务结果：{runtimeStatus?.last_task_result ? shortText(JSON.stringify(runtimeStatus.last_task_result), 120) : "-"}
+              </div>
             </div>
           </div>
         </section>
+        ) : null}
 
-        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
-          <div className="font-bold">启动说明</div>
-          <div>请在当前使用微信的 Windows 电脑启动 小高AI微信助手。网页按钮会调用当前电脑的 127.0.0.1:19000。</div>
-          <div>宝塔服务器不能运行 19000；微信助手依赖本机微信窗口，任务执行前需要 Local Agent 在线。</div>
-        </div>
+        {activeTab === "download-test" ? (
+          <>
+            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
+              <div className="font-bold">启动说明</div>
+              <div>请在当前使用微信的 Windows 电脑启动 小高AI微信助手。网页按钮会调用当前电脑的 127.0.0.1:19000。</div>
+              <div>宝塔服务器不能运行 19000；微信助手依赖本机微信窗口，任务执行前需要 Local Agent 在线。</div>
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-md bg-white/75 p-3">
+                  <div className="mb-1 font-semibold text-blue-900">源码启动命令</div>
+                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-blue-900">{SOURCE_START_COMMAND}</pre>
+                  <button
+                    onClick={() => void handleCopyCommand(SOURCE_START_COMMAND)}
+                    className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-white px-2 text-[11px] font-semibold text-blue-800"
+                  >
+                    <CopyIcon size={13} />
+                    复制源码命令
+                  </button>
+                </div>
+                <div className="rounded-md bg-white/75 p-3">
+                  <div className="mb-1 font-semibold text-blue-900">exe 启动命令</div>
+                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-blue-900">{EXE_START_COMMAND}</pre>
+                  <button
+                    onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
+                    className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-blue-200 bg-white px-2 text-[11px] font-semibold text-blue-800"
+                  >
+                    <CopyIcon size={13} />
+                    复制 exe 命令
+                  </button>
+                </div>
+              </div>
+            </div>
 
-        <div className="mt-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs leading-6 text-slate-700">
-          <div className="font-bold text-slate-900">构建与分发说明</div>
-          <div>当前页面不提供在线下载；一期验收请使用构建产物或人工分发的完整目录。</div>
-          <div>
-            产物路径：
-            <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
-              dist/local-agent/小高AI微信助手.exe
-            </span>
-          </div>
-          <div>
-            局域网构建需指定主系统地址：
-            <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
-              -ServerUrl http://192.168.110.113:9000
-            </span>
-          </div>
-          <div className="font-semibold text-amber-700">安全边界：notify_sales 只允许 paste_only，detect_reply 只读检测，结果必须保持 sent=false。</div>
-        </div>
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs leading-6 text-slate-700">
+              <div className="font-bold text-slate-900">构建与分发说明</div>
+              <div>当前页面不提供在线下载；一期验收请使用构建产物或人工分发的完整目录。</div>
+              <div>
+                产物路径：
+                <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
+                  dist/local-agent/小高AI微信助手.exe
+                </span>
+              </div>
+              <div>
+                局域网构建需指定主系统地址：
+                <span className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-800">
+                  -ServerUrl http://192.168.110.113:9000
+                </span>
+              </div>
+              <div className="font-semibold text-amber-700">安全边界：notify_sales 只允许 paste_only，detect_reply 只读检测，结果必须保持 sent=false。</div>
+            </div>
+          </>
+        ) : null}
 
-        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        {activeTab === "config" || activeTab === "download-test" ? (
+        <div className={activeTab === "config" ? "mt-5 grid gap-5" : "mt-5 grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]"}>
+          {activeTab === "config" ? (
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
               <div className="flex items-center gap-2">
@@ -716,7 +781,9 @@ export default function WechatAgent() {
               </div>
             </div>
           </section>
+          ) : null}
 
+          {activeTab === "download-test" ? (
           <section className="rounded-lg border border-[#dfe5ee] bg-white">
             <div className="flex items-center gap-2 border-b border-[#edf1f6] px-4 py-3">
               <ShieldCheckIcon size={16} className="text-emerald-600" />
@@ -770,8 +837,17 @@ export default function WechatAgent() {
               ) : null}
             </div>
           </section>
+          ) : null}
         </div>
+        ) : null}
 
+        {activeTab === "download-test" ? (
+          <div className="mt-5">
+            <LocalWechatAgentTestPanel />
+          </div>
+        ) : null}
+
+        {activeTab === "tasks" ? (
         <section className="mt-5 rounded-lg border border-[#dfe5ee] bg-white">
           <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
             <div className="flex items-center gap-2">
@@ -780,17 +856,22 @@ export default function WechatAgent() {
             </div>
             <span className="text-xs text-[#8b95a6]">待处理任务 {pendingTasks.length} 条</span>
           </div>
+          <div className="border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs leading-5 text-blue-800">
+            当前仅展示待执行任务，历史任务记录将在后续版本开放。
+          </div>
           <div className="overflow-auto">
-            <table className="w-full min-w-[860px] text-left text-xs">
+            <table className="w-full min-w-[980px] text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
                   <th className="px-4 py-3 font-semibold">创建时间</th>
                   <th className="px-4 py-3 font-semibold">微信昵称</th>
                   <th className="px-4 py-3 font-semibold">任务类型</th>
+                  <th className="px-4 py-3 font-semibold">模式</th>
                   <th className="px-4 py-3 font-semibold">内容摘要</th>
                   <th className="px-4 py-3 font-semibold">状态</th>
-                  <th className="px-4 py-3 font-semibold">执行时间</th>
-                  <th className="px-4 py-3 font-semibold">失败原因</th>
+                  <th className="px-4 py-3 font-semibold">更新时间</th>
+                  <th className="px-4 py-3 font-semibold">failure_stage</th>
+                  <th className="px-4 py-3 text-right font-semibold">详情</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -800,6 +881,7 @@ export default function WechatAgent() {
                       <td className="px-4 py-3 text-slate-600">{formatTime(task.created_at)}</td>
                       <td className="px-4 py-3 font-semibold text-slate-800">{task.target_nickname || "-"}</td>
                       <td className="px-4 py-3 text-slate-600">{taskTypeText(task.task_type)}</td>
+                      <td className="px-4 py-3 text-slate-600">{taskModeText(task.mode)}</td>
                       <td className="px-4 py-3 text-slate-600">{shortText(task.message)}</td>
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 font-semibold text-amber-700">
@@ -807,19 +889,96 @@ export default function WechatAgent() {
                           {taskStatusText(task.status)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-600">{formatTime(task.pasted_at || task.sent_at)}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatTime(task.updated_at || task.pasted_at || task.sent_at)}</td>
                       <td className="px-4 py-3 text-slate-600">{task.failure_stage || "-"}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end">
+                          <button
+                            onClick={() => void handleOpenTaskDetail(task)}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            <EyeIcon size={13} />
+                            查看
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-slate-500">暂无待处理任务</td>
+                    <td colSpan={9} className="px-4 py-10 text-center text-slate-500">暂无待处理任务</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </section>
+        ) : null}
+
+        {selectedTask ? (
+          <div className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
+            <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[#dfe5ee] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
+              <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
+                <div>
+                  <div className="text-sm font-bold text-[#1a1f2e]">任务详情 #{selectedTask.id}</div>
+                  <div className="mt-1 text-xs text-[#8b95a6]">
+                    {taskTypeText(selectedTask.task_type)} / {taskModeText(selectedTask.mode)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedTask(null)}
+                  className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                >
+                  <XIcon size={16} />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-4">
+                {taskDetailLoading ? (
+                  <div className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                    <Loader2Icon size={14} className="animate-spin" />
+                    正在加载任务详情
+                  </div>
+                ) : null}
+                <div className="grid gap-3 text-xs sm:grid-cols-2">
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">target_nickname</div>
+                    <div className="mt-1 text-slate-800">{selectedTask.target_nickname || "-"}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">status</div>
+                    <div className="mt-1 text-slate-800">{taskStatusText(selectedTask.status)}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">failure_stage</div>
+                    <div className="mt-1 text-slate-800">{selectedTask.failure_stage || "-"}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">created_at / updated_at</div>
+                    <div className="mt-1 text-slate-800">{formatTime(selectedTask.created_at)} / {formatTime(selectedTask.updated_at)}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">lead_id / staff_id</div>
+                    <div className="mt-1 text-slate-800">{selectedTask.lead_id || "-"} / {selectedTask.staff_id || "-"}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="text-[11px] font-semibold text-slate-500">agent</div>
+                    <div className="mt-1 text-slate-800">{selectedTask.agent_hostname || "-"} / {selectedTask.agent_pid || "-"}</div>
+                  </div>
+                </div>
+                <div className="mt-3 rounded-md border border-slate-200 px-3 py-2 text-xs">
+                  <div className="text-[11px] font-semibold text-slate-500">消息内容</div>
+                  <div className="mt-1 whitespace-pre-wrap text-slate-800">{selectedTask.message || "-"}</div>
+                </div>
+                <div className="mt-3 rounded-md border border-slate-200 px-3 py-2 text-xs">
+                  <div className="text-[11px] font-semibold text-slate-500">raw_result</div>
+                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700">
+                    {selectedTask.raw_result || "-"}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     </section>
   );
