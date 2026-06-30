@@ -7,6 +7,7 @@ import ctypes.wintypes
 import json
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from app.wechat_ui.ocr_matcher import match_ocr_text_to_nickname
@@ -33,7 +34,7 @@ def safe_name(value: str) -> str:
 
 
 def json_safe(value):
-    """把 OCR 引擎返回值转换为 JSON 可序列化结构。"""
+    """把 OCR 引擎返回值转成 JSON 可序列化结构。"""
     if hasattr(value, "item"):
         return value.item()
     if isinstance(value, tuple):
@@ -45,17 +46,68 @@ def json_safe(value):
     return value
 
 
+def build_ocr_title_regions(rect: dict) -> dict[str, tuple[int, int, int, int]]:
+    """构建微信窗口顶部标题 OCR 的两个候选区域。"""
+    left = int(rect["left"])
+    top = int(rect["top"])
+    right = int(rect["right"])
+    bottom = int(rect["bottom"])
+    width = max(1, right - left)
+    height = max(1, bottom - top)
+
+    tight_local = get_chat_title_ocr_region(width, height)
+    chat_panel_left = _estimate_chat_panel_left(width)
+    standard_local = (
+        max(chat_panel_left + 8, tight_local[0] - 12),
+        8,
+        min(chat_panel_left + 332, width - 20),
+        min(78, height),
+    )
+
+    def _clamp_region(region: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        local_x1, local_y1, local_x2, local_y2 = region
+        x1 = left + local_x1
+        y1 = top + local_y1
+        x2 = left + local_x2
+        y2 = top + local_y2
+        x1 = max(left, min(x1, right - 1))
+        y1 = max(top, min(y1, bottom - 1))
+        x2 = max(x1 + 1, min(x2, right))
+        y2 = max(y1 + 1, min(y2, top + 78, bottom))
+        return x1, y1, x2, y2
+
+    return {
+        "title_left_tight": _clamp_region(tight_local),
+        "title_left_standard": _clamp_region(standard_local),
+    }
+
+
+def _estimate_chat_panel_left(window_width: int) -> int:
+    """估算右侧聊天面板左边界，避免裁到左侧搜索框和会话列表。"""
+    left_sidebar_width = 68
+    conversation_list_width = 240
+    return min(max(left_sidebar_width + conversation_list_width, int(window_width * 0.34)), max(0, window_width - 320))
+
+
+def get_chat_title_ocr_region(window_width: int, window_height: int) -> tuple[int, int, int, int]:
+    """
+    返回完整微信窗口截图内部坐标系下的联系人标题 OCR 区域。
+    坐标格式: left, top, right, bottom
+    """
+    chat_panel_left = _estimate_chat_panel_left(window_width)
+    left = chat_panel_left + 12
+    top = 10
+    right = min(chat_panel_left + 280, window_width - 20)
+    bottom = min(72, window_height)
+    return left, top, max(left + 1, right), max(top + 1, bottom)
+
+
 def calculate_region(rect: dict, region: str) -> tuple[int, int, int, int]:
-    """计算 OCR 截图区域。"""
+    """计算 OCR 裁剪区域。"""
     width = int(rect["right"] - rect["left"])
     height = int(rect["bottom"] - rect["top"])
     if region == "top_title":
-        return (
-            int(rect["left"] + width * 0.36),
-            int(rect["top"] + height * 0.00),
-            int(rect["right"] - width * 0.06),
-            int(rect["top"] + height * 0.13),
-        )
+        return build_ocr_title_regions(rect)["title_left_standard"]
     if region == "right_profile_card":
         return (
             int(rect["left"] + width * 0.58),
@@ -73,6 +125,21 @@ def calculate_region(rect: dict, region: str) -> tuple[int, int, int, int]:
     raise ValueError(f"不支持的 OCR 区域: {region}")
 
 
+def _strip_trailing_pure_symbols(text: str) -> str:
+    """只去掉尾部纯空白或符号，不碰字母、数字、中文。"""
+    value = (text or "").rstrip()
+    while value:
+        ch = value[-1]
+        if ch.isspace():
+            value = value[:-1]
+            continue
+        if unicodedata.category(ch).startswith("P") or ch in "[]（）()【】<>《》『』「」":
+            value = value[:-1]
+            continue
+        break
+    return value
+
+
 def capture_region(region_bbox: tuple[int, int, int, int], path: Path) -> dict:
     """保存指定区域截图，失败时返回结构化错误。"""
     from app.wechat_ui.screenshot_debug import capture_screen_result
@@ -87,7 +154,7 @@ def capture_region(region_bbox: tuple[int, int, int, int], path: Path) -> dict:
 
 
 def preprocess_top_title_image(cropped_path: str, output_path: Path) -> str:
-    """对顶部标题截图做最小预处理，提升小字号 OCR 稳定性。"""
+    """对标题区域做最小预处理。"""
     from PIL import Image, ImageEnhance, ImageOps
 
     img = Image.open(cropped_path).convert("RGB")
@@ -100,8 +167,37 @@ def preprocess_top_title_image(cropped_path: str, output_path: Path) -> str:
     return str(output_path)
 
 
+def save_title_region_overlay(
+    full_window_path: str,
+    window_rect: dict,
+    title_regions: dict[str, tuple[int, int, int, int]],
+    output_path: Path,
+) -> str | None:
+    """在完整窗口截图上画出联系人 OCR 裁剪框。"""
+    try:
+        from PIL import Image, ImageDraw
+
+        img = Image.open(full_window_path).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        origin_x = int(window_rect["left"])
+        origin_y = int(window_rect["top"])
+        colors = {
+            "title_left_tight": "red",
+            "title_left_standard": "orange",
+        }
+        for name, bbox in title_regions.items():
+            x1, y1, x2, y2 = bbox
+            local_box = (x1 - origin_x, y1 - origin_y, x2 - origin_x, y2 - origin_y)
+            draw.rectangle(local_box, outline=colors.get(name, "red"), width=3)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(output_path))
+        return str(output_path)
+    except Exception:
+        return None
+
+
 def run_easyocr(image_path: str) -> tuple[str, float, str, list, str | None, str | None]:
-    """运行 EasyOCR，未安装时返回清晰错误。"""
+    """运行 EasyOCR。"""
     try:
         import easyocr
     except ImportError:
@@ -149,7 +245,7 @@ def run_tesseract_if_available(image_path: str) -> tuple[str, float, str, list, 
 
 
 def run_paddleocr(image_path: str) -> tuple[str, float, str, list, str | None, str | None]:
-    """运行 PaddleOCR，未安装时返回清晰错误。"""
+    """运行 PaddleOCR。"""
     try:
         from paddleocr import PaddleOCR
     except ImportError:
@@ -202,6 +298,9 @@ def build_ocr_result(
     error: str | None = None,
     failure_stage: str | None = None,
     min_confidence: float = 0.75,
+    ocr_title_regions_tried: list[str] | None = None,
+    ocr_title_region: str | None = None,
+    ocr_title_candidates_by_region: dict | None = None,
 ) -> dict:
     """构建统一 OCR 验证结果。"""
     match = match_ocr_text_to_nickname(
@@ -210,6 +309,21 @@ def build_ocr_result(
         confidence=confidence,
         min_confidence=min_confidence,
     )
+    stripped_text = _strip_trailing_pure_symbols(ocr_text)
+    if stripped_text and stripped_text != (ocr_text or "").strip():
+        stripped_match = match_ocr_text_to_nickname(
+            ocr_text=stripped_text,
+            expected_nickname=expected_nickname,
+            confidence=confidence,
+            min_confidence=min_confidence,
+        )
+        if stripped_match.get("matched") and stripped_match.get("match_method") in {
+            "exact_match",
+            "exact_case_insensitive_match",
+            "exact_normalized_match",
+        }:
+            match = stripped_match
+
     strong_title_match = (
         region == "top_title"
         and match.get("matched")
@@ -254,6 +368,9 @@ def build_ocr_result(
         "cropped_path": cropped_path,
         "preprocessed_path": preprocessed_path,
         "error": error,
+        "ocr_title_regions_tried": ocr_title_regions_tried or [],
+        "ocr_title_region": ocr_title_region,
+        "ocr_title_candidates_by_region": ocr_title_candidates_by_region or {},
     }
 
 
@@ -312,55 +429,112 @@ def verify_contact_by_top_title_ocr(
 
     nickname_safe = safe_name(expected_nickname)
     full_bbox = (int(rect["left"]), int(rect["top"]), int(rect["right"]), int(rect["bottom"]))
-    title_bbox = calculate_region(rect, "top_title")
     screenshot_path = run_dir / f"{nickname_safe}_top_title_{engine}_full.png"
-    cropped_path = run_dir / f"{nickname_safe}_top_title_{engine}_crop.png"
-
     full_capture = capture_region(full_bbox, screenshot_path)
-    crop_capture = capture_region(title_bbox, cropped_path)
-    if not full_capture["success"] or not crop_capture["success"]:
+    if not full_capture["success"]:
         return build_ocr_result(
             expected_nickname=expected_nickname,
             region="top_title",
             ocr_text="",
             confidence=0.0,
             screenshot_path=full_capture.get("path"),
-            cropped_path=crop_capture.get("path"),
             engine=engine,
-            error=full_capture.get("error") or crop_capture.get("error"),
+            error=full_capture.get("error"),
             failure_stage="screenshot_failed",
             min_confidence=min_confidence,
         )
 
-    preprocessed_path = None
-    ocr_input_path = crop_capture["path"]
-    if engine != "none":
-        try:
-            preprocessed_path = preprocess_top_title_image(
-                crop_capture["path"],
-                run_dir / f"{nickname_safe}_top_title_{engine}_preprocessed.png",
-            )
-            ocr_input_path = preprocessed_path
-        except Exception:
-            preprocessed_path = None
+    title_regions = build_ocr_title_regions(rect)
+    overlay_path = save_title_region_overlay(
+        full_capture["path"],
+        rect,
+        title_regions,
+        run_dir / "full_window_with_contact_ocr_box.png",
+    )
+    tried_regions: list[str] = []
+    candidates_by_region: dict[str, list[str]] = {}
+    cropped_paths_by_region: dict[str, str | None] = {}
+    preprocessed_paths_by_region: dict[str, str | None] = {}
+    best_result: dict | None = None
+    last_error: str | None = None
+    last_failure_stage: str | None = None
+    actual_engine = engine
 
-    ocr_text, confidence, actual_engine, raw_results, error, failure_stage = run_ocr_engine(
-        ocr_input_path,
-        engine,
-    )
-    result = build_ocr_result(
-        expected_nickname=expected_nickname,
-        region="top_title",
-        ocr_text=ocr_text,
-        confidence=confidence,
-        screenshot_path=full_capture["path"],
-        cropped_path=crop_capture["path"],
-        preprocessed_path=preprocessed_path,
-        engine=actual_engine,
-        raw_results=raw_results,
-        error=error,
-        failure_stage=failure_stage,
-        min_confidence=min_confidence,
-    )
-    result["position"] = position
-    return result
+    for region_name in ("title_left_tight", "title_left_standard"):
+        tried_regions.append(region_name)
+        bbox = title_regions[region_name]
+        cropped_path = run_dir / f"{nickname_safe}_top_title_{region_name}_{engine}_crop.png"
+        crop_capture = capture_region(bbox, cropped_path)
+        cropped_paths_by_region[region_name] = crop_capture.get("path")
+        if not crop_capture["success"]:
+            candidates_by_region[region_name] = []
+            last_error = crop_capture.get("error")
+            last_failure_stage = crop_capture.get("stage")
+            continue
+
+        preprocessed_path = None
+        ocr_input_path = crop_capture["path"]
+        if engine != "none":
+            try:
+                preprocessed_path = preprocess_top_title_image(
+                    crop_capture["path"],
+                    run_dir / f"{nickname_safe}_top_title_{region_name}_{engine}_preprocessed.png",
+                )
+                ocr_input_path = preprocessed_path
+            except Exception:
+                preprocessed_path = None
+        preprocessed_paths_by_region[region_name] = preprocessed_path
+
+        ocr_text, confidence, actual_engine, raw_results, error, failure_stage = run_ocr_engine(
+            ocr_input_path,
+            engine,
+        )
+        candidate_texts = [value for value in (ocr_text, _strip_trailing_pure_symbols(ocr_text)) if (value or "").strip()]
+        candidates_by_region[region_name] = list(dict.fromkeys(candidate_texts))
+        result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text=ocr_text,
+            confidence=confidence,
+            screenshot_path=full_capture["path"],
+            cropped_path=crop_capture["path"],
+            preprocessed_path=preprocessed_path,
+            engine=actual_engine,
+            raw_results=raw_results,
+            error=error,
+            failure_stage=failure_stage,
+            min_confidence=min_confidence,
+            ocr_title_regions_tried=tried_regions[:],
+            ocr_title_region=region_name,
+            ocr_title_candidates_by_region={**candidates_by_region},
+        )
+        result["cropped_paths_by_region"] = dict(cropped_paths_by_region)
+        result["preprocessed_paths_by_region"] = dict(preprocessed_paths_by_region)
+        result["overlay_path"] = overlay_path
+        best_result = result
+        if result.get("verified"):
+            break
+
+    if best_result is None:
+        best_result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text="",
+            confidence=0.0,
+            screenshot_path=full_capture.get("path"),
+            cropped_path=cropped_paths_by_region.get("title_left_tight") or cropped_paths_by_region.get("title_left_standard"),
+            engine=engine,
+            error=last_error,
+            failure_stage=last_failure_stage or "screenshot_failed",
+            min_confidence=min_confidence,
+            ocr_title_regions_tried=tried_regions,
+            ocr_title_region=None,
+            ocr_title_candidates_by_region=candidates_by_region,
+        )
+        best_result["cropped_paths_by_region"] = dict(cropped_paths_by_region)
+        best_result["preprocessed_paths_by_region"] = dict(preprocessed_paths_by_region)
+        best_result["overlay_path"] = overlay_path
+
+    best_result["position"] = position
+    best_result["overlay_path"] = overlay_path
+    return best_result

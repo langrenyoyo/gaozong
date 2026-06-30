@@ -127,6 +127,110 @@ def test_ocr_top_title_normalized_exact_match_ignores_low_confidence():
     assert result["match_method"] == "exact_normalized_match"
 
 
+def test_build_ocr_title_regions_are_narrow():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_title_regions
+
+    rect = {"left": 100, "top": 200, "right": 980, "bottom": 900}
+    regions = build_ocr_title_regions(rect)
+
+    tight = regions["title_left_tight"]
+    standard = regions["title_left_standard"]
+    width = rect["right"] - rect["left"]
+
+    assert tight[2] - tight[0] <= int(width * 0.60)
+    assert tight[3] - tight[1] <= 72
+    assert tight[0] >= rect["left"] + 320
+    assert standard[0] >= rect["left"] + 308
+    assert standard[2] - standard[0] <= int(width * 0.60)
+    assert standard[3] - standard[1] <= 72
+
+
+def test_ocr_title_regions_start_after_conversation_list():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_title_regions
+
+    rect = {"left": 0, "top": 0, "right": 886, "bottom": 700}
+    regions = build_ocr_title_regions(rect)
+
+    assert regions["title_left_tight"][0] >= 320
+    assert regions["title_left_standard"][0] >= 308
+    assert regions["title_left_tight"][2] <= 600
+    assert regions["title_left_standard"][2] <= 640
+
+
+def test_ocr_top_title_trims_trailing_symbol_only():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_result
+
+    result = build_ocr_result(
+        expected_nickname="A张生177020658",
+        region="top_title",
+        ocr_text="A张生177020658 [",
+        confidence=0.92,
+        screenshot_path="full.png",
+        engine="easyocr",
+    )
+
+    assert result["matched"] is True
+    assert result["verified"] is True
+    assert result["manual_review_required"] is False
+    assert result["failure_stage"] is None
+    assert result["matched_text"] == "A张生177020658"
+
+
+def test_ocr_top_title_rejects_noise_suffix():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_result
+
+    result = build_ocr_result(
+        expected_nickname="黄照",
+        region="top_title",
+        ocr_text="黄照 01AAAGACAAAVGVI CIAIO",
+        confidence=0.96,
+        screenshot_path="full.png",
+        engine="easyocr",
+    )
+
+    assert result["matched"] is False
+    assert result["verified"] is False
+    assert result["manual_review_required"] is True
+    assert result["failure_stage"] == "ocr_text_wrong"
+
+    result = build_ocr_result(
+        expected_nickname="Aw3",
+        region="top_title",
+        ocr_text="AW3 UCK 多贝问s",
+        confidence=0.96,
+        screenshot_path="full.png",
+        engine="easyocr",
+    )
+
+    assert result["matched"] is False
+    assert result["verified"] is False
+    assert result["manual_review_required"] is True
+    assert result["failure_stage"] == "ocr_text_wrong"
+
+
+def test_ocr_top_title_tracks_region_candidates():
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_result
+
+    result = build_ocr_result(
+        expected_nickname="A张生177020658",
+        region="top_title",
+        ocr_text="A张生177020658 [",
+        confidence=0.92,
+        screenshot_path="full.png",
+        engine="easyocr",
+        ocr_title_regions_tried=["title_left_tight", "title_left_standard"],
+        ocr_title_region="title_left_tight",
+        ocr_title_candidates_by_region={
+            "title_left_tight": ["A张生177020658"],
+            "title_left_standard": ["A张生177020658 ["],
+        },
+    )
+
+    assert result["ocr_title_regions_tried"] == ["title_left_tight", "title_left_standard"]
+    assert result["ocr_title_region"] == "title_left_tight"
+    assert result["ocr_title_candidates_by_region"]["title_left_tight"] == ["A张生177020658"]
+
+
 def test_contact_verifier_uses_ocr_after_uia_title_failed():
     from app.wechat_ui.contact_verifier import verify_current_chat_contact
 

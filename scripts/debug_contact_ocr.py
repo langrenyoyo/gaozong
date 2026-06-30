@@ -163,12 +163,8 @@ def calculate_region(rect: dict, region: str) -> tuple[int, int, int, int]:
     width = int(rect["right"] - rect["left"])
     height = int(rect["bottom"] - rect["top"])
     if region == "top_title":
-        return (
-            int(rect["left"] + width * 0.36),
-            int(rect["top"] + height * 0.00),
-            int(rect["right"] - width * 0.06),
-            int(rect["top"] + height * 0.13),
-        )
+        regions = build_ocr_title_regions(rect)
+        return regions["title_left_standard"]
     if region == "right_profile_card":
         return (
             int(rect["left"] + width * 0.58),
@@ -184,6 +180,12 @@ def calculate_region(rect: dict, region: str) -> tuple[int, int, int, int]:
             int(rect["bottom"] - height * 0.10),
         )
     raise ValueError(f"不支持的区域: {region}")
+
+
+def build_ocr_title_regions(rect: dict) -> dict[str, tuple[int, int, int, int]]:
+    from app.wechat_ui.contact_ocr_verifier import build_ocr_title_regions as _build
+
+    return _build(rect)
 
 
 def capture_region(region_bbox: tuple[int, int, int, int], path: Path) -> dict:
@@ -352,6 +354,16 @@ def run_debug(args: argparse.Namespace) -> dict:
     cropped_path = run_dir / f"{nickname_safe}_{args.region}_{args.engine}_crop.png"
     full_capture = capture_region(full_bbox, screenshot_path)
     crop_capture = capture_region(bbox, cropped_path)
+    overlay_path = None
+    if args.region == "top_title" and full_capture["success"]:
+        from app.wechat_ui.contact_ocr_verifier import save_title_region_overlay
+
+        overlay_path = save_title_region_overlay(
+            full_capture["path"],
+            rect,
+            build_ocr_title_regions(rect),
+            run_dir / "full_window_with_contact_ocr_box.png",
+        )
 
     if not full_capture["success"] or not crop_capture["success"]:
         error = full_capture.get("error") or crop_capture.get("error")
@@ -366,6 +378,7 @@ def run_debug(args: argparse.Namespace) -> dict:
             error=error,
             failure_stage="screenshot_failed",
         )
+        result["overlay_path"] = overlay_path
     else:
         preprocessed_path = None
         ocr_input_path = crop_capture["path"]
@@ -396,6 +409,7 @@ def run_debug(args: argparse.Namespace) -> dict:
             error=error,
             failure_stage=failure_stage,
         )
+        result["overlay_path"] = overlay_path
 
     output_path = run_dir / "contact_ocr_result.json"
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
