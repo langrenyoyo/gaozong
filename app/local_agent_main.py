@@ -11,6 +11,9 @@ import platform
 import json
 import threading
 import socket
+import time
+import sys
+from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI
@@ -65,6 +68,7 @@ DEFAULT_PORT = 19000
 HEARTBEAT_INTERVAL_SECONDS = 10
 AGENT_CLIENT_ID = "local-agent-default"
 AGENT_DISPLAY_NAME = "小高AI微信助手"
+DEFAULT_TASK_POLL_INTERVAL_SECONDS = 5.0
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
     "http://localhost:5173",
@@ -247,6 +251,10 @@ def start_heartbeat_loop(server_url: str | None) -> threading.Thread | None:
     )
     thread.start()
     return thread
+
+
+def _runtime_now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def _write_back_task_result(
@@ -1045,6 +1053,101 @@ def create_local_agent_app(
     _wechat_task_lock = threading.Lock()
     if server_url:
         start_heartbeat_loop(server_url)
+
+    app.state.runtime_lock = threading.Lock()
+    app.state.runtime_poll_thread = None
+    app.state.runtime_poll_interval_seconds = float(
+        os.getenv("LOCAL_AGENT_TASK_POLL_INTERVAL_SECONDS", str(DEFAULT_TASK_POLL_INTERVAL_SECONDS))
+    )
+    app.state.runtime_state = {
+        "task_polling_enabled": False,
+        "last_poll_at": None,
+        "last_execute_poll_at": None,
+        "last_detect_poll_at": None,
+        "last_task_result": None,
+        "last_error": None,
+    }
+    app.state.runtime_poll_once = None
+
+    def _runtime_snapshot() -> dict:
+        thread = app.state.runtime_poll_thread
+        with app.state.runtime_lock:
+            state = dict(app.state.runtime_state)
+        return {
+            "online": True,
+            "task_polling_enabled": bool(state["task_polling_enabled"]),
+            "server_url": server_url,
+            "last_poll_at": state["last_poll_at"],
+            "last_execute_poll_at": state["last_execute_poll_at"],
+            "last_detect_poll_at": state["last_detect_poll_at"],
+            "last_task_result": state["last_task_result"],
+            "last_error": state["last_error"],
+            "version": BUILD_VERSION,
+            "mode": "exe" if getattr(sys, "frozen", False) else "dev",
+            "poll_loop_started": bool(thread and thread.is_alive()),
+            "poll_interval_seconds": app.state.runtime_poll_interval_seconds,
+        }
+
+    def _runtime_poll_loop() -> None:
+        while True:
+            with app.state.runtime_lock:
+                enabled = bool(app.state.runtime_state["task_polling_enabled"])
+            if not enabled:
+                time.sleep(app.state.runtime_poll_interval_seconds)
+                continue
+
+            poll_started_at = _runtime_now_iso()
+            with app.state.runtime_lock:
+                app.state.runtime_state["last_poll_at"] = poll_started_at
+                app.state.runtime_state["last_error"] = None
+
+            try:
+                poll_once = app.state.runtime_poll_once
+                if poll_once is None:
+                    raise RuntimeError("runtime_poll_once_not_configured")
+                execute_result, detect_result = poll_once()
+                now = _runtime_now_iso()
+                with app.state.runtime_lock:
+                    app.state.runtime_state["last_execute_poll_at"] = now
+                    app.state.runtime_state["last_detect_poll_at"] = now
+                    app.state.runtime_state["last_task_result"] = {
+                        "execute": _safe_json_serialize(execute_result),
+                        "detect": _safe_json_serialize(detect_result),
+                    }
+            except Exception as exc:
+                logger.warning("runtime polling loop error: %s", exc, exc_info=True)
+                with app.state.runtime_lock:
+                    app.state.runtime_state["last_error"] = str(exc)
+            time.sleep(app.state.runtime_poll_interval_seconds)
+
+    def _ensure_runtime_poll_loop_started() -> None:
+        thread = app.state.runtime_poll_thread
+        if thread and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=_runtime_poll_loop,
+            name="local-agent-task-polling",
+            daemon=True,
+        )
+        app.state.runtime_poll_thread = thread
+        thread.start()
+
+    @app.get("/runtime/status")
+    def runtime_status():
+        return _runtime_snapshot()
+
+    @app.post("/runtime/enable-task-polling")
+    def runtime_enable_task_polling():
+        with app.state.runtime_lock:
+            app.state.runtime_state["task_polling_enabled"] = True
+        _ensure_runtime_poll_loop_started()
+        return _runtime_snapshot()
+
+    @app.post("/runtime/disable-task-polling")
+    def runtime_disable_task_polling():
+        with app.state.runtime_lock:
+            app.state.runtime_state["task_polling_enabled"] = False
+        return _runtime_snapshot()
 
     @app.get("/agent/version")
     def agent_version():
@@ -1866,6 +1969,13 @@ def create_local_agent_app(
 
         return result
 
+
+    def _default_runtime_poll_once() -> tuple[dict, dict]:
+        execute_result = agent_poll_and_execute(PollAndExecuteRequest())
+        detect_result = agent_poll_and_detect(PollAndDetectRequest())
+        return execute_result, detect_result
+
+    app.state.runtime_poll_once = _default_runtime_poll_once
 
     # ========== P0-REPLY-2：回复检测 ==========
 

@@ -1,9 +1,12 @@
 import {
   CheckCircle2Icon,
   ClockIcon,
+  CopyIcon,
   Loader2Icon,
   MessageCircleIcon,
+  PauseIcon,
   PlayIcon,
+  PowerIcon,
   RefreshCwIcon,
   SendIcon,
   ShieldCheckIcon,
@@ -15,16 +18,22 @@ import { fetchAgentStatus } from "../../../api/agent";
 import type { AgentStatusData } from "../../../api/types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import {
+  LOCAL_AGENT_BASE_URL,
   checkLocalAgentHealth,
   createStaff,
   createWechatTask,
+  disableLocalAgentTaskPolling,
+  enableLocalAgentTaskPolling,
   fetchPendingWechatTasks,
+  fetchLocalAgentRuntimeStatus,
   fetchStaffList,
   pollAndExecuteWechatTask,
 } from "../api";
-import type { PollAndExecuteResponse, Staff, WechatTask } from "../types";
+import type { LocalAgentRuntimeStatus, PollAndExecuteResponse, Staff, WechatTask } from "../types";
 
 const DEFAULT_TEST_NICKNAME = "Aw3";
+const SOURCE_START_COMMAND = "cd E:\\work\\project\\auto_wechat\npython app\\local_agent_main.py --host 127.0.0.1 --port 19000 --server-url http://127.0.0.1:9000";
+const EXE_START_COMMAND = 'Start-Process ".\\dist\\local-agent\\小高AI微信助手.exe"';
 
 function formatTime(value?: string | null): string {
   return formatDateTimeLocal(value || null);
@@ -61,9 +70,11 @@ function agentOnlineText(status: AgentStatusData | null, localOnline: boolean | 
 export default function WechatAgent() {
   const [agentStatus, setAgentStatus] = useState<AgentStatusData | null>(null);
   const [localOnline, setLocalOnline] = useState<boolean | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [pendingTasks, setPendingTasks] = useState<WechatTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
   const [creatingStaff, setCreatingStaff] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testNickname, setTestNickname] = useState(DEFAULT_TEST_NICKNAME);
@@ -88,14 +99,16 @@ export default function WechatAgent() {
   async function refreshPage() {
     setLoading(true);
     try {
-      const [statusResponse, health, staffs, tasks] = await Promise.all([
+      const [statusResponse, health, runtime, staffs, tasks] = await Promise.all([
         fetchAgentStatus().catch(() => null),
         checkLocalAgentHealth().catch(() => null),
+        fetchLocalAgentRuntimeStatus().catch(() => null),
         fetchStaffList("active"),
         fetchPendingWechatTasks({ limit: 20 }),
       ]);
       setAgentStatus(statusResponse?.data || null);
       setLocalOnline(Boolean(health?.success));
+      setRuntimeStatus(runtime);
       setStaffList(staffs);
       setPendingTasks(tasks);
     } catch (err) {
@@ -108,6 +121,60 @@ export default function WechatAgent() {
   useEffect(() => {
     void refreshPage();
   }, []);
+
+  async function handleRefreshRuntime() {
+    setRuntimeLoading(true);
+    try {
+      const [health, runtime] = await Promise.all([
+        checkLocalAgentHealth().catch(() => null),
+        fetchLocalAgentRuntimeStatus().catch(() => null),
+      ]);
+      setLocalOnline(Boolean(health?.success));
+      setRuntimeStatus(runtime);
+      if (!health?.success) {
+        toast.warning("未检测到本机 Local Agent");
+      }
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }
+
+  async function handleEnablePolling() {
+    setRuntimeLoading(true);
+    try {
+      const runtime = await enableLocalAgentTaskPolling();
+      setRuntimeStatus(runtime);
+      setLocalOnline(true);
+      toast.success("本机 Agent 已开始接收任务");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "开始接收任务失败");
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }
+
+  async function handleDisablePolling() {
+    setRuntimeLoading(true);
+    try {
+      const runtime = await disableLocalAgentTaskPolling();
+      setRuntimeStatus(runtime);
+      setLocalOnline(true);
+      toast.success("本机 Agent 已暂停接收任务");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "暂停接收任务失败");
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }
+
+  async function handleCopyCommand(command: string) {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast.success("启动命令已复制");
+    } catch {
+      toast.error("复制失败，请手动选择命令文本");
+    }
+  }
 
   async function handleCreateStaff() {
     const name = newStaffName.trim();
@@ -250,6 +317,106 @@ export default function WechatAgent() {
             <div className="mt-2 text-[11px] text-[#8b95a6]">今日创建 / 待处理</div>
           </div>
         </div>
+
+        <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <PowerIcon size={16} className={localOnline ? "text-emerald-600" : "text-rose-600"} />
+              <h2 className="text-sm font-bold text-[#1a1f2e]">本机 Local Agent</h2>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => void handleRefreshRuntime()}
+                disabled={runtimeLoading}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <RefreshCwIcon size={14} className={runtimeLoading ? "animate-spin" : ""} />
+                检测连接
+              </button>
+              <button
+                onClick={() => void handleEnablePolling()}
+                disabled={!localOnline || runtimeLoading || runtimeStatus?.task_polling_enabled === true}
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                <PlayIcon size={14} />
+                开始接收任务
+              </button>
+              <button
+                onClick={() => void handleDisablePolling()}
+                disabled={!localOnline || runtimeLoading || runtimeStatus?.task_polling_enabled !== true}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+              >
+                <PauseIcon size={14} />
+                暂停接收任务
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.85fr)]">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">本机地址</div>
+                <div className="mt-1 break-all font-mono text-xs text-slate-800">{LOCAL_AGENT_BASE_URL}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">接收任务</div>
+                <div className={runtimeStatus?.task_polling_enabled ? "mt-1 text-sm font-bold text-emerald-600" : "mt-1 text-sm font-bold text-amber-700"}>
+                  {runtimeStatus?.task_polling_enabled ? "正在接收 9000 任务" : localOnline ? "已连接，未接收任务" : "Local Agent 未启动"}
+                </div>
+              </div>
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">上游服务地址</div>
+                <div className="mt-1 break-all text-xs text-slate-800">{runtimeStatus?.server_url || "未配置"}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">版本 / 模式</div>
+                <div className="mt-1 text-xs text-slate-800">{runtimeStatus ? `${runtimeStatus.version} / ${runtimeStatus.mode}` : "-"}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">最近轮询</div>
+                <div className="mt-1 text-xs text-slate-800">{formatTime(runtimeStatus?.last_poll_at)}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 px-3 py-3">
+                <div className="text-[11px] font-semibold text-slate-500">最近错误</div>
+                <div className="mt-1 break-all text-xs text-slate-800">{runtimeStatus?.last_error || "-"}</div>
+              </div>
+            </div>
+
+            <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800" : "rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-6 text-rose-800"}>
+              <div className="font-bold">{localOnline ? "Local Agent 在线" : "Local Agent 未启动"}</div>
+              <div>浏览器只能检测当前电脑的 127.0.0.1:19000，不能直接保证启动 exe。启动后点击“检测连接”刷新状态。</div>
+              {!localOnline ? (
+                <div className="mt-3 space-y-2">
+                  <div className="rounded bg-white/70 p-2">
+                    <div className="mb-1 font-semibold">源码启动</div>
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5">{SOURCE_START_COMMAND}</pre>
+                    <button
+                      onClick={() => void handleCopyCommand(SOURCE_START_COMMAND)}
+                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-800"
+                    >
+                      <CopyIcon size={13} />
+                      复制源码命令
+                    </button>
+                  </div>
+                  <div className="rounded bg-white/70 p-2">
+                    <div className="mb-1 font-semibold">exe 启动</div>
+                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5">{EXE_START_COMMAND}</pre>
+                    <button
+                      onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
+                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-rose-200 bg-white px-2 text-[11px] font-semibold text-rose-800"
+                    >
+                      <CopyIcon size={13} />
+                      复制 exe 命令
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3 rounded bg-white/70 p-2 text-emerald-900">
+                  最近任务结果：{runtimeStatus?.last_task_result ? shortText(JSON.stringify(runtimeStatus.last_task_result), 120) : "-"}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
 
         <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-6 text-blue-800">
           <div className="font-bold">启动说明</div>

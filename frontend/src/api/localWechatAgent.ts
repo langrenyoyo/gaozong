@@ -16,6 +16,21 @@ export interface LocalAgentHealth {
   };
 }
 
+export interface LocalAgentRuntimeStatus {
+  online: boolean;
+  task_polling_enabled: boolean;
+  server_url: string | null;
+  last_poll_at: string | null;
+  last_execute_poll_at: string | null;
+  last_detect_poll_at: string | null;
+  last_task_result: Record<string, unknown> | null;
+  last_error: string | null;
+  version: string;
+  mode: "dev" | "exe" | string;
+  poll_loop_started?: boolean;
+  poll_interval_seconds?: number;
+}
+
 export interface LocalWechatTestPayload {
   nickname: string;
   message: string;
@@ -331,6 +346,18 @@ async function requestLocalAgent<T>(path: string, init?: RequestInit): Promise<T
 
 export async function checkLocalAgentHealth(): Promise<LocalAgentHealth> {
   return requestLocalAgent<LocalAgentHealth>("/health", { method: "GET" });
+}
+
+export async function fetchLocalAgentRuntimeStatus(): Promise<LocalAgentRuntimeStatus> {
+  return requestLocalAgent<LocalAgentRuntimeStatus>("/runtime/status", { method: "GET" });
+}
+
+export async function enableLocalAgentTaskPolling(): Promise<LocalAgentRuntimeStatus> {
+  return requestLocalAgent<LocalAgentRuntimeStatus>("/runtime/enable-task-polling", { method: "POST" });
+}
+
+export async function disableLocalAgentTaskPolling(): Promise<LocalAgentRuntimeStatus> {
+  return requestLocalAgent<LocalAgentRuntimeStatus>("/runtime/disable-task-polling", { method: "POST" });
 }
 
 export async function startLocalWechatTest(
