@@ -283,7 +283,7 @@ const DOUYIN_EVENT_DIRECTION: Record<string, { label: string; tone: string; alig
     align: "ml-8",
   },
   im_enter_direct_msg: {
-    label: "进入私信/系统事件",
+    label: "系统提示",
     tone: "border-slate-200 bg-slate-50 text-slate-600",
     align: "",
   },
@@ -291,7 +291,7 @@ const DOUYIN_EVENT_DIRECTION: Record<string, { label: string; tone: string; alig
 
 function douyinDirection(event?: string | null) {
   return DOUYIN_EVENT_DIRECTION[event || ""] || {
-    label: "其他事件",
+    label: "消息",
     tone: "border-zinc-200 bg-zinc-50 text-zinc-600",
     align: "",
   };
@@ -739,9 +739,6 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
             <MessageCircleIcon size={15} className="text-[#2563eb]" />
             <h3 className="text-sm font-bold text-[#1a1f2e]">抖音私信记录</h3>
           </div>
-          <p className="mt-1 truncate text-[11px] text-[#8b95a6]" title={conversationId || undefined}>
-            会话 ID：{conversationId ? shortId(conversationId, 12, 8) : "未识别，按客户 open_id 兜底"}
-          </p>
         </div>
         <span className="rounded-md bg-[#f8fafc] px-2 py-0.5 text-[11px] font-semibold text-[#64748b]">
           消息数：{loading ? "..." : total}
@@ -765,7 +762,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
         <div className="space-y-3">
           {hiddenCount > 0 ? (
             <div className="rounded-lg bg-[#f8fafc] px-3 py-2 text-[11px] text-[#8b95a6]">
-              右侧仅显示最近 {visibleEvents.length} 条私信摘要，完整会话可在抖音A小高客服页查看。
+              右侧仅显示最近 {visibleEvents.length} 条私信摘要，完整会话可在抖音AI小高客服页查看。
             </div>
           ) : null}
           {visibleEvents.map((event) => {
@@ -777,22 +774,11 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
                   <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${direction.tone}`}>
                     {direction.label}
                   </span>
-                  <span className="font-mono text-[10px] text-[#8b95a6]">{event.event || "-"}</span>
                   <span className="ml-auto text-[10px] text-[#8b95a6]">{formatTime(event.created_at)}</span>
                 </div>
                 <p className="whitespace-pre-wrap break-words rounded-lg bg-white px-3 py-2 text-[12px] leading-5 text-[#334155]">
                   {messageText || "无文本内容"}
                 </p>
-                <div className="mt-2 grid gap-1 text-[10px] text-[#8b95a6]">
-                  <div className="truncate" title={event.from_user_id || undefined}>from_user_id：{shortId(event.from_user_id)}</div>
-                  <div className="truncate" title={event.to_user_id || undefined}>to_user_id：{shortId(event.to_user_id)}</div>
-                  <div className="truncate" title={event.server_message_id || undefined}>server_message_id：{shortId(event.server_message_id, 12, 8)}</div>
-                  <div className="flex flex-wrap gap-2">
-                    <span>lead_action：{event.lead_action || "-"}</span>
-                    <span>contact_extract_status：{event.contact_extract_status || "-"}</span>
-                    <span>customer_contact：{event.customer_contact || "-"}</span>
-                  </div>
-                </div>
               </article>
             );
           })}
