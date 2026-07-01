@@ -12,7 +12,7 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
 from app.integrations.douyin_webhook import process_webhook_event
-from app.models import DouyinAuthorizedAccount, DouyinLead
+from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 from app.routers.leads import router as leads_router
 
 # 测试固定商户：企业号绑定 / 请求上下文 / 直接创建的线索 merchant_id 必须一致
@@ -235,3 +235,114 @@ def test_lead_payload_exposes_safe_derived_display_fields_and_status_label():
     assert item["city"] == "涓婃捣"
     assert item["car_model"] == "姣呰窘03"
     assert item["budget"] == "20-30涓"
+
+
+def test_lead_detail_uses_shared_profile_deriver_for_raw_data_aliases():
+    db = TestSession()
+    lead = DouyinLead(
+        source="douyin",
+        lead_type="私信",
+        customer_name="画像字段客户",
+        customer_contact="13800000001",
+        content="客户已留资",
+        source_id="profile-alias-open-id",
+        merchant_id=MERCHANT_ID,
+        raw_data=json.dumps(
+            {
+                "source_channel": "抖音私信",
+                "brand_model": "宝马5系",
+                "vehicle_year": "2020",
+                "budget_range": "20-30万",
+                "location_city": "广州",
+                "contact_extract": {"status": "matched", "phone": "13800000001"},
+            },
+            ensure_ascii=False,
+        ),
+        status="pending",
+    )
+    db.add(lead)
+    db.commit()
+    lead_id = lead.id
+    db.close()
+
+    resp = _client().get(f"/leads/{lead_id}")
+
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["source_channel"] == "抖音私信"
+    assert item["car_model"] == "宝马5系"
+    assert item["car_year"] == "2020"
+    assert item["budget"] == "20-30万"
+    assert item["city"] == "广州"
+
+
+def test_lead_detail_uses_customer_messages_without_cross_account_leakage():
+    db = TestSession()
+    lead = DouyinLead(
+        source="douyin",
+        lead_type="私信",
+        customer_name="消息画像客户",
+        customer_contact="13800000002",
+        content="客户已留资",
+        source_id="profile-message-open-id",
+        merchant_id=MERCHANT_ID,
+        account_open_id="account_001",
+        conversation_short_id="profile_message_conv",
+        raw_data=json.dumps(
+            {
+                "account_open_id": "account_001",
+                "conversation_short_id": "profile_message_conv",
+                "contact_extract": {"status": "matched", "phone": "13800000002"},
+            },
+            ensure_ascii=False,
+        ),
+        status="pending",
+    )
+    db.add(lead)
+    db.flush()
+    good_content = {
+        "conversation_short_id": "profile_message_conv",
+        "message_type": "text",
+        "text": "预算10万，在广州，想看20年宝马5系。",
+    }
+    leaked_content = {
+        "conversation_short_id": "profile_message_conv",
+        "message_type": "text",
+        "text": "深圳，预算99万，想看奔驰E级。",
+    }
+    db.add_all(
+        [
+            DouyinWebhookEvent(
+                event="im_receive_msg",
+                from_user_id="profile-message-open-id",
+                to_user_id="account_001",
+                conversation_short_id="profile_message_conv",
+                parsed_content_json=json.dumps(good_content, ensure_ascii=False),
+                raw_body=json.dumps({"content": json.dumps(good_content, ensure_ascii=False)}, ensure_ascii=False),
+                is_duplicate=0,
+                lead_id=lead.id,
+            ),
+            DouyinWebhookEvent(
+                event="im_receive_msg",
+                from_user_id="profile-message-open-id",
+                to_user_id="other_account",
+                conversation_short_id="profile_message_conv",
+                parsed_content_json=json.dumps(leaked_content, ensure_ascii=False),
+                raw_body=json.dumps({"content": json.dumps(leaked_content, ensure_ascii=False)}, ensure_ascii=False),
+                is_duplicate=0,
+            ),
+        ]
+    )
+    db.commit()
+    lead_id = lead.id
+    db.close()
+
+    resp = _client().get(f"/leads/{lead_id}")
+
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["car_model"] in {"宝马5系", "宝马"}
+    assert item["car_year"] == "20款"
+    assert item["budget"] == "10万"
+    assert item["city"] == "广州"
+    assert "奔驰" not in json.dumps(item, ensure_ascii=False)

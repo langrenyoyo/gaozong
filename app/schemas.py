@@ -478,8 +478,10 @@ class LeadOut(BaseModel):
     customer_contact: Optional[str] = None
     phone: Optional[str] = None
     wechat: Optional[str] = None
+    source_channel: Optional[str] = None
     city: Optional[str] = None
     car_model: Optional[str] = None
+    car_year: Optional[str] = None
     budget: Optional[str] = None
     all_extracted_contacts: list[str] = Field(default_factory=list)
     contact_extract_status: Optional[str] = None
@@ -521,11 +523,13 @@ class LeadOut(BaseModel):
                 "content": getattr(value, "content", None),
                 "source_url": getattr(value, "source_url", None),
                 "source_id": getattr(value, "source_id", None),
+                "source_channel": getattr(value, "source_channel", None),
                 "merchant_id": getattr(value, "merchant_id", None),
                 "account_open_id": getattr(value, "account_open_id", None),
                 "conversation_short_id": getattr(value, "conversation_short_id", None),
                 "city": getattr(value, "city", None),
                 "car_model": getattr(value, "car_model", None),
+                "car_year": getattr(value, "car_year", None),
                 "budget": getattr(value, "budget", None),
                 "assigned_staff_id": getattr(value, "assigned_staff_id", None),
                 "assigned_at": getattr(value, "assigned_at", None),
@@ -550,9 +554,11 @@ class LeadOut(BaseModel):
 
         data.setdefault("phone", contact_extract.get("phone"))
         data.setdefault("wechat", contact_extract.get("wechat"))
-        data.setdefault("city", _extract_first_string(raw_data, ("city", "location", "customer_city")))
-        data.setdefault("car_model", _extract_first_string(raw_data, ("car_model", "vehicle_model", "intent_car_model")))
-        data.setdefault("budget", _extract_first_string(raw_data, ("budget", "intent_budget")))
+        data.setdefault("source_channel", _extract_first_string(raw_data, ("source_channel", "source")))
+        data.setdefault("city", _extract_first_string(raw_data, ("city", "location", "location_city", "customer_city")))
+        data.setdefault("car_model", _extract_first_string(raw_data, ("intent_car", "car_model", "vehicle_model", "intent_car_model", "model", "series", "brand_model")))
+        data.setdefault("car_year", _extract_first_string(raw_data, ("car_year", "year", "vehicle_year", "model_year", "years")))
+        data.setdefault("budget", _extract_first_string(raw_data, ("budget", "intent_budget", "budget_range", "price_range")))
         data.setdefault("contact_extract_status", contact_extract.get("status"))
         data.setdefault(
             "original_message_text",

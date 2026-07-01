@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.models import (
     DouyinLead,
+    DouyinWebhookEvent,
     FeedbackRecord,
     LeadFollowupRecord,
     LeadNotification,
@@ -20,6 +21,11 @@ from app.models import (
     SalesStaff,
 )
 from app.services import sales_followup_service
+from app.services.douyin_customer_profile_deriver import (
+    derive_profile_fields_from_messages,
+    derive_profile_fields_from_raw_data,
+    merge_profile_fields,
+)
 
 
 HIGH_INTENT_KEYWORDS = ("价格", "多少钱", "报价", "最低", "预算", "看车", "到店", "电话", "微信", "联系")
@@ -136,15 +142,21 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
     """构造兼容旧 LeadOut 的响应字典，并追加展示字段。"""
     # 销售跟进状态（纯派生：未反馈/已联系/联系方式错误），供前端 AI小高线索页面展示
     followup_status = sales_followup_service.derive_sales_followup_status(db, lead)
+    profile_fields = _derive_lead_profile_fields(db, lead, include_messages=include_detail)
     payload = {
         "id": lead.id,
         "source": lead.source,
+        "source_channel": profile_fields.get("source_channel") or lead.source,
         "lead_type": lead.lead_type,
         "customer_name": lead.customer_name,
         "customer_contact": lead.customer_contact,
         "content": lead.content,
         "source_url": lead.source_url,
         "source_id": lead.source_id,
+        "car_model": profile_fields.get("intent_car"),
+        "car_year": profile_fields.get("car_year"),
+        "budget": profile_fields.get("budget"),
+        "city": profile_fields.get("city"),
         "merchant_id": lead.merchant_id,
         "account_open_id": lead.account_open_id,
         "conversation_short_id": lead.conversation_short_id,
@@ -166,6 +178,60 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
         payload["assigned_staff"] = _staff_payload(staff)
         payload["timeline"] = build_timeline(db, lead.id)
     return payload
+
+
+def _derive_lead_profile_fields(db: Session, lead: DouyinLead, *, include_messages: bool) -> dict[str, str | None]:
+    raw_fields = derive_profile_fields_from_raw_data(_safe_raw_data(lead))
+    message_fields = derive_profile_fields_from_messages(_lead_customer_message_texts(db, lead)) if include_messages else {}
+    return merge_profile_fields(raw_fields, message_fields)
+
+
+def _lead_customer_message_texts(db: Session, lead: DouyinLead) -> list[str]:
+    if not lead.account_open_id or not lead.conversation_short_id:
+        return []
+    rows = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.event == "im_receive_msg")
+        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.to_user_id == lead.account_open_id)
+        .filter(DouyinWebhookEvent.conversation_short_id == lead.conversation_short_id)
+        .order_by(DouyinWebhookEvent.message_create_time.asc(), DouyinWebhookEvent.created_at.asc(), DouyinWebhookEvent.id.asc())
+        .all()
+    )
+    values: list[str] = []
+    for row in rows:
+        if lead.source_id and row.from_user_id and row.from_user_id != lead.source_id:
+            continue
+        content = _parse_webhook_content(row.raw_body)
+        text = content.get("text")
+        if isinstance(text, str) and text.strip():
+            values.append(text.strip())
+            continue
+        parsed = _safe_load_json(row.parsed_content_json)
+        parsed_text = parsed.get("text") if isinstance(parsed, dict) else None
+        if isinstance(parsed_text, str) and parsed_text.strip():
+            values.append(parsed_text.strip())
+    return values
+
+
+def _safe_load_json(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_webhook_content(raw_body: str | None) -> dict[str, Any]:
+    payload = _safe_load_json(raw_body)
+    content = payload.get("content")
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        return _safe_load_json(content)
+    return {}
 
 
 def _status_reason(lead: DouyinLead) -> str:

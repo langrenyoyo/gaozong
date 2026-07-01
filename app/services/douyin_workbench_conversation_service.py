@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -24,6 +23,11 @@ from app.models import (
     DouyinWebhookEvent,
 )
 from app.services.contact_extractor import extract_contacts_from_text
+from app.services.douyin_customer_profile_deriver import (
+    derive_profile_fields_from_messages,
+    derive_profile_fields_from_raw_data,
+    merge_profile_fields,
+)
 from app.services.douyin_live_check_service import (
     list_authorized_accounts,
     list_persisted_authorized_accounts,
@@ -62,8 +66,6 @@ HIGH_INTENT_KEYWORDS = (
     "电话多少",
 )
 MANUAL_REQUIRED_KEYWORDS = ("人工", "客服", "转人工", "真人", "电话联系", "加微信")
-SYSTEM_NOTICE_TEXTS = ("你收到一条新消息，请打开抖音app查看",)
-PROFILE_CITIES = ("广州", "深圳", "上海", "北京")
 
 
 @dataclass(frozen=True)
@@ -389,7 +391,10 @@ def get_conversation_profile(
     lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
     raw_data = _safe_lead_raw_data(lead)
     trace_message = latest or first
-    message_profile = _profile_fields_from_customer_messages(messages)
+    profile_fields = merge_profile_fields(
+        derive_profile_fields_from_raw_data(raw_data),
+        _profile_fields_from_customer_messages(messages),
+    )
 
     result = {
         "conversation_id": first.conversation_key,
@@ -400,11 +405,11 @@ def get_conversation_profile(
         "nickname": first.nick_name or (lead.customer_name if lead else None) or first.open_id,
         "avatar": first.avatar,
         "online_status": "unknown",
-        "source_channel": _profile_source_channel(lead, raw_data),
-        "intent_car": _first_raw_value(raw_data, ("intent_car", "car_model", "model", "series", "brand_model")) or message_profile.get("intent_car"),
-        "car_year": _first_raw_value(raw_data, ("car_year", "year", "vehicle_year")) or message_profile.get("car_year"),
-        "budget": _first_raw_value(raw_data, ("budget", "budget_range", "price_range")) or message_profile.get("budget"),
-        "city": _first_raw_value(raw_data, ("city", "location_city", "customer_city")) or message_profile.get("city"),
+        "source_channel": _profile_source_channel(lead, profile_fields),
+        "intent_car": profile_fields.get("intent_car"),
+        "car_year": profile_fields.get("car_year"),
+        "budget": profile_fields.get("budget"),
+        "city": profile_fields.get("city"),
         "tags": build_conversation_tags(db, messages),
         "lead_score": _profile_lead_score(lead, raw_data),
         "trace": _profile_trace(db, trace_message),
@@ -1030,125 +1035,21 @@ def _safe_lead_raw_data(lead: DouyinLead | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _first_raw_value(raw_data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        value = raw_data.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return None
-
-
 def _profile_fields_from_customer_messages(messages: list[WorkbenchMessage]) -> dict[str, str | None]:
     """只从客户入站消息中提取右侧画像已有字段。"""
-    result: dict[str, str | None] = {
-        "intent_car": None,
-        "car_year": None,
-        "budget": None,
-        "city": None,
-    }
-    known_brand: str | None = None
-    for message in _sort_messages(messages):
-        if message.event != "im_receive_msg":
-            continue
-        text = str(message.content or "").strip()
-        if not text or text in SYSTEM_NOTICE_TEXTS:
-            continue
-        brand = _extract_profile_brand(text)
-        if brand:
-            known_brand = brand
-        vehicle = _extract_profile_vehicle(text, known_brand)
-        if vehicle:
-            result["intent_car"] = vehicle
-            vehicle_brand = _extract_profile_brand(vehicle)
-            if vehicle_brand:
-                known_brand = vehicle_brand
-        year = _extract_profile_year(text)
-        if year:
-            result["car_year"] = year
-        budget = _extract_profile_budget(text)
-        if budget:
-            result["budget"] = budget
-        city = _extract_profile_city(text)
-        if city:
-            result["city"] = city
-    return result
-
-
-def _extract_profile_budget(text: str) -> str | None:
-    match = re.search(r"(\d{1,3})\s*万\s*(左右|以内|以上|上下|多)?", text)
-    if not match:
-        return None
-    return f"{match.group(1)}万{match.group(2) or ''}"
-
-
-def _extract_profile_year(text: str) -> str | None:
-    pair = re.search(r"((?:20)?\d{2})\s*(?:款)?\s*(?:/|或|或者|、|和)\s*((?:20)?\d{2})\s*款", text)
-    if pair:
-        return f"{_normalize_profile_year(pair.group(1))} / {_normalize_profile_year(pair.group(2))}"
-    values = re.findall(r"((?:20)?\d{2})\s*款", text)
-    if len(values) >= 2:
-        return f"{_normalize_profile_year(values[-2])} / {_normalize_profile_year(values[-1])}"
-    if values:
-        return _normalize_profile_year(values[-1])
-    return None
-
-
-def _normalize_profile_year(value: str) -> str:
-    text = str(value or "").strip()
-    if len(text) == 2:
-        return f"{text}款"
-    return f"{text}款"
-
-
-def _extract_profile_vehicle(text: str, known_brand: str | None) -> str | None:
-    patterns = (
-        r"(宝马)\s*(530Li|525Li|520Li|320Li|325Li|330Li)",
-        r"(宝马)\s*(5系|3系|X3|X5)",
-        r"(奥迪)\s*(A6L|A6|A4L|Q5L)",
-        r"(奔驰)\s*(E级|C级|GLC)",
+    return derive_profile_fields_from_messages(
+        [
+            str(message.content or "")
+            for message in _sort_messages(messages)
+            if message.event == "im_receive_msg"
+        ]
     )
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return f"{match.group(1)}{match.group(2)}"
-
-    standalone = re.search(
-        r"(?<![A-Za-z0-9])(530Li|525Li|520Li|320Li|325Li|330Li|A6L|A6|A4L|Q5L)(?![A-Za-z0-9])",
-        text,
-        re.IGNORECASE,
-    )
-    if standalone:
-        model = standalone.group(1)
-        if (known_brand == "宝马" or "宝马" in text) and model.lower().endswith("li"):
-            return f"宝马{model}"
-        if (known_brand == "奥迪" or "奥迪" in text) and model.upper().startswith("A"):
-            return f"奥迪{model}"
-        return model
-    return None
 
 
-def _extract_profile_brand(text: str) -> str | None:
-    for brand in ("宝马", "奥迪", "奔驰"):
-        if brand in text:
-            return brand
-    return None
-
-
-def _extract_profile_city(text: str) -> str | None:
-    normalized = re.sub(r"[\s，。！？!?,.]", "", text)
-    for city in PROFILE_CITIES:
-        if city in normalized:
-            return city
-    return None
-
-
-def _profile_source_channel(lead: DouyinLead | None, raw_data: dict[str, Any]) -> str:
+def _profile_source_channel(lead: DouyinLead | None, profile_fields: dict[str, Any]) -> str:
     if lead and lead.source:
         return lead.source
-    return _first_raw_value(raw_data, ("source", "source_channel")) or "douyin"
+    return str(profile_fields.get("source_channel") or "douyin")
 
 
 def _profile_lead_score(lead: DouyinLead | None, raw_data: dict[str, Any]) -> int:

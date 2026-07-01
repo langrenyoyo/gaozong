@@ -232,6 +232,13 @@ def test_single_v_does_not_match_inside_english_word():
     assert result.wechats == []
 
 
+def test_single_v_does_not_match_plain_english_word_prefix():
+    result = extract_contacts_from_text("conversation is visible")
+
+    assert result.wechat is None
+    assert result.wechats == []
+
+
 def test_plain_english_token_without_car_context_is_not_wechat():
     result = extract_contacts_from_text("douyin open_id server_message_id conversation_short_id https miniapp")
 

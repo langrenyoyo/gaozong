@@ -28,7 +28,7 @@ _WECHAT_KEYWORD_RE = re.compile(
     re.IGNORECASE,
 )
 _SINGLE_V_WECHAT_RE = re.compile(
-    rf"(?<![A-Za-z0-9_-])v\s*(?:我)?\s*[：:\s]*\s*{_WECHAT_ACCOUNT_RE}",
+    rf"(?<![A-Za-z0-9_-])v(?:我\s*|\s+我?\s*|[：:]\s*){_WECHAT_ACCOUNT_RE}",
     re.IGNORECASE,
 )
 _WEAK_WECHAT_CONTEXT_KEYWORDS = (

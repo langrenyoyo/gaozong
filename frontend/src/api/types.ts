@@ -8,8 +8,10 @@ export interface Lead {
   customer_contact: string | null;
   phone?: string | null;
   wechat?: string | null;
+  source_channel?: string | null;
   city?: string | null;
   car_model?: string | null;
+  car_year?: string | null;
   budget?: string | null;
   all_extracted_contacts?: string[];
   contact_extract_status?: string | null;

@@ -225,13 +225,15 @@ function rawString(data: Record<string, unknown>, keys: string[]): string | null
   return null;
 }
 
-function leadDerivedValue(lead: Lead, field: "city" | "car_model" | "budget"): string | null {
+function leadDerivedValue(lead: Lead, field: "source_channel" | "city" | "car_model" | "car_year" | "budget"): string | null {
   const directValue = lead[field];
   if (typeof directValue === "string" && directValue.trim()) return directValue.trim();
   const raw = parseLeadRawData(lead);
-  if (field === "city") return rawString(raw, ["city", "location", "customer_city"]);
-  if (field === "car_model") return rawString(raw, ["car_model", "vehicle_model", "intent_car_model"]);
-  return rawString(raw, ["budget", "intent_budget"]);
+  if (field === "source_channel") return rawString(raw, ["source_channel", "source"]);
+  if (field === "city") return rawString(raw, ["city", "location", "location_city", "customer_city"]);
+  if (field === "car_model") return rawString(raw, ["intent_car", "car_model", "vehicle_model", "intent_car_model", "model", "series", "brand_model"]);
+  if (field === "car_year") return rawString(raw, ["car_year", "year", "vehicle_year", "model_year", "years"]);
+  return rawString(raw, ["budget", "intent_budget", "budget_range", "price_range"]);
 }
 
 function leadTraceItems(lead: Lead): Array<{ label: string; value: string; title?: string }> {
@@ -792,8 +794,10 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
+  const sourceChannel = leadDerivedValue(lead, "source_channel") || lead.source;
   const city = leadDerivedValue(lead, "city") || "未提供";
   const carModel = leadDerivedValue(lead, "car_model") || "未提供";
+  const carYear = leadDerivedValue(lead, "car_year") || "未提供";
   const budget = leadDerivedValue(lead, "budget") || "未提供";
   const traceItems = leadTraceItems(lead);
   const currentStaffName = lead.assigned_staff?.name || staffName || "未分配";
@@ -841,9 +845,10 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
           {[
             ["联系方式", leadPrimaryContact(lead)],
             ["提取状态", contactStatusLabel(lead.contact_extract_status)],
-            ["来源", lead.source],
+            ["来源", sourceChannel],
             ["线索类型", lead.lead_type || "-"],
             ["意向车型", carModel],
+            ["年份", carYear],
             ["预算", budget],
             ["城市", city],
             ["当前销售", currentStaffName],
