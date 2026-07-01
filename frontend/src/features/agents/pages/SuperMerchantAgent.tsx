@@ -86,11 +86,6 @@ function AgentEditor({
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [categoryLoadFailed, setCategoryLoadFailed] = useState(false);
   const [bindingLoadFailed, setBindingLoadFailed] = useState(false);
-  const [previewQuestion, setPreviewQuestion] = useState("客户问：预算10万买什么车合适？");
-  const [previewReply, setPreviewReply] = useState("");
-  const [previewError, setPreviewError] = useState("");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewUsedCategories, setPreviewUsedCategories] = useState<string[]>([]);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -104,9 +99,6 @@ function AgentEditor({
           }
         : emptyDraft,
     );
-    setPreviewReply("");
-    setPreviewError("");
-    setPreviewUsedCategories([]);
   }, [agent]);
 
   useEffect(() => {
@@ -190,45 +182,11 @@ function AgentEditor({
     }, categoryKeys);
   };
 
-  const generatePreview = async () => {
-    const text = previewQuestion.trim();
-    if (!text) {
-      toast.error("请输入测试问题");
-      return;
-    }
-
-    setPreviewLoading(true);
-    setPreviewError("");
-    try {
-      const result = await previewAiAgent({
-        agent_id: agent?.agent_id || null,
-        name: draft.name.trim() || "AI小高智能体",
-        persona_prompt: draft.prompt || "",
-        knowledge_prompt: draft.knowledge_base_text || "",
-        knowledge_category_keys: selectedCategoryKeys,
-        message: text,
-      });
-      setPreviewReply(result.reply_text || "暂无回复");
-      setPreviewUsedCategories(result.used_category_keys || []);
-      if (result.error) {
-        setPreviewError(result.error);
-      }
-      if (result.warnings?.length) {
-        toast.warning(result.warnings.join("；"));
-      }
-    } catch (error) {
-      setPreviewReply("");
-      setPreviewError(error instanceof Error ? error.message : "AI 回复预览失败");
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-30 grid place-items-center bg-slate-950/36 p-6 backdrop-blur-sm">
       <form
         onSubmit={submit}
-        className="grid max-h-[88vh] w-full max-w-[1120px] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl border border-[#dfe5ee] bg-white shadow-[0_24px_90px_rgba(15,23,42,0.24)]"
+        className="grid max-h-[88vh] w-full max-w-[760px] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl border border-[#dfe5ee] bg-white shadow-[0_24px_90px_rgba(15,23,42,0.24)]"
       >
         <header className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div className="flex items-center gap-3">
@@ -245,7 +203,7 @@ function AgentEditor({
           </button>
         </header>
 
-        <div className="grid min-h-0 gap-5 overflow-y-auto px-5 py-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-h-0 overflow-y-auto px-5 py-5">
           <div className="space-y-4">
           <label className="grid gap-1.5 text-xs">
             <span className="font-semibold text-[#475569]">智能体名称</span>
@@ -304,47 +262,6 @@ function AgentEditor({
             ) : null}
           </section>
           </div>
-
-          <aside className="flex min-h-[360px] flex-col rounded-xl border border-[#dfe5ee] bg-[#f8fafc]">
-            <div className="border-b border-[#e4e8f0] px-4 py-3">
-              <h3 className="text-sm font-bold text-[#1a1f2e]">AI 回复预览</h3>
-              <p className="mt-1 text-xs leading-5 text-[#8b95a6]">输入一条客户问题，预览当前智能体配置下的真实回复效果。</p>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-              <label className="grid gap-1.5 text-xs">
-                <span className="font-semibold text-[#475569]">测试问题</span>
-                <textarea
-                  value={previewQuestion}
-                  onChange={(event) => setPreviewQuestion(event.target.value)}
-                  className="min-h-[92px] resize-none rounded-xl border border-[#dfe5ee] bg-white px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:ring-4 focus:ring-blue-500/10"
-                  placeholder="输入客户问题"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={generatePreview}
-                disabled={previewLoading}
-                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.18)] disabled:opacity-60"
-              >
-                {previewLoading ? <RefreshCwIcon size={14} className="animate-spin" /> : <SendIcon size={14} />}
-                生成预览
-              </button>
-              {previewError ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">{previewError}</div>
-              ) : null}
-              <div className="min-h-[150px] flex-1 overflow-y-auto rounded-xl border border-[#e4e8f0] bg-white px-3 py-3 text-sm leading-6 text-[#374151]">
-                {previewReply || "暂无回复"}
-              </div>
-              <div className="flex flex-wrap gap-2 text-[11px] text-[#64748b]">
-                <span className="rounded-lg bg-white px-2 py-1 ring-1 ring-[#e4e8f0]">
-                  {previewUsedCategories.includes(BASE_CATEGORY_KEY) ? "已使用小高知识库" : "未使用小高知识库"}
-                </span>
-                {previewUsedCategories.filter((key) => key !== BASE_CATEGORY_KEY).map((key) => (
-                  <span key={key} className="rounded-lg bg-white px-2 py-1 ring-1 ring-[#e4e8f0]">{key}</span>
-                ))}
-              </div>
-            </div>
-          </aside>
         </div>
 
         <footer className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
