@@ -591,6 +591,19 @@ class LeadListResponse(BaseModel):
     message: str = "success"
 
 
+class LeadWechatNotifyStatus(BaseModel):
+    """线索微信通知资格只读状态。"""
+
+    allowed: bool
+    reason: str
+    message: str
+    status: str
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    existing_task_id: Optional[int] = None
+    existing_notification_id: Optional[int] = None
+
+
 # ========== 手动回复 ==========
 
 class ManualReply(BaseModel):

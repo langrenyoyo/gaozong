@@ -4,6 +4,7 @@ export type {
   DouyinSyncResponse,
   Lead,
   LeadListResponse,
+  LeadWechatNotifyStatus,
   ReportSummary,
   Staff,
   WebhookEvent,

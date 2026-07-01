@@ -2,6 +2,7 @@ export {
   assignLead,
   createLead,
   fetchLead,
+  fetchLeadWechatNotifyStatus,
   fetchLeads,
   fetchLeadsPage,
 } from "../../api/leads";

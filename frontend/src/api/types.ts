@@ -71,6 +71,17 @@ export interface LeadListResponse {
   message: string;
 }
 
+export interface LeadWechatNotifyStatus {
+  allowed: boolean;
+  reason: string;
+  message: string;
+  status: string;
+  lead_id?: number | null;
+  staff_id?: number | null;
+  existing_task_id?: number | null;
+  existing_notification_id?: number | null;
+}
+
 // ========== Raw webhook events ==========
 
 export type WebhookLeadAction =

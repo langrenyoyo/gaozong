@@ -6,9 +6,14 @@ from sqlalchemy.orm import Session
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import get_db
-from app.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut
+from app.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut, LeadWechatNotifyStatus
 from app.services import assign_service, lead_management_service, lead_service
 from app.services.lead_management_service import LeadListQuery
+from app.services.lead_wechat_notify_eligibility_service import (
+    LeadWechatNotifyDecision,
+    LeadWechatNotifyReason,
+    evaluate_lead_wechat_notify_eligibility,
+)
 
 
 router = APIRouter(prefix="/leads", tags=["线索管理"])
@@ -76,6 +81,22 @@ def list_leads(
     return items
 
 
+@router.get("/{lead_id}/wechat-notify-status", response_model=LeadWechatNotifyStatus)
+def get_lead_wechat_notify_status(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """只读查询线索是否允许手动通知销售。"""
+    _auth(context)
+    decision = evaluate_lead_wechat_notify_eligibility(
+        db=db,
+        context=context,
+        lead_id=lead_id,
+    )
+    return _to_wechat_notify_status(decision, context)
+
+
 @router.get("/{lead_id}", response_model=LeadOut)
 def get_lead(
     lead_id: int,
@@ -112,3 +133,41 @@ def assign_lead(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return lead_management_service.build_lead_payload(db, lead, include_detail=True)
+
+
+def _to_wechat_notify_status(
+    decision: LeadWechatNotifyDecision,
+    context: RequestContext,
+) -> LeadWechatNotifyStatus:
+    status, message = _notify_status_and_message(decision.reason, context)
+    return LeadWechatNotifyStatus(
+        allowed=decision.allowed,
+        reason=decision.reason,
+        message=message,
+        status=status,
+        lead_id=decision.lead_id,
+        staff_id=decision.staff_id,
+        existing_task_id=decision.existing_task_id,
+        existing_notification_id=decision.existing_notification_id,
+    )
+
+
+def _notify_status_and_message(reason: str, context: RequestContext) -> tuple[str, str]:
+    if reason == LeadWechatNotifyReason.OK:
+        return "ready", "可通知销售"
+    if reason == LeadWechatNotifyReason.PERMISSION_DENIED and not context.has_permission("auto_wechat:agent"):
+        return "not_opened", "当前套餐未开通小高 AI 微信助手"
+    mapping = {
+        LeadWechatNotifyReason.PERMISSION_DENIED: ("unavailable", "当前不可通知"),
+        LeadWechatNotifyReason.MERCHANT_REQUIRED: ("unavailable", "当前登录缺少商户上下文"),
+        LeadWechatNotifyReason.LEAD_NOT_FOUND: ("unavailable", "线索不存在或无权访问"),
+        LeadWechatNotifyReason.LEAD_NOT_ASSIGNED: ("not_assigned", "请先分配销售"),
+        LeadWechatNotifyReason.STAFF_MISMATCH: ("unavailable", "销售与线索分配不一致"),
+        LeadWechatNotifyReason.STAFF_NOT_ACTIVE: ("staff_unavailable", "销售已停用"),
+        LeadWechatNotifyReason.STAFF_WECHAT_NOT_CONFIGURED: ("staff_wechat_missing", "销售未配置微信昵称"),
+        LeadWechatNotifyReason.CONTACT_MISSING: ("not_ready_no_contact", "客户未提供手机号或微信号"),
+        LeadWechatNotifyReason.CONTACT_INVALID: ("contact_invalid", "联系方式无效"),
+        LeadWechatNotifyReason.ALREADY_SENT: ("task_done", "已通知销售"),
+        LeadWechatNotifyReason.EXISTING_PENDING_TASK: ("task_pending", "已有通知任务等待执行"),
+    }
+    return mapping.get(reason, ("unavailable", "当前不可通知"))

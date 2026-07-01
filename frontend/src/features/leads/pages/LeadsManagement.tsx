@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { assignLead, fetchLead, fetchLeadsPage } from "../api";
+import { assignLead, fetchLead, fetchLeadsPage, fetchLeadWechatNotifyStatus } from "../api";
 import { fetchStaffList } from "../api";
 import { fetchSummary } from "../api";
 import { syncDouyinLeads } from "../api";
@@ -26,7 +26,7 @@ import { sendLeadToStaff } from "../api";
 import { fetchNotificationRecords } from "../../../api/notifications";
 import { fetchAgentStatus } from "../api";
 import { fetchWebhookEvents } from "../api";
-import type { AgentStatusData, DouyinSyncResponse, Lead, ReportSummary, Staff, WechatDetectResponse, CheckRecord, WechatAutoDetectStatus, WebhookEvent } from "../types";
+import type { AgentStatusData, DouyinSyncResponse, Lead, LeadWechatNotifyStatus, ReportSummary, Staff, WechatDetectResponse, CheckRecord, WechatAutoDetectStatus, WebhookEvent } from "../types";
 import type { NotificationRecord } from "../../../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../../../lib/datetime";
 
@@ -387,6 +387,31 @@ function leadPrimaryContact(lead: Lead): string {
   return fallback ? `联系方式：${fallback}` : "未留联系方式";
 }
 
+function notifyStatusLabelText(status?: string | null): string {
+  const labels: Record<string, string> = {
+    not_opened: "未开通",
+    not_ready_no_contact: "缺少联系方式",
+    contact_invalid: "联系方式错误",
+    not_assigned: "未分配",
+    staff_wechat_missing: "销售微信未配置",
+    ready: "可通知",
+    task_pending: "等待执行",
+    task_done: "已通知",
+    staff_unavailable: "销售不可用",
+    unavailable: "不可通知",
+  };
+  return status ? labels[status] || "不可通知" : "未读取";
+}
+
+function notifyStatusToneClass(status?: string | null): string {
+  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "task_pending") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (status === "task_done") return "border-slate-200 bg-slate-50 text-slate-700";
+  if (status === "not_opened") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "contact_invalid" || status === "staff_unavailable") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-[#e4e8f0] bg-[#f8fafc] text-[#64748b]";
+}
+
 // ========== 同步弹窗 ==========
 
 type SyncPhase = "preview" | "syncing" | "result" | "error";
@@ -667,6 +692,8 @@ interface LeadDetailProps {
   isAutoDetectTarget: boolean;
   intervalSeconds: number;
   notifyLoading: boolean;
+  notifyStatus: LeadWechatNotifyStatus | null;
+  notifyStatusLoading: boolean;
   agentStatus: AgentStatusData;
   onOpenAssign: () => void;
   onDetect: () => void;
@@ -790,7 +817,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, loadingNotifications, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
+function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, loadingNotifications, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, notifyStatus, notifyStatusLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
@@ -809,7 +836,12 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
   const agentReason = agentDisabledReason(agentStatus);
   const canDetect = lead.status === "assigned" && lead.assigned_staff_id !== null && !detectLoading && agentStatus.can_run_wechat_action;
   const canSetAutoDetect = Boolean(pendingCheckId) && agentStatus.can_run_wechat_action;
-  const canSendToStaff = lead.status === "assigned" && lead.assigned_staff_id !== null && !notifyLoading;
+  const notifyStatusLabel = notifyStatusLabelText(notifyStatus?.status);
+  const notifyStatusTone = notifyStatusToneClass(notifyStatus?.status);
+  const notifyDisabledReason = notifyStatusLoading
+    ? "正在读取微信通知状态"
+    : notifyStatus?.message || "当前不可通知";
+  const canSendToStaff = Boolean(notifyStatus?.allowed) && !notifyLoading && !notifyStatusLoading;
 
   // 检测按钮禁用提示
   let detectDisabledReason = "";
@@ -1037,10 +1069,21 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
         {/* 发送线索给销售按钮（Demo） */}
         {lead.status === "assigned" && lead.assigned_staff_id ? (
           <div className="mt-2">
+            <div className={`mb-2 rounded-xl border px-3 py-2 text-xs ${notifyStatusTone}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">微信通知状态</span>
+                <span className="shrink-0 rounded-md bg-white/70 px-2 py-0.5 text-[11px] font-semibold">
+                  {notifyStatusLoading ? "读取中" : notifyStatusLabel}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-5">
+                {notifyStatusLoading ? "正在读取是否允许通知销售" : notifyStatus?.message || "当前不可通知"}
+              </p>
+            </div>
             <button
               onClick={onSendToStaff}
               disabled={!canSendToStaff}
-              title="创建微信通知任务，Local Agent 在线后将自动执行"
+              title={canSendToStaff ? "创建微信通知任务，Local Agent 在线后将自动执行" : notifyDisabledReason}
               className="h-9 w-full rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-xs font-semibold text-white shadow-[0_4px_12px_rgba(37,99,235,0.3)] disabled:cursor-not-allowed disabled:opacity-50 hover:from-blue-700 hover:to-indigo-700"
             >
               {notifyLoading ? "创建中..." : "通知销售"}
@@ -1158,6 +1201,8 @@ export default function LeadsManagement() {
   const [checksData, setChecksData] = useState<CheckRecord[]>([]);
   const [autoDetectStatus, setAutoDetectStatus] = useState<WechatAutoDetectStatus | null>(null);
   const [notifyLoading, setNotifyLoading] = useState(false);
+  const [notifyStatus, setNotifyStatus] = useState<LeadWechatNotifyStatus | null>(null);
+  const [notifyStatusLoading, setNotifyStatusLoading] = useState(false);
   const [notificationRecords, setNotificationRecords] = useState<NotificationRecord[]>([]);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentStatusData>(AGENT_STATUS_FALLBACK);
@@ -1217,6 +1262,10 @@ export default function LeadsManagement() {
   const loadNotificationRecordsForLead = useCallback(async (leadId: number) => {
     const result = await fetchNotificationRecords({ lead_id: leadId, limit: 20 });
     return result.records || [];
+  }, []);
+
+  const loadWechatNotifyStatusForLead = useCallback(async (leadId: number) => {
+    return fetchLeadWechatNotifyStatus(leadId);
   }, []);
 
   // 页面加载时拉取数据
@@ -1289,6 +1338,43 @@ export default function LeadsManagement() {
     };
   }, [loadNotificationRecordsForLead, selectedId]);
 
+  useEffect(() => {
+    if (!selectedId) {
+      setNotifyStatus(null);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadWechatNotifyStatus() {
+      setNotifyStatusLoading(true);
+      try {
+        const status = await loadWechatNotifyStatusForLead(selectedId);
+        if (!cancelled) {
+          setNotifyStatus(status);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setNotifyStatus({
+            allowed: false,
+            reason: "LOAD_FAILED",
+            status: "unavailable",
+            message: err instanceof Error ? err.message : "微信通知状态读取失败",
+            lead_id: selectedId,
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setNotifyStatusLoading(false);
+        }
+      }
+    }
+
+    void loadWechatNotifyStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadWechatNotifyStatusForLead, selectedId]);
+
   // ========== 同步流程 ==========
 
   const handleSyncPreview = async () => {
@@ -1346,6 +1432,9 @@ export default function LeadsManagement() {
       setAssignLeadDraft(null);
       // 刷新列表，保持选中线索
       await refreshData();
+      if (targetLead.id === selectedId) {
+        setNotifyStatus(await loadWechatNotifyStatusForLead(targetLead.id));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "分配失败";
       toast.error(message);
@@ -1504,6 +1593,7 @@ export default function LeadsManagement() {
         await Promise.all([
           refreshData(),
           loadNotificationRecordsForLead(selectedLead.id).then(setNotificationRecords),
+          loadWechatNotifyStatusForLead(selectedLead.id).then(setNotifyStatus),
         ]);
       } else {
         toast.error(result.message || "创建通知任务失败");
@@ -1897,6 +1987,8 @@ export default function LeadsManagement() {
             onSetAutoDetect={handleSetAutoDetect}
             onClearAutoDetect={handleClearAutoDetect}
             notifyLoading={notifyLoading}
+            notifyStatus={notifyStatus}
+            notifyStatusLoading={notifyStatusLoading}
             onSendToStaff={handleSendToStaff}
           />
         ) : (

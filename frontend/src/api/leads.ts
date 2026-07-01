@@ -9,7 +9,7 @@
  */
 
 import apiClient from "./client";
-import type { Lead, LeadListResponse } from "./types";
+import type { Lead, LeadListResponse, LeadWechatNotifyStatus } from "./types";
 
 export interface LeadListQuery {
   keyword?: string;
@@ -39,6 +39,11 @@ export async function fetchLeadsPage(query?: LeadListQuery): Promise<LeadListRes
 /** 获取单条线索详情 */
 export async function fetchLead(id: number): Promise<Lead> {
   return apiClient.get(`/leads/${id}`);
+}
+
+/** 获取单条线索的微信通知资格状态 */
+export async function fetchLeadWechatNotifyStatus(id: number): Promise<LeadWechatNotifyStatus> {
+  return apiClient.get(`/leads/${id}/wechat-notify-status`);
 }
 
 /** 创建线索（P0-FE-MAIN-2A：测试用） */
