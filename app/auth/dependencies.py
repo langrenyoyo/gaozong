@@ -95,6 +95,18 @@ def require_any_permission(permission_codes: list[str]) -> Callable[[RequestCont
     return checker
 
 
+def require_permissions(permission_codes: list[str]) -> Callable[[RequestContext], RequestContext]:
+    """生成必须同时具备全部权限的校验函数。"""
+
+    def checker(context: RequestContext) -> RequestContext:
+        missing = [code for code in permission_codes if not context.has_permission(code)]
+        if missing:
+            raise _auth_error(403, "PERMISSION_DENIED", f"缺少权限 {','.join(missing)}")
+        return context
+
+    return checker
+
+
 def require_merchant_access(merchant_id: str, context: RequestContext) -> RequestContext:
     """校验当前上下文是否可访问商户。"""
     if not context.has_merchant_access(merchant_id):

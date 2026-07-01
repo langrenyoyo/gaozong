@@ -28,7 +28,7 @@ def _context(merchant_id: str = "merchant-a") -> RequestContext:
         user_id="user-1",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id],
-        permission_codes=["auto_wechat:wechat_assistant"],
+        permission_codes=["auto_wechat:agent"],
     )
 
 
@@ -46,6 +46,23 @@ def _client(merchant_id: str = "merchant-a") -> TestClient:
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_request_context_required] = lambda: _context(merchant_id)
+    return TestClient(app)
+
+
+def _client_with_context(context: RequestContext) -> TestClient:
+    from app.main import create_app
+
+    app = create_app()
+
+    def _override_get_db():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_request_context_required] = lambda: context
     return TestClient(app)
 
 
@@ -178,3 +195,17 @@ def test_auto_assign_next_skips_disabled_inactive_deleted_and_uses_enabled_staff
         assert assigned.assigned_staff_id not in {disabled_id, inactive_id, deleted_id}
     finally:
         db.close()
+
+
+def test_staff_requires_agent_permission():
+    denied_context = RequestContext(
+        user_id="user-1",
+        merchant_id="merchant-a",
+        merchant_ids=["merchant-a"],
+        permission_codes=["auto_wechat:leads"],
+    )
+
+    response = _client_with_context(denied_context).get("/staff")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"

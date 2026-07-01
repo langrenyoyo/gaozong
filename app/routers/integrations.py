@@ -329,8 +329,10 @@ def get_douyin_account_conversations(
     account_id: str,
     account_open_id: str | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Aggregate real private-message webhook events into workbench conversations."""
+    _merchant_id_for_douyin_cs(context)
     resolved_account_open_id = account_open_id or account_id
     return list_account_conversations(db, account_open_id=resolved_account_open_id)
 
@@ -340,8 +342,10 @@ def get_douyin_conversation_messages(
     conversation_key: str,
     account_open_id: str | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message webhook events for one workbench conversation."""
+    _merchant_id_for_douyin_cs(context)
     return list_conversation_messages(
         db,
         conversation_key=conversation_key,
@@ -381,8 +385,10 @@ def get_douyin_conversation_profile_by_query(
     conversation_id: str,
     account_open_id: str | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return customer profile without putting conversation_id in the path."""
+    _merchant_id_for_douyin_cs(context)
     return _get_douyin_conversation_profile_response(
         account_id=account_id,
         conversation_key=conversation_id,
@@ -397,8 +403,10 @@ def get_douyin_conversation_profile(
     conversation_key: str,
     account_open_id: str | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return a read-only customer profile aggregated from 9000 local data."""
+    _merchant_id_for_douyin_cs(context)
     return _get_douyin_conversation_profile_response(
         account_id=account_id,
         conversation_key=conversation_key,
@@ -412,8 +420,10 @@ def get_douyin_conversation_messages_by_query(
     conversation_key: str,
     account_open_id: str | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message events without putting conversation_key in the path."""
+    _merchant_id_for_douyin_cs(context)
     return list_conversation_messages(
         db,
         conversation_key=conversation_key,

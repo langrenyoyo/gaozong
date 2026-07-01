@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import (
     WechatTaskCreateRequest,
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/wechat-tasks", tags=["微信任务队列"])
 
 
 def _merchant_id(context: RequestContext) -> str:
+    require_permission("auto_wechat:agent")(context)
     if not context.merchant_id:
         raise HTTPException(400, "当前登录态缺少商户 ID")
     return context.merchant_id

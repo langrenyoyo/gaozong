@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import StaffCreate, StaffOut, StaffUpdate
 from app.services import staff_service
@@ -13,6 +13,7 @@ router = APIRouter(prefix="/staff", tags=["销售人员"])
 
 
 def _merchant_id(context: RequestContext) -> str:
+    require_permission("auto_wechat:agent")(context)
     if not context.merchant_id:
         raise HTTPException(400, "当前登录态缺少商户 ID")
     return context.merchant_id

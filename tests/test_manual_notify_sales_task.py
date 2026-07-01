@@ -31,7 +31,7 @@ def _context(merchant_id: str | None = "merchant-a") -> RequestContext:
         user_id="user-1",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id] if merchant_id else [],
-        permission_codes=["auto_wechat:leads", "auto_wechat:wechat_assistant"],
+        permission_codes=["auto_wechat:leads", "auto_wechat:agent"],
     )
 
 
@@ -186,6 +186,50 @@ def test_cross_merchant_lead_returns_404():
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "LEAD_NOT_FOUND"
+
+
+def test_send_to_staff_requires_both_leads_and_agent_permissions():
+    staff_id = _insert_staff()
+    lead_id = _insert_lead(assigned_staff_id=staff_id)
+
+    only_leads = _client(
+        RequestContext(
+            user_id="user-1",
+            merchant_id="merchant-a",
+            merchant_ids=["merchant-a"],
+            permission_codes=["auto_wechat:leads"],
+        )
+    ).post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+    only_agent = _client(
+        RequestContext(
+            user_id="user-1",
+            merchant_id="merchant-a",
+            merchant_ids=["merchant-a"],
+            permission_codes=["auto_wechat:agent"],
+        )
+    ).post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+
+    assert only_leads.status_code == 403
+    assert only_agent.status_code == 403
+    assert _task_count() == 0
+
+
+def test_send_to_staff_missing_merchant_context_is_rejected_before_creating_task():
+    staff_id = _insert_staff()
+    lead_id = _insert_lead(assigned_staff_id=staff_id)
+
+    response = _client(
+        RequestContext(
+            user_id="user-1",
+            merchant_id=None,
+            merchant_ids=[],
+            permission_codes=["auto_wechat:leads", "auto_wechat:agent"],
+        )
+    ).post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "MERCHANT_CONTEXT_MISSING"
+    assert _task_count() == 0
 
 
 def test_inactive_staff_is_rejected():

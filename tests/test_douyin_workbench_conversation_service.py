@@ -25,13 +25,13 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
-def _context(merchant_id="merchant-1"):
+def _context(merchant_id="merchant-1", permission_codes: list[str] | None = None):
     return RequestContext(
         user_id="user-1",
         username="user-1",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id],
-        permission_codes=["auto_wechat:douyin_ai_cs"],
+        permission_codes=permission_codes or ["auto_wechat:douyin_ai_cs"],
     )
 
 
@@ -216,3 +216,25 @@ def test_mark_read_supports_fallback_conversation_key_without_short_id():
 
     assert response.status_code == 200
     assert _conversation_unread("account-open-1", fallback_key) == 0
+
+
+def test_douyin_workbench_user_conversation_entries_require_douyin_ai_cs_permission():
+    _insert_account()
+    _insert_event(event_key="inbound-1")
+    denied = _client(_context(permission_codes=["auto_wechat:leads"]))
+
+    responses = [
+        denied.get("/integrations/douyin/accounts/account-open-1/conversations"),
+        denied.get("/integrations/douyin/conversations/conv-1/messages", params={"account_open_id": "account-open-1"}),
+        denied.get(
+            "/integrations/douyin/accounts/account-open-1/conversation-profile",
+            params={"conversation_id": "conv-1"},
+        ),
+        denied.get("/integrations/douyin/accounts/account-open-1/conversations/conv-1/profile"),
+        denied.get(
+            "/integrations/douyin/conversation-messages",
+            params={"conversation_key": "conv-1", "account_open_id": "account-open-1"},
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403, 403]

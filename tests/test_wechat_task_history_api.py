@@ -25,17 +25,25 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
-def _context(merchant_id: str = "merchant-a", session_id: str | None = None) -> RequestContext:
+def _context(
+    merchant_id: str = "merchant-a",
+    session_id: str | None = None,
+    permission_codes: list[str] | None = None,
+) -> RequestContext:
     return RequestContext(
         user_id="user-1",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id],
-        permission_codes=["auto_wechat:wechat_assistant"],
+        permission_codes=permission_codes or ["auto_wechat:agent"],
         session_id=session_id,
     )
 
 
-def _client(merchant_id: str = "merchant-a", session_id: str | None = None) -> TestClient:
+def _client(
+    merchant_id: str = "merchant-a",
+    session_id: str | None = None,
+    permission_codes: list[str] | None = None,
+) -> TestClient:
     from app.main import create_app
 
     app = create_app()
@@ -48,7 +56,11 @@ def _client(merchant_id: str = "merchant-a", session_id: str | None = None) -> T
             db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_request_context_required] = lambda: _context(merchant_id, session_id=session_id)
+    app.dependency_overrides[get_request_context_required] = lambda: _context(
+        merchant_id,
+        session_id=session_id,
+        permission_codes=permission_codes,
+    )
     return TestClient(app)
 
 
@@ -269,3 +281,29 @@ def test_orphan_task_detail_only_allowed_for_dev_mock_context():
     dev_response = _client("dev-merchant", session_id="dev-session").get(f"/wechat-tasks/{task_id}")
     assert dev_response.status_code == 200
     assert dev_response.json()["id"] == task_id
+
+
+def test_wechat_task_user_queries_require_agent_permission_but_local_agent_endpoints_keep_working():
+    staff_id = _insert_staff()
+    lead_id = _insert_lead()
+    task_id = _insert_task(lead_id=lead_id, staff_id=staff_id, status="pending", raw_result=None)
+    denied_client = _client(permission_codes=["auto_wechat:leads"])
+
+    list_response = denied_client.get("/wechat-tasks")
+    detail_response = denied_client.get(f"/wechat-tasks/{task_id}")
+    pending_response = denied_client.get("/wechat-tasks/pending")
+    result_response = denied_client.post(
+        f"/wechat-tasks/{task_id}/result",
+        json={
+            "success": True,
+            "verified": True,
+            "pasted": True,
+            "sent": False,
+            "raw_result": {"contact_verified": True, "sent": False},
+        },
+    )
+
+    assert list_response.status_code == 403
+    assert detail_response.status_code == 403
+    assert pending_response.status_code == 200
+    assert result_response.status_code == 200

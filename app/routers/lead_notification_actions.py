@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required
+from app.auth.dependencies import get_request_context_required, require_permissions
 from app.database import get_db
 from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 from app.schemas import SendToStaffRequest, SendToStaffResponse
@@ -38,6 +38,7 @@ def create_notify_sales_task(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """为已分配线索创建通知销售的微信任务。"""
+    require_permissions(["auto_wechat:leads", "auto_wechat:agent"])(context)
     merchant_id = _require_merchant_id(context)
     lead = db.query(DouyinLead).filter(
         DouyinLead.id == request.lead_id,
