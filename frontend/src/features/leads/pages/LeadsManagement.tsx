@@ -1667,11 +1667,20 @@ export default function LeadsManagement() {
   return (
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
       <div className="shrink-0 bg-white">
-        <header className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
-          <div>
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[#e4e8f0] bg-white px-5 py-4">
+          <div className="min-w-0">
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高线索</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">聚合 AI 识别、留资和销售跟进状态</p>
+            <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
+              统一展示抖音留资线索、联系方式、意向车型、预算、城市、销售跟进状态。
+            </p>
           </div>
+          <button
+            onClick={() => void refreshData()}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-3 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
+          >
+            <RefreshCwIcon size={14} />
+            刷新
+          </button>
         </header>
 
         <div className="grid grid-cols-4 gap-0 border-b border-[#e4e8f0]">
