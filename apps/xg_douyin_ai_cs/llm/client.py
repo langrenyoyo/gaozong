@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from urllib.parse import urlparse
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -30,7 +31,9 @@ class LLMNotConfiguredError(RuntimeError):
 
 
 class LLMRequestError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, detail: dict | None = None):
+        super().__init__(message)
+        self.detail = detail
 
 
 class OpenAICompatibleClient:
@@ -95,8 +98,9 @@ class OpenAICompatibleClient:
             raise LLMRequestError(str(exc)) from exc
 
     def _post_json(self, path: str, payload: dict) -> dict:
+        url = f"{self.config.base_url}{path}"
         req = urllib_request.Request(
-            f"{self.config.base_url}{path}",
+            url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.config.api_key}",
@@ -104,11 +108,40 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
+        started = time.perf_counter()
         try:
             with urllib_request.urlopen(req, timeout=self.config.timeout_seconds) as resp:
                 return json.loads(resp.read().decode("utf-8") or "{}")
-        except (urllib_error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except TimeoutError as exc:
+            detail = self._build_timeout_detail(started)
+            raise LLMRequestError("llm_provider_timeout", detail=detail) from exc
+        except urllib_error.URLError as exc:
+            if isinstance(getattr(exc, "reason", None), TimeoutError):
+                detail = self._build_timeout_detail(started)
+                raise LLMRequestError("llm_provider_timeout", detail=detail) from exc
             raise LLMRequestError(str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise LLMRequestError(str(exc)) from exc
+
+    def _build_timeout_detail(self, started: float) -> dict:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        detail = {
+            "error": "llm_provider_timeout",
+            "timeout_layer": "9100_to_llm_provider",
+            "elapsed_ms": elapsed_ms,
+            "timeout_seconds": self.config.timeout_seconds,
+            "provider": urlparse(self.config.base_url).netloc,
+            "model": self.config.chat_model,
+        }
+        _logger.warning(
+            "llm_provider_timeout stage=chat timeout_layer=9100_to_llm_provider "
+            "provider=%s model=%s timeout_seconds=%s elapsed_ms=%s",
+            detail["provider"],
+            self.config.chat_model,
+            self.config.timeout_seconds,
+            elapsed_ms,
+        )
+        return detail
 
 
 def mock_embedding(text: str, size: int = 16) -> list[float]:

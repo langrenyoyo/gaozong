@@ -116,6 +116,113 @@ def test_chat_still_uses_chat_completions_when_embedding_is_disabled(monkeypatch
     assert result["reply_text"] == "ok"
 
 
+def test_llm_client_timeout_error_contains_provider_diagnostics(monkeypatch):
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient, LLMRequestError
+    from apps.xg_douyin_ai_cs.llm.config import LLMConfig
+
+    cfg = LLMConfig(
+        base_url="https://api.ofox.io/v1",
+        api_key="test-key",
+        chat_model="google/gemini-3-flash-preview",
+        embedding_model="unused",
+        embedding_enabled=False,
+        timeout_seconds=60,
+        temperature=0.2,
+    )
+
+    def fake_urlopen(req, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.urllib_request.urlopen", fake_urlopen)
+
+    try:
+        OpenAICompatibleClient(cfg).chat([{"role": "user", "content": "hello"}])
+    except LLMRequestError as exc:
+        assert str(exc) == "llm_provider_timeout"
+        assert exc.detail["error"] == "llm_provider_timeout"
+        assert exc.detail["timeout_layer"] == "9100_to_llm_provider"
+        assert exc.detail["timeout_seconds"] == 60
+        assert exc.detail["provider"] == "api.ofox.io"
+        assert exc.detail["model"] == "google/gemini-3-flash-preview"
+        assert exc.detail["elapsed_ms"] >= 0
+    else:
+        raise AssertionError("expected LLMRequestError")
+
+
+def test_llm_client_urlerror_timeout_is_provider_timeout(monkeypatch):
+    from urllib.error import URLError
+
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient, LLMRequestError
+    from apps.xg_douyin_ai_cs.llm.config import LLMConfig
+
+    cfg = LLMConfig(
+        base_url="https://api.ofox.io/v1",
+        api_key="test-key",
+        chat_model="google/gemini-3-flash-preview",
+        embedding_model="unused",
+        embedding_enabled=False,
+        timeout_seconds=60,
+        temperature=0.2,
+    )
+
+    def fake_urlopen(req, timeout):
+        raise URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.urllib_request.urlopen", fake_urlopen)
+
+    try:
+        OpenAICompatibleClient(cfg).chat([{"role": "user", "content": "hello"}])
+    except LLMRequestError as exc:
+        assert str(exc) == "llm_provider_timeout"
+        assert exc.detail["timeout_layer"] == "9100_to_llm_provider"
+    else:
+        raise AssertionError("expected LLMRequestError")
+
+
+def test_reply_suggestion_provider_timeout_returns_diagnostics(tmp_path, monkeypatch):
+    from apps.xg_douyin_ai_cs.llm.client import LLMRequestError
+
+    client = _client(tmp_path, monkeypatch)
+    _seed_knowledge(client)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        raise LLMRequestError(
+            "llm_provider_timeout",
+            detail={
+                "error": "llm_provider_timeout",
+                "timeout_layer": "9100_to_llm_provider",
+                "elapsed_ms": 60002,
+                "timeout_seconds": 60,
+                "provider": "api.ofox.io",
+                "model": "google/gemini-3-flash-preview",
+            },
+        )
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "你们有奥迪A6吗？",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["manual_required"] is True
+    assert data["auto_send"] is False
+    assert data["error_code"] == "llm_provider_timeout"
+    assert data["timeout_layer"] == "9100_to_llm_provider"
+    assert data["elapsed_ms"] == 60002
+    assert data["timeout_seconds"] == 60
+    assert data["provider"] == "api.ofox.io"
+    assert data["model"] == "google/gemini-3-flash-preview"
+
+
 def test_reply_suggestion_uses_rag_and_mocked_llm(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _seed_knowledge(client)

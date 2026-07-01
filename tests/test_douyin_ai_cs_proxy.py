@@ -352,6 +352,74 @@ def test_9000_client_error_keeps_9100_response_body_detail(monkeypatch):
         raise AssertionError("expected XgDouyinAiCsClientError")
 
 
+def test_9000_client_timeout_raises_structured_diagnostics(monkeypatch):
+    from app.auth.context import RequestContext
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient, XgDouyinAiCsClientError
+
+    def fake_post(url, *, json, headers, timeout):
+        raise httpx.ReadTimeout("read timed out")
+
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", fake_post)
+    client = XgDouyinAiCsClient(base_url="http://xg-ai", service_token="", timeout_seconds=75)
+
+    try:
+        client.suggest_reply(
+            context=RequestContext(user_id="u1", merchant_id="merchant-1"),
+            conversation_id="conv-1",
+            request={"tenant_id": "tenant-1", "account_id": "account-open-1", "latest_message": "hello"},
+        )
+    except XgDouyinAiCsClientError as exc:
+        assert str(exc) == "xg_cs_http_timeout"
+        assert exc.detail["error"] == "xg_cs_http_timeout"
+        assert exc.detail["timeout_layer"] == "9000_to_9100"
+        assert exc.detail["timeout_seconds"] == 75
+        assert exc.detail["elapsed_ms"] >= 0
+        assert exc.detail["upstream_url"] == "http://xg-ai/douyin/reply-suggestion"
+    else:
+        raise AssertionError("expected XgDouyinAiCsClientError")
+
+
+def test_9000_client_passes_through_9100_provider_timeout_detail(monkeypatch):
+    from app.auth.context import RequestContext
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient, XgDouyinAiCsClientError
+
+    def fake_post(url, *, json, headers, timeout):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            504,
+            json={
+                "detail": {
+                    "error": "llm_provider_timeout",
+                    "timeout_layer": "9100_to_llm_provider",
+                    "elapsed_ms": 60002,
+                    "timeout_seconds": 60,
+                    "provider": "api.ofox.io",
+                    "model": "google/gemini-3-flash-preview",
+                }
+            },
+            request=request,
+        )
+        raise httpx.HTTPStatusError("504", request=request, response=response)
+
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", fake_post)
+    client = XgDouyinAiCsClient(base_url="http://xg-ai", service_token="", timeout_seconds=75)
+
+    try:
+        client.suggest_reply(
+            context=RequestContext(user_id="u1", merchant_id="merchant-1"),
+            conversation_id="conv-1",
+            request={"tenant_id": "tenant-1", "account_id": "account-open-1", "latest_message": "hello"},
+        )
+    except XgDouyinAiCsClientError as exc:
+        assert str(exc) == "llm_provider_timeout"
+        assert exc.status_code == 504
+        assert exc.detail["timeout_layer"] == "9100_to_llm_provider"
+        assert exc.detail["provider"] == "api.ofox.io"
+        assert exc.detail["model"] == "google/gemini-3-flash-preview"
+    else:
+        raise AssertionError("expected XgDouyinAiCsClientError")
+
+
 def test_rag_document_proxy_ignores_forged_scope_and_builds_trusted_payload(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 

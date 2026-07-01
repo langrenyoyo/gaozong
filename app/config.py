@@ -129,7 +129,7 @@ NEWCAR_AUTH_TIMEOUT_SECONDS = int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5"))
 # ---------- 9000 调用 9100 抖音AI客服可信代理配置 ----------
 XG_DOUYIN_AI_CS_BASE_URL = os.getenv("XG_DOUYIN_AI_CS_BASE_URL", "http://localhost:9100").strip().rstrip("/")
 XG_DOUYIN_AI_CS_SERVICE_TOKEN = os.getenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "").strip()
-XG_DOUYIN_AI_CS_TIMEOUT_SECONDS = int(os.getenv("XG_DOUYIN_AI_CS_TIMEOUT_SECONDS", "10"))
+XG_DOUYIN_AI_CS_TIMEOUT_SECONDS = int(os.getenv("XG_DOUYIN_AI_CS_TIMEOUT_SECONDS", "75"))
 
 # ---------- 小高知识库内部训练接口配置 ----------
 KNOWLEDGE_TRAINING_IP_WHITELIST = os.getenv(

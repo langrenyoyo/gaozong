@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -126,6 +127,7 @@ class XgDouyinAiCsClient:
         if self.service_token:
             headers["X-Internal-Service-Token"] = self.service_token
 
+        started = time.perf_counter()
         try:
             response = httpx.post(
                 url,
@@ -135,7 +137,22 @@ class XgDouyinAiCsClient:
             )
             response.raise_for_status()
         except httpx.TimeoutException as exc:
-            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_timeout") from exc
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            detail = {
+                "error": "xg_cs_http_timeout",
+                "timeout_layer": "9000_to_9100",
+                "elapsed_ms": elapsed_ms,
+                "upstream_url": url,
+                "timeout_seconds": self.timeout_seconds,
+            }
+            logger.warning(
+                "xg_douyin_ai_cs_timeout stage=post_json timeout_layer=9000_to_9100 "
+                "timeout_seconds=%s elapsed_ms=%s upstream_url=%s",
+                self.timeout_seconds,
+                elapsed_ms,
+                url,
+            )
+            raise XgDouyinAiCsClientError("xg_cs_http_timeout", detail=detail) from exc
         except httpx.HTTPStatusError as exc:
             raise _build_status_error(exc) from exc
         except httpx.HTTPError as exc:
@@ -155,6 +172,12 @@ def get_xg_douyin_ai_cs_client() -> XgDouyinAiCsClient:
 def _build_status_error(exc: httpx.HTTPStatusError) -> XgDouyinAiCsClientError:
     status_code = exc.response.status_code
     detail = _extract_error_detail(exc.response)
+    if isinstance(detail, dict) and detail.get("error"):
+        return XgDouyinAiCsClientError(
+            str(detail["error"]),
+            status_code=status_code,
+            detail=detail,
+        )
     if status_code in {400, 403, 404, 422}:
         logger.warning(
             "xg_douyin_ai_cs_http_error status_code=%s detail=%s",

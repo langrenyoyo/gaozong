@@ -790,6 +790,89 @@ def test_9100_exception_records_failed_run():
     assert "xg_douyin_ai_cs_timeout" in run.error_message
 
 
+def test_9100_timeout_diagnostics_records_layer_and_does_not_send():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClientError
+
+    event_id = _insert_event(event_key="event-timeout-diagnostics")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(
+        error=XgDouyinAiCsClientError(
+            "xg_cs_http_timeout",
+            detail={
+                "error": "xg_cs_http_timeout",
+                "timeout_layer": "9000_to_9100",
+                "elapsed_ms": 75001,
+                "timeout_seconds": 75,
+                "upstream_url": "http://xg-ai/douyin/reply-suggestion",
+            },
+        )
+    )
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    gate_results = json.loads(run.gate_results_json)
+    assert run.status == "failed"
+    assert run.decision_log_id is None
+    assert run.would_send_content is None
+    assert run.error_message == "xg_cs_http_timeout"
+    assert gate_results["llm"]["status"] == "failed"
+    assert gate_results["llm"]["error"] == "xg_cs_http_timeout"
+    assert gate_results["llm"]["timeout_layer"] == "9000_to_9100"
+    assert gate_results["llm"]["elapsed_ms"] == 75001
+    assert gate_results["llm"]["timeout_seconds"] == 75
+
+
+def test_9100_provider_timeout_response_marks_run_failed_and_does_not_send():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-provider-timeout-response")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(
+        result={
+            "reply_text": "AI 模型调用失败，请人工确认回复。",
+            "manual_required": True,
+            "manual_required_reason": "LLM provider 调用超时，需要人工确认",
+            "risk_flags": ["llm_provider_timeout"],
+            "rag_used": True,
+            "rag_sources": [{"chunk_id": "c1"}],
+            "confidence": 0.0,
+            "auto_send": False,
+            "llm_used": False,
+            "error_code": "llm_provider_timeout",
+            "timeout_layer": "9100_to_llm_provider",
+            "elapsed_ms": 60002,
+            "timeout_seconds": 60,
+            "provider": "api.ofox.io",
+            "model": "google/gemini-3-flash-preview",
+        }
+    )
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    gate_results = json.loads(run.gate_results_json)
+    assert run.status == "failed"
+    assert run.decision_log_id is None
+    assert run.would_send_content is None
+    assert run.error_message == "llm_provider_timeout"
+    assert gate_results["llm"]["error"] == "llm_provider_timeout"
+    assert gate_results["llm"]["timeout_layer"] == "9100_to_llm_provider"
+    assert gate_results["llm"]["provider"] == "api.ofox.io"
+    assert gate_results["llm"]["model"] == "google/gemini-3-flash-preview"
+
+
 def test_dry_run_never_calls_send_msg():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 

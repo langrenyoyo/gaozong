@@ -158,3 +158,9 @@ class ReplySuggestionResponse(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     rag_sources: list[dict] = Field(default_factory=list)
     decision_version: str | None = None
+    error_code: str | None = None
+    timeout_layer: str | None = None
+    elapsed_ms: int | None = None
+    timeout_seconds: float | None = None
+    provider: str | None = None
+    model: str | None = None

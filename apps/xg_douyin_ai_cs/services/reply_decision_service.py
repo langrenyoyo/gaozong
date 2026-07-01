@@ -638,21 +638,34 @@ def _build_llm_reply(
         )
     except LLMRequestError as exc:
         error_summary = _safe_error_summary(exc)
+        error_detail = getattr(exc, "detail", None)
+        if not isinstance(error_detail, dict):
+            error_detail = {}
+        error_code = str(error_detail.get("error") or "llm_call_failed")
+        risk_flag = "llm_provider_timeout" if error_code == "llm_provider_timeout" else "llm_call_failed"
         _logger.warning(
-            "reply_suggestion_llm_unavailable stage=llm_chat reason=llm_call_failed "
-            "tenant_id=%s merchant_id=%s conversation_id=%s rag_used=%s error=%s",
+            "reply_suggestion_llm_unavailable stage=llm_chat reason=%s "
+            "tenant_id=%s merchant_id=%s conversation_id=%s rag_used=%s "
+            "timeout_layer=%s timeout_seconds=%s elapsed_ms=%s provider=%s model=%s error=%s",
+            error_code,
             request.tenant_id,
             request.merchant_id,
             conversation_id,
             rag_used,
+            error_detail.get("timeout_layer"),
+            error_detail.get("timeout_seconds"),
+            error_detail.get("elapsed_ms"),
+            error_detail.get("provider"),
+            error_detail.get("model"),
             error_summary,
         )
         log_llm_call(
             tenant_id=request.tenant_id,
             merchant_id=request.merchant_id,
             conversation_id=conversation_id,
-            model="",
+            model=str(error_detail.get("model") or ""),
             status="failed",
+            elapsed_ms=int(error_detail.get("elapsed_ms") or 0),
             error_summary=error_summary,
         )
         return ReplySuggestionResponse(
@@ -669,10 +682,16 @@ def _build_llm_reply(
             rag_used=rag_used,
             source_chunks=source_payload,
             rag_sources=source_payload,
-            warnings=[*agent_warnings, "llm_call_failed"],
+            warnings=[*agent_warnings, risk_flag],
             manual_required_reason="LLM调用失败，需要人工确认",
-            risk_flags=["llm_call_failed"],
+            risk_flags=[risk_flag],
             decision_version=decision_version,
+            error_code=error_code if error_code != "llm_call_failed" else None,
+            timeout_layer=error_detail.get("timeout_layer"),
+            elapsed_ms=error_detail.get("elapsed_ms"),
+            timeout_seconds=error_detail.get("timeout_seconds"),
+            provider=error_detail.get("provider"),
+            model=error_detail.get("model"),
             **_agent_response_fields(agent),
         )
 

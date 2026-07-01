@@ -254,12 +254,52 @@ def _run_with_session(db, *, event_id: int) -> None:
             request=payload,
         )
     except XgDouyinAiCsClientError as exc:
+        llm_gate = _build_llm_error_gate(exc)
+        logger.warning(
+            "ai_auto_reply_llm_failed stage=xg_douyin_ai_cs run_id=%s event_id=%s "
+            "account_open_id=%s conversation_short_id=%s agent_id=%s "
+            "error_code=%s timeout_layer=%s timeout_seconds=%s elapsed_ms=%s",
+            run.id,
+            event.id,
+            _short(account_open_id),
+            conversation_short_id,
+            binding.agent.agent_id,
+            llm_gate.get("error"),
+            llm_gate.get("timeout_layer"),
+            llm_gate.get("timeout_seconds"),
+            llm_gate.get("elapsed_ms"),
+        )
         _finish_run(
             db,
             run,
             status="failed",
             error_message=str(exc),
-            gate_results={"history": history_gate, "agent": agent_gate, "llm": {"status": "failed", "error": str(exc)}},
+            gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
+        )
+        return
+
+    if _is_upstream_llm_error(upstream_result):
+        llm_gate = _build_llm_result_error_gate(upstream_result)
+        logger.warning(
+            "ai_auto_reply_llm_failed stage=xg_douyin_ai_cs_response run_id=%s event_id=%s "
+            "account_open_id=%s conversation_short_id=%s agent_id=%s "
+            "error_code=%s timeout_layer=%s timeout_seconds=%s elapsed_ms=%s",
+            run.id,
+            event.id,
+            _short(account_open_id),
+            conversation_short_id,
+            binding.agent.agent_id,
+            llm_gate.get("error"),
+            llm_gate.get("timeout_layer"),
+            llm_gate.get("timeout_seconds"),
+            llm_gate.get("elapsed_ms"),
+        )
+        _finish_run(
+            db,
+            run,
+            status="failed",
+            error_message=str(llm_gate.get("error") or "llm_failed"),
+            gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
         )
         return
 
@@ -343,6 +383,46 @@ def _build_agent_gate_result(*, agent_id: str | None, agent_name: str | None, pr
         "prompt_chars": len(prompt_text),
         "prompt_sha256": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest() if prompt_text else "",
     }
+
+
+def _build_llm_error_gate(exc: XgDouyinAiCsClientError) -> dict[str, Any]:
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    gate = {"status": "failed", "error": str(exc)}
+    for key in (
+        "timeout_layer",
+        "elapsed_ms",
+        "timeout_seconds",
+        "upstream_url",
+        "provider",
+        "model",
+    ):
+        if key in detail:
+            gate[key] = detail[key]
+    if detail.get("error"):
+        gate["error"] = detail["error"]
+    return gate
+
+
+def _is_upstream_llm_error(result: dict[str, Any]) -> bool:
+    return bool(isinstance(result, dict) and str(result.get("error_code") or "").strip())
+
+
+def _build_llm_result_error_gate(result: dict[str, Any]) -> dict[str, Any]:
+    gate = {
+        "status": "failed",
+        "error": str(result.get("error_code") or "llm_failed"),
+    }
+    for key in (
+        "timeout_layer",
+        "elapsed_ms",
+        "timeout_seconds",
+        "provider",
+        "model",
+        "manual_required_reason",
+    ):
+        if key in result:
+            gate[key] = result[key]
+    return gate
 
 
 def _event_content(event: DouyinWebhookEvent) -> dict[str, Any]:
