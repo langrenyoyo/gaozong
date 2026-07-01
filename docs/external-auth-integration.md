@@ -1,6 +1,6 @@
 # 外部系统登录接入说明
 
-更新时间：2026-06-22
+更新时间：2026-07-01
 
 本文档提供给外部系统开发人员使用，用于接入当前内部商户系统维护的外部账号登录能力。
 
@@ -30,29 +30,60 @@
 
 ### 2.1 Base URL
 
-开发环境示例：
+当前局域网联调环境：
 
 ```text
-http://127.0.0.1:8790
+内部系统前端：http://192.168.110.19:5174
+内部系统后端：http://192.168.110.19:8790
+外部系统跳转地址：http://192.168.110.113:5173
+外部系统跨域 Origin：http://192.168.110.113:9000
 ```
 
-线上环境请使用实际后端域名。
+外部系统调用本项目接口时，当前联调 Base URL 使用：
+
+```text
+http://192.168.110.19:8790
+```
+
+线上环境请替换为内部系统后端的实际 HTTPS 域名。
 
 ### 2.2 CORS
 
-如果外部系统前端直接从浏览器调用本后端，需要将外部系统域名加入后端 `CORS_ORIGINS`，例如：
+如果外部系统前端直接从浏览器调用本后端，需要将外部系统域名加入后端 `CORS_ORIGINS`。
+
+当前局域网联调已配置：
 
 ```text
-CORS_ORIGINS=https://internal.example.com,https://auto-wechat.example.com
+CORS_ORIGINS=http://127.0.0.1:5174,http://localhost:5174,http://192.168.110.19:5174,http://192.168.110.113:5173,http://192.168.110.113:9000
+EXTERNAL_APP_URL=http://192.168.110.113:5173
 ```
 
-本地开发默认包含：
+说明：
+
+- `http://192.168.110.113:5173` 是外部账号登录成功后的跳转地址。
+- `http://192.168.110.113:9000` 是外部系统浏览器请求来源，必须允许跨域。
+- 如果外部系统实际由 `5173` 发起接口请求，`5173` 也必须保留在 `CORS_ORIGINS`。
+
+线上示例：
 
 ```text
-http://127.0.0.1:5173
-http://127.0.0.1:5174
-http://localhost:5174
-http://127.0.0.1:9000
+CORS_ORIGINS=https://internal.example.com,https://external.example.com
+EXTERNAL_APP_URL=https://external.example.com
+```
+
+内部统一登录页识别到外部账号后，会返回并跳转到：
+
+```text
+http://192.168.110.113:5173?code=<one_time_code>&source=new_car_project
+```
+
+外部系统拿到 `code` 后，应立即调用 `POST /api/external-auth/exchange-code` 换取外部 token。
+
+当前局域网联调可直接从以下 Origin 调用本项目后端：
+
+```text
+http://192.168.110.113:5173
+http://192.168.110.113:9000
 ```
 
 ### 2.3 认证方式
@@ -90,17 +121,17 @@ auto_wechat:use
 
 当前可分配的外部权限包括：
 
-| 权限码 | 说明 |
-|---|---|
-| `auto_wechat:use` | 进入外部系统 |
-| `auto_wechat:douyin_ai_cs` | 抖音 AI 小高客服 |
-| `auto_wechat:leads` | AI 小高线索 |
-| `auto_wechat:agent` | 小高 AI 微信助手 |
-| `auto_wechat:compute` | 小高算力 |
-| `auto_wechat:admin:forbidden_words` | 外部违禁词管理 |
-| `auto_wechat:admin:accounts` | 外部账号管理 |
-| `auto_wechat:admin:ai_reply_records` | AI 回复记录 |
-| `auto_wechat:admin:compute_config` | 算力配置管理 |
+| 权限码                               | 说明             |
+| ------------------------------------ | ---------------- |
+| `auto_wechat:use`                    | 进入外部系统     |
+| `auto_wechat:douyin_ai_cs`           | 抖音 AI 小高客服 |
+| `auto_wechat:leads`                  | AI 小高线索      |
+| `auto_wechat:agent`                  | 小高 AI 微信助手 |
+| `auto_wechat:compute`                | 小高算力         |
+| `auto_wechat:admin:forbidden_words`  | 外部违禁词管理   |
+| `auto_wechat:admin:accounts`         | 外部账号管理     |
+| `auto_wechat:admin:ai_reply_records` | AI 回复记录      |
+| `auto_wechat:admin:compute_config`   | 算力配置管理     |
 
 接口返回的 `permissions` 是当前账号实际拥有的外部权限列表，外部系统应以后端返回值为准控制页面和接口能力。
 
@@ -108,19 +139,24 @@ auto_wechat:use
 
 ### 4.1 内部统一登录页跳转外部系统
 
-内部后台当前仍使用同一个登录界面。用户在内部后台登录页输入外部账号密码时，`/api/login` 会识别 `account_scope=external`，不返回内部后台 token，而是返回短时一次性 `external_auth_code` 和带 code 的 `redirect_url`。
+内部后台当前仍使用同一个登录界面。用户在内部后台登录页输入外部账号密码时，`/api/login` 会识别 `account_scope=external`，不返回内部后台 token，而是返回带短时一次性 code 的 `redirect_url`。code 只放在跳转地址中，不再作为独立 JSON 字段返回。
 
 外部系统接收跳转后，应读取 URL 中的 `code`，立即调用 `POST /api/external-auth/exchange-code` 换取外部 token。code 只能使用一次，默认 120 秒过期。
+
+重要限制：
+
+- code 会绑定创建 code 时的客户端 IP 和 `User-Agent`。
+- 推荐由接收跳转的外部系统前端页面，直接从浏览器调用 `exchange-code`。
+- 如果由外部系统后端代为换 token，必须保证请求来源 IP 和 `User-Agent` 与创建 code 时一致；否则会返回 `401`。
 
 内部登录页返回示例：
 
 ```json
 {
   "account_scope": "external",
-  "redirect_url": "http://127.0.0.1:9000?code=one_time_code&source=new_car_project",
-  "external_auth_code": "one_time_code",
+  "redirect_url": "http://192.168.110.113:5173?code=one_time_code&source=new_car_project",
   "external_auth_code_expires_in": 120,
-  "external_auth_code_expires_at": "2026-06-22T10:02:00+08:00",
+  "external_auth_code_expires_at": "2026-07-01T10:02:00+08:00",
   "message": "外部账号登录成功，正在跳转外部系统",
   "permissions": ["auto_wechat:use"]
 }
@@ -149,11 +185,11 @@ Content-Type: application/json
 
 常见状态码：
 
-| 状态码 | 场景 |
-|---|---|
-| `400` | code 为空 |
-| `401` | code 无效、已使用或已过期 |
-| `403` | 外部账号缺少 `auto_wechat:use` |
+| 状态码 | 场景                           |
+| ------ | ------------------------------ |
+| `400`  | code 为空                      |
+| `401`  | code 无效、已使用或已过期      |
+| `403`  | 外部账号缺少 `auto_wechat:use` |
 
 ### 4.3 POST `/api/external-auth/login`
 
@@ -179,12 +215,12 @@ Content-Type: application/json
 
 字段说明：
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `account` | 是 | 外部账号登录名，通常是手机号 |
-| `password` | 是 | 外部账号密码 |
-| `platform` | 否 | 来源系统标识，建议传 `auto_wechat` |
-| `device_name` | 否 | 设备或浏览器信息，用于审计 |
+| 字段          | 必填 | 说明                               |
+| ------------- | ---- | ---------------------------------- |
+| `account`     | 是   | 外部账号登录名，通常是手机号       |
+| `password`    | 是   | 外部账号密码                       |
+| `platform`    | 否   | 来源系统标识，建议传 `auto_wechat` |
+| `device_name` | 否   | 设备或浏览器信息，用于审计         |
 
 成功响应：
 
@@ -193,10 +229,10 @@ Content-Type: application/json
   "ok": true,
   "token": "raw_token_string",
   "token_type": "Bearer",
-  "expires_in": 604800,
-  "expires_at": "2026-06-29T10:00:00+08:00",
+  "expires_in": 86400,
+  "expires_at": "2026-07-02T10:00:00+08:00",
   "account_scope": "external",
-  "external_app_url": "http://127.0.0.1:9000",
+  "external_app_url": "http://192.168.110.113:5173",
   "user": {
     "id": 12,
     "account": "13200000000",
@@ -223,6 +259,7 @@ Content-Type: application/json
 说明：
 
 - `token` 只返回一次，推荐由外部系统后端写入 HttpOnly Cookie；纯前端临时接入时可暂存在内存或 sessionStorage。
+- `expires_in` 以接口实际返回为准，部署侧可通过 `EXTERNAL_SESSION_HOURS` 调整。
 - 当前版本没有外部商户绑定，所以 `merchant_id` 为 `null`，`merchant_ids` 为空数组。
 - 不要从 URL 长期携带 token。
 
@@ -236,11 +273,11 @@ Content-Type: application/json
 
 常见状态码：
 
-| 状态码 | 场景 |
-|---|---|
-| `401` | 账号或密码错误 |
-| `403` | 非外部账号、账号停用、缺少 `auto_wechat:use` |
-| `429` | 短时间内失败次数过多 |
+| 状态码 | 场景                                         |
+| ------ | -------------------------------------------- |
+| `401`  | 账号或密码错误                               |
+| `403`  | 非外部账号、账号停用、缺少 `auto_wechat:use` |
+| `429`  | 短时间内失败次数过多                         |
 
 ## 5. 查询当前登录态
 
@@ -261,7 +298,7 @@ Authorization: Bearer <token>
 {
   "ok": true,
   "account_scope": "external",
-  "expires_at": "2026-06-29T10:00:00+08:00",
+  "expires_at": "2026-07-02T10:00:00+08:00",
   "user": {
     "id": 12,
     "account": "13200000000",
@@ -295,10 +332,10 @@ Authorization: Bearer <token>
 
 状态码：
 
-| 状态码 | 场景 |
-|---|---|
-| `401` | token 缺失、无效、过期、账号不可用 |
-| `403` | 账号缺少 `auto_wechat:use` |
+| 状态码 | 场景                               |
+| ------ | ---------------------------------- |
+| `401`  | token 缺失、无效、过期、账号不可用 |
+| `403`  | 账号缺少 `auto_wechat:use`         |
 
 ## 6. 退出登录
 
@@ -365,8 +402,8 @@ Content-Type: application/json
       "description": "不要在回复中使用",
       "status": "active",
       "created_by": 1,
-      "created_at": "2026-06-22T10:00:00",
-      "updated_at": "2026-06-22T10:00:00"
+      "created_at": "2026-07-01T10:00:00",
+      "updated_at": "2026-07-01T10:00:00"
     }
   ]
 }
@@ -395,8 +432,10 @@ Content-Type: application/json
 伪代码：
 
 ```ts
+const NEWCAR_API_BASE = "http://192.168.110.19:8790";
+
 async function exchangeExternalCode(code: string) {
-  const res = await fetch("/api/external-auth/exchange-code", {
+  const res = await fetch(`${NEWCAR_API_BASE}/api/external-auth/exchange-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -428,8 +467,10 @@ async function exchangeExternalCode(code: string) {
 伪代码：
 
 ```ts
+const NEWCAR_API_BASE = "http://192.168.110.19:8790";
+
 async function externalLogin(account: string, password: string) {
-  const res = await fetch("/api/external-auth/login", {
+  const res = await fetch(`${NEWCAR_API_BASE}/api/external-auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -448,7 +489,7 @@ async function externalLogin(account: string, password: string) {
 
 async function externalMe() {
   const token = sessionStorage.getItem("external_token");
-  const res = await fetch("/api/external-auth/me", {
+  const res = await fetch(`${NEWCAR_API_BASE}/api/external-auth/me`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(await res.text());
@@ -470,24 +511,24 @@ async function externalMe() {
 
 ## 10. 和内部后台登录的区别
 
-| 能力 | 内部后台 `/api/login` | 外部登录 `/api/external-auth/login` |
-|---|---|---|
-| 面向对象 | 内部管理员 | 外部系统账号 |
-| 账号范围 | `account_scope=internal` | `account_scope=external` |
-| 返回 token | 内部 token | 外部 token；统一登录跳转场景先返回一次性 code |
-| 可访问接口 | 内部后台接口 | 外部系统接口 |
-| 角色来源 | 内部角色 RBAC | 外部账号直配权限 |
-| 商户关系 | 内部 `merchants` / 分配范围 | 第一版无外部商户绑定 |
+| 能力       | 内部后台 `/api/login`       | 外部登录 `/api/external-auth/login`           |
+| ---------- | --------------------------- | --------------------------------------------- |
+| 面向对象   | 内部管理员                  | 外部系统账号                                  |
+| 账号范围   | `account_scope=internal`    | `account_scope=external`                      |
+| 返回 token | 内部 token                  | 外部 token；统一登录跳转场景先返回一次性 code |
+| 可访问接口 | 内部后台接口                | 外部系统接口                                  |
+| 角色来源   | 内部角色 RBAC               | 外部账号直配权限                              |
+| 商户关系   | 内部 `merchants` / 分配范围 | 第一版无外部商户绑定                          |
 
 ## 11. 当前版本接口清单
 
-| 方法 | 路径 | 说明 | 认证 |
-|---|---|---|---|
-| `POST` | `/api/external-auth/login` | 外部账号登录 | 无 |
-| `POST` | `/api/external-auth/exchange-code` | 一次性 code 换外部 token | 无 |
-| `GET` | `/api/external-auth/me` | 查询当前外部登录态 | 外部 token |
-| `POST` | `/api/external-auth/logout` | 退出外部登录 | 外部 token |
-| `POST` | `/api/external-auth/forbidden-words/check` | 全局违禁词检查 | 外部 token |
+| 方法   | 路径                                       | 说明                     | 认证       |
+| ------ | ------------------------------------------ | ------------------------ | ---------- |
+| `POST` | `/api/external-auth/login`                 | 外部账号登录             | 无         |
+| `POST` | `/api/external-auth/exchange-code`         | 一次性 code 换外部 token | 无         |
+| `GET`  | `/api/external-auth/me`                    | 查询当前外部登录态       | 外部 token |
+| `POST` | `/api/external-auth/logout`                | 退出外部登录             | 外部 token |
+| `POST` | `/api/external-auth/forbidden-words/check` | 全局违禁词检查           | 外部 token |
 
 ## 12. 后续扩展建议
 
