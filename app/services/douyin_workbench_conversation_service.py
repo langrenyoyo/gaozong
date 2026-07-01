@@ -16,7 +16,13 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
-from app.models import DouyinLead, DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.models import (
+    DouyinAuthorizedAccount,
+    DouyinConversationReadState,
+    DouyinLead,
+    DouyinPrivateMessageSend,
+    DouyinWebhookEvent,
+)
 from app.services.contact_extractor import extract_contacts_from_text
 from app.services.douyin_live_check_service import (
     list_authorized_accounts,
@@ -96,11 +102,13 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
     for message in messages:
         grouped.setdefault(message.conversation_key, []).append(message)
 
+    read_states = _load_read_states(db, account_open_ids=[account_open_id])
     items = []
     for conversation_key, group in grouped.items():
         ordered = _sort_messages(group)
         first = ordered[0]
         latest = ordered[-1]
+        read_state = read_states.get((first.account_open_id, conversation_key))
         items.append(
             {
                 "id": conversation_key,
@@ -114,7 +122,7 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
                 "avatar": first.avatar,
                 "last_message": latest.content,
                 "last_message_at": latest.created_at,
-                "unread_count": sum(1 for item in ordered if item.event == "im_receive_msg"),
+                "unread_count": _unread_count_for_messages(ordered, read_state),
                 "lead_status": _lead_status(ordered),
                 "tags": build_conversation_tags(db, ordered),
             }
@@ -136,6 +144,7 @@ def get_account_unread_counts(
     db: Session,
     *,
     account_open_ids: list[str],
+    merchant_id: str | None = None,
 ) -> dict[str, int]:
     """当前未接已读状态前，按企业号聚合入站私信数量作为一期临时未读数。"""
     requested_open_ids = {str(item) for item in account_open_ids if item}
@@ -151,13 +160,88 @@ def get_account_unread_counts(
         lookback_days=WORKBENCH_CONVERSATION_LOOKBACK_DAYS,
         operation="get_account_unread_counts",
     )
+    read_states = _load_read_states(db, account_open_ids=list(requested_open_ids), merchant_id=merchant_id)
+    grouped: dict[tuple[str, str], list[WorkbenchMessage]] = {}
     for message in messages:
         if message.event != "im_receive_msg":
             continue
         if message.account_open_id not in requested_open_ids:
             continue
-        counts[message.account_open_id] += 1
+        grouped.setdefault((message.account_open_id, message.conversation_key), []).append(message)
+    for key, group in grouped.items():
+        account_open_id, _conversation_key = key
+        counts[account_open_id] += _unread_count_for_messages(_sort_messages(group), read_states.get(key))
     return counts
+
+
+def mark_conversation_read(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_key: str,
+    conversation_short_id: str | None = None,
+    customer_open_id: str | None = None,
+) -> DouyinConversationReadState:
+    """持久化抖音客服工作台会话已读水位。"""
+    account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
+        .first()
+    )
+    if account is None:
+        raise ValueError("account_not_found")
+    if str(account.merchant_id or "") != str(merchant_id):
+        raise PermissionError("account_merchant_denied")
+
+    messages = _sort_messages(
+        _load_messages(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=conversation_key,
+            limit=WORKBENCH_MESSAGE_LIMIT,
+            operation="mark_conversation_read",
+        )
+    )
+    latest = messages[-1] if messages else None
+    now = datetime.now()
+    resolved_conversation_short_id = conversation_short_id or (latest.conversation_short_id if latest else None)
+    resolved_customer_open_id = customer_open_id or (latest.open_id if latest else None)
+    last_read_at = latest.created_at if latest and latest.created_at else now
+    last_read_event_id = latest.event_id if latest else None
+
+    row = (
+        db.query(DouyinConversationReadState)
+        .filter(
+            DouyinConversationReadState.merchant_id == merchant_id,
+            DouyinConversationReadState.account_open_id == account_open_id,
+            DouyinConversationReadState.conversation_key == conversation_key,
+        )
+        .first()
+    )
+    if row is None:
+        row = DouyinConversationReadState(
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_key=conversation_key,
+            created_at=now,
+        )
+        db.add(row)
+    row.conversation_short_id = resolved_conversation_short_id
+    row.customer_open_id = resolved_customer_open_id
+    row.last_read_at = last_read_at
+    row.last_read_event_id = last_read_event_id
+    row.updated_at = now
+    db.commit()
+    db.refresh(row)
+    logger.info(
+        "douyin_conversation_mark_read merchant_id=%s account_open_id=%s conversation_key=%s last_read_event_id=%s",
+        merchant_id,
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        last_read_event_id,
+    )
+    return row
 
 
 def build_conversation_tags(db: Session, messages: list[WorkbenchMessage]) -> list[str]:
@@ -454,6 +538,44 @@ def _send_msg_participants(row: DouyinWebhookEvent) -> tuple[str | None, str | N
     if row.event == "im_send_msg":
         return row.from_user_id, row.to_user_id
     return row.to_user_id, row.from_user_id
+
+
+def _load_read_states(
+    db: Session,
+    *,
+    account_open_ids: list[str],
+    merchant_id: str | None = None,
+) -> dict[tuple[str, str], DouyinConversationReadState]:
+    account_values = [item for item in {str(value) for value in account_open_ids if value}]
+    if not account_values:
+        return {}
+    query = (
+        db.query(DouyinConversationReadState)
+        .filter(DouyinConversationReadState.account_open_id.in_(account_values))
+    )
+    if merchant_id:
+        query = query.filter(DouyinConversationReadState.merchant_id == merchant_id)
+    rows = query.all()
+    return {
+        (row.account_open_id, row.conversation_key): row
+        for row in rows
+        if row.account_open_id and row.conversation_key
+    }
+
+
+def _unread_count_for_messages(
+    messages: list[WorkbenchMessage],
+    read_state: DouyinConversationReadState | None,
+) -> int:
+    if read_state is None:
+        return sum(1 for item in messages if item.event == "im_receive_msg")
+    return sum(
+        1
+        for item in messages
+        if item.event == "im_receive_msg"
+        and item.created_at is not None
+        and item.created_at > read_state.last_read_at
+    )
 
 
 def _load_messages(

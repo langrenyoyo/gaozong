@@ -41,6 +41,7 @@ import {
   getDouyinConversationProfileFrom9000,
   getDouyinConversationMessages,
   listDouyinAccounts,
+  markDouyinConversationRead,
   resumeDouyinConversationAutopilot,
   sendDouyinManualMessage,
   unbindAgentFromDouyinAccount,
@@ -804,6 +805,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const messagesCacheRef = useRef<Record<string, DouyinMessageItem[]>>({});
   const profileCacheRef = useRef<Record<string, DouyinConversationProfile | null>>({});
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
+  const markReadWatermarksRef = useRef<Record<string, string>>({});
   const selectedAccountOpenIdRef = useRef<string | null>(null);
   const selectedConversationIdRef = useRef<string | number | null>(null);
   const accountModeCacheRef = useRef<Record<string, ChatAssistMode>>({});
@@ -1327,6 +1329,27 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, [selectedAccount?.account_open_id]);
 
+  const persistConversationRead = useCallback(async (conversation: DouyinConversationItem) => {
+    const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
+    if (!accountOpenId) return;
+    const cacheKey = conversationCacheKey(accountOpenId, conversation.id);
+    if (!cacheKey) return;
+    const watermark = conversationWatermark(conversation);
+    if (markReadWatermarksRef.current[cacheKey] === watermark) return;
+    markReadWatermarksRef.current[cacheKey] = watermark;
+    try {
+      await markDouyinConversationRead({
+        account_open_id: accountOpenId,
+        conversation_key: String(conversation.conversation_key || conversation.id),
+        conversation_short_id: conversation.conversation_short_id || null,
+        customer_open_id: conversation.customer_open_id || conversation.open_id || null,
+      });
+    } catch (err) {
+      delete markReadWatermarksRef.current[cacheKey];
+      console.warn("会话已读状态保存失败", err);
+    }
+  }, [selectedAccount?.account_open_id]);
+
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
@@ -1344,6 +1367,21 @@ export default function DouyinAiCsWorkbenchPage() {
       setSelectedConversationId(null);
     }
   }, [conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccount, selectedAccountId]);
+
+  useEffect(() => {
+    if (!selectedConversation || !selectedAccount?.account_open_id || loadingMessages || messages.length === 0) {
+      return;
+    }
+    markConversationReadLocally(selectedConversation);
+    void persistConversationRead(selectedConversation);
+  }, [
+    loadingMessages,
+    markConversationReadLocally,
+    messages.length,
+    persistConversationRead,
+    selectedAccount?.account_open_id,
+    selectedConversation,
+  ]);
 
   useEffect(() => {
     if (!conversationJumpParams || conversationJumpHandled || loadingAccounts) return;

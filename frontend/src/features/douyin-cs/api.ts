@@ -15,6 +15,7 @@ export {
   getReplySuggestion,
   getTrustedReplySuggestion,
   listDouyinAccounts,
+  markDouyinConversationRead,
   sendDouyinManualMessage,
   unbindAgentFromDouyinAccount,
   uploadDouyinImage,

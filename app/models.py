@@ -469,6 +469,33 @@ class ConversationAutopilotState(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DouyinConversationReadState(Base):
+    """抖音客服工作台会话已读水位。"""
+
+    __tablename__ = "douyin_conversation_read_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "account_open_id",
+            "conversation_key",
+            name="uk_dy_conversation_read_states_scope",
+        ),
+        Index("idx_dy_conversation_read_states_merchant_account", "merchant_id", "account_open_id"),
+        Index("idx_dy_conversation_read_states_customer", "customer_open_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False)
+    account_open_id = Column(String(255), nullable=False)
+    conversation_key = Column(String(255), nullable=False)
+    conversation_short_id = Column(String(255))
+    customer_open_id = Column(String(255))
+    last_read_at = Column(DateTime, nullable=False)
+    last_read_event_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DouyinMessageResourceDownload(Base):
     """Manual resource download record for Douyin media."""
     __tablename__ = "douyin_message_resource_downloads"

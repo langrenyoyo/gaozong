@@ -101,7 +101,7 @@ def list_douyin_accounts(
         .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
         .all()
     )
-    unread_counts = get_account_unread_counts(db, account_open_ids=[row.open_id for row in rows])
+    unread_counts = get_account_unread_counts(db, account_open_ids=[row.open_id for row in rows], merchant_id=merchant_id)
     items = []
     for row in rows:
         summary = get_binding_summary(db, account_open_id=row.open_id, merchant_id=merchant_id)

@@ -205,6 +205,26 @@ export interface DouyinConversationProfileResponse {
   message?: string;
 }
 
+export interface DouyinConversationMarkReadRequest {
+  account_open_id: string;
+  conversation_key: string;
+  conversation_short_id?: string | null;
+  customer_open_id?: string | null;
+}
+
+export interface DouyinConversationMarkReadResponse {
+  success?: boolean;
+  data: {
+    account_open_id: string;
+    conversation_key: string;
+    conversation_short_id?: string | null;
+    customer_open_id?: string | null;
+    last_read_at?: string | null;
+    last_read_event_id?: number | null;
+  };
+  message?: string;
+}
+
 export interface ReplySuggestionRequest {
   tenant_id: string;
   merchant_id?: string;
@@ -595,6 +615,19 @@ export async function getDouyinConversationMessages(
       signal: params?.signal,
     },
   ) as unknown as Promise<DouyinMessageListResponse>;
+}
+
+export async function markDouyinConversationRead(
+  payload: DouyinConversationMarkReadRequest,
+): Promise<DouyinConversationMarkReadResponse> {
+  try {
+    return (await apiClient.post(
+      "/integrations/douyin/conversations/mark-read",
+      payload,
+    )) as unknown as DouyinConversationMarkReadResponse;
+  } catch (error) {
+    throw new Error(`会话已读状态保存失败：${getAutoWechatProxyErrorMessage(error)}`);
+  }
 }
 
 export async function getDouyinConversationProfileFrom9000(

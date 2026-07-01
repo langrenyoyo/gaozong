@@ -5,9 +5,12 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import config
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.integrations.douyin_webhook import (
     WebhookSignatureError,
@@ -21,6 +24,7 @@ from app.services.douyin_workbench_conversation_service import (
     get_conversation_profile,
     list_account_conversations,
     list_conversation_messages,
+    mark_conversation_read,
 )
 from packages.clients.leads_client import LeadsClient, LeadsClientError
 
@@ -30,6 +34,23 @@ router = APIRouter(prefix="/integrations/douyin", tags=["外部系统集成"])
 
 # 兼容旧路径 /webhook/douyin（GMP 已配置的回调地址，保持不变）
 legacy_webhook_router = APIRouter(prefix="/webhook", tags=["抖音Webhook兼容路径"])
+
+class DouyinConversationMarkReadRequest(BaseModel):
+    account_open_id: str = Field(..., min_length=1)
+    conversation_key: str = Field(..., min_length=1)
+    conversation_short_id: str | None = None
+    customer_open_id: str | None = None
+
+
+def _merchant_id_for_douyin_cs(context: RequestContext) -> str:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+    return context.merchant_id
+
 
 _WEBHOOK_RESULT_FIELDS = {
     "event_id",
@@ -398,6 +419,46 @@ def get_douyin_conversation_messages_by_query(
         conversation_key=conversation_key,
         account_open_id=account_open_id,
     )
+
+
+@router.post("/conversations/mark-read")
+def post_douyin_conversation_mark_read(
+    request: DouyinConversationMarkReadRequest,
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> dict:
+    merchant_id = _merchant_id_for_douyin_cs(context)
+    try:
+        row = mark_conversation_read(
+            db,
+            merchant_id=merchant_id,
+            account_open_id=request.account_open_id,
+            conversation_key=request.conversation_key,
+            conversation_short_id=request.conversation_short_id,
+            customer_open_id=request.customer_open_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOUYIN_ACCOUNT_NOT_FOUND", "message": "抖音企业号不存在"},
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED", "message": "抖音企业号不属于当前商户"},
+        ) from exc
+    return {
+        "success": True,
+        "data": {
+            "account_open_id": row.account_open_id,
+            "conversation_key": row.conversation_key,
+            "conversation_short_id": row.conversation_short_id,
+            "customer_open_id": row.customer_open_id,
+            "last_read_at": row.last_read_at,
+            "last_read_event_id": row.last_read_event_id,
+        },
+        "message": "success",
+    }
 
 
 @router.post("/webhook", response_model=WebhookResponse)
