@@ -634,45 +634,15 @@ def _dispatch_lead_after_create(
         )
         return diag
 
-    # 3. 查找 assign_lead 已创建的 pending reply_check
-    reply_check_id = None
-    latest_check = (
-        db.query(ReplyCheck)
-        .filter(
-            ReplyCheck.lead_id == lead.id,
-            ReplyCheck.staff_id == staff.id,
-            ReplyCheck.check_status == "pending",
-        )
-        .order_by(ReplyCheck.id.desc())
-        .first()
+    # 阶段性禁用自动微信任务创建：自动路径缺少可信商户权益判断，只保留手动 send-to-staff。
+    diag["task_reason"] = "auto_notify_disabled"
+    logger.info(
+        "lead_auto_notify_sales_skipped reason=auto_notify_disabled source=webhook "
+        "lead_id=%d merchant_id=%s assigned_staff_id=%s",
+        lead.id,
+        lead.merchant_id,
+        staff.id,
     )
-    if latest_check:
-        reply_check_id = latest_check.id
-
-    # 4. 创建 notify_sales 任务（single_send，真实昵称）
-    message = compose_notification_text(lead)
-    try:
-        task = wechat_task_service.create_wechat_task(
-            db,
-            task_type="notify_sales",
-            lead_id=lead.id,
-            staff_id=staff.id,
-            reply_check_id=reply_check_id,
-            target_nickname=staff.wechat_nickname,
-            message=message,
-            mode="single_send",
-        )
-        diag["task_id"] = task.id
-        logger.info(
-            "webhook 留资派单已建任务: lead_id=%d, staff_id=%d, task_id=%d, nickname='%s', mode=single_send",
-            lead.id, staff.id, task.id, staff.wechat_nickname,
-        )
-    except Exception as exc:
-        diag["task_reason"] = f"create_task_failed: {type(exc).__name__}"
-        logger.error(
-            "webhook 留资派单建任务失败: lead_id=%d, staff_id=%d, error_type=%s, %s",
-            lead.id, staff.id, type(exc).__name__, exc, exc_info=True,
-        )
 
     return diag
 

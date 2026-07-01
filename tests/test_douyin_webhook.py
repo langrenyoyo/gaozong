@@ -1385,17 +1385,14 @@ def test_webhook_dispatch_assigns_and_creates_notify_task():
         assert lead.extracted_phone == "13800007777"
         assert lead.contact_extract_status == "matched"
 
-        # notify_sales 任务已创建
-        task = db.query(WechatTask).filter(
+        # 自动 notify_sales 已阶段性禁用，不创建微信任务和通知记录
+        tasks = db.query(WechatTask).filter(
             WechatTask.lead_id == lead.id,
             WechatTask.task_type == "notify_sales",
-        ).one()
-        assert task.status == "pending"
-        assert task.mode == "single_send"
-        assert task.target_nickname == "派单销售微信"
-        assert task.sent_at is None
-        # 关联 reply_check
-        assert task.reply_check_id is not None
+        ).all()
+        assert tasks == []
+        notifications = db.query(LeadNotification).filter(LeadNotification.lead_id == lead.id).all()
+        assert notifications == []
         db.close()
     finally:
         _cleanup_staff_and_related([staff_id])
@@ -1426,8 +1423,8 @@ def test_webhook_dispatch_idempotent_no_duplicate_task():
 
         lead = db.query(DouyinLead).filter(DouyinLead.source_id == "wh_idem_001").one()
         tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
-        # 仅一个 notify_sales 任务，重复事件不重复建
-        assert len(tasks) == 1
+        # 自动 notify_sales 已禁用，重复事件也不建任务
+        assert len(tasks) == 0
         db.close()
     finally:
         _cleanup_staff_and_related([staff_id])
@@ -1462,9 +1459,8 @@ def test_webhook_dispatch_merchant_isolation():
         # 分配给商户 A 销售，绝不跨商户分配给商户 B
         assert lead.assigned_staff_id == staff_a_id
         assert lead.merchant_id == "test_merchant_001"
-        task = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).one()
-        assert task.target_nickname == "商户A微信"
-        assert task.staff_id == staff_a_id
+        tasks = db.query(WechatTask).filter(WechatTask.lead_id == lead.id).all()
+        assert tasks == []
         db.close()
     finally:
         _cleanup_staff_and_related([staff_a_id, staff_b_id])
@@ -1537,7 +1533,7 @@ def test_webhook_dispatch_skips_already_assigned():
     )
     try:
         db = _db()
-        # 先用 webhook 正常派单一次（lead 进入 assigned + 建任务）
+        # 先用 webhook 正常派单一次（lead 进入 assigned，但自动建任务已禁用）
         payload = _sample_payload(
             from_user_id="wh_assigned_001",
             nick_name="已分配客户",
@@ -1551,7 +1547,7 @@ def test_webhook_dispatch_skips_already_assigned():
         tasks_before = db.query(WechatTask).filter(
             WechatTask.lead_id == lead.id, WechatTask.task_type == "notify_sales"
         ).count()
-        assert tasks_before == 1
+        assert tasks_before == 0
 
         # 直接对已 assigned lead 再次 dispatch → 前置守卫拦截，不新建任务
         contact_result = extract_contacts_from_text("手机 13800002222")
@@ -1561,7 +1557,7 @@ def test_webhook_dispatch_skips_already_assigned():
         tasks_after = db.query(WechatTask).filter(
             WechatTask.lead_id == lead.id, WechatTask.task_type == "notify_sales"
         ).count()
-        assert tasks_after == 1  # 未重复建任务
+        assert tasks_after == 0  # 自动建任务保持禁用
         db.close()
     finally:
         _cleanup_staff_and_related([staff_id])

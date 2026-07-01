@@ -318,17 +318,19 @@ def preview_sync_leads(
 
                         # P0-5A-2：auto_create_wechat_task — 分配成功后创建 pending 任务（新链路）
                         if request.auto_create_wechat_task:
-                            wt_result = _try_create_wechat_task(db, lead)
-                            if wt_result.get("created"):
-                                wt_stats.created_count += 1
-                                wt_stats.task_ids.append(wt_result["task_id"])
-                                reason += "，已创建微信任务"
-                            else:
-                                wt_stats.skipped_count += 1
-                                wt_stats.skipped.append({
-                                    "lead_id": lead.id,
-                                    "reason": wt_result.get("reason", "unknown"),
-                                })
+                            wt_stats.skipped_count += 1
+                            wt_stats.skipped.append({
+                                "lead_id": lead.id,
+                                "reason": "auto_create_wechat_task_disabled",
+                            })
+                            reason += "，微信任务自动创建已禁用"
+                            logger.info(
+                                "lead_auto_notify_sales_skipped reason=auto_create_wechat_task_disabled "
+                                "source=sync lead_id=%d merchant_id=%s assigned_staff_id=%s",
+                                lead.id,
+                                lead.merchant_id,
+                                lead.assigned_staff_id,
+                            )
                     else:
                         reason += f"，{assign_tag}"
 

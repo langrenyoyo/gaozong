@@ -1,12 +1,11 @@
-"""P0-5A-2 线索同步/派发后创建 WechatTask 测试
+"""P0-5A-2 线索同步/派发后微信任务自动创建禁用测试
 
 验证：
 - auto_create_wechat_task 默认不创建任务
-- 分配给 Aw3 时创建 pending 任务
-- 分配给非 Aw3 真实昵称时也创建任务（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁）
+- auto_create_wechat_task=true 时也不创建任务
 - 不调用 notification_service 的发送函数
 - 不调用 local agent
-- sync response 包含任务统计
+- sync response 包含跳过统计
 """
 
 import sys
@@ -127,8 +126,8 @@ def test_sync_leads_does_not_create_wechat_task_by_default():
     db.close()
 
 
-def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3():
-    """2. auto_create_wechat_task=true + 分配给 Aw3 → 创建 WechatTask。"""
+def test_sync_leads_auto_create_true_is_disabled_when_assigned_to_aw3():
+    """2. auto_create_wechat_task=true + 分配给 Aw3 → 不创建 WechatTask。"""
     db = _db()
     staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
@@ -148,25 +147,19 @@ def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3
     assert result.assigned == 1
     assert result.wechat_tasks is not None
     assert result.wechat_tasks.auto_create_enabled is True
-    assert result.wechat_tasks.created_count == 1
-    assert result.wechat_tasks.skipped_count == 0
-    assert len(result.wechat_tasks.task_ids) == 1
+    assert result.wechat_tasks.created_count == 0
+    assert result.wechat_tasks.skipped_count == 1
+    assert result.wechat_tasks.task_ids == []
+    assert result.wechat_tasks.skipped[0]["reason"] == "auto_create_wechat_task_disabled"
 
-    # 确认 WechatTask 已创建
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.status == "pending"
-    assert task.target_nickname == "Aw3"
-    assert task.mode == "single_send"
-    assert task.sent_at is None
-    assert "Aw3测试客户" in task.message or "未知客户" in task.message
+    # 确认 WechatTask 未创建
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -174,12 +167,8 @@ def test_sync_leads_create_wechat_task_when_auto_create_true_and_assigned_to_aw3
     db.close()
 
 
-def test_sync_leads_create_wechat_task_when_staff_not_aw3():
-    """3. auto_create_wechat_task=true + 非 Aw3 真实昵称 → 创建 WechatTask。
-
-    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3 门禁后，
-    使用销售真实微信昵称（啊东、）建任务，不再跳过。
-    """
+def test_sync_leads_auto_create_true_is_disabled_when_staff_not_aw3():
+    """3. auto_create_wechat_task=true + 非 Aw3 真实昵称 → 不创建 WechatTask。"""
     db = _db()
     staff = SalesStaff(name="其他销售", wechat_nickname="啊东、", status="active", merchant_id="p05a_merchant")
     db.add(staff)
@@ -198,23 +187,19 @@ def test_sync_leads_create_wechat_task_when_staff_not_aw3():
     assert result.success is True
     assert result.assigned == 1
     assert result.wechat_tasks is not None
-    assert result.wechat_tasks.created_count == 1
-    assert result.wechat_tasks.skipped_count == 0
-    assert len(result.wechat_tasks.task_ids) == 1
+    assert result.wechat_tasks.created_count == 0
+    assert result.wechat_tasks.skipped_count == 1
+    assert result.wechat_tasks.task_ids == []
+    assert result.wechat_tasks.skipped[0]["reason"] == "auto_create_wechat_task_disabled"
 
-    # 确认 WechatTask 已创建，使用销售真实昵称
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.status == "pending"
-    assert task.target_nickname == "啊东、"
-    assert task.mode == "single_send"
+    # 确认 WechatTask 未创建
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_non_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -245,16 +230,14 @@ def test_sync_leads_auto_create_task_does_not_call_notification_service_send():
     mock_notify.assert_not_called()
 
     assert result.success is True
-    assert result.wechat_tasks.created_count == 1
+    assert result.wechat_tasks.created_count == 0
+    assert result.wechat_tasks.skipped_count == 1
 
     # 清理
-    task = db.query(WechatTask).first()
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    if task:
-        db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -281,21 +264,17 @@ def test_sync_leads_auto_create_task_does_not_call_local_agent():
         result = preview_sync_leads(db, request)
 
     assert result.success is True
-    assert result.wechat_tasks.created_count == 1
+    assert result.wechat_tasks.created_count == 0
+    assert result.wechat_tasks.skipped_count == 1
 
-    # 任务状态是 pending，不是 pasted/sent/completed
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.status == "pending"
-    assert task.pasted_at is None
-    assert task.sent_at is None
+    # 自动路径不落 WechatTask，也不会进入 pasted/sent/completed
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -329,13 +308,10 @@ def test_sync_response_includes_wechat_task_stats():
     assert result.wechat_tasks.auto_create_enabled is True
 
     # 清理
-    task = db.query(WechatTask).first()
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    if task:
-        db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -343,8 +319,8 @@ def test_sync_response_includes_wechat_task_stats():
     db.close()
 
 
-def test_created_wechat_task_status_is_pending():
-    """7. 创建的任务 status 必须是 pending。"""
+def test_auto_create_true_does_not_create_pending_wechat_task():
+    """7. auto_create_wechat_task=true 不创建 pending 任务。"""
     db = _db()
     staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
@@ -358,16 +334,13 @@ def test_created_wechat_task_status_is_pending():
         )
         preview_sync_leads(db, request)
 
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.status == "pending"
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -375,8 +348,8 @@ def test_created_wechat_task_status_is_pending():
     db.close()
 
 
-def test_created_wechat_task_mode_is_single_send():
-    """8. 创建的任务 mode 必须是 single_send。"""
+def test_auto_create_true_does_not_create_single_send_wechat_task():
+    """8. auto_create_wechat_task=true 不创建 single_send 任务。"""
     db = _db()
     staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
@@ -390,16 +363,13 @@ def test_created_wechat_task_mode_is_single_send():
         )
         preview_sync_leads(db, request)
 
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.mode == "single_send"
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -407,8 +377,8 @@ def test_created_wechat_task_mode_is_single_send():
     db.close()
 
 
-def test_created_wechat_task_sent_at_is_none():
-    """9. 创建的任务 sent_at 必须是 None。"""
+def test_auto_create_true_does_not_create_sent_wechat_task():
+    """9. auto_create_wechat_task=true 不创建任何待发送任务。"""
     db = _db()
     staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
@@ -422,17 +392,13 @@ def test_created_wechat_task_sent_at_is_none():
         )
         preview_sync_leads(db, request)
 
-    task = db.query(WechatTask).first()
-    assert task is not None
-    assert task.sent_at is None
-    assert task.pasted_at is None
+    assert db.query(WechatTask).count() == 0
 
     # 清理
     lead = db.query(DouyinLead).filter(DouyinLead.source_id == "p05a_aw3_001").first()
     checks = db.query(ReplyCheck).filter(ReplyCheck.lead_id == lead.id).all() if lead else []
     for c in checks:
         db.delete(c)
-    db.delete(task)
     if lead:
         db.delete(lead)
     db.delete(staff)
@@ -443,25 +409,34 @@ def test_created_wechat_task_sent_at_is_none():
 def test_manual_post_wechat_tasks_still_works_after_sync_changes():
     """10. POST /wechat-tasks 手动创建仍然正常工作。"""
     from fastapi.testclient import TestClient
+    from app.database import SessionLocal
     from app.main import create_app
 
     app = create_app()
     client = TestClient(app)
 
-    # 手动创建任务
-    resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "手动创建测试",
-        "mode": "paste_only",
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "pending"
-    assert data["target_nickname"] == "Aw3"
-    assert data["message"] == "手动创建测试"
+    try:
+        # 手动创建任务
+        resp = client.post("/wechat-tasks", json={
+            "target_nickname": "Aw3",
+            "message": "手动创建测试",
+            "mode": "paste_only",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "pending"
+        assert data["target_nickname"] == "Aw3"
+        assert data["message"] == "手动创建测试"
 
-    # 查询 pending 列表能看到
-    resp2 = client.get("/wechat-tasks/pending")
-    assert resp2.status_code == 200
-    tasks = resp2.json()
-    assert any(t["target_nickname"] == "Aw3" for t in tasks)
+        # 查询 pending 列表能看到
+        resp2 = client.get("/wechat-tasks/pending")
+        assert resp2.status_code == 200
+        tasks = resp2.json()
+        assert any(t["id"] == data["id"] for t in tasks)
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(WechatTask).filter(WechatTask.message == "手动创建测试").delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()
