@@ -370,6 +370,52 @@ def test_external_auth_code_exchanges_token_then_loads_me(monkeypatch):
     ]
 
 
+def test_auth_callback_returns_exchanged_token_for_frontend_storage(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeExchangeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "token": "frontend-token"}
+
+    class FakeMeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:use", "auto_wechat:leads"],
+                "merchant_id": None,
+                "merchant_ids": [],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.post", lambda *args, **kwargs: FakeExchangeResponse())
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeMeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/auth/callback", params={"code": "login-code"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["token"] == "frontend-token"
+    assert data["user_id"] == "u-code"
+    assert data["permission_codes"] == ["auto_wechat:use", "auto_wechat:leads"]
+
+
 def test_external_auth_plain_authorization_is_token(monkeypatch):
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")

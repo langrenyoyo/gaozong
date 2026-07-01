@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Routes, Route, useLocation } from "react-router-dom";
-import { useState } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
+import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
+import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
+import { filterCapabilityNavCenters } from "./features/capabilities";
 
 const queryClient = new QueryClient();
 
@@ -11,6 +14,37 @@ export interface AppUser {
   account: string;
   role: "merchant" | "super_admin" | "operation_admin" | "finance_admin";
   roleLabel: string;
+  permissions?: string[];
+  permissionItems?: PermissionItem[];
+  merchantId?: string | null;
+  merchantIds?: string[];
+}
+
+function userFromAuthData(data: AuthContextData): AppUser {
+  const permissions = data.permission_codes || data.permissions || [];
+  const role = data.super_admin ? "super_admin" : "merchant";
+  return {
+    account: data.username || data.display_name || data.user_id || "external-user",
+    role,
+    roleLabel: role === "super_admin" ? "超级管理员" : "商户账号",
+    permissions,
+    permissionItems: data.permission_items || [],
+    merchantId: data.merchant_id ?? null,
+    merchantIds: data.merchant_ids || [],
+  };
+}
+
+function cleanCodeFromUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("code");
+  url.searchParams.delete("source");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function defaultPathForUser(user: AppUser): string {
+  if (user.role !== "merchant") return "/agents";
+  const first = filterCapabilityNavCenters(user)[0];
+  return first?.path || "/";
 }
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -20,12 +54,87 @@ function LegacyRedirect({ to }: { to: string }) {
 
 const App = () => {
   const [user, setUser] = useState<AppUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function restoreAuth() {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      try {
+        if (code) {
+          const data = await exchangeExternalCode(code);
+          if (data.token) {
+            setExternalToken(data.token);
+          }
+          cleanCodeFromUrl();
+          if (active) setUser(userFromAuthData(data));
+          return;
+        }
+
+        if (getExternalToken()) {
+          const data = await fetchCurrentAuthUser();
+          if (active) setUser(userFromAuthData(data));
+        }
+      } catch (error) {
+        clearExternalToken();
+        cleanCodeFromUrl();
+        if (active) {
+          setUser(null);
+          setAuthError(error instanceof Error ? error.message : "外部登录失败，请重新登录");
+        }
+      } finally {
+        if (active) setAuthLoading(false);
+      }
+    }
+
+    void restoreAuth();
+
+    const onAuthExpired = () => {
+      setUser(null);
+      setAuthError("登录已过期，请重新登录");
+    };
+    window.addEventListener("external-auth-expired", onAuthExpired);
+
+    return () => {
+      active = false;
+      window.removeEventListener("external-auth-expired", onAuthExpired);
+    };
+  }, []);
+
+  const allowedRoutes = useMemo(() => {
+    if (!user || user.role !== "merchant") return capabilityRoutes;
+    const allowedNavIds = new Set(filterCapabilityNavCenters(user).flatMap((center) => center.children.map((item) => item.id)));
+    return capabilityRoutes.filter((route) => allowedNavIds.has(route.navId));
+  }, [user]);
+
+  const handleLogin = (nextUser: AppUser) => {
+    setAuthError(null);
+    setUser(nextUser);
+  };
+
+  const handleLogout = () => {
+    clearExternalToken();
+    setUser(null);
+    setAuthError(null);
+  };
+
   const renderIndex = (initialActiveNav: string) =>
     user ? (
-      <Index user={user} onLogout={() => setUser(null)} initialActiveNav={initialActiveNav} />
+      <Index user={user} onLogout={handleLogout} initialActiveNav={initialActiveNav} />
     ) : (
-      <Login onLogin={setUser} />
+      <Login onLogin={handleLogin} authError={authError} />
     );
+
+  if (authLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#070d18] text-sm font-semibold text-white">
+        正在恢复登录态...
+      </div>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -35,19 +144,19 @@ const App = () => {
             path="/"
             element={
               user ? (
-                <Navigate to="/douyin-cs/workbench" replace />
+                <Navigate to={defaultPathForUser(user)} replace />
               ) : (
-                <Login onLogin={setUser} />
+                <Login onLogin={handleLogin} authError={authError} />
               )
             }
           />
-          {capabilityRoutes.map((route) => (
+          {allowedRoutes.map((route) => (
             <Route key={route.path} path={route.path} element={renderIndex(route.navId)} />
           ))}
           {legacyRouteRedirects.map((route) => (
             <Route key={route.from} path={route.from} element={<LegacyRedirect to={route.to} />} />
           ))}
-          <Route path="*" element={<Navigate to={user ? "/douyin-cs/workbench" : "/"} replace />} />
+          <Route path="*" element={<Navigate to={user ? defaultPathForUser(user) : "/"} replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

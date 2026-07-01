@@ -47,13 +47,19 @@ class NewCarProjectAuthClient:
             timeout_seconds=int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5")),
         )
 
-    def introspect_code(self, code: str) -> RequestContext:
-        """校验一次性 code 并返回请求上下文。"""
+    def exchange_code_for_token(self, code: str) -> str:
+        """使用一次性 code 换取外部 token，供前端完成最小登录闭环。"""
         if not code:
             raise NewCarAuthError("TOKEN_MISSING", "missing code")
         if self.mock_enabled:
+            return f"mock-external-token:{code}"
+        return self._exchange_code(code)
+
+    def introspect_code(self, code: str) -> RequestContext:
+        """校验一次性 code 并返回请求上下文。"""
+        token = self.exchange_code_for_token(code)
+        if self.mock_enabled:
             return self.build_mock_context(session_id=f"code:{code}")
-        token = self._exchange_code(code)
         return self._load_me(token)
 
     def introspect_token(self, token: str) -> RequestContext:

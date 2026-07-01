@@ -1,11 +1,11 @@
 /**
- * API 客户端基础配置
+ * API 客户端基础配置。
  *
- * 基于 axios，统一管理后端请求的 baseURL、超时和响应拦截。
- * baseURL 从环境变量读取，开发环境指向 auto_wechat 本地服务。
+ * 统一管理后端请求的 baseURL、超时、Authorization 注入和响应解包。
  */
 
 import axios from "axios";
+import { clearExternalToken, getExternalToken } from "../authToken";
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
@@ -17,10 +17,23 @@ const apiClient = axios.create({
   timeout: 10000,
 });
 
-// 响应拦截器：统一返回 response.data，调用方无需再 .data
+apiClient.interceptors.request.use((config) => {
+  const token = getExternalToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 apiClient.interceptors.response.use(
   (response) => response.data,
-  (error) => Promise.reject(error),
+  (error) => {
+    if (error?.response?.status === 401) {
+      clearExternalToken();
+      window.dispatchEvent(new Event("external-auth-expired"));
+    }
+    return Promise.reject(error);
+  },
 );
 
 export default apiClient;

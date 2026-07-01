@@ -6,6 +6,7 @@ export interface CapabilityNavCenter {
   shortLabel: string;
   path: string;
   defaultNavId: string;
+  permissionCodes: string[];
   children: NavItem[];
 }
 

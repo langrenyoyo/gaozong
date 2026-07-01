@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { AppUser } from "../App";
-import { capabilityNavCenters, findCapabilityByNavId } from "../features/capabilities";
+import { filterCapabilityNavCenters, findCapabilityByNavId } from "../features/capabilities";
 
 interface SideNavProps {
   activeNav?: string;
@@ -56,7 +56,8 @@ export default function SideNav({
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
 }: SideNavProps) {
   const isAdminUser = user.role !== "merchant";
-  const activeCenter = findCapabilityByNavId(activeNav);
+  const visibleCenters = filterCapabilityNavCenters(user);
+  const activeCenter = findCapabilityByNavId(activeNav, user);
   const navigate = useNavigate();
 
   const navigateMerchantItem = (id: string, path: string) => {
@@ -112,7 +113,7 @@ export default function SideNav({
                   </button>
                 );
               })
-            : capabilityNavCenters.map((center) => {
+            : visibleCenters.map((center) => {
                 const isCenterActive = activeCenter.id === center.id;
                 const showChildren = expanded && isCenterActive && center.children.length > 1;
                 return (

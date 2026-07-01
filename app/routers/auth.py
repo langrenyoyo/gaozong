@@ -1,24 +1,42 @@
 """认证上下文调试接口。"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
+from app.auth.newcar_client import NewCarAuthError, NewCarProjectAuthClient
 
 
 router = APIRouter(prefix="/auth", tags=["登录权限"])
 
 
+def _auth_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
 @router.get("/me")
 async def get_me(context: RequestContext = Depends(get_request_context_required)):
-    """返回当前请求上下文。
-
-    P0 阶段用于调试 NewCarProject 登录态接入，不对现有业务接口强制鉴权。
-    """
+    """返回当前请求上下文。"""
     return {"success": True, "data": context.to_dict(), "message": "success"}
 
 
 @router.get("/callback")
-async def auth_callback(context: RequestContext = Depends(get_request_context_required)):
-    """NewCarProject 登录回调占位接口。"""
-    return {"success": True, "data": context.to_dict(), "message": "success"}
+async def auth_callback(request: Request):
+    """NewCarProject 登录回调门面，code 场景额外返回前端需要保存的外部 token。"""
+    code = request.query_params.get("code")
+    client = NewCarProjectAuthClient.from_env()
+    try:
+        if code:
+            token = client.exchange_code_for_token(code)
+            context = client.introspect_token(token)
+            data = context.to_dict()
+            data["token"] = token
+        else:
+            context = await get_request_context_required(request)
+            data = context.to_dict()
+    except NewCarAuthError as exc:
+        status_code = 401
+        if exc.code in {"PERMISSION_DENIED", "MERCHANT_DISABLED", "PACKAGE_EXPIRED"}:
+            status_code = 403
+        raise _auth_error(status_code, exc.code, exc.message) from exc
+    return {"success": True, "data": data, "message": "success"}

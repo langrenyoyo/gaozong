@@ -1,4 +1,18 @@
+import type { AppUser } from "../App";
 import type { CapabilityNavCenter } from "./types";
+
+export const PERMISSIONS = {
+  use: "auto_wechat:use",
+  douyinAiCs: "auto_wechat:douyin_ai_cs",
+  leads: "auto_wechat:leads",
+  agent: "auto_wechat:agent",
+  compute: "auto_wechat:compute",
+  adminComputeConfig: "auto_wechat:admin:compute_config",
+} as const;
+
+const legacyPermissionAliases: Record<string, string[]> = {
+  [PERMISSIONS.agent]: ["auto_wechat:wechat_assistant", "auto_wechat:wechat_agent", "auto_wechat:ai_agents"],
+};
 
 export const capabilityNavCenters: CapabilityNavCenter[] = [
   {
@@ -7,6 +21,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     shortLabel: "客服",
     path: "/douyin-cs/workbench",
     defaultNavId: "douyin-ai-cs",
+    permissionCodes: [PERMISSIONS.douyinAiCs],
     children: [
       { id: "douyin-ai-cs", label: "客服工作台", path: "/douyin-cs/workbench" },
       { id: "douyin-auto-reply-diagnostics", label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
@@ -18,6 +33,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     shortLabel: "线索",
     path: "/leads",
     defaultNavId: "leads",
+    permissionCodes: [PERMISSIONS.leads],
     children: [
       { id: "leads", label: "AI小高线索", path: "/leads" },
     ],
@@ -28,16 +44,18 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     shortLabel: "智能体",
     path: "/agents",
     defaultNavId: "ai-agents",
+    permissionCodes: [PERMISSIONS.agent],
     children: [
       { id: "ai-agents", label: "智能体管理", path: "/agents" },
     ],
   },
   {
     id: "wechat-assistant",
-    title: "AI小高微信助手",
+    title: "小高AI微信助手",
     shortLabel: "微信",
     path: "/wechat-assistant",
     defaultNavId: "ai-agent",
+    permissionCodes: [PERMISSIONS.agent],
     children: [
       { id: "ai-agent", label: "Local Agent状态", path: "/wechat-assistant" },
       { id: "wechat-config", label: "微信配置", path: "/wechat-assistant/config" },
@@ -51,6 +69,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     shortLabel: "算力",
     path: "/compute/center",
     defaultNavId: "compute",
+    permissionCodes: [PERMISSIONS.compute],
     children: [
       { id: "compute", label: "算力中心", path: "/compute/center" },
       { id: "compute-token-transactions", label: "Token流水", path: "/compute/token-transactions" },
@@ -62,6 +81,23 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
 
 export const merchantNavItems = capabilityNavCenters.flatMap((center) => center.children);
 
-export function findCapabilityByNavId(navId: string): CapabilityNavCenter {
-  return capabilityNavCenters.find((center) => center.children.some((item) => item.id === navId)) || capabilityNavCenters[0];
+export function hasPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined, code: string): boolean {
+  if (!user) return false;
+  if (user.role !== "merchant") return true;
+  const permissions = user.permissions || [];
+  return permissions.includes(code) || (legacyPermissionAliases[code] || []).some((alias) => permissions.includes(alias));
+}
+
+export function hasAnyPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined, codes: string[]): boolean {
+  return codes.some((code) => hasPermission(user, code));
+}
+
+export function filterCapabilityNavCenters(user: AppUser): CapabilityNavCenter[] {
+  if (user.role !== "merchant") return capabilityNavCenters;
+  return capabilityNavCenters.filter((center) => hasAnyPermission(user, center.permissionCodes));
+}
+
+export function findCapabilityByNavId(navId: string, user?: AppUser | null): CapabilityNavCenter {
+  const centers = user ? filterCapabilityNavCenters(user) : capabilityNavCenters;
+  return centers.find((center) => center.children.some((item) => item.id === navId)) || centers[0] || capabilityNavCenters[0];
 }
