@@ -3,6 +3,7 @@
   CheckCircleIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  FilterIcon,
   InboxIcon,
   LoaderIcon,
   MoreHorizontalIcon,
@@ -1668,11 +1669,16 @@ export default function LeadsManagement() {
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
       <div className="shrink-0 bg-white">
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-[#e4e8f0] bg-white px-5 py-4">
-          <div className="min-w-0">
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高线索</h1>
-            <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
-              统一展示抖音留资线索、联系方式、意向车型、预算、城市、销售跟进状态。
-            </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
+              <FilterIcon size={22} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高线索</h1>
+              <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
+                统一展示抖音留资线索、联系方式、意向车型、预算、城市、销售跟进状态。
+              </p>
+            </div>
           </div>
           <button
             onClick={() => void refreshData()}
