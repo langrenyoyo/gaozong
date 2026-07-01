@@ -25,6 +25,7 @@ from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
 from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
 from apps.xg_douyin_ai_cs.services.compute_usage_client import ComputeUsageClient
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
+from app.services.contact_extractor import extract_contacts_from_text
 
 _logger = logging.getLogger(__name__)
 
@@ -809,6 +810,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "如果知识库没有相关信息，应要求人工确认或引导客户继续在当前对话内补充需求。",
             "Direct LLM 不允许主动索要微信、电话、手机号或其他联系方式。",
             "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
+            "如果客户已经提供手机号、微信号或联系方式，不要重复索要联系方式，应确认已收到并引导后续跟进。",
             "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
             "已知客户信息会通过 known_customer_info 提供，请作为上下文使用，不要机械复述成槽位列表。",
             "回复要像正常二手车销售接话，1 到 3 句话，不要输出“收到，预算、车型、关注点...”这种系统总结。",
@@ -840,6 +842,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         system_parts.extend(
             [
                 "必须读取 conversation_history 中客户已经提供的信息，不得重复询问已知预算、车型、年份、用途、城市或关注点。",
+                "如果客户已经提供手机号、微信号或联系方式，不要重复索要联系方式，应确认已收到并引导后续跟进。",
                 "如果客户已提供预算和车型，回复必须复述这些已知需求，并承接客户最新问题。",
                 "已知客户信息会通过 known_customer_info 提供，请作为上下文使用，不要机械复述成槽位列表。",
                 "回复要像正常二手车销售接话，1 到 3 句话，不要输出“收到，预算、车型、关注点...”这种系统总结。",
@@ -1565,6 +1568,10 @@ def _build_known_customer_context(
         latest_message=latest_message,
         conversation_history=conversation_history,
     )
+    contacts = _extract_known_contacts(
+        latest_message=latest_message,
+        conversation_history=conversation_history,
+    )
 
     def field(name: str, label: str | None = None) -> dict[str, Any]:
         value = merged.get(name)
@@ -1591,6 +1598,8 @@ def _build_known_customer_context(
         must_not_ask_again.append("车型")
     if merged.get("years"):
         must_not_ask_again.append("年份")
+    if contacts.get("phone") or contacts.get("wechat"):
+        must_not_ask_again.append("联系方式")
 
     return {
         "known_customer_info": {
@@ -1602,11 +1611,55 @@ def _build_known_customer_context(
                 "value": merged.get("years"),
             },
             "city": field("city", "城市"),
+            **contacts,
             "concerns": normalized_concerns,
         },
         "conversation_task": _build_conversation_task(latest_message, merged),
         "must_not_ask_again": must_not_ask_again,
     }
+
+
+def _extract_known_contacts(
+    *,
+    latest_message: str,
+    conversation_history: object,
+) -> dict[str, dict[str, Any]]:
+    latest_contacts = extract_contacts_from_text(latest_message)
+    history_contacts: list[tuple[str, str]] = []
+    if isinstance(conversation_history, list):
+        for item in conversation_history:
+            if str(getattr(item, "role", "") or "").strip() != "customer":
+                continue
+            extracted = extract_contacts_from_text(getattr(item, "content", None))
+            history_contacts.extend((str(contact["type"]), str(contact["value"])) for contact in extracted.all_contacts)
+
+    def contact_field(contact_type: str, label: str) -> dict[str, Any] | None:
+        latest_value = getattr(latest_contacts, contact_type, None)
+        if latest_value:
+            return {
+                "value": latest_value,
+                "source": "latest",
+                "updated_from_latest_message": True,
+                "label": label,
+            }
+        history_value = next((value for item_type, value in history_contacts if item_type == contact_type), None)
+        if history_value:
+            return {
+                "value": history_value,
+                "source": "history",
+                "updated_from_latest_message": False,
+                "label": label,
+            }
+        return None
+
+    result: dict[str, dict[str, Any]] = {}
+    phone = contact_field("phone", "手机号")
+    wechat = contact_field("wechat", "微信号")
+    if phone:
+        result["phone"] = phone
+    if wechat:
+        result["wechat"] = wechat
+    return result
 
 
 def _build_conversation_task(latest_message: str, slots: dict[str, Any]) -> str:

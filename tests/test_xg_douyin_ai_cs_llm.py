@@ -1594,6 +1594,59 @@ def test_reply_suggestion_prompt_includes_structured_known_customer_info(
     assert "什么车型" not in text
 
 
+def test_reply_suggestion_prompt_includes_known_contact_info(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    seen = {}
+
+    def fake_chat(self, messages):
+        seen["system_prompt"] = messages[0]["content"]
+        seen["payload"] = json.loads(messages[1]["content"])
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "收到，您的联系方式我已经记下了，我让顾问按您说的需求核一下车源和检测报告。",
+                    "intent": "consult_inventory",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.86,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "有合适的车源再发我看看",
+            "conversation_history": [
+                {"role": "customer", "content": "我想买辆车，➕我qazwkp152"},
+                {"role": "customer", "content": "电话 15057903797"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    known = seen["payload"]["known_customer_info"]
+    assert known["wechat"]["value"] == "qazwkp152"
+    assert known["phone"]["value"] == "15057903797"
+    assert "联系方式" in seen["payload"]["must_not_ask_again"]
+    assert "手机号、微信号" in seen["system_prompt"]
+
+
 def test_reply_suggestion_uses_history_slots_when_latest_only_mentions_detection(
     tmp_path, monkeypatch
 ):

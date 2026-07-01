@@ -145,6 +145,37 @@ def test_extract_wechat_after_add_me_keyword():
     assert result.wechats == ["abc123"]
 
 
+def test_extract_wechat_after_add_me_without_separator():
+    result = extract_contacts_from_text("我想买辆车，➕我qazwkp152")
+
+    assert result.wechat == "qazwkp152"
+    assert result.wechats == ["qazwkp152"]
+
+
+def test_extract_wechat_from_weak_car_buying_context():
+    result = extract_contacts_from_text("你好 我想买台车 dhff98475")
+
+    assert result.wechat == "dhff98475"
+    assert result.wechats == ["dhff98475"]
+
+
+def test_extract_wechat_positive_variants_from_task_examples():
+    cases = [
+        ("加我qazwkp152", "qazwkp152"),
+        ("微信qazwkp152", "qazwkp152"),
+        ("微qazwkp152", "qazwkp152"),
+        ("V我 qAz_wkp-152", "qAz_wkp-152"),
+        ("vx qazwkp152", "qazwkp152"),
+        ("v: qazwkp152", "qazwkp152"),
+        ("微信号：qazwkp152", "qazwkp152"),
+    ]
+
+    for text, expected in cases:
+        result = extract_contacts_from_text(text)
+        assert result.wechat == expected
+        assert result.wechats == [expected]
+
+
 def test_extract_wechat_after_add_my_wechat_keyword():
     result = extract_contacts_from_text("加我微信 abc123")
 
@@ -197,6 +228,21 @@ def test_extract_duplicate_wechats_deduplicates_by_first_seen():
 def test_single_v_does_not_match_inside_english_word():
     result = extract_contacts_from_text("love abc123")
 
+    assert result.wechat is None
+    assert result.wechats == []
+
+
+def test_plain_english_token_without_car_context_is_not_wechat():
+    result = extract_contacts_from_text("douyin open_id server_message_id conversation_short_id https miniapp")
+
+    assert result.wechat is None
+    assert result.wechats == []
+
+
+def test_phone_number_is_not_wechat_when_car_context_exists():
+    result = extract_contacts_from_text("我想买车 15057903797")
+
+    assert result.phone == "15057903797"
     assert result.wechat is None
     assert result.wechats == []
 
