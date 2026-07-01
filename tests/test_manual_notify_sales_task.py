@@ -243,6 +243,38 @@ def test_inactive_staff_is_rejected():
     assert _task_count() == 0
 
 
+def test_staff_without_wechat_nickname_is_rejected_without_creating_task():
+    staff_id = _insert_staff(wechat_nickname=" ")
+    lead_id = _insert_lead(assigned_staff_id=staff_id)
+
+    response = _client().post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "STAFF_WECHAT_NICKNAME_MISSING"
+    assert _task_count() == 0
+
+
+def test_contact_missing_is_rejected_without_creating_task():
+    staff_id = _insert_staff()
+    lead_id = _insert_lead(assigned_staff_id=staff_id)
+    db = TestSession()
+    try:
+        lead = db.query(DouyinLead).filter_by(id=lead_id).one()
+        lead.customer_contact = None
+        lead.raw_data = None
+        lead.extracted_phone = None
+        lead.extracted_wechat = None
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "CONTACT_MISSING"
+    assert _task_count() == 0
+
+
 def test_existing_pending_task_is_reused_without_duplicate_records():
     staff_id = _insert_staff()
     lead_id = _insert_lead(assigned_staff_id=staff_id)

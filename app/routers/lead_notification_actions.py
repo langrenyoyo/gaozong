@@ -13,6 +13,11 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 from app.schemas import SendToStaffRequest, SendToStaffResponse
+from app.services.lead_wechat_notify_eligibility_service import (
+    LeadWechatNotifyDecision,
+    LeadWechatNotifyReason,
+    evaluate_lead_wechat_notify_eligibility,
+)
 from app.services.notification_template import compose_notification_text
 from app.services.wechat_task_service import create_wechat_task
 
@@ -40,101 +45,26 @@ def create_notify_sales_task(
     """为已分配线索创建通知销售的微信任务。"""
     require_permissions(["auto_wechat:leads", "auto_wechat:agent"])(context)
     merchant_id = _require_merchant_id(context)
+    decision = evaluate_lead_wechat_notify_eligibility(
+        db=db,
+        context=context,
+        lead_id=request.lead_id,
+        staff_id=request.staff_id,
+    )
+    if not decision.allowed:
+        compatible = _compatible_decision_response(db, decision)
+        if compatible:
+            return compatible
+        _raise_decision_error(decision)
+
     lead = db.query(DouyinLead).filter(
         DouyinLead.id == request.lead_id,
         DouyinLead.merchant_id == merchant_id,
     ).first()
-    if not lead:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "LEAD_NOT_FOUND", "message": "线索不存在"},
-        )
-
-    if not lead.assigned_staff_id:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "LEAD_NOT_ASSIGNED", "message": "线索尚未分配销售"},
-        )
-
-    if request.staff_id is not None and request.staff_id != lead.assigned_staff_id:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "STAFF_MISMATCH", "message": "请先重新分配线索后再通知销售"},
-        )
-
     staff = db.query(SalesStaff).filter(
         SalesStaff.id == lead.assigned_staff_id,
         SalesStaff.merchant_id == merchant_id,
     ).first()
-    if not staff:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "STAFF_NOT_FOUND", "message": "销售不存在"},
-        )
-
-    if staff.status != "active":
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "STAFF_NOT_ACTIVE", "message": "销售不是启用状态"},
-        )
-
-    if not staff.wechat_nickname or not staff.wechat_nickname.strip():
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "STAFF_WECHAT_NICKNAME_MISSING", "message": "销售未设置微信昵称"},
-        )
-
-    existing_sent = db.query(LeadNotification).filter(
-        LeadNotification.lead_id == lead.id,
-        LeadNotification.staff_id == staff.id,
-        LeadNotification.send_status == "sent",
-    ).order_by(LeadNotification.id.desc()).first()
-    if existing_sent:
-        logger.info(
-            "manual_notify_sales stage=already_sent lead_id=%s staff_id=%s notification_id=%s",
-            lead.id,
-            staff.id,
-            existing_sent.id,
-        )
-        return _response(
-            status="already_sent",
-            message="该销售已通知，无需重复发送",
-            lead=lead,
-            staff=staff,
-            task=None,
-            notification=existing_sent,
-        )
-
-    existing_task = db.query(WechatTask).filter(
-        WechatTask.task_type == "notify_sales",
-        WechatTask.lead_id == lead.id,
-        WechatTask.staff_id == staff.id,
-        WechatTask.status.in_(["pending", "running"]),
-    ).order_by(WechatTask.id.desc()).first()
-    if existing_task:
-        notification = _latest_notification(db, lead.id, staff.id)
-        if not notification:
-            notification = _create_notification(
-                db,
-                lead_id=lead.id,
-                staff_id=staff.id,
-                notification_text=existing_task.message or compose_notification_text(lead),
-            )
-        logger.info(
-            "manual_notify_sales stage=existing_pending lead_id=%s staff_id=%s task_id=%s notification_id=%s",
-            lead.id,
-            staff.id,
-            existing_task.id,
-            notification.id,
-        )
-        return _response(
-            status="existing_pending",
-            message="该销售已有待执行通知任务",
-            lead=lead,
-            staff=staff,
-            task=existing_task,
-            notification=notification,
-        )
 
     notification_text = (request.message or "").strip() or compose_notification_text(lead)
     task = create_wechat_task(
@@ -167,6 +97,75 @@ def create_notify_sales_task(
         task=task,
         notification=notification,
     )
+
+
+def _compatible_decision_response(db: Session, decision: LeadWechatNotifyDecision) -> SendToStaffResponse | None:
+    if decision.reason == LeadWechatNotifyReason.ALREADY_SENT and decision.existing_notification_id:
+        notification = db.get(LeadNotification, decision.existing_notification_id)
+        if notification and notification.lead and notification.staff:
+            logger.info(
+                "manual_notify_sales stage=already_sent lead_id=%s staff_id=%s notification_id=%s",
+                notification.lead_id,
+                notification.staff_id,
+                notification.id,
+            )
+            return _response(
+                status="already_sent",
+                message="该销售已通知，无需重复发送",
+                lead=notification.lead,
+                staff=notification.staff,
+                task=None,
+                notification=notification,
+            )
+
+    if decision.reason == LeadWechatNotifyReason.EXISTING_PENDING_TASK and decision.existing_task_id:
+        task = db.get(WechatTask, decision.existing_task_id)
+        if task and task.lead and task.staff:
+            notification = _latest_notification(db, task.lead_id, task.staff_id)
+            if not notification:
+                notification = _create_notification(
+                    db,
+                    lead_id=task.lead_id,
+                    staff_id=task.staff_id,
+                    notification_text=task.message or compose_notification_text(task.lead),
+                )
+            logger.info(
+                "manual_notify_sales stage=existing_pending lead_id=%s staff_id=%s task_id=%s notification_id=%s",
+                task.lead_id,
+                task.staff_id,
+                task.id,
+                notification.id,
+            )
+            return _response(
+                status="existing_pending",
+                message="该销售已有待执行通知任务",
+                lead=task.lead,
+                staff=task.staff,
+                task=task,
+                notification=notification,
+            )
+
+    return None
+
+
+def _raise_decision_error(decision: LeadWechatNotifyDecision) -> None:
+    status_code = 400
+    if decision.reason in {LeadWechatNotifyReason.PERMISSION_DENIED, LeadWechatNotifyReason.MERCHANT_REQUIRED}:
+        status_code = 403
+    elif decision.reason == LeadWechatNotifyReason.LEAD_NOT_FOUND:
+        status_code = 404
+    raise HTTPException(
+        status_code=status_code,
+        detail={"code": _route_error_code(decision.reason), "message": decision.message},
+    )
+
+
+def _route_error_code(reason: str) -> str:
+    if reason == LeadWechatNotifyReason.MERCHANT_REQUIRED:
+        return "MERCHANT_CONTEXT_MISSING"
+    if reason == LeadWechatNotifyReason.STAFF_WECHAT_NOT_CONFIGURED:
+        return "STAFF_WECHAT_NICKNAME_MISSING"
+    return reason
 
 
 def _latest_notification(db: Session, lead_id: int, staff_id: int) -> LeadNotification | None:
