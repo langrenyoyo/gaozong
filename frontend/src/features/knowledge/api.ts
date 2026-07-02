@@ -14,6 +14,7 @@ export type { DouyinAccountItem } from "../douyin-cs/types";
 const KNOWLEDGE_RAG_API_BASE_URL =
   import.meta.env.VITE_DOUYIN_AI_CS_API_BASE_URL || "http://127.0.0.1:9100";
 
+// 内部调试专用：正式商户侧写入/训练入口必须走 9000 可信代理。
 const knowledgeRagClient = axios.create({
   baseURL: KNOWLEDGE_RAG_API_BASE_URL,
   timeout: 10000,

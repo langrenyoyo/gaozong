@@ -705,6 +705,7 @@ export async function getReplySuggestion(
   conversationId: string | number,
   payload: ReplySuggestionRequest,
 ): Promise<ReplySuggestionResponse> {
+  // 内部调试专用：正式商户侧工作台必须使用 getTrustedReplySuggestion 走 9000 可信代理。
   return requestDouyinAiCs(
     douyinAiCsClient.post<ReplySuggestionResponse>(
       `/douyin/conversations/${encodeURIComponent(String(conversationId))}/reply-suggestion`,
