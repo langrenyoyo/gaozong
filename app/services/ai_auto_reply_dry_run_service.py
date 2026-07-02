@@ -222,6 +222,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             "knowledge_base_text": binding.agent.knowledge_base_text or "",
             "status": binding.agent.status,
             "allowed_category_keys": allowed_category_keys,
+            "rag_enabled": bool(allowed_category_keys),
         },
         "latest_message": latest_message,
         "conversation_history": conversation_history,

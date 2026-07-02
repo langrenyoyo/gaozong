@@ -101,6 +101,7 @@ class AgentConfig(BaseModel):
     status: str | None = None
     allowed_category_keys: list[str] | None = None
     allowed_category_ids: list[str] | None = None
+    rag_enabled: bool | None = None
 
 
 class ConversationHistoryItem(BaseModel):

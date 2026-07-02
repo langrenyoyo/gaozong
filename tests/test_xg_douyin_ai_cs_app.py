@@ -751,11 +751,19 @@ def test_reply_suggestion_without_allowed_category_keys_keeps_rag_unfiltered(tmp
     assert sorted(item["title"] for item in data["source_chunks"]) == ["base doc", "bba doc"]
 
 
-def test_reply_suggestion_empty_allowed_category_keys_keeps_rag_unfiltered(tmp_path, monkeypatch):
+def test_reply_suggestion_empty_allowed_category_keys_disables_rag(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _seed_reply_suggestion_category_chunks()
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
     _patch_reply_suggestion_vector_and_chat(monkeypatch, "empty list reply")
+
+    def fail_search(_payload):
+        raise AssertionError("empty allowed_category_keys must not search RAG")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.search",
+        fail_search,
+    )
 
     response = client.post(
         "/douyin/conversations/1/reply-suggestion",
@@ -777,7 +785,11 @@ def test_reply_suggestion_empty_allowed_category_keys_keeps_rag_unfiltered(tmp_p
     assert response.status_code == 200
     data = response.json()
     assert data["auto_send"] is False
-    assert sorted(item["title"] for item in data["source_chunks"]) == ["base doc", "bba doc"]
+    assert data["llm_used"] is True
+    assert data["rag_used"] is False
+    assert data["source_chunks"] == []
+    assert data["rag_sources"] == []
+    assert data["reply_text"] == "empty list reply"
 
 
 def test_reply_suggestion_uses_default_agent_when_agent_id_missing(tmp_path, monkeypatch):

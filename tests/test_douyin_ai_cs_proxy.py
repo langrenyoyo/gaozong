@@ -689,9 +689,10 @@ def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
     assert agent_config["knowledge_base_text"] == "A6 暂无现车，可推荐同级车型。"
     assert agent_config["status"] == "active"
     assert agent_config["allowed_category_keys"] == []
+    assert agent_config["rag_enabled"] is False
 
 
-def test_proxy_does_not_inject_base_when_agent_has_no_category_binding(monkeypatch):
+def test_proxy_disables_rag_when_agent_has_no_category_binding(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -705,7 +706,9 @@ def test_proxy_does_not_inject_base_when_agent_has_no_category_binding(monkeypat
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == []
+    agent_config = fake_client.calls[0]["request"]["agent_config"]
+    assert agent_config["allowed_category_keys"] == []
+    assert agent_config["rag_enabled"] is False
 
 
 def test_proxy_injects_account_direct_llm_policy(monkeypatch):
@@ -884,6 +887,7 @@ def test_proxy_injects_active_agent_category_keys(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["premium_bba", "new_energy"]
+    assert fake_client.calls[0]["request"]["agent_config"]["rag_enabled"] is True
 
 
 def test_proxy_deduplicates_allowed_category_keys_with_base_first(monkeypatch):
@@ -906,6 +910,7 @@ def test_proxy_deduplicates_allowed_category_keys_with_base_first(monkeypatch):
         "premium_bba",
         "finance",
     ]
+    assert fake_client.calls[0]["request"]["agent_config"]["rag_enabled"] is True
 
 
 def test_proxy_ignores_forged_allowed_category_keys_from_payload(monkeypatch):
@@ -929,6 +934,7 @@ def test_proxy_ignores_forged_allowed_category_keys_from_payload(monkeypatch):
 
     assert response.status_code == 200
     assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == ["premium_bba"]
+    assert fake_client.calls[0]["request"]["agent_config"]["rag_enabled"] is True
     assert fake_client.calls[0]["request"].get("allowed_category_keys") is None
 
 
@@ -951,7 +957,9 @@ def test_proxy_uses_empty_categories_when_category_binding_read_fails(monkeypatc
     )
 
     assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["agent_config"]["allowed_category_keys"] == []
+    agent_config = fake_client.calls[0]["request"]["agent_config"]
+    assert agent_config["allowed_category_keys"] == []
+    assert agent_config["rag_enabled"] is False
 
 
 def test_proxy_rejects_agent_from_other_merchant_before_calling_9100(monkeypatch):

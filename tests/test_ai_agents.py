@@ -262,6 +262,7 @@ def test_agent_preview_uses_draft_config_and_forces_auto_send_false(monkeypatch)
     assert payload["agent_config"]["prompt"] == "只使用草稿人设"
     assert payload["agent_config"]["knowledge_base_text"] == "只使用草稿知识库提示词"
     assert payload["agent_config"]["allowed_category_keys"] == ["base"]
+    assert payload["agent_config"]["rag_enabled"] is True
 
 
 def test_agent_preview_rejects_cross_merchant_agent(monkeypatch):

@@ -279,6 +279,7 @@ async def create_reply_suggestion_proxy(
             "knowledge_base_text": agent.knowledge_base_text or "",
             "status": agent.status,
             "allowed_category_keys": allowed_category_keys,
+            "rag_enabled": bool(allowed_category_keys),
         },
         "latest_message": request.latest_message,
         "max_history_messages": request.max_history_messages,

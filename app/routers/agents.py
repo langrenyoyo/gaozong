@@ -226,6 +226,7 @@ def preview_agent(
             "knowledge_base_text": payload.knowledge_prompt or "",
             "status": "active",
             "allowed_category_keys": category_keys,
+            "rag_enabled": bool(category_keys),
         },
         "latest_message": text,
         "max_history_messages": 1,

@@ -549,6 +549,7 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
     ]
     assert payload["agent_config"]["agent_id"] == "agent-1"
     assert payload["agent_config"]["allowed_category_keys"] == []
+    assert payload["agent_config"]["rag_enabled"] is False
 
     db = TestSession()
     try:

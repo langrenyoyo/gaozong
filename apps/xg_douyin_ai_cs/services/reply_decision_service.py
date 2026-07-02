@@ -291,33 +291,41 @@ def build_reply_suggestion(
     )
     merchant_prompt = apply_agent_prompt(merchant_prompt, agent)
     agent_phone_goal = _agent_requires_phone_lead_capture(agent)
-    allowed_category_keys = _normalized_optional_list(
-        request.agent_config.allowed_category_keys if request.agent_config else None
-    )
-    allowed_category_ids = _normalized_optional_list(
-        request.agent_config.allowed_category_ids if request.agent_config else None
+    raw_allowed_category_keys = request.agent_config.allowed_category_keys if request.agent_config else None
+    raw_allowed_category_ids = request.agent_config.allowed_category_ids if request.agent_config else None
+    allowed_category_keys = _normalized_optional_list(raw_allowed_category_keys)
+    allowed_category_ids = _normalized_optional_list(raw_allowed_category_ids)
+    rag_enabled = _agent_rag_enabled(
+        request.agent_config,
+        raw_allowed_category_keys=raw_allowed_category_keys,
+        raw_allowed_category_ids=raw_allowed_category_ids,
+        allowed_category_keys=allowed_category_keys,
+        allowed_category_ids=allowed_category_ids,
     )
     _logger.info(
         "reply_suggestion_rag_filter tenant_id=%s merchant_id=%s douyin_account_id=%s "
-        "agent_id=%s allowed_category_keys_count=%d allowed_category_ids_count=%d",
+        "agent_id=%s rag_enabled=%s allowed_category_keys_count=%d allowed_category_ids_count=%d",
         request.tenant_id,
         request.merchant_id,
         douyin_account_id,
         agent.get("agent_id"),
+        rag_enabled,
         len(allowed_category_keys or []),
         len(allowed_category_ids or []),
     )
-    source_chunks = search(
-        RagSearchRequest(
-            tenant_id=request.tenant_id,
-            merchant_id=request.merchant_id,
-            douyin_account_id=douyin_account_id,
-            query=request.latest_message,
-            top_k=5,
-            category_keys=allowed_category_keys,
-            category_ids=allowed_category_ids,
+    source_chunks = []
+    if rag_enabled:
+        source_chunks = search(
+            RagSearchRequest(
+                tenant_id=request.tenant_id,
+                merchant_id=request.merchant_id,
+                douyin_account_id=douyin_account_id,
+                query=request.latest_message,
+                top_k=5,
+                category_keys=allowed_category_keys,
+                category_ids=allowed_category_ids,
+            )
         )
-    )
     if source_chunks:
         return _build_llm_reply(
             conversation_id,
@@ -2234,6 +2242,23 @@ def _normalized_optional_list(values: list[str] | None) -> list[str] | None:
         if text:
             normalized.append(text)
     return normalized or None
+
+
+def _agent_rag_enabled(
+    agent_config: object,
+    *,
+    raw_allowed_category_keys: object,
+    raw_allowed_category_ids: object,
+    allowed_category_keys: list[str] | None,
+    allowed_category_ids: list[str] | None,
+) -> bool:
+    if agent_config is not None and getattr(agent_config, "rag_enabled", None) is not None:
+        return bool(getattr(agent_config, "rag_enabled"))
+    if isinstance(raw_allowed_category_keys, list) and not allowed_category_keys and not allowed_category_ids:
+        return False
+    if isinstance(raw_allowed_category_ids, list) and not allowed_category_ids and not allowed_category_keys:
+        return False
+    return True
 
 
 def _report_llm_usage(

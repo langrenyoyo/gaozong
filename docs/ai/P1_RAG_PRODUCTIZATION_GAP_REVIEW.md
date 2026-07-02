@@ -353,3 +353,202 @@ P1-RAG-KNOWLEDGE-SERVICE-DECOMMISSION-1
 P1-RAG-AGENT-KB-CATEGORY-SCOPE-CONFIRM-1
 P1-FRONTEND-KNOWLEDGE-LEGACY-CLEANUP-1
 ```
+
+## 10. P1-AGENT-KB-CATEGORY-CONSUMPTION-POLICY-AUDIT-1 只读审计
+
+更新时间：2026-07-02
+
+### 10.1 审计范围
+
+已扫描：
+
+1. `app/routers/agents.py`
+2. `app/routers/knowledge_categories.py`
+3. `app/routers/douyin_ai_cs_proxy.py`
+4. `app/services/agent_knowledge_category_service.py`
+5. `apps/agents/services.py`
+6. `app/services/knowledge_category_service.py`
+7. `apps/knowledge/services.py`
+8. `app/models.py`
+9. `app/schemas.py`
+10. `migrations/versions/0012_agent_knowledge_categories.sql`
+11. `migrations/versions/0013_knowledge_categories.sql`
+12. `tests/test_knowledge_categories_api.py`
+13. `tests/test_ai_agents.py`
+14. `tests/test_douyin_ai_cs_proxy.py`
+15. `tests/test_xg_douyin_ai_cs_app.py`
+16. `frontend/src/features/agents/pages/SuperMerchantAgent.tsx`
+17. `frontend/src/api/aiAgents.ts`
+18. `frontend/src/features/routes.ts`
+19. `frontend/src/features/capabilities.ts`
+20. `frontend/src/features/knowledge/*`
+21. `frontend/src/features/douyin-cs/pages/DouyinAiCsTestPage.tsx`
+
+本轮只读审计业务代码和前端代码；本节为文档记录，不修改接口、权限、前端 UI、9100、19000、NewCar 登录协议或自动发送链路。
+
+### 10.2 后端接口清单
+
+| Method | Path | 函数名 | 当前权限依赖 | merchant_id | 可写 | 修改知识库内容 | 修改 Agent 分类绑定 | 调用 9100 | 影响 allowed_category_keys | 初步分类 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GET | `/knowledge-categories` | `list_knowledge_categories` | `get_request_context_required` + `auto_wechat:ai_agents` 或历史兼容 `auto_wechat:agent` | 是，缺失返回 `MERCHANT_ID_REQUIRED` | 否 | 否 | 否 | 否 | 间接提供可选分类 | 只读分类展示 / Agent 消费配置辅助 |
+| POST | `/knowledge-categories` | `create_knowledge_category` | 入口先固定 403，旧逻辑未进入 | 未进入旧逻辑 | 否，已锁定 | 否 | 否 | 否 | 否 | 历史商户分类管理入口，已禁用 |
+| GET | `/agents/{agent_id}/knowledge-categories` | `get_agent_knowledge_categories` | `get_request_context_required` + `auto_wechat:ai_agents` 或历史兼容 `auto_wechat:agent` | 是 | 否 | 否 | 否 | 否 | 返回当前 Agent 手动绑定 key | Agent 消费知识分类配置 |
+| PUT | `/agents/{agent_id}/knowledge-categories` | `update_agent_knowledge_categories` | `get_request_context_required` + `auto_wechat:ai_agents` 或历史兼容 `auto_wechat:agent` | 是 | 是 | 否 | 是，替换 `agent_knowledge_categories` | 否 | 后续 reply-suggestion 会读取这些 key | Agent 消费知识分类配置 |
+| POST | `/agents/preview` | `preview_agent` | `get_request_context_required` + `auto_wechat:ai_agents` 或历史兼容 `auto_wechat:agent` | 是 | 否 | 否 | 否 | 是 | 使用请求中的 `knowledge_category_keys` 构造预览用 `allowed_category_keys` | Agent 预览 / 调试消费链路 |
+| POST | `/agents/{agent_id}/training-chat` | `training_chat` | `get_request_context_required` + `auto_wechat:ai_agents` 或历史兼容 `auto_wechat:agent` | 是 | 否 | 否 | 否 | 否 | 否 | 历史训练预览，不写知识库 |
+| POST | `/integrations/douyin-ai-cs/conversations/{conversation_id}/reply-suggestion` | `create_reply_suggestion_proxy` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` | 是，缺失返回 `MERCHANT_CONTEXT_MISSING` | 否 | 否 | 否 | 是 | 读取 `agent_knowledge_categories` 并注入 `agent_config.allowed_category_keys` | 商户 AI 客服消费统一知识库 |
+
+说明：
+
+1. 代码中不存在 `POST` / `DELETE` 形式的 `/agents/{agent_id}/knowledge-categories`，当前只有 `GET` 和 `PUT`。
+2. `Agent CRUD` 请求体不携带分类字段，分类绑定通过独立 `PUT /agents/{agent_id}/knowledge-categories` 保存。
+3. `PUT /agents/{agent_id}/knowledge-categories` 只写 9000 的绑定表，不创建、修改或删除 9100 知识文档。
+4. `POST /knowledge-categories` 已固定返回 403 `KNOWLEDGE_CATEGORY_CREATE_DISABLED`，旧创建逻辑不可达。
+
+### 10.3 前端入口清单
+
+| 页面 / 组件 | 商户正式页面可见 | 知识分类勾选 | 当前文案 | 是否像知识库管理 | 实际语义 | 是否调用写入接口 | 调用 API |
+|---|---|---|---|---|---|---|---|
+| `frontend/src/features/agents/pages/SuperMerchantAgent.tsx` | 是，路由 `/agents` | 是 | `智能体知识库`、`小高知识库`、`配置名称、提示词、知识库提示词和知识库范围` | 有混淆风险 | Agent 可消费哪些知识分类 | 是，只写绑定 | `GET /knowledge-categories`、`GET/PUT /agents/{agent_id}/knowledge-categories` |
+| `SuperMerchantAgent` 右侧预览面板 | 是，随 `/agents` 可见 | 间接读取绑定 | `统一知识库训练预览`、`输入训练问题` | 有混淆风险 | Agent 草稿预览 / 调试消费 | 否 | `POST /agents/preview` |
+| `frontend/src/features/knowledge/pages/KnowledgeBasePage.tsx` | 否，正式路由已重定向 | 有知识范围选择 | `小高知识库`、`新增知识`、`整理小高知识库` | 是 | 历史知识写入 / 训练页面 | 是，但 9000 写入/训练代理已锁定 | `POST /integrations/douyin-ai-cs/rag/documents`、`POST /integrations/douyin-ai-cs/rag/train` |
+| `frontend/src/features/knowledge/pages/KnowledgeCategoriesPage.tsx` | 否，正式路由已重定向 | 分类创建 | `知识分类`、`创建商户分类` | 是 | 历史分类管理页面 | 是，但后端已锁定 | `POST /knowledge-categories` |
+| `frontend/src/features/douyin-cs/pages/DouyinAiCsTestPage.tsx` | 否，`/douyin-ai-cs-test` 已重定向 | 可填 `category_key` | `创建知识`、`训练知识库`、`搜索知识库` | 是 | 内部调试页残留 | 是 / 搜索 | `createRagDocument`、`trainRag`、`searchRag` |
+| `frontend/src/features/knowledge/api.ts` | 不是页面 | 无 | 注释标注“内部调试专用” | 代码残留风险 | 历史/调试 API | 部分函数仍存在 | `searchRag` 仍直连 9100 `/rag/search`，但正式页面不触达 |
+
+路由事实：
+
+1. `frontend/src/features/routes.ts` 没有把 `knowledgeRoutes` 合并进 `capabilityRoutes`。
+2. `/knowledge-base`、`/knowledge-categories`、`/knowledge/base`、`/knowledge/categories` 都重定向到 `/douyin-cs/workbench`。
+3. `/agents/knowledge-categories` 重定向到 `/agents`。
+4. 商户导航中没有单独的知识库管理菜单。
+
+### 10.4 当前真实行为
+
+事实：
+
+1. Agent 分类绑定不会创建、修改或删除知识库文档。
+2. Agent 分类绑定只写 `agent_knowledge_categories`，用于 9000 在 reply-suggestion 时注入 `agent_config.allowed_category_keys`。
+3. 商户当前不能创建知识分类：`POST /knowledge-categories` 固定 403。
+4. 商户当前可以通过 `/agents` 页面绑定 / 解绑已有可见分类，包括 `base`。
+5. 当前前端允许取消 `base`；测试 `test_agent_base_knowledge_category_can_be_saved_and_unchecked` 也断言可取消。
+6. `apps/agents/services.py` 的 `build_effective_category_keys()` 不自动追加 `base`，绑定为空时返回空列表。
+7. 9000 reply-suggestion 代理 `_build_allowed_category_keys()` 直接读取绑定表并去重，不自动追加 `base`。
+8. P1-AGENT-KB-DISABLE-RAG-SAFE-FIX-1 后，9000 在 reply-suggestion / Agent 预览 / 自动回复 dry-run 请求中显式注入 `agent_config.rag_enabled`；当绑定为空时为 `false`。
+9. P1-AGENT-KB-DISABLE-RAG-SAFE-FIX-1 后，9100 收到 `rag_enabled=false` 或 `allowed_category_keys=[]` 时跳过 RAG 检索，`source_chunks=[]`、`rag_used=false`、`rag_sources=[]`，继续走 direct LLM 回复生成。
+10. 分类绑定有 merchant_id 隔离：只允许 `base` 或当前商户 active 的 `KnowledgeCategory`；其他商户、disabled、deleted、missing 分类会被拒绝。
+11. 前端伪造 `allowed_category_keys` 不影响正式 reply-suggestion：测试断言 9000 会忽略请求体伪造值，改用绑定表。
+12. 代码中 `auto_wechat:knowledge` / `auto_wechat:knowledge_training` 仍出现在 mock 权限和历史记录里，只能按历史 / 过渡 / 待清理处理，不是 NewCar 正式商户权限码。
+
+### 10.5 是否属于知识库管理
+
+结论：`/agents/{agent_id}/knowledge-categories` 当前不是知识库内容管理入口，而是 Agent 消费知识分类的范围配置入口。
+
+依据：
+
+1. 它只写 `agent_knowledge_categories`。
+2. 它不调用 9100 `/rag/documents`、`/rag/train`、`/rag/search`。
+3. 它不写 `knowledge_documents`、`knowledge_chunks` 或 9100 RAG 数据。
+4. 它会影响正式回复建议链路的 `allowed_category_keys`。
+
+但存在产品表达风险：前端文案多处使用“智能体知识库”“训练预览”“维护提示词和知识库”，商户容易理解为自己可以管理知识库内容。若最终允许商户配置消费范围，应改为“回复知识范围 / AI 客服知识范围 / 可使用知识分类”。
+
+### 10.6 风险点
+
+1. 商户误以为在管理知识库：`/agents` 页面文案仍偏“知识库”而不是“消费范围”。
+2. 商户取消 `base` 后的“空分类查全库”风险已由 P1-AGENT-KB-DISABLE-RAG-SAFE-FIX-1 收口：空绑定会显式禁用 RAG，不再查全库。
+3. 商户可以绑定 / 解绑已有分类；这是否属于产品允许的“消费范围配置”尚未确认。
+4. 分类绑定本身有 merchant_id 隔离，但 `base` 是全局允许项；如果 base 是否必选还未决策，需避免前端给出“可随意关闭统一知识库”的暗示。
+5. 历史知识库页面和 `searchRag()` 直连 9100 的代码仍存在，当前正式路由不触达；后续清理前不要恢复为正式入口。
+6. `auto_wechat:ai_agents` 在代码注释中写为“正式 NewCarProject 权限字典应补”，但本轮未取得上游确认；当前只能记录为项目内历史/过渡兼容事实，不应当作已确认上游权限。
+7. 测试仍覆盖“base 可取消”；本轮已将“9100 空分类不过滤”的旧断言改为“空分类禁用 RAG”。
+
+### 10.7 产品决策候选方案
+
+说明：以下 A / B / C 是本只读审计阶段的候选命名；P1-AGENT-KB-DISABLE-RAG-SAFE-FIX-1 的最终产品口径以第 11 节为准。
+
+方案 A：允许商户配置 Agent 消费分类。
+
+1. 允许商户选择“AI 客服可使用哪些管理员知识分类”。
+2. 不允许商户新增、编辑、删除知识分类。
+3. 前端文案改为“回复知识范围 / AI 客服知识范围 / 可使用知识分类”。
+4. 权限建议归属抖音 AI 客服使用能力，即 `auto_wechat:douyin_ai_cs`，不要使用 `auto_wechat:knowledge`。
+5. 当前已确认允许商户关闭知识库；关闭后 `allowed_category_keys=[]` 表示禁用 RAG，不表示“不限分类”。
+
+方案 B：不允许商户配置消费分类。
+
+1. 隐藏 Agent 分类勾选 UI。
+2. 后端绑定接口禁用，或仅管理员 / 内部可用。
+3. 统一由管理员配置知识分类和 Agent 消费范围。
+4. 商户只看到“小高知识库已启用”之类状态。
+
+方案 C：保留历史能力但暂不展示。
+
+1. 后端保留绑定能力。
+2. 前端隐藏分类勾选入口。
+3. 文档标为历史 / 过渡能力。
+4. 后续等产品确认后再开放。
+
+### 10.8 推荐下一步任务名
+
+```text
+P1-AGENT-KB-CATEGORY-CONSUMPTION-POLICY-CONFIRM-1
+P1-FRONTEND-AGENT-KB-COPY-CLEANUP-1
+P1-FRONTEND-KNOWLEDGE-LEGACY-CLEANUP-1
+```
+
+## 11. P1-AGENT-KB-DISABLE-RAG-SAFE-FIX-1 修复记录
+
+### 11.1 产品最终语义
+
+本轮采用用户确认后的关闭知识库口径：
+
+1. 商户可以选择关闭知识库。
+2. 关闭知识库后仍然可以生成回复。
+3. 关闭知识库后仍然允许自动发送，但是否自动发送继续由既有自动发送安全门禁决定。
+4. 关闭知识库时必须明确不走 RAG / 不检索小高知识库。
+5. `allowed_category_keys=[]` 不得解释为查全库。
+
+### 11.2 修复位置
+
+1. `app/routers/douyin_ai_cs_proxy.py`：正式商户 AI 客服 reply-suggestion 代理在 `agent_config` 中注入 `rag_enabled=bool(allowed_category_keys)`。
+2. `app/routers/agents.py`：Agent 预览链路同步注入 `rag_enabled`。
+3. `app/services/ai_auto_reply_dry_run_service.py`：自动回复 dry-run 链路同步注入 `rag_enabled`。
+4. `apps/xg_douyin_ai_cs/schemas.py`：`AgentConfig` 增加 `rag_enabled` 可选字段。
+5. `apps/xg_douyin_ai_cs/services/reply_decision_service.py`：9100 在 `rag_enabled=false` 或显式空分类时跳过 RAG 搜索，后续继续 direct LLM 生成。
+
+### 11.3 行为结果
+
+| 场景 | 行为 |
+|---|---|
+| Agent 绑定 `base` 或其他分类 | `rag_enabled=true`，9100 按 `category_keys` 过滤检索。 |
+| Agent 未绑定任何分类 | `rag_enabled=false`，9100 不执行 RAG 检索。 |
+| 商户取消 `base` / 小高知识库 | `allowed_category_keys=[]`，表示关闭知识库，不会查全库。 |
+| 关闭知识库后生成回复 | 继续走 direct LLM / no RAG 路径，`source_chunks=[]`、`rag_used=false`。 |
+| 自动发送安全门禁 | 本轮不修改 `DOUYIN_AUTO_REPLY_ENABLED`、真实发送开关、账号开关、白名单、`manual_required`、24h、`send_context`、`manual_confirmed` 等既有条件。 |
+
+### 11.4 测试记录
+
+已新增 / 更新测试覆盖：
+
+1. `tests/test_douyin_ai_cs_proxy.py::test_proxy_disables_rag_when_agent_has_no_category_binding`
+2. `tests/test_douyin_ai_cs_proxy.py::test_proxy_ignores_forged_allowed_category_keys_from_payload`
+3. `tests/test_xg_douyin_ai_cs_app.py::test_reply_suggestion_empty_allowed_category_keys_disables_rag`
+4. `tests/test_ai_agents.py` 中 Agent 预览请求断言 `rag_enabled=true`
+5. `tests/test_ai_auto_reply_dry_run.py` 中自动回复 dry-run 空绑定断言 `rag_enabled=false`
+
+聚焦红绿验证结论：
+
+```text
+python -m pytest tests/test_xg_douyin_ai_cs_app.py::test_reply_suggestion_empty_allowed_category_keys_disables_rag -q
+1 passed
+
+python -m pytest tests/test_douyin_ai_cs_proxy.py::test_proxy_disables_rag_when_agent_has_no_category_binding tests/test_douyin_ai_cs_proxy.py::test_proxy_ignores_forged_allowed_category_keys_from_payload -q
+2 passed
+
+python -m pytest tests/test_ai_agents.py -q
+11 passed
+
+python -m pytest tests/test_ai_auto_reply_dry_run.py -q
+36 passed
+```
