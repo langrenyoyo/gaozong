@@ -6,7 +6,7 @@ import Login from "./pages/Login";
 import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
-import { filterCapabilityNavCenters } from "./features/capabilities";
+import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +34,18 @@ function userFromAuthData(data: AuthContextData): AppUser {
   };
 }
 
+function assertCanEnterSystem(user: AppUser) {
+  if (!hasPermission(user, PERMISSIONS.use)) {
+    throw new Error("账号缺少 auto_wechat:use 权限，无法进入系统");
+  }
+}
+
+function getNewCarRedirectCode(url: URL): string | null {
+  const code = url.searchParams.get("code");
+  const source = url.searchParams.get("source");
+  return code && source === "new_car_project" ? code : null;
+}
+
 function cleanCodeFromUrl() {
   const url = new URL(window.location.href);
   url.searchParams.delete("code");
@@ -56,27 +68,33 @@ const App = () => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const externalMerchantNotBound = authError === "账号未绑定商户，请联系管理员。";
 
   useEffect(() => {
     let active = true;
 
     async function restoreAuth() {
       const url = new URL(window.location.href);
-      const code = url.searchParams.get("code");
+      const code = getNewCarRedirectCode(url);
       try {
         if (code) {
           const data = await exchangeExternalCode(code);
           if (data.token) {
             setExternalToken(data.token);
           }
+          const currentUserData = await fetchCurrentAuthUser();
           cleanCodeFromUrl();
-          if (active) setUser(userFromAuthData(data));
+          const nextUser = userFromAuthData(currentUserData);
+          assertCanEnterSystem(nextUser);
+          if (active) setUser(nextUser);
           return;
         }
 
         if (getExternalToken()) {
           const data = await fetchCurrentAuthUser();
-          if (active) setUser(userFromAuthData(data));
+          const nextUser = userFromAuthData(data);
+          assertCanEnterSystem(nextUser);
+          if (active) setUser(nextUser);
         }
       } catch (error) {
         clearExternalToken();
@@ -122,7 +140,7 @@ const App = () => {
   };
 
   const renderIndex = (initialActiveNav: string) =>
-    user ? (
+    user && !externalMerchantNotBound ? (
       <Index user={user} onLogout={handleLogout} initialActiveNav={initialActiveNav} />
     ) : (
       <Login onLogin={handleLogin} authError={authError} />
@@ -143,7 +161,7 @@ const App = () => {
           <Route
             path="/"
             element={
-              user ? (
+              user && !externalMerchantNotBound ? (
                 <Navigate to={defaultPathForUser(user)} replace />
               ) : (
                 <Login onLogin={handleLogin} authError={authError} />
@@ -156,7 +174,7 @@ const App = () => {
           {legacyRouteRedirects.map((route) => (
             <Route key={route.from} path={route.from} element={<LegacyRedirect to={route.to} />} />
           ))}
-          <Route path="*" element={<Navigate to={user ? defaultPathForUser(user) : "/"} replace />} />
+          <Route path="*" element={<Navigate to={user && !externalMerchantNotBound ? defaultPathForUser(user) : "/"} replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

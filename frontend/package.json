@@ -10,7 +10,8 @@
     "dev:lan": "vite --mode lan --host 0.0.0.0 --port 5173",
     "lint": "eslint .",
     "preview": "vite preview",
-    "encoding:check": "node scripts/check-frontend-encoding.mjs"
+    "encoding:check": "node scripts/check-frontend-encoding.mjs",
+    "auth:check": "node scripts/check-newcar-direct-auth.mjs"
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.6",

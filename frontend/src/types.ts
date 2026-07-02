@@ -57,4 +57,5 @@ export type NavItem = {
   label: string;
   path: string;
   badge?: number;
+  permissionCodes?: string[];
 };

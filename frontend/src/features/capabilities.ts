@@ -74,7 +74,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "compute", label: "算力中心", path: "/compute/center" },
       { id: "compute-token-transactions", label: "Token流水", path: "/compute/token-transactions" },
       { id: "compute-recharge-orders", label: "充值订单", path: "/compute/recharge-orders" },
-      { id: "compute-packages", label: "套餐配置", path: "/compute/packages" },
+      { id: "compute-packages", label: "套餐配置", path: "/compute/packages", permissionCodes: [PERMISSIONS.adminComputeConfig] },
     ],
   },
 ];
@@ -94,7 +94,12 @@ export function hasAnyPermission(user: Pick<AppUser, "permissions" | "role"> | n
 
 export function filterCapabilityNavCenters(user: AppUser): CapabilityNavCenter[] {
   if (user.role !== "merchant") return capabilityNavCenters;
-  return capabilityNavCenters.filter((center) => hasAnyPermission(user, center.permissionCodes));
+  return capabilityNavCenters
+    .map((center) => ({
+      ...center,
+      children: center.children.filter((item) => hasAnyPermission(user, item.permissionCodes || center.permissionCodes)),
+    }))
+    .filter((center) => center.children.length > 0);
 }
 
 export function findCapabilityByNavId(navId: string, user?: AppUser | null): CapabilityNavCenter {
