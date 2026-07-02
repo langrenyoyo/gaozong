@@ -7,10 +7,12 @@
 本轮按 `P1-RAG-UNIFIED-KB-CONSUMPTION-CLOSURE-1` 更新后的产品口径审计：
 
 1. 当前阶段不开放商户知识库管理。
-2. 只有管理员可以训练 / 维护统一“小高 AI 知识库”。
+2. 只有管理员 / 内部训练入口可以训练 / 维护统一“小高 AI 知识库”。
 3. 商户的抖音 AI 客服 / 自动回复能力只消费管理员维护的小高 AI 知识库。
 4. `auto_wechat:douyin_ai_cs` 控制商户使用抖音 AI 客服能力，不代表商户拥有知识库管理权限。
 5. `auto_wechat:knowledge` 不是 NewCar 上游正式权限码，只能作为项目内历史 / 过渡权限记录。
+6. 知识库训练入口最终准入以 IP 白名单为准；商户 NewCar 登录态不能替代 IP 白名单。
+7. `auto_wechat:knowledge_training` 如在历史代码或测试中出现，只能视为历史 / 阶段性 / 待清理实现，不写成最终正式商户权限码。
 
 ## 2. 已扫描范围
 
@@ -82,33 +84,35 @@
 3. 白名单来自 `KNOWLEDGE_TRAINING_IP_WHITELIST`，默认仅本机来源。
 4. 9000 使用固定 `KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID` 和 `KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID` 调用 9100。
 5. 该代理返回字段经过 `_public_payload()` 收口，只暴露训练必要字段。
+6. 甲方已确认知识库训练端由管理员统一使用，非白名单无法进入；该入口不对商户开放。
 
-结论：当前管理员统一知识库训练入口更接近“内部白名单代理”，不是商户菜单能力。
+结论：当前管理员统一知识库训练入口是“内部白名单代理”，不是商户菜单能力；商户登录态和商户权限不能替代 IP 白名单。
 
-### 3.5 9100 RAG 接口仍是内部服务裸接口
+### 3.5 9100 内部接口增加服务间 token 门禁
 
 事实：
 
 1. `apps/xg_douyin_ai_cs/routers/rag.py` 暴露 `/rag/documents`、`/rag/train`、`/rag/search`。
-2. 这些接口本身未校验 NewCar 登录态、商户绑定、模块权限或内部服务 token。
-3. `app/services/xg_douyin_ai_cs_client.py` 支持向 9100 发送 `X-Internal-Service-Token`。
-4. 当前 9100 侧未在 RAG router 中校验该 token。
+2. `apps/xg_douyin_ai_cs/routers/knowledge_training.py` 暴露 `/knowledge-training/ask` 和 `/knowledge-training/{training_id}/feedback`。
+3. `apps/xg_douyin_ai_cs/routers/ai_reply.py` 暴露 `/douyin/reply-suggestion` 和 `/douyin/conversations/{conversation_id}/reply-suggestion`。
+4. 这些 9100 内部接口已增加 `X-Internal-Service-Token` 校验。
+5. `app/services/xg_douyin_ai_cs_client.py` 在配置 `XG_DOUYIN_AI_CS_SERVICE_TOKEN` 后会向 9100 发送 `X-Internal-Service-Token`。
+6. `docker-compose.dev.yml` 已把同一个 `XG_DOUYIN_AI_CS_SERVICE_TOKEN` 注入 9000 和 9100。
+7. 内部 token 不进入任何 `VITE_*` 环境变量，不暴露给浏览器。
+8. `health` / `ready` / `version` 不受内部 token 门禁影响。
+9. 开发环境未配置 token 时兼容放行；`APP_ENV=production` 且未配置 token 时，9100 内部接口拒绝访问。
 
-结论：9100 应视为内部 RAG 服务，不能作为商户浏览器生产入口直接暴露。
+结论：9100 应视为内部服务，商户浏览器生产链路必须走 9000 可信代理，不允许直连 9100。
 
 ## 4. 当前风险
 
-### P0：9100 RAG 内部服务缺少强制内部认证
+### P0：9100 内部服务 token 需要生产配置落地
 
-如果 9100 在局域网或容器网络中被浏览器直接访问，调用方可以绕过 9000 的 NewCar 登录态、商户绑定、账号归属和分类注入。
+`P1-RAG-INTERNAL-SERVICE-AUTH-GATE-1` 已补 9100 内部 token 门禁和 9000 请求头注入验证。生产部署仍必须确保：
 
-建议下一步任务：
-
-```text
-P1-RAG-INTERNAL-SERVICE-AUTH-1
-```
-
-最小方向：在 9100 `/rag/*` 和 `/knowledge-training/*` 增加内部服务 token 校验，9000 继续通过 `X-Internal-Service-Token` 调用。
+1. 9000 和 9100 配置同一个非空 `XG_DOUYIN_AI_CS_SERVICE_TOKEN`。
+2. 不把该 token 放入任何前端 `VITE_*` 环境变量。
+3. 9100 不直接暴露给商户浏览器公网访问。
 
 ### P0：9000 商户 RAG 写入 / 训练代理仍存在
 

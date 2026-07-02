@@ -1,7 +1,8 @@
 """规则版 AI 回复建议路由。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from apps.xg_douyin_ai_cs.dependencies import require_internal_service_token
 from apps.xg_douyin_ai_cs.schemas import (
     ReplySuggestionRequest,
     ReplySuggestionResponse,
@@ -14,6 +15,7 @@ router = APIRouter(tags=["AI回复建议"])
 @router.post(
     "/douyin/reply-suggestion",
     response_model=ReplySuggestionResponse,
+    dependencies=[Depends(require_internal_service_token)],
 )
 def create_reply_suggestion_by_body(
     request: ReplySuggestionRequest,
@@ -25,6 +27,7 @@ def create_reply_suggestion_by_body(
 @router.post(
     "/douyin/conversations/{conversation_id}/reply-suggestion",
     response_model=ReplySuggestionResponse,
+    dependencies=[Depends(require_internal_service_token)],
 )
 def create_reply_suggestion(
     conversation_id: int,

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from apps.xg_douyin_ai_cs.dependencies import require_internal_service_token
 from apps.xg_douyin_ai_cs.services.knowledge_training_service import (
     KnowledgeTrainingAskInput,
     KnowledgeTrainingFeedbackInput,
@@ -35,7 +36,7 @@ class KnowledgeTrainingFeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
-@router.post("/ask")
+@router.post("/ask", dependencies=[Depends(require_internal_service_token)])
 def ask(request: KnowledgeTrainingAskRequest) -> dict:
     return ask_training(
         KnowledgeTrainingAskInput(
@@ -49,7 +50,7 @@ def ask(request: KnowledgeTrainingAskRequest) -> dict:
     )
 
 
-@router.post("/{training_id}/feedback")
+@router.post("/{training_id}/feedback", dependencies=[Depends(require_internal_service_token)])
 def feedback(training_id: str, request: KnowledgeTrainingFeedbackRequest) -> dict:
     try:
         return submit_feedback(

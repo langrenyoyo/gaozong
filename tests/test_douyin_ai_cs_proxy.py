@@ -306,6 +306,38 @@ def test_9000_client_uses_body_endpoint_for_douyin_conversation_short_id(monkeyp
     assert captured["json"]["merchant_id"] == "merchant-1"
 
 
+def test_9000_client_sends_internal_service_token_header(monkeypatch):
+    from app.auth.context import RequestContext
+    from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient
+
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        return httpx.Response(
+            200,
+            json={"items": []},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", fake_post)
+    client = XgDouyinAiCsClient(base_url="http://xg-ai", service_token="internal-secret", timeout_seconds=3)
+
+    client.create_rag_document(
+        context=RequestContext(user_id="u1", merchant_id="merchant-1"),
+        request={
+            "tenant_id": "new_car_project",
+            "douyin_account_id": 1,
+            "title": "门店优势",
+            "content": "门店支持到店看车。",
+        },
+    )
+
+    assert captured["url"] == "http://xg-ai/rag/documents"
+    assert captured["headers"]["X-Internal-Service-Token"] == "internal-secret"
+
+
 def test_9000_client_error_keeps_9100_response_body_detail(monkeypatch):
     from app.auth.context import RequestContext
     from app.services.xg_douyin_ai_cs_client import XgDouyinAiCsClient, XgDouyinAiCsClientError

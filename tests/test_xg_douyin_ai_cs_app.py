@@ -361,6 +361,148 @@ def test_local_frontend_origin_is_allowed_by_cors(tmp_path, monkeypatch):
     assert "POST" in preflight.headers["access-control-allow-methods"]
 
 
+def test_internal_service_token_protects_rag_routes_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+    client = _client(tmp_path, monkeypatch)
+    payloads = {
+        "/rag/documents": {
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+            "title": "门店优势",
+            "content": "门店支持到店看车。",
+        },
+        "/rag/train": {
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+        },
+        "/rag/search": {
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+            "query": "门店优势",
+        },
+    }
+
+    for path, payload in payloads.items():
+        missing = client.post(path, json=payload)
+        assert missing.status_code == 401
+        assert missing.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+        wrong = client.post(path, json=payload, headers={"X-Internal-Service-Token": "wrong"})
+        assert wrong.status_code == 401
+        assert wrong.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+    allowed = client.post(
+        "/rag/search",
+        json=payloads["/rag/search"],
+        headers={"X-Internal-Service-Token": "internal-secret"},
+    )
+    assert allowed.status_code == 200
+
+
+def test_internal_service_token_protects_knowledge_training_routes_when_configured(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+    client = _client(tmp_path, monkeypatch)
+
+    ask_payload = {
+        "tenant_id": "new_car_project",
+        "merchant_id": "merchant-real",
+        "question": "客户问门店优势怎么答？",
+    }
+    missing = client.post("/knowledge-training/ask", json=ask_payload)
+    assert missing.status_code == 401
+    assert missing.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+    wrong = client.post(
+        "/knowledge-training/kt-1/feedback",
+        json={"tenant_id": "new_car_project", "merchant_id": "merchant-real", "rating": "wrong"},
+        headers={"X-Internal-Service-Token": "wrong"},
+    )
+    assert wrong.status_code == 401
+    assert wrong.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+    def fake_ask_training(_request):
+        return {
+            "training_id": "kt-1",
+            "question": "客户问门店优势怎么答？",
+            "answer": "可以介绍门店支持到店看车。",
+            "used_knowledge_base": False,
+            "knowledge_base_name": "小高知识库",
+            "status": "answered",
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.routers.knowledge_training.ask_training", fake_ask_training)
+    allowed = client.post(
+        "/knowledge-training/ask",
+        json=ask_payload,
+        headers={"X-Internal-Service-Token": "internal-secret"},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["training_id"] == "kt-1"
+
+
+def test_internal_service_token_protects_reply_suggestion_routes_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+    client = _client(tmp_path, monkeypatch)
+    payload = {
+        "tenant_id": "new_car_project",
+        "merchant_id": "merchant-real",
+        "account_id": "account-open-1",
+        "latest_message": "想了解一下A6",
+    }
+
+    for path in ["/douyin/reply-suggestion", "/douyin/conversations/1/reply-suggestion"]:
+        missing = client.post(path, json=payload)
+        assert missing.status_code == 401
+        assert missing.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+        wrong = client.post(path, json=payload, headers={"X-Internal-Service-Token": "wrong"})
+        assert wrong.status_code == 401
+        assert wrong.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_INVALID"
+
+    allowed = client.post(
+        "/douyin/reply-suggestion",
+        json=payload,
+        headers={"X-Internal-Service-Token": "internal-secret"},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["auto_send"] is False
+
+
+def test_internal_service_token_does_not_protect_health_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+    client = _client(tmp_path, monkeypatch)
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/ready").status_code == 200
+    assert client.get("/version").status_code == 200
+
+
+def test_internal_routes_reject_when_production_token_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", raising=False)
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/rag/search",
+        json={
+            "tenant_id": "new_car_project",
+            "merchant_id": "merchant-real",
+            "douyin_account_id": 1,
+            "query": "门店优势",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "INTERNAL_SERVICE_TOKEN_REQUIRED"
+    assert client.get("/health").status_code == 200
+
+
 def test_categories_returns_ten_fixed_items(tmp_path, monkeypatch):
     response = _client(tmp_path, monkeypatch).get("/categories")
 
@@ -698,6 +840,7 @@ def test_reply_suggestion_without_agents_requires_manual_review(tmp_path, monkey
 
 
 def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_path, monkeypatch):
+    monkeypatch.delenv("XG_DOUYIN_AI_LLM_API_KEY", raising=False)
     response = _client(tmp_path, monkeypatch).post(
         "/douyin/conversations/1/reply-suggestion",
         json={

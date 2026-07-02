@@ -12,6 +12,7 @@ def _client(*, client_host: str = "127.0.0.1") -> TestClient:
 
 def test_ask_allows_whitelisted_ip_without_auth_and_uses_system_context(monkeypatch):
     seen: dict = {}
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
 
     def fake_post(url, *, json, headers, timeout):
         seen["url"] = url
@@ -60,6 +61,7 @@ def test_ask_allows_whitelisted_ip_without_auth_and_uses_system_context(monkeypa
     }
     assert seen["json"]["merchant_id"] == "xiaogao_base"
     assert seen["json"]["tenant_id"] == "xiaogao_system"
+    assert seen["headers"]["X-Internal-Service-Token"] == "internal-secret"
     assert "forged-merchant" not in seen["json"].values()
     assert "rag" not in response.json()
     assert "category_key" not in response.json()
@@ -79,10 +81,12 @@ def test_ask_rejects_non_whitelisted_ip(monkeypatch):
 
 def test_feedback_allows_whitelisted_ip_without_auth_and_uses_system_context(monkeypatch):
     seen: dict = {}
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
 
     def fake_post(url, *, json, headers, timeout):
         seen["url"] = url
         seen["json"] = json
+        seen["headers"] = headers
 
         class Response:
             def raise_for_status(self):
@@ -122,6 +126,7 @@ def test_feedback_allows_whitelisted_ip_without_auth_and_uses_system_context(mon
     assert seen["json"]["merchant_id"] == "xiaogao_base"
     assert seen["json"]["tenant_id"] == "xiaogao_system"
     assert seen["json"]["rating"] == "wrong"
+    assert seen["headers"]["X-Internal-Service-Token"] == "internal-secret"
 
 
 def test_feedback_preserves_training_session_not_found(monkeypatch):
