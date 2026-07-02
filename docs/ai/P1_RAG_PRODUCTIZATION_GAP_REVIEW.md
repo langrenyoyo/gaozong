@@ -206,3 +206,73 @@ DouyinAiCsWorkbenchPage
 2. 9000 的 `/integrations/douyin-ai-cs/rag/documents` 和 `/rag/train` 是否立即禁用商户访问，还是先加管理员 / 内部白名单。
 3. 商户是否允许配置 Agent 使用的统一知识分类。
 4. 9100 内部服务 token 的环境变量名称、部署注入方式和失败返回格式。
+
+## 8. P1-RAG-WRITE-TRAIN-PROXY-LOCKDOWN-1 补充审计
+
+更新时间：2026-07-02
+
+### 8.1 本轮产品口径
+
+事实：
+1. 当前阶段不开放商户知识库管理。
+2. 管理员 / 内部训练端统一维护“小高 AI 知识库”，准入方式为 IP 白名单。
+3. 商户抖音 AI 客服只消费统一知识库，不允许训练、写入、管理或直接搜索知识库。
+4. `auto_wechat:douyin_ai_cs` 只代表商户可使用抖音 AI 客服能力，不代表知识库管理权限。
+5. `auto_wechat:knowledge`、`auto_wechat:knowledge_training` 只按历史 / 过渡 / 待清理权限记录处理，不写成 NewCar 正式商户权限码。
+
+### 8.2 已扫描文件
+
+后端：
+1. `app/routers/douyin_ai_cs_proxy.py`
+2. `app/routers/knowledge_categories.py`
+3. `app/routers/knowledge_training.py`
+4. `app/services/xg_douyin_ai_cs_client.py`
+5. `apps/knowledge/routers.py`
+6. `apps/knowledge/dependencies.py`
+7. `apps/knowledge/services.py`
+
+前端：
+1. `frontend/src/features/routes.ts`
+2. `frontend/src/features/capabilities.ts`
+3. `frontend/src/features/knowledge/api.ts`
+4. `frontend/src/features/knowledge/pages/KnowledgeBasePage.tsx`
+5. `frontend/src/features/knowledge/pages/KnowledgeCategoriesPage.tsx`
+6. `frontend/src/features/douyin-cs/pages/DouyinAiCsTestPage.tsx`
+
+### 8.3 接口分类和处理结果
+
+| 接口 / 入口 | 分类 | 本轮处理 | 说明 |
+|---|---|---|---|
+| `POST /knowledge-training/ask` | 管理员 / 内部训练入口 | 保持 IP 白名单 | 不走商户 NewCar 权限。 |
+| `POST /knowledge-training/{training_id}/feedback` | 管理员 / 内部训练入口 | 保持 IP 白名单 | 保持 wrong 反馈只进入 `knowledge_training_feedbacks`、`pending_review` 的语义。 |
+| `POST /integrations/douyin-ai-cs/conversations/{conversation_id}/reply-suggestion` | 商户 AI 客服消费入口 | 保持现状 | 继续校验 `auto_wechat:douyin_ai_cs`，由 9000 注入可信上下文。 |
+| `POST /integrations/douyin-ai-cs/rag/documents` | 历史 / 待清理写入代理 | 已锁定 | 商户请求返回 403 `RAG_MERCHANT_WRITE_DISABLED`，不会调用 9100。 |
+| `POST /integrations/douyin-ai-cs/rag/train` | 历史 / 待清理训练代理 | 已锁定 | 商户请求返回 403 `RAG_MERCHANT_TRAIN_DISABLED`，不会调用 9100。 |
+| `GET /knowledge-categories` | 只读分类展示 / 历史辅助 | 保持只读 | 当前仍供 Agent 分类绑定等历史链路读取。 |
+| `POST /knowledge-categories` | 历史商户分类管理入口 | 已锁定 | 商户请求返回 403 `KNOWLEDGE_CATEGORY_CREATE_DISABLED`。 |
+| `apps/knowledge` 下 `/api/knowledge/*` | dev/internal-only 过渡服务 | 本轮只记录 | 未挂入 9000 主应用；未来启用需单独加内部鉴权或下线。 |
+| `DouyinAiCsTestPage` | 内部调试页 | 保持不进正式路由 | `/douyin-ai-cs-test` 当前重定向到 `/douyin-cs/workbench`。 |
+| `frontend/src/features/knowledge/*` | 历史页面 / 待清理代码 | 保持不进正式路由 | 正式 `capabilityRoutes` 未合并 `knowledgeRoutes`。 |
+
+### 8.4 本轮锁定的风险面
+
+事实：
+1. 持有商户登录态和 `auto_wechat:douyin_ai_cs` 的用户不能再通过 9000 创建 RAG 文档。
+2. 持有商户登录态和 `auto_wechat:douyin_ai_cs` 的用户不能再通过 9000 触发 RAG 训练。
+3. 持有商户登录态和历史 Agent 权限的用户不能再通过 `POST /knowledge-categories` 创建商户知识分类。
+4. 以上锁定都发生在入口最前面，前端伪造 `merchant_id` / `tenant_id` / `douyin_account_id` 不会进入旧写入链路。
+5. 9000 调 9100 的正式消费链路仍通过 `X-Internal-Service-Token` 走内部服务调用。
+
+### 8.5 未处理风险和原因
+
+1. `apps/knowledge` 过渡服务仍保留旧写入 / 训练能力：该服务未挂入 9000 主应用，本轮按审计记录处理；如果未来启用或部署，需要单开 `P1-RAG-KNOWLEDGE-APP-LOCKDOWN-1`。
+2. `/agents/{agent_id}/knowledge-categories` 仍允许 Agent 分类绑定：是否允许商户配置“消费哪些统一知识分类”仍需产品确认，本轮不顺手修改 Agent UI 和绑定逻辑。
+3. 前端历史知识库页面代码仍存在：正式路由不触达，本轮不删除代码；如要彻底清理，需要单开前端历史入口清理任务。
+
+### 8.6 建议下一步任务
+
+```text
+P1-RAG-KNOWLEDGE-APP-LOCKDOWN-1
+P1-RAG-AGENT-KB-CATEGORY-SCOPE-CONFIRM-1
+P1-FRONTEND-KNOWLEDGE-LEGACY-CLEANUP-1
+```

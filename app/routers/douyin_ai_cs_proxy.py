@@ -94,6 +94,17 @@ def _normalize_and_validate_category_key(
             detail={"code": "CATEGORY_KEY_NOT_VISIBLE", "message": "知识分类不存在或不可用"},
         ) from exc
 
+
+def _deny_merchant_rag_management(code: str) -> None:
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": code,
+            "message": "当前阶段不开放商户知识库写入、训练或管理入口，请使用管理员统一训练入口。",
+        },
+    )
+
+
 def _build_allowed_category_keys(
     *,
     db: Session,
@@ -321,6 +332,7 @@ def create_rag_document_proxy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """由 9000 注入可信 scope 后代理创建 9100 RAG 文档。"""
+    _deny_merchant_rag_management("RAG_MERCHANT_WRITE_DISABLED")
     require_permission("auto_wechat:douyin_ai_cs")(context)
     if not context.merchant_id:
         raise HTTPException(
@@ -379,6 +391,7 @@ def train_rag_proxy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """由 9000 注入可信 scope 后代理触发 9100 RAG 训练。"""
+    _deny_merchant_rag_management("RAG_MERCHANT_TRAIN_DISABLED")
     require_permission("auto_wechat:douyin_ai_cs")(context)
     if not context.merchant_id:
         raise HTTPException(

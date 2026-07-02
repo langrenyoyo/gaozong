@@ -25,6 +25,16 @@ def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
 
 
+def _deny_category_management() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "KNOWLEDGE_CATEGORY_CREATE_DISABLED",
+            "message": "当前阶段不开放商户知识分类管理入口，请由管理员统一维护小高知识库。",
+        },
+    )
+
+
 @router.get("", response_model=KnowledgeCategoryListResponse)
 def list_knowledge_categories(
     db: Session = Depends(get_db),
@@ -44,6 +54,7 @@ def create_knowledge_category(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
+    _deny_category_management()
     context = _auth(context)
     try:
         row = create_merchant_knowledge_category(

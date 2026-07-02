@@ -156,7 +156,7 @@ def test_get_knowledge_categories_returns_base_and_current_merchant_active_categ
     assert all(item["scope_type"] in {"system", "merchant"} for item in data)
 
 
-def test_create_knowledge_category_creates_current_merchant_category_and_ignores_forged_merchant_id():
+def test_create_knowledge_category_is_locked_for_merchant_requests():
     client = _client(_context(merchant_id="merchant-a"))
 
     response = client.post(
@@ -164,54 +164,28 @@ def test_create_knowledge_category_creates_current_merchant_category_and_ignores
         json={"merchant_id": "merchant-b", "category_key": " premium_bba ", "name": " 精品BBA "},
     )
 
-    assert response.status_code == 200
-    assert response.json()["data"]["category_key"] == "premium_bba"
-    assert response.json()["data"]["name"] == "精品BBA"
-
-    db = TestSession()
-    try:
-        row = db.query(KnowledgeCategory).filter_by(category_key="premium_bba").one()
-        assert row.merchant_id == "merchant-a"
-        assert row.scope_type == "merchant"
-        assert row.is_base == 0
-        assert row.status == "active"
-    finally:
-        db.close()
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CREATE_DISABLED"
 
 
 def test_create_knowledge_category_rejects_base_and_duplicate_key():
     client = _client(_context(merchant_id="merchant-a"))
 
     base_response = client.post("/knowledge-categories", json={"category_key": "base", "name": "基础知识"})
-    assert base_response.status_code == 400
-    assert base_response.json()["detail"]["code"] == "BASE_CATEGORY_READONLY"
-
-    first_response = client.post(
-        "/knowledge-categories",
-        json={"category_key": "premium_bba", "name": "精品BBA"},
-    )
-    duplicate_response = client.post(
-        "/knowledge-categories",
-        json={"category_key": "premium_bba", "name": "重复BBA"},
-    )
-
-    assert first_response.status_code == 200
-    assert duplicate_response.status_code == 409
-    assert duplicate_response.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CONFLICT"
+    assert base_response.status_code == 403
+    assert base_response.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CREATE_DISABLED"
 
 
 def test_same_category_key_isolated_between_merchants():
     client_a = _client(_context(merchant_id="merchant-a"))
     client_b = _client(_context(merchant_id="merchant-b"))
 
-    assert client_a.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "A-BBA"}).status_code == 200
-    assert client_b.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "B-BBA"}).status_code == 200
-
-    data_a = client_a.get("/knowledge-categories").json()["data"]
-    data_b = client_b.get("/knowledge-categories").json()["data"]
-
-    assert [item["name"] for item in data_a if item["category_key"] == "premium_bba"] == ["A-BBA"]
-    assert [item["name"] for item in data_b if item["category_key"] == "premium_bba"] == ["B-BBA"]
+    response_a = client_a.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "A-BBA"})
+    response_b = client_b.post("/knowledge-categories", json={"category_key": "premium_bba", "name": "B-BBA"})
+    assert response_a.status_code == 403
+    assert response_b.status_code == 403
+    assert response_a.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CREATE_DISABLED"
+    assert response_b.json()["detail"]["code"] == "KNOWLEDGE_CATEGORY_CREATE_DISABLED"
 
 
 def test_get_knowledge_categories_rejects_missing_merchant_context():

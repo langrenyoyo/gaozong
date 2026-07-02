@@ -452,7 +452,7 @@ def test_9000_client_passes_through_9100_provider_timeout_detail(monkeypatch):
         raise AssertionError("expected XgDouyinAiCsClientError")
 
 
-def test_rag_document_proxy_ignores_forged_scope_and_builds_trusted_payload(monkeypatch):
+def test_rag_document_proxy_is_locked_for_merchant_requests(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -476,25 +476,12 @@ def test_rag_document_proxy_ignores_forged_scope_and_builds_trusted_payload(monk
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["data"]["document_id"] == 101
-    call = fake_client.calls[0]
-    assert call["method"] == "create_rag_document"
-    assert call["context"].merchant_id == "dev-merchant"
-    assert call["request"] == {
-        "tenant_id": "new_car_project",
-        "merchant_id": "dev-merchant",
-        "douyin_account_id": "account-open-1",
-        "title": "精品BBA话术",
-        "content": "客户咨询宝马5系时，引导留下联系方式。",
-        "category": "旧分类展示",
-        "category_key": "base",
-        "brand": "宝马",
-        "vehicle_name": "5系",
-    }
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
+    assert fake_client.calls == []
 
 
-def test_rag_document_proxy_defaults_missing_category_key_to_base(monkeypatch):
+def test_rag_document_proxy_locked_before_defaulting_category_key(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -510,11 +497,12 @@ def test_rag_document_proxy_defaults_missing_category_key_to_base(monkeypatch):
         },
     )
 
-    assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["category_key"] == "base"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
+    assert fake_client.calls == []
 
 
-def test_rag_document_proxy_rejects_empty_category_key(monkeypatch):
+def test_rag_document_proxy_locked_before_category_validation(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -531,12 +519,12 @@ def test_rag_document_proxy_rejects_empty_category_key(monkeypatch):
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "CATEGORY_KEY_REQUIRED"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
     assert fake_client.calls == []
 
 
-def test_rag_document_proxy_allows_visible_merchant_category(monkeypatch):
+def test_rag_document_proxy_locked_even_for_visible_merchant_category(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -556,11 +544,12 @@ def test_rag_document_proxy_allows_visible_merchant_category(monkeypatch):
         },
     )
 
-    assert response.status_code == 200
-    assert fake_client.calls[0]["request"]["category_key"] == "精品BBA"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
+    assert fake_client.calls == []
 
 
-def test_rag_document_proxy_rejects_invisible_or_other_merchant_category(monkeypatch):
+def test_rag_document_proxy_locked_before_merchant_category_visibility_check(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -579,12 +568,12 @@ def test_rag_document_proxy_rejects_invisible_or_other_merchant_category(monkeyp
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "CATEGORY_KEY_NOT_VISIBLE"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
     assert fake_client.calls == []
 
 
-def test_rag_document_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
+def test_rag_document_proxy_locked_before_account_scope_check(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -602,11 +591,11 @@ def test_rag_document_proxy_rejects_account_owned_by_other_merchant(monkeypatch)
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_WRITE_DISABLED"
     assert fake_client.calls == []
 
 
-def test_rag_train_proxy_validates_account_and_builds_trusted_payload(monkeypatch):
+def test_rag_train_proxy_is_locked_for_merchant_requests(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -626,18 +615,12 @@ def test_rag_train_proxy_validates_account_and_builds_trusted_payload(monkeypatc
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["data"]["training_run_id"] == 202
-    assert fake_client.calls[0]["request"] == {
-        "tenant_id": "new_car_project",
-        "merchant_id": "dev-merchant",
-        "douyin_account_id": "account-open-1",
-        "category_key": "base",
-        "force_rebuild": True,
-    }
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_TRAIN_DISABLED"
+    assert fake_client.calls == []
 
 
-def test_rag_train_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
+def test_rag_train_proxy_locked_before_account_scope_check(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
@@ -650,7 +633,7 @@ def test_rag_train_proxy_rejects_account_owned_by_other_merchant(monkeypatch):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+    assert response.json()["detail"]["code"] == "RAG_MERCHANT_TRAIN_DISABLED"
     assert fake_client.calls == []
 
 

@@ -2,22 +2,23 @@ import re
 from pathlib import Path
 
 
-def test_frontend_capability_navigation_has_only_six_top_level_centers():
+def test_frontend_capability_navigation_has_only_product_centers_without_knowledge_management():
     source = Path("frontend/src/features/capabilities.ts").read_text(encoding="utf-8")
 
     expected_centers = [
         "抖音AI小高客服",
         "AI小高线索",
         "AI小高智能体",
-        "AI小高微信助手",
+        "小高AI微信助手",
         "小高算力",
-        "统一知识库训练",
     ]
     for center in expected_centers:
         assert f'title: "{center}"' in source
 
     configured_titles = re.findall(r'^\s+title: "', source, flags=re.MULTILINE)
-    assert len(configured_titles) == 6
+    assert len(configured_titles) == 5
+    assert "统一知识库训练" not in source
+    assert "auto_wechat:knowledge" not in source
 
 
 def test_frontend_legacy_routes_are_declared_as_redirects():
@@ -25,11 +26,11 @@ def test_frontend_legacy_routes_are_declared_as_redirects():
 
     expected_redirects = {
         "/douyin-ai-cs": "/douyin-cs/workbench",
-        "/douyin-ai-cs-test": "/douyin-cs/test",
+        "/douyin-ai-cs-test": "/douyin-cs/workbench",
         "/ai-agent": "/wechat-assistant",
         "/compute": "/compute/center",
-        "/knowledge-base": "/knowledge/base",
-        "/knowledge-categories": "/knowledge/categories",
+        "/knowledge-base": "/douyin-cs/workbench",
+        "/knowledge-categories": "/douyin-cs/workbench",
     }
     for old_path, new_path in expected_redirects.items():
         assert f'from: "{old_path}"' in source
@@ -78,3 +79,19 @@ def test_frontend_api_clients_are_reexported_from_features():
     assert "/rag/" not in feature_douyin
     assert "createRagDocument" not in feature_douyin
     assert "trainRag" not in feature_douyin
+
+
+def test_frontend_does_not_expose_internal_service_token():
+    frontend_root = Path("frontend/src")
+    env_example = Path("frontend/.env.example")
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in frontend_root.rglob("*")
+        if path.is_file() and path.suffix in {".ts", ".tsx", ".js", ".jsx", ".env"}
+    )
+    if env_example.exists():
+        combined = f"{combined}\n{env_example.read_text(encoding='utf-8')}"
+
+    assert "XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
+    assert "VITE_XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
+    assert "VITE_INTERNAL_SERVICE_TOKEN" not in combined
