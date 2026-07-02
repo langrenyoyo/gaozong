@@ -5,6 +5,7 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
+import { redirectToNewCarLogin, restoreSavedRedirectPathAfterLogin } from "./newcarRedirect";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
 
@@ -84,6 +85,7 @@ const App = () => {
           }
           const currentUserData = await fetchCurrentAuthUser();
           cleanCodeFromUrl();
+          restoreSavedRedirectPathAfterLogin();
           const nextUser = userFromAuthData(currentUserData);
           assertCanEnterSystem(nextUser);
           if (active) setUser(nextUser);
@@ -95,6 +97,8 @@ const App = () => {
           const nextUser = userFromAuthData(data);
           assertCanEnterSystem(nextUser);
           if (active) setUser(nextUser);
+        } else if (redirectToNewCarLogin()) {
+          return;
         }
       } catch (error) {
         clearExternalToken();
@@ -111,6 +115,9 @@ const App = () => {
     void restoreAuth();
 
     const onAuthExpired = () => {
+      if (redirectToNewCarLogin()) {
+        return;
+      }
       setUser(null);
       setAuthError("登录已过期，请重新登录");
     };

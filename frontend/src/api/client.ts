@@ -6,6 +6,7 @@
 
 import axios from "axios";
 import { clearExternalToken, getExternalToken } from "../authToken";
+import { redirectToNewCarLogin } from "../newcarRedirect";
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
@@ -30,7 +31,9 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error?.response?.status === 401) {
       clearExternalToken();
-      window.dispatchEvent(new Event("external-auth-expired"));
+      if (!redirectToNewCarLogin()) {
+        window.dispatchEvent(new Event("external-auth-expired"));
+      }
     }
     return Promise.reject(error);
   },
