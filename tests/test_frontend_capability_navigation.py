@@ -95,3 +95,30 @@ def test_frontend_does_not_expose_internal_service_token():
     assert "XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
     assert "VITE_XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
     assert "VITE_INTERNAL_SERVICE_TOKEN" not in combined
+
+
+def test_agent_page_describes_knowledge_as_reply_scope_not_management():
+    source = Path("frontend/src/features/agents/pages/SuperMerchantAgent.tsx").read_text(encoding="utf-8")
+
+    expected_copy = [
+        "AI 客服知识范围",
+        "参考小高知识库",
+        "小高知识库由管理员统一维护",
+        "已关闭知识库参考",
+    ]
+    for text in expected_copy:
+        assert text in source
+
+    forbidden_copy = [
+        "统一知识库训练预览",
+        "输入训练问题",
+        "发送训练问题",
+        "知识库管理",
+        "训练知识库",
+        "上传知识库",
+        "创建分类",
+        "管理分类",
+        "文档管理",
+    ]
+    for text in forbidden_copy:
+        assert text not in source

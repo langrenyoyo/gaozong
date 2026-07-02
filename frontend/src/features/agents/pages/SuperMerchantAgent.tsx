@@ -36,7 +36,7 @@ interface ChatMessage {
 const welcomeMessage: ChatMessage = {
   id: "welcome",
   sender: "ai",
-  content: "你好，请输入你想训练的问题，我会按引导留资的思路给出回答。",
+  content: "你好，请输入客户问题，我会按当前智能体配置预览回复。",
 };
 
 const emptyDraft: AiAgentPayload = {
@@ -195,7 +195,7 @@ function AgentEditor({
             </div>
             <div>
               <h2 className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
-              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词、知识库提示词和知识库范围。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词、知识参考提示词和 AI 客服知识范围。</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
@@ -227,7 +227,7 @@ function AgentEditor({
           </label>
 
           <label className="grid gap-1.5 text-xs">
-            <span className="font-semibold text-[#475569]">智能体知识库提示词</span>
+            <span className="font-semibold text-[#475569]">知识参考提示词</span>
             <textarea
               value={draft.knowledge_base_text}
               onChange={(event) => setDraft({ ...draft, knowledge_base_text: event.target.value })}
@@ -238,9 +238,12 @@ function AgentEditor({
 
           <section className="rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold text-[#475569]">智能体知识库</span>
+              <span className="text-xs font-semibold text-[#475569]">AI 客服知识范围</span>
               {categoryLoading ? <span className="text-[11px] text-[#8b95a6]">加载中...</span> : null}
             </div>
+            <p className="mb-3 text-[11px] leading-5 text-[#8b95a6]">
+              小高知识库由管理员统一维护。关闭后，AI 将只按人设提示词和当前对话生成回复，不检索知识库。
+            </p>
             <div className="flex flex-wrap gap-2">
               {selectableCategories.map((category) => (
                 <label
@@ -253,12 +256,16 @@ function AgentEditor({
                     onChange={() => toggleCategory(category.category_key)}
                     className="h-4 w-4 accent-[#2563eb]"
                   />
-                  {category.category_key === BASE_CATEGORY_KEY ? "小高知识库" : category.name || category.category_key}
+                  {category.category_key === BASE_CATEGORY_KEY ? "参考小高知识库" : category.name || category.category_key}
                 </label>
               ))}
             </div>
+            <p className="mt-2 text-[11px] leading-5 text-[#8b95a6]">选择 AI 回复时可参考的知识分类，不会修改知识库内容。</p>
+            {!categoryLoadFailed && !bindingLoadFailed && selectedCategoryKeys.length === 0 ? (
+              <p className="mt-2 text-[11px] leading-5 text-amber-600">已关闭知识库参考：AI 仍会生成回复，但不会引用小高知识库内容。</p>
+            ) : null}
             {categoryLoadFailed || bindingLoadFailed ? (
-              <p className="mt-2 text-[11px] text-amber-600">知识库分类加载不完整，本次保存会保留已加载的选择。</p>
+              <p className="mt-2 text-[11px] text-amber-600">知识范围加载不完整，本次保存会保留已加载的选择。</p>
             ) : null}
           </section>
           </div>
@@ -303,7 +310,7 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
         }
       } catch (error) {
         if (!cancelled) {
-          toast.warning("知识库绑定加载失败，本次预览不使用知识库分类");
+          toast.warning("知识范围加载失败，本次预览不参考知识分类");
         }
       }
     }
@@ -342,8 +349,8 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
         toast.error(result.error);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "训练预览失败");
-      setMessages((current) => [...current, { id: `ai-error-${Date.now()}`, sender: "ai", content: "训练预览失败，请稍后重试。" }]);
+      toast.error(error instanceof Error ? error.message : "回复预览失败");
+      setMessages((current) => [...current, { id: `ai-error-${Date.now()}`, sender: "ai", content: "回复预览失败，请稍后重试。" }]);
     } finally {
       setSending(false);
     }
@@ -357,7 +364,7 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
             <BookOpenIcon size={17} />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-bold text-[#1a1f2e]">统一知识库训练预览</h2>
+            <h2 className="truncate text-sm font-bold text-[#1a1f2e]">回复效果预览</h2>
             <p className="mt-1 truncate text-[11px] text-[#8b95a6]">{agent ? agent.name : "请选择一个智能体"}</p>
           </div>
         </div>
@@ -387,13 +394,13 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
             disabled={!agent || sending}
             onChange={(event) => setInput(event.target.value)}
             className="h-9 bg-transparent px-2 text-sm text-[#1a1f2e] outline-none placeholder:text-[#94a3b8] disabled:cursor-not-allowed"
-            placeholder={agent ? "输入训练问题" : "先选择智能体"}
+            placeholder={agent ? "输入客户问题" : "先选择智能体"}
           />
           <button
             type="submit"
             disabled={!agent || sending}
             className="grid h-9 w-9 place-items-center rounded-lg bg-[#2563eb] text-white disabled:opacity-50"
-            aria-label="发送训练问题"
+            aria-label="发送预览问题"
           >
             {sending ? <RefreshCwIcon size={15} className="animate-spin" /> : <SendIcon size={15} />}
           </button>
@@ -485,7 +492,7 @@ export default function SuperMerchantAgent() {
             </div>
             <div>
               <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高智能体</h1>
-              <p className="mt-1 text-xs text-[#8b95a6]">管理智能体名称、提示词和统一知识库训练预览。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置智能体名称、提示词和 AI 客服知识范围。</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -516,7 +523,7 @@ export default function SuperMerchantAgent() {
                   <BotIcon size={28} />
                 </div>
                 <h2 className="mt-4 text-base font-bold text-[#1a1f2e]">暂无智能体</h2>
-                <p className="mt-2 text-sm leading-6 text-[#8b95a6]">创建第一个AI小高智能体后，可以维护提示词和知识库并进行训练预览。</p>
+                <p className="mt-2 text-sm leading-6 text-[#8b95a6]">创建第一个AI小高智能体后，可以配置提示词和回复知识范围。</p>
               </div>
             </div>
           ) : (

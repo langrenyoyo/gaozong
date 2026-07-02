@@ -552,3 +552,48 @@ python -m pytest tests/test_ai_agents.py -q
 python -m pytest tests/test_ai_auto_reply_dry_run.py -q
 36 passed
 ```
+
+## 12. P1-AGENT-KB-CATEGORY-UI-COPY-CLOSURE-1 前端文案收口
+
+### 12.1 产品口径
+
+本轮沿用第 11 节确认的方案 B 关闭语义：
+
+1. 商户可以关闭知识库参考。
+2. 关闭后仍生成回复，但走 direct LLM / no RAG，不检索小高知识库。
+3. 关闭后是否自动发送继续由既有自动发送安全门禁决定。
+4. 商户不能训练、上传、写入、删除或管理知识库。
+5. 商户 AI 客服只消费管理员统一维护的“小高 AI 知识库”。
+
+### 12.2 前端收口结果
+
+`frontend/src/features/agents/pages/SuperMerchantAgent.tsx` 已将 Agent 页面中的商户侧表达从“知识库 / 训练预览”收口为“AI 客服知识范围 / 回复效果预览”：
+
+1. 编辑弹窗区域标题改为“AI 客服知识范围”。
+2. `base` 分类勾选文案改为“参考小高知识库”。
+3. 辅助说明明确“小高知识库由管理员统一维护”。
+4. 分类选择说明明确“选择 AI 回复时可参考的知识分类，不会修改知识库内容”。
+5. 全部取消勾选时展示“已关闭知识库参考：AI 仍会生成回复，但不会引用小高知识库内容”。
+6. 右侧预览从“统一知识库训练预览”调整为“回复效果预览”，避免让商户误以为正在训练知识库。
+
+### 12.3 本轮未改变内容
+
+1. 未改变 Agent 分类绑定保存逻辑。
+2. 未强制勾选 `base`，也未自动补回 `base`。
+3. 未改变 9000 注入 `rag_enabled` 的逻辑。
+4. 未改变 9100 RAG / direct LLM 行为。
+5. 未新增训练、上传、分类创建或文档管理入口。
+6. 未修改自动发送链路和安全门禁。
+
+### 12.4 测试记录
+
+新增静态回归测试：
+
+```text
+tests/test_frontend_capability_navigation.py::test_agent_page_describes_knowledge_as_reply_scope_not_management
+```
+
+测试目的：
+
+1. 断言 Agent 页面存在“AI 客服知识范围 / 参考小高知识库 / 管理员统一维护 / 已关闭知识库参考”等正确表达。
+2. 断言 Agent 页面不再出现“统一知识库训练预览 / 输入训练问题 / 发送训练问题 / 知识库管理 / 训练知识库 / 上传知识库 / 创建分类 / 管理分类 / 文档管理”等商户侧误导文案。
