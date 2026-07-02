@@ -260,8 +260,6 @@ class NewCarProjectAuthClient:
             "auto_wechat:wechat_assistant",
             "auto_wechat:compute",
             "auto_wechat:admin:compute_config",
-            "auto_wechat:knowledge",
-            "auto_wechat:knowledge_training",
             "auto_wechat:wechat_agent",
         ]
         return RequestContext(

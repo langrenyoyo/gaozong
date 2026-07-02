@@ -704,3 +704,51 @@ knowledge_base_name = "小高知识库"
 
 1. 生产部署是否位于可信反向代理后，以及是否允许开启 `KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS=true`，需要部署侧确认。
 2. `auto_wechat:knowledge_training` 在 mock 权限或历史记录中的残留后续可单开清理任务；本轮不把它写成正式商户权限。
+
+## 14. P1-KNOWLEDGE-TRAINING-HISTORICAL-PERMISSION-CLEANUP-1
+
+### 14.1 本轮搜索结果
+
+本轮重点搜索：
+
+```text
+auto_wechat:knowledge_training
+auto_wechat:knowledge
+knowledge_training
+knowledge-training
+mock permissions
+PERMISSION_DENIED
+```
+
+确认属于历史权限残留的位置：
+
+1. `app/auth/newcar_client.py`：本地 mock 默认权限中包含 `auto_wechat:knowledge` 和 `auto_wechat:knowledge_training`。
+2. `tests/test_auth_context.py`：默认 mock 权限测试仍把这两个历史权限当作默认商户能力断言。
+3. 本文档历史章节：已多次标注 `auto_wechat:knowledge` / `auto_wechat:knowledge_training` 不是 NewCar 正式商户权限码。
+
+确认不属于本轮清理的位置：
+
+1. `app/routers/knowledge_training.py` 的路由名、函数名、IP 白名单依赖和环境变量。
+2. `tests/test_knowledge_training_api.py` 中 `/knowledge-training/*` 的接口回归测试。
+3. `apps/xg_douyin_ai_cs` 中的 `knowledge_training_sessions`、`knowledge_training_feedbacks` 表名和训练服务实现。
+4. `apps/knowledge`、`packages/clients/knowledge_client.py`、`tests/test_knowledge_app.py` 中的 `auto_wechat:knowledge`，这些属于 9206 过渡服务 / 历史客户端测试范围，后续如要删除需单开任务。
+
+### 14.2 本轮清理结果
+
+1. 已从 `app/auth/newcar_client.py` 的本地 mock 默认权限中移除 `auto_wechat:knowledge_training`。
+2. 已同时移除 `auto_wechat:knowledge`，避免本地 mock 商户默认获得知识库管理含义的历史权限。
+3. 已更新 `tests/test_auth_context.py`，明确默认 mock 权限覆盖当前正式商户功能，但不包含 `auto_wechat:knowledge_training` 和 `auto_wechat:knowledge`。
+
+### 14.3 最终权限口径
+
+1. 知识库训练端是管理员 / 内部训练入口。
+2. `/knowledge-training/ask` 和 `/knowledge-training/{training_id}/feedback` 继续以 IP 白名单准入。
+3. 商户 NewCar 登录态、商户 token 或历史权限码不能替代 IP 白名单。
+4. `auto_wechat:knowledge_training` 不属于 NewCar 正式商户权限码。
+5. `auto_wechat:knowledge` 不作为商户知识库管理入口权限；当前如在历史过渡代码中出现，仅按历史 / 过渡 / 待清理记录处理。
+
+### 14.4 保留项和后续建议
+
+1. 保留 `knowledge_training` 路由名、表名和业务函数名，因为它们表达训练业务对象，不等同于商户权限码。
+2. 保留 9206 `apps/knowledge` 过渡服务测试中的 `auto_wechat:knowledge` 历史权限 fixture，本轮不扩大到过渡服务删除或客户端协议调整。
+3. 后续如继续收口，可单开 `P1-KNOWLEDGE-LEGACY-PERMISSION-FIXTURE-CLEANUP-1`，专门评估 9206 过渡服务、`packages/clients/knowledge_client.py` 和相关测试是否下线或改为内部门禁。

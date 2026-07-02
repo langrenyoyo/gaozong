@@ -194,11 +194,11 @@ def test_mock_newcar_client_default_permissions_cover_current_features():
         "auto_wechat:wechat_assistant",
         "auto_wechat:agent",
         "auto_wechat:ai_agents",
-        "auto_wechat:knowledge_training",
-        "auto_wechat:knowledge",
         "auto_wechat:compute",
         "auto_wechat:admin:compute_config",
     }
+    assert "auto_wechat:knowledge_training" not in context.permission_codes
+    assert "auto_wechat:knowledge" not in context.permission_codes
 
 
 def test_required_context_missing_token_returns_401(monkeypatch):
