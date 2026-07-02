@@ -79,6 +79,73 @@ def test_ask_rejects_non_whitelisted_ip(monkeypatch):
     assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
 
 
+def test_ask_rejects_non_whitelisted_ip_even_with_merchant_token(monkeypatch):
+    response = _client(client_host="203.0.113.10").post(
+        "/knowledge-training/ask",
+        json={"question": "怎么回复？"},
+        headers={"Authorization": "Bearer merchant-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+
+
+def test_ask_rejects_when_production_whitelist_is_not_explicit(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("KNOWLEDGE_TRAINING_IP_WHITELIST", raising=False)
+
+    response = _client().post(
+        "/knowledge-training/ask",
+        json={"question": "怎么回复？"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+
+
+def test_ask_allows_production_explicit_whitelist(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_IP_WHITELIST", "127.0.0.1/32")
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+
+    def fake_post(url, *, json, headers, timeout):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "training_id": "kt-prod",
+                    "question": json["question"],
+                    "answer": "生产白名单已命中。",
+                    "used_knowledge_base": True,
+                    "knowledge_base_name": "小高知识库",
+                    "status": "answered",
+                }
+
+        return Response()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client().post(
+        "/knowledge-training/ask",
+        json={"question": "怎么回复？"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["training_id"] == "kt-prod"
+
+
+def test_feedback_rejects_non_whitelisted_ip(monkeypatch):
+    response = _client(client_host="203.0.113.10").post(
+        "/knowledge-training/kt-1/feedback",
+        json={"rating": "wrong"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+
+
 def test_feedback_allows_whitelisted_ip_without_auth_and_uses_system_context(monkeypatch):
     seen: dict = {}
     monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")

@@ -597,3 +597,110 @@ tests/test_frontend_capability_navigation.py::test_agent_page_describes_knowledg
 
 1. 断言 Agent 页面存在“AI 客服知识范围 / 参考小高知识库 / 管理员统一维护 / 已关闭知识库参考”等正确表达。
 2. 断言 Agent 页面不再出现“统一知识库训练预览 / 输入训练问题 / 发送训练问题 / 知识库管理 / 训练知识库 / 上传知识库 / 创建分类 / 管理分类 / 文档管理”等商户侧误导文案。
+
+## 13. P1-ADMIN-KNOWLEDGE-TRAINING-IP-WHITELIST-CLOSURE-1
+
+### 13.1 最终产品口径
+
+1. 知识库训练端由管理员统一使用，不对商户开放。
+2. 准入方式为 IP 白名单；非白名单无法进入。
+3. 商户 NewCar 登录态不能替代 IP 白名单。
+4. `auto_wechat:knowledge_training` 如存在，只能作为历史 / 阶段性 / 待清理权限记录，不是 NewCar 正式商户权限码。
+5. 前端正式调用仍走 9000，不直连 9100。
+6. 9000 调用 9100 时继续携带 `X-Internal-Service-Token`。
+
+### 13.2 当前准入方式
+
+9000 `POST /knowledge-training/ask` 和 `POST /knowledge-training/{training_id}/feedback` 当前依赖：
+
+```text
+require_knowledge_training_ip_whitelist
+```
+
+未依赖：
+
+```text
+get_request_context_required
+auto_wechat:knowledge_training
+merchant_id
+```
+
+配置项：
+
+```text
+KNOWLEDGE_TRAINING_IP_WHITELIST
+KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS
+KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID
+KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID
+```
+
+开发默认白名单：
+
+```text
+127.0.0.1,::1,localhost
+```
+
+生产环境收口：
+
+1. `APP_ENV=production` 时，未显式配置 `KNOWLEDGE_TRAINING_IP_WHITELIST` 会拒绝。
+2. `APP_ENV=production` 时，如果仍沿用开发默认白名单，也会拒绝。
+3. 生产必须替换为真实管理员入口或可信反代来源 IP / CIDR。
+4. 默认不信任 `X-Forwarded-For` / `X-Real-IP`；只有确认可信反代会覆盖这些请求头时，才允许开启 `KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS=true`。
+
+### 13.3 ask / feedback 契约保持不变
+
+`ask` 请求体保持：
+
+```text
+question
+prompt
+use_xiaogao_knowledge_base
+douyin_account_id
+```
+
+`ask` 响应体保持：
+
+```text
+training_id
+question
+answer
+used_knowledge_base
+knowledge_base_name = "小高知识库"
+status = "answered"
+```
+
+`feedback` 请求体保持：
+
+```text
+rating: useful | normal | wrong
+comment
+```
+
+`feedback` 响应体保持：
+
+```text
+training_id
+rating
+status
+knowledge_base_name = "小高知识库"
+```
+
+`wrong` 反馈语义保持：
+
+1. 写入 `knowledge_training_feedbacks`。
+2. `status=pending_review`。
+3. 不新增 `knowledge_documents`。
+4. 不污染可检索知识库。
+5. 本轮不改变 feedback 暂不校验 `training_id` 是否真实存在的现状。
+
+### 13.4 本轮加固结果
+
+1. `app/routers/knowledge_training.py`：生产环境不允许继续使用开发默认白名单。
+2. `docker-compose.dev.yml`：9000 服务显式透传知识库训练白名单相关环境变量。
+3. `.env.example`：补充生产必须替换开发默认白名单的说明。
+4. `tests/test_knowledge_training_api.py`：补充生产默认白名单拒绝、生产显式白名单放行、feedback 非白名单拒绝、商户 token 不能绕过 IP 白名单等测试。
+
+### 13.5 仍待确认项
+
+1. 生产部署是否位于可信反向代理后，以及是否允许开启 `KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS=true`，需要部署侧确认。
+2. `auto_wechat:knowledge_training` 在 mock 权限或历史记录中的残留后续可单开清理任务；本轮不把它写成正式商户权限。

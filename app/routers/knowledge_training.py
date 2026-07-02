@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import (
+    APP_ENV,
     KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID,
     KNOWLEDGE_TRAINING_DEFAULT_TENANT_ID,
     KNOWLEDGE_TRAINING_IP_WHITELIST,
@@ -57,7 +58,13 @@ FEEDBACK_PUBLIC_FIELDS = {
 
 
 def _knowledge_training_whitelist_items() -> list[str]:
-    raw = os.getenv("KNOWLEDGE_TRAINING_IP_WHITELIST", KNOWLEDGE_TRAINING_IP_WHITELIST)
+    raw = os.getenv("KNOWLEDGE_TRAINING_IP_WHITELIST")
+    if os.getenv("APP_ENV", APP_ENV).strip().lower() == "production" and (
+        raw is None or raw.strip() == KNOWLEDGE_TRAINING_IP_WHITELIST
+    ):
+        return []
+    if raw is None:
+        raw = KNOWLEDGE_TRAINING_IP_WHITELIST
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
