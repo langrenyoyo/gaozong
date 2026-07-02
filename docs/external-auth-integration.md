@@ -96,6 +96,14 @@ http://192.168.110.113:9000
 Authorization: Bearer <token>
 ```
 
+当前 auto_wechat 前端运行态使用浏览器 `sessionStorage` 保存 token，key 为：
+
+```text
+external_token
+```
+
+`external_auth_token` 是早期 E2E 指引中的误称，不作为当前运行态检查口径。
+
 ### 2.4 Token 隔离
 
 外部 token 只能访问 `/api/external-auth/*` 这类外部接口。

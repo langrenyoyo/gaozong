@@ -49,6 +49,8 @@ assertIncludes(client, "getExternalToken()", "9000 api client reads token store"
 assertIncludes(client, "Authorization = `Bearer ${token}`", "9000 api client injects bearer token");
 assertIncludes(client, "redirectToNewCarLogin", "9000 api client redirects expired token to NewCar login");
 assertIncludes(tokenStore, "sessionStorage", "token store uses sessionStorage");
+assertIncludes(tokenStore, 'EXTERNAL_TOKEN_KEY = "external_token"', "token store uses the runtime sessionStorage key");
+assertNotIncludes(tokenStore, "external_auth_token", "token store does not use the historical mistaken key");
 assertIncludes(newcarRedirect, "NEWCAR_LOGIN_URL", "NewCar redirect helper uses configured login url");
 assertIncludes(newcarRedirect, "NEWCAR_REDIRECT_PATH_KEY", "NewCar redirect helper stores current path");
 assertIncludes(newcarRedirect, "NEWCAR_REDIRECTING_TTL_MS", "NewCar redirect helper expires stale redirect guard");
