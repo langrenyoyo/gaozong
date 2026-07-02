@@ -35,6 +35,10 @@ def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
 
 
+def _disabled(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=403, detail={"code": code, "message": message})
+
+
 def _trusted_tenant_id(context) -> str:
     return context.source_system or "new_car_project"
 
@@ -81,6 +85,7 @@ def create_knowledge_category(
     gateway_context: GatewayContext = Depends(get_gateway_context),
 ):
     """创建当前商户 merchant 知识分类。"""
+    raise _disabled("KNOWLEDGE_APP_CATEGORY_WRITE_DISABLED", "9206 过渡服务已禁用知识分类写入")
     require_knowledge_context(gateway_context)
     context = build_request_context(gateway_context)
     try:
@@ -114,6 +119,7 @@ def create_rag_document_proxy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """由 9206 注入可信 scope 后代理创建 9100 RAG 文档。"""
+    raise _disabled("KNOWLEDGE_APP_RAG_WRITE_DISABLED", "9206 过渡服务已禁用 RAG 写入")
     context = require_rag_context(gateway_context)
     account_open_id = str(request.account_open_id).strip()
     trusted_account_open_id = knowledge_service.validate_rag_account_scope(
@@ -168,6 +174,7 @@ def train_rag_proxy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """由 9206 注入可信 scope 后代理触发 9100 RAG 训练。"""
+    raise _disabled("KNOWLEDGE_APP_RAG_TRAIN_DISABLED", "9206 过渡服务已禁用 RAG 训练")
     context = require_rag_context(gateway_context)
     account_open_id = str(request.account_open_id).strip()
     trusted_account_open_id = knowledge_service.validate_rag_account_scope(

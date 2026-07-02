@@ -276,3 +276,80 @@ P1-RAG-KNOWLEDGE-APP-LOCKDOWN-1
 P1-RAG-AGENT-KB-CATEGORY-SCOPE-CONFIRM-1
 P1-FRONTEND-KNOWLEDGE-LEGACY-CLEANUP-1
 ```
+
+## 9. P1-RAG-KNOWLEDGE-APP-LOCKDOWN-1 审计结果
+
+更新时间：2026-07-02
+
+### 9.1 本轮产品口径
+
+事实：
+1. 知识库训练端只给管理员 / 内部统一使用，不对商户开放。
+2. 管理员训练入口最终准入方式为 IP 白名单。
+3. 商户抖音 AI 客服 / 自动回复只消费管理员维护的统一“小高 AI 知识库”。
+4. `apps/knowledge` 是过渡服务，不能成为商户绕过 9000 / 9100 安全边界的入口。
+5. `auto_wechat:knowledge` 和 `auto_wechat:knowledge_training` 只按历史 / 过渡 / 待清理权限记录处理，不写成 NewCar 正式商户权限码。
+
+### 9.2 已扫描文件
+
+1. `apps/knowledge/main.py`
+2. `apps/knowledge/router.py`
+3. `apps/knowledge/routers.py`
+4. `apps/knowledge/dependencies.py`
+5. `apps/knowledge/services.py`
+6. `apps/knowledge/schemas.py`
+7. `docker-compose.dev.yml`
+8. `Dockerfile.backend.dev`
+9. `app/main.py`
+10. `app/routers/capability_gateway.py`
+11. `tests/test_knowledge_app.py`
+12. `tests/test_capability_service_boundaries.py`
+13. `frontend/src/features/knowledge/*`
+14. `frontend/src/pages/KnowledgeBasePage.tsx`
+15. `frontend/src/pages/KnowledgeCategoriesPage.tsx`
+
+### 9.3 暴露面判断
+
+事实：
+1. `apps/knowledge` 有独立 FastAPI app，入口为 `apps.knowledge.main:app`。
+2. `docker-compose.dev.yml` 当前定义了 `knowledge-service`，并映射宿主端口 `9206:9206`。
+3. `app/main.py` 没有 include `apps.knowledge` 路由；9000 只挂载 `app.routers.knowledge_categories` 和 `app.routers.knowledge_training`。
+4. 前端正式生产入口没有调用 `http://*:9206/api/knowledge/*`。
+5. `frontend/src/features/knowledge/*` 仍保留历史页面和 API，但当前正式路由已回落到 `/douyin-cs/workbench`。
+
+结论：`apps/knowledge` 不是 9000 主应用路由，但在 dev compose 中可独立启动并对宿主暴露 9206，因此不能仅按“未暴露过渡代码”处理。
+
+### 9.4 apps/knowledge 路由清单
+
+| 接口 | 分类 | 本轮处理 | 说明 |
+|---|---|---|---|
+| `GET /` | 只读健康 / 状态 | 保持现状 | capability 根信息。 |
+| `GET /health` | 只读健康 / 状态 | 保持现状 | 健康检查。 |
+| `GET /openapi.json` | 只读调试 / 文档 | 保持现状 | 仅反映服务接口文档。 |
+| `GET /api/knowledge/categories` | 历史只读 / 待确认 | 保持只读 | 仍要求 gateway context；后续建议随 9206 去留一起处理。 |
+| `POST /api/knowledge/categories` | 已暴露写入接口 | 已锁定 | 固定返回 403 `KNOWLEDGE_APP_CATEGORY_WRITE_DISABLED`。 |
+| `POST /api/knowledge/rag/documents` | 已暴露 RAG 写入接口 | 已锁定 | 固定返回 403 `KNOWLEDGE_APP_RAG_WRITE_DISABLED`，不调用 9100。 |
+| `POST /api/knowledge/rag/train` | 已暴露 RAG 训练接口 | 已锁定 | 固定返回 403 `KNOWLEDGE_APP_RAG_TRAIN_DISABLED`，不调用 9100。 |
+
+### 9.5 本轮锁定的风险面
+
+事实：
+1. 即使请求方伪造 `X-Gateway-*` 上下文，也不能通过 9206 创建知识分类。
+2. 即使请求方伪造 `merchant_id`、`tenant_id`、`douyin_account_id`、`allowed_category_keys`，也不能通过 9206 写入 RAG 文档。
+3. 即使请求方具备历史 `auto_wechat:knowledge` 或 `auto_wechat:douyin_ai_cs` 字段，也不能通过 9206 触发 RAG 训练。
+4. 三个锁定入口在进入旧业务逻辑前直接返回 403，不写数据库，不调用 9100。
+5. health / root / openapi 保持可用，避免破坏 capability 边界测试。
+
+### 9.6 未处理风险和原因
+
+1. `GET /api/knowledge/categories` 仍保留：本轮目标是锁定旧写入 / 训练 / 搜索能力；只读分类是否继续保留，需要结合 Agent 分类消费口径单独确认。
+2. `knowledge-service` 仍保留宿主端口 `9206:9206`：本轮不做部署结构删除，避免影响 capability service 边界验证；后续如果不再需要独立过渡服务，应单开任务移除 compose 服务或改为仅内部网络。
+3. 旧代码中不可达的写入实现暂未删除：本轮采用最小锁定，不删除历史代码，便于后续按产品确认统一清理。
+
+### 9.7 后续建议
+
+```text
+P1-RAG-KNOWLEDGE-SERVICE-DECOMMISSION-1
+P1-RAG-AGENT-KB-CATEGORY-SCOPE-CONFIRM-1
+P1-FRONTEND-KNOWLEDGE-LEGACY-CLEANUP-1
+```

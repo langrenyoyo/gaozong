@@ -125,19 +125,17 @@ def test_knowledge_app_root_health_openapi_and_categories():
     assert data[1]["name"] == "精品BBA"
 
 
-def test_knowledge_app_creates_current_merchant_category_and_rejects_missing_context():
+def test_knowledge_app_create_category_is_locked_and_rejects_missing_context():
     response = _client().post(
         "/api/knowledge/categories",
-        json={"merchant_id": "merchant-b", "category_key": " premium_bba ", "name": " 精品BBA "},
+        json={"merchant_id": "merchant-b", "category_key": " premium_bba ", "name": "精品BBA"},
     )
-    assert response.status_code == 200
-    assert response.json()["data"]["category_key"] == "premium_bba"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_APP_CATEGORY_WRITE_DISABLED"
 
     db = TestSession()
     try:
-        row = db.query(KnowledgeCategory).filter_by(category_key="premium_bba").one()
-        assert row.merchant_id == "merchant-a"
-        assert row.name == "精品BBA"
+        assert db.query(KnowledgeCategory).filter_by(category_key="premium_bba").count() == 0
     finally:
         db.close()
 
@@ -153,7 +151,7 @@ def test_knowledge_app_categories_keep_legacy_ai_agents_permission_compatible():
     assert response.json()["data"][0]["category_key"] == "base"
 
 
-def test_knowledge_app_rag_document_uses_trusted_scope_and_rejects_other_merchant_account(monkeypatch):
+def test_knowledge_app_rag_document_write_is_locked(monkeypatch):
     from apps.knowledge import routers
 
     fake_client = FakeRagClient()
@@ -175,30 +173,11 @@ def test_knowledge_app_rag_document_uses_trusted_scope_and_rejects_other_merchan
         },
     )
 
-    assert response.status_code == 200
-    call = fake_client.calls[0]
-    assert call["method"] == "create_rag_document"
-    assert call["context"].merchant_id == "merchant-a"
-    assert call["request"] == {
-        "tenant_id": "new_car_project",
-        "merchant_id": "merchant-a",
-        "douyin_account_id": "account-open-1",
-        "title": "精品BBA话术",
-        "content": "客户咨询宝马5系时，引导留下联系方式。",
-        "category_key": "base",
-        "category": "旧分类展示",
-    }
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_APP_RAG_WRITE_DISABLED"
+    assert fake_client.calls == []
 
-    _insert_account(open_id="other-open", merchant_id="merchant-b")
-    rejected = _client(permissions=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"]).post(
-        "/api/knowledge/rag/documents",
-        json={"account_open_id": "other-open", "title": "跨商户", "content": "内容", "category_key": "base"},
-    )
-    assert rejected.status_code == 403
-    assert rejected.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
-
-
-def test_knowledge_app_rag_train_validates_category_and_builds_trusted_payload(monkeypatch):
+def test_knowledge_app_rag_train_is_locked(monkeypatch):
     from apps.knowledge import routers
 
     fake_client = FakeRagClient()
@@ -217,18 +196,6 @@ def test_knowledge_app_rag_train_validates_category_and_builds_trusted_payload(m
         },
     )
 
-    assert response.status_code == 200
-    assert fake_client.calls[0]["request"] == {
-        "tenant_id": "new_car_project",
-        "merchant_id": "merchant-a",
-        "douyin_account_id": "account-open-1",
-        "category_key": "premium_bba",
-        "force_rebuild": True,
-    }
-
-    rejected = _client(permissions=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"]).post(
-        "/api/knowledge/rag/train",
-        json={"account_open_id": "account-open-1", "category_key": "missing_key"},
-    )
-    assert rejected.status_code == 400
-    assert rejected.json()["detail"]["code"] == "CATEGORY_KEY_NOT_VISIBLE"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_APP_RAG_TRAIN_DISABLED"
+    assert fake_client.calls == []
