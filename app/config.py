@@ -51,7 +51,7 @@ def _env_csv_set(name: str) -> set[str]:
             result.add(text)
     return result
 
-
+# 默认跨域来源地址
 DEFAULT_CORS_ORIGINS = {
     "http://127.0.0.1:5173",
     "http://localhost:5173",
