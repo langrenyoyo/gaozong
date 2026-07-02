@@ -66,6 +66,26 @@ async def get_request_context_required(request: Request, db: Session = Depends(g
 
 
 def _resolve_required_context(request: Request, client: NewCarProjectAuthClient) -> RequestContext:
+    """
+    从请求中解析 NewCarProject 登录态，按优先级依次尝试授权码、Bearer Token、会话 Cookie
+    
+    按以下顺序尝试获取用户上下文：
+    1. 查询参数中的授权码（code）→ 调用 introspect_code
+    2. Authorization 头中的 Bearer Token → 调用 introspect_token
+    3. Cookie 中的 newcar_session / NEWCAR_SESSION → 调用 introspect_cookie
+    
+    三者均不存在时抛出 TOKEN_MISSING 异常
+    
+    Args:
+        request (Request): FastAPI 请求对象
+        client (NewCarProjectAuthClient): NewCarProject 认证客户端
+    
+    Returns:
+        RequestContext: 解析成功后的用户请求上下文
+    
+    Raises:
+        NewCarAuthError: 未提供任何登录态时抛出，错误码 TOKEN_MISSING
+    """
     code = request.query_params.get("code")
     if code:
         return client.introspect_code(code)
@@ -82,6 +102,23 @@ def _resolve_required_context(request: Request, client: NewCarProjectAuthClient)
 
 
 def _with_local_merchant_binding(db: Session, context: RequestContext) -> RequestContext:
+    
+    """
+    为请求上下文绑定本地商户ID。
+    
+    通过外部系统用户信息解析对应的本地商户绑定关系，并将商户ID写入上下文。
+    若未找到绑定关系则抛出认证异常。
+    
+    Args:
+        db (Session): 数据库会话
+        context (RequestContext): 待绑定商户的请求上下文
+    
+    Returns:
+        RequestContext: 已写入 merchant_id 的请求上下文
+    
+    Raises:
+        NewCarAuthError: 外部账号未绑定本地商户时抛出
+    """
     merchant_id = resolve_external_merchant_binding(
         db,
         source_system=context.source_system,
