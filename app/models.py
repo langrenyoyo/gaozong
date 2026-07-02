@@ -28,6 +28,26 @@ class SalesStaff(Base):
     leads = relationship("DouyinLead", back_populates="assigned_staff")
 
 
+class ExternalMerchantBinding(Base):
+    """外部账号与本地商户的绑定关系。"""
+
+    __tablename__ = "external_merchant_bindings"
+    __table_args__ = (
+        Index("idx_external_merchant_bindings_user", "source_system", "external_user_id"),
+        Index("idx_external_merchant_bindings_account", "source_system", "external_account"),
+        Index("idx_external_merchant_bindings_merchant", "merchant_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_system = Column(String(64), nullable=False, comment="外部来源系统")
+    external_user_id = Column(String(128), comment="外部用户 ID")
+    external_account = Column(String(128), comment="外部登录账号")
+    merchant_id = Column(String(128), nullable=False, comment="本地可信商户 ID")
+    status = Column(String(20), nullable=False, default="active", comment="active/disabled/deleted")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DouyinLead(Base):
     """抖音线索表"""
     __tablename__ = "douyin_leads"

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from migrations import migrate_sqlite
 
 
@@ -282,5 +284,107 @@ def test_0020_is_idempotent_when_direct_llm_policy_column_exists(tmp_path):
         assert conn.execute(
             "SELECT count(*) FROM schema_migrations WHERE version_num='0020'"
         ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_0023_external_merchant_bindings_creates_table_and_is_idempotent(tmp_path):
+    db_path = tmp_path / "external_bindings.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version_num VARCHAR(32) PRIMARY KEY, applied_at DATETIME NOT NULL, description VARCHAR(200));"
+        )
+        migration = next(
+            item
+            for item in migrate_sqlite.discover_migrations()
+            if item.version == "0023"
+        )
+        first = migrate_sqlite.apply_migration(
+            conn,
+            migrate_sqlite._load_stmts(migration.path),
+            migration.version,
+            migration.description,
+        )
+        second = migrate_sqlite.apply_migration(
+            conn,
+            migrate_sqlite._load_stmts(migration.path),
+            migration.version,
+            migration.description,
+        )
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert first.already_applied is False
+        assert second.already_applied is True
+        assert migrate_sqlite.table_exists(conn, "external_merchant_bindings") is True
+        assert {
+            "id",
+            "source_system",
+            "external_user_id",
+            "external_account",
+            "merchant_id",
+            "status",
+            "created_at",
+            "updated_at",
+        } <= migrate_sqlite.get_columns(conn, "external_merchant_bindings")
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(external_merchant_bindings)")
+        }
+        assert {
+            "idx_external_merchant_bindings_user",
+            "idx_external_merchant_bindings_account",
+            "idx_external_merchant_bindings_merchant",
+        } <= indexes
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0023'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_0023_external_merchant_bindings_constraints(tmp_path):
+    db_path = tmp_path / "external_bindings_constraints.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version_num VARCHAR(32) PRIMARY KEY, applied_at DATETIME NOT NULL, description VARCHAR(200));"
+        )
+        migration = next(
+            item
+            for item in migrate_sqlite.discover_migrations()
+            if item.version == "0023"
+        )
+        migrate_sqlite.apply_migration(
+            conn,
+            migrate_sqlite._load_stmts(migration.path),
+            migration.version,
+            migration.description,
+        )
+
+        conn.execute(
+            "INSERT INTO external_merchant_bindings "
+            "(source_system, external_user_id, merchant_id, status, created_at, updated_at) "
+            "VALUES ('new_car_project', 'u1', 'merchant-a', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        import sqlite3
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO external_merchant_bindings "
+                "(source_system, merchant_id, status, created_at, updated_at) "
+                "VALUES ('new_car_project', 'merchant-a', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO external_merchant_bindings "
+                "(source_system, external_user_id, merchant_id, status, created_at, updated_at) "
+                "VALUES ('new_car_project', 'u2', 'merchant-a', 'archived', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
     finally:
         conn.close()

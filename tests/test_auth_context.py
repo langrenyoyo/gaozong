@@ -3,6 +3,66 @@ import importlib
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import app.models  # noqa: F401  注册 ORM 模型到 Base.metadata
+from app.database import Base, get_db
+
+
+auth_engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+AuthTestSession = sessionmaker(autocommit=False, autoflush=False, bind=auth_engine)
+
+
+def _reset_auth_db():
+    Base.metadata.drop_all(bind=auth_engine)
+    Base.metadata.create_all(bind=auth_engine)
+
+
+def _override_auth_db(app):
+    def _get_db():
+        db = AuthTestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _get_db
+    return app
+
+
+def _insert_external_binding(
+    *,
+    source_system: str = "new_car_project",
+    external_user_id: str | None = "u-code",
+    external_account: str | None = "code-user",
+    merchant_id: str = "merchant-bound",
+    status: str = "active",
+):
+    db = AuthTestSession()
+    try:
+        db.execute(
+            text(
+                "INSERT INTO external_merchant_bindings "
+                "(source_system, external_user_id, external_account, merchant_id, status, created_at, updated_at) "
+                "VALUES (:source_system, :external_user_id, :external_account, :merchant_id, :status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            {
+                "source_system": source_system,
+                "external_user_id": external_user_id,
+                "external_account": external_account,
+                "merchant_id": merchant_id,
+                "status": status,
+            },
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_request_context_can_be_created():
@@ -52,6 +112,7 @@ def test_auth_config_defaults_do_not_block_dev(monkeypatch):
         "NEWCAR_AUTH_ENABLED",
         "NEWCAR_AUTH_MOCK_ENABLED",
         "NEWCAR_AUTH_BASE_URL",
+        "CORS_ORIGINS",
         "NEWCAR_AUTH_EXCHANGE_CODE_URL",
         "NEWCAR_AUTH_ME_URL",
         "NEWCAR_AUTH_LOGIN_URL",
@@ -59,6 +120,8 @@ def test_auth_config_defaults_do_not_block_dev(monkeypatch):
         "NEWCAR_AUTH_TIMEOUT_SECONDS",
     ]:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
 
     import app.config as config
 
@@ -66,6 +129,45 @@ def test_auth_config_defaults_do_not_block_dev(monkeypatch):
     assert reloaded.NEWCAR_AUTH_ENABLED is False
     assert reloaded.NEWCAR_AUTH_MOCK_ENABLED is True
     assert reloaded.NEWCAR_AUTH_TIMEOUT_SECONDS == 5
+
+
+def test_cors_origins_can_be_overridden_and_allow_newcar_login_origin(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "http://192.168.110.19:5174")
+
+    import app.config as config
+
+    reloaded_config = importlib.reload(config)
+    assert reloaded_config.CORS_ORIGINS == ("http://192.168.110.19:5174",)
+
+    import app.main as main
+
+    reloaded_main = importlib.reload(main)
+    client = TestClient(reloaded_main.create_app())
+    response = client.options(
+        "/auth/me",
+        headers={
+            "Origin": "http://192.168.110.19:5174",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://192.168.110.19:5174"
+
+
+def test_default_cors_origins_keep_lan_newcar_and_local_frontend(monkeypatch):
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    import app.config as config
+
+    reloaded_config = importlib.reload(config)
+    assert set(reloaded_config.CORS_ORIGINS) >= {
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://192.168.110.113:5173",
+        "http://192.168.110.113:9000",
+        "http://192.168.110.19:5174",
+    }
 
 
 def test_mock_newcar_client_returns_context():
@@ -183,6 +285,12 @@ def test_auth_me_required_mode_accepts_bearer_token(monkeypatch):
 
 
 def test_external_auth_token_me_builds_trusted_context(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="100",
+        external_account="merchant-user",
+        merchant_id="merchant-local",
+    )
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
     monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
@@ -222,7 +330,7 @@ def test_external_auth_token_me_builds_trusted_context(monkeypatch):
 
     from app.main import create_app
 
-    response = TestClient(create_app()).get(
+    response = TestClient(_override_auth_db(create_app())).get(
         "/auth/me",
         params={"merchant_id": "forged-merchant"},
         headers={"Authorization": "Bearer real-token"},
@@ -231,8 +339,8 @@ def test_external_auth_token_me_builds_trusted_context(monkeypatch):
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["user_id"] == "100"
-    assert data["merchant_id"] == "merchant-real"
-    assert data["merchant_ids"] == ["merchant-real"]
+    assert data["merchant_id"] == "merchant-local"
+    assert data["merchant_ids"] == ["merchant-local", "merchant-real"]
     assert data["source_system"] == "new_car_project"
     assert data["permission_codes"] == ["auto_wechat:use", "auto_wechat:leads"]
     assert calls == [
@@ -245,6 +353,12 @@ def test_external_auth_token_me_builds_trusted_context(monkeypatch):
 
 
 def test_external_auth_cookie_uses_me_endpoint(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="u-cookie",
+        external_account="cookie-user",
+        merchant_id="merchant-local-cookie",
+    )
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
     monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
@@ -274,7 +388,7 @@ def test_external_auth_cookie_uses_me_endpoint(monkeypatch):
 
     from app.main import create_app
 
-    response = TestClient(create_app()).get(
+    response = TestClient(_override_auth_db(create_app())).get(
         "/auth/me",
         cookies={"newcar_session": "cookie-value"},
     )
@@ -282,8 +396,8 @@ def test_external_auth_cookie_uses_me_endpoint(monkeypatch):
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["user_id"] == "u-cookie"
-    assert data["merchant_id"] == "merchant-cookie"
-    assert data["merchant_ids"] == ["merchant-cookie", "merchant-extra"]
+    assert data["merchant_id"] == "merchant-local-cookie"
+    assert data["merchant_ids"] == ["merchant-local-cookie", "merchant-cookie", "merchant-extra"]
     assert data["permission_codes"] == ["auto_wechat:use", "auto_wechat:compute"]
     assert calls == [
         {
@@ -294,6 +408,12 @@ def test_external_auth_cookie_uses_me_endpoint(monkeypatch):
 
 
 def test_external_auth_code_exchanges_token_then_loads_me(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="u-code",
+        external_account="code-user",
+        merchant_id="merchant-code-local",
+    )
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
     monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
@@ -348,11 +468,11 @@ def test_external_auth_code_exchanges_token_then_loads_me(monkeypatch):
 
     from app.main import create_app
 
-    response = TestClient(create_app()).get("/auth/me", params={"code": "login-code"})
+    response = TestClient(_override_auth_db(create_app())).get("/auth/me", params={"code": "login-code"})
 
     assert response.status_code == 200
     assert response.json()["data"]["user_id"] == "u-code"
-    assert response.json()["data"]["merchant_id"] is None
+    assert response.json()["data"]["merchant_id"] == "merchant-code-local"
     assert calls == [
         {
             "method": "POST",
@@ -368,6 +488,201 @@ def test_external_auth_code_exchanges_token_then_loads_me(monkeypatch):
             "timeout": 5,
         },
     ]
+
+
+def test_auth_me_uses_local_binding_by_external_user_id(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="u-code",
+        external_account="code-user",
+        merchant_id="merchant-local",
+    )
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:use", "auto_wechat:leads"],
+                "merchant_id": None,
+                "merchant_ids": [],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+        params={"merchant_id": "forged-merchant"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["merchant_id"] == "merchant-local"
+    assert data["merchant_ids"] == ["merchant-local"]
+
+
+def test_auth_me_falls_back_to_external_account_binding(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="another-user",
+        external_account="code-user",
+        merchant_id="merchant-by-account",
+    )
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:use"],
+                "merchant_id": None,
+                "merchant_ids": [],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["merchant_id"] == "merchant-by-account"
+
+
+@pytest.mark.parametrize("status", ["disabled", "deleted"])
+def test_auth_me_rejects_inactive_local_binding(monkeypatch, status):
+    _reset_auth_db()
+    _insert_external_binding(status=status)
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:use"],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "EXTERNAL_MERCHANT_NOT_BOUND",
+        "message": "账号未绑定商户，请联系管理员。",
+    }
+
+
+def test_auth_me_rejects_missing_local_binding(monkeypatch):
+    _reset_auth_db()
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:use"],
+                "merchant_id": None,
+                "merchant_ids": [],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "EXTERNAL_MERCHANT_NOT_BOUND"
+
+
+def test_auth_me_missing_use_permission_wins_before_binding(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding()
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "u-code", "account": "code-user", "status": "active"},
+                "permissions": ["auto_wechat:leads"],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer real-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
 def test_auth_callback_returns_exchanged_token_for_frontend_storage(monkeypatch):
@@ -417,6 +732,12 @@ def test_auth_callback_returns_exchanged_token_for_frontend_storage(monkeypatch)
 
 
 def test_external_auth_plain_authorization_is_token(monkeypatch):
+    _reset_auth_db()
+    _insert_external_binding(
+        external_user_id="u-token",
+        external_account="token-user",
+        merchant_id="merchant-token-local",
+    )
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
     monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
@@ -446,7 +767,7 @@ def test_external_auth_plain_authorization_is_token(monkeypatch):
 
     from app.main import create_app
 
-    response = TestClient(create_app()).get("/auth/me", headers={"Authorization": "plain-token"})
+    response = TestClient(_override_auth_db(create_app())).get("/auth/me", headers={"Authorization": "plain-token"})
 
     assert response.status_code == 200
     assert response.json()["data"]["user_id"] == "u-token"

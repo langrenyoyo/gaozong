@@ -2,10 +2,13 @@
 
 from collections.abc import Callable
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
+from app.auth.external_merchant_binding_service import resolve_external_merchant_binding
 from app.auth.newcar_client import NewCarAuthError, NewCarProjectAuthClient
+from app.database import get_db
 
 
 def _auth_error(status_code: int, code: str, message: str) -> HTTPException:
@@ -26,10 +29,7 @@ def _client() -> NewCarProjectAuthClient:
 
 
 async def get_request_context_optional(request: Request) -> RequestContext | None:
-    """获取可选请求上下文。
-
-    开发默认关闭鉴权时返回 mock 上下文，避免阻塞既有接口和本地调试。
-    """
+    """获取可选请求上下文；开发 mock 保持旧行为。"""
     client = _client()
     if not client.auth_enabled:
         if client.mock_enabled:
@@ -41,18 +41,26 @@ async def get_request_context_optional(request: Request) -> RequestContext | Non
         return None
 
 
-async def get_request_context_required(request: Request) -> RequestContext:
-    """获取必需请求上下文，失败时返回 401。"""
+async def get_request_context_required(request: Request, db: Session = Depends(get_db)) -> RequestContext:
+    """获取必需请求上下文；真实 NewCar 登录态必须命中本地商户绑定。"""
     client = _client()
     if not client.auth_enabled:
         if client.mock_enabled:
             return client.build_mock_context()
         raise _auth_error(401, "TOKEN_MISSING", "认证未启用且 mock 上下文不可用")
     try:
-        return _resolve_required_context(request, client)
+        context = _resolve_required_context(request, client)
+        if client.mock_enabled:
+            return context
+        return _with_local_merchant_binding(db, context)
     except NewCarAuthError as exc:
         status_code = 401
-        if exc.code in {"PERMISSION_DENIED", "MERCHANT_DISABLED", "PACKAGE_EXPIRED"}:
+        if exc.code in {
+            "PERMISSION_DENIED",
+            "MERCHANT_DISABLED",
+            "PACKAGE_EXPIRED",
+            "EXTERNAL_MERCHANT_NOT_BOUND",
+        }:
             status_code = 403
         raise _auth_error(status_code, exc.code, exc.message) from exc
 
@@ -71,6 +79,22 @@ def _resolve_required_context(request: Request, client: NewCarProjectAuthClient)
         return client.introspect_cookie(cookie)
 
     raise NewCarAuthError("TOKEN_MISSING", "未提供 NewCarProject 登录态")
+
+
+def _with_local_merchant_binding(db: Session, context: RequestContext) -> RequestContext:
+    merchant_id = resolve_external_merchant_binding(
+        db,
+        source_system=context.source_system,
+        external_user_id=context.user_id,
+        external_account=context.username,
+    )
+    if not merchant_id:
+        raise NewCarAuthError("EXTERNAL_MERCHANT_NOT_BOUND", "账号未绑定商户，请联系管理员。")
+
+    context.merchant_id = merchant_id
+    if merchant_id not in context.merchant_ids:
+        context.merchant_ids.insert(0, merchant_id)
+    return context
 
 
 def require_permission(permission_code: str) -> Callable[[RequestContext], RequestContext]:

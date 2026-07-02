@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.database import engine, Base
+from app.config import CORS_ORIGINS
 from app.routers import (
     agent,
     staff,
@@ -95,12 +96,7 @@ def create_app() -> FastAPI:
     # 注意：局域网地址和主机名仅用于临时开发测试，上线前需移除
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://127.0.0.1:5173",
-            "http://localhost:5173",
-            "http://192.168.110.113:5173",
-            "http://DESKTOP-T0HA3GO:5173",
-        ],
+        allow_origins=CORS_ORIGINS,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )

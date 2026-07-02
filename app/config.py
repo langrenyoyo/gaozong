@@ -51,6 +51,17 @@ def _env_csv_set(name: str) -> set[str]:
             result.add(text)
     return result
 
+
+DEFAULT_CORS_ORIGINS = {
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://192.168.110.113:5173",
+    "http://192.168.110.113:9000",
+    "http://192.168.110.19:5174",
+    "http://DESKTOP-T0HA3GO:5173",
+}
+CORS_ORIGINS = tuple(sorted(_env_csv_set("CORS_ORIGINS") or DEFAULT_CORS_ORIGINS))
+
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
