@@ -69,6 +69,7 @@ HEARTBEAT_INTERVAL_SECONDS = 10
 AGENT_CLIENT_ID = "local-agent-default"
 AGENT_DISPLAY_NAME = "小高AI微信助手"
 DEFAULT_TASK_POLL_INTERVAL_SECONDS = 5.0
+# 允许跨域来源
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
     "http://localhost:5173",
