@@ -173,6 +173,23 @@ def test_cross_merchant_lead_id_returns_404():
     assert response.json()["detail"]["code"] == "LEAD_NOT_FOUND"
 
 
+def test_records_require_leads_permission():
+    lead_id, staff_id = _insert_lead_with_staff(merchant_id="merchant-a")
+    _insert_notification(lead_id=lead_id, staff_id=staff_id)
+
+    response = _client(
+        RequestContext(
+            user_id="user-no-leads",
+            merchant_id="merchant-a",
+            merchant_ids=["merchant-a"],
+            permission_codes=["auto_wechat:agent"],
+        )
+    ).get("/lead-notifications/records", params={"lead_id": lead_id})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
 def test_missing_lead_id_returns_404():
     response = _client().get(
         "/lead-notifications/records",

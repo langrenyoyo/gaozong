@@ -232,10 +232,18 @@ def test_douyin_sync_non_dry_run_rejected():
 def test_douyin_sync_api():
     """测试 5：POST /integrations/douyin/sync-leads API 层测试"""
     from fastapi.testclient import TestClient
+    from app.auth.context import RequestContext
+    from app.auth.dependencies import get_request_context_required
     from app.main import create_app
 
     app = create_app()
     app.dependency_overrides[get_db] = _db_session
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="user-leads",
+        merchant_id="merchant-a",
+        merchant_ids=["merchant-a"],
+        permission_codes=["auto_wechat:leads"],
+    )
     client = TestClient(app)
 
     with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
@@ -268,6 +276,32 @@ def test_douyin_sync_api():
     assert len(data["items"]) == 1
     assert data["items"][0]["source_id"] == "api_test_001"
     assert data["items"][0]["action"] == "create"
+
+
+def test_douyin_sync_api_requires_leads_permission():
+    """POST /integrations/douyin/sync-leads 必须具备线索权限。"""
+    from fastapi.testclient import TestClient
+    from app.auth.context import RequestContext
+    from app.auth.dependencies import get_request_context_required
+    from app.main import create_app
+
+    app = create_app()
+    app.dependency_overrides[get_db] = _db_session
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="user-no-leads",
+        merchant_id="merchant-a",
+        merchant_ids=["merchant-a"],
+        permission_codes=["auto_wechat:agent"],
+    )
+    client = TestClient(app)
+
+    resp = client.post(
+        "/integrations/douyin/sync-leads",
+        json={"dry_run": True, "limit": 50, "lead_status": "pending"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
 def test_douyin_sync_api_error():

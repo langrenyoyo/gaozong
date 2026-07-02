@@ -316,11 +316,13 @@ async def _handle_douyin_webhook(
 def sync_leads(
     request: DouyinSyncRequest = DouyinSyncRequest(),
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ) -> DouyinSyncResponse:
     """从 douyinAPI 拉取线索并预览同步结果
 
     默认 dry_run=true（只预览，不写库）。
     """
+    require_permission("auto_wechat:leads")(context)
     return preview_sync_leads(db, request)
 
 

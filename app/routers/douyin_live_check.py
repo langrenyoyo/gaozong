@@ -199,7 +199,11 @@ def status(
 
 
 @router.get("/accounts", response_model=DouyinLiveCheckAccountsResponse)
-def accounts(db: Session = Depends(get_db)) -> DouyinLiveCheckAccountsResponse:
+def accounts(
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> DouyinLiveCheckAccountsResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     return DouyinLiveCheckAccountsResponse(
         data=list_douyin_workbench_accounts_with_event_fallback(db)
@@ -209,9 +213,10 @@ def accounts(db: Session = Depends(get_db)) -> DouyinLiveCheckAccountsResponse:
 @router.post("/accounts/sync-bind-info", response_model=DouyinBindInfoSyncResponse)
 def sync_accounts_bind_info(
     request: DouyinBindInfoSyncRequest = DouyinBindInfoSyncRequest(),
-    context: RequestContext | None = Depends(get_request_context_optional),
+    context: RequestContext = Depends(get_request_context_required),
     db: Session = Depends(get_db),
 ) -> DouyinBindInfoSyncResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     return DouyinBindInfoSyncResponse(
         data=sync_bind_info_accounts(
@@ -265,8 +270,10 @@ def bind_authorized_open_id(
 @router.post("/messages/send", response_model=DouyinPrivateMessageSendResponse)
 def send_message(
     request: DouyinPrivateMessageSendRequest,
+    context: RequestContext = Depends(get_request_context_required),
     db: Session = Depends(get_db),
 ) -> DouyinPrivateMessageSendResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     data = send_manual_private_message(
         db,
@@ -283,8 +290,10 @@ def send_message(
 @router.post("/resources/download", response_model=DouyinResourceDownloadResponse)
 def download_resource(
     request: DouyinResourceDownloadRequest,
+    context: RequestContext = Depends(get_request_context_required),
     db: Session = Depends(get_db),
 ) -> DouyinResourceDownloadResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     data = download_douyin_resource(
         db,
@@ -300,8 +309,10 @@ def download_resource(
 @router.post("/resources/upload-image", response_model=DouyinImageUploadResponse)
 def upload_image(
     request: DouyinImageUploadRequest,
+    context: RequestContext = Depends(get_request_context_required),
     db: Session = Depends(get_db),
 ) -> DouyinImageUploadResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     data = upload_douyin_image(
         db,

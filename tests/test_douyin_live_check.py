@@ -100,6 +100,13 @@ def _client():
             db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="user-1",
+        username="user-1",
+        merchant_id="merchant-1",
+        merchant_ids=["merchant-1"],
+        permission_codes=["auto_wechat:douyin_ai_cs"],
+    )
     return TestClient(app)
 
 
@@ -113,6 +120,7 @@ def _client_with_context(merchant_id: str = "merchant-1"):
         permission_codes=["auto_wechat:douyin_ai_cs"],
     )
     client.app.dependency_overrides[get_request_context_optional] = lambda: context
+    client.app.dependency_overrides[get_request_context_required] = lambda: context
     return client
 
 
@@ -134,6 +142,65 @@ def _client_with_required_context(
     )
     client.app.dependency_overrides[get_request_context_required] = lambda: context
     return client
+
+
+def test_live_check_accounts_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/accounts")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_sync_bind_info_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.post("/integrations/douyin/live-check/accounts/sync-bind-info", json={})
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_send_message_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.routers.douyin_live_check.send_manual_private_message") as mock_send:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "content": "hello",
+                "manual_confirmed": True,
+            },
+        )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+    mock_send.assert_not_called()
+
+
+def test_download_resource_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.routers.douyin_live_check.download_douyin_resource") as mock_download:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={"conversation_short_id": "resource_conv_001"},
+        )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+    mock_download.assert_not_called()
+
+
+def test_upload_image_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.routers.douyin_live_check.upload_douyin_image") as mock_upload:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/upload-image",
+            json={"file_name": "test.png", "image_base64": "abc"},
+        )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+    mock_upload.assert_not_called()
 
 
 def setup_function():

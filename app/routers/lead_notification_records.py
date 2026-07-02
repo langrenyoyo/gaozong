@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.models import DouyinLead, LeadNotification, SalesStaff
 from app.schemas import NotificationRecordOut, NotificationRecordsResponse
@@ -45,6 +45,7 @@ def list_notification_records(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """查询当前商户线索下的通知记录列表。"""
+    require_permission("auto_wechat:leads")(context)
     merchant_id = _require_merchant_id(context)
     limit = min(limit, 100)
 

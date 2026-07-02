@@ -79,9 +79,13 @@ def run_checks(db: Session) -> list[ReplyCheck]:
     return updated
 
 
-def list_checks(db: Session, check_status: str = None) -> list[ReplyCheck]:
+def list_checks(db: Session, check_status: str = None, merchant_id: str | None = None) -> list[ReplyCheck]:
     """查看检测记录"""
     q = db.query(ReplyCheck)
+    if merchant_id:
+        q = q.join(DouyinLead, ReplyCheck.lead_id == DouyinLead.id).filter(
+            DouyinLead.merchant_id == merchant_id
+        )
     if check_status:
         q = q.filter(ReplyCheck.check_status == check_status)
     return q.order_by(ReplyCheck.id.desc()).all()

@@ -9,6 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
 from app.integrations.douyin_webhook import process_webhook_event
 from app.main import create_app
@@ -28,7 +30,7 @@ def setup_function():
     Base.metadata.create_all(bind=test_engine)
 
 
-def _client() -> TestClient:
+def _client(permission_codes: list[str] | None = None) -> TestClient:
     app = create_app()
 
     def _override_get_db():
@@ -39,6 +41,12 @@ def _client() -> TestClient:
             db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="user-1",
+        merchant_id="merchant-a",
+        merchant_ids=["merchant-a"],
+        permission_codes=permission_codes or ["auto_wechat:leads"],
+    )
     return TestClient(app)
 
 
@@ -159,6 +167,22 @@ def test_list_webhook_events_empty():
     data = resp.json()
     assert data["success"] is True
     assert data["data"] == {"page": 1, "page_size": 20, "total": 0, "items": []}
+
+
+def test_webhook_events_require_leads_permission():
+    resp = _client(permission_codes=["auto_wechat:agent"]).get("/webhook-events")
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_webhook_event_detail_requires_leads_permission():
+    event_id = _insert_event(event_key="detail_permission_001")
+
+    resp = _client(permission_codes=["auto_wechat:agent"]).get(f"/webhook-events/{event_id}")
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
 def test_list_webhook_events_infers_valid_lead():

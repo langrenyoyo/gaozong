@@ -5,6 +5,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import WebhookEventDetailResponse, WebhookEventListResponse
 from app.services.webhook_event_service import (
@@ -31,8 +33,10 @@ def list_events(
     conversation_short_id: str | None = None,
     lead_id: int | None = None,
     db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
 ):
     """List raw webhook events without changing business state."""
+    require_permission("auto_wechat:leads")(context)
     data = list_webhook_events(
         db,
         WebhookEventFilters(
@@ -53,8 +57,13 @@ def list_events(
 
 
 @router.get("/{event_id}", response_model=WebhookEventDetailResponse)
-def get_event(event_id: int, db: Session = Depends(get_db)):
+def get_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
     """Get raw webhook event detail."""
+    require_permission("auto_wechat:leads")(context)
     data = get_webhook_event_detail(db, event_id)
     if data is None:
         raise HTTPException(status_code=404, detail="webhook event not found")
