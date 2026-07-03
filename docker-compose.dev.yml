@@ -206,11 +206,11 @@ services:
       # 匿名 volume 隔离 node_modules，避免宿主机 Windows 二进制覆盖容器 Linux 依赖
       - /workspace/frontend/node_modules
     environment:
-      # 这些 URL 给浏览器访问，本地开发用 127.0.0.1 正确
-      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://127.0.0.1:9000}
-      - VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-http://127.0.0.1:9000}
+      # 浏览器侧主 API 默认走 Vite /api 代理，避免局域网访问时 127.0.0.1 指向访问者电脑。
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-/api}
+      - VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-/api}
       - VITE_LOCAL_WECHAT_AGENT_BASE_URL=${VITE_LOCAL_WECHAT_AGENT_BASE_URL:-http://127.0.0.1:19000}
-      - VITE_DOUYIN_AI_CS_API_BASE_URL=${VITE_DOUYIN_AI_CS_API_BASE_URL:-http://127.0.0.1:9100}
+      - VITE_DOUYIN_AI_CS_API_BASE_URL=${VITE_DOUYIN_AI_CS_API_BASE_URL:-/ai-cs-api}
       - VITE_NEWCAR_AUTH_BASE_URL=${VITE_NEWCAR_AUTH_BASE_URL:-http://192.168.110.19:8790}
       - VITE_NEWCAR_LOGIN_URL=${VITE_NEWCAR_LOGIN_URL:-http://192.168.110.19:5174/login}
       - VITE_DEV_API_PROXY_TARGET=${VITE_DEV_API_PROXY_TARGET:-http://auto-wechat-api:9000}

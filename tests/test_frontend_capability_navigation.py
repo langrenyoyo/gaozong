@@ -138,3 +138,17 @@ def test_wechat_assistant_uses_browser_pending_task_api_instead_of_agent_poll_en
     assert "fetchBrowserPendingWechatTasks" in panel_source
     assert "fetchPendingWechatTasks" not in page_source
     assert "fetchPendingWechatTasks" not in panel_source
+
+
+def test_frontend_docker_dev_uses_browser_api_proxy_instead_of_loopback_9000():
+    compose_source = Path("docker-compose.dev.yml").read_text(encoding="utf-8")
+    env_example_source = Path("frontend/.env.example").read_text(encoding="utf-8")
+
+    assert "VITE_API_BASE_URL=${VITE_API_BASE_URL:-/api}" in compose_source
+    assert "VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-/api}" in compose_source
+    assert "VITE_DOUYIN_AI_CS_API_BASE_URL=${VITE_DOUYIN_AI_CS_API_BASE_URL:-/ai-cs-api}" in compose_source
+    assert "VITE_API_BASE_URL=http://127.0.0.1:9000" not in compose_source
+    assert "VITE_AUTO_WECHAT_API_BASE_URL=http://127.0.0.1:9000" not in compose_source
+
+    assert "VITE_API_BASE_URL=/api" in env_example_source
+    assert "VITE_AUTO_WECHAT_API_BASE_URL=/api" in env_example_source
