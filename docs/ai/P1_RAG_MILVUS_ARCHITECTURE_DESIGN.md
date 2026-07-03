@@ -495,3 +495,73 @@ Milvus
 ```bash
 git diff --check
 ```
+
+## 18. P1-RAG-MILVUS-CONFIG-ADAPTER-SKELETON-1
+
+### 18.1 本轮目标
+
+本轮在 9100 抖音 AI 小高客服服务中落地 Milvus 接入底座，只做配置项、向量库抽象和可测试工厂，不切换当前生产检索结果，不连接真实 Milvus，不做 collection 初始化，不做真实 upsert/search。
+
+### 18.2 新增配置项
+
+新增 9100 RAG 向量库后端配置：
+
+```text
+RAG_VECTOR_BACKEND=sqlite|milvus
+MILVUS_URI=
+MILVUS_TOKEN=
+MILVUS_DB_NAME=
+MILVUS_COLLECTION=
+MILVUS_DIMENSION=
+MILVUS_TIMEOUT_SECONDS=
+MILVUS_INDEX_TYPE=
+MILVUS_METRIC_TYPE=
+```
+
+默认值仍为 `RAG_VECTOR_BACKEND=sqlite`。sqlite 模式下，`MILVUS_*` 可以为空，也不要求安装 `pymilvus`。只有显式设置 `RAG_VECTOR_BACKEND=milvus` 时，才校验 `MILVUS_URI`、`MILVUS_COLLECTION`、`MILVUS_DIMENSION` 和 `pymilvus` 依赖。
+
+配置错误不会打印 `MILVUS_TOKEN`。
+
+### 18.3 VectorStore 抽象位置
+
+新增文件：
+
+```text
+apps/xg_douyin_ai_cs/services/vector_store.py
+```
+
+当前包含：
+
+1. `VectorStore` 协议。
+2. `SQLiteVectorStore`：默认实现，`search()` 继续代理现有 `rag.repository.search()`，保持 SQLite 行为不变。
+3. `MilvusVectorStore`：骨架实现，只做配置和依赖门禁；`search` / `upsert_chunks` / `delete_document` 均明确未实现，不会假成功。
+4. `get_vector_store(settings)`：根据 `RAG_VECTOR_BACKEND` 返回对应实现。
+
+### 18.4 当前行为
+
+`RAG_VECTOR_BACKEND=sqlite` 时，现有 RAG 搜索、reply-suggestion、`source_chunks`、`rag_sources`、`allowed_category_keys`、`rag_enabled=false` 等行为保持原路径，不经过真实 Milvus。
+
+`RAG_VECTOR_BACKEND=milvus` 时，本轮只允许进入骨架门禁：
+
+1. 缺少必要配置时报 `MILVUS_CONFIG_MISSING`。
+2. 未安装 `pymilvus` 时报 `MILVUS_DEPENDENCY_MISSING`。
+3. 配置和依赖都满足后也不连接 Milvus，真实连接留给后续 collection 初始化任务。
+
+### 18.5 本轮未实现
+
+1. 未新增 Milvus collection。
+2. 未连接真实 Milvus。
+3. 未做真实 Milvus upsert。
+4. 未做真实 Milvus search。
+5. 未把 reply-suggestion 主链路切换到 Milvus。
+6. 未修改 `/knowledge-training/ask` 和 `/feedback` schema。
+7. 未修改 9000、前端、NewCar 登录、live-check、Local Agent / 19000、自动发送 gate。
+
+### 18.6 下一步任务
+
+建议后续拆分为：
+
+1. `P1-RAG-MILVUS-COLLECTION-INIT-1`：在 staging 中实现幂等 collection 初始化和 schema 校验。
+2. `P1-RAG-MILVUS-UPSERT-INGESTION-1`：训练链路写入 SQLite metadata 后同步 upsert Milvus。
+3. `P1-RAG-MILVUS-SEARCH-FALLBACK-1`：在显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。
+4. `P1-RAG-MILVUS-SECURITY-OBSERVABILITY-1`：补充 scope/filter 强制校验、耗时指标和脱敏日志。

@@ -74,6 +74,8 @@ services:
     environment:
       # RAG 数据库路径（挂载到独立 /data，与 9000 的 data 隔离）
       XG_DOUYIN_AI_CS_DB_PATH: /data/xg_douyin_ai_cs.db
+      # 本地开发默认继续使用 SQLite 向量检索，不强制依赖 Milvus。
+      RAG_VECTOR_BACKEND: "${RAG_VECTOR_BACKEND:-sqlite}"
       XG_DOUYIN_AI_CS_SERVICE_TOKEN: "${XG_DOUYIN_AI_CS_SERVICE_TOKEN:-}"
       # LLM 变量从宿主机环境变量或根目录 .env 透传；不要把真实 Key 写入 compose。
       XG_DOUYIN_AI_LLM_BASE_URL: "${XG_DOUYIN_AI_LLM_BASE_URL:-}"

@@ -26,5 +26,55 @@ class Settings:
             return Path(raw)
         return Path(__file__).resolve().parent / "data" / "xg_douyin_ai_cs.db"
 
+    @property
+    def rag_vector_backend(self) -> str:
+        return os.environ.get("RAG_VECTOR_BACKEND", "sqlite").strip().lower() or "sqlite"
+
+    @property
+    def milvus_uri(self) -> str:
+        return os.environ.get("MILVUS_URI", "").strip()
+
+    @property
+    def milvus_token(self) -> str:
+        return os.environ.get("MILVUS_TOKEN", "").strip()
+
+    @property
+    def milvus_db_name(self) -> str:
+        return os.environ.get("MILVUS_DB_NAME", "").strip()
+
+    @property
+    def milvus_collection(self) -> str:
+        return os.environ.get("MILVUS_COLLECTION", "").strip()
+
+    @property
+    def milvus_dimension(self) -> int | None:
+        raw = os.environ.get("MILVUS_DIMENSION", "").strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    @property
+    def milvus_timeout_seconds(self) -> float:
+        raw = os.environ.get("MILVUS_TIMEOUT_SECONDS", "").strip()
+        if not raw:
+            return 5.0
+        try:
+            value = float(raw)
+        except ValueError:
+            return 5.0
+        return value if value > 0 else 5.0
+
+    @property
+    def milvus_index_type(self) -> str:
+        return os.environ.get("MILVUS_INDEX_TYPE", "AUTOINDEX").strip() or "AUTOINDEX"
+
+    @property
+    def milvus_metric_type(self) -> str:
+        return os.environ.get("MILVUS_METRIC_TYPE", "COSINE").strip().upper() or "COSINE"
+
 
 settings = Settings()
