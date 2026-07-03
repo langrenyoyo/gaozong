@@ -127,7 +127,22 @@ newcar_redirect_path_saved_at
 - 非法或过期路径只做安全日志记录并回退默认工作台，不向用户展示技术细节。
 - token 缺失或过期时，前端会先显示轻量提示，再跳转 NewCarProject 统一登录页。
 
-### 2.5 Token 隔离
+### 2.5 登录和鉴权异常提示
+
+auto_wechat 前端按错误类型区分是否自动跳转统一登录：
+
+- `TOKEN_MISSING`：显示“正在前往统一登录，请稍候…”后自动跳转 NewCarProject 统一登录页。
+- `TOKEN_EXPIRED` / `TOKEN_INVALID`：清理本地 `external_token`，显示“登录已过期，正在重新登录…”后自动跳转 NewCarProject 统一登录页。
+- `EXTERNAL_MERCHANT_NOT_BOUND`：显示“账号已登录，但暂未绑定商户，请联系管理员开通服务。”，不自动跳统一登录，避免反复登录。
+- `PERMISSION_DENIED`：显示“当前账号暂无访问该功能权限，请联系管理员开通。”，不自动跳统一登录。
+- 一次性 code 换 token 失败：清理 URL 中的 `code` / `source`，显示“登录凭证已失效，请重新登录。”，不展示上游完整错误体。
+
+错误页提供的操作：
+
+- “重新登录”：清理 `external_token` 和 NewCar 回跳状态，然后跳转 NewCarProject 统一登录页；该操作不把当前错误页保存为回跳路径，重新登录成功后默认进入 `/douyin-cs/workbench`。
+- “返回工作台”：用于权限不足场景，跳转 `/douyin-cs/workbench`。
+
+### 2.6 Token 隔离
 
 外部 token 只能访问 `/api/external-auth/*` 这类外部接口。
 

@@ -38,9 +38,15 @@ function authErrorMessage(error: unknown): string {
     if (record.code === "EXTERNAL_MERCHANT_NOT_BOUND") {
       return "账号未绑定商户，请联系管理员。";
     }
+    if (record.code === "PERMISSION_DENIED") {
+      return "当前账号暂无访问该功能权限，请联系管理员开通。";
+    }
     if (typeof record.message === "string" && record.message) {
       return record.message;
     }
+  }
+  if (response?.status === 403) {
+    return "当前账号暂无访问该功能权限，请联系管理员开通。";
   }
   if (response?.status === 401) {
     return "登录已过期，请重新登录";
@@ -65,10 +71,10 @@ export async function exchangeExternalCode(code: string): Promise<AuthContextDat
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error("登录 code 已使用、过期或无效，请重新登录");
+      throw new Error("登录凭证已失效，请重新登录。");
     }
     if (response.status === 403) {
-      throw new Error("账号缺少 auto_wechat:use 权限，无法进入系统");
+      throw new Error("当前账号暂无访问该功能权限，请联系管理员开通。");
     }
     throw new Error("外部登录失败，请重新登录");
   }

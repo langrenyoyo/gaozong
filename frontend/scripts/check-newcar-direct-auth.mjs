@@ -34,6 +34,9 @@ assertIncludes(authApi, "navigator.userAgent.slice(0, 80)", "auth api sends boun
 assertNotIncludes(authApi, '"/auth/callback"', "auth api no longer calls 9000 callback");
 assertIncludes(authApi, "EXTERNAL_MERCHANT_NOT_BOUND", "auth api maps unbound external account error");
 assertIncludes(authApi, "账号未绑定商户，请联系管理员。", "auth api exposes unbound merchant message");
+assertIncludes(authApi, "PERMISSION_DENIED", "auth api maps permission denied error");
+assertIncludes(authApi, "当前账号暂无访问该功能权限，请联系管理员开通。", "auth api exposes permission denied message");
+assertIncludes(authApi, "登录凭证已失效，请重新登录。", "auth api exposes expired code message");
 
 assertIncludes(app, 'source === "new_car_project"', "app only consumes NewCar redirect code");
 assertIncludes(app, "assertCanEnterSystem", "app enforces auto_wechat:use");
@@ -44,6 +47,14 @@ assertIncludes(app, "`${url.pathname}${url.search}${url.hash}`", "app preserves 
 assertIncludes(app, "externalMerchantNotBound", "app keeps unbound external account out of business routes");
 assertIncludes(app, "redirectToNewCarLogin", "app redirects missing/expired external auth to NewCar login");
 assertIncludes(app, "restoreSavedRedirectPathAfterLogin", "app restores saved path after code login");
+assertIncludes(app, "AuthErrorScreen", "app renders user-facing auth error states");
+assertIncludes(app, "账号已登录，但暂未绑定商户，请联系管理员开通服务。", "app shows unbound merchant guidance");
+assertIncludes(app, "当前账号暂无访问该功能权限，请联系管理员开通。", "app shows permission denied guidance");
+assertIncludes(app, "登录凭证已失效，请重新登录。", "app shows exchange-code failure guidance");
+assertIncludes(app, "重新登录", "app exposes a relogin action for auth errors");
+assertIncludes(app, "返回工作台", "app exposes a workbench action for permission errors");
+assertIncludes(app, "handleRelogin", "app relogin action clears local auth state before NewCar redirect");
+assertIncludes(app, "handleBackToWorkbench", "app permission action returns to the default workbench");
 
 assertIncludes(client, "getExternalToken()", "9000 api client reads token store");
 assertIncludes(client, "Authorization = `Bearer ${token}`", "9000 api client injects bearer token");

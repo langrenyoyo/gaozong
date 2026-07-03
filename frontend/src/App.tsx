@@ -5,7 +5,13 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
-import { addNewCarRedirectNoticeListener, redirectToNewCarLogin, restoreSavedRedirectPathAfterLogin } from "./newcarRedirect";
+import {
+  addNewCarRedirectNoticeListener,
+  clearNewCarRedirectState,
+  DEFAULT_POST_LOGIN_PATH,
+  redirectToNewCarLogin,
+  restoreSavedRedirectPathAfterLogin,
+} from "./newcarRedirect";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
 
@@ -37,7 +43,7 @@ function userFromAuthData(data: AuthContextData): AppUser {
 
 function assertCanEnterSystem(user: AppUser) {
   if (!hasPermission(user, PERMISSIONS.use)) {
-    throw new Error("账号缺少 auto_wechat:use 权限，无法进入系统");
+    throw new Error("当前账号暂无访问该功能权限，请联系管理员开通。");
   }
 }
 
@@ -65,12 +71,90 @@ function LegacyRedirect({ to }: { to: string }) {
   return <Navigate to={`${to}${location.search || ""}`} replace />;
 }
 
+type AuthErrorKind = "externalMerchantNotBound" | "permissionDenied" | "exchangeCodeFailed" | "tokenExpired" | "generic";
+
+interface AuthErrorState {
+  kind: AuthErrorKind;
+  message: string;
+}
+
+function classifyAuthError(error: unknown): AuthErrorState {
+  const message = error instanceof Error ? error.message : "外部登录失败，请重新登录";
+  if (message.includes("账号未绑定商户")) {
+    return {
+      kind: "externalMerchantNotBound",
+      message: "账号已登录，但暂未绑定商户，请联系管理员开通服务。",
+    };
+  }
+  if (message.includes("暂无访问该功能权限") || message.includes("缺少 auto_wechat:use 权限")) {
+    return {
+      kind: "permissionDenied",
+      message: "当前账号暂无访问该功能权限，请联系管理员开通。",
+    };
+  }
+  if (message.includes("登录凭证已失效") || message.includes("code")) {
+    return {
+      kind: "exchangeCodeFailed",
+      message: "登录凭证已失效，请重新登录。",
+    };
+  }
+  if (message.includes("登录已过期")) {
+    return {
+      kind: "tokenExpired",
+      message: "登录已过期，请重新登录",
+    };
+  }
+  return { kind: "generic", message };
+}
+
+function AuthErrorScreen({
+  error,
+  onRelogin,
+  onBackToWorkbench,
+}: {
+  error: AuthErrorState;
+  onRelogin: () => void;
+  onBackToWorkbench: () => void;
+}) {
+  const canBackToWorkbench = error.kind === "permissionDenied";
+  return (
+    <div className="grid min-h-screen place-items-center bg-[#070d18] px-6 text-white">
+      <div className="w-full max-w-md rounded-lg border border-white/10 bg-[#101729] p-6 shadow-[0_18px_50px_rgba(0,0,0,0.32)]">
+        <div className="text-base font-semibold">{error.message}</div>
+        <div className="mt-2 text-sm leading-6 text-slate-400">
+          {error.kind === "externalMerchantNotBound"
+            ? "当前登录态已保留，请联系管理员完成商户绑定后再进入系统。"
+            : "如已完成开通，请重新登录后再试。"}
+        </div>
+        <div className="mt-5 flex flex-wrap gap-3">
+          {canBackToWorkbench ? (
+            <button
+              type="button"
+              onClick={onBackToWorkbench}
+              className="rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/8"
+            >
+              返回工作台
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onRelogin}
+            className="rounded-md bg-[#2563eb] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
+          >
+            重新登录
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const App = () => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<AuthErrorState | null>(null);
   const [loginRedirectNotice, setLoginRedirectNotice] = useState<string | null>(null);
-  const externalMerchantNotBound = authError === "账号未绑定商户，请联系管理员。";
+  const externalMerchantNotBound = authError?.kind === "externalMerchantNotBound";
 
   useEffect(() => {
     let active = true;
@@ -103,11 +187,14 @@ const App = () => {
           return;
         }
       } catch (error) {
-        clearExternalToken();
         cleanCodeFromUrl();
+        const nextAuthError = classifyAuthError(error);
+        if (nextAuthError.kind !== "externalMerchantNotBound" && nextAuthError.kind !== "permissionDenied") {
+          clearExternalToken();
+        }
         if (active) {
           setUser(null);
-          setAuthError(error instanceof Error ? error.message : "外部登录失败，请重新登录");
+          setAuthError(nextAuthError);
         }
       } finally {
         if (active) setAuthLoading(false);
@@ -121,7 +208,7 @@ const App = () => {
         return;
       }
       setUser(null);
-      setAuthError("登录已过期，请重新登录");
+      setAuthError({ kind: "tokenExpired", message: "登录已过期，请重新登录" });
     };
     window.addEventListener("external-auth-expired", onAuthExpired);
 
@@ -138,6 +225,12 @@ const App = () => {
     return capabilityRoutes.filter((route) => allowedNavIds.has(route.navId));
   }, [user]);
 
+  const deniedRoutes = useMemo(() => {
+    if (!user || user.role !== "merchant") return [];
+    const allowedPaths = new Set(allowedRoutes.map((route) => route.path));
+    return capabilityRoutes.filter((route) => !allowedPaths.has(route.path));
+  }, [allowedRoutes, user]);
+
   const handleLogin = (nextUser: AppUser) => {
     setAuthError(null);
     setUser(nextUser);
@@ -149,11 +242,24 @@ const App = () => {
     setAuthError(null);
   };
 
+  const handleRelogin = () => {
+    clearExternalToken();
+    clearNewCarRedirectState();
+    setUser(null);
+    setAuthError(null);
+    void redirectToNewCarLogin({ message: "正在前往统一登录，请稍候…", delayMs: 0, saveCurrentPath: false });
+  };
+
+  const handleBackToWorkbench = () => {
+    setAuthError(null);
+    window.location.replace(DEFAULT_POST_LOGIN_PATH);
+  };
+
   const renderIndex = (initialActiveNav: string) =>
     user && !externalMerchantNotBound ? (
       <Index user={user} onLogout={handleLogout} initialActiveNav={initialActiveNav} />
     ) : (
-      <Login onLogin={handleLogin} authError={authError} />
+      <Login onLogin={handleLogin} authError={authError?.message || null} />
     );
 
   if (loginRedirectNotice) {
@@ -172,6 +278,10 @@ const App = () => {
     );
   }
 
+  if (authError && authError.kind !== "tokenExpired") {
+    return <AuthErrorScreen error={authError} onRelogin={handleRelogin} onBackToWorkbench={handleBackToWorkbench} />;
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
@@ -182,12 +292,25 @@ const App = () => {
               user && !externalMerchantNotBound ? (
                 <Navigate to={defaultPathForUser(user)} replace />
               ) : (
-                <Login onLogin={handleLogin} authError={authError} />
+                <Login onLogin={handleLogin} authError={authError?.message || null} />
               )
             }
           />
           {allowedRoutes.map((route) => (
             <Route key={route.path} path={route.path} element={renderIndex(route.navId)} />
+          ))}
+          {deniedRoutes.map((route) => (
+            <Route
+              key={route.path}
+              path={route.path}
+              element={
+                <AuthErrorScreen
+                  error={{ kind: "permissionDenied", message: "当前账号暂无访问该功能权限，请联系管理员开通。" }}
+                  onRelogin={handleRelogin}
+                  onBackToWorkbench={handleBackToWorkbench}
+                />
+              }
+            />
           ))}
           {legacyRouteRedirects.map((route) => (
             <Route key={route.from} path={route.from} element={<LegacyRedirect to={route.to} />} />

@@ -23,6 +23,7 @@ const ALLOWED_REDIRECT_PATH_PREFIXES = [
 interface RedirectToNewCarLoginOptions {
   message?: string;
   delayMs?: number;
+  saveCurrentPath?: boolean;
 }
 
 function currentPath(): string {
@@ -56,6 +57,11 @@ function isAllowedRedirectPath(path: string | null): path is string {
 function clearSavedRedirectPath(): void {
   sessionStorage.removeItem(NEWCAR_REDIRECT_PATH_KEY);
   sessionStorage.removeItem(NEWCAR_REDIRECT_PATH_SAVED_AT_KEY);
+}
+
+export function clearNewCarRedirectState(): void {
+  clearSavedRedirectPath();
+  sessionStorage.removeItem(NEWCAR_REDIRECTING_KEY);
 }
 
 function resolveSavedRedirectPath(): string {
@@ -105,8 +111,10 @@ export function redirectToNewCarLogin(options: RedirectToNewCarLoginOptions = {}
 
   const loginUrl = new URL(NEWCAR_LOGIN_URL);
   const now = Date.now().toString();
-  sessionStorage.setItem(NEWCAR_REDIRECT_PATH_KEY, currentPath());
-  sessionStorage.setItem(NEWCAR_REDIRECT_PATH_SAVED_AT_KEY, now);
+  if (options.saveCurrentPath !== false) {
+    sessionStorage.setItem(NEWCAR_REDIRECT_PATH_KEY, currentPath());
+    sessionStorage.setItem(NEWCAR_REDIRECT_PATH_SAVED_AT_KEY, now);
+  }
   sessionStorage.setItem(NEWCAR_REDIRECTING_KEY, now);
   clearExternalToken();
   emitRedirectNotice(options.message || DEFAULT_REDIRECT_MESSAGE);
