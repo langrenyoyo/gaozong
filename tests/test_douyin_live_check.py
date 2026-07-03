@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import importlib
 import hashlib
+import time
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -233,6 +234,13 @@ def _live_receive_payload(
             ensure_ascii=False,
         ),
     }
+
+
+def _signed_live_request(payload: dict, secret: str = "test-live-secret") -> tuple[str, str, str]:
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    timestamp = str(int(time.time()))
+    signature = hashlib.sha256((secret + body_text + "-" + timestamp).encode("utf-8")).hexdigest()
+    return body_text, timestamp, signature
 
 
 def _insert_live_forward_account_binding() -> None:
@@ -2254,16 +2262,78 @@ def test_webhook_observe_forward_disabled_does_not_write_formal_event():
         db.close()
 
 
-def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead():
+def test_webhook_observe_forward_enabled_rejects_missing_signature_in_production():
     client = _client()
     _insert_live_forward_account_binding()
-    payload = _live_receive_payload(from_user_id="live_forward_create_001")
+    payload = _live_receive_payload(from_user_id="live_forward_missing_sig_001")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
          patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
          patch("app.config.APP_ENV", "production"):
         resp = client.post("/integrations/douyin/live-check/webhook-observe", json=payload)
+
+    assert resp.status_code == 401
+
+    db = TestSession()
+    try:
+        assert db.query(DouyinWebhookEvent).count() == 0
+        assert db.query(DouyinLead).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_observe_forward_enabled_rejects_wrong_signature_in_production():
+    client = _client()
+    _insert_live_forward_account_binding()
+    payload = _live_receive_payload(from_user_id="live_forward_wrong_sig_001")
+    body_text, ts, _sig = _signed_live_request(payload)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
+         patch("app.config.APP_ENV", "production"), \
+         patch("app.integrations.douyin_webhook.DY_SECRET_KEY", "test-live-secret"):
+        resp = client.post(
+            "/integrations/douyin/live-check/webhook-observe",
+            data=body_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Auth-Timestamp": ts,
+                "Authorization": "wrong-signature",
+            },
+        )
+
+    assert resp.status_code == 401
+
+    db = TestSession()
+    try:
+        assert db.query(DouyinWebhookEvent).count() == 0
+        assert db.query(DouyinLead).count() == 0
+    finally:
+        db.close()
+
+
+def test_webhook_observe_forward_enabled_reuses_formal_pipeline_after_signature_verified():
+    client = _client()
+    _insert_live_forward_account_binding()
+    payload = _live_receive_payload(from_user_id="live_forward_create_001")
+    body_text, ts, sig = _signed_live_request(payload)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
+         patch("app.config.APP_ENV", "production"), \
+         patch("app.integrations.douyin_webhook.DY_SECRET_KEY", "test-live-secret"):
+        resp = client.post(
+            "/integrations/douyin/live-check/webhook-observe",
+            data=body_text.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Auth-Timestamp": ts,
+                "Authorization": sig,
+            },
+        )
 
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -2283,6 +2353,27 @@ def test_webhook_observe_forward_enabled_reuses_formal_pipeline_and_creates_lead
         assert lead is not None
         assert lead.source_id == "live_forward_create_001"
         assert lead.customer_contact == "13633624849"
+    finally:
+        db.close()
+
+
+def test_live_check_callback_forward_enabled_rejects_missing_signature_in_production():
+    client = _client()
+    _insert_live_forward_account_binding()
+    payload = _live_receive_payload(from_user_id="callback_forward_missing_sig_001")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_LIVE_CHECK_FORWARD_TO_FORMAL", True), \
+         patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
+         patch("app.config.APP_ENV", "production"):
+        resp = client.post("/integrations/douyin/live-check/callback", json=payload)
+
+    assert resp.status_code == 401
+
+    db = TestSession()
+    try:
+        assert db.query(DouyinWebhookEvent).count() == 0
+        assert db.query(DouyinLead).count() == 0
     finally:
         db.close()
 

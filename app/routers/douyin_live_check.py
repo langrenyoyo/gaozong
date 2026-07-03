@@ -434,8 +434,10 @@ async def _maybe_forward_to_formal(
             db=db,
             source_path=source_path,
             background_tasks=background_tasks,
-            skip_signature_verification=True,
         )
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
         logger.warning(

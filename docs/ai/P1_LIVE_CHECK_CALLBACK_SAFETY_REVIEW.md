@@ -224,3 +224,28 @@
 - 私信发送、资源下载和图片上传的账号 / 会话 / open_id 是否有上游侧二次归属校验；即便上游有校验，本系统仍建议做本地显式校验。
 - webhook raw_body 和私信内容的保留周期、访问权限、导出策略。
 - observe 类入口是否仍需公网可达；若仅用于本地排障，建议从反代层下线或加内部访问限制。
+
+## 11. P1-LIVE-CHECK-WEBHOOK-OBSERVE-SIGNATURE-GUARD-1
+
+本轮已修复 `webhook-observe` / `callback` 在开启 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 后绕过正式 webhook 签名校验的问题。
+
+当前行为：
+
+- 观察模式：`DY_LIVE_CHECK_FORWARD_TO_FORMAL=false` 时，只记录 live-check 观察摘要，不写入正式 `douyin_webhook_events` / `douyin_leads`。
+- 转正式管线模式：`DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 时，复用正式 `_handle_douyin_webhook()` 入口，不再设置跳过签名校验。
+- 缺少 `X-Auth-Timestamp` 或 `Authorization` 时，按正式 webhook 规则返回 401，不进入正式管线。
+- 签名错误时，按正式 webhook 规则返回 401，不进入正式管线。
+- 签名正确时，继续进入正式 webhook 处理流程，保留 timestamp 漂移检查、raw event 留存、event_key 幂等、线索写入和自动回复 dry-run 调度边界。
+- 重复 event_key 仍按正式 webhook 幂等逻辑处理，不重复创建正式线索。
+
+本轮未修改：
+
+- OAuth state 加固。
+- OAuth redirect 白名单。
+- live-check merchant isolation。
+- resource download SSRF 防护。
+- raw_body / 私信内容脱敏和留存策略。
+- NewCar 登录。
+- RAG / 知识库。
+- Local Agent / 19000。
+- 私信真实发送逻辑和自动发送链路。
