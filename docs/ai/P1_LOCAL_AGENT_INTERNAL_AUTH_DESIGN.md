@@ -730,3 +730,84 @@ LOCAL_AGENT_AUTH_REQUIRED=true
 ```
 
 一期 token 粒度为每商户一个。后续如果需要更强归属校验，应在数据模型补齐 `merchant_id` / Agent 归属字段后，再对 pending 拉取、任务详情、结果回写和回复检测回写做强校验。
+
+## 20. P1-LEGACY-WECHAT-DEBUG-ENDPOINTS-LOCKDOWN-1
+
+### 20.1 本轮目标
+
+锁定历史微信 debug / 直检接口，减少公网暴露面。本轮不影响正式 Local Agent 任务队列链路，不修改 19000。
+
+### 20.2 已锁定接口
+
+以下 9000 历史接口默认禁用：
+
+1. `POST /replies/current-wechat-detect`
+2. `GET /replies/debug/windows`
+3. `GET /replies/debug/messages`
+4. `GET /replies/debug/raw-tree`
+5. `POST /replies/debug/sender-experiment`
+
+禁用时返回 404，且在进入微信 UI 自动化、窗口枚举、消息读取或数据库回写前直接停止。
+
+### 20.3 保留接口
+
+正式 Local Agent 链路继续保留：
+
+1. `POST /agent/heartbeat`
+2. `GET /wechat-tasks/pending`
+3. `POST /wechat-tasks/{task_id}/result`
+4. `POST /replies/agent-write-back`
+
+其中 `/replies/agent-write-back` 不受历史 debug 开关影响，继续使用 P1-LOCAL-AGENT-AUTH-COMPAT-GATE-1 的兼容 token 鉴权。
+
+### 20.4 新增配置
+
+新增后端配置项：
+
+```env
+LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED=false
+```
+
+默认值为 `false`，禁止配置到任何 `VITE_*` 前端环境变量。
+
+### 20.5 默认行为
+
+未配置 `LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED` 时，历史微信 debug / 直检接口默认禁用。
+
+### 20.6 本地开发显式开启
+
+仅本地开发排查旧接口时可临时开启：
+
+```env
+APP_ENV=development
+LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED=true
+```
+
+该模式保留旧接口原行为，便于本地定位微信窗口、消息结构和旧检测逻辑问题。
+
+### 20.7 生产环境强制关闭
+
+`APP_ENV=production` 时，即使配置：
+
+```env
+LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED=true
+```
+
+历史微信 debug / 直检接口仍强制返回 404，不进入微信 UI 自动化、不读取窗口、不写数据库。
+
+### 20.8 前端收口
+
+前端历史“检测微信回复”入口已停止调用 `POST /replies/current-wechat-detect`，页面保留按钮但默认禁用，并提示使用自动回复检测任务链路。
+
+### 20.9 不变边界
+
+本轮未修改：
+
+1. 19000 Local Agent。
+2. 正式任务状态机。
+3. `/wechat-tasks/pending` 语义。
+4. `/replies/agent-write-back` 业务逻辑。
+5. NewCar 登录。
+6. `/auth/callback`。
+7. RAG / 知识库。
+8. 自动发送链路。

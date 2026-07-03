@@ -20,7 +20,6 @@ import { assignLead, fetchLead, fetchLeadsPage, fetchLeadWechatNotifyStatus } fr
 import { fetchStaffList } from "../api";
 import { fetchSummary } from "../api";
 import { syncDouyinLeads } from "../api";
-import { detectWechatReply } from "../api";
 import { fetchChecks } from "../api";
 import { setWechatAutoDetectTarget, fetchWechatAutoDetectStatus, clearWechatAutoDetectTarget } from "../api";
 import { sendLeadToStaff } from "../api";
@@ -835,7 +834,8 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
 
   // 检测按钮可用条件
   const agentReason = agentDisabledReason(agentStatus);
-  const canDetect = lead.status === "assigned" && lead.assigned_staff_id !== null && !detectLoading && agentStatus.can_run_wechat_action;
+  const legacyDetectDisabledReason = "历史微信检测入口已下线，请使用自动回复检测任务";
+  const canDetect = false;
   const canSetAutoDetect = Boolean(pendingCheckId) && agentStatus.can_run_wechat_action;
   const notifyStatusLabel = notifyStatusLabelText(notifyStatus?.status);
   const notifyStatusTone = notifyStatusToneClass(notifyStatus?.status);
@@ -1033,7 +1033,7 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
           <button
             onClick={onDetect}
             disabled={!canDetect}
-            title={detectDisabledReason || (!agentStatus.can_run_wechat_action ? agentReason : "检测微信回复")}
+            title={legacyDetectDisabledReason || detectDisabledReason || (!agentStatus.can_run_wechat_action ? agentReason : "检测微信回复")}
             className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#374151] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {detectLoading ? "检测中..." : "检测微信回复"}
@@ -1459,43 +1459,7 @@ export default function LeadsManagement() {
   }, [selectedId]);
 
   const handleDetect = async () => {
-    if (!selectedLead || !selectedLead.assigned_staff_id) return;
-    if (!agentStatus.can_run_wechat_action) {
-      toast.warning(agentDisabledReason(agentStatus));
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `请确认主机微信当前已打开对应销售的聊天窗口，并且销售已回复「收到，已添加微信」。`,
-    );
-    if (!confirmed) return;
-
-    setDetectLoading(true);
-    try {
-      const result = await detectWechatReply({
-        leadId: selectedLead.id,
-        staffId: selectedLead.assigned_staff_id,
-        maxMessages: 20,
-        confirmCurrentChat: true,
-      });
-      setDetectResult(result);
-
-      if (!result.success) {
-        toast.error(result.message);
-      } else if (result.is_effective === 1) {
-        toast.success("检测到有效回复，线索已标记为已跟进");
-        if (result.warning) {
-          toast.warning(result.warning);
-        }
-        await refreshData();
-      } else {
-        toast.warning("未检测到有效回复");
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "检测请求失败");
-    } finally {
-      setDetectLoading(false);
-    }
+    toast.warning("历史微信检测入口已下线，请使用自动回复检测任务");
   };
 
   // 前端搜索与状态筛选

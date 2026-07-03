@@ -9,7 +9,6 @@ export {
 
 export { fetchSummary } from "../../api/reports";
 export { syncDouyinLeads } from "../../api/integrations";
-export { detectWechatReply } from "../../api/replies";
 export { fetchChecks } from "../../api/checks";
 export { fetchStaffList } from "../../api/staff";
 export {

@@ -1,11 +1,13 @@
 """回复相关 API"""
 
 import logging
+import os
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.auth.local_agent_auth import get_optional_local_agent_context
+from app.config import APP_ENV
 from app.database import get_db
 from app.schemas import (
     ManualReply, CheckOut, WechatDetectRequest, WechatDetectResponse,
@@ -17,6 +19,19 @@ from app.services import wechat_ui_reply_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/replies", tags=["回复管理"])
+
+
+def _legacy_wechat_debug_enabled() -> bool:
+    """历史微信调试接口默认关闭，生产环境强制关闭。"""
+    app_env = os.getenv("APP_ENV", APP_ENV).strip().lower()
+    if app_env == "production":
+        return False
+    return os.getenv("LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED", "false").strip().lower() == "true"
+
+
+def _require_legacy_wechat_debug_enabled() -> None:
+    if not _legacy_wechat_debug_enabled():
+        raise HTTPException(404, "历史微信调试接口已禁用")
 
 
 def _load_wechat_window_tools():
@@ -51,6 +66,7 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
     4. 判断是否存在有效回复
     5. 有效回复时更新 reply_checks 和 douyin_leads
     """
+    _require_legacy_wechat_debug_enabled()
     result = wechat_ui_reply_service.detect_reply_from_wechat(
         db=db,
         lead_id=data.lead_id,
@@ -96,6 +112,7 @@ def debug_windows():
     用于排查微信窗口定位失败的问题。
     返回候选窗口列表，包含 Name、ClassName、HWND 等信息。
     """
+    _require_legacy_wechat_debug_enabled()
     try:
         list_suspected_windows, _, _ = _load_wechat_window_tools()
         windows = list_suspected_windows()
@@ -119,6 +136,7 @@ def debug_messages(max_messages: int = Query(10, ge=1, le=50, description="最�
     用于排查消息发送方识别失败的问题。
     返回每条消息的子控件详情和各级识别策略结果。
     """
+    _require_legacy_wechat_debug_enabled()
     try:
         _, find_wechat_window, find_message_list = _load_wechat_window_tools()
         # 定位微信窗口
@@ -330,6 +348,7 @@ def debug_raw_tree(max_messages: int = Query(5, ge=1, le=20)):
     对最近消息进行 WalkControl / FindAll / ControlFromPoint 探测，
     判断是否存在可用于区分 self/friend 的深层控件。
     """
+    _require_legacy_wechat_debug_enabled()
     import uiautomation as uia
 
     try:
@@ -477,6 +496,7 @@ def debug_sender_experiment(data: dict):
         "known_self_text": "请回复收到"
     }
     """
+    _require_legacy_wechat_debug_enabled()
     import uiautomation as uia
 
     max_messages = data.get("max_messages", 10)

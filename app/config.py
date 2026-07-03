@@ -181,6 +181,12 @@ LEADS_CLIENT_TIMEOUT_SECONDS = float(os.getenv("LEADS_CLIENT_TIMEOUT_SECONDS", "
 LOCAL_AGENT_AUTH_REQUIRED = os.getenv("LOCAL_AGENT_AUTH_REQUIRED", "false").lower() == "true"
 LOCAL_AGENT_TOKENS = os.getenv("LOCAL_AGENT_TOKENS", "").strip()
 
+# ---------- 历史微信调试接口开关 ----------
+# 默认关闭；production 始终关闭。仅本地排查时显式开启。
+LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED = (
+    os.getenv("LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED", "false").strip().lower() == "true"
+)
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"
