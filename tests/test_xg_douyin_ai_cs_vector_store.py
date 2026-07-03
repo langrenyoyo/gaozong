@@ -16,6 +16,7 @@ def _clear_milvus_env(monkeypatch):
         "MILVUS_TIMEOUT_SECONDS",
         "MILVUS_INDEX_TYPE",
         "MILVUS_METRIC_TYPE",
+        "MILVUS_CONNECT_STRATEGY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -55,6 +56,19 @@ def test_unknown_vector_backend_is_rejected(monkeypatch):
         get_vector_store(Settings())
 
     assert exc_info.value.code == "RAG_VECTOR_BACKEND_INVALID"
+
+
+def test_milvus_backend_invalid_uri_without_scheme_is_rejected(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+    monkeypatch.setenv("MILVUS_URI", "milvus.example.test")
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services.vector_store import VectorStoreConfigError, get_vector_store
+
+    with pytest.raises(VectorStoreConfigError) as exc_info:
+        get_vector_store(Settings())
+
+    assert exc_info.value.code == "MILVUS_URI_INVALID"
 
 
 def test_milvus_backend_missing_required_config_is_rejected(monkeypatch):
@@ -381,6 +395,105 @@ def test_milvus_collection_check_cli_prints_sanitized_diagnostics(monkeypatch, c
     assert "readonly_user" not in output
 
 
+def test_milvus_probe_connect_uses_client_token_strategy_first(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus()
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.probe_milvus_connections(Settings())
+
+    assert [item["strategy"] for item in result] == [
+        "milvus_client_token",
+        "orm_connections_user_password",
+    ]
+    assert fake.client_calls[0]["token"] == "readonly_user:secret-password-should-not-leak"
+    assert fake.client_calls[0]["uri"] == "https://milvus.example.test"
+    assert fake.client_calls[0]["db_name"] is None
+    assert fake.client_calls[0]["timeout"] == 5.0
+
+
+def test_milvus_probe_connect_orm_uses_user_password(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus()
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    vector_store.probe_milvus_connections(Settings())
+
+    assert fake.connect_calls[0]["user"] == "readonly_user"
+    assert fake.connect_calls[0]["password"] == "secret-password-should-not-leak"
+    assert "username" not in fake.connect_calls[0]
+
+
+def test_milvus_probe_connect_rejects_uri_without_scheme(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+    monkeypatch.setenv("MILVUS_URI", "milvus.example.test")
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    result = vector_store.probe_milvus_connections(Settings())
+
+    assert result == [
+        {
+            "strategy": "milvus_client_token",
+            "connected": False,
+            "phase": "connect",
+            "error_code": "MILVUS_URI_INVALID",
+            "error_type": "VectorStoreConfigError",
+        },
+        {
+            "strategy": "orm_connections_user_password",
+            "connected": False,
+            "phase": "connect",
+            "error_code": "MILVUS_URI_INVALID",
+            "error_type": "VectorStoreConfigError",
+        },
+    ]
+
+
+def test_milvus_collection_check_cli_probe_prints_sanitized_results(monkeypatch, capsys):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.scripts import milvus_collection_check
+
+    def fake_probe(config):
+        return [
+            {
+                "strategy": "milvus_client_token",
+                "connected": False,
+                "phase": "connect",
+                "error_code": "MILVUS_CONNECT_FAILED",
+                "error_type": "RuntimeError",
+                "error_message": (
+                    "failed host milvus.example.test user readonly_user "
+                    "password secret-password-should-not-leak token "
+                    "readonly_user:secret-password-should-not-leak"
+                ),
+            }
+        ]
+
+    monkeypatch.setattr(milvus_collection_check, "probe_milvus_connections", fake_probe)
+
+    exit_code = milvus_collection_check.main(["--probe-connect"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "strategy=milvus_client_token" in output
+    assert "error_code=MILVUS_CONNECT_FAILED" in output
+    assert "milvus.example.test" not in output
+    assert "readonly_user" not in output
+    assert "secret-password-should-not-leak" not in output
+    assert "readonly_user:secret-password-should-not-leak" not in output
+
+
 def _fake_pymilvus(
     collection_exists=True,
     existing_dimension=1536,
@@ -433,11 +546,19 @@ def _fake_pymilvus(
         return FakeCollection(name, schema=schema, using=using)
 
     def connect(**kwargs):
+        fake.connect_calls.append(kwargs)
         if connect_error is not None:
             raise connect_error
 
+    class MilvusClient:
+        def __init__(self, **kwargs):
+            fake.client_calls.append(kwargs)
+
     fake = SimpleNamespace(
+        client_calls=[],
+        connect_calls=[],
         connections=SimpleNamespace(connect=connect),
+        MilvusClient=MilvusClient,
         utility=FakeUtility(),
         DataType=DataType,
         FieldSchema=FieldSchema,

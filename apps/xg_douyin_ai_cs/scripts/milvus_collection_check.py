@@ -11,7 +11,12 @@ import warnings
 from typing import Any
 
 from apps.xg_douyin_ai_cs.config import Settings
-from apps.xg_douyin_ai_cs.services.vector_store import VectorStoreError, get_vector_store
+from apps.xg_douyin_ai_cs.services.vector_store import (
+    VectorStoreError,
+    get_vector_store,
+    probe_milvus_connections,
+    sanitize_milvus_diagnostic,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,12 +24,19 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="只检查 collection，不创建")
     mode.add_argument("--init", action="store_true", help="缺失时创建 collection 和索引")
+    mode.add_argument("--probe-connect", action="store_true", help="只探测 Milvus 连接策略，不检查 collection")
     args = parser.parse_args(argv)
 
     config = Settings()
     if config.rag_vector_backend != "milvus":
         print("Milvus 未启用：当前 RAG_VECTOR_BACKEND 不是 milvus，未执行 collection 检查。")
         return 0
+
+    if args.probe_connect:
+        results = [sanitize_milvus_diagnostic(item, config) for item in probe_milvus_connections(config)]
+        for item in results:
+            print(_format_probe_result(item))
+        return 0 if all(item.get("connected") is True for item in results) else 1
 
     try:
         store = get_vector_store(config)
@@ -86,6 +98,18 @@ def _format_failure(result: dict[str, Any]) -> str:
     )
     parts = [f"{key}={result[key]}" for key in safe_keys if key in result]
     return "Milvus collection 检查失败：" + ", ".join(parts)
+
+
+def _format_probe_result(result: dict[str, Any]) -> str:
+    safe_keys = (
+        "strategy",
+        "connected",
+        "phase",
+        "error_code",
+        "error_type",
+    )
+    parts = [f"{key}={result[key]}" for key in safe_keys if key in result]
+    return "Milvus 连接探测：" + ", ".join(parts)
 
 
 if __name__ == "__main__":

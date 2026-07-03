@@ -80,5 +80,9 @@ class Settings:
     def milvus_metric_type(self) -> str:
         return os.environ.get("MILVUS_METRIC_TYPE", "COSINE").strip().upper() or "COSINE"
 
+    @property
+    def milvus_connect_strategy(self) -> str:
+        return os.environ.get("MILVUS_CONNECT_STRATEGY", "orm").strip().lower() or "orm"
+
 
 settings = Settings()

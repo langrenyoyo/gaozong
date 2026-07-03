@@ -9,6 +9,7 @@ import importlib.util
 import importlib
 import re
 import sys
+from urllib.parse import urlparse
 from typing import Any, Protocol
 
 from apps.xg_douyin_ai_cs.config import Settings, settings
@@ -362,6 +363,46 @@ def get_vector_store(config: Settings = settings) -> VectorStore:
     )
 
 
+def probe_milvus_connections(config: Settings = settings) -> list[dict[str, Any]]:
+    strategies = ("milvus_client_token", "orm_connections_user_password")
+    try:
+        _validate_milvus_connection_config(config)
+        pymilvus = _load_pymilvus()
+    except VectorStoreError as exc:
+        diagnostic = _probe_error_diagnostic(exc)
+        return [dict(diagnostic, strategy=strategy) for strategy in strategies]
+
+    results = []
+    for strategy in strategies:
+        try:
+            if strategy == "milvus_client_token":
+                _probe_milvus_client_token(pymilvus, config)
+            else:
+                _probe_orm_connections_user_password(pymilvus, config)
+        except Exception as exc:
+            results.append(
+                {
+                    "strategy": strategy,
+                    "connected": False,
+                    "phase": "connect",
+                    "error_code": _classify_connect_error(exc),
+                    "error_type": type(exc).__name__,
+                    "error_message": _sanitize_exception(exc, config),
+                }
+            )
+        else:
+            results.append(
+                {
+                    "strategy": strategy,
+                    "connected": True,
+                    "phase": "connect",
+                    "error_code": "OK",
+                    "error_type": "",
+                }
+            )
+    return results
+
+
 def _validate_milvus_config(config: Settings) -> None:
     missing = []
     if not config.milvus_uri:
@@ -379,6 +420,70 @@ def _validate_milvus_config(config: Settings) -> None:
             "MILVUS_CONFIG_MISSING",
             f"Missing Milvus config: {', '.join(missing)}",
         )
+    _validate_milvus_uri(config)
+
+
+def _validate_milvus_connection_config(config: Settings) -> None:
+    missing = []
+    if not config.milvus_uri:
+        missing.append("MILVUS_URI")
+    if not config.milvus_username:
+        missing.append("MILVUS_USERNAME")
+    if not config.milvus_password:
+        missing.append("MILVUS_PASSWORD")
+    if missing:
+        raise VectorStoreConfigError(
+            "MILVUS_CONFIG_MISSING",
+            f"Missing Milvus config: {', '.join(missing)}",
+            phase="config",
+        )
+    _validate_milvus_uri(config)
+
+
+def _validate_milvus_uri(config: Settings) -> None:
+    parsed = urlparse(config.milvus_uri)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise VectorStoreConfigError(
+            "MILVUS_URI_INVALID",
+            "MILVUS_URI must start with http:// or https://",
+            phase="connect",
+            connected=False,
+        )
+
+
+def _probe_error_diagnostic(exc: VectorStoreError) -> dict[str, Any]:
+    return {
+        "connected": False,
+        "phase": exc.phase if exc.phase != "unknown" else "connect",
+        "error_code": exc.code,
+        "error_type": exc.__class__.__name__,
+    }
+
+
+def _probe_milvus_client_token(pymilvus: Any, config: Settings) -> None:
+    kwargs = {
+        "uri": config.milvus_uri,
+        "token": f"{config.milvus_username}:{config.milvus_password}",
+        "timeout": config.milvus_timeout_seconds,
+    }
+    if config.milvus_db_name:
+        kwargs["db_name"] = config.milvus_db_name
+    else:
+        kwargs["db_name"] = None
+    pymilvus.MilvusClient(**kwargs)
+
+
+def _probe_orm_connections_user_password(pymilvus: Any, config: Settings) -> None:
+    kwargs = {
+        "alias": f"{MilvusVectorStore._alias}_probe",
+        "uri": config.milvus_uri,
+        "user": config.milvus_username,
+        "password": config.milvus_password,
+        "timeout": config.milvus_timeout_seconds,
+    }
+    if config.milvus_db_name:
+        kwargs["db_name"] = config.milvus_db_name
+    pymilvus.connections.connect(**kwargs)
 
 
 def _ensure_pymilvus_available() -> None:
@@ -420,10 +525,39 @@ def _classify_connect_error(exc: Exception) -> str:
 
 def _sanitize_exception(exc: Exception, config: Settings) -> str:
     text = _sanitize_text(str(exc))
-    for value in (config.milvus_password, config.milvus_username, config.milvus_uri):
+    for value in _milvus_sensitive_values(config):
         if value:
             text = text.replace(value, "<redacted>")
     return text or "details redacted"
+
+
+def sanitize_milvus_diagnostic(result: dict[str, Any], config: Settings) -> dict[str, Any]:
+    sanitized = dict(result)
+    for key, value in list(sanitized.items()):
+        if isinstance(value, str):
+            sanitized[key] = _sanitize_with_config(value, config)
+    return sanitized
+
+
+def _sanitize_with_config(text: str, config: Settings) -> str:
+    sanitized = _sanitize_text(text)
+    for value in _milvus_sensitive_values(config):
+        if value:
+            sanitized = sanitized.replace(value, "<redacted>")
+    return sanitized
+
+
+def _milvus_sensitive_values(config: Settings) -> tuple[str, ...]:
+    parsed = urlparse(config.milvus_uri)
+    token = f"{config.milvus_username}:{config.milvus_password}" if config.milvus_username else ""
+    return (
+        config.milvus_password,
+        config.milvus_username,
+        token,
+        config.milvus_uri,
+        parsed.netloc,
+        parsed.hostname or "",
+    )
 
 
 def _sanitize_text(text: str) -> str:

@@ -668,3 +668,41 @@ schema 不匹配时返回 `MILVUS_SCHEMA_MISMATCH`，不静默继续，避免后
 阶段枚举覆盖配置、依赖、连接、collection 查询、schema 校验、索引检查、collection 创建、索引创建和 load。CLI 输出会脱敏异常文本，不打印 `MILVUS_PASSWORD`、完整 `MILVUS_URI` 或真实 `MILVUS_USERNAME`。
 
 当前仍使用 PyMilvus `connections.connect` 旧式 API。弃用提示不是连接失败原因，CLI 已避免该 warning 干扰人工判断；后续如需迁移到新客户端，单独拆分 `P1-RAG-MILVUS-MILVUSCLIENT-MIGRATION-1`。
+
+## P1-RAG-MILVUS-MILVUSCLIENT-PROBE-1
+
+本轮新增 Milvus 连接探测入口：
+
+```bash
+python -m apps.xg_douyin_ai_cs.scripts.milvus_collection_check --probe-connect
+```
+
+探测只验证连接，不检查 collection，不创建 collection，不写入业务知识，不执行 upsert/search，也不调用 LLM。
+
+新增配置项：
+
+```text
+MILVUS_CONNECT_STRATEGY=orm|client_token
+```
+
+默认仍为 `orm`，因此现有 `--check` 行为不变。本轮只是为后续把正式 collection check 切换到 `MilvusClient` 连接策略做准备。
+
+`--probe-connect` 当前按顺序探测：
+
+1. `milvus_client_token`：使用 `pymilvus.MilvusClient(uri=..., token="username:password", db_name=..., timeout=...)`，这是甲方 Milvus 当前确认可用的主探测策略。
+2. `orm_connections_user_password`：使用 `pymilvus.connections.connect(uri=..., user=..., password=..., db_name=..., timeout=...)`，仅作为旧 ORM API 对照策略。
+
+安全规则：
+
+1. `MILVUS_URI` 必须以 `http://` 或 `https://` 开头，否则返回 `MILVUS_URI_INVALID`。
+2. CLI 输出只包含 `strategy`、`connected`、`phase`、`error_code`、`error_type`。
+3. 输出和异常脱敏，不打印完整 URI、host、username、password 或拼接后的 token。
+4. 真实 Milvus URI、用户名、密码仍只允许放在本地 `.env`、shell 环境变量、容器环境变量或部署平台环境变量中，不写入仓库、文档、测试或提交信息。
+
+未改内容：
+
+1. 默认 `RAG_VECTOR_BACKEND=sqlite` 行为不变。
+2. `--check` 仍保持现有 ORM 连接策略，不在本轮切换。
+3. 未接入 reply-suggestion 主检索链路。
+4. 未实现真实 upsert/search/delete。
+5. 未修改 9000、前端、NewCar、live-check、Local Agent / 19000 或自动发送 gate。
