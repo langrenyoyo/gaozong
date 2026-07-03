@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -1675,6 +1676,45 @@ def test_download_resource_rejects_missing_url_without_calling_upstream():
     mock_post.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "http://127.0.0.1:9000/internal?token=secret-token",
+        "http://localhost/admin?token=secret-token",
+        "http://192.168.110.113/internal",
+        "http://10.0.0.8/internal",
+        "http://169.254.169.254/latest/meta-data/",
+        "file:///etc/passwd",
+        "ftp://example.com/file",
+    ],
+)
+def test_download_resource_rejects_unsafe_request_url_without_calling_upstream(unsafe_url):
+    _insert_resource_event()
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+                "url": unsafe_url,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_RESOURCE_URL_FORBIDDEN"
+    assert "secret-token" not in json.dumps(resp.json(), ensure_ascii=False)
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinMessageResourceDownload).count() == 0
+    finally:
+        db.close()
+
+
 def test_download_resource_rejects_other_merchant_account_without_calling_upstream():
     _insert_resource_event(merchant_id="merchant-2")
     client = _client_with_required_context(merchant_id="merchant-1")
@@ -1731,6 +1771,56 @@ def test_download_resource_supports_file_url_field():
     assert resp.json()["data"]["download_url"] == "https://download.example.com/file-url.png"
     body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
     assert body["url"] == "https://api-normal.amemv.com/file-url-image"
+
+
+def test_download_resource_allows_request_url_when_it_matches_event_url():
+    _insert_resource_event(resource_url="https://api-normal.amemv.com/im_open/media?resource=image001")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"download_url": "https://download.example.com/resource.png"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+                "url": "https://api-normal.amemv.com/im_open/media?resource=image001",
+            },
+        )
+
+    assert resp.status_code == 200
+    body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert body["url"] == "https://api-normal.amemv.com/im_open/media?resource=image001"
+
+
+def test_download_resource_rejects_event_url_outside_configured_allowed_hosts():
+    _insert_resource_event(resource_url="https://evil.example.com/im_open/media?resource=image001")
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DOUYIN_RESOURCE_ALLOWED_HOSTS_SET", {"api-normal.amemv.com"}), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_RESOURCE_URL_FORBIDDEN"
+    mock_post.assert_not_called()
 
 
 def test_download_resource_success_uses_signed_openapi_body_and_persists_record():

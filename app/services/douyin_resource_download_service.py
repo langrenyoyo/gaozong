@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from ipaddress import ip_address
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -179,7 +181,13 @@ def _resolve_context(
 
     content = _payload_content(row)
     resolved_media_type = _optional_str(media_type) or _media_type_from_content(row, content)
-    resolved_url = _optional_str(url) or _resource_url_from_content(content)
+    event_url = _resource_url_from_content(content)
+    request_url = _optional_str(url)
+    if request_url and event_url and request_url != event_url:
+        raise _resource_url_forbidden()
+    if request_url and not event_url:
+        raise _resource_url_forbidden()
+    resolved_url = _validate_resource_url(event_url)
     account_open_id, row_open_id = douyin_event_participants(row)
     request_open_id = _optional_str(open_id)
     if request_open_id and row_open_id and request_open_id != row_open_id:
@@ -241,6 +249,40 @@ def _resource_url_from_content(content: dict[str, Any]) -> str | None:
             if value:
                 return value
     return None
+
+
+def _validate_resource_url(url: str | None) -> str | None:
+    text = _optional_str(url)
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise _resource_url_forbidden()
+    host = parsed.hostname.strip().lower().rstrip(".")
+    if host in {"localhost", "localhost.localdomain"}:
+        raise _resource_url_forbidden()
+    try:
+        ip = ip_address(host.strip("[]"))
+    except ValueError:
+        allowed_hosts = getattr(config, "DOUYIN_RESOURCE_ALLOWED_HOSTS_SET", set()) or set()
+        if allowed_hosts and not _host_allowed(host, allowed_hosts):
+            raise _resource_url_forbidden()
+        return text
+    if not ip.is_global:
+        raise _resource_url_forbidden()
+    return text
+
+
+def _host_allowed(host: str, allowed_hosts: set[str]) -> bool:
+    normalized = {item.strip().lower().rstrip(".") for item in allowed_hosts if item.strip()}
+    return any(host == item or host.endswith(f".{item}") for item in normalized)
+
+
+def _resource_url_forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={"code": "DOUYIN_RESOURCE_URL_FORBIDDEN", "message": "资源 URL 不允许访问"},
+    )
 
 
 def _resource_open_id(row: DouyinWebhookEvent, content: dict[str, Any]) -> str | None:

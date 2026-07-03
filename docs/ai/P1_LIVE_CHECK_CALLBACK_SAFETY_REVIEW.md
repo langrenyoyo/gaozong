@@ -294,3 +294,66 @@
 ### 12.5 测试结果
 
 - `python -m pytest tests/test_douyin_live_check.py -q`：99 passed。
+
+## 13. P1-LIVE-CHECK-RESOURCE-SSRF-GUARD-1
+
+本轮已收口 live-check 资源下载接口的 URL 来源和 SSRF 风险，重点防止浏览器请求体传入任意 URL 后，让 9000 代为向上游提交 localhost、内网、云 metadata 或非可信资源地址。
+
+### 13.1 本轮发现的缺口
+
+- `POST /integrations/douyin/live-check/resources/download` 原先会优先使用请求体 `url`，再回退到入库 webhook 事件里的资源 URL。
+- 当前 9000 不直接 GET 该资源 URL，而是调用抖音 OpenAPI `/download_resource` 获取下载地址；但请求体 URL 覆盖仍会形成“浏览器让后端代提交任意资源 URL 给上游”的通道。
+- `POST /integrations/douyin/live-check/resources/upload-image` 不接受 URL，只接受 `file_name`、`image_base64` 和可选 `open_id`；本轮未发现上传接口存在前端任意 URL 代请求路径。
+
+### 13.2 修复范围
+
+- `resources/download` 只使用入库 webhook 事件中解析出的资源 URL。
+- 请求体 `url` 仅作为兼容字段保留；只有与事件 URL 完全一致时才允许通过，不允许覆盖事件 URL。
+- 请求体提供 `url` 但事件中没有资源 URL 时，返回 403，不进入上游调用。
+- URL 校验失败统一返回 `DOUYIN_RESOURCE_URL_FORBIDDEN`，错误响应不回显完整 URL，避免 query 中的 token 泄露。
+- 保留上一轮 merchant/account/open_id 归属校验，不因 URL 校验改动放宽跨商户访问。
+
+### 13.3 URL 安全校验规则
+
+| 规则 | 当前策略 |
+|---|---|
+| URL 来源 | 只信任已入库 webhook 事件资源 URL；请求体 URL 不得覆盖 |
+| scheme | 只允许 `http` / `https` |
+| localhost | 拒绝 `localhost`、`localhost.localdomain`、`127.0.0.0/8`、`::1` |
+| 内网 / 特殊地址 | 字面量 IP 使用 `ip.is_global` 校验，拒绝私网、link-local、loopback、unspecified、reserved、metadata 等非公网地址 |
+| metadata | 拒绝 `169.254.169.254` 等 link-local metadata 地址 |
+| 域名白名单 | 新增可选 `DOUYIN_RESOURCE_ALLOWED_HOSTS`；为空时先做 scheme 和非公网 IP 拦截，生产确认抖音资源域名后建议显式配置 |
+| redirect | 9000 当前不直接下载资源 URL，不跟随该 URL 的重定向；如未来改为 9000 直连下载，需另开任务补 redirect 后 URL 复验、大小和 Content-Type 限制 |
+| 响应大小 / 类型 | 当前资源 URL 不由 9000 直连下载，大小和类型由上游 OpenAPI 处理；upload-image 继续保留原有文件类型、文件头和 10MB 限制 |
+
+### 13.4 新增配置
+
+- `DOUYIN_RESOURCE_ALLOWED_HOSTS`
+
+配置格式为逗号分隔域名列表，例如：
+
+```text
+DOUYIN_RESOURCE_ALLOWED_HOSTS=api-normal.amemv.com
+```
+
+留空时不启用域名白名单，只执行 scheme、localhost、私网、link-local、metadata 和非公网 IP 拦截。抖音资源真实域名仍需上游确认，生产环境建议确认后配置白名单。
+
+### 13.5 保持不变
+
+- 不改 NewCar 登录。
+- 不恢复 `/auth/callback`。
+- 不改 webhook 签名。
+- 不改 OAuth state。
+- 不改 live-check 商户归属校验语义，只复用上一轮已完成的边界。
+- 不改 RAG / 知识库。
+- 不改 Local Agent / 19000。
+- 不改自动发送链路。
+- 不改真实私信发送业务语义，不触发真实私信发送。
+- 不调用真实上游写接口。
+
+### 13.6 测试结果
+
+- `python -m pytest tests/test_douyin_live_check.py::test_download_resource_rejects_unsafe_request_url_without_calling_upstream -q`：7 passed。
+- `python -m pytest tests/test_douyin_live_check.py::test_download_resource_allows_request_url_when_it_matches_event_url tests/test_douyin_live_check.py::test_download_resource_success_uses_signed_openapi_body_and_persists_record tests/test_douyin_live_check.py::test_download_resource_rejects_other_merchant_account_without_calling_upstream tests/test_douyin_live_check.py::test_upload_image_rejects_invalid_inputs_without_calling_upstream -q`：4 passed。
+- `python -m pytest tests/test_douyin_live_check.py::test_download_resource_rejects_event_url_outside_configured_allowed_hosts -q`：1 passed。
+- `python -m pytest tests/test_douyin_live_check.py -q`：108 passed。
