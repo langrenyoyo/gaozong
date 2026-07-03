@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from typing import Any
 
 from apps.xg_douyin_ai_cs.config import Settings
@@ -27,12 +28,31 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         store = get_vector_store(config)
-        result = store.ensure_collection(create_if_missing=bool(args.init))
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*connections.connect is an ORM-style PyMilvus API.*",
+                category=Warning,
+            )
+            result = store.ensure_collection(create_if_missing=bool(args.init))
     except VectorStoreError as exc:
-        print(f"Milvus collection 检查失败：code={exc.code}")
+        print(_format_failure(exc.to_diagnostic()))
         return 1
-    except Exception:
-        print("Milvus collection 检查失败：code=MILVUS_COLLECTION_CHECK_FAILED")
+    except Exception as exc:
+        print(
+            _format_failure(
+                {
+                    "backend": "milvus",
+                    "connected": "unknown",
+                    "collection_exists": "unknown",
+                    "schema_match": "unknown",
+                    "phase": "unknown",
+                    "error_code": "MILVUS_COLLECTION_CHECK_FAILED",
+                    "error_type": type(exc).__name__,
+                    "error_message": "details redacted",
+                }
+            )
+        )
         return 1
 
     print(_format_result(result))
@@ -42,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
 def _format_result(result: dict[str, Any]) -> str:
     safe_keys = (
         "backend",
+        "connected",
         "collection_exists",
         "created",
         "schema_match",
@@ -50,6 +71,21 @@ def _format_result(result: dict[str, Any]) -> str:
     )
     parts = [f"{key}={result[key]}" for key in safe_keys if key in result]
     return "Milvus collection 检查完成：" + ", ".join(parts)
+
+
+def _format_failure(result: dict[str, Any]) -> str:
+    safe_keys = (
+        "backend",
+        "connected",
+        "collection_exists",
+        "schema_match",
+        "phase",
+        "error_code",
+        "error_type",
+        "error_message",
+    )
+    parts = [f"{key}={result[key]}" for key in safe_keys if key in result]
+    return "Milvus collection 检查失败：" + ", ".join(parts)
 
 
 if __name__ == "__main__":

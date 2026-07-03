@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import importlib
+import re
 import sys
 from typing import Any, Protocol
 
@@ -15,9 +16,36 @@ from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
 
 
 class VectorStoreError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        phase: str = "unknown",
+        connected: bool | str = "unknown",
+        collection_exists: bool | str = "unknown",
+        schema_match: bool | str = "unknown",
+        error_type: str | None = None,
+    ) -> None:
         self.code = code
-        super().__init__(message)
+        self.phase = phase
+        self.connected = connected
+        self.collection_exists = collection_exists
+        self.schema_match = schema_match
+        self.error_type = error_type
+        super().__init__(_sanitize_text(message))
+
+    def to_diagnostic(self) -> dict[str, Any]:
+        return {
+            "backend": "milvus",
+            "connected": self.connected,
+            "collection_exists": self.collection_exists,
+            "schema_match": self.schema_match,
+            "phase": self.phase,
+            "error_code": self.code,
+            "error_type": self.error_type or self.__class__.__name__,
+            "error_message": _sanitize_text(str(self)),
+        }
 
 
 class VectorStoreConfigError(VectorStoreError):
@@ -102,8 +130,10 @@ class MilvusVectorStore:
             )
         except VectorStoreError as exc:
             result["error_code"] = exc.code
+            result["phase"] = exc.phase
         except Exception:
             result["error_code"] = "MILVUS_HEALTH_CHECK_FAILED"
+            result["phase"] = "unknown"
         return result
 
     def connect(self) -> None:
@@ -118,7 +148,16 @@ class MilvusVectorStore:
         }
         if self.config.milvus_db_name:
             kwargs["db_name"] = self.config.milvus_db_name
-        self._pymilvus.connections.connect(**kwargs)
+        try:
+            self._pymilvus.connections.connect(**kwargs)
+        except Exception as exc:
+            raise VectorStoreError(
+                _classify_connect_error(exc),
+                _sanitize_exception(exc, self.config),
+                phase="connect",
+                connected=False,
+                error_type=type(exc).__name__,
+            ) from exc
         self._connected = True
 
     def build_schema(self) -> Any:
@@ -153,22 +192,66 @@ class MilvusVectorStore:
     def ensure_collection(self, create_if_missing: bool = False) -> dict[str, Any]:
         self.connect()
         collection_name = self.config.milvus_collection
-        exists = self._pymilvus.utility.has_collection(collection_name, using=self._alias)
+        try:
+            exists = self._pymilvus.utility.has_collection(collection_name, using=self._alias)
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_COLLECTION_CHECK_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="has_collection",
+                connected=True,
+                error_type=type(exc).__name__,
+            ) from exc
         if not exists:
             if not create_if_missing:
                 raise VectorStoreCollectionError(
                     "MILVUS_COLLECTION_NOT_FOUND",
                     f"Milvus collection not found: {collection_name}",
+                    phase="has_collection",
+                    connected=True,
+                    collection_exists=False,
                 )
-            collection = self._pymilvus.Collection(
-                name=collection_name,
-                schema=self.build_schema(),
-                using=self._alias,
-            )
-            self.create_index_if_needed(collection)
-            collection.load()
+            try:
+                collection = self._pymilvus.Collection(
+                    name=collection_name,
+                    schema=self.build_schema(),
+                    using=self._alias,
+                )
+            except Exception as exc:
+                raise VectorStoreError(
+                    "MILVUS_COLLECTION_CHECK_FAILED",
+                    _sanitize_exception(exc, self.config),
+                    phase="create_collection",
+                    connected=True,
+                    collection_exists=False,
+                    error_type=type(exc).__name__,
+                ) from exc
+            try:
+                self.create_index_if_needed(collection)
+            except Exception as exc:
+                raise VectorStoreError(
+                    "MILVUS_COLLECTION_CHECK_FAILED",
+                    _sanitize_exception(exc, self.config),
+                    phase="create_index",
+                    connected=True,
+                    collection_exists=True,
+                    error_type=type(exc).__name__,
+                ) from exc
+            try:
+                collection.load()
+            except Exception as exc:
+                raise VectorStoreError(
+                    "MILVUS_COLLECTION_CHECK_FAILED",
+                    _sanitize_exception(exc, self.config),
+                    phase="load_collection",
+                    connected=True,
+                    collection_exists=True,
+                    schema_match=True,
+                    error_type=type(exc).__name__,
+                ) from exc
             return {
                 "backend": self.backend,
+                "connected": True,
                 "collection_exists": True,
                 "created": True,
                 "schema_match": True,
@@ -176,11 +259,33 @@ class MilvusVectorStore:
                 "metric_type": self.config.milvus_metric_type,
             }
 
-        collection = self._pymilvus.Collection(name=collection_name, using=self._alias)
+        try:
+            collection = self._pymilvus.Collection(name=collection_name, using=self._alias)
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_COLLECTION_CHECK_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="describe_collection",
+                connected=True,
+                collection_exists=True,
+                error_type=type(exc).__name__,
+            ) from exc
         self._validate_collection_schema(collection.schema)
-        self.create_index_if_needed(collection)
+        try:
+            self.create_index_if_needed(collection)
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_COLLECTION_CHECK_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="index_check",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+                error_type=type(exc).__name__,
+            ) from exc
         return {
             "backend": self.backend,
+            "connected": True,
             "collection_exists": True,
             "created": False,
             "schema_match": True,
@@ -227,6 +332,10 @@ class MilvusVectorStore:
             raise VectorStoreCollectionError(
                 "MILVUS_SCHEMA_MISMATCH",
                 f"Milvus schema missing fields: {', '.join(missing)}",
+                phase="schema_check",
+                connected=True,
+                collection_exists=True,
+                schema_match=False,
             )
         embedding = fields["embedding"]
         dimension = _field_param(embedding, "dim")
@@ -234,6 +343,10 @@ class MilvusVectorStore:
             raise VectorStoreCollectionError(
                 "MILVUS_SCHEMA_MISMATCH",
                 "Milvus embedding dimension does not match MILVUS_DIMENSION",
+                phase="schema_check",
+                connected=True,
+                collection_exists=True,
+                schema_match=False,
             )
 
 
@@ -292,3 +405,31 @@ def _field_param(field: Any, name: str) -> Any:
     if hasattr(field, "kwargs") and name in field.kwargs:
         return field.kwargs[name]
     return getattr(field, name, None)
+
+
+def _classify_connect_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if any(word in text for word in ("auth", "credential", "permission", "unauthorized", "forbidden")):
+        return "MILVUS_AUTH_FAILED"
+    if "uri" in text and "invalid" in text:
+        return "MILVUS_URI_INVALID"
+    if "database" in text or "db" in text:
+        return "MILVUS_DB_NOT_FOUND"
+    return "MILVUS_CONNECT_FAILED"
+
+
+def _sanitize_exception(exc: Exception, config: Settings) -> str:
+    text = _sanitize_text(str(exc))
+    for value in (config.milvus_password, config.milvus_username, config.milvus_uri):
+        if value:
+            text = text.replace(value, "<redacted>")
+    return text or "details redacted"
+
+
+def _sanitize_text(text: str) -> str:
+    sanitized = str(text)
+    sanitized = re.sub(r"(?i)(password|passwd|pwd)\s*=\s*\S+", r"\1=<redacted>", sanitized)
+    sanitized = re.sub(r"(?i)(user|username)\s*=\s*\S+", r"\1=<redacted-user>", sanitized)
+    sanitized = re.sub(r"(?i)(uri|url)\s*=\s*\S+", r"\1=<redacted-uri>", sanitized)
+    sanitized = re.sub(r"https?://[^\s,;]+", "<redacted-uri>", sanitized)
+    return sanitized

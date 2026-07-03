@@ -651,3 +651,20 @@ schema 不匹配时返回 `MILVUS_SCHEMA_MISMATCH`，不静默继续，避免后
 1. `P1-RAG-MILVUS-UPSERT-INGESTION-1`：训练链路写 SQLite metadata 后同步 upsert Milvus。
 2. `P1-RAG-MILVUS-SEARCH-FALLBACK-1`：显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。
 3. `P1-RAG-MILVUS-SECURITY-OBSERVABILITY-1`：补齐 scope/filter 强校验、指标和脱敏日志。
+## P1-RAG-MILVUS-CHECK-DIAGNOSTICS-1
+
+本轮只增强 9100 Milvus collection check/init 的脱敏诊断能力，不改变默认 `RAG_VECTOR_BACKEND=sqlite` 行为，不接入真实 upsert/search，不调用真实 LLM。
+
+新增诊断字段：
+
+- `connected`
+- `collection_exists`
+- `schema_match`
+- `phase`
+- `error_code`
+- `error_type`
+- `error_message`
+
+阶段枚举覆盖配置、依赖、连接、collection 查询、schema 校验、索引检查、collection 创建、索引创建和 load。CLI 输出会脱敏异常文本，不打印 `MILVUS_PASSWORD`、完整 `MILVUS_URI` 或真实 `MILVUS_USERNAME`。
+
+当前仍使用 PyMilvus `connections.connect` 旧式 API。弃用提示不是连接失败原因，CLI 已避免该 warning 干扰人工判断；后续如需迁移到新客户端，单独拆分 `P1-RAG-MILVUS-MILVUSCLIENT-MIGRATION-1`。

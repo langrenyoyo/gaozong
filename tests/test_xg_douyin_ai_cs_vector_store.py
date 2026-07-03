@@ -206,6 +206,58 @@ def test_milvus_ensure_collection_missing_without_init_returns_not_found(monkeyp
     assert fake.utility.created_collections == []
 
 
+def test_milvus_connect_failure_reports_phase_and_sanitized_message(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(
+        connect_error=RuntimeError(
+            "connect failed uri=https://milvus.example.test user=readonly_user "
+            "password=secret-password-should-not-leak"
+        )
+    )
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    store = vector_store.MilvusVectorStore(Settings())
+
+    with pytest.raises(vector_store.VectorStoreError) as exc_info:
+        store.ensure_collection(create_if_missing=False)
+
+    exc = exc_info.value
+    assert exc.code == "MILVUS_CONNECT_FAILED"
+    assert exc.phase == "connect"
+    assert "secret-password-should-not-leak" not in str(exc)
+    assert "https://milvus.example.test" not in str(exc)
+    assert "readonly_user" not in str(exc)
+
+
+def test_milvus_has_collection_failure_reports_phase(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(
+        has_collection_error=RuntimeError(
+            "has collection failed uri=https://milvus.example.test user=readonly_user"
+        )
+    )
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    store = vector_store.MilvusVectorStore(Settings())
+
+    with pytest.raises(vector_store.VectorStoreError) as exc_info:
+        store.ensure_collection(create_if_missing=False)
+
+    exc = exc_info.value
+    assert exc.code == "MILVUS_COLLECTION_CHECK_FAILED"
+    assert exc.phase == "has_collection"
+    assert "https://milvus.example.test" not in str(exc)
+    assert "readonly_user" not in str(exc)
+
+
 def test_milvus_ensure_collection_missing_with_init_creates_collection(monkeypatch):
     _set_valid_milvus_env(monkeypatch)
 
@@ -240,6 +292,7 @@ def test_milvus_ensure_collection_dimension_mismatch_is_rejected(monkeypatch):
         store.ensure_collection(create_if_missing=False)
 
     assert exc_info.value.code == "MILVUS_SCHEMA_MISMATCH"
+    assert exc_info.value.phase == "schema_check"
     assert "secret-password-should-not-leak" not in str(exc_info.value)
 
 
@@ -299,7 +352,41 @@ def test_milvus_collection_check_cli_init_uses_explicit_create(monkeypatch):
     assert calls == [True]
 
 
-def _fake_pymilvus(collection_exists=True, existing_dimension=1536):
+def test_milvus_collection_check_cli_prints_sanitized_diagnostics(monkeypatch, capsys):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.scripts import milvus_collection_check
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    class FakeStore:
+        def ensure_collection(self, create_if_missing=False):
+            raise vector_store.VectorStoreError(
+                "MILVUS_CONNECT_FAILED",
+                "connect failed uri=https://milvus.example.test user=readonly_user "
+                "password=secret-password-should-not-leak",
+                phase="connect",
+                connected=False,
+            )
+
+    monkeypatch.setattr(milvus_collection_check, "get_vector_store", lambda config: FakeStore())
+
+    exit_code = milvus_collection_check.main(["--check"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "phase=connect" in output
+    assert "error_code=MILVUS_CONNECT_FAILED" in output
+    assert "secret-password-should-not-leak" not in output
+    assert "https://milvus.example.test" not in output
+    assert "readonly_user" not in output
+
+
+def _fake_pymilvus(
+    collection_exists=True,
+    existing_dimension=1536,
+    connect_error=None,
+    has_collection_error=None,
+):
     class DataType:
         VARCHAR = "VarChar"
         FLOAT_VECTOR = "FloatVector"
@@ -336,6 +423,8 @@ def _fake_pymilvus(collection_exists=True, existing_dimension=1536):
             self.index_created = False
 
         def has_collection(self, name, using=None):
+            if has_collection_error is not None:
+                raise has_collection_error
             return collection_exists or name in self.created_collections
 
     def collection_factory(name, schema=None, using=None):
@@ -343,8 +432,12 @@ def _fake_pymilvus(collection_exists=True, existing_dimension=1536):
             fake.utility.created_collections.append(name)
         return FakeCollection(name, schema=schema, using=using)
 
+    def connect(**kwargs):
+        if connect_error is not None:
+            raise connect_error
+
     fake = SimpleNamespace(
-        connections=SimpleNamespace(connect=lambda **kwargs: None),
+        connections=SimpleNamespace(connect=connect),
         utility=FakeUtility(),
         DataType=DataType,
         FieldSchema=FieldSchema,
