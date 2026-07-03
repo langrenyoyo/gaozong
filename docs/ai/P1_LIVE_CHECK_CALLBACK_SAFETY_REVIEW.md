@@ -1,0 +1,226 @@
+# P1-LIVE-CHECK-CALLBACK-SAFETY-REVIEW-1
+
+## 1. 背景和范围
+
+本轮是 live-check / OAuth / callback / webhook-observe 相关入口的只读安全审计和文档记录，不修改业务代码，不触发真实私信发送，不调用真实上游写接口。
+
+审计重点：
+
+- 公网暴露入口是否合理。
+- 浏览器业务接口是否接入 NewCar RequestContext 和权限门禁。
+- OAuth callback / redirect 是否存在 state、回跳地址、日志泄露风险。
+- webhook 与 webhook-observe 是否存在签名绕过、重放、误写库风险。
+- 私信发送是否保持人工确认、24 小时窗口、send_context 边界。
+- 资源下载 / 上传是否存在账号归属、任意 URL、文件类型和大小风险。
+- 日志、错误响应、持久化记录是否可能包含敏感信息。
+
+扫描范围包括：
+
+- `app/routers/integrations.py`
+- `app/routers/douyin_live_check.py`
+- `app/routers/douyin_ai_cs_proxy.py`
+- `app/services/douyin_private_message_send_service.py`
+- `app/services/douyin_workbench_conversation_service.py`
+- `app/services/douyin_resource_download_service.py`
+- `app/services/douyin_image_upload_service.py`
+- `app/services/douyin_openapi_client.py`
+- `app/integrations/douyin_webhook.py`
+- `app/auth/dependencies.py`
+- `app/config.py`
+- `tests/test_douyin_live_check.py`
+- `tests/test_douyin_webhook.py`
+- `tests/test_douyin_ai_cs_proxy.py`
+- `frontend/src/api/douyinLiveCheck.ts`
+- `frontend/src/api/douyinAiCsClient.ts`
+- `frontend/src/features/douyin-cs/*`
+- `frontend/src/pages/*Douyin*`
+- `docs/ai/*`
+
+## 2. 接口清单
+
+### live-check 浏览器业务接口
+
+| 接口 | 当前用途 | 当前审计结论 |
+|---|---|---|
+| `GET /integrations/douyin/live-check/accounts` | 查询抖音客服账号列表 | 已接入登录和权限门禁，但账号查询服务未显式传入当前商户上下文，存在后续归属校验加固空间 |
+| `POST /integrations/douyin/live-check/accounts/sync-bind-info` | 同步绑定账号信息 | 已接入登录和权限门禁，并传入 RequestContext |
+| `POST /integrations/douyin/live-check/messages/send` | 人工确认后发送私信 | 已接入登录和权限门禁，发送安全边界较完整；但服务层未显式按当前商户校验 conversation/account 归属 |
+| `POST /integrations/douyin/live-check/resources/download` | 拉取私信资源下载地址 | 已接入登录和权限门禁；存在 URL 覆盖、账号归属和上游资源访问边界加固空间 |
+| `POST /integrations/douyin/live-check/resources/upload-image` | 上传图片到抖音开放平台 | 已接入登录和权限门禁；文件类型和大小有限制，但 open_id 归属校验需加固 |
+
+### OAuth / callback / redirect
+
+| 接口 | 当前用途 | 当前审计结论 |
+|---|---|---|
+| `GET /integrations/douyin/live-check/auth-url` | 获取授权链接 | 只检查 live-check 开关，未要求浏览器登录 |
+| `GET /integrations/douyin/live-check/oauth-callback` | 观察 OAuth callback 参数 | 只记录内存摘要，不写库；未发现 state 强校验闭环 |
+| `GET /integrations/douyin/live-check/auth-redirect` | 授权回跳后同步账号并跳转前端 | 使用可选 RequestContext；未发现 state 强校验、state 绑定商户和可信回跳域名白名单闭环 |
+| `POST /integrations/douyin/live-check/callback` | live-check 回调观察入口 | 默认记录观察态；转正式管线开关开启时会跳过签名校验进入正式 webhook 处理 |
+
+### webhook / observe
+
+| 接口 | 当前用途 | 当前审计结论 |
+|---|---|---|
+| `POST /integrations/douyin/webhook` | 正式抖音 webhook | production 强制签名校验，支持 timestamp 漂移检查和事件幂等 |
+| `POST /webhook/douyin` | 正式抖音 webhook 兼容路径 | 与正式路径共用处理逻辑 |
+| `POST /integrations/douyin/live-check/webhook-observe` | live-check webhook 观察入口 | 默认观察记录；转正式管线开关开启时存在签名绕过风险 |
+
+## 3. 当前鉴权 / 签名 / state 现状
+
+### 浏览器业务接口鉴权
+
+- `accounts`、`sync-bind-info`、`messages/send`、`resources/download`、`resources/upload-image` 均接入 `get_request_context_required`。
+- 上述接口均要求 `auto_wechat:douyin_ai_cs` 权限。
+- 前端 live-check 私信发送、资源下载、图片上传请求未传 `merchant_id`，这是正向边界。
+- 当前代码未看到服务层对 `messages/send`、`resources/download`、`resources/upload-image` 显式传入 `context.merchant_id` 后做账号 / 会话归属强校验。
+- `accounts` 入口有权限门禁，但账号列表服务调用未显式带当前商户上下文，存在跨商户数据暴露的后续审计和加固点。
+
+### OAuth callback / auth-redirect
+
+- `oauth-callback` 当前更像观察入口：记录 callback 参数摘要到内存，不直接写库。
+- `auth-redirect` 使用可选 RequestContext，随后同步授权账号并跳回前端。
+- 本轮扫描未发现不可预测 `state` 的生成、校验、一次性消费、过期处理、商户绑定、redirect 目标绑定的完整闭环。
+- 未确认回跳 URL 有可信前端域名白名单。该项需要后续按配置和部署反代一起复核。
+- callback 记录中 code 只保留预览摘要，未发现完整 code / access token / refresh token 写日志的代码路径。
+
+### webhook 签名与幂等
+
+- 正式 webhook 共用 `_handle_douyin_webhook`。
+- production 下 `config.is_douyin_webhook_auth_required()` 强制验签；非生产环境按 `DOUYIN_WEBHOOK_AUTH_REQUIRED` 配置。
+- `verify_signature` 校验 timestamp、signature，并使用 HMAC 比较。
+- 缺签名、签名错误、timestamp 过期会拒绝。
+- 事件持久化使用 event_key 做幂等；重复事件不会重复调度自动回复。
+- `webhook-observe` / `callback` 在默认观察模式下不进入正式处理；但当 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 时，会以 `skip_signature_verification=True` 调用正式处理管线，这是明确的加固风险点。
+
+## 4. 风险矩阵
+
+| 风险项 | 接口 | 当前状态 | 风险等级 | 建议任务 |
+|---|---|---|---|---|
+| webhook-observe 可绕过正式签名进入正式管线 | `/integrations/douyin/live-check/webhook-observe`、`/integrations/douyin/live-check/callback` | 开关开启时使用 `skip_signature_verification=True`，可能无签名写入正式事件处理流程 | 高 | `P1-LIVE-CHECK-WEBHOOK-OBSERVE-SIGNATURE-GUARD-1` |
+| OAuth state 缺少完整强校验闭环 | `/integrations/douyin/live-check/oauth-callback`、`/integrations/douyin/live-check/auth-redirect` | 未发现 state 生成、校验、一次性消费、过期和商户绑定闭环 | 高 | `P1-LIVE-CHECK-OAUTH-STATE-HARDEN-1` |
+| auth-redirect 回跳目标白名单需确认 | `/integrations/douyin/live-check/auth-redirect` | 未确认回跳 URL 被限制在可信前端域名 | 中 | `P1-LIVE-CHECK-OAUTH-REDIRECT-WHITELIST-1` |
+| live-check 账号列表可能跨商户暴露 | `/integrations/douyin/live-check/accounts` | 入口有登录和权限，但查询服务未显式传入当前商户上下文 | 中 | `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` |
+| 私信发送服务层缺少显式商户归属校验 | `/integrations/douyin/live-check/messages/send` | 入口有登录和权限，发送上下文边界完整；但服务层未按当前商户强校验 conversation/account 归属 | 中 | `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` |
+| 资源下载允许请求体 URL 覆盖事件资源 URL | `/integrations/douyin/live-check/resources/download` | 请求体可传 `url`，未看到 URL 协议 / 域名白名单；风险主要是向上游传任意资源 URL | 中 | `P1-LIVE-CHECK-RESOURCE-SSRF-GUARD-1` |
+| 资源下载缺少显式商户 / 账号归属校验 | `/integrations/douyin/live-check/resources/download` | 入口有登录和权限，但服务层未按当前商户强校验资源所属账号 | 中 | `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` |
+| 图片上传缺少 open_id 归属校验 | `/integrations/douyin/live-check/resources/upload-image` | 文件类型和大小有限制，但未看到 open_id 归属当前商户的强校验 | 中 | `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` |
+| 原始 webhook payload 持久化可能包含敏感字段 | 正式 webhook 事件表 | 会保存 raw_body，业务上便于追溯，但可能包含手机号、微信号、昵称或私信内容 | 中 | `P1-LIVE-CHECK-LOG-REDACTION-1` |
+| 私信发送记录持久化明文内容 | `/integrations/douyin/live-check/messages/send` | 发送记录包含 content、请求 / 响应摘要字段，需确认是否符合隐私留存策略 | 中 | `P1-LIVE-CHECK-LOG-REDACTION-1` |
+| 公网暴露面缺少路径级反代策略说明 | `/api/*` 反代假设下的 callback / observe / live-check 路径 | 正式 webhook 和 OAuth callback 公网可达有业务合理性；observe/debug 类入口不宜长期公网可达 | 中 | `P1-LIVE-CHECK-PUBLIC-EXPOSURE-GATE-1` |
+
+## 5. 已满足的安全边界
+
+- 正式 webhook 在 production 下强制签名校验。
+- 正式 webhook 签名校验包含 timestamp 漂移检查。
+- 正式 webhook 使用 HMAC 比较，避免普通字符串比较问题。
+- 正式 webhook 有 event_key 幂等逻辑，重复事件不会重复调度自动回复。
+- `im_send_msg` 不会创建线索，不会作为自动回复调度来源。
+- `messages/send` 要求 `manual_confirmed=true`。
+- 私信发送上下文只允许 `im_receive_msg` / `im_enter_direct_msg`，拒绝 `im_send_msg` 作为发送上下文，保留 `28003082` 修复边界。
+- 私信发送保留 24 小时上下文限制。
+- `scene` 由后端根据发送上下文推导，不信任前端传入值。
+- 前端人工发送只在人工接管模式下传 `manual_confirmed: true`。
+- 前端图片上传成功后只展示 `image_id`，不会自动触发私信发送。
+- 图片上传限制扩展名、文件头和 10MB 大小，不保存 `image_base64` 明文。
+- OpenAPI 客户端已对 token、secret、base64 等敏感键做日志脱敏处理。
+- OAuth callback 观察摘要未记录完整 code。
+
+## 6. 发现的问题
+
+### 6.1 webhook-observe 转正式管线时绕过签名
+
+`webhook-observe` / `callback` 观察入口在默认模式下风险较低。但当 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 时，会跳过签名校验进入正式 webhook 管线。若该入口公网可达且开关误开，外部请求可能写入事件或线索，并触发后续自动回复 dry-run 相关流程。
+
+建议后续将 observe 入口和正式入口分离：observe 只能只读记录或内存观察；任何进入正式管线的请求都必须复用正式签名校验。
+
+### 6.2 OAuth state 缺少强绑定
+
+当前未发现 OAuth state 的完整安全闭环。风险包括 CSRF、授权结果绑定错误商户、授权回跳目标被污染、用户在未登录上下文触发授权同步等。
+
+建议后续 state 至少包含不可预测随机值、有效期、一次性消费、发起商户、发起账号、可信 redirect 目标，并在 callback / auth-redirect 中强制校验。
+
+### 6.3 live-check 服务层商户归属校验不足
+
+浏览器业务接口已经接入登录和权限门禁，这是关键进展。但账号查询、私信发送、资源下载、图片上传的服务层仍需要显式使用当前 `merchant_id` 校验 account / open_id / conversation / resource 归属。
+
+建议后续统一把 RequestContext 传入服务层，避免只依赖前端不传 `merchant_id` 或仅依赖权限门禁。
+
+### 6.4 资源下载 URL 边界不足
+
+资源下载接口允许请求体中的 `url` 覆盖从事件中解析出的资源 URL。虽然当前服务不是直接下载任意 URL，而是调用上游 OpenAPI 获取下载地址，但仍可能变成“让后端代用户向上游提交任意资源 URL”的通道。
+
+建议后续只允许使用已入库 webhook 事件里的资源 URL，或增加 URL 协议、域名、路径、大小、媒体类型白名单。
+
+### 6.5 日志与持久化脱敏仍需产品级策略
+
+当前日志层面已避免打印 token、secret、base64 明文；但数据库中的 raw_body、私信内容、发送请求 / 响应摘要仍可能含敏感信息。该问题不一定是代码错误，因为原始事件留存有排障和审计价值，但需要明确留存周期、访问权限、脱敏展示和导出策略。
+
+## 7. 建议修复任务拆分
+
+| 任务 | 建议目标 |
+|---|---|
+| `P1-LIVE-CHECK-WEBHOOK-OBSERVE-SIGNATURE-GUARD-1` | 禁止 observe 入口跳过签名进入正式管线；如需转正式处理，必须复用正式 webhook 签名校验 |
+| `P1-LIVE-CHECK-OAUTH-STATE-HARDEN-1` | 实现 OAuth state 的随机生成、服务端保存、过期、一次性消费、商户绑定和回跳目标绑定 |
+| `P1-LIVE-CHECK-OAUTH-REDIRECT-WHITELIST-1` | 限制授权完成后的前端回跳 URL，只允许可信域名 / 固定路径 |
+| `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` | 对 accounts、messages/send、resources/download、resources/upload-image 增加服务层 merchant/account/open_id/conversation 归属校验 |
+| `P1-LIVE-CHECK-RESOURCE-SSRF-GUARD-1` | 禁止任意 URL 覆盖，或增加资源 URL 白名单、协议限制、事件来源校验和测试覆盖 |
+| `P1-LIVE-CHECK-LOG-REDACTION-1` | 梳理 raw_body、私信内容、send_msg_context、错误响应的脱敏、留存周期和访问权限 |
+| `P1-LIVE-CHECK-PUBLIC-EXPOSURE-GATE-1` | 给宝塔 / Nginx 反代提供路径级暴露建议，区分正式公网入口和仅内部观察入口 |
+
+## 8. 测试覆盖现状
+
+### 已覆盖
+
+- live-check `accounts`、`sync-bind-info`、`messages/send`、`resources/download`、`resources/upload-image` 缺权限时返回 403，且不调用服务。
+- `messages/send` 缺少 `manual_confirmed=true` 时拒绝。
+- 私信发送上下文保留 `28003082` 边界，拒绝 `im_send_msg` 作为发送上下文。
+- 资源下载、图片上传的基础输入校验和敏感字段不泄露。
+- OAuth callback 观察摘要不暴露完整 code。
+- auth status 按当前商户过滤。
+- 正式 webhook 签名成功、缺头、错签、timestamp 过期。
+- production 下正式 webhook 缺签名拒绝。
+- `/webhook/douyin` 和 `/integrations/douyin/webhook` 共用正式行为。
+- webhook duplicate event 幂等。
+- `im_send_msg` 不创建 lead、不触发自动回复调度。
+- 9000 可信代理相关测试覆盖不信任前端 `merchant_id`、账号归属等边界。
+
+### 缺口
+
+- OAuth state 生成、不可预测、过期、一次性消费、商户绑定、redirect 目标绑定测试。
+- `webhook-observe` 开关误开时不能绕过签名进入正式管线的测试。
+- live-check `accounts` 的商户隔离测试。
+- `messages/send` 按当前商户校验 conversation/account 归属的测试。
+- `resources/download` 按当前商户校验资源归属的测试。
+- `resources/download` 禁止任意 URL / URL 白名单测试。
+- `resources/upload-image` 按当前商户校验 open_id 归属的测试。
+- raw_body、私信内容、send_msg_context 的脱敏和留存策略测试。
+- 公网路径暴露策略无法完全由单元测试覆盖，需要部署配置审计或集成验收清单。
+
+## 9. 不改内容
+
+本轮未修改以下内容：
+
+- 不改业务代码。
+- 不改 NewCar 登录。
+- 不恢复 `/auth/callback`。
+- 不改 RAG / 知识库。
+- 不改 Local Agent。
+- 不改 19000。
+- 不改私信真实发送逻辑。
+- 不改 webhook 状态机。
+- 不改自动回复链路。
+- 不触发真实私信发送。
+- 不调用真实上游写接口。
+- 不调整前端菜单和页面入口。
+- 不修改宝塔 / Nginx 反代配置。
+
+## 10. 待确认事项
+
+- 生产环境是否会暴露完整 `/api/*` 到 9000，还是已有路径级 allowlist。
+- `DY_LIVE_CHECK_FORWARD_TO_FORMAL` 在生产环境是否保证永远关闭。
+- `auth-redirect` 的前端回跳 URL 当前配置来源和生产域名白名单。
+- OAuth 授权发起时是否存在其他文件生成 state，本轮扫描未确认到完整闭环。
+- `accounts` fallback 数据是否可能跨商户返回历史 webhook 事件中的账号。
+- 私信发送、资源下载和图片上传的账号 / 会话 / open_id 是否有上游侧二次归属校验；即便上游有校验，本系统仍建议做本地显式校验。
+- webhook raw_body 和私信内容的保留周期、访问权限、导出策略。
+- observe 类入口是否仍需公网可达；若仅用于本地排障，建议从反代层下线或加内部访问限制。
