@@ -285,6 +285,27 @@ class DouyinAuthorizedAccount(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DouyinOAuthState(Base):
+    """抖音授权回跳 state，一次性绑定发起授权时的可信商户上下文。"""
+
+    __tablename__ = "douyin_oauth_states"
+    __table_args__ = (
+        UniqueConstraint("state", name="uk_douyin_oauth_states_state"),
+        Index("idx_douyin_oauth_states_merchant", "merchant_id"),
+        Index("idx_douyin_oauth_states_expires_at", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state = Column(String(128), nullable=False)
+    merchant_id = Column(String(128), nullable=False, comment="发起授权时的可信商户 ID")
+    user_id = Column(String(128), comment="发起授权的 NewCar 用户 ID")
+    source_system = Column(String(64), nullable=False, default="new_car_project")
+    redirect_target = Column(String(1000), comment="授权完成后允许回跳的前端基址")
+    created_at = Column(DateTime, default=datetime.now)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime)
+
+
 class DouyinAccountAgentBinding(Base):
     """9000 权威抖音企业号与 AI 智能体绑定表。"""
 

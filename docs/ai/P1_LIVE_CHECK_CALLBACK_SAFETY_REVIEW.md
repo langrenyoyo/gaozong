@@ -357,3 +357,79 @@ DOUYIN_RESOURCE_ALLOWED_HOSTS=api-normal.amemv.com
 - `python -m pytest tests/test_douyin_live_check.py::test_download_resource_allows_request_url_when_it_matches_event_url tests/test_douyin_live_check.py::test_download_resource_success_uses_signed_openapi_body_and_persists_record tests/test_douyin_live_check.py::test_download_resource_rejects_other_merchant_account_without_calling_upstream tests/test_douyin_live_check.py::test_upload_image_rejects_invalid_inputs_without_calling_upstream -q`：4 passed。
 - `python -m pytest tests/test_douyin_live_check.py::test_download_resource_rejects_event_url_outside_configured_allowed_hosts -q`：1 passed。
 - `python -m pytest tests/test_douyin_live_check.py -q`：108 passed。
+
+## 14. P1-LIVE-CHECK-OAUTH-STATE-HARDEN-1
+
+本轮已收口抖音 live-check 授权发起与 `auth-redirect` 回跳的 OAuth state 安全边界，目标是防止伪造回调、跨商户绑定和重复回调重放。
+
+### 14.1 原始问题
+
+- `GET /integrations/douyin/live-check/auth-url` 原先不生成服务端 state，也不绑定当前商户上下文。
+- `GET /integrations/douyin/live-check/auth-redirect` 原先使用可选浏览器登录态；如果回跳时没有登录态或上下文异常，仍可能继续同步授权账号。
+- `auth-redirect` 原先没有校验 state 是否存在、是否过期、是否已消费，也不能证明本次回调来自当前商户发起的授权。
+- 回调 query 中如出现 `merchant_id` / `redirect_url` 等字段，原实现没有明确用 state 固定可信归属和回跳目标。
+
+### 14.2 新的 state 生成规则
+
+- 发起授权时必须经过 NewCar `RequestContext`，并具备 `auto_wechat:douyin_ai_cs` 权限。
+- 后端使用 `secrets.token_urlsafe(32)` 生成高熵随机 state。
+- state 会追加到传给抖音上游的 `auth_redirect_url` 中，由抖音授权完成后带回。
+- state 绑定字段包括：
+  - `merchant_id`
+  - `user_id`
+  - `source_system`
+  - `redirect_target`
+  - `created_at`
+  - `expires_at`
+  - `consumed_at`
+
+### 14.3 state 存储位置
+
+新增持久化表：
+
+```text
+douyin_oauth_states
+```
+
+该表通过迁移 `migrations/versions/0024_douyin_oauth_states.sql` 创建。生产不依赖单进程内存，服务重启后仍可判断 state 是否存在、过期或已消费。
+
+### 14.4 过期和一次性消费
+
+- 新增配置：`DY_OAUTH_STATE_TTL_SECONDS`
+- 默认值：`900` 秒，即 15 分钟。
+- `auth-redirect` 收到回调后先校验并消费 state，再进入 `/list_bind_info` 同步绑定流程。
+- 缺失 state：返回 `DOUYIN_OAUTH_STATE_MISSING`。
+- state 不存在或 source_system 不匹配：返回 `DOUYIN_OAUTH_STATE_INVALID`。
+- state 过期：返回 `DOUYIN_OAUTH_STATE_EXPIRED`。
+- state 已消费：返回 `DOUYIN_OAUTH_STATE_REPLAYED`。
+- 重放同一个 state 不会再次进入绑定流程。
+
+### 14.5 merchant_id 归属来源
+
+- `auth-redirect` 不信任 query/body 中的 `merchant_id`。
+- 绑定账号时使用 `douyin_oauth_states.merchant_id` 还原可信 `RequestContext`。
+- A 商户发起的 state 即使被带上 `merchant_id=B` 的 query 参数，也只能按 A 商户上下文处理；若 state 已消费则直接拒绝。
+
+### 14.6 callback redirect 安全规则
+
+- 最终回跳前端地址来自发起授权时写入 state 的 `redirect_target`。
+- 请求 query 中的 `redirect_url` 不参与回跳决策，避免开放重定向。
+- 当前 `redirect_target` 来源为后端配置 `DY_AUTH_REDIRECT_FRONTEND_URL`，未配置时按既有 `PUBLIC_BASE_URL` 兜底；生产建议显式配置可信前端域名。
+
+### 14.7 保持不变
+
+- 不改 NewCar 登录协议。
+- 不恢复或修改 NewCar `/auth/callback`。
+- 不改 webhook 签名。
+- 不改资源 SSRF 逻辑。
+- 不改 merchant isolation 已有语义。
+- 不改 RAG / 知识库。
+- 不改 Local Agent / 19000。
+- 不改自动发送链路。
+- 不触发真实私信发送，不调用真实上游写接口；测试均使用 mock。
+
+### 14.8 测试结果
+
+- `python -m pytest tests/test_douyin_live_check.py -q`：115 passed。
+- `python -m pytest tests/test_db_migration_runner.py::test_0024_douyin_oauth_states_creates_table_and_indexes -q`：1 passed。
+- `python -m pytest tests/test_auth_context.py -q`：27 passed。

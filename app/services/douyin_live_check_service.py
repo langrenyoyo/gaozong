@@ -3,16 +3,18 @@
 import json
 import logging
 import hashlib
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
 from app.auth.context import RequestContext
-from app.models import DouyinAuthorizedAccount
+from app.models import DouyinAuthorizedAccount, DouyinOAuthState
 from app.services.douyin_openapi_client import (
     build_safe_openapi_error_detail,
     call_douyin_openapi as _shared_call_douyin_openapi,
@@ -135,7 +137,7 @@ def _auth_url_base_data() -> dict[str, Any]:
     }
 
 
-def build_auth_payload() -> dict[str, Any]:
+def build_auth_payload(auth_redirect_url: str | None = None) -> dict[str, Any]:
     """Build upstream get_aweme_auth_url payload."""
     base_data = _auth_url_base_data()
     if not base_data["configured"]:
@@ -143,7 +145,7 @@ def build_auth_payload() -> dict[str, Any]:
     params = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,
         "account_name": config.DY_ACCOUNT_NAME,
-        "auth_redirect_url": base_data["auth_redirect_url"],
+        "auth_redirect_url": auth_redirect_url or base_data["auth_redirect_url"],
         "callback_url": base_data["callback_url"],
     }
     if config.DY_CALLBACK_EVENTS:
@@ -236,13 +238,24 @@ def _safe_upstream_error(
     return safe_error
 
 
-def fetch_auth_url() -> dict[str, Any]:
+def fetch_auth_url(
+    *,
+    db: Session | None = None,
+    context: RequestContext | None = None,
+    redirect_target: str | None = None,
+) -> dict[str, Any]:
     """Fetch the final browser-openable Douyin auth URL via the unified OpenAPI client."""
     base_data = _auth_url_base_data()
     if not base_data["configured"]:
         return base_data
 
-    payload = build_auth_payload()
+    state_value = None
+    auth_redirect_url = base_data["auth_redirect_url"]
+    if db is not None and context is not None:
+        state_row = create_oauth_state(db, context=context, redirect_target=redirect_target)
+        state_value = state_row.state
+        auth_redirect_url = _with_query_param(str(auth_redirect_url), "state", state_value)
+    payload = build_auth_payload(auth_redirect_url=auth_redirect_url)
     try:
         result = _shared_call_douyin_openapi("/get_aweme_auth_url", payload)
     except HTTPException as exc:
@@ -277,8 +290,96 @@ def fetch_auth_url() -> dict[str, Any]:
         )
     return {
         **base_data,
+        "auth_redirect_url": auth_redirect_url,
+        "state": state_value,
         "auth_url": auth_url,
     }
+
+
+def create_oauth_state(
+    db: Session,
+    *,
+    context: RequestContext,
+    redirect_target: str | None,
+) -> DouyinOAuthState:
+    """创建一次性 OAuth state，绑定发起授权时的可信商户上下文。"""
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+    now = _now()
+    expires_at = now + timedelta(seconds=max(60, int(config.DY_OAUTH_STATE_TTL_SECONDS)))
+    for _ in range(3):
+        state = secrets.token_urlsafe(32)
+        row = DouyinOAuthState(
+            state=state,
+            merchant_id=context.merchant_id,
+            user_id=str(context.user_id) if context.user_id else None,
+            source_system=context.source_system or "new_car_project",
+            redirect_target=redirect_target,
+            created_at=now,
+            expires_at=expires_at,
+        )
+        db.add(row)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            continue
+        return row
+    raise HTTPException(
+        status_code=500,
+        detail={"code": "DOUYIN_OAUTH_STATE_CREATE_FAILED", "message": "授权状态创建失败"},
+    )
+
+
+def consume_oauth_state(db: Session, state: str | None) -> tuple[RequestContext, str | None]:
+    """校验并一次性消费 OAuth state，返回可信 RequestContext 与回跳目标。"""
+    text = _optional_str(state)
+    if not text:
+        raise _oauth_state_error("DOUYIN_OAUTH_STATE_MISSING")
+    row = db.query(DouyinOAuthState).filter(DouyinOAuthState.state == text).first()
+    if row is None:
+        raise _oauth_state_error("DOUYIN_OAUTH_STATE_INVALID")
+    now = _now()
+    if row.consumed_at is not None:
+        raise _oauth_state_error("DOUYIN_OAUTH_STATE_REPLAYED")
+    if row.expires_at and row.expires_at < now:
+        raise _oauth_state_error("DOUYIN_OAUTH_STATE_EXPIRED")
+    if row.source_system != "new_car_project" or not row.merchant_id:
+        raise _oauth_state_error("DOUYIN_OAUTH_STATE_INVALID")
+
+    row.consumed_at = now
+    db.commit()
+    return (
+        RequestContext(
+            user_id=row.user_id or "douyin-oauth",
+            username=row.user_id,
+            merchant_id=row.merchant_id,
+            merchant_ids=[row.merchant_id],
+            permission_codes=["auto_wechat:douyin_ai_cs"],
+            source_system=row.source_system,
+        ),
+        row.redirect_target,
+    )
+
+
+def _oauth_state_error(code: str) -> HTTPException:
+    messages = {
+        "DOUYIN_OAUTH_STATE_MISSING": "缺少授权 state",
+        "DOUYIN_OAUTH_STATE_INVALID": "授权 state 无效",
+        "DOUYIN_OAUTH_STATE_EXPIRED": "授权 state 已过期",
+        "DOUYIN_OAUTH_STATE_REPLAYED": "授权 state 已被使用",
+    }
+    return HTTPException(status_code=403, detail={"code": code, "message": messages.get(code, "授权 state 校验失败")})
+
+
+def _with_query_param(url: str, key: str, value: str) -> str:
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query[key] = value
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 def call_douyin_openapi(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     """兼容旧导入路径，实际使用统一 OpenAPI client。"""

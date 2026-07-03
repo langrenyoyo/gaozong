@@ -40,6 +40,7 @@ from app.models import (
     DouyinImageUpload,
     DouyinLead,
     DouyinMessageResourceDownload,
+    DouyinOAuthState,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
 )
@@ -144,6 +145,36 @@ def _client_with_required_context(
     )
     client.app.dependency_overrides[get_request_context_required] = lambda: context
     return client
+
+
+def _seed_oauth_state(
+    *,
+    state: str = "state-valid-001",
+    merchant_id: str = "merchant-1",
+    user_id: str = "user-1",
+    source_system: str = "new_car_project",
+    redirect_target: str = "https://workbench.example.com",
+    expires_at: datetime | None = None,
+    consumed_at: datetime | None = None,
+) -> str:
+    db = TestSession()
+    try:
+        db.add(
+            DouyinOAuthState(
+                state=state,
+                merchant_id=merchant_id,
+                user_id=user_id,
+                source_system=source_system,
+                redirect_target=redirect_target,
+                created_at=datetime.now(),
+                expires_at=expires_at or (datetime.now() + timedelta(minutes=10)),
+                consumed_at=consumed_at,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    return state
 
 
 def test_live_check_accounts_requires_douyin_ai_cs_permission():
@@ -539,14 +570,55 @@ def test_auth_url_configured_returns_final_scan_url_without_secret():
     assert data["configured"] is True
     assert data["auth_url"] == "https://open.douyin.com/auth/scan?ticket=abc"
     assert "/get_aweme_auth_url" not in data["auth_url"]
-    assert data["auth_redirect_url"] == "https://callback.example.com/oauth-callback"
+    assert data["auth_redirect_url"].startswith("https://callback.example.com/oauth-callback?state=")
     assert data["callback_url"] == "https://callback.example.com/webhook-observe"
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
     assert mock_post.call_args.kwargs["headers"]["X-Auth-Timestamp"]
     assert mock_post.call_args.kwargs["headers"]["Authorization"]
-    assert json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))["main_account_id"] == 123
+    payload = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert payload["main_account_id"] == 123
+    assert payload["auth_redirect_url"].startswith("https://callback.example.com/oauth-callback?state=")
     assert "super-secret" not in json.dumps(resp.json(), ensure_ascii=False)
+
+
+def test_auth_url_generates_state_bound_to_request_context():
+    client = _client_with_context("merchant-oauth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://example.test/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
+         patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
+        )
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 200
+    payload = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert "state=" in payload["auth_redirect_url"]
+    state = payload["auth_redirect_url"].split("state=", 1)[1].split("&", 1)[0]
+    assert state
+    db = TestSession()
+    try:
+        row = db.query(DouyinOAuthState).filter_by(state=state).one()
+        assert row.merchant_id == "merchant-oauth"
+        assert row.user_id == "user-1"
+        assert row.source_system == "new_car_project"
+        assert row.redirect_target == "https://workbench.example.com"
+        assert row.consumed_at is None
+    finally:
+        db.close()
 
 
 def test_auth_url_accepts_upstream_redirect_url_compatibility_field():
@@ -595,13 +667,8 @@ def test_auth_url_signature_matches_douyinapi_with_gmp_secret():
         resp = client.get("/integrations/douyin/live-check/auth-url")
 
     assert resp.status_code == 200
-    expected_payload = {
-        "main_account_id": 123,
-        "account_name": "demo-account",
-        "auth_redirect_url": "https://callback.example.com/oauth-callback",
-        "callback_url": "https://callback.example.com/webhook-observe",
-        "callback_event": ["im_receive_msg", "im_send_msg"],
-    }
+    expected_payload = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert expected_payload["auth_redirect_url"].startswith("https://callback.example.com/oauth-callback?state=")
     expected_body = json.dumps(expected_payload, ensure_ascii=False, separators=(",", ":"))
     expected_signature = hashlib.sha256(
         ("gmp-secret" + expected_body + "-1700000000").encode("utf-8")
@@ -2316,6 +2383,7 @@ def test_auth_status_with_merchant_context_ignores_memory_callback_without_db_bi
 
 def test_auth_redirect_success_writes_db_and_status_can_poll_authorized_account():
     client = _client_with_context("merchant-auth")
+    state = _seed_oauth_state(state="state-auth-db-success", merchant_id="merchant-auth")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
@@ -2328,7 +2396,7 @@ def test_auth_redirect_success_writes_db_and_status_can_poll_authorized_account(
         )
         redirect_resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"open_id": "account_auth_redirect_1", "nick_name": "回跳企业号"},
+            params={"open_id": "account_auth_redirect_1", "nick_name": "回跳企业号", "state": state},
             follow_redirects=False,
         )
         status_resp = client.get("/integrations/douyin/live-check/status")
@@ -3305,6 +3373,7 @@ def test_bind_authorized_open_id_requires_permission():
 def test_auth_redirect_with_open_id_syncs_and_redirects_success():
     """auth-redirect 收到 open_id 时同步账号并 302 回前端 success。"""
     client = _client()
+    state = _seed_oauth_state(state="state-auth-redirect-open-id", merchant_id="merchant-1")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
@@ -3312,7 +3381,7 @@ def test_auth_redirect_with_open_id_syncs_and_redirects_success():
         mock_sync.return_value = {"upserted": 1, "active_count": 1, "fetched": 1}
         resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"open_id": "account_open_001", "nick_name": "Test Account"},
+            params={"open_id": "account_open_001", "nick_name": "Test Account", "state": state},
             follow_redirects=False,
         )
 
@@ -3325,11 +3394,19 @@ def test_auth_redirect_with_open_id_syncs_and_redirects_success():
     assert mock_sync.call_args.kwargs["name_or_open_id"] == "account_open_001"
     assert mock_sync.call_args.kwargs["page_num"] == 1
     assert mock_sync.call_args.kwargs["page_size"] == 20
+    assert mock_sync.call_args.kwargs["context"].merchant_id == "merchant-1"
+    db = TestSession()
+    try:
+        row = db.query(DouyinOAuthState).filter_by(state=state).one()
+        assert row.consumed_at is not None
+    finally:
+        db.close()
 
 
 def test_auth_redirect_with_nick_name_syncs_when_no_open_id():
     """auth-redirect 无 open_id 但有 nick_name 时用 nick_name 同步。"""
     client = _client()
+    state = _seed_oauth_state(state="state-auth-redirect-nick", merchant_id="merchant-1")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
@@ -3337,7 +3414,7 @@ def test_auth_redirect_with_nick_name_syncs_when_no_open_id():
         mock_sync.return_value = {"upserted": 1, "active_count": 1, "fetched": 1}
         resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"nick_name": "南京佳欣说车"},
+            params={"nick_name": "南京佳欣说车", "state": state},
             follow_redirects=False,
         )
 
@@ -3351,8 +3428,7 @@ def test_auth_redirect_with_nick_name_syncs_when_no_open_id():
     assert mock_sync.call_args.kwargs["name_or_open_id"] == "南京佳欣说车"
 
 
-def test_auth_redirect_with_error_does_not_sync_and_redirects_failed():
-    """auth-redirect 收到 error/err_msg 时不同步，302 回前端 failed。"""
+def test_auth_redirect_missing_state_rejects_binding():
     client = _client()
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
@@ -3360,7 +3436,138 @@ def test_auth_redirect_with_error_does_not_sync_and_redirects_failed():
          patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
         resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"error": "auth_denied", "err_msg": "user cancelled"},
+            params={"open_id": "account_missing_state"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "auth=failed" in resp.headers["location"]
+    assert "DOUYIN_OAUTH_STATE_MISSING" in resp.headers["location"]
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_invalid_state_rejects_binding():
+    client = _client()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_invalid_state", "state": "not-exists"},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "auth=failed" in resp.headers["location"]
+    assert "DOUYIN_OAUTH_STATE_INVALID" in resp.headers["location"]
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_expired_state_rejects_binding():
+    client = _client()
+    state = _seed_oauth_state(
+        state="state-expired",
+        expires_at=datetime.now() - timedelta(seconds=1),
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_expired_state", "state": state},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "auth=failed" in resp.headers["location"]
+    assert "DOUYIN_OAUTH_STATE_EXPIRED" in resp.headers["location"]
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_consumed_state_rejects_replay():
+    client = _client()
+    state = _seed_oauth_state(
+        state="state-consumed",
+        consumed_at=datetime.now() - timedelta(seconds=1),
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_consumed_state", "state": state},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "auth=failed" in resp.headers["location"]
+    assert "DOUYIN_OAUTH_STATE_REPLAYED" in resp.headers["location"]
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_uses_state_merchant_and_ignores_forged_merchant_id_and_redirect():
+    client = _client_with_context("merchant-browser-other")
+    state = _seed_oauth_state(
+        state="state-merchant-a",
+        merchant_id="merchant-a",
+        redirect_target="https://workbench.example.com",
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        mock_sync.return_value = {"upserted": 1, "active_count": 1, "fetched": 1}
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={
+                "open_id": "account_state_merchant",
+                "state": state,
+                "merchant_id": "merchant-b",
+                "redirect_url": "https://evil.example.com/phish",
+            },
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"].startswith("https://workbench.example.com/douyin-ai-cs?")
+    assert "evil.example.com" not in resp.headers["location"]
+    mock_sync.assert_called_once()
+    assert mock_sync.call_args.kwargs["context"].merchant_id == "merchant-a"
+
+
+def test_auth_redirect_state_source_system_mismatch_rejects_binding():
+    client = _client()
+    state = _seed_oauth_state(state="state-source-mismatch", source_system="other_system")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_source_mismatch", "state": state},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "auth=failed" in resp.headers["location"]
+    assert "DOUYIN_OAUTH_STATE_INVALID" in resp.headers["location"]
+    mock_sync.assert_not_called()
+
+
+def test_auth_redirect_with_error_does_not_sync_and_redirects_failed():
+    """auth-redirect 收到 error/err_msg 时不同步，302 回前端 failed。"""
+    client = _client()
+    state = _seed_oauth_state(state="state-error", merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"error": "auth_denied", "err_msg": "user cancelled", "state": state},
             follow_redirects=False,
         )
 
@@ -3374,13 +3581,14 @@ def test_auth_redirect_with_error_does_not_sync_and_redirects_failed():
 def test_auth_redirect_without_open_id_or_nick_name_redirects_unknown():
     """auth-redirect 缺 open_id 和 nick_name 时不同步，302 回前端 unknown。"""
     client = _client()
+    state = _seed_oauth_state(state="state-unknown", merchant_id="merchant-1")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
          patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
         resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"code": "auth_code_001", "state": "state_abc"},
+            params={"code": "auth_code_001", "state": state},
             follow_redirects=False,
         )
 
@@ -3393,6 +3601,7 @@ def test_auth_redirect_without_open_id_or_nick_name_redirects_unknown():
 def test_auth_redirect_sync_failure_redirects_sync_failed_without_secret():
     """auth-redirect 同步抛异常时 302 回前端 sync_failed，且不泄露 secret/token。"""
     client = _client()
+    state = _seed_oauth_state(state="state-sync-failed", merchant_id="merchant-1")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
          patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
@@ -3400,7 +3609,7 @@ def test_auth_redirect_sync_failure_redirects_sync_failed_without_secret():
         mock_sync.side_effect = RuntimeError("upstream failed with gmp-secret-value token-abc")
         resp = client.get(
             "/integrations/douyin/live-check/auth-redirect",
-            params={"open_id": "account_open_002"},
+            params={"open_id": "account_open_002", "state": state},
             follow_redirects=False,
         )
 

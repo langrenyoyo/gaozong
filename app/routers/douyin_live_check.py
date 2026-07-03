@@ -37,6 +37,7 @@ from app.services.douyin_image_upload_service import upload_douyin_image
 from app.services.douyin_live_check_service import (
     bind_authorized_account_by_open_id,
     build_auth_url,
+    consume_oauth_state,
     fetch_auth_url,
     get_live_check_status,
     record_oauth_callback,
@@ -72,9 +73,17 @@ def _ensure_enabled() -> None:
 
 
 @router.get("/auth-url", response_model=DouyinLiveCheckAuthUrlResponse)
-def get_auth_url() -> DouyinLiveCheckAuthUrlResponse:
+def get_auth_url(
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+) -> DouyinLiveCheckAuthUrlResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
-    data = fetch_auth_url()
+    data = fetch_auth_url(
+        db=db,
+        context=context,
+        redirect_target=_auth_redirect_frontend_base(),
+    )
     if not data["configured"]:
         raise HTTPException(
             status_code=400,
@@ -121,7 +130,6 @@ def _require_merchant_id(context: RequestContext) -> str:
 @router.get("/auth-redirect")
 def auth_redirect(
     request: Request,
-    context: RequestContext | None = Depends(get_request_context_optional),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """抖音授权成功后 GMP 302 回跳入口：同步企业号后跳回前端。
@@ -134,6 +142,22 @@ def auth_redirect(
     _ensure_enabled()
     params = dict(request.query_params)
     frontend_base = _auth_redirect_frontend_base()
+    try:
+        trusted_context, state_redirect_target = consume_oauth_state(db, params.get("state"))
+        if state_redirect_target:
+            frontend_base = state_redirect_target.rstrip("/")
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        code = detail.get("code") or "DOUYIN_OAUTH_STATE_INVALID"
+        logger.warning(
+            "douyin auth-redirect state 校验失败: code=%s, query_keys=%s",
+            code,
+            sorted(params.keys()),
+        )
+        return RedirectResponse(
+            url=f"{frontend_base}/douyin-ai-cs?auth=failed&reason={_safe_query_value(code)}",
+            status_code=302,
+        )
 
     error = params.get("error") or params.get("err_msg")
     if error:
@@ -166,7 +190,7 @@ def auth_redirect(
             page_num=1,
             page_size=20,
             name_or_open_id=sync_key,
-            context=context,
+            context=trusted_context,
         )
     except Exception as exc:
         # 同步失败：仅记录 error 类型与摘要，绝不打印 secret/token/Authorization
