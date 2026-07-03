@@ -176,6 +176,11 @@ LEADS_SERVICE_BASE_URL = os.getenv("LEADS_SERVICE_BASE_URL", "http://127.0.0.1:9
 LEADS_INTERNAL_TOKEN = os.getenv("LEADS_INTERNAL_TOKEN", "").strip()
 LEADS_CLIENT_TIMEOUT_SECONDS = float(os.getenv("LEADS_CLIENT_TIMEOUT_SECONDS", "5") or 5)
 
+# ---------- Local Agent 机器身份鉴权配置 ----------
+# 兼容模式默认关闭强制拦截，避免旧 19000 现场 Agent 掉线。
+LOCAL_AGENT_AUTH_REQUIRED = os.getenv("LOCAL_AGENT_AUTH_REQUIRED", "false").lower() == "true"
+LOCAL_AGENT_TOKENS = os.getenv("LOCAL_AGENT_TOKENS", "").strip()
+
 def is_production_env() -> bool:
     """判断当前是否为生产环境。"""
     return APP_ENV == "production"

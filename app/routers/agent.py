@@ -1,7 +1,8 @@
 """Read-only Agent status API."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from app.auth.local_agent_auth import get_optional_local_agent_context
 from app.schemas import (
     AgentHeartbeatRequest,
     AgentHeartbeatResponse,
@@ -20,6 +21,7 @@ def read_agent_status():
 
 
 @router.post("/heartbeat", response_model=AgentHeartbeatResponse)
-def receive_agent_heartbeat(payload: AgentHeartbeatRequest):
+def receive_agent_heartbeat(payload: AgentHeartbeatRequest, request: Request):
     """Record the latest Local Agent heartbeat without running automation."""
+    get_optional_local_agent_context(request)
     return AgentHeartbeatResponse(data=record_agent_heartbeat(payload))

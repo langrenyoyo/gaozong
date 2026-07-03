@@ -2,9 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
+from app.auth.local_agent_auth import get_optional_local_agent_context
 from app.database import get_db
 from app.schemas import (
     ManualReply, CheckOut, WechatDetectRequest, WechatDetectResponse,
@@ -61,7 +62,7 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
 
 
 @router.post("/agent-write-back", response_model=AgentWriteBackResponse)
-def agent_write_back(data: AgentWriteBackRequest, db: Session = Depends(get_db)):
+def agent_write_back(data: AgentWriteBackRequest, request: Request, db: Session = Depends(get_db)):
     """P0-REPLY-2：接收 Local Agent 从客户电脑微信读取的消息，分析关键词并回写数据库。
 
     调用方：Local Agent POST 19000 /agent/replies/detect 内部调用此接口。
@@ -74,6 +75,7 @@ def agent_write_back(data: AgentWriteBackRequest, db: Session = Depends(get_db))
     5. 未命中 → pending
     6. 不伪造 replied，不修改 sent_at
     """
+    get_optional_local_agent_context(request)
     result = wechat_ui_reply_service.agent_write_back_reply(
         db=db,
         lead_id=data.lead_id,

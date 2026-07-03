@@ -6,11 +6,12 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
+from app.auth.local_agent_auth import get_optional_local_agent_context
 from app.database import get_db
 from app.schemas import (
     WechatTaskCreateRequest,
@@ -86,12 +87,14 @@ def list_wechat_tasks(
 
 @router.get("/pending", response_model=list[WechatTaskResponse])
 def get_pending_wechat_tasks(
+    request: Request,
     limit: int = 20,
     task_type: str | None = None,
     staff_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     """查询 pending 状态的微信任务。"""
+    get_optional_local_agent_context(request)
     return wechat_task_service.get_pending_wechat_tasks(
         db,
         limit=limit,
@@ -122,6 +125,7 @@ def get_wechat_task(
 def submit_wechat_task_result(
     task_id: int,
     data: WechatTaskResultRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """回写微信任务执行结果。
@@ -131,6 +135,7 @@ def submit_wechat_task_result(
     - verified=false / partial_match / manual_review_required 会被 blocked
     - pasted=true && sent=false && verified=true → status=pasted
     """
+    get_optional_local_agent_context(request)
     task = wechat_task_service.get_wechat_task(db, task_id)
     if not task:
         raise HTTPException(404, "微信任务不存在")

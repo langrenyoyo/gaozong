@@ -516,3 +516,217 @@ python -m pytest tests/test_wechat_task_history_api.py -q
 4. `P1-LEGACY-WECHAT-DEBUG-ENDPOINTS-LOCKDOWN-1`
    - 收口 `/replies/current-wechat-detect`、`/replies/debug/*` 和旧 9000 直操微信入口。
 
+## 18. P1-LOCAL-AGENT-PUBLIC-EXPOSURE-AUDIT-1
+
+### 18.1 审计性质和边界
+
+本轮为只读审计 + 最小安全验证记录，不修改业务代码，不修改 Nginx，不直接阻断公网反代，不对真实 pending 任务做完成回写，不触发真实微信发送。
+
+已知公网实测入口来自 `https://douyinapi.misanduo.com/api`。本轮未再次拉取真实 pending 队列，避免记录客户手机号、微信号、客户昵称等敏感数据；对 422 补齐参数后的读写能力，以本地 router / service / schema 代码审计为准。
+
+### 18.2 公网测试结果表
+
+| Method | 公网路径 | 已知公网状态 | 是否到达 FastAPI | 是否进入业务逻辑 | 是否写库 | 是否可能泄露任务数据 | 风险等级 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| POST | `/agent/heartbeat` | 200 | 是 | 是，进入 `receive_agent_heartbeat` | 不写数据库；写进程内 `_latest_heartbeat` | 不返回任务数据，但可伪造 Agent 在线状态 | 高 |
+| GET | `/wechat-tasks/pending` | 422 | 是，422 为参数 / schema 层响应 | 补齐合法 query 后会进入 `get_pending_wechat_tasks` | 不写库 | 是，返回 pending 任务字段 | 高 |
+| POST | `/wechat-tasks/1/result` | 200 | 是 | 是，进入 `submit_wechat_task_result` | 是，task 存在时更新 `wechat_tasks`，并可能联动通知 / 检测记录 | 不以读取为主，但响应返回任务字段 | 高 |
+| POST | `/replies/agent-write-back` | 422 | 是，422 为 body schema 层响应 | 补齐 `lead_id` / `staff_id` 后会进入 `agent_write_back` | 是，命中 pending check 时可更新回复检测、线索状态、通知状态 | 不以读取为主，但响应可能返回检测摘要 | 高 |
+
+### 18.3 接口逐项结论
+
+#### POST `/agent/heartbeat`
+
+- Router：`app/routers/agent.py::receive_agent_heartbeat`
+- Schema：`AgentHeartbeatRequest`
+- 必填请求体：`agent_client_id`、`agent_status`、`wechat_status`
+- 可选字段：`agent_name`、`host_name`、`current_task_id`、`current_task_type`、`version`
+- Service：`app/services/agent_status_service.py::record_agent_heartbeat`
+- 当前认证：无 NewCar 登录态、无 Local Agent token、无 merchant 校验、无 machine 校验
+- 来源 IP：当前未记录
+- 写入行为：不写数据库，只更新进程内 `_latest_heartbeat`
+- 风险：公网可伪造 Agent 在线 / busy / 微信可用状态，影响 `/agent/status` 和前端动作门禁判断
+
+#### GET `/wechat-tasks/pending`
+
+- Router：`app/routers/wechat_tasks.py::get_pending_wechat_tasks`
+- Query 参数：`limit=20`、`task_type`、`staff_id`
+- Service：`app/services/wechat_task_service.py::get_pending_wechat_tasks`
+- 当前认证：无 NewCar 登录态、无 Local Agent token
+- 当前隔离：只按 `status=pending`、可选 `task_type`、可选 `staff_id` 过滤；无 merchant 过滤
+- 返回模型：`WechatTaskResponse`
+- 返回字段包括：`id`、`task_type`、`lead_id`、`staff_id`、`reply_check_id`、`target_nickname`、`message`、`mode`、`status`、`raw_result`、`agent_hostname`、`agent_pid`、`pasted_at`、`sent_at`
+- 写入行为：不写库
+- 风险：公网补齐合法 query 后可读取 pending 队列，可能包含目标微信昵称、通知消息、线索 / 销售关联 ID、历史 raw_result 等敏感字段；且当前不按商户隔离
+
+#### POST `/wechat-tasks/{task_id}/result`
+
+- Router：`app/routers/wechat_tasks.py::submit_wechat_task_result`
+- Schema：`WechatTaskResultRequest`
+- 必填请求体：`success`
+- 可选字段：`verified`、`partial_match`、`manual_review_required`、`pasted`、`sent`、`failure_stage`、`agent_hostname`、`agent_pid`、`raw_result`、`detected_status`、`detect_count`
+- task 不存在：当前 router 返回 404，不进入写库分支
+- task 存在：调用 `app/services/wechat_task_service.py::submit_wechat_task_result`
+- 当前认证：无 NewCar 登录态、无 Local Agent token
+- 当前归属校验：无任务归属 / merchant / agent 校验
+- 写入行为：更新 `wechat_tasks.status`、`failure_stage`、`raw_result`、`agent_hostname`、`agent_pid`、`pasted_at`、`sent_at` 等；`notify_sales` 分支可能联动 `lead_notifications`、`check_configs`、自动创建 `detect_reply` task；`detect_reply` 分支可能联动 `reply_checks`
+- 风险：公网可伪造任务执行结果。虽然现有发送安全门禁会根据 `verified`、`partial_match`、`manual_review_required`、`sent` 等字段做状态约束，但认证缺失仍允许外部请求改写任务状态和相关业务记录
+
+#### POST `/replies/agent-write-back`
+
+- Router：`app/routers/replies.py::agent_write_back`
+- Schema：`AgentWriteBackRequest`
+- 必填请求体：`lead_id`、`staff_id`
+- 可选字段：`task_id`、`target_nickname`、`messages`、`agent_result`
+- Service：`app/services/wechat_ui_reply_service.py::agent_write_back_reply`
+- 当前认证：无 NewCar 登录态、无 Local Agent token
+- 当前归属校验：按 `lead_id + staff_id + check_status=pending` 查记录；未校验调用方 agent、task 归属或 merchant
+- 写入行为：`agent_result.success=false` 时不写业务状态；若命中 pending check，会更新 `ReplyCheck.checked_at`，命中有效 friend 消息时可更新 `ReplyCheck` 为 `replied`、更新 `DouyinLead.status=replied`、更新 `LeadNotification.send_status=replied`
+- 风险：公网补齐合法 body 后可伪造销售回复检测结果。现有逻辑不会把 unknown sender 直接判 replied，但认证和归属缺失仍是高危状态写入口
+
+### 18.4 相关 router / service / model / test
+
+| 类型 | 文件 | 结论 |
+| --- | --- | --- |
+| Router | `app/routers/agent.py` | `/agent/heartbeat` 无认证，写内存心跳 |
+| Service | `app/services/agent_status_service.py` | `_latest_heartbeat` 为进程内状态，不写 DB |
+| Router | `app/routers/wechat_tasks.py` | `/pending` 和 `/{task_id}/result` 为 Local Agent 关键入口，当前无 agent auth |
+| Service | `app/services/wechat_task_service.py` | pending 不按 merchant 过滤；result 会写 `WechatTask` 并联动业务表 |
+| Router | `app/routers/replies.py` | `/replies/agent-write-back` 无认证 |
+| Service | `app/services/wechat_ui_reply_service.py` | 可按 lead/staff 回写 `ReplyCheck`、`DouyinLead`、`LeadNotification` |
+| Model | `app/models.py::WechatTask` | 无 `merchant_id`、`agent_id`、`machine_id` 字段，归属需经 lead/staff 推导 |
+| Model | `app/models.py::ReplyCheck` | 回写检测结果的主要状态表 |
+| Model | `app/models.py::LeadNotification` | 任务 / 回复回写可联动通知状态 |
+| Model | `app/models.py::DouyinLead` | 回复命中时可更新线索状态 |
+| Test | `tests/test_agent_status.py` | 断言 heartbeat 200 且不触发微信自动化 |
+| Test | `tests/test_p0_5a_wechat_tasks.py` | 覆盖 pending、result 写状态和联动行为 |
+| Test | `tests/test_p0_reply_2_agent_write_back.py` | 覆盖 agent-write-back 的数据库回写语义 |
+| Test | `tests/test_wechat_task_history_api.py` | 明确现有 `/pending` 和 `/result` 保持无作用域 Local Agent 契约 |
+
+### 18.5 后续兼容鉴权精确范围
+
+建议进入 `P1-LOCAL-AGENT-AUTH-COMPAT-GATE-1`，最小范围只覆盖以下 9000 接口：
+
+1. `POST /agent/heartbeat`
+2. `GET /wechat-tasks/pending`
+3. `GET /wechat-tasks/{task_id}`：浏览器已有 NewCar 分支，但 19000 指定 task_id 拉取会复用，需要兼容 Agent token
+4. `POST /wechat-tasks/{task_id}/result`
+5. `POST /replies/agent-write-back`
+
+兼容目标：
+
+- 浏览器入口继续走 NewCar 登录态和既有权限。
+- Local Agent 入口新增 Agent token / agent key 分支。
+- Agent token 映射可信 `merchant_id`，请求体 / query 伪造 `merchant_id` 不生效。
+- pending 拉取和 result / write-back 回写都必须校验任务、线索、销售、检测记录属于同一可信 merchant。
+- 兼容期可先观测和告警，再切换强制拦截，避免现场 19000 断链。
+
+### 18.6 不建议直接 Nginx deny 的原因
+
+1. 19000 Local Agent 当前通过 9000 的 `/agent/heartbeat`、`/wechat-tasks/pending`、`/wechat-tasks/{task_id}`、`/wechat-tasks/{task_id}/result`、`/replies/agent-write-back` 完成心跳、拉任务和回写。
+2. 直接在公网反代层 deny 容易误伤已有局域网 / 现场 Local Agent 链路，且无法区分浏览器 NewCar 用户和 Agent 机器身份。
+3. 当前 `GET /wechat-tasks/{task_id}` 同时存在浏览器详情读取和 19000 指定任务拉取语义，需要代码层兼容鉴权，而不是粗暴按路径阻断。
+4. 即使后续反代做内网限制，代码层仍应有认证、归属校验和审计日志，不能把 Nginx 当唯一安全边界。
+
+### 18.7 风险结论
+
+- `POST /agent/heartbeat`：高风险。可伪造 Agent 状态，但不写 DB。
+- `GET /wechat-tasks/pending`：高风险。补齐合法参数后可读任务队列，且当前无商户隔离。
+- `POST /wechat-tasks/{task_id}/result`：高风险。task 存在时可写库并联动业务状态。
+- `POST /replies/agent-write-back`：高风险。补齐合法 body 后可伪造回复检测回写。
+
+本轮未修改业务代码；后续应进入 `P1-LOCAL-AGENT-AUTH-COMPAT-GATE-1`，先做兼容式 Local Agent 鉴权和归属校验，再考虑反代层收敛。
+
+## 19. P1-LOCAL-AGENT-AUTH-COMPAT-GATE-1
+
+### 19.1 本轮目标
+
+给公网已暴露的 Local Agent 入口增加兼容式机器身份鉴权能力。本轮默认不强制拦截无 token 的旧 19000 请求，避免现场 Local Agent 掉线。
+
+### 19.2 已确认公网暴露事实
+
+以下接口已确认经公网反代暴露，并且能够到达 9000 FastAPI：
+
+1. `POST /api/agent/heartbeat`
+2. `GET /api/wechat-tasks/pending`
+3. `POST /api/wechat-tasks/{task_id}/result`
+4. `POST /api/replies/agent-write-back`
+
+### 19.3 新增配置
+
+新增后端配置项：
+
+```env
+LOCAL_AGENT_AUTH_REQUIRED=false
+LOCAL_AGENT_TOKENS=demo_merchant_001:local-agent-dev-token
+```
+
+`LOCAL_AGENT_TOKENS` 格式为：
+
+```text
+merchant_id:token,merchant_id2:token2
+```
+
+请求头为：
+
+```text
+X-Local-Agent-Token: <token>
+```
+
+token 只允许配置在后端 / Local Agent 运行环境中，禁止写入任何 `VITE_*` 前端环境变量。
+
+### 19.4 兼容模式行为
+
+当 `LOCAL_AGENT_AUTH_REQUIRED=false`：
+
+1. 无 token：兼容放行，保持旧 19000 行为不变，同时记录 warning 日志。
+2. 正确 token：通过，并解析出 token 对应的 `merchant_id`。
+3. 错误 token：返回 401，不进入业务逻辑。
+
+legacy warning 日志只记录 `path`、`method`、`client_ip`、`auth_mode`，不记录 token、不记录任务消息体或敏感业务内容。
+
+### 19.5 强制模式行为
+
+当 `LOCAL_AGENT_AUTH_REQUIRED=true`：
+
+1. 无 token：返回 401。
+2. 错误 token：返回 401。
+3. 正确 token：通过，并解析出 token 对应的 `merchant_id`。
+
+本轮只完成 token 身份识别与入口拦截，不基于请求体里的 `merchant_id` 做信任判断，也不新增数据库字段。
+
+### 19.6 本轮接入接口
+
+本轮只接入以下四个接口：
+
+1. `POST /agent/heartbeat`
+2. `GET /wechat-tasks/pending`
+3. `POST /wechat-tasks/{task_id}/result`
+4. `POST /replies/agent-write-back`
+
+未改动内容：
+
+1. 不改 19000 Local Agent。
+2. 不改任务状态机。
+3. 不改 `/wechat-tasks/pending` 路由语义。
+4. 不改 NewCar 登录。
+5. 不改 `/auth/callback`。
+6. 不改 RAG / 知识库。
+7. 不改自动发送链路。
+8. 不下线 `/replies/current-wechat-detect` 和 `/replies/debug/*`。
+
+### 19.7 灰度强制建议
+
+本轮上线后可先保持：
+
+```env
+LOCAL_AGENT_AUTH_REQUIRED=false
+```
+
+观察 legacy warning 日志，确认所有现场 Local Agent 已升级并携带 `X-Local-Agent-Token` 后，再灰度切换：
+
+```env
+LOCAL_AGENT_AUTH_REQUIRED=true
+```
+
+一期 token 粒度为每商户一个。后续如果需要更强归属校验，应在数据模型补齐 `merchant_id` / Agent 归属字段后，再对 pending 拉取、任务详情、结果回写和回复检测回写做强校验。
