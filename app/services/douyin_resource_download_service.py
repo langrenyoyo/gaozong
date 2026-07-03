@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from app import config
 from app.integrations.douyin_webhook import parse_content
 from app.models import DouyinMessageResourceDownload, DouyinWebhookEvent
+from app.services.douyin_merchant_isolation import (
+    douyin_event_participants,
+    require_douyin_account_for_merchant,
+)
 from app.services.douyin_openapi_client import call_douyin_openapi
 
 
@@ -31,6 +35,7 @@ RESOURCE_URL_KEYS = (
 def download_douyin_resource(
     db: Session,
     *,
+    merchant_id: str | None = None,
     conversation_short_id: str,
     server_message_id: str | None = None,
     open_id: str | None = None,
@@ -55,6 +60,12 @@ def download_douyin_resource(
         raise HTTPException(status_code=400, detail="media_type must be image or video")
     if not resolved["url"]:
         raise HTTPException(status_code=400, detail="resource_url_not_found")
+    require_douyin_account_for_merchant(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=resolved["account_open_id"],
+        code="DOUYIN_RESOURCE_FORBIDDEN",
+    )
 
     request_payload = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,
@@ -169,12 +180,20 @@ def _resolve_context(
     content = _payload_content(row)
     resolved_media_type = _optional_str(media_type) or _media_type_from_content(row, content)
     resolved_url = _optional_str(url) or _resource_url_from_content(content)
-    resolved_open_id = _optional_str(open_id) or _resource_open_id(row, content)
+    account_open_id, row_open_id = douyin_event_participants(row)
+    request_open_id = _optional_str(open_id)
+    if request_open_id and row_open_id and request_open_id != row_open_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "DOUYIN_RESOURCE_FORBIDDEN", "message": "无权访问该抖音账号、会话或资源"},
+        )
+    resolved_open_id = request_open_id or row_open_id or _resource_open_id(row, content)
     if not resolved_media_type:
         raise HTTPException(status_code=400, detail="media_type is required")
 
     return {
         "webhook_event_id": row.id,
+        "account_open_id": account_open_id,
         "server_message_id": row.server_message_id,
         "open_id": resolved_open_id,
         "media_type": resolved_media_type,

@@ -15,6 +15,7 @@ from app import config
 from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
+from app.services.douyin_merchant_isolation import require_douyin_account_for_merchant
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
 
@@ -27,6 +28,7 @@ DEFAULT_SEND_SCENE = "im_reply_msg"
 def send_manual_private_message(
     db: Session,
     *,
+    merchant_id: str | None = None,
     conversation_short_id: str,
     content: str,
     customer_open_id: str | None = None,
@@ -47,6 +49,13 @@ def send_manual_private_message(
         conversation_short_id=conversation_short_id,
         customer_open_id=customer_open_id,
     )
+    if context is None and customer_open_id:
+        conversation_context = get_send_msg_context(db, conversation_short_id=conversation_short_id)
+        if conversation_context is not None:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "DOUYIN_CONVERSATION_FORBIDDEN", "message": "无权访问该抖音账号、会话或资源"},
+            )
     if context is None:
         # 缺少可回复前置事件（如该会话只剩 im_send_msg 企业号发出消息）：不调用上游，
         # 返回稳定错误码，便于前端识别为「缺少可回复上下文，勿重试」。
@@ -61,6 +70,12 @@ def send_manual_private_message(
         raise HTTPException(status_code=400, detail="send_msg context missing conversation_id or msg_id")
     if _is_context_expired(context.get("message_create_time")):
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
+    require_douyin_account_for_merchant(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=context.get("account_open_id"),
+        code="DOUYIN_ACCOUNT_FORBIDDEN",
+    )
 
     result = _send_private_message_with_context(
         db,

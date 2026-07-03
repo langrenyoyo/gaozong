@@ -143,7 +143,7 @@
 
 浏览器业务接口已经接入登录和权限门禁，这是关键进展。但账号查询、私信发送、资源下载、图片上传的服务层仍需要显式使用当前 `merchant_id` 校验 account / open_id / conversation / resource 归属。
 
-建议后续统一把 RequestContext 传入服务层，避免只依赖前端不传 `merchant_id` 或仅依赖权限门禁。
+`P1-LIVE-CHECK-MERCHANT-ISOLATION-1` 已完成最小修复：accounts、messages/send、resources/download、resources/upload-image 已接入当前商户归属校验。后续仍建议在数据模型中补齐更结构化的 account / conversation / resource 归属字段，减少从 raw event 解析的兼容逻辑。
 
 ### 6.4 资源下载 URL 边界不足
 
@@ -188,11 +188,11 @@
 
 - OAuth state 生成、不可预测、过期、一次性消费、商户绑定、redirect 目标绑定测试。
 - `webhook-observe` 开关误开时不能绕过签名进入正式管线的测试。
-- live-check `accounts` 的商户隔离测试。
-- `messages/send` 按当前商户校验 conversation/account 归属的测试。
-- `resources/download` 按当前商户校验资源归属的测试。
+- live-check `accounts` 的商户隔离测试已在 `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` 补齐。
+- `messages/send` 按当前商户校验 conversation/account/customer open_id 归属的测试已在 `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` 补齐。
+- `resources/download` 按当前商户校验资源归属的测试已在 `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` 补齐。
 - `resources/download` 禁止任意 URL / URL 白名单测试。
-- `resources/upload-image` 按当前商户校验 open_id 归属的测试。
+- `resources/upload-image` 按当前商户校验 open_id 归属的测试已在 `P1-LIVE-CHECK-MERCHANT-ISOLATION-1` 补齐。
 - raw_body、私信内容、send_msg_context 的脱敏和留存策略测试。
 - 公网路径暴露策略无法完全由单元测试覆盖，需要部署配置审计或集成验收清单。
 
@@ -249,3 +249,48 @@
 - RAG / 知识库。
 - Local Agent / 19000。
 - 私信真实发送逻辑和自动发送链路。
+
+## 12. P1-LIVE-CHECK-MERCHANT-ISOLATION-1
+
+本轮已对 live-check 浏览器业务接口补齐最小商户归属校验，目标是防止已登录 A 商户通过构造 `account_open_id`、`conversation_short_id`、`open_id` 或资源上下文读取、下载、上传或发送到 B 商户数据。
+
+### 12.1 本轮发现的缺口
+
+- `GET /integrations/douyin/live-check/accounts` 原先在已登录浏览器上下文下仍会混入无商户归属的内存账号 / webhook 事件兜底账号，存在跨商户账号可见风险。
+- `POST /integrations/douyin/live-check/messages/send` 原先只依赖 `send_msg_context` 和 24 小时窗口，未显式确认该企业号属于当前 `RequestContext.merchant_id`。
+- `POST /integrations/douyin/live-check/resources/download` 原先未在调用上游前确认资源事件对应企业号属于当前商户，也未拒绝请求体伪造不匹配的 `open_id`。
+- `POST /integrations/douyin/live-check/resources/upload-image` 原先带 `open_id` 上传时未确认该客户 open_id 出现在当前商户授权企业号会话中。
+
+### 12.2 修复范围
+
+- `accounts`：只返回 `bind_status=1` 且 `merchant_id=context.merchant_id` 的持久化授权账号；登录态浏览器接口不再混入无归属 memory / event fallback。
+- `messages/send`：继续要求 NewCar 登录和 `auto_wechat:douyin_ai_cs` 权限；发送前校验 send context 派生出的 `account_open_id` 属于当前商户；请求体伪造 `merchant_id` 不生效；请求体 `customer_open_id` 与会话上下文不匹配时返回 403。
+- `resources/download`：从入库 webhook 事件解析企业号与客户 open_id；企业号不属于当前商户时返回 403；请求体 `open_id` 与事件客户不一致时返回 403。
+- `resources/upload-image`：传入 `open_id` 时，必须能在当前商户授权企业号的会话事件中找到该客户；不传 `open_id` 的通用素材上传保持原行为。
+- `sync-bind-info`：保持已有策略，继续使用 `RequestContext.merchant_id` 写入 / 回填账号归属，跨商户 owner conflict 不覆盖。
+
+### 12.3 归属校验规则
+
+| 对象 | 校验规则 | 失败策略 |
+|---|---|---|
+| merchant | 所有 live-check 浏览器业务接口使用 `RequestContext`，不信任请求体 `merchant_id` / `tenant_id` | 缺少可信商户上下文返回 403 |
+| account_open_id | 必须存在于 `DouyinAuthorizedAccount`，`bind_status=1`，且 `merchant_id` 等于当前商户 | `DOUYIN_ACCOUNT_FORBIDDEN` 或 `DOUYIN_RESOURCE_FORBIDDEN` |
+| conversation_short_id | 发送前只使用服务端入库的 `im_receive_msg` / `im_enter_direct_msg` 生成 send context | 不存在返回原有 send context 错误；客户不匹配返回 `DOUYIN_CONVERSATION_FORBIDDEN` |
+| customer open_id | 必须与 send context 或当前商户授权企业号事件中的客户一致 | `DOUYIN_CONVERSATION_FORBIDDEN` 或 `DOUYIN_RESOURCE_FORBIDDEN` |
+| resource | 必须来自可解析的入库事件，且事件企业号属于当前商户 | `DOUYIN_RESOURCE_FORBIDDEN` |
+
+### 12.4 保持不变
+
+- 不改 NewCar exchange-code。
+- 不恢复 `/auth/callback`。
+- 不改 webhook 签名。
+- 不改 OAuth state。
+- 不改 resource SSRF，本轮只做归属校验；URL 白名单仍留给 `P1-LIVE-CHECK-RESOURCE-SSRF-GUARD-1`。
+- 不改真实私信发送业务语义，不触发真实私信发送。
+- 不改 RAG / 知识库。
+- 不改 Local Agent / 19000。
+- 不改自动发送链路。
+
+### 12.5 测试结果
+
+- `python -m pytest tests/test_douyin_live_check.py -q`：99 passed。

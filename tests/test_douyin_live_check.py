@@ -259,6 +259,36 @@ def _insert_live_forward_account_binding() -> None:
         db.close()
 
 
+def _insert_authorized_account(
+    *,
+    open_id: str,
+    merchant_id: str = "merchant-1",
+    bind_status: int = 1,
+) -> None:
+    db = TestSession()
+    try:
+        existing = (
+            db.query(DouyinAuthorizedAccount)
+            .filter_by(main_account_id=123, open_id=open_id)
+            .first()
+        )
+        if existing is None:
+            db.add(
+                DouyinAuthorizedAccount(
+                    main_account_id=123,
+                    open_id=open_id,
+                    merchant_id=merchant_id,
+                    bind_status=bind_status,
+                )
+            )
+        else:
+            existing.merchant_id = merchant_id
+            existing.bind_status = bind_status
+        db.commit()
+    finally:
+        db.close()
+
+
 def _insert_live_auto_reply_binding(
     *,
     account_open_id: str = "live_forward_account_001",
@@ -359,7 +389,10 @@ def _insert_send_context_event(
     from_user_id: str = "send_customer_001",
     to_user_id: str = "send_account_001",
     message_create_time=None,
+    merchant_id: str = "merchant-1",
 ) -> None:
+    account_open_id = to_user_id if event in {"im_receive_msg", "im_enter_direct_msg"} else from_user_id
+    _insert_authorized_account(open_id=account_open_id, merchant_id=merchant_id)
     db = TestSession()
     try:
         payload = {
@@ -407,7 +440,9 @@ def _insert_resource_event(
     message_type: str = "image",
     resource_url: str | None = "https://api-normal.amemv.com/im_open/media?resource=image001",
     resource_key: str = "url",
+    merchant_id: str = "merchant-1",
 ) -> None:
+    _insert_authorized_account(open_id=to_user_id, merchant_id=merchant_id)
     db = TestSession()
     try:
         content = {
@@ -1115,6 +1150,7 @@ def test_accounts_prefers_persisted_bind_info_and_keeps_webhook_fallback():
             DouyinAuthorizedAccount(
                 main_account_id=123,
                 open_id="account_persisted",
+                merchant_id="merchant-1",
                 account_name="Persisted Account",
                 bind_status=1,
                 raw_body_json="{}",
@@ -1130,10 +1166,21 @@ def test_accounts_prefers_persisted_bind_info_and_keeps_webhook_fallback():
 
     assert data["items"][0]["account_open_id"] == "account_persisted"
     assert data["items"][0]["source"] == "persisted_bind_info"
-    assert {item["account_open_id"] for item in data["items"]} == {
-        "account_persisted",
-        "account_from_event",
-    }
+    assert {item["account_open_id"] for item in data["items"]} == {"account_persisted"}
+
+
+def test_accounts_hides_other_merchant_authorized_accounts():
+    _insert_authorized_account(open_id="account_current", merchant_id="merchant-1")
+    _insert_authorized_account(open_id="account_other", merchant_id="merchant-2")
+    client = _client_with_required_context(merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/accounts")
+
+    assert resp.status_code == 200
+    open_ids = {item["account_open_id"] for item in resp.json()["data"]["items"]}
+    assert "account_current" in open_ids
+    assert "account_other" not in open_ids
 
 
 def test_sync_bind_info_persists_inactive_but_accounts_hides_it_by_default():
@@ -1252,6 +1299,81 @@ def test_send_message_rejects_missing_context_and_does_not_call_upstream():
     assert resp.status_code == 404
     assert "context" in json.dumps(resp.json(), ensure_ascii=False).lower()
     mock_post.assert_not_called()
+
+
+def test_send_message_rejects_other_merchant_conversation_without_calling_upstream():
+    _insert_send_context_event(merchant_id="merchant-2")
+    client = _client_with_required_context(merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "hello",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_ACCOUNT_FORBIDDEN"
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinPrivateMessageSend).count() == 0
+    finally:
+        db.close()
+
+
+def test_send_message_rejects_forged_customer_open_id_without_calling_upstream():
+    _insert_send_context_event()
+    client = _client_with_required_context(merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "other_customer_001",
+                "content": "hello",
+                "manual_confirmed": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_CONVERSATION_FORBIDDEN"
+    mock_post.assert_not_called()
+
+
+def test_send_message_ignores_forged_payload_merchant_id():
+    _insert_send_context_event()
+    client = _client_with_required_context(merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"msg_id": "upstream_sent_msg_001"}},
+        )
+        resp = client.post(
+            "/integrations/douyin/live-check/messages/send",
+            json={
+                "conversation_short_id": "send_conv_001",
+                "customer_open_id": "send_customer_001",
+                "content": "hello",
+                "manual_confirmed": True,
+                "merchant_id": "merchant-2",
+            },
+        )
+
+    assert resp.status_code == 200
+    sent_body = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    assert sent_body["from_user_id"] == "send_account_001"
 
 
 def test_send_message_success_uses_signed_openapi_body_and_persists_sent_record():
@@ -1553,6 +1675,31 @@ def test_download_resource_rejects_missing_url_without_calling_upstream():
     mock_post.assert_not_called()
 
 
+def test_download_resource_rejects_other_merchant_account_without_calling_upstream():
+    _insert_resource_event(merchant_id="merchant-2")
+    client = _client_with_required_context(merchant_id="merchant-1")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/download",
+            json={
+                "conversation_short_id": "resource_conv_001",
+                "server_message_id": "resource_msg_001",
+                "media_type": "image",
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_RESOURCE_FORBIDDEN"
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinMessageResourceDownload).count() == 0
+    finally:
+        db.close()
+
+
 def test_download_resource_supports_file_url_field():
     _insert_resource_event(
         message_type="user_local_image",
@@ -1734,6 +1881,13 @@ def test_download_resource_upstream_business_error_persists_failed_record_withou
 
 def test_upload_image_success_uses_signed_openapi_body_and_persists_sanitized_record():
     client = _client()
+    _insert_resource_event(
+        event_id_suffix="upload_owner",
+        conversation_short_id="upload_conv_001",
+        server_message_id="upload_msg_001",
+        from_user_id="customer_open_001",
+        to_user_id="upload_account_001",
+    )
     png_base64 = _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
@@ -1914,7 +2068,39 @@ def test_upload_image_upstream_error_persists_failed_record_without_secret_or_ba
         assert record.error_message
         assert "super-secret" not in (record.response_body_json or "")
         assert png_base64 not in (record.request_body_json or "")
-        assert png_base64 not in (record.response_body_json or "")
+    finally:
+        db.close()
+
+
+def test_upload_image_rejects_other_merchant_open_id_without_calling_upstream():
+    _insert_resource_event(
+        event_id_suffix="upload_other",
+        conversation_short_id="upload_other_conv_001",
+        server_message_id="upload_other_msg_001",
+        from_user_id="other_customer_open_001",
+        to_user_id="other_upload_account_001",
+        merchant_id="merchant-2",
+    )
+    client = _client_with_required_context(merchant_id="merchant-1")
+    png_base64 = _image_base64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.post(
+            "/integrations/douyin/live-check/resources/upload-image",
+            json={
+                "file_name": "test.png",
+                "image_base64": png_base64,
+                "open_id": "other_customer_open_001",
+            },
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_RESOURCE_FORBIDDEN"
+    mock_post.assert_not_called()
+    db = TestSession()
+    try:
+        assert db.query(DouyinImageUpload).count() == 0
     finally:
         db.close()
 
@@ -2084,7 +2270,7 @@ def test_authorized_accounts_empty_before_oauth_callback():
     data = resp.json()["data"]
     assert data["items"] == []
     assert data["total"] == 0
-    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
+    assert data["source"] == "persisted_bind_info_current_merchant"
 
 
 def test_authorized_accounts_returns_oauth_callback_account_without_secret():
@@ -2106,16 +2292,8 @@ def test_authorized_accounts_returns_oauth_callback_account_without_secret():
 
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["total"] == 1
-    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
-    account = data["items"][0]
-    assert account["account_open_id"] == "open-account-001"
-    assert account["open_id"] == "open-account-001"
-    assert account["account_name"] == "Authorized Account"
-    assert account["avatar_url"] == "https://avatar.example.com/a.png"
-    assert account["status"] == "active"
-    assert account["is_active"] is True
-    assert account["unread_count"] == 0
+    assert data["total"] == 0
+    assert data["source"] == "persisted_bind_info_current_merchant"
     assert "token-should-not-leak" not in json.dumps(resp.json(), ensure_ascii=False)
 
 

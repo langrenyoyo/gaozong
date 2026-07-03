@@ -547,13 +547,11 @@ def bind_authorized_account_by_open_id(
     }
 
 
-def list_persisted_authorized_accounts(db: Session) -> dict[str, Any]:
-    rows = (
-        db.query(DouyinAuthorizedAccount)
-        .filter(DouyinAuthorizedAccount.bind_status == 1)
-        .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
-        .all()
-    )
+def list_persisted_authorized_accounts(db: Session, *, merchant_id: str | None = None) -> dict[str, Any]:
+    query = db.query(DouyinAuthorizedAccount).filter(DouyinAuthorizedAccount.bind_status == 1)
+    if merchant_id:
+        query = query.filter(DouyinAuthorizedAccount.merchant_id == merchant_id)
+    rows = query.order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc()).all()
     items = [_persisted_account_item(row) for row in rows]
     return {"items": items, "total": len(items), "source": "persisted_bind_info"}
 

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.models import DouyinImageUpload
+from app.services.douyin_merchant_isolation import require_customer_open_id_for_merchant
 from app.services.douyin_openapi_client import call_douyin_openapi
 
 
@@ -31,6 +32,7 @@ ALLOWED_IMAGE_TYPES = {
 def upload_douyin_image(
     db: Session,
     *,
+    merchant_id: str | None = None,
     file_name: str,
     image_base64: str,
     open_id: str | None = None,
@@ -43,6 +45,13 @@ def upload_douyin_image(
         "file_name": normalized["file_name"],
     }
     normalized_open_id = _optional_str(open_id)
+    if normalized_open_id:
+        require_customer_open_id_for_merchant(
+            db,
+            merchant_id=merchant_id,
+            customer_open_id=normalized_open_id,
+            code="DOUYIN_RESOURCE_FORBIDDEN",
+        )
     if normalized_open_id:
         request_payload["open_id"] = normalized_open_id
 

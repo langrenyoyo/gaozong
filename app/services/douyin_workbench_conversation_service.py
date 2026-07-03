@@ -274,10 +274,20 @@ def build_conversation_tags(db: Session, messages: list[WorkbenchMessage]) -> li
     return tags
 
 
-def list_douyin_workbench_accounts_with_event_fallback(db: Session) -> dict[str, Any]:
+def list_douyin_workbench_accounts_with_event_fallback(
+    db: Session,
+    *,
+    merchant_id: str | None = None,
+) -> dict[str, Any]:
     """Return persisted authorized accounts, then live-check memory, then event fallback."""
-    persisted = list_persisted_authorized_accounts(db)
+    persisted = list_persisted_authorized_accounts(db, merchant_id=merchant_id)
     items = list(persisted.get("items") or [])
+    if merchant_id:
+        return {
+            "items": items,
+            "total": len(items),
+            "source": "persisted_bind_info_current_merchant",
+        }
     existing_open_ids = {
         str(item.get("account_open_id") or item.get("open_id"))
         for item in items

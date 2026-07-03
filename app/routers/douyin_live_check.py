@@ -109,6 +109,15 @@ def _safe_query_value(value: str | None) -> str:
     return quote(str(value), safe="")
 
 
+def _require_merchant_id(context: RequestContext) -> str:
+    if not context.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
+        )
+    return context.merchant_id
+
+
 @router.get("/auth-redirect")
 def auth_redirect(
     request: Request,
@@ -206,7 +215,10 @@ def accounts(
     require_permission("auto_wechat:douyin_ai_cs")(context)
     _ensure_enabled()
     return DouyinLiveCheckAccountsResponse(
-        data=list_douyin_workbench_accounts_with_event_fallback(db)
+        data=list_douyin_workbench_accounts_with_event_fallback(
+            db,
+            merchant_id=_require_merchant_id(context),
+        )
     )
 
 
@@ -277,6 +289,7 @@ def send_message(
     _ensure_enabled()
     data = send_manual_private_message(
         db,
+        merchant_id=_require_merchant_id(context),
         conversation_short_id=request.conversation_short_id,
         customer_open_id=request.customer_open_id,
         content=request.content,
@@ -297,6 +310,7 @@ def download_resource(
     _ensure_enabled()
     data = download_douyin_resource(
         db,
+        merchant_id=_require_merchant_id(context),
         conversation_short_id=request.conversation_short_id,
         server_message_id=request.server_message_id,
         open_id=request.open_id,
@@ -316,6 +330,7 @@ def upload_image(
     _ensure_enabled()
     data = upload_douyin_image(
         db,
+        merchant_id=_require_merchant_id(context),
         file_name=request.file_name,
         image_base64=request.image_base64,
         open_id=request.open_id,
