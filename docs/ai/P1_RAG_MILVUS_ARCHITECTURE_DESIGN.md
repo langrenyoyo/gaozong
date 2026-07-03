@@ -152,7 +152,8 @@ class VectorStore:
 ```text
 RAG_VECTOR_BACKEND=sqlite|milvus
 MILVUS_URI=
-MILVUS_TOKEN=
+MILVUS_USERNAME=
+MILVUS_PASSWORD=
 MILVUS_DB_NAME=
 MILVUS_COLLECTION=xg_douyin_ai_cs_chunks
 MILVUS_DIMENSION=
@@ -359,9 +360,9 @@ Milvus
 4. 9000 注入 `allowed_category_keys`，不接受前端覆盖。
 5. 9100 只信任 9000 注入的 `agent_config` 和 scope。
 6. 9100 遇到缺失 `merchant_id` 或空分类过滤时不得查全库。
-7. Milvus token 只存在 9100 环境变量，不进入前端和 9000。
+7. Milvus 账号密码只存在 9100 环境变量，不进入前端和 9000；甲方当前提供的是 username/password 鉴权模式。
 8. 生产环境 Milvus 必须走内网或私网，不建议公网暴露。
-9. 日志不得打印完整客户私信、手机号、微信号、完整 prompt、Milvus token。
+9. 日志不得打印完整客户私信、手机号、微信号、完整 prompt、Milvus 密码。
 10. source_chunks 返回给前端时建议保留标题、chunk_id、短摘要和 score，不直接返回超长原文。
 
 ## 11. Fallback 策略
@@ -412,7 +413,8 @@ Milvus
 |---|---|---|---|
 | RAG_VECTOR_BACKEND | sqlite | sqlite 或 milvus | 显式配置，灰度期建议 milvus |
 | MILVUS_URI | 可空 | 必填于 milvus | 必填 |
-| MILVUS_TOKEN | 可空 | 按环境配置 | 必填或使用内网鉴权 |
+| MILVUS_USERNAME | 可空 | 按环境配置 | 必填 |
+| MILVUS_PASSWORD | 可空 | 按环境配置 | 必填，禁止写入代码和日志 |
 | MILVUS_DB_NAME | 可空 | 建议独立库 | 必填 |
 | MILVUS_COLLECTION | 默认 `xg_douyin_ai_cs_chunks` | 显式配置 | 显式配置 |
 | MILVUS_DIMENSION | 可空 | 必须匹配 embedding 模型 | 必须匹配 embedding 模型 |
@@ -509,7 +511,8 @@ git diff --check
 ```text
 RAG_VECTOR_BACKEND=sqlite|milvus
 MILVUS_URI=
-MILVUS_TOKEN=
+MILVUS_USERNAME=
+MILVUS_PASSWORD=
 MILVUS_DB_NAME=
 MILVUS_COLLECTION=
 MILVUS_DIMENSION=
@@ -518,9 +521,9 @@ MILVUS_INDEX_TYPE=
 MILVUS_METRIC_TYPE=
 ```
 
-默认值仍为 `RAG_VECTOR_BACKEND=sqlite`。sqlite 模式下，`MILVUS_*` 可以为空，也不要求安装 `pymilvus`。只有显式设置 `RAG_VECTOR_BACKEND=milvus` 时，才校验 `MILVUS_URI`、`MILVUS_COLLECTION`、`MILVUS_DIMENSION` 和 `pymilvus` 依赖。
+默认值仍为 `RAG_VECTOR_BACKEND=sqlite`。sqlite 模式下，`MILVUS_*` 可以为空，也不要求安装 `pymilvus`。只有显式设置 `RAG_VECTOR_BACKEND=milvus` 时，才校验 `MILVUS_URI`、`MILVUS_USERNAME`、`MILVUS_PASSWORD`、`MILVUS_COLLECTION`、`MILVUS_DIMENSION` 和 `pymilvus` 依赖。
 
-配置错误不会打印 `MILVUS_TOKEN`。
+甲方当前提供 Milvus username/password 鉴权模式；账号密码只进入 9100 环境变量，前端和 9000 不接触。配置错误不会打印 `MILVUS_PASSWORD`。
 
 ### 18.3 VectorStore 抽象位置
 

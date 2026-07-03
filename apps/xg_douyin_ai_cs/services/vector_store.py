@@ -96,6 +96,10 @@ def _validate_milvus_config(config: Settings) -> None:
     missing = []
     if not config.milvus_uri:
         missing.append("MILVUS_URI")
+    if not config.milvus_username:
+        missing.append("MILVUS_USERNAME")
+    if not config.milvus_password:
+        missing.append("MILVUS_PASSWORD")
     if not config.milvus_collection:
         missing.append("MILVUS_COLLECTION")
     if config.milvus_dimension is None:

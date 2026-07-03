@@ -35,8 +35,12 @@ class Settings:
         return os.environ.get("MILVUS_URI", "").strip()
 
     @property
-    def milvus_token(self) -> str:
-        return os.environ.get("MILVUS_TOKEN", "").strip()
+    def milvus_username(self) -> str:
+        return os.environ.get("MILVUS_USERNAME", "").strip()
+
+    @property
+    def milvus_password(self) -> str:
+        return os.environ.get("MILVUS_PASSWORD", "").strip()
 
     @property
     def milvus_db_name(self) -> str:
