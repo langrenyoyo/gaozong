@@ -774,3 +774,72 @@ python -m py_compile apps\xg_douyin_ai_cs\services\vector_store.py apps\xg_douyi
 ```
 
 下一步建议进入 `P1-RAG-MILVUS-SEARCH-FALLBACK-1`，在显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。
+
+## P1-RAG-MILVUS-SEARCH-FALLBACK-1
+
+本轮在 9100 RAG 服务中接入 Milvus search。只有 `RAG_VECTOR_BACKEND=milvus` 时才优先走 Milvus；默认 `sqlite` 行为保持不变。
+
+### search 接入点
+
+1. `apps/xg_douyin_ai_cs/rag/repository.py` 继续作为 `/rag/search` 和 reply-suggestion 的统一检索入口。
+2. `RAG_VECTOR_BACKEND=sqlite` 时仍走原 SQLite 向量检索和词法 fallback。
+3. `RAG_VECTOR_BACKEND=milvus` 时由 `MilvusVectorStore.search()` 检索；失败后回落到 SQLite 原路径。
+
+### metadata filter 规则
+
+Milvus search 表达式强制包含：
+
+1. `tenant_id == 当前请求 tenant_id`
+2. `merchant_id == 当前请求 merchant_id`
+3. `douyin_account_id == 当前请求 douyin_account_id`
+4. `status == "active"`
+5. `category_key in allowed_category_keys`
+
+`category_key` 多值使用 Milvus in 表达式，字符串值会做引号和反斜杠转义，避免表达式拼接错误。
+
+### 空分类和 RAG 关闭
+
+1. `category_keys=[]` 或未提供可信分类范围时，Milvus backend 直接返回空结果，不查 Milvus，不裸搜全库。
+2. `rag_enabled=false` 仍由 reply-suggestion 层在调用 `repository.search()` 前拦截，因此不会触发 Milvus。
+3. `tenant_id` / `merchant_id` 缺失时，Milvus backend 直接返回空结果。
+
+### fallback 策略
+
+1. Milvus search 成功：使用 Milvus 返回的 chunk。
+2. Milvus search 抛错或 query embedding 生成失败：记录 `fallback_reason=milvus_search_failed`，回落到 SQLite 检索。
+3. fallback 不改变 reply-suggestion 响应 schema，不放宽 `auto_send`、`manual_required` 或 9000 后处理门禁。
+
+### source_chunks / rag_sources 兼容性
+
+Milvus 命中会归一化为既有 `RagSearchItem`，字段继续包含：
+
+1. `chunk_id`
+2. `document_id`
+3. `title`
+4. `chunk_text`
+5. `score`
+
+reply-suggestion 仍沿用现有 `source_chunks` / `rag_sources` 映射逻辑，不新增前端字段。
+
+### 本轮未接入
+
+1. 未调用真实 LLM 做测试。
+2. 未做真实 Milvus canary search。
+3. 未修改 9000 接口 schema。
+4. 未修改 `/knowledge-training/ask` 和 `/feedback` schema。
+5. 未修改 NewCar、live-check、Local Agent / 19000 或自动发送 gate。
+
+### 测试结果
+
+已通过：
+
+```bash
+python -m pytest tests/test_xg_douyin_ai_cs_vector_store.py -q
+python -m pytest tests/test_xg_douyin_ai_cs_rag.py -q
+python -m pytest tests/test_douyin_ai_cs_proxy.py -q
+python -m pytest tests/test_knowledge_training_api.py -q
+python -m pytest tests/test_agent_knowledge_categories.py -q
+python -m py_compile apps\xg_douyin_ai_cs\services\vector_store.py apps\xg_douyin_ai_cs\scripts\milvus_collection_check.py
+```
+
+下一步建议进入 `P1-RAG-MILVUS-CANARY-E2E-VERIFY-1`，使用非业务 synthetic canary 数据做一次真实写入、检索和删除闭环验证。

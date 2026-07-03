@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from typing import Any, Protocol
 
 from apps.xg_douyin_ai_cs.config import Settings, settings
-from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+from apps.xg_douyin_ai_cs.rag.models import RagSearchItem, RagSearchRequest
 
 
 class VectorStoreError(RuntimeError):
@@ -125,8 +125,54 @@ class MilvusVectorStore:
             ) from exc
         return {"backend": self.backend, "upserted": len(rows)}
 
-    def search(self, payload: RagSearchRequest, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("MILVUS_SEARCH_NOT_IMPLEMENTED")
+    def search(self, payload: RagSearchRequest, *, query_embedding: object, **kwargs: Any) -> list[RagSearchItem]:
+        category_keys = _normalize_required_filter_values(payload.category_keys)
+        if not category_keys or not str(payload.tenant_id or "").strip() or not str(payload.merchant_id or "").strip():
+            return []
+        embedding = _coerce_vector(query_embedding)
+        if len(embedding) != self.config.milvus_dimension:
+            raise VectorStoreConfigError(
+                "MILVUS_VECTOR_DIMENSION_MISMATCH",
+                "Milvus query embedding dimension does not match MILVUS_DIMENSION",
+                phase="search",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+            )
+        self.ensure_collection(create_if_missing=False)
+        expr = _build_milvus_search_expr(
+            tenant_id=payload.tenant_id,
+            merchant_id=payload.merchant_id,
+            douyin_account_id=payload.douyin_account_id,
+            category_keys=category_keys,
+        )
+        try:
+            collection = self._pymilvus.Collection(name=self.config.milvus_collection, using=self._alias)
+            result = collection.search(
+                data=[embedding],
+                anns_field="embedding",
+                param={"metric_type": self.config.milvus_metric_type, "params": {}},
+                limit=int(payload.top_k),
+                expr=expr,
+                output_fields=[
+                    "chunk_id",
+                    "chunk_text",
+                    "document_id",
+                    "category_key",
+                    "source_title",
+                ],
+            )
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_SEARCH_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="search",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+                error_type=type(exc).__name__,
+            ) from exc
+        return [_hit_to_search_item(hit) for hits in result for hit in hits][: int(payload.top_k)]
 
     def delete_document(self, *, document_id: str, tenant_id: str, merchant_id: str) -> dict[str, Any]:
         required = {"document_id": document_id, "tenant_id": tenant_id, "merchant_id": merchant_id}
@@ -634,6 +680,62 @@ def _coerce_unix_timestamp(value: object) -> int:
 
 def _expr_quote(value: object) -> str:
     return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _normalize_required_filter_values(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _build_milvus_search_expr(
+    *,
+    tenant_id: object,
+    merchant_id: object,
+    douyin_account_id: object,
+    category_keys: list[str],
+) -> str:
+    quoted_categories = ", ".join(f'"{_expr_quote(item)}"' for item in category_keys)
+    return (
+        f'tenant_id == "{_expr_quote(tenant_id)}" '
+        f'and merchant_id == "{_expr_quote(merchant_id)}" '
+        f'and douyin_account_id == "{_expr_quote(douyin_account_id)}" '
+        f'and status == "active" '
+        f"and category_key in [{quoted_categories}]"
+    )
+
+
+def _hit_to_search_item(hit: object) -> RagSearchItem:
+    entity = getattr(hit, "entity", None)
+    score = getattr(hit, "score", getattr(hit, "distance", 0.0))
+    return RagSearchItem(
+        chunk_id=_safe_int(_entity_value(entity, "chunk_id")),
+        document_id=_safe_int(_entity_value(entity, "document_id")),
+        title=str(_entity_value(entity, "source_title") or ""),
+        chunk_text=str(_entity_value(entity, "chunk_text") or "")[:1000],
+        score=round(float(score or 0.0), 4),
+    )
+
+
+def _entity_value(entity: object, key: str) -> object:
+    if isinstance(entity, dict):
+        return entity.get(key)
+    getter = getattr(entity, "get", None)
+    if callable(getter):
+        return getter(key)
+    return getattr(entity, key, None)
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return int(str(value or "0"))
+    except ValueError:
+        return 0
 
 
 def _classify_connect_error(exc: Exception) -> str:

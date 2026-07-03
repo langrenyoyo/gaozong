@@ -414,10 +414,13 @@ def test_train_milvus_backend_marks_run_failed_when_upsert_fails(tmp_path, monke
 
 
 class _FakeVectorStore:
-    def __init__(self, upsert_error=None):
+    def __init__(self, upsert_error=None, search_error=None, search_results=None):
         self.upsert_error = upsert_error
+        self.search_error = search_error
+        self.search_results = search_results or []
         self.deleted_documents = []
         self.upserted_chunks = []
+        self.search_calls = []
 
     def delete_document(self, *, document_id, tenant_id, merchant_id):
         self.deleted_documents.append(
@@ -432,6 +435,19 @@ class _FakeVectorStore:
         if self.upsert_error is not None:
             raise self.upsert_error
         self.upserted_chunks.extend(chunks)
+
+    def search(self, payload, *, query_embedding):
+        self.search_calls.append(
+            {
+                "tenant_id": payload.tenant_id,
+                "merchant_id": payload.merchant_id,
+                "category_keys": payload.category_keys,
+                "query_embedding": query_embedding,
+            }
+        )
+        if self.search_error is not None:
+            raise self.search_error
+        return self.search_results
 
 
 def test_rag_documents_train_search_and_scope_isolation(tmp_path, monkeypatch):
@@ -896,3 +912,138 @@ def test_search_unknown_category_returns_empty_results(tmp_path, monkeypatch):
     )
 
     assert results == []
+
+
+def test_search_milvus_backend_uses_vector_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchItem, RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+
+    fake_store = _FakeVectorStore(
+        search_results=[
+            RagSearchItem(
+                chunk_id=101,
+                document_id=201,
+                title="milvus title",
+                chunk_text="milvus chunk",
+                score=0.91,
+            )
+        ]
+    )
+    monkeypatch.setattr(repository, "get_vector_store", lambda: fake_store)
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="milvus query",
+            top_k=5,
+            category_keys=["base"],
+        ),
+        llm_client=_StaticEmbeddingClient({"milvus query": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["milvus chunk"]
+    assert fake_store.search_calls == [
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "category_keys": ["base"],
+            "query_embedding": [1.0, 0.0],
+        }
+    ]
+
+
+def test_search_milvus_backend_empty_category_keys_does_not_touch_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+
+    monkeypatch.setattr(
+        repository,
+        "get_vector_store",
+        lambda: (_ for _ in ()).throw(AssertionError("milvus should not be touched")),
+    )
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="query",
+            top_k=5,
+            category_keys=[],
+        ),
+        llm_client=_StaticEmbeddingClient({"query": [1.0, 0.0]}),
+    )
+
+    assert results == []
+
+
+def test_search_milvus_backend_missing_scope_does_not_touch_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+
+    monkeypatch.setattr(
+        repository,
+        "get_vector_store",
+        lambda: (_ for _ in ()).throw(AssertionError("milvus should not be touched")),
+    )
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="",
+            douyin_account_id=1,
+            query="query",
+            top_k=5,
+            category_keys=["base"],
+        ),
+        llm_client=_StaticEmbeddingClient({"query": [1.0, 0.0]}),
+    )
+
+    assert results == []
+
+
+def test_search_milvus_backend_falls_back_to_sqlite_when_store_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+    from apps.xg_douyin_ai_cs.services.vector_store import VectorStoreError
+
+    _seed_chunks(
+        {
+            "tenant_id": "tenant",
+            "merchant_id": "merchant",
+            "douyin_account_id": 1,
+            "title": "sqlite fallback title",
+            "content": "sqlite fallback chunk",
+        },
+        [("sqlite fallback chunk", "[1.0, 0.0]", 1, "base")],
+    )
+    fake_store = _FakeVectorStore(search_error=VectorStoreError("MILVUS_SEARCH_FAILED", "details redacted"))
+    monkeypatch.setattr(repository, "get_vector_store", lambda: fake_store)
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="tenant",
+            merchant_id="merchant",
+            douyin_account_id=1,
+            query="sqlite fallback",
+            top_k=5,
+            category_keys=["base"],
+        ),
+        llm_client=_StaticEmbeddingClient({"sqlite fallback": [1.0, 0.0]}),
+    )
+
+    assert [item.chunk_text for item in results] == ["sqlite fallback chunk"]

@@ -429,6 +429,110 @@ def test_milvus_upsert_rejects_missing_required_metadata(monkeypatch):
     assert fake.utility.upsert_rows == []
 
 
+def test_milvus_search_uses_required_metadata_filter(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(
+        collection_exists=True,
+        existing_dimension=1536,
+        search_hits=[
+            [
+                _fake_hit(
+                    score=0.91,
+                    entity={
+                        "chunk_id": "101",
+                        "document_id": "201",
+                        "chunk_text": "synthetic search chunk",
+                        "category_key": "base",
+                        "source_title": "synthetic title",
+                    },
+                )
+            ]
+        ],
+    )
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.MilvusVectorStore(Settings()).search(
+        RagSearchRequest(
+            tenant_id="tenant-a",
+            merchant_id="merchant-a",
+            douyin_account_id="account-a",
+            query="query",
+            top_k=3,
+            category_keys=["base", 'b"ba'],
+        ),
+        query_embedding=[0.1] * 1536,
+    )
+
+    assert result[0].chunk_id == 101
+    assert result[0].document_id == 201
+    assert result[0].title == "synthetic title"
+    assert result[0].chunk_text == "synthetic search chunk"
+    assert result[0].score == 0.91
+    call = fake.utility.search_calls[0]
+    assert call["limit"] == 3
+    assert call["data"] == [[0.1] * 1536]
+    assert 'tenant_id == "tenant-a"' in call["expr"]
+    assert 'merchant_id == "merchant-a"' in call["expr"]
+    assert 'status == "active"' in call["expr"]
+    assert 'category_key in ["base", "b\\"ba"]' in call["expr"]
+
+
+def test_milvus_search_empty_category_keys_returns_empty_without_query(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.MilvusVectorStore(Settings()).search(
+        RagSearchRequest(
+            tenant_id="tenant-a",
+            merchant_id="merchant-a",
+            douyin_account_id="account-a",
+            query="query",
+            category_keys=[],
+        ),
+        query_embedding=[0.1] * 1536,
+    )
+
+    assert result == []
+    assert fake.utility.search_calls == []
+
+
+def test_milvus_search_rejects_query_dimension_mismatch(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    with pytest.raises(vector_store.VectorStoreConfigError) as exc_info:
+        vector_store.MilvusVectorStore(Settings()).search(
+            RagSearchRequest(
+                tenant_id="tenant-a",
+                merchant_id="merchant-a",
+                douyin_account_id="account-a",
+                query="query",
+                category_keys=["base"],
+            ),
+            query_embedding=[0.1],
+        )
+
+    assert exc_info.value.code == "MILVUS_VECTOR_DIMENSION_MISMATCH"
+    assert fake.utility.search_calls == []
+
+
 def test_milvus_collection_check_cli_skips_sqlite_backend(monkeypatch, capsys):
     _clear_milvus_env(monkeypatch)
 
@@ -599,6 +703,7 @@ def _fake_pymilvus(
     existing_dimension=1536,
     connect_error=None,
     has_collection_error=None,
+    search_hits=None,
 ):
     class DataType:
         VARCHAR = "VarChar"
@@ -635,6 +740,10 @@ def _fake_pymilvus(
         def delete(self, expr):
             fake.utility.delete_exprs.append(expr)
 
+        def search(self, **kwargs):
+            fake.utility.search_calls.append(kwargs)
+            return search_hits or []
+
     class FakeUtility:
         def __init__(self):
             self.created_collections = []
@@ -642,6 +751,7 @@ def _fake_pymilvus(
             self.index_created = False
             self.upsert_rows = []
             self.delete_exprs = []
+            self.search_calls = []
 
         def has_collection(self, name, using=None):
             if has_collection_error is not None:
@@ -674,6 +784,15 @@ def _fake_pymilvus(
     )
     fake.Collection = collection_factory
     return fake
+
+
+def _fake_hit(score, entity):
+    class Hit:
+        def __init__(self):
+            self.score = score
+            self.entity = entity
+
+    return Hit()
 
 
 def _existing_schema(dimension, field_schema, collection_schema, data_type):

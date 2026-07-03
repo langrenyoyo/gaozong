@@ -265,6 +265,68 @@ def search(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
 ) -> list[RagSearchItem]:
+    if settings.rag_vector_backend == "milvus":
+        return _search_milvus_or_fallback(payload, llm_client=llm_client)
+    return _search_sqlite(payload, llm_client=llm_client)
+
+
+def _search_milvus_or_fallback(
+    payload: RagSearchRequest,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> list[RagSearchItem]:
+    category_keys = _normalize_filter_values(payload.category_keys)
+    if not category_keys:
+        _logger.info(
+            "rag_search vector_backend=milvus fallback_reason=category_keys_empty "
+            "tenant_id=%s merchant_id=%s top_k=%d",
+            payload.tenant_id,
+            payload.merchant_id,
+            payload.top_k,
+        )
+        return []
+    if not str(payload.tenant_id or "").strip() or not str(payload.merchant_id or "").strip():
+        _logger.warning(
+            "rag_search vector_backend=milvus fallback_reason=merchant_context_missing "
+            "tenant_id_present=%s merchant_id_present=%s top_k=%d",
+            bool(str(payload.tenant_id or "").strip()),
+            bool(str(payload.merchant_id or "").strip()),
+            payload.top_k,
+        )
+        return []
+    try:
+        client = llm_client or OpenAICompatibleClient()
+        query_embedding_payload = client.embed(payload.query)
+        query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
+        if not query_embedding:
+            raise ValueError("query embedding is empty")
+        result = get_vector_store().search(payload, query_embedding=query_embedding)
+        _logger.info(
+            "rag_search vector_backend=milvus fallback_reason=none tenant_id=%s "
+            "merchant_id=%s top_k=%d result_count=%d category_key_count=%d",
+            payload.tenant_id,
+            payload.merchant_id,
+            payload.top_k,
+            len(result),
+            len(category_keys),
+        )
+        return result
+    except Exception as exc:
+        _logger.warning(
+            "rag_search vector_backend=milvus fallback_reason=milvus_search_failed "
+            "tenant_id=%s merchant_id=%s top_k=%d category_key_count=%d error_type=%s",
+            payload.tenant_id,
+            payload.merchant_id,
+            payload.top_k,
+            len(category_keys),
+            type(exc).__name__,
+        )
+        return _search_sqlite(payload, llm_client=llm_client)
+
+
+def _search_sqlite(
+    payload: RagSearchRequest,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> list[RagSearchItem]:
     query_tokens = set(_tokens(payload.query))
     category_ids = _normalize_filter_values(payload.category_ids)
     category_keys = _normalize_filter_values(payload.category_keys)
