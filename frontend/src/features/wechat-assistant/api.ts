@@ -10,8 +10,8 @@ export {
 } from "../../api/automation";
 export {
   createWechatTask,
+  fetchBrowserPendingWechatTasks,
   fetchWechatTaskHistory,
-  fetchPendingWechatTasks,
   fetchWechatTaskDetail,
   fetchWechatTask,
 } from "../../api/wechatTasks";

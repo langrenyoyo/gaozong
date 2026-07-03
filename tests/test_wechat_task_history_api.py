@@ -236,6 +236,23 @@ def test_history_filters_status_type_mode_keyword_failure_stage_and_paginates():
     assert len(page_2["items"]) == 1
 
 
+def test_browser_pending_list_uses_user_history_endpoint_with_merchant_filter():
+    staff_a = _insert_staff(name="销售A", wechat_nickname="销售A微信")
+    lead_a = _insert_lead(customer_contact="13600001111")
+    staff_b = _insert_staff(merchant_id="merchant-b", name="销售B", wechat_nickname="销售B微信")
+    lead_b = _insert_lead(merchant_id="merchant-b", customer_contact="13700002222")
+    pending_id = _insert_task(lead_id=lead_a, staff_id=staff_a, status="pending")
+    _insert_task(lead_id=lead_a, staff_id=staff_a, status="sent")
+    _insert_task(lead_id=lead_b, staff_id=staff_b, status="pending")
+
+    response = _client("merchant-a").get("/wechat-tasks", params={"status": "pending"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["id"] for item in body["items"]] == [pending_id]
+
+
 def test_task_detail_requires_same_merchant_but_result_writeback_keeps_working():
     staff_a = _insert_staff()
     lead_a = _insert_lead()
@@ -256,19 +273,26 @@ def test_task_detail_requires_same_merchant_but_result_writeback_keeps_working()
             "sent": False,
             "raw_result": {"contact_verified": True, "sent": False},
         },
+        headers={"X-Local-Agent-Token": "local-agent-dev-token"},
     )
     assert writeback.status_code == 200
     assert writeback.json()["status"] == "pasted"
 
 
-def test_pending_endpoint_keeps_existing_unscoped_local_agent_contract():
+def test_pending_endpoint_requires_local_agent_token_and_keeps_agent_contract_with_token():
     staff_a = _insert_staff()
     lead_a = _insert_lead()
     _insert_task(lead_id=lead_a, staff_id=staff_a, status="pending")
     _insert_task(lead_id=None, staff_id=None, status="pending", target_nickname="孤立 pending")
 
-    response = _client("merchant-a").get("/wechat-tasks/pending")
+    missing = _client("merchant-a").get("/wechat-tasks/pending")
+    response = _client("merchant-a").get(
+        "/wechat-tasks/pending",
+        headers={"X-Local-Agent-Token": "local-agent-dev-token"},
+    )
 
+    assert missing.status_code == 401
+    assert missing.json()["detail"]["code"] == "LOCAL_AGENT_TOKEN_MISSING"
     assert response.status_code == 200
     assert len(response.json()) == 2
 
@@ -283,7 +307,7 @@ def test_orphan_task_detail_only_allowed_for_dev_mock_context():
     assert dev_response.json()["id"] == task_id
 
 
-def test_wechat_task_user_queries_require_agent_permission_but_local_agent_endpoints_keep_working():
+def test_wechat_task_user_queries_require_agent_permission_and_agent_endpoints_require_agent_token():
     staff_id = _insert_staff()
     lead_id = _insert_lead()
     task_id = _insert_task(lead_id=lead_id, staff_id=staff_id, status="pending", raw_result=None)
@@ -305,5 +329,7 @@ def test_wechat_task_user_queries_require_agent_permission_but_local_agent_endpo
 
     assert list_response.status_code == 403
     assert detail_response.status_code == 403
-    assert pending_response.status_code == 200
-    assert result_response.status_code == 200
+    assert pending_response.status_code == 401
+    assert pending_response.json()["detail"]["code"] == "LOCAL_AGENT_TOKEN_MISSING"
+    assert result_response.status_code == 401
+    assert result_response.json()["detail"]["code"] == "LOCAL_AGENT_TOKEN_MISSING"

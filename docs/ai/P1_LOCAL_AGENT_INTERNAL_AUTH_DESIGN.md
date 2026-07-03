@@ -811,3 +811,51 @@ LEGACY_WECHAT_DEBUG_ENDPOINTS_ENABLED=true
 6. `/auth/callback`。
 7. RAG / 知识库。
 8. 自动发送链路。
+## 21. P1-WECHAT-ASSISTANT-BROWSER-PENDING-API-SPLIT-1
+
+### 21.1 本轮目标
+
+修正微信助手浏览器页面的 pending 任务接口分层。浏览器页面不再调用 Local Agent 机器接口 `GET /wechat-tasks/pending`，避免浏览器用户流量误走 `X-Local-Agent-Token` 机器鉴权边界。
+
+### 21.2 浏览器 pending 新接口
+
+浏览器微信助手页面改走 NewCar 用户接口：
+
+```text
+GET /wechat-tasks?status=pending&page=1&page_size=...
+```
+
+该接口继续使用 NewCar 登录态和 `auto_wechat:agent` 权限，并由后端按 `RequestContext.merchant_id` 做当前商户任务过滤，不信任前端传入 merchant_id。
+
+### 21.3 Local Agent pending 保持不变
+
+Local Agent / 19000 继续使用机器接口：
+
+```text
+GET /wechat-tasks/pending
+```
+
+本轮未改变该接口语义，未改变 Local Agent token gate，未改变 `POST /wechat-tasks/{task_id}/result`，未改变 19000 拉任务逻辑。
+
+### 21.4 前端分层约定
+
+前端 API 层明确区分：
+
+1. `fetchBrowserPendingWechatTasks()`：浏览器用户接口，内部请求 `GET /wechat-tasks?status=pending`。
+2. `fetchPendingWechatTasks()`：Local Agent pending poll 机器接口保留函数，内部仍请求 `GET /wechat-tasks/pending`。
+
+`/wechat-assistant` 页面和任务面板只使用 `fetchBrowserPendingWechatTasks()`，不再从微信助手 feature 聚合 API 转出口 Local Agent pending poll helper。
+
+### 21.5 不变边界
+
+本轮未修改：
+
+1. `/wechat-tasks/pending` 后端路由语义。
+2. `/wechat-tasks/{task_id}/result`。
+3. Local Agent token gate。
+4. 19000。
+5. NewCar 登录、`/auth/me`、`/auth/callback`。
+6. `/wechat-assistant` 权限映射。
+7. 任务状态机。
+8. RAG / 知识库。
+9. 自动发送链路和真实微信动作。

@@ -40,7 +40,7 @@ import { toast } from "sonner";
 
 import {
   createWechatTask,
-  fetchPendingWechatTasks,
+  fetchBrowserPendingWechatTasks,
   fetchWechatTask,
 } from "../api";
 import { pollAndExecuteWechatTask, detectReply, pollAndDetectReply } from "../api";
@@ -259,7 +259,7 @@ export default function WechatTaskPanel() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchPendingWechatTasks({ limit: 50 });
+      const data = await fetchBrowserPendingWechatTasks({ limit: 50 });
       setTasks(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "任务列表加载失败";
@@ -295,7 +295,7 @@ export default function WechatTaskPanel() {
   /** P1-AUTO-1D：刷新 detect_reply 任务列表 */
   const refreshDetectReplyTasks = useCallback(async () => {
     try {
-      const data = await fetchPendingWechatTasks({ task_type: "detect_reply", limit: 10 });
+      const data = await fetchBrowserPendingWechatTasks({ task_type: "detect_reply", limit: 10 });
       setDetectReplyTasks(data);
     } catch {
       // 静默失败

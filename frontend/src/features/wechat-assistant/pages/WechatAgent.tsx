@@ -34,7 +34,7 @@ import {
   disableStaff,
   enableStaff,
   enableLocalAgentTaskPolling,
-  fetchPendingWechatTasks,
+  fetchBrowserPendingWechatTasks,
   fetchLocalAgentRuntimeStatus,
   fetchWechatTaskHistory,
   fetchWechatTask,
@@ -242,7 +242,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
   async function loadPendingTasksForBrowser(): Promise<WechatTask[]> {
     try {
-      return await fetchPendingWechatTasks({ limit: 20 });
+      return await fetchBrowserPendingWechatTasks({ limit: 20 });
     } catch (err) {
       if (isLocalAgentAuthErrorCode(getApiErrorCode(err))) {
         toast.warning("Local Agent 尚未完成授权或当前任务接口需要 Agent token");

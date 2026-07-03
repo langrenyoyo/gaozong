@@ -122,3 +122,19 @@ def test_agent_page_describes_knowledge_as_reply_scope_not_management():
     ]
     for text in forbidden_copy:
         assert text not in source
+
+
+def test_wechat_assistant_uses_browser_pending_task_api_instead_of_agent_poll_endpoint():
+    api_source = Path("frontend/src/api/wechatTasks.ts").read_text(encoding="utf-8")
+    feature_api_source = Path("frontend/src/features/wechat-assistant/api.ts").read_text(encoding="utf-8")
+    page_source = Path("frontend/src/features/wechat-assistant/pages/WechatAgent.tsx").read_text(encoding="utf-8")
+    panel_source = Path("frontend/src/features/wechat-assistant/components/WechatTaskPanel.tsx").read_text(encoding="utf-8")
+
+    assert "fetchBrowserPendingWechatTasks" in api_source
+    assert 'status: "pending"' in api_source
+    assert "fetchBrowserPendingWechatTasks" in feature_api_source
+    assert "fetchPendingWechatTasks" not in feature_api_source
+    assert "fetchBrowserPendingWechatTasks" in page_source
+    assert "fetchBrowserPendingWechatTasks" in panel_source
+    assert "fetchPendingWechatTasks" not in page_source
+    assert "fetchPendingWechatTasks" not in panel_source

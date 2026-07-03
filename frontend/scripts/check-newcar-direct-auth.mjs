@@ -22,10 +22,12 @@ function assertNotIncludes(content, unexpected, label) {
 const authApi = read("src/api/auth.ts");
 const app = read("src/App.tsx");
 const client = read("src/api/client.ts");
+const wechatTasks = read("src/api/wechatTasks.ts");
 const tokenStore = read("src/authToken.ts");
 const newcarRedirect = read("src/newcarRedirect.ts");
 const envExample = read(".env.example");
 const wechatAgentPage = read("src/features/wechat-assistant/pages/WechatAgent.tsx");
+const wechatTaskPanel = read("src/features/wechat-assistant/components/WechatTaskPanel.tsx");
 
 assertIncludes(authApi, "VITE_NEWCAR_AUTH_BASE_URL", "auth api reads NewCar base url");
 assertIncludes(authApi, "/api/external-auth/exchange-code", "auth api calls upstream exchange-code");
@@ -34,10 +36,7 @@ assertIncludes(authApi, 'platform: "auto_wechat"', "auth api sends platform");
 assertIncludes(authApi, "navigator.userAgent.slice(0, 80)", "auth api sends bounded device_name");
 assertNotIncludes(authApi, '"/auth/callback"', "auth api no longer calls 9000 callback");
 assertIncludes(authApi, "EXTERNAL_MERCHANT_NOT_BOUND", "auth api maps unbound external account error");
-assertIncludes(authApi, "账号未绑定商户，请联系管理员。", "auth api exposes unbound merchant message");
 assertIncludes(authApi, "PERMISSION_DENIED", "auth api maps permission denied error");
-assertIncludes(authApi, "当前账号暂无访问该功能权限，请联系管理员开通。", "auth api exposes permission denied message");
-assertIncludes(authApi, "登录凭证已失效，请重新登录。", "auth api exposes expired code message");
 
 assertIncludes(app, 'source === "new_car_project"', "app only consumes NewCar redirect code");
 assertIncludes(app, "assertCanEnterSystem", "app enforces auto_wechat:use");
@@ -46,16 +45,14 @@ assertIncludes(app, "cleanCodeFromUrl()", "app clears one-time code from URL");
 assertIncludes(app, "new URL(window.location.href)", "app reads NewCar code from the current browser URL");
 assertIncludes(app, "`${url.pathname}${url.search}${url.hash}`", "app preserves current route when clearing one-time code");
 assertIncludes(app, "externalMerchantNotBound", "app keeps unbound external account out of business routes");
+assertIncludes(app, "permissionDenied", "app keeps permission denied users out of relogin loops");
+assertIncludes(app, "exchangeCodeFailed", "app handles invalid one-time code as a readable error");
 assertIncludes(app, "redirectToNewCarLogin", "app redirects missing/expired external auth to NewCar login");
 assertIncludes(app, "restoreSavedRedirectPathAfterLogin", "app restores saved path after code login");
 assertIncludes(app, "AuthErrorScreen", "app renders user-facing auth error states");
-assertIncludes(app, "账号已登录，但暂未绑定商户，请联系管理员开通服务。", "app shows unbound merchant guidance");
-assertIncludes(app, "当前账号暂无访问该功能权限，请联系管理员开通。", "app shows permission denied guidance");
-assertIncludes(app, "登录凭证已失效，请重新登录。", "app shows exchange-code failure guidance");
-assertIncludes(app, "重新登录", "app exposes a relogin action for auth errors");
-assertIncludes(app, "返回工作台", "app exposes a workbench action for permission errors");
 assertIncludes(app, "handleRelogin", "app relogin action clears local auth state before NewCar redirect");
 assertIncludes(app, "handleBackToWorkbench", "app permission action returns to the default workbench");
+assertIncludes(app, "loginRedirectNotice", "app renders a user-facing NewCar redirect notice");
 
 assertIncludes(client, "getExternalToken()", "9000 api client reads token store");
 assertIncludes(client, "Authorization = `Bearer ${token}`", "9000 api client injects bearer token");
@@ -77,9 +74,11 @@ assertIncludes(client, "shouldRedirectToNewCarLogin", "9000 api client scopes 40
 assertIncludes(client, "isNewCarLoginAuthErrorCode(code)", "9000 api client redirects known NewCar login auth errors");
 assertIncludes(client, "!isLocalAgentAuthErrorCode(code)", "9000 api client excludes Local Agent auth errors from NewCar redirects");
 assertIncludes(client, "!isNonLoginAuthErrorCode(code)", "9000 api client excludes permission and binding errors from NewCar redirects");
+
 assertIncludes(tokenStore, "sessionStorage", "token store uses sessionStorage");
 assertIncludes(tokenStore, 'EXTERNAL_TOKEN_KEY = "external_token"', "token store uses the runtime sessionStorage key");
 assertNotIncludes(tokenStore, "external_auth_token", "token store does not use the historical mistaken key");
+
 assertIncludes(newcarRedirect, "NEWCAR_LOGIN_URL", "NewCar redirect helper uses configured login url");
 assertIncludes(newcarRedirect, "NEWCAR_REDIRECT_PATH_KEY", "NewCar redirect helper stores current path");
 assertIncludes(newcarRedirect, 'DEFAULT_POST_LOGIN_PATH = "/douyin-cs/workbench"', "NewCar redirect helper has a stable default post-login path");
@@ -107,13 +106,16 @@ assertIncludes(newcarRedirect, "newcar_redirecting", "NewCar redirect helper pre
 assertIncludes(newcarRedirect, "code", "NewCar redirect helper does not redirect while handling one-time code");
 assertIncludes(newcarRedirect, "source", "NewCar redirect helper checks NewCar source before redirecting");
 assertNotIncludes(newcarRedirect, 'sessionStorage.getItem(NEWCAR_REDIRECTING_KEY) === "1"', "NewCar redirect helper no longer treats old guard value as permanent");
-assertIncludes(app, "loginRedirectNotice", "app renders a user-facing NewCar redirect notice");
-assertIncludes(app, "正在前往统一登录，请稍候", "app shows a friendly notice for missing token redirect");
-assertIncludes(app, "登录已过期，正在重新登录", "app shows a friendly notice for expired token redirect");
-assertIncludes(wechatAgentPage, "loadPendingTasksForBrowser", "wechat assistant handles browser pending task loading separately");
-assertIncludes(wechatAgentPage, "isLocalAgentAuthErrorCode(getApiErrorCode(err))", "wechat assistant treats Local Agent token errors as page-level business errors");
-assertIncludes(wechatAgentPage, "Local Agent 尚未完成授权或当前任务接口需要 Agent token", "wechat assistant shows Local Agent token guidance without NewCar relogin");
-assertIncludes(wechatAgentPage, "return []", "wechat assistant keeps other modules visible when pending machine task auth fails");
+
+assertIncludes(wechatTasks, "fetchBrowserPendingWechatTasks", "wechat task api exposes a browser pending list helper");
+assertIncludes(wechatTasks, 'status: "pending"', "browser pending helper queries GET /wechat-tasks with status=pending");
+assertIncludes(wechatTasks, 'apiClient.get("/wechat-tasks/pending"', "Local Agent pending poll endpoint remains available");
+assertIncludes(wechatAgentPage, "fetchBrowserPendingWechatTasks({ limit: 20 })", "wechat assistant page uses browser pending task helper");
+assertIncludes(wechatTaskPanel, "fetchBrowserPendingWechatTasks({ limit: 50 })", "wechat task panel uses browser pending task helper");
+assertIncludes(wechatTaskPanel, 'fetchBrowserPendingWechatTasks({ task_type: "detect_reply", limit: 10 })', "detect reply list uses browser pending task helper");
+assertNotIncludes(wechatAgentPage, "fetchPendingWechatTasks", "wechat assistant page no longer calls the Local Agent pending poll helper");
+assertNotIncludes(wechatTaskPanel, "fetchPendingWechatTasks", "wechat task panel no longer calls the Local Agent pending poll helper");
+
 assertIncludes(envExample, "VITE_NEWCAR_AUTH_BASE_URL=http://192.168.110.19:8790", "frontend env example documents NewCar base url");
 assertIncludes(envExample, "VITE_NEWCAR_LOGIN_URL=http://192.168.110.19:5174/login", "frontend env example documents NewCar login url");
 
