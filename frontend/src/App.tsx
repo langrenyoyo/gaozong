@@ -5,7 +5,7 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
-import { redirectToNewCarLogin, restoreSavedRedirectPathAfterLogin } from "./newcarRedirect";
+import { addNewCarRedirectNoticeListener, redirectToNewCarLogin, restoreSavedRedirectPathAfterLogin } from "./newcarRedirect";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
 
@@ -69,10 +69,12 @@ const App = () => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [loginRedirectNotice, setLoginRedirectNotice] = useState<string | null>(null);
   const externalMerchantNotBound = authError === "账号未绑定商户，请联系管理员。";
 
   useEffect(() => {
     let active = true;
+    const removeRedirectNoticeListener = addNewCarRedirectNoticeListener(setLoginRedirectNotice);
 
     async function restoreAuth() {
       const url = new URL(window.location.href);
@@ -97,7 +99,7 @@ const App = () => {
           const nextUser = userFromAuthData(data);
           assertCanEnterSystem(nextUser);
           if (active) setUser(nextUser);
-        } else if (redirectToNewCarLogin()) {
+        } else if (redirectToNewCarLogin({ message: "正在前往统一登录，请稍候…" })) {
           return;
         }
       } catch (error) {
@@ -115,7 +117,7 @@ const App = () => {
     void restoreAuth();
 
     const onAuthExpired = () => {
-      if (redirectToNewCarLogin()) {
+      if (redirectToNewCarLogin({ message: "登录已过期，正在重新登录…" })) {
         return;
       }
       setUser(null);
@@ -125,6 +127,7 @@ const App = () => {
 
     return () => {
       active = false;
+      removeRedirectNoticeListener();
       window.removeEventListener("external-auth-expired", onAuthExpired);
     };
   }, []);
@@ -152,6 +155,14 @@ const App = () => {
     ) : (
       <Login onLogin={handleLogin} authError={authError} />
     );
+
+  if (loginRedirectNotice) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#070d18] text-sm font-semibold text-white">
+        {loginRedirectNotice}
+      </div>
+    );
+  }
 
   if (authLoading) {
     return (

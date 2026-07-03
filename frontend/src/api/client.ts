@@ -31,7 +31,7 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error?.response?.status === 401) {
       clearExternalToken();
-      if (!redirectToNewCarLogin()) {
+      if (!redirectToNewCarLogin({ message: "登录已过期，正在重新登录…" })) {
         window.dispatchEvent(new Event("external-auth-expired"));
       }
     }

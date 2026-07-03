@@ -104,7 +104,30 @@ external_token
 
 `external_auth_token` 是早期 E2E 指引中的误称，不作为当前运行态检查口径。
 
-### 2.4 Token 隔离
+### 2.4 登录后回跳路径
+
+auto_wechat 前端在跳转 NewCarProject 统一登录前，会把当前站内业务路径临时保存到浏览器 `sessionStorage`：
+
+```text
+newcar_redirect_path
+newcar_redirect_path_saved_at
+```
+
+该路径只用于一次登录回跳，登录成功后会立即消费并删除。当前默认登录落点为：
+
+```text
+/douyin-cs/workbench
+```
+
+`newcar_redirect_path` 具备以下安全规则：
+
+- 带 TTL，当前为 10 分钟；过期后回退到 `/douyin-cs/workbench`。
+- 只允许站内业务路径，当前允许 `/douyin-cs`、`/leads`、`/compute`、`/agents`、`/wechat-assistant` 及其子路径。
+- 拒绝空路径、外部 URL、`//` 开头路径、`/login`、`/auth/callback` 和未知路径。
+- 非法或过期路径只做安全日志记录并回退默认工作台，不向用户展示技术细节。
+- token 缺失或过期时，前端会先显示轻量提示，再跳转 NewCarProject 统一登录页。
+
+### 2.5 Token 隔离
 
 外部 token 只能访问 `/api/external-auth/*` 这类外部接口。
 

@@ -53,6 +53,22 @@ assertIncludes(tokenStore, 'EXTERNAL_TOKEN_KEY = "external_token"', "token store
 assertNotIncludes(tokenStore, "external_auth_token", "token store does not use the historical mistaken key");
 assertIncludes(newcarRedirect, "NEWCAR_LOGIN_URL", "NewCar redirect helper uses configured login url");
 assertIncludes(newcarRedirect, "NEWCAR_REDIRECT_PATH_KEY", "NewCar redirect helper stores current path");
+assertIncludes(newcarRedirect, 'DEFAULT_POST_LOGIN_PATH = "/douyin-cs/workbench"', "NewCar redirect helper has a stable default post-login path");
+assertIncludes(newcarRedirect, 'NEWCAR_REDIRECT_PATH_SAVED_AT_KEY = "newcar_redirect_path_saved_at"', "NewCar redirect helper stores redirect path saved timestamp");
+assertIncludes(newcarRedirect, "NEWCAR_REDIRECT_PATH_TTL_MS", "NewCar redirect path has a TTL");
+assertIncludes(newcarRedirect, "ALLOWED_REDIRECT_PATH_PREFIXES", "NewCar redirect helper uses a path allowlist");
+assertIncludes(newcarRedirect, "isAllowedRedirectPath", "NewCar redirect helper validates saved redirect path");
+assertIncludes(newcarRedirect, "savedAgeMs > NEWCAR_REDIRECT_PATH_TTL_MS", "NewCar redirect helper rejects expired redirect paths");
+assertIncludes(newcarRedirect, 'url.pathname === "/login"', "NewCar redirect helper rejects local login path");
+assertIncludes(newcarRedirect, 'url.pathname === "/auth/callback"', "NewCar redirect helper rejects legacy callback path");
+assertIncludes(newcarRedirect, 'url.pathname.startsWith(`${prefix}/`)', "NewCar redirect helper allows known business subpaths");
+assertIncludes(newcarRedirect, '"/douyin-cs"', "NewCar redirect allowlist includes douyin cs");
+assertIncludes(newcarRedirect, '"/leads"', "NewCar redirect allowlist includes leads");
+assertIncludes(newcarRedirect, '"/compute"', "NewCar redirect allowlist includes compute");
+assertIncludes(newcarRedirect, '"/agents"', "NewCar redirect allowlist includes agents");
+assertIncludes(newcarRedirect, '"/wechat-assistant"', "NewCar redirect allowlist includes wechat assistant without changing its permission mapping");
+assertIncludes(newcarRedirect, "restoreSavedRedirectPathAfterLogin", "NewCar redirect helper restores saved path after login");
+assertIncludes(newcarRedirect, "return DEFAULT_POST_LOGIN_PATH", "NewCar redirect helper falls back to the default workbench");
 assertIncludes(newcarRedirect, "NEWCAR_REDIRECTING_TTL_MS", "NewCar redirect helper expires stale redirect guard");
 assertIncludes(newcarRedirect, "Date.now().toString()", "NewCar redirect helper stores redirect guard timestamp");
 assertIncludes(newcarRedirect, "Number(redirectingAt)", "NewCar redirect helper parses previous redirect guard timestamp");
@@ -62,6 +78,9 @@ assertIncludes(newcarRedirect, "newcar_redirecting", "NewCar redirect helper pre
 assertIncludes(newcarRedirect, "code", "NewCar redirect helper does not redirect while handling one-time code");
 assertIncludes(newcarRedirect, "source", "NewCar redirect helper checks NewCar source before redirecting");
 assertNotIncludes(newcarRedirect, 'sessionStorage.getItem(NEWCAR_REDIRECTING_KEY) === "1"', "NewCar redirect helper no longer treats old guard value as permanent");
+assertIncludes(app, "loginRedirectNotice", "app renders a user-facing NewCar redirect notice");
+assertIncludes(app, "正在前往统一登录，请稍候", "app shows a friendly notice for missing token redirect");
+assertIncludes(app, "登录已过期，正在重新登录", "app shows a friendly notice for expired token redirect");
 assertIncludes(envExample, "VITE_NEWCAR_AUTH_BASE_URL=http://192.168.110.19:8790", "frontend env example documents NewCar base url");
 assertIncludes(envExample, "VITE_NEWCAR_LOGIN_URL=http://192.168.110.19:5174/login", "frontend env example documents NewCar login url");
 
