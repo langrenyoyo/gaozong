@@ -239,6 +239,11 @@ def test_upload_image_requires_douyin_ai_cs_permission():
 def setup_function():
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
+    config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET = {
+        "https://workbench.example.com",
+        "https://douyinapi.misanduo.com",
+        "http://192.168.110.113:5173",
+    }
 
 
 def _live_receive_payload(
@@ -619,6 +624,94 @@ def test_auth_url_generates_state_bound_to_request_context():
         assert row.consumed_at is None
     finally:
         db.close()
+
+
+def test_auth_url_rejects_frontend_origin_outside_allowlist():
+    client = _client_with_context("merchant-oauth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://evil.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET", {"https://workbench.example.com"}), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "DOUYIN_OAUTH_REDIRECT_FORBIDDEN"
+    mock_post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "//evil.example.com",
+        "javascript:alert(1)",
+        "data:text/html,evil",
+        "file:///etc/passwd",
+        "ftp://workbench.example.com/douyin-ai-cs",
+        "https://user:pass@workbench.example.com/douyin-ai-cs",
+    ],
+)
+def test_auth_url_rejects_unsafe_frontend_redirect_target(unsafe_url: str):
+    client = _client_with_context("merchant-oauth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", unsafe_url), \
+         patch("app.config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET", {"https://workbench.example.com"}), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "DOUYIN_OAUTH_REDIRECT_FORBIDDEN"
+    mock_post.assert_not_called()
+
+
+def test_auth_url_allows_development_local_origin_when_explicitly_allowlisted():
+    client = _client_with_context("merchant-oauth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_BASE_URL", "https://example.test/openapi"), \
+         patch("app.config.DY_BASE_URL_LEGACY", "https://example.test/openapi"), \
+         patch("app.config.DY_OPENAPI_BASE_URL", "https://gmp.bytedanceapi.com"), \
+         patch("app.config.DY_OPENAPI_PREFIX", "/ai_chat_agent_test_api/v1/openapi"), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 123), \
+         patch("app.config.DY_ACCOUNT_NAME", "demo-account"), \
+         patch("app.config.DY_AUTH_REDIRECT_URL", "https://callback.example.com/oauth-callback"), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "http://127.0.0.1:5173"), \
+         patch("app.config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET", {"http://127.0.0.1:5173"}), \
+         patch("app.config.DY_CALLBACK_URL", "https://callback.example.com/webhook-observe"), \
+         patch("app.config.DY_CALLBACK_EVENTS", ["im_receive_msg"]), \
+         patch("app.config.DY_GMP_SECRET_KEY", "super-secret"), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        mock_post.return_value = FakeUpstreamResponse(
+            200,
+            {"code": 0, "msg": "success", "data": {"auth_url": "https://open.douyin.com/auth/scan?ticket=abc"}},
+        )
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 200
+    payload = json.loads(mock_post.call_args.kwargs["data"].decode("utf-8"))
+    state = payload["auth_redirect_url"].split("state=", 1)[1].split("&", 1)[0]
+    db = TestSession()
+    try:
+        row = db.query(DouyinOAuthState).filter_by(state=state).one()
+        assert row.redirect_target == "http://127.0.0.1:5173"
+    finally:
+        db.close()
+
+
+def test_auth_url_rejects_production_without_redirect_allowlist():
+    client = _client_with_context("merchant-oauth")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.APP_ENV", "production"), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET", set()), \
+         patch("app.services.douyin_openapi_client.requests.post") as mock_post:
+        resp = client.get("/integrations/douyin/live-check/auth-url")
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "DOUYIN_OAUTH_REDIRECT_CONFIG_INVALID"
+    mock_post.assert_not_called()
 
 
 def test_auth_url_accepts_upstream_redirect_url_compatibility_field():
@@ -3536,6 +3629,42 @@ def test_auth_redirect_uses_state_merchant_and_ignores_forged_merchant_id_and_re
     assert "evil.example.com" not in resp.headers["location"]
     mock_sync.assert_called_once()
     assert mock_sync.call_args.kwargs["context"].merchant_id == "merchant-a"
+
+
+@pytest.mark.parametrize(
+    "stored_redirect_target",
+    [
+        "https://evil.example.com/phish",
+        "//evil.example.com",
+        "javascript:alert(1)",
+        "https://user:pass@workbench.example.com/douyin-ai-cs",
+    ],
+)
+def test_auth_redirect_rejects_historical_unsafe_state_redirect_target(stored_redirect_target: str):
+    client = _client()
+    state = _seed_oauth_state(
+        state=f"state-unsafe-{abs(hash(stored_redirect_target))}",
+        merchant_id="merchant-1",
+        redirect_target=stored_redirect_target,
+    )
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True), \
+         patch("app.config.DY_AUTH_REDIRECT_FRONTEND_URL", "https://workbench.example.com"), \
+         patch("app.config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET", {"https://workbench.example.com"}), \
+         patch("app.routers.douyin_live_check.sync_bind_info_accounts") as mock_sync:
+        resp = client.get(
+            "/integrations/douyin/live-check/auth-redirect",
+            params={"open_id": "account_state_redirect", "state": state},
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.startswith("https://workbench.example.com/douyin-ai-cs?")
+    assert "auth=failed" in location
+    assert "DOUYIN_OAUTH_REDIRECT_FORBIDDEN" in location
+    assert "evil.example.com" not in location
+    mock_sync.assert_not_called()
 
 
 def test_auth_redirect_state_source_system_mismatch_rejects_binding():

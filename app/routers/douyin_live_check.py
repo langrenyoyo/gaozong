@@ -2,12 +2,13 @@
 
 import json
 import logging
+import ipaddress
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from pydantic import BaseModel, Field
 
 from app import config
@@ -53,6 +54,14 @@ from app.services.douyin_resource_download_service import download_douyin_resour
 
 logger = logging.getLogger(__name__)
 LIVE_CHECK_OBSERVE_PATH = "/integrations/douyin/live-check/webhook-observe"
+AUTH_REDIRECT_DEFAULT_ORIGIN = "https://douyinapi.misanduo.com"
+AUTH_REDIRECT_RESULT_PATH = "/douyin-ai-cs"
+AUTH_REDIRECT_ALLOWED_PATHS = {
+    "/douyin-ai-cs",
+    "/douyin-cs/workbench",
+    "/settings/douyin",
+    "/wechat-assistant",
+}
 # 抖音 /get_aweme_auth_url 传入的 callback_url 是私信事件回调地址（非 OAuth 回调）。
 # 当 DY_CALLBACK_URL 指向本路径时，抖音把 im_receive_msg / im_send_msg /
 # im_enter_direct_msg 等私信事件推送到这里，行为与 webhook-observe 一致。
@@ -99,18 +108,89 @@ def oauth_callback(request: Request) -> DouyinLiveCheckObserveResponse:
     return DouyinLiveCheckObserveResponse(data=record_oauth_callback(params))
 
 
-def _auth_redirect_frontend_base() -> str:
-    """授权成功后 302 回前端的基址。
+def _auth_redirect_error(code: str, status_code: int = 400) -> HTTPException:
+    messages = {
+        "DOUYIN_OAUTH_REDIRECT_FORBIDDEN": "抖音授权回跳地址不在可信白名单内",
+        "DOUYIN_OAUTH_REDIRECT_CONFIG_INVALID": "抖音授权回跳白名单配置无效",
+    }
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": messages.get(code, "抖音授权回跳地址校验失败")},
+    )
 
-    必须与传给上游的 DY_AUTH_REDIRECT_URL（后端 auth-redirect 地址）区分，
-    否则 auth-redirect 同步后会 302 回自身形成循环。
-    优先 DY_AUTH_REDIRECT_FRONTEND_URL，其次 PUBLIC_BASE_URL，最后兜底。
-    """
-    if config.DY_AUTH_REDIRECT_FRONTEND_URL:
-        return config.DY_AUTH_REDIRECT_FRONTEND_URL.rstrip("/")
-    if config.PUBLIC_BASE_URL:
-        return config.PUBLIC_BASE_URL.rstrip("/")
-    return "https://douyinapi.misanduo.com"
+
+def _is_local_or_private_host(host: str | None) -> bool:
+    if not host:
+        return True
+    text = host.strip().strip("[]").lower()
+    if text in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return not ip.is_global
+
+
+def _normalize_auth_redirect_origin(raw_origin: str) -> str:
+    parts = urlsplit(raw_origin.strip())
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if parts.username or parts.password:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    path = parts.path or ""
+    if path not in {"", "/"}:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if parts.query or parts.fragment:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if config.is_production_env() and _is_local_or_private_host(parts.hostname):
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    return f"{parts.scheme}://{parts.netloc}".rstrip("/")
+
+
+def _auth_redirect_allowed_origins() -> set[str]:
+    raw_items = set(config.DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET)
+    if config.is_production_env() and not raw_items:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_CONFIG_INVALID", status_code=500)
+    # 开发环境只保留固定兜底；业务前端地址仍需显式加入白名单。
+    if not raw_items:
+        raw_items = {AUTH_REDIRECT_DEFAULT_ORIGIN}
+    allowed: set[str] = set()
+    for item in raw_items:
+        allowed.add(_normalize_auth_redirect_origin(item))
+    return allowed
+
+
+def _validate_auth_redirect_target(raw_target: str | None) -> str:
+    """校验并归一化 OAuth 前端回跳地址，只返回可信 origin。"""
+    if not raw_target:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    parts = urlsplit(raw_target.strip())
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if parts.username or parts.password:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if config.is_production_env() and _is_local_or_private_host(parts.hostname):
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    path = parts.path or ""
+    if path not in {"", "/"} and path not in AUTH_REDIRECT_ALLOWED_PATHS:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    if parts.query or parts.fragment:
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    origin = f"{parts.scheme}://{parts.netloc}".rstrip("/")
+    if origin not in _auth_redirect_allowed_origins():
+        raise _auth_redirect_error("DOUYIN_OAUTH_REDIRECT_FORBIDDEN")
+    return origin
+
+
+def _auth_redirect_frontend_base() -> str:
+    """授权完成后 302 回前端的可信 origin。"""
+    target = config.DY_AUTH_REDIRECT_FRONTEND_URL or AUTH_REDIRECT_DEFAULT_ORIGIN
+    return _validate_auth_redirect_target(target)
+
+
+def _auth_redirect_url(frontend_base: str, query: str) -> str:
+    return f"{frontend_base}{AUTH_REDIRECT_RESULT_PATH}?{query}"
 
 
 def _safe_query_value(value: str | None) -> str:
@@ -145,7 +225,7 @@ def auth_redirect(
     try:
         trusted_context, state_redirect_target = consume_oauth_state(db, params.get("state"))
         if state_redirect_target:
-            frontend_base = state_redirect_target.rstrip("/")
+            frontend_base = _validate_auth_redirect_target(state_redirect_target)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         code = detail.get("code") or "DOUYIN_OAUTH_STATE_INVALID"
@@ -155,7 +235,13 @@ def auth_redirect(
             sorted(params.keys()),
         )
         return RedirectResponse(
-            url=f"{frontend_base}/douyin-ai-cs?auth=failed&reason={_safe_query_value(code)}",
+            url=_auth_redirect_url(frontend_base, f"auth=failed&reason={_safe_query_value(code)}"),
+            status_code=302,
+        )
+    except Exception:
+        logger.exception("douyin auth-redirect redirect target 校验异常")
+        return RedirectResponse(
+            url=_auth_redirect_url(frontend_base, "auth=failed&reason=DOUYIN_OAUTH_REDIRECT_FORBIDDEN"),
             status_code=302,
         )
 
@@ -167,7 +253,7 @@ def auth_redirect(
             params.get("open_id"),
         )
         return RedirectResponse(
-            url=f"{frontend_base}/douyin-ai-cs?auth=failed&reason={_safe_query_value(error)}",
+            url=_auth_redirect_url(frontend_base, f"auth=failed&reason={_safe_query_value(error)}"),
             status_code=302,
         )
 
@@ -180,7 +266,7 @@ def auth_redirect(
             sorted(params.keys()),
         )
         return RedirectResponse(
-            url=f"{frontend_base}/douyin-ai-cs?auth=unknown",
+            url=_auth_redirect_url(frontend_base, "auth=unknown"),
             status_code=302,
         )
 
@@ -201,7 +287,7 @@ def auth_redirect(
             open_id,
         )
         return RedirectResponse(
-            url=f"{frontend_base}/douyin-ai-cs?auth=sync_failed",
+            url=_auth_redirect_url(frontend_base, "auth=sync_failed"),
             status_code=302,
         )
 
@@ -213,11 +299,11 @@ def auth_redirect(
     )
     if open_id:
         return RedirectResponse(
-            url=f"{frontend_base}/douyin-ai-cs?auth=success&open_id={_safe_query_value(open_id)}",
+            url=_auth_redirect_url(frontend_base, f"auth=success&open_id={_safe_query_value(open_id)}"),
             status_code=302,
         )
     return RedirectResponse(
-        url=f"{frontend_base}/douyin-ai-cs?auth=success&nick_name={_safe_query_value(nick_name or '')}",
+        url=_auth_redirect_url(frontend_base, f"auth=success&nick_name={_safe_query_value(nick_name or '')}"),
         status_code=302,
     )
 

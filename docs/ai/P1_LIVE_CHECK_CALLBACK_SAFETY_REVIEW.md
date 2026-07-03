@@ -433,3 +433,74 @@ douyin_oauth_states
 - `python -m pytest tests/test_douyin_live_check.py -q`：115 passed。
 - `python -m pytest tests/test_db_migration_runner.py::test_0024_douyin_oauth_states_creates_table_and_indexes -q`：1 passed。
 - `python -m pytest tests/test_auth_context.py -q`：27 passed。
+
+## 15. P1-LIVE-CHECK-OAUTH-REDIRECT-WHITELIST-1
+
+本轮继续收口抖音 live-check OAuth 授权完成后的前端跳转地址，防止配置错误、历史脏 state 或恶意回调参数造成开放重定向。
+
+### 15.1 原 redirect 风险点
+
+- `auth-url` 发起授权时，原实现会把 `DY_AUTH_REDIRECT_FRONTEND_URL`、`PUBLIC_BASE_URL` 或历史兜底值作为 `redirect_target` 写入 state，未做显式 origin 白名单校验。
+- `auth-redirect` 回跳时，原实现优先使用 state 中保存的 `redirect_target`，未对历史脏数据做二次校验。
+- callback query 中的 `redirect_url` 已不参与决策，本轮继续保持该边界。
+
+### 15.2 新增配置项
+
+- `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`
+
+该配置为逗号分隔的可信前端 origin 白名单，例如：
+
+```text
+DY_AUTH_REDIRECT_ALLOWED_ORIGINS=https://douyinapi.misanduo.com,http://127.0.0.1:5173,http://192.168.110.113:5173
+```
+
+### 15.3 allowed origins 规则
+
+- 只允许 `http` / `https`。
+- origin 必须精确命中 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`。
+- 禁止 scheme-relative URL，例如 `//evil.example.com`。
+- 禁止 `javascript:`、`data:`、`file:`、`ftp:` 等非 http(s) scheme。
+- 禁止带用户名密码的 URL，例如 `https://user:pass@example.com`。
+- production 下未配置白名单返回 `DOUYIN_OAUTH_REDIRECT_CONFIG_INVALID`，不静默放开。
+- production 下即使显式配置，也拒绝 localhost、127.0.0.1、私网和非公网 IP。
+
+### 15.4 allowed paths 规则
+
+当前授权结果页固定跳转到 `/douyin-ai-cs`。如果配置或历史 state 中携带路径，只接受明确站内路径：
+
+- `/douyin-ai-cs`
+- `/douyin-cs/workbench`
+- `/settings/douyin`
+- `/wechat-assistant`
+
+最终实际回跳仍由后端拼接为可信 origin + `/douyin-ai-cs` + 安全结果 query，不使用外部传入路径覆盖最终结果页。
+
+### 15.5 development / production 差异
+
+- development：可以使用 localhost、127.0.0.1 或局域网前端地址，但必须显式加入 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`。
+- production：必须显式配置 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`，且不允许 localhost / 127.0.0.1 / 私网地址作为回跳 origin。
+
+### 15.6 成功、失败、取消授权的跳转策略
+
+- 成功授权：使用校验后的 state redirect origin，跳转 `/douyin-ai-cs?auth=success...`。
+- 授权失败或取消：同样使用校验后的 state redirect origin，跳转 `/douyin-ai-cs?auth=failed...`。
+- state 缺失、无效、过期、重放：使用当前配置校验后的安全 origin，跳转失败结果页。
+- 历史 state 中的非法 `redirect_target`：不进入绑定同步，回退到当前配置的安全 origin，并返回 `DOUYIN_OAUTH_REDIRECT_FORBIDDEN`。
+- 错误跳转不携带完整 code、token、secret 或 state 原文。
+
+### 15.7 未改内容
+
+- 不改 NewCar 登录。
+- 不恢复或修改 NewCar `/auth/callback`。
+- 不改 webhook 签名。
+- 不改资源 SSRF。
+- 不改 merchant isolation。
+- 不改 RAG / 知识库。
+- 不改 Local Agent / 19000。
+- 不改自动发送链路。
+- 不触发真实私信发送。
+- 不调用真实上游写接口；测试使用 mock。
+
+### 15.8 测试结果
+
+- `python -m pytest tests/test_douyin_live_check.py -q`：128 passed。
