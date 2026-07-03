@@ -843,3 +843,51 @@ python -m py_compile apps\xg_douyin_ai_cs\services\vector_store.py apps\xg_douyi
 ```
 
 下一步建议进入 `P1-RAG-MILVUS-CANARY-E2E-VERIFY-1`，使用非业务 synthetic canary 数据做一次真实写入、检索和删除闭环验证。
+## P1-RAG-MILVUS-CANARY-E2E-VERIFY-1
+
+本轮新增独立 canary 运行态验证脚本：
+
+```bash
+python -m apps.xg_douyin_ai_cs.scripts.milvus_canary_e2e --run
+python -m apps.xg_douyin_ai_cs.scripts.milvus_canary_e2e --cleanup-only <canary_document_id>
+```
+
+验证范围：
+
+1. 只使用 synthetic canary 文档，不使用真实客户数据、真实销售话术、手机号、微信号或业务知识。
+2. 执行顺序为 `collection check -> upsert -> search -> delete -> search_after_delete`。
+3. 检索使用同一条 deterministic fake embedding，不调用真实 LLM，不触发 reply-suggestion，不触发 auto-reply。
+4. canary 固定 scope 为 `tenant_id=xiaogao_system`、`merchant_id=xiaogao_base`、`douyin_account_id=canary_account`、`category_key=base`。
+5. `finally` 中会尽力调用 `delete_document(document_id, tenant_id, merchant_id)`，避免留下 canary 脏数据。
+
+输出脱敏规则：
+
+1. CLI 只输出 `canary_document_id` 的短标识、`connected`、`collection_exists`、`schema_match`、`upsert_ok`、`search_hit`、`delete_ok`、`search_after_delete_hit`、`cleanup_ok`、`phase`、`error_code`、`error_type`。
+2. 不输出 Milvus URI、host、username、password、token。
+3. 不输出完整 canary chunk 文本。
+
+当前执行状态：
+
+1. 本地 shell 未注入真实 `RAG_VECTOR_BACKEND=milvus`、`MILVUS_URI`、`MILVUS_USERNAME`、`MILVUS_PASSWORD`、`MILVUS_COLLECTION`、`MILVUS_DIMENSION`，因此未执行真实 collection check 和真实 canary 写入。
+2. 已完成 fake Milvus 单元测试，覆盖 canary upsert、search 命中、delete、delete 后不命中、异常时 finally cleanup 和 CLI 脱敏输出。
+3. 未调用真实 LLM，未触发自动发送，未修改 9000 schema、ask / feedback schema、NewCar、live-check、Local Agent / 19000 或自动发送 gate。
+
+后续在用户本机注入真实 Milvus 环境变量后，可执行：
+
+```bash
+python -m apps.xg_douyin_ai_cs.scripts.milvus_collection_check --check
+python -m apps.xg_douyin_ai_cs.scripts.milvus_canary_e2e --run
+```
+
+预期脱敏结果为：
+
+```text
+connected=True
+collection_exists=True
+schema_match=True
+upsert_ok=True
+search_hit=True
+delete_ok=True
+search_after_delete_hit=False
+cleanup_ok=True
+```
