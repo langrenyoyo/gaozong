@@ -568,3 +568,86 @@ apps/xg_douyin_ai_cs/services/vector_store.py
 2. `P1-RAG-MILVUS-UPSERT-INGESTION-1`：训练链路写入 SQLite metadata 后同步 upsert Milvus。
 3. `P1-RAG-MILVUS-SEARCH-FALLBACK-1`：在显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。
 4. `P1-RAG-MILVUS-SECURITY-OBSERVABILITY-1`：补充 scope/filter 强制校验、耗时指标和脱敏日志。
+## 19. P1-RAG-MILVUS-COLLECTION-INIT-1
+
+### 19.1 本轮目标
+
+本轮在 9100 RAG 服务内补齐 Milvus collection 初始化、schema 校验和连接探测能力。默认仍为 `RAG_VECTOR_BACKEND=sqlite`，sqlite 模式不连接 Milvus，不要求安装 `pymilvus`，也不改变现有 RAG / reply-suggestion 检索链路。
+
+真实 Milvus URI、用户名、密码只允许放在本地 `.env`、容器环境变量或部署平台环境变量中，不写入仓库、文档、测试、日志或提交信息。
+
+### 19.2 collection schema
+
+当前采用单 collection + metadata filter 设计，collection 名称来自 `MILVUS_COLLECTION`，向量维度来自 `MILVUS_DIMENSION`。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| chunk_id | VarChar 主键 | chunk 唯一标识，max_length=128 |
+| embedding | FloatVector | 向量字段，dim=`MILVUS_DIMENSION` |
+| chunk_text | VarChar | chunk 文本，max_length=4096 |
+| document_id | VarChar | 文档标识 |
+| chunk_index | Int64 | 文档内 chunk 序号 |
+| tenant_id | VarChar | 租户隔离字段 |
+| merchant_id | VarChar | 商户隔离字段 |
+| douyin_account_id | VarChar | 抖音企业号范围字段，可为空字符串 |
+| category_key | VarChar | 知识范围过滤字段 |
+| category_id | VarChar | 可选分类标识，可为空字符串 |
+| source_type | VarChar | 来源类型 |
+| source_title | VarChar | 来源标题 |
+| source_hash | VarChar | 来源哈希 |
+| content_hash | VarChar | 内容哈希 |
+| status | VarChar | chunk 状态，后续 search 只允许 active |
+| created_at | Int64 | Unix timestamp |
+| updated_at | Int64 | Unix timestamp |
+
+可空字段先使用空字符串兼容，暂不依赖高版本 Milvus nullable / JSON 能力。
+
+### 19.3 index / metric 策略
+
+`MILVUS_INDEX_TYPE` 和 `MILVUS_METRIC_TYPE` 继续由环境变量控制。当前默认沿用上一轮配置骨架：`MILVUS_INDEX_TYPE=AUTOINDEX`，`MILVUS_METRIC_TYPE=COSINE`。本轮只做可初始化能力，不追求压测后的最优索引参数。
+
+### 19.4 check / init 入口
+
+新增内部 CLI：
+
+```bash
+python -m apps.xg_douyin_ai_cs.scripts.milvus_collection_check --check
+python -m apps.xg_douyin_ai_cs.scripts.milvus_collection_check --init
+```
+
+行为：
+
+1. `--check` 只检查 collection，不创建。
+2. `--init` 在 collection 缺失时创建 collection、索引并 load。
+3. `RAG_VECTOR_BACKEND` 不是 `milvus` 时只提示 Milvus 未启用，不连接、不创建。
+4. 输出只包含 backend、collection_exists、created、schema_match、dimension、metric_type 等脱敏字段。
+5. 失败只输出错误码，不输出 password、真实 URI 或真实用户名。
+
+### 19.5 schema mismatch 策略
+
+collection 已存在时会校验：
+
+1. 主键字段 `chunk_id` 存在。
+2. 向量字段 `embedding` 存在。
+3. `embedding` dimension 与 `MILVUS_DIMENSION` 一致。
+4. 关键 metadata 字段存在：`tenant_id`、`merchant_id`、`douyin_account_id`、`category_key`、`status` 等。
+
+schema 不匹配时返回 `MILVUS_SCHEMA_MISMATCH`，不静默继续，避免后续跨商户、跨知识范围或错误维度检索。
+
+### 19.6 本轮未实现
+
+1. 未接入 reply-suggestion 主检索链路。
+2. 未实现真实 upsert / search / delete 业务逻辑。
+3. 未写入真实业务知识。
+4. 未调用真实 LLM。
+5. 未修改 9000 业务接口 schema。
+6. 未修改 `/knowledge-training/ask` 和 `/feedback` schema。
+7. 未修改 NewCar 登录、live-check、Local Agent / 19000 或自动发送 gate。
+
+### 19.7 下一步任务
+
+建议后续拆分：
+
+1. `P1-RAG-MILVUS-UPSERT-INGESTION-1`：训练链路写 SQLite metadata 后同步 upsert Milvus。
+2. `P1-RAG-MILVUS-SEARCH-FALLBACK-1`：显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。
+3. `P1-RAG-MILVUS-SECURITY-OBSERVABILITY-1`：补齐 scope/filter 强校验、指标和脱敏日志。
