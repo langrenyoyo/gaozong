@@ -291,6 +291,149 @@ def test_document_without_category_still_trains_chunks(tmp_path, monkeypatch):
     assert [(row["category_id"], row["category_key"]) for row in rows] == [(None, None)]
 
 
+def test_train_sqlite_backend_does_not_touch_milvus(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagTrainRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+
+    repository.create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+            title="sqlite only",
+            content="sqlite backend should not touch milvus",
+            category_key="base",
+        )
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_vector_store",
+        lambda: (_ for _ in ()).throw(AssertionError("milvus should not be touched")),
+    )
+
+    result = repository.train_scope(
+        RagTrainRequest(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+        ),
+        llm_client=_StaticEmbeddingClient({"sqlite backend should not touch milvus": [1.0, 0.0]}),
+    )
+
+    assert result["status"] == "completed"
+
+
+def test_train_milvus_backend_deletes_and_upserts_chunks(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagTrainRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+
+    document_id = repository.create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id="account-open-id",
+            title="milvus sync",
+            content="milvus backend should upsert synthetic chunk",
+            source_type="manual",
+            category_id=7,
+            category_key="base",
+        )
+    )
+    fake_store = _FakeVectorStore()
+    monkeypatch.setattr(repository, "get_vector_store", lambda: fake_store)
+
+    result = repository.train_scope(
+        RagTrainRequest(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id="account-open-id",
+        ),
+        llm_client=_StaticEmbeddingClient({"milvus backend should upsert synthetic chunk": [1.0, 0.0]}),
+    )
+
+    assert result["status"] == "completed"
+    assert fake_store.deleted_documents == [
+        {
+            "document_id": str(document_id),
+            "tenant_id": "demo_tenant",
+            "merchant_id": "merchant_a",
+        }
+    ]
+    assert fake_store.upserted_chunks[0]["document_id"] == str(document_id)
+    assert fake_store.upserted_chunks[0]["tenant_id"] == "demo_tenant"
+    assert fake_store.upserted_chunks[0]["merchant_id"] == "merchant_a"
+    assert fake_store.upserted_chunks[0]["douyin_account_id"] == "account-open-id"
+    assert fake_store.upserted_chunks[0]["category_key"] == "base"
+    assert fake_store.upserted_chunks[0]["category_id"] == "7"
+    assert fake_store.upserted_chunks[0]["embedding"] == [1.0, 0.0]
+
+
+def test_train_milvus_backend_marks_run_failed_when_upsert_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagTrainRequest
+    from apps.xg_douyin_ai_cs.rag import repository
+    from apps.xg_douyin_ai_cs.services.vector_store import VectorStoreError
+
+    repository.create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="demo_tenant",
+            merchant_id="merchant_a",
+            douyin_account_id=1,
+            title="milvus fail",
+            content="milvus upsert failure should fail training",
+            category_key="base",
+        )
+    )
+    monkeypatch.setattr(
+        repository,
+        "get_vector_store",
+        lambda: _FakeVectorStore(upsert_error=VectorStoreError("MILVUS_UPSERT_FAILED", "details redacted")),
+    )
+
+    with pytest.raises(VectorStoreError):
+        repository.train_scope(
+            RagTrainRequest(
+                tenant_id="demo_tenant",
+                merchant_id="merchant_a",
+                douyin_account_id=1,
+            ),
+            llm_client=_StaticEmbeddingClient({"milvus upsert failure should fail training": [1.0, 0.0]}),
+        )
+
+    rows = _db_rows("SELECT status, chunk_count, error FROM rag_training_runs")
+    assert [(row["status"], row["chunk_count"]) for row in rows] == [("failed", 1)]
+    assert "MILVUS_UPSERT_FAILED" in rows[0]["error"]
+
+
+class _FakeVectorStore:
+    def __init__(self, upsert_error=None):
+        self.upsert_error = upsert_error
+        self.deleted_documents = []
+        self.upserted_chunks = []
+
+    def delete_document(self, *, document_id, tenant_id, merchant_id):
+        self.deleted_documents.append(
+            {
+                "document_id": document_id,
+                "tenant_id": tenant_id,
+                "merchant_id": merchant_id,
+            }
+        )
+
+    def upsert_chunks(self, chunks):
+        if self.upsert_error is not None:
+            raise self.upsert_error
+        self.upserted_chunks.extend(chunks)
+
+
 def test_rag_documents_train_search_and_scope_isolation(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 

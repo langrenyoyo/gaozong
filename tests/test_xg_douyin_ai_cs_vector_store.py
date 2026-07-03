@@ -329,6 +329,106 @@ def test_milvus_health_check_reports_sanitized_status(monkeypatch):
     assert "secret-password-should-not-leak" not in repr(result)
 
 
+def _valid_milvus_chunk(**overrides):
+    chunk = {
+        "chunk_id": "chunk-1",
+        "embedding": [0.1] * 1536,
+        "chunk_text": "synthetic test chunk",
+        "document_id": "doc-1",
+        "chunk_index": 1,
+        "tenant_id": "tenant-a",
+        "merchant_id": "merchant-a",
+        "douyin_account_id": "account-a",
+        "category_key": "base",
+        "category_id": "",
+        "source_type": "test",
+        "source_title": "synthetic title",
+        "source_hash": "",
+        "content_hash": "hash-1",
+        "status": "active",
+        "created_at": 1,
+        "updated_at": 1,
+    }
+    chunk.update(overrides)
+    return chunk
+
+
+def test_milvus_upsert_chunks_validates_and_writes_schema_rows(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.MilvusVectorStore(Settings()).upsert_chunks([_valid_milvus_chunk()])
+
+    assert result == {"backend": "milvus", "upserted": 1}
+    assert fake.utility.upsert_rows[0]["chunk_id"] == "chunk-1"
+    assert fake.utility.upsert_rows[0]["embedding"] == [0.1] * 1536
+    assert fake.utility.upsert_rows[0]["category_id"] == ""
+    assert fake.utility.upsert_rows[0]["status"] == "active"
+
+
+def test_milvus_delete_document_uses_scope_filter(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.MilvusVectorStore(Settings()).delete_document(
+        document_id="doc-1",
+        tenant_id="tenant-a",
+        merchant_id="merchant-a",
+    )
+
+    assert result == {"backend": "milvus", "deleted": True}
+    assert fake.utility.delete_exprs == [
+        'document_id == "doc-1" and tenant_id == "tenant-a" and merchant_id == "merchant-a"'
+    ]
+
+
+def test_milvus_upsert_rejects_dimension_mismatch(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    with pytest.raises(vector_store.VectorStoreConfigError) as exc_info:
+        vector_store.MilvusVectorStore(Settings()).upsert_chunks(
+            [_valid_milvus_chunk(embedding=[0.1, 0.2])]
+        )
+
+    assert exc_info.value.code == "MILVUS_VECTOR_DIMENSION_MISMATCH"
+    assert fake.utility.upsert_rows == []
+
+
+def test_milvus_upsert_rejects_missing_required_metadata(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(collection_exists=True, existing_dimension=1536)
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    with pytest.raises(vector_store.VectorStoreConfigError) as exc_info:
+        vector_store.MilvusVectorStore(Settings()).upsert_chunks(
+            [_valid_milvus_chunk(merchant_id="")]
+        )
+
+    assert exc_info.value.code == "MILVUS_CHUNK_METADATA_MISSING"
+    assert "merchant_id" in str(exc_info.value)
+    assert fake.utility.upsert_rows == []
+
+
 def test_milvus_collection_check_cli_skips_sqlite_backend(monkeypatch, capsys):
     _clear_milvus_env(monkeypatch)
 
@@ -529,11 +629,19 @@ def _fake_pymilvus(
         def load(self):
             fake.utility.loaded_collections.append(self.name)
 
+        def upsert(self, rows):
+            fake.utility.upsert_rows.extend(rows)
+
+        def delete(self, expr):
+            fake.utility.delete_exprs.append(expr)
+
     class FakeUtility:
         def __init__(self):
             self.created_collections = []
             self.loaded_collections = []
             self.index_created = False
+            self.upsert_rows = []
+            self.delete_exprs = []
 
         def has_collection(self, name, using=None):
             if has_collection_error is not None:

@@ -706,3 +706,71 @@ MILVUS_CONNECT_STRATEGY=orm|client_token
 3. 未接入 reply-suggestion 主检索链路。
 4. 未实现真实 upsert/search/delete。
 5. 未修改 9000、前端、NewCar、live-check、Local Agent / 19000 或自动发送 gate。
+
+## P1-RAG-MILVUS-UPSERT-INGESTION-1
+
+本轮在 9100 RAG 服务中新增 Milvus 写入能力，只覆盖训练后的 chunk 同步写入、按文档范围删除和幂等 upsert，不接入 reply-suggestion 搜索链路。
+
+### upsert 字段映射
+
+训练链路仍先写 SQLite `knowledge_documents` / `knowledge_chunks` / `rag_training_runs`。当 `RAG_VECTOR_BACKEND=milvus` 时，再把本次训练生成的 SQLite chunk 转换为 Milvus row：
+
+| Milvus 字段 | 来源 |
+|---|---|
+| `chunk_id` | `knowledge_chunks.id` 字符串 |
+| `embedding` | 本次 embedding 结果 |
+| `chunk_text` | `knowledge_chunks.chunk_text` |
+| `document_id` | `knowledge_chunks.document_id` 字符串 |
+| `chunk_index` | `knowledge_chunks.chunk_index` |
+| `tenant_id` | `knowledge_chunks.tenant_id` |
+| `merchant_id` | `knowledge_chunks.merchant_id` |
+| `douyin_account_id` | `knowledge_chunks.douyin_account_id` 字符串 |
+| `category_key` | `knowledge_chunks.category_key` |
+| `category_id` | `knowledge_chunks.category_id` 字符串，空值写空字符串 |
+| `source_type` | `knowledge_documents.source_type` |
+| `source_title` | `knowledge_documents.title` |
+| `source_hash` | 文档内容 hash |
+| `content_hash` | `knowledge_chunks.content_hash` |
+| `status` | active / inactive |
+| `created_at` / `updated_at` | 当前 Unix 秒级时间戳 |
+
+### delete / 更新 / 幂等策略
+
+1. `MilvusVectorStore.upsert_chunks()` 会先复用 `ensure_collection(create_if_missing=False)`，确认 collection 存在、schema 匹配、向量维度匹配。
+2. `embedding` 长度必须等于 `MILVUS_DIMENSION`，否则返回 `MILVUS_VECTOR_DIMENSION_MISMATCH`。
+3. `chunk_id`、`document_id`、`tenant_id`、`merchant_id`、`category_key` 必须非空，否则返回 `MILVUS_CHUNK_METADATA_MISSING`。
+4. 文档更新时，训练链路先调用 `delete_document(document_id, tenant_id, merchant_id)`，再 upsert 新 chunks。
+5. `delete_document()` 的过滤条件必须同时包含 `document_id`、`tenant_id`、`merchant_id`，不提供裸删全库能力。
+6. 同一个 `chunk_id` 重复 upsert 交给 Milvus upsert 语义覆盖或保持一致。
+
+### sqlite 与 milvus backend 行为
+
+1. `RAG_VECTOR_BACKEND=sqlite`：现有训练、搜索、reply-suggestion 行为不变，不初始化、不调用 Milvus。
+2. `RAG_VECTOR_BACKEND=milvus`：训练完成 SQLite chunk/embedding 后，同步写入 Milvus；SQLite metadata 仍保留，后续 search 可继续回退。
+3. 本轮不改变 `/rag/train`、`/knowledge-training/ask`、`/feedback` 的请求和响应 schema。
+
+### 失败策略
+
+Milvus delete/upsert 失败时，`train_scope()` 不会返回 completed；`rag_training_runs.status` 会记录为 `failed`，`error` 写入脱敏后的错误摘要。当前不做 silent fallback，避免外部向量库与 SQLite metadata 状态被误判为一致。
+
+### 本轮未接入
+
+1. 未接入 reply-suggestion / auto-reply 搜索链路。
+2. 未实现 Milvus search。
+3. 未调用真实 LLM。
+4. 未写入真实业务知识。
+5. 未修改 9000、前端、NewCar、live-check、Local Agent / 19000 或自动发送 gate。
+
+### 测试结果
+
+已通过：
+
+```bash
+python -m pytest tests/test_xg_douyin_ai_cs_vector_store.py -q
+python -m pytest tests/test_xg_douyin_ai_cs_rag.py -q
+python -m pytest tests/test_knowledge_training_api.py -q
+python -m pytest tests/test_douyin_ai_cs_proxy.py -q
+python -m py_compile apps\xg_douyin_ai_cs\services\vector_store.py apps\xg_douyin_ai_cs\scripts\milvus_collection_check.py
+```
+
+下一步建议进入 `P1-RAG-MILVUS-SEARCH-FALLBACK-1`，在显式 Milvus backend 下接入 search，并保留 SQLite / direct LLM fallback。

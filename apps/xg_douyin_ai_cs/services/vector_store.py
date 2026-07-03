@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import importlib.util
 import importlib
+import math
 import re
 import sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import Any, Protocol
 
@@ -103,14 +105,59 @@ class MilvusVectorStore:
         self.config = config
         self._connected = False
 
-    def upsert_chunks(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("MILVUS_UPSERT_NOT_IMPLEMENTED")
+    def upsert_chunks(self, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+        if not chunks:
+            return {"backend": self.backend, "upserted": 0}
+        self.ensure_collection(create_if_missing=False)
+        rows = [self._normalize_chunk(chunk) for chunk in chunks]
+        try:
+            collection = self._pymilvus.Collection(name=self.config.milvus_collection, using=self._alias)
+            collection.upsert(rows)
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_UPSERT_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="upsert",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+                error_type=type(exc).__name__,
+            ) from exc
+        return {"backend": self.backend, "upserted": len(rows)}
 
     def search(self, payload: RagSearchRequest, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError("MILVUS_SEARCH_NOT_IMPLEMENTED")
 
-    def delete_document(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("MILVUS_DELETE_NOT_IMPLEMENTED")
+    def delete_document(self, *, document_id: str, tenant_id: str, merchant_id: str) -> dict[str, Any]:
+        required = {"document_id": document_id, "tenant_id": tenant_id, "merchant_id": merchant_id}
+        missing = [key for key, value in required.items() if not str(value or "").strip()]
+        if missing:
+            raise VectorStoreConfigError(
+                "MILVUS_DELETE_SCOPE_MISSING",
+                f"Missing Milvus delete scope: {', '.join(missing)}",
+                phase="delete",
+                connected=self._connected,
+            )
+        self.ensure_collection(create_if_missing=False)
+        expr = (
+            f'document_id == "{_expr_quote(document_id)}" '
+            f'and tenant_id == "{_expr_quote(tenant_id)}" '
+            f'and merchant_id == "{_expr_quote(merchant_id)}"'
+        )
+        try:
+            collection = self._pymilvus.Collection(name=self.config.milvus_collection, using=self._alias)
+            collection.delete(expr)
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_DELETE_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="delete",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+                error_type=type(exc).__name__,
+            ) from exc
+        return {"backend": self.backend, "deleted": True}
 
     def health_check(self) -> dict[str, Any]:
         result = {
@@ -312,6 +359,48 @@ class MilvusVectorStore:
             **kwargs,
         )
 
+    def _normalize_chunk(self, chunk: dict[str, Any]) -> dict[str, Any]:
+        required = ("chunk_id", "document_id", "tenant_id", "merchant_id", "category_key")
+        missing = [key for key in required if not str(chunk.get(key) or "").strip()]
+        if missing:
+            raise VectorStoreConfigError(
+                "MILVUS_CHUNK_METADATA_MISSING",
+                f"Missing Milvus chunk metadata: {', '.join(missing)}",
+                phase="upsert",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+            )
+        embedding = _coerce_vector(chunk.get("embedding"))
+        if len(embedding) != self.config.milvus_dimension:
+            raise VectorStoreConfigError(
+                "MILVUS_VECTOR_DIMENSION_MISMATCH",
+                "Milvus embedding dimension does not match MILVUS_DIMENSION",
+                phase="upsert",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+            )
+        return {
+            "chunk_id": str(chunk["chunk_id"]),
+            "embedding": embedding,
+            "chunk_text": str(chunk.get("chunk_text") or ""),
+            "document_id": str(chunk["document_id"]),
+            "chunk_index": int(chunk.get("chunk_index") or 0),
+            "tenant_id": str(chunk["tenant_id"]),
+            "merchant_id": str(chunk["merchant_id"]),
+            "douyin_account_id": str(chunk.get("douyin_account_id") or ""),
+            "category_key": str(chunk["category_key"]),
+            "category_id": str(chunk.get("category_id") or ""),
+            "source_type": str(chunk.get("source_type") or ""),
+            "source_title": str(chunk.get("source_title") or ""),
+            "source_hash": str(chunk.get("source_hash") or ""),
+            "content_hash": str(chunk.get("content_hash") or ""),
+            "status": str(chunk.get("status") or "active"),
+            "created_at": _coerce_unix_timestamp(chunk.get("created_at")),
+            "updated_at": _coerce_unix_timestamp(chunk.get("updated_at")),
+        }
+
     def _validate_collection_schema(self, schema: Any) -> None:
         fields = {field.name: field for field in getattr(schema, "fields", [])}
         required_fields = {
@@ -510,6 +599,41 @@ def _field_param(field: Any, name: str) -> Any:
     if hasattr(field, "kwargs") and name in field.kwargs:
         return field.kwargs[name]
     return getattr(field, name, None)
+
+
+def _coerce_vector(value: object) -> list[float]:
+    if value is None or isinstance(value, (str, bytes)):
+        return []
+    try:
+        vector = [float(item) for item in value]  # type: ignore[operator]
+    except (TypeError, ValueError):
+        return []
+    if any(not math.isfinite(item) for item in vector):
+        return []
+    return vector
+
+
+def _coerce_unix_timestamp(value: object) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def _expr_quote(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _classify_connect_error(exc: Exception) -> str:

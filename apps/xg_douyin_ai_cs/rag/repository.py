@@ -8,9 +8,11 @@ import logging
 import math
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from typing import Sequence
 
+from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
 from apps.xg_douyin_ai_cs.rag.chunker import chunk_text
 from apps.xg_douyin_ai_cs.rag.database import connect
@@ -22,6 +24,7 @@ from apps.xg_douyin_ai_cs.rag.models import (
     RagSearchRequest,
     RagTrainRequest,
 )
+from apps.xg_douyin_ai_cs.services.vector_store import get_vector_store
 
 
 TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
@@ -125,6 +128,7 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
             (payload.tenant_id, payload.merchant_id, payload.douyin_account_id),
         ).fetchall()
         chunk_count = 0
+        milvus_chunks: list[dict] = []
         try:
             conn.execute(
                 """
@@ -175,7 +179,20 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                             digest,
                         ),
                     )
+                    row = conn.execute(
+                        """
+                        SELECT c.*, d.title, d.source_type, d.content AS document_content
+                        FROM knowledge_chunks c
+                        JOIN knowledge_documents d ON d.id=c.document_id
+                        WHERE c.document_id=? AND c.content_hash=?
+                        """,
+                        (doc["id"], digest),
+                    ).fetchone()
+                    if row is not None:
+                        milvus_chunks.append(_to_milvus_chunk(row, embedding["embedding"]))
                     chunk_count += 1
+            if settings.rag_vector_backend == "milvus":
+                _sync_milvus_chunks(docs, milvus_chunks)
             conn.execute(
                 """
                 UPDATE rag_training_runs
@@ -198,10 +215,50 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                 SET status='failed', document_count=?, chunk_count=?, error=?, finished_at=CURRENT_TIMESTAMP
                 WHERE id=?
                 """,
-                (len(docs), chunk_count, str(exc)[:500], run_id),
+                (len(docs), chunk_count, _error_summary(exc), run_id),
             )
             conn.commit()
             raise
+
+
+def _sync_milvus_chunks(docs: Sequence[sqlite3.Row], chunks: list[dict]) -> None:
+    store = get_vector_store()
+    for doc in docs:
+        store.delete_document(
+            document_id=str(doc["id"]),
+            tenant_id=str(doc["tenant_id"]),
+            merchant_id=str(doc["merchant_id"]),
+        )
+    store.upsert_chunks(chunks)
+
+
+def _to_milvus_chunk(row: sqlite3.Row, embedding: object) -> dict:
+    now = int(time.time())
+    return {
+        "chunk_id": str(row["id"]),
+        "embedding": embedding,
+        "chunk_text": str(row["chunk_text"] or ""),
+        "document_id": str(row["document_id"]),
+        "chunk_index": int(row["chunk_index"]),
+        "tenant_id": str(row["tenant_id"]),
+        "merchant_id": str(row["merchant_id"]),
+        "douyin_account_id": str(row["douyin_account_id"] or ""),
+        "category_key": str(row["category_key"] or ""),
+        "category_id": "" if row["category_id"] is None else str(row["category_id"]),
+        "source_type": str(row["source_type"] or ""),
+        "source_title": str(row["title"] or ""),
+        "source_hash": hashlib.sha256(str(row["document_content"] or "").encode("utf-8")).hexdigest(),
+        "content_hash": str(row["content_hash"] or ""),
+        "status": "active" if int(row["is_active"]) == 1 else "inactive",
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _error_summary(exc: Exception) -> str:
+    code = getattr(exc, "code", "")
+    message = str(exc)
+    return f"{code}: {message}"[:500] if code else message[:500]
 
 
 def search(
