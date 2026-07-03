@@ -21,6 +21,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { fetchAgentStatus } from "../../../api/agent";
+import { getApiErrorCode, isLocalAgentAuthErrorCode } from "../../../api/client";
 import type { AgentStatusData } from "../../../api/types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import {
@@ -239,6 +240,18 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     }
   }
 
+  async function loadPendingTasksForBrowser(): Promise<WechatTask[]> {
+    try {
+      return await fetchPendingWechatTasks({ limit: 20 });
+    } catch (err) {
+      if (isLocalAgentAuthErrorCode(getApiErrorCode(err))) {
+        toast.warning("Local Agent 尚未完成授权或当前任务接口需要 Agent token");
+        return [];
+      }
+      throw err;
+    }
+  }
+
   async function refreshPage() {
     setLoading(true);
     try {
@@ -250,7 +263,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           status: staffStatusFilter,
           keyword: staffKeyword.trim() || undefined,
         }),
-        fetchPendingWechatTasks({ limit: 20 }),
+        loadPendingTasksForBrowser(),
         fetchWechatTaskHistory({
           page: taskHistoryPage,
           page_size: taskHistoryPageSize,

@@ -1,6 +1,6 @@
 # 外部系统登录接入说明
 
-更新时间：2026-07-01
+更新时间：2026-07-03
 
 本文档提供给外部系统开发人员使用，用于接入当前内部商户系统维护的外部账号登录能力。
 
@@ -135,7 +135,12 @@ auto_wechat 前端按错误类型区分是否自动跳转统一登录：
 - `TOKEN_EXPIRED` / `TOKEN_INVALID`：清理本地 `external_token`，显示“登录已过期，正在重新登录…”后自动跳转 NewCarProject 统一登录页。
 - `EXTERNAL_MERCHANT_NOT_BOUND`：显示“账号已登录，但暂未绑定商户，请联系管理员开通服务。”，不自动跳统一登录，避免反复登录。
 - `PERMISSION_DENIED`：显示“当前账号暂无访问该功能权限，请联系管理员开通。”，不自动跳统一登录。
+- `LOCAL_AGENT_*`：表示 Local Agent 机器认证错误，不清理浏览器 `external_token`，不自动跳 NewCarProject 统一登录页。
 - 一次性 code 换 token 失败：清理 URL 中的 `code` / `source`，显示“登录凭证已失效，请重新登录。”，不展示上游完整错误体。
+
+auto_wechat 前端全局 `401` 拦截器只处理 NewCar 浏览器登录态错误。`LOCAL_AGENT_TOKEN_MISSING`、`LOCAL_AGENT_TOKEN_INVALID`、`LOCAL_AGENT_TOKEN_REQUIRED`、`LOCAL_AGENT_TOKEN_REVOKED` 以及其它 `LOCAL_AGENT_` 前缀错误会继续抛给页面处理。
+
+`/wechat-assistant` 页面如果遇到 Local Agent token 错误，应作为业务接口错误展示轻量提示，例如“Local Agent 尚未完成授权或当前任务接口需要 Agent token”，并保持本机 `19000` 健康检查、运行状态、销售配置等其它模块可见。
 
 错误页提供的操作：
 

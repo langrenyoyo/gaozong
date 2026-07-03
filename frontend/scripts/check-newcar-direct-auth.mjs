@@ -25,6 +25,7 @@ const client = read("src/api/client.ts");
 const tokenStore = read("src/authToken.ts");
 const newcarRedirect = read("src/newcarRedirect.ts");
 const envExample = read(".env.example");
+const wechatAgentPage = read("src/features/wechat-assistant/pages/WechatAgent.tsx");
 
 assertIncludes(authApi, "VITE_NEWCAR_AUTH_BASE_URL", "auth api reads NewCar base url");
 assertIncludes(authApi, "/api/external-auth/exchange-code", "auth api calls upstream exchange-code");
@@ -59,6 +60,23 @@ assertIncludes(app, "handleBackToWorkbench", "app permission action returns to t
 assertIncludes(client, "getExternalToken()", "9000 api client reads token store");
 assertIncludes(client, "Authorization = `Bearer ${token}`", "9000 api client injects bearer token");
 assertIncludes(client, "redirectToNewCarLogin", "9000 api client redirects expired token to NewCar login");
+assertIncludes(client, "getApiErrorCode", "9000 api client classifies api error codes before redirecting");
+assertIncludes(client, "isLocalAgentAuthErrorCode", "9000 api client recognizes Local Agent machine auth errors");
+assertIncludes(client, 'code.startsWith("LOCAL_AGENT_")', "9000 api client treats all LOCAL_AGENT_* errors as machine auth errors");
+assertIncludes(client, "LOCAL_AGENT_TOKEN_MISSING", "9000 api client explicitly covers missing Local Agent token");
+assertIncludes(client, "LOCAL_AGENT_TOKEN_INVALID", "9000 api client explicitly covers invalid Local Agent token");
+assertIncludes(client, "LOCAL_AGENT_TOKEN_REQUIRED", "9000 api client explicitly covers required Local Agent token");
+assertIncludes(client, "LOCAL_AGENT_TOKEN_REVOKED", "9000 api client explicitly covers revoked Local Agent token");
+assertIncludes(client, "PERMISSION_DENIED", "9000 api client does not redirect permission denied users to NewCar login");
+assertIncludes(client, "EXTERNAL_MERCHANT_NOT_BOUND", "9000 api client does not redirect unbound merchants to NewCar login");
+assertIncludes(client, "isNewCarLoginAuthErrorCode", "9000 api client explicitly recognizes NewCar login auth errors");
+assertIncludes(client, "TOKEN_MISSING", "9000 api client keeps missing token redirect behavior");
+assertIncludes(client, "TOKEN_EXPIRED", "9000 api client keeps expired token redirect behavior");
+assertIncludes(client, "TOKEN_INVALID", "9000 api client keeps invalid token redirect behavior");
+assertIncludes(client, "shouldRedirectToNewCarLogin", "9000 api client scopes 401 redirects to NewCar auth errors");
+assertIncludes(client, "isNewCarLoginAuthErrorCode(code)", "9000 api client redirects known NewCar login auth errors");
+assertIncludes(client, "!isLocalAgentAuthErrorCode(code)", "9000 api client excludes Local Agent auth errors from NewCar redirects");
+assertIncludes(client, "!isNonLoginAuthErrorCode(code)", "9000 api client excludes permission and binding errors from NewCar redirects");
 assertIncludes(tokenStore, "sessionStorage", "token store uses sessionStorage");
 assertIncludes(tokenStore, 'EXTERNAL_TOKEN_KEY = "external_token"', "token store uses the runtime sessionStorage key");
 assertNotIncludes(tokenStore, "external_auth_token", "token store does not use the historical mistaken key");
@@ -92,6 +110,10 @@ assertNotIncludes(newcarRedirect, 'sessionStorage.getItem(NEWCAR_REDIRECTING_KEY
 assertIncludes(app, "loginRedirectNotice", "app renders a user-facing NewCar redirect notice");
 assertIncludes(app, "正在前往统一登录，请稍候", "app shows a friendly notice for missing token redirect");
 assertIncludes(app, "登录已过期，正在重新登录", "app shows a friendly notice for expired token redirect");
+assertIncludes(wechatAgentPage, "loadPendingTasksForBrowser", "wechat assistant handles browser pending task loading separately");
+assertIncludes(wechatAgentPage, "isLocalAgentAuthErrorCode(getApiErrorCode(err))", "wechat assistant treats Local Agent token errors as page-level business errors");
+assertIncludes(wechatAgentPage, "Local Agent 尚未完成授权或当前任务接口需要 Agent token", "wechat assistant shows Local Agent token guidance without NewCar relogin");
+assertIncludes(wechatAgentPage, "return []", "wechat assistant keeps other modules visible when pending machine task auth fails");
 assertIncludes(envExample, "VITE_NEWCAR_AUTH_BASE_URL=http://192.168.110.19:8790", "frontend env example documents NewCar base url");
 assertIncludes(envExample, "VITE_NEWCAR_LOGIN_URL=http://192.168.110.19:5174/login", "frontend env example documents NewCar login url");
 
