@@ -63,7 +63,8 @@ def test_knowledge_client_posts_rag_document_with_gateway_headers(monkeypatch):
     assert header_map["x-gateway-merchant-id"] == "merchant-a"
     assert header_map["x-gateway-tenant-id"] == "tenant-a"
     assert header_map["x-gateway-user-id"] == "user-a"
-    assert "auto_wechat:knowledge" in header_map["x-gateway-permissions"]
+    assert "auto_wechat:knowledge" not in header_map["x-gateway-permissions"]
+    assert "auto_wechat:douyin_ai_cs" in header_map["x-gateway-permissions"]
     assert data["data"]["document_id"] == 7
 
 

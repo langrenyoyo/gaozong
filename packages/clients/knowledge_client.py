@@ -114,7 +114,7 @@ class KnowledgeClient:
             merchant_id=merchant_id,
             tenant_id=tenant_id,
             user_id=user_id,
-            permission_codes=["auto_wechat:knowledge"],
+            permission_codes=["auto_wechat:ai_agents"],
         )
 
     def create_rag_document(
@@ -147,7 +147,7 @@ class KnowledgeClient:
             merchant_id=merchant_id,
             tenant_id=tenant_id,
             user_id=user_id,
-            permission_codes=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"],
+            permission_codes=["auto_wechat:douyin_ai_cs"],
         )
 
     def train_rag(
@@ -172,5 +172,5 @@ class KnowledgeClient:
             merchant_id=merchant_id,
             tenant_id=tenant_id,
             user_id=user_id,
-            permission_codes=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"],
+            permission_codes=["auto_wechat:douyin_ai_cs"],
         )

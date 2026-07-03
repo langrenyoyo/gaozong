@@ -45,7 +45,6 @@ def test_frontend_feature_directories_have_required_entrypoints():
         "agents",
         "wechat-assistant",
         "compute",
-        "knowledge",
     ]
     expected_files = ["api.ts", "types.ts", "routes.ts"]
     expected_dirs = ["pages", "components"]
@@ -57,6 +56,22 @@ def test_frontend_feature_directories_have_required_entrypoints():
             assert (feature_dir / filename).is_file(), f"missing feature entrypoint: {feature}/{filename}"
         for dirname in expected_dirs:
             assert (feature_dir / dirname).is_dir(), f"missing feature folder: {feature}/{dirname}"
+
+
+def test_frontend_removes_historical_knowledge_management_and_debug_pages():
+    removed_paths = [
+        "frontend/src/features/knowledge/api.ts",
+        "frontend/src/features/knowledge/routes.ts",
+        "frontend/src/features/knowledge/pages/KnowledgeBasePage.tsx",
+        "frontend/src/features/knowledge/pages/KnowledgeCategoriesPage.tsx",
+        "frontend/src/pages/KnowledgeBasePage.tsx",
+        "frontend/src/pages/KnowledgeCategoriesPage.tsx",
+        "frontend/src/pages/DouyinAiCsTestPage.tsx",
+        "frontend/src/features/douyin-cs/pages/DouyinAiCsTestPage.tsx",
+        "frontend/src/api/knowledge.ts",
+    ]
+    for path in removed_paths:
+        assert not Path(path).exists(), f"historical knowledge/debug entry should be removed: {path}"
 
 
 def test_frontend_app_and_sidenav_consume_feature_aggregation():
@@ -71,11 +86,9 @@ def test_frontend_app_and_sidenav_consume_feature_aggregation():
 
 def test_frontend_api_clients_are_reexported_from_features():
     legacy_douyin = Path("frontend/src/api/douyinCs.ts").read_text(encoding="utf-8")
-    legacy_knowledge = Path("frontend/src/api/knowledge.ts").read_text(encoding="utf-8")
     feature_douyin = Path("frontend/src/features/douyin-cs/api.ts").read_text(encoding="utf-8")
 
     assert '../features/douyin-cs/api' in legacy_douyin
-    assert '../features/knowledge/api' in legacy_knowledge
     assert "/rag/" not in feature_douyin
     assert "createRagDocument" not in feature_douyin
     assert "trainRag" not in feature_douyin

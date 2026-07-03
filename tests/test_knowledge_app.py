@@ -43,7 +43,7 @@ def _client(*, merchant_id: str | None = "merchant-a", permissions: list[str] | 
         "tenant_id": "tenant-a",
         "user_id": "user-a",
         "super_admin": False,
-        "permission_codes": permissions or ["auto_wechat:knowledge"],
+        "permission_codes": permissions or ["auto_wechat:ai_agents"],
         "source_system": "new_car_project",
     }
     return TestClient(app)
@@ -151,6 +151,13 @@ def test_knowledge_app_categories_keep_legacy_ai_agents_permission_compatible():
     assert response.json()["data"][0]["category_key"] == "base"
 
 
+def test_knowledge_app_rejects_historical_knowledge_permission():
+    response = _client(permissions=["auto_wechat:knowledge"]).get("/api/knowledge/categories")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
 def test_knowledge_app_rag_document_write_is_locked(monkeypatch):
     from apps.knowledge import routers
 
@@ -158,7 +165,7 @@ def test_knowledge_app_rag_document_write_is_locked(monkeypatch):
     monkeypatch.setattr(routers, "get_xg_douyin_ai_cs_client", lambda: fake_client)
     _insert_account(open_id="account-open-1", merchant_id="merchant-a")
 
-    response = _client(permissions=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"]).post(
+    response = _client(permissions=["auto_wechat:douyin_ai_cs"]).post(
         "/api/knowledge/rag/documents",
         json={
             "account_open_id": "account-open-1",
@@ -185,7 +192,7 @@ def test_knowledge_app_rag_train_is_locked(monkeypatch):
     _insert_account(open_id="account-open-1", merchant_id="merchant-a")
     _insert_category(merchant_id="merchant-a", category_key="premium_bba", name="精品BBA")
 
-    response = _client(permissions=["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"]).post(
+    response = _client(permissions=["auto_wechat:douyin_ai_cs"]).post(
         "/api/knowledge/rag/train",
         json={
             "account_open_id": "account-open-1",

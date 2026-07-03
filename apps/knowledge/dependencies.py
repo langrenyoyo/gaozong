@@ -55,14 +55,14 @@ def _has_any_permission(context: GatewayContext, permission_codes: list[str]) ->
 
 
 def require_knowledge_context(context: GatewayContext) -> str:
-    """知识分类接口需要可信商户上下文和知识库/智能体权限。"""
+    """知识分类接口需要可信商户上下文和智能体权限。"""
     if not _has_any_permission(
         context,
-        ["auto_wechat:knowledge", "auto_wechat:ai_agents", "auto_wechat:agent"],
+        ["auto_wechat:ai_agents", "auto_wechat:agent"],
     ):
         raise HTTPException(
             status_code=403,
-            detail={"code": "PERMISSION_DENIED", "message": "缺少统一知识库权限"},
+            detail={"code": "PERMISSION_DENIED", "message": "缺少智能体知识范围权限"},
         )
     merchant_id = context.get("merchant_id")
     if not merchant_id:
@@ -92,14 +92,14 @@ def build_request_context(context: GatewayContext) -> RequestContext:
 
 
 def require_rag_context(context: GatewayContext) -> RequestContext:
-    """RAG 代理接口需要可信商户上下文和知识库/抖音客服权限。"""
+    """RAG 代理接口需要可信商户上下文和抖音客服权限。"""
     if not _has_any_permission(
         context,
-        ["auto_wechat:knowledge", "auto_wechat:douyin_ai_cs"],
+        ["auto_wechat:douyin_ai_cs"],
     ):
         raise HTTPException(
             status_code=403,
-            detail={"code": "PERMISSION_DENIED", "message": "缺少 RAG 训练权限"},
+            detail={"code": "PERMISSION_DENIED", "message": "缺少抖音 AI 客服权限"},
         )
     merchant_id = context.get("merchant_id")
     if not merchant_id:
