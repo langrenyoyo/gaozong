@@ -1,7 +1,7 @@
 import { clearExternalToken } from "./authToken";
 
 export const NEWCAR_LOGIN_URL = import.meta.env.VITE_NEWCAR_LOGIN_URL as string | undefined;
-export const DEFAULT_POST_LOGIN_PATH = "/douyin-cs/workbench";
+export const DEFAULT_POST_LOGIN_PATH = "/";
 export const NEWCAR_REDIRECT_PATH_KEY = "newcar_redirect_path";
 export const NEWCAR_REDIRECT_PATH_SAVED_AT_KEY = "newcar_redirect_path_saved_at";
 export const NEWCAR_REDIRECT_PATH_TTL_MS = 10 * 60 * 1000;
@@ -66,25 +66,25 @@ export function clearNewCarRedirectState(): void {
   sessionStorage.removeItem(NEWCAR_REDIRECTING_KEY);
 }
 
-function resolveSavedRedirectPath(): string {
+function resolveSavedRedirectPath(): string | null {
   const savedPath = sessionStorage.getItem(NEWCAR_REDIRECT_PATH_KEY);
   const savedAt = sessionStorage.getItem(NEWCAR_REDIRECT_PATH_SAVED_AT_KEY);
   const savedAgeMs = Date.now() - Number(savedAt);
 
   if (!savedPath) {
-    return DEFAULT_POST_LOGIN_PATH;
+    return null;
   }
 
   if (!savedAt || !Number.isFinite(savedAgeMs) || savedAgeMs < 0 || savedAgeMs > NEWCAR_REDIRECT_PATH_TTL_MS) {
-    console.warn("NewCar redirect path expired, fallback to default workbench.");
+    console.warn("NewCar redirect path expired, fallback to permission-based default page.");
     clearSavedRedirectPath();
-    return DEFAULT_POST_LOGIN_PATH;
+    return null;
   }
 
   if (!isAllowedRedirectPath(savedPath)) {
-    console.warn("NewCar redirect path rejected by allowlist, fallback to default workbench.");
+    console.warn("NewCar redirect path rejected by allowlist, fallback to permission-based default page.");
     clearSavedRedirectPath();
-    return DEFAULT_POST_LOGIN_PATH;
+    return null;
   }
 
   return savedPath;
@@ -126,14 +126,9 @@ export function redirectToNewCarLogin(options: RedirectToNewCarLoginOptions = {}
   return true;
 }
 
-export function restoreSavedRedirectPathAfterLogin(): void {
+export function consumeSavedRedirectPathAfterLogin(): string | null {
   sessionStorage.removeItem(NEWCAR_REDIRECTING_KEY);
-
   const targetPath = resolveSavedRedirectPath();
   clearSavedRedirectPath();
-  if (targetPath === currentPath()) {
-    return;
-  }
-
-  window.history.replaceState({}, "", targetPath);
+  return targetPath;
 }

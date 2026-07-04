@@ -8,8 +8,8 @@ import { clearExternalToken, getExternalToken, setExternalToken } from "./authTo
 import {
   addNewCarRedirectNoticeListener,
   clearNewCarRedirectState,
+  consumeSavedRedirectPathAfterLogin,
   redirectToNewCarLogin,
-  restoreSavedRedirectPathAfterLogin,
 } from "./newcarRedirect";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 import {
@@ -56,7 +56,7 @@ function userFromAuthData(data: AuthContextData): AppUser {
 }
 
 function assertCanEnterSystem(user: AppUser) {
-  if (!hasPermission(user, PERMISSIONS.use)) {
+  if (!hasPermission(user, PERMISSIONS.use) && !isAdminLike(user)) {
     throw new Error("当前账号暂无访问该功能权限，请联系管理员开通。");
   }
 }
@@ -74,15 +74,64 @@ function cleanCodeFromUrl() {
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function replaceCurrentPath(path: string) {
+  const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (path !== currentPath) {
+    window.history.replaceState({}, "", path);
+  }
+}
+
 function defaultPathForUser(user: AppUser): string {
   if (isAdminLike(user)) {
     if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
+    if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/no-local-feature";
     if (hasAnyNewCarOwnedAdminPermission(user)) return "/admin/newcar-owned";
     return "/admin/no-local-feature";
   }
   const first = filterCapabilityNavCenters(user)[0];
   return first?.path || "/";
+}
+
+function pathNameOf(path: string): string | null {
+  if (!path.trim() || !path.startsWith("/") || path.startsWith("//")) {
+    return null;
+  }
+  try {
+    return new URL(path, window.location.origin).pathname;
+  } catch {
+    return null;
+  }
+}
+
+function canAccessPath(user: AppUser, path: string): boolean {
+  const pathname = pathNameOf(path);
+  if (!pathname) return false;
+
+  if (pathname === "/admin/autoreply-rollout") {
+    return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminAutoreply);
+  }
+  if (pathname === "/admin/ai-reply-records") {
+    return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminAiReplyRecords);
+  }
+  if (pathname === "/admin/newcar-owned" || pathname === "/admin/no-local-feature") {
+    return isAdminLike(user);
+  }
+
+  const legacyTarget = legacyRouteRedirects.find((route) => pathname === route.from)?.to;
+  if (legacyTarget) {
+    return canAccessPath(user, legacyTarget);
+  }
+
+  const allowedNavIds = new Set(filterCapabilityNavCenters(user).flatMap((center) => center.children.map((item) => item.id)));
+  return capabilityRoutes.some((route) => route.path === pathname && allowedNavIds.has(route.navId));
+}
+
+function resolvePostLoginPath(user: AppUser, candidateRedirect: string | null): string {
+  if (candidateRedirect && canAccessPath(user, candidateRedirect)) {
+    return candidateRedirect;
+  }
+  return defaultPathForUser(user);
 }
 
 function hasAnyNewCarOwnedAdminPermission(user: AppUser): boolean {
@@ -197,9 +246,10 @@ const App = () => {
           }
           const currentUserData = await fetchCurrentAuthUser();
           cleanCodeFromUrl();
-          restoreSavedRedirectPathAfterLogin();
           const nextUser = userFromAuthData(currentUserData);
           assertCanEnterSystem(nextUser);
+          const postLoginPath = resolvePostLoginPath(nextUser, consumeSavedRedirectPathAfterLogin());
+          replaceCurrentPath(postLoginPath);
           if (active) setUser(nextUser);
           return;
         }
