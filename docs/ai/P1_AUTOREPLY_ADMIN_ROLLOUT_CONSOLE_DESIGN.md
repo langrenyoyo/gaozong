@@ -533,3 +533,106 @@ env fuse -> admin global -> admin rollout/whitelist -> account settings -> runti
 3. 当前 env 白名单无法通过前端安全修改，生产控制台应引入 DB 管理层白名单。
 4. env 仍应保留为最高级熔断，不应被前端覆盖。
 5. 后端 gate 继续保持最终权威，控制台只是配置入口和审计入口。
+
+## 13. P1-AUTOREPLY-ADMIN-ROLLOUT-MODEL-1
+
+本轮新增 DB 管理层配置与审计模型，不接入真实发送 gate，不新增 admin API，不做前端页面。
+
+### 13.1 新增表
+
+| 表 | 作用 | 默认安全策略 |
+|---|---|---|
+| `autoreply_rollout_configs` | 保存管理员 DB 层自动回复灰度意图 | `auto_reply_enabled=false`、`real_send_enabled=false`、`allow_full_rollout=false` |
+| `autoreply_whitelist_entries` | 保存企业号 / 客户 / 会话白名单 | 默认空白名单，新增记录默认 `enabled=true` |
+| `autoreply_admin_audit_logs` | 保存管理员操作审计 | 只记录配置摘要，不记录密钥、完整客户消息或 prompt |
+
+### 13.2 默认值
+
+未找到 DB 配置时，服务层返回安全默认值：
+
+```text
+auto_reply_enabled=false
+real_send_enabled=false
+allow_full_rollout=false
+```
+
+这只是 DB 管理层意图，不计算 env 熔断。后续 gate 接入时必须同时满足 env 和 DB 配置。
+
+### 13.3 审计字段
+
+审计日志记录：
+
+- `action`
+- `merchant_id`
+- `account_open_id`
+- `target_type`
+- `target_id`
+- `before_json`
+- `after_json`
+- `reason`
+- `operator_id`
+- `operator_name`
+- `created_at`
+
+`before_json` / `after_json` 写入前会剔除 `token`、`secret`、`password`、`cookie`、`authorization` 等敏感键。
+
+### 13.4 白名单幂等策略
+
+白名单以 `entry_type + merchant_id + account_open_id + value` 作为幂等范围。
+
+- active 记录重复添加：返回已有记录，不重复写审计。
+- disabled 记录再次添加：重新启用，并写入审计。
+- 移除白名单：软禁用，写入 `disabled_by` / `disabled_at`，不物理删除。
+
+### 13.5 env 熔断与 DB 配置关系
+
+本轮没有让 DB 配置覆盖 env。后续 gate 接入时应保持：
+
+```text
+env 熔断
+  -> DB 管理层配置
+  -> DB 管理层 rollout / whitelist
+  -> 账号 enabled/send_enabled
+  -> Agent / RAG / post-LLM / 人工接管 / send context
+```
+
+env 级开关仍是最高优先级。即使 DB 中 `real_send_enabled=true`，只要 env 真实发送熔断关闭，仍不得真实发送。
+
+### 13.6 本轮未接入真实 gate
+
+本轮未修改：
+
+- `evaluate_real_send_gates`
+- `send_ai_auto_reply_for_run`
+- 9000 对外 schema
+- 管理端 API
+- 前端页面
+- NewCar、live-check、Local Agent、19000
+
+### 13.7 测试结果
+
+本轮新增测试文件：
+
+```text
+tests/test_autoreply_admin_rollout_service.py
+```
+
+覆盖：
+
+- 默认配置安全。
+- 更新 DB 配置会写审计。
+- account 白名单重复添加幂等。
+- customer / conversation 白名单添加。
+- disable 后不再 active。
+- audit log 不记录 secret/token/password。
+- 服务层不触发 sender，也不调用既有 gate。
+
+### 13.8 下一步任务
+
+建议下一任务再接入真实发送 gate：
+
+```text
+P1-AUTOREPLY-ADMIN-ROLLOUT-GATE-INTEGRATION-1
+```
+
+该任务再把 env fuse、DB 管理层配置、DB 白名单与现有账号级 gate 串联，并补充 blocked_reason。

@@ -481,6 +481,79 @@ class DouyinAccountAutoreplySetting(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class AutoReplyRolloutConfig(Base):
+    """管理员 DB 层自动回复灰度配置；只表达管理员意图，不覆盖 env 熔断。"""
+
+    __tablename__ = "autoreply_rollout_configs"
+    __table_args__ = (
+        UniqueConstraint("scope", "merchant_id", name="uk_autoreply_rollout_configs_scope_merchant"),
+        Index("idx_autoreply_rollout_configs_merchant", "merchant_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scope = Column(String(32), nullable=False, default="global")
+    merchant_id = Column(String(128))
+    auto_reply_enabled = Column(Boolean, nullable=False, default=False)
+    real_send_enabled = Column(Boolean, nullable=False, default=False)
+    allow_full_rollout = Column(Boolean, nullable=False, default=False)
+    updated_by = Column(String(128))
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AutoReplyWhitelistEntry(Base):
+    """管理员 DB 层白名单；用于后续 gate 消费，本轮不接入发送链路。"""
+
+    __tablename__ = "autoreply_whitelist_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "entry_type",
+            "merchant_id",
+            "account_open_id",
+            "value",
+            name="uk_autoreply_whitelist_entries_scope_value",
+        ),
+        Index("idx_autoreply_whitelist_entries_merchant_type", "merchant_id", "entry_type", "enabled"),
+        Index("idx_autoreply_whitelist_entries_account", "account_open_id", "enabled"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entry_type = Column(String(32), nullable=False)
+    merchant_id = Column(String(128), nullable=False)
+    account_open_id = Column(String(255))
+    value = Column(String(255), nullable=False)
+    reason = Column(Text)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(128))
+    created_at = Column(DateTime, default=datetime.now)
+    disabled_by = Column(String(128))
+    disabled_at = Column(DateTime)
+
+
+class AutoReplyAdminAuditLog(Base):
+    """自动回复管理员操作审计日志；禁止写入密钥、完整客户消息或 prompt。"""
+
+    __tablename__ = "autoreply_admin_audit_logs"
+    __table_args__ = (
+        Index("idx_autoreply_admin_audit_logs_merchant_created", "merchant_id", "created_at"),
+        Index("idx_autoreply_admin_audit_logs_action_created", "action", "created_at"),
+        Index("idx_autoreply_admin_audit_logs_account_created", "account_open_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    action = Column(String(64), nullable=False)
+    merchant_id = Column(String(128))
+    account_open_id = Column(String(255))
+    target_type = Column(String(64), nullable=False)
+    target_id = Column(String(255))
+    before_json = Column(Text)
+    after_json = Column(Text)
+    reason = Column(Text)
+    operator_id = Column(String(128))
+    operator_name = Column(String(128))
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class ConversationAutopilotState(Base):
     """抖音私信会话托管状态。"""
 
