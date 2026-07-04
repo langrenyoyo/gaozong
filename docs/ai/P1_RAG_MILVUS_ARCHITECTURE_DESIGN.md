@@ -989,3 +989,66 @@ search_after_delete_hit=False
 cleanup_verified=True
 cleanup_ok=True
 ```
+
+## P1-AI-CS-RAG-AUTOREPLY-TRAINING-WORKFLOW-1
+
+本轮验证并收口“AI 客服知识训练 -> Milvus 写入 -> reply-suggestion 检索 source_chunks -> 生成建议回复”的 workflow。测试全部使用 fake Milvus 和 fake LLM，不连接真实 Milvus，不调用真实 LLM，不触发 reply-suggestion 之外的自动回复或真实发送。
+
+### 训练到 Milvus 工作流
+
+workflow 测试通过 `repository.create_document()` 写入 synthetic 非业务知识，再通过 `repository.train_scope()` 生成 chunk / embedding。`RAG_VECTOR_BACKEND=milvus` 时，训练链路会调用同一个 fake VectorStore：
+
+1. `delete_document(document_id, tenant_id, merchant_id)` 清理旧向量范围。
+2. `upsert_chunks(chunks)` 写入本次训练 chunk。
+3. SQLite metadata 继续保留，作为后续 fallback 和审计基础。
+
+训练失败策略保持不变：Milvus upsert 抛错时 training run 记录 failed，不假成功。
+
+### reply-suggestion 消费 Milvus source_chunks
+
+workflow 测试使用同一个 fake VectorStore 保存训练 chunk，随后调用 `build_reply_suggestion()`。当 `agent_config.rag_enabled=true` 且 `allowed_category_keys=["base"]` 时，reply-suggestion 会调用 `repository.search()`，再命中刚训练的 synthetic 文档，并返回兼容既有结构的：
+
+1. `source_chunks`
+2. `rag_sources`
+3. `rag_used=true`
+4. `llm_used=true`
+
+响应 schema 未改变，`source_chunks` / `rag_sources` 仍包含 `chunk_id`、`document_id`、`title`、`score` 等既有字段。
+
+### allowed_category_keys / rag_enabled 安全边界
+
+本轮新增 workflow 测试覆盖：
+
+1. `allowed_category_keys=["base"]`：可命中 base synthetic 文档。
+2. `allowed_category_keys=[]`：不查 Milvus，`source_chunks=[]`。
+3. `allowed_category_keys=["other"]`：会按 other 分类查询，但不能命中 base 知识。
+4. `rag_enabled=false`：不查 Milvus，`source_chunks=[]`。
+
+Milvus search 失败时继续 fallback 到 SQLite，日志包含 `fallback_reason=milvus_search_failed`，且不会把 direct LLM fallback 当成 RAG 命中。
+
+### auto_send gate 收口
+
+本轮发现并修复一个正式 Agent fallback 缺口：带 `agent_config` 的正式 AI 客服链路在 RAG 未命中、分类为空或 `rag_enabled=false` 时会走 direct LLM fallback，旧逻辑可能返回 `auto_send=true`。现在 `reply_decision_service` 会在带 `agent_config` 的 direct fallback 响应上强制：
+
+1. `auto_send=false`
+2. `manual_required=true`
+3. `manual_required_reason=RAG未命中或关闭，需要人工确认`
+4. `risk_flags` 增加 `agent_config_fallback_auto_send_blocked`
+
+该收口不改变 9000 对外接口 schema，不改变 `/knowledge-training/ask` 和 `/feedback` schema，不改默认 sqlite 行为，也不放开任何真实发送链路。
+
+### 测试结果
+
+已通过：
+
+```bash
+python -m pytest tests/test_xg_douyin_ai_cs_rag_workflow.py -q
+python -m pytest tests/test_xg_douyin_ai_cs_rag.py -q
+python -m pytest tests/test_douyin_ai_cs_proxy.py -q
+python -m pytest tests/test_knowledge_training_api.py -q
+python -m pytest tests/test_xg_douyin_ai_cs_vector_store.py -q
+```
+
+本轮未做真实 synthetic Milvus 验证；真实 canary 已在前置任务完成。本轮未写入真实业务知识，未调用真实 LLM，未触发真实私信发送。
+
+下一步建议：如要继续推进自动回复训练工作流，应单独进入托管 dry-run / 自动发送 gate 审计任务，不与 RAG workflow 验证混合。

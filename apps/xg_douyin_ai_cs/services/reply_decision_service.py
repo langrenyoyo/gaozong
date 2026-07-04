@@ -348,6 +348,11 @@ def build_reply_suggestion(
         manual_match_level="direct_llm_manual_required",
         decision_version=DIRECT_LLM_DECISION_VERSION,
     )
+    direct_llm_response = _force_agent_config_fallback_auto_send_false(
+        direct_llm_response,
+        request=request,
+        conversation_id=conversation_id,
+    )
     if direct_llm_response.llm_used:
         return direct_llm_response
 
@@ -819,6 +824,31 @@ def _build_llm_reply(
         decision_version=decision_version,
         **_agent_response_fields(agent),
     )
+
+
+def _force_agent_config_fallback_auto_send_false(
+    response: ReplySuggestionResponse,
+    *,
+    request: ReplySuggestionRequest,
+    conversation_id: int | str,
+) -> ReplySuggestionResponse:
+    if request.agent_config is None or (response.auto_send is not True and response.manual_required is True):
+        return response
+    _logger.warning(
+        "reply_suggestion_direct_fallback_auto_send_blocked "
+        "tenant_id=%s merchant_id=%s conversation_id=%s agent_id=%s",
+        request.tenant_id,
+        request.merchant_id,
+        conversation_id,
+        request.agent_id,
+    )
+    response.auto_send = False
+    response.manual_required = True
+    response.manual_required_reason = response.manual_required_reason or "RAG未命中或关闭，需要人工确认"
+    response.risk_flags = _dedupe(
+        [*list(response.risk_flags or []), "agent_config_fallback_auto_send_blocked"]
+    )
+    return response
 
 
 def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks) -> list[dict]:
