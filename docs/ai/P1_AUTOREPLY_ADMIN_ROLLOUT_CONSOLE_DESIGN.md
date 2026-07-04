@@ -636,3 +636,119 @@ P1-AUTOREPLY-ADMIN-ROLLOUT-GATE-INTEGRATION-1
 ```
 
 该任务再把 env fuse、DB 管理层配置、DB 白名单与现有账号级 gate 串联，并补充 blocked_reason。
+
+## 14. P1-AUTOREPLY-ADMIN-ROLLOUT-GATE-INTEGRATION-1
+
+本轮把 DB 管理层 rollout 配置和 DB 白名单接入现有真实发送 gate。未新增 admin API，未做前端，未触发真实发送。
+
+### 14.1 env fuse 与 DB config 优先级
+
+真实发送 gate 仍保持 env 优先级最高：
+
+```text
+env 自动回复开关 / env 真实发送开关 / env rollout whitelist
+  -> DB rollout config
+  -> DB whitelist
+  -> 账号 enabled / send_enabled
+  -> Agent / 频控 / 人工接管 / send context / post-LLM gate
+```
+
+DB 配置只能表达管理员意图，不能覆盖 env 熔断。即使 DB `real_send_enabled=true`，只要 `DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED=false`，仍阻断真实发送。
+
+### 14.2 DB rollout gate 规则
+
+新增内部 helper：
+
+```text
+app/services/autoreply_admin_rollout_service.py::evaluate_db_rollout_gate
+```
+
+规则：
+
+- 缺少 DB rollout config：阻断，`no_db_rollout_config`。
+- `auto_reply_enabled=false`：阻断，`db_auto_reply_disabled`。
+- `real_send_enabled=false`：阻断，`db_real_send_disabled`。
+- `allow_full_rollout=true`：不要求 DB 白名单，但仍继续执行后续账号、Agent、频控、人工接管、send context 等 gate。
+- `allow_full_rollout=false`：必须命中 DB 企业号白名单，并命中 DB 客户或会话白名单。
+
+### 14.3 DB whitelist 规则
+
+DB 白名单使用 `autoreply_whitelist_entries`：
+
+- `entry_type=account`：`value` 必须等于当前 `account_open_id`。
+- `entry_type=customer`：`value` 必须等于当前 `customer_open_id`。
+- `entry_type=conversation`：`value` 必须等于当前 `conversation_short_id`。
+- customer / conversation 白名单支持按当前企业号限定，也支持 `account_open_id` 为空的商户级条目。
+- disabled 白名单不生效。
+
+### 14.4 blocked_reason
+
+本轮新增或接入的 DB 层阻断原因：
+
+- `no_db_rollout_config`
+- `db_auto_reply_disabled`
+- `db_real_send_disabled`
+- `db_account_whitelist_missed`
+- `db_customer_or_conversation_whitelist_missed`
+
+既有 env、账号、Agent、频控、人工接管、send context、post-LLM blocked_reason 保持不变。
+
+### 14.5 gate_results_json 审计快照
+
+`gate_results_json.real_send.db_rollout` 会记录脱敏快照：
+
+- `config_exists`
+- `scope`
+- `merchant_id`
+- `auto_reply_enabled`
+- `real_send_enabled`
+- `allow_full_rollout`
+- `mode`
+- `account_whitelist_required`
+- `customer_or_conversation_whitelist_required`
+- `account_whitelist_hit`
+- `customer_whitelist_hit`
+- `conversation_whitelist_hit`
+
+快照不包含 token、secret、password、cookie、authorization，也不包含客户完整消息或 prompt。
+
+### 14.6 默认无 DB 配置行为
+
+本轮采用安全默认：缺少 DB rollout config 时阻断真实发送，返回 `no_db_rollout_config`。
+
+现有测试中的正向路径已显式 seed DB rollout config 和 DB 白名单，避免通过默认放开掩盖配置缺失。
+
+### 14.7 测试结果
+
+本轮新增 / 更新测试覆盖：
+
+- 无 DB rollout config 阻断。
+- DB auto_reply_enabled=false 阻断。
+- DB real_send_enabled=false 阻断。
+- DB full rollout=false 且企业号白名单未命中阻断。
+- DB full rollout=false 且客户 / 会话白名单未命中阻断。
+- DB 白名单命中时 fake sender 可被调用。
+- DB full rollout=true 时不要求 DB 白名单，但仍要求其它 gate 通过。
+- env real_send=false 时即使 DB 开启仍阻断。
+- DB 配置不能绕过账号 send_enabled=false。
+- gate_results_json 包含 db_rollout 快照且不包含敏感字段名。
+
+### 14.8 本轮未改内容
+
+- 未新增 admin API。
+- 未做前端页面。
+- 未修改 9000 对外 schema。
+- 未修改 NewCar、live-check、Local Agent、19000。
+- 未触发真实发送。
+- 未调用真实 LLM。
+- 未连接真实 Milvus。
+
+### 14.9 下一步任务
+
+建议进入：
+
+```text
+P1-AUTOREPLY-ADMIN-ROLLOUT-API-1
+```
+
+下一步可新增管理员端 rollout summary / global / accounts / whitelist / runs API，并继续保持 env 熔断最高优先级。

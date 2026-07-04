@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import config
 from app.models import AiAgent, AiAutoReplyRun, DouyinAccountAgentBinding, DouyinAccountAutoreplySetting
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
+from app.services.autoreply_admin_rollout_service import evaluate_db_rollout_gate
 from app.services.douyin_autoreply_settings_service import (
     parse_allowed_intents,
     parse_blocked_risk_flags,
@@ -189,6 +190,18 @@ def evaluate_real_send_gates(
         return GateDecision(False, "blocked", "global_account_whitelist_missed", gate_results)
     if not allow_full_rollout and not (global_customer_hit or global_conversation_hit):
         return GateDecision(False, "blocked", "global_customer_or_conversation_whitelist_missed", gate_results)
+
+    db_rollout_gate = evaluate_db_rollout_gate(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        customer_open_id=customer_open_id,
+        conversation_short_id=conversation_short_id,
+    )
+    gate_results["db_rollout"] = db_rollout_gate.snapshot
+    if not db_rollout_gate.passed:
+        return GateDecision(False, "blocked", db_rollout_gate.blocked_reason, gate_results)
+
     if settings is None:
         return GateDecision(False, "blocked", "no_autoreply_settings", gate_results)
     if settings.enabled is not True:

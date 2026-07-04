@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -34,6 +35,15 @@ class RolloutConfigView:
     allow_full_rollout: bool = False
 
 
+@dataclass(frozen=True)
+class RolloutGateDecision:
+    """DB 管理层灰度门禁结果。"""
+
+    passed: bool
+    blocked_reason: str | None
+    snapshot: dict[str, Any]
+
+
 def get_effective_rollout_config(db: Session, *, merchant_id: str | None = None) -> RolloutConfigView:
     """读取 DB 管理层配置；不计算 env 熔断，缺失时返回安全默认值。"""
     row = None
@@ -50,6 +60,67 @@ def get_effective_rollout_config(db: Session, *, merchant_id: str | None = None)
         real_send_enabled=bool(row.real_send_enabled),
         allow_full_rollout=bool(row.allow_full_rollout),
     )
+
+
+def evaluate_db_rollout_gate(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str | None,
+    conversation_short_id: str | None,
+) -> RolloutGateDecision:
+    """评估 DB 管理层 rollout；只收紧真实发送，不读取 env 熔断。"""
+    config = _get_config_row(db, scope="merchant", merchant_id=merchant_id)
+    if config is None:
+        config = _get_config_row(db, scope="global", merchant_id=None)
+    snapshot = _db_rollout_snapshot(
+        config=config,
+        account_whitelist_hit=False,
+        customer_whitelist_hit=False,
+        conversation_whitelist_hit=False,
+    )
+    if config is None:
+        return RolloutGateDecision(False, "no_db_rollout_config", snapshot)
+    if config.auto_reply_enabled is not True:
+        return RolloutGateDecision(False, "db_auto_reply_disabled", snapshot)
+    if config.real_send_enabled is not True:
+        return RolloutGateDecision(False, "db_real_send_disabled", snapshot)
+
+    account_hit = _active_whitelist_hit(
+        db,
+        entry_type="account",
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        value=account_open_id,
+    )
+    customer_hit = _active_whitelist_hit(
+        db,
+        entry_type="customer",
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        value=customer_open_id,
+    )
+    conversation_hit = _active_whitelist_hit(
+        db,
+        entry_type="conversation",
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        value=conversation_short_id,
+    )
+    snapshot = _db_rollout_snapshot(
+        config=config,
+        account_whitelist_hit=account_hit,
+        customer_whitelist_hit=customer_hit,
+        conversation_whitelist_hit=conversation_hit,
+    )
+    if config.allow_full_rollout is True:
+        return RolloutGateDecision(True, None, snapshot)
+    if not account_hit:
+        return RolloutGateDecision(False, "db_account_whitelist_missed", snapshot)
+    if not (customer_hit or conversation_hit):
+        return RolloutGateDecision(False, "db_customer_or_conversation_whitelist_missed", snapshot)
+    return RolloutGateDecision(True, None, snapshot)
 
 
 def update_rollout_config(
@@ -283,6 +354,34 @@ def _find_whitelist_entry(
     return query.first()
 
 
+def _active_whitelist_hit(
+    db: Session,
+    *,
+    entry_type: str,
+    merchant_id: str,
+    account_open_id: str,
+    value: str | None,
+) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    query = (
+        db.query(AutoReplyWhitelistEntry)
+        .filter(AutoReplyWhitelistEntry.entry_type == entry_type)
+        .filter(AutoReplyWhitelistEntry.merchant_id == merchant_id)
+        .filter(AutoReplyWhitelistEntry.value == text)
+        .filter(AutoReplyWhitelistEntry.enabled.is_(True))
+    )
+    if entry_type in {"customer", "conversation"}:
+        query = query.filter(
+            or_(
+                AutoReplyWhitelistEntry.account_open_id == account_open_id,
+                AutoReplyWhitelistEntry.account_open_id.is_(None),
+            )
+        )
+    return query.first() is not None
+
+
 def _validate_whitelist(*, entry_type: str, merchant_id: str, value: str, reason: str) -> None:
     if entry_type not in VALID_WHITELIST_TYPES:
         raise ValueError(f"unsupported whitelist entry_type: {entry_type}")
@@ -316,6 +415,43 @@ def _whitelist_snapshot(entry: AutoReplyWhitelistEntry | None) -> dict[str, Any]
         "account_open_id": entry.account_open_id,
         "value": entry.value,
         "enabled": bool(entry.enabled),
+    }
+
+
+def _db_rollout_snapshot(
+    *,
+    config: AutoReplyRolloutConfig | None,
+    account_whitelist_hit: bool,
+    customer_whitelist_hit: bool,
+    conversation_whitelist_hit: bool,
+) -> dict[str, Any]:
+    if config is None:
+        return {
+            "config_exists": False,
+            "auto_reply_enabled": False,
+            "real_send_enabled": False,
+            "allow_full_rollout": False,
+            "mode": "whitelist",
+            "account_whitelist_required": True,
+            "customer_or_conversation_whitelist_required": True,
+            "account_whitelist_hit": False,
+            "customer_whitelist_hit": False,
+            "conversation_whitelist_hit": False,
+        }
+    allow_full_rollout = bool(config.allow_full_rollout)
+    return {
+        "config_exists": True,
+        "scope": config.scope,
+        "merchant_id": config.merchant_id,
+        "auto_reply_enabled": bool(config.auto_reply_enabled),
+        "real_send_enabled": bool(config.real_send_enabled),
+        "allow_full_rollout": allow_full_rollout,
+        "mode": "full_rollout" if allow_full_rollout else "whitelist",
+        "account_whitelist_required": not allow_full_rollout,
+        "customer_or_conversation_whitelist_required": not allow_full_rollout,
+        "account_whitelist_hit": bool(account_whitelist_hit),
+        "customer_whitelist_hit": bool(customer_whitelist_hit),
+        "conversation_whitelist_hit": bool(conversation_whitelist_hit),
     }
 
 

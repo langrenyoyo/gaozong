@@ -15,6 +15,8 @@ from app.models import (
     AiAgent,
     AiAutoReplyRun,
     AiReplyDecisionLog,
+    AutoReplyRolloutConfig,
+    AutoReplyWhitelistEntry,
     ConversationAutopilotState,
     DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
@@ -56,6 +58,7 @@ def _insert_settings(
     conversation_whitelist_ids: list[str] | None = None,
     min_interval_seconds: int = 10,
     max_auto_replies_per_conversation_per_day: int = 80,
+    seed_db_rollout: bool = True,
 ) -> None:
     db = TestSession()
     try:
@@ -93,6 +96,89 @@ def _insert_settings(
                     status="active",
                 )
             )
+        if seed_db_rollout:
+            _add_db_rollout_rows(db)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _add_db_rollout_rows(
+    db,
+    *,
+    auto_reply_enabled: bool = True,
+    real_send_enabled: bool = True,
+    allow_full_rollout: bool = False,
+    account_whitelist: bool = True,
+    customer_whitelist: bool = True,
+    conversation_whitelist: bool = False,
+) -> None:
+    db.add(
+        AutoReplyRolloutConfig(
+            scope="merchant",
+            merchant_id="merchant-1",
+            auto_reply_enabled=auto_reply_enabled,
+            real_send_enabled=real_send_enabled,
+            allow_full_rollout=allow_full_rollout,
+        )
+    )
+    if account_whitelist:
+        db.add(
+            AutoReplyWhitelistEntry(
+                entry_type="account",
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                value="account-open-1",
+                reason="测试企业号",
+                enabled=True,
+            )
+        )
+    if customer_whitelist:
+        db.add(
+            AutoReplyWhitelistEntry(
+                entry_type="customer",
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                value="customer-open-1",
+                reason="测试客户",
+                enabled=True,
+            )
+        )
+    if conversation_whitelist:
+        db.add(
+            AutoReplyWhitelistEntry(
+                entry_type="conversation",
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                value="conv-1",
+                reason="测试会话",
+                enabled=True,
+            )
+        )
+
+
+def _replace_db_rollout(
+    *,
+    auto_reply_enabled: bool = True,
+    real_send_enabled: bool = True,
+    allow_full_rollout: bool = False,
+    account_whitelist: bool = True,
+    customer_whitelist: bool = True,
+    conversation_whitelist: bool = False,
+) -> None:
+    db = TestSession()
+    try:
+        db.query(AutoReplyWhitelistEntry).delete()
+        db.query(AutoReplyRolloutConfig).delete()
+        _add_db_rollout_rows(
+            db,
+            auto_reply_enabled=auto_reply_enabled,
+            real_send_enabled=real_send_enabled,
+            allow_full_rollout=allow_full_rollout,
+            account_whitelist=account_whitelist,
+            customer_whitelist=customer_whitelist,
+            conversation_whitelist=conversation_whitelist,
+        )
         db.commit()
     finally:
         db.close()
@@ -370,6 +456,131 @@ def test_global_real_send_disabled_does_not_send(monkeypatch):
 
     assert result["status"] == "send_skipped"
     assert result["reason"] == "global_real_send_disabled"
+
+
+def test_no_db_rollout_config_blocks_real_send():
+    run_id = _insert_run()
+    _insert_settings(seed_db_rollout=False)
+    _insert_event()
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    run = _get_run(run_id)
+    gate_results = json.loads(run.gate_results_json)
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "no_db_rollout_config"
+    assert gate_results["real_send"]["send_gate_passed"] is False
+    assert gate_results["real_send"]["db_rollout"]["config_exists"] is False
+    openapi_mock.assert_not_called()
+
+
+def test_db_auto_reply_disabled_blocks_real_send():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    _replace_db_rollout(auto_reply_enabled=False, real_send_enabled=True)
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "db_auto_reply_disabled"
+
+
+def test_db_real_send_disabled_blocks_real_send():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    _replace_db_rollout(auto_reply_enabled=True, real_send_enabled=False)
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "db_real_send_disabled"
+
+
+def test_db_whitelist_miss_blocks_real_send():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    _replace_db_rollout(account_whitelist=False, customer_whitelist=True)
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "db_account_whitelist_missed"
+
+
+def test_db_customer_or_conversation_whitelist_miss_blocks_real_send():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    _replace_db_rollout(account_whitelist=True, customer_whitelist=False, conversation_whitelist=False)
+
+    result = _send(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "db_customer_or_conversation_whitelist_missed"
+
+
+def test_db_whitelist_hit_allows_fake_sender():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
+
+    run = _get_run(run_id)
+    gate_results = json.loads(run.gate_results_json)
+    assert result["status"] == "sent"
+    assert gate_results["real_send"]["send_gate_passed"] is True
+    assert gate_results["real_send"]["db_rollout"]["account_whitelist_hit"] is True
+    assert gate_results["real_send"]["db_rollout"]["customer_whitelist_hit"] is True
+    openapi_mock.assert_called_once()
+
+
+def test_db_full_rollout_allows_without_db_whitelist(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    _replace_db_rollout(allow_full_rollout=True, account_whitelist=False, customer_whitelist=False)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", set())
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
+
+
+def test_db_rollout_snapshot_does_not_store_secret_like_values():
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    run = _get_run(run_id)
+    payload = run.gate_results_json or ""
+    assert result["status"] == "sent"
+    assert "token" not in payload.lower()
+    assert "secret" not in payload.lower()
+    assert "password" not in payload.lower()
+    assert "cookie" not in payload.lower()
 
 
 def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
@@ -1101,6 +1312,7 @@ def test_disabled_settings_are_send_skipped(enabled, dry_run_enabled, reason):
                 send_enabled=True,
             )
         )
+        _add_db_rollout_rows(db)
         db.commit()
     finally:
         db.close()

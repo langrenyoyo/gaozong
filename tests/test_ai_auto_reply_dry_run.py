@@ -13,6 +13,8 @@ from app.models import (
     AiAgent,
     AiAutoReplyRun,
     AiReplyDecisionLog,
+    AutoReplyRolloutConfig,
+    AutoReplyWhitelistEntry,
     ConversationAutopilotState,
     DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
@@ -174,6 +176,43 @@ def _insert_autoreply_settings(
                 direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
                 max_replies_per_conversation_per_hour=max_replies_per_conversation_per_hour,
                 max_replies_per_account_per_hour=max_replies_per_account_per_hour,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_db_rollout_allowlist() -> None:
+    db = TestSession()
+    try:
+        db.add(
+            AutoReplyRolloutConfig(
+                scope="merchant",
+                merchant_id="merchant-1",
+                auto_reply_enabled=True,
+                real_send_enabled=True,
+                allow_full_rollout=False,
+            )
+        )
+        db.add(
+            AutoReplyWhitelistEntry(
+                entry_type="account",
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                value="account-open-1",
+                reason="测试企业号",
+                enabled=True,
+            )
+        )
+        db.add(
+            AutoReplyWhitelistEntry(
+                entry_type="customer",
+                merchant_id="merchant-1",
+                account_open_id="account-open-1",
+                value="customer-open-1",
+                reason="测试客户",
+                enabled=True,
             )
         )
         db.commit()
@@ -981,6 +1020,7 @@ def test_real_send_mode_all_gates_pass_calls_fake_sender_once(monkeypatch):
     event_id = _insert_event(event_key="event-real-send-allowed", server_message_id="server-msg-allowed")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    _insert_db_rollout_allowlist()
     fake_client = FakeAiCsClient(result={
         "reply_text": "您好，可以先说下预算和关注车型，我帮您整理需求。",
         "manual_required": False,
