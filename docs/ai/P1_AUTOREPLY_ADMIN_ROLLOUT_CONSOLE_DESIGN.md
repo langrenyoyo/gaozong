@@ -752,3 +752,153 @@ P1-AUTOREPLY-ADMIN-ROLLOUT-API-1
 ```
 
 下一步可新增管理员端 rollout summary / global / accounts / whitelist / runs API，并继续保持 env 熔断最高优先级。
+
+## 15. P1-AUTOREPLY-ADMIN-ROLLOUT-API-1
+
+本轮新增管理员端自动回复 rollout 控制 API，仅做后端接口、权限、服务复用、脱敏输出和测试。不做前端页面，不触发真实发送，不调用真实 LLM，不连接真实 Milvus。
+
+### 15.1 新增 API
+
+新增路由文件：
+
+```text
+app/routers/admin_autoreply_rollout.py
+```
+
+注册到 `app/main.py`。新增接口：
+
+- `GET /admin/autoreply/rollout/summary`
+- `POST /admin/autoreply/rollout/global`
+- `GET /admin/autoreply/rollout/accounts`
+- `POST /admin/autoreply/rollout/accounts/{account_open_id}`
+- `GET /admin/autoreply/rollout/whitelist`
+- `POST /admin/autoreply/rollout/whitelist`
+- `DELETE /admin/autoreply/rollout/whitelist/{entry_id}`
+- `GET /admin/autoreply/runs`
+
+### 15.2 权限要求
+
+第一版采用更保守策略：仅 `RequestContext.super_admin=true` 可访问。设计权限码记录为：
+
+```text
+auto_wechat:admin:autoreply
+```
+
+后续 NewCarProject 提供细粒度权限后，可在保持 `super_admin` 兼容的基础上接入该权限码。本轮非超管返回 `SUPER_ADMIN_REQUIRED`，未登录仍由现有 `get_request_context_required` 返回 401。
+
+### 15.3 summary 字段
+
+`summary` 返回：
+
+- `env_fuse`：只返回布尔状态，不返回 env 原始值。
+- `db_config`：返回 DB 管理层全局配置和 `config_exists`。
+- `counts`：白名单数量、账号 enabled/send_enabled 数量。
+- `recent_stats`：近 24 小时 dry-run、real-send candidate、sent、blocked 计数。
+- `safety`：`real_send_effectively_possible` 和不可发送原因。
+
+env 熔断仍是最高优先级。即使 DB `real_send_enabled=true`，只要 env 真实发送熔断关闭，`real_send_effectively_possible` 仍为 false。
+
+### 15.4 写操作
+
+`POST /rollout/global` 复用 `update_rollout_config()`，只更新 DB 管理层配置，不修改 env。
+
+`POST /rollout/accounts/{account_open_id}` 复用 `upsert_account_autoreply_settings()`，只更新企业号 `enabled/send_enabled`，并额外写 `update_account_config` 审计日志。
+
+`POST /rollout/whitelist` 复用 `add_whitelist_entry()`，保持幂等；重复添加 active 记录不会重复写审计。
+
+`DELETE /rollout/whitelist/{entry_id}` 复用 `disable_whitelist_entry()`，只做软禁用。
+
+所有写操作要求 `reason`，不提供 `bypass`、`force_send`、`ignore_gate`、`set_final_auto_send` 等危险字段。
+
+### 15.5 runs 审计查询
+
+`GET /admin/autoreply/runs` 返回自动回复 run 摘要，包含：
+
+- `mode`
+- `status`
+- `final_auto_send`
+- `send_gate_passed`
+- `blocked_reason`
+- `fallback_reason`
+- `rag_used`
+- `rag_sources_count`
+- `db_rollout`
+- `env_rollout`
+- `created_at`
+
+接口不返回完整客户消息、不返回完整回复内容、不返回 prompt、不返回 `raw_response_json`。
+
+### 15.6 脱敏策略
+
+- env 只返回布尔状态，不返回原始 env 内容。
+- 企业号、客户、会话、白名单值只返回 `*_masked` 展示字段。
+- 手机号在 run 摘要中掩码。
+- `wxid_` 格式微信号在 run 摘要中掩码。
+- API 响应不返回 token、secret、password、cookie。
+
+### 15.7 本轮未改内容
+
+- 未修改 `evaluate_real_send_gates`。
+- 未修改 `send_ai_auto_reply_for_run`。
+- 未新增 sender 调用入口。
+- 未修改 9000 对外业务 schema。
+- 未做前端页面。
+- 未改 NewCar、live-check、Local Agent、19000。
+- 未调用真实 LLM。
+- 未连接真实 Milvus。
+- 未触发真实私信发送。
+
+### 15.8 测试结果
+
+新增测试：
+
+```text
+tests/test_admin_autoreply_rollout_api.py
+```
+
+覆盖：
+
+- 未登录 401。
+- 非超管 403。
+- summary 不返回 env 原始值。
+- global update 写 DB config 和 audit log。
+- env fuse=false 时 DB 配置不能让真实发送变为可用。
+- full rollout=true 要求 reason。
+- account update 写 audit log 且不调用 sender。
+- whitelist add 幂等且返回脱敏字段。
+- whitelist delete 软禁用并写 audit。
+- runs 查询不返回完整客户消息、prompt、手机号、微信号。
+- 写接口拒绝危险字段。
+- 写接口拒绝空白 reason，避免审计日志缺少操作原因。
+
+本轮验证命令：
+
+```text
+python -m pytest tests/test_admin_autoreply_rollout_api.py -q
+15 passed
+
+python -m pytest tests/test_autoreply_admin_rollout_service.py -q
+8 passed
+
+python -m pytest tests/test_ai_auto_reply_send_service.py -q
+49 passed
+
+python -m pytest tests/test_ai_auto_reply_dry_run.py tests/test_douyin_autoreply_settings_api.py tests/test_douyin_autoreply_settings_service.py -q
+59 passed
+
+python -m py_compile app\routers\admin_autoreply_rollout.py app\services\autoreply_admin_rollout_service.py app\services\ai_auto_reply_send_service.py app\services\douyin_autoreply_gate_service.py app\main.py
+passed
+
+git diff --check
+passed
+```
+
+### 15.9 下一步任务
+
+建议下一步进入管理员端前端控制台实现：
+
+```text
+P1-AUTOREPLY-ADMIN-ROLLOUT-CONSOLE-FE-1
+```
+
+前端只能调用本轮 admin API 修改 DB 管理层配置，不能直接触发真实发送，不能覆盖 env 熔断。

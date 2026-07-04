@@ -26,6 +26,7 @@ from app.routers import (
     ai_reply_decision_logs,
     douyin_autoreply_settings,
     ai_auto_reply_runs,
+    admin_autoreply_rollout,
     douyin_accounts,
     agents,
     knowledge_categories,
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_reply_decision_logs.router)
     app.include_router(douyin_autoreply_settings.router)
     app.include_router(ai_auto_reply_runs.router)
+    app.include_router(admin_autoreply_rollout.router)
     app.include_router(douyin_accounts.router)
     app.include_router(agents.router)
     app.include_router(knowledge_categories.router)
