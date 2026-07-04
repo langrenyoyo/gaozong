@@ -112,6 +112,8 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
+    _merge_run_gate_results(db, run, "real_send", {"send_gate_passed": True})
+
     manual_takeover = evaluate_manual_takeover_gate(
         db,
         merchant_id=run.merchant_id,

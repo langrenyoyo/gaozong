@@ -17,6 +17,7 @@ from app.models import (
     DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
     DouyinAuthorizedAccount,
+    DouyinPrivateMessageSend,
     DouyinWebhookEvent,
 )
 
@@ -523,7 +524,7 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         created_at=base_time + timedelta(minutes=2),
     )
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     fake_client = FakeAiCsClient()
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
@@ -558,7 +559,7 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         assert run.would_send_content == "您好，可以先介绍一下您的预算和关注车型。"
         assert run.decision_log_id is not None
         log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
-        assert log.final_auto_send == 1
+        assert log.final_auto_send == 0
     finally:
         db.close()
 
@@ -573,7 +574,7 @@ def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
         server_message_id="latest-bound-agent-msg",
     )
     _insert_account_agent_binding(agent_prompt=agent_prompt)
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     fake_client = FakeAiCsClient()
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
@@ -598,12 +599,12 @@ def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
         db.close()
 
 
-def test_9100_manual_required_does_not_block_run():
+def test_9100_manual_required_blocks_real_send_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-manual")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
     fake_client = FakeAiCsClient(result={
         "reply_text": "请人工处理",
         "manual_required": True,
@@ -615,21 +616,23 @@ def test_9100_manual_required_does_not_block_run():
     })
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
-         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
+    auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert run.status == "decided"
-    assert run.block_reason is None
-    assert run.would_send_content == "请人工处理"
+    assert run.status == "blocked"
+    assert run.block_reason == "manual_required"
+    assert run.would_send_content is None
 
 
-def test_9100_risk_flags_do_not_block_run():
+def test_9100_risk_flags_block_real_send_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-risk")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
     fake_client = FakeAiCsClient(result={
         "reply_text": "风险回复",
         "manual_required": False,
@@ -641,13 +644,15 @@ def test_9100_risk_flags_do_not_block_run():
     })
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
-         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
+    auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert run.status == "decided"
-    assert run.block_reason is None
-    assert run.would_send_content == "风险回复"
+    assert run.status == "blocked"
+    assert run.block_reason == "risk_flags"
+    assert run.would_send_content is None
 
 
 def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content():
@@ -655,7 +660,7 @@ def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content():
 
     event_id = _insert_event(event_key="event-fenced-json")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     fake_client = FakeAiCsClient(result={
         "reply_text": '```json\n{"reply_text":"你好","manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}\n```',
         "manual_required": True,
@@ -671,11 +676,17 @@ def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content():
         run_ai_auto_reply_dry_run(event_id)
 
     run = _latest_run()
-    assert run.status == "decided"
-    assert run.block_reason is None
-    assert run.would_send_content == "你好"
-    assert "```json" not in (run.would_send_content or "")
-    assert "manual_required" not in (run.would_send_content or "")
+    assert run.status == "blocked"
+    assert run.block_reason == "manual_required"
+    assert run.would_send_content is None
+    db = TestSession()
+    try:
+        log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
+        assert log.reply_text == "你好"
+        assert "```json" not in log.reply_text
+        assert "manual_required" not in log.reply_text
+    finally:
+        db.close()
 
 
 def test_json_without_reply_text_is_blocked_before_run_content():
@@ -683,7 +694,7 @@ def test_json_without_reply_text_is_blocked_before_run_content():
 
     event_id = _insert_event(event_key="event-json-without-reply")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     fake_client = FakeAiCsClient(result={
         "reply_text": '{"manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}',
         "manual_required": True,
@@ -705,7 +716,7 @@ def test_json_without_reply_text_is_blocked_before_run_content():
     assert run.would_send_content is None
 
 
-def test_9100_rag_and_confidence_gates_do_not_block_run():
+def test_9100_rag_and_confidence_gates_block_real_send_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     cases = [
@@ -720,7 +731,7 @@ def test_9100_rag_and_confidence_gates_do_not_block_run():
             server_message_id=f"{event_key}-msg",
         )
         _insert_account_agent_binding(account_open_id=account_open_id, agent_id=f"agent-{event_key}")
-        _insert_autoreply_settings(account_open_id=account_open_id)
+        _insert_autoreply_settings(account_open_id=account_open_id, send_enabled=True, dry_run_enabled=False)
         result = {
             "reply_text": "测试",
             "manual_required": False,
@@ -731,16 +742,49 @@ def test_9100_rag_and_confidence_gates_do_not_block_run():
         fake_client = FakeAiCsClient(result=result)
 
         with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
-             patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+             patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+             patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
             run_ai_auto_reply_dry_run(event_id)
 
+        auto_send_mock.assert_not_called()
         run = _latest_run()
-        assert run.status == "decided"
-        assert run.block_reason is None
-        assert run.would_send_content == "测试"
+        assert run.status == "blocked"
+        assert run.block_reason == expected_reason
+        assert run.would_send_content is None
 
 
-def test_9100_auto_send_true_is_decided_when_account_send_disabled():
+def test_9100_fallback_reason_blocks_real_send_candidate():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-fallback-reason")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "fallback 回复不能自动发送",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "fallback_reason": "milvus_search_failed",
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    gate_results = json.loads(run.gate_results_json)
+    assert run.status == "blocked"
+    assert run.block_reason == "fallback_reason"
+    assert run.would_send_content is None
+    assert gate_results["post_llm"]["fallback_reason"] == "milvus_search_failed"
+
+
+def test_9100_auto_send_true_is_blocked_when_account_send_disabled():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-autosend")
@@ -763,12 +807,12 @@ def test_9100_auto_send_true_is_decided_when_account_send_disabled():
     db = TestSession()
     try:
         run = db.query(AiAutoReplyRun).one()
-        assert run.status == "decided"
-        assert run.block_reason is None
-        assert run.would_send_content == "上游想自动发"
+        assert run.status == "blocked"
+        assert run.block_reason == "account_send_disabled"
+        assert run.would_send_content is None
         log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
         assert log.upstream_auto_send == 1
-        assert log.final_auto_send == 1
+        assert log.final_auto_send == 0
     finally:
         db.close()
 
@@ -905,10 +949,11 @@ def test_send_enabled_false_does_not_call_auto_send_service():
 
     auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert run.status == "decided"
+    assert run.status == "blocked"
+    assert run.block_reason == "account_send_disabled"
 
 
-def test_real_send_mode_ignores_upstream_auto_send_false_and_calls_send_service(monkeypatch):
+def test_real_send_mode_requires_upstream_auto_send_true(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     _enable_real_send_config(monkeypatch)
@@ -922,12 +967,60 @@ def test_real_send_mode_ignores_upstream_auto_send_false_and_calls_send_service(
          patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
-    auto_send_mock.assert_called_once()
+    auto_send_mock.assert_not_called()
     run = _latest_run()
     assert run.mode == "real_send_candidate"
-    assert run.status == "decided"
-    assert run.block_reason is None
-    assert run.skip_reason != "dry_run_disabled"
+    assert run.status == "send_skipped"
+    assert run.block_reason == "auto_send_disabled_by_decision"
+
+
+def test_real_send_mode_all_gates_pass_calls_fake_sender_once(monkeypatch):
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _enable_real_send_config(monkeypatch)
+    event_id = _insert_event(event_key="event-real-send-allowed", server_message_id="server-msg-allowed")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "您好，可以先说下预算和关注车型，我帮您整理需求。",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1", "document_id": "d1", "title": "base"}],
+        "source_chunks": [{"chunk_id": "c1", "document_id": "d1", "title": "base"}],
+        "confidence": 0.99,
+        "intent": "vehicle_intro",
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch(
+             "app.services.douyin_private_message_send_service.call_douyin_openapi",
+             return_value={"payload": {"code": 0, "data": {"msg_id": "fake-upstream-msg"}}},
+         ) as fake_sender:
+        run_ai_auto_reply_dry_run(event_id)
+
+    fake_sender.assert_called_once()
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).one()
+        log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
+        send_record = db.query(DouyinPrivateMessageSend).filter(DouyinPrivateMessageSend.auto_reply_run_id == run.id).one()
+        gate_results = json.loads(run.gate_results_json)
+        assert run.mode == "real_send_candidate"
+        assert run.status == "sent"
+        assert run.block_reason is None
+        assert log.final_auto_send == 1
+        assert log.manual_required == 0
+        assert log.upstream_auto_send == 1
+        assert send_record.auto_send == 1
+        assert send_record.manual_confirmed == 0
+        assert gate_results["post_llm"]["source_chunks_count"] == 1
+        assert gate_results["post_llm"]["final_auto_send"] is True
+        assert gate_results["real_send"]["send_gate_passed"] is True
+    finally:
+        db.close()
 
 
 def test_dry_run_mode_with_dry_run_enabled_does_not_call_auto_send_service(monkeypatch):
@@ -950,7 +1043,7 @@ def test_dry_run_mode_with_dry_run_enabled_does_not_call_auto_send_service(monke
     assert run.mode == "dry_run"
 
 
-def test_real_send_mode_content_risks_call_auto_send_service(monkeypatch):
+def test_real_send_mode_content_risks_block_auto_send_service(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     _enable_real_send_config(monkeypatch)
@@ -972,11 +1065,11 @@ def test_real_send_mode_content_risks_call_auto_send_service(monkeypatch):
          patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
-    auto_send_mock.assert_called_once()
+    auto_send_mock.assert_not_called()
     run = _latest_run()
-    assert run.status == "decided"
-    assert run.block_reason is None
-    assert run.would_send_content == "宝马5系有现车，价格20万，可以加微信聊。"
+    assert run.status == "blocked"
+    assert run.block_reason == "manual_required"
+    assert run.would_send_content is None
 
 
 def test_9100_auto_send_true_in_dry_run_mode_does_not_call_auto_send_service():
@@ -1052,8 +1145,8 @@ def test_autoreply_disabled_skips_but_dry_run_disabled_continues_to_decision(mon
         runs = {run.trigger_event_key: run for run in db.query(AiAutoReplyRun).all()}
         assert runs["event-disabled"].status == "skipped"
         assert runs["event-disabled"].skip_reason == "autoreply_disabled"
-        assert runs["event-dry-disabled"].status == "decided"
-        assert runs["event-dry-disabled"].block_reason is None
+        assert runs["event-dry-disabled"].status == "send_skipped"
+        assert runs["event-dry-disabled"].block_reason == "auto_send_disabled_by_decision"
         assert runs["event-dry-disabled"].skip_reason is None
         assert runs["event-dry-disabled"].mode == "real_send_candidate"
         assert len(fake_client.calls) == 1
@@ -1061,7 +1154,7 @@ def test_autoreply_disabled_skips_but_dry_run_disabled_continues_to_decision(mon
         db.close()
 
 
-def test_send_disabled_marks_gate_but_does_not_block_dry_run():
+def test_send_disabled_blocks_auto_reply_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id = _insert_event(event_key="event-send-disabled")
@@ -1078,20 +1171,22 @@ def test_send_disabled_marks_gate_but_does_not_block_dry_run():
         run = db.query(AiAutoReplyRun).one()
         gate_results = json.loads(run.gate_results_json)
         assert len(fake_client.calls) == 1
-        assert run.status == "decided"
+        assert run.status == "blocked"
+        assert run.block_reason == "account_send_disabled"
         assert run.decision_log_id is not None
         assert gate_results["post_llm"]["send_disabled"] is True
     finally:
         db.close()
 
 
-def test_allowed_intents_and_blocked_risk_flags_do_not_block_reply():
+def test_allowed_intents_and_blocked_risk_flags_block_reply():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     event_id_1 = _insert_event(account_open_id="account-intent", event_key="event-intent")
     _insert_account_agent_binding(account_open_id="account-intent", agent_id="agent-intent")
     _insert_autoreply_settings(
         account_open_id="account-intent",
+        send_enabled=True,
         allowed_intents_json=json.dumps(["vehicle_intro"], ensure_ascii=False),
     )
     fake_client_1 = FakeAiCsClient(result={
@@ -1102,7 +1197,7 @@ def test_allowed_intents_and_blocked_risk_flags_do_not_block_reply():
         "rag_used": True,
         "rag_sources": [{"chunk_id": "c1"}],
         "confidence": 0.99,
-        "auto_send": False,
+        "auto_send": True,
     })
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
@@ -1113,6 +1208,7 @@ def test_allowed_intents_and_blocked_risk_flags_do_not_block_reply():
     _insert_account_agent_binding(account_open_id="account-risk", agent_id="agent-risk-blocked")
     _insert_autoreply_settings(
         account_open_id="account-risk",
+        send_enabled=True,
         blocked_risk_flags_json=json.dumps(["price_commitment"], ensure_ascii=False),
     )
     fake_client_2 = FakeAiCsClient(result={
@@ -1123,7 +1219,7 @@ def test_allowed_intents_and_blocked_risk_flags_do_not_block_reply():
         "rag_used": True,
         "rag_sources": [{"chunk_id": "c1"}],
         "confidence": 0.99,
-        "auto_send": False,
+        "auto_send": True,
     })
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
@@ -1133,10 +1229,10 @@ def test_allowed_intents_and_blocked_risk_flags_do_not_block_reply():
     db = TestSession()
     try:
         runs = {run.trigger_event_key: run for run in db.query(AiAutoReplyRun).all()}
-        assert runs["event-intent"].status == "decided"
-        assert runs["event-intent"].block_reason is None
-        assert runs["event-risk-blocked"].status == "decided"
-        assert runs["event-risk-blocked"].block_reason is None
+        assert runs["event-intent"].status == "blocked"
+        assert runs["event-intent"].block_reason == "intent_not_allowed"
+        assert runs["event-risk-blocked"].status == "blocked"
+        assert runs["event-risk-blocked"].block_reason == "risk_flags"
     finally:
         db.close()
 
@@ -1146,7 +1242,7 @@ def test_require_rag_flags_can_be_disabled():
 
     event_id = _insert_event(event_key="event-rag-disabled")
     _insert_account_agent_binding()
-    _insert_autoreply_settings(require_rag=False, require_rag_sources=False)
+    _insert_autoreply_settings(send_enabled=True, require_rag=False, require_rag_sources=False)
     fake_client = FakeAiCsClient(result={
         "reply_text": "娴嬭瘯",
         "manual_required": False,
@@ -1171,7 +1267,7 @@ def test_manual_takeover_blocks_before_calling_9100():
 
     event_id = _insert_event(event_key="event-manual-takeover")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     _insert_manual_takeover()
     fake_client = FakeAiCsClient()
 
@@ -1191,7 +1287,7 @@ def test_resumed_ai_autopilot_allows_next_customer_message_to_pass_manual_gate()
 
     event_id = _insert_event(event_key="event-resumed-autopilot")
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     _insert_manual_takeover()
     db = TestSession()
     try:
@@ -1229,7 +1325,7 @@ def test_notice_sourced_manual_takeover_is_ignored_for_next_customer_message():
         created_at=notice_time,
     )
     _insert_account_agent_binding()
-    _insert_autoreply_settings()
+    _insert_autoreply_settings(send_enabled=True)
     _insert_manual_takeover(
         customer_open_id="customer-open-1",
         last_human_message_at=notice_time,

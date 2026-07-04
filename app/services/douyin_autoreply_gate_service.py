@@ -97,8 +97,10 @@ def evaluate_post_llm_gates(
     blocked_risk_flags = parse_blocked_risk_flags(settings)
     risk_flags = _string_list(result.get("risk_flags"))
     rag_sources = result.get("rag_sources") or []
+    source_chunks = result.get("source_chunks") or []
     confidence = _float_or_zero(result.get("confidence"))
     intent = str(result.get("intent") or "").strip()
+    fallback_reason = str(result.get("fallback_reason") or "").strip()
     gate_results = {
         "send_disabled": settings.send_enabled is not True,
         "manual_required": result.get("manual_required"),
@@ -108,6 +110,8 @@ def evaluate_post_llm_gates(
         "rag_used": result.get("rag_used"),
         "require_rag_sources": settings.require_rag_sources is True,
         "rag_sources_count": len(rag_sources) if isinstance(rag_sources, list) else 0,
+        "source_chunks_count": len(source_chunks) if isinstance(source_chunks, list) else 0,
+        "fallback_reason": fallback_reason or None,
         "confidence": confidence,
         "min_confidence": float(settings.min_confidence or 0),
         "intent": intent,
@@ -119,6 +123,26 @@ def evaluate_post_llm_gates(
 
     if not str(result.get("reply_text") or "").strip():
         return GateDecision(False, "blocked", "empty_reply_text", gate_results)
+    if settings.send_enabled is not True:
+        return GateDecision(False, "blocked", "account_send_disabled", gate_results)
+    if result.get("manual_required") is True:
+        return GateDecision(False, "blocked", "manual_required", gate_results)
+    if risk_flags:
+        return GateDecision(False, "blocked", "risk_flags", gate_results)
+    if fallback_reason:
+        return GateDecision(False, "blocked", "fallback_reason", gate_results)
+    if allowed_intents and intent not in allowed_intents:
+        return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
+    if blocked_risk_flags and any(flag in blocked_risk_flags for flag in risk_flags):
+        return GateDecision(False, "blocked", "risk_flags", gate_results)
+    if settings.require_rag is True and result.get("rag_used") is not True:
+        return GateDecision(False, "blocked", "rag_not_used", gate_results)
+    if settings.require_rag_sources is True and (
+        not isinstance(rag_sources, list) or len(rag_sources) == 0
+    ):
+        return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
+    if confidence < float(settings.min_confidence or 0):
+        return GateDecision(False, "blocked", "confidence_low", gate_results)
     return GateDecision(True, "decided", None, gate_results)
 
 

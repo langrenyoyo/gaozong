@@ -1052,3 +1052,76 @@ python -m pytest tests/test_xg_douyin_ai_cs_vector_store.py -q
 本轮未做真实 synthetic Milvus 验证；真实 canary 已在前置任务完成。本轮未写入真实业务知识，未调用真实 LLM，未触发真实私信发送。
 
 下一步建议：如要继续推进自动回复训练工作流，应单独进入托管 dry-run / 自动发送 gate 审计任务，不与 RAG workflow 验证混合。
+
+## P1-AUTOREPLY-DRYRUN-GATE-AUDIT-1
+
+本轮系统审计 AI 客服自动回复 gate，覆盖 reply-suggestion、RAG 命中、RAG 未命中、Milvus fallback、direct LLM fallback、dry-run candidate 和 real-send candidate。测试全部使用 fake LLM / fake sender / fake Milvus，不连接真实 Milvus，不调用真实 LLM，不触发真实私信发送。
+
+### gate 链路
+
+1. `reply-suggestion`：9100 `build_reply_suggestion()` 只生成建议回复，不直接发送私信。
+2. webhook dry-run 编排：9000 `run_ai_auto_reply_dry_run()` 读取企业号绑定、账号自动回复配置、会话状态和 Agent 知识范围，再调用 9100。
+3. post-LLM gate：9000 `evaluate_post_llm_gates()` 统一判断 `manual_required`、`risk_flags`、`fallback_reason`、RAG、source、confidence、intent 和账号发送开关。
+4. real-send gate：只有 `run.mode=real_send_candidate` 且 decision log `final_auto_send=1` 时，`send_ai_auto_reply_for_run()` 才会继续检查全局开关、真实发送开关、rollout / whitelist、账号配置、绑定、人工接管、最新消息和 send context。
+5. 最终 sender：真实发送入口仍是 `douyin_private_message_send_service._send_private_message_with_context()`；本轮测试只用 fake OpenAPI sender。
+
+### dry-run 与 real-send 边界
+
+dry-run 可以生成 run、decision log 和 would-send 候选，但不能调用真实 sender，也不能把消息状态改成 sent。real-send candidate 必须同时满足：
+
+1. 账号 `enabled=true`、`send_enabled=true`、`dry_run_enabled=false`。
+2. 9100 返回 `auto_send=true`、`manual_required=false`。
+3. `rag_used=true`，且 `rag_sources` / `source_chunks` 有命中。
+4. 无 `fallback_reason`、无 `risk_flags`。
+5. `confidence >= min_confidence`。
+6. allowed intent 命中或未配置 intent 限制。
+7. 全局自动回复、真实发送、rollout / whitelist 和会话 send context 全部通过。
+
+### 阻断规则
+
+以下路径会阻断真实发送候选，`send_ai_auto_reply_for_run()` 不会被调用，或真实发送服务返回 `send_skipped`：
+
+1. `manual_required=true`。
+2. `risk_flags` 非空。
+3. `fallback_reason` 存在，例如 `milvus_search_failed`。
+4. `require_rag=true` 且 `rag_used!=true`。
+5. `require_rag_sources=true` 且 source 为空。
+6. `confidence < min_confidence`。
+7. configured allowed intents 不命中。
+8. `account.send_enabled=false`。
+9. 上游未明确返回 `auto_send=true`。
+10. dry-run 模式。
+11. 全局真实发送 gate、白名单、人工接管、最新消息、send context 任一不通过。
+
+### 正向放行
+
+新增正向测试覆盖：RAG 命中 `source_chunks`、fake LLM 返回 `auto_send=true/manual_required=false`、全局和账号 gate 均开启、full rollout 允许、会话未人工接管、send context 合法、`dry_run=false`。预期结果：
+
+1. `run.mode=real_send_candidate`。
+2. `run.status=sent`。
+3. `decision_log.final_auto_send=1`。
+4. `gate_results.real_send.send_gate_passed=true`。
+5. fake sender 被调用一次。
+6. 不调用真实上游 sender。
+
+### 未改内容
+
+1. 未改 9000 对外 schema。
+2. 未改 `/knowledge-training/ask` 和 `/feedback` schema。
+3. 未改 NewCar、live-check、Local Agent / 19000。
+4. 未改默认 sqlite RAG 行为。
+5. 未连接真实 Milvus。
+6. 未调用真实 LLM。
+7. 未触发真实私信发送。
+
+### 测试结果
+
+本轮执行：
+
+```bash
+python -m pytest tests/test_ai_auto_reply_dry_run.py -q
+python -m pytest tests/test_ai_auto_reply_send_service.py -q
+python -m pytest tests/test_xg_douyin_ai_cs_rag_workflow.py -q
+```
+
+下一步建议：如要继续推进自动回复真实发送，需要单独做生产环境 rollout / whitelist 配置验收和真实发送审计演练，仍应使用测试账号与人工确认流程。

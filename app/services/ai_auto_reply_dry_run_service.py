@@ -320,8 +320,13 @@ def _run_with_session(db, *, event_id: int) -> None:
         upstream_auto_send=upstream_auto_send,
     )
     final_result["auto_send"] = bool(
-        post_gate.passed and not format_invalid and str(final_result.get("reply_text") or "").strip()
+        post_gate.passed
+        and upstream_auto_send
+        and not format_invalid
+        and str(final_result.get("reply_text") or "").strip()
     )
+    if post_gate.gate_results is not None:
+        post_gate.gate_results["final_auto_send"] = final_result["auto_send"]
     status = "blocked" if format_invalid else (post_gate.status or ("decided" if post_gate.passed else "blocked"))
     block_reason = "format_invalid" if format_invalid else post_gate.reason
     error_message = content_check.reason if format_invalid else None
