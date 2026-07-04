@@ -447,3 +447,55 @@ def test_0024_douyin_oauth_states_creates_table_and_indexes(tmp_path):
         ).fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_0026_external_merchant_bindings_active_user_unique_index(tmp_path):
+    db_path = tmp_path / "external_bindings_unique.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version_num VARCHAR(32) PRIMARY KEY, applied_at DATETIME NOT NULL, description VARCHAR(200));"
+        )
+        for version in ("0023", "0026"):
+            migration = next(
+                item
+                for item in migrate_sqlite.discover_migrations()
+                if item.version == version
+            )
+            migrate_sqlite.apply_migration(
+                conn,
+                migrate_sqlite._load_stmts(migration.path),
+                migration.version,
+                migration.description,
+            )
+
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(external_merchant_bindings)")
+        }
+        assert "uk_external_merchant_bindings_active_user" in indexes
+
+        conn.execute(
+            "INSERT INTO external_merchant_bindings "
+            "(source_system, external_user_id, merchant_id, status, created_at, updated_at) "
+            "VALUES ('new_car_project', 'u1', 'm1', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        import sqlite3
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO external_merchant_bindings "
+                "(source_system, external_user_id, merchant_id, status, created_at, updated_at) "
+                "VALUES ('new_car_project', 'u1', 'm2', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        conn.execute(
+            "INSERT INTO external_merchant_bindings "
+            "(source_system, external_user_id, merchant_id, status, created_at, updated_at) "
+            "VALUES ('new_car_project', 'u1', 'm3', 'disabled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0026'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()

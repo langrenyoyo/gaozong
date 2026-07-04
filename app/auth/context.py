@@ -2,6 +2,8 @@
 
 from dataclasses import asdict, dataclass, field
 
+from app.auth.external_merchant_binding_service import has_newcar_merchant_permission
+
 
 @dataclass
 class RequestContext:
@@ -34,6 +36,10 @@ class RequestContext:
     def has_admin_permission(self) -> bool:
         """判断当前上下文是否拥有 NewCar 管理员权限。"""
         return self.super_admin or any(code.startswith("auto_wechat:admin:") for code in self.permission_codes)
+
+    def has_merchant_permission(self) -> bool:
+        """判断当前上下文是否拥有 NewCar 商户侧能力。"""
+        return has_newcar_merchant_permission(self.permission_codes)
 
     def has_merchant_access(self, merchant_id: str) -> bool:
         """判断当前上下文是否可访问指定商户。"""

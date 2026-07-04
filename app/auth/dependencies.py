@@ -6,7 +6,10 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.external_merchant_binding_service import resolve_external_merchant_binding
+from app.auth.external_merchant_binding_service import (
+    get_or_create_newcar_merchant_binding,
+    resolve_external_merchant_binding,
+)
 from app.auth.newcar_client import NewCarAuthError, NewCarProjectAuthClient
 from app.database import get_db
 
@@ -119,7 +122,19 @@ def _with_local_merchant_binding(db: Session, context: RequestContext) -> Reques
     Raises:
         NewCarAuthError: 外部账号未绑定本地商户时抛出
     """
-    if context.has_admin_permission():
+    if context.source_system == "new_car_project" and context.has_merchant_permission():
+        try:
+            merchant_id, _, _ = get_or_create_newcar_merchant_binding(
+                db,
+                source_system=context.source_system,
+                external_user_id=context.user_id,
+                external_account=context.username,
+            )
+        except ValueError as exc:
+            raise NewCarAuthError("EXTERNAL_MERCHANT_NOT_BOUND", str(exc)) from exc
+        context.merchant_id = merchant_id
+        if merchant_id not in context.merchant_ids:
+            context.merchant_ids.insert(0, merchant_id)
         return context
 
     merchant_id = resolve_external_merchant_binding(
@@ -129,6 +144,8 @@ def _with_local_merchant_binding(db: Session, context: RequestContext) -> Reques
         external_account=context.username,
     )
     if not merchant_id:
+        if context.has_admin_permission():
+            return context
         raise NewCarAuthError("EXTERNAL_MERCHANT_NOT_BOUND", "账号未绑定商户，请联系管理员。")
 
     context.merchant_id = merchant_id
