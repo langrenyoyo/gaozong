@@ -75,11 +75,11 @@ class WhitelistCreateRequest(BaseModel):
 
 
 def _require_admin(context: RequestContext) -> RequestContext:
-    """管理员 rollout API 只允许超管访问；细粒度权限仅作后续扩展记录。"""
-    if not context.super_admin:
+    """管理员 rollout API 允许超管或 NewCar 自动回复灰度权限访问。"""
+    if not context.has_permission("auto_wechat:admin:autoreply"):
         raise HTTPException(
             status_code=403,
-            detail={"code": "SUPER_ADMIN_REQUIRED", "message": "仅超级管理员可操作自动回复灰度控制"},
+            detail={"code": "PERMISSION_DENIED", "message": "缺少权限 auto_wechat:admin:autoreply"},
         )
     return context
 

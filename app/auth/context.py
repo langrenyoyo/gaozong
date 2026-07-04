@@ -31,6 +31,10 @@ class RequestContext:
         """判断当前上下文是否拥有任一权限。"""
         return self.super_admin or any(code in self.permission_codes for code in permission_codes)
 
+    def has_admin_permission(self) -> bool:
+        """判断当前上下文是否拥有 NewCar 管理员权限。"""
+        return self.super_admin or any(code.startswith("auto_wechat:admin:") for code in self.permission_codes)
+
     def has_merchant_access(self, merchant_id: str) -> bool:
         """判断当前上下文是否可访问指定商户。"""
         return self.super_admin or merchant_id in self.merchant_ids
@@ -38,4 +42,3 @@ class RequestContext:
     def to_dict(self) -> dict:
         """转换为接口返回结构。"""
         return asdict(self)
-

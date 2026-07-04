@@ -8,19 +8,24 @@ import { clearExternalToken, getExternalToken, setExternalToken } from "./authTo
 import {
   addNewCarRedirectNoticeListener,
   clearNewCarRedirectState,
-  DEFAULT_POST_LOGIN_PATH,
   redirectToNewCarLogin,
   restoreSavedRedirectPathAfterLogin,
 } from "./newcarRedirect";
 import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
-import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
+import {
+  filterCapabilityNavCenters,
+  hasAdminPermission,
+  hasPermission,
+  isAdminLike,
+  PERMISSIONS,
+} from "./features/capabilities";
 
 const queryClient = new QueryClient();
 const adminRoutes = [
-  { path: "/admin/autoreply-rollout", navId: "admin-autoreply-rollout", superAdminOnly: true },
-  { path: "/admin/ai-reply-records", navId: "ai-reply-records", superAdminOnly: false },
-  { path: "/admin/compute", navId: "admin-compute", superAdminOnly: false },
-  { path: "/admin/accounts", navId: "admin-accounts", superAdminOnly: false },
+  { path: "/admin/autoreply-rollout", navId: "admin-autoreply-rollout", permission: PERMISSIONS.adminAutoreply },
+  { path: "/admin/ai-reply-records", navId: "ai-reply-records", permission: PERMISSIONS.adminAiReplyRecords },
+  { path: "/admin/no-local-feature", navId: "admin-no-local-feature", message: "暂无可访问管理员功能" },
+  { path: "/admin/newcar-owned", navId: "admin-newcar-owned", message: "该管理功能请在 NewCarProject 操作" },
 ];
 
 export interface AppUser {
@@ -31,19 +36,22 @@ export interface AppUser {
   permissionItems?: PermissionItem[];
   merchantId?: string | null;
   merchantIds?: string[];
+  admin?: boolean;
 }
 
 function userFromAuthData(data: AuthContextData): AppUser {
   const permissions = data.permission_codes || data.permissions || [];
-  const role = data.super_admin ? "super_admin" : "merchant";
+  const adminLike = Boolean(data.super_admin) || permissions.some((code) => code.startsWith("auto_wechat:admin:"));
+  const role = data.super_admin ? "super_admin" : adminLike ? "operation_admin" : "merchant";
   return {
     account: data.username || data.display_name || data.user_id || "external-user",
     role,
-    roleLabel: role === "super_admin" ? "超级管理员" : "商户账号",
+    roleLabel: data.super_admin ? "超级管理员" : adminLike ? "管理员账号" : "商户账号",
     permissions,
     permissionItems: data.permission_items || [],
     merchantId: data.merchant_id ?? null,
     merchantIds: data.merchant_ids || [],
+    admin: hasAdminPermission({ role, permissions }),
   };
 }
 
@@ -67,9 +75,21 @@ function cleanCodeFromUrl() {
 }
 
 function defaultPathForUser(user: AppUser): string {
-  if (user.role !== "merchant") return "/agents";
+  if (isAdminLike(user)) {
+    if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
+    if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
+    if (hasAnyNewCarOwnedAdminPermission(user)) return "/admin/newcar-owned";
+    return "/admin/no-local-feature";
+  }
   const first = filterCapabilityNavCenters(user)[0];
   return first?.path || "/";
+}
+
+function hasAnyNewCarOwnedAdminPermission(user: AppUser): boolean {
+  return [
+    PERMISSIONS.adminAccounts,
+    PERMISSIONS.adminForbiddenWords,
+  ].some((code) => hasPermission(user, code));
 }
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -226,13 +246,13 @@ const App = () => {
   }, []);
 
   const allowedRoutes = useMemo(() => {
-    if (!user || user.role !== "merchant") return capabilityRoutes;
+    if (!user) return capabilityRoutes;
     const allowedNavIds = new Set(filterCapabilityNavCenters(user).flatMap((center) => center.children.map((item) => item.id)));
     return capabilityRoutes.filter((route) => allowedNavIds.has(route.navId));
   }, [user]);
 
   const deniedRoutes = useMemo(() => {
-    if (!user || user.role !== "merchant") return [];
+    if (!user) return [];
     const allowedPaths = new Set(allowedRoutes.map((route) => route.path));
     return capabilityRoutes.filter((route) => !allowedPaths.has(route.path));
   }, [allowedRoutes, user]);
@@ -244,8 +264,10 @@ const App = () => {
 
   const handleLogout = () => {
     clearExternalToken();
+    clearNewCarRedirectState();
     setUser(null);
     setAuthError(null);
+    void redirectToNewCarLogin({ message: "正在退出登录，请稍候…", delayMs: 0, saveCurrentPath: false });
   };
 
   const handleRelogin = () => {
@@ -258,7 +280,7 @@ const App = () => {
 
   const handleBackToWorkbench = () => {
     setAuthError(null);
-    window.location.replace(DEFAULT_POST_LOGIN_PATH);
+    window.location.replace(defaultPathForUser(user || { account: "", role: "merchant", roleLabel: "商户账号" }));
   };
 
   const renderIndex = (initialActiveNav: string) =>
@@ -310,11 +332,14 @@ const App = () => {
               key={route.path}
               path={route.path}
               element={
-                user?.role !== "merchant" && (!route.superAdminOnly || user.role === "super_admin") ? (
+                user && isAdminLike(user) && (!route.permission || hasPermission(user, route.permission)) ? (
                   renderIndex(route.navId)
                 ) : (
                   <AuthErrorScreen
-                    error={{ kind: "permissionDenied", message: "当前账号暂无访问该功能权限，请联系管理员开通。" }}
+                    error={{
+                      kind: "permissionDenied",
+                      message: route.message || "当前账号暂无访问该功能权限，请联系管理员开通。",
+                    }}
                     onRelogin={handleRelogin}
                     onBackToWorkbench={handleBackToWorkbench}
                   />

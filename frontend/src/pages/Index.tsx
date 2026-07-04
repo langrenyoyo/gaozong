@@ -26,9 +26,8 @@ import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReply
 import { AppUser } from "../App";
 import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
-import SuperAdminAccounts from "./SuperAdminAccounts";
-import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
+import { isAdminLike } from "../features/capabilities";
 
 interface DouyinAccount {
   name: string;
@@ -658,7 +657,7 @@ export default function Index({
     null;
   const selectedMessages = selectedContact ? conversations.messages[selectedContact.id] || [] : [];
   const navColumn = isNavExpanded ? "220px" : "88px";
-  const isAdminUser = user.role !== "merchant";
+  const isAdminUser = isAdminLike(user);
 
   useEffect(() => {
     setActiveNav((current) => (current === initialActiveNav ? current : initialActiveNav));
@@ -753,10 +752,10 @@ export default function Index({
             <SuperAiReplyRecords />
           ) : superActiveNav === "admin-autoreply-rollout" ? (
             <AdminAutoreplyRolloutPage />
-          ) : superActiveNav === "admin-compute" ? (
-            <SuperComputeConfig />
-          ) : superActiveNav === "admin-accounts" ? (
-            <SuperAdminAccounts />
+          ) : superActiveNav === "admin-newcar-owned" ? (
+            <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
+          ) : superActiveNav === "admin-no-local-feature" ? (
+            <AdminPlaceholder message="暂无可访问管理员功能" />
           ) : (
             <SuperMerchantAgent />
           )
@@ -807,5 +806,15 @@ export default function Index({
         />
       ) : null}
     </main>
+  );
+}
+
+function AdminPlaceholder({ message }: { message: string }) {
+  return (
+    <section className="min-h-0 overflow-auto bg-[#f3f6fa] p-8">
+      <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-700 shadow-sm">
+        {message}
+      </div>
+    </section>
   );
 }

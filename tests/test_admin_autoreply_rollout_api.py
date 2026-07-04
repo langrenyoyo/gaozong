@@ -40,14 +40,19 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
-def _context(*, super_admin: bool = True, user_id: str = "admin-1") -> RequestContext:
+def _context(
+    *,
+    super_admin: bool = True,
+    user_id: str = "admin-1",
+    permission_codes: list[str] | None = None,
+) -> RequestContext:
     return RequestContext(
         user_id=user_id,
         username=user_id,
         display_name="管理员",
         merchant_id="admin-merchant",
         merchant_ids=["admin-merchant"],
-        permission_codes=["auto_wechat:admin:autoreply"],
+        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:admin:autoreply"],
         super_admin=super_admin,
     )
 
@@ -185,13 +190,32 @@ def test_admin_api_requires_login():
     assert resp.status_code == 401
 
 
-def test_admin_api_requires_super_admin():
-    client = _client(_context(super_admin=False))
+def test_admin_api_accepts_autoreply_admin_permission_without_super_admin():
+    client = _client(_context(super_admin=False, permission_codes=["auto_wechat:admin:autoreply"]))
+
+    resp = client.get("/admin/autoreply/rollout/summary")
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "permission_codes",
+    [
+        ["auto_wechat:admin:ai_reply_records"],
+        ["auto_wechat:admin:compute_config"],
+        ["auto_wechat:admin:accounts"],
+        ["auto_wechat:admin:forbidden_words"],
+        ["auto_wechat:douyin_ai_cs"],
+        [],
+    ],
+)
+def test_admin_api_rejects_non_autoreply_admin_permissions(permission_codes):
+    client = _client(_context(super_admin=False, permission_codes=permission_codes))
 
     resp = client.get("/admin/autoreply/rollout/summary")
 
     assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "SUPER_ADMIN_REQUIRED"
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
 def test_summary_returns_boolean_env_state_without_raw_values(monkeypatch):

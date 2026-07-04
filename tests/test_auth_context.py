@@ -650,6 +650,45 @@ def test_auth_me_rejects_missing_local_binding(monkeypatch):
     assert response.json()["detail"]["code"] == "EXTERNAL_MERCHANT_NOT_BOUND"
 
 
+def test_auth_me_allows_admin_permission_without_local_merchant_binding(monkeypatch):
+    _reset_auth_db()
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ok": True,
+                "account_scope": "external",
+                "user": {"id": "admin-autoreply", "account": "admin-user", "status": "active"},
+                "permissions": ["auto_wechat:use", "auto_wechat:admin:autoreply"],
+                "merchant_id": None,
+                "merchant_ids": [],
+            }
+
+    monkeypatch.setattr("app.auth.newcar_client.httpx.get", lambda *args, **kwargs: FakeResponse())
+
+    from app.main import create_app
+
+    response = TestClient(_override_auth_db(create_app())).get(
+        "/auth/me",
+        headers={"Authorization": "Bearer admin-token"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["user_id"] == "admin-autoreply"
+    assert data["merchant_id"] is None
+    assert data["permission_codes"] == ["auto_wechat:use", "auto_wechat:admin:autoreply"]
+
+
 def test_auth_me_missing_use_permission_wins_before_binding(monkeypatch):
     _reset_auth_db()
     _insert_external_binding()

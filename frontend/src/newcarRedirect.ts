@@ -13,6 +13,8 @@ const DEFAULT_REDIRECT_DELAY_MS = 600;
 const DEFAULT_REDIRECT_MESSAGE = "正在前往统一登录，请稍候…";
 
 const ALLOWED_REDIRECT_PATH_PREFIXES = [
+  "/admin/autoreply-rollout",
+  "/admin/ai-reply-records",
   "/douyin-cs",
   "/leads",
   "/compute",

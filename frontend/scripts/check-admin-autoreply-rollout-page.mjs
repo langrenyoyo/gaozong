@@ -19,6 +19,7 @@ const api = readFileSync(resolve(root, 'api/adminAutoreplyRollout.ts'), 'utf8');
 const page = readFileSync(resolve(root, 'pages/AdminAutoreplyRolloutPage.tsx'), 'utf8');
 const sideNav = readFileSync(resolve(root, 'components/SideNav.tsx'), 'utf8');
 const app = readFileSync(resolve(root, 'App.tsx'), 'utf8');
+const capabilities = readFileSync(resolve(root, 'features/capabilities.ts'), 'utf8');
 
 const requiredApiNames = [
   'getAutoreplyRolloutSummary',
@@ -51,6 +52,12 @@ for (const forbidden of ['force_send', 'bypass', 'ignore_gate', 'set_final_auto_
 
 if (!sideNav.includes('admin-autoreply-rollout')) {
   throw new Error('侧栏缺少自动回复灰度入口');
+}
+if (!sideNav.includes('PERMISSIONS.adminAutoreply') || !capabilities.includes('auto_wechat:admin:autoreply')) {
+  throw new Error('侧栏缺少自动回复灰度专属权限码');
+}
+if (!capabilities.includes('hasAdminPermission')) {
+  throw new Error('权限工具缺少 hasAdminPermission');
 }
 if (!app.includes('/admin/autoreply-rollout')) {
   throw new Error('路由缺少 /admin/autoreply-rollout');

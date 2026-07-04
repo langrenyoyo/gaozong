@@ -7,7 +7,13 @@ export const PERMISSIONS = {
   leads: "auto_wechat:leads",
   agent: "auto_wechat:agent",
   compute: "auto_wechat:compute",
+  aiEdit: "auto_wechat:ai_edit",
+  adminAutoreply: "auto_wechat:admin:autoreply",
+  adminAiReplyRecords: "auto_wechat:admin:ai_reply_records",
   adminComputeConfig: "auto_wechat:admin:compute_config",
+  adminAccounts: "auto_wechat:admin:accounts",
+  adminForbiddenWords: "auto_wechat:admin:forbidden_words",
+  adminReturnVisitPrompts: "auto_wechat:admin:return_visit_prompts",
 } as const;
 
 const legacyPermissionAliases: Record<string, string[]> = {
@@ -81,9 +87,13 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
 
 export const merchantNavItems = capabilityNavCenters.flatMap((center) => center.children);
 
+export function isSuperAdmin(user: Pick<AppUser, "role"> | null | undefined): boolean {
+  return user?.role === "super_admin";
+}
+
 export function hasPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined, code: string): boolean {
   if (!user) return false;
-  if (user.role !== "merchant") return true;
+  if (isSuperAdmin(user)) return true;
   const permissions = user.permissions || [];
   return permissions.includes(code) || (legacyPermissionAliases[code] || []).some((alias) => permissions.includes(alias));
 }
@@ -92,8 +102,15 @@ export function hasAnyPermission(user: Pick<AppUser, "permissions" | "role"> | n
   return codes.some((code) => hasPermission(user, code));
 }
 
+export function hasAdminPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined): boolean {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  return (user.permissions || []).some((code) => code.startsWith("auto_wechat:admin:"));
+}
+
+export const isAdminLike = hasAdminPermission;
+
 export function filterCapabilityNavCenters(user: AppUser): CapabilityNavCenter[] {
-  if (user.role !== "merchant") return capabilityNavCenters;
   return capabilityNavCenters
     .map((center) => ({
       ...center,

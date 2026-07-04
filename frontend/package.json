@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "encoding:check": "node scripts/check-frontend-encoding.mjs",
     "auth:check": "node scripts/check-newcar-direct-auth.mjs",
-    "admin-autoreply:check": "node scripts/check-admin-autoreply-rollout-page.mjs"
+    "admin-autoreply:check": "node scripts/check-admin-autoreply-rollout-page.mjs",
+    "newcar-auth:check": "node scripts/check-newcar-admin-entry-logout-route.mjs"
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.6",

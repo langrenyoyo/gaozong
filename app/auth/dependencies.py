@@ -119,6 +119,9 @@ def _with_local_merchant_binding(db: Session, context: RequestContext) -> Reques
     Raises:
         NewCarAuthError: 外部账号未绑定本地商户时抛出
     """
+    if context.has_admin_permission():
+        return context
+
     merchant_id = resolve_external_merchant_binding(
         db,
         source_system=context.source_system,

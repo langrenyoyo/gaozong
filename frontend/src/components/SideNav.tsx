@@ -4,7 +4,6 @@ import {
   ChevronRightIcon,
   CoinsIcon,
   CpuIcon,
-  DatabaseIcon,
   FilterIcon,
   LogOutIcon,
   MessageCircleMoreIcon,
@@ -13,7 +12,13 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { AppUser } from "../App";
-import { filterCapabilityNavCenters, findCapabilityByNavId } from "../features/capabilities";
+import {
+  filterCapabilityNavCenters,
+  findCapabilityByNavId,
+  hasPermission,
+  isAdminLike,
+  PERMISSIONS,
+} from "../features/capabilities";
 
 interface SideNavProps {
   activeNav?: string;
@@ -34,19 +39,25 @@ const centerIcons: Record<string, React.ReactNode> = {
 };
 
 const adminItems = [
-  { id: "merchant-agent", label: "智能体", expandedLabel: "AI小高智能体", path: "/agents" },
-  { id: "admin-autoreply-rollout", label: "发送", expandedLabel: "自动回复灰度", path: "/admin/autoreply-rollout" },
-  { id: "ai-reply-records", label: "回复", expandedLabel: "AI回复记录", path: "/admin/ai-reply-records" },
-  { id: "admin-compute", label: "算力", expandedLabel: "算力配置", path: "/admin/compute" },
-  { id: "admin-accounts", label: "账号", expandedLabel: "管理员账号", path: "/admin/accounts" },
+  {
+    id: "admin-autoreply-rollout",
+    label: "发送",
+    expandedLabel: "自动回复灰度",
+    path: "/admin/autoreply-rollout",
+    permission: PERMISSIONS.adminAutoreply,
+  },
+  {
+    id: "ai-reply-records",
+    label: "回复",
+    expandedLabel: "AI回复记录",
+    path: "/admin/ai-reply-records",
+    permission: PERMISSIONS.adminAiReplyRecords,
+  },
 ];
 
 const adminIcons: Record<string, React.ReactNode> = {
-  "merchant-agent": <BotIcon size={18} />,
   "admin-autoreply-rollout": <ShieldAlertIcon size={18} />,
   "ai-reply-records": <MessageCircleMoreIcon size={18} />,
-  "admin-compute": <CpuIcon size={18} />,
-  "admin-accounts": <DatabaseIcon size={18} />,
 };
 
 export default function SideNav({
@@ -58,7 +69,8 @@ export default function SideNav({
   showSalesBadge = false,
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
 }: SideNavProps) {
-  const isAdminUser = user.role !== "merchant";
+  const isAdminUser = isAdminLike(user);
+  const visibleAdminItems = adminItems.filter((item) => canViewAdminItem(user, item.permission));
   const visibleCenters = filterCapabilityNavCenters(user);
   const activeCenter = findCapabilityByNavId(activeNav, user);
   const navigate = useNavigate();
@@ -100,9 +112,7 @@ export default function SideNav({
 
         <nav className={`flex flex-1 flex-col gap-1.5 overflow-y-auto pt-4 ${expanded ? "px-3" : "items-center"}`}>
           {isAdminUser
-            ? adminItems
-                .filter((item) => item.id !== "admin-autoreply-rollout" || user.role === "super_admin")
-                .map((item) => {
+            ? visibleAdminItems.map((item) => {
                 const isActive = activeNav === item.id;
                 return (
                   <button
@@ -231,4 +241,8 @@ export default function SideNav({
       </div>
     </aside>
   );
+}
+
+function canViewAdminItem(user: AppUser, permission: string): boolean {
+  return hasPermission(user, permission);
 }
