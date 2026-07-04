@@ -388,6 +388,31 @@ def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
     assert result["reason"] == "global_account_whitelist_missed"
 
 
+def test_real_send_gate_blocked_persists_rollout_audit(monkeypatch):
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED", True)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT", False)
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET", {"other-account"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
+    monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
+
+    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+        result = _send(run_id)
+
+    run = _get_run(run_id)
+    gate_results = json.loads(run.gate_results_json)
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "global_account_whitelist_missed"
+    assert gate_results["real_send"]["send_gate_passed"] is False
+    assert gate_results["real_send"]["blocked_reason"] == "global_account_whitelist_missed"
+    assert gate_results["real_send"]["global"]["mode"] == "whitelist"
+    assert gate_results["real_send"]["global"]["account_whitelist_hit"] is False
+    openapi_mock.assert_not_called()
+
+
 def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypatch):
     run_id = _insert_run()
     _insert_settings()
