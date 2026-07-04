@@ -480,6 +480,54 @@ def test_milvus_search_uses_required_metadata_filter(monkeypatch):
     assert 'merchant_id == "merchant-a"' in call["expr"]
     assert 'status == "active"' in call["expr"]
     assert 'category_key in ["base", "b\\"ba"]' in call["expr"]
+    assert "chunk_id" in call["output_fields"]
+    assert "document_id" in call["output_fields"]
+    assert "category_key" in call["output_fields"]
+
+
+def test_milvus_search_can_preserve_raw_string_ids_for_canary(monkeypatch):
+    _set_valid_milvus_env(monkeypatch)
+
+    from apps.xg_douyin_ai_cs.config import Settings
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+    from apps.xg_douyin_ai_cs.services import vector_store
+
+    fake = _fake_pymilvus(
+        collection_exists=True,
+        existing_dimension=1536,
+        search_hits=[
+            [
+                _fake_hit(
+                    score=0.99,
+                    entity={
+                        "chunk_id": "canary_chunk_string_001",
+                        "document_id": "canary_doc_string_001",
+                        "chunk_text": "synthetic search chunk",
+                        "category_key": "base",
+                        "source_title": "synthetic title",
+                    },
+                )
+            ]
+        ],
+    )
+    monkeypatch.setattr(vector_store, "_load_pymilvus", lambda: fake)
+
+    result = vector_store.MilvusVectorStore(Settings()).search(
+        RagSearchRequest(
+            tenant_id="tenant-a",
+            merchant_id="merchant-a",
+            douyin_account_id="account-a",
+            query="query",
+            top_k=3,
+            category_keys=["base"],
+        ),
+        query_embedding=[0.1] * 1536,
+        preserve_raw_ids=True,
+    )
+
+    assert result[0].chunk_id == "canary_chunk_string_001"
+    assert result[0].document_id == "canary_doc_string_001"
+    assert result[0].category_key == "base"
 
 
 def test_milvus_search_empty_category_keys_returns_empty_without_query(monkeypatch):

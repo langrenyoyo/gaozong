@@ -11,6 +11,7 @@ import math
 import re
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from typing import Any, Protocol
 
@@ -125,7 +126,14 @@ class MilvusVectorStore:
             ) from exc
         return {"backend": self.backend, "upserted": len(rows)}
 
-    def search(self, payload: RagSearchRequest, *, query_embedding: object, **kwargs: Any) -> list[RagSearchItem]:
+    def search(
+        self,
+        payload: RagSearchRequest,
+        *,
+        query_embedding: object,
+        preserve_raw_ids: bool = False,
+        **kwargs: Any,
+    ) -> list[Any]:
         category_keys = _normalize_required_filter_values(payload.category_keys)
         if not category_keys or not str(payload.tenant_id or "").strip() or not str(payload.merchant_id or "").strip():
             return []
@@ -172,7 +180,28 @@ class MilvusVectorStore:
                 schema_match=True,
                 error_type=type(exc).__name__,
             ) from exc
-        return [_hit_to_search_item(hit) for hits in result for hit in hits][: int(payload.top_k)]
+        mapper = _hit_to_raw_search_item if preserve_raw_ids else _hit_to_search_item
+        return [mapper(hit) for hits in result for hit in hits][: int(payload.top_k)]
+
+    def flush(self) -> None:
+        try:
+            collection = self._pymilvus.Collection(name=self.config.milvus_collection, using=self._alias)
+            flush = getattr(collection, "flush", None)
+            if callable(flush):
+                flush()
+            load = getattr(collection, "load", None)
+            if callable(load):
+                load()
+        except Exception as exc:
+            raise VectorStoreError(
+                "MILVUS_FLUSH_FAILED",
+                _sanitize_exception(exc, self.config),
+                phase="flush",
+                connected=True,
+                collection_exists=True,
+                schema_match=True,
+                error_type=type(exc).__name__,
+            ) from exc
 
     def delete_document(self, *, document_id: str, tenant_id: str, merchant_id: str) -> dict[str, Any]:
         required = {"document_id": document_id, "tenant_id": tenant_id, "merchant_id": merchant_id}
@@ -716,6 +745,19 @@ def _hit_to_search_item(hit: object) -> RagSearchItem:
     return RagSearchItem(
         chunk_id=_safe_int(_entity_value(entity, "chunk_id")),
         document_id=_safe_int(_entity_value(entity, "document_id")),
+        title=str(_entity_value(entity, "source_title") or ""),
+        chunk_text=str(_entity_value(entity, "chunk_text") or "")[:1000],
+        score=round(float(score or 0.0), 4),
+    )
+
+
+def _hit_to_raw_search_item(hit: object) -> Any:
+    entity = getattr(hit, "entity", None)
+    score = getattr(hit, "score", getattr(hit, "distance", 0.0))
+    return SimpleNamespace(
+        chunk_id=str(_entity_value(entity, "chunk_id") or ""),
+        document_id=str(_entity_value(entity, "document_id") or ""),
+        category_key=str(_entity_value(entity, "category_key") or ""),
         title=str(_entity_value(entity, "source_title") or ""),
         chunk_text=str(_entity_value(entity, "chunk_text") or "")[:1000],
         score=round(float(score or 0.0), 4),

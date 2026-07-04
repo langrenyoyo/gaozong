@@ -939,3 +939,53 @@ error_type
 5. delete 后 5 次仍命中时最终 `cleanup_ok=False`。
 6. marker 文本不再作为 canary 命中依据。
 7. CLI 输出不包含 URI、host、username、password、token 或完整 chunk 文本。
+
+## P1-RAG-MILVUS-CANARY-UPSERT-SEARCH-VISIBILITY-FIX-1
+
+本轮修复真实 Milvus canary E2E 中 `upsert_ok=True` 但 `search_hit=False` 的验证问题，不修改 9000 schema、不改变默认 sqlite 行为、不触发 reply-suggestion / auto-reply、不调用真实 LLM。
+
+### 根因
+
+canary 写入时使用 `canary_doc_...` / `canary_chunk_...` 这类 synthetic 字符串 ID；但 Milvus search 统一返回 `RagSearchItem` 时会把 `document_id` / `chunk_id` 转为整型。字符串 ID 转换失败后变成 `0`，导致 canary 脚本无法用当前 document_id / chunk_id 判断命中。
+
+### 修复内容
+
+1. canary search 显式请求保留原始字符串 ID，仅用于 canary 验证；正常 RAG search 仍保持既有 `RagSearchItem` 返回结构。
+2. upsert 后增加 search 可见性重试，最多 5 次，每次间隔 1 秒；只要当前 canary `document_id` 或 `chunk_id` 命中，即 `search_hit=True`。
+3. canary embedding 保持 deterministic 非零向量，长度等于 `MILVUS_DIMENSION`，避免 COSINE / IP / L2 自检索时被全零向量影响。
+4. canary search 使用固定 scope：`tenant_id=xiaogao_system`、`merchant_id=xiaogao_base`、`douyin_account_id=canary_account`、`category_key=base`，与 upsert metadata 一致。
+5. canary search `top_k=10`，不设置额外 score threshold。
+6. 如果 search 返回非空但缺少 `document_id` / `chunk_id`，输出脱敏诊断字段：`result_count`、`has_document_id_field`、`has_chunk_id_field`，不输出完整 chunk 文本。
+7. 如果 5 次 search 后仍未命中，返回 `phase=verify_search`、`error_code=CANARY_SEARCH_NOT_VISIBLE`，但仍继续执行 delete 和 delete 后可见性验证。
+
+### 未改内容
+
+1. 未改业务 RAG search 主链路。
+2. 未改 9000 接口 schema。
+3. 未改 `/knowledge-training/ask` 和 `/feedback` schema。
+4. 未改默认 `RAG_VECTOR_BACKEND=sqlite` 行为。
+5. 未调用真实 LLM。
+6. 未触发 reply-suggestion、auto-reply 或真实发送。
+7. 未写入真实业务数据。
+
+### 验证口径
+
+真实 Milvus 环境变量只允许通过本地 shell / 部署环境注入。运行：
+
+```bash
+python -m apps.xg_douyin_ai_cs.scripts.milvus_canary_e2e --run
+```
+
+通过标准：
+
+```text
+connected=True
+collection_exists=True
+schema_match=True
+upsert_ok=True
+search_hit=True
+delete_ok=True
+search_after_delete_hit=False
+cleanup_verified=True
+cleanup_ok=True
+```

@@ -59,13 +59,24 @@ def run_canary_e2e(
 
         store.upsert_chunks([chunk])
         upserted = True
-        result.update(upsert_ok=True, phase="search")
-
-        result["search_hit"] = _contains_canary_hit(
-            store.search(_search_payload(), query_embedding=embedding),
+        _flush_store_if_supported(store)
+        result.update(upsert_ok=True, phase="verify_search")
+        search_hit, search_attempts, search_diagnostics = _verify_search_visible(
+            store,
+            embedding=embedding,
             document_id=document_id,
             chunk_id=chunk_id,
+            max_attempts=delete_verify_attempts,
+            retry_interval_seconds=retry_interval_seconds,
         )
+        result.update(
+            search_hit=search_hit,
+            search_verify_attempts=search_attempts,
+            **search_diagnostics,
+        )
+        if not search_hit:
+            result.update(phase="verify_search", error_code="CANARY_SEARCH_NOT_VISIBLE")
+
         result["phase"] = "delete"
         store.delete_document(
             document_id=document_id,
@@ -89,6 +100,8 @@ def run_canary_e2e(
         )
         if visible:
             result.update(phase="verify_delete", error_code="CANARY_DELETE_NOT_VISIBLE")
+        elif not search_hit:
+            result.update(phase="verify_search", error_code="CANARY_SEARCH_NOT_VISIBLE")
         else:
             result.update(phase="complete", error_code="OK")
         return result
@@ -188,6 +201,7 @@ def _base_result(document_id: str) -> dict[str, Any]:
         "cleanup_ok": False,
         "cleanup_verified": False,
         "delete_verify_attempts": 0,
+        "search_verify_attempts": 0,
         "phase": "config",
         "error_code": "MILVUS_CANARY_FAILED",
         "error_type": "",
@@ -224,9 +238,33 @@ def _search_payload() -> RagSearchRequest:
         merchant_id=CANARY_MERCHANT_ID,
         douyin_account_id=CANARY_ACCOUNT_ID,
         query="synthetic canary vector verification",
-        top_k=5,
+        top_k=10,
         category_keys=[CANARY_CATEGORY_KEY],
     )
+
+
+def _verify_search_visible(
+    store: Any,
+    *,
+    embedding: list[float],
+    document_id: str,
+    chunk_id: str,
+    max_attempts: int,
+    retry_interval_seconds: float,
+) -> tuple[bool, int, dict[str, Any]]:
+    attempts = max(1, int(max_attempts))
+    last_items: list[Any] = []
+    last_diagnostics: dict[str, Any] = _search_diagnostics(last_items)
+    for attempt in range(1, attempts + 1):
+        last_items = _search_canary(store, embedding)
+        current_diagnostics = _search_diagnostics(last_items)
+        if current_diagnostics["result_count"]:
+            last_diagnostics = current_diagnostics
+        if _contains_canary_hit(last_items, document_id=document_id, chunk_id=chunk_id):
+            return True, attempt, _search_diagnostics(last_items)
+        if attempt < attempts and retry_interval_seconds > 0:
+            time.sleep(retry_interval_seconds)
+    return False, attempts, last_diagnostics
 
 
 def _verify_delete_not_visible(
@@ -241,7 +279,7 @@ def _verify_delete_not_visible(
     attempts = max(1, int(max_attempts))
     for attempt in range(1, attempts + 1):
         visible = _contains_canary_hit(
-            store.search(_search_payload(), query_embedding=embedding),
+            _search_canary(store, embedding),
             document_id=document_id,
             chunk_id=chunk_id,
         )
@@ -252,6 +290,10 @@ def _verify_delete_not_visible(
     return True, attempts
 
 
+def _search_canary(store: Any, embedding: list[float]) -> list[Any]:
+    return store.search(_search_payload(), query_embedding=embedding, preserve_raw_ids=True)
+
+
 def _contains_canary_hit(items: list[Any], *, document_id: str, chunk_id: str) -> bool:
     for item in items:
         if document_id and str(getattr(item, "document_id", "")) == document_id:
@@ -259,6 +301,26 @@ def _contains_canary_hit(items: list[Any], *, document_id: str, chunk_id: str) -
         if chunk_id and str(getattr(item, "chunk_id", "")) == chunk_id:
             return True
     return False
+
+
+def _search_diagnostics(items: list[Any]) -> dict[str, Any]:
+    return {
+        "result_count": len(items),
+        "has_document_id_field": any(_has_field(item, "document_id") for item in items),
+        "has_chunk_id_field": any(_has_field(item, "chunk_id") for item in items),
+    }
+
+
+def _has_field(item: Any, name: str) -> bool:
+    if isinstance(item, dict):
+        return name in item
+    return hasattr(item, name)
+
+
+def _flush_store_if_supported(store: Any) -> None:
+    flush = getattr(store, "flush", None)
+    if callable(flush):
+        flush()
 
 
 def _resolve_dimension(config: Settings, check: dict[str, Any]) -> int:
@@ -288,6 +350,7 @@ def _error_result(error_code: str, phase: str, error_type: str) -> dict[str, Any
 def _phase_error_code(phase: str) -> str:
     return {
         "collection_check": "MILVUS_CANARY_COLLECTION_CHECK_FAILED",
+        "verify_search": "MILVUS_CANARY_SEARCH_FAILED",
         "search": "MILVUS_CANARY_SEARCH_FAILED",
         "delete": "MILVUS_CANARY_DELETE_FAILED",
         "search_after_delete": "MILVUS_CANARY_SEARCH_AFTER_DELETE_FAILED",
@@ -307,6 +370,10 @@ def _format_result(result: dict[str, Any]) -> str:
         "cleanup_ok",
         "cleanup_verified",
         "delete_verify_attempts",
+        "search_verify_attempts",
+        "result_count",
+        "has_document_id_field",
+        "has_chunk_id_field",
         "phase",
         "error_code",
         "error_type",
