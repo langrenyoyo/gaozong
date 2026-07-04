@@ -205,6 +205,7 @@ def test_admin_api_accepts_autoreply_admin_permission_without_super_admin():
         ["auto_wechat:admin:compute_config"],
         ["auto_wechat:admin:accounts"],
         ["auto_wechat:admin:forbidden_words"],
+        ["auto_wechat:admin:return_visit_prompts"],
         ["auto_wechat:douyin_ai_cs"],
         [],
     ],
