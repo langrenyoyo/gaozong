@@ -891,3 +891,51 @@ delete_ok=True
 search_after_delete_hit=False
 cleanup_ok=True
 ```
+
+## P1-RAG-MILVUS-CANARY-DELETE-VISIBILITY-VERIFY-1
+
+本轮修复 Milvus canary E2E 工具的删除后验证与可清理性问题，不修改业务 RAG search、9000 schema、默认 sqlite 行为、reply-suggestion 或自动发送链路。
+
+### 修复内容
+
+1. `canary_document_id` 改为完整输出。该 ID 是 synthetic 测试 ID，不属于 Milvus 凭据，方便后续 `--cleanup-only` 精确清理。
+2. `--run` 新增可选参数 `--document-id <id>`，用于复测同一个 synthetic 文档或保留可清理 ID。
+3. `--cleanup-only <document_id>` 会按固定 canary scope 调用 `delete_document(document_id, tenant_id, merchant_id)`，并在删除后重新 search 验证当前 document_id 不再命中。
+4. delete 后验证从单次 search 改为最多 5 次重试，每次间隔 1 秒；只要当前 canary 不再命中，即认为 `search_after_delete_hit=False`。
+5. `search_after_delete_hit` 只基于当前 canary 的 `document_id` / `chunk_id` 判断，不再用 marker 文本、category_key 或 source_type 做宽泛判断。
+6. `cleanup_ok=True` 仅表示 delete 调用成功且最终验证不再命中；如果 delete 成功但 5 次后仍命中，返回 `phase=verify_delete`、`error_code=CANARY_DELETE_NOT_VISIBLE`、`cleanup_verified=False`、`cleanup_ok=False`。
+
+### 输出字段
+
+CLI 继续只输出脱敏运行态字段：
+
+```text
+connected
+collection_exists
+schema_match
+canary_document_id
+upsert_ok
+search_hit
+delete_ok
+search_after_delete_hit
+cleanup_ok
+cleanup_verified
+delete_verify_attempts
+phase
+error_code
+error_type
+```
+
+仍禁止输出 Milvus URI、host、username、password、token 和完整 canary chunk 文本。
+
+### 测试结果
+
+已补充 fake Milvus 单元测试覆盖：
+
+1. 完整输出 `canary_document_id`。
+2. `--document-id` 复用指定 synthetic ID。
+3. `--cleanup-only` 使用完整 document_id。
+4. delete 后第一次 search 仍命中、第二次不命中时最终 `cleanup_ok=True`。
+5. delete 后 5 次仍命中时最终 `cleanup_ok=False`。
+6. marker 文本不再作为 canary 命中依据。
+7. CLI 输出不包含 URI、host、username、password、token 或完整 chunk 文本。

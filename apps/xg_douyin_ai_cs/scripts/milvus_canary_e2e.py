@@ -30,6 +30,8 @@ def run_canary_e2e(
     document_id: str | None = None,
     chunk_id: str | None = None,
     marker: str | None = None,
+    delete_verify_attempts: int = 5,
+    retry_interval_seconds: float = 1.0,
 ) -> dict[str, Any]:
     store = store or get_vector_store(config)
     document_id = document_id or _new_canary_id("doc")
@@ -61,7 +63,6 @@ def run_canary_e2e(
 
         result["search_hit"] = _contains_canary_hit(
             store.search(_search_payload(), query_embedding=embedding),
-            marker=marker,
             document_id=document_id,
             chunk_id=chunk_id,
         )
@@ -71,14 +72,25 @@ def run_canary_e2e(
             tenant_id=CANARY_TENANT_ID,
             merchant_id=CANARY_MERCHANT_ID,
         )
-        result.update(delete_ok=True, cleanup_ok=True, phase="search_after_delete")
-        result["search_after_delete_hit"] = _contains_canary_hit(
-            store.search(_search_payload(), query_embedding=embedding),
-            marker=marker,
+        result.update(delete_ok=True, phase="verify_delete")
+        visible, attempts = _verify_delete_not_visible(
+            store,
+            embedding=embedding,
             document_id=document_id,
             chunk_id=chunk_id,
+            max_attempts=delete_verify_attempts,
+            retry_interval_seconds=retry_interval_seconds,
         )
-        result.update(phase="complete", error_code="OK")
+        result.update(
+            search_after_delete_hit=visible,
+            cleanup_verified=not visible,
+            cleanup_ok=not visible,
+            delete_verify_attempts=attempts,
+        )
+        if visible:
+            result.update(phase="verify_delete", error_code="CANARY_DELETE_NOT_VISIBLE")
+        else:
+            result.update(phase="complete", error_code="OK")
         return result
     except VectorStoreError as exc:
         result.update(_error_result(exc.code, exc.phase, exc.error_type or type(exc).__name__))
@@ -95,7 +107,7 @@ def run_canary_e2e(
             except Exception as exc:  # pragma: no cover - 真实环境兜底清理失败只做脱敏报告
                 result.update(cleanup_ok=False, cleanup_error_type=type(exc).__name__)
             else:
-                result.update(delete_ok=True, cleanup_ok=True)
+                result.update(delete_ok=True)
     return sanitize_milvus_diagnostic(result, config)
 
 
@@ -103,6 +115,13 @@ def cleanup_only(*, config: Settings, document_id: str) -> dict[str, Any]:
     result = _base_result(document_id)
     try:
         store = get_vector_store(config)
+        check = store.ensure_collection(create_if_missing=False)
+        result.update(
+            connected=check.get("connected", True),
+            collection_exists=check.get("collection_exists", True),
+            schema_match=check.get("schema_match", True),
+            phase="cleanup",
+        )
         store.delete_document(
             document_id=document_id,
             tenant_id=CANARY_TENANT_ID,
@@ -113,7 +132,24 @@ def cleanup_only(*, config: Settings, document_id: str) -> dict[str, Any]:
     except Exception as exc:
         result.update(_error_result("MILVUS_CANARY_CLEANUP_FAILED", "cleanup", type(exc).__name__))
     else:
-        result.update(delete_ok=True, cleanup_ok=True, phase="cleanup", error_code="OK")
+        dimension = _resolve_dimension(config, check)
+        visible, attempts = _verify_delete_not_visible(
+            store,
+            embedding=_fake_embedding(dimension),
+            document_id=document_id,
+            chunk_id="",
+            max_attempts=5,
+            retry_interval_seconds=1.0,
+        )
+        result.update(
+            delete_ok=True,
+            search_after_delete_hit=visible,
+            cleanup_verified=not visible,
+            cleanup_ok=not visible,
+            delete_verify_attempts=attempts,
+            phase="cleanup" if not visible else "verify_delete",
+            error_code="OK" if not visible else "CANARY_DELETE_NOT_VISIBLE",
+        )
     return sanitize_milvus_diagnostic(result, config)
 
 
@@ -122,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--run", action="store_true", help="执行 upsert/search/delete 闭环")
     mode.add_argument("--cleanup-only", metavar="DOCUMENT_ID", help="按固定 canary scope 清理指定文档")
+    parser.add_argument("--document-id", help="指定本次 canary document_id，便于复测和清理")
     args = parser.parse_args(argv)
 
     config = Settings()
@@ -132,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     result = (
         cleanup_only(config=config, document_id=args.cleanup_only)
         if args.cleanup_only
-        else run_canary_e2e(config=config)
+        else run_canary_e2e(config=config, document_id=args.document_id)
     )
     print(_format_result(result))
     return 0 if result.get("error_code") == "OK" and result.get("cleanup_ok") is True else 1
@@ -140,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _base_result(document_id: str) -> dict[str, Any]:
     return {
-        "canary_document_id": _short_id(document_id),
+        "canary_document_id": document_id,
         "connected": "unknown",
         "collection_exists": "unknown",
         "schema_match": "unknown",
@@ -149,6 +186,8 @@ def _base_result(document_id: str) -> dict[str, Any]:
         "delete_ok": False,
         "search_after_delete_hit": "unknown",
         "cleanup_ok": False,
+        "cleanup_verified": False,
+        "delete_verify_attempts": 0,
         "phase": "config",
         "error_code": "MILVUS_CANARY_FAILED",
         "error_type": "",
@@ -190,13 +229,34 @@ def _search_payload() -> RagSearchRequest:
     )
 
 
-def _contains_canary_hit(items: list[Any], *, marker: str, document_id: str, chunk_id: str) -> bool:
+def _verify_delete_not_visible(
+    store: Any,
+    *,
+    embedding: list[float],
+    document_id: str,
+    chunk_id: str,
+    max_attempts: int,
+    retry_interval_seconds: float,
+) -> tuple[bool, int]:
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        visible = _contains_canary_hit(
+            store.search(_search_payload(), query_embedding=embedding),
+            document_id=document_id,
+            chunk_id=chunk_id,
+        )
+        if not visible:
+            return False, attempt
+        if attempt < attempts and retry_interval_seconds > 0:
+            time.sleep(retry_interval_seconds)
+    return True, attempts
+
+
+def _contains_canary_hit(items: list[Any], *, document_id: str, chunk_id: str) -> bool:
     for item in items:
-        if str(getattr(item, "document_id", "")) == document_id:
+        if document_id and str(getattr(item, "document_id", "")) == document_id:
             return True
-        if str(getattr(item, "chunk_id", "")) == chunk_id:
-            return True
-        if marker in str(getattr(item, "chunk_text", "")):
+        if chunk_id and str(getattr(item, "chunk_id", "")) == chunk_id:
             return True
     return False
 
@@ -215,10 +275,6 @@ def _fake_embedding(dimension: int) -> list[float]:
 
 def _new_canary_id(kind: str) -> str:
     return f"canary_{kind}_{int(time.time())}_{uuid.uuid4().hex[:12]}"
-
-
-def _short_id(value: str) -> str:
-    return value if len(value) <= 18 else f"{value[:12]}...{value[-6:]}"
 
 
 def _error_result(error_code: str, phase: str, error_type: str) -> dict[str, Any]:
@@ -249,6 +305,8 @@ def _format_result(result: dict[str, Any]) -> str:
         "delete_ok",
         "search_after_delete_hit",
         "cleanup_ok",
+        "cleanup_verified",
+        "delete_verify_attempts",
         "phase",
         "error_code",
         "error_type",
