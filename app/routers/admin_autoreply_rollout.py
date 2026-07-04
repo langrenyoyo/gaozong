@@ -441,6 +441,7 @@ def _account_response(
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     return {
         "merchant_id": account.merchant_id,
+        "account_open_id": account.open_id,
         "account_open_id_masked": _mask_identifier(account.open_id),
         "account_name": account.account_name,
         "enabled": bool(setting.enabled) if setting is not None else False,

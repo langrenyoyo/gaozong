@@ -28,6 +28,7 @@ import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import SuperAdminAccounts from "./SuperAdminAccounts";
 import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
+import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
 
 interface DouyinAccount {
   name: string;
@@ -637,7 +638,11 @@ export default function Index({
   initialActiveNav?: string;
 }) {
   const [activeNav, setActiveNav] = useState(initialActiveNav);
-  const [superActiveNav, setSuperActiveNav] = useState("merchant-agent");
+  const [superActiveNav, setSuperActiveNav] = useState(
+    initialActiveNav.startsWith("admin-") || initialActiveNav === "ai-reply-records"
+      ? initialActiveNav
+      : "merchant-agent",
+  );
   const [isNavExpanded, setIsNavExpanded] = useState(true);
   const [selectedContactId, setSelectedContactId] = useState("");
   const [douyinAccount, setDouyinAccount] = useState<DouyinAccount | null>(null);
@@ -657,6 +662,12 @@ export default function Index({
 
   useEffect(() => {
     setActiveNav((current) => (current === initialActiveNav ? current : initialActiveNav));
+  }, [initialActiveNav]);
+
+  useEffect(() => {
+    if (initialActiveNav.startsWith("admin-") || initialActiveNav === "ai-reply-records") {
+      setSuperActiveNav(initialActiveNav);
+    }
   }, [initialActiveNav]);
 
   const isLeadConversationNav = activeNav === "chat";
@@ -740,6 +751,8 @@ export default function Index({
         {isAdminUser ? (
           superActiveNav === "ai-reply-records" ? (
             <SuperAiReplyRecords />
+          ) : superActiveNav === "admin-autoreply-rollout" ? (
+            <AdminAutoreplyRolloutPage />
           ) : superActiveNav === "admin-compute" ? (
             <SuperComputeConfig />
           ) : superActiveNav === "admin-accounts" ? (

@@ -16,6 +16,12 @@ import { capabilityRoutes, legacyRouteRedirects } from "./features/routes";
 import { filterCapabilityNavCenters, hasPermission, PERMISSIONS } from "./features/capabilities";
 
 const queryClient = new QueryClient();
+const adminRoutes = [
+  { path: "/admin/autoreply-rollout", navId: "admin-autoreply-rollout", superAdminOnly: true },
+  { path: "/admin/ai-reply-records", navId: "ai-reply-records", superAdminOnly: false },
+  { path: "/admin/compute", navId: "admin-compute", superAdminOnly: false },
+  { path: "/admin/accounts", navId: "admin-accounts", superAdminOnly: false },
+];
 
 export interface AppUser {
   account: string;
@@ -298,6 +304,23 @@ const App = () => {
           />
           {allowedRoutes.map((route) => (
             <Route key={route.path} path={route.path} element={renderIndex(route.navId)} />
+          ))}
+          {adminRoutes.map((route) => (
+            <Route
+              key={route.path}
+              path={route.path}
+              element={
+                user?.role !== "merchant" && (!route.superAdminOnly || user.role === "super_admin") ? (
+                  renderIndex(route.navId)
+                ) : (
+                  <AuthErrorScreen
+                    error={{ kind: "permissionDenied", message: "当前账号暂无访问该功能权限，请联系管理员开通。" }}
+                    onRelogin={handleRelogin}
+                    onBackToWorkbench={handleBackToWorkbench}
+                  />
+                )
+              }
+            />
           ))}
           {deniedRoutes.map((route) => (
             <Route

@@ -902,3 +902,141 @@ P1-AUTOREPLY-ADMIN-ROLLOUT-CONSOLE-FE-1
 ```
 
 前端只能调用本轮 admin API 修改 DB 管理层配置，不能直接触发真实发送，不能覆盖 env 熔断。
+
+## 16. P1-AUTOREPLY-ADMIN-ROLLOUT-CONSOLE-FE-1
+
+本轮新增管理员端“自动回复灰度与发送控制”前端页面，只调用 admin rollout API，不触发真实发送，不修改后端真实发送 gate。
+
+### 16.1 页面路径和菜单入口
+
+页面路径：
+
+```text
+/admin/autoreply-rollout
+```
+
+超管侧栏新增入口：
+
+```text
+自动回复灰度
+```
+
+普通商户访问 `/admin/autoreply-rollout` 时展示无权限页面；后端 API 仍以 `super_admin` 作为最终权限校验。
+
+### 16.2 API client
+
+新增：
+
+```text
+frontend/src/api/adminAutoreplyRollout.ts
+```
+
+封装：
+
+- `getAutoreplyRolloutSummary`
+- `updateAutoreplyRolloutGlobal`
+- `listAutoreplyRolloutAccounts`
+- `updateAutoreplyRolloutAccount`
+- `listAutoreplyWhitelist`
+- `addAutoreplyWhitelist`
+- `deleteAutoreplyWhitelist`
+- `listAutoreplyRuns`
+
+为支持前端企业号行内操作，后端账号列表响应补充 `account_open_id` 作为操作键；页面仍只展示 `account_open_id_masked`。
+
+### 16.3 页面五个区域
+
+1. 总览状态：展示 env 熔断状态、DB 管理层配置、白名单数量、企业号数量和近 24 小时 run 统计。
+2. 全局控制：修改 DB 自动回复、DB 真实发送、DB full rollout，所有提交必须填写 reason。
+3. 企业号控制：展示账号脱敏 ID、绑定 Agent、enabled、send_enabled、今日统计和最后阻断原因。
+4. 测试范围 / 白名单控制：支持 account / customer / conversation 白名单新增、列表和软禁用。
+5. 审计与回滚：展示 run 摘要、发送门禁、阻断原因、RAG 来源数量、rollout 快照，并提供 DB 层暂停按钮。
+
+### 16.4 full rollout 二次确认
+
+当 DB `allow_full_rollout=true` 时，前端必须弹出二次确认：
+
+```text
+确认开启全量自动回复
+```
+
+取消确认时不提交。
+
+### 16.5 env fuse 展示策略
+
+页面只显示 env 的布尔状态，不展示原始 env 值。
+
+当 `real_send_env_enabled=false` 时，页面醒目提示：
+
+```text
+系统级真实发送熔断中，前端配置不会触发真实发送。
+```
+
+即使保存 DB `real_send_enabled=true`，真实发送仍受后端 env fuse 阻断。
+
+### 16.6 回滚操作
+
+前端提供 DB 层快速回滚：
+
+- 一键暂停 DB 真实发送：调用 global update，将 `real_send_enabled=false`。
+- 关闭 DB 自动回复：调用 global update，将 `auto_reply_enabled=false`。
+- 企业号行内关闭 `send_enabled`。
+- 白名单行内软禁用。
+
+所有回滚操作都要求填写 reason，不修改 env。
+
+### 16.7 脱敏策略
+
+- 企业号、客户、会话、白名单值展示后端返回的 `*_masked` 字段。
+- runs 列表不展示完整客户消息、不展示完整 prompt、不展示原始响应。
+- 页面不提供 `force_send`、`bypass`、`ignore_gate`、`set_final_auto_send` 能力。
+- 页面不显示 token、secret、password、cookie。
+
+### 16.8 测试结果
+
+新增前端静态验收脚本：
+
+```text
+frontend/scripts/check-admin-autoreply-rollout-page.mjs
+```
+
+验证页面路径、API client、核心文案、侧栏入口、禁止字段。
+
+本轮验证命令：
+
+```text
+npm run admin-autoreply:check
+passed
+
+npm run auth:check
+passed
+
+npm run build
+passed
+
+python -m pytest tests/test_admin_autoreply_rollout_api.py -q
+16 passed
+```
+
+`npm run build` 仍有既有字体路径和 chunk size warning，不阻塞本轮。
+
+### 16.9 本轮未改内容
+
+- 未新增真实发送按钮。
+- 未调用真实发送接口。
+- 未修改 `evaluate_real_send_gates`。
+- 未修改 `send_ai_auto_reply_for_run`。
+- 未改 NewCar、live-check、Local Agent、19000。
+- 未改知识训练 ask / feedback schema。
+- 未连接真实 Milvus。
+- 未调用真实 LLM。
+
+### 16.10 下一步任务
+
+建议下一步进入真实测试账号演练前检查：
+
+```text
+P1-AUTOREPLY-REAL-SEND-TEST-ACCOUNT-DRYRUN-VERIFY-1
+```
+
+继续坚持 fake sender / dry-run 优先，只有在 env、DB、账号、白名单、RAG 和 post gate 全部通过后，才进入真实账号小范围演练。

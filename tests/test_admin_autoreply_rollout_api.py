@@ -297,6 +297,18 @@ def test_account_update_writes_audit_log_without_sender_call():
         db.close()
 
 
+def test_accounts_list_returns_operation_key_and_masked_display_value():
+    _seed_account()
+    client = _client(_context())
+
+    resp = client.get("/admin/autoreply/rollout/accounts")
+
+    assert resp.status_code == 200
+    item = resp.json()["data"]["items"][0]
+    assert item["account_open_id"] == "account-open-123456"
+    assert item["account_open_id_masked"] != "account-open-123456"
+
+
 def test_whitelist_add_is_idempotent_and_masks_value():
     client = _client(_context())
 
