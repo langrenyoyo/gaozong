@@ -322,11 +322,13 @@ def soft_delete_unified_document(*, tenant_id: str, merchant_id: str, document_i
         )
         conn.commit()
     if settings.rag_vector_backend == "milvus":
-        get_vector_store().delete_document(
+        store = get_vector_store()
+        store.delete_document(
             document_id=str(document_id),
             tenant_id=tenant_id,
             merchant_id=merchant_id,
         )
+        store.flush()
     return {"document_id": str(document_id), "status": "deleted"}
 
 
@@ -422,12 +424,14 @@ def train_document(
                     milvus_chunks.append(_to_milvus_chunk(row, embedding["embedding"]))
                 chunk_count += 1
             if settings.rag_vector_backend == "milvus":
-                get_vector_store().delete_document(
+                store = get_vector_store()
+                store.delete_document(
                     document_id=str(document_id),
                     tenant_id=tenant_id,
                     merchant_id=merchant_id,
                 )
-                get_vector_store().upsert_chunks(milvus_chunks)
+                store.upsert_chunks(milvus_chunks)
+                store.flush()
             conn.execute(
                 """
                 UPDATE rag_training_runs
@@ -571,6 +575,7 @@ def _sync_milvus_chunks(docs: Sequence[sqlite3.Row], chunks: list[dict]) -> None
             merchant_id=str(doc["merchant_id"]),
         )
     store.upsert_chunks(chunks)
+    store.flush()
 
 
 def _to_milvus_chunk(row: sqlite3.Row, embedding: object) -> dict:
@@ -583,7 +588,7 @@ def _to_milvus_chunk(row: sqlite3.Row, embedding: object) -> dict:
         "chunk_index": int(row["chunk_index"]),
         "tenant_id": str(row["tenant_id"]),
         "merchant_id": str(row["merchant_id"]),
-        "douyin_account_id": str(row["douyin_account_id"] or ""),
+        "douyin_account_id": "" if row["douyin_account_id"] is None else str(row["douyin_account_id"]),
         "category_key": str(row["category_key"] or ""),
         "category_id": "" if row["category_id"] is None else str(row["category_id"]),
         "source_type": str(row["source_type"] or ""),

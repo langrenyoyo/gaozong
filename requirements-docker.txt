@@ -6,3 +6,4 @@ sqlalchemy==2.0.50
 pydantic==2.12.4
 httpx==0.28.1
 requests==2.32.3
+pymilvus==2.6.12

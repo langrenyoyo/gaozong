@@ -372,6 +372,40 @@ def test_train_milvus_backend_deletes_and_upserts_chunks(tmp_path, monkeypatch):
     assert fake_store.upserted_chunks[0]["category_key"] == "base"
     assert fake_store.upserted_chunks[0]["category_id"] == "7"
     assert fake_store.upserted_chunks[0]["embedding"] == [1.0, 0.0]
+    assert fake_store.flush_count == 1
+
+
+def test_train_unified_milvus_backend_preserves_zero_account_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+
+    from apps.xg_douyin_ai_cs.rag import repository
+    from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate
+
+    document_id = repository.create_document(
+        KnowledgeDocumentCreate(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            douyin_account_id=repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+            title="unified milvus sync",
+            content="unified milvus should preserve zero account id",
+            source_type="manual_text",
+            category_key="base",
+        )
+    )
+    fake_store = _FakeVectorStore()
+    monkeypatch.setattr(repository, "get_vector_store", lambda: fake_store)
+
+    result = repository.train_document(
+        tenant_id="xiaogao_system",
+        merchant_id="xiaogao_base",
+        document_id=document_id,
+        llm_client=_StaticEmbeddingClient({"unified milvus should preserve zero account id": [1.0, 0.0]}),
+    )
+
+    assert result["status"] == "completed"
+    assert fake_store.upserted_chunks[0]["douyin_account_id"] == "0"
+    assert fake_store.flush_count == 1
 
 
 def test_train_milvus_backend_marks_run_failed_when_upsert_fails(tmp_path, monkeypatch):
@@ -421,6 +455,7 @@ class _FakeVectorStore:
         self.deleted_documents = []
         self.upserted_chunks = []
         self.search_calls = []
+        self.flush_count = 0
 
     def delete_document(self, *, document_id, tenant_id, merchant_id):
         self.deleted_documents.append(
@@ -435,6 +470,9 @@ class _FakeVectorStore:
         if self.upsert_error is not None:
             raise self.upsert_error
         self.upserted_chunks.extend(chunks)
+
+    def flush(self):
+        self.flush_count += 1
 
     def search(self, payload, *, query_embedding):
         self.search_calls.append(

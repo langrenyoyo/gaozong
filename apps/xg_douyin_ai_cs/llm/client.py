@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from urllib.parse import urlparse
 from urllib import error as urllib_error
@@ -78,14 +79,16 @@ class OpenAICompatibleClient:
         """
         cfg = self._embedding_config
         if not cfg.real_enabled:
+            mock_size = _mock_embedding_size(cfg.dimensions)
             _logger.info(
                 "embedding branch=mock provider=%s model=mock_for_test_only "
-                "input_type=text text_len=%d reason=not_configured",
+                "input_type=text text_len=%d vector_size=%d reason=not_configured",
                 cfg.provider,
                 len(str(text or "")),
+                mock_size,
             )
             return {
-                "embedding": mock_embedding(text),
+                "embedding": mock_embedding(text, size=mock_size),
                 "model": "mock_for_test_only",
                 "embedding_provider": "mock_for_test_only",
             }
@@ -150,3 +153,20 @@ def mock_embedding(text: str, size: int = 16) -> list[float]:
         vector[index % size] += (ord(char) % 97) / 97.0
     magnitude = sum(item * item for item in vector) ** 0.5 or 1.0
     return [round(item / magnitude, 6) for item in vector]
+
+
+def _mock_embedding_size(configured_dimensions: str) -> int:
+    """mock embedding 默认 16 维；Milvus 验证时对齐 collection 维度。"""
+    for raw in (
+        configured_dimensions,
+        os.environ.get("MILVUS_DIMENSION", "")
+        if os.environ.get("RAG_VECTOR_BACKEND", "").strip().lower() == "milvus"
+        else "",
+    ):
+        try:
+            value = int(str(raw or "").strip())
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return 16

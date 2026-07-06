@@ -37,6 +37,9 @@ def _seed_knowledge(client):
 def test_embedding_disabled_uses_mock_even_when_llm_key_is_configured(monkeypatch):
     from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
 
+    monkeypatch.delenv("RAG_VECTOR_BACKEND", raising=False)
+    monkeypatch.delenv("MILVUS_DIMENSION", raising=False)
+    monkeypatch.delenv("XG_DOUYIN_AI_EMBEDDING_DIMENSIONS", raising=False)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "fake-key")
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_BASE_URL", "https://example.test/v1")
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_EMBEDDING_ENABLED", "false")
@@ -51,6 +54,22 @@ def test_embedding_disabled_uses_mock_even_when_llm_key_is_configured(monkeypatc
     assert result["model"] == "mock_for_test_only"
     assert result["embedding_provider"] == "mock_for_test_only"
     assert result["embedding"]
+    assert len(result["embedding"]) == 16
+
+
+def test_mock_embedding_uses_milvus_dimension_when_milvus_backend_enabled(monkeypatch):
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
+
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+    monkeypatch.setenv("MILVUS_DIMENSION", "2048")
+    monkeypatch.setenv("XG_DOUYIN_AI_EMBEDDING_ENABLED", "false")
+    monkeypatch.delenv("XG_DOUYIN_AI_EMBEDDING_DIMENSIONS", raising=False)
+
+    result = OpenAICompatibleClient().embed("synthetic smoke text")
+
+    assert result["model"] == "mock_for_test_only"
+    assert result["embedding_provider"] == "mock_for_test_only"
+    assert len(result["embedding"]) == 2048
 
 
 def test_legacy_embedding_enabled_without_ark_key_still_uses_mock(monkeypatch):

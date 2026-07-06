@@ -51,6 +51,7 @@ class _FakeVectorStore:
         self.deleted_documents = []
         self.upserted_chunks = []
         self.search_calls = []
+        self.flush_count = 0
 
     def delete_document(self, *, document_id, tenant_id, merchant_id):
         self.deleted_documents.append(
@@ -63,6 +64,9 @@ class _FakeVectorStore:
 
     def upsert_chunks(self, chunks):
         self.upserted_chunks.extend(chunks)
+
+    def flush(self):
+        self.flush_count += 1
 
     def search(self, payload, *, query_embedding):
         self.search_calls.append(
