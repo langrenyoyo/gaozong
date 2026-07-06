@@ -121,6 +121,36 @@ def test_unified_categories_allows_internal_token_and_uses_fixed_context(monkeyp
     assert fake.calls == [("categories", {"tenant_id": "xiaogao_system", "merchant_id": "xiaogao_base"})]
 
 
+def test_unified_categories_allows_x_internal_token_with_trimmed_csv(monkeypatch):
+    fake = FakeKnowledgeTrainingClient()
+    _patch_fake_client(monkeypatch, fake)
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_IP_WHITELIST", "127.0.0.1")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", " old-token , dev_knowledge_training_token ")
+
+    response = _client().get(
+        "/knowledge-training/categories",
+        headers={"X-Internal-Token": "dev_knowledge_training_token"},
+    )
+
+    assert response.status_code == 200
+    assert fake.calls == [("categories", {"tenant_id": "xiaogao_system", "merchant_id": "xiaogao_base"})]
+
+
+def test_unified_categories_allows_case_insensitive_bearer_scheme(monkeypatch):
+    fake = FakeKnowledgeTrainingClient()
+    _patch_fake_client(monkeypatch, fake)
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_IP_WHITELIST", "127.0.0.1")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "dev_knowledge_training_token")
+
+    response = _client().get(
+        "/knowledge-training/categories",
+        headers={"Authorization": "bEaReR dev_knowledge_training_token"},
+    )
+
+    assert response.status_code == 200
+    assert fake.calls == [("categories", {"tenant_id": "xiaogao_system", "merchant_id": "xiaogao_base"})]
+
+
 def test_create_document_rejects_context_fields(monkeypatch):
     fake = FakeKnowledgeTrainingClient()
     _patch_fake_client(monkeypatch, fake)
