@@ -121,6 +121,87 @@ class XgDouyinAiCsClient:
         }
         return self._post_json(f"/knowledge-training/{training_id}/feedback", payload)
 
+    def list_knowledge_training_categories(self, *, tenant_id: str, merchant_id: str) -> dict:
+        return self._get_json(
+            "/knowledge-training/categories",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id},
+        )
+
+    def list_knowledge_training_documents(self, *, tenant_id: str, merchant_id: str, params: dict) -> dict:
+        return self._get_json(
+            "/knowledge-training/documents",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **params},
+        )
+
+    def get_knowledge_training_document(self, *, tenant_id: str, merchant_id: str, document_id: str) -> dict:
+        return self._get_json(
+            f"/knowledge-training/documents/{document_id}",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id},
+        )
+
+    def create_knowledge_training_document(self, *, tenant_id: str, merchant_id: str, request: dict) -> dict:
+        return self._post_json(
+            "/knowledge-training/documents",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **request},
+        )
+
+    def update_knowledge_training_document(
+        self,
+        *,
+        tenant_id: str,
+        merchant_id: str,
+        document_id: str,
+        request: dict,
+    ) -> dict:
+        return self._put_json(
+            f"/knowledge-training/documents/{document_id}",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **request},
+        )
+
+    def train_knowledge_training_document(
+        self,
+        *,
+        tenant_id: str,
+        merchant_id: str,
+        document_id: str,
+        request: dict,
+    ) -> dict:
+        return self._post_json(
+            f"/knowledge-training/documents/{document_id}/train",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **request},
+        )
+
+    def get_knowledge_training_run(self, *, tenant_id: str, merchant_id: str, run_id: str) -> dict:
+        return self._get_json(
+            f"/knowledge-training/training-runs/{run_id}",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id},
+        )
+
+    def list_knowledge_training_runs(self, *, tenant_id: str, merchant_id: str, params: dict) -> dict:
+        return self._get_json(
+            "/knowledge-training/training-runs",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **params},
+        )
+
+    def delete_knowledge_training_document(
+        self,
+        *,
+        tenant_id: str,
+        merchant_id: str,
+        document_id: str,
+        request: dict,
+    ) -> dict:
+        return self._delete_json(
+            f"/knowledge-training/documents/{document_id}",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **request},
+        )
+
+    def search_knowledge_training_preview(self, *, tenant_id: str, merchant_id: str, request: dict) -> dict:
+        return self._post_json(
+            "/knowledge-training/search-preview",
+            {"tenant_id": tenant_id, "merchant_id": merchant_id, **request},
+        )
+
     def _post_json(self, path: str, payload: dict) -> dict:
         url = f"{self.base_url}{path}"
         headers = {"Content-Type": "application/json"}
@@ -138,6 +219,61 @@ class XgDouyinAiCsClient:
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            logger.warning(
+                "xg_douyin_ai_cs_timeout stage=post_json timeout_layer=9000_to_9100 "
+                "timeout_seconds=%s elapsed_ms=%s upstream_url=%s",
+                self.timeout_seconds,
+                elapsed_ms,
+                url,
+            )
+            raise XgDouyinAiCsClientError(
+                "xg_cs_http_timeout",
+                detail={
+                    "error": "xg_cs_http_timeout",
+                    "timeout_layer": "9000_to_9100",
+                    "elapsed_ms": elapsed_ms,
+                    "upstream_url": url,
+                    "timeout_seconds": self.timeout_seconds,
+                },
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise _build_status_error(exc) from exc
+        except httpx.HTTPError as exc:
+            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_unavailable") from exc
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise XgDouyinAiCsClientError("xg_douyin_ai_cs_invalid_json") from exc
+
+    def _put_json(self, path: str, payload: dict) -> dict:
+        return self._request_json("PUT", path, json=payload)
+
+    def _delete_json(self, path: str, payload: dict) -> dict:
+        return self._request_json("DELETE", path, json=payload)
+
+    def _get_json(self, path: str, params: dict) -> dict:
+        return self._request_json("GET", path, params=params)
+
+    def _request_json(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
+        url = f"{self.base_url}{path}"
+        headers = {"Content-Type": "application/json"}
+        if self.service_token:
+            headers["X-Internal-Service-Token"] = self.service_token
+
+        started = time.perf_counter()
+        try:
+            response = httpx.request(
+                method,
+                url,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
             detail = {
                 "error": "xg_cs_http_timeout",
                 "timeout_layer": "9000_to_9100",
@@ -146,7 +282,7 @@ class XgDouyinAiCsClient:
                 "timeout_seconds": self.timeout_seconds,
             }
             logger.warning(
-                "xg_douyin_ai_cs_timeout stage=post_json timeout_layer=9000_to_9100 "
+                "xg_douyin_ai_cs_timeout stage=request_json timeout_layer=9000_to_9100 "
                 "timeout_seconds=%s elapsed_ms=%s upstream_url=%s",
                 self.timeout_seconds,
                 elapsed_ms,

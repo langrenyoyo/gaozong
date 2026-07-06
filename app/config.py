@@ -161,6 +161,7 @@ KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID = os.getenv(
 KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS = (
     os.getenv("KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS", "false").strip().lower() == "true"
 )
+KNOWLEDGE_TRAINING_INTERNAL_TOKENS = os.getenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "").strip()
 
 # ---------- 抖音 AI 客服真实自动回复门禁 ----------
 # 默认全部关闭；真实发送必须同时打开总开关和真实发送开关，并命中后端白名单。
