@@ -22,7 +22,7 @@ Phase 4-E 原始不覆盖范围：
 4. 不验收 19000 本地微信 Agent。
 5. 不验收生产环境真实迁移执行。
 
-Phase 5-E-G 补充说明：Phase 5 已完成“知识分类”页面与“知识库”最小页面，并完成运行态 E2E 验收；详情见 `docs/ai/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`。
+Phase 5-E-G 补充说明：Phase 5 已完成“知识分类”页面与“知识库”最小页面，并完成运行态 E2E 验收；详情见 `docs/ai/05_acceptance/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`。
 
 ## 2. Phase 实现链路汇总
 

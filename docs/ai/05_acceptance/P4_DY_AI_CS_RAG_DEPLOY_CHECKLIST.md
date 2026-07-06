@@ -129,7 +129,7 @@
 12. 尝试传不存在分类，应被拒绝。
 13. 如条件允许，创建未绑定分类写入知识并训练，确认未授权分类不进入 `allowed_category_keys`。
 
-Phase 5-E-F 已完成一次运行态正向 E2E，记录见 `docs/ai/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`。本次未单独执行未绑定分类负向运行态验收。
+Phase 5-E-F 已完成一次运行态正向 E2E，记录见 `docs/ai/05_acceptance/P5_DY_AI_CS_RAG_E2E_ACCEPTANCE.md`。本次未单独执行未绑定分类负向运行态验收。
 
 ## 7. 自动化回归建议
 

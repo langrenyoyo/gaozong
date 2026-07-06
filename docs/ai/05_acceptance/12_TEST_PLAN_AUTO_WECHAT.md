@@ -10,13 +10,13 @@
 
 本文基于以下已冻结或已完成文档：
 
-1. `docs/ai/06_PRD_AUTO_WECHAT.md`
-2. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
-3. `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
-4. `docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
-5. `docs/ai/10_WEBHOOK_AUTH_MIGRATION.md`
-6. `docs/ai/11_CODE_PLAN_AUTO_WECHAT.md`
-7. `docs/ai/P1_END_1_ACCEPTANCE.md`
+1. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+2. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
+3. `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
+4. `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+5. `docs/ai/04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md`
+6. `docs/ai/12_legacy_research/11_CODE_PLAN_AUTO_WECHAT.md`
+7. `docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md`
 
 验收口径：
 

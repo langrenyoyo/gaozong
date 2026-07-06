@@ -36,9 +36,9 @@ apps/xg_douyin_ai_cs/rag/database.py
 apps/xg_douyin_ai_cs/services/vector_store.py
 tests/test_xg_douyin_ai_cs_rag.py
 tests/test_xg_douyin_ai_cs_rag_workflow.py
-docs/ai/P1_RAG_UNIFIED_KB_TRAINING_API_CONTRACT_FOR_CAR_PROJECT.md
-docs/ai/P1_RAG_UNIFIED_KB_TRAINING_9000_API_PROXY.md
-docs/ai/P1_RAG_UNIFIED_KB_TRAINING_9000_API_RUNTIME_SMOKE.md
+docs/ai/06_rag/P1_RAG_UNIFIED_KB_TRAINING_API_CONTRACT_FOR_CAR_PROJECT.md
+docs/ai/06_rag/P1_RAG_UNIFIED_KB_TRAINING_9000_API_PROXY.md
+docs/ai/06_rag/P1_RAG_UNIFIED_KB_TRAINING_9000_API_RUNTIME_SMOKE.md
 ```
 
 运行态只读检查：

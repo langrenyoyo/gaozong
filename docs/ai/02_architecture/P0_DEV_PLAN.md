@@ -1,7 +1,7 @@
 # auto_wechat / 小高AI微信助手 第一版开发计划
 
 版本：P0-DEV-PLAN-1
-状态：基于冻结 PRD（`docs/ai/06_PRD_AUTO_WECHAT.md`）和差距分析（`docs/ai/PRD_GAP_ANALYSIS.md`）的阶段性开发计划
+状态：基于冻结 PRD（`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`）和差距分析（`docs/ai/01_product_prd/PRD_GAP_ANALYSIS.md`）的阶段性开发计划
 范围：只定义阶段目标、修改范围、验收标准、风险点、是否涉及数据库 / 前端 / Local Agent。本文件不是技术方案，不包含数据库迁移 DDL、不包含代码实现。
 
 更新时间：2026-06-15
@@ -86,7 +86,7 @@ P3~P12 按阶段边界继续推进
 ### 1.2 DB-MIG：迁移体系方案设计
 
 - **最终目标**：确定未来数据库结构演进的方法，避免继续依赖 `Base.metadata.create_all` 处理已有表字段变更。
-- **完成状态**：输出迁移体系方案，明确手写迁移脚本、schema_migrations、备份、dry-run、回滚、字段分批策略（见 `docs/ai/14_DB_MIGRATION_PLAN.md`）。
+- **完成状态**：输出迁移体系方案，明确手写迁移脚本、schema_migrations、备份、dry-run、回滚、字段分批策略（见 `docs/ai/03_data_and_migration/14_DB_MIGRATION_PLAN.md`）。
 - **不属于本阶段**：不写迁移脚本、不改 models.py、不执行迁移、不改数据库、不做字段回填。
 - **补充口径**：当前 `data/auto_wechat.db` 是开发测试库，不是生产库；但迁移体系按准生产规范设计，方便未来真实客户数据上线后沿用。
 
@@ -219,8 +219,8 @@ P3~P12 按阶段边界继续推进
 
 - **目标**：冻结 PRD 边界、盘点真实调用链与已有能力、输出差距分析、明确命名映射。
 - **修改范围**：纯文档。
-  - 新增 `docs/ai/PRD_GAP_ANALYSIS.md`
-  - 新增 `docs/ai/P0_DEV_PLAN.md`
+  - 新增 `docs/ai/01_product_prd/PRD_GAP_ANALYSIS.md`
+  - 新增 `docs/ai/02_architecture/P0_DEV_PLAN.md`
   - 更新 `docs/ai/05_PROJECT_CONTEXT.md`
 - **验收标准**：
   1. 差距分析区分 ✅ / ⚠️ / ❌ / ⛔ 四级。
@@ -234,7 +234,7 @@ P3~P12 按阶段边界继续推进
 ### DB-MIG — 数据库迁移体系方案设计（独立前置阶段）
 
 - **目标**：在修改 `models.py` 之前，确定迁移机制。
-- **修改范围**：输出技术方案文档（预计 `docs/ai/14_DB_MIGRATION_PLAN.md`），不动业务代码。
+- **修改范围**：输出技术方案文档（预计 `docs/ai/03_data_and_migration/14_DB_MIGRATION_PLAN.md`），不动业务代码。
 - **待决策项**：
   1. 引入 Alembic，还是手写迁移脚本。
   2. 历史 SQLite 数据如何兼容（生产库已有 `douyin_leads` / `douyin_webhook_events` 等表数据）。
@@ -462,7 +462,7 @@ P12（前端）跟随各后端阶段穿插，最后整体收口。
 
 ## 6. 第一版不做清单（重申）
 
-见 `docs/ai/PRD_GAP_ANALYSIS.md` 第 4 节。核心：
+见 `docs/ai/01_product_prd/PRD_GAP_ANALYSIS.md` 第 4 节。核心：
 
 - P0 阶段不重命名 `douyin_webhook_events`。
 - DB-MIG 方案未确认前，不改 `models.py`。

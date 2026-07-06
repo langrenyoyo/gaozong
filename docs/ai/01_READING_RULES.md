@@ -764,7 +764,7 @@ P4 输出规范
 P1-END-1 后，新窗口/新会话在完成标准阅读顺序后，**额外必须阅读**：
 
 ```text
-docs/ai/P1_END_1_ACCEPTANCE.md
+docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md
 ```
 
 该文档记录了 P1 自动检测单次闭环演示版的真机验收结果、安全确认和非阻塞问题。

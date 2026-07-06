@@ -8,11 +8,11 @@
 
 本计划基于以下已冻结或已完成文档：
 
-1. `docs/ai/06_PRD_AUTO_WECHAT.md`
-2. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
-3. `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
-4. `docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
-5. `docs/ai/10_WEBHOOK_AUTH_MIGRATION.md`
+1. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+2. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
+3. `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
+4. `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+5. `docs/ai/04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md`
 
 同时基于当前代码只读探索结果。当前代码仍是 demo / 验收链路逐步演进后的实现，不等同于第一版产品化完成状态。
 

@@ -6,6 +6,31 @@
 
 **不依赖** 小猫AI员工的任何闭源 `.pyd` 模块。
 
+## 文档入口
+
+AI 协作规则、产品上下文、架构、接口契约、验收记录和专题任务文档已归档到：
+
+```text
+docs/ai/README.md
+```
+
+常用入口：
+
+| 场景 | 文档 |
+|------|------|
+| AI 任务入口规则 | `CLAUDE.md` / `AGENTS.md` |
+| AI 文档总索引 | `docs/ai/README.md` |
+| 当前项目上下文 | `docs/ai/05_PROJECT_CONTEXT.md` |
+| PRD | `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md` |
+| 架构 | `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md` |
+| 接口契约 | `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
+| 验收记录 | `docs/ai/05_acceptance/` |
+| RAG / Milvus | `docs/ai/06_rag/` |
+| 自动回复 rollout | `docs/ai/07_autoreply/` |
+| NewCarProject 对接 | `docs/ai/08_newcar/` |
+| car-porject-main 对接 | `docs/ai/09_car_project/` |
+| 部署与运维 | `docs/ai/11_deployment_ops/` |
+
 ## 技术栈
 
 - Python 3.10+
@@ -391,7 +416,7 @@ DOUYIN_WEBHOOK_AUTH_REQUIRED=false
 | `im_enter_direct_msg` | 记录事件，不创建线索 |
 | 重复事件 | event_key 幂等去重，不重复创建线索 |
 
-> 详见 [docs/ai/P1_END_2_WEBHOOK_ACCEPTANCE.md](docs/ai/P1_END_2_WEBHOOK_ACCEPTANCE.md)。
+> 详见 [P1_END_2_WEBHOOK_ACCEPTANCE.md](docs/ai/05_acceptance/P1_END_2_WEBHOOK_ACCEPTANCE.md)。
 
 ## 项目结构
 

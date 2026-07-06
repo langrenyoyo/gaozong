@@ -4,7 +4,7 @@
 
 > ## 状态更新（2026-06-19）
 >
-> 本报告为截至 `244a93b` 的差异分析快照。以下条目已在后续提交中**闭环或基本闭环**，最新结论以 `docs/ai/P1_REQUIREMENT_ALIGNMENT_REPORT.md`（HEAD `2d8986b`）为准，不再以下表"未实现/部分实现"的旧表述为准。
+> 本报告为截至 `244a93b` 的差异分析快照。以下条目已在后续提交中**闭环或基本闭环**，最新结论以 `docs/ai/01_product_prd/P1_REQUIREMENT_ALIGNMENT_REPORT.md`（HEAD `2d8986b`）为准，不再以下表"未实现/部分实现"的旧表述为准。
 >
 > | 原缺口 | 闭环提交 | 新结论 |
 > |---|---|---|
@@ -336,7 +336,7 @@ super_admin
 - 多组 `rg` / `Get-Content -Encoding UTF8` 只读检索，用于确认代码路径和能力边界。
 - `python -m py_compile app/auth/newcar_client.py app/auth/context.py app/auth/dependencies.py app/routers/auth.py app/routers/compute.py app/routers/leads.py app/routers/douyin_accounts.py app/routers/douyin_ai_cs_proxy.py app/local_agent_main.py`：通过。
 - `python -m pytest tests/test_auth_context.py tests/test_compute_models.py tests/test_compute_service.py tests/test_compute_router.py tests/test_compute_usage_client.py -q`：`54 passed, 117 warnings`。
-- `rg -n "�|涓|鍟|鈫|鉁|TODO|TBD" docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md docs/ai/05_PROJECT_CONTEXT.md docs/ai/08_DATA_MODEL_AUTO_WECHAT.md docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`：未发现匹配。
+- `rg -n "�|涓|鍟|鈫|鉁|TODO|TBD" docs/ai/01_product_prd/P1_REQUIREMENT_GAP_ANALYSIS.md docs/ai/05_PROJECT_CONTEXT.md docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`：未发现匹配。
 
 上一轮探索阶段已记录：
 

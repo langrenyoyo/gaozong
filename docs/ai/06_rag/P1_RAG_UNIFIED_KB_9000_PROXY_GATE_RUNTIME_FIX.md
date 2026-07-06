@@ -273,7 +273,7 @@ passed
 docker-compose.dev.yml
 .env.example
 tests/test_knowledge_training_unified_api.py
-docs/ai/P1_RAG_UNIFIED_KB_9000_PROXY_GATE_RUNTIME_FIX.md
+docs/ai/06_rag/P1_RAG_UNIFIED_KB_9000_PROXY_GATE_RUNTIME_FIX.md
 ```
 
 修改摘要：

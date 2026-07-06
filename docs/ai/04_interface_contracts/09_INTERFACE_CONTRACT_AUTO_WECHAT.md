@@ -1,7 +1,7 @@
 # auto_wechat / 小高AI微信助手 第一版产品化接口契约
 
 版本：P0-API-1
-依据：`docs/ai/06_PRD_AUTO_WECHAT.md`、`docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`、`docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
+依据：`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`、`docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`、`docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
 范围：接口契约设计与当前接口兼容关系说明。本文不修改业务代码、不新增接口实现、不修改现有接口实现、不修改配置默认值。
 
 ------
@@ -1375,14 +1375,14 @@ P0-API-1 完成后，后续文档顺序：
 
 1. `docs/ai/01_READING_RULES.md`
 2. `docs/ai/05_PROJECT_CONTEXT.md`
-3. `docs/ai/06_PRD_AUTO_WECHAT.md`
-4. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
-5. `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
+3. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+4. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
+5. `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
 6. `docs/ai/02_EXECUTION_RULES.md`
 7. `docs/ai/03_TESTING_RULES.md`
 8. `docs/ai/04_OUTPUT_RULES.md`
 9. `CLAUDE.md`
-10. `docs/ai/P1_END_1_ACCEPTANCE.md`
+10. `docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md`
 11. `app/main.py`
 12. `app/local_agent_main.py`
 13. `app/routers/`
@@ -1556,7 +1556,7 @@ P0-API-1 完成后，后续文档顺序：
 
 更新时间：2026-06-18
 
-本节基于 `docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md` 补充一期需求差异探索后的接口契约风险。以下内容是后续开发前置约束，不代表已经实现。
+本节基于 `docs/ai/01_product_prd/P1_REQUIREMENT_GAP_ANALYSIS.md` 补充一期需求差异探索后的接口契约风险。以下内容是后续开发前置约束，不代表已经实现。
 
 ### 17.1 NewCarProject 登录与权限契约
 

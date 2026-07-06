@@ -1,7 +1,7 @@
 # auto_wechat / 小高AI微信助手 第一版产品化数据模型设计
 
 版本：P0-DATA-1
-依据：`docs/ai/06_PRD_AUTO_WECHAT.md`、`docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
+依据：`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`、`docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
 范围：数据模型设计与兼容 / 迁移边界说明。本文不修改业务代码、不修改 ORM 模型、不新增迁移脚本、不执行数据库迁移。
 
 ------
@@ -1391,8 +1391,8 @@ P0-DATA-1 完成后，后续文档顺序：
 
 1. `docs/ai/01_READING_RULES.md`
 2. `docs/ai/05_PROJECT_CONTEXT.md`
-3. `docs/ai/06_PRD_AUTO_WECHAT.md`
-4. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
+3. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+4. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
 5. `docs/ai/02_EXECUTION_RULES.md`
 6. `docs/ai/03_TESTING_RULES.md`
 7. `docs/ai/04_OUTPUT_RULES.md`
@@ -1489,7 +1489,7 @@ Agent disabled 或 deleted 后不得继续生成回复建议。
 
 更新时间：2026-06-18
 
-本节基于 `docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md` 的一期需求差异探索结果补充，只记录设计风险，不代表已经批准数据库迁移。
+本节基于 `docs/ai/01_product_prd/P1_REQUIREMENT_GAP_ANALYSIS.md` 的一期需求差异探索结果补充，只记录设计风险，不代表已经批准数据库迁移。
 
 ### 26.1 已具备商户字段的模型
 

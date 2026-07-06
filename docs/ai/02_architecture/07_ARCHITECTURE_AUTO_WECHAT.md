@@ -1,7 +1,7 @@
 # auto_wechat / 小高AI微信助手 第一版产品化架构设计
 
 版本：P0-ARCH-1
-依据：`docs/ai/06_PRD_AUTO_WECHAT.md`
+依据：`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
 范围：架构设计与 Webhook 验签迁移说明。本文不修改业务代码、不定义最终数据库模型、不新增接口契约、不作为迁移脚本。
 
 ------

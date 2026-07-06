@@ -62,7 +62,7 @@ POST /knowledge-training/{training_id}/feedback
 ```text
 app/routers/knowledge_training.py
 tests/test_knowledge_training_api.py
-docs/ai/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_ASK_GATE_FIX.md
+docs/ai/09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_ASK_GATE_FIX.md
 ```
 
 ## 5. ask gate 修复

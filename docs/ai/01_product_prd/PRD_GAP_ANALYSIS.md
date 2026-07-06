@@ -2,7 +2,7 @@
 
 版本：P0-DOC-GAP-1
 状态：第一阶段盘点与差距分析落盘
-范围：仅盘点 `docs/ai/06_PRD_AUTO_WECHAT.md` 冻结 PRD 与当前 auto_wechat 真实代码之间的差距，输出能力分级、风险等级、命名映射说明。本文件不含技术方案、数据库迁移方案或代码修改计划。
+范围：仅盘点 `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md` 冻结 PRD 与当前 auto_wechat 真实代码之间的差距，输出能力分级、风险等级、命名映射说明。本文件不含技术方案、数据库迁移方案或代码修改计划。
 
 更新时间：2026-06-15
 
@@ -12,7 +12,7 @@
 
 本文件基于以下真实文件盘点，不基于推测：
 
-- PRD：`docs/ai/06_PRD_AUTO_WECHAT.md`（冻结版）
+- PRD：`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`（冻结版）
 - 项目上下文：`docs/ai/05_PROJECT_CONTEXT.md`（含 0.1~0.16、第 28 章 GMP 直连、P0-DEV-E1）
 - 代码：
   - `app/main.py`、`app/config.py`、`app/models.py`
@@ -60,7 +60,7 @@ douyin_webhook_events
 3. 在文档、接口注释、状态映射中统一用「`douyin_webhook_events`（语义承接 PRD 的 `lead_source_events` 原始事件域）」表述。
 4. 后续产品化稳定后，若确有必要做物理表名迁移，必须单独出迁移技术方案，经确认后再执行。
 
-> 该结论与 `docs/ai/05_PROJECT_CONTEXT.md` 0.10 节、`docs/ai/08_DATA_MODEL_AUTO_WECHAT.md` 的既有结论保持一致：第一版推荐保留 `douyin_webhook_events` 物理表名。
+> 该结论与 `docs/ai/05_PROJECT_CONTEXT.md` 0.10 节、`docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md` 的既有结论保持一致：第一版推荐保留 `douyin_webhook_events` 物理表名。
 
 ------
 
@@ -315,4 +315,4 @@ douyin_webhook_events
   3. **产品化业务功能**（销售 Excel 导入、超时重分配、delay_assign、人工处理、Excel 导出）。
 - 下一阶段首要任务是**数据库迁移体系方案设计**，在 Alembic / 手写迁移脚本方案未确认前，禁止修改 `models.py`。
 
-详见开发计划：`docs/ai/P0_DEV_PLAN.md`。
+详见开发计划：`docs/ai/02_architecture/P0_DEV_PLAN.md`。

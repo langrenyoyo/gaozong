@@ -61,7 +61,9 @@ CLAUDE.md 是所有 VibeCoding / Codex / Claude Code 任务的项目入口文件
 
 CLAUDE.md 是入口规则和项目级约束汇总文件。
 
-docs/ai/*.md 是分层执行规则文件。
+docs/ai 根目录保留入口规则与项目上下文；专题文档已按阶段和业务域归档到 docs/ai 子目录。
+
+完整索引见：`docs/ai/README.md`。
 
 优先级如下：
 
@@ -93,11 +95,11 @@ Output Rules
 项目名称：主机微信线索分发与销售跟进检测系统
 
 当前阶段（2026-06-18 同步）：
-- 微信助手主线：P1-END-1 自动检测单次闭环演示版已冻结验收（见 docs/ai/P1_END_1_ACCEPTANCE.md）
+- 微信助手主线：P1-END-1 自动检测单次闭环演示版已冻结验收（见 docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md）
 - 抖音AI客服线：抖音AI小高客服（9100）多账号工作台已正式化（含真实私信会话接入、应用内抖音账号授权、抖音 OpenAPI 授权签名修复），前端 DouyinAiCsWorkbenchPage 已上线
 - 文档体系：PRD（06）/架构（07）/数据模型（08）/接口契约（09）/Webhook 验签迁移（10）/代码计划（11）/测试计划（12）/DB 迁移（14）已落盘
 
-最新冻结 PRD：`docs/ai/06_PRD_AUTO_WECHAT.md`
+最新冻结 PRD：`docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
 
 当前产品定位：auto_wechat / 小高AI微信助手属于 NewCarProject 外部客户系统下的一组商户可售卖子功能系统。当前重点建设链路有两条：
 - `AI小高线索 → 小高AI微信助手`（线索分发与销售跟进检测）
@@ -153,13 +155,13 @@ Output Rules
 
 进行中：
 - P0-DOC-PRD-1 文档冻结与上下文同步
-- P0-ARCH-1 架构设计与 Webhook 验签迁移说明（文档已同步，见 `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`）
-- P0-DATA-1 数据模型设计文档（文档已同步，见 `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`）
+- P0-ARCH-1 架构设计与 Webhook 验签迁移说明（文档已同步，见 `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`）
+- P0-DATA-1 数据模型设计文档（文档已同步，见 `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`）
 
 下一步聚焦：
-- 基于 `docs/ai/06_PRD_AUTO_WECHAT.md` 拆分后续架构设计、数据模型设计、接口契约、测试验收计划
-- 基于 `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md` 继续输出数据模型设计、接口契约和 Webhook 验签迁移技术方案
-- 基于 `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md` 继续输出接口契约、Webhook 验签迁移技术方案和代码修改计划
+- 基于 `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md` 拆分后续架构设计、数据模型设计、接口契约、测试验收计划
+- 基于 `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md` 继续输出数据模型设计、接口契约和 Webhook 验签迁移技术方案
+- 基于 `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md` 继续输出接口契约、Webhook 验签迁移技术方案和代码修改计划
 - P1-END-2 修复前端 pasted 展示字段
 - P1-END-3 清理/归档旧 pending 任务策略
 - 历史自动检测计划项：后台定时轮询检测（旧编号 P2-A，后续按新的阶段总控重新排期）
@@ -860,7 +862,7 @@ tsconfig.node.json 必须包含：
 
 必须遵守阶段最终目标与边界总控。每个阶段开始前复述目标、允许范围、禁止事项、验收标准；每个阶段结束后检查是否越界、是否提前实现后续阶段能力。不得把多个阶段混在同一轮完成，不得用“顺便完成了某功能”替代阶段验收。
 
-1. 当前 auto_wechat 已完成 P1-END-1 自动检测单次闭环演示版冻结，验收文档见 docs/ai/P1_END_1_ACCEPTANCE.md
+1. 当前 auto_wechat 已完成 P1-END-1 自动检测单次闭环演示版冻结，验收文档见 docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md
 2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
 3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
 4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
@@ -868,7 +870,7 @@ tsconfig.node.json 必须包含：
 6. React 离线提示应使用："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
 7. Bug 修复必须先做代码探索和根因确认，禁止仅凭现象就编写修复方案（详见 02_EXECUTION_RULES.md #17 BUG 修复前置探索原则）
 8. 高风险逻辑必须强制写诊断日志，包含 stage、输入摘要、failure_stage，禁止只写"失败了"（详见 02_EXECUTION_RULES.md #19 高风险代码日志原则）
-9. P1-END-1 后新窗口必须先阅读 docs/ai/P1_END_1_ACCEPTANCE.md
+9. P1-END-1 后新窗口必须先阅读 docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md
 10. 禁止绕过 task_id 指定执行机制，新建任务后必须按 task_id 执行当前任务
 11. 诊断接口（search-debug 等）不得返回原始 UIA 对象，必须安全 JSON 序列化
 
@@ -917,6 +919,25 @@ tsconfig.node.json 必须包含：
 4. docs/ai/02_EXECUTION_RULES.md
 5. docs/ai/03_TESTING_RULES.md
 6. docs/ai/04_OUTPUT_RULES.md
+
+专题文档按需从 `docs/ai/README.md` 进入，不再默认遍历整个 `docs/ai` 目录。
+
+归档目录：
+
+```text
+docs/ai/01_product_prd/          PRD 与需求差距
+docs/ai/02_architecture/         架构与阶段迁移总方案
+docs/ai/03_data_and_migration/   数据模型与迁移
+docs/ai/04_interface_contracts/  接口契约与外部系统契约
+docs/ai/05_acceptance/           测试计划、验收与检查清单
+docs/ai/06_rag/                  RAG、Milvus、统一知识库
+docs/ai/07_autoreply/            自动回复 gate、rollout、白名单
+docs/ai/08_newcar/               NewCarProject 登录与权限
+docs/ai/09_car_project/          car-porject-main 对接
+docs/ai/10_local_agent_wechat/   Local Agent 与微信自动化
+docs/ai/11_deployment_ops/       Docker、部署、OpenAPI、live-check
+docs/ai/12_legacy_research/      历史计划与探索资料
+```
 
 ------
 
@@ -1001,7 +1022,7 @@ Coding Later.
 
 更新时间：2026-06-15
 
-接口契约文档：`docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+接口契约文档：`docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
 
 关键结论：第一版产品化接口契约保留 `/webhook/douyin` 作为正式 webhook 入口，AI小高线索到小高AI微信助手推荐先采用拉取式边界或服务层模拟；Local Agent 兼容现有 `poll-and-execute` / `poll-and-detect`，后续需补齐生产验签迁移、NewCarProject 入口、商户后台、导出、状态回调和健康检查等接口实现方案。
 
@@ -1013,7 +1034,7 @@ Coding Later.
 
 更新时间：2026-06-15
 
-技术方案文档：`docs/ai/10_WEBHOOK_AUTH_MIGRATION.md`
+技术方案文档：`docs/ai/04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md`
 
 关键结论：douyinAPI 的验签实现可作为签名计算、原始 body、timestamp 校验和测试样例参考，但不能作为 auto_wechat 正式生产依赖；auto_wechat 当前 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 只允许作为开发 / 联调兼容，生产环境后续必须引入环境识别并强制验签。
 
@@ -1025,7 +1046,7 @@ Coding Later.
 
 更新时间：2026-06-15
 
-代码修改计划文档：`docs/ai/11_CODE_PLAN_AUTO_WECHAT.md`
+代码修改计划文档：`docs/ai/12_legacy_research/11_CODE_PLAN_AUTO_WECHAT.md`
 
 关键结论：本轮只输出代码修改计划，不修改业务代码。后续产品化代码建议分阶段执行：先处理 Webhook 生产验签和 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 迁移风险，再补联系方式提取、原始事件 / 有效线索规则、数据模型字段、状态流转、customer_id 预留、Local Agent 回归、前端接口与导出。执行前需要先确认生产签名头、SECRET_KEY 配置、数据库迁移策略和 NewCarProject 对接字段。
 
@@ -1065,7 +1086,7 @@ logging_config.py 使用说明.md
 
 更新时间：2026-06-15
 
-测试验收计划文档：`docs/ai/12_TEST_PLAN_AUTO_WECHAT.md`
+测试验收计划文档：`docs/ai/05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md`
 
 关键结论：第一版产品化测试验收范围覆盖 Webhook 生产验签、原始 body 签名一致性、联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出。正式验收不以免验签为通过口径；Local Agent 真机验收必须保持 `sent=false`、检测只读、不粘贴、不发送、不按 Enter。
 

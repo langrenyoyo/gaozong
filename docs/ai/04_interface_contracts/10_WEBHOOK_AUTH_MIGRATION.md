@@ -4,10 +4,10 @@
 
 依据：
 
-1. `docs/ai/06_PRD_AUTO_WECHAT.md`
-2. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
-3. `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
-4. `docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+1. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+2. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
+3. `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
+4. `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
 5. `E:\work\project\douyinAPI` 真实代码只读探索结论
 
 范围：本文只做 Webhook 验签迁移技术方案，不修改业务代码、不修改配置默认值、不改接口实现、不改数据库模型、不新增测试代码、不引入依赖。
@@ -1078,15 +1078,15 @@ P0-WEBHOOK-AUTH-1 完成后，后续顺序：
 
 1. `docs/ai/01_READING_RULES.md`
 2. `docs/ai/05_PROJECT_CONTEXT.md`
-3. `docs/ai/06_PRD_AUTO_WECHAT.md`
-4. `docs/ai/07_ARCHITECTURE_AUTO_WECHAT.md`
-5. `docs/ai/08_DATA_MODEL_AUTO_WECHAT.md`
-6. `docs/ai/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
+3. `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md`
+4. `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md`
+5. `docs/ai/03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md`
+6. `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md`
 7. `docs/ai/02_EXECUTION_RULES.md`
 8. `docs/ai/03_TESTING_RULES.md`
 9. `docs/ai/04_OUTPUT_RULES.md`
 10. `CLAUDE.md`
-11. `docs/ai/P1_END_1_ACCEPTANCE.md`
+11. `docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md`
 12. `app/main.py`
 13. `app/config.py`
 14. `.env.example`

@@ -37,7 +37,7 @@ Local Agent 不是浏览器用户，不能直接套 NewCar 用户 token。后续
 | 打包 / 配置 | `scripts/build_local_agent_exe.ps1`、`scripts/stop_local_agent.ps1`、`.env.example`、`frontend/.env.example`、`docker-compose.dev.yml` |
 | 前端 | `frontend/src/api/localWechatAgent.ts`、`frontend/src/api/agent.ts`、`frontend/src/api/wechatTasks.ts`、`frontend/src/features/wechat-assistant/*` |
 | 测试 | `tests/test_agent_status.py`、`tests/test_p0_5a_wechat_tasks.py`、`tests/test_p0_reply_2_agent_write_back.py`、`tests/test_p0_main_5b_poll_and_execute.py`、`tests/test_p1_auto_1c_poll_and_detect.py`、`tests/test_wechat_task_history_api.py` |
-| 文档 | `docs/ai/LOCAL_AGENT_FRONTEND_CAPABILITY_REVIEW.md`、`docs/ai/P1_AUTH_PERMISSION_ROUTE_MATRIX.md`、`docs/ai/05_PROJECT_CONTEXT.md`、`docs/ai/P1_END_1_ACCEPTANCE.md` |
+| 文档 | `docs/ai/10_local_agent_wechat/LOCAL_AGENT_FRONTEND_CAPABILITY_REVIEW.md`、`docs/ai/08_newcar/P1_AUTH_PERMISSION_ROUTE_MATRIX.md`、`docs/ai/05_PROJECT_CONTEXT.md`、`docs/ai/05_acceptance/P1_END_1_ACCEPTANCE.md` |
 
 ## 3. 当前真实调用链
 

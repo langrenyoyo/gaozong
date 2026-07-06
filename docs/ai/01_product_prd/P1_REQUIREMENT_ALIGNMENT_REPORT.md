@@ -4,7 +4,7 @@
 > 编写日期：2026-06-19
 > 基准需求文档：`docs/PRD/需求文档-小高AI系统一期（对外）.md`
 > 代码快照：HEAD = `2d8986b`（`git status --short` 工作树存在一个非本任务的未提交改动 `tests/test_xg_douyin_ai_cs_app.py`，本轮不处理）
-> 承接文档：`docs/ai/P1_REQUIREMENT_GAP_ANALYSIS.md`（截止 `244a93b`），本报告在其之后约 30 条提交进展基础上更新
+> 承接文档：`docs/ai/01_product_prd/P1_REQUIREMENT_GAP_ANALYSIS.md`（截止 `244a93b`），本报告在其之后约 30 条提交进展基础上更新
 > 本轮范围：只读探索 + 文档落盘，未改业务代码 / 未改数据库 / 未新增迁移 / 未改 9100 / 未改 19000 / 未改自动发送 / 未引入 LangChain / Agent tools
 
 ---
