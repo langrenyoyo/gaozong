@@ -22,9 +22,10 @@ COPY requirements-docker.txt ./requirements-docker.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir --prefer-binary -r requirements-docker.txt
 
-# 复制后端源码：9000 的 app/ 与 9100 的 apps/
+# 复制后端源码：9000 的 app/、9100 的 apps/ 与共享 packages/
 COPY app/ ./app/
 COPY apps/ ./apps/
+COPY packages/ ./packages/
 
 # 9000、9100 均通过 compose command 指定实际入口，这里仅给默认（9000）
 EXPOSE 9000 9100
