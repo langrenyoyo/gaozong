@@ -463,7 +463,7 @@ async def search_preview(request: Request) -> dict[str, Any]:
 @router.post("/ask")
 def ask(
     request: KnowledgeTrainingAskRequest,
-    _: None = Depends(require_knowledge_training_ip_whitelist),
+    _: None = Depends(require_unified_knowledge_training_access),
 ) -> dict[str, Any]:
     """使用统一系统级小高知识库上下文调用训练问答。"""
     payload: dict[str, Any] = {
@@ -490,7 +490,7 @@ def ask(
 def feedback(
     training_id: str,
     request: KnowledgeTrainingFeedbackRequest,
-    _: None = Depends(require_knowledge_training_ip_whitelist),
+    _: None = Depends(require_unified_knowledge_training_access),
 ) -> dict[str, Any]:
     """提交训练反馈，仍由 9100 校验训练会话归属。"""
     try:

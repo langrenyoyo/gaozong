@@ -76,10 +76,12 @@ def test_ask_rejects_non_whitelisted_ip(monkeypatch):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_PERMISSION_DENIED"
 
 
-def test_ask_rejects_non_whitelisted_ip_even_with_merchant_token(monkeypatch):
+def test_ask_rejects_non_whitelisted_ip_with_invalid_internal_token(monkeypatch):
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "valid-internal-token")
+
     response = _client(client_host="203.0.113.10").post(
         "/knowledge-training/ask",
         json={"question": "怎么回复？"},
@@ -87,7 +89,62 @@ def test_ask_rejects_non_whitelisted_ip_even_with_merchant_token(monkeypatch):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_PERMISSION_DENIED"
+
+
+def test_ask_allows_internal_token_from_non_whitelisted_ip_and_uses_system_context(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_IP_WHITELIST", "127.0.0.1")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "valid-internal-token")
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+
+    def fake_post(url, *, json, headers, timeout):
+        seen["url"] = url
+        seen["json"] = json
+        seen["headers"] = headers
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "training_id": "kt-token",
+                    "question": json["question"],
+                    "answer": "这是 internal token 放行后的训练建议回答。",
+                    "used_knowledge_base": True,
+                    "knowledge_base_name": "小高知识库",
+                    "status": "answered",
+                }
+
+        return Response()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client(client_host="203.0.113.10").post(
+        "/knowledge-training/ask",
+        headers={"Authorization": "Bearer valid-internal-token"},
+        json={
+            "question": "客户问价格还能不能便宜一点，该怎么回复？",
+            "prompt": "保持礼貌",
+            "douyin_account_id": "1",
+            "use_xiaogao_knowledge_base": True,
+            "merchant_id": "forged-merchant",
+            "tenant_id": "forged-tenant",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["training_id"] == "kt-token"
+    assert response.json()["answer"]
+    assert seen["json"]["tenant_id"] == "xiaogao_system"
+    assert seen["json"]["merchant_id"] == "xiaogao_base"
+    assert seen["json"]["question"] == "客户问价格还能不能便宜一点，该怎么回复？"
+    assert seen["json"]["prompt"] == "保持礼貌"
+    assert seen["json"]["douyin_account_id"] == "1"
+    assert seen["json"]["use_xiaogao_knowledge_base"] is True
+    assert "forged-merchant" not in seen["json"].values()
+    assert "forged-tenant" not in seen["json"].values()
 
 
 def test_ask_rejects_when_production_whitelist_is_not_explicit(monkeypatch):
@@ -100,7 +157,7 @@ def test_ask_rejects_when_production_whitelist_is_not_explicit(monkeypatch):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_PERMISSION_DENIED"
 
 
 def test_ask_allows_production_explicit_whitelist(monkeypatch):
@@ -143,7 +200,54 @@ def test_feedback_rejects_non_whitelisted_ip(monkeypatch):
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_IP_FORBIDDEN"
+    assert response.json()["detail"]["code"] == "KNOWLEDGE_TRAINING_PERMISSION_DENIED"
+
+
+def test_feedback_allows_internal_token_from_non_whitelisted_ip(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_IP_WHITELIST", "127.0.0.1")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "valid-internal-token")
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+
+    def fake_post(url, *, json, headers, timeout):
+        seen["url"] = url
+        seen["json"] = json
+        seen["headers"] = headers
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "training_id": "kt-1",
+                    "rating": json["rating"],
+                    "status": "submitted",
+                    "knowledge_base_name": "小高知识库",
+                    "raw_detail": "should-hide",
+                }
+
+        return Response()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client(client_host="203.0.113.10").post(
+        "/knowledge-training/kt-1/feedback",
+        headers={"Authorization": "Bearer valid-internal-token"},
+        json={"rating": "useful", "comment": "SMOKE feedback only"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "training_id": "kt-1",
+        "rating": "useful",
+        "status": "submitted",
+        "knowledge_base_name": "小高知识库",
+    }
+    assert seen["json"]["tenant_id"] == "xiaogao_system"
+    assert seen["json"]["merchant_id"] == "xiaogao_base"
+    assert seen["json"]["rating"] == "useful"
+    assert seen["json"]["comment"] == "SMOKE feedback only"
 
 
 def test_feedback_allows_whitelisted_ip_without_auth_and_uses_system_context(monkeypatch):
