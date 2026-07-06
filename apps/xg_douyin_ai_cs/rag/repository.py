@@ -30,6 +30,7 @@ from apps.xg_douyin_ai_cs.services.vector_store import get_vector_store
 TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
 
 _logger = logging.getLogger(__name__)
+UNIFIED_KB_DOUYIN_ACCOUNT_ID = 0
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,141 @@ def list_categories(tenant_id: str, merchant_id: str) -> list[KnowledgeCategoryI
     return [_to_category_item(row) for row in rows]
 
 
+def ensure_base_category(tenant_id: str) -> KnowledgeCategoryItem:
+    """确保统一知识库默认 base 分类可见。"""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM knowledge_categories
+            WHERE tenant_id=? AND category_key='base' AND scope_type='system'
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            cur = conn.execute(
+                """
+                INSERT INTO knowledge_categories(
+                  tenant_id, merchant_id, category_key, name, scope_type,
+                  is_base, is_active, sort_order
+                ) VALUES(?,NULL,'base','小高知识库','system',1,1,1)
+                """,
+                (tenant_id,),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM knowledge_categories WHERE id=?", (int(cur.lastrowid),)).fetchone()
+    return _to_category_item(row)
+
+
+def list_unified_documents(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    category_key: str | None = None,
+    status: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    where, params = _document_filters(
+        tenant_id=tenant_id,
+        merchant_id=merchant_id,
+        category_key=category_key,
+        status=status,
+        keyword=keyword,
+    )
+    offset = (max(page, 1) - 1) * page_size
+    with connect() as conn:
+        total = conn.execute(f"SELECT COUNT(*) AS total FROM knowledge_documents d WHERE {where}", params).fetchone()
+        rows = conn.execute(
+            f"""
+            SELECT d.*,
+              (
+                SELECT COUNT(*)
+                FROM knowledge_chunks c
+                WHERE c.document_id=d.id AND c.is_active=1
+              ) AS chunk_count,
+              (
+                SELECT r.id
+                FROM rag_training_runs r
+                WHERE r.document_id=d.id
+                ORDER BY r.id DESC
+                LIMIT 1
+              ) AS last_training_run_id,
+              (
+                SELECT r.status
+                FROM rag_training_runs r
+                WHERE r.document_id=d.id
+                ORDER BY r.id DESC
+                LIMIT 1
+              ) AS last_training_status
+            FROM knowledge_documents d
+            WHERE {where}
+            ORDER BY d.updated_at DESC, d.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, offset),
+        ).fetchall()
+    return {
+        "items": [_document_summary(row) for row in rows],
+        "total": int(total["total"] if total else 0),
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+def get_unified_document(*, tenant_id: str, merchant_id: str, document_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT d.*,
+              (
+                SELECT COUNT(*)
+                FROM knowledge_chunks c
+                WHERE c.document_id=d.id AND c.is_active=1
+              ) AS chunk_count,
+              (
+                SELECT r.id
+                FROM rag_training_runs r
+                WHERE r.document_id=d.id
+                ORDER BY r.id DESC
+                LIMIT 1
+              ) AS last_training_run_id,
+              (
+                SELECT r.status
+                FROM rag_training_runs r
+                WHERE r.document_id=d.id
+                ORDER BY r.id DESC
+                LIMIT 1
+              ) AS last_training_status,
+              (
+                SELECT r.chunk_count
+                FROM rag_training_runs r
+                WHERE r.document_id=d.id
+                ORDER BY r.id DESC
+                LIMIT 1
+              ) AS last_training_chunk_count
+            FROM knowledge_documents d
+            WHERE d.id=? AND d.tenant_id=? AND d.merchant_id=? AND d.douyin_account_id=?
+            """,
+            (document_id, tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID),
+        ).fetchone()
+    if row is None:
+        return None
+    data = _document_summary(row)
+    data["content"] = str(row["content"])
+    if row["last_training_run_id"] is not None:
+        data["last_training_run"] = {
+            "training_run_id": str(row["last_training_run_id"]),
+            "status": row["last_training_status"],
+            "chunk_count": int(row["last_training_chunk_count"] or 0),
+        }
+    else:
+        data["last_training_run"] = None
+    return data
+
+
 def create_document(payload: KnowledgeDocumentCreate) -> int:
     if not payload.content.strip():
         raise ValueError("content must not be empty")
@@ -113,6 +249,211 @@ def create_document(payload: KnowledgeDocumentCreate) -> int:
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def update_unified_document(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    document_id: int,
+    title: str,
+    content: str,
+    category_key: str,
+) -> dict | None:
+    if not content.strip():
+        raise ValueError("content must not be empty")
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM knowledge_documents
+            WHERE id=? AND tenant_id=? AND merchant_id=? AND douyin_account_id=?
+            """,
+            (document_id, tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            """
+            UPDATE knowledge_documents
+            SET title=?, content=?, category_key=?, source_type='manual_text',
+                is_active=1, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (title, content, category_key, document_id),
+        )
+        conn.execute(
+            """
+            UPDATE knowledge_chunks
+            SET is_active=0, updated_at=CURRENT_TIMESTAMP
+            WHERE document_id=?
+            """,
+            (document_id,),
+        )
+        conn.commit()
+    return get_unified_document(tenant_id=tenant_id, merchant_id=merchant_id, document_id=document_id)
+
+
+def soft_delete_unified_document(*, tenant_id: str, merchant_id: str, document_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM knowledge_documents
+            WHERE id=? AND tenant_id=? AND merchant_id=? AND douyin_account_id=?
+            """,
+            (document_id, tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            """
+            UPDATE knowledge_documents
+            SET is_active=0, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (document_id,),
+        )
+        conn.execute(
+            """
+            UPDATE knowledge_chunks
+            SET is_active=0, updated_at=CURRENT_TIMESTAMP
+            WHERE document_id=?
+            """,
+            (document_id,),
+        )
+        conn.commit()
+    if settings.rag_vector_backend == "milvus":
+        get_vector_store().delete_document(
+            document_id=str(document_id),
+            tenant_id=tenant_id,
+            merchant_id=merchant_id,
+        )
+    return {"document_id": str(document_id), "status": "deleted"}
+
+
+def train_document(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    document_id: int,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> dict | None:
+    client = llm_client or OpenAICompatibleClient()
+    with connect() as conn:
+        doc = conn.execute(
+            """
+            SELECT * FROM knowledge_documents
+            WHERE id=? AND tenant_id=? AND merchant_id=? AND douyin_account_id=? AND is_active=1
+            """,
+            (document_id, tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID),
+        ).fetchone()
+        if doc is None:
+            return None
+        run_id = _create_training_run(
+            conn,
+            RagTrainRequest(
+                tenant_id=tenant_id,
+                merchant_id=merchant_id,
+                douyin_account_id=UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+            ),
+            document_id=document_id,
+        )
+        chunk_count = 0
+        milvus_chunks: list[dict] = []
+        try:
+            conn.execute(
+                """
+                UPDATE knowledge_chunks
+                SET is_active=0, updated_at=CURRENT_TIMESTAMP
+                WHERE document_id=?
+                """,
+                (document_id,),
+            )
+            for index, chunk in enumerate(chunk_text(doc["content"]), start=1):
+                digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+                embedding = client.embed(chunk)
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO knowledge_chunks(
+                      document_id, tenant_id, merchant_id, douyin_account_id,
+                      chunk_text, chunk_index, embedding_json, embedding_model,
+                      category_id, category_key, content_hash, is_active
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
+                    """,
+                    (
+                        doc["id"],
+                        doc["tenant_id"],
+                        doc["merchant_id"],
+                        doc["douyin_account_id"],
+                        chunk,
+                        index,
+                        json.dumps(embedding["embedding"]),
+                        embedding["model"],
+                        doc["category_id"],
+                        doc["category_key"],
+                        digest,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE knowledge_chunks
+                    SET is_active=1, embedding_json=?, embedding_model=?,
+                        category_id=?, category_key=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE document_id=? AND content_hash=?
+                    """,
+                    (
+                        json.dumps(embedding["embedding"]),
+                        embedding["model"],
+                        doc["category_id"],
+                        doc["category_key"],
+                        doc["id"],
+                        digest,
+                    ),
+                )
+                row = conn.execute(
+                    """
+                    SELECT c.*, d.title, d.source_type, d.content AS document_content
+                    FROM knowledge_chunks c
+                    JOIN knowledge_documents d ON d.id=c.document_id
+                    WHERE c.document_id=? AND c.content_hash=?
+                    """,
+                    (doc["id"], digest),
+                ).fetchone()
+                if row is not None:
+                    milvus_chunks.append(_to_milvus_chunk(row, embedding["embedding"]))
+                chunk_count += 1
+            if settings.rag_vector_backend == "milvus":
+                get_vector_store().delete_document(
+                    document_id=str(document_id),
+                    tenant_id=tenant_id,
+                    merchant_id=merchant_id,
+                )
+                get_vector_store().upsert_chunks(milvus_chunks)
+            conn.execute(
+                """
+                UPDATE rag_training_runs
+                SET status='completed', document_count=1, chunk_count=?, finished_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (chunk_count, run_id),
+            )
+            conn.commit()
+            return {
+                "training_run_id": str(run_id),
+                "document_id": str(document_id),
+                "status": "completed",
+                "chunk_count": chunk_count,
+            }
+        except Exception as exc:
+            conn.execute(
+                """
+                UPDATE rag_training_runs
+                SET status='failed', document_count=1, chunk_count=?, error=?, finished_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (chunk_count, _error_summary(exc), run_id),
+            )
+            conn.commit()
+            raise
 
 
 def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | None = None) -> dict:
@@ -268,6 +609,92 @@ def search(
     if settings.rag_vector_backend == "milvus":
         return _search_milvus_or_fallback(payload, llm_client=llm_client)
     return _search_sqlite(payload, llm_client=llm_client)
+
+
+def search_unified_preview(*, tenant_id: str, merchant_id: str, query: str, category_keys: list[str], top_k: int) -> dict:
+    if not category_keys:
+        return {"matches": []}
+    results = search(
+        RagSearchRequest(
+            tenant_id=tenant_id,
+            merchant_id=merchant_id,
+            douyin_account_id=UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+            query=query,
+            top_k=top_k,
+            category_keys=category_keys,
+        )
+    )
+    matches = []
+    for item in results:
+        doc = get_unified_document(tenant_id=tenant_id, merchant_id=merchant_id, document_id=int(item.document_id))
+        matches.append(
+            {
+                "document_id": str(item.document_id),
+                "title": item.title,
+                "category_key": (doc or {}).get("category_key") or "",
+                "chunk_text": item.chunk_text[:500],
+                "score": item.score,
+            }
+        )
+    return {"matches": matches}
+
+
+def get_training_run(*, tenant_id: str, merchant_id: str, run_id: int) -> dict | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM rag_training_runs
+            WHERE id=? AND tenant_id=? AND merchant_id=? AND douyin_account_id=?
+            """,
+            (run_id, tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID),
+        ).fetchone()
+    if row is None:
+        return None
+    return _training_run_item(row)
+
+
+def list_training_runs(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    document_id: int | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    clauses = [
+        "tenant_id=?",
+        "merchant_id=?",
+        "douyin_account_id=?",
+    ]
+    params: list[object] = [tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID]
+    if document_id is not None:
+        clauses.append("document_id=?")
+        params.append(document_id)
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    where = " AND ".join(clauses)
+    offset = (max(page, 1) - 1) * page_size
+    with connect() as conn:
+        total = conn.execute(f"SELECT COUNT(*) AS total FROM rag_training_runs WHERE {where}", params).fetchone()
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM rag_training_runs
+            WHERE {where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, offset),
+        ).fetchall()
+    return {
+        "items": [_training_run_item(row) for row in rows],
+        "total": int(total["total"] if total else 0),
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def _search_milvus_or_fallback(
@@ -560,13 +987,90 @@ def log_llm_call(
         conn.commit()
 
 
-def _create_training_run(conn: sqlite3.Connection, payload: RagTrainRequest) -> int:
+def _document_filters(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    category_key: str | None,
+    status: str | None,
+    keyword: str | None,
+) -> tuple[str, list[object]]:
+    clauses = [
+        "d.tenant_id=?",
+        "d.merchant_id=?",
+        "d.douyin_account_id=?",
+    ]
+    params: list[object] = [tenant_id, merchant_id, UNIFIED_KB_DOUYIN_ACCOUNT_ID]
+    if category_key:
+        clauses.append("d.category_key=?")
+        params.append(category_key)
+    if keyword:
+        clauses.append("(d.title LIKE ? OR d.content LIKE ?)")
+        like = f"%{keyword}%"
+        params.extend([like, like])
+    if status in {"deleted", "disabled"}:
+        clauses.append("d.is_active=0")
+    elif status in {"draft", "active"}:
+        clauses.append("d.is_active=1")
+        if status == "active":
+            clauses.append("EXISTS(SELECT 1 FROM knowledge_chunks c WHERE c.document_id=d.id AND c.is_active=1)")
+        else:
+            clauses.append("NOT EXISTS(SELECT 1 FROM knowledge_chunks c WHERE c.document_id=d.id AND c.is_active=1)")
+    elif status:
+        clauses.append("1=0")
+    return " AND ".join(clauses), params
+
+
+def _document_summary(row: sqlite3.Row) -> dict:
+    chunk_count = int(row["chunk_count"] or 0)
+    return {
+        "document_id": str(row["id"]),
+        "title": str(row["title"]),
+        "category_key": str(row["category_key"] or "base"),
+        "status": _document_status(row, chunk_count),
+        "chunk_count": chunk_count,
+        "last_training_run_id": None if row["last_training_run_id"] is None else str(row["last_training_run_id"]),
+        "last_training_status": row["last_training_status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _document_status(row: sqlite3.Row, chunk_count: int) -> str:
+    if int(row["is_active"]) != 1:
+        return "deleted"
+    return "active" if chunk_count > 0 else "draft"
+
+
+def _training_run_item(row: sqlite3.Row) -> dict:
+    return {
+        "training_run_id": str(row["id"]),
+        "document_id": None if row["document_id"] is None else str(row["document_id"]),
+        "status": str(row["status"]),
+        "chunk_count": int(row["chunk_count"] or 0),
+        "error_code": None if not row["error"] else "RAG_TRAINING_FAILED",
+        "error_message": _sanitize_error_message(row["error"]),
+        "started_at": row["created_at"],
+        "completed_at": row["finished_at"],
+    }
+
+
+def _sanitize_error_message(value: object) -> str | None:
+    if not value:
+        return None
+    text = str(value)
+    for marker in ("token", "secret", "password", "cookie", "milvus", "qdrant", "http://", "https://"):
+        text = re.sub(marker, "<redacted>", text, flags=re.IGNORECASE)
+    return text[:300]
+
+
+def _create_training_run(conn: sqlite3.Connection, payload: RagTrainRequest, document_id: int | None = None) -> int:
     cur = conn.execute(
         """
-        INSERT INTO rag_training_runs(tenant_id, merchant_id, douyin_account_id, status)
-        VALUES(?,?,?,'running')
+        INSERT INTO rag_training_runs(tenant_id, merchant_id, douyin_account_id, document_id, status)
+        VALUES(?,?,?,?,'running')
         """,
-        (payload.tenant_id, payload.merchant_id, payload.douyin_account_id),
+        (payload.tenant_id, payload.merchant_id, payload.douyin_account_id, document_id),
     )
     return int(cur.lastrowid)
 

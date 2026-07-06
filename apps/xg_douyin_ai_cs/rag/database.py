@@ -158,6 +158,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "knowledge_documents", "category_key", "TEXT")
     _ensure_column(conn, "knowledge_chunks", "category_id", "INTEGER")
     _ensure_column(conn, "knowledge_chunks", "category_key", "TEXT")
+    _ensure_column(conn, "rag_training_runs", "document_id", "INTEGER")
     conn.executescript(
         """
         CREATE INDEX IF NOT EXISTS idx_documents_category
