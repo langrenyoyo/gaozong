@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -208,10 +209,85 @@ def test_reports_summary_returns_retained_and_high_intent_counts():
     assert data["assigned_count"] == 1
     assert data["retained_contact_count"] == 2
     assert data["high_intent_count"] == 2
+    assert data["yesterday_total_leads"] == 0
+    assert data["today_new_leads"] == 3
     assert data["lead_growth_rate"] is None
     assert data["sales_response_rate"] == 50.0
     assert data["retained_contact_rate"] == 66.7
     assert data["high_intent_hint"] == "需优先跟进"
+
+
+def test_reports_summary_returns_yesterday_baseline_growth_rate():
+    today = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+    yesterday = today - timedelta(days=1)
+    db = TestSession()
+    try:
+        db.add_all(
+            [
+                DouyinLead(
+                    source="douyin",
+                    lead_type="private",
+                    customer_name="yesterday-a",
+                    content="old",
+                    source_id="growth-old-1",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    created_at=yesterday,
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="private",
+                    customer_name="yesterday-b",
+                    content="old",
+                    source_id="growth-old-2",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    created_at=yesterday + timedelta(hours=1),
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="private",
+                    customer_name="today-a",
+                    content="new",
+                    source_id="growth-new-1",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    created_at=today,
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="private",
+                    customer_name="today-b",
+                    content="new",
+                    source_id="growth-new-2",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    created_at=today + timedelta(hours=1),
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="private",
+                    customer_name="other-merchant",
+                    content="other",
+                    source_id="growth-other-1",
+                    merchant_id="merchant-b",
+                    status="pending",
+                    created_at=yesterday,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().get("/reports/summary")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_leads"] == 4
+    assert data["yesterday_total_leads"] == 2
+    assert data["today_new_leads"] == 2
+    assert data["lead_growth_rate"] == 100.0
 
 
 def test_get_lead_detail_returns_assigned_staff_score_and_timeline():

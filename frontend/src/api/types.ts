@@ -327,6 +327,8 @@ export interface ReportSummary {
   timeout_count?: number;
   retained_contact_count?: number;
   high_intent_count?: number;
+  yesterday_total_leads?: number;
+  today_new_leads?: number;
   lead_growth_rate?: number | null;
   sales_response_rate?: number | null;
   retained_contact_rate?: number | null;

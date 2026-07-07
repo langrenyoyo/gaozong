@@ -259,7 +259,11 @@ function formatPercent(value?: number | null): string | null {
 
 function leadGrowthHint(summary: ReportSummary): string {
   const percent = formatPercent(summary.lead_growth_rate);
-  return percent ? `较昨日增长 ${percent}` : "暂无昨日基线";
+  if (percent) return `较昨日增长 ${percent}`;
+  const todayNew = summary.today_new_leads ?? 0;
+  const yesterdayTotal = summary.yesterday_total_leads ?? 0;
+  if (yesterdayTotal === 0 && todayNew > 0) return `昨日累计 0，今日新增 ${todayNew}`;
+  return "今日暂无新增";
 }
 
 function leadScorePercent(lead: Lead): number | null {

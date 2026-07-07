@@ -1,5 +1,7 @@
 """报表服务"""
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -17,6 +19,18 @@ def get_summary(db: Session, merchant_id: str | None = None) -> dict:
 
     # 总线索数
     total_leads = _scoped(db.query(func.count(DouyinLead.id))).scalar() or 0
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_total_leads = _scoped(
+        db.query(func.count(DouyinLead.id)).filter(DouyinLead.created_at < today_start)
+    ).scalar() or 0
+    today_new_leads = _scoped(
+        db.query(func.count(DouyinLead.id)).filter(DouyinLead.created_at >= today_start)
+    ).scalar() or 0
+    lead_growth_rate = (
+        round(today_new_leads / yesterday_total_leads * 100, 1)
+        if yesterday_total_leads > 0
+        else None
+    )
 
     # 各状态计数
     status_counts = {}
@@ -76,7 +90,9 @@ def get_summary(db: Session, merchant_id: str | None = None) -> dict:
         "assigned_count": assigned_count,
         "retained_contact_count": retained_contact_count,
         "high_intent_count": high_intent_count,
-        "lead_growth_rate": None,
+        "yesterday_total_leads": yesterday_total_leads,
+        "today_new_leads": today_new_leads,
+        "lead_growth_rate": lead_growth_rate,
         "sales_response_rate": sales_response_rate,
         "retained_contact_rate": retained_contact_rate,
         # 转化口径语义别名（D4）：与留资口径等价，前端可选用 converted_leads/conversion_rate

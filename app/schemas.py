@@ -637,6 +637,8 @@ class ReportSummary(BaseModel):
     assigned_count: int = 0
     retained_contact_count: int = 0
     high_intent_count: int = 0
+    yesterday_total_leads: int = 0
+    today_new_leads: int = 0
     lead_growth_rate: Optional[float] = None
     sales_response_rate: Optional[float] = None
     retained_contact_rate: Optional[float] = None
