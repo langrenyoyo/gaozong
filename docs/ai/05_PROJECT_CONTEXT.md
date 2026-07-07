@@ -114,6 +114,19 @@ PostgreSQL:
 
 后续数据库演进顺序：P2-B / P2-C 建立 database factory、异步连接池和 repository 收口；P2-D 再增加 PostgreSQL docker-compose dev profile。
 
+P2-B-DB-9000-DATABASE-FACTORY-1 已建立 9000 最小 database factory：
+
+```text
+app/database.py
+  - 继续作为 9000 唯一中心数据库入口。
+  - 对外保留 engine、SessionLocal、Base、get_db。
+  - 新增 get_database_runtime / get_sqlite_path / create_database_engine。
+  - SQLite 默认行为保持不变。
+  - PostgreSQL backend 仅识别并脱敏展示；本轮创建连接会明确报未启用。
+```
+
+本轮仍未启用 PostgreSQL、未创建 async pool、未改业务 SQL、未改表结构。9000 后续 PostgreSQL 仍对应 `auto_wechat` database。
+
 后续新增数据库代码应避免继续扩散 SQLite 专属写法，尤其不要在业务 service 中直接依赖 `sqlite3.connect`、`PRAGMA table_info`、`INSERT OR REPLACE`、`INSERT OR IGNORE`、`rowid` 或 SQLite 布尔 0/1 隐式语义。
 
 #### RAG / 训练反馈最新状态

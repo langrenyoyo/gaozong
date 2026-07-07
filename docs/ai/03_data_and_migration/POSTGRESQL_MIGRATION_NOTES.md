@@ -386,3 +386,38 @@ docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
 
 1. P2-B / P2-C：建立 database factory、异步连接池配置和 repository 分层收口。
 2. P2-D：增加 PostgreSQL docker-compose dev profile，一个 PostgreSQL 容器实例内创建 `auto_wechat` 与 `xg_douyin_ai_cs` 两个 database。
+
+## 14. P2-B 9000 database factory 补充
+
+任务：`P2-B-DB-9000-DATABASE-FACTORY-1`
+
+本轮已完成 9000 主服务的最小 database factory / runtime 抽象：
+
+1. `app/database.py` 继续作为 9000 唯一中心数据库入口，不新增重复职责文件。
+2. 对外兼容保留 `engine`、`SessionLocal`、`Base`、`get_db`。
+3. 新增 `get_database_runtime()`，从 `DATABASE_URL` 识别 backend，并返回脱敏 URL。
+4. 新增 `get_sqlite_path()`，用于 SQLite URL 文件路径解析。
+5. 新增 `create_database_engine()`，统一创建 SQLAlchemy engine。
+6. SQLite backend 默认行为保持不变，继续使用当前 SQLite 路径和现有连接参数。
+7. PostgreSQL backend 本轮只识别、不连接；尝试创建 engine 会明确报“已识别但未启用”。
+
+本轮未执行：
+
+1. 未启用 PostgreSQL。
+2. 未新增 PostgreSQL Docker Compose 服务或 profile。
+3. 未创建 async pool。
+4. 未改业务 SQL。
+5. 未改表结构。
+6. 未跑迁移。
+7. 未改 9100。
+
+并发与后续连接池约束：
+
+1. 后续 PostgreSQL 推荐使用 asyncpg 或 SQLAlchemy async engine。
+2. 后续任务再引入 FastAPI startup 初始化连接池、shutdown 关闭连接池。
+3. 连接池配置方向继续预留 `DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_TIMEOUT`。
+4. 本轮没有在 async FastAPI 请求链路中新增阻塞式数据库访问。
+
+SQLite 守门说明：
+
+本轮没有新增 `sqlite3.connect`，因此不需要新增 SQLite guard allowlist。`app/database.py` 是 9000 数据库兼容入口，但当前仍通过 SQLAlchemy `create_engine` 维持旧行为。
