@@ -3097,3 +3097,43 @@ apps/xg_douyin_ai_cs/rag/database.py
 4. 数据库访问最终需要支持 QPS600。
 5. 后续必须走 async PostgreSQL driver、连接池、事务、索引和压测验证。
 6. P2-C 仍不启用 PostgreSQL，但新增抽象不得阻碍后续 asyncpg / SQLAlchemy async engine 接入。
+
+# P2-D 前置数据库路线同步
+
+任务：`P2-D-PRE-DOCS-PROJECT-CONTEXT-DB-ROADMAP-SYNC-1`
+
+本节只同步当前数据库迁移路线状态，不代表已启用 PostgreSQL，不修改业务代码、配置、docker-compose 或迁移脚本。
+
+当前路线进度：
+
+1. P1-DB-SQLITE-SPECIFIC-USAGE-AUDIT-GUARD-1 已完成：已新增 SQLite 专属写法审计守门，当前 guard 结果为 `errors=0, warnings=77`。
+2. P2-A-DB-DATABASE-URL-CONFIG-ABSTRACTION-1 已完成：9000 支持 `DATABASE_URL`，9100 支持 `RAG_DATABASE_URL`，默认仍是 SQLite，并已支持 `postgresql+asyncpg://` URL 识别和脱敏展示。
+3. P2-B-DB-9000-DATABASE-FACTORY-1 已完成：9000 database factory 已收口到 `app/database.py`，PostgreSQL 仅识别、不连接，SQLite 默认行为不变。
+4. P2-C-DB-9100-DATABASE-FACTORY-1 已完成：9100 metadata DB factory 已收口到 `apps/xg_douyin_ai_cs/rag/database.py`，`RAG_DATABASE_URL` 已进入 runtime 抽象，`XG_DOUYIN_AI_CS_DB_PATH` 仍兼容，PostgreSQL 仅识别、不连接，未改 Milvus / RAG 检索 / 业务 SQL。
+
+最终生产目标：
+
+1. 宝塔生产部署最终不再使用 SQLite。
+2. PostgreSQL 使用 Docker Compose 容器，不是外部托管数据库。
+3. 一个 PostgreSQL 容器实例，两个 database：
+   - `auto_wechat`：9000 主服务数据库，通过 `DATABASE_URL` 接入。
+   - `xg_douyin_ai_cs`：9100 RAG metadata 数据库，通过 `RAG_DATABASE_URL` 接入。
+4. Milvus 继续作为向量检索库，只做 embedding / 向量检索副本，不是 documents、chunks、feedback、training_run 或状态字段的 metadata 真源。
+5. 系统目标需要支持 QPS600。
+6. 后续数据库访问必须考虑 asyncpg / SQLAlchemy async engine、连接池、startup 初始化 pool、shutdown 关闭 pool、事务边界、幂等约束、多租户隔离字段、高频查询索引和压测验证。
+
+后续路线：
+
+1. P2-D：增加 PostgreSQL docker-compose dev profile，初始化 `auto_wechat` 和 `xg_douyin_ai_cs` 两个 database。
+2. P2-D 边界：可以新增 PostgreSQL dev profile 和初始化脚本，但不要立即把 9000 / 9100 生产运行切到 PostgreSQL；运行路径切换应放到后续任务。
+3. P2-E：设计异步连接池与并发配置，包括 `DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_TIMEOUT`、`RAG_DB_POOL_SIZE`、`RAG_DB_MAX_OVERFLOW`、`RAG_DB_POOL_TIMEOUT`。
+4. P3：引入 Alembic / PostgreSQL migration，补齐 status、dry-run、apply、verify 和 rollback plan。
+5. P4：围绕 QPS600 做压测与调优，验证连接池、事务、索引、RAG metadata 查询和关键接口延迟。
+
+QPS600 注意事项：
+
+1. 不允许在高频 async 请求链路继续扩散阻塞式 DB 调用。
+2. 不允许每个请求创建 engine / pool。
+3. PostgreSQL pool 参数后续必须可配置。
+4. RAG / LLM / Milvus / 抖音发送不得阻塞主请求链路。
+5. `RAG_VECTOR_BACKEND=milvus` 时，`ask` 仍不能因为 SQLite 或 PostgreSQL active count 不可靠为 0 就跳过 Milvus 检索。
