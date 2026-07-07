@@ -421,3 +421,48 @@ docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
 SQLite 守门说明：
 
 本轮没有新增 `sqlite3.connect`，因此不需要新增 SQLite guard allowlist。`app/database.py` 是 9000 数据库兼容入口，但当前仍通过 SQLAlchemy `create_engine` 维持旧行为。
+## 15. P2-C 9100 database factory 补充
+
+任务：`P2-C-DB-9100-DATABASE-FACTORY-1`
+
+本轮已完成 9100 `xg_douyin_ai_cs` 的最小 database factory / runtime 抽象：
+
+1. `apps/xg_douyin_ai_cs/rag/database.py` 继续作为 9100 RAG metadata 的中心数据库入口。
+2. 对外兼容保留 `database_path()`、`connect()`、`init_db()` 行为，现有 repository / service 调用不需要改动。
+3. 新增 `get_database_runtime()`，从 `RAG_DATABASE_URL` 识别 backend，并返回脱敏 URL。
+4. SQLite backend 默认行为保持不变，未配置 `RAG_DATABASE_URL` 时仍使用当前默认 SQLite 路径。
+5. `XG_DOUYIN_AI_CS_DB_PATH` 继续兼容，且在未配置 `RAG_DATABASE_URL` 时生效。
+6. PostgreSQL backend 本轮只识别、不连接；尝试通过 9100 factory 创建 PostgreSQL metadata 连接会明确报“已识别但未启用”。
+7. 9100 后续 PostgreSQL 仍对应 `xg_douyin_ai_cs` database，未来通过 `RAG_DATABASE_URL` 接入。
+
+最终生产目标补充：
+
+1. 宝塔生产部署最终不再使用 SQLite。
+2. 9000 / 9100 metadata 最终全部使用 Docker Compose 中的 PostgreSQL 容器。
+3. PostgreSQL 仍采用一个容器实例、两个 database：`auto_wechat` 与 `xg_douyin_ai_cs`。
+4. 数据库访问最终需要支持 QPS600。
+5. 后续必须补齐 async PostgreSQL driver、连接池、事务边界、索引设计和压测验证。
+6. 本轮 P2-C 不启用 PostgreSQL，但 9100 database factory 不得阻碍后续 asyncpg / SQLAlchemy async engine 接入。
+
+本轮未执行：
+
+1. 未启用 PostgreSQL。
+2. 未新增 PostgreSQL Docker Compose 服务或 profile。
+3. 未创建 async pool。
+4. 未改 RAG 检索逻辑。
+5. 未改 Milvus upsert / search。
+6. 未改业务 SQL。
+7. 未改表结构。
+8. 未跑迁移。
+9. 未改 9000。
+
+并发与后续连接池约束：
+
+1. 后续 9100 PostgreSQL 推荐使用 asyncpg 或 SQLAlchemy async engine。
+2. 后续任务再引入 FastAPI startup 初始化连接池、shutdown 关闭连接池。
+3. 连接池配置方向继续预留 `RAG_DB_POOL_SIZE`、`RAG_DB_MAX_OVERFLOW`、`RAG_DB_POOL_TIMEOUT`。
+4. 本轮没有在 async FastAPI 请求链路中新增阻塞式数据库访问。
+
+SQLite 守门说明：
+
+`apps/xg_douyin_ai_cs/rag/database.py` 已在 SQLite guard allowlist 中，定位为 9100 SQLite 兼容层。本轮未新增 allowlist，也未把 SQLite 专属写法扩散到 routers / services 高频业务链路。

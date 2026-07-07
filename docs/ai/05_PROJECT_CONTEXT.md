@@ -3071,3 +3071,29 @@ Phase 7 已完成“AI 回复记录查询与商户侧只读页面”闭环：
 2. AI 回复记录导出、有效/无效标记、人工反馈等增强后置。
 3. 托管 dry-run 后置，只记录“如果托管会如何决策”，不真实发送。
 4. 自动发送继续暂缓；只有在完成托管配置、频控、审计、灰度、回滚和发送前二次读取最新消息门禁后，才允许进入极小范围试点。
+# P2-C 9100 database factory 当前状态补充
+
+任务：`P2-C-DB-9100-DATABASE-FACTORY-1`
+
+当前已为 9100 `xg_douyin_ai_cs` 建立最小 database factory / runtime 抽象：
+
+```text
+apps/xg_douyin_ai_cs/rag/database.py
+  - 继续作为 9100 RAG metadata 中心数据库入口。
+  - 对外保留 database_path / connect / init_db。
+  - 新增 get_database_runtime，从 RAG_DATABASE_URL 识别 backend 并脱敏展示。
+  - SQLite 默认行为保持不变。
+  - 未配置 RAG_DATABASE_URL 时继续兼容 XG_DOUYIN_AI_CS_DB_PATH。
+  - PostgreSQL backend 仅识别、不连接；本轮不创建 async pool。
+```
+
+本轮仍未启用 PostgreSQL、未改 RAG 检索、未改 Milvus upsert / search、未改业务 SQL、未改表结构、未跑迁移、未改 9000。9100 后续 PostgreSQL 仍对应 `xg_douyin_ai_cs` database，未来通过 `RAG_DATABASE_URL` 接入；async pool 留到后续任务。
+
+最终生产目标补充：
+
+1. 宝塔部署最终不再使用 SQLite。
+2. 9000 / 9100 metadata 全部使用 Docker Compose 中的 PostgreSQL 容器。
+3. 一个 PostgreSQL 容器实例，两个 database：`auto_wechat`、`xg_douyin_ai_cs`。
+4. 数据库访问最终需要支持 QPS600。
+5. 后续必须走 async PostgreSQL driver、连接池、事务、索引和压测验证。
+6. P2-C 仍不启用 PostgreSQL，但新增抽象不得阻碍后续 asyncpg / SQLAlchemy async engine 接入。

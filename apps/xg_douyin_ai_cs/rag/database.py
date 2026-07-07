@@ -1,19 +1,49 @@
-"""SQLite database bootstrap for the 9100 RAG MVP."""
+"""9100 RAG metadata database bootstrap."""
 
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
+from app.database_url import parse_database_url
 from apps.xg_douyin_ai_cs.config import settings
 
 
-def database_path() -> Path:
-    return settings.rag_db_path
+@dataclass(frozen=True)
+class RagDatabaseRuntime:
+    backend: str
+    raw_url: str
+    safe_url: str
+    sqlite_path: str | None
 
 
-def connect() -> sqlite3.Connection:
-    path = database_path()
+def get_database_runtime(database_url: str | None = None) -> RagDatabaseRuntime:
+    """返回 9100 RAG metadata 数据库运行时描述，不创建连接。"""
+    parsed = parse_database_url(database_url or settings.rag_database_url)
+    return RagDatabaseRuntime(
+        backend=parsed.backend,
+        raw_url=parsed.raw_url,
+        safe_url=parsed.safe_url,
+        sqlite_path=parsed.sqlite_path,
+    )
+
+
+def database_path(database_url: str | None = None) -> Path:
+    runtime = get_database_runtime(database_url)
+    if runtime.backend != "sqlite" or not runtime.sqlite_path:
+        raise RuntimeError("当前 9100 database factory 仅允许从 SQLite URL 提取 metadata 文件路径")
+    return Path(runtime.sqlite_path)
+
+
+def connect(database_url: str | None = None) -> sqlite3.Connection:
+    runtime = get_database_runtime(database_url)
+    if runtime.backend == "postgresql":
+        raise RuntimeError("PostgreSQL backend 已识别但 9100 本轮未启用，后续 P2/P3 再接入连接池")
+    if runtime.backend != "sqlite" or not runtime.sqlite_path:
+        raise RuntimeError(f"不支持的 9100 metadata 数据库后端: {runtime.backend}")
+
+    path = Path(runtime.sqlite_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -21,6 +51,10 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     init_db(conn)
     return conn
+
+
+# 后续 PostgreSQL 推荐 asyncpg 或 SQLAlchemy async engine，并在 FastAPI startup/shutdown
+# 中初始化和关闭连接池。本轮不创建 RAG PostgreSQL pool，也不新增 async 请求链路阻塞访问。
 
 
 def init_db(conn: sqlite3.Connection) -> None:
