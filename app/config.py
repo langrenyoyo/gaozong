@@ -70,7 +70,8 @@ DATABASE_DIR = os.path.join(BASE_DIR, "data")
 DATABASE_PATH = os.path.join(DATABASE_DIR, "auto_wechat.db")
 
 # 数据库连接 URL
-DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+# P2-A 仅引入配置抽象；默认仍使用当前 SQLite 文件，PostgreSQL 连接池留到后续阶段。
+DATABASE_URL = _env_str("DATABASE_URL", f"sqlite:///{DATABASE_PATH}")
 
 # 服务端口
 SERVER_HOST = "127.0.0.1"

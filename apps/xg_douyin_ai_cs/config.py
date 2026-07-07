@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from app.database_url import parse_database_url
 from .constants import DEFAULT_HOST, DEFAULT_PORT, SERVICE_NAME, SERVICE_VERSION
 
 
@@ -20,11 +21,22 @@ class Settings:
     port: int = DEFAULT_PORT
 
     @property
+    def rag_database_url(self) -> str:
+        raw_url = os.environ.get("RAG_DATABASE_URL", "").strip()
+        if raw_url:
+            return raw_url
+        raw_path = os.environ.get("XG_DOUYIN_AI_CS_DB_PATH", "").strip()
+        if raw_path:
+            return f"sqlite:///{raw_path}"
+        default_path = Path(__file__).resolve().parent / "data" / "xg_douyin_ai_cs.db"
+        return f"sqlite:///{default_path}"
+
+    @property
     def rag_db_path(self) -> Path:
-        raw = os.environ.get("XG_DOUYIN_AI_CS_DB_PATH", "").strip()
-        if raw:
-            return Path(raw)
-        return Path(__file__).resolve().parent / "data" / "xg_douyin_ai_cs.db"
+        parsed = parse_database_url(self.rag_database_url)
+        if parsed.backend != "sqlite" or not parsed.sqlite_path:
+            raise ValueError("当前 9100 SQLite 运行路径只支持 sqlite RAG_DATABASE_URL")
+        return Path(parsed.sqlite_path)
 
     @property
     def rag_vector_backend(self) -> str:
