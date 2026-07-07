@@ -3137,3 +3137,34 @@ QPS600 注意事项：
 3. PostgreSQL pool 参数后续必须可配置。
 4. RAG / LLM / Milvus / 抖音发送不得阻塞主请求链路。
 5. `RAG_VECTOR_BACKEND=milvus` 时，`ask` 仍不能因为 SQLite 或 PostgreSQL active count 不可靠为 0 就跳过 Milvus 检索。
+
+# P2-D PostgreSQL dev profile 当前状态补充
+
+任务：`P2-D-DB-POSTGRES-DEV-PROFILE-1`
+
+当前已为本地开发增加 PostgreSQL Docker Compose dev profile，但系统默认运行路径仍是 SQLite。
+
+本轮状态：
+
+1. `docker-compose.dev.yml` 新增可选 `postgres` service，使用 `postgres:16-alpine`。
+2. `postgres` service 放入 `profiles: ["postgres"]`，默认 compose 启动不会强制启动 PostgreSQL。
+3. 使用 named volume `postgres_data` 持久化数据。
+4. 初始化脚本位于 `docker/postgres/init/001_create_databases.sql`。
+5. 初始化两个 database：
+   - `auto_wechat`：未来给 9000 主服务使用，对应 `DATABASE_URL`。
+   - `xg_douyin_ai_cs`：未来给 9100 RAG metadata 使用，对应 `RAG_DATABASE_URL`。
+
+启动 PostgreSQL dev profile 示例：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
+```
+
+当前边界：
+
+1. 本轮不切换 9000 到 PostgreSQL。
+2. 本轮不切换 9100 到 PostgreSQL。
+3. 本轮不跑业务迁移，不引入 Alembic，不改业务 SQL，不改表结构。
+4. `DATABASE_URL` / `RAG_DATABASE_URL` 的 PostgreSQL 示例只作为后续切换任务的占位说明。
+5. 后续 P2-E / P3 再处理 asyncpg / SQLAlchemy async engine、连接池、Alembic 和表结构迁移。
+6. 宝塔生产最终目标仍是不再使用 SQLite，并通过 Docker Compose 中的 PostgreSQL 容器承载 `auto_wechat` 与 `xg_douyin_ai_cs` 两个 database。

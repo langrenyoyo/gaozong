@@ -466,3 +466,43 @@ SQLite 守门说明：
 SQLite 守门说明：
 
 `apps/xg_douyin_ai_cs/rag/database.py` 已在 SQLite guard allowlist 中，定位为 9100 SQLite 兼容层。本轮未新增 allowlist，也未把 SQLite 专属写法扩散到 routers / services 高频业务链路。
+
+## 16. P2-D PostgreSQL dev profile 补充
+
+任务：`P2-D-DB-POSTGRES-DEV-PROFILE-1`
+
+本轮新增 PostgreSQL Docker Compose dev profile，仅用于后续本地验证 PostgreSQL 连接、迁移、基础读写和回滚流程，不切换 9000 / 9100 当前运行数据库。
+
+新增内容：
+
+1. `docker-compose.dev.yml` 新增 `postgres` service，使用 `postgres:16-alpine`。
+2. `postgres` service 放入 `profiles: ["postgres"]`，默认 `docker compose -f docker-compose.dev.yml up -d` 不会强制启动 PostgreSQL。
+3. 使用 named volume `postgres_data` 持久化 PostgreSQL 数据。
+4. 新增 healthcheck：`pg_isready` 检查 `postgres` 默认库。
+5. 新增初始化脚本 `docker/postgres/init/001_create_databases.sql`。
+6. 初始化两个 database：
+   - `auto_wechat`：未来给 9000 主服务使用，对应 `DATABASE_URL`。
+   - `xg_douyin_ai_cs`：未来给 9100 RAG metadata 使用，对应 `RAG_DATABASE_URL`。
+
+启动方式示例：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
+```
+
+开发占位连接示例：
+
+```text
+DATABASE_URL=postgresql+asyncpg://auto_wechat:change_me@postgres:5432/auto_wechat
+RAG_DATABASE_URL=postgresql+asyncpg://xg_douyin_ai_cs:change_me@postgres:5432/xg_douyin_ai_cs
+```
+
+边界确认：
+
+1. 默认仍使用 SQLite。
+2. 本轮不把 9000 切换到 PostgreSQL。
+3. 本轮不把 9100 切换到 PostgreSQL。
+4. 本轮不创建业务表、不改表结构、不跑 SQLite -> PostgreSQL 数据迁移。
+5. 本轮不引入 Alembic。
+6. 本轮不改 Milvus upsert / search。
+7. 后续 P2-E / P3 再处理 async pool、Alembic、表结构迁移和生产切换。
