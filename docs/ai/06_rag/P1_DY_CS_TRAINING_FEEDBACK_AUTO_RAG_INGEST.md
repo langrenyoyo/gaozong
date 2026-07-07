@@ -264,3 +264,36 @@ DB 抽查：
 - `python tests\test_douyin_cs_autoreply_9000_proxy.py -v`：6 passed。
 - `python -m py_compile backend\app.py`：passed。
 - `python -m py_compile app\routers\knowledge_training.py app\services\xg_douyin_ai_cs_client.py apps\xg_douyin_ai_cs\services\knowledge_training_service.py apps\xg_douyin_ai_cs\routers\knowledge_training.py`：passed。
+
+## 16. P1-DY-CS-TRAINING-ASK-MILVUS-SKIP-FIX-1
+
+问题现象：
+- 宝塔环境中 `/knowledge-training/search-preview` 可以命中 Milvus 中的统一知识库文档。
+- 但 `/knowledge-training/ask` 返回 `used_knowledge_base=false`。
+- 9100 SQLite 中统一知识库 scope 下的 active chunk 数量为 0，导致 ask 在进入 Milvus 检索前被跳过。
+
+根因：
+- `ask()` 先调用 `_active_base_chunk_count()` 查询 SQLite。
+- 当 `active_doc_count=0` 时，旧逻辑直接设置 `rag_skipped=True`，不再执行 `RagSearchRequest`。
+- 在 `RAG_VECTOR_BACKEND=milvus` 时，SQLite active chunk count 不能代表 Milvus 是否有可检索数据，因此该 count 不可靠。
+
+修复策略：
+- 统一知识库 ask scope 继续固定为 `tenant_id=xiaogao_system`、`merchant_id=xiaogao_base`、`douyin_account_id=0`、`category_keys=["base"]`。
+- RAG query 继续只使用清洗后的 `question`，不拼接 prompt、系统提示词或 session history。
+- `RAG_VECTOR_BACKEND=milvus` 时，即使 SQLite `active_doc_count=0`，也继续执行 `RagSearchRequest`。
+- 仅 SQLite/local 模式下保留 `active_doc_count=0` 时的快速跳过。
+- timing log 补充 `vector_backend`、`active_doc_count_source=sqlite`、`active_doc_count_reliable`，只记录长度、数量和布尔值，不打印 question、prompt、answer、chunk 全文或 Milvus URI。
+
+测试结果：
+- `python -m pytest tests/test_xg_douyin_ai_cs_knowledge_training_ask_latency.py -q`：7 passed。
+
+runtime smoke：
+- 本节追加时未执行宝塔真实 smoke。
+- 建议复验：9100 search-preview 查询“客户问价格还能不能便宜一点”应返回 matches；8788 ask 查询“客户问价格还能不能便宜一点，该怎么回复？”应返回 `used_knowledge_base=true`；9100 日志应显示 `vector_backend=milvus`、`rag_skipped=False`、`match_count>=1`、`used_knowledge_base=True`。
+
+安全确认：
+- 未修改 8788。
+- 未修改 9000 NewCar/auth/logout。
+- 未触发抖音发送或私信发送。
+- 未删除已有知识文档。
+- 未写入或输出真实 token、URI、password。

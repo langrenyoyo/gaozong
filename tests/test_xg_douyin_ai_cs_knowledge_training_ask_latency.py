@@ -96,6 +96,99 @@ def test_ask_skips_rag_when_base_has_no_active_chunks(tmp_path, monkeypatch, cap
     assert "empty kb answer" not in log_text
 
 
+def test_ask_does_not_skip_rag_for_milvus_when_sqlite_has_no_active_chunks(tmp_path, monkeypatch, caplog):
+    _use_temp_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+    _patch_chat(monkeypatch, "milvus kb answer")
+
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchItem
+    from apps.xg_douyin_ai_cs.services import knowledge_training_service as service
+
+    calls = {"count": 0}
+
+    def fake_search(payload):
+        calls["count"] += 1
+        assert payload.tenant_id == "xiaogao_system"
+        assert payload.merchant_id == "xiaogao_base"
+        assert payload.douyin_account_id == 0
+        assert payload.category_keys == ["base"]
+        assert payload.query == "synthetic milvus question"
+        return [
+            RagSearchItem(
+                chunk_id=1,
+                document_id=16,
+                title="synthetic milvus title",
+                chunk_text="synthetic milvus chunk",
+                score=0.9,
+            )
+        ]
+
+    monkeypatch.setattr(service, "search", fake_search)
+
+    caplog.set_level(logging.INFO)
+    response = service.ask(
+        service.KnowledgeTrainingAskInput(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            question="synthetic milvus question",
+            use_xiaogao_knowledge_base=True,
+            douyin_account_id=1,
+        )
+    )
+
+    assert calls["count"] == 1
+    assert response["status"] == "answered"
+    assert response["used_knowledge_base"] is True
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "vector_backend=milvus" in log_text
+    assert "active_doc_count=0" in log_text
+    assert "active_doc_count_source=sqlite" in log_text
+    assert "active_doc_count_reliable=False" in log_text
+    assert "rag_skipped=False" in log_text
+    assert "match_count=1" in log_text
+    assert "used_knowledge_base=True" in log_text
+    assert "synthetic milvus question" not in log_text
+    assert "synthetic milvus chunk" not in log_text
+
+
+def test_ask_milvus_empty_search_is_not_marked_as_skipped(tmp_path, monkeypatch, caplog):
+    _use_temp_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("RAG_VECTOR_BACKEND", "milvus")
+    _patch_chat(monkeypatch, "milvus empty answer")
+
+    from apps.xg_douyin_ai_cs.services import knowledge_training_service as service
+
+    calls = {"count": 0}
+
+    def fake_search(_payload):
+        calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(service, "search", fake_search)
+
+    caplog.set_level(logging.INFO)
+    response = service.ask(
+        service.KnowledgeTrainingAskInput(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            question="synthetic miss question",
+            use_xiaogao_knowledge_base=True,
+            douyin_account_id=0,
+        )
+    )
+
+    assert calls["count"] == 1
+    assert response["status"] == "answered"
+    assert response["used_knowledge_base"] is False
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "vector_backend=milvus" in log_text
+    assert "rag_skipped=False" in log_text
+    assert "match_count=0" in log_text
+    assert "used_knowledge_base=False" in log_text
+
+
 def test_ask_still_searches_when_base_has_active_chunks(tmp_path, monkeypatch):
     _use_temp_db(tmp_path, monkeypatch)
     _seed_active_base_chunk()

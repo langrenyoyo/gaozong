@@ -14,6 +14,7 @@ from apps.xg_douyin_ai_cs.llm.client import (
     LLMRequestError,
     OpenAICompatibleClient,
 )
+from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.rag.database import connect
 from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagSearchRequest
 from apps.xg_douyin_ai_cs.rag import repository
@@ -67,6 +68,9 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
     fallback = False
     error_type = ""
     rag_query = _rag_query(payload.question)
+    vector_backend = settings.rag_vector_backend
+    active_doc_count_source = "sqlite"
+    active_doc_count_reliable = vector_backend != "milvus"
     try:
         if payload.use_xiaogao_knowledge_base:
             active_doc_count = _active_base_chunk_count(
@@ -74,7 +78,7 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
                 merchant_id=payload.merchant_id,
                 douyin_account_id=account_id,
             )
-            if active_doc_count == 0:
+            if active_doc_count == 0 and active_doc_count_reliable:
                 rag_skipped = True
                 rag_skip_reason = "no_active_documents"
             else:
@@ -136,7 +140,10 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
             request_id=request_id,
             training_id=training_id,
             total_ms=_elapsed_ms(started),
+            vector_backend=vector_backend,
             active_doc_count=active_doc_count,
+            active_doc_count_source=active_doc_count_source,
+            active_doc_count_reliable=active_doc_count_reliable,
             rag_skipped=rag_skipped,
             rag_skip_reason=rag_skip_reason,
             rag_ms=rag_ms,
@@ -517,7 +524,10 @@ def _log_ask_timing(
     request_id: str,
     training_id: str,
     total_ms: int,
+    vector_backend: str,
     active_doc_count: int | None,
+    active_doc_count_source: str,
+    active_doc_count_reliable: bool,
     rag_skipped: bool,
     rag_skip_reason: str,
     rag_ms: int,
@@ -533,14 +543,18 @@ def _log_ask_timing(
 ) -> None:
     _logger.info(
         "knowledge_training_ask_timing request_id=%s training_id=%s total_ms=%d "
-        "active_doc_count=%s rag_skipped=%s rag_skip_reason=%s rag_ms=%d "
+        "vector_backend=%s active_doc_count=%s active_doc_count_source=%s "
+        "active_doc_count_reliable=%s rag_skipped=%s rag_skip_reason=%s rag_ms=%d "
         "embedding_ms=-1 milvus_ms=-1 llm_ms=%d db_ms=%d match_count=%d "
         "used_knowledge_base=%s fallback=%s error_type=%s rag_query_source=%s "
         "rag_query_chars=%d prompt_chars=%d",
         request_id,
         training_id,
         total_ms,
+        vector_backend,
         "unknown" if active_doc_count is None else active_doc_count,
+        active_doc_count_source,
+        active_doc_count_reliable,
         rag_skipped,
         rag_skip_reason,
         rag_ms,
