@@ -36,6 +36,8 @@ class KnowledgeTrainingFeedbackRequest(BaseModel):
     merchant_id: str = Field(..., min_length=1)
     rating: Literal["useful", "normal", "wrong"]
     comment: str | None = Field(default=None, max_length=2000)
+    corrected_answer: str | None = Field(default=None, max_length=3000)
+    auto_ingest: bool = True
 
 
 class UnifiedDocumentCreateRequest(BaseModel):
@@ -300,6 +302,8 @@ def feedback(training_id: str, request: KnowledgeTrainingFeedbackRequest) -> dic
                 training_id=training_id,
                 rating=request.rating,
                 comment=request.comment,
+                corrected_answer=request.corrected_answer,
+                auto_ingest=request.auto_ingest,
             )
         )
     except ValueError as exc:

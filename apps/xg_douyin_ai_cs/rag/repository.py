@@ -230,8 +230,9 @@ def create_document(payload: KnowledgeDocumentCreate) -> int:
             """
             INSERT INTO knowledge_documents(
               tenant_id, merchant_id, douyin_account_id, title, content,
-              source_type, category, category_id, category_key, brand, vehicle_name
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+              source_type, category, category_id, category_key, brand, vehicle_name,
+              metadata_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 payload.tenant_id,
@@ -245,6 +246,7 @@ def create_document(payload: KnowledgeDocumentCreate) -> int:
                 payload.category_key,
                 payload.brand,
                 payload.vehicle_name,
+                json.dumps(payload.metadata or {}, ensure_ascii=False) if payload.metadata else None,
             ),
         )
         conn.commit()

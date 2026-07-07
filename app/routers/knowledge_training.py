@@ -39,6 +39,8 @@ class KnowledgeTrainingFeedbackRequest(BaseModel):
 
     rating: Literal["useful", "normal", "wrong"]
     comment: str | None = Field(default=None, max_length=2000)
+    corrected_answer: str | None = Field(default=None, max_length=3000)
+    auto_ingest: bool = True
 
 
 ASK_PUBLIC_FIELDS = {
@@ -55,6 +57,7 @@ FEEDBACK_PUBLIC_FIELDS = {
     "rating",
     "status",
     "knowledge_base_name",
+    "rag_ingestion",
 }
 
 CONTEXT_FORBIDDEN_FIELDS = {"tenant_id", "merchant_id"}
@@ -471,8 +474,6 @@ def ask(
         "prompt": request.prompt,
         "use_xiaogao_knowledge_base": request.use_xiaogao_knowledge_base,
     }
-    if request.douyin_account_id is not None:
-        payload["douyin_account_id"] = request.douyin_account_id
 
     try:
         result = get_xg_douyin_ai_cs_client().knowledge_training_ask(
@@ -498,7 +499,12 @@ def feedback(
             tenant_id=_training_tenant_id(),
             merchant_id=_training_merchant_id(),
             training_id=training_id,
-            request={"rating": request.rating, "comment": request.comment},
+            request={
+                "rating": request.rating,
+                "comment": request.comment,
+                "corrected_answer": request.corrected_answer,
+                "auto_ingest": request.auto_ingest,
+            },
         )
     except XgDouyinAiCsClientError as exc:
         _raise_upstream_error(exc)

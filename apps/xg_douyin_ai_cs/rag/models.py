@@ -44,6 +44,7 @@ class KnowledgeDocumentCreate(BaseModel):
     category_key: str | None = None
     brand: str | None = None
     vehicle_name: str | None = None
+    metadata: dict | None = None
 
 
 class KnowledgeDocumentCreated(BaseModel):

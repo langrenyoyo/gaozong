@@ -58,6 +58,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           category_key TEXT,
           brand TEXT,
           vehicle_name TEXT,
+          metadata_json TEXT,
           is_active INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -156,9 +157,17 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "knowledge_documents", "category_id", "INTEGER")
     _ensure_column(conn, "knowledge_documents", "category_key", "TEXT")
+    _ensure_column(conn, "knowledge_documents", "metadata_json", "TEXT")
     _ensure_column(conn, "knowledge_chunks", "category_id", "INTEGER")
     _ensure_column(conn, "knowledge_chunks", "category_key", "TEXT")
     _ensure_column(conn, "rag_training_runs", "document_id", "INTEGER")
+    _ensure_column(conn, "knowledge_training_feedbacks", "corrected_answer", "TEXT")
+    _ensure_column(conn, "knowledge_training_feedbacks", "auto_ingest", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "knowledge_training_feedbacks", "ingestion_status", "TEXT")
+    _ensure_column(conn, "knowledge_training_feedbacks", "ingested_document_id", "INTEGER")
+    _ensure_column(conn, "knowledge_training_feedbacks", "ingestion_training_run_id", "INTEGER")
+    _ensure_column(conn, "knowledge_training_feedbacks", "ingestion_error", "TEXT")
+    _ensure_column(conn, "knowledge_training_feedbacks", "answer_hash", "TEXT")
     conn.executescript(
         """
         CREATE INDEX IF NOT EXISTS idx_documents_category
@@ -166,6 +175,9 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_chunks_category
         ON knowledge_chunks(tenant_id, merchant_id, category_id, category_key, is_active);
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_training_feedbacks_ingestion
+        ON knowledge_training_feedbacks(tenant_id, merchant_id, training_id, answer_hash, ingestion_status);
         """
     )
     conn.commit()

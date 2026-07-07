@@ -141,7 +141,7 @@ def test_ask_allows_internal_token_from_non_whitelisted_ip_and_uses_system_conte
     assert seen["json"]["merchant_id"] == "xiaogao_base"
     assert seen["json"]["question"] == "客户问价格还能不能便宜一点，该怎么回复？"
     assert seen["json"]["prompt"] == "保持礼貌"
-    assert seen["json"]["douyin_account_id"] == "1"
+    assert "douyin_account_id" not in seen["json"]
     assert seen["json"]["use_xiaogao_knowledge_base"] is True
     assert "forged-merchant" not in seen["json"].values()
     assert "forged-tenant" not in seen["json"].values()
@@ -356,6 +356,67 @@ def test_feedback_preserves_training_session_forbidden(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "TRAINING_SESSION_FORBIDDEN"
+
+
+def test_feedback_forwards_corrected_answer_auto_ingest_and_returns_rag_ingestion(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", "internal-secret")
+    monkeypatch.setenv("KNOWLEDGE_TRAINING_INTERNAL_TOKENS", "valid-internal-token")
+
+    def fake_post(url, *, json, headers, timeout):
+        seen["url"] = url
+        seen["json"] = json
+        seen["headers"] = headers
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "training_id": "kt-1",
+                    "rating": json["rating"],
+                    "status": "submitted",
+                    "knowledge_base_name": "test-kb",
+                    "rag_ingestion": {
+                        "enabled": True,
+                        "triggered": True,
+                        "status": "completed",
+                        "document_id": "12",
+                        "training_run_id": "34",
+                    },
+                    "raw_detail": "should-hide",
+                }
+
+        return Response()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    response = _client(client_host="203.0.113.10").post(
+        "/knowledge-training/kt-1/feedback",
+        headers={"Authorization": "Bearer valid-internal-token"},
+        json={
+            "rating": "useful",
+            "comment": "feedback only",
+            "corrected_answer": "corrected answer",
+            "auto_ingest": True,
+            "tenant_id": "forged-tenant",
+            "merchant_id": "forged-merchant",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["rag_ingestion"]["status"] == "completed"
+    assert "raw_detail" not in response.json()
+    assert seen["json"] == {
+        "tenant_id": "xiaogao_system",
+        "merchant_id": "xiaogao_base",
+        "rating": "useful",
+        "comment": "feedback only",
+        "corrected_answer": "corrected answer",
+        "auto_ingest": True,
+    }
+    assert seen["headers"]["X-Internal-Service-Token"] == "internal-secret"
 
 
 def test_non_training_endpoint_still_requires_newcar_auth(monkeypatch):

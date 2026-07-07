@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import logging
 import time
 from uuid import uuid4
@@ -13,7 +15,8 @@ from apps.xg_douyin_ai_cs.llm.client import (
     OpenAICompatibleClient,
 )
 from apps.xg_douyin_ai_cs.rag.database import connect
-from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagSearchRequest
+from apps.xg_douyin_ai_cs.rag import repository
 from apps.xg_douyin_ai_cs.rag.repository import search
 
 KNOWLEDGE_BASE_NAME = "小高知识库"
@@ -37,6 +40,8 @@ class KnowledgeTrainingFeedbackInput:
     training_id: str
     rating: str
     comment: str | None = None
+    corrected_answer: str | None = None
+    auto_ingest: bool = True
 
 
 class TrainingSessionNotFoundError(ValueError):
@@ -51,7 +56,7 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
     request_id = f"kt-req-{uuid4().hex[:12]}"
     started = time.perf_counter()
     training_id = ""
-    account_id = _normalize_account_id(payload.douyin_account_id)
+    account_id = repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID
     source_chunks = []
     active_doc_count: int | None = None
     rag_skipped = False
@@ -151,10 +156,12 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
     if payload.rating not in {"useful", "normal", "wrong"}:
         raise ValueError("INVALID_RATING")
     status = "pending_review" if payload.rating == "wrong" else "submitted"
+    corrected_answer = _clean_text(payload.corrected_answer, limit=3000)
+    auto_ingest = bool(payload.auto_ingest)
     with connect() as conn:
         session = conn.execute(
             """
-            SELECT tenant_id, merchant_id
+            SELECT tenant_id, merchant_id, question, answer
             FROM knowledge_training_sessions
             WHERE training_id=?
             """,
@@ -165,12 +172,23 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
         if session["tenant_id"] != payload.tenant_id or session["merchant_id"] != payload.merchant_id:
             raise TrainingSessionForbiddenError("TRAINING_SESSION_FORBIDDEN")
 
-        conn.execute(
+        selected_answer, answer_source = _selected_ingestion_answer(
+            rating=payload.rating,
+            original_answer=session["answer"],
+            corrected_answer=corrected_answer,
+        )
+        answer_hash = _answer_hash(selected_answer) if selected_answer else None
+        ingestion = _skipped_ingestion("auto_ingest_disabled", enabled=False) if not auto_ingest else None
+        if ingestion is None and not selected_answer:
+            ingestion = _skipped_ingestion("rating_not_ingestable")
+
+        cur = conn.execute(
             """
             INSERT INTO knowledge_training_feedbacks(
-              training_id, tenant_id, merchant_id, rating, comment, status
+              training_id, tenant_id, merchant_id, rating, comment, status,
+              corrected_answer, auto_ingest, ingestion_status, answer_hash
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.training_id,
@@ -179,15 +197,223 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
                 payload.rating,
                 payload.comment,
                 status,
+                corrected_answer or None,
+                1 if auto_ingest else 0,
+                ingestion["status"] if ingestion else "pending",
+                answer_hash,
             ),
         )
+        feedback_id = int(cur.lastrowid)
         conn.commit()
+
+    if ingestion is None:
+        ingestion = _ingest_feedback_document(
+            feedback_id=feedback_id,
+            training_id=payload.training_id,
+            tenant_id=payload.tenant_id,
+            merchant_id=payload.merchant_id,
+            question=session["question"],
+            selected_answer=selected_answer,
+            answer_source=answer_source,
+            rating=payload.rating,
+            answer_hash=answer_hash,
+        )
+    else:
+        _update_feedback_ingestion(
+            feedback_id=feedback_id,
+            ingestion=ingestion,
+            answer_hash=answer_hash,
+        )
+
     return {
         "training_id": payload.training_id,
         "rating": payload.rating,
         "status": status,
         "knowledge_base_name": KNOWLEDGE_BASE_NAME,
+        "rag_ingestion": ingestion,
     }
+
+
+def _selected_ingestion_answer(*, rating: str, original_answer: str, corrected_answer: str) -> tuple[str, str]:
+    original = _clean_text(original_answer, limit=3000)
+    corrected = _clean_text(corrected_answer, limit=3000)
+    if corrected and corrected != original:
+        return corrected, "corrected_answer"
+    if rating == "useful" and original:
+        return original, "ai_answer"
+    return "", ""
+
+
+def _clean_text(value: str | None, *, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _answer_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _skipped_ingestion(reason: str, *, enabled: bool = True) -> dict:
+    return {
+        "enabled": enabled,
+        "triggered": False,
+        "status": "skipped",
+        "reason": reason,
+    }
+
+
+def _ingest_feedback_document(
+    *,
+    feedback_id: int,
+    training_id: str,
+    tenant_id: str,
+    merchant_id: str,
+    question: str,
+    selected_answer: str,
+    answer_source: str,
+    rating: str,
+    answer_hash: str | None,
+) -> dict:
+    existing = _existing_completed_ingestion(
+        tenant_id=tenant_id,
+        merchant_id=merchant_id,
+        training_id=training_id,
+        answer_hash=answer_hash,
+    )
+    if existing:
+        ingestion = {
+            "enabled": True,
+            "triggered": True,
+            "status": "completed",
+            "document_id": str(existing["ingested_document_id"]),
+            "training_run_id": str(existing["ingestion_training_run_id"]),
+            "reason": "already_ingested",
+            "answer_source": answer_source,
+        }
+        _update_feedback_ingestion(feedback_id=feedback_id, ingestion=ingestion, answer_hash=answer_hash)
+        return ingestion
+
+    document_id = None
+    try:
+        repository.ensure_base_category(tenant_id)
+        document_id = repository.create_document(
+            KnowledgeDocumentCreate(
+                tenant_id=tenant_id,
+                merchant_id=merchant_id,
+                douyin_account_id=repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                title=_feedback_document_title(question),
+                content=_feedback_document_content(question, selected_answer),
+                source_type="douyin_cs_training_feedback",
+                category_key="base",
+                metadata={
+                    "source": "douyin_cs_training_feedback",
+                    "training_id": training_id,
+                    "feedback_id": str(feedback_id),
+                    "rating": rating,
+                    "answer_source": answer_source,
+                    "auto_ingest": True,
+                },
+            )
+        )
+        training = repository.train_document(
+            tenant_id=tenant_id,
+            merchant_id=merchant_id,
+            document_id=document_id,
+        )
+        ingestion = {
+            "enabled": True,
+            "triggered": True,
+            "status": "completed",
+            "document_id": str(document_id),
+            "training_run_id": str(training["training_run_id"] if training else ""),
+            "reason": "ingested",
+            "answer_source": answer_source,
+        }
+    except Exception as exc:
+        _logger.warning("knowledge_training_feedback_auto_ingest_failed error_type=%s", type(exc).__name__)
+        ingestion = {
+            "enabled": True,
+            "triggered": True,
+            "status": "failed",
+            "document_id": "" if document_id is None else str(document_id),
+            "training_run_id": "",
+            "reason": "ingestion_failed",
+            "error_type": type(exc).__name__,
+            "answer_source": answer_source,
+        }
+    _update_feedback_ingestion(feedback_id=feedback_id, ingestion=ingestion, answer_hash=answer_hash)
+    return ingestion
+
+
+def _existing_completed_ingestion(
+    *,
+    tenant_id: str,
+    merchant_id: str,
+    training_id: str,
+    answer_hash: str | None,
+) -> dict | None:
+    if not answer_hash:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT ingested_document_id, ingestion_training_run_id
+            FROM knowledge_training_feedbacks
+            WHERE tenant_id=? AND merchant_id=? AND training_id=? AND answer_hash=?
+              AND ingestion_status='completed'
+              AND ingested_document_id IS NOT NULL
+              AND ingestion_training_run_id IS NOT NULL
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (tenant_id, merchant_id, training_id, answer_hash),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _update_feedback_ingestion(*, feedback_id: int, ingestion: dict, answer_hash: str | None) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE knowledge_training_feedbacks
+            SET ingestion_status=?, ingested_document_id=?, ingestion_training_run_id=?,
+                ingestion_error=?, answer_hash=?
+            WHERE id=?
+            """,
+            (
+                ingestion.get("status"),
+                _optional_int(ingestion.get("document_id")),
+                _optional_int(ingestion.get("training_run_id")),
+                ingestion.get("error_type") or ingestion.get("reason"),
+                answer_hash,
+                feedback_id,
+            ),
+        )
+        conn.commit()
+
+
+def _optional_int(value: object) -> int | None:
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _feedback_document_title(question: str) -> str:
+    compact = _clean_text(question, limit=40)
+    return f"AI抖音客服训练反馈：{compact or '未命名问题'}"
+
+
+def _feedback_document_content(question: str, selected_answer: str) -> str:
+    return "\n".join(
+        [
+            "【客户问题】",
+            question,
+            "",
+            "【标准回答】",
+            selected_answer,
+            "",
+            "【来源】",
+            "AI 抖音客服自动回复训练反馈",
+        ]
+    )
 
 
 def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tuple[str, int, bool, str]:
@@ -257,13 +483,6 @@ def _fallback_answer(payload: KnowledgeTrainingAskInput, source_chunks: list, re
         first = source_chunks[0]
         return f"{reason}，可先参考{KNOWLEDGE_BASE_NAME}：{first.chunk_text}"
     return f"{reason}，建议先让商家补充{KNOWLEDGE_BASE_NAME}后再训练该问题。"
-
-
-def _normalize_account_id(value: int | str | None) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _rag_query(question: str) -> str:
