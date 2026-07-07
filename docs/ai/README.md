@@ -51,6 +51,7 @@ docs/ai/04_OUTPUT_RULES.md
 | 产品边界 | `01_product_prd/06_PRD_AUTO_WECHAT.md` |
 | 系统架构 | `02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md` |
 | 数据模型 | `03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md` |
+| PostgreSQL 迁移路线 | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | 接口契约 | `04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |

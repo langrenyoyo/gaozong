@@ -65,6 +65,23 @@ docs/ai 根目录保留入口规则与项目上下文；专题文档已按阶段
 
 完整索引见：`docs/ai/README.md`。
 
+------
+
+# Current Hard Constraints（2026-07）
+
+以下约束用于防止后续 VibeCoding / Codex 基于旧假设误改：
+
+1. PostgreSQL 目标方案已确认：方案 A，一个 PostgreSQL 实例，两个 database。
+   - `auto_wechat`：9000 主服务数据库，未来使用 `DATABASE_URL`。
+   - `xg_douyin_ai_cs`：9100 RAG / AI 客服 metadata 数据库，未来使用 `RAG_DATABASE_URL`。
+2. SQLite 只是开发和过渡数据库，不是最终生产数据库；新增代码不得继续扩散 SQLite 专属写法。
+3. Milvus 是 embedding + 向量检索副本，不是 documents、chunks、feedback、training_run 或状态字段的 metadata 真源。
+4. RAG `ask` 在 `RAG_VECTOR_BACKEND=milvus` 时，不能因为 SQLite active count 为 0 就跳过 Milvus 检索。
+5. 前端不得持有 internal token，不得直连 9100 / Milvus，不得把前端传入的 tenant_id / merchant_id / douyin_account_id 当可信上下文。
+6. 禁止触发抖音发送、私信发送、自动回复真实发送 gate；AI 回复默认仍必须通过后端 gate。
+7. NewCar 真实鉴权本地联调必须显式设置：`NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`。
+8. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清理前端本地 token。
+
 优先级如下：
 
 P-1 CLAUDE.md Entry Protocol

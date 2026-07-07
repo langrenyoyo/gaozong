@@ -21,6 +21,7 @@ docs/ai/README.md
 | AI 任务入口规则 | `CLAUDE.md` / `AGENTS.md` |
 | AI 文档总索引 | `docs/ai/README.md` |
 | 当前项目上下文 | `docs/ai/05_PROJECT_CONTEXT.md` |
+| PostgreSQL 迁移路线 | `docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | PRD | `docs/ai/01_product_prd/06_PRD_AUTO_WECHAT.md` |
 | 架构 | `docs/ai/02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md` |
 | 接口契约 | `docs/ai/04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |

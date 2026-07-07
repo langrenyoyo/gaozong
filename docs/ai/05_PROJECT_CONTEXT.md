@@ -50,6 +50,120 @@ docs/ai/README.md
 12_legacy_research/      历史计划与探索资料
 ```
 
+### 0.0b 2026-07 当前上下文更新：PostgreSQL / RAG / NewCar
+
+本节用于防止后续任务继续基于旧 SQLite-only、旧 RAG scope 或旧 NewCar 退出假设修改代码。
+
+#### 当前服务结构
+
+```text
+9000 auto_wechat 主后端
+  - 负责主业务 API、NewCar 鉴权门面、9000 可信代理、微信助手主链路、自动回复 gate。
+
+9100 xg_douyin_ai_cs
+  - 负责抖音 AI 客服、RAG、统一知识库 metadata、训练反馈自动入库、LLM 回复建议。
+
+8788 car-porject-main 知识训练入口
+  - 作为 AI 抖音客服训练页面和知识训练入口，经 9000 可信代理访问统一知识库能力。
+
+19000 Local Agent
+  - 运行在客户 Windows 本机，只负责本机微信 UI 自动化、只读检测和 paste_only 任务。
+
+Milvus
+  - 外部向量库，只负责 embedding + 向量检索副本。
+```
+
+#### 数据库路线
+
+当前 SQLite 只是开发和早期部署过渡库，不是最终生产数据库。
+
+PostgreSQL 目标方案已确认采用方案 A：一个 PostgreSQL 实例，两个 database。
+
+```text
+auto_wechat
+  - 9000 主服务数据库
+  - 未来使用 DATABASE_URL
+
+xg_douyin_ai_cs
+  - 9100 RAG / AI 客服 metadata 数据库
+  - 未来使用 RAG_DATABASE_URL
+```
+
+Milvus 不替代 metadata。documents、chunks、feedback、training_run、状态字段的真源仍是 SQLite / PostgreSQL metadata；Milvus 只是检索副本。详细迁移规则见：
+
+```text
+docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
+```
+
+后续新增数据库代码应避免继续扩散 SQLite 专属写法，尤其不要在业务 service 中直接依赖 `sqlite3.connect`、`PRAGMA table_info`、`INSERT OR REPLACE`、`INSERT OR IGNORE`、`rowid` 或 SQLite 布尔 0/1 隐式语义。
+
+#### RAG / 训练反馈最新状态
+
+训练反馈自动入库已完成：
+
+1. `useful` 自动入库 AI answer。
+2. `corrected_answer` 自动入库 corrected answer。
+3. `normal` / `wrong` 无修正不入库。
+4. `training_id + answer_hash` 幂等。
+5. 自动创建 `knowledge_document` 并训练 / upsert Milvus。
+
+统一小高知识库 scope 已固定：
+
+```text
+tenant_id=xiaogao_system
+merchant_id=xiaogao_base
+douyin_account_id=0
+category_key=base
+```
+
+训练 `ask`、`search-preview`、feedback auto-ingest 都必须按该统一 scope 检索或写入。前端传入的 `tenant_id` / `merchant_id` / `douyin_account_id` 不能作为可信上下文。
+
+Milvus skip 问题已修复并作为后续规则固化：
+
+```text
+RAG_VECTOR_BACKEND=milvus 时，ask 不能因为 SQLite active count=0 跳过 Milvus RAG。
+search-preview 能命中 Milvus 时，ask 也必须执行 Milvus RAG。
+```
+
+`ask` 的 RAG embedding/search query 只能使用 question 或极短清洗后的 question，不得把 prompt、智能体人设、知识库提示词、系统提示词或完整 session history 拼进 RAG query。prompt 只能进入 LLM 生成阶段。
+
+#### NewCar 最新状态
+
+NewCar 鉴权当前链路：
+
+```text
+前端 NewCar 登录跳转 / code
+  -> 9000 exchange-code / callback
+  -> NewCar external-auth/me
+  -> 9000 建立当前用户上下文
+```
+
+本地真实 NewCar 登录必须显式配置：
+
+```text
+NEWCAR_AUTH_ENABLED=true
+NEWCAR_AUTH_MOCK_ENABLED=false
+```
+
+退出登录不能只清理前端本地 token。当前要求：
+
+```text
+前端点击退出
+  -> 9000 POST /auth/logout
+  -> NewCarProject POST /api/external-auth/logout
+  -> 前端清理本地 token 并跳回 NewCar 登录页
+```
+
+#### 安全边界
+
+1. 不触发抖音真实发送。
+2. 不触发私信真实发送。
+3. 不改自动回复真实发送 gate。
+4. 前端不得持有 internal token。
+5. 前端不得直连 9100 / Milvus。
+6. 不打印 token、URI、password、secret、cookie、完整客户消息或完整 chunk_text。
+7. Milvus URI、token、数据库连接串只允许在运行环境中配置，不得进入文档示例的真实值或 git diff。
+
 ### 0.0 阶段最终目标与边界总控（2026-06-15 追加）
 
 当前阶段状态：

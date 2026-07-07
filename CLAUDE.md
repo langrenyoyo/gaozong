@@ -47,6 +47,14 @@ CLAUDE.md 是所有 VibeCoding / Codex / Claude Code 任务的项目入口文件
 
 开始任何任务前，必须第一步阅读 CLAUDE.md；随后再按 Required Reading Order 阅读 docs/ai 规则文件。
 
+当前涉及 PostgreSQL、RAG、Milvus、NewCar 鉴权或知识训练任务时，必须额外阅读：
+
+```text
+AGENTS.md
+docs/ai/05_PROJECT_CONTEXT.md
+docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
+```
+
 不得跳过 CLAUDE.md 直接进入代码、测试、日志或业务实现。
 
 你正在参与一个真实项目开发。
@@ -54,6 +62,21 @@ CLAUDE.md 是所有 VibeCoding / Codex / Claude Code 任务的项目入口文件
 本项目遵循分层 AI 协作规范。
 
 开始任何任务前必须先阅读项目规范。
+
+------
+
+# Current Architecture Notes（2026-07）
+
+1. PostgreSQL 目标方案已确认：方案 A，一个 PostgreSQL 实例，两个 database。
+   - `auto_wechat`：9000 主服务数据库，未来使用 `DATABASE_URL`。
+   - `xg_douyin_ai_cs`：9100 RAG / AI 客服 metadata 数据库，未来使用 `RAG_DATABASE_URL`。
+2. SQLite 只是开发和过渡数据库；不要基于旧 SQLite-only 假设修改 RAG、训练、反馈或迁移逻辑。
+3. Milvus 继续作为向量检索库，只是 embedding + 检索副本，不是 metadata 真源。documents、chunks、feedback、training_run 和状态字段的真源是 SQLite / PostgreSQL metadata。
+4. Milvus 模式下，`ask` 不能因为 SQLite active count 为 0 跳过 RAG；`search-preview` 能命中 Milvus 时，`ask` 也必须执行 Milvus RAG。
+5. 统一小高知识库训练和检索 scope 固定为 `tenant_id=xiaogao_system`、`merchant_id=xiaogao_base`、`douyin_account_id=0`、`category_key=base`。
+6. NewCar 真实鉴权本地联调必须显式设置 `NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`。
+7. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清本地 token。
+8. 前端不得持有 internal token，不得直连 9100 / Milvus；不得触发抖音发送、私信发送或自动回复真实发送 gate。
 
 ------
 
