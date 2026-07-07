@@ -13,7 +13,7 @@
   UserCheckIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { assignLead, fetchLead, fetchLeadsPage, fetchLeadWechatNotifyStatus } from "../api";
@@ -1180,7 +1180,10 @@ export default function LeadsManagement() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [listLoading, setListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initialLoadedRef = useRef(false);
+  const leadRequestIdRef = useRef(0);
 
   // 同步弹窗状态
   const [syncPhase, setSyncPhase] = useState<SyncPhase | null>(null);
@@ -1234,31 +1237,48 @@ export default function LeadsManagement() {
     [staffMap],
   );
 
-  // 刷新全部数据
-  const refreshData = useCallback(async () => {
-    const [leadsData, staffData, summaryData, checksRes, autoStatusRes, agentStatusRes] = await Promise.all([
-      fetchLeadsPage({
+  const loadLeadsPage = useCallback(async () => {
+    const requestId = leadRequestIdRef.current + 1;
+    leadRequestIdRef.current = requestId;
+    setListLoading(true);
+    try {
+      const leadsData = await fetchLeadsPage({
         keyword: keyword.trim() || undefined,
         source: source === "all" ? undefined : source,
         status: status === "全部状态" ? undefined : status,
         assigned_staff_id: assignedStaffFilter === "all" ? undefined : assignedStaffFilter,
         page,
         page_size: pageSize,
-      }),
+      });
+      if (leadRequestIdRef.current !== requestId) return;
+      setLeads(leadsData.data.items);
+      setTotalLeads(leadsData.data.total);
+    } finally {
+      if (leadRequestIdRef.current === requestId) {
+        setListLoading(false);
+      }
+    }
+  }, [assignedStaffFilter, keyword, page, pageSize, source, status]);
+
+  const loadSupportData = useCallback(async () => {
+    const [staffData, summaryData, checksRes, autoStatusRes, agentStatusRes] = await Promise.all([
       fetchStaffList("active"),
       fetchSummary(),
       fetchChecks(),
       fetchWechatAutoDetectStatus().catch(() => null),
       fetchAgentStatus().catch(() => null),
     ]);
-    setLeads(leadsData.data.items);
-    setTotalLeads(leadsData.data.total);
     setStaffList(staffData);
     setSummary(summaryData);
     setChecksData(checksRes);
     if (autoStatusRes) setAutoDetectStatus(autoStatusRes);
     setAgentStatus(agentStatusRes?.success ? agentStatusRes.data : AGENT_STATUS_FALLBACK);
-  }, [assignedStaffFilter, keyword, page, pageSize, source, status]);
+  }, []);
+
+  // 刷新全部数据
+  const refreshData = useCallback(async () => {
+    await Promise.all([loadLeadsPage(), loadSupportData()]);
+  }, [loadLeadsPage, loadSupportData]);
 
   const loadNotificationRecordsForLead = useCallback(async (leadId: number) => {
     const result = await fetchNotificationRecords({ lead_id: leadId, limit: 20 });
@@ -1269,13 +1289,14 @@ export default function LeadsManagement() {
     return fetchLeadWechatNotifyStatus(leadId);
   }, []);
 
-  // 页面加载时拉取数据
+  // 页面首次加载时拉取全部数据；后续筛选只刷新列表，避免整页闪烁。
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       setError(null);
       try {
         await refreshData();
+        initialLoadedRef.current = true;
       } catch (err) {
         setError(err instanceof Error ? err.message : "数据加载失败");
       } finally {
@@ -1283,7 +1304,15 @@ export default function LeadsManagement() {
       }
     }
     loadData();
-  }, [refreshData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!initialLoadedRef.current) return;
+    void loadLeadsPage().catch((err) => {
+      toast.error(err instanceof Error ? err.message : "线索列表刷新失败");
+    });
+  }, [loadLeadsPage]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1646,9 +1675,10 @@ export default function LeadsManagement() {
           </div>
           <button
             onClick={() => void refreshData()}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-3 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
+            disabled={listLoading}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-3 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCwIcon size={14} />
+            <RefreshCwIcon size={14} className={listLoading ? "animate-spin" : ""} />
             刷新
           </button>
         </header>
@@ -1753,6 +1783,12 @@ export default function LeadsManagement() {
             </div>
 
             <div className="flex shrink-0 items-center gap-3">
+              {listLoading ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#64748b]">
+                  <LoaderIcon size={13} className="animate-spin" />
+                  刷新中
+                </span>
+              ) : null}
               <span className="text-xs font-semibold text-[#8b95a6]">
                 共 <b className="text-[#2563eb]">{totalLeads}</b> 条
               </span>
