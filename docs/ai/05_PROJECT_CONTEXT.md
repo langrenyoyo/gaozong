@@ -3259,3 +3259,27 @@ GET /knowledge-categories
 4. 本轮不修改 docker-compose。
 5. 本轮不改 9100、不改 Milvus。
 6. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+# P2-F2 9000 async PG engine / pool skeleton 当前状态补充
+
+任务：`P2-F2-DB-9000-ASYNC-PG-ENGINE-POOL-SKELETON-1`
+
+当前已为 9000 主服务新增 async PostgreSQL engine / session / lifecycle 骨架，但系统默认运行路径仍是 SQLite，且未把任何业务接口切换到 PostgreSQL。
+
+新增能力：
+
+1. `app/database.py` 新增 `AsyncDatabaseRuntime`，用于描述 async PG runtime 是否启用、脱敏 URL、engine 和 session factory。
+2. `create_async_pg_engine()` 只接受 `postgresql+asyncpg://`，使用 `DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_TIMEOUT`、`DB_POOL_RECYCLE`。
+3. `DB_STATEMENT_TIMEOUT_MS` 已在 async engine 创建处保留设置位置，后续再通过连接事件或 startup 初始化 SQL 接入。
+4. `init_async_database_runtime()` 在 SQLite 默认环境下返回 disabled runtime，不创建 engine / pool。
+5. `close_async_database_runtime()` 可重复调用，已初始化时关闭 engine，未初始化时不报错。
+6. `get_async_sessionmaker()` 未初始化时会明确报错，避免业务链路误用空 runtime。
+
+边界确认：
+
+1. 本轮未连接 PostgreSQL。
+2. 本轮未切换 `GET /knowledge-categories`。
+3. 本轮未改业务 SQL、未改表结构、未跑迁移、未引入 Alembic。
+4. 本轮未接入 FastAPI startup / shutdown；后续接入时仍必须保证 SQLite 默认启动不初始化 PG engine。
+5. 本轮未改 9100、未改 docker-compose、未改 Milvus。
+6. 后续 P2-F3 才实现 `GET /knowledge-categories` 试点 repository，P2-F4 才增加显式接口开关，P2-F5 再做 SQLite / PostgreSQL 对照测试。

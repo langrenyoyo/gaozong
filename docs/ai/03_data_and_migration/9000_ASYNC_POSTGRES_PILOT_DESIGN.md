@@ -289,6 +289,16 @@ QPS600 不能只靠连接池默认值保证，需要后续压测验证。
 3. PostgreSQL 未启用时不影响 SQLite。
 4. 不在每请求创建 pool。
 
+当前状态（P2-F2）：
+
+1. `app/database.py` 已新增 `AsyncDatabaseRuntime`、`create_async_pg_engine()`、`init_async_database_runtime()`、`close_async_database_runtime()` 和 `get_async_sessionmaker()`。
+2. 默认 SQLite 路径下 async PG runtime 为 disabled，不创建 async engine / pool。
+3. 只有 `DATABASE_URL` 为 `postgresql+asyncpg://...` 时，才允许显式初始化 async PG runtime。
+4. `postgresql://` 和 `postgresql+psycopg://` 不作为 9000 async PG runtime 入口，会提示必须使用 `postgresql+asyncpg://`。
+5. async engine 创建使用 P2-E 的 `DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_TIMEOUT`、`DB_POOL_RECYCLE` 配置；`DB_STATEMENT_TIMEOUT_MS` 已保留设置位置，后续在连接事件或 startup 初始化 SQL 中接入。
+6. 本轮未把 lifecycle 接入 `app.main`，未连接 PostgreSQL，未切换任何业务接口。
+7. 本轮未切换 `GET /knowledge-categories`；P2-F3 才实现试点 repository，P2-F4 才增加接口开关，P2-F5 再做 SQLite / PostgreSQL 对照测试。
+
 ### P2-F3：试点 repository
 
 目标：
