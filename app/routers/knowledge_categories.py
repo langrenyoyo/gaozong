@@ -3,9 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app import config
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_any_permission
-from app.database import get_db
+from app.database import get_async_sessionmaker, get_db
+from app.repositories.knowledge_categories_async_repository import list_visible_knowledge_categories_async
 from app.schemas import KnowledgeCategoryCreate, KnowledgeCategoryListResponse
 from app.services.knowledge_category_service import (
     create_merchant_knowledge_category,
@@ -36,13 +38,27 @@ def _deny_category_management() -> None:
 
 
 @router.get("", response_model=KnowledgeCategoryListResponse)
-def list_knowledge_categories(
+async def list_knowledge_categories(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
     context = _auth(context)
     try:
-        categories = list_visible_knowledge_categories(db, context=context)
+        if config.KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED:
+            try:
+                session_factory = get_async_sessionmaker()
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "KNOWLEDGE_CATEGORIES_ASYNC_PG_RUNTIME_UNAVAILABLE",
+                        "message": "知识分类 async PostgreSQL 试点未初始化",
+                    },
+                ) from exc
+            async with session_factory() as session:
+                categories = await list_visible_knowledge_categories_async(session, context=context)
+        else:
+            categories = list_visible_knowledge_categories(db, context=context)
     except ValueError as exc:
         raise _bad_request(str(exc), "缺少可信商户上下文") from exc
     return {"success": True, "data": categories, "message": "success"}

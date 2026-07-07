@@ -338,3 +338,26 @@ QPS600 不能只靠连接池默认值保证，需要后续压测验证。
 9. 未改 Milvus。
 10. 未触发 LLM、抖音发送、私信发送或自动回复 gate。
 11. 未写入真实 URI、token 或 password。
+## 13. P2-F3 试点 repository 当前状态
+
+任务：`P2-F3-DB-9000-KNOWLEDGE-CATEGORIES-ASYNC-REPOSITORY-PILOT-1`
+
+本轮已为 `GET /knowledge-categories` 增加 async PostgreSQL repository 试点实现，但默认流量仍保持现有 SQLite 同步路径。
+
+新增能力：
+
+1. `app/repositories/knowledge_categories_async_repository.py` 新增 `list_visible_knowledge_categories_async()`。
+2. async repository 只覆盖 `GET /knowledge-categories` 只读查询。
+3. 查询语义保持与当前 SQLite 同步路径一致：使用可信 `RequestContext.merchant_id`，过滤 `scope_type=merchant`、`status=active`、`deleted_at IS NULL`，按 `sort_order ASC, id ASC` 排序，并在应用层补充 `base` 分类。
+4. `app/config.py` 新增 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=false`，默认关闭。
+5. `app/routers/knowledge_categories.py` 仅在该开关为 true 时尝试调用 async repository；runtime 未初始化时返回清晰错误，不静默降级。
+6. 本轮未修改 `POST /knowledge-categories` 或任何 Agent 分类写接口。
+
+边界确认：
+
+1. 默认仍是 SQLite 同步路径。
+2. 本轮未连接 PostgreSQL。
+3. 本轮未切换默认流量。
+4. 本轮未改表结构、未跑迁移、未引入 Alembic。
+5. 本轮未改 9100、Milvus、RAG、LLM、抖音发送、私信发送或自动回复 gate。
+6. 后续 P2-F4 才做试点运行开关验证；P2-F5 再做 SQLite / PostgreSQL 对照测试。

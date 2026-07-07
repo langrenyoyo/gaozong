@@ -3283,3 +3283,21 @@ GET /knowledge-categories
 4. 本轮未接入 FastAPI startup / shutdown；后续接入时仍必须保证 SQLite 默认启动不初始化 PG engine。
 5. 本轮未改 9100、未改 docker-compose、未改 Milvus。
 6. 后续 P2-F3 才实现 `GET /knowledge-categories` 试点 repository，P2-F4 才增加显式接口开关，P2-F5 再做 SQLite / PostgreSQL 对照测试。
+# P2-F3 GET /knowledge-categories async repository 试点当前状态
+任务：`P2-F3-DB-9000-KNOWLEDGE-CATEGORIES-ASYNC-REPOSITORY-PILOT-1`
+
+当前已为 9000 `GET /knowledge-categories` 增加 async PostgreSQL repository 试点代码，但系统默认运行路径仍是 SQLite。
+
+新增内容：
+1. `app/repositories/knowledge_categories_async_repository.py` 新增只读 async repository。
+2. `app/config.py` 新增显式开关 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=false`。
+3. `app/routers/knowledge_categories.py` 仅在开关为 true 时尝试走 async repository；开关默认 false 时继续走现有 `apps.knowledge.services.list_visible_knowledge_categories()` 同步路径。
+4. async repository 查询仍只信任后端 `RequestContext.merchant_id`，不信任前端传入的 `merchant_id`。
+5. runtime 未初始化时返回清晰错误，不静默伪装为成功。
+
+边界确认：
+1. 默认未切换 `GET /knowledge-categories` 流量。
+2. 本轮未连接 PostgreSQL，未创建真实连接池，未运行迁移。
+3. 本轮未改 `POST /knowledge-categories`、Agent 分类写接口、表结构或业务 SQL。
+4. 本轮未改 9100、Milvus、RAG、LLM、抖音发送、私信发送或自动回复 gate。
+5. 后续 P2-F4 才做试点运行开关验证；P2-F5 再做 SQLite / PostgreSQL 对照测试。

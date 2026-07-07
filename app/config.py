@@ -92,6 +92,9 @@ DB_POOL_TIMEOUT = _env_positive_int("DB_POOL_TIMEOUT", 30)
 DB_POOL_RECYCLE = _env_positive_int("DB_POOL_RECYCLE", 1800)
 DB_STATEMENT_TIMEOUT_MS = _env_positive_int("DB_STATEMENT_TIMEOUT_MS", 5000)
 
+# P2-F3 试点开关：默认关闭，GET /knowledge-categories 继续走现有 SQLite 同步路径。
+KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED = _env_bool("KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED", False)
+
 # 服务端口
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 9000
