@@ -3200,3 +3200,62 @@ RAG_DB_STATEMENT_TIMEOUT_MS=5000
 4. 禁止每个请求创建 engine / pool。
 5. 高频 async 请求链路不应继续扩散阻塞式数据库调用。
 6. 本轮未改业务 SQL，未引入 Alembic，未连接 PostgreSQL，未改 Milvus / RAG 检索。
+
+# P2-F 9000 async PostgreSQL 试点设计当前状态补充
+
+任务：`P2-F-DB-9000-ASYNC-PG-PILOT-DESIGN-1`
+
+本节只同步 9000 async PostgreSQL 接入设计和第一个低风险试点模块选择，不代表已连接 PostgreSQL，不切换 9000 当前 SQLite 默认运行路径，不修改业务 SQL，不修改表结构。
+
+当前已新增设计文档：
+
+```text
+docs/ai/03_data_and_migration/9000_ASYNC_POSTGRES_PILOT_DESIGN.md
+```
+
+设计结论：
+
+1. 9000 当前数据库入口仍是 `app/database.py`，主请求链路仍以同步 SQLAlchemy `SessionLocal` / `get_db` 为主。
+2. 后续 async PostgreSQL 推荐使用 `asyncpg` 或 SQLAlchemy async engine。
+3. PostgreSQL pool 必须在 FastAPI startup 初始化，在 shutdown 关闭。
+4. 禁止每个请求创建 engine / pool。
+5. QPS600 仍需要后续连接池、事务、索引、慢查询、后台队列和压测共同验证。
+
+第一个试点模块选择：
+
+```text
+GET /knowledge-categories
+```
+
+选择理由：
+
+1. 它是真实数据库查询，涉及 `knowledge_categories` 表。
+2. 查询简单，只读，已有 SQLite 测试覆盖。
+3. 可按 `RequestContext.merchant_id` 做商户隔离对照。
+4. 不触发抖音发送、私信发送、自动回复 gate、Local Agent、RAG 检索或 Milvus。
+5. 后续便于做 SQLite / PostgreSQL 响应结构、排序、权限和商户隔离对照测试。
+
+明确不选择：
+
+1. 抖音发送 / 私信发送 / 自动回复 gate 链路。
+2. Local Agent / 微信任务执行链路。
+3. NewCar 登录、me、logout 鉴权主链路。
+4. RAG / Milvus 链路。
+5. `/reports/summary` 这类聚合较多、可能存在 N+1 风险的报表接口。
+6. `/compute` 这类同文件混有充值、管理员写入和内部 usage 上报的模块。
+
+后续拆分：
+
+1. P2-F2：新增 async PG engine / pool skeleton，只做 startup / shutdown 生命周期，不切全量链路。
+2. P2-F3：为 `GET /knowledge-categories` 增加试点 repository。
+3. P2-F4：为试点接口增加显式开关，默认仍走 SQLite。
+4. P2-F5：做 SQLite / PostgreSQL 对照测试。
+
+当前边界：
+
+1. 本轮不连接 PostgreSQL。
+2. 本轮不切换 9000 到 PostgreSQL。
+3. 本轮不修改业务 SQL。
+4. 本轮不修改 docker-compose。
+5. 本轮不改 9100、不改 Milvus。
+6. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
