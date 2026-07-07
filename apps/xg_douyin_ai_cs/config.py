@@ -8,6 +8,18 @@ from app.database_url import parse_database_url
 from .constants import DEFAULT_HOST, DEFAULT_PORT, SERVICE_NAME, SERVICE_VERSION
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    """读取正整数配置；非法值回落默认，避免脏环境变量阻断服务启动。"""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 @dataclass(frozen=True)
 class Settings:
     """9100 独立服务配置。
@@ -37,6 +49,26 @@ class Settings:
         if parsed.backend != "sqlite" or not parsed.sqlite_path:
             raise ValueError("当前 9100 SQLite 运行路径只支持 sqlite RAG_DATABASE_URL")
         return Path(parsed.sqlite_path)
+
+    @property
+    def rag_db_pool_size(self) -> int:
+        return _positive_int_env("RAG_DB_POOL_SIZE", 20)
+
+    @property
+    def rag_db_max_overflow(self) -> int:
+        return _positive_int_env("RAG_DB_MAX_OVERFLOW", 40)
+
+    @property
+    def rag_db_pool_timeout(self) -> int:
+        return _positive_int_env("RAG_DB_POOL_TIMEOUT", 30)
+
+    @property
+    def rag_db_pool_recycle(self) -> int:
+        return _positive_int_env("RAG_DB_POOL_RECYCLE", 1800)
+
+    @property
+    def rag_db_statement_timeout_ms(self) -> int:
+        return _positive_int_env("RAG_DB_STATEMENT_TIMEOUT_MS", 5000)
 
     @property
     def rag_vector_backend(self) -> str:

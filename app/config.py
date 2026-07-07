@@ -42,6 +42,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() == "true"
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    """读取正整数配置；非法值回落默认，避免脏环境变量阻断服务启动。"""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _env_csv_set(name: str) -> set[str]:
     """解析逗号分隔白名单，自动忽略空值和多余空格。"""
     result: set[str] = set()
@@ -72,6 +84,13 @@ DATABASE_PATH = os.path.join(DATABASE_DIR, "auto_wechat.db")
 # 数据库连接 URL
 # P2-A 仅引入配置抽象；默认仍使用当前 SQLite 文件，PostgreSQL 连接池留到后续阶段。
 DATABASE_URL = _env_str("DATABASE_URL", f"sqlite:///{DATABASE_PATH}")
+
+# PostgreSQL async pool 预留配置。P2-E 只读取配置，不创建连接池。
+DB_POOL_SIZE = _env_positive_int("DB_POOL_SIZE", 20)
+DB_MAX_OVERFLOW = _env_positive_int("DB_MAX_OVERFLOW", 40)
+DB_POOL_TIMEOUT = _env_positive_int("DB_POOL_TIMEOUT", 30)
+DB_POOL_RECYCLE = _env_positive_int("DB_POOL_RECYCLE", 1800)
+DB_STATEMENT_TIMEOUT_MS = _env_positive_int("DB_STATEMENT_TIMEOUT_MS", 5000)
 
 # 服务端口
 SERVER_HOST = "127.0.0.1"

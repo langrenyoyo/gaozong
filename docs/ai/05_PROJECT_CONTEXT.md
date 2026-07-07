@@ -3168,3 +3168,35 @@ docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
 4. `DATABASE_URL` / `RAG_DATABASE_URL` 的 PostgreSQL 示例只作为后续切换任务的占位说明。
 5. 后续 P2-E / P3 再处理 asyncpg / SQLAlchemy async engine、连接池、Alembic 和表结构迁移。
 6. 宝塔生产最终目标仍是不再使用 SQLite，并通过 Docker Compose 中的 PostgreSQL 容器承载 `auto_wechat` 与 `xg_douyin_ai_cs` 两个 database。
+
+# P2-E async pool 并发配置当前状态补充
+任务：`P2-E-DB-ASYNC-POOL-QPS600-CONCURRENCY-CONFIG-1`
+
+当前已为后续 PostgreSQL + asyncpg / SQLAlchemy async engine + QPS600 增加连接池配置预留，但仍未创建真实连接池，未连接 PostgreSQL，未切换 9000 / 9100 当前 SQLite 默认运行路径。
+
+9000 新增配置：
+```text
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=40
+DB_POOL_TIMEOUT=30
+DB_POOL_RECYCLE=1800
+DB_STATEMENT_TIMEOUT_MS=5000
+```
+
+9100 新增配置：
+```text
+RAG_DB_POOL_SIZE=20
+RAG_DB_MAX_OVERFLOW=40
+RAG_DB_POOL_TIMEOUT=30
+RAG_DB_POOL_RECYCLE=1800
+RAG_DB_STATEMENT_TIMEOUT_MS=5000
+```
+
+边界确认：
+
+1. 默认值只适合开发和占位说明，不代表最终生产值。
+2. QPS600 必须通过压测、慢查询分析、索引设计、事务边界、幂等约束和后台队列共同验证。
+3. 后续 PostgreSQL pool 必须在 FastAPI startup 初始化，在 shutdown 关闭。
+4. 禁止每个请求创建 engine / pool。
+5. 高频 async 请求链路不应继续扩散阻塞式数据库调用。
+6. 本轮未改业务 SQL，未引入 Alembic，未连接 PostgreSQL，未改 Milvus / RAG 检索。
