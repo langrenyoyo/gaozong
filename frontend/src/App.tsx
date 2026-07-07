@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-route
 import { useEffect, useMemo, useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
+import apiClient from "./api/client";
 import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
 import {
@@ -313,11 +314,24 @@ const App = () => {
   };
 
   const handleLogout = () => {
-    clearExternalToken();
-    clearNewCarRedirectState();
-    setUser(null);
-    setAuthError(null);
-    void redirectToNewCarLogin({ message: "正在退出登录，请稍候…", delayMs: 0, saveCurrentPath: false });
+    const token = getExternalToken();
+    void (async () => {
+      try {
+        if (token) {
+          await apiClient.post("/auth/logout", {}, { headers: { Authorization: `Bearer ${token}` } });
+        } else {
+          await apiClient.post("/auth/logout", {});
+        }
+      } catch {
+        // 退出失败不阻塞本地清理，避免用户卡在旧登录态。
+      } finally {
+        clearExternalToken();
+        clearNewCarRedirectState();
+        setUser(null);
+        setAuthError(null);
+        void redirectToNewCarLogin({ message: "正在退出登录，请稍候…", delayMs: 0, saveCurrentPath: false });
+      }
+    })();
   };
 
   const handleRelogin = () => {

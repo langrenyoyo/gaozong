@@ -29,6 +29,7 @@ class NewCarProjectAuthClient:
     base_url: str = ""
     exchange_code_url: str = ""
     me_url: str = ""
+    logout_url: str = ""
     login_url: str = ""
     service_token: str = ""
     timeout_seconds: int = 5
@@ -42,6 +43,7 @@ class NewCarProjectAuthClient:
             base_url=os.getenv("NEWCAR_AUTH_BASE_URL", "").strip().rstrip("/"),
             exchange_code_url=os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip(),
             me_url=os.getenv("NEWCAR_AUTH_ME_URL", "").strip(),
+            logout_url=os.getenv("NEWCAR_AUTH_LOGOUT_URL", "").strip(),
             login_url=os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip(),
             service_token=os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip(),
             timeout_seconds=int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5")),
@@ -77,6 +79,35 @@ class NewCarProjectAuthClient:
         if self.mock_enabled:
             return self.build_mock_context(session_id="cookie")
         return self._load_me(cookie)
+
+    def logout_token(self, token: str) -> dict[str, Any]:
+        """通知 NewCarProject 吊销外部 token；不在异常或返回中暴露 token。"""
+        if self.mock_enabled:
+            return {"ok": True, "mock": True}
+        if not token:
+            return {"ok": True, "token_present": False}
+
+        headers = {"Authorization": f"Bearer {token}"}
+        headers.update(self._service_headers())
+        try:
+            response = httpx.post(
+                self._external_auth_url("logout"),
+                json={},
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise NewCarAuthError("NEWCAR_LOGOUT_UNAVAILABLE", "NewCarProject logout timeout") from exc
+        except httpx.HTTPError as exc:
+            raise NewCarAuthError("NEWCAR_LOGOUT_UNAVAILABLE", "NewCarProject logout request failed") from exc
+
+        if response.status_code == 401:
+            return {"ok": True, "upstream_status": 401}
+        if response.status_code >= 500:
+            raise NewCarAuthError("NEWCAR_LOGOUT_UNAVAILABLE", f"NewCarProject logout failed with status {response.status_code}")
+        if response.status_code >= 400:
+            raise NewCarAuthError("NEWCAR_LOGOUT_FAILED", f"NewCarProject logout failed with status {response.status_code}")
+        return {"ok": True}
 
     def _exchange_code(self, code: str) -> str:
         """使用一次性 code 换取外部 token。"""
@@ -137,6 +168,8 @@ class NewCarProjectAuthClient:
             return self.exchange_code_url
         if endpoint == "me" and self.me_url:
             return self.me_url
+        if endpoint == "logout" and self.logout_url:
+            return self.logout_url
         if not self.base_url:
             raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject auth base url is not configured")
         return f"{self.base_url}/api/external-auth/{endpoint}"

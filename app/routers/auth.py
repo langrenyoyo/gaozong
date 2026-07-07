@@ -40,3 +40,18 @@ async def auth_callback(request: Request):
             status_code = 403
         raise _auth_error(status_code, exc.code, exc.message) from exc
     return {"success": True, "data": data, "message": "success"}
+
+
+@router.post("/logout")
+async def auth_logout(request: Request):
+    """退出 NewCarProject 外部登录态；mock 模式仅返回成功。"""
+    authorization = request.headers.get("Authorization", "")
+    token = ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    client = NewCarProjectAuthClient.from_env()
+    try:
+        return client.logout_token(token)
+    except NewCarAuthError as exc:
+        status_code = 502 if exc.code == "NEWCAR_LOGOUT_UNAVAILABLE" else 400
+        raise _auth_error(status_code, exc.code, exc.message) from exc
