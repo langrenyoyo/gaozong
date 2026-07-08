@@ -90,26 +90,43 @@ docker compose -f <COMPOSE_FILE> exec <POSTGRES_CONTAINER> psql -U <POSTGRES_USE
 
 注意：命令中的 `<POSTGRES_USER>`、`<POSTGRES_URL>`、`<SQLITE_DB_PATH>`、`<BACKUP_PATH>`、`<COMPOSE_FILE>`、`<API_CONTAINER>`、`<POSTGRES_CONTAINER>` 都必须由执行人按 staging 环境填写，不能把真实密码写入文档或 git。
 
+## 3A. P3-C8 当前 blocked 与 P3-C8B 前置 schema 初始化
+
+P3-C8 人工预检查已确认 Baota staging PostgreSQL `auto_wechat` database 存在，但当前为空库：
+
+1. `alembic_version` 不存在。
+2. `knowledge_categories` 表不存在。
+3. P3-C8 dry-run 的 PG schema 只读检查无法继续。
+
+因此在继续 P3-C8 dry-run 前，必须先执行 P3-C8B 人工 Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
+```
+
+P3-C8B 只允许把 `auto_wechat` PostgreSQL schema 初始化到 `0002_create_knowledge_categories`，不迁移 SQLite 数据，不执行 `--apply --yes`，不切换默认 `DATABASE_URL`，不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
 ## 4. Baota staging dry-run 步骤
 
 dry-run 必须不写 PostgreSQL，只输出计划和风险。
 
-### 4.1 schema smoke
+### 4.1 schema 状态确认
 
-先确认目标 PostgreSQL schema 可用：
+P3-C8 dry-run 默认只做只读检查，不在 dry-run 步骤里执行 Alembic upgrade。若目标 PostgreSQL 为空库，先按 P3-C8B Runbook 初始化 schema。
+
+schema 初始化完成后，再确认目标 PostgreSQL schema 可用：
 
 ```bash
-export SMOKE_DATABASE_URL="<POSTGRES_URL>"
-python scripts/smoke_auto_wechat_alembic_knowledge_categories.py
-unset SMOKE_DATABASE_URL
+docker compose -f <COMPOSE_FILE> exec <POSTGRES_CONTAINER> psql -U <POSTGRES_USER> -d auto_wechat -c "select * from alembic_version;"
+docker compose -f <COMPOSE_FILE> exec <POSTGRES_CONTAINER> psql -U <POSTGRES_USER> -d auto_wechat -c "\d+ knowledge_categories"
 ```
 
 预期：
 
-1. 输出 `SMOKE_PASS`。
-2. `alembic_version` 为 `0002_create_knowledge_categories` 或更高。
-3. `knowledge_categories` 表、索引、唯一约束、check constraint 均存在。
-4. 输出 URL 必须脱敏。
+1. `alembic_version` 为 `0002_create_knowledge_categories` 或更高。
+2. `knowledge_categories` 表、索引、唯一约束、check constraint 均存在。
+3. `knowledge_categories` 行数符合预期；当前 P3-C8 前置结果期望为 0。
+4. 输出 URL 或连接信息必须脱敏。
 
 ### 4.2 dry-run 迁移计划
 
@@ -297,6 +314,16 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.
 P3-C8 的宝塔 dry-run 结果需要由人工在 Baota staging 宿主机代码目录执行后贴回，再判断是否进入 P3-C9。
 
 P3-C8 只读 dry-run 默认不执行 `scripts/smoke_auto_wechat_alembic_knowledge_categories.py`，因为该脚本会执行 Alembic `upgrade head`，不属于只读 dry-run 边界。P3-C8 只允许使用 `scripts/migrate_knowledge_categories_sqlite_to_postgres.py --dry-run` 读取 SQLite 和 PostgreSQL 元数据，禁止 `--apply`、`--yes`、Alembic upgrade、重启 9000、切换 `DATABASE_URL` 或开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+## 11A. P3-C8B schema 初始化 Runbook 补充
+
+P3-C8 人工预检查发现 Baota staging PostgreSQL `auto_wechat` database 为空，`alembic_version` 不存在，导致 dry-run 被阻塞。P3-C8B 新增人工 Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
+```
+
+该 Runbook 只用于在 Baota staging PostgreSQL 空库中执行 `migrations/postgres/auto_wechat/alembic.ini` 到 `0002_create_knowledge_categories`，创建 `alembic_version` 与 `knowledge_categories` schema。它不迁移 SQLite 数据，不执行数据脚本 apply，不切换 9000 默认数据库，不开启 PG pilot，不操作 9100 / Milvus / RAG。
 
 ## 12. 本轮边界确认
 

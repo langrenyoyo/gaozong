@@ -912,3 +912,41 @@ Runbook 结论：
 6. 不执行 migration。
 7. 不迁移真实数据。
 8. 不修改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` 或 `.env.example`。
+
+## 28. P3-C8B Baota staging PostgreSQL schema 初始化 Runbook 补充
+
+任务：`P3-C8B-BAOTA-STAGING-POSTGRES-SCHEMA-INIT-MANUAL-RUNBOOK-1`
+
+当前已新增：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
+```
+
+P3-C8 blocked 原因：
+
+1. Baota staging SQLite 已确认路径和备份，且 `knowledge_categories` 表存在。
+2. Baota staging SQLite `knowledge_categories_count = 0`。
+3. PostgreSQL dev 容器可启动且 healthy，`auto_wechat` database 存在。
+4. `auto_wechat` database 当前无表，`alembic_version` 不存在。
+5. P3-C8 dry-run 需要只读检查 PostgreSQL schema，因此被 PG schema 未初始化阻塞。
+
+Runbook 目标：
+
+1. 只初始化 PostgreSQL `auto_wechat` schema 到 `0002_create_knowledge_categories`。
+2. 只创建 `alembic_version`、`knowledge_categories` 表、索引、唯一约束和 check constraint。
+3. 推荐通过一次性 `auto-wechat-api` 容器执行 `migrations/postgres/auto_wechat/alembic.ini`。
+4. `migrations/postgres/auto_wechat/env.py` 当前读取临时注入的 `DATABASE_URL`，不使用 `ALEMBIC_DATABASE_URL`。
+5. 成功后回到 P3-C8 dry-run；P3-C9 才讨论 staging apply + API contrast。
+
+边界确认：
+
+1. 本轮只做文档。
+2. 本轮不执行宝塔命令。
+3. 本轮不连接 PostgreSQL。
+4. 本轮不读取宝塔 SQLite。
+5. 本轮不迁移 SQLite 业务数据。
+6. 本轮不切换 9000 默认 `DATABASE_URL`。
+7. 本轮不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+8. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` 或 `.env.example`。
+9. 本轮不操作 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。

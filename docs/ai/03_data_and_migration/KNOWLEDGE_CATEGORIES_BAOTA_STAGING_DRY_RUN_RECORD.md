@@ -4,6 +4,14 @@
 
 范围：本文用于指导宝塔执行人在 Baota staging 宿主机代码目录手动执行 `knowledge_categories` SQLite -> PostgreSQL 迁移 dry-run，并记录结果。本机 VibeCoding 只生成 Runbook 和记录模板，不操作宝塔服务器，不执行宝塔命令，不连接宝塔数据库，不读取宝塔 SQLite。
 
+当前执行状态：P3-C8 已被 PG schema 未初始化阻塞。人工预检查已确认 PostgreSQL `auto_wechat` database 存在，但 `alembic_version` 不存在且无业务表；dry-run 的只读 schema 检查无法继续。进入本文 dry-run 前，必须先按以下 Runbook 完成 Baota staging schema 初始化：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
+```
+
+P3-C8B 只允许初始化 `auto_wechat` schema 到 `0002_create_knowledge_categories`，不得迁移 SQLite 数据，不得切换 9000 默认数据库。
+
 ## 1. 本机 VibeCoding 边界说明
 
 本轮只允许本地修改文档。
@@ -39,6 +47,7 @@
 | SQLite 已备份 | `<BACKUP_FILE>` | `<通过/不通过>` |
 | PostgreSQL URL 是 staging/dev | `<脱敏 URL>` | `<通过/不通过>` |
 | PostgreSQL database 是 auto_wechat | `<是/否>` | `<通过/不通过>` |
+| PG schema 已初始化到 0002_create_knowledge_categories | `<是/否>` | `<通过/不通过>` |
 | 不使用隐式 DATABASE_URL | `<是/否>` | `<通过/不通过>` |
 | 未携带 --apply | `<是/否>` | `<通过/不通过>` |
 | 未携带 --yes | `<是/否>` | `<通过/不通过>` |
@@ -239,6 +248,7 @@ python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
 2. `PostgreSQL 目标表存在=false`：不得进入 P3-C9。
 3. `Alembic revision` 低于 `0002_create_knowledge_categories`：不得进入 P3-C9。
 4. insert / update / skip 数量必须能解释来源，不能只记录总数。
+5. 如果 `alembic_version` 不存在或 PG 空库无表，先执行 P3-C8B schema 初始化 Runbook，不得在 P3-C8 中临时执行 Alembic upgrade。
 
 ## 11. 异常行记录表
 

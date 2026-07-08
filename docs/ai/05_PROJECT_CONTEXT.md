@@ -3714,3 +3714,47 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.
 9. 本轮不重启 9000。
 10. 本轮不改 `.env`、docker-compose、业务代码、迁移脚本或 Alembic revision。
 11. 本轮不迁移真实数据，不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+# P3-C8B knowledge_categories 宝塔 staging PostgreSQL schema 初始化 Runbook 当前状态
+
+任务：`P3-C8B-BAOTA-STAGING-POSTGRES-SCHEMA-INIT-MANUAL-RUNBOOK-1`
+
+当前已新增人工 Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
+```
+
+P3-C8 当前 blocked 摘要：
+
+1. 宝塔 staging SQLite 路径已确认：`docker-data/auto_wechat_9000/auto_wechat.db`。
+2. SQLite `knowledge_categories` 表存在，当前 `knowledge_categories_count = 0`。
+3. SQLite 已备份到 `backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`。
+4. PostgreSQL dev 容器可启动且 healthy。
+5. PostgreSQL `auto_wechat` database 存在。
+6. `auto_wechat` database 当前无表，`alembic_version` 不存在。
+7. P3-C8 dry-run 被 PG schema 未初始化阻塞。
+8. PostgreSQL 容器已停止。
+
+P3-C8B Runbook 定位：
+
+1. 本机 VibeCoding 不操作宝塔，只生成 Runbook。
+2. 宝塔命令必须由人工执行，并贴回执行结果。
+3. 目标只是在 Baota staging PostgreSQL 空库中执行 `migrations/postgres/auto_wechat/alembic.ini` 到 `0002_create_knowledge_categories`。
+4. 只创建 `alembic_version`、`knowledge_categories` 表、索引、唯一约束和 check constraint。
+5. `migrations/postgres/auto_wechat/env.py` 当前读取临时注入的 `DATABASE_URL`，不使用 `ALEMBIC_DATABASE_URL`。
+6. 成功后回到 P3-C8 dry-run；P3-C8 仍只 dry-run，不写 PostgreSQL。
+7. P3-C9 才讨论 Baota staging apply + API contrast。
+
+边界确认：
+
+1. 本轮只改文档。
+2. 本轮不执行宝塔命令。
+3. 本轮不连接 PostgreSQL。
+4. 本轮不读取宝塔 SQLite。
+5. 本轮不迁移 SQLite 业务数据。
+6. 本轮不切换 9000 默认 `DATABASE_URL`。
+7. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+8. 本轮不重启 9000。
+9. 本轮不改 `.env`、docker-compose、业务代码、迁移脚本或 Alembic revision。
+10. 本轮不操作 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。
