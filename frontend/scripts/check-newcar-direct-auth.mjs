@@ -45,10 +45,19 @@ assertIncludes(authApi, "navigator.userAgent.slice(0, 80)", "auth api sends boun
 assertNotIncludes(authApi, '"/auth/callback"', "auth api no longer calls 9000 callback");
 assertIncludes(authApi, "EXTERNAL_MERCHANT_NOT_BOUND", "auth api maps unbound external account error");
 assertIncludes(authApi, "PERMISSION_DENIED", "auth api maps permission denied error");
+assertIncludes(authApi, "fetchCurrentAuthUserWithoutRedirect", "auth api exposes a no-redirect backend auth probe for local mock mode");
+assertIncludes(authApi, 'fetch(`${baseUrl}/auth/me`', "auth api no-redirect probe calls 9000 /auth/me");
 
 assertIncludes(app, 'source === "new_car_project"', "app only consumes NewCar redirect code");
 assertIncludes(app, "assertCanEnterSystem", "app enforces auto_wechat:use");
 assertIncludes(app, "await fetchCurrentAuthUser()", "app asks 9000 /auth/me after token is saved");
+assertIncludes(app, "await fetchCurrentAuthUserWithoutRedirect()", "app probes backend mock auth before consuming NewCar code");
+assertOrder(
+  app,
+  "await fetchCurrentAuthUserWithoutRedirect()",
+  "exchangeExternalCode(code)",
+  "app must let backend mock auth win before direct NewCar code exchange",
+);
 assertIncludes(app, "cleanCodeFromUrl()", "app clears one-time code from URL");
 assertIncludes(app, "new URL(window.location.href)", "app reads NewCar code from the current browser URL");
 assertIncludes(app, "`${url.pathname}${url.search}${url.hash}`", "app preserves current route when clearing one-time code");

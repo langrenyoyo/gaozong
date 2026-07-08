@@ -4,7 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import apiClient from "./api/client";
-import { exchangeExternalCode, fetchCurrentAuthUser, type AuthContextData, type PermissionItem } from "./api/auth";
+import {
+  exchangeExternalCode,
+  fetchCurrentAuthUser,
+  fetchCurrentAuthUserWithoutRedirect,
+  type AuthContextData,
+  type PermissionItem,
+} from "./api/auth";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
 import {
   addNewCarRedirectNoticeListener,
@@ -54,6 +60,10 @@ function userFromAuthData(data: AuthContextData): AppUser {
     merchantIds: data.merchant_ids || [],
     admin: hasAdminPermission({ role, permissions }),
   };
+}
+
+function isMockAuthData(data: AuthContextData | null): data is AuthContextData {
+  return data?.auth_mode === "mock" || data?.source_system === "mock";
 }
 
 function assertCanEnterSystem(user: AppUser) {
@@ -240,6 +250,16 @@ const App = () => {
       const url = new URL(window.location.href);
       const code = getNewCarRedirectCode(url);
       try {
+        const backendAuthData = await fetchCurrentAuthUserWithoutRedirect();
+        if (isMockAuthData(backendAuthData)) {
+          cleanCodeFromUrl();
+          const nextUser = userFromAuthData(backendAuthData);
+          assertCanEnterSystem(nextUser);
+          clearNewCarRedirectState();
+          if (active) setUser(nextUser);
+          return;
+        }
+
         if (code) {
           const data = await exchangeExternalCode(code);
           if (data.token) {

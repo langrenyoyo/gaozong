@@ -1,4 +1,5 @@
-import apiClient from "./client";
+import apiClient, { API_BASE_URL } from "./client";
+import { getExternalToken } from "../authToken";
 
 export const NEWCAR_AUTH_BASE_URL =
   import.meta.env.VITE_NEWCAR_AUTH_BASE_URL || (import.meta.env.DEV ? "http://192.168.110.19:8790" : undefined);
@@ -21,6 +22,8 @@ export interface AuthContextData {
   permissions?: string[];
   permission_items?: PermissionItem[];
   super_admin?: boolean;
+  source_system?: string;
+  auth_mode?: string;
 }
 
 interface ApiResponse<T> {
@@ -88,5 +91,25 @@ export async function fetchCurrentAuthUser(): Promise<AuthContextData> {
     return response.data;
   } catch (error) {
     throw new Error(authErrorMessage(error));
+  }
+}
+
+export async function fetchCurrentAuthUserWithoutRedirect(): Promise<AuthContextData | null> {
+  const baseUrl = API_BASE_URL || "";
+  const headers: Record<string, string> = {};
+  const token = getExternalToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/auth/me`, { headers });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as ApiResponse<AuthContextData>;
+    return payload.data || null;
+  } catch {
+    return null;
   }
 }
