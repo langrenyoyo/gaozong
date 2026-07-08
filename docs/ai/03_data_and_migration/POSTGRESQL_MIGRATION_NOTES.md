@@ -1237,3 +1237,59 @@ P3-C12 production apply: SKIPPED_NO_SOURCE_ROWS
 ```
 
 原因是 production SQLite `knowledge_categories` 源行数 = 0，dry-run insert/update/skip/error = 0/0/0/0，执行 apply 没有业务价值。
+
+## 34. P3-D0 PostgreSQL switch readiness 与 QPS600 路线
+
+任务：`P3-D0-DB-9000-POSTGRESQL-SWITCH-READINESS-AND-QPS600-ROADMAP-1`
+
+当前已新增 9000 PostgreSQL switch readiness 与 QPS600 路线文档：
+
+```text
+docs/ai/03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md
+```
+
+阶段结论：
+
+1. `knowledge_categories` 单表链路已阶段性关闭。
+2. production dry-run 已通过，输出 `DRY_RUN_PASS`。
+3. production apply 建议结论为 `SKIPPED_NO_SOURCE_ROWS`，原因是 production SQLite `knowledge_categories` source rows = 0。
+4. 单表验证不能等同于 9000 全系统 PostgreSQL 切库完成。
+5. 当前仍不能切换默认 `DATABASE_URL` 到 PostgreSQL。
+6. 当前仍不能把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+7. QPS600 仍需要 asyncpg / SQLAlchemy async、connection pool、索引、事务、幂等和压测共同验证。
+
+readiness 准入条件：
+
+1. 核心业务表完成 PostgreSQL schema。
+2. 核心业务表完成 SQLite -> PostgreSQL dry-run / apply / verify。
+3. 核心接口完成 SQLite / PG API contrast。
+4. 写入链路完成事务边界和幂等保护。
+5. 宝塔 staging 完成灰度验证和回滚演练。
+6. worker、pool_size、max_overflow、pool_timeout 和 PostgreSQL `max_connections` 完成容量核算。
+7. 高频查询完成 PostgreSQL 索引和 explain 验证。
+8. QPS600 压测达标。
+
+下一阶段进入 P3-D：
+
+1. P3-D1：表盘点与读写路径审计。
+2. P3-D2：核心基础表 schema 设计。
+3. P3-D3：线索链路 PG schema + migration。
+4. P3-D4：Local Agent task 链路 PG schema + migration。
+5. P3-D5：智能体 / 账号绑定 PG schema + migration。
+6. P3-D6：算力账户 / 流水 PG schema + migration。
+7. P3-D7：核心接口 SQLite / PG contrast。
+8. P3-D8 / P3-D9：staging 与 production 灰度、dry-run、apply 判断。
+9. P3-E：默认 `DATABASE_URL` 切换预案。
+
+边界确认：
+
+1. 本轮只做文档和只读代码审计。
+2. 本轮不改业务代码。
+3. 本轮不改迁移脚本。
+4. 本轮不新增 Alembic migration。
+5. 本轮不执行宝塔命令。
+6. 本轮不连接数据库。
+7. 本轮不读取 SQLite。
+8. 本轮不执行 dry-run / apply。
+9. 本轮不切换 `DATABASE_URL`。
+10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。

@@ -3989,3 +3989,55 @@ P3-C12 production apply: SKIPPED_NO_SOURCE_ROWS
 ```
 
 原因是 production SQLite `knowledge_categories` 源行数 = 0，dry-run insert/update/skip/error = 0/0/0/0，执行 apply 没有业务价值。后续不能自动进入 apply；如未来出现源数据，必须重新 dry-run 并另走 P3-C12 production apply 审批。
+
+# P3-D0 PostgreSQL switch readiness 与 QPS600 路线当前状态
+
+任务：`P3-D0-DB-9000-POSTGRESQL-SWITCH-READINESS-AND-QPS600-ROADMAP-1`
+
+当前已新增 readiness 路线文档：
+
+```text
+docs/ai/03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md
+```
+
+当前结论：
+
+1. `knowledge_categories` 单表 PostgreSQL 链路已阶段性关闭。
+2. production dry-run 已通过。
+3. production apply 建议为 `SKIPPED_NO_SOURCE_ROWS`，原因是 production SQLite `knowledge_categories` source rows = 0。
+4. 该结论只证明单表迁移闭环可行，不能视为 9000 全系统 PostgreSQL 切库完成。
+5. 当前仍不能切换宝塔默认 `DATABASE_URL` 到 PostgreSQL。
+6. 当前仍不能把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+7. 下一阶段进入 P3-D：全系统 PostgreSQL readiness 与 QPS600 异步化路线。
+
+只读审计摘要：
+
+1. `app/database.py` 当前同步 `engine` / `SessionLocal` / `get_db` 仍是主路径，默认 SQLite；PostgreSQL backend 已识别但默认同步 engine 路径仍拒绝启用。
+2. `knowledge_categories` 已有 async PG pilot，但不能代表全系统 async 化完成。
+3. 多数 routers / services / schedulers 仍使用同步 SQLAlchemy session、`db.query()`、`db.commit()` 和 `SessionLocal()`。
+4. 高频 async 改造候选包括 webhook、leads、wechat_tasks、staff、webhook_events、compute、conversation 和自动回复记录接口。
+5. QPS600 需要 asyncpg / SQLAlchemy async、connection pool、statement_timeout、慢查询日志、高频索引、幂等键、任务锁策略、事务边界和压测共同验证。
+
+后续阶段：
+
+1. P3-D1：表盘点与读写路径审计。
+2. P3-D2：核心基础表 schema 设计。
+3. P3-D3：线索链路 PG schema + migration。
+4. P3-D4：Local Agent task 链路 PG schema + migration。
+5. P3-D5：智能体 / 账号绑定 PG schema + migration。
+6. P3-D6：算力账户 / 流水 PG schema + migration。
+7. P3-D7：核心接口 SQLite / PG contrast。
+8. P3-D8 / P3-D9：staging 与 production 灰度、dry-run、apply 判断。
+9. P3-E：默认 `DATABASE_URL` 切换预案。
+
+边界确认：
+
+1. 本轮只做文档和只读代码审计。
+2. 本轮不改业务代码、迁移脚本或 Alembic revision。
+3. 本轮不执行宝塔命令。
+4. 本轮不连接数据库。
+5. 本轮不读取 SQLite。
+6. 本轮不执行 dry-run / apply。
+7. 本轮不切换 `DATABASE_URL`。
+8. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+9. 本轮不提交 `.venv-p3c8/`、`backups/`、`docs/superpowers/` 等非本轮文件。
