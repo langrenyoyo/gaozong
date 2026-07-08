@@ -218,3 +218,28 @@ staging API contrast: NOT_RUN_NO_BUSINESS_ROWS
 14. 不改 `.env`。
 15. 不提交非文档改动。
 
+## 10. P3-C10 后续审批模板状态
+
+P3-C10 已进入 production dry-run 审批模板阶段：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_APPROVAL_TEMPLATE.md
+```
+
+P3-C10 只审批 production dry-run，不审批 apply，不审批切换默认 `DATABASE_URL`，不审批开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+P3-C10 继承 P3-C9-PRECHECK 结论：
+
+```text
+P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+边界确认：
+
+1. 本轮不执行 production dry-run。
+2. 本轮不连接 production。
+3. 本轮不读取 production SQLite。
+4. 本轮不执行 `--apply` / `--yes`。
+5. 本轮不写 PostgreSQL 业务数据。
+6. 本轮不切换 `DATABASE_URL`。
+7. 本轮不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。

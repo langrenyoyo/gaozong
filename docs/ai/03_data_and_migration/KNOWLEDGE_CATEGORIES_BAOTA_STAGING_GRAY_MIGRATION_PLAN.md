@@ -390,6 +390,29 @@ P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
 
 后续若 staging 出现源数据，必须先重新执行 P3-C8 dry-run；只有 dry-run 显示 `insert > 0` 或 `update > 0` 且 `error = 0`，才重新审批 P3-C9 apply。
 
+## 11D. P3-C10 production dry-run 审批模板补充
+
+当前已新增 production dry-run 审批模板：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_APPROVAL_TEMPLATE.md
+```
+
+P3-C10 目标只是在进入 production 前审批 dry-run，不执行 production 命令，不连接 production，不读取 production SQLite，不执行 dry-run，也不执行 apply。
+
+审批边界：
+
+1. 只针对 9000 `knowledge_categories`。
+2. 只审批 `--dry-run`。
+3. 不审批 `--apply` / `--yes`。
+4. 不写 PostgreSQL。
+5. 不切换 `DATABASE_URL`。
+6. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+7. 不操作 9100 / Milvus / RAG。
+8. production PostgreSQL schema 初始化如未完成，必须另走独立 schema-init 审批，不得混入 P3-C10。
+
+P3-C10 继承 P3-C9-PRECHECK 结论：staging apply 已建议跳过，原因是 `SKIPPED_NO_SOURCE_ROWS`，SQLite 源行数 = 0，insert/update/skip/error = 0/0/0/0。
+
 ## 12. 本轮边界确认
 
 本轮只新增预案文档并同步现有文档。

@@ -1067,3 +1067,58 @@ P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
 8. 不切换 `DATABASE_URL`。
 9. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 10. 不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+
+## 31. P3-C10 production dry-run 审批模板补充
+
+任务：`P3-C10-DB-9000-KNOWLEDGE-CATEGORIES-PRODUCTION-DRY-RUN-APPROVAL-TEMPLATE-1`
+
+当前已新增 production dry-run 审批模板：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_APPROVAL_TEMPLATE.md
+```
+
+输入背景：
+
+1. P3-C8B Baota staging PG schema 初始化已通过。
+2. P3-C8 Baota staging dry-run 已通过。
+3. P3-C9-PRECHECK 已确认 staging apply 建议跳过。
+4. 跳过原因：`SKIPPED_NO_SOURCE_ROWS`。
+5. SQLite 源行数 = 0。
+6. dry-run insert/update/skip/error = 0/0/0/0。
+
+P3-C10 审批范围：
+
+1. 只审批 production dry-run。
+2. 只针对 9000 `knowledge_categories`。
+3. 不审批 apply。
+4. 不审批切换默认 `DATABASE_URL`。
+5. 不审批开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. 不涉及 9100 / Milvus / RAG。
+
+production dry-run 命令必须显式传入：
+
+1. `--sqlite-db-path`
+2. `--postgres-url`
+3. `--dry-run`
+
+通过标准必须包含：
+
+1. `DRY_RUN_PASS`。
+2. `error = 0`。
+3. PG `knowledge_categories` 表存在。
+4. Alembic revision >= `0002_create_knowledge_categories`。
+5. PostgreSQL 写入 disabled。
+6. 未执行 `--apply` / `--yes`。
+
+边界确认：
+
+1. 本轮只做文档。
+2. 不执行 production dry-run。
+3. 不连接 production。
+4. 不读取 production SQLite。
+5. 不写 PostgreSQL。
+6. 不迁移数据。
+7. 不切换 `DATABASE_URL`。
+8. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+9. 不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
