@@ -3789,3 +3789,54 @@ P3-C8B 执行结果：
 6. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 
 结论：P3-C8B 已执行通过，P3-C8 已从 blocked 更新为 dry-run passed。可以进入 P3-C9 前的人工审批，但 P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。
+
+# P3-C9-PRECHECK knowledge_categories 宝塔 staging apply 必要性判断当前状态
+
+任务：`P3-C9-PRECHECK-DB-9000-KNOWLEDGE-CATEGORIES-STAGING-APPLY-NECESSITY-1`
+
+当前已新增 P3-C9 apply 前置判断记录：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_APPLY_PRECHECK.md
+```
+
+判断依据：
+
+1. P3-C8B schema 初始化已通过，`alembic_version = 0002_create_knowledge_categories`。
+2. PG `knowledge_categories` 表、唯一约束和 check constraint 已存在。
+3. PG `knowledge_categories` 行数 = 0。
+4. P3-C8 dry-run 已通过，最终输出 `DRY_RUN_PASS`。
+5. SQLite 源行数 = 0。
+6. 过滤后待处理行数 = 0。
+7. dry-run insert/update/skip/error = 0/0/0/0。
+8. PostgreSQL 写入: disabled。
+
+建议结论：
+
+```text
+P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+当前 staging 没有 `knowledge_categories` 源业务行需要迁移，执行 `--apply --yes` 不会产生业务价值。为避免无意义写操作和误操作风险，建议跳过 P3-C9 staging apply。
+
+后续触发 apply 的条件：
+
+1. 后续 staging 出现 `knowledge_categories` 源数据。
+2. 重新执行 P3-C8 dry-run。
+3. dry-run 显示 `insert > 0` 或 `update > 0`。
+4. dry-run 显示 `error = 0`。
+5. PostgreSQL schema 仍至少为 `0002_create_knowledge_categories`。
+6. 人工重新审批 P3-C9 apply。
+
+边界确认：
+
+1. 本轮只改文档。
+2. 本轮不执行宝塔命令。
+3. 本轮不连接 PostgreSQL。
+4. 本轮不读取 SQLite。
+5. 本轮不执行 `--apply` / `--yes`。
+6. 本轮不写 PostgreSQL 业务数据。
+7. 本轮不迁移数据。
+8. 本轮不切换 `DATABASE_URL`。
+9. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+10. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。

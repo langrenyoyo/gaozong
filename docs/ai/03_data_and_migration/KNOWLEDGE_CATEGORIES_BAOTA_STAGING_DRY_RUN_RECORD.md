@@ -439,3 +439,41 @@ backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db
 15. 未清 volume。
 
 结论：P3-C8 dry-run passed。可以进入 P3-C9 前的人工审批；P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。
+
+## 17. P3-C9-PRECHECK apply 必要性判断（2026-07-08）
+
+已新增 P3-C9 前置判断记录：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_APPLY_PRECHECK.md
+```
+
+判断依据：
+
+1. P3-C8B schema 初始化已通过，`alembic_version = 0002_create_knowledge_categories`。
+2. PG `knowledge_categories` 表、唯一约束和 check constraint 已存在。
+3. PG `knowledge_categories` 当前行数为 0。
+4. P3-C8 dry-run 已通过，最终输出 `DRY_RUN_PASS`。
+5. SQLite 源行数 = 0。
+6. 过滤后待处理行数 = 0。
+7. dry-run insert/update/skip/error = 0/0/0/0。
+8. PostgreSQL 写入: disabled。
+
+结论：
+
+```text
+P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+当前 staging 没有 `knowledge_categories` 源业务行需要迁移，执行 `--apply --yes` 不会产生业务价值。为避免无意义写操作和误操作风险，建议跳过 P3-C9 staging apply。
+
+边界确认：
+
+1. 不执行 `--apply` / `--yes`。
+2. 不写 PostgreSQL 业务数据。
+3. 不迁移 SQLite 数据。
+4. 不切换 `DATABASE_URL`。
+5. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. 不执行空数据 API contrast 灰度。
+
+后续只有在 staging 后续出现 `knowledge_categories` 源数据，并重新执行 P3-C8 dry-run 显示 `insert > 0` 或 `update > 0` 且 `error = 0` 后，才重新审批是否进入 P3-C9 apply。

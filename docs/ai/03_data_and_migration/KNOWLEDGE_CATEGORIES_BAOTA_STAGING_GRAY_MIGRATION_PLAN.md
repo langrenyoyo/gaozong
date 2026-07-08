@@ -167,6 +167,8 @@ dry-run 失败时不得进入 apply。
 
 本节只是预案，不在本轮执行。
 
+P3-C9-PRECHECK 已完成当前 staging apply 必要性判断：由于 P3-C8 dry-run 显示 SQLite 源行数 = 0，insert/update/skip/error = 0/0/0/0，当前建议将 P3-C9 staging apply 标记为 `SKIPPED_NO_SOURCE_ROWS`，不执行 `--apply --yes`，不写 PostgreSQL 业务数据。
+
 apply 前必须满足：
 
 1. 已完成 SQLite backup。
@@ -300,10 +302,11 @@ production apply 和默认数据库切换必须是后续独立任务，不能在
 ## 10. 后续阶段建议
 
 1. P3-C8：宝塔 staging dry-run 人工 Runbook 与执行记录模板。
-2. P3-C9：宝塔 staging apply + API contrast 执行记录。
-3. P3-C10：production dry-run 审批模板。
-4. P3-D：下一个表的 PostgreSQL migration 设计，不能直接全量迁移。
-5. P3 后续：QPS600 压测、慢查询分析、索引验证、事务边界、幂等批次记录和生产回滚实现。
+2. P3-C9-PRECHECK：宝塔 staging apply 必要性判断，当前建议 `SKIPPED_NO_SOURCE_ROWS`。
+3. P3-C9：仅当后续 dry-run 显示 insert/update > 0 且 error = 0，并完成人工审批后，才进入 staging apply + API contrast 执行记录。
+4. P3-C10：production dry-run 审批模板。
+5. P3-D：下一个表的 PostgreSQL migration 设计，不能直接全量迁移。
+6. P3 后续：QPS600 压测、慢查询分析、索引验证、事务边界、幂等批次记录和生产回滚实现。
 
 ## 11. P3-C8 人工 Runbook 补充
 
@@ -360,6 +363,32 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUN
 6. PostgreSQL dev 容器已停止。
 
 结论：可以进入 P3-C9 前的人工审批；P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。
+
+## 11C. P3-C9-PRECHECK apply 必要性判断补充
+
+当前已新增 P3-C9 前置判断记录：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_APPLY_PRECHECK.md
+```
+
+判断结论：
+
+```text
+P3-C9 staging apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+判断依据：
+
+1. P3-C8B schema 初始化已通过，PG `knowledge_categories` 行数为 0。
+2. P3-C8 dry-run 已通过，最终输出 `DRY_RUN_PASS`。
+3. SQLite 源行数 = 0。
+4. dry-run insert/update/skip/error = 0/0/0/0。
+5. PostgreSQL 写入: disabled。
+
+当前 staging 没有 `knowledge_categories` 源业务行需要迁移，执行 `--apply --yes` 没有业务价值。为避免无意义写操作和误操作风险，本预案当前建议跳过 P3-C9 staging apply，不执行空数据 API contrast 灰度，不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`，不切换 `DATABASE_URL`。
+
+后续若 staging 出现源数据，必须先重新执行 P3-C8 dry-run；只有 dry-run 显示 `insert > 0` 或 `update > 0` 且 `error = 0`，才重新审批 P3-C9 apply。
 
 ## 12. 本轮边界确认
 
