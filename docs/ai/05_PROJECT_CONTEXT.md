@@ -3624,3 +3624,30 @@ scripts/migrate_knowledge_categories_sqlite_to_postgres.py
 4. 本轮不改 9100 / Milvus / RAG。
 5. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
 6. P3-C6 才做 `GET /knowledge-categories` SQLite / PostgreSQL 数据对照；P3-C7 才做宝塔 staging / 灰度迁移预案。
+
+# P3-C6 knowledge_categories SQLite / PostgreSQL API 对照当前状态
+
+任务：`P3-C6-DB-9000-KNOWLEDGE-CATEGORIES-SQLITE-PG-API-CONTRAST-1`
+
+当前已为 9000 `GET /knowledge-categories` 建立接口层 SQLite / PostgreSQL 响应语义对照 smoke，但默认运行路径仍是 SQLite。
+
+新增能力：
+
+1. 新增 `scripts/smoke_knowledge_categories_sqlite_pg_api_contrast.py`。
+2. smoke 使用 synthetic / 本地测试数据，不读取或迁移真实生产 SQLite。
+3. smoke 会复用 P3-C5 迁移脚本，把同一批 synthetic SQLite 数据 apply 到 dev PostgreSQL。
+4. SQLite probe 通过 FastAPI 路由调用默认同步路径。
+5. PostgreSQL probe 显式开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=true`，并用 `postgresql+asyncpg://` 初始化 async PG runtime 后调用同一接口。
+6. normalize 会忽略自增 `id` 差异，时间字段只比较存在性，并比较 base 虚拟分类、active 过滤、disabled/deleted 过滤、商户隔离、排序和公开响应 schema。
+7. smoke 结束后只清理 synthetic merchant_id 范围内的 PostgreSQL 数据，不 drop 表、不清 volume。
+
+边界确认：
+
+1. 默认运行仍是 SQLite。
+2. 本轮未切换 9000 默认 `DATABASE_URL`。
+3. 本轮未把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+4. 本轮未迁移真实生产数据。
+5. 本轮未改 Alembic revision、未改业务接口契约、未改 docker-compose。
+6. 本轮未改 9100 / Milvus / RAG。
+7. 本轮未触发 LLM、抖音发送、私信发送或自动回复 gate。
+8. 下一步才进入宝塔 staging / 灰度迁移预案。

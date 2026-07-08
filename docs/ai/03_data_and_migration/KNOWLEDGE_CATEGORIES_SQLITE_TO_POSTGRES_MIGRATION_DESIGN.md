@@ -414,3 +414,40 @@ synthetic smoke 辅助：
 4. 本轮不改业务接口、不改 docker-compose、不改 9100 / Milvus / RAG。
 5. 后续 P3-C6 才做 `GET /knowledge-categories` SQLite / PostgreSQL 数据对照。
 6. 后续 P3-C7 才做宝塔 staging / 灰度迁移预案。
+
+## 16. P3-C6 API 语义对照 smoke 状态
+
+任务：`P3-C6-DB-9000-KNOWLEDGE-CATEGORIES-SQLITE-PG-API-CONTRAST-1`
+
+当前已新增接口层对照 smoke：
+
+```text
+scripts/smoke_knowledge_categories_sqlite_pg_api_contrast.py
+```
+
+对照流程：
+
+1. 创建 synthetic SQLite 数据，不读取真实生产 SQLite。
+2. 使用 P3-C5 迁移脚本将同一批 synthetic 数据 apply 到 dev PostgreSQL。
+3. SQLite 路径保持 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=false`，通过 FastAPI 路由调用 `GET /knowledge-categories`。
+4. PostgreSQL 路径显式开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=true`，并通过 `postgresql+asyncpg://` 初始化 async PG runtime 后调用同一接口。
+5. 响应归一化后对比 base 虚拟分类、active merchant 分类过滤、disabled/deleted 过滤、`sort_order ASC, id ASC` 排序和公开响应 schema。
+6. smoke 结束后只清理 synthetic merchant_id 范围内的 PostgreSQL 数据，不 drop 表、不清 volume。
+
+normalize 规则：
+
+1. 忽略数据库自增 `id` 差异。
+2. 时间字段只比较存在性，避免 SQLite / PostgreSQL 字符串格式差异影响接口语义判断。
+3. 保留并比较现有公开 API 字段：`category_key`、`name`、`scope_type`、`is_base`。
+4. 对 helper / 扩展输入保留 `key`、`description`、`status`、`sort_order`、`merchant_id`，方便后续定位 mismatch。
+5. 当前 `GET /knowledge-categories` 响应契约未暴露 `description`、`status`、`sort_order`、`merchant_id`；P3-C6 不修改接口契约。
+
+边界确认：
+
+1. 默认运行仍是 SQLite。
+2. PG pilot 仍需显式开关，不把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+3. 本轮不迁移真实生产数据。
+4. 本轮不切换 9000 默认 `DATABASE_URL`。
+5. 本轮不改 Alembic revision，不引入正式 migration。
+6. 本轮不改 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。
+7. 下一步才进入宝塔 staging / 灰度迁移预案。

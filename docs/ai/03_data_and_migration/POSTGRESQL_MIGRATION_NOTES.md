@@ -810,3 +810,44 @@ synthetic smoke：
 4. 本轮不改 Alembic revision、不改业务接口、不改 docker-compose。
 5. 本轮不改 9100 / Milvus / RAG。
 6. 宝塔 staging / 灰度迁移预案留到后续任务。
+
+## 25. P3-C6 knowledge_categories API 对照 smoke 补充
+
+任务：`P3-C6-DB-9000-KNOWLEDGE-CATEGORIES-SQLITE-PG-API-CONTRAST-1`
+
+当前已新增：
+
+```text
+scripts/smoke_knowledge_categories_sqlite_pg_api_contrast.py
+tests/test_knowledge_categories_sqlite_pg_api_contrast.py
+```
+
+smoke 设计：
+
+1. 只覆盖 9000 `GET /knowledge-categories`。
+2. 先创建 synthetic SQLite 数据，再通过 P3-C5 迁移脚本 apply 到 dev PostgreSQL。
+3. SQLite probe 使用默认同步路径，保持 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=false`。
+4. PostgreSQL probe 显式开启 PG pilot，并用 `postgresql+asyncpg://` 初始化 async PG runtime。
+5. 两侧都通过 FastAPI 路由调用同一个 `GET /knowledge-categories`，不启动前端。
+6. 响应归一化后比较 base 虚拟分类、active 分类、disabled/deleted 过滤、商户隔离、排序和公开 schema。
+7. mismatch 时输出统一 diff，便于定位 SQLite / PostgreSQL 语义差异。
+
+运行方式：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
+$env:SMOKE_DATABASE_URL="postgresql+asyncpg://auto_wechat:change_me@127.0.0.1:5432/auto_wechat"
+python scripts/smoke_auto_wechat_alembic_knowledge_categories.py
+python scripts/smoke_knowledge_categories_sqlite_pg_api_contrast.py --postgres-url $env:SMOKE_DATABASE_URL
+docker compose -f docker-compose.dev.yml stop postgres
+```
+
+边界确认：
+
+1. 默认 9000 运行数据库仍是 SQLite。
+2. 本轮不切换默认 `DATABASE_URL`。
+3. 本轮不把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+4. 本轮不迁移真实生产数据，只使用 synthetic / 本地测试数据。
+5. 本轮不改 Alembic revision，不改业务接口契约，不改 docker-compose。
+6. 本轮不改 9100 / Milvus / RAG。
+7. 下一步才进入宝塔 staging / 灰度迁移预案。
