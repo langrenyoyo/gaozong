@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -480,6 +482,7 @@ class _FakeVectorStore:
                 "tenant_id": payload.tenant_id,
                 "merchant_id": payload.merchant_id,
                 "category_keys": payload.category_keys,
+                "top_k": payload.top_k,
                 "query_embedding": query_embedding,
             }
         )
@@ -920,6 +923,156 @@ def test_search_category_filter_applies_to_lexical_fallback(tmp_path, monkeypatc
     assert [item.chunk_text for item in results] == ["宝马保养方案"]
 
 
+def test_feedback_chunks_are_reranked_by_rating_priority_in_lexical_fallback(tmp_path, monkeypatch):
+    db_path = tmp_path / "xg_douyin_ai_cs.db"
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(db_path))
+
+    from apps.xg_douyin_ai_cs.rag import repository
+    from apps.xg_douyin_ai_cs.rag.database import init_db
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        document_ids = {}
+        for title in ["不准样本", "一般样本", "有用样本"]:
+            cur = conn.execute(
+                """
+                INSERT INTO knowledge_documents(
+                  tenant_id, merchant_id, douyin_account_id, title, content,
+                  source_type, category_key, is_active
+                ) VALUES(?,?,?,?,?,?,?,1)
+                """,
+                (
+                    "xiaogao_system",
+                    "xiaogao_base",
+                    repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                    title,
+                    f"{title} 内容",
+                    "douyin_cs_training_feedback",
+                    "base",
+                ),
+            )
+            document_ids[title] = int(cur.lastrowid)
+
+        for title, rating in [
+            ("有用样本", "有用"),
+            ("一般样本", "一般"),
+            ("不准样本", "不准"),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO knowledge_chunks(
+                  document_id, tenant_id, merchant_id, douyin_account_id,
+                  chunk_text, chunk_index, embedding_json, embedding_model,
+                  category_key, content_hash, is_active
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,1)
+                """,
+                (
+                    document_ids[title],
+                    "xiaogao_system",
+                    "xiaogao_base",
+                    repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                    f"分期 首付 【人工反馈】\n{rating}",
+                    1,
+                    "",
+                    "test_embedding_model",
+                    "base",
+                    f"feedback-{rating}",
+                ),
+            )
+        conn.commit()
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            douyin_account_id=repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+            query="分期首付",
+            top_k=3,
+            category_keys=["base"],
+        ),
+        llm_client=_StaticEmbeddingClient({"分期首付": RuntimeError("embedding down")}),
+    )
+
+    assert [item.title for item in results] == ["有用样本", "一般样本", "不准样本"]
+
+
+def test_feedback_chunks_are_reranked_by_rating_priority_in_vector_search(tmp_path, monkeypatch):
+    db_path = tmp_path / "xg_douyin_ai_cs.db"
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(db_path))
+
+    from apps.xg_douyin_ai_cs.rag import repository
+    from apps.xg_douyin_ai_cs.rag.database import init_db
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        document_ids = {}
+        for title in ["不准样本", "一般样本", "有用样本"]:
+            cur = conn.execute(
+                """
+                INSERT INTO knowledge_documents(
+                  tenant_id, merchant_id, douyin_account_id, title, content,
+                  source_type, category_key, is_active
+                ) VALUES(?,?,?,?,?,?,?,1)
+                """,
+                (
+                    "xiaogao_system",
+                    "xiaogao_base",
+                    repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                    title,
+                    f"{title} 内容",
+                    "douyin_cs_training_feedback",
+                    "base",
+                ),
+            )
+            document_ids[title] = int(cur.lastrowid)
+
+        for title, rating in [
+            ("不准样本", "不准"),
+            ("一般样本", "一般"),
+            ("有用样本", "有用"),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO knowledge_chunks(
+                  document_id, tenant_id, merchant_id, douyin_account_id,
+                  chunk_text, chunk_index, embedding_json, embedding_model,
+                  category_key, content_hash, is_active
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,1)
+                """,
+                (
+                    document_ids[title],
+                    "xiaogao_system",
+                    "xiaogao_base",
+                    repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                    f"分期 首付 【人工反馈】\n{rating}",
+                    1,
+                    "[1.0, 0.0]",
+                    "test_embedding_model",
+                    "base",
+                    f"feedback-vector-{rating}",
+                ),
+            )
+        conn.commit()
+
+    results = repository.search(
+        RagSearchRequest(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            douyin_account_id=repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+            query="分期首付",
+            top_k=3,
+            category_keys=["base"],
+        ),
+        llm_client=_StaticEmbeddingClient({"分期首付": [1.0, 0.0]}),
+    )
+
+    assert [item.title for item in results] == ["有用样本", "一般样本", "不准样本"]
+
+
 def test_search_unknown_category_returns_empty_results(tmp_path, monkeypatch):
     monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
 
@@ -964,10 +1117,17 @@ def test_search_milvus_backend_uses_vector_store(tmp_path, monkeypatch):
             RagSearchItem(
                 chunk_id=101,
                 document_id=201,
-                title="milvus title",
-                chunk_text="milvus chunk",
-                score=0.91,
-            )
+                title="不准样本",
+                chunk_text="milvus chunk 【人工反馈】\n不准",
+                score=0.904,
+            ),
+            RagSearchItem(
+                chunk_id=102,
+                document_id=202,
+                title="有用样本",
+                chunk_text="milvus chunk 【人工反馈】\n有用",
+                score=0.903,
+            ),
         ]
     )
     monkeypatch.setattr(repository, "get_vector_store", lambda: fake_store)
@@ -978,18 +1138,19 @@ def test_search_milvus_backend_uses_vector_store(tmp_path, monkeypatch):
             merchant_id="merchant",
             douyin_account_id=1,
             query="milvus query",
-            top_k=5,
+            top_k=1,
             category_keys=["base"],
         ),
         llm_client=_StaticEmbeddingClient({"milvus query": [1.0, 0.0]}),
     )
 
-    assert [item.chunk_text for item in results] == ["milvus chunk"]
+    assert [item.title for item in results] == ["有用样本"]
     assert fake_store.search_calls == [
         {
             "tenant_id": "tenant",
             "merchant_id": "merchant",
             "category_keys": ["base"],
+            "top_k": 3,
             "query_embedding": [1.0, 0.0],
         }
     ]

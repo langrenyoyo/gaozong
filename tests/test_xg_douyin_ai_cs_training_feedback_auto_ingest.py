@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -80,6 +81,54 @@ def test_useful_feedback_auto_creates_document_and_trains(tmp_path, monkeypatch)
     assert str(feedback["ingestion_training_run_id"]) == data["rag_ingestion"]["training_run_id"]
 
 
+def test_useful_feedback_ingests_ai_reply_feedback_sample(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    question = "这台车可以分期吗？首付多少，流程是什么？"
+    ai_answer = "您好，可以分期，建议先确认预算和首付比例。"
+    comment = "回答方向可用，但需要更自然一点。"
+    _patch_llm(monkeypatch, answer=ai_answer)
+    ask_data = _ask(client, question=question, answer=ai_answer)
+
+    response = client.post(
+        f"/knowledge-training/{ask_data['training_id']}/feedback",
+        json={
+            "tenant_id": "xiaogao_system",
+            "merchant_id": "xiaogao_base",
+            "rating": "useful",
+            "comment": comment,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rag_ingestion"]["status"] == "completed"
+
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        document = conn.execute(
+            "SELECT content, source_type, metadata_json FROM knowledge_documents WHERE id=?",
+            (int(data["rag_ingestion"]["document_id"]),),
+        ).fetchone()
+
+    assert document["source_type"] == "douyin_cs_training_feedback"
+    content = document["content"]
+    assert "【客户问题】" in content
+    assert question in content
+    assert "【AI原始回复】" in content
+    assert ai_answer in content
+    assert "【人工反馈】" in content
+    assert "有用" in content
+    assert "【人工评价】" in content
+    assert comment in content
+    assert "【来源】" in content
+    assert "AI 抖音客服自动回复训练反馈" in content
+    assert "【标准回答】" not in content
+    metadata = json.loads(document["metadata_json"])
+    assert metadata["rating"] == "useful"
+    assert metadata["answer_source"] == "feedback_sample"
+
+
 def test_ask_uses_unified_account_scope_even_when_payload_has_account_id(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, answer="hit unified kb")
@@ -138,6 +187,7 @@ def test_corrected_answer_auto_creates_document_even_when_rating_is_not_useful(t
     client = _client(tmp_path, monkeypatch)
     _patch_llm(monkeypatch, answer="AI answer")
     ask_data = _ask(client)
+    corrected_answer = "修正后应先共情，再引导留下电话核价。"
 
     response = client.post(
         f"/knowledge-training/{ask_data['training_id']}/feedback",
@@ -145,21 +195,41 @@ def test_corrected_answer_auto_creates_document_even_when_rating_is_not_useful(t
             "tenant_id": "xiaogao_system",
             "merchant_id": "xiaogao_base",
             "rating": rating,
-            "corrected_answer": "修正后应先共情，再引导留下电话核价。",
+            "corrected_answer": corrected_answer,
         },
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["rag_ingestion"]["status"] == "completed"
-    assert data["rag_ingestion"]["answer_source"] == "corrected_answer"
+    assert data["rag_ingestion"]["answer_source"] == "feedback_sample"
+
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        document = conn.execute(
+            "SELECT content FROM knowledge_documents WHERE id=?",
+            (int(data["rag_ingestion"]["document_id"]),),
+        ).fetchone()
+
+    assert "【人工修正回复】" in document["content"]
+    assert corrected_answer in document["content"]
 
 
-@pytest.mark.parametrize("rating", ["normal", "wrong"])
-def test_normal_or_wrong_without_corrected_answer_only_saves_feedback(tmp_path, monkeypatch, rating):
+@pytest.mark.parametrize(
+    ("rating", "label", "usage_text"),
+    [
+        ("normal", "一般", "一般反馈样本"),
+        ("wrong", "不准", "负向反馈样本"),
+    ],
+)
+def test_normal_or_wrong_feedback_auto_ingests_as_feedback_sample(tmp_path, monkeypatch, rating, label, usage_text):
     client = _client(tmp_path, monkeypatch)
-    _patch_llm(monkeypatch)
-    ask_data = _ask(client)
+    question = "这台车可以分期吗？首付多少？"
+    ai_answer = "您好~我这边帮您详细核实下哦。"
+    comment = "AI回复太长太礼貌，机器人感太强。"
+    _patch_llm(monkeypatch, answer=ai_answer)
+    ask_data = _ask(client, question=question, answer=ai_answer)
 
     response = client.post(
         f"/knowledge-training/{ask_data['training_id']}/feedback",
@@ -167,16 +237,28 @@ def test_normal_or_wrong_without_corrected_answer_only_saves_feedback(tmp_path, 
             "tenant_id": "xiaogao_system",
             "merchant_id": "xiaogao_base",
             "rating": rating,
+            "comment": comment,
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["rag_ingestion"] == {
-        "enabled": True,
-        "triggered": False,
-        "status": "skipped",
-        "reason": "rating_not_ingestable",
-    }
+    data = response.json()
+    assert data["rag_ingestion"]["status"] == "completed"
+
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        document = conn.execute(
+            "SELECT content FROM knowledge_documents WHERE id=?",
+            (int(data["rag_ingestion"]["document_id"]),),
+        ).fetchone()
+
+    content = document["content"]
+    assert f"【人工反馈】\n{label}" in content
+    assert usage_text in content
+    assert comment in content
+    assert "【AI原始回复】" in content
+    assert ai_answer in content
 
 
 def test_auto_ingest_false_only_saves_feedback(tmp_path, monkeypatch):
@@ -201,6 +283,20 @@ def test_auto_ingest_false_only_saves_feedback(tmp_path, monkeypatch):
         "status": "skipped",
         "reason": "auto_ingest_disabled",
     }
+    from apps.xg_douyin_ai_cs.rag.database import connect
+
+    with connect() as conn:
+        document_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM knowledge_documents WHERE source_type='douyin_cs_training_feedback'"
+        ).fetchone()["count"]
+        feedback = conn.execute(
+            "SELECT ingestion_status, answer_hash FROM knowledge_training_feedbacks WHERE training_id=?",
+            (ask_data["training_id"],),
+        ).fetchone()
+
+    assert document_count == 0
+    assert feedback["ingestion_status"] == "skipped"
+    assert feedback["answer_hash"]
 
 
 def test_duplicate_useful_feedback_reuses_existing_ingestion(tmp_path, monkeypatch):
@@ -299,3 +395,88 @@ def test_legacy_feedback_table_is_auto_upgraded(tmp_path, monkeypatch):
         "ingestion_error",
         "answer_hash",
     }.issubset(columns)
+
+
+def test_repair_feedback_documents_collects_legacy_standard_answer_samples(tmp_path, monkeypatch):
+    db_path = tmp_path / "xg_douyin_ai_cs.db"
+    monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(db_path))
+
+    from apps.xg_douyin_ai_cs.rag.database import connect, init_db
+    from apps.xg_douyin_ai_cs.rag import repository
+    from scripts.repair_douyin_cs_training_feedback_documents import collect_repairs
+
+    with connect() as conn:
+        init_db(conn)
+        conn.execute(
+            """
+            INSERT INTO knowledge_training_sessions(
+              training_id, tenant_id, merchant_id, douyin_account_id,
+              question, answer, used_knowledge_base, status
+            ) VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                "kt-legacy",
+                "xiaogao_system",
+                "xiaogao_base",
+                repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                "这台车可以分期吗？",
+                "您好~我帮您详细核实下哦。",
+                0,
+                "answered",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO knowledge_training_feedbacks(
+              training_id, tenant_id, merchant_id, rating, comment, status,
+              corrected_answer, auto_ingest, ingestion_status
+            ) VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "kt-legacy",
+                "xiaogao_system",
+                "xiaogao_base",
+                "normal",
+                "AI回复太长太礼貌，机器人感太强。",
+                "submitted",
+                "",
+                1,
+                "completed",
+            ),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO knowledge_documents(
+              tenant_id, merchant_id, douyin_account_id, title, content,
+              source_type, category_key, metadata_json, is_active
+            ) VALUES(?,?,?,?,?,?,?,?,1)
+            """,
+            (
+                "xiaogao_system",
+                "xiaogao_base",
+                repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                "历史坏反馈",
+                "【客户问题】\n这台车可以分期吗？\n\n【标准回答】\n一般\n\n【来源】\nAI 抖音客服自动回复训练反馈",
+                "douyin_cs_training_feedback",
+                "base",
+                json.dumps({"training_id": "kt-legacy"}, ensure_ascii=False),
+            ),
+        )
+        document_id = int(cur.lastrowid)
+        conn.commit()
+
+    repairs = collect_repairs()
+
+    assert len(repairs) == 1
+    repair = repairs[0]
+    assert repair["document_id"] == document_id
+    assert repair["status"] == "ready"
+    assert "【AI原始回复】" in repair["content"]
+    assert "您好~我帮您详细核实下哦。" in repair["content"]
+    assert "【人工反馈】\n一般" in repair["content"]
+    assert "【人工评价】\nAI回复太长太礼貌，机器人感太强。" in repair["content"]
+    assert "【标准回答】" not in repair["content"]
+
+    with connect() as conn:
+        stored = conn.execute("SELECT content FROM knowledge_documents WHERE id=?", (document_id,)).fetchone()
+    assert "【标准回答】" in stored["content"]

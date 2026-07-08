@@ -28,6 +28,12 @@ from apps.xg_douyin_ai_cs.services.vector_store import get_vector_store
 
 
 TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
+FEEDBACK_RATING_PRIORITY = {
+    "有用": 3,
+    "一般": 2,
+    "不准": 1,
+}
+FEEDBACK_RATING_RE = re.compile(r"【人工反馈】\s*(有用|一般|不准)")
 
 _logger = logging.getLogger(__name__)
 UNIFIED_KB_DOUYIN_ACCOUNT_ID = 0
@@ -733,17 +739,21 @@ def _search_milvus_or_fallback(
         query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
         if not query_embedding:
             raise ValueError("query embedding is empty")
-        result = get_vector_store().search(payload, query_embedding=query_embedding)
+        candidate_top_k = min(20, max(payload.top_k, payload.top_k * 3))
+        search_payload = _copy_search_request(payload, top_k=candidate_top_k)
+        result = get_vector_store().search(search_payload, query_embedding=query_embedding)
+        ranked_result = _rerank_search_items(result)[: payload.top_k]
         _logger.info(
             "rag_search vector_backend=milvus fallback_reason=none tenant_id=%s "
-            "merchant_id=%s top_k=%d result_count=%d category_key_count=%d",
+            "merchant_id=%s top_k=%d candidate_top_k=%d result_count=%d category_key_count=%d",
             payload.tenant_id,
             payload.merchant_id,
             payload.top_k,
-            len(result),
+            candidate_top_k,
+            len(ranked_result),
             len(category_keys),
         )
-        return result
+        return ranked_result
     except Exception as exc:
         _logger.warning(
             "rag_search vector_backend=milvus fallback_reason=milvus_search_failed "
@@ -820,7 +830,7 @@ def _search_sqlite(
             score = cosine_similarity(query_embedding, chunk_embedding)
             vector_scored.append((score, row))
         if vector_scored:
-            vector_scored.sort(key=lambda item: item[0], reverse=True)
+            vector_scored.sort(key=_scored_row_sort_key, reverse=True)
             _logger.info(
                 "rag_search strategy=vector tenant_id=%s merchant_id=%s "
                 "douyin_account_id=%s top_k=%d candidate_count=%d "
@@ -895,7 +905,7 @@ def _lexical_search(
         score = _score(query_tokens, str(row["chunk_text"] or ""))
         if score > 0:
             scored.append((score, row))
-    scored.sort(key=lambda item: item[0], reverse=True)
+    scored.sort(key=_scored_row_sort_key, reverse=True)
     _logger.info(
         "rag_search strategy=lexical_fallback top_k=%d "
         "category_filter_enabled=%s category_id_count=%d category_key_count=%d "
@@ -948,6 +958,37 @@ def _to_search_items(scored_rows: list[tuple[float, sqlite3.Row]]) -> list[RagSe
         )
         for score, row in scored_rows
     ]
+
+
+def _scored_row_sort_key(scored_row: tuple[float, sqlite3.Row]) -> tuple[float, int, float]:
+    score, row = scored_row
+    return (round(float(score), 2), _feedback_priority_from_text(str(row["chunk_text"] or "")), float(score))
+
+
+def _rerank_search_items(items: Sequence[RagSearchItem]) -> list[RagSearchItem]:
+    return sorted(
+        items,
+        key=lambda item: (
+            round(float(item.score), 2),
+            _feedback_priority_from_text(item.chunk_text),
+            float(item.score),
+        ),
+        reverse=True,
+    )
+
+
+def _feedback_priority_from_text(text: str) -> int:
+    match = FEEDBACK_RATING_RE.search(str(text or ""))
+    if not match:
+        return 0
+    return FEEDBACK_RATING_PRIORITY.get(match.group(1), 0)
+
+
+def _copy_search_request(payload: RagSearchRequest, *, top_k: int) -> RagSearchRequest:
+    model_copy = getattr(payload, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"top_k": top_k})
+    return payload.copy(update={"top_k": top_k})
 
 
 def _parse_embedding_json(value: object) -> list[float] | None:

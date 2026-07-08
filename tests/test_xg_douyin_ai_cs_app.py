@@ -116,7 +116,7 @@ def _seed_training_base_knowledge():
         KnowledgeDocumentCreate(
             tenant_id="new_car_project",
             merchant_id="merchant-real",
-            douyin_account_id=1,
+            douyin_account_id=0,
             title="门店优势",
             content="门店支持到店看车、检测报告说明和金融方案咨询。",
             category_key="base",
@@ -135,7 +135,7 @@ def _seed_training_base_knowledge():
                 document_id,
                 "new_car_project",
                 "merchant-real",
-                1,
+                0,
                 "门店支持到店看车、检测报告说明和金融方案咨询。",
                 1,
                 "[1.0, 0.0]",
@@ -195,7 +195,9 @@ def test_knowledge_training_ask_feedback_flow(tmp_path, monkeypatch):
     )
 
     assert feedback_response.status_code == 200
-    assert feedback_response.json()["status"] == "pending_review"
+    feedback_data = feedback_response.json()
+    assert feedback_data["status"] == "pending_review"
+    assert feedback_data["rag_ingestion"]["status"] == "completed"
 
     from apps.xg_douyin_ai_cs.rag.database import connect
 
@@ -204,13 +206,77 @@ def test_knowledge_training_ask_feedback_flow(tmp_path, monkeypatch):
             "SELECT status FROM knowledge_training_feedbacks WHERE training_id=?",
             (ask_data["training_id"],),
         ).fetchone()
-        document_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM knowledge_documents WHERE title=?",
-            ("回答不准，待人工整理",),
-        ).fetchone()["count"]
+        document = conn.execute(
+            "SELECT content FROM knowledge_documents WHERE id=?",
+            (int(feedback_data["rag_ingestion"]["document_id"]),),
+        ).fetchone()
 
     assert feedback["status"] == "pending_review"
-    assert document_count == 0
+    assert "【人工反馈】\n不准" in document["content"]
+    assert "【人工评价】\n回答不准，待人工整理" in document["content"]
+
+
+def test_knowledge_training_prompt_mentions_feedback_priority(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    captured = {}
+
+    def fake_chat(self, messages):
+        captured["messages"] = messages
+        return {
+            "reply_text": "好的回复",
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+            "usage": None,
+        }
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat",
+        fake_chat,
+    )
+
+    response = client.post(
+        "/knowledge-training/ask",
+        json={
+            "tenant_id": "xiaogao_system",
+            "merchant_id": "xiaogao_base",
+            "question": "分期首付怎么说",
+            "use_xiaogao_knowledge_base": False,
+        },
+    )
+
+    assert response.status_code == 200
+    prompt_text = "\n".join(message["content"] for message in captured["messages"])
+    assert "有用样本优先借鉴" in prompt_text
+    assert "不准样本只能作为避坑提醒" in prompt_text
+
+
+def test_reply_suggestion_prompt_mentions_feedback_priority():
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchItem
+    from apps.xg_douyin_ai_cs.schemas import ReplySuggestionRequest
+    from apps.xg_douyin_ai_cs.services.reply_decision_service import build_llm_messages
+
+    messages = build_llm_messages(
+        ReplySuggestionRequest(
+            tenant_id="demo_tenant",
+            merchant_id="demo_bba",
+            account_id=1,
+            latest_message="分期首付怎么说？",
+        ),
+        {"merchant_name": "小高汽车"},
+        [
+            RagSearchItem(
+                document_id="1",
+                chunk_id="1",
+                title="反馈样本",
+                chunk_text="【人工反馈】\n不准\n【人工评价】回复太长。",
+                score=0.9,
+            )
+        ],
+    )
+
+    prompt_text = "\n".join(message["content"] for message in messages)
+    assert "有用反馈优先借鉴" in prompt_text
+    assert "不准反馈只用于规避同类错误" in prompt_text
 
 
 def test_knowledge_training_feedback_rejects_missing_session(tmp_path, monkeypatch):

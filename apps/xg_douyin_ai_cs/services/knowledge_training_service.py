@@ -21,6 +21,16 @@ from apps.xg_douyin_ai_cs.rag import repository
 from apps.xg_douyin_ai_cs.rag.repository import search
 
 KNOWLEDGE_BASE_NAME = "小高知识库"
+FEEDBACK_RATING_LABELS = {
+    "useful": "有用",
+    "normal": "一般",
+    "wrong": "不准",
+}
+FEEDBACK_RATING_USAGE = {
+    "useful": "正向反馈样本，可参考 AI 原始回复的方向，并结合人工评价继续优化表达。",
+    "normal": "一般反馈样本，AI 原始回复不能直接视为标准答案，需结合人工评价谨慎使用。",
+    "wrong": "负向反馈样本，AI 原始回复不应直接复用；如有人工修正回复，应优先参考修正内容。",
+}
 _logger = logging.getLogger(__name__)
 
 
@@ -179,15 +189,16 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
         if session["tenant_id"] != payload.tenant_id or session["merchant_id"] != payload.merchant_id:
             raise TrainingSessionForbiddenError("TRAINING_SESSION_FORBIDDEN")
 
-        selected_answer, answer_source = _selected_ingestion_answer(
-            rating=payload.rating,
+        feedback_document_content = _feedback_document_content(
+            question=session["question"],
             original_answer=session["answer"],
+            rating=payload.rating,
+            comment=payload.comment,
             corrected_answer=corrected_answer,
         )
-        answer_hash = _answer_hash(selected_answer) if selected_answer else None
+        answer_source = "feedback_sample"
+        answer_hash = _answer_hash(feedback_document_content)
         ingestion = _skipped_ingestion("auto_ingest_disabled", enabled=False) if not auto_ingest else None
-        if ingestion is None and not selected_answer:
-            ingestion = _skipped_ingestion("rating_not_ingestable")
 
         cur = conn.execute(
             """
@@ -220,7 +231,7 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
             tenant_id=payload.tenant_id,
             merchant_id=payload.merchant_id,
             question=session["question"],
-            selected_answer=selected_answer,
+            content=feedback_document_content,
             answer_source=answer_source,
             rating=payload.rating,
             answer_hash=answer_hash,
@@ -239,16 +250,6 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
         "knowledge_base_name": KNOWLEDGE_BASE_NAME,
         "rag_ingestion": ingestion,
     }
-
-
-def _selected_ingestion_answer(*, rating: str, original_answer: str, corrected_answer: str) -> tuple[str, str]:
-    original = _clean_text(original_answer, limit=3000)
-    corrected = _clean_text(corrected_answer, limit=3000)
-    if corrected and corrected != original:
-        return corrected, "corrected_answer"
-    if rating == "useful" and original:
-        return original, "ai_answer"
-    return "", ""
 
 
 def _clean_text(value: str | None, *, limit: int) -> str:
@@ -275,7 +276,7 @@ def _ingest_feedback_document(
     tenant_id: str,
     merchant_id: str,
     question: str,
-    selected_answer: str,
+    content: str,
     answer_source: str,
     rating: str,
     answer_hash: str | None,
@@ -308,7 +309,7 @@ def _ingest_feedback_document(
                 merchant_id=merchant_id,
                 douyin_account_id=repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
                 title=_feedback_document_title(question),
-                content=_feedback_document_content(question, selected_answer),
+                content=content,
                 source_type="douyin_cs_training_feedback",
                 category_key="base",
                 metadata={
@@ -408,19 +409,38 @@ def _feedback_document_title(question: str) -> str:
     return f"AI抖音客服训练反馈：{compact or '未命名问题'}"
 
 
-def _feedback_document_content(question: str, selected_answer: str) -> str:
-    return "\n".join(
-        [
-            "【客户问题】",
-            question,
-            "",
-            "【标准回答】",
-            selected_answer,
-            "",
-            "【来源】",
-            "AI 抖音客服自动回复训练反馈",
-        ]
-    )
+def _feedback_document_content(
+    *,
+    question: str,
+    original_answer: str,
+    rating: str,
+    comment: str | None,
+    corrected_answer: str | None,
+) -> str:
+    rating_label = FEEDBACK_RATING_LABELS.get(rating, rating)
+    usage = FEEDBACK_RATING_USAGE.get(rating, "按人工反馈和人工评价谨慎使用。")
+    comment_text = _clean_text(comment, limit=2000) or "未填写"
+    corrected = _clean_text(corrected_answer, limit=3000)
+    lines = [
+        "【客户问题】",
+        _clean_text(question, limit=1000),
+        "",
+        "【AI原始回复】",
+        _clean_text(original_answer, limit=3000),
+        "",
+        "【人工反馈】",
+        rating_label,
+        "",
+        "【反馈使用规则】",
+        usage,
+        "",
+        "【人工评价】",
+        comment_text,
+    ]
+    if corrected:
+        lines.extend(["", "【人工修正回复】", corrected])
+    lines.extend(["", "【来源】", "AI 抖音客服自动回复训练反馈"])
+    return "\n".join(lines)
 
 
 def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tuple[str, int, bool, str]:
@@ -480,6 +500,7 @@ def _build_user_prompt(payload: KnowledgeTrainingAskInput, source_chunks: list) 
         f"商家提示词：{prompt_text or '未配置'}",
         f"客户问题：{payload.question}",
         f"{KNOWLEDGE_BASE_NAME}：{knowledge_text or '未命中可用内容'}",
+        "如果小高知识库命中 AI 抖音客服自动回复训练反馈：有用样本优先借鉴；一般样本只吸收有效信息并优化表达；不准样本只能作为避坑提醒，禁止照抄其中的 AI 原始回复。",
         "请给出一条可直接用于商家人工参考的回复建议。",
     ]
     return "\n".join(parts)
