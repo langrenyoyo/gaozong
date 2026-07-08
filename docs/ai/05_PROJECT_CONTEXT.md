@@ -3485,3 +3485,33 @@ migrations/postgres/auto_wechat/versions/0002_create_knowledge_categories.py
 3. 本轮未切换 `GET /knowledge-categories` 默认流量。
 4. P3-C 后续可以单独做 dev postgres migration smoke，但必须另起受控任务。
 5. QPS600 仍需后续索引验证、慢查询分析、连接池配置和压测确认。
+
+# P3-C2 auto_wechat knowledge_categories migration smoke 当前状态
+
+任务：`P3-C2-DB-9000-KNOWLEDGE-CATEGORIES-PG-MIGRATION-SMOKE-1`
+
+当前已为 `auto_wechat` Alembic migration 增加 dev PostgreSQL smoke 验证入口：
+
+```text
+scripts/smoke_auto_wechat_alembic_knowledge_categories.py
+```
+
+当前能力：
+
+1. smoke 只针对 `auto_wechat` database，不触碰 `xg_douyin_ai_cs`。
+2. 读取 `SMOKE_DATABASE_URL` 或 `DATABASE_URL`，拒绝 SQLite URL。
+3. 通过 `migrations/postgres/auto_wechat/alembic.ini` 执行 `upgrade head`。
+4. 验证 `alembic_version` 到 `0002_create_knowledge_categories`。
+5. 验证 `knowledge_categories` 表、关键字段、索引、唯一约束和 check constraint。
+6. URL 输出必须脱敏，不打印 password。
+
+为支持 dev profile 推荐的 `postgresql+asyncpg` URL，`migrations/postgres/auto_wechat/env.py` 已增加 asyncpg Alembic 在线迁移分支；这只属于 migration smoke 能力，不代表 9000 默认运行路径切换。
+
+边界确认：
+
+1. 默认运行仍是 SQLite。
+2. 本轮不切换 9000 默认 `DATABASE_URL`。
+3. 本轮不迁移真实 SQLite 数据。
+4. 本轮不插入真实业务数据。
+5. 本轮不改业务接口、不改 9100、不改 Milvus / RAG。
+6. P3-C3 / P3 后续才处理正式数据迁移、更多表和生产灰度切换。

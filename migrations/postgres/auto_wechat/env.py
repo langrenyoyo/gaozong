@@ -5,11 +5,14 @@ P3-B 只建立骨架。业务表、索引和正式 schema 留到后续 P3-C。
 
 from __future__ import annotations
 
+import asyncio
 import os
 from logging.config import fileConfig
+from urllib.parse import urlsplit
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.database_url import parse_database_url
 
@@ -32,6 +35,10 @@ def _database_url() -> str:
     return parsed.raw_url
 
 
+def _is_asyncpg_url(database_url: str) -> bool:
+    return urlsplit(database_url).scheme == "postgresql+asyncpg"
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
@@ -44,9 +51,25 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = _database_url()
+def _run_migrations_with_connection(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def run_async_migrations_online(configuration: dict) -> None:
+    connectable = async_engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(_run_migrations_with_connection)
+    await connectable.dispose()
+
+
+def run_sync_migrations_online(configuration: dict) -> None:
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
@@ -54,9 +77,17 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        _run_migrations_with_connection(connection)
+
+
+def run_migrations_online() -> None:
+    database_url = _database_url()
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = database_url
+    if _is_asyncpg_url(database_url):
+        asyncio.run(run_async_migrations_online(configuration))
+    else:
+        run_sync_migrations_online(configuration)
 
 
 if context.is_offline_mode():

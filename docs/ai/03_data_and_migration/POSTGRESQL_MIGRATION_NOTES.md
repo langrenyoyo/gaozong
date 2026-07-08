@@ -639,3 +639,43 @@ migrations/postgres/auto_wechat/versions/0002_create_knowledge_categories.py
 4. 本轮未修改 9100 Alembic 环境、Milvus、RAG、业务接口逻辑或 docker-compose。
 5. P3-C 后续可以单独做 dev postgres migration smoke，但必须另起受控任务。
 6. QPS600 仍需后续索引验证、慢查询分析和压测确认。
+
+## 21. P3-C2 auto_wechat knowledge_categories migration smoke 补充
+
+任务：`P3-C2-DB-9000-KNOWLEDGE-CATEGORIES-PG-MIGRATION-SMOKE-1`
+
+当前已新增 dev PostgreSQL migration smoke 脚本：
+
+```text
+scripts/smoke_auto_wechat_alembic_knowledge_categories.py
+```
+
+脚本能力：
+
+1. 只验证 `auto_wechat` database。
+2. 读取 `SMOKE_DATABASE_URL` 或 `DATABASE_URL`，拒绝 SQLite URL。
+3. 执行 `migrations/postgres/auto_wechat/alembic.ini` 的 `upgrade head`。
+4. 验证 `alembic_version` 已到 `0002_create_knowledge_categories`。
+5. 验证 `knowledge_categories` 表存在。
+6. 验证关键字段、`idx_knowledge_categories_visible_lookup`、`idx_knowledge_categories_merchant_category_status`、`uk_knowledge_categories_scope_merchant_key` 和 `ck_knowledge_categories_key_matches_category_key` 存在。
+7. 输出 `SMOKE_PASS` 或清晰失败原因。
+8. 输出 URL 时只展示脱敏值。
+
+`auto_wechat` Alembic `env.py` 已支持 `postgresql+asyncpg` 在线迁移分支，用于 dev smoke；该能力仍只属于 migration 环境，不代表 9000 默认运行路径切换到 PostgreSQL。
+
+运行示例：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
+python scripts/smoke_auto_wechat_alembic_knowledge_categories.py
+docker compose -f docker-compose.dev.yml stop postgres
+```
+
+边界确认：
+
+1. 默认运行仍是 SQLite。
+2. 本轮不切换 9000。
+3. 本轮不迁移真实业务数据。
+4. 本轮不插入真实业务数据。
+5. 本轮不改业务接口、不改 9100、不改 Milvus / RAG。
+6. P3-C3 / P3 后续才处理正式数据迁移、更多表和生产灰度切换。
