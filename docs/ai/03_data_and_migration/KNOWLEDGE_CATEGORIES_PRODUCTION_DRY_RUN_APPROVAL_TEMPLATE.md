@@ -200,6 +200,29 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_RUNBOOK.md
 
 P3-C11 仍不执行 production dry-run，不连接 production，不读取 production SQLite，不执行 apply；production 操作必须由人工/运维按 P3-C10 approval 结果执行并回填记录。
 
+P3-C11 production dry-run 人工执行结果已回填：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_EXECUTION_RECORD.md
+```
+
+结果摘要：
+
+1. P3-C11 production dry-run：`PASS`。
+2. 最终状态：`DRY_RUN_PASS`。
+3. SQLite 源行数：0。
+4. insert/update/skip/error = 0/0/0/0。
+5. PostgreSQL 写入：disabled。
+6. 未执行 `--apply / --yes`。
+7. 未写 PostgreSQL 业务数据。
+8. 未修改 SQLite。
+9. 未修改 `.env`。
+10. 未切换 `DATABASE_URL`。
+11. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+12. PostgreSQL 容器已停止。
+
+基于本次 production dry-run，P3-C12 production apply 建议结论为 `SKIPPED_NO_SOURCE_ROWS`，原因是 production SQLite `knowledge_categories` 源行数 = 0，执行 apply 没有业务价值。
+
 ## 11. 本轮边界确认
 
 本轮只做文档。

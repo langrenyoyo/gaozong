@@ -364,3 +364,47 @@ production dry-run 通过不等于允许 apply。
 12. 不改 Alembic revision。
 13. 不改 docker-compose。
 14. 不改 `.env`。
+
+## 14. P3-C11 production dry-run 执行记录回填
+
+本节回填人工已执行的 production dry-run 结果；本次文档更新不再执行 production 命令，不连接 PostgreSQL，不读取 SQLite，不执行 dry-run 或 apply。
+
+执行记录文档：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_EXECUTION_RECORD.md
+```
+
+执行结论：
+
+1. P3-C11 production dry-run：`PASS`。
+2. commit hash：`26f4762763e71f25f66efba8d83015ff7ff8b633`。
+3. `.env` PGSQL 变量仍为注释状态。
+4. 未切换默认 `DATABASE_URL`。
+5. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. PostgreSQL `alembic_version = 0002_create_knowledge_categories`。
+7. PostgreSQL `knowledge_categories` 表存在，PG 行数 = 0。
+8. SQLite 路径：`docker-data/auto_wechat_9000/auto_wechat.db`。
+9. SQLite `knowledge_categories` 表存在，SQLite 源行数：0。
+10. 备份存在：`backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`，size = 4.0K。
+11. dry-run 输出 `DRY_RUN_PASS`。
+12. insert/update/skip/error = 0/0/0/0。
+13. PostgreSQL 写入：disabled。
+14. 未执行 `--apply / --yes`。
+15. 未写 PostgreSQL 业务数据。
+16. 未修改 SQLite。
+17. 未修改 `.env`。
+18. PostgreSQL 容器已停止。
+
+本地未跟踪操作文件说明：
+
+1. `.venv-p3c8/` 是服务器本地操作环境文件，不应提交。
+2. `backups/` 是服务器本地备份目录，不应提交。
+
+后续建议：
+
+```text
+P3-C12 production apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+原因是 production SQLite `knowledge_categories` 源行数 = 0，dry-run insert/update/skip/error = 0/0/0/0，执行 apply 没有业务价值。

@@ -1178,3 +1178,62 @@ Runbook 关键内容：
 9. 本轮不切换 `DATABASE_URL`。
 10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 11. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+
+## 33. P3-C11 production dry-run 执行记录补充
+
+任务：`P3-C11-DB-9000-KNOWLEDGE-CATEGORIES-PRODUCTION-DRY-RUN-EXECUTION-RECORD-1`
+
+当前已新增 production dry-run 执行记录：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_EXECUTION_RECORD.md
+```
+
+人工执行结果：
+
+1. P3-C11 production dry-run：`PASS`。
+2. commit hash：`26f4762763e71f25f66efba8d83015ff7ff8b633`。
+3. `.env` PGSQL 变量仍为注释状态。
+4. 未切换默认 `DATABASE_URL`。
+5. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. PostgreSQL schema 已满足前置条件：`alembic_version = 0002_create_knowledge_categories`，`knowledge_categories` 表存在。
+7. PG `knowledge_categories_count = 0`。
+8. SQLite 路径：`docker-data/auto_wechat_9000/auto_wechat.db`。
+9. SQLite `knowledge_categories` 表存在，SQLite 源行数：0。
+10. SQLite 备份存在：`backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`，size = 4.0K。
+11. dry-run 输出：`DRY_RUN_PASS`。
+12. 过滤后待处理行数 = 0。
+13. insert/update/skip/error = 0/0/0/0。
+14. 异常行数量 = 0。
+15. 字段映射预览：`[]`。
+16. PostgreSQL 写入：disabled。
+
+收尾确认：
+
+1. `POSTGRES_URL` 已 unset。
+2. `auto-wechat-postgres-dev` 已停止。
+3. `ps postgres` 无运行容器。
+4. PostgreSQL 容器已停止。
+5. `.venv-p3c8/` 和 `backups/` 是服务器本地未跟踪操作文件，不应提交。
+
+边界确认：
+
+1. 本轮只补充文档记录。
+2. 本轮不执行 production 命令。
+3. 本轮不连接 PostgreSQL。
+4. 本轮不读取 SQLite。
+5. 本轮不执行 dry-run。
+6. 本轮不执行 `--apply / --yes`。
+7. 本轮不写 PostgreSQL。
+8. 本轮不迁移数据。
+9. 本轮不切换 `DATABASE_URL`。
+10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+11. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+
+后续建议：
+
+```text
+P3-C12 production apply: SKIPPED_NO_SOURCE_ROWS
+```
+
+原因是 production SQLite `knowledge_categories` 源行数 = 0，dry-run insert/update/skip/error = 0/0/0/0，执行 apply 没有业务价值。
