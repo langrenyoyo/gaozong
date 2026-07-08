@@ -22,6 +22,8 @@ async def get_me(context: RequestContext = Depends(get_request_context_required)
     data = context.to_dict()
     if auth_mode == "mock":
         data["source_system"] = "mock"
+        data["role"] = "super_admin"
+        data["super_admin"] = True
     data["auth_mode"] = auth_mode
     return {"success": True, "data": data, "message": "success"}
 

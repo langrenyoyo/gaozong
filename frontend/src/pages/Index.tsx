@@ -27,7 +27,7 @@ import { AppUser } from "../App";
 import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
-import { isAdminLike } from "../features/capabilities";
+import { isAdminLike, isMockAuthUser } from "../features/capabilities";
 
 interface DouyinAccount {
   name: string;
@@ -627,6 +627,10 @@ function DouyinConnectEmpty({ onConnect }: { onConnect: () => void }) {
   );
 }
 
+function isAdminRouteNav(navId: string): boolean {
+  return navId.startsWith("admin-") || navId === "ai-reply-records";
+}
+
 export default function Index({
   user,
   onLogout = () => {},
@@ -638,7 +642,7 @@ export default function Index({
 }) {
   const [activeNav, setActiveNav] = useState(initialActiveNav);
   const [superActiveNav, setSuperActiveNav] = useState(
-    initialActiveNav.startsWith("admin-") || initialActiveNav === "ai-reply-records"
+    isAdminRouteNav(initialActiveNav)
       ? initialActiveNav
       : "merchant-agent",
   );
@@ -658,16 +662,36 @@ export default function Index({
   const selectedMessages = selectedContact ? conversations.messages[selectedContact.id] || [] : [];
   const navColumn = isNavExpanded ? "220px" : "88px";
   const isAdminUser = isAdminLike(user);
+  const isMockUser = isMockAuthUser(user);
+  const isAdminSectionActive = isAdminUser && (!isMockUser || isAdminRouteNav(superActiveNav));
 
   useEffect(() => {
-    setActiveNav((current) => (current === initialActiveNav ? current : initialActiveNav));
-  }, [initialActiveNav]);
-
-  useEffect(() => {
-    if (initialActiveNav.startsWith("admin-") || initialActiveNav === "ai-reply-records") {
-      setSuperActiveNav(initialActiveNav);
+    if (!isAdminRouteNav(initialActiveNav)) {
+      setActiveNav((current) => (current === initialActiveNav ? current : initialActiveNav));
     }
   }, [initialActiveNav]);
+
+  useEffect(() => {
+    if (isAdminRouteNav(initialActiveNav)) {
+      setSuperActiveNav(initialActiveNav);
+    } else if (isMockUser) {
+      setSuperActiveNav("merchant-agent");
+    }
+  }, [initialActiveNav, isMockUser]);
+
+  const handleNavChange = useCallback(
+    (nextNav: string) => {
+      if (isAdminRouteNav(nextNav)) {
+        setSuperActiveNav(nextNav);
+        return;
+      }
+      setActiveNav(nextNav);
+      if (isMockUser) {
+        setSuperActiveNav("merchant-agent");
+      }
+    },
+    [isMockUser],
+  );
 
   const isLeadConversationNav = activeNav === "chat";
   const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
@@ -730,7 +754,7 @@ export default function Index({
       <Toaster position="top-right" richColors />
       <div
         className={`grid h-full min-h-0 overflow-hidden ${
-          isAdminUser
+          isAdminSectionActive
             ? "grid-cols-[var(--nav-width)_minmax(900px,1fr)]"
             : isLeadConversationNav
             ? "grid-cols-[var(--nav-width)_minmax(270px,320px)_minmax(520px,1fr)_240px] max-[1180px]:grid-cols-[var(--nav-width)_minmax(260px,300px)_minmax(460px,1fr)]"
@@ -739,15 +763,15 @@ export default function Index({
         style={{ "--nav-width": navColumn } as React.CSSProperties}
       >
         <SideNav
-          activeNav={isAdminUser ? superActiveNav : activeNav}
-          onNavChange={isAdminUser ? setSuperActiveNav : setActiveNav}
+          activeNav={isAdminSectionActive ? superActiveNav : activeNav}
+          onNavChange={handleNavChange}
           expanded={isNavExpanded}
           onExpandedChange={setIsNavExpanded}
           onLogout={onLogout}
           showSalesBadge={Boolean(douyinAccount)}
           user={user}
         />
-        {isAdminUser ? (
+        {isAdminSectionActive ? (
           superActiveNav === "ai-reply-records" ? (
             <SuperAiReplyRecords />
           ) : superActiveNav === "admin-autoreply-rollout" ? (

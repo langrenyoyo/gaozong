@@ -17,6 +17,7 @@ import {
   findCapabilityByNavId,
   hasPermission,
   isAdminLike,
+  isMockAuthUser,
   PERMISSIONS,
 } from "../features/capabilities";
 
@@ -70,6 +71,7 @@ export default function SideNav({
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
 }: SideNavProps) {
   const isAdminUser = isAdminLike(user);
+  const isMockUser = isMockAuthUser(user);
   const visibleAdminItems = adminItems.filter((item) => canViewAdminItem(user, item.permission));
   const visibleCenters = filterCapabilityNavCenters(user);
   const activeCenter = findCapabilityByNavId(activeNav, user);
@@ -111,7 +113,7 @@ export default function SideNav({
         </div>
 
         <nav className={`flex flex-1 flex-col gap-1.5 overflow-y-auto pt-4 ${expanded ? "px-3" : "items-center"}`}>
-          {isAdminUser
+          {isAdminUser && !isMockUser
             ? visibleAdminItems.map((item) => {
                 const isActive = activeNav === item.id;
                 return (
@@ -181,6 +183,29 @@ export default function SideNav({
                   </div>
                 );
               })}
+          {isMockUser && visibleAdminItems.length > 0
+            ? visibleAdminItems.map((item) => {
+                const isActive = activeNav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => navigateAdminItem(item.id, item.path)}
+                    className={`relative flex transition-smooth ${
+                      expanded
+                        ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
+                        : "w-16 flex-col items-center gap-1 rounded-xl py-2.5 text-[10px]"
+                    } ${
+                      isActive
+                        ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
+                        : "text-slate-400 hover:bg-white/8 hover:text-white"
+                    }`}
+                  >
+                    <span className="shrink-0">{adminIcons[item.id]}</span>
+                    <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? item.expandedLabel : item.label}</span>
+                  </button>
+                );
+              })
+            : null}
         </nav>
 
         <div className={`flex flex-col gap-2 pb-4 ${expanded ? "px-3" : "items-center"}`}>

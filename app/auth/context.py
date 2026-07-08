@@ -23,26 +23,32 @@ class RequestContext:
     merchant_status: str | None = None
     session_id: str | None = None
     source_system: str = "new_car_project"
+    auth_mode: str | None = None
     request_id: str | None = None
+
+    def is_mock_auth(self) -> bool:
+        return self.auth_mode == "mock"
 
     def has_permission(self, permission_code: str) -> bool:
         """判断当前上下文是否拥有指定权限。"""
-        return self.super_admin or permission_code in self.permission_codes
+        return self.is_mock_auth() or self.super_admin or permission_code in self.permission_codes
 
     def has_any_permission(self, permission_codes: list[str]) -> bool:
         """判断当前上下文是否拥有任一权限。"""
-        return self.super_admin or any(code in self.permission_codes for code in permission_codes)
+        return self.is_mock_auth() or self.super_admin or any(code in self.permission_codes for code in permission_codes)
 
     def has_admin_permission(self) -> bool:
         """判断当前上下文是否拥有 NewCar 管理员权限。"""
-        return self.super_admin or any(code.startswith("auto_wechat:admin:") for code in self.permission_codes)
+        return self.is_mock_auth() or self.super_admin or any(code.startswith("auto_wechat:admin:") for code in self.permission_codes)
 
     def has_merchant_permission(self) -> bool:
         """判断当前上下文是否拥有 NewCar 商户侧能力。"""
-        return has_newcar_merchant_permission(self.permission_codes)
+        return self.is_mock_auth() or has_newcar_merchant_permission(self.permission_codes)
 
     def has_merchant_access(self, merchant_id: str) -> bool:
         """判断当前上下文是否可访问指定商户。"""
+        if self.is_mock_auth():
+            return merchant_id in self.merchant_ids
         return self.super_admin or merchant_id in self.merchant_ids
 
     def to_dict(self) -> dict:

@@ -198,9 +198,12 @@ def test_mock_newcar_client_returns_context():
     client = NewCarProjectAuthClient(auth_enabled=False, mock_enabled=True)
     context = client.build_mock_context(merchant_id="m_2", permission_codes=["auto_wechat:agent"])
 
-    assert context.user_id == "dev-user"
+    assert context.user_id == "local-dev-admin"
     assert context.merchant_id == "m_2"
+    assert context.auth_mode == "mock"
+    assert context.super_admin is False
     assert context.has_permission("auto_wechat:agent") is True
+    assert context.has_permission("auto_wechat:missing") is True
 
 
 def test_mock_newcar_client_default_permissions_cover_current_features():
@@ -210,6 +213,7 @@ def test_mock_newcar_client_default_permissions_cover_current_features():
     context = client.build_mock_context()
 
     assert set(context.permission_codes) >= {
+        "*",
         "auto_wechat:use",
         "auto_wechat:leads",
         "auto_wechat:douyin_ai_cs",
@@ -218,9 +222,31 @@ def test_mock_newcar_client_default_permissions_cover_current_features():
         "auto_wechat:ai_agents",
         "auto_wechat:compute",
         "auto_wechat:admin:compute_config",
+        "auto_wechat:admin:accounts",
+        "auto_wechat:admin:ai_reply_records",
+        "auto_wechat:admin:autoreply",
+        "auto_wechat:admin:forbidden_words",
+        "auto_wechat:knowledge",
+        "auto_wechat:knowledge_training",
     }
-    assert "auto_wechat:knowledge_training" not in context.permission_codes
-    assert "auto_wechat:knowledge" not in context.permission_codes
+    assert context.role_codes == ["super_admin", "local_dev_admin"]
+    assert context.has_admin_permission() is True
+
+
+def test_mock_context_bypasses_permission_dependencies():
+    from app.auth.context import RequestContext
+    from app.auth.dependencies import require_any_permission, require_merchant_access, require_permission
+
+    context = RequestContext(user_id="local-dev-admin", auth_mode="mock", merchant_ids=["dev-merchant"])
+
+    assert require_permission("auto_wechat:anything")(context) is context
+    assert require_any_permission(["auto_wechat:none", "auto_wechat:missing"])(context) is context
+    assert require_merchant_access("dev-merchant", context) is context
+
+    with pytest.raises(Exception) as exc_info:
+        require_merchant_access("other-merchant", context)
+
+    assert getattr(exc_info.value, "status_code") == 403
 
 
 def test_required_context_missing_token_returns_401(monkeypatch):
@@ -287,10 +313,13 @@ def test_auth_me_returns_mock_context_in_dev_mode(monkeypatch):
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["user_id"] == "dev-user"
+    assert data["user_id"] == "local-dev-admin"
+    assert data["role_codes"] == ["super_admin", "local_dev_admin"]
+    assert data["super_admin"] is True
     assert data["merchant_id"] == "dev-merchant"
     assert data["source_system"] == "mock"
     assert data["auth_mode"] == "mock"
+    assert "*" in data["permission_codes"]
 
 
 def test_api_auth_me_returns_mock_context_in_dev_mode(monkeypatch):
@@ -303,10 +332,13 @@ def test_api_auth_me_returns_mock_context_in_dev_mode(monkeypatch):
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["user_id"] == "dev-user"
+    assert data["user_id"] == "local-dev-admin"
+    assert data["role_codes"] == ["super_admin", "local_dev_admin"]
+    assert data["super_admin"] is True
     assert data["merchant_id"] == "dev-merchant"
     assert data["source_system"] == "mock"
     assert data["auth_mode"] == "mock"
+    assert "*" in data["permission_codes"]
 
 
 def test_auth_disabled_without_mock_still_returns_local_context(monkeypatch):
@@ -319,10 +351,25 @@ def test_auth_disabled_without_mock_still_returns_local_context(monkeypatch):
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["user_id"] == "dev-user"
+    assert data["user_id"] == "local-dev-admin"
+    assert data["role_codes"] == ["super_admin", "local_dev_admin"]
+    assert data["super_admin"] is True
     assert data["merchant_id"] == "dev-merchant"
     assert data["source_system"] == "mock"
     assert data["auth_mode"] == "mock"
+    assert "*" in data["permission_codes"]
+
+
+@pytest.mark.parametrize("path", ["/agents", "/leads", "/compute/summary", "/admin/compute/packages"])
+def test_mock_context_can_access_permission_protected_routes(monkeypatch, path):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get(path)
+
+    assert response.status_code == 200
 
 
 def test_auth_me_required_mode_accepts_bearer_token(monkeypatch):

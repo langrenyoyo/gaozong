@@ -91,19 +91,37 @@ export function isSuperAdmin(user: Pick<AppUser, "role"> | null | undefined): bo
   return user?.role === "super_admin";
 }
 
-export function hasPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined, code: string): boolean {
+export function isMockAuthUser(
+  user: Pick<AppUser, "permissions" | "authMode" | "sourceSystem"> | null | undefined,
+): boolean {
   if (!user) return false;
+  const permissions = user.permissions || [];
+  return user.authMode === "mock" || user.sourceSystem === "mock" || permissions.includes("*");
+}
+
+export function hasPermission(
+  user: Pick<AppUser, "permissions" | "role" | "authMode" | "sourceSystem"> | null | undefined,
+  code: string,
+): boolean {
+  if (!user) return false;
+  if (isMockAuthUser(user)) return true;
   if (isSuperAdmin(user)) return true;
   const permissions = user.permissions || [];
   return permissions.includes(code) || (legacyPermissionAliases[code] || []).some((alias) => permissions.includes(alias));
 }
 
-export function hasAnyPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined, codes: string[]): boolean {
+export function hasAnyPermission(
+  user: Pick<AppUser, "permissions" | "role" | "authMode" | "sourceSystem"> | null | undefined,
+  codes: string[],
+): boolean {
   return codes.some((code) => hasPermission(user, code));
 }
 
-export function hasAdminPermission(user: Pick<AppUser, "permissions" | "role"> | null | undefined): boolean {
+export function hasAdminPermission(
+  user: Pick<AppUser, "permissions" | "role" | "authMode" | "sourceSystem"> | null | undefined,
+): boolean {
   if (!user) return false;
+  if (isMockAuthUser(user)) return true;
   if (isSuperAdmin(user)) return true;
   return (user.permissions || []).some((code) => code.startsWith("auto_wechat:admin:"));
 }

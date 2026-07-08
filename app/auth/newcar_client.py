@@ -286,27 +286,37 @@ class NewCarProjectAuthClient:
     ) -> RequestContext:
         """构造本地开发和测试用上下文。"""
         permissions = permission_codes or [
+            "*",
             "auto_wechat:use",
+            "auto_wechat:douyin_ai_cs",
             "auto_wechat:leads",
             "auto_wechat:agent",
-            "auto_wechat:ai_agents",
-            "auto_wechat:douyin_ai_cs",
-            "auto_wechat:wechat_assistant",
             "auto_wechat:compute",
-            "auto_wechat:admin:compute_config",
+            "auto_wechat:ai_edit",
+            "auto_wechat:ai_agents",
+            "auto_wechat:knowledge",
+            "auto_wechat:knowledge_training",
+            "auto_wechat:wechat_assistant",
             "auto_wechat:wechat_agent",
+            "auto_wechat:admin:accounts",
+            "auto_wechat:admin:ai_reply_records",
+            "auto_wechat:admin:autoreply",
+            "auto_wechat:admin:compute_config",
+            "auto_wechat:admin:forbidden_words",
+            "auto_wechat:admin:return_visit_prompts",
         ]
         return RequestContext(
-            user_id="dev-user",
-            username="dev-user",
-            display_name="本地开发用户",
+            user_id="local-dev-admin",
+            username="local",
+            display_name="本地开发管理员",
             merchant_id=merchant_id,
             merchant_ids=[merchant_id],
-            role_codes=["dev_admin"],
+            role_codes=["super_admin", "local_dev_admin"],
             permission_codes=permissions,
             super_admin=False,
             merchant_status="active",
             session_id=session_id,
+            auth_mode="mock",
         )
 
 

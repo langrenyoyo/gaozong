@@ -127,7 +127,7 @@ admin_router = APIRouter(prefix="/admin", tags=["超管-算力配置"])
 
 def _require_admin(context: RequestContext) -> RequestContext:
     """管理员接口仅允许 super_admin（PRD 第三章为超级管理员专属功能）。"""
-    if not context.super_admin:
+    if not (context.is_mock_auth() or context.super_admin):
         raise HTTPException(
             status_code=403,
             detail={"code": "SUPER_ADMIN_REQUIRED", "message": "仅超级管理员可操作"},

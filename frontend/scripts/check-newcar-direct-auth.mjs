@@ -29,7 +29,10 @@ function assertOrder(content, first, second, label) {
 
 const authApi = read("src/api/auth.ts");
 const app = read("src/App.tsx");
+const capabilities = read("src/features/capabilities.ts");
 const client = read("src/api/client.ts");
+const sideNav = read("src/components/SideNav.tsx");
+const indexPage = read("src/pages/Index.tsx");
 const wechatTasks = read("src/api/wechatTasks.ts");
 const tokenStore = read("src/authToken.ts");
 const newcarRedirect = read("src/newcarRedirect.ts");
@@ -85,6 +88,26 @@ assertIncludes(app, "AuthErrorScreen", "app renders user-facing auth error state
 assertIncludes(app, "handleRelogin", "app relogin action clears local auth state before NewCar redirect");
 assertIncludes(app, "handleBackToWorkbench", "app permission action returns to the default workbench");
 assertIncludes(app, "loginRedirectNotice", "app renders a user-facing NewCar redirect notice");
+assertIncludes(app, "authMode?: string", "app user carries auth mode");
+assertIncludes(app, "sourceSystem?: string", "app user carries source system");
+assertIncludes(app, "authMode: data.auth_mode", "app maps backend auth_mode onto user");
+assertIncludes(app, "sourceSystem: data.source_system", "app maps backend source_system onto user");
+assertIncludes(app, "isMockAuthUser(user)", "app routes local mock users through full local workspace default");
+
+assertIncludes(capabilities, "isMockAuthUser", "capabilities expose local mock auth predicate");
+assertIncludes(capabilities, 'user.authMode === "mock"', "capabilities detect mock auth mode");
+assertIncludes(capabilities, 'user.sourceSystem === "mock"', "capabilities detect mock source system");
+assertIncludes(capabilities, 'permissions.includes("*")', "capabilities treat wildcard mock permissions as full access");
+assertOrder(capabilities, "isMockAuthUser(user)", "isSuperAdmin(user)", "permission checks must let mock auth win before normal roles");
+
+assertIncludes(sideNav, "const isMockUser = isMockAuthUser(user)", "side nav detects local mock user");
+assertIncludes(sideNav, "isAdminUser && !isMockUser", "side nav does not hide merchant centers for mock admins");
+assertIncludes(sideNav, "visibleAdminItems.length > 0", "side nav can append admin entries for mock users");
+
+assertIncludes(indexPage, "const isMockUser = isMockAuthUser(user)", "index detects local mock user");
+assertIncludes(indexPage, "isAdminRouteNav", "index distinguishes admin nav from merchant nav");
+assertIncludes(indexPage, "handleNavChange", "index routes mock nav clicks to merchant or admin state");
+assertIncludes(indexPage, "isAdminRouteNav(initialActiveNav)", "index initializes mock admin routes correctly");
 
 assertIncludes(client, "getExternalToken()", "9000 api client reads token store");
 assertIncludes(client, "Authorization = `Bearer ${token}`", "9000 api client injects bearer token");

@@ -23,6 +23,7 @@ import {
   filterCapabilityNavCenters,
   hasAdminPermission,
   hasPermission,
+  isMockAuthUser,
   isAdminLike,
   PERMISSIONS,
 } from "./features/capabilities";
@@ -44,6 +45,8 @@ export interface AppUser {
   merchantId?: string | null;
   merchantIds?: string[];
   admin?: boolean;
+  authMode?: string;
+  sourceSystem?: string;
 }
 
 function userFromAuthData(data: AuthContextData): AppUser {
@@ -58,7 +61,9 @@ function userFromAuthData(data: AuthContextData): AppUser {
     permissionItems: data.permission_items || [],
     merchantId: data.merchant_id ?? null,
     merchantIds: data.merchant_ids || [],
-    admin: hasAdminPermission({ role, permissions }),
+    admin: hasAdminPermission({ role, permissions, authMode: data.auth_mode, sourceSystem: data.source_system }),
+    authMode: data.auth_mode,
+    sourceSystem: data.source_system,
   };
 }
 
@@ -93,6 +98,10 @@ function replaceCurrentPath(path: string) {
 }
 
 function defaultPathForUser(user: AppUser): string {
+  if (isMockAuthUser(user)) {
+    const first = filterCapabilityNavCenters(user)[0];
+    return first?.path || "/";
+  }
   if (isAdminLike(user)) {
     if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
