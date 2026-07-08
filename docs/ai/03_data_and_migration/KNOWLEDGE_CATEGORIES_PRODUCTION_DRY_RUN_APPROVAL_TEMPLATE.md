@@ -187,10 +187,18 @@ production dry-run 后不能自动 apply。
 
 后续只允许进入以下独立任务之一：
 
-1. P3-C11：production dry-run 执行记录。
+1. P3-C11：production dry-run 人工执行 Runbook 和执行记录模板。
 2. P3-C12：production apply 审批模板。
 
 是否进入 P3-C12 取决于 production dry-run 结果和人工审批。即使 dry-run 通过，也不代表允许 apply。
+
+P3-C11 已生成正式人工 Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_RUNBOOK.md
+```
+
+P3-C11 仍不执行 production dry-run，不连接 production，不读取 production SQLite，不执行 apply；production 操作必须由人工/运维按 P3-C10 approval 结果执行并回填记录。
 
 ## 11. 本轮边界确认
 

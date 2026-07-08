@@ -1122,3 +1122,59 @@ production dry-run 命令必须显式传入：
 7. 不切换 `DATABASE_URL`。
 8. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 9. 不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+
+## 32. P3-C11 production dry-run 人工 Runbook 补充
+
+任务：`P3-C11-DB-9000-KNOWLEDGE-CATEGORIES-PRODUCTION-DRY-RUN-MANUAL-RUNBOOK-1`
+
+当前已新增 production dry-run Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_RUNBOOK.md
+```
+
+P3-C11 范围：
+
+1. 只生成 production dry-run 人工执行 Runbook 和执行记录模板。
+2. 只针对 9000 `knowledge_categories`。
+3. production 操作必须由人工/运维执行。
+4. 执行前必须引用 P3-C10 approval 结果。
+5. 本 Runbook 不授权 apply。
+6. 本 Runbook 不授权切换默认 `DATABASE_URL`。
+7. 本 Runbook 不授权开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+8. 不涉及 9100 / Milvus / RAG。
+
+Runbook 关键内容：
+
+1. 执行前审批确认：审批编号、审批人、审批时间、是否批准 production dry-run、是否确认不执行 `--apply / --yes`。
+2. 执行前检查：`cd <PRODUCTION_CODE_DIR>`、`git rev-parse HEAD`、`git status --short`、`git diff --check`、`docker compose -f <COMPOSE_FILE> config --services`、`docker ps`。
+3. 依赖和脚本可见性检查：容器内可能缺 `asyncpg` / `alembic`；可通过一次性容器临时安装 `requirements-docker.txt`，但不在宿主机全局安装。
+4. SQLite 只读检查与备份：确认 `<SQLITE_DB_PATH>`，读取前先备份，只读查询 `knowledge_categories` 表和源行数。
+5. PostgreSQL 只读连接检查：`POSTGRES_URL` 只脱敏记录，确认 database 为 `auto_wechat` 和当前 user。
+6. PG schema 检查：`\dt`、`select * from alembic_version`、`\d+ public.knowledge_categories`、唯一约束和 check constraint。
+7. schema 缺失时不能在本 Runbook 内执行 Alembic upgrade，必须转独立 schema-init 审批。
+8. production dry-run 命令必须显式传 `--sqlite-db-path`、`--postgres-url`、`--dry-run`，不得携带 `--apply` 或 `--yes`。
+9. 输出记录模板包含 SQLite 源行数、过滤后待处理行数、PG 表状态、Alembic revision、insert/update/skip/error、字段映射预览、异常行和最终状态。
+10. 执行后安全确认必须包含 PostgreSQL 写入 disabled、未切换 `DATABASE_URL`、未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`、未执行 Alembic upgrade、未 drop 表、未清 volume。
+
+后续判断：
+
+1. dry-run 通过不等于允许 apply。
+2. 如 source rows = 0，可记录 `SKIPPED_NO_SOURCE_ROWS`。
+3. 如 insert/update > 0 且 error = 0，进入 production apply 审批模板。
+4. 如 error > 0，先处理异常行，不允许 apply。
+5. 不允许从 dry-run 自动进入 apply。
+
+边界确认：
+
+1. 本轮只做文档。
+2. 本轮不执行 production 命令。
+3. 本轮不连接 production 数据库。
+4. 本轮不读取 production SQLite。
+5. 本轮不执行 dry-run。
+6. 本轮不执行 `--apply` / `--yes`。
+7. 本轮不写 PostgreSQL。
+8. 本轮不迁移数据。
+9. 本轮不切换 `DATABASE_URL`。
+10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+11. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。

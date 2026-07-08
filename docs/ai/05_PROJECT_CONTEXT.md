@@ -3884,3 +3884,61 @@ P3-C10 审批范围：
 11. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
 
 后续：P3-C10 审批通过后，仍只能由人工/运维执行 production dry-run，并在 P3-C11 形成执行记录；production apply 必须另走 P3-C12 审批模板。
+
+# P3-C11 knowledge_categories production dry-run 人工 Runbook 当前状态
+
+任务：`P3-C11-DB-9000-KNOWLEDGE-CATEGORIES-PRODUCTION-DRY-RUN-MANUAL-RUNBOOK-1`
+
+当前已新增 production dry-run Runbook：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_PRODUCTION_DRY_RUN_RUNBOOK.md
+```
+
+P3-C11 目标：
+
+1. 为 production 环境 `knowledge_categories` SQLite -> PostgreSQL dry-run 生成正式人工执行 Runbook 和执行记录模板。
+2. 只覆盖 9000 `knowledge_categories`。
+3. 只允许 production dry-run。
+4. 不允许 apply。
+5. 不允许切换默认 `DATABASE_URL`。
+6. 不允许开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+7. 不涉及 9100 / Milvus / RAG。
+
+Runbook 关键要求：
+
+1. production 操作必须由人工/运维执行。
+2. 执行前必须引用 P3-C10 approval 结果。
+3. 执行前检查必须覆盖 commit hash、`git status --short`、`git diff --check`、Compose services、运行容器、`<API_SERVICE>`、`<SQLITE_DB_PATH>` 和 `<POSTGRES_URL>`。
+4. 依赖检查必须确认容器内 `asyncpg` / `alembic` 和脚本可见性；不得在生产宿主机全局安装依赖。
+5. SQLite 读取前必须备份，并只读查询 `knowledge_categories` 表和行数。
+6. PostgreSQL 只读连接检查必须脱敏记录 URL，并确认 database 为 `auto_wechat`。
+7. PG schema 必须至少到 `0002_create_knowledge_categories`，且 `knowledge_categories` 表、唯一约束、check constraint 存在。
+8. schema 缺失时不能在 P3-C11 内执行 Alembic upgrade，必须转独立 schema-init 审批。
+9. dry-run 命令必须显式传 `--sqlite-db-path`、`--postgres-url`、`--dry-run`，不得携带 `--apply` 或 `--yes`。
+10. 输出记录必须包含 SQLite 源行数、过滤后待处理行数、PG 表状态、Alembic revision、insert/update/skip/error、字段映射预览、异常行、PostgreSQL 写入 disabled 和最终状态。
+
+失败处理：
+
+1. 依赖失败：停止，记录，不改宿主机。
+2. PG 连接失败：停止，记录。
+3. schema 缺失：停止，转 schema-init 独立审批。
+4. `error > 0`：停止，不 apply。
+5. 出现写入迹象：立即停止并升级事故排查。
+6. 不现场临时修 production 配置。
+
+边界确认：
+
+1. 本轮只改文档。
+2. 本轮不执行 production 命令。
+3. 本轮不连接 production 数据库。
+4. 本轮不读取 production SQLite。
+5. 本轮不执行 production dry-run。
+6. 本轮不执行 `--apply` / `--yes`。
+7. 本轮不写 PostgreSQL。
+8. 本轮不迁移数据。
+9. 本轮不切换 `DATABASE_URL`。
+10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+11. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+
+后续：production dry-run 通过不等于允许 apply。若 source rows = 0，可记录 `SKIPPED_NO_SOURCE_ROWS`；若 insert/update > 0 且 error = 0，才进入 P3-C12 production apply 审批模板。不允许自动进入 apply。
