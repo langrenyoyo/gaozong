@@ -3521,3 +3521,39 @@ P3-C2-FIX 已修复唯一约束 inspect 误判：smoke 现在以 `pg_constraint`
 4. 本轮不插入真实业务数据。
 5. 本轮不改业务接口、不改 9100、不改 Milvus / RAG。
 6. P3-C3 / P3 后续才处理正式数据迁移、更多表和生产灰度切换。
+
+# P3-C3 knowledge_categories SQLite -> PostgreSQL 数据迁移设计当前状态
+
+任务：`P3-C3-DB-9000-KNOWLEDGE-CATEGORIES-DATA-MIGRATION-DESIGN-1`
+
+当前已新增 9000 `knowledge_categories` 最小数据迁移设计文档：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_SQLITE_TO_POSTGRES_MIGRATION_DESIGN.md
+```
+
+当前状态：
+
+1. P3-C3 只设计 `knowledge_categories` 数据迁移，不实现迁移脚本。
+2. 本轮不连接 PostgreSQL，不读取真实 SQLite，不迁移真实数据。
+3. 迁移目标仍是 `auto_wechat` database 中 revision `0002_create_knowledge_categories` 或更高版本的 `knowledge_categories` 表。
+4. 当前 SQLite 字段以 `category_key` 为稳定标识；PostgreSQL 目标需要同时写 `"key"` 和 `category_key`，并满足 `key = category_key`。
+5. `base` 分类仍由服务层虚拟补充；最小迁移不主动生成新的 base system 行，已有真实 base 行按普通历史行保留。
+6. 幂等策略使用 `scope_type + merchant_id + key` 唯一约束，未来脚本推荐 `ON CONFLICT (scope_type, merchant_id, key) DO UPDATE`。
+7. 未来脚本必须默认 `--dry-run`，只有显式 `--apply` 或 `--yes` 才允许真实写入。
+
+后续拆分：
+
+1. P3-C4：实现 dry-run-only 迁移脚本骨架。
+2. P3-C5：实现 dev PG apply smoke。
+3. P3-C6：接入 `GET /knowledge-categories` PG 数据对照。
+4. P3-C7：宝塔 staging / 灰度迁移预案。
+
+边界确认：
+
+1. 默认运行仍是 SQLite。
+2. 本轮未改业务代码。
+3. 本轮未改 Alembic revision。
+4. 本轮未改 docker-compose。
+5. 本轮未改 9100 / Milvus / RAG。
+6. 本轮未触发 LLM、抖音发送、私信发送或自动回复 gate。

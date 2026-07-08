@@ -515,3 +515,33 @@ docker compose -f docker-compose.dev.yml stop postgres
 6. 不修改 9100 Alembic 环境。
 7. 不把 smoke 验证等同于生产切换。
 8. P3-C3 / P3 后续任务再处理正式数据迁移、更多表和灰度切换。
+
+## 15. P3-C3 knowledge_categories 数据迁移设计
+
+任务：`P3-C3-DB-9000-KNOWLEDGE-CATEGORIES-DATA-MIGRATION-DESIGN-1`
+
+当前已新增 9000 `knowledge_categories` SQLite -> PostgreSQL 最小数据迁移设计文档：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_SQLITE_TO_POSTGRES_MIGRATION_DESIGN.md
+```
+
+设计结论：
+
+1. 本阶段只设计数据迁移方案，不实现迁移脚本。
+2. 迁移范围只覆盖 9000 `knowledge_categories`，不迁移其它 9000 表，不迁移 9100，不迁移 Milvus。
+3. SQLite 源为当前 `auto_wechat.db` 的 `knowledge_categories` 表；SQLite 路径未来必须通过参数或现有配置传入，不硬编码宝塔路径。
+4. PostgreSQL 目标为 `auto_wechat` database 的正式 `knowledge_categories` 表，要求 Alembic revision 为 `0002_create_knowledge_categories` 或更高。
+5. 当前 SQLite 表只有 `category_key`，PostgreSQL 正式表同时保留 `"key"` 和 `category_key`；未来迁移时二者都写入 SQLite `category_key`，满足 `key = category_key`。
+6. `base` 分类当前仍由服务层虚拟补充；最小迁移不主动生成新的 base system 行。如果 SQLite 已有真实 base 行，按普通已有行迁移。
+7. 幂等依据使用 PostgreSQL 唯一约束 `scope_type + merchant_id + key`，推荐 `ON CONFLICT (scope_type, merchant_id, key) DO UPDATE`。
+8. 未来脚本必须默认 `--dry-run`，只有显式 `--apply` 或 `--yes` 才允许写入。
+
+边界确认：
+
+1. 本轮未连接 PostgreSQL。
+2. 本轮未读取真实 SQLite。
+3. 本轮未迁移真实数据。
+4. 本轮未修改 `0002_create_knowledge_categories.py`。
+5. 本轮未切换 9000 默认运行路径。
+6. P3-C4 才实现 dry-run-only 迁移脚本骨架。
