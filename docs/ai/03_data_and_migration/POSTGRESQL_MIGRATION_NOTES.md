@@ -901,6 +901,7 @@ Runbook 结论：
 5. P3-C8 只读 dry-run 禁止 `--apply`、`--yes`、Alembic upgrade、重启 9000、切换默认 `DATABASE_URL` 或开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 6. 执行记录必须包含 SQLite 源行数、过滤后行数、PG 表状态、Alembic revision、预计 insert / update / skip / error、异常行摘要和安全确认。
 7. 宝塔执行结果必须由人工贴回后再判断是否进入 P3-C9。
+8. 人工已贴回 P3-C8 执行结果：dry-run 输出 `DRY_RUN_PASS`，详见第 29 节。
 
 边界确认：
 
@@ -923,13 +924,15 @@ Runbook 结论：
 docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
 ```
 
-P3-C8 blocked 原因：
+P3-C8 历史 blocked 原因：
 
 1. Baota staging SQLite 已确认路径和备份，且 `knowledge_categories` 表存在。
 2. Baota staging SQLite `knowledge_categories_count = 0`。
 3. PostgreSQL dev 容器可启动且 healthy，`auto_wechat` database 存在。
 4. `auto_wechat` database 当前无表，`alembic_version` 不存在。
 5. P3-C8 dry-run 需要只读检查 PostgreSQL schema，因此被 PG schema 未初始化阻塞。
+
+该阻塞已通过 P3-C8B schema 初始化解除，后续 P3-C8 dry-run 已通过，详见第 29 节。
 
 Runbook 目标：
 
@@ -950,3 +953,64 @@ Runbook 目标：
 7. 本轮不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 8. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` 或 `.env.example`。
 9. 本轮不操作 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+## 29. P3-C8B schema 初始化与 P3-C8 dry-run 执行记录补充
+
+任务：`P3-C8-C8B-BAOTA-STAGING-SCHEMA-INIT-AND-DRY-RUN-EXECUTION-RECORD-1`
+
+本阶段只补充人工执行记录。本机 VibeCoding 不执行宝塔命令，不连接 PostgreSQL，不读取 SQLite，不迁移数据。
+
+### 29.1 P3-C8B schema 初始化结果
+
+人工已在 Baota staging 完成 `auto_wechat` PostgreSQL schema 初始化：
+
+1. PostgreSQL dev 容器 `auto-wechat-postgres-dev` 已启动并 healthy。
+2. `auto_wechat` database 存在。
+3. 初始化前 `auto_wechat` 库无表、无 `alembic_version`。
+4. 使用一次性 `auto-wechat-api` 容器，挂载宿主机代码目录。
+5. 使用临时 `DATABASE_URL`，未修改 `.env`。
+6. 执行 `alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade 0002_create_knowledge_categories`。
+7. 初始化后 `alembic_version = 0002_create_knowledge_categories`。
+8. `knowledge_categories` 表存在。
+9. `uk_knowledge_categories_scope_merchant_key` UNIQUE 约束存在。
+10. `ck_knowledge_categories_key_matches_category_key` CHECK 约束存在。
+11. PG `knowledge_categories` 行数为 0。
+
+说明：schema 初始化会写 PostgreSQL schema，但不迁移 SQLite 业务数据，不写 PG 业务数据。
+
+### 29.2 P3-C8 dry-run 结果
+
+人工已完成 `knowledge_categories` SQLite -> PostgreSQL dry-run：
+
+1. SQLite 路径：`docker-data/auto_wechat_9000/auto_wechat.db`。
+2. SQLite 备份：`backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`。
+3. SQLite `knowledge_categories` 表存在。
+4. SQLite 源行数: 0。
+5. 过滤后待处理行数: 0。
+6. PostgreSQL 目标表存在: True。
+7. Alembic revision: `0002_create_knowledge_categories`。
+8. Alembic revision 至少为 `0002_create_knowledge_categories`: True。
+9. 预计 insert: 0。
+10. 预计 update: 0。
+11. 预计 skip: 0。
+12. 异常行数量: 0。
+13. 字段映射预览: `[]`。
+14. PostgreSQL 写入: disabled。
+15. 最终输出：`DRY_RUN_PASS`。
+
+说明：当前 SQLite 源行数为 0，所以 dry-run insert / update / skip 均为 0；这不代表生产数据迁移已完成。
+
+### 29.3 收尾与边界确认
+
+1. `POSTGRES_URL` 已 unset。
+2. PostgreSQL dev 容器已停止。
+3. `ps postgres` 无运行容器。
+4. 未执行 `--apply` / `--yes`。
+5. 未写 PostgreSQL 业务数据。
+6. 未迁移 SQLite 数据。
+7. 未切换 `DATABASE_URL`。
+8. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+9. 未改业务代码、迁移脚本、Alembic revision、docker-compose 或 `.env`。
+10. 未操作 9100 / Milvus / RAG。
+
+结论：P3-C8B 已执行通过，P3-C8 已从 blocked 更新为 dry-run passed。可以进入 P3-C9 前的人工审批，但 P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。

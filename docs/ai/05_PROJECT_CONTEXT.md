@@ -3685,7 +3685,7 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_GRAY_MIGRATION_
 
 任务：`P3-C8-BAOTA-STAGING-DRY-RUN-MANUAL-RUNBOOK-1`
 
-当前已新增人工 Runbook 与执行记录模板：
+当前已新增人工 Runbook 与执行记录：
 
 ```text
 docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.md
@@ -3694,12 +3694,27 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.
 当前阶段定位：
 
 1. P3-C8 不由本机 VibeCoding 直接执行宝塔命令。
-2. 本机只生成 Baota staging dry-run 人工执行 Runbook 和执行记录模板。
-3. 宝塔执行人需要在宿主机代码目录手动执行 `scripts/migrate_knowledge_categories_sqlite_to_postgres.py --dry-run`。
-4. dry-run 必须显式传入 `--sqlite-db-path` 和 `--postgres-url`，不得依赖隐式 `DATABASE_URL`。
-5. Runbook 要求记录 commit hash、工作区状态、Python 依赖、SQLite 路径、SQLite backup、脱敏 PostgreSQL URL、PG 表状态、Alembic revision、预计 insert / update / skip / error 和异常行。
-6. P3-C8 不执行 `scripts/smoke_auto_wechat_alembic_knowledge_categories.py` 作为默认步骤，因为该脚本会执行 Alembic `upgrade head`。
-7. 宝塔 dry-run 结果必须由人工贴回后再判断是否进入 P3-C9。
+2. 本机只生成 Baota staging dry-run 人工执行 Runbook，并记录人工贴回结果。
+3. dry-run 必须显式传入 `--sqlite-db-path` 和 `--postgres-url`，不得依赖隐式 `DATABASE_URL`。
+4. P3-C8 不执行 `scripts/smoke_auto_wechat_alembic_knowledge_categories.py` 作为默认步骤，因为该脚本会执行 Alembic `upgrade head`。
+5. P3-C8B schema 初始化已完成后，人工已执行 P3-C8 dry-run 并贴回结果。
+
+P3-C8 人工 dry-run 结果：
+
+1. SQLite 路径：`docker-data/auto_wechat_9000/auto_wechat.db`。
+2. SQLite 已备份到 `backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`。
+3. SQLite `knowledge_categories` 表存在，SQLite 源行数: 0。
+4. PostgreSQL 目标表存在: True。
+5. Alembic revision: `0002_create_knowledge_categories`。
+6. Alembic revision 至少为 `0002_create_knowledge_categories`: True。
+7. 过滤后待处理行数: 0。
+8. 预计 insert / update / skip 均为 0。
+9. 异常行数量: 0。
+10. 字段映射预览: `[]`。
+11. PostgreSQL 写入: disabled。
+12. 最终输出：`DRY_RUN_PASS`。
+
+说明：当前 SQLite 源行数为 0，所以 dry-run 计划为 0/0/0；本次 dry-run 未写 PostgreSQL 业务数据，不代表生产数据迁移已完成。
 
 边界确认：
 
@@ -3719,13 +3734,13 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.
 
 任务：`P3-C8B-BAOTA-STAGING-POSTGRES-SCHEMA-INIT-MANUAL-RUNBOOK-1`
 
-当前已新增人工 Runbook：
+当前已新增人工 Runbook 与人工执行记录：
 
 ```text
 docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
 ```
 
-P3-C8 当前 blocked 摘要：
+P3-C8 历史 blocked 摘要：
 
 1. 宝塔 staging SQLite 路径已确认：`docker-data/auto_wechat_9000/auto_wechat.db`。
 2. SQLite `knowledge_categories` 表存在，当前 `knowledge_categories_count = 0`。
@@ -3736,15 +3751,20 @@ P3-C8 当前 blocked 摘要：
 7. P3-C8 dry-run 被 PG schema 未初始化阻塞。
 8. PostgreSQL 容器已停止。
 
-P3-C8B Runbook 定位：
+该 blocked 状态已通过 P3-C8B schema 初始化解除。
 
-1. 本机 VibeCoding 不操作宝塔，只生成 Runbook。
-2. 宝塔命令必须由人工执行，并贴回执行结果。
-3. 目标只是在 Baota staging PostgreSQL 空库中执行 `migrations/postgres/auto_wechat/alembic.ini` 到 `0002_create_knowledge_categories`。
-4. 只创建 `alembic_version`、`knowledge_categories` 表、索引、唯一约束和 check constraint。
-5. `migrations/postgres/auto_wechat/env.py` 当前读取临时注入的 `DATABASE_URL`，不使用 `ALEMBIC_DATABASE_URL`。
-6. 成功后回到 P3-C8 dry-run；P3-C8 仍只 dry-run，不写 PostgreSQL。
-7. P3-C9 才讨论 Baota staging apply + API contrast。
+P3-C8B 执行结果：
+
+1. 人工已使用一次性 `auto-wechat-api` 容器和临时 `DATABASE_URL` 执行 schema 初始化。
+2. 执行命令为 `alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade 0002_create_knowledge_categories`。
+3. `alembic_version` 表存在。
+4. `knowledge_categories` 表存在。
+5. `alembic_version = 0002_create_knowledge_categories`。
+6. `uk_knowledge_categories_scope_merchant_key` UNIQUE 约束存在。
+7. `ck_knowledge_categories_key_matches_category_key` CHECK 约束存在。
+8. PG `knowledge_categories` 行数为 0。
+9. schema 初始化写入 PostgreSQL schema，但未迁移 SQLite 业务数据，未写 PG 业务数据。
+10. P3-C9 才讨论 Baota staging apply + API contrast；不能自动执行 production apply 或真实生产数据迁移。
 
 边界确认：
 
@@ -3758,3 +3778,14 @@ P3-C8B Runbook 定位：
 8. 本轮不重启 9000。
 9. 本轮不改 `.env`、docker-compose、业务代码、迁移脚本或 Alembic revision。
 10. 本轮不操作 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+收尾确认：
+
+1. `POSTGRES_URL` 已 unset。
+2. PostgreSQL dev 容器已停止。
+3. `ps postgres` 无运行容器。
+4. 未执行 `--apply` / `--yes`。
+5. 未切换 `DATABASE_URL`。
+6. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+结论：P3-C8B 已执行通过，P3-C8 已从 blocked 更新为 dry-run passed。可以进入 P3-C9 前的人工审批，但 P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。

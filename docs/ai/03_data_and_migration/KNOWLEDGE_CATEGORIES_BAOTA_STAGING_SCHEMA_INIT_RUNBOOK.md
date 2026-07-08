@@ -2,7 +2,9 @@
 
 任务：`P3-C8B-BAOTA-STAGING-POSTGRES-SCHEMA-INIT-MANUAL-RUNBOOK-1`
 
-范围：本文用于指导宝塔执行人在 Baota staging PostgreSQL 空库中执行 `auto_wechat` Alembic migration 到 `0002_create_knowledge_categories`，为后续 P3-C8 `knowledge_categories` SQLite -> PostgreSQL dry-run 提供前置 schema。本机 VibeCoding 只生成 Runbook，不执行宝塔命令，不连接 PostgreSQL，不读取 SQLite，不迁移业务数据。
+范围：本文用于指导宝塔执行人在 Baota staging PostgreSQL 空库中执行 `auto_wechat` Alembic migration 到 `0002_create_knowledge_categories`，为后续 P3-C8 `knowledge_categories` SQLite -> PostgreSQL dry-run 提供前置 schema，并记录人工回传的执行结果。本机 VibeCoding 不执行宝塔命令，不连接 PostgreSQL，不读取 SQLite，不迁移业务数据。
+
+当前状态：P3-C8B 已由人工在 Baota staging 执行通过。schema 初始化写入了 PostgreSQL schema，只创建 `alembic_version` 与 `knowledge_categories` 表、索引、唯一约束、check constraint；未迁移 SQLite 业务数据，未执行 `--apply` / `--yes`，未切换 9000 默认 `DATABASE_URL`，未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 
 ## 1. 本机 VibeCoding 边界
 
@@ -49,7 +51,7 @@
 7. 不开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 8. 不重启 9000。
 
-## 3. P3-C8 当前 blocked 摘要
+## 3. P3-C8 历史 blocked 摘要
 
 人工 P3-C8 前置检查已确认：
 
@@ -73,7 +75,7 @@ backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db
 8. P3-C8 dry-run 被阻塞，原因是 PG schema 未初始化。
 9. PostgreSQL 容器已停止。
 
-结论：migration 文件本身不是本轮问题；需要先在 Baota staging PostgreSQL 空库中执行 `auto_wechat` Alembic schema 初始化，再回到 P3-C8 只读 dry-run。
+历史结论：migration 文件本身不是阻塞原因；当时需要先在 Baota staging PostgreSQL 空库中执行 `auto_wechat` Alembic schema 初始化，再回到 P3-C8 只读 dry-run。该阻塞已通过 P3-C8B 人工执行解除。
 
 ## 4. 前置检查
 
@@ -393,3 +395,42 @@ knowledge_categories 行数：<COUNT>
 结论：<SCHEMA_INIT_PASS / SCHEMA_INIT_FAIL>
 后续：<回到 P3-C8 dry-run / 停止并拆后续任务>
 ```
+
+## 13. P3-C8B 人工执行记录（2026-07-08）
+
+人工已在 Baota staging 完成 schema 初始化。执行记录如下：
+
+1. PostgreSQL dev 容器 `auto-wechat-postgres-dev` 已启动并处于 healthy。
+2. `auto_wechat` database 存在。
+3. 初始化前 `auto_wechat` 库无表，`alembic_version` 不存在。
+4. 使用一次性 `auto-wechat-api` 容器执行，并挂载宿主机代码目录。
+5. 使用临时 `DATABASE_URL`，未修改 `.env`，未切换默认 `DATABASE_URL`。
+6. 执行的 migration 命令为：
+
+```text
+alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade 0002_create_knowledge_categories
+```
+
+初始化后验证结果：
+
+| 检查项 | 结果 |
+|---|---|
+| `alembic_version` 表 | 存在 |
+| `knowledge_categories` 表 | 存在 |
+| Alembic revision | `0002_create_knowledge_categories` |
+| 唯一约束 | `uk_knowledge_categories_scope_merchant_key` 存在 |
+| check constraint | `ck_knowledge_categories_key_matches_category_key` 存在 |
+| PG `knowledge_categories` 行数 | `0` |
+
+安全确认：
+
+1. schema 初始化会写 PostgreSQL schema，但未写入 PostgreSQL 业务数据。
+2. 未迁移 SQLite 数据。
+3. 未执行 `scripts/migrate_knowledge_categories_sqlite_to_postgres.py --apply --yes`。
+4. 未执行 `--apply` / `--yes`。
+5. 未修改 `.env`。
+6. 未切换 9000 默认 `DATABASE_URL`。
+7. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+8. 未操作 9100 / Milvus / RAG。
+
+结论：`SCHEMA_INIT_PASS`。P3-C8B 阻塞项已解除，可以回到 P3-C8 dry-run；P3-C8 仍只允许 dry-run，不允许 apply。

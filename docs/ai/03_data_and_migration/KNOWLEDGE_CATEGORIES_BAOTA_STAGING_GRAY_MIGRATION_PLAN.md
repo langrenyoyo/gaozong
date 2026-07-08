@@ -90,21 +90,23 @@ docker compose -f <COMPOSE_FILE> exec <POSTGRES_CONTAINER> psql -U <POSTGRES_USE
 
 注意：命令中的 `<POSTGRES_USER>`、`<POSTGRES_URL>`、`<SQLITE_DB_PATH>`、`<BACKUP_PATH>`、`<COMPOSE_FILE>`、`<API_CONTAINER>`、`<POSTGRES_CONTAINER>` 都必须由执行人按 staging 环境填写，不能把真实密码写入文档或 git。
 
-## 3A. P3-C8 当前 blocked 与 P3-C8B 前置 schema 初始化
+## 3A. P3-C8B / P3-C8 执行状态
 
-P3-C8 人工预检查已确认 Baota staging PostgreSQL `auto_wechat` database 存在，但当前为空库：
+P3-C8 人工预检查曾确认 Baota staging PostgreSQL `auto_wechat` database 存在，但当时为空库：
 
 1. `alembic_version` 不存在。
 2. `knowledge_categories` 表不存在。
 3. P3-C8 dry-run 的 PG schema 只读检查无法继续。
 
-因此在继续 P3-C8 dry-run 前，必须先执行 P3-C8B 人工 Runbook：
+该阻塞已通过 P3-C8B 人工 Runbook 解除：
 
 ```text
 docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUNBOOK.md
 ```
 
-P3-C8B 只允许把 `auto_wechat` PostgreSQL schema 初始化到 `0002_create_knowledge_categories`，不迁移 SQLite 数据，不执行 `--apply --yes`，不切换默认 `DATABASE_URL`，不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+P3-C8B 已在 Baota staging 执行通过：使用一次性 `auto-wechat-api` 容器和临时 `DATABASE_URL` 执行 `migrations/postgres/auto_wechat/alembic.ini` 到 `0002_create_knowledge_categories`。schema 初始化写入了 PostgreSQL schema，只创建 `alembic_version`、`knowledge_categories` 表、索引、唯一约束和 check constraint；未迁移 SQLite 数据，未执行 `--apply --yes`，未切换默认 `DATABASE_URL`，未默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+P3-C8 dry-run 也已执行通过，输出 `DRY_RUN_PASS`。当前 SQLite 源行数为 0，因此 dry-run 计划为 insert=0、update=0、skip=0、error=0，`PostgreSQL 写入: disabled`。PostgreSQL dev 容器已停止。
 
 ## 4. Baota staging dry-run 步骤
 
@@ -324,6 +326,40 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_SCHEMA_INIT_RUN
 ```
 
 该 Runbook 只用于在 Baota staging PostgreSQL 空库中执行 `migrations/postgres/auto_wechat/alembic.ini` 到 `0002_create_knowledge_categories`，创建 `alembic_version` 与 `knowledge_categories` schema。它不迁移 SQLite 数据，不执行数据脚本 apply，不切换 9000 默认数据库，不开启 PG pilot，不操作 9100 / Milvus / RAG。
+
+## 11B. P3-C8B / P3-C8 人工执行结果补充
+
+人工已在 Baota staging 完成两步前置执行：
+
+1. P3-C8B schema 初始化通过：
+   - PostgreSQL dev 容器 `auto-wechat-postgres-dev` 启动并 healthy。
+   - `auto_wechat` database 初始化到 `0002_create_knowledge_categories`。
+   - `alembic_version` 与 `knowledge_categories` 表存在。
+   - `uk_knowledge_categories_scope_merchant_key` UNIQUE 约束存在。
+   - `ck_knowledge_categories_key_matches_category_key` CHECK 约束存在。
+   - PG `knowledge_categories` 行数为 0。
+
+2. P3-C8 dry-run 通过：
+   - SQLite 路径：`docker-data/auto_wechat_9000/auto_wechat.db`。
+   - SQLite 备份：`backups/p3_c8/auto_wechat_knowledge_categories_p3_c8_20260708_155855.db`。
+   - SQLite 源行数: 0。
+   - 过滤后待处理行数: 0。
+   - Alembic revision: `0002_create_knowledge_categories`。
+   - 预计 insert / update / skip / error 均为 0。
+   - 字段映射预览: `[]`。
+   - PostgreSQL 写入: disabled。
+   - 最终输出：`DRY_RUN_PASS`。
+
+安全边界：
+
+1. schema 初始化写入了 PG schema；dry-run 未写 PG 业务数据。
+2. 未迁移 SQLite 数据。
+3. 未执行 `--apply` / `--yes`。
+4. 未切换 `DATABASE_URL`。
+5. 未开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. PostgreSQL dev 容器已停止。
+
+结论：可以进入 P3-C9 前的人工审批；P3-C9 不应自动执行 production apply，也不应自动迁移真实生产数据。
 
 ## 12. 本轮边界确认
 
