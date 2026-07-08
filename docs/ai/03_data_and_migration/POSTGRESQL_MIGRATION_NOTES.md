@@ -1293,3 +1293,77 @@ readiness 准入条件：
 8. 本轮不执行 dry-run / apply。
 9. 本轮不切换 `DATABASE_URL`。
 10. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+## 35. P3-D1 leads/tasks core PostgreSQL schema batch 补充
+
+任务：`P3-D1-DB-9000-POSTGRESQL-LEADS-TASKS-CORE-SCHEMA-BATCH-1`
+
+P3-D1 开始从 `knowledge_categories` 单表验证进入 9000 业务域批量 schema。当前 batch 只覆盖 4 张 P0 核心表：
+
+```text
+douyin_leads
+douyin_webhook_events
+sales_staff
+wechat_tasks
+```
+
+当前新增：
+
+```text
+migrations/postgres/auto_wechat/versions/0003_create_leads_tasks_core_tables.py
+tests/test_9000_postgres_leads_tasks_core_schema.py
+scripts/smoke_auto_wechat_alembic_leads_tasks_core.py
+```
+
+revision 链路：
+
+1. `revision = 0003_leads_tasks_core`。
+2. `down_revision = 0002_create_knowledge_categories`。
+3. `upgrade()` 只创建 `douyin_leads`、`douyin_webhook_events`、`sales_staff`、`wechat_tasks`。
+4. `downgrade()` 只 drop 本批 4 张表。
+
+只读审计摘要：
+
+1. `douyin_leads` 读写路径覆盖线索列表、详情、报表统计、销售分配、webhook 会话归并和留资字段回填。
+2. `douyin_webhook_events` 读写路径覆盖 webhook 原始事件落库、`event_key` 幂等去重、重复事件记录、解析字段保存和会话消息读取。
+3. `sales_staff` 读写路径覆盖销售配置、商户内 active 销售过滤、微信昵称/微信号检索和自动分配候选。
+4. `wechat_tasks` 读写路径覆盖 `notify_sales` / `detect_reply` 创建、pending 拉取、结果回写、检测次数和后续检测任务生成。
+
+字段与类型口径：
+
+1. 主键使用 `BigInteger` 自增。
+2. 时间字段使用 `DateTime(timezone=True)`。
+3. JSON 类字段使用 PostgreSQL `JSONB`。
+4. boolean 字段使用 PostgreSQL `Boolean`。
+5. 状态字段继续使用字符串，避免本轮引入状态枚举迁移。
+6. schema 保留 `tenant_id`、`merchant_id`、`account_open_id`、`conversation_short_id` 等隔离和归并字段。
+
+QPS600 相关 schema 起点：
+
+1. `douyin_webhook_events.event_key` 建唯一约束，作为 webhook 幂等键。
+2. `douyin_leads(account_open_id, conversation_short_id)` 保留唯一约束，延续会话归并口径。
+3. `douyin_leads` 建商户更新时间、商户状态更新时间、商户账号会话、销售状态索引。
+4. `douyin_webhook_events` 建商户时间、事件时间、账号会话、open_id 时间和消息 ID 索引。
+5. `sales_staff` 建商户状态、商户微信昵称、商户微信号索引。
+6. `wechat_tasks` 建商户状态时间、任务类型状态时间、线索任务类型、销售状态索引。
+
+dev smoke 口径：
+
+1. `scripts/smoke_auto_wechat_alembic_leads_tasks_core.py` 只读取 `SMOKE_DATABASE_URL`。
+2. smoke 拒绝 SQLite URL，并脱敏展示 PostgreSQL URL。
+3. smoke 执行 `alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head`。
+4. smoke 只读验证 `alembic_version` 到 `0003_leads_tasks_core`、4 张表、关键字段、关键索引和关键约束。
+5. smoke 不插入业务数据，不迁移 SQLite 数据，不执行 apply。
+
+边界确认：
+
+1. 本轮只新增 PostgreSQL schema batch、静态测试、dev smoke 和文档。
+2. 本轮不迁移 SQLite 数据。
+3. 本轮不执行 apply。
+4. 本轮不切换默认 `DATABASE_URL`。
+5. 本轮不改业务接口默认数据库。
+6. 本轮不连接宝塔生产。
+7. 本轮不改 9100 / Milvus / RAG。
+8. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+后续：P3-D1 只是核心链路 schema 起点；后续仍需针对本批表补数据迁移 dry-run、受控 dev apply smoke、SQLite / PG API contrast、staging dry-run、production dry-run 与是否 apply 的人工判断，不能直接切换默认数据库。

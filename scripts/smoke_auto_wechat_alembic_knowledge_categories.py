@@ -27,6 +27,10 @@ from app.database_url import parse_database_url
 SMOKE_ENV_NAME = "SMOKE_DATABASE_URL"
 ALEMBIC_CONFIG_PATH = PROJECT_ROOT / "migrations" / "postgres" / "auto_wechat" / "alembic.ini"
 EXPECTED_REVISION = "0002_create_knowledge_categories"
+ACCEPTED_REVISIONS = {
+    EXPECTED_REVISION,
+    "0003_leads_tasks_core",
+}
 EXPECTED_TABLE = "knowledge_categories"
 EXPECTED_COLUMNS = [
     "id",
@@ -252,9 +256,11 @@ async def inspect_with_asyncpg(database_url: str) -> InspectionResult:
 
 
 def verify_inspection(result: InspectionResult) -> None:
-    if result.current_revision != EXPECTED_REVISION:
+    if result.current_revision not in ACCEPTED_REVISIONS:
         raise SmokeVerificationError(
-            f"alembic_version 不在 head: actual={result.current_revision}, expected={EXPECTED_REVISION}"
+            "alembic_version 未包含 knowledge_categories revision: "
+            f"actual={result.current_revision}, expected_at_least={EXPECTED_REVISION}, "
+            f"accepted={sorted(ACCEPTED_REVISIONS)}"
         )
     _assert_contains("字段", result.columns, EXPECTED_COLUMNS)
     _assert_contains("索引", result.indexes, EXPECTED_INDEXES)

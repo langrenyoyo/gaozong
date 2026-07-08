@@ -4041,3 +4041,61 @@ docs/ai/03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md
 7. 本轮不切换 `DATABASE_URL`。
 8. 本轮不默认开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
 9. 本轮不提交 `.venv-p3c8/`、`backups/`、`docs/superpowers/` 等非本轮文件。
+
+# P3-D1 leads/tasks core PostgreSQL schema batch 当前状态
+
+任务：`P3-D1-DB-9000-POSTGRESQL-LEADS-TASKS-CORE-SCHEMA-BATCH-1`
+
+当前已从 `knowledge_categories` 单表链路进入 9000 业务域批量 PostgreSQL schema。本批只覆盖 4 张 P0 核心表：
+
+1. `douyin_leads`
+2. `douyin_webhook_events`
+3. `sales_staff`
+4. `wechat_tasks`
+
+新增文件：
+
+```text
+migrations/postgres/auto_wechat/versions/0003_create_leads_tasks_core_tables.py
+tests/test_9000_postgres_leads_tasks_core_schema.py
+scripts/smoke_auto_wechat_alembic_leads_tasks_core.py
+```
+
+审计摘要：
+
+1. `DouyinLead` 当前用于线索列表、详情、报表统计、销售分配、webhook 会话归并和留资字段回填。
+2. `DouyinWebhookEvent` 当前用于 webhook 原始事件落库、`event_key` 幂等、重复事件记录、解析字段保存和会话消息读取。
+3. `SalesStaff` 当前用于销售配置、商户隔离、active 销售过滤、微信昵称/微信号检索和分配候选。
+4. `WechatTask` 当前用于 `notify_sales` / `detect_reply` 任务创建、pending 拉取、结果回写、检测次数和后续检测任务生成。
+
+schema 摘要：
+
+1. revision 为 `0003_leads_tasks_core`，接在 `0002_create_knowledge_categories` 后。
+2. 4 张表主键使用 PostgreSQL `BigInteger` 自增。
+3. 时间字段使用 `DateTime(timezone=True)`。
+4. JSON 类字段使用 PostgreSQL `JSONB`。
+5. webhook 幂等字段 `event_key` 建唯一约束。
+6. 线索会话归并字段 `account_open_id + conversation_short_id` 保留唯一约束。
+7. `douyin_leads`、`douyin_webhook_events`、`sales_staff`、`wechat_tasks` 均已补核心查询索引，作为 QPS600 索引落地起点。
+
+dev smoke 摘要：
+
+1. `scripts/smoke_auto_wechat_alembic_leads_tasks_core.py` 只从 `SMOKE_DATABASE_URL` 读取 PostgreSQL URL。
+2. smoke 拒绝 SQLite URL，并脱敏输出 URL。
+3. smoke 执行 auto_wechat Alembic `upgrade head`。
+4. smoke 只读验证 revision、4 张表、关键字段、索引和约束。
+5. smoke 不写业务数据，不迁移 SQLite 数据，不执行 apply。
+
+边界确认：
+
+1. 本轮允许新增 PostgreSQL Alembic migration、schema 静态测试、dev PostgreSQL migration smoke 和文档。
+2. 本轮不迁移 SQLite 数据。
+3. 本轮不执行 apply。
+4. 本轮不切换 `DATABASE_URL`。
+5. 本轮不改业务接口默认数据库。
+6. 本轮不连接宝塔生产。
+7. 本轮不改 9100 / Milvus / RAG。
+8. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
+9. 本轮不提交 `.venv-p3c8/`、`backups/`、`docs/superpowers/` 等非本轮文件。
+
+后续：P3-D1 只是线索与任务核心链路的 PostgreSQL schema 起点。后续还需要本批表的数据迁移 dry-run、受控 dev apply smoke、SQLite / PG API contrast、staging dry-run、production dry-run 和是否 apply 的人工判断；当前仍不能切换 9000 默认 `DATABASE_URL` 到 PostgreSQL。

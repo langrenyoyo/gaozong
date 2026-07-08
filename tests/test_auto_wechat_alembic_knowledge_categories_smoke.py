@@ -112,6 +112,44 @@ def test_pg_constraint_unique_result_is_used_for_unique_constraint_check():
     )
 
 
+def test_knowledge_smoke_accepts_later_head_revision_when_0002_is_in_lineage():
+    from scripts.smoke_auto_wechat_alembic_knowledge_categories import (
+        EXPECTED_CHECK_CONSTRAINTS,
+        EXPECTED_COLUMNS,
+        EXPECTED_INDEXES,
+        InspectionResult,
+        parse_pg_constraints,
+        verify_inspection,
+    )
+
+    constraints = parse_pg_constraints(
+        [
+            {
+                "conname": "uk_knowledge_categories_scope_merchant_key",
+                "contype": b"u",
+                "definition": "UNIQUE (scope_type, merchant_id, key)",
+            },
+            {
+                "conname": "ck_knowledge_categories_key_matches_category_key",
+                "contype": b"c",
+                "definition": 'CHECK (("key")::text = (category_key)::text)',
+            },
+        ]
+    )
+
+    verify_inspection(
+        InspectionResult(
+            current_revision="0003_leads_tasks_core",
+            columns=list(EXPECTED_COLUMNS),
+            indexes=list(EXPECTED_INDEXES),
+            pg_indexes=[],
+            pg_constraints=constraints,
+            unique_constraints=[],
+            check_constraints=list(EXPECTED_CHECK_CONSTRAINTS),
+        )
+    )
+
+
 def test_missing_unique_constraint_error_includes_pg_constraint_and_pg_indexes_details():
     from scripts.smoke_auto_wechat_alembic_knowledge_categories import (
         EXPECTED_CHECK_CONSTRAINTS,

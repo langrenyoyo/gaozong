@@ -276,3 +276,61 @@ QPS600 不能只压一个接口，至少拆分以下场景：
 3. 每个表组都沿用 `knowledge_categories` 的闭环：schema -> dry-run -> dev smoke -> API contrast -> staging dry-run -> production dry-run -> 是否 apply 判断。
 4. QPS600 路线与切库路线并行推进，但 QPS600 结论只能由压测和数据库观测数据确认。
 5. `knowledge_categories` 链路可阶段性关闭；后续除非出现源数据，否则 P3-C12 production apply 建议保持 `SKIPPED_NO_SOURCE_ROWS`。
+
+## 10. P3-D1 线索与任务核心 schema batch
+
+任务：`P3-D1-DB-9000-POSTGRESQL-LEADS-TASKS-CORE-SCHEMA-BATCH-1`
+
+P3-D1 从单表试点进入业务域批量 PostgreSQL schema。当前 batch 只覆盖 4 张 P0 核心表：
+
+1. `douyin_leads`
+2. `douyin_webhook_events`
+3. `sales_staff`
+4. `wechat_tasks`
+
+新增 PostgreSQL revision：
+
+```text
+migrations/postgres/auto_wechat/versions/0003_create_leads_tasks_core_tables.py
+```
+
+新增 dev schema smoke：
+
+```text
+scripts/smoke_auto_wechat_alembic_leads_tasks_core.py
+```
+
+新增静态测试：
+
+```text
+tests/test_9000_postgres_leads_tasks_core_schema.py
+```
+
+### 10.1 只读审计摘要
+
+1. `DouyinLead` 当前承担线索列表、线索详情、报表统计、webhook 会话归并和销售分配主路径。
+2. `DouyinWebhookEvent` 当前承担 webhook 原始事件、解析字段、`event_key` 幂等去重、重复事件记录和会话消息读取。
+3. `SalesStaff` 当前承担销售配置、商户内 active 销售过滤、微信昵称/微信号检索和分配候选。
+4. `WechatTask` 当前承担 `notify_sales` / `detect_reply` Local Agent 任务创建、pending 拉取、结果回写和后续检测任务生成。
+5. 现有主路径仍使用同步 SQLAlchemy session；P3-D1 只补 PostgreSQL schema，不做 async 改造。
+
+### 10.2 索引与幂等落地
+
+1. `douyin_webhook_events.event_key` 建唯一约束，作为 webhook 幂等保护的 schema 起点。
+2. `douyin_leads(account_open_id, conversation_short_id)` 保留唯一约束，延续会话维度线索归并口径。
+3. `douyin_leads` 增加 `merchant_id + updated_at`、`merchant_id + status + updated_at`、`merchant_id + account_open_id + conversation_short_id`、`assigned_staff_id + status` 索引。
+4. `sales_staff` 增加 `merchant_id + status`、`merchant_id + wechat_nickname`、`merchant_id + wechat_id` 索引，不破坏同商户多销售逻辑。
+5. `wechat_tasks` 增加 `merchant_id + status + created_at`、`task_type + status + created_at`、`lead_id + task_type`、`staff_id + status` 索引。
+
+### 10.3 边界确认
+
+1. P3-D1 只建立 PostgreSQL schema batch。
+2. 本轮不迁移 SQLite 数据。
+3. 本轮不执行 apply。
+4. 本轮不切换 `DATABASE_URL`。
+5. 本轮不改业务接口默认数据库。
+6. 本轮不连接宝塔生产。
+7. 本轮不改 9100 / Milvus / RAG。
+8. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
+
+后续仍需为该 batch 增加 SQLite -> PostgreSQL 数据迁移 dry-run、dev apply smoke、核心接口 SQLite / PG API contrast、staging dry-run 与 production dry-run 记录。P3-D1 不能被解读为 9000 已可切换默认数据库。
