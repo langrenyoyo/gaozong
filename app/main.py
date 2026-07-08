@@ -7,7 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
-from app.database import engine, Base
+from app import config
+from app.database import (
+    Base,
+    close_async_database_runtime,
+    engine,
+    get_database_runtime,
+    init_async_database_runtime,
+)
 from app.config import CORS_ORIGINS
 from app.routers import (
     agent,
@@ -140,6 +147,16 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def on_startup():
+        if config.KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED:
+            database_runtime = get_database_runtime()
+            if database_runtime.backend == "postgresql":
+                init_async_database_runtime(database_runtime.raw_url)
+            else:
+                logger.info(
+                    "async_db_runtime stage=startup_skip reason=database_backend_not_postgresql backend=%s",
+                    database_runtime.backend,
+                )
+
         scheduler.start()
 
         # P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。
@@ -166,7 +183,8 @@ def create_app() -> FastAPI:
         start_desktop_overlay()
 
     @app.on_event("shutdown")
-    def on_shutdown():
+    async def on_shutdown():
+        await close_async_database_runtime()
         scheduler.stop()
         wechat_auto_detect_scheduler.stop()
         # P8-4：释放热键 + 关闭桌面提示

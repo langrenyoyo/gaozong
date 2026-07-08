@@ -3301,3 +3301,26 @@ GET /knowledge-categories
 3. 本轮未改 `POST /knowledge-categories`、Agent 分类写接口、表结构或业务 SQL。
 4. 本轮未改 9100、Milvus、RAG、LLM、抖音发送、私信发送或自动回复 gate。
 5. 后续 P2-F4 才做试点运行开关验证；P2-F5 再做 SQLite / PostgreSQL 对照测试。
+
+# P2-F4 9000 async PG 生命周期接入当前状态
+
+任务：`P2-F4-DB-9000-KNOWLEDGE-CATEGORIES-ASYNC-PG-SWITCH-LIFECYCLE-1`
+
+当前已将 9000 async PostgreSQL runtime 接入 `app/main.py` startup / shutdown 生命周期，用于后续 `GET /knowledge-categories` 试点运行验证。
+
+当前行为：
+
+1. `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED=false` 时，startup 不初始化 async PG runtime，默认仍走 SQLite 同步路径。
+2. 开关为 true 但 `DATABASE_URL` 仍为 SQLite 时，startup 跳过 async PG 初始化，不创建 engine / pool。
+3. 开关为 true 且 `DATABASE_URL=postgresql+asyncpg://...` 时，startup 才初始化 async PG runtime。
+4. `postgresql://` 和 `postgresql+psycopg://` 不作为 9000 async PG runtime 初始化入口。
+5. shutdown 会调用 `close_async_database_runtime()`，支持重复调用。
+6. `GET /knowledge-categories` 开关开启但 runtime 不可用时，返回 `KNOWLEDGE_CATEGORIES_ASYNC_PG_RUNTIME_UNAVAILABLE`。
+
+边界：
+
+1. 本轮不连接真实 PostgreSQL。
+2. 本轮不切默认 `DATABASE_URL`，不切默认流量。
+3. 本轮不创建 PostgreSQL 业务表，不改表结构，不跑 Alembic，不做 SQLite / PostgreSQL 数据对照。
+4. 本轮不改 9100、Milvus、RAG、LLM、抖音发送、私信发送或自动回复 gate。
+5. P2-F5 才做 SQLite / PostgreSQL 对照验证；QPS600 仍需后续压测与索引、事务、连接池参数调优。
