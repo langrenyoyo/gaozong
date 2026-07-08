@@ -26,8 +26,7 @@ def test_parse_args_supports_required_dry_run_options():
     assert args.dry_run is True
 
 
-@pytest.mark.parametrize("flag", ["--apply", "--yes"])
-def test_apply_and_yes_are_rejected_in_p3_c4(flag):
+def test_apply_requires_yes_and_yes_requires_apply():
     from scripts.migrate_knowledge_categories_sqlite_to_postgres import MigrationConfigurationError, parse_args, validate_args
 
     args = parse_args(
@@ -35,12 +34,65 @@ def test_apply_and_yes_are_rejected_in_p3_c4(flag):
             "--sqlite-db-path",
             "data/source.db",
             "--postgres-url",
-            "postgresql+asyncpg://auto_wechat:secret@postgres:5432/auto_wechat",
-            flag,
+            "postgresql+asyncpg://auto_wechat:secret@127.0.0.1:5432/auto_wechat",
+            "--apply",
         ]
     )
+    with pytest.raises(MigrationConfigurationError, match="--apply 必须同时传入 --yes"):
+        validate_args(args, env={})
 
-    with pytest.raises(MigrationConfigurationError, match="apply mode is not implemented in P3-C4"):
+    args = parse_args(
+        [
+            "--sqlite-db-path",
+            "data/source.db",
+            "--postgres-url",
+            "postgresql+asyncpg://auto_wechat:secret@127.0.0.1:5432/auto_wechat",
+            "--yes",
+        ]
+    )
+    with pytest.raises(MigrationConfigurationError, match="--yes 只能和 --apply 一起使用"):
+        validate_args(args, env={})
+
+
+def test_apply_rejects_database_url_fallback():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import MigrationConfigurationError, parse_args, validate_args
+
+    args = parse_args(["--sqlite-db-path", "data/source.db", "--apply", "--yes"])
+
+    with pytest.raises(MigrationConfigurationError, match="apply 不允许使用 DATABASE_URL"):
+        validate_args(
+            args,
+            env={"DATABASE_URL": "postgresql+asyncpg://auto_wechat:secret@127.0.0.1:5432/auto_wechat"},
+        )
+
+
+def test_apply_rejects_non_dev_host_and_wrong_database():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import MigrationConfigurationError, parse_args, validate_args
+
+    args = parse_args(
+        [
+            "--sqlite-db-path",
+            "data/source.db",
+            "--postgres-url",
+            "postgresql+asyncpg://auto_wechat:secret@prod-db.example.com:5432/auto_wechat",
+            "--apply",
+            "--yes",
+        ]
+    )
+    with pytest.raises(MigrationConfigurationError, match="apply 只允许 dev host"):
+        validate_args(args, env={})
+
+    args = parse_args(
+        [
+            "--sqlite-db-path",
+            "data/source.db",
+            "--postgres-url",
+            "postgresql+asyncpg://auto_wechat:secret@127.0.0.1:5432/not_auto_wechat",
+            "--apply",
+            "--yes",
+        ]
+    )
+    with pytest.raises(MigrationConfigurationError, match="目标 database 必须是 auto_wechat"):
         validate_args(args, env={})
 
 
@@ -164,6 +216,117 @@ def test_dry_run_statistics_counts_insert_update_skip_and_anomalies():
     assert plan.skip_count == 1
     assert plan.anomaly_count == 1
     assert plan.will_write_postgres is False
+
+
+def test_repeated_apply_plan_does_not_count_duplicate_insert():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import TargetSnapshot, build_dry_run_plan
+
+    rows = [
+        {"id": 1, "merchant_id": "merchant-a", "category_key": "exists", "name": "已有分类"},
+    ]
+    snapshot = TargetSnapshot(
+        alembic_revision="0002_create_knowledge_categories",
+        table_exists=True,
+        existing_keys={("merchant", "merchant-a", "exists")},
+    )
+
+    plan = build_dry_run_plan(rows, snapshot)
+
+    assert plan.insert_count == 0
+    assert plan.update_count == 1
+    assert plan.skip_count == 0
+
+
+def test_upsert_sql_only_targets_knowledge_categories_and_conflict_key():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import build_upsert_sql
+
+    sql = build_upsert_sql()
+
+    assert "INSERT INTO knowledge_categories" in sql
+    assert "ON CONFLICT (scope_type, merchant_id, \"key\") DO UPDATE" in sql
+    assert "excluded.deleted_at" in sql
+    assert "excluded.status" in sql
+    assert "DROP TABLE" not in sql
+    assert "INSERT INTO other" not in sql
+
+
+def test_deleted_and_disabled_source_values_are_preserved_for_apply():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import map_sqlite_row_to_postgres
+
+    deleted = map_sqlite_row_to_postgres(
+        {
+            "id": 1,
+            "merchant_id": "merchant-a",
+            "category_key": "old",
+            "name": "已删除",
+            "status": "deleted",
+            "deleted_at": "2026-07-08 12:00:00",
+        }
+    )
+    disabled = map_sqlite_row_to_postgres(
+        {
+            "id": 2,
+            "merchant_id": "merchant-a",
+            "category_key": "disabled",
+            "name": "已停用",
+            "status": "disabled",
+        }
+    )
+
+    assert deleted["status"] == "deleted"
+    assert deleted["deleted_at"] == "2026-07-08 12:00:00"
+    assert disabled["status"] == "disabled"
+
+
+def test_row_to_upsert_params_converts_timestamp_strings_for_asyncpg():
+    from datetime import datetime
+
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import map_sqlite_row_to_postgres, row_to_upsert_params
+
+    row = map_sqlite_row_to_postgres(
+        {
+            "id": 1,
+            "merchant_id": "merchant-a",
+            "category_key": "active",
+            "name": "有效分类",
+            "created_at": "2026-07-08 10:00:00+00",
+            "updated_at": "2026-07-08 10:01:00+00",
+            "deleted_at": "2026-07-08 10:02:00+00",
+        }
+    )
+
+    params = row_to_upsert_params(row)
+
+    assert isinstance(params[10], datetime)
+    assert isinstance(params[11], datetime)
+    assert isinstance(params[12], datetime)
+
+
+def test_synthetic_sqlite_rows_include_expected_cases_without_extra_base():
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import build_synthetic_source_rows
+
+    rows = build_synthetic_source_rows(merchant_id="smoke-merchant")
+    category_keys = [row["category_key"] for row in rows]
+
+    assert "active_smoke" in category_keys
+    assert "disabled_smoke" in category_keys
+    assert "deleted_smoke" in category_keys
+    assert category_keys.count("base") <= 1
+
+
+def test_write_synthetic_sqlite_database_can_be_read_by_migration_reader(tmp_path: Path):
+    from scripts.migrate_knowledge_categories_sqlite_to_postgres import (
+        read_sqlite_rows,
+        write_synthetic_sqlite_database,
+    )
+
+    db_path = tmp_path / "synthetic.db"
+    write_synthetic_sqlite_database(str(db_path), merchant_id="smoke-merchant")
+
+    rows = read_sqlite_rows(str(db_path), merchant_id="smoke-merchant")
+
+    assert len(rows) == 4
+    assert {row["category_key"] for row in rows} == {"active_smoke", "disabled_smoke", "deleted_smoke", "base"}
 
 
 def test_postgres_readonly_sql_guard_rejects_write_sql():

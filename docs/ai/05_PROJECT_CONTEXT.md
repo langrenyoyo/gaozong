@@ -3597,3 +3597,30 @@ scripts/migrate_knowledge_categories_sqlite_to_postgres.py
 4. 本轮不改 Alembic revision，不改业务接口，不改 9100 / Milvus / RAG。
 5. P3-C5 才在单独任务中实现 dev PG apply smoke。
 6. 生产迁移仍未开始。
+
+# P3-C5 knowledge_categories 受控 dev apply smoke 当前状态
+
+任务：`P3-C5-DB-9000-KNOWLEDGE-CATEGORIES-DEV-PG-APPLY-SMOKE-1`
+
+当前已为 9000 `knowledge_categories` SQLite -> PostgreSQL 迁移脚本增加受控 dev apply 能力，但默认运行路径仍是 SQLite，生产迁移仍未开始。
+
+新增能力：
+
+1. `scripts/migrate_knowledge_categories_sqlite_to_postgres.py` 默认仍 dry-run，不传 `--apply` 不写 PostgreSQL。
+2. apply 必须同时传入 `--apply` 与 `--yes`。
+3. apply 只能使用 `--postgres-url` 或 `SMOKE_DATABASE_URL`，不能隐式使用 `DATABASE_URL`。
+4. apply host 只允许 `localhost`、`127.0.0.1` 或 `postgres`。
+5. 目标 database 必须是 `auto_wechat`。
+6. schema 检查必须确认 Alembic revision 至少为 `0002_create_knowledge_categories`，且 `knowledge_categories` 表存在。
+7. 写入只覆盖 `knowledge_categories`，使用 `ON CONFLICT (scope_type, merchant_id, "key") DO UPDATE` 做幂等 upsert。
+8. `key = category_key`，`disabled/deleted` 状态与 `deleted_at` 不会被默认 active 复活。
+9. 脚本提供 synthetic SQLite helper，用于 dev smoke 临时测试库，不读取真实生产 SQLite。
+
+边界确认：
+
+1. 本轮不迁移真实生产数据。
+2. 本轮不切换 9000 默认 `DATABASE_URL`。
+3. 本轮不改 Alembic revision、不改业务接口、不改 docker-compose。
+4. 本轮不改 9100 / Milvus / RAG。
+5. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
+6. P3-C6 才做 `GET /knowledge-categories` SQLite / PostgreSQL 数据对照；P3-C7 才做宝塔 staging / 灰度迁移预案。

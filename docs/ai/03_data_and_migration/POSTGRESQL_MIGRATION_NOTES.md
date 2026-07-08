@@ -766,3 +766,47 @@ scripts/migrate_knowledge_categories_sqlite_to_postgres.py
 4. 本轮不改业务代码、不改 docker-compose、不改 `.env` / `.env.example`。
 5. 本轮不改 9100 / Milvus / RAG。
 6. P3-C5 才实现 dev PG apply smoke；生产迁移仍未开始。
+
+## 24. P3-C5 knowledge_categories 受控 dev apply smoke 补充
+
+任务：`P3-C5-DB-9000-KNOWLEDGE-CATEGORIES-DEV-PG-APPLY-SMOKE-1`
+
+当前已在迁移脚本中增加受控 dev apply 能力：
+
+```text
+scripts/migrate_knowledge_categories_sqlite_to_postgres.py
+```
+
+安全门：
+
+1. 默认仍为 dry-run，不传 `--apply` 不写 PostgreSQL。
+2. apply 必须同时传入 `--apply` 与 `--yes`。
+3. apply URL 只能来自 `--postgres-url` 或 `SMOKE_DATABASE_URL`，不能隐式使用 `DATABASE_URL`。
+4. apply host 只允许 `localhost`、`127.0.0.1` 或 `postgres`。
+5. 目标 database 必须是 `auto_wechat`。
+6. schema 检查必须通过：Alembic revision 至少为 `0002_create_knowledge_categories`，且目标表存在。
+7. URL 输出继续脱敏，不打印 password。
+
+写入策略：
+
+1. 只写 `knowledge_categories`，不迁移其它表。
+2. 使用 `ON CONFLICT (scope_type, merchant_id, "key") DO UPDATE` 做幂等 upsert。
+3. `key = category_key`，均来自 SQLite `category_key`。
+4. conflict update 不覆盖目标 `created_at`。
+5. `status=disabled/deleted` 与非空 `deleted_at` 按源端值保留，不被默认 `active` 复活。
+6. 不主动生成 base 行；已有真实 base 行按普通源行处理。
+
+synthetic smoke：
+
+1. 脚本提供 synthetic SQLite 数据 helper，用于创建临时本地 SQLite 测试库。
+2. synthetic 数据覆盖 active、disabled、deleted、不同 `sort_order` 和一条显式真实 base 行。
+3. 该 smoke 只验证 dev PostgreSQL 闭环，不代表生产迁移。
+
+边界确认：
+
+1. 默认 9000 运行数据库仍是 SQLite。
+2. 本轮不迁移真实生产数据。
+3. 本轮不切换默认 `DATABASE_URL`。
+4. 本轮不改 Alembic revision、不改业务接口、不改 docker-compose。
+5. 本轮不改 9100 / Milvus / RAG。
+6. 宝塔 staging / 灰度迁移预案留到后续任务。
