@@ -881,3 +881,34 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_GRAY_MIGRATION_
 4. 不迁移真实数据。
 5. 不切换默认数据库。
 6. 不改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` 或 `.env.example`。
+
+## 27. P3-C8 Baota staging dry-run 人工 Runbook 补充
+
+任务：`P3-C8-BAOTA-STAGING-DRY-RUN-MANUAL-RUNBOOK-1`
+
+当前已新增：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.md
+```
+
+Runbook 结论：
+
+1. P3-C8 不由本机 VibeCoding 直接执行宝塔命令。
+2. 本机只生成 Baota staging dry-run 人工 Runbook 和执行记录模板。
+3. 宝塔执行人需要在宿主机代码目录手动确认 commit hash、工作区、Python 依赖、SQLite 路径、SQLite backup、脱敏 PostgreSQL URL 和 dry-run 输出。
+4. dry-run 命令必须显式传入 `--sqlite-db-path` 和 `--postgres-url`，不得依赖隐式 `DATABASE_URL`。
+5. P3-C8 只读 dry-run 禁止 `--apply`、`--yes`、Alembic upgrade、重启 9000、切换默认 `DATABASE_URL` 或开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+6. 执行记录必须包含 SQLite 源行数、过滤后行数、PG 表状态、Alembic revision、预计 insert / update / skip / error、异常行摘要和安全确认。
+7. 宝塔执行结果必须由人工贴回后再判断是否进入 P3-C9。
+
+边界确认：
+
+1. 本轮只改文档。
+2. 不执行宝塔命令。
+3. 不连接 PostgreSQL。
+4. 不读取宝塔 SQLite。
+5. 不写 PostgreSQL。
+6. 不执行 migration。
+7. 不迁移真实数据。
+8. 不修改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` 或 `.env.example`。

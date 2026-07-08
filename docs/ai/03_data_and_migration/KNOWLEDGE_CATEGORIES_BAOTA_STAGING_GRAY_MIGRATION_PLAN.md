@@ -280,13 +280,25 @@ production apply 和默认数据库切换必须是后续独立任务，不能在
 
 ## 10. 后续阶段建议
 
-1. P3-C8：宝塔 staging dry-run 执行记录。
+1. P3-C8：宝塔 staging dry-run 人工 Runbook 与执行记录模板。
 2. P3-C9：宝塔 staging apply + API contrast 执行记录。
 3. P3-C10：production dry-run 审批模板。
 4. P3-D：下一个表的 PostgreSQL migration 设计，不能直接全量迁移。
 5. P3 后续：QPS600 压测、慢查询分析、索引验证、事务边界、幂等批次记录和生产回滚实现。
 
-## 11. 本轮边界确认
+## 11. P3-C8 人工 Runbook 补充
+
+P3-C8 不由本机 VibeCoding 直接执行宝塔命令，而是新增人工 Runbook 和执行记录模板：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_DRY_RUN_RECORD.md
+```
+
+P3-C8 的宝塔 dry-run 结果需要由人工在 Baota staging 宿主机代码目录执行后贴回，再判断是否进入 P3-C9。
+
+P3-C8 只读 dry-run 默认不执行 `scripts/smoke_auto_wechat_alembic_knowledge_categories.py`，因为该脚本会执行 Alembic `upgrade head`，不属于只读 dry-run 边界。P3-C8 只允许使用 `scripts/migrate_knowledge_categories_sqlite_to_postgres.py --dry-run` 读取 SQLite 和 PostgreSQL 元数据，禁止 `--apply`、`--yes`、Alembic upgrade、重启 9000、切换 `DATABASE_URL` 或开启 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED`。
+
+## 12. 本轮边界确认
 
 本轮只新增预案文档并同步现有文档。
 
