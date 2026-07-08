@@ -572,3 +572,41 @@ docs/ai/03_data_and_migration/ALEMBIC_POSTGRESQL_MIGRATION_DESIGN.md
 5. P3-F：继续围绕 `GET /knowledge-categories` 做试点接口 PG 对照。
 6. P3-G：宝塔灰度切换。
 7. P3-H：关闭 SQLite 生产路径。
+
+## 19. P3-B Alembic skeleton 补充
+
+任务：`P3-B-DB-ALEMBIC-SKELETON-NO-BUSINESS-TABLES-1`
+
+当前已为 PostgreSQL migration 建立两个独立 Alembic skeleton：
+
+```text
+migrations/postgres/auto_wechat/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+
+migrations/postgres/xg_douyin_ai_cs/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+```
+
+边界确认：
+
+1. `auto_wechat` 环境读取 `DATABASE_URL`。
+2. `xg_douyin_ai_cs` 环境读取 `RAG_DATABASE_URL`。
+3. 两个 `0001_empty_baseline.py` 都是空 migration，`upgrade()` / `downgrade()` 不创建业务表、不创建 index。
+4. `env.py` 遇到 SQLite URL 会拒绝执行，避免误迁移。
+5. 本轮只引入 Alembic 依赖和骨架，不执行 migration，不连接 PostgreSQL。
+6. P3-C 才开始 9000 PostgreSQL 初始 schema。
+7. P3-D 才开始 9100 PostgreSQL 初始 schema。
+
+未来命令示例：
+
+```bash
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini current
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
+
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini current
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head
+```

@@ -150,14 +150,54 @@ migrations/
 
 ### P3-B：Alembic skeleton，不建业务表
 
-后续创建两个 Alembic 环境骨架：
+已创建两个 Alembic 环境骨架：
 
 ```text
 migrations/postgres/auto_wechat/
 migrations/postgres/xg_douyin_ai_cs/
 ```
 
-P3-B 只验证配置、脱敏、status 命令和空 migration 环境，不创建业务表。
+P3-B 只验证配置、脱敏、命令入口和空 migration 环境，不创建业务表。
+
+当前骨架文件：
+
+```text
+migrations/postgres/auto_wechat/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+
+migrations/postgres/xg_douyin_ai_cs/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+```
+
+两个 `0001_empty_baseline.py` 均为空基线：
+
+1. `upgrade()` 为空。
+2. `downgrade()` 为空。
+3. 不创建业务表。
+4. 不创建 index。
+
+未来命令示例：
+
+```bash
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini current
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
+
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini current
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head
+```
+
+执行边界：
+
+1. `auto_wechat` 环境读取 `DATABASE_URL`。
+2. `xg_douyin_ai_cs` 环境读取 `RAG_DATABASE_URL`。
+3. `env.py` 遇到 SQLite URL 会拒绝执行，避免误把 SQLite 当 PostgreSQL migration 目标。
+4. 本阶段不执行上述命令，不连接 PostgreSQL，不跑 migration。
+5. P3-C 才开始设计 / 创建 9000 PostgreSQL 初始 schema。
+6. P3-D 才开始设计 / 创建 9100 PostgreSQL 初始 schema。
 
 ### P3-C：9000 PostgreSQL 初始 schema
 

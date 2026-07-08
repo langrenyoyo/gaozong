@@ -3404,3 +3404,50 @@ docs/ai/03_data_and_migration/ALEMBIC_POSTGRESQL_MIGRATION_DESIGN.md
 3. 当前 P3-A 不切默认数据库，不改业务 SQL，不改 docker-compose。
 4. 后续任何生产切换都不得直接全量切库，必须先灰度试点接口。
 5. QPS600 仍需 asyncpg / SQLAlchemy async engine、连接池、事务、索引、慢查询和压测验证。
+
+# P3-B Alembic skeleton 当前状态
+
+任务：`P3-B-DB-ALEMBIC-SKELETON-NO-BUSINESS-TABLES-1`
+
+当前已为 PostgreSQL migration 建立 Alembic skeleton，但仍未创建业务表、未创建 index、未连接 PostgreSQL、未执行 migration。
+
+新增骨架：
+
+```text
+migrations/postgres/auto_wechat/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+
+migrations/postgres/xg_douyin_ai_cs/
+  alembic.ini
+  env.py
+  versions/0001_empty_baseline.py
+```
+
+当前行为：
+
+1. `auto_wechat` Alembic 环境读取 `DATABASE_URL`。
+2. `xg_douyin_ai_cs` Alembic 环境读取 `RAG_DATABASE_URL`。
+3. 两个环境独立管理，各自维护自己的 `alembic_version`。
+4. SQLite URL 不允许作为 PostgreSQL migration 目标。
+5. `0001_empty_baseline.py` 是空基线，`upgrade()` / `downgrade()` 均为空。
+
+未来命令示例：
+
+```bash
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini current
+python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
+
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini current
+python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head
+```
+
+边界确认：
+
+1. 本轮未切换 9000 / 9100 到 PostgreSQL。
+2. 本轮未跑 migration。
+3. 本轮未改 `app/models.py`。
+4. 本轮未改 9100 metadata bootstrap。
+5. 本轮未改 docker-compose、Milvus、RAG 或业务 SQL。
+6. P3-C 才开始 9000 PostgreSQL 初始 schema；P3-D 才开始 9100 PostgreSQL 初始 schema。
