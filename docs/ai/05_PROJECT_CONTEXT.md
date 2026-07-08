@@ -3651,3 +3651,32 @@ scripts/migrate_knowledge_categories_sqlite_to_postgres.py
 6. 本轮未改 9100 / Milvus / RAG。
 7. 本轮未触发 LLM、抖音发送、私信发送或自动回复 gate。
 8. 下一步才进入宝塔 staging / 灰度迁移预案。
+
+# P3-C7 knowledge_categories 宝塔 staging / 灰度迁移预案当前状态
+
+任务：`P3-C7-DB-9000-KNOWLEDGE-CATEGORIES-BAOTA-STAGING-GRAY-MIGRATION-PLAN-1`
+
+当前已新增预案文档：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_GRAY_MIGRATION_PLAN.md
+```
+
+当前阶段定位：
+
+1. P3-C7 只做 Baota staging / gray migration 文档预案。
+2. 目标只覆盖 9000 `knowledge_categories`，不迁移全量 9000 表。
+3. Baota staging dry-run 后续必须记录 git commit hash、Docker Compose 状态、9000 健康、SQLite DB 路径、SQLite backup、PostgreSQL 容器、`auto_wechat` database、`0002_create_knowledge_categories` revision、SQLite / PG 行数、PG pilot 开关和默认 `DATABASE_URL` 状态。
+4. Baota staging apply 后续必须显式 `--apply --yes`，必须使用受控 `<POSTGRES_URL>`，不允许隐式 `DATABASE_URL` apply。
+5. API contrast 灰度验证必须对比 SQLite 默认路径与 PostgreSQL pilot 路径，且不把 `KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED` 默认改为 true。
+6. rollback 默认关闭 PG pilot，恢复 SQLite 默认路径，不默认 drop `knowledge_categories` 表。
+7. production dry-run、production apply、默认 `DATABASE_URL` 切换都必须另起审批任务。
+
+边界确认：
+
+1. 本轮不执行宝塔命令。
+2. 本轮不连接生产数据库。
+3. 本轮不迁移真实数据。
+4. 本轮不切换默认数据库。
+5. 本轮不改业务代码、迁移脚本、Alembic revision、docker-compose、`.env` / `.env.example`。
+6. 本轮不改 9100 / Milvus / RAG，不触发 LLM、抖音发送、私信发送或自动回复 gate。

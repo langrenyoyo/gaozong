@@ -545,3 +545,30 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_SQLITE_TO_POSTGRES_MIGRATION_
 4. 本轮未修改 `0002_create_knowledge_categories.py`。
 5. 本轮未切换 9000 默认运行路径。
 6. P3-C4 才实现 dry-run-only 迁移脚本骨架。
+
+## 16. P3-C7 knowledge_categories 宝塔 staging / 灰度迁移预案
+
+任务：`P3-C7-DB-9000-KNOWLEDGE-CATEGORIES-BAOTA-STAGING-GRAY-MIGRATION-PLAN-1`
+
+当前已在 P3-C4 / P3-C5 / P3-C6 之后补充宝塔 staging / gray migration 预案：
+
+```text
+docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_BAOTA_STAGING_GRAY_MIGRATION_PLAN.md
+```
+
+与 Alembic 方案的关系：
+
+1. Baota staging 前置检查必须验证 `auto_wechat` Alembic revision 到 `0002_create_knowledge_categories` 或更高。
+2. schema smoke 仍使用 `migrations/postgres/auto_wechat/alembic.ini`，只验证 `auto_wechat` database。
+3. `xg_douyin_ai_cs` 独立 Alembic 环境不参与本次 `knowledge_categories` 灰度预案。
+4. P3-C7 不创建新 Alembic revision，不修改 `0002_create_knowledge_categories.py`，不执行 migration。
+5. production 不允许直接全量切库；必须先 staging dry-run、staging apply、API contrast、审批后再进入 production dry-run。
+
+边界确认：
+
+1. 本轮只做文档。
+2. 不执行宝塔命令。
+3. 不连接生产数据库。
+4. 不迁移真实数据。
+5. 不切换默认数据库。
+6. 不改 Alembic skeleton、revision、业务代码、docker-compose、9100 / Milvus / RAG。
