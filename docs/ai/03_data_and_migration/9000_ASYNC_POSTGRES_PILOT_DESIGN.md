@@ -386,3 +386,32 @@ QPS600 不能只靠连接池默认值保证，需要后续压测验证。
 4. 本轮未修改 `POST /knowledge-categories`、Agent 分类写接口或其它 9000 接口。
 5. 本轮未修改 9100、Milvus、RAG、LLM、抖音发送、私信发送或自动回复 gate。
 6. 后续 P2-F5 再做 SQLite / PostgreSQL 对照验证，QPS600 仍需后续压测。
+## P2-F5 SQLite / PostgreSQL 对照 smoke 当前状态
+
+任务：`P2-F5-DB-9000-KNOWLEDGE-CATEGORIES-SQLITE-PG-CONTRAST-SMOKE-1`
+
+本轮已为 9000 `GET /knowledge-categories` 建立最小 SQLite / PostgreSQL 对照 smoke：
+
+1. 新增脚本 `scripts/smoke_knowledge_categories_sqlite_pg_contrast.py`。
+2. smoke 仅覆盖 `GET /knowledge-categories`，不覆盖 POST / DELETE / Agent 写接口。
+3. SQLite 侧使用临时 SQLite 数据库和 synthetic 分类数据，通过 FastAPI `TestClient` 调用 GET 路由。
+4. PostgreSQL 侧使用 `SMOKE_POSTGRES_DATABASE_URL` 指向 dev profile 的 `auto_wechat` database，只创建临时 `knowledge_categories` smoke 表和 synthetic 数据。
+5. PostgreSQL smoke 表包含 `id`、`key`、`category_key`、`name`、`description`、`scope_type`、`merchant_id`、`status`、`sort_order`、`deleted_at`、`created_at`、`updated_at` 等字段；其中 `key` 用于覆盖本轮 smoke 字段要求，`category_key` 用于兼容当前 async repository 查询。
+6. smoke 对照验证 base 分类、merchant 过滤、inactive / deleted 过滤、`sort_order ASC, id ASC` 排序和响应 schema。
+7. 脚本不修改 `.env`，不打印完整 `DATABASE_URL`，只输出脱敏 URL。
+
+运行方式：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
+python scripts/smoke_knowledge_categories_sqlite_pg_contrast.py
+docker compose -f docker-compose.dev.yml stop postgres
+```
+
+边界确认：
+
+1. PostgreSQL smoke 表是临时验证表，不是正式 migration，不得当成生产 schema。
+2. 本轮不切默认数据库，9000 默认仍是 SQLite。
+3. 本轮不引入 Alembic，不跑 SQLite -> PostgreSQL 正式数据迁移。
+4. 正式表结构、索引、约束和历史数据迁移仍留给 P3 Alembic / PostgreSQL migration。
+5. QPS600 仍需后续压测、索引、慢查询、事务边界和连接池参数调优验证，不能由本 smoke 证明。
