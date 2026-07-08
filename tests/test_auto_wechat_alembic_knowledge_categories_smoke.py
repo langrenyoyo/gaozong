@@ -73,6 +73,83 @@ def test_expected_inspection_contract_matches_knowledge_categories_schema():
     assert "ck_knowledge_categories_key_matches_category_key" in smoke.EXPECTED_CHECK_CONSTRAINTS
 
 
+def test_pg_constraint_unique_result_is_used_for_unique_constraint_check():
+    from scripts.smoke_auto_wechat_alembic_knowledge_categories import (
+        EXPECTED_CHECK_CONSTRAINTS,
+        EXPECTED_COLUMNS,
+        EXPECTED_INDEXES,
+        EXPECTED_REVISION,
+        InspectionResult,
+        parse_pg_constraints,
+        verify_inspection,
+    )
+
+    constraints = parse_pg_constraints(
+        [
+            {
+                "conname": "uk_knowledge_categories_scope_merchant_key",
+                "contype": b"u",
+                "definition": "UNIQUE (scope_type, merchant_id, key)",
+            },
+            {
+                "conname": "ck_knowledge_categories_key_matches_category_key",
+                "contype": b"c",
+                "definition": 'CHECK (("key")::text = (category_key)::text)',
+            },
+        ]
+    )
+
+    verify_inspection(
+        InspectionResult(
+            current_revision=EXPECTED_REVISION,
+            columns=list(EXPECTED_COLUMNS),
+            indexes=list(EXPECTED_INDEXES),
+            pg_indexes=[],
+            pg_constraints=constraints,
+            unique_constraints=[],
+            check_constraints=list(EXPECTED_CHECK_CONSTRAINTS),
+        )
+    )
+
+
+def test_missing_unique_constraint_error_includes_pg_constraint_and_pg_indexes_details():
+    from scripts.smoke_auto_wechat_alembic_knowledge_categories import (
+        EXPECTED_CHECK_CONSTRAINTS,
+        EXPECTED_COLUMNS,
+        EXPECTED_INDEXES,
+        EXPECTED_REVISION,
+        InspectionResult,
+        PgIndex,
+        SmokeVerificationError,
+        verify_inspection,
+    )
+
+    result = InspectionResult(
+        current_revision=EXPECTED_REVISION,
+        columns=list(EXPECTED_COLUMNS),
+        indexes=list(EXPECTED_INDEXES),
+        pg_indexes=[
+            PgIndex(
+                name="uk_knowledge_categories_scope_merchant_key",
+                definition="CREATE UNIQUE INDEX uk_knowledge_categories_scope_merchant_key ON public.knowledge_categories",
+            )
+        ],
+        pg_constraints=[],
+        unique_constraints=[],
+        check_constraints=list(EXPECTED_CHECK_CONSTRAINTS),
+    )
+
+    with pytest.raises(SmokeVerificationError) as exc_info:
+        verify_inspection(result)
+
+    message = str(exc_info.value)
+    assert "唯一约束缺失" in message
+    assert "actual_unique_constraints=[]" in message
+    assert "pg_constraint=[]" in message
+    assert "pg_indexes=" in message
+    assert "uk_knowledge_categories_scope_merchant_key" in message
+
+
 def test_script_does_not_contain_real_secrets_or_fixed_uri():
     content = SCRIPT.read_text(encoding="utf-8")
     forbidden = [

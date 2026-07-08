@@ -3505,6 +3505,12 @@ scripts/smoke_auto_wechat_alembic_knowledge_categories.py
 5. 验证 `knowledge_categories` 表、关键字段、索引、唯一约束和 check constraint。
 6. URL 输出必须脱敏，不打印 password。
 
+P3-C2-FIX 已修复唯一约束 inspect 误判：smoke 现在以 `pg_constraint`
+作为唯一约束真源，要求 `uk_knowledge_categories_scope_merchant_key`
+存在且 `contype='u'`，并把 `pg_get_constraintdef(oid)` 与 `pg_indexes`
+作为失败诊断输出。本修复不修改 `0002_create_knowledge_categories.py`，
+不改变 schema，只修 dev smoke 检查逻辑。
+
 为支持 dev profile 推荐的 `postgresql+asyncpg` URL，`migrations/postgres/auto_wechat/env.py` 已增加 asyncpg Alembic 在线迁移分支；这只属于 migration smoke 能力，不代表 9000 默认运行路径切换。
 
 边界确认：

@@ -67,10 +67,25 @@ class SmokeVerificationError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class PgConstraint:
+    name: str
+    contype: str
+    definition: str
+
+
+@dataclass(frozen=True)
+class PgIndex:
+    name: str
+    definition: str
+
+
+@dataclass(frozen=True)
 class InspectionResult:
     current_revision: str
     columns: list[str]
     indexes: list[str]
+    pg_indexes: list[PgIndex]
+    pg_constraints: list[PgConstraint]
     unique_constraints: list[str]
     check_constraints: list[str]
 
@@ -119,6 +134,33 @@ def ensure_runtime_dependencies(database_url: str) -> None:
             + ", ".join(missing)
             + "。请先按 requirements 安装依赖；本脚本不会自动安装。"
         )
+
+
+def parse_pg_constraints(rows: list[Mapping[str, object]]) -> list[PgConstraint]:
+    return [
+        PgConstraint(
+            name=str(row["conname"]),
+            contype=_normalize_pg_contype(row["contype"]),
+            definition=str(row["definition"]),
+        )
+        for row in rows
+    ]
+
+
+def _normalize_pg_contype(value: object) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("ascii")
+    return str(value)
+
+
+def parse_pg_indexes(rows: list[Mapping[str, object]]) -> list[PgIndex]:
+    return [
+        PgIndex(
+            name=str(row["indexname"]),
+            definition=str(row["indexdef"]),
+        )
+        for row in rows
+    ]
 
 
 def run_alembic_upgrade_head(database_url: str) -> None:
@@ -172,29 +214,36 @@ async def inspect_with_asyncpg(database_url: str) -> InspectionResult:
                 EXPECTED_TABLE,
             )
         ]
-        indexes = [
-            row["indexname"]
-            for row in await conn.fetch(
-                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
-                EXPECTED_TABLE,
-            )
-        ]
-        constraints = await conn.fetch(
+        index_rows = await conn.fetch(
             """
-            SELECT con.conname, con.contype
-            FROM pg_constraint con
-            JOIN pg_class rel ON rel.oid = con.conrelid
-            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-            WHERE nsp.nspname = 'public' AND rel.relname = $1
+            SELECT indexname, indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = $1
+            ORDER BY indexname
             """,
             EXPECTED_TABLE,
         )
-        unique_constraints = [row["conname"] for row in constraints if row["contype"] == "u"]
-        check_constraints = [row["conname"] for row in constraints if row["contype"] == "c"]
+        pg_indexes = parse_pg_indexes(index_rows)
+
+        # SQLAlchemy inspector 在 asyncpg/dialect 组合下可能拿不到唯一约束；
+        # smoke 以 PostgreSQL catalog 为准，pg_indexes 只保留为诊断辅助。
+        constraint_rows = await conn.fetch(
+            """
+            SELECT conname, contype, pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE conrelid = 'public.knowledge_categories'::regclass
+            ORDER BY conname
+            """,
+        )
+        pg_constraints = parse_pg_constraints(constraint_rows)
+        unique_constraints = _constraint_names(pg_constraints, "u")
+        check_constraints = _constraint_names(pg_constraints, "c")
         return InspectionResult(
             current_revision=str(current_revision or ""),
             columns=columns,
-            indexes=indexes,
+            indexes=[index.name for index in pg_indexes],
+            pg_indexes=pg_indexes,
+            pg_constraints=pg_constraints,
             unique_constraints=unique_constraints,
             check_constraints=check_constraints,
         )
@@ -209,8 +258,45 @@ def verify_inspection(result: InspectionResult) -> None:
         )
     _assert_contains("字段", result.columns, EXPECTED_COLUMNS)
     _assert_contains("索引", result.indexes, EXPECTED_INDEXES)
-    _assert_contains("唯一约束", result.unique_constraints, EXPECTED_UNIQUE_CONSTRAINTS)
-    _assert_contains("check 约束", result.check_constraints, EXPECTED_CHECK_CONSTRAINTS)
+    _assert_unique_constraints(result)
+    _assert_contains("check 约束", _constraint_names(result.pg_constraints, "c"), EXPECTED_CHECK_CONSTRAINTS)
+
+
+def _constraint_names(constraints: list[PgConstraint], contype: str) -> list[str]:
+    return [constraint.name for constraint in constraints if constraint.contype == contype]
+
+
+def _format_pg_constraints(constraints: list[PgConstraint]) -> list[dict[str, str]]:
+    return [
+        {
+            "conname": constraint.name,
+            "contype": constraint.contype,
+            "definition": constraint.definition,
+        }
+        for constraint in constraints
+    ]
+
+
+def _format_pg_indexes(indexes: list[PgIndex]) -> list[dict[str, str]]:
+    return [
+        {
+            "indexname": index.name,
+            "indexdef": index.definition,
+        }
+        for index in indexes
+    ]
+
+
+def _assert_unique_constraints(result: InspectionResult) -> None:
+    actual = _constraint_names(result.pg_constraints, "u")
+    missing = sorted(set(EXPECTED_UNIQUE_CONSTRAINTS) - set(actual))
+    if missing:
+        raise SmokeVerificationError(
+            "唯一约束缺失: "
+            f"{missing}; actual_unique_constraints={sorted(actual)}; "
+            f"pg_constraint={_format_pg_constraints(result.pg_constraints)}; "
+            f"pg_indexes={_format_pg_indexes(result.pg_indexes)}"
+        )
 
 
 def _assert_contains(label: str, actual: list[str], expected: list[str]) -> None:
@@ -254,6 +340,7 @@ def main() -> int:
     print(f"Indexes: {inspection.indexes}")
     print(f"Unique constraints: {inspection.unique_constraints}")
     print(f"Check constraints: {inspection.check_constraints}")
+    print(f"pg_constraint: {_format_pg_constraints(inspection.pg_constraints)}")
     print("SMOKE_PASS: auto_wechat Alembic migration 已在 dev PostgreSQL 验证到 head")
     return 0
 

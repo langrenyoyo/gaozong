@@ -661,6 +661,12 @@ scripts/smoke_auto_wechat_alembic_knowledge_categories.py
 7. 输出 `SMOKE_PASS` 或清晰失败原因。
 8. 输出 URL 时只展示脱敏值。
 
+P3-C2-FIX 已修复唯一约束检查误判：smoke 优先读取 `pg_constraint`，要求
+`uk_knowledge_categories_scope_merchant_key` 的 `contype='u'`，并输出
+`pg_get_constraintdef(oid)`。如果约束缺失，失败信息会同时展示实际
+`pg_constraint` 和 `pg_indexes` 结果，便于区分 migration 问题与 inspector
+兼容问题。
+
 `auto_wechat` Alembic `env.py` 已支持 `postgresql+asyncpg` 在线迁移分支，用于 dev smoke；该能力仍只属于 migration 环境，不代表 9000 默认运行路径切换到 PostgreSQL。
 
 运行示例：

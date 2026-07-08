@@ -490,6 +490,11 @@ smoke 范围：
 5. 验证 `alembic_version` 当前 revision 为 `0002_create_knowledge_categories`。
 6. 验证 `knowledge_categories` 表、关键字段、索引、唯一约束和 check constraint 存在。
 
+P3-C2-FIX 已修正唯一约束 inspect 口径：`uk_knowledge_categories_scope_merchant_key`
+以 PostgreSQL `pg_constraint` 为准，要求 `contype='u'`，并读取
+`pg_get_constraintdef(oid)` 作为诊断信息。`pg_indexes` 只作为辅助诊断，不再把
+SQLAlchemy inspector / dialect 返回的空 unique constraint 列表当作最终判断。
+
 为支持 dev smoke 中推荐的 `postgresql+asyncpg` URL，`migrations/postgres/auto_wechat/env.py` 已增加 asyncpg Alembic 在线迁移分支；同步 PostgreSQL URL 仍走原同步分支。该调整只影响 `auto_wechat` Alembic migration 环境，不切换 9000 默认运行数据库。
 
 运行方式：
