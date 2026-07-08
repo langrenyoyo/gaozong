@@ -35,9 +35,7 @@ async def get_request_context_optional(request: Request) -> RequestContext | Non
     """获取可选请求上下文；开发 mock 保持旧行为。"""
     client = _client()
     if not client.auth_enabled:
-        if client.mock_enabled:
-            return client.build_mock_context()
-        return None
+        return client.build_mock_context()
     try:
         return _resolve_required_context(request, client)
     except NewCarAuthError:
@@ -48,9 +46,7 @@ async def get_request_context_required(request: Request, db: Session = Depends(g
     """获取必需请求上下文；真实 NewCar 登录态必须命中本地商户绑定。"""
     client = _client()
     if not client.auth_enabled:
-        if client.mock_enabled:
-            return client.build_mock_context()
-        raise _auth_error(401, "TOKEN_MISSING", "认证未启用且 mock 上下文不可用")
+        return client.build_mock_context()
     try:
         context = _resolve_required_context(request, client)
         if client.mock_enabled:

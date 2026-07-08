@@ -131,6 +131,28 @@ def test_auth_config_defaults_do_not_block_dev(monkeypatch):
     assert reloaded.NEWCAR_AUTH_TIMEOUT_SECONDS == 5
 
 
+def test_auth_config_invalid_bool_falls_back_false(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "fasle")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
+
+    import app.config as config
+
+    reloaded = importlib.reload(config)
+    assert reloaded.NEWCAR_AUTH_ENABLED is False
+    assert reloaded.NEWCAR_AUTH_MOCK_ENABLED is True
+
+
+def test_newcar_client_invalid_bool_does_not_enable_real_auth(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "fasle")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
+
+    from app.auth.newcar_client import NewCarProjectAuthClient
+
+    client = NewCarProjectAuthClient.from_env()
+    assert client.auth_enabled is False
+    assert client.mock_enabled is True
+
+
 def test_cors_origins_can_be_overridden_and_allow_newcar_login_origin(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "http://192.168.110.19:5174")
 
@@ -267,6 +289,40 @@ def test_auth_me_returns_mock_context_in_dev_mode(monkeypatch):
     data = response.json()["data"]
     assert data["user_id"] == "dev-user"
     assert data["merchant_id"] == "dev-merchant"
+    assert data["source_system"] == "mock"
+    assert data["auth_mode"] == "mock"
+
+
+def test_api_auth_me_returns_mock_context_in_dev_mode(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/api/auth/me")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["user_id"] == "dev-user"
+    assert data["merchant_id"] == "dev-merchant"
+    assert data["source_system"] == "mock"
+    assert data["auth_mode"] == "mock"
+
+
+def test_auth_disabled_without_mock_still_returns_local_context(monkeypatch):
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+
+    from app.main import create_app
+
+    response = TestClient(create_app()).get("/auth/me")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["user_id"] == "dev-user"
+    assert data["merchant_id"] == "dev-merchant"
+    assert data["source_system"] == "mock"
+    assert data["auth_mode"] == "mock"
 
 
 def test_auth_me_required_mode_accepts_bearer_token(monkeypatch):

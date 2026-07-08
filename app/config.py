@@ -1,7 +1,10 @@
 """项目配置"""
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 BASE_PATH = Path(__file__).resolve().parents[1]
 ENV_FILE = BASE_PATH / ".env"
@@ -35,11 +38,26 @@ def _env_str(name: str, default: str = "") -> str:
     return os.getenv(name, "").strip() or default
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
+def parse_bool(value: object, default: bool = False, *, name: str | None = None) -> bool:
+    """严格解析布尔配置；未知值回落默认，避免拼写错误误启高风险能力。"""
     if value is None:
         return default
-    return value.strip().lower() == "true"
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", ""}:
+        return False
+
+    if name:
+        logger.warning("Invalid boolean value for %s=%r, fallback to %s", name, value, default)
+    return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return parse_bool(os.getenv(name), default, name=name)
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -154,8 +172,8 @@ DY_AUTH_REDIRECT_ALLOWED_ORIGINS_SET = _env_csv_set("DY_AUTH_REDIRECT_ALLOWED_OR
 
 # ---------- NewCarProject 登录权限对接配置 ----------
 # P0 默认不强制拦截既有业务接口，mock 仅用于本地开发和测试。
-NEWCAR_AUTH_ENABLED = os.getenv("NEWCAR_AUTH_ENABLED", "false").lower() == "true"
-NEWCAR_AUTH_MOCK_ENABLED = os.getenv("NEWCAR_AUTH_MOCK_ENABLED", "true").lower() == "true"
+NEWCAR_AUTH_ENABLED = _env_bool("NEWCAR_AUTH_ENABLED", False)
+NEWCAR_AUTH_MOCK_ENABLED = _env_bool("NEWCAR_AUTH_MOCK_ENABLED", True)
 NEWCAR_AUTH_BASE_URL = os.getenv("NEWCAR_AUTH_BASE_URL", "").strip().rstrip("/")
 NEWCAR_AUTH_EXCHANGE_CODE_URL = os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip()
 NEWCAR_AUTH_ME_URL = os.getenv("NEWCAR_AUTH_ME_URL", "").strip()

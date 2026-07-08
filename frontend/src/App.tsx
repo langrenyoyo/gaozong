@@ -255,17 +255,20 @@ const App = () => {
           return;
         }
 
-        if (getExternalToken()) {
-          const data = await fetchCurrentAuthUser();
-          const nextUser = userFromAuthData(data);
-          assertCanEnterSystem(nextUser);
-          if (active) setUser(nextUser);
-        } else if (redirectToNewCarLogin({ message: "正在前往统一登录，请稍候…" })) {
-          return;
+        const data = await fetchCurrentAuthUser();
+        const token = getExternalToken();
+        const nextUser = userFromAuthData(data);
+        assertCanEnterSystem(nextUser);
+        if (active) setUser(nextUser);
+        if (!token) {
+          clearNewCarRedirectState();
         }
       } catch (error) {
         cleanCodeFromUrl();
         const nextAuthError = classifyAuthError(error);
+        if (nextAuthError.kind === "tokenExpired" && redirectToNewCarLogin({ message: "正在前往统一登录，请稍候…" })) {
+          return;
+        }
         if (nextAuthError.kind !== "externalMerchantNotBound" && nextAuthError.kind !== "permissionDenied") {
           clearExternalToken();
         }

@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from app.auth.context import RequestContext
+from app.config import parse_bool
 
 
 class NewCarAuthError(Exception):
@@ -38,8 +39,8 @@ class NewCarProjectAuthClient:
     def from_env(cls) -> "NewCarProjectAuthClient":
         """从环境变量创建客户端，避免测试依赖模块级配置缓存。"""
         return cls(
-            auth_enabled=os.getenv("NEWCAR_AUTH_ENABLED", "false").lower() == "true",
-            mock_enabled=os.getenv("NEWCAR_AUTH_MOCK_ENABLED", "true").lower() == "true",
+            auth_enabled=parse_bool(os.getenv("NEWCAR_AUTH_ENABLED"), False, name="NEWCAR_AUTH_ENABLED"),
+            mock_enabled=parse_bool(os.getenv("NEWCAR_AUTH_MOCK_ENABLED"), True, name="NEWCAR_AUTH_MOCK_ENABLED"),
             base_url=os.getenv("NEWCAR_AUTH_BASE_URL", "").strip().rstrip("/"),
             exchange_code_url=os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip(),
             me_url=os.getenv("NEWCAR_AUTH_ME_URL", "").strip(),
@@ -53,14 +54,14 @@ class NewCarProjectAuthClient:
         """使用一次性 code 换取外部 token，供前端完成最小登录闭环。"""
         if not code:
             raise NewCarAuthError("TOKEN_MISSING", "missing code")
-        if self.mock_enabled:
+        if not self.auth_enabled or self.mock_enabled:
             return f"mock-external-token:{code}"
         return self._exchange_code(code)
 
     def introspect_code(self, code: str) -> RequestContext:
         """校验一次性 code 并返回请求上下文。"""
         token = self.exchange_code_for_token(code)
-        if self.mock_enabled:
+        if not self.auth_enabled or self.mock_enabled:
             return self.build_mock_context(session_id=f"code:{code}")
         return self._load_me(token)
 
@@ -68,7 +69,7 @@ class NewCarProjectAuthClient:
         """校验 token 并返回请求上下文。"""
         if not token:
             raise NewCarAuthError("TOKEN_MISSING", "missing token")
-        if self.mock_enabled:
+        if not self.auth_enabled or self.mock_enabled:
             return self.build_mock_context(session_id=f"token:{token}")
         return self._load_me(token)
 
@@ -76,13 +77,13 @@ class NewCarProjectAuthClient:
         """校验 cookie 并返回请求上下文。"""
         if not cookie:
             raise NewCarAuthError("TOKEN_MISSING", "missing cookie")
-        if self.mock_enabled:
+        if not self.auth_enabled or self.mock_enabled:
             return self.build_mock_context(session_id="cookie")
         return self._load_me(cookie)
 
     def logout_token(self, token: str) -> dict[str, Any]:
         """通知 NewCarProject 吊销外部 token；不在异常或返回中暴露 token。"""
-        if self.mock_enabled:
+        if not self.auth_enabled or self.mock_enabled:
             return {"ok": True, "mock": True}
         if not token:
             return {"ok": True, "token_present": False}

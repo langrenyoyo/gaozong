@@ -123,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(agent.router)
     app.include_router(douyin_live_check.router)
     app.include_router(auth.router)
+    app.include_router(auth.router, prefix="/api")
     app.include_router(douyin_ai_cs_proxy.router)
     app.include_router(ai_reply_decision_logs.router)
     app.include_router(douyin_autoreply_settings.router)

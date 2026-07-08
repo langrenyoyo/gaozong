@@ -17,7 +17,13 @@ def _auth_error(status_code: int, code: str, message: str) -> HTTPException:
 @router.get("/me")
 async def get_me(context: RequestContext = Depends(get_request_context_required)):
     """返回当前请求上下文。"""
-    return {"success": True, "data": context.to_dict(), "message": "success"}
+    client = NewCarProjectAuthClient.from_env()
+    auth_mode = "mock" if not client.auth_enabled or client.mock_enabled else "newcar"
+    data = context.to_dict()
+    if auth_mode == "mock":
+        data["source_system"] = "mock"
+    data["auth_mode"] = auth_mode
+    return {"success": True, "data": data, "message": "success"}
 
 
 @router.get("/callback")

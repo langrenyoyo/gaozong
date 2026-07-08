@@ -19,6 +19,14 @@ function assertNotIncludes(content, unexpected, label) {
   }
 }
 
+function assertOrder(content, first, second, label) {
+  const firstIndex = content.indexOf(first);
+  const secondIndex = content.indexOf(second);
+  if (firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex) {
+    throw new Error(`${label}: expected ${first} before ${second}`);
+  }
+}
+
 const authApi = read("src/api/auth.ts");
 const app = read("src/App.tsx");
 const client = read("src/api/client.ts");
@@ -48,6 +56,18 @@ assertIncludes(app, "externalMerchantNotBound", "app keeps unbound external acco
 assertIncludes(app, "permissionDenied", "app keeps permission denied users out of relogin loops");
 assertIncludes(app, "exchangeCodeFailed", "app handles invalid one-time code as a readable error");
 assertIncludes(app, "redirectToNewCarLogin", "app redirects missing/expired external auth to NewCar login");
+assertIncludes(app, "const data = await fetchCurrentAuthUser();", "app tries 9000 /auth/me before checking local token");
+assertOrder(
+  app,
+  "const data = await fetchCurrentAuthUser();",
+  "const token = getExternalToken();",
+  "app restores backend mock auth before reading local external token",
+);
+assertNotIncludes(
+  app,
+  "} else if (redirectToNewCarLogin({ message: \"正在前往统一登录，请稍候…\" })) {",
+  "app must not redirect to NewCar only because local token is missing",
+);
 assertIncludes(app, "consumeSavedRedirectPathAfterLogin", "app consumes saved path after code login");
 assertIncludes(app, "resolvePostLoginPath", "app checks saved path against current user permissions");
 assertIncludes(app, "canAccessPath", "app rejects saved paths the current user cannot access");
