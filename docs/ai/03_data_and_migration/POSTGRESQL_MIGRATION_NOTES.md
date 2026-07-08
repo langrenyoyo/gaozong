@@ -610,3 +610,32 @@ python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
 python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini current
 python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head
 ```
+
+## 20. P3-C 9000 knowledge_categories schema 补充
+
+任务：`P3-C-DB-9000-POSTGRES-KNOWLEDGE-CATEGORIES-SCHEMA-1`
+
+当前已在 `auto_wechat` Alembic 环境新增第一张正式 PostgreSQL 业务表 revision：
+
+```text
+migrations/postgres/auto_wechat/versions/0002_create_knowledge_categories.py
+```
+
+本轮只处理 9000 `knowledge_categories`：
+
+1. 创建 `knowledge_categories` 表。
+2. 使用 `BIGSERIAL` 语义的 `BIGINT` 自增主键。
+3. 时间字段使用 `TIMESTAMPTZ`。
+4. 保留当前代码依赖的 `category_key` 字段。
+5. 同时保留任务和 smoke 对照中的 `"key"` 字段，并用 check constraint 保持 `"key" = category_key`。
+6. 增加支撑 `GET /knowledge-categories` 的组合索引：`merchant_id + scope_type + status + deleted_at + sort_order`。
+7. 增加同 scope / merchant / key 的唯一约束，base 分类当前仍由服务层虚拟补充，不强制主表落 system 行。
+
+边界确认：
+
+1. 本轮未切换 9000 到 PostgreSQL。
+2. 本轮未迁移真实 SQLite 数据。
+3. 本轮未连接 PostgreSQL，未执行 `alembic upgrade`。
+4. 本轮未修改 9100 Alembic 环境、Milvus、RAG、业务接口逻辑或 docker-compose。
+5. P3-C 后续可以单独做 dev postgres migration smoke，但必须另起受控任务。
+6. QPS600 仍需后续索引验证、慢查询分析和压测确认。

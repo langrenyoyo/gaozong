@@ -3451,3 +3451,37 @@ python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade hea
 4. 本轮未改 9100 metadata bootstrap。
 5. 本轮未改 docker-compose、Milvus、RAG 或业务 SQL。
 6. P3-C 才开始 9000 PostgreSQL 初始 schema；P3-D 才开始 9100 PostgreSQL 初始 schema。
+
+# P3-C 9000 knowledge_categories PostgreSQL schema 当前状态
+
+任务：`P3-C-DB-9000-POSTGRES-KNOWLEDGE-CATEGORIES-SCHEMA-1`
+
+当前已在 9000 `auto_wechat` Alembic 环境创建第一张正式 PostgreSQL 业务表 revision：
+
+```text
+migrations/postgres/auto_wechat/versions/0002_create_knowledge_categories.py
+```
+
+当前 schema 范围：
+
+1. 只创建 `knowledge_categories`。
+2. 不创建其它 9000 业务表。
+3. 不修改 `migrations/postgres/xg_douyin_ai_cs/`。
+4. 不修改 `app/models.py`、业务接口、RAG、Milvus 或 docker-compose。
+
+字段和索引要点：
+
+1. `id` 使用 PostgreSQL `BIGSERIAL` 语义。
+2. `created_at`、`updated_at`、`deleted_at` 使用 `TIMESTAMPTZ`。
+3. 当前 9000 代码依赖 `category_key`，正式表保留该字段。
+4. 为兼容 P2-F5 smoke 和任务中的 `key` 语义，正式表同时保留 `"key"`，并通过 check constraint 保证 `"key" = category_key`。
+5. `GET /knowledge-categories` 查询索引覆盖 `merchant_id + scope_type + status + deleted_at + sort_order`。
+6. 同 scope / merchant / key 唯一约束用于后续数据迁移幂等与商户隔离。
+
+边界确认：
+
+1. 当前默认运行仍是 SQLite。
+2. 本轮未连接 PostgreSQL，未执行 Alembic migration，未跑 SQLite -> PostgreSQL 数据迁移。
+3. 本轮未切换 `GET /knowledge-categories` 默认流量。
+4. P3-C 后续可以单独做 dev postgres migration smoke，但必须另起受控任务。
+5. QPS600 仍需后续索引验证、慢查询分析、连接池配置和压测确认。

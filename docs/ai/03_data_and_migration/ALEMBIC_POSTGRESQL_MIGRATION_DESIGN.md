@@ -203,6 +203,16 @@ python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade hea
 
 为 `auto_wechat` database 创建 9000 初始 schema。首批优先覆盖低风险和试点所需表，不一次迁移全部发送链路表。
 
+P3-C-DB-9000-POSTGRES-KNOWLEDGE-CATEGORIES-SCHEMA-1 已新增第一张正式业务表 revision：
+
+```text
+migrations/postgres/auto_wechat/versions/0002_create_knowledge_categories.py
+```
+
+本 revision 只创建 `knowledge_categories` 表和该表查询所需索引，不创建其它业务表，不修改 `xg_douyin_ai_cs` Alembic 环境。当前仍未切换 9000 运行数据库，未迁移真实 SQLite 数据，未连接 PostgreSQL，未执行 `alembic upgrade`。
+
+字段设计以当前 9000 查询链路为准：现有代码依赖 `category_key`，P2-F5 smoke 也保留 `"key"` / `category_key` 双字段对照。因此 PostgreSQL 正式表同时保留 `"key"` 和 `category_key`，并用 `ck_knowledge_categories_key_matches_category_key` 保证二者一致，避免后续试点 repository 与迁移数据语义分叉。
+
 ### P3-D：9100 PostgreSQL 初始 schema
 
 为 `xg_douyin_ai_cs` database 创建 RAG / AI 客服 metadata 初始 schema，明确 PostgreSQL 为 metadata 真源。
@@ -229,7 +239,8 @@ python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade hea
 
 1. `knowledge_categories`
    - P2-F 试点接口 `GET /knowledge-categories` 已围绕该表建立 async PG repository 和 smoke。
-   - 建议优先迁移，便于 SQLite / PostgreSQL 对照。
+   - P3-C 已优先创建该表的 PostgreSQL revision，便于后续单独做 dev postgres migration smoke 和 SQLite / PostgreSQL 对照。
+   - 当前未迁移真实数据，正式数据迁移仍留给 P3-E。
 2. `external_merchant_bindings`
    - NewCar 鉴权和 merchant binding 相关。
    - 需要保留 active 用户唯一约束。
