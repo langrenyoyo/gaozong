@@ -540,3 +540,35 @@ RAG_DATABASE_URL=postgresql+asyncpg://xg_douyin_ai_cs:change_me@postgres:5432/xg
 5. 高频 async 请求链路不应继续扩散阻塞式数据库调用。
 6. 本轮未改业务 SQL，未引入 Alembic，未连接 PostgreSQL，未改 Milvus。
 7. RAG / LLM / Milvus / 抖音发送不得阻塞主请求链路；需要耗时处理时应走后续后台队列或异步编排设计。
+
+## 18. P3-A Alembic / PostgreSQL migration 方案设计补充
+
+任务：`P3-A-DB-ALEMBIC-POSTGRESQL-MIGRATION-DESIGN-1`
+
+当前已新增 PostgreSQL Alembic migration 方案设计文档：
+
+```text
+docs/ai/03_data_and_migration/ALEMBIC_POSTGRESQL_MIGRATION_DESIGN.md
+```
+
+本阶段只做设计，不引入 Alembic，不创建 `alembic.ini` / `env.py` / `versions`，不连接 PostgreSQL，不跑迁移，不切换 9000 / 9100 当前运行路径。
+
+方案结论：
+
+1. PostgreSQL 仍采用一个 Docker Compose 容器实例、两个 database：`auto_wechat` 与 `xg_douyin_ai_cs`。
+2. 9000 与 9100 应使用两个独立 Alembic migration 环境：
+   - `migrations/postgres/auto_wechat/`
+   - `migrations/postgres/xg_douyin_ai_cs/`
+3. 两个环境分别维护自己的 `alembic_version` 表，分别读取 `DATABASE_URL` 与 `RAG_DATABASE_URL`。
+4. 不共用一个 migration 环境，避免服务边界、database、发布节奏和误迁移风险混在一起。
+5. Milvus 不参与 Alembic migration；Milvus 仍只是向量检索副本，不是 metadata 真源。
+
+后续路线：
+
+1. P3-B：创建 Alembic skeleton，但不建业务表。
+2. P3-C：建立 9000 PostgreSQL 初始 schema。
+3. P3-D：建立 9100 PostgreSQL 初始 schema。
+4. P3-E：编写 SQLite -> PostgreSQL 数据迁移脚本。
+5. P3-F：继续围绕 `GET /knowledge-categories` 做试点接口 PG 对照。
+6. P3-G：宝塔灰度切换。
+7. P3-H：关闭 SQLite 生产路径。

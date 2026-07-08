@@ -3354,3 +3354,53 @@ docker compose -f docker-compose.dev.yml --profile postgres up -d postgres
 python scripts/smoke_knowledge_categories_sqlite_pg_contrast.py
 docker compose -f docker-compose.dev.yml stop postgres
 ```
+
+# P3-A Alembic / PostgreSQL migration 方案设计当前状态
+
+任务：`P3-A-DB-ALEMBIC-POSTGRESQL-MIGRATION-DESIGN-1`
+
+当前已完成 Alembic / PostgreSQL migration 方案设计，但尚未引入 Alembic，尚未创建 migration skeleton，尚未连接 PostgreSQL，尚未跑迁移。
+
+新增设计文档：
+
+```text
+docs/ai/03_data_and_migration/ALEMBIC_POSTGRESQL_MIGRATION_DESIGN.md
+```
+
+设计结论：
+
+1. 宝塔生产最终仍是不再使用 SQLite。
+2. PostgreSQL 仍使用 Docker Compose 容器，不是外部托管数据库。
+3. 目标架构仍是一个 PostgreSQL 容器实例，两个 database：
+   - `auto_wechat`：9000 主服务，通过 `DATABASE_URL` 接入。
+   - `xg_douyin_ai_cs`：9100 RAG metadata，通过 `RAG_DATABASE_URL` 接入。
+4. 9000 和 9100 应使用两个独立 Alembic migration 环境：
+   - `migrations/postgres/auto_wechat/`
+   - `migrations/postgres/xg_douyin_ai_cs/`
+5. 两个 database 分别维护自己的 `alembic_version` 表，避免 9000 / 9100 服务边界、发布节奏和回滚半径混在一起。
+6. Milvus 不参与 Alembic migration；Milvus 不是 metadata 真源，只是 embedding / 向量检索副本。
+
+当前 migration 审计结论：
+
+1. 9000 当前正式迁移体系仍是 `migrations/migrate_sqlite.py` + `migrations/versions/*.sql` + `schema_migrations`。
+2. 9000 当前表结构还来自 `app/models.py` 和 `Base.metadata.create_all()`。
+3. 9100 当前 metadata 表结构来自 `apps/xg_douyin_ai_cs/rag/database.py` 的 SQLite bootstrap。
+4. P2-F5 PostgreSQL smoke 表只是临时对照表，不是正式 migration，也不是生产 schema。
+
+后续路线：
+
+1. P3-B：创建两个 Alembic skeleton，不建业务表。
+2. P3-C：9000 PostgreSQL 初始 schema，优先低风险表和 `knowledge_categories` 试点。
+3. P3-D：9100 PostgreSQL 初始 schema，覆盖 RAG / AI 客服 metadata。
+4. P3-E：SQLite -> PostgreSQL 数据迁移脚本，包含 backup、dry-run、apply、verify、rollback plan。
+5. P3-F：试点接口切 PG 对照。
+6. P3-G：宝塔灰度切换。
+7. P3-H：关闭 SQLite 生产路径。
+
+边界确认：
+
+1. 当前 P3-A 不引入 Alembic。
+2. 当前 P3-A 不创建 PostgreSQL 表，不连接 PostgreSQL，不跑迁移。
+3. 当前 P3-A 不切默认数据库，不改业务 SQL，不改 docker-compose。
+4. 后续任何生产切换都不得直接全量切库，必须先灰度试点接口。
+5. QPS600 仍需 asyncpg / SQLAlchemy async engine、连接池、事务、索引、慢查询和压测验证。
