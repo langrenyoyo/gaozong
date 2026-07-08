@@ -337,3 +337,35 @@ ON CONFLICT (scope_type, merchant_id, key) DO UPDATE
 9. 不改 9100 / Milvus / RAG。
 10. 不触发 LLM、抖音发送、私信发送或自动回复 gate。
 11. 不写真实 URI、token、password。
+
+## 14. P3-C4 dry-run-only 脚本骨架状态
+
+任务：`P3-C4-DB-9000-KNOWLEDGE-CATEGORIES-MIGRATION-DRY-RUN-SKELETON-1`
+
+当前已新增 dry-run-only 脚本骨架：
+
+```text
+scripts/migrate_knowledge_categories_sqlite_to_postgres.py
+```
+
+当前能力：
+
+1. 支持显式 `--sqlite-db-path`，不猜测宝塔或生产 SQLite 路径。
+2. 支持 `--postgres-url`，未传时读取 `SMOKE_DATABASE_URL` 或 `DATABASE_URL`。
+3. 支持 `--merchant-id` 与 `--limit` 做 dry-run 范围控制。
+4. 默认 dry-run，只读取 SQLite 源数据和 PostgreSQL 只读元数据。
+5. PostgreSQL 只读检查包含 `alembic_version`、`knowledge_categories` 表是否存在，以及已有唯一键 `scope_type + merchant_id + key`。
+6. 字段映射会把 SQLite `category_key` 同时映射到 PostgreSQL `"key"` 和 `category_key`，保证 `key = category_key`。
+7. SQLite `is_base` 0/1 会显式转换为 PostgreSQL boolean 语义。
+8. 缺失 `description` 为 `None`，缺失 `scope_type` 默认为 `merchant`，缺失 `status` 默认为 `active`，缺失 `sort_order` 默认为 `0`。
+9. dry-run 输出源行数、过滤后行数、目标表状态、revision 状态、预计 insert / update / skip、异常行数量和字段映射预览。
+10. `--apply` 或 `--yes` 在 P3-C4 会明确失败：`apply mode is not implemented in P3-C4`。
+
+边界确认：
+
+1. P3-C4 不支持 apply 成功。
+2. P3-C4 不写 PostgreSQL，不执行 `INSERT` / `UPDATE` / `DELETE` / `CREATE` / `DROP` / `ALTER`。
+3. P3-C4 不迁移真实业务数据。
+4. P3-C4 不修改 Alembic revision。
+5. P3-C4 不改业务接口，不切换 9000 默认数据库。
+6. P3-C5 才能在单独受控任务中实现 dev PG apply smoke。

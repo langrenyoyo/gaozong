@@ -725,3 +725,44 @@ docs/ai/03_data_and_migration/KNOWLEDGE_CATEGORIES_SQLITE_TO_POSTGRES_MIGRATION_
 4. 本轮不读取真实 SQLite。
 5. 本轮不迁移真实业务数据。
 6. 本轮不改业务接口、不改 Alembic revision、不改 9100、不改 Milvus / RAG。
+
+## 23. P3-C4 knowledge_categories dry-run-only 迁移脚本骨架补充
+
+任务：`P3-C4-DB-9000-KNOWLEDGE-CATEGORIES-MIGRATION-DRY-RUN-SKELETON-1`
+
+当前已新增脚本：
+
+```text
+scripts/migrate_knowledge_categories_sqlite_to_postgres.py
+```
+
+脚本范围：
+
+1. 只覆盖 9000 `knowledge_categories`。
+2. 默认 dry-run，不实现 PostgreSQL 写入。
+3. 可以读取 SQLite 源库，但必须显式传入 `--sqlite-db-path`，不猜测宝塔路径。
+4. 可以通过 `--postgres-url`、`SMOKE_DATABASE_URL` 或 `DATABASE_URL` 连接 PostgreSQL 做只读检查。
+5. PostgreSQL URL 输出必须脱敏，不打印 password。
+6. PostgreSQL 只读检查仅包含 `alembic_version`、`knowledge_categories` 表存在性和已有唯一键 `scope_type + merchant_id + key`。
+7. `--merchant-id` 和 `--limit` 只影响 dry-run 范围，不改变任何数据。
+8. `--apply` / `--yes` 当前会明确失败：`apply mode is not implemented in P3-C4`。
+
+字段映射边界：
+
+1. SQLite `category_key` 同时映射到 PostgreSQL `"key"` 与 `category_key`。
+2. dry-run 映射阶段校验 `key = category_key`。
+3. SQLite `is_base` 0/1 显式转换为 boolean 语义。
+4. 缺失 `description` 为 `None`。
+5. 缺失 `scope_type` 默认为 `merchant`。
+6. 缺失 `status` 默认为 `active`。
+7. 缺失 `sort_order` 默认为 `0`，与本轮任务要求一致。
+8. 脚本不会主动生成新的 `base` system 行；SQLite 中已有真实 base 行按普通源行进入 dry-run 统计。
+
+当前边界确认：
+
+1. 默认运行仍是 SQLite。
+2. 本轮不写 PostgreSQL，不迁移真实业务数据。
+3. 本轮不改 Alembic revision，不创建新表或索引。
+4. 本轮不改业务代码、不改 docker-compose、不改 `.env` / `.env.example`。
+5. 本轮不改 9100 / Milvus / RAG。
+6. P3-C5 才实现 dev PG apply smoke；生产迁移仍未开始。
