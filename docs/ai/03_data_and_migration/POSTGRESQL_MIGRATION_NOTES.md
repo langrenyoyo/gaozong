@@ -2181,3 +2181,61 @@ SMOKE_PASS: agents/accounts core data migration dev apply ready
 1. `P3-E3`：agents/accounts API contrast。
 2. `P3-E4`：agents/accounts runtime shadow read 方案，视复杂度决定。
 3. 不得跳过 contrast / staging 审批直接进入默认数据库切换。
+
+## 50. P3-E3 agents/accounts SQLite / PostgreSQL contrast
+
+任务：`P3-E3-DB-9000-AGENTS-ACCOUNTS-API-CONTRAST-1`
+
+P3-E3 已为 P3-E1/P3-E2 完成的 agents/accounts 四表新增离线只读 SQLite vs PostgreSQL data contrast 框架和本地/dev synthetic contrast smoke：
+
+```text
+scripts/contrast_agents_accounts_core_sqlite_vs_postgres.py
+scripts/smoke_contrast_agents_accounts_core_dev.py
+tests/test_contrast_agents_accounts_core_sqlite_vs_postgres.py
+```
+
+覆盖表：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+contrast 规则：
+
+1. 只读读取 SQLite 与 PostgreSQL，不执行 `insert` / `update` / `delete` / `truncate` / `drop`。
+2. `postgres-url` 拒绝 SQLite URL，输出 URL 必须脱敏。
+3. 对比 `sqlite_count`、`postgres_count`、`count_match`、`sample_key_match`、`required_columns_match`、nullable/default compatibility、JSON parseability、datetime parseability、`mismatch_count` 和 warnings。
+4. 对照 key 沿用 P3-E2 迁移 key：`ai_agents.agent_id`、`douyin_authorized_accounts.merchant_id + open_id`、`douyin_account_agent_bindings.id`、`agent_knowledge_categories.merchant_id + agent_id + category_key`。
+5. `token`、`secret`、`access_token`、`refresh_token`、`open_id`、`user_id`、`union_id`、raw JSON 等敏感内容不得完整明文输出。
+6. 非 strict 模式下 JSON / datetime parse warning 不阻断；strict 模式下 warning 会返回 `CONTRAST_FAILED`。
+
+dev synthetic contrast smoke：
+
+1. 通过 `SMOKE_DATABASE_URL` 读取 dev PostgreSQL URL。
+2. 自动创建临时 SQLite fixture。
+3. 复用 P3-E2 迁移 helper 将 synthetic SQLite 数据 apply 到 dev PostgreSQL。
+4. 执行 contrast，要求四表 `count_match=true`、`sample_key_match=true`、`mismatch_count=0`。
+5. smoke 后只清理 synthetic merchant/id 范围的 PG 数据。
+6. 成功输出：`SMOKE_PASS: agents/accounts core SQLite vs PostgreSQL contrast ready`。
+
+边界确认：
+
+1. 本轮只做离线 contrast、dev synthetic smoke、测试和文档。
+2. 本轮未连接宝塔 production。
+3. 本轮未读取 production SQLite。
+4. 本轮未执行 production apply。
+5. 本轮未切换默认 `DATABASE_URL`。
+6. 本轮未默认开启 PG pilot。
+7. 本轮未启用 PG write。
+8. 本轮未接 runtime shadow。
+9. 本轮未修改业务接口默认数据库。
+10. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+当前切库结论不变：P3-E3 只证明 agents/accounts 四表本地/dev synthetic 数据在 SQLite 与 PostgreSQL 之间可以离线对照，不等于宝塔真实数据 contrast，不等于 runtime shadow 已接入，也不等于可以切换默认数据库。
+
+后续建议：
+
+1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
+2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
+3. 仍不得跳过 contrast / staging 审批直接切换默认 `DATABASE_URL`。

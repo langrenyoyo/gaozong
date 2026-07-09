@@ -893,3 +893,39 @@ readiness 影响：
 1. `P3-E3`：agents/accounts API contrast，验证 SQLite / PG 响应语义。
 2. `P3-E4`：agents/accounts runtime shadow read 方案，视接口复杂度决定。
 3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。
+
+## 25. P3-E3 agents/accounts contrast 当前状态
+
+任务：`P3-E3-DB-9000-AGENTS-ACCOUNTS-API-CONTRAST-1`
+
+P3-E3 已为 agents/accounts 四表新增离线 SQLite / PostgreSQL contrast 框架：
+
+```text
+scripts/contrast_agents_accounts_core_sqlite_vs_postgres.py
+scripts/smoke_contrast_agents_accounts_core_dev.py
+tests/test_contrast_agents_accounts_core_sqlite_vs_postgres.py
+```
+
+readiness 影响：
+
+1. 第二批 P0 核心域已从 schema batch、data migration dry-run/dev apply 进入 SQLite vs PostgreSQL contrast 阶段。
+2. contrast 覆盖 `ai_agents`、`douyin_authorized_accounts`、`douyin_account_agent_bindings`、`agent_knowledge_categories`。
+3. 对照规则覆盖 count、key、必要列、JSON parse warning、datetime parse warning、nullable/default compatibility 与 `mismatch_count`。
+4. key 规则与 P3-E2 迁移 upsert key 保持一致，避免 contrast 与迁移口径分叉。
+5. dev synthetic smoke 会复用 P3-E2 helper apply synthetic SQLite 数据，再执行 strict contrast，并在结束时清理 synthetic PG 数据。
+6. 敏感字段和 URL 继续脱敏，`open_id`、token、secret、raw JSON 不完整明文输出。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. P3-E3 仍是本地/dev synthetic contrast，不代表宝塔真实数据 contrast。
+5. P3-E3 未接 runtime shadow，不改变线上接口响应源。
+6. production QPS600 仍需要真实 HTTP benchmark、连接池观测、慢查询和回滚演练证明。
+
+后续建议：
+
+1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
+2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
+3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。

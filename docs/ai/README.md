@@ -56,6 +56,7 @@ docs/ai/04_OUTPUT_RULES.md
 | leads/tasks PG shadow 灰度预设 | `03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md` |
 | agents/accounts PG schema batch | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | agents/accounts PG data migration dry-run / dev apply | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
+| agents/accounts SQLite / PG contrast | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | 接口契约 | `04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |

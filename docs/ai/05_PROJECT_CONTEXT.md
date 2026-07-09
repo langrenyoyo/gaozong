@@ -4837,3 +4837,66 @@ SMOKE_PASS: agents/accounts core data migration dev apply ready
 1. `P3-E3`：agents/accounts API contrast。
 2. `P3-E4`：agents/accounts runtime shadow read 方案，视复杂度决定。
 3. 仍不得跳过 contrast / staging 审批直接切换默认数据库。
+
+# P3-E3 agents/accounts SQLite / PostgreSQL contrast 当前状态
+
+任务：`P3-E3-DB-9000-AGENTS-ACCOUNTS-API-CONTRAST-1`
+
+当前已为 P3-E1/P3-E2 的 agents/accounts 四表新增离线 SQLite vs PostgreSQL contrast 框架：
+
+```text
+scripts/contrast_agents_accounts_core_sqlite_vs_postgres.py
+scripts/smoke_contrast_agents_accounts_core_dev.py
+tests/test_contrast_agents_accounts_core_sqlite_vs_postgres.py
+```
+
+覆盖表：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+对照 key：
+
+1. `ai_agents`：`agent_id`
+2. `douyin_authorized_accounts`：`merchant_id + open_id`
+3. `douyin_account_agent_bindings`：`id`
+4. `agent_knowledge_categories`：`merchant_id + agent_id + category_key`
+
+contrast 输出：
+
+1. `sqlite_count` / `postgres_count` / `count_match`
+2. `sample_key_match`
+3. `required_columns_match`
+4. nullable/default compatibility
+5. JSON / datetime parseability warning
+6. `mismatch_count`
+7. 脱敏 warnings
+8. `CONTRAST_PASS` / `CONTRAST_WARN` / `CONTRAST_FAILED`
+
+dev synthetic contrast smoke：
+
+1. 使用临时 synthetic SQLite fixture。
+2. 复用 P3-E2 迁移 helper apply synthetic 数据到 dev PostgreSQL。
+3. strict contrast 要求四表 count/key/mismatch 全部一致。
+4. smoke 后只清理 synthetic PG 数据。
+5. 成功输出：`SMOKE_PASS: agents/accounts core SQLite vs PostgreSQL contrast ready`。
+
+边界确认：
+
+1. 本轮未连接宝塔 production。
+2. 本轮未读取 production SQLite。
+3. 本轮未执行 production apply。
+4. 本轮未切换默认 `DATABASE_URL`。
+5. 本轮未默认开启 PG pilot。
+6. 本轮未启用 PG write。
+7. 本轮未接 runtime shadow。
+8. 本轮未修改业务接口默认数据库。
+9. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
+2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
+3. 仍不得跳过 contrast / staging 审批直接切换默认数据库。
