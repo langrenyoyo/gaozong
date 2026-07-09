@@ -502,3 +502,34 @@ docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
 该脚本用于本地/dev synthetic worker/pool sizing，输出 worker、pool、sample rate、shadow concurrency、`estimated_pg_connections`、HTTP 延迟、吞吐和 shadow metrics。当前仍不能切换默认 `DATABASE_URL`，不能默认开启 PG pilot，不能将结果视为 production QPS600 证明。
 
 下一步建议：`P3-D12` 做 shadow sampling / max concurrency 策略调优，或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。
+
+## 18. P3-D12 shadow sampling / concurrency tuning 记录
+
+任务：`P3-D12-DB-9000-LEADS-TASKS-SHADOW-SAMPLING-CONCURRENCY-TUNING-1`
+
+P3-D12 已在 P3-D11 worker/pool sizing 基础上完成本地/dev synthetic quick-tuning：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py --quick-tuning
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_SAMPLING_TUNING_REPORT.md
+```
+
+当前 recommended gray config：
+
+```text
+LEADS_TASKS_PG_SHADOW_SAMPLE_RATE=0.1
+LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY=10
+LEADS_TASKS_PG_POOL_SIZE=5
+LEADS_TASKS_PG_MAX_OVERFLOW=5
+workers=2
+```
+
+本轮结果只用于后续灰度 preset 讨论：
+
+1. 默认仍不启用 `LEADS_TASKS_PG_PILOT_ENABLED`。
+2. 默认仍不启用 `LEADS_TASKS_PG_READ_SHADOW_ENABLED`。
+3. 仍不启用 `LEADS_TASKS_PG_WRITE_ENABLED`。
+4. SQLite 仍是接口返回源，PG 仍只做 read-only shadow。
+5. 本地/dev synthetic 最佳吞吐 `570.102 rps` 仍低于 QPS600，不能作为 production QPS600 证明。
+
+下一步建议：`P3-D13` 做 runtime shadow gray config preset 与环境变量文档，默认关闭；或进入 `P3-E1` 智能体 / 抖音账号绑定 schema batch。

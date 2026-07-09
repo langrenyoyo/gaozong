@@ -320,3 +320,34 @@ docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
 3. P3-D11 不默认开启 PG pilot。
 4. P3-D11 不启用 PG write。
 5. P3-D11 不连接宝塔 production，不读取 production SQLite，不执行 production apply。
+
+## 12. P3-D12 sampling / concurrency tuning 补充
+
+任务：`P3-D12-DB-9000-LEADS-TASKS-SHADOW-SAMPLING-CONCURRENCY-TUNING-1`
+
+P3-D12 已扩展 worker benchmark，新增：
+
+1. `--quick-tuning` 快速矩阵。
+2. `shadow_sample_rate=1.0,0.5,0.2,0.1`。
+3. `shadow_max_concurrency=1,3,5,10`。
+4. `theoretical_shadow_attempts`。
+5. `shadow_coverage_ratio`。
+6. `tuning_summary.recommended_gray_config`。
+
+本地/dev synthetic quick-tuning 结果：
+
+| 指标 | 值 |
+|---|---:|
+| status | `SAMPLING_TUNING_PASS` |
+| recommended workers | 2 |
+| recommended pool_size | 5 |
+| recommended max_overflow | 5 |
+| recommended shadow_max_concurrency | 10 |
+| recommended shadow_sample_rate | 0.1 |
+| estimated_pg_connections | 20 |
+| throughput_rps | 570.102 |
+| p95_ms | 52.178 |
+| p99_ms | 59.518 |
+| QPS600 remaining_rps | 29.898 |
+
+结论：P3-D12 只形成 read-only shadow 灰度候选参数；当前仍不能切换默认 `DATABASE_URL`，仍未启用 PG write，也仍不是 production QPS600 证明。

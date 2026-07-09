@@ -175,3 +175,25 @@ docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
 5. 仍只允许本地/dev synthetic，不代表 production QPS600。
 
 边界保持不变：不切换默认 `DATABASE_URL`，不默认开启 PG pilot，不启用 PG write，不连接宝塔 production。
+
+## 10. P3-D12 sampling / concurrency tuning 补充
+
+P3-D12 在 P3-D11 worker/pool sizing 基础上继续调优 `shadow_sample_rate` 与 `shadow_max_concurrency`：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py --quick-tuning
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_SAMPLING_TUNING_REPORT.md
+```
+
+本地/dev synthetic quick-tuning 推荐灰度候选：
+
+```text
+workers=2
+pool_size=5
+max_overflow=5
+shadow_max_concurrency=10
+shadow_sample_rate=0.1
+estimated_pg_connections=20
+```
+
+本轮最佳 synthetic 结果为 `throughput_rps=570.102`、`p95=52.178ms`、`p99=59.518ms`、`error_rate=0`，距离 QPS600 仍差约 `29.898 rps`。该结果不包含宝塔反代、真实 production 数据和 production PostgreSQL，因此仍不能作为 production QPS600 证明。

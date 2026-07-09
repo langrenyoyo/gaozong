@@ -4643,3 +4643,55 @@ worker benchmark 覆盖：
 10. P3-D11 benchmark 不代表 production QPS600 达标。
 
 下一步建议：`P3-D12` 做 shadow sampling / max concurrency 策略调优，或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。
+
+# P3-D12 leads/tasks shadow sampling / concurrency tuning 当前状态
+
+任务：`P3-D12-DB-9000-LEADS-TASKS-SHADOW-SAMPLING-CONCURRENCY-TUNING-1`
+
+当前已在 P3-D11 worker/pool sizing benchmark 基础上完成本地/dev synthetic sample rate 与 shadow max concurrency 调优：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+tests/test_leads_tasks_shadow_worker_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_SAMPLING_TUNING_REPORT.md
+```
+
+新增 benchmark 能力：
+
+1. `--quick-tuning` 快速矩阵。
+2. `shadow_sample_rate=1.0,0.5,0.2,0.1`。
+3. `shadow_max_concurrency=1,3,5,10`。
+4. `theoretical_shadow_attempts` 与 `shadow_coverage_ratio`。
+5. `tuning_summary.recommended_gray_config`。
+
+本地/dev synthetic quick-tuning 结果：
+
+```text
+SAMPLING_TUNING_PASS
+recommended_gray_config:
+  workers=2
+  pool_size=5
+  max_overflow=5
+  shadow_max_concurrency=10
+  shadow_sample_rate=0.1
+  estimated_pg_connections=20
+best_throughput_rps=570.102
+p95_ms=52.178
+p99_ms=59.518
+QPS600 remaining_rps=29.898
+```
+
+边界确认：
+
+1. P3-D12 仍只使用本地/dev synthetic。
+2. P3-D12 未连接宝塔 production。
+3. P3-D12 未读取 production SQLite。
+4. P3-D12 未执行 production apply。
+5. P3-D12 未切换默认 `DATABASE_URL`。
+6. P3-D12 未默认开启 PG pilot。
+7. P3-D12 未启用 PG write。
+8. P3-D12 未接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+9. P3-D12 未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+10. P3-D12 benchmark 仍不代表 production QPS600 达标。
+
+下一步建议：`P3-D13` 做 runtime shadow gray config preset 与环境变量文档，默认关闭；或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。

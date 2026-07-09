@@ -16,16 +16,31 @@ def test_parse_csv_parameters_and_defaults():
     assert args.concurrency == 50
     assert args.warmup == 50
     assert args.profile == "all"
+    assert args.quick_tuning is False
 
     assert bench.parse_int_csv("1, 2,4", name="workers") == [1, 2, 4]
     assert bench.parse_int_csv("5,10", name="pool_sizes") == [5, 10]
     assert bench.parse_int_csv("0,1", name="max_overflows", minimum=0) == [0, 1]
-    assert bench.parse_float_csv("1.0,0.5", name="sample_rates") == [1.0, 0.5]
+    assert bench.parse_float_csv("1.0,0.5,0.2,0.1", name="sample_rates") == [1.0, 0.5, 0.2, 0.1]
 
     with pytest.raises(bench.WorkerBenchmarkError, match="sample_rate"):
         bench.parse_sample_rates("1.1")
     with pytest.raises(bench.WorkerBenchmarkError, match="workers"):
         bench.parse_int_csv("0", name="workers")
+
+
+def test_quick_tuning_expands_recommended_matrix():
+    from scripts import benchmark_leads_tasks_shadow_workers_dev as bench
+
+    args = bench.parse_args(["--quick-tuning"])
+    matrix = bench._parse_matrix_from_args(args)
+
+    assert len(matrix) == 32
+    assert {item.workers for item in matrix} == {2}
+    assert {item.pool_size for item in matrix} == {5, 10}
+    assert {item.max_overflow for item in matrix} == {5}
+    assert {item.shadow_sample_rate for item in matrix} == {1.0, 0.5, 0.2, 0.1}
+    assert {item.shadow_max_concurrency for item in matrix} == {1, 3, 5, 10}
 
 
 def test_matrix_and_estimated_pg_connections():
@@ -46,6 +61,27 @@ def test_matrix_and_estimated_pg_connections():
         (item.workers, item.pool_size, item.max_overflow, item.shadow_sample_rate)
         for item in matrix
     } >= {(2, 5, 10, 0.5)}
+
+
+def test_theoretical_attempts_and_shadow_coverage_ratio():
+    from scripts import benchmark_leads_tasks_shadow_workers_dev as bench
+    from scripts import benchmark_leads_tasks_shadow_http_dev as http_bench
+
+    operations = http_bench.build_http_operations("all", lead_id=9003001)
+    expected = http_bench.EXPECTED_SHADOW_OPERATIONS_BY_PROFILE["all"]
+
+    assert bench.calculate_theoretical_shadow_attempts(
+        total_requests=6,
+        operations=operations,
+        expected_operations=expected,
+    ) == 5
+    assert bench.calculate_theoretical_shadow_attempts(
+        total_requests=12,
+        operations=operations,
+        expected_operations=expected,
+    ) == 10
+    assert bench.calculate_shadow_coverage_ratio(total_shadow_reads=5, theoretical_shadow_attempts=10) == 0.5
+    assert bench.calculate_shadow_coverage_ratio(total_shadow_reads=0, theoretical_shadow_attempts=0) == 0.0
 
 
 def test_url_validation_reuses_dev_only_rules_and_masks_password():
@@ -111,6 +147,66 @@ def test_strict_validation_and_sample_rate_operation_warning():
     assert any("sample_rate < 1.0" in warning for warning in warnings)
 
 
+def test_recommended_gray_config_selection_and_tuning_summary():
+    from scripts import benchmark_leads_tasks_shadow_workers_dev as bench
+
+    results = [
+        {
+            "workers": 2,
+            "pool_size": 10,
+            "max_overflow": 5,
+            "shadow_max_concurrency": 5,
+            "shadow_sample_rate": 1.0,
+            "estimated_pg_connections": 30,
+            "throughput_rps": 276.231,
+            "p95_ms": 116.622,
+            "p99_ms": 130.031,
+            "error_rate": 0,
+            "shadow_error": 0,
+            "shadow_timeout": 0,
+            "shadow_coverage_ratio": 1.0,
+        },
+        {
+            "workers": 2,
+            "pool_size": 5,
+            "max_overflow": 5,
+            "shadow_max_concurrency": 3,
+            "shadow_sample_rate": 0.2,
+            "estimated_pg_connections": 20,
+            "throughput_rps": 500.0,
+            "p95_ms": 140.0,
+            "p99_ms": 180.0,
+            "error_rate": 0,
+            "shadow_error": 0,
+            "shadow_timeout": 0,
+            "shadow_coverage_ratio": 0.2,
+        },
+        {
+            "workers": 2,
+            "pool_size": 5,
+            "max_overflow": 5,
+            "shadow_max_concurrency": 1,
+            "shadow_sample_rate": 0.1,
+            "estimated_pg_connections": 20,
+            "throughput_rps": 520.0,
+            "p95_ms": 170.0,
+            "p99_ms": 220.0,
+            "error_rate": 0,
+            "shadow_error": 0,
+            "shadow_timeout": 0,
+            "shadow_coverage_ratio": 0.1,
+        },
+    ]
+
+    summary = bench.build_tuning_summary(results, target_qps=600)
+
+    assert summary["best_throughput"]["throughput_rps"] == 520.0
+    assert summary["best_p95_under_150ms"]["shadow_sample_rate"] == 0.2
+    assert summary["best_low_pg_connections"]["estimated_pg_connections"] == 20
+    assert summary["recommended_gray_config"]["shadow_sample_rate"] == 0.2
+    assert summary["qps600_gap"]["best_throughput_ratio"] == 0.866667
+
+
 def test_output_json_structure(tmp_path):
     from scripts import benchmark_leads_tasks_shadow_workers_dev as bench
 
@@ -129,6 +225,7 @@ def test_output_json_structure(tmp_path):
             }
         ],
         "recommendation": {"recommended": True},
+        "tuning_summary": {"recommended_gray_config": {"shadow_sample_rate": 0.2}},
     }
 
     bench.write_json_result(str(output_path), payload)
@@ -136,6 +233,7 @@ def test_output_json_structure(tmp_path):
     loaded = json.loads(output_path.read_text(encoding="utf-8"))
     assert loaded["status"] == "pass"
     assert loaded["results"][0]["estimated_pg_connections"] == 10
+    assert loaded["tuning_summary"]["recommended_gray_config"]["shadow_sample_rate"] == 0.2
 
 
 def test_windows_stop_worker_server_kills_process_tree(monkeypatch):

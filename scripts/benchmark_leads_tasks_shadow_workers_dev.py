@@ -30,6 +30,15 @@ class WorkerBenchmarkError(RuntimeError):
     """worker benchmark 配置或执行失败。"""
 
 
+QUICK_TUNING_DEFAULTS = {
+    "workers": "2",
+    "pool_sizes": "5,10",
+    "max_overflows": "5",
+    "shadow_max_concurrency": "1,3,5,10",
+    "shadow_sample_rates": "1.0,0.5,0.2,0.1",
+}
+
+
 @dataclass(frozen=True)
 class WorkerMatrixItem:
     workers: int
@@ -77,6 +86,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--strict", action="store_true", help="严格模式：HTTP error、shadow error、engine 异常会失败")
     parser.add_argument("--timeout-seconds", type=float, default=10, help="单个 HTTP 请求超时，默认 10 秒")
     parser.add_argument("--port", type=int, help="本地端口；不传则每组随机")
+    parser.add_argument(
+        "--quick-tuning",
+        action="store_true",
+        help="使用 P3-D12 推荐快速调优矩阵：workers=2, pool_size=5/10, max_overflow=5, sample_rate=1.0/0.5/0.2/0.1, shadow_max_concurrency=1/3/5/10",
+    )
     return parser.parse_args(argv)
 
 
@@ -123,6 +137,27 @@ def parse_sample_rates(value: str) -> list[float]:
 
 def estimate_pg_connections(*, workers: int, pool_size: int, max_overflow: int) -> int:
     return workers * (pool_size + max_overflow)
+
+
+def calculate_theoretical_shadow_attempts(
+    *,
+    total_requests: int,
+    operations: Sequence[http_bench.HttpBenchmarkOperation],
+    expected_operations: set[str],
+) -> int:
+    if total_requests <= 0 or not operations:
+        return 0
+    return sum(
+        1
+        for index in range(total_requests)
+        if operations[index % len(operations)].operation in expected_operations
+    )
+
+
+def calculate_shadow_coverage_ratio(*, total_shadow_reads: int, theoretical_shadow_attempts: int) -> float:
+    if theoretical_shadow_attempts <= 0:
+        return 0.0
+    return round(total_shadow_reads / theoretical_shadow_attempts, 6)
 
 
 def build_matrix(
@@ -361,8 +396,10 @@ def build_result_row(
     stats: Mapping[str, Any],
     shadow_metrics: Mapping[str, Any],
     engine_snapshot: Mapping[str, Any],
+    theoretical_shadow_attempts: int,
     warnings: Sequence[str],
 ) -> dict[str, Any]:
+    total_shadow_reads = int(shadow_metrics.get("total_shadow_reads") or 0)
     return {
         "workers": item.workers,
         "pool_size": item.pool_size,
@@ -376,6 +413,17 @@ def build_result_row(
         "p95_ms": stats.get("p95_ms", 0),
         "p99_ms": stats.get("p99_ms", 0),
         "error_rate": stats.get("error_rate", 0),
+        "theoretical_shadow_attempts": theoretical_shadow_attempts,
+        "total_shadow_reads": total_shadow_reads,
+        "total_shadow_pass": shadow_metrics.get("total_shadow_pass", 0),
+        "total_shadow_sampled_out": shadow_metrics.get("total_shadow_sampled_out", 0),
+        "total_shadow_concurrency_limited": shadow_metrics.get("total_shadow_concurrency_limited", 0),
+        "total_shadow_error": shadow_metrics.get("total_shadow_error", 0),
+        "total_shadow_timeout": shadow_metrics.get("total_shadow_timeout", 0),
+        "shadow_coverage_ratio": calculate_shadow_coverage_ratio(
+            total_shadow_reads=total_shadow_reads,
+            theoretical_shadow_attempts=theoretical_shadow_attempts,
+        ),
         "shadow_error": shadow_metrics.get("total_shadow_error", 0),
         "shadow_timeout": shadow_metrics.get("total_shadow_timeout", 0),
         "sampled_out": shadow_metrics.get("total_shadow_sampled_out", 0),
@@ -386,46 +434,117 @@ def build_result_row(
     }
 
 
-def recommend_dev_parameters(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    candidates = [
+def _valid_tuning_candidates(results: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [
         result
         for result in results
         if float(result.get("error_rate") or 0) == 0
         and int(result.get("shadow_error") or 0) == 0
         and int(result.get("shadow_timeout") or 0) == 0
     ]
+
+
+def _compact_config(result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not result:
+        return None
+    keys = (
+        "workers",
+        "pool_size",
+        "max_overflow",
+        "shadow_max_concurrency",
+        "shadow_sample_rate",
+        "estimated_pg_connections",
+        "throughput_rps",
+        "p95_ms",
+        "p99_ms",
+        "error_rate",
+        "total_shadow_reads",
+        "total_shadow_sampled_out",
+        "total_shadow_concurrency_limited",
+        "shadow_coverage_ratio",
+    )
+    return {key: result.get(key) for key in keys if key in result}
+
+
+def build_tuning_summary(results: Sequence[Mapping[str, Any]], *, target_qps: int = 600) -> dict[str, Any]:
+    candidates = _valid_tuning_candidates(results)
     if not candidates:
         return {
-            "recommended": False,
+            "status": "no_candidate",
             "reason": "没有无 error / timeout 的候选参数",
+            "target_qps": target_qps,
+        }
+
+    best_throughput = max(candidates, key=lambda item: float(item.get("throughput_rps") or 0))
+    p95_candidates = [item for item in candidates if float(item.get("p95_ms") or 0) <= 150]
+    best_p95_under_150 = (
+        max(p95_candidates, key=lambda item: float(item.get("throughput_rps") or 0))
+        if p95_candidates
+        else min(candidates, key=lambda item: float(item.get("p95_ms") or 0))
+    )
+    best_low_pg_connections = min(
+        candidates,
+        key=lambda item: (
+            int(item.get("estimated_pg_connections") or 0),
+            float(item.get("p95_ms") or 0),
+            -float(item.get("throughput_rps") or 0),
+        ),
+    )
+    recommended_source = min(
+        p95_candidates or candidates,
+        key=lambda item: (
+            int(item.get("estimated_pg_connections") or 0),
+            float(item.get("p95_ms") or 0),
+            -float(item.get("throughput_rps") or 0),
+        ),
+    )
+    best_rps = float(best_throughput.get("throughput_rps") or 0)
+    return {
+        "status": "ready",
+        "target_qps": target_qps,
+        "best_throughput": _compact_config(best_throughput),
+        "best_p95_under_150ms": _compact_config(best_p95_under_150),
+        "best_low_pg_connections": _compact_config(best_low_pg_connections),
+        "recommended_gray_config": _compact_config(recommended_source),
+        "qps600_gap": {
+            "best_throughput_rps": round(best_rps, 3),
+            "best_throughput_ratio": round(best_rps / target_qps, 6) if target_qps > 0 else 0.0,
+            "remaining_rps": round(max(target_qps - best_rps, 0.0), 3),
+            "required_multiplier": round(target_qps / best_rps, 6) if best_rps > 0 else None,
+        },
+    }
+
+
+def recommend_dev_parameters(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    tuning = build_tuning_summary(results)
+    recommended = tuning.get("recommended_gray_config")
+    if not recommended:
+        return {
+            "recommended": False,
+            "reason": tuning.get("reason", "没有推荐参数"),
         }
     ranked = sorted(
-        candidates,
+        _valid_tuning_candidates(results),
         key=lambda item: (
             float(item.get("p95_ms") or 0),
             -float(item.get("throughput_rps") or 0),
             int(item.get("estimated_pg_connections") or 0),
         ),
     )
-    best = ranked[0]
     return {
         "recommended": True,
-        "best": {
-            "workers": best["workers"],
-            "pool_size": best["pool_size"],
-            "max_overflow": best["max_overflow"],
-            "shadow_max_concurrency": best["shadow_max_concurrency"],
-            "shadow_sample_rate": best["shadow_sample_rate"],
-            "estimated_pg_connections": best["estimated_pg_connections"],
-            "throughput_rps": best["throughput_rps"],
-            "p95_ms": best["p95_ms"],
-            "p99_ms": best["p99_ms"],
-        },
+        "best": recommended,
         "top_candidates": ranked[:3],
     }
 
 
 def _parse_matrix_from_args(args: argparse.Namespace) -> list[WorkerMatrixItem]:
+    if getattr(args, "quick_tuning", False):
+        args.workers = QUICK_TUNING_DEFAULTS["workers"]
+        args.pool_sizes = QUICK_TUNING_DEFAULTS["pool_sizes"]
+        args.max_overflows = QUICK_TUNING_DEFAULTS["max_overflows"]
+        args.shadow_max_concurrency = QUICK_TUNING_DEFAULTS["shadow_max_concurrency"]
+        args.shadow_sample_rates = QUICK_TUNING_DEFAULTS["shadow_sample_rates"]
     return build_matrix(
         workers=parse_int_csv(args.workers, name="workers"),
         pool_sizes=parse_int_csv(args.pool_sizes, name="pool_sizes"),
@@ -492,12 +611,18 @@ def run_suite(args: argparse.Namespace, database_url: str) -> dict[str, Any]:
                 strict=args.strict,
             )
             warnings.extend(row_warnings)
+            theoretical_attempts = calculate_theoretical_shadow_attempts(
+                total_requests=int(stats.get("total_requests") or 0),
+                operations=operations,
+                expected_operations=expected_operations,
+            )
             results.append(
                 build_result_row(
                     item=item,
                     stats=stats,
                     shadow_metrics=shadow_metrics,
                     engine_snapshot=engine_snapshot,
+                    theoretical_shadow_attempts=theoretical_attempts,
                     warnings=row_warnings,
                 )
             )
@@ -518,6 +643,7 @@ def run_suite(args: argparse.Namespace, database_url: str) -> dict[str, Any]:
             "matrix_size": len(matrix),
             "results": results,
             "recommendation": recommend_dev_parameters(results),
+            "tuning_summary": build_tuning_summary(results),
             "pg_write_enabled": False,
             "multi_worker_measured": any(item.workers > 1 for item in matrix),
         }
@@ -537,6 +663,7 @@ def print_summary(payload: Mapping[str, Any]) -> None:
     for item in payload["results"]:
         print(f"matrix_result={json.dumps(item, ensure_ascii=False)}")
     print(f"recommendation={json.dumps(payload['recommendation'], ensure_ascii=False)}")
+    print(f"tuning_summary={json.dumps(payload['tuning_summary'], ensure_ascii=False)}")
     if payload["warnings"]:
         print(f"warnings={json.dumps(payload['warnings'], ensure_ascii=False)}")
 
@@ -553,9 +680,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"output_json={args.output_json}")
         print_summary(payload)
         if payload["status"] == "pass":
-            print("WORKER_BENCHMARK_PASS: leads/tasks shadow worker pool sizing ready")
+            print("SAMPLING_TUNING_PASS: leads/tasks shadow sampling concurrency tuning ready")
         else:
-            print("WORKER_BENCHMARK_WARN: leads/tasks shadow worker pool sizing has warnings")
+            print("SAMPLING_TUNING_WARN: leads/tasks shadow sampling concurrency tuning has warnings")
         return 0
     except Exception as exc:
         print(f"WORKER_BENCHMARK_FAIL: {exc}")

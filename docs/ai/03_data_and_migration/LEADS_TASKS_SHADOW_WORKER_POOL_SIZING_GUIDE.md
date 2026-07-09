@@ -160,3 +160,52 @@ PG 最大连接预算 = worker 数 * (pool_size + max_overflow)
 6. 不执行 production apply。
 7. 不把本地 worker benchmark 当作 QPS600 达标证明。
 8. 不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+## 9. P3-D12 sampling / concurrency tuning 补充
+
+任务：`P3-D12-DB-9000-LEADS-TASKS-SHADOW-SAMPLING-CONCURRENCY-TUNING-1`
+
+P3-D12 在本文 D11 worker/pool sizing benchmark 基础上增加快速调优模式：
+
+```powershell
+python scripts/benchmark_leads_tasks_shadow_workers_dev.py --quick-tuning --requests 100 --concurrency 20 --warmup 20 --strict
+```
+
+`--quick-tuning` 固定展开：
+
+```text
+workers=2
+pool_size=5,10
+max_overflow=5
+shadow_sample_rate=1.0,0.5,0.2,0.1
+shadow_max_concurrency=1,3,5,10
+```
+
+新增输出字段：
+
+1. `theoretical_shadow_attempts`
+2. `total_shadow_reads`
+3. `total_shadow_pass`
+4. `total_shadow_sampled_out`
+5. `total_shadow_concurrency_limited`
+6. `shadow_coverage_ratio`
+7. `tuning_summary`
+
+本地/dev synthetic 结果记录见：
+
+```text
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_SAMPLING_TUNING_REPORT.md
+```
+
+当前 recommended gray config：
+
+```text
+workers=2
+pool_size=5
+max_overflow=5
+shadow_max_concurrency=10
+shadow_sample_rate=0.1
+estimated_pg_connections=20
+```
+
+该配置只作为后续灰度候选，不得默认启用；当前仍不切换默认 `DATABASE_URL`，不启用 PG write，也不能作为 production QPS600 证明。

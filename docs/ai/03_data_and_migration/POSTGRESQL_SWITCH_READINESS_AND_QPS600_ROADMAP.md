@@ -753,3 +753,43 @@ readiness 影响：
 
 1. `P3-D12`：shadow sampling / max concurrency 策略调优。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 21. P3-D12 sampling / concurrency tuning 当前状态
+
+任务：`P3-D12-DB-9000-LEADS-TASKS-SHADOW-SAMPLING-CONCURRENCY-TUNING-1`
+
+P3-D12 已完成本地/dev synthetic sample rate 与 shadow max concurrency 调优：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py --quick-tuning
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_SAMPLING_TUNING_REPORT.md
+```
+
+readiness 影响：
+
+1. benchmark 已覆盖 `shadow_sample_rate=1.0,0.5,0.2,0.1` 和 `shadow_max_concurrency=1,3,5,10`。
+2. 输出 `theoretical_shadow_attempts`、`shadow_coverage_ratio` 和 `tuning_summary`。
+3. 当前 recommended gray config 为 `workers=2`、`pool_size=5`、`max_overflow=5`、`shadow_max_concurrency=10`、`shadow_sample_rate=0.1`。
+4. 本地/dev synthetic 最佳 `throughput_rps=570.102`、`p95=52.178ms`、`p99=59.518ms`，距离 QPS600 仍差约 `29.898 rps`。
+5. sample rate 降低减少了实际 PG shadow read 覆盖，适合灰度降载，不适合替代全量 contrast。
+
+当前仍未完成：
+
+1. 宝塔 staging / production 真实 HTTP 压测审批与记录。
+2. Nginx / 宝塔反代链路 benchmark。
+3. PostgreSQL 端实际连接数、慢查询、锁等待观测。
+4. async repository / `AsyncSession` 全链路替换。
+5. pending polling、task result write、webhook write 的事务和幂等设计。
+6. production QPS600 证明。
+
+边界确认：
+
+1. P3-D12 不能作为 production QPS600 达标证明。
+2. 当前仍不能切换默认 `DATABASE_URL`。
+3. 当前仍不能默认开启 PG pilot。
+4. 当前仍未启用 PG write。
+
+下一步建议：
+
+1. `P3-D13`：runtime shadow gray config preset 与环境变量文档，默认关闭。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
