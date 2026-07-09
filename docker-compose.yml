@@ -1,4 +1,22 @@
 services:
+  # PostgreSQL（9000 主库；方案 A：一个 PG 实例两个 database，9100 暂不动，未来走 RAG_DATABASE_URL）
+  # 启动前必须在 .env 设置 PG_PASSWORD（postgres 镜像拒绝空密码，会 fail-fast 倒逼配置）
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-auto_wechat}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DB:-auto_wechat}
+    volumes:
+      - ./docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-auto_wechat} -d ${PG_DB:-auto_wechat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   auto-wechat-api:
     image: xg-ai-system-backend:latest
     build:
@@ -9,8 +27,12 @@ services:
     env_file:
       - .env
     environment:
+      DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/${PG_DB:-auto_wechat}
       XG_DOUYIN_AI_CS_BASE_URL: http://xg-douyin-ai-cs:9100
       AUTO_WECHAT_9000_BASE_URL: http://auto-wechat-api:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:9000:9000"
     volumes:

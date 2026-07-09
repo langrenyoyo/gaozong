@@ -1253,8 +1253,17 @@ P3-Z5 只输出生产切换 Runbook，禁止自动执行。宝塔 production 的
 2. 确认 production PG `alembic_version` 为 `0006_runtime_cutover_gap`，30 表存在。
 3. production cutover dry-run：`python scripts/migrate_9000_sqlite_to_postgres_cutover.py --sqlite-db-path data/auto_wechat.db --postgres-url <production-pg-url>`（注意 production apply 被脚本闸门拒绝 `APP_ENV=production`，dry-run 只读安全）。确认 `DRY_RUN_PASS` 且 `error=0`，评估大表行数（见 33.6 Maj-4）。
 4. 审批二次确认后，在 production PG 执行 apply（需临时以非 production 环境变量跑，或由 DBA 手工执行等价 upsert，全程留审计日志）。
-5. 切 production `DATABASE_URL` 指向 PostgreSQL（`postgresql+psycopg://...`），原 SQLite URL 存为 `SQLITE_DATABASE_URL_ROLLBACK`。
-6. 重启 9000 production，确认启动日志出现 `db_schema stage=startup_skip_create_all backend=postgresql`。
+5. **compose PG 化**（宝塔生产用 `docker-compose.yml`，当前 9000 服务 `auto-wechat-api` 是 SQLite-only，必须改才能切 PG；C-D2/C-E6）：
+   - 5.1 `docker-compose.yml` 已内置 `postgres` 服务（方案 a，`postgres:16-alpine` + 独立 volume `./docker-data/postgres` + healthcheck）+ 9000 `environment.DATABASE_URL` 指向 `postgres:5432`（用 `${PG_USER:-auto_wechat}`/`${PG_PASSWORD}`/`${PG_DB:-auto_wechat}` 拼接）。`.env` 必须设 `PG_PASSWORD=<强密码>`（postgres 镜像拒绝空密码，会 fail-fast）；可选 `PG_USER`（默认 `auto_wechat`）、`PG_DB`（默认 `auto_wechat`）。回滚无需 `SQLITE_DATABASE_URL_ROLLBACK`（注释 compose 的 `DATABASE_URL` 行即回 config 默认 `sqlite:///`，见 33.4）。
+   - 5.2 `docker-compose.yml` 已加 9000 `depends_on: postgres (condition: service_healthy)`，PG 就绪后才起 9000。9100 服务（`xg-douyin-ai-cs`）保持 SQLite 不动（未来走 `RAG_DATABASE_URL`，C-E5）；前端服务不动。
+   - 5.3 9000 服务的 SQLite 卷 `./docker-data/auto_wechat_9000:/workspace/data` 保留挂载，过渡期作为回滚备份（切 PG 后 9000 不再写 SQLite，但回滚需要）。
+   - 5.4 核对 `.env` 的 `APP_ENV=production`、`DY_SECRET_KEY` 非空且与上游一致（否则 development 模式下 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 静默放行 webhook，P0-DEV-A1 生产强制验签失效；C-D1/C-E3）。
+   - 5.5 **镜像脚本/迁移（C-E6，已完成）**：`Dockerfile.backend.dev` 已补 `COPY scripts/` + `COPY migrations/`（含 `migrations/postgres/auto_wechat/alembic.ini`，`script_location=%(here)s`）。Z5 执行前需 `docker compose -f docker-compose.yml build --no-cache auto-wechat-api`（或 `up -d --build`）让新 COPY 生效；生效后容器内可直接跑 `python -m alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head` 与 cutover 脚本。env.py 仅依赖 `app.database_url` + `DATABASE_URL` 环境变量，依赖齐全。
+6. 重启 9000 production（`docker compose -f docker-compose.yml up -d --build`），并执行切换后核验（确保切干净，新数据不再进 SQLite）：
+   - 6.1 启动日志出现 `db_schema stage=startup_skip_create_all backend=postgresql`（确认没回退 `create_all`）。
+   - 6.2 `docker compose exec auto-wechat-api python -c "from app.database import DATABASE_RUNTIME; print(DATABASE_RUNTIME.backend, DATABASE_RUNTIME.safe_url)"` 必须输出 `postgresql ...`（非 `sqlite`）。
+   - 6.3 `docker compose exec auto-wechat-api ls -la /workspace/data/auto_wechat.db*`：切 PG 后该文件应冻结（mtime 不再更新，`-wal`/`-shm`/`-journal` 不增长）= 新数据已不走 SQLite。
+   - 6.4 若 6.2 输出 `sqlite` 或 6.3 文件仍增长 → 切换未生效，立即按 33.4 回滚，排查 `.env` 的 `DATABASE_URL` 是否漏配（风险 A：默认回 `sqlite:///`）。
 7. 带 production auth token 对 8 模块 12 接口跑 GET，预期全部 200 且数据非空。
 8. 前端核对 8 个核心页面渲染正常。
 9. 观察 ≥ 48h（含完整业务周期），记录接口延迟、5xx、连接池、慢查询。
@@ -1265,8 +1274,8 @@ P3-Z5 只输出生产切换 Runbook，禁止自动执行。宝塔 production 的
 
 触发条件：任何 5xx 突增 / 页面异常 / 数据不一致 / 业务中断。
 
-1. production `DATABASE_URL` 切回原 SQLite URL（`SQLITE_DATABASE_URL_ROLLBACK`）。
-2. 重启 9000 production，确认日志 `backend=sqlite` + `Base.metadata.create_all`。
+1. 注释 `docker-compose.yml` 里 9000 服务的 `DATABASE_URL` 行与 `depends_on` 段（让 `config.py` 默认值 `sqlite:///data/auto_wechat.db` 生效）。
+2. `docker compose -f docker-compose.yml up -d --build auto-wechat-api`（**不重启 postgres**，保留 PG 数据），确认 9000 日志 `backend=sqlite` + `Base.metadata.create_all`。
 3. 确认业务恢复正常（SQLite 数据未动，PG 只是多了一份副本）。
 4. **不删** SQLite 文件，**不清** PG volume（PG 副本保留供排查）。
 5. 排查问题后，重新走 33.3 流程。

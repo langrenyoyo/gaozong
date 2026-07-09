@@ -27,6 +27,10 @@ COPY app/ ./app/
 COPY apps/ ./apps/
 COPY packages/ ./packages/
 
+# 复制迁移与运维脚本（9000 PG cutover + alembic upgrade head 需要，C-E6）
+COPY scripts/ ./scripts/
+COPY migrations/ ./migrations/
+
 # 9000、9100 均通过 compose command 指定实际入口，这里仅给默认（9000）
 EXPOSE 9000 9100
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
