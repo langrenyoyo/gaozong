@@ -167,3 +167,91 @@ LEADS_TASKS_PG_DATABASE_URL=<dev PG URL>
 5. 不开启 PG write。
 6. 不执行 production apply。
 7. 不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+## 9. P3-D9 engine / pool hardening 补充
+
+任务：`P3-D9-DB-9000-LEADS-TASKS-ASYNC-ENGINE-POOL-HARDENING-1`
+
+P3-D8 暴露的问题：
+
+| 指标 | P3-D8 shadow off | P3-D8 shadow on | P3-D8 overhead |
+|---|---:|---:|---:|
+| throughput_rps | 15089.898 | 39.301 | -99.74% |
+| p50 | 0.881ms | 536.994ms | +536.113ms |
+| p95 | 1.357ms | 734.568ms | +733.211ms |
+| p99 | 1.634ms | 909.916ms | +908.282ms |
+
+原因：P3-D7 为避免 async engine 跨 `asyncio.run()` event loop 复用，把 engine 生命周期收窄到单次 shadow query。该方案安全，但每个请求 create/dispose engine，导致 shadow overhead 很大。
+
+P3-D9 新增 event-loop-safe engine manager：
+
+1. `app/services/leads_tasks_pg_engine.py` 按 event loop 缓存 async engine。
+2. 同一 event loop 内复用 engine，不同 event loop 不复用 engine。
+3. 默认关闭或 URL 为空时不创建 engine。
+4. SQLite URL 和非 `postgresql+asyncpg://` URL 会被拒绝。
+5. URL、`pool_size`、`max_overflow`、`pool_timeout` 变化时重建 engine，并 dispose 旧 engine。
+6. benchmark 结束时显式调用 `dispose_shadow_engines()`。
+7. URL 输出仍脱敏。
+
+P3-D9 benchmark 额外输出 `engine_manager_snapshot`：
+
+1. `engine_count`
+2. `loop_count`
+3. `created_count`
+4. `disposed_count`
+5. `cache_hit_count`
+6. `cache_miss_count`
+7. 脱敏后的 engine URL 与 pool 参数
+
+`--strict` 额外校验：
+
+1. `engine_count` 或 `created_count` 不得随 requests 线性增长。
+2. requests > 1 时 `cache_hit_count` 不应为 0。
+
+P3-D9 本地/dev synthetic benchmark 结果：
+
+```text
+命令：python scripts/benchmark_leads_tasks_shadow_overhead_dev.py --requests 200 --concurrency 20 --warmup 20 --strict
+模型：service-level synthetic rows；SQLite response source；PostgreSQL read-only shadow
+结果：BENCHMARK_PASS
+```
+
+| 指标 | P3-D9 shadow off | P3-D9 shadow on | P3-D9 overhead |
+|---|---:|---:|---:|
+| throughput_rps | 12613.203 | 441.390 | -96.501% |
+| p50 | 0.971ms | 33.621ms | +32.650ms |
+| p95 | 3.234ms | 155.103ms | +151.869ms |
+| p99 | 3.683ms | 170.014ms | +166.331ms |
+
+相对 P3-D8 shadow on 的改善：
+
+| 指标 | 改善 |
+|---|---:|
+| p50 | 降低 503.373ms，约 93.74% |
+| p95 | 降低 579.465ms，约 78.89% |
+| p99 | 降低 739.902ms，约 81.32% |
+| throughput | 提升 402.089 rps，约 11.23 倍 |
+
+P3-D9 engine manager snapshot：
+
+```text
+engine_count=1
+loop_count=1
+created_count=1
+disposed_count=0
+cache_hit_count=183
+cache_miss_count=1
+pool_size=5
+max_overflow=5
+pool_timeout=3
+```
+
+说明：snapshot 是 dispose 前的 benchmark 观测值；脚本 finally 已输出 `shadow engine cleanup: done`。
+
+边界：
+
+1. P3-D9 benchmark 仍是 dev/synthetic，不代表 production QPS600 达标。
+2. `shadow_on throughput_rps=441.390` 仍低于 QPS600 目标。
+3. P3-D9 不切换默认 `DATABASE_URL`。
+4. P3-D9 不默认开启 PG pilot。
+5. P3-D9 不启用 PG write。

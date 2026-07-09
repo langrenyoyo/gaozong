@@ -1771,3 +1771,90 @@ benchmark 能力：
 
 1. `P3-D9`：async session / connection pool runtime design hardening。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 43. P3-D9 leads/tasks async engine / pool 生命周期加固
+
+任务：`P3-D9-DB-9000-LEADS-TASKS-ASYNC-ENGINE-POOL-HARDENING-1`
+
+P3-D9 基于 P3-D8 benchmark 暴露的 shadow overhead，对 leads/tasks PostgreSQL read-only shadow 的 async engine 生命周期做了加固。本轮仍保持默认关闭 PG pilot，不切换 `DATABASE_URL`，不启用 PG write。
+
+新增 / 修改文件：
+
+```text
+app/services/leads_tasks_pg_engine.py
+app/services/leads_tasks_pg_shadow.py
+scripts/benchmark_leads_tasks_shadow_overhead_dev.py
+tests/test_leads_tasks_pg_engine_manager.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+tests/test_leads_tasks_shadow_benchmark.py
+```
+
+engine manager 规则：
+
+1. 默认关闭或 URL 为空时不创建 engine。
+2. 拒绝 SQLite URL 和非 `postgresql+asyncpg://` URL。
+3. 按 event loop 缓存 engine，同一个 event loop 复用，不同 event loop 不复用。
+4. URL 或 pool 参数变化时重建 engine，并 dispose 旧 engine。
+5. 提供 `dispose_shadow_engines()`，benchmark / smoke 收尾时显式释放。
+6. `get_engine_manager_snapshot()` 输出 `engine_count`、`loop_count`、`created_count`、`disposed_count`、`cache_hit_count`、`cache_miss_count`，URL 脱敏。
+
+shadow service 调整：
+
+1. `leads_tasks_pg_shadow.py` 改用 engine manager，不再每次 shadow query create/dispose engine。
+2. 同步请求路径通过后台 event loop 运行 async PG shadow read，避免每次 `asyncio.run()` 造成独立 event loop 和 engine 重建。
+3. PG 查询仍只允许 SELECT。
+4. shadow timeout、异常和 mismatch 仍只记录 warning / metrics，不影响 SQLite 主响应。
+5. `LEADS_TASKS_PG_WRITE_ENABLED` 仍未被任何业务写路径消费。
+
+P3-D8 benchmark baseline：
+
+```text
+shadow off: throughput_rps=15089.898, p50=0.881ms, p95=1.357ms, p99=1.634ms
+shadow on:  throughput_rps=39.301, p50=536.994ms, p95=734.568ms, p99=909.916ms
+overhead:   p50 +536.113ms, p95 +733.211ms, p99 +908.282ms, throughput -99.74%
+```
+
+P3-D9 本地/dev synthetic benchmark：
+
+```text
+命令：python scripts/benchmark_leads_tasks_shadow_overhead_dev.py --requests 200 --concurrency 20 --warmup 20 --strict
+结果：BENCHMARK_PASS
+shadow off: throughput_rps=12613.203, p50=0.971ms, p95=3.234ms, p99=3.683ms
+shadow on:  throughput_rps=441.390, p50=33.621ms, p95=155.103ms, p99=170.014ms
+overhead:   p50 +32.650ms, p95 +151.869ms, p99 +166.331ms, throughput -96.501%
+```
+
+相对 P3-D8 shadow on 改善：
+
+1. p50 降低 503.373ms，约 93.74%。
+2. p95 降低 579.465ms，约 78.89%。
+3. p99 降低 739.902ms，约 81.32%。
+4. throughput 提升 402.089 rps，约 11.23 倍。
+
+engine manager snapshot：
+
+```text
+engine_count=1
+loop_count=1
+created_count=1
+disposed_count=0
+cache_hit_count=183
+cache_miss_count=1
+```
+
+边界确认：
+
+1. 本轮未连接宝塔生产。
+2. 本轮未读取生产 SQLite。
+3. 本轮未执行 production apply。
+4. 本轮未切换默认 `DATABASE_URL`。
+5. 本轮未默认开启 PG pilot。
+6. 本轮未启用 PG write。
+7. 本轮未接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+8. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+9. P3-D9 benchmark 仍是本地/dev synthetic，不代表 production QPS600 达标。
+
+后续建议：
+
+1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，用真实 ASGI/HTTP 路径继续量化 shadow overhead。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

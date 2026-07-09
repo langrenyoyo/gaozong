@@ -140,6 +140,7 @@ def test_shadow_on_requires_all_operations_and_strict_failures():
         baseline_stats={"error_rate": 0.0},
         shadow_stats={"error_rate": 0.0},
         shadow_metrics={"total_shadow_reads": 1, "total_shadow_error": 0, "by_operation": {}},
+        engine_manager_snapshot={"engine_count": 1, "created_count": 1, "cache_hit_count": 1},
         expected_operations=expected,
         strict=False,
     )
@@ -165,7 +166,39 @@ def test_shadow_on_requires_all_operations_and_strict_failures():
             baseline_stats={"error_rate": 0.0},
             shadow_stats={"error_rate": 0.01},
             shadow_metrics=metrics,
+            engine_manager_snapshot={"engine_count": 1, "created_count": 1, "cache_hit_count": 1},
             expected_operations=expected,
+            strict=True,
+        )
+
+
+def test_engine_manager_snapshot_rejects_linear_engine_growth_in_strict_mode():
+    from scripts import benchmark_leads_tasks_shadow_overhead_dev as bench
+
+    ok_snapshot = {
+        "engine_count": 4,
+        "created_count": 4,
+        "disposed_count": 0,
+        "cache_hit_count": 196,
+        "cache_miss_count": 4,
+    }
+    assert bench.validate_engine_manager_snapshot(
+        ok_snapshot,
+        total_requests=200,
+        strict=True,
+    ) == []
+
+    linear_snapshot = {
+        "engine_count": 200,
+        "created_count": 200,
+        "disposed_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 200,
+    }
+    with pytest.raises(bench.BenchmarkError, match="engine_count"):
+        bench.validate_engine_manager_snapshot(
+            linear_snapshot,
+            total_requests=200,
             strict=True,
         )
 

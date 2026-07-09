@@ -4468,3 +4468,69 @@ benchmark 覆盖 read-only shadow 范围：
 
 1. `P3-D9`：async session / connection pool runtime design hardening。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+# P3-D9 leads/tasks async engine / pool hardening 当前状态
+
+任务：`P3-D9-DB-9000-LEADS-TASKS-ASYNC-ENGINE-POOL-HARDENING-1`
+
+当前已基于 P3-D8 benchmark 暴露的问题，为 leads/tasks PostgreSQL read-only shadow 新增 event-loop-safe async engine manager：
+
+```text
+app/services/leads_tasks_pg_engine.py
+tests/test_leads_tasks_pg_engine_manager.py
+```
+
+已调整：
+
+1. `app/services/leads_tasks_pg_shadow.py` 不再每次 shadow query create/dispose engine。
+2. shadow read 改用后台 event loop 执行 async PG 查询，同一 loop 内复用 engine。
+3. 不同 event loop 不复用 engine，避免跨 loop async engine bug 回归。
+4. `scripts/benchmark_leads_tasks_shadow_overhead_dev.py` 输出 `engine_manager_snapshot`，strict 模式校验 engine 不随 requests 线性增长。
+5. benchmark 收尾会调用 `dispose_shadow_engines()`。
+
+P3-D8 暴露的 baseline：
+
+```text
+shadow off: throughput_rps=15089.898, p50=0.881ms, p95=1.357ms, p99=1.634ms
+shadow on:  throughput_rps=39.301, p50=536.994ms, p95=734.568ms, p99=909.916ms
+```
+
+P3-D9 本地/dev synthetic benchmark：
+
+```text
+BENCHMARK_PASS
+shadow off: throughput_rps=12613.203, p50=0.971ms, p95=3.234ms, p99=3.683ms
+shadow on:  throughput_rps=441.390, p50=33.621ms, p95=155.103ms, p99=170.014ms
+overhead:   p50 +32.650ms, p95 +151.869ms, p99 +166.331ms, throughput -96.501%
+```
+
+相对 P3-D8 shadow on 改善：
+
+1. p50 降低 503.373ms，约 93.74%。
+2. p95 降低 579.465ms，约 78.89%。
+3. p99 降低 739.902ms，约 81.32%。
+4. throughput 提升 402.089 rps，约 11.23 倍。
+
+engine manager snapshot：
+
+```text
+engine_count=1
+loop_count=1
+created_count=1
+disposed_count=0
+cache_hit_count=183
+cache_miss_count=1
+```
+
+边界确认：
+
+1. 默认仍关闭 PG pilot。
+2. SQLite 仍是用户响应源。
+3. PG shadow 仍只读，异常 / timeout / mismatch 不影响主响应。
+4. 未切换默认 `DATABASE_URL`。
+5. 未启用 PG write。
+6. 未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+7. 未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+8. 当前 benchmark 仍是 dev/synthetic，不代表 production QPS600 达标。
+
+下一步建议：P3-D10 做真实 Uvicorn / HTTP benchmark 脚手架，或 P3-E1 进入智能体 / 抖音账号绑定 schema batch。

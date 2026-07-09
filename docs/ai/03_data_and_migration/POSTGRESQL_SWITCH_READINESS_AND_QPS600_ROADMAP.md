@@ -608,3 +608,63 @@ readiness 影响：
 
 1. `P3-D9`：async session / connection pool runtime design hardening。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 18. P3-D9 async engine / pool hardening 当前状态
+
+任务：`P3-D9-DB-9000-LEADS-TASKS-ASYNC-ENGINE-POOL-HARDENING-1`
+
+P3-D9 已针对 P3-D8 暴露的 shadow read engine 生命周期问题做运行时加固：
+
+1. 新增 `app/services/leads_tasks_pg_engine.py`，按 event loop 缓存 async engine。
+2. 同一 event loop 复用 engine，不同 event loop 不复用 engine，避免 D7 已修过的跨 loop 风险回归。
+3. 默认关闭、URL 为空、SQLite URL、非 `postgresql+asyncpg://` URL 均不创建 engine。
+4. `app/services/leads_tasks_pg_shadow.py` 改为复用 engine manager，不再每次 shadow query create/dispose。
+5. benchmark 输出 engine manager snapshot，并在收尾显式 dispose。
+
+P3-D8 到 P3-D9 的 dev/synthetic 对比：
+
+| 指标 | P3-D8 shadow on | P3-D9 shadow on | 改善 |
+|---|---:|---:|---:|
+| throughput_rps | 39.301 | 441.390 | +402.089 rps，约 11.23 倍 |
+| p50 | 536.994ms | 33.621ms | 降低 503.373ms，约 93.74% |
+| p95 | 734.568ms | 155.103ms | 降低 579.465ms，约 78.89% |
+| p99 | 909.916ms | 170.014ms | 降低 739.902ms，约 81.32% |
+
+P3-D9 benchmark snapshot：
+
+```text
+BENCHMARK_PASS
+engine_count=1
+loop_count=1
+created_count=1
+disposed_count=0
+cache_hit_count=183
+cache_miss_count=1
+total_shadow_error=0
+total_shadow_timeout=0
+```
+
+readiness 影响：
+
+1. P3-D9 证明每请求创建 engine / pool 的开销已经明显下降。
+2. P3-D9 仍只是 read-only shadow 生命周期加固，不是 async repository 全链路替换。
+3. P3-D9 benchmark 仍是 service-level dev/synthetic，不是真实 Nginx + Uvicorn + 网络链路。
+4. `shadow_on throughput_rps=441.390` 仍不能宣称 QPS600 达标。
+5. 当前仍不能切换默认 `DATABASE_URL`，不能默认开启 PG pilot，不能启用 PG write。
+
+仍未完成：
+
+1. 真实 Uvicorn / HTTP benchmark。
+2. async repository / `AsyncSession` 全链路替换。
+3. `GET /wechat-tasks/pending` pending polling 与锁策略。
+4. `POST /wechat-tasks/{task_id}/result` result write。
+5. webhook write 幂等、事务和回滚。
+6. 宝塔真实数据 contrast。
+7. production QPS600 压测证明。
+
+边界确认：P3-D9 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
+
+下一步建议：
+
+1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，继续默认关闭 PG pilot。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

@@ -7,6 +7,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+import threading
 from typing import Mapping, Sequence
 from urllib.parse import urlsplit
 
@@ -14,6 +15,7 @@ from sqlalchemy import text
 
 from app import config
 from app.database_url import parse_database_url
+from app.services import leads_tasks_pg_engine
 from app.services.leads_tasks_shadow_compare import compare_shadow_rows
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,9 @@ READ_ONLY_SQL_TEMPLATES = (
 )
 
 _shadow_engine = None
+_BACKGROUND_LOOP_LOCK = threading.Lock()
+_BACKGROUND_LOOP: asyncio.AbstractEventLoop | None = None
+_BACKGROUND_THREAD: threading.Thread | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +72,8 @@ def mask_database_url(database_url: str) -> str:
 
 def get_shadow_engine_for_test():
     """测试观察点：默认配置下应保持 None，证明没有初始化 PG engine。"""
-    return _shadow_engine
+    snapshot = leads_tasks_pg_engine.get_engine_manager_snapshot()
+    return None if snapshot["engine_count"] == 0 else snapshot
 
 
 def is_shadow_configured(settings: LeadsTasksPgShadowSettings | None = None) -> bool:
@@ -292,18 +298,13 @@ def _run_shadow_read_sync(
 
     started = time.perf_counter()
     try:
-        result = asyncio.run(
-            asyncio.wait_for(
-                _run_shadow_read_async(
-                    table=table,
-                    operation=operation,
-                    sqlite_rows=sqlite_rows,
-                    key_columns=key_columns,
-                    filters=filters,
-                    settings=settings,
-                ),
-                timeout=settings.shadow_timeout_ms / 1000,
-            )
+        result = _run_shadow_read_in_thread_loop(
+            table=table,
+            operation=operation,
+            sqlite_rows=sqlite_rows,
+            key_columns=key_columns,
+            filters=filters,
+            settings=settings,
         )
     except TimeoutError:
         result = ShadowReadResult(
@@ -382,31 +383,61 @@ async def _select_pg_rows(
     filters: Mapping[str, object],
     settings: LeadsTasksPgShadowSettings,
 ) -> list[dict[str, object]]:
-    engine = _create_shadow_engine(settings)
+    engine = await leads_tasks_pg_engine.get_shadow_engine(settings)
+    if engine is None:
+        return []
     statement, params = _build_select(table, filters)
-    try:
-        async with engine.connect() as conn:
-            if settings.statement_timeout_ms > 0:
-                timeout_ms = max(int(settings.statement_timeout_ms), 1)
-                await conn.execute(text(f"SET statement_timeout = {timeout_ms}"))
-            result = await conn.execute(statement, params)
-            return [dict(row._mapping) for row in result.fetchall()]
-    finally:
-        await engine.dispose()
+    async with engine.connect() as conn:
+        if settings.statement_timeout_ms > 0:
+            timeout_ms = max(int(settings.statement_timeout_ms), 1)
+            await conn.execute(text(f"SET statement_timeout = {timeout_ms}"))
+        result = await conn.execute(statement, params)
+        return [dict(row._mapping) for row in result.fetchall()]
 
 
-def _create_shadow_engine(settings: LeadsTasksPgShadowSettings):
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    parsed = parse_database_url(settings.database_url)
-    logger.info("leads_tasks_pg_shadow stage=engine_init url=%s", parsed.safe_url)
-    return create_async_engine(
-        parsed.raw_url,
-        pool_size=settings.pool_size,
-        max_overflow=settings.max_overflow,
-        pool_timeout=settings.pool_timeout,
-        pool_pre_ping=True,
+def _run_shadow_read_in_thread_loop(
+    *,
+    table: str,
+    operation: str,
+    sqlite_rows: list[dict[str, object]],
+    key_columns: Sequence[str],
+    filters: Mapping[str, object],
+    settings: LeadsTasksPgShadowSettings,
+) -> ShadowReadResult:
+    loop = _get_background_shadow_loop()
+    coroutine = asyncio.wait_for(
+        _run_shadow_read_async(
+            table=table,
+            operation=operation,
+            sqlite_rows=sqlite_rows,
+            key_columns=key_columns,
+            filters=filters,
+            settings=settings,
+        ),
+        timeout=settings.shadow_timeout_ms / 1000,
     )
+    future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    return future.result(timeout=settings.shadow_timeout_ms / 1000 + 1)
+
+
+def _get_background_shadow_loop() -> asyncio.AbstractEventLoop:
+    global _BACKGROUND_LOOP, _BACKGROUND_THREAD
+
+    with _BACKGROUND_LOOP_LOCK:
+        if _BACKGROUND_LOOP is not None and _BACKGROUND_LOOP.is_running():
+            return _BACKGROUND_LOOP
+
+        loop = asyncio.new_event_loop()
+
+        def _run_loop() -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        thread = threading.Thread(target=_run_loop, name="leads-tasks-pg-shadow-loop", daemon=True)
+        thread.start()
+        _BACKGROUND_LOOP = loop
+        _BACKGROUND_THREAD = thread
+        return loop
 
 
 def _build_select(table: str, filters: Mapping[str, object]):

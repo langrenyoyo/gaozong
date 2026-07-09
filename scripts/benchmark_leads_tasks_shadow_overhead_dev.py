@@ -24,6 +24,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.database_url import parse_database_url
+from app.services.leads_tasks_pg_engine import (
+    dispose_shadow_engines,
+    get_engine_manager_snapshot,
+    reset_shadow_engines_for_tests,
+)
 from app.services import leads_tasks_pg_shadow as shadow
 from app.services.leads_tasks_shadow_observability import (
     get_shadow_metrics_snapshot,
@@ -225,15 +230,44 @@ def validate_shadow_on_metrics(
     return warnings
 
 
+def validate_engine_manager_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    total_requests: int,
+    strict: bool,
+) -> list[str]:
+    warnings: list[str] = []
+    engine_count = int(snapshot.get("engine_count") or 0)
+    created_count = int(snapshot.get("created_count") or 0)
+    cache_hit_count = int(snapshot.get("cache_hit_count") or 0)
+    if total_requests > 1 and engine_count >= total_requests:
+        warnings.append(f"engine_count 随 requests 线性增长: engine_count={engine_count}, requests={total_requests}")
+    if total_requests > 1 and created_count >= total_requests:
+        warnings.append(f"created_count 随 requests 线性增长: created_count={created_count}, requests={total_requests}")
+    if total_requests > 1 and cache_hit_count == 0:
+        warnings.append("engine manager cache_hit_count=0，未观察到同 event loop 内 engine 复用")
+    if warnings and strict:
+        raise BenchmarkError("; ".join(warnings))
+    return warnings
+
+
 def evaluate_benchmark_outcome(
     *,
     baseline_stats: Mapping[str, Any],
     shadow_stats: Mapping[str, Any],
     shadow_metrics: Mapping[str, Any],
+    engine_manager_snapshot: Mapping[str, Any],
     expected_operations: set[str],
     strict: bool,
 ) -> tuple[str, list[str]]:
     warnings = validate_shadow_on_metrics(shadow_metrics, expected_operations, strict=strict)
+    warnings.extend(
+        validate_engine_manager_snapshot(
+            engine_manager_snapshot,
+            total_requests=int(shadow_stats.get("total_requests") or 0),
+            strict=strict,
+        )
+    )
     if float(baseline_stats.get("error_rate") or 0) > 0:
         warnings.append(f"baseline error_rate > 0: {baseline_stats.get('error_rate')}")
     if float(shadow_stats.get("error_rate") or 0) > 0:
@@ -370,6 +404,7 @@ def run_suite(args: argparse.Namespace, database_url: str) -> dict[str, Any]:
     rows = prepare_synthetic_rows(database_url)
     operations = build_operations(args.profile)
     expected_operations = EXPECTED_SHADOW_OPERATIONS_BY_PROFILE[args.profile]
+    reset_shadow_engines_for_tests()
 
     disabled_settings = shadow.LeadsTasksPgShadowSettings(
         pilot_enabled=False,
@@ -437,11 +472,13 @@ def run_suite(args: argparse.Namespace, database_url: str) -> dict[str, Any]:
     )
     shadow_stats = build_round_stats(shadow_results, shadow_elapsed)
     shadow_metrics = get_shadow_metrics_snapshot()
+    engine_manager_snapshot = get_engine_manager_snapshot()
     overhead = calculate_overhead(baseline_stats, shadow_stats)
     status, warnings = evaluate_benchmark_outcome(
         baseline_stats=baseline_stats,
         shadow_stats=shadow_stats,
         shadow_metrics=shadow_metrics,
+        engine_manager_snapshot=engine_manager_snapshot,
         expected_operations=expected_operations,
         strict=args.strict,
     )
@@ -456,6 +493,7 @@ def run_suite(args: argparse.Namespace, database_url: str) -> dict[str, Any]:
         "shadow_on": shadow_stats,
         "overhead": overhead,
         "shadow_metrics": shadow_metrics,
+        "engine_manager_snapshot": engine_manager_snapshot,
         "pg_write_enabled": False,
         "database_url": mask_database_url(database_url),
     }
@@ -539,6 +577,7 @@ def print_summary(payload: Mapping[str, Any]) -> None:
     print(f"shadow_on={json.dumps(payload['shadow_on'], ensure_ascii=False)}")
     print(f"overhead={json.dumps(payload['overhead'], ensure_ascii=False)}")
     print(f"shadow_metrics={json.dumps(payload['shadow_metrics'], ensure_ascii=False)}")
+    print(f"engine_manager_snapshot={json.dumps(payload['engine_manager_snapshot'], ensure_ascii=False)}")
     if payload["warnings"]:
         print(f"warnings={json.dumps(payload['warnings'], ensure_ascii=False)}")
 
@@ -569,6 +608,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("synthetic PG cleanup: done")
             except Exception as cleanup_exc:  # pragma: no cover - 真实 dev smoke 收尾诊断
                 print(f"synthetic PG cleanup failed: {cleanup_exc}")
+        try:
+            dispose_shadow_engines()
+            print("shadow engine cleanup: done")
+        except Exception as dispose_exc:  # pragma: no cover - 真实 dev benchmark 收尾诊断
+            print(f"shadow engine cleanup failed: {dispose_exc}")
 
 
 if __name__ == "__main__":

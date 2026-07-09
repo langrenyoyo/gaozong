@@ -378,3 +378,70 @@ docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_QPS_BENCHMARK_GUIDE.md
 
 1. `P3-D9`：async session / connection pool runtime design hardening。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 15. P3-D9 async engine / pool 生命周期加固
+
+任务：`P3-D9-DB-9000-LEADS-TASKS-ASYNC-ENGINE-POOL-HARDENING-1`
+
+P3-D8 暴露的性能问题：
+
+1. P3-D8 shadow off baseline：`throughput_rps=15089.898`、`p50=0.881ms`、`p95=1.357ms`、`p99=1.634ms`。
+2. P3-D8 shadow on：`throughput_rps=39.301`、`p50=536.994ms`、`p95=734.568ms`、`p99=909.916ms`。
+3. 根因是为规避跨 event loop 复用 async engine，P3-D7 将 engine 创建 / dispose 收窄到每次 shadow query，导致开销随请求线性放大。
+
+P3-D9 已新增：
+
+```text
+app/services/leads_tasks_pg_engine.py
+tests/test_leads_tasks_pg_engine_manager.py
+```
+
+engine manager 语义：
+
+1. 默认关闭、URL 为空时不创建 engine。
+2. 只允许 `postgresql+asyncpg://`，拒绝 SQLite URL。
+3. 按 event loop 缓存 async engine，同一 loop 复用，不同 loop 不复用。
+4. URL、`pool_size`、`max_overflow`、`pool_timeout` 变化时重建 engine。
+5. 提供 `dispose_shadow_engines()`、`get_engine_manager_snapshot()` 和测试重置 helper。
+6. snapshot 只输出脱敏 URL。
+
+shadow service 调整：
+
+1. `app/services/leads_tasks_pg_shadow.py` 不再每次 query 创建 / dispose engine。
+2. 同步 router 中的 shadow read 通过后台 event loop 执行 async 查询，避免每次 `asyncio.run()` 创建独立 event loop。
+3. SQLite 仍是唯一响应源。
+4. PG shadow 仍只读，异常、timeout、mismatch 不影响主响应。
+5. `LEADS_TASKS_PG_WRITE_ENABLED` 仍未被业务写路径消费。
+
+P3-D9 本地/dev synthetic benchmark：
+
+| 指标 | P3-D8 shadow on | P3-D9 shadow on | 改善 |
+|---|---:|---:|---:|
+| throughput_rps | 39.301 | 441.390 | +402.089 rps，约 11.23 倍 |
+| p50 | 536.994ms | 33.621ms | 降低 503.373ms，约 93.74% |
+| p95 | 734.568ms | 155.103ms | 降低 579.465ms，约 78.89% |
+| p99 | 909.916ms | 170.014ms | 降低 739.902ms，约 81.32% |
+
+D9 engine manager snapshot：
+
+```text
+engine_count=1
+loop_count=1
+created_count=1
+disposed_count=0
+cache_hit_count=183
+cache_miss_count=1
+```
+
+边界确认：
+
+1. P3-D9 仍不切换默认 `DATABASE_URL`。
+2. P3-D9 仍不默认开启 PG pilot。
+3. P3-D9 仍不启用 PG write。
+4. P3-D9 未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+5. P3-D9 benchmark 仍是 dev/synthetic，不代表 production QPS600 达标。
+
+下一步建议：
+
+1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，继续默认关闭 PG pilot。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

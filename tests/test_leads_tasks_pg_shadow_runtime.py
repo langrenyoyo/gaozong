@@ -630,6 +630,69 @@ def test_shadow_sql_templates_are_read_only_and_write_flag_is_unused():
     assert not hasattr(shadow, "run_pg_write")
 
 
+def test_shadow_read_uses_engine_manager_without_per_query_dispose(monkeypatch):
+    from app.services import leads_tasks_pg_shadow as shadow
+
+    class _Row:
+        _mapping = {"id": 1}
+
+    class _Result:
+        def fetchall(self):
+            return [_Row()]
+
+    class _Connection:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def execute(self, statement, params=None):
+            return _Result()
+
+    class _Engine:
+        def __init__(self):
+            self.dispose_count = 0
+
+        def connect(self):
+            return _Connection()
+
+        async def dispose(self):
+            self.dispose_count += 1
+
+    engine = _Engine()
+    loop_ids = []
+
+    async def _fake_get_shadow_engine(settings):
+        loop_ids.append(id(asyncio.get_running_loop()))
+        return engine
+
+    monkeypatch.setattr(shadow.leads_tasks_pg_engine, "get_shadow_engine", _fake_get_shadow_engine)
+    settings = shadow.LeadsTasksPgShadowSettings(
+        pilot_enabled=True,
+        read_shadow_enabled=True,
+        database_url="postgresql+asyncpg://u:p@localhost:5432/auto_wechat",
+        statement_timeout_ms=0,
+    )
+
+    first = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+    second = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+
+    assert first.status == "pass"
+    assert second.status == "pass"
+    assert engine.dispose_count == 0
+    assert len(loop_ids) == 2
+    assert loop_ids[0] == loop_ids[1]
+
+
 def test_shadow_metrics_endpoint_requires_admin_and_does_not_initialize_pg(monkeypatch):
     from app.services import leads_tasks_pg_shadow as shadow
     from app.services.leads_tasks_shadow_observability import record_shadow_result
