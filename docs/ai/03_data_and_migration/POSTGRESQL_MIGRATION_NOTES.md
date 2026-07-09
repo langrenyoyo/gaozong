@@ -2239,3 +2239,62 @@ dev synthetic contrast smoke：
 1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
 2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
 3. 仍不得跳过 contrast / staging 审批直接切换默认 `DATABASE_URL`。
+
+## 51. P3-F1 compute core PostgreSQL schema batch
+
+任务：`P3-F1-DB-9000-POSTGRESQL-COMPUTE-SCHEMA-BATCH-1`
+
+P3-F1 开始第三批 P0 核心域 PostgreSQL schema。本批只覆盖小高算力账户与算力流水两张表：
+
+1. `compute_accounts`
+2. `compute_transactions`
+
+只读审计摘要：
+
+1. ORM 模型位于 `app/models.py`：`ComputeAccount`、`ComputeTransaction`；`ComputePackage` 存在但不属于本轮目标。
+2. SQLite 迁移来源为 `migrations/versions/0010_compute.sql`，当前 token 余额、流水变动和余额快照均为整数，不使用浮点。
+3. 主要路由位于 `app/routers/compute.py`，覆盖商户侧 `/compute/summary`、`/compute/transactions`，管理员侧充值 / 发放套餐，以及内部 `/internal/compute/usage`。
+4. 真实业务实现已收敛到 `apps/compute/services.py`，`app/services/compute_service.py` 仅做兼容导出。
+5. 当前读写路径仍使用同步 SQLAlchemy session，本轮只建 PostgreSQL schema，不做 runtime async 改造。
+
+新增 migration：
+
+```text
+migrations/postgres/auto_wechat/versions/0005_create_compute_core_tables.py
+revision = 0005_compute_core
+down_revision = 0004_agents_accounts_core
+```
+
+schema 摘要：
+
+1. `compute_accounts`：保留 `merchant_id` 唯一约束 `uk_compute_accounts_merchant`，字段包括 `merchant_id`、`tenant_id`、`balance_tokens`、`created_at`、`updated_at`，新增 `idx_compute_accounts_updated` 支持更新时间扫描。
+2. `compute_transactions`：字段包括 `merchant_id`、`tenant_id`、`transaction_type`、`delta_tokens`、`balance_after_tokens`、`source`、`remark`、`model`、`agent_id`、`conversation_id`、`created_at`。
+3. `compute_transactions` 增加 `ck_compute_transactions_delta_nonzero`，与当前 service 中 delta 不允许 0 的语义一致。
+4. `compute_transactions` 增加 `merchant_id + created_at`、`merchant_id + transaction_type + created_at`、`source + created_at` 索引，覆盖流水分页、消耗统计和来源筛选。
+5. 当前模型没有 `account_id`、`transaction_id`、`request_id`、`idempotency_key`、`status`，本轮不凭空新增这些字段和唯一约束，避免提前改变扣费 / 充值语义。
+6. `balance_tokens`、`delta_tokens`、`balance_after_tokens` 使用 PostgreSQL `BIGINT`，保持现有整数 Token 口径，避免 Float 精度风险。
+
+新增 dev schema smoke：
+
+```text
+scripts/smoke_auto_wechat_alembic_compute_core.py
+```
+
+smoke 只读取 `SMOKE_DATABASE_URL`，拒绝 SQLite URL，URL 输出脱敏，目标 database 必须为 `auto_wechat`，dev host 仅允许 `localhost` / `127.0.0.1` / `postgres`。脚本执行 auto_wechat Alembic `upgrade head`，验证 `alembic_version = 0005_compute_core`，并验证两张表、关键索引、关键约束和 bigint 数值字段类型存在。
+
+边界确认：
+
+1. 本轮只建 PostgreSQL schema，不迁移 SQLite 数据。
+2. 本轮不执行数据 apply。
+3. 本轮不切换默认 `DATABASE_URL`。
+4. 本轮不修改业务接口默认数据库。
+5. 本轮不默认开启 PG pilot，不启用 PG write。
+6. 本轮不修改支付、扣费、充值、套餐发放或流水生成逻辑。
+7. 本轮不连接宝塔 production，不读取 production SQLite。
+8. 本轮不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+后续建议：
+
+1. `P3-F2`：compute 数据迁移 dry-run + dev apply smoke。
+2. `P3-F3`：compute API contrast，视算力需求成熟度决定是否先做离线 contrast。
+3. 仍不得跳过 dry-run / contrast / staging 审批直接切换默认 `DATABASE_URL`。

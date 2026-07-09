@@ -4900,3 +4900,51 @@ dev synthetic contrast smoke：
 1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
 2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
 3. 仍不得跳过 contrast / staging 审批直接切换默认数据库。
+
+# P3-F1 compute core PostgreSQL schema batch 当前状态
+
+任务：`P3-F1-DB-9000-POSTGRESQL-COMPUTE-SCHEMA-BATCH-1`
+
+当前已为 9000 小高算力账户与流水核心表新增 PostgreSQL schema batch：
+
+```text
+migrations/postgres/auto_wechat/versions/0005_create_compute_core_tables.py
+scripts/smoke_auto_wechat_alembic_compute_core.py
+tests/test_9000_postgres_compute_core_schema.py
+```
+
+本批覆盖：
+
+1. `compute_accounts`
+2. `compute_transactions`
+
+只读审计结论：
+
+1. 当前 ORM 模型为 `ComputeAccount`、`ComputeTransaction`；`ComputePackage` 存在但不属于 P3-F1 目标。
+2. 当前 SQLite 结构来自 `migrations/versions/0010_compute.sql`。
+3. 当前接口包括商户侧 `/compute/summary`、`/compute/transactions`，管理员充值 / 发放套餐，以及内部 `/internal/compute/usage`。
+4. 当前业务实现仍使用同步 SQLAlchemy session，P3-F1 不做 runtime async 改造。
+
+schema 结论：
+
+1. `compute_accounts.merchant_id` 保持唯一账户约束。
+2. `compute_transactions` 保留当前整数 Token 流水语义，并增加 delta 非 0 check constraint。
+3. `balance_tokens`、`delta_tokens`、`balance_after_tokens` 使用 PostgreSQL `BIGINT`，不使用 Float。
+4. 当前模型没有 `account_id`、`transaction_id`、`request_id`、`idempotency_key`、流水 `status`，本轮不提前新增。
+
+边界确认：
+
+1. 本轮只建 PostgreSQL schema，不迁移 SQLite 数据。
+2. 本轮不执行 production apply。
+3. 本轮不切换默认 `DATABASE_URL`。
+4. 本轮不默认开启 PG pilot。
+5. 本轮不启用 PG write。
+6. 本轮不修改支付、扣费、充值、套餐发放或流水生成逻辑。
+7. 本轮未连接宝塔 production，未读取 production SQLite。
+8. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-F2`：compute 数据迁移 dry-run + dev apply smoke。
+2. `P3-F3`：compute API contrast。
+3. 仍不得跳过 dry-run / contrast / staging 审批直接切换默认数据库。

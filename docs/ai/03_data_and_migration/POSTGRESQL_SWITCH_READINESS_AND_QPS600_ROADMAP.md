@@ -929,3 +929,43 @@ readiness 影响：
 1. `P3-E4`：agents/accounts runtime shadow read 方案，默认关闭。
 2. 或 `P3-F1`：`compute_accounts` / `compute_transactions` schema batch。
 3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。
+
+## 26. P3-F1 compute schema batch 当前状态
+
+任务：`P3-F1-DB-9000-POSTGRESQL-COMPUTE-SCHEMA-BATCH-1`
+
+P3-F1 已为 P0 核心算力域新增 PostgreSQL schema batch：
+
+```text
+migrations/postgres/auto_wechat/versions/0005_create_compute_core_tables.py
+scripts/smoke_auto_wechat_alembic_compute_core.py
+tests/test_9000_postgres_compute_core_schema.py
+```
+
+覆盖表：
+
+1. `compute_accounts`
+2. `compute_transactions`
+
+readiness 影响：
+
+1. 9000 PostgreSQL Alembic 链路从 `0004_agents_accounts_core` 延伸到 `0005_compute_core`。
+2. `compute_accounts` 已落地商户唯一账户约束 `uk_compute_accounts_merchant`。
+3. `compute_transactions` 已落地流水分页和类型筛选索引：`merchant_id + created_at`、`merchant_id + transaction_type + created_at`、`source + created_at`。
+4. token 余额、流水变动和余额快照使用 `BIGINT`，延续当前整数 Token 口径，避免 Float 精度风险。
+5. 当前模型没有 `account_id`、`transaction_id`、`idempotency_key` 和流水 `status`，P3-F1 不提前新增这些字段，不改变支付 / 扣费 / 充值逻辑。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. P3-F1 只是 compute 两表 schema batch，不迁移 SQLite 数据，不代表 compute 迁移完成。
+5. 算力扣减并发事务、幂等键、余额不足策略和真实支付仍需后续独立设计与验证。
+6. production QPS600 仍需要真实 HTTP benchmark、连接池观测、慢查询和回滚演练证明。
+
+后续建议：
+
+1. `P3-F2`：compute 数据迁移 dry-run + dev apply smoke。
+2. `P3-F3`：compute API contrast，确认 `/compute/summary` 与 `/compute/transactions` 语义一致。
+3. 不得因为 compute schema 已建就跳过 staging / production dry-run 审批。
