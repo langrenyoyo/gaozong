@@ -4,6 +4,8 @@
 >
 > **生效日期**：2026-07-09
 > **性质**：一期需求已冻结，本文档为权威理解。当本文档与 CLAUDE.md 旧约束冲突时，**以本文档为准**（见第 8 章「已推翻的旧约束」）。
+>
+> **2026-07-09 修订**：删除此前误加的「2.7 AI小高剪辑」章节。核对主需求原文（`docs/PRD/需求文档-小高AI系统一期（对外）.md`）确认：**2.7 实为「小高算力」、无 2.8、全文无任何剪辑字样**。AI 剪辑是**独立需求 `project_info/Project_02_一键剪辑/`**（走 ASR+Agent 流水线），不属于本项目一期；douyinAPI 的 AIGC `video_mixcut` 是历史/demo 沉淀，不属任何一期需求。一键过审属独立需求 `project_info/project_01_巨量广告/`，亦不在一期主需求范围。
 
 ---
 
@@ -28,10 +30,9 @@
 | AI小高智能体 | 9000 auto_wechat | 智能体 CRUD |
 | 抖音企业号管理 | 9000 auto_wechat | 企业号授权+绑定 |
 | AI小高助手（微信代理） | 9000 + 19000 Local Agent | 微信自动化 |
-| **AI小高剪辑（auto_edit）** | 9000 auto_wechat **内子模块** | ⚠️ 不是独立项目，全部在本仓库 |
 | 小高算力 | 9000 auto_wechat | Token 账户/消耗/套餐 |
 
-> ⚠️ **修正旧认知**：CLAUDE.md 曾写"AI小高剪辑是独立售卖子功能系统"——**已作废**。auto_edit 是 auto_wechat 的子模块，全部在本项目实现。
+> ⚠️ **范围澄清**：主需求一期**不含 AI 剪辑**（无任何剪辑模块）。剪辑（auto_edit）是**独立需求 `project_info/Project_02_一键剪辑/`**（二手车营销视频一键剪辑，走 ASR+Agent 流水线），不属于本项目一期交付。`E:\work\project\douyinAPI` 的 AIGC `video_mixcut` 是历史/demo 沉淀，也不属于任何一期需求。
 
 ---
 
@@ -45,7 +46,7 @@
         ▼ (前端直调登录，auto_wechat 只消费 token)
 ┌─────────────────────────────────────────────┐
 │ 9000 auto_wechat（主服务）                    │
-│  ├─ 线索 / 智能体 / 企业号 / 算力 / 剪辑      │
+│  ├─ 线索 / 智能体 / 企业号 / 算力               │
 │  ├─ 违禁词 / 回访提示词 / AI回复记录 / 算力配置 │
 │  └─ knowledge_training 代理 → 9100            │
 └─────────────────────────────────────────────┘
@@ -60,9 +61,8 @@
 ```
 
 **外部资源**：
-- `E:\work\project\douyinAPI`：参考实现（剪辑混剪 + 过审 OAuth 骨架），**不作生产依赖，需迁移重构**。
+- `E:\work\project\douyinAPI`：参考实现（一键过审 OAuth 骨架），**不作生产依赖**。一键过审是独立需求 `project_info/project_01_巨量广告/`，不在一期主需求范围。
 - `E:\work\project\react_base_back`：前端 UI 参考（算力页 ComputeCenter.tsx）。
-- auto_edit 子模块内：ASR + 全模态识别能力（剪辑用）。
 
 ---
 
@@ -92,7 +92,6 @@ Database Migration / Authentication / RBAC / 环境变量 / Docker / Nginx / Fil
 - 优先 UI Automation + OCR
 - Local Agent 只监听 `127.0.0.1:19000`，不监听 `0.0.0.0`
 - 前端不得持有 internal token，不得直连 9100 / Milvus
-- 剪辑过审授权 = **平台级一次授权**（非每商户授权）
 
 ### 3.6 Ponytail 原则（lazy senior dev）
 最小可用 diff、复用现有工具、不引入不必要抽象/依赖、Deletion over Addition。非平凡逻辑留一个可运行的自检。
@@ -120,8 +119,8 @@ auto_wechat:use                         基础使用
 auto_wechat:douyin_ai_cs                抖音AI客服（2.2）
 auto_wechat:leads                       线索（2.3）
 auto_wechat:agent                       智能体(2.4) + 微信助手(2.6) 共用
-auto_wechat:compute                     算力（2.8）
-auto_wechat:ai_edit                     剪辑（2.7）⚠️导航未注册
+auto_wechat:compute                     算力（2.7）
+auto_wechat:ai_edit                     ⚠️预留码，一期不交付（剪辑属独立 Project_02）
 auto_wechat:admin:autoreply             自动回复管理
 auto_wechat:admin:ai_reply_records      AI回复记录（3.4）
 auto_wechat:admin:compute_config        算力配置（3.5）
@@ -150,8 +149,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 2.4 智能体 | ✅已有 | 9000 | 无（模型已全） |
 | 2.5 企业号 | ✅已有 | 9000 | 补列表展示字段 |
 | 2.6 微信助手 | ⚠️改造 | 9000+19000 | 放开自动发送+规则勘误+SalesStaff改造 |
-| 2.7 剪辑 | 🆕全新 | 9000 | 迁移douyinAPI+素材库+识别抽象 |
-| 2.8 算力 | ✅后端已实现 | 9000 | FE-1+支付mock+3套餐seed+上浮比例 |
+| 2.7 算力 | ✅后端已实现 | 9000 | FE-1+支付mock+3套餐seed+上浮比例 |
 | 3.1 商户管理 | ⛔上游 | used-car | 仅充值/发放套餐跨调 |
 | 3.2 违禁词 | 🆕全新 | 9000 | 词库→违禁词→安全词，替换后仍发 |
 | 3.3 回访提示词 | 🆕全新 | 9000 | 微信→抖音回访闭环 |
@@ -223,20 +221,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 - 历史记录对应 `WechatTask` 表。
 - 前端重构对齐现有 WechatAgent 页。
 
-### 2.7 AI小高剪辑（9000，全新）
-- **全新模块**，迁移 douyinAPI 骨架：
-  - AI 合成：抖音 `/open_api/v3.0/aic/video_mixcut/create/` + `/video_clip/tasks/{task_id}`
-  - 一键过审：OAuth + `reject_material/ai_repair/*`（拒审修复建议 + 采纳）
-- **过审授权 = 平台级一次授权**（全局共享，非每商户）。
-- 文件存储：服务器磁盘，**视频先压缩再上传**；自动删除/对象存储后定，一期不做。
-- 素材库全新建：口播/高光分类 + 识别文案/描述 + 识别状态 + 文件名/时长/类型 + 按日期分组(前端倒序) + 商户隔离。
-- 识别能力：复用 auto_edit 的 **ASR + 全模态模型**，**抽象为公共能力**，预留作 Agent tool。
-- 算力消耗走 ComputeAccount（/internal/compute/usage）。
-- 新建 `edit_tasks` 类表。
-- 接口最新规范：飞书文档 https://bytedance.larkoffice.com/docx/Q20vd0QUFoVgkyxlaeBcCkqPnDb（实施时查阅）。
-- ⚠️ 权限码 `auto_wechat:ai_edit` 已定义但**前端导航未注册**，需补。
-
-### 2.8 小高算力（9000，前端+小补）
+### 2.7 小高算力（9000，前端+小补）
 - 后端已实现：`compute.py` + `apps.compute.services`。
 - **支付一期保持 mock**（react_base_back 无真实支付 SDK）；FE-1 可参考 `react_base_back/src/pages/ComputeCenter.tsx`。
 - **初始化写入 3 个套餐 seed**：基础99元/100000、标准299元/350000、专业699元/900000。
@@ -308,9 +293,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | `forbidden_words`（新） | 违禁词→安全词映射，每词一行， belongs to library | 3.2 |
 | `return_visit_prompts`（新） | 3 类预置提示词（名称/模板/启停/场景类型） | 3.3 |
 | `compute_markup_ratios`（新） | 按 6 功能模块的上浮比例 | 3.5 |
-| `edit_tasks`（新） | 剪辑任务（标题/标签/状态机7态/素材关联/成片URL） | 2.7 |
-| `edit_materials`（新） | 素材库（口播/高光分类/识别文案/识别状态/文件/时长/商户隔离） | 2.7 |
-| `compute_packages` | 写入 3 个 seed（不强制，可初始化脚本） | 2.8/3.5 |
+| `compute_packages` | 写入 3 个 seed（不强制，可初始化脚本） | 2.7/3.5 |
 | `douyin_authorized_accounts` | 删除时 `douyin_account_agent_bindings` 级联处理 | 2.5 |
 
 ---
@@ -329,7 +312,6 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | "业务自动派单发送仍禁止，sent 必须为 false" | **微信侧放开自动发送** |
 | "不允许把 sent 置为 true" | 可置 true |
 | "不允许发送 Enter / 不允许业务自动派单发送" | 允许（完整闭环） |
-| "AI小高剪辑是独立售卖子功能系统" | **auto_edit 是 auto_wechat 子模块，全部在本仓库** |
 
 **配套必须**（放开自动发送后强制）：违禁词过滤、人工接管降级、频率上限、失败回写、紧急停止。
 
@@ -346,7 +328,6 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 按第 7 章清单，逐表迁移 + dry-run + 测试。
 
 ### 阶段 2 · 全新模块
-- 2.7 剪辑（迁移 douyinAPI + 素材库 + 识别抽象）
 - 3.2 违禁词管理（前后端）
 - 3.3 回访提示词 + 微信→抖音回访闭环
 
@@ -357,7 +338,6 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 
 ### 阶段 4 · 前端 + 埋点
 - FE-1 算力页（参考 ComputeCenter.tsx）
-- 剪辑前端（/ai-editing + 注册导航）
 - 3.2/3.3 超管页接入
 - USAGE-1 所有 AI 操作上报算力（字符 × 上浮比例）
 
@@ -372,7 +352,6 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 3.3 微信→抖音回访闭环 | **一期需跑通简化版**（LLM + 关键字兜底） |
 | 3.5 上浮比例粒度 | 按**功能模块（6 能力）** |
 | 2.5 抖音号数字 ID | **抖音不返回**，前端隐藏/占位 |
-| 2.7 接口规范 | 以飞书文档为权威，实施时查阅 |
 
 ---
 
@@ -384,9 +363,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 权限码全貌 | `frontend/src/features/capabilities.ts` | 功能授权映射 |
 | 能力网关 | `app/routers/capability_gateway.py` | 6 能力健康检查 |
 | 算力服务 | `app/routers/compute.py` + `apps.compute.services` | 余额/消耗/套餐 |
-| 剪辑骨架 | `E:\work\project\douyinAPI\app.py` | AIGC 混剪 + 过审 OAuth 参考 |
+| 过审 OAuth 参考 | `E:\work\project\douyinAPI\app.py` | 一键过审 OAuth 骨架（独立 project_01，非一期） |
 | 算力页 UI | `E:\work\project\react_base_back\src\pages\ComputeCenter.tsx` | FE-1 参考 |
-| 飞书接口文档 | https://bytedance.larkoffice.com/docx/Q20vd0QUFoVgkyxlaeBcCkqPnDb | 2.7 剪辑/过审/支付规范 |
 | 项目记忆 | `C:\Users\A\.claude\projects\e--work-project-auto-wechat\memory\xg-phase1-*.md` | 9 条一期决策详情 |
 
 ---
