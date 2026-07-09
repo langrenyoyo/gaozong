@@ -559,3 +559,52 @@ readiness 影响：
 边界确认：P3-D7 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
 
 下一步建议：P3-D8 进入本地 QPS baseline + shadow overhead 压测；或进入 P3-E1 智能体 / 抖音账号绑定 schema batch。
+
+## 17. P3-D8 shadow QPS baseline 与 overhead 当前状态
+
+任务：`P3-D8-DB-9000-LEADS-TASKS-QPS-BASELINE-AND-SHADOW-OVERHEAD-1`
+
+P3-D8 已为 leads/tasks runtime read-only shadow 增加本地/dev synthetic benchmark 骨架，用于建立 shadow off baseline 与 shadow on overhead 的早期量化基线。
+
+新增内容：
+
+1. `scripts/benchmark_leads_tasks_shadow_overhead_dev.py`
+2. `tests/test_leads_tasks_shadow_benchmark.py`
+3. `docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_QPS_BENCHMARK_GUIDE.md`
+
+benchmark 覆盖当前五个 read-only shadow operation：
+
+1. `sales_staff.list`
+2. `wechat_tasks.history`
+3. `douyin_leads.list`
+4. `douyin_leads.detail`
+5. `douyin_webhook_events.list`
+
+压测输出指标：
+
+1. shadow off baseline：`total_requests`、`successful_requests`、`failed_requests`、`error_rate`、`throughput_rps`、`p50_ms`、`p95_ms`、`p99_ms`、`max_ms`、`min_ms`、`avg_ms`、`per_endpoint`。
+2. shadow on overhead：同 baseline 指标，加上 shadow metrics。
+3. overhead delta：`p50_delta_ms`、`p95_delta_ms`、`p99_delta_ms`、`avg_delta_ms`、`throughput_delta_percent`、`error_rate_delta`。
+4. shadow metrics：`total_shadow_reads`、`total_shadow_pass`、`total_shadow_warn`、`total_shadow_failed`、`total_shadow_timeout`、`total_shadow_error`、`by_operation`。
+
+readiness 影响：
+
+1. P3-D8 只提供本地/dev synthetic baseline，不是 production 压测。
+2. P3-D8 不证明 QPS600 已达标。
+3. P3-D8 不改变 `DATABASE_URL` 切换准入条件。
+4. 当前仍需 async repository、连接池容量核算、真实接口压测、慢查询日志、PostgreSQL 连接数和锁等待观测。
+
+边界确认：
+
+1. 不连接宝塔生产。
+2. 不读取生产 SQLite。
+3. 不执行 production apply。
+4. 不切换默认 `DATABASE_URL`。
+5. 不默认开启 PG pilot。
+6. 不启用 PG write。
+7. 不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-D9`：async session / connection pool runtime design hardening。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

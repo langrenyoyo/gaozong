@@ -4415,3 +4415,56 @@ D7 smoke / regression 验证点：
 7. 未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
 
 下一步建议：P3-D8 做本地 QPS baseline + shadow overhead 压测，或进入 P3-E1 智能体 / 抖音账号绑定 schema batch；仍不得直接进入默认数据库切换。
+
+# P3-D8 leads/tasks shadow QPS baseline 与 overhead 当前状态
+
+任务：`P3-D8-DB-9000-LEADS-TASKS-QPS-BASELINE-AND-SHADOW-OVERHEAD-1`
+
+当前已为 P3-D4/P3-D5/P3-D6/P3-D7 的 leads/tasks runtime PostgreSQL read-only shadow 增加本地/dev synthetic benchmark 骨架：
+
+```text
+scripts/benchmark_leads_tasks_shadow_overhead_dev.py
+tests/test_leads_tasks_shadow_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_QPS_BENCHMARK_GUIDE.md
+```
+
+benchmark 覆盖 read-only shadow 范围：
+
+1. `sales_staff.list`
+2. `wechat_tasks.history`
+3. `douyin_leads.list`
+4. `douyin_leads.detail`
+5. `douyin_webhook_events.list`
+
+脚本定位：
+
+1. 本地/dev synthetic baseline。
+2. 对比 shadow off baseline 与 shadow on overhead。
+3. 输出 p50 / p95 / p99 / max / avg / error_rate / throughput_rps / per_endpoint。
+4. 输出 shadow metrics：`total_shadow_reads`、`total_shadow_pass`、`total_shadow_warn`、`total_shadow_failed`、`total_shadow_timeout`、`total_shadow_error`、`by_operation`。
+5. 输出 shadow overhead delta。
+6. 可选输出 JSON 结果。
+
+运行边界：
+
+1. 只允许通过 `BENCHMARK_DATABASE_URL` 或 `SMOKE_DATABASE_URL` 使用 dev PostgreSQL URL。
+2. 不允许隐式使用 `DATABASE_URL`。
+3. SQLite synthetic rows 仍是响应源，PostgreSQL 只做 read-only shadow。
+4. synthetic PG 数据仅用于 setup，并在收尾清理。
+5. 当前 benchmark 不代表 production QPS600 达标。
+
+安全边界：
+
+1. 未连接宝塔生产。
+2. 未读取生产 SQLite。
+3. 未执行 production apply。
+4. 未切换默认 `DATABASE_URL`。
+5. 未默认开启 PG pilot。
+6. 未启用 PG write。
+7. 未接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+8. 未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-D9`：async session / connection pool runtime design hardening。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

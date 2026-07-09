@@ -334,3 +334,47 @@ runtime smoke 语义：
 
 1. `P3-D8`：本地 QPS baseline + shadow overhead 压测。
 2. 或进入 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 14. P3-D8 shadow QPS baseline 与 overhead 压测
+
+任务：`P3-D8-DB-9000-LEADS-TASKS-QPS-BASELINE-AND-SHADOW-OVERHEAD-1`
+
+P3-D8 在 P3-D4/P3-D5/P3-D6/P3-D7 已完成的 read-only shadow 覆盖上，新增本地/dev synthetic benchmark：
+
+```text
+scripts/benchmark_leads_tasks_shadow_overhead_dev.py
+tests/test_leads_tasks_shadow_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_QPS_BENCHMARK_GUIDE.md
+```
+
+当前 benchmark 覆盖五个 read-only operation：
+
+1. `sales_staff.list`
+2. `wechat_tasks.history`
+3. `douyin_leads.list`
+4. `douyin_leads.detail`
+5. `douyin_webhook_events.list`
+
+压测模型：
+
+1. 仅限本地/dev synthetic 数据。
+2. 自动创建 synthetic SQLite fixture。
+3. 通过 P3-D2 migration helper 把 synthetic rows 写入 dev PostgreSQL。
+4. 运行态仍以 SQLite synthetic rows 作为响应源。
+5. PostgreSQL 只做 read-only shadow read。
+6. 对比 shadow off baseline 与 shadow on overhead。
+7. 输出 p50 / p95 / p99 / max / avg / error_rate / throughput_rps / per_endpoint / overhead delta / shadow metrics。
+
+边界保持不变：
+
+1. 当前 benchmark 不代表 production QPS600 达标。
+2. 当前仍不能切换默认 `DATABASE_URL`。
+3. 当前仍不能默认开启 PG pilot。
+4. 当前仍未启用 PG write。
+5. 当前不连接宝塔生产，不读取生产 SQLite，不执行 production apply。
+6. 当前不接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+
+下一步建议：
+
+1. `P3-D9`：async session / connection pool runtime design hardening。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
