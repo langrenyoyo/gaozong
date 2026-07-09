@@ -53,11 +53,16 @@ docs/ai/04_OUTPUT_RULES.md
 | 数据模型 | `03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md` |
 | PostgreSQL 迁移路线 | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | PostgreSQL 切库 readiness / QPS600 | `03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md` |
+| PostgreSQL cutover 缺口审计 | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
+| PostgreSQL runtime cutover gap schema batch | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
+| PostgreSQL cutover 一次性数据迁移 | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
+| PostgreSQL DATABASE_URL 启动 smoke | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
 | leads/tasks PG shadow 灰度预设 | `03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md` |
 | agents/accounts PG schema batch | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | agents/accounts PG data migration dry-run / dev apply | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | agents/accounts SQLite / PG contrast | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | compute PG schema batch | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
+| compute PG data migration dry-run / dev apply | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
 | 接口契约 | `04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |

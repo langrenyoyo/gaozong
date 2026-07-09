@@ -58,8 +58,20 @@ def test_database_factory_recognizes_postgresql_without_password_leak():
     assert "***" in runtime.safe_url
 
 
-def test_database_factory_does_not_create_postgresql_engine():
+def test_database_factory_creates_postgresql_sync_engine(monkeypatch):
     from app.database import create_database_engine
+    import app.database as database
 
-    with pytest.raises(RuntimeError, match="PostgreSQL backend 已识别但本轮未启用"):
-        create_database_engine("postgresql+asyncpg://user:pass@postgres:5432/auto_wechat")
+    calls = []
+
+    def _fake_create_engine(url, **kwargs):
+        calls.append((url, kwargs))
+        return object()
+
+    monkeypatch.setattr(database, "create_engine", _fake_create_engine)
+
+    create_database_engine("postgresql+asyncpg://user:pass@postgres:5432/auto_wechat")
+
+    assert calls[0][0] == "postgresql+psycopg://user:pass@postgres:5432/auto_wechat"
+    assert calls[0][1]["pool_pre_ping"] is True
+    assert "connect_args" not in calls[0][1]

@@ -74,8 +74,7 @@ class UTF8JSONResponse(JSONResponse):
 
 def create_app() -> FastAPI:
     """创建并返回 FastAPI 应用实例"""
-    # 创建数据库表
-    Base.metadata.create_all(bind=engine)
+    ensure_runtime_schema()
 
     app = FastAPI(
         title="抖音线索销售微信回复检测系统 MVP",
@@ -205,6 +204,21 @@ def create_app() -> FastAPI:
         }
 
     return app
+
+
+def ensure_runtime_schema() -> None:
+    """SQLite 兼容路径自动建表；PostgreSQL 必须先通过 Alembic 初始化。"""
+    database_runtime = get_database_runtime()
+    if database_runtime.backend == "sqlite":
+        Base.metadata.create_all(bind=engine)
+        return
+    if database_runtime.backend == "postgresql":
+        logger.info(
+            "db_schema stage=startup_skip_create_all backend=postgresql url=%s",
+            getattr(database_runtime, "safe_url", "<unavailable>"),
+        )
+        return
+    raise RuntimeError(f"不支持的数据库后端: {database_runtime.backend}")
 
 
 app = create_app()

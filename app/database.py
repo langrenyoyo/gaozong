@@ -178,11 +178,26 @@ def get_sqlite_path(database_url: str | None = None) -> str:
     return runtime.sqlite_path
 
 
+def _postgres_sync_url(raw_url: str) -> str:
+    """把规划中的 asyncpg URL 转成主 runtime 可用的同步 psycopg URL。"""
+    parts = urlsplit(raw_url)
+    if parts.scheme in {"postgresql", "postgresql+asyncpg"}:
+        return parts._replace(scheme="postgresql+psycopg").geturl()
+    return raw_url
+
+
 def create_database_engine(database_url: str | None = None):
-    """创建 9000 SQLAlchemy engine；本轮 PostgreSQL 只识别、不连接。"""
+    """创建 9000 SQLAlchemy engine；SQLite 默认不变，PostgreSQL 使用同步 psycopg。"""
     runtime = get_database_runtime(database_url)
     if runtime.backend == "postgresql":
-        raise RuntimeError("PostgreSQL backend 已识别但本轮未启用，后续 P2/P3 再接入连接池")
+        return create_engine(
+            _postgres_sync_url(runtime.raw_url),
+            pool_size=DB_POOL_SIZE,
+            max_overflow=DB_MAX_OVERFLOW,
+            pool_timeout=DB_POOL_TIMEOUT,
+            pool_recycle=DB_POOL_RECYCLE,
+            pool_pre_ping=True,
+        )
     if runtime.backend != "sqlite":
         raise RuntimeError(f"不支持的数据库后端: {runtime.backend}")
 
@@ -223,10 +238,13 @@ logger.info(
 
 
 @event.listens_for(engine, "connect")
-def _set_sqlite_pragma(dbapi_connection, connection_record):
-    """连接创建时设置 WAL 模式。"""
+def _configure_database_connection(dbapi_connection, connection_record):
+    """连接创建时设置当前数据库方言需要的最小参数。"""
     cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
+    if engine.dialect.name == "sqlite":
+        cursor.execute("PRAGMA journal_mode=WAL")
+    elif engine.dialect.name == "postgresql":
+        cursor.execute(f"SET statement_timeout = {DB_STATEMENT_TIMEOUT_MS}")
     cursor.close()
 
 

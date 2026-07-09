@@ -969,3 +969,338 @@ readiness 影响：
 1. `P3-F2`：compute 数据迁移 dry-run + dev apply smoke。
 2. `P3-F3`：compute API contrast，确认 `/compute/summary` 与 `/compute/transactions` 语义一致。
 3. 不得因为 compute schema 已建就跳过 staging / production dry-run 审批。
+
+## 27. P3-F2 compute data migration 当前状态
+
+任务：`P3-F2-DB-9000-POSTGRESQL-COMPUTE-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+P3-F2 已为 compute 两表新增 SQLite -> PostgreSQL 数据迁移 dry-run / 受控 dev apply 工具链：
+
+```text
+scripts/migrate_compute_core_sqlite_to_postgres.py
+scripts/smoke_migrate_compute_core_dev_apply.py
+tests/test_migrate_compute_core_sqlite_to_postgres.py
+```
+
+readiness 影响：
+
+1. 第三批 P0 核心域已从 schema batch 进入 data migration dry-run/dev apply 阶段。
+2. 迁移顺序固定为 `compute_accounts` -> `compute_transactions`。
+3. `compute_accounts` 按 `merchant_id` upsert；`compute_transactions` 按 SQLite id -> PostgreSQL id upsert。
+4. token 余额、流水变动和余额快照继续保持整数，不引入 Float。
+5. `delta_tokens = 0`、非整数 token 字段、datetime 解析失败都会进入异常行并阻断 apply。
+6. 本轮仍不新增 `transaction_id`、`idempotency_key`、流水 `status`，不改变扣费 / 充值 / 套餐发放语义。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. P3-F2 只是本地/dev synthetic 数据迁移闭环，不代表宝塔真实数据迁移完成。
+5. 算力扣减并发事务、幂等键、余额不足策略和真实支付仍需后续独立设计与验证。
+6. production QPS600 仍需要真实 HTTP benchmark、连接池观测、慢查询和回滚演练证明。
+
+后续建议：
+
+1. `P3-F3`：compute SQLite vs PostgreSQL contrast。
+2. `P3-G0`：P1 表分级决策，继续按业务域推进，不跳过 dry-run / contrast / staging 审批。
+
+## 28. P3-Z0 cutover gap audit 当前状态
+
+任务：`P3-Z0-DB-9000-POSTGRESQL-CUTOVER-GAP-AUDIT-1`
+
+P3-Z0 已新增 9000 SQLite -> PostgreSQL 默认切库缺口审计：
+
+```text
+docs/ai/03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md
+```
+
+readiness 影响：
+
+1. 现在仍不能切换 production `DATABASE_URL` 到 PostgreSQL。
+2. 当前不建议继续对 leads/tasks 做更深的单表优化；应转入 cutover gap closure。
+3. 切库第一硬阻塞是 9000 同步主数据库入口仍拒绝 PostgreSQL backend，且启动阶段仍调用 `Base.metadata.create_all(bind=engine)`。
+4. PostgreSQL 已覆盖 11 张表，但 9000 ORM/runtime 仍有多张会被当前路由、service 或 scheduler 访问的表没有 PG schema。
+5. 缺失表中，`external_merchant_bindings` 会影响真实 NewCar 登录 / 商户绑定；`reply_checks`、`check_configs`、`lead_notifications`、`lead_followup_records`、`feedback_records` 会影响线索、微信助手和任务回写；自动回复/工作台相关表会影响抖音 AI 客服与管理员页面；`compute_packages` 会影响算力套餐页。
+
+切库最短路径更新为：
+
+1. `P3-Z1`：补齐 PG runtime 缺失表 schema，并让 9000 支持受控 PostgreSQL staging 启动路径。
+2. `P3-Z2`：补齐 cutover 必需表数据迁移脚本。
+3. `P3-Z3`：staging PG `DATABASE_URL` 启动 smoke。
+4. `P3-Z4`：production dry-run + apply 计划。
+5. `P3-Z5`：production `DATABASE_URL` 切换窗口。
+
+QPS600 结论不变：
+
+1. P3-Z0 不证明 QPS600 达标。
+2. 最短 cutover 可以先做同步 PostgreSQL staging 启动 smoke，但 production QPS600 仍必须通过 async repository、连接池、慢查询、锁等待和真实 HTTP 压测证明。
+3. 当前仍不能默认开启 PG pilot，不能启用 PG write，不能宣称全系统 PostgreSQL ready。
+
+## 29. P3-Z1 runtime gap schema batch 当前状态
+
+任务：`P3-Z1-DB-9000-POSTGRESQL-RUNTIME-CUTOVER-GAP-SCHEMA-1`
+
+P3-Z1 已新增 `0006_runtime_cutover_gap` Alembic revision，补齐 Z0 审计中缺失的 19 张 runtime 表：
+
+```text
+external_merchant_bindings
+reply_checks
+check_configs
+lead_notifications
+lead_followup_records
+feedback_records
+douyin_oauth_states
+douyin_account_autoreply_settings
+conversation_autopilot_states
+douyin_conversation_read_states
+douyin_private_message_sends
+ai_reply_decision_logs
+ai_auto_reply_runs
+douyin_message_resource_downloads
+douyin_image_uploads
+autoreply_rollout_configs
+autoreply_whitelist_entries
+autoreply_admin_audit_logs
+compute_packages
+```
+
+readiness 影响：
+
+1. 9000 PostgreSQL schema 覆盖面从 11 张表扩展到 30 张 runtime 表。
+2. NewCar 绑定、微信助手回写、抖音 AI 客服工作台、自动回复 rollout、资源记录和算力套餐的 runtime 表缺失风险已在 schema 层收敛。
+3. 当前仍只完成 schema，不代表数据迁移完成。
+4. 当前仍未处理 `app/database.py` PostgreSQL 同步主 engine 启动路径，也未处理 production 禁用自动 `Base.metadata.create_all` 的切换策略。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换 production `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. P3-Z1 不迁移 SQLite 数据，不执行 production apply，不连接宝塔 production。
+5. 下一步最短路径应进入 `P3-Z2` cutover 必需表数据迁移脚本，并在后续 staging `DATABASE_URL` smoke 中验证 9000 能以 PostgreSQL 启动。
+
+## 30. P3-Z2 cutover 统一迁移脚本当前状态
+
+任务：`P3-Z2-DB-9000-POSTGRESQL-CUTOVER-DATA-MIGRATION-1`
+
+P3-Z2 已新增 9000 cutover 一次性迁移脚本：
+
+```text
+scripts/migrate_9000_sqlite_to_postgres_cutover.py
+tests/test_cutover_sqlite_to_postgres_migration.py
+```
+
+readiness 影响：
+
+1. 30 张 runtime 表已有统一 dry-run / apply 骨架。
+2. 脚本默认 dry-run，apply 必须显式 `--apply --yes`。
+3. apply 拒绝 `APP_ENV=production`，拒绝隐式 `DATABASE_URL`，只允许 dev/staging host 和 `auto_wechat` database。
+4. 当前仍未在宝塔 staging 执行真实 SQLite -> PostgreSQL apply。
+5. 当前仍不能切换 production `DATABASE_URL`。
+
+下一步最短路径：
+
+1. `P3-Z3`：在 staging 使用 PostgreSQL `DATABASE_URL` 启动 9000 smoke。
+2. 该 smoke 必须先解决 `app/database.py` PostgreSQL 主 engine 启动路径和 production 禁用自动 `Base.metadata.create_all` 策略。
+
+## 31. P3-Z3 PostgreSQL DATABASE_URL startup smoke scaffold 当前状态
+
+任务：`P3-Z3-DB-9000-POSTGRESQL-DATABASE-URL-STARTUP-SMOKE-1`
+
+P3-Z3 已完成最小 runtime 接入：
+
+1. 9000 主同步 engine 支持 PostgreSQL backend。
+2. `postgresql+asyncpg://` 会为同步主 engine 派生 `postgresql+psycopg://`，避免把 asyncpg 塞进同步 `SessionLocal`。
+3. PostgreSQL 下不执行 `Base.metadata.create_all`，schema readiness 交给 Alembic。
+4. 新增 startup smoke 脚本，验证 PostgreSQL `DATABASE_URL` 下 app 可创建。
+5. 新增 `psycopg[binary]` 依赖，供 staging / production 同步主 runtime 使用。
+
+readiness 影响：
+
+1. 切库第一硬阻塞已从“代码直接拒绝 PostgreSQL engine”推进到“需要 staging 实库 smoke 验证”。
+2. 当前仍不能切换 production `DATABASE_URL`。
+3. 当前仍未证明 QPS600，最短 cutover 仍只是让同步 PostgreSQL runtime 可在 staging 启动。
+4. production 前仍必须完成核心页面 / 核心接口 smoke、人工审批和回滚演练。
+
+下一步最短路径：
+
+1. `P3-Z4`：staging 核心页面 / 核心接口 smoke。
+2. `P3-Z5`：production dry-run / apply / `DATABASE_URL` 切换 Runbook。
+
+### 31.1 P3-Z3 实库验证记录（2026-07-09 dev 本地）
+
+本轮在 dev 本地 PostgreSQL 容器（`auto-wechat-postgres-dev`，postgres:16-alpine，非 staging / production）完成 Z3 实库收尾，证明 9000 在 PostgreSQL 下可启动 + 数据可迁移 + 幂等可重跑。
+
+实库验证证据链：
+
+1. alembic smoke `SMOKE_PASS`：`scripts/smoke_auto_wechat_alembic_runtime_cutover_gap.py` 跑通 `alembic upgrade head` + asyncpg inspect，19 张 0006 表的字段 / 索引 / 约束全部对齐 `EXPECTED_TABLES`，FK 自动命名存在（`lead_notifications_*_fkey`、`ai_auto_reply_runs_trigger_event_id_fkey` 等）。
+2. cutover dry-run `DRY_RUN_PASS`：`scripts/migrate_9000_sqlite_to_postgres_cutover.py` 扫描 30 张 runtime 表，0 error，0 warning，SQLite 源库基本空（仅 `compute_accounts` 1 行）。
+3. cutover apply `APPLY_PASS`：`compute_accounts` 1 行落 PG，datetime 字段正确从 SQLite ISO 字符串转 PostgreSQL `timestamptz`。
+4. 幂等性验证：重跑 apply，`compute_accounts` `insert=0 update=1`，count 仍为 1，`ON CONFLICT (id) DO UPDATE` 幂等机制正确。
+5. 9000 真启动冒烟 `REAL_STARTUP_PASS`：`DATABASE_URL=postgresql+psycopg://...` 下 `TestClient` 进入 lifespan 正常，`GET /` 返回 200，同步 engine 直查 PG 得 `compute_accounts=1`、`alembic_version=0006_runtime_cutover_gap`。真启动时 patch 掉 `scheduler` / `hotkey_listener` / `desktop_overlay` 避免本机副作用。
+
+关键环境发现：
+
+- Windows 下 asyncpg 连本地 PG 必须用 `127.0.0.1`。`localhost` 优先解析到 IPv6 `::1`，asyncpg 走 IPv6 socket 在握手阶段 `ConnectionResetError [WinError 10054]`；`ssl=False`、`ssl='disable'`、`WindowsSelectorEventLoopPolicy`、`statement_cache_size=0` 均无效。psycopg 同步引擎连 `localhost` 不受影响。cutover / alembic smoke 都 `import asyncpg`，本机直连 URL 固定 `postgresql+asyncpg://auto_wechat:change_me@127.0.0.1:5432/auto_wechat`（host 在 `ALLOWED_APPLY_HOSTS` / `ALLOWED_DEV_HOSTS` 白名单内）。
+
+审查 Major 处置：
+
+- Maj-1（startup smoke 只验构建不验启动）：已补真启动冒烟，lifespan + engine 查 PG 闭环验证。
+- Maj-3（`coerce_json` 坏数据只产 warning 不计 error）：dry-run 0 warning，SQLite 源数据干净，本轮不改 `coerce_json`；若 staging 数据出现 JSON warning 再升级为 error。
+- Maj-5（0006 FK `ondelete` 与 ORM 一致性）：全链一致——`app/models.py` 14 个 FK 全不带 `ondelete`，0001-0006 migration 全链无任何 `ondelete`，都默认 NO ACTION，行为一致。前序 Minor：0003 `wechat_tasks.reply_check_id` 列存在但未建 FK 约束（ORM 有 FK），语义仍一致，留待后续严格对齐。
+- Maj-2（cutover `ON CONFLICT (id)` 对 seed 表 unique violation 风险）、Maj-4（`read_postgres_snapshot` 全量 id 进内存）：本轮未改代码，留 P3-Z5 Runbook 约束（cutover 必须在 seed 之前；大表 snapshot 需评估行数）。
+
+本轮仍未完成（保持 readiness 边界）：
+
+1. 仍未在宝塔 staging 执行真实 SQLite -> PostgreSQL apply（本轮只 dev 本地）。
+2. 仍未切换 production `DATABASE_URL`。
+3. 仍未证明 QPS600（本轮只验证启动 + 迁移管道，未跑 HTTP 压测）。
+4. SQLite 源库基本空（仅 1 行），cutover 对大数据量 / 多样数据的 mapping / coercion 路径未充分验证，P3-Z4 staging 冒烟需补充合成数据。
+5. production 前仍必须完成核心页面 / 核心接口 smoke、人工审批和回滚演练。
+
+## 32. P3-Z4 核心页面 / 接口冒烟当前状态
+
+任务：`P3-Z4-DB-9000-POSTGRESQL-CORE-PAGE-SMOKE-1`
+
+### 32.1 dev 本地冒烟结果（2026-07-09）
+
+dev 本地 PG 容器（`auto-wechat-postgres-dev`，DATABASE_URL=`postgresql+psycopg://auto_wechat:change_me@127.0.0.1:5432/auto_wechat`）下完成两层冒烟：
+
+1. HTTP 只读接口矩阵（`TestClient` 真启动，patch 掉 scheduler / hotkey / desktop_overlay 副作用）：12 个接口全部返回 401（NewCar auth 中间件拦截，TestClient 未带 token），**0 个 500 / ERR**，证明 8 模块路由全部注册可达 + 中间件链正常 + app 在 PG 下无 DB 崩溃。
+
+   | 模块 | 接口 | 状态 |
+   |------|------|------|
+   | 抖音AI客服工作台 | `/ai-reply-decision-logs`, `/ai-auto-reply-runs` | 401 |
+   | AI小高线索 | `/leads`, `/webhook-events` | 401 |
+   | AI小高智能体 | `/agents` | 401 |
+   | 抖音企业号管理 | `/integrations/douyin/accounts` | 401 |
+   | 小高AI微信助手 | `/wechat-tasks`, `/checks` | 401 |
+   | 小高算力 | `/compute/summary`, `/compute/packages` | 401 |
+   | 管理员基础页面 | `/admin/autoreply/rollout/summary` | 401 |
+   | NewCar 登录绑定 | `/auth/me` | 401 |
+
+2. DB 层表 count 矩阵（同步 engine 直查 PG）：16 张核心表全部可读，无异常，`compute_accounts=1`（apply 迁移数据），其余空表。
+
+结论：dev 环境下 9000 在 PostgreSQL 运行模式的"app 启动 + 路由 + 中间件 + DB 表可读"四层全部可用。
+
+### 32.2 dev 冒烟局限
+
+1. HTTP 401 在业务 handler 之前拦截，未触发 handler 内 ORM 查询。
+2. SQLite 源库基本空（仅 `compute_accounts` 1 行），handler 深度查询返回空列表，验证价值有限。
+3. 抖音AI客服工作台的 9100 代理路径（`douyin_ai_cs_proxy`）不在本轮 9000 PG 迁移范围（9100 独立服务，未来用 `RAG_DATABASE_URL`）。
+
+handler 内 ORM 查询的深度验证 + 真实数据渲染留 P3-Z4 staging 阶段（带 auth token + 真实数据）。
+
+### 32.3 staging 冒烟 Runbook（人工执行，禁止自动）
+
+staging / production 属于宝塔环境，只写 Runbook，必须人工审批后执行。
+
+前置条件：
+
+1. staging PostgreSQL 实例已就绪，`alembic upgrade head` 到 `0006_runtime_cutover_gap`，30 张 runtime 表 schema 齐全（用 `scripts/smoke_auto_wechat_alembic_runtime_cutover_gap.py` + `SMOKE_DATABASE_URL=staging` 验证，注意 asyncpg 在 Windows 用 127.0.0.1，staging Linux 不受此限制）。
+2. staging SQLite 现有数据已备份（`cp data/auto_wechat.db data/auto_wechat.db.pre-cutover`）。
+3. staging `DATABASE_URL` 当前仍指向 SQLite（回滚基线）。
+
+操作步骤：
+
+1. 在 staging 跑 cutover dry-run：`python scripts/migrate_9000_sqlite_to_postgres_cutover.py --sqlite-db-path data/auto_wechat.db --postgres-url <staging-pg-url>`，确认 `DRY_RUN_PASS` 且 `error=0`。若出现 JSON / datetime warning，记录并评估是否阻塞（见 Maj-3）。
+2. 在 staging 跑 cutover apply：加 `--apply --yes`，确认 `APPLY_PASS`。apply 前确认 staging PG 为 alembic upgrade head 后的空库或 cutover-before-seed 顺序（见 Maj-2）。
+3. 切 staging `DATABASE_URL` 指向 PostgreSQL（`postgresql+psycopg://...`），保留原 SQLite URL 为 `SQLITE_DATABASE_URL_ROLLBACK` 备用。
+4. 重启 9000 staging，观察启动日志出现 `db_schema stage=startup_skip_create_all backend=postgresql`。
+5. 带 staging auth token 对 8 模块 12 接口跑 GET，预期全部 200 且返回真实数据结构（非空）。
+6. 前端连 staging，人工核对 8 个核心页面（抖音AI客服工作台 / AI小高线索 / AI小高智能体 / 抖音企业号管理 / 小高AI微信助手 / 小高算力 / 管理员基础页面 / NewCar 登录外部账号绑定）渲染正常。
+7. 观察 staging 24h，确认无异常日志、无 500、无连接池耗尽。
+
+通过标准：12 接口 200 + 8 页面正常 + 24h 无异常。
+
+回滚（出现任何异常立即执行）：
+
+1. staging `DATABASE_URL` 切回原 SQLite URL。
+2. 重启 9000 staging，确认日志 `backend=sqlite` + `Base.metadata.create_all`。
+3. 确认业务恢复正常（SQLite 数据未动，只是 PG 导入了一份副本）。
+4. 排查异常后，重新走 dry-run → apply → 切换流程。
+
+边界（Z4 staging 不得越界）：
+
+1. 不得直接操作 production `DATABASE_URL`（production 切换属 P3-Z5，需独立审批）。
+2. 不得启用 PostgreSQL 写入灰度（runtime shadow read 仍默认关闭）。
+3. 不得触发抖音发送 / 微信发送 / 私信发送 / 自动回复闸门（冒烟只读）。
+4. 不得改支付 / 扣费 / 充值 / 套餐发放业务逻辑。
+
+## 33. P3-Z5 production cutover Runbook
+
+任务：`P3-Z5-DB-9000-POSTGRESQL-PRODUCTION-CUTOVER-RUNBOOK-1`
+
+P3-Z5 只输出生产切换 Runbook，禁止自动执行。宝塔 production 的任何 `DATABASE_URL` 切换、cutover apply、重启都必须人工审批后手动执行。
+
+### 33.1 审批窗口（硬约束）
+
+1. production 切换必须预留人工审批窗口，禁止脚本化一键切换。
+2. 审批需明确：变更时间（避开业务高峰）、执行人、回滚负责人、观察时长、通知干系人。
+3. 审批通过前不得在 production 执行 cutover apply 或 `DATABASE_URL` 切换。
+
+### 33.2 前置就绪（Z1-Z4 全部通过方可进入 Z5）
+
+1. `0006_runtime_cutover_gap` 已在 production PG `alembic upgrade head` 完成，30 表 schema 齐全。
+2. cutover 脚本 dry-run / apply / 幂等已在 dev 或 staging 验证通过（见节 31.1、32.1）。
+3. 核心页面 / 接口 staging 冒烟通过（见节 32.3）。
+4. 回滚预案已在 staging 演练一次。
+
+### 33.3 生产切换步骤
+
+1. 备份 production SQLite：`cp data/auto_wechat.db data/auto_wechat.db.pre-cutover-<date>`，确认备份可读。
+2. 确认 production PG `alembic_version` 为 `0006_runtime_cutover_gap`，30 表存在。
+3. production cutover dry-run：`python scripts/migrate_9000_sqlite_to_postgres_cutover.py --sqlite-db-path data/auto_wechat.db --postgres-url <production-pg-url>`（注意 production apply 被脚本闸门拒绝 `APP_ENV=production`，dry-run 只读安全）。确认 `DRY_RUN_PASS` 且 `error=0`，评估大表行数（见 33.6 Maj-4）。
+4. 审批二次确认后，在 production PG 执行 apply（需临时以非 production 环境变量跑，或由 DBA 手工执行等价 upsert，全程留审计日志）。
+5. 切 production `DATABASE_URL` 指向 PostgreSQL（`postgresql+psycopg://...`），原 SQLite URL 存为 `SQLITE_DATABASE_URL_ROLLBACK`。
+6. 重启 9000 production，确认启动日志出现 `db_schema stage=startup_skip_create_all backend=postgresql`。
+7. 带 production auth token 对 8 模块 12 接口跑 GET，预期全部 200 且数据非空。
+8. 前端核对 8 个核心页面渲染正常。
+9. 观察 ≥ 48h（含完整业务周期），记录接口延迟、5xx、连接池、慢查询。
+
+通过标准：12 接口 200 + 8 页面正常 + 48h 无异常 + 无 5xx 突增。
+
+### 33.4 回滚手册
+
+触发条件：任何 5xx 突增 / 页面异常 / 数据不一致 / 业务中断。
+
+1. production `DATABASE_URL` 切回原 SQLite URL（`SQLITE_DATABASE_URL_ROLLBACK`）。
+2. 重启 9000 production，确认日志 `backend=sqlite` + `Base.metadata.create_all`。
+3. 确认业务恢复正常（SQLite 数据未动，PG 只是多了一份副本）。
+4. **不删** SQLite 文件，**不清** PG volume（PG 副本保留供排查）。
+5. 排查问题后，重新走 33.3 流程。
+
+### 33.5 运行参数建议（验收 #8）
+
+起点值取自节 21 P3-D12 dev synthetic 调优结论，production 需结合节 5.2 公式和实际压测核算：
+
+| 参数 | dev 起点值 | 生产核算要求 |
+|------|-----------|--------------|
+| `workers`（uvicorn/gunicorn） | 2 | 按 CPU 核数和压测调整；`理论最大连接 = workers * (pool_size + max_overflow)` |
+| `DB_POOL_SIZE` | 5 | 单 worker 最大连接 = `pool_size + max_overflow` |
+| `DB_MAX_OVERFLOW` | 5 | 突发流量缓冲 |
+| PostgreSQL `max_connections` | — | `>= workers * (pool_size + max_overflow) + 预留（maintenance/migration/psql/monitoring ≥ 10）` |
+| `DB_STATEMENT_TIMEOUT_MS` | 200-500 | 节 5.3 按 SLA 倒推，webhook / polling / 分页 / 报表建议 200ms，慢路径放宽到 500ms |
+| `DB_POOL_TIMEOUT` / `DB_POOL_RECYCLE` | 现有配置 | 按节 5.2 配置入口保留 |
+| shadow `sample_rate` / `max_concurrency` | 默认关闭 | 灰度时 `0.1 / 10`（节 21）；切换期建议关闭 runtime shadow read |
+
+重要边界：节 21 dev synthetic `throughput_rps=570.102 / p95=52ms / p99=59ms` **不是 production QPS600 证明**，距 QPS600 仍差约 30 rps。production QPS600 达标必须在独立压测环境按节 5.6 场景跑 HTTP 基准测试（不在宝塔生产跑），审批后另行记录。
+
+### 33.6 Maj-2 / Maj-4 约束
+
+- **Maj-2（cutover 必须在 seed 之前）**：production PG 在 `alembic upgrade head` 后应为空库，cutover 完成后再执行业务 seed（`compute_packages` 套餐、`autoreply_rollout_configs` global scope 等）。若 PG 已有 seed 且 id 与 SQLite 错位，cutover 的 `ON CONFLICT (id) DO UPDATE` 不触发，业务唯一键冲突会 `unique_violation` 导致单事务整批回滚。有 uk 的敏感表：`autoreply_rollout_configs`、`autoreply_whitelist_entries`、`douyin_account_autoreply_settings`、`conversation_autopilot_states`、`douyin_conversation_read_states`、`douyin_oauth_states`、`douyin_private_message_sends(auto_reply_run_id)`、`check_configs`、`ai_auto_reply_runs`。
+- **Maj-4（snapshot 全量 id 进内存）**：`read_postgres_snapshot` 对每表 `SELECT id FROM "<table>"` 全量拉内存。生产大表（`douyin_webhook_events` / `ai_reply_decision_logs` / `ai_auto_reply_runs` / `douyin_private_message_sends` 可能百万行）迁移前必须评估行数；超阈值（建议 10 万行）需改 snapshot 策略（临时表 anti-join 或按 id 分批），当前脚本未实现分批。
+
+### 33.7 不越界
+
+1. 不改 9100 / Milvus / RAG（独立服务，未来用 `RAG_DATABASE_URL`）。
+2. 不触发 LLM / 抖音发送 / 微信发送 / 私信发送 / 自动回复闸门。
+3. 不改支付 / 扣费 / 充值 / 套餐发放业务逻辑。
+4. 不启用 PostgreSQL 写入灰度（runtime shadow read 默认关闭）。
+5. 不在宝塔生产环境跑 HTTP 压测。
+6. 不把 dev / staging 的合成 QPS 当作 production QPS600 证明。
+
+### 33.8 Z5 交付边界
+
+本轮 Z5 只输出 Runbook，不执行任何 production 操作。production 切换需另起审批窗口，由人工按 33.1-33.3 执行，按 33.4 回滚预案保障。
