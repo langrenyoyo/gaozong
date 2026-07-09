@@ -4227,3 +4227,47 @@ async PG pilot 方案：
 7. 当前未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
 
 下一步：P3-D4 进入 runtime shadow read scaffolding，默认关闭。
+
+# P3-D4 leads/tasks runtime shadow read scaffolding 当前状态
+
+任务：`P3-D4-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-READ-SCAFFOLDING-DEFAULT-OFF-1`
+
+当前已新增 9000 leads/tasks runtime PostgreSQL shadow read scaffolding，默认关闭：
+
+```text
+app/services/leads_tasks_pg_shadow.py
+app/services/leads_tasks_shadow_compare.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+新增配置项默认值：
+
+```text
+LEADS_TASKS_PG_PILOT_ENABLED=false
+LEADS_TASKS_PG_READ_SHADOW_ENABLED=false
+LEADS_TASKS_PG_WRITE_ENABLED=false
+LEADS_TASKS_PG_STRICT_CONTRAST=false
+LEADS_TASKS_PG_DATABASE_URL=
+LEADS_TASKS_PG_POOL_SIZE=5
+LEADS_TASKS_PG_MAX_OVERFLOW=5
+LEADS_TASKS_PG_POOL_TIMEOUT=3
+LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS=1500
+LEADS_TASKS_PG_SHADOW_TIMEOUT_MS=800
+```
+
+本轮只接入：
+
+1. `GET /staff`：`sales_staff` list read-only shadow。
+2. `GET /wechat-tasks`：`wechat_tasks` history read-only shadow。
+
+边界确认：
+
+1. 默认配置下不初始化 PG engine，不连接 PostgreSQL。
+2. SQLite 仍是唯一响应源，接口返回不变。
+3. PG shadow read 失败、mismatch 或 timeout 只记录 warning，不影响用户响应。
+4. PG write 未接入，`LEADS_TASKS_PG_WRITE_ENABLED` 本阶段不被业务写路径消费。
+5. 未接入 `douyin_leads` runtime hook、`douyin_webhook_events` runtime hook、pending task、result write 或 webhook write。
+6. 未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+7. 未切换 `DATABASE_URL`，未改业务接口默认数据库，未默认开启 PG pilot。
+
+下一步建议：P3-D5 可扩展到 `douyin_leads` list/detail shadow read，或进入智能体 / 账号绑定 PostgreSQL schema batch；不得直接进入默认数据库切换。

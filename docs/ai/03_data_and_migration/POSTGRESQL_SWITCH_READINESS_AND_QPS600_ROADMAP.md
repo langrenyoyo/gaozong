@@ -434,3 +434,35 @@ QPS600 准备项继续保持：
 5. webhook 幂等键和 `wechat_tasks` pending polling 锁策略必须落地。
 
 边界确认：P3-D3 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot。
+
+## 13. P3-D4 runtime shadow read scaffolding 当前状态
+
+任务：`P3-D4-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-READ-SCAFFOLDING-DEFAULT-OFF-1`
+
+P3-D4 已把 P3-D3 的 async PG pilot 方案推进到最小运行态脚手架，但默认仍全部关闭，不能视为默认数据库切换。
+
+已落地点：
+
+1. 新增 leads/tasks PG shadow read 配置项，默认 false / 空 URL / 保守连接池参数。
+2. 新增 `app/services/leads_tasks_pg_shadow.py`，负责 lazy async engine、只读 SELECT、timeout 隔离、异常 warning 和 URL 脱敏。
+3. 新增 `app/services/leads_tasks_shadow_compare.py`，负责 count/key 轻量对照和 PII 脱敏摘要。
+4. 接入 `GET /staff` 的 `sales_staff` list read-only shadow。
+5. 接入 `GET /wechat-tasks` 的 `wechat_tasks` history read-only shadow。
+6. 新增 `tests/test_leads_tasks_pg_shadow_runtime.py` 覆盖默认关闭、不开 engine、不连 PG、响应不变、异常吞掉、只读 SQL 和无 PG write。
+
+仍未落地点：
+
+1. `douyin_leads` runtime shadow hook。
+2. `douyin_webhook_events` runtime shadow hook。
+3. `wechat_tasks` pending polling shadow。
+4. `wechat_tasks` result write。
+5. webhook write。
+6. 任何 PostgreSQL 写入。
+
+readiness 影响：
+
+1. 这一步只证明默认关闭的 shadow read 脚手架可以安全挂入两个低风险读接口。
+2. SQLite 仍是唯一用户响应源。
+3. `DATABASE_URL` 仍不能切换到 PostgreSQL。
+4. `LEADS_TASKS_PG_PILOT_ENABLED` 和 `LEADS_TASKS_PG_READ_SHADOW_ENABLED` 不得默认开启。
+5. QPS600 仍需要后续 async repository、连接池容量核算、真实索引 explain 和压测证明。

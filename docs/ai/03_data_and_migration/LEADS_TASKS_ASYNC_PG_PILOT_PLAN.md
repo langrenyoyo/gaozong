@@ -154,3 +154,56 @@ PostgreSQL max_connections >= 理论最大连接 + 运维/迁移/监控预留连
 4. P3-D7：douyin_leads list/detail read-only shadow 对照。
 5. P3-D8：douyin_webhook_events read-only shadow 对照。
 6. 后续写入灰度单独审批，不在 P3-D3 内启用。
+
+## 10. P3-D4 runtime shadow read scaffolding 落地记录
+
+任务：`P3-D4-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-READ-SCAFFOLDING-DEFAULT-OFF-1`
+
+P3-D4 已新增默认关闭的运行态 PostgreSQL shadow read 脚手架：
+
+```text
+app/services/leads_tasks_pg_shadow.py
+app/services/leads_tasks_shadow_compare.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+新增配置项默认全部关闭或保守：
+
+```text
+LEADS_TASKS_PG_PILOT_ENABLED=false
+LEADS_TASKS_PG_READ_SHADOW_ENABLED=false
+LEADS_TASKS_PG_WRITE_ENABLED=false
+LEADS_TASKS_PG_STRICT_CONTRAST=false
+LEADS_TASKS_PG_DATABASE_URL=
+LEADS_TASKS_PG_POOL_SIZE=5
+LEADS_TASKS_PG_MAX_OVERFLOW=5
+LEADS_TASKS_PG_POOL_TIMEOUT=3
+LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS=1500
+LEADS_TASKS_PG_SHADOW_TIMEOUT_MS=800
+```
+
+本轮只接入两个低风险只读点：
+
+1. `GET /staff`：`sales_staff` list read-only shadow。
+2. `GET /wechat-tasks`：`wechat_tasks` history read-only shadow。
+
+运行语义：
+
+1. SQLite 仍是唯一用户响应源。
+2. PostgreSQL 只做 shadow read，不参与返回值生成。
+3. shadow read 只有在 `LEADS_TASKS_PG_PILOT_ENABLED=true`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=true` 且 `LEADS_TASKS_PG_DATABASE_URL` 为 `postgresql+asyncpg://` 时才允许执行。
+4. 默认配置下不初始化 PG engine、不连接 PostgreSQL。
+5. shadow read 异常或超时只记录 warning，不影响主请求。
+6. URL 日志只允许脱敏展示。
+7. `LEADS_TASKS_PG_WRITE_ENABLED` 本阶段不被任何业务写路径消费。
+
+本轮明确未接入：
+
+1. `douyin_leads` runtime hook。
+2. `douyin_webhook_events` runtime hook。
+3. `GET /wechat-tasks/pending`。
+4. `POST /wechat-tasks/{task_id}/result`。
+5. webhook write。
+6. 任何 PostgreSQL write。
+
+后续建议：P3-D5 可继续扩展到 `douyin_leads` list/detail shadow read，或先进入智能体 / 账号绑定 PostgreSQL schema batch；仍不得切换默认 `DATABASE_URL`。

@@ -1486,3 +1486,56 @@ async PG pilot 方案：
 7. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
 
 后续建议：P3-D4 进入 runtime shadow read scaffolding，默认关闭。
+
+## 38. P3-D4 leads/tasks runtime shadow read scaffolding 补充
+
+任务：`P3-D4-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-READ-SCAFFOLDING-DEFAULT-OFF-1`
+
+P3-D4 已新增 9000 leads/tasks runtime PostgreSQL shadow read scaffolding，默认全部关闭。本轮只覆盖 P3-D3 推荐顺序中最安全的两个 read-only 点：
+
+```text
+GET /staff                  -> sales_staff list shadow read
+GET /wechat-tasks           -> wechat_tasks history shadow read
+```
+
+新增配置项：
+
+```text
+LEADS_TASKS_PG_PILOT_ENABLED=false
+LEADS_TASKS_PG_READ_SHADOW_ENABLED=false
+LEADS_TASKS_PG_WRITE_ENABLED=false
+LEADS_TASKS_PG_STRICT_CONTRAST=false
+LEADS_TASKS_PG_DATABASE_URL=
+LEADS_TASKS_PG_POOL_SIZE=5
+LEADS_TASKS_PG_MAX_OVERFLOW=5
+LEADS_TASKS_PG_POOL_TIMEOUT=3
+LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS=1500
+LEADS_TASKS_PG_SHADOW_TIMEOUT_MS=800
+```
+
+新增运行态文件：
+
+```text
+app/services/leads_tasks_pg_shadow.py
+app/services/leads_tasks_shadow_compare.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+运行边界：
+
+1. 默认配置下不初始化 PG engine，不连接 PostgreSQL。
+2. SQLite 仍是唯一响应源，接口 response model 和返回内容不变。
+3. PostgreSQL shadow read 只做 count/key 轻量对照。
+4. shadow mismatch、异常、超时只记录 warning，不影响用户响应。
+5. URL 必须脱敏，不打印 password。
+6. 本阶段不消费 `LEADS_TASKS_PG_WRITE_ENABLED`，不接入任何 PG write。
+7. 当前仍不能切换默认 `DATABASE_URL`。
+
+未接入范围：
+
+1. `douyin_leads` list/detail runtime hook。
+2. `douyin_webhook_events` runtime hook。
+3. `GET /wechat-tasks/pending` pending polling。
+4. `POST /wechat-tasks/{task_id}/result` result write。
+5. webhook write。
+6. production apply 或真实生产数据迁移。

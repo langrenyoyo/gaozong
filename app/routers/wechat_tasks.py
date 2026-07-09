@@ -19,7 +19,7 @@ from app.schemas import (
     WechatTaskResultRequest,
     WechatTaskResponse,
 )
-from app.services import wechat_task_service
+from app.services import leads_tasks_pg_shadow, wechat_task_service
 
 router = APIRouter(prefix="/wechat-tasks", tags=["微信任务队列"])
 
@@ -70,9 +70,10 @@ def list_wechat_tasks(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """分页查询当前商户微信任务历史，列表不返回完整 raw_result。"""
-    return wechat_task_service.list_wechat_task_history(
+    merchant_id = _merchant_id(context)
+    result = wechat_task_service.list_wechat_task_history(
         db,
-        merchant_id=_merchant_id(context),
+        merchant_id=merchant_id,
         page=page,
         page_size=page_size,
         status=status,
@@ -83,6 +84,21 @@ def list_wechat_tasks(
         date_from=date_from,
         date_to=date_to,
     )
+    if leads_tasks_pg_shadow.is_shadow_configured():
+        leads_tasks_pg_shadow.run_wechat_tasks_history_shadow_read(
+            sqlite_rows=result["items"],
+            merchant_id=merchant_id,
+            page=page,
+            page_size=page_size,
+            status=status,
+            task_type=task_type,
+            mode=mode,
+            keyword=keyword,
+            failure_stage=failure_stage,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    return result
 
 
 @router.get("/pending", response_model=list[WechatTaskResponse])

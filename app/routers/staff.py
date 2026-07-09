@@ -7,7 +7,7 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import StaffCreate, StaffOut, StaffUpdate
-from app.services import staff_service
+from app.services import leads_tasks_pg_shadow, staff_service
 
 router = APIRouter(prefix="/staff", tags=["销售人员"])
 
@@ -52,13 +52,23 @@ def list_staff(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """获取当前商户销售列表。"""
-    return staff_service.list_staff(
+    merchant_id = _merchant_id(context)
+    result = staff_service.list_staff(
         db,
         status=status,
-        merchant_id=_merchant_id(context),
+        merchant_id=merchant_id,
         keyword=keyword,
         include_deleted=include_deleted,
     )
+    if leads_tasks_pg_shadow.is_shadow_configured():
+        leads_tasks_pg_shadow.run_sales_staff_list_shadow_read(
+            sqlite_rows=result,
+            merchant_id=merchant_id,
+            status=status,
+            keyword=keyword,
+            include_deleted=include_deleted,
+        )
+    return result
 
 
 @router.get("/{staff_id}", response_model=StaffOut)
