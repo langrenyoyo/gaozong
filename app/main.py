@@ -43,6 +43,7 @@ from app.routers import (
     replies,
     lead_notification_actions,
     lead_notification_records,
+    admin_debug,
 )
 
 # Windows 专用路由：依赖 comtypes / uiautomation，Linux/Docker 环境跳过
@@ -140,6 +141,7 @@ def create_app() -> FastAPI:
     app.include_router(replies.router)
     app.include_router(lead_notification_actions.router)
     app.include_router(lead_notification_records.router)
+    app.include_router(admin_debug.router)
 
     # Windows 专用路由（微信 UI 自动化，Linux/Docker 不可用）
     if _WINDOWS_ROUTERS_AVAILABLE:

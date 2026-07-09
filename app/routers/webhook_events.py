@@ -9,6 +9,8 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import WebhookEventDetailResponse, WebhookEventListResponse
+from app.services import leads_tasks_pg_shadow
+from app.services.leads_tasks_shadow_observability import record_shadow_result
 from app.services.webhook_event_service import (
     WebhookEventFilters,
     get_webhook_event_detail,
@@ -53,6 +55,19 @@ def list_events(
             lead_id=lead_id,
         ),
     )
+    if leads_tasks_pg_shadow.is_shadow_configured():
+        result = leads_tasks_pg_shadow.run_douyin_webhook_events_list_shadow_read(
+            sqlite_rows=data.get("items", []),
+            merchant_id=context.merchant_id,
+            event=event,
+            conversation_short_id=conversation_short_id,
+            open_id=open_id,
+            start_time=start_time,
+            end_time=end_time,
+            page=page,
+            page_size=page_size,
+        )
+        record_shadow_result(result)
     return {"success": True, "data": data, "message": "success"}
 
 

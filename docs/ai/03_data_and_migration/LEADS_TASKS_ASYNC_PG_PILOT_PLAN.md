@@ -245,3 +245,92 @@ GET /leads/{lead_id}   -> douyin_leads detail shadow read
 6. 当前仍不能切换默认 `DATABASE_URL`，也不能默认开启 PG pilot。
 
 下一步建议：P3-D6 可接入 `douyin_webhook_events` read-only shadow，并评估是否新增受限的 admin/debug metrics endpoint；或进入 P3-E1 智能体 / 抖音账号绑定 schema batch。
+
+## 12. P3-D6 douyin_webhook_events shadow read 与 metrics endpoint
+
+任务：`P3-D6-DB-9000-WEBHOOK-EVENTS-SHADOW-READ-AND-METRICS-ENDPOINT-1`
+
+P3-D6 在 P3-D4/P3-D5 默认关闭的 leads/tasks PG shadow read 基础上，补齐 `douyin_webhook_events` 只读 shadow，并新增受限 metrics debug endpoint：
+
+```text
+GET /webhook-events -> douyin_webhook_events list shadow read
+GET /admin/debug/leads-tasks-pg-shadow/metrics -> shadow metrics snapshot
+```
+
+webhook events read path 审计摘要：
+
+1. `GET /webhook-events` 位于 `app/routers/webhook_events.py`，通过 `Depends(get_db)` 使用同步 SQLAlchemy session。
+2. 列表查询由 `app/services/webhook_event_service.py` 的 `list_webhook_events()` 承载，返回源仍是 SQLite。
+3. 当前列表过滤覆盖 `event`、`lead_action`、`is_duplicate`、`start_time`、`end_time`、`keyword`、`open_id`、`conversation_short_id`、`lead_id`、分页。
+4. `lead_action` 和部分 `open_id` 语义依赖 SQLite 读取后的 Python post-filter；PG shadow 本轮只做结构化字段近似对照，不比较 raw body。
+5. webhook 入库、幂等、lead capture/upsert、自动回复调度和私信发送上下文本轮均未接入 shadow。
+
+当前已接入 read-only shadow 范围：
+
+1. `GET /staff`：`sales_staff` list。
+2. `GET /wechat-tasks`：`wechat_tasks` history。
+3. `GET /leads`：`douyin_leads` list。
+4. `GET /leads/{lead_id}`：`douyin_leads` detail。
+5. `GET /webhook-events`：`douyin_webhook_events` list。
+
+metrics endpoint 边界：
+
+1. endpoint 仅 `super_admin` 或具备 admin 权限上下文可访问，普通 merchant 和未登录请求不可访问。
+2. endpoint 只返回 `get_shadow_metrics_snapshot()` 只读快照，不初始化 PG engine，不触发 shadow read。
+3. 返回内容不包含 raw body、完整手机号、微信号、客户名、nickname 或 PostgreSQL URL 密码。
+4. `reset_shadow_metrics_for_tests()` 仍只在测试中使用，运行态不暴露 reset endpoint。
+
+当前仍未接入范围：
+
+1. webhook write。
+2. `GET /wechat-tasks/pending` pending task。
+3. `POST /wechat-tasks/{task_id}/result` task result write。
+4. `notify_sales` / `detect_reply` write。
+5. 任何 PostgreSQL write。
+
+运行边界保持不变：SQLite 仍是唯一响应源；PG shadow 默认关闭；当前仍不能切换默认 `DATABASE_URL`，不能默认开启 PG pilot，不能启用 `LEADS_TASKS_PG_WRITE_ENABLED` 写入链路。
+
+下一步建议：P3-D7 做本地 synthetic runtime shadow smoke + 全量 shadow 覆盖回归；或进入 P3-E1 智能体 / 抖音账号绑定 schema batch。
+
+## 13. P3-D7 runtime shadow synthetic smoke 与回归
+
+任务：`P3-D7-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-SYNTHETIC-SMOKE-AND-REGRESSION-1`
+
+P3-D7 已为 P3-D4/P3-D5/P3-D6 接入的 leads/tasks runtime PostgreSQL read-only shadow 增加 dev/synthetic smoke 与回归测试：
+
+```text
+scripts/smoke_leads_tasks_runtime_shadow_dev.py
+tests/test_leads_tasks_runtime_shadow_smoke.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+当前 P0 四表 read-only shadow 覆盖：
+
+1. `sales_staff list`
+2. `wechat_tasks history`
+3. `douyin_leads list`
+4. `douyin_leads detail`
+5. `douyin_webhook_events list`
+
+runtime smoke 语义：
+
+1. 默认关闭时不初始化 PG engine，不连接 PostgreSQL，metrics 不增长。
+2. dev/synthetic 开启时必须显式设置 `LEADS_TASKS_PG_PILOT_ENABLED=true`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=true`、`LEADS_TASKS_PG_DATABASE_URL=postgresql+asyncpg://...`，并保持 `LEADS_TASKS_PG_WRITE_ENABLED=false`。
+3. SQLite synthetic fixture 仍是接口响应语义来源，PG 只做 shadow read 对照。
+4. `total_shadow_reads` 和 `by_operation` 必须覆盖上述五个 operation。
+5. mismatch、PG error、timeout 只进入 metrics / warning，不改变 SQLite 主响应。
+6. metrics endpoint 只读取内存 snapshot，不触发额外 PG 初始化，不暴露 PII。
+7. 本阶段仍不接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` write。
+
+边界确认：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍未启用 PG write。
+4. 当前未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+5. dev/synthetic shadow smoke 通过不代表可以 production 切库，也不代表 QPS600 已达标。
+
+下一步建议：
+
+1. `P3-D8`：本地 QPS baseline + shadow overhead 压测。
+2. 或进入 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

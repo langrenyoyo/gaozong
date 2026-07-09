@@ -495,3 +495,67 @@ readiness 影响：
 6. QPS600 压测证明。
 
 边界确认：P3-D5 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
+
+## 15. P3-D6 webhook events shadow read 与 metrics 当前状态
+
+任务：`P3-D6-DB-9000-WEBHOOK-EVENTS-SHADOW-READ-AND-METRICS-ENDPOINT-1`
+
+P3-D6 已把 read-only shadow 覆盖扩展到 webhook 原始事件列表，并补充受限 metrics debug endpoint：
+
+1. `GET /webhook-events`：`douyin_webhook_events` list shadow read。
+2. `GET /admin/debug/leads-tasks-pg-shadow/metrics`：只读 metrics snapshot。
+
+readiness 影响：
+
+1. 当前 read-only shadow 覆盖 `sales_staff list`、`wechat_tasks history`、`douyin_leads list/detail`、`douyin_webhook_events list`。
+2. SQLite 仍是唯一响应源，PG shadow 不改变接口返回结构。
+3. `douyin_webhook_events` shadow 查询必须带 `merchant_id`；缺失时跳过，避免跨商户无隔离查询。
+4. metrics endpoint 仅 admin / super_admin 可访问，不触发 PG 连接，不包含 PII。
+5. 当前 observability 仍是进程内轻量指标，不等于 QPS600 的最终指标体系；后续仍需连接池、慢查询、压测、错误率和告警体系。
+
+仍未完成：
+
+1. webhook write。
+2. task result write。
+3. pending polling 锁策略。
+4. async repository / `AsyncSession` 全链路替换。
+5. 宝塔真实数据 contrast。
+6. QPS600 压测证明。
+
+边界确认：P3-D6 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
+
+## 16. P3-D7 runtime shadow synthetic smoke 与回归当前状态
+
+任务：`P3-D7-DB-9000-LEADS-TASKS-RUNTIME-SHADOW-SYNTHETIC-SMOKE-AND-REGRESSION-1`
+
+P3-D7 已为当前 P0 四表 read-only shadow 覆盖增加本地/dev synthetic smoke 与回归测试。新增脚本 `scripts/smoke_leads_tasks_runtime_shadow_dev.py` 使用 synthetic SQLite fixture 和 dev PostgreSQL URL，在显式 shadow 开关开启时验证五个 read-only operation；新增 `tests/test_leads_tasks_runtime_shadow_smoke.py` 覆盖默认关闭、开启记录 metrics、mismatch/error/timeout 隔离和 PG write 禁止。
+
+当前 read-only shadow 覆盖：
+
+1. `sales_staff.list`
+2. `wechat_tasks.history`
+3. `douyin_leads.list`
+4. `douyin_leads.detail`
+5. `douyin_webhook_events.list`
+
+readiness 影响：
+
+1. P3-D7 证明默认关闭场景不初始化 PG engine，shadow 不影响 SQLite 主响应。
+2. P3-D7 证明 dev/synthetic 开启场景可以记录五类 operation 的 metrics。
+3. P3-D7 证明 mismatch、PG error、timeout 不改变接口主响应。
+4. P3-D7 证明 metrics endpoint 可读取快照且不触发额外 PG 连接。
+5. P3-D7 仍不证明 production 切库可行，也不证明 QPS600 达标。
+
+仍未完成：
+
+1. webhook write。
+2. `GET /wechat-tasks/pending` pending polling 与锁策略。
+3. `POST /wechat-tasks/{task_id}/result` result write。
+4. `notify_sales` / `detect_reply` 写链路。
+5. async repository / `AsyncSession` 全链路替换。
+6. 宝塔真实数据 contrast。
+7. QPS600 baseline 与 shadow overhead 压测。
+
+边界确认：P3-D7 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
+
+下一步建议：P3-D8 进入本地 QPS baseline + shadow overhead 压测；或进入 P3-E1 智能体 / 抖音账号绑定 schema batch。

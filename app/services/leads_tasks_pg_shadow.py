@@ -23,6 +23,7 @@ READ_ONLY_SQL_TEMPLATES = (
     "SELECT id FROM wechat_tasks ORDER BY id DESC LIMIT :limit",
     "SELECT id FROM douyin_leads WHERE merchant_id = :merchant_id ORDER BY id DESC LIMIT :limit",
     "SELECT id FROM douyin_leads WHERE merchant_id = :merchant_id AND id = :lead_id LIMIT 1",
+    "SELECT event_key FROM douyin_webhook_events WHERE merchant_id = :merchant_id ORDER BY created_at DESC LIMIT :limit",
 )
 
 _shadow_engine = None
@@ -225,6 +226,51 @@ def run_douyin_leads_detail_shadow_read(
     )
 
 
+def run_douyin_webhook_events_list_shadow_read(
+    *,
+    sqlite_rows: Sequence[Mapping[str, object] | object],
+    merchant_id: str | None,
+    event: str | None = None,
+    account_open_id: str | None = None,
+    conversation_short_id: str | None = None,
+    open_id: str | None = None,
+    msg_id: str | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    settings: LeadsTasksPgShadowSettings | None = None,
+) -> ShadowReadResult:
+    settings = settings or LeadsTasksPgShadowSettings()
+    if not merchant_id:
+        return ShadowReadResult(
+            enabled=False,
+            table="douyin_webhook_events",
+            operation="list",
+            sqlite_count=len(sqlite_rows),
+            warnings=["merchant_id 缺失，跳过 douyin_webhook_events.list shadow read"],
+        )
+    return _run_shadow_read_sync(
+        table="douyin_webhook_events",
+        operation="list",
+        sqlite_rows=_normalize_rows(sqlite_rows),
+        key_columns=("event_key",),
+        filters={
+            "merchant_id": merchant_id,
+            "event": event,
+            "account_open_id": account_open_id,
+            "conversation_short_id": conversation_short_id,
+            "open_id": open_id,
+            "msg_id": msg_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "page": page,
+            "page_size": page_size,
+        },
+        settings=settings,
+    )
+
+
 def _run_shadow_read_sync(
     *,
     table: str,
@@ -336,30 +382,31 @@ async def _select_pg_rows(
     filters: Mapping[str, object],
     settings: LeadsTasksPgShadowSettings,
 ) -> list[dict[str, object]]:
-    engine = _get_or_create_shadow_engine(settings)
+    engine = _create_shadow_engine(settings)
     statement, params = _build_select(table, filters)
-    async with engine.connect() as conn:
-        if settings.statement_timeout_ms > 0:
-            await conn.execute(text("SET statement_timeout = :timeout_ms"), {"timeout_ms": settings.statement_timeout_ms})
-        result = await conn.execute(statement, params)
-        return [dict(row._mapping) for row in result.fetchall()]
+    try:
+        async with engine.connect() as conn:
+            if settings.statement_timeout_ms > 0:
+                timeout_ms = max(int(settings.statement_timeout_ms), 1)
+                await conn.execute(text(f"SET statement_timeout = {timeout_ms}"))
+            result = await conn.execute(statement, params)
+            return [dict(row._mapping) for row in result.fetchall()]
+    finally:
+        await engine.dispose()
 
 
-def _get_or_create_shadow_engine(settings: LeadsTasksPgShadowSettings):
-    global _shadow_engine
-    if _shadow_engine is None:
-        from sqlalchemy.ext.asyncio import create_async_engine
+def _create_shadow_engine(settings: LeadsTasksPgShadowSettings):
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-        parsed = parse_database_url(settings.database_url)
-        _shadow_engine = create_async_engine(
-            parsed.raw_url,
-            pool_size=settings.pool_size,
-            max_overflow=settings.max_overflow,
-            pool_timeout=settings.pool_timeout,
-            pool_pre_ping=True,
-        )
-        logger.info("leads_tasks_pg_shadow stage=engine_init url=%s", parsed.safe_url)
-    return _shadow_engine
+    parsed = parse_database_url(settings.database_url)
+    logger.info("leads_tasks_pg_shadow stage=engine_init url=%s", parsed.safe_url)
+    return create_async_engine(
+        parsed.raw_url,
+        pool_size=settings.pool_size,
+        max_overflow=settings.max_overflow,
+        pool_timeout=settings.pool_timeout,
+        pool_pre_ping=True,
+    )
 
 
 def _build_select(table: str, filters: Mapping[str, object]):
@@ -467,6 +514,47 @@ def _build_select(table: str, filters: Mapping[str, object]):
             FROM douyin_leads
             WHERE {' AND '.join(clauses)}
             ORDER BY id DESC
+            LIMIT :limit OFFSET :offset
+        """
+        return text(sql), params
+
+    if table == "douyin_webhook_events":
+        clauses = ["merchant_id = :merchant_id"]
+        params = {"merchant_id": filters["merchant_id"]}
+        event = (filters.get("event") or "").strip() if isinstance(filters.get("event"), str) else ""
+        if event:
+            clauses.append("event = :event")
+            params["event"] = event
+        account_open_id = (filters.get("account_open_id") or "").strip() if isinstance(filters.get("account_open_id"), str) else ""
+        if account_open_id:
+            clauses.append("to_user_id = :account_open_id")
+            params["account_open_id"] = account_open_id
+        conversation_short_id = (filters.get("conversation_short_id") or "").strip() if isinstance(filters.get("conversation_short_id"), str) else ""
+        if conversation_short_id:
+            clauses.append("conversation_short_id = :conversation_short_id")
+            params["conversation_short_id"] = conversation_short_id
+        open_id = (filters.get("open_id") or "").strip() if isinstance(filters.get("open_id"), str) else ""
+        if open_id:
+            clauses.append("(from_user_id = :open_id OR to_user_id = :open_id)")
+            params["open_id"] = open_id
+        msg_id = (filters.get("msg_id") or "").strip() if isinstance(filters.get("msg_id"), str) else ""
+        if msg_id:
+            clauses.append("server_message_id = :msg_id")
+            params["msg_id"] = msg_id
+        if filters.get("start_time"):
+            clauses.append("created_at >= :start_time")
+            params["start_time"] = filters["start_time"]
+        if filters.get("end_time"):
+            clauses.append("created_at <= :end_time")
+            params["end_time"] = filters["end_time"]
+        page_size = min(max(int(filters.get("page_size") or 20), 1), 100)
+        params["limit"] = page_size
+        params["offset"] = (max(int(filters.get("page") or 1), 1) - 1) * page_size
+        sql = f"""
+            SELECT event_key, server_message_id, to_user_id, conversation_short_id
+            FROM douyin_webhook_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC, id DESC
             LIMIT :limit OFFSET :offset
         """
         return text(sql), params
