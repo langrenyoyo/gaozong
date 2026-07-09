@@ -793,3 +793,35 @@ readiness 影响：
 
 1. `P3-D13`：runtime shadow gray config preset 与环境变量文档，默认关闭。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 22. P3-D13 shadow gray preset 当前状态
+
+任务：`P3-D13-DB-9000-LEADS-TASKS-SHADOW-GRAY-PRESET-AND-RUNBOOK-1`
+
+P3-D13 已新增 read-only shadow 灰度预设、启停 Runbook 和上线前准入检查：
+
+```text
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md
+```
+
+readiness 影响：
+
+1. P3-D13 只把 P3-D12 的本地/dev synthetic 推荐值沉淀为 dev / staging / production 三档参数预设。
+2. dev 推荐值沿用 `workers=2`、`pool_size=5`、`max_overflow=5`、`shadow_max_concurrency=10`、`shadow_sample_rate=0.1`。
+3. staging 建议更保守，从 `shadow_sample_rate=0.05`、`shadow_max_concurrency=5` 开始，并要求人工审批、观察窗口和回滚负责人。
+4. production 当前状态为 `not approved / not executed`，不得开启 PG pilot。
+5. `.env.example` 只新增默认关闭的注释示例，不改变默认行为。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 `LEADS_TASKS_PG_PILOT_ENABLED` 或 `LEADS_TASKS_PG_READ_SHADOW_ENABLED`。
+3. 当前仍不能启用 `LEADS_TASKS_PG_WRITE_ENABLED`。
+4. read-only shadow preset 不等于 async repository 全链路替换完成。
+5. read-only shadow preset 不等于 production QPS600 达标。
+
+后续建议：
+
+1. P3-D14：宝塔 staging read-only shadow 审批模板和执行记录。
+2. P3-D15：宝塔 staging shadow 观察结果。
+3. P3-E：继续按表组推进 PostgreSQL schema / migration / contrast，不能因为 shadow preset 直接切库。

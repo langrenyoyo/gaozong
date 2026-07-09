@@ -533,3 +533,30 @@ workers=2
 5. 本地/dev synthetic 最佳吞吐 `570.102 rps` 仍低于 QPS600，不能作为 production QPS600 证明。
 
 下一步建议：`P3-D13` 做 runtime shadow gray config preset 与环境变量文档，默认关闭；或进入 `P3-E1` 智能体 / 抖音账号绑定 schema batch。
+
+## 19. P3-D13 shadow gray preset 与启停 Runbook
+
+任务：`P3-D13-DB-9000-LEADS-TASKS-SHADOW-GRAY-PRESET-AND-RUNBOOK-1`
+
+P3-D13 已新增 read-only shadow 灰度预设和 Runbook：
+
+```text
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md
+```
+
+灰度预设：
+
+1. dev recommended：`LEADS_TASKS_PG_PILOT_ENABLED=true`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=true`、`LEADS_TASKS_PG_WRITE_ENABLED=false`、`pool_size=5`、`max_overflow=5`、`shadow_max_concurrency=10`、`shadow_sample_rate=0.1`。
+2. staging cautious：显式审批后才可开启，建议 `shadow_sample_rate=0.05`、`shadow_max_concurrency=5` 起步。
+3. production current：`not approved / not executed`，必须保持 PG pilot 和 read shadow 关闭。
+
+运行边界保持不变：
+
+1. SQLite 仍是用户响应源。
+2. PostgreSQL 只做 read-only shadow。
+3. `LEADS_TASKS_PG_WRITE_ENABLED=false`，当前仍不接任何 PG write。
+4. 不切换默认 `DATABASE_URL`。
+5. 不接 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+6. P3-D12/P3-D13 结果不代表 production QPS600 达标。
+
+后续建议：先做宝塔 staging read-only shadow 审批和执行记录；production shadow 需要独立审批，PG write 仍需后续单独阶段。

@@ -2006,3 +2006,48 @@ QPS600 remaining_rps=29.898
 10. P3-D12 benchmark 不代表 production QPS600 达标。
 
 后续建议：`P3-D13` 做 runtime shadow gray config preset 与环境变量文档，默认关闭；或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。
+
+## 47. P3-D13 leads/tasks shadow gray preset 与 Runbook
+
+任务：`P3-D13-DB-9000-LEADS-TASKS-SHADOW-GRAY-PRESET-AND-RUNBOOK-1`
+
+P3-D13 已基于 P3-D12 本地/dev synthetic tuning 结果，新增 leads/tasks PostgreSQL read-only shadow 灰度预设与启停 Runbook：
+
+```text
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md
+```
+
+本轮同步更新 `.env.example`，只增加默认关闭的注释示例，不改变运行时默认值。
+
+当前灰度候选来自 P3-D12：
+
+```text
+workers=2
+pool_size=5
+max_overflow=5
+shadow_max_concurrency=10
+shadow_sample_rate=0.1
+estimated_pg_connections=20
+throughput_rps=570.102
+p95_ms=52.178
+p99_ms=59.518
+error_rate=0
+```
+
+P3-D13 结论：
+
+1. dev 可按推荐值做本地/dev synthetic 验证。
+2. staging 建议从更保守的 `shadow_sample_rate=0.05`、`shadow_max_concurrency=5` 开始，观察通过后再审批提升。
+3. production 当前为 `not approved / not executed`，必须保持 `LEADS_TASKS_PG_PILOT_ENABLED=false`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=false`、`LEADS_TASKS_PG_WRITE_ENABLED=false`。
+4. 任何环境都不允许通过本 Runbook 切换默认 `DATABASE_URL`。
+5. 任何环境都不允许启用 PG write。
+6. 本轮不连接宝塔 production，不读取 production SQLite，不执行 production apply。
+7. P3-D12/P3-D13 仍不能作为 production QPS600 达标证明。
+
+监控与熔断口径：
+
+1. 观察 `total_shadow_reads`、`total_shadow_pass`、`total_shadow_warn`、`total_shadow_timeout`、`total_shadow_error`、`total_shadow_sampled_out`、`total_shadow_concurrency_limited`、`total_mismatch_count`。
+2. 观察接口 p50 / p95 / p99、HTTP 5xx、PostgreSQL 当前连接数、慢查询、锁等待和 statement timeout。
+3. 出现 error、timeout、mismatch 持续增长、接口延迟明显恶化、连接数接近预算或任何写 PG 迹象时，立即关闭 shadow。
+
+后续建议：P3-D14 做宝塔 staging read-only shadow 人工审批模板与执行记录；不得自动进入 production shadow 或 PG write。

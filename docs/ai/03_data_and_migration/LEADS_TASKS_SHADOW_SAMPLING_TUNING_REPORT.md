@@ -167,5 +167,6 @@ required_multiplier=1.052443
 
 ## 9. 后续建议
 
-1. `P3-D13`：runtime shadow gray config preset 与环境变量文档，默认仍关闭。
-2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+1. `P3-D13` 已新增 runtime shadow gray config preset 与启停 Runbook：`docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md`。
+2. P3-D13 只沉淀 dev / staging / production 三档 read-only shadow 参数，默认仍关闭，production 当前 `not approved / not executed`。
+3. 后续可进入 `P3-D14` 宝塔 staging read-only shadow 审批模板与执行记录，或进入 `P3-E1` 智能体 / 抖音账号绑定 schema batch。
