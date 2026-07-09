@@ -1367,3 +1367,77 @@ dev smoke 口径：
 8. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
 
 后续：P3-D1 只是核心链路 schema 起点；后续仍需针对本批表补数据迁移 dry-run、受控 dev apply smoke、SQLite / PG API contrast、staging dry-run、production dry-run 与是否 apply 的人工判断，不能直接切换默认数据库。
+
+## 36. P3-D2 leads/tasks core 数据迁移 dry-run 与 dev apply smoke 补充
+
+任务：`P3-D2-DB-9000-POSTGRESQL-LEADS-TASKS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+P3-D2 为 P3-D1 已创建的 4 张 PostgreSQL 表补充 SQLite -> PostgreSQL 数据迁移脚本、dry-run 统计、静态测试和 dev apply smoke。本轮仍只覆盖：
+
+```text
+sales_staff
+douyin_leads
+douyin_webhook_events
+wechat_tasks
+```
+
+新增文件：
+
+```text
+scripts/migrate_leads_tasks_core_sqlite_to_postgres.py
+scripts/smoke_migrate_leads_tasks_core_dev_apply.py
+tests/test_migrate_leads_tasks_core_sqlite_to_postgres.py
+```
+
+脚本能力：
+
+1. 默认 dry-run，不传 `--apply --yes` 不写 PostgreSQL。
+2. 支持 `--sqlite-db-path`、`--postgres-url`、`--dry-run`、`--apply`、`--yes`、`--tables`。
+3. `--postgres-url` 只允许 PostgreSQL URL，输出时通过 `parse_database_url().safe_url` 脱敏。
+4. apply 必须显式 `--apply --yes`，且 host 只允许 `localhost`、`127.0.0.1`、`postgres`、`auto-wechat-postgres-dev`。
+5. apply 目标 database 必须是 `auto_wechat`，并拒绝 `APP_ENV=production`。
+6. `DATABASE_URL` 不允许隐式触发 apply；dev apply 需要显式 `--postgres-url` 或 `SMOKE_DATABASE_URL`。
+7. dry-run 每表输出 source rows、insert/update/skip/error 预估、ignored/defaulted 字段、脱敏 mapping preview 和 warning。
+8. apply 每表输出 inserted/updated/skipped/errors/before_count/after_count，不允许有异常行时静默部分成功。
+
+迁移顺序：
+
+```text
+sales_staff -> douyin_leads -> douyin_webhook_events -> wechat_tasks
+```
+
+说明：任务原建议顺序为 `sales_staff -> douyin_webhook_events -> douyin_leads -> wechat_tasks`，但 P3-D1 PostgreSQL schema 中 `douyin_webhook_events.lead_id` 外键指向 `douyin_leads.id`，因此 P3-D2 按实际 schema 依赖调整为先迁移 `douyin_leads`，再迁移 `douyin_webhook_events`。
+
+upsert / 幂等策略：
+
+1. `sales_staff`：按 `id` 主键 upsert，属于过渡期最小迁移策略；后续如需跨环境真实迁移，应补更稳定业务键或人工确认 ID 保留策略。
+2. `douyin_leads`：按 P3-D1 唯一约束 `account_open_id + conversation_short_id` upsert。
+3. `douyin_webhook_events`：按 P3-D1 唯一约束 `event_key` upsert。
+4. `wechat_tasks`：按 `id` 主键 upsert，属于任务队列迁移的最小幂等策略；不删除、不 truncate PostgreSQL 既有数据。
+5. JSON 字段做安全解析，失败时保留原始字符串并记录 warning，不中断整批。
+6. datetime 字段解析失败进入 error_rows，避免错误时间静默写入。
+7. 联系方式字段在 mapping preview 中脱敏。
+
+dev apply smoke：
+
+1. `scripts/smoke_migrate_leads_tasks_core_dev_apply.py` 只读取 `SMOKE_DATABASE_URL`。
+2. smoke 自动创建临时 synthetic SQLite fixture，不读取真实生产 SQLite。
+3. fixture 至少包含每表 2 行 synthetic 数据。
+4. smoke 先执行 auto_wechat Alembic `upgrade head`，确保 PG schema 到 `0003_leads_tasks_core`。
+5. smoke 先 dry-run，确认预计 insert；再执行 apply；再执行第二次 dry-run，确认不会重复 insert。
+6. smoke 校验四表 synthetic ID 范围内行数均不少于 2。
+7. 成功输出 `SMOKE_PASS: leads/tasks core data migration dev apply ready`。
+
+边界确认：
+
+1. 本轮未连接宝塔生产。
+2. 本轮未读取宝塔生产 SQLite。
+3. 本轮未执行 production apply。
+4. 本轮未切换默认 `DATABASE_URL`。
+5. 本轮未修改业务接口默认数据库。
+6. 本轮未改 9000 runtime DB 逻辑。
+7. 本轮未改 9100 / Milvus / RAG。
+8. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+9. 当前仍不能切换宝塔 SQLite 到 PostgreSQL。
+
+后续建议：P3-D3 进入四表 API contrast 与 async PG pilot 方案，不应直接进入默认 `DATABASE_URL` 切换。

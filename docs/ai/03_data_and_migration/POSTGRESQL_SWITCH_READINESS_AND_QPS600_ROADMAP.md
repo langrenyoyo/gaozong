@@ -334,3 +334,63 @@ tests/test_9000_postgres_leads_tasks_core_schema.py
 8. 本轮不触发 LLM、抖音发送、私信发送或自动回复 gate。
 
 后续仍需为该 batch 增加 SQLite -> PostgreSQL 数据迁移 dry-run、dev apply smoke、核心接口 SQLite / PG API contrast、staging dry-run 与 production dry-run 记录。P3-D1 不能被解读为 9000 已可切换默认数据库。
+
+## 11. P3-D2 线索与任务核心数据迁移脚本
+
+任务：`P3-D2-DB-9000-POSTGRESQL-LEADS-TASKS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+P3-D2 在 P3-D1 schema batch 基础上补齐 4 张表的 SQLite -> PostgreSQL 数据迁移脚本、dry-run 统计、静态测试与本地/dev apply smoke。
+
+新增文件：
+
+```text
+scripts/migrate_leads_tasks_core_sqlite_to_postgres.py
+scripts/smoke_migrate_leads_tasks_core_dev_apply.py
+tests/test_migrate_leads_tasks_core_sqlite_to_postgres.py
+```
+
+### 11.1 迁移顺序与字段映射
+
+默认迁移顺序：
+
+```text
+sales_staff -> douyin_leads -> douyin_webhook_events -> wechat_tasks
+```
+
+该顺序按 P3-D1 PostgreSQL 外键依赖确定：`douyin_leads.assigned_staff_id` 依赖 `sales_staff.id`，`douyin_webhook_events.lead_id` 依赖 `douyin_leads.id`，`wechat_tasks.lead_id/staff_id` 依赖 `douyin_leads.id` 与 `sales_staff.id`。
+
+字段映射采用显式白名单：
+
+1. `sales_staff` 覆盖销售 ID、商户、微信号/昵称、手机号、状态、排序、备注和时间字段。
+2. `douyin_leads` 覆盖线索来源、客户信息、商户隔离、账号/会话归并、销售分配、状态、联系方式提取字段、JSON 原始数据和时间字段。
+3. `douyin_webhook_events` 覆盖 webhook 原始事件、账号/会话、消息 ID、解析字段、`event_key`、重复标记、关联线索和 raw body。
+4. `wechat_tasks` 覆盖任务类型、线索/销售/检测关联、目标昵称、消息、执行模式、状态、Agent 结果和时间字段。
+5. SQLite 有但 PostgreSQL 无的字段记录为 `ignored_fields`；PostgreSQL 有但 SQLite 无且可默认/可空的字段记录为 `defaulted_fields`。
+
+### 11.2 幂等与 apply 安全门
+
+upsert key：
+
+1. `sales_staff`：`id`。
+2. `douyin_leads`：`account_open_id + conversation_short_id`。
+3. `douyin_webhook_events`：`event_key`。
+4. `wechat_tasks`：`id`。
+
+安全门：
+
+1. 默认 dry-run，PostgreSQL 写入为 `disabled`。
+2. apply 必须显式 `--apply --yes`。
+3. apply 只允许本地/dev host：`localhost`、`127.0.0.1`、`postgres`、`auto-wechat-postgres-dev`。
+4. apply 目标 database 必须是 `auto_wechat`。
+5. `APP_ENV=production` 时拒绝 apply。
+6. 不允许隐式 `DATABASE_URL` 触发 apply。
+7. 不允许 `delete`、`truncate`、`drop` 作为迁移策略。
+
+### 11.3 阶段结论
+
+1. P3-D2 只证明 4 表数据迁移脚本 dry-run 与本地/dev apply smoke 路径可用。
+2. 本轮未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+3. 本轮未切换默认 `DATABASE_URL`，未修改 9000 runtime DB 逻辑。
+4. 本轮未改 9100 / Milvus / RAG，未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+5. 当前仍不能切换宝塔 SQLite 到 PostgreSQL。
+6. 下一步建议 P3-D3：四表 API contrast 与 async PG pilot 方案。

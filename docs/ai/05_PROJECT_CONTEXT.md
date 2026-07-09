@@ -4099,3 +4099,72 @@ dev smoke 摘要：
 9. 本轮不提交 `.venv-p3c8/`、`backups/`、`docs/superpowers/` 等非本轮文件。
 
 后续：P3-D1 只是线索与任务核心链路的 PostgreSQL schema 起点。后续还需要本批表的数据迁移 dry-run、受控 dev apply smoke、SQLite / PG API contrast、staging dry-run、production dry-run 和是否 apply 的人工判断；当前仍不能切换 9000 默认 `DATABASE_URL` 到 PostgreSQL。
+
+# P3-D2 leads/tasks core 数据迁移 dry-run 与 dev apply 当前状态
+
+任务：`P3-D2-DB-9000-POSTGRESQL-LEADS-TASKS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+当前已为 P3-D1 的 4 张 P0 核心表新增 SQLite -> PostgreSQL 数据迁移脚本、dry-run 统计、静态测试和 dev apply smoke：
+
+```text
+scripts/migrate_leads_tasks_core_sqlite_to_postgres.py
+scripts/smoke_migrate_leads_tasks_core_dev_apply.py
+tests/test_migrate_leads_tasks_core_sqlite_to_postgres.py
+```
+
+覆盖表：
+
+1. `sales_staff`
+2. `douyin_leads`
+3. `douyin_webhook_events`
+4. `wechat_tasks`
+
+默认迁移顺序：
+
+```text
+sales_staff -> douyin_leads -> douyin_webhook_events -> wechat_tasks
+```
+
+说明：该顺序按 P3-D1 PostgreSQL schema 外键依赖确定，避免 `douyin_webhook_events.lead_id` 先于 `douyin_leads.id` 写入造成外键失败。
+
+脚本能力：
+
+1. 默认 dry-run，PostgreSQL 写入为 `disabled`。
+2. 支持 `--sqlite-db-path`、`--postgres-url`、`--dry-run`、`--apply`、`--yes`、`--tables`。
+3. PostgreSQL URL 必须脱敏输出。
+4. apply 必须显式 `--apply --yes`。
+5. apply 只允许 dev/local host，目标 database 必须是 `auto_wechat`。
+6. `APP_ENV=production` 时拒绝 apply。
+7. JSON 字段解析失败记录 warning 并保留原始字符串。
+8. datetime 字段解析失败进入 error_rows。
+9. mapping preview 会脱敏手机号、微信号等联系方式。
+
+upsert / 幂等策略：
+
+1. `sales_staff` 按 `id` 主键 upsert。
+2. `douyin_leads` 按 `account_open_id + conversation_short_id` upsert。
+3. `douyin_webhook_events` 按 `event_key` upsert。
+4. `wechat_tasks` 按 `id` 主键 upsert。
+5. 不删除 PostgreSQL 既有数据，不 truncate，不 drop 表。
+
+dev smoke 摘要：
+
+1. `scripts/smoke_migrate_leads_tasks_core_dev_apply.py` 只从 `SMOKE_DATABASE_URL` 读取 PostgreSQL URL。
+2. smoke 自动创建临时 synthetic SQLite fixture，不读取真实生产 SQLite。
+3. smoke 每表至少写入 2 行 synthetic 数据。
+4. smoke 执行 Alembic `upgrade head` 后，先 dry-run，再 apply，再二次 dry-run 验证幂等。
+5. 成功输出：`SMOKE_PASS: leads/tasks core data migration dev apply ready`。
+
+边界确认：
+
+1. 本轮未连接宝塔生产。
+2. 本轮未读取宝塔生产 SQLite。
+3. 本轮未执行 production apply。
+4. 本轮未切换默认 `DATABASE_URL`。
+5. 本轮未修改业务接口默认数据库。
+6. 本轮未改 9000 runtime DB 逻辑。
+7. 本轮未改 9100 / Milvus / RAG。
+8. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+9. 当前仍不能切换宝塔 SQLite 到 PostgreSQL。
+
+后续：P3-D3 建议进入四表 API contrast 与 async PG pilot 方案；P3-D2 dev apply smoke 不能被解读为 production 迁移完成或默认数据库可切换。
