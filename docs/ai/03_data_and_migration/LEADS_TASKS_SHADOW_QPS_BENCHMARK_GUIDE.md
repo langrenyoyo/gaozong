@@ -255,3 +255,33 @@ pool_timeout=3
 3. P3-D9 不切换默认 `DATABASE_URL`。
 4. P3-D9 不默认开启 PG pilot。
 5. P3-D9 不启用 PG write。
+
+## 10. P3-D10 HTTP benchmark scaffold 补充
+
+任务：`P3-D10-DB-9000-LEADS-TASKS-REAL-HTTP-BENCHMARK-SCAFFOLD-1`
+
+P3-D10 在 P3-D8/P3-D9 service-level benchmark 基础上新增真实 Uvicorn/HTTP 层 benchmark 脚手架：
+
+```text
+scripts/benchmark_leads_tasks_shadow_http_dev.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
+```
+
+新增脚手架能力：
+
+1. 支持 `--start-server` 自动启动本地 Uvicorn，使用临时 SQLite fixture。
+2. 支持 `--base-url http://127.0.0.1:9000` 连接已启动的本地 dev 服务；该模式无法由脚本切换目标服务环境，结果会标记 warning。
+3. 只从 `BENCHMARK_DATABASE_URL` 或 `SMOKE_DATABASE_URL` 读取 dev PostgreSQL URL。
+4. 拒绝 SQLite URL、拒绝隐式 `DATABASE_URL`、拒绝非本地 base-url。
+5. 覆盖 `GET /staff`、`GET /wechat-tasks`、`GET /leads`、`GET /leads/{lead_id}`、`GET /webhook-events` 和 metrics endpoint。
+6. 输出 HTTP 层 p50 / p95 / p99 / avg / max / error_rate / throughput / per-endpoint / overhead delta。
+7. metrics endpoint 额外返回 `engine_manager_snapshot`，只读、不触发 PG 初始化、不包含密码。
+
+边界：
+
+1. P3-D10 仍只使用本地/dev synthetic 数据。
+2. P3-D10 不代表 production QPS600 达标。
+3. P3-D10 不切换默认 `DATABASE_URL`。
+4. P3-D10 不默认开启 PG pilot。
+5. P3-D10 不启用 PG write。
+6. P3-D10 不连接宝塔生产，不读取生产 SQLite，不执行 production apply。

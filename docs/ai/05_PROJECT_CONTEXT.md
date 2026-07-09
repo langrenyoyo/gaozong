@@ -4534,3 +4534,61 @@ cache_miss_count=1
 8. 当前 benchmark 仍是 dev/synthetic，不代表 production QPS600 达标。
 
 下一步建议：P3-D10 做真实 Uvicorn / HTTP benchmark 脚手架，或 P3-E1 进入智能体 / 抖音账号绑定 schema batch。
+
+# P3-D10 leads/tasks HTTP benchmark scaffold 当前状态
+
+任务：`P3-D10-DB-9000-LEADS-TASKS-REAL-HTTP-BENCHMARK-SCAFFOLD-1`
+
+当前已在 P3-D9 event-loop-safe async engine manager 基础上，新增真实 Uvicorn / HTTP 层 benchmark 脚手架，用于对比 leads/tasks PostgreSQL read-only shadow off 与 shadow on 的接口耗时、吞吐、错误率和 shadow overhead。
+
+新增 / 修改文件：
+
+```text
+scripts/benchmark_leads_tasks_shadow_http_dev.py
+tests/test_leads_tasks_shadow_http_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
+app/routers/admin_debug.py
+```
+
+HTTP benchmark 覆盖：
+
+1. `GET /staff`：`sales_staff.list`
+2. `GET /wechat-tasks`：`wechat_tasks.history`
+3. `GET /leads`：`douyin_leads.list`
+4. `GET /leads/{lead_id}`：`douyin_leads.detail`
+5. `GET /webhook-events`：`douyin_webhook_events.list`
+6. `GET /admin/debug/leads-tasks-pg-shadow/metrics`
+
+脚本能力：
+
+1. 支持 `--start-server` 自动启动本地 Uvicorn 子进程，并把子进程 `DATABASE_URL` 指向临时 SQLite fixture。
+2. 支持 `--base-url` 连接已启动的本地 9000 dev 服务；该模式无法由脚本切换目标服务环境，因此会输出 warning。
+3. PostgreSQL URL 只允许来自 `BENCHMARK_DATABASE_URL` 或 `SMOKE_DATABASE_URL`，拒绝隐式 `DATABASE_URL`。
+4. 只允许 localhost / 127.0.0.1 / 0.0.0.0 作为本地 benchmark base-url。
+5. 使用 synthetic SQLite 作为接口响应源，使用 synthetic dev PostgreSQL 作为 read-only shadow 对照源。
+6. 输出 p50 / p95 / p99 / avg / max / error_rate / throughput_rps / per-endpoint stats / overhead delta。
+7. metrics endpoint 已增强返回 `engine_manager_snapshot`，不触发 PG 初始化，不包含 PII 或数据库密码。
+
+认证 / mock auth 处理：
+
+1. `--start-server` 子进程显式设置 `NEWCAR_AUTH_ENABLED=false`、`NEWCAR_AUTH_MOCK_ENABLED=true`。
+2. synthetic merchant 使用 `dev-merchant`，与本地 mock auth 默认商户一致。
+3. admin metrics endpoint 仍需要 super_admin 或 admin 权限；普通 merchant 和未登录请求不可访问。
+
+边界确认：
+
+1. 本轮仍只使用本地/dev synthetic 数据。
+2. 本轮 benchmark 不代表 production QPS600 达标。
+3. 本轮未连接宝塔生产。
+4. 本轮未读取生产 SQLite。
+5. 本轮未执行 production apply。
+6. 本轮未切换默认 `DATABASE_URL`。
+7. 本轮未默认开启 PG pilot。
+8. 本轮未启用 PG write。
+9. 本轮未接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+10. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

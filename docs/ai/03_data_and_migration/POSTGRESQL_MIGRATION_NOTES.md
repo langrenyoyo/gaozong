@@ -1858,3 +1858,46 @@ cache_miss_count=1
 
 1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，用真实 ASGI/HTTP 路径继续量化 shadow overhead。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 44. P3-D10 leads/tasks HTTP benchmark scaffold
+
+任务：`P3-D10-DB-9000-LEADS-TASKS-REAL-HTTP-BENCHMARK-SCAFFOLD-1`
+
+P3-D10 在 P3-D9 event-loop-safe async engine manager 基础上，新增真实 Uvicorn/HTTP 层 benchmark 脚手架，用于继续量化 leads/tasks PostgreSQL read-only shadow 的 HTTP 层 overhead。
+
+新增 / 修改文件：
+
+```text
+scripts/benchmark_leads_tasks_shadow_http_dev.py
+tests/test_leads_tasks_shadow_http_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
+app/routers/admin_debug.py
+```
+
+脚手架能力：
+
+1. 支持 `--start-server` 自动启动本地 Uvicorn，使用临时 SQLite fixture。
+2. 支持 `--base-url` 连接已启动的本地 9000 dev 服务，但该模式不能由脚本切换服务环境，会输出 warning。
+3. 仅允许 `BENCHMARK_DATABASE_URL` 或 `SMOKE_DATABASE_URL` 作为 dev PostgreSQL URL；拒绝 SQLite URL 和隐式 `DATABASE_URL`。
+4. 仅允许 localhost / 127.0.0.1 / 0.0.0.0 base-url。
+5. 覆盖 `GET /staff`、`GET /wechat-tasks`、`GET /leads`、`GET /leads/{lead_id}`、`GET /webhook-events` 和 metrics endpoint。
+6. 输出 p50 / p95 / p99 / avg / max / error_rate / throughput / per-endpoint / overhead delta。
+7. metrics endpoint 额外返回 `engine_manager_snapshot`，不触发 PG 初始化，不包含 PII 或数据库密码。
+
+边界确认：
+
+1. 本轮仍只使用本地/dev synthetic 数据。
+2. 本轮未连接宝塔生产。
+3. 本轮未读取生产 SQLite。
+4. 本轮未执行 production apply。
+5. 本轮未切换默认 `DATABASE_URL`。
+6. 本轮未默认开启 PG pilot。
+7. 本轮未启用 PG write。
+8. 本轮未接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+9. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+10. P3-D10 benchmark 仍不代表 production QPS600 达标。
+
+后续建议：
+
+1. `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

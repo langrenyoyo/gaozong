@@ -445,3 +445,30 @@ cache_miss_count=1
 
 1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，继续默认关闭 PG pilot。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 16. P3-D10 HTTP benchmark scaffold
+
+任务：`P3-D10-DB-9000-LEADS-TASKS-REAL-HTTP-BENCHMARK-SCAFFOLD-1`
+
+P3-D10 已在默认关闭的 read-only shadow pilot 基础上新增真实 Uvicorn/HTTP benchmark 脚手架：
+
+```text
+scripts/benchmark_leads_tasks_shadow_http_dev.py
+tests/test_leads_tasks_shadow_http_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
+```
+
+设计结论：
+
+1. 默认仍不切换 `DATABASE_URL`。
+2. 默认仍不启用 `LEADS_TASKS_PG_PILOT_ENABLED`。
+3. `--start-server` 模式使用临时 SQLite fixture 启动本地 Uvicorn，并分别启动 shadow off / shadow on 子进程。
+4. `--base-url` 模式只允许本地 dev 服务，且无法由脚本切换服务环境，因此只作为人工已启动服务的辅助压测入口。
+5. PostgreSQL 只做 read-only shadow；`LEADS_TASKS_PG_WRITE_ENABLED=false`。
+6. metrics endpoint 增加 engine manager snapshot，只读、不触发 PG 初始化、不包含 PII 或数据库密码。
+
+QPS600 影响：
+
+1. P3-D10 比 P3-D8/P3-D9 service-level benchmark 更接近真实接口链路。
+2. P3-D10 仍是本地/dev synthetic，不代表宝塔 staging 或 production QPS600 达标。
+3. 下一步建议进入 `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing；或进入 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

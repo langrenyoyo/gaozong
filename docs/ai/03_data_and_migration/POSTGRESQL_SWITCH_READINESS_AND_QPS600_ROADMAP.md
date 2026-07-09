@@ -668,3 +668,47 @@ readiness 影响：
 
 1. `P3-D10`：真实 Uvicorn / HTTP benchmark 脚手架，继续默认关闭 PG pilot。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 19. P3-D10 HTTP benchmark scaffold 当前状态
+
+任务：`P3-D10-DB-9000-LEADS-TASKS-REAL-HTTP-BENCHMARK-SCAFFOLD-1`
+
+P3-D10 已为 leads/tasks read-only shadow 新增本地/dev 真实 HTTP benchmark 脚手架：
+
+```text
+scripts/benchmark_leads_tasks_shadow_http_dev.py
+tests/test_leads_tasks_shadow_http_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
+```
+
+覆盖接口：
+
+1. `GET /staff`
+2. `GET /wechat-tasks`
+3. `GET /leads`
+4. `GET /leads/{lead_id}`
+5. `GET /webhook-events`
+6. `GET /admin/debug/leads-tasks-pg-shadow/metrics`
+
+readiness 影响：
+
+1. P3-D10 补齐了真实 Uvicorn/HTTP 层 benchmark scaffold，比 P3-D8/P3-D9 service-level benchmark 更接近接口链路。
+2. `--start-server` 模式可以用临时 SQLite fixture 分别启动 shadow off / shadow on 本地服务。
+3. metrics endpoint 现在返回 `engine_manager_snapshot`，用于观察 engine 是否随请求线性增长。
+4. P3-D10 仍只使用本地/dev synthetic 数据，不包含 Nginx、宝塔反代、多 worker、真实生产数据和真实生产 PostgreSQL。
+5. P3-D10 不能作为 production QPS600 达标证明。
+6. 当前仍不能切换默认 `DATABASE_URL`，不能默认开启 PG pilot，不能启用 PG write。
+
+仍未完成：
+
+1. Uvicorn / Gunicorn multi-worker benchmark。
+2. Nginx / 宝塔反代链路 benchmark。
+3. worker 数与 PostgreSQL pool 总连接数 sizing。
+4. async repository / `AsyncSession` 全链路替换。
+5. pending polling 锁策略和写入链路事务幂等。
+6. staging / production 压测审批与执行记录。
+
+下一步建议：
+
+1. `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
+from app.services.leads_tasks_pg_engine import get_engine_manager_snapshot
 from app.services.leads_tasks_shadow_observability import get_shadow_metrics_snapshot
 
 
@@ -23,5 +24,6 @@ def get_leads_tasks_pg_shadow_metrics(
     return {
         "component": "leads_tasks_pg_shadow",
         "metrics": get_shadow_metrics_snapshot(),
+        "engine_manager_snapshot": get_engine_manager_snapshot(),
         "pii_redacted": True,
     }
