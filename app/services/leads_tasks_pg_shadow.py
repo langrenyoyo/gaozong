@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +17,7 @@ from sqlalchemy import text
 from app import config
 from app.database_url import parse_database_url
 from app.services import leads_tasks_pg_engine
+from app.services import leads_tasks_shadow_observability
 from app.services.leads_tasks_shadow_compare import compare_shadow_rows
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,8 @@ _shadow_engine = None
 _BACKGROUND_LOOP_LOCK = threading.Lock()
 _BACKGROUND_LOOP: asyncio.AbstractEventLoop | None = None
 _BACKGROUND_THREAD: threading.Thread | None = None
+_SHADOW_GATE_LOCK = threading.Lock()
+_CURRENT_SHADOW_INFLIGHT = 0
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,8 @@ class LeadsTasksPgShadowSettings:
     pool_timeout: int = config.LEADS_TASKS_PG_POOL_TIMEOUT
     statement_timeout_ms: int = config.LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS
     shadow_timeout_ms: int = config.LEADS_TASKS_PG_SHADOW_TIMEOUT_MS
+    shadow_max_concurrency: int = config.LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY
+    shadow_sample_rate: float = config.LEADS_TASKS_PG_SHADOW_SAMPLE_RATE
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,13 @@ def get_shadow_engine_for_test():
     """测试观察点：默认配置下应保持 None，证明没有初始化 PG engine。"""
     snapshot = leads_tasks_pg_engine.get_engine_manager_snapshot()
     return None if snapshot["engine_count"] == 0 else snapshot
+
+
+def reset_shadow_gate_for_tests() -> None:
+    """测试专用：重置 shadow 并发门禁计数。"""
+    global _CURRENT_SHADOW_INFLIGHT
+    with _SHADOW_GATE_LOCK:
+        _CURRENT_SHADOW_INFLIGHT = 0
 
 
 def is_shadow_configured(settings: LeadsTasksPgShadowSettings | None = None) -> bool:
@@ -296,6 +309,28 @@ def _run_shadow_read_sync(
             strict=settings.strict_contrast,
         )
 
+    if _is_sampled_out(settings):
+        return _build_skipped_result(
+            table=table,
+            operation=operation,
+            sqlite_rows=sqlite_rows,
+            filters=filters,
+            settings=settings,
+            status="sampled_out",
+            warning="shadow read sampled_out，未连接 PostgreSQL",
+        )
+
+    if not _try_enter_shadow_execution(settings):
+        return _build_skipped_result(
+            table=table,
+            operation=operation,
+            sqlite_rows=sqlite_rows,
+            filters=filters,
+            settings=settings,
+            status="concurrency_limited",
+            warning="shadow read concurrency_limited，未排队且未连接 PostgreSQL",
+        )
+
     started = time.perf_counter()
     try:
         result = _run_shadow_read_in_thread_loop(
@@ -328,6 +363,8 @@ def _run_shadow_read_sync(
             strict=settings.strict_contrast,
             status="error",
         )
+    finally:
+        _leave_shadow_execution()
     duration_ms = int((time.perf_counter() - started) * 1000)
     logger.warning(
         "leads_tasks_pg_shadow table=%s operation=%s status=%s sqlite_count=%s pg_count=%s count_match=%s key_match=%s mismatch_count=%s duration_ms=%s warnings_count=%s pii_redacted=True",
@@ -343,6 +380,71 @@ def _run_shadow_read_sync(
         len(result.warnings),
     )
     return ShadowReadResult(**{**result.__dict__, "duration_ms": duration_ms})
+
+
+def _build_skipped_result(
+    *,
+    table: str,
+    operation: str,
+    sqlite_rows: list[dict[str, object]],
+    filters: Mapping[str, object],
+    settings: LeadsTasksPgShadowSettings,
+    status: str,
+    warning: str,
+) -> ShadowReadResult:
+    return ShadowReadResult(
+        enabled=True,
+        table=table,
+        operation=operation,
+        merchant_id_present=bool(filters.get("merchant_id")),
+        sqlite_count=len(sqlite_rows),
+        warnings=[warning],
+        strict=settings.strict_contrast,
+        status=status,
+    )
+
+
+def _is_sampled_out(settings: LeadsTasksPgShadowSettings) -> bool:
+    sample_rate = _normalize_sample_rate(settings.shadow_sample_rate)
+    if sample_rate >= 1.0:
+        return False
+    if sample_rate <= 0.0:
+        return True
+    return random.random() >= sample_rate
+
+
+def _normalize_sample_rate(value: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(max(parsed, 0.0), 1.0)
+
+
+def _try_enter_shadow_execution(settings: LeadsTasksPgShadowSettings) -> bool:
+    global _CURRENT_SHADOW_INFLIGHT
+
+    try:
+        limit = int(settings.shadow_max_concurrency)
+    except (TypeError, ValueError):
+        limit = config.LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY
+    if limit <= 0:
+        return False
+
+    with _SHADOW_GATE_LOCK:
+        if _CURRENT_SHADOW_INFLIGHT >= limit:
+            return False
+        _CURRENT_SHADOW_INFLIGHT += 1
+    leads_tasks_shadow_observability.record_shadow_inflight_started()
+    return True
+
+
+def _leave_shadow_execution() -> None:
+    global _CURRENT_SHADOW_INFLIGHT
+
+    with _SHADOW_GATE_LOCK:
+        _CURRENT_SHADOW_INFLIGHT = max(0, _CURRENT_SHADOW_INFLIGHT - 1)
+    leads_tasks_shadow_observability.record_shadow_inflight_finished()
 
 
 async def _run_shadow_read_async(

@@ -4592,3 +4592,54 @@ HTTP benchmark 覆盖：
 
 1. `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+# P3-D11 leads/tasks worker/pool sizing benchmark 当前状态
+
+任务：`P3-D11-DB-9000-LEADS-TASKS-UVICORN-MULTI-WORKER-POOL-SIZING-1`
+
+当前已在 P3-D10 真实 Uvicorn/HTTP benchmark scaffold 基础上新增 worker/pool sizing benchmark：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+tests/test_leads_tasks_shadow_worker_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
+```
+
+新增 shadow 控制项：
+
+```text
+LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY=10
+LEADS_TASKS_PG_SHADOW_SAMPLE_RATE=1.0
+```
+
+运行语义：
+
+1. 默认仍不启用 PG pilot。
+2. 默认仍不切换 `DATABASE_URL`。
+3. PG pilot/read shadow 未开启时，新配置不生效。
+4. `sampled_out` / `concurrency_limited` 不影响 SQLite 主响应，不连接 PostgreSQL，不视为 error。
+5. metrics 新增 sampled_out、concurrency_limited 和 inflight 观测。
+
+worker benchmark 覆盖：
+
+1. Uvicorn worker 数矩阵。
+2. PG `pool_size` / `max_overflow` 矩阵。
+3. shadow max concurrency / sample rate 矩阵。
+4. `estimated_pg_connections = workers * (pool_size + max_overflow)`。
+5. HTTP throughput / p50 / p95 / p99 / error_rate。
+6. shadow metrics 与 engine manager snapshot。
+
+边界确认：
+
+1. P3-D11 仍只使用本地/dev synthetic。
+2. P3-D11 不连接宝塔 production。
+3. P3-D11 不读取 production SQLite。
+4. P3-D11 不执行 production apply。
+5. P3-D11 不切换默认 `DATABASE_URL`。
+6. P3-D11 不默认开启 PG pilot。
+7. P3-D11 不启用 PG write。
+8. P3-D11 不接入 webhook write、pending task、task result write、`notify_sales` / `detect_reply` 写链路。
+9. P3-D11 不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+10. P3-D11 benchmark 不代表 production QPS600 达标。
+
+下一步建议：`P3-D12` 做 shadow sampling / max concurrency 策略调优，或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。

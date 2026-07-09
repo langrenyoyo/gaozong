@@ -72,6 +72,30 @@ def _env_positive_int(name: str, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _env_nonnegative_int(name: str, default: int) -> int:
+    """读取非负整数配置；用于 0 有明确语义的限流开关。"""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _env_float_range(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    """读取浮点范围配置；非法值回落默认，避免误拼写放大灰度范围。"""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if minimum <= parsed <= maximum else default
+
+
 def _env_csv_set(name: str) -> set[str]:
     """解析逗号分隔白名单，自动忽略空值和多余空格。"""
     result: set[str] = set()
@@ -124,6 +148,13 @@ LEADS_TASKS_PG_MAX_OVERFLOW = _env_positive_int("LEADS_TASKS_PG_MAX_OVERFLOW", 5
 LEADS_TASKS_PG_POOL_TIMEOUT = _env_positive_int("LEADS_TASKS_PG_POOL_TIMEOUT", 3)
 LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS = _env_positive_int("LEADS_TASKS_PG_STATEMENT_TIMEOUT_MS", 1500)
 LEADS_TASKS_PG_SHADOW_TIMEOUT_MS = _env_positive_int("LEADS_TASKS_PG_SHADOW_TIMEOUT_MS", 800)
+LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY = _env_nonnegative_int("LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY", 10)
+LEADS_TASKS_PG_SHADOW_SAMPLE_RATE = _env_float_range(
+    "LEADS_TASKS_PG_SHADOW_SAMPLE_RATE",
+    1.0,
+    minimum=0.0,
+    maximum=1.0,
+)
 
 # 服务端口
 SERVER_HOST = "127.0.0.1"

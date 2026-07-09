@@ -157,3 +157,21 @@ QPS600 仍需要后续验证：
 7. 不把本地 HTTP benchmark 当作 QPS600 达标证明。
 8. 不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
 
+## 9. P3-D11 worker/pool sizing 补充
+
+P3-D11 在本文 P3-D10 HTTP benchmark 脚手架上新增 worker/pool sizing benchmark：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
+```
+
+新增能力：
+
+1. 支持 `--workers`、`--pool-sizes`、`--max-overflows` 矩阵。
+2. 支持 `--shadow-max-concurrency` 与 `--shadow-sample-rates` 实验。
+3. 输出 `estimated_pg_connections = workers * (pool_size + max_overflow)`。
+4. 输出每组 HTTP 指标、shadow metrics 和 engine manager snapshot。
+5. 仍只允许本地/dev synthetic，不代表 production QPS600。
+
+边界保持不变：不切换默认 `DATABASE_URL`，不默认开启 PG pilot，不启用 PG write，不连接宝塔 production。

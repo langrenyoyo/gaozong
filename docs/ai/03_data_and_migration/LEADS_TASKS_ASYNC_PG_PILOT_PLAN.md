@@ -472,3 +472,33 @@ QPS600 影响：
 1. P3-D10 比 P3-D8/P3-D9 service-level benchmark 更接近真实接口链路。
 2. P3-D10 仍是本地/dev synthetic，不代表宝塔 staging 或 production QPS600 达标。
 3. 下一步建议进入 `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing；或进入 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 17. P3-D11 worker/pool sizing 与 shadow 降载方案
+
+任务：`P3-D11-DB-9000-LEADS-TASKS-UVICORN-MULTI-WORKER-POOL-SIZING-1`
+
+P3-D11 在 read-only shadow pilot 默认关闭的前提下新增：
+
+```text
+LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY=10
+LEADS_TASKS_PG_SHADOW_SAMPLE_RATE=1.0
+```
+
+运行语义：
+
+1. PG pilot/read shadow 未开启时两个配置不生效。
+2. `shadow_sample_rate` 只影响是否执行 shadow read，SQLite 主响应不变。
+3. `shadow_max_concurrency` 只限制 shadow read，超过上限时不排队，直接记录 `concurrency_limited`。
+4. `sampled_out` / `concurrency_limited` 不视为 error，且不会连接 PostgreSQL。
+5. PG write 仍未启用，`LEADS_TASKS_PG_WRITE_ENABLED=false`。
+
+新增 benchmark：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
+```
+
+该脚本用于本地/dev synthetic worker/pool sizing，输出 worker、pool、sample rate、shadow concurrency、`estimated_pg_connections`、HTTP 延迟、吞吐和 shadow metrics。当前仍不能切换默认 `DATABASE_URL`，不能默认开启 PG pilot，不能将结果视为 production QPS600 证明。
+
+下一步建议：`P3-D12` 做 shadow sampling / max concurrency 策略调优，或 `P3-E1` 进入智能体 / 抖音账号绑定 schema batch。

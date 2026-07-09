@@ -30,6 +30,12 @@ def setup_function():
         reset_shadow_metrics_for_tests()
     except ModuleNotFoundError:
         pass
+    try:
+        from app.services.leads_tasks_pg_shadow import reset_shadow_gate_for_tests
+
+        reset_shadow_gate_for_tests()
+    except ModuleNotFoundError:
+        pass
 
 
 def _context(
@@ -628,6 +634,173 @@ def test_shadow_sql_templates_are_read_only_and_write_flag_is_unused():
 
     assert shadow.LeadsTasksPgShadowSettings(write_enabled=True).write_enabled is True
     assert not hasattr(shadow, "run_pg_write")
+
+
+def test_shadow_sample_rate_zero_samples_out_without_pg(monkeypatch):
+    from app.services import leads_tasks_pg_shadow as shadow
+    from app.services.leads_tasks_shadow_observability import (
+        get_shadow_metrics_snapshot,
+        record_shadow_result,
+    )
+
+    monkeypatch.setattr(
+        shadow,
+        "_run_shadow_read_in_thread_loop",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("sampled_out 不应连接 PG")),
+    )
+    settings = shadow.LeadsTasksPgShadowSettings(
+        pilot_enabled=True,
+        read_shadow_enabled=True,
+        database_url="postgresql+asyncpg://u:p@localhost:5432/auto_wechat",
+        shadow_sample_rate=0.0,
+    )
+
+    result = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+    record_shadow_result(result)
+
+    snapshot = get_shadow_metrics_snapshot()
+    assert result.status == "sampled_out"
+    assert result.enabled is True
+    assert snapshot["total_shadow_sampled_out"] == 1
+    assert snapshot["total_shadow_error"] == 0
+    assert snapshot["by_operation"]["sales_staff.list"]["sampled_out"] == 1
+
+
+def test_shadow_sample_rate_one_runs_shadow(monkeypatch):
+    from app.services import leads_tasks_pg_shadow as shadow
+
+    calls = []
+
+    def _fake_run(**kwargs):
+        calls.append(kwargs)
+        return shadow.ShadowReadResult(
+            enabled=True,
+            table=kwargs["table"],
+            operation=kwargs["operation"],
+            sqlite_count=len(kwargs["sqlite_rows"]),
+            pg_count=len(kwargs["sqlite_rows"]),
+            status="pass",
+        )
+
+    monkeypatch.setattr(shadow, "_run_shadow_read_in_thread_loop", _fake_run)
+    settings = shadow.LeadsTasksPgShadowSettings(
+        pilot_enabled=True,
+        read_shadow_enabled=True,
+        database_url="postgresql+asyncpg://u:p@localhost:5432/auto_wechat",
+        shadow_sample_rate=1.0,
+        shadow_max_concurrency=1,
+    )
+
+    result = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+
+    assert result.status == "pass"
+    assert len(calls) == 1
+
+
+def test_shadow_max_concurrency_zero_limits_without_pg(monkeypatch):
+    from app.services import leads_tasks_pg_shadow as shadow
+    from app.services.leads_tasks_shadow_observability import (
+        get_shadow_metrics_snapshot,
+        record_shadow_result,
+    )
+
+    monkeypatch.setattr(
+        shadow,
+        "_run_shadow_read_in_thread_loop",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("concurrency_limited 不应连接 PG")),
+    )
+    settings = shadow.LeadsTasksPgShadowSettings(
+        pilot_enabled=True,
+        read_shadow_enabled=True,
+        database_url="postgresql+asyncpg://u:p@localhost:5432/auto_wechat",
+        shadow_max_concurrency=0,
+    )
+
+    result = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+    record_shadow_result(result)
+
+    snapshot = get_shadow_metrics_snapshot()
+    assert result.status == "concurrency_limited"
+    assert snapshot["total_shadow_concurrency_limited"] == 1
+    assert snapshot["by_operation"]["sales_staff.list"]["concurrency_limited"] == 1
+
+
+def test_shadow_max_concurrency_one_skips_second_without_blocking(monkeypatch):
+    import threading
+    import time
+
+    from app.services import leads_tasks_pg_shadow as shadow
+    from app.services.leads_tasks_shadow_observability import (
+        get_shadow_metrics_snapshot,
+        record_shadow_result,
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_run(**kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return shadow.ShadowReadResult(
+            enabled=True,
+            table=kwargs["table"],
+            operation=kwargs["operation"],
+            status="pass",
+        )
+
+    monkeypatch.setattr(shadow, "_run_shadow_read_in_thread_loop", _slow_run)
+    settings = shadow.LeadsTasksPgShadowSettings(
+        pilot_enabled=True,
+        read_shadow_enabled=True,
+        database_url="postgresql+asyncpg://u:p@localhost:5432/auto_wechat",
+        shadow_max_concurrency=1,
+    )
+    first_result = []
+
+    def _first_call():
+        first_result.append(
+            shadow.run_sales_staff_list_shadow_read(
+                sqlite_rows=[{"id": 1}],
+                merchant_id="merchant-a",
+                settings=settings,
+            )
+        )
+
+    worker = threading.Thread(target=_first_call)
+    worker.start()
+    assert started.wait(timeout=1)
+
+    before = time.perf_counter()
+    second = shadow.run_sales_staff_list_shadow_read(
+        sqlite_rows=[{"id": 1}],
+        merchant_id="merchant-a",
+        settings=settings,
+    )
+    elapsed_ms = (time.perf_counter() - before) * 1000
+    release.set()
+    worker.join(timeout=2)
+
+    record_shadow_result(second)
+    record_shadow_result(first_result[0])
+    snapshot = get_shadow_metrics_snapshot()
+    assert second.status == "concurrency_limited"
+    assert elapsed_ms < 100
+    assert first_result[0].status == "pass"
+    assert snapshot["total_shadow_concurrency_limited"] == 1
+    assert snapshot["max_shadow_inflight_seen"] == 1
+    assert snapshot["current_shadow_inflight"] == 0
 
 
 def test_shadow_read_uses_engine_manager_without_per_query_dispose(monkeypatch):

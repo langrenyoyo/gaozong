@@ -285,3 +285,38 @@ docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_HTTP_BENCHMARK_GUIDE.md
 4. P3-D10 不默认开启 PG pilot。
 5. P3-D10 不启用 PG write。
 6. P3-D10 不连接宝塔生产，不读取生产 SQLite，不执行 production apply。
+
+## 11. P3-D11 worker/pool sizing benchmark 补充
+
+任务：`P3-D11-DB-9000-LEADS-TASKS-UVICORN-MULTI-WORKER-POOL-SIZING-1`
+
+P3-D11 新增本地/dev worker/pool sizing benchmark：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+tests/test_leads_tasks_shadow_worker_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
+```
+
+相比 P3-D8/P3-D9 service-level benchmark 和 P3-D10 单进程 HTTP benchmark，P3-D11 增加：
+
+1. Uvicorn worker 数矩阵。
+2. 每 worker `pool_size` / `max_overflow` 矩阵。
+3. `LEADS_TASKS_PG_SHADOW_MAX_CONCURRENCY` 非阻塞 shadow 并发限制。
+4. `LEADS_TASKS_PG_SHADOW_SAMPLE_RATE` shadow 采样率。
+5. `estimated_pg_connections` 估算，用于连接数预算。
+
+新增 shadow 降载指标：
+
+1. `total_shadow_sampled_out`
+2. `total_shadow_concurrency_limited`
+3. `current_shadow_inflight`
+4. `max_shadow_inflight_seen`
+
+边界：
+
+1. P3-D11 仍是本地/dev synthetic，不代表 production QPS600 达标。
+2. P3-D11 不切换默认 `DATABASE_URL`。
+3. P3-D11 不默认开启 PG pilot。
+4. P3-D11 不启用 PG write。
+5. P3-D11 不连接宝塔 production，不读取 production SQLite，不执行 production apply。

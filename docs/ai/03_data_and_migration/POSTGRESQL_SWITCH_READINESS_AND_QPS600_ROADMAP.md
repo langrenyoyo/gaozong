@@ -712,3 +712,44 @@ readiness 影响：
 
 1. `P3-D11`：Uvicorn multi-worker benchmark / connection pool sizing。
 2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
+
+## 20. P3-D11 worker/pool sizing 当前状态
+
+任务：`P3-D11-DB-9000-LEADS-TASKS-UVICORN-MULTI-WORKER-POOL-SIZING-1`
+
+P3-D11 已在 P3-D10 HTTP benchmark 基础上新增本地/dev worker/pool sizing scaffold：
+
+```text
+scripts/benchmark_leads_tasks_shadow_workers_dev.py
+tests/test_leads_tasks_shadow_worker_benchmark.py
+docs/ai/03_data_and_migration/LEADS_TASKS_SHADOW_WORKER_POOL_SIZING_GUIDE.md
+```
+
+readiness 影响：
+
+1. 开始量化 Uvicorn worker 数、每 worker PG pool、shadow 并发限制和采样率对吞吐 / p95 / p99 的影响。
+2. 新增 `estimated_pg_connections = workers * (pool_size + max_overflow)`，用于 PostgreSQL 连接数预算。
+3. 新增 shadow 降载指标：`sampled_out`、`concurrency_limited`、`current_shadow_inflight`、`max_shadow_inflight_seen`。
+4. 采样和并发限制只影响 PG read-only shadow，不影响 SQLite 主响应。
+5. 当前仍是本地/dev synthetic，不包含宝塔反代、真实 production 数据、真实 production PostgreSQL 和跨 worker metrics 聚合。
+
+当前仍未完成：
+
+1. 宝塔 staging / production 真实 HTTP 压测审批与记录。
+2. Nginx / 宝塔反代链路 benchmark。
+3. PostgreSQL 端实际连接数、慢查询、锁等待观测。
+4. async repository / `AsyncSession` 全链路替换。
+5. pending polling、task result write、webhook write 的事务和幂等设计。
+6. production QPS600 证明。
+
+边界确认：
+
+1. P3-D11 不能作为 production QPS600 达标证明。
+2. 当前仍不能切换默认 `DATABASE_URL`。
+3. 当前仍不能默认开启 PG pilot。
+4. 当前仍未启用 PG write。
+
+下一步建议：
+
+1. `P3-D12`：shadow sampling / max concurrency 策略调优。
+2. 或 `P3-E1`：智能体 / 抖音账号绑定 schema batch。
