@@ -1441,3 +1441,48 @@ dev apply smoke：
 9. 当前仍不能切换宝塔 SQLite 到 PostgreSQL。
 
 后续建议：P3-D3 进入四表 API contrast 与 async PG pilot 方案，不应直接进入默认 `DATABASE_URL` 切换。
+
+## 37. P3-D3 leads/tasks core API contrast 与 async PG pilot 方案
+
+任务：`P3-D3-DB-9000-LEADS-TASKS-API-CONTRAST-AND-ASYNC-PG-PILOT-1`
+
+P3-D3 在 P3-D1 四表 PostgreSQL schema 和 P3-D2 四表数据迁移 dry-run / dev apply smoke 基础上，新增四表 SQLite vs PostgreSQL contrast 框架、dev synthetic contrast smoke，并补充 async PG pilot 方案。
+
+新增文件：
+
+```text
+scripts/contrast_leads_tasks_core_sqlite_vs_postgres.py
+scripts/smoke_contrast_leads_tasks_core_dev.py
+tests/test_contrast_leads_tasks_core_sqlite_vs_postgres.py
+docs/ai/03_data_and_migration/LEADS_TASKS_ASYNC_PG_PILOT_PLAN.md
+```
+
+contrast 口径：
+
+1. 覆盖 `sales_staff`、`douyin_leads`、`douyin_webhook_events`、`wechat_tasks`。
+2. 默认只读，PostgreSQL 写入为 `disabled`。
+3. 对比 SQLite / PostgreSQL 行数、业务 key、必要字段、JSON parseability、datetime parseability。
+4. mismatch_count 已收窄为 key 层面的缺失 / 多出。
+5. JSON / datetime 解析异常在非 strict 模式下作为 warning；strict 模式下 warning 可导致失败。
+6. PostgreSQL URL 输出必须脱敏。
+
+async PG pilot 方案：
+
+1. 当前仍不切换默认 `DATABASE_URL`。
+2. 当前不默认开启 PG pilot。
+3. 后续开关默认全部 false：`LEADS_TASKS_PG_PILOT_ENABLED=false`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=false`、`LEADS_TASKS_PG_WRITE_ENABLED=false`、`LEADS_TASKS_PG_STRICT_CONTRAST=false`。
+4. 推荐先做 read-only shadow：`sales_staff` -> `wechat_tasks` history -> `douyin_leads` list/detail -> `douyin_webhook_events`。
+5. SQLite 仍是返回源，PostgreSQL 只做 shadow read；mismatch 只记录日志，不影响用户。
+6. webhook write 与 `wechat_tasks` result write 必须最后灰度，且需要单独事务、幂等和回滚设计。
+
+边界确认：
+
+1. 本轮未连接宝塔生产。
+2. 本轮未读取生产 SQLite。
+3. 本轮未执行 production apply。
+4. 本轮未切换默认 `DATABASE_URL`。
+5. 本轮未改业务接口默认数据库。
+6. 本轮未默认开启 PG pilot。
+7. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+后续建议：P3-D4 进入 runtime shadow read scaffolding，默认关闭。

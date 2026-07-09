@@ -394,3 +394,43 @@ upsert key：
 4. 本轮未改 9100 / Milvus / RAG，未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
 5. 当前仍不能切换宝塔 SQLite 到 PostgreSQL。
 6. 下一步建议 P3-D3：四表 API contrast 与 async PG pilot 方案。
+
+## 12. P3-D3 四表 API contrast 与 async PG pilot 方案
+
+任务：`P3-D3-DB-9000-LEADS-TASKS-API-CONTRAST-AND-ASYNC-PG-PILOT-1`
+
+P3-D3 已新增四表 SQLite vs PostgreSQL contrast 框架、dev synthetic contrast smoke，以及 async PG pilot 方案文档：
+
+```text
+scripts/contrast_leads_tasks_core_sqlite_vs_postgres.py
+scripts/smoke_contrast_leads_tasks_core_dev.py
+tests/test_contrast_leads_tasks_core_sqlite_vs_postgres.py
+docs/ai/03_data_and_migration/LEADS_TASKS_ASYNC_PG_PILOT_PLAN.md
+```
+
+当前阶段结论：
+
+1. P3-D1 已完成 `douyin_leads`、`douyin_webhook_events`、`sales_staff`、`wechat_tasks` 四表 PostgreSQL schema。
+2. P3-D2 已完成四表数据迁移 dry-run 与 dev apply smoke。
+3. P3-D3 已完成 synthetic/dev 级别 contrast 框架，包含行数、业务 key、必要字段、JSON / datetime warning 和 strict 模式。
+4. 当前仍不能切换默认 `DATABASE_URL`。
+5. 当前不默认开启 PG pilot。
+6. 下一步是 P3-D4 runtime shadow read scaffolding，默认关闭。
+
+pilot 顺序建议：
+
+1. `sales_staff` read-only shadow。
+2. `wechat_tasks` history read-only shadow。
+3. `douyin_leads` list/detail read-only shadow。
+4. `douyin_webhook_events` read-only shadow。
+5. webhook write / task result write 最后灰度。
+
+QPS600 准备项继续保持：
+
+1. 使用 `asyncpg` 或 SQLAlchemy async / `AsyncSession`。
+2. 明确 connection pool 与 worker 总连接数计算。
+3. 设置 `statement_timeout` 和慢查询日志。
+4. 验证高频索引。
+5. webhook 幂等键和 `wechat_tasks` pending polling 锁策略必须落地。
+
+边界确认：P3-D3 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot。
