@@ -4775,3 +4775,65 @@ tests/test_9000_postgres_agents_accounts_schema.py
 1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
 2. `P3-E3`：agents/accounts API contrast。
 3. 不得跳过 dry-run / contrast 直接进入默认数据库切换。
+
+# P3-E2 agents/accounts data migration dry-run 与 dev apply 当前状态
+
+任务：`P3-E2-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+当前已为 P3-E1 的 agents/accounts 四表新增 SQLite -> PostgreSQL 数据迁移 dry-run / apply 工具链：
+
+```text
+scripts/migrate_agents_accounts_core_sqlite_to_postgres.py
+scripts/smoke_migrate_agents_accounts_core_dev_apply.py
+tests/test_migrate_agents_accounts_core_sqlite_to_postgres.py
+```
+
+覆盖表：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+迁移顺序：
+
+```text
+ai_agents
+-> douyin_authorized_accounts
+-> douyin_account_agent_bindings
+-> agent_knowledge_categories
+```
+
+upsert / 幂等策略：
+
+1. `ai_agents` 按 `agent_id`。
+2. `douyin_authorized_accounts` 按 `merchant_id + open_id`。
+3. `douyin_account_agent_bindings` 按 `id`，并额外拦截同商户同账号双 active default 源数据冲突。
+4. `agent_knowledge_categories` active 行按 `merchant_id + agent_id + category_key`，并额外拦截重复 active 分类源数据冲突。
+
+dev synthetic apply smoke 结果：
+
+```text
+第一次 dry-run: insert/update/skip/error = 8/0/0/0
+apply: inserted/updated/skipped/errors = 8/0/0/0
+第二次 dry-run: insert/update/skip/error = 0/8/0/0
+SMOKE_PASS: agents/accounts core data migration dev apply ready
+```
+
+边界确认：
+
+1. 本轮只使用本地/dev synthetic SQLite fixture。
+2. 本轮未连接宝塔 production。
+3. 本轮未读取 production SQLite。
+4. 本轮未执行 production apply。
+5. 本轮未切换默认 `DATABASE_URL`。
+6. 本轮未修改业务接口默认数据库。
+7. 本轮未默认开启 PG pilot。
+8. 本轮未启用 PG write。
+9. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+下一步建议：
+
+1. `P3-E3`：agents/accounts API contrast。
+2. `P3-E4`：agents/accounts runtime shadow read 方案，视复杂度决定。
+3. 仍不得跳过 contrast / staging 审批直接切换默认数据库。

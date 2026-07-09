@@ -2109,3 +2109,75 @@ scripts/smoke_auto_wechat_alembic_agents_accounts_core.py
 1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
 2. `P3-E3`：agents/accounts API contrast。
 3. leads/tasks shadow 链路虽已进入 gray preset 阶段，但仍未 production 执行，不能据此切换默认数据库。
+
+## 49. P3-E2 agents/accounts 数据迁移 dry-run 与 dev apply smoke
+
+任务：`P3-E2-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+P3-E2 已为 P3-E1 创建的四张 agents/accounts PostgreSQL 表补充 SQLite -> PostgreSQL 数据迁移脚本、dry-run 能力、静态测试和本地/dev synthetic apply smoke：
+
+```text
+scripts/migrate_agents_accounts_core_sqlite_to_postgres.py
+scripts/smoke_migrate_agents_accounts_core_dev_apply.py
+tests/test_migrate_agents_accounts_core_sqlite_to_postgres.py
+```
+
+覆盖表：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+迁移顺序：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+upsert / 幂等策略：
+
+1. `ai_agents`：按 `agent_id` upsert。
+2. `douyin_authorized_accounts`：按 `merchant_id + open_id` upsert；历史 `merchant_id` 缺失会记录 warning，不静默伪造商户归属。
+3. `douyin_account_agent_bindings`：按 `id` upsert，并在源数据内拦截同一 `merchant_id + account_open_id` 的双 active default 绑定，避免破坏默认绑定语义。
+4. `agent_knowledge_categories`：active 行按 `merchant_id + agent_id + category_key` 与 PG 局部唯一索引 upsert，并在源数据内拦截重复 active 分类绑定。
+
+脚本安全门：
+
+1. 默认 dry-run，`--apply` 必须同时显式传 `--yes`。
+2. `postgres-url` 拒绝 SQLite URL，输出必须脱敏。
+3. apply 只允许 dev/local host：`localhost`、`127.0.0.1`、`postgres`、`auto-wechat-postgres-dev`。
+4. apply 目标 database 必须是 `auto_wechat`。
+5. `APP_ENV=production` 时拒绝 apply。
+6. apply 不允许隐式使用 `DATABASE_URL`，必须显式 `--postgres-url` 或 `SMOKE_DATABASE_URL`。
+7. 脚本不执行 `delete` / `truncate` / `drop`；dev smoke 仅按 synthetic merchant/id 范围清理测试数据。
+
+dev apply smoke 结果：
+
+```text
+第一次 dry-run: total_insert=8, total_update=0, total_skip=0, total_errors=0, DRY_RUN_PASS
+apply: inserted=8, updated=0, skipped=0, errors=0, APPLY_PASS
+第二次 dry-run: total_insert=0, total_update=8, total_skip=0, total_errors=0, DRY_RUN_PASS
+PostgreSQL 行数: 四表各 >= 2
+SMOKE_PASS: agents/accounts core data migration dev apply ready
+```
+
+边界确认：
+
+1. 本轮只验证 dry-run 和本地/dev synthetic apply smoke。
+2. 本轮未连接宝塔 production。
+3. 本轮未读取 production SQLite。
+4. 本轮未执行 production apply。
+5. 本轮未切换默认 `DATABASE_URL`。
+6. 本轮未修改业务接口默认数据库。
+7. 本轮未默认开启 PG pilot，未启用 PG write。
+8. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+当前切库结论不变：仍不能把宝塔 SQLite 直接切到 PostgreSQL。P3-E2 只证明 agents/accounts 四表迁移脚本在本地/dev synthetic 数据上具备 dry-run、受控 apply 与幂等闭环。
+
+后续建议：
+
+1. `P3-E3`：agents/accounts API contrast。
+2. `P3-E4`：agents/accounts runtime shadow read 方案，视复杂度决定。
+3. 不得跳过 contrast / staging 审批直接进入默认数据库切换。

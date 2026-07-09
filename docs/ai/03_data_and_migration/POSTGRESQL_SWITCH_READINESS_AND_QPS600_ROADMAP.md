@@ -857,3 +857,39 @@ readiness 影响：
 1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
 2. `P3-E3`：agents/accounts API contrast。
 3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。
+
+## 24. P3-E2 agents/accounts data migration dry-run / dev apply 当前状态
+
+任务：`P3-E2-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-DATA-MIGRATION-DRY-RUN-AND-DEV-APPLY-1`
+
+P3-E2 已为 agents/accounts 四表建立 SQLite -> PostgreSQL 数据迁移脚本和本地/dev synthetic apply smoke：
+
+```text
+scripts/migrate_agents_accounts_core_sqlite_to_postgres.py
+scripts/smoke_migrate_agents_accounts_core_dev_apply.py
+tests/test_migrate_agents_accounts_core_sqlite_to_postgres.py
+```
+
+readiness 影响：
+
+1. 第二批 P0 核心域已从 schema batch 进入数据迁移 dry-run / dev apply smoke 验证。
+2. 四表迁移顺序固定为 `ai_agents` -> `douyin_authorized_accounts` -> `douyin_account_agent_bindings` -> `agent_knowledge_categories`。
+3. dry-run 输出 per-table `sqlite_source_rows`、`estimated_insert/update/skip`、`error_rows`、`ignored_fields`、`defaulted_fields`、`upsert_key`、脱敏 `mapping_preview` 和 warnings。
+4. dev apply smoke 使用临时 synthetic SQLite，不读取 production SQLite，不迁移真实业务数据。
+5. dev apply smoke 已验证第一次 insert=8，第二次 dry-run insert=0/update=8，说明本地/dev synthetic 幂等闭环可用。
+6. `douyin_account_agent_bindings` 和 `agent_knowledge_categories` 的 active 局部唯一语义在迁移脚本中增加源数据冲突拦截。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. agents/accounts dev apply smoke 不等于 production apply 审批通过。
+5. agents/accounts dev apply smoke 不等于全系统数据迁移完成。
+6. production QPS600 仍需要真实 HTTP benchmark、连接池观测、慢查询和回滚演练证明。
+
+后续建议：
+
+1. `P3-E3`：agents/accounts API contrast，验证 SQLite / PG 响应语义。
+2. `P3-E4`：agents/accounts runtime shadow read 方案，视接口复杂度决定。
+3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。
