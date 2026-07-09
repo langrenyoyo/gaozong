@@ -291,6 +291,77 @@ def test_ask_returns_fallback_answer_when_llm_fails_and_keeps_session(tmp_path, 
     assert saved["status"] == "answered"
 
 
+def test_ask_fallback_does_not_expose_raw_knowledge_chunk_when_llm_fails(tmp_path, monkeypatch):
+    _use_temp_db(tmp_path, monkeypatch)
+    _seed_active_base_chunk()
+
+    from apps.xg_douyin_ai_cs.llm.client import LLMRequestError
+    from apps.xg_douyin_ai_cs.rag.models import RagSearchItem
+    from apps.xg_douyin_ai_cs.services import knowledge_training_service as service
+
+    raw_feedback_chunk = "\n".join(
+        [
+            "【客户问题】",
+            "这台车价格还能便宜吗？",
+            "",
+            "【AI原始回复】",
+            "价格可谈，留个电话我给您申请内部底价。",
+            "",
+            "【人工反馈】",
+            "不准",
+            "",
+            "【反馈使用规则】",
+            "负向反馈样本，AI 原始回复不应直接复用；如有人工修正回复，应优先参考修正内容。",
+            "",
+            "【人工评价】",
+            "禁止说申请内部底价",
+            "",
+            "【来源】",
+            "AI 抖音客服自动回复训练反馈",
+        ]
+    )
+
+    def fake_chat(self, messages):
+        raise LLMRequestError("synthetic timeout")
+
+    def fake_search(_payload):
+        return [
+            RagSearchItem(
+                chunk_id=1,
+                document_id=1,
+                title="不准反馈样本",
+                chunk_text=raw_feedback_chunk,
+                score=0.98,
+            )
+        ]
+
+    monkeypatch.setattr(service.OpenAICompatibleClient, "chat", fake_chat)
+    monkeypatch.setattr(service, "search", fake_search)
+
+    response = service.ask(
+        service.KnowledgeTrainingAskInput(
+            tenant_id="xiaogao_system",
+            merchant_id="xiaogao_base",
+            question="这台车价格还能便宜吗？",
+            use_xiaogao_knowledge_base=True,
+        )
+    )
+
+    assert response["status"] == "answered"
+    assert response["used_knowledge_base"] is True
+    assert response["answer"] == "AI 模型调用失败，已命中小高知识库，但当前无法生成安全可直接使用的话术，请稍后重试或人工处理。"
+    for forbidden_text in [
+        "【客户问题】",
+        "【AI原始回复】",
+        "【人工反馈】",
+        "【反馈使用规则】",
+        "【人工评价】",
+        "【来源】",
+        "申请内部底价",
+    ]:
+        assert forbidden_text not in response["answer"]
+
+
 def test_search_preview_still_runs_search_when_ask_can_skip_rag(tmp_path, monkeypatch):
     _use_temp_db(tmp_path, monkeypatch)
     from apps.xg_douyin_ai_cs.main import create_app

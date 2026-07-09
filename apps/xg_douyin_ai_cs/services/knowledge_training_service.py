@@ -508,8 +508,7 @@ def _build_user_prompt(payload: KnowledgeTrainingAskInput, source_chunks: list) 
 
 def _fallback_answer(payload: KnowledgeTrainingAskInput, source_chunks: list, reason: str) -> str:
     if source_chunks:
-        first = source_chunks[0]
-        return f"{reason}，可先参考{KNOWLEDGE_BASE_NAME}：{first.chunk_text}"
+        return f"{reason}，已命中{KNOWLEDGE_BASE_NAME}，但当前无法生成安全可直接使用的话术，请稍后重试或人工处理。"
     return f"{reason}，建议先让商家补充{KNOWLEDGE_BASE_NAME}后再训练该问题。"
 
 

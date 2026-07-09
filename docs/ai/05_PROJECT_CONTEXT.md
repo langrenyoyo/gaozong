@@ -4742,3 +4742,36 @@ error_rate=0
 9. P3-D12/P3-D13 不代表 production QPS600 达标。
 
 下一步建议：P3-D14 做宝塔 staging read-only shadow 人工审批模板与执行记录；不得自动进入 production shadow 或 PG write。
+# P3-E1 agents/accounts core PostgreSQL schema batch 当前状态
+
+任务：`P3-E1-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-SCHEMA-BATCH-1`
+
+当前已为 9000 智能体与抖音账号绑定核心链路新增 PostgreSQL schema batch：
+
+```text
+migrations/postgres/auto_wechat/versions/0004_create_agents_accounts_core_tables.py
+scripts/smoke_auto_wechat_alembic_agents_accounts_core.py
+tests/test_9000_postgres_agents_accounts_schema.py
+```
+
+本批覆盖：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+关键边界：
+
+1. 本轮只建 PostgreSQL schema，不迁移 SQLite 数据。
+2. 本轮不执行 apply，不切换默认 `DATABASE_URL`。
+3. 本轮不修改业务接口默认数据库，不默认开启 PG pilot，不启用 PG write。
+4. 本轮不连接宝塔 production，不读取 production SQLite。
+5. 本轮不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+6. leads/tasks shadow 链路已进入 gray preset 阶段，但仍未 production 执行，不能据此切库。
+
+下一步建议：
+
+1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
+2. `P3-E3`：agents/accounts API contrast。
+3. 不得跳过 dry-run / contrast 直接进入默认数据库切换。

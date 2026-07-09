@@ -2051,3 +2051,61 @@ P3-D13 结论：
 3. 出现 error、timeout、mismatch 持续增长、接口延迟明显恶化、连接数接近预算或任何写 PG 迹象时，立即关闭 shadow。
 
 后续建议：P3-D14 做宝塔 staging read-only shadow 人工审批模板与执行记录；不得自动进入 production shadow 或 PG write。
+## 48. P3-E1 agents/accounts core PostgreSQL schema batch
+
+任务：`P3-E1-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-SCHEMA-BATCH-1`
+
+P3-E1 开始第二批 P0 核心域 PostgreSQL schema。本批只覆盖智能体与抖音账号绑定链路的四张表：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+只读审计摘要：
+
+1. ORM 模型位于 `app/models.py`：`AiAgent`、`DouyinAuthorizedAccount`、`DouyinAccountAgentBinding`、`AgentKnowledgeCategory`。
+2. SQLite 迁移来源包括 `0002_douyin_authorized_accounts.sql`、`0007_ai_agents.sql`、`0008_douyin_account_agent_bindings.sql`、`0012_agent_knowledge_categories.sql`。
+3. 主要路由 / service 包括 `app/routers/agents.py`、`apps/agents/services.py`、`app/routers/douyin_accounts.py`、`app/services/douyin_account_agent_binding_service.py`、`app/routers/douyin_ai_cs_proxy.py`。
+4. 当前隔离字段以 `merchant_id` 为主，预留 `tenant_id`；绑定关系使用 `account_open_id`、`agent_id`、`category_key`。
+5. 当前高频读路径包括智能体列表/详情、抖音授权账号列表、账号绑定默认 Agent、Agent 知识分类绑定读取。
+
+新增 migration：
+
+```text
+migrations/postgres/auto_wechat/versions/0004_create_agents_accounts_core_tables.py
+revision = 0004_agents_accounts_core
+down_revision = 0003_leads_tasks_core
+```
+
+schema 摘要：
+
+1. `ai_agents`：保留 `agent_id` 唯一约束，增加 `merchant_id + status`、`merchant_id + name`、`merchant_id + updated_at` 索引；不强制同商户 name 唯一，避免破坏现有多智能体命名弹性。
+2. `douyin_authorized_accounts`：保留 `main_account_id + open_id` 唯一约束，增加 `merchant_id + open_id` 唯一约束，以及 `merchant_id + bind_status`、`open_id`、`last_synced_at` 索引。
+3. `douyin_account_agent_bindings`：保留 `merchant_id + account_open_id`、`merchant_id + agent_id` 查询索引，增加 active default 局部唯一索引，保证同商户同账号只有一个 active default 绑定。
+4. `agent_knowledge_categories`：保留 `merchant_id + agent_id + status`、`merchant_id + category_key + status` 查询索引，增加 `category_key` 索引和 active 局部唯一索引。
+
+dev smoke：
+
+```text
+scripts/smoke_auto_wechat_alembic_agents_accounts_core.py
+```
+
+该 smoke 只读取 `SMOKE_DATABASE_URL`，拒绝 SQLite URL，URL 输出脱敏，目标 database 必须是 `auto_wechat`，dev host 仅允许 `localhost` / `127.0.0.1` / `postgres`。脚本执行 auto_wechat Alembic `upgrade head`，验证 `alembic_version = 0004_agents_accounts_core`，并验证四张表、关键索引和关键约束存在。
+
+边界确认：
+
+1. 本轮只建 PostgreSQL schema，不迁移 SQLite 数据。
+2. 本轮不执行数据 apply。
+3. 本轮不切换默认 `DATABASE_URL`。
+4. 本轮不修改业务接口默认数据库。
+5. 本轮不默认开启 PG pilot。
+6. 本轮不启用 PG write。
+7. 本轮不连接宝塔 production，不读取 production SQLite。
+8. 本轮不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+后续建议：
+
+1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
+2. `P3-E3`：agents/accounts API contrast。
+3. leads/tasks shadow 链路虽已进入 gray preset 阶段，但仍未 production 执行，不能据此切换默认数据库。

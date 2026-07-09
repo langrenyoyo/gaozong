@@ -825,3 +825,35 @@ readiness 影响：
 1. P3-D14：宝塔 staging read-only shadow 审批模板和执行记录。
 2. P3-D15：宝塔 staging shadow 观察结果。
 3. P3-E：继续按表组推进 PostgreSQL schema / migration / contrast，不能因为 shadow preset 直接切库。
+## 23. P3-E1 agents/accounts schema batch 当前状态
+
+任务：`P3-E1-DB-9000-POSTGRESQL-AGENTS-ACCOUNTS-SCHEMA-BATCH-1`
+
+P3-E1 已开始第二批 P0 核心基础 schema，覆盖：
+
+1. `ai_agents`
+2. `douyin_authorized_accounts`
+3. `douyin_account_agent_bindings`
+4. `agent_knowledge_categories`
+
+readiness 影响：
+
+1. 9000 PostgreSQL Alembic 链路从 `0003_leads_tasks_core` 延伸到 `0004_agents_accounts_core`。
+2. 智能体、授权账号、账号-Agent 绑定、Agent-知识分类绑定的 PG schema、关键索引和唯一约束开始落地。
+3. `douyin_account_agent_bindings` 和 `agent_knowledge_categories` 使用局部唯一索引保护 active 业务语义。
+4. 本批只是 schema batch，不迁移 SQLite 数据，不执行 apply，不启用 PG write。
+5. 本批不改变 leads/tasks shadow gray preset 的状态；leads/tasks shadow 仍未 production 执行。
+
+切库 readiness 结论不变：
+
+1. 当前仍不能切换默认 `DATABASE_URL`。
+2. 当前仍不能默认开启 PG pilot。
+3. 当前仍不能启用 PG write。
+4. 单表和局部表组 schema 验证不等于全系统切库完成。
+5. production QPS600 仍需要真实 HTTP benchmark、连接池观测、慢查询和回滚演练证明。
+
+后续建议：
+
+1. `P3-E2`：agents/accounts 数据迁移 dry-run + dev apply smoke。
+2. `P3-E3`：agents/accounts API contrast。
+3. `P3-D14`：leads/tasks 宝塔 staging read-only shadow 人工审批与执行记录。
