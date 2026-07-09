@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 READ_ONLY_SQL_TEMPLATES = (
     "SELECT id FROM sales_staff WHERE merchant_id = :merchant_id ORDER BY id ASC",
     "SELECT id FROM wechat_tasks ORDER BY id DESC LIMIT :limit",
+    "SELECT id FROM douyin_leads WHERE merchant_id = :merchant_id ORDER BY id DESC LIMIT :limit",
+    "SELECT id FROM douyin_leads WHERE merchant_id = :merchant_id AND id = :lead_id LIMIT 1",
 )
 
 _shadow_engine = None
@@ -45,6 +47,7 @@ class ShadowReadResult:
     enabled: bool
     table: str
     operation: str
+    merchant_id_present: bool = False
     sqlite_count: int = 0
     pg_count: int = 0
     count_match: bool = True
@@ -52,6 +55,9 @@ class ShadowReadResult:
     mismatch_count: int = 0
     warnings: list[str] = field(default_factory=list)
     duration_ms: int = 0
+    strict: bool = False
+    status: str = "disabled"
+    request_scope: str | None = None
 
 
 def mask_database_url(database_url: str) -> str:
@@ -149,6 +155,76 @@ def run_wechat_tasks_history_shadow_read(
     )
 
 
+def run_douyin_leads_list_shadow_read(
+    *,
+    sqlite_rows: Sequence[Mapping[str, object] | object],
+    merchant_id: str | None,
+    status: str | None = None,
+    keyword: str | None = None,
+    source: str | None = None,
+    assigned_staff_id: int | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    settings: LeadsTasksPgShadowSettings | None = None,
+) -> ShadowReadResult:
+    settings = settings or LeadsTasksPgShadowSettings()
+    if not merchant_id:
+        return ShadowReadResult(
+            enabled=False,
+            table="douyin_leads",
+            operation="list",
+            sqlite_count=len(sqlite_rows),
+            warnings=["merchant_id 缺失，跳过 douyin_leads.list shadow read"],
+        )
+    return _run_shadow_read_sync(
+        table="douyin_leads",
+        operation="list",
+        sqlite_rows=_normalize_rows(sqlite_rows),
+        key_columns=("id",),
+        filters={
+            "operation": "list",
+            "merchant_id": merchant_id,
+            "status": status,
+            "keyword": keyword,
+            "source": source,
+            "assigned_staff_id": assigned_staff_id,
+            "page": page,
+            "page_size": page_size,
+        },
+        settings=settings,
+    )
+
+
+def run_douyin_leads_detail_shadow_read(
+    *,
+    sqlite_row: Mapping[str, object] | object,
+    merchant_id: str | None,
+    lead_id: int,
+    settings: LeadsTasksPgShadowSettings | None = None,
+) -> ShadowReadResult:
+    settings = settings or LeadsTasksPgShadowSettings()
+    if not merchant_id:
+        return ShadowReadResult(
+            enabled=False,
+            table="douyin_leads",
+            operation="detail",
+            sqlite_count=1 if sqlite_row else 0,
+            warnings=["merchant_id 缺失，跳过 douyin_leads.detail shadow read"],
+        )
+    return _run_shadow_read_sync(
+        table="douyin_leads",
+        operation="detail",
+        sqlite_rows=_normalize_rows([sqlite_row] if sqlite_row else []),
+        key_columns=("id",),
+        filters={
+            "operation": "detail",
+            "merchant_id": merchant_id,
+            "lead_id": lead_id,
+        },
+        settings=settings,
+    )
+
+
 def _run_shadow_read_sync(
     *,
     table: str,
@@ -159,7 +235,14 @@ def _run_shadow_read_sync(
     settings: LeadsTasksPgShadowSettings,
 ) -> ShadowReadResult:
     if not should_shadow_read(settings):
-        return ShadowReadResult(enabled=False, table=table, operation=operation, sqlite_count=len(sqlite_rows))
+        return ShadowReadResult(
+            enabled=False,
+            table=table,
+            operation=operation,
+            merchant_id_present=bool(filters.get("merchant_id")),
+            sqlite_count=len(sqlite_rows),
+            strict=settings.strict_contrast,
+        )
 
     started = time.perf_counter()
     try:
@@ -181,29 +264,36 @@ def _run_shadow_read_sync(
             enabled=True,
             table=table,
             operation=operation,
+            merchant_id_present=bool(filters.get("merchant_id")),
             sqlite_count=len(sqlite_rows),
             warnings=[f"{table}.{operation} shadow read 超时"],
+            strict=settings.strict_contrast,
+            status="timeout",
         )
     except Exception as exc:
         result = ShadowReadResult(
             enabled=True,
             table=table,
             operation=operation,
+            merchant_id_present=bool(filters.get("merchant_id")),
             sqlite_count=len(sqlite_rows),
             warnings=[f"{table}.{operation} shadow read 异常: {type(exc).__name__}: {exc}"],
+            strict=settings.strict_contrast,
+            status="error",
         )
     duration_ms = int((time.perf_counter() - started) * 1000)
     logger.warning(
-        "leads_tasks_pg_shadow table=%s operation=%s sqlite_count=%s pg_count=%s count_match=%s key_match=%s mismatch_count=%s duration_ms=%s warnings=%s",
+        "leads_tasks_pg_shadow table=%s operation=%s status=%s sqlite_count=%s pg_count=%s count_match=%s key_match=%s mismatch_count=%s duration_ms=%s warnings_count=%s pii_redacted=True",
         result.table,
         result.operation,
+        result.status,
         result.sqlite_count,
         result.pg_count,
         result.count_match,
         result.key_match,
         result.mismatch_count,
         duration_ms,
-        result.warnings,
+        len(result.warnings),
     )
     return ShadowReadResult(**{**result.__dict__, "duration_ms": duration_ms})
 
@@ -228,12 +318,15 @@ async def _run_shadow_read_async(
         enabled=True,
         table=table,
         operation=operation,
+        merchant_id_present=bool(filters.get("merchant_id")),
         sqlite_count=compare.sqlite_count,
         pg_count=compare.pg_count,
         count_match=compare.count_match,
         key_match=compare.key_match,
         mismatch_count=compare.mismatch_count,
         warnings=compare.warnings,
+        strict=settings.strict_contrast,
+        status=_shadow_status(compare.mismatch_count, compare.warnings, settings.strict_contrast),
     )
 
 
@@ -331,6 +424,53 @@ def _build_select(table: str, filters: Mapping[str, object]):
         """
         return text(sql), params
 
+    if table == "douyin_leads":
+        operation = filters.get("operation")
+        clauses = ["merchant_id = :merchant_id"]
+        params = {"merchant_id": filters["merchant_id"]}
+        if operation == "detail":
+            params["lead_id"] = filters["lead_id"]
+            return (
+                text(
+                    """
+                    SELECT id, account_open_id, conversation_short_id, status, assigned_staff_id, updated_at
+                    FROM douyin_leads
+                    WHERE merchant_id = :merchant_id AND id = :lead_id
+                    LIMIT 1
+                    """
+                ),
+                params,
+            )
+        status = (filters.get("status") or "").strip() if isinstance(filters.get("status"), str) else ""
+        if status:
+            clauses.append("status = :status")
+            params["status"] = status
+        source = (filters.get("source") or "").strip() if isinstance(filters.get("source"), str) else ""
+        if source:
+            clauses.append("source = :source")
+            params["source"] = source
+        if filters.get("assigned_staff_id") is not None:
+            clauses.append("assigned_staff_id = :assigned_staff_id")
+            params["assigned_staff_id"] = filters["assigned_staff_id"]
+        keyword = (filters.get("keyword") or "").strip() if isinstance(filters.get("keyword"), str) else ""
+        if keyword:
+            params["keyword"] = f"%{keyword}%"
+            clauses.append(
+                "(customer_name LIKE :keyword OR customer_contact LIKE :keyword OR content LIKE :keyword "
+                "OR source_id LIKE :keyword OR raw_data LIKE :keyword)"
+            )
+        page_size = min(max(int(filters.get("page_size") or 50), 1), 200)
+        params["limit"] = page_size
+        params["offset"] = (max(int(filters.get("page") or 1), 1) - 1) * page_size
+        sql = f"""
+            SELECT id, account_open_id, conversation_short_id
+            FROM douyin_leads
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id DESC
+            LIMIT :limit OFFSET :offset
+        """
+        return text(sql), params
+
     raise ValueError(f"不支持的 shadow read 表: {table}")
 
 
@@ -343,3 +483,9 @@ def _normalize_rows(rows: Sequence[Mapping[str, object] | object]) -> list[dict[
         data = getattr(row, "__dict__", {})
         normalized.append({key: value for key, value in data.items() if not key.startswith("_")})
     return normalized
+
+
+def _shadow_status(mismatch_count: int, warnings: Sequence[str], strict: bool) -> str:
+    if mismatch_count or warnings:
+        return "failed" if strict else "warn"
+    return "pass"

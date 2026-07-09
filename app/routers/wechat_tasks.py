@@ -20,6 +20,7 @@ from app.schemas import (
     WechatTaskResponse,
 )
 from app.services import leads_tasks_pg_shadow, wechat_task_service
+from app.services.leads_tasks_shadow_observability import record_shadow_result
 
 router = APIRouter(prefix="/wechat-tasks", tags=["微信任务队列"])
 
@@ -85,18 +86,20 @@ def list_wechat_tasks(
         date_to=date_to,
     )
     if leads_tasks_pg_shadow.is_shadow_configured():
-        leads_tasks_pg_shadow.run_wechat_tasks_history_shadow_read(
-            sqlite_rows=result["items"],
-            merchant_id=merchant_id,
-            page=page,
-            page_size=page_size,
-            status=status,
-            task_type=task_type,
-            mode=mode,
-            keyword=keyword,
-            failure_stage=failure_stage,
-            date_from=date_from,
-            date_to=date_to,
+        record_shadow_result(
+            leads_tasks_pg_shadow.run_wechat_tasks_history_shadow_read(
+                sqlite_rows=result["items"],
+                merchant_id=merchant_id,
+                page=page,
+                page_size=page_size,
+                status=status,
+                task_type=task_type,
+                mode=mode,
+                keyword=keyword,
+                failure_stage=failure_stage,
+                date_from=date_from,
+                date_to=date_to,
+            )
         )
     return result
 

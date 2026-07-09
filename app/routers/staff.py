@@ -8,6 +8,7 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.schemas import StaffCreate, StaffOut, StaffUpdate
 from app.services import leads_tasks_pg_shadow, staff_service
+from app.services.leads_tasks_shadow_observability import record_shadow_result
 
 router = APIRouter(prefix="/staff", tags=["销售人员"])
 
@@ -61,12 +62,14 @@ def list_staff(
         include_deleted=include_deleted,
     )
     if leads_tasks_pg_shadow.is_shadow_configured():
-        leads_tasks_pg_shadow.run_sales_staff_list_shadow_read(
-            sqlite_rows=result,
-            merchant_id=merchant_id,
-            status=status,
-            keyword=keyword,
-            include_deleted=include_deleted,
+        record_shadow_result(
+            leads_tasks_pg_shadow.run_sales_staff_list_shadow_read(
+                sqlite_rows=result,
+                merchant_id=merchant_id,
+                status=status,
+                keyword=keyword,
+                include_deleted=include_deleted,
+            )
         )
     return result
 

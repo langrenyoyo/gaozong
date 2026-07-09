@@ -7,8 +7,9 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import get_db
 from app.schemas import LeadAssign, LeadCreate, LeadListResponse, LeadOut, LeadWechatNotifyStatus
-from app.services import assign_service, lead_management_service, lead_service
+from app.services import assign_service, lead_management_service, lead_service, leads_tasks_pg_shadow
 from app.services.lead_management_service import LeadListQuery
+from app.services.leads_tasks_shadow_observability import record_shadow_result
 from app.services.lead_wechat_notify_eligibility_service import (
     LeadWechatNotifyDecision,
     LeadWechatNotifyReason,
@@ -67,6 +68,19 @@ def list_leads(
         query,
     )
     items = [lead_management_service.build_lead_payload(db, lead) for lead in leads]
+    if leads_tasks_pg_shadow.is_shadow_configured():
+        record_shadow_result(
+            leads_tasks_pg_shadow.run_douyin_leads_list_shadow_read(
+                sqlite_rows=items,
+                merchant_id=query.merchant_id,
+                status=status,
+                keyword=keyword,
+                source=source,
+                assigned_staff_id=query.assigned_staff_id,
+                page=page,
+                page_size=page_size,
+            )
+        )
     if response_format == "page":
         normalized_page = max(page, 1)
         normalized_page_size = min(max(page_size, 1), 200)
@@ -107,7 +121,16 @@ def get_lead(
     _auth(context)
     lead = lead_service.get_lead(db, lead_id)
     lead_management_service.require_lead_ownership(lead, context)
-    return lead_management_service.build_lead_payload(db, lead, include_detail=True)
+    payload = lead_management_service.build_lead_payload(db, lead, include_detail=True)
+    if leads_tasks_pg_shadow.is_shadow_configured():
+        record_shadow_result(
+            leads_tasks_pg_shadow.run_douyin_leads_detail_shadow_read(
+                sqlite_row=payload,
+                merchant_id=lead.merchant_id,
+                lead_id=lead_id,
+            )
+        )
+    return payload
 
 
 @router.post("/{lead_id}/assign", response_model=LeadOut)

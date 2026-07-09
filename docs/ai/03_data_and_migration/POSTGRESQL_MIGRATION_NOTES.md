@@ -1539,3 +1539,75 @@ tests/test_leads_tasks_pg_shadow_runtime.py
 4. `POST /wechat-tasks/{task_id}/result` result write。
 5. webhook write。
 6. production apply 或真实生产数据迁移。
+
+## 39. P3-D5 douyin_leads runtime shadow read 与 observability
+
+任务：`P3-D5-DB-9000-LEADS-RUNTIME-SHADOW-READ-AND-OBSERVABILITY-1`
+
+P3-D5 在 P3-D4 默认关闭的 leads/tasks PG shadow read 脚手架基础上，扩展到 `douyin_leads` 运行态只读 shadow：
+
+```text
+GET /leads             -> douyin_leads list shadow read
+GET /leads/{lead_id}   -> douyin_leads detail shadow read
+```
+
+新增 / 扩展文件：
+
+```text
+app/services/leads_tasks_shadow_observability.py
+app/services/leads_tasks_pg_shadow.py
+app/routers/leads.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+leads list/detail 审计摘要：
+
+1. `GET /leads` 位于 `app/routers/leads.py`，通过 `Depends(get_db)` 使用同步 SQLAlchemy session。
+2. 列表查询由 `LeadListQuery` 和 `lead_management_service.list_leads()` 承载，支持 `merchant_id`、`status`、`keyword`、`source`、`assigned_staff_id`、`page/page_size`。
+3. 非 `super_admin` 的 `merchant_id` 来自可信 `RequestContext`，不接受前端传入；`super_admin` 跨商户场景本轮跳过 PG shadow，避免无隔离查询。
+4. `GET /leads/{lead_id}` 先读 SQLite，再通过 `require_lead_ownership()` 校验归属，最后构造 detail payload。
+5. detail shadow 使用 SQLite 命中的 `lead.merchant_id + lead_id` 查询 PG；SQLite 不存在或无权访问时仍按原接口返回 404，不盲查 PG。
+
+shadow read 扩展摘要：
+
+1. 新增 operation：`douyin_leads.list`、`douyin_leads.detail`。
+2. PG 查询只生成 `SELECT`，不包含 insert/update/delete/truncate/drop/create/alter。
+3. list 查询按现有 SQLite 列表条件做近似对齐：`merchant_id`、`status`、`source`、`assigned_staff_id`、`keyword`、分页。
+4. detail 查询要求 `merchant_id + lead_id`。
+5. 对照仍为轻量 count/key：主键 `id` 为第一批运行态 key；`account_open_id + conversation_short_id` 作为查询结果字段保留给后续增强。
+6. shadow 异常、timeout、mismatch 均不影响主响应，SQLite 仍是唯一响应源。
+
+observability 摘要：
+
+1. 新增 `record_shadow_result(result)` 输出结构化日志摘要。
+2. 日志字段包含 `component=leads_tasks_pg_shadow`、table、operation、status、count_match、key_match、mismatch_count、duration_ms、warnings_count、strict、request_scope、merchant_id_present、`pii_redacted=True`。
+3. 新增内存指标 snapshot：`total_shadow_reads`、`total_shadow_pass`、`total_shadow_warn`、`total_shadow_failed`、`total_shadow_timeout`、`total_shadow_error`、`total_mismatch_count`、`by_operation`。
+4. 本轮不新增数据库表、不写文件、不暴露公网 metrics endpoint。
+5. 日志不记录完整手机号、微信号、客户名、nickname 或 PostgreSQL URL 密码。
+
+当前已接入范围：
+
+1. `sales_staff` list。
+2. `wechat_tasks` history。
+3. `douyin_leads` list。
+4. `douyin_leads` detail。
+
+当前未接入范围：
+
+1. `douyin_webhook_events` runtime hook。
+2. webhook write。
+3. pending task。
+4. task result write。
+5. `notify_sales` / `detect_reply` write。
+6. 任何 PostgreSQL write。
+
+边界确认：
+
+1. 默认仍关闭 PG shadow。
+2. SQLite 仍是唯一接口响应源。
+3. 本轮未切换 `DATABASE_URL`。
+4. 本轮未启用 PG write。
+5. 本轮未连接宝塔生产，未读取生产 SQLite，未执行 production apply。
+6. 本轮未触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+
+后续建议：P3-D6 可接入 `douyin_webhook_events` read-only shadow + 受限 metrics debug endpoint；或进入 P3-E1 智能体 / 抖音账号绑定 schema batch。

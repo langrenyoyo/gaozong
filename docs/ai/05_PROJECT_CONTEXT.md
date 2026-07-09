@@ -4271,3 +4271,44 @@ LEADS_TASKS_PG_SHADOW_TIMEOUT_MS=800
 7. 未切换 `DATABASE_URL`，未改业务接口默认数据库，未默认开启 PG pilot。
 
 下一步建议：P3-D5 可扩展到 `douyin_leads` list/detail shadow read，或进入智能体 / 账号绑定 PostgreSQL schema batch；不得直接进入默认数据库切换。
+
+# P3-D5 douyin_leads runtime shadow read 与 observability 当前状态
+
+任务：`P3-D5-DB-9000-LEADS-RUNTIME-SHADOW-READ-AND-OBSERVABILITY-1`
+
+当前已在 P3-D4 默认关闭脚手架基础上，扩展 `douyin_leads` 运行态 read-only shadow，并补充 shadow 观测：
+
+```text
+app/services/leads_tasks_shadow_observability.py
+app/services/leads_tasks_pg_shadow.py
+app/routers/leads.py
+tests/test_leads_tasks_pg_shadow_runtime.py
+```
+
+当前已接入 shadow 的范围：
+
+1. `GET /staff`：`sales_staff` list。
+2. `GET /wechat-tasks`：`wechat_tasks` history。
+3. `GET /leads`：`douyin_leads` list。
+4. `GET /leads/{lead_id}`：`douyin_leads` detail。
+
+当前未接入范围：
+
+1. `douyin_webhook_events` runtime hook。
+2. webhook write。
+3. `GET /wechat-tasks/pending` pending task。
+4. `POST /wechat-tasks/{task_id}/result` task result write。
+5. `notify_sales` / `detect_reply` write。
+6. 任何 PostgreSQL write。
+
+运行边界：
+
+1. 默认配置下仍不初始化 PG engine，不连接 PostgreSQL。
+2. SQLite 仍是唯一用户响应源，接口返回结构不变。
+3. PG shadow 只有在 `LEADS_TASKS_PG_PILOT_ENABLED=true`、`LEADS_TASKS_PG_READ_SHADOW_ENABLED=true` 且 `LEADS_TASKS_PG_DATABASE_URL` 为 `postgresql+asyncpg://` 时才允许只读查询。
+4. `douyin_leads` shadow 必须携带 `merchant_id`；缺失时跳过，不做无隔离查询。
+5. mismatch、异常、timeout 只记录结构化日志和内存指标，不影响用户响应。
+6. 结构化日志只记录摘要与 `pii_redacted=True`，不记录完整手机号、微信号、客户名或数据库密码。
+7. 未切换 `DATABASE_URL`，未改业务接口默认数据库，未默认开启 PG pilot。
+
+下一步建议：P3-D6 可接入 `douyin_webhook_events` read-only shadow 和受限 metrics debug endpoint；也可进入 P3-E1 智能体 / 抖音账号绑定 schema batch。仍不得直接进入默认数据库切换。

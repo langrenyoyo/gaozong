@@ -466,3 +466,32 @@ readiness 影响：
 3. `DATABASE_URL` 仍不能切换到 PostgreSQL。
 4. `LEADS_TASKS_PG_PILOT_ENABLED` 和 `LEADS_TASKS_PG_READ_SHADOW_ENABLED` 不得默认开启。
 5. QPS600 仍需要后续 async repository、连接池容量核算、真实索引 explain 和压测证明。
+
+## 14. P3-D5 douyin_leads shadow read 与观测当前状态
+
+任务：`P3-D5-DB-9000-LEADS-RUNTIME-SHADOW-READ-AND-OBSERVABILITY-1`
+
+P3-D5 已把 read-only shadow 从 `sales_staff` 和 `wechat_tasks` 扩展到线索核心读路径：
+
+1. `GET /leads`：`douyin_leads` list shadow read。
+2. `GET /leads/{lead_id}`：`douyin_leads` detail shadow read。
+3. 新增 `app/services/leads_tasks_shadow_observability.py`，提供结构化日志和轻量内存指标。
+
+readiness 影响：
+
+1. 当前已覆盖 `sales_staff list`、`wechat_tasks history`、`douyin_leads list`、`douyin_leads detail` 四个只读 shadow 点。
+2. SQLite 仍是唯一响应源，PG shadow 不改变接口返回结构。
+3. PG shadow 默认关闭；仍不得默认开启 `LEADS_TASKS_PG_PILOT_ENABLED` 或 `LEADS_TASKS_PG_READ_SHADOW_ENABLED`。
+4. `douyin_leads` shadow 查询必须带 `merchant_id`，缺失时跳过，避免跨商户无隔离查询。
+5. mismatch 现在可进入结构化日志和内存指标，但这不是 QPS600 观测的最终形态；后续仍需要进程级指标、慢查询、连接池、压测与告警体系。
+
+仍未完成：
+
+1. `douyin_webhook_events` runtime shadow hook。
+2. webhook write / task result write。
+3. pending polling 锁策略。
+4. async repository / `AsyncSession` 全链路替换。
+5. 宝塔真实数据 contrast。
+6. QPS600 压测证明。
+
+边界确认：P3-D5 不迁移生产数据，不执行 production apply，不切换默认数据库，不默认开启 PG pilot，不启用任何 PostgreSQL write。
