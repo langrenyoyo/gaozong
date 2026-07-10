@@ -24,6 +24,14 @@ class SalesStaff(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    # 小高 AI 一期：销售规则布尔字段（5 项）
+    # enable_lead_assignment 默认 true，避免后续接入时破坏现有分配行为；其余 4 个报表字段默认 false
+    enable_lead_assignment = Column(Boolean, nullable=False, default=True, comment="是否参与线索分配，默认 true")
+    enable_short_video_live_lead_report = Column(Boolean, nullable=False, default=False, comment="是否接收短视频/直播留资管理表")
+    enable_daily_sales_feedback_report = Column(Boolean, nullable=False, default=False, comment="是否接收每日线索销售反馈表")
+    enable_lead_trace_report = Column(Boolean, nullable=False, default=False, comment="是否接收线索溯源表")
+    enable_sales_unit_cost_report = Column(Boolean, nullable=False, default=False, comment="是否接收销售单车成本表")
+
     # 关联
     leads = relationship("DouyinLead", back_populates="assigned_staff")
 
@@ -404,6 +412,10 @@ class AiReplyDecisionLog(Base):
     decision_version = Column(String(64), comment="决策版本")
     raw_response_json = Column(Text, comment="9100 原始响应 JSON 副本")
     error_message = Column(Text, comment="日志记录错误信息，预留")
+    # 小高 AI 一期：有效性与模型字段（超管人工标记 + 实际模型留痕）
+    is_effective = Column(Boolean, nullable=True, comment="超管人工标记：null 未标记 / true 有效 / false 无效")
+    effectiveness_reason = Column(Text, comment="人工标记有效/无效原因")
+    model = Column(String(128), comment="实际模型，对齐 ComputeTransaction.model")
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -822,3 +834,337 @@ class ComputePackage(Base):
     enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+# ---------------------------------------------------------------------------
+# 小高 AI 一期 Phase 1 数据迁移骨架新增模型
+# 仅结构骨架，不接 router / service / scheduler；商户业务表必须有 merchant_id，
+# 全局配置表必须有固定 key 或 scope。
+# ---------------------------------------------------------------------------
+
+
+class ForbiddenWordLibrary(Base):
+    """违禁词库：全局配置，按 library_key 唯一，一期固定 3 类词库 seed。"""
+
+    __tablename__ = "forbidden_word_libraries"
+    __table_args__ = (
+        UniqueConstraint("library_key", name="uk_forbidden_word_libraries_library_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    library_key = Column(String(64), nullable=False, comment="词库固定 key")
+    name = Column(String(100), nullable=False, comment="词库名称")
+    description = Column(Text, comment="词库说明")
+    scope = Column(String(32), nullable=False, default="global", comment="作用域")
+    enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    sort_order = Column(Integer, nullable=False, default=0, comment="排序")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ForbiddenWord(Base):
+    """违禁词条目：归属某个词库，word -> safe_word 一一映射，只替换不拦截。"""
+
+    __tablename__ = "forbidden_words"
+    __table_args__ = (
+        UniqueConstraint("library_id", "word", name="uk_forbidden_words_library_word"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    library_id = Column(Integer, nullable=False, comment="所属违禁词库 ID")
+    word = Column(String(100), nullable=False, comment="违禁词")
+    safe_word = Column(String(100), comment="替换安全词")
+    severity = Column(String(32), comment="严重程度")
+    enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    hit_count = Column(Integer, nullable=False, default=0, comment="命中次数")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ForbiddenWordHitLog(Base):
+    """违禁词命中日志：只保存摘要，不保存完整 raw LLM response 或完整客户消息。"""
+
+    __tablename__ = "forbidden_word_hit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    library_key = Column(String(64), comment="命中的词库 key")
+    word = Column(String(100), comment="命中的违禁词")
+    safe_word = Column(String(100), comment="替换后的安全词")
+    source = Column(String(32), comment="命中来源（如 douyin_cs / wechat）")
+    context_type = Column(String(32), comment="上下文类型")
+    context_id = Column(String(64), comment="上下文 ID")
+    before_text_summary = Column(Text, comment="替换前文本摘要")
+    after_text_summary = Column(Text, comment="替换后文本摘要")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class ReturnVisitPrompt(Base):
+    """回访提示词：全局配置，按 prompt_key 唯一，一期固定 3 类提示词 seed。"""
+
+    __tablename__ = "return_visit_prompts"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", name="uk_return_visit_prompts_prompt_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    prompt_key = Column(String(64), nullable=False, comment="提示词固定 key")
+    name = Column(String(100), nullable=False, comment="提示词名称")
+    scene_type = Column(String(32), comment="场景类型")
+    template_text = Column(Text, comment="提示词模板文本")
+    scope = Column(String(32), nullable=False, default="global", comment="作用域")
+    enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    sort_order = Column(Integer, nullable=False, default=0, comment="排序")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ReturnVisitRun(Base):
+    """回访运行记录：一次回访话术生成与发送的完整链路留痕。"""
+
+    __tablename__ = "return_visit_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    lead_id = Column(Integer, comment="关联线索 ID")
+    staff_id = Column(Integer, comment="关联销售 ID")
+    reply_check_id = Column(Integer, comment="关联回复检测 ID")
+    prompt_key = Column(String(64), comment="使用的回访提示词 key")
+    trigger_source = Column(String(32), comment="触发来源")
+    trigger_text = Column(Text, comment="触发文本")
+    judgement_source = Column(String(32), comment="判断来源")
+    judgement_result = Column(String(32), comment="判断结果")
+    generated_content = Column(Text, comment="生成的话术内容")
+    final_content = Column(Text, comment="最终发送内容")
+    send_status = Column(String(32), comment="发送状态")
+    send_id = Column(String(64), comment="发送 ID")
+    error_message = Column(Text, comment="错误信息")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SalesLeadFeedback(Base):
+    """【线索反馈】表：销售填写的单条线索反馈，由日报解析服务写入。"""
+
+    __tablename__ = "sales_lead_feedbacks"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "feedback_no", name="uk_sales_lead_feedbacks_merchant_feedback_no"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    feedback_no = Column(String(64), nullable=False, comment="反馈编号（同一次提交内唯一）")
+    lead_id = Column(Integer, comment="关联线索 ID")
+    staff_id = Column(Integer, comment="关联销售 ID")
+    raw_text = Column(Text, comment="原始反馈文本")
+    wechat_status = Column(String(32), comment="微信状态")
+    opening_status = Column(String(32), comment="开口状态")
+    payment_method = Column(String(32), comment="金融方案")
+    car_model = Column(String(100), comment="关注车型")
+    match_status = Column(String(32), comment="车源匹配状态")
+    budget_text = Column(String(100), comment="预算描述")
+    precision_status = Column(String(32), comment="意向精准度")
+    imprecision_reason = Column(Text, comment="意向不精准原因")
+    intention_level = Column(String(32), comment="意向等级")
+    no_intention_reason = Column(Text, comment="无意向原因")
+    region_text = Column(String(100), comment="区域描述")
+    remark = Column(Text, comment="备注")
+    parse_status = Column(String(32), comment="解析状态")
+    parse_error = Column(Text, comment="解析错误")
+    feedback_date = Column(DateTime, comment="反馈日期")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SalesLeadUpdate(Base):
+    """【线索更新】表：到店/成交状态更新，由日报解析服务写入。"""
+
+    __tablename__ = "sales_lead_updates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    feedback_no = Column(String(64), comment="关联反馈编号")
+    lead_id = Column(Integer, comment="关联线索 ID")
+    staff_id = Column(Integer, comment="关联销售 ID")
+    raw_text = Column(Text, comment="原始文本")
+    visit_status = Column(String(32), comment="到店状态")
+    visit_time_text = Column(String(64), comment="到店时间描述")
+    deal_status = Column(String(32), comment="成交状态")
+    deal_time_text = Column(String(64), comment="成交时间描述")
+    remark = Column(Text, comment="备注")
+    parse_status = Column(String(32), comment="解析状态")
+    parse_error = Column(Text, comment="解析错误")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SalesDailySummary(Base):
+    """【每日线索总结】表：每个销售每天一条，支持只汇总有反馈的销售。"""
+
+    __tablename__ = "sales_daily_summaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id", "staff_id", "summary_date",
+            name="uk_sales_daily_summaries_merchant_staff_date",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    staff_id = Column(Integer, nullable=False, comment="关联销售 ID")
+    summary_date = Column(DateTime, nullable=False, comment="汇总日期")
+    sales_name = Column(String(50), comment="销售姓名")
+    raw_text = Column(Text, comment="原始总结文本")
+    overall_quality = Column(String(32), comment="整体质量评级")
+    main_problem = Column(Text, comment="主要问题")
+    car_model_summary = Column(Text, comment="车型汇总")
+    budget_summary = Column(Text, comment="预算汇总")
+    cooperation_level = Column(String(32), comment="配合程度")
+    today_suggestion = Column(Text, comment="今日建议")
+    extra_feedback = Column(Text, comment="额外反馈")
+    parse_status = Column(String(32), comment="解析状态")
+    parse_error = Column(Text, comment="解析错误")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DailyReportJob(Base):
+    """日报任务：不返回绝对路径，file_storage_key 为内部存储键。"""
+
+    __tablename__ = "daily_report_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    report_date = Column(DateTime, comment="报表日期")
+    report_type = Column(String(32), comment="报表类型")
+    receiver_staff_id = Column(Integer, comment="接收销售 ID")
+    status = Column(String(32), comment="任务状态")
+    file_storage_key = Column(String(255), comment="内部存储键，不返回绝对路径")
+    file_name = Column(String(255), comment="文件名")
+    error_message = Column(Text, comment="错误信息")
+    generated_at = Column(DateTime, comment="生成时间")
+    sent_at = Column(DateTime, comment="发送时间")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ComputeMarkupRatio(Base):
+    """算力上浮比例：按能力模块粒度计费，markup_basis_points 用基点（3300 表示 33%）。"""
+
+    __tablename__ = "compute_markup_ratios"
+    __table_args__ = (
+        UniqueConstraint("capability_key", name="uk_compute_markup_ratios_capability_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    capability_key = Column(String(64), nullable=False, comment="能力 key")
+    markup_basis_points = Column(Integer, nullable=False, default=0, comment="上浮基点，3300 表示 33%")
+    enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AdReviewOAuthAccount(Base):
+    """一键过审授权账号：独立于 douyin_authorized_accounts，不建立强外键耦合。"""
+
+    __tablename__ = "ad_review_oauth_accounts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    advertiser_id = Column(String(128), nullable=False, comment="巨量广告主 ID")
+    account_name = Column(String(128), comment="账号名称")
+    auth_status = Column(String(32), comment="授权状态")
+    access_token_cipher = Column(Text, comment="access_token 密文")
+    refresh_token_cipher = Column(Text, comment="refresh_token 密文")
+    token_expires_at = Column(DateTime, comment="token 过期时间")
+    raw_body_json = Column(Text, comment="授权原始响应 JSON")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    deleted_at = Column(DateTime, comment="软删除时间")
+
+
+class AdReviewSuggestion(Base):
+    """一键过审建议：单条广告/素材的过审建议，按 suggestion_key 幂等。"""
+
+    __tablename__ = "ad_review_suggestions"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "suggestion_key", name="uk_ad_review_suggestions_merchant_suggestion_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    oauth_account_id = Column(Integer, comment="关联一键过审授权账号 ID（弱引用，不强外键）")
+    suggestion_key = Column(String(128), nullable=False, comment="建议幂等 key")
+    advertiser_id = Column(String(128), comment="巨量广告主 ID")
+    ad_id = Column(String(128), comment="广告 ID")
+    material_id = Column(String(128), comment="素材 ID")
+    rejection_reason = Column(Text, comment="拒审原因")
+    suggestion_text = Column(Text, comment="过审建议文本")
+    adopt_status = Column(String(32), comment="采纳状态")
+    raw_body_json = Column(Text, comment="原始响应 JSON")
+    pulled_at = Column(DateTime, comment="拉取时间")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AdReviewAdoptTask(Base):
+    """一键过审采纳任务：批量采纳过审建议的任务壳，按 task_key 幂等。"""
+
+    __tablename__ = "ad_review_adopt_tasks"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "task_key", name="uk_ad_review_adopt_tasks_merchant_task_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    oauth_account_id = Column(Integer, comment="关联一键过审授权账号 ID（弱引用，不强外键）")
+    task_key = Column(String(128), nullable=False, comment="任务幂等 key")
+    suggestion_ids_json = Column(Text, comment="采纳的建议 ID 列表 JSON")
+    status = Column(String(32), comment="任务状态")
+    request_body_json = Column(Text, comment="请求体 JSON")
+    response_body_json = Column(Text, comment="响应体 JSON")
+    error_message = Column(Text, comment="错误信息")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    completed_at = Column(DateTime, comment="完成时间")
+
+
+class AiEditJob(Base):
+    """AI 剪辑任务壳：只做迁入后的任务结构，不接外部 auto_edit。"""
+
+    __tablename__ = "ai_edit_jobs"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uk_ai_edit_jobs_job_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    job_id = Column(String(64), nullable=False, comment="任务幂等 ID")
+    status = Column(String(32), comment="任务状态")
+    source_type = Column(String(32), comment="来源类型")
+    input_json = Column(Text, comment="输入 JSON")
+    result_json = Column(Text, comment="结果 JSON")
+    error_message = Column(Text, comment="错误信息")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    completed_at = Column(DateTime, comment="完成时间")
+
+
+class AiEditJobArtifact(Base):
+    """AI 剪辑产物：只存内部 storage_key，禁止保存或返回外部仓库绝对路径。"""
+
+    __tablename__ = "ai_edit_job_artifacts"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", name="uk_ai_edit_job_artifacts_artifact_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    job_id = Column(String(64), nullable=False, comment="关联剪辑任务 ID")
+    artifact_id = Column(String(64), nullable=False, comment="产物幂等 ID")
+    artifact_type = Column(String(32), comment="产物类型")
+    storage_key = Column(String(255), comment="内部存储键，不存绝对路径")
+    file_name = Column(String(255), comment="文件名")
+    mime_type = Column(String(64), comment="MIME 类型")
+    file_size_bytes = Column(Integer, comment="文件大小（字节）")
+    created_at = Column(DateTime, default=datetime.now)

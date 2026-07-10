@@ -1475,3 +1475,232 @@ class AiAutoReplyRunDetailResponse(BaseModel):
     success: bool = True
     data: AiAutoReplyRunDetail
     message: str = "success"
+
+
+# ---------------------------------------------------------------------------
+# 小高 AI 一期 Phase 1 数据迁移骨架 Pydantic 结构
+# 只定义结构，不接 router；使用项目现有 Pydantic 版本兼容写法。
+# ---------------------------------------------------------------------------
+
+
+class ForbiddenWordLibraryOut(BaseModel):
+    """违禁词库输出结构。"""
+
+    id: int
+    library_key: str
+    name: str
+    description: Optional[str] = None
+    scope: str = "global"
+    enabled: bool = True
+    sort_order: int = 0
+
+
+class ForbiddenWordOut(BaseModel):
+    """违禁词条目输出结构。"""
+
+    id: int
+    library_id: int
+    word: str
+    safe_word: Optional[str] = None
+    severity: Optional[str] = None
+    enabled: bool = True
+    hit_count: int = 0
+
+
+class ForbiddenWordHitLogOut(BaseModel):
+    """违禁词命中日志输出结构（只暴露摘要）。"""
+
+    id: int
+    merchant_id: str
+    library_key: Optional[str] = None
+    word: Optional[str] = None
+    safe_word: Optional[str] = None
+    source: Optional[str] = None
+    context_type: Optional[str] = None
+    context_id: Optional[str] = None
+    before_text_summary: Optional[str] = None
+    after_text_summary: Optional[str] = None
+
+
+class ReturnVisitPromptOut(BaseModel):
+    """回访提示词输出结构。"""
+
+    id: int
+    prompt_key: str
+    name: str
+    scene_type: Optional[str] = None
+    template_text: Optional[str] = None
+    scope: str = "global"
+    enabled: bool = True
+    sort_order: int = 0
+
+
+class ReturnVisitRunOut(BaseModel):
+    """回访运行记录输出结构。"""
+
+    id: int
+    merchant_id: str
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    reply_check_id: Optional[int] = None
+    prompt_key: Optional[str] = None
+    trigger_source: Optional[str] = None
+    judgement_source: Optional[str] = None
+    judgement_result: Optional[str] = None
+    generated_content: Optional[str] = None
+    final_content: Optional[str] = None
+    send_status: Optional[str] = None
+    send_id: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class SalesLeadFeedbackOut(BaseModel):
+    """【线索反馈】输出结构。"""
+
+    id: int
+    merchant_id: str
+    feedback_no: str
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    wechat_status: Optional[str] = None
+    opening_status: Optional[str] = None
+    payment_method: Optional[str] = None
+    car_model: Optional[str] = None
+    match_status: Optional[str] = None
+    budget_text: Optional[str] = None
+    precision_status: Optional[str] = None
+    intention_level: Optional[str] = None
+    region_text: Optional[str] = None
+    parse_status: Optional[str] = None
+    feedback_date: Optional[datetime] = None
+
+
+class SalesLeadUpdateOut(BaseModel):
+    """【线索更新】输出结构。"""
+
+    id: int
+    merchant_id: str
+    feedback_no: Optional[str] = None
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+    visit_status: Optional[str] = None
+    visit_time_text: Optional[str] = None
+    deal_status: Optional[str] = None
+    deal_time_text: Optional[str] = None
+    parse_status: Optional[str] = None
+
+
+class SalesDailySummaryOut(BaseModel):
+    """【每日线索总结】输出结构。"""
+
+    id: int
+    merchant_id: str
+    staff_id: int
+    summary_date: datetime
+    sales_name: Optional[str] = None
+    overall_quality: Optional[str] = None
+    main_problem: Optional[str] = None
+    car_model_summary: Optional[str] = None
+    budget_summary: Optional[str] = None
+    cooperation_level: Optional[str] = None
+    today_suggestion: Optional[str] = None
+    extra_feedback: Optional[str] = None
+    parse_status: Optional[str] = None
+
+
+class DailyReportJobOut(BaseModel):
+    """日报任务输出结构（不返回绝对路径，只返回内部存储键与文件名）。"""
+
+    id: int
+    merchant_id: str
+    report_date: Optional[datetime] = None
+    report_type: Optional[str] = None
+    receiver_staff_id: Optional[int] = None
+    status: Optional[str] = None
+    file_storage_key: Optional[str] = None
+    file_name: Optional[str] = None
+    error_message: Optional[str] = None
+    generated_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+
+
+class ComputeMarkupRatioOut(BaseModel):
+    """算力上浮比例输出结构（基点整数，不浮点）。"""
+
+    id: int
+    capability_key: str
+    markup_basis_points: int
+    enabled: bool = True
+
+
+class AdReviewOAuthAccountOut(BaseModel):
+    """一键过审授权账号输出结构（不暴露 token 密文）。"""
+
+    id: int
+    merchant_id: str
+    advertiser_id: str
+    account_name: Optional[str] = None
+    auth_status: Optional[str] = None
+    token_expires_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+
+
+class AdReviewSuggestionOut(BaseModel):
+    """一键过审建议输出结构。"""
+
+    id: int
+    merchant_id: str
+    oauth_account_id: Optional[int] = None
+    suggestion_key: str
+    advertiser_id: Optional[str] = None
+    ad_id: Optional[str] = None
+    material_id: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    suggestion_text: Optional[str] = None
+    adopt_status: Optional[str] = None
+    pulled_at: Optional[datetime] = None
+
+
+class AdReviewAdoptTaskOut(BaseModel):
+    """一键过审采纳任务输出结构。"""
+
+    id: int
+    merchant_id: str
+    oauth_account_id: Optional[int] = None
+    task_key: str
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+
+class AiEditJobOut(BaseModel):
+    """AI 剪辑任务输出结构。"""
+
+    id: int
+    merchant_id: str
+    job_id: str
+    status: Optional[str] = None
+    source_type: Optional[str] = None
+    error_message: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+
+class AiEditJobArtifactOut(BaseModel):
+    """AI 剪辑产物输出结构（只返回内部 storage_key，不返回绝对路径）。"""
+
+    id: int
+    merchant_id: str
+    job_id: str
+    artifact_id: str
+    artifact_type: Optional[str] = None
+    storage_key: Optional[str] = None
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+
+
+class AiReplyDecisionEffectivenessPatch(BaseModel):
+    """超管人工标记 AI 回复决策有效性补丁。"""
+
+    is_effective: Optional[bool] = None
+    effectiveness_reason: Optional[str] = None
