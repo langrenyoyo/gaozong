@@ -503,7 +503,7 @@ P0-ARCH-1 完成后，后续文档顺序如下：
 5. `app/database.py`
 6. `app/routers/`
 7. `app/services/`
-8. `.env.example`
+8. `.env.development.example` / `.env.lan.example` / `.env.production.example`
 9. `app/routers/integrations.py`
 10. `app/integrations/douyin_webhook.py`
 11. `app/routers/replies.py`

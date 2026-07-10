@@ -6,11 +6,11 @@
 # 输出脱敏（不打印密码或完整 URL）。任一 FAIL 返回非零，不得开始切换。
 #
 # 用法：
-#   bash scripts/production_pg_preflight.sh [--project-root DIR] [--env-file .env]
+#   bash scripts/production_pg_preflight.sh [--project-root DIR] [--env-file .env.production.local]
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 COMPOSE_FILE="docker-compose.yml"
 # 疑似废弃 compose（memory 记录宝塔用 docker-compose.yml，非 auto-wechat.yml）；
 # 现场确认若仍在用需从本列表移除。
@@ -69,8 +69,8 @@ for dep in "${DEPRECATED_COMPOSE[@]}"; do
 done
 [[ $DEP_ISSUE -eq 0 ]] && pass "4.  无疑似废弃 compose"
 
-# ---------- 加载 .env ----------
-if load_env "$ENV_FILE"; then echo "[INFO] .env 已加载（内容不打印）"; else fail "0.  .env 加载失败（$ENV_FILE 不存在或格式错误）"; fi
+# ---------- 加载 production env ----------
+if load_env "$ENV_FILE"; then echo "[INFO] production env 已加载（内容不打印）"; else fail "0.  production env 加载失败（$ENV_FILE 不存在或格式错误）"; fi
 
 # ---------- 5-8. 配置 ----------
 if [[ "${APP_ENV:-}" == "production" ]]; then pass "5.  APP_ENV = production"; else fail "5.  APP_ENV != production（当前=${APP_ENV:-空}）"; fi

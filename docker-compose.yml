@@ -2,7 +2,7 @@ services:
   # PostgreSQL（方案 A：一个 PG 实例两个 database）
   # - auto_wechat：9000 主库（POSTGRES_DB 自动建）
   # - xg_douyin_ai_cs：9100 RAG metadata 库（init-prod/010 首次启动建，幂等）
-  # 启动前必须在 .env 设置 PG_PASSWORD（postgres 镜像拒绝空密码，会 fail-fast 倒逼配置）
+  # 启动前必须准备 .env.production.local 或通过 --env-file 显式传入生产配置。
   postgres:
     image: postgres:16-alpine
     environment:
@@ -28,7 +28,8 @@ services:
     container_name: xg-auto-wechat-api
     working_dir: /workspace
     env_file:
-      - .env
+      - path: .env.production.local
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/${PG_DB:-auto_wechat}
       XG_DOUYIN_AI_CS_BASE_URL: http://xg-douyin-ai-cs:9100
@@ -60,7 +61,8 @@ services:
     container_name: xg-douyin-ai-cs
     working_dir: /workspace
     env_file:
-      - .env
+      - path: .env.production.local
+        required: false
     environment:
       RAG_DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/xg_douyin_ai_cs
       AUTO_WECHAT_9000_BASE_URL: http://auto-wechat-api:9000
@@ -89,7 +91,16 @@ services:
     container_name: xg-auto-wechat-frontend
     working_dir: /workspace/frontend
     env_file:
-      - ./frontend/.env
+      - path: .env.production.local
+        required: false
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+      VITE_AUTO_WECHAT_API_BASE_URL: ${VITE_AUTO_WECHAT_API_BASE_URL:-/api}
+      VITE_DOUYIN_AI_CS_API_BASE_URL: ${VITE_DOUYIN_AI_CS_API_BASE_URL:-/ai-cs-api}
+      VITE_NEWCAR_AUTH_BASE_URL: ${VITE_NEWCAR_AUTH_BASE_URL:-}
+      VITE_NEWCAR_LOGIN_URL: ${VITE_NEWCAR_LOGIN_URL:-}
+      VITE_DEV_API_PROXY_TARGET: ${VITE_DEV_API_PROXY_TARGET:-http://auto-wechat-api:9000}
+      VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET: ${VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET:-http://xg-douyin-ai-cs:9100}
     ports:
       - "127.0.0.1:5173:5173"
     volumes:

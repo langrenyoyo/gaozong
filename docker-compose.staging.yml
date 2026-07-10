@@ -13,10 +13,10 @@
 #   - volume root: ./docker-data-staging/（dev 用 ./docker-data/）
 #   - database: auto_wechat_staging / xg_douyin_ai_cs_staging（带后缀，实例+名双重隔离）
 #   - image tag: xg-ai-system-backend:staging（dev 用 :latest）
-#   - env_file: .env.staging（dev 用 .env）
+#   - env_file: .env.staging.local（production 用 .env.production.local）
 #
 # 启动：
-#   docker compose --project-name auto_wechat_staging --env-file .env.staging \
+#   docker compose --project-name auto_wechat_staging --env-file .env.staging.local \
 #     -f docker-compose.yml -f docker-compose.staging.yml up -d --build
 #
 # 重要：staging 禁止 SQLite metadata fallback。
@@ -37,7 +37,8 @@ services:
     container_name: xg-staging-api
     image: xg-ai-system-backend:staging
     env_file: !override
-      - .env.staging
+      - path: .env.staging.local
+        required: false
     ports: !override
       - "127.0.0.1:29000:9000"
     volumes: !override
@@ -51,7 +52,8 @@ services:
     container_name: xg-staging-cs
     image: xg-ai-system-backend:staging
     env_file: !override
-      - .env.staging
+      - path: .env.staging.local
+        required: false
     ports: !override
       - "127.0.0.1:29100:9100"
     volumes: !override

@@ -150,7 +150,7 @@ Docker
 ```text
 docker-compose.yml
 
-.env.example
+.env.development.example / .env.lan.example / .env.production.example
 
 migration
 

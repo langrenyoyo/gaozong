@@ -96,18 +96,21 @@ def test_frontend_api_clients_are_reexported_from_features():
 
 def test_frontend_does_not_expose_internal_service_token():
     frontend_root = Path("frontend/src")
-    env_example = Path("frontend/.env.example")
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in frontend_root.rglob("*")
         if path.is_file() and path.suffix in {".ts", ".tsx", ".js", ".jsx", ".env"}
     )
-    if env_example.exists():
-        combined = f"{combined}\n{env_example.read_text(encoding='utf-8')}"
 
     assert "XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
-    assert "VITE_XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in combined
-    assert "VITE_INTERNAL_SERVICE_TOKEN" not in combined
+    for env_example in [
+        Path(".env.development.example"),
+        Path(".env.lan.example"),
+        Path(".env.production.example"),
+    ]:
+        env_source = env_example.read_text(encoding="utf-8")
+        assert "VITE_XG_DOUYIN_AI_CS_SERVICE_TOKEN" not in env_source
+        assert "VITE_INTERNAL_SERVICE_TOKEN" not in env_source
 
 
 def test_agent_page_describes_knowledge_as_reply_scope_not_management():
@@ -155,7 +158,7 @@ def test_wechat_assistant_uses_browser_pending_task_api_instead_of_agent_poll_en
 
 def test_frontend_docker_dev_uses_browser_api_proxy_instead_of_loopback_9000():
     compose_source = Path("docker-compose.dev.yml").read_text(encoding="utf-8")
-    env_example_source = Path("frontend/.env.example").read_text(encoding="utf-8")
+    env_example_source = Path(".env.development.example").read_text(encoding="utf-8")
 
     assert "VITE_API_BASE_URL=${VITE_API_BASE_URL:-/api}" in compose_source
     assert "VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-/api}" in compose_source

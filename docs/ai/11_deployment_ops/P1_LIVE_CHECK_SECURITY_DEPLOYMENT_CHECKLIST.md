@@ -57,7 +57,7 @@ unknown_applied_versions 为空
 1. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 必须显式配置真实可信前端 origin。
 2. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 不得包含 `localhost`、`127.0.0.1`、`192.168.*`、`10.*`、`172.16.*` 到 `172.31.*` 等内网地址。
 3. `DOUYIN_RESOURCE_ALLOWED_HOSTS` 当前可为空，但上线前建议向抖音官方或实际回调样本确认资源域名后配置。
-4. 不得把 `.env.example` 中的本地、局域网示例直接复制到生产。
+4. 生产必须从 `.env.production.example` 复制为 `.env.production.local` 后填写真实值，不得把 development / LAN 示例复制到生产。
 
 ## 5. 安全边界最终状态
 

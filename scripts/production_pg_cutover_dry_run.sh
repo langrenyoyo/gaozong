@@ -10,7 +10,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 SERVICE="${SERVICE:-both}"
 
 while [[ $# -gt 0 ]]; do

@@ -24,8 +24,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: auto-wechat
-    env_file:
-      - .env
+    # 废弃入口不再绑定 env_file，避免误读根目录旧 .env。
     ports:
       # 只绑定本机，公网通过宝塔 Nginx 反代进入
       - "127.0.0.1:9000:9000"

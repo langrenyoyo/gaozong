@@ -10,14 +10,14 @@
 #   5. 输出 database 名、alembic revision 和 critical tables 行数
 #   6. readiness 失败时返回非零
 #
-# 不得删除 SQLite 文件或 volume；不得修改 .env。
+# 不得删除 SQLite 文件或 volume；不得修改 production env。
 #
 # 用法：
-#   bash scripts/production_pg_switch_and_verify.sh [--project-root DIR] [--env-file .env]
+#   bash scripts/production_pg_switch_and_verify.sh [--project-root DIR] [--env-file .env.production.local]
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"   # 单端点最大等待秒数
 
 while [[ $# -gt 0 ]]; do
@@ -32,9 +32,9 @@ done
 
 cd "$PROJECT_ROOT"
 
-# 加载 .env（只读校验，不修改）
+# 加载 production env（只读校验，不修改）
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "[FAIL] .env 不存在：$ENV_FILE" >&2; exit 1
+  echo "[FAIL] production env 不存在：$ENV_FILE" >&2; exit 1
 fi
 set -a; source "$ENV_FILE"; set +a
 

@@ -29,12 +29,12 @@
 步骤 1-4   前置准备与确认
 步骤 5     SQLite 冻结基线快照（before）
 步骤 6     preflight 预检查（18 项）
-步骤 7     backup 备份（SQLite + PG + .env）
+步骤 7     backup 备份（SQLite + PG + .env.production.local）
 步骤 8     ensure_databases 第二库确认/创建
 步骤 9-10  Alembic upgrade（9000 → 0007，9100 → 0002）
 步骤 11-12 cutover dry-run（只读，不写数据）
 步骤 13-14 cutover apply（写操作，需审批三参数）
-步骤 15    切换 .env 至 PostgreSQL（人工编辑）
+步骤 15    切换 .env.production.local 至 PostgreSQL（人工编辑）
 步骤 16    switch_and_verify 启动 + 就绪检查
 步骤 17    smoke 只读业务接口验证
 步骤 18    SQLite 冻结对比（before vs after）
@@ -48,7 +48,7 @@
 出现以下任一情况，**立即停止前进并执行回滚**（步骤详见 §13 / `production_pg_rollback.sh`）：
 
 1. preflight 任意 `[FAIL]`（第 6 步）
-2. backup 关键项失败（SQLite 或 .env 备份失败）（第 7 步）
+2. backup 关键项失败（SQLite 或 production env 备份失败）（第 7 步）
 3. Alembic upgrade 失败或未达目标 revision（第 9-10 步）
 4. cutover apply 失败或未输出 `APPLY_PASS`（第 13-14 步）
 5. switch_and_verify 的 readiness 检查超时（9000/9100 /ready 或 PG health）（第 16 步）
@@ -98,13 +98,13 @@
 - **日志**：`/tmp/step03_pull.log`
 - **回滚触发**：无
 
-## 步骤 4：确认 .env 当前是 SQLite 配置（切换前）
+## 步骤 4：确认 .env.production.local 当前是 SQLite 配置（切换前）
 
 - **执行者**：VHwwsf
 - **命令**：
   ```bash
   cd [宝塔项目根目录]
-  grep -E "^(DATABASE_URL|RAG_DATABASE_URL|APP_ENV)=" .env
+  grep -E "^(DATABASE_URL|RAG_DATABASE_URL|APP_ENV)=" .env.production.local
   # 预期：DATABASE_URL / RAG_DATABASE_URL 为 sqlite:// 或未设；APP_ENV=production
   ```
 - **成功标准**：`DATABASE_URL` 不是 `postgresql://`（确认当前确为 SQLite，待切换）
@@ -133,7 +133,7 @@
   ```bash
   cd [宝塔项目根目录]
   bash scripts/production_pg_preflight.sh \
-    --project-root "$(pwd)" --env-file .env 2>&1 | tee /tmp/step06_preflight.log
+    --project-root "$(pwd)" --env-file .env.production.local 2>&1 | tee /tmp/step06_preflight.log
   ```
 - **成功标准**：所有 18 项检查无 `[FAIL]`（`[WARN]` 需人工评估是否阻塞）
 - **失败停止**：任意 `[FAIL]` → 停止，修复后重跑
@@ -150,11 +150,11 @@
   bash scripts/production_pg_backup.sh 2>&1 | tee /tmp/step07_backup.log
   echo "BACKUP_DIR:"; grep -oE 'backups/cutover-[0-9-]+' /tmp/step07_backup.log | tail -1
   ```
-- **成功标准**：输出 `BACKUP_DONE`；`MANIFEST.txt` 含 9000/9100 SQLite + .env + PG dump 路径与 SHA-256
-- **失败停止**：SQLite 源备份失败或 .env 备份失败 → 停止，回滚（无需切回，备份前未改数据）
+- **成功标准**：输出 `BACKUP_DONE`；`MANIFEST.txt` 含 9000/9100 SQLite + production env + PG dump 路径与 SHA-256
+- **失败停止**：SQLite 源备份失败或 production env 备份失败 → 停止，回滚（无需切回，备份前未改数据）
 - **日志**：`/tmp/step07_backup.log` + `backups/cutover-YYYYMMDD-HHMMSS/MANIFEST.txt`
 - **回滚触发**：关键备份失败
-- **⚠️ 提示**：备份目录含 .env（密码）和 PG dump，建议加密后存外部安全存储
+- **⚠️ 提示**：备份目录含 production env（密码）和 PG dump，建议加密后存外部安全存储
 
 ## 步骤 8：ensure_databases 第二库确认
 
@@ -263,23 +263,23 @@
 - **日志**：`/tmp/step14_apply_9100.log` + `markers/cutover_apply_audit_*.log`
 - **回滚触发**：是
 
-## 步骤 15：切换 .env 至 PostgreSQL（人工编辑）
+## 步骤 15：切换 .env.production.local 至 PostgreSQL（人工编辑）
 
 - **执行者**：VHwwsf（编辑）+ Waston（提供密码）
-- **操作**：人工编辑 `.env`，设置以下变量（参考 `.env.production.pg.example`）：
+- **操作**：人工编辑 `.env.production.local`，设置以下变量（参考 `.env.production.example`）：
   ```bash
   APP_ENV=production
-  DATABASE_URL=postgresql://[宝塔现场确认PG_USER]:[宝塔现场确认PG密码]@postgres:5432/auto_wechat
-  RAG_DATABASE_URL=postgresql://[宝塔现场确认PG_USER]:[宝塔现场确认PG密码]@postgres:5432/xg_douyin_ai_cs
+  DATABASE_URL=postgresql+psycopg://[宝塔现场确认PG_USER]:[宝塔现场确认PG密码]@postgres:5432/auto_wechat
+  RAG_DATABASE_URL=postgresql+psycopg://[宝塔现场确认PG_USER]:[宝塔现场确认PG密码]@postgres:5432/xg_douyin_ai_cs
   EXPECTED_DATABASE_NAME=auto_wechat
   RAG_EXPECTED_DATABASE_NAME=xg_douyin_ai_cs
   RAG_VECTOR_BACKEND=sqlite
   ```
-- **成功标准**：`.env` 含上述变量；`grep DATABASE_URL .env` 显示 `postgresql://`
+- **成功标准**：`.env.production.local` 含上述变量；`grep DATABASE_URL .env.production.local` 显示 `postgresql+psycopg://`
 - **失败停止**：密码错误或变量缺失 → 停止，不启动容器
-- **日志**：无（.env 不打印到日志）
+- **日志**：无（production env 不打印到日志）
 - **回滚触发**：无（配置改动，下一步验证）
-- **⚠️ 安全**：`.env` 改动前已在步骤 7 备份；编辑后不 echo 明文密码
+- **⚠️ 安全**：`.env.production.local` 改动前已在步骤 7 备份；编辑后不 echo 明文密码
 
 ## 步骤 16：switch_and_verify 启动 + 就绪检查
 
@@ -291,7 +291,7 @@
   ```
 - **成功标准**：
   - `APP_ENV=production` PASS
-  - `DATABASE_URL` / `RAG_DATABASE_URL` 均为 `postgresql://`
+  - `DATABASE_URL` / `RAG_DATABASE_URL` 均为 `postgresql+psycopg://`
   - 两库名不同
   - `compose config` PASS
   - PostgreSQL healthy
@@ -373,7 +373,7 @@ bash scripts/production_pg_rollback.sh \
 ```
 
 **回滚效果**：
-- `.env` 中 `DATABASE_URL` / `RAG_DATABASE_URL` 被注释，9000/9100 回退读 SQLite
+- `.env.production.local` 中 `DATABASE_URL` / `RAG_DATABASE_URL` 被注释，9000/9100 回退读 SQLite
 - 容器重启，/ready 恢复
 - **PG volume 不删除**，切换期间写入 PG 的新数据保留
 - **原始 SQLite 不覆盖**（cutover 未改 SQLite，回滚后读切换前状态）
@@ -391,7 +391,7 @@ bash scripts/production_pg_rollback.sh \
 | `[宝塔项目根目录]` | 所有脚本 `cd` 目标 | VHwwsf |
 | `[宝塔现场确认单号]` | 审批单号，写入审计日志 | Waston |
 | `[宝塔现场确认PG_USER]` | PostgreSQL 用户名 | Waston |
-| `[宝塔现场确认PG密码]` | PostgreSQL 密码（写入 .env，不进日志） | Waston |
+| `[宝塔现场确认PG密码]` | PostgreSQL 密码（写入 .env.production.local，不进日志） | Waston |
 | `[宝塔现场确认JWT]` | smoke 测试 token | Waston |
 | `[宝塔现场确认TS]` | 回滚时 backup-dir 时间戳 | LNZS |
 | `[宝塔现场填写回滚原因]` | rollback --reason | LNZS |
@@ -404,7 +404,7 @@ bash scripts/production_pg_rollback.sh \
 | 脚本 | 默认行为 | 写操作 | 安全门 |
 |------|---------|--------|--------|
 | `production_pg_preflight.sh` | 只读 18 项检查 | 否 | FAIL 退出非零 |
-| `production_pg_backup.sh` | 备份到 `backups/` | 是（备份） | SQLite/.env 缺失 FAIL |
+| `production_pg_backup.sh` | 备份到 `backups/` | 是（备份） | SQLite / production env 缺失 FAIL |
 | `production_pg_ensure_databases.sh` | 只读检查 | 否（需 `--create --yes`） | 双参数确认 |
 | `production_pg_alembic_upgrade.sh` | Alembic upgrade head | 是（DDL） | 目标 revision 校验 |
 | `production_pg_cutover_dry_run.sh` | 只读 dry-run | 否 | 校验 DRY_RUN_PASS |
@@ -412,7 +412,7 @@ bash scripts/production_pg_rollback.sh \
 | `production_pg_switch_and_verify.sh` | 启动+健康检查 | 是（容器重启） | readiness FAIL 退出非零；不删 volume/SQLite |
 | `production_pg_smoke.sh` | 只读 GET + search-preview | 否 | 禁止端点自检；FAIL 退出非零 |
 | `production_pg_sqlite_freeze_check.sh` | 快照/对比 | 否 | 元数据增长 FAIL |
-| `production_pg_rollback.sh` | 默认拒绝（打印计划） | 是（改 .env+重启） | 需 `--execute`+审批≠执行 |
+| `production_pg_rollback.sh` | 默认拒绝（打印计划） | 是（改 production env+重启） | 需 `--execute`+审批≠执行 |
 
 ---
 

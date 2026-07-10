@@ -36,7 +36,7 @@ const indexPage = read("src/pages/Index.tsx");
 const wechatTasks = read("src/api/wechatTasks.ts");
 const tokenStore = read("src/authToken.ts");
 const newcarRedirect = read("src/newcarRedirect.ts");
-const envExample = read(".env.example");
+const envExample = read("../.env.lan.example");
 const wechatAgentPage = read("src/features/wechat-assistant/pages/WechatAgent.tsx");
 const wechatTaskPanel = read("src/features/wechat-assistant/components/WechatTaskPanel.tsx");
 

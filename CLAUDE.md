@@ -425,7 +425,7 @@ React UI（客户运营后台，端口 5173）
 
 - 多页面已接入真实 API（线索、销售、检测、报表、微信助手、抖音客服工作台、webhook 事件、超管后台）
 - API 层已扩展至 17 个模块（client/types/leads/staff/reports/integrations/checks/replies/notifications/wechat/wechatTasks/wechatAutoDetect/automation/agent/localWechatAgent/webhookEvents/douyinAiCsClient/douyinLiveCheck）
-- 环境变量示例：`frontend/.env.example`（VITE_API_BASE_URL / VITE_AUTO_WECHAT_API_BASE_URL=9000 / VITE_LOCAL_WECHAT_AGENT_BASE_URL=19000 / VITE_DOUYIN_AI_CS_API_BASE_URL=9100）
+- 环境变量示例：根目录 `.env.development.example` / `.env.lan.example` / `.env.production.example`（前端 VITE_* 变量已合并到三份根模板）
 - TS 配置约束：ignoreDeprecations=5.0 / composite / emitDeclarationOnly（详见下文 React TypeScript 配置约束）
 
 ------

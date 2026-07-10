@@ -42,6 +42,26 @@ docs/ai/README.md
 
 ## 快速开始
 
+## 环境配置
+
+仓库只保留三份环境示例：
+
+| 文件 | 用途 |
+|------|------|
+| `.env.development.example` | 单机开发，默认 SQLite + mock auth + localhost |
+| `.env.lan.example` | 局域网联调，使用 LAN IP + NewCar 真实鉴权 |
+| `.env.production.example` | 宝塔生产 PostgreSQL 部署，9000/9100 分库 |
+
+真实配置复制为对应 `.local` 文件后填写密钥：
+
+```bash
+cp .env.development.example .env.development.local
+cp .env.lan.example .env.lan.local
+cp .env.production.example .env.production.local
+```
+
+生产脚本默认读取 `.env.production.local`，也可通过 `--env-file` 显式覆盖。前端示例变量已合并到根目录模板，不再保留单独的前端示例文件。
+
 ### 1. 安装依赖
 
 ```bash

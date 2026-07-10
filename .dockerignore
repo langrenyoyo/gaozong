@@ -50,9 +50,8 @@ test_wechat_debug.json
 @AutomationLog.txt
 resources/
 
-# 环境变量（含密钥，禁止进入镜像；.env.example 无密钥可进）
+# 环境变量（含示例模板）不进入镜像；运行时由 compose env_file 注入。
 .env*
-!.env.example
 
 # 前端依赖与构建产物（不进镜像）
 node_modules/

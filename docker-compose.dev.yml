@@ -19,6 +19,9 @@ services:
     image: postgres:16-alpine
     container_name: auto-wechat-postgres-dev
     profiles: ["postgres"]
+    env_file:
+      - path: ${AUTO_WECHAT_ENV_FILE:-.env.development.local}
+        required: false
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     environment:
@@ -44,6 +47,9 @@ services:
       dockerfile: Dockerfile.backend.dev
     container_name: auto-wechat-api-dev
     working_dir: /workspace
+    env_file:
+      - path: ${AUTO_WECHAT_ENV_FILE:-.env.development.local}
+        required: false
     ports:
       - "9000:9000"
     volumes:
@@ -53,10 +59,10 @@ services:
       - ./docker-data/auto_wechat_9000:/workspace/data
     environment:
       APP_ENV: "${APP_ENV:-development}"
-      CORS_ORIGINS: "${CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,http://192.168.110.113:5173,http://192.168.110.113:9000,http://192.168.110.19:5174}"
-      NEWCAR_AUTH_ENABLED: "${NEWCAR_AUTH_ENABLED:-true}"
-      NEWCAR_AUTH_MOCK_ENABLED: "${NEWCAR_AUTH_MOCK_ENABLED:-false}"
-      NEWCAR_AUTH_BASE_URL: "${NEWCAR_AUTH_BASE_URL:-http://192.168.110.19:8790}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
+      NEWCAR_AUTH_ENABLED: "${NEWCAR_AUTH_ENABLED:-false}"
+      NEWCAR_AUTH_MOCK_ENABLED: "${NEWCAR_AUTH_MOCK_ENABLED:-true}"
+      NEWCAR_AUTH_BASE_URL: "${NEWCAR_AUTH_BASE_URL:-http://127.0.0.1:8790}"
       NEWCAR_AUTH_LOGOUT_URL: "${NEWCAR_AUTH_LOGOUT_URL:-}"
       DOUYIN_WEBHOOK_AUTH_REQUIRED: "${DOUYIN_WEBHOOK_AUTH_REQUIRED:-false}"
       DY_SECRET_KEY: "${DY_SECRET_KEY:-}"
@@ -89,6 +95,9 @@ services:
       dockerfile: Dockerfile.backend.dev
     container_name: xg-douyin-ai-cs-dev
     working_dir: /workspace
+    env_file:
+      - path: ${AUTO_WECHAT_ENV_FILE:-.env.development.local}
+        required: false
     ports:
       - "9100:9100"
     volumes:
@@ -96,8 +105,8 @@ services:
       # 9100 SQLite RAG 库独立持久化
       - ./docker-data/xg_douyin_ai_cs:/data
     environment:
-      # RAG 数据库路径（挂载到独立 /data，与 9000 的 data 隔离）
-      XG_DOUYIN_AI_CS_DB_PATH: /data/xg_douyin_ai_cs.db
+      # RAG metadata 使用规范的 RAG_DATABASE_URL；SQLite dev 文件挂载到独立 /data。
+      RAG_DATABASE_URL: sqlite:////data/xg_douyin_ai_cs.db
       # 本地开发默认继续使用 SQLite 向量检索，不强制依赖 Milvus。
       RAG_VECTOR_BACKEND: "${RAG_VECTOR_BACKEND:-sqlite}"
       MILVUS_URI: "${MILVUS_URI:-}"
@@ -234,6 +243,9 @@ services:
       dockerfile: Dockerfile.frontend.dev
     container_name: auto-wechat-frontend-dev
     working_dir: /workspace/frontend
+    env_file:
+      - path: ${AUTO_WECHAT_ENV_FILE:-.env.development.local}
+        required: false
     ports:
       - "5173:5173"
     volumes:
@@ -247,8 +259,8 @@ services:
       - VITE_AUTO_WECHAT_API_BASE_URL=${VITE_AUTO_WECHAT_API_BASE_URL:-/api}
       - VITE_LOCAL_WECHAT_AGENT_BASE_URL=${VITE_LOCAL_WECHAT_AGENT_BASE_URL:-http://127.0.0.1:19000}
       - VITE_DOUYIN_AI_CS_API_BASE_URL=${VITE_DOUYIN_AI_CS_API_BASE_URL:-/ai-cs-api}
-      - VITE_NEWCAR_AUTH_BASE_URL=${VITE_NEWCAR_AUTH_BASE_URL:-http://192.168.110.19:8790}
-      - VITE_NEWCAR_LOGIN_URL=${VITE_NEWCAR_LOGIN_URL:-http://192.168.110.19:5174/login}
+      - VITE_NEWCAR_AUTH_BASE_URL=${VITE_NEWCAR_AUTH_BASE_URL:-http://127.0.0.1:8790}
+      - VITE_NEWCAR_LOGIN_URL=${VITE_NEWCAR_LOGIN_URL:-http://127.0.0.1:5174/login}
       - VITE_DEV_API_PROXY_TARGET=${VITE_DEV_API_PROXY_TARGET:-http://auto-wechat-api:9000}
       - VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET=${VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET:-http://xg-douyin-ai-cs:9100}
     restart: "no"

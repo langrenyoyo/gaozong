@@ -23,7 +23,7 @@ const app = read("src/App.tsx");
 const capabilities = read("src/features/capabilities.ts");
 const sideNav = read("src/components/SideNav.tsx");
 const newcarRedirect = read("src/newcarRedirect.ts");
-const envExample = read(".env.example");
+const envExample = read("../.env.lan.example");
 const adminCheck = read("scripts/check-admin-autoreply-rollout-page.mjs");
 
 assertIncludes(capabilities, "adminAutoreply", "权限常量包含自动回复灰度权限");

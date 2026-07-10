@@ -8,6 +8,13 @@ logger = logging.getLogger(__name__)
 
 BASE_PATH = Path(__file__).resolve().parents[1]
 ENV_FILE = BASE_PATH / ".env"
+PROFILE_ENV_FILE_MAP = {
+    "development": BASE_PATH / ".env.development.local",
+    "lan": BASE_PATH / ".env.lan.local",
+    "production": BASE_PATH / ".env.production.local",
+    "staging": BASE_PATH / ".env.staging.local",
+}
+PROFILE_ENV_FILES = tuple(PROFILE_ENV_FILE_MAP.values())
 
 
 def _load_env_file(env_file: Path) -> None:
@@ -31,7 +38,38 @@ def _load_env_file(env_file: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-_load_env_file(ENV_FILE)
+def _resolve_env_file(path_value: str) -> Path:
+    """解析显式 env 文件路径；相对路径按项目根目录计算。"""
+    path = Path(path_value)
+    return path if path.is_absolute() else BASE_PATH / path
+
+
+def _env_file_candidates() -> list[Path]:
+    """返回 env 加载候选；旧 .env 仅作兼容兜底。"""
+    explicit = os.getenv("AUTO_WECHAT_ENV_FILE", "").strip()
+    if explicit:
+        return [_resolve_env_file(explicit)]
+
+    profile = (os.getenv("AUTO_WECHAT_ENV_PROFILE") or os.getenv("APP_ENV") or "").strip().lower()
+    if profile in PROFILE_ENV_FILE_MAP:
+        return [PROFILE_ENV_FILE_MAP[profile], ENV_FILE]
+
+    return [
+        PROFILE_ENV_FILE_MAP["development"],
+        PROFILE_ENV_FILE_MAP["lan"],
+        ENV_FILE,
+    ]
+
+
+def _load_env_files() -> None:
+    """加载第一个存在的 env 文件，不覆盖已显式注入的环境变量。"""
+    for env_file in _env_file_candidates():
+        if env_file.exists():
+            _load_env_file(env_file)
+            return
+
+
+_load_env_files()
 
 
 def _env_str(name: str, default: str = "") -> str:
