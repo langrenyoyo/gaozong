@@ -67,5 +67,6 @@ frontend/.vite/
 frontend/*.d.ts
 frontend/tsconfig.tsbuildinfo
 
-# Docker 本地开发运行数据（容器 SQLite 持久化，不应提交）
+# Docker 本地运行数据（dev + staging 的 PG/SQLite 持久化，不应提交）
 docker-data/
+docker-data-staging/
