@@ -14,6 +14,7 @@ venv/
 .env.*
 !.env.example
 !.env.staging.example
+!.env.production.pg.example
 
 # Build artifacts and local backups
 build/

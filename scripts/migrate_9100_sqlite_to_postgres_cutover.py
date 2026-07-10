@@ -142,6 +142,40 @@ def parse_tables(raw_tables: str | Sequence[str]) -> list[str]:
     return tables or list(CUTOVER_TABLES)
 
 
+def _require_production_cutover_approval(values: Mapping[str, str]) -> None:
+    """APP_ENV=production 时 apply 的显式放行校验。
+
+    禁止通过修改 APP_ENV=development 绕过 production 门（shell apply 脚本强制
+    APP_ENV=production，且本函数在 production 时必须调用）。放行需三变量齐全 +
+    审批人 ≠ 执行人：
+      PROD_CUTOVER_APPROVER  审批人（必须 ≠ 执行人）
+      PROD_CUTOVER_OPERATOR  执行人
+      PROD_CUTOVER_TICKET    变更单号 / 执行记录号
+    """
+    approver = values.get("PROD_CUTOVER_APPROVER", "").strip()
+    operator = values.get("PROD_CUTOVER_OPERATOR", "").strip()
+    ticket = values.get("PROD_CUTOVER_TICKET", "").strip()
+    missing = [
+        name for name, val in (
+            ("PROD_CUTOVER_APPROVER", approver),
+            ("PROD_CUTOVER_OPERATOR", operator),
+            ("PROD_CUTOVER_TICKET", ticket),
+        ) if not val
+    ]
+    if missing:
+        raise MigrationConfigurationError(
+            "APP_ENV=production 时 --apply 需显式放行，缺少："
+            + ", ".join(missing)
+            + "（审批人 PROD_CUTOVER_APPROVER / 执行人 PROD_CUTOVER_OPERATOR / "
+            "变更单号 PROD_CUTOVER_TICKET）。禁止修改 APP_ENV=development 绕过。"
+        )
+    if approver == operator:
+        raise MigrationConfigurationError(
+            "production apply 审批人不得与执行人相同"
+            "（PROD_CUTOVER_APPROVER != PROD_CUTOVER_OPERATOR）"
+        )
+
+
 def validate_args(args: argparse.Namespace, env: Mapping[str, str] | None = None) -> None:
     values = env if env is not None else os.environ
     if args.apply and not args.yes:
@@ -149,7 +183,7 @@ def validate_args(args: argparse.Namespace, env: Mapping[str, str] | None = None
     if args.yes and not args.apply:
         raise MigrationConfigurationError("--yes 只能和 --apply 一起使用")
     if args.apply and values.get("APP_ENV", "").lower() == "production":
-        raise MigrationConfigurationError("APP_ENV=production 时拒绝 --apply")
+        _require_production_cutover_approval(values)
     parse_tables(args.tables)
     postgres_url, source = resolve_postgres_url_with_source(args, values)
     if args.apply:
