@@ -827,7 +827,7 @@ def test_reply_suggestion_empty_allowed_category_keys_disables_rag(tmp_path, mon
         raise AssertionError("empty allowed_category_keys must not search RAG")
 
     monkeypatch.setattr(
-        "apps.xg_douyin_ai_cs.services.reply_decision_service.search",
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.search_with_diagnostics",
         fail_search,
     )
 

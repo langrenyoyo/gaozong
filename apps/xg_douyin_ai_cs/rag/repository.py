@@ -735,13 +735,35 @@ def _error_summary(exc: Exception) -> str:
     return f"{code}: {message}"[:500] if code else message[:500]
 
 
+@dataclass(frozen=True)
+class RagSearchDiagnostics:
+    vector_backend: str
+    fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RagSearchResult:
+    items: list[RagSearchItem]
+    diagnostics: RagSearchDiagnostics
+
+
+def search_with_diagnostics(
+    payload: RagSearchRequest,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> RagSearchResult:
+    if settings.rag_vector_backend == "milvus":
+        return _search_milvus_or_fallback_with_diagnostics(payload, llm_client=llm_client)
+    return RagSearchResult(
+        items=_search_sqlite(payload, llm_client=llm_client),
+        diagnostics=RagSearchDiagnostics(vector_backend="sqlite"),
+    )
+
+
 def search(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
 ) -> list[RagSearchItem]:
-    if settings.rag_vector_backend == "milvus":
-        return _search_milvus_or_fallback(payload, llm_client=llm_client)
-    return _search_sqlite(payload, llm_client=llm_client)
+    return search_with_diagnostics(payload, llm_client=llm_client).items
 
 
 def search_unified_preview(*, tenant_id: str, merchant_id: str, query: str, category_keys: list[str], top_k: int) -> dict:
@@ -851,6 +873,13 @@ def _search_milvus_or_fallback(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
 ) -> list[RagSearchItem]:
+    return _search_milvus_or_fallback_with_diagnostics(payload, llm_client=llm_client).items
+
+
+def _search_milvus_or_fallback_with_diagnostics(
+    payload: RagSearchRequest,
+    llm_client: OpenAICompatibleClient | None = None,
+) -> RagSearchResult:
     category_keys = _normalize_filter_values(payload.category_keys)
     if not category_keys:
         _logger.info(
@@ -860,7 +889,10 @@ def _search_milvus_or_fallback(
             payload.merchant_id,
             payload.top_k,
         )
-        return []
+        return RagSearchResult(
+            items=[],
+            diagnostics=RagSearchDiagnostics(vector_backend="milvus"),
+        )
     if not str(payload.tenant_id or "").strip() or not str(payload.merchant_id or "").strip():
         _logger.warning(
             "rag_search vector_backend=milvus fallback_reason=merchant_context_missing "
@@ -869,7 +901,12 @@ def _search_milvus_or_fallback(
             bool(str(payload.merchant_id or "").strip()),
             payload.top_k,
         )
-        return []
+        return RagSearchResult(
+            items=[],
+            diagnostics=RagSearchDiagnostics(
+                vector_backend="milvus", fallback_reason="merchant_context_missing"
+            ),
+        )
     try:
         client = llm_client or OpenAICompatibleClient()
         query_embedding_payload = client.embed(payload.query)
@@ -890,7 +927,10 @@ def _search_milvus_or_fallback(
             len(ranked_result),
             len(category_keys),
         )
-        return ranked_result
+        return RagSearchResult(
+            items=ranked_result,
+            diagnostics=RagSearchDiagnostics(vector_backend="milvus"),
+        )
     except Exception as exc:
         _logger.warning(
             "rag_search vector_backend=milvus fallback_reason=milvus_search_failed "
@@ -901,7 +941,12 @@ def _search_milvus_or_fallback(
             len(category_keys),
             type(exc).__name__,
         )
-        return _search_sqlite(payload, llm_client=llm_client)
+        return RagSearchResult(
+            items=_search_sqlite(payload, llm_client=llm_client),
+            diagnostics=RagSearchDiagnostics(
+                vector_backend="milvus", fallback_reason="milvus_search_failed"
+            ),
+        )
 
 
 def _search_sqlite(

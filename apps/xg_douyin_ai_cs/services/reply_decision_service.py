@@ -15,7 +15,7 @@ from apps.xg_douyin_ai_cs.llm.client import (
     OpenAICompatibleClient,
 )
 from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
-from apps.xg_douyin_ai_cs.rag.repository import log_llm_call, search
+from apps.xg_douyin_ai_cs.rag.repository import log_llm_call, search_with_diagnostics
 from apps.xg_douyin_ai_cs.schemas import (
     RecommendedVehicle,
     ReplySuggestionRequest,
@@ -314,8 +314,9 @@ def build_reply_suggestion(
         len(allowed_category_ids or []),
     )
     source_chunks = []
+    fallback_reason = None
     if rag_enabled:
-        source_chunks = search(
+        search_result = search_with_diagnostics(
             RagSearchRequest(
                 tenant_id=request.tenant_id,
                 merchant_id=request.merchant_id,
@@ -326,6 +327,8 @@ def build_reply_suggestion(
                 category_ids=allowed_category_ids,
             )
         )
+        source_chunks = search_result.items
+        fallback_reason = search_result.diagnostics.fallback_reason
     if source_chunks:
         return _build_llm_reply(
             conversation_id,
@@ -334,6 +337,7 @@ def build_reply_suggestion(
             source_chunks,
             agent=agent,
             agent_warnings=agent_warnings,
+            fallback_reason=fallback_reason,
         )
 
     direct_llm_response = _build_llm_reply(
@@ -347,6 +351,7 @@ def build_reply_suggestion(
         success_match_level="direct_llm_reply",
         manual_match_level="direct_llm_manual_required",
         decision_version=DIRECT_LLM_DECISION_VERSION,
+        fallback_reason=fallback_reason,
     )
     direct_llm_response = _force_agent_config_fallback_auto_send_false(
         direct_llm_response,
@@ -403,6 +408,7 @@ def build_reply_suggestion(
             manual_required_reason=decision.get("manual_required_reason"),
             risk_flags=decision["risk_flags"],
             decision_version=DECISION_VERSION,
+            fallback_reason=fallback_reason,
             **_agent_response_fields(agent),
         )
 
@@ -446,6 +452,7 @@ def build_reply_suggestion(
         manual_required_reason=decision.get("manual_required_reason"),
         risk_flags=decision["risk_flags"],
         decision_version=DECISION_VERSION,
+        fallback_reason=fallback_reason,
         **_agent_response_fields(agent),
     )
 
@@ -597,6 +604,7 @@ def _build_llm_reply(
     success_match_level: str = "rag_llm_reply",
     manual_match_level: str = "rag_manual_required",
     decision_version: str = DECISION_VERSION,
+    fallback_reason: str | None = None,
 ) -> ReplySuggestionResponse:
     source_payload = [
         {
@@ -647,6 +655,7 @@ def _build_llm_reply(
             manual_required_reason="LLM未配置，需要人工确认",
             risk_flags=["llm_not_configured"],
             decision_version=decision_version,
+            fallback_reason=fallback_reason,
             **_agent_response_fields(agent),
         )
     except LLMRequestError as exc:
@@ -705,6 +714,7 @@ def _build_llm_reply(
             timeout_seconds=error_detail.get("timeout_seconds"),
             provider=error_detail.get("provider"),
             model=error_detail.get("model"),
+            fallback_reason=fallback_reason,
             **_agent_response_fields(agent),
         )
 
@@ -782,6 +792,9 @@ def _build_llm_reply(
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
     )
+    # RAG 检索降级诊断非空时阻断候选；fallback_reason 是检索诊断，不入 risk_flags。
+    if fallback_reason:
+        decision["auto_send"] = False
     reply_text = decision["reply_text"]
     log_llm_call(
         tenant_id=request.tenant_id,
@@ -822,6 +835,7 @@ def _build_llm_reply(
         manual_required_reason=decision.get("manual_required_reason"),
         risk_flags=decision["risk_flags"],
         decision_version=decision_version,
+        fallback_reason=fallback_reason,
         **_agent_response_fields(agent),
     )
 

@@ -275,7 +275,7 @@ def test_reply_suggestion_rag_disabled_skips_milvus(tmp_path, monkeypatch):
     assert response.manual_required is True
 
 
-def test_milvus_search_failure_falls_back_to_sqlite_without_relaxing_gate(tmp_path, monkeypatch, caplog):
+def test_milvus_search_failure_returns_fallback_reason_and_blocks_candidate(tmp_path, monkeypatch, caplog):
     from apps.xg_douyin_ai_cs.services.vector_store import VectorStoreError
 
     fake_store = _FakeVectorStore(search_error=VectorStoreError("MILVUS_SEARCH_FAILED", "details redacted"))
@@ -292,4 +292,5 @@ def test_milvus_search_failure_falls_back_to_sqlite_without_relaxing_gate(tmp_pa
     assert "fallback_reason=milvus_search_failed" in caplog.text
     assert response.rag_used is True
     assert response.source_chunks[0]["document_id"] == document_id
+    assert response.fallback_reason == "milvus_search_failed"
     assert response.auto_send is False
