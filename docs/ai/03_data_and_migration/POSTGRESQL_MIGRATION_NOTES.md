@@ -2566,3 +2566,59 @@ tests/test_9000_postgres_runtime_startup.py
 1. 在宝塔 staging 安装更新后的 requirements，确保 `psycopg[binary]` 可用。
 2. 在 staging PostgreSQL 先执行 Alembic 到 head，再运行 `scripts/smoke_9000_postgres_startup.py`。
 3. 继续 `P3-Z4` 核心页面 / 核心接口 smoke，不直接进入 production cutover。
+
+## 57. P3-D-9100 RAG metadata PostgreSQL schema + factory engine 补充
+
+任务：`P3-D-9100-RAG-METADATA-PG-SCHEMA-AND-FACTORY-1`
+
+P3-D-9100 开始 9100 RAG / AI 客服 metadata PostgreSQL schema 与 factory engine，对应本文件第 18 节路线第 3 步（P3-D 建立 9100 schema）。本批覆盖 9100 RAG metadata 全部 8 张业务表，并补齐 factory PG engine，为后续 repository 改写铺路。
+
+```text
+migrations/postgres/xg_douyin_ai_cs/versions/0002_create_rag_metadata.py
+apps/xg_douyin_ai_cs/rag/database.py
+scripts/smoke_9100_rag_pg_runtime.py
+tests/test_9100_rag_pg_metadata_schema.py
+tests/test_9100_database_factory.py
+```
+
+schema 摘要（revision = `0002_create_rag_metadata`，down_revision = `0001_empty_baseline`）：
+
+1. `knowledge_categories`：保留 system / merchant 双 scope CHECK 与 partial unique index（`uk_categories_system_key` / `uk_categories_merchant_key`），`is_base` / `is_active` 用 BOOLEAN。
+2. `knowledge_documents`：含增量字段 `category_id` / `category_key` / `metadata_json`（TEXT），`is_active` BOOLEAN。
+3. `knowledge_chunks`：`document_id` 外键 `ON DELETE CASCADE`，保留 `UNIQUE(document_id, content_hash)`；`embedding_json` 用 TEXT 直平移（用户决定不引入 JSONB），Milvus 仍是向量检索副本，本 schema 是 metadata 真源。
+4. `rag_training_runs`：含增量字段 `document_id`。
+5. `llm_call_logs` / `knowledge_training_sessions` / `knowledge_training_feedbacks`：feedbacks 含全部自动摄入增量字段（`corrected_answer` / `auto_ingest` / `ingestion_*` / `answer_hash`），保留 rating / status CHECK。
+
+类型映射：`AUTOINCREMENT` → `BigInteger autoincrement`，布尔 0/1 → `BOOLEAN`，TEXT 时间戳 → `DateTime(timezone=True) server_default now()`，无任何 SQLite 专属语法（PRAGMA / INSERT OR IGNORE / AUTOINCREMENT / datetime('now')）。
+
+factory engine（P3-D2）：
+
+1. `apps/xg_douyin_ai_cs/rag/database.py` 新增 `create_rag_engine()`，PG backend 使用同步 `psycopg` + 连接池（对齐 9000 `create_database_engine`），读取 `RAG_DB_POOL_SIZE` / `RAG_DB_MAX_OVERFLOW` / `RAG_DB_POOL_TIMEOUT` / `RAG_DB_POOL_RECYCLE` / `RAG_DB_STATEMENT_TIMEOUT_MS`，sqlite 保留 dev 兜底。
+2. `connect()`（sqlite3 原生路径）在 PG backend 仍主动报错：repository 仍是 SQLite 专属 SQL，P3-D3 改写前不可用；PG schema 由 Alembic 管，engine 走 `create_rag_engine()`。
+3. 本轮不引入 async engine（9100 repository 是同步链路，async 另起）。
+
+dev smoke：
+
+```text
+scripts/smoke_9100_rag_pg_runtime.py --database-url "postgresql://..."
+```
+
+该 smoke 跑 9100 Alembic `upgrade head`，再用 `create_rag_engine()` 直连验证 8 张表存在；不写业务数据，不触碰 Milvus / 训练 / 回复逻辑。要求 `RAG_DATABASE_URL` 为 PostgreSQL，URL 输出脱敏。
+
+边界确认：
+
+1. 本轮只建 9100 PostgreSQL schema 与 factory engine，不迁移 SQLite 数据。
+2. 本轮不切换 9100 默认 `RAG_DATABASE_URL`，不删除 `XG_DOUYIN_AI_CS_DB_PATH` SQLite 兼容路径。
+3. 本轮不修改 9100 repository SQL（`apps/xg_douyin_ai_cs/rag/repository.py` 仍是 `?` / `INSERT OR IGNORE` / `PRAGMA`），PG 下业务路径不可用，待 P3-D3。
+4. 本轮不触碰 Milvus 检索逻辑、知识训练写入、反馈自动摄入、`reply_decision_service` auto_send gate。
+5. 本轮不引入 async engine / async sessionmaker。
+6. 本轮不连接宝塔 production，不读取 production SQLite。
+7. 本轮不触发 LLM、抖音发送、微信发送、私信发送或自动回复 gate。
+8. `docker-compose.yml` 的 9100 服务仍走 SQLite（`XG_DOUYIN_AI_CS_DB_PATH`），compose 切 PG 待 9100 repository 改写完成（P3-D3 后）。
+
+后续建议：
+
+1. `P3-D3-9100`（repository 改写，PG-only）：`?` → `%s`、`INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`、`PRAGMA table_info` → information_schema、布尔 0/1 → BOOLEAN；SQLite 仅 dev 兜底。
+2. `P3-E-9100`：9100 RAG metadata SQLite -> PostgreSQL 数据迁移脚本（类比 9000 `migrate_9000_sqlite_to_postgres_cutover.py`）。
+3. compose 切 9100 `RAG_DATABASE_URL` + `depends_on postgres` + init 第二个 database（待 repository 改写后）。
+4. 9100 Z5 Runbook（切换 / 回滚手册，追加到 `POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md`）。

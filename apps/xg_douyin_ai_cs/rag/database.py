@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from sqlalchemy import create_engine, event
 
 from app.database_url import parse_database_url
 from apps.xg_douyin_ai_cs.config import settings
@@ -36,10 +39,56 @@ def database_path(database_url: str | None = None) -> Path:
     return Path(runtime.sqlite_path)
 
 
+def _postgres_sync_url(raw_url: str) -> str:
+    """把规划中的 asyncpg URL 转成同步 psycopg URL（对齐 9000 create_database_engine）。"""
+    parts = urlsplit(raw_url)
+    if parts.scheme in {"postgresql", "postgresql+asyncpg"}:
+        return parts._replace(scheme="postgresql+psycopg").geturl()
+    return raw_url
+
+
+def create_rag_engine(database_url: str | None = None):
+    """创建 9100 RAG metadata SQLAlchemy engine。
+
+    P3-D2：PG backend 使用同步 psycopg + 连接池（对齐 9000），供 alembic / smoke / 后续
+    P3-D3 repository 改写使用。SQLite backend 保留 dev 兜底。本函数不替换 connect()——
+    repository 仍走 sqlite3 路径，P3-D3 改写后才切换到 engine / Session。
+    """
+    runtime = get_database_runtime(database_url)
+    if runtime.backend == "postgresql":
+        engine = create_engine(
+            _postgres_sync_url(runtime.raw_url),
+            pool_size=settings.rag_db_pool_size,
+            max_overflow=settings.rag_db_max_overflow,
+            pool_timeout=settings.rag_db_pool_timeout,
+            pool_recycle=settings.rag_db_pool_recycle,
+            pool_pre_ping=True,
+        )
+
+        @event.listens_for(engine, "connect")
+        def _set_statement_timeout(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute(f"SET statement_timeout = {settings.rag_db_statement_timeout_ms}")
+            cursor.close()
+
+        return engine
+    if runtime.backend != "sqlite":
+        raise RuntimeError(f"不支持的 9100 RAG 数据库后端: {runtime.backend}")
+    # SQLite dev 兜底（不进连接池配置，保持简单）
+    return create_engine(
+        runtime.raw_url,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+
+
 def connect(database_url: str | None = None) -> sqlite3.Connection:
     runtime = get_database_runtime(database_url)
     if runtime.backend == "postgresql":
-        raise RuntimeError("PostgreSQL backend 已识别但 9100 本轮未启用，后续 P2/P3 再接入连接池")
+        raise RuntimeError(
+            "PostgreSQL backend 已识别，但 9100 repository 仍使用 SQLite 专属 SQL "
+            "（PRAGMA / INSERT OR IGNORE / ? 占位符），P3-D3 改写前 connect() 不可用；"
+            "PG schema 由 alembic 管理，engine 走 create_rag_engine()"
+        )
     if runtime.backend != "sqlite" or not runtime.sqlite_path:
         raise RuntimeError(f"不支持的 9100 metadata 数据库后端: {runtime.backend}")
 
