@@ -223,3 +223,49 @@ def test_admin_lists_words_with_filters():
     resp2 = client.get("/admin/forbidden-words?library_key=used_car_sales_base")
     assert resp2.status_code == 200
     assert resp2.json()["data"]["total"] >= 1
+
+
+def test_admin_create_word_rejects_blank_word():
+    # 纯空格 word 能绕过 Pydantic min_length（按字符数计），需业务层拒绝。
+    db = TestSession()
+    _seed_library(db)
+    db.close()
+
+    client = _client(_context())
+    resp = client.post(
+        "/admin/forbidden-words",
+        json={
+            "library_key": "used_car_sales_base",
+            "word": "   ",
+            "safe_word": "安全词",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "WORD_REQUIRED"
+
+
+def test_admin_update_word_rejects_blank_word():
+    db = TestSession()
+    _seed_library(db)
+    db.close()
+
+    client = _client(_context())
+    created = client.post(
+        "/admin/forbidden-words",
+        json={
+            "library_key": "used_car_sales_base",
+            "word": "现车很多",
+            "safe_word": "可到店详询",
+        },
+    )
+    assert created.status_code == 200
+    word_id = created.json()["data"]["id"]
+
+    resp = client.put(
+        f"/admin/forbidden-words/{word_id}",
+        json={"word": "   "},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "WORD_REQUIRED"

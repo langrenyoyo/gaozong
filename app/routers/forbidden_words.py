@@ -109,6 +109,14 @@ def _has_casefold_duplicate(db: Session, library_id: int, word: str, exclude_id:
     return any((row.word or "").casefold() == target for row in query.all())
 
 
+def _validate_word_required(value: str) -> str:
+    """strip 后拒绝纯空白 word；纯空格能绕过 Pydantic min_length（按字符数计）。"""
+    word = value.strip()
+    if not word:
+        raise _bad_request("WORD_REQUIRED", "违禁词不能为空")
+    return word
+
+
 @router.get("/forbidden-word-libraries")
 def list_libraries(
     db: Session = Depends(get_db),
@@ -158,7 +166,7 @@ def create_word(
 ):
     """新增词条；校验词库存在、safe_word 非空、同库大小写等价查重。"""
     _require_admin(context)
-    word = payload.word.strip()
+    word = _validate_word_required(payload.word)
     safe_word = payload.safe_word.strip()
     if not safe_word:
         raise _bad_request("SAFE_WORD_REQUIRED", "安全替换词不能为空")
@@ -197,8 +205,8 @@ def update_word(
     data = payload.model_dump(exclude_unset=True)
 
     if "word" in data and data["word"] is not None:
-        new_word = data["word"].strip()
-        if new_word and new_word != record.word:
+        new_word = _validate_word_required(data["word"])
+        if new_word != record.word:
             if _has_casefold_duplicate(db, record.library_id, new_word, exclude_id=record.id):
                 raise _bad_request("WORD_DUPLICATED", "同一词库已存在相同违禁词")
             record.word = new_word

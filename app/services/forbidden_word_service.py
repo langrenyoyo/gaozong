@@ -48,16 +48,6 @@ class ForbiddenWordReplacementResult:
         return self.audit_ids[0] if self.audit_ids else None
 
 
-# 只允许从后端已校验上下文传入的字段；其它前端字段一律忽略。
-_ALLOWED_CONTEXT_KEYS = (
-    "context_type",
-    "context_id",
-    "conversation_short_id",
-    "lead_id",
-    "record_id",
-    "task_id",
-)
-
 _PHONE_PATTERN = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
 # 微信/微信号/wx/wechat 后跟账号值统一脱敏为掩码值，不保留账号明文。
 _WECHAT_ACCOUNT_PATTERN = re.compile(
