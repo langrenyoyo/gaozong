@@ -43,7 +43,10 @@ services:
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/docs', timeout=5)"]
+      # P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A1：用 /ready 替代 /docs
+      # /ready 验证 PG 连通 + database 名 + alembic head + 关键表，任一失败返回 503 → unhealthy
+      # 前提：部署前必须先执行 alembic upgrade head，否则 alembic_revision 检查失败导致 unhealthy
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/ready', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -71,7 +74,9 @@ services:
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/health', timeout=5)"]
+      # P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A1：用 /ready 替代 /health（liveness）
+      # /ready 验证 RAG PG 连通 + database 名 + alembic head + 关键表，不调用 SQLite fallback
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

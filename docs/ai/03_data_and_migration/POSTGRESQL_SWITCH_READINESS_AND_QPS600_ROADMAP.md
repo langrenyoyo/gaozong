@@ -1404,3 +1404,85 @@ P3-E-9100 覆盖 9100（apps/xg_douyin_ai_cs）RAG metadata 7 表从 SQLite 切 
 ### 34.8 Z5 交付边界
 
 本轮 P3-E（第 1-4 步）交付：迁移脚本 + 静态测试 + 生产 compose 改动 + Z5 Runbook + dev 真实 PG smoke。compose 文件层面已就绪，但 production 的 `alembic upgrade` + cutover apply + `compose up` 仍需另起审批窗口由人工按 34.1-34.3 执行，按 34.4 回滚预案保障。
+
+### 34.9 staging 预发布演练（production 前置硬门禁，17 步）
+
+P3-PGSQL-PRECUTOVER-REMEDIATION-1 / B2。本节是 34.2.6 所述"staging 演练"的完整流程。production cutover（34.3）前必须在独立 staging 环境完整跑通一次"切换 + 回滚 + 再前进"，签字归档后方可进入 34.1 审批窗口。staging 禁止共享 production PG 实例或直连生产 SQLite。
+
+1. staging 独立环境：独立 PG 实例（不共享 dev / production volume），`.env` 设 `APP_ENV=staging`、`PG_PASSWORD` 非空、`RAG_DATABASE_URL` 指向 staging PG。
+2. staging 数据准备：从 production SQLite 副本复制（`cp data/xg_douyin_ai_cs.db` 到 staging 宿主机），禁止 staging 直连生产文件或生产 PG。
+3. staging postgres 首启：`docker compose up -d postgres`，确认 `init-prod/010_create_rag_database.sh` 建出第二个 database `xg_douyin_ai_cs`（`docker compose exec postgres psql -U ${PG_USER} -l` 可见）。
+4. staging 9100 alembic upgrade：`docker compose exec xg-douyin-ai-cs python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head`，确认 `alembic_version` = `0002_create_rag_metadata`，7 表齐全。
+5. staging cutover dry-run：`python scripts/migrate_9100_sqlite_to_postgres_cutover.py --sqlite-db-path <staging-sqlite> --postgres-url <staging-pg>`，确认 `DRY_RUN_PASS` 且 `error=0`，记录 chunks 行数（评估 34.6 开销）。
+6. staging cutover apply：`APP_ENV=staging python scripts/migrate_9100_sqlite_to_postgres_cutover.py --sqlite-db-path <staging-sqlite> --postgres-url <staging-pg> --apply --yes`，记录耗时。
+7. staging 9100 compose up（`RAG_DATABASE_URL` 指向 staging PG + `depends_on: postgres`），容器 healthy。
+8. staging `/ready` 验证：返回 200 且 checks 全 pass（backend=postgresql + database_name=xg_douyin_ai_cs + alembic_revision=head + critical_tables knowledge_documents/knowledge_chunks pass）。
+9. staging 工作台冒烟：RAG 检索 / 回复建议 / 知识训练查询命中 `tenant_id=xiaogao_system` scope 数据。
+10. staging 反馈摄入：触发一次反馈写入，确认落 PG metadata（`SELECT` 验证）；同时确认 SQLite 文件 mtime 冻结（新写入不走 SQLite）。
+11. staging 回滚演练：注释 compose `RAG_DATABASE_URL` + 恢复 `XG_DOUYIN_AI_CS_DB_PATH` + `up -d --build xg-douyin-ai-cs`，确认 9100 回到 SQLite backend + 工作台 RAG 恢复。
+12. staging 回滚后再前进：重新 `--apply`（幂等 `ON CONFLICT DO UPDATE ... RETURNING xmax=0`）+ `up`，确认 PG 恢复正常，验证幂等性。
+13. staging 观察 ≥ 24h：记录 RAG 检索延迟、9100 5xx、连接池、慢查询。
+14. staging 全量测试：`pytest tests/test_9100_cutover_sqlite_to_postgres_migration.py` + `python scripts/smoke_9100_rag_pg_runtime.py --database-url <staging-pg>` 通过。
+15. staging 演练归档：耗时、坑、回滚/再前进验证记录写入交付物。
+16. staging 签字门禁：执行人 + 审批人 + DBA 三方签字后方可进入 34.1 production 审批窗口。
+17. 演练有效期：staging 演练到 production 切换间隔 ≤ 7 天；超期或中间有代码 / 迁移变更须重跑演练（避免环境漂移）。
+
+通过标准：步骤 5-10 全 pass + 步骤 11-12 回滚/再前进验证通过 + 步骤 16 三方签字。
+
+### 34.10 生产环境控制矩阵
+
+P3-PGSQL-PRECUTOVER-REMEDIATION-1 / B2。本节细化 34.1 审批窗口与 34.4 回滚的生产控制项，作为 Z5 执行的硬约束清单（与 34.3 切换步骤、34.4 回滚手册配套使用）。
+
+| 控制项 | 约束 |
+|--------|------|
+| 维护窗口 | 低峰期（建议 02:00–05:00），窗口 ≥ 2h；提前 ≥ 24h 通知业务方 + 客服（9100 工作台可能短暂不可用）。 |
+| 执行人 | 1 人主执行 + 1 人复核；主执行须能直接操作宝塔宿主机与 `docker compose`。 |
+| 审批人 | 1 人审批（技术负责人），签字归档；审批人不得兼任执行人。 |
+| DBA | 34.3 步骤 4（production PG apply）须 DBA 在场复核生产 PG 写入。 |
+| 最大故障窗口 | 从 cutover apply 到 `/ready` 200 或回滚完成 ≤ 30 分钟；超时立即按 34.4 回滚。 |
+| 回滚触发条件 | 任一：9100 5xx 突增 / RAG 检索异常 / 知识训练写入失败 / 数据不一致 / `/ready` 持续 503 超 5 分钟。 |
+| 割接失败恢复（apply 中途报错） | apply 终止 → 不执行 `compose up`，9100 继续跑旧 SQLite（在线未断）；保留 apply 日志排查；回滚 = 不切换。 |
+| migration 成功但 cutover 失败 | alembic 已 upgrade 但 apply 中途失败 → PG 已有部分数据，SQLite 仍完整；回滚 = compose 恢复 `XG_DOUYIN_AI_CS_DB_PATH`，PG 部分数据保留供排查，**不删** volume。 |
+| PG 新数据回滚丢失 | 切 PG 后产生的 RAG 新写入（反馈 / 训练会话）回滚到 SQLite 时会丢失（SQLite 无这些写）；回滚决策须权衡丢失量，低峰 + 短观察窗降低丢失。 |
+| 旧 SQLite 归档 | cutover 成功 + 观察 48h 通过后，`cp data/xg_douyin_ai_cs.db data/archive/xg_douyin_ai_cs.db.cutover-<date>`，保留 ≥ 30 天；归档校验（`sqlite3 .tables`）通过前不删原文件。 |
+| 观察期 | 切换后 ≥ 48h 监控：9100 `/ready`、5xx、RAG 延迟、连接池、慢查询；观察期内不部署其他 9100 变更。 |
+| 回滚窗口 | 切换后 48h 内可快速回滚（SQLite 文件未动）；48h 后回滚须重新评估 PG 新数据丢失量。 |
+
+通过标准：切换后 `/ready` 200 + 工作台 RAG 正常 + 48h 无异常 + 无 5xx 突增 + 三方签字归档。
+
+### 34.11 向量后端策略（生产人工确认，不自动切换）
+
+P3-PGSQL-PRECUTOVER-REMEDIATION-1 / B3。9100 向量检索后端由 `RAG_VECTOR_BACKEND` 决定（sqlite / milvus）。metadata 真源恒为 PG（chunks.embedding_json），向量后端只是检索副本/机制。本轮不自动切换，生产选择需人工确认。
+
+**两选项机制**（见 `apps/xg_douyin_ai_cs/services/vector_store.py` + `rag/repository.py`）：
+
+| 维度 | sqlite（默认） | milvus |
+|------|---------------|--------|
+| 检索 | `repository.search` 读 PG `embedding_json` + Python `cosine_similarity` 全量计算（O(active chunks)） | `MilvusVectorStore.search` ANN 索引 |
+| 训练写入 | 直插 PG `embedding_json`（SQLite 模式 `upsert_chunks` 为 NotImplementedError，不走） | 双写：PG `embedding_json` + `store.upsert_chunks(milvus_chunks)`（repository.py:514-520, 698-705） |
+| 额外服务 | 无 | 需独立 Milvus 实例（生产 `docker-compose.yml` 当前未含 Milvus service，须外部提供或新增 service） |
+| 数据真源 | PG metadata（chunks.embedding_json） | PG metadata 是真源，Milvus 是检索副本 |
+
+**约束矩阵**：
+
+| 维度 | sqlite | milvus |
+|------|--------|--------|
+| volume 路径 | PG volume（`./docker-data/postgres`） | PG volume + Milvus data volume（独立，路径由 Milvus 实例决定） |
+| 恢复 | PG 恢复即恢复（无独立副本） | PG 恢复后须从 metadata 重建 Milvus collection（全量 upsert） |
+| 多实例 | 多 9100 共享 PG 连接池，无副本竞争 | 多 9100 共享同一 Milvus collection（连接别名 `xg_douyin_ai_cs_milvus`） |
+| 不一致重建 | 无副本，不存在不一致 | 从 PG metadata 全量重建：遍历 active chunks → `ensure_collection(create_if_missing=True)` → `upsert_chunks` |
+| 回滚影响（PG cutover） | 向量后端随 PG cutover（无独立切换） | Milvus 数据不随 PG cutover 变化；metadata `chunk_id`/`document_id` 平移后 id 一致，Milvus 无需重建 |
+| smoke 验证 | `repository.search` 命中 + RAG 检索返回正常 | `milvus_collection_check.py` + `milvus_canary_e2e.py` 通过 + `health_check` connected=True + collection_exists=True |
+
+**生产决策（人工确认，本轮不定）**：
+
+1. 生产 active chunks 行数量级 —— 决定 sqlite 全表扫描 + Python 余弦是否可接受（数百级可接受，数千级须压测，超万级不建议 sqlite）。
+2. 是否已有可用 Milvus 实例 —— 无则须新增 `docker-compose` service 或外部托管（成本 + 运维）。
+3. sqlite 模式 —— 生产前必须压测 `repository.search` 在生产数据量下的延迟与内存（全量 embedding_json 拉内存，~15-30 KB/chunk）。
+4. milvus 模式 —— 必须验证训练双写链路（PG + Milvus upsert）+ `milvus_collection_check.py` / `milvus_canary_e2e.py` 在 staging 通过。
+
+**默认与边界**：
+- 未确认前生产保持 `RAG_VECTOR_BACKEND=sqlite`（与 dev 一致），在低规模下运行。
+- 本轮不修改 `config.py` 默认值（`rag_vector_backend` 默认 sqlite），不自动切换。
+- `/ready` 不校验向量后端 —— 向量后端是检索性能优化，非接收业务流量的硬前提；向量后端异常不应导致 9100 标记 not_ready，由 `MilvusVectorStore.health_check` 单独诊断（见 `services/vector_store.py`）。
+- 切换向量后端（sqlite ↔ milvus）须独立审批窗口，不与 PG cutover 窗口同时切换，避免叠加风险。

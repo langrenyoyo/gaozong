@@ -1,3 +1,23 @@
+# ============================================================================
+# ⚠️ 已废弃（DEPRECATED）— P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A2
+# ============================================================================
+# 本文件是 SQLite-only 旧版 9000 单服务部署入口，仅保留历史参考，不得用于生产。
+#
+# 生产 PostgreSQL 部署必须使用根目录 docker-compose.yml：
+#   docker compose -f docker-compose.yml up -d --build
+#
+# 本文件与生产不兼容的点：
+#   - 仅 9000 单服务，无 9100 RAG，无 PostgreSQL，无 alembic
+#   - build.dockerfile 指向根 Dockerfile（SQLite-only，已废弃，见其顶部说明）
+#   - 数据持久化走 SQLite 文件（./docker-data），与 PG metadata 真源冲突
+#   - healthcheck 用 /docs（非 /ready），不校验 DB / alembic / 关键表
+#
+# 如需历史 SQLite 形态本地复现（仅 dev 参考）：
+#   APP_ENV 必须留空或 development，否则根 Dockerfile CMD 会拒绝启动。
+#
+# 保留原因：历史宝塔部署形态参考；如确认无引用可人工删除（本轮不删）。
+# ============================================================================
+
 services:
   auto-wechat:
     build:

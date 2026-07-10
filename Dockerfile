@@ -1,3 +1,20 @@
+# ============================================================================
+# ⚠️ 已废弃（DEPRECATED）— P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A2
+# ============================================================================
+# 本文件是 SQLite-only 旧版 9000 单服务镜像，仅保留历史参考，不得用于生产。
+#
+# 生产 PostgreSQL 部署必须使用 Dockerfile.backend.dev（9000 + 9100 共享镜像，
+# 含 apps/ / scripts/ / migrations/ + psycopg + alembic）。
+#
+# 本镜像与生产不兼容的点：
+#   - 仅 COPY app/，不含 apps/（9100 RAG）/ scripts / migrations
+#   - 数据走 SQLite 文件（/app/data），与 PG metadata 真源冲突
+#   - 无 PostgreSQL 驱动，无 alembic migration 链
+#
+# 防误用：运行时若 APP_ENV=production，CMD 拒绝启动（倒逼改用 Dockerfile.backend.dev）。
+# 保留原因：历史宝塔部署形态参考；如确认无引用可人工删除（本轮不删）。
+# ============================================================================
+
 FROM python:3.10-slim
 
 # pip 镜像与超时配置（加速国内构建）
@@ -29,5 +46,7 @@ USER app
 
 EXPOSE 9000
 
-# 容器启动命令
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
+# 防误用 guard：APP_ENV=production 时拒绝启动（废弃 SQLite-only 镜像禁止生产使用）。
+# 用 shell form 让 $APP_ENV 展开；exec 让 uvicorn 替换 sh 进程接管 SIGTERM。
+# dev / 未设 APP_ENV 正常启动。
+CMD sh -c 'if [ "$APP_ENV" = "production" ]; then echo "[DEPRECATED] SQLite-only 镜像禁止生产使用，请改用 Dockerfile.backend.dev" >&2; exit 1; fi; exec uvicorn app.main:app --host 0.0.0.0 --port 9000'
