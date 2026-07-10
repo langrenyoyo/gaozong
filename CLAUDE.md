@@ -76,7 +76,22 @@ docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
 5. 统一小高知识库训练和检索 scope 固定为 `tenant_id=xiaogao_system`、`merchant_id=xiaogao_base`、`douyin_account_id=0`、`category_key=base`。
 6. NewCar 真实鉴权本地联调必须显式设置 `NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`。
 7. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清本地 token。
-8. 前端不得持有 internal token，不得直连 9100 / Milvus；不得触发抖音发送、私信发送或自动回复真实发送 gate。
+8. 前端不得持有 internal token，不得直连 9100 / Milvus；一期已放开旧的自动发送硬门禁，但任何真实发送仍必须经过后端 gate，并保留违禁词、人工接管、限频、失败回写、幂等和紧急停止等运行保护。
+
+## 2026-07-10 小高AI系统一期确认范围覆盖
+
+如 `docs/ai/01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md` 与本文旧段落冲突，以该一期确认文档为准。当前 Phase 0 仅同步上下文，不代表发送业务逻辑已在代码中完成改造。
+
+一期确认要点：
+
+1. AI剪辑、一键过审纳入小高AI系统一期。
+2. AI剪辑由 `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` 仓库。
+3. 一键过审复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI`。
+4. 微信助手规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
+5. 留资口径为 `extracted_phone`、`extracted_wechat`、`all_extracted_contacts` 任一存在。
+6. 抖音侧和微信侧后续按一期计划放开旧自动发送硬门禁，但必须保留违禁词替换、人工接管、限频、失败回写、幂等、紧急停止。
+7. 商户管理、管理员账号、登录、功能授权仍归 NewCarProject / used-car。
+8. 微信 UI 自动化底线仍有效：不读取微信数据库、不 DLL 注入、不微信协议逆向；Local Agent 默认只监听 `127.0.0.1:19000`。
 
 ------
 
@@ -132,7 +147,7 @@ Output Rules
 - NewCarProject 负责商户、账号、权限、菜单、套餐、消耗管理
 - AI小高线索负责抖音扫码鉴权、抖音私信、原始线索事件、联系方式提取、有效线索生成
 - 小高AI微信助手负责线索分配、微信通知任务、Local Agent、本地微信通知销售、回复检测、超时重分配、失败记录、人工处理、Excel 导出
-- AI小高剪辑是独立售卖子功能系统，巨量一键过审属于 AI小高剪辑，不属于小高AI微信助手
+- AI剪辑、一键过审已纳入小高AI系统一期扩展范围；AI剪辑由 `auto_edit` 先独立完成后迁入本仓库，一键过审复制改造 `douyinAPI` 现有实现且运行时解耦
 - 小高算力不是子功能系统，是商户查看套餐和消耗的展示能力
 - douyinAPI 当前定位为 demo / 参考实现 / 历史代码沉淀，不应作为长期正式生产依赖
 - 第一版不接入 LLM，不保存截图，不把三个子功能混成一个服务
@@ -172,8 +187,8 @@ Output Rules
 - 本地 Docker 开发环境（docker-compose.dev.yml：9000 + 9100 + frontend，19000 不容器化）
 
 当前版本定位（按子系统区分）：
-- 微信助手（9000 + 19000）：✅ 自动检测单次闭环演示版；❌ 非后台无限轮询版；❌ 非自动发送版（业务派单 sent 仍为 false）
-- 抖音AI客服（9100）：✅ 多账号工作台 + RAG/LLM 回复建议；❌ AI 回复 auto_send 恒为 false，不自动发送私信（reply_decision_service 全路径 auto_send=False）
+- 微信助手（9000 + 19000）：✅ 自动检测单次闭环演示版；一期计划后续放开真实派单发送，但必须经过联系人验证、违禁词替换、限频、失败回写、幂等和紧急停止
+- 抖音AI客服（9100）：✅ 多账号工作台 + RAG/LLM 回复建议；一期计划后续从回复建议收束为 AI 托管自动回复闭环，真实发送必须走后端 gate
 - 全局：❌ 非多客户生产版（NewCarProject 对接字段、生产验签切换、状态机重构待落地）
 
 进行中：
@@ -206,7 +221,7 @@ auto_wechat（端口 9000，AI小高线索 + 小高AI微信助手）
 抖音私信会话
     ↓ 9100 工作台拉取 / webhook 兜底生成账号
 抖音AI小高客服（端口 9100，apps/xg_douyin_ai_cs）
-    ↓ RAG 检索 + LLM 回复建议（auto_send=false，人工确认）
+    ↓ RAG 检索 + LLM 回复决策（一期 AI 托管真实发送需经过后端 gate）
 工作台前端（DouyinAiCsWorkbenchPage）
 ```
 
@@ -230,7 +245,7 @@ auto_wechat（端口 9000，AI小高线索 + 小高AI微信助手）
 - 谁打开 React 页面，谁点击按钮，127.0.0.1 就是谁的电脑
 - 虚拟机/测试电脑默认无源码，不得要求运行 python 命令作为验收
 - React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
-- 业务自动派单发送仍禁止
+- 后续真实派单发送必须经过 Local Agent 安全 gate，不能绕过联系人验证、前台焦点、失败回写、幂等和紧急停止
 
 前端架构：
 
@@ -265,7 +280,7 @@ auto_wechat 不负责：
 - 管理 NewCarProject 商户、账号、套餐、消耗、菜单
 - 管理所有子功能权限
 - AI小高线索的完整抖音扫码鉴权与私信线索能力
-- AI小高剪辑 / 巨量一键过审
+- 长期依赖外部 `auto_edit` 或 `douyinAPI` 运行时；AI剪辑和一键过审迁入后必须形成 auto_wechat 内部边界
 - 把 douyinAPI 作为长期正式生产依赖
 - 第一版 LLM 判断
 - 第一版截图保存或截图入库
@@ -586,12 +601,12 @@ P0-3 已完成：
 6. **P0-3F 截图链路修复**：修复 screenshot_debug.py Win32 64 位 GDI 句柄问题，100 次截图压力测试通过
 7. **P0-3G OCR 最小实测**：EasyOCR 安装，Aw3 顶部标题 OCR 5/5 成功，啊东、只能识别主体
 8. **P0-3H OCR 接入联系人验证**：ocr_matcher.py + contact_ocr_verifier.py，Aw3 5/5 verified，啊东、5/5 partial_match
-9. **P0-3I Aw3 单条发送复测**：debug_aw3_single_send.py，paste-only 成功，single_send 成功，但业务自动派单发送仍未放开
+9. **P0-3I Aw3 单条发送复测**：debug_aw3_single_send.py，paste-only 成功，single_send 成功；后续一期真实发送需另按安全 gate 接入
 
 P0-3 结论：
 - Aw3 是当前唯一允许自动验证和 debug 测试的联系人（OCR 5/5 verified）
 - 啊东、只能 partial_match，不允许自动发送
-- P0-3I 证明 debug 单发链路可用，不代表业务自动发送已放开
+- P0-3I 证明 debug 单发链路可用，不代表已完成一期真实发送业务改造
 
 ------
 
@@ -621,7 +636,7 @@ Windows 11 虚拟机真实状态：
 - /agent/wechat/test 只验证当前聊天窗口，没有自动执行 open_chat_by_nickname("Aw3")
 
 P0-4 下一步：
-- **P0-4A-3**：/agent/wechat/test 自动执行 readiness → foreground → open_chat_by_nickname("Aw3") → verify OCR → paste_only → sent=false
+- **P0-4A-3**：/agent/wechat/test 历史目标为 readiness → foreground → open_chat_by_nickname("Aw3") → verify OCR → paste_only；一期真实发送另按安全 gate 接入
 - P0-4B：安装包/分发优化
 - P0-4C：Windows 10 测试电脑复测
 
@@ -629,9 +644,9 @@ P0-4 下一步：
 
 # Current Safety Gates（当前活跃安全约束）
 
-以下约束在 P0-4A-3 通过前必须严格执行：
+以下约束在一期真实发送业务改造完成前必须严格执行：
 
-1. **业务自动派单发送仍禁止**（sent 必须为 false）
+1. 真实派单发送只能在通过联系人验证、前台焦点、违禁词替换、限频、失败回写、幂等和紧急停止 gate 后接入
 2. P0-4A 只验证本地 Agent 架构和 Aw3 paste_only
 3. Aw3 是唯一允许自动验证和 debug 测试的联系人
 4. 啊东、只能 partial_match，不允许自动发送
@@ -647,16 +662,16 @@ P0-4 下一步：
 
 ## WeChat Automation Safety Boundary
 
-以下边界适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
+以下底线适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
 
 1. 不允许绕过 foreground_guard。
 2. 不允许绕过 search_focus guard。
 3. 不允许绕过 search_text_verified。
-4. 不允许未经验证直接粘贴。
-5. 不允许发送 Ctrl+V。
-6. 不允许发送 Enter。
-7. 不允许把 sent 置为 true。
-8. 不允许业务自动派单发送。
+4. 不允许未经验证直接粘贴或发送。
+5. 真实发送必须有联系人验证、前台焦点、违禁词替换、限频、失败回写、幂等和紧急停止保护。
+6. Local Agent 只操作客户本机微信，9000 不直接操作微信。
+7. 检测链路保持只读，不写输入框、不发送。
+8. partial_match、manual_review_required、hidden/minimized、foreground guard 失败时必须阻断并回写原因。
 
 # LAN Access Rules
 
@@ -889,7 +904,7 @@ tsconfig.node.json 必须包含：
 2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
 3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
 4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
-5. 业务自动派单发送仍禁止，sent 必须为 false
+5. 一期已放开旧自动发送硬门禁，但真实发送业务改造必须保留违禁词、人工接管、限频、失败回写、幂等、紧急停止
 6. React 离线提示应使用："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
 7. Bug 修复必须先做代码探索和根因确认，禁止仅凭现象就编写修复方案（详见 02_EXECUTION_RULES.md #17 BUG 修复前置探索原则）
 8. 高风险逻辑必须强制写诊断日志，包含 stage、输入摘要、failure_stage，禁止只写"失败了"（详见 02_EXECUTION_RULES.md #19 高风险代码日志原则）
@@ -1111,7 +1126,7 @@ logging_config.py 使用说明.md
 
 测试验收计划文档：`docs/ai/05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md`
 
-关键结论：第一版产品化测试验收范围覆盖 Webhook 生产验签、原始 body 签名一致性、联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出。正式验收不以免验签为通过口径；Local Agent 真机验收必须保持 `sent=false`、检测只读、不粘贴、不发送、不按 Enter。
+关键结论：第一版产品化测试验收范围覆盖 Webhook 生产验签、原始 body 签名一致性、联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出。该记录描述 P1 单次闭环时期的历史验收口径；一期真实发送改造必须另按违禁词、人工接管、限频、失败回写、幂等、紧急停止 gate 验收。
 
 本轮只输出测试验收计划；不得顺手修改业务代码、测试代码、配置默认值、接口实现、数据库模型或依赖，不得启动服务，不得执行迁移或真机微信自动化。
 

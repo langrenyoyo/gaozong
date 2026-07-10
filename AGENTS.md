@@ -78,9 +78,24 @@ docs/ai 根目录保留入口规则与项目上下文；专题文档已按阶段
 3. Milvus 是 embedding + 向量检索副本，不是 documents、chunks、feedback、training_run 或状态字段的 metadata 真源。
 4. RAG `ask` 在 `RAG_VECTOR_BACKEND=milvus` 时，不能因为 SQLite active count 为 0 就跳过 Milvus 检索。
 5. 前端不得持有 internal token，不得直连 9100 / Milvus，不得把前端传入的 tenant_id / merchant_id / douyin_account_id 当可信上下文。
-6. 禁止触发抖音发送、私信发送、自动回复真实发送 gate；AI 回复默认仍必须通过后端 gate。
+6. 一期已放开旧的自动发送硬门禁；抖音私信、AI 自动回复和微信派单真实发送仍必须通过后端 gate 与运行保护，不得绕过违禁词、人工接管、限频、失败回写、幂等、紧急停止。
 7. NewCar 真实鉴权本地联调必须显式设置：`NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`。
 8. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清理前端本地 token。
+
+## 2026-07-10 Phase 0-B 入口上下文同步
+
+Phase 0-B 只清理入口上下文残留，不代表发送业务代码已经完成改造。
+
+一期确认范围同步：
+
+1. AI剪辑、一键过审纳入小高AI系统一期。
+2. AI剪辑由 `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` 仓库。
+3. 一键过审复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI`。
+4. `auto_wechat:ai_edit` 是 AI剪辑与一键过审共用入口权限，不新增 `auto_wechat:ai_video` 或 `auto_wechat:ad_review`。
+5. 微信助手规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
+6. 留资口径为 `extracted_phone`、`extracted_wechat`、`all_extracted_contacts` 任一存在。
+7. 旧的“只建议不实发”“只粘贴不实发”硬门禁已废止；真实发送必须经 AI 托管、联系人验证、前台焦点、违禁词、人工接管、限频、失败回写、幂等、紧急停止等 gate。
+8. 微信自动化底线继续有效：不读取微信数据库、不 DLL 注入、不微信协议逆向；Local Agent 默认只监听 `127.0.0.1:19000`。
 
 优先级如下：
 
@@ -126,7 +141,7 @@ Output Rules
 - NewCarProject 负责商户、账号、权限、菜单、套餐、消耗管理
 - AI小高线索负责抖音扫码鉴权、抖音私信、原始线索事件、联系方式提取、有效线索生成
 - 小高AI微信助手负责线索分配、微信通知任务、Local Agent、本地微信通知销售、回复检测、超时重分配、失败记录、人工处理、Excel 导出
-- AI小高剪辑是独立售卖子功能系统，巨量一键过审属于 AI小高剪辑，不属于小高AI微信助手
+- AI剪辑、一键过审已纳入小高AI系统一期扩展范围；AI剪辑由 `auto_edit` 先独立完成后迁入本仓库，一键过审复制改造 `douyinAPI` 现有实现且运行时解耦
 - 小高算力不是子功能系统，是商户查看套餐和消耗的展示能力
 - douyinAPI 当前定位为 demo / 参考实现 / 历史代码沉淀，不应作为长期正式生产依赖
 - 第一版不接入 LLM，不保存截图，不把三个子功能混成一个服务
@@ -166,8 +181,8 @@ Output Rules
 - 本地 Docker 开发环境（docker-compose.dev.yml：9000 + 9100 + frontend，19000 不容器化）
 
 当前版本定位（按子系统区分）：
-- 微信助手（9000 + 19000）：✅ 自动检测单次闭环演示版；❌ 非后台无限轮询版；❌ 非自动发送版（业务派单 sent 仍为 false）
-- 抖音AI客服（9100）：✅ 多账号工作台 + RAG/LLM 回复建议；❌ AI 回复 auto_send 恒为 false，不自动发送私信（reply_decision_service 全路径 auto_send=False）
+- 微信助手（9000 + 19000）：✅ 自动检测单次闭环演示版；一期计划后续放开真实派单发送，但必须经过联系人验证、前台焦点、违禁词、人工接管、限频、失败回写、幂等和紧急停止 gate
+- 抖音AI客服（9100）：✅ 多账号工作台 + RAG/LLM 回复建议；一期计划后续收束为 AI 托管自动回复闭环，真实发送必须走后端 gate
 - 全局：❌ 非多客户生产版（NewCarProject 对接字段、生产验签切换、状态机重构待落地）
 
 进行中：
@@ -224,7 +239,7 @@ auto_wechat（端口 9000，AI小高线索 + 小高AI微信助手）
 - 谁打开 React 页面，谁点击按钮，127.0.0.1 就是谁的电脑
 - 虚拟机/测试电脑默认无源码，不得要求运行 python 命令作为验收
 - React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
-- 业务自动派单发送仍禁止
+- 后续真实派单发送必须经过 Local Agent 安全 gate，不能绕过联系人验证、前台焦点、违禁词、人工接管、限频、失败回写、幂等和紧急停止
 
 前端架构：
 
@@ -259,7 +274,7 @@ auto_wechat 不负责：
 - 管理 NewCarProject 商户、账号、套餐、消耗、菜单
 - 管理所有子功能权限
 - AI小高线索的完整抖音扫码鉴权与私信线索能力
-- AI小高剪辑 / 巨量一键过审
+- 长期依赖外部 `auto_edit` 或 `douyinAPI` 运行时；AI剪辑和一键过审迁入后必须形成 auto_wechat 内部边界
 - 把 douyinAPI 作为长期正式生产依赖
 - 第一版 LLM 判断
 - 第一版截图保存或截图入库
@@ -623,9 +638,9 @@ P0-4 下一步：
 
 # Current Safety Gates（当前活跃安全约束）
 
-以下约束在 P0-4A-3 通过前必须严格执行：
+以下约束在一期真实发送业务改造完成前必须严格执行：
 
-1. **业务自动派单发送仍禁止**（sent 必须为 false）
+1. 真实派单发送只能在通过联系人验证、前台焦点、违禁词、人工接管、限频、失败回写、幂等和紧急停止 gate 后接入
 2. P0-4A 只验证本地 Agent 架构和 Aw3 paste_only
 3. Aw3 是唯一允许自动验证和 debug 测试的联系人
 4. 啊东、只能 partial_match，不允许自动发送
@@ -641,16 +656,16 @@ P0-4 下一步：
 
 ## WeChat Automation Safety Boundary
 
-以下边界适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
+以下底线适用于当前所有微信自动化任务，除非用户明确批准，不得放宽：
 
 1. 不允许绕过 foreground_guard。
 2. 不允许绕过 search_focus guard。
 3. 不允许绕过 search_text_verified。
-4. 不允许未经验证直接粘贴。
-5. 不允许发送 Ctrl+V。
-6. 不允许发送 Enter。
-7. 不允许把 sent 置为 true。
-8. 不允许业务自动派单发送。
+4. 不允许未经验证直接粘贴或发送。
+5. 真实发送必须有联系人验证、前台焦点、违禁词、人工接管、限频、失败回写、幂等和紧急停止保护。
+6. Local Agent 只操作客户本机微信，9000 不直接操作微信。
+7. 检测链路保持只读，不写输入框、不发送。
+8. partial_match、manual_review_required、hidden/minimized、foreground guard 失败时必须阻断并回写原因。
 
 # LAN Access Rules
 
@@ -883,7 +898,7 @@ tsconfig.node.json 必须包含：
 2. 测试电脑默认无源码，不得要求虚拟机运行 python 命令作为验收
 3. 本地 Agent 名称为**小高AI微信助手**（exe：小高AI微信助手.exe），禁止使用"萌猫微信助手"
 4. React 的本机 Agent 测试按钮必须调用浏览器所在电脑的 127.0.0.1:19000，不走 VITE_API_BASE_URL
-5. 业务自动派单发送仍禁止，sent 必须为 false
+5. 一期已放开旧自动发送硬门禁，但真实发送业务改造必须保留违禁词、人工接管、限频、失败回写、幂等、紧急停止
 6. React 离线提示应使用："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"
 7. Bug 修复必须先做代码探索和根因确认，禁止仅凭现象就编写修复方案（详见 02_EXECUTION_RULES.md #17 BUG 修复前置探索原则）
 8. 高风险逻辑必须强制写诊断日志，包含 stage、输入摘要、failure_stage，禁止只写"失败了"（详见 02_EXECUTION_RULES.md #19 高风险代码日志原则）
@@ -1105,7 +1120,7 @@ logging_config.py 使用说明.md
 
 测试验收计划文档：`docs/ai/05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md`
 
-关键结论：第一版产品化测试验收范围覆盖 Webhook 生产验签、原始 body 签名一致性、联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出。正式验收不以免验签为通过口径；Local Agent 真机验收必须保持 `sent=false`、检测只读、不粘贴、不发送、不按 Enter。
+关键结论：第一版产品化测试验收范围覆盖 Webhook 生产验签、原始 body 签名一致性、联系方式提取、有效线索生成、invalid 展示与导出、状态流转、销售分配、超时重分配、Local Agent 发送 / 检测互斥、失败回写、日志脱敏、数据迁移兼容、前端接口和导出。该记录描述 P1 单次闭环时期的历史验收口径；一期真实发送改造必须另按违禁词、人工接管、限频、失败回写、幂等、紧急停止 gate 验收。
 
 本轮只输出测试验收计划；不得顺手修改业务代码、测试代码、配置默认值、接口实现、数据库模型或依赖，不得启动服务，不得执行迁移或真机微信自动化。
 

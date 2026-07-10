@@ -7,6 +7,7 @@ export const PERMISSIONS = {
   leads: "auto_wechat:leads",
   agent: "auto_wechat:agent",
   compute: "auto_wechat:compute",
+  // AI剪辑与一键过审共用入口权限，不新增拆分权限码。
   aiEdit: "auto_wechat:ai_edit",
   adminAutoreply: "auto_wechat:admin:autoreply",
   adminAiReplyRecords: "auto_wechat:admin:ai_reply_records",
