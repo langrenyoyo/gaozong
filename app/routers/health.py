@@ -14,6 +14,7 @@ P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A1。
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -32,8 +33,10 @@ _ALEMBIC_INI = (
     / "auto_wechat"
     / "alembic.ini"
 )
-# 方案 A：9000 主业务 database 名
-_EXPECTED_DATABASE = "auto_wechat"
+# 方案 A：9000 主业务 database 名。
+# 默认 auto_wechat（dev / 生产）；staging 等隔离环境通过 EXPECTED_DATABASE_NAME 覆盖
+# （如 auto_wechat_staging），避免 readiness 永远返回 WRONG_DATABASE。
+_EXPECTED_DATABASE = os.environ.get("EXPECTED_DATABASE_NAME", "auto_wechat")
 # 关键业务表：alembic head 建好后必须存在并可查（覆盖线索 + 销售两条主线）
 _CRITICAL_TABLES = ("douyin_leads", "sales_staff")
 

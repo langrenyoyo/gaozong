@@ -16,6 +16,7 @@ P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A1。
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -37,8 +38,10 @@ _ALEMBIC_INI = (
     / "xg_douyin_ai_cs"
     / "alembic.ini"
 )
-# 方案 A：9100 RAG metadata database 名
-_EXPECTED_DATABASE = "xg_douyin_ai_cs"
+# 方案 A：9100 RAG metadata database 名。
+# 默认 xg_douyin_ai_cs（dev / 生产）；staging 等隔离环境通过 RAG_EXPECTED_DATABASE_NAME 覆盖
+# （如 xg_douyin_ai_cs_staging），避免 readiness 永远返回 WRONG_DATABASE。
+_EXPECTED_DATABASE = os.environ.get("RAG_EXPECTED_DATABASE_NAME", "xg_douyin_ai_cs")
 # 关键 RAG metadata 表：alembic head 建好后必须存在（文档 + 切片两主线）
 _CRITICAL_TABLES = ("knowledge_documents", "knowledge_chunks")
 

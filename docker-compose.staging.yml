@@ -1,0 +1,70 @@
+# staging 独立编排（override docker-compose.yml）
+# P3-E-9100-STAGING-ENV-BOOTSTRAP-1
+#
+# 隔离策略（!override 完全替换 base 继承的 ports/volumes/env_file）：
+#   注：compose list merge 默认是 append（base + override 叠加），
+#   直接写 ports/volumes 会导致 staging 与 dev 的端口/卷同时存在 → 冲突。
+#   必须用 !override 完全替换（不要用 !reset，!reset 只清空不重设 → ports/volumes 丢失）。
+#
+#   - project: auto_wechat_staging（独立 network: auto_wechat_staging_default）
+#   - container_name: xg-staging-{postgres,api,cs,frontend}（dev 用 xg-auto-wechat-api 等）
+#   - host ports: 29000(9000) / 29100(9100) / 5180(5173) / 25432(pg，仅 127.0.0.1)
+#     （dev 用 9000/9100/5173；5175/5174 已被 performance_pay/其他占用）
+#   - volume root: ./docker-data-staging/（dev 用 ./docker-data/）
+#   - database: auto_wechat_staging / xg_douyin_ai_cs_staging（带后缀，实例+名双重隔离）
+#   - image tag: xg-ai-system-backend:staging（dev 用 :latest）
+#   - env_file: .env.staging（dev 用 .env）
+#
+# 启动：
+#   docker compose --project-name auto_wechat_staging --env-file .env.staging \
+#     -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+#
+# 重要：staging 禁止 SQLite metadata fallback。
+# - RAG_DATABASE_URL 必须指向 PG（override 已设 xg_douyin_ai_cs_staging）。
+# - XG_DOUYIN_AI_CS_DB_PATH 留空（config.py property 在 RAG_DATABASE_URL 非空时优先 PG）。
+# - 部署前必须对两个 staging database 各执行一次 alembic upgrade head（见 Z5 Runbook 节 34.9）。
+
+services:
+  postgres:
+    container_name: xg-staging-postgres
+    ports: !override
+      - "127.0.0.1:25432:5432"
+    volumes: !override
+      - ./docker-data-staging/postgres:/var/lib/postgresql/data
+      - ./docker/postgres/init-staging:/docker-entrypoint-initdb.d:ro
+
+  auto-wechat-api:
+    container_name: xg-staging-api
+    image: xg-ai-system-backend:staging
+    env_file: !override
+      - .env.staging
+    ports: !override
+      - "127.0.0.1:29000:9000"
+    volumes: !override
+      - ./docker-data-staging/auto_wechat_9000:/workspace/data
+    environment:
+      APP_ENV: staging
+      DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat_staging}:${PG_PASSWORD}@postgres:5432/${PG_DB:-auto_wechat_staging}
+      EXPECTED_DATABASE_NAME: ${PG_DB:-auto_wechat_staging}
+
+  xg-douyin-ai-cs:
+    container_name: xg-staging-cs
+    image: xg-ai-system-backend:staging
+    env_file: !override
+      - .env.staging
+    ports: !override
+      - "127.0.0.1:29100:9100"
+    volumes: !override
+      - ./docker-data-staging/xg_douyin_ai_cs:/data
+    environment:
+      APP_ENV: staging
+      RAG_DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat_staging}:${PG_PASSWORD}@postgres:5432/xg_douyin_ai_cs_staging
+      RAG_EXPECTED_DATABASE_NAME: xg_douyin_ai_cs_staging
+      # 留空：RAG_DATABASE_URL 优先，显式禁用 SQLite metadata fallback
+      XG_DOUYIN_AI_CS_DB_PATH: ""
+      RAG_VECTOR_BACKEND: ${RAG_VECTOR_BACKEND:-sqlite}
+
+  auto-wechat-frontend:
+    container_name: xg-staging-frontend
+    ports: !override
+      - "127.0.0.1:5180:5173"
