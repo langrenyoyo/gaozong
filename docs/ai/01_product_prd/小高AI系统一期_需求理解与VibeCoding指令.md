@@ -5,7 +5,7 @@
 > **生效日期**：2026-07-09
 > **性质**：一期需求已冻结，本文档为权威理解。当本文档与 CLAUDE.md 旧约束冲突时，**以本文档为准**（见第 8 章「已推翻的旧约束」）。
 >
-> **2026-07-09 修订**：删除此前误加的「2.7 AI小高剪辑」章节。核对主需求原文（`docs/PRD/需求文档-小高AI系统一期（对外）.md`）确认：**2.7 实为「小高算力」、无 2.8、全文无任何剪辑字样**。AI 剪辑是**独立需求 `project_info/Project_02_一键剪辑/`**（走 ASR+Agent 流水线），不属于本项目一期；douyinAPI 的 AIGC `video_mixcut` 是历史/demo 沉淀，不属任何一期需求。一键过审属独立需求 `project_info/project_01_巨量广告/`，亦不在一期主需求范围。
+> **2026-07-10 修订**：按一期确认结果同步范围：AI剪辑、一键过审纳入小高AI系统一期。AI剪辑由 `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` 仓库；一键过审复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI`。本文档若与 `CLAUDE.md` 旧口径冲突，以本次确认后的一期计划为准。
 
 ---
 
@@ -31,8 +31,10 @@
 | 抖音企业号管理 | 9000 auto_wechat | 企业号授权+绑定 |
 | AI小高助手（微信代理） | 9000 + 19000 Local Agent | 微信自动化 |
 | 小高算力 | 9000 auto_wechat | Token 账户/消耗/套餐 |
+| AI剪辑 | `auto_edit` → 后续迁入 auto_wechat | 先独立完成，迁入后保持模块边界 |
+| 一键过审 | 9000 auto_wechat | 复制改造 douyinAPI 现有实现，运行时解耦 |
 
-> ⚠️ **范围澄清**：主需求一期**不含 AI 剪辑**（无任何剪辑模块）。剪辑（auto_edit）是**独立需求 `project_info/Project_02_一键剪辑/`**（二手车营销视频一键剪辑，走 ASR+Agent 流水线），不属于本项目一期交付。`E:\work\project\douyinAPI` 的 AIGC `video_mixcut` 是历史/demo 沉淀，也不属于任何一期需求。
+> ⚠️ **范围澄清**：一期包含 AI剪辑和一键过审，但不把外部仓库作为长期生产依赖。`auto_edit` 先由同事独立完成，后续迁入本仓库；`douyinAPI` 只作为一键过审 OAuth、拒审建议和采纳能力的复制改造来源。
 
 ---
 
@@ -61,7 +63,8 @@
 ```
 
 **外部资源**：
-- `E:\work\project\douyinAPI`：参考实现（一键过审 OAuth 骨架），**不作生产依赖**。一键过审是独立需求 `project_info/project_01_巨量广告/`，不在一期主需求范围。
+- `E:\work\project\douyinAPI`：一键过审参考实现，复制改造 OAuth、拒审建议和采纳能力后，auto_wechat 运行时不依赖该项目。
+- `E:\work\project\auto_edit`：AI剪辑先行实现来源，后续源码迁入 `auto_wechat` 仓库并保持独立模块边界。
 - `E:\work\project\react_base_back`：前端 UI 参考（算力页 ComputeCenter.tsx）。
 
 ---
@@ -84,8 +87,10 @@ Database Migration / Authentication / RBAC / 环境变量 / Docker / Nginx / Fil
 一期**抖音侧 + 微信侧都放开自动发送**。但放开 ≠ 无脑发，必须配套：
 - 违禁词过滤（命中替换安全词后再发）
 - 人工接管降级
-- 发送频率上限
+- 限频
 - 失败回写
+- 幂等
+- 紧急停止
 
 ### 3.5 仍有效的安全约束（未推翻，必须遵守）
 - 不读取微信数据库 / 不 DLL 注入 / 不微信协议逆向
@@ -120,7 +125,7 @@ auto_wechat:douyin_ai_cs                抖音AI客服（2.2）
 auto_wechat:leads                       线索（2.3）
 auto_wechat:agent                       智能体(2.4) + 微信助手(2.6) 共用
 auto_wechat:compute                     算力（2.7）
-auto_wechat:ai_edit                     ⚠️预留码，一期不交付（剪辑属独立 Project_02）
+auto_wechat:ai_edit                     AI剪辑与一键过审共用入口权限
 auto_wechat:admin:autoreply             自动回复管理
 auto_wechat:admin:ai_reply_records      AI回复记录（3.4）
 auto_wechat:admin:compute_config        算力配置（3.5）
@@ -150,6 +155,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 2.5 企业号 | ✅已有 | 9000 | 补列表展示字段 |
 | 2.6 微信助手 | ⚠️改造 | 9000+19000 | 放开自动发送+规则勘误+SalesStaff改造 |
 | 2.7 算力 | ✅后端已实现 | 9000 | FE-1+支付mock+3套餐seed+上浮比例 |
+| 一键过审 | 🆕迁入 | 9000 | 复制改造 douyinAPI，运行时解耦 |
+| AI剪辑 | 🆕迁入预留 | auto_edit → auto_wechat | 先独立完成，后续源码迁入 |
 | 3.1 商户管理 | ⛔上游 | used-car | 仅充值/发放套餐跨调 |
 | 3.2 违禁词 | 🆕全新 | 9000 | 词库→违禁词→安全词，替换后仍发 |
 | 3.3 回访提示词 | 🆕全新 | 9000 | 微信→抖音回访闭环 |
@@ -166,7 +173,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 前端直调上游；记住账号字符串；密码显隐切换；按权限码识别角色跳转。
 
 ### 2.2 抖音AI小高客服（9100，改造）
-- **放开 AI 自动发送私信**（推翻 auto_send=false）。
+- **放开 AI 自动发送私信**（推翻旧的仅建议口径）。
 - **移除 reply_suggestion 调试功能**（前端不显示"AI回复建议"）。
 - AI 回复**唯一触发路径** = 企业号绑定智能体 + 打开自动回复开关（即 AI 托管模式）。
 - 托管模式：AI托管(蓝色)/人工接管(黄色)。
@@ -180,8 +187,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 ### 2.3 AI小高线索（9000，小改）
 - 状态机映射层已存在：`STATUS_LABELS`（`app/services/lead_management_service.py:32`）
   - pending=新线索 / assigned=跟进中 / replied=已留资 / timeout=已失效 / closed=已成交
-- **"已留资"权威判定 = `extracted_phone` 非空**（非 status）。
-- ⚠️ **实施必修**：展示层"已留资"也要基于 `extracted_phone`，否则与 STATUS_LABELS 的 replied→已留资 冲突误展示。
+- **"已留资"权威判定 = `extracted_phone`、`extracted_wechat`、`all_extracted_contacts` 任一存在**（非 status）。
+- ⚠️ **实施必修**：展示层"已留资"统一基于联系方式提取结果，避免把 replied 状态误当作唯一留资口径。
 - 高意向 = 评分 ≥ 阈值。
 - 销售响应率 = 已分配中销售微信已响应比例。
 - 跟进记录时间线主数据源 = `LeadFollowupRecord`（record_type: assign/reassign/reply_check/notification/feedback/manual_note）。
@@ -211,9 +218,9 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 - **抖音号数字 ID：抖音实际不返回**，前端该字段隐藏或占位"-"。
 
 ### 2.6 AI小高助手 / 微信代理（9000+19000，改造）
-- **微信侧自动发送一期放开**（推翻 sent=false）。
-- ⚠️ **需求规则勘误**：原文 4 类规则错误。**实际 4 类 = 线索分配 / 销售盈亏表 / 客户溯源表（原文"湖源"为笔误）/ 总表**。
-- "配置" = **复用 `SalesStaff` 改造**（不新建表），加 4 个规则布尔字段。
+- **微信侧自动发送一期放开**（推翻旧的仅粘贴验证口径）。
+- ⚠️ **需求规则勘误**：规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
+- "配置" = **复用 `SalesStaff` 改造**（不新建表），加 5 个规则布尔字段。
 - 不做"立即下载"，只检测微信是否已打开，调 19000。
 - 客户端状态（未启动/未登录/已登录）由 19000 探测上报，已登录靠 UIA/OCR 兜底（后续方案设计）。
 - **"启动微信测试"验收口径（完整闭环）**：针对每个微信配置 → 自动打开微信窗口 → 搜索联系人 → 进入聊天框 → 输入对应"线索模板" → 自动发送。
@@ -287,7 +294,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 
 | 表 | 变更 | 来源模块 |
 |---|---|---|
-| `sales_staff` | 加 4 个规则布尔字段（线索分配/盈亏表/溯源表/总表） | 2.6 |
+| `sales_staff` | 加 5 个规则布尔字段（线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表） | 2.6 |
 | `ai_reply_decision_logs` | 加 `is_effective` / `effectiveness_reason` / `model` | 3.4 |
 | `forbidden_word_libraries`（新） | 3 类预置词库（名称/启停） | 3.2 |
 | `forbidden_words`（新） | 违禁词→安全词映射，每词一行， belongs to library | 3.2 |
@@ -295,25 +302,23 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | `compute_markup_ratios`（新） | 按 6 功能模块的上浮比例 | 3.5 |
 | `compute_packages` | 写入 3 个 seed（不强制，可初始化脚本） | 2.7/3.5 |
 | `douyin_authorized_accounts` | 删除时 `douyin_account_agent_bindings` 级联处理 | 2.5 |
+| `ad_review_*` | 一键过审 OAuth、建议快照和采纳任务 | 一键过审 |
+| `ai_edit_jobs` / `ai_edit_job_artifacts` | AI剪辑迁入后的任务壳和产物映射 | AI剪辑 |
 
 ---
 
-## 8. 已推翻的 CLAUDE.md 旧约束（⚠️ VibeCoding 必读）
+## 8. 历史废止项与新决策（⚠️ VibeCoding 必读）
 
-> **以下约束已在一期作废。若 VibeCoding 读到 CLAUDE.md 旧描述，以本章为准。**
+> 以下是已废止的历史方向。后续 agent 不得把旧的“只建议不实发”“只粘贴不实发”描述复制成当前硬规则；应按本章的新决策和运行保护执行。
 
-| 旧约束（已作废） | 一期新决策 |
+| 历史方向 | 一期新决策 |
 |---|---|
-| "AI 回复 auto_send 恒为 false" | **抖音侧放开自动发送** |
-| "reply_decision_service 全路径 auto_send=False" | 同上 |
-| `DouyinPrivateMessageSend.auto_send` "P1-H must always be 0" | 可置 1（放开后） |
-| `AiReplyDecisionLog.final_auto_send` "必须为 0" | 可置 1 |
-| "9100 reply_suggestion 回复建议功能" | **一期移除**（调试残留） |
-| "业务自动派单发送仍禁止，sent 必须为 false" | **微信侧放开自动发送** |
-| "不允许把 sent 置为 true" | 可置 true |
-| "不允许发送 Enter / 不允许业务自动派单发送" | 允许（完整闭环） |
+| 抖音客服仅输出回复建议 | **抖音侧放开自动发送**，触发条件为企业号绑定智能体并开启 AI 托管 |
+| 9100 reply_suggestion 调试入口作为用户功能 | **一期移除**，保留内部兼容不作为用户主链路 |
+| 微信助手只做粘贴验证 | **微信侧放开自动发送**，但必须走联系人验证和运行保护 |
+| AI剪辑与一键过审排除在本轮范围外 | **一期纳入**，AI剪辑迁入预留，一键过审复制改造 douyinAPI |
 
-**配套必须**（放开自动发送后强制）：违禁词过滤、人工接管降级、频率上限、失败回写、紧急停止。
+**配套必须**（放开自动发送后强制）：违禁词过滤、人工接管降级、限频、失败回写、幂等、紧急停止。
 
 ---
 
@@ -321,7 +326,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 
 ### 阶段 0 · 门禁放开方案（最高优先，最高风险）
 1. 抖音侧自动发送门禁放开方案（含配套兜底设计）
-2. 微信侧自动发送门禁放开方案（含 SalesStaff 规则字段迁移）
+2. 微信侧自动发送门禁放开方案（含 SalesStaff 5 个规则字段迁移）
 3. 违禁词库（3.2）作为自动发送的安全前置
 
 ### 阶段 1 · 数据模型迁移（高风险）
@@ -333,8 +338,10 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 
 ### 阶段 3 · 改造模块
 - 2.2 移除 reply_suggestion + 放开自动发送
-- 2.6 微信助手重构 + 规则字段
+- 2.6 微信助手重构 + 5 个规则字段
 - 3.4 AI回复记录（实发展示 + is_effective/model）
+- 一键过审复制改造 douyinAPI 实现
+- AI剪辑等待 auto_edit 迁入后接真实任务
 
 ### 阶段 4 · 前端 + 埋点
 - FE-1 算力页（参考 ComputeCenter.tsx）
@@ -352,6 +359,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 3.3 微信→抖音回访闭环 | **一期需跑通简化版**（LLM + 关键字兜底） |
 | 3.5 上浮比例粒度 | 按**功能模块（6 能力）** |
 | 2.5 抖音号数字 ID | **抖音不返回**，前端隐藏/占位 |
+| AI剪辑 | `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` |
+| 一键过审 | 复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI` |
 
 ---
 
@@ -363,7 +372,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 权限码全貌 | `frontend/src/features/capabilities.ts` | 功能授权映射 |
 | 能力网关 | `app/routers/capability_gateway.py` | 6 能力健康检查 |
 | 算力服务 | `app/routers/compute.py` + `apps.compute.services` | 余额/消耗/套餐 |
-| 过审 OAuth 参考 | `E:\work\project\douyinAPI\app.py` | 一键过审 OAuth 骨架（独立 project_01，非一期） |
+| 过审 OAuth 参考 | `E:\work\project\douyinAPI\app.py` | 一键过审 OAuth、拒审建议和采纳能力参考 |
+| AI剪辑迁入来源 | `E:\work\project\auto_edit` | 先独立完成，后续源码迁入 auto_wechat |
 | 算力页 UI | `E:\work\project\react_base_back\src\pages\ComputeCenter.tsx` | FE-1 参考 |
 | 项目记忆 | `C:\Users\A\.claude\projects\e--work-project-auto-wechat\memory\xg-phase1-*.md` | 9 条一期决策详情 |
 
@@ -372,7 +382,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 ## 12. 给 VibeCoding 的最终指令
 
 1. **开始任何任务前**：读本文档 + CLAUDE.md（注意第 8 章推翻项）+ 对应模块的 `docs/ai/` 专题。
-2. **涉及自动发送**：必须确认配套兜底已设计（违禁词/降级/频率/失败回写）。
+2. **涉及自动发送**：必须确认配套兜底已设计（违禁词/人工接管/限频/失败回写/幂等/紧急停止）。
 3. **涉及数据库**：走迁移流程（脚本 + dry-run + 回滚），不直接改 models 生效。
 4. **涉及外部 API**（抖音/上游）：先确认授权、签名、限流。
 5. **不确定时**：先探索代码确认现状，再出方案，不臆测。
