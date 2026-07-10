@@ -191,7 +191,7 @@ def test_training_to_milvus_then_reply_suggestion_hits_source_chunks_and_keeps_g
     ]
     assert response.rag_used is True
     assert response.llm_used is True
-    assert response.auto_send is False
+    assert response.auto_send is True
     assert response.manual_required is False
     assert response.source_chunks == [
         {
@@ -202,6 +202,27 @@ def test_training_to_milvus_then_reply_suggestion_hits_source_chunks_and_keeps_g
         }
     ]
     assert response.rag_sources == response.source_chunks
+
+
+def test_rag_hit_low_risk_structured_reply_becomes_auto_send_candidate(tmp_path, monkeypatch):
+    # Phase 3：RAG 命中 + LLM 结构化低风险 + 无需人工 → 9100 返回候选 auto_send=True。
+    # auto_send 仅表示候选资格，真实发送仍由 9000 gate 决定。
+    repository, reply_decision_service, fake_store = _setup_workflow(tmp_path, monkeypatch)
+    _train_synthetic_document(repository)
+
+    response = reply_decision_service.build_reply_suggestion(
+        "workflow-conversation",
+        _reply_request(allowed_category_keys=["base"]),
+    )
+
+    assert fake_store.search_calls
+    assert response.rag_used is True
+    assert response.llm_used is True
+    assert response.manual_required is False
+    assert response.risk_flags == []
+    assert response.source_chunks
+    assert response.rag_sources == response.source_chunks
+    assert response.auto_send is True
 
 
 def test_reply_suggestion_empty_allowed_categories_skips_milvus_and_returns_no_sources(tmp_path, monkeypatch):

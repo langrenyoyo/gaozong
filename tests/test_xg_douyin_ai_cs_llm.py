@@ -249,7 +249,10 @@ def test_reply_suggestion_uses_rag_and_mocked_llm(tmp_path, monkeypatch):
 
     def fake_chat(self, messages):
         assert messages[0]["role"] == "system"
-        assert "不要自动发送真实私信" in messages[0]["content"]
+        assert "不要自动发送真实私信" not in messages[0]["content"]
+        assert "auto_send 必须为 false" not in messages[0]["content"]
+        assert "auto_send 不直接控制发送" in messages[0]["content"]
+        assert "服务端独立计算候选资格" in messages[0]["content"]
         assert "精品BBA主营车型和留资话术" in messages[1]["content"]
         return {
             "reply_text": "您好，我们这边主要做宝马、奔驰、奥迪这类精品BBA车型。您咨询的奥迪A6属于主营范围，方便留个联系方式吗？",
@@ -364,7 +367,7 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
     assert data["confidence"] == 0.73
     assert data["decision_version"] == "structured_v1"
     assert data["rag_sources"] == data["source_chunks"]
-    assert data["auto_send"] is False
+    assert data["auto_send"] is True
 
 
 def test_reply_suggestion_extracts_reply_text_from_fenced_json(tmp_path, monkeypatch):
@@ -477,7 +480,7 @@ def test_reply_suggestion_prompt_includes_sanitized_conversation_history(
     )
 
     assert response.status_code == 200
-    assert response.json()["auto_send"] is False
+    assert response.json()["auto_send"] is True
     user_payload = json.loads(seen["messages"][1]["content"])
     assert user_payload["latest_customer_message"] == "我现在还想了解奥迪A6"
     assert "conversation_history_policy" in user_payload
@@ -741,7 +744,7 @@ def test_reply_suggestion_no_rag_uses_direct_llm_when_configured(tmp_path, monke
     assert data["source_chunks"] == []
     assert data["rag_sources"] == []
     assert data["decision_version"] == "direct_llm_structured_v1"
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert seen["messages"][0]["role"] == "system"
     assert "不要虚构库存、价格、优惠、金融方案、联系方式" in seen["messages"][0]["content"]
 
@@ -790,7 +793,7 @@ def test_direct_llm_specific_model_question_requires_manual_and_sanitizes_risky_
     assert data["rag_used"] is False
     assert data["manual_required"] is False
     assert data["manual_required_reason"] == ""
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert "inventory_claim" in data["risk_flags"]
     assert "contact_request" in data["risk_flags"]
@@ -840,7 +843,7 @@ def test_direct_llm_brand_series_question_requires_manual_without_inventory_prom
     assert response.status_code == 200
     data = response.json()
     assert data["manual_required"] is False
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert "inventory_or_model_specific" in data["risk_flags"]
     assert "都有现车" not in data["reply_text"]
     assert "具体在库车源会实时变化" in data["reply_text"]
@@ -980,7 +983,7 @@ def test_direct_llm_greeting_does_not_request_contact_or_make_promises(tmp_path,
     assert response.status_code == 200
     data = response.json()
     assert data["intent"] == "greeting"
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert "微信" not in data["reply_text"]
     assert "电话" not in data["reply_text"]
     assert "车况有保障" not in data["reply_text"]
@@ -1041,13 +1044,13 @@ def test_direct_llm_price_and_contact_inputs_are_flagged(tmp_path, monkeypatch):
     ).json()
 
     assert price["manual_required"] is False
-    assert price["auto_send"] is True
+    assert price["auto_send"] is False
     assert "price_or_discount" in price["risk_flags"]
     assert "价格是" not in price["reply_text"]
     assert "可以优惠" not in price["reply_text"]
 
     assert contact["manual_required"] is False
-    assert contact["auto_send"] is True
+    assert contact["auto_send"] is False
     assert "contact_request" in contact["risk_flags"]
     assert "留个微信" not in contact["reply_text"]
 
@@ -1094,7 +1097,7 @@ def test_direct_llm_keeps_cautious_inventory_price_reply(tmp_path, monkeypatch):
     data = response.json()
     assert data["reply_text"] == cautious_reply
     assert data["manual_required"] is False
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert "price_or_discount" in data["risk_flags"]
     assert "您可以先说下预算" not in data["reply_text"]
     assert "需要顾问按实时库存核" in data["reply_text"]
@@ -1381,8 +1384,8 @@ def test_reply_suggestion_no_rag_different_inputs_return_different_direct_llm_re
     assert second["llm_used"] is True
     assert first["rag_used"] is False
     assert second["rag_used"] is False
-    assert first["auto_send"] is True
-    assert second["auto_send"] is True
+    assert first["auto_send"] is False
+    assert second["auto_send"] is False
     assert first["manual_required"] is False
     assert second["manual_required"] is False
     assert "price_or_inventory_sensitive" in first["risk_flags"]
@@ -2625,7 +2628,7 @@ def test_direct_llm_standard_policy_allows_hard_price_text_auto_send(tmp_path, m
 
     assert response.status_code == 200
     data = response.json()
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert data["manual_required"] is False
     assert "price_or_discount" in data["risk_flags"]
 
@@ -2692,11 +2695,11 @@ def test_direct_llm_standard_policy_allows_finance_and_contact_text_auto_send(tm
         },
     ).json()
 
-    assert finance["auto_send"] is True
+    assert finance["auto_send"] is False
     assert finance["manual_required"] is False
     assert "finance_or_loan" in finance["risk_flags"]
 
-    assert contact["auto_send"] is True
+    assert contact["auto_send"] is False
     assert contact["manual_required"] is False
     assert "contact_request" in contact["risk_flags"]
 
