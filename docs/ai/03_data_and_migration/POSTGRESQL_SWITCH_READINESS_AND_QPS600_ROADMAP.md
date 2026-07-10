@@ -1313,3 +1313,94 @@ P3-Z5 只输出生产切换 Runbook，禁止自动执行。宝塔 production 的
 ### 33.8 Z5 交付边界
 
 本轮 Z5 只输出 Runbook，不执行任何 production 操作。production 切换需另起审批窗口，由人工按 33.1-33.3 执行，按 33.4 回滚预案保障。
+
+## 34. P3-E-9100 production cutover Runbook
+
+任务：`P3-E-9100-RAG-POSTGRESQL-PRODUCTION-CUTOVER-RUNBOOK-1`
+
+P3-E-9100 覆盖 9100（apps/xg_douyin_ai_cs）RAG metadata 7 表从 SQLite 切 PostgreSQL（方案 A 第二个 database `xg_douyin_ai_cs` via `RAG_DATABASE_URL`）。本轮 P3-E 第 2 步已落地生产 `docker-compose.yml` 改动（postgres 挂载 init-prod + 9100 切 RAG_DATABASE_URL + depends_on + 移除 SQLite 路径），compose 文件层面已就绪；Z5 的 production `alembic upgrade` + cutover apply + compose up 仍需审批窗口人工执行，禁止脚本化一键切换。Milvus 是向量检索副本，embedding_json 平移到 PG metadata DB，不动 Milvus。
+
+### 34.1 审批窗口（硬约束）
+
+1. production 切换必须预留人工审批窗口，禁止脚本化一键切换。
+2. 审批需明确：变更时间、执行人、回滚负责人、观察时长、通知干系人。
+3. 审批通过前不得在 production 执行 cutover apply 或 `RAG_DATABASE_URL` 生效的 `compose up`。
+
+### 34.2 前置就绪（P3-D/D2/D3 + dev smoke 全部通过方可进入 Z5）
+
+1. P3-D/D2/D3 已完成：alembic `0002_create_rag_metadata`（7 表 PG schema）+ `database.py` `get_rag_engine()` factory + `repository.py` / `knowledge_training_service.py` 跨方言改写（见 POSTGRESQL_MIGRATION_NOTES.md 节 58）。
+2. production PG 第二个 database `xg_douyin_ai_cs` 已由 `docker/postgres/init-prod/010_create_rag_database.sh` 在 postgres 首次启动时创建（幂等；**已有数据卷时 init 脚本不运行，需手动 `docker compose exec postgres createdb --owner ${PG_USER:-auto_wechat} xg_douyin_ai_cs`**）。
+3. 9100 production PG `alembic upgrade head` 完成，revision = `0002_create_rag_metadata`，7 表齐全（`docker compose exec xg-douyin-ai-cs python -m alembic -c migrations/postgres/xg_douyin_ai_cs/alembic.ini upgrade head`）。
+4. cutover 脚本 `scripts/migrate_9100_sqlite_to_postgres_cutover.py` dry-run / apply / 静态结构测试在 dev 验证通过（见 `tests/test_9100_cutover_sqlite_to_postgres_migration.py` 10 测试）。
+5. dev 真实 PG smoke 通过（`scripts/smoke_9100_rag_pg_runtime.py` 连本地 docker PG，alembic upgrade + 8 表 inspect）。
+6. 回滚预案已在 staging 演练一次。
+
+### 34.3 生产切换步骤
+
+1. 备份 production SQLite：`cp data/xg_douyin_ai_cs.db data/xg_douyin_ai_cs.db.pre-cutover-<date>`（宝塔宿主机 `./docker-data/xg_douyin_ai_cs/xg_douyin_ai_cs.db`，切 PG 前 9100 仍写此文件），确认备份可读。
+2. 确认 production PG `xg_douyin_ai_cs` 库存在且 `alembic_version` = `0002_create_rag_metadata`，7 表存在。
+3. production cutover dry-run（只读安全，production apply 被脚本闸门拒绝）：
+   ```
+   python scripts/migrate_9100_sqlite_to_postgres_cutover.py \
+     --sqlite-db-path ./docker-data/xg_douyin_ai_cs/xg_douyin_ai_cs.db \
+     --postgres-url <production-rag-pg-url>
+   ```
+   确认 `DRY_RUN_PASS` 且 `error=0`，评估 chunks 表行数（见 34.6 embedding_json 平移开销）。
+4. 审批二次确认后，在 production PG 执行 apply（脚本拒绝 `APP_ENV=production`，需临时以非 production 环境变量跑，或由 DBA 手工执行等价 upsert，全程留审计日志）：
+   ```
+   APP_ENV=staging python scripts/migrate_9100_sqlite_to_postgres_cutover.py \
+     --sqlite-db-path ./docker-data/xg_douyin_ai_cs/xg_douyin_ai_cs.db \
+     --postgres-url <production-rag-pg-url> --apply --yes
+   ```
+   注意 apply 不允许隐式 `RAG_DATABASE_URL`，必须显式 `--postgres-url` 且 host 在 `localhost/127.0.0.1/postgres/auto-wechat-postgres-dev`，database 必须是 `xg_douyin_ai_cs`。
+5. **compose 已就绪（本轮 P3-E 第 2 步已落地）**：`docker-compose.yml` 9100 服务已内置 `RAG_DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/xg_douyin_ai_cs` + `depends_on: postgres (condition: service_healthy)` + 移除 `XG_DOUYIN_AI_CS_DB_PATH`；postgres 服务已挂载 `./docker/postgres/init-prod:/docker-entrypoint-initdb.d:ro`（首次启动建第二个 database）。Z5 执行只需 `docker compose -f docker-compose.yml build --no-cache xg-douyin-ai-cs` + `up -d xg-douyin-ai-cs` 让新配置生效（镜像 `Dockerfile.backend.dev` 的 `COPY migrations/` 递归含 `xg_douyin_ai_cs/` 子目录，alembic 可用）。
+6. 重启 9100 production，执行切换后核验（确保切干净，新 RAG 写入不再进 SQLite）：
+   - 6.1 启动日志 / `/health` 反映 backend=postgresql（9100 `get_database_runtime(settings.rag_database_url).backend`）。
+   - 6.2 `docker compose exec xg-douyin-ai-cs python -c "from apps.xg_douyin_ai_cs.rag.database import get_database_runtime; print(get_database_runtime().backend, get_database_runtime().safe_url)"` 必须输出 `postgresql ...`（非 `sqlite`）。
+   - 6.3 `docker compose exec xg-douyin-ai-cs ls -la /data/xg_douyin_ai_cs.db*`：切 PG 后该文件应冻结（mtime 不再更新）= 新 RAG 写入已不走 SQLite。
+   - 6.4 若 6.2 输出 `sqlite` 或 6.3 文件仍增长 → 切换未生效，立即按 34.4 回滚，排查 `.env` 或 compose 的 `RAG_DATABASE_URL` 是否漏配。
+7. 工作台冒烟：RAG 检索 / 回复建议 / 知识训练查询返回正常数据（`tenant_id=xiaogao_system` scope 命中），反馈摄入写入 PG metadata。
+8. 观察 ≥ 48h，记录 RAG 检索延迟、9100 5xx、连接池、慢查询。
+
+通过标准：6.2 postgresql + 工作台 RAG 正常 + 48h 无异常 + 无 5xx 突增。
+
+### 34.4 回滚手册
+
+触发条件：9100 5xx 突增 / RAG 检索异常 / 知识训练写入失败 / 数据不一致。
+
+1. 在 `docker-compose.yml` 9100 服务注释 `RAG_DATABASE_URL` 与 `depends_on` 段，恢复 `XG_DOUYIN_AI_CS_DB_PATH: /data/xg_douyin_ai_cs.db`（让 `config.py` 的 `settings.rag_database_url` property 回退 SQLite）。
+2. `docker compose -f docker-compose.yml up -d --build xg-douyin-ai-cs`（**不重启 postgres**，保留 PG 数据），确认 9100 日志 backend=sqlite。
+3. 确认工作台 RAG 恢复正常（SQLite 数据未动，PG 只是多了一份副本）。
+4. **不删** SQLite 文件，**不清** PG volume（PG 副本保留供排查）。
+5. 排查问题后，重新走 34.3 流程。
+
+### 34.5 运行参数建议
+
+9100 PG engine 运行参数取自 `apps/xg_douyin_ai_cs/config.py`（`rag_db_pool_size` / `rag_db_max_overflow` / `rag_db_pool_timeout` / `rag_db_pool_recycle` / `rag_db_statement_timeout_ms`），production 需结合实际压测核算：
+
+| 参数 | dev 起点值 | 生产核算要求 |
+|------|-----------|--------------|
+| `workers`（9100 uvicorn） | 1-2 | 9100 是 RAG + LLM 回复建议，并发低于 9000；按 CPU 核数调整 |
+| `RAG_DB_POOL_SIZE` | 配置默认 | 单 worker 最大连接 = `pool_size + max_overflow` |
+| `RAG_DB_MAX_OVERFLOW` | 配置默认 | 突发流量缓冲 |
+| PostgreSQL `max_connections` | — | 9100 与 9000 共享同一 PG 实例，`>= 9000 连接 + 9100 连接 + 预留` |
+| `RAG_DB_STATEMENT_TIMEOUT_MS` | 配置默认 | RAG 检索 / 向量平移查询建议宽松（embedding_json 是大 TEXT）|
+
+### 34.6 chunks 大表约束（embedding_json 平移开销）
+
+- `knowledge_chunks` 每行含 `embedding_json`（1536 维向量 JSON 字符串，约 15-30 KB/行），chunks 行数 = documents × 切片数，可能数千～数万行。
+- cutover `apply_postgres_rows` 对每行 `embedding_json` 走 `coerce_json`（json.loads + json.dumps 重新序列化），CPU 开销 = 行数 × 单行 JSON 解析开销。数万行级迁移需评估 apply 耗时（建议先 dry-run 看行数，超 1 万行考虑分批或低峰执行）。
+- `read_postgres_snapshot` 对每表全量拉主键进内存：9100 主键 id 是 int（sessions 是 training_id 字符串），内存占用远小于 9000 业务大表，但仍需评估 chunks 行数。
+- Milvus 不动：embedding_json 平移到 PG 是 metadata 副本，Milvus 向量索引独立保留。
+
+### 34.7 不越界
+
+1. 不改 9100 RAG / Milvus 检索逻辑、训练写入 / 反馈摄入业务逻辑、auto_send gate。
+2. 不触发 LLM / 抖音发送 / 私信发送 / 自动回复闸门。
+3. 不改 9000 主库（独立切 PG，9100 只用第二个 database）。
+4. 不把前端 tenant_id / merchant_id / douyin_account_id 当可信上下文。
+5. 不在 .env.example 写真实 URI / token / password。
+
+### 34.8 Z5 交付边界
+
+本轮 P3-E（第 1-4 步）交付：迁移脚本 + 静态测试 + 生产 compose 改动 + Z5 Runbook + dev 真实 PG smoke。compose 文件层面已就绪，但 production 的 `alembic upgrade` + cutover apply + `compose up` 仍需另起审批窗口由人工按 34.1-34.3 执行，按 34.4 回滚预案保障。

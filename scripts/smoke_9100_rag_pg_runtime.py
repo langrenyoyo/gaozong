@@ -1,6 +1,6 @@
 """验证 9100 RAG metadata 在 PostgreSQL RAG_DATABASE_URL 下 alembic upgrade + engine 连通。
 
-P3-D / P3-D2 smoke：跑 alembic upgrade head 建 8 张 RAG metadata 表，
+P3-D / P3-D2 smoke：跑 alembic upgrade head 建 7 张 RAG metadata 表，
 再用 create_rag_engine() 直连验证表存在。不写业务数据，不触碰 Milvus / 训练 / 回复逻辑。
 
 用法：
@@ -16,9 +16,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from app.database_url import parse_database_url
 
-ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI = ROOT / "migrations" / "postgres" / "xg_douyin_ai_cs" / "alembic.ini"
 
 EXPECTED_TABLES = {

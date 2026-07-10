@@ -2665,5 +2665,53 @@ P3-D3-9100 将 9100 业务路径从原生 sqlite3 切换到 SQLAlchemy engine + 
 1. `P3-E-9100`：9100 RAG metadata SQLite -> PostgreSQL 数据迁移脚本（类比 9000 `migrate_9000_sqlite_to_postgres_cutover.py`）。
 2. compose 切 9100 `RAG_DATABASE_URL` + `depends_on postgres` + init 第二个 database。
 3. 9100 Z5 Runbook（切换 / 回滚手册，追加到 `POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md`）。
-4. 真实 PG smoke：`scripts/smoke_9100_rag_pg_runtime.py --database-url postgresql://...` + alembic upgrade head + 8 表验证（待真实 PG 环境）。
+4. 真实 PG smoke：`scripts/smoke_9100_rag_pg_runtime.py --database-url postgresql://...` + alembic upgrade head + 7 表验证（待真实 PG 环境）。
+
+## 59. P3-E-9100 数据迁移脚本 + compose 切换 + Z5 Runbook + 真实 PG smoke
+
+任务：`P3-E-9100-RAG-CUTOVER-SCRIPT-COMPOSE-RUNBOOK-SMOKE-1`
+
+P3-E-9100 闭环交付 9100 RAG metadata SQLite -> PostgreSQL 全套：迁移脚本（含安全门）+ 生产 compose 切换 + Z5 生产切换 Runbook + dev 真实 PG smoke + 端到端 cutover dry-run。Milvus 不动（向量副本），embedding_json 平移到 PG metadata。
+
+覆盖范围（本次新增 / 修改）：
+
+1. `scripts/migrate_9100_sqlite_to_postgres_cutover.py`（新增）：类比 9000 `migrate_9000_sqlite_to_postgres_cutover.py`，覆盖 alembic 0002 的 7 张 RAG metadata 表（`knowledge_categories` / `knowledge_documents` / `knowledge_chunks` / `rag_training_runs` / `llm_call_logs` / `knowledge_training_sessions` / `knowledge_training_feedbacks`）。安全门：dry-run 默认 + `--apply --yes` + `APP_ENV=production` 拒绝 apply + `ALLOWED_APPLY_HOSTS`（localhost/127.0.0.1/postgres/auto-wechat-postgres-dev）+ database 名必须 `xg_douyin_ai_cs` + apply 不允许隐式 `RAG_DATABASE_URL`（必须显式 `--postgres-url` 或 `SMOKE_DATABASE_URL`）。幂等 upsert 用 `ON CONFLICT (conflict_col) DO UPDATE SET ... RETURNING (xmax = 0)`。
+2. `tests/test_9100_cutover_sqlite_to_postgres_migration.py`（新增）：10 静态结构测试，覆盖表清单 / 安全门 / `RAG_DATABASE_URL` 隐式 apply 拒绝 / database 名校验 / 列交集映射（无 synthetic）/ sessions 用 `training_id` conflict / 9100 布尔列（`used_knowledge_base` / `auto_ingest`）/ upsert SQL / 拒绝部分成功 / 无敏感信息。
+3. `docker/postgres/init-prod/010_create_rag_database.sh`（新增）：生产 postgres init 幂等 shell，首次启动建第二个 database `xg_douyin_ai_cs`（owner=`${PGUSER:-auto_wechat}`）。注意 docker-entrypoint-initdb.d 只在数据卷为空时运行，已有数据卷需手动 `createdb`。
+4. `docker-compose.yml`（生产，改）：postgres 挂载 `./docker/postgres/init-prod:/docker-entrypoint-initdb.d:ro`；9100 服务 `XG_DOUYIN_AI_CS_DB_PATH`（SQLite）→ `RAG_DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/xg_douyin_ai_cs` + `depends_on: postgres (condition: service_healthy)`。
+5. `scripts/smoke_9100_rag_pg_runtime.py`（改）：修复顶层 `from app.database_url` 在 `sys.path` 设置之前的 import 失败（P3-D2 留下的脚本 bug，首次跑才暴露）；注释"8 张"修正为"7 张"。
+6. `POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md` 第 34 节（新增）：9100 Z5 生产切换 Runbook（审批窗口 / 前置就绪 / 切换步骤 / 回滚手册 / 运行参数 / chunks 大表 embedding_json 平移约束 / 不越界 / 交付边界）。
+
+关键决策（4 步方案用户确认）：
+
+1. **dev 默认 SQLite 不变**：dev compose（`docker-compose.dev.yml`）9100 服务保持 `XG_DOUYIN_AI_CS_DB_PATH`，本地开发零切换成本；只有生产 compose 切 PG。
+2. **生产单 role 多库**：生产 init-prod 用 `${PGUSER}` 单 role 同时 owner `auto_wechat` + `xg_douyin_ai_cs` 两个库，不为 9100 单独建 role（与 dev 的 001 独立 role 策略不同，简化生产权限）。
+3. **生产移除 SQLite 路径**：生产 compose 移除 `XG_DOUYIN_AI_CS_DB_PATH`，9100 只走 `RAG_DATABASE_URL`（PG）；回滚靠恢复该行（见 Z5 Runbook 34.4）。
+4. **URL scheme 需带 `+psycopg`**：9100 alembic `env.py` 返回 `parsed.raw_url`（不转 scheme，对齐 9000 env.py），依赖 URL 自带 driver；compose / smoke / cutover 的 `RAG_DATABASE_URL` 必须用 `postgresql+psycopg://`（无 driver 的 `postgresql://` 会让 SA 默认 psycopg2 → `No module named 'psycopg2'`）。
+
+9100 vs 9000 迁移脚本关键差异：
+
+1. 7 表（非 30 表），列名 SQLite 与 PG alembic 0002 完全一致，**无 synthetic 列映射**（9000 有 `key` ← `category_key`），`build_column_mapping` 直接取交集。
+2. **`CONFLICT_COLUMNS` 按表**：`knowledge_training_sessions` 用业务主键 `training_id`（字符串，非自增 id），其余 6 表用自增 `id`；`build_upsert_sql` / `read_sqlite_tables`（ORDER BY）/ `read_postgres_snapshot`（existing_keys 字符串化）均按表区分。
+3. **`BOOL_COLUMNS`**：`used_knowledge_base` / `auto_ingest` 不符合 `is_` 前缀 / `_enabled` 后缀规则，显式声明走 `coerce_bool`（SQLite INTEGER 0/1 → PG BOOLEAN）。
+4. `validate_apply_target` 校验 database 名为 `xg_douyin_ai_cs`（9000 为 `auto_wechat`）；`resolve_postgres_url_with_source` 读 `RAG_DATABASE_URL` / `SMOKE_DATABASE_URL`（9000 读 `DATABASE_URL`）。
+
+真实 PG smoke 结果（dev docker postgres，库 `xg_douyin_ai_cs`，role `xg_douyin_ai_cs` / `change_me`）：
+
+1. `smoke_9100_rag_pg_runtime.py --database-url postgresql+psycopg://...@127.0.0.1:5432/xg_douyin_ai_cs`：**SMOKE_PASS**，alembic upgrade head 建 7 表 + `create_rag_engine()` 连通验证表存在（URL 用 127.0.0.1 避免 localhost IPv6 ConnectionReset 坑）。
+2. 端到端 cutover dry-run（临时 SQLite 插 2 行：1 categories + 1 sessions with `used_knowledge_base=1`）：**DRY_RUN_PASS**，`total_source_rows=2 insert=2 update=0 skip=0 error=0`，`mapping_preview` 验证 `used_knowledge_base: True`（coerce_bool 生效）、`created_at` 解析成 datetime（coerce_datetime 生效）、sessions 按 `training_id` conflict 计算、asyncpg 读 PG `information_schema` + `alembic_version=0002_create_rag_metadata`、脱敏正常。
+3. 聚焦回归 25 passed（9100 cutover 10 + 9100 database_factory 7 + 9000 schema 8）。
+
+边界（本轮未触碰）：
+
+1. 不改 9100 RAG / Milvus 检索逻辑、训练写入 / 反馈摄入业务逻辑、`auto_send` gate。
+2. 不执行 production cutover apply / `compose up`（Z5 Runbook 只输出手册，production 切换需另起审批窗口人工执行）。
+3. 不改 dev compose（`docker-compose.dev.yml` 9100 保持 SQLite）。
+4. 不改 alembic schema（0002_create_rag_metadata 已在 P3-D 落盘）。
+5. 不改 9100 repository / knowledge_training_service / database.py（P3-D3 已提交，本轮只加新文件 + compose + smoke 修复）。
+
+后续建议：
+
+1. `P3-E-9100` production 切换：按 Z5 Runbook（roadmap 第 34 节）在审批窗口执行 staging 演练 + production apply。
+2. chunks 大表迁移前评估行数（embedding_json 约 15-30 KB/行，数万行级 apply 需评估耗时，见 roadmap 34.6）。
 
