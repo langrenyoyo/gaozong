@@ -15,6 +15,7 @@ from app import config
 from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
+from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.douyin_merchant_isolation import require_douyin_account_for_merchant
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
@@ -115,6 +116,20 @@ def _send_private_message_with_context(
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
 
     context = send_context
+    # 违禁词替换：在 request_payload 构造前替换 content_text，使上游 payload、
+    # 发送流水 content、request_body_json 三处同步为安全词；命中只替换不拦截。
+    replacement = replace_forbidden_words(
+        db,
+        merchant_id=_resolve_merchant_id_for_account(db, context["account_open_id"]) or "unknown_merchant",
+        source="douyin_ai_auto" if send_source == "ai_auto" else "douyin_manual",
+        content=content_text,
+        context={
+            "context_type": "douyin_conversation",
+            "context_id": context.get("conversation_short_id"),
+            "conversation_short_id": context.get("conversation_short_id"),
+        },
+    )
+    content_text = replacement.final_content
     send_scene = _default_scene(context)
     request_payload = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,

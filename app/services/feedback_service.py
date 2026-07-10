@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import DEFAULT_CONFIGS
 from app.models import DouyinLead, ReplyCheck, SalesStaff, FeedbackRecord
+from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.reply_analyzer import get_config_value
 
 logger = logging.getLogger(__name__)
@@ -292,11 +293,20 @@ def send_feedback_current_chat(
             )
 
     # --- 第 6 步：写入微信输入框 ---
+    # 违禁词替换：仅用于本次写入，不新增字段保存原文，不修改 write_text_to_input。
+    replacement = replace_forbidden_words(
+        db,
+        merchant_id=_resolve_feedback_merchant_id(db, record),
+        source="wechat_feedback",
+        content=record.feedback_text,
+        context={"context_type": "feedback_record", "context_id": str(record.id)},
+    )
+    feedback_text = replacement.final_content
     try:
         from app.wechat_ui.input_writer import write_text_to_input
         write_result = write_text_to_input(
             window=window,
-            text=record.feedback_text,
+            text=feedback_text,
             require_confirm=require_confirm,
         )
     except Exception as e:
@@ -328,6 +338,14 @@ def send_feedback_current_chat(
         f"action={write_result['action']}, chat_title={chat_title}"
     )
     return result
+
+
+def _resolve_feedback_merchant_id(db: Session, record: FeedbackRecord) -> str:
+    """反馈记录没有直接 merchant_id，经 lead 关联解析；解析不到用 unknown_merchant。"""
+    if not record.lead_id:
+        return "unknown_merchant"
+    lead = db.get(DouyinLead, record.lead_id)
+    return lead.merchant_id if lead and lead.merchant_id else "unknown_merchant"
 
 
 def _mark_failed(db: Session, record: FeedbackRecord, error_message: str):

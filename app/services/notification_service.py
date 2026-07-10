@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.services.automation_control import is_automation_allowed, BLOCKED_MESSAGE, set_action_in_progress
 from app.services.notification_template import DEFAULT_TEMPLATE, compose_notification_text
+from app.services.forbidden_word_service import replace_forbidden_words
 from app.wechat_ui.contact_searcher import open_chat_by_nickname
 from app.wechat_ui.contact_verifier import verify_current_chat_contact
 from app.wechat_ui.input_writer import write_text_to_input
@@ -132,6 +133,15 @@ def auto_notify_assigned_lead(
 
     # 4. 生成通知文本
     notification_text = _compose_notification_text(lead)
+    # 违禁词替换：写入前替换，并用替换后文本创建通知记录；与路由路径保持一致，命中只替换不拦截。
+    replacement = replace_forbidden_words(
+        db,
+        merchant_id=lead.merchant_id or "unknown_merchant",
+        source="wechat_dispatch",
+        content=notification_text,
+        context={"context_type": "lead_notification", "context_id": str(lead.id)},
+    )
+    notification_text = replacement.final_content
 
     try:
         ready_window = find_wechat_window()

@@ -27,6 +27,7 @@ from app.wechat_ui.window_locator import (
     WECHAT_NOT_READY_MESSAGE,
 )
 from app.services.automation_control import is_automation_allowed, BLOCKED_MESSAGE
+from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.notification_service import batch_notify_pending_assigned
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,15 @@ def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
 
     # 3. 生成通知文本
     notification_text = _compose_notification_text(lead)
+    # 违禁词替换：写入前替换，并用替换后文本创建通知记录；命中只替换不拦截。
+    replacement = replace_forbidden_words(
+        db,
+        merchant_id=lead.merchant_id or "unknown_merchant",
+        source="wechat_dispatch",
+        content=notification_text,
+        context={"context_type": "lead_notification", "context_id": str(lead.id)},
+    )
+    notification_text = replacement.final_content
     result.notification_text = notification_text
 
     try:
