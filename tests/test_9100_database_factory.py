@@ -76,11 +76,11 @@ def test_9100_database_factory_recognizes_postgresql_without_password_leak():
 
 
 def test_9100_database_factory_does_not_create_postgresql_connection():
-    # P3-D2 后 connect() 在 PG 仍不可用：repository 未改写到 engine/Session（P3-D3 才切换）；
-    # PG 真连接走 create_rag_engine()，schema 由 alembic 管
+    # P3-D3 后 repository / knowledge_training_service 都走 get_rag_engine()，
+    # connect() 仅 SQLite dev 兜底（PRAGMA / init_db），PG 下主动报错指向 engine
     from apps.xg_douyin_ai_cs.rag.database import connect
 
-    with pytest.raises(RuntimeError, match="PostgreSQL backend.*9100 repository.*P3-D3"):
+    with pytest.raises(RuntimeError, match="PostgreSQL backend.*get_rag_engine"):
         connect("postgresql+asyncpg://rag_user:secret@postgres:5432/xg_douyin_ai_cs")
 
 

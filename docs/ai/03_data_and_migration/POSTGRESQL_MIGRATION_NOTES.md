@@ -2622,3 +2622,48 @@ scripts/smoke_9100_rag_pg_runtime.py --database-url "postgresql://..."
 2. `P3-E-9100`：9100 RAG metadata SQLite -> PostgreSQL 数据迁移脚本（类比 9000 `migrate_9000_sqlite_to_postgres_cutover.py`）。
 3. compose 切 9100 `RAG_DATABASE_URL` + `depends_on postgres` + init 第二个 database（待 repository 改写后）。
 4. 9100 Z5 Runbook（切换 / 回滚手册，追加到 `POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md`）。
+
+## 58. P3-D3-9100 repository + knowledge_training_service 跨方言改写
+
+任务：`P3-D3-9100-REPOSITORY-AND-TRAINING-SERVICE-CROSS-DIALECT-1`
+
+P3-D3-9100 将 9100 业务路径从原生 sqlite3 切换到 SQLAlchemy engine + `text()`，SQL 用命名占位符 + `ON CONFLICT DO NOTHING` + `RETURNING` + BOOLEAN `true/false`，跨 PG / SQLite 方言。PG 生产 / SQLite dev 兜底均走 `database.get_rag_engine()` 单例。公共 API 签名不变，调用方零改动。
+
+覆盖范围（本次新增 / 修改）：
+
+1. `apps/xg_douyin_ai_cs/rag/repository.py`：~25 条 SQL 全量改写（`?` → `:name` 命名参数、`INSERT OR IGNORE` → `ON CONFLICT (document_id, content_hash) DO NOTHING`、`cur.lastrowid` → `RETURNING id` + `fetchone()["id"]`、`is_active=0/1` → `is_active=false/true`、`int(row["is_active"])==1` → `bool(row["is_active"])`）；`with connect() as conn:` → `with get_rag_engine().connect() as conn:`；execute 链尾加 `.mappings()` 让 RowMapping 支持 `row["col"]`（SQLAlchemy 2.0 Row 不支持字符串索引）；业务逻辑（chunker / embedding / milvus / scoring / 反馈摄入）一字不动。
+2. `apps/xg_douyin_ai_cs/services/knowledge_training_service.py`：6 条 SQL 同规则改写（`ask` 写 `knowledge_training_sessions`、`submit_feedback` 读写 `knowledge_training_feedbacks` + `RETURNING id` 替代 `cur.lastrowid`、`_active_base_chunk_count` 的 `is_active=1` → `is_active=true`）；`dict(row._mapping)` → `dict(row)`（fetchone 已是 RowMapping）；业务逻辑不动。
+3. `apps/xg_douyin_ai_cs/rag/database.py`：新增 `get_rag_engine()` 单例（按 `settings.rag_database_url` 变化重建，PG / SQLite 均走此单例，repository + knowledge_training_service 共用）；SQLite 路径在 `create_rag_engine` 内用原生 `sqlite3.connect` 调 `init_db` 建表（对齐原 `connect()` 行为，file-based 下 engine 连接池读到同一文件）；`connect()` 保留为 SQLite dev 兜底 + 测试 fixture 用，PG 下主动报错指向 `get_rag_engine()`。
+
+关键决策：
+
+1. **方案 A 跨方言（非 PG-only）**：保留 SQLite dev 路径，用 SQLAlchemy `text()` + 命名参数 + RETURNING + ON CONFLICT + true/false 跨方言。SQLite 3.35+ 支持 RETURNING，3.24+ 支持 ON CONFLICT，项目 SQLite 3.51.1 满足。布尔列 PG 是 `Boolean`、SQLite init_db 是 `INTEGER`，Python `bool()` 跨方言安全（sqlite3 把 `True` 存 1，psycopg 接受 bool）。
+2. **engine 单例按 url 变化重建**：`settings.rag_database_url` 是 `@property`（每次读环境变量），单例需感知 url 变化才能支持测试隔离（每个测试 `setenv` 不同 `tmp_path`）。不在 repository / service 模块级缓存 `_engine`，每次 `get_rag_engine().connect()`，保证测试 `setenv` 切换 `tmp_path` 时隔离成立。
+3. **`connect()` 保留**：SQLite dev 兜底 + 测试 fixture 建表 / 断言仍用 `connect()`（返回原生 `sqlite3.Connection` + `init_db`），PG 下报错。业务路径全部切到 `get_rag_engine()`。
+
+边界（本轮未触碰）：
+
+1. 不改 Milvus 检索逻辑（`vector_store.py`、`search` / `_search_milvus_or_fallback` 行为不变）。
+2. 不改训练写入 / 反馈摄入业务逻辑（chunk 切分、embedding 调用、auto_ingest 规则、评分排序不变）。
+3. 不改 `auto_send` gate（`reply_decision_service` 一字不动，AI 回复仍不自动发送）。
+4. 不切换 compose `RAG_DATABASE_URL`、不动 `docker-compose.yml` 9100 服务的 `XG_DOUYIN_AI_CS_DB_PATH`（仍 SQLite）。
+5. 不写生产数据迁移脚本、不连真实 PG（PG 运行时由 `scripts/smoke_9100_rag_pg_runtime.py` + 真实 PG 验证，本轮未跑）。
+6. 不改 alembic schema（0002_create_rag_metadata 已在 P3-D 落盘）。
+7. 不删除 `init_db` / `connect`（SQLite dev 与测试仍依赖）。
+
+测试与回归：
+
+1. 9100 全量回归（`-k "9100 or xg_douyin_ai_cs or rag or douyin_ai_cs or knowledge_training or database_factory or database_url"`）：**387 passed, 5 failed**。
+2. 5 failed 全部 pre-existing（stash 验证零回归）：
+   - `test_xg_douyin_ai_cs_agent_runtime.py` × 2：`llm_not_configured`（本地无 LLM API key，stash 前后均 FAIL）。
+   - `test_xg_douyin_ai_cs_app.py::test_reply_suggestion_*` × 3：全量跑时被前置测试污染（单独跑 PASS，stash 前后全量均 FAIL，属 pre-existing 隔离问题）。
+3. 顺手修复 P3-D 遗留：`test_9000_postgres_knowledge_categories_schema.py::test_xg_douyin_ai_cs_migration_still_only_has_baseline` 断言过时（P3-D 加 0002 后仍断言只有 baseline），重命名为 `test_xg_douyin_ai_cs_migration_has_baseline_and_rag_metadata` 并更新断言。修复后 387 passed（较 P3-D3 前的 386 多 1）。
+4. 核心链路 4 文件（database_factory + training_feedback_auto_ingest + knowledge_training_ask_latency + unified_knowledge_training_api）36 passed。
+
+后续建议：
+
+1. `P3-E-9100`：9100 RAG metadata SQLite -> PostgreSQL 数据迁移脚本（类比 9000 `migrate_9000_sqlite_to_postgres_cutover.py`）。
+2. compose 切 9100 `RAG_DATABASE_URL` + `depends_on postgres` + init 第二个 database。
+3. 9100 Z5 Runbook（切换 / 回滚手册，追加到 `POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md`）。
+4. 真实 PG smoke：`scripts/smoke_9100_rag_pg_runtime.py --database-url postgresql://...` + alembic upgrade head + 8 表验证（待真实 PG 环境）。
+

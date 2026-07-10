@@ -47,12 +47,34 @@ def _postgres_sync_url(raw_url: str) -> str:
     return raw_url
 
 
-def create_rag_engine(database_url: str | None = None):
-    """创建 9100 RAG metadata SQLAlchemy engine。
+# 模块级 engine 单例：按当前 rag_database_url 缓存，url 变化时重建。
+# settings.rag_database_url 是动态 property（每次读环境变量），单例需感知 url 变化
+# 才能支持测试隔离（每个测试 setenv 不同 tmp_path）。生产环境 url 不变，单例稳定。
+_rag_engine = None
+_rag_engine_url = None
 
-    P3-D2：PG backend 使用同步 psycopg + 连接池（对齐 9000），供 alembic / smoke / 后续
-    P3-D3 repository 改写使用。SQLite backend 保留 dev 兜底。本函数不替换 connect()——
-    repository 仍走 sqlite3 路径，P3-D3 改写后才切换到 engine / Session。
+
+def get_rag_engine():
+    """返回 9100 RAG metadata engine 单例（按当前 rag_database_url 缓存，url 变化时重建）。
+
+    P3-D3：repository 与 knowledge_training_service 共用此单例。PG 生产 / SQLite dev
+    兜底由 create_rag_engine 按当前 backend 决定。SQLite 路径建表（init_db）对齐原 connect。
+    """
+    global _rag_engine, _rag_engine_url
+    current_url = settings.rag_database_url
+    if _rag_engine is None or _rag_engine_url != current_url:
+        if _rag_engine is not None:
+            _rag_engine.dispose()
+        _rag_engine = create_rag_engine(current_url)
+        _rag_engine_url = current_url
+    return _rag_engine
+
+
+def create_rag_engine(database_url: str | None = None):
+    """创建 9100 RAG metadata SQLAlchemy engine（每次返回新实例）。
+
+    P3-D2：PG backend 使用同步 psycopg + 连接池（对齐 9000），供 alembic / smoke / 测试
+    使用。SQLite backend 保留 dev 兜底。业务路径请走 get_rag_engine() 单例，避免连接池膨胀。
     """
     runtime = get_database_runtime(database_url)
     if runtime.backend == "postgresql":
@@ -75,19 +97,30 @@ def create_rag_engine(database_url: str | None = None):
     if runtime.backend != "sqlite":
         raise RuntimeError(f"不支持的 9100 RAG 数据库后端: {runtime.backend}")
     # SQLite dev 兜底（不进连接池配置，保持简单）
-    return create_engine(
+    engine = create_engine(
         runtime.raw_url,
         connect_args={"check_same_thread": False, "timeout": 30},
     )
+    # SQLite 模式建表，对齐原 connect() 的 init_db（PG 路径表由 alembic 管）。
+    # 用原生 sqlite3.connect 建表（设 row_factory 让 init_db 的 PRAGMA row["name"] 可用），
+    # file-based 下 engine 连接池后续读到同一文件；:memory: 跳过（engine 独立内存库）
+    sqlite_path = runtime.sqlite_path
+    if sqlite_path:
+        path = Path(sqlite_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = sqlite3.connect(str(path))
+        raw.row_factory = sqlite3.Row
+        init_db(raw)
+        raw.close()
+    return engine
 
 
 def connect(database_url: str | None = None) -> sqlite3.Connection:
     runtime = get_database_runtime(database_url)
     if runtime.backend == "postgresql":
         raise RuntimeError(
-            "PostgreSQL backend 已识别，但 9100 repository 仍使用 SQLite 专属 SQL "
-            "（PRAGMA / INSERT OR IGNORE / ? 占位符），P3-D3 改写前 connect() 不可用；"
-            "PG schema 由 alembic 管理，engine 走 create_rag_engine()"
+            "PostgreSQL backend 已识别，connect() 是 SQLite 专属 dev 兜底（PRAGMA / init_db），"
+            "PG 不可用；9100 业务路径（repository / knowledge_training_service）走 get_rag_engine()"
         )
     if runtime.backend != "sqlite" or not runtime.sqlite_path:
         raise RuntimeError(f"不支持的 9100 metadata 数据库后端: {runtime.backend}")

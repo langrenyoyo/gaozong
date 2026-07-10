@@ -92,6 +92,7 @@ def test_revision_does_not_contain_real_secrets_or_fixed_database_uri():
         assert item not in content
 
 
-def test_xg_douyin_ai_cs_migration_still_only_has_baseline():
+def test_xg_douyin_ai_cs_migration_has_baseline_and_rag_metadata():
+    # P3-D 后 9100 alembic 含 0001 baseline + 0002 RAG metadata schema（head=0002）
     files = sorted(path.name for path in XG_DOUYIN_AI_CS_VERSIONS.glob("*.py"))
-    assert files == ["0001_empty_baseline.py"]
+    assert files == ["0001_empty_baseline.py", "0002_create_rag_metadata.py"]

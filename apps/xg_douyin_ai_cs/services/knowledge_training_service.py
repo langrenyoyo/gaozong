@@ -9,16 +9,21 @@ import logging
 import time
 from uuid import uuid4
 
+from sqlalchemy import text
+
 from apps.xg_douyin_ai_cs.llm.client import (
     LLMNotConfiguredError,
     LLMRequestError,
     OpenAICompatibleClient,
 )
 from apps.xg_douyin_ai_cs.config import settings
-from apps.xg_douyin_ai_cs.rag.database import connect
+from apps.xg_douyin_ai_cs.rag.database import get_rag_engine
 from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagSearchRequest
 from apps.xg_douyin_ai_cs.rag import repository
 from apps.xg_douyin_ai_cs.rag.repository import search
+
+# P3-D3：engine 走 database.get_rag_engine() 单例（按 rag_database_url 变化重建），
+# 不在模块级缓存 _engine，保证测试 setenv 切换 tmp_path 时隔离成立
 
 KNOWLEDGE_BASE_NAME = "小高知识库"
 FEEDBACK_RATING_LABELS = {
@@ -111,25 +116,28 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
         training_id = f"kt-{uuid4().hex[:12]}"
         used_knowledge_base = bool(source_chunks)
         db_started = time.perf_counter()
-        with connect() as conn:
+        with get_rag_engine().connect() as conn:
             conn.execute(
-                """
-                INSERT INTO knowledge_training_sessions(
-                  training_id, tenant_id, merchant_id, douyin_account_id,
-                  question, answer, used_knowledge_base, status
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    training_id,
-                    payload.tenant_id,
-                    payload.merchant_id,
-                    account_id,
-                    payload.question,
-                    answer,
-                    1 if used_knowledge_base else 0,
-                    "answered",
+                text(
+                    """
+                    INSERT INTO knowledge_training_sessions(
+                      training_id, tenant_id, merchant_id, douyin_account_id,
+                      question, answer, used_knowledge_base, status
+                    )
+                    VALUES (:training_id, :tenant_id, :merchant_id, :douyin_account_id,
+                            :question, :answer, :used_knowledge_base, :status)
+                    """
                 ),
+                {
+                    "training_id": training_id,
+                    "tenant_id": payload.tenant_id,
+                    "merchant_id": payload.merchant_id,
+                    "douyin_account_id": account_id,
+                    "question": payload.question,
+                    "answer": answer,
+                    "used_knowledge_base": bool(used_knowledge_base),
+                    "status": "answered",
+                },
             )
             conn.commit()
         db_ms = _elapsed_ms(db_started)
@@ -175,15 +183,17 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
     status = "pending_review" if payload.rating == "wrong" else "submitted"
     corrected_answer = _clean_text(payload.corrected_answer, limit=3000)
     auto_ingest = bool(payload.auto_ingest)
-    with connect() as conn:
+    with get_rag_engine().connect() as conn:
         session = conn.execute(
-            """
-            SELECT tenant_id, merchant_id, question, answer
-            FROM knowledge_training_sessions
-            WHERE training_id=?
-            """,
-            (payload.training_id,),
-        ).fetchone()
+            text(
+                """
+                SELECT tenant_id, merchant_id, question, answer
+                FROM knowledge_training_sessions
+                WHERE training_id = :training_id
+                """
+            ),
+            {"training_id": payload.training_id},
+        ).mappings().fetchone()
         if session is None:
             raise TrainingSessionNotFoundError("TRAINING_SESSION_NOT_FOUND")
         if session["tenant_id"] != payload.tenant_id or session["merchant_id"] != payload.merchant_id:
@@ -201,27 +211,31 @@ def submit_feedback(payload: KnowledgeTrainingFeedbackInput) -> dict:
         ingestion = _skipped_ingestion("auto_ingest_disabled", enabled=False) if not auto_ingest else None
 
         cur = conn.execute(
-            """
-            INSERT INTO knowledge_training_feedbacks(
-              training_id, tenant_id, merchant_id, rating, comment, status,
-              corrected_answer, auto_ingest, ingestion_status, answer_hash
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.training_id,
-                payload.tenant_id,
-                payload.merchant_id,
-                payload.rating,
-                payload.comment,
-                status,
-                corrected_answer or None,
-                1 if auto_ingest else 0,
-                ingestion["status"] if ingestion else "pending",
-                answer_hash,
+            text(
+                """
+                INSERT INTO knowledge_training_feedbacks(
+                  training_id, tenant_id, merchant_id, rating, comment, status,
+                  corrected_answer, auto_ingest, ingestion_status, answer_hash
+                )
+                VALUES (:training_id, :tenant_id, :merchant_id, :rating, :comment, :status,
+                        :corrected_answer, :auto_ingest, :ingestion_status, :answer_hash)
+                RETURNING id
+                """
             ),
+            {
+                "training_id": payload.training_id,
+                "tenant_id": payload.tenant_id,
+                "merchant_id": payload.merchant_id,
+                "rating": payload.rating,
+                "comment": payload.comment,
+                "status": status,
+                "corrected_answer": corrected_answer or None,
+                "auto_ingest": bool(auto_ingest),
+                "ingestion_status": ingestion["status"] if ingestion else "pending",
+                "answer_hash": answer_hash,
+            },
         )
-        feedback_id = int(cur.lastrowid)
+        feedback_id = int(cur.mappings().fetchone()["id"])
         conn.commit()
 
     if ingestion is None:
@@ -361,40 +375,51 @@ def _existing_completed_ingestion(
 ) -> dict | None:
     if not answer_hash:
         return None
-    with connect() as conn:
+    with get_rag_engine().connect() as conn:
         row = conn.execute(
-            """
-            SELECT ingested_document_id, ingestion_training_run_id
-            FROM knowledge_training_feedbacks
-            WHERE tenant_id=? AND merchant_id=? AND training_id=? AND answer_hash=?
-              AND ingestion_status='completed'
-              AND ingested_document_id IS NOT NULL
-              AND ingestion_training_run_id IS NOT NULL
-            ORDER BY id ASC
-            LIMIT 1
-            """,
-            (tenant_id, merchant_id, training_id, answer_hash),
-        ).fetchone()
+            text(
+                """
+                SELECT ingested_document_id, ingestion_training_run_id
+                FROM knowledge_training_feedbacks
+                WHERE tenant_id = :tenant_id AND merchant_id = :merchant_id
+                  AND training_id = :training_id AND answer_hash = :answer_hash
+                  AND ingestion_status = 'completed'
+                  AND ingested_document_id IS NOT NULL
+                  AND ingestion_training_run_id IS NOT NULL
+                ORDER BY id ASC
+                LIMIT 1
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "merchant_id": merchant_id,
+                "training_id": training_id,
+                "answer_hash": answer_hash,
+            },
+        ).mappings().fetchone()
     return dict(row) if row else None
 
 
 def _update_feedback_ingestion(*, feedback_id: int, ingestion: dict, answer_hash: str | None) -> None:
-    with connect() as conn:
+    with get_rag_engine().connect() as conn:
         conn.execute(
-            """
-            UPDATE knowledge_training_feedbacks
-            SET ingestion_status=?, ingested_document_id=?, ingestion_training_run_id=?,
-                ingestion_error=?, answer_hash=?
-            WHERE id=?
-            """,
-            (
-                ingestion.get("status"),
-                _optional_int(ingestion.get("document_id")),
-                _optional_int(ingestion.get("training_run_id")),
-                ingestion.get("error_type") or ingestion.get("reason"),
-                answer_hash,
-                feedback_id,
+            text(
+                """
+                UPDATE knowledge_training_feedbacks
+                SET ingestion_status = :ingestion_status, ingested_document_id = :ingested_document_id,
+                    ingestion_training_run_id = :ingestion_training_run_id,
+                    ingestion_error = :ingestion_error, answer_hash = :answer_hash
+                WHERE id = :feedback_id
+                """
             ),
+            {
+                "ingestion_status": ingestion.get("status"),
+                "ingested_document_id": _optional_int(ingestion.get("document_id")),
+                "ingestion_training_run_id": _optional_int(ingestion.get("training_run_id")),
+                "ingestion_error": ingestion.get("error_type") or ingestion.get("reason"),
+                "answer_hash": answer_hash,
+                "feedback_id": feedback_id,
+            },
         )
         conn.commit()
 
@@ -518,17 +543,25 @@ def _rag_query(question: str) -> str:
 
 def _active_base_chunk_count(*, tenant_id: str, merchant_id: str, douyin_account_id: int) -> int | None:
     try:
-        with connect() as conn:
+        with get_rag_engine().connect() as conn:
             row = conn.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM knowledge_chunks c
-                JOIN knowledge_documents d ON d.id=c.document_id
-                WHERE c.tenant_id=? AND c.merchant_id=? AND c.douyin_account_id=?
-                  AND c.category_key='base' AND c.is_active=1 AND d.is_active=1
-                """,
-                (tenant_id, merchant_id, douyin_account_id),
-            ).fetchone()
+                text(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM knowledge_chunks c
+                    JOIN knowledge_documents d ON d.id = c.document_id
+                    WHERE c.tenant_id = :tenant_id AND c.merchant_id = :merchant_id
+                      AND c.douyin_account_id = :douyin_account_id
+                      AND c.category_key = 'base'
+                      AND c.is_active = true AND d.is_active = true
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "merchant_id": merchant_id,
+                    "douyin_account_id": douyin_account_id,
+                },
+            ).mappings().fetchone()
         return int(row["count"] if row else 0)
     except Exception as exc:
         _logger.warning("knowledge_training_active_doc_count_failed error_type=%s", type(exc).__name__)
