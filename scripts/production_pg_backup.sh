@@ -1,17 +1,19 @@
 #!/bin/bash
-# 生产 PostgreSQL 切换前备份（SQLite + PG + .env）。
+# 生产 PostgreSQL 切换前备份（SQLite + PG + production env）。
 # P3-E-9100-PRODUCTION-RELEASE-PACKAGE-1 / §6。
 #
-# 备份项：9000 SQLite / 9100 metadata SQLite / 向量副本 / 9000 PG / 9100 PG / .env。
+# 备份项：9000 SQLite / 9100 metadata SQLite / 向量副本 / 9000 PG / 9100 PG / production env。
 # 记录 MANIFEST（时间/路径/大小/SHA-256/pg_dump 退出码）。关键备份失败返回非零。
 # backups/ 已被 .gitignore 排除，禁止提交。
 #
 # 用法：
-#   bash scripts/production_pg_backup.sh [--project-root DIR] [--env-file .env]
+#   bash scripts/production_pg_backup.sh [--project-root DIR] [--env-file .env.production.local]
 set -euo pipefail
+# 备份含 production env（数据库密码）与 PG dump，默认文件 600 / 目录 700
+umask 077
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 TS=$(date +%Y%m%d-%H%M%S)
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups/cutover-$TS}"
 
@@ -26,11 +28,12 @@ done
 
 cd "$PROJECT_ROOT"
 
-# 加载 .env
+# 加载 production env
 if [[ -f "$ENV_FILE" ]]; then set -a; source "$ENV_FILE"; set +a; fi
 
 MANIFEST="$BACKUP_DIR/MANIFEST.txt"
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"   # 含 production env 备份（密码），强制 700（mkdir -p 不收紧已存在目录权限）
 {
   echo "cutover backup manifest"
   echo "time     : $(date -Iseconds)"
@@ -57,6 +60,7 @@ backup_file() {
   fi
   local dest="$BACKUP_DIR/$(basename "$path").${name}.bak"
   cp -p "$path" "$dest"
+  chmod 600 "$dest"   # 含 production env 密码 / SQLite 数据，强制 600（cp -p 可能继承源 644，绕过 umask）
   local size; size=$(wc -c < "$dest")
   local sha; sha=$(sha256_of "$dest")
   printf "%-22s %s\n  dest: %s\n  size: %s bytes\n  sha256: %s\n" "$name" "$path" "$dest" "$size" "$sha" | tee -a "$MANIFEST"
@@ -77,9 +81,9 @@ backup_file "9100-SQLite-metadata" "$SQLITE_9100"
 # 向量副本：RAG_VECTOR_BACKEND=sqlite 时向量在 PG metadata（无独立文件）；如有独立向量文件单独备份
 backup_file "9100-SQLite-vector"   "$VECTOR_SQLITE"
 
-# ---------- .env ----------
+# ---------- production env ----------
 backup_file "env" "$ENV_FILE"
-echo "[提示] .env 含真实密码，建议加密后存外部安全存储（如宝塔加密备份/OSS 加密桶）" | tee -a "$MANIFEST"
+echo "[提示] production env 含真实密码，建议加密后存外部安全存储（如宝塔加密备份/OSS 加密桶）" | tee -a "$MANIFEST"
 
 # ---------- PG database ----------
 COMPOSE_CMD=""
@@ -116,5 +120,5 @@ echo "==================== 备份汇总 ===================="
 echo "MANIFEST: $MANIFEST"
 cat "$MANIFEST" | tail -40
 echo ""
-echo "[提示] 备份目录 $BACKUP_DIR 含敏感数据（.env/PG dump），禁止提交 Git，建议加密外部存储。"
+echo "[提示] 备份目录 $BACKUP_DIR 含敏感数据（production env/PG dump），禁止提交 Git，建议加密外部存储。"
 echo "BACKUP_DONE"

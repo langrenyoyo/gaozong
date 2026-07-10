@@ -3,7 +3,7 @@
 # P3-E-9100-PRODUCTION-RELEASE-PACKAGE-1 / §9。
 #
 # 安全门（全部必须通过才执行）：
-#   1. 默认拒绝（无参数只打印计划，退出 0）
+#   1. 默认拒绝（无参数只打印计划，退出 2 = 拒绝/未执行）
 #   2. 显式 --approver/--operator/--ticket 三参数齐全 + 审批人 ≠ 执行人
 #   3. APP_ENV 必须是 production（拒绝 development/staging 绕过）
 #   4. 备份标记存在（--backup-dir 指向 backup.sh 产出目录，含 MANIFEST.txt）
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 SERVICE="both"
 APPROVER=""; OPERATOR=""; TICKET=""; BACKUP_DIR=""; DRY_RUN_LOG=""
 
@@ -57,11 +57,11 @@ if [[ -z "$APPROVER" && -z "$OPERATOR" && -z "$TICKET" ]]; then
   1. preflight PASS
   2. backup.sh 已执行且 BACKUP_DIR 存在
   3. dry_run.sh 已执行且日志含 DRY_RUN_PASS
-  4. .env APP_ENV=production（拒绝 development/staging 绕过）
+4. production env APP_ENV=production（拒绝 development/staging 绕过）
 
-未传审批参数，不执行任何写操作。
+未传审批参数，不执行任何写操作（退出码 2 = 拒绝/未执行，非成功）。
 EOF
-  exit 0
+  exit 2
 fi
 
 # ---------- 2. 校验审批三参数 ----------

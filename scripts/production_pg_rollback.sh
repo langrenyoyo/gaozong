@@ -3,18 +3,18 @@
 # P3-E-9100-PRODUCTION-RELEASE-PACKAGE-1 / §13。
 #
 # 回滚策略：
-#   - 恢复 .env 至 SQLite 配置（注释 DATABASE_URL / RAG_DATABASE_URL）
+#   - 恢复 production env 至 SQLite 配置（注释 DATABASE_URL / RAG_DATABASE_URL）
 #   - 重启 9000/9100 容器，使其回退读 SQLite
 #   - 不删除 PG 数据（volume 保留，便于事后查切换期间新数据）
 #   - 不覆盖原始 SQLite 文件（cutover 只读 SQLite 写 PG，原始 SQLite 未被改）
 #   - 切换期间写入 PG 的新数据需人工评估补偿（脚本只提示，不自动同步）
 #
 # 安全门：
-#   1. 默认拒绝（无 --execute 只打印计划，退出 0）
+#   1. 默认拒绝（无 --execute 只打印计划，退出 2 = 拒绝/未执行）
 #   2. 需要 --approver/--operator/--reason + 审批≠执行
 #   3. APP_ENV=production
-#   4. 当前 .env 确实是 PG 配置（确认从 PG 回滚）
-#   5. .env 改前先备份 .env.pg-rollback-TS
+#   4. 当前 production env 确实是 PG 配置（确认从 PG 回滚）
+#   5. production env 改前先备份 .env.production.local.pg-rollback-TS
 #   6. 不 touch docker-data/*.db，不删 volume
 #
 # 用法：
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
-ENV_FILE=".env"
+ENV_FILE=".env.production.local"
 EXECUTE=0
 APPROVER=""; OPERATOR=""; REASON=""; TICKET=""; BACKUP_DIR=""
 
@@ -60,8 +60,8 @@ if [[ $EXECUTE -eq 0 ]]; then
   [--ticket <单号>]       [--backup-dir <dir>]
 
 回滚操作内容：
-  1. 备份当前 .env → .env.pg-rollback-<TS>
-  2. 注释 .env 中 DATABASE_URL / RAG_DATABASE_URL（恢复 SQLite 配置）
+  1. 备份当前 production env → .env.production.local.pg-rollback-<TS>
+  2. 注释 production env 中 DATABASE_URL / RAG_DATABASE_URL（恢复 SQLite 配置）
   3. docker compose up -d（重启 9000/9100 回退 SQLite）
   4. 健康检查：9000 /ready、9100 /ready
 
@@ -75,9 +75,9 @@ if [[ $EXECUTE -eq 0 ]]; then
   - 从 PG 备份（backup.sh 产出 pg-*.dump + 当前 PG 实时数据）导出增量
   - 按 [宝塔现场确认] 的方式补偿到 SQLite 或人工处理
 
-未传 --execute，不执行任何写操作。
+未传 --execute，不执行任何写操作（退出码 2 = 拒绝/未执行，非成功）。
 EOF
-  exit 0
+  exit 2
 fi
 
 # ---------- 校验审批参数 ----------
@@ -93,7 +93,7 @@ if [[ "$APPROVER" == "$OPERATOR" ]]; then
 fi
 
 # ---------- APP_ENV ----------
-if [[ ! -f "$ENV_FILE" ]]; then echo "[FAIL] .env 不存在：$ENV_FILE" >&2; exit 1; fi
+if [[ ! -f "$ENV_FILE" ]]; then echo "[FAIL] production env 不存在：$ENV_FILE" >&2; exit 1; fi
 set -a; source "$ENV_FILE"; set +a
 if [[ "${APP_ENV:-}" != "production" ]]; then
   echo "[FAIL] APP_ENV 必须是 production（当前=${APP_ENV:-空}）" >&2; exit 2
@@ -103,7 +103,7 @@ fi
 if [[ "${DATABASE_URL:-}" != postgresql* ]]; then
   echo "[FAIL] 当前 DATABASE_URL 不是 PostgreSQL（$(mask_url "${DATABASE_URL:-空}")），无需回滚到 SQLite" >&2; exit 2
 fi
-echo "[PASS] 当前 .env 确为 PG 配置，确认从 PG 回滚"
+echo "[PASS] 当前 production env 确为 PG 配置，确认从 PG 回滚"
 
 # ---------- compose 命令 ----------
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
@@ -131,10 +131,10 @@ echo "==================== 执行回滚 ===================="
 echo "[INFO] 执行人=$OPERATOR 审批人=$APPROVER 单号=${TICKET:-无}"
 echo "[INFO] 原因=$REASON"
 
-# 1. 备份当前 .env
+# 1. 备份当前 production env
 ENV_BACKUP="${ENV_FILE}.pg-rollback-${TS}"
 cp -p "$ENV_FILE" "$ENV_BACKUP"
-echo "[PASS] .env 已备份 → $ENV_BACKUP" | tee -a "$AUDIT_LOG"
+echo "[PASS] production env 已备份 → $ENV_BACKUP" | tee -a "$AUDIT_LOG"
 
 # 2. 注释 DATABASE_URL / RAG_DATABASE_URL（恢复 SQLite 配置）
 # 使用 sed 注释掉 PG URL 行（保留原行作为注释，便于事后追溯）
