@@ -124,6 +124,13 @@ def _summarize_consume(db: Session, merchant_id: str) -> tuple[int, int, int]:
         created = row.created_at
         if not created:
             continue
+        # PG TIMESTAMPTZ 读出 tz-aware（UTC），SQLite DateTime 读出 naive；
+        # today_start 来自 _now()（本地 naive）。先转本地 naive 再比较，避免
+        # offset-naive/aware TypeError 且不引入 UTC/本地 8 小时偏差。
+        # 技术债：_now() naive vs PG TIMESTAMPTZ 是全项目 tz 策略问题；
+        # 升级路径 = 统一 _now() 到 aware + 全项目 audit datetime 比较。
+        if created.tzinfo is not None:
+            created = created.astimezone().replace(tzinfo=None)
         if created >= today_start:
             today_consume += amount
         elif created >= yesterday_start:

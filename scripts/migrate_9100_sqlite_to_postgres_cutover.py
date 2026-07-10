@@ -34,7 +34,10 @@ EXPECTED_REVISION = "0002_create_rag_metadata"
 POSTGRES_WRITE_MODE_DISABLED = "disabled"
 ALLOWED_POSTGRES_SCHEMES = {"postgresql", "postgresql+asyncpg", "postgresql+psycopg"}
 ALLOWED_APPLY_HOSTS = {"localhost", "127.0.0.1", "postgres", "auto-wechat-postgres-dev"}
-TARGET_DATABASE_NAME = "xg_douyin_ai_cs"
+# 默认 xg_douyin_ai_cs（dev/生产）；staging 等隔离环境通过 RAG_TARGET_DATABASE_NAME 覆盖
+# （如 xg_douyin_ai_cs_staging），避免 validate_apply_target 库名校验拒绝 staging 演练。
+# 生产安全不受影响：APP_ENV=production 仍拒绝 apply，host 仍校验 ALLOWED_APPLY_HOSTS。
+TARGET_DATABASE_NAME = os.environ.get("RAG_TARGET_DATABASE_NAME", "xg_douyin_ai_cs")
 
 # 9100 RAG metadata 7 张表（alembic 0002）。SQLite 列名与 PG 完全一致，无 synthetic 映射。
 CUTOVER_TABLES = [
@@ -299,10 +302,13 @@ def map_row(source_row: Mapping[str, object], mapping: ColumnMapping) -> tuple[d
 
 
 def coerce_value(column: str, value: object) -> tuple[object, str | None]:
-    if value is None or value == "":
+    # SQLite 空字符串 '' 语义是空字符串而非 NULL。PG NOT NULL DEFAULT '' 列
+    # 显式 INSERT NULL 仍违反约束（DEFAULT 只对省略该列生效，不兜底显式 NULL）。
+    # 保留 '' 让 INSERT 合法且忠实源数据；真 NULL 才归一为 None。
+    if value is None:
         return None, None
     name = column.lower()
-    if name.endswith("_at") or name.endswith("_time"):
+    if name.endswith("_at") or name.endswith("_time") or name.endswith("_deadline"):
         return coerce_datetime(column, value), None
     if name.endswith("_json") or name.startswith("raw_") or name in {"raw_body", "raw_data", "raw_result"}:
         parsed, warning = coerce_json(column, value)

@@ -26,10 +26,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.database_url import parse_database_url
 
 
-EXPECTED_REVISION = "0006_runtime_cutover_gap"
+EXPECTED_REVISION = "0007_lead_type_widen"
 POSTGRES_WRITE_MODE_DISABLED = "disabled"
 ALLOWED_POSTGRES_SCHEMES = {"postgresql", "postgresql+asyncpg", "postgresql+psycopg"}
 ALLOWED_APPLY_HOSTS = {"localhost", "127.0.0.1", "postgres", "auto-wechat-postgres-dev"}
+# 默认 auto_wechat（dev/生产）；staging 等隔离环境通过 MAIN_TARGET_DATABASE_NAME 覆盖
+# （如 auto_wechat_staging），避免 validate_apply_target 库名校验拒绝 staging 演练。
+# 生产安全不受影响：APP_ENV=production 仍拒绝 apply，host 仍校验 ALLOWED_APPLY_HOSTS。
+TARGET_DATABASE_NAME = os.environ.get("MAIN_TARGET_DATABASE_NAME", "auto_wechat")
 
 CUTOVER_TABLES = [
     "knowledge_categories",
@@ -194,8 +198,8 @@ def validate_apply_target(database_url: str, source: str) -> None:
         raise MigrationConfigurationError("apply 不允许隐式使用 DATABASE_URL；请显式传 --postgres-url 或 SMOKE_DATABASE_URL")
     if (parsed.hostname or "").lower() not in ALLOWED_APPLY_HOSTS:
         raise MigrationConfigurationError("apply 只允许 dev/staging host: localhost / 127.0.0.1 / postgres / auto-wechat-postgres-dev")
-    if (parsed.path or "").lstrip("/") != "auto_wechat":
-        raise MigrationConfigurationError("postgres database 必须是 auto_wechat")
+    if (parsed.path or "").lstrip("/") != TARGET_DATABASE_NAME:
+        raise MigrationConfigurationError(f"postgres database 必须是 {TARGET_DATABASE_NAME}")
 
 
 def mask_database_url(database_url: str) -> str:
@@ -305,15 +309,27 @@ def map_row(source_row: Mapping[str, object], mapping: ColumnMapping) -> tuple[d
 
 
 def coerce_value(column: str, value: object) -> tuple[object, str | None]:
-    if value is None or value == "":
+    # SQLite 空字符串 '' 语义是空字符串而非 NULL。PG NOT NULL DEFAULT '' 列
+    # （如 ai_agents.knowledge_base_text / prompt）显式 INSERT NULL 仍违反约束——
+    # DEFAULT 只对"省略该列"生效，显式 NULL 不会被 DEFAULT 兜底。
+    # 保留 '' 让 INSERT 合法且忠实源数据；真 NULL 才归一为 None。
+    if value is None:
         return None, None
     name = column.lower()
-    if name.endswith("_at") or name.endswith("_time"):
+    if name.endswith("_at") or name.endswith("_time") or name.endswith("_deadline"):
         return coerce_datetime(column, value), None
     if name.endswith("_json") or name.startswith("raw_") or name in {"raw_body", "raw_data", "raw_result"}:
         parsed, warning = coerce_json(column, value)
         return parsed, warning
-    if name.startswith("is_") or name.endswith("_enabled") or name in {"enabled", "auto_send", "manual_confirmed"}:
+    # bool 列：is_* 前缀 + _enabled 后缀覆盖大多数；下列散落 bool 列名需显式枚举。
+    # 技术债：coerce_value 靠列名猜类型 inherently 脆弱，新表 bool 列需补这里；
+    # 升级路径 = snapshot 带 column_types 后改 PG 列类型驱动（见 staging drill 报告已知风险）。
+    if name.startswith("is_") or name.endswith("_enabled") or name in {
+        "enabled", "auto_send", "manual_confirmed",
+        "allow_full_rollout", "require_rag", "require_rag_sources",
+        "manual_required", "llm_used", "rag_used",
+        "upstream_auto_send", "final_auto_send",
+    }:
         return coerce_bool(value), None
     return value, None
 

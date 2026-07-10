@@ -24,6 +24,23 @@ const douyinAiCsProxyTarget =
   process.env.DOUYIN_AI_CS_PROXY_TARGET ||
   "http://127.0.0.1:9100";
 
+// server（dev）和 preview（npm run preview / 容器静态预览）共享同一套代理配置，
+// 让 staging 容器 frontend 的 /api、/ai-cs-api 也能转发到后端，而不返回 index.html。
+const sharedProxyConfig = {
+  // Docker 前端容器可把浏览器侧 /api 转发到 9000，避免 Vite 返回 index.html。
+  "/api": {
+    target: apiProxyTarget,
+    changeOrigin: true,
+    rewrite: (value: string) => value.replace(/^\/api/, ""),
+  },
+  // 抖音 AI 客服独立服务的开发代理，保持与 /api 同一套浏览器侧前缀策略。
+  "/ai-cs-api": {
+    target: douyinAiCsProxyTarget,
+    changeOrigin: true,
+    rewrite: (value: string) => value.replace(/^\/ai-cs-api/, ""),
+  },
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -50,20 +67,8 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  server: {
-    proxy: {
-      // Docker 前端容器可把浏览器侧 /api 转发到 9000，避免 Vite 返回 index.html。
-      "/api": {
-        target: apiProxyTarget,
-        changeOrigin: true,
-        rewrite: (value) => value.replace(/^\/api/, ""),
-      },
-      // 抖音 AI 客服独立服务的开发代理，保持与 /api 同一套浏览器侧前缀策略。
-      "/ai-cs-api": {
-        target: douyinAiCsProxyTarget,
-        changeOrigin: true,
-        rewrite: (value) => value.replace(/^\/ai-cs-api/, ""),
-      },
-    },
-  },
+  server: { proxy: sharedProxyConfig },
+  // preview（npm run preview / 容器静态预览）复用同一套代理，让 staging 容器 frontend
+  // 的 /api、/ai-cs-api 也能转发到后端，而不返回 index.html。
+  preview: { proxy: sharedProxyConfig },
 });

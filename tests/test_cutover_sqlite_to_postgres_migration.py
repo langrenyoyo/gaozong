@@ -23,7 +23,7 @@ def test_script_exists_and_covers_runtime_cutover_tables():
     module = _load_module()
 
     assert SCRIPT.is_file()
-    assert module.EXPECTED_REVISION == "0006_runtime_cutover_gap"
+    assert module.EXPECTED_REVISION == "0007_lead_type_widen"
     assert module.POSTGRES_WRITE_MODE_DISABLED == "disabled"
     assert module.CUTOVER_TABLES == [
         "knowledge_categories",

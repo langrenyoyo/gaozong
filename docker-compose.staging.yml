@@ -68,3 +68,9 @@ services:
     container_name: xg-staging-frontend
     ports: !override
       - "127.0.0.1:5180:5173"
+    environment:
+      # preview（npm run preview）代理目标：容器内用 compose service name 访问 staging 后端，
+      # 不指向 dev 9000/9100、不指向 production、不用构建机 localhost。
+      # vite.config.ts 的 sharedProxyConfig 在 preview 模式读这两个变量做 /api、/ai-cs-api 转发。
+      VITE_DEV_API_PROXY_TARGET: http://auto-wechat-api:9000
+      VITE_DEV_DOUYIN_AI_CS_PROXY_TARGET: http://xg-douyin-ai-cs:9100

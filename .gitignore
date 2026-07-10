@@ -19,6 +19,7 @@ venv/
 build/
 dist/
 dist_backup_*/
+backups/
 *.spec
 !local_agent.spec
 

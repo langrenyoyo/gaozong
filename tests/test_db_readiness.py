@@ -24,7 +24,7 @@ from app.db_readiness import (
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI_9000 = ROOT / "migrations" / "postgres" / "auto_wechat" / "alembic.ini"
 ALEMBIC_INI_9100 = ROOT / "migrations" / "postgres" / "xg_douyin_ai_cs" / "alembic.ini"
-EXPECTED_HEAD_9000 = ["0006_runtime_cutover_gap"]
+EXPECTED_HEAD_9000 = ["0007_lead_type_widen"]
 EXPECTED_HEAD_9100 = ["0002_create_rag_metadata"]
 
 
@@ -58,7 +58,7 @@ def _make_pg_engine(execute_results, *, connect_raises=None):
 # ---------- alembic head 加载（不连 DB）----------
 
 def test_load_alembic_heads_9000():
-    """9000 alembic head 必须读出 0006_runtime_cutover_gap。"""
+    """9000 alembic head 必须读出 0007_lead_type_widen。"""
     assert load_alembic_heads(ALEMBIC_INI_9000) == EXPECTED_HEAD_9000
 
 
@@ -74,7 +74,7 @@ def test_pg_all_pass():
     engine = _make_pg_engine([
         mock.MagicMock(),  # SELECT 1
         _result(scalar="auto_wechat"),  # current_database()
-        _result(fetchall=[("0006_runtime_cutover_gap",)]),  # alembic_version
+        _result(fetchall=[("0007_lead_type_widen",)]),  # alembic_version
         mock.MagicMock(),  # douyin_leads
         mock.MagicMock(),  # sales_staff
     ])
@@ -123,7 +123,7 @@ def test_pg_wrong_database():
     engine = _make_pg_engine([
         mock.MagicMock(),
         _result(scalar="wrong_db"),  # 不是 auto_wechat
-        _result(fetchall=[("0006_runtime_cutover_gap",)]),
+        _result(fetchall=[("0007_lead_type_widen",)]),
         mock.MagicMock(),  # 关键表（仍会执行）
     ])
     ok, checks, err = run_db_readiness(
@@ -171,7 +171,7 @@ def test_pg_critical_table_missing():
     engine = _make_pg_engine([
         mock.MagicMock(),  # SELECT 1
         _result(scalar="auto_wechat"),
-        _result(fetchall=[("0006_runtime_cutover_gap",)]),
+        _result(fetchall=[("0007_lead_type_widen",)]),
         mock.MagicMock(),  # douyin_leads pass
         RuntimeError('relation "sales_staff" does not exist'),  # sales_staff fail
     ])

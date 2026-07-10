@@ -61,7 +61,7 @@ class DouyinLead(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source = Column(String(20), default="douyin", comment="来源平台")
-    lead_type = Column(String(20), comment="线索类型: lead/comment/chat")
+    lead_type = Column(String(32), comment="线索类型: lead/comment/chat")
     customer_name = Column(String(100), comment="客户名称/昵称")
     customer_contact = Column(String(100), comment="联系方式")
     content = Column(Text, comment="线索内容")

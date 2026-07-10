@@ -504,7 +504,9 @@ class LeadOut(BaseModel):
     sales_followup_label: Optional[str] = None
     assigned_staff: Optional[dict] = None
     timeline: list[dict] = Field(default_factory=list)
-    raw_data: Optional[str] = None
+    # PG jsonb 列读出 dict，SQLite Text 读出 str；validator 已用 _safe_load_json_object 统一处理。
+    # 声明 Any 避免 Pydantic 在 validator 之后对 PG dict 做类型拒绝（/leads 500）。
+    raw_data: Optional[Any] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
