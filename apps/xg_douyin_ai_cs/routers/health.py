@@ -5,13 +5,16 @@ P3-PGSQL-PRECUTOVER-REMEDIATION-1 / A1。
 /health：进程存活（liveness），不查数据库。
 /ready：就绪度（readiness），验证 RAG 服务具备接收业务流量的条件——
         PostgreSQL 可连、连到预期 database（xg_douyin_ai_cs）、
-        alembic_version 等于代码 migration head、关键 RAG 表存在并可查。
+        alembic_version 等于代码 migration head、关键 RAG 表存在并可查；
+        当 RAG_VECTOR_BACKEND=milvus 时追加纯只读 Milvus readiness
+        （配置/认证/collection/dimension/轻量探测），不可达即 not_ready。
         任一失败返回 503 + 结构化 error_code。
 
-硬性约束：只读，不执行 alembic，不创建表，不写数据；
+硬性约束：只读，不执行 alembic，不创建表/collection/索引，不写数据/向量；
           不调用 SQLite fallback（backend 由当前 rag_database_url 决定，
           PG 模式下 PG 不可用即 not_ready，绝不回退 SQLite）；
-          不输出数据库密码或完整 connection URL。
+          Milvus 模式下 Milvus 不可达即 not_ready，绝不回退 SQLite 向量后端；
+          不输出数据库或 Milvus 密码/完整 connection URL。
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from app.db_readiness import run_db_readiness
 from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.rag.database import get_database_runtime, get_rag_engine
 from apps.xg_douyin_ai_cs.schemas import ServiceStatusResponse, VersionResponse
+from apps.xg_douyin_ai_cs.services.vector_store import run_milvus_readiness
 
 router = APIRouter(tags=["健康检查"])
 
@@ -56,9 +60,11 @@ def health() -> ServiceStatusResponse:
 def ready():
     """readiness：验证 RAG 服务具备接收业务流量的条件。
 
-    PG 连接 + database 名（xg_douyin_ai_cs）+ alembic head + 关键表。
-    只读，不执行 alembic，不创建表，不调用 SQLite fallback；
-    失败返回 503 + 结构化 error_code。不输出数据库密码或完整 connection URL。
+    PG 连接 + database 名（xg_douyin_ai_cs）+ alembic head + 关键表；
+    当 RAG_VECTOR_BACKEND=milvus 时，追加纯只读 Milvus readiness
+    （配置/认证/collection/dimension/轻量探测），失败即 not_ready，不回退 SQLite。
+    只读，不执行 alembic，不创建表/collection/索引，不写入/删除向量；
+    失败返回 503 + 结构化 error_code。不输出数据库或 Milvus 密码/完整 URI。
     """
     runtime = get_database_runtime()
     ok, checks, error_code = run_db_readiness(
@@ -76,6 +82,16 @@ def ready():
     if error_code:
         body["error_code"] = error_code
         return JSONResponse(status_code=503, content=body)
+
+    # 向量后端为 milvus 时，追加纯只读 Milvus readiness；不可达即 not_ready，不回退 SQLite
+    if settings.rag_vector_backend == "milvus":
+        milvus_result = run_milvus_readiness(settings)
+        body["milvus"] = milvus_result
+        if not milvus_result.get("query_ok"):
+            body["status"] = "not_ready"
+            body["error_code"] = milvus_result.get("error_code", "MILVUS_NOT_READY")
+            return JSONResponse(status_code=503, content=body)
+
     return body
 
 

@@ -1,6 +1,7 @@
 """9100 RAG 向量库抽象骨架。
 
-当前默认仍走 SQLite；Milvus 只做配置和依赖门禁，不在本轮连接外部服务。
+支持两种 backend：sqlite（dev 轻量开发）/ milvus（LAN + production 外部服务）。
+production 固定使用外部 Milvus，不得回退 SQLite 向量后端。
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import importlib
 import math
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -257,6 +259,74 @@ class MilvusVectorStore:
         except Exception:
             result["error_code"] = "MILVUS_HEALTH_CHECK_FAILED"
             result["phase"] = "unknown"
+        return result
+
+    def readiness_check(self) -> dict[str, Any]:
+        """纯只读 Milvus readiness 实例检查（connect → collection → schema → 探测）。
+
+        P3-CONFIG-EXTERNAL-MILVUS-CORRECTION-1。
+        前置：pymilvus 依赖 + 配置完整性 + embedding/milvus 维度一致性已由
+        run_milvus_readiness 校验（__init__ 也做了配置校验）。
+
+        硬性约束：只读，不创建 collection、不修改索引、不写入/删除向量、不 load。
+        全程脱敏：异常经 _sanitize_exception 去除密码/完整 URI。
+        """
+        result: dict[str, Any] = {
+            "backend": self.backend,
+            "connected": False,
+            "collection_exists": False,
+            "schema_match": False,
+            "query_ok": False,
+        }
+        # 认证 + 连接（database 不存在在此阶段暴露 → MILVUS_DB_NOT_FOUND）
+        try:
+            self.connect()
+        except VectorStoreError as exc:
+            result["error_code"] = exc.code
+            result["phase"] = exc.phase
+            return result
+        result["connected"] = True
+        # collection 存在（纯只读 has_collection）
+        try:
+            exists = self._pymilvus.utility.has_collection(
+                self.config.milvus_collection, using=self._alias
+            )
+        except Exception as exc:
+            result["error_code"] = "MILVUS_COLLECTION_CHECK_FAILED"
+            result["phase"] = "has_collection"
+            result["error_type"] = type(exc).__name__
+            return result
+        if not exists:
+            result["error_code"] = "MILVUS_COLLECTION_NOT_FOUND"
+            result["phase"] = "has_collection"
+            return result
+        result["collection_exists"] = True
+        # collection schema 维度一致（collection 实际 dim vs MILVUS_DIMENSION）
+        try:
+            collection = self._pymilvus.Collection(
+                name=self.config.milvus_collection, using=self._alias
+            )
+            self._validate_collection_schema(collection.schema)
+        except VectorStoreCollectionError:
+            # _validate_collection_schema 抛 MILVUS_SCHEMA_MISMATCH；readiness 统一映射为 DIMENSION_MISMATCH
+            result["error_code"] = "MILVUS_DIMENSION_MISMATCH"
+            result["phase"] = "schema_check"
+            return result
+        except Exception as exc:
+            result["error_code"] = "MILVUS_COLLECTION_CHECK_FAILED"
+            result["phase"] = "describe_collection"
+            result["error_type"] = type(exc).__name__
+            return result
+        result["schema_match"] = True
+        # 轻量只读探测（num_entities 只读统计，不修改数据、不需 load）
+        try:
+            _ = collection.num_entities
+        except Exception as exc:
+            result["error_code"] = "MILVUS_QUERY_FAILED"
+            result["phase"] = "query"
+            result["error_type"] = type(exc).__name__
+            return result
+        result["query_ok"] = True
         return result
 
     def connect(self) -> None:
@@ -527,6 +597,48 @@ def get_vector_store(config: Settings = settings) -> VectorStore:
     )
 
 
+def run_milvus_readiness(config: Settings = settings) -> dict[str, Any]:
+    """纯只读 Milvus readiness 完整检查链（P3-CONFIG-EXTERNAL-MILVUS-CORRECTION-1）。
+
+    检查链：pymilvus 依赖 → 配置完整 → embedding/milvus 维度一致 →
+    认证连接 → collection 存在 → collection schema 维度一致 → 轻量只读探测。
+    任一失败返回结构化 error_code（不抛异常），全程脱敏不输出密码或完整 URI。
+
+    硬性约束：只读，不创建 collection、不修改索引、不写入/删除向量、不 load。
+    """
+    result: dict[str, Any] = {
+        "backend": "milvus",
+        "connected": False,
+        "collection_exists": False,
+        "schema_match": False,
+        "query_ok": False,
+    }
+    # pymilvus 依赖
+    try:
+        _load_pymilvus()
+    except VectorStoreError as exc:
+        result["error_code"] = exc.code
+        result["phase"] = "dependency"
+        return result
+    # 配置完整性 + URI 合法性
+    try:
+        _validate_milvus_config(config)
+    except VectorStoreError as exc:
+        result["error_code"] = exc.code
+        result["phase"] = exc.phase
+        return result
+    # embedding/milvus 维度一致（配置层）
+    try:
+        _validate_embedding_milvus_dimension_consistency(config)
+    except VectorStoreError as exc:
+        result["error_code"] = exc.code
+        result["phase"] = exc.phase
+        return result
+    # 委托实例做 connect → collection → schema → 探测（此时 __init__ 校验必通过）
+    store = MilvusVectorStore(config)
+    return store.readiness_check()
+
+
 def probe_milvus_connections(config: Settings = settings) -> list[dict[str, Any]]:
     strategies = ("milvus_client_token", "orm_connections_user_password")
     try:
@@ -585,6 +697,43 @@ def _validate_milvus_config(config: Settings) -> None:
             f"Missing Milvus config: {', '.join(missing)}",
         )
     _validate_milvus_uri(config)
+
+
+def _validate_embedding_milvus_dimension_consistency(config: Settings) -> None:
+    """当 RAG_VECTOR_BACKEND=milvus 时，校验 EMBEDDING_DIMENSIONS 与 MILVUS_DIMENSION 一致。
+
+    三层校验：两者都必须存在且为正整数，且数值相等。
+    不一致或缺失抛 MILVUS_DIMENSION_MISMATCH；collection 实际维度由
+    _validate_collection_schema 在 readiness 连接阶段校验。
+    """
+    embedding_dim_raw = os.environ.get("XG_DOUYIN_AI_EMBEDDING_DIMENSIONS", "").strip()
+    milvus_dim = config.milvus_dimension
+    if not embedding_dim_raw:
+        raise VectorStoreConfigError(
+            "MILVUS_DIMENSION_MISMATCH",
+            "XG_DOUYIN_AI_EMBEDDING_DIMENSIONS 未设置；backend=milvus 时必须与 MILVUS_DIMENSION 一致",
+            phase="config",
+        )
+    if milvus_dim is None:
+        raise VectorStoreConfigError(
+            "MILVUS_DIMENSION_MISMATCH",
+            "MILVUS_DIMENSION 未设置；backend=milvus 时必须与 XG_DOUYIN_AI_EMBEDDING_DIMENSIONS 一致",
+            phase="config",
+        )
+    try:
+        embedding_dim = int(embedding_dim_raw)
+    except ValueError:
+        raise VectorStoreConfigError(
+            "MILVUS_DIMENSION_MISMATCH",
+            f"XG_DOUYIN_AI_EMBEDDING_DIMENSIONS 非整数：{embedding_dim_raw}",
+            phase="config",
+        )
+    if embedding_dim != milvus_dim:
+        raise VectorStoreConfigError(
+            "MILVUS_DIMENSION_MISMATCH",
+            f"维度不一致：EMBEDDING_DIMENSIONS={embedding_dim} != MILVUS_DIMENSION={milvus_dim}",
+            phase="config",
+        )
 
 
 def _validate_milvus_connection_config(config: Settings) -> None:
