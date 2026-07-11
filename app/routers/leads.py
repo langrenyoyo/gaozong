@@ -172,6 +172,8 @@ def _to_wechat_notify_status(
         staff_id=decision.staff_id,
         existing_task_id=decision.existing_task_id,
         existing_notification_id=decision.existing_notification_id,
+        # Phase 7-FIX1：GET 状态透出限频等待秒数
+        retry_after_seconds=decision.retry_after_seconds,
     )
 
 
@@ -192,5 +194,8 @@ def _notify_status_and_message(reason: str, context: RequestContext) -> tuple[st
         LeadWechatNotifyReason.CONTACT_INVALID: ("contact_invalid", "联系方式无效"),
         LeadWechatNotifyReason.ALREADY_SENT: ("task_done", "已通知销售"),
         LeadWechatNotifyReason.EXISTING_PENDING_TASK: ("task_pending", "已有通知任务等待执行"),
+        # Phase 7-FIX1：分配开关与限频状态映射
+        LeadWechatNotifyReason.STAFF_LEAD_ASSIGNMENT_DISABLED: ("staff_unavailable", "当前销售已关闭线索分配"),
+        LeadWechatNotifyReason.RATE_LIMITED: ("rate_limited", "操作过快，请稍后重试"),
     }
     return mapping.get(reason, ("unavailable", "当前不可通知"))

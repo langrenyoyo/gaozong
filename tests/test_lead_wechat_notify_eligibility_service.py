@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -45,12 +46,14 @@ def _seed_staff(
     merchant_id: str = "merchant-a",
     status: str = "active",
     wechat_nickname: str | None = "Aw3",
+    enable_lead_assignment: bool = True,
 ) -> SalesStaff:
     staff = SalesStaff(
         name=f"销售-{merchant_id}",
         status=status,
         wechat_nickname=wechat_nickname,
         merchant_id=merchant_id,
+        enable_lead_assignment=enable_lead_assignment,
     )
     db.add(staff)
     db.flush()
@@ -243,5 +246,194 @@ def test_already_sent_and_existing_pending_are_reported_without_allowing_create(
         assert sent_decision.existing_notification_id == sent.id
         assert pending_decision.reason == LeadWechatNotifyReason.EXISTING_PENDING_TASK
         assert pending_decision.existing_task_id == pending.id
+    finally:
+        db.close()
+
+
+# ---- Phase 7-FIX1 Task 1: 开关 + 限频 + 幂等优先级红灯 ----
+
+def test_eligibility_rejects_staff_with_lead_assignment_disabled():
+    db = TestSession()
+    try:
+        staff = _seed_staff(db, enable_lead_assignment=False)
+        lead = _seed_lead(db, assigned_staff_id=staff.id)
+        db.commit()
+
+        decision = _decision(db, lead.id)
+
+        assert decision.allowed is False
+        assert decision.reason == LeadWechatNotifyReason.STAFF_LEAD_ASSIGNMENT_DISABLED
+    finally:
+        db.close()
+
+
+def test_eligibility_rate_limits_same_merchant_and_staff():
+    db = TestSession()
+    try:
+        staff = _seed_staff(db)
+        first_lead = _seed_lead(db, assigned_staff_id=staff.id)
+        second_lead = _seed_lead(db, assigned_staff_id=staff.id)
+        db.add(WechatTask(
+            task_type="notify_sales",
+            lead_id=first_lead.id,
+            staff_id=staff.id,
+            status="pending",
+            mode="single_send",
+        ))
+        db.commit()
+
+        decision = _decision(db, second_lead.id)
+
+        assert decision.allowed is False
+        assert decision.reason == LeadWechatNotifyReason.RATE_LIMITED
+        assert 1 <= decision.retry_after_seconds <= 10
+    finally:
+        db.close()
+
+
+def test_eligibility_rate_limit_skips_failed_blocked_cancelled_statuses():
+    db = TestSession()
+    try:
+        staff = _seed_staff(db)
+        lead = _seed_lead(db, assigned_staff_id=staff.id)
+        for status in ("failed", "blocked", "cancelled"):
+            db.add(WechatTask(
+                task_type="notify_sales",
+                lead_id=lead.id,
+                staff_id=staff.id,
+                status=status,
+                mode="single_send",
+            ))
+        db.commit()
+
+        decision = _decision(db, lead.id)
+
+        assert decision.allowed is True
+        assert decision.reason == LeadWechatNotifyReason.OK
+    finally:
+        db.close()
+
+
+def test_eligibility_rate_limit_isolates_by_staff():
+    db = TestSession()
+    try:
+        staff_a = _seed_staff(db, wechat_nickname="StaffA")
+        staff_b = _seed_staff(db, wechat_nickname="StaffB")
+        lead_a = _seed_lead(db, assigned_staff_id=staff_a.id)
+        lead_b = _seed_lead(db, assigned_staff_id=staff_b.id)
+        db.add(WechatTask(
+            task_type="notify_sales",
+            lead_id=lead_a.id,
+            staff_id=staff_a.id,
+            status="pending",
+            mode="single_send",
+        ))
+        db.commit()
+
+        decision = _decision(db, lead_b.id)
+
+        assert decision.allowed is True
+        assert decision.reason == LeadWechatNotifyReason.OK
+    finally:
+        db.close()
+
+
+def test_eligibility_rate_limit_isolates_by_merchant():
+    db = TestSession()
+    try:
+        staff_a = _seed_staff(db, merchant_id="merchant-a")
+        staff_b = _seed_staff(db, merchant_id="merchant-b")
+        lead_a = _seed_lead(db, merchant_id="merchant-a", assigned_staff_id=staff_a.id)
+        lead_b = _seed_lead(db, merchant_id="merchant-b", assigned_staff_id=staff_b.id)
+        db.add(WechatTask(
+            task_type="notify_sales",
+            lead_id=lead_a.id,
+            staff_id=staff_a.id,
+            status="pending",
+            mode="single_send",
+        ))
+        db.commit()
+
+        decision = _decision(
+            db, lead_b.id,
+            context=_context(merchant_id="merchant-b"),
+        )
+
+        assert decision.allowed is True
+        assert decision.reason == LeadWechatNotifyReason.OK
+    finally:
+        db.close()
+
+
+def test_eligibility_rate_limit_allows_after_window_expires():
+    db = TestSession()
+    try:
+        staff = _seed_staff(db)
+        first_lead = _seed_lead(db, assigned_staff_id=staff.id)
+        second_lead = _seed_lead(db, assigned_staff_id=staff.id)
+        old_task = WechatTask(
+            task_type="notify_sales",
+            lead_id=first_lead.id,
+            staff_id=staff.id,
+            status="pending",
+            mode="single_send",
+            created_at=datetime.now() - timedelta(seconds=11),
+        )
+        db.add(old_task)
+        db.commit()
+
+        decision = _decision(db, second_lead.id)
+
+        assert decision.allowed is True
+        assert decision.reason == LeadWechatNotifyReason.OK
+    finally:
+        db.close()
+
+
+def test_eligibility_idempotency_priority_over_switch_and_rate_limit():
+    """同线索已有 pending/running/pasted 任务时，优先返回幂等原因，
+    不被 enable_lead_assignment 或限频覆盖。"""
+    db = TestSession()
+    try:
+        staff = _seed_staff(db, enable_lead_assignment=False)
+        lead = _seed_lead(db, assigned_staff_id=staff.id)
+        db.add(WechatTask(
+            task_type="notify_sales",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            status="pending",
+            mode="single_send",
+        ))
+        db.commit()
+
+        decision = _decision(db, lead.id)
+
+        assert decision.allowed is False
+        assert decision.reason == LeadWechatNotifyReason.EXISTING_PENDING_TASK
+        assert decision.existing_task_id is not None
+    finally:
+        db.close()
+
+
+def test_eligibility_already_sent_priority_over_disabled_switch():
+    """同线索已有 sent 通知时，即使销售关闭分配开关也返回幂等原因。"""
+    db = TestSession()
+    try:
+        staff = _seed_staff(db, enable_lead_assignment=False)
+        lead = _seed_lead(db, assigned_staff_id=staff.id)
+        sent = LeadNotification(
+            lead_id=lead.id,
+            staff_id=staff.id,
+            notification_text="已通知",
+            send_status="sent",
+            send_mode="wechat_task",
+        )
+        db.add(sent)
+        db.commit()
+
+        decision = _decision(db, lead.id)
+
+        assert decision.allowed is False
+        assert decision.reason == LeadWechatNotifyReason.ALREADY_SENT
     finally:
         db.close()

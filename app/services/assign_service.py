@@ -39,6 +39,10 @@ def assign_lead(
     if staff.status != "active":
         raise ValueError(f"销售 {staff.name} 当前状态非 active，无法分配")
 
+    # Phase 7-FIX1：关闭线索分配开关的销售拒绝分配
+    if staff.enable_lead_assignment is False:
+        raise ValueError(f"销售 {staff.name} 已关闭线索分配，无法分配")
+
     is_reassign = lead.assigned_staff_id is not None
 
     # 更新线索状态
@@ -95,9 +99,11 @@ def auto_assign_next(db: Session, lead_id: int) -> DouyinLead:
         raise ValueError("线索未归属商户，无法按商户隔离分配")
 
     # 找到同商户所有活跃销售，按 ID 排序做简单轮询
+    # Phase 7-FIX1：自动分配跳过 enable_lead_assignment=False 的销售
     active_staff = db.query(SalesStaff).filter(
         SalesStaff.status == "active",
         SalesStaff.merchant_id == lead.merchant_id,
+        SalesStaff.enable_lead_assignment != False,
     ).order_by(SalesStaff.id).all()
 
     if not active_staff:

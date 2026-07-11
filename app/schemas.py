@@ -648,6 +648,8 @@ class LeadWechatNotifyStatus(BaseModel):
     staff_id: Optional[int] = None
     existing_task_id: Optional[int] = None
     existing_notification_id: Optional[int] = None
+    # Phase 7-FIX1：限频时返回建议等待秒数，前端据此显示倒计时
+    retry_after_seconds: Optional[int] = None
 
 
 # ========== 手动回复 ==========

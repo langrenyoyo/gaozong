@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
+
+# Phase 7-FIX1：固定 10 秒限频窗口；O(1) 查询，上限为同商户同销售并发数
+NOTIFY_SALES_RATE_LIMIT_SECONDS = 10
+# 限频视为"活跃任务"的状态集合（包括 pasted 和 sent，补齐 Phase 7 遗漏）
+ACTIVE_NOTIFY_TASK_STATUSES = {"pending", "running", "pasted", "sent"}
 
 
 class LeadWechatNotifyReason:
@@ -25,6 +32,10 @@ class LeadWechatNotifyReason:
     CONTACT_INVALID = "CONTACT_INVALID"
     ALREADY_SENT = "ALREADY_SENT"
     EXISTING_PENDING_TASK = "EXISTING_PENDING_TASK"
+    # Phase 7-FIX1：分配开关关闭
+    STAFF_LEAD_ASSIGNMENT_DISABLED = "STAFF_LEAD_ASSIGNMENT_DISABLED"
+    # Phase 7-FIX1：10 秒固定窗口限频
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 @dataclass
@@ -36,6 +47,8 @@ class LeadWechatNotifyDecision:
     staff_id: int | None = None
     existing_task_id: int | None = None
     existing_notification_id: int | None = None
+    # Phase 7-FIX1：限频时返回建议等待秒数（1..10）
+    retry_after_seconds: int | None = None
 
 
 def evaluate_lead_wechat_notify_eligibility(
@@ -44,8 +57,13 @@ def evaluate_lead_wechat_notify_eligibility(
     context: RequestContext,
     lead_id: int,
     staff_id: int | None = None,
+    lock_staff: bool = False,
 ) -> LeadWechatNotifyDecision:
-    """只判断是否允许创建 notify_sales，不创建任何任务或通知记录。"""
+    """只判断是否允许创建 notify_sales，不创建任何任务或通知记录。
+
+    lock_staff=True 时对 SalesStaff 行加 FOR UPDATE 锁（仅 POST 路径使用），
+    防止同销售并发创建任务绕过限频窗口。
+    """
     if not context.merchant_id:
         return _blocked(LeadWechatNotifyReason.MERCHANT_REQUIRED, "缺少可信商户上下文", lead_id=lead_id)
 
@@ -71,11 +89,12 @@ def evaluate_lead_wechat_notify_eligibility(
             staff_id=staff_id,
         )
 
-    staff = (
-        db.query(SalesStaff)
-        .filter(SalesStaff.id == lead.assigned_staff_id, SalesStaff.merchant_id == context.merchant_id)
-        .first()
+    staff_query = db.query(SalesStaff).filter(
+        SalesStaff.id == lead.assigned_staff_id, SalesStaff.merchant_id == context.merchant_id
     )
+    if lock_staff:
+        staff_query = staff_query.with_for_update()
+    staff = staff_query.first()
     if not staff:
         return _blocked(LeadWechatNotifyReason.LEAD_NOT_ASSIGNED, "线索分配的销售不存在", lead_id=lead.id)
 
@@ -136,7 +155,7 @@ def evaluate_lead_wechat_notify_eligibility(
             WechatTask.task_type == "notify_sales",
             WechatTask.lead_id == lead.id,
             WechatTask.staff_id == staff.id,
-            WechatTask.status.in_(["pending", "running"]),
+            WechatTask.status.in_(["pending", "running", "pasted"]),
         )
         .order_by(WechatTask.id.desc())
         .first()
@@ -148,6 +167,26 @@ def evaluate_lead_wechat_notify_eligibility(
             lead_id=lead.id,
             staff_id=staff.id,
             existing_task_id=existing_task.id,
+        )
+
+    # Phase 7-FIX1：分配开关检查（判断顺序：幂等 > 开关 > 限频）
+    if staff.enable_lead_assignment is False:
+        return _blocked(
+            LeadWechatNotifyReason.STAFF_LEAD_ASSIGNMENT_DISABLED,
+            "当前销售已关闭线索分配",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+
+    # Phase 7-FIX1：固定 10 秒限频窗口，按同商户同销售隔离
+    rate_limit = _check_rate_limit(db, staff.id, context.merchant_id)
+    if rate_limit is not None:
+        return _blocked(
+            LeadWechatNotifyReason.RATE_LIMITED,
+            f"该销售 {NOTIFY_SALES_RATE_LIMIT_SECONDS} 秒内已有通知任务，请稍后重试",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            retry_after_seconds=rate_limit,
         )
 
     return LeadWechatNotifyDecision(
@@ -167,6 +206,7 @@ def _blocked(
     staff_id: int | None = None,
     existing_task_id: int | None = None,
     existing_notification_id: int | None = None,
+    retry_after_seconds: int | None = None,
 ) -> LeadWechatNotifyDecision:
     return LeadWechatNotifyDecision(
         allowed=False,
@@ -176,7 +216,36 @@ def _blocked(
         staff_id=staff_id,
         existing_task_id=existing_task_id,
         existing_notification_id=existing_notification_id,
+        retry_after_seconds=retry_after_seconds,
     )
+
+
+def _check_rate_limit(db: Session, staff_id: int, merchant_id: str) -> int | None:
+    """检查同商户同销售 10 秒内是否有活跃通知任务，有则返回建议等待秒数。
+
+    通过 JOIN DouyinLead 按 merchant_id 隔离，避免跨商户限频。
+    返回 None 表示无限频，可以创建新任务。
+    """
+    cutoff = datetime.now() - timedelta(seconds=NOTIFY_SALES_RATE_LIMIT_SECONDS)
+    recent = (
+        db.query(WechatTask.id, WechatTask.created_at)
+        .join(DouyinLead, WechatTask.lead_id == DouyinLead.id)
+        .filter(
+            WechatTask.task_type == "notify_sales",
+            WechatTask.staff_id == staff_id,
+            DouyinLead.merchant_id == merchant_id,
+            WechatTask.status.in_(ACTIVE_NOTIFY_TASK_STATUSES),
+            WechatTask.created_at >= cutoff,
+        )
+        .order_by(WechatTask.created_at.desc())
+        .first()
+    )
+    if recent is None:
+        return None
+    # 计算剩余等待秒数，钳制在 1..NOTIFY_SALES_RATE_LIMIT_SECONDS
+    elapsed = (datetime.now() - recent.created_at).total_seconds()
+    remaining = NOTIFY_SALES_RATE_LIMIT_SECONDS - elapsed
+    return max(1, min(math.ceil(remaining), NOTIFY_SALES_RATE_LIMIT_SECONDS))
 
 
 def _contact_invalid(lead: DouyinLead) -> bool:

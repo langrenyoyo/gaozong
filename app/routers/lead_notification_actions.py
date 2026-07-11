@@ -6,6 +6,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
@@ -15,6 +16,7 @@ from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 from app.schemas import SendToStaffRequest, SendToStaffResponse
 from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.lead_wechat_notify_eligibility_service import (
+    NOTIFY_SALES_RATE_LIMIT_SECONDS,
     LeadWechatNotifyDecision,
     LeadWechatNotifyReason,
     evaluate_lead_wechat_notify_eligibility,
@@ -51,8 +53,30 @@ def create_notify_sales_task(
         context=context,
         lead_id=request.lead_id,
         staff_id=request.staff_id,
+        lock_staff=True,  # Phase 7-FIX1：POST 路径对销售行加锁，防并发绕过限频
     )
     if not decision.allowed:
+        # Phase 7-FIX1：限频返回 429 + Retry-After
+        if decision.reason == LeadWechatNotifyReason.RATE_LIMITED:
+            retry_after = decision.retry_after_seconds or NOTIFY_SALES_RATE_LIMIT_SECONDS
+            logger.info(
+                "manual_notify_sales stage=rate_limited lead_id=%s staff_id=%s retry_after=%s",
+                request.lead_id,
+                decision.staff_id,
+                retry_after,
+            )
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "success": False,
+                    "detail": {
+                        "code": "RATE_LIMITED",
+                        "message": decision.message,
+                        "retry_after_seconds": retry_after,
+                    },
+                },
+                headers={"Retry-After": str(retry_after)},
+            )
         compatible = _compatible_decision_response(db, decision)
         if compatible:
             return compatible

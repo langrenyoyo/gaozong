@@ -241,3 +241,70 @@ def test_staff_crud_exposes_xiaogao_report_rule_fields():
     assert updated.status_code == 200
     assert updated.json()["enable_lead_assignment"] is True
     assert updated.json()["enable_sales_unit_cost_report"] is False
+
+
+# ---- Phase 7-FIX1 Task 1 Step 4: 分配开关红灯 ----
+
+def test_manual_assign_rejects_staff_with_lead_assignment_disabled():
+    """手动分配拒绝 enable_lead_assignment=False 的销售。"""
+    db = TestSession()
+    try:
+        # 创建关闭开关的销售
+        disabled_staff = SalesStaff(
+            name="关闭分配", status="active", merchant_id="merchant-a",
+            enable_lead_assignment=False,
+        )
+        db.add(disabled_staff)
+        lead = DouyinLead(
+            source="douyin", lead_type="私信", customer_name="客户",
+            merchant_id="merchant-a", status="pending",
+        )
+        db.add(lead)
+        db.commit()
+        staff_id = disabled_staff.id
+        lead_id = lead.id
+    finally:
+        db.close()
+
+    # 需要 auto_wechat:leads 权限才能访问 /leads/{id}/assign
+    context = RequestContext(
+        user_id="user-1",
+        merchant_id="merchant-a",
+        merchant_ids=["merchant-a"],
+        permission_codes=["auto_wechat:leads", "auto_wechat:agent"],
+    )
+    response = _client_with_context(context).post(
+        f"/leads/{lead_id}/assign", json={"staff_id": staff_id},
+    )
+
+    assert response.status_code == 400
+
+
+def test_auto_assign_skips_staff_with_lead_assignment_disabled():
+    """自动分配跳过 enable_lead_assignment=False 的销售。"""
+    db = TestSession()
+    try:
+        disabled = SalesStaff(
+            name="关闭分配", status="active", merchant_id="merchant-a",
+            enable_lead_assignment=False,
+        )
+        enabled = SalesStaff(
+            name="开启分配", status="active", merchant_id="merchant-a",
+            enable_lead_assignment=True,
+        )
+        db.add_all([disabled, enabled])
+        db.flush()
+        lead = DouyinLead(
+            source="douyin", lead_type="私信", customer_name="客户",
+            merchant_id="merchant-a", status="pending",
+        )
+        db.add(lead)
+        db.commit()
+
+        from app.services.assign_service import auto_assign_next
+        result = auto_assign_next(db, lead.id)
+
+        assert result is not None
+        assert result.assigned_staff_id == enabled.id
+    finally:
+        db.close()

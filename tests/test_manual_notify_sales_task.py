@@ -282,6 +282,30 @@ def test_contact_missing_is_rejected_without_creating_task():
     assert _task_count() == 0
 
 
+# ---- Phase 7-FIX1 Task 1 Step 3: 429 限频红灯 ----
+
+def test_send_to_staff_returns_429_with_retry_after_for_rate_limit():
+    """同商户同销售存在有效任务时，再次请求返回 429 + Retry-After。"""
+    staff_id = _insert_staff()
+    first_lead_id = _insert_lead(assigned_staff_id=staff_id)
+    second_lead_id = _insert_lead(assigned_staff_id=staff_id)
+
+    # 创建第一条有效 notify_sales 任务
+    first_response = _client().post(
+        "/lead-notifications/send-to-staff", json={"lead_id": first_lead_id},
+    )
+    assert first_response.status_code == 200
+
+    # 第二条线索同商户同销售 → 限频
+    response = _client().post(
+        "/lead-notifications/send-to-staff", json={"lead_id": second_lead_id},
+    )
+
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["Retry-After"]) <= 10
+    assert response.json()["detail"]["code"] == "RATE_LIMITED"
+
+
 def test_existing_pending_task_is_reused_without_duplicate_records():
     staff_id = _insert_staff()
     lead_id = _insert_lead(assigned_staff_id=staff_id)
