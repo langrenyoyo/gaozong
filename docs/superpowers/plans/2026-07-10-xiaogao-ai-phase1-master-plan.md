@@ -131,7 +131,7 @@
 - Modify: `app/models.py`
 - Modify: `app/schemas.py`
 - Create: `migrations/versions/0027_xiaogao_phase1_core.sql`
-- Create: `migrations/postgres/auto_wechat/versions/0007_xiaogao_phase1_core.py`
+- Create: `migrations/postgres/auto_wechat/versions/0008_xiaogao_phase1_core.py`
 - Test: `tests/test_xiaogao_phase1_schema.py`
 
 - [ ] **Step 1: 写 schema 测试**
@@ -155,6 +155,7 @@
 
 - [ ] **Step 4: 添加 PostgreSQL Alembic 迁移**
   - 使用 `op.create_table`、`op.add_column`、`sa.CheckConstraint`、`op.create_index`。
+  - 迁移编号使用 `revision = "0008_xiaogao_phase1_core"`，`down_revision = "0007_lead_type_widen"`。
   - downgrade 不 drop 历史核心表；新增表可按反向顺序 drop。
 
 - [ ] **Step 5: 跑迁移与 schema 测试**
