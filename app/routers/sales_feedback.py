@@ -54,7 +54,8 @@ def parse_sales_feedback(
             db.commit()
         except Exception as exc:
             db.rollback()
-            logger.exception("sales_feedback_persist_error route=parse")
+            # Phase 7-FIX2：不记录异常正文，只记录异常类型名
+            logger.error("sales_feedback_persist_error route=parse error_type=%s", type(exc).__name__)
             raise HTTPException(
                 status_code=500,
                 detail={"code": "SALES_FEEDBACK_PERSIST_FAILED", "message": "销售反馈持久化失败"},

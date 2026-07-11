@@ -672,9 +672,10 @@ def _submit_detect_reply_result(
                 db.commit()
             except Exception as exc:
                 db.rollback()
-                logger.exception(
-                    "sales_feedback_parse stage=failed task_id=%s error=%s",
-                    task.id, exc,
+                # Phase 7-FIX2：不记录异常正文，只记录异常类型名
+                logger.error(
+                    "sales_feedback_parse stage=failed task_id=%s error_type=%s",
+                    task.id, type(exc).__name__,
                 )
         return task
 
