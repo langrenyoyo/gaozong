@@ -18,7 +18,7 @@ export const PERMISSIONS = {
 } as const;
 
 const legacyPermissionAliases: Record<string, string[]> = {
-  [PERMISSIONS.agent]: ["auto_wechat:wechat_assistant", "auto_wechat:wechat_agent", "auto_wechat:ai_agents"],
+  [PERMISSIONS.agent]: ["auto_wechat:wechat_assistant", "auto_wechat:wechat_agent"],
 };
 
 export const capabilityNavCenters: CapabilityNavCenter[] = [
@@ -51,7 +51,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     shortLabel: "智能体",
     path: "/agents",
     defaultNavId: "ai-agents",
-    permissionCodes: [PERMISSIONS.agent],
+    permissionCodes: [PERMISSIONS.douyinAiCs],
     children: [
       { id: "ai-agents", label: "智能体管理", path: "/agents" },
     ],

@@ -34,7 +34,7 @@ def _context(
         username=f"user-{merchant_id or 'none'}",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id] if merchant_id else [],
-        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:ai_agents"],
+        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:douyin_ai_cs"],
     )
 
 
@@ -282,3 +282,16 @@ def test_cross_merchant_agent_knowledge_categories_are_rejected():
 
     assert get_response.status_code == 404
     assert put_response.status_code == 404
+
+
+def test_get_knowledge_categories_requires_douyin_ai_cs_permission():
+    denied = _client(_context(merchant_id="merchant-a", permission_codes=["auto_wechat:agent"])).get(
+        "/knowledge-categories"
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+    allowed = _client(_context(merchant_id="merchant-a", permission_codes=["auto_wechat:douyin_ai_cs"])).get(
+        "/knowledge-categories"
+    )
+    assert allowed.status_code == 200

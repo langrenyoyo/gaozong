@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required, require_any_permission
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_async_sessionmaker, get_db
 from app.repositories.knowledge_categories_async_repository import list_visible_knowledge_categories_async
 from app.schemas import KnowledgeCategoryCreate, KnowledgeCategoryListResponse
@@ -19,8 +19,8 @@ router = APIRouter(prefix="/knowledge-categories", tags=["知识分类"])
 
 
 def _auth(context: RequestContext) -> RequestContext:
-    """复用智能体权限，分类当前服务于 Agent 配置。"""
-    return require_any_permission(["auto_wechat:ai_agents", "auto_wechat:agent"])(context)
+    """知识分类当前服务于 AI小高智能体配置，跟随抖音 AI 客服权限。"""
+    return require_permission("auto_wechat:douyin_ai_cs")(context)
 
 
 def _bad_request(code: str, message: str) -> HTTPException:
