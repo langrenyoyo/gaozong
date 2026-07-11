@@ -56,7 +56,7 @@ def _has_any_permission(context: GatewayContext, permission_codes: list[str]) ->
 
 def require_agents_context(context: GatewayContext) -> RequestContext:
     """校验智能体权限并构造旧服务层可复用的 RequestContext。"""
-    if not _has_any_permission(context, ["auto_wechat:ai_agents", "auto_wechat:agent"]):
+    if not _has_any_permission(context, ["auto_wechat:douyin_ai_cs"]):
         raise HTTPException(
             status_code=403,
             detail={"code": "PERMISSION_DENIED", "message": "缺少 AI小高智能体权限"},

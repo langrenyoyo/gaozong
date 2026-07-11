@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.models import AgentKnowledgeCategory, AiAgent, KnowledgeCategory
+from app.models import AgentKnowledgeCategory, AiAgent, DouyinAccountAgentBinding, KnowledgeCategory
 from apps.agents.schemas import AiAgentCreate, AiAgentUpdate
 
 
@@ -17,6 +18,8 @@ ACTIVE_STATUSES = ("active", "disabled")
 ACTIVE_STATUS = "active"
 BASE_CATEGORY_KEY = "base"
 DELETED_STATUS = "deleted"
+ACTIVE_ACCOUNT_BINDING_STATUS = "active"
+ACTIVE_BINDING_BLOCK_DELETE_ERROR = "AI_AGENT_ACTIVE_BINDING_EXISTS"
 
 
 @dataclass
@@ -98,12 +101,39 @@ def update_agent(db: Session, agent: AiAgent, payload: AiAgentUpdate) -> AiAgent
     return agent
 
 
-def soft_delete_agent(db: Session, agent: AiAgent) -> AiAgent:
-    """软删除智能体。"""
-    agent.status = DELETED_STATUS
+def has_active_douyin_account_binding(db: Session, *, merchant_id: str, agent_id: str) -> bool:
+    """判断智能体是否仍被抖音企业号 active 绑定。"""
+    return (
+        db.query(DouyinAccountAgentBinding.id)
+        .filter(
+            DouyinAccountAgentBinding.merchant_id == merchant_id,
+            DouyinAccountAgentBinding.agent_id == agent_id,
+            DouyinAccountAgentBinding.status == ACTIVE_ACCOUNT_BINDING_STATUS,
+            DouyinAccountAgentBinding.deleted_at.is_(None),
+        )
+        .first()
+        is not None
+    )
+
+
+def hard_delete_agent(db: Session, agent: AiAgent) -> dict[str, Any]:
+    """硬删除未被企业号 active 绑定的智能体。"""
+    if has_active_douyin_account_binding(db, merchant_id=agent.merchant_id, agent_id=agent.agent_id):
+        raise ValueError(ACTIVE_BINDING_BLOCK_DELETE_ERROR)
+
+    payload = {column.name: getattr(agent, column.name) for column in AiAgent.__table__.columns}
+    db.query(AgentKnowledgeCategory).filter(
+        AgentKnowledgeCategory.merchant_id == agent.merchant_id,
+        AgentKnowledgeCategory.agent_id == agent.agent_id,
+    ).delete(synchronize_session=False)
+    db.delete(agent)
     db.commit()
-    db.refresh(agent)
-    return agent
+    return payload
+
+
+def soft_delete_agent(db: Session, agent: AiAgent) -> dict[str, Any]:
+    """兼容旧导出；一期智能体删除已改为硬删除。"""
+    return hard_delete_agent(db, agent)
 
 
 def preview_training_chat(agent: AiAgent, message: str) -> TrainingChatResult:

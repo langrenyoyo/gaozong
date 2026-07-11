@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required, require_any_permission
+from app.auth.dependencies import get_request_context_required, require_permission
 from app.database import get_db
 from app.schemas import (
     AgentKnowledgeCategoriesResponse,
@@ -43,13 +43,8 @@ logger = logging.getLogger(__name__)
 
 
 def _auth(context: RequestContext) -> RequestContext:
-    """校验 AI小高智能体权限。
-
-    auto_wechat:agent 是历史/过渡兼容权限；正式 NewCarProject 权限字典应补
-    auto_wechat:ai_agents。AI小高助手/微信代理后续应使用独立权限，例如
-    auto_wechat:wechat_agent。
-    """
-    return require_any_permission(["auto_wechat:ai_agents", "auto_wechat:agent"])(context)
+    """校验 AI小高智能体权限；智能体归属抖音 AI 客服闭环。"""
+    return require_permission("auto_wechat:douyin_ai_cs")(context)
 
 
 def _not_found() -> HTTPException:
@@ -58,6 +53,10 @@ def _not_found() -> HTTPException:
 
 def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
+
+
+def _conflict(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": code, "message": message})
 
 
 def _binding_not_found(exc: ValueError) -> HTTPException:
@@ -134,8 +133,13 @@ def delete_agent(
     agent = ai_agent_service.get_agent(db, context, agent_id)
     if not agent:
         raise _not_found()
-    agent = ai_agent_service.soft_delete_agent(db, agent)
-    return {"success": True, "data": agent, "message": "success"}
+    try:
+        deleted = ai_agent_service.hard_delete_agent(db, agent)
+    except ValueError as exc:
+        if str(exc) == ai_agent_service.ACTIVE_BINDING_BLOCK_DELETE_ERROR:
+            raise _conflict(str(exc), "智能体已绑定抖音企业号，请先解绑后再删除") from exc
+        raise _bad_request(str(exc), "智能体删除失败") from exc
+    return {"success": True, "data": deleted, "message": "success"}
 
 
 @router.get("/{agent_id}/knowledge-categories", response_model=AgentKnowledgeCategoriesResponse)

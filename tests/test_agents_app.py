@@ -43,7 +43,7 @@ def _client(*, merchant_id: str | None = "merchant-a", permissions: list[str] | 
         "tenant_id": "tenant-a",
         "user_id": "user-a",
         "super_admin": False,
-        "permission_codes": permissions or ["auto_wechat:ai_agents"],
+        "permission_codes": permissions or ["auto_wechat:douyin_ai_cs"],
         "source_system": "new_car_project",
     }
     return TestClient(app)
@@ -123,16 +123,30 @@ def test_agents_app_root_health_openapi_and_crud_use_gateway_context():
 
     deleted = client.delete(f"/api/agents/{created['agent_id']}")
     assert deleted.status_code == 200
-    assert deleted.json()["data"]["status"] == "deleted"
+    assert deleted.json()["data"]["agent_id"] == created["agent_id"]
+
+    db = TestSession()
+    try:
+        assert db.query(AiAgent).filter_by(agent_id=created["agent_id"]).first() is None
+    finally:
+        db.close()
 
 
-def test_agents_app_rejects_missing_permission_and_keeps_legacy_agent_permission():
+def test_agents_app_rejects_missing_and_legacy_agent_permission():
     denied = _client(permissions=["auto_wechat:leads"]).get("/api/agents")
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "PERMISSION_DENIED"
 
-    legacy = _client(permissions=["auto_wechat:agent"]).get("/api/agents")
-    assert legacy.status_code == 200
+    legacy_agent = _client(permissions=["auto_wechat:agent"]).get("/api/agents")
+    assert legacy_agent.status_code == 403
+    assert legacy_agent.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+    legacy_ai_agents = _client(permissions=["auto_wechat:ai_agents"]).get("/api/agents")
+    assert legacy_ai_agents.status_code == 403
+    assert legacy_ai_agents.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+    allowed = _client(permissions=["auto_wechat:douyin_ai_cs"]).get("/api/agents")
+    assert allowed.status_code == 200
 
 
 def test_agents_app_blocks_cross_merchant_access_and_forged_payload_scope():

@@ -1,6 +1,7 @@
 """AI小高智能体能力服务元数据与兼容导出。"""
 
 from apps.agents.services import (
+    ACTIVE_BINDING_BLOCK_DELETE_ERROR,
     ACTIVE_STATUSES,
     ACTIVE_STATUS,
     BASE_CATEGORY_KEY,
@@ -11,6 +12,8 @@ from apps.agents.services import (
     create_agent,
     ensure_category_usable_for_merchant,
     get_agent,
+    hard_delete_agent,
+    has_active_douyin_account_binding,
     list_agent_category_keys,
     list_agents,
     manual_category_keys,
@@ -34,6 +37,7 @@ META = CapabilityMeta(
 
 
 __all__ = [
+    "ACTIVE_BINDING_BLOCK_DELETE_ERROR",
     "ACTIVE_STATUSES",
     "ACTIVE_STATUS",
     "BASE_CATEGORY_KEY",
@@ -45,6 +49,8 @@ __all__ = [
     "create_agent",
     "ensure_category_usable_for_merchant",
     "get_agent",
+    "hard_delete_agent",
+    "has_active_douyin_account_binding",
     "list_agent_category_keys",
     "list_agents",
     "manual_category_keys",

@@ -31,6 +31,10 @@ def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
 
 
+def _conflict(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"code": code, "message": message})
+
+
 def _binding_not_found(exc: ValueError) -> HTTPException:
     code = str(exc)
     if code == "CATEGORY_NOT_USABLE":
@@ -105,13 +109,18 @@ def delete_agent(
     db: Session = Depends(get_db),
     gateway_context: GatewayContext = Depends(get_gateway_context),
 ):
-    """软删除当前商户智能体。"""
+    """硬删除当前商户智能体；存在 active 企业号绑定时拒绝。"""
     context = require_agents_context(gateway_context)
     agent = agents_service.get_agent(db, context, agent_id)
     if not agent:
         raise _not_found()
-    agent = agents_service.soft_delete_agent(db, agent)
-    return {"success": True, "data": agent, "message": "success"}
+    try:
+        deleted = agents_service.hard_delete_agent(db, agent)
+    except ValueError as exc:
+        if str(exc) == agents_service.ACTIVE_BINDING_BLOCK_DELETE_ERROR:
+            raise _conflict(str(exc), "智能体已绑定抖音企业号，请先解绑后再删除") from exc
+        raise _bad_request(str(exc), "智能体删除失败") from exc
+    return {"success": True, "data": deleted, "message": "success"}
 
 
 @router.get("/{agent_id}/knowledge-categories", response_model=AgentKnowledgeCategoriesResponse)

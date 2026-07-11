@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AiAgent  # noqa: F401
+from app.models import AiAgent, DouyinAccountAgentBinding, DouyinAuthorizedAccount  # noqa: F401
 
 
 engine = create_engine(
@@ -51,7 +51,7 @@ def _context(
         username="user-1",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id],
-        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:ai_agents"],
+        permission_codes=permission_codes if permission_codes is not None else ["auto_wechat:douyin_ai_cs"],
         super_admin=super_admin,
     )
 
@@ -67,6 +67,42 @@ def _create_agent(client: TestClient, name: str = "门店接待智能体") -> di
     )
     assert response.status_code == 200
     return response.json()["data"]
+
+
+def _insert_account_and_binding(
+    *,
+    account_open_id: str,
+    agent_id: str,
+    merchant_id: str = "merchant-a",
+    binding_status: str = "active",
+    deleted_at=None,
+) -> None:
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=123,
+                open_id=account_open_id,
+                merchant_id=merchant_id,
+                bind_status=1,
+                account_name=f"account {account_open_id}",
+            )
+        )
+        db.add(
+            DouyinAccountAgentBinding(
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                agent_id=agent_id,
+                is_default=True,
+                status=binding_status,
+                deleted_at=deleted_at,
+                created_by="user-1",
+                updated_by="user-1",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_create_agent_success():
@@ -117,11 +153,17 @@ def test_get_update_and_delete_agent():
 
     deleted = client.delete(f"/agents/{agent['agent_id']}")
     assert deleted.status_code == 200
-    assert deleted.json()["data"]["status"] == "deleted"
+    assert deleted.json()["data"]["agent_id"] == agent["agent_id"]
 
     listed = client.get("/agents")
     assert listed.status_code == 200
     assert listed.json()["data"] == []
+
+    db = TestSession()
+    try:
+        assert db.query(AiAgent).filter_by(agent_id=agent["agent_id"]).first() is None
+    finally:
+        db.close()
 
 
 def test_missing_ai_agents_permission_is_denied():
@@ -133,12 +175,80 @@ def test_missing_ai_agents_permission_is_denied():
     assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
 
 
-def test_legacy_agent_permission_is_temporarily_allowed():
+def test_agent_permission_no_longer_allows_ai_agent_management():
     client = _client(_context(permission_codes=["auto_wechat:agent"]))
 
     response = client.get("/agents")
 
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_legacy_ai_agents_permission_no_longer_allows_ai_agent_management():
+    client = _client(_context(permission_codes=["auto_wechat:ai_agents"]))
+
+    response = client.get("/agents")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_delete_agent_without_active_binding_hard_deletes_row():
+    client = _client(_context())
+    agent = _create_agent(client)
+
+    response = client.delete(f"/agents/{agent['agent_id']}")
+
     assert response.status_code == 200
+    assert response.json()["data"]["agent_id"] == agent["agent_id"]
+    listed = client.get("/agents")
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+
+    db = TestSession()
+    try:
+        assert db.query(AiAgent).filter_by(agent_id=agent["agent_id"]).first() is None
+    finally:
+        db.close()
+
+
+def test_delete_agent_with_active_douyin_account_binding_returns_409():
+    client = _client(_context())
+    agent = _create_agent(client)
+    _insert_account_and_binding(account_open_id="account-open-1", agent_id=agent["agent_id"])
+
+    response = client.delete(f"/agents/{agent['agent_id']}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "AI_AGENT_ACTIVE_BINDING_EXISTS"
+
+    db = TestSession()
+    try:
+        row = db.query(AiAgent).filter_by(agent_id=agent["agent_id"]).one()
+        assert row.status == "active"
+    finally:
+        db.close()
+
+
+def test_delete_agent_ignores_inactive_douyin_account_binding():
+    client = _client(_context())
+    agent = _create_agent(client)
+    _insert_account_and_binding(
+        account_open_id="account-open-1",
+        agent_id=agent["agent_id"],
+        binding_status="unbound",
+    )
+
+    response = client.delete(f"/agents/{agent['agent_id']}")
+
+    assert response.status_code == 200
+    db = TestSession()
+    try:
+        assert db.query(AiAgent).filter_by(agent_id=agent["agent_id"]).first() is None
+        binding = db.query(DouyinAccountAgentBinding).filter_by(agent_id=agent["agent_id"]).one()
+        assert binding.status == "unbound"
+    finally:
+        db.close()
 
 
 def test_cannot_access_other_merchant_agent():
