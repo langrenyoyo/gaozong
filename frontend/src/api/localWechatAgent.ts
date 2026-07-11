@@ -1,7 +1,14 @@
 export const DEFAULT_LOCAL_AGENT_BASE_URL = "http://127.0.0.1:19000";
 
+// Local Agent 地址优先级（高 → 低）：
+//   1. localStorage.local_wechat_agent_url：销售在页面手动设置过的地址，最高优先级。
+//   2. import.meta.env.VITE_LOCAL_WECHAT_AGENT_BASE_URL：Vite 环境变量（模板约定值）。
+//   3. DEFAULT_LOCAL_AGENT_BASE_URL：硬编码 127.0.0.1:19000。
+// 这样 VITE_LOCAL_WECHAT_AGENT_BASE_URL 真实生效，且页面手动设置仍能覆盖环境变量。
 export const LOCAL_AGENT_BASE_URL =
-  localStorage.getItem("local_wechat_agent_url") || DEFAULT_LOCAL_AGENT_BASE_URL;
+  localStorage.getItem("local_wechat_agent_url") ||
+  import.meta.env.VITE_LOCAL_WECHAT_AGENT_BASE_URL ||
+  DEFAULT_LOCAL_AGENT_BASE_URL;
 
 export interface LocalAgentHealth {
   success: boolean;
