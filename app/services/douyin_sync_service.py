@@ -6,10 +6,8 @@ P4-3：支持 dry_run + auto_assign 联动。
 - dry_run=false + auto_assign=true: 写库 + 对新建线索自动分配
 - auto_assign 仅作用于本次 create 的新线索，update/skip 不触发分配
 
-P0-5A-2：支持 auto_create_wechat_task 联动。
-- auto_create_wechat_task=true 且分配成功后创建 WechatTask(status=pending)
-- 使用销售真实微信昵称，mode=single_send（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Aw3/paste_only 门禁）
-- 不调用微信自动化，不调用 Local Agent
+Phase 7-FIX2：auto_create_wechat_task 保留兼容字段统计，不创建 WechatTask。
+业务 single_send 唯一入口为 POST /lead-notifications/send-to-staff。
 """
 
 import json
@@ -20,13 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.config import DOUYIN_API_BASE_URL, DOUYIN_API_TIMEOUT_SECONDS
 from app.integrations.douyin_api_client import fetch_leads, DouyinApiError
-from app.models import DouyinLead, SalesStaff, ReplyCheck
+from app.models import DouyinLead
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, DouyinSyncItem, WechatTaskSyncStats
 from app.services import assign_service
-from app.services import wechat_task_service
-
-# 通知文本模板无 Windows 依赖，直接导入（供任务消息生成使用）
-from app.services.notification_template import compose_notification_text
 
 logger = logging.getLogger("douyin_sync_service")
 
@@ -145,79 +139,6 @@ def _try_auto_assign(db: Session, lead_id: int) -> tuple[bool, str]:
         return False, "assign_failed"
 
 
-def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
-    """分配成功后尝试创建 notify_sales WechatTask(pending)。
-
-    P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后：
-    - target_nickname 使用销售真实微信昵称（不再硬编码 Aw3）
-    - mode 使用 single_send（不再强制 paste_only）
-    - 消息文本由 notification_template 生成（无 Windows 依赖，Linux/Docker 可用）
-    - 不调用微信自动化，不调用 Local Agent
-
-    Returns:
-        {"created": bool, "task_id": int | None, "reason": str | None}
-    """
-    result = {"created": False, "task_id": None, "reason": None}
-
-    # 获取分配的销售信息
-    if not lead.assigned_staff_id:
-        result["reason"] = "lead_not_assigned"
-        return result
-
-    staff = db.query(SalesStaff).filter(SalesStaff.id == lead.assigned_staff_id).first()
-    if not staff:
-        result["reason"] = "staff_not_found"
-        return result
-
-    # 销售必须配置微信昵称，否则无法搜索聊天窗口
-    if not staff.wechat_nickname:
-        result["reason"] = "staff_no_wechat_nickname"
-        logger.info(
-            "WechatTask 跳过: lead_id=%d, staff='%s' 未设置微信昵称",
-            lead.id, staff.name,
-        )
-        return result
-
-    # 复用通知模板生成消息（纯函数，不发送，无 Windows 依赖）
-    message = compose_notification_text(lead)
-
-    # 查找该 lead+staff 最新的 pending reply_check，填入 reply_check_id
-    reply_check_id = None
-    latest_check = db.query(ReplyCheck).filter(
-        ReplyCheck.lead_id == lead.id,
-        ReplyCheck.staff_id == staff.id,
-        ReplyCheck.check_status == "pending",
-    ).order_by(ReplyCheck.id.desc()).first()
-    if latest_check:
-        reply_check_id = latest_check.id
-
-    try:
-        task = wechat_task_service.create_wechat_task(
-            db,
-            task_type="notify_sales",
-            lead_id=lead.id,
-            staff_id=staff.id,
-            reply_check_id=reply_check_id,
-            target_nickname=staff.wechat_nickname,
-            message=message,
-            mode="single_send",
-        )
-        result["created"] = True
-        result["task_id"] = task.id
-        logger.info(
-            "WechatTask 已创建: task_id=%d, lead_id=%d, staff_id=%d, nickname='%s', mode=single_send",
-            task.id, lead.id, staff.id, staff.wechat_nickname,
-        )
-    except Exception as exc:
-        result["reason"] = f"create_failed: {exc}"
-        logger.error(
-            "WechatTask 创建失败: lead_id=%d, staff_id=%d, %s",
-            lead.id, staff.id, exc, exc_info=True,
-        )
-
-    return result
-
-
 def preview_sync_leads(
     db: Session,
     request: DouyinSyncRequest,
@@ -228,9 +149,7 @@ def preview_sync_leads(
     dry_run=false + auto_assign=false: 只写库
     dry_run=false + auto_assign=true: 写库 + 对新建线索自动分配
 
-    P0-5A-2：
-    auto_create_wechat_task=true + 分配成功 → 创建 WechatTask(pending)
-    使用销售真实微信昵称，mode=single_send
+    Phase 7-FIX2：auto_create_wechat_task 仅返回 disabled 统计，不创建任务。
     """
     # 从上游拉取线索
     try:
