@@ -5,7 +5,7 @@
 - 固定生产基准：方案 A（一个 PG 实例，两个 database）
   - 9000 主库：`auto_wechat`，Alembic head = `0007_lead_type_widen`
   - 9100 RAG metadata 库：`xg_douyin_ai_cs`，Alembic head = `0002_create_rag_metadata`
-  - `RAG_VECTOR_BACKEND=sqlite`，9100 单实例，保留 SQLite 向量副本，排除 Milvus / 全局时区 / 类型重构
+  - `RAG_VECTOR_BACKEND=milvus`，9100 连接外部 Milvus（不由 Compose 部署），不回退 SQLite 向量后端；详见「步骤 15A 外部 Milvus 现场确认」
 - ⚠️ 本 Runbook 由本地（非生产环境）生成，未经生产环境实际执行验证。所有标注 `[宝塔现场确认]` 的值必须在宝塔现场确认后填入。
 
 ---
@@ -273,13 +273,43 @@
   RAG_DATABASE_URL=postgresql+psycopg://[宝塔现场确认PG_USER]:[宝塔现场确认PG密码]@postgres:5432/xg_douyin_ai_cs
   EXPECTED_DATABASE_NAME=auto_wechat
   RAG_EXPECTED_DATABASE_NAME=xg_douyin_ai_cs
-  RAG_VECTOR_BACKEND=sqlite
+  RAG_VECTOR_BACKEND=milvus
+  MILVUS_URI=[宝塔现场确认外部 Milvus URI]
+  MILVUS_USERNAME=[宝塔现场确认 Milvus 用户]
+  MILVUS_PASSWORD=[宝塔现场确认 Milvus 密码]
+  MILVUS_DB_NAME=[宝塔现场确认 Milvus database]
+  MILVUS_COLLECTION=[宝塔现场确认生产 collection，不得与 dev/LAN 共用]
+  MILVUS_DIMENSION=2048
+  XG_DOUYIN_AI_EMBEDDING_DIMENSIONS=2048
   ```
 - **成功标准**：`.env.production.local` 含上述变量；`grep DATABASE_URL .env.production.local` 显示 `postgresql+psycopg://`
 - **失败停止**：密码错误或变量缺失 → 停止，不启动容器
 - **日志**：无（production env 不打印到日志）
 - **回滚触发**：无（配置改动，下一步验证）
 - **⚠️ 安全**：`.env.production.local` 改动前已在步骤 7 备份；编辑后不 echo 明文密码
+
+## 步骤 15A：外部 Milvus 现场确认（P3-CONFIG-EXTERNAL-MILVUS-CORRECTION-1）
+
+- **执行者**：VHwwsf + Waston（凭据 Owner）
+- **背景**：production 固定使用外部 Milvus（不由 Compose 部署），9100 通过 `MILVUS_*` 连接；不得回退 SQLite 向量后端。
+- **现场确认清单**（全部 `[宝塔现场确认]`）：
+  1. 外部 Milvus 地址（`MILVUS_URI`，`http://host:19530` 形式，9100 容器可达）
+  2. Milvus database（`MILVUS_DB_NAME`，生产专用，不得与 dev/LAN 共用）
+  3. Milvus collection（`MILVUS_COLLECTION`，生产专用，不得与 dev/LAN 共用）
+  4. collection owner / 权限（`MILVUS_USERNAME` 对该 collection 有读/写权限）
+  5. 当前向量数量（记录 baseline，切换后对比）
+  6. dimension（`MILVUS_DIMENSION=2048`，与 `XG_DOUYIN_AI_EMBEDDING_DIMENSIONS=2048` 和 collection 实际维度一致）
+  7. 备份 / 恢复策略（collection 是否已备份；误删恢复方式）
+  8. 生产凭据 Owner（谁持有 `MILVUS_PASSWORD`）
+  9. 网络 / 防火墙（9100 容器到 Milvus host:port TCP 可达）
+  10. 9100 容器可达性（`docker exec xg-douyin-ai-cs python -c "import urllib.request;urllib.request.urlopen('$MILVUS_URI')"` 或等价探测）
+- **切换前必须确认**：
+  - metadata PostgreSQL migration **不会删除** Milvus 向量（migration 只动 PG metadata，不触碰 Milvus collection）
+  - 现有 collection 与迁移后的 document/chunk metadata 能对应（`document_id` / `chunk_id` 主键一致）
+  - 如需重建向量，必须有明确重建命令和预计影响（重建期间 RAG 检索降级）
+- **成功标准**：清单 10 项全部确认；`MILVUS_DIMENSION == XG_DOUYIN_AI_EMBEDDING_DIMENSIONS == collection 实际维度`
+- **失败停止**：任一项无法确认 → 停止，不进入步骤 16
+- **日志**：无（现场确认不打印凭据）
 
 ## 步骤 16：switch_and_verify 启动 + 就绪检查
 
@@ -331,7 +361,7 @@
   bash scripts/production_pg_sqlite_freeze_check.sh \
     --compare /tmp/freeze_before.json /tmp/freeze_after.json 2>&1 | tee /tmp/step18_freeze_compare.log
   ```
-- **成功标准**：`FREEZE_CHECK_DONE`；元数据 SQLite size/行数未增长（向量副本可增长，记 INFO）
+- **成功标准**：`FREEZE_CHECK_DONE`；元数据 SQLite size/行数未增长（Milvus 向量由外部服务管理，不计入 SQLite 冻结对比）
 - **失败停止**：元数据 SQLite 增长 → **触发回滚**（存在未切净写入路径）
 - **日志**：`/tmp/step18_freeze_*.log`
 - **回滚触发**：是（元数据增长）
