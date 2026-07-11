@@ -1,34 +1,24 @@
-"""线索通知路由 — 主机微信 B 向销售 C 发送线索信息
+"""线索通知路由 — Phase 7-FIX2 入口封堵后
 
-P7 Demo：
-  POST /lead-notifications/send-to-staff — 发送线索给销售（自动搜索+发送）
+旧 UI 直发入口已停用，保留：
+- /send-to-staff → 410（旧直发入口）
+- /send-pending-assigned → 410（旧批量发送入口）
+- /open-chat → 调试搜索（保留）
 """
 
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, HTTPException
 from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.models import (
-    DouyinLead, SalesStaff, ReplyCheck, LeadNotification, CheckConfig,
+    DouyinLead, LeadNotification, CheckConfig,
 )
 from app.schemas import (
-    SendToStaffRequest, SendToStaffResponse,
     OpenChatRequest, OpenChatResponse,
 )
 from app.wechat_ui.contact_searcher import open_chat_by_nickname
-from app.wechat_ui.contact_verifier import verify_current_chat_contact
-from app.wechat_ui.input_writer import write_text_to_input
-from app.wechat_ui.window_locator import (
-    find_wechat_window,
-    check_wechat_ready_for_automation,
-    WECHAT_NOT_READY_MESSAGE,
-)
-from app.services.automation_control import is_automation_allowed, BLOCKED_MESSAGE
-from app.services.forbidden_word_service import replace_forbidden_words
-from app.services.notification_service import batch_notify_pending_assigned
 
 logger = logging.getLogger(__name__)
 
@@ -79,234 +69,19 @@ def _set_auto_detect_target(db: Session, check_id: int) -> bool:
         return False
 
 
-@router.post("/send-to-staff", response_model=SendToStaffResponse)
-def send_to_staff(request: SendToStaffRequest, db: Session = Depends(get_db)):
+@router.post("/send-to-staff")
+def send_to_staff_disabled():
+    """Phase 7-FIX2：旧 UI 直发微信入口已停用。
+
+    线索通知发送必须通过微信任务队列（WechatTask）受控链路：
+    Local Agent 19000 poll-and-execute → token 鉴权 → 商户隔离 → 安全 gate。
+
+    旧入口直接调用 Windows UI 自动化，绕过所有安全 gate，已永久关闭。
     """
-    发送线索给销售。
-
-    Demo 流程：
-    1. 查询线索和分配的销售
-    2. 获取销售微信昵称
-    3. 自动搜索并打开销售聊天窗口
-    4. 生成通知文本并发送
-    5. 设置自动检测目标
-    6. 记录通知结果
-    """
-    result = SendToStaffResponse(
-        success=False,
-        message="",
-        lead_id=request.lead_id,
-    )
-
-    # 0. 紧急停止检查
-    if not is_automation_allowed():
-        result.message = BLOCKED_MESSAGE
-        logger.warning("线索发送被紧急停止拦截: lead_id=%d", request.lead_id)
-        return result
-
-    # 1. 查询线索
-    lead = db.query(DouyinLead).filter(DouyinLead.id == request.lead_id).first()
-    if not lead:
-        result.message = f"线索不存在: id={request.lead_id}"
-        return result
-
-    if lead.status != "assigned":
-        result.message = f"线索状态不是 assigned（当前: {lead.status}），无法发送"
-        return result
-
-    if not lead.assigned_staff_id:
-        result.message = "线索未分配销售"
-        return result
-
-    # 2. 查询销售信息
-    staff = db.query(SalesStaff).filter(SalesStaff.id == lead.assigned_staff_id).first()
-    if not staff:
-        result.message = f"销售不存在: id={lead.assigned_staff_id}"
-        return result
-
-    result.staff_id = staff.id
-    result.staff_name = staff.name
-    result.wechat_nickname = staff.wechat_nickname
-
-    if not staff.wechat_nickname:
-        # 没有微信昵称，直接失败
-        _create_notification_record(
-            db, lead.id, staff.id, "", "failed",
-            error_message="销售未设置微信昵称",
-        )
-        result.message = f"销售 {staff.name} 未设置微信昵称，无法搜索"
-        return result
-
-    # 3. 生成通知文本
-    notification_text = _compose_notification_text(lead)
-    # 违禁词替换：写入前替换，并用替换后文本创建通知记录；命中只替换不拦截。
-    replacement = replace_forbidden_words(
-        db,
-        merchant_id=lead.merchant_id or "unknown_merchant",
-        source="wechat_dispatch",
-        content=notification_text,
-        context={"context_type": "lead_notification", "context_id": str(lead.id)},
-    )
-    notification_text = replacement.final_content
-    result.notification_text = notification_text
-
-    try:
-        ready_window = find_wechat_window()
-        ready_hwnd = getattr(ready_window, "NativeWindowHandle", None)
-    except Exception:
-        ready_hwnd = None
-    if isinstance(ready_hwnd, int):
-        ready = check_wechat_ready_for_automation(ready_hwnd)
-    elif ready_hwnd is None:
-        ready = check_wechat_ready_for_automation()
-    else:
-        ready = {"success": True, "message": "non-win32 test window"}
-    if not ready.get("success"):
-        _create_notification_record(
-            db, lead.id, staff.id, notification_text, "failed",
-            error_message=WECHAT_NOT_READY_MESSAGE,
-        )
-        result.message = WECHAT_NOT_READY_MESSAGE
-        result.send_status = "failed"
-        logger.warning(
-            "微信自动化前置门禁失败: lead_id=%s, staff_id=%s, ready=%s",
-            lead.id, staff.id, ready,
-        )
-        return result
-
-    # 4. 搜索并打开销售聊天窗口
-    logger.info(f"开始搜索销售聊天窗口: nickname='{staff.wechat_nickname}'")
-    search_result = open_chat_by_nickname(staff.wechat_nickname)
-
-    if not search_result["success"]:
-        # 搜索失败，记录并返回
-        _create_notification_record(
-            db, lead.id, staff.id, notification_text, "failed",
-            error_message=search_result["message"],
-        )
-        result.message = f"搜索销售聊天窗口失败: {search_result['message']}"
-        result.send_status = "failed"
-        return result
-
-    # P0-2C 守卫：chat_verified 来自 UIA 控件树，Qt5 微信不可靠（P0-3E 结论）。
-    # 不再作为终止条件，改由后续 OCR 联系人验证作为最终硬门禁（P0-MAIN-2D）。
-    chat_verified = search_result.get("chat_verified", False)
-    result.chat_title = search_result.get("chat_title")
-    logger.info(
-        "聊天窗口已打开: chat_title='%s', chat_verified=%s, confidence=%s",
-        result.chat_title, chat_verified, search_result.get("confidence", 0),
-    )
-
-    if not chat_verified:
-        logger.info(
-            "chat_verified=false（UIA 不可靠），将继续执行 OCR 联系人验证: nickname='%s'",
-            staff.wechat_nickname,
-        )
-
-    # P0-2E 守卫：联系人 OCR 二次确认（最终硬门禁）
-    verify_result = verify_current_chat_contact(
-        staff.wechat_nickname,
-        win_rect=search_result.get("window_rect"),
-    )
-    logger.info(
-        "联系人确认: verified=%s, strategy=%s, matched='%s'",
-        verify_result.get("verified"),
-        verify_result.get("strategy"),
-        verify_result.get("matched_text"),
-    )
-
-    if not verify_result.get("verified"):
-        _create_notification_record(
-            db, lead.id, staff.id, notification_text, "failed",
-            error_message=f"联系人未确认: {verify_result.get('message', '')}",
-            send_mode="require_confirm" if not request.auto_send else "auto_send",
-        )
-        result.message = (
-            f"无法确认当前聊天对象为 '{staff.wechat_nickname}'，不允许发送: "
-            f"{verify_result.get('message', '')}"
-        )
-        result.send_status = "failed"
-        result.contact_verified = False
-        result.contact_verified_strategy = verify_result.get("strategy")
-        return result
-
-    # OCR 验证通过，记录联系人确认信息
-    result.contact_verified = True
-    result.contact_verified_strategy = verify_result.get("strategy")
-
-    # 5. 发送通知文本
-    try:
-        window = find_wechat_window()
-        require_confirm = not request.auto_send
-        # P0-2C：传递 window_rect 用于发送前校验
-        before_rect = search_result.get("window_rect")
-        safe_nick = "".join(c if c.isalnum() or c in "_-" else "_" for c in (staff.wechat_nickname or ""))
-        write_result = write_text_to_input(
-            window, notification_text, require_confirm=require_confirm,
-            before_rect=before_rect, debug_prefix=f"send_{safe_nick}",
-        )
-
-        if write_result["success"]:
-            # P0-MAIN-2B：区分 pasted_only 和真正发送，修复状态语义
-            if write_result.get("action") == "pasted_only":
-                send_status = "pasted"
-                sent_at = None
-                result.send_status = "pasted"
-                result.message = f"线索通知已粘贴到 {staff.name} 聊天输入框（等待人工确认）"
-            else:
-                send_status = "sent"
-                sent_at = datetime.now()
-                result.send_status = "sent"
-                result.message = f"线索已发送给销售 {staff.name}"
-        else:
-            send_status = "failed"
-            sent_at = None
-            result.send_status = "failed"
-            result.message = f"写入微信输入框失败: {write_result['message']}"
-
-    except Exception as e:
-        send_status = "failed"
-        sent_at = None
-        result.send_status = "failed"
-        result.message = f"写入微信输入框异常: {e}"
-        logger.error(f"写入微信输入框异常: {e}", exc_info=True)
-
-    # 6. 创建通知记录
-    notification = _create_notification_record(
-        db, lead.id, staff.id, notification_text, send_status,
-        chat_title=result.chat_title,
-        error_message=result.message if send_status == "failed" else None,
-        send_mode="auto_send" if request.auto_send else "require_confirm",
-        sent_at=sent_at,
-    )
-    result.notification_id = notification.id
-
-    # 7. 如果发送成功，设置自动检测目标
-    if send_status == "sent":
-        # 查找该线索对应的 pending check
-        check = db.query(ReplyCheck).filter(
-            ReplyCheck.lead_id == lead.id,
-            ReplyCheck.staff_id == staff.id,
-            ReplyCheck.check_status == "pending",
-        ).first()
-
-        if check:
-            auto_detect_set = _set_auto_detect_target(db, check.id)
-            result.auto_detect_set = auto_detect_set
-            if auto_detect_set:
-                result.warning = (
-                    f"已发送线索通知并设置自动检测目标（check_id={check.id}）。"
-                    f"系统将每 10 秒检测销售是否回复。"
-                )
-                notification.check_id = check.id
-                db.commit()
-        else:
-            result.warning = "发送成功但未找到对应的 pending 检测记录，无法设置自动检测目标"
-
-    if send_status == "sent":
-        result.success = True
-
-    return result
+    raise HTTPException(410, detail={
+        "code": "LEGACY_WECHAT_SEND_DISABLED",
+        "message": "旧微信直发入口已停用。请通过微信任务队列受控链路发送。",
+    })
 
 
 @router.post("/open-chat", response_model=OpenChatResponse)
@@ -335,20 +110,15 @@ def debug_open_chat(request: OpenChatRequest):
 
 
 @router.post("/send-pending-assigned")
-def send_pending_assigned(db: Session = Depends(get_db)):
-    """
-    批量发送已分配但未通知的线索（P8-3）。
+def send_pending_assigned_disabled():
+    """Phase 7-FIX2：旧批量发送入口已停用。
 
-    查找所有 status=assigned 且未成功发送通知的线索，
-    逐条调用 auto_notify_assigned_lead 进行搜索+发送。
-
-    安全约束：
-    - emergency_stopped=true 时不执行
-    - 每条线索发送前都会检查 automation_control
-    - 遇到紧急停止后立即停止批量处理
+    批量发送已迁移到微信任务队列受控链路，旧入口已永久关闭。
     """
-    result = batch_notify_pending_assigned(db)
-    return result
+    raise HTTPException(410, detail={
+        "code": "LEGACY_WECHAT_SEND_DISABLED",
+        "message": "旧批量发送入口已停用。请通过微信任务队列受控链路发送。",
+    })
 
 
 def _create_notification_record(

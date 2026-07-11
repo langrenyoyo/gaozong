@@ -32,28 +32,20 @@ def _merchant_id(context: RequestContext) -> str:
     return context.merchant_id
 
 
-@router.post("", response_model=WechatTaskResponse)
-def create_wechat_task(data: WechatTaskCreateRequest, db: Session = Depends(get_db)):
-    """创建微信任务。
+@router.post("")
+def create_wechat_task_disabled():
+    """Phase 7-FIX2：通用 HTTP 创建微信任务入口已停用。
 
-    约束（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 放开 Demo 门禁后）：
-    - target_nickname 必须非空（真实销售微信昵称）
-    - notify_sales: mode=paste_only / single_send
-    - detect_reply: mode=read_only / paste_only
+    微信任务创建必须通过内部受控链路：
+    - Local Agent 19000 poll-and-execute（含 token 鉴权 + 商户隔离）
+    - notify_sales pasted/sent 后自动创建 detect_reply task
+
+    直接 POST /wechat-tasks 绕过所有安全 gate，已永久关闭。
     """
-    try:
-        return wechat_task_service.create_wechat_task(
-            db,
-            task_type=data.task_type,
-            lead_id=data.lead_id,
-            staff_id=data.staff_id,
-            reply_check_id=data.reply_check_id,
-            target_nickname=data.target_nickname,
-            message=data.message,
-            mode=data.mode,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    raise HTTPException(410, detail={
+        "code": "DIRECT_WECHAT_TASK_CREATE_DISABLED",
+        "message": "通用微信任务创建已停用。任务只能通过 Local Agent 安全链路创建。",
+    })
 
 
 @router.get("", response_model=WechatTaskHistoryPage)

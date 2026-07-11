@@ -321,8 +321,18 @@ def sync_leads(
     """从 douyinAPI 拉取线索并预览同步结果
 
     默认 dry_run=true（只预览，不写库）。
+
+    Phase 7-FIX2：auto_notify=true 已停用，旧链路直接调用微信 UI 自动化绕过所有安全 gate。
     """
     require_permission("auto_wechat:leads")(context)
+
+    # Phase 7-FIX2：禁止旧 auto_notify 链路
+    if request.auto_notify:
+        raise HTTPException(400, detail={
+            "code": "LEGACY_AUTO_NOTIFY_DISABLED",
+            "message": "旧 auto_notify 链路已停用。请通过微信任务队列受控链路发送。",
+        })
+
     return preview_sync_leads(db, request)
 
 

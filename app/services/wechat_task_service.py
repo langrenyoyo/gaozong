@@ -380,7 +380,18 @@ def submit_wechat_task_result(
 
     # sent=true && verified=true → status=sent（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1 新增）
     # single_send 模式下 19000 粘贴并回车发送，回写 sent=true。
+    # Phase 7-FIX2：paste_only 模式不允许 sent=true（Local Agent 不应发送 paste_only 任务）
     if sent and verified:
+        if task.mode == "paste_only":
+            task.status = "blocked"
+            task.failure_stage = "task_mode_send_mismatch"
+            db.commit()
+            db.refresh(task)
+            _update_linked_notification(db, task, send_status="blocked",
+                                        error_message="paste_only 任务不允许 sent=true")
+            logger.warning("WechatTask %s: paste_only 模式不允许 sent=true，已 blocked", task.id)
+            return task
+
         sent_now = datetime.now()
         task.status = "sent"
         task.sent_at = sent_now

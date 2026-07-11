@@ -406,37 +406,18 @@ def test_auto_create_true_does_not_create_sent_wechat_task():
     db.close()
 
 
-def test_manual_post_wechat_tasks_still_works_after_sync_changes():
-    """10. POST /wechat-tasks 手动创建仍然正常工作。"""
+def test_manual_post_wechat_tasks_is_disabled():
+    """Phase 7-FIX2：POST /wechat-tasks 手动创建已停用。"""
     from fastapi.testclient import TestClient
-    from app.database import SessionLocal
     from app.main import create_app
 
     app = create_app()
     client = TestClient(app)
 
-    try:
-        # 手动创建任务
-        resp = client.post("/wechat-tasks", json={
-            "target_nickname": "Aw3",
-            "message": "手动创建测试",
-            "mode": "paste_only",
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "pending"
-        assert data["target_nickname"] == "Aw3"
-        assert data["message"] == "手动创建测试"
-
-        # 查询 pending 列表能看到
-        resp2 = client.get("/wechat-tasks/pending")
-        assert resp2.status_code == 200
-        tasks = resp2.json()
-        assert any(t["id"] == data["id"] for t in tasks)
-    finally:
-        db = SessionLocal()
-        try:
-            db.query(WechatTask).filter(WechatTask.message == "手动创建测试").delete(synchronize_session=False)
-            db.commit()
-        finally:
-            db.close()
+    resp = client.post("/wechat-tasks", json={
+        "target_nickname": "Aw3",
+        "message": "手动创建测试",
+        "mode": "paste_only",
+    })
+    assert resp.status_code == 410
+    assert resp.json()["detail"]["code"] == "DIRECT_WECHAT_TASK_CREATE_DISABLED"

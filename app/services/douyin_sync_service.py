@@ -28,13 +28,6 @@ from app.services import wechat_task_service
 # 通知文本模板无 Windows 依赖，直接导入（供任务消息生成使用）
 from app.services.notification_template import compose_notification_text
 
-# 延迟导入：notification_service 依赖 wechat_ui（Windows 专用），Linux/Docker 环境不可用
-try:
-    from app.services.notification_service import auto_notify_assigned_lead
-    _NOTIFICATION_AVAILABLE = True
-except ImportError:
-    _NOTIFICATION_AVAILABLE = False
-
 logger = logging.getLogger("douyin_sync_service")
 
 
@@ -150,26 +143,6 @@ def _try_auto_assign(db: Session, lead_id: int) -> tuple[bool, str]:
     except Exception as exc:
         logger.error("自动分配异常: lead_id=%d, %s", lead_id, exc)
         return False, "assign_failed"
-
-
-def _try_auto_notify(db: Session, lead_id: int) -> dict:
-    """尝试对已分配线索自动通知销售
-
-    P8-3：包装 notification_service.auto_notify_assigned_lead，
-    捕获异常以避免同步流程因通知失败而中断。
-    Linux/Docker 环境下跳过（依赖 Windows 专用微信 UI 自动化）。
-
-    Returns:
-        {"success": bool, "message": str}
-    """
-    if not _NOTIFICATION_AVAILABLE:
-        return {"success": False, "message": "跳过：微信通知依赖 Windows 环境，当前平台不可用"}
-    try:
-        result = auto_notify_assigned_lead(db, lead_id)
-        return result
-    except Exception as exc:
-        logger.error("auto_notify 异常: lead_id=%d, %s", lead_id, exc, exc_info=True)
-        return {"success": False, "message": f"通知异常: {exc}"}
 
 
 def _try_create_wechat_task(db: Session, lead: DouyinLead) -> dict:
@@ -307,16 +280,8 @@ def preview_sync_leads(
                         counts["assigned"] += 1
                         reason += f"，{assign_tag}"
 
-                        # P8-3：auto_notify — 分配成功后自动搜索销售微信并发送通知（旧链路）
-                        if request.auto_notify:
-                            notify_result = _try_auto_notify(db, lead.id)
-                            if notify_result["success"]:
-                                counts["notified"] += 1
-                                reason += "，已通知销售"
-                            else:
-                                reason += f"，通知失败({notify_result.get('message', '未知')})"
-
                         # P0-5A-2：auto_create_wechat_task — 分配成功后创建 pending 任务（新链路）
+                        # Phase 7-FIX2：旧 auto_notify 分支已删除，统一走 WechatTask 受控链路
                         if request.auto_create_wechat_task:
                             wt_stats.skipped_count += 1
                             wt_stats.skipped.append({

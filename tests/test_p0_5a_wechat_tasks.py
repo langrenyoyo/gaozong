@@ -42,54 +42,47 @@ def _setup_db():
         db.close()
 
 
-# ========== 创建任务 ==========
+# ========== 创建任务（Phase 7-FIX2：HTTP 入口已停用）==========
 
-def test_create_wechat_task_success():
-    """创建 Aw3 paste_only 任务应成功。"""
+def test_direct_wechat_task_create_is_disabled():
+    """POST /wechat-tasks 必须返回 410。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "Aw3",
         "message": "[TEST] hello Aw3",
         "mode": "paste_only",
     })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "pending"
-    assert data["target_nickname"] == "Aw3"
-    assert data["mode"] == "paste_only"
-    assert data["sent_at"] is None
-    assert data["pasted_at"] is None
+    assert resp.status_code == 410
+    assert resp.json()["detail"]["code"] == "DIRECT_WECHAT_TASK_CREATE_DISABLED"
 
 
-def test_create_wechat_task_accepts_non_aw3_nickname():
-    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 Aw3 门禁，任意非空昵称都接受。"""
+def test_direct_create_disabled_for_any_nickname():
+    """任意昵称 POST 创建都返回 410。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "啊东、",
         "message": "test",
         "mode": "paste_only",
     })
-    assert resp.status_code == 200
-    assert resp.json()["target_nickname"] == "啊东、"
+    assert resp.status_code == 410
 
 
-def test_create_wechat_task_rejects_empty_nickname():
-    """空昵称仍应被拒绝（target_nickname 必须非空）。"""
+def test_direct_create_disabled_empty_nickname():
+    """空昵称 POST 也返回 410。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "",
         "message": "test",
         "mode": "paste_only",
     })
-    assert resp.status_code == 422
+    assert resp.status_code == 410
 
 
-def test_create_wechat_task_accepts_single_send_mode():
-    """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 paste_only 门禁，single_send 接受。"""
+def test_direct_create_disabled_single_send():
+    """single_send POST 也返回 410。"""
     resp = client.post("/wechat-tasks", json={
         "target_nickname": "Aw3",
         "message": "test",
         "mode": "single_send",
     })
-    assert resp.status_code == 200
-    assert resp.json()["mode"] == "single_send"
+    assert resp.status_code == 410
 
 
 # ========== 查询任务 ==========
