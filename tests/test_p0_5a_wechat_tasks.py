@@ -610,15 +610,17 @@ def test_submit_sent_true_creates_sent_notification():
     try:
         staff, lead, _ = _create_staff_and_lead(db)
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "sent true 测试",
-            "mode": "single_send",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="sent true 测试",
+            mode="single_send",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+        task_id = task.id
+        db.commit()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,
@@ -646,16 +648,18 @@ def test_submit_pasted_does_not_change_lead_status():
     try:
         staff, lead, check = _create_staff_and_lead(db)
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "状态测试",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-            "reply_check_id": check.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="状态测试",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            reply_check_id=check.id,
+        )
+        task_id = task.id
+        db.commit()
 
         client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,
@@ -689,15 +693,17 @@ def test_submit_result_updates_existing_notification():
         db.add(existing_notif)
         db.commit()
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "重试通知",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="重试通知",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+        task_id = task.id
+        db.commit()
 
         # 第二次回写 pasted
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
@@ -724,13 +730,15 @@ def test_non_notify_sales_task_no_notification():
     db = SessionLocal()
     try:
         # 创建 detect_reply task（不带 lead_id/staff_id）
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "detect_reply",
-            "target_nickname": "Aw3",
-            "message": "",
-            "mode": "read_only",
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="detect_reply",
+            target_nickname="Aw3",
+            message="",
+            mode="read_only",
+        )
+        task_id = task.id
+        db.commit()
 
         # P1-AUTO-1：detect_reply 使用 detected_status 而非 pasted
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={

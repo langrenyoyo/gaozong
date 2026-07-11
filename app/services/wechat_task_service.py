@@ -42,6 +42,7 @@ def create_wechat_task(
     target_nickname: str = "",
     message: str = "",
     mode: str = "single_send",
+    commit: bool = True,
 ) -> WechatTask:
     """创建微信任务。
 
@@ -51,6 +52,8 @@ def create_wechat_task(
     2. detect_reply（P1-AUTO-1）：允许 mode=read_only / paste_only。
     3. status 初始为 pending。
     4. sent_at 初始为 None（由 19000 回写 sent 成功后填充）。
+
+    Phase 7-FIX2：commit=False 支持外部原子事务（任务+通知一起提交）。
     """
     if not target_nickname or not target_nickname.strip():
         raise ValueError("target_nickname 不能为空（需传入真实销售微信昵称）")
@@ -85,8 +88,11 @@ def create_wechat_task(
         sent_at=None,
     )
     db.add(task)
-    db.commit()
-    db.refresh(task)
+    if commit:
+        db.commit()
+        db.refresh(task)
+    else:
+        db.flush()
     logger.info("WechatTask 已创建: id=%s, type=%s, target=%s", task.id, task_type, target_nickname)
     return task
 
@@ -379,7 +385,7 @@ def submit_wechat_task_result(
     # pasted=true && sent=false && verified=true → status=pasted
     if pasted and not sent and verified:
         task.status = "pasted"
-        task.pasted_at = datetime.now()
+        task.pasted_at = datetime.now(timezone.utc)
         task.failure_stage = None
         # paste_only：未发送，sent_at 保持 None
         task.sent_at = None
@@ -408,7 +414,7 @@ def submit_wechat_task_result(
             logger.warning("WechatTask %s: paste_only 模式不允许 sent=true，已 blocked", task.id)
             return task
 
-        sent_now = datetime.now()
+        sent_now = datetime.now(timezone.utc)
         task.status = "sent"
         task.sent_at = sent_now
         if not task.pasted_at:
@@ -658,7 +664,7 @@ def _submit_detect_reply_result(
         task.status = "pending"
         task.failure_stage = None
         # 更新 pasted_at 记录最后一次检测时间
-        task.pasted_at = datetime.now()
+        task.pasted_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(task)
         logger.info(
@@ -752,7 +758,7 @@ def _ensure_reply_check_for_task(db: Session, task: WechatTask) -> ReplyCheck | 
     # 步骤 4：创建新的 pending ReplyCheck
     try:
         deadline_minutes = _get_config_int(db, "reply_deadline_minutes", 30)
-        deadline = datetime.now() + timedelta(minutes=deadline_minutes)
+        deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
 
         check = ReplyCheck(
             lead_id=task.lead_id,
