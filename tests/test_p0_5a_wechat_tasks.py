@@ -15,6 +15,7 @@ from app.models import (
     WechatTask, LeadNotification, CheckConfig,
     SalesStaff, DouyinLead, ReplyCheck,
 )
+from app.services import wechat_task_service
 
 # 创建测试应用和数据库
 app = create_app()
@@ -89,17 +90,18 @@ def test_direct_create_disabled_single_send():
 
 def test_get_pending_wechat_tasks():
     """查询 pending 任务列表。"""
-    # 创建 2 个任务
-    client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "task-a",
-        "mode": "paste_only",
-    })
-    client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "task-b",
-        "mode": "paste_only",
-    })
+    # 创建 2 个任务（通过 service 层）
+    db = SessionLocal()
+    try:
+        wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="task-a", mode="paste_only",
+        )
+        wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="task-b", mode="paste_only",
+        )
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.get("/wechat-tasks/pending")
     assert resp.status_code == 200
@@ -112,14 +114,16 @@ def test_get_pending_wechat_tasks():
 
 def test_get_wechat_task_detail():
     """查询任务详情。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "detail-test",
-        "mode": "paste_only",
-        "lead_id": 1,
-        "staff_id": 2,
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="detail-test", mode="paste_only",
+            lead_id=1, staff_id=2,
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.get(f"/wechat-tasks/{task_id}")
     assert resp.status_code == 200
@@ -135,12 +139,15 @@ def test_get_wechat_task_detail():
 
 def test_submit_result_pasted_success():
     """pasted=true + sent=false + verified=true → status=pasted。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "pasted-test",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="pasted-test", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -164,12 +171,15 @@ def test_submit_result_pasted_success():
 
 def test_submit_result_sent_true_marks_sent():
     """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 sent 门禁，sent=true + verified → status=sent。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "sent-ok",
-        "mode": "single_send",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="sent-ok", mode="single_send",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -188,12 +198,15 @@ def test_submit_result_sent_true_marks_sent():
 
 def test_submit_result_blocks_verified_false():
     """verified=false → blocked。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "unverified",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="unverified", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -211,12 +224,15 @@ def test_submit_result_blocks_verified_false():
 
 def test_submit_result_blocks_partial_match():
     """partial_match=true → blocked。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "partial",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="partial", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -234,12 +250,15 @@ def test_submit_result_blocks_partial_match():
 
 def test_submit_result_blocks_manual_review_required():
     """manual_review_required=true → blocked。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "manual",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="manual", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -257,12 +276,15 @@ def test_submit_result_blocks_manual_review_required():
 
 def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
     """success=false 时 failure_stage 不能为空，为空则填 unknown_failure。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "fail-test",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task1 = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="fail-test", mode="paste_only",
+        )
+        task_id = task1.id
+        db.commit()
+    finally:
+        db.close()
 
     # 不提供 failure_stage
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
@@ -276,12 +298,15 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
     assert data["failure_stage"] == "unknown_failure"
 
     # 创建另一个任务，提供 failure_stage
-    create_resp2 = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "fail-with-stage",
-        "mode": "paste_only",
-    })
-    task_id2 = create_resp2.json()["id"]
+    db2 = SessionLocal()
+    try:
+        task2 = wechat_task_service.create_wechat_task(
+            db2, target_nickname="Aw3", message="fail-with-stage", mode="paste_only",
+        )
+        task_id2 = task2.id
+        db2.commit()
+    finally:
+        db2.close()
 
     resp2 = client.post(f"/wechat-tasks/{task_id2}/result", json={
         "success": False,
@@ -295,12 +320,15 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
 
 def test_submit_result_saves_raw_result():
     """raw_result 必须保存。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "raw-test",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="raw-test", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     raw = {"ocr_text": "AW3", "confidence": 0.95, "steps": ["focus", "ocr", "paste"]}
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
@@ -323,12 +351,15 @@ def test_submit_result_saves_raw_result():
 
 def test_submit_result_keeps_sent_at_none():
     """pasted 成功后 sent_at 必须保持 None。"""
-    create_resp = client.post("/wechat-tasks", json={
-        "target_nickname": "Aw3",
-        "message": "sent-at-none",
-        "mode": "paste_only",
-    })
-    task_id = create_resp.json()["id"]
+    db = SessionLocal()
+    try:
+        task = wechat_task_service.create_wechat_task(
+            db, target_nickname="Aw3", message="sent-at-none", mode="paste_only",
+        )
+        task_id = task.id
+        db.commit()
+    finally:
+        db.close()
 
     resp = client.post(f"/wechat-tasks/{task_id}/result", json={
         "success": True,
@@ -386,17 +417,18 @@ def test_submit_pasted_creates_lead_notification():
         staff, lead, check = _create_staff_and_lead(db)
 
         # 创建 task（带 reply_check_id）
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "【新线索分配】\n客户：测试客户",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-            "reply_check_id": check.id,
-        })
-        assert create_resp.status_code == 200
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="【新线索分配】\n客户：测试客户",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            reply_check_id=check.id,
+        )
+        task_id = task.id
+        db.commit()
 
         # 回写 pasted 结果
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
@@ -432,16 +464,18 @@ def test_submit_pasted_sets_auto_detect_target():
     try:
         staff, lead, check = _create_staff_and_lead(db)
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "测试自动检测",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-            "reply_check_id": check.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="测试自动检测",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            reply_check_id=check.id,
+        )
+        task_id = task.id
+        db.commit()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,
@@ -469,15 +503,17 @@ def test_submit_pasted_no_reply_check_no_auto_detect():
         staff, lead, _ = _create_staff_and_lead(db)
 
         # 不传 reply_check_id
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "无 reply_check",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="无 reply_check",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+        task_id = task.id
+        db.commit()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,
@@ -502,15 +538,17 @@ def test_submit_failed_creates_lead_notification_failed():
     try:
         staff, lead, _ = _create_staff_and_lead(db)
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "失败测试",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="失败测试",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+        task_id = task.id
+        db.commit()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": False,
@@ -537,15 +575,17 @@ def test_submit_blocked_creates_lead_notification_blocked():
     try:
         staff, lead, _ = _create_staff_and_lead(db)
 
-        create_resp = client.post("/wechat-tasks", json={
-            "task_type": "notify_sales",
-            "target_nickname": "Aw3",
-            "message": "blocked 测试",
-            "mode": "paste_only",
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-        })
-        task_id = create_resp.json()["id"]
+        task = wechat_task_service.create_wechat_task(
+            db,
+            task_type="notify_sales",
+            target_nickname="Aw3",
+            message="blocked 测试",
+            mode="paste_only",
+            lead_id=lead.id,
+            staff_id=staff.id,
+        )
+        task_id = task.id
+        db.commit()
 
         resp = client.post(f"/wechat-tasks/{task_id}/result", json={
             "success": True,

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
-from app.auth.local_agent_auth import get_optional_local_agent_context
+from app.auth.local_agent_auth import get_optional_local_agent_context, require_local_agent_context
 from app.database import get_db
 from app.schemas import (
     WechatTaskCreateRequest,
@@ -104,13 +104,18 @@ def get_pending_wechat_tasks(
     staff_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    """查询 pending 状态的微信任务。"""
-    get_optional_local_agent_context(request)
+    """查询 pending 状态的微信任务（Local Agent 专用，需 token 鉴权）。
+
+    Phase 7-FIX2：强制 Local Agent token 鉴权 + 商户隔离。
+    只返回当前 token 对应商户的 pending 任务。
+    """
+    ctx = require_local_agent_context(request)
     return wechat_task_service.get_pending_wechat_tasks(
         db,
         limit=limit,
         task_type=task_type,
         staff_id=staff_id,
+        merchant_id=ctx.merchant_id,
     )
 
 
@@ -139,16 +144,24 @@ def submit_wechat_task_result(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """回写微信任务执行结果。
+    """回写微信任务执行结果（Local Agent 专用，需 token 鉴权）。
+
+    Phase 7-FIX2：强制 Local Agent token 鉴权 + 商户隔离。
+    - 任务必须属于当前 token 对应商户，否则返回 404。
 
     回写规则：
     - sent=true && verified=true → status=sent
     - verified=false / partial_match / manual_review_required 会被 blocked
     - pasted=true && sent=false && verified=true → status=pasted
+    - paste_only 模式 sent=true → blocked（task_mode_send_mismatch）
     """
-    get_optional_local_agent_context(request)
+    ctx = require_local_agent_context(request)
     task = wechat_task_service.get_wechat_task(db, task_id)
     if not task:
+        raise HTTPException(404, "微信任务不存在")
+
+    # Phase 7-FIX2：商户隔离 — 任务必须属于当前 token 对应商户
+    if not wechat_task_service.task_belongs_to_merchant(task, ctx.merchant_id):
         raise HTTPException(404, "微信任务不存在")
 
     return wechat_task_service.submit_wechat_task_result(

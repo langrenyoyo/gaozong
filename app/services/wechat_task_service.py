@@ -97,14 +97,30 @@ def get_pending_wechat_tasks(
     limit: int = 20,
     task_type: str | None = None,
     staff_id: int | None = None,
+    merchant_id: str | None = None,
 ) -> list[WechatTask]:
-    """查询 pending 状态的任务。"""
+    """查询 pending 状态的任务。
+
+    Phase 7-FIX2：merchant_id 非空时按商户过滤（通过关联 lead/staff 的 merchant_id）。
+    """
+    from sqlalchemy import or_
+
     query = db.query(WechatTask).filter(WechatTask.status == "pending")
 
     if task_type is not None:
         query = query.filter(WechatTask.task_type == task_type)
     if staff_id is not None:
         query = query.filter(WechatTask.staff_id == staff_id)
+    if merchant_id is not None:
+        query = (
+            query
+            .outerjoin(DouyinLead, WechatTask.lead_id == DouyinLead.id)
+            .outerjoin(SalesStaff, WechatTask.staff_id == SalesStaff.id)
+            .filter(or_(
+                DouyinLead.merchant_id == merchant_id,
+                SalesStaff.merchant_id == merchant_id,
+            ))
+        )
 
     return query.order_by(WechatTask.id.asc()).limit(limit).all()
 
