@@ -66,7 +66,7 @@ def get_optional_local_agent_context(request: Request) -> LocalAgentAuthContext:
         if hmac.compare_digest(token, configured_token):
             return LocalAgentAuthContext(authenticated=True, merchant_id=merchant_id, auth_mode="token")
 
-    raise _auth_error(401, "LOCAL_AGENT_TOKEN_INVALID", "Local Agent token 无效")
+    raise _auth_error(403, "LOCAL_AGENT_TOKEN_INVALID", "Local Agent token 无效")
 
 
 def require_local_agent_context(request: Request) -> LocalAgentAuthContext:

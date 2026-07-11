@@ -9,60 +9,61 @@
 - POST /wechat-tasks/{id}/result 正确 token 但任务不属于本商户 → 404
 """
 
+import os
 import pytest
 
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+# 在导入 app 之前设置环境变量（直接赋值，覆盖 .env 已有值）
+os.environ["APP_ENV"] = "development"
+os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
+os.environ["LOCAL_AGENT_TOKENS"] = "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy"
+os.environ["NEWCAR_AUTH_ENABLED"] = "false"
+os.environ["NEWCAR_AUTH_MOCK_ENABLED"] = "true"
+
+from app.main import app  # 复用模块级已创建的 app 实例
 
 
-def _client(monkeypatch, **extra_env) -> TestClient:
+def _client() -> TestClient:
     """创建带 Local Agent 环境变量的测试客户端。"""
-    monkeypatch.setenv("APP_ENV", "development")
-    monkeypatch.setenv("LOCAL_AGENT_AUTH_REQUIRED", "true")
-    monkeypatch.setenv("LOCAL_AGENT_TOKENS", "merchant-a:token-a-xxx,merchant-b:token-b-yyy")
-    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
-    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
-    for key, value in extra_env.items():
-        monkeypatch.setenv(key, value)
-    return TestClient(create_app())
+    return TestClient(app)
 
 
 # ========== pending 端点鉴权 ==========
 
 
-def test_pending_no_token_returns_401(monkeypatch):
+def test_pending_no_token_returns_401():
     """无 token 时 GET /wechat-tasks/pending 返回 401。"""
-    client = _client(monkeypatch)
+    client = _client()
 
     resp = client.get("/wechat-tasks/pending")
 
     assert resp.status_code == 401
 
 
-def test_pending_wrong_token_returns_403(monkeypatch):
+def test_pending_wrong_token_returns_403():
     """错误 token 时 GET /wechat-tasks/pending 返回 403。"""
-    client = _client(monkeypatch)
+    client = _client()
 
     resp = client.get("/wechat-tasks/pending", headers={
-        "Authorization": "Bearer wrong-token",
+        "X-Local-Agent-Token": "wrong-token",
     })
 
     assert resp.status_code == 403
 
 
-def test_pending_valid_token_returns_200(monkeypatch):
+def test_pending_valid_token_returns_200():
     """正确 token 时 GET /wechat-tasks/pending 返回 200。"""
-    client = _client(monkeypatch)
+    client = _client()
 
     resp = client.get("/wechat-tasks/pending", headers={
-        "Authorization": "Bearer token-a-xxx",
+        "X-Local-Agent-Token": "token-a-xxx",
     })
 
     assert resp.status_code == 200
 
 
-def test_pending_filters_by_merchant(monkeypatch):
+def test_pending_filters_by_merchant():
     """正确 token 只返回本商户的 pending 任务。"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
@@ -111,9 +112,7 @@ def test_pending_filters_by_merchant(monkeypatch):
     finally:
         db.close()
 
-    # 需要 monkeypatch 数据库引擎
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
-    # 无法直接替换已创建的 app 的数据库，改为直接测试 service 层
+    # 直接测试 service 层商户过滤（独立内存库，不依赖 app 的数据库）
     # 验证 service 层商户过滤
     db2 = TestSession()
     try:
@@ -137,9 +136,9 @@ def test_pending_filters_by_merchant(monkeypatch):
 # ========== result 端点鉴权 ==========
 
 
-def test_result_no_token_returns_401(monkeypatch):
+def test_result_no_token_returns_401():
     """无 token 时 POST /wechat-tasks/1/result 返回 401。"""
-    client = _client(monkeypatch)
+    client = _client()
 
     resp = client.post("/wechat-tasks/1/result", json={
         "success": True,
@@ -151,9 +150,9 @@ def test_result_no_token_returns_401(monkeypatch):
     assert resp.status_code == 401
 
 
-def test_result_wrong_token_returns_403(monkeypatch):
+def test_result_wrong_token_returns_403():
     """错误 token 时 POST /wechat-tasks/1/result 返回 403。"""
-    client = _client(monkeypatch)
+    client = _client()
 
     resp = client.post("/wechat-tasks/1/result", json={
         "success": True,
@@ -161,13 +160,13 @@ def test_result_wrong_token_returns_403(monkeypatch):
         "pasted": True,
         "sent": False,
     }, headers={
-        "Authorization": "Bearer wrong-token",
+        "X-Local-Agent-Token": "wrong-token",
     })
 
     assert resp.status_code == 403
 
 
-def test_result_wrong_merchant_token_returns_404(monkeypatch):
+def test_result_wrong_merchant_token_returns_404():
     """正确 token 但任务不属于本商户 → task_belongs_to_merchant 返回 False。"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
@@ -207,7 +206,7 @@ def test_result_wrong_merchant_token_returns_404(monkeypatch):
         db.close()
 
 
-def test_result_valid_token_same_merchant_returns_200(monkeypatch):
+def test_result_valid_token_same_merchant_returns_200():
     """正确 token + 同商户任务 → task_belongs_to_merchant 返回 True。"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker

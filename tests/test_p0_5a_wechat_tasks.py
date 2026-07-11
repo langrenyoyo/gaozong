@@ -19,7 +19,8 @@ from app.models import (
 from app.services import wechat_task_service
 
 # Phase 7-FIX2：Local Agent token 鉴权所需的环境变量
-os.environ.setdefault("LOCAL_AGENT_TOKENS", "demo_merchant_001:local-agent-dev-token")
+# 使用 dev-merchant 匹配 mock auth context 的默认 merchant_id
+os.environ["LOCAL_AGENT_TOKENS"] = "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy"
 
 # 创建测试应用和数据库
 app = create_app()
@@ -32,6 +33,7 @@ _AGENT_HEADERS = {"X-Local-Agent-Token": "local-agent-dev-token"}
 @pytest.fixture(autouse=True)
 def _setup_db():
     """每个测试前重建所有表，测试后清理。"""
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
     # 清理相关表
@@ -97,14 +99,17 @@ def test_direct_create_disabled_single_send():
 
 def test_get_pending_wechat_tasks():
     """查询 pending 任务列表。"""
-    # 创建 2 个任务（通过 service 层）
+    # 创建 2 个任务（通过 service 层，带商户上下文）
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="task-a", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="task-b", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         db.commit()
     finally:
@@ -120,12 +125,15 @@ def test_get_pending_wechat_tasks():
 
 
 def test_get_wechat_task_detail():
-    """查询任务详情。"""
+    """查询任务详情（需真实 lead/staff 关联以通过 AND 商户过滤）。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
+        lead_id = lead.id
+        staff_id = staff.id
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="detail-test", mode="paste_only",
-            lead_id=1, staff_id=2,
+            lead_id=lead_id, staff_id=staff_id,
         )
         task_id = task.id
         db.commit()
@@ -138,8 +146,33 @@ def test_get_wechat_task_detail():
     assert data["id"] == task_id
     assert data["target_nickname"] == "Aw3"
     assert data["message"] == "detail-test"
-    assert data["lead_id"] == 1
-    assert data["staff_id"] == 2
+    assert data["lead_id"] == lead_id
+    assert data["staff_id"] == staff_id
+
+
+def _setup_merchant_context(db):
+    """为简单测试创建最小商户上下文（staff + lead with merchant_id）。"""
+    staff = SalesStaff(
+        name="test", wechat_nickname="Aw3", status="active",
+        merchant_id="dev-merchant",
+    )
+    db.add(staff)
+    db.commit()
+    db.refresh(staff)
+    lead = DouyinLead(
+        source="douyin",
+        source_id=f"test_{datetime.now().timestamp()}",
+        customer_name="test",
+        content="test",
+        status="assigned",
+        assigned_staff_id=staff.id,
+        assigned_at=datetime.now(),
+        merchant_id="dev-merchant",
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    return staff, lead
 
 
 # ========== 结果回写 ==========
@@ -148,8 +181,10 @@ def test_submit_result_pasted_success():
     """pasted=true + sent=false + verified=true → status=pasted。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="pasted-test", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -180,8 +215,10 @@ def test_submit_result_sent_true_marks_sent():
     """P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：放开 sent 门禁，sent=true + verified → status=sent。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="sent-ok", mode="single_send",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -207,8 +244,10 @@ def test_submit_result_blocks_verified_false():
     """verified=false → blocked。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="unverified", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -233,8 +272,10 @@ def test_submit_result_blocks_partial_match():
     """partial_match=true → blocked。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="partial", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -259,8 +300,10 @@ def test_submit_result_blocks_manual_review_required():
     """manual_review_required=true → blocked。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="manual", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -285,8 +328,10 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
     """success=false 时 failure_stage 不能为空，为空则填 unknown_failure。"""
     db = SessionLocal()
     try:
+        staff1, lead1 = _setup_merchant_context(db)
         task1 = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="fail-test", mode="paste_only",
+            lead_id=lead1.id, staff_id=staff1.id,
         )
         task_id = task1.id
         db.commit()
@@ -307,8 +352,10 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
     # 创建另一个任务，提供 failure_stage
     db2 = SessionLocal()
     try:
+        staff2, lead2 = _setup_merchant_context(db2)
         task2 = wechat_task_service.create_wechat_task(
             db2, target_nickname="Aw3", message="fail-with-stage", mode="paste_only",
+            lead_id=lead2.id, staff_id=staff2.id,
         )
         task_id2 = task2.id
         db2.commit()
@@ -329,8 +376,10 @@ def test_submit_result_saves_raw_result():
     """raw_result 必须保存。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="raw-test", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -360,8 +409,10 @@ def test_submit_result_keeps_sent_at_none():
     """pasted 成功后 sent_at 必须保持 None。"""
     db = SessionLocal()
     try:
+        staff, lead = _setup_merchant_context(db)
         task = wechat_task_service.create_wechat_task(
             db, target_nickname="Aw3", message="sent-at-none", mode="paste_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()
@@ -387,7 +438,10 @@ def test_submit_result_keeps_sent_at_none():
 
 def _create_staff_and_lead(db):
     """创建销售 + 已分配线索 + pending reply_check，返回 (staff, lead, check)。"""
-    staff = SalesStaff(name="测试销售", wechat_nickname="Aw3", status="active")
+    staff = SalesStaff(
+        name="测试销售", wechat_nickname="Aw3", status="active",
+        merchant_id="dev-merchant",
+    )
     db.add(staff)
     db.commit()
     db.refresh(staff)
@@ -400,6 +454,7 @@ def _create_staff_and_lead(db):
         status="assigned",
         assigned_staff_id=staff.id,
         assigned_at=datetime.now(),
+        merchant_id="dev-merchant",
     )
     db.add(lead)
     db.commit()
@@ -668,7 +723,7 @@ def test_submit_pasted_does_not_change_lead_status():
         task_id = task.id
         db.commit()
 
-        client.post(f"/wechat-tasks/{task_id}/result", json={
+        client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "pasted": True,
@@ -736,13 +791,15 @@ def test_non_notify_sales_task_no_notification():
     """P0-MAIN-5A：task_type != notify_sales 时不联动 lead_notification。"""
     db = SessionLocal()
     try:
-        # 创建 detect_reply task（不带 lead_id/staff_id）
+        staff, lead = _setup_merchant_context(db)
+        # 创建 detect_reply task（不带 lead_id/staff_id 以验证不联动通知）
         task = wechat_task_service.create_wechat_task(
             db,
             task_type="detect_reply",
             target_nickname="Aw3",
             message="",
             mode="read_only",
+            lead_id=lead.id, staff_id=staff.id,
         )
         task_id = task.id
         db.commit()

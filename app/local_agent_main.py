@@ -69,6 +69,8 @@ HEARTBEAT_INTERVAL_SECONDS = 10
 AGENT_CLIENT_ID = "local-agent-default"
 AGENT_DISPLAY_NAME = "小高AI微信助手"
 DEFAULT_TASK_POLL_INTERVAL_SECONDS = 5.0
+# Phase 7-FIX2：Local Agent 与 9000 通信的机器 token
+_LOCAL_AGENT_TOKEN: str | None = os.getenv("LOCAL_AGENT_TOKEN") or None
 # 允许跨域来源
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
@@ -147,13 +149,22 @@ def get_route_paths(app: FastAPI) -> list[str]:
 # ========== P0-MAIN-5B：HTTP 辅助函数 ==========
 
 def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> dict:
-    """HTTP GET 请求，返回 {"ok": bool, "status": int, "json": any, "error": str|None}。"""
+    """HTTP GET 请求（Phase 7-FIX2：统一携带 X-Local-Agent-Token）。
+
+    返回 {"ok": bool, "status": int, "json": any, "error": str|None}。
+    token 未配置时明确失败，不发起匿名请求。
+    """
     import urllib.request
     import urllib.parse
+    if not _LOCAL_AGENT_TOKEN:
+        return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(
+            url, method="GET",
+            headers={"X-Local-Agent-Token": _LOCAL_AGENT_TOKEN},
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
             return {"ok": True, "status": resp.status, "json": __import__("json").loads(body), "error": None}
@@ -162,13 +173,22 @@ def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> di
 
 
 def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
-    """HTTP POST JSON 请求，返回 {"ok": bool, "status": int, "json": any, "error": str|None}。"""
+    """HTTP POST JSON 请求（Phase 7-FIX2：统一携带 X-Local-Agent-Token）。
+
+    返回 {"ok": bool, "status": int, "json": any, "error": str|None}。
+    token 未配置时明确失败，不发起匿名请求。
+    """
     import urllib.request
+    if not _LOCAL_AGENT_TOKEN:
+        return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     body = __import__("json").dumps(data, ensure_ascii=False).encode("utf-8")
     try:
         req = urllib.request.Request(
             url, data=body, method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-Local-Agent-Token": _LOCAL_AGENT_TOKEN,
+            },
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_body = resp.read().decode("utf-8")

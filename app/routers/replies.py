@@ -6,7 +6,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from app.auth.local_agent_auth import get_optional_local_agent_context
+from app.auth.local_agent_auth import require_local_agent_context
 from app.config import APP_ENV
 from app.database import get_db
 from app.schemas import (
@@ -90,8 +90,34 @@ def agent_write_back(data: AgentWriteBackRequest, request: Request, db: Session 
     4. unknown 消息命中关键词 → manual_review
     5. 未命中 → pending
     6. 不伪造 replied，不修改 sent_at
+
+    Phase 7-FIX2：强制 Local Agent token 鉴权 + 商户隔离。
+    - lead、staff、task 必须同属 token 商户。
+    - payload ID 与 task 关联不一致时拒绝。
     """
-    get_optional_local_agent_context(request)
+    from app.models import DouyinLead, SalesStaff, WechatTask
+
+    ctx = require_local_agent_context(request)
+
+    # Phase 7-FIX2：验证 task、lead、staff 同属 token 商户
+    if data.task_id:
+        task = db.query(WechatTask).filter(WechatTask.id == data.task_id).first()
+        if not task:
+            raise HTTPException(404, {"code": "TASK_NOT_FOUND", "message": "微信任务不存在"})
+        if task.lead_id != data.lead_id or task.staff_id != data.staff_id:
+            raise HTTPException(
+                400,
+                {"code": "PAYLOAD_TASK_MISMATCH", "message": "payload 与 task 关联不一致"},
+            )
+
+    lead = db.query(DouyinLead).filter(DouyinLead.id == data.lead_id).first()
+    if not lead or lead.merchant_id != ctx.merchant_id:
+        raise HTTPException(404, {"code": "LEAD_NOT_FOUND", "message": "线索不存在或不属于当前商户"})
+
+    staff = db.query(SalesStaff).filter(SalesStaff.id == data.staff_id).first()
+    if not staff or staff.merchant_id != ctx.merchant_id:
+        raise HTTPException(404, {"code": "STAFF_NOT_FOUND", "message": "销售不存在或不属于当前商户"})
+
     result = wechat_ui_reply_service.agent_write_back_reply(
         db=db,
         lead_id=data.lead_id,

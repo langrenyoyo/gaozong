@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
-from app.auth.local_agent_auth import get_optional_local_agent_context, require_local_agent_context
+from app.auth.local_agent_auth import require_local_agent_context
 from app.database import get_db
 from app.schemas import (
     WechatTaskCreateRequest,
@@ -117,6 +117,25 @@ def get_pending_wechat_tasks(
         staff_id=staff_id,
         merchant_id=ctx.merchant_id,
     )
+
+
+@router.get("/agent/{task_id}", response_model=WechatTaskResponse)
+def get_agent_task_detail(
+    task_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """查询微信任务详情（Local Agent 机器接口，需 token 鉴权 + 商户隔离）。
+
+    Phase 7-FIX2：使用 INNER JOIN + AND 双重过滤，
+    关联缺失或任一侧跨商户返回 404。
+    路由声明在通用 /{task_id} 之前，防止被动态路由遮蔽。
+    """
+    ctx = require_local_agent_context(request)
+    task = wechat_task_service.get_agent_task(db, task_id, ctx.merchant_id)
+    if not task:
+        raise HTTPException(404, "微信任务不存在")
+    return task
 
 
 @router.get("/{task_id}", response_model=WechatTaskResponse)
