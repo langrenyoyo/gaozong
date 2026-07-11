@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import pytest
 from datetime import datetime
 from fastapi.testclient import TestClient
@@ -17,9 +18,15 @@ from app.models import (
 )
 from app.services import wechat_task_service
 
+# Phase 7-FIX2：Local Agent token 鉴权所需的环境变量
+os.environ.setdefault("LOCAL_AGENT_TOKENS", "demo_merchant_001:local-agent-dev-token")
+
 # 创建测试应用和数据库
 app = create_app()
 client = TestClient(app)
+
+# Local Agent 鉴权请求头（Phase 7-FIX2 要求所有 wechat-tasks 端点携带 token）
+_AGENT_HEADERS = {"X-Local-Agent-Token": "local-agent-dev-token"}
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +110,7 @@ def test_get_pending_wechat_tasks():
     finally:
         db.close()
 
-    resp = client.get("/wechat-tasks/pending")
+    resp = client.get("/wechat-tasks/pending", headers=_AGENT_HEADERS)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
@@ -149,7 +156,7 @@ def test_submit_result_pasted_success():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "partial_match": False,
@@ -181,7 +188,7 @@ def test_submit_result_sent_true_marks_sent():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "pasted": True,
@@ -208,7 +215,7 @@ def test_submit_result_blocks_verified_false():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": False,
         "partial_match": False,
@@ -234,7 +241,7 @@ def test_submit_result_blocks_partial_match():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "partial_match": True,
@@ -260,7 +267,7 @@ def test_submit_result_blocks_manual_review_required():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "partial_match": False,
@@ -287,7 +294,7 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
         db.close()
 
     # 不提供 failure_stage
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": False,
         "pasted": False,
         "sent": False,
@@ -308,7 +315,7 @@ def test_submit_result_failed_requires_failure_stage_or_sets_unknown():
     finally:
         db2.close()
 
-    resp2 = client.post(f"/wechat-tasks/{task_id2}/result", json={
+    resp2 = client.post(f"/wechat-tasks/{task_id2}/result", headers=_AGENT_HEADERS, json={
         "success": False,
         "failure_stage": "ocr_timeout",
         "pasted": False,
@@ -331,7 +338,7 @@ def test_submit_result_saves_raw_result():
         db.close()
 
     raw = {"ocr_text": "AW3", "confidence": 0.95, "steps": ["focus", "ocr", "paste"]}
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "partial_match": False,
@@ -361,7 +368,7 @@ def test_submit_result_keeps_sent_at_none():
     finally:
         db.close()
 
-    resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+    resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
         "success": True,
         "verified": True,
         "partial_match": False,
@@ -431,7 +438,7 @@ def test_submit_pasted_creates_lead_notification():
         db.commit()
 
         # 回写 pasted 结果
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "partial_match": False,
@@ -477,7 +484,7 @@ def test_submit_pasted_sets_auto_detect_target():
         task_id = task.id
         db.commit()
 
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "pasted": True,
@@ -515,7 +522,7 @@ def test_submit_pasted_no_reply_check_no_auto_detect():
         task_id = task.id
         db.commit()
 
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "pasted": True,
@@ -550,7 +557,7 @@ def test_submit_failed_creates_lead_notification_failed():
         task_id = task.id
         db.commit()
 
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": False,
             "failure_stage": "search_focus_not_verified",
             "pasted": False,
@@ -587,7 +594,7 @@ def test_submit_blocked_creates_lead_notification_blocked():
         task_id = task.id
         db.commit()
 
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": False,
             "pasted": False,
@@ -622,7 +629,7 @@ def test_submit_sent_true_creates_sent_notification():
         task_id = task.id
         db.commit()
 
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "pasted": True,
@@ -706,7 +713,7 @@ def test_submit_result_updates_existing_notification():
         db.commit()
 
         # 第二次回写 pasted
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "pasted": True,
@@ -741,7 +748,7 @@ def test_non_notify_sales_task_no_notification():
         db.commit()
 
         # P1-AUTO-1：detect_reply 使用 detected_status 而非 pasted
-        resp = client.post(f"/wechat-tasks/{task_id}/result", json={
+        resp = client.post(f"/wechat-tasks/{task_id}/result", headers=_AGENT_HEADERS, json={
             "success": True,
             "verified": True,
             "detected_status": "replied",
