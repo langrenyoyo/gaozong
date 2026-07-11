@@ -16,6 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck, DouyinLead, SalesStaff
+from app.services.sales_feedback_parser import parse_and_persist_sales_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -771,15 +772,17 @@ def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> 
     1. 更新 ReplyCheck.check_status 为 replied（如果有 reply_check_id）
     2. 更新 LeadNotification.send_status 为 replied
     3. 回填 LeadNotification.check_id（如果为空）
-    4. 失败时只记日志，不抛异常，不影响 task 状态
+    4. Phase 7：尝试解析销售反馈固定模板并持久化（失败不影响 replied 状态）
+    5. 失败时只记日志，不抛异常，不影响 task 状态
     """
     try:
+        reply_text = _extract_reply_from_raw(task.raw_result)
         # 更新 ReplyCheck
         if task.reply_check_id:
             check = db.query(ReplyCheck).filter(ReplyCheck.id == task.reply_check_id).first()
             if check and check.check_status == "pending":
                 check.check_status = "replied"
-                check.reply_content = _extract_reply_from_raw(task.raw_result)
+                check.reply_content = reply_text
                 logger.info(
                     "_update_check_and_notification_on_replied: "
                     "check #%d 状态更新为 replied", check.id,
@@ -806,10 +809,54 @@ def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> 
                     "_update_check_and_notification_on_replied: "
                     "LeadNotification #%d send_status=replied", notif.id,
                 )
+
+        # Phase 7：尝试解析销售反馈固定模板；失败只记日志，不影响 replied 状态流转
+        if reply_text:
+            _try_parse_sales_feedback_from_reply(db, task, reply_text)
     except Exception as exc:
         logger.error(
             "_update_check_and_notification_on_replied: 联动更新失败（不影响 task）: %s",
             exc,
+        )
+
+
+def _try_parse_sales_feedback_from_reply(
+    db: Session, task: WechatTask, reply_text: str | None,
+) -> None:
+    """Phase 7：尝试从销售回复中解析固定模板反馈并持久化。
+
+    只识别【线索反馈】/【线索更新】/【每日线索总结】三类模板头；
+    非模板文本直接跳过，不接 LLM、不做自由文本猜测。
+    解析失败只记日志，不影响 task/ReplyCheck/LeadNotification 原有状态流转。
+    """
+    if not reply_text or "【" not in reply_text:
+        return
+    try:
+        merchant_id: str | None = None
+        if task.lead_id:
+            lead = db.query(DouyinLead).filter(DouyinLead.id == task.lead_id).first()
+            if lead:
+                merchant_id = lead.merchant_id
+        if not merchant_id:
+            logger.warning(
+                "sales_feedback_parse stage=skipped reason=merchant_missing task_id=%s",
+                task.id,
+            )
+            return
+        result = parse_and_persist_sales_feedback(
+            db,
+            merchant_id=merchant_id,
+            raw_text=reply_text,
+            lead_id=task.lead_id,
+            staff_id=task.staff_id,
+        )
+        logger.info(
+            "sales_feedback_parse stage=done task_id=%s kind=%s status=%s error=%s",
+            task.id, result.kind, result.parse_status, result.parse_error,
+        )
+    except Exception as exc:
+        logger.exception(
+            "sales_feedback_parse stage=failed task_id=%s error=%s", task.id, exc,
         )
 
 

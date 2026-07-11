@@ -153,3 +153,68 @@ def test_parse_api_skips_non_template_text():
     body = response.json()
     assert body["data"]["kind"] == "none"
     assert body["data"]["parse_status"] == "skipped"
+
+
+def test_detect_reply_replied_persists_sales_feedback_and_updates_notification():
+    """Phase 7 Task 5：detect_reply 检测到 replied 时联动解析销售反馈模板。
+
+    走 service 层 submit_wechat_task_result（避开 Local Agent auth 复杂性），验证：
+    1. 销售回复命中【线索反馈】模板 → SalesLeadFeedback 入库
+    2. ReplyCheck.check_status 联动 replied
+    3. LeadNotification.send_status 联动 replied
+    解析失败不应破坏 ReplyCheck/LeadNotification 原有状态流转。
+    """
+    from app.models import DouyinLead, LeadNotification, ReplyCheck, SalesStaff, WechatTask
+    from app.services.wechat_task_service import submit_wechat_task_result
+
+    db = TestSession()
+    try:
+        staff = SalesStaff(id=3, name="张三", wechat_nickname="Aw3", merchant_id="merchant-a")
+        db.add(staff)
+        lead = DouyinLead(
+            id=10, merchant_id="merchant-a", assigned_staff_id=3,
+            account_open_id="acc-10", conversation_short_id="conv-10",
+        )
+        db.add(lead)
+        check = ReplyCheck(id=1, lead_id=10, staff_id=3, check_status="pending")
+        db.add(check)
+        notif = LeadNotification(
+            id=1, lead_id=10, staff_id=3, check_id=1,
+            notification_text="线索通知", send_status="composed",
+        )
+        db.add(notif)
+        task = WechatTask(
+            id=1, task_type="detect_reply", lead_id=10, staff_id=3,
+            reply_check_id=1, mode="read_only", status="pending",
+        )
+        db.add(task)
+        db.commit()
+
+        # 检测到 replied，raw_result.matched_reply 为线索反馈模板
+        submit_wechat_task_result(
+            db, task,
+            success=True,
+            verified=True,
+            detected_status="replied",
+            raw_result={"matched_reply": LEAD_FEEDBACK_TEXT},
+        )
+
+        # 销售反馈入库
+        fb = db.query(SalesLeadFeedback).filter_by(
+            merchant_id="merchant-a", feedback_no="XGF-10-3",
+        ).one()
+        assert fb.lead_id == 10
+        assert fb.staff_id == 3
+        assert fb.wechat_status == "已通过"
+        assert fb.intention_level == "高意向"
+
+        # ReplyCheck 联动 replied
+        db.refresh(check)
+        assert check.check_status == "replied"
+        assert "【线索反馈】" in (check.reply_content or "")
+
+        # LeadNotification 联动 replied
+        db.refresh(notif)
+        assert notif.send_status == "replied"
+    finally:
+        db.close()
