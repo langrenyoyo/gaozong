@@ -21,6 +21,18 @@ export interface AiReplyDecisionLogListItem {
   upstream_auto_send: boolean;
   final_auto_send: boolean;
   decision_version?: string | null;
+  // Phase 4：发送流水字段，列表展示违禁词替换后的实发内容摘要与发送状态
+  send_record_id?: number | null;
+  sent_content_summary?: string | null;
+  send_status?: string | null;
+  send_source?: string | null;
+  auto_send?: boolean;
+  manual_confirmed?: boolean;
+  upstream_msg_id?: string | null;
+  sent_at?: string | null;
+  model?: string | null;
+  is_effective?: boolean | null;
+  effectiveness_reason?: string | null;
   created_at?: string | null;
 }
 
@@ -30,6 +42,8 @@ export interface AiReplyDecisionLogDetail extends AiReplyDecisionLogListItem {
   rag_sources?: AiReplyDecisionSource[] | null;
   source_chunks?: AiReplyDecisionSource[] | null;
   allowed_category_keys?: string[] | null;
+  // 详情返回违禁词替换后的最终实发内容（脱敏后完整展示）
+  sent_content?: string | null;
 }
 
 export interface AiReplyDecisionSource {
@@ -62,6 +76,16 @@ export interface AiReplyDecisionLogQueryParams {
   date_from?: string;
   date_to?: string;
   keyword?: string;
+  // Phase 4：超管可按商户筛选；新增发送状态与有效性筛选
+  merchant_id?: string;
+  send_status?: string;
+  is_effective?: boolean | null;
+}
+
+// 超管人工标记 AI 实发回复有效性补丁
+export interface AiReplyDecisionEffectivenessPatch {
+  is_effective?: boolean | null;
+  effectiveness_reason?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -98,6 +122,9 @@ function buildQueryParams(query: AiReplyDecisionLogQueryParams = {}): URLSearchP
   appendString(params, "date_from", query.date_from);
   appendString(params, "date_to", query.date_to);
   appendString(params, "keyword", query.keyword);
+  appendString(params, "merchant_id", query.merchant_id);
+  appendString(params, "send_status", query.send_status);
+  appendBoolean(params, "is_effective", query.is_effective);
   return params;
 }
 
@@ -114,6 +141,18 @@ export async function getAiReplyDecisionLogs(
 export async function getAiReplyDecisionLogDetail(id: number | string): Promise<AiReplyDecisionLogDetail> {
   const response = (await apiClient.get(
     `/ai-reply-decision-logs/${encodeURIComponent(String(id))}`,
+  )) as unknown as ApiResponse<AiReplyDecisionLogDetail>;
+  return response.data;
+}
+
+// 超管标记 AI 实发回复有效性，返回更新后的详情
+export async function patchAiReplyDecisionLogEffectiveness(
+  id: number | string,
+  payload: AiReplyDecisionEffectivenessPatch,
+): Promise<AiReplyDecisionLogDetail> {
+  const response = (await apiClient.patch(
+    `/ai-reply-decision-logs/${encodeURIComponent(String(id))}/effectiveness`,
+    payload,
   )) as unknown as ApiResponse<AiReplyDecisionLogDetail>;
   return response.data;
 }

@@ -20,6 +20,7 @@ export type {
 } from "../../api/douyinAiCsClient";
 
 export type {
+  AiReplyDecisionEffectivenessPatch,
   AiReplyDecisionLogDetail,
   AiReplyDecisionLogListData,
   AiReplyDecisionLogListItem,

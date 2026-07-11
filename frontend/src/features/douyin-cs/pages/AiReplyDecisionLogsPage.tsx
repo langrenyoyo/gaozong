@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircleIcon,
   BotIcon,
@@ -14,6 +14,7 @@ import {
 import {
   getAiReplyDecisionLogDetail,
   getAiReplyDecisionLogs,
+  patchAiReplyDecisionLogEffectiveness,
   type AiReplyDecisionLogDetail,
   type AiReplyDecisionLogListItem,
   type AiReplyDecisionSource,
@@ -81,6 +82,27 @@ function sourceScore(value?: number | null): string {
   return value <= 1 ? value.toFixed(3) : value.toFixed(1);
 }
 
+// Phase 4：发送状态与有效性展示 helper
+function sendStatusLabel(status?: string | null): string {
+  if (status === "sent") return "已发送";
+  if (status === "failed") return "发送失败";
+  if (status === "pending") return "待发送";
+  return status || "未知";
+}
+
+function sendStatusTone(status?: string | null): "slate" | "amber" | "red" | "emerald" {
+  if (status === "sent") return "emerald";
+  if (status === "failed") return "red";
+  if (status === "pending") return "amber";
+  return "slate";
+}
+
+function effectivenessLabel(value?: boolean | null): string {
+  if (value === true) return "有效";
+  if (value === false) return "无效";
+  return "未标记";
+}
+
 function Chip({
   children,
   tone = "slate",
@@ -124,11 +146,13 @@ function DetailModal({
   loading,
   error,
   onClose,
+  onMarkEffectiveness,
 }: {
   detail: AiReplyDecisionLogDetail | null;
   loading: boolean;
   error: string | null;
   onClose: () => void;
+  onMarkEffectiveness: (id: number, isEffective: boolean) => void;
 }) {
   const riskFlags = safeArray(detail?.risk_flags);
   const tags = safeArray(detail?.tags);
@@ -141,8 +165,8 @@ function DetailModal({
       <div className="flex max-h-[88vh] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">AI回复记录详情</h2>
-            <p className="mt-1 text-xs text-[#8b95a6]">仅记录 AI 回复建议，不代表自动发送</p>
+            <h2 className="text-base font-bold text-[#1a1f2e]">AI实发记录详情</h2>
+            <p className="mt-1 text-xs text-[#8b95a6]">展示 AI 自动回复和 AI 辅助发送的最终实发内容</p>
           </div>
           <button
             onClick={onClose}
@@ -163,16 +187,17 @@ function DetailModal({
             </div>
           ) : detail ? (
             <div className="space-y-4">
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-emerald-800">
+              <div className="rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-[#1a1f2e]">
                   <ShieldCheckIcon size={15} />
-                  <span>仅记录 AI 回复建议，不会自动发送</span>
-                  <Chip tone="emerald">auto_send=false</Chip>
+                  <span>内容来自发送流水，已包含发送前统一处理结果</span>
+                  <Chip tone={sendStatusTone(detail.send_status)}>{sendStatusLabel(detail.send_status)}</Chip>
+                  {detail.is_effective === true || detail.is_effective === false ? (
+                    <Chip tone={detail.is_effective ? "emerald" : "red"}>{effectivenessLabel(detail.is_effective)}</Chip>
+                  ) : null}
                 </div>
-                {detail.upstream_auto_send ? (
-                  <div className="mt-2 text-xs font-semibold text-amber-700">
-                    上游曾请求自动发送，已被系统关闭。
-                  </div>
+                {detail.effectiveness_reason ? (
+                  <div className="mt-2 text-xs text-[#64748b]">标记原因：{detail.effectiveness_reason}</div>
                 ) : null}
               </div>
 
@@ -182,8 +207,16 @@ function DetailModal({
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-[#475467]">{detail.latest_message || "-"}</p>
                 </section>
                 <section className="rounded-xl border border-[#e4e8f0] bg-white p-4">
-                  <h3 className="text-xs font-bold text-[#1a1f2e]">AI建议回复</h3>
-                  <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-[#475467]">{detail.reply_text || "-"}</p>
+                  <h3 className="text-xs font-bold text-[#1a1f2e]">AI实发内容</h3>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-[#475467]">
+                    {detail.sent_content || "-"}
+                  </p>
+                  {detail.reply_text ? (
+                    <div className="mt-3 border-t border-[#f0f2f7] pt-2">
+                      <div className="text-[10px] font-semibold text-[#8b95a6]">模型原始回复</div>
+                      <div className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#8b95a6]">{detail.reply_text}</div>
+                    </div>
+                  ) : null}
                 </section>
               </div>
 
@@ -242,8 +275,8 @@ function DetailModal({
                 <div className="mt-3 grid gap-2 text-xs text-[#475467] md:grid-cols-2">
                   <div>RAG：{detail.rag_used ? "已使用" : "未使用"}</div>
                   <div>LLM：{detail.llm_used ? "已使用" : "未使用"}</div>
-                  <div>上游 auto_send：{detail.upstream_auto_send ? "true" : "false"}</div>
-                  <div>最终 auto_send：{detail.final_auto_send ? "true" : "false"}</div>
+                  <div>模型：{detail.model || "-"}</div>
+                  <div>发送来源：{detail.send_source || "-"}</div>
                   <div>决策版本：{detail.decision_version || "-"}</div>
                   <div>创建时间：{formatDateTimeLocal(detail.created_at)}</div>
                 </div>
@@ -259,7 +292,23 @@ function DetailModal({
           ) : null}
         </div>
 
-        <div className="flex justify-end border-t border-[#e4e8f0] px-5 py-4">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
+          {detail ? (
+            <>
+              <button
+                onClick={() => void onMarkEffectiveness(detail.id, true)}
+                className="h-9 rounded-xl bg-emerald-600 px-4 text-xs font-semibold text-white hover:bg-emerald-700"
+              >
+                标记有效
+              </button>
+              <button
+                onClick={() => void onMarkEffectiveness(detail.id, false)}
+                className="h-9 rounded-xl bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700"
+              >
+                标记无效
+              </button>
+            </>
+          ) : null}
           <button
             onClick={onClose}
             className="h-9 rounded-xl border border-[#e4e8f0] bg-white px-4 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
@@ -336,6 +385,31 @@ export default function AiReplyDecisionLogsPage() {
       .finally(() => setDetailLoading(false));
   }, [detailId]);
 
+  // 超管人工标记 AI 实发回复有效性
+  const markEffectiveness = async (id: number, isEffective: boolean) => {
+    const reason = window.prompt(isEffective ? "请输入标记为有效的原因" : "请输入标记为无效的原因");
+    if (reason === null) return;
+    const text = reason.trim();
+    if (!text) {
+      setDetailError("请填写标记原因");
+      return;
+    }
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      const updated = await patchAiReplyDecisionLogEffectiveness(id, {
+        is_effective: isEffective,
+        effectiveness_reason: text,
+      });
+      setDetail(updated);
+      await loadLogs();
+    } catch (err) {
+      setDetailError(resolveErrorMessage(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
   const hasFilters = useMemo(
     () =>
       Boolean(keyword.trim()) ||
@@ -369,9 +443,9 @@ export default function AiReplyDecisionLogsPage() {
             <BotIcon size={22} />
           </div>
           <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI回复记录</h1>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI实发记录</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">
-              展示 AI 小高生成的结构化回复建议与人工确认原因，仅作审计查看，不会自动发送
+              展示 AI 自动回复和 AI 辅助发送的最终实发内容，支持超管标记回复有效性
             </p>
           </div>
         </div>
@@ -385,8 +459,8 @@ export default function AiReplyDecisionLogsPage() {
         </button>
       </header>
 
-      <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-xs font-semibold text-emerald-800">
-        仅记录 AI 回复建议，不代表自动发送。系统最终保持 auto_send=false。
+      <div className="border-b border-[#dbe3ef] bg-[#f8fafc] px-5 py-3 text-xs font-semibold text-[#475467]">
+        内容来自发送流水，已包含发送前统一处理结果。
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#e4e8f0] bg-white px-5 py-3">
@@ -398,7 +472,7 @@ export default function AiReplyDecisionLogsPage() {
               setKeyword(event.target.value);
               setPage(1);
             }}
-            placeholder="搜索客户消息或建议回复"
+            placeholder="搜索客户消息或实发内容"
             className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
           />
         </label>
@@ -447,7 +521,7 @@ export default function AiReplyDecisionLogsPage() {
           <div className="grid h-full place-items-center text-center">
             <div>
               <BotIcon size={30} className="mx-auto text-[#cbd5e1]" />
-              <p className="mt-2 text-xs text-[#8b95a6]">暂无 AI 回复记录</p>
+              <p className="mt-2 text-xs text-[#8b95a6]">暂无 AI 实发记录</p>
             </div>
           </div>
         ) : (
@@ -455,7 +529,7 @@ export default function AiReplyDecisionLogsPage() {
             <thead className="bg-[#f8fafc] text-[#64748b]">
               <tr>
                 <th className="w-[18%] px-4 py-3 font-semibold">客户消息</th>
-                <th className="w-[22%] px-4 py-3 font-semibold">AI建议回复</th>
+                <th className="w-[22%] px-4 py-3 font-semibold">AI实发内容</th>
                 <th className="w-[10%] px-4 py-3 font-semibold">意图</th>
                 <th className="w-[10%] px-4 py-3 font-semibold">意向</th>
                 <th className="w-[10%] px-4 py-3 font-semibold">人工确认</th>
@@ -469,7 +543,7 @@ export default function AiReplyDecisionLogsPage() {
                 const riskFlags = safeArray(item.risk_flags);
                 const tags = safeArray(item.tags);
                 return (
-                  <tr key={item.id} className="border-t border-[#f0f2f7] hover:bg-[#f8fafc]">
+                  <tr key={item.send_record_id || item.id} className="border-t border-[#f0f2f7] hover:bg-[#f8fafc]">
                     <td className="px-4 py-3">
                       <div className="line-clamp-2 text-[#374151]" title={item.latest_message_summary || undefined}>
                         {item.latest_message_summary || "-"}
@@ -477,8 +551,8 @@ export default function AiReplyDecisionLogsPage() {
                       <div className="mt-1 text-[10px] text-[#8b95a6]">{formatDateTimeLocal(item.created_at)}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="line-clamp-2 text-[#374151]" title={item.reply_text_summary || undefined}>
-                        {item.reply_text_summary || "-"}
+                      <div className="line-clamp-2 text-[#374151]" title={item.sent_content_summary || undefined}>
+                        {item.sent_content_summary || "-"}
                       </div>
                       <div className="mt-1 text-[10px] text-[#8b95a6]">{item.agent_name || item.agent_id || "-"}</div>
                     </td>
@@ -501,13 +575,10 @@ export default function AiReplyDecisionLogsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="space-y-1">
-                        <Chip tone="emerald">不会自动发送</Chip>
+                        <Chip tone={sendStatusTone(item.send_status)}>{sendStatusLabel(item.send_status)}</Chip>
                         <div className="text-[10px] text-[#8b95a6]">
-                          RAG {item.rag_used ? "是" : "否"} / LLM {item.llm_used ? "是" : "否"}
+                          模型 {item.model || "-"} / {effectivenessLabel(item.is_effective)}
                         </div>
-                        {item.upstream_auto_send ? (
-                          <div className="text-[10px] font-semibold text-amber-700">上游请求已关闭</div>
-                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -561,6 +632,7 @@ export default function AiReplyDecisionLogsPage() {
             setDetail(null);
             setDetailError(null);
           }}
+          onMarkEffectiveness={(id, isEffective) => void markEffectiveness(id, isEffective)}
         />
       ) : null}
     </section>
