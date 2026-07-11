@@ -39,7 +39,7 @@ const SOURCE_OPTIONS = ["douyin", "douyin_live"] as const;
 const STATUS_LABELS: Record<string, string> = {
   pending: "新线索",
   assigned: "跟进中",
-  replied: "已回复",
+  replied: "销售已回复",
   timeout: "已失效",
   closed: "已成交",
 };
@@ -197,14 +197,23 @@ function deriveOperationalTags(
     }));
 }
 
-function buildDouyinConversationUrl(lead: Lead): string | null {
-  if (!lead.account_open_id || !lead.conversation_short_id || !lead.source_id) return null;
+function buildDouyinConversationJump(lead: Lead): { href: string | null; disabledReason: string | null } {
+  const missing: string[] = [];
+  if (!lead.account_open_id) missing.push("企业号");
+  if (!lead.conversation_short_id) missing.push("会话标识");
+  if (!lead.source_id) missing.push("客户 open_id");
+  if (missing.length) {
+    return {
+      href: null,
+      disabledReason: `缺少${missing.join("、")}，无法打开抖音会话`,
+    };
+  }
   const params = new URLSearchParams({
     account_open_id: lead.account_open_id,
     conversation_short_id: lead.conversation_short_id,
     open_id: lead.source_id,
   });
-  return `/douyin-ai-cs?${params.toString()}`;
+  return { href: `/douyin-cs/workbench?${params.toString()}`, disabledReason: null };
 }
 
 function parseLeadRawData(lead: Lead): Record<string, unknown> {
@@ -834,7 +843,7 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
   const currentStaffName = lead.assigned_staff?.name || staffName || "未分配";
   const operationalTags = deriveOperationalTags(lead, checks, notificationRecords);
   const followUpTag = operationalTags.find((tag) => tag.key === "follow_up");
-  const conversationUrl = buildDouyinConversationUrl(lead);
+  const conversationJump = buildDouyinConversationJump(lead);
 
   // 检测按钮可用条件
   const agentReason = agentDisabledReason(agentStatus);
@@ -933,18 +942,24 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
         </div>
 
         <div className="mt-3">
-          {conversationUrl ? (
+          {conversationJump.href ? (
             <a
-              href={conversationUrl}
+              href={conversationJump.href}
               className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 text-xs font-semibold text-blue-700 hover:bg-blue-100"
             >
               <MessageCircleIcon size={14} />
               查看抖音会话
             </a>
           ) : (
-            <div className="rounded-xl border border-dashed border-[#e4e8f0] bg-[#f8fafc] px-3 py-2 text-center text-[11px] text-[#8b95a6]">
-              暂无可跳转的抖音会话
-            </div>
+            <button
+              type="button"
+              disabled
+              title={conversationJump.disabledReason || "无法打开抖音会话"}
+              className="inline-flex h-9 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-dashed border-[#e4e8f0] bg-[#f8fafc] text-xs font-semibold text-[#8b95a6]"
+            >
+              <MessageCircleIcon size={14} />
+              {conversationJump.disabledReason || "无法打开抖音会话"}
+            </button>
           )}
         </div>
 
@@ -1824,7 +1839,7 @@ export default function LeadsManagement() {
                   const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
                   const budget = leadDerivedValue(lead, "budget") || "预算未提供";
                   const tags = deriveOperationalTags(lead, checksData);
-                  const conversationUrl = buildDouyinConversationUrl(lead);
+                  const conversationJump = buildDouyinConversationJump(lead);
                   return (
                     <tr
                       key={lead.id}
@@ -1898,15 +1913,27 @@ export default function LeadsManagement() {
                       <td className="px-4 py-3 text-[#374151]">{getStaffName(lead.assigned_staff_id)}</td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">
-                          {conversationUrl ? (
+                          {conversationJump.href ? (
                             <a
-                              href={conversationUrl}
+                              href={conversationJump.href}
                               onClick={(event) => event.stopPropagation()}
                               className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
                             >
                               查看抖音会话
                             </a>
-                          ) : null}
+                          ) : (
+                            <button
+                              type="button"
+                              title={conversationJump.disabledReason || "无法打开抖音会话"}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toast.warning(conversationJump.disabledReason || "无法打开抖音会话");
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#e4e8f0] bg-[#f8fafc] px-2 py-1.5 text-[11px] font-semibold text-[#8b95a6]"
+                            >
+                              查看抖音会话
+                            </button>
+                          )}
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
