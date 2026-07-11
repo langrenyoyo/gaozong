@@ -106,11 +106,18 @@ def _append_all_contact_values(values: list[str], all_contacts: Any) -> None:
                 _append_contact_value(values, item)
 
 
-def _contact_values(lead: DouyinLead) -> list[str]:
+def _authoritative_contact_values(lead: DouyinLead) -> list[str]:
+    """权威留资口径：只看提取后的独立列，不读 raw_data 或 customer_contact。"""
     values: list[str] = []
     _append_contact_value(values, getattr(lead, "extracted_phone", None))
     _append_contact_value(values, getattr(lead, "extracted_wechat", None))
     _append_all_contact_values(values, getattr(lead, "all_extracted_contacts", None))
+    return values
+
+
+def _contact_values(lead: DouyinLead) -> list[str]:
+    """展示口径：在权威列基础上兼容旧 raw_data.contact_extract 与 customer_contact。"""
+    values = _authoritative_contact_values(lead)
 
     extract = _contact_extract(lead)
     for key in ("phone", "wechat"):
@@ -121,8 +128,8 @@ def _contact_values(lead: DouyinLead) -> list[str]:
 
 
 def has_retained_contact(lead: DouyinLead) -> bool:
-    """判断线索是否已留资；状态字段不能作为留资依据。"""
-    return bool(_contact_values(lead))
+    """判断线索是否已留资；只以提取后的独立列为权威口径。"""
+    return bool(_authoritative_contact_values(lead))
 
 
 def is_high_intent(lead: DouyinLead) -> bool:

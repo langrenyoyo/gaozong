@@ -207,14 +207,16 @@ def test_reports_summary_returns_retained_and_high_intent_counts():
     data = response.json()
     assert data["total_leads"] == 3
     assert data["assigned_count"] == 1
-    assert data["retained_contact_count"] == 2
-    assert data["high_intent_count"] == 2
+    # FIX1：权威留资口径只认 extracted_phone/wechat/all_extracted_contacts；
+    # seed 数据联系方式都在 raw_data.contact_extract / customer_contact，不计入留资与高意向。
+    assert data["retained_contact_count"] == 0
+    assert data["high_intent_count"] == 0
     assert data["yesterday_total_leads"] == 0
     assert data["today_new_leads"] == 3
     assert data["lead_growth_rate"] is None
     assert data["sales_response_rate"] == 50.0
-    assert data["retained_contact_rate"] == 66.7
-    assert data["high_intent_hint"] == "需优先跟进"
+    assert data["retained_contact_rate"] == 0.0
+    assert data["high_intent_hint"] == "暂无高意向线索"
 
 
 def test_reports_summary_uses_extracted_contact_columns_not_replied_status():
@@ -278,6 +280,140 @@ def test_reports_summary_uses_extracted_contact_columns_not_replied_status():
     assert data["retained_contact_count"] == 3
     assert data["replied_count"] == 1
     assert data["retained_contact_rate"] == 75.0
+
+
+def test_customer_contact_alone_does_not_count_as_retained_contact():
+    db = TestSession()
+    try:
+        lead = DouyinLead(
+            source="douyin",
+            lead_type="私信",
+            customer_name="旧字段客户",
+            customer_contact="legacy_contact",
+            content="旧线索只有 customer_contact，没有提取字段",
+            source_id="customer-contact-only",
+            merchant_id="merchant-a",
+            status="pending",
+        )
+        db.add(lead)
+        db.commit()
+        lead_id = lead.id
+    finally:
+        db.close()
+
+    summary_response = _client().get("/reports/summary")
+
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["total_leads"] == 1
+    assert summary["retained_contact_count"] == 0
+    assert summary["retained_contact_rate"] == 0.0
+    assert summary["high_intent_count"] == 0
+
+    detail_response = _client().get(f"/leads/{lead_id}")
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["customer_contact"] == "legacy_contact"
+    assert detail["all_extracted_contacts"] == ["legacy_contact"]
+
+
+def test_legacy_raw_contact_extract_does_not_count_as_retained_contact():
+    raw_data = json.dumps(
+        {
+            "contact_extract": {
+                "phone": "13900001111",
+                "wechat": "wx_legacy",
+                "all_contacts": ["13900001111", "wx_legacy"],
+                "status": "matched",
+            }
+        },
+        ensure_ascii=False,
+    )
+    db = TestSession()
+    try:
+        lead = DouyinLead(
+            source="douyin",
+            lead_type="私信",
+            customer_name="旧 raw 客户",
+            customer_contact=None,
+            content="旧 raw_data 里有联系方式",
+            source_id="legacy-raw-contact-only",
+            merchant_id="merchant-a",
+            raw_data=raw_data,
+            status="pending",
+        )
+        db.add(lead)
+        db.commit()
+        lead_id = lead.id
+    finally:
+        db.close()
+
+    summary_response = _client().get("/reports/summary")
+
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["total_leads"] == 1
+    assert summary["retained_contact_count"] == 0
+    assert summary["retained_contact_rate"] == 0.0
+
+    detail_response = _client().get(f"/leads/{lead_id}")
+
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["phone"] == "13900001111"
+    assert detail["wechat"] == "wx_legacy"
+    assert detail["all_extracted_contacts"] == ["13900001111", "wx_legacy"]
+
+
+def test_authoritative_contact_columns_count_as_retained_contact():
+    db = TestSession()
+    try:
+        db.add_all(
+            [
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="手机号客户",
+                    content="客户留了手机号",
+                    source_id="auth-phone",
+                    merchant_id="merchant-a",
+                    extracted_phone="13800001111",
+                    status="pending",
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="微信客户",
+                    content="客户留了微信",
+                    source_id="auth-wechat",
+                    merchant_id="merchant-a",
+                    extracted_wechat="wx_auth",
+                    status="pending",
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="全部联系方式客户",
+                    content="客户留了其他联系方式",
+                    source_id="auth-all",
+                    merchant_id="merchant-a",
+                    all_extracted_contacts=json.dumps({"all": ["wx_all"]}, ensure_ascii=False),
+                    status="pending",
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().get("/reports/summary")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_leads"] == 3
+    assert data["retained_contact_count"] == 3
+    assert data["retained_contact_rate"] == 100.0
 
 
 def test_reports_summary_returns_yesterday_baseline_growth_rate():
