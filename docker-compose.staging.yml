@@ -65,6 +65,17 @@ services:
       # 留空：RAG_DATABASE_URL 优先，显式禁用 SQLite metadata fallback
       XG_DOUYIN_AI_CS_DB_PATH: ""
       RAG_VECTOR_BACKEND: ${RAG_VECTOR_BACKEND:-sqlite}
+      # 外部 Milvus（staging smoke 时在 .env.staging.local 设 RAG_VECTOR_BACKEND=milvus 并填 MILVUS_*）
+      MILVUS_URI: ${MILVUS_URI:-}
+      MILVUS_USERNAME: ${MILVUS_USERNAME:-}
+      MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
+      MILVUS_DB_NAME: ${MILVUS_DB_NAME:-}
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-}
+      MILVUS_DIMENSION: ${MILVUS_DIMENSION:-2048}
+      MILVUS_TIMEOUT_SECONDS: ${MILVUS_TIMEOUT_SECONDS:-5}
+      MILVUS_INDEX_TYPE: ${MILVUS_INDEX_TYPE:-AUTOINDEX}
+      MILVUS_METRIC_TYPE: ${MILVUS_METRIC_TYPE:-COSINE}
+      MILVUS_CONNECT_STRATEGY: ${MILVUS_CONNECT_STRATEGY:-orm}
 
   auto-wechat-frontend:
     container_name: xg-staging-frontend

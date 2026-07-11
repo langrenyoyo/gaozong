@@ -66,6 +66,18 @@ services:
     environment:
       RAG_DATABASE_URL: postgresql+psycopg://${PG_USER:-auto_wechat}:${PG_PASSWORD}@postgres:5432/xg_douyin_ai_cs
       AUTO_WECHAT_9000_BASE_URL: http://auto-wechat-api:9000
+      # 外部 Milvus 向量后端（不由 Compose 部署；production 不得回退 SQLite 向量后端）
+      RAG_VECTOR_BACKEND: ${RAG_VECTOR_BACKEND:-milvus}
+      MILVUS_URI: ${MILVUS_URI:-}
+      MILVUS_USERNAME: ${MILVUS_USERNAME:-}
+      MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
+      MILVUS_DB_NAME: ${MILVUS_DB_NAME:-}
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-}
+      MILVUS_DIMENSION: ${MILVUS_DIMENSION:-2048}
+      MILVUS_TIMEOUT_SECONDS: ${MILVUS_TIMEOUT_SECONDS:-5}
+      MILVUS_INDEX_TYPE: ${MILVUS_INDEX_TYPE:-AUTOINDEX}
+      MILVUS_METRIC_TYPE: ${MILVUS_METRIC_TYPE:-COSINE}
+      MILVUS_CONNECT_STRATEGY: ${MILVUS_CONNECT_STRATEGY:-orm}
     depends_on:
       postgres:
         condition: service_healthy
