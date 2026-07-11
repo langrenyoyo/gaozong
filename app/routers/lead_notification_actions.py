@@ -110,21 +110,37 @@ def create_notify_sales_task(
         },
     )
     notification_text = replacement.final_content
-    task = create_wechat_task(
-        db,
-        task_type="notify_sales",
-        lead_id=lead.id,
-        staff_id=staff.id,
-        target_nickname=staff.wechat_nickname,
-        message=notification_text,
-        mode="single_send",
-    )
-    notification = _create_notification(
-        db,
-        lead_id=lead.id,
-        staff_id=staff.id,
-        notification_text=notification_text,
-    )
+
+    # Phase 7-FIX2：原子事务 — task 和 notification 同一次 commit
+    from sqlalchemy.exc import SQLAlchemyError
+
+    try:
+        task = create_wechat_task(
+            db,
+            task_type="notify_sales",
+            lead_id=lead.id,
+            staff_id=staff.id,
+            target_nickname=staff.wechat_nickname,
+            message=notification_text,
+            mode="single_send",
+            commit=False,
+        )
+        notification = _create_notification(
+            db,
+            lead_id=lead.id,
+            staff_id=staff.id,
+            notification_text=notification_text,
+            commit=False,
+        )
+        db.commit()
+        db.refresh(task)
+        db.refresh(notification)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "DISPATCH_PERSIST_FAILED", "message": "派单持久化失败，已回滚"},
+        )
     logger.info(
         "manual_notify_sales stage=created lead_id=%s staff_id=%s task_id=%s notification_id=%s",
         lead.id,
@@ -224,7 +240,9 @@ def _create_notification(
     lead_id: int,
     staff_id: int,
     notification_text: str,
+    commit: bool = True,
 ) -> LeadNotification:
+    """创建通知记录。Phase 7-FIX2：commit=False 支持外部原子事务。"""
     record = LeadNotification(
         lead_id=lead_id,
         staff_id=staff_id,
@@ -233,8 +251,11 @@ def _create_notification(
         send_mode="wechat_task",
     )
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    if commit:
+        db.commit()
+        db.refresh(record)
+    else:
+        db.flush()
     return record
 
 

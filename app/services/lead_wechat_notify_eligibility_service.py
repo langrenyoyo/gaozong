@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -220,13 +220,21 @@ def _blocked(
     )
 
 
+def _ensure_aware_utc(dt: datetime) -> datetime:
+    """将 naive datetime 视为 UTC 后返回 aware datetime；已是 aware 则原样返回。"""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _check_rate_limit(db: Session, staff_id: int, merchant_id: str) -> int | None:
     """检查同商户同销售 10 秒内是否有活跃通知任务，有则返回建议等待秒数。
 
     通过 JOIN DouyinLead 按 merchant_id 隔离，避免跨商户限频。
     返回 None 表示无限频，可以创建新任务。
+    Phase 7-FIX2：时间比较使用 UTC aware，兼容 SQLite naive 和 PG TIMESTAMPTZ。
     """
-    cutoff = datetime.now() - timedelta(seconds=NOTIFY_SALES_RATE_LIMIT_SECONDS)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=NOTIFY_SALES_RATE_LIMIT_SECONDS)
     recent = (
         db.query(WechatTask.id, WechatTask.created_at)
         .join(DouyinLead, WechatTask.lead_id == DouyinLead.id)
@@ -242,8 +250,10 @@ def _check_rate_limit(db: Session, staff_id: int, merchant_id: str) -> int | Non
     )
     if recent is None:
         return None
-    # 计算剩余等待秒数，钳制在 1..NOTIFY_SALES_RATE_LIMIT_SECONDS
-    elapsed = (datetime.now() - recent.created_at).total_seconds()
+    # Phase 7-FIX2：规范化到 UTC aware 后计算时间差
+    now_utc = datetime.now(timezone.utc)
+    created_utc = _ensure_aware_utc(recent.created_at)
+    elapsed = (now_utc - created_utc).total_seconds()
     remaining = NOTIFY_SALES_RATE_LIMIT_SECONDS - elapsed
     return max(1, min(math.ceil(remaining), NOTIFY_SALES_RATE_LIMIT_SECONDS))
 

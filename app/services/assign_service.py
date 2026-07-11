@@ -1,6 +1,6 @@
 ﻿"""线索分配服务"""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -27,14 +27,21 @@ def assign_lead(
     remark: str | None = None,
     operator_id: str | None = None,
 ) -> DouyinLead:
-    """将线索分配给销售，同时创建回复检测记录"""
+    """将线索分配给销售，同时创建回复检测记录。
+
+    Phase 7-FIX2：跨商户 staff 分配被拒绝。
+    """
     lead = db.query(DouyinLead).filter(DouyinLead.id == lead_id).first()
     if not lead:
         raise ValueError(f"线索不存在: {lead_id}")
 
-    staff = db.query(SalesStaff).filter(SalesStaff.id == staff_id).first()
+    # Phase 7-FIX2：跨商户验证 — staff 必须与 lead 同属一个商户
+    staff = db.query(SalesStaff).filter(
+        SalesStaff.id == staff_id,
+        SalesStaff.merchant_id == lead.merchant_id,
+    ).first()
     if not staff:
-        raise ValueError(f"销售不存在: {staff_id}")
+        raise ValueError(f"销售不存在或不属于线索商户: {staff_id}")
 
     if staff.status != "active":
         raise ValueError(f"销售 {staff.name} 当前状态非 active，无法分配")
@@ -45,14 +52,14 @@ def assign_lead(
 
     is_reassign = lead.assigned_staff_id is not None
 
-    # 更新线索状态
+    # 更新线索状态（Phase 7-FIX2：使用 UTC aware 时间）
     lead.assigned_staff_id = staff_id
-    lead.assigned_at = datetime.now()
+    lead.assigned_at = datetime.now(timezone.utc)
     lead.status = "assigned"
 
     # 计算回复截止时间
     deadline_minutes = get_config_int(db, "reply_deadline_minutes", 30)
-    deadline = datetime.now() + timedelta(minutes=deadline_minutes)
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=deadline_minutes)
 
     # 创建检测记录
     check = ReplyCheck(

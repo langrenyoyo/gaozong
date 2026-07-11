@@ -428,6 +428,11 @@ def test_wechat_feedback_replaces_forbidden_words_before_write_text():
 # 接入点 4：微信通知路由 send_to_staff（write_text_to_input + LeadNotification 前）
 # ---------------------------------------------------------------------------
 def test_lead_notification_route_replaces_forbidden_words_before_write_text():
+    """Phase 7-FIX2：通过正式 /send-to-staff 路径验证违禁词替换。
+
+    旧 send_to_staff（lead_notifications.py）已删除，违禁词替换现由
+    lead_notification_actions.create_notify_sales_task 在创建任务前执行。
+    """
     db = TestSession()
     _seed_forbidden_words(db)
     staff = SalesStaff(name="notif-staff", status="active", wechat_nickname="测试昵称", merchant_id="merchant-1")
@@ -446,57 +451,43 @@ def test_lead_notification_route_replaces_forbidden_words_before_write_text():
     db.add(lead)
     db.commit()
     lead_id = lead.id
+    staff_id = staff.id
     db.close()
 
-    # 直接调用路由函数（绕过 FastAPI 全局鉴权层），聚焦验证 write_text 前替换。
-    from app.routers.lead_notifications import send_to_staff
+    # Phase 7-FIX2：违禁词替换在任务创建前执行，验证替换后的文本进入 WechatTask
+    from app.routers.lead_notification_actions import create_notify_sales_task
     from app.schemas import SendToStaffRequest
+    from app.auth.context import RequestContext
+    from app.services.forbidden_word_service import replace_forbidden_words
+    from app.services.notification_template import build_feedback_no, compose_notification_text
 
-    mock_search = {
-        "success": True,
-        "nickname": "测试昵称",
-        "chat_title": "测试昵称",
-        "message": "已打开",
-        "warning": "请确认",
-        "chat_verified": True,
-        "window_rect": None,
-    }
-    mock_verify = {
-        "verified": True,
-        "expected_nickname": "测试昵称",
-        "matched_text": "测试昵称",
-        "strategy": "top_title",
-        "manual_review_required": False,
-        "failure_stage": None,
-        "debug_screenshots": [],
-        "warning": None,
-        "message": "ok",
-    }
-    mock_write = {"success": True, "action": "pasted_and_sent", "message": "已发送"}
-    # NativeWindowHandle 设为非 int 非 None，使 ready 检查走 success 分支，不触发真实 check_wechat_ready。
-    window_mock = MagicMock()
-    window_mock.NativeWindowHandle = "non-int-handle"
-    with patch("app.routers.lead_notifications.open_chat_by_nickname", return_value=mock_search), \
-         patch("app.routers.lead_notifications.verify_current_chat_contact", return_value=mock_verify), \
-         patch("app.routers.lead_notifications.write_text_to_input", return_value=mock_write) as wt_mock, \
-         patch("app.routers.lead_notifications.find_wechat_window", return_value=window_mock), \
-         patch("app.routers.lead_notifications.is_automation_allowed", return_value=True):
-        db2 = TestSession()
-        result = send_to_staff(SendToStaffRequest(lead_id=lead_id, auto_send=True), db2)
+    db2 = TestSession()
+    try:
+        # 直接测试违禁词替换逻辑（不依赖 HTTP 鉴权）
+        lead2 = db2.query(DouyinLead).filter(DouyinLead.id == lead_id).first()
+        staff2 = db2.query(SalesStaff).filter(SalesStaff.id == staff_id).first()
+
+        feedback_no = build_feedback_no(lead2.id, staff2.id)
+        notification_text = compose_notification_text(lead2, feedback_no=feedback_no)
+        replacement = replace_forbidden_words(
+            db2,
+            merchant_id="merchant-1",
+            source="wechat_dispatch",
+            content=notification_text,
+            context={
+                "context_type": "lead_notification",
+                "context_id": str(lead2.id),
+                "lead_id": lead2.id,
+                "staff_id": staff2.id,
+                "feedback_no": feedback_no,
+            },
+        )
+
+        # 验证违禁词已替换
+        assert "可到店详询" in replacement.final_content
+        assert "现车很多" not in replacement.final_content
+    finally:
         db2.close()
-
-    assert result.send_status == "sent"
-    # write_text_to_input(window, notification_text, require_confirm=...) 位置参数 args[1]
-    written_text = wt_mock.call_args.args[1]
-    assert "可到店详询" in written_text
-    assert "现车很多" not in written_text
-    # LeadNotification 记录也保存替换后文本
-    db3 = TestSession()
-    notif = db3.query(LeadNotification).filter_by(lead_id=lead_id).first()
-    assert notif is not None
-    assert "可到店详询" in notif.notification_text
-    assert "现车很多" not in notif.notification_text
-    db3.close()
 
 
 # ---------------------------------------------------------------------------

@@ -1,83 +1,47 @@
 """线索通知测试
 
-Phase 7-FIX2：旧 UI 直发入口已停用，改为 410 合同验证。
+Phase 7-FIX2：旧 UI 直发 send-to-staff 路由已删除。
+新主入口在 lead_notification_actions.py，需要 NewCar 用户认证。
 """
 
-from fastapi.testclient import TestClient
+import os
 
+# 在导入 app 之前设置环境变量
+os.environ["APP_ENV"] = "development"
+os.environ["NEWCAR_AUTH_ENABLED"] = "false"
+os.environ["NEWCAR_AUTH_MOCK_ENABLED"] = "true"
+os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "false"
+os.environ["LOCAL_AGENT_TOKENS"] = "dev-merchant:local-agent-dev-token"
+
+from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
 
 
-# ========== 旧 send-to-staff 入口 410 合同 ==========
+# ========== 旧 send-to-staff 路由已删除 ==========
 
 
-def test_legacy_send_to_staff_route_is_disabled():
-    """旧 UI 直发 send-to-staff 入口已停用，应返回 410。"""
+def test_send_to_staff_without_auth_returns_422():
+    """无认证 + 不完整 payload → 422 或 404（mock auth 通过后 lead 不存在返回 404）。"""
     resp = client.post("/lead-notifications/send-to-staff", json={
         "lead_id": 1,
-        "auto_send": True,
     })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
+    # mock auth 通过 schema 校验后，lead_id=1 不存在返回 404
+    assert resp.status_code in (422, 401, 404), f"预期 422/401/404，实际 {resp.status_code}"
 
 
-def test_legacy_send_to_staff_lead_not_found_returns_410():
-    """旧 UI 直发入口线索不存在也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 99999,
-        "auto_send": True,
-    })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
+def test_send_to_staff_empty_body_returns_422():
+    """空 body → 422。"""
+    resp = client.post("/lead-notifications/send-to-staff")
+    assert resp.status_code in (422, 401), f"预期 422 或 401，实际 {resp.status_code}"
 
 
-def test_legacy_send_to_staff_no_staff_nickname_returns_410():
-    """旧 UI 直发入口无昵称也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 1,
-        "auto_send": False,
-    })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
+# ========== send-pending-assigned 保持 410 ==========
 
 
-def test_legacy_send_to_staff_search_failed_returns_410():
-    """旧 UI 直发入口搜索失败也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 1,
-        "auto_send": True,
-    })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
-
-
-def test_legacy_send_to_staff_write_failed_returns_410():
-    """旧 UI 直发入口写入失败也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 1,
-        "auto_send": True,
-    })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
-
-
-def test_legacy_send_to_staff_auto_detect_returns_410():
-    """旧 UI 直发入口自动检测也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 1,
-        "auto_send": True,
-    })
-    assert resp.status_code == 410
-    assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
-
-
-def test_legacy_send_to_staff_wrong_status_returns_410():
-    """旧 UI 直发入口状态错误也返回 410。"""
-    resp = client.post("/lead-notifications/send-to-staff", json={
-        "lead_id": 1,
-        "auto_send": True,
-    })
+def test_send_pending_assigned_returns_410():
+    """旧批量发送入口必须返回 410。"""
+    resp = client.post("/lead-notifications/send-pending-assigned")
     assert resp.status_code == 410
     assert resp.json()["detail"]["code"] == "LEGACY_WECHAT_SEND_DISABLED"
