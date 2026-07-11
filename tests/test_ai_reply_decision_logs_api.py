@@ -9,7 +9,11 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AiReplyDecisionLog
+from app.models import (
+    AiReplyDecisionLog,
+    AutoReplyAdminAuditLog,
+    DouyinPrivateMessageSend,
+)
 
 
 engine = create_engine(
@@ -29,14 +33,18 @@ def _context(
     *,
     merchant_id: str | None = "merchant-a",
     permission_codes: list[str] | None = None,
+    super_admin: bool = False,
 ):
     return RequestContext(
         user_id="user-1",
+        username="admin-user",
+        display_name="审核员",
         merchant_id=merchant_id,
         merchant_ids=[merchant_id] if merchant_id else [],
         permission_codes=permission_codes
         if permission_codes is not None
         else ["auto_wechat:douyin_ai_cs"],
+        super_admin=super_admin,
     )
 
 
@@ -131,9 +139,57 @@ def _insert_log(
         db.close()
 
 
+def _insert_send_record(
+    *,
+    decision_log_id: int | None,
+    send_source: str = "ai_auto",
+    merchant_account_open_id: str = "account-1",
+    conversation_short_id: str = "conv-1",
+    customer_open_id: str = "customer-1",
+    content: str = "违禁词替换后的最终实发内容 13812345678",
+    status: str = "sent",
+    auto_send: int = 1,
+    manual_confirmed: int = 0,
+    auto_reply_run_id: int | None = None,
+    sent_at: datetime | None = None,
+    created_at: datetime | None = None,
+) -> int:
+    db = TestSession()
+    try:
+        row = DouyinPrivateMessageSend(
+            main_account_id=123,
+            conversation_short_id=conversation_short_id,
+            server_message_id=f"server-send-{datetime.now().timestamp()}",
+            from_user_id=merchant_account_open_id,
+            to_user_id=customer_open_id,
+            customer_open_id=customer_open_id,
+            account_open_id=merchant_account_open_id,
+            content=content,
+            status=status,
+            upstream_msg_id="upstream-1" if status == "sent" else None,
+            manual_confirmed=manual_confirmed,
+            auto_send=auto_send,
+            send_source=send_source,
+            auto_reply_run_id=auto_reply_run_id,
+            decision_log_id=decision_log_id,
+            sent_at=sent_at or datetime.now(),
+        )
+        # created_at 用于对齐 date_from/date_to 筛选（Phase 4 起按发送流水时间过滤）
+        if created_at is not None:
+            row.created_at = created_at
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    finally:
+        db.close()
+
+
 def test_list_logs_returns_only_current_merchant_and_ignores_forged_merchant_id():
-    _insert_log(merchant_id="merchant-a", conversation_id="conv-a")
-    _insert_log(merchant_id="merchant-b", conversation_id="conv-b")
+    log_a = _insert_log(merchant_id="merchant-a", conversation_id="conv-a")
+    log_b = _insert_log(merchant_id="merchant-b", conversation_id="conv-b")
+    _insert_send_record(decision_log_id=log_a)
+    _insert_send_record(decision_log_id=log_b)
 
     response = _client().get(
         "/ai-reply-decision-logs",
@@ -163,11 +219,12 @@ def test_list_logs_requires_permission_and_merchant_context():
 
 def test_list_logs_pagination_and_page_size_limit():
     for index in range(3):
-        _insert_log(
+        log_id = _insert_log(
             merchant_id="merchant-a",
             conversation_id=f"conv-{index}",
             created_at=datetime(2026, 6, 20, 10, index, 0),
         )
+        _insert_send_record(decision_log_id=log_id)
 
     response = _client().get("/ai-reply-decision-logs", params={"page": 2, "page_size": 2})
     data = response.json()["data"]
@@ -184,7 +241,7 @@ def test_list_logs_pagination_and_page_size_limit():
 
 
 def test_list_logs_filters_by_structured_fields_and_flags():
-    _insert_log(
+    match_log = _insert_log(
         merchant_id="merchant-a",
         conversation_id="match",
         manual_required=1,
@@ -194,7 +251,8 @@ def test_list_logs_filters_by_structured_fields_and_flags():
         llm_used=1,
         risk_flags=["price_commitment"],
     )
-    _insert_log(
+    _insert_send_record(decision_log_id=match_log)
+    miss_log = _insert_log(
         merchant_id="merchant-a",
         conversation_id="miss",
         manual_required=0,
@@ -204,6 +262,7 @@ def test_list_logs_filters_by_structured_fields_and_flags():
         llm_used=0,
         risk_flags=["no_rag_source"],
     )
+    _insert_send_record(decision_log_id=miss_log)
 
     response = _client().get(
         "/ai-reply-decision-logs",
@@ -226,20 +285,22 @@ def test_list_logs_filters_by_structured_fields_and_flags():
 
 
 def test_list_logs_filters_by_keyword_and_date_range():
-    _insert_log(
+    old_log = _insert_log(
         merchant_id="merchant-a",
         conversation_id="old",
         latest_message="客户问宝马",
         reply_text="旧回复",
         created_at=datetime(2026, 6, 18, 12, 0, 0),
     )
-    _insert_log(
+    _insert_send_record(decision_log_id=old_log, created_at=datetime(2026, 6, 18, 12, 0, 0))
+    new_log = _insert_log(
         merchant_id="merchant-a",
         conversation_id="new",
         latest_message="客户问奥迪",
         reply_text="包含关键回复",
         created_at=datetime(2026, 6, 20, 12, 0, 0),
     )
+    _insert_send_record(decision_log_id=new_log, created_at=datetime(2026, 6, 20, 12, 0, 0))
 
     response = _client().get(
         "/ai-reply-decision-logs",
@@ -262,6 +323,7 @@ def test_detail_returns_current_merchant_log_without_raw_response():
         latest_message="客户手机号13812345678，问A6",
         reply_text="回复客户手机号13812345678",
     )
+    _insert_send_record(decision_log_id=log_id)
 
     response = _client().get(f"/ai-reply-decision-logs/{log_id}")
 
@@ -278,6 +340,7 @@ def test_detail_returns_current_merchant_log_without_raw_response():
 
 def test_detail_cannot_read_other_merchant_log():
     log_id = _insert_log(merchant_id="merchant-b")
+    _insert_send_record(decision_log_id=log_id)
 
     response = _client().get(f"/ai-reply-decision-logs/{log_id}")
 
@@ -287,6 +350,7 @@ def test_detail_cannot_read_other_merchant_log():
 
 def test_bad_json_fields_do_not_return_500():
     log_id = _insert_log(merchant_id="merchant-a")
+    _insert_send_record(decision_log_id=log_id)
     db = TestSession()
     try:
         row = db.get(AiReplyDecisionLog, log_id)
@@ -313,3 +377,156 @@ def test_bad_json_fields_do_not_return_500():
     assert detail["rag_sources"] == []
     assert detail["source_chunks"] == []
     assert detail["allowed_category_keys"] == []
+
+
+def test_list_logs_returns_only_ai_sent_records_and_uses_send_content():
+    sent_log_id = _insert_log(
+        merchant_id="merchant-a",
+        conversation_id="conv-sent",
+        reply_text="旧建议回复，不应作为实发内容",
+        final_auto_send=1,
+    )
+    _insert_send_record(
+        decision_log_id=sent_log_id,
+        content="最终实发内容，手机号13812345678已脱敏展示",
+        status="sent",
+        send_source="ai_auto",
+    )
+    _insert_log(merchant_id="merchant-a", conversation_id="conv-decision-only")
+    _insert_send_record(
+        decision_log_id=None,
+        content="普通人工发送不应进入 AI 回复记录",
+        send_source="manual",
+        auto_send=0,
+        manual_confirmed=1,
+    )
+
+    response = _client().get("/ai-reply-decision-logs")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["id"] == sent_log_id
+    assert item["send_record_id"] is not None
+    assert item["conversation_id"] == "conv-sent"
+    assert item["send_status"] == "sent"
+    assert item["send_source"] == "ai_auto"
+    assert item["sent_content_summary"] == "最终实发内容，手机号138****5678已脱敏展示"
+    assert item["reply_text_summary"] != item["sent_content_summary"]
+
+
+def test_admin_can_filter_by_merchant_but_merchant_user_cannot_forge_scope():
+    log_a = _insert_log(merchant_id="merchant-a", conversation_id="conv-a")
+    _insert_send_record(decision_log_id=log_a, content="商户A实发")
+    log_b = _insert_log(merchant_id="merchant-b", conversation_id="conv-b")
+    _insert_send_record(decision_log_id=log_b, content="商户B实发")
+
+    merchant_response = _client().get(
+        "/ai-reply-decision-logs",
+        params={"merchant_id": "merchant-b"},
+    )
+    assert merchant_response.status_code == 200
+    merchant_data = merchant_response.json()["data"]
+    assert merchant_data["total"] == 1
+    assert merchant_data["items"][0]["merchant_id"] == "merchant-a"
+
+    admin_context = _context(
+        merchant_id=None,
+        permission_codes=["auto_wechat:admin:ai_reply_records"],
+        super_admin=True,
+    )
+    admin_response = _client(admin_context).get(
+        "/ai-reply-decision-logs",
+        params={"merchant_id": "merchant-b"},
+    )
+    assert admin_response.status_code == 200
+    admin_data = admin_response.json()["data"]
+    assert admin_data["total"] == 1
+    assert admin_data["items"][0]["merchant_id"] == "merchant-b"
+
+
+def test_detail_returns_send_content_and_effectiveness_fields():
+    log_id = _insert_log(
+        merchant_id="merchant-a",
+        latest_message="客户手机号13812345678，问A6",
+        reply_text="模型原始建议回复",
+    )
+    send_id = _insert_send_record(
+        decision_log_id=log_id,
+        content="最终实发内容13812345678",
+        status="sent",
+    )
+
+    response = _client().get(f"/ai-reply-decision-logs/{log_id}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["id"] == log_id
+    assert data["send_record_id"] == send_id
+    assert data["sent_content"] == "最终实发内容138****5678"
+    assert data["reply_text"] == "模型原始建议回复"
+    assert data["is_effective"] is None
+    assert data["effectiveness_reason"] is None
+    assert "request_body_json" not in data
+    assert "response_body_json" not in data
+
+
+def test_patch_effectiveness_requires_admin_and_writes_audit_log():
+    log_id = _insert_log(merchant_id="merchant-a")
+    _insert_send_record(decision_log_id=log_id)
+
+    denied = _client().patch(
+        f"/ai-reply-decision-logs/{log_id}/effectiveness",
+        json={"is_effective": True, "effectiveness_reason": "回复促成留资"},
+    )
+    assert denied.status_code == 403
+
+    admin_context = _context(
+        merchant_id=None,
+        permission_codes=["auto_wechat:admin:ai_reply_records"],
+        super_admin=True,
+    )
+    response = _client(admin_context).patch(
+        f"/ai-reply-decision-logs/{log_id}/effectiveness",
+        json={"is_effective": True, "effectiveness_reason": " 回复促成留资 "},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["is_effective"] is True
+    assert data["effectiveness_reason"] == "回复促成留资"
+
+    db = TestSession()
+    try:
+        audit = db.query(AutoReplyAdminAuditLog).one()
+        assert audit.action == "mark_ai_reply_effectiveness"
+        assert audit.target_type == "ai_reply_decision_log"
+        assert audit.target_id == str(log_id)
+        assert audit.reason == "回复促成留资"
+        assert "13812345678" not in (audit.after_json or "")
+    finally:
+        db.close()
+
+
+def test_patch_effectiveness_rejects_empty_payload_and_unsent_decision():
+    log_id = _insert_log(merchant_id="merchant-a")
+    admin_context = _context(
+        merchant_id=None,
+        permission_codes=["auto_wechat:admin:ai_reply_records"],
+        super_admin=True,
+    )
+
+    empty_payload = _client(admin_context).patch(
+        f"/ai-reply-decision-logs/{log_id}/effectiveness",
+        json={},
+    )
+    assert empty_payload.status_code == 400
+    assert empty_payload.json()["detail"]["code"] == "NO_FIELDS_TO_UPDATE"
+
+    unsent = _client(admin_context).patch(
+        f"/ai-reply-decision-logs/{log_id}/effectiveness",
+        json={"is_effective": False, "effectiveness_reason": "未发送不能标记"},
+    )
+    assert unsent.status_code == 404
+    assert unsent.json()["detail"]["code"] == "AI_REPLY_DECISION_LOG_NOT_FOUND"

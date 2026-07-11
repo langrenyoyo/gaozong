@@ -1228,6 +1228,18 @@ class AiReplyDecisionLogListItem(BaseModel):
     upstream_auto_send: bool
     final_auto_send: bool
     decision_version: Optional[str] = None
+    # 发送流水字段：列表展示实发内容摘要与发送状态
+    send_record_id: Optional[int] = None
+    sent_content_summary: Optional[str] = None
+    send_status: Optional[str] = None
+    send_source: Optional[str] = None
+    auto_send: bool = False
+    manual_confirmed: bool = False
+    upstream_msg_id: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    model: Optional[str] = None
+    is_effective: Optional[bool] = None
+    effectiveness_reason: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -1256,6 +1268,8 @@ class AiReplyDecisionLogDetail(AiReplyDecisionLogListItem):
     rag_sources: list = Field(default_factory=list)
     source_chunks: list = Field(default_factory=list)
     allowed_category_keys: list = Field(default_factory=list)
+    # 详情返回违禁词替换后的最终实发内容（脱敏后完整展示）
+    sent_content: Optional[str] = None
 
 
 class AiReplyDecisionLogDetailResponse(BaseModel):
