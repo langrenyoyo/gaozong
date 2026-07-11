@@ -217,6 +217,69 @@ def test_reports_summary_returns_retained_and_high_intent_counts():
     assert data["high_intent_hint"] == "需优先跟进"
 
 
+def test_reports_summary_uses_extracted_contact_columns_not_replied_status():
+    db = TestSession()
+    try:
+        db.add_all(
+            [
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="独立手机号",
+                    content="想看车，预算十万",
+                    source_id="retained-phone",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    extracted_phone="13800001111",
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="独立微信",
+                    content="问价格",
+                    source_id="retained-wechat",
+                    merchant_id="merchant-a",
+                    status="assigned",
+                    extracted_wechat="wx_phase5",
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="全部联系方式",
+                    content="普通咨询",
+                    source_id="retained-all",
+                    merchant_id="merchant-a",
+                    status="pending",
+                    all_extracted_contacts=json.dumps(
+                        {"phones": [], "wechats": ["wx_all"], "all": ["wx_all"]},
+                        ensure_ascii=False,
+                    ),
+                ),
+                DouyinLead(
+                    source="douyin",
+                    lead_type="私信",
+                    customer_name="仅销售回复",
+                    content="销售回复过但客户未留联系方式",
+                    source_id="replied-no-contact",
+                    merchant_id="merchant-a",
+                    status="replied",
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().get("/reports/summary")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_leads"] == 4
+    assert data["retained_contact_count"] == 3
+    assert data["replied_count"] == 1
+    assert data["retained_contact_rate"] == 75.0
+
+
 def test_reports_summary_returns_yesterday_baseline_growth_rate():
     today = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
     yesterday = today - timedelta(days=1)
@@ -352,3 +415,29 @@ def test_missing_leads_permission_is_denied():
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_replied_status_label_does_not_mean_retained_contact():
+    db = TestSession()
+    try:
+        lead = DouyinLead(
+            source="douyin",
+            lead_type="私信",
+            customer_name="销售已回复客户",
+            content="未留联系方式",
+            source_id="status-replied-no-contact",
+            merchant_id="merchant-a",
+            status="replied",
+        )
+        db.add(lead)
+        db.commit()
+        lead_id = lead.id
+    finally:
+        db.close()
+
+    response = _client().get(f"/leads/{lead_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status_label"] == "销售已回复"
+    assert data["all_extracted_contacts"] == []

@@ -127,6 +127,44 @@ def test_get_lead_returns_same_contact_extract_fields():
     assert item["original_message_text"] == "手机号 13812345678 微信 abc123"
 
 
+def test_get_lead_returns_contact_fields_from_extracted_columns():
+    db = TestSession()
+    lead = DouyinLead(
+        source="douyin",
+        lead_type="私信",
+        customer_name="新字段客户",
+        customer_contact=None,
+        content="客户把联系方式发在上游提取字段",
+        source_id="column_user_001",
+        merchant_id=MERCHANT_ID,
+        account_open_id="account_001",
+        conversation_short_id="column_conv_001",
+        raw_message_text="电话 13900001111 微信 wx_column",
+        extracted_phone="13900001111",
+        extracted_wechat="wx_column",
+        all_extracted_contacts=json.dumps(
+            {"phones": ["13900001111"], "wechats": ["wx_column"], "all": ["13900001111", "wx_column"]},
+            ensure_ascii=False,
+        ),
+        contact_extract_status="matched",
+        status="pending",
+    )
+    db.add(lead)
+    db.commit()
+    lead_id = lead.id
+    db.close()
+
+    resp = _client().get(f"/leads/{lead_id}")
+
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["phone"] == "13900001111"
+    assert item["wechat"] == "wx_column"
+    assert item["all_extracted_contacts"] == ["13900001111", "wx_column"]
+    assert item["contact_extract_status"] == "matched"
+    assert item["original_message_text"] == "电话 13900001111 微信 wx_column"
+
+
 def test_leads_contact_fields_tolerate_legacy_raw_data_without_contact_extract():
     db = TestSession()
     lead = DouyinLead(

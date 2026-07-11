@@ -21,12 +21,29 @@ def _safe_load_json_object(value: Any) -> dict:
 
 def _extract_contact_values(all_contacts: Any) -> list[str]:
     values: list[str] = []
+    if isinstance(all_contacts, str):
+        stripped = all_contacts.strip()
+        if not stripped:
+            return values
+        try:
+            parsed = json.loads(stripped)
+        except (TypeError, ValueError):
+            return [stripped]
+        return _extract_contact_values(parsed)
+    if isinstance(all_contacts, dict):
+        for key in ("all", "phones", "wechats", "values"):
+            for item in _extract_contact_values(all_contacts.get(key)):
+                if item not in values:
+                    values.append(item)
+        return values
     if not isinstance(all_contacts, list):
         return values
     for item in all_contacts:
         value = item.get("value") if isinstance(item, dict) else item
-        if isinstance(value, str) and value and value not in values:
-            values.append(value)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized and normalized not in values:
+                values.append(normalized)
     return values
 
 
@@ -522,6 +539,11 @@ class LeadOut(BaseModel):
                 "lead_type": getattr(value, "lead_type", None),
                 "customer_name": getattr(value, "customer_name", None),
                 "customer_contact": getattr(value, "customer_contact", None),
+                "phone": getattr(value, "extracted_phone", None),
+                "wechat": getattr(value, "extracted_wechat", None),
+                "all_extracted_contacts": _extract_contact_values(getattr(value, "all_extracted_contacts", None)),
+                "contact_extract_status": getattr(value, "contact_extract_status", None),
+                "original_message_text": getattr(value, "raw_message_text", None),
                 "content": getattr(value, "content", None),
                 "source_url": getattr(value, "source_url", None),
                 "source_id": getattr(value, "source_id", None),
@@ -554,8 +576,8 @@ class LeadOut(BaseModel):
         if not isinstance(contact_extract, dict):
             contact_extract = {}
 
-        data.setdefault("phone", contact_extract.get("phone"))
-        data.setdefault("wechat", contact_extract.get("wechat"))
+        data["phone"] = data.get("phone") or contact_extract.get("phone")
+        data["wechat"] = data.get("wechat") or contact_extract.get("wechat")
         data.setdefault("source_channel", _extract_first_string(raw_data, ("source_channel", "source")))
         data.setdefault("city", _extract_first_string(raw_data, ("city", "location", "location_city", "customer_city")))
         data.setdefault("car_model", _extract_first_string(raw_data, ("intent_car", "car_model", "vehicle_model", "intent_car_model", "model", "series", "brand_model")))
@@ -567,10 +589,14 @@ class LeadOut(BaseModel):
             raw_data.get("raw_message_text") or data.get("content"),
         )
 
-        contact_values = _extract_contact_values(contact_extract.get("all_contacts"))
-        if not contact_values and data.get("customer_contact"):
-            contact_values = [data["customer_contact"]]
-        data.setdefault("all_extracted_contacts", contact_values)
+        contact_values = _extract_contact_values(data.get("all_extracted_contacts"))
+        for item in _extract_contact_values(contact_extract.get("all_contacts")):
+            if item not in contact_values:
+                contact_values.append(item)
+        for item in (data.get("phone"), data.get("wechat"), data.get("customer_contact")):
+            if isinstance(item, str) and item.strip() and item.strip() not in contact_values:
+                contact_values.append(item.strip())
+        data["all_extracted_contacts"] = contact_values
         return data
 
     model_config = {"from_attributes": True}

@@ -32,7 +32,7 @@ HIGH_INTENT_KEYWORDS = ("价格", "多少钱", "报价", "最低", "预算", "�
 STATUS_LABELS = {
     "pending": "新线索",
     "assigned": "跟进中",
-    "replied": "已留资",
+    "replied": "销售已回复",
     "timeout": "已失效",
     "closed": "已成交",
 }
@@ -75,28 +75,54 @@ def _contact_extract(lead: DouyinLead) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _contact_values(lead: DouyinLead) -> list[str]:
-    values: list[str] = []
-    extract = _contact_extract(lead)
-    for key in ("phone", "wechat"):
-        value = extract.get(key)
-        if isinstance(value, str) and value and value not in values:
-            values.append(value)
-    all_contacts = extract.get("all_contacts")
+def _append_contact_value(values: list[str], value: Any) -> None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized and normalized not in values:
+            values.append(normalized)
+
+
+def _append_all_contact_values(values: list[str], all_contacts: Any) -> None:
+    if isinstance(all_contacts, str):
+        stripped = all_contacts.strip()
+        if not stripped:
+            return
+        try:
+            parsed = json.loads(stripped)
+        except (TypeError, ValueError):
+            _append_contact_value(values, stripped)
+            return
+        _append_all_contact_values(values, parsed)
+        return
+    if isinstance(all_contacts, dict):
+        for key in ("all", "phones", "wechats", "values"):
+            _append_all_contact_values(values, all_contacts.get(key))
+        return
     if isinstance(all_contacts, list):
         for item in all_contacts:
-            value = item.get("value") if isinstance(item, dict) else item
-            if isinstance(value, str) and value and value not in values:
-                values.append(value)
-    if lead.customer_contact and lead.customer_contact not in values:
-        values.append(lead.customer_contact)
+            if isinstance(item, dict):
+                _append_contact_value(values, item.get("value"))
+            else:
+                _append_contact_value(values, item)
+
+
+def _contact_values(lead: DouyinLead) -> list[str]:
+    values: list[str] = []
+    _append_contact_value(values, getattr(lead, "extracted_phone", None))
+    _append_contact_value(values, getattr(lead, "extracted_wechat", None))
+    _append_all_contact_values(values, getattr(lead, "all_extracted_contacts", None))
+
+    extract = _contact_extract(lead)
+    for key in ("phone", "wechat"):
+        _append_contact_value(values, extract.get(key))
+    _append_all_contact_values(values, extract.get("all_contacts"))
+    _append_contact_value(values, lead.customer_contact)
     return values
 
 
 def has_retained_contact(lead: DouyinLead) -> bool:
-    """判断线索是否已留资。"""
-    extract = _contact_extract(lead)
-    return bool(lead.customer_contact or extract.get("phone") or extract.get("wechat") or _contact_values(lead))
+    """判断线索是否已留资；状态字段不能作为留资依据。"""
+    return bool(_contact_values(lead))
 
 
 def is_high_intent(lead: DouyinLead) -> bool:
@@ -138,6 +164,21 @@ def lead_score(lead: DouyinLead) -> dict[str, Any]:
     }
 
 
+def _lead_contact_payload(lead: DouyinLead) -> dict[str, Any]:
+    extract = _contact_extract(lead)
+    values = _contact_values(lead)
+    phone = getattr(lead, "extracted_phone", None) or extract.get("phone")
+    wechat = getattr(lead, "extracted_wechat", None) or extract.get("wechat")
+    raw_data = _safe_raw_data(lead)
+    return {
+        "phone": phone,
+        "wechat": wechat,
+        "all_extracted_contacts": values,
+        "contact_extract_status": getattr(lead, "contact_extract_status", None) or extract.get("status"),
+        "original_message_text": getattr(lead, "raw_message_text", None) or raw_data.get("raw_message_text") or lead.content,
+    }
+
+
 def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = False) -> dict[str, Any]:
     """构造兼容旧 LeadOut 的响应字典，并追加展示字段。"""
     # 销售跟进状态（纯派生：未反馈/已联系/联系方式错误），供前端 AI小高线索页面展示
@@ -151,6 +192,7 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
         "customer_name": lead.customer_name,
         "customer_contact": lead.customer_contact,
         "content": lead.content,
+        **_lead_contact_payload(lead),
         "source_url": lead.source_url,
         "source_id": lead.source_id,
         "car_model": profile_fields.get("intent_car"),
