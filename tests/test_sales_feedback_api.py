@@ -15,7 +15,11 @@ import app.models  # noqa: F401  确保 metadata 注册全部模型
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import SalesDailySummary, SalesLeadFeedback
+from app.models import (
+    DouyinLead, LeadNotification, ReplyCheck, SalesDailySummary, SalesLeadFeedback,
+    SalesStaff, WechatTask,
+)
+from app.services.notification_template import build_feedback_no
 
 
 engine = create_engine(
@@ -58,6 +62,34 @@ DAILY_SUMMARY_TEXT = """【每日线索总结】
 补充反馈：无"""
 
 
+def _seed_trusted_context(
+    db,
+    *,
+    merchant_id: str = "merchant-a",
+    lead_id: int = 10,
+    staff_id: int = 3,
+    staff_name: str = "张三",
+    wechat_nickname: str = "Aw3",
+    with_notify_history: bool = True,
+) -> None:
+    """创建可信上下文：SalesStaff + DouyinLead + 历史 notify_sales WechatTask。"""
+    staff = SalesStaff(
+        id=staff_id, name=staff_name, wechat_nickname=wechat_nickname,
+        merchant_id=merchant_id, status="active",
+    )
+    lead = DouyinLead(
+        id=lead_id, merchant_id=merchant_id, assigned_staff_id=staff_id,
+    )
+    db.add_all([staff, lead])
+    if with_notify_history:
+        task = WechatTask(
+            task_type="notify_sales", lead_id=lead_id, staff_id=staff_id,
+            mode="single_send", status="sent",
+        )
+        db.add(task)
+    db.commit()
+
+
 def _client(
     merchant_id: str | None = "merchant-a",
     permission_codes: list[str] | None = None,
@@ -85,6 +117,13 @@ def _client(
 
 
 def test_parse_api_persists_lead_feedback_with_trusted_merchant():
+    """Phase 7-FIX1：使用真实 seed 数据替换假 lead_id=10/staff_id=3。"""
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, lead_id=10, staff_id=3)
+    finally:
+        db.close()
+
     response = _client().post(
         "/sales-feedback/parse",
         json={"raw_text": LEAD_FEEDBACK_TEXT, "lead_id": 10, "staff_id": 3},
@@ -111,6 +150,15 @@ def test_parse_api_persists_lead_feedback_with_trusted_merchant():
 
 
 def test_parse_api_upserts_daily_summary_by_staff_and_date():
+    # Phase 7-FIX1：seed 可信 staff
+    db = TestSession()
+    try:
+        staff = SalesStaff(id=5, name="张三", merchant_id="merchant-a", status="active")
+        db.add(staff)
+        db.commit()
+    finally:
+        db.close()
+
     first = _client().post(
         "/sales-feedback/parse",
         json={"raw_text": DAILY_SUMMARY_TEXT, "staff_id": 5},
@@ -188,6 +236,12 @@ def test_detect_reply_replied_persists_sales_feedback_and_updates_notification()
             reply_check_id=1, mode="read_only", status="pending",
         )
         db.add(task)
+        # Phase 7-FIX1：补充历史 notify_sales 任务（detect_reply 本身不算派单历史）
+        notify_task = WechatTask(
+            id=2, task_type="notify_sales", lead_id=10, staff_id=3,
+            mode="single_send", status="sent",
+        )
+        db.add(notify_task)
         db.commit()
 
         # 检测到 replied，raw_result.matched_reply 为线索反馈模板
@@ -218,3 +272,121 @@ def test_detect_reply_replied_persists_sales_feedback_and_updates_notification()
         assert notif.send_status == "replied"
     finally:
         db.close()
+
+
+# ---- Phase 7-FIX1 Task 3 Step 4: 可信商户和派单历史 ----
+
+def test_parse_rejects_cross_merchant_lead():
+    """线索属于另一商户时，解析失败且不写库。"""
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, merchant_id="merchant-b", lead_id=20, staff_id=4)
+    finally:
+        db.close()
+
+    response = _client(merchant_id="merchant-a").post(
+        "/sales-feedback/parse",
+        json={"raw_text": "【线索反馈】\n反馈编号：XGF-20-4\n微信：已通过\n开口：已开口\n方式：全款或分期均可\n车型：A6\n匹配：展厅有车\n精准：精准\n意向：高意向", "lead_id": 20, "staff_id": 4},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "SALES_FEEDBACK_PARSE_FAILED"
+
+    db = TestSession()
+    try:
+        assert db.query(SalesLeadFeedback).count() == 0
+    finally:
+        db.close()
+
+
+def test_parse_rejects_cross_merchant_staff():
+    """销售属于另一商户时，解析失败且不写库。"""
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, merchant_id="merchant-b", lead_id=20, staff_id=4)
+    finally:
+        db.close()
+
+    response = _client(merchant_id="merchant-a").post(
+        "/sales-feedback/parse",
+        json={"raw_text": "【线索反馈】\n反馈编号：XGF-20-4\n微信：已通过\n开口：已开口\n方式：全款或分期均可\n车型：A6\n匹配：展厅有车\n精准：精准\n意向：高意向", "lead_id": 20, "staff_id": 4},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "SALES_FEEDBACK_PARSE_FAILED"
+
+    db = TestSession()
+    try:
+        assert db.query(SalesLeadFeedback).count() == 0
+    finally:
+        db.close()
+
+
+def test_parse_rejects_feedback_without_notify_sales_history():
+    """无历史 notify_sales 任务时，解析失败且不写库。"""
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, lead_id=10, staff_id=3, with_notify_history=False)
+    finally:
+        db.close()
+
+    response = _client().post(
+        "/sales-feedback/parse",
+        json={"raw_text": LEAD_FEEDBACK_TEXT, "lead_id": 10, "staff_id": 3},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "SALES_FEEDBACK_PARSE_FAILED"
+
+    db = TestSession()
+    try:
+        assert db.query(SalesLeadFeedback).count() == 0
+    finally:
+        db.close()
+
+
+def test_parse_allows_original_staff_feedback_after_reassignment():
+    """线索改派后，原销售仍可提交反馈（历史 notify_sales 存在）。"""
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, lead_id=10, staff_id=3)
+        # 改派：更新线索的 assigned_staff_id 为新销售
+        lead = db.query(DouyinLead).filter_by(id=10).one()
+        lead.assigned_staff_id = 99
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().post(
+        "/sales-feedback/parse",
+        json={"raw_text": LEAD_FEEDBACK_TEXT, "lead_id": 10, "staff_id": 3},
+    )
+    # 原销售有历史 notify_sales → 允许反馈
+    assert response.status_code == 200
+    assert response.json()["data"]["parse_status"] == "success"
+
+    db = TestSession()
+    try:
+        row = db.query(SalesLeadFeedback).filter_by(
+            merchant_id="merchant-a", feedback_no="XGF-10-3",
+        ).one()
+        assert row.staff_id == 3
+        assert row.parse_status == "success"
+    finally:
+        db.close()
+
+
+def test_daily_summary_only_requires_merchant_owned_staff():
+    """每日总结只需 staff 归属商户，不要求 lead_id 或 notify_sales 历史。"""
+    db = TestSession()
+    try:
+        # 只创建 staff，不创建 lead 和 notify_sales
+        staff = SalesStaff(id=5, name="张三", merchant_id="merchant-a", status="active")
+        db.add(staff)
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client().post(
+        "/sales-feedback/parse",
+        json={"raw_text": DAILY_SUMMARY_TEXT, "staff_id": 5},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["parse_status"] == "success"

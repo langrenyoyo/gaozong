@@ -36,6 +36,16 @@ def parse_sales_feedback(
         lead_id=payload.lead_id,
         staff_id=payload.staff_id,
     )
+    # Phase 7-FIX1：failed 回滚并返回 400，不写库
+    if result.parse_status == "failed":
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "SALES_FEEDBACK_PARSE_FAILED", "message": "销售反馈格式或上下文无效"},
+        )
+    # Phase 7-FIX1：success 由调用方统一 commit（Task 5 收口）
+    if result.parse_status == "success":
+        db.commit()
     return {
         "success": True,
         "data": {

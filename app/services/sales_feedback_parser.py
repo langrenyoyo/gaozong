@@ -1,4 +1,4 @@
-"""销售反馈固定模板解析与持久化服务（Phase 7）。
+"""销售反馈固定模板解析与持久化服务（Phase 7 + Phase 7-FIX1 Task 4）。
 
 只识别三类固定模板头和固定字段，不做自由文本猜测、不接 LLM：
   - 【线索反馈】→ sales_lead_feedbacks（按 merchant_id + feedback_no upsert）
@@ -6,18 +6,20 @@
   - 【每日线索总结】→ sales_daily_summaries（按 merchant_id + staff_id + summary_date upsert）
 
 解析失败只返回 parse_status=failed，不抛异常，不影响调用方事务。
+Phase 7-FIX1：模板头首行精确匹配、严格日期、可信上下文校验、失败不落库。
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.models import SalesDailySummary, SalesLeadFeedback, SalesLeadUpdate
+from app.models import DouyinLead, SalesDailySummary, SalesLeadFeedback, SalesLeadUpdate, SalesStaff, WechatTask
+from app.services.notification_template import build_feedback_no
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,9 @@ LEAD_UPDATE_VISIT = {"未预约", "已预约", "已到店", "爽约", "取消预
 LEAD_UPDATE_DEAL = {"未成交", "跟进中", "已成交", "成交失败", "已流失"}
 DAILY_QUALITY = {"很好", "较好", "一般", "较差", "很差"}
 
+# Phase 7-FIX1：反馈编号格式 XGF-数字-数字
+_FEEDBACK_NO_RE = re.compile(r"^XGF-\d+-\d+$")
+
 
 @dataclass
 class SalesFeedbackParseResult:
@@ -42,6 +47,11 @@ class SalesFeedbackParseResult:
     feedback_no: str | None = None
     fields: dict[str, str] = field(default_factory=dict)
     parse_error: str | None = None
+
+
+def _first_line(text: str) -> str:
+    """取文本首行（先 strip）。"""
+    return text.strip().splitlines()[0].strip() if text.strip() else ""
 
 
 def _extract_fields(text: str) -> dict[str, str]:
@@ -73,13 +83,19 @@ def _optional_text(value: str | None) -> str:
 
 
 def parse_sales_feedback_text(text: str) -> SalesFeedbackParseResult:
-    """解析入口：按模板头分流；非模板返回 skipped。"""
+    """解析入口：按模板头首行精确匹配分流；非模板返回 skipped。
+
+    Phase 7-FIX1：首行必须是精确的模板头，不再使用包含匹配。
+    """
     raw = (text or "").strip()
-    if "【线索反馈】" in raw:
+    if not raw:
+        return SalesFeedbackParseResult(kind="none", parse_status="skipped")
+    header = _first_line(raw)
+    if header == "【线索反馈】":
         return _parse_lead_feedback(raw)
-    if "【线索更新】" in raw:
+    if header == "【线索更新】":
         return _parse_lead_update(raw)
-    if "【每日线索总结】" in raw:
+    if header == "【每日线索总结】":
         return _parse_daily_summary(raw)
     return SalesFeedbackParseResult(kind="none", parse_status="skipped")
 
@@ -92,6 +108,14 @@ def _parse_lead_feedback(raw: str) -> SalesFeedbackParseResult:
             kind="lead_feedback",
             parse_status="failed",
             parse_error="反馈编号不能为空",
+        )
+    # Phase 7-FIX1：编号格式校验
+    if not _FEEDBACK_NO_RE.fullmatch(feedback_no):
+        return SalesFeedbackParseResult(
+            kind="lead_feedback",
+            parse_status="failed",
+            feedback_no=feedback_no,
+            parse_error="反馈编号格式错误，应为 XGF-数字-数字",
         )
     try:
         parsed: dict[str, str] = {
@@ -132,6 +156,14 @@ def _parse_lead_update(raw: str) -> SalesFeedbackParseResult:
             parse_status="failed",
             parse_error="反馈编号不能为空",
         )
+    # Phase 7-FIX1：编号格式校验
+    if not _FEEDBACK_NO_RE.fullmatch(feedback_no):
+        return SalesFeedbackParseResult(
+            kind="lead_update",
+            parse_status="failed",
+            feedback_no=feedback_no,
+            parse_error="反馈编号格式错误，应为 XGF-数字-数字",
+        )
     try:
         parsed: dict[str, str] = {
             "visit_status": _require_enum("到店", fields_raw.get("到店"), LEAD_UPDATE_VISIT),
@@ -157,16 +189,25 @@ def _parse_lead_update(raw: str) -> SalesFeedbackParseResult:
 
 def _parse_daily_summary(raw: str) -> SalesFeedbackParseResult:
     fields_raw = _extract_fields(raw)
-    summary_date = fields_raw.get("日期")
-    if not summary_date:
+    summary_date_text = (fields_raw.get("日期") or "").strip()
+    if not summary_date_text:
         return SalesFeedbackParseResult(
             kind="daily_summary",
             parse_status="failed",
             parse_error="日期不能为空",
         )
+    # Phase 7-FIX1：严格 %Y-%m-%d 格式，无 fallback
+    try:
+        datetime.strptime(summary_date_text, "%Y-%m-%d")
+    except ValueError:
+        return SalesFeedbackParseResult(
+            kind="daily_summary",
+            parse_status="failed",
+            parse_error="日期必须使用 YYYY-MM-DD 格式",
+        )
     try:
         parsed: dict[str, str] = {
-            "summary_date": summary_date,
+            "summary_date": summary_date_text,
             "sales_name": _optional_text(fields_raw.get("销售")),
             "overall_quality": _require_enum("整体质量", fields_raw.get("整体质量"), DAILY_QUALITY),
             "main_problem": _optional_text(fields_raw.get("主要问题")),
@@ -189,10 +230,71 @@ def _parse_daily_summary(raw: str) -> SalesFeedbackParseResult:
     )
 
 
-def _error_feedback_no(raw_text: str) -> str:
-    """缺失反馈编号的异常记录用稳定 hash，仅用于 parse_status=failed 排查。"""
-    digest = hashlib.sha1(raw_text.encode("utf-8")).hexdigest()[:16].upper()
-    return f"ERR-{digest}"
+def _verify_lead_feedback_context(
+    db: Session,
+    *,
+    merchant_id: str,
+    lead_id: int | None,
+    staff_id: int | None,
+    feedback_no: str | None,
+) -> str | None:
+    """校验线索反馈/更新的可信上下文，返回错误信息或 None。
+
+    规则：
+      - lead_id 和 staff_id 必填
+      - DouyinLead 归属 merchant_id
+      - SalesStaff 归属 merchant_id
+      - 存在历史 notify_sales WechatTask
+      - feedback_no == build_feedback_no(lead_id, staff_id)
+    """
+    if lead_id is None or staff_id is None:
+        return "线索反馈缺少 lead_id 或 staff_id"
+    lead = db.query(DouyinLead).filter(
+        DouyinLead.id == lead_id, DouyinLead.merchant_id == merchant_id,
+    ).first()
+    if not lead:
+        return "线索不存在或不属于当前商户"
+    staff = db.query(SalesStaff).filter(
+        SalesStaff.id == staff_id, SalesStaff.merchant_id == merchant_id,
+    ).first()
+    if not staff:
+        return "销售不存在或不属于当前商户"
+    # 历史派单校验（不要求 assigned_staff_id 匹配，改派后原销售仍可反馈）
+    notify_task = db.query(WechatTask).filter(
+        WechatTask.task_type == "notify_sales",
+        WechatTask.lead_id == lead_id,
+        WechatTask.staff_id == staff_id,
+    ).first()
+    if not notify_task:
+        return "未找到该线索的派单历史"
+    # 编号必须与 lead/staff 绑定
+    expected_no = build_feedback_no(lead_id, staff_id)
+    if feedback_no != expected_no:
+        return "反馈编号与线索/销售不匹配"
+    return None
+
+
+def _verify_daily_summary_context(
+    db: Session,
+    *,
+    merchant_id: str,
+    staff_id: int | None,
+) -> str | None:
+    """校验每日总结的可信上下文，返回错误信息或 None。
+
+    规则：
+      - staff_id 必填
+      - SalesStaff 归属 merchant_id
+      - 不要求 lead_id 或 notify_sales 历史
+    """
+    if staff_id is None:
+        return "每日线索总结缺少 staff_id"
+    staff = db.query(SalesStaff).filter(
+        SalesStaff.id == staff_id, SalesStaff.merchant_id == merchant_id,
+    ).first()
+    if not staff:
+        return "销售不存在或不属于当前商户"
+    return None
 
 
 def parse_and_persist_sales_feedback(
@@ -203,10 +305,59 @@ def parse_and_persist_sales_feedback(
     lead_id: int | None = None,
     staff_id: int | None = None,
 ) -> SalesFeedbackParseResult:
-    """解析并持久化销售反馈；非模板直接返回不写库。"""
+    """解析并持久化销售反馈；非模板直接返回不写库。
+
+    Phase 7-FIX1：
+      - 模板头首行精确匹配
+      - 可信上下文校验（lead/staff/merchant/notify_sales 历史/编号绑定）
+      - 失败/skipped 不写业务表、不 commit
+      - 本函数不再自行 commit，由调用方统一管理事务
+    """
     result = parse_sales_feedback_text(raw_text)
     if result.kind == "none":
         return result
+
+    # ---- 可信上下文校验（在任何 upsert 之前）----
+    if result.kind in ("lead_feedback", "lead_update"):
+        ctx_error = _verify_lead_feedback_context(
+            db,
+            merchant_id=merchant_id,
+            lead_id=lead_id,
+            staff_id=staff_id,
+            feedback_no=result.feedback_no,
+        )
+        if ctx_error:
+            result.parse_status = "failed"
+            result.parse_error = ctx_error
+            logger.info(
+                "sales_feedback_context_failed kind=%s feedback_no=%s error=%s",
+                result.kind, result.feedback_no, ctx_error,
+            )
+            return result
+
+    if result.kind == "daily_summary":
+        ctx_error = _verify_daily_summary_context(
+            db,
+            merchant_id=merchant_id,
+            staff_id=staff_id,
+        )
+        if ctx_error:
+            result.parse_status = "failed"
+            result.parse_error = ctx_error
+            logger.info(
+                "sales_feedback_context_failed kind=daily_summary staff_id=%s error=%s",
+                staff_id, ctx_error,
+            )
+            return result
+
+    # ---- 只有 success 才写业务表 ----
+    if result.parse_status != "success":
+        logger.info(
+            "sales_feedback_parse_not_success kind=%s status=%s feedback_no=%s",
+            result.kind, result.parse_status, result.feedback_no,
+        )
+        return result
+
     if result.kind == "lead_feedback":
         _upsert_lead_feedback(
             db, merchant_id=merchant_id, raw_text=raw_text,
@@ -218,15 +369,11 @@ def parse_and_persist_sales_feedback(
             lead_id=lead_id, staff_id=staff_id, result=result,
         )
     elif result.kind == "daily_summary":
-        if staff_id is None:
-            result.parse_status = "failed"
-            result.parse_error = "每日线索总结缺少 staff_id"
-            return result
         _upsert_daily_summary(
             db, merchant_id=merchant_id, raw_text=raw_text,
             staff_id=staff_id, result=result,
         )
-    db.commit()
+
     logger.info(
         "sales_feedback_persist kind=%s status=%s feedback_no=%s",
         result.kind, result.parse_status, result.feedback_no,
@@ -250,7 +397,7 @@ def _upsert_lead_feedback(
     lead_id: int | None, staff_id: int | None, result: SalesFeedbackParseResult,
 ) -> None:
     """SalesLeadFeedback 按 merchant_id + feedback_no upsert。"""
-    feedback_no = result.feedback_no or _error_feedback_no(raw_text)
+    feedback_no = result.feedback_no
     row = db.query(SalesLeadFeedback).filter_by(
         merchant_id=merchant_id, feedback_no=feedback_no,
     ).first()
@@ -295,13 +442,10 @@ def _upsert_daily_summary(
     db: Session, *, merchant_id: str, raw_text: str,
     staff_id: int, result: SalesFeedbackParseResult,
 ) -> None:
-    """SalesDailySummary 按 merchant_id + staff_id + summary_date upsert；只保留日期当天 00:00。"""
-    summary_date_str = result.fields.get("summary_date")
-    try:
-        summary_date = datetime.fromisoformat(summary_date_str) if summary_date_str else datetime.now()
-    except ValueError:
-        summary_date = datetime.now()
-    summary_date = summary_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    """SalesDailySummary 按 merchant_id + staff_id + summary_date upsert；日期使用 strptime 严格解析。"""
+    summary_date_text = result.fields.get("summary_date")
+    # Phase 7-FIX1：严格 strptime，不做 fallback
+    summary_date = datetime.strptime(summary_date_text, "%Y-%m-%d")
     row = db.query(SalesDailySummary).filter_by(
         merchant_id=merchant_id, staff_id=staff_id, summary_date=summary_date,
     ).first()
