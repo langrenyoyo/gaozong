@@ -395,6 +395,10 @@ function compactOpenId(value?: string | null) {
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
 }
 
+function accountIdentityText(account: DouyinAccountItem): string {
+  return account.account_open_id ? `账号标识 ${compactOpenId(account.account_open_id)}` : "账号标识 -";
+}
+
 function profileTagsText(profile: DouyinConversationProfile | null, fallback?: string[] | null) {
   const tags = (profile?.tags?.length ? profile.tags : fallback || []).filter(Boolean);
   if (!tags.length) return [];
@@ -2052,9 +2056,7 @@ export default function DouyinAiCsWorkbenchPage() {
           <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-4">
             <div>
               <div className="text-sm font-bold text-[#172033]">抖音号</div>
-              <div className="text-[11px] text-slate-500">
-                {accountListSource ? "正式企业号绑定" : "企业号绑定"}
-              </div>
+              <div className="text-[11px] text-slate-500">商户本地授权管理</div>
             </div>
             <button
               onClick={() => void loadAccounts()}
@@ -2067,7 +2069,7 @@ export default function DouyinAiCsWorkbenchPage() {
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {loadingAccounts ? <EmptyState text="正在加载抖音号..." /> : null}
             {!loadingAccounts && accounts.length === 0 ? (
-              <EmptyState text="暂无抖音号：未发现授权账号或历史私信事件，请扫码授权。" />
+              <EmptyState text="暂无抖音号：请在商户本地授权管理中添加抖音号。" />
             ) : null}
             {accounts.map((account) => {
               const active = account.id === selectedAccountId;
@@ -2101,7 +2103,7 @@ export default function DouyinAiCsWorkbenchPage() {
                       {authorizationStatusText(account.authorization_status)}
                     </span>
                     <span className="mt-1 block truncate text-[11px] text-slate-500">
-                      {account.main_account_id || account.account_open_id}
+                      {accountIdentityText(account)}
                     </span>
                     <span
                       className={`mt-1 inline-flex max-w-full rounded px-1.5 py-0.5 text-[11px] font-semibold ${
