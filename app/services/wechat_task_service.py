@@ -269,7 +269,7 @@ def submit_wechat_task_result(
     """回写任务执行结果。
 
     通用规则：
-    - sent=true → 必须拒绝（P0 安全约束）
+    - sent=true + verified=true → status=sent；安全门禁失败仍 blocked/failed
     - raw_result 必须保存
 
     notify_sales 结果回写规则：
@@ -277,7 +277,8 @@ def submit_wechat_task_result(
     2. partial_match=true → status=blocked
     3. manual_review_required=true → status=blocked
     4. pasted=true && sent=false && verified=true → status=pasted
-    5. success=false → status=failed
+    5. sent=true && verified=true → status=sent（Phase 7 放开真实发送回写）
+    6. success=false → status=failed
 
     detect_reply（P1-AUTO-1）结果回写规则：
     1. verified=false → status=blocked

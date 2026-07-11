@@ -149,8 +149,8 @@ def submit_wechat_task_result(
 ):
     """回写微信任务执行结果。
 
-    P0-5A 约束：
-    - sent=true 会被拒绝
+    回写规则：
+    - sent=true && verified=true → status=sent
     - verified=false / partial_match / manual_review_required 会被 blocked
     - pasted=true && sent=false && verified=true → status=pasted
     """

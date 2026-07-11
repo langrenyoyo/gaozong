@@ -2,6 +2,7 @@
 
 覆盖 Phase 2 执行包 Task 5 要求的 5 个接入点：
 抖音人工私信、抖音 AI 自动回复、微信反馈、微信通知路由、微信自动通知服务。
+Phase 7 追加接入点 6：主线 /lead-notifications/send-to-staff 创建 WechatTask 前替换。
 所有外部上游调用与微信 UI 自动化均 mock，不发起任何真实请求，不操作真实微信。
 """
 
@@ -39,6 +40,7 @@ from app.models import (
     ForbiddenWordLibrary,
     LeadNotification,
     SalesStaff,
+    WechatTask,
 )
 
 
@@ -549,3 +551,70 @@ def test_notification_service_replaces_forbidden_words_before_write_text():
     assert "可到店详询" in notif.notification_text
     assert "现车很多" not in notif.notification_text
     db3.close()
+
+
+# ---------------------------------------------------------------------------
+# 接入点 6：主线 /lead-notifications/send-to-staff（Phase 7 WechatTask.message 前替换）
+# ---------------------------------------------------------------------------
+def test_send_to_staff_task_message_uses_forbidden_word_replacement():
+    """Phase 7：主线 send-to-staff 创建的 WechatTask.message 与 LeadNotification 必须是替换后文本。
+
+    主线 send-to-staff 只在 9000 创建 WechatTask(mode=single_send)，不操作微信 UI；
+    因此无需 mock Windows 自动化，只需断言入库文本已替换。
+    """
+    db = TestSession()
+    _seed_forbidden_words(db)
+    staff = SalesStaff(name="主线销售", status="active", wechat_nickname="Aw3", merchant_id="merchant-1")
+    db.add(staff)
+    db.flush()
+    lead = DouyinLead(
+        customer_name="主线客户",
+        source="douyin",
+        lead_type="私信",
+        status="assigned",
+        assigned_staff_id=staff.id,
+        assigned_at=datetime.now(),
+        content="现车很多",
+        customer_contact="13800138000",
+        merchant_id="merchant-1",
+    )
+    db.add(lead)
+    db.commit()
+    lead_id = lead.id
+    db.close()
+
+    from app.main import create_app
+
+    app = create_app()
+
+    def _override_get_db():
+        session = TestSession()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
+        user_id="user-1",
+        merchant_id="merchant-1",
+        merchant_ids=["merchant-1"],
+        permission_codes=["auto_wechat:leads", "auto_wechat:agent"],
+    )
+    client = TestClient(app)
+
+    response = client.post("/lead-notifications/send-to-staff", json={"lead_id": lead_id})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "created"
+    assert body["task_id"] is not None
+
+    db2 = TestSession()
+    try:
+        task = db2.query(WechatTask).filter_by(id=body["task_id"]).one()
+        notification = db2.query(LeadNotification).filter_by(id=body["notification_id"]).one()
+        assert "现车很多" not in task.message
+        assert "可到店详询" in task.message
+        assert notification.notification_text == task.message
+    finally:
+        db2.close()

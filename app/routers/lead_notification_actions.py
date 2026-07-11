@@ -13,12 +13,13 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 from app.schemas import SendToStaffRequest, SendToStaffResponse
+from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.lead_wechat_notify_eligibility_service import (
     LeadWechatNotifyDecision,
     LeadWechatNotifyReason,
     evaluate_lead_wechat_notify_eligibility,
 )
-from app.services.notification_template import compose_notification_text
+from app.services.notification_template import build_feedback_no, compose_notification_text
 from app.services.wechat_task_service import create_wechat_task
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,25 @@ def create_notify_sales_task(
         SalesStaff.merchant_id == merchant_id,
     ).first()
 
-    notification_text = (request.message or "").strip() or compose_notification_text(lead)
+    feedback_no = build_feedback_no(lead.id, staff.id)
+    notification_text = (request.message or "").strip() or compose_notification_text(
+        lead, feedback_no=feedback_no,
+    )
+    # Phase 7：派单文本进入 WechatTask / LeadNotification 前走违禁词替换（命中只替换不拦截）
+    replacement = replace_forbidden_words(
+        db,
+        merchant_id=merchant_id,
+        source="wechat_dispatch",
+        content=notification_text,
+        context={
+            "context_type": "lead_notification",
+            "context_id": str(lead.id),
+            "lead_id": lead.id,
+            "staff_id": staff.id,
+            "feedback_no": feedback_no,
+        },
+    )
+    notification_text = replacement.final_content
     task = create_wechat_task(
         db,
         task_type="notify_sales",

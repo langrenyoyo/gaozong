@@ -946,7 +946,7 @@ class WechatTaskResultRequest(BaseModel):
     partial_match: bool = Field(False, description="是否部分匹配")
     manual_review_required: bool = Field(False, description="是否需要人工复核")
     pasted: bool = Field(False, description="是否已粘贴到输入框")
-    sent: bool = Field(False, description="是否已发送（P0-5A 期间必须为 false）")
+    sent: bool = Field(False, description="是否已真实发送；notify_sales 在 verified=true 且安全门禁通过时可为 true，detect_reply 必须为 false")
     failure_stage: Optional[str] = Field(None, description="失败阶段标识")
     agent_hostname: Optional[str] = Field(None, description="执行 Agent 的主机名")
     agent_pid: Optional[int] = Field(None, description="执行 Agent 的进程 ID")

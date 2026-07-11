@@ -154,6 +154,11 @@ def test_assigned_lead_creates_notify_sales_task_and_notification_record():
         assert task.target_nickname == "Aw3"
         assert task.mode == "single_send"
         assert task.status == "pending"
+        # Phase 7：派单文本必须包含稳定反馈编号和【线索反馈】填写模板
+        assert "反馈编号：XGF-" in task.message
+        assert "【线索反馈】" in task.message
+        assert "微信：待添加/已发送申请/已通过/客户拒绝/无法添加/联系方式错误" in task.message
+        assert "意向：高意向/中意向/低意向/无意向/待判断" in task.message
 
         notification = db.query(LeadNotification).filter_by(id=body["notification_id"]).one()
         assert notification.lead_id == lead_id
@@ -161,6 +166,8 @@ def test_assigned_lead_creates_notify_sales_task_and_notification_record():
         assert notification.send_status == "pending"
         assert notification.send_mode == "wechat_task"
         assert "客户-merchant-a" in notification.notification_text
+        # Phase 7：WechatTask.message 与 LeadNotification.notification_text 必须一致
+        assert task.message == notification.notification_text
     finally:
         db.close()
 
