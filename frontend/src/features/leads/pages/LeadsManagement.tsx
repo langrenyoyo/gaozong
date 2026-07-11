@@ -79,8 +79,11 @@ function contactStatusLabel(status?: string | null): string {
 }
 
 function getLeadContactValues(lead: Lead): string[] {
-  const values = [lead.phone, lead.wechat, ...(lead.all_extracted_contacts || []), lead.customer_contact];
-  return values.filter((value, index): value is string => Boolean(value) && values.indexOf(value) === index);
+  return uniqueStrings([lead.phone, lead.wechat, ...(lead.all_extracted_contacts || []), lead.customer_contact]);
+}
+
+function getAuthoritativeContactValues(lead: Lead): string[] {
+  return uniqueStrings([lead.phone, lead.wechat, ...(lead.all_extracted_contacts || [])]);
 }
 
 type OperationalTagKey = "manual_required" | "follow_up" | "retained_contact" | "high_intent";
@@ -115,7 +118,7 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
 }
 
 function hasRetainedContact(lead: Lead): boolean {
-  return getLeadContactValues(lead).length > 0;
+  return getAuthoritativeContactValues(lead).length > 0;
 }
 
 function isHighIntentLead(lead: Lead): boolean {
@@ -201,7 +204,7 @@ function buildDouyinConversationJump(lead: Lead): { href: string | null; disable
   const missing: string[] = [];
   if (!lead.account_open_id) missing.push("企业号");
   if (!lead.conversation_short_id) missing.push("会话标识");
-  if (!lead.source_id) missing.push("客户 open_id");
+  if (!lead.source_id) missing.push("客户身份标识");
   if (missing.length) {
     return {
       href: null,
@@ -1825,7 +1828,7 @@ export default function LeadsManagement() {
                 <tr>
                   <th className="w-[15%] px-4 py-3 font-semibold">联系人</th>
                   <th className="w-[17%] px-4 py-3 font-semibold">线索信息</th>
-                  <th className="w-[14%] px-4 py-3 font-semibold">联系电话</th>
+                  <th className="w-[14%] px-4 py-3 font-semibold">联系方式</th>
                   <th className="w-[10%] px-4 py-3 font-semibold">线索状态</th>
                   <th className="w-[16%] px-4 py-3 font-semibold">运营标签</th>
                   <th className="w-[10%] px-4 py-3 font-semibold">分配销售</th>
