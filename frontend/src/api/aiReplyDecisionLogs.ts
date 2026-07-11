@@ -30,6 +30,8 @@ export interface AiReplyDecisionLogListItem {
   manual_confirmed?: boolean;
   upstream_msg_id?: string | null;
   sent_at?: string | null;
+  // 发送流水创建时间，用于实发时间回退展示（sent_at 优先，其次本字段，最后 created_at）
+  send_created_at?: string | null;
   model?: string | null;
   is_effective?: boolean | null;
   effectiveness_reason?: string | null;

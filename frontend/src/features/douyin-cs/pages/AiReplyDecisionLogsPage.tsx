@@ -103,6 +103,11 @@ function effectivenessLabel(value?: boolean | null): string {
   return "未标记";
 }
 
+// 实发时间优先级：sent_at > send_created_at > 决策 created_at
+function displaySendTime(item: { sent_at?: string | null; send_created_at?: string | null; created_at?: string | null }) {
+  return item.sent_at || item.send_created_at || item.created_at || null;
+}
+
 function Chip({
   children,
   tone = "slate",
@@ -278,7 +283,8 @@ function DetailModal({
                   <div>模型：{detail.model || "-"}</div>
                   <div>发送来源：{detail.send_source || "-"}</div>
                   <div>决策版本：{detail.decision_version || "-"}</div>
-                  <div>创建时间：{formatDateTimeLocal(detail.created_at)}</div>
+                  <div>实发时间：{displaySendTime(detail) ? formatDateTimeLocal(displaySendTime(detail)) : "-"}</div>
+                  <div>决策时间：{formatDateTimeLocal(detail.created_at)}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {allowedCategoryKeys.length > 0 ? (
@@ -543,12 +549,12 @@ export default function AiReplyDecisionLogsPage() {
                 const riskFlags = safeArray(item.risk_flags);
                 const tags = safeArray(item.tags);
                 return (
-                  <tr key={item.send_record_id || item.id} className="border-t border-[#f0f2f7] hover:bg-[#f8fafc]">
+                  <tr key={item.id} className="border-t border-[#f0f2f7] hover:bg-[#f8fafc]">
                     <td className="px-4 py-3">
                       <div className="line-clamp-2 text-[#374151]" title={item.latest_message_summary || undefined}>
                         {item.latest_message_summary || "-"}
                       </div>
-                      <div className="mt-1 text-[10px] text-[#8b95a6]">{formatDateTimeLocal(item.created_at)}</div>
+                      <div className="mt-1 text-[10px] text-[#8b95a6]">{displaySendTime(item) ? formatDateTimeLocal(displaySendTime(item)) : "-"}</div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="line-clamp-2 text-[#374151]" title={item.sent_content_summary || undefined}>
