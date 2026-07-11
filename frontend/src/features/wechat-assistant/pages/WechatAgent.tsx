@@ -193,6 +193,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     wechat_id: "",
     phone: "",
     status: "active",
+    enable_lead_assignment: true,
+    enable_short_video_live_lead_report: false,
+    enable_daily_sales_feedback_report: false,
+    enable_lead_trace_report: false,
+    enable_sales_unit_cost_report: false,
   });
   const [editStaffForm, setEditStaffForm] = useState({
     name: "",
@@ -200,6 +205,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     wechat_id: "",
     phone: "",
     status: "active",
+    enable_lead_assignment: true,
+    enable_short_video_live_lead_report: false,
+    enable_daily_sales_feedback_report: false,
+    enable_lead_trace_report: false,
+    enable_sales_unit_cost_report: false,
   });
 
   const activeStaff = useMemo(
@@ -356,6 +366,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       wechat_id: "",
       phone: "",
       status: "active",
+      enable_lead_assignment: true,
+      enable_short_video_live_lead_report: false,
+      enable_daily_sales_feedback_report: false,
+      enable_lead_trace_report: false,
+      enable_sales_unit_cost_report: false,
     });
   }
 
@@ -367,6 +382,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       wechat_id: "",
       phone: "",
       status: "active",
+      enable_lead_assignment: true,
+      enable_short_video_live_lead_report: false,
+      enable_daily_sales_feedback_report: false,
+      enable_lead_trace_report: false,
+      enable_sales_unit_cost_report: false,
     });
   }
 
@@ -378,6 +398,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       wechat_id: staff.wechat_id || "",
       phone: staff.phone || "",
       status: staff.status === "disabled" || staff.status === "inactive" ? "disabled" : "active",
+      enable_lead_assignment: staff.enable_lead_assignment ?? true,
+      enable_short_video_live_lead_report: staff.enable_short_video_live_lead_report ?? false,
+      enable_daily_sales_feedback_report: staff.enable_daily_sales_feedback_report ?? false,
+      enable_lead_trace_report: staff.enable_lead_trace_report ?? false,
+      enable_sales_unit_cost_report: staff.enable_sales_unit_cost_report ?? false,
     });
   }
 
@@ -395,6 +420,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         wechat_nickname: wechatNickname,
         wechat_id: staffForm.wechat_id.trim() || undefined,
         phone: staffForm.phone.trim() || undefined,
+        enable_lead_assignment: staffForm.enable_lead_assignment,
+        enable_short_video_live_lead_report: staffForm.enable_short_video_live_lead_report,
+        enable_daily_sales_feedback_report: staffForm.enable_daily_sales_feedback_report,
+        enable_lead_trace_report: staffForm.enable_lead_trace_report,
+        enable_sales_unit_cost_report: staffForm.enable_sales_unit_cost_report,
       };
       await createStaff(payload);
       resetStaffForm();
@@ -423,6 +453,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         wechat_id: editStaffForm.wechat_id.trim() || undefined,
         phone: editStaffForm.phone.trim() || undefined,
         status: editStaffForm.status as "active" | "disabled",
+        enable_lead_assignment: editStaffForm.enable_lead_assignment,
+        enable_short_video_live_lead_report: editStaffForm.enable_short_video_live_lead_report,
+        enable_daily_sales_feedback_report: editStaffForm.enable_daily_sales_feedback_report,
+        enable_lead_trace_report: editStaffForm.enable_lead_trace_report,
+        enable_sales_unit_cost_report: editStaffForm.enable_sales_unit_cost_report,
       });
       closeEditStaffDialog();
       toast.success("销售微信已更新");
@@ -494,7 +529,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         executed: Boolean(result.success),
         pollResult: result,
         message: result.success
-          ? "测试任务已由本机 Agent 执行。当前安全门禁保持 sent=false。"
+          ? "测试任务已由本机 Agent 执行，请查看任务结果确认 pasted / sent 状态。"
           : result.failure_stage || result.message || "测试任务执行失败",
       });
       await refreshPage();
@@ -772,6 +807,48 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="手机号"
                 />
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={staffForm.enable_lead_assignment}
+                      onChange={(event) => setStaffForm((prev) => ({ ...prev, enable_lead_assignment: event.target.checked }))}
+                    />
+                    线索分配
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={staffForm.enable_short_video_live_lead_report}
+                      onChange={(event) => setStaffForm((prev) => ({ ...prev, enable_short_video_live_lead_report: event.target.checked }))}
+                    />
+                    短视频/直播留资管理表
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={staffForm.enable_daily_sales_feedback_report}
+                      onChange={(event) => setStaffForm((prev) => ({ ...prev, enable_daily_sales_feedback_report: event.target.checked }))}
+                    />
+                    每日线索销售反馈表
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={staffForm.enable_lead_trace_report}
+                      onChange={(event) => setStaffForm((prev) => ({ ...prev, enable_lead_trace_report: event.target.checked }))}
+                    />
+                    线索溯源表
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={staffForm.enable_sales_unit_cost_report}
+                      onChange={(event) => setStaffForm((prev) => ({ ...prev, enable_sales_unit_cost_report: event.target.checked }))}
+                    />
+                    销售单车成本表
+                  </label>
+                </div>
                 <button
                   onClick={() => void handleSaveStaff()}
                   disabled={savingStaff}
@@ -923,7 +1000,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             </div>
             <div className="space-y-3 p-4">
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                执行测试会操作本机微信窗口，请确保微信已登录且窗口可见。本次测试只粘贴消息，不会自动发送。
+                执行测试会操作本机微信窗口，请确保微信已登录且窗口可见。
               </div>
               <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                 <input
@@ -940,7 +1017,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 />
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs font-semibold text-slate-600">执行模式：paste_only，仅粘贴，不发送。</div>
+                <div className="text-xs font-semibold text-slate-600">执行模式由任务 mode 决定；真实派单任务需通过联系人验证、前台焦点和安全门禁。</div>
                 <button
                   onClick={() => void handleRunTest()}
                   disabled={testing || !testMessage.trim()}
@@ -1238,6 +1315,51 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                       <option value="disabled">停用</option>
                     </select>
                   </label>
+                  <div className="text-xs font-semibold text-slate-600 sm:col-span-2">
+                    规则字段
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-normal text-slate-700">
+                      <label className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editStaffForm.enable_lead_assignment}
+                          onChange={(event) => setEditStaffForm((prev) => ({ ...prev, enable_lead_assignment: event.target.checked }))}
+                        />
+                        线索分配
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editStaffForm.enable_short_video_live_lead_report}
+                          onChange={(event) => setEditStaffForm((prev) => ({ ...prev, enable_short_video_live_lead_report: event.target.checked }))}
+                        />
+                        短视频/直播留资管理表
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editStaffForm.enable_daily_sales_feedback_report}
+                          onChange={(event) => setEditStaffForm((prev) => ({ ...prev, enable_daily_sales_feedback_report: event.target.checked }))}
+                        />
+                        每日线索销售反馈表
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editStaffForm.enable_lead_trace_report}
+                          onChange={(event) => setEditStaffForm((prev) => ({ ...prev, enable_lead_trace_report: event.target.checked }))}
+                        />
+                        线索溯源表
+                      </label>
+                      <label className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editStaffForm.enable_sales_unit_cost_report}
+                          onChange={(event) => setEditStaffForm((prev) => ({ ...prev, enable_sales_unit_cost_report: event.target.checked }))}
+                        />
+                        销售单车成本表
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex flex-wrap justify-end gap-2 border-t border-[#edf1f6] pt-3">
                   <button

@@ -310,6 +310,12 @@ export interface Staff {
   phone: string | null;
   status: "active" | "disabled" | "inactive" | "deleted" | string;
   merchant_id?: string | null;
+  // 小高 AI 一期：销售规则布尔字段（5 项）
+  enable_lead_assignment: boolean;
+  enable_short_video_live_lead_report: boolean;
+  enable_daily_sales_feedback_report: boolean;
+  enable_lead_trace_report: boolean;
+  enable_sales_unit_cost_report: boolean;
   created_at: string;
   updated_at: string;
 }

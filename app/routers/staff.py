@@ -41,6 +41,11 @@ def create_staff(
         wechat_nickname=data.wechat_nickname,
         phone=data.phone,
         merchant_id=_merchant_id(context),
+        enable_lead_assignment=data.enable_lead_assignment,
+        enable_short_video_live_lead_report=data.enable_short_video_live_lead_report,
+        enable_daily_sales_feedback_report=data.enable_daily_sales_feedback_report,
+        enable_lead_trace_report=data.enable_lead_trace_report,
+        enable_sales_unit_cost_report=data.enable_sales_unit_cost_report,
     )
 
 

@@ -18,9 +18,8 @@
  * - 检测后刷新 checks + notifications + task
  *
  * 安全约束：
- * - 只允许 Aw3
- * - 只允许 paste_only
- * - sent 必须为 false
+ * - 测试面板用于创建本机 Agent 任务并查看回写结果
+ * - 真实派单发送由任务 mode 与安全门禁共同决定
  */
 
 import {
@@ -651,8 +650,8 @@ export default function WechatTaskPanel() {
       <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
         <InfoIcon size={14} className="mt-0.5 shrink-0" />
         <div>
-          <span className="font-semibold">安全约束：</span>
-          仅允许 Aw3 联系人、仅 paste_only 模式、禁止自动发送（sent 必须为 false）。
+          <span className="font-semibold">安全提示：</span>
+          测试面板用于创建本机 Agent 任务并查看回写结果；真实派单发送由任务 mode 与安全门禁共同决定。
         </div>
       </div>
 

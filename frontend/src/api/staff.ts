@@ -27,6 +27,12 @@ export interface StaffPayload {
   wechat_id?: string;
   phone?: string;
   status?: "active" | "disabled" | "deleted";
+  // 小高 AI 一期：销售规则布尔字段（5 项）
+  enable_lead_assignment?: boolean;
+  enable_short_video_live_lead_report?: boolean;
+  enable_daily_sales_feedback_report?: boolean;
+  enable_lead_trace_report?: boolean;
+  enable_sales_unit_cost_report?: boolean;
 }
 
 /** 获取销售列表，可按状态和关键词过滤 */

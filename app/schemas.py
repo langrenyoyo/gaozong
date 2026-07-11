@@ -445,6 +445,12 @@ class StaffCreate(BaseModel):
     wechat_id: Optional[str] = Field(None, description="微信号")
     wechat_nickname: Optional[str] = Field(None, description="微信昵称")
     phone: Optional[str] = Field(None, description="手机号")
+    # 小高 AI 一期：销售规则布尔字段（5 项）
+    enable_lead_assignment: bool = Field(True, description="是否参与线索分配，默认 true")
+    enable_short_video_live_lead_report: bool = Field(False, description="是否接收短视频/直播留资管理表")
+    enable_daily_sales_feedback_report: bool = Field(False, description="是否接收每日线索销售反馈表")
+    enable_lead_trace_report: bool = Field(False, description="是否接收线索溯源表")
+    enable_sales_unit_cost_report: bool = Field(False, description="是否接收销售单车成本表")
 
 
 class StaffUpdate(BaseModel):
@@ -453,6 +459,12 @@ class StaffUpdate(BaseModel):
     wechat_nickname: Optional[str] = None
     phone: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|disabled|deleted)$")
+    # 小高 AI 一期：销售规则布尔字段（5 项）
+    enable_lead_assignment: Optional[bool] = None
+    enable_short_video_live_lead_report: Optional[bool] = None
+    enable_daily_sales_feedback_report: Optional[bool] = None
+    enable_lead_trace_report: Optional[bool] = None
+    enable_sales_unit_cost_report: Optional[bool] = None
 
 
 class StaffOut(BaseModel):
@@ -463,6 +475,12 @@ class StaffOut(BaseModel):
     phone: Optional[str] = None
     status: str
     merchant_id: Optional[str] = None
+    # 小高 AI 一期：销售规则布尔字段（5 项）
+    enable_lead_assignment: bool = True
+    enable_short_video_live_lead_report: bool = False
+    enable_daily_sales_feedback_report: bool = False
+    enable_lead_trace_report: bool = False
+    enable_sales_unit_cost_report: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

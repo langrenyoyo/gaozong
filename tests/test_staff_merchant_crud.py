@@ -209,3 +209,35 @@ def test_staff_requires_agent_permission():
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_staff_crud_exposes_xiaogao_report_rule_fields():
+    """Phase 7 Task 6：销售 CRUD 必须接收并返回小高 5 项规则字段。"""
+    client = _client("merchant-a")
+    response = client.post(
+        "/staff",
+        json={
+            "name": "规则销售",
+            "wechat_nickname": "Aw3",
+            "enable_lead_assignment": False,
+            "enable_short_video_live_lead_report": True,
+            "enable_daily_sales_feedback_report": True,
+            "enable_lead_trace_report": True,
+            "enable_sales_unit_cost_report": True,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enable_lead_assignment"] is False
+    assert body["enable_short_video_live_lead_report"] is True
+    assert body["enable_daily_sales_feedback_report"] is True
+    assert body["enable_lead_trace_report"] is True
+    assert body["enable_sales_unit_cost_report"] is True
+
+    updated = client.put(
+        f"/staff/{body['id']}",
+        json={"enable_lead_assignment": True, "enable_sales_unit_cost_report": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["enable_lead_assignment"] is True
+    assert updated.json()["enable_sales_unit_cost_report"] is False

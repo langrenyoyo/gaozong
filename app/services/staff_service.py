@@ -13,6 +13,11 @@ def create_staff(
     wechat_nickname: str | None = None,
     phone: str | None = None,
     merchant_id: str | None = None,
+    enable_lead_assignment: bool = True,
+    enable_short_video_live_lead_report: bool = False,
+    enable_daily_sales_feedback_report: bool = False,
+    enable_lead_trace_report: bool = False,
+    enable_sales_unit_cost_report: bool = False,
 ) -> SalesStaff:
     """创建销售人员。"""
     staff = SalesStaff(
@@ -21,6 +26,11 @@ def create_staff(
         wechat_nickname=wechat_nickname,
         phone=phone,
         merchant_id=merchant_id,
+        enable_lead_assignment=enable_lead_assignment,
+        enable_short_video_live_lead_report=enable_short_video_live_lead_report,
+        enable_daily_sales_feedback_report=enable_daily_sales_feedback_report,
+        enable_lead_trace_report=enable_lead_trace_report,
+        enable_sales_unit_cost_report=enable_sales_unit_cost_report,
     )
     db.add(staff)
     db.commit()
