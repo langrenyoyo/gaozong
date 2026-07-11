@@ -4,7 +4,10 @@
 沿用 auto_wechat:agent 权限，便于后台调试和人工补录。
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
@@ -12,6 +15,8 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.schemas import SalesFeedbackParseRequest, SalesFeedbackParseResponse
 from app.services.sales_feedback_parser import parse_and_persist_sales_feedback
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sales-feedback", tags=["销售反馈"])
 
@@ -43,9 +48,17 @@ def parse_sales_feedback(
             status_code=400,
             detail={"code": "SALES_FEEDBACK_PARSE_FAILED", "message": "销售反馈格式或上下文无效"},
         )
-    # Phase 7-FIX1：success 由调用方统一 commit（Task 5 收口）
+    # Phase 7-FIX1 Task 5：success 由调用方统一 commit；持久化异常回滚并返回 500
     if result.parse_status == "success":
-        db.commit()
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.exception("sales_feedback_persist_error route=parse")
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "SALES_FEEDBACK_PERSIST_FAILED", "message": "销售反馈持久化失败"},
+            ) from exc
     return {
         "success": True,
         "data": {

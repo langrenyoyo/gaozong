@@ -390,3 +390,156 @@ def test_daily_summary_only_requires_merchant_owned_staff():
     )
     assert response.status_code == 200
     assert response.json()["data"]["parse_status"] == "success"
+
+
+# ---- Phase 7-FIX1 Task 5 Step 1: 事务隔离红灯 ----
+
+
+def test_sales_feedback_api_rolls_back_on_persistence_error(monkeypatch):
+    """API 持久化异常时回滚，新 session 查不到半成品。"""
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.orm import Session as SASession
+
+    db = TestSession()
+    try:
+        _seed_trusted_context(db, lead_id=10, staff_id=3)
+    finally:
+        db.close()
+
+    # monkeypatch sqlalchemy.orm.Session.commit 模拟持久化异常
+    original_commit = SASession.commit
+
+    def failing_commit(self):
+        raise SQLAlchemyError("simulated persistence error")
+
+    monkeypatch.setattr(SASession, "commit", failing_commit)
+
+    try:
+        response = _client().post(
+            "/sales-feedback/parse",
+            json={"raw_text": LEAD_FEEDBACK_TEXT, "lead_id": 10, "staff_id": 3},
+        )
+        assert response.status_code == 500
+        assert response.json()["detail"]["code"] == "SALES_FEEDBACK_PERSIST_FAILED"
+    finally:
+        monkeypatch.setattr(SASession, "commit", original_commit)
+
+    # 新 session 查不到半成品
+    db = TestSession()
+    try:
+        assert db.query(SalesLeadFeedback).count() == 0
+    finally:
+        db.close()
+
+
+def test_reply_state_survives_feedback_parser_failure():
+    """detect_reply 提交 replied 后反馈解析失败，核心 replied 状态不受影响。"""
+    from app.models import DouyinLead, LeadNotification, ReplyCheck, SalesStaff, WechatTask
+    from app.services.wechat_task_service import submit_wechat_task_result
+
+    db = TestSession()
+    try:
+        staff = SalesStaff(id=3, name="张三", wechat_nickname="Aw3", merchant_id="merchant-a")
+        db.add(staff)
+        lead = DouyinLead(
+            id=10, merchant_id="merchant-a", assigned_staff_id=3,
+        )
+        db.add(lead)
+        check = ReplyCheck(id=1, lead_id=10, staff_id=3, check_status="pending")
+        db.add(check)
+        notif = LeadNotification(
+            id=1, lead_id=10, staff_id=3, check_id=1,
+            notification_text="线索通知", send_status="composed",
+        )
+        db.add(notif)
+        notify_task = WechatTask(
+            id=2, task_type="notify_sales", lead_id=10, staff_id=3,
+            mode="single_send", status="sent",
+        )
+        db.add(notify_task)
+        task = WechatTask(
+            id=1, task_type="detect_reply", lead_id=10, staff_id=3,
+            reply_check_id=1, mode="read_only", status="pending",
+        )
+        db.add(task)
+        db.commit()
+
+        # 提交 replied，raw_result 含非法枚举值触发解析失败
+        submit_wechat_task_result(
+            db, task,
+            success=True,
+            verified=True,
+            detected_status="replied",
+            raw_result={
+                "matched_reply": (
+                    "【线索反馈】\n反馈编号：XGF-10-3\n"
+                    "微信：非法值\n开口：已开口\n方式：全款或分期均可\n"
+                    "车型：A6\n匹配：展厅有车\n精准：精准\n意向：高意向"
+                ),
+            },
+        )
+    finally:
+        db.close()
+
+    # 新 session 验证核心 replied 状态已提交
+    db = TestSession()
+    try:
+        task_check = db.query(WechatTask).filter_by(id=1).one()
+        assert task_check.status == "completed"
+        reply_check = db.query(ReplyCheck).filter_by(id=1).one()
+        assert reply_check.check_status == "replied"
+        notification = db.query(LeadNotification).filter_by(id=1).one()
+        assert notification.send_status == "replied"
+    finally:
+        db.close()
+
+
+def test_reply_parser_failure_rolls_back_session():
+    """反馈解析异常后，同一 session 仍可正常查询。"""
+    from app.models import DouyinLead, LeadNotification, ReplyCheck, SalesStaff, WechatTask
+    from app.services.wechat_task_service import submit_wechat_task_result
+
+    db = TestSession()
+    try:
+        staff = SalesStaff(id=3, name="张三", wechat_nickname="Aw3", merchant_id="merchant-a")
+        db.add(staff)
+        lead = DouyinLead(id=10, merchant_id="merchant-a", assigned_staff_id=3)
+        db.add(lead)
+        check = ReplyCheck(id=1, lead_id=10, staff_id=3, check_status="pending")
+        db.add(check)
+        notif = LeadNotification(
+            id=1, lead_id=10, staff_id=3, check_id=1,
+            notification_text="线索通知", send_status="composed",
+        )
+        db.add(notif)
+        notify_task = WechatTask(
+            id=2, task_type="notify_sales", lead_id=10, staff_id=3,
+            mode="single_send", status="sent",
+        )
+        db.add(notify_task)
+        task = WechatTask(
+            id=1, task_type="detect_reply", lead_id=10, staff_id=3,
+            reply_check_id=1, mode="read_only", status="pending",
+        )
+        db.add(task)
+        db.commit()
+
+        submit_wechat_task_result(
+            db, task,
+            success=True,
+            verified=True,
+            detected_status="replied",
+            raw_result={
+                "matched_reply": (
+                    "【线索反馈】\n反馈编号：XGF-10-3\n"
+                    "微信：非法值\n开口：已开口\n方式：全款或分期均可\n"
+                    "车型：A6\n匹配：展厅有车\n精准：精准\n意向：高意向"
+                ),
+            },
+        )
+
+        # 同一 session 仍可正常查询
+        count = db.query(WechatTask).count()
+        assert count >= 2
+    finally:
+        db.close()

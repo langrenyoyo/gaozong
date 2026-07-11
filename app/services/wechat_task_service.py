@@ -598,11 +598,24 @@ def _submit_detect_reply_result(
         task.failure_stage = None
 
         # P1-AUTO-1AB-FIX2：联动更新关联的 ReplyCheck 和 LeadNotification
-        _update_check_and_notification_on_replied(db, task)
+        reply_text = _update_check_and_notification_on_replied(db, task)
 
+        # Phase 7-FIX1 Task 5：先提交核心 replied 状态，再独立解析反馈
         db.commit()
         db.refresh(task)
         logger.info("detect_reply task %s: 检测到有效回复", task.id)
+
+        # 反馈解析在独立事务中执行，失败只回滚反馈不碰 replied 状态
+        if reply_text:
+            try:
+                _try_parse_sales_feedback_from_reply(db, task, reply_text)
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.exception(
+                    "sales_feedback_parse stage=failed task_id=%s error=%s",
+                    task.id, exc,
+                )
         return task
 
     if detected_status == "manual_review":
@@ -765,15 +778,16 @@ def _backfill_notification_check_id(db: Session, task: WechatTask, check_id: int
     return False
 
 
-def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> None:
+def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> str | None:
     """P1-AUTO-1AB-FIX2：detect_reply 检测到有效回复后，联动更新关联记录。
 
     职责：
     1. 更新 ReplyCheck.check_status 为 replied（如果有 reply_check_id）
     2. 更新 LeadNotification.send_status 为 replied
     3. 回填 LeadNotification.check_id（如果为空）
-    4. Phase 7：尝试解析销售反馈固定模板并持久化（失败不影响 replied 状态）
-    5. 失败时只记日志，不抛异常，不影响 task 状态
+
+    返回 reply_text 供外层独立解析反馈（Phase 7-FIX1 Task 5）。
+    失败时只记日志，不抛异常，不影响 task 状态。
     """
     try:
         reply_text = _extract_reply_from_raw(task.raw_result)
@@ -810,14 +824,13 @@ def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> 
                     "LeadNotification #%d send_status=replied", notif.id,
                 )
 
-        # Phase 7：尝试解析销售反馈固定模板；失败只记日志，不影响 replied 状态流转
-        if reply_text:
-            _try_parse_sales_feedback_from_reply(db, task, reply_text)
+        return reply_text
     except Exception as exc:
         logger.error(
             "_update_check_and_notification_on_replied: 联动更新失败（不影响 task）: %s",
             exc,
         )
+        return None
 
 
 def _try_parse_sales_feedback_from_reply(
@@ -827,37 +840,33 @@ def _try_parse_sales_feedback_from_reply(
 
     只识别【线索反馈】/【线索更新】/【每日线索总结】三类模板头；
     非模板文本直接跳过，不接 LLM、不做自由文本猜测。
-    解析失败只记日志，不影响 task/ReplyCheck/LeadNotification 原有状态流转。
+
+    Phase 7-FIX1 Task 5：异常不再内部吞没，由外层统一 rollback 并记日志。
     """
     if not reply_text or "【" not in reply_text:
         return
-    try:
-        merchant_id: str | None = None
-        if task.lead_id:
-            lead = db.query(DouyinLead).filter(DouyinLead.id == task.lead_id).first()
-            if lead:
-                merchant_id = lead.merchant_id
-        if not merchant_id:
-            logger.warning(
-                "sales_feedback_parse stage=skipped reason=merchant_missing task_id=%s",
-                task.id,
-            )
-            return
-        result = parse_and_persist_sales_feedback(
-            db,
-            merchant_id=merchant_id,
-            raw_text=reply_text,
-            lead_id=task.lead_id,
-            staff_id=task.staff_id,
+    merchant_id: str | None = None
+    if task.lead_id:
+        lead = db.query(DouyinLead).filter(DouyinLead.id == task.lead_id).first()
+        if lead:
+            merchant_id = lead.merchant_id
+    if not merchant_id:
+        logger.warning(
+            "sales_feedback_parse stage=skipped reason=merchant_missing task_id=%s",
+            task.id,
         )
-        logger.info(
-            "sales_feedback_parse stage=done task_id=%s kind=%s status=%s error=%s",
-            task.id, result.kind, result.parse_status, result.parse_error,
-        )
-    except Exception as exc:
-        logger.exception(
-            "sales_feedback_parse stage=failed task_id=%s error=%s", task.id, exc,
-        )
+        return
+    result = parse_and_persist_sales_feedback(
+        db,
+        merchant_id=merchant_id,
+        raw_text=reply_text,
+        lead_id=task.lead_id,
+        staff_id=task.staff_id,
+    )
+    logger.info(
+        "sales_feedback_parse stage=done task_id=%s kind=%s status=%s error=%s",
+        task.id, result.kind, result.parse_status, result.parse_error,
+    )
 
 
 def _extract_reply_from_raw(raw_result: str | None) -> str | None:
