@@ -1746,3 +1746,29 @@ class AiReplyDecisionEffectivenessPatch(BaseModel):
 
     is_effective: Optional[bool] = None
     effectiveness_reason: Optional[str] = None
+
+
+class SalesFeedbackParseRequest(BaseModel):
+    """销售反馈解析请求（Phase 7）。"""
+
+    raw_text: str = Field(..., min_length=1, max_length=5000)
+    lead_id: Optional[int] = None
+    staff_id: Optional[int] = None
+
+
+class SalesFeedbackParseResponseData(BaseModel):
+    """销售反馈解析结果数据。"""
+
+    kind: str
+    parse_status: str
+    feedback_no: Optional[str] = None
+    fields: dict[str, str] = Field(default_factory=dict)
+    parse_error: Optional[str] = None
+
+
+class SalesFeedbackParseResponse(BaseModel):
+    """销售反馈解析响应。"""
+
+    success: bool = True
+    data: SalesFeedbackParseResponseData
+    message: str = "success"
