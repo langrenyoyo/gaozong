@@ -444,7 +444,6 @@ def test_compose_files_use_explicit_local_env_profiles():
     production = read("docker-compose.yml")
     development = read("docker-compose.dev.yml")
     staging = read("docker-compose.staging.yml")
-    legacy = read("docker-compose.auto-wechat.yml")
 
     assert ".env.production.local" in production
     assert "./frontend/.env" not in production
@@ -452,7 +451,6 @@ def test_compose_files_use_explicit_local_env_profiles():
     assert "XG_DOUYIN_AI_CS_DB_PATH:" not in development
     assert "RAG_DATABASE_URL: sqlite:////data/xg_douyin_ai_cs.db" in development
     assert ".env.staging.local" in staging
-    assert "env_file:\n      - .env" not in legacy
 
     assert 'NEWCAR_AUTH_ENABLED: "${NEWCAR_AUTH_ENABLED:-false}"' in development
     assert 'NEWCAR_AUTH_MOCK_ENABLED: "${NEWCAR_AUTH_MOCK_ENABLED:-true}"' in development
@@ -885,3 +883,36 @@ def test_three_templates_document_address_roles():
         # 必须提到容器/service name 概念和浏览器概念
         assert "容器" in content or "service name" in content or "Compose" in content, f"{name} 缺容器/service name 说明"
         assert "浏览器" in content, f"{name} 缺浏览器地址角色说明"
+
+
+def test_deprecated_auto_wechat_compose_not_exist():
+    """旧 SQLite-only 入口 docker-compose.auto-wechat.yml 必须已删除，禁止重新出现。"""
+    assert not Path("docker-compose.auto-wechat.yml").exists()
+
+
+def test_preflight_keeps_deprecated_compose_guard():
+    """production preflight 必须保留 DEPRECATED_COMPOSE 门禁，发现废弃 compose 重新出现时报警。"""
+    source = Path("scripts/production_pg_preflight.sh").read_text(encoding="utf-8")
+    assert "docker-compose.auto-wechat.yml" in source, (
+        "preflight 必须保留 docker-compose.auto-wechat.yml 废弃入口检测"
+    )
+
+
+def test_production_compose_documents_main_entry():
+    """docker-compose.yml 顶部必须明确：唯一 production 主入口。"""
+    source = read("docker-compose.yml")
+    assert "唯一 production 主入口" in source, "docker-compose.yml 缺唯一 production 主入口声明"
+
+
+def test_dev_compose_documents_independent():
+    """docker-compose.dev.yml 顶部必须明确：独立完整编排，禁止与生产主文件组合。"""
+    source = read("docker-compose.dev.yml")
+    assert "独立完整编排" in source
+    assert "禁止与生产主文件组合使用" in source
+
+
+def test_staging_compose_documents_override_only():
+    """docker-compose.staging.yml 顶部必须明确：只能与主文件组合，禁止单独运行、禁止 production。"""
+    source = read("docker-compose.staging.yml")
+    assert "不能单独运行" in source
+    assert "禁止用于 production" in source

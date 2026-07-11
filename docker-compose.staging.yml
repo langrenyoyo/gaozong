@@ -1,4 +1,7 @@
-# staging 独立编排（override docker-compose.yml）
+# auto_wechat staging 覆盖文件。
+# 本文件不能单独运行，只能与 docker-compose.yml 组合使用。
+# 禁止用于 production，必须指定独立 project name、staging env、端口和数据卷。
+# （原 staging 独立编排，override docker-compose.yml）
 # P3-E-9100-STAGING-ENV-BOOTSTRAP-1
 #
 # 隔离策略（!override 完全替换 base 继承的 ports/volumes/env_file）：

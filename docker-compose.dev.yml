@@ -1,7 +1,15 @@
-# 本地开发调试容器编排（9000 主后端 + 9100 抖音AI客服 + frontend 前端）
+# auto_wechat 本地开发专用 Docker Compose。
+# 本文件是独立完整编排，不是 docker-compose.yml 的 override，禁止与生产主文件组合使用。
+# 使用 SQLite、Mock 鉴权、源码热更新和开发能力中心服务，禁止用于 staging 或 production。
 #
-# 启动：  docker compose -f docker-compose.dev.yml up --build
-# 停止：  docker compose -f docker-compose.dev.yml down
+# 9000 主后端 + 9100 抖音AI客服 + frontend 前端 + 能力中心 9201-9206 + 可选 postgres profile。
+#
+# 启动（开发）：
+#   docker compose --env-file .env.development.local -f docker-compose.dev.yml up -d
+# 启动（LAN 联调）：
+#   docker compose --env-file .env.lan.local -f docker-compose.dev.yml up -d
+# 停止：
+#   docker compose -f docker-compose.dev.yml down
 #
 # 重要边界：
 # - 19000 小高AI微信助手【不】在本编排中。它依赖宿主机 Windows 微信窗口、UIA、

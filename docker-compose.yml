@@ -1,3 +1,8 @@
+# auto_wechat Docker Compose 文件。
+# 本文件是唯一 production 主入口（PostgreSQL + 外部 Milvus + 真实 NewCar）。
+# 本地开发 / LAN 使用独立的 docker-compose.dev.yml（SQLite + mock + 能力中心），不是本文件的 override。
+# staging 使用 docker-compose.yml + docker-compose.staging.yml 组合，staging 文件禁止单独运行。
+
 services:
   # PostgreSQL（方案 A：一个 PG 实例两个 database）
   # - auto_wechat：9000 主库（POSTGRES_DB 自动建）

@@ -21,23 +21,25 @@ python -m app.local_agent_main --host 127.0.0.1 --port 19000 --server-url http:/
 
 ## 2. 启动和停止
 
-一条命令构建并启动：
+`docker-compose.dev.yml` 是独立完整开发编排（SQLite + mock 鉴权 + 源码热更新 + 能力中心 9201-9206），不是 production `docker-compose.yml` 的 override，禁止与主文件 `-f` 组合使用。
+
+开发环境一条命令构建并启动：
 
 ```bash
-docker compose -f docker-compose.dev.yml up --build
+docker compose --env-file .env.development.local -f docker-compose.dev.yml up -d --build
+```
+
+LAN 联调（同一份开发编排，换 LAN env）：
+
+```bash
+docker compose --env-file .env.lan.local -f docker-compose.dev.yml up -d --build
 ```
 
 也可以分步执行：
 
 ```bash
 docker compose -f docker-compose.dev.yml build
-docker compose -f docker-compose.dev.yml up
-```
-
-后台启动：
-
-```bash
-docker compose -f docker-compose.dev.yml up -d --build
+docker compose --env-file .env.development.local -f docker-compose.dev.yml up -d
 ```
 
 停止并删除容器：
