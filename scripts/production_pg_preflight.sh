@@ -84,6 +84,44 @@ else
   fail "8.  两 database 名相同或为空（9000=$DB_9000  9100=$DB_9100）"
 fi
 
+# ---------- Milvus 外部向量后端（P3-CONFIG-EXTERNAL-MILVUS-CORRECTION-1）----------
+# production 固定外部 Milvus，不得回退 SQLite 向量后端；检查配置完整性 + dimension 一致 + TCP 可达。
+if [[ "${RAG_VECTOR_BACKEND:-}" != "milvus" ]]; then
+  fail "M1. RAG_VECTOR_BACKEND 必须为 milvus（当前=${RAG_VECTOR_BACKEND:-空}），production 不得回退 SQLite 向量后端"
+else
+  pass "M1. RAG_VECTOR_BACKEND = milvus"
+  MILVUS_MISSING=""
+  for var in MILVUS_URI MILVUS_USERNAME MILVUS_PASSWORD MILVUS_DB_NAME MILVUS_COLLECTION MILVUS_DIMENSION; do
+    if [[ -z "${!var:-}" ]]; then MILVUS_MISSING="$MILVUS_MISSING $var"; fi
+  done
+  if [[ -z "$MILVUS_MISSING" ]]; then
+    pass "M2. Milvus 必填配置完整"
+  else
+    fail "M2. Milvus 配置缺失：$MILVUS_MISSING"
+  fi
+  if [[ -n "${MILVUS_DIMENSION:-}" && -n "${XG_DOUYIN_AI_EMBEDDING_DIMENSIONS:-}" ]]; then
+    if [[ "$MILVUS_DIMENSION" == "$XG_DOUYIN_AI_EMBEDDING_DIMENSIONS" ]]; then
+      pass "M3. MILVUS_DIMENSION=$MILVUS_DIMENSION 与 EMBEDDING_DIMENSIONS 一致"
+    else
+      fail "M3. MILVUS_DIMENSION=$MILVUS_DIMENSION != EMBEDDING_DIMENSIONS=$XG_DOUYIN_AI_EMBEDDING_DIMENSIONS"
+    fi
+  else
+    fail "M3. MILVUS_DIMENSION 或 XG_DOUYIN_AI_EMBEDDING_DIMENSIONS 未设置"
+  fi
+  # TCP 连通性（从 URI 提取 host:port，去除认证前缀，不输出密码）
+  MILVUS_HOSTPORT=$(echo "${MILVUS_URI:-}" | sed -E 's#^https?://##; s#/.*##; s#\?.*##; s#.*@##')
+  MILVUS_HOST=$(echo "$MILVUS_HOSTPORT" | sed -E 's#:.*##')
+  MILVUS_PORT=$(echo "$MILVUS_HOSTPORT" | sed -E 's#.*:##')
+  [[ -z "$MILVUS_PORT" || "$MILVUS_PORT" == "$MILVUS_HOST" ]] && MILVUS_PORT=19530
+  if [[ -n "$MILVUS_HOST" ]]; then
+    if timeout 3 bash -c "echo > /dev/tcp/$MILVUS_HOST/$MILVUS_PORT" 2>/dev/null; then
+      pass "M4. Milvus TCP 连通（$MILVUS_HOST:$MILVUS_PORT）"
+    else
+      fail "M4. Milvus TCP 不可达（$MILVUS_HOST:$MILVUS_PORT）"
+    fi
+  fi
+fi
+
 # ---------- 15. docker/compose/psql ----------
 COMPOSE_CMD=""
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then

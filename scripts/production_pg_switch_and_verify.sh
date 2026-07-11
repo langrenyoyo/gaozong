@@ -78,8 +78,24 @@ echo "[PASS] 9000 database = $DB_9000"
 echo "[PASS] 9100 database = $DB_9100"
 echo "[PASS] 两库不同（方案 A）"
 
-# 向量后端校验（一期固定 sqlite 副本）
-echo "[INFO] RAG_VECTOR_BACKEND=${RAG_VECTOR_BACKEND:-(未设)}"
+# 向量后端校验（production 固定外部 Milvus，不得回退 SQLite 向量后端）
+if [[ "${RAG_VECTOR_BACKEND:-}" != "milvus" ]]; then
+  echo "[FAIL] RAG_VECTOR_BACKEND 必须为 milvus（当前=${RAG_VECTOR_BACKEND:-空}），production 不得回退 SQLite 向量后端" >&2
+  exit 1
+fi
+echo "[PASS] RAG_VECTOR_BACKEND=milvus"
+MILVUS_MISSING=""
+for var in MILVUS_URI MILVUS_USERNAME MILVUS_PASSWORD MILVUS_DB_NAME MILVUS_COLLECTION MILVUS_DIMENSION; do
+  if [[ -z "${!var:-}" ]]; then MILVUS_MISSING="$MILVUS_MISSING $var"; fi
+done
+if [[ -n "$MILVUS_MISSING" ]]; then
+  echo "[FAIL] Milvus 配置缺失：$MILVUS_MISSING" >&2; exit 1
+fi
+echo "[PASS] Milvus 必填配置完整"
+if [[ "${MILVUS_DIMENSION:-}" != "${XG_DOUYIN_AI_EMBEDDING_DIMENSIONS:-}" ]]; then
+  echo "[FAIL] MILVUS_DIMENSION=$MILVUS_DIMENSION != XG_DOUYIN_AI_EMBEDDING_DIMENSIONS=${XG_DOUYIN_AI_EMBEDDING_DIMENSIONS:-空}" >&2; exit 1
+fi
+echo "[PASS] MILVUS_DIMENSION=$MILVUS_DIMENSION 与 EMBEDDING_DIMENSIONS 一致（9100 /ready 将验证 Milvus 可连接性）"
 
 echo ""
 echo "==================== 2. compose config 校验 ===================="

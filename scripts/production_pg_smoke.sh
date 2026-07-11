@@ -66,6 +66,7 @@ check_get "9000-compute-accts"  "$API_9000" "/compute/accounts"
 echo ""
 echo "==================== 9100 smoke（只读 RAG）===================="
 check_get "9100-health" "$API_9100" "/health" 0
+# /ready 含 Milvus readiness：backend=milvus 时 Milvus 不可达即 503→FAIL，不回退 SQLite
 check_get "9100-ready"  "$API_9100" "/ready"  0
 check_get "9100-rag-documents" "$API_9100" "/rag/documents?page_size=1"
 
