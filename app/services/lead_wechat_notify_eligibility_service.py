@@ -155,7 +155,7 @@ def evaluate_lead_wechat_notify_eligibility(
             WechatTask.task_type == "notify_sales",
             WechatTask.lead_id == lead.id,
             WechatTask.staff_id == staff.id,
-            WechatTask.status.in_(["pending", "running", "pasted"]),
+            WechatTask.status.in_(ACTIVE_NOTIFY_TASK_STATUSES),
         )
         .order_by(WechatTask.id.desc())
         .first()
