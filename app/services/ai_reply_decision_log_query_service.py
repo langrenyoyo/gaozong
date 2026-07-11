@@ -1,8 +1,9 @@
 """AI 回复实发记录查询服务。
 
-Phase 4 起查询源由「AI 决策日志」改为「AI 实发流水」：
-仅展示 DouyinPrivateMessageSend 中关联决策日志或 AI 自动发送的记录，
-列表/详情字段以最终实发内容（违禁词替换后）为准。
+Phase 4-FIX1：列表/详情/有效性标记统一为「决策日志粒度」——
+每个 AiReplyDecisionLog 只展示其最新一条关联发送流水（按发送流水自增 id 取最新），
+避免同一决策多条发送时列表行与详情内容错配。
+有效性字段仍存储在 AiReplyDecisionLog，因此查询必须与决策日志粒度一致。
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.models import AiReplyDecisionLog, DouyinPrivateMessageSend
@@ -50,28 +51,39 @@ class AiReplyDecisionLogQuery:
 
 
 def _sent_records_query(db: Session) -> Query:
-    """基础联表查询：发送流水 INNER JOIN 决策日志。
+    """基础联表查询：每条 AI 决策只取最新一条关联发送流水。
 
-    普通人工发送 send_source="manual" 且 decision_log_id 为空会被 INNER JOIN 过滤；
-    若人工确认发送的是 AI 决策内容（decision_log_id 非空），仍作为 AI 回复记录展示。
+    有效性字段存储在 AiReplyDecisionLog 上，列表/详情必须与决策日志粒度一致，
+    因此用子查询按 decision_log_id 分组取 max(send.id)，再回连主表。
+    普通人工发送 send_source="manual" 且 decision_log_id 为空不会进入子查询。
     """
-    return (
-        db.query(DouyinPrivateMessageSend, AiReplyDecisionLog)
-        .join(
-            AiReplyDecisionLog,
-            DouyinPrivateMessageSend.decision_log_id == AiReplyDecisionLog.id,
+    latest_send_ids = (
+        db.query(
+            DouyinPrivateMessageSend.decision_log_id.label("decision_log_id"),
+            func.max(DouyinPrivateMessageSend.id).label("send_record_id"),
         )
+        .filter(DouyinPrivateMessageSend.decision_log_id.isnot(None))
         .filter(
             or_(
                 DouyinPrivateMessageSend.send_source == "ai_auto",
                 DouyinPrivateMessageSend.decision_log_id.isnot(None),
             )
         )
+        .group_by(DouyinPrivateMessageSend.decision_log_id)
+        .subquery()
+    )
+    return (
+        db.query(DouyinPrivateMessageSend, AiReplyDecisionLog)
+        .join(latest_send_ids, DouyinPrivateMessageSend.id == latest_send_ids.c.send_record_id)
+        .join(
+            AiReplyDecisionLog,
+            DouyinPrivateMessageSend.decision_log_id == AiReplyDecisionLog.id,
+        )
     )
 
 
 def list_ai_reply_decision_logs(db: Session, query: AiReplyDecisionLogQuery) -> dict[str, Any]:
-    """查询 AI 回复实发记录列表。"""
+    """查询 AI 回复实发记录列表（决策日志粒度）。"""
     page = max(query.page, 1)
     page_size = min(max(query.page_size, 1), PAGE_SIZE_LIMIT)
     base_query = _apply_filters(_sent_records_query(db), query)
@@ -201,6 +213,7 @@ def _build_list_item(
         "manual_confirmed": bool(send.manual_confirmed),
         "upstream_msg_id": send.upstream_msg_id,
         "sent_at": send.sent_at,
+        "send_created_at": send.created_at,
         "intent": decision.intent,
         "lead_level": decision.lead_level,
         "confidence": decision.confidence,
@@ -215,9 +228,15 @@ def _build_list_item(
         "decision_version": decision.decision_version,
         "model": decision.model,
         "is_effective": decision.is_effective,
-        "effectiveness_reason": decision.effectiveness_reason,
+        # 有效性原因属自由文本，展示前统一脱敏手机号与微信号
+        "effectiveness_reason": _mask_sensitive_text(decision.effectiveness_reason),
         "created_at": decision.created_at,
     }
+
+
+def mask_ai_reply_sensitive_text(value: str | None) -> str | None:
+    """脱敏 AI 回复记录中允许展示或审计的自由文本（供路由复用同一规则）。"""
+    return _mask_sensitive_text(value)
 
 
 def _json_list(raw_value: str | None) -> list[Any]:
@@ -238,11 +257,20 @@ def _summary(value: str | None) -> str | None:
 
 
 def _mask_sensitive_text(value: str | None) -> str | None:
-    """脱敏手机号与微信号。"""
+    """脱敏手机号与微信号。
+
+    微信号前缀可能紧贴中文（如「微信wxid_xxx」），用负回顾断言 (?<![A-Za-z0-9_])
+    代替 \\b，避免中文（Python re 默认属 \\w）与前缀字母之间不构成词边界而漏匹配。
+    """
     if value is None:
         return None
     text = re.sub(r"(?<!\d)(1[3-9]\d)(\d{4})(\d{4})(?!\d)", r"\1****\3", value)
-    return re.sub(r"\b(wxid|wx|wechat)[A-Za-z0-9_\-]{4,}\b", r"\1***", text, flags=re.IGNORECASE)
+    return re.sub(
+        r"(?<![A-Za-z0-9_])(wxid|wx|wechat)[A-Za-z0-9_\-]{4,}",
+        r"\1***",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _bool_to_int(value: bool) -> int:

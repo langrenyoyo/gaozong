@@ -472,6 +472,76 @@ def test_detail_returns_send_content_and_effectiveness_fields():
     assert "response_body_json" not in data
 
 
+def test_list_and_detail_use_latest_send_record_per_decision_log():
+    log_id = _insert_log(
+        merchant_id="merchant-a",
+        conversation_id="conv-multi-send",
+        reply_text="模型原始回复",
+    )
+    old_send_id = _insert_send_record(
+        decision_log_id=log_id,
+        content="旧实发内容13812345678",
+        status="failed",
+        sent_at=datetime(2026, 7, 10, 9, 0, 0),
+        created_at=datetime(2026, 7, 10, 9, 0, 0),
+    )
+    latest_send_id = _insert_send_record(
+        decision_log_id=log_id,
+        content="最新实发内容wxid_abcd1234",
+        status="sent",
+        sent_at=datetime(2026, 7, 10, 10, 0, 0),
+        created_at=datetime(2026, 7, 10, 10, 0, 0),
+    )
+
+    list_response = _client().get("/ai-reply-decision-logs")
+    assert list_response.status_code == 200
+    list_data = list_response.json()["data"]
+    assert list_data["total"] == 1
+    item = list_data["items"][0]
+    assert item["id"] == log_id
+    assert item["send_record_id"] == latest_send_id
+    assert item["send_record_id"] != old_send_id
+    assert item["send_status"] == "sent"
+    assert item["sent_content_summary"] == "最新实发内容wxid***"
+
+    detail_response = _client().get(f"/ai-reply-decision-logs/{log_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()["data"]
+    assert detail["id"] == log_id
+    assert detail["send_record_id"] == latest_send_id
+    assert detail["sent_content"] == "最新实发内容wxid***"
+
+    # 实发时间字段必须来自发送流水：sent_at 优先，send_created_at 次之
+    assert item["sent_at"] == "2026-07-10T10:00:00"
+    assert item["send_created_at"] == "2026-07-10T10:00:00"
+
+
+def test_list_logs_filters_by_send_status_and_effectiveness():
+    effective_log = _insert_log(merchant_id="merchant-a", conversation_id="effective")
+    pending_log = _insert_log(merchant_id="merchant-a", conversation_id="pending")
+    db = TestSession()
+    try:
+        row = db.get(AiReplyDecisionLog, effective_log)
+        row.is_effective = True
+        db.commit()
+    finally:
+        db.close()
+    _insert_send_record(decision_log_id=effective_log, status="sent")
+    _insert_send_record(decision_log_id=pending_log, status="failed")
+
+    response = _client().get(
+        "/ai-reply-decision-logs",
+        params={"send_status": "sent", "is_effective": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["conversation_id"] == "effective"
+    assert data["items"][0]["send_status"] == "sent"
+    assert data["items"][0]["is_effective"] is True
+
+
 def test_patch_effectiveness_requires_admin_and_writes_audit_log():
     log_id = _insert_log(merchant_id="merchant-a")
     _insert_send_record(decision_log_id=log_id)
@@ -524,9 +594,54 @@ def test_patch_effectiveness_rejects_empty_payload_and_unsent_decision():
     assert empty_payload.status_code == 400
     assert empty_payload.json()["detail"]["code"] == "NO_FIELDS_TO_UPDATE"
 
+    sent_log_id = _insert_log(merchant_id="merchant-a", conversation_id="sent-log")
+    _insert_send_record(decision_log_id=sent_log_id)
+
+    blank_reason = _client(admin_context).patch(
+        f"/ai-reply-decision-logs/{sent_log_id}/effectiveness",
+        json={"is_effective": True, "effectiveness_reason": "   "},
+    )
+    assert blank_reason.status_code == 400
+    assert blank_reason.json()["detail"]["code"] == "EFFECTIVENESS_REASON_REQUIRED"
+
     unsent = _client(admin_context).patch(
         f"/ai-reply-decision-logs/{log_id}/effectiveness",
         json={"is_effective": False, "effectiveness_reason": "未发送不能标记"},
     )
     assert unsent.status_code == 404
     assert unsent.json()["detail"]["code"] == "AI_REPLY_DECISION_LOG_NOT_FOUND"
+
+
+def test_patch_effectiveness_masks_sensitive_reason_in_record_and_audit():
+    log_id = _insert_log(merchant_id="merchant-a")
+    _insert_send_record(decision_log_id=log_id)
+    admin_context = _context(
+        merchant_id=None,
+        permission_codes=["auto_wechat:admin:ai_reply_records"],
+        super_admin=True,
+    )
+
+    response = _client(admin_context).patch(
+        f"/ai-reply-decision-logs/{log_id}/effectiveness",
+        json={
+            "is_effective": False,
+            "effectiveness_reason": "客户手机号13812345678，微信wxid_abcd1234，回复偏离需求",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["effectiveness_reason"] == "客户手机号138****5678，微信wxid***，回复偏离需求"
+
+    db = TestSession()
+    try:
+        row = db.get(AiReplyDecisionLog, log_id)
+        audit = db.query(AutoReplyAdminAuditLog).one()
+        assert row.effectiveness_reason == "客户手机号138****5678，微信wxid***，回复偏离需求"
+        assert audit.reason == "客户手机号138****5678，微信wxid***，回复偏离需求"
+        assert "13812345678" not in audit.reason
+        assert "wxid_abcd1234" not in audit.reason
+        assert "13812345678" not in (audit.after_json or "")
+        assert "wxid_abcd1234" not in (audit.after_json or "")
+    finally:
+        db.close()

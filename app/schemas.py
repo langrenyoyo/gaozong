@@ -1237,6 +1237,8 @@ class AiReplyDecisionLogListItem(BaseModel):
     manual_confirmed: bool = False
     upstream_msg_id: Optional[str] = None
     sent_at: Optional[datetime] = None
+    # 发送流水创建时间，用于实发时间回退展示（sent_at 优先，其次本字段，最后 created_at）
+    send_created_at: Optional[datetime] = None
     model: Optional[str] = None
     is_effective: Optional[bool] = None
     effectiveness_reason: Optional[str] = None

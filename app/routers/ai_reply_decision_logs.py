@@ -24,6 +24,7 @@ from app.services.ai_reply_decision_log_query_service import (
     AiReplyDecisionLogQuery,
     get_ai_reply_decision_log_detail,
     list_ai_reply_decision_logs,
+    mask_ai_reply_sensitive_text,
 )
 from app.services.autoreply_admin_rollout_service import record_admin_audit
 
@@ -84,6 +85,8 @@ def list_logs(
     risk_flag: str | None = None,
     rag_used: bool | None = None,
     llm_used: bool | None = None,
+    send_status: str | None = None,
+    is_effective: bool | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     keyword: str | None = None,
@@ -112,6 +115,8 @@ def list_logs(
             risk_flag=risk_flag,
             rag_used=rag_used,
             llm_used=llm_used,
+            send_status=send_status,
+            is_effective=is_effective,
             date_from=date_from,
             date_to=date_to,
             keyword=keyword,
@@ -171,6 +176,22 @@ def patch_log_effectiveness(
         if payload.effectiveness_reason is not None
         else None
     )
+    if has_reason and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "EFFECTIVENESS_REASON_REQUIRED",
+                "message": "有效性原因不能为空",
+            },
+        )
+    if has_is_effective and reason is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "EFFECTIVENESS_REASON_REQUIRED",
+                "message": "标记有效性必须填写原因",
+            },
+        )
     if reason is not None and len(reason) > 500:
         raise HTTPException(
             status_code=400,
@@ -179,6 +200,8 @@ def patch_log_effectiveness(
                 "message": "有效性原因不能超过 500 字",
             },
         )
+    # 入库与审计统一使用脱敏后的原因，避免手机号/微信号明文落库
+    masked_reason = mask_ai_reply_sensitive_text(reason) if reason is not None else None
 
     # 仅允许标记已实发的记录：必须存在关联发送流水（与查询源口径一致）
     row = (
@@ -212,7 +235,7 @@ def patch_log_effectiveness(
     if has_is_effective:
         row.is_effective = payload.is_effective
     if has_reason:
-        row.effectiveness_reason = reason
+        row.effectiveness_reason = masked_reason
     db.flush()
     after = {
         "is_effective": row.is_effective,
@@ -227,7 +250,7 @@ def patch_log_effectiveness(
         target_id=str(row.id),
         before=before,
         after=after,
-        reason=reason,
+        reason=masked_reason,
         operator_id=context.user_id,
         operator_name=context.display_name or context.username,
         commit=False,
