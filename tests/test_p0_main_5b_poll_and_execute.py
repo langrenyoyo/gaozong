@@ -1158,7 +1158,11 @@ def test_poll_and_execute_skips_detect_reply_by_filter(mock_get, mock_post):
 
 @patch("app.local_agent_main._http_get")
 def test_poll_and_execute_with_task_id_fetches_specific_task(mock_get):
-    """P1-AUTO-1D-FIX2：请求体带 task_id 时，调用 GET /wechat-tasks/{task_id}。"""
+    """P1-AUTO-1D-FIX2：请求体带 task_id 时，调用 GET /wechat-tasks/agent/{task_id}。
+
+    Phase 7-FIX2 Task 8：机器接口改走 /wechat-tasks/agent/{task_id}
+    （token 鉴权 + INNER JOIN 商户隔离），不再走需 NewCar 用户上下文的 /wechat-tasks/{task_id}。
+    """
     mock_get.return_value = {
         "ok": True, "status": 200,
         "json": {"id": 44, "task_type": "notify_sales", "target_nickname": "Aw3",
@@ -1171,7 +1175,7 @@ def test_poll_and_execute_with_task_id_fetches_specific_task(mock_get):
     # 请求发送到特定任务 URL（不是 pending 队列）
     mock_get.assert_called_once()
     call_url = mock_get.call_args[0][0]
-    assert "/wechat-tasks/44" in call_url
+    assert "/wechat-tasks/agent/44" in call_url
     assert "/pending" not in call_url
 
 

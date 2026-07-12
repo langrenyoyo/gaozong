@@ -479,9 +479,10 @@ def test_fix3_poll_and_detect_with_task_id_fetches_specific_task(mock_get, mock_
     assert data["action"]["sent"] is False
     assert data["action"]["pasted"] is False
 
-    # 验证 GET 调用的是 /wechat-tasks/55 而非 /wechat-tasks/pending
+    # 验证 GET 调用的是 /wechat-tasks/agent/55 而非 /wechat-tasks/pending
+    # Phase 7-FIX2 Task 8：机器接口改走 /wechat-tasks/agent/{task_id}
     mock_get.assert_called_once()
-    assert "/wechat-tasks/55" in mock_get.call_args[0][0]
+    assert "/wechat-tasks/agent/55" in mock_get.call_args[0][0]
 
 
 @patch("app.local_agent_main._http_post_json")
@@ -616,9 +617,10 @@ def test_fix3_poll_and_detect_task_id_success_no_queue(mock_get, mock_auto, mock
     assert data["action"]["sent"] is False
     assert data["action"]["pasted"] is False
 
-    # 只调用了一次 _http_get，且是 /wechat-tasks/88，不是 pending
+    # 只调用了一次 _http_get，且是 /wechat-tasks/agent/88，不是 pending
+    # Phase 7-FIX2 Task 8：机器接口改走 /wechat-tasks/agent/{task_id}
     assert mock_get.call_count == 1
-    assert "/wechat-tasks/88" in mock_get.call_args[0][0]
+    assert "/wechat-tasks/agent/88" in mock_get.call_args[0][0]
 
     # 验证 helper 的 max_messages 传递
     call_kwargs = mock_helper.call_args[1]
