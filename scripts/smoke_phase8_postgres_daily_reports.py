@@ -352,6 +352,35 @@ def _business_smoke(engine, storage_root: str) -> dict:
     finally:
         db.close()
 
+    # 9. 四类报表 Excel 表头抽查（执行包四类报表合同，不只检查任务状态/文件哈希）
+    from app.services import daily_report_service as svc
+    from app.services import daily_report_excel as xl
+    expected_headers = {
+        "short_video_live_lead": ("留资管理", ["来源类型", "消耗金额", "私信量", "留资量", "留资率", "到店", "到店率", "成交", "成交率"]),
+        "daily_sales_feedback": ("销售反馈", ["线索数量", "总线索", "通过数量", "分期数量", "全款数量", "展厅车型数量", "找车数量", "价位区间与展厅价位一致比例", "开口率", "销售线索自我感觉"]),
+        "lead_trace": ("线索溯源", ["线索", "销售", "来源", "精准", "不精准原因", "意向", "不意向原因", "地区", "溯源"]),
+        "sales_unit_cost": ("销售单车成本", ["销售", "今日线索", "通过率", "开口率", "总线索", "总开口", "总通过", "到店", "成交", "到店成本", "成交成本"]),
+    }
+    merchant_4t = f"{_RUN_ID}4t"
+    db = TestSession()
+    try:
+        for report_type, (sheet_name, headers_expected) in expected_headers.items():
+            result = svc.build_daily_report(
+                db, merchant_id=merchant_4t, report_day=report_day,
+                report_type=report_type, summary_client=None,
+            )
+            wb = xl.build_daily_report_workbook(result)
+            if sheet_name not in wb.sheetnames:
+                results[f"excel_headers_{report_type}"] = f"FAIL: sheet {sheet_name} not in {wb.sheetnames}"
+                continue
+            actual_headers = [c.value for c in wb[sheet_name][1]]
+            if actual_headers == headers_expected:
+                results[f"excel_headers_{report_type}"] = "PASS"
+            else:
+                results[f"excel_headers_{report_type}"] = f"FAIL: {actual_headers}"
+    finally:
+        db.close()
+
     return results, {"merchant_a": merchant_a, "merchant_b": merchant_b, "merchant_c": merchant_c,
                      "report_day": report_day}
 

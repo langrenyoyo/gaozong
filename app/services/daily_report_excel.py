@@ -35,7 +35,8 @@ from app.services.daily_report_service import (
 
 logger = logging.getLogger(__name__)
 
-MISSING_TEXT = "数据源未接入/数据不足"
+MISSING_TEXT = "数据源未接入"
+INSUFFICIENT_COST_TEXT = "数据不足"  # 报表4 销售级成本固定文案（执行包第 194 行，禁止虚构分摊）
 
 # 公式注入前缀（去前导空白后匹配）
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
@@ -87,6 +88,30 @@ _COLUMN_WIDTH = {
     "deal_count": 10,
     "visit_cost": 16,
     "deal_cost": 16,
+    # Phase 8 合同补齐新增列
+    "visit_rate": 10,
+    "deal_rate": 10,
+    "paid_lead_count": 12,
+    "total_lead_count": 12,
+    "passed_count": 12,
+    "installment_count": 12,
+    "full_payment_count": 14,
+    "showroom_car_count": 14,
+    "find_car_count": 12,
+    "price_match_rate": 22,
+    "opening_rate": 10,
+    "pass_rate": 10,
+    "total_opening_count": 12,
+    "total_pass_count": 12,
+    "today_lead_count": 12,
+    "self_feeling": 36,
+    "contact": 18,
+    "ad_source": 18,
+    "precision_status": 10,
+    "imprecision_reason": 24,
+    "intention_display": 18,
+    "no_intention_reason": 24,
+    "region_text": 14,
 }
 _DEFAULT_WIDTH = 16
 
@@ -117,9 +142,15 @@ def _sanitize_cell_value(value):
     return value
 
 
-def _cell_value_for_output(col_name: str, raw_value):
-    """数值列 None 展示缺失文案；其余原样（经公式防护）。"""
+def _cell_value_for_output(col_name: str, raw_value, row: dict | None = None):
+    """数值列 None 展示缺失文案；其余原样（经公式防护）。
+
+    报表4 销售单车成本：销售/未分配行的到店成本/成交成本固定写'数据不足'（执行包第 194 行，
+    禁止虚构分摊）；合计行 _cost None 才是'数据源未接入'（广告指标缺失）。
+    """
     if raw_value is None and _column_format(col_name) is not None:
+        if col_name in ("visit_cost", "deal_cost") and (row or {}).get("sales_name") != "合计":
+            return INSUFFICIENT_COST_TEXT
         return MISSING_TEXT
     return _sanitize_cell_value(raw_value)
 
@@ -148,7 +179,7 @@ def _write_sheet(wb: Workbook, *, title: str, columns: tuple[str, ...], rows: li
     for row in rows:
         output_row = []
         for col in columns:
-            output_row.append(_cell_value_for_output(col, row.get(col)))
+            output_row.append(_cell_value_for_output(col, row.get(col), row))
         ws.append(output_row)
     # 数值格式 + 边框 + 换行
     for row_idx in range(2, ws.max_row + 1):
@@ -169,45 +200,66 @@ def _write_sheet(wb: Workbook, *, title: str, columns: tuple[str, ...], rows: li
 def _header_label(col_name: str) -> str:
     """列名转中文表头（固定映射，未覆盖的回退原列名）。"""
     labels = {
-        "content_type": "内容类型",
-        "lead_count": "线索数",
-        "retained_count": "留资数",
-        "retained_rate": "留资率",
+        # 报表 1 短视频/直播留资管理表
+        "content_type": "来源类型",
         "spend_amount": "消耗金额",
         "private_message_count": "私信量",
+        "retained_count": "留资量",
+        "retained_rate": "留资率",
+        "visit_count": "到店",
+        "visit_rate": "到店率",
+        "deal_count": "成交",
+        "deal_rate": "成交率",
+        # 报表 2 主工作表（每日线索销售反馈）
+        "paid_lead_count": "线索数量",
+        "total_lead_count": "总线索",
+        "passed_count": "通过数量",
+        "installment_count": "分期数量",
+        "full_payment_count": "全款数量",
+        "showroom_car_count": "展厅车型数量",
+        "find_car_count": "找车数量",
+        "price_match_rate": "价位区间与展厅价位一致比例",
+        "opening_rate": "开口率",
+        "self_feeling": "销售线索自我感觉",
+        # 报表 2 原始总结 + 报表 3/4 共用销售字段
         "sales_name": "销售",
         "overall_quality": "整体质量",
         "main_problem": "主要问题",
-        "car_model_summary": "车型汇总",
-        "budget_summary": "预算汇总",
-        "cooperation_level": "配合程度",
+        "car_model_summary": "车型情况",
+        "budget_summary": "预算情况",
+        "cooperation_level": "客户配合度",
         "today_suggestion": "今日建议",
-        "extra_feedback": "额外反馈",
-        "lead_id": "线索ID",
-        "customer_name": "客户",
-        "traffic_type": "流量类型",
-        "ad_id": "广告ID",
-        "material_id": "素材ID",
-        "trace_url": "溯源链接",
-        "assigned_staff_name": "分配销售",
-        "followup_content": "跟进备注",
-        "assigned_count": "分配数",
-        "visit_count": "到店数",
-        "deal_count": "成交数",
+        "extra_feedback": "补充反馈",
+        # 报表 3 线索溯源表
+        "contact": "线索",
+        "ad_source": "来源",
+        "precision_status": "精准",
+        "imprecision_reason": "不精准原因",
+        "intention_display": "意向",
+        "no_intention_reason": "不意向原因",
+        "region_text": "地区",
+        "trace_url": "溯源",
+        # 报表 4 销售单车成本表（sales_name/visit_count/deal_count/visit_cost/deal_cost 已在上面）
+        "today_lead_count": "今日线索",
+        "pass_rate": "通过率",
+        "total_opening_count": "总开口",
+        "total_pass_count": "总通过",
         "visit_cost": "到店成本",
         "deal_cost": "成交成本",
-        "summary_text": "汇总",
-        "raw_text": "原始总结",
     }
     return labels.get(col_name, col_name)
 
 
 def _write_feedback_extra_sheets(wb: Workbook, result: ReportBuildResult) -> None:
-    """每日反馈表追加“汇总”和“原始总结”工作表；原始总结只包含提交者。"""
-    summary_rows = result.extra_sheets.get("汇总", [])
+    """每日反馈表追加'原始总结'工作表（执行包固定 8 列结构化，不写 raw_text/parse_error）。
+
+    LLM 摘要已在主工作表'销售线索自我感觉'单元格，不再单列'汇总'工作表。
+    """
     raw_rows = result.extra_sheets.get("原始总结", [])
-    _write_sheet(wb, title="汇总", columns=("summary_text",), rows=summary_rows)
-    _write_sheet(wb, title="原始总结", columns=("sales_name", "raw_text"), rows=raw_rows)
+    _write_sheet(wb, title="原始总结", columns=(
+        "sales_name", "overall_quality", "main_problem", "car_model_summary",
+        "budget_summary", "cooperation_level", "today_suggestion", "extra_feedback",
+    ), rows=raw_rows)
 
 
 def build_daily_report_workbook(result: ReportBuildResult) -> Workbook:
