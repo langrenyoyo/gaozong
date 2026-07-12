@@ -367,10 +367,15 @@ def _run_smoke_tests(engine) -> dict:
         assign_lead(db, lead_conc1.id, staff_conc.id)
         assign_lead(db, lead_conc2.id, staff_conc.id)
         db.commit()
+        # Phase 7-FIX2 Task 8 续修：在 session 关闭前提取 id（int 值），
+        # 避免 close 后访问 ORM 对象触发 DetachedInstanceError
+        staff_conc_id = staff_conc.id
+        lead_conc1_id = lead_conc1.id
+        lead_conc2_id = lead_conc2.id
         db.close()
 
         results["concurrent_rate_limit_for_update"] = _concurrent_rate_limit(
-            engine, merchant_a, staff_conc.id, lead_conc1.id, lead_conc2.id,
+            engine, merchant_a, staff_conc_id, lead_conc1_id, lead_conc2_id,
         )
 
         # 并发测试结束后重新打开会话用于清理
