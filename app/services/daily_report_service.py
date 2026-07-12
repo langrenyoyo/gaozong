@@ -135,10 +135,10 @@ def _lead_retained(lead: DouyinLead) -> bool:
     )
 
 
-def _safe_rate(num: int, den: int) -> float | None:
-    """分母 > 0 返回比率，否则 None（不除零、不伪造 0%）。"""
+def _ratio_or_zero(num: int, den: int) -> float:
+    """执行包报表 1/4 口径：分母为 0 返回数值 0.0（Excel 展示 0.00%）；分母 > 0 返回 num/den。"""
     if den <= 0:
-        return None
+        return 0.0
     return num / den
 
 
@@ -217,6 +217,36 @@ def _staff_map(db: Session, staff_ids: set[int]) -> dict[int, str]:
     return {row[0]: row[1] for row in rows}
 
 
+def _latest_assign_staff_by_lead(
+    db: Session, *, merchant_id: str, start: datetime, end: datetime
+) -> dict[int, int]:
+    """当日每 lead 最后一条 assign/reassign 的 staff_id（SQL row_number 去重）。
+
+    执行包口径：当日同一线索多次分配只取最后一条，避免改派后在多名销售下重复计数。
+    LeadFollowupRecord 无 merchant_id，INNER JOIN DouyinLead 过滤商户。
+    staff_id 可能为 None（未关联销售的分配记录），由调用方决定如何处理。
+    """
+    rn = func.row_number().over(
+        partition_by=LeadFollowupRecord.lead_id,
+        order_by=[
+            LeadFollowupRecord.created_at.desc(),
+            LeadFollowupRecord.id.desc(),
+        ],
+    ).label("rn")
+    sub = db.query(
+        LeadFollowupRecord.lead_id, LeadFollowupRecord.staff_id, rn
+    ).join(
+        DouyinLead, DouyinLead.id == LeadFollowupRecord.lead_id
+    ).filter(
+        DouyinLead.merchant_id == merchant_id,
+        LeadFollowupRecord.record_type.in_(["assign", "reassign"]),
+        LeadFollowupRecord.created_at >= start,
+        LeadFollowupRecord.created_at < end,
+    ).subquery()
+    rows = db.query(sub.c.lead_id, sub.c.staff_id).filter(sub.c.rn == 1).all()
+    return {row.lead_id: row.staff_id for row in rows if row.lead_id is not None}
+
+
 # ---------------------------------------------------------------------------
 # 报表 1：短视频/直播留资管理表
 # ---------------------------------------------------------------------------
@@ -224,6 +254,13 @@ def _staff_map(db: Session, staff_ids: set[int]) -> dict[int, str]:
 def _build_short_video_live_lead_report(
     db: Session, *, merchant_id: str, report_day: date, report_variant: str
 ) -> ReportBuildResult:
+    """报表 1：短视频/直播留资管理表（执行包 9 列 × 3 行）。
+
+    列：来源类型、消耗金额、私信量、留资量、留资率、到店、到店率、成交、成交率。
+    口径：留资率=留资量/私信量（私信量缺失→None/数据源未接入，显式 0→0.0）；
+    到店率=到店/留资量、成交率=成交/到店；分母为 0 返回数值 0；
+    到店/成交读 cohort 最新成功 SalesLeadUpdate（visit_status=已到店 / deal_status=已成交）。
+    """
     start, end = _day_bounds(db, report_day)
     leads = db.query(DouyinLead).filter(
         DouyinLead.merchant_id == merchant_id,
@@ -248,20 +285,39 @@ def _build_short_video_live_lead_report(
         ).all()
     }
 
-    groups = {
-        "short_video": {"leads": 0, "retained": 0},
-        "live": {"leads": 0, "retained": 0},
-    }
+    # 付费 short_video/live cohort：保留 lead_id 用于到店/成交计数
+    cohort_ids: dict[str, list[int]] = {"short_video": [], "live": []}
+    retained: dict[str, int] = {"short_video": 0, "live": 0}
     for lead in leads:
         attr = attrs.get(lead.id)
         # 只统计 paid + short_video/live，不把 organic 算入付费表
         if attr is None or attr.traffic_type != "paid":
             continue
-        if attr.content_type not in groups:
+        if attr.content_type not in cohort_ids:
             continue
-        groups[attr.content_type]["leads"] += 1
+        cohort_ids[attr.content_type].append(lead.id)
         if _lead_retained(lead):
-            groups[attr.content_type]["retained"] += 1
+            retained[attr.content_type] += 1
+
+    # cohort 最新更新（到店/成交）
+    all_cohort_ids = cohort_ids["short_video"] + cohort_ids["live"]
+    latest_updates = _latest_success_updates(db, merchant_id=merchant_id, lead_ids=all_cohort_ids)
+
+    def _visit_count(ids: list[int]) -> int:
+        cnt = 0
+        for lid in ids:
+            upd = latest_updates.get(lid)
+            if upd is not None and _visit_done(upd.visit_status):
+                cnt += 1
+        return cnt
+
+    def _deal_count(ids: list[int]) -> int:
+        cnt = 0
+        for lid in ids:
+            upd = latest_updates.get(lid)
+            if upd is not None and _deal_done(upd.deal_status):
+                cnt += 1
+        return cnt
 
     sv_ad = ad.get("short_video")
     live_ad = ad.get("live")
@@ -271,41 +327,68 @@ def _build_short_video_live_lead_report(
     if live_ad is None:
         diagnostics.append(ReportDiagnostic("ad_metric_live_missing"))
 
-    sv = groups["short_video"]
-    live = groups["live"]
+    sv_ids = cohort_ids["short_video"]
+    live_ids = cohort_ids["live"]
+    sv_retained = retained["short_video"]
+    live_retained = retained["live"]
+    sv_visit = _visit_count(sv_ids)
+    live_visit = _visit_count(live_ids)
+    sv_deal = _deal_count(sv_ids)
+    live_deal = _deal_count(live_ids)
+
     any_missing = sv_ad is None or live_ad is None
+    sv_pm = sv_ad.private_message_count if sv_ad else None
+    live_pm = live_ad.private_message_count if live_ad else None
+    sv_spend = sv_ad.spend_amount if sv_ad else None
+    live_spend = live_ad.spend_amount if live_ad else None
+
+    def _retained_rate(retained_count: int, pm: int | None) -> float | None:
+        # 留资率=留资量/私信量；私信量缺失→None（数据源未接入）；显式 0→0.0；>0→retained/pm
+        if pm is None:
+            return None
+        return _ratio_or_zero(retained_count, pm)
 
     rows: list[dict[str, object]] = [
         {
             "content_type": "短视频",
-            "lead_count": sv["leads"],
-            "retained_count": sv["retained"],
-            "retained_rate": _safe_rate(sv["retained"], sv["leads"]),
-            "spend_amount": sv_ad.spend_amount if sv_ad else None,
-            "private_message_count": sv_ad.private_message_count if sv_ad else None,
+            "spend_amount": sv_spend,
+            "private_message_count": sv_pm,
+            "retained_count": sv_retained,
+            "retained_rate": _retained_rate(sv_retained, sv_pm),
+            "visit_count": sv_visit,
+            "visit_rate": _ratio_or_zero(sv_visit, sv_retained),
+            "deal_count": sv_deal,
+            "deal_rate": _ratio_or_zero(sv_deal, sv_visit),
         },
         {
             "content_type": "直播",
-            "lead_count": live["leads"],
-            "retained_count": live["retained"],
-            "retained_rate": _safe_rate(live["retained"], live["leads"]),
-            "spend_amount": live_ad.spend_amount if live_ad else None,
-            "private_message_count": live_ad.private_message_count if live_ad else None,
+            "spend_amount": live_spend,
+            "private_message_count": live_pm,
+            "retained_count": live_retained,
+            "retained_rate": _retained_rate(live_retained, live_pm),
+            "visit_count": live_visit,
+            "visit_rate": _ratio_or_zero(live_visit, live_retained),
+            "deal_count": live_deal,
+            "deal_rate": _ratio_or_zero(live_deal, live_visit),
         },
         {
             "content_type": "合计",
-            "lead_count": sv["leads"] + live["leads"],
-            "retained_count": sv["retained"] + live["retained"],
-            "retained_rate": None if any_missing else _safe_rate(sv["retained"] + live["retained"], sv["leads"] + live["leads"]),
-            "spend_amount": None if any_missing else _sum_decimal(sv_ad.spend_amount, live_ad.spend_amount),
-            "private_message_count": None if any_missing else _sum_int(sv_ad.private_message_count, live_ad.private_message_count),
+            "spend_amount": None if any_missing else _sum_decimal(sv_spend, live_spend),
+            "private_message_count": None if any_missing else _sum_int(sv_pm, live_pm),
+            "retained_count": sv_retained + live_retained,
+            "retained_rate": None if any_missing else _retained_rate(sv_retained + live_retained, _sum_int(sv_pm, live_pm)),
+            "visit_count": sv_visit + live_visit,
+            "visit_rate": _ratio_or_zero(sv_visit + live_visit, sv_retained + live_retained),
+            "deal_count": sv_deal + live_deal,
+            "deal_rate": _ratio_or_zero(sv_deal + live_deal, sv_visit + live_visit),
         },
     ]
     return ReportBuildResult(
         report_type=REPORT_SHORT_VIDEO_LIVE_LEAD,
         report_variant=report_variant,
         report_day=report_day,
-        columns=("content_type", "lead_count", "retained_count", "retained_rate", "spend_amount", "private_message_count"),
+        columns=("content_type", "spend_amount", "private_message_count", "retained_count",
+                 "retained_rate", "visit_count", "visit_rate", "deal_count", "deal_rate"),
         rows=rows,
         diagnostics=tuple(diagnostics),
     )
@@ -513,6 +596,18 @@ def _build_lead_trace_report(
 def _build_sales_unit_cost_report(
     db: Session, *, merchant_id: str, report_day: date, report_variant: str
 ) -> ReportBuildResult:
+    """报表 4：销售单车成本表（执行包 11 列）。
+
+    列：销售、今日线索、通过率、开口率、总线索、总开口、总通过、到店、成交、到店成本、成交成本。
+    口径：今日线索=总线索（当日分配给该销售的全部来源线索数，按 lead 去重，取当日最后一条分配）；
+    总通过/总开口=cohort 最新反馈（wechat_status=已通过 / opening_status=已开口）；
+    到店/成交=cohort 最新更新（visit_status=已到店 / deal_status=已成交）；
+    通过率=总通过/今日线索、开口率=总开口/今日线索，分母 0 返回数值 0；
+    销售级到店/成交成本固定 None（数据不足，不虚构分摊）；
+    未分配行=当日新增且报表日结束前无 assign/reassign 记录的线索；
+    合计行到店成本=当日短视频+直播总消耗/合计到店，成交成本=当日总消耗/合计成交
+    （分母 0→0.00，广告缺失→None/数据源未接入 + partial）。
+    """
     start, end = _day_bounds(db, report_day)
 
     # 当天广告总消耗（短视频 + 直播）
@@ -524,59 +619,108 @@ def _build_sales_unit_cost_report(
     has_all_ad = {m.content_type for m in ad_metrics} >= {"short_video", "live"}
     total_spend = _sum_decimal(*[m.spend_amount for m in ad_metrics]) if ad_metrics else None
 
-    # 当天 assigned cohort 的销售集合
-    assigned_leads = _lead_trace_cohort(
-        db, merchant_id=merchant_id, start=start, end=end, report_variant="assigned"
-    )
-    assigned_lead_ids = [lead.id for lead in assigned_leads]
+    # 当日每 lead 最后分配 staff（SQL row_number 去重，取最后一条 assign/reassign）
+    assign_staff = _latest_assign_staff_by_lead(db, merchant_id=merchant_id, start=start, end=end)
+    assigned_lead_ids = list(assign_staff.keys())
 
-    # 最新成功反馈/更新，用于到店/成交计数
-    latest_updates = _latest_success_updates(db, merchant_id=merchant_id, lead_ids=assigned_lead_ids)
+    # assigned cohort leads（已按 lead 去重，每 lead 一条）
+    assigned_leads = db.query(DouyinLead).filter(
+        DouyinLead.merchant_id == merchant_id,
+        DouyinLead.id.in_(assigned_lead_ids),
+    ).order_by(DouyinLead.id.asc()).all() if assigned_lead_ids else []
 
-    # 按销售聚合 assigned/visit/deal 计数
-    staff_stat: dict[int, dict[str, int]] = {}
-    for lead in assigned_leads:
-        sid = lead.assigned_staff_id
-        if sid is None:
-            continue
-        stat = staff_stat.setdefault(sid, {"assigned": 0, "visit": 0, "deal": 0})
-        stat["assigned"] += 1
+    # 未分配 cohort：当日新增且当日 [start,end) 无 assign/reassign 记录
+    new_leads = db.query(DouyinLead).filter(
+        DouyinLead.merchant_id == merchant_id,
+        DouyinLead.created_at >= start,
+        DouyinLead.created_at < end,
+    ).order_by(DouyinLead.id.asc()).all()
+    assigned_set = set(assigned_lead_ids)
+    unassigned_leads = [lead for lead in new_leads if lead.id not in assigned_set]
+
+    # 合并 cohort（assigned + 未分配），读最新反馈/更新
+    all_cohort = assigned_leads + unassigned_leads
+    all_cohort_ids = [lead.id for lead in all_cohort]
+    latest_feedback = _latest_success_feedback(db, merchant_id=merchant_id, lead_ids=all_cohort_ids)
+    latest_updates = _latest_success_updates(db, merchant_id=merchant_id, lead_ids=all_cohort_ids)
+
+    # 按销售聚合（None key = 未分配）
+    stat: dict[int | None, dict[str, int]] = {}
+    for lead in all_cohort:
+        sid = assign_staff.get(lead.id)  # None 表示未分配
+        s = stat.setdefault(sid, {"today": 0, "pass": 0, "opening": 0, "visit": 0, "deal": 0})
+        s["today"] += 1
+        fb = latest_feedback.get(lead.id)
+        if fb is not None:
+            if _wechat_passed(fb.wechat_status):
+                s["pass"] += 1
+            if _opening_done(fb.opening_status):
+                s["opening"] += 1
         upd = latest_updates.get(lead.id)
         if upd is not None:
             if _visit_done(upd.visit_status):
-                stat["visit"] += 1
+                s["visit"] += 1
             if _deal_done(upd.deal_status):
-                stat["deal"] += 1
-    staff_map = _staff_map(db, set(staff_stat.keys()))
+                s["deal"] += 1
 
-    columns = ("sales_name", "assigned_count", "visit_count", "deal_count", "visit_cost", "deal_cost")
-    rows: list[dict[str, object]] = []
-    total_visit = 0
-    total_deal = 0
-    # 销售级：数据不足（不做金额分摊，只列计数）
-    for sid in sorted(staff_stat.keys()):
-        stat = staff_stat[sid]
-        total_visit += stat["visit"]
-        total_deal += stat["deal"]
-        rows.append({
-            "sales_name": staff_map.get(sid),
-            "assigned_count": stat["assigned"],
-            "visit_count": stat["visit"],
-            "deal_count": stat["deal"],
-            "visit_cost": None,  # 销售级数据不足，不虚构分摊
+    staff_ids = {sid for sid in stat.keys() if sid is not None}
+    staff_map = _staff_map(db, staff_ids)
+
+    columns = (
+        "sales_name", "today_lead_count", "pass_rate", "opening_rate",
+        "total_lead_count", "total_opening_count", "total_pass_count",
+        "visit_count", "deal_count", "visit_cost", "deal_cost",
+    )
+
+    def _sales_row(name: str | None, sid: int | None) -> dict[str, object]:
+        s = stat.get(sid, {"today": 0, "pass": 0, "opening": 0, "visit": 0, "deal": 0})
+        return {
+            "sales_name": name,
+            "today_lead_count": s["today"],
+            "pass_rate": _ratio_or_zero(s["pass"], s["today"]),
+            "opening_rate": _ratio_or_zero(s["opening"], s["today"]),
+            "total_lead_count": s["today"],  # 一期今日线索=总线索，同口径
+            "total_opening_count": s["opening"],
+            "total_pass_count": s["pass"],
+            "visit_count": s["visit"],
+            "deal_count": s["deal"],
+            "visit_cost": None,  # 销售级数据不足，禁止虚构分摊
             "deal_cost": None,
-        })
-    # 合计行：用当日总消耗计算整体到店/成交成本
+        }
+
+    rows: list[dict[str, object]] = []
+    # 销售行（sid 非 None，按 id 稳定排序）
+    for sid in sorted(s for s in stat.keys() if s is not None):
+        rows.append(_sales_row(staff_map.get(sid), sid))
+    # 未分配行（sid None）
+    if None in stat:
+        rows.append(_sales_row("未分配", None))
+
+    # 合计行：汇总全体销售与未分配
+    total_today = sum(s["today"] for s in stat.values())
+    total_opening = sum(s["opening"] for s in stat.values())
+    total_pass = sum(s["pass"] for s in stat.values())
+    total_visit = sum(s["visit"] for s in stat.values())
+    total_deal = sum(s["deal"] for s in stat.values())
     diagnostics: list[ReportDiagnostic] = []
     if not has_all_ad or total_spend is None:
         diagnostics.append(ReportDiagnostic("ad_metric_missing"))
+    # 合计成本：广告缺失→None（数据源未接入）；分母 0→Decimal 0；>0→总消耗/分母
+    effective_spend = total_spend if (has_all_ad and total_spend is not None) else None
+    visit_cost_total = None if effective_spend is None else (Decimal("0") if total_visit <= 0 else effective_spend / total_visit)
+    deal_cost_total = None if effective_spend is None else (Decimal("0") if total_deal <= 0 else effective_spend / total_deal)
     rows.append({
         "sales_name": "合计",
-        "assigned_count": sum(s["assigned"] for s in staff_stat.values()),
+        "today_lead_count": total_today,
+        "pass_rate": _ratio_or_zero(total_pass, total_today),
+        "opening_rate": _ratio_or_zero(total_opening, total_today),
+        "total_lead_count": total_today,
+        "total_opening_count": total_opening,
+        "total_pass_count": total_pass,
         "visit_count": total_visit,
         "deal_count": total_deal,
-        "visit_cost": _safe_decimal_div(total_spend, total_visit) if (has_all_ad and total_spend is not None) else None,
-        "deal_cost": _safe_decimal_div(total_spend, total_deal) if (has_all_ad and total_spend is not None) else None,
+        "visit_cost": visit_cost_total,
+        "deal_cost": deal_cost_total,
     })
 
     return ReportBuildResult(
@@ -589,23 +733,24 @@ def _build_sales_unit_cost_report(
     )
 
 
-def _safe_decimal_div(num: Decimal | None, den: int) -> Decimal | None:
-    """Decimal 除 int；分母为 0 或分子缺失返回 None。"""
-    if num is None or den <= 0:
-        return None
-    return num / den
-
-
 def _visit_done(visit_status: str | None) -> bool:
-    if not visit_status:
-        return False
-    return visit_status.strip() in {"visited", "arrived", "到店", "已到店"}
+    """到店判定：精确匹配 visit_status == '已到店'（对齐 sales_feedback_parser.LEAD_UPDATE_VISIT 枚举）。"""
+    return bool(visit_status) and visit_status.strip() == "已到店"
 
 
 def _deal_done(deal_status: str | None) -> bool:
-    if not deal_status:
-        return False
-    return deal_status.strip() in {"dealt", "deal", "成交", "已成交"}
+    """成交判定：精确匹配 deal_status == '已成交'（对齐 sales_feedback_parser.LEAD_UPDATE_DEAL 枚举）。"""
+    return bool(deal_status) and deal_status.strip() == "已成交"
+
+
+def _wechat_passed(wechat_status: str | None) -> bool:
+    """微信通过判定：精确匹配 wechat_status == '已通过'（对齐 LEAD_FEEDBACK_WECHAT 枚举）。"""
+    return bool(wechat_status) and wechat_status.strip() == "已通过"
+
+
+def _opening_done(opening_status: str | None) -> bool:
+    """开口判定：精确匹配 opening_status == '已开口'（对齐 LEAD_FEEDBACK_OPENING 枚举）。"""
+    return bool(opening_status) and opening_status.strip() == "已开口"
 
 
 # ---------------------------------------------------------------------------

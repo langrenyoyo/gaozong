@@ -126,7 +126,7 @@ def _insert_ad(*, merchant_id=_MERCHANT, metric_day=_REPORT_DAY, content_type="s
         db.close()
 
 
-def _insert_feedback(*, lead_id, merchant_id=_MERCHANT, staff_id=None, parse_status="success", feedback_no=None, feedback_date=None, updated_at=None, budget_text=None, intention_level=None):
+def _insert_feedback(*, lead_id, merchant_id=_MERCHANT, staff_id=None, parse_status="success", feedback_no=None, feedback_date=None, updated_at=None, budget_text=None, intention_level=None, wechat_status=None, opening_status=None, payment_method=None, match_status=None, precision_status=None, imprecision_reason=None, no_intention_reason=None, region_text=None, car_model=None):
     db = _db()
     try:
         db.add(SalesLeadFeedback(
@@ -134,6 +134,11 @@ def _insert_feedback(*, lead_id, merchant_id=_MERCHANT, staff_id=None, parse_sta
             feedback_no=feedback_no or f"fb_{lead_id}", parse_status=parse_status,
             feedback_date=feedback_date or _DAY, updated_at=updated_at,
             budget_text=budget_text, intention_level=intention_level,
+            wechat_status=wechat_status, opening_status=opening_status,
+            payment_method=payment_method, match_status=match_status,
+            precision_status=precision_status, imprecision_reason=imprecision_reason,
+            no_intention_reason=no_intention_reason, region_text=region_text,
+            car_model=car_model,
         ))
         db.commit()
     finally:
@@ -321,6 +326,23 @@ def test_latest_feedback_cross_merchant_isolation():
 # Step 3：报表 1 短视频/直播留资管理表
 # ============================================================================
 
+def test_short_video_live_lead_columns_contract():
+    """报表 1 严格 9 列顺序 + 固定 3 行（短视频/直播/合计）。"""
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SHORT_VIDEO_LIVE_LEAD,
+        )
+        assert result.columns == (
+            "content_type", "spend_amount", "private_message_count", "retained_count",
+            "retained_rate", "visit_count", "visit_rate", "deal_count", "deal_rate",
+        )
+        assert [r["content_type"] for r in result.rows] == ["短视频", "直播", "合计"]
+    finally:
+        db.close()
+
+
 def test_short_video_live_lead_paid_only_excludes_organic():
     """只统计 paid + short_video/live；organic 不算入付费表。"""
     l_paid_sv = _insert_lead(extracted_phone="138", conv="sv")
@@ -336,14 +358,15 @@ def test_short_video_live_lead_paid_only_excludes_organic():
             report_type=svc.REPORT_SHORT_VIDEO_LIVE_LEAD,
         )
         sv_row = next(r for r in result.rows if r["content_type"] == "短视频")
-        assert sv_row["lead_count"] == 1  # 只 paid
-        assert sv_row["retained_count"] == 1
+        assert sv_row["retained_count"] == 1  # 只 paid sv 留资
+        assert sv_row["visit_count"] == 0  # 无到店更新
+        assert sv_row["deal_count"] == 0
     finally:
         db.close()
 
 
 def test_short_video_live_lead_missing_ad_is_none_not_zero():
-    """缺广告指标时消耗/私信量为 None，合计行也 None，状态 partial。"""
+    """缺广告指标时消耗/私信量/留资率为 None（数据源未接入），合计行同理，状态 partial。"""
     l = _insert_lead(extracted_phone="138", conv="noad")
     _insert_attribution(lead_id=l, traffic_type="paid", content_type="short_video")
     # 无广告指标
@@ -356,9 +379,10 @@ def test_short_video_live_lead_missing_ad_is_none_not_zero():
         sv_row = next(r for r in result.rows if r["content_type"] == "短视频")
         assert sv_row["spend_amount"] is None
         assert sv_row["private_message_count"] is None
+        assert sv_row["retained_rate"] is None  # 私信量缺失→留资率缺失
         total_row = next(r for r in result.rows if r["content_type"] == "合计")
         assert total_row["spend_amount"] is None
-        assert total_row["retained_rate"] is None  # 合计留资率缺失
+        assert total_row["retained_rate"] is None
         assert not result.is_complete
         codes = {d.code for d in result.diagnostics}
         assert "ad_metric_short_video_missing" in codes
@@ -366,17 +390,54 @@ def test_short_video_live_lead_missing_ad_is_none_not_zero():
         db.close()
 
 
-def test_short_video_live_lead_zero_denominator_no_div_by_zero():
-    """分母为 0 不除错，retained_rate 为 None。"""
+def test_short_video_live_lead_explicit_zero_pm_returns_zero_rate():
+    """广告指标显式录入 pm=0 时，留资率为数值 0.0（非 None，非数据源未接入），状态 complete。"""
+    l = _insert_lead(extracted_phone="138", conv="zpm")
+    _insert_attribution(lead_id=l, content_type="short_video")
+    _insert_ad(content_type="short_video", spend="0.00", msg=0)
+    _insert_ad(content_type="live", spend="0.00", msg=0)
     db = _db()
     try:
         result = svc.build_daily_report(
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_SHORT_VIDEO_LIVE_LEAD,
         )
-        sv_row = next(r for r in result.rows if r["content_type"] == "短视频")
-        assert sv_row["lead_count"] == 0
-        assert sv_row["retained_rate"] is None
+        sv = next(r for r in result.rows if r["content_type"] == "短视频")
+        assert sv["private_message_count"] == 0
+        assert sv["retained_count"] == 1  # 留资（phone）
+        assert sv["retained_rate"] == 0.0  # pm=0→留资率 0（数值，非 None）
+        assert result.is_complete  # 广告显式录入 0，不 partial
+    finally:
+        db.close()
+
+
+def test_short_video_live_lead_visit_deal_conversion_from_updates():
+    """到店/成交及转化率读 cohort 最新成功 SalesLeadUpdate（精确枚举 已到店/已成交）。"""
+    l1 = _insert_lead(extracted_phone="138", conv="v1")
+    l2 = _insert_lead(extracted_wechat="wx", conv="v2")
+    l3 = _insert_lead(extracted_phone="139", conv="v3")
+    _insert_attribution(lead_id=l1, content_type="short_video")
+    _insert_attribution(lead_id=l2, content_type="short_video")
+    _insert_attribution(lead_id=l3, content_type="short_video")
+    _insert_ad(content_type="short_video", spend="100.00", msg=10)
+    _insert_ad(content_type="live", spend="50.00", msg=5)
+    # 3 条付费 sv 留资，2 到店，1 成交
+    _insert_update(lead_id=l1, visit_status="已到店", deal_status="已成交")
+    _insert_update(lead_id=l2, visit_status="已到店")
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SHORT_VIDEO_LIVE_LEAD,
+        )
+        sv = next(r for r in result.rows if r["content_type"] == "短视频")
+        assert sv["retained_count"] == 3
+        assert sv["visit_count"] == 2
+        assert sv["deal_count"] == 1
+        # 留资率=留资量/私信量=3/10；到店率=到店/留资量=2/3；成交率=成交/到店=1/2
+        assert sv["retained_rate"] == 3 / 10
+        assert sv["visit_rate"] == 2 / 3
+        assert sv["deal_rate"] == 1 / 2
     finally:
         db.close()
 
@@ -398,9 +459,13 @@ def test_short_video_live_lead_ad_present_sums_correctly():
         total = next(r for r in result.rows if r["content_type"] == "合计")
         assert total["spend_amount"] == Decimal("150.00")
         assert total["private_message_count"] == 8
-        assert total["lead_count"] == 2
         assert total["retained_count"] == 2
-        assert total["retained_rate"] == 1.0
+        # 留资率=留资量/私信量=2/8=0.25（不再是线索数分母）
+        assert total["retained_rate"] == 0.25
+        assert total["visit_count"] == 0
+        assert total["visit_rate"] == 0.0  # 分母 0→数值 0
+        assert total["deal_count"] == 0
+        assert total["deal_rate"] == 0.0
     finally:
         db.close()
 
@@ -606,15 +671,39 @@ def test_lead_trace_next_day_refill_regenerate():
 # Step 3：报表 4 销售单车成本表
 # ============================================================================
 
+def test_sales_unit_cost_columns_contract():
+    """报表 4 严格 11 列顺序。"""
+    sid = _insert_staff()
+    l = _insert_lead(conv="cc", assigned_staff_id=sid)
+    _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
+    _insert_ad(content_type="short_video", spend="100.00", msg=5)
+    _insert_ad(content_type="live", spend="50.00", msg=3)
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        assert result.columns == (
+            "sales_name", "today_lead_count", "pass_rate", "opening_rate",
+            "total_lead_count", "total_opening_count", "total_pass_count",
+            "visit_count", "deal_count", "visit_cost", "deal_cost",
+        )
+        # 末行是合计
+        assert result.rows[-1]["sales_name"] == "合计"
+    finally:
+        db.close()
+
+
 def test_sales_unit_cost_staff_level_no_cost_allocation():
-    """销售级不虚构金额分摊，visit_cost/deal_cost 全 None。"""
+    """销售级不虚构金额分摊，visit_cost/deal_cost 全 None；通过/开口/到店/成交精确计数。"""
     sid = _insert_staff()
     l1 = _insert_lead(conv="c1", assigned_staff_id=sid)
     l2 = _insert_lead(conv="c2", assigned_staff_id=sid)
     _insert_followup(lead_id=l1, staff_id=sid, record_type="assign")
     _insert_followup(lead_id=l2, staff_id=sid, record_type="assign")
-    _insert_update(lead_id=l1, visit_status="visited")
-    _insert_update(lead_id=l2, deal_status="dealt")
+    _insert_update(lead_id=l1, visit_status="已到店")
+    _insert_update(lead_id=l2, deal_status="已成交")
     _insert_ad(content_type="short_video", spend="200.00", msg=10)
     _insert_ad(content_type="live", spend="100.00", msg=5)
     db = _db()
@@ -623,24 +712,56 @@ def test_sales_unit_cost_staff_level_no_cost_allocation():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_SALES_UNIT_COST,
         )
-        staff_row = next(r for r in result.rows if r["sales_name"] != "合计")
-        assert staff_row["visit_cost"] is None
-        assert staff_row["deal_cost"] is None
+        staff_row = next(r for r in result.rows if r["sales_name"] not in ("合计", "未分配"))
+        assert staff_row["today_lead_count"] == 2
+        assert staff_row["total_lead_count"] == 2  # 一期今日线索=总线索
         assert staff_row["visit_count"] == 1
         assert staff_row["deal_count"] == 1
+        assert staff_row["total_pass_count"] == 0  # 无 feedback
+        assert staff_row["total_opening_count"] == 0
+        assert staff_row["pass_rate"] == 0.0  # 分母 0→数值 0
+        assert staff_row["opening_rate"] == 0.0
+        assert staff_row["visit_cost"] is None  # 销售级数据不足
+        assert staff_row["deal_cost"] is None
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_pass_opening_from_feedback():
+    """总通过/总开口读 cohort 最新成功 SalesLeadFeedback（精确枚举 已通过/已开口）。"""
+    sid = _insert_staff()
+    l1 = _insert_lead(conv="p1", assigned_staff_id=sid)
+    l2 = _insert_lead(conv="p2", assigned_staff_id=sid)
+    _insert_followup(lead_id=l1, staff_id=sid, record_type="assign")
+    _insert_followup(lead_id=l2, staff_id=sid, record_type="assign")
+    _insert_feedback(lead_id=l1, staff_id=sid, wechat_status="已通过", opening_status="已开口")
+    _insert_feedback(lead_id=l2, staff_id=sid, wechat_status="待添加", opening_status="未开口")
+    _insert_ad(content_type="short_video", spend="100.00", msg=5)
+    _insert_ad(content_type="live", spend="50.00", msg=3)
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        staff_row = next(r for r in result.rows if r["sales_name"] not in ("合计", "未分配"))
+        assert staff_row["total_pass_count"] == 1  # 仅 l1 已通过
+        assert staff_row["total_opening_count"] == 1  # 仅 l1 已开口
+        assert staff_row["pass_rate"] == 0.5  # 1/2
+        assert staff_row["opening_rate"] == 0.5
     finally:
         db.close()
 
 
 def test_sales_unit_cost_total_row_uses_day_spend():
-    """合计行用当日总消耗计算整体到店/成交成本。"""
+    """合计行用当日总消耗计算整体到店/成交成本；成交分母 0→Decimal 0.00。"""
     sid = _insert_staff()
     l1 = _insert_lead(conv="tc1", assigned_staff_id=sid)
     l2 = _insert_lead(conv="tc2", assigned_staff_id=sid)
     _insert_followup(lead_id=l1, staff_id=sid, record_type="assign")
     _insert_followup(lead_id=l2, staff_id=sid, record_type="assign")
-    _insert_update(lead_id=l1, visit_status="visited")
-    _insert_update(lead_id=l2, visit_status="visited")
+    _insert_update(lead_id=l1, visit_status="已到店")
+    _insert_update(lead_id=l2, visit_status="已到店")
     _insert_ad(content_type="short_video", spend="200.00", msg=10)
     _insert_ad(content_type="live", spend="100.00", msg=5)
     db = _db()
@@ -650,18 +771,20 @@ def test_sales_unit_cost_total_row_uses_day_spend():
             report_type=svc.REPORT_SALES_UNIT_COST,
         )
         total = next(r for r in result.rows if r["sales_name"] == "合计")
-        assert total["visit_cost"] == Decimal("150.0")  # 300 / 2
         assert total["visit_count"] == 2
+        assert total["visit_cost"] == Decimal("150.0")  # 300 / 2
+        assert total["deal_count"] == 0
+        assert total["deal_cost"] == Decimal("0")  # 分母 0→数值 0.00（非 None）
     finally:
         db.close()
 
 
 def test_sales_unit_cost_missing_ad_no_fake_cost():
-    """缺广告指标时合计成本 None，不伪造 0。"""
+    """缺广告指标时合计成本 None（数据源未接入），不伪造 0，状态 partial。"""
     sid = _insert_staff()
     l = _insert_lead(conv="mc", assigned_staff_id=sid)
     _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
-    _insert_update(lead_id=l, visit_status="visited")
+    _insert_update(lead_id=l, visit_status="已到店")
     # 无广告指标
     db = _db()
     try:
@@ -676,12 +799,12 @@ def test_sales_unit_cost_missing_ad_no_fake_cost():
         db.close()
 
 
-def test_sales_unit_cost_zero_denominator_no_div_by_zero():
-    """成交数为 0 时 deal_cost None，不除错。"""
+def test_sales_unit_cost_zero_denominator_visit_zero():
+    """合计到店为 0 时到店成本 Decimal 0.00（非 None），不除错。"""
     sid = _insert_staff()
     l = _insert_lead(conv="zd", assigned_staff_id=sid)
     _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
-    _insert_update(lead_id=l, visit_status="visited")  # 到店但未成交
+    # 无到店/成交更新
     _insert_ad(content_type="short_video", spend="200.00", msg=10)
     _insert_ad(content_type="live", spend="100.00", msg=5)
     db = _db()
@@ -691,9 +814,64 @@ def test_sales_unit_cost_zero_denominator_no_div_by_zero():
             report_type=svc.REPORT_SALES_UNIT_COST,
         )
         total = next(r for r in result.rows if r["sales_name"] == "合计")
+        assert total["visit_count"] == 0
         assert total["deal_count"] == 0
-        assert total["deal_cost"] is None
-        assert total["visit_cost"] == Decimal("300.0")  # 300 / 1
+        assert total["visit_cost"] == Decimal("0")  # 分母 0→数值 0.00
+        assert total["deal_cost"] == Decimal("0")
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_unassigned_row():
+    """当日新增且无 assign/reassign 记录的线索计入'未分配'行。"""
+    sid = _insert_staff()
+    l_assigned = _insert_lead(conv="as", assigned_staff_id=sid)
+    l_unassigned = _insert_lead(conv="un", extracted_phone="139")  # 当日新增无分配记录
+    _insert_followup(lead_id=l_assigned, staff_id=sid, record_type="assign")
+    _insert_ad(content_type="short_video", spend="100.00", msg=5)
+    _insert_ad(content_type="live", spend="50.00", msg=3)
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        names = [r["sales_name"] for r in result.rows]
+        assert "未分配" in names
+        unassigned_row = next(r for r in result.rows if r["sales_name"] == "未分配")
+        assert unassigned_row["today_lead_count"] == 1
+        staff_row = next(r for r in result.rows if r["sales_name"] not in ("合计", "未分配"))
+        assert staff_row["today_lead_count"] == 1
+        # 合计含未分配
+        total = next(r for r in result.rows if r["sales_name"] == "合计")
+        assert total["today_lead_count"] == 2
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_reassign_dedup_keeps_last():
+    """当日同一线索多次分配只取最后一条 reassign（SQL 去重，不重复计数）。"""
+    sid_a = _insert_staff(name="销售甲")
+    sid_b = _insert_staff(name="销售乙")
+    l = _insert_lead(conv="re", assigned_staff_id=sid_a)
+    # 当日先 assign 甲，再 reassign 乙
+    _insert_followup(lead_id=l, staff_id=sid_a, record_type="assign", created_at=datetime(2026, 7, 10, 9, 0, 0))
+    _insert_followup(lead_id=l, staff_id=sid_b, record_type="reassign", created_at=datetime(2026, 7, 10, 11, 0, 0))
+    _insert_ad(content_type="short_video", spend="100.00", msg=5)
+    _insert_ad(content_type="live", spend="50.00", msg=3)
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        # 只算给最后一条 reassign 的乙，甲不计 l
+        staff_b = next(r for r in result.rows if r["sales_name"] == "销售乙")
+        assert staff_b["today_lead_count"] == 1
+        staff_a = next((r for r in result.rows if r["sales_name"] == "销售甲"), None)
+        assert staff_a is None  # 甲当日无任何线索（l 改派给乙）
+        total = next(r for r in result.rows if r["sales_name"] == "合计")
+        assert total["today_lead_count"] == 1  # 不重复计数
     finally:
         db.close()
 
@@ -740,6 +918,6 @@ def test_cross_merchant_lead_not_counted_in_short_video_report():
             report_type=svc.REPORT_SHORT_VIDEO_LIVE_LEAD,
         )
         sv_row = next(r for r in result.rows if r["content_type"] == "短视频")
-        assert sv_row["lead_count"] == 0  # 不串 merchant-b
+        assert sv_row["retained_count"] == 0  # 不串 merchant-b
     finally:
         db.close()
