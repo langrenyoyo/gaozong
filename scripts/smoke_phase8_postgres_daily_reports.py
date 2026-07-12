@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -161,6 +162,25 @@ def _business_row_count(engine) -> int:
                   "sales_daily_summaries", "lead_report_attributions", "daily_ad_metrics"):
         total += _query_scalar(engine, f"SELECT count(*) FROM {table}") or 0
     return total
+
+
+def _smoke_residue_baseline(engine) -> dict[str, int]:
+    """检查库内是否存在任何 smoke_p8a_% 历史残留（含本轮前轮次）。
+
+    安全基线：非 0 表示上轮 smoke 未清干净（崩溃/中断残留），冒烟必须失败报告，
+    不能由本轮静默代清——否则会删除并发执行的另一轮冒烟审计。
+    本轮 cleanup 只清本轮 _RUN_ID 前缀。
+    """
+    return {
+        "audit": _query_scalar(engine,
+            "SELECT count(*) FROM autoreply_admin_audit_logs WHERE operator_id LIKE 'smoke_p8a_%'") or 0,
+        "jobs": _query_scalar(engine,
+            "SELECT count(*) FROM daily_report_jobs WHERE merchant_id LIKE 'smoke_p8a_%'") or 0,
+        "summaries": _query_scalar(engine,
+            "SELECT count(*) FROM sales_daily_summaries WHERE merchant_id LIKE 'smoke_p8a_%'") or 0,
+        "staff": _query_scalar(engine,
+            "SELECT count(*) FROM sales_staff WHERE name LIKE 'smoke_p8a_%'") or 0,
+    }
 
 
 # ---- 业务冒烟（商户隔离 / 并发 / 生成 / 重生成 / 失败）----
@@ -339,7 +359,7 @@ def _business_smoke(engine, storage_root: str) -> dict:
 # ---- 清理（外键顺序 + 残留验证）----
 
 def _cleanup(engine, ctx: dict) -> str:
-    from app.models import DailyReportJob, SalesDailySummary, SalesStaff
+    from app.models import AutoReplyAdminAuditLog, DailyReportJob, SalesDailySummary, SalesStaff
     from app.services.daily_report_storage import resolve_storage_path
     from sqlalchemy.orm import sessionmaker
     TestSession = sessionmaker(bind=engine)
@@ -358,7 +378,12 @@ def _cleanup(engine, ctx: dict) -> str:
                         p.unlink()
                 except Exception as exc:  # noqa: BLE001  单文件清理失败不阻断
                     logger.warning("smoke cleanup file key=%s: %s", j.file_storage_key, exc)
-        # 外键顺序：daily_report_jobs → sales_daily_summaries → sales_staff
+        # 外键顺序：审计 → daily_report_jobs → sales_daily_summaries → sales_staff
+        # 审计清理只用本轮 _RUN_ID 前缀：不清其他轮次（避免删并发冒烟审计）；
+        # 历史残留由起始 _smoke_residue_baseline 检查报告失败，不静默代清
+        db.query(AutoReplyAdminAuditLog).filter(
+            AutoReplyAdminAuditLog.operator_id.like(f"{_RUN_ID}%")
+        ).delete(synchronize_session=False)
         db.query(DailyReportJob).filter(
             DailyReportJob.merchant_id.like(f"{_RUN_ID}%")
         ).delete(synchronize_session=False)
@@ -386,9 +411,12 @@ def _cleanup(engine, ctx: dict) -> str:
     residue_staff = _query_scalar(engine,
         "SELECT count(*) FROM sales_staff WHERE name LIKE :p",
         {"p": f"{_RUN_ID}%"})
-    if failed or residue or residue_summaries or residue_staff:
+    residue_audit = _query_scalar(engine,
+        "SELECT count(*) FROM autoreply_admin_audit_logs WHERE operator_id LIKE :p",
+        {"p": f"{_RUN_ID}%"})
+    if failed or residue or residue_summaries or residue_staff or residue_audit:
         return (f"FAIL: cleanup_failed={failed} job={residue} "
-                f"summary={residue_summaries} staff={residue_staff}")
+                f"summary={residue_summaries} staff={residue_staff} audit={residue_audit}")
     return "PASS"
 
 
@@ -459,6 +487,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         logger.info("downgrade→upgrade 循环通过")
 
+        # 4.5 smoke 历史残留基线：任何 smoke_p8a_% 残留必须为 0，失败报告不静默代清
+        smoke_baseline = _smoke_residue_baseline(engine)
+        if any(v > 0 for v in smoke_baseline.values()):
+            logger.error("存在历史 smoke 残留，请人工清理后再跑（不静默代清）: %s", smoke_baseline)
+            return 1
+        logger.info("smoke 历史残留基线通过: %s", smoke_baseline)
+
         # 5-8. 业务 smoke
         storage_root = os.environ["DAILY_REPORT_STORAGE_DIR"]
         biz_results, biz_ctx = _business_smoke(engine, storage_root)
@@ -487,6 +522,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         engine.dispose()
+        # 清理本轮临时存储目录（tempfile.mkdtemp 不自删，防累积残留）
+        _sr = os.environ.get("DAILY_REPORT_STORAGE_DIR")
+        if _sr:
+            shutil.rmtree(_sr, ignore_errors=True)
 
 
 if __name__ == "__main__":

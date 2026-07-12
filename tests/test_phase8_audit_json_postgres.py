@@ -60,10 +60,12 @@ def engine():
         ))
         conn.commit()
     yield eng
+    # 只清数据不 DROP 表：该表由迁移 0006 建立，DROP 后 alembic 版本仍 head，
+    # 后续 smoke（downgrade→0008→upgrade→head）不会重建 0006 表，导致 record_admin_audit
+    # 因表不存在失败。setup 的 create(checkfirst=True) + ALTER TYPE jsonb 已幂等可重复执行。
     with eng.connect() as conn:
         conn.execute(text("DELETE FROM autoreply_admin_audit_logs"))
         conn.commit()
-    AutoReplyAdminAuditLog.__table__.drop(bind=eng, checkfirst=True)
     eng.dispose()
 
 
