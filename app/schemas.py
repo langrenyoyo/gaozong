@@ -1,10 +1,16 @@
 """Pydantic 请求/响应模型"""
 
 import json
+import re
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Phase 8 Task 3：trace_url 安全校验用控制字符集，禁止 \x00-\x1f 与 \x7f
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _safe_load_json_object(value: Any) -> dict:
@@ -1712,6 +1718,174 @@ class DailyReportJobItem(BaseModel):
     diagnostics: list[DailyReportDiagnostic] = Field(default_factory=list)
     generated_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+# ========== Phase 8 Task 3：日报权威数据补录 ==========
+
+
+class LeadReportAttributionUpsert(BaseModel):
+    """线索归因补录项。
+
+    不含 merchant_id（商户来自可信 RequestContext）；不含 source_system（服务固定 manual）。
+    extra=forbid 拒绝伪造 merchant_id / source_system 等字段。
+    """
+
+    model_config = {"extra": "forbid"}
+    lead_id: int
+    traffic_type: Literal["paid", "organic", "unknown"]
+    content_type: Literal["short_video", "live", "other", "unknown"]
+    ad_id: Optional[str] = Field(None, max_length=128)
+    material_id: Optional[str] = Field(None, max_length=128)
+    trace_url: Optional[str] = Field(None, max_length=1000)
+
+    @field_validator("trace_url")
+    @classmethod
+    def _validate_trace_url(cls, v: str | None) -> str | None:
+        """trace_url 仅做格式校验：http/https、无 userinfo、无控制字符；不做 DNS/网络请求。"""
+        if not v:
+            return None
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("trace_url 含控制字符")
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("trace_url 仅允许 http/https")
+        if not parsed.hostname:
+            raise ValueError("trace_url 缺少 host")
+        if parsed.username or parsed.password:
+            raise ValueError("trace_url 不允许 userinfo")
+        return v
+
+
+class LeadAttributionUpsertRequest(BaseModel):
+    """归因批量补录请求体（min_length=1 拒绝空数组，max_length=500 拒绝超限）。"""
+
+    model_config = {"extra": "forbid"}
+    items: list[LeadReportAttributionUpsert] = Field(..., min_length=1, max_length=500)
+
+
+class LeadReportAttributionOut(BaseModel):
+    """归因响应项（响应可返回完整 trace_url，因为商户有权查看自有数据；审计才脱敏）。"""
+
+    model_config = {"from_attributes": True}
+    id: int
+    lead_id: int
+    traffic_type: str
+    content_type: str
+    ad_id: Optional[str] = None
+    material_id: Optional[str] = None
+    trace_url: Optional[str] = None
+    source_system: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class LeadAttributionUpsertResponse(BaseModel):
+    success: bool = True
+    count: int
+    records: list[LeadReportAttributionOut]
+
+
+class LeadAttributionItem(BaseModel):
+    """GET 归因列表项：线索基本信息 + 当前归因（无归因时 None）；不含 raw_data。"""
+
+    lead_id: int
+    customer_name: Optional[str] = None
+    lead_type: Optional[str] = None
+    created_at: Optional[datetime] = None
+    attribution: Optional[LeadReportAttributionOut] = None
+
+
+class LeadAttributionListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: list[LeadAttributionItem]
+
+
+class LeadReportAttributionQuery(BaseModel):
+    """归因列表查询参数（service 入参容器）。"""
+
+    report_day: date
+    content_type: Optional[Literal["short_video", "live", "other", "unknown"]] = None
+    traffic_type: Optional[Literal["paid", "organic", "unknown"]] = None
+    missing_only: bool = False
+    page: int = 1
+    page_size: int = 50
+
+
+class DailyAdMetricUpsert(BaseModel):
+    """广告日指标补录项。
+
+    channel 固定 douyin（服务写入，客户端不传）；不接受广告明细字段
+    （metric_key/ad_id/material_id），extra=forbid 拒绝。
+    """
+
+    model_config = {"extra": "forbid"}
+    metric_day: date
+    content_type: Literal["short_video", "live"]
+    spend_amount: Decimal = Field(..., ge=0, max_digits=14, decimal_places=2)
+    private_message_count: int = Field(..., ge=0)
+
+
+class DailyAdMetricUpsertRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    items: list[DailyAdMetricUpsert] = Field(..., min_length=1, max_length=500)
+
+
+class DailyAdMetricOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: int
+    metric_day: date
+    channel: str
+    content_type: str
+    spend_amount: Decimal
+    private_message_count: int
+    source_system: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class DailyAdMetricUpsertResponse(BaseModel):
+    success: bool = True
+    count: int
+    records: list[DailyAdMetricOut]
+
+
+class DailyAdMetricListResponse(BaseModel):
+    metric_day: date
+    records: list[DailyAdMetricOut]
+
+
+class MerchantReportProfileUpsert(BaseModel):
+    """展厅价位补录：两个价位必须同时为空或同时存在且 0 <= min <= max。"""
+
+    model_config = {"extra": "forbid"}
+    showroom_price_min_yuan: Optional[Decimal] = Field(None, ge=0, max_digits=14, decimal_places=2)
+    showroom_price_max_yuan: Optional[Decimal] = Field(None, ge=0, max_digits=14, decimal_places=2)
+
+    @model_validator(mode="after")
+    def _check_price_range(self) -> "MerchantReportProfileUpsert":
+        mn = self.showroom_price_min_yuan
+        mx = self.showroom_price_max_yuan
+        if (mn is None) != (mx is None):
+            raise ValueError("价位必须同时存在或同时为空")
+        if mn is not None and mx is not None and mn > mx:
+            raise ValueError("最低价不能大于最高价")
+        return self
+
+
+class MerchantReportProfileOut(BaseModel):
+    model_config = {"from_attributes": True}
+    showroom_price_min_yuan: Optional[Decimal] = None
+    showroom_price_max_yuan: Optional[Decimal] = None
+    updated_at: Optional[datetime] = None
+
+
+class ReportDataCompletenessOut(BaseModel):
+    """完整度诊断响应：只列 count>0 的稳定诊断码。"""
+
+    report_day: date
+    diagnostics: list[DailyReportDiagnostic]
 
 
 class ComputeMarkupRatioOut(BaseModel):
