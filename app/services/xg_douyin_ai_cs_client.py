@@ -105,6 +105,10 @@ class XgDouyinAiCsClient:
         }
         return self._post_json("/knowledge-training/ask", payload)
 
+    def summarize_daily_sales_feedback(self, payload: dict) -> dict:
+        """调用 9100 每日销售总结摘要窄接口；不复用 ask / reply-suggestion。"""
+        return self._post_json("/internal/daily-reports/sales-summary", payload)
+
     def knowledge_training_feedback(
         self,
         *,

@@ -1,5 +1,7 @@
 """抖音AI小高客服 API schema。"""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -165,4 +167,52 @@ class ReplySuggestionResponse(BaseModel):
     timeout_seconds: float | None = None
     provider: str | None = None
     model: str | None = None
+    fallback_reason: str | None = None
+
+
+# ========== Phase 8 Task 4：每日销售总结摘要 ==========
+
+DAILY_SUMMARY_FIELD_MAX = 2000
+DAILY_SUMMARY_NAME_MAX = 200
+DAILY_SUMMARY_MAX_ITEMS = 100
+
+
+class DailySalesSummaryItem(BaseModel):
+    """单条销售总结输入。
+
+    只允许 8 个结构化字段；extra=forbid 拒绝 raw_text/parse_error/手机号/微信号等
+    不应进入 LLM 的字段。手机号/微信号在服务层发给 LLM 前再次脱敏。
+    """
+
+    model_config = {"extra": "forbid"}
+    sales_name: str | None = Field(default=None, max_length=DAILY_SUMMARY_NAME_MAX)
+    overall_quality: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+    main_problem: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+    car_model_summary: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+    budget_summary: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+    cooperation_level: str | None = Field(default=None, max_length=DAILY_SUMMARY_NAME_MAX)
+    today_suggestion: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+    extra_feedback: str | None = Field(default=None, max_length=DAILY_SUMMARY_FIELD_MAX)
+
+
+class DailySalesSummaryRequest(BaseModel):
+    """9000 → 9100 每日销售总结摘要请求。
+
+    9100 不信任 merchant_id 以外的租户字段，不访问 9000 数据库；
+    merchant_id 仅用于算力上报，report_day 仅用于日志，均不参与 LLM prompt。
+    """
+
+    model_config = {"extra": "forbid"}
+    merchant_id: str = Field(..., min_length=1, max_length=128)
+    report_day: str = Field(..., min_length=1, max_length=10)
+    summaries: list[DailySalesSummaryItem] = Field(..., min_length=1, max_length=DAILY_SUMMARY_MAX_ITEMS)
+
+
+class DailySalesSummaryResponse(BaseModel):
+    """摘要响应：llm_used=false 时 summary_text=None + fallback_reason 稳定诊断码。"""
+
+    summary_text: str | None = None
+    llm_used: bool = False
+    model: str | None = None
+    prompt_version: str
     fallback_reason: str | None = None

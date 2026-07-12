@@ -14,6 +14,7 @@ from apps.xg_douyin_ai_cs.routers import (
     ai_reply,
     categories,
     conversations,
+    daily_reports,
     health,
     knowledge_training,
     rag,
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_reply.router)
     app.include_router(rag.router)
     app.include_router(knowledge_training.router)
+    app.include_router(daily_reports.router)
     return app
 
 
