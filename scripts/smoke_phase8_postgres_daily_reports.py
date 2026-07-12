@@ -178,13 +178,6 @@ def _business_smoke(engine, storage_root: str) -> dict:
     # 让存储解析到本次临时 root（generate_one 用默认 root，这里临时覆盖模块属性）
     storage.DAILY_REPORT_STORAGE_DIR = Path(storage_root)
 
-    # 遗留风险：autoreply_admin_audit_logs.before_json/after_json 迁移建为 jsonb，
-    # ORM 用 String 插入导致 PG 严格拒绝（SQLite 宽松未暴露）。修复需改 ORM/迁移，超出本 smoke 范围。
-    # smoke 聚焦核心生成/下载/并发链路，审计 no-op 绕过，jsonb 兼容性记为遗留风险。
-    import app.services.daily_report_job_service as _job_svc
-    _orig_audit = _job_svc.record_admin_audit
-    _job_svc.record_admin_audit = lambda *a, **kw: None
-
     TestSession = sessionmaker(bind=engine)
     results: dict[str, str] = {}
     report_day = date(2026, 7, 10)
@@ -339,7 +332,6 @@ def _business_smoke(engine, storage_root: str) -> dict:
     finally:
         db.close()
 
-    _job_svc.record_admin_audit = _orig_audit
     return results, {"merchant_a": merchant_a, "merchant_b": merchant_b, "merchant_c": merchant_c,
                      "report_day": report_day}
 

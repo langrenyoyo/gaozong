@@ -610,7 +610,7 @@ def test_put_lead_attributions_audit_redacts_trace_url():
             action="upsert_lead_attributions"
         ).first()
         assert audit is not None
-        after = audit.after_json or ""
+        after = json.dumps(audit.after_json, ensure_ascii=False) if audit.after_json else ""
         assert "token=secret" not in after
         assert "#frag" not in after
         assert "example.com/p/1" in after  # 保留 scheme/host/path
@@ -636,8 +636,8 @@ def test_put_lead_attributions_audit_writes_before_after():
             action="upsert_lead_attributions"
         ).order_by(AutoReplyAdminAuditLog.id.asc()).all()
         assert len(audits) == 2
-        before2 = json.loads(audits[1].before_json or "{}")
-        after2 = json.loads(audits[1].after_json or "{}")
+        before2 = audits[1].before_json or {}
+        after2 = audits[1].after_json or {}
         before_rows = before2.get("rows", [])
         after_rows = after2.get("rows", [])
         assert any(r.get("traffic_type") == "paid" for r in before_rows)

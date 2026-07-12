@@ -455,10 +455,15 @@ def _db_rollout_snapshot(
     }
 
 
-def _safe_json(value: Any) -> str | None:
+def _safe_json(value: Any) -> Any:
+    """脱敏后返回结构化值（dict/list/标量），供 ORM JSON 列直接存储；剔除敏感键。
+
+    不返回 json.dumps 字符串——ORM JSON 列在 SQLite 落 TEXT、PG 落 jsonb，
+    由 SQLAlchemy 负责编码，避免 String→jsonb 类型不匹配。
+    """
     if value is None:
         return None
-    return json.dumps(_strip_sensitive(value), ensure_ascii=False, separators=(",", ":"))
+    return _strip_sensitive(value)
 
 
 def _strip_sensitive(value: Any) -> Any:

@@ -574,7 +574,7 @@ def test_patch_effectiveness_requires_admin_and_writes_audit_log():
         assert audit.target_type == "ai_reply_decision_log"
         assert audit.target_id == str(log_id)
         assert audit.reason == "回复促成留资"
-        assert "13812345678" not in (audit.after_json or "")
+        assert "13812345678" not in json.dumps(audit.after_json or {}, ensure_ascii=False)
     finally:
         db.close()
 
@@ -641,7 +641,7 @@ def test_patch_effectiveness_masks_sensitive_reason_in_record_and_audit():
         assert audit.reason == "客户手机号138****5678，微信wxid***，回复偏离需求"
         assert "13812345678" not in audit.reason
         assert "wxid_abcd1234" not in audit.reason
-        assert "13812345678" not in (audit.after_json or "")
-        assert "wxid_abcd1234" not in (audit.after_json or "")
+        assert "13812345678" not in json.dumps(audit.after_json or {}, ensure_ascii=False)
+        assert "wxid_abcd1234" not in json.dumps(audit.after_json or {}, ensure_ascii=False)
     finally:
         db.close()

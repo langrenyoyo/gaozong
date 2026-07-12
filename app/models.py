@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint,
+    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -558,8 +558,9 @@ class AutoReplyAdminAuditLog(Base):
     account_open_id = Column(String(255))
     target_type = Column(String(64), nullable=False)
     target_id = Column(String(255))
-    before_json = Column(Text)
-    after_json = Column(Text)
+    # JSON 类型：SQLite 落 TEXT（编码），PG 落 jsonb；统一 dict 语义，避免 String→jsonb 类型不匹配
+    before_json = Column(JSON)
+    after_json = Column(JSON)
     reason = Column(Text)
     operator_id = Column(String(128))
     operator_name = Column(String(128))
