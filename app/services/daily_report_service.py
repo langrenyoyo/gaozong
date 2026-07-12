@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -32,6 +33,7 @@ from app.models import (
     DouyinLead,
     LeadFollowupRecord,
     LeadReportAttribution,
+    MerchantReportProfile,
     SalesDailySummary,
     SalesLeadFeedback,
     SalesLeadUpdate,
@@ -398,20 +400,135 @@ def _build_short_video_live_lead_report(
 # 报表 2：每日线索销售反馈表
 # ---------------------------------------------------------------------------
 
+# 预算解析支持的固定格式（执行包第 146-154 行），其他文本不猜测
+_BUDGET_UNKNOWN = {"未知", "无", "空白"}
+
+
+def _parse_budget(text: str | None) -> tuple[str, Decimal | None, Decimal | None]:
+    """解析预算文本。返回 (kind, min_yuan, max_yuan)。
+
+    kind:
+    - 'range'：min/max 为 Decimal 区间（max=None 表示 10万以上 无上限）；
+    - 'unknown'：未知/无/空白/空（不计入预算可解析分母，不产生异常）；
+    - 'unparseable'：非空但不符合固定格式（产生 budget_text_unparseable 诊断）。
+    """
+    if not text or not text.strip():
+        return ("unknown", None, None)
+    t = text.strip()
+    if t in _BUDGET_UNKNOWN:
+        return ("unknown", None, None)
+    # 8-12万 / 8~12万 / 8至12万
+    m = re.match(r"^(\d+(?:\.\d+)?)[\-~至](\d+(?:\.\d+)?)万?$", t)
+    if m:
+        return ("range", Decimal(m.group(1)), Decimal(m.group(2)))
+    # 10万以内
+    m = re.match(r"^(\d+(?:\.\d+)?)万?以内$", t)
+    if m:
+        return ("range", Decimal("0"), Decimal(m.group(1)))
+    # 10万以上
+    m = re.match(r"^(\d+(?:\.\d+)?)万?以上$", t)
+    if m:
+        return ("range", Decimal(m.group(1)), None)  # None=无上限
+    # 10万（单点）
+    m = re.match(r"^(\d+(?:\.\d+)?)万$", t)
+    if m:
+        v = Decimal(m.group(1))
+        return ("range", v, v)
+    return ("unparseable", None, None)
+
+
+def _budget_intersects(b_min: Decimal, b_max: Decimal | None,
+                       s_min: Decimal, s_max: Decimal) -> bool:
+    """预算区间与展厅价位区间有交集（执行包：有交集即匹配）。
+
+    b_max=None 表示预算无上限（10万以上）。
+    """
+    upper = b_max if b_max is not None else Decimal("100000000")  # 大数代无上限
+    return max(b_min, s_min) <= min(upper, s_max)
+
+
 def _build_daily_sales_feedback_report(
     db: Session, *, merchant_id: str, report_day: date, report_variant: str, summary_client
 ) -> ReportBuildResult:
+    """报表 2：每日线索销售反馈表（执行包主工作表 10 列单行汇总 + 原始总结 8 列）。
+
+    主工作表列：线索数量、总线索、通过数量、分期数量、全款数量、展厅车型数量、找车数量、
+    价位区间与展厅价位一致比例、开口率、销售线索自我感觉。
+    口径：线索数量=付费短视频线索；总线索=当日全部新增；
+    通过=最新反馈 wechat_status=已通过；分期/全款=payment_method；展厅车型=match_status=展厅有车；
+    找车=match_status in (需要找车,不匹配)；价位匹配=预算可解析且与展厅价位交集 / 预算可解析；
+    开口率=已开口/总线索；销售线索自我感觉=LLM 摘要（无总结→固定文案，LLM 失败→固定文案+partial）。
+    """
+    start, end = _day_bounds(db, report_day)
+
+    # 当日全部新增线索（总线索分母）
+    all_leads = db.query(DouyinLead).filter(
+        DouyinLead.merchant_id == merchant_id,
+        DouyinLead.created_at >= start,
+        DouyinLead.created_at < end,
+    ).order_by(DouyinLead.id.asc()).all()
+    all_lead_ids = [lead.id for lead in all_leads]
+    total_leads = len(all_leads)
+
+    # 归因（线索数量=付费短视频）
+    attrs: dict[int, LeadReportAttribution] = {}
+    if all_lead_ids:
+        for a in db.query(LeadReportAttribution).filter(
+            LeadReportAttribution.merchant_id == merchant_id,
+            LeadReportAttribution.lead_id.in_(all_lead_ids),
+        ).all():
+            attrs[a.lead_id] = a
+    paid_lead_count = sum(
+        1 for lead in all_leads
+        if (attr := attrs.get(lead.id)) is not None
+        and attr.traffic_type == "paid"
+        and attr.content_type == "short_video"
+    )
+
+    # 最新成功反馈（通过/分期/全款/展厅/找车/预算/开口）
+    latest_feedback = _latest_success_feedback(db, merchant_id=merchant_id, lead_ids=all_lead_ids)
+    passed_count = sum(1 for fb in latest_feedback.values() if _wechat_passed(fb.wechat_status))
+    installment_count = sum(1 for fb in latest_feedback.values() if (fb.payment_method or "").strip() == "分期")
+    full_payment_count = sum(1 for fb in latest_feedback.values() if (fb.payment_method or "").strip() == "全款")
+    showroom_car_count = sum(1 for fb in latest_feedback.values() if (fb.match_status or "").strip() == "展厅有车")
+    find_car_count = sum(1 for fb in latest_feedback.values() if (fb.match_status or "").strip() in ("需要找车", "不匹配"))
+    opening_count = sum(1 for fb in latest_feedback.values() if _opening_done(fb.opening_status))
+
+    # 价位匹配（展厅价位 + 预算解析）
+    profile = db.query(MerchantReportProfile).filter(
+        MerchantReportProfile.merchant_id == merchant_id
+    ).first()
+    has_showroom = (
+        profile is not None
+        and profile.showroom_price_min_yuan is not None
+        and profile.showroom_price_max_yuan is not None
+    )
+    budget_parseable = 0
+    budget_matched = 0
+    budget_unparseable = False
+    for fb in latest_feedback.values():
+        kind, b_min, b_max = _parse_budget(fb.budget_text)
+        if kind == "unparseable":
+            budget_unparseable = True
+            continue
+        if kind != "range":
+            continue  # unknown/空 不计入分母
+        budget_parseable += 1
+        if has_showroom and _budget_intersects(
+            b_min, b_max, profile.showroom_price_min_yuan, profile.showroom_price_max_yuan
+        ):
+            budget_matched += 1
+    # 价位匹配比例：展厅未配置→None（数据源未接入）；已配置→匹配/可解析（分母 0→0）
+    price_match_rate = None if not has_showroom else _ratio_or_zero(budget_matched, budget_parseable)
+    opening_rate = _ratio_or_zero(opening_count, total_leads)
+
+    # 原始总结（8 列结构化，按 id ASC，只 success，summary_date=report_day，不写 raw_text/parse_error）
     summaries = db.query(SalesDailySummary).filter(
         SalesDailySummary.merchant_id == merchant_id,
         SalesDailySummary.summary_date == report_day,
         SalesDailySummary.parse_status == "success",
     ).order_by(SalesDailySummary.id.asc()).all()
-
-    columns = (
-        "sales_name", "overall_quality", "main_problem", "car_model_summary",
-        "budget_summary", "cooperation_level", "today_suggestion", "extra_feedback",
-    )
-    rows = [
+    raw_rows = [
         {
             "sales_name": s.sales_name,
             "overall_quality": s.overall_quality,
@@ -424,30 +541,17 @@ def _build_daily_sales_feedback_report(
         }
         for s in summaries
     ]
+
+    # LLM 摘要（销售线索自我感觉）：每次报表最多调用一次 LLM
     diagnostics: list[ReportDiagnostic] = []
-    extra_sheets: dict[str, list[dict[str, object]]] = {"汇总": [], "原始总结": []}
-
     if not summaries:
-        # 没有有效总结：数据源未接入/数据不足，不调 LLM
-        diagnostics.append(ReportDiagnostic("daily_summary_no_data"))
-        return ReportBuildResult(
-            report_type=REPORT_DAILY_SALES_FEEDBACK,
-            report_variant=report_variant,
-            report_day=report_day,
-            columns=columns,
-            rows=rows,
-            extra_sheets=extra_sheets,
-            diagnostics=tuple(diagnostics),
-        )
-
-    extra_sheets["原始总结"] = [
-        {"sales_name": s.sales_name, "raw_text": s.raw_text} for s in summaries
-    ]
-
-    if summary_client is None:
-        diagnostics.append(ReportDiagnostic("daily_summary_client_not_configured"))
+        # 当日无销售提交总结：固定文案，不调 LLM，不算失败（is_complete 不受影响）
+        self_feeling = "当日无销售提交总结"
+    elif summary_client is None:
+        # client 未配置视为 LLM 失败
+        diagnostics.append(ReportDiagnostic("daily_summary_llm_failed"))
+        self_feeling = "摘要生成失败，原始反馈见原始总结工作表"
     else:
-        # 有总结只调用一次摘要 client
         payload = {
             "merchant_id": merchant_id,
             "report_day": report_day.isoformat(),
@@ -465,9 +569,10 @@ def _build_daily_sales_feedback_report(
                 for s in summaries
             ],
         }
+        self_feeling = "摘要生成失败，原始反馈见原始总结工作表"
         try:
             resp = summary_client.summarize_daily_sales_feedback(payload)
-        except Exception as exc:  # noqa: BLE001  LLM 失败保留原始总结，降级
+        except Exception as exc:  # noqa: BLE001  LLM 异常降级，保留原始总结
             logger.warning(
                 "daily_sales_feedback stage=summary_call_failed merchant=%s err=%s",
                 merchant_id, type(exc).__name__,
@@ -475,11 +580,40 @@ def _build_daily_sales_feedback_report(
             diagnostics.append(ReportDiagnostic(
                 "daily_summary_llm_failed", exception_type=type(exc).__name__,
             ))
-            resp = {"llm_used": False, "summary_text": None}
-        if resp.get("llm_used") and resp.get("summary_text"):
-            extra_sheets["汇总"] = [{"summary_text": resp["summary_text"]}]
-        else:
-            diagnostics.append(ReportDiagnostic("daily_summary_llm_failed"))
+            resp = None
+        if resp is not None:
+            if resp.get("input_too_large"):
+                diagnostics.append(ReportDiagnostic("daily_summary_input_too_large"))
+            elif resp.get("llm_used") and resp.get("summary_text"):
+                self_feeling = resp["summary_text"]
+            else:
+                # LLM 返回未用/空：计为失败（与上面 catch 互斥，只追加一次）
+                diagnostics.append(ReportDiagnostic("daily_summary_llm_failed"))
+
+    # 价位/预算诊断（独立于 LLM）
+    if not has_showroom:
+        diagnostics.append(ReportDiagnostic("showroom_price_profile_missing"))
+    if budget_unparseable:
+        diagnostics.append(ReportDiagnostic("budget_text_unparseable"))
+
+    columns = (
+        "paid_lead_count", "total_lead_count", "passed_count", "installment_count",
+        "full_payment_count", "showroom_car_count", "find_car_count",
+        "price_match_rate", "opening_rate", "self_feeling",
+    )
+    rows = [{
+        "paid_lead_count": paid_lead_count,
+        "total_lead_count": total_leads,
+        "passed_count": passed_count,
+        "installment_count": installment_count,
+        "full_payment_count": full_payment_count,
+        "showroom_car_count": showroom_car_count,
+        "find_car_count": find_car_count,
+        "price_match_rate": price_match_rate,
+        "opening_rate": opening_rate,
+        "self_feeling": self_feeling,
+    }]
+    extra_sheets: dict[str, list[dict[str, object]]] = {"原始总结": raw_rows}
 
     return ReportBuildResult(
         report_type=REPORT_DAILY_SALES_FEEDBACK,

@@ -21,6 +21,7 @@ from app.models import (
     DouyinLead,
     LeadFollowupRecord,
     LeadReportAttribution,
+    MerchantReportProfile,
     SalesDailySummary,
     SalesLeadFeedback,
     SalesLeadUpdate,
@@ -164,6 +165,19 @@ def _insert_summary(*, merchant_id=_MERCHANT, staff_id, summary_date=_REPORT_DAY
         db.add(SalesDailySummary(
             merchant_id=merchant_id, staff_id=staff_id, summary_date=summary_date,
             parse_status=parse_status, sales_name=sales_name, raw_text=raw_text,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _insert_profile(*, merchant_id=_MERCHANT, min_yuan=None, max_yuan=None):
+    db = _db()
+    try:
+        db.add(MerchantReportProfile(
+            merchant_id=merchant_id,
+            showroom_price_min_yuan=min_yuan,
+            showroom_price_max_yuan=max_yuan,
         ))
         db.commit()
     finally:
@@ -488,8 +502,27 @@ class _SpyClient:
         return self.response
 
 
-def test_daily_feedback_no_data_does_not_call_llm():
-    """无有效总结不调 LLM，返回 daily_summary_no_data。"""
+def test_daily_feedback_columns_contract():
+    """报表 2 主工作表严格 10 列单行汇总。"""
+    spy = _SpyClient()
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
+        )
+        assert result.columns == (
+            "paid_lead_count", "total_lead_count", "passed_count", "installment_count",
+            "full_payment_count", "showroom_car_count", "find_car_count",
+            "price_match_rate", "opening_rate", "self_feeling",
+        )
+        assert len(result.rows) == 1  # 单行汇总
+    finally:
+        db.close()
+
+
+def test_daily_feedback_no_summaries_fixed_text_no_llm():
+    """无有效总结：self_feeling 固定文案，不调 LLM，不产生 daily_summary 诊断。"""
     spy = _SpyClient()
     db = _db()
     try:
@@ -498,14 +531,16 @@ def test_daily_feedback_no_data_does_not_call_llm():
             report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
         )
         assert spy.calls == 0
+        assert result.rows[0]["self_feeling"] == "当日无销售提交总结"
         codes = {d.code for d in result.diagnostics}
-        assert "daily_summary_no_data" in codes
-        assert result.extra_sheets["汇总"] == []
+        assert "daily_summary_llm_failed" not in codes  # 无总结不算 LLM 失败
+        assert result.extra_sheets["原始总结"] == []
     finally:
         db.close()
 
 
-def test_daily_feedback_calls_llm_once_when_summaries_exist():
+def test_daily_feedback_llm_summary_into_self_feeling():
+    """有总结时 LLM 调用一次，summary_text 写入主工作表 self_feeling 单元格。"""
     s1 = _insert_staff(name="张三")
     s2 = _insert_staff(name="李四")
     _insert_summary(staff_id=s1, sales_name="张三")
@@ -518,16 +553,16 @@ def test_daily_feedback_calls_llm_once_when_summaries_exist():
             report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
         )
         assert spy.calls == 1
-        assert len(result.rows) == 2
-        assert result.extra_sheets["汇总"] == [{"summary_text": "今日汇总"}]
+        assert result.rows[0]["self_feeling"] == "今日汇总"
         assert len(result.extra_sheets["原始总结"]) == 2
-        assert result.is_complete
+        llm_codes = {d.code for d in result.diagnostics if d.code.startswith("daily_summary")}
+        assert "daily_summary_llm_failed" not in llm_codes
     finally:
         db.close()
 
 
-def test_daily_feedback_llm_failed_keeps_raw_summaries():
-    """LLM 失败保留原始总结工作表，产生 daily_summary_llm_failed。"""
+def test_daily_feedback_llm_failed_fixed_text_partial():
+    """LLM 返回未用：self_feeling 固定回退文案 + daily_summary_llm_failed（一次）。"""
     sid = _insert_staff()
     _insert_summary(staff_id=sid)
     spy = _SpyClient(response={"summary_text": None, "llm_used": False})
@@ -537,15 +572,16 @@ def test_daily_feedback_llm_failed_keeps_raw_summaries():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
         )
-        codes = {d.code for d in result.diagnostics}
-        assert "daily_summary_llm_failed" in codes
-        assert result.extra_sheets["汇总"] == []
+        assert result.rows[0]["self_feeling"] == "摘要生成失败，原始反馈见原始总结工作表"
+        codes = [d.code for d in result.diagnostics]
+        assert codes.count("daily_summary_llm_failed") == 1  # 不重复
         assert len(result.extra_sheets["原始总结"]) == 1  # 原始总结保留
     finally:
         db.close()
 
 
-def test_daily_feedback_summary_exception_is_degraded():
+def test_daily_feedback_llm_exception_degraded():
+    """LLM 异常：daily_summary_llm_failed（带 exception_type，一次）。"""
     sid = _insert_staff()
     _insert_summary(staff_id=sid)
     spy = _SpyClient(raise_exc=RuntimeError("9100 down"))
@@ -555,14 +591,38 @@ def test_daily_feedback_summary_exception_is_degraded():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
         )
-        codes = {d.code for d in result.diagnostics}
-        assert "daily_summary_llm_failed" in codes
+        codes = [d.code for d in result.diagnostics]
+        assert codes.count("daily_summary_llm_failed") == 1
+        failed = next(d for d in result.diagnostics if d.code == "daily_summary_llm_failed")
+        assert failed.exception_type == "RuntimeError"
+    finally:
+        db.close()
+
+
+def test_daily_feedback_raw_summary_8_columns_no_raw_text():
+    """原始总结工作表固定 8 列结构化，不写 raw_text/parse_error。"""
+    sid = _insert_staff()
+    _insert_summary(staff_id=sid, sales_name="张三", raw_text="不应出现的原文")
+    spy = _SpyClient()
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
+        )
+        raw = result.extra_sheets["原始总结"]
+        assert len(raw) == 1
+        assert set(raw[0].keys()) == {
+            "sales_name", "overall_quality", "main_problem", "car_model_summary",
+            "budget_summary", "cooperation_level", "today_suggestion", "extra_feedback",
+        }
+        assert "raw_text" not in raw[0]
     finally:
         db.close()
 
 
 def test_daily_feedback_only_success_summaries():
-    """只汇总 parse_status=success。"""
+    """原始总结只汇总 parse_status=success（失败的不出现）。"""
     s1 = _insert_staff(name="成功销售")
     s2 = _insert_staff(name="失败销售")
     _insert_summary(staff_id=s1, sales_name="成功", parse_status="success")
@@ -574,10 +634,122 @@ def test_daily_feedback_only_success_summaries():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=spy,
         )
-        assert len(result.rows) == 1
-        assert result.rows[0]["sales_name"] == "成功"
+        raw = result.extra_sheets["原始总结"]
+        assert len(raw) == 1
+        assert raw[0]["sales_name"] == "成功"
     finally:
         db.close()
+
+
+def test_daily_feedback_paid_lead_count_and_conversion():
+    """线索数量=付费短视频；通过/分期/全款/展厅/找车从最新反馈精确计数。"""
+    l_paid = _insert_lead(extracted_phone="138", conv="p1")
+    l_live = _insert_lead(extracted_wechat="wx", conv="live")
+    _insert_attribution(lead_id=l_paid, traffic_type="paid", content_type="short_video")
+    _insert_attribution(lead_id=l_live, traffic_type="paid", content_type="live")
+    _insert_feedback(lead_id=l_paid, wechat_status="已通过", payment_method="分期", match_status="展厅有车", opening_status="已开口")
+    _insert_feedback(lead_id=l_live, wechat_status="待添加", payment_method="全款", match_status="需要找车")
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=None,
+        )
+        row = result.rows[0]
+        assert row["paid_lead_count"] == 1  # 仅付费短视频
+        assert row["total_lead_count"] == 2  # 全部新增
+        assert row["passed_count"] == 1  # 仅 l_paid 已通过
+        assert row["installment_count"] == 1
+        assert row["full_payment_count"] == 1
+        assert row["showroom_car_count"] == 1
+        assert row["find_car_count"] == 1  # l_live 需要找车
+        assert row["opening_rate"] == 0.5  # 1 已开口 / 2 总线索
+    finally:
+        db.close()
+
+
+def test_daily_feedback_price_match_rate():
+    """价位匹配=预算可解析且与展厅价位交集 / 预算可解析。"""
+    l1 = _insert_lead(extracted_phone="138", conv="m1")
+    l2 = _insert_lead(extracted_phone="139", conv="m2")
+    l3 = _insert_lead(extracted_phone="137", conv="m3")
+    _insert_feedback(lead_id=l1, budget_text="8-12万")  # 与 10-15 交集 → 匹配
+    _insert_feedback(lead_id=l2, budget_text="3万")  # range(3,3)，与 10-15 不交集 → 不匹配
+    _insert_feedback(lead_id=l3, budget_text="未知")  # unknown，不计入分母
+    _insert_profile(min_yuan=Decimal("10.00"), max_yuan=Decimal("15.00"))
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=None,
+        )
+        row = result.rows[0]
+        # 可解析 2（l1,l2），匹配 1（l1）→ 1/2=0.5；l3 unknown 不计入分母
+        assert row["price_match_rate"] == 0.5
+        assert result.is_complete  # 无 unparseable，无缺失
+    finally:
+        db.close()
+
+
+def test_daily_feedback_showroom_missing_price_rate_none_partial():
+    """展厅价位未配置：price_match_rate None（数据源未接入）+ showroom_price_profile_missing。"""
+    l = _insert_lead(extracted_phone="138", conv="sm")
+    _insert_feedback(lead_id=l, budget_text="10万")
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=None,
+        )
+        assert result.rows[0]["price_match_rate"] is None
+        codes = {d.code for d in result.diagnostics}
+        assert "showroom_price_profile_missing" in codes
+        assert not result.is_complete
+    finally:
+        db.close()
+
+
+def test_daily_feedback_budget_unparseable_partial():
+    """预算文本不符合固定格式：budget_text_unparseable + partial，不阻断其他指标。"""
+    l = _insert_lead(extracted_phone="138", conv="bu")
+    _insert_feedback(lead_id=l, budget_text="瞎写的预算")
+    _insert_profile(min_yuan=Decimal("10.00"), max_yuan=Decimal("15.00"))
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_DAILY_SALES_FEEDBACK, summary_client=None,
+        )
+        codes = {d.code for d in result.diagnostics}
+        assert "budget_text_unparseable" in codes
+        # 价位匹配分母 0（无 range 反馈）→ 0.0（展厅已配置）
+        assert result.rows[0]["price_match_rate"] == 0.0
+        assert not result.is_complete
+    finally:
+        db.close()
+
+
+def test_parse_budget_formats():
+    """预算解析覆盖执行包全部固定格式 + unknown + unparseable。"""
+    # 区间：8-12万 / 8~12万 / 8至12万
+    assert svc._parse_budget("8-12万") == ("range", Decimal("8"), Decimal("12"))
+    assert svc._parse_budget("8~12万") == ("range", Decimal("8"), Decimal("12"))
+    assert svc._parse_budget("8至12万") == ("range", Decimal("8"), Decimal("12"))
+    # 单点
+    assert svc._parse_budget("10万") == ("range", Decimal("10"), Decimal("10"))
+    # 以内（下限 0）
+    assert svc._parse_budget("10万以内") == ("range", Decimal("0"), Decimal("10"))
+    # 以上（上限 None=无上限）
+    assert svc._parse_budget("10万以上") == ("range", Decimal("10"), None)
+    # unknown：未知/无/空白/空/None
+    assert svc._parse_budget("未知") == ("unknown", None, None)
+    assert svc._parse_budget("无") == ("unknown", None, None)
+    assert svc._parse_budget("空白") == ("unknown", None, None)
+    assert svc._parse_budget("") == ("unknown", None, None)
+    assert svc._parse_budget(None) == ("unknown", None, None)
+    # unparseable：非空且不符合固定格式
+    assert svc._parse_budget("瞎写的预算")[0] == "unparseable"
+    assert svc._parse_budget("十万")[0] == "unparseable"
 
 
 # ============================================================================
