@@ -955,3 +955,74 @@ export interface AiAutoReplyRunDetailResponse {
   data: AiAutoReplyRunDetail;
   message?: string;
 }
+
+// ========== Phase 8 Task 8：每日报表后台 ==========
+// 仅对齐后端 DailyReportJobItem 安全字段；不含 merchant_id/file_storage_key/token/sha/size/error_message
+
+export type DailyReportType =
+  | "short_video_live_lead"
+  | "daily_sales_feedback"
+  | "lead_trace"
+  | "sales_unit_cost";
+
+export type DailyReportVariant = "default" | "created" | "assigned";
+
+export interface DailyReportDiagnostic {
+  code: string;
+  count: number;
+  exception_type?: string | null;
+}
+
+export interface DailyReportJobItem {
+  id: number;
+  report_day: string; // YYYY-MM-DD 自然日
+  report_type: string;
+  report_variant: string;
+  status: string; // none/generating/generated/partial/failed
+  artifact_status: string; // none/available
+  file_name?: string | null;
+  download_available: boolean;
+  is_previous_artifact: boolean;
+  diagnostics: DailyReportDiagnostic[];
+  generated_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DailyReportJobListResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  records: DailyReportJobItem[];
+}
+
+export interface DailyReportListQuery {
+  report_day_from?: string;
+  report_day_to?: string;
+  report_type?: string;
+  status?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface GenerateDailyReportsRequest {
+  report_day: string;
+  report_type?: DailyReportType;
+  report_variant?: DailyReportVariant;
+}
+
+export interface SkippedReport {
+  report_type: string;
+  variant?: string | null;
+  reason: string;
+}
+
+export interface GenerateDailyReportsResponse {
+  success: boolean;
+  jobs: DailyReportJobItem[];
+  skipped: SkippedReport[];
+}
+
+export interface RegenerateDailyReportResponse {
+  success: boolean;
+  job: DailyReportJobItem;
+}

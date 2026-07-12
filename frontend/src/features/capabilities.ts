@@ -68,6 +68,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "wechat-config", label: "微信配置", path: "/wechat-assistant/config" },
       { id: "wechat-tasks", label: "任务记录", path: "/wechat-assistant/tasks" },
       { id: "wechat-download-test", label: "下载/测试", path: "/wechat-assistant/download-test" },
+      { id: "wechat-daily-reports", label: "每日报表", path: "/wechat-assistant/daily-reports" },
     ],
   },
   {

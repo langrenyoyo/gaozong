@@ -21,6 +21,7 @@ import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
+import DailyReports from "../features/wechat-assistant/pages/DailyReports";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
 import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
@@ -706,6 +707,7 @@ export default function Index({
     activeNav === "wechat-config" ||
     activeNav === "wechat-tasks" ||
     activeNav === "wechat-download-test";
+  const isDailyReportsNav = activeNav === "wechat-daily-reports";
   const isComputeNav =
     activeNav === "compute" ||
     activeNav === "compute-token-transactions" ||
@@ -807,6 +809,8 @@ export default function Index({
           <LeadsModulePage />
         ) : isAgentModuleNav ? (
           <SuperMerchantAgent />
+        ) : isDailyReportsNav ? (
+          <DailyReports user={user} />
         ) : isWechatAssistantNav ? (
           <WechatAgent activeTab={activeWechatTab} />
         ) : isComputeNav ? (

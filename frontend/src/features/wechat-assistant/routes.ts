@@ -5,4 +5,5 @@ export const wechatAssistantRoutes: CapabilityRoute[] = [
   { path: "/wechat-assistant/config", navId: "wechat-config" },
   { path: "/wechat-assistant/tasks", navId: "wechat-tasks" },
   { path: "/wechat-assistant/download-test", navId: "wechat-download-test" },
+  { path: "/wechat-assistant/daily-reports", navId: "wechat-daily-reports" },
 ];
