@@ -331,3 +331,32 @@ def is_douyin_webhook_auth_required() -> bool:
 # 新主线使用 19000 Local Agent 操作微信，旧调度器会在 9000 所在电脑直接操作微信导致冲突。
 # 设置为 "1" 可恢复旧行为（仅供开发调试或回退使用）。
 AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT = os.getenv("AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT", "0") == "1"
+
+# ---------- Phase 8 每日自动报表存储与调度 ----------
+# 配置读取严格校验：TIMEZONE 交给 zoneinfo 解析；SCHEDULE_LOCAL_TIME 只接受 HH:MM 00:00-23:59；
+# 非法值启动时报明确配置错误，不静默回退到系统时区或当前时间。
+def _parse_daily_report_timezone():
+    from zoneinfo import ZoneInfo
+    raw = os.getenv("DAILY_REPORT_TIMEZONE", "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(raw)
+    except Exception as exc:  # noqa: BLE001  启动期显式失败优于静默回退
+        raise RuntimeError(f"DAILY_REPORT_TIMEZONE 非法时区: {raw} ({exc})") from exc
+
+
+def _parse_daily_report_schedule_time() -> str:
+    import re
+    raw = os.getenv("DAILY_REPORT_SCHEDULE_LOCAL_TIME", "01:10").strip() or "01:10"
+    if not re.fullmatch(r"\d{2}:\d{2}", raw):
+        raise RuntimeError(f"DAILY_REPORT_SCHEDULE_LOCAL_TIME 必须是 HH:MM: {raw!r}")
+    hh, mm = raw.split(":")
+    hour, minute = int(hh), int(mm)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise RuntimeError(f"DAILY_REPORT_SCHEDULE_LOCAL_TIME 超范围 00:00-23:59: {raw!r}")
+    return raw
+
+
+DAILY_REPORT_STORAGE_DIR = Path(os.getenv("DAILY_REPORT_STORAGE_DIR", "./data/daily_reports").strip() or "./data/daily_reports")
+DAILY_REPORT_TIMEZONE = _parse_daily_report_timezone()
+DAILY_REPORT_SCHEDULER_ENABLED = _env_bool("DAILY_REPORT_SCHEDULER_ENABLED", False)
+DAILY_REPORT_SCHEDULE_LOCAL_TIME = _parse_daily_report_schedule_time()
