@@ -1888,6 +1888,47 @@ class ReportDataCompletenessOut(BaseModel):
     diagnostics: list[DailyReportDiagnostic]
 
 
+# ========== Phase 8 Task 7：生成/列表/下载 ==========
+
+DailyReportType = Literal[
+    "short_video_live_lead", "daily_sales_feedback", "lead_trace", "sales_unit_cost"
+]
+DailyReportVariant = Literal["default", "created", "assigned"]
+
+
+class GenerateDailyReportsRequest(BaseModel):
+    """生成请求：report_day 必填；report_type 缺省生成默认集；不接受 merchant_id。"""
+
+    model_config = {"extra": "forbid"}
+    report_day: date
+    report_type: Optional[DailyReportType] = None
+    report_variant: Optional[DailyReportVariant] = None
+
+
+class SkippedReport(BaseModel):
+    report_type: str
+    variant: Optional[str] = None
+    reason: str
+
+
+class GenerateDailyReportsResponse(BaseModel):
+    success: bool = True
+    jobs: list[DailyReportJobItem]
+    skipped: list[SkippedReport] = Field(default_factory=list)
+
+
+class RegenerateDailyReportResponse(BaseModel):
+    success: bool = True
+    job: DailyReportJobItem
+
+
+class DailyReportJobListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: list[DailyReportJobItem]
+
+
 class ComputeMarkupRatioOut(BaseModel):
     """算力上浮比例输出结构（基点整数，不浮点）。"""
 

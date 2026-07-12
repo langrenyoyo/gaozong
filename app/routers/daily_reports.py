@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import date, datetime
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -26,18 +28,23 @@ from app.auth.dependencies import (
     require_permissions,
 )
 from app.database import get_db
-from app.models import LeadReportAttribution, MerchantReportProfile
+from app.models import DailyReportJob, LeadReportAttribution, MerchantReportProfile
 from app.schemas import (
     DailyAdMetricListResponse,
     DailyAdMetricUpsertRequest,
     DailyAdMetricUpsertResponse,
+    DailyReportJobListResponse,
+    GenerateDailyReportsRequest,
+    GenerateDailyReportsResponse,
     LeadAttributionListResponse,
     LeadAttributionUpsertRequest,
     LeadAttributionUpsertResponse,
     LeadReportAttributionQuery,
     MerchantReportProfileOut,
     MerchantReportProfileUpsert,
+    RegenerateDailyReportResponse,
     ReportDataCompletenessOut,
+    SkippedReport,
 )
 from app.services.autoreply_admin_rollout_service import record_admin_audit
 from app.services.daily_report_data_service import (
@@ -49,6 +56,20 @@ from app.services.daily_report_data_service import (
     upsert_lead_attributions,
     upsert_merchant_report_profile,
 )
+from app.services.daily_report_job_service import (
+    ARTIFACT_AVAILABLE,
+    ARTIFACT_NONE,
+    ClaimConflictError,
+    PermissionDeniedError,
+    STATUS_GENERATING,
+    generate_reports,
+    get_job_for_download,
+    list_jobs,
+    regenerate_job,
+)
+from app.services.daily_report_service import REPORT_LEAD_TRACE
+from app.services.daily_report_storage import validate_artifact_path
+from app.services.xg_douyin_ai_cs_client import get_xg_douyin_ai_cs_client
 
 logger = logging.getLogger(__name__)
 
@@ -359,4 +380,196 @@ def get_data_completeness(
     return ReportDataCompletenessOut(
         report_day=payload["report_day"],
         diagnostics=payload["diagnostics"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 Task 7：生成任务、列表、重试与安全下载
+# ---------------------------------------------------------------------------
+
+_XLSX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+def _get_summary_client():
+    """构造 9100 摘要客户端；可被测试 monkeypatch 替换为 mock。"""
+    return get_xg_douyin_ai_cs_client()
+
+
+def _file_sha256(path) -> str:
+    """流式计算文件 sha256，用于下载完整性校验。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _has_leads(context: RequestContext) -> bool:
+    return context.has_permission("auto_wechat:leads")
+
+
+def _not_found() -> HTTPException:
+    """跨商户、不存在、无文件统一按不存在处理，避免泄露任务是否存在。"""
+    return HTTPException(
+        status_code=404,
+        detail={"code": "DAILY_REPORT_NOT_FOUND", "message": "日报任务不存在"},
+    )
+
+
+@router.post("/generate", response_model=GenerateDailyReportsResponse)
+def generate_daily_reports(
+    payload: GenerateDailyReportsRequest,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """生成日报。report_type 缺省生成默认集；显式 lead_trace 缺 leads 返回 403。
+
+    普通报表只需 auto_wechat:agent；默认集缺 leads 时 trace 记入 skipped 而非报错。
+    """
+    require_permission("auto_wechat:agent")(context)
+    merchant_id = _require_merchant_id(context)
+    try:
+        items, skipped = generate_reports(
+            db, merchant_id=merchant_id, report_day=payload.report_day,
+            report_type=payload.report_type, report_variant=payload.report_variant,
+            has_leads=_has_leads(context), summary_client=_get_summary_client(),
+            operator_id=context.user_id, operator_name=context.username,
+        )
+    except PermissionDeniedError:
+        logger.info(
+            "generate_daily_reports stage=permission_denied merchant=%s report_type=%s",
+            merchant_id, payload.report_type,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PERMISSION_DENIED", "message": "缺少线索溯源权限"},
+        )
+    return GenerateDailyReportsResponse(
+        jobs=items,
+        skipped=[SkippedReport(**s) for s in skipped],
+    )
+
+
+@router.post("/{job_id}/regenerate", response_model=RegenerateDailyReportResponse)
+def regenerate_daily_report(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """重试单个日报。跨商户统一按不存在；活跃 generating 返回 409。"""
+    require_permission("auto_wechat:agent")(context)
+    merchant_id = _require_merchant_id(context)
+    existing = db.query(DailyReportJob).filter(
+        DailyReportJob.id == job_id,
+        DailyReportJob.merchant_id == merchant_id,
+    ).first()
+    if existing is None:
+        raise _not_found()
+    if existing.report_type == REPORT_LEAD_TRACE and not _has_leads(context):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PERMISSION_DENIED", "message": "缺少线索溯源权限"},
+        )
+    try:
+        item = regenerate_job(
+            db, merchant_id=merchant_id, job_id=job_id,
+            summary_client=_get_summary_client(),
+            operator_id=context.user_id, operator_name=context.username,
+        )
+    except ClaimConflictError:
+        logger.info("regenerate_daily_report stage=claim_conflict job_id=%s", job_id)
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "DAILY_REPORT_GENERATING",
+                    "message": "任务正在生成，请稍后重试"},
+        )
+    return RegenerateDailyReportResponse(job=item)
+
+
+@router.get("/", response_model=DailyReportJobListResponse)
+def list_daily_reports(
+    report_day_from: date | None = Query(None),
+    report_day_to: date | None = Query(None),
+    report_type: str | None = Query(None),
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """列表：按可信商户过滤 + 分页 + 日期/类型/状态筛选 + 稳定排序。"""
+    require_permission("auto_wechat:agent")(context)
+    merchant_id = _require_merchant_id(context)
+    records, total = list_jobs(
+        db, merchant_id=merchant_id,
+        report_day_from=report_day_from, report_day_to=report_day_to,
+        report_type=report_type, status=status,
+        page=page, page_size=page_size,
+    )
+    return DailyReportJobListResponse(
+        total=total, page=page, page_size=page_size, records=records,
+    )
+
+
+@router.get("/{job_id}/download")
+def download_daily_report(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """安全下载：按当前商户 job_id 查 storage_key（不接受客户端路径），
+    重新校验受控目录/穿越/符号链接/普通文件/大小/SHA-256，再返回 FileResponse。
+
+    跨商户、无文件、被篡改统一按不存在；不暴露绝对路径/storage_key。
+    """
+    require_permission("auto_wechat:agent")(context)
+    merchant_id = _require_merchant_id(context)
+    job = get_job_for_download(db, merchant_id=merchant_id, job_id=job_id)
+    if job is None:
+        raise _not_found()
+    if job.report_type == REPORT_LEAD_TRACE and not _has_leads(context):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PERMISSION_DENIED", "message": "缺少线索溯源权限"},
+        )
+    if job.artifact_status != ARTIFACT_AVAILABLE or not job.file_storage_key:
+        raise _not_found()
+    # 受控目录 + 路径穿越 + 符号链接 + 普通文件 + 扩展名
+    try:
+        path = validate_artifact_path(job.file_storage_key)
+    except (FileNotFoundError, ValueError):
+        logger.warning(
+            "download_daily_report stage=artifact_invalid job_id=%s", job_id,
+        )
+        raise _not_found()
+    # 文件大小 + SHA-256 完整性校验
+    stat = path.stat()
+    if job.file_size_bytes is not None and stat.st_size != job.file_size_bytes:
+        logger.warning(
+            "download_daily_report stage=size_mismatch job_id=%s expected=%s actual=%s",
+            job_id, job.file_size_bytes, stat.st_size,
+        )
+        raise _not_found()
+    if _file_sha256(path) != job.content_sha256:
+        logger.warning(
+            "download_daily_report stage=sha_mismatch job_id=%s", job_id,
+        )
+        raise _not_found()
+    # 中文文件名安全编码：拒绝换行注入，不暴露绝对路径/storage_key
+    raw_name = job.file_name or "daily_report.xlsx"
+    safe_name = raw_name.replace("\r", "").replace("\n", "").strip() or "daily_report.xlsx"
+    quoted = quote(safe_name)
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}",
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return FileResponse(
+        path=str(path),
+        media_type=_XLSX_MEDIA_TYPE,
+        filename=safe_name,
+        headers=headers,
     )
