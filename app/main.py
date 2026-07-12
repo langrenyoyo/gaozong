@@ -59,6 +59,7 @@ except ImportError:
     logger.warning("Windows 专用路由（feedback/lead_notifications）导入跳过，当前平台不支持微信 UI 自动化")
 from app.scheduler.check_scheduler import scheduler
 from app.scheduler.wechat_auto_detect_scheduler import wechat_auto_detect_scheduler
+from app.scheduler.daily_report_scheduler import daily_report_scheduler
 
 # 配置日志
 logging.basicConfig(
@@ -169,6 +170,14 @@ def create_app() -> FastAPI:
 
         scheduler.start()
 
+        # Phase 8 Task 9：日报调度器默认关闭，仅显式开启才启动（不在 import 时启动）
+        from app.config import DAILY_REPORT_SCHEDULER_ENABLED
+        if DAILY_REPORT_SCHEDULER_ENABLED:
+            daily_report_scheduler.start()
+            logger.info("日报调度器已启用（DAILY_REPORT_SCHEDULER_ENABLED=true）")
+        else:
+            logger.info("日报调度器默认关闭（DAILY_REPORT_SCHEDULER_ENABLED 未开启）")
+
         # P0-END-2A：旧 wechat_auto_detect_scheduler 默认禁用。
         # 新主线使用 19000 Local Agent 操作微信，旧调度器会在 9000 所在电脑直接操作微信导致冲突。
         # 如需恢复旧调度器（仅供开发调试或回退），设置环境变量 AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT=1。
@@ -196,6 +205,7 @@ def create_app() -> FastAPI:
     async def on_shutdown():
         await close_async_database_runtime()
         scheduler.stop()
+        daily_report_scheduler.stop()
         wechat_auto_detect_scheduler.stop()
         # P8-4：释放热键 + 关闭桌面提示
         from app.services.hotkey_listener import stop_hotkey_listener
