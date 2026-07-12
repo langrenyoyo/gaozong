@@ -957,7 +957,7 @@ export interface AiAutoReplyRunDetailResponse {
 }
 
 // ========== Phase 8 Task 8：每日报表后台 ==========
-// 仅对齐后端 DailyReportJobItem 安全字段；不含 merchant_id/file_storage_key/token/sha/size/error_message
+// 仅对齐后端公开安全字段（不含内部存储键、令牌、哈希、文件大小或异常正文）
 
 export type DailyReportType =
   | "short_video_live_lead"
@@ -1025,4 +1025,99 @@ export interface GenerateDailyReportsResponse {
 export interface RegenerateDailyReportResponse {
   success: boolean;
   job: DailyReportJobItem;
+}
+
+// ========== 数据配置：归因 / 广告日指标 / 展厅价位 / 完整度 ==========
+
+export interface LeadReportAttributionOut {
+  id: number;
+  lead_id: number;
+  traffic_type: string;
+  content_type: string;
+  ad_id?: string | null;
+  material_id?: string | null;
+  trace_url?: string | null;
+  source_system: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface LeadAttributionItem {
+  lead_id: number;
+  customer_name?: string | null;
+  lead_type?: string | null;
+  created_at?: string | null;
+  attribution?: LeadReportAttributionOut | null;
+}
+
+export interface LeadAttributionListResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  records: LeadAttributionItem[];
+}
+
+export interface LeadAttributionListQuery {
+  report_day: string;
+  content_type?: string;
+  traffic_type?: string;
+  missing_only?: boolean;
+  page?: number;
+  page_size?: number;
+}
+
+export interface LeadReportAttributionUpsert {
+  lead_id: number;
+  traffic_type: string;
+  content_type: string;
+  ad_id?: string | null;
+  material_id?: string | null;
+  trace_url?: string | null;
+}
+
+export interface LeadAttributionUpsertResponse {
+  success: boolean;
+  count: number;
+  records: LeadReportAttributionOut[];
+}
+
+export interface DailyAdMetricUpsert {
+  metric_day: string;
+  content_type: "short_video" | "live";
+  spend_amount: string;
+  private_message_count: number;
+}
+
+export interface DailyAdMetricOut {
+  id: number;
+  metric_day: string;
+  channel: string;
+  content_type: string;
+  spend_amount: string;
+  private_message_count: number;
+  source_system: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DailyAdMetricListResponse {
+  metric_day: string;
+  records: DailyAdMetricOut[];
+}
+
+export interface DailyAdMetricUpsertResponse {
+  success: boolean;
+  count: number;
+  records: DailyAdMetricOut[];
+}
+
+export interface MerchantReportProfileOut {
+  showroom_price_min_yuan?: string | null;
+  showroom_price_max_yuan?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ReportDataCompletenessOut {
+  report_day: string;
+  diagnostics: DailyReportDiagnostic[];
 }
