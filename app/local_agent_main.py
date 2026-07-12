@@ -153,9 +153,12 @@ def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> di
 
     返回 {"ok": bool, "status": int, "json": any, "error": str|None}。
     token 未配置时明确失败，不发起匿名请求。
+    Phase 7-FIX2 Task 8：HTTPError 单独捕获并保留状态码，
+    旧实现统一 except Exception 把 404 也变成 status=None，调用方无法区分。
     """
     import urllib.request
     import urllib.parse
+    from urllib.error import HTTPError
     if not _LOCAL_AGENT_TOKEN:
         return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     if params:
@@ -168,6 +171,14 @@ def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> di
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
             return {"ok": True, "status": resp.status, "json": __import__("json").loads(body), "error": None}
+    except HTTPError as exc:
+        # 保留 HTTP 状态码（404/403/500 等），并尝试解析错误响应体供调用方区分
+        try:
+            body = exc.read().decode("utf-8")
+            parsed = __import__("json").loads(body)
+        except Exception:
+            parsed = None
+        return {"ok": False, "status": exc.code, "json": parsed, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "status": None, "json": None, "error": str(exc)}
 
@@ -1437,15 +1448,22 @@ def create_local_agent_app(
             if requested_task_id:
                 # 指定 task_id → 直接拉取该任务
                 try:
-                    task_resp = _http_get(f"{server_url}/wechat-tasks/{requested_task_id}")
+                    # Phase 7-FIX2 Task 8：改走机器接口 /wechat-tasks/agent/{task_id}
+                    # （token 鉴权 + INNER JOIN 商户隔离），不再调用需要 NewCar 用户上下文的 /wechat-tasks/{task_id}
+                    task_resp = _http_get(f"{server_url}/wechat-tasks/agent/{requested_task_id}")
                 except Exception as exc:
                     result["failure_stage"] = "server_connection_failed"
                     result["message"] = f"连接主系统失败: {exc}"
                     return result
 
                 if not task_resp.get("ok"):
-                    result["failure_stage"] = "server_request_failed"
-                    result["message"] = f"请求主系统失败: {task_resp.get('status', '?')}"
+                    status_code = task_resp.get("status")
+                    if status_code == 404:
+                        result["failure_stage"] = "task_not_found"
+                        result["message"] = f"任务 #{requested_task_id} 不存在"
+                    else:
+                        result["failure_stage"] = "server_request_failed"
+                        result["message"] = f"请求主系统失败: {status_code or '?'}"
                     return result
 
                 task_data = task_resp.get("json")
@@ -1808,7 +1826,9 @@ def create_local_agent_app(
             if requested_task_id:
                 # 指定 task_id → 直接拉取该任务
                 try:
-                    task_resp = _http_get(f"{server_url}/wechat-tasks/{requested_task_id}")
+                    # Phase 7-FIX2 Task 8：改走机器接口 /wechat-tasks/agent/{task_id}
+                    # （token 鉴权 + INNER JOIN 商户隔离），不再调用需要 NewCar 用户上下文的 /wechat-tasks/{task_id}
+                    task_resp = _http_get(f"{server_url}/wechat-tasks/agent/{requested_task_id}")
                 except Exception as exc:
                     result["failure_stage"] = "server_connection_failed"
                     result["message"] = f"连接主系统失败: {exc}"

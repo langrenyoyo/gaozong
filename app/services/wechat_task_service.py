@@ -924,9 +924,11 @@ def _try_parse_sales_feedback_from_reply(
         lead_id=task.lead_id,
         staff_id=task.staff_id,
     )
+    # Phase 7-FIX2 Task 8 续修：日志只记诊断字段（kind/status），不含 parse_error，
+    # 避免 parse_error 中可能携带的客户输入片段进入运行日志。
     logger.info(
-        "sales_feedback_parse stage=done task_id=%s kind=%s status=%s error=%s",
-        task.id, result.kind, result.parse_status, result.parse_error,
+        "sales_feedback_parse stage=done task_id=%s kind=%s status=%s",
+        task.id, result.kind, result.parse_status,
     )
 
 

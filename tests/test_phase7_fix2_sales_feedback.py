@@ -1,12 +1,17 @@
 """Phase 7-FIX2 Task 7：销售反馈异常事务与日志收口
 
+Phase 7-FIX2 Task 8 续修：测试不再弱化，制造真实异常验证传播 + 回滚，
+并校验运行日志不含 parse_error 或客户原文。
+
 验证：
-- parse_and_persist_sales_feedback 异常时正确 rollback
-- 日志包含完整诊断字段
+- parse_and_persist_sales_feedback 抛真实异常时不被吞没（外层统一回滚）
+- 反馈异常不影响核心 replied/completed 状态（独立事务提交）
+- 日志只含诊断字段（kind/status），不含 parse_error 或客户原文
 - 非模板文本不抛异常
 """
 
-from unittest.mock import patch, MagicMock
+import json
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -14,7 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import DouyinLead, SalesStaff, WechatTask, CheckConfig
+from app.models import DouyinLead, SalesStaff, WechatTask, ReplyCheck
 from app.services import wechat_task_service
 from app.services.sales_feedback_parser import parse_and_persist_sales_feedback
 
@@ -33,6 +38,23 @@ def db():
     session.close()
 
 
+def _seed_staff_lead(db):
+    staff = SalesStaff(
+        name="fb-test", status="active",
+        wechat_nickname="Aw3", merchant_id="dev-merchant",
+    )
+    lead = DouyinLead(
+        customer_name="fb-lead", source="test", status="assigned",
+        merchant_id="dev-merchant", assigned_staff_id=1,
+    )
+    db.add(staff)
+    db.add(lead)
+    db.commit()
+    db.refresh(staff)
+    db.refresh(lead)
+    return staff, lead
+
+
 def test_non_template_text_does_not_throw(db):
     """非模板文本不抛异常，返回 kind=none。"""
     result = parse_and_persist_sales_feedback(
@@ -44,62 +66,95 @@ def test_non_template_text_does_not_throw(db):
     assert result.parse_status == "skipped"
 
 
-def test_parse_exception_is_caught_and_logged(db):
-    """解析失败时返回 failed 状态，不抛异常。"""
-    # 无效反馈编号格式 → parse_status=failed（上下文校验先执行，也会返回 failed）
-    result = parse_and_persist_sales_feedback(
-        db,
-        merchant_id="test-merchant",
-        raw_text="【线索反馈】\n反馈编号：bad-format\n微信：待添加\n开口：未开口\n方式：全款\n匹配：展厅有车\n精准：精准\n意向：高意向",
-    )
-
-    # 解析应优雅失败，不抛异常
-    assert result.parse_status == "failed"
-    assert result.parse_error is not None
-
-
-def test_feedback_parse_does_not_affect_caller_transaction(db):
-    """反馈解析失败不影响调用方事务。"""
-    staff = SalesStaff(
-        name="fb-test", status="active",
-        wechat_nickname="Aw3", merchant_id="dev-merchant",
-    )
-    lead = DouyinLead(
-        customer_name="fb-lead", source="test", status="assigned",
-        merchant_id="dev-merchant", assigned_staff_id=1,
-    )
-    db.add(staff)
-    db.add(lead)
-    db.flush()
-
+def test_sales_feedback_exception_propagates_for_rollback(db):
+    """Phase 7-FIX2 Task 8：parse_and_persist_sales_feedback 抛真实异常时，
+    _try_parse_sales_feedback_from_reply 不吞异常，交由外层 submit_wechat_task_result
+    的 try/except 统一捕获并回滚。
+    """
+    staff, lead = _seed_staff_lead(db)
     task = wechat_task_service.create_wechat_task(
         db, task_type="notify_sales", lead_id=lead.id,
         staff_id=staff.id, target_nickname="Aw3",
         message="test", mode="single_send",
     )
+    db.commit()
 
-    # 反馈解析在独立事务中，即使失败也不影响 task 状态
-    # 这是 Phase 7-FIX2 的关键保证
-    task_status_before = task.status
-    assert task_status_before == "pending"
+    # mock 解析器抛真实异常（模拟持久化层失败）
+    with patch(
+        "app.services.wechat_task_service.parse_and_persist_sales_feedback",
+        side_effect=RuntimeError("simulated persistence failure"),
+    ):
+        # 异常必须传播，外层才能捕获并回滚
+        with pytest.raises(RuntimeError, match="simulated persistence failure"):
+            wechat_task_service._try_parse_sales_feedback_from_reply(
+                db, task, "【线索反馈】\n反馈编号：XGF-1-1\n微信：待添加",
+            )
 
 
-def test_feedback_log_contains_diagnostic_fields(db, caplog):
-    """反馈日志包含 kind/status 诊断字段，不含客户原文或 parse_error。"""
-    import logging
-    caplog.set_level(logging.INFO, logger="app.services.sales_feedback_parser")
+def test_replied_state_survives_feedback_exception(db):
+    """Phase 7-FIX2 Task 8：反馈解析异常时，submit_wechat_task_result 外层
+    try/except 捕获并回滚反馈事务；核心 replied/completed 状态已在反馈解析前
+    独立 commit，不受反馈回滚影响，ReplyCheck 联动也保留。
+    """
+    staff, lead = _seed_staff_lead(db)
+    check = ReplyCheck(lead_id=lead.id, staff_id=staff.id, check_status="pending")
+    db.add(check)
+    db.commit()
+    db.refresh(check)
 
-    # 使用模板头触发解析流程（上下文校验会因无 lead/staff 而失败，但会记录日志）
-    parse_and_persist_sales_feedback(
-        db,
-        merchant_id="test-merchant",
-        raw_text="【线索反馈】\n反馈编号：XGF-1-1\n微信：待添加\n开口：未开口\n方式：全款\n匹配：展厅有车\n精准：精准\n意向：高意向",
-        lead_id=1,
-        staff_id=2,
+    task = wechat_task_service.create_wechat_task(
+        db, task_type="detect_reply", lead_id=lead.id,
+        staff_id=staff.id, reply_check_id=check.id,
+        target_nickname="Aw3", message="", mode="read_only",
     )
+    # raw_result 含匹配回复 → _update_check_and_notification_on_replied 返回非空 reply_text
+    task.raw_result = json.dumps(
+        {"matched_reply": "【线索反馈】\n反馈编号：XGF-1-1\n微信：待添加"},
+        ensure_ascii=False,
+    )
+    db.commit()
 
-    # 上下文校验失败会记录日志
-    log_text = " ".join(r.message for r in caplog.records)
+    # mock 反馈解析抛异常，验证核心状态不被回滚
+    with patch(
+        "app.services.wechat_task_service.parse_and_persist_sales_feedback",
+        side_effect=RuntimeError("feedback persistence failure"),
+    ):
+        result = wechat_task_service.submit_wechat_task_result(
+            db, task, success=True, verified=True, detected_status="replied",
+        )
+
+    # 核心 replied → completed 状态已独立提交，反馈回滚不影响
+    assert result.status == "completed"
+    db.refresh(check)
+    assert check.check_status == "replied"  # 联动更新同样保留
+
+
+def test_feedback_log_excludes_parse_error_and_raw_text(db, caplog):
+    """Phase 7-FIX2 Task 8：反馈日志只含诊断字段（kind/status/task_id），
+    不含 parse_error 字段值，也不含客户原文片段。
+    """
+    import logging
+    caplog.set_level(logging.INFO)
+
+    staff, lead = _seed_staff_lead(db)
+    task = wechat_task_service.create_wechat_task(
+        db, task_type="notify_sales", lead_id=lead.id,
+        staff_id=staff.id, target_nickname="Aw3",
+        message="test", mode="single_send",
+    )
+    db.commit()
+
+    raw_text = "【线索反馈】\n反馈编号：XGF-1-1\n微信：待添加"
+    wechat_task_service._try_parse_sales_feedback_from_reply(db, task, raw_text)
+
     assert len(caplog.records) > 0, "应至少有一条日志"
-    # 日志不包含客户原文
+    log_text = " ".join(r.getMessage() for r in caplog.records)
+    # 客户原文片段不进日志（模板头、字段值）
     assert "【线索反馈】" not in log_text
+    assert "微信：待添加" not in log_text
+    # Phase 7-FIX2 Task 8：wechat_task_service 日志不再记录 parse_error（只记 kind/status）
+    ws_log = " ".join(
+        r.getMessage() for r in caplog.records
+        if r.name == "app.services.wechat_task_service"
+    )
+    assert "parse_error" not in ws_log.lower()

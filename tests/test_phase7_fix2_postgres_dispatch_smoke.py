@@ -98,6 +98,32 @@ class TestSmokeDatabaseUrlValidation:
         result = _validate_smoke_url()
         assert "secret123" not in str(result)
 
+    def test_query_param_overriding_host_rejected(self, monkeypatch):
+        """Phase 7-FIX2 Task 8：query 参数可覆盖真实 host/dbname，必须拒绝。
+
+        psycopg 支持 ?host=...&dbname=... 连接级覆盖，攻击者可用看似合规的
+        localhost/db_test URL 绕过校验连接到生产库。
+        """
+        monkeypatch.setenv(
+            "SMOKE_DATABASE_URL",
+            "postgresql+psycopg://user:pass@localhost/auto_wechat_test?host=prod.internal&dbname=prod",
+        )
+
+        result = _validate_smoke_url()
+        assert result["valid"] is False
+        assert "query" in result["reason"].lower() or "fragment" in result["reason"].lower()
+
+    def test_fragment_rejected(self, monkeypatch):
+        """Phase 7-FIX2 Task 8：fragment 同样拒绝。"""
+        monkeypatch.setenv(
+            "SMOKE_DATABASE_URL",
+            "postgresql+psycopg://user:pass@localhost:5432/db_test#fragment",
+        )
+
+        result = _validate_smoke_url()
+        assert result["valid"] is False
+        assert "query" in result["reason"].lower() or "fragment" in result["reason"].lower()
+
     def test_no_real_connection_made(self, monkeypatch):
         """单元测试不连接真实数据库。"""
         monkeypatch.setenv("SMOKE_DATABASE_URL",

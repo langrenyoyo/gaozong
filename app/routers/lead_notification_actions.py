@@ -95,26 +95,28 @@ def create_notify_sales_task(
     notification_text = (request.message or "").strip() or compose_notification_text(
         lead, feedback_no=feedback_no,
     )
-    # Phase 7：派单文本进入 WechatTask / LeadNotification 前走违禁词替换（命中只替换不拦截）
-    replacement = replace_forbidden_words(
-        db,
-        merchant_id=merchant_id,
-        source="wechat_dispatch",
-        content=notification_text,
-        context={
-            "context_type": "lead_notification",
-            "context_id": str(lead.id),
-            "lead_id": lead.id,
-            "staff_id": staff.id,
-            "feedback_no": feedback_no,
-        },
-    )
-    notification_text = replacement.final_content
 
-    # Phase 7-FIX2：原子事务 — task 和 notification 同一次 commit
+    # Phase 7-FIX2 Task 8 续修：违禁词替换（命中写 ForbiddenWordHitLog）+ task + notification
+    # 必须在同一原子事务内。旧实现违禁词 flush 在 try 外，flush 失败无法回滚；
+    # commit 成功后的 refresh 也原样放在可回滚块内，refresh 失败时会错误声称"已回滚"。
     from sqlalchemy.exc import SQLAlchemyError
 
     try:
+        # Phase 7：派单文本进入 WechatTask / LeadNotification 前走违禁词替换（命中只替换不拦截）
+        replacement = replace_forbidden_words(
+            db,
+            merchant_id=merchant_id,
+            source="wechat_dispatch",
+            content=notification_text,
+            context={
+                "context_type": "lead_notification",
+                "context_id": str(lead.id),
+                "lead_id": lead.id,
+                "staff_id": staff.id,
+                "feedback_no": feedback_no,
+            },
+        )
+        notification_text = replacement.final_content
         task = create_wechat_task(
             db,
             task_type="notify_sales",
@@ -133,13 +135,22 @@ def create_notify_sales_task(
             commit=False,
         )
         db.commit()
-        db.refresh(task)
-        db.refresh(notification)
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
             status_code=500,
             detail={"code": "DISPATCH_PERSIST_FAILED", "message": "派单持久化失败，已回滚"},
+        )
+
+    # Phase 7-FIX2 Task 8：commit 已成功后 refresh 失败不再回滚（数据已持久化），
+    # 单独保护并告警，避免对客户端谎报"已回滚"。
+    try:
+        db.refresh(task)
+        db.refresh(notification)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "manual_notify_sales stage=refresh_failed_after_commit lead_id=%s task_id=%s err=%s",
+            lead.id, task.id, type(exc).__name__,
         )
     logger.info(
         "manual_notify_sales stage=created lead_id=%s staff_id=%s task_id=%s notification_id=%s",
