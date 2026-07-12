@@ -428,10 +428,12 @@ def test_wechat_feedback_replaces_forbidden_words_before_write_text():
 # 接入点 4：微信通知路由 send_to_staff（write_text_to_input + LeadNotification 前）
 # ---------------------------------------------------------------------------
 def test_lead_notification_route_replaces_forbidden_words_before_write_text():
-    """Phase 7-FIX2：通过正式 /send-to-staff 路径验证违禁词替换。
+    """Phase 7-FIX2 Task 8 续修：通过正式 create_notify_sales_task 路径验证违禁词替换。
 
-    旧 send_to_staff（lead_notifications.py）已删除，违禁词替换现由
-    lead_notification_actions.create_notify_sales_task 在创建任务前执行。
+    直接调用 lead_notification_actions.create_notify_sales_task 路由处理函数
+    （即 /lead-notifications/send-to-staff 的正式入口），验证 WechatTask.message 与
+    LeadNotification.notification_text 在原子持久化前已完成违禁词替换。
+    不再弱化为只调用 replace_forbidden_words() 本身。
     """
     db = TestSession()
     _seed_forbidden_words(db)
@@ -451,41 +453,42 @@ def test_lead_notification_route_replaces_forbidden_words_before_write_text():
     db.add(lead)
     db.commit()
     lead_id = lead.id
-    staff_id = staff.id
     db.close()
 
-    # Phase 7-FIX2：违禁词替换在任务创建前执行，验证替换后的文本进入 WechatTask
+    # Phase 7-FIX2 Task 8：调用正式路由处理函数，覆盖 eligibility → 违禁词替换 → 原子持久化全链路
     from app.routers.lead_notification_actions import create_notify_sales_task
     from app.schemas import SendToStaffRequest
     from app.auth.context import RequestContext
-    from app.services.forbidden_word_service import replace_forbidden_words
-    from app.services.notification_template import build_feedback_no, compose_notification_text
 
     db2 = TestSession()
     try:
-        # 直接测试违禁词替换逻辑（不依赖 HTTP 鉴权）
-        lead2 = db2.query(DouyinLead).filter(DouyinLead.id == lead_id).first()
-        staff2 = db2.query(SalesStaff).filter(SalesStaff.id == staff_id).first()
-
-        feedback_no = build_feedback_no(lead2.id, staff2.id)
-        notification_text = compose_notification_text(lead2, feedback_no=feedback_no)
-        replacement = replace_forbidden_words(
-            db2,
+        ctx = RequestContext(
+            user_id="admin-1",
             merchant_id="merchant-1",
-            source="wechat_dispatch",
-            content=notification_text,
-            context={
-                "context_type": "lead_notification",
-                "context_id": str(lead2.id),
-                "lead_id": lead2.id,
-                "staff_id": staff2.id,
-                "feedback_no": feedback_no,
-            },
+            merchant_ids=["merchant-1"],
+            permission_codes=["auto_wechat:leads", "auto_wechat:agent"],
+        )
+        response = create_notify_sales_task(
+            SendToStaffRequest(lead_id=lead_id),
+            db=db2,
+            context=ctx,
         )
 
-        # 验证违禁词已替换
-        assert "可到店详询" in replacement.final_content
-        assert "现车很多" not in replacement.final_content
+        # 路由处理函数正常路径返回 SendToStaffResponse（非 JSONResponse）
+        assert response.status == "created"
+        assert response.task_id is not None
+        assert response.notification_id is not None
+
+        # 验证返回的 notification_text 已替换违禁词
+        assert "现车很多" not in (response.notification_text or "")
+        assert "可到店详询" in (response.notification_text or "")
+
+        # 验证持久化的 WechatTask.message 与 LeadNotification.notification_text 一致且已替换
+        task = db2.query(WechatTask).filter_by(id=response.task_id).one()
+        notification = db2.query(LeadNotification).filter_by(id=response.notification_id).one()
+        assert "现车很多" not in task.message
+        assert "可到店详询" in task.message
+        assert notification.notification_text == task.message
     finally:
         db2.close()
 

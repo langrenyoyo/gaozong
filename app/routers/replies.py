@@ -94,29 +94,38 @@ def agent_write_back(data: AgentWriteBackRequest, request: Request, db: Session 
     Phase 7-FIX2：强制 Local Agent token 鉴权 + 商户隔离。
     - lead、staff、task 必须同属 token 商户。
     - payload ID 与 task 关联不一致时拒绝。
+
+    Phase 7-FIX2 Task 8 续修：task_id 必填。
+    - 旧实现 `if data.task_id:` 允许 None 绕过任务/线索/员工商户归属校验，
+      现改为路由层强制拒绝 None，并通过 get_agent_task 的 INNER JOIN + AND
+      一次性保证 task、lead、staff 同属 token 商户。
     """
-    from app.models import DouyinLead, SalesStaff, WechatTask
+    from app.services.wechat_task_service import get_agent_task
 
     ctx = require_local_agent_context(request)
 
-    # Phase 7-FIX2：验证 task、lead、staff 同属 token 商户
-    if data.task_id:
-        task = db.query(WechatTask).filter(WechatTask.id == data.task_id).first()
-        if not task:
-            raise HTTPException(404, {"code": "TASK_NOT_FOUND", "message": "微信任务不存在"})
-        if task.lead_id != data.lead_id or task.staff_id != data.staff_id:
-            raise HTTPException(
-                400,
-                {"code": "PAYLOAD_TASK_MISMATCH", "message": "payload 与 task 关联不一致"},
-            )
+    # Phase 7-FIX2 Task 8：schemas 层 task_id 仍为 Optional（受约束保留），路由层强制拒绝 None
+    if data.task_id is None:
+        raise HTTPException(
+            400,
+            {"code": "TASK_ID_REQUIRED", "message": "缺少 task_id，拒绝绕过任务商户归属校验"},
+        )
 
-    lead = db.query(DouyinLead).filter(DouyinLead.id == data.lead_id).first()
-    if not lead or lead.merchant_id != ctx.merchant_id:
-        raise HTTPException(404, {"code": "LEAD_NOT_FOUND", "message": "线索不存在或不属于当前商户"})
+    # INNER JOIN + AND 双重过滤：task、lead、staff 必须同属 token 商户，
+    # 任一关联缺失或跨商户均返回 None，不再需要单独查询 lead/staff 校验商户
+    task = get_agent_task(db, data.task_id, ctx.merchant_id)
+    if task is None:
+        raise HTTPException(
+            404,
+            {"code": "TASK_NOT_FOUND", "message": "微信任务不存在或不属于当前商户"},
+        )
 
-    staff = db.query(SalesStaff).filter(SalesStaff.id == data.staff_id).first()
-    if not staff or staff.merchant_id != ctx.merchant_id:
-        raise HTTPException(404, {"code": "STAFF_NOT_FOUND", "message": "销售不存在或不属于当前商户"})
+    # 验证 payload 与 task 关联一致，防篡改
+    if task.lead_id != data.lead_id or task.staff_id != data.staff_id:
+        raise HTTPException(
+            400,
+            {"code": "PAYLOAD_TASK_MISMATCH", "message": "payload 与 task 关联不一致"},
+        )
 
     result = wechat_ui_reply_service.agent_write_back_reply(
         db=db,

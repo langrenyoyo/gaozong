@@ -113,12 +113,70 @@ def test_development_explicit_enable_keeps_debug_windows_behavior(monkeypatch):
 
 
 def test_agent_write_back_is_not_locked_by_legacy_debug_switch(monkeypatch):
+    """Phase 7-FIX2 Task 8 续修：agent-write-back 不受 legacy debug switch 锁定。
+
+    production + debug switch=false 下，agent-write-back 仍可访问（非 404 locked）。
+    但 Phase 7-FIX2 强制 token + Task 8 强制 task_id 后，必须传 token + 有效 task。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.database import Base, get_db
+    from app.models import DouyinLead, SalesStaff, WechatTask
+
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    db = TestSession()
+    try:
+        staff = SalesStaff(
+            name="lockdown-staff", wechat_nickname="Aw3", status="active",
+            merchant_id="demo_merchant_001",
+        )
+        db.add(staff)
+        db.commit()
+        db.refresh(staff)
+        lead = DouyinLead(
+            source="test", source_id="lockdown-lead",
+            customer_name="lockdown", content="test",
+            status="assigned", assigned_staff_id=staff.id,
+            merchant_id="demo_merchant_001",
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        task = WechatTask(
+            task_type="notify_sales", target_nickname="Aw3",
+            message="lockdown", mode="paste_only", status="pending",
+            lead_id=lead.id, staff_id=staff.id,
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        task_id, lead_id, staff_id = task.id, lead.id, staff.id
+    finally:
+        db.close()
+
     client = _client(monkeypatch, app_env="production", enabled="false")
+
+    def _override_get_db():
+        session = TestSession()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    client.app.dependency_overrides[get_db] = _override_get_db
 
     response = client.post(
         "/replies/agent-write-back",
-        json={"lead_id": 999999, "staff_id": 999999},
+        json={"lead_id": lead_id, "staff_id": staff_id, "task_id": task_id},
+        headers={"X-Local-Agent-Token": "local-agent-dev-token"},
     )
 
+    # agent-write-back 不被 debug switch 锁定：带 token + 有效 task → 200 + 业务结果
     assert response.status_code == 200
     assert response.json()["detected_status"] == "failed"

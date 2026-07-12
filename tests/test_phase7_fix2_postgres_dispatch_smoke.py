@@ -5,6 +5,7 @@
 """
 
 import os
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -110,49 +111,40 @@ class TestSmokeDatabaseUrlValidation:
         assert result["valid"] is True
 
     def test_no_module_level_env_pollution(self):
-        """测试不通过模块级 os.environ 修改污染环境。"""
-        # 此测试文件本身不使用模块级 os.environ 赋值
-        assert True  # 编译通过即证明无模块级环境污染
+        """合约测试文件本身不在模块导入阶段修改 os.environ。"""
+        # 用 AST 检查模块级赋值，避免字符串自引用误判
+        import ast
+        import inspect
+        own_source = inspect.getsource(sys.modules[__name__])
+        tree = ast.parse(own_source)
+        violators = []
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (isinstance(target, ast.Subscript)
+                            and isinstance(target.value, ast.Attribute)
+                            and isinstance(target.value.value, ast.Name)
+                            and target.value.value.id == "os"
+                            and target.value.attr == "environ"):
+                        violators.append(ast.dump(target))
+        assert violators == [], f"发现模块级 os.environ 赋值: {violators}"
 
 
-# ========== 安全 URL 校验实现 ==========
+# ========== 导入真实冒烟脚本的 _validate_smoke_url ==========
 
-_SMOKE_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "postgres", "auto-wechat-postgres-dev"}
-_SMOKE_REQUIRED_SCHEME = "postgresql+psycopg"
-
-
-def _validate_smoke_url() -> dict:
-    """结构化校验 SMOKE_DATABASE_URL 安全性。
-
-    Returns:
-        {"valid": bool, "reason": str, "scheme": str, "host": str, "database": str}
-    不记录密码或完整 URL。
+def _load_real_smoke_validator():
+    """Phase 7-FIX2 Task 8：通过 importlib 加载真实冒烟脚本，
+    确保合约测试验证的是 scripts/smoke_phase7_fix2_postgres_dispatch_gate.py
+    的真实实现，而非本文件内复制的副本。
     """
-    from urllib.parse import urlparse
+    import importlib.util
+    from pathlib import Path
 
-    url_str = os.getenv("SMOKE_DATABASE_URL", "").strip()
-    if not url_str:
-        return {"valid": False, "reason": "SMOKE_DATABASE_URL missing", "scheme": "", "host": "", "database": ""}
+    smoke_path = Path(__file__).resolve().parent.parent / "scripts" / "smoke_phase7_fix2_postgres_dispatch_gate.py"
+    spec = importlib.util.spec_from_file_location("_smoke_phase7_fix2_real", smoke_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._validate_smoke_url
 
-    try:
-        parsed = urlparse(url_str)
-    except Exception:
-        return {"valid": False, "reason": "invalid URL format", "scheme": "", "host": "", "database": ""}
 
-    scheme = parsed.scheme or ""
-    host = (parsed.hostname or "").lower()
-    database = (parsed.path or "").lstrip("/")
-
-    if scheme != _SMOKE_REQUIRED_SCHEME:
-        return {"valid": False, "reason": f"scheme must be {_SMOKE_REQUIRED_SCHEME}, got {scheme}",
-                "scheme": scheme, "host": host, "database": database}
-
-    if host not in _SMOKE_ALLOWED_HOSTS:
-        return {"valid": False, "reason": f"host not in allowlist: {host}",
-                "scheme": scheme, "host": host, "database": database}
-
-    if not (database.endswith("_test") or database.endswith("_staging")):
-        return {"valid": False, "reason": f"database must end with _test or _staging, got {database}",
-                "scheme": scheme, "host": host, "database": database}
-
-    return {"valid": True, "reason": "ok", "scheme": scheme, "host": host, "database": database}
+_validate_smoke_url = _load_real_smoke_validator()

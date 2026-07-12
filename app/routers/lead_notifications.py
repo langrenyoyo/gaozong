@@ -69,21 +69,6 @@ def _set_auto_detect_target(db: Session, check_id: int) -> bool:
         return False
 
 
-@router.post("/send-to-staff")
-def send_to_staff_disabled():
-    """Phase 7-FIX2：旧 UI 直发微信入口已停用。
-
-    线索通知发送必须通过微信任务队列（WechatTask）受控链路：
-    Local Agent 19000 poll-and-execute → token 鉴权 → 商户隔离 → 安全 gate。
-
-    旧入口直接调用 Windows UI 自动化，绕过所有安全 gate，已永久关闭。
-    """
-    raise HTTPException(410, detail={
-        "code": "LEGACY_WECHAT_SEND_DISABLED",
-        "message": "旧微信直发入口已停用。请通过微信任务队列受控链路发送。",
-    })
-
-
 @router.post("/open-chat", response_model=OpenChatResponse)
 def debug_open_chat(request: OpenChatRequest):
     """

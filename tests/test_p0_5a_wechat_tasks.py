@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 import pytest
 from datetime import datetime
 from fastapi.testclient import TestClient
@@ -18,13 +17,22 @@ from app.models import (
 )
 from app.services import wechat_task_service
 
-# Phase 7-FIX2：Local Agent token 鉴权所需的环境变量
-# 使用 dev-merchant 匹配 mock auth context 的默认 merchant_id
-os.environ["LOCAL_AGENT_TOKENS"] = "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy"
-
-# 创建测试应用和数据库
+# Phase 7-FIX2：不在模块导入阶段修改 os.environ。
+# app 鉴权在请求处理时读取 os.getenv，autouse fixture 在每个用例内注入即可生效。
 app = create_app()
 client = TestClient(app)
+
+
+# Phase 7-FIX2：Local Agent token 鉴权环境变量通过 autouse fixture 注入，
+# 用例结束后 monkeypatch 自动还原，不污染后续测试。
+@pytest.fixture(autouse=True)
+def _local_agent_auth_env(monkeypatch):
+    # 使用 dev-merchant 匹配 mock auth context 的默认 merchant_id
+    monkeypatch.setenv(
+        "LOCAL_AGENT_TOKENS",
+        "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy",
+    )
+
 
 # Local Agent 鉴权请求头（Phase 7-FIX2 要求所有 wechat-tasks 端点携带 token）
 _AGENT_HEADERS = {"X-Local-Agent-Token": "local-agent-dev-token"}

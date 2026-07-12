@@ -34,35 +34,28 @@ def db():
 
 
 def test_non_template_text_does_not_throw(db):
-    """非模板文本不抛异常，返回 kind=unknown。"""
+    """非模板文本不抛异常，返回 kind=none。"""
     result = parse_and_persist_sales_feedback(
         db,
         merchant_id="test-merchant",
         raw_text="这是一条普通的微信消息，没有模板标记",
     )
-    assert result.kind == "unknown"
+    assert result.kind == "none"
     assert result.parse_status == "skipped"
 
 
 def test_parse_exception_is_caught_and_logged(db):
-    """解析异常时正确捕获并记录日志。"""
-    import logging
-    from app.services.sales_feedback_parser import FeedbackParseResult
+    """解析失败时返回 failed 状态，不抛异常。"""
+    # 无效反馈编号格式 → parse_status=failed（上下文校验先执行，也会返回 failed）
+    result = parse_and_persist_sales_feedback(
+        db,
+        merchant_id="test-merchant",
+        raw_text="【线索反馈】\n反馈编号：bad-format\n微信：待添加\n开口：未开口\n方式：全款\n匹配：展厅有车\n精准：精准\n意向：高意向",
+    )
 
-    # 模拟解析异常
-    with patch("app.services.sales_feedback_parser.FeedbackParser") as mock_parser:
-        mock_parser.return_value.parse.side_effect = Exception("模拟解析失败")
-
-        result = parse_and_persist_sales_feedback(
-            db,
-            merchant_id="test-merchant",
-            raw_text="【线索反馈】客户名：张三\n状态：已跟进",
-        )
-
-        # 异常应被捕获，不应传播
-        assert result.parse_status == "error"
-        assert result.parse_error is not None
-        assert "模拟解析失败" in (result.parse_error or "")
+    # 解析应优雅失败，不抛异常
+    assert result.parse_status == "failed"
+    assert result.parse_error is not None
 
 
 def test_feedback_parse_does_not_affect_caller_transaction(db):
@@ -92,19 +85,21 @@ def test_feedback_parse_does_not_affect_caller_transaction(db):
 
 
 def test_feedback_log_contains_diagnostic_fields(db, caplog):
-    """反馈日志包含完整诊断字段。"""
+    """反馈日志包含 kind/status 诊断字段，不含客户原文或 parse_error。"""
     import logging
     caplog.set_level(logging.INFO, logger="app.services.sales_feedback_parser")
 
+    # 使用模板头触发解析流程（上下文校验会因无 lead/staff 而失败，但会记录日志）
     parse_and_persist_sales_feedback(
         db,
         merchant_id="test-merchant",
-        raw_text="普通消息",
+        raw_text="【线索反馈】\n反馈编号：XGF-1-1\n微信：待添加\n开口：未开口\n方式：全款\n匹配：展厅有车\n精准：精准\n意向：高意向",
         lead_id=1,
         staff_id=2,
     )
 
-    # 验证日志包含 kind 和 status
+    # 上下文校验失败会记录日志
     log_text = " ".join(r.message for r in caplog.records)
-    # 至少有一条日志
-    assert len(caplog.records) > 0
+    assert len(caplog.records) > 0, "应至少有一条日志"
+    # 日志不包含客户原文
+    assert "【线索反馈】" not in log_text

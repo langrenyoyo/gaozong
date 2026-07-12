@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import WechatTask
+from app.models import DouyinLead, SalesStaff, WechatTask
 
 
 engine = create_engine(
@@ -53,20 +53,44 @@ def _heartbeat_payload():
     }
 
 
-def _insert_task() -> int:
+def _insert_task() -> tuple[int, int, int]:
+    """Phase 7-FIX2：创建 demo_merchant_001 商户下的 lead + staff + task 完整上下文。
+
+    INNER JOIN + AND 商户隔离后，孤立 task 不再被 get_agent_task / result 路由命中，
+    必须同时插入 lead 和 staff 才能构成有效任务。
+    返回 (task_id, lead_id, staff_id)。
+    """
     db = TestSession()
     try:
+        staff = SalesStaff(
+            name="agent-auth-staff", wechat_nickname="Aw3", status="active",
+            merchant_id="demo_merchant_001",
+        )
+        db.add(staff)
+        db.commit()
+        db.refresh(staff)
+        lead = DouyinLead(
+            source="test", source_id="agent-auth-lead",
+            customer_name="agent-auth", content="test",
+            status="assigned", assigned_staff_id=staff.id,
+            merchant_id="demo_merchant_001",
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
         task = WechatTask(
             task_type="notify_sales",
             target_nickname="Aw3",
             message="test",
             mode="paste_only",
             status="pending",
+            lead_id=lead.id,
+            staff_id=staff.id,
         )
         db.add(task)
         db.commit()
         db.refresh(task)
-        return task.id
+        return task.id, lead.id, staff.id
     finally:
         db.close()
 
@@ -123,7 +147,7 @@ def test_required_mode_rejects_missing_and_wrong_token(monkeypatch, client):
 def test_required_mode_accepts_correct_token_for_exposed_agent_endpoints(monkeypatch, client):
     monkeypatch.setenv("LOCAL_AGENT_AUTH_REQUIRED", "true")
     headers = {"X-Local-Agent-Token": "local-agent-dev-token"}
-    task_id = _insert_task()
+    task_id, lead_id, staff_id = _insert_task()
 
     heartbeat = client.post("/agent/heartbeat", json=_heartbeat_payload(), headers=headers)
     pending = client.get("/wechat-tasks/pending", headers=headers)
@@ -134,7 +158,7 @@ def test_required_mode_accepts_correct_token_for_exposed_agent_endpoints(monkeyp
     )
     write_back = client.post(
         "/replies/agent-write-back",
-        json={"lead_id": 999999, "staff_id": 999999},
+        json={"lead_id": lead_id, "staff_id": staff_id, "task_id": task_id},
         headers=headers,
     )
 

@@ -2,26 +2,38 @@
 
 验证：
 - GET /wechat-tasks/pending 无 token → 401
-- GET /wechat-tasks/pending 错误 token → 403
+- GET /wechat-tasks/pending 错误 token → 401
 - GET /wechat-tasks/pending 正确 token → 200，只返回本商户任务
 - POST /wechat-tasks/{id}/result 无 token → 401
-- POST /wechat-tasks/{id}/result 错误 token → 403
+- POST /wechat-tasks/{id}/result 错误 token → 401
 - POST /wechat-tasks/{id}/result 正确 token 但任务不属于本商户 → 404
+
+Phase 7-FIX2 Task 8 续修：
+- 错误 token 统一 401（不暴露 token 有效性差异）。
+- 环境变量改用 autouse monkeypatch fixture，不在模块导入阶段污染 os.environ。
 """
 
-import os
 import pytest
 
 from fastapi.testclient import TestClient
 
-# 在导入 app 之前设置环境变量（直接赋值，覆盖 .env 已有值）
-os.environ["APP_ENV"] = "development"
-os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
-os.environ["LOCAL_AGENT_TOKENS"] = "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy"
-os.environ["NEWCAR_AUTH_ENABLED"] = "false"
-os.environ["NEWCAR_AUTH_MOCK_ENABLED"] = "true"
-
+# 不在模块导入阶段修改 os.environ；app 鉴权在请求处理时读取 os.getenv，
+# autouse fixture 的 monkeypatch 在每个测试用例内注入环境变量即可生效。
 from app.main import app  # 复用模块级已创建的 app 实例
+
+
+# Phase 7-FIX2：所有 token 与 NewCar 鉴权环境变量通过 autouse fixture 注入，
+# 用例结束后 monkeypatch 自动还原，不污染后续测试。
+@pytest.fixture(autouse=True)
+def _local_agent_auth_env(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("LOCAL_AGENT_AUTH_REQUIRED", "true")
+    monkeypatch.setenv(
+        "LOCAL_AGENT_TOKENS",
+        "dev-merchant:local-agent-dev-token,merchant-a:token-a-xxx,merchant-b:token-b-yyy",
+    )
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "true")
 
 
 def _client() -> TestClient:
@@ -41,15 +53,15 @@ def test_pending_no_token_returns_401():
     assert resp.status_code == 401
 
 
-def test_pending_wrong_token_returns_403():
-    """错误 token 时 GET /wechat-tasks/pending 返回 403。"""
+def test_pending_wrong_token_returns_401():
+    """错误 token 时 GET /wechat-tasks/pending 返回 401（不暴露 token 有效性差异）。"""
     client = _client()
 
     resp = client.get("/wechat-tasks/pending", headers={
         "X-Local-Agent-Token": "wrong-token",
     })
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_pending_valid_token_returns_200():
@@ -150,8 +162,8 @@ def test_result_no_token_returns_401():
     assert resp.status_code == 401
 
 
-def test_result_wrong_token_returns_403():
-    """错误 token 时 POST /wechat-tasks/1/result 返回 403。"""
+def test_result_wrong_token_returns_401():
+    """错误 token 时 POST /wechat-tasks/1/result 返回 401（不暴露 token 有效性差异）。"""
     client = _client()
 
     resp = client.post("/wechat-tasks/1/result", json={
@@ -163,7 +175,7 @@ def test_result_wrong_token_returns_403():
         "X-Local-Agent-Token": "wrong-token",
     })
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_result_wrong_merchant_token_returns_404():

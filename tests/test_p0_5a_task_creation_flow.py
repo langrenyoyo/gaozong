@@ -208,14 +208,14 @@ def test_sync_leads_auto_create_true_is_disabled_when_staff_not_aw3():
 
 
 def test_sync_leads_auto_create_task_does_not_call_notification_service_send():
-    """4. auto_create_wechat_task=true 不调用 notification_service 的发送函数。"""
+    """4. auto_create_wechat_task=true 不调用旧通知链路。"""
     db = _db()
     staff = SalesStaff(name="Aw3销售", wechat_nickname="Aw3", status="active", merchant_id="p05a_merchant")
     db.add(staff)
     db.commit()
 
-    with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch, \
-         patch("app.services.douyin_sync_service.auto_notify_assigned_lead") as mock_notify:
+    # Phase 7-FIX2：auto_notify_assigned_lead 已删除，旧通知链路不再存在
+    with patch("app.services.douyin_sync_service.fetch_leads") as mock_fetch:
         mock_fetch.return_value = MOCK_AW3_STAFF_LEAD
 
         request = DouyinSyncRequest(
@@ -225,9 +225,6 @@ def test_sync_leads_auto_create_task_does_not_call_notification_service_send():
             # auto_notify=False（默认），确保不调用旧通知链路
         )
         result = preview_sync_leads(db, request)
-
-    # auto_notify_assigned_lead 不应被调用
-    mock_notify.assert_not_called()
 
     assert result.success is True
     assert result.wechat_tasks.created_count == 0
@@ -409,9 +406,8 @@ def test_auto_create_true_does_not_create_sent_wechat_task():
 def test_manual_post_wechat_tasks_is_disabled():
     """Phase 7-FIX2：POST /wechat-tasks 手动创建已停用。"""
     from fastapi.testclient import TestClient
-    from app.main import create_app
+    from app.main import app  # 复用模块级已创建的 app 实例
 
-    app = create_app()
     client = TestClient(app)
 
     resp = client.post("/wechat-tasks", json={
