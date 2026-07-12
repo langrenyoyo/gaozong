@@ -756,10 +756,28 @@ def test_parse_budget_formats():
 # Step 3：报表 3 线索溯源表
 # ============================================================================
 
-def test_lead_trace_created_variant_includes_unassigned():
-    """created 变体：当天入库线索都列，未分配不丢。"""
-    l1 = _insert_lead(conv="t1")
-    l2 = _insert_lead(conv="t2")  # 无分配记录
+def test_lead_trace_columns_contract():
+    """报表 3 严格 9 列顺序。"""
+    _insert_lead(extracted_phone="138", conv="cc")
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
+        )
+        assert result.columns == (
+            "contact", "sales_name", "ad_source", "precision_status",
+            "imprecision_reason", "intention_display", "no_intention_reason",
+            "region_text", "trace_url",
+        )
+    finally:
+        db.close()
+
+
+def test_lead_trace_created_variant_includes_all_leads():
+    """created 变体：当天入库线索都列；归因缺失写'未归因' + partial。"""
+    l1 = _insert_lead(extracted_phone="138", conv="t1")
+    _insert_lead(extracted_wechat="wx", conv="t2")  # 无归因
     _insert_attribution(lead_id=l1, ad_id="AD1", trace_url="https://h/p")
     db = _db()
     try:
@@ -767,20 +785,42 @@ def test_lead_trace_created_variant_includes_unassigned():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
         )
-        ids = {r["lead_id"] for r in result.rows}
-        assert ids == {l1, l2}
-        with_ad = next(r for r in result.rows if r["lead_id"] == l1)
-        assert with_ad["ad_id"] == "AD1"
+        contacts = {r["contact"] for r in result.rows}
+        assert contacts == {"138", "wx"}
+        with_ad = next(r for r in result.rows if r["contact"] == "138")
+        assert with_ad["ad_source"] == "AD1"
         assert with_ad["trace_url"] == "https://h/p"
+        without_ad = next(r for r in result.rows if r["contact"] == "wx")
+        assert without_ad["ad_source"] == "未归因"
+        codes = {d.code for d in result.diagnostics}
+        assert "trace_source_incomplete" in codes
+        assert not result.is_complete
     finally:
         db.close()
 
 
-def test_lead_trace_assigned_variant_uses_followup_cohort():
-    """assigned 变体：按分配记录当天归属；LeadFollowupRecord INNER JOIN 商户。"""
+def test_lead_trace_contact_priority_phone_wechat_all():
+    """contact 优先级：手机号 > 微信号 > 全部联系方式。"""
+    _insert_lead(extracted_phone="138", extracted_wechat="wx1", conv="cp1")
+    _insert_lead(extracted_wechat="wx2", conv="cp2")
+    _insert_lead(all_extracted_contacts="email@a", conv="cp3")
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
+        )
+        contacts = {r["contact"] for r in result.rows}
+        assert contacts == {"138", "wx2", "email@a"}  # 138 优先（不取 wx1）
+    finally:
+        db.close()
+
+
+def test_lead_trace_assigned_variant_dedup_by_lead():
+    """assigned 变体：按当日最后一条分配记录归属，按 lead 去重。"""
     sid = _insert_staff()
-    l_assigned = _insert_lead(conv="as", assigned_staff_id=sid)
-    l_not_assigned = _insert_lead(conv="nas")
+    l_assigned = _insert_lead(extracted_phone="138", conv="as", assigned_staff_id=sid)
+    _insert_lead(extracted_wechat="wx", conv="nas")  # 无分配记录
     _insert_followup(lead_id=l_assigned, staff_id=sid, record_type="assign")
     db = _db()
     try:
@@ -788,8 +828,8 @@ def test_lead_trace_assigned_variant_uses_followup_cohort():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_LEAD_TRACE, report_variant="assigned",
         )
-        ids = {r["lead_id"] for r in result.rows}
-        assert ids == {l_assigned}  # 只有 assigned 的
+        contacts = {r["contact"] for r in result.rows}
+        assert contacts == {"138"}  # 只有 assigned 的
     finally:
         db.close()
 
@@ -797,11 +837,9 @@ def test_lead_trace_assigned_variant_uses_followup_cohort():
 def test_lead_trace_assigned_cross_merchant_isolation():
     """assigned cohort INNER JOIN DouyinLead + merchant_id，跨商户 followup 不串。"""
     sid = _insert_staff()
-    # merchant-a 的 lead + followup
-    l_a = _insert_lead(merchant_id=_MERCHANT, conv="ma", assigned_staff_id=sid)
+    l_a = _insert_lead(merchant_id=_MERCHANT, extracted_phone="138", conv="ma", assigned_staff_id=sid)
+    l_b = _insert_lead(merchant_id=_OTHER, extracted_phone="139", conv="mb", assigned_staff_id=sid)
     _insert_followup(lead_id=l_a, staff_id=sid, record_type="assign")
-    # merchant-b 的 lead + followup
-    l_b = _insert_lead(merchant_id=_OTHER, conv="mb", assigned_staff_id=sid)
     _insert_followup(lead_id=l_b, staff_id=sid, record_type="assign")
     db = _db()
     try:
@@ -809,19 +847,19 @@ def test_lead_trace_assigned_cross_merchant_isolation():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_LEAD_TRACE, report_variant="assigned",
         )
-        ids = {r["lead_id"] for r in result.rows}
-        assert ids == {l_a}  # 不串 merchant-b
+        contacts = {r["contact"] for r in result.rows}
+        assert contacts == {"138"}  # 不串 merchant-b
     finally:
         db.close()
 
 
 def test_lead_trace_next_day_refill_regenerate():
-    """次日补填反馈后重生成原日期报表，原 cohort 仍读最新结果。"""
-    l = _insert_lead(conv="refill", created_at=_DAY)
+    """次日补填归因后重生成原日期报表，原 cohort 仍读最新归因。"""
+    l = _insert_lead(extracted_phone="138", conv="refill", created_at=_DAY)
     _insert_attribution(lead_id=l, ad_id="AD_OLD")
     db = _db()
     try:
-        # 第二天补填新归因（覆盖）—— 用更新 updated_at
+        # 第二天补填新归因（覆盖）
         db2 = _db()
         try:
             attr = db2.query(LeadReportAttribution).filter_by(lead_id=l).first()
@@ -833,8 +871,84 @@ def test_lead_trace_next_day_refill_regenerate():
             db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
             report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
         )
-        row = next(r for r in result.rows if r["lead_id"] == l)
-        assert row["ad_id"] == "AD_NEW"  # 读到最新
+        row = next(r for r in result.rows if r["contact"] == "138")
+        assert row["ad_source"] == "AD_NEW"  # 读到最新
+    finally:
+        db.close()
+
+
+def test_lead_trace_unassigned_sales_name():
+    """created 变体无负责人的线索，销售列写'未分配'。"""
+    _insert_lead(extracted_phone="138", conv="un")  # 无 assigned_staff_id
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
+        )
+        assert result.rows[0]["sales_name"] == "未分配"
+    finally:
+        db.close()
+
+
+def test_lead_trace_feedback_fields_from_latest():
+    """精准/不精准原因/意向/不意向原因/地区读最新成功反馈。"""
+    l = _insert_lead(extracted_phone="138", conv="fb")
+    _insert_feedback(
+        lead_id=l, precision_status="精准", imprecision_reason="价格高",
+        intention_level="H", car_model="Model X", region_text="北京",
+    )
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
+        )
+        row = result.rows[0]
+        assert row["precision_status"] == "精准"
+        assert row["imprecision_reason"] == "价格高"
+        assert row["intention_display"] == "H / Model X"
+        assert row["region_text"] == "北京"
+    finally:
+        db.close()
+
+
+def test_lead_trace_intention_format_no_extra_separator():
+    """意向格式：缺失部分不拼多余分隔符。"""
+    _insert_lead(extracted_phone="138", conv="lo")
+    _insert_lead(extracted_phone="139", conv="co")
+    l_lo = _insert_lead(extracted_phone="137", conv="lo2")
+    _insert_feedback(lead_id=l_lo, intention_level="H")  # 仅等级
+    l_co = _insert_lead(extracted_phone="136", conv="co2")
+    _insert_feedback(lead_id=l_co, car_model="Model Y")  # 仅车型
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="created",
+        )
+        by_contact = {r["contact"]: r["intention_display"] for r in result.rows}
+        assert by_contact["137"] == "H"  # 仅等级，无多余分隔
+        assert by_contact["136"] == "Model Y"  # 仅车型
+    finally:
+        db.close()
+
+
+def test_lead_trace_reassign_dedup_keeps_last_staff():
+    """assigned 变体当日多次分配按 lead 去重，销售取最后一条 reassign。"""
+    sid_a = _insert_staff(name="销售甲")
+    sid_b = _insert_staff(name="销售乙")
+    l = _insert_lead(extracted_phone="138", conv="re", assigned_staff_id=sid_a)
+    _insert_followup(lead_id=l, staff_id=sid_a, record_type="assign", created_at=datetime(2026, 7, 10, 9, 0, 0))
+    _insert_followup(lead_id=l, staff_id=sid_b, record_type="reassign", created_at=datetime(2026, 7, 10, 11, 0, 0))
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_LEAD_TRACE, report_variant="assigned",
+        )
+        assert len(result.rows) == 1  # 去重，不重复
+        assert result.rows[0]["sales_name"] == "销售乙"  # 取最后 reassign
     finally:
         db.close()
 

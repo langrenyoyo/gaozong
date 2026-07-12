@@ -633,18 +633,20 @@ def _build_daily_sales_feedback_report(
 def _lead_trace_cohort(
     db: Session, *, merchant_id: str, start: datetime, end: datetime, report_variant: str
 ) -> list[DouyinLead]:
-    """created 变体按 lead.created_at；assigned 变体按 LeadFollowupRecord 分配记录。
+    """created 变体按 lead.created_at；assigned 变体按当日最后一条 assign/reassign（SQL 去重）。
 
-    LeadFollowupRecord 无 merchant_id，assigned 必须 INNER JOIN DouyinLead 过滤商户。
+    LeadFollowupRecord 无 merchant_id，assigned 通过 _latest_assign_staff_by_lead
+    INNER JOIN DouyinLead 过滤商户并按 lead 去重（每 lead 取最后一条分配记录）。
     """
     if report_variant == "assigned":
-        return db.query(DouyinLead).join(
-            LeadFollowupRecord, LeadFollowupRecord.lead_id == DouyinLead.id
-        ).filter(
+        staff_by_lead = _latest_assign_staff_by_lead(
+            db, merchant_id=merchant_id, start=start, end=end
+        )
+        if not staff_by_lead:
+            return []
+        return db.query(DouyinLead).filter(
             DouyinLead.merchant_id == merchant_id,
-            LeadFollowupRecord.record_type.in_(["assign", "reassign"]),
-            LeadFollowupRecord.created_at >= start,
-            LeadFollowupRecord.created_at < end,
+            DouyinLead.id.in_(list(staff_by_lead.keys())),
         ).order_by(DouyinLead.id.asc()).all()
     # default / created
     return db.query(DouyinLead).filter(
@@ -654,9 +656,31 @@ def _lead_trace_cohort(
     ).order_by(DouyinLead.id.asc()).all()
 
 
+def _lead_contact(lead: DouyinLead) -> str | None:
+    """线索联系方式：权威手机号优先，其次微信号，再次全部提取联系方式。"""
+    for value in (lead.extracted_phone, lead.extracted_wechat, lead.all_extracted_contacts):
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _format_intention(level: str | None, car_model: str | None) -> str | None:
+    """意向格式：{意向等级} / {车型}，缺失部分不拼多余分隔符。"""
+    parts = [p.strip() for p in (level, car_model) if p and p.strip()]
+    return " / ".join(parts) if parts else None
+
+
 def _build_lead_trace_report(
     db: Session, *, merchant_id: str, report_day: date, report_variant: str
 ) -> ReportBuildResult:
+    """报表 3：线索溯源表（执行包 9 列）。
+
+    列：线索、销售、来源、精准、不精准原因、意向、不意向原因、地区、溯源。
+    口径：线索=权威手机号优先，其次微信号，再次全部提取联系方式；
+    销售=当前负责人（created 用 lead.assigned_staff_id，assigned 用当日最后分配记录），无→'未分配'；
+    来源=归因广告 ID（缺失→'未归因' + partial）；精准/不精准原因/意向/不意向原因/地区=最新成功反馈；
+    意向格式 {意向等级} / {车型}；溯源=归因 trace_url。
+    """
     start, end = _day_bounds(db, report_day)
     leads = _lead_trace_cohort(
         db, merchant_id=merchant_id, start=start, end=end, report_variant=report_variant
@@ -664,54 +688,55 @@ def _build_lead_trace_report(
     lead_ids = [lead.id for lead in leads]
 
     attrs: dict[int, LeadReportAttribution] = {}
-    followups: dict[int, LeadFollowupRecord] = {}
-    staff_map: dict[int, str] = {}
+    latest_feedback: dict[int, SalesLeadFeedback] = {}
+    lead_staff: dict[int, int | None] = {}
     if lead_ids:
         for a in db.query(LeadReportAttribution).filter(
             LeadReportAttribution.merchant_id == merchant_id,
             LeadReportAttribution.lead_id.in_(lead_ids),
         ).all():
             attrs[a.lead_id] = a
-        # 最新分配/重分配记录（按 created_at desc, id desc）
-        fr_rows = db.query(LeadFollowupRecord).filter(
-            LeadFollowupRecord.lead_id.in_(lead_ids),
-            LeadFollowupRecord.record_type.in_(["assign", "reassign"]),
-        ).all()
-        for fr in fr_rows:
-            cur = followups.get(fr.lead_id)
-            if cur is None:
-                followups[fr.lead_id] = fr
-            else:
-                cur_key = (cur.created_at or datetime.min, cur.id)
-                fr_key = (fr.created_at or datetime.min, fr.id)
-                if fr_key > cur_key:
-                    followups[fr.lead_id] = fr
-        staff_ids = {fr.staff_id for fr in followups.values() if fr.staff_id}
-        staff_map = _staff_map(db, staff_ids)
+        latest_feedback = _latest_success_feedback(db, merchant_id=merchant_id, lead_ids=lead_ids)
+        if report_variant == "assigned":
+            staff_by_lead = _latest_assign_staff_by_lead(
+                db, merchant_id=merchant_id, start=start, end=end
+            )
+            lead_staff = {lid: staff_by_lead.get(lid) for lid in lead_ids}
+        else:
+            lead_staff = {lead.id: lead.assigned_staff_id for lead in leads}
+    staff_map = _staff_map(db, {sid for sid in lead_staff.values() if sid is not None})
 
     columns = (
-        "lead_id", "customer_name", "traffic_type", "content_type",
-        "ad_id", "material_id", "trace_url", "assigned_staff_name", "followup_content",
+        "contact", "sales_name", "ad_source", "precision_status",
+        "imprecision_reason", "intention_display", "no_intention_reason",
+        "region_text", "trace_url",
     )
     rows: list[dict[str, object]] = []
+    has_incomplete_attribution = False
     for lead in leads:
         attr = attrs.get(lead.id)
-        fr = followups.get(lead.id)
+        fb = latest_feedback.get(lead.id)
+        sid = lead_staff.get(lead.id)
+        ad_id = attr.ad_id if attr and attr.ad_id and attr.ad_id.strip() else None
+        if ad_id is None:
+            has_incomplete_attribution = True
         rows.append({
-            "lead_id": lead.id,
-            "customer_name": lead.customer_name,
-            "traffic_type": attr.traffic_type if attr else None,
-            "content_type": attr.content_type if attr else None,
-            "ad_id": attr.ad_id if attr else None,
-            "material_id": attr.material_id if attr else None,
+            "contact": _lead_contact(lead),
+            "sales_name": (staff_map.get(sid) if sid is not None else None) or "未分配",
+            "ad_source": ad_id or "未归因",
+            "precision_status": fb.precision_status if fb else None,
+            "imprecision_reason": fb.imprecision_reason if fb else None,
+            "intention_display": _format_intention(
+                fb.intention_level if fb else None, fb.car_model if fb else None
+            ),
+            "no_intention_reason": fb.no_intention_reason if fb else None,
+            "region_text": fb.region_text if fb else None,
             "trace_url": attr.trace_url if attr else None,
-            "assigned_staff_name": staff_map.get(fr.staff_id) if fr and fr.staff_id else None,
-            "followup_content": fr.content if fr else None,
         })
 
     diagnostics: list[ReportDiagnostic] = []
-    if not leads:
-        diagnostics.append(ReportDiagnostic("lead_trace_no_data"))
+    if has_incomplete_attribution:
+        diagnostics.append(ReportDiagnostic("trace_source_incomplete"))
 
     return ReportBuildResult(
         report_type=REPORT_LEAD_TRACE,
