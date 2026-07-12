@@ -442,10 +442,14 @@ def _upsert_daily_summary(
     db: Session, *, merchant_id: str, raw_text: str,
     staff_id: int, result: SalesFeedbackParseResult,
 ) -> None:
-    """SalesDailySummary 按 merchant_id + staff_id + summary_date upsert；日期使用 strptime 严格解析。"""
+    """SalesDailySummary 按 merchant_id + staff_id + summary_date upsert；日期使用 strptime 严格解析。
+
+    Phase 8：summary_date 收敛为业务 DATE，parser 写 Python date（不再用 DateTime）。
+    """
     summary_date_text = result.fields.get("summary_date")
     # Phase 7-FIX1：严格 strptime，不做 fallback
-    summary_date = datetime.strptime(summary_date_text, "%Y-%m-%d")
+    # Phase 8：写入 Python date，与 ORM Column(Date) 对齐
+    summary_date = datetime.strptime(summary_date_text, "%Y-%m-%d").date()
     row = db.query(SalesDailySummary).filter_by(
         merchant_id=merchant_id, staff_id=staff_id, summary_date=summary_date,
     ).first()
@@ -457,5 +461,5 @@ def _upsert_daily_summary(
     row.raw_text = raw_text
     row.parse_status = result.parse_status
     row.parse_error = result.parse_error
-    # summary_date 是 DateTime 列，已在上面单独设置；fields 里的字符串版本跳过。
+    # summary_date 是 DATE 列，已在上面单独设置；fields 里的字符串版本跳过。
     _apply_fields(row, result, skip={"summary_date"})

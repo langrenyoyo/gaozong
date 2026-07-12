@@ -1,7 +1,7 @@
 """Pydantic 请求/响应模型"""
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -1658,7 +1658,7 @@ class SalesDailySummaryOut(BaseModel):
     id: int
     merchant_id: str
     staff_id: int
-    summary_date: datetime
+    summary_date: date
     sales_name: Optional[str] = None
     overall_quality: Optional[str] = None
     main_problem: Optional[str] = None
@@ -1684,6 +1684,34 @@ class DailyReportJobOut(BaseModel):
     error_message: Optional[str] = None
     generated_at: Optional[datetime] = None
     sent_at: Optional[datetime] = None
+
+
+class DailyReportDiagnostic(BaseModel):
+    """日报稳定诊断码：只写计数、稳定码和异常类型名，不写正文/路径/密钥。"""
+
+    code: str
+    count: int = Field(default=1, ge=1)
+    exception_type: Optional[str] = None
+
+
+class DailyReportJobItem(BaseModel):
+    """Phase 8 日报任务 API 响应项。
+
+    不含 file_storage_key / merchant_id / 绝对路径 / 底层异常正文。
+    """
+
+    id: int
+    report_day: date
+    report_type: str
+    report_variant: str
+    status: str
+    artifact_status: str
+    file_name: Optional[str] = None
+    download_available: bool = False
+    is_previous_artifact: bool = False
+    diagnostics: list[DailyReportDiagnostic] = Field(default_factory=list)
+    generated_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class ComputeMarkupRatioOut(BaseModel):

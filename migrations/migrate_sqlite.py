@@ -388,6 +388,16 @@ def apply_migration(
 
     try:
         conn.execute("BEGIN")
+        # Phase 8 Task 2：0028 显式版本映射——事务内 preflight（非零点/折叠重复/业务键重复），
+        # 任一非 0 抛 MigrationError 触发 ROLLBACK，不登记 0028；不做可插拔框架。
+        if version == "0028":
+            preflight = phase8_preflight_sqlite(conn)
+            bad = {k: v for k, v in preflight.items() if v > 0}
+            if bad:
+                raise MigrationError(
+                    f"0028 preflight 失败，已回滚不登记：{bad}；"
+                    f"请由审批窗口决定数据修复，不自动删/合并/回填"
+                )
         for s in plan.will_run:
             logger.debug("执行 DDL: %s", _one_line(s.raw))
             conn.execute(s.raw)
@@ -415,6 +425,59 @@ def _get_migration_description(conn: sqlite3.Connection, version: str) -> str | 
         (version,),
     ).fetchone()
     return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 Task 2：0028 迁移前只读 preflight
+# ---------------------------------------------------------------------------
+
+
+def phase8_preflight_sqlite(conn: sqlite3.Connection) -> dict:
+    """Phase 8 0028 迁移前只读 preflight，返回 4 个阻断计数。
+
+    任一非 0 应阻断迁移（不自动删/合并/回填，交由审批窗口决定）：
+    - summary_non_midnight_count: sales_daily_summaries.summary_date 非零点行数
+    - summary_date_fold_duplicate_group_count: 按业务日期折叠后的重复键组数
+    - daily_report_candidate_duplicate_group_count: daily_report_jobs 候选重复组数
+    - daily_report_existing_non_null_key_duplicate_group_count: 已有非 NULL 新业务键重复组数
+
+    自包含，不 import app 包；只读查询，不写库。
+    """
+    counts = {
+        "summary_non_midnight_count": 0,
+        "summary_date_fold_duplicate_group_count": 0,
+        "daily_report_candidate_duplicate_group_count": 0,
+        "daily_report_existing_non_null_key_duplicate_group_count": 0,
+    }
+    if table_exists(conn, "sales_daily_summaries"):
+        counts["summary_non_midnight_count"] = conn.execute(
+            "SELECT count(*) FROM sales_daily_summaries WHERE time(summary_date) != '00:00:00'"
+        ).fetchone()[0]
+        counts["summary_date_fold_duplicate_group_count"] = conn.execute(
+            "SELECT count(*) FROM ("
+            " SELECT merchant_id, staff_id, date(summary_date) AS d"
+            " FROM sales_daily_summaries"
+            " GROUP BY merchant_id, staff_id, date(summary_date)"
+            " HAVING count(*) > 1)"
+        ).fetchone()[0]
+    if table_exists(conn, "daily_report_jobs"):
+        counts["daily_report_candidate_duplicate_group_count"] = conn.execute(
+            "SELECT count(*) FROM ("
+            " SELECT merchant_id, date(report_date) AS d, report_type"
+            " FROM daily_report_jobs WHERE report_date IS NOT NULL"
+            " GROUP BY merchant_id, date(report_date), COALESCE(report_type, '')"
+            " HAVING count(*) > 1)"
+        ).fetchone()[0]
+        cols = get_columns(conn, "daily_report_jobs")
+        if "report_day" in cols:
+            counts["daily_report_existing_non_null_key_duplicate_group_count"] = conn.execute(
+                "SELECT count(*) FROM ("
+                " SELECT merchant_id, report_day, report_type, COALESCE(report_variant, 'default') AS rv"
+                " FROM daily_report_jobs WHERE report_day IS NOT NULL"
+                " GROUP BY merchant_id, report_day, COALESCE(report_type, ''), COALESCE(report_variant, 'default')"
+                " HAVING count(*) > 1)"
+            ).fetchone()[0]
+    return counts
 
 
 # ---------------------------------------------------------------------------

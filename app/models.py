@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -1012,7 +1012,7 @@ class SalesDailySummary(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
     staff_id = Column(Integer, nullable=False, comment="关联销售 ID")
-    summary_date = Column(DateTime, nullable=False, comment="汇总日期")
+    summary_date = Column(Date, nullable=False, comment="汇总业务日期（Phase 8 从 DateTime 收敛为 Date）")
     sales_name = Column(String(50), comment="销售姓名")
     raw_text = Column(Text, comment="原始总结文本")
     overall_quality = Column(String(32), comment="整体质量评级")
@@ -1029,21 +1029,112 @@ class SalesDailySummary(Base):
 
 
 class DailyReportJob(Base):
-    """日报任务：不返回绝对路径，file_storage_key 为内部存储键。"""
+    """日报任务：不返回绝对路径，file_storage_key 为内部存储键。
+
+    Phase 8：新增 report_day/report_variant 业务权威键与生成 claim 字段；
+    旧 report_date/receiver_staff_id/sent_at 保留兼容，Phase 8-A 新代码不使用。
+    """
 
     __tablename__ = "daily_report_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id", "report_day", "report_type", "report_variant",
+            name="uk_daily_report_jobs_merchant_day_type_variant",
+        ),
+        Index("idx_daily_report_jobs_merchant_status_date", "merchant_id", "status", "report_date"),
+        Index("idx_daily_report_jobs_merchant_status_day", "merchant_id", "status", "report_day"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
-    report_date = Column(DateTime, comment="报表日期")
+    # Phase 1 旧字段（保留兼容，Phase 8-A 新代码不作为权威键或发送证据）
+    report_date = Column(DateTime, comment="旧报表日期字段（保留兼容，新代码用 report_day）")
     report_type = Column(String(32), comment="报表类型")
-    receiver_staff_id = Column(Integer, comment="接收销售 ID")
-    status = Column(String(32), comment="任务状态")
+    receiver_staff_id = Column(Integer, comment="旧接收销售字段（保留兼容，Phase 8-A 不用）")
+    status = Column(String(32), comment="任务最近一次生成尝试状态")
     file_storage_key = Column(String(255), comment="内部存储键，不返回绝对路径")
     file_name = Column(String(255), comment="文件名")
     error_message = Column(Text, comment="错误信息")
     generated_at = Column(DateTime, comment="生成时间")
-    sent_at = Column(DateTime, comment="发送时间")
+    sent_at = Column(DateTime, comment="旧发送时间字段（保留兼容，Phase 8-A 不用）")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Phase 8 新增字段
+    report_day = Column(Date, comment="Phase 8 权威业务日期")
+    report_variant = Column(String(32), comment="报表变体 default/created/assigned")
+    diagnostics_json = Column(Text, comment="诊断 JSON 数组，元素 {code,count,exception_type?}")
+    content_sha256 = Column(String(64), comment="文件内容 sha256")
+    file_size_bytes = Column(BigInteger, comment="文件字节数")
+    generation_version = Column(String(32), comment="生成版本，初始 daily_report_v1")
+    generation_token = Column(String(64), comment="generating 期间 claim 令牌，防旧 worker 覆盖")
+    generation_started_at = Column(DateTime, comment="generating 开始时间，超 30 分钟视为 stale")
+    artifact_status = Column(String(16), default="none", comment="文件指针状态 none/available")
+
+
+class LeadReportAttribution(Base):
+    """线索报表归因：流量/内容类型、广告 ID、素材 ID、溯源链接。
+
+    merchant_id 来自可信上下文，不建本地商户外键；lead_id 建普通外键到 douyin_leads.id，
+    商户一致性仍由写服务用 lead_id + merchant_id 双条件验证。
+    """
+
+    __tablename__ = "lead_report_attributions"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "lead_id", name="uk_lead_report_attributions_merchant_lead"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    lead_id = Column(Integer, ForeignKey("douyin_leads.id"), nullable=False, comment="关联线索 ID")
+    traffic_type = Column(String(16), nullable=False, comment="流量类型 paid/organic/unknown")
+    content_type = Column(String(16), nullable=False, comment="内容类型 short_video/live/other/unknown")
+    ad_id = Column(String(128), comment="广告 ID")
+    material_id = Column(String(128), comment="素材 ID")
+    trace_url = Column(String(1000), comment="溯源链接，仅允许 http/https")
+    source_system = Column(String(32), nullable=False, comment="来源 manual/api")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DailyAdMetric(Base):
+    """广告日指标：付费投流聚合事实。
+
+    天然只接收付费聚合（商户+日+渠道+内容类型唯一），不存自然流，也不兼容广告明细粒度，
+    从结构上消除聚合/明细双算和并发竞态。
+    """
+
+    __tablename__ = "daily_ad_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id", "metric_day", "channel", "content_type",
+            name="uk_daily_ad_metrics_merchant_day_channel_content",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    metric_day = Column(Date, nullable=False, comment="业务日期")
+    channel = Column(String(32), nullable=False, comment="渠道，一期固定 douyin")
+    content_type = Column(String(16), nullable=False, comment="内容类型 short_video/live")
+    spend_amount = Column(Numeric(14, 2), nullable=False, comment="消耗金额，非负，禁止 Float")
+    private_message_count = Column(Integer, nullable=False, comment="私信量，非负")
+    source_system = Column(String(32), nullable=False, comment="来源 manual/api")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class MerchantReportProfile(Base):
+    """商户报表配置：展厅价位区间。两个价位必须同时为空或同时存在且 min <= max。"""
+
+    __tablename__ = "merchant_report_profiles"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", name="uk_merchant_report_profiles_merchant"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    showroom_price_min_yuan = Column(Numeric(14, 2), comment="展厅最低价，非负")
+    showroom_price_max_yuan = Column(Numeric(14, 2), comment="展厅最高价，非负")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
