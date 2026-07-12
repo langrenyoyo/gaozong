@@ -410,17 +410,25 @@
 
 ---
 
-### Phase 8: 每日自动报表
+### Phase 8-A: 每日自动报表（SQL 数据补录、4 类 Excel、后台管理、安全下载、定时生成）
 
-**目的:** 从 SQL 今日数据生成 5 类日报 Excel，并按销售配置发送。
+**目的:** 从 SQL 今日数据生成 4 类日报 Excel（留资管理表、每日销售反馈表、销售单车成本表、线索溯源表），提供后台数据补录、安全下载和上一自然日定时生成；不包含微信附件真实发送。
+
+**规则字段口径（2026-07-12 勘误）:** 4 类日报；SalesStaff 另有 1 个线索分配开关，共 5 个规则字段（原"5 类日报"表述作废）。
+
+**状态（2026-07-12）:** 代码与测试链路完成（Task 2-9，提交 162ef4a/9a2f596/a591bd9/0c4d875/6522742/cf18f99/976f3d6/e361aba）；甲方样例 Excel 视觉验收未完成，整体保留 `DONE_WITH_CONCERNS`。微信 Excel 附件真实发送见 Phase 8-B。
 
 **Files:**
 - Create: `app/services/daily_report_service.py`
 - Create: `app/services/daily_report_excel.py`
+- Create: `app/services/daily_report_storage.py`
+- Create: `app/services/daily_report_job_service.py`
+- Create: `app/scheduler/daily_report_scheduler.py`
 - Create: `app/routers/daily_reports.py`
-- Modify: `app/services/wechat_task_service.py`
 - Test: `tests/test_daily_report_service.py`
 - Test: `tests/test_daily_report_excel.py`
+- Test: `tests/test_daily_reports_api.py`
+- Test: `tests/test_daily_report_scheduler.py`
 
 - [ ] **Step 1: 写报表聚合测试**
   - 短视频/直播留资管理表来自今日留资 SQL。
@@ -438,16 +446,27 @@
   - 文件路径不返回前端绝对路径。
   - 支持 dry-run 只生成记录和预览摘要。
 
-- [ ] **Step 4: 实现按配置发送**
-  - 销售配置启用哪个表，就发送哪个 Excel。
-  - 发送失败记录 `failed` 和错误原因，不无限重试。
+- [ ] **Step 4: 跑测试**
+  - Run: `pytest tests/test_daily_report_service.py tests/test_daily_report_excel.py tests/test_daily_reports_api.py tests/test_daily_report_scheduler.py -v`
+  - Expected: PASS（8-A 验收口径：可生成、可下载、可定时；不包含真实发送）。
 
-- [ ] **Step 5: 跑测试**
-  - Run: `pytest tests/test_daily_report_service.py tests/test_daily_report_excel.py -v`
-  - Expected: PASS。
+- [ ] **Step 5: 提交**
+  - Commit: `功能：增加每日自动报表 8-A 生成下载与定时`
 
-- [ ] **Step 6: 提交**
-  - Commit: `feat: 增加服务端每日自动报表`
+### Phase 8-B: 按销售开关发送日报 Excel 附件（高风险，另开执行包）
+
+**目的:** 按 SalesStaff 的 4 个报表开关，将 8-A 生成的 Excel 以微信附件发送给销售。
+
+**边界:** 必须另开高风险执行包并真机验收；依赖 Local Agent / 微信 UI 自动化；不得与 8-A 混为同一阶段验收。
+
+**Files:**
+- Modify: `app/services/wechat_task_service.py`（从 8-A 文件范围移到 8-B）
+- Create: WechatTask 日报附件协议（专项设计）
+- Test: 真机发送验收
+
+**验收口径区分:**
+- 8-A 可生成、可下载、可定时生成 → 不等于完整 Phase 8 已真实发送。
+- 完整 Phase 8 验收必须在 8-B 真机附件发送通过后才能升级为无条件 `DONE`。
 
 ---
 
