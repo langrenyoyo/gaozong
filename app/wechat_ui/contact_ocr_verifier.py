@@ -153,17 +153,26 @@ def capture_region(region_bbox: tuple[int, int, int, int], path: Path) -> dict:
     }
 
 
-def preprocess_top_title_image(cropped_path: str, output_path: Path) -> str:
-    """对标题区域做最小预处理。"""
-    from PIL import Image, ImageEnhance, ImageOps
+def _preprocess_top_title_image(image):
+    """在内存中对标题区域做最小预处理。"""
+    from PIL import ImageEnhance, ImageOps
 
-    img = Image.open(cropped_path).convert("RGB")
-    width, height = img.size
-    roi = img.crop((0, int(height * 0.20), int(width * 0.45), height))
+    image = image.convert("RGB")
+    width, height = image.size
+    roi = image.crop((0, int(height * 0.20), int(width * 0.45), height))
     roi = roi.resize((roi.width * 4, roi.height * 4))
-    roi = ImageEnhance.Contrast(ImageOps.grayscale(roi)).enhance(2.0)
+    return ImageEnhance.Contrast(ImageOps.grayscale(roi)).enhance(2.0)
+
+
+def preprocess_top_title_image(cropped_path: str, output_path: Path) -> str:
+    """对标题区域做最小预处理并保存调试文件。"""
+    from PIL import Image
+
+    with Image.open(cropped_path) as img:
+        roi = _preprocess_top_title_image(img)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     roi.save(str(output_path))
+    roi.close()
     return str(output_path)
 
 
@@ -196,7 +205,7 @@ def save_title_region_overlay(
         return None
 
 
-def run_easyocr(image_path: str) -> tuple[str, float, str, list, str | None, str | None]:
+def run_easyocr(image_input) -> tuple[str, float, str, list, str | None, str | None]:
     """运行 EasyOCR。"""
     try:
         import easyocr
@@ -205,7 +214,11 @@ def run_easyocr(image_path: str) -> tuple[str, float, str, list, str | None, str
 
     try:
         reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
-        raw = reader.readtext(image_path)
+        if not isinstance(image_input, (str, Path)):
+            import numpy as np
+
+            image_input = np.asarray(image_input)
+        raw = reader.readtext(str(image_input) if isinstance(image_input, Path) else image_input)
     except Exception as exc:
         return "", 0.0, "easyocr", [], str(exc), "ocr_engine_error"
 
@@ -272,16 +285,16 @@ def run_paddleocr(image_path: str) -> tuple[str, float, str, list, str | None, s
     return " ".join(texts).strip(), confidence, "paddleocr", results, None, None
 
 
-def run_ocr_engine(image_path: str, engine: str) -> tuple[str, float, str, list, str | None, str | None]:
+def run_ocr_engine(image_input, engine: str) -> tuple[str, float, str, list, str | None, str | None]:
     """按指定引擎运行 OCR。"""
     if engine == "none":
         return "", 0.0, "none", [], "OCR engine=none，未执行识别", None
     if engine == "easyocr":
-        return run_easyocr(image_path)
+        return run_easyocr(image_input)
     if engine == "paddleocr":
-        return run_paddleocr(image_path)
+        return run_paddleocr(image_input)
     if engine == "tesseract":
-        return run_tesseract_if_available(image_path)
+        return run_tesseract_if_available(image_input)
     return "", 0.0, engine, [], f"不支持的 OCR 引擎: {engine}", "ocr_engine_error"
 
 
@@ -382,6 +395,121 @@ def _get_window_rect(hwnd: int) -> dict:
     return {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
 
 
+def _verify_top_title_ocr_in_memory(
+    expected_nickname: str,
+    hwnd: int,
+    position: str,
+    engine: str,
+    min_confidence: float,
+) -> dict:
+    """只在内存中截取和识别标题，禁止生成任何截图或中间文件。"""
+    if engine != "easyocr":
+        result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text="",
+            confidence=0.0,
+            screenshot_path=None,
+            engine=engine,
+            error="内存 OCR 仅支持 easyocr",
+            failure_stage="memory_ocr_engine_unsupported",
+            min_confidence=min_confidence,
+        )
+        result["position"] = position
+        return result
+
+    try:
+        rect = _get_window_rect(hwnd)
+    except Exception as exc:
+        result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text="",
+            confidence=0.0,
+            screenshot_path=None,
+            engine=engine,
+            error=str(exc),
+            failure_stage="window_rect_failed",
+            min_confidence=min_confidence,
+        )
+        result["position"] = position
+        return result
+
+    from app.wechat_ui.screenshot_debug import capture_screen_result
+
+    tried_regions: list[str] = []
+    candidates_by_region: dict[str, list[str]] = {}
+    best_result: dict | None = None
+    last_error: str | None = None
+    last_failure_stage: str | None = None
+
+    for region_name, bbox in build_ocr_title_regions(rect).items():
+        tried_regions.append(region_name)
+        capture = capture_screen_result(bbox=bbox, path=None)
+        image = capture.get("image")
+        if not capture.get("success") or image is None:
+            candidates_by_region[region_name] = []
+            last_error = capture.get("error")
+            last_failure_stage = capture.get("stage")
+            continue
+
+        processed = None
+        try:
+            processed = _preprocess_top_title_image(image)
+            ocr_text, confidence, actual_engine, raw_results, error, failure_stage = run_ocr_engine(
+                processed,
+                engine,
+            )
+        finally:
+            if processed is not None:
+                processed.close()
+            image.close()
+
+        candidates = [
+            value
+            for value in (ocr_text, _strip_trailing_pure_symbols(ocr_text))
+            if (value or "").strip()
+        ]
+        candidates_by_region[region_name] = list(dict.fromkeys(candidates))
+        best_result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text=ocr_text,
+            confidence=confidence,
+            screenshot_path=None,
+            cropped_path=None,
+            preprocessed_path=None,
+            engine=actual_engine,
+            raw_results=raw_results,
+            error=error,
+            failure_stage=failure_stage,
+            min_confidence=min_confidence,
+            ocr_title_regions_tried=tried_regions[:],
+            ocr_title_region=region_name,
+            ocr_title_candidates_by_region=dict(candidates_by_region),
+        )
+        best_result["position"] = position
+        if best_result.get("verified"):
+            return best_result
+
+    if best_result is None:
+        best_result = build_ocr_result(
+            expected_nickname=expected_nickname,
+            region="top_title",
+            ocr_text="",
+            confidence=0.0,
+            screenshot_path=None,
+            engine=engine,
+            error=last_error,
+            failure_stage=last_failure_stage or "screenshot_failed",
+            min_confidence=min_confidence,
+            ocr_title_regions_tried=tried_regions,
+            ocr_title_candidates_by_region=candidates_by_region,
+        )
+    best_result["position"] = position
+    return best_result
+
+
 def verify_contact_by_top_title_ocr(
     expected_nickname: str,
     hwnd: int,
@@ -389,6 +517,7 @@ def verify_contact_by_top_title_ocr(
     engine: str = "easyocr",
     min_confidence: float = 0.75,
     output_dir: str | Path | None = None,
+    persist_artifacts: bool = True,
 ) -> dict:
     """通过聊天顶部标题 OCR 验证联系人身份。"""
     ready = check_wechat_ready_for_automation(hwnd)
@@ -406,6 +535,15 @@ def verify_contact_by_top_title_ocr(
         )
         result["ready_check"] = ready
         return result
+
+    if not persist_artifacts:
+        return _verify_top_title_ocr_in_memory(
+            expected_nickname=expected_nickname,
+            hwnd=hwnd,
+            position=position,
+            engine=engine,
+            min_confidence=min_confidence,
+        )
 
     from datetime import datetime
 

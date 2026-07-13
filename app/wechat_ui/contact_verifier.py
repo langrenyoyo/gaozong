@@ -65,6 +65,7 @@ def verify_current_chat_contact(
     candidate_source: str | None = None,
     candidate_is_normalized_fallback: bool = False,
     allow_ocr: bool = True,
+    persist_ocr_artifacts: bool = True,
 ) -> dict:
     """
     确认当前微信聊天窗口的联系人是否为目标微信昵称。
@@ -205,8 +206,7 @@ def verify_current_chat_contact(
         logger.warning("策略A异常: %s", e)
 
     # =====================================================
-    # 探针模式：禁止 OCR/资料卡落盘。UIA 顶部标题未精确确认即阻断。
-    # 仅文件气泡只读探针等不落盘场景传 allow_ocr=False。
+    # 明确禁用 OCR 时，UIA 顶部标题未精确确认即阻断。
     # =====================================================
     if not allow_ocr:
         result["strategy"] = result.get("strategy") or "uia_chat_title"
@@ -225,6 +225,7 @@ def verify_current_chat_contact(
                 hwnd=hwnd,
                 position="right",
                 engine="easyocr",
+                persist_artifacts=persist_ocr_artifacts,
             )
             result["strategy"] = ocr_result.get("strategy") or "ocr_top_title"
             result["confidence"] = ocr_result.get("confidence")
@@ -488,6 +489,7 @@ def get_current_chat_title_by_ocr_title_region(
     hwnd: int,
     position: str = "right",
     engine: str = "easyocr",
+    persist_artifacts: bool = True,
 ) -> dict:
     """只识别微信顶部标题区域的 OCR 兜底。"""
     return verify_contact_by_top_title_ocr(
@@ -495,6 +497,7 @@ def get_current_chat_title_by_ocr_title_region(
         hwnd=hwnd,
         position=position,
         engine=engine,
+        persist_artifacts=persist_artifacts,
     )
 
 

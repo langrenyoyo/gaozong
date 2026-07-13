@@ -182,9 +182,10 @@ def probe_app(monkeypatch):
     monkeypatch.setenv("LOCAL_AGENT_TOKEN", "test-token")
     monkeypatch.setattr(la, "start_heartbeat_loop", lambda url: None)
 
-    # 调用跟踪：发送函数必须全零；并记录 reason / allow_ocr 真实签名
+    # 调用跟踪：发送函数必须全零；并记录联系人校验真实签名
     calls = {"set_clipboard_hdrop": 0, "write_text": 0, "press_enter": 0,
-             "authorize_send_intent": 0, "fg_reasons": [], "allow_ocr": []}
+             "authorize_send_intent": 0, "fg_reasons": [], "allow_ocr": [],
+             "persist_ocr_artifacts": []}
 
     # gate 默认通过（替身保持真实签名：ensure_wechat_foreground reason 必填无默认）
     monkeypatch.setattr(la, "is_automation_allowed", lambda: True)
@@ -197,8 +198,9 @@ def probe_app(monkeypatch):
         return {"success": True, "reason": reason}
     monkeypatch.setattr(la, "ensure_wechat_foreground", _fg)
 
-    def _verify(nick, allow_ocr=True, **kw):
+    def _verify(nick, allow_ocr=True, persist_ocr_artifacts=True, **kw):
         calls["allow_ocr"].append(allow_ocr)
+        calls["persist_ocr_artifacts"].append(persist_ocr_artifacts)
         return {"verified": True, "partial_match": False, "manual_review_required": False}
     monkeypatch.setattr(la, "verify_current_chat_contact", _verify)
 
@@ -240,9 +242,10 @@ def test_endpoint_finds_file_bubble(probe_app, monkeypatch):
     # 发送函数零调用
     assert calls["set_clipboard_hdrop"] == 0
     assert calls["write_text"] == 0
-    # 真实签名：前台守卫带 reason、联系人校验禁 OCR
+    # 真实签名：前台守卫带 reason、联系人校验只允许不落盘 OCR
     assert calls["fg_reasons"] == ["file_message_probe"]
-    assert calls["allow_ocr"] == [False]
+    assert calls["allow_ocr"] == [True]
+    assert calls["persist_ocr_artifacts"] == [False]
 
 
 def test_endpoint_same_name_text_not_matched(probe_app, monkeypatch):
@@ -330,8 +333,8 @@ def test_endpoint_response_desensitized(probe_app, monkeypatch):
     assert set(body.keys()).issubset(allowed)
 
 
-def test_probe_passes_allow_ocr_false(monkeypatch):
-    """探针端点必须向 verify_current_chat_contact 传 allow_ocr=False（禁止 OCR 落盘）。"""
+def test_probe_uses_nonpersistent_ocr(monkeypatch):
+    """探针必须允许 OCR，但禁止保存任何 OCR 截图或中间文件。"""
     from app import local_agent_main as la
     monkeypatch.setenv("LOCAL_AGENT_TOKEN", "test-token")
     monkeypatch.setattr(la, "start_heartbeat_loop", lambda url: None)
@@ -343,7 +346,10 @@ def test_probe_passes_allow_ocr_false(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(la, "verify_current_chat_contact",
-                        lambda nick, **kw: captured.update(allow_ocr=kw.get("allow_ocr")) or {
+                        lambda nick, **kw: captured.update(
+                            allow_ocr=kw.get("allow_ocr"),
+                            persist_ocr_artifacts=kw.get("persist_ocr_artifacts"),
+                        ) or {
                             "verified": True, "partial_match": False, "manual_review_required": False})
     msg_list = _MockMsgList([_file_msg("日报.xlsx", "ChatFileItemView")])
     monkeypatch.setattr(la, "find_message_list", lambda window, timeout=3: msg_list)
@@ -358,7 +364,8 @@ def test_probe_passes_allow_ocr_false(monkeypatch):
     client.post("/agent/wechat/file-message-probe", json={
         "expected_contact": "Aw3", "expected_filename": "日报.xlsx",
     })
-    assert captured["allow_ocr"] is False
+    assert captured["allow_ocr"] is True
+    assert captured["persist_ocr_artifacts"] is False
 
 
 def test_verify_current_chat_contact_no_ocr_no_disk_save(monkeypatch):
@@ -378,3 +385,98 @@ def test_verify_current_chat_contact_no_ocr_no_disk_save(monkeypatch):
     assert not r.get("debug_screenshots")
     assert not r.get("evidence", {}).get("screenshot_path")
     assert not r.get("evidence", {}).get("cropped_path")
+
+
+def test_verify_current_chat_contact_uses_nonpersistent_ocr(monkeypatch):
+    """UIA 标题为空时，探针允许内存 OCR，但不得要求任何持久化路径。"""
+    from app.wechat_ui import contact_verifier as cv
+
+    fake_window = type("W", (), {
+        "NativeWindowHandle": 12345,
+        "ClassName": "WeChatMainWndForPC",
+    })()
+    monkeypatch.setattr(cv, "find_wechat_window", lambda: fake_window)
+    monkeypatch.setattr(cv, "check_wechat_ready_for_automation", lambda hwnd: {"success": True})
+    monkeypatch.setattr(cv, "get_current_chat_title_by_uia",
+                        lambda window: {"title": None, "candidates": []})
+
+    captured = {}
+
+    def _ocr(**kwargs):
+        captured.update(kwargs)
+        return {
+            "verified": True,
+            "strategy": "ocr_top_title",
+            "ocr_text": "Aw3",
+            "matched_text": "Aw3",
+            "match_method": "exact_match",
+            "partial_match": False,
+            "confidence": 0.99,
+            "manual_review_required": False,
+            "failure_stage": None,
+            "screenshot_path": None,
+            "cropped_path": None,
+            "preprocessed_path": None,
+        }
+
+    monkeypatch.setattr(cv, "get_current_chat_title_by_ocr_title_region", _ocr)
+    result = cv.verify_current_chat_contact(
+        "Aw3",
+        allow_ocr=True,
+        persist_ocr_artifacts=False,
+    )
+
+    assert result["verified"] is True
+    assert captured["persist_artifacts"] is False
+    assert result["debug_screenshots"] == []
+    assert result["evidence"] == {
+        "screenshot_path": None,
+        "cropped_path": None,
+        "preprocessed_path": None,
+    }
+
+
+def test_top_title_ocr_nonpersistent_creates_no_files(monkeypatch, tmp_path):
+    """内存 OCR 不创建输出目录，也不返回截图或预处理文件路径。"""
+    from PIL import Image
+
+    from app.wechat_ui import contact_ocr_verifier as ocr
+    from app.wechat_ui import screenshot_debug
+
+    monkeypatch.setattr(ocr, "check_wechat_ready_for_automation", lambda hwnd: {"success": True})
+    monkeypatch.setattr(ocr, "_get_window_rect", lambda hwnd: {
+        "left": 0, "top": 0, "right": 886, "bottom": 700,
+    })
+
+    capture_paths = []
+
+    def _capture(*, bbox=None, path=None):
+        capture_paths.append(path)
+        return {
+            "success": True,
+            "path": None,
+            "error": None,
+            "stage": None,
+            "image": Image.new("RGB", (max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])), "white"),
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr(screenshot_debug, "capture_screen_result", _capture)
+    monkeypatch.setattr(ocr, "run_ocr_engine",
+                        lambda image, engine: ("Aw3", 0.99, engine, [], None, None))
+
+    output_dir = tmp_path / "must_not_exist"
+    result = ocr.verify_contact_by_top_title_ocr(
+        expected_nickname="Aw3",
+        hwnd=12345,
+        engine="easyocr",
+        output_dir=output_dir,
+        persist_artifacts=False,
+    )
+
+    assert result["verified"] is True
+    assert capture_paths == [None]
+    assert result["screenshot_path"] is None
+    assert result["cropped_path"] is None
+    assert result["preprocessed_path"] is None
+    assert not output_dir.exists()
