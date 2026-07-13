@@ -1,12 +1,17 @@
 """Phase 9 回访判定服务（9100）。
 
 冻结设计：docs/superpowers/plans/2026-07-13-phase9-return-visit-design.md（FIX4 b077feb）。
-执行包：docs/superpowers/plans/2026-07-13-phase9-return-visit-execution-package.md Task 4。
+执行包：docs/superpowers/plans/2026-07-13-phase9-return-visit-execution-package.md Task 4 + Task 4-FIX1。
 
 判定顺序（FIX4，安全阻断优先）：
 1. 提示词注入预检 → risk_flags=[prompt_injection] → blocked（不调 LLM、不兜底）。
 2. 抑制词预检 → suppress_hit → not_needed。
-3. LLM 最多一次：拒答/风险→blocked（不兜底）/ 技术故障→兜底 / 正常判定。
+3. LLM 最多一次：
+   - 模型拒答（结构化 model_refusal 或纯文本拒答）→ blocked（不进兜底）。
+   - 其他 risk_flags 非空（含畸形归一）→ blocked（不进兜底）。
+   - 技术故障（超时/网络/未配置/空输出/非 dict/普通格式错误/confidence 越界/suggested_message 缺失或非法）→ 兜底。
+   - ambiguous=true → ambiguous 不发送。
+   - 正常单场景命中：enabled / threshold / 用 LLM 生成的 suggested_message（空/超长/类型错误 → 兜底）。
 4. 关键词兜底（仅技术故障）：多场景→ambiguous；单场景+enabled→命中 fallback_message confidence=0.5；
    enabled=false→prompt_disabled；全未命中→no_match。
 
@@ -75,7 +80,16 @@ _INJECTION_PATTERNS = (
     re.compile(r"新(的)?(指令|规则|提示)"),
 )
 
-# risk_flags 固定枚举（未知值归一 policy_violation 保守阻断；≤8 项单项 ≤32 字符）
+# 模型拒答短语（json 解析失败时检测纯文本拒答，区分拒答 vs 普通格式错误；FIX1 新增）
+_REFUSAL_PATTERNS = (
+    re.compile(r"我(无法|不能|没办法|拒绝|不会|不方便)"),
+    re.compile(r"作为(一个)?(AI|人工智能)"),
+    re.compile(r"违反(政策|规定|规则|法律|道德)"),
+    re.compile(r"i (can'?t|cannot|am unable to|refuse)", re.IGNORECASE),
+    re.compile(r"sorry,? i", re.IGNORECASE),
+)
+
+# risk_flags 固定枚举（未知值归一 policy_violation；畸形一律保守阻断；≤8 项单项 ≤32 字符）
 _RISK_FLAGS_ENUM = frozenset({
     "prompt_injection",
     "sensitive_info",
@@ -86,6 +100,7 @@ _RISK_FLAGS_ENUM = frozenset({
 })
 _RISK_FLAGS_MAX = 8
 _RISK_FLAG_MAX_LEN = 32
+_SUGGESTED_MESSAGE_MAX = 500
 
 
 # ---------------------------------------------------------------------------
@@ -101,24 +116,33 @@ def _detect_injection(text: str) -> bool:
     return any(p.search(text) for p in _INJECTION_PATTERNS)
 
 
+def _looks_like_refusal(text: str) -> bool:
+    """检测纯文本拒答（json 解析失败时调用，区分拒答阻断 vs 普通格式错误兜底）。"""
+    return any(p.search(text) for p in _REFUSAL_PATTERNS)
+
+
 def _normalize_risk_flags(raw_flags: Any) -> list[str]:
-    """归一 risk_flags：未知值→policy_violation，去重，截断到 8 项，单项 ≤32 字符。"""
+    """归一 risk_flags。
+
+    畸形输入（非列表/元组、含非字符串元素、单项超长、超量）一律保守阻断返回 ['policy_violation']。
+    合法字符串但非枚举值 → 归一 policy_violation（保留其他已知值）。
+    """
+    if not isinstance(raw_flags, (list, tuple)):
+        return ["policy_violation"]
+    if len(raw_flags) > _RISK_FLAGS_MAX:
+        return ["policy_violation"]
     normalized: list[str] = []
     seen: set[str] = set()
-    if not isinstance(raw_flags, (list, tuple)):
-        return normalized
     for flag in raw_flags:
         if not isinstance(flag, str):
-            continue
-        flag = flag.strip()[:_RISK_FLAG_MAX_LEN]
-        if not flag:
-            continue
-        normalized_flag = flag if flag in _RISK_FLAGS_ENUM else "policy_violation"
+            return ["policy_violation"]
+        stripped = flag.strip()
+        if not stripped or len(stripped) > _RISK_FLAG_MAX_LEN:
+            return ["policy_violation"]
+        normalized_flag = stripped if stripped in _RISK_FLAGS_ENUM else "policy_violation"
         if normalized_flag not in seen:
             seen.add(normalized_flag)
             normalized.append(normalized_flag)
-        if len(normalized) >= _RISK_FLAGS_MAX:
-            break
     return normalized
 
 
@@ -180,16 +204,20 @@ def _log_and_build(
 def _build_llm_messages(request: ReturnVisitJudgeRequest, text: str) -> list[dict]:
     """构造 LLM 受控判定消息（system 约束输出 JSON 结构 + user 传原文）。
 
+    LLM 必须返回 prompt_key/confidence/risk_flags/suggested_message/ambiguous 五字段。
+    命中单场景时 suggested_message 必须是基于 template_text 生成的可发送客户话术（非模板原文）。
     注意：原文仅传入 LLM，不进入日志（日志脱敏见 _log_and_build）。
     """
     system_prompt = (
-        "你是回访判定助手。根据销售回复文本判断是否触发以下回访场景之一："
+        "你是回访判定与话术生成助手。根据销售回复文本判断是否触发以下回访场景之一："
         "retain_contact_conversion（留资联系方式无效需重新留资）、"
         "finance_plan_followup（金融方案跟进）、"
         "silent_customer_wakeup（沉默客户唤醒）。"
-        "严格输出 JSON：{\"prompt_key\": 场景键或null, \"confidence\": 0-1, "
-        "\"risk_flags\": []}。risk_flags 仅可为 prompt_injection/sensitive_info/"
-        "off_topic/duplicate/policy_violation/model_refusal。无法判定时 prompt_key=null。"
+        "严格只输出 JSON：{\"prompt_key\": 场景键或null, \"confidence\": 0到1, "
+        "\"risk_flags\": [], \"suggested_message\": 生成的话术或null, \"ambiguous\": false}。"
+        "risk_flags 仅可为 prompt_injection/sensitive_info/off_topic/duplicate/policy_violation/model_refusal。"
+        "命中单场景时 suggested_message 必须是基于该场景 template_text 生成的可发送客户话术，不得直接回填模板原文。"
+        "多场景同时命中时 ambiguous=true 且 suggested_message=null。无法判定时 prompt_key=null。"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -203,14 +231,19 @@ def _try_llm(
 ) -> ReturnVisitJudgment | None:
     """LLM 判定分支。
 
-    返回 ReturnVisitJudgment：LLM 正常判定 / 拒答 blocked / 风险 blocked / 未知键 no_match。
-    返回 None：LLM 技术故障（超时/网络/未配置/空输出/格式错误/置信度越界）→ 调用方走关键词兜底。
+    返回 ReturnVisitJudgment：LLM 正常判定 / 拒答 blocked / 风险 blocked / 未知键 no_match / ambiguous。
+    返回 None：LLM 技术故障（超时/网络/未配置/空输出/非 dict/普通格式错误/confidence 越界/
+              suggested_message 缺失或非法）→ 调用方走关键词兜底。
     """
     text = request.sales_reply_text or ""
     try:
         result = client.chat(_build_llm_messages(request, text))
     except (LLMNotConfiguredError, LLMRequestError):
         return None  # 技术故障 → 兜底
+
+    # 非 dict 结果 → 技术故障兜底（防止 result.get 触发 500）
+    if not isinstance(result, dict):
+        return None
 
     reply_text = str(result.get("reply_text") or "").strip()
     model = result.get("model")
@@ -220,15 +253,30 @@ def _try_llm(
     try:
         parsed = json.loads(reply_text)
     except (json.JSONDecodeError, ValueError):
-        return None  # 格式错误 → 技术故障 → 兜底
+        # 纯文本拒答 → model_refusal 阻断（不兜底）；其他格式错误 → 技术故障兜底
+        if _looks_like_refusal(reply_text):
+            return _log_and_build(
+                request,
+                prompt_key=None,
+                confidence=0.0,
+                should_trigger=False,
+                suggested_message=None,
+                judgement_source="llm",
+                judgement_result="blocked",
+                model=model,
+                risk_flags=["model_refusal"],
+            )
+        return None  # 普通格式错误 → 技术故障 → 兜底
     if not isinstance(parsed, dict):
         return None
 
     risk_flags = _normalize_risk_flags(parsed.get("risk_flags"))
     prompt_key = parsed.get("prompt_key")
     raw_confidence = parsed.get("confidence")
+    raw_suggested = parsed.get("suggested_message")
+    raw_ambiguous = parsed.get("ambiguous")
 
-    # 安全阻断（拒答/风险）→ blocked，绝不进入关键词兜底（FIX4）
+    # 安全阻断（拒答/风险/畸形）→ blocked，绝不进入关键词兜底（FIX4）
     if risk_flags:
         key = prompt_key if isinstance(prompt_key, str) and prompt_key in PROMPT_KEYS else None
         return _log_and_build(
@@ -248,6 +296,21 @@ def _try_llm(
         return None
 
     confidence = float(raw_confidence)
+
+    # LLM 自报多场景 → ambiguous 不发送
+    if isinstance(raw_ambiguous, bool) and raw_ambiguous:
+        return _log_and_build(
+            request,
+            prompt_key=None,
+            confidence=confidence,
+            should_trigger=False,
+            suggested_message=None,
+            judgement_source="llm",
+            judgement_result="ambiguous",
+            model=model,
+            risk_flags=[],
+            ambiguous=True,
+        )
 
     # prompt_key 非三键 → no_match（LLM 分支）
     if not (isinstance(prompt_key, str) and prompt_key in PROMPT_KEYS):
@@ -289,13 +352,18 @@ def _try_llm(
             model=model,
             risk_flags=[],
         )
-    # 命中：一期 suggested_message 直接用 template_text（后续可扩展 LLM 生成话术）
+    # 命中：必须使用 LLM 生成的 suggested_message；空/超长/类型错误 → 技术故障兜底
+    if not isinstance(raw_suggested, str):
+        return None
+    suggested_message = raw_suggested.strip()
+    if not suggested_message or len(suggested_message) > _SUGGESTED_MESSAGE_MAX:
+        return None
     return _log_and_build(
         request,
         prompt_key=prompt_key,
         confidence=confidence,
         should_trigger=True,
-        suggested_message=prompt.template_text,
+        suggested_message=suggested_message,
         judgement_source="llm",
         judgement_result=prompt_key,
         model=model,

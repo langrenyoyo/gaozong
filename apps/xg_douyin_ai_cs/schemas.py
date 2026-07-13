@@ -243,19 +243,43 @@ class ReturnVisitJudgeRequest(BaseModel):
     dispatch_context: dict
 
 
-# risk_flags 单项上限 32 字符（固定枚举归一后单项远小于 32）。
-RiskFlag = Annotated[str, Field(max_length=32)]
+# 稳定枚举（冻结合同：固定三键 / 判定来源 / 判定结果 / 风险标记六类）。
+PromptKey = Literal[
+    "retain_contact_conversion",
+    "finance_plan_followup",
+    "silent_customer_wakeup",
+]
+JudgementSource = Literal["llm", "keyword_fallback", "precheck"]
+JudgementResult = Literal[
+    "retain_contact_conversion",
+    "finance_plan_followup",
+    "silent_customer_wakeup",
+    "ambiguous",
+    "no_match",
+    "below_threshold",
+    "prompt_disabled",
+    "suppress_hit",
+    "blocked",
+]
+RiskFlagValue = Literal[
+    "prompt_injection",
+    "sensitive_info",
+    "off_topic",
+    "duplicate",
+    "policy_violation",
+    "model_refusal",
+]
 
 
 class ReturnVisitJudgment(BaseModel):
-    """回访判定输出（复用既有 judgement_source/judgement_result + model + risk_flags）。"""
+    """回访判定输出（枚举冻结；复用 judgement_source/judgement_result + model + risk_flags）。"""
 
-    prompt_key: str | None
+    prompt_key: PromptKey | None
     confidence: float = Field(..., ge=0, le=1)
     should_trigger: bool
     suggested_message: str | None = Field(default=None, max_length=500)
-    judgement_source: str
-    judgement_result: str
+    judgement_source: JudgementSource
+    judgement_result: JudgementResult
     model: str | None
-    risk_flags: list[RiskFlag] = Field(default_factory=list, max_length=8)
+    risk_flags: list[RiskFlagValue] = Field(default_factory=list, max_length=8)
     ambiguous: bool = False
