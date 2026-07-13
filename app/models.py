@@ -387,6 +387,7 @@ class DouyinPrivateMessageSend(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     sent_at = Column(DateTime, comment="Sent time when upstream code=0")
+    return_visit_run_id = Column(Integer, unique=True, index=True, comment="Phase 9 回访 run ID，用于防重复发送")
 
 
 class AiReplyDecisionLog(Base):
@@ -936,12 +937,24 @@ class ReturnVisitPrompt(Base):
     sort_order = Column(Integer, nullable=False, default=0, comment="排序")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Phase 9 增量（C6/F10）：confidence_threshold 仅约束 LLM；fallback_message NOT NULL 回填已批准三条文案，无占位默认
+    confidence_threshold = Column(Float, nullable=False, default=0.90, comment="场景置信度阈值 0.50-1.00，仅约束 LLM")
+    fallback_message = Column(Text, nullable=False, comment="LLM 不可用且关键词触发词命中时兜底文案（已批准三条）")
 
 
 class ReturnVisitRun(Base):
     """回访运行记录：一次回访话术生成与发送的完整链路留痕。"""
 
     __tablename__ = "return_visit_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uk_return_visit_runs_idempotency_key"),
+        Index(
+            "idx_return_visit_runs_cooldown",
+            "merchant_id", "account_open_id", "conversation_short_id",
+            "customer_open_id", "prompt_key",
+        ),
+        Index("idx_return_visit_runs_dispatch_notification", "dispatch_notification_id"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
@@ -960,6 +973,23 @@ class ReturnVisitRun(Base):
     error_message = Column(Text, comment="错误信息")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Phase 9 增量（设计 §4.2）：派单锚点 + 触发指纹 + 幂等键 + 抖音上下文 + 判定元数据 + 门禁 + 租约 + 尝试计数
+    dispatch_notification_id = Column(Integer, comment="触发回访的销售派单通知 ID（锚点查询）")
+    trigger_message_fp = Column(String(64), comment="触发消息指纹摘要，日志/审计用，不回显原文")
+    idempotency_key = Column(String(128), comment="幂等键 sha256(merchant+dispatch_notification_id+trigger_message_fp)")
+    account_open_id = Column(String(255), comment="抖音授权账号 open_id")
+    conversation_short_id = Column(String(255), comment="抖音会话 short_id")
+    customer_open_id = Column(String(255), comment="客户 open_id")
+    context_server_message_id = Column(String(255), comment="触发时最新客户消息 server_message_id（漂移检测）")
+    confidence = Column(Float, comment="LLM 置信度 0-1，关键词命中仅审计值不过阈值门禁")
+    model = Column(String(128), comment="LLM 模型标识")
+    risk_flags_json = Column(Text, comment="风险标记 JSON（6 枚举，安全命中阻断进 blocked）")
+    gate_results_json = Column(Text, comment="门禁逐项结果 JSON")
+    last_failure_stage = Column(String(100), comment="最后失败阶段（门禁/发送/恢复等）")
+    manual_takeover = Column(Boolean, nullable=False, default=False, comment="人工接管标记")
+    lease_owner = Column(String(64), comment="租约持有者（崩溃恢复单飞）")
+    lease_expires_at = Column(DateTime, comment="租约过期时间")
+    attempt_count = Column(Integer, nullable=False, default=0, comment="崩溃恢复尝试计数")
 
 
 class SalesLeadFeedback(Base):
