@@ -2,7 +2,7 @@
 
 验证 scripts/probe_phase8b_wechat_file_message_controls.py 的两个纯函数：
   - dump_control_structure：UIA 控件树脱敏 dump（顶层 + 1-2 层子控件）
-  - _sanitize_sender_debug：sender_debug 仅保留 strategy/reason + 数值字段
+  - _sanitize_sender_debug：strategy 白名单 + 完全删除 reason + 仅数值字段
 
 安全约束（任务硬要求）：
   1. 原始 Name 不出现在输出

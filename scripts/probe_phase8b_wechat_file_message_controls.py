@@ -195,7 +195,7 @@ def probe_message_controls(max_messages: int = 20, dump_structure: bool = False)
             "text_fp": _fingerprint(m.get("content")),
         }
         if dump_structure:
-            # sender_debug 仅保留 strategy/reason + 数值，不泄露正文
+            # sender_debug：白名单 strategy + 完全删除 reason + 仅数值，不泄露正文
             entry["sender_debug"] = _sanitize_sender_debug(m.get("sender_debug"))
         summary["messages"].append(entry)
 
