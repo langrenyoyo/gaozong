@@ -493,10 +493,10 @@ def test_get_data_completeness_returns_diagnostics_when_missing():
     body = resp.json()
     assert body["report_day"] == "2026-07-10"
     codes = {d["code"]: d["count"] for d in body["diagnostics"]}
-    assert codes.get("missing_attribution") == 1
-    assert codes.get("ad_metric_short_video_missing") == 1
-    assert codes.get("ad_metric_live_missing") == 1
-    assert codes.get("showroom_price_not_configured") == 1
+    assert codes.get("lead_attribution_incomplete") == 1
+    assert codes.get("short_video_ad_metric_missing") == 1
+    assert codes.get("live_ad_metric_missing") == 1
+    assert codes.get("showroom_price_profile_missing") == 1
 
 
 def test_get_data_completeness_empty_when_all_present():
@@ -517,10 +517,10 @@ def test_get_data_completeness_empty_when_all_present():
     resp = client.get("/daily-reports/data-completeness", params={"report_day": "2026-07-10"})
     assert resp.status_code == 200
     codes = {d["code"] for d in resp.json()["diagnostics"]}
-    assert "missing_attribution" not in codes
-    assert "ad_metric_short_video_missing" not in codes
-    assert "ad_metric_live_missing" not in codes
-    assert "showroom_price_not_configured" not in codes
+    assert "lead_attribution_incomplete" not in codes
+    assert "short_video_ad_metric_missing" not in codes
+    assert "live_ad_metric_missing" not in codes
+    assert "showroom_price_profile_missing" not in codes
 
 
 # ============================================================================

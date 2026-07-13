@@ -325,9 +325,9 @@ def _build_short_video_live_lead_report(
     live_ad = ad.get("live")
     diagnostics: list[ReportDiagnostic] = []
     if sv_ad is None:
-        diagnostics.append(ReportDiagnostic("ad_metric_short_video_missing"))
+        diagnostics.append(ReportDiagnostic("short_video_ad_metric_missing"))
     if live_ad is None:
-        diagnostics.append(ReportDiagnostic("ad_metric_live_missing"))
+        diagnostics.append(ReportDiagnostic("live_ad_metric_missing"))
 
     sv_ids = cohort_ids["short_video"]
     live_ids = cohort_ids["live"]
@@ -775,7 +775,8 @@ def _build_sales_unit_cost_report(
         DailyAdMetric.metric_day == report_day,
         DailyAdMetric.content_type.in_(["short_video", "live"]),
     ).all()
-    has_all_ad = {m.content_type for m in ad_metrics} >= {"short_video", "live"}
+    ad_content_types = {m.content_type for m in ad_metrics}
+    has_all_ad = ad_content_types >= {"short_video", "live"}
     total_spend = _sum_decimal(*[m.spend_amount for m in ad_metrics]) if ad_metrics else None
 
     # 当日每 lead 最后分配 staff（SQL row_number 去重，取最后一条 assign/reassign）
@@ -862,8 +863,11 @@ def _build_sales_unit_cost_report(
     total_visit = sum(s["visit"] for s in stat.values())
     total_deal = sum(s["deal"] for s in stat.values())
     diagnostics: list[ReportDiagnostic] = []
-    if not has_all_ad or total_spend is None:
-        diagnostics.append(ReportDiagnostic("ad_metric_missing"))
+    # 分别判断短视频/直播指标缺失（执行包清单码，缺哪类返回对应码，不合并笼统码）
+    if "short_video" not in ad_content_types:
+        diagnostics.append(ReportDiagnostic("short_video_ad_metric_missing"))
+    if "live" not in ad_content_types:
+        diagnostics.append(ReportDiagnostic("live_ad_metric_missing"))
     # 合计成本：广告缺失→None（数据源未接入）；分母 0→Decimal 0；>0→总消耗/分母
     effective_spend = total_spend if (has_all_ad and total_spend is not None) else None
     visit_cost_total = None if effective_spend is None else (Decimal("0") if total_visit <= 0 else effective_spend / total_visit)

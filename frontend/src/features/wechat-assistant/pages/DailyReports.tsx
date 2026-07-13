@@ -59,11 +59,19 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
   failed: { label: "失败", tone: "text-rose-600" },
 };
 
+// 执行包稳定诊断码（与后端 daily_report_service / daily_report_data_service 同一组）
 const COMPLETENESS_LABELS: Record<string, string> = {
-  missing_attribution: "待归因线索",
-  ad_metric_short_video_missing: "短视频广告指标缺失",
-  ad_metric_live_missing: "直播广告指标缺失",
-  showroom_price_not_configured: "展厅价位未配置",
+  lead_attribution_incomplete: "待归因线索",
+  short_video_ad_metric_missing: "短视频广告指标缺失",
+  live_ad_metric_missing: "直播广告指标缺失",
+  showroom_price_profile_missing: "展厅价位未配置",
+  budget_text_unparseable: "预算文本不可解析",
+  ad_spend_allocation_unavailable: "广告消耗分摊不可用",
+  daily_summary_llm_failed: "每日总结摘要失败",
+  daily_summary_input_too_large: "每日总结输入过大",
+  trace_source_incomplete: "溯源信息不完整",
+  // 任务编排层系统级稳定码（非报表数据完整度，仅暴露 exception_type，不暴露异常正文）
+  generation_failed: "生成失败",
 };
 
 const SKIP_REASON_LABELS: Record<string, string> = {
@@ -91,7 +99,11 @@ function todayStr(): string {
 function diagnosticsText(job: DailyReportJobItem): string {
   if (!job.diagnostics || job.diagnostics.length === 0) return "";
   return job.diagnostics
-    .map((d) => (d.exception_type ? `${d.code}(${d.exception_type})×${d.count}` : `${d.code}×${d.count}`))
+    .map((d) => {
+      // 中文标签映射；未知码原文兜底，不静默隐藏
+      const label = COMPLETENESS_LABELS[d.code] ?? d.code;
+      return d.exception_type ? `${label}(${d.exception_type})×${d.count}` : `${label}×${d.count}`;
+    })
     .join("，");
 }
 

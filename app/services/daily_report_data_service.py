@@ -295,11 +295,11 @@ def get_report_data_completeness(
 ) -> dict:
     """返回 report_day 的结构化完整度诊断（只列 count>0 的稳定诊断码）。
 
-    诊断码：
-    - missing_attribution：当天入库线索中无归因的计数；
-    - ad_metric_short_video_missing：当天无 short_video 广告指标则 1；
-    - ad_metric_live_missing：当天无 live 广告指标则 1；
-    - showroom_price_not_configured：未配置展厅价位则 1。
+    诊断码（执行包稳定诊断码清单，与报表生成/前端标签同一组）：
+    - lead_attribution_incomplete：当天入库线索中无归因的计数；
+    - short_video_ad_metric_missing：当天无 short_video 广告指标则 1；
+    - live_ad_metric_missing：当天无 live 广告指标则 1；
+    - showroom_price_profile_missing：未配置展厅价位则 1。
     """
     start, end = bounds
     day_lead_ids = [
@@ -337,11 +337,11 @@ def get_report_data_completeness(
 
     diagnostics: list[dict] = []
     if missing_count > 0:
-        diagnostics.append({"code": "missing_attribution", "count": missing_count})
+        diagnostics.append({"code": "lead_attribution_incomplete", "count": missing_count})
     if not has_short_video:
-        diagnostics.append({"code": "ad_metric_short_video_missing", "count": 1})
+        diagnostics.append({"code": "short_video_ad_metric_missing", "count": 1})
     if not has_live:
-        diagnostics.append({"code": "ad_metric_live_missing", "count": 1})
+        diagnostics.append({"code": "live_ad_metric_missing", "count": 1})
     if not has_profile:
-        diagnostics.append({"code": "showroom_price_not_configured", "count": 1})
+        diagnostics.append({"code": "showroom_price_profile_missing", "count": 1})
     return {"report_day": report_day, "diagnostics": diagnostics}

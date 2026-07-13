@@ -26,6 +26,12 @@ const assertContains = (text, needle, msg) => {
 const assertNotContains = (text, needle, msg) => {
   if (text.includes(needle)) failures.push(`禁区命中：${msg}（出现 "${needle}"）`);
 };
+// 单词边界匹配：旧码 ad_metric_missing 是规范码 short_video_ad_metric_missing 的子串，
+// 用 \b 避免子串误伤（_ad_metric_missing 中 _ 与 a 均为 \w，无单词边界，不匹配）
+const assertNotContainsWord = (text, needle, msg) => {
+  const re = new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+  if (re.test(text)) failures.push(`禁区命中：${msg}（出现 "${needle}"）`);
+};
 
 const dailyReportsApi = read("src/api/dailyReports.ts");
 const types = read("src/api/types.ts");
@@ -71,6 +77,30 @@ if (!adBlock) {
   failures.push("未找到 DailyAdMetricUpsert type");
 } else if (adBlock[0].includes("ad_id") || adBlock[0].includes("material_id")) {
   failures.push("DailyAdMetricUpsert 不应含广告 ID/素材 ID 明细输入");
+}
+
+// 8. 稳定诊断码规范（执行包清单码存在，旧码零命中）
+for (const code of [
+  "lead_attribution_incomplete",
+  "short_video_ad_metric_missing",
+  "live_ad_metric_missing",
+  "showroom_price_profile_missing",
+  "budget_text_unparseable",
+  "ad_spend_allocation_unavailable",
+  "daily_summary_llm_failed",
+  "daily_summary_input_too_large",
+  "trace_source_incomplete",
+]) {
+  assertContains(page, code, `清单稳定诊断码 ${code}`);
+}
+for (const stale of [
+  "ad_metric_short_video_missing",
+  "ad_metric_live_missing",
+  "ad_metric_missing",
+  "showroom_price_not_configured",
+  "missing_attribution",
+]) {
+  assertNotContainsWord(page, stale, `旧诊断码 ${stale} 应已下线`);
 }
 
 if (failures.length > 0) {

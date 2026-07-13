@@ -399,7 +399,8 @@ def test_short_video_live_lead_missing_ad_is_none_not_zero():
         assert total_row["retained_rate"] is None
         assert not result.is_complete
         codes = {d.code for d in result.diagnostics}
-        assert "ad_metric_short_video_missing" in codes
+        assert "short_video_ad_metric_missing" in codes
+        assert "live_ad_metric_missing" in codes  # 报表1 无广告时两类都缺
     finally:
         db.close()
 
@@ -1081,6 +1082,10 @@ def test_sales_unit_cost_missing_ad_no_fake_cost():
         total = next(r for r in result.rows if r["sales_name"] == "合计")
         assert total["visit_cost"] is None
         assert not result.is_complete
+        # 两类广告都缺 → 两个诊断码（不合并笼统码）
+        codes = [d.code for d in result.diagnostics]
+        assert codes.count("short_video_ad_metric_missing") == 1
+        assert codes.count("live_ad_metric_missing") == 1
     finally:
         db.close()
 
@@ -1104,6 +1109,64 @@ def test_sales_unit_cost_zero_denominator_visit_zero():
         assert total["deal_count"] == 0
         assert total["visit_cost"] == Decimal("0")  # 分母 0→数值 0.00
         assert total["deal_cost"] == Decimal("0")
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_only_short_video_missing():
+    """仅缺短视频广告：只返回 short_video_ad_metric_missing，不返回 live。"""
+    sid = _insert_staff()
+    l = _insert_lead(conv="osv", assigned_staff_id=sid)
+    _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
+    _insert_ad(content_type="live", spend="100.00", msg=5)  # 仅 live
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        codes = {d.code for d in result.diagnostics}
+        assert "short_video_ad_metric_missing" in codes
+        assert "live_ad_metric_missing" not in codes
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_only_live_missing():
+    """仅缺直播广告：只返回 live_ad_metric_missing，不返回 short_video。"""
+    sid = _insert_staff()
+    l = _insert_lead(conv="olv", assigned_staff_id=sid)
+    _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
+    _insert_ad(content_type="short_video", spend="200.00", msg=10)  # 仅 sv
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        codes = {d.code for d in result.diagnostics}
+        assert "live_ad_metric_missing" in codes
+        assert "short_video_ad_metric_missing" not in codes
+    finally:
+        db.close()
+
+
+def test_sales_unit_cost_both_ad_present_no_ad_diagnostic():
+    """两类广告都存在：无广告缺失诊断。"""
+    sid = _insert_staff()
+    l = _insert_lead(conv="bap", assigned_staff_id=sid)
+    _insert_followup(lead_id=l, staff_id=sid, record_type="assign")
+    _insert_ad(content_type="short_video", spend="200.00", msg=10)
+    _insert_ad(content_type="live", spend="100.00", msg=5)
+    db = _db()
+    try:
+        result = svc.build_daily_report(
+            db, merchant_id=_MERCHANT, report_day=_REPORT_DAY,
+            report_type=svc.REPORT_SALES_UNIT_COST,
+        )
+        codes = {d.code for d in result.diagnostics}
+        assert "short_video_ad_metric_missing" not in codes
+        assert "live_ad_metric_missing" not in codes
     finally:
         db.close()
 
