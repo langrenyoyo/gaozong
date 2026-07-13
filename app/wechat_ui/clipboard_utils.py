@@ -7,11 +7,104 @@ from ctypes import wintypes
 
 
 CF_UNICODETEXT = 13
+CF_HDROP = 15
 GMEM_MOVEABLE = 0x0002
 
 
 class ClipboardError(RuntimeError):
     """剪贴板操作失败。"""
+
+
+class DROPFILES(ctypes.Structure):
+    """Win32 DROPFILES 结构，CF_HDROP 剪贴板数据头。
+
+    pFiles 指向文件列表偏移（sizeof(DROPFILES)=20）；fWide=1 表示文件名为 UTF-16。
+    """
+
+    _fields_ = [
+        ("pFiles", ctypes.c_uint32),
+        ("pt_x", ctypes.c_long),
+        ("pt_y", ctypes.c_long),
+        ("fNC", ctypes.c_int32),
+        ("fWide", ctypes.c_int32),
+    ]
+
+
+def build_hdrop_payload(file_path: str) -> bytes:
+    """构造 CF_HDROP payload：DROPFILES 头 + 文件绝对路径 UTF-16LE + 双 NUL 结尾。
+
+    每条路径以 UTF-16 NUL（\\x00\\x00）结尾，列表整体再补一个 UTF-16 NUL。
+    """
+    header = DROPFILES()
+    header.pFiles = ctypes.sizeof(DROPFILES)  # 20
+    header.pt_x = 0
+    header.pt_y = 0
+    header.fNC = 0
+    header.fWide = 1
+    path_blob = file_path.encode("utf-16-le") + b"\x00\x00\x00\x00"  # 路径 NUL + 列表结束 NUL
+    return bytes(header) + path_blob
+
+
+def backup_clipboard_text() -> str | None:
+    """备份当前剪贴板文本（用于发送后恢复）。失败返回 None。"""
+    try:
+        return get_clipboard_text()
+    except Exception:
+        return None
+
+
+def restore_clipboard_text(text: str | None) -> None:
+    """恢复剪贴板文本。text 为 None 或恢复失败均静默跳过（不阻断主流程）。"""
+    if text is None:
+        return
+    try:
+        set_clipboard_text(text)
+    except Exception:
+        pass
+
+
+def set_clipboard_hdrop(file_path: str, user32=None, kernel32=None) -> None:
+    """写入 CF_HDROP 文件剪贴板（单文件，UTF-16LE 双 NUL）。
+
+    SetClipboardData 成功后系统接管 h_global，不再 GlobalFree；失败才释放。
+    """
+    if user32 is None or kernel32 is None:
+        user32, kernel32 = _get_win32_api()
+    else:
+        _configure_win32_clipboard_api(user32, kernel32)
+
+    payload = build_hdrop_payload(file_path)
+    handle = None
+    ownership_transferred = False
+
+    if not user32.OpenClipboard(None):
+        raise ClipboardError(_last_error_message("OpenClipboard"))
+    try:
+        if not user32.EmptyClipboard():
+            raise ClipboardError(_last_error_message("EmptyClipboard"))
+
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(payload))
+        if not handle:
+            raise ClipboardError(_last_error_message("GlobalAlloc"))
+
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            kernel32.GlobalFree(handle)
+            handle = None
+            raise ClipboardError(_last_error_message("GlobalLock"))
+
+        try:
+            ctypes.memmove(ptr, payload, len(payload))
+        finally:
+            kernel32.GlobalUnlock(handle)
+
+        if not user32.SetClipboardData(CF_HDROP, handle):
+            raise ClipboardError(_last_error_message("SetClipboardData"))
+        ownership_transferred = True
+    finally:
+        if handle and not ownership_transferred:
+            kernel32.GlobalFree(handle)
+        user32.CloseClipboard()
 
 
 def _load_pyperclip():
