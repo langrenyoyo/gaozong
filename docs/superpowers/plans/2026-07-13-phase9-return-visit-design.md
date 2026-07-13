@@ -47,7 +47,7 @@ Phase 9 在该链路之后增加"回访"能力（master plan 行 475）：当销
 | C4 | ReplyCheck 状态与回访触发解耦 |
 | C5 | 持久化 `ReturnVisitRun`（含完整标准化回复包）后异步处理；统一入口 `process_return_visit_run(run_id)`；请求路径用 FastAPI `BackgroundTasks`，启动路径在 lifespan `startup` 中启动一次性、有界、单飞后台任务；不引入周期高频 worker；不丢失已持久化任务 |
 | C6 | LLM 输出 `confidence` 范围 `0～1`；配置 `confidence_threshold` 范围 `0.50～1.00` 初始 `0.90`；**阈值仅约束 LLM 的 `completed` 分支**，关键词兜底不参与阈值门禁 |
-| C7 | LLM 优先；LLM 不可用时关键词兜底；关键词分**触发词**与**抑制词**（抑制优先阻断）；多场景命中记 `ambiguous` 不发送；单场景触发词命中且场景 `enabled` 直接用 `fallback_message`，`confidence=0.5` 仅审计值；关键词固定代码不入 DB |
+| C7 | LLM 优先；**仅技术故障**（超时/网络异常/未配置/空输出/普通格式错误/置信度越界）时关键词兜底；**模型拒答 `model_refusal` 与提示词注入 `prompt_injection` 为安全阻断**，写 `risk_flags` 进 `blocked`，**不进入关键词兜底**；关键词分**触发词**与**抑制词**（抑制优先阻断）；多场景命中记 `ambiguous` 不发送；单场景触发词命中且场景 `enabled` 直接用 `fallback_message`，`confidence=0.5` 仅审计值；关键词固定代码（9100 判定模块）不入 DB |
 | C8 | 消息级永久幂等键 = `sha256(merchant_id + dispatch_notification_id + trigger_message_fp)`（不含 `prompt_key`）；会话级 24h 冷却按 `(merchant_id, account_open_id, conversation_short_id, customer_open_id, prompt_key)` 统计，时间基准为 `DouyinPrivateMessageSend.sent_at`（JOIN 发送流水），**仅 `sent` 计入** |
 | C9 | 安全熔断使用抖音 env 总熔断 + `AutoReplyRolloutConfig.real_send_enabled`；**不使用**微信 `is_automation_allowed`；**不使用**账号/客户灰度白名单 |
 | C10 | 状态机 11 态；除 `pending_judgement/processing/send_authorized` 外其余 **8 态为不可重试终态**；崩溃恢复分层：`pending_judgement` 重调度、未授权 `processing` 回 `pending_judgement`、`send_authorized` 只核对发送流水（已发送→`sent`，否则→`send_unknown`），**绝不重发**；新消息创建新 run ≠ 旧终态 run 可继续 |
@@ -125,13 +125,16 @@ Phase 9 在该链路之后增加"回访"能力（master plan 行 475）：当销
         │  claim: pending_judgement → processing（lease_owner + lease_expires_at）
         │
         ▼  调用内部协议 /internal/return-visits/decide-and-generate（XgDouyinAiCsClient + X-Internal-Service-Token）
-9100 LLM 判定（LLM 优先，关键字兜底，C7）
+9100 LLM 判定（LLM 优先，关键字兜底仅技术故障，C7）
         │  入参含 sales_reply_text = run.trigger_text（DB 读取，崩溃可重判定）
         │  输出：prompt_key / confidence(0-1) / suggested_message / judgement_source /
         │        judgement_result / model / risk_flags(固定枚举) / ambiguous
+        │  提示词注入预检（兜底前）→ risk_flags=[prompt_injection] → blocked（不进兜底）
+        │  模型拒答 model_refusal → risk_flags=[model_refusal] → blocked（不进兜底）
         │  抑制词命中 → not_needed（suppress_hit）
-        │  risk_flags 命中 → blocked（风险阻断）
+        │  其他 risk_flags 命中 → blocked（风险阻断）
         │  多场景命中 → ambiguous 不发送
+        │  仅技术故障（超时/网络/未配置/空输出/普通格式错误/置信度越界）→ 关键词兜底
         ▼
 判定结果分流
         │  未命中 → not_needed
@@ -320,24 +323,28 @@ ReturnVisitJudgment:
 
 **risk_flags 固定枚举**（`{prompt_injection, sensitive_info, off_topic, duplicate, policy_violation, model_refusal}`；未知值归一 `policy_violation` 保守阻断）。
 
-### 5.4 判定顺序（抑制优先，LLM 优先，关键词命中也检查 enabled）
+### 5.4 判定顺序（安全阻断优先，LLM 优先，关键词兜底仅技术故障，关键词命中也检查 enabled）
 
-1. **抑制词预检**（最高优先级，C7）：命中抑制词 → `judgement_result=suppress_hit`，`should_trigger=false`。
-2. **LLM 优先**（`judgement_source=llm`）：
-   - LLM 正常（输出受控结构、confidence ∈ [0,1]、prompt_key 为三键之一、非空输出、非模型拒答）：
-     - `risk_flags` 非空 → 返回，门禁 G10 阻断（不在此拦截判定）。
+1. **提示词注入安全预检**（最高优先级，LLM 与兜底前）：销售回复含指令性注入 → `risk_flags=[prompt_injection]`，`should_trigger=false`，进 `blocked`（**既不进入 LLM 也不进入关键词兜底**）。
+2. **抑制词预检**（C7）：命中抑制词 → `judgement_result=suppress_hit`，`should_trigger=false`，进 `not_needed`。
+3. **LLM 优先**（`judgement_source=llm`）：
+   - **模型拒答**（`model_refusal`）→ `risk_flags=[model_refusal]`，进 `blocked`（**安全阻断，不进关键词兜底**）。
+   - **其他 `risk_flags` 非空** → 返回，门禁 G10 阻断（不在此拦截判定）。
+   - **LLM 技术故障**（超时/网络异常/未配置/空输出/普通格式错误/置信度越界）→ 进入步骤 4 关键词兜底。
+   - LLM 正常（输出受控结构、confidence ∈ [0,1]、prompt_key 为三键之一、非空输出、非拒答）：
      - 多场景命中 → `ambiguous`，不发送。
      - 场景 `enabled=false` → `prompt_disabled`。
      - 单场景 + `confidence >= confidence_threshold` → 命中，`suggested_message` 基于 template_text 生成。
      - 单场景 + `confidence < 阈值` → `below_threshold`（阈值仅约束 LLM）。
      - 未命中 → `no_match`。
-   - LLM 不可用（异常/超时/格式错误/置信度越界/空输出/模型拒答/未配置）→ 进入步骤 3。
-3. **关键词兜底**（`judgement_source=keyword_fallback`，C7）：
-   - 关键字固定代码常量，分触发词与抑制词。
+4. **关键词兜底**（`judgement_source=keyword_fallback`，**仅 LLM 技术故障时执行**，C7）：
+   - 关键字固定代码常量（9100 判定模块），分触发词与抑制词。
    - **关键词命中后也必须检查 `prompt.enabled`**：`enabled=false` → `prompt_disabled`。
    - 多场景触发词同时命中 → `ambiguous`，不发送。
    - 单场景触发词命中 + `enabled=true` → **直接触发**，`suggested_message=fallback_message`，`confidence=0.5`（审计值，不过阈值门禁），`judgement_result=命中 prompt_key`。
    - 全未命中 → `no_match`。
+
+> **安全阻断不进兜底**：模型拒答（`model_refusal`）与提示词注入（`prompt_injection`）写 `risk_flags` 进 `blocked`，**绝不进入关键词兜底**；只有超时、网络异常、未配置、空输出、普通格式错误、置信度越界等**技术故障**才允许关键词兜底。
 
 ### 5.5 判定结果到状态映射
 
@@ -353,10 +360,10 @@ ReturnVisitJudgment:
 
 ### 5.6 严格性约束
 
-- LLM 输出受控结构；解析失败/越界/空/拒答/超时 → 视为不可用 → 关键词兜底。
+- LLM 输出受控结构；**技术故障**（解析失败/超时/网络异常/未配置/空输出/普通格式错误）→ 关键词兜底；**模型拒答**（`model_refusal`）→ 安全阻断进 `blocked`，**不进关键词兜底**。
 - `prompt_key` 必须为三键之一，未知键 → `no_match`。
-- `confidence` 越界（<0 或 >1）→ 视为不可用 → 关键词兜底。
-- 提示词注入检测（销售回复含指令性注入）→ `risk_flags=[prompt_injection]` → 阻断。
+- `confidence` 越界（<0 或 >1）→ 视为技术故障 → 关键词兜底。
+- 提示词注入预检在 LLM 调用与关键词兜底**之前**完成，命中即 `risk_flags=[prompt_injection]` → `blocked`（不进兜底）。
 - 9100 日志只记 `lead_id` / `prompt_key` / `confidence` / `judgement_source` / `judgement_result` / `model` / `risk_flags`，不记原文。
 
 ---
@@ -365,7 +372,7 @@ ReturnVisitJudgment:
 
 ### 6.1 关键词（固定代码，触发词 + 抑制词，抑制优先，C7）
 
-关键字定义在 `app/services/return_visit_run_service.py` 模块级常量，不入 DB。基于 master plan 行 492-495：
+关键字定义在 **9100 判定模块** `apps/xg_douyin_ai_cs/services/return_visit_judge_service.py` 模块级常量，不入 DB（关键词兜底由 9100 `judge_return_visit` 执行）。**9000 仅负责持久化、调用 9100、门禁与发送，不持有判定/关键词逻辑**；9100 不反向依赖 9000 业务服务。基于 master plan 行 492-495：
 
 **抑制词**（最高优先级，命中即 `suppress_hit`）：
 `不是手机号不对`、`号码没问题`、`已联系上`、`客户已回复`、`客户回消息了`、`无需回访`、`不用回访`、`已成交`、`已到店`
@@ -493,7 +500,8 @@ if account_sent >= limit: rate_limited / frequency_account_exceeded
 
 1. `return_visit_prompts` 安全重建：
    - CREATE `_new`（全部旧列 + `confidence_threshold FLOAT NOT NULL DEFAULT 0.90` + `fallback_message TEXT NOT NULL`**无 DEFAULT**）。
-   - INSERT SELECT：旧列直选；`fallback_message` 用 `CASE prompt_key WHEN 'retain_contact_conversion' THEN '<文案1>' WHEN 'finance_plan_followup' THEN '<文案2>' WHEN 'silent_customer_wakeup' THEN '<文案3>' ELSE '<兜底>' END`（不保留占位默认）。
+   - **迁移前校验**：`SELECT COUNT(*) FROM return_visit_prompts WHERE prompt_key NOT IN ('retain_contact_conversion','finance_plan_followup','silent_customer_wakeup')` 必须为 0；非 0 立即 ROLLBACK 不登记 0030（表中只能存在三个冻结键）。
+   - INSERT SELECT：旧列直选；`fallback_message` 用 `CASE prompt_key WHEN 'retain_contact_conversion' THEN '<文案1>' WHEN 'finance_plan_followup' THEN '<文案2>' WHEN 'silent_customer_wakeup' THEN '<文案3>' END`（**无 ELSE 兜底**；前置校验已保证仅三键，CASE 未匹配则 NULL 触发 NOT NULL 约束失败回滚）。
    - 行数 + max(id) + 双向 GROUP BY 守卫（含 fallback_message 非空 CHECK）→ RENAME 旧 `_backup`、`_new` 正式 → DROP `_backup`。CHECK 违反 ROLLBACK 不登记 0030。
 2. `return_visit_runs` 安全重建：CREATE `_new`（全部旧列 + §4.2 新列 + `idempotency_key` + UNIQUE + 索引）→ INSERT SELECT 旧数据 → 守卫 → RENAME 替换。
 3. `douyin_private_message_sends` 安全重建：CREATE `_new`（全部旧列含 `auto_reply_run_id UNIQUE` + `return_visit_run_id` + UNIQUE）→ INSERT SELECT → 守卫 → RENAME。
@@ -548,11 +556,13 @@ if account_sent >= limit: rate_limited / frequency_account_exceeded
 | 抑制词命中 | suppress_hit → not_needed |
 | 多场景触发词命中 | ambiguous，不发送 |
 | **未知场景键**（LLM 返回非三键） | 视为 no_match |
-| **越界置信度**（<0 或 >1） | 视为 LLM 不可用 → 关键词兜底 |
-| **提示词注入**（销售回复含注入指令） | risk_flags=[prompt_injection] → blocked |
-| **空输出**（LLM 返回空） | 视为不可用 → 关键词兜底 |
-| **超时**（LLM 超时） | 视为不可用 → 关键词兜底 |
-| **模型拒答**（refusal） | risk_flags=[model_refusal] 或视为不可用，不发送 |
+| **越界置信度**（<0 或 >1） | 视为技术故障 → 关键词兜底 |
+| **空输出**（LLM 返回空） | 视为技术故障 → 关键词兜底 |
+| **超时**（LLM 超时） | 视为技术故障 → 关键词兜底 |
+| **网络异常 / 未配置 / 普通格式错误** | 视为技术故障 → 关键词兜底 |
+| **提示词注入**（销售回复含注入指令） | risk_flags=[prompt_injection] → blocked（**不进兜底**） |
+| **模型拒答**（refusal） | risk_flags=[model_refusal] → blocked（**不进兜底**） |
+| 提示词注入 + LLM 技术故障叠加 | 注入预检先阻断 → blocked（不进兜底） |
 | risk_flags 非空 | 返回，门禁 G10 阻断 |
 | risk_flags 未知值 | 归一 policy_violation 保守阻断 |
 | risk_flags 数量 >8 或单项 >32 字符 | 视为无效 → 阻断 |
@@ -686,7 +696,8 @@ if account_sent >= limit: rate_limited / frequency_account_exceeded
 - G5 三独立阻断：`outbound_after_trigger` / `latest_not_customer` / `context_drifted`。
 - 幂等键 = `sha256(merchant + dispatch_notification_id + trigger_message_fp)`，不含 prompt_key（F11）。
 - 熔断：抖音 env + `AutoReplyRolloutConfig.real_send_enabled`（C9），不用微信 is_automation_allowed/白名单。
-- 关键词：触发词+抑制词，抑制优先，ambiguous 不发送，**关键词命中也检查 enabled**，固定代码（C7）。
+- 关键词：触发词+抑制词，抑制优先，ambiguous 不发送，**关键词命中也检查 enabled**，固定代码（**归属 9100 判定模块** `apps/xg_douyin_ai_cs/services/return_visit_judge_service.py`；9000 不持有判定逻辑，C7）。
+- **安全阻断 vs 技术故障**：模型拒答 `model_refusal` + 提示词注入 `prompt_injection` → `risk_flags` → `blocked`，**不进关键词兜底**；仅技术故障（超时/网络/未配置/空输出/普通格式错误/置信度越界）允许关键词兜底。
 - 发送：复用底层 `_send_private_message_with_context`，send_source=`return_visit_auto`，不经上层 ai_auto_reply_send_service（C12）；不复用 `_frequency_snapshot`（N9）。
 - 复用既有 `judgement_source`/`judgement_result`/`trigger_text`（持久化完整回复包），不新增 decision_source/reason_code。
 - 恢复：统一入口 `process_return_visit_run`；请求 BackgroundTasks + 启动 lifespan 一次性有界单飞任务（F14）。
@@ -719,7 +730,7 @@ if account_sent >= limit: rate_limited / frequency_account_exceeded
 1. 迁移：SQLite 0030 / PG 0011（安全重建/先可空回填校验SET NOT NULL + 真实回滚 + 已批准三条文案）。
 2. 底层发送扩展：`_send_private_message_with_context` 加 return_visit_run_id + send_source/违禁词 source。
 3. 9100 `judge_return_visit` + `/internal/return-visits/decide-and-generate`（复用既有内部鉴权链，model/risk_flags 固定枚举）。
-4. 关键词常量（触发词+抑制词+三条件+enabled 检查）。
+4. 关键词常量（触发词+抑制词+三条件+enabled 检查，**归属 9100 `return_visit_judge_service`，随第 3 项 `judge_return_visit` 实现**）。
 5. 9000 回访触发 + 持久化(trigger_text 完整包) + 统一入口 `process_return_visit_run` + 请求 BackgroundTasks + 启动 lifespan 一次性任务 + 分层对账 + 幂等。
 6. C-安全版 11 门禁（env + DB real_send_enabled + 人工接管 + G5 三条件 + 限频 sent_at 基准回落60 + 冷却 sent_at JOIN + risk_flags）。
 7. 管理 API + 前端（PUT reason + record_admin_audit）。
