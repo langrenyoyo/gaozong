@@ -131,3 +131,7 @@ docker-data-staging/
 agent/
 skills/
 skills-lock.json
+
+
+# example
+phase8-visual-samples/
