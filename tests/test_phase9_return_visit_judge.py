@@ -49,9 +49,16 @@ PROMPT_KEYS = (
 )
 
 
-def _prompt(key: str, *, enabled: bool = True, threshold: float = 0.90, fallback: str | None = None) -> ReturnVisitPromptInput:
+def _prompt(
+    key: str,
+    *,
+    enabled: bool = True,
+    threshold: float = 0.90,
+    fallback: str | None = None,
+    template: str | None = None,
+) -> ReturnVisitPromptInput:
     return ReturnVisitPromptInput(
-        template_text=f"{key}-template",
+        template_text=template if template is not None else f"{key}-template",
         fallback_message=fallback or f"{key}-fallback",
         confidence_threshold=threshold,
         enabled=enabled,
@@ -654,3 +661,104 @@ def test_schema_literal_accepts_all_blocked_results():
             risk_flags=[],
         )
         assert j.judgement_result == result
+
+
+# ---------------------------------------------------------------------------
+# 红灯 9（FIX2）：LLM user payload 含模板 + ambiguous 严格 + 话术去重
+# ---------------------------------------------------------------------------
+
+
+def test_llm_request_payload_includes_templates_and_reply_excludes_fallback(caplog):
+    """FIX2 高：LLM user payload 必须含三键 template_text + sales_reply_text；
+    不含 fallback_message；日志无原文/模板/话术。"""
+    caplog.set_level(logging.DEBUG)
+    custom_templates = {
+        "retain_contact_conversion": "留资场景模板UNIQUE_A",
+        "finance_plan_followup": "金融场景模板UNIQUE_B",
+        "silent_customer_wakeup": "沉默场景模板UNIQUE_C",
+    }
+    prompts = {
+        key: _prompt(key, template=custom_templates[key], fallback=f"{key}-fallback-LEAK")
+        for key in PROMPT_KEYS
+    }
+    reply_original = "客户回复原文UNIQUE_REPLY"
+    request = _request(reply_original, prompts=prompts)
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="生成话术UNIQUE_GEN",
+        )
+    )
+    judge_return_visit(request, llm_client=client)
+
+    # 捕获 messages：user payload 必须是结构化 JSON
+    assert client.last_messages is not None
+    user_content = client.last_messages[-1]["content"]
+    user_payload = json.loads(user_content)
+    # 三键 template_text 进入请求
+    for key in PROMPT_KEYS:
+        assert user_payload["prompts"][key] == custom_templates[key], f"{key} template_text 未进入 LLM 请求"
+    # sales_reply_text 进入请求
+    assert user_payload["sales_reply_text"] == reply_original
+    # fallback_message 不进入请求
+    assert "fallback-LEAK" not in user_content, "fallback_message 不应进入 LLM 请求"
+    # 日志无原文/模板/话术
+    for record in caplog.records:
+        msg = record.getMessage()
+        assert reply_original not in msg, "日志泄露销售回复原文"
+        for key in PROMPT_KEYS:
+            assert custom_templates[key] not in msg, f"日志泄露 {key} 模板"
+        assert "生成话术UNIQUE_GEN" not in msg, "日志泄露 LLM 生成话术"
+
+
+@pytest.mark.parametrize(
+    "ambiguous_value",
+    ["true", 1, "yes", None],
+    ids=["string_true", "int_one", "string_yes", "null"],
+)
+def test_malformed_ambiguous_falls_back(ambiguous_value):
+    """FIX2 中：ambiguous 非 bool（字符串/数字/null）→ 技术故障兜底，不进 LLM 单场景触发。"""
+    request = _request("客户说空号")  # retain 触发词，验证降级到 keyword_fallback 命中
+    raw = json.dumps({
+        "prompt_key": "retain_contact_conversion",
+        "confidence": 0.95,
+        "risk_flags": [],
+        "suggested_message": "生成话术",
+        "ambiguous": ambiguous_value,
+    })
+    client = _StubLLM(reply_text=raw)
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", (
+        f"ambiguous={ambiguous_value!r} 必须降级兜底，不得进 LLM 单场景"
+    )
+
+
+def test_missing_ambiguous_field_falls_back():
+    """FIX2 中：LLM JSON 缺失 ambiguous 字段 → 技术故障兜底。"""
+    request = _request("客户说空号")
+    raw = json.dumps({
+        "prompt_key": "retain_contact_conversion",
+        "confidence": 0.95,
+        "risk_flags": [],
+        "suggested_message": "生成话术",
+        # 故意缺失 ambiguous
+    })
+    client = _StubLLM(reply_text=raw)
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", "缺失 ambiguous 必须降级兜底"
+
+
+def test_suggested_message_equals_template_falls_back():
+    """FIX2：模型生成话术与 template_text 完全相同 → 技术故障兜底（避免发送模板占位文本）。"""
+    request = _request("客户说空号")
+    template = request.prompts["retain_contact_conversion"].template_text
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message=template,  # 与 template_text 完全相同
+        )
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", "suggested_message==template_text 必须降级兜底"
