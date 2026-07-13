@@ -208,6 +208,149 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
         return {"ok": False, "status": None, "json": None, "error": str(exc)}
 
 
+class DownloadError(Exception):
+    """受控下载错误（code 化，不携带 token/path/内容原文）。"""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+_ATTACHMENT_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _safe_attachment_basename(name: str) -> str:
+    """basename 化并校验仅 .xlsx、无穿越/控制字符；不安全抛 DownloadError。"""
+    if not name or not isinstance(name, str):
+        raise DownloadError("filename_empty")
+    if "/" in name or "\\" in name or ".." in name or "\x00" in name:
+        raise DownloadError("filename_unsafe")
+    base = os.path.basename(name)
+    if base != name:
+        raise DownloadError("filename_unsafe")
+    if not base.lower().endswith(".xlsx"):
+        raise DownloadError("filename_not_xlsx")
+    return base
+
+
+def _download_report_attachment(
+    *, server_url: str, task_id: int, execution_token: str,
+    download_ticket: str, expected_name: str,
+    expected_sha256: str, expected_size: int,
+    local_agent_token: str, max_bytes: int | None = None,
+):
+    """安全下载日报附件到受控临时目录，返回最终 Path。
+
+    安全门禁（执行包 Task 5）：
+    - token/ticket 只进 header，绝不进 URL/query/日志/异常/持久化明文。
+    - 拒绝 30x（自定义不重定向 opener）；只接受 server_url 指定的 9000 受控端点。
+    - 流式下载（64KB chunk），Content-Length 预检 + 实际字节上限双重限制。
+    - 写同目录随机 .part，校验通过后原子 replace 为最终文件。
+    - 校验 HTTP 200 + MIME xlsx + 实际 size + sha256；任一不符抛 DownloadError。
+    - finally 清理响应流与残留 .part；不删除已验证的其他文件（不同 task 不同子目录）。
+    - 日志只记 task_id/code/exception_type，不记内容/token/path。
+    """
+    import hashlib
+    import secrets as _secrets
+    import tempfile
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    from app import config as _cfg
+
+    limit = max_bytes if max_bytes is not None else _cfg.DAILY_REPORT_ATTACHMENT_MAX_BYTES
+    final_name = _safe_attachment_basename(expected_name)
+    url = f"{server_url.rstrip('/')}/daily-report-deliveries/agent/tasks/{int(task_id)}/attachment"
+    headers = {
+        "X-Local-Agent-Token": local_agent_token,
+        "X-Report-Execution-Token": execution_token,
+        "X-Report-Download-Ticket": download_ticket,
+    }
+
+    tmp_root = Path(tempfile.gettempdir()) / "xg_agent_attachments"
+    tmp_dir = tmp_root / f"task{int(task_id)}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    if tmp_dir.is_symlink():
+        raise DownloadError("tmp_dir_symlink")
+    part_path = tmp_dir / f"{_secrets.token_hex(8)}.part"
+    final_path = tmp_dir / final_name
+    if final_path.exists() and final_path.is_symlink():
+        raise DownloadError("final_path_symlink")
+
+    hasher = hashlib.sha256()
+    total = 0
+    resp = None
+    renamed = False
+    try:
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **kw):
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            resp = opener.open(req, timeout=60)
+        except urllib.error.HTTPError as exc:
+            logger.warning("delivery download http_error task_id=%s code=%s", task_id, exc.code)
+            raise DownloadError(f"http_{exc.code}") from exc
+        if resp.status != 200:
+            raise DownloadError(f"http_status_{resp.status}")
+        ctype = resp.headers.get("Content-Type", "")
+        if _ATTACHMENT_XLSX_MIME not in ctype:
+            raise DownloadError("mime_mismatch")
+        clen = resp.headers.get("Content-Length")
+        if clen is not None:
+            try:
+                if int(clen) > limit:
+                    raise DownloadError("content_length_exceeds_limit")
+            except ValueError:
+                raise DownloadError("content_length_invalid")
+        with part_path.open("wb") as f:
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise DownloadError("byte_limit_exceeded")
+                hasher.update(chunk)
+                f.write(chunk)
+        if total == 0:
+            raise DownloadError("empty_body")
+        if total != expected_size:
+            raise DownloadError("size_mismatch")
+        if hasher.hexdigest() != expected_sha256:
+            raise DownloadError("hash_mismatch")
+        part_path.replace(final_path)
+        renamed = True
+        logger.info("delivery download ok task_id=%s size=%s", task_id, total)
+        return final_path
+    except DownloadError:
+        raise
+    except urllib.error.URLError as exc:
+        logger.warning("delivery download network_error task_id=%s exc=%s", task_id, type(exc).__name__)
+        raise DownloadError("network_error") from exc
+    except OSError as exc:
+        logger.warning("delivery download io_error task_id=%s exc=%s", task_id, type(exc).__name__)
+        raise DownloadError("io_error") from exc
+    except Exception as exc:  # noqa: BLE001  受控化所有未知异常
+        logger.warning("delivery download unexpected task_id=%s exc=%s", task_id, type(exc).__name__)
+        raise DownloadError("unexpected") from exc
+    finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001
+                pass
+        # 仅清理本次的 .part（rename 成功后 part_path 已不存在，不误删 final/其他文件）
+        if not renamed and part_path.exists():
+            try:
+                part_path.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _is_wechat_task_busy() -> bool:
     """只检查本地任务锁状态，不阻塞、不探测微信窗口。"""
     if _wechat_task_lock is None:
