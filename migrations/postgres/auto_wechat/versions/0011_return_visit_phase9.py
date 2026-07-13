@@ -94,7 +94,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "return_visit_prompts",
-        sa.Column("confidence_threshold", sa.Float(), nullable=True),
+        sa.Column("confidence_threshold", sa.Float(), nullable=True, server_default=sa.text("0.90")),
     )
 
     # 1.2 三键 UPDATE 回填 fallback_message + confidence_threshold=0.90
@@ -186,7 +186,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "return_visit_runs",
-        sa.Column("manual_takeover", sa.Boolean(), nullable=True),
+        sa.Column("manual_takeover", sa.Boolean(), nullable=True, server_default=sa.false()),
     )
     op.add_column(
         "return_visit_runs",
@@ -198,18 +198,10 @@ def upgrade() -> None:
     )
     op.add_column(
         "return_visit_runs",
-        sa.Column("attempt_count", sa.Integer(), nullable=True),
+        sa.Column("attempt_count", sa.Integer(), nullable=True, server_default=sa.text("0")),
     )
 
-    # 2.2 NOT NULL 列补默认值后 SET NOT NULL
-    op.execute(
-        "UPDATE return_visit_runs "
-        "SET manual_takeover = FALSE WHERE manual_takeover IS NULL"
-    )
-    op.execute(
-        "UPDATE return_visit_runs "
-        "SET attempt_count = 0 WHERE attempt_count IS NULL"
-    )
+    # 2.2 NOT NULL 列：ADD COLUMN server_default 已回填现有行，直接 SET NOT NULL
     op.execute(
         "ALTER TABLE return_visit_runs "
         "ALTER COLUMN manual_takeover SET NOT NULL"

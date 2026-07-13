@@ -181,3 +181,22 @@ def test_postgres_0011_downgrade_preserves_legacy_tables():
         assert f'op.drop_table("{table}")' not in downgrade, (
             f"downgrade 不得删除历史表 {table}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 2-FIX1 红灯：三方 server default 一致（PG 必须保留 DB default）
+# ---------------------------------------------------------------------------
+
+
+def test_postgres_0011_three_default_columns_have_server_default():
+    """PG 0011 必须为 confidence_threshold/manual_takeover/attempt_count 保留 server_default（三方一致）。"""
+    content = _content()
+    assert 'server_default=sa.text("0.90")' in content, (
+        'confidence_threshold 的 ADD COLUMN 必须带 server_default=sa.text("0.90")'
+    )
+    assert "server_default=sa.false()" in content, (
+        "manual_takeover 的 ADD COLUMN 必须带 server_default=sa.false()"
+    )
+    assert 'server_default=sa.text("0")' in content, (
+        'attempt_count 的 ADD COLUMN 必须带 server_default=sa.text("0")'
+    )

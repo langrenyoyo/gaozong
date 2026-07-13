@@ -557,3 +557,125 @@ def test_sqlite_0030_downgrade_restores_baseline_and_reupgradable(tmp_path):
     finally:
         conn.close()
     assert again.already_applied is False, "downgrade 后应能再次 apply 0030"
+
+
+# ---------------------------------------------------------------------------
+# Task 2-FIX1 红灯：迁移安全合同收紧
+# 缺失键回滚 / 禁兜底建表 / downgrade 事务守卫与故障回滚 / 三方 server default 一致
+# ---------------------------------------------------------------------------
+
+
+def test_sqlite_0030_apply_rejects_missing_prompt_key(tmp_path):
+    """基线缺一键（仅两键）时，0030 前置校验必须拒绝并整体回滚（精确三键，非仅拒未知键）。"""
+    if not SQLITE_FILE_PHASE9.is_file():
+        pytest.skip("SQLite 0030 未实现")
+    db_path = tmp_path / "phase9_0030_missing_key.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _create_phase1_predecessor_tables(conn)
+        _create_douyin_private_message_sends_shell(conn)
+        _apply_phase9_baseline(conn)
+        # 删除一键，制造"缺失键"（非未知键）场景
+        conn.execute(
+            "DELETE FROM return_visit_prompts WHERE prompt_key='silent_customer_wakeup'"
+        )
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0030")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0030'"
+        ).fetchone()[0] == 0, "缺失键场景 0030 不应登记"
+        prompt_cols = migrate_sqlite.get_columns(conn, "return_visit_prompts")
+        assert "fallback_message" not in prompt_cols, (
+            "回滚后 return_visit_prompts 不应出现 fallback_message"
+        )
+    finally:
+        conn.close()
+
+
+def test_sqlite_0030_does_not_create_legacy_send_table():
+    """0030 不得含 CREATE TABLE IF NOT EXISTS douyin_private_message_sends 兜底（F1：掩盖迁移链漂移）。"""
+    if not SQLITE_FILE_PHASE9.is_file():
+        pytest.skip("SQLite 0030 未实现")
+    content = SQLITE_FILE_PHASE9.read_text(encoding="utf-8").upper()
+    assert "CREATE TABLE IF NOT EXISTS DOUYIN_PRIVATE_MESSAGE_SENDS" not in content, (
+        "0030 不得兜底创建 douyin_private_message_sends；既有表只允许安全重建"
+    )
+
+
+def test_sqlite_0030_downgrade_is_transactional_with_guard():
+    """downgrade 必须显式事务（BEGIN/COMMIT）+ 多重集守卫，中途失败整体回滚。"""
+    if not SQLITE_DOWNGRADE_PHASE9.is_file():
+        pytest.skip("downgrade 未实现")
+    content = SQLITE_DOWNGRADE_PHASE9.read_text(encoding="utf-8")
+    upper = content.upper()
+    assert "BEGIN" in upper, "downgrade 必须显式 BEGIN 事务"
+    assert "COMMIT" in upper, "downgrade 必须显式 COMMIT 事务"
+    assert any(m in upper for m in ("EXCEPT", "MAX(ID)", "COUNT(*)")), (
+        "downgrade 必须含多重集守卫（EXCEPT/MAX(ID)/COUNT(*)）"
+    )
+
+
+def test_sqlite_0030_downgrade_rejects_unupgraded_state(tmp_path):
+    """downgrade 必须校验已 upgrade；未 upgrade 时执行应前置守卫失败并整体回滚（故障回滚保证）。"""
+    if not SQLITE_DOWNGRADE_PHASE9.is_file():
+        pytest.skip("downgrade 未实现")
+    db_path = tmp_path / "phase9_0030_down_unupgraded.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _create_phase1_predecessor_tables(conn)
+        _create_douyin_private_message_sends_shell(conn)
+        _apply_phase9_baseline(conn)  # 0029 基线，未 0030
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE9.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        prompt_cols = migrate_sqlite.get_columns(conn, "return_visit_prompts")
+        assert "fallback_message" not in prompt_cols, (
+            "未 upgrade 库 downgrade 回滚后不应出现 fallback_message"
+        )
+        assert "prompt_key" in prompt_cols, "回滚后原列必须保留"
+    finally:
+        conn.close()
+
+
+def test_return_visit_prompt_confidence_threshold_server_default():
+    """confidence_threshold ORM 必须带 server_default（与 SQLite/PG DB default 三方一致）。"""
+    import app.models as models
+
+    col = models.ReturnVisitPrompt.__table__.columns["confidence_threshold"]
+    assert col.server_default is not None, (
+        "confidence_threshold 必须有 server_default（三方一致）"
+    )
+
+
+def test_return_visit_run_manual_takeover_server_default():
+    """manual_takeover ORM 必须带 server_default（三方一致）。"""
+    import app.models as models
+
+    col = models.ReturnVisitRun.__table__.columns["manual_takeover"]
+    assert col.server_default is not None, "manual_takeover 必须有 server_default"
+
+
+def test_return_visit_run_attempt_count_server_default():
+    """attempt_count ORM 必须带 server_default（三方一致）。"""
+    import app.models as models
+
+    col = models.ReturnVisitRun.__table__.columns["attempt_count"]
+    assert col.server_default is not None, "attempt_count 必须有 server_default"
+
+
+def test_return_visit_prompt_fallback_message_no_server_default_preserved():
+    """fallback_message 仍无 server_default（F10 占位禁令继续生效）。"""
+    import app.models as models
+
+    col = models.ReturnVisitPrompt.__table__.columns["fallback_message"]
+    assert col.server_default is None, "fallback_message 不得有 server_default"

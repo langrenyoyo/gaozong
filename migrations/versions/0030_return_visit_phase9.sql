@@ -27,8 +27,9 @@
 -- 1. return_visit_prompts（加 2 列 + 三键 CASE 无 ELSE 回填）
 -- ---------------------------------------------------------------------------
 
--- 1.0 前置三键校验：未知 prompt_key 触发整体回滚（F10/FIX4）
+-- 1.0 前置精确三键校验：拒绝未知键 + 拒绝缺失键（FIX1 收紧）
 CREATE TEMP TABLE _guard_rvp_keys_0030 (ok INTEGER NOT NULL CHECK (ok = 1));
+-- 校验1：无未知键
 INSERT INTO _guard_rvp_keys_0030 (ok)
 SELECT CASE WHEN (
     SELECT count(*) FROM return_visit_prompts
@@ -38,6 +39,16 @@ SELECT CASE WHEN (
         'silent_customer_wakeup'
     )
 ) = 0 THEN 1 ELSE 0 END;
+-- 校验2：三键都存在（DISTINCT = 3，拒绝缺失键）
+INSERT INTO _guard_rvp_keys_0030 (ok)
+SELECT CASE WHEN (
+    SELECT count(DISTINCT prompt_key) FROM return_visit_prompts
+    WHERE prompt_key IN (
+        'retain_contact_conversion',
+        'finance_plan_followup',
+        'silent_customer_wakeup'
+    )
+) = 3 THEN 1 ELSE 0 END;
 DROP TABLE _guard_rvp_keys_0030;
 
 -- 1.1 改名旧表为事务内备份
@@ -254,37 +265,8 @@ CREATE INDEX IF NOT EXISTS idx_return_visit_runs_dispatch_notification
 
 -- ---------------------------------------------------------------------------
 -- 3. douyin_private_message_sends（加 return_visit_run_id + UNIQUE 索引）
---    SQLite 迁移体系 0004/0018 已建此表；主线库由 ORM create_all 建。
---    CREATE TABLE IF NOT EXISTS 统一两种场景：存在则 skip，不存在则建壳。
+--    0004/0018 已建此表；0030 只安全重建，不兜底创建（F1：兜底会掩盖迁移链漂移）。
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS douyin_private_message_sends (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    main_account_id INTEGER NOT NULL,
-    conversation_short_id VARCHAR(255) NOT NULL,
-    server_message_id VARCHAR(255) NOT NULL,
-    from_user_id VARCHAR(255) NOT NULL,
-    to_user_id VARCHAR(255) NOT NULL,
-    customer_open_id VARCHAR(255),
-    account_open_id VARCHAR(255),
-    scene VARCHAR(64) NOT NULL DEFAULT 'im_reply_msg',
-    content TEXT NOT NULL,
-    request_body_json TEXT,
-    response_body_json TEXT,
-    upstream_msg_id VARCHAR(255),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    error_code VARCHAR(64),
-    error_message VARCHAR(500),
-    manual_confirmed INTEGER NOT NULL DEFAULT 1,
-    auto_send INTEGER NOT NULL DEFAULT 0,
-    decision_log_id INTEGER,
-    auto_reply_run_id INTEGER,
-    send_source VARCHAR(32) NOT NULL DEFAULT 'manual',
-    operator_id VARCHAR(255),
-    created_at DATETIME,
-    updated_at DATETIME,
-    sent_at DATETIME
-);
-
 ALTER TABLE douyin_private_message_sends RENAME TO _douyin_private_message_sends_backup_0030;
 
 CREATE TABLE _douyin_private_message_sends_new_0030 (

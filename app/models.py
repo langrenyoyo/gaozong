@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, false, ForeignKey, Index, Integer, JSON, Numeric, String, Text, text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -938,7 +938,7 @@ class ReturnVisitPrompt(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     # Phase 9 增量（C6/F10）：confidence_threshold 仅约束 LLM；fallback_message NOT NULL 回填已批准三条文案，无占位默认
-    confidence_threshold = Column(Float, nullable=False, default=0.90, comment="场景置信度阈值 0.50-1.00，仅约束 LLM")
+    confidence_threshold = Column(Float, nullable=False, default=0.90, server_default=text("0.90"), comment="场景置信度阈值 0.50-1.00，仅约束 LLM")
     fallback_message = Column(Text, nullable=False, comment="LLM 不可用且关键词触发词命中时兜底文案（已批准三条）")
 
 
@@ -986,10 +986,10 @@ class ReturnVisitRun(Base):
     risk_flags_json = Column(Text, comment="风险标记 JSON（6 枚举，安全命中阻断进 blocked）")
     gate_results_json = Column(Text, comment="门禁逐项结果 JSON")
     last_failure_stage = Column(String(100), comment="最后失败阶段（门禁/发送/恢复等）")
-    manual_takeover = Column(Boolean, nullable=False, default=False, comment="人工接管标记")
+    manual_takeover = Column(Boolean, nullable=False, default=False, server_default=false(), comment="人工接管标记")
     lease_owner = Column(String(64), comment="租约持有者（崩溃恢复单飞）")
     lease_expires_at = Column(DateTime, comment="租约过期时间")
-    attempt_count = Column(Integer, nullable=False, default=0, comment="崩溃恢复尝试计数")
+    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"), comment="崩溃恢复尝试计数")
 
 
 class SalesLeadFeedback(Base):
