@@ -68,7 +68,8 @@ def probe_message_controls(max_messages: int = 20) -> dict:
             "index": m.get("index"),
             "sender": m.get("sender"),
             "type": m.get("type"),
-            "file_name": m.get("file_name"),
+            # 脱敏：文件名只输出指纹，不输出原文（与"脱敏控件摘要"声明一致）
+            "file_name_fp": _fingerprint(m.get("file_name")),
             "text_fp": _fingerprint(m.get("content")),
         })
     return summary
@@ -78,14 +79,16 @@ def _self_check() -> int:
     """不依赖真微信：用样例消息验证脱敏指纹不含原文。"""
     sample = [
         {"index": 0, "sender": "self", "type": "file", "file_name": "日报.xlsx"},
-        {"index": 1, "sender": "friend", "type": "text", "text": "收到，谢谢配合"},
+        {"index": 1, "sender": "friend", "type": "text", "content": "收到，谢谢配合"},
     ]
     for m in sample:
         print(f"  - index={m.get('index')} sender={m.get('sender')} "
-              f"type={m.get('type')} file={m.get('file_name')} {_fingerprint(m.get('text'))}")
-    fp = _fingerprint("收到，谢谢配合")
-    assert "收到" not in fp and "谢谢" not in fp, "脱敏失败：指纹含原文"
-    assert fp.startswith("len=") and "fp=" in fp, "脱敏指纹格式异常"
+              f"type={m.get('type')} file_fp={_fingerprint(m.get('file_name'))} "
+              f"text_fp={_fingerprint(m.get('content'))}")
+    fp_text = _fingerprint("收到，谢谢配合")
+    fp_file = _fingerprint("日报.xlsx")
+    assert "收到" not in fp_text and "日报" not in fp_file, "脱敏失败：指纹含原文"
+    assert fp_text.startswith("len=") and "fp=" in fp_text, "脱敏指纹格式异常"
     print("self-check OK：脱敏指纹不含原文，格式正确")
     return 0
 
@@ -114,7 +117,7 @@ def main() -> int:
             print(f"消息数: {len(msgs)}")
             for m in msgs:
                 print(f"  - index={m.get('index')} sender={m.get('sender')} "
-                      f"type={m.get('type')} file={m.get('file_name')} {m.get('text_fp')}")
+                      f"type={m.get('type')} file_fp={m.get('file_name_fp')} text_fp={m.get('text_fp')}")
         else:
             print(f"消息读取异常: {msgs}")
     return 0

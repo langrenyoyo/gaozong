@@ -64,6 +64,7 @@ def verify_current_chat_contact(
     focus_after_select: str | None = None,
     candidate_source: str | None = None,
     candidate_is_normalized_fallback: bool = False,
+    allow_ocr: bool = True,
 ) -> dict:
     """
     确认当前微信聊天窗口的联系人是否为目标微信昵称。
@@ -202,6 +203,17 @@ def verify_current_chat_contact(
             logger.info("策略A: 未读取到标题，继续策略B")
     except Exception as e:
         logger.warning("策略A异常: %s", e)
+
+    # =====================================================
+    # 探针模式：禁止 OCR/资料卡落盘。UIA 顶部标题未精确确认即阻断。
+    # 仅文件气泡只读探针等不落盘场景传 allow_ocr=False。
+    # =====================================================
+    if not allow_ocr:
+        result["strategy"] = result.get("strategy") or "uia_chat_title"
+        result["failure_stage"] = "uia_title_insufficient_no_ocr"
+        result["manual_review_required"] = True
+        result["message"] = "UIA 顶部标题未能精确确认（探针禁止 OCR 落盘）"
+        return result
 
     # =====================================================
     # 策略 B：顶部标题 OCR。只截图识别，不点击资料卡，不发送 Esc。

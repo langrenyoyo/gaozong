@@ -2523,13 +2523,13 @@ def create_local_agent_app(
                 result["failure_stage"] = "wechat_window_not_found"
                 return result
             hwnd = getattr(window, "NativeWindowHandle", 0)
-            # 3. 前台焦点
-            fg = ensure_wechat_foreground(hwnd)
+            # 3. 前台焦点（reason 必填，真实签名无默认值）
+            fg = ensure_wechat_foreground(hwnd, reason="file_message_probe")
             if not (isinstance(fg, dict) and fg.get("success")):
                 result["failure_stage"] = "foreground_lost"
                 return result
-            # 4. 校验当前聊天联系人（只读，不切换）
-            verify = verify_current_chat_contact(request.expected_contact)
+            # 4. 校验当前聊天联系人（只读，不切换；探针禁止 OCR 落盘，UIA 标题未确认即阻断）
+            verify = verify_current_chat_contact(request.expected_contact, allow_ocr=False)
             if not (isinstance(verify, dict) and verify.get("verified")):
                 result["failure_stage"] = "contact_not_verified"
                 return result
