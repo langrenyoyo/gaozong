@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SEND_SCENE = "im_reply_msg"
 
+# send_source → 违禁词命中 source 固定映射；未知 send_source 拒绝发送（不再默认 manual）。
+_FORBIDDEN_SOURCE_BY_SEND_SOURCE = {
+    "manual": "douyin_manual",
+    "ai_auto": "douyin_ai_auto",
+    "return_visit_auto": "douyin_return_visit",
+}
+
 
 def send_manual_private_message(
     db: Session,
@@ -102,6 +109,7 @@ def _send_private_message_with_context(
     operator_id: str | None = None,
     decision_log_id: int | None = None,
     auto_reply_run_id: int | None = None,
+    return_visit_run_id: int | None = None,
 ) -> dict[str, Any]:
     """基于已校验的 send_msg context 发送私信，并写入统一发送流水。"""
     content_check = sanitize_ai_reply_content(content)
@@ -116,12 +124,16 @@ def _send_private_message_with_context(
         raise HTTPException(status_code=400, detail="send_msg context msg_id is older than 24 hours")
 
     context = send_context
+    # send_source 固定白名单字典映射；未知 send_source 拒绝发送（不再默认 manual，防误判来源）。
+    forbidden_source = _FORBIDDEN_SOURCE_BY_SEND_SOURCE.get(send_source)
+    if forbidden_source is None:
+        raise HTTPException(status_code=400, detail="unknown_send_source")
     # 违禁词替换：在 request_payload 构造前替换 content_text，使上游 payload、
     # 发送流水 content、request_body_json 三处同步为安全词；命中只替换不拦截。
     replacement = replace_forbidden_words(
         db,
         merchant_id=_resolve_merchant_id_for_account(db, context["account_open_id"]) or "unknown_merchant",
-        source="douyin_ai_auto" if send_source == "ai_auto" else "douyin_manual",
+        source=forbidden_source,
         content=content_text,
         context={
             "context_type": "douyin_conversation",
@@ -176,6 +188,7 @@ def _send_private_message_with_context(
         auto_send=1 if auto_send else 0,
         decision_log_id=decision_log_id,
         auto_reply_run_id=auto_reply_run_id,
+        return_visit_run_id=return_visit_run_id,
         send_source=send_source,
         operator_id=operator_id,
         created_at=datetime.now(),

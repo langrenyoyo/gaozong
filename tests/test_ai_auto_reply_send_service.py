@@ -1321,3 +1321,26 @@ def test_disabled_settings_are_send_skipped(enabled, dry_run_enabled, reason):
 
     assert result["status"] == "send_skipped"
     assert result["reason"] == reason
+
+
+def test_ai_auto_send_preserves_run_ids_against_phase9_extension():
+    """Task 3 守护：ai_auto 路径写 auto_reply_run_id，return_visit_run_id 为 None（Phase 9 扩展不破坏既有）。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        result = _send(run_id)
+
+    assert result["status"] == "sent"
+    db = TestSession()
+    try:
+        record = db.query(DouyinPrivateMessageSend).one()
+        assert record.send_source == "ai_auto"
+        assert record.auto_reply_run_id == run_id
+        assert record.return_visit_run_id is None
+    finally:
+        db.close()
