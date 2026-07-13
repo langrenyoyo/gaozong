@@ -70,7 +70,18 @@ AGENT_CLIENT_ID = "local-agent-default"
 AGENT_DISPLAY_NAME = "小高AI微信助手"
 DEFAULT_TASK_POLL_INTERVAL_SECONDS = 5.0
 # Phase 7-FIX2：Local Agent 与 9000 通信的机器 token
-_LOCAL_AGENT_TOKEN: str | None = os.getenv("LOCAL_AGENT_TOKEN") or None
+# 检查点 A 前置修复：原模块级常量在 exe 入口 import 阶段就缓存，而 exe 同目录
+# .env 由 local_agent_exe_entry._load_dotenv_defaults 在导入之后才写入 os.environ，
+# 导致打包后令牌恒 None。改为延迟读取，见 _get_local_agent_token。
+
+
+def _get_local_agent_token() -> str | None:
+    """每次请求执行时读取 LOCAL_AGENT_TOKEN（不缓存）。
+
+    保证 exe 同目录 .env 在导入后加载也能生效。令牌只进 HTTP header，
+    不进 URL/日志/异常/响应。
+    """
+    return os.getenv("LOCAL_AGENT_TOKEN") or None
 # 允许跨域来源
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
@@ -169,14 +180,15 @@ def _http_get(url: str, params: dict | None = None, timeout: float = 10.0) -> di
     import urllib.request
     import urllib.parse
     from urllib.error import HTTPError
-    if not _LOCAL_AGENT_TOKEN:
+    token = _get_local_agent_token()
+    if not token:
         return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     try:
         req = urllib.request.Request(
             url, method="GET",
-            headers={"X-Local-Agent-Token": _LOCAL_AGENT_TOKEN},
+            headers={"X-Local-Agent-Token": token},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
@@ -200,7 +212,8 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
     token 未配置时明确失败，不发起匿名请求。
     """
     import urllib.request
-    if not _LOCAL_AGENT_TOKEN:
+    token = _get_local_agent_token()
+    if not token:
         return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     body = __import__("json").dumps(data, ensure_ascii=False).encode("utf-8")
     from urllib.error import HTTPError
@@ -209,7 +222,7 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
             url, data=body, method="POST",
             headers={
                 "Content-Type": "application/json",
-                "X-Local-Agent-Token": _LOCAL_AGENT_TOKEN,
+                "X-Local-Agent-Token": token,
             },
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -600,7 +613,7 @@ def _delivery_probe_run(
                 server_url=server_url, task_id=task_id,
                 execution_token=execution_token, download_ticket=download_ticket,
                 expected_name=file_name, expected_sha256=sha256,
-                expected_size=size, local_agent_token=_LOCAL_AGENT_TOKEN,
+                expected_size=size, local_agent_token=_get_local_agent_token(),
             )
         except DownloadError as exc:
             result["failure_stage"] = f"download_{exc.code}"

@@ -155,7 +155,7 @@ def download_patch(monkeypatch, tmp_path):
 
 @pytest.fixture
 def agent_app(mock_server, monkeypatch):
-    monkeypatch.setattr(la, "_LOCAL_AGENT_TOKEN", "test-token")
+    monkeypatch.setenv("LOCAL_AGENT_TOKEN", "test-token")
     monkeypatch.setattr(la, "start_heartbeat_loop", lambda url: None)
     from fastapi.testclient import TestClient
     app = la.create_local_agent_app(server_url=mock_server)
@@ -222,7 +222,7 @@ def test_no_pending_task(agent_app, gate_patches, download_patch):
 
 
 def test_server_url_not_configured(monkeypatch, gate_patches, download_patch):
-    monkeypatch.setattr(la, "_LOCAL_AGENT_TOKEN", "test-token")
+    monkeypatch.setenv("LOCAL_AGENT_TOKEN", "test-token")
     monkeypatch.setattr(la, "start_heartbeat_loop", lambda url: None)
     app = la.create_local_agent_app(server_url=None)
     from fastapi.testclient import TestClient
