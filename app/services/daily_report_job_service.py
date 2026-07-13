@@ -42,6 +42,12 @@ from app.services.daily_report_service import (
     ReportBuildResult,
     build_daily_report,
 )
+from app.services.daily_report_delivery_service import (
+    DeliveryActiveError,
+    artifact_is_pinned,
+    ensure_deliveries_for_job,
+    has_unreplaceable_deliveries,
+)
 from app.services.daily_report_storage import (
     build_storage_key,
     generate_storage_token,
@@ -286,11 +292,14 @@ def _finalize_failure(
         logger.warning("daily_report stage=stale_worker_failed job_id=%s token stale", job_id)
 
 
-def _cleanup_orphan_file(storage_key: str | None) -> None:
-    """删除未被引用的文件；删除失败只告警，不抛异常。"""
+def _cleanup_orphan_file(db: Session, storage_key: str | None) -> None:
+    """删除未被引用的文件；被投递钉住（artifact_is_pinned）或删除失败只告警，不抛异常。"""
     if not storage_key:
         return
     try:
+        if artifact_is_pinned(db, storage_key=storage_key):
+            logger.info("daily_report stage=cleanup_skipped_pinned key=%s", storage_key)
+            return
         path = resolve_storage_path(storage_key)
         if path.exists():
             path.unlink()
@@ -329,7 +338,7 @@ def generate_one(
         sha256, size = save_workbook_to_storage(workbook, new_storage_key)
     except Exception as exc:
         # 异常：清理新文件 + finalize_failure
-        _cleanup_orphan_file(new_storage_key)
+        _cleanup_orphan_file(db, new_storage_key)
         _finalize_failure(
             db, job_id=job.id, token=token, exc=exc, merchant_id=merchant_id,
             report_type=report_type, report_variant=report_variant,
@@ -346,12 +355,17 @@ def generate_one(
         operator_id=operator_id, operator_name=operator_name,
     )
     if committed:
-        # 成功后才删旧版本（claim 时捕获）；删除失败只告警
+        # Phase 8-B：finalize 后独立短事务建投递（钉住 new artifact）；投递失败不回滚报表
+        try:
+            ensure_deliveries_for_job(db, job_id=job.id)
+        except Exception as exc:  # noqa: BLE001  投递失败不影响生成结果
+            logger.warning("delivery ensure failed job=%s: %s", job.id, exc)
+        # 成功后才删旧版本（claim 时捕获）；被投递钉住或删除失败只告警
         if old_storage_key and old_storage_key != new_storage_key:
-            _cleanup_orphan_file(old_storage_key)
+            _cleanup_orphan_file(db, old_storage_key)
     else:
         # token 失效：删本次新文件，不动任务/旧文件
-        _cleanup_orphan_file(new_storage_key)
+        _cleanup_orphan_file(db, new_storage_key)
     db.refresh(job)
     return job
 
@@ -386,12 +400,18 @@ def generate_reports(
 def regenerate_job(
     db: Session, *, merchant_id, job_id, summary_client, operator_id, operator_name,
 ) -> DailyReportJobItem:
-    """重生成：按 job_id + merchant 查；未超时 generating 抛 ClaimConflictError（router 转 409）。"""
+    """重生成：按 job_id + merchant 查；未超时 generating 抛 ClaimConflictError（router 转 409）。
+
+    Phase 8-B：存在不可替换投递（sent/running/send_authorized/verify_pending/pending）时
+    抛 DeliveryActiveError（router 转 409），避免重生成漂移已钉住的发送版本。
+    """
     job = db.query(DailyReportJob).filter(
         DailyReportJob.id == job_id, DailyReportJob.merchant_id == merchant_id,
     ).first()
     if job is None:
         raise LookupError("job_not_found")
+    if has_unreplaceable_deliveries(db, merchant_id=merchant_id, job_id=job_id):
+        raise DeliveryActiveError(f"job {job_id} 存在不可替换投递")
     # 直接走 generate_one（claim 会校验未超时 generating）
     job = generate_one(
         db, merchant_id=merchant_id, report_day=job.report_day,

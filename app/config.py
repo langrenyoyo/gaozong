@@ -360,3 +360,30 @@ DAILY_REPORT_STORAGE_DIR = Path(os.getenv("DAILY_REPORT_STORAGE_DIR", "./data/da
 DAILY_REPORT_TIMEZONE = _parse_daily_report_timezone()
 DAILY_REPORT_SCHEDULER_ENABLED = _env_bool("DAILY_REPORT_SCHEDULER_ENABLED", False)
 DAILY_REPORT_SCHEDULE_LOCAL_TIME = _parse_daily_report_schedule_time()
+
+# ---------- Phase 8-B 日报附件投递（默认关闭，灰度 allowlist）----------
+# 总开关关闭时只创建 held 投递，不创建可执行任务；production 禁 insecure HTTP。
+DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED = _env_bool("DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED", False)
+DAILY_REPORT_ATTACHMENT_ALLOW_FULL_ROLLOUT = _env_bool("DAILY_REPORT_ATTACHMENT_ALLOW_FULL_ROLLOUT", False)
+DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST_IDS = os.getenv("DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST_IDS", "").strip()
+DAILY_REPORT_ATTACHMENT_MAX_BYTES = int(os.getenv("DAILY_REPORT_ATTACHMENT_MAX_BYTES", "20971520").strip() or "20971520")
+DAILY_REPORT_ATTACHMENT_DOWNLOAD_TTL_SECONDS = int(os.getenv("DAILY_REPORT_ATTACHMENT_DOWNLOAD_TTL_SECONDS", "120").strip() or "120")
+DAILY_REPORT_ATTACHMENT_SEND_AUTH_TTL_SECONDS = int(os.getenv("DAILY_REPORT_ATTACHMENT_SEND_AUTH_TTL_SECONDS", "15").strip() or "15")
+DAILY_REPORT_ATTACHMENT_EXECUTION_LEASE_SECONDS = int(os.getenv("DAILY_REPORT_ATTACHMENT_EXECUTION_LEASE_SECONDS", "300").strip() or "300")
+LOCAL_AGENT_ATTACHMENT_ALLOW_INSECURE_PRIVATE_HTTP = _env_bool("LOCAL_AGENT_ATTACHMENT_ALLOW_INSECURE_PRIVATE_HTTP", False)
+
+
+def _parse_attachment_allowlist_ids() -> set[int]:
+    """解析 DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST_IDS（逗号分隔销售 ID），非数字忽略。"""
+    raw = DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST_IDS
+    if not raw:
+        return set()
+    result: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            result.add(int(part))
+    return result
+
+
+DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST = _parse_attachment_allowlist_ids()

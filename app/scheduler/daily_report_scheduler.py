@@ -23,6 +23,7 @@ from sqlalchemy import or_
 from app.config import DAILY_REPORT_SCHEDULE_LOCAL_TIME, DAILY_REPORT_TIMEZONE
 from app.database import SessionLocal
 from app.models import DailyReportJob, SalesStaff
+from app.services.daily_report_delivery_service import reconcile_job_deliveries
 from app.services.daily_report_job_service import (
     ARTIFACT_NONE,
     ClaimConflictError,
@@ -201,6 +202,17 @@ class DailyReportScheduler:
                 )
                 if job.status in (STATUS_GENERATED, STATUS_PARTIAL):
                     results["generated"] += 1
+                    # Phase 8-B：生成后对账（held 随新 artifact 刷新；sent 保留钉住版本）；
+                    # 投递对账失败不阻断调度，单商户失败隔离
+                    try:
+                        reconcile_job_deliveries(
+                            gen_db, merchant_id=merchant_id, job_id=job.id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "delivery reconcile failed merchant=%s job=%s: %s",
+                            merchant_id, job.id, exc,
+                        )
                 else:
                     results["failed"] += 1
             except ClaimConflictError:
