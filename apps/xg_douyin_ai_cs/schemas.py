@@ -1,6 +1,6 @@
 """抖音AI小高客服 API schema。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -216,3 +216,46 @@ class DailySalesSummaryResponse(BaseModel):
     model: str | None = None
     prompt_version: str
     fallback_reason: str | None = None
+
+
+# ========== Phase 9 Task 4：9100 回访判定协议 ==========
+
+
+class ReturnVisitPromptInput(BaseModel):
+    """单条回访提示词输入（9000 从 DB 读 ReturnVisitPrompt 传入，9100 不读 DB）。"""
+
+    model_config = {"extra": "forbid"}
+    template_text: str = Field(..., min_length=1, max_length=500)
+    fallback_message: str = Field(..., min_length=1, max_length=500)
+    confidence_threshold: float = Field(..., ge=0.50, le=1.00)
+    enabled: bool
+
+
+class ReturnVisitJudgeRequest(BaseModel):
+    """9000 → 9100 回访判定请求（extra=forbid 拒绝未知字段）。"""
+
+    model_config = {"extra": "forbid"}
+    tenant_id: str | None = Field(default=None, max_length=128)
+    merchant_id: str = Field(..., min_length=1, max_length=128)
+    lead_id: int
+    prompts: dict[str, ReturnVisitPromptInput]
+    sales_reply_text: str = Field(..., min_length=1)
+    dispatch_context: dict
+
+
+# risk_flags 单项上限 32 字符（固定枚举归一后单项远小于 32）。
+RiskFlag = Annotated[str, Field(max_length=32)]
+
+
+class ReturnVisitJudgment(BaseModel):
+    """回访判定输出（复用既有 judgement_source/judgement_result + model + risk_flags）。"""
+
+    prompt_key: str | None
+    confidence: float = Field(..., ge=0, le=1)
+    should_trigger: bool
+    suggested_message: str | None = Field(default=None, max_length=500)
+    judgement_source: str
+    judgement_result: str
+    model: str | None
+    risk_flags: list[RiskFlag] = Field(default_factory=list, max_length=8)
+    ambiguous: bool = False

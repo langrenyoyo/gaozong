@@ -18,6 +18,7 @@ from apps.xg_douyin_ai_cs.routers import (
     health,
     knowledge_training,
     rag,
+    return_visits,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(rag.router)
     app.include_router(knowledge_training.router)
     app.include_router(daily_reports.router)
+    app.include_router(return_visits.router)
     return app
 
 
