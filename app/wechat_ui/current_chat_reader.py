@@ -5,7 +5,7 @@ import logging
 import uiautomation as uia
 
 from app.wechat_ui.exceptions import MessageReadError
-from app.wechat_ui.message_parser import identify_sender, extract_text
+from app.wechat_ui.message_parser import identify_sender, extract_text, identify_message_type
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,9 @@ def read_recent_messages(
         [{"sender": "self"|"friend"|"system"|"unknown",
           "content": "文本内容"或None,
           "index": 序号,
-          "sender_debug": dict或None}, ...]
+          "sender_debug": dict或None,
+          "type": "file"|"text",          # Phase 8-B 检查点 A：真实 UIA 证据
+          "file_name": "文件名"或None}, ...]
         按 UI 顺序排列（时间从早到晚）
 
     Raises:
@@ -66,6 +68,9 @@ def read_recent_messages(
             # 提取文本内容
             content = extract_text(child)
 
+            # Phase 8-B 检查点 A：识别消息类型与文件名（真实 UIA 证据，非正文推断）
+            type_info = identify_message_type(child)
+
             # unknown 消息打印调试信息
             if sender == "unknown":
                 _log_unknown_message(child, start_idx + i, chat_mid_x)
@@ -75,6 +80,8 @@ def read_recent_messages(
                 "content": content,
                 "index": start_idx + i,
                 "sender_debug": debug if debug else None,
+                "type": type_info["type"],
+                "file_name": type_info["file_name"],
             })
 
         logger.info(

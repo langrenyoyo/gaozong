@@ -149,6 +149,16 @@ class PollAndSendReportRequest(BaseModel):
     dry_run: bool | None = Field(None, description="默认 True 探针；False 真实发送（Task 7 禁用）")
 
 
+class FileMessageProbeRequest(BaseModel):
+    """Phase 8-B 检查点 A：文件气泡只读探针请求。
+
+    人工须预先打开目标聊天窗口；端点不搜索、不切换联系人、不写输入框、不发送。
+    """
+    expected_contact: str = Field(..., description="期望联系人昵称（须人工预先打开聊天）")
+    expected_filename: str = Field(..., description="期望文件名（精确匹配）")
+    max_messages: int = Field(20, ge=5, le=100, description="最多读取的消息条数")
+
+
 def get_machine_identity() -> dict:
     return {
         "hostname": socket.gethostname(),
@@ -238,6 +248,29 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
         return {"ok": False, "status": exc.code, "json": parsed, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "status": None, "json": None, "error": str(exc)}
+
+
+def _fingerprint_text(text) -> str | None:
+    """脱敏：文本只输出长度 + sha256 前 8 位指纹，不泄露原文。
+
+    Phase 8-B 检查点 A：文件气泡探针响应使用，正文原文不得进响应/日志。
+    """
+    if not text:
+        return None
+    import hashlib
+    return f"len={len(str(text))} fp={hashlib.sha256(str(text).encode('utf-8')).hexdigest()[:8]}"
+
+
+def _diagnose_probe_no_match(messages: list[dict]) -> str:
+    """诊断文件气泡探针未命中的受控 failure_stage（不泄露无关内容）。"""
+    self_msgs = [m for m in messages if m.get("sender") == "self"]
+    if not self_msgs:
+        return "no_self_message"
+    file_msgs = [m for m in self_msgs if m.get("type") == "file"]
+    if not file_msgs:
+        # 有 self 消息但无任一被识别为 file（可能正文含文件名的文本陷阱，或 UIA 证据不足）
+        return "self_message_not_file"
+    return "file_name_mismatch"
 
 
 class DownloadError(Exception):
@@ -2451,6 +2484,85 @@ def create_local_agent_app(
 
             # dry_run 探针编排（claim → 下载 → 校验 → gates → 回写）
             _delivery_probe_run(server_url, task_data, result)
+            return result
+        finally:
+            _wechat_task_lock.release()
+
+    @app.post("/agent/wechat/file-message-probe")
+    def agent_wechat_file_message_probe(request: FileMessageProbeRequest):
+        """Phase 8-B 检查点 A：文件气泡只读探针。
+
+        人工预先打开目标聊天；端点只读，不搜索联系人、不切换聊天、不写输入框、
+        不粘贴、不 CF_HDROP、不 send-intent、不 Enter、不写任务状态、不后台轮询。
+        在当前聊天中查找 self 侧、type=file、文件名精确匹配的气泡，回传四要素证据。
+
+        响应字段（脱敏，不含原文正文）：
+          contact_verified / index / sender / type / exact_name_match / text_fp / failure_stage
+        """
+        result = {
+            "contact_verified": False,
+            "index": None,
+            "sender": None,
+            "type": None,
+            "exact_name_match": False,
+            "text_fp": None,
+            "failure_stage": None,
+        }
+        if _wechat_task_lock is None or not _wechat_task_lock.acquire(blocking=False):
+            result["failure_stage"] = "agent_busy"
+            return result
+        try:
+            # 1. 紧急停止
+            if not is_automation_allowed():
+                result["failure_stage"] = "emergency_stop"
+                return result
+            # 2. 找窗口（不搜索、不切换）
+            try:
+                window = find_wechat_window()
+            except Exception:
+                result["failure_stage"] = "wechat_window_not_found"
+                return result
+            hwnd = getattr(window, "NativeWindowHandle", 0)
+            # 3. 前台焦点
+            fg = ensure_wechat_foreground(hwnd)
+            if not (isinstance(fg, dict) and fg.get("success")):
+                result["failure_stage"] = "foreground_lost"
+                return result
+            # 4. 校验当前聊天联系人（只读，不切换）
+            verify = verify_current_chat_contact(request.expected_contact)
+            if not (isinstance(verify, dict) and verify.get("verified")):
+                result["failure_stage"] = "contact_not_verified"
+                return result
+            result["contact_verified"] = True
+            # 5. 找消息列表
+            try:
+                msg_list = find_message_list(window, timeout=5)
+            except Exception:
+                result["failure_stage"] = "message_list_not_found"
+                return result
+            # 6. 读消息（复用 read_recent_messages，产出 type/file_name）
+            try:
+                messages = read_recent_messages(msg_list, max_messages=request.max_messages)
+            except Exception:
+                result["failure_stage"] = "message_read_failed"
+                return result
+            # 7. 查找匹配的 self 文件气泡（四要素：sender=self + type=file + 文件名精确）
+            match = None
+            for m in messages:
+                if (m.get("sender") == "self"
+                        and m.get("type") == "file"
+                        and m.get("file_name") == request.expected_filename):
+                    match = m
+                    break
+            if match is not None:
+                result["index"] = match.get("index")
+                result["sender"] = "self"
+                result["type"] = "file"
+                result["exact_name_match"] = True
+                result["text_fp"] = _fingerprint_text(match.get("content"))
+                return result
+            # 8. 未命中诊断（受控 failure_stage，不泄露无关内容）
+            result["failure_stage"] = _diagnose_probe_no_match(messages)
             return result
         finally:
             _wechat_task_lock.release()

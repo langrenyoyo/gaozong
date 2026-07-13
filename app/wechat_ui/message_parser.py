@@ -73,6 +73,85 @@ _TIME_PATTERN = re.compile(
 _EDGE_THRESHOLD = 80
 
 
+# ============================================================
+# Phase 8-B 检查点 A：文件消息类型识别（真实 UIA 控件证据）
+# ============================================================
+
+# 文件名标签模式：用于识别文件卡"名称子控件"，不是从正文文本推断消息类型。
+# 允许汉字/字母/数字/下划线/连字符/点/空格/括号，末尾必须 .扩展名(2-5 位)。
+_FILENAME_LABEL_PATTERN = re.compile(
+    r"\A[\w\-. 一-龥()（）]{1,250}\.[A-Za-z0-9]{2,5}\Z"
+)
+
+# 文件类 ClassName 关键字（WeChat Qt 类名；文本消息为 ChatTextItemView，文件消息为另一类）
+_FILE_CLASS_KEYWORDS = ("File", "Attach", "FileTrans")
+
+
+def identify_message_type(msg_control) -> dict:
+    """根据真实 UIA 控件证据识别消息类型与文件名。
+
+    保守策略：必须有多重结构证据才判 ``type=file``。
+    **禁止仅凭消息正文文本含扩展名推断 type=file**；文件名必须来自独立 UIA 子控件
+    （文件卡名称标签）或文件类 ClassName。
+
+    判定优先级：
+      1. 消息控件 ClassName 含文件/附件关键字（File/Attach/FileTrans）→ file
+      2. 存在 ImageControl 图标子控件 + 文件名标签子控件 → file
+      3. 其它（含正文恰为 "r.xlsx" 的纯文本）→ text
+
+    Returns:
+        {"type": "file"|"text", "file_name": str|None}
+        file 时 file_name 取自文件名子控件；若仅有 ClassName 提示则回退到消息 Name。
+    """
+    class_name = (getattr(msg_control, "ClassName", "") or "")
+
+    # 收集子控件证据（ControlTypeName + Name）
+    children_info: list[dict] = []
+    try:
+        for ch in msg_control.GetChildren():
+            children_info.append({
+                "ctype": getattr(ch, "ControlTypeName", "") or "",
+                "name": (getattr(ch, "Name", "") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    has_icon = any(c["ctype"] == "ImageControl" for c in children_info)
+    filename_child: str | None = None
+    for c in children_info:
+        if c["name"] and _is_filename_label(c["name"]):
+            filename_child = c["name"]
+            break
+
+    file_class_hint = any(kw in class_name for kw in _FILE_CLASS_KEYWORDS)
+
+    # 文件判定：ClassName 文件提示，或（图标子控件 + 文件名子控件）
+    if file_class_hint or (has_icon and filename_child):
+        fname = filename_child
+        if fname is None:
+            # 仅有 ClassName 提示而子控件无文件名 → 回退到消息自身 Name（若像文件名）
+            own = (getattr(msg_control, "Name", "") or "").strip()
+            if own and _is_filename_label(own):
+                fname = own
+        logger.debug(
+            "identify_message_type: file class=%s icon=%s filename=%s",
+            class_name, has_icon, "set" if fname else "missing",
+        )
+        return {"type": "file", "file_name": fname}
+
+    return {"type": "text", "file_name": None}
+
+
+def _is_filename_label(text: str) -> bool:
+    """判断文本是否像文件名标签。
+
+    用于识别文件卡的"名称子控件"（独立 UIA 元素），不是从消息正文推断。
+    """
+    if not text or len(text) > 250:
+        return False
+    return bool(_FILENAME_LABEL_PATTERN.match(text))
+
+
 def identify_sender(
     msg_control: uia.Control,
     chat_mid_x: float,

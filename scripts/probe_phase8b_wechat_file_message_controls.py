@@ -31,12 +31,13 @@ def _fingerprint(text: str | None) -> str:
 def probe_message_controls(max_messages: int = 20) -> dict:
     """读取当前聊天窗口消息摘要（脱敏）。
 
-    复用既有 read_recent_messages（只读）；不写输入框、不保存截图。
+    复用既有 read_recent_messages（只读，真实签名第一参数为消息列表控件）；
+    不写输入框、不粘贴、不发送、不保存截图、不搜索/切换联系人。
     """
-    from app.wechat_ui.window_locator import find_wechat_window
+    from app.wechat_ui.window_locator import find_wechat_window, find_message_list
     from app.wechat_ui.current_chat_reader import read_recent_messages
 
-    summary: dict = {"wechat_window": None, "messages": []}
+    summary: dict = {"wechat_window": None, "failure_stage": None, "messages": []}
     try:
         window = find_wechat_window()
         summary["wechat_window"] = {
@@ -45,11 +46,20 @@ def probe_message_controls(max_messages: int = 20) -> dict:
         }
     except Exception as exc:
         summary["wechat_window"] = {"found": False, "error": type(exc).__name__}
+        summary["failure_stage"] = "wechat_window_not_found"
         return summary
 
     try:
-        messages = read_recent_messages(max_messages)
+        msg_list = find_message_list(window, timeout=5)
     except Exception as exc:
+        summary["failure_stage"] = "message_list_not_found"
+        summary["messages"] = {"error": type(exc).__name__}
+        return summary
+
+    try:
+        messages = read_recent_messages(msg_list, max_messages=max_messages)
+    except Exception as exc:
+        summary["failure_stage"] = "message_read_failed"
         summary["messages"] = {"error": type(exc).__name__}
         return summary
 
@@ -59,7 +69,7 @@ def probe_message_controls(max_messages: int = 20) -> dict:
             "sender": m.get("sender"),
             "type": m.get("type"),
             "file_name": m.get("file_name"),
-            "text_fp": _fingerprint(m.get("text")),
+            "text_fp": _fingerprint(m.get("content")),
         })
     return summary
 
