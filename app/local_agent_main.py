@@ -128,6 +128,16 @@ class PollAndExecuteRequest(BaseModel):
     task_id: int | None = Field(None, description="指定要执行的任务 ID（优先于队列拉取）")
 
 
+class PollAndSendReportRequest(BaseModel):
+    """Phase 8-B Task 7：日报附件投递编排请求。
+
+    dry_run 默认 True（探针：claim→下载→校验→gate 检查→回写，不 Enter/不消费 nonce/不 sent）。
+    dry_run=False 真实发送在 Task 7 禁用（Task 8 审批放行后才启用）。
+    """
+    task_id: int | None = Field(None, description="指定投递任务 ID（优先于队列拉取）")
+    dry_run: bool | None = Field(None, description="默认 True 探针；False 真实发送（Task 7 禁用）")
+
+
 def get_machine_identity() -> dict:
     return {
         "hostname": socket.gethostname(),
@@ -193,6 +203,7 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
     if not _LOCAL_AGENT_TOKEN:
         return {"ok": False, "status": None, "json": None, "error": "LOCAL_AGENT_TOKEN 未配置，拒绝匿名请求"}
     body = __import__("json").dumps(data, ensure_ascii=False).encode("utf-8")
+    from urllib.error import HTTPError
     try:
         req = urllib.request.Request(
             url, data=body, method="POST",
@@ -204,6 +215,14 @@ def _http_post_json(url: str, data: dict, timeout: float = 10.0) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_body = resp.read().decode("utf-8")
             return {"ok": True, "status": resp.status, "json": __import__("json").loads(resp_body), "error": None}
+    except HTTPError as exc:
+        # Phase 8-B Task 7：保留 HTTP 状态码（409/404 等），与 _http_get 一致；
+        # 旧实现统一 except Exception 把 409 也变成 status=None，调用方无法区分 claim 冲突。
+        try:
+            parsed = __import__("json").loads(exc.read().decode("utf-8"))
+        except Exception:
+            parsed = None
+        return {"ok": False, "status": exc.code, "json": parsed, "error": str(exc)}
     except Exception as exc:
         return {"ok": False, "status": None, "json": None, "error": str(exc)}
 
@@ -489,6 +508,187 @@ def _write_back_task_result(
         "error": resp.get("error"),
     }
     return resp
+
+
+def _writeback_delivery_result(
+    server_url: str, task_id: int, execution_token: str, *,
+    failed: bool = False, blocked: bool = False, probe: bool = False,
+    failure_stage: str | None = None, contact_verified: bool = False,
+    evidence: dict | None = None,
+) -> dict:
+    """Phase 8-B Task 7：回写投递结果到 9000 delivery result 端点。
+
+    token 透传：X-Local-Agent-Token 由 _http_post_json 统一携带（header）；
+    execution_token 进 body（服务端按 hash 校验）。send_nonce 始终 None——
+    探针/gate 失败/下载失败均未 send-intent，绝不消费发送 nonce。
+    异常正文只记受控 failure_stage，不记 token/path/内容。
+    """
+    url = f"{server_url.rstrip('/')}/daily-report-deliveries/agent/tasks/{int(task_id)}/result"
+    payload = {
+        "execution_token": execution_token,
+        "send_nonce": None,
+        "success": False,
+        "send_triggered": False,
+        "message_verified": False,
+        "contact_verified": contact_verified,
+        "failure_stage": failure_stage,
+        "blocked": blocked,
+        "probe": probe,
+        "evidence": evidence,
+    }
+    resp = _http_post_json(url, payload)
+    body = resp.get("json") or {}
+    return {
+        "ok": resp.get("ok"),
+        "status": resp.get("status"),
+        "delivery_status": body.get("delivery_status"),
+        "task_status": body.get("status"),
+    }
+
+
+def _delivery_probe_run(
+    server_url: str, task_data: dict, result: dict,
+) -> dict:
+    """Phase 8-B Task 7：dry_run 探针编排（无发送）。
+
+    严格顺序：claim → 下载 → 文件校验 → gates 检查 → 回写。
+    不 CF_HDROP、不 Ctrl+V、不 send-intent、不 Enter。
+    成功 → probe（verify_pending）；gate 失败 → blocked；下载/文件失败 → failed。
+    成功证据绝不伪装 sent（service probe 分支强制 verify_pending）。
+    """
+    import tempfile
+    from pathlib import Path
+    from app.wechat_ui.file_attachment_sender import (
+        AttachmentSendError,
+        validate_attachment_file,
+    )
+
+    task_id = int(task_data.get("id"))
+    target_nickname = task_data.get("target_nickname")
+    claim_url = f"{server_url.rstrip('/')}/daily-report-deliveries/agent/tasks/{task_id}/claim"
+
+    # 1. claim（原子 pending→running，获取一次性 token + 文件元数据）
+    claim_resp = _http_post_json(claim_url, {})
+    if not claim_resp.get("ok"):
+        status = claim_resp.get("status")
+        if status == 409:
+            result["failure_stage"] = "claim_conflict"
+            result["message"] = "任务已被其他 Agent 占用"
+        elif status == 404:
+            result["failure_stage"] = "task_not_found"
+            result["message"] = "任务不存在或跨商户不可见"
+        else:
+            result["failure_stage"] = "claim_failed"
+            result["message"] = "claim 请求失败"
+        return result
+    claim = claim_resp.get("json") or {}
+    execution_token = claim.get("execution_token")
+    download_ticket = claim.get("download_ticket")
+    file_name = claim.get("file_name")
+    sha256 = claim.get("sha256")
+    size = claim.get("size")
+    if not execution_token or not download_ticket or not file_name:
+        result["failure_stage"] = "claim_response_incomplete"
+        result["message"] = "claim 响应缺少必要字段"
+        return result
+
+    downloaded_path = None
+    try:
+        # 2. 下载（Task 5 安全下载器，token/ticket 只进 header，流式 + 双重限 + 原子替换）
+        try:
+            downloaded_path = _download_report_attachment(
+                server_url=server_url, task_id=task_id,
+                execution_token=execution_token, download_ticket=download_ticket,
+                expected_name=file_name, expected_sha256=sha256,
+                expected_size=size, local_agent_token=_LOCAL_AGENT_TOKEN,
+            )
+        except DownloadError as exc:
+            result["failure_stage"] = f"download_{exc.code}"
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                failed=True, failure_stage=f"download_{exc.code}",
+            )
+            return result
+
+        # 3. 文件校验（Task 6 validate_attachment_file，拒 symlink/UNC/穿越/控制字符/非xlsx/目录外）
+        try:
+            allowed_dir = Path(tempfile.gettempdir()) / "xg_agent_attachments"
+            validate_attachment_file(downloaded_path, allowed_dir)
+        except AttachmentSendError as exc:
+            # exc.code 已含 file_ 前缀（file_outside_allowed_dir 等），直接使用避免重复
+            result["failure_stage"] = exc.code
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                failed=True, failure_stage=exc.code,
+            )
+            return result
+
+        # 4. gates 检查（探针只检查，不 Enter、不粘贴、不 send-intent）
+        if not is_automation_allowed():
+            result["failure_stage"] = "emergency_stop"
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                blocked=True, failure_stage="emergency_stop",
+            )
+            return result
+        try:
+            window = find_wechat_window()
+            hwnd = getattr(window, "NativeWindowHandle", None)
+        except Exception:
+            hwnd = None
+        if not isinstance(hwnd, int):
+            result["failure_stage"] = "wechat_window_not_found"
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                blocked=True, failure_stage="wechat_window_not_found",
+            )
+            return result
+        readiness = check_wechat_ready_for_automation(hwnd)
+        if not readiness.get("success"):
+            result["failure_stage"] = "wechat_not_ready"
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                blocked=True, failure_stage="wechat_not_ready",
+            )
+            return result
+        if not ensure_wechat_foreground(hwnd, reason="delivery_probe_foreground").get("success"):
+            result["failure_stage"] = "foreground_lost"
+            result["write_back"] = _writeback_delivery_result(
+                server_url, task_id, execution_token,
+                blocked=True, failure_stage="foreground_lost",
+            )
+            return result
+        contact_verified = False
+        if target_nickname:
+            contact = verify_current_chat_contact(target_nickname)
+            contact_verified = bool(
+                contact.get("verified")
+                and not contact.get("partial_match")
+                and not contact.get("manual_review_required")
+            )
+            if not contact_verified:
+                result["failure_stage"] = "contact_not_verified"
+                result["write_back"] = _writeback_delivery_result(
+                    server_url, task_id, execution_token,
+                    blocked=True, failure_stage="contact_not_verified",
+                )
+                return result
+
+        # 5. 探针成功：回写 probe（verify_pending，禁止伪装 sent）
+        result["probe"] = {"completed": True, "contact_verified": contact_verified}
+        result["write_back"] = _writeback_delivery_result(
+            server_url, task_id, execution_token,
+            probe=True, contact_verified=contact_verified,
+        )
+        return result
+    finally:
+        # 探针不复用下载文件；清理避免残留受控目录
+        if downloaded_path is not None:
+            try:
+                from pathlib import Path as _Path
+                _Path(downloaded_path).unlink()
+            except Exception:
+                pass
 
 
 def _base_response(request: LocalWechatTestRequest | None = None) -> dict:
@@ -2152,6 +2352,95 @@ def create_local_agent_app(
             _wechat_task_lock.release()
 
         return result
+
+
+    @app.post("/agent/tasks/poll-and-send-report")
+    def agent_poll_and_send_report(request: PollAndSendReportRequest | None = None):
+        """Phase 8-B Task 7：日报附件投递编排（默认 dry_run 探针，禁止真实发送）。
+
+        dry_run=true（默认）：claim → 下载 → 文件校验 → gates 检查 → 回写 probe（verify_pending）。
+        dry_run=false：Task 7 禁止（Task 8 审批放行后启用），不 claim 返回 blocked，避免消耗任务。
+        与 execute/detect 共用 _wechat_task_lock；每次只处理一条 send_report_attachment。
+        本端点不接后台 runtime loop；Task 8 单发通过前禁止自动轮询。
+        """
+        result = {
+            "success": False,
+            "agent_machine": get_machine_identity(),
+            "server_url": server_url,
+            "task": None,
+            "probe": None,
+            "write_back": None,
+            "failure_stage": None,
+            "blocked": False,
+            "message": "",
+        }
+        if _wechat_task_lock is None or not _wechat_task_lock.acquire(blocking=False):
+            result["failure_stage"] = "agent_busy"
+            result["message"] = "Agent 正在执行其他任务，请稍后重试"
+            logger.warning("poll-and-send-report: 运行锁被占用或未初始化，跳过")
+            return result
+        if not server_url:
+            result["failure_stage"] = "server_url_not_configured"
+            result["message"] = "未配置主系统地址，请启动时传入 --server-url 参数"
+            _wechat_task_lock.release()
+            return result
+        try:
+            dry_run = True
+            requested_task_id = None
+            if request:
+                if request.dry_run is not None:
+                    dry_run = request.dry_run
+                requested_task_id = request.task_id
+
+            # dry_run=false：Task 7 禁止真实发送（不 claim，不消耗任务）
+            if not dry_run:
+                result["failure_stage"] = "real_send_not_enabled_in_task7"
+                result["blocked"] = True
+                result["message"] = "Task 7 仅支持 dry_run 探针；真实发送需 Task 8 审批放行"
+                return result
+
+            # 拉取任务（指定 task_id 走 detail，否则走 pending 队列头部）
+            if requested_task_id:
+                detail_url = f"{server_url.rstrip('/')}/daily-report-deliveries/agent/tasks/{requested_task_id}"
+                resp = _http_get(detail_url)
+                if not resp.get("ok"):
+                    status = resp.get("status")
+                    result["failure_stage"] = "task_not_found" if status == 404 else "server_request_failed"
+                    result["message"] = "任务不存在或请求失败"
+                    return result
+                task_data = resp.get("json") or {}
+                if task_data.get("status") != "pending":
+                    result["failure_stage"] = "task_not_pending"
+                    result["message"] = f"任务 #{requested_task_id} 状态为 {task_data.get('status')}，非 pending"
+                    return result
+                task_data.setdefault("id", requested_task_id)
+                task_data.setdefault("task_type", "send_report_attachment")
+            else:
+                pending_url = f"{server_url.rstrip('/')}/daily-report-deliveries/agent/pending"
+                resp = _http_get(pending_url, params={"limit": 1})
+                if not resp.get("ok"):
+                    result["failure_stage"] = "server_request_failed"
+                    result["message"] = "拉取待处理投递任务失败"
+                    return result
+                tasks = resp.get("json") or []
+                if not tasks:
+                    result["message"] = "无待处理投递任务"
+                    result["task_found"] = False
+                    return result
+                task_data = tasks[0]
+
+            result["task"] = {
+                "id": task_data.get("id"),
+                "task_type": task_data.get("task_type"),
+                "target_nickname": task_data.get("target_nickname"),
+                "report_delivery_id": task_data.get("report_delivery_id"),
+            }
+
+            # dry_run 探针编排（claim → 下载 → 校验 → gates → 回写）
+            _delivery_probe_run(server_url, task_data, result)
+            return result
+        finally:
+            _wechat_task_lock.release()
 
 
     def _default_runtime_poll_once() -> tuple[dict, dict]:

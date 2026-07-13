@@ -1988,6 +1988,8 @@ class DeliveryResultRequest(BaseModel):
     failure_stage: str | None = None
     agent_identity: dict | None = None
     evidence: dict | None = None
+    blocked: bool = False
+    probe: bool = False
 
 
 class DeliveryResultResponse(BaseModel):

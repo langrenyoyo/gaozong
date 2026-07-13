@@ -134,6 +134,7 @@ def agent_result(
             pasted=body.pasted, sent=body.sent, send_triggered=body.send_triggered,
             message_verified=body.message_verified, failure_stage=body.failure_stage,
             agent_identity=body.agent_identity, evidence=body.evidence,
+            blocked=body.blocked, probe=body.probe,
         )
     except svc.DeliveryNotFoundError:
         raise HTTPException(404, "任务不存在")

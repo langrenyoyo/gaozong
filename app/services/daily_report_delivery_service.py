@@ -558,15 +558,18 @@ def submit_delivery_result(
     partial_match: bool = False, manual_review_required: bool = False, pasted: bool = False,
     sent: bool = False, send_triggered: bool = False, message_verified: bool = False,
     failure_stage: str | None = None, agent_identity: dict | None = None,
-    evidence: dict | None = None,
+    evidence: dict | None = None, blocked: bool = False, probe: bool = False,
 ) -> dict:
     """状态规则回写。
 
     - 全门禁 + nonce 有效 + message_verified → sent（delivery 也 sent）
     - send_triggered 但未 message_verified → verify_pending（保守，不假设 Enter 未发生）
-    - 未触发发送的失败 → failed（可显式重试）
+    - blocked=True（前台/联系人/紧停/发送前 gate 失败，未触发发送）→ blocked（可显式重试）
+    - probe=True（dry_run 探针：已 claim+下载+校验+gate 通过，但显式未 Enter 未发送）→ verify_pending
+    - 其它未触发发送的失败 → failed（可显式重试）
     - 旧/错误 execution_token → ClaimConflictError（409）
     - 已 sent 重复 → 幂等返回
+    - 探针成功禁止伪装 sent：probe 分支强制 verify_pending，不受 success 影响。
     """
     task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
     if task is None:
@@ -588,6 +591,13 @@ def submit_delivery_result(
         delivery.status = STATUS_SENT
         delivery.delivered_at = now
     elif send_triggered:
+        task.status = STATUS_VERIFY_PENDING
+        delivery.status = STATUS_VERIFY_PENDING
+    elif blocked:
+        task.status = STATUS_BLOCKED
+        delivery.status = STATUS_BLOCKED
+    elif probe:
+        # dry_run 探针：已 claim+下载+校验+gate 通过但显式未 Enter；强制 verify_pending，禁止伪装 sent
         task.status = STATUS_VERIFY_PENDING
         delivery.status = STATUS_VERIFY_PENDING
     else:
