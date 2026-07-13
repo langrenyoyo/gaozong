@@ -1929,6 +1929,75 @@ class DailyReportJobListResponse(BaseModel):
     records: list[DailyReportJobItem]
 
 
+# ----- Phase 8-B Task 4：Local Agent 附件协议（不含 storage_key/token 原文/绝对路径）-----
+class DeliveryAgentTaskItem(BaseModel):
+    id: int
+    task_type: str
+    status: str
+    staff_id: int | None = None
+    target_nickname: str | None = None
+    report_delivery_id: int
+    delivery_attempt_no: int | None = None
+
+
+class DeliveryTaskDetail(BaseModel):
+    id: int
+    status: str
+    delivery_id: int
+    attempt_no: int | None = None
+    target_nickname: str | None = None
+    file_name: str | None = None
+    sha256: str | None = None
+    size: int | None = None
+
+
+class DeliveryClaimResponse(BaseModel):
+    """claim 响应：一次性返回明文 execution_token/download_ticket（DB 只存 SHA-256 hash）。"""
+    task_id: int
+    delivery_id: int
+    attempt_no: int | None = None
+    target_nickname: str | None = None
+    file_name: str | None = None
+    sha256: str | None = None
+    size: int | None = None
+    execution_token: str
+    download_ticket: str
+    expires_at: datetime | None = None
+
+
+class DeliverySendIntentRequest(BaseModel):
+    execution_token: str
+
+
+class DeliverySendIntentResponse(BaseModel):
+    send_nonce: str
+    expires_at: datetime | None = None
+
+
+class DeliveryResultRequest(BaseModel):
+    execution_token: str
+    send_nonce: str | None = None
+    success: bool
+    contact_verified: bool = False
+    partial_match: bool = False
+    manual_review_required: bool = False
+    pasted: bool = False
+    sent: bool = False
+    send_triggered: bool = False
+    message_verified: bool = False
+    failure_stage: str | None = None
+    agent_identity: dict | None = None
+    evidence: dict | None = None
+
+
+class DeliveryResultResponse(BaseModel):
+    task_id: int
+    status: str
+    delivery_id: int
+    delivery_status: str
+    attempt_no: int | None = None
+
+
 class ComputeMarkupRatioOut(BaseModel):
     """算力上浮比例输出结构（基点整数，不浮点）。"""
 

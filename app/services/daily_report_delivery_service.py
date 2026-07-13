@@ -313,3 +313,326 @@ def has_unreplaceable_deliveries(db: Session, *, merchant_id: str, job_id: int) 
         .count()
         > 0
     )
+
+
+# ===========================================================================
+# Phase 8-B Task 4：9000 Local Agent 附件协议
+# ===========================================================================
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import secrets  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from app.services.daily_report_storage import validate_artifact_path  # noqa: E402
+
+
+class ClaimConflictError(Exception):
+    """claim/消费并发冲突（task 已被 claim 或 ticket 已消费/旧 token）。"""
+
+
+class InvalidTokenError(Exception):
+    """令牌/票据无效或过期（不区分具体原因，防枚举）。"""
+
+
+class DeliveryRateLimitError(Exception):
+    """同商户同销售 send-intent 限频。"""
+
+
+_SEND_INTENT_RATE_LIMIT_SECONDS = 10
+_TASK_TYPE_ATTACHMENT = "send_report_attachment"
+
+
+def _hash_token(token: str) -> str:
+    """令牌 SHA-256 摘要（DB 只存 hash，不存明文）。"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _const_eq(stored_hash: str | None, token: str | None) -> bool:
+    """常量时间比较 stored_hash 与 token 的 hash；None 直接 False（不泄露存在性）。"""
+    if not stored_hash or not token:
+        return False
+    return hmac.compare_digest(stored_hash, _hash_token(token))
+
+
+def _get_task_chain(db: Session, merchant_id: str, task_id: int):
+    """JOIN task+delivery+job+staff 验证可信 merchant；任一缺失/跨商户统一返回 None（router 转 404）。"""
+    task = (
+        db.query(WechatTask)
+        .filter(WechatTask.id == task_id, WechatTask.task_type == _TASK_TYPE_ATTACHMENT)
+        .first()
+    )
+    if task is None or task.report_delivery_id is None:
+        return None, None, None, None
+    delivery = (
+        db.query(DailyReportDelivery)
+        .filter(
+            DailyReportDelivery.id == task.report_delivery_id,
+            DailyReportDelivery.merchant_id == merchant_id,
+        )
+        .first()
+    )
+    if delivery is None:
+        return None, None, None, None
+    job = db.query(DailyReportJob).filter(
+        DailyReportJob.id == delivery.report_job_id, DailyReportJob.merchant_id == merchant_id,
+    ).first()
+    staff = db.query(SalesStaff).filter(
+        SalesStaff.id == delivery.receiver_staff_id, SalesStaff.merchant_id == merchant_id,
+    ).first()
+    if job is None:
+        return None, None, None, None
+    return task, delivery, job, staff
+
+
+def list_pending_delivery_tasks(db: Session, *, merchant_id: str, limit: int = 20) -> list[dict]:
+    """列出本商户 pending 的 send_report_attachment 任务（Agent 拉单）。"""
+    rows = (
+        db.query(WechatTask)
+        .filter(WechatTask.task_type == _TASK_TYPE_ATTACHMENT, WechatTask.status == STATUS_PENDING)
+        .order_by(WechatTask.id.asc())
+        .limit(limit * 2)
+        .all()
+    )
+    result: list[dict] = []
+    for t in rows:
+        owned = (
+            db.query(DailyReportDelivery)
+            .filter(
+                DailyReportDelivery.id == t.report_delivery_id,
+                DailyReportDelivery.merchant_id == merchant_id,
+            )
+            .first()
+        )
+        if owned is None:
+            continue
+        result.append({
+            "id": t.id, "task_type": t.task_type, "status": t.status,
+            "staff_id": t.staff_id, "target_nickname": t.target_nickname,
+            "report_delivery_id": t.report_delivery_id,
+            "delivery_attempt_no": t.delivery_attempt_no,
+        })
+        if len(result) >= limit:
+            break
+    return result
+
+
+def get_agent_task_detail(db: Session, *, merchant_id: str, task_id: int) -> dict | None:
+    task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
+    if task is None:
+        return None
+    return {
+        "id": task.id, "status": task.status, "delivery_id": delivery.id,
+        "attempt_no": task.delivery_attempt_no,
+        "target_nickname": staff.wechat_nickname if staff else None,
+        "file_name": delivery.artifact_file_name,
+        "sha256": delivery.artifact_sha256, "size": delivery.artifact_size_bytes,
+    }
+
+
+def claim_delivery_task(db: Session, *, merchant_id: str, task_id: int) -> dict:
+    """原子 claim：pending→running，生成 execution_token + download_ticket（只存 hash）。
+
+    返回一次性明文 token + 文件元数据。并发/已 claim → ClaimConflictError（router 转 409）。
+    """
+    task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
+    if task is None:
+        raise DeliveryNotFoundError(str(task_id))
+    now = datetime.now()
+    exec_token = secrets.token_hex(32)
+    dl_ticket = secrets.token_hex(32)
+    dl_expires = now + timedelta(seconds=config.DAILY_REPORT_ATTACHMENT_DOWNLOAD_TTL_SECONDS)
+    rowcount = (
+        db.query(WechatTask)
+        .filter(WechatTask.id == task_id, WechatTask.status == STATUS_PENDING)
+        .update({
+            WechatTask.status: STATUS_RUNNING,
+            WechatTask.execution_token_hash: _hash_token(exec_token),
+            WechatTask.execution_started_at: now,
+            WechatTask.download_ticket_hash: _hash_token(dl_ticket),
+            WechatTask.download_ticket_expires_at: dl_expires,
+            WechatTask.downloaded_at: None,
+        }, synchronize_session=False)
+    )
+    if rowcount == 0:
+        db.rollback()
+        raise ClaimConflictError(f"task {task_id} 非 pending 或已被 claim")
+    db.commit()
+    return {
+        "task_id": task_id, "delivery_id": delivery.id,
+        "attempt_no": task.delivery_attempt_no,
+        "target_nickname": staff.wechat_nickname if staff else None,
+        "file_name": delivery.artifact_file_name,
+        "sha256": delivery.artifact_sha256, "size": delivery.artifact_size_bytes,
+        "execution_token": exec_token, "download_ticket": dl_ticket,
+        "expires_at": dl_expires,
+    }
+
+
+def consume_download_ticket(
+    db: Session, *, merchant_id: str, task_id: int,
+    execution_token: str, download_ticket: str,
+) -> tuple[Path, DailyReportDelivery]:
+    """三头校验 + 单次消费 + hash/size 重算校验。返回 (file_path, delivery)。"""
+    task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
+    if task is None:
+        raise DeliveryNotFoundError(str(task_id))
+    if not _const_eq(task.execution_token_hash, execution_token):
+        raise InvalidTokenError("execution_token")
+    if not _const_eq(task.download_ticket_hash, download_ticket):
+        raise InvalidTokenError("download_ticket")
+    if task.download_ticket_expires_at is None or datetime.now() > task.download_ticket_expires_at:
+        raise InvalidTokenError("download_ticket_expired")
+    rowcount = (
+        db.query(WechatTask)
+        .filter(WechatTask.id == task_id, WechatTask.downloaded_at.is_(None))
+        .update({WechatTask.downloaded_at: datetime.now()}, synchronize_session=False)
+    )
+    if rowcount == 0:
+        db.rollback()
+        raise ClaimConflictError("download_ticket_used")
+    db.commit()
+    path = validate_artifact_path(delivery.artifact_storage_key)
+    data = path.read_bytes()
+    if len(data) != delivery.artifact_size_bytes:
+        raise InvalidTokenError("size_mismatch")
+    if hashlib.sha256(data).hexdigest() != delivery.artifact_sha256:
+        raise InvalidTokenError("hash_mismatch")
+    return path, delivery
+
+
+def authorize_send_intent(
+    db: Session, *, merchant_id: str, task_id: int, execution_token: str,
+) -> str:
+    """Enter 前二次检查 + 签发 15s 单次 nonce（只存 hash）。返回明文 nonce。"""
+    task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
+    if task is None:
+        raise DeliveryNotFoundError(str(task_id))
+    if not _const_eq(task.execution_token_hash, execution_token):
+        raise InvalidTokenError("execution_token")
+    if task.downloaded_at is None:
+        raise DeliveryStateError("not_downloaded")
+    if delivery.status in _TERMINAL:
+        raise DeliveryStateError("delivery_terminal")
+    if staff is None or staff.status != "active" or not staff.wechat_nickname:
+        raise DeliveryStateError("staff_unavailable")
+    toggle = _REPORT_TOGGLE.get(job.report_type)
+    if toggle and not getattr(staff, toggle, False):
+        raise DeliveryStateError("report_toggle_off")
+    if not config.DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED:
+        raise DeliveryStateError("delivery_disabled")
+    if (not config.DAILY_REPORT_ATTACHMENT_ALLOW_FULL_ROLLOUT
+            and staff.id not in config.DAILY_REPORT_ATTACHMENT_STAFF_ALLOWLIST):
+        raise DeliveryStateError("staff_not_in_allowlist")
+    # 同商户同销售 10s 限频（排除自己）
+    threshold = datetime.now() - timedelta(seconds=_SEND_INTENT_RATE_LIMIT_SECONDS)
+    recent_count = (
+        db.query(WechatTask)
+        .join(DailyReportDelivery, WechatTask.report_delivery_id == DailyReportDelivery.id)
+        .filter(
+            DailyReportDelivery.merchant_id == merchant_id,
+            WechatTask.staff_id == task.staff_id,
+            WechatTask.send_authorized_at.isnot(None),
+            WechatTask.send_authorized_at >= threshold,
+            WechatTask.id != task_id,
+        )
+        .count()
+    )
+    if recent_count > 0:
+        raise DeliveryRateLimitError("send_intent_rate_limit")
+    nonce = secrets.token_hex(32)
+    now = datetime.now()
+    db.query(WechatTask).filter(WechatTask.id == task_id).update({
+        WechatTask.send_nonce_hash: _hash_token(nonce),
+        WechatTask.send_nonce_expires_at: now + timedelta(seconds=config.DAILY_REPORT_ATTACHMENT_SEND_AUTH_TTL_SECONDS),
+        WechatTask.send_authorized_at: now,
+        WechatTask.status: STATUS_SEND_AUTHORIZED,
+    }, synchronize_session=False)
+    db.commit()
+    return nonce
+
+
+def submit_delivery_result(
+    db: Session, *, merchant_id: str, task_id: int, execution_token: str,
+    send_nonce: str | None, success: bool, contact_verified: bool = False,
+    partial_match: bool = False, manual_review_required: bool = False, pasted: bool = False,
+    sent: bool = False, send_triggered: bool = False, message_verified: bool = False,
+    failure_stage: str | None = None, agent_identity: dict | None = None,
+    evidence: dict | None = None,
+) -> dict:
+    """状态规则回写。
+
+    - 全门禁 + nonce 有效 + message_verified → sent（delivery 也 sent）
+    - send_triggered 但未 message_verified → verify_pending（保守，不假设 Enter 未发生）
+    - 未触发发送的失败 → failed（可显式重试）
+    - 旧/错误 execution_token → ClaimConflictError（409）
+    - 已 sent 重复 → 幂等返回
+    """
+    task, delivery, job, staff = _get_task_chain(db, merchant_id, task_id)
+    if task is None:
+        raise DeliveryNotFoundError(str(task_id))
+    if not _const_eq(task.execution_token_hash, execution_token):
+        raise ClaimConflictError("execution_token")
+    if task.status == STATUS_SENT and delivery.status == STATUS_SENT:
+        return {"task_id": task_id, "status": STATUS_SENT, "delivery_id": delivery.id,
+                "delivery_status": STATUS_SENT, "attempt_no": task.delivery_attempt_no}
+    nonce_valid = bool(
+        send_nonce and _const_eq(task.send_nonce_hash, send_nonce)
+        and task.send_nonce_expires_at and datetime.now() <= task.send_nonce_expires_at
+    )
+    now = datetime.now()
+    if send_triggered and message_verified and contact_verified and success and nonce_valid:
+        task.status = STATUS_SENT
+        task.sent_at = now
+        task.attachment_verified_at = now
+        delivery.status = STATUS_SENT
+        delivery.delivered_at = now
+    elif send_triggered:
+        task.status = STATUS_VERIFY_PENDING
+        delivery.status = STATUS_VERIFY_PENDING
+    else:
+        task.status = STATUS_FAILED
+        delivery.status = STATUS_FAILED
+    if failure_stage:
+        task.failure_stage = failure_stage
+        delivery.last_failure_stage = failure_stage
+    db.commit()
+    return {"task_id": task_id, "status": task.status, "delivery_id": delivery.id,
+            "delivery_status": delivery.status, "attempt_no": task.delivery_attempt_no}
+
+
+def reclaim_stale_leases(db: Session, *, lease_seconds: int) -> dict:
+    """租约回收（保守）：running 过期 + 未签 nonce → failed；曾签 nonce 超时 → verify_pending。
+
+    数据库条件更新（不由 Agent 本地时钟决定），写安全审计日志。
+    """
+    threshold = datetime.now() - timedelta(seconds=lease_seconds)
+    stale_running = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.status == STATUS_RUNNING,
+            WechatTask.execution_started_at.isnot(None),
+            WechatTask.execution_started_at < threshold,
+            WechatTask.send_nonce_hash.is_(None),
+        )
+        .update({WechatTask.status: STATUS_FAILED,
+                 WechatTask.failure_stage: "execution_lease_expired"},
+                synchronize_session=False)
+    )
+    stale_authorized = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.status.in_([STATUS_RUNNING, STATUS_SEND_AUTHORIZED]),
+            WechatTask.send_nonce_hash.isnot(None),
+            WechatTask.send_authorized_at.isnot(None),
+            WechatTask.send_authorized_at < threshold,
+        )
+        .update({WechatTask.status: STATUS_VERIFY_PENDING}, synchronize_session=False)
+    )
+    if stale_running or stale_authorized:
+        db.commit()
+        logger.warning(
+            "delivery reclaim_stale running_to_failed=%s authorized_to_verify_pending=%s",
+            stale_running, stale_authorized,
+        )
+    return {"running_to_failed": stale_running, "authorized_to_verify_pending": stale_authorized}

@@ -46,6 +46,7 @@ from app.routers import (
     lead_notification_records,
     sales_feedback,
     daily_reports,
+    daily_report_deliveries,
     admin_debug,
     health,
 )
@@ -148,6 +149,7 @@ def create_app() -> FastAPI:
     app.include_router(lead_notification_records.router)
     app.include_router(sales_feedback.router)
     app.include_router(daily_reports.router)
+    app.include_router(daily_report_deliveries.router)
     app.include_router(admin_debug.router)
     app.include_router(health.router)
 

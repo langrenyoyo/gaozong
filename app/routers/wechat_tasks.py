@@ -183,6 +183,10 @@ def submit_wechat_task_result(
     if not wechat_task_service.task_belongs_to_merchant(task, ctx.merchant_id):
         raise HTTPException(404, "微信任务不存在")
 
+    # Phase 8-B：send_report_attachment 必须走附件专用 result 端点（禁旁路 nonce/气泡验证）
+    if task.task_type == "send_report_attachment":
+        raise HTTPException(409, "附件任务须走专用 result 端点")
+
     return wechat_task_service.submit_wechat_task_result(
         db,
         task,

@@ -341,6 +341,9 @@ def submit_wechat_task_result(
     8. detect_count >= MAX_DETECT_COUNT → status=completed（max_retries_exceeded）
     9. success=false → status=failed
     """
+    # Phase 8-B：send_report_attachment 必须走附件专用 result 端点（禁止旁路 nonce/气泡验证）
+    if task.task_type == "send_report_attachment":
+        raise PermissionError("send_report_attachment 必须走附件专用 result 端点")
     # 保存 raw_result（通用规则）
     task.raw_result = json.dumps(raw_result, ensure_ascii=False) if raw_result else task.raw_result
 
