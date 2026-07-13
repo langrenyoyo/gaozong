@@ -10,3 +10,5 @@ pydantic==2.12.4
 httpx==0.28.1
 requests==2.32.3
 pymilvus==2.6.12
+# Phase 8 每日报表 Excel 导出（app/services/daily_report_excel.py 顶层依赖，缺失会启动即崩）
+openpyxl>=3.1.5,<4
