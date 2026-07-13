@@ -230,9 +230,11 @@ def test_postgres_migration_0010_downgrade_preserves_legacy_tables():
         pytest.skip("PG 0010 未实现（Task 2 才建）")
     content = PG_FILE_PHASE8B.read_text(encoding="utf-8")
     downgrade = content.split("def downgrade() -> None:", 1)[-1]
-    for legacy in ["wechat_tasks", "daily_report_jobs", "sales_staff", "daily_report_deliveries"]:
+    # daily_report_deliveries 是 0010 新表，downgrade 删除以回到 0009 前状态，属合理；
+    # 此处只保护 wechat_tasks / daily_report_jobs / sales_staff 等历史表不被误删。
+    for legacy in ["wechat_tasks", "daily_report_jobs", "sales_staff"]:
         assert f'op.drop_table("{legacy}")' not in downgrade, (
-            f"downgrade 不得删除 {legacy}"
+            f"downgrade 不得删除历史表 {legacy}"
         )
 
 
@@ -285,7 +287,22 @@ def test_sqlite_0029_apply_builds_delivery_table_and_preserves_tasks(tmp_path):
         _create_phase1_predecessor_tables(conn)
         for v in ["0027", "0028"]:
             _apply_on_temp(conn, v)
-        # 0029 前插入 wechat_tasks 旧数据（验证重建守卫不丢）
+        # 模拟主线库：wechat_tasks 由 ORM create_all 建（SQLite 迁移体系未建），
+        # 手动建旧版 17 列壳，验证 0029 重建保留数据。
+        conn.execute(
+            "CREATE TABLE wechat_tasks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "task_type VARCHAR(30) NOT NULL DEFAULT 'notify_sales', "
+            "lead_id INTEGER, staff_id INTEGER, reply_check_id INTEGER, "
+            "target_nickname VARCHAR(100), message TEXT, "
+            "mode VARCHAR(20) NOT NULL DEFAULT 'paste_only', "
+            "status VARCHAR(20) NOT NULL DEFAULT 'pending', "
+            "failure_stage VARCHAR(100), raw_result TEXT, "
+            "agent_hostname VARCHAR(100), agent_pid INTEGER, "
+            "pasted_at DATETIME, sent_at DATETIME, "
+            "created_at DATETIME, updated_at DATETIME)"
+        )
+        # 插入旧数据（验证重建守卫不丢）
         conn.execute(
             "INSERT INTO wechat_tasks (task_type, status, created_at, updated_at) "
             "VALUES ('notify_sales', 'sent', '2026-07-13 10:00:00', '2026-07-13 10:00:00')"

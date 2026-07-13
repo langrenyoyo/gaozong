@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -209,10 +209,13 @@ class LeadFollowupRecord(Base):
 class WechatTask(Base):
     """微信任务队列 — P0-5A 新增，用于 Local Agent 架构的任务分发与结果回写"""
     __tablename__ = "wechat_tasks"
+    __table_args__ = (
+        UniqueConstraint("report_delivery_id", "delivery_attempt_no", name="uk_wechat_tasks_delivery_attempt"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_type = Column(String(30), nullable=False, default="notify_sales",
-                       comment="任务类型: notify_sales / detect_reply")
+                       comment="任务类型: notify_sales / detect_reply / send_report_attachment")
     lead_id = Column(Integer, ForeignKey("douyin_leads.id"), comment="关联线索 ID")
     staff_id = Column(Integer, ForeignKey("sales_staff.id"), comment="关联销售 ID")
     reply_check_id = Column(Integer, ForeignKey("reply_checks.id"), comment="关联检测记录 ID（可为空）")
@@ -230,6 +233,21 @@ class WechatTask(Base):
     sent_at = Column(DateTime, comment="发送完成时间（P0-5A 期间必须为 None）")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Phase 8-B 附件投递扩展（令牌仅存 SHA-256 hash，不存明文；不存 storage key）
+    report_delivery_id = Column(Integer, ForeignKey("daily_report_deliveries.id"), comment="关联投递 ID（send_report_attachment 专用）")
+    delivery_attempt_no = Column(Integer, comment="投递 attempt 序号（从 1 开始）")
+    execution_token_hash = Column(String(64), comment="execution token SHA-256，claim 级")
+    execution_started_at = Column(DateTime, comment="execution 开始时间")
+    download_ticket_hash = Column(String(64), comment="单次下载票据 SHA-256")
+    download_ticket_expires_at = Column(DateTime, comment="下载票据过期时间")
+    downloaded_at = Column(DateTime, comment="下载完成时间")
+    send_nonce_hash = Column(String(64), comment="15 秒单次发送 nonce SHA-256")
+    send_nonce_expires_at = Column(DateTime, comment="发送 nonce 过期时间")
+    send_authorized_at = Column(DateTime, comment="send-intent 授权时间")
+    attachment_verified_at = Column(DateTime, comment="附件本地校验完成时间")
+    attachment_file_name = Column(String(255), comment="attempt 级文件名快照")
+    attachment_sha256 = Column(String(64), comment="attempt 级内容 hash 快照")
+    attachment_size_bytes = Column(BigInteger, comment="attempt 级字节数快照")
 
     # 关联
     lead = relationship("DouyinLead")
@@ -1070,6 +1088,37 @@ class DailyReportJob(Base):
     generation_token = Column(String(64), comment="generating 期间 claim 令牌，防旧 worker 覆盖")
     generation_started_at = Column(DateTime, comment="generating 开始时间，超 30 分钟视为 stale")
     artifact_status = Column(String(16), default="none", comment="文件指针状态 none/available")
+
+
+class DailyReportDelivery(Base):
+    """日报附件投递：一份报表到一名接收销售的幂等投递（Phase 8-B）。
+
+    artifact 四元组钉住生成时的文件版本，job 重生成不漂移、不误删。
+    WechatTask 只存 attempt 级文件元数据和令牌 hash，不存 storage key。
+    """
+
+    __tablename__ = "daily_report_deliveries"
+    __table_args__ = (
+        UniqueConstraint("report_job_id", "receiver_staff_id", name="uk_daily_report_deliveries_job_staff"),
+        Index("idx_daily_report_deliveries_merchant_status", "merchant_id", "status"),
+        Index("idx_daily_report_deliveries_staff_status", "receiver_staff_id", "status"),
+        CheckConstraint("artifact_size_bytes > 0", name="ck_daily_report_deliveries_size_positive"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
+    report_job_id = Column(Integer, ForeignKey("daily_report_jobs.id"), nullable=False, comment="关联日报任务")
+    receiver_staff_id = Column(Integer, ForeignKey("sales_staff.id"), nullable=False, comment="接收销售")
+    status = Column(String(20), nullable=False, default="held", comment="投递状态 held/pending/running/send_authorized/sent/failed/blocked/verify_pending/cancelled")
+    artifact_storage_key = Column(String(255), comment="内部存储键，仅 9000 内部，不返回前端")
+    artifact_file_name = Column(String(255), comment="钉住的文件名")
+    artifact_sha256 = Column(String(64), comment="钉住的内容 sha256")
+    artifact_size_bytes = Column(BigInteger, comment="钉住的字节数")
+    attempt_count = Column(Integer, nullable=False, default=0, comment="已创建 attempt 数")
+    last_failure_stage = Column(String(100), comment="最近失败阶段标识")
+    delivered_at = Column(DateTime, comment="发送成功时间")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class LeadReportAttribution(Base):
