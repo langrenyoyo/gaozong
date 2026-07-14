@@ -821,6 +821,15 @@ class ComputeTransaction(Base):
     __tablename__ = "compute_transactions"
     __table_args__ = (
         Index("idx_compute_transactions_merchant_created", "merchant_id", "created_at"),
+        # Phase 10 §0.2 合同：actual_tokens 为空（充值/套餐/历史未知）或正数；markup 快照为空或非负
+        CheckConstraint(
+            "actual_tokens IS NULL OR actual_tokens > 0",
+            name="ck_compute_transactions_actual_positive",
+        ),
+        CheckConstraint(
+            "markup_basis_points IS NULL OR markup_basis_points >= 0",
+            name="ck_compute_transactions_markup_nonnegative",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -835,6 +844,10 @@ class ComputeTransaction(Base):
     agent_id = Column(String(64), comment="AI 消耗所属智能体，预留")
     conversation_id = Column(Integer, comment="AI 消耗所属会话，预留")
     created_at = Column(DateTime, default=datetime.now)
+    # Phase 10 算力计费快照（§0.2 合同）：历史充值/套餐流水为空，历史能力禁止伪造
+    actual_tokens = Column(BigInteger, nullable=True, comment="AI 实际字符量")
+    capability_key = Column(String(64), nullable=True, comment="六能力 key；历史未知允许空")
+    markup_basis_points = Column(Integer, nullable=True, comment="本次计费上浮基点快照")
 
 
 class ComputePackage(Base):
@@ -1225,6 +1238,11 @@ class ComputeMarkupRatio(Base):
     __tablename__ = "compute_markup_ratios"
     __table_args__ = (
         UniqueConstraint("capability_key", name="uk_compute_markup_ratios_capability_key"),
+        # Phase 10：与 PG 0008 DB 级约束对齐，SQLite 0031 安全重建时落库
+        CheckConstraint(
+            "markup_basis_points >= 0",
+            name="ck_compute_markup_ratios_basis_points_nonnegative",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
