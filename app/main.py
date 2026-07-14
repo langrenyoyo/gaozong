@@ -34,6 +34,7 @@ from app.routers import (
     douyin_autoreply_settings,
     ai_auto_reply_runs,
     admin_autoreply_rollout,
+    admin_return_visits,
     forbidden_words,
     douyin_accounts,
     agents,
@@ -135,6 +136,7 @@ def create_app() -> FastAPI:
     app.include_router(douyin_autoreply_settings.router)
     app.include_router(ai_auto_reply_runs.router)
     app.include_router(admin_autoreply_rollout.router)
+    app.include_router(admin_return_visits.router)
     app.include_router(forbidden_words.router)
     app.include_router(douyin_accounts.router)
     app.include_router(agents.router)

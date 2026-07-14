@@ -1085,6 +1085,22 @@ class AgentWriteBackResponse(BaseModel):
     message: str = ""
 
 
+class ReturnVisitPromptUpdateRequest(BaseModel):
+    """管理员更新回访提示词请求（Phase 9 Task 8）。
+
+    严格校验：template_text/fallback_message 1..500；confidence_threshold 0.50..1.00；
+    enabled bool；reason 非空；未知字段 422（extra=forbid）。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    template_text: str = Field(..., min_length=1, max_length=500)
+    fallback_message: str = Field(..., min_length=1, max_length=500)
+    confidence_threshold: float = Field(..., ge=0.50, le=1.00)
+    enabled: bool
+    reason: str = Field(..., min_length=1)
+
+
 # ========== 抖音 GMP Webhook ==========
 
 
