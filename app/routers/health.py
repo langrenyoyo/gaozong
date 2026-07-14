@@ -33,6 +33,18 @@ _ALEMBIC_INI = (
     / "auto_wechat"
     / "alembic.ini"
 )
+_SQLITE_VERSIONS_DIR = (
+    Path(__file__).resolve().parents[2] / "migrations" / "versions"
+)
+_SQLITE_REQUIRED_COLUMNS = {
+    "return_visit_prompts": {"confidence_threshold", "fallback_message"},
+    "return_visit_runs": {
+        "dispatch_notification_id",
+        "trigger_message_fp",
+        "idempotency_key",
+    },
+    "douyin_private_message_sends": {"return_visit_run_id"},
+}
 # 方案 A：9000 主业务 database 名。
 # 默认 auto_wechat（dev / 生产）；staging 等隔离环境通过 EXPECTED_DATABASE_NAME 覆盖
 # （如 auto_wechat_staging），避免 readiness 永远返回 WRONG_DATABASE。
@@ -62,6 +74,8 @@ def ready():
         alembic_ini_path=_ALEMBIC_INI,
         expected_database=_EXPECTED_DATABASE,
         critical_tables=_CRITICAL_TABLES,
+        sqlite_versions_dir=_SQLITE_VERSIONS_DIR,
+        sqlite_required_columns=_SQLITE_REQUIRED_COLUMNS,
     )
     body: dict = {
         "service": "auto_wechat",

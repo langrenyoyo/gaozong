@@ -48,6 +48,18 @@ DEFAULT_SQL_FILE = VERSIONS_DIR / "0001_prd_base_fields.sql"
 CURRENT_VERSION = "0001"
 CURRENT_DESCRIPTION = "PRD 基础字段：schema_migrations 基础设施 + douyin_leads 9 列 + sales_staff 2 列"
 
+# 启动迁移完成后必须存在的当前故障相关字段。revision 是主判断，字段用于防止
+# 历史库出现“版本已登记但 DDL 不完整”的假完成状态。
+STARTUP_REQUIRED_COLUMNS = {
+    "return_visit_prompts": {"confidence_threshold", "fallback_message"},
+    "return_visit_runs": {
+        "dispatch_notification_id",
+        "trigger_message_fp",
+        "idempotency_key",
+    },
+    "douyin_private_message_sends": {"return_visit_run_id"},
+}
+
 
 # ---------------------------------------------------------------------------
 # 异常
@@ -334,6 +346,117 @@ def get_migration_status(
     }
 
 
+def get_expected_head(
+    migrations: list[MigrationFile] | None = None,
+) -> str:
+    """从版本目录推导当前 head，不依赖过期的 CURRENT_VERSION 常量。"""
+    all_migrations = migrations or discover_migrations()
+    if not all_migrations:
+        raise MigrationError("迁移目录中没有可用版本")
+    return all_migrations[-1].version
+
+
+def validate_schema_head(
+    conn: sqlite3.Connection,
+    migrations: list[MigrationFile] | None = None,
+    required_columns: dict[str, set[str]] | None = None,
+) -> dict:
+    """校验 revision 精确等于代码 head，并检查关键字段完整性。"""
+    all_migrations = migrations or discover_migrations()
+    status = get_migration_status(conn, all_migrations)
+    expected = get_expected_head(all_migrations)
+    applied = status["applied_versions"]
+    current = applied[-1] if applied else None
+
+    if status["unknown_applied_versions"]:
+        raise MigrationError(
+            f"数据库包含未知 migration revision: {status['unknown_applied_versions']}"
+        )
+    if applied != status["known_versions"]:
+        raise MigrationError(
+            f"SQLite migration revision 不匹配: current={current} expected={expected} "
+            f"pending={status['pending_versions']}"
+        )
+
+    missing_columns: dict[str, list[str]] = {}
+    for table, columns in (required_columns or STARTUP_REQUIRED_COLUMNS).items():
+        if not table_exists(conn, table):
+            missing_columns[table] = sorted(columns)
+            continue
+        missing = sorted(columns - get_columns(conn, table))
+        if missing:
+            missing_columns[table] = missing
+    if missing_columns:
+        raise MigrationError(
+            f"SQLite revision 已到 head 但关键字段不完整: {missing_columns}"
+        )
+
+    return {"current": current, "expected": expected, "status": status}
+
+
+def migrate_for_startup(
+    db_path: str | os.PathLike,
+    *,
+    migrations: list[MigrationFile] | None = None,
+    now: datetime | None = None,
+    required_columns: dict[str, set[str]] | None = None,
+) -> dict:
+    """供 Development/LAN 一次性容器调用：按需备份、迁移并校验 head。"""
+    path = Path(db_path).resolve()
+    if not path.exists():
+        raise MigrationError(f"启动迁移目标数据库不存在: {path}")
+
+    all_migrations = migrations or discover_migrations()
+    expected = get_expected_head(all_migrations)
+    conn = connect_readonly(path)
+    try:
+        before = get_migration_status(conn, all_migrations)
+    finally:
+        conn.close()
+
+    if before["unknown_applied_versions"]:
+        raise MigrationError(
+            f"数据库包含未知 migration revision: {before['unknown_applied_versions']}"
+        )
+
+    backup_path: Path | None = None
+    if before["pending_versions"]:
+        timestamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+        backup_path = path.with_name(f"{path.name}.before-migration-{timestamp}.bak")
+        backup_database(path, backup_path)
+
+        conn = connect_readwrite(path)
+        try:
+            apply_all_migrations(conn, all_migrations)
+        finally:
+            conn.close()
+
+    conn = connect_readonly(path)
+    try:
+        verified = validate_schema_head(
+            conn,
+            all_migrations,
+            STARTUP_REQUIRED_COLUMNS if required_columns is None else required_columns,
+        )
+    finally:
+        conn.close()
+
+    previous = before["applied_versions"][-1] if before["applied_versions"] else None
+    logger.info(
+        "SQLite migration current: before=%s current=%s expected=%s backup=%s",
+        previous,
+        verified["current"],
+        expected,
+        backup_path or "not_required",
+    )
+    return {
+        "before": previous,
+        "current": verified["current"],
+        "expected": expected,
+        "backup_path": str(backup_path) if backup_path else None,
+    }
+
+
 def apply_migration(
     conn: sqlite3.Connection,
     stmts: list[ParsedStmt],
@@ -491,7 +614,7 @@ def backup_database(src_path: str | os.PathLike, dst_path: str | os.PathLike) ->
     - 源库以只读方式打开，不执行任何 DDL。
     - backup API 会正确处理 WAL 内容，生成完整一致的快照
       （不依赖 shutil.copy2 单独拷贝 -wal / -shm）。
-    - 若目标已存在则先删除，避免脏副本。
+    - 若目标已存在则拒绝覆盖，保留每次迁移前的独立证据。
     """
     src_path = Path(src_path).resolve()
     dst_path = Path(dst_path).resolve()
@@ -499,8 +622,7 @@ def backup_database(src_path: str | os.PathLike, dst_path: str | os.PathLike) ->
         raise MigrationError(f"源库不存在: {src_path}")
 
     if dst_path.exists():
-        dst_path.unlink()
-        logger.warning("目标副本已存在，已覆盖: %s", dst_path)
+        raise MigrationError(f"备份目标已存在，拒绝覆盖: {dst_path}")
 
     src = connect_readonly(src_path)
     dst = sqlite3.connect(str(dst_path))
@@ -643,6 +765,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", action="store_true", help="只读输出已执行版本和待执行版本")
     p.add_argument("--backup-src", help="副本生成：源库路径（使用 backup API）")
     p.add_argument("--backup-dst", help="副本生成：目标副本路径")
+    p.add_argument(
+        "--startup",
+        action="store_true",
+        help="启动模式：仅有待迁移版本时自动备份，执行全部版本并校验 head",
+    )
     return p
 
 
@@ -666,6 +793,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     assert_not_mainline(args.db_path, args.allow_mainline)
+
+    if args.startup:
+        result = migrate_for_startup(args.db_path)
+        print("[startup]", result)
+        return 0
 
     if args.status:
         conn = connect_readonly(args.db_path)

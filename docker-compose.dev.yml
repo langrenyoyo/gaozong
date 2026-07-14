@@ -47,6 +47,28 @@ services:
       start_period: 10s
     restart: "no"
 
+  # ===== 9000 SQLite 启动前迁移（唯一迁移负责人）=====
+  auto-wechat-sqlite-migrate:
+    image: auto-wechat-backend-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.dev
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      APP_ENV: "${APP_ENV:-development}"
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    command:
+      - python
+      - migrations/migrate_sqlite.py
+      - --db-path
+      - /workspace/data/auto_wechat.db
+      - --allow-mainline
+      - --startup
+    restart: "no"
+
   # ===== 9000 主后端（AI小高线索）=====
   auto-wechat-api:
     image: auto-wechat-backend-dev:local
@@ -67,6 +89,7 @@ services:
       - ./docker-data/auto_wechat_9000:/workspace/data
     environment:
       APP_ENV: "${APP_ENV:-development}"
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
       CORS_ORIGINS: "${CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
       NEWCAR_AUTH_ENABLED: "${NEWCAR_AUTH_ENABLED:-false}"
       NEWCAR_AUTH_MOCK_ENABLED: "${NEWCAR_AUTH_MOCK_ENABLED:-true}"
@@ -92,6 +115,9 @@ services:
       KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID: "${KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID:-xiaogao_base}"
       KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS: "${KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS:-false}"
       COMPUTE_INTERNAL_TOKEN: "${COMPUTE_INTERNAL_TOKEN:-}"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
     restart: "no"
 
@@ -171,6 +197,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.douyin_cs.main:app", "--host", "0.0.0.0", "--port", "9201"]
     restart: "no"
 
@@ -185,6 +216,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.leads.main:app", "--host", "0.0.0.0", "--port", "9202"]
     restart: "no"
 
@@ -199,6 +235,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.agents.main:app", "--host", "0.0.0.0", "--port", "9203"]
     restart: "no"
 
@@ -213,6 +254,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.wechat_assistant.main:app", "--host", "0.0.0.0", "--port", "9204"]
     restart: "no"
 
@@ -227,6 +273,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.compute.main:app", "--host", "0.0.0.0", "--port", "9205"]
     restart: "no"
 
@@ -241,6 +292,11 @@ services:
     volumes:
       - .:/workspace
       - ./docker-data/auto_wechat_9000:/workspace/data
+    environment:
+      DATABASE_URL: "sqlite:////workspace/data/auto_wechat.db"
+    depends_on:
+      auto-wechat-sqlite-migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "uvicorn", "apps.knowledge.main:app", "--host", "0.0.0.0", "--port", "9206"]
     restart: "no"
 

@@ -17,6 +17,8 @@ from app.db_readiness import (
     ERROR_CRITICAL_TABLE,
     ERROR_DB_CONNECT,
     ERROR_WRONG_DATABASE,
+    ERROR_SQLITE_REVISION,
+    ERROR_SQLITE_SCHEMA,
     load_alembic_heads,
     run_db_readiness,
 )
@@ -227,3 +229,112 @@ def test_non_pg_connect_fail():
     )
     assert ok is False
     assert err == ERROR_DB_CONNECT
+
+
+def _sqlite_versions(tmp_path: Path) -> Path:
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    (versions / "0001_init.sql").write_text("-- fixture\n", encoding="utf-8")
+    (versions / "0002_next.sql").write_text("-- fixture\n", encoding="utf-8")
+    return versions
+
+
+def _sqlite_schema(tmp_path: Path, revisions: list[str], *, with_column: bool = True):
+    db_path = tmp_path / "ready.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE schema_migrations (version_num TEXT PRIMARY KEY, applied_at TEXT NOT NULL, description TEXT)"
+        )
+        conn.exec_driver_sql("CREATE TABLE sample_table (id INTEGER PRIMARY KEY, name TEXT)")
+        if with_column:
+            conn.exec_driver_sql("CREATE TABLE required_table (required TEXT)")
+        for revision in revisions:
+            conn.exec_driver_sql(
+                "INSERT INTO schema_migrations(version_num, applied_at, description) VALUES (?, ?, ?)",
+                (revision, "2026-07-14", revision),
+            )
+    return engine
+
+
+def test_sqlite_revision_and_required_schema_pass(tmp_path):
+    versions = _sqlite_versions(tmp_path)
+    engine = _sqlite_schema(tmp_path, ["0001", "0002"])
+    ok, checks, err = run_db_readiness(
+        engine=engine,
+        backend="sqlite",
+        alembic_ini_path=ALEMBIC_INI_9000,
+        expected_database="auto_wechat",
+        critical_tables=(),
+        sqlite_versions_dir=versions,
+        sqlite_required_columns={"required_table": {"required"}},
+    )
+    assert ok is True
+    assert err is None
+    assert {item["name"] for item in checks} >= {"schema_revision", "critical_schema_fields"}
+
+
+def test_sqlite_revision_lag_fails(tmp_path):
+    versions = _sqlite_versions(tmp_path)
+    engine = _sqlite_schema(tmp_path, ["0001"])
+    ok, checks, err = run_db_readiness(
+        engine=engine,
+        backend="sqlite",
+        alembic_ini_path=ALEMBIC_INI_9000,
+        expected_database="auto_wechat",
+        critical_tables=(),
+        sqlite_versions_dir=versions,
+        sqlite_required_columns={"required_table": {"required"}},
+    )
+    assert ok is False
+    assert err == ERROR_SQLITE_REVISION
+    assert next(item for item in checks if item["name"] == "schema_revision")["current"] == "0001"
+
+
+def test_sqlite_recorded_head_but_missing_required_column_fails(tmp_path):
+    versions = _sqlite_versions(tmp_path)
+    engine = _sqlite_schema(tmp_path, ["0001", "0002"], with_column=False)
+    ok, checks, err = run_db_readiness(
+        engine=engine,
+        backend="sqlite",
+        alembic_ini_path=ALEMBIC_INI_9000,
+        expected_database="auto_wechat",
+        critical_tables=(),
+        sqlite_versions_dir=versions,
+        sqlite_required_columns={"required_table": {"required"}},
+    )
+    assert ok is False
+    assert err == ERROR_SQLITE_SCHEMA
+
+
+def test_sqlite_missing_revision_table_fails(tmp_path):
+    versions = _sqlite_versions(tmp_path)
+    engine = create_engine(f"sqlite:///{tmp_path / 'missing_revision.db'}")
+    ok, checks, err = run_db_readiness(
+        engine=engine,
+        backend="sqlite",
+        alembic_ini_path=ALEMBIC_INI_9000,
+        expected_database="auto_wechat",
+        critical_tables=(),
+        sqlite_versions_dir=versions,
+    )
+    assert ok is False
+    assert err == ERROR_SQLITE_REVISION
+    assert next(item for item in checks if item["name"] == "schema_revision")["current"] is None
+
+
+def test_sqlite_unknown_revision_fails(tmp_path):
+    versions = _sqlite_versions(tmp_path)
+    engine = _sqlite_schema(tmp_path, ["0001", "9999"])
+    ok, checks, err = run_db_readiness(
+        engine=engine,
+        backend="sqlite",
+        alembic_ini_path=ALEMBIC_INI_9000,
+        expected_database="auto_wechat",
+        critical_tables=(),
+        sqlite_versions_dir=versions,
+    )
+    assert ok is False
+    assert err == ERROR_SQLITE_REVISION
+    revision = next(item for item in checks if item["name"] == "schema_revision")
+    assert revision["unknown"] == ["9999"]

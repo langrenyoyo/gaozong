@@ -24,7 +24,7 @@ from typing import Any
 
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ ERROR_DB_CONNECT = "DB_CONNECT_FAILED"
 ERROR_WRONG_DATABASE = "WRONG_DATABASE"
 ERROR_ALEMBIC_REVISION = "ALEMBIC_REVISION_MISMATCH"
 ERROR_CRITICAL_TABLE = "CRITICAL_TABLE_MISSING"
+ERROR_SQLITE_REVISION = "SQLITE_REVISION_MISMATCH"
+ERROR_SQLITE_SCHEMA = "SQLITE_SCHEMA_INCOMPLETE"
 
 
 def load_alembic_heads(alembic_ini_path: str | Path) -> list[str]:
@@ -77,6 +79,8 @@ def run_db_readiness(
     alembic_ini_path: str | Path,
     expected_database: str,
     critical_tables: tuple[str, ...],
+    sqlite_versions_dir: str | Path | None = None,
+    sqlite_required_columns: dict[str, set[str]] | None = None,
 ) -> tuple[bool, list[dict[str, Any]], str | None]:
     """执行数据库就绪检查，返回 (all_pass, checks, error_code)。
 
@@ -88,15 +92,68 @@ def run_db_readiness(
         {"name": "backend", "status": "pass", "backend": backend}
     ]
 
-    # 非 PG backend：dev SQLite 简化检查（只验证连接）
-    # 生产环境 backend 必须为 postgresql，由 compose / .env 保证；此处不强制
+    # 非 PG backend 默认保持原连接检查；9000 显式传 versions 目录时增加 SQLite
+    # revision 与关键字段校验。9100 未传该参数，不受本轮改造影响。
     if backend != "postgresql":
         checks[-1]["mode"] = "dev_non_pg"
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            checks.append({"name": "db_connect", "status": "pass"})
-            return True, checks, None
+                checks.append({"name": "db_connect", "status": "pass"})
+                if backend != "sqlite" or sqlite_versions_dir is None:
+                    return True, checks, None
+
+                from migrations.migrate_sqlite import discover_migrations
+
+                migrations = discover_migrations(sqlite_versions_dir)
+                known = [item.version for item in migrations]
+                expected = known[-1] if known else None
+                db_inspector = inspect(conn)
+                applied: list[str] = []
+                if db_inspector.has_table("schema_migrations"):
+                    applied = [
+                        row[0]
+                        for row in conn.execute(
+                            text(
+                                "SELECT version_num FROM schema_migrations "
+                                "ORDER BY version_num"
+                            )
+                        )
+                    ]
+                current = applied[-1] if applied else None
+                unknown = [version for version in applied if version not in set(known)]
+                revision_ok = bool(known) and applied == known
+                checks.append(
+                    {
+                        "name": "schema_revision",
+                        "status": "pass" if revision_ok else "fail",
+                        "current": current,
+                        "expected": expected,
+                        "unknown": unknown,
+                    }
+                )
+                if not revision_ok:
+                    return False, checks, ERROR_SQLITE_REVISION
+
+                missing: dict[str, list[str]] = {}
+                for table, required in (sqlite_required_columns or {}).items():
+                    if not db_inspector.has_table(table):
+                        missing[table] = sorted(required)
+                        continue
+                    actual = {column["name"] for column in db_inspector.get_columns(table)}
+                    absent = sorted(required - actual)
+                    if absent:
+                        missing[table] = absent
+                checks.append(
+                    {
+                        "name": "critical_schema_fields",
+                        "status": "fail" if missing else "pass",
+                        "missing": missing,
+                    }
+                )
+                if missing:
+                    return False, checks, ERROR_SQLITE_SCHEMA
+                return True, checks, None
         except Exception as exc:  # noqa: BLE001 — readiness 必须兜底所有连接异常，不能 500
             checks.append({"name": "db_connect", "status": "fail", "error": _safe_error(exc)})
             return False, checks, ERROR_DB_CONNECT
