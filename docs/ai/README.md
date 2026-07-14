@@ -68,7 +68,14 @@ docs/ai/04_OUTPUT_RULES.md
 | car-porject-main 对接 | `09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_CONVERSATION_LINK_AUDIT.md` |
 | 本地 Docker | `11_deployment_ops/LOCAL_DOCKER_DEV.md` |
 | AI剪辑 / 小高素材库 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
-| 历史里程碑流水账（2026-07-14 前，仅追溯） | `archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md` |
+
+## 历史追溯 / 归档入口
+
+以下文件**不是当前项目事实**，普通任务不得默认读取；仅在追溯历史决策或旧结论来源时按需读取：
+
+| 内容 | 文件 |
+|---|---|
+| 2026-07-14 基线重构前的历史里程碑流水账（旧 05_PROJECT_CONTEXT 冻结快照） | `archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md` |
 
 ## 归档规则
 
