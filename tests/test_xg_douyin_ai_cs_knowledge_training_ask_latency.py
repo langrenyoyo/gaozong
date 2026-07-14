@@ -3,7 +3,15 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _disable_compute_usage_client(monkeypatch):
+    """Phase 10：埋点不应在知识问答单测中触网；禁用 ComputeUsageClient。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
 
 
 def _use_temp_db(tmp_path, monkeypatch) -> None:

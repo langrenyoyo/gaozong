@@ -117,7 +117,7 @@ class ReplySuggestionRequest(BaseModel):
     tenant_id: str
     account_id: int | str
     latest_message: str
-    merchant_id: str = "demo_bba"
+    merchant_id: str = Field(..., min_length=1, max_length=128)
     douyin_account_id: int | str | None = None
     agent_id: str | None = None
     agent_config: AgentConfig | None = None

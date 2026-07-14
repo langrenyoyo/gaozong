@@ -5,6 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _disable_compute_usage_client(monkeypatch):
+    """Phase 10：埋点不应在 reply-suggestion 单测中触网；禁用 ComputeUsageClient。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
+
+
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
     from apps.xg_douyin_ai_cs.main import create_app
@@ -923,6 +930,7 @@ def test_reply_suggestion_for_audi_a6_is_same_category_and_never_auto_send(tmp_p
         "/douyin/conversations/1/reply-suggestion",
         json={
             "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
             "account_id": 1,
             "latest_message": "我想要奥迪A6",
             "max_history_messages": 20,
@@ -1009,9 +1017,8 @@ def _patch_report_usage_recorder(monkeypatch, sink):
 
 
 def test_reply_suggestion_reports_compute_usage_on_llm_success(tmp_path, monkeypatch):
-    """场景1+2：LLM 成功 + usage.total_tokens>0 → 触发上报，
-    payload 含 merchant_id / tokens / source=llm / model / agent_id / conversation_id。
-    且 auto_send 仍为 False（安全边界不变）。
+    """Phase 10 §0.2：LLM 成功后按字符计量上报（capability=douyin-cs），
+    provider usage.total_tokens 被字符数覆盖；auto_send 仍为 False（安全边界不变）。
     """
     client = _client(tmp_path, monkeypatch)
     _seed_knowledge_for_usage(client)
@@ -1038,21 +1045,24 @@ def test_reply_suggestion_reports_compute_usage_on_llm_success(tmp_path, monkeyp
     assert data["llm_used"] is True
     assert data["auto_send"] is False
 
-    # 上报被触发一次，且字段全部正确
+    # Phase 10 §0.2：按字符计量上报一次，capability=douyin-cs
     assert sink["count"] == 1
     payload = sink["calls"][0]
     assert payload["merchant_id"] == "demo_bba"
-    assert payload["tokens"] == 15
+    assert payload["capability_key"] == "douyin-cs"
     assert payload["source"] == "llm"
     assert payload["model"] == "mock-chat"
     assert payload["conversation_id"] == 1
     assert payload["remark"] == "douyin_ai_reply"
     # agent_id 来自 demo_bba + account 1 的默认 agent_bba
     assert payload["agent_id"] == "agent_bba"
+    # tokens 为字符数（非 provider total_tokens=15），证明按字符计量
+    assert payload["tokens"] != 15
+    assert payload["tokens"] > 0
 
 
-def test_reply_suggestion_does_not_report_when_usage_missing(tmp_path, monkeypatch):
-    """场景3a：LLM 成功但响应未携带 usage（OpenAI-compatible 历史响应）→ 不上报。"""
+def test_reply_suggestion_reports_chars_when_usage_missing(tmp_path, monkeypatch):
+    """Phase 10 §0.2：LLM 成功但响应未携带 usage → 仍按字符上报（字符计量不依赖 provider usage）。"""
     client = _client(tmp_path, monkeypatch)
     _seed_knowledge_for_usage(client)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
@@ -1072,11 +1082,14 @@ def test_reply_suggestion_does_not_report_when_usage_missing(tmp_path, monkeypat
 
     assert response.status_code == 200
     assert response.json()["llm_used"] is True
-    assert sink.get("count", 0) == 0
+    # 字符计量：usage 缺失仍上报
+    assert sink["count"] == 1
+    assert sink["calls"][0]["capability_key"] == "douyin-cs"
+    assert sink["calls"][0]["tokens"] > 0
 
 
-def test_reply_suggestion_does_not_report_when_total_tokens_non_positive(tmp_path, monkeypatch):
-    """场景3b：usage 存在但 total_tokens<=0 → 不上报。"""
+def test_reply_suggestion_reports_chars_when_total_tokens_non_positive(tmp_path, monkeypatch):
+    """Phase 10 §0.2：usage.total_tokens<=0 时仍按字符上报（chat 成功即计量）。"""
     client = _client(tmp_path, monkeypatch)
     _seed_knowledge_for_usage(client)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
@@ -1096,7 +1109,10 @@ def test_reply_suggestion_does_not_report_when_total_tokens_non_positive(tmp_pat
 
     assert response.status_code == 200
     assert response.json()["llm_used"] is True
-    assert sink.get("count", 0) == 0
+    # 字符计量：total_tokens<=0 仍上报
+    assert sink["count"] == 1
+    assert sink["calls"][0]["capability_key"] == "douyin-cs"
+    assert sink["calls"][0]["tokens"] > 0
 
 
 def test_reply_suggestion_does_not_report_when_llm_call_fails(tmp_path, monkeypatch):

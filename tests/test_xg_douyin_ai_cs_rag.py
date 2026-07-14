@@ -4,6 +4,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _disable_compute_usage_client(monkeypatch):
+    """Phase 10：埋点不应在 RAG 单测中触网；禁用 ComputeUsageClient（缺 token/base_url 即跳过上报）。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
+
+
 class _StaticEmbeddingClient:
     def __init__(self, embedding_by_text):
         self.embedding_by_text = embedding_by_text

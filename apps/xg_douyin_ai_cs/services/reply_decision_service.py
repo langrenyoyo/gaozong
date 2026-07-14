@@ -23,7 +23,10 @@ from apps.xg_douyin_ai_cs.schemas import (
 )
 from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
 from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
-from apps.xg_douyin_ai_cs.services.compute_usage_client import ComputeUsageClient
+from apps.xg_douyin_ai_cs.services.compute_usage_client import (
+    ComputeUsageClient,
+    count_chat_characters,
+)
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
 from app.services.contact_extractor import extract_contacts_from_text
 
@@ -718,6 +721,14 @@ def _build_llm_reply(
             **_agent_response_fields(agent),
         )
 
+    # Phase 10 §0.2：主 chat 成功后立即按字符上报，再做 JSON 解析/retry（每次成功调用独立计量）
+    _report_llm_usage(
+        request=request,
+        agent=agent,
+        conversation_id=conversation_id,
+        messages=messages,
+        result=result,
+    )
     retry_warnings: list[str] = []
     decision = _parse_structured_llm_decision(result.get("reply_text"))
     known_customer_info = _build_known_customer_context(
@@ -736,6 +747,13 @@ def _build_llm_reply(
         )
         try:
             result = client.chat(retry_messages)
+            _report_llm_usage(
+                request=request,
+                agent=agent,
+                conversation_id=conversation_id,
+                messages=retry_messages,
+                result=result,
+            )
             decision = _parse_structured_llm_decision(result.get("reply_text"))
             retry_warnings.append("llm_retry_for_known_customer_info")
         except (LLMNotConfiguredError, LLMRequestError) as exc:
@@ -764,6 +782,13 @@ def _build_llm_reply(
         )
         try:
             result = client.chat(retry_messages)
+            _report_llm_usage(
+                request=request,
+                agent=agent,
+                conversation_id=conversation_id,
+                messages=retry_messages,
+                result=result,
+            )
             decision = _parse_structured_llm_decision(result.get("reply_text"))
             retry_warnings.append("llm_retry_for_agent_phone_goal")
         except (LLMNotConfiguredError, LLMRequestError) as exc:
@@ -803,13 +828,6 @@ def _build_llm_reply(
         model=str(result.get("model") or ""),
         status="completed",
         elapsed_ms=int(result.get("elapsed_ms") or 0),
-    )
-    # P1-COMPUTE-USAGE-1：LLM 成功后上报 token 消耗到 9000；上报失败不影响回复。
-    _report_llm_usage(
-        request=request,
-        agent=agent,
-        conversation_id=conversation_id,
-        result=result,
     )
     return ReplySuggestionResponse(
         reply_text=reply_text,
@@ -2326,28 +2344,26 @@ def _report_llm_usage(
     request: ReplySuggestionRequest,
     agent: dict,
     conversation_id: int | str,
+    messages: list[dict],
     result: dict,
+    capability_key: str = "douyin-cs",
 ) -> None:
-    """P1-COMPUTE-USAGE-1：LLM 成功路径上报算力消耗到 9000。
+    """Phase 10 §0.2：LLM 成功后按字符计量上报算力消耗到 9000。
 
-    仅在 usage.total_tokens 为正且 merchant_id 存在时上报；
+    计量只看 messages 内容字符数 + reply_text 字符数；不再使用 provider 的 usage.total_tokens。
     上报失败只记日志，**绝不影响**回复建议主流程。
-    安全边界：本函数不涉及 auto_send，不改变回复内容，不新增任何自动发送。
+    安全边界：本函数不涉及 auto_send，不改变回复内容；payload/日志不含提示词或回复原文。
     """
-    usage = result.get("usage")
-    if not isinstance(usage, dict):
-        return
-    total_tokens = usage.get("total_tokens")
-    if not isinstance(total_tokens, int) or total_tokens <= 0:
-        return
     if not request.merchant_id:
         return
+    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
     try:
         ComputeUsageClient().report_usage(
             merchant_id=request.merchant_id,
-            tokens=total_tokens,
+            tokens=tokens,
             source="llm",
-            model=result.get("model"),
+            capability_key=capability_key,
+            model=str(result.get("model") or ""),
             agent_id=agent.get("agent_id"),
             conversation_id=conversation_id,
             remark="douyin_ai_reply",

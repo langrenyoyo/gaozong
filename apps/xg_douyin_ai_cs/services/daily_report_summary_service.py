@@ -6,7 +6,7 @@
   系统提示词固定，注入文本只作为待汇总数据；
 - LLM 输出严格 JSON Schema 校验，超时/网络异常/空响应/非法 JSON/恶意输出均稳定降级，
   返回 llm_used=false + fallback_reason，不伪造摘要、不暴露异常正文；
-- LLM 成功且 usage.total_tokens>0 时复用 ComputeUsageClient 上报，remark=daily_sales_summary；
+- LLM 成功后按字符计量（messages + reply_text）复用 ComputeUsageClient 上报，capability=leads；
   上报失败不影响摘要。
 
 边界：
@@ -30,7 +30,10 @@ from apps.xg_douyin_ai_cs.schemas import (
     DailySalesSummaryItem,
     DailySalesSummaryRequest,
 )
-from apps.xg_douyin_ai_cs.services.compute_usage_client import ComputeUsageClient
+from apps.xg_douyin_ai_cs.services.compute_usage_client import (
+    ComputeUsageClient,
+    count_chat_characters,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -134,20 +137,18 @@ def _fallback(report_day: str, reason: str, *, model: str | None = None) -> dict
     }
 
 
-def _report_usage(merchant_id: str, result: dict) -> None:
-    """LLM 成功路径上报算力消耗；只上报 provider 返回的真实 total_tokens，失败不影响摘要。"""
-    usage = result.get("usage")
-    if not isinstance(usage, dict):
+def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
+    """Phase 10 §0.2：LLM 成功后按字符计量上报；不再使用 provider usage.total_tokens，失败不影响摘要。"""
+    if not merchant_id:
         return
-    total_tokens = usage.get("total_tokens")
-    if not isinstance(total_tokens, int) or total_tokens <= 0:
-        return
+    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
     try:
         ComputeUsageClient().report_usage(
             merchant_id=merchant_id,
-            tokens=total_tokens,
+            tokens=tokens,
             source="llm",
-            model=result.get("model"),
+            capability_key="leads",
+            model=str(result.get("model") or ""),
             remark="daily_sales_summary",
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响摘要主流程
@@ -183,6 +184,9 @@ def summarize_daily_sales_feedback(request: DailySalesSummaryRequest) -> dict:
         )
         return _fallback(request.report_day, reason)
 
+    # Phase 10 §0.2：chat 成功后立即按字符上报（capability=leads），再做解析（空/畸形输出也计量）
+    _report_usage(request.merchant_id, messages, result)
+
     summary_text = _parse_summary_text(result.get("reply_text"))
     if not summary_text:
         _logger.info(
@@ -191,7 +195,6 @@ def summarize_daily_sales_feedback(request: DailySalesSummaryRequest) -> dict:
         )
         return _fallback(request.report_day, "llm_empty_or_invalid_output", model=result.get("model"))
 
-    _report_usage(request.merchant_id, result)
     _logger.info(
         "daily_summary stage=ok merchant_id=%s report_day=%s model=%s",
         request.merchant_id, request.report_day, result.get("model"),

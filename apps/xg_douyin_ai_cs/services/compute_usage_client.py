@@ -23,6 +23,23 @@ from urllib import request as urllib_request
 _logger = logging.getLogger(__name__)
 
 
+def count_chat_characters(messages: list[dict], reply_text: str) -> int:
+    """Phase 10 §0.2 计费合同：chat 消息内容字符数总和 + 回复字符数，不做 strip。
+
+    所有业务服务的 chat 上报必须经过本 helper，避免算法重复漂移。
+    """
+    return sum(
+        len(item["content"])
+        for item in messages
+        if isinstance(item, dict) and isinstance(item.get("content"), str)
+    ) + len(reply_text)
+
+
+def count_embedding_characters(text: str) -> int:
+    """Phase 10 §0.2 计费合同：embedding 按输入文本 Python 字符数计量。"""
+    return len(text)
+
+
 @dataclass(frozen=True)
 class ComputeUsageConfig:
     """算力上报配置（环境变量驱动，与 llm/config.py 风格一致）。"""
@@ -59,16 +76,19 @@ class ComputeUsageClient:
         *,
         merchant_id: str,
         tokens: int,
+        capability_key: str,
+        model: str,
         source: str = "llm",
-        model: str | None = None,
         agent_id: str | None = None,
         conversation_id: int | None = None,
         remark: str | None = None,
     ) -> bool:
         """上报一次算力消耗。成功返回 True，跳过/失败返回 False，**绝不抛异常**。
 
-        跳过条件：配置未启用（缺 base_url 或 internal_token）、tokens<=0、缺 merchant_id。
-        调用方无需 try/except，上报失败不影响 AI 回复主流程。
+        跳过条件：配置未启用（缺 base_url 或 internal_token）、tokens<=0、缺 merchant_id、
+        缺 capability_key 或 model。调用方无需 try/except，上报失败不影响 AI 回复主流程。
+        Phase 10 §0.2：capability_key/model 必填；payload 与日志只记 merchant_id、字符数、
+        capability、model、状态，不含提示词、销售回复、模型输出或知识片段原文。
         """
         if not self.config.enabled:
             _logger.info(
@@ -79,18 +99,21 @@ class ComputeUsageClient:
             )
             return False
 
-        if tokens <= 0 or not merchant_id:
+        if tokens <= 0 or not merchant_id or not capability_key or not model:
             _logger.info(
                 "compute_usage stage=skipped reason=invalid_payload "
-                "merchant_id_set=%s tokens=%s",
+                "merchant_id_set=%s tokens=%s capability=%s model_set=%s",
                 bool(merchant_id),
                 tokens,
+                capability_key,
+                bool(model),
             )
             return False
 
         payload = {
             "merchant_id": merchant_id,
             "tokens": int(tokens),
+            "capability_key": capability_key,
             "source": source,
             "model": model,
             "agent_id": agent_id,
@@ -135,9 +158,10 @@ class ComputeUsageClient:
             return False
 
         _logger.info(
-            "compute_usage stage=reported merchant_id=%s tokens=%s model=%s",
+            "compute_usage stage=reported merchant_id=%s tokens=%s capability=%s model=%s",
             merchant_id,
             tokens,
+            capability_key,
             model,
         )
         return True

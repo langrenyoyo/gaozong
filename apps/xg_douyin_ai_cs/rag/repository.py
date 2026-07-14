@@ -22,6 +22,10 @@ from sqlalchemy.engine import Connection, Row
 
 from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
+from apps.xg_douyin_ai_cs.services.compute_usage_client import (
+    ComputeUsageClient,
+    count_embedding_characters,
+)
 from apps.xg_douyin_ai_cs.rag.chunker import chunk_text
 from apps.xg_douyin_ai_cs.rag.database import get_rag_engine
 from apps.xg_douyin_ai_cs.rag.models import (
@@ -399,6 +403,37 @@ def soft_delete_unified_document(*, tenant_id: str, merchant_id: str, document_i
     return {"document_id": str(document_id), "status": "deleted"}
 
 
+def _embed_with_usage(
+    *,
+    client: OpenAICompatibleClient,
+    text: str,
+    merchant_id: str | None,
+    remark: str | None = None,
+) -> dict:
+    """Phase 10 §0.2：统一 embedding 调用 + 字符计量上报；mock_for_test_only 跳过上报。
+
+    所有训练 ingest 与查询 embedding 必须经此 helper；返回 embed 原始 payload，兼容既有读取。
+    真实 embedding 按 count_embedding_characters 计量、capability=knowledge、source=embedding；
+    mock 分支（model=mock_for_test_only，未配置真实 Ark）不计费。
+    """
+    result = client.embed(text)
+    model = str(result.get("model") or result.get("embedding_provider") or "")
+    if model and model != "mock_for_test_only" and merchant_id:
+        tokens = count_embedding_characters(text)
+        try:
+            ComputeUsageClient().report_usage(
+                merchant_id=merchant_id,
+                tokens=tokens,
+                source="embedding",
+                capability_key="knowledge",
+                model=model,
+                remark=remark,
+            )
+        except Exception as exc:  # noqa: BLE001  上报失败绝不影响 RAG 主流程
+            _logger.warning("rag_embed stage=compute_report_error error=%s", exc)
+    return result
+
+
 def train_document(
     *,
     tenant_id: str,
@@ -449,7 +484,10 @@ def train_document(
             )
             for index, chunk in enumerate(chunk_text(doc["content"]), start=1):
                 digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
-                embedding = client.embed(chunk)
+                embedding = _embed_with_usage(
+                    client=client, text=chunk, merchant_id=merchant_id,
+                    remark="knowledge_training_ingest",
+                )
                 conn.execute(
                     text(
                         """
@@ -592,7 +630,10 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
             for doc in docs:
                 for index, chunk in enumerate(chunk_text(doc["content"]), start=1):
                     digest = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
-                    embedding = client.embed(chunk)
+                    embedding = _embed_with_usage(
+                        client=client, text=chunk, merchant_id=payload.merchant_id,
+                        remark="knowledge_training_ingest",
+                    )
                     conn.execute(
                         text(
                             """
@@ -909,7 +950,10 @@ def _search_milvus_or_fallback_with_diagnostics(
         )
     try:
         client = llm_client or OpenAICompatibleClient()
-        query_embedding_payload = client.embed(payload.query)
+        query_embedding_payload = _embed_with_usage(
+            client=client, text=payload.query, merchant_id=payload.merchant_id,
+            remark="knowledge_search",
+        )
         query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
         if not query_embedding:
             raise ValueError("query embedding is empty")
@@ -985,7 +1029,10 @@ def _search_sqlite(
     vector_scored = []
     try:
         client = llm_client or OpenAICompatibleClient()
-        query_embedding_payload = client.embed(payload.query)
+        query_embedding_payload = _embed_with_usage(
+            client=client, text=payload.query, merchant_id=payload.merchant_id,
+            remark="knowledge_search",
+        )
         query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
     except Exception as exc:
         query_embedding = None

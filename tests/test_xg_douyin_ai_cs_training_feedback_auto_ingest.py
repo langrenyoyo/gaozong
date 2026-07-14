@@ -5,6 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _disable_compute_usage_client(monkeypatch):
+    """Phase 10：埋点不应在训练单测中触网；禁用 ComputeUsageClient。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
+
+
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("XG_DOUYIN_AI_CS_DB_PATH", str(tmp_path / "xg_douyin_ai_cs.db"))
     from apps.xg_douyin_ai_cs.main import create_app

@@ -33,6 +33,10 @@ from apps.xg_douyin_ai_cs.llm.client import (
     OpenAICompatibleClient,
 )
 from apps.xg_douyin_ai_cs.schemas import ReturnVisitJudgeRequest, ReturnVisitJudgment
+from apps.xg_douyin_ai_cs.services.compute_usage_client import (
+    ComputeUsageClient,
+    count_chat_characters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +266,28 @@ def _build_llm_messages(request: ReturnVisitJudgeRequest, text: str) -> list[dic
     ]
 
 
+def _report_usage(
+    request: ReturnVisitJudgeRequest,
+    messages: list[dict],
+    result: dict,
+) -> None:
+    """Phase 10 §0.2：回访判定 chat 成功后按字符上报；payload/日志不含 sales_reply_text 原文。"""
+    if not request.merchant_id:
+        return
+    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    try:
+        ComputeUsageClient().report_usage(
+            merchant_id=request.merchant_id,
+            tokens=tokens,
+            source="llm",
+            capability_key="wechat-assistant",
+            model=str(result.get("model") or ""),
+            remark="return_visit_judge",
+        )
+    except Exception as exc:  # noqa: BLE001  上报失败绝不影响回访主流程
+        logger.warning("return_visit stage=compute_report_error error=%s", exc)
+
+
 def _try_llm(
     client: OpenAICompatibleClient,
     request: ReturnVisitJudgeRequest,
@@ -273,14 +299,18 @@ def _try_llm(
               suggested_message 缺失或非法）→ 调用方走关键词兜底。
     """
     text = request.sales_reply_text or ""
+    messages = _build_llm_messages(request, text)
     try:
-        result = client.chat(_build_llm_messages(request, text))
+        result = client.chat(messages)
     except (LLMNotConfiguredError, LLMRequestError):
         return None  # 技术故障 → 兜底
 
     # 非 dict 结果 → 技术故障兜底（防止 result.get 触发 500）
     if not isinstance(result, dict):
         return None
+
+    # Phase 10 §0.2：chat 成功后立即按字符上报（capability=wechat-assistant），再做判定
+    _report_usage(request, messages, result)
 
     reply_text = str(result.get("reply_text") or "").strip()
     # FIX4：model 是可丢弃元数据；畸形/超长/含控制字符 → 归一 None，继续判定（不降级覆盖安全结论）

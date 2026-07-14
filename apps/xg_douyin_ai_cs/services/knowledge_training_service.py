@@ -21,6 +21,10 @@ from apps.xg_douyin_ai_cs.rag.database import get_rag_engine
 from apps.xg_douyin_ai_cs.rag.models import KnowledgeDocumentCreate, RagSearchRequest
 from apps.xg_douyin_ai_cs.rag import repository
 from apps.xg_douyin_ai_cs.rag.repository import search
+from apps.xg_douyin_ai_cs.services.compute_usage_client import (
+    ComputeUsageClient,
+    count_chat_characters,
+)
 
 # P3-D3：engine 走 database.get_rag_engine() 单例（按 rag_database_url 变化重建），
 # 不在模块级缓存 _engine，保证测试 setenv 切换 tmp_path 时隔离成立
@@ -468,6 +472,24 @@ def _feedback_document_content(
     return "\n".join(lines)
 
 
+def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
+    """Phase 10 §0.2：知识问答 chat 成功后按字符上报（capability=knowledge）。"""
+    if not merchant_id:
+        return
+    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    try:
+        ComputeUsageClient().report_usage(
+            merchant_id=merchant_id,
+            tokens=tokens,
+            source="llm",
+            capability_key="knowledge",
+            model=str(result.get("model") or ""),
+            remark="knowledge_training_ask",
+        )
+    except Exception as exc:  # noqa: BLE001  上报失败绝不影响问答主流程
+        _logger.warning("knowledge_training stage=compute_report_error error=%s", exc)
+
+
 def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tuple[str, int, bool, str]:
     messages = [
         {
@@ -504,6 +526,9 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
             True,
             type(exc).__name__,
         )
+
+    # Phase 10 §0.2：问答 chat 成功后立即按字符上报（capability=knowledge），再做解析
+    _report_usage(payload.merchant_id, messages, result)
 
     answer = str(result.get("reply_text") or "").strip()
     if answer:
