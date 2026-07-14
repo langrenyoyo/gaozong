@@ -3,7 +3,7 @@
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.auth.local_agent_auth import require_local_agent_context
@@ -15,6 +15,10 @@ from app.schemas import (
 )
 from app.services import reply_checker
 from app.services import wechat_ui_reply_service
+from app.services.return_visit_run_service import (
+    process_return_visit_run,
+    trigger_return_visit_from_writeback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +82,7 @@ def wechat_current_detect(data: WechatDetectRequest, db: Session = Depends(get_d
 
 
 @router.post("/agent-write-back", response_model=AgentWriteBackResponse)
-def agent_write_back(data: AgentWriteBackRequest, request: Request, db: Session = Depends(get_db)):
+def agent_write_back(data: AgentWriteBackRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """P0-REPLY-2：接收 Local Agent 从客户电脑微信读取的消息，分析关键词并回写数据库。
 
     调用方：Local Agent POST 19000 /agent/replies/detect 内部调用此接口。
@@ -136,6 +140,31 @@ def agent_write_back(data: AgentWriteBackRequest, request: Request, db: Session 
         messages=[m.model_dump() for m in data.messages],
         agent_result=data.agent_result.model_dump(),
     )
+
+    # Phase 9 Task 6：完成既有 ReplyCheck 回写后，独立触发回访持久化。
+    # 触发失败不得回滚或伪造既有回复检测结果；只有新建 pending_judgement run 才调度处理。
+    try:
+        run = trigger_return_visit_from_writeback(
+            db,
+            merchant_id=ctx.merchant_id or "",
+            lead_id=data.lead_id,
+            staff_id=data.staff_id,
+            reply_check_id=result.get("check_id"),
+            messages=[m.model_dump() for m in data.messages],
+        )
+        if run is not None:
+            run_id = run.id
+            run_status = run.send_status
+            db.commit()
+            if run_status == "pending_judgement":
+                background_tasks.add_task(process_return_visit_run, run_id)
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "return_visit_trigger_failed lead_id=%s staff_id=%s error=%s",
+            data.lead_id, data.staff_id, exc,
+        )
+
     return AgentWriteBackResponse(**result)
 
 
