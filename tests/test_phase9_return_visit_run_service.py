@@ -342,7 +342,7 @@ def test_judgment_disabled_maps_prompt_disabled(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_g1_config_disabled_maps_prompt_disabled(monkeypatch):
+def test_g1_config_disabled_maps_blocked(monkeypatch):
     monkeypatch.setattr(config, "DOUYIN_AUTO_REPLY_ENABLED", False)
     db = TestSession()
     try:
@@ -359,12 +359,13 @@ def test_g1_config_disabled_maps_prompt_disabled(monkeypatch):
 
     db2 = TestSession()
     try:
-        assert db2.get(ReturnVisitRun, run_id).send_status == "prompt_disabled"
+        # FIX2：G1 config 熔断落 blocked（设计文档 line 405 env_kill_switch）
+        assert db2.get(ReturnVisitRun, run_id).send_status == "blocked"
     finally:
         db2.close()
 
 
-def test_g2_rollout_disabled_maps_prompt_disabled(monkeypatch):
+def test_g2_rollout_disabled_maps_blocked(monkeypatch):
     db = TestSession()
     try:
         _seed_prompts(db)
@@ -380,7 +381,8 @@ def test_g2_rollout_disabled_maps_prompt_disabled(monkeypatch):
 
     db2 = TestSession()
     try:
-        assert db2.get(ReturnVisitRun, run_id).send_status == "prompt_disabled"
+        # FIX2：G2 rollout real_send_enabled=false 落 blocked（设计文档 line 406 real_send_disabled）
+        assert db2.get(ReturnVisitRun, run_id).send_status == "blocked"
     finally:
         db2.close()
 
@@ -454,6 +456,83 @@ def test_contract_invalid_source_not_needed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 检查点 B-FIX2 问题 2：合法 should_trigger=False 终态不被吞成 not_needed
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_blocked_with_should_trigger_false_not_swallowed(monkeypatch):
+    """问题 2：result=blocked + risk_flags + should_trigger=False 是合法安全阻断，必须落 blocked。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(
+        judgement_result="blocked", prompt_key=None, confidence=0.0,
+        risk_flags=["model_refusal"], should_trigger=False, suggested_message=None,
+    ))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "blocked"
+    finally:
+        db2.close()
+
+
+def test_terminal_prompt_disabled_with_should_trigger_false_not_swallowed(monkeypatch):
+    """问题 2：result=prompt_disabled + should_trigger=False 必须落 prompt_disabled（场景禁用）。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(
+        judgement_result="prompt_disabled", prompt_key=None, confidence=0.0,
+        should_trigger=False, suggested_message=None,
+    ))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "prompt_disabled"
+    finally:
+        db2.close()
+
+
+def test_terminal_below_threshold_with_should_trigger_false_not_swallowed(monkeypatch):
+    """问题 2：result=below_threshold + should_trigger=False 必须落 confidence_low（LLM 低置信）。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(
+        judgement_result="below_threshold", prompt_key=None, confidence=0.3,
+        should_trigger=False, suggested_message="低置信话术",
+    ))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "confidence_low"
+    finally:
+        db2.close()
+
+
+# ---------------------------------------------------------------------------
 # G3 跨商户发送绕过（阻断 1）
 # ---------------------------------------------------------------------------
 
@@ -479,7 +558,7 @@ def test_g3_unauthorized_account_blocked(monkeypatch):
     db2 = TestSession()
     try:
         done = db2.get(ReturnVisitRun, run_id)
-        assert done.send_status == "failed"
+        assert done.send_status == "blocked"  # FIX2：G3 落 blocked（设计文档 line 407 cross_merchant）
         assert db2.query(DouyinPrivateMessageSend).count() == 0
     finally:
         db2.close()

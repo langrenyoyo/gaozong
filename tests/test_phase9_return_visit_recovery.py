@@ -99,7 +99,13 @@ def _seed_run(
     return run
 
 
-def _seed_sent_flow(db, *, run_id: int, suffix: str) -> DouyinPrivateMessageSend:
+def _seed_sent_flow(
+    db,
+    *,
+    run_id: int,
+    suffix: str,
+    upstream_msg_id: str | None = None,
+) -> DouyinPrivateMessageSend:
     send = DouyinPrivateMessageSend(
         main_account_id="main-1",
         conversation_short_id="conv-1",
@@ -111,6 +117,7 @@ def _seed_sent_flow(db, *, run_id: int, suffix: str) -> DouyinPrivateMessageSend
         scene="im_receive_msg",
         content="回访话术",
         request_body_json="{}",
+        upstream_msg_id=upstream_msg_id if upstream_msg_id is not None else f"up-msg-{suffix}",
         status="sent",
         manual_confirmed=0,
         auto_send=1,
@@ -352,16 +359,14 @@ def test_reconcile_send_authorized_respects_max_id(monkeypatch):
         db3.close()
 
 
-def test_reconcile_send_authorized_uses_send_id(monkeypatch):
-    """send_id 成功回填优先对账：run.send_id 指向 sent 流水 PK → sent。"""
+def test_reconcile_send_authorized_backfills_upstream_msg_id(monkeypatch):
+    """问题 3：send_authorized + sent 流水（upstream_msg_id 非空）→ sent + 补写 run.send_id=upstream_msg_id。"""
     _stub_processor(monkeypatch)
     db = TestSession()
     try:
         run = _seed_run(db, send_status="send_authorized", attempt_count=1)
         db.flush()
-        send = _seed_sent_flow(db, run_id=run.id, suffix="sid")
-        # 模拟 process 成功回填 send_id（指向 sent 流水 PK）
-        run.send_id = str(send.id)
+        _seed_sent_flow(db, run_id=run.id, suffix="backfill", upstream_msg_id="up-backfill-1")
         db.commit()
         run_id = run.id
     finally:
@@ -370,6 +375,39 @@ def test_reconcile_send_authorized_uses_send_id(monkeypatch):
     db2 = TestSession()
     try:
         _reconcile_send_authorized(db2, run_id)
+    finally:
+        db2.close()
+
+    db3 = TestSession()
+    try:
+        done = db3.get(ReturnVisitRun, run_id)
+        assert done.send_status == "sent"
+        assert done.send_id == "up-backfill-1"  # 补写 upstream_msg_id（非本地流水 PK）
+    finally:
+        db3.close()
+
+
+def test_set_run_status_guarded_skips_non_send_authorized(monkeypatch):
+    """问题 4：guarded update WHERE send_status 守卫，不覆盖并发 process 已落的终态。"""
+    _stub_processor(monkeypatch)
+    db = TestSession()
+    try:
+        # run 已被并发 process 落成 sent（不再是 send_authorized）
+        run = _seed_run(db, send_status="sent", attempt_count=1)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    db2 = TestSession()
+    try:
+        from app.services.return_visit_run_service import _set_run_status_guarded
+        hit = _set_run_status_guarded(
+            db2, run_id, expected_status="send_authorized",
+            send_status="send_unknown", last_failure_stage="race",
+        )
+        db2.commit()
+        assert hit is False  # run 已 sent，guarded 不命中、不覆盖
     finally:
         db2.close()
 

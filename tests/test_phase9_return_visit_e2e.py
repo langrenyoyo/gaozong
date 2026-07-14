@@ -334,12 +334,13 @@ def test_e2e_confidence_low(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_e2e_config_disabled_prompt_disabled(monkeypatch):
+def test_e2e_config_disabled_blocked(monkeypatch):
     monkeypatch.setattr(config, "DOUYIN_AUTO_REPLY_ENABLED", False)
     run_id = _trigger_and_process(monkeypatch, judgment=_judgment())
     db = TestSession()
     try:
-        assert db.get(ReturnVisitRun, run_id).send_status == "prompt_disabled"
+        # FIX2：G1 config 熔断落 blocked（设计文档 line 405）
+        assert db.get(ReturnVisitRun, run_id).send_status == "blocked"
         assert db.query(DouyinPrivateMessageSend).count() == 0
     finally:
         db.close()

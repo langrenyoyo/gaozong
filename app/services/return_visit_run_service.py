@@ -327,18 +327,19 @@ def trigger_return_visit_from_writeback(
 # ---------------------------------------------------------------------------
 
 # 门禁失败 code → 终态 status 映射（G1-G10；G8 已发对账用 status_hint 覆盖）
+# 冻结合同（设计文档 §7）：G1-G5/G10 → blocked（line 401/405-414）；G6/G7 → rate_limited；G9 → confidence_low
 _GATE_BLOCK_STATUS = {
-    "config_disabled": "prompt_disabled",
-    "rollout_disabled": "prompt_disabled",
-    "lead_attribution_invalid": "failed",
-    "manual_takeover_blocked": "not_needed",
-    "outbound_after_trigger": "not_needed",
-    "latest_not_customer": "not_needed",
-    "context_drifted": "not_needed",
+    "config_disabled": "blocked",
+    "rollout_disabled": "blocked",
+    "lead_attribution_invalid": "blocked",
+    "manual_takeover_blocked": "blocked",
+    "outbound_after_trigger": "blocked",
+    "latest_not_customer": "blocked",
+    "context_drifted": "blocked",
     "rate_limited": "rate_limited",
     "cooldown_active": "rate_limited",
     "confidence_low": "confidence_low",
-    "content_invalid": "failed",
+    "content_invalid": "blocked",
 }
 
 
@@ -371,6 +372,24 @@ def _set_run_status(db: Session, run_id: int, **fields: Any) -> None:
     """条件 UPDATE run 字段（不依赖 ORM 对象 expire 状态）。"""
     fields.setdefault("updated_at", datetime.now())
     db.execute(update(ReturnVisitRun).where(ReturnVisitRun.id == run_id).values(**fields))
+
+
+def _set_run_status_guarded(db: Session, run_id: int, *, expected_status: str, **fields: Any) -> bool:
+    """条件 UPDATE：仅当 send_status==expected_status 时更新（崩溃恢复专用，防覆盖并发终态）。
+
+    检查点 B-FIX2（问题 4）：reconcile 与并发 process 可能同时操作同一 run，普通 _set_run_status
+    仅按 id 会覆盖 process 已落的终态。本函数加 WHERE send_status 守卫并检查 rowcount。
+    process 内部 claim 已保证单飞，用 _set_run_status 即可；仅 reconcile 回写用本函数。
+    返回 rowcount>0（是否命中）。
+    """
+    fields.setdefault("updated_at", datetime.now())
+    result = db.execute(
+        update(ReturnVisitRun)
+        .where(ReturnVisitRun.id == run_id)
+        .where(ReturnVisitRun.send_status == expected_status)
+        .values(**fields)
+    )
+    return result.rowcount > 0
 
 
 def _save_gate_results(db: Session, run_id: int, section: str, payload: dict) -> None:
@@ -462,13 +481,15 @@ def _map_judgment_terminal(judgment: dict) -> dict | None:
 
 
 def _validate_judgment_contract(judgment: dict) -> str | None:
-    """9000 侧跨字段合同校验（不信任 9100 任意字段组合，阻断 2）。
+    """9000 侧跨字段合同校验（只拦字段自相矛盾，不拦合法的 should_trigger=False）。
 
-    违反返回稳定 code（统一映射 not_needed，绝不进入发送）。校验：
+    检查点 B-FIX2（问题 2 修正）：合法的 should_trigger=False 终态（blocked / prompt_disabled /
+    below_threshold / no_match / ambiguous / suppress_hit）由 _map_judgment_terminal 映射正确终态，
+    不在此拦截。本函数只拦 9100 字段自相矛盾：
     - 来源枚举必须合法（llm/keyword_fallback/precheck）。
-    - ambiguous=True 或 should_trigger=False 一律不发送。
-    - 命中场景 key 时 must should_trigger=True + ambiguous=False + prompt_key==result。
+    - 命中场景 key 时 must should_trigger=True + ambiguous=False + prompt_key==result（否则字段矛盾）。
     - precheck 不命中具体场景（prompt_key 必须非 PROMPT_KEYS）。
+    违反返回稳定 code（统一映射 not_needed，绝不进入发送）。
     """
     source = judgment.get("judgement_source")
     result = judgment.get("judgement_result")
@@ -478,10 +499,8 @@ def _validate_judgment_contract(judgment: dict) -> str | None:
 
     if source not in ("llm", "keyword_fallback", "precheck"):
         return "contract_invalid_source"
-    if ambiguous is True:
-        return "contract_ambiguous_true"
-    if should_trigger is False:
-        return "contract_should_trigger_false"
+    # 仅当判定"命中场景 key"时校验四字段一致性；非命中终态 should_trigger=False / ambiguous=True
+    # 是 9100 的合法表达（如 result=ambiguous + ambiguous=True），由 _map_judgment_terminal 处理。
     if result in PROMPT_KEYS:
         if should_trigger is not True or ambiguous is not False or prompt_key != result:
             return "contract_hit_inconsistent"
@@ -713,8 +732,9 @@ def _send_and_classify(
             send_source="return_visit_auto",
             return_visit_run_id=run_id,
         )
-        record_id = send_result.get("record_id") if isinstance(send_result, dict) else None
-        return {"status": "sent", "failure_stage": None, "send_record_id": record_id}
+        # send_id 合同（设计文档 line 159）：写 upstream msg_id（抖音返回），非本地流水 PK。
+        upstream_msg_id = send_result.get("upstream_msg_id") if isinstance(send_result, dict) else None
+        return {"status": "sent", "failure_stage": None, "send_id": upstream_msg_id}
     except HTTPException as exc:
         error_code = _error_code_from_detail(exc.detail)
         if error_code == "upstream_business_error":
@@ -846,13 +866,13 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         return
 
     outcome = _send_and_classify(db, run_id, run, content, send_context)
-    # 成功回填 send_id（DouyinPrivateMessageSend PK），便于崩溃恢复精确对账
+    # 成功回填 send_id（upstream msg_id，设计文档 line 159）；失败分支无 send_id
     status_fields: dict[str, Any] = {
         "send_status": outcome["status"],
         "last_failure_stage": outcome.get("failure_stage"),
     }
-    if outcome.get("send_record_id"):
-        status_fields["send_id"] = str(outcome["send_record_id"])
+    if outcome.get("send_id"):
+        status_fields["send_id"] = str(outcome["send_id"])
     _set_run_status(db, run_id, **status_fields)
     _safe_commit(db)
     logger.info(
@@ -944,11 +964,12 @@ def _recover_expired_processing(db: Session, max_id: int) -> int:
 
 
 def _reconcile_send_authorized(db: Session, max_id: int) -> int:
-    """对账 send_authorized：有 sent 发送流水 → sent；无 → send_unknown（崩溃在发送后回写前）。
+    """对账 send_authorized：按 return_visit_run_id 查本地 sent 流水。
 
-    保守恢复：send_unknown 永不重发（与 _send_and_classify 一致）。
-    受 id <= max_id 快照约束（阻断 5），不把快照后正在发送的任务误判为 send_unknown。
-    优先用 run.send_id（成功回填的发送流水 PK）精确对账，fallback 到 return_visit_run_id。
+    有 sent 流水 → sent + 补写 send_id=upstream_msg_id；无 → send_unknown（崩溃在发送后回写前，
+    永不重发，与 _send_and_classify 一致）。受 id <= max_id 快照约束（阻断 5）。
+    回写用 _set_run_status_guarded + WHERE send_status='send_authorized' 条件更新（检查点 B-FIX2
+    问题 4），防止并发 process 已落终态时被恢复覆盖。
     """
     runs = (
         db.query(ReturnVisitRun)
@@ -959,28 +980,20 @@ def _reconcile_send_authorized(db: Session, max_id: int) -> int:
     if not runs:
         return 0
     for run in runs:
-        sent_flow = None
-        # 优先用 run.send_id 精确对账（成功回填的发送流水 PK）
-        if run.send_id:
-            try:
-                candidate = db.get(DouyinPrivateMessageSend, int(run.send_id))
-                if candidate is not None and candidate.status == "sent":
-                    sent_flow = candidate
-            except (ValueError, TypeError):
-                pass
-        # fallback：按 return_visit_run_id 查 sent 流水
-        if sent_flow is None:
-            sent_flow = (
-                db.query(DouyinPrivateMessageSend)
-                .filter(DouyinPrivateMessageSend.return_visit_run_id == run.id)
-                .filter(DouyinPrivateMessageSend.status == "sent")
-                .first()
-            )
+        sent_flow = (
+            db.query(DouyinPrivateMessageSend)
+            .filter(DouyinPrivateMessageSend.return_visit_run_id == run.id)
+            .filter(DouyinPrivateMessageSend.status == "sent")
+            .first()
+        )
         if sent_flow is not None:
-            _set_run_status(db, run.id, send_status="sent", last_failure_stage=None)
+            fields: dict[str, Any] = {"send_status": "sent", "last_failure_stage": None}
+            if sent_flow.upstream_msg_id:
+                fields["send_id"] = str(sent_flow.upstream_msg_id)
+            _set_run_status_guarded(db, run.id, expected_status="send_authorized", **fields)
         else:
-            _set_run_status(
-                db, run.id,
+            _set_run_status_guarded(
+                db, run.id, expected_status="send_authorized",
                 send_status="send_unknown",
                 last_failure_stage="reconcile_send_authorized_no_sent_flow",
             )

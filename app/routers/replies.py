@@ -141,10 +141,12 @@ def agent_write_back(data: AgentWriteBackRequest, request: Request, background_t
         agent_result=data.agent_result.model_dump(),
     )
 
-    # Phase 9 Task 6 / 检查点 B-FIX1：仅 detect_reply 任务 + 检测成功才触发回访（阻断 6）。
-    # notify_sales / send_report_attachment 不触发；agent_result.success=False（检测失败）不触发。
-    # 触发失败不得回滚或伪造既有回复检测结果；只有新建 pending_judgement run 才调度处理。
-    if task.task_type == "detect_reply" and result.get("success"):
+    # Phase 9 检查点 B-FIX2（C4 解耦）：仅 detect_reply 任务 + Agent 读取成功（data.agent_result.success）
+    # 才触发回访。不依赖 ReplyCheck 的 result.success：timeout（未命中关键词）时 Agent 仍可能读到回复原文，
+    # 回访判定基于回复原文而非关键词命中，故 timeout 也应触发。notify_sales / send_report_attachment 不触发；
+    # agent_result.success=False（Agent 读取失败）不触发。触发失败不回滚或伪造既有回复检测结果；
+    # 只有新建 pending_judgement run 才调度处理。
+    if task.task_type == "detect_reply" and data.agent_result.success is True:
         try:
             run = trigger_return_visit_from_writeback(
                 db,
