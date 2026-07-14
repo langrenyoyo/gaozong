@@ -7,6 +7,7 @@ import {
   FilterIcon,
   LogOutIcon,
   MessageCircleMoreIcon,
+  MessagesSquareIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
@@ -48,6 +49,13 @@ const adminItems = [
     permission: PERMISSIONS.adminAutoreply,
   },
   {
+    id: "admin-return-visits",
+    label: "回访",
+    expandedLabel: "回访配置",
+    path: "/admin/return-visits",
+    permission: PERMISSIONS.adminReturnVisitPrompts,
+  },
+  {
     id: "ai-reply-records",
     label: "回复",
     expandedLabel: "AI回复记录",
@@ -58,6 +66,7 @@ const adminItems = [
 
 const adminIcons: Record<string, React.ReactNode> = {
   "admin-autoreply-rollout": <ShieldAlertIcon size={18} />,
+  "admin-return-visits": <MessagesSquareIcon size={18} />,
   "ai-reply-records": <MessageCircleMoreIcon size={18} />,
 };
 

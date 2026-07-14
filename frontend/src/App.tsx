@@ -31,6 +31,7 @@ import {
 const queryClient = new QueryClient();
 const adminRoutes = [
   { path: "/admin/autoreply-rollout", navId: "admin-autoreply-rollout", permission: PERMISSIONS.adminAutoreply },
+  { path: "/admin/return-visits", navId: "admin-return-visits", permission: PERMISSIONS.adminReturnVisitPrompts },
   { path: "/admin/ai-reply-records", navId: "ai-reply-records", permission: PERMISSIONS.adminAiReplyRecords },
   { path: "/admin/no-local-feature", navId: "admin-no-local-feature", message: "暂无可访问管理员功能" },
   { path: "/admin/newcar-owned", navId: "admin-newcar-owned", message: "该管理功能请在 NewCarProject 操作" },
@@ -105,7 +106,7 @@ function defaultPathForUser(user: AppUser): string {
   if (isAdminLike(user)) {
     if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
-    if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/no-local-feature";
+    if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/return-visits";
     if (hasAnyNewCarOwnedAdminPermission(user)) return "/admin/newcar-owned";
     return "/admin/no-local-feature";
   }
@@ -130,6 +131,9 @@ function canAccessPath(user: AppUser, path: string): boolean {
 
   if (pathname === "/admin/autoreply-rollout") {
     return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminAutoreply);
+  }
+  if (pathname === "/admin/return-visits") {
+    return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminReturnVisitPrompts);
   }
   if (pathname === "/admin/ai-reply-records") {
     return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminAiReplyRecords);

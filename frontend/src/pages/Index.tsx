@@ -28,6 +28,7 @@ import { AppUser } from "../App";
 import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
+import AdminReturnVisitsPage from "./AdminReturnVisitsPage";
 import { isAdminLike, isMockAuthUser } from "../features/capabilities";
 
 interface DouyinAccount {
@@ -778,6 +779,8 @@ export default function Index({
             <SuperAiReplyRecords />
           ) : superActiveNav === "admin-autoreply-rollout" ? (
             <AdminAutoreplyRolloutPage />
+          ) : superActiveNav === "admin-return-visits" ? (
+            <AdminReturnVisitsPage />
           ) : superActiveNav === "admin-newcar-owned" ? (
             <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
           ) : superActiveNav === "admin-no-local-feature" ? (
