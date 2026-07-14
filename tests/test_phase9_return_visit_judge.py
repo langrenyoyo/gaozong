@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import pytest
 
@@ -97,7 +98,7 @@ class _StubLLM:
         self,
         *,
         reply_text: str = "",
-        model: str = "test-model",
+        model: Any = "test-model",
         raises: BaseException | None = None,
         non_dict_result: bool = False,
     ) -> None:
@@ -762,3 +763,70 @@ def test_suggested_message_equals_template_falls_back():
     )
     result = judge_return_visit(request, llm_client=client)
     assert result.judgement_source == "keyword_fallback", "suggested_message==template_text 必须降级兜底"
+
+
+# ---------------------------------------------------------------------------
+# 红灯 10（FIX3）：模板空白绕过 + 畸形 model 降级
+# ---------------------------------------------------------------------------
+
+
+def test_suggested_message_equals_template_with_whitespace_falls_back():
+    """FIX3：模板与模型输出都带前后空白时，strip 后相等仍必须兜底（防空白绕过）。"""
+    request = _request(
+        "客户说空号",
+        prompts=_prompts(
+            retain_contact_conversion=_prompt(
+                "retain_contact_conversion",
+                template="  TEMPLATE_UNIQUE_WHITESPACE  ",  # 模板带前后空白
+            )
+        ),
+    )
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="  TEMPLATE_UNIQUE_WHITESPACE  ",  # 模型输出同样带空白
+        )
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", "strip 后与模板strip相等必须降级兜底"
+
+
+@pytest.mark.parametrize(
+    "model_value",
+    [123, {"x": 1}, ["a"]],
+    ids=["int", "dict", "list"],
+)
+def test_malformed_model_falls_back(model_value):
+    """FIX3：LLM 响应 model 非 None/str（int/dict/list）→ 技术故障兜底，不抛 ValidationError 500。"""
+    request = _request("客户说空号")
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="生成话术",
+        ),
+        model=model_value,
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", (
+        f"model={model_value!r} 必须降级兜底，不得抛 ValidationError"
+    )
+
+
+def test_none_model_accepted():
+    """FIX3：model=None 合法（LLM 未返回模型名），不降级，正常进入判定。"""
+    request = _request("客户说空号")
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="生成话术",
+        ),
+        model=None,
+    )
+    result = judge_return_visit(request, llm_client=client)
+    # model=None 合法 → 进入 LLM 判定 → 命中 retain_contact（should_trigger=True, source=llm）
+    assert result.judgement_source == "llm"
+    assert result.should_trigger is True
+    assert result.model is None

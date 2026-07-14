@@ -260,6 +260,9 @@ def _try_llm(
 
     reply_text = str(result.get("reply_text") or "").strip()
     model = result.get("model")
+    # FIX3：model 只接受 None 或字符串；畸形（int/dict/list）→ 技术故障兜底，防 ValidationError 500
+    if model is not None and not isinstance(model, str):
+        return None
     if not reply_text:
         return None  # 空输出 → 技术故障 → 兜底
 
@@ -375,8 +378,8 @@ def _try_llm(
     suggested_message = raw_suggested.strip()
     if not suggested_message or len(suggested_message) > _SUGGESTED_MESSAGE_MAX:
         return None
-    if suggested_message == prompt.template_text:
-        return None  # 模型直接回填模板 → 兜底
+    if suggested_message == prompt.template_text.strip():
+        return None  # 模型直接回填模板（两侧 strip 归一，防空白绕过）→ 兜底
     return _log_and_build(
         request,
         prompt_key=prompt_key,
