@@ -42,6 +42,7 @@ docs/ai/04_OUTPUT_RULES.md
 | `10_local_agent_wechat/` | Local Agent、微信自动化、安全边界和探索报告 |
 | `11_deployment_ops/` | Docker、本地/宝塔部署、OpenAPI、live-check 安全清单 |
 | `12_legacy_research/` | 历史代码计划、旧探索和低频参考资料 |
+| `13_ai_edit/` | AI剪辑、小高素材库、外部剪辑能力迁入与复用评估 |
 | `archive/` | 后续归档区 |
 
 ## 当前常用入口
@@ -73,6 +74,7 @@ docs/ai/04_OUTPUT_RULES.md
 | NewCar 权限 | `08_newcar/P1_AUTH_PERMISSION_ROUTE_MATRIX.md` |
 | car-porject-main 对接 | `09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_CONVERSATION_LINK_AUDIT.md` |
 | 本地 Docker | `11_deployment_ops/LOCAL_DOCKER_DEV.md` |
+| AI剪辑 / 小高素材库 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
 
 ## 归档规则
 
