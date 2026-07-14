@@ -72,3 +72,21 @@ def require_super_admin(context: GatewayContext) -> GatewayContext:
             detail={"code": "SUPER_ADMIN_REQUIRED", "message": "仅超级管理员可操作"},
         )
     return context
+
+
+# 算力配置精确权限：套餐/充值/发放沿用 require_super_admin，配置比例单独收口到此权限
+COMPUTE_CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
+
+
+def require_compute_config_admin(context: GatewayContext) -> GatewayContext:
+    """算力配置接口：gateway 标记的 super_admin 或精确权限 auto_wechat:admin:compute_config。
+
+    其他 admin 权限或仅商户权限均不授予，避免越权改计费比例。
+    """
+    permission_codes = set(context.get("permission_codes") or [])
+    if context.get("super_admin") or COMPUTE_CONFIG_PERMISSION in permission_codes:
+        return context
+    raise HTTPException(
+        status_code=403,
+        detail={"code": "PERMISSION_DENIED", "message": "缺少算力配置权限"},
+    )

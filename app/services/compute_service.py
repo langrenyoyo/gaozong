@@ -21,9 +21,11 @@ from apps.compute.services import (  # noqa: F401
     grant_package_to_merchant,
     list_admin_packages,
     list_enabled_packages,
+    list_markup_ratios,
     list_transactions,
     recharge_merchant,
     record_usage,
+    update_markup_ratio,
     update_package,
 )
 
@@ -44,8 +46,10 @@ __all__ = [
     "grant_package_to_merchant",
     "list_admin_packages",
     "list_enabled_packages",
+    "list_markup_ratios",
     "list_transactions",
     "recharge_merchant",
     "record_usage",
+    "update_markup_ratio",
     "update_package",
 ]

@@ -389,6 +389,41 @@ def record_usage(
     return account
 
 
+def list_markup_ratios(db: Session) -> list[ComputeMarkupRatio]:
+    """按冻结六能力顺序返回比例行；缺行或多余行视为配置漂移，返回稳定错误不自动补写。"""
+    rows = {r.capability_key: r for r in db.query(ComputeMarkupRatio).all()}
+    if len(rows) != len(COMPUTE_CAPABILITY_KEYS) or any(
+        key not in rows for key in COMPUTE_CAPABILITY_KEYS
+    ):
+        raise ValueError("MARKUP_RATIO_DRIFT")
+    return [rows[key] for key in COMPUTE_CAPABILITY_KEYS]
+
+
+def update_markup_ratio(
+    db: Session,
+    capability_key: str,
+    markup_basis_points: int,
+    enabled: bool,
+) -> ComputeMarkupRatio:
+    """更新指定能力的上浮比例与启用位；未知能力拒绝，不允许改 capability_key。"""
+    if capability_key not in COMPUTE_CAPABILITY_KEYS:
+        raise ValueError("INVALID_CAPABILITY")
+    ratio = (
+        db.query(ComputeMarkupRatio)
+        .filter(ComputeMarkupRatio.capability_key == capability_key)
+        .one_or_none()
+    )
+    if ratio is None:
+        # 六能力内但无行：配置漂移（seed 未跑或被删），不自动补写
+        raise ValueError("MARKUP_RATIO_DRIFT")
+    ratio.markup_basis_points = markup_basis_points
+    ratio.enabled = enabled
+    ratio.updated_at = _now()
+    db.commit()
+    db.refresh(ratio)
+    return ratio
+
+
 def create_mock_recharge_order(
     db: Session,
     merchant_id: str,

@@ -9,12 +9,16 @@ from app.database import get_db
 from apps.compute.dependencies import (
     GatewayContext,
     get_gateway_context,
+    require_compute_config_admin,
     require_merchant_context,
     require_super_admin,
 )
 from apps.compute.schemas import (
     ComputeAdminRechargeRequest,
     ComputeGrantPackageRequest,
+    ComputeMarkupRatioListResponse,
+    ComputeMarkupRatioResponse,
+    ComputeMarkupRatioUpdate,
     ComputePackageCreate,
     ComputePackageListResponse,
     ComputePackageResponse,
@@ -201,6 +205,54 @@ def admin_grant_package(
         raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
+
+
+@router.get("/admin/markup-ratios", response_model=ComputeMarkupRatioListResponse)
+def admin_list_markup_ratios(
+    db: Session = Depends(get_db),
+    context: GatewayContext = Depends(get_gateway_context),
+):
+    """查看六能力上浮比例（按冻结顺序，缺行视为漂移）。"""
+    require_compute_config_admin(context)
+    try:
+        ratios = compute_service.list_markup_ratios(db)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "MARKUP_RATIO_DRIFT":
+            raise HTTPException(
+                status_code=500,
+                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+            ) from exc
+        raise _bad_request(code, code) from exc
+    return {"success": True, "data": ratios, "message": "success"}
+
+
+@router.put(
+    "/admin/markup-ratios/{capability_key}",
+    response_model=ComputeMarkupRatioResponse,
+)
+def admin_update_markup_ratio(
+    capability_key: str,
+    payload: ComputeMarkupRatioUpdate,
+    db: Session = Depends(get_db),
+    context: GatewayContext = Depends(get_gateway_context),
+):
+    """更新指定能力的上浮比例与启用位（不允许改 capability_key）。"""
+    require_compute_config_admin(context)
+    try:
+        ratio = compute_service.update_markup_ratio(
+            db, capability_key, payload.markup_basis_points, payload.enabled
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "MARKUP_RATIO_DRIFT":
+            raise HTTPException(
+                status_code=500,
+                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+            ) from exc
+        message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
+        raise _bad_request(code, message_map.get(code, code)) from exc
+    return {"success": True, "data": ratio, "message": "success"}
 
 
 def _get_internal_token() -> str:

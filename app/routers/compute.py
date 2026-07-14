@@ -19,6 +19,9 @@ from app.database import get_db
 from app.schemas import (
     ComputeAdminRechargeRequest,
     ComputeGrantPackageRequest,
+    ComputeMarkupRatioListResponse,
+    ComputeMarkupRatioResponse,
+    ComputeMarkupRatioUpdate,
     ComputePackageCreate,
     ComputePackageListResponse,
     ComputePackageResponse,
@@ -229,6 +232,69 @@ def admin_grant_package(
         raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
+
+
+# ============ 算力上浮配置 /admin/compute/markup-ratios ============
+
+
+def _require_compute_config_admin(context: RequestContext) -> RequestContext:
+    """算力配置：精确权限 auto_wechat:admin:compute_config / super_admin / mock。"""
+    if not context.has_permission("auto_wechat:admin:compute_config"):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PERMISSION_DENIED", "message": "缺少算力配置权限"},
+        )
+    return context
+
+
+@admin_router.get(
+    "/compute/markup-ratios", response_model=ComputeMarkupRatioListResponse
+)
+def admin_list_markup_ratios(
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """查看六能力上浮比例（按冻结顺序，缺行视为漂移）。"""
+    _require_compute_config_admin(context)
+    try:
+        ratios = compute_service.list_markup_ratios(db)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "MARKUP_RATIO_DRIFT":
+            raise HTTPException(
+                status_code=500,
+                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+            ) from exc
+        raise _bad_request(code, code) from exc
+    return {"success": True, "data": ratios, "message": "success"}
+
+
+@admin_router.put(
+    "/compute/markup-ratios/{capability_key}",
+    response_model=ComputeMarkupRatioResponse,
+)
+def admin_update_markup_ratio(
+    capability_key: str,
+    payload: ComputeMarkupRatioUpdate,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """更新指定能力的上浮比例与启用位（不允许改 capability_key）。"""
+    _require_compute_config_admin(context)
+    try:
+        ratio = compute_service.update_markup_ratio(
+            db, capability_key, payload.markup_basis_points, payload.enabled
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "MARKUP_RATIO_DRIFT":
+            raise HTTPException(
+                status_code=500,
+                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+            ) from exc
+        message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
+        raise _bad_request(code, message_map.get(code, code)) from exc
+    return {"success": True, "data": ratio, "message": "success"}
 
 
 # ============ 内部 AI 消耗 /internal ============

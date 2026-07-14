@@ -2041,9 +2041,39 @@ class ComputeMarkupRatioOut(BaseModel):
     """算力上浮比例输出结构（基点整数，不浮点）。"""
 
     id: int
-    capability_key: str
+    capability_key: Literal[
+        "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge"
+    ]
     markup_basis_points: int
     enabled: bool = True
+
+    model_config = {"from_attributes": True}
+
+
+class ComputeMarkupRatioUpdate(BaseModel):
+    """算力上浮比例更新请求（只允许改 markup/enabled，禁止改 capability_key）。"""
+
+    model_config = {"extra": "forbid"}
+    markup_basis_points: int = Field(
+        ..., ge=0, le=2_147_483_647, description="上浮基点（非负，≤ PostgreSQL INTEGER 上界）"
+    )
+    enabled: bool = Field(..., description="是否启用该能力的上浮")
+
+
+class ComputeMarkupRatioListResponse(BaseModel):
+    """算力上浮比例列表响应。"""
+
+    success: bool = True
+    data: list[ComputeMarkupRatioOut]
+    message: str = "success"
+
+
+class ComputeMarkupRatioResponse(BaseModel):
+    """算力上浮比例单项响应。"""
+
+    success: bool = True
+    data: ComputeMarkupRatioOut
+    message: str = "success"
 
 
 class AdReviewOAuthAccountOut(BaseModel):
