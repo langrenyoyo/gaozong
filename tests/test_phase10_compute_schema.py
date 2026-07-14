@@ -924,3 +924,144 @@ def test_sqlite_0031_downgrade_rejects_out_of_order(tmp_path):
         assert "actual_tokens" in cols, "越序降级被拒，升级态结构应保留"
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 2-FIX2 红灯：SQLite VIRTUAL 生成列不得绕过列集守卫
+# pragma_table_info 不返回生成列（hidden!=0），旧守卫被绕过致生成列静默删除；
+# 必须用 pragma_table_xinfo 识别生成列。
+# ---------------------------------------------------------------------------
+
+
+def test_sqlite_0031_upgrade_rejects_generated_column_on_transactions(tmp_path):
+    """compute_transactions 有 VIRTUAL 生成列 → upgrade 必须事前拒绝，生成列保留、数据不丢。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix2_upgrade_tx_gen.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        # pragma_table_info 不返回生成列（旧守卫被绕过）；pragma_table_xinfo 能识别（hidden!=0）
+        conn.execute(
+            "ALTER TABLE compute_transactions ADD COLUMN gen_marker INTEGER "
+            "GENERATED ALWAYS AS (id) VIRTUAL"
+        )
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        gen = conn.execute(
+            "SELECT count(*) FROM pragma_table_xinfo('compute_transactions') "
+            "WHERE name='gen_marker' AND hidden != 0"
+        ).fetchone()[0]
+        assert gen == 1, "生成列必须保留（pragma_table_xinfo 仍可见，守卫不得静默删除）"
+        assert "actual_tokens" not in migrate_sqlite.get_columns(conn, "compute_transactions"), (
+            "生成列场景 upgrade 被拒不应出现新列"
+        )
+        assert conn.execute(
+            "SELECT count(*) FROM compute_transactions"
+        ).fetchone()[0] == 4, "历史流水数据不得丢失"
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+def test_sqlite_0031_upgrade_rejects_generated_column_on_markup_ratios(tmp_path):
+    """compute_markup_ratios 有 VIRTUAL 生成列 → upgrade 必须事前拒绝（两表都识别生成列）。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix2_upgrade_cmr_gen.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        conn.execute(
+            "ALTER TABLE compute_markup_ratios ADD COLUMN gen_marker INTEGER "
+            "GENERATED ALWAYS AS (id) VIRTUAL"
+        )
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        gen = conn.execute(
+            "SELECT count(*) FROM pragma_table_xinfo('compute_markup_ratios') "
+            "WHERE name='gen_marker' AND hidden != 0"
+        ).fetchone()[0]
+        assert gen == 1, "markup_ratios 生成列必须保留"
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+def test_sqlite_0031_downgrade_rejects_generated_column_on_transactions(tmp_path):
+    """升级态 compute_transactions 有 VIRTUAL 生成列 → downgrade 必须事前拒绝，生成列保留。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix2_down_tx_gen.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        conn.execute(
+            "ALTER TABLE compute_transactions ADD COLUMN gen_marker INTEGER "
+            "GENERATED ALWAYS AS (id) VIRTUAL"
+        )
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 1, "downgrade 被拒，0031 登记应保留"
+        gen = conn.execute(
+            "SELECT count(*) FROM pragma_table_xinfo('compute_transactions') "
+            "WHERE name='gen_marker' AND hidden != 0"
+        ).fetchone()[0]
+        assert gen == 1, "生成列必须保留（downgrade 被拒不得删除生成列）"
+        assert "actual_tokens" in migrate_sqlite.get_columns(conn, "compute_transactions"), (
+            "downgrade 被拒，升级态结构应保留"
+        )
+    finally:
+        conn.close()
+
+
+def test_sqlite_0031_downgrade_rejects_generated_column_on_markup_ratios(tmp_path):
+    """升级态 compute_markup_ratios 有 VIRTUAL 生成列 → downgrade 必须事前拒绝。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix2_down_cmr_gen.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        conn.execute(
+            "ALTER TABLE compute_markup_ratios ADD COLUMN gen_marker INTEGER "
+            "GENERATED ALWAYS AS (id) VIRTUAL"
+        )
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 1, "downgrade 被拒，0031 登记应保留"
+        gen = conn.execute(
+            "SELECT count(*) FROM pragma_table_xinfo('compute_markup_ratios') "
+            "WHERE name='gen_marker' AND hidden != 0"
+        ).fetchone()[0]
+        assert gen == 1, "markup_ratios 生成列必须保留"
+    finally:
+        conn.close()

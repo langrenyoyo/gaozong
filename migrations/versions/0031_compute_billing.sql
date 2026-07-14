@@ -32,32 +32,35 @@
 
 CREATE TEMP TABLE _guard_0031 (ok INTEGER NOT NULL CHECK (ok = 1));
 
--- 0.1 compute_transactions 列数精确为 12（无额外/缺失列）
+-- 0.1 compute_transactions 列数精确为 12
+-- pragma_table_xinfo 覆盖生成列（hidden!=0），额外列/生成列超标即拒（pragma_table_info 会漏生成列）
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_transactions')
+    SELECT count(*) FROM pragma_table_xinfo('compute_transactions')
 ) = 12 THEN 1 ELSE 0 END;
 
--- 0.2 compute_transactions 12 基线列名都在（防列数对但列名漂移）
+-- 0.2 compute_transactions 12 基线列名都在且 hidden=0（普通列，拒绝生成/隐藏列同名）
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_transactions')
+    SELECT count(*) FROM pragma_table_xinfo('compute_transactions')
     WHERE name IN ('id','merchant_id','tenant_id','transaction_type','delta_tokens',
                    'balance_after_tokens','source','remark','model','agent_id',
                    'conversation_id','created_at')
+                   AND hidden = 0
 ) = 12 THEN 1 ELSE 0 END;
 
--- 0.3 compute_markup_ratios 列数精确为 6（无额外/缺失列）
+-- 0.3 compute_markup_ratios 列数精确为 6（pragma_table_xinfo 含生成列）
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+    SELECT count(*) FROM pragma_table_xinfo('compute_markup_ratios')
 ) = 6 THEN 1 ELSE 0 END;
 
--- 0.4 compute_markup_ratios 6 基线列名都在
+-- 0.4 compute_markup_ratios 6 基线列名都在且 hidden=0
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+    SELECT count(*) FROM pragma_table_xinfo('compute_markup_ratios')
     WHERE name IN ('id','capability_key','markup_basis_points','enabled','created_at','updated_at')
+                   AND hidden = 0
 ) = 6 THEN 1 ELSE 0 END;
 
 -- 0.5 compute_markup_ratios 无未知键
