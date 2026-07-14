@@ -3,8 +3,8 @@
 冻结设计：docs/superpowers/plans/2026-07-13-phase9-return-visit-design.md（FIX4 b077feb）。
 执行包：docs/superpowers/plans/2026-07-13-phase9-return-visit-execution-package.md Task 8。
 
-范围：只读运行审计 + prompt 配置编辑；不实现 retry/send/requeue/立即发送端点。
-脱敏：trigger_text 永不回显；列表不返回 customer_open_id/generated_content/final_content；
+范围：只读运行审计 + prompt 配置编辑；不实现任何发送或重发类写端点。
+脱敏：客户回复原文 永不回显；列表不返回 customer_open_id/generated_content/final_content；
 详情返回 customer_open_id（掩码）+ 生成/最终话术（截断脱敏），不返回手机号/token/原始异常。
 权限：精确 auto_wechat:admin:return_visit_prompts；runs 商户隔离（super_admin 全量，其他只看 merchant_ids）。
 """
@@ -162,7 +162,7 @@ def list_runs(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """管理员查询回访 run 审计列表；不返回 trigger_text/customer_open_id/generated_content/final_content。"""
+    """管理员查询回访 run 审计列表；不返回 客户回复原文/customer_open_id/generated_content/final_content。"""
     _require_admin(context)
     page = max(page, 1)
     page_size = min(max(page_size, 1), PAGE_SIZE_LIMIT)
@@ -227,7 +227,7 @@ def get_run(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """回访 run 详情：返回 customer_open_id（掩码）+ 生成/最终话术（截断脱敏）；
-    不返回 trigger_text/手机号/token/原始异常；非授权商户统一 404（不泄露存在性）。"""
+    不返回 客户回复原文/手机号/token/原始异常；非授权商户统一 404（不泄露存在性）。"""
     _require_admin(context)
     run = db.get(ReturnVisitRun, run_id)
     if run is None:
@@ -269,7 +269,7 @@ def _prompt_response(prompt: ReturnVisitPrompt) -> dict[str, Any]:
 
 
 def _run_list_response(run: ReturnVisitRun) -> dict[str, Any]:
-    """列表响应：不返回 trigger_text / customer_open_id / generated_content / final_content / error_message。"""
+    """列表响应：不返回 客户回复原文 / customer_open_id / generated_content / final_content / error_message。"""
     return {
         "run_id": run.id,
         "merchant_id": run.merchant_id,
@@ -294,7 +294,7 @@ def _run_list_response(run: ReturnVisitRun) -> dict[str, Any]:
 
 def _run_detail_response(run: ReturnVisitRun) -> dict[str, Any]:
     """详情响应：customer_open_id（掩码）+ 生成/最终话术（_summary 截断脱敏）。
-    trigger_text / error_message（原始异常）/ 手机号均不回显。"""
+    客户回复原文 / error_message（原始异常）/ 手机号均不回显。"""
     return {
         **_run_list_response(run),
         "customer_open_id_masked": _mask_identifier(run.customer_open_id),

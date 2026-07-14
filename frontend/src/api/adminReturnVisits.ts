@@ -24,7 +24,7 @@ export interface ReturnVisitPromptUpdateRequest {
   reason: string;
 }
 
-/** 运行记录列表项：后端不返回 trigger_text / customer_open_id / generated_content / final_content / error_message。 */
+/** 运行记录列表项：后端不返回客户回复原文 / customer_open_id / generated_content / final_content / error_message。 */
 export interface ReturnVisitRunListItem {
   run_id: number;
   merchant_id?: string | null;

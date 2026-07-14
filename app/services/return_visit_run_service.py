@@ -348,7 +348,7 @@ def process_return_visit_run(run_id: int) -> None:
 
     自行创建并关闭 DB Session；终态和 claim 冲突直接返回。
     流程：原子 claim → 9100 判定 → 终态映射 → G1-G10 门禁 → send_authorized → 发送分类。
-    不得调用 is_automation_allowed / 白名单 rollout / ai_auto_reply_send_service / _frequency_snapshot。
+    不得调用旧自动回复服务的自动化判定、白名单灰度、发送服务或频率快照函数（保持回访链路解耦）。
     """
     db = SessionLocal()
     try:

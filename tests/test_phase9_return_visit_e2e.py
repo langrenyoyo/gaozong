@@ -485,3 +485,187 @@ def test_e2e_trigger_idempotent_single_process(monkeypatch):
         ).count() == 1
     finally:
         db3.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 10 补充场景矩阵：三场景 / 注入拒答不兜底 / 关键词兜底命中 / 不同包新 run / 24h 冷却
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_finance_scene_sent(monkeypatch):
+    """金融方案 → finance_plan_followup → sent。"""
+    run_id = _trigger_and_process(
+        monkeypatch,
+        judgment=_judgment(
+            prompt_key="finance_plan_followup",
+            judgement_result="finance_plan_followup",
+            suggested_message="金融方案跟进话术",
+        ),
+    )
+    db = TestSession()
+    try:
+        done = db.get(ReturnVisitRun, run_id)
+        assert done.send_status == "sent"
+        assert done.prompt_key == "finance_plan_followup"
+    finally:
+        db.close()
+
+
+def test_e2e_silent_scene_sent(monkeypatch):
+    """长期未回复 → silent_customer_wakeup → sent。"""
+    run_id = _trigger_and_process(
+        monkeypatch,
+        judgment=_judgment(
+            prompt_key="silent_customer_wakeup",
+            judgement_result="silent_customer_wakeup",
+            suggested_message="沉默客户唤醒话术",
+        ),
+    )
+    db = TestSession()
+    try:
+        assert db.get(ReturnVisitRun, run_id).send_status == "sent"
+    finally:
+        db.close()
+
+
+def test_e2e_injection_and_refusal_blocked_no_fallback(monkeypatch):
+    """注入 + 模型拒答 → blocked，不兜底、不发送。"""
+    run_id = _trigger_and_process(
+        monkeypatch,
+        judgment=_judgment(
+            judgement_result="blocked",
+            prompt_key=None,
+            confidence=0.0,
+            risk_flags=["prompt_injection", "model_refusal"],
+            should_trigger=False,
+            suggested_message=None,
+        ),
+    )
+    db = TestSession()
+    try:
+        assert db.get(ReturnVisitRun, run_id).send_status == "blocked"
+        assert db.query(DouyinPrivateMessageSend).count() == 0
+    finally:
+        db.close()
+
+
+def test_e2e_keyword_fallback_hit_sent(monkeypatch):
+    """9100 技术故障降级关键词兜底命中 → 仍进入发送 → sent。"""
+    run_id = _trigger_and_process(
+        monkeypatch,
+        judgment=_judgment(
+            judgement_source="keyword_fallback",
+            prompt_key="retain_contact_conversion",
+            judgement_result="retain_contact_conversion",
+            confidence=0.80,
+            suggested_message="关键词兜底话术",
+        ),
+    )
+    db = TestSession()
+    try:
+        assert db.get(ReturnVisitRun, run_id).send_status == "sent"
+    finally:
+        db.close()
+
+
+def test_e2e_different_packet_creates_new_run(monkeypatch):
+    """不同回复包（不同 trigger_message_fp）→ 新 run（区别于同包幂等）。"""
+    db = TestSession()
+    try:
+        _seed_baseline(db)
+        db.commit()
+    finally:
+        db.close()
+
+    messages_a = [
+        {"sender": "self", "content": NOTIFICATION_TEXT, "index": 0},
+        {"sender": "friend", "content": "手机号不对", "index": 1},
+    ]
+    messages_b = [
+        {"sender": "self", "content": NOTIFICATION_TEXT, "index": 0},
+        {"sender": "friend", "content": "金融方案问问", "index": 1},
+    ]
+
+    db1 = TestSession()
+    try:
+        run1 = trigger_return_visit_from_writeback(
+            db1, merchant_id="merchant-1", lead_id=10, staff_id=1,
+            reply_check_id=None, messages=messages_a,
+        )
+        run1_id = run1.id
+        db1.commit()
+    finally:
+        db1.close()
+
+    db2 = TestSession()
+    try:
+        run2 = trigger_return_visit_from_writeback(
+            db2, merchant_id="merchant-1", lead_id=10, staff_id=1,
+            reply_check_id=None, messages=messages_b,
+        )
+        run2_id = run2.id
+        db2.commit()
+    finally:
+        db2.close()
+
+    assert run2_id != run1_id
+
+
+def test_e2e_sent_cooldown_24h(monkeypatch):
+    """同 customer+prompt 24h 内已 sent → 新 run G7 冷却阻断（rate_limited），不发送。"""
+    db = TestSession()
+    try:
+        _seed_baseline(db)
+        db.commit()
+    finally:
+        db.close()
+
+    messages_a = _MESSAGES
+    db1 = TestSession()
+    try:
+        run1 = trigger_return_visit_from_writeback(
+            db1, merchant_id="merchant-1", lead_id=10, staff_id=1,
+            reply_check_id=None, messages=messages_a,
+        )
+        run1_id = run1.id
+        db1.commit()
+    finally:
+        db1.close()
+
+    # run1 sent（retain）
+    _patch_9100(monkeypatch, _judgment())
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"data": {"msg_id": "up-cd-1"}}},
+    ):
+        process_return_visit_run(run1_id)
+
+    # run2 不同包（不同 fp → 新 run），同 customer，9100 仍判 retain → G7 冷却
+    messages_b = [
+        {"sender": "self", "content": NOTIFICATION_TEXT, "index": 0},
+        {"sender": "friend", "content": "手机号不对呀", "index": 1},
+    ]
+    db2 = TestSession()
+    try:
+        run2 = trigger_return_visit_from_writeback(
+            db2, merchant_id="merchant-1", lead_id=10, staff_id=1,
+            reply_check_id=None, messages=messages_b,
+        )
+        run2_id = run2.id
+        db2.commit()
+    finally:
+        db2.close()
+
+    assert run2_id != run1_id
+    # 无 openapi stub：G7 冷却在发送前拦截，不应触网
+    process_return_visit_run(run2_id)
+
+    db3 = TestSession()
+    try:
+        assert db3.get(ReturnVisitRun, run2_id).send_status == "rate_limited"
+        # run2 不新建发送流水
+        assert db3.query(DouyinPrivateMessageSend).filter(
+            DouyinPrivateMessageSend.return_visit_run_id == run2_id
+        ).count() == 0
+    finally:
+        db3.close()
