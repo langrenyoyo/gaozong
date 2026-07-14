@@ -16,13 +16,45 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models import ComputeAccount, ComputePackage, ComputeTransaction
+from app.models import ComputeAccount, ComputeMarkupRatio, ComputePackage, ComputeTransaction
 from apps.compute.schemas import ComputePackageCreate, ComputePackageUpdate, ComputeRechargeOrderRequest
 
 # 流水类型与来源受控字典（一期）
 TRANSACTION_TYPES = ("recharge", "grant_package", "consume")
 USAGE_SOURCES = ("llm", "embedding", "other")
 CONSUME_TYPE = "consume"
+
+# Phase 10 §0.2 算力计费合同：六能力 key 与基点计费常量
+COMPUTE_CAPABILITY_KEYS = (
+    "douyin-cs",
+    "leads",
+    "agents",
+    "wechat-assistant",
+    "compute",
+    "knowledge",
+)
+BASIS_POINT_DENOMINATOR = 10_000
+# PostgreSQL 列域上界：markup_basis_points 为 INTEGER，计费量按 BIGINT 语义校验天花板
+POSTGRES_INTEGER_MAX = 2_147_483_647
+POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
+
+
+def calculate_billed_tokens(actual_tokens: int, markup_basis_points: int) -> int:
+    """按上浮基点计算计费量：ceil(actual * (1 + markup/10000))，超 BIGINT 整笔拒绝。
+
+    markup_basis_points=3300 表示上浮 33%（1000 实际 → 1330 计费）。
+    """
+    if actual_tokens <= 0:
+        raise ValueError("TOKENS_MUST_BE_POSITIVE")
+    if not 0 <= markup_basis_points <= POSTGRES_INTEGER_MAX:
+        raise ValueError("MARKUP_OUT_OF_RANGE")
+    billed = (
+        actual_tokens * (BASIS_POINT_DENOMINATOR + markup_basis_points)
+        + BASIS_POINT_DENOMINATOR - 1
+    ) // BASIS_POINT_DENOMINATOR
+    if billed > POSTGRES_BIGINT_MAX:
+        raise ValueError("COMPUTE_VALUE_OUT_OF_RANGE")
+    return billed
 
 
 def _now() -> datetime:
@@ -70,29 +102,49 @@ def _write_transaction(
     model: str | None = None,
     agent_id: str | None = None,
     conversation_id: int | None = None,
+    actual_tokens: int | None = None,
+    capability_key: str | None = None,
+    markup_basis_points: int | None = None,
 ) -> ComputeTransaction:
-    """写入一条流水并同步更新账户余额（含 balance_after_tokens 快照）。
+    """写入一条流水并同步更新账户余额（含 balance_after_tokens 与计费快照）。
 
     delta_tokens 正为增加（充值/发放），负为消耗。每次写入一个事务，立即 commit。
+    Phase 10：写账户前重新查询该商户账户行并加 FOR UPDATE 行锁（PostgreSQL 防并发
+    丢失更新；SQLite 为 no-op，靠本地写事务隔离）；新余额超 BIGINT 整笔拒绝。
+    充值/发放调用 actual_tokens/capability_key/markup_basis_points 保持空（§0.2）。
     """
-    account.balance_tokens += delta_tokens
-    account.updated_at = _now()
+    locked = (
+        db.query(ComputeAccount)
+        .filter(ComputeAccount.merchant_id == account.merchant_id)
+        .with_for_update()
+        .first()
+    )
+    if locked is None:
+        raise ValueError("COMPUTE_ACCOUNT_MISSING")
+    new_balance = locked.balance_tokens + delta_tokens
+    if abs(new_balance) > POSTGRES_BIGINT_MAX:
+        raise ValueError("COMPUTE_BALANCE_OUT_OF_RANGE")
+    locked.balance_tokens = new_balance
+    locked.updated_at = _now()
     tx = ComputeTransaction(
-        merchant_id=account.merchant_id,
-        tenant_id=account.tenant_id,
+        merchant_id=locked.merchant_id,
+        tenant_id=locked.tenant_id,
         transaction_type=transaction_type,
         delta_tokens=delta_tokens,
-        balance_after_tokens=account.balance_tokens,
+        balance_after_tokens=new_balance,
         source=source,
         remark=remark,
         model=model,
         agent_id=agent_id,
         conversation_id=conversation_id,
         created_at=_now(),
+        actual_tokens=actual_tokens,
+        capability_key=capability_key,
+        markup_basis_points=markup_basis_points,
     )
     db.add(tx)
     db.commit()
-    db.refresh(account)
+    db.refresh(locked)
     db.refresh(tx)
     return tx
 
@@ -290,28 +342,49 @@ def record_usage(
     db: Session,
     merchant_id: str,
     tokens: int,
+    *,
+    capability_key: str,
     source: str = "llm",
-    model: str | None = None,
+    model: str,
     agent_id: str | None = None,
     conversation_id: int | None = None,
     remark: str | None = None,
 ) -> ComputeAccount:
-    """内部 AI 消耗上报：余额减少，写 consume 流水（一期不做余额拦截，不阻断）。"""
-    if tokens <= 0:
-        raise ValueError("TOKENS_MUST_BE_POSITIVE")
+    """内部 AI 消耗上报：按能力上浮计费，写 consume 流水（一期不拦截余额，允许负）。
+
+    tokens 语义冻结为实际字符量；按 capability_key 读取唯一比例行计算计费量，
+    写入 actual_tokens/capability_key/markup_basis_points 三个快照列。
+    """
+    if capability_key not in COMPUTE_CAPABILITY_KEYS:
+        raise ValueError("INVALID_CAPABILITY")
+    model_name = str(model or "").strip()
+    if not model_name or len(model_name) > 128:
+        raise ValueError("MODEL_INVALID")
     if source not in USAGE_SOURCES:
         raise ValueError("INVALID_SOURCE")
+    ratio = (
+        db.query(ComputeMarkupRatio)
+        .filter(ComputeMarkupRatio.capability_key == capability_key)
+        .one_or_none()
+    )
+    if ratio is None:
+        raise ValueError("MARKUP_RATIO_NOT_FOUND")
+    effective_markup = ratio.markup_basis_points if ratio.enabled else 0
+    billed_tokens = calculate_billed_tokens(tokens, effective_markup)
     account = get_or_create_account(db, merchant_id)
     _write_transaction(
         db,
         account,
         transaction_type=CONSUME_TYPE,
-        delta_tokens=-tokens,  # 消耗记为负
+        delta_tokens=-billed_tokens,  # 消耗记为负计费值
         source=source,
         remark=remark,
-        model=model,
+        model=model_name,
         agent_id=agent_id,
         conversation_id=conversation_id,
+        actual_tokens=tokens,
+        capability_key=capability_key,
+        markup_basis_points=effective_markup,
     )
     return account
 

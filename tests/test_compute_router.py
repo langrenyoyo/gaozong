@@ -17,6 +17,8 @@ import app.models  # noqa: F401  触发 ORM 注册
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
+from app.models import ComputeMarkupRatio
+from datetime import datetime
 
 
 engine = create_engine(
@@ -31,6 +33,31 @@ def setup_function():
     """每个测试前重建表，保证隔离。"""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_compute_internal_token(monkeypatch):
+    """清理环境 COMPUTE_INTERNAL_TOKEN，避免 .env.lan.local 的 token 污染 usage 测试。
+
+    test_internal_token_enforced 自行 setenv 覆盖，不受影响。
+    """
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+
+
+def _seed_markup_ratio(capability_key="douyin-cs", basis=0, enabled=True):
+    """写入一条上浮比例（默认不上浮），供 /internal/compute/usage 走 record_usage。"""
+    db = TestSession()
+    db.add(
+        ComputeMarkupRatio(
+            capability_key=capability_key,
+            markup_basis_points=basis,
+            enabled=enabled,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+    )
+    db.commit()
+    db.close()
 
 
 def _context(
@@ -101,10 +128,17 @@ def test_transactions_after_recharge_and_consume():
     admin.post("/admin/merchants/merchant-a/compute/recharge", json={"tokens": 1000})
 
     # internal 上报消耗（不需要用户上下文）
+    _seed_markup_ratio()
     internal = _client()
     internal.post(
         "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 300, "source": "llm", "model": "gpt-4o-mini"},
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 300,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o-mini",
+        },
     )
 
     resp = client.get("/compute/transactions")
@@ -276,10 +310,17 @@ def test_internal_usage_records_consume():
     admin = _client(_context(super_admin=True))
     admin.post("/admin/merchants/merchant-a/compute/recharge", json={"tokens": 1000})
 
+    _seed_markup_ratio()
     internal = _client()
     resp = internal.post(
         "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 300, "source": "llm", "model": "gpt-4o-mini"},
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 300,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o-mini",
+        },
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -289,49 +330,64 @@ def test_internal_usage_records_consume():
 
 def test_internal_usage_no_balance_block():
     """一期不做余额拦截，余额为负也记录。"""
+    _seed_markup_ratio()
     internal = _client()
     resp = internal.post(
         "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 500, "source": "llm"},
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 500,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o",
+        },
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["balance_tokens"] == -500
 
 
 def test_internal_usage_rejects_invalid_source():
+    """source 受 Literal 约束，非法值由 schema 层 422 拦截（service 的 INVALID_SOURCE 为防御冗余）。"""
     internal = _client()
     resp = internal.post(
         "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 100, "source": "invalid"},
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 100,
+            "capability_key": "douyin-cs",
+            "source": "invalid",
+            "model": "gpt",
+        },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 def test_internal_token_enforced(monkeypatch):
     """配置 COMPUTE_INTERNAL_TOKEN 后，缺失/错误令牌 401，正确令牌放行。"""
     monkeypatch.setenv("COMPUTE_INTERNAL_TOKEN", "secret-token")
     internal = _client()
+    payload = {
+        "merchant_id": "merchant-a",
+        "tokens": 100,
+        "capability_key": "douyin-cs",
+        "source": "llm",
+        "model": "gpt",
+    }
 
     # 无令牌
-    resp = internal.post(
-        "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 100, "source": "llm"},
-    )
+    resp = internal.post("/internal/compute/usage", json=payload)
     assert resp.status_code == 401
     assert resp.json()["detail"]["code"] == "INTERNAL_TOKEN_INVALID"
 
     # 错误令牌
     resp = internal.post(
-        "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 100, "source": "llm"},
-        headers={"X-Internal-Token": "wrong"},
+        "/internal/compute/usage", json=payload, headers={"X-Internal-Token": "wrong"}
     )
     assert resp.status_code == 401
 
-    # 正确令牌
+    # 正确令牌（需比例行存在才能 record_usage 成功）
+    _seed_markup_ratio()
     resp = internal.post(
-        "/internal/compute/usage",
-        json={"merchant_id": "merchant-a", "tokens": 100, "source": "llm"},
-        headers={"X-Internal-Token": "secret-token"},
+        "/internal/compute/usage", json=payload, headers={"X-Internal-Token": "secret-token"}
     )
     assert resp.status_code == 200

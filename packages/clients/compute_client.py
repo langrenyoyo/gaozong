@@ -116,19 +116,21 @@ class ComputeClient:
         *,
         merchant_id: str,
         tokens: int,
+        capability_key: str,
+        model: str,
         source: str = "llm",
-        model: str | None = None,
         agent_id: str | None = None,
         conversation_id: int | None = None,
         remark: str | None = None,
     ) -> dict[str, Any]:
-        """上报一次 AI 算力消耗。"""
+        """上报一次 AI 算力消耗（capability_key/model 必填，对齐 §0.2 严格合同）。"""
         return self._request(
             "POST",
             "/api/compute/internal/usage",
             payload={
                 "merchant_id": merchant_id,
                 "tokens": tokens,
+                "capability_key": capability_key,
                 "source": source,
                 "model": model,
                 "agent_id": agent_id,

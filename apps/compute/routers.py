@@ -234,6 +234,7 @@ def report_usage(
             db,
             payload.merchant_id,
             payload.tokens,
+            capability_key=payload.capability_key,
             source=payload.source,
             model=payload.model,
             agent_id=payload.agent_id,
@@ -243,8 +244,14 @@ def report_usage(
     except ValueError as exc:
         code = str(exc)
         message_map = {
-            "TOKENS_MUST_BE_POSITIVE": "消耗 Token 数量必须大于 0",
+            "TOKENS_MUST_BE_POSITIVE": "消耗字符量必须大于 0",
             "INVALID_SOURCE": "无效的消耗来源",
+            "INVALID_CAPABILITY": "无效的算力能力",
+            "MODEL_INVALID": "模型标识无效",
+            "MARKUP_RATIO_NOT_FOUND": "算力上浮比例未配置",
+            "COMPUTE_VALUE_OUT_OF_RANGE": "计费值超出范围",
+            "COMPUTE_BALANCE_OUT_OF_RANGE": "账户余额变动超出范围",
+            "COMPUTE_ACCOUNT_MISSING": "商户算力账户不存在",
         }
         raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, payload.merchant_id)

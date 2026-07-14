@@ -3,6 +3,7 @@
 覆盖 9205 compute 服务的健康检查、新能力路径、mock 充值边界和 usage 扣费语义。
 """
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,6 +11,8 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  触发 ORM 注册
 from app.database import Base, get_db
+from app.models import ComputeMarkupRatio
+from datetime import datetime
 
 
 engine = create_engine(
@@ -24,6 +27,28 @@ def setup_function():
     """每个测试前重建表，保证独立能力服务测试隔离。"""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_compute_internal_token(monkeypatch):
+    """清理环境 COMPUTE_INTERNAL_TOKEN，避免 .env.lan.local 的 token 污染 usage 测试。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+
+
+def _seed_markup_ratio(capability_key="douyin-cs", basis=0, enabled=True):
+    """写入一条上浮比例（默认不上浮），供 /api/compute/internal/usage 走 record_usage。"""
+    db = TestSession()
+    db.add(
+        ComputeMarkupRatio(
+            capability_key=capability_key,
+            markup_basis_points=basis,
+            enabled=enabled,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+    )
+    db.commit()
+    db.close()
 
 
 def _client() -> TestClient:
@@ -144,10 +169,17 @@ def test_compute_app_internal_usage_keeps_existing_deduct_semantics():
         json={"tokens": 1000},
     )
 
+    _seed_markup_ratio()
     client = _client()
     usage = client.post(
         "/api/compute/internal/usage",
-        json={"merchant_id": "merchant-a", "tokens": 300, "source": "llm"},
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 300,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o",
+        },
     )
     assert usage.status_code == 200
     data = usage.json()["data"]

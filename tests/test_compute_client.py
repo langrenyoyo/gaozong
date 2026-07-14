@@ -46,6 +46,7 @@ def test_compute_client_posts_internal_usage_with_timeout_and_token(monkeypatch)
     data = client.report_usage(
         merchant_id="merchant-a",
         tokens=9,
+        capability_key="douyin-cs",
         source="llm",
         model="mock-model",
     )
@@ -55,6 +56,8 @@ def test_compute_client_posts_internal_usage_with_timeout_and_token(monkeypatch)
     assert seen["timeout"] == 3.0
     assert seen["body"]["merchant_id"] == "merchant-a"
     assert seen["body"]["tokens"] == 9
+    assert seen["body"]["capability_key"] == "douyin-cs"
+    assert seen["body"]["model"] == "mock-model"
     header_map = {str(k).lower(): v for k, v in seen["headers"].items()}
     assert header_map["x-internal-token"] == "secret-token"
     assert data["data"]["balance_tokens"] == 7

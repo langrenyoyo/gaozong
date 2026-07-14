@@ -1182,6 +1182,10 @@ class ComputeTransactionOut(BaseModel):
     agent_id: Optional[str] = None
     conversation_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    # Phase 10 §0.2 计费快照：历史/充值/套餐为 None，consume 保存实际值、能力、比例快照
+    actual_tokens: Optional[int] = None
+    capability_key: Optional[str] = None
+    markup_basis_points: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -1228,15 +1232,23 @@ class ComputeGrantPackageRequest(BaseModel):
 
 
 class ComputeUsageRequest(BaseModel):
-    """内部 AI 消耗上报请求（供 9100/19000 埋点）。"""
+    """内部 AI 消耗上报请求（供 9100/19000 埋点）。
+
+    Phase 10 §0.2：tokens 语义为实际字符量；capability_key/model 必填，source 受控。
+    """
 
     merchant_id: str = Field(..., description="商户 ID")
-    tokens: int = Field(..., gt=0, description="本次消耗 Token 数量")
-    source: str = Field("llm", description="消耗来源: llm / embedding / other")
-    model: Optional[str] = Field(None, description="模型标识")
+    tokens: int = Field(..., gt=0, description="本次实际字符量（按能力上浮后扣费）")
+    capability_key: Literal[
+        "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge"
+    ] = Field(..., description="算力能力 key（六值之一）")
+    source: Literal["llm", "embedding", "other"] = Field("llm", description="消耗来源")
+    model: str = Field(..., min_length=1, max_length=128, description="模型标识")
     agent_id: Optional[str] = Field(None, description="智能体 ID")
     conversation_id: Optional[int] = Field(None, description="会话 ID")
     remark: Optional[str] = None
+
+    model_config = {"extra": "forbid", "protected_namespaces": ()}
 
 
 class ComputeSummaryResponse(BaseModel):
