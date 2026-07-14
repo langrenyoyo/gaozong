@@ -1055,6 +1055,7 @@ class AgentMessage(BaseModel):
     sender: str = Field("unknown", description="发送方: self / friend / system / unknown")
     content: Optional[str] = Field(None, description="消息文本内容")
     sender_debug: Optional[dict] = Field(None, description="P0-REPLY-3B：发送方识别调试信息")
+    index: Optional[int] = Field(None, description="Phase 9：消息 UI 序号，回访触发锚点按 index 升序定位")
 
 
 class AgentResult(BaseModel):

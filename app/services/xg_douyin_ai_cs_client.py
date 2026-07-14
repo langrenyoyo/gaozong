@@ -109,6 +109,14 @@ class XgDouyinAiCsClient:
         """调用 9100 每日销售总结摘要窄接口；不复用 ask / reply-suggestion。"""
         return self._post_json("/internal/daily-reports/sales-summary", payload)
 
+    def judge_return_visit(self, request: dict) -> dict:
+        """Phase 9：调用 9100 回访判定窄接口；不复用 ask / reply-suggestion。
+
+        9000 在 process_return_visit_run 内组装完整请求（merchant_id/lead_id/prompts/
+        sales_reply_text/dispatch_context），9100 返回 ReturnVisitJudgment。
+        """
+        return self._post_json("/internal/return-visits/decide-and-generate", request)
+
     def knowledge_training_feedback(
         self,
         *,

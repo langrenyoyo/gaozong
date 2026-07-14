@@ -1300,7 +1300,7 @@ def _detect_reply_for_task(
         result["messages_read"] = len(messages)
         result["messages"] = [
             {"sender": m.get("sender", "unknown"), "content": m.get("content"),
-             "sender_debug": m.get("sender_debug")}
+             "sender_debug": m.get("sender_debug"), "index": m.get("index")}
             for m in messages
         ]
         logger.info("detect_reply_for_task: 读取 %d 条消息, lead_id=%s, staff_id=%s",
@@ -2734,6 +2734,7 @@ def create_local_agent_app(
                     "sender": m.get("sender", "unknown"),
                     "content": m.get("content"),
                     "sender_debug": m.get("sender_debug"),
+                    "index": m.get("index"),
                 }
                 for m in messages
             ]
