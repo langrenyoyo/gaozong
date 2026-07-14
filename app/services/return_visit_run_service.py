@@ -39,6 +39,8 @@ from app import config
 from app.database import SessionLocal
 from app.models import (
     AutoReplyRolloutConfig,
+    DouyinAccountAutoreplySetting,
+    DouyinAuthorizedAccount,
     DouyinLead,
     DouyinPrivateMessageSend,
     LeadNotification,
@@ -194,12 +196,13 @@ def trigger_return_visit_from_writeback(
     幂等：idempotency_key UNIQUE 冲突返回既有 run（先查 + flush 兜底并发）。
     返回新建/既有 ReturnVisitRun，或 None（不建 run）。
     """
-    # 1. 查最新 sent LeadNotification（当前 lead + staff）
+    # 1. 查最新已发送派单通知（sent_at 非空，不可变证据；兼容状态已转 replied）。
+    #    销售回复回写会先把通知 send_status 改为 replied，再用 send_status=="sent" 会漏触发。
     notification = (
         db.query(LeadNotification)
         .filter(LeadNotification.lead_id == lead_id)
         .filter(LeadNotification.staff_id == staff_id)
-        .filter(LeadNotification.send_status == "sent")
+        .filter(LeadNotification.sent_at.is_not(None))
         .order_by(LeadNotification.id.desc())
         .first()
     )
@@ -458,8 +461,44 @@ def _map_judgment_terminal(judgment: dict) -> dict | None:
     return {"status": "not_needed", "code": "unknown_result"}  # 未知保守 not_needed
 
 
-def _hourly_send_limit() -> int:
-    """G6 限频上限：config 缺失/None/<=0 回落 60。"""
+def _validate_judgment_contract(judgment: dict) -> str | None:
+    """9000 侧跨字段合同校验（不信任 9100 任意字段组合，阻断 2）。
+
+    违反返回稳定 code（统一映射 not_needed，绝不进入发送）。校验：
+    - 来源枚举必须合法（llm/keyword_fallback/precheck）。
+    - ambiguous=True 或 should_trigger=False 一律不发送。
+    - 命中场景 key 时 must should_trigger=True + ambiguous=False + prompt_key==result。
+    - precheck 不命中具体场景（prompt_key 必须非 PROMPT_KEYS）。
+    """
+    source = judgment.get("judgement_source")
+    result = judgment.get("judgement_result")
+    should_trigger = judgment.get("should_trigger")
+    ambiguous = judgment.get("ambiguous")
+    prompt_key = judgment.get("prompt_key")
+
+    if source not in ("llm", "keyword_fallback", "precheck"):
+        return "contract_invalid_source"
+    if ambiguous is True:
+        return "contract_ambiguous_true"
+    if should_trigger is False:
+        return "contract_should_trigger_false"
+    if result in PROMPT_KEYS:
+        if should_trigger is not True or ambiguous is not False or prompt_key != result:
+            return "contract_hit_inconsistent"
+    if source == "precheck" and prompt_key in PROMPT_KEYS:
+        return "contract_precheck_has_prompt_key"
+    return None
+
+
+def _hourly_send_limit(setting: DouyinAccountAutoreplySetting | None = None) -> int:
+    """G6 限频上限：优先账号配置 max_replies_per_account_per_hour，缺失/<=0 回落 60。"""
+    if setting is not None:
+        try:
+            configured = int(setting.max_replies_per_account_per_hour)
+        except (TypeError, ValueError):
+            configured = 0
+        if configured > 0:
+            return configured
     raw = getattr(config, "DOUYIN_RETURN_VISIT_HOURLY_LIMIT", None)
     try:
         value = int(raw) if raw is not None else 0
@@ -495,15 +534,28 @@ def _evaluate_gates(db: Session, run: ReturnVisitRun, judgment: dict) -> dict:
     if not g2:
         return {"passed": False, "code": "rollout_disabled", "results": results}
 
-    # G3: lead/account/merchant 可信归属
+    # G3: lead/account/merchant 可信归属 + 授权账号当前有效绑定（阻断 1：跨商户发送绕过）。
+    #     仅比较 run 与 lead 不够：账号可能已解绑或迁移到其他商户。
+    #     必须查 DouyinAuthorizedAccount 确认 account_open_id 当前归属 run.merchant_id 且 bind_status=1。
     lead = db.get(DouyinLead, run.lead_id) if run.lead_id else None
-    g3 = (
+    lead_ok = (
         lead is not None
         and lead.merchant_id == run.merchant_id
         and lead.account_open_id == run.account_open_id
         and lead.conversation_short_id == run.conversation_short_id
     )
-    results["g3_lead_attribution"] = g3
+    auth_account = None
+    if lead_ok and run.account_open_id:
+        auth_account = (
+            db.query(DouyinAuthorizedAccount)
+            .filter(DouyinAuthorizedAccount.open_id == run.account_open_id)
+            .filter(DouyinAuthorizedAccount.merchant_id == run.merchant_id)
+            .filter(DouyinAuthorizedAccount.bind_status == 1)
+            .first()
+        )
+    g3 = lead_ok and auth_account is not None
+    results["g3_lead_attribution"] = lead_ok
+    results["g3_authorized_account_bound"] = auth_account is not None
     if not g3:
         return {"passed": False, "code": "lead_attribution_invalid", "results": results}
 
@@ -542,14 +594,22 @@ def _evaluate_gates(db: Session, run: ReturnVisitRun, judgment: dict) -> dict:
     if context_drifted:
         return {"passed": False, "code": "context_drifted", "results": results}
 
-    # G6: 1h 实际发送流水计数（source 只含 ai_auto/return_visit_auto）
-    limit = _hourly_send_limit()
+    # G6: 1h 实际 sent 发送流水计数（阻断 3：读账号配置上限，只统计 status=sent + sent_at）。
+    #     source 含 ai_auto + return_visit_auto；上限优先取账号配置，缺失回落 60。
+    setting = (
+        db.query(DouyinAccountAutoreplySetting)
+        .filter(DouyinAccountAutoreplySetting.merchant_id == run.merchant_id)
+        .filter(DouyinAccountAutoreplySetting.account_open_id == (run.account_open_id or ""))
+        .first()
+    )
+    limit = _hourly_send_limit(setting)
     since = datetime.now() - timedelta(hours=_RATE_WINDOW_HOURS)
     hourly_count = (
         db.query(DouyinPrivateMessageSend)
         .filter(DouyinPrivateMessageSend.account_open_id == run.account_open_id)
         .filter(DouyinPrivateMessageSend.send_source.in_(["ai_auto", "return_visit_auto"]))
-        .filter(DouyinPrivateMessageSend.created_at >= since)
+        .filter(DouyinPrivateMessageSend.status == "sent")
+        .filter(DouyinPrivateMessageSend.sent_at >= since)
         .count()
     )
     results["g6_hourly_count"] = hourly_count
@@ -644,7 +704,7 @@ def _send_and_classify(
     网络/超时/HTTP/非法/空响应等"请求可能已到上游" → send_unknown（永不重发）。
     """
     try:
-        _send_private_message_with_context(
+        send_result = _send_private_message_with_context(
             db,
             content=content,
             send_context=send_context,
@@ -653,14 +713,15 @@ def _send_and_classify(
             send_source="return_visit_auto",
             return_visit_run_id=run_id,
         )
-        return {"status": "sent", "failure_stage": None}
+        record_id = send_result.get("record_id") if isinstance(send_result, dict) else None
+        return {"status": "sent", "failure_stage": None, "send_record_id": record_id}
     except HTTPException as exc:
         error_code = _error_code_from_detail(exc.detail)
         if error_code == "upstream_business_error":
-            return {"status": "failed", "failure_stage": "send_upstream_business_error"}
-        return {"status": "send_unknown", "failure_stage": f"send_unknown:{error_code}"}
+            return {"status": "failed", "failure_stage": "send_upstream_business_error", "send_record_id": None}
+        return {"status": "send_unknown", "failure_stage": f"send_unknown:{error_code}", "send_record_id": None}
     except Exception as exc:
-        return {"status": "send_unknown", "failure_stage": f"send_unknown:{type(exc).__name__}"}
+        return {"status": "send_unknown", "failure_stage": f"send_unknown:{type(exc).__name__}", "send_record_id": None}
 
 
 def _process_run_with_session(db: Session, run_id: int) -> None:
@@ -696,6 +757,17 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         judgement_result=judgment.get("judgement_result"),
         risk_flags_json=json.dumps(judgment.get("risk_flags") or [], ensure_ascii=False),
     )
+
+    # 跨字段合同校验（阻断 2：should_trigger=False/ambiguous=True/来源非法等不得进入发送）
+    contract_code = _validate_judgment_contract(judgment)
+    if contract_code is not None:
+        _set_run_status(db, run_id, send_status="not_needed", last_failure_stage=contract_code)
+        _safe_commit(db)
+        logger.info(
+            "return_visit_process run_id=%s stage=contract_violation code=%s",
+            run_id, contract_code,
+        )
+        return
 
     # 3. 终态映射
     terminal = _map_judgment_terminal(judgment)
@@ -756,13 +828,32 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         logger.warning("return_visit_process run_id=%s stage=send_context_missing", run_id)
         return
 
+    # 发送前重新核对上下文一致性（阻断 1：防 gate 与发送间 account/customer/conversation/server_message_id 漂移）
+    if (
+        send_context.get("account_open_id") != run.account_open_id
+        or send_context.get("customer_open_id") != run.customer_open_id
+        or send_context.get("conversation_short_id") != run.conversation_short_id
+        or send_context.get("server_message_id") != run.context_server_message_id
+    ):
+        _set_run_status(
+            db,
+            run_id,
+            send_status="failed",
+            last_failure_stage="send_context_drifted_before_send",
+        )
+        _safe_commit(db)
+        logger.warning("return_visit_process run_id=%s stage=send_context_drifted", run_id)
+        return
+
     outcome = _send_and_classify(db, run_id, run, content, send_context)
-    _set_run_status(
-        db,
-        run_id,
-        send_status=outcome["status"],
-        last_failure_stage=outcome.get("failure_stage"),
-    )
+    # 成功回填 send_id（DouyinPrivateMessageSend PK），便于崩溃恢复精确对账
+    status_fields: dict[str, Any] = {
+        "send_status": outcome["status"],
+        "last_failure_stage": outcome.get("failure_stage"),
+    }
+    if outcome.get("send_record_id"):
+        status_fields["send_id"] = str(outcome["send_record_id"])
+    _set_run_status(db, run_id, **status_fields)
     _safe_commit(db)
     logger.info(
         "return_visit_process run_id=%s stage=send_done status=%s failure_stage=%s",
@@ -813,8 +904,8 @@ def _reconcile_eligible_runs() -> None:
             logger.info("return_visit_reconcile stage=no_eligible")
             return
 
-        recovered = _recover_expired_processing(db)
-        reconciled = _reconcile_send_authorized(db)
+        recovered = _recover_expired_processing(db, max_id)
+        reconciled = _reconcile_send_authorized(db, max_id)
     finally:
         db.close()
 
@@ -825,14 +916,16 @@ def _reconcile_eligible_runs() -> None:
     )
 
 
-def _recover_expired_processing(db: Session) -> int:
+def _recover_expired_processing(db: Session, max_id: int) -> int:
     """原子回收过期 processing（lease_expires_at <= now）→ pending + attempt_count += 1。
 
-    未过期 processing 不动（仍在被某 processor 持有）。
+    未过期 processing 不动（仍在被某 processor 持有）；受 id <= max_id 快照约束（阻断 5），
+    不误回收快照后正在发送的任务。
     """
     now = datetime.now()
     result = db.execute(
         update(ReturnVisitRun)
+        .where(ReturnVisitRun.id <= max_id)
         .where(ReturnVisitRun.send_status == "processing")
         .where(ReturnVisitRun.lease_expires_at.is_not(None))
         .where(ReturnVisitRun.lease_expires_at <= now)
@@ -850,37 +943,50 @@ def _recover_expired_processing(db: Session) -> int:
     return int(result.rowcount or 0)
 
 
-def _reconcile_send_authorized(db: Session) -> int:
+def _reconcile_send_authorized(db: Session, max_id: int) -> int:
     """对账 send_authorized：有 sent 发送流水 → sent；无 → send_unknown（崩溃在发送后回写前）。
 
     保守恢复：send_unknown 永不重发（与 _send_and_classify 一致）。
+    受 id <= max_id 快照约束（阻断 5），不把快照后正在发送的任务误判为 send_unknown。
+    优先用 run.send_id（成功回填的发送流水 PK）精确对账，fallback 到 return_visit_run_id。
     """
     runs = (
-        db.query(ReturnVisitRun.id)
+        db.query(ReturnVisitRun)
         .filter(ReturnVisitRun.send_status == "send_authorized")
+        .filter(ReturnVisitRun.id <= max_id)
         .all()
     )
-    run_ids = [row[0] for row in runs]
-    if not run_ids:
+    if not runs:
         return 0
-    for run_id in run_ids:
-        sent_flow = (
-            db.query(DouyinPrivateMessageSend)
-            .filter(DouyinPrivateMessageSend.return_visit_run_id == run_id)
-            .filter(DouyinPrivateMessageSend.status == "sent")
-            .first()
-        )
+    for run in runs:
+        sent_flow = None
+        # 优先用 run.send_id 精确对账（成功回填的发送流水 PK）
+        if run.send_id:
+            try:
+                candidate = db.get(DouyinPrivateMessageSend, int(run.send_id))
+                if candidate is not None and candidate.status == "sent":
+                    sent_flow = candidate
+            except (ValueError, TypeError):
+                pass
+        # fallback：按 return_visit_run_id 查 sent 流水
+        if sent_flow is None:
+            sent_flow = (
+                db.query(DouyinPrivateMessageSend)
+                .filter(DouyinPrivateMessageSend.return_visit_run_id == run.id)
+                .filter(DouyinPrivateMessageSend.status == "sent")
+                .first()
+            )
         if sent_flow is not None:
-            _set_run_status(db, run_id, send_status="sent", last_failure_stage=None)
+            _set_run_status(db, run.id, send_status="sent", last_failure_stage=None)
         else:
             _set_run_status(
-                db, run_id,
+                db, run.id,
                 send_status="send_unknown",
                 last_failure_stage="reconcile_send_authorized_no_sent_flow",
             )
     db.commit()
-    logger.info("return_visit_reconcile stage=reconcile_send_authorized count=%s", len(run_ids))
-    return len(run_ids)
+    logger.info("return_visit_reconcile stage=reconcile_send_authorized count=%s", len(runs))
+    return len(runs)
 
 
 def _dispatch_pending_snapshot(max_id: int) -> int:

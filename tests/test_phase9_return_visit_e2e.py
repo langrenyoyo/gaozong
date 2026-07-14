@@ -31,6 +31,7 @@ from app import config
 from app.database import Base
 from app.models import (
     AutoReplyRolloutConfig,
+    DouyinAuthorizedAccount,
     DouyinLead,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
@@ -67,6 +68,7 @@ def _patch_env(monkeypatch):
         raise AssertionError("网络哨兵：未打桩 call_douyin_openapi，禁止真实网络调用")
 
     monkeypatch.setattr("app.services.douyin_openapi_client.requests.post", _raise)
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", _raise)
 
 
 NOTIFICATION_TEXT = "新线索：张先生 13800000000"
@@ -88,6 +90,19 @@ def _seed_lead(db, *, merchant_id="merchant-1", lead_id=10) -> DouyinLead:
     db.add(lead)
     db.flush()
     return lead
+
+
+def _seed_authorized_account(db, *, merchant_id="merchant-1", open_id="account-open-1") -> DouyinAuthorizedAccount:
+    """G3 授权账号当前归属（阻断 1）。"""
+    account = DouyinAuthorizedAccount(
+        merchant_id=merchant_id,
+        main_account_id=1,
+        open_id=open_id,
+        bind_status=1,
+    )
+    db.add(account)
+    db.flush()
+    return account
 
 
 def _seed_notification(db, *, lead_id=10, staff_id=1, notification_id=100) -> LeadNotification:
@@ -135,6 +150,7 @@ def _seed_webhook_event(db) -> DouyinWebhookEvent:
 
 def _seed_baseline(db, *, rollout=True) -> None:
     _seed_lead(db)
+    _seed_authorized_account(db)  # G3 授权账号当前归属（阻断 1）
     _seed_notification(db)
     _seed_webhook_event(db)
     if rollout:
@@ -143,7 +159,7 @@ def _seed_baseline(db, *, rollout=True) -> None:
 
 
 def _seed_hourly_send(db, suffix: str) -> None:
-    """G6 限频计数：1h 内 ai_auto/return_visit_auto 发送流水。"""
+    """G6 限频计数：1h 内 ai_auto/return_visit_auto 已发送流水（status=sent + sent_at）。"""
     send = DouyinPrivateMessageSend(
         main_account_id="main-1",
         conversation_short_id="conv-1",
@@ -159,6 +175,7 @@ def _seed_hourly_send(db, suffix: str) -> None:
         manual_confirmed=0,
         auto_send=1,
         send_source="ai_auto",
+        sent_at=datetime.now(),
         created_at=datetime.now(),
         updated_at=datetime.now(),
     )
@@ -336,7 +353,7 @@ def test_e2e_config_disabled_prompt_disabled(monkeypatch):
 def test_e2e_rate_limited(monkeypatch):
     # 把 G6 上限压到 2，再 seed 2 行历史 ai_auto 发送 → count(2) >= limit(2)
     monkeypatch.setattr(
-        "app.services.return_visit_run_service._hourly_send_limit", lambda: 2
+        "app.services.return_visit_run_service._hourly_send_limit", lambda *a, **kw: 2
     )
 
     db = TestSession()

@@ -33,6 +33,7 @@ from app.models import (
     ReturnVisitRun,
 )
 from app.services.return_visit_run_service import (
+    _reconcile_send_authorized,
     reconcile_return_visit_runs_on_startup,
 )
 
@@ -59,6 +60,7 @@ def _patch_env(monkeypatch):
         raise AssertionError("网络哨兵：recovery 禁止真实网络调用")
 
     monkeypatch.setattr("app.services.douyin_openapi_client.requests.post", _raise)
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", _raise)
 
 
 _RUN_COUNTER = [0]
@@ -314,3 +316,65 @@ def test_single_flight_skip(monkeypatch):
         rvrs._RECONCILE_LOCK.release()
 
     assert run_id not in called  # 锁占用，直接跳过，不调度
+
+
+# ---------------------------------------------------------------------------
+# 阻断 5：recovery 快照边界（id <= max_id 约束）
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_send_authorized_respects_max_id(monkeypatch):
+    """阻断 5：send_authorized 对账受 id <= max_id 约束，不误判快照后正在发送的任务。"""
+    _stub_processor(monkeypatch)
+    db = TestSession()
+    try:
+        run1 = _seed_run(db, send_status="send_authorized", attempt_count=1)
+        run2 = _seed_run(db, send_status="send_authorized", attempt_count=1)
+        db.commit()
+        run1_id = run1.id
+        run2_id = run2.id
+    finally:
+        db.close()
+
+    assert run2_id > run1_id
+    # max_id=run1_id：只对账 run1（无 sent 流水→send_unknown），run2 不动
+    db2 = TestSession()
+    try:
+        _reconcile_send_authorized(db2, run1_id)
+    finally:
+        db2.close()
+
+    db3 = TestSession()
+    try:
+        assert db3.get(ReturnVisitRun, run1_id).send_status == "send_unknown"
+        assert db3.get(ReturnVisitRun, run2_id).send_status == "send_authorized"
+    finally:
+        db3.close()
+
+
+def test_reconcile_send_authorized_uses_send_id(monkeypatch):
+    """send_id 成功回填优先对账：run.send_id 指向 sent 流水 PK → sent。"""
+    _stub_processor(monkeypatch)
+    db = TestSession()
+    try:
+        run = _seed_run(db, send_status="send_authorized", attempt_count=1)
+        db.flush()
+        send = _seed_sent_flow(db, run_id=run.id, suffix="sid")
+        # 模拟 process 成功回填 send_id（指向 sent 流水 PK）
+        run.send_id = str(send.id)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    db2 = TestSession()
+    try:
+        _reconcile_send_authorized(db2, run_id)
+    finally:
+        db2.close()
+
+    db3 = TestSession()
+    try:
+        assert db3.get(ReturnVisitRun, run_id).send_status == "sent"
+    finally:
+        db3.close()

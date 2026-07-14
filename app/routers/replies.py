@@ -141,29 +141,31 @@ def agent_write_back(data: AgentWriteBackRequest, request: Request, background_t
         agent_result=data.agent_result.model_dump(),
     )
 
-    # Phase 9 Task 6：完成既有 ReplyCheck 回写后，独立触发回访持久化。
+    # Phase 9 Task 6 / 检查点 B-FIX1：仅 detect_reply 任务 + 检测成功才触发回访（阻断 6）。
+    # notify_sales / send_report_attachment 不触发；agent_result.success=False（检测失败）不触发。
     # 触发失败不得回滚或伪造既有回复检测结果；只有新建 pending_judgement run 才调度处理。
-    try:
-        run = trigger_return_visit_from_writeback(
-            db,
-            merchant_id=ctx.merchant_id or "",
-            lead_id=data.lead_id,
-            staff_id=data.staff_id,
-            reply_check_id=result.get("check_id"),
-            messages=[m.model_dump() for m in data.messages],
-        )
-        if run is not None:
-            run_id = run.id
-            run_status = run.send_status
-            db.commit()
-            if run_status == "pending_judgement":
-                background_tasks.add_task(process_return_visit_run, run_id)
-    except Exception as exc:
-        db.rollback()
-        logger.warning(
-            "return_visit_trigger_failed lead_id=%s staff_id=%s error=%s",
-            data.lead_id, data.staff_id, exc,
-        )
+    if task.task_type == "detect_reply" and result.get("success"):
+        try:
+            run = trigger_return_visit_from_writeback(
+                db,
+                merchant_id=ctx.merchant_id or "",
+                lead_id=data.lead_id,
+                staff_id=data.staff_id,
+                reply_check_id=result.get("check_id"),
+                messages=[m.model_dump() for m in data.messages],
+            )
+            if run is not None:
+                run_id = run.id
+                run_status = run.send_status
+                db.commit()
+                if run_status == "pending_judgement":
+                    background_tasks.add_task(process_return_visit_run, run_id)
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "return_visit_trigger_failed lead_id=%s staff_id=%s error=%s",
+                data.lead_id, data.staff_id, exc,
+            )
 
     return AgentWriteBackResponse(**result)
 

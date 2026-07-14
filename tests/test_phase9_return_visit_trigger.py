@@ -66,6 +66,7 @@ def _network_sentinel(monkeypatch):
         raise AssertionError("网络哨兵触发：Task 5 禁止真实网络调用")
 
     monkeypatch.setattr("app.services.douyin_openapi_client.requests.post", _raise)
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", _raise)
 
 
 NOTIFICATION_TEXT = "新线索：张先生 13800000000"
@@ -100,14 +101,20 @@ def _seed_notification(
     notification_text=NOTIFICATION_TEXT,
     send_status="sent",
     notification_id=100,
+    sent_at="auto",
 ) -> LeadNotification:
+    # sent_at="auto"：sent 状态默认 now，非 sent 默认 None；可显式传 datetime 覆盖（测试 replied 锚点）
+    if sent_at == "auto":
+        resolved_sent_at = datetime.now() if send_status == "sent" else None
+    else:
+        resolved_sent_at = sent_at
     notification = LeadNotification(
         id=notification_id,
         lead_id=lead_id,
         staff_id=staff_id,
         notification_text=notification_text,
         send_status=send_status,
-        sent_at=datetime.now() if send_status == "sent" else None,
+        sent_at=resolved_sent_at,
     )
     db.add(notification)
     db.flush()
@@ -418,6 +425,42 @@ def test_notification_not_sent_no_run():
             ],
         )
         assert run is None
+        db2.commit()
+    finally:
+        db2.close()
+
+
+# ---------------------------------------------------------------------------
+# 红灯 7B：通知状态已转 replied，sent_at 非空仍锚点（阻断 4）
+# ---------------------------------------------------------------------------
+
+
+def test_notification_replied_with_sent_at_still_anchors():
+    """阻断 4：回复回写先把通知改 replied，trigger 用 sent_at 不可变证据仍建 run。"""
+    db = TestSession()
+    try:
+        _seed_lead(db)
+        _seed_notification(db, send_status="replied", sent_at=datetime.now())
+        _seed_webhook_event(db)
+        db.commit()
+    finally:
+        db.close()
+
+    db2 = TestSession()
+    try:
+        run = trigger_return_visit_from_writeback(
+            db2,
+            merchant_id="merchant-1",
+            lead_id=10,
+            staff_id=1,
+            reply_check_id=None,
+            messages=[
+                _msg("self", NOTIFICATION_TEXT, 0),
+                _msg("friend", "回复", 1),
+            ],
+        )
+        assert run is not None
+        assert run.dispatch_notification_id == 100
         db2.commit()
     finally:
         db2.close()

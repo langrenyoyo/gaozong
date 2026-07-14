@@ -31,6 +31,7 @@ from app import config
 from app.database import Base
 from app.models import (
     AutoReplyRolloutConfig,
+    DouyinAuthorizedAccount,
     DouyinLead,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
@@ -64,6 +65,7 @@ def _patch_env(monkeypatch):
         raise AssertionError("网络哨兵：未打桩 call_douyin_openapi，禁止真实网络调用")
 
     monkeypatch.setattr("app.services.douyin_openapi_client.requests.post", _raise)
+    monkeypatch.setattr("app.services.xg_douyin_ai_cs_client.httpx.post", _raise)
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +105,19 @@ def _seed_lead(db, *, merchant_id="merchant-1", lead_id=10) -> DouyinLead:
     db.add(lead)
     db.flush()
     return lead
+
+
+def _seed_authorized_account(db, *, merchant_id="merchant-1", open_id="account-open-1", bind_status=1) -> DouyinAuthorizedAccount:
+    """G3 授权账号当前归属（阻断 1：account_open_id 绑定 merchant_id 且 bind_status=1）。"""
+    account = DouyinAuthorizedAccount(
+        merchant_id=merchant_id,
+        main_account_id=1,
+        open_id=open_id,
+        bind_status=bind_status,
+    )
+    db.add(account)
+    db.flush()
+    return account
 
 
 def _seed_rollout(db, *, real_send_enabled=True) -> AutoReplyRolloutConfig:
@@ -371,6 +386,106 @@ def test_g2_rollout_disabled_maps_prompt_disabled(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 跨字段合同（阻断 2）
+# ---------------------------------------------------------------------------
+
+
+def test_contract_should_trigger_false_not_needed(monkeypatch):
+    """阻断 2：should_trigger=False 不得进入发送（即使 judgement_result 命中 key）。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(should_trigger=False))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "not_needed"
+    finally:
+        db2.close()
+
+
+def test_contract_ambiguous_true_not_needed(monkeypatch):
+    """阻断 2：ambiguous=True（多场景冲突）不得进入发送。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(ambiguous=True))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "not_needed"
+    finally:
+        db2.close()
+
+
+def test_contract_invalid_source_not_needed(monkeypatch):
+    """阻断 2：来源枚举非法不得进入发送。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment(judgement_source="rogue_source"))
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        assert db2.get(ReturnVisitRun, run_id).send_status == "not_needed"
+    finally:
+        db2.close()
+
+
+# ---------------------------------------------------------------------------
+# G3 跨商户发送绕过（阻断 1）
+# ---------------------------------------------------------------------------
+
+
+def test_g3_unauthorized_account_blocked(monkeypatch):
+    """阻断 1：授权账号未绑定 run.merchant_id → lead_attribution_invalid failed，不发送。"""
+    db = TestSession()
+    try:
+        _seed_prompts(db)
+        _seed_lead(db)
+        _seed_authorized_account(db, merchant_id="merchant-2")  # 绑定到其他商户
+        _seed_rollout(db, real_send_enabled=True)
+        _seed_webhook_event(db)
+        run = _seed_run(db)
+        db.commit()
+        run_id = run.id
+    finally:
+        db.close()
+
+    _patch_9100(monkeypatch, _judgment())
+    process_return_visit_run(run_id)
+
+    db2 = TestSession()
+    try:
+        done = db2.get(ReturnVisitRun, run_id)
+        assert done.send_status == "failed"
+        assert db2.query(DouyinPrivateMessageSend).count() == 0
+    finally:
+        db2.close()
+
+
+# ---------------------------------------------------------------------------
 # 发送三分类
 # ---------------------------------------------------------------------------
 
@@ -378,6 +493,7 @@ def test_g2_rollout_disabled_maps_prompt_disabled(monkeypatch):
 def _seed_full_gate_pass(db) -> int:
     _seed_prompts(db)
     _seed_lead(db)
+    _seed_authorized_account(db)  # G3 授权账号当前归属（阻断 1）
     _seed_rollout(db, real_send_enabled=True)
     _seed_webhook_event(db)  # G5 latest_is_customer + context_not_drifted
     run = _seed_run(db)
