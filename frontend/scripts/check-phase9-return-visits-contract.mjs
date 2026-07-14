@@ -40,13 +40,17 @@ for (const name of requiredApiNames) {
   if (!api.includes(name)) throw new Error(`API client 缺少函数：${name}`);
 }
 
-// 3. API 路径齐全
+// 3. API 路径齐全（冻结连字符路径，非 /admin/return-visit/...）
 for (const path of [
-  '/admin/return-visit/prompts',
-  '/admin/return-visit/runs',
-  '/admin/return-visit/runs/stats',
+  '/admin/return-visit-prompts',
+  '/admin/return-visit-runs',
+  '/admin/return-visit-runs/stats',
 ]) {
   if (!api.includes(path)) throw new Error(`API 路径缺少：${path}`);
+}
+// 3b. 禁止旧漂移路径（/admin/return-visit/prompts|runs，C11 合同要求连字符）
+for (const bad of ['/admin/return-visit/prompts', '/admin/return-visit/runs']) {
+  if (api.includes(bad)) throw new Error(`API 含旧漂移路径：${bad}（应为连字符 /admin/return-visit-prompts|runs）`);
 }
 
 // 4. 禁 any（类型注解 / as any / <any>；注释里"禁止 any"不算）

@@ -215,7 +215,7 @@ def _seed_run(
 
 def test_list_prompts_returns_three():
     _seed_prompts()
-    resp = _client(_context()).get("/admin/return-visit/prompts")
+    resp = _client(_context()).get("/admin/return-visit-prompts")
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -233,7 +233,7 @@ def test_update_prompt_preserves_verbatim_text():
         "enabled": False,
         "reason": "调整话术",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 200
     data = resp.json()["data"]
     # 数据库保存管理员原文（逐字），不被替换或改写
@@ -268,7 +268,7 @@ def test_update_prompt_rejects_too_long_template():
         "enabled": True,
         "reason": "测试",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 422
 
 
@@ -281,11 +281,11 @@ def test_update_prompt_rejects_threshold_out_of_range():
         "enabled": True,
         "reason": "测试",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 422
 
     payload["confidence_threshold"] = 1.01
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 422
 
 
@@ -298,7 +298,21 @@ def test_update_prompt_rejects_empty_reason():
         "enabled": True,
         "reason": "",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
+    assert resp.status_code == 422
+
+
+def test_update_prompt_rejects_whitespace_only_reason():
+    """reason 纯空白（strip 后为空）→ 422（审计合同：reason 非空，min_length 拦不住纯空白）。"""
+    _seed_prompts()
+    payload = {
+        "template_text": "模板",
+        "fallback_message": "兜底",
+        "confidence_threshold": 0.80,
+        "enabled": True,
+        "reason": "   ",
+    }
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 422
 
 
@@ -312,7 +326,7 @@ def test_update_prompt_rejects_unknown_field():
         "reason": "测试",
         "extra_field": "不应接受",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/retain_contact_conversion", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/retain_contact_conversion", json=payload)
     assert resp.status_code == 422
 
 
@@ -331,7 +345,7 @@ def test_update_prompt_writes_audit():
         "reason": "审计留痕原因",
     }
     resp = _client(_context(user_id="admin-77")).put(
-        "/admin/return-visit/prompts/silent_customer_wakeup", json=payload
+        "/admin/return-visit-prompts/silent_customer_wakeup", json=payload
     )
     assert resp.status_code == 200
 
@@ -367,7 +381,7 @@ def test_update_prompt_forbidden_word_alert_preserves_original():
         "reason": "违禁词告警测试",
     }
     resp = _client(_context()).put(
-        "/admin/return-visit/prompts/retain_contact_conversion", json=payload
+        "/admin/return-visit-prompts/retain_contact_conversion", json=payload
     )
     assert resp.status_code == 200
 
@@ -396,7 +410,7 @@ def test_update_prompt_forbidden_word_alert_preserves_original():
 def test_no_permission_403():
     _seed_prompts()
     ctx = _context(super_admin=False, permission_codes=["other:permission"])
-    resp = _client(ctx).get("/admin/return-visit/prompts")
+    resp = _client(ctx).get("/admin/return-visit-prompts")
     assert resp.status_code == 403
 
 
@@ -409,7 +423,7 @@ def test_unknown_prompt_key_404():
         "enabled": True,
         "reason": "测试",
     }
-    resp = _client(_context()).put("/admin/return-visit/prompts/unknown_key", json=payload)
+    resp = _client(_context()).put("/admin/return-visit-prompts/unknown_key", json=payload)
     assert resp.status_code == 404
 
 
@@ -426,20 +440,20 @@ def test_runs_filter_and_stats():
     client = _client(_context())
 
     # 按 send_status 过滤
-    resp = client.get("/admin/return-visit/runs", params={"send_status": "blocked"})
+    resp = client.get("/admin/return-visit-runs", params={"send_status": "blocked"})
     assert resp.status_code == 200
     assert resp.json()["data"]["total"] == 2
 
     # 按 prompt_key 过滤
-    resp = client.get("/admin/return-visit/runs", params={"prompt_key": "finance_plan_followup"})
+    resp = client.get("/admin/return-visit-runs", params={"prompt_key": "finance_plan_followup"})
     assert resp.json()["data"]["total"] == 1
 
     # 按 judgement_source 过滤
-    resp = client.get("/admin/return-visit/runs", params={"judgement_source": "keyword_fallback"})
+    resp = client.get("/admin/return-visit-runs", params={"judgement_source": "keyword_fallback"})
     assert resp.json()["data"]["total"] == 1
 
     # 统计
-    resp = client.get("/admin/return-visit/runs/stats")
+    resp = client.get("/admin/return-visit-runs/stats")
     assert resp.status_code == 200
     stats = resp.json()["data"]
     assert stats["total"] == 3
@@ -450,7 +464,7 @@ def test_runs_filter_and_stats():
 def test_runs_stats_path_not_swallowed_by_run_id():
     """/runs/stats 必须在 /runs/{run_id} 前注册，否则 stats 被当 run_id 解析。"""
     _seed_run(send_status="sent")
-    resp = _client(_context()).get("/admin/return-visit/runs/stats")
+    resp = _client(_context()).get("/admin/return-visit-runs/stats")
     assert resp.status_code == 200
     assert "by_send_status" in resp.json()["data"]
 
@@ -464,13 +478,13 @@ def test_run_detail_merchant_isolation_404():
     """非 super_admin 看其他商户 run 详情 → 404（不泄露存在性）。"""
     other_run_id = _seed_run(merchant_id="merchant-other")
     ctx = _context(super_admin=False, merchant_ids=["admin-merchant"])
-    resp = _client(ctx).get(f"/admin/return-visit/runs/{other_run_id}")
+    resp = _client(ctx).get(f"/admin/return-visit-runs/{other_run_id}")
     assert resp.status_code == 404
 
 
 def test_run_detail_super_admin_sees_all_merchants():
     other_run_id = _seed_run(merchant_id="merchant-other")
-    resp = _client(_context(super_admin=True)).get(f"/admin/return-visit/runs/{other_run_id}")
+    resp = _client(_context(super_admin=True)).get(f"/admin/return-visit-runs/{other_run_id}")
     assert resp.status_code == 200
 
 
@@ -485,7 +499,7 @@ def test_trigger_text_never_exposed_in_list_or_detail():
     client = _client(_context())
 
     # 列表
-    resp = client.get("/admin/return-visit/runs")
+    resp = client.get("/admin/return-visit-runs")
     assert resp.status_code == 200
     list_body = json.dumps(resp.json(), ensure_ascii=False)
     assert trigger_secret not in list_body
@@ -501,7 +515,7 @@ def test_trigger_text_never_exposed_in_list_or_detail():
         assert forbidden_key not in item, f"列表响应不应含 {forbidden_key}"
 
     # 详情
-    resp = client.get(f"/admin/return-visit/runs/{run_id}")
+    resp = client.get(f"/admin/return-visit-runs/{run_id}")
     assert resp.status_code == 200
     detail_body = json.dumps(resp.json(), ensure_ascii=False)
     assert trigger_secret not in detail_body
@@ -517,12 +531,54 @@ def test_trigger_text_never_exposed_in_list_or_detail():
 def test_detail_masks_phone_in_generated_final_content():
     """详情返回生成/最终话术摘要，手机号须脱敏。"""
     run_id = _seed_run()
-    resp = _client(_context()).get(f"/admin/return-visit/runs/{run_id}")
+    resp = _client(_context()).get(f"/admin/return-visit-runs/{run_id}")
     detail = resp.json()["data"]
     body = json.dumps(resp.json(), ensure_ascii=False)
     # generated_content 原文含 13900001111，脱敏后不得出现完整手机号
     assert "13900001111" not in body
     assert detail["generated_content_summary"] is not None
+
+
+def test_list_and_detail_return_trigger_message_fp():
+    """F8：列表与详情均返回 trigger_message_fp 指纹（非原文）；trigger_text 原文不回显。"""
+    db = TestSession()
+    try:
+        _RUN_COUNTER[0] += 1
+        suffix = str(_RUN_COUNTER[0])
+        run = ReturnVisitRun(
+            merchant_id="admin-merchant",
+            lead_id=10,
+            staff_id=1,
+            trigger_source="wechat_sales_reply",
+            trigger_text="绝密原文不回显",
+            send_status="sent",
+            attempt_count=1,
+            idempotency_key=f"fpkey-{suffix}",
+            trigger_message_fp="fp-fixed-abc123",
+            prompt_key="retain_contact_conversion",
+            judgement_source="llm",
+            judgement_result="retain_contact_conversion",
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+    finally:
+        db.close()
+
+    client = _client(_context())
+    # 列表项返回指纹
+    resp = client.get("/admin/return-visit-runs")
+    assert resp.status_code == 200
+    item = resp.json()["data"]["items"][0]
+    assert item["trigger_message_fp"] == "fp-fixed-abc123"
+    # 详情返回指纹
+    resp = client.get(f"/admin/return-visit-runs/{run_id}")
+    assert resp.status_code == 200
+    detail = resp.json()["data"]
+    assert detail["trigger_message_fp"] == "fp-fixed-abc123"
+    # 原文不回显（仅指纹）
+    assert "绝密原文不回显" not in json.dumps(resp.json(), ensure_ascii=False)
 
 
 def test_detail_invalid_json_returns_empty_structures():
@@ -550,7 +606,7 @@ def test_detail_invalid_json_returns_empty_structures():
     finally:
         db.close()
 
-    resp = _client(_context()).get(f"/admin/return-visit/runs/{run_id}")
+    resp = _client(_context()).get(f"/admin/return-visit-runs/{run_id}")
     detail = resp.json()["data"]
     assert detail["risk_flags"] == []
     assert detail["gate_results"] == {}

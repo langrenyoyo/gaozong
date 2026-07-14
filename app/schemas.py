@@ -1100,6 +1100,14 @@ class ReturnVisitPromptUpdateRequest(BaseModel):
     enabled: bool
     reason: str = Field(..., min_length=1)
 
+    @field_validator("reason")
+    @classmethod
+    def _reason_non_empty_after_strip(cls, v: str) -> str:
+        # 审计合同：reason 非空；min_length 拦不住纯空白（"   " 长度≥1），须 strip 后校验
+        if not v.strip():
+            raise ValueError("reason 不能为纯空白")
+        return v
+
 
 # ========== 抖音 GMP Webhook ==========
 

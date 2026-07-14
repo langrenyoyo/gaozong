@@ -30,7 +30,7 @@ from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.return_visit_run_service import PROMPT_KEYS
 
 
-router = APIRouter(prefix="/admin/return-visit", tags=["管理员-回访配置与审计"])
+router = APIRouter(prefix="/admin", tags=["管理员-回访配置与审计"])
 PAGE_SIZE_LIMIT = 100
 
 _PERMISSION_CODE = "auto_wechat:admin:return_visit_prompts"
@@ -59,7 +59,7 @@ def _not_found(code: str, message: str) -> HTTPException:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/prompts")
+@router.get("/return-visit-prompts")
 def list_prompts(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
@@ -79,7 +79,7 @@ def list_prompts(
     }
 
 
-@router.put("/prompts/{prompt_key}")
+@router.put("/return-visit-prompts/{prompt_key}")
 def update_prompt(
     prompt_key: str,
     payload: ReturnVisitPromptUpdateRequest,
@@ -152,7 +152,7 @@ def _merchant_scope(query, context: RequestContext):
     return query
 
 
-@router.get("/runs")
+@router.get("/return-visit-runs")
 def list_runs(
     send_status: str | None = None,
     prompt_key: str | None = None,
@@ -192,7 +192,7 @@ def list_runs(
     }
 
 
-@router.get("/runs/stats")
+@router.get("/return-visit-runs/stats")
 def runs_stats(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
@@ -220,7 +220,7 @@ def runs_stats(
     }
 
 
-@router.get("/runs/{run_id}")
+@router.get("/return-visit-runs/{run_id}")
 def get_run(
     run_id: int,
     db: Session = Depends(get_db),
@@ -269,7 +269,8 @@ def _prompt_response(prompt: ReturnVisitPrompt) -> dict[str, Any]:
 
 
 def _run_list_response(run: ReturnVisitRun) -> dict[str, Any]:
-    """列表响应：不返回 客户回复原文 / customer_open_id / generated_content / final_content / error_message。"""
+    """列表响应：不返回 客户回复原文 / customer_open_id / generated_content / final_content / error_message；
+    返回 trigger_message_fp 指纹（sha256 摘要，非原文，可用于审计对账）。"""
     return {
         "run_id": run.id,
         "merchant_id": run.merchant_id,
@@ -277,6 +278,7 @@ def _run_list_response(run: ReturnVisitRun) -> dict[str, Any]:
         "staff_id": run.staff_id,
         "prompt_key": run.prompt_key,
         "trigger_source": run.trigger_source,
+        "trigger_message_fp": run.trigger_message_fp,
         "judgement_source": run.judgement_source,
         "judgement_result": run.judgement_result,
         "send_status": run.send_status,

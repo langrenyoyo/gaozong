@@ -24,7 +24,7 @@ export interface ReturnVisitPromptUpdateRequest {
   reason: string;
 }
 
-/** 运行记录列表项：后端不返回客户回复原文 / customer_open_id / generated_content / final_content / error_message。 */
+/** 运行记录列表项：后端不返回客户回复原文 / customer_open_id / generated_content / final_content / error_message；返回 trigger_message_fp 指纹（非原文）。 */
 export interface ReturnVisitRunListItem {
   run_id: number;
   merchant_id?: string | null;
@@ -32,6 +32,7 @@ export interface ReturnVisitRunListItem {
   staff_id?: number | null;
   prompt_key?: string | null;
   trigger_source?: string | null;
+  trigger_message_fp?: string | null;
   judgement_source?: string | null;
   judgement_result?: string | null;
   send_status?: string | null;
@@ -91,26 +92,26 @@ interface PagedListResponse<T> {
 }
 
 export async function getReturnVisitPrompts(): Promise<ApiResponse<ListResponse<ReturnVisitPrompt>>> {
-  return apiClient.get("/admin/return-visit/prompts");
+  return apiClient.get("/admin/return-visit-prompts");
 }
 
 export async function updateReturnVisitPrompt(
   promptKey: string,
   payload: ReturnVisitPromptUpdateRequest,
 ): Promise<ApiResponse<ReturnVisitPrompt>> {
-  return apiClient.put(`/admin/return-visit/prompts/${encodeURIComponent(promptKey)}`, payload);
+  return apiClient.put(`/admin/return-visit-prompts/${encodeURIComponent(promptKey)}`, payload);
 }
 
 export async function listReturnVisitRuns(
   params: ReturnVisitRunsQuery = {},
 ): Promise<ApiResponse<PagedListResponse<ReturnVisitRunListItem>>> {
-  return apiClient.get("/admin/return-visit/runs", { params });
+  return apiClient.get("/admin/return-visit-runs", { params });
 }
 
 export async function getReturnVisitRunsStats(): Promise<ApiResponse<ReturnVisitRunsStats>> {
-  return apiClient.get("/admin/return-visit/runs/stats");
+  return apiClient.get("/admin/return-visit-runs/stats");
 }
 
 export async function getReturnVisitRun(runId: number): Promise<ApiResponse<ReturnVisitRunDetail>> {
-  return apiClient.get(`/admin/return-visit/runs/${runId}`);
+  return apiClient.get(`/admin/return-visit-runs/${runId}`);
 }

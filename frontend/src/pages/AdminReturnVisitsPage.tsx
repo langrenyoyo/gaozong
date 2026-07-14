@@ -601,6 +601,7 @@ function RunsTab() {
                 ["场景", labelOf(SCENE_LABELS, detail.prompt_key)],
                 ["状态", labelOf(STATUS_LABELS, detail.send_status)],
                 ["判定来源", labelOf(SOURCE_LABELS, detail.judgement_source)],
+                ["触发指纹", detail.trigger_message_fp || "-"],
                 ["判定结果", detail.judgement_result || "-"],
                 ["置信度", detail.confidence != null ? Number(detail.confidence).toFixed(2) : "-"],
                 ["模型", detail.model || "-"],

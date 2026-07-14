@@ -19,6 +19,19 @@ if (page.includes('trigger_text')) {
   throw new Error('页面引用 trigger_text（禁止回显客户回复原文）');
 }
 
+// 1b. trigger_message_fp 必须在 API 类型与页面详情（F8：指纹非原文，列表与详情须返回）
+if (!api.includes('trigger_message_fp')) {
+  throw new Error('API 类型缺少 trigger_message_fp（F8：列表与详情须返回触发指纹）');
+}
+if (!page.includes('触发指纹')) {
+  throw new Error('页面详情抽屉缺少"触发指纹"展示（F8）');
+}
+
+// 1c. 禁止旧漂移路径（C11：冻结连字符 /admin/return-visit-prompts|runs）
+for (const bad of ['/admin/return-visit/prompts', '/admin/return-visit/runs']) {
+  if (api.includes(bad)) throw new Error(`API 含旧漂移路径：${bad}（应为连字符）`);
+}
+
 // 2. API 不得定义发送/重试类 POST 端点（本阶段无写发送命令）
 if (api.includes('apiClient.post')) {
   throw new Error('API 含 apiClient.post（回访管理端不应有 POST 写发送端点）');
