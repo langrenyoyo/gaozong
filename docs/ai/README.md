@@ -67,7 +67,8 @@ docs/ai/04_OUTPUT_RULES.md
 | NewCar 权限 | `08_newcar/P1_AUTH_PERMISSION_ROUTE_MATRIX.md` |
 | car-porject-main 对接 | `09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_CONVERSATION_LINK_AUDIT.md` |
 | 本地 Docker | `11_deployment_ops/LOCAL_DOCKER_DEV.md` |
-| AI剪辑 / 小高素材库 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
+| AI剪辑 Phase 12 迁入准备 | `13_ai_edit/auto_edit_Phase12_AI剪辑迁入准备审计报告.md` |
+| 小高素材库 / 视频增稳 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
 
 ## 历史追溯 / 归档入口
 
