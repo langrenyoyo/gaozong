@@ -797,8 +797,11 @@ def test_suggested_message_equals_template_with_whitespace_falls_back():
     [123, {"x": 1}, ["a"]],
     ids=["int", "dict", "list"],
 )
-def test_malformed_model_falls_back(model_value):
-    """FIX3：LLM 响应 model 非 None/str（int/dict/list）→ 技术故障兜底，不抛 ValidationError 500。"""
+def test_malformed_model_normalized_continues_judgment(model_value):
+    """FIX4：LLM 响应 model 畸形（int/dict/list）→ 归一 None，继续 LLM 判定，不降级不 500。
+
+    model 是可丢弃元数据，不得因畸形覆盖 LLM 正常判定结论。
+    """
     request = _request("客户说空号")
     client = _StubLLM(
         reply_text=_llm_reply(
@@ -809,13 +812,13 @@ def test_malformed_model_falls_back(model_value):
         model=model_value,
     )
     result = judge_return_visit(request, llm_client=client)
-    assert result.judgement_source == "keyword_fallback", (
-        f"model={model_value!r} 必须降级兜底，不得抛 ValidationError"
-    )
+    assert result.judgement_source == "llm", "model 畸形归一 None，不得降级关键词兜底"
+    assert result.model is None, "畸形 model 必须归一为 None"
+    assert result.should_trigger is True
 
 
 def test_none_model_accepted():
-    """FIX3：model=None 合法（LLM 未返回模型名），不降级，正常进入判定。"""
+    """model=None 合法（LLM 未返回模型名），归一 None，正常进入判定。"""
     request = _request("客户说空号")
     client = _StubLLM(
         reply_text=_llm_reply(
@@ -826,7 +829,111 @@ def test_none_model_accepted():
         model=None,
     )
     result = judge_return_visit(request, llm_client=client)
-    # model=None 合法 → 进入 LLM 判定 → 命中 retain_contact（should_trigger=True, source=llm）
     assert result.judgement_source == "llm"
     assert result.should_trigger is True
     assert result.model is None
+
+
+# ---------------------------------------------------------------------------
+# 红灯 11（FIX4）：model 归一不覆盖安全结论 + 结构化拒答 + 边界
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_model_does_not_override_refusal_blocked():
+    """FIX4 高：model=123 + risk_flags=[model_refusal] → 仍 blocked，model 畸形不覆盖拒答。"""
+    request = _request("客户说空号")  # 有触发词，验证不被关键词降级覆盖
+    client = _StubLLM(
+        reply_text=_llm_reply(prompt_key=None, confidence=0.0, risk_flags=["model_refusal"]),
+        model=123,
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_result == "blocked"
+    assert "model_refusal" in result.risk_flags
+    assert result.judgement_source == "llm"
+    assert result.should_trigger is False
+    assert result.model is None
+
+
+def test_malformed_model_does_not_override_ambiguous():
+    """FIX4 高：model=123 + ambiguous=true → 仍 ambiguous 不发送，model 畸形不覆盖冲突信号。"""
+    request = _request("客户说空号")
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="x",
+            ambiguous=True,
+        ),
+        model=123,
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_result == "ambiguous"
+    assert result.ambiguous is True
+    assert result.should_trigger is False
+    assert result.model is None
+
+
+def test_structured_refusal_in_suggested_message_blocks():
+    """FIX4 高：合法 JSON 中 suggested_message 含拒答短语、risk_flags=[] → model_refusal blocked。"""
+    request = _request("客户说了一些话")
+    raw = json.dumps({
+        "prompt_key": "retain_contact_conversion",
+        "confidence": 0.95,
+        "risk_flags": [],
+        "suggested_message": "抱歉，我无法回答这个问题。",
+        "ambiguous": False,
+    })
+    client = _StubLLM(reply_text=raw)
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_result == "blocked"
+    assert "model_refusal" in result.risk_flags
+    assert result.should_trigger is False
+
+
+def test_confidence_overflow_falls_back():
+    """FIX4 中：confidence=10**400（超大 int）→ OverflowError 捕获 → 技术故障兜底，不 500。"""
+    request = _request("客户说空号")
+    raw = json.dumps({
+        "prompt_key": "retain_contact_conversion",
+        "confidence": 10 ** 400,
+        "risk_flags": [],
+        "suggested_message": "生成话术",
+        "ambiguous": False,
+    })
+    client = _StubLLM(reply_text=raw)
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "keyword_fallback", "超大 confidence 必须技术降级兜底"
+
+
+def test_model_too_long_normalized_to_none():
+    """FIX4 中：model 超 128 字符 → 归一 None，继续 LLM 判定（对齐 DB VARCHAR(128)）。"""
+    request = _request("客户说空号")
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="生成话术",
+        ),
+        model="a" * 129,
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "llm"
+    assert result.model is None
+    assert result.should_trigger is True
+
+
+def test_model_with_control_char_normalized_to_none():
+    """FIX4 中：model 含换行控制字符 → 归一 None（防污染日志），继续 LLM 判定。"""
+    request = _request("客户说空号")
+    client = _StubLLM(
+        reply_text=_llm_reply(
+            prompt_key="retain_contact_conversion",
+            confidence=0.95,
+            suggested_message="生成话术",
+        ),
+        model="fake\nmodel",
+    )
+    result = judge_return_visit(request, llm_client=client)
+    assert result.judgement_source == "llm"
+    assert result.model is None
+    assert result.should_trigger is True

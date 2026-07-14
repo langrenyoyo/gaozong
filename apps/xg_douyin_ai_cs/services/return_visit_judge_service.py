@@ -146,11 +146,35 @@ def _normalize_risk_flags(raw_flags: Any) -> list[str]:
     return normalized
 
 
+_MODEL_MAX_LEN = 128  # 对齐 ReturnVisitPrompt 持久化字段 VARCHAR(128)
+
+
+def _normalize_model(value: Any) -> str | None:
+    """归一 LLM 响应 model 字段为安全可持久化的字符串。
+
+    model 是可丢弃元数据：非字符串/空/超长(>128)/含控制字符 → None。
+    绝不因 model 畸形而降级判定结论（安全 blocked/ambiguous/no_match 优先）。
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or len(stripped) > _MODEL_MAX_LEN:
+        return None
+    # 含 C0 控制字符或 DEL → 污染日志/字段，归一 None
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in stripped):
+        return None
+    return stripped
+
+
 def _valid_confidence(value: Any) -> bool:
-    """confidence 必须为 [0,1] 区间数值（排除 bool，bool 是 int 子类）。"""
+    """confidence 必须为 [0,1] 区间数值（排除 bool；超大 int 捕获 OverflowError 视为越界）。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
-    return 0.0 <= float(value) <= 1.0
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return False
+    return 0.0 <= numeric <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +283,8 @@ def _try_llm(
         return None
 
     reply_text = str(result.get("reply_text") or "").strip()
-    model = result.get("model")
-    # FIX3：model 只接受 None 或字符串；畸形（int/dict/list）→ 技术故障兜底，防 ValidationError 500
-    if model is not None and not isinstance(model, str):
-        return None
+    # FIX4：model 是可丢弃元数据；畸形/超长/含控制字符 → 归一 None，继续判定（不降级覆盖安全结论）
+    model = _normalize_model(result.get("model"))
     if not reply_text:
         return None  # 空输出 → 技术故障 → 兜底
 
@@ -305,6 +327,22 @@ def _try_llm(
             judgement_result="blocked",
             model=model,
             risk_flags=risk_flags,
+        )
+
+    # FIX4 高：结构化拒答检测（合法 JSON 但 reply_text/suggested_message 含拒答短语，risk_flags 空）→ blocked
+    if _looks_like_refusal(reply_text) or (
+        isinstance(raw_suggested, str) and _looks_like_refusal(raw_suggested)
+    ):
+        return _log_and_build(
+            request,
+            prompt_key=None,
+            confidence=0.0,
+            should_trigger=False,
+            suggested_message=None,
+            judgement_source="llm",
+            judgement_result="blocked",
+            model=model,
+            risk_flags=["model_refusal"],
         )
 
     # confidence 越界 → 技术故障 → 兜底

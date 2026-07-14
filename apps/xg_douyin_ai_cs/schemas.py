@@ -280,6 +280,6 @@ class ReturnVisitJudgment(BaseModel):
     suggested_message: str | None = Field(default=None, max_length=500)
     judgement_source: JudgementSource
     judgement_result: JudgementResult
-    model: str | None
+    model: str | None = Field(default=None, max_length=128)
     risk_flags: list[RiskFlagValue] = Field(default_factory=list, max_length=8)
     ambiguous: bool = False

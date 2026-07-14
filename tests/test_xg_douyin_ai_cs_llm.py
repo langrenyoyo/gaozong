@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -2715,3 +2716,71 @@ def test_reply_decision_service_source_has_readable_chinese_copy():
         assert mojibake not in source
     assert "精品BBA" in source
     assert "你是该商户的抖音私信销售客服。" in source
+
+
+def test_chat_malformed_list_response_raises_llm_request_error(monkeypatch):
+    """FIX4：供应商返回合法 JSON []（非 dict）→ LLMRequestError，不 AttributeError 500。"""
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient, LLMRequestError
+    from apps.xg_douyin_ai_cs.llm.config import LLMConfig
+
+    cfg = LLMConfig(
+        base_url="https://example.test/v1",
+        api_key="test-key",
+        chat_model="test-chat-model",
+        embedding_model="unused",
+        embedding_enabled=False,
+        timeout_seconds=60,
+        temperature=0.2,
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"[]"  # 合法 JSON 但非 dict
+
+    def fake_urlopen(req, timeout):
+        return FakeResponse()
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.urllib_request.urlopen", fake_urlopen)
+
+    with pytest.raises(LLMRequestError):
+        OpenAICompatibleClient(cfg).chat([{"role": "user", "content": "hi"}])
+
+
+def test_chat_malformed_choices_non_dict_raises_llm_request_error(monkeypatch):
+    """FIX4：choices[0] 非 dict（字符串）→ LLMRequestError，不 AttributeError 500。"""
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient, LLMRequestError
+    from apps.xg_douyin_ai_cs.llm.config import LLMConfig
+
+    cfg = LLMConfig(
+        base_url="https://example.test/v1",
+        api_key="test-key",
+        chat_model="test-chat-model",
+        embedding_model="unused",
+        embedding_enabled=False,
+        timeout_seconds=60,
+        temperature=0.2,
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"choices":["not-a-dict"]}'
+
+    def fake_urlopen(req, timeout):
+        return FakeResponse()
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.urllib_request.urlopen", fake_urlopen)
+
+    with pytest.raises(LLMRequestError):
+        OpenAICompatibleClient(cfg).chat([{"role": "user", "content": "hi"}])

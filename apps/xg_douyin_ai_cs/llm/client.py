@@ -54,8 +54,24 @@ class OpenAICompatibleClient:
         started = time.perf_counter()
         data = self._post_json("/chat/completions", payload)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        choices = data.get("choices") or []
-        message = (choices[0].get("message") if choices else {}) or {}
+        # FIX4：校验供应商响应结构；畸形（非 dict / choices 元素非 dict）→ LLMRequestError，不 AttributeError 500
+        if not isinstance(data, dict):
+            raise LLMRequestError(
+                "llm_provider_malformed_response",
+                detail={"shape": type(data).__name__},
+            )
+        choices = data.get("choices")
+        if not isinstance(choices, list):
+            choices = []
+        first_choice = choices[0] if choices else None
+        if first_choice is not None and not isinstance(first_choice, dict):
+            raise LLMRequestError(
+                "llm_provider_malformed_response",
+                detail={"choice_shape": type(first_choice).__name__},
+            )
+        message = (first_choice.get("message") if first_choice else {}) or {}
+        if not isinstance(message, dict):
+            message = {}
         return {
             "reply_text": str(message.get("content") or "").strip(),
             "model": data.get("model") or self.config.chat_model,
