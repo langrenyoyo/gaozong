@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import unicodedata
 import uuid
 from datetime import datetime, timedelta
@@ -30,7 +31,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -767,3 +768,148 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         "return_visit_process run_id=%s stage=send_done status=%s failure_stage=%s",
         run_id, outcome["status"], outcome.get("failure_stage"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 Task 7：启动一次性分层崩溃恢复
+# ---------------------------------------------------------------------------
+
+# 模块级非阻塞锁：保证 reconcile 单飞（启动线程 + 手动调用互斥）
+_RECONCILE_LOCK = threading.Lock()
+# 分页大小：内存与并发有界
+_RECONCILE_PAGE_SIZE = 100
+# 可恢复状态：pending（待处理）/ processing（崩溃残留）/ send_authorized（发送后未回写）
+_RECOVERABLE_RECONCILE_STATUSES = ("pending_judgement", "processing", "send_authorized")
+
+
+def reconcile_return_visit_runs_on_startup() -> None:
+    """Phase 9 Task 7：启动一次性崩溃恢复（单飞，不阻塞调用方）。
+
+    流程：原子回收过期 processing → 对账 send_authorized → 依次 process pending 快照。
+    不使用 BackgroundTasks、不建周期线程、不 sleep、不轮询；获取锁失败直接返回。
+    """
+    if not _RECONCILE_LOCK.acquire(blocking=False):
+        logger.info("return_visit_reconcile stage=single_flight_skip")
+        return
+    try:
+        _reconcile_eligible_runs()
+    except Exception:
+        logger.exception("return_visit_reconcile stage=unexpected_error")
+    finally:
+        _RECONCILE_LOCK.release()
+
+
+def _reconcile_eligible_runs() -> None:
+    """单飞锁内的恢复主体：快照 → 回收 → 对账 → 调度。"""
+    db = SessionLocal()
+    try:
+        # 固定 eligible 最大 id 快照（只处理启动时已存在的记录，不追新）
+        max_id = (
+            db.query(func.max(ReturnVisitRun.id))
+            .filter(ReturnVisitRun.send_status.in_(_RECOVERABLE_RECONCILE_STATUSES))
+            .scalar()
+        )
+        if max_id is None:
+            logger.info("return_visit_reconcile stage=no_eligible")
+            return
+
+        recovered = _recover_expired_processing(db)
+        reconciled = _reconcile_send_authorized(db)
+    finally:
+        db.close()
+
+    processed = _dispatch_pending_snapshot(max_id)
+    logger.info(
+        "return_visit_reconcile stage=done max_id=%s recovered=%s reconciled=%s processed=%s",
+        max_id, recovered, reconciled, processed,
+    )
+
+
+def _recover_expired_processing(db: Session) -> int:
+    """原子回收过期 processing（lease_expires_at <= now）→ pending + attempt_count += 1。
+
+    未过期 processing 不动（仍在被某 processor 持有）。
+    """
+    now = datetime.now()
+    result = db.execute(
+        update(ReturnVisitRun)
+        .where(ReturnVisitRun.send_status == "processing")
+        .where(ReturnVisitRun.lease_expires_at.is_not(None))
+        .where(ReturnVisitRun.lease_expires_at <= now)
+        .values(
+            send_status="pending_judgement",
+            attempt_count=ReturnVisitRun.attempt_count + 1,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+    )
+    db.commit()
+    if result.rowcount:
+        logger.info("return_visit_reconcile stage=recover_expired count=%s", result.rowcount)
+    return int(result.rowcount or 0)
+
+
+def _reconcile_send_authorized(db: Session) -> int:
+    """对账 send_authorized：有 sent 发送流水 → sent；无 → send_unknown（崩溃在发送后回写前）。
+
+    保守恢复：send_unknown 永不重发（与 _send_and_classify 一致）。
+    """
+    runs = (
+        db.query(ReturnVisitRun.id)
+        .filter(ReturnVisitRun.send_status == "send_authorized")
+        .all()
+    )
+    run_ids = [row[0] for row in runs]
+    if not run_ids:
+        return 0
+    for run_id in run_ids:
+        sent_flow = (
+            db.query(DouyinPrivateMessageSend)
+            .filter(DouyinPrivateMessageSend.return_visit_run_id == run_id)
+            .filter(DouyinPrivateMessageSend.status == "sent")
+            .first()
+        )
+        if sent_flow is not None:
+            _set_run_status(db, run_id, send_status="sent", last_failure_stage=None)
+        else:
+            _set_run_status(
+                db, run_id,
+                send_status="send_unknown",
+                last_failure_stage="reconcile_send_authorized_no_sent_flow",
+            )
+    db.commit()
+    logger.info("return_visit_reconcile stage=reconcile_send_authorized count=%s", len(run_ids))
+    return len(run_ids)
+
+
+def _dispatch_pending_snapshot(max_id: int) -> int:
+    """依次处理快照内 pending（id <= max_id，分页 100）。
+
+    每页独立 Session 查询避免 identity map 缓存；process_return_visit_run 自管 Session。
+    last_id 单调推进，即使 process 异常留 pending 也不会无限循环。
+    """
+    processed = 0
+    last_id = 0
+    while True:
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(ReturnVisitRun.id)
+                .filter(ReturnVisitRun.send_status == "pending_judgement")
+                .filter(ReturnVisitRun.id > last_id)
+                .filter(ReturnVisitRun.id <= max_id)
+                .order_by(ReturnVisitRun.id)
+                .limit(_RECONCILE_PAGE_SIZE)
+                .all()
+            )
+            id_list = [row[0] for row in rows]
+        finally:
+            db.close()
+        if not id_list:
+            break
+        for run_id in id_list:
+            process_return_visit_run(run_id)
+            processed += 1
+        last_id = id_list[-1]
+    return processed

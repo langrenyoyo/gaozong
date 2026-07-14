@@ -203,6 +203,17 @@ def create_app() -> FastAPI:
         start_hotkey_listener()
         start_desktop_overlay()
 
+        # Phase 9 Task 7：启动一次性回访崩溃恢复（daemon 线程，不阻塞应用启动）
+        # 模块级单飞锁保证只执行一次；reconcile 内部自管 Session，不建周期线程、不轮询。
+        import threading
+        from app.services.return_visit_run_service import reconcile_return_visit_runs_on_startup
+        threading.Thread(
+            target=reconcile_return_visit_runs_on_startup,
+            name="return-visit-recovery-once",
+            daemon=True,
+        ).start()
+        logger.info("回访崩溃恢复一次性线程已启动（return-visit-recovery-once）")
+
     @app.on_event("shutdown")
     async def on_shutdown():
         await close_async_database_runtime()
