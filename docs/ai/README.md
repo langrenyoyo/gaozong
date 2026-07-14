@@ -19,11 +19,11 @@ docs/ai/04_OUTPUT_RULES.md
 
 | 文件 | 用途 |
 |---|---|
-| `01_READING_RULES.md` | 阅读和理解项目的强制规则 |
+| `01_READING_RULES.md` | 阅读和理解项目的强制规则 + AI 文档自治维护规则（第 18 节） |
 | `02_EXECUTION_RULES.md` | 执行、风险、日志、安全边界 |
 | `03_TESTING_RULES.md` | 测试和验收规则 |
 | `04_OUTPUT_RULES.md` | 汇报格式和风险说明 |
-| `05_PROJECT_CONTEXT.md` | 当前项目上下文、阶段状态和活跃安全约束 |
+| `05_PROJECT_CONTEXT.md` | **当前项目事实文档**（只保存当前有效上下文，不记录里程碑流水账） |
 
 ## 分阶段归档
 
@@ -43,31 +43,24 @@ docs/ai/04_OUTPUT_RULES.md
 | `11_deployment_ops/` | Docker、本地/宝塔部署、OpenAPI、live-check 安全清单 |
 | `12_legacy_research/` | 历史代码计划、旧探索和低频参考资料 |
 | `13_ai_edit/` | AI剪辑、小高素材库、外部剪辑能力迁入与复用评估 |
-| `archive/` | 后续归档区 |
+| `archive/` | 冻结历史快照（非当前事实，仅追溯用） |
 
 ## 当前常用入口
 
 | 场景 | 推荐阅读 |
 |---|---|
-| 产品边界 | `01_product_prd/06_PRD_AUTO_WECHAT.md` |
+| 一期需求权威文档 | `01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md` |
+| 产品边界（历史 PRD） | `01_product_prd/06_PRD_AUTO_WECHAT.md` |
 | 系统架构 | `02_architecture/07_ARCHITECTURE_AUTO_WECHAT.md` |
 | 数据模型 | `03_data_and_migration/08_DATA_MODEL_AUTO_WECHAT.md` |
-| PostgreSQL 迁移路线 | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
-| PostgreSQL 切库 readiness / QPS600 | `03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md` |
-| PostgreSQL cutover 缺口审计 | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
-| PostgreSQL runtime cutover gap schema batch | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
-| PostgreSQL cutover 一次性数据迁移 | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
-| PostgreSQL DATABASE_URL 启动 smoke | `03_data_and_migration/POSTGRESQL_CUTOVER_GAP_AUDIT.md` |
-| leads/tasks PG shadow 灰度预设 | `03_data_and_migration/LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md` |
-| agents/accounts PG schema batch | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
-| agents/accounts PG data migration dry-run / dev apply | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
-| agents/accounts SQLite / PG contrast | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
-| compute PG schema batch | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
-| compute PG data migration dry-run / dev apply | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
+| PostgreSQL 迁移路线（含 schema batch、数据迁移、对照记录） | `03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md` |
+| PostgreSQL 切库 readiness / cutover 审计 / 灰度 | `03_data_and_migration/POSTGRESQL_SWITCH_READINESS_AND_QPS600_ROADMAP.md`、`POSTGRESQL_CUTOVER_GAP_AUDIT.md`、`LEADS_TASKS_SHADOW_GRAY_PRESET_RUNBOOK.md` |
+| PostgreSQL 生产切换 Runbook | `05_acceptance/P3-E-9100-PRODUCTION-CUTOVER-BAOTA-RUNBOOK.md` |
 | 接口契约 | `04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |
-| P1-END-1 验收 | `05_acceptance/P1_END_1_ACCEPTANCE.md` |
+| P1-END-1 验收（改微信自动化前必读） | `05_acceptance/P1_END_1_ACCEPTANCE.md` |
+| 微信回复检测规则 | `10_local_agent_wechat/WECHAT_REPLY_DETECTION_RULES.md` |
 | RAG / Milvus | `06_rag/P1_RAG_MILVUS_ARCHITECTURE_DESIGN.md` |
 | 统一知识库训练 | `06_rag/P1_RAG_UNIFIED_KB_TRAINING_API_CONTRACT_FOR_CAR_PROJECT.md` |
 | 自动回复 rollout | `07_autoreply/P1_AUTOREPLY_ADMIN_ROLLOUT_CONSOLE_DESIGN.md` |
@@ -75,6 +68,7 @@ docs/ai/04_OUTPUT_RULES.md
 | car-porject-main 对接 | `09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_CONVERSATION_LINK_AUDIT.md` |
 | 本地 Docker | `11_deployment_ops/LOCAL_DOCKER_DEV.md` |
 | AI剪辑 / 小高素材库 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
+| 历史里程碑流水账（2026-07-14 前，仅追溯） | `archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md` |
 
 ## 归档规则
 
