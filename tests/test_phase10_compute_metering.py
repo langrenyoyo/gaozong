@@ -45,3 +45,118 @@ def test_count_embedding_characters_is_python_len():
     assert count_embedding_characters("你好abc") == 5
     assert count_embedding_characters("") == 0
     assert count_embedding_characters("\n\t ") == 3
+
+
+# ============================================================================
+# Phase 10 §0.2 FIX：原始字符计量 + 六能力映射启用态上报
+# ============================================================================
+
+
+def _enable_compute_capture(monkeypatch):
+    """启用 ComputeUsageClient（真 token + base_url）并捕获 urlopen 上报 payload。
+
+    覆盖"启用态"路径：服务 _report_usage → ComputeUsageClient.report_usage → 真实 HTTP
+    序列化（mock urlopen），验证 payload 字段而非仅 mock 调用参数。
+    """
+    import json
+
+    monkeypatch.setenv("COMPUTE_INTERNAL_TOKEN", "stub-token")
+    monkeypatch.setenv("AUTO_WECHAT_9000_BASE_URL", "http://9000.test")
+    captured: list[dict] = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(req, timeout):
+        captured.append(json.loads(req.data.decode("utf-8")))
+        return _Resp()
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.compute_usage_client.urllib_request.urlopen",
+        fake_urlopen,
+    )
+    return captured
+
+
+def test_llm_client_preserves_raw_reply_text_without_strip():
+    """Phase 10 §0.2：共享 LLM client 保留原始模型输出，计量前不 strip（探针 "  x\\n" 计 4 字符）。"""
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
+
+    client = OpenAICompatibleClient.__new__(OpenAICompatibleClient)
+    client.config = type("C", (), {"configured": True, "chat_model": "stub", "temperature": 0.1})()
+    client._post_json = lambda path, payload: {
+        "choices": [{"message": {"content": "  x\n"}}],
+        "model": "stub",
+    }
+    result = client.chat([{"role": "user", "content": "hi"}])
+    assert result["reply_text"] == "  x\n"  # 原始 4 字符，共享层不裁剪
+
+
+def test_return_visit_reports_wechat_assistant_when_enabled(monkeypatch):
+    """Phase 10 §0.2：回访判定启用态上报 capability=wechat-assistant（冻结合同）。"""
+    captured = _enable_compute_capture(monkeypatch)
+    from apps.xg_douyin_ai_cs.services.return_visit_judge_service import _report_usage
+
+    request = type("R", (), {"merchant_id": "m1"})()
+    _report_usage(
+        request,
+        [{"role": "user", "content": "hi"}],
+        {"reply_text": "ok", "model": "stub-llm"},
+    )
+    assert len(captured) == 1
+    assert captured[0]["capability_key"] == "wechat-assistant"
+    assert captured[0]["model"] == "stub-llm"
+
+
+def test_knowledge_ask_reports_knowledge_when_enabled(monkeypatch):
+    """Phase 10 §0.2：知识问答启用态上报 capability=knowledge。"""
+    captured = _enable_compute_capture(monkeypatch)
+    from apps.xg_douyin_ai_cs.services.knowledge_training_service import _report_usage
+
+    _report_usage(
+        "m1",
+        [{"role": "user", "content": "hi"}],
+        {"reply_text": "ok", "model": "stub-llm"},
+    )
+    assert len(captured) == 1
+    assert captured[0]["capability_key"] == "knowledge"
+    assert captured[0]["remark"] == "knowledge_training_ask"
+
+
+def test_real_embedding_reports_knowledge_chars_when_enabled(monkeypatch):
+    """Phase 10 §0.2：真实 embedding 按字符上报 capability=knowledge、source=embedding。"""
+    captured = _enable_compute_capture(monkeypatch)
+    from apps.xg_douyin_ai_cs.rag.repository import _embed_with_usage
+
+    class _RealEmbed:
+        def embed(self, text):
+            return {"embedding": [1.0], "model": "real-embedding-model"}
+
+    result = _embed_with_usage(client=_RealEmbed(), text="你好abc", merchant_id="m1")
+    assert result["model"] == "real-embedding-model"  # 返回原始 payload 给调用方
+    assert len(captured) == 1
+    assert captured[0]["capability_key"] == "knowledge"
+    assert captured[0]["source"] == "embedding"
+    assert captured[0]["tokens"] == 5  # len("你好abc")
+
+
+def test_mock_embedding_does_not_report_when_enabled(monkeypatch):
+    """Phase 10 §0.2：mock embedding（model=mock_for_test_only）即使启用也不上报，不伪造计费。"""
+    captured = _enable_compute_capture(monkeypatch)
+    from apps.xg_douyin_ai_cs.rag.repository import _embed_with_usage
+
+    class _MockEmbed:
+        def embed(self, text):
+            return {"embedding": [1.0], "model": "mock_for_test_only"}
+
+    _embed_with_usage(client=_MockEmbed(), text="你好", merchant_id="m1")
+    assert captured == []

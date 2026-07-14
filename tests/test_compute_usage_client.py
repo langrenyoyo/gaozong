@@ -263,3 +263,38 @@ def test_report_usage_defaults_source_to_llm(monkeypatch):
     ) is True
     assert seen["body"]["source"] == "llm"
     assert seen["body"]["capability_key"] == "douyin-cs"
+
+
+def test_report_usage_normalizes_non_numeric_conversation_id_to_none(monkeypatch):
+    """Phase 10 §0.2：非数字会话 ID（正式链路的字符串 short_id）归一 None，
+    避免 9000 整数 DTO 触发 int_parsing 422 导致消费漏记。数字字符串归一为 int。"""
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResponse(status=200, body="{}")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.compute_usage_client.urllib_request.urlopen",
+        fake_urlopen,
+    )
+
+    client = ComputeUsageClient(config=_enabled_config())
+    # 字符串 short_id（正式链路形态，非纯数字）→ 归一 None
+    assert client.report_usage(
+        merchant_id="demo_bba", tokens=100, capability_key="douyin-cs", model="mock-chat",
+        conversation_id="conv-1",
+    ) is True
+    assert seen["body"]["conversation_id"] is None
+    # 纯数字字符串 → 归一 int
+    assert client.report_usage(
+        merchant_id="demo_bba", tokens=100, capability_key="douyin-cs", model="mock-chat",
+        conversation_id="42",
+    ) is True
+    assert seen["body"]["conversation_id"] == 42
+    # 布尔不是合法会话 ID（isinstance True 陷阱）→ None
+    assert client.report_usage(
+        merchant_id="demo_bba", tokens=100, capability_key="douyin-cs", model="mock-chat",
+        conversation_id=True,
+    ) is True
+    assert seen["body"]["conversation_id"] is None

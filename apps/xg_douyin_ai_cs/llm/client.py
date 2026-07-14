@@ -73,7 +73,7 @@ class OpenAICompatibleClient:
         if not isinstance(message, dict):
             message = {}
         return {
-            "reply_text": str(message.get("content") or "").strip(),
+            "reply_text": str(message.get("content") or ""),
             "model": data.get("model") or self.config.chat_model,
             "elapsed_ms": elapsed_ms,
             # P1-COMPUTE-USAGE-1：透传 OpenAI-compatible 响应中的 usage（prompt/completion/total_tokens）。

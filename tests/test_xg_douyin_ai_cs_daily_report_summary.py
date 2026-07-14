@@ -357,7 +357,7 @@ def test_compute_usage_reported_on_success(monkeypatch):
     )
     assert resp.status_code == 200
     assert capture["call"]["merchant_id"] == "merchant-x"
-    assert capture["call"]["capability_key"] == "leads"
+    assert capture["call"]["capability_key"] == "wechat-assistant"
     assert capture["call"]["model"] == "test-llm"
     assert capture["call"]["remark"] == "daily_sales_summary"
     # 字符数远小于 provider 伪 total_tokens，证明按字符计量而非 usage.total_tokens
@@ -373,7 +373,7 @@ def test_compute_usage_uses_chars_when_provider_total_tokens_zero(monkeypatch):
     client = _client(monkeypatch)
     client.post("/internal/daily-reports/sales-summary", json=_request_body())
     assert "call" in called  # 字符计量，chat 成功即上报
-    assert called["call"]["capability_key"] == "leads"
+    assert called["call"]["capability_key"] == "wechat-assistant"
     assert called["call"]["tokens"] > 0
 
 

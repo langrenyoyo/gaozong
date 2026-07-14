@@ -462,3 +462,97 @@ def test_mock_recharge_order_does_not_change_balance(db):
         compute_service.create_mock_recharge_order(
             db, "m_001", ComputeRechargeOrderRequest(package_id=9999)
         )
+
+
+# ============ Phase 10 §0.2 FIX：一次提交 / 负余额告警 / 并发建账 ============
+
+
+def test_record_usage_uses_single_top_level_commit(db, monkeypatch):
+    """Phase 10 §0.2：record_usage 账户创建与流水写入只做一次顶层 commit（合同）。
+
+    get_or_create_account + _write_transaction 不得各自 commit，避免"账户已建、流水未写"半成品。
+    """
+    _seed_ratio(db)
+    commits = {"n": 0}
+    real_commit = db.commit
+
+    def counting_commit(*args, **kwargs):
+        commits["n"] += 1
+        return real_commit(*args, **kwargs)
+
+    monkeypatch.setattr(db, "commit", counting_commit)
+    compute_service.record_usage(db, "m_once", 100, capability_key="douyin-cs", model="stub")
+    assert commits["n"] == 1
+
+
+def test_negative_balance_writes_structured_warning(db, caplog):
+    """Phase 10 §0.2：余额变负写稳定 warning（不阻断），作为持久化风险证据。"""
+    _seed_ratio(db)
+    caplog.set_level("WARNING", logger="apps.compute.services")
+    account = compute_service.record_usage(
+        db, "m_neg", 500, capability_key="douyin-cs", model="gpt-4o-mini"
+    )
+    assert account.balance_tokens == -500
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("negative_balance" in msg for msg in messages), messages
+
+
+def test_get_or_create_account_recovers_from_concurrent_insert(db, monkeypatch):
+    """Phase 10 §0.2：首次建账 IntegrityError（并发竞争）→ SAVEPOINT 回滚 → 复用已建账户。
+
+    SQLite 写锁串行化使真实两线程竞争难以稳定复现；这里用确定性 mock 模拟"两线程都查无 +
+    对手先提交唯一键"：首次 ComputeAccount 查询返回 None 触发 insert，flush 抛 IntegrityError，
+    恢复后重新查询命中预置账户，不抛异常、不漏建（合同：账户与流水一次提交，失败不留半成品）。
+    """
+    from app.models import ComputeAccount
+    from apps.compute.services import get_or_create_account
+    from sqlalchemy.exc import IntegrityError
+
+    # 预置对手账户（SAVEPOINT 回滚后的重新 query 必须命中它）
+    db.add(ComputeAccount(merchant_id="m_race", tenant_id="t1", balance_tokens=0))
+    db.commit()
+
+    real_query = db.query  # monkeypatch 前捕获原绑定方法
+    first_query_done = {"done": False}
+
+    class _QueryProxy:
+        """首次 first() 返回 None（模拟并发"查无"），之后透传真实查询。"""
+
+        def __init__(self, real_q):
+            self._real_q = real_q
+
+        def filter(self, *args, **kwargs):
+            return self  # 简化：忽略 filter 链，first() 内自行真实查询
+
+        def first(self):
+            if not first_query_done["done"]:
+                first_query_done["done"] = True
+                return None
+            return (
+                real_query(ComputeAccount)
+                .filter(ComputeAccount.merchant_id == "m_race")
+                .first()
+            )
+
+    def fake_query(entity, *args, **kwargs):
+        if entity is ComputeAccount:
+            return _QueryProxy(real_query(entity))
+        return real_query(entity, *args, **kwargs)
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    # flush 第一次抛 IntegrityError（模拟对手已提交唯一键冲突）
+    real_flush = db.flush
+    flush_calls = {"n": 0}
+
+    def fake_flush(*args, **kwargs):
+        flush_calls["n"] += 1
+        if flush_calls["n"] == 1:
+            raise IntegrityError("simulated", params=None, orig=Exception("UNIQUE"))
+        return real_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", fake_flush)
+
+    account = get_or_create_account(db, "m_race", tenant_id="t1")
+    assert account is not None
+    assert account.merchant_id == "m_race"

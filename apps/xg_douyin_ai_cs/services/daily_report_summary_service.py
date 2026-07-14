@@ -6,7 +6,7 @@
   系统提示词固定，注入文本只作为待汇总数据；
 - LLM 输出严格 JSON Schema 校验，超时/网络异常/空响应/非法 JSON/恶意输出均稳定降级，
   返回 llm_used=false + fallback_reason，不伪造摘要、不暴露异常正文；
-- LLM 成功后按字符计量（messages + reply_text）复用 ComputeUsageClient 上报，capability=leads；
+- LLM 成功后按字符计量（messages + reply_text）复用 ComputeUsageClient 上报，capability=wechat-assistant；
   上报失败不影响摘要。
 
 边界：
@@ -147,7 +147,7 @@ def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
             merchant_id=merchant_id,
             tokens=tokens,
             source="llm",
-            capability_key="leads",
+            capability_key="wechat-assistant",
             model=str(result.get("model") or ""),
             remark="daily_sales_summary",
         )
@@ -184,7 +184,7 @@ def summarize_daily_sales_feedback(request: DailySalesSummaryRequest) -> dict:
         )
         return _fallback(request.report_day, reason)
 
-    # Phase 10 §0.2：chat 成功后立即按字符上报（capability=leads），再做解析（空/畸形输出也计量）
+    # Phase 10 §0.2：chat 成功后立即按字符上报（capability=wechat-assistant），再做解析（空/畸形输出也计量）
     _report_usage(request.merchant_id, messages, result)
 
     summary_text = _parse_summary_text(result.get("reply_text"))

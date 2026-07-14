@@ -40,6 +40,24 @@ def count_embedding_characters(text: str) -> int:
     return len(text)
 
 
+def _normalize_conversation_id(value) -> int | None:
+    """Phase 10 §0.2：会话 ID 归一为 int 或 None。
+
+    正式链路用字符串 conversation_short_id（非纯数字）；9000 整数 DTO 收到非数字会
+    int_parsing 422，导致 AI 正常返回但消费漏记。归一在 9100 计费元数据层完成，
+    不扩表、不改 9000 现有整数列：纯数字（含数字字符串）→ int，其余 → None。
+    """
+    if isinstance(value, bool):  # bool 是 int 子类，必须先排除
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        digits = value.strip()
+        if digits.isdigit():
+            return int(digits)
+    return None
+
+
 @dataclass(frozen=True)
 class ComputeUsageConfig:
     """算力上报配置（环境变量驱动，与 llm/config.py 风格一致）。"""
@@ -117,7 +135,7 @@ class ComputeUsageClient:
             "source": source,
             "model": model,
             "agent_id": agent_id,
-            "conversation_id": conversation_id,
+            "conversation_id": _normalize_conversation_id(conversation_id),
             "remark": remark,
         }
         req = urllib_request.Request(

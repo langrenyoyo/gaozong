@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import ComputeAccount, ComputeMarkupRatio, ComputePackage, ComputeTransaction
@@ -37,6 +39,8 @@ BASIS_POINT_DENOMINATOR = 10_000
 # PostgreSQL 列域上界：markup_basis_points 为 INTEGER，计费量按 BIGINT 语义校验天花板
 POSTGRES_INTEGER_MAX = 2_147_483_647
 POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
+
+_logger = logging.getLogger(__name__)
 
 
 def calculate_billed_tokens(actual_tokens: int, markup_basis_points: int) -> int:
@@ -68,11 +72,14 @@ def _start_of_day(dt: datetime) -> datetime:
 
 
 def get_or_create_account(
-    db: Session, merchant_id: str, tenant_id: str | None = None
+    db: Session, merchant_id: str, tenant_id: str | None = None, *, autocommit: bool = True
 ) -> ComputeAccount:
     """获取商户算力账户，不存在则创建（默认余额 0）。
 
     一个商户一行（compute_accounts.uk_compute_accounts_merchant 约束）。
+    Phase 10 §0.2：首次建账用 SAVEPOINT（begin_nested）+ IntegrityError 恢复，避免并发
+    首次 usage 时失败方触发唯一键异常漏记消费；autocommit=False 时只 flush 不 commit，
+    由调用方（record_usage）顶层一次 commit，保证账户与流水原子提交。
     """
     account = (
         db.query(ComputeAccount)
@@ -80,14 +87,27 @@ def get_or_create_account(
         .first()
     )
     if account is None:
-        account = ComputeAccount(
-            merchant_id=merchant_id,
-            tenant_id=tenant_id,
-            balance_tokens=0,
-        )
-        db.add(account)
-        db.commit()
-        db.refresh(account)
+        try:
+            with db.begin_nested():  # SAVEPOINT：并发竞争只回滚此 insert
+                account = ComputeAccount(
+                    merchant_id=merchant_id,
+                    tenant_id=tenant_id,
+                    balance_tokens=0,
+                )
+                db.add(account)
+                db.flush()
+        except IntegrityError:
+            # 并发竞争：另一事务已插入该商户账户；回滚 SAVEPOINT 后复用
+            account = (
+                db.query(ComputeAccount)
+                .filter(ComputeAccount.merchant_id == merchant_id)
+                .first()
+            )
+            if account is None:
+                raise  # 非竞争的真实异常，向上传播
+        if autocommit:
+            db.commit()
+            db.refresh(account)
     return account
 
 
@@ -105,12 +125,15 @@ def _write_transaction(
     actual_tokens: int | None = None,
     capability_key: str | None = None,
     markup_basis_points: int | None = None,
+    autocommit: bool = True,
 ) -> ComputeTransaction:
     """写入一条流水并同步更新账户余额（含 balance_after_tokens 与计费快照）。
 
-    delta_tokens 正为增加（充值/发放），负为消耗。每次写入一个事务，立即 commit。
+    delta_tokens 正为增加（充值/发放），负为消耗。autocommit=True 时每次一个事务立即 commit；
+    autocommit=False 时只 flush，由调用方（record_usage）顶层一次 commit，保证账户与流水原子提交。
     Phase 10：写账户前重新查询该商户账户行并加 FOR UPDATE 行锁（PostgreSQL 防并发
-    丢失更新；SQLite 为 no-op，靠本地写事务隔离）；新余额超 BIGINT 整笔拒绝。
+    丢失更新；SQLite 为 no-op，靠本地写事务隔离）；新余额超 BIGINT 整笔拒绝；
+    负余额写结构化 warning（不阻断，作为持久化风险证据，§0.2）。
     充值/发放调用 actual_tokens/capability_key/markup_basis_points 保持空（§0.2）。
     """
     locked = (
@@ -124,6 +147,15 @@ def _write_transaction(
     new_balance = locked.balance_tokens + delta_tokens
     if abs(new_balance) > POSTGRES_BIGINT_MAX:
         raise ValueError("COMPUTE_BALANCE_OUT_OF_RANGE")
+    if new_balance < 0:
+        _logger.warning(
+            "compute stage=negative_balance merchant_id=%s capability=%s "
+            "balance_after=%d delta=%d",
+            locked.merchant_id,
+            capability_key,
+            new_balance,
+            delta_tokens,
+        )
     locked.balance_tokens = new_balance
     locked.updated_at = _now()
     tx = ComputeTransaction(
@@ -143,9 +175,12 @@ def _write_transaction(
         markup_basis_points=markup_basis_points,
     )
     db.add(tx)
-    db.commit()
-    db.refresh(locked)
-    db.refresh(tx)
+    if autocommit:
+        db.commit()
+        db.refresh(locked)
+        db.refresh(tx)
+    else:
+        db.flush()
     return tx
 
 
@@ -354,6 +389,9 @@ def record_usage(
 
     tokens 语义冻结为实际字符量；按 capability_key 读取唯一比例行计算计费量，
     写入 actual_tokens/capability_key/markup_basis_points 三个快照列。
+    Phase 10 §0.2：账户创建与流水写入只做一次顶层 commit（get_or_create_account +
+    _write_transaction 均 autocommit=False），避免"账户已建、流水未写"半成品；并发首次
+    建账由 get_or_create_account 的 SAVEPOINT + IntegrityError 恢复兜底，失败方不漏记。
     """
     if capability_key not in COMPUTE_CAPABILITY_KEYS:
         raise ValueError("INVALID_CAPABILITY")
@@ -371,7 +409,7 @@ def record_usage(
         raise ValueError("MARKUP_RATIO_NOT_FOUND")
     effective_markup = ratio.markup_basis_points if ratio.enabled else 0
     billed_tokens = calculate_billed_tokens(tokens, effective_markup)
-    account = get_or_create_account(db, merchant_id)
+    account = get_or_create_account(db, merchant_id, autocommit=False)
     _write_transaction(
         db,
         account,
@@ -385,7 +423,10 @@ def record_usage(
         actual_tokens=tokens,
         capability_key=capability_key,
         markup_basis_points=effective_markup,
+        autocommit=False,
     )
+    db.commit()  # 顶层一次 commit：账户 + 流水原子持久化（合同）
+    db.refresh(account)
     return account
 
 
