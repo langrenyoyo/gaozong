@@ -11,13 +11,51 @@
 
 BEGIN;
 
--- 0. 前置守卫：已升级（actual_tokens 列存在），拒绝未升级/二次降级
+-- 0. 前置守卫：已完整升级 + head 精确为 0031
+--    精确校验 transactions 15 列（12 基线 + 3 新列）、markup_ratios 6 列，
+--    拒绝未升级/部分升级/列漂移；max(version_num)='0031' 拒绝越序降级（存在 0032+ 时阻断）
 CREATE TEMP TABLE _guard_down_0031 (ok INTEGER NOT NULL CHECK (ok = 1));
 
+-- 0.1 compute_transactions 列数精确为 15（12 基线 + 3 新列，确认已完整升级）
 INSERT INTO _guard_down_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_transactions') WHERE name='actual_tokens'
-) > 0 THEN 1 ELSE 0 END;
+    SELECT count(*) FROM pragma_table_info('compute_transactions')
+) = 15 THEN 1 ELSE 0 END;
+
+-- 0.2 compute_transactions 15 列名都在
+INSERT INTO _guard_down_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_transactions')
+    WHERE name IN ('id','merchant_id','tenant_id','transaction_type','delta_tokens',
+                   'balance_after_tokens','source','remark','model','agent_id',
+                   'conversation_id','created_at',
+                   'actual_tokens','capability_key','markup_basis_points')
+) = 15 THEN 1 ELSE 0 END;
+
+-- 0.3 compute_markup_ratios 列数精确为 6
+INSERT INTO _guard_down_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+) = 6 THEN 1 ELSE 0 END;
+
+-- 0.4 compute_markup_ratios 6 列名都在
+INSERT INTO _guard_down_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+    WHERE name IN ('id','capability_key','markup_basis_points','enabled','created_at','updated_at')
+) = 6 THEN 1 ELSE 0 END;
+
+-- 0.5 0031 已登记
+INSERT INTO _guard_down_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM schema_migrations WHERE version_num='0031'
+) = 1 THEN 1 ELSE 0 END;
+
+-- 0.6 head 精确为 0031（无更高版本登记，拒绝越序降级）
+INSERT INTO _guard_down_0031 (ok)
+SELECT CASE WHEN (
+    SELECT max(version_num) FROM schema_migrations
+) = '0031' THEN 1 ELSE 0 END;
 
 DROP TABLE _guard_down_0031;
 
@@ -67,31 +105,31 @@ THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_ct_down_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_new_down_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
     EXCEPT
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_down_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
 ) THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_ct_down_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_down_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
     EXCEPT
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_new_down_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
 ) THEN 1 ELSE 0 END;
 
@@ -139,24 +177,24 @@ THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_cmr_down_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_new_down_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
     EXCEPT
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_down_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
 ) THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_cmr_down_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_down_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
     EXCEPT
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_new_down_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
 ) THEN 1 ELSE 0 END;
 
 DROP TABLE _compute_markup_ratios_down_0031;

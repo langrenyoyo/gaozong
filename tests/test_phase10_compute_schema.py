@@ -367,9 +367,9 @@ def test_sqlite_0031_preserves_data_indexes_and_seeds(tmp_path):
         ).fetchone()
         before_tx_multiset = sorted(
             conn.execute(
-                "SELECT merchant_id, tenant_id, transaction_type, delta_tokens, "
-                "balance_after_tokens, source, remark, model, agent_id, conversation_id "
-                "FROM compute_transactions"
+                "SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, "
+                "balance_after_tokens, source, remark, model, agent_id, conversation_id, "
+                "created_at FROM compute_transactions"
             ).fetchall()
         )
         before_ratio = conn.execute(
@@ -386,9 +386,9 @@ def test_sqlite_0031_preserves_data_indexes_and_seeds(tmp_path):
         ).fetchone()
         after_tx_multiset = sorted(
             conn.execute(
-                "SELECT merchant_id, tenant_id, transaction_type, delta_tokens, "
-                "balance_after_tokens, source, remark, model, agent_id, conversation_id "
-                "FROM compute_transactions"
+                "SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, "
+                "balance_after_tokens, source, remark, model, agent_id, conversation_id, "
+                "created_at FROM compute_transactions"
             ).fetchall()
         )
         assert after_tx == before_tx, f"compute_transactions 行数/max(id) 变化: {before_tx} -> {after_tx}"
@@ -604,5 +604,323 @@ def test_sqlite_0031_downgrade_rejects_unupgraded_state(tmp_path):
         assert cols == TRANSACTION_BASELINE_COLUMNS, (
             "未 upgrade 库 downgrade 回滚后列集必须保持基线"
         )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 2-FIX 红灯：精确列集校验 / 越序降级阻断 / 跨表事务原子性
+# （检查点 A Must-Fix 1/2/5）
+# ---------------------------------------------------------------------------
+
+
+def _apply_baseline_with_history(conn):
+    """基线（0010+0027）+ 历史流水，守卫测试的公共前置。"""
+    _create_phase1_predecessor_tables(conn)
+    _apply_compute_baseline(conn)
+    _seed_history_transactions(conn)
+
+
+def _registered_versions(conn) -> list[str]:
+    return sorted(
+        r[0] for r in conn.execute("SELECT version_num FROM schema_migrations")
+    )
+
+
+def _assert_no_0031_residue(db_path):
+    """守卫拒绝后：0031 未登记、无 _backup/_new/_down 中间表残留。"""
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 0, "0031 不应登记（守卫拒绝）"
+        leftovers = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND (name LIKE '%_backup_0031%' OR name LIKE '%_new_0031%' "
+                "OR name LIKE '%_down_0031%')"
+            )
+        ]
+        assert not leftovers, f"守卫拒绝后残留中间表: {leftovers}"
+    finally:
+        conn.close()
+
+
+# --- Must-Fix 1：升级遇额外列/缺失列/部分升级列必须拒绝（精确列集校验） ---
+
+
+def test_sqlite_0031_upgrade_rejects_extra_column_on_transactions(tmp_path):
+    """compute_transactions 有额外列（并发改动）→ upgrade 必须事前拒绝，额外列保留、数据不丢。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix_upgrade_tx_extra.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        conn.execute("ALTER TABLE compute_transactions ADD COLUMN extra_col TEXT")
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        cols = migrate_sqlite.get_columns(conn, "compute_transactions")
+        assert "actual_tokens" not in cols, "额外列场景 upgrade 被拒不应出现新列"
+        assert "extra_col" in cols, "守卫须在重建前触发，额外列必须保留（不得静默丢列）"
+        assert conn.execute(
+            "SELECT count(*) FROM compute_transactions"
+        ).fetchone()[0] == 4, "历史流水数据不得丢失"
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+def test_sqlite_0031_upgrade_rejects_missing_column_on_transactions(tmp_path):
+    """compute_transactions 缺失基线列 → upgrade 必须事前拒绝（列集守卫，非事后 INSERT 失败）。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix_upgrade_tx_missing.db"
+    # 重建去掉 agent_id 列模拟缺失（SQLite 旧版无 DROP COLUMN）
+    corrupt = (
+        "ALTER TABLE compute_transactions RENAME TO _tx_missing_fix; "
+        "CREATE TABLE compute_transactions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id VARCHAR(128) NOT NULL, "
+        "tenant_id VARCHAR(128), transaction_type VARCHAR(32) NOT NULL, "
+        "delta_tokens INTEGER NOT NULL, balance_after_tokens INTEGER NOT NULL, "
+        "source VARCHAR(32) NOT NULL, remark TEXT, model VARCHAR(128), "
+        "conversation_id INTEGER, created_at DATETIME); "
+        "INSERT INTO compute_transactions (id, merchant_id, tenant_id, transaction_type, "
+        "delta_tokens, balance_after_tokens, source, remark, model, conversation_id, created_at) "
+        "SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, "
+        "balance_after_tokens, source, remark, model, conversation_id, created_at "
+        "FROM _tx_missing_fix; "
+        "DROP TABLE _tx_missing_fix;"
+    )
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        conn.executescript(corrupt)
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+def test_sqlite_0031_upgrade_rejects_partial_upgrade_columns(tmp_path):
+    """compute_transactions 仅含部分升级列（已有 actual_tokens 缺其余）→ upgrade 必须事前拒绝。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix_upgrade_partial.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        # 仅加 actual_tokens（13 列，既非 12 基线也非 15 完整升级态）
+        conn.execute("ALTER TABLE compute_transactions ADD COLUMN actual_tokens BIGINT")
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+def test_sqlite_0031_upgrade_rejects_extra_column_on_markup_ratios(tmp_path):
+    """compute_markup_ratios 有额外列 → upgrade 必须事前拒绝（两表都精确校验）。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix_upgrade_cmr_extra.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        conn.execute("ALTER TABLE compute_markup_ratios ADD COLUMN extra_col TEXT")
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+# --- Must-Fix 5：第二张表复制失败时第一张表整体回滚（跨表事务原子性） ---
+
+
+def test_sqlite_0031_upgrade_rolls_back_first_table_when_second_fails(tmp_path):
+    """markup_ratios 负值触发第二表 CHECK 失败 → 第一表 transactions 重建必须整体回滚。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix_tx_atomic.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        # 注入负值：列集不变、capability 不重复，前置守卫通过；重建 INSERT 触发 CHECK 失败
+        conn.execute(
+            "UPDATE compute_markup_ratios SET markup_basis_points=-1 "
+            "WHERE capability_key='douyin-cs'"
+        )
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 0, "第二表失败时整体回滚，不应登记 0031"
+        cols = migrate_sqlite.get_columns(conn, "compute_transactions")
+        assert "actual_tokens" not in cols, "第二表失败时第一表重建必须回滚"
+        assert conn.execute(
+            "SELECT count(*) FROM compute_transactions"
+        ).fetchone()[0] == 4, "回滚后历史流水不得丢失"
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
+# --- Must-Fix 1（降级侧）：额外列/缺失列/部分降级列必须拒绝 ---
+
+
+def test_sqlite_0031_downgrade_rejects_extra_column(tmp_path):
+    """升级态 compute_transactions 有额外列 → downgrade 必须事前拒绝，登记与结构不变。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix_down_extra.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        conn.execute("ALTER TABLE compute_transactions ADD COLUMN extra_col TEXT")
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 1, "downgrade 被拒，0031 登记应保留"
+        cols = migrate_sqlite.get_columns(conn, "compute_transactions")
+        assert "actual_tokens" in cols, "downgrade 被拒，升级态结构应保留"
+    finally:
+        conn.close()
+
+
+def test_sqlite_0031_downgrade_rejects_missing_column(tmp_path):
+    """升级态 compute_transactions 缺失列 → downgrade 必须事前拒绝。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix_down_missing.db"
+    # 重建去掉 capability_key 模拟缺失（14 列，非 15 完整升级态）
+    corrupt = (
+        "ALTER TABLE compute_transactions RENAME TO _tx_corrupt_down; "
+        "CREATE TABLE compute_transactions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id VARCHAR(128) NOT NULL, "
+        "tenant_id VARCHAR(128), transaction_type VARCHAR(32) NOT NULL, "
+        "delta_tokens INTEGER NOT NULL, balance_after_tokens INTEGER NOT NULL, "
+        "source VARCHAR(32) NOT NULL, remark TEXT, model VARCHAR(128), "
+        "agent_id VARCHAR(64), conversation_id INTEGER, created_at DATETIME, "
+        "actual_tokens BIGINT, markup_basis_points INTEGER); "
+        "INSERT INTO compute_transactions (id, merchant_id, tenant_id, transaction_type, "
+        "delta_tokens, balance_after_tokens, source, remark, model, agent_id, conversation_id, "
+        "created_at, actual_tokens, markup_basis_points) "
+        "SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, "
+        "balance_after_tokens, source, remark, model, agent_id, conversation_id, created_at, "
+        "actual_tokens, markup_basis_points FROM _tx_corrupt_down; "
+        "DROP TABLE _tx_corrupt_down;"
+    )
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        conn.executescript(corrupt)
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 1, "downgrade 被拒，0031 登记应保留"
+    finally:
+        conn.close()
+
+
+def test_sqlite_0031_downgrade_rejects_partial_downgrade_columns(tmp_path):
+    """升级态仅剩部分新列（actual_tokens 已删但 capability_key 还在）→ downgrade 必须事前拒绝。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix_down_partial.db"
+    corrupt = (
+        "ALTER TABLE compute_transactions RENAME TO _tx_corrupt_partial; "
+        "CREATE TABLE compute_transactions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, merchant_id VARCHAR(128) NOT NULL, "
+        "tenant_id VARCHAR(128), transaction_type VARCHAR(32) NOT NULL, "
+        "delta_tokens INTEGER NOT NULL, balance_after_tokens INTEGER NOT NULL, "
+        "source VARCHAR(32) NOT NULL, remark TEXT, model VARCHAR(128), "
+        "agent_id VARCHAR(64), conversation_id INTEGER, created_at DATETIME, "
+        "capability_key VARCHAR(64), markup_basis_points INTEGER); "
+        "INSERT INTO compute_transactions (id, merchant_id, tenant_id, transaction_type, "
+        "delta_tokens, balance_after_tokens, source, remark, model, agent_id, conversation_id, "
+        "created_at, capability_key, markup_basis_points) "
+        "SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, "
+        "balance_after_tokens, source, remark, model, agent_id, conversation_id, created_at, "
+        "capability_key, markup_basis_points FROM _tx_corrupt_partial; "
+        "DROP TABLE _tx_corrupt_partial;"
+    )
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        conn.executescript(corrupt)
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert conn.execute(
+            "SELECT count(*) FROM schema_migrations WHERE version_num='0031'"
+        ).fetchone()[0] == 1, "downgrade 被拒，0031 登记应保留"
+    finally:
+        conn.close()
+
+
+# --- Must-Fix 2：越序降级必须拒绝（head 不是 0031 时阻断） ---
+
+
+def test_sqlite_0031_downgrade_rejects_out_of_order(tmp_path):
+    """存在更高版本 0032 登记时，0031 downgrade 必须拒绝；0031/0032 登记与结构均不变。"""
+    if not SQLITE_FILE_PHASE10.is_file() or not SQLITE_DOWNGRADE_PHASE10.is_file():
+        pytest.skip("0031 upgrade/downgrade 未实现")
+    db_path = tmp_path / "phase10_fix_down_outoforder.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        _apply_on_temp(conn, "0031")
+        # 模拟后续 0032 已登记（head 不再是 0031）
+        conn.execute(
+            "INSERT INTO schema_migrations (version_num, applied_at, description) "
+            "VALUES ('0032', CURRENT_TIMESTAMP, 'mock_future_version')"
+        )
+        downgrade_sql = SQLITE_DOWNGRADE_PHASE10.read_text(encoding="utf-8")
+        with pytest.raises(Exception):
+            conn.executescript(downgrade_sql)
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert _registered_versions(conn) == ["0010", "0027", "0031", "0032"], (
+            "越序降级不应改变任何版本登记"
+        )
+        cols = migrate_sqlite.get_columns(conn, "compute_transactions")
+        assert "actual_tokens" in cols, "越序降级被拒，升级态结构应保留"
     finally:
         conn.close()

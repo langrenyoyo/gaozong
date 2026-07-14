@@ -25,18 +25,42 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- 0. 前置守卫（仿 0030 三键校验，任一失败整体回滚）
+-- 0. 前置守卫（任一失败触发 _guard CHECK 违反，runner 整体 ROLLBACK，不登记 0031）
+--    精确校验两表列集 == 0030 基线（拒绝额外列/缺失列/部分升级列，防止安全重建静默丢列）
+--    + markup_ratios 六键数据精确（拒绝未知/缺失键）
 -- ---------------------------------------------------------------------------
 
--- 0.1 compute_transactions 未被 0031 升级（无 actual_tokens 列）
 CREATE TEMP TABLE _guard_0031 (ok INTEGER NOT NULL CHECK (ok = 1));
 
+-- 0.1 compute_transactions 列数精确为 12（无额外/缺失列）
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
-    SELECT count(*) FROM pragma_table_info('compute_transactions') WHERE name='actual_tokens'
-) = 0 THEN 1 ELSE 0 END;
+    SELECT count(*) FROM pragma_table_info('compute_transactions')
+) = 12 THEN 1 ELSE 0 END;
 
--- 0.2 compute_markup_ratios 无未知键
+-- 0.2 compute_transactions 12 基线列名都在（防列数对但列名漂移）
+INSERT INTO _guard_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_transactions')
+    WHERE name IN ('id','merchant_id','tenant_id','transaction_type','delta_tokens',
+                   'balance_after_tokens','source','remark','model','agent_id',
+                   'conversation_id','created_at')
+) = 12 THEN 1 ELSE 0 END;
+
+-- 0.3 compute_markup_ratios 列数精确为 6（无额外/缺失列）
+INSERT INTO _guard_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+) = 6 THEN 1 ELSE 0 END;
+
+-- 0.4 compute_markup_ratios 6 基线列名都在
+INSERT INTO _guard_0031 (ok)
+SELECT CASE WHEN (
+    SELECT count(*) FROM pragma_table_info('compute_markup_ratios')
+    WHERE name IN ('id','capability_key','markup_basis_points','enabled','created_at','updated_at')
+) = 6 THEN 1 ELSE 0 END;
+
+-- 0.5 compute_markup_ratios 无未知键
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
     SELECT count(*) FROM compute_markup_ratios
@@ -45,7 +69,7 @@ SELECT CASE WHEN (
     )
 ) = 0 THEN 1 ELSE 0 END;
 
--- 0.3 compute_markup_ratios 六键精确存在（DISTINCT = 6，拒绝缺失键）
+-- 0.6 compute_markup_ratios 六键精确存在（DISTINCT = 6，拒绝缺失键）
 INSERT INTO _guard_0031 (ok)
 SELECT CASE WHEN (
     SELECT count(DISTINCT capability_key) FROM compute_markup_ratios
@@ -113,31 +137,31 @@ THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_ct_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_new_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
     EXCEPT
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_backup_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
 ) THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_ct_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_backup_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
     EXCEPT
-    SELECT merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    SELECT id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
            source, remark, model, agent_id, conversation_id, created_at, count(*) AS cnt
     FROM _compute_transactions_new_0031
-    GROUP BY merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
+    GROUP BY id, merchant_id, tenant_id, transaction_type, delta_tokens, balance_after_tokens,
              source, remark, model, agent_id, conversation_id, created_at
 ) THEN 1 ELSE 0 END;
 
@@ -188,24 +212,24 @@ THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_cmr_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_new_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
     EXCEPT
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_backup_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
 ) THEN 1 ELSE 0 END;
 
 INSERT INTO _guard_cmr_0031 (ok)
 SELECT CASE WHEN NOT EXISTS(
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_backup_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
     EXCEPT
-    SELECT capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
+    SELECT id, capability_key, markup_basis_points, enabled, created_at, updated_at, count(*) AS cnt
     FROM _compute_markup_ratios_new_0031
-    GROUP BY capability_key, markup_basis_points, enabled, created_at, updated_at
+    GROUP BY id, capability_key, markup_basis_points, enabled, created_at, updated_at
 ) THEN 1 ELSE 0 END;
 
 DROP TABLE _compute_markup_ratios_backup_0031;
