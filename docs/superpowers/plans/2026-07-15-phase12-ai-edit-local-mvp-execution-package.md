@@ -886,3 +886,48 @@ git commit -m "测试：完成 Phase 12 AI剪辑本地闭环验收"
 - 前端不造假、不重叠，双分辨率真实产物可用。
 
 三方 PASS 后 Phase 12 才可标记 `DONE_WITH_CONCERNS`，随后进入 Phase 13；不得提前启动宝塔验证。
+
+---
+
+## Task 11：甲方测试专用单入口 EXE（内部双运行时）
+
+**前置条件：** 检查点 C 三方 PASS。未经阶段总验收，不得把当前工作区直接打成甲方测试件。
+
+**目标：** 生成一个带明确测试标识的 `小高AI系统测试版.exe`。甲方只接收并启动这一个文件；启动器在受控的版本目录中释放并管理内部 Local Agent 与 AI剪辑 Worker 双运行时、FFmpeg/ffprobe、字体、配置和许可证文件。供甲方在授权测试电脑验证界面、素材导入、任务控制、基础剪切/缩放、720P/1080P、取消和恢复。该交付不是生产安装包，不代表真实 AI 分析、生产模型或宝塔环境已经验收。
+
+**必须新增或修改：**
+
+- 新建甲方测试单入口启动器、构建脚本和静态合同测试，不复用 `DistributionMode=Customer` 绕过许可证门禁。
+- 新建 `TEST_BUILD_NOTICE.md`，列明版本、提交、SHA-256、测试范围、缺失能力和禁止用于生产的声明。
+- 更新 `THIRD_PARTY_NOTICES.md`：完整安装包继续阻断；测试包只允许包含已核清分发依据的组件。
+- 最终对外交付目录只能包含一个 `小高AI系统测试版.exe` 及同目录 SHA-256 文本；内部载荷由启动器释放到 `%LOCALAPPDATA%/XiaogaoAI/Test/<version>/`，不得要求甲方手工启动第二个 EXE。
+- 内部载荷包含 Local Agent、AI剪辑 Worker、FFmpeg/ffprobe（若完成对应 GPL/LGPL 文本和源码获取说明）、确定授权字体、许可证文本、测试说明和校验文件；内部仍保持双进程与双 Python 运行时。
+
+**硬门禁：**
+
+1. 测试包不得包含尚未确认商用分发许可的 YOLO、FunASR、open_clip 代码或模型权重；构建后必须扫描并断言不存在。
+2. 不得创建或伪造 `LICENSE_CONFIRMED.txt`，不得调用 `DistributionMode=Customer`。
+3. Worker 固定 Python 3.11；Local Agent 固定既有 Python 3.10 构建链；不得为了表面上的“单 EXE”合并运行时或改成单进程。
+4. 测试包必须在干净目录构建，不能把既有 `dist/local-agent` 陈旧文件带入。
+5. 构建后只执行离线启动、版本、路由、Worker 预检和合成任务 smoke；真实付费模型、宝塔、生产数据库和抖音发布调用为 0。
+6. 未核清 FFmpeg、字体及随包文件的分发义务时，只能产出内部构建证据，不能发送给甲方。
+7. 启动器必须校验内嵌载荷 SHA-256，使用版本化私有目录原子释放，禁止写入仓库目录、系统目录或用户任意路径；启动失败不得影响既有微信助手数据。
+8. 退出时应终止本版本启动的 Local Agent/Worker 进程树；升级不得覆盖运行中版本，旧版本清理由显式维护流程执行。
+
+**当前已知构建环境：**
+
+- Local Agent：`C:\Users\A\miniconda3\envs\demo_auto_wechat\python.exe`（Python 3.10.20，已有 PyInstaller）。
+- Worker：`C:\Users\A\miniconda3\envs\zws\python.exe` 或 `deepagent_demo`（Python 3.11.15；需使用固定 PyInstaller 版本）。
+- FFmpeg：本机 8.1.1 full build，具备 `vidstabdetect/vidstabtransform`；是否随包分发仍须完成许可证文件门禁。
+- 当前缺少仓库内 `resources/ai_edit_models` 与 `resources/fonts`；不得用空目录或未授权系统字体冒充正式资源。
+
+**交付状态口径：**
+
+```text
+Phase 12 代码与本地/模拟闭环：DONE
+甲方测试专用单入口 EXE：BUILT_FOR_CUSTOMER_TEST 或 BLOCKED_BY_DISTRIBUTION_EVIDENCE
+正式客户安装包：NOT_BUILT
+宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
+```
+
+Task 11 完成后硬暂停，回传单入口 EXE SHA-256、内部载荷清单与逐项 SHA-256、释放目录安全探针、离线 smoke、许可证扫描和已知能力限制；未经审批不得发送。
