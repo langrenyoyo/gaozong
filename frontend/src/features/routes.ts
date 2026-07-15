@@ -1,4 +1,5 @@
 import { agentsRoutes } from "./agents/routes";
+import { aiEditRoutes } from "./ai-edit/routes";
 import { computeRoutes } from "./compute/routes";
 import { douyinCsRoutes } from "./douyin-cs/routes";
 import { leadsRoutes } from "./leads/routes";
@@ -11,6 +12,7 @@ export const capabilityRoutes: CapabilityRoute[] = [
   ...agentsRoutes,
   ...wechatAssistantRoutes,
   ...computeRoutes,
+  ...aiEditRoutes,
 ];
 
 export const legacyRouteRedirects: LegacyRouteRedirect[] = [

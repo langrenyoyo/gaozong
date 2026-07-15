@@ -19,6 +19,8 @@ import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
+import MaterialLibrary from "../features/ai-edit/pages/MaterialLibrary";
+import AiVideoEditor from "../features/ai-edit/pages/AiVideoEditor";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
@@ -718,6 +720,8 @@ export default function Index({
     activeNav === "compute-token-transactions" ||
     activeNav === "compute-recharge-orders" ||
     activeNav === "compute-packages";
+  const isAiEditMaterialsNav = activeNav === "ai-edit-materials";
+  const isAiEditEditorNav = activeNav === "ai-edit-editor";
   const activeWechatTab: WechatAgentTab =
     activeNav === "wechat-config"
       ? "config"
@@ -824,6 +828,10 @@ export default function Index({
           <SuperComputeConfig />
         ) : isComputeNav ? (
           <ComputeCenter />
+        ) : isAiEditMaterialsNav ? (
+          <MaterialLibrary />
+        ) : isAiEditEditorNav ? (
+          <AiVideoEditor />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">

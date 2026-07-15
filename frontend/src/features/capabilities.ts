@@ -86,6 +86,18 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "compute-markup-ratios", label: "上浮比例", path: "/compute/markup-ratios", permissionCodes: [PERMISSIONS.adminComputeConfig] },
     ],
   },
+  {
+    id: "ai-edit-center",
+    title: "AI小高剪辑",
+    shortLabel: "剪辑",
+    path: "/ai-edit/materials",
+    defaultNavId: "ai-edit-materials",
+    permissionCodes: [PERMISSIONS.aiEdit],
+    children: [
+      { id: "ai-edit-materials", label: "素材库", path: "/ai-edit/materials" },
+      { id: "ai-edit-editor", label: "剪辑工作台", path: "/ai-edit/editor" },
+    ],
+  },
 ];
 
 export const merchantNavItems = capabilityNavCenters.flatMap((center) => center.children);
