@@ -160,3 +160,81 @@ def test_mock_embedding_does_not_report_when_enabled(monkeypatch):
 
     _embed_with_usage(client=_MockEmbed(), text="你好", merchant_id="m1")
     assert captured == []
+
+
+# ============================================================================
+# Phase 10 §0.2 FIX2：抖音回复重试每次成功调用分别计量 + 缺商户零上报
+# ============================================================================
+
+
+def test_reply_decision_reports_per_successful_chat_call(monkeypatch):
+    """FIX2 §0.2：抖音回复主 chat + 重试每次成功调用都独立计量（_report_llm_usage 不去重）。
+
+    mock 主 chat 返回"重复询问已知预算"触发 known_info retry；retry 成功后再次计量。
+    断言 report_usage 调用次数 == chat 成功次数（主 + retry 各一次，分别计量）。
+    """
+    from apps.xg_douyin_ai_cs.llm.client import OpenAICompatibleClient
+    from apps.xg_douyin_ai_cs.schemas import ReplySuggestionRequest
+    from apps.xg_douyin_ai_cs.services import reply_decision_service
+
+    chat_count = {"n": 0}
+
+    def fake_chat(self, messages):
+        chat_count["n"] += 1
+        if chat_count["n"] == 1:
+            # 首次返回"重复询问已知预算"→ 触发 known_info retry
+            reply = (
+                '{"reply_text":"请说下预算和车型","manual_required":false,'
+                '"confidence":0.8,"intent":"general_inquiry","lead_level":"unknown",'
+                '"tags":[],"risk_flags":[],"auto_send":false}'
+            )
+        else:
+            reply = (
+                '{"reply_text":"好的，10万左右我帮您整理需求","manual_required":false,'
+                '"confidence":0.8,"intent":"general_inquiry","lead_level":"unknown",'
+                '"tags":[],"risk_flags":[],"auto_send":false}'
+            )
+        return {"reply_text": reply, "model": "stub-llm", "elapsed_ms": 10, "usage": None}
+
+    monkeypatch.setattr(OpenAICompatibleClient, "chat", fake_chat)
+
+    report_calls = []
+
+    def spy_report(*args, **kwargs):
+        report_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        spy_report,
+    )
+
+    request = ReplySuggestionRequest(
+        tenant_id="t", account_id=1, latest_message="10万左右", merchant_id="m_retry"
+    )
+    agent = {
+        "agent_id": "a",
+        "agent_name": "a",
+        "agent_category": "bound_agent",
+        "system_prompt": None,
+        "reply_style": "",
+        "business_scope": "",
+        "is_active": True,
+    }
+    merchant_prompt = {
+        "merchant_name": "m_retry",
+        "category": None,
+        "main_brands": [],
+        "main_models": [],
+    }
+    reply_decision_service._build_llm_reply(
+        "conv-1",
+        request,
+        merchant_prompt,
+        [],
+        agent=agent,
+        agent_warnings=[],
+        rag_used=False,
+    )
+    assert chat_count["n"] >= 2  # 主 chat + known_info retry
+    assert len(report_calls) == chat_count["n"]  # 每次成功 chat 都独立计量

@@ -498,31 +498,35 @@ def test_negative_balance_writes_structured_warning(db, caplog):
 
 
 def test_get_or_create_account_recovers_from_concurrent_insert(db, monkeypatch):
-    """Phase 10 §0.2：首次建账 IntegrityError（并发竞争）→ SAVEPOINT 回滚 → 复用已建账户。
+    """Phase 10 §0.2 FIX2：真实唯一键竞争恢复（不伪造 flush）。
 
-    SQLite 写锁串行化使真实两线程竞争难以稳定复现；这里用确定性 mock 模拟"两线程都查无 +
-    对手先提交唯一键"：首次 ComputeAccount 查询返回 None 触发 insert，flush 抛 IntegrityError，
-    恢复后重新查询命中预置账户，不抛异常、不漏建（合同：账户与流水一次提交，失败不留半成品）。
+    预置竞争对手账户（同 merchant_id 已落库）；monkeypatch 首次 query.first() 返回 None
+    模拟"并发查询时对手尚未可见"；SAVEPOINT 正文内 db.add + db.flush 发出的 INSERT 命中
+    uk_compute_accounts_merchant 真实 UNIQUE 约束触发 IntegrityError，SAVEPOINT 回滚后重新
+    query 命中预置账户。不伪造 db.flush，证明正文内 insert 冲突的恢复路径（而非前置 flush 异常）。
     """
     from app.models import ComputeAccount
     from apps.compute.services import get_or_create_account
-    from sqlalchemy.exc import IntegrityError
 
-    # 预置对手账户（SAVEPOINT 回滚后的重新 query 必须命中它）
+    # 预置对手账户（唯一键 uk_compute_accounts_merchant 已落库）
     db.add(ComputeAccount(merchant_id="m_race", tenant_id="t1", balance_tokens=0))
     db.commit()
 
-    real_query = db.query  # monkeypatch 前捕获原绑定方法
+    real_query = db.query
     first_query_done = {"done": False}
 
     class _QueryProxy:
-        """首次 first() 返回 None（模拟并发"查无"），之后透传真实查询。"""
+        """首次 first() 返回 None（模拟并发"查无"），之后透传真实查询。
+        支持 filter/with_for_update 链（_write_transaction 也走此 proxy）。"""
 
         def __init__(self, real_q):
             self._real_q = real_q
 
         def filter(self, *args, **kwargs):
-            return self  # 简化：忽略 filter 链，first() 内自行真实查询
+            return self
+
+        def with_for_update(self, *args, **kwargs):
+            return self
 
         def first(self):
             if not first_query_done["done"]:
@@ -541,18 +545,135 @@ def test_get_or_create_account_recovers_from_concurrent_insert(db, monkeypatch):
 
     monkeypatch.setattr(db, "query", fake_query)
 
-    # flush 第一次抛 IntegrityError（模拟对手已提交唯一键冲突）
-    real_flush = db.flush
-    flush_calls = {"n": 0}
-
-    def fake_flush(*args, **kwargs):
-        flush_calls["n"] += 1
-        if flush_calls["n"] == 1:
-            raise IntegrityError("simulated", params=None, orig=Exception("UNIQUE"))
-        return real_flush(*args, **kwargs)
-
-    monkeypatch.setattr(db, "flush", fake_flush)
-
     account = get_or_create_account(db, "m_race", tenant_id="t1")
     assert account is not None
     assert account.merchant_id == "m_race"
+
+
+# ============ Phase 10 §0.2 FIX2：BIGINT 下界 / 空白商户 / 竞争写流水 ============
+
+
+def test_balance_range_accepts_bigint_min_and_rejects_beyond():
+    """FIX2：余额区间用显式 [BIGINT_MIN, BIGINT_MAX]，合法下界 -2^63 不被拒。
+
+    abs(MIN) 溢出经典坑：abs(-2^63)=2^63 > 2^63-1=MAX，旧 abs 判断会拒绝合法下界。
+    """
+    from apps.compute.services import (
+        POSTGRES_BIGINT_MAX,
+        POSTGRES_BIGINT_MIN,
+        _balance_within_bigint_range,
+    )
+
+    assert _balance_within_bigint_range(POSTGRES_BIGINT_MIN) is True  # 合法下界
+    assert _balance_within_bigint_range(POSTGRES_BIGINT_MAX) is True  # 合法上界
+    assert _balance_within_bigint_range(POSTGRES_BIGINT_MIN - 1) is False  # 越下界
+    assert _balance_within_bigint_range(POSTGRES_BIGINT_MAX + 1) is False  # 越上界
+    assert _balance_within_bigint_range(0) is True
+
+
+def test_record_usage_accepts_balance_at_bigint_min(db):
+    """FIX2：新余额正好达到 BIGINT_MIN（-2^63）合法通过，不抛 COMPUTE_BALANCE_OUT_OF_RANGE。
+
+    预置余额 -1，消耗 POSTGRES_BIGINT_MAX（markup=0 → billed=MAX）→ new_balance = -1-MAX = MIN。
+    """
+    from apps.compute.services import POSTGRES_BIGINT_MAX, POSTGRES_BIGINT_MIN
+
+    _seed_ratio(db)  # markup=0
+    account = compute_service.get_or_create_account(db, "m_min")
+    account.balance_tokens = -1
+    db.commit()
+    result = compute_service.record_usage(
+        db, "m_min", POSTGRES_BIGINT_MAX, capability_key="douyin-cs", model="gpt"
+    )
+    assert result.balance_tokens == POSTGRES_BIGINT_MIN
+
+
+def test_record_usage_rejects_blank_merchant_id(db):
+    """FIX2：空白 merchant_id（" "）不得建账户、不得写流水。"""
+    from app.models import ComputeAccount
+
+    _seed_ratio(db)
+    with pytest.raises(ValueError, match="MERCHANT_ID_INVALID"):
+        compute_service.record_usage(
+            db, " ", 100, capability_key="douyin-cs", model="gpt"
+        )
+    # 无账户、无流水
+    assert (
+        db.query(ComputeAccount).filter(ComputeAccount.merchant_id == " ").count() == 0
+    )
+    assert compute_service.list_transactions(db, " ")["total"] == 0
+
+
+def test_record_usage_writes_flow_after_account_race_recovery(db, monkeypatch):
+    """FIX2：建账竞争恢复后 record_usage 仍写 consume 流水（失败请求不漏记）。
+
+    预置对手账户（balance=1000）；首次 query miss 触发 insert 唯一键冲突 → 恢复预置账户；
+    _write_transaction 在恢复的账户上扣减并写流水，顶层一次 commit。
+    """
+    from app.models import ComputeAccount
+
+    _seed_ratio(db)
+    db.add(ComputeAccount(merchant_id="m_race2", tenant_id="t1", balance_tokens=1000))
+    db.commit()
+
+    real_query = db.query
+    first_query_done = {"done": False}
+
+    class _QueryProxy:
+        def __init__(self, real_q):
+            self._real_q = real_q
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def with_for_update(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            if not first_query_done["done"]:
+                first_query_done["done"] = True
+                return None
+            return (
+                real_query(ComputeAccount)
+                .filter(ComputeAccount.merchant_id == "m_race2")
+                .first()
+            )
+
+    def fake_query(entity, *args, **kwargs):
+        if entity is ComputeAccount:
+            return _QueryProxy(real_query(entity))
+        return real_query(entity, *args, **kwargs)
+
+    monkeypatch.setattr(db, "query", fake_query)
+
+    account = compute_service.record_usage(
+        db, "m_race2", 100, capability_key="douyin-cs", model="gpt"
+    )
+    assert account.balance_tokens == 900  # 1000 - 100
+    flows = compute_service.list_transactions(db, "m_race2", transaction_type="consume")
+    assert flows["total"] == 1
+    assert flows["items"][0].delta_tokens == -100
+
+
+def test_compute_usage_request_rejects_blank_merchant_id():
+    """FIX2：9000 内部 usage DTO 对空白 merchant_id strip 后非空校验，拒绝伪造计费归属。"""
+    from pydantic import ValidationError
+
+    from app.schemas import ComputeUsageRequest
+
+    for bad in (" ", "  \t "):
+        with pytest.raises(ValidationError):
+            ComputeUsageRequest(
+                merchant_id=bad,
+                tokens=100,
+                capability_key="douyin-cs",
+                model="gpt",
+            )
+    # 正常值 strip 后保留（不拒绝合法空白前后缀）
+    ok = ComputeUsageRequest(
+        merchant_id="  m_valid  ",
+        tokens=100,
+        capability_key="douyin-cs",
+        model="gpt",
+    )
+    assert ok.merchant_id == "m_valid"

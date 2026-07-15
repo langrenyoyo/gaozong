@@ -39,8 +39,19 @@ BASIS_POINT_DENOMINATOR = 10_000
 # PostgreSQL 列域上界：markup_basis_points 为 INTEGER，计费量按 BIGINT 语义校验天花板
 POSTGRES_INTEGER_MAX = 2_147_483_647
 POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
+# PostgreSQL bigint 下界：abs(-2^63)=2^63 > 2^63-1=MAX，abs 判断会拒绝合法下界，须显式区间
+POSTGRES_BIGINT_MIN = -9_223_372_036_854_775_808
 
 _logger = logging.getLogger(__name__)
+
+
+def _balance_within_bigint_range(value: int) -> bool:
+    """显式 [BIGINT_MIN, BIGINT_MAX] 区间判断（避免 abs(MIN) 溢出拒绝合法下界）。
+
+    PostgreSQL bigint 范围 [-2^63, 2^63-1]；abs(-2^63)=2^63 > MAX，
+    旧 abs 判断会错误拒绝合法下界 -2^63。升级路径：列域改 numeric 则放开此区间。
+    """
+    return POSTGRES_BIGINT_MIN <= value <= POSTGRES_BIGINT_MAX
 
 
 def calculate_billed_tokens(actual_tokens: int, markup_basis_points: int) -> int:
@@ -145,7 +156,7 @@ def _write_transaction(
     if locked is None:
         raise ValueError("COMPUTE_ACCOUNT_MISSING")
     new_balance = locked.balance_tokens + delta_tokens
-    if abs(new_balance) > POSTGRES_BIGINT_MAX:
+    if not _balance_within_bigint_range(new_balance):
         raise ValueError("COMPUTE_BALANCE_OUT_OF_RANGE")
     if new_balance < 0:
         _logger.warning(
@@ -393,6 +404,9 @@ def record_usage(
     _write_transaction 均 autocommit=False），避免"账户已建、流水未写"半成品；并发首次
     建账由 get_or_create_account 的 SAVEPOINT + IntegrityError 恢复兜底，失败方不漏记。
     """
+    merchant_id = str(merchant_id or "").strip()
+    if not merchant_id:
+        raise ValueError("MERCHANT_ID_INVALID")
     if capability_key not in COMPUTE_CAPABILITY_KEYS:
         raise ValueError("INVALID_CAPABILITY")
     model_name = str(model or "").strip()

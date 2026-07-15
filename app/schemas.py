@@ -1237,7 +1237,7 @@ class ComputeUsageRequest(BaseModel):
     Phase 10 §0.2：tokens 语义为实际字符量；capability_key/model 必填，source 受控。
     """
 
-    merchant_id: str = Field(..., description="商户 ID")
+    merchant_id: str = Field(..., max_length=128, description="商户 ID")
     tokens: int = Field(..., gt=0, description="本次实际字符量（按能力上浮后扣费）")
     capability_key: Literal[
         "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge"
@@ -1247,6 +1247,15 @@ class ComputeUsageRequest(BaseModel):
     agent_id: Optional[str] = Field(None, description="智能体 ID")
     conversation_id: Optional[int] = Field(None, description="会话 ID")
     remark: Optional[str] = None
+
+    @field_validator("merchant_id")
+    @classmethod
+    def _strip_merchant_id(cls, v: str) -> str:
+        """去空白后非空校验，拒绝空白商户伪造计费归属（FIX2 §0.2）。"""
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("merchant_id 不能为空白")
+        return stripped
 
     model_config = {"extra": "forbid", "protected_namespaces": ()}
 

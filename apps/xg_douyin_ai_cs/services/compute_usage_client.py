@@ -117,6 +117,8 @@ class ComputeUsageClient:
             )
             return False
 
+        # FIX2 §0.2：空白 merchant_id（" "）strip 后为空，拒绝上报（零网络尝试），不伪造计费归属
+        merchant_id = str(merchant_id or "").strip()
         if tokens <= 0 or not merchant_id or not capability_key or not model:
             _logger.info(
                 "compute_usage stage=skipped reason=invalid_payload "

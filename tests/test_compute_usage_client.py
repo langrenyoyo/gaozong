@@ -298,3 +298,30 @@ def test_report_usage_normalizes_non_numeric_conversation_id_to_none(monkeypatch
         conversation_id=True,
     ) is True
     assert seen["body"]["conversation_id"] is None
+
+
+def test_report_usage_skips_blank_merchant_id_with_zero_network(monkeypatch):
+    """FIX2：空白 merchant_id（" "）strip 后为空，不得发起上报（零网络尝试），返回 False。
+
+    conftest 已装网络哨兵；本测试再装 fail_urlopen 双保险，确保空白 merchant 在进入
+    urlopen 前就被 strip 后非空校验拦截（要求是零网络尝试，不只是零成功请求）。
+    """
+    calls = []
+
+    def fail_urlopen(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("空白 merchant_id 不得发起上报请求")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.compute_usage_client.urllib_request.urlopen",
+        fail_urlopen,
+    )
+
+    client = ComputeUsageClient(config=_enabled_config())
+    assert client.report_usage(
+        merchant_id=" ", tokens=100, capability_key="douyin-cs", model="mock-chat"
+    ) is False
+    assert client.report_usage(
+        merchant_id="  \t ", tokens=100, capability_key="douyin-cs", model="mock-chat"
+    ) is False
+    assert calls == []  # 零网络尝试（不只是零成功）
