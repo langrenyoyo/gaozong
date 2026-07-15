@@ -25,6 +25,7 @@ import {
   fetchDouyinLiveCheckAuthUrl,
   fetchDouyinLiveCheckStatus,
 } from "../api";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import type {
   DouyinLiveCheckAuthUrlData,
@@ -762,6 +763,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadedImageData | null>(null);
+  // ponytail: 客户画像在窄桌面（<1500px）折叠为右侧抽屉，宽桌面（>=1500px）保持四栏内联；布局切换走 CSS，仅 open 状态走 JS
+  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
   const [uploadImageIdCopied, setUploadImageIdCopied] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
@@ -2030,6 +2033,146 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }
 
+  // ponytail: 客户画像 body 提取复用——宽桌面内联第四栏与窄桌面 Sheet 抽屉共用同一份内容，消除重复 DOM
+  const profileAsideBody = selectedConversation ? (
+    <div className="min-h-0 flex-1 overflow-auto p-4">
+      {loadingProfile ? (
+        <div className="mb-3 inline-flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          <LoaderIcon size={14} className="animate-spin" />
+          正在加载客户画像...
+        </div>
+      ) : null}
+      {profileError ? (
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+          <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
+          <span>暂无客户画像，已保留会话基础信息。</span>
+        </div>
+      ) : null}
+
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center gap-3">
+          {profileAvatar ? (
+            <img
+              src={profileAvatar}
+              alt={profileNickname}
+              className="h-10 w-10 rounded-md object-cover"
+            />
+          ) : (
+            <span className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-400 ring-1 ring-slate-200">
+              <UserRoundIcon size={18} />
+            </span>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-[#172033]">{profileNickname}</div>
+            <div className="mt-1 truncate font-mono text-[11px] text-slate-500">
+              {compactOpenId(profileOpenId)}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 inline-flex rounded bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+          {onlineStatusText(profile?.online_status)}
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3 text-xs">
+        <div>
+          <div className="font-semibold text-slate-500">基础信息</div>
+          <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">来源渠道</span>
+              <span className="text-right">{profileFieldText(profile?.source_channel)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">意向车型</span>
+              <span className="text-right">{profileFieldText(profile?.intent_car)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">年份</span>
+              <span className="text-right">{profileFieldText(profile?.car_year)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">预算</span>
+              <span className="text-right">{profileFieldText(profile?.budget)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">城市</span>
+              <span className="text-right">{profileFieldText(profile?.city)}</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-slate-500">当前标签</div>
+          <div className="mt-1 flex flex-wrap gap-1.5 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+            {profileTags.length ? (
+              profileTags.map((tag) => (
+                <span key={tag} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                  {tag}
+                </span>
+              ))
+            ) : (
+              <span className="text-slate-500">暂无标签</span>
+            )}
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-slate-500">线索评分</div>
+          <div className="mt-1 rounded-md bg-white px-3 py-3 text-slate-800 ring-1 ring-slate-200">
+            {profileLeadScore === null ? (
+              <div className="text-slate-500">暂无评分</div>
+            ) : (
+              <>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-semibold">{profileLeadScore}%</span>
+                  <span className="text-[11px] text-slate-500">0-100</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-blue-600"
+                    style={{ width: `${profileLeadScore}%` }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-slate-500">线索信息</div>
+          <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">线索 ID</span>
+              <span className="text-right">{profileFieldText(profile?.lead?.id)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">状态</span>
+              <span className="text-right">{statusText(profile?.lead?.status || selectedConversation.lead_status)}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">联系方式</span>
+              <span className="text-right">{profileFieldText(profile?.lead?.customer_contact)}</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-slate-500">溯源信息</div>
+          <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
+            {profileTraceItems.length ? (
+              profileTraceItems.map(([label, value]) => (
+                <div key={label} className="flex justify-between gap-3">
+                  <span className="shrink-0 text-slate-500">{label}</span>
+                  <span className="min-w-0 break-all text-right font-mono text-[11px]">{value}</span>
+                </div>
+              ))
+            ) : (
+              <span className="text-slate-500">暂无溯源信息</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : (
+    <EmptyState text="暂无客户画像" />
+  );
+
   return (
     <section className="flex h-full min-w-0 flex-col overflow-hidden bg-[#f3f6fa]">
       <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
@@ -2044,14 +2187,24 @@ export default function DouyinAiCsWorkbenchPage() {
             </p>
           </div>
         </div>
-        <div className="max-w-[420px] rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold leading-5 text-blue-700">
-          {chatModeTitle(effectiveChatAssistMode, activeBindingReady)}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setProfileDrawerOpen(true)}
+            className="hidden max-[1499px]:inline-flex items-center gap-1.5 rounded-md border border-[#dfe5ee] bg-white px-3 py-2 text-xs font-semibold text-[#1a1f2e] hover:bg-[#f3f6fa]"
+          >
+            <UserRoundIcon size={15} />
+            客户画像
+          </button>
+          <div className="max-w-[420px] rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold leading-5 text-blue-700">
+            {chatModeTitle(effectiveChatAssistMode, activeBindingReady)}
+          </div>
         </div>
       </header>
 
       <ErrorBanner message={error} />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_320px_minmax(460px,1fr)_260px] overflow-hidden p-4 pt-3">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(200px,260px)_minmax(260px,320px)_minmax(320px,1fr)] overflow-hidden p-4 pt-3 min-[1500px]:grid-cols-[260px_320px_minmax(420px,1fr)_260px]">
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-l-lg border border-r-0 border-[#dfe5ee] bg-white">
           <div className="flex h-14 items-center justify-between border-b border-[#edf1f6] px-4">
             <div>
@@ -2434,7 +2587,8 @@ export default function DouyinAiCsWorkbenchPage() {
             </div>
 
             <div className="min-h-0 overflow-auto border-t border-[#edf1f6] bg-white p-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
+              {/* ponytail: 窄桌面（<1500px，第三列宽度受限）发送区标题与附件操作上下堆叠，避免逐字换行；宽桌面恢复左右布局 */}
+              <div className="mb-3 flex flex-col items-start gap-3 min-[1500px]:flex-row min-[1500px]:items-center min-[1500px]:justify-between">
                 <div className="flex items-center gap-2">
                   <span className="grid h-8 w-8 place-items-center rounded-md bg-blue-50 text-blue-600">
                     <BotIcon size={16} />
@@ -2625,7 +2779,8 @@ export default function DouyinAiCsWorkbenchPage() {
           </div>
         </section>
 
-        <aside className="flex min-h-0 flex-col overflow-hidden rounded-r-lg border border-[#dfe5ee] bg-white">
+        {/* 宽桌面（>=1500px）：客户画像内联第四栏 */}
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-r-lg border border-[#dfe5ee] bg-white min-[1500px]:flex max-[1499px]:hidden">
           <div className="flex h-14 items-center gap-2 border-b border-[#edf1f6] px-4">
             <span className="grid h-8 w-8 place-items-center rounded-md bg-blue-50 text-blue-600">
               <UserRoundIcon size={16} />
@@ -2635,146 +2790,25 @@ export default function DouyinAiCsWorkbenchPage() {
               <div className="text-[11px] text-slate-500">会话辅助信息</div>
             </div>
           </div>
-          {selectedConversation ? (
-            <div className="min-h-0 flex-1 overflow-auto p-4">
-              {loadingProfile ? (
-                <div className="mb-3 inline-flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                  <LoaderIcon size={14} className="animate-spin" />
-                  正在加载客户画像...
-                </div>
-              ) : null}
-              {profileError ? (
-                <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                  <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
-                  <span>暂无客户画像，已保留会话基础信息。</span>
-                </div>
-              ) : null}
-
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center gap-3">
-                  {profileAvatar ? (
-                    <img
-                      src={profileAvatar}
-                      alt={profileNickname}
-                      className="h-10 w-10 rounded-md object-cover"
-                    />
-                  ) : (
-                    <span className="grid h-10 w-10 place-items-center rounded-md bg-white text-slate-400 ring-1 ring-slate-200">
-                      <UserRoundIcon size={18} />
-                    </span>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-bold text-[#172033]">{profileNickname}</div>
-                    <div className="mt-1 truncate font-mono text-[11px] text-slate-500">
-                      {compactOpenId(profileOpenId)}
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-3 inline-flex rounded bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
-                  {onlineStatusText(profile?.online_status)}
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-3 text-xs">
-                <div>
-                  <div className="font-semibold text-slate-500">基础信息</div>
-                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">来源渠道</span>
-                      <span className="text-right">{profileFieldText(profile?.source_channel)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">意向车型</span>
-                      <span className="text-right">{profileFieldText(profile?.intent_car)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">年份</span>
-                      <span className="text-right">{profileFieldText(profile?.car_year)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">预算</span>
-                      <span className="text-right">{profileFieldText(profile?.budget)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">城市</span>
-                      <span className="text-right">{profileFieldText(profile?.city)}</span>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-500">当前标签</div>
-                  <div className="mt-1 flex flex-wrap gap-1.5 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {profileTags.length ? (
-                      profileTags.map((tag) => (
-                        <span key={tag} className="rounded bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
-                          {tag}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-slate-500">暂无标签</span>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-500">线索评分</div>
-                  <div className="mt-1 rounded-md bg-white px-3 py-3 text-slate-800 ring-1 ring-slate-200">
-                    {profileLeadScore === null ? (
-                      <div className="text-slate-500">暂无评分</div>
-                    ) : (
-                      <>
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="font-semibold">{profileLeadScore}%</span>
-                          <span className="text-[11px] text-slate-500">0-100</span>
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-blue-600"
-                            style={{ width: `${profileLeadScore}%` }}
-                          />
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-500">线索信息</div>
-                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">线索 ID</span>
-                      <span className="text-right">{profileFieldText(profile?.lead?.id)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">状态</span>
-                      <span className="text-right">{statusText(profile?.lead?.status || selectedConversation.lead_status)}</span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">联系方式</span>
-                      <span className="text-right">{profileFieldText(profile?.lead?.customer_contact)}</span>
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <div className="font-semibold text-slate-500">溯源信息</div>
-                  <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
-                    {profileTraceItems.length ? (
-                      profileTraceItems.map(([label, value]) => (
-                        <div key={label} className="flex justify-between gap-3">
-                          <span className="shrink-0 text-slate-500">{label}</span>
-                          <span className="min-w-0 break-all text-right font-mono text-[11px]">{value}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <span className="text-slate-500">暂无溯源信息</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <EmptyState text="暂无客户画像" />
-          )}
+          {profileAsideBody}
         </aside>
       </div>
+
+      {/* 窄桌面（<1500px）：复用 Sheet 抽屉，自带 Esc 关闭、焦点约束、遮罩与对话框语义 */}
+      <Sheet open={profileDrawerOpen} onOpenChange={setProfileDrawerOpen}>
+        <SheetContent side="right" className="w-[300px] max-w-[300px] gap-0 p-0 sm:max-w-[300px]">
+          <SheetHeader className="flex h-14 flex-row items-center gap-2 border-b border-[#edf1f6] px-4">
+            <span className="grid h-8 w-8 place-items-center rounded-md bg-blue-50 text-blue-600">
+              <UserRoundIcon size={16} />
+            </span>
+            <div className="flex flex-col gap-0">
+              <SheetTitle className="text-sm font-bold text-[#172033]">客户画像</SheetTitle>
+              <SheetDescription className="text-[11px] text-slate-500">会话辅助信息</SheetDescription>
+            </div>
+          </SheetHeader>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{profileAsideBody}</div>
+        </SheetContent>
+      </Sheet>
 
       {agentConfigAccount ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">

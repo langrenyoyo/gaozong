@@ -649,7 +649,10 @@ export default function Index({
       ? initialActiveNav
       : "merchant-agent",
   );
-  const [isNavExpanded, setIsNavExpanded] = useState(true);
+  // ponytail: 窄桌面默认折叠导航，避免 1024/1180 视口导航挤压内容；用户仍可手动展开（SideNav 折叠按钮）
+  const [isNavExpanded, setIsNavExpanded] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 1280 : true,
+  );
   const [selectedContactId, setSelectedContactId] = useState("");
   const [douyinAccount, setDouyinAccount] = useState<DouyinAccount | null>(null);
   const [showDouyinAuth, setShowDouyinAuth] = useState(false);
@@ -759,10 +762,10 @@ export default function Index({
       <div
         className={`grid h-full min-h-0 overflow-hidden ${
           isAdminSectionActive
-            ? "grid-cols-[var(--nav-width)_minmax(900px,1fr)]"
+            ? "grid-cols-[var(--nav-width)_minmax(0,1fr)]"
             : isLeadConversationNav
             ? "grid-cols-[var(--nav-width)_minmax(270px,320px)_minmax(520px,1fr)_240px] max-[1180px]:grid-cols-[var(--nav-width)_minmax(260px,300px)_minmax(460px,1fr)]"
-            : "grid-cols-[var(--nav-width)_minmax(900px,1fr)]"
+            : "grid-cols-[var(--nav-width)_minmax(0,1fr)]"
         }`}
         style={{ "--nav-width": navColumn } as React.CSSProperties}
       >

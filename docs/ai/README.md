@@ -43,6 +43,7 @@ docs/ai/04_OUTPUT_RULES.md
 | `11_deployment_ops/` | Docker、本地/宝塔部署、OpenAPI、live-check 安全清单 |
 | `12_legacy_research/` | 历史代码计划、旧探索和低频参考资料 |
 | `13_ai_edit/` | AI剪辑、小高素材库、冻结设计与外部能力迁入评估 |
+| `06_ui_audit/` | UI/UX 基准审查、响应式和视觉回归记录 |
 | `archive/` | 冻结历史快照（非当前事实，仅追溯用） |
 
 ## 当前常用入口
