@@ -9,7 +9,7 @@
 | 目标项目 | `E:\work\project\auto_wechat` |
 | 目标业务域 | AI剪辑、小高素材库 |
 | 评估方式 | 只读源码审计、离线单元测试、随包 FFmpeg 能力检查、合成视频运行验证 |
-| 文档状态 | 迁入方案输入，不代表相关能力已经迁入或上线 |
+| 文档状态 | 迁入能力证据基线；当前产品和架构边界见 `2026-07-15_Phase12_AI剪辑本地MVP设计.md` |
 
 ## 2. 结论摘要
 
@@ -70,7 +70,7 @@ BrollStudio = 空镜素材预处理 + 增稳 + 多模态标注 + 可用区间管
 当前尚未发现以下正式实现：
 
 - `app/routers/ai_edit.py`。
-- `apps/ai_edit/` 独立服务或 Worker。
+- 19000 AI剪辑协调层和随包 `ai_edit_worker.exe`。
 - AI剪辑素材资产、标签、可用区间的正式数据模型。
 - AI剪辑任务领取、运行、取消和失败回写服务。
 - AI剪辑真实前端接口。
@@ -80,7 +80,7 @@ BrollStudio = 空镜素材预处理 + 增稳 + 多模态标注 + 可用区间管
 - `frontend/src/pages/AiVideoEditor.tsx:23-25`。
 - `frontend/src/pages/MaterialLibrary.tsx:23-25`。
 
-项目边界要求 AI剪辑具备独立启动、部署、配置、健康检查、日志和异常处理能力，见 `docs/ai/05_PROJECT_CONTEXT.md:277-281`。入口权限继续使用 `auto_wechat:ai_edit`。
+已批准边界要求 AI剪辑由小高AI微信助手监管随包 Python 3.11 子进程，具备独立启动、配置、健康检查、日志、取消和异常处理能力。入口权限继续使用 `auto_wechat:ai_edit`。
 
 ## 5. 复用矩阵
 
@@ -334,26 +334,24 @@ completed / failed / cancelled
 ### 10.2 推荐调用链
 
 ```text
-React 上传素材
-  -> 9000 鉴权并从可信上下文确定 merchant_id
-  -> 创建 AiEditJob 和输入 artifact
-  -> 独立 AI剪辑 Worker 原子领取任务
-  -> 按 storage_key 下载到受控临时目录
-  -> 计算 SHA-256、ffprobe、执行自动增稳
-  -> 上传增稳产物并保存新 storage_key
-  -> 回写任务状态和安全错误摘要
+React（与小高AI微信助手同机）导入素材
+  -> 9000 鉴权并创建可信素材 ID
+  -> 19000 复制到本地受管目录
+  -> 随包 ai_edit_worker.exe 计算 SHA-256、ffprobe、执行自动增稳
+  -> 19000 回写素材 metadata、缩略图、状态和安全错误摘要
   -> React 查询状态并预览对比
+  -> 用户主动选择后才上传云端产物
 ```
 
-9000 不应在同步 HTTP 请求内执行长时间视频转码。
+9000 和 19000 主进程都不应在同步 HTTP 请求内执行长时间视频转码。
 
 ### 10.3 素材库 metadata
 
 当前 `AiEditJobArtifact` 只能表达任务产物，不能完整替代长期素材库。正式数据模型至少需要表达：
 
 - 可信 `merchant_id`。
-- 原始素材 `storage_key`。
-- 增稳素材 `storage_key`。
+- 原始素材本地设备 ID/受管引用，或用户主动上传后的 `storage_key`。
+- 增稳素材本地设备 ID/受管引用，或用户主动上传后的 `storage_key`。
 - 源内容 SHA-256。
 - 素材处理状态。
 - 增稳模式、参数和算法版本。
@@ -392,7 +390,7 @@ BrollStudio/_internal/ffmpeg/ffprobe.exe
 - 包含 `vidstabtransform`。
 - 包含 `libx264`。
 
-当前 `auto_wechat` 的本地 `requirements.txt` 已有 OpenCV，但 `requirements-docker.txt` 刻意排除了 OpenCV 等重依赖，`Dockerfile.backend.dev` 也没有安装 FFmpeg。因此正式迁入必须使用独立 Worker 镜像或单独运行环境，不能假设当前 9000/9100 容器已经具备增稳条件。
+当前小高AI微信助手构建环境是 Python 3.10.20，而 `auto_edit` 要求 Python 3.11；9000/9100 容器也不具备完整媒体依赖。因此正式迁入使用随安装包交付的 Python 3.11 `ai_edit_worker.exe`、固定 FFmpeg/ffprobe 和字体，不把重依赖塞进 9000、9100 或 19000 主进程。
 
 ## 12. 风险清单
 
@@ -520,4 +518,4 @@ vidstabtransform
 不迁入：SQLite 共享库、PySide6 桌面端、绝对路径协议、固定豆包客户端
 ```
 
-第一阶段的目标应是形成一个可独立部署、可取消、幂等、商户隔离、只使用 `storage_key` 的 AI剪辑素材增稳 Worker，而不是一次性搬入整个 BrollStudio。
+第一阶段的目标应是形成由 19000 监管、可取消、幂等、商户隔离、本地文件默认真源且支持主动云端上传的随包增稳 Worker，而不是一次性搬入整个 BrollStudio。

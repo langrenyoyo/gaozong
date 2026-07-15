@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `auto_wechat` 中完成小高AI系统一期扩展：抖音AI客服自动回复闭环、线索与留资口径、微信助手真实派单与日报、违禁词、回访提示词、AI回复记录、算力配置、一键过审、AI剪辑迁入预留。
+**Goal:** 在 `auto_wechat` 中完成小高AI系统一期扩展：抖音AI客服自动回复闭环、线索与留资口径、微信助手真实派单与日报、违禁词、回访提示词、AI回复记录、算力配置，以及“小高素材库 + AI 小高剪辑”本地 MVP。
 
-**Architecture:** `auto_wechat` 9000 继续作为控制面，负责登录态消费、权限、商户隔离、任务持久化、审计和前端 API；9100 `apps/xg_douyin_ai_cs` 保持抖音AI客服/RAG/LLM 独立服务；19000 Local Agent 继续只负责本机微信 UI 自动化。`douyinAPI` 和 `auto_edit` 只作为迁移来源，不作为长期生产依赖；`auto_edit` 后续代码迁入本仓库后仍以独立服务或 Worker 边界运行。
+**Architecture:** `auto_wechat` 9000 继续作为控制面，负责登录态消费、权限、商户隔离、任务持久化、审计和前端 API；9100 `apps/xg_douyin_ai_cs` 保持抖音AI客服/RAG/LLM 独立服务；19000 Local Agent 除本机微信 UI 自动化外，新增本地素材与剪辑任务协调，但重型媒体处理固定由随包 Python 3.11 `ai_edit_worker.exe` 子进程执行。`douyinAPI`、`auto_edit` 和 BrollStudio 只作为迁移来源，不作为长期生产依赖。
 
 **Tech Stack:** FastAPI、SQLAlchemy、PostgreSQL 目标迁移、SQLite 开发兼容、React + TypeScript + Vite、Local Agent Windows UI Automation/OCR、Milvus/RAG、抖音 OpenAPI、Excel 导出。
 
@@ -24,8 +24,8 @@
 8. 违禁词：全局 3 类词库，每词映射安全词，AI 和人工消息统一替换，替换后继续发送。
 9. 回访提示词：全局 3 类模板，微信销售回复触发 LLM/关键字判断，再发抖音回访私信。
 10. AI 回复记录：展示 AI 实发内容 `DouyinPrivateMessageSend.content`，与 `AiReplyDecisionLog` 关联，支持超管标记有效。
-11. 一键过审：复制改造 `douyinAPI` 的巨量广告 OAuth 和拒审建议采纳能力，运行时不依赖 `douyinAPI`。
-12. AI 剪辑：`auto_edit` 由同事先完成，后续源码迁入 `auto_wechat` 仓库，迁入后仍保持独立模块边界。
+11. 一键过审：客户已取消（`CANCELLED_BY_CUSTOMER`）；保留历史代码和兼容字段，不继续实施。
+12. AI 剪辑：迁入 `auto_edit` 剪辑内核和 BrollStudio 自动增稳能力，交付“小高素材库 + AI 小高剪辑”本地 MVP；19000 监管随包剪辑子进程，素材默认本地保存。
 13. 自动发送放开：删除旧硬门禁，但保留违禁词、人工接管、限频、失败回写、幂等、紧急停止等运行保护。
 14. 上游边界：登录、商户管理、管理员账号、功能授权在 NewCarProject/used-car，不在 auto_wechat 重建。
 15. 前端旧口径清理：移除 `auto_send=false`、`sent=false`、假数据、假 CRUD、回复建议等旧文案。
@@ -39,6 +39,7 @@
 - 不绕过微信前台焦点、联系人校验、OCR/置信度保护、紧急停止。
 - 不让违禁词命中阻断发送；一期统一替换后继续发送。
 - 不做真实支付，充值订单保持 Mock。
+- 不让 AI剪辑直接发布抖音，不做远程设备控制、商户间素材共享或完整多轨编辑器。
 
 ---
 
@@ -73,8 +74,12 @@
 | `ad_review_oauth_accounts` | 巨量广告 OAuth 授权账号，与抖音企业号授权隔离 |
 | `ad_review_suggestions` | 拒审素材修复建议快照 |
 | `ad_review_adopt_tasks` | 异步采纳任务和轮询结果 |
-| `ai_edit_jobs` | AI 剪辑迁入后任务壳，当前可只建迁移草案，不提前接执行 |
-| `ai_edit_job_artifacts` | AI 剪辑产物映射，禁止暴露内部绝对路径 |
+| `ai_edit_materials` | 商户私有/平台公共素材 metadata、本地/云端状态和回收站 |
+| `ai_edit_material_analyses` | 版本化 ASR、分镜、标签、稳定性和可用区间 |
+| `ai_edit_templates` | 超管维护的平台剪辑模板和 Prompt 版本 |
+| `ai_edit_job_materials` | 任务素材角色、顺序、固定哈希和使用区间 |
+| `ai_edit_jobs` | AI 剪辑任务、阶段、进度、设备、attempt、取消和恢复 |
+| `ai_edit_job_artifacts` | 本地/云端产物映射和媒体完整性，禁止暴露内部绝对路径 |
 
 ### 迁移风险
 
@@ -102,17 +107,17 @@
 - Test: `tests/test_xiaogao_phase1_context_contract.py`
 
 - [ ] **Step 1: 写上下文合同测试**
-  - 断言需求理解文档包含 AI 剪辑、一键过审、5 个报表规则字段、`all_extracted_contacts` 留资口径、自动发送放开。
+  - 断言需求理解文档包含 AI 剪辑、5 个报表规则字段、`all_extracted_contacts` 留资口径、自动发送放开和一键过审取消口径。
   - 断言文档不再包含“AI剪辑不属于一期”“sent 必须为 false”“系统最终保持 auto_send=false”。
   - Run: `pytest tests/test_xiaogao_phase1_context_contract.py -v`
   - Expected: FAIL，缺少新测试或旧文档口径未改。
 
 - [ ] **Step 2: 更新项目上下文**
   - 把旧 4 个规则字段改为 5 个确认字段。
-  - 将 AI 剪辑改为一期范围内的迁入预留。
-  - 将一键过审改为一期范围内的复制改造项。
+  - 将 AI 剪辑改为一期范围内的“小高素材库 + AI 小高剪辑”本地 MVP。
+  - 将一键过审改为 `CANCELLED_BY_CUSTOMER`，不恢复执行。
   - 明确 NewCarProject 上游边界。
-  - 明确 `auto_wechat:ai_edit` 覆盖 AI剪辑和一键过审。
+  - 明确 `auto_wechat:ai_edit` 只覆盖小高素材库和 AI 小高剪辑入口。
 
 - [ ] **Step 3: 跑合同测试**
   - Run: `pytest tests/test_xiaogao_phase1_context_contract.py -v`
@@ -550,77 +555,46 @@
 
 ---
 
-### Phase 11: 一键过审
+### Phase 11: 一键过审（CANCELLED_BY_CUSTOMER）
 
-**目的:** 从 `douyinAPI` 复制改造巨量广告一键过审能力，纳入 `auto_wechat:ai_edit`。
+**状态:** 客户已于 2026-07-13 取消，不再是一期交付范围。
 
-**Files:**
-- Create: `app/services/ad_review_oauth_service.py`
-- Create: `app/services/ad_review_service.py`
-- Create: `app/routers/ad_review.py`
-- Create: `frontend/src/features/ai-edit/pages/AdReviewPage.tsx`
-- Modify: `frontend/src/features/capabilities.ts`
-- Modify: `frontend/src/features/routes.ts`
-- Test: `tests/test_ad_review_service.py`
-- Test: `tests/test_ad_review_api.py`
-
-- [ ] **Step 1: 写接口测试**
-  - OAuth 获取授权链接和回调记录按商户隔离。
-  - 拉取拒审建议默认最近 7 天、未采纳。
-  - 根据 `mid` 查询同主体账户建议。
-  - 创建异步采纳任务一次最多 50 条。
-  - 轮询采纳结果。
-
-- [ ] **Step 2: 复制并重组 douyinAPI 代码**
-  - 不复制单文件 `app.py` 的结构。
-  - 把 OAuth、签名、API client、任务服务拆开。
-  - 去掉全局最新 token，改为商户隔离授权记录。
-
-- [ ] **Step 3: 前端页面**
-  - 独立于抖音企业号管理。
-  - 使用 `auto_wechat:ai_edit` 权限。
-  - 展示建议列表、同主体查询、采纳任务、轮询结果。
-
-- [ ] **Step 4: 跑测试**
-  - Run: `pytest tests/test_ad_review_service.py tests/test_ad_review_api.py && cd frontend && npm run build`
-  - Expected: PASS。
-
-- [ ] **Step 5: 提交**
-  - Commit: `feat: 接入巨量广告一键过审`
+- 不恢复执行，不新增入口、权限码或生产验证任务。
+- 不删除历史代码、迁移、表和兼容字段。
+- 历史实现过程由 Git 提交和归档文档追溯，不在当前计划保留待执行清单。
 
 ---
 
-### Phase 12: AI剪辑迁入预留
+### Phase 12: 小高素材库与 AI 小高剪辑本地 MVP
 
-**目的:** 为 `auto_edit` 迁入仓库做边界准备，不提前绑定未交付实现。
+**目的:** 将 `auto_edit` 剪辑内核和 BrollStudio 自动增稳能力迁入本仓库，在安装小高AI微信助手的同一台 Windows 电脑完成真实可操作的本地剪辑闭环。
 
-**Files:**
-- Create: `apps/ai_edit/README.md`
-- Create: `app/routers/ai_edit.py`
-- Create: `frontend/src/features/ai-edit/routes.ts`
-- Modify: `frontend/src/pages/AiVideoEditor.tsx`
-- Test: `tests/test_ai_edit_boundary.py`
+**冻结设计:** `docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`
 
-- [ ] **Step 1: 写边界测试**
-  - `/ai-edit/*` 需要 `auto_wechat:ai_edit`。
-  - 未配置剪辑服务时返回明确 `not_configured`，不造假任务。
-  - 不允许前端传内部路径。
+- [ ] **Step 1: 数据、权限与迁移**
+  - 扩展现有 AI剪辑任务/产物壳，增加素材、分析、模板和任务素材关系。
+  - SQLite/PG 双轨迁移；所有 9000 接口校验 `auto_wechat:ai_edit` 和可信商户上下文。
 
-- [ ] **Step 2: 预留服务边界**
-  - 只放健康检查、任务壳、配置检查。
-  - 不调用外部 `E:\work\project\auto_edit` CLI。
-  - 文档写明迁入目录建议为 `apps/ai_edit`。
+- [ ] **Step 2: 19000 本地素材与进程监管**
+  - 本地受管素材、元数据/缩略图同步、7 天回收站和可配置资源门禁。
+  - 小高AI微信助手监管随包 Python 3.11 `ai_edit_worker.exe`，默认单任务排队，支持取消和重启恢复。
 
-- [ ] **Step 3: 前端预留页**
-  - 显示真实接入状态。
-  - 不加载假任务、假素材、假统计。
+- [ ] **Step 3: 迁入剪辑与增稳内核**
+  - 迁入纯逻辑、FunASR、分镜、候选、Vid.Stab、字幕、BGM 和 FFmpeg 双分辨率渲染。
+  - 不迁 PySide6、SQLite、本地 JSON 任务库、固定豆包客户端或外部 CLI 编排。
 
-- [ ] **Step 4: 跑测试**
-  - Run: `pytest tests/test_ai_edit_boundary.py && cd frontend && npm run build`
-  - Expected: PASS。
+- [ ] **Step 4: 9100 规划与算力**
+  - 只发送转写和结构化镜头摘要；严格校验剪辑计划，不上传原媒体。
+  - 仅 9100 规划与文案建议计入现有 `compute` 算力。
 
-- [ ] **Step 5: 提交**
-  - Commit: `chore: 预留AI剪辑迁入边界`
+- [ ] **Step 5: 前端真实闭环**
+  - 实现小高素材库、任务进度、720P 草稿轻量调整、1080P 成片、下载和主动云端上传。
+  - 不显示假任务、假素材、假统计，不直接发布抖音。
+
+- [ ] **Step 6: 本地/模拟验收**
+  - 自动化测试零真实外部网络；使用合成媒体覆盖媒体链路。
+  - 使用获授权真实汽车素材在普通 Windows CPU 电脑完成单任务闭环，9100 使用替身。
+  - 宝塔、生产数据库和真实付费模型统一留到 Phase 13 后验证。
 
 ---
 
@@ -647,7 +621,7 @@
 - [ ] **Step 2: 更新入口**
   - 商户默认进抖音AI客服。
   - 超管默认进 AI回复记录。
-  - AI剪辑和一键过审位于 `auto_wechat:ai_edit` 能力中心。
+  - 小高素材库和 AI 小高剪辑位于 `auto_wechat:ai_edit` 能力中心；不展示已取消的一键过审入口。
 
 - [ ] **Step 3: 工具栏补齐**
   - 表情至少支持插入文本表情。
@@ -671,7 +645,7 @@
 | 微信派单 | `pytest tests/test_p0_5a_wechat_tasks.py tests/test_lead_notifications.py -v` |
 | 数据迁移 | `pytest tests/test_xiaogao_phase1_schema.py tests/test_db_migration_0001.py -v` |
 | 算力 | `pytest tests/test_compute_service.py tests/test_compute_usage_client.py -v` |
-| 一键过审 | `pytest tests/test_ad_review_service.py tests/test_ad_review_api.py -v` |
+| AI剪辑 | 按 Phase 12 逐任务执行包运行素材、任务、19000、Worker、媒体和前端专项测试 |
 | 前端 | `cd frontend && npm run build` |
 | UI 合同 | `node frontend/scripts/check-xiaogao-phase1-ui-contract.mjs` |
 | 全量回归 | `pytest` |
@@ -686,8 +660,8 @@
 4. 微信派单按销售配置逐步开启，失败时通过紧急停止和配置开关回退。
 5. 违禁词替换服务出现误替换时，可禁用对应词或词库；发送链路继续可人工接管。
 6. 日报发送失败不影响数据持久化，可从 `daily_report_jobs` 人工重新生成或重发。
-7. 一键过审失败只影响 `ad_review_adopt_tasks` 状态，不回滚已成功采纳的巨量广告上游任务。
-8. AI剪辑预留阶段不执行真实剪辑，因此回滚仅删除入口和任务壳。
+7. 一键过审已取消，不进入新的发布或验证流程。
+8. AI剪辑按控制面、19000 协调层和随包 Worker 分层关闭；回滚不得删除原素材或已确认成片。
 
 ---
 
@@ -701,8 +675,8 @@
 6. 销售反馈三类模板可解析并持久化。
 7. 每日 5 类报表可由 SQL 今日数据生成 Excel，并按配置发送。
 8. 小高算力套餐、Mock 充值、上浮比例、模型埋点可用。
-9. 一键过审可完成 OAuth、建议拉取、同主体查询、异步采纳、结果轮询。
-10. AI剪辑入口不造假，等待 `auto_edit` 迁入后接真实任务。
+9. 一键过审保持 `CANCELLED_BY_CUSTOMER`，不作为一期验收项。
+10. 小高素材库和 AI 小高剪辑可在同机完成本地导入、分析、可选增稳、模拟规划、720P 草稿、轻量调整、1080P 成片和下载。
 11. 商户管理、管理员账号管理不在 auto_wechat 出现假 CRUD。
 12. 前端没有旧门禁文案和“回复建议不会发送”口径。
 
@@ -797,8 +771,8 @@ Code Quality Reviewer 结论：
 4. Phase 7 微信真实派单必须晚于 Phase 2。
 5. Phase 8 日报依赖 Phase 7 的销售反馈结构化数据。
 6. Phase 9 回访闭环依赖 Phase 2、Phase 3、Phase 7。
-7. Phase 11 一键过审可与 Phase 3/7 并行，但必须等 Phase 1 数据迁移骨架完成。
-8. Phase 12 AI剪辑只做预留，正式迁入需另开迁入专项计划。
+7. Phase 11 一键过审已由客户取消，不恢复执行。
+8. Phase 12 按冻结设计交付本地 MVP；完成后进入 Phase 13 前端总收口，再统一制定宝塔生产验证执行包。
 
 ### 审批判定
 
