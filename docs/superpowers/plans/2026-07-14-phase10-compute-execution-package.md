@@ -764,7 +764,7 @@ git commit -m "功能：完成小高算力上浮配置前端闭环"
 
 ## Task 7：本地模拟总验收与阶段固化
 
-> **完成状态（2026-07-15）：Task 7 已完成（提交 `47884ba`）；首轮三方评审 BLOCKED 5 个 Must-Fix，Task 7-FIX1（`0821759`）闭合后三方复审 PASS（Spec/Code Quality/Security 均 PASS，复审范围 `47884ba..0821759`，本地 75 passed）。Phase 10 终态 `DONE_WITH_CONCERNS`（唯一 concern = `baota_production_compute_not_verified`，不阻塞 Phase 12/13）。**
+> **完成状态（2026-07-15）：Task 7 已完成（提交 `47884ba`）；首轮三方评审 BLOCKED 5 个 Must-Fix，Task 7-FIX1（`0821759`）闭合后三方复审 PASS（Spec/Code Quality/Security 均 PASS，复审范围 `47884ba..0821759`，本地 75 passed）；用户本地验证发现 SuperComputeConfig 孤儿页面，Task 7-FIX2（`8d37efb`）补接入路由+导航+渲染（3 文件 +5 行，phase10-compute:check/tsc/build 全通过）。Phase 10 终态 `DONE_WITH_CONCERNS`（唯一 concern = `baota_production_compute_not_verified`，不阻塞 Phase 12/13）。**
 
 **文件：**
 

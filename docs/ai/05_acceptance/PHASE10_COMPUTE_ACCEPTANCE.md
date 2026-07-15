@@ -26,6 +26,7 @@
 | `47884ba` | Task 7 | 本地模拟总验收 + PHASE10_COMPUTE_ACCEPTANCE.md 验收文档 + 静态门禁 #4 注释措辞 |
 | `0821759` | Task 7-FIX1 | 闭合三方评审 5 个 Must-Fix（fail-closed + BIGINT_MIN 守卫 + 验收文档提交链/起点/网络措辞补正） |
 | `8ffa4f3` | Task 7-FIX1 收尾 | 补 Task 7-FIX1 提交号到验收文档 |
+| `8d37efb` | Task 7-FIX2 | 接入超管上浮比例配置页 SuperComputeConfig（路由+导航+渲染，3 文件 +5 行） |
 
 **Task 7 额外改动**（修复静态门禁 #4）：`reply_decision_service.py` + `daily_report_summary_service.py` 注释措辞调整（"usage.total_tokens" → "provider 返回的 token 用量"），让 `rg total_tokens` 零命中，语义不变。
 
@@ -33,6 +34,12 @@
 - Must-Fix 1（高危 fail-open）：`app/routers/compute.py` + `apps/compute/routers.py` 的 `_require_internal` 改 fail-closed（生产 `APP_ENV=production` 空配置 → 500 `INTERNAL_TOKEN_NOT_CONFIGURED`，dev 仍放行）；补 9000/9205 production fail-closed 测试。
 - Must-Fix 2（高危 BIGINT_MIN）：`0031_compute_billing.sql` + `0012_compute_billing.py` 在 abs 回填前加 `delta_tokens < -9223372036854775807` 守卫（BIGINT_MIN 行 abs 溢出 BIGINT_MAX，存在则迁移阻断）；补 SQLite + PG 双数据库守卫测试。
 - Must-Fix 3/4/5：本验收文档提交链加 `b3bc6b6`/`47884ba` + 起点/终点调整；后端/迁移 1 failed 补起点 `265d719` 同命令证据；完成定义改"目标专项通过、扩展回归零新增失败"；网络零调用措辞收窄为"专项测试哨兵"。
+
+**Task 7-FIX2 改动**（用户本地验证发现 SuperComputeConfig 孤儿页面，提交 `8d37efb`）：
+- 根因：Task 6 实现了 `SuperComputeConfig.tsx`（超管六能力上浮比例配置，821 行）但遗漏三处接入——`compute/routes.ts` 无路由、`capabilities.ts` compute-center children 无导航项、`Index.tsx` 无渲染分支。页面代码存在但用户无法通过菜单访问（`ComputeCenter` 4 个 navId 全部渲染商户侧，`SuperComputeConfig` 全仓库零 import）。
+- 修复：`compute/routes.ts` 加 `/compute/markup-ratios` 路由；`capabilities.ts` compute-center children 加"上浮比例"导航项（需 `auto_wechat:admin:compute_config`）；`Index.tsx` import + 渲染分支加 `activeNav === "compute-markup-ratios" ? <SuperComputeConfig />`。3 文件 +5 行。
+- 验证：phase10-compute:check PASS + tsc -b 退出码 0 + build ✓ built（chunk size 警告 pre-existing）。
+- 教训：Task 6 验收记录"超管上浮配置前端闭环"但未验证页面可达性，三方复审只读代码未发现孤儿。后续前端验收应补"菜单入口可达性"检查。
 
 ---
 
