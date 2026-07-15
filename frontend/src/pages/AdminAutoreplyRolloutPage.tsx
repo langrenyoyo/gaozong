@@ -166,6 +166,7 @@ export default function AdminAutoreplyRolloutPage() {
     reason: "",
   });
   const [savingGlobal, setSavingGlobal] = useState(false);
+  const [addingWhitelist, setAddingWhitelist] = useState(false);
   const [whitelistForm, setWhitelistForm] = useState<AdminWhitelistCreateRequest>(emptyWhitelistForm);
   const [runsFilter, setRunsFilter] = useState({ mode: "", status: "", blocked_reason: "", account_open_id: "" });
 
@@ -303,6 +304,7 @@ export default function AdminAutoreplyRolloutPage() {
       toast.error("merchant_id、value 和 reason 必填");
       return;
     }
+    setAddingWhitelist(true);
     try {
       await addAutoreplyWhitelist(payload);
       const response = await listAutoreplyWhitelist();
@@ -311,6 +313,8 @@ export default function AdminAutoreplyRolloutPage() {
       toast.success("白名单已保存");
     } catch (err) {
       toast.error(resolveErrorMessage(err));
+    } finally {
+      setAddingWhitelist(false);
     }
   };
 
@@ -406,6 +410,7 @@ export default function AdminAutoreplyRolloutPage() {
         {error ? (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">
             加载失败：{error}
+            <button type="button" onClick={() => void loadAll()} className="ml-2 underline">重试</button>
           </div>
         ) : null}
         {envRealSendDisabled ? (
@@ -551,7 +556,7 @@ export default function AdminAutoreplyRolloutPage() {
                       ))}
                       {!accounts.length ? (
                         <tr>
-                          <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无企业号配置</td>
+                          <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无企业号配置，请先在抖音客服工作台绑定企业号</td>
                         </tr>
                       ) : null}
                     </tbody>
@@ -605,9 +610,10 @@ export default function AdminAutoreplyRolloutPage() {
                   <button
                     type="button"
                     onClick={() => void handleAddWhitelist()}
-                    className="h-9 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white"
+                    disabled={addingWhitelist}
+                    className="h-9 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white disabled:opacity-60"
                   >
-                    添加白名单
+                    {addingWhitelist ? "添加中..." : "添加白名单"}
                   </button>
                 </div>
               </div>
@@ -661,7 +667,7 @@ export default function AdminAutoreplyRolloutPage() {
                       ))}
                       {!whitelist.length ? (
                         <tr>
-                          <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无白名单</td>
+                          <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无白名单，请先在左侧添加白名单条目</td>
                         </tr>
                       ) : null}
                     </tbody>
@@ -723,7 +729,8 @@ export default function AdminAutoreplyRolloutPage() {
                 <button
                   type="button"
                   onClick={() => void loadRuns()}
-                  className="h-9 rounded-xl border border-[#dbe3ef] bg-white px-4 text-xs font-semibold text-[#475467]"
+                  disabled={loading}
+                  className="h-9 rounded-xl border border-[#dbe3ef] bg-white px-4 text-xs font-semibold text-[#475467] disabled:opacity-60"
                 >
                   筛选
                 </button>
@@ -772,7 +779,7 @@ export default function AdminAutoreplyRolloutPage() {
                     ))}
                     {!runs.length ? (
                       <tr>
-                        <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无 run 记录</td>
+                        <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无 run 记录，系统产生自动回复 run 后会自动出现在此列表</td>
                       </tr>
                     ) : null}
                   </tbody>

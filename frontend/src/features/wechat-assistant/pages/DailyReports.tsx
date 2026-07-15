@@ -417,7 +417,7 @@ function ReportsTaskTab() {
           </button>
         </div>
 
-        {listError ? <div className="px-5 py-6 text-xs text-rose-600">{listError}</div> : null}
+        {listError ? <div className="px-5 py-6 text-xs text-rose-600">{listError} <button type="button" onClick={loadList} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px] text-left text-xs">
@@ -580,7 +580,7 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
       </div>
 
-      {error ? <div className="text-xs text-rose-600">{error}</div> : null}
+      {error ? <div className="text-xs text-rose-600">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
 
       <div className="overflow-x-auto rounded-2xl border border-[#e4e8f0] bg-white">
         <table className="w-full min-w-[960px] text-left text-xs">
@@ -687,7 +687,7 @@ function CompletenessTab() {
         </div>
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
       </div>
-      {error ? <div className="text-xs text-rose-600">{error}</div> : null}
+      {error ? <div className="text-xs text-rose-600">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
       <div className="rounded-2xl border border-[#e4e8f0] bg-white p-5">
         {loading ? (
           <div className="text-xs text-[#8b95a6]"><Loader2Icon size={16} className="mr-2 inline animate-spin" />加载中...</div>
@@ -779,7 +779,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
         <span className="text-[11px] text-[#94a3b8]">仅录入日期、消耗与私信量，不提供广告 ID 明细输入。</span>
       </div>
-      {error ? <div className="text-xs text-rose-600">{error}</div> : null}
+      {error ? <div className="text-xs text-rose-600">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
       <div className="rounded-2xl border border-[#e4e8f0] bg-white p-5">
         {loading ? <div className="text-xs text-[#8b95a6]"><Loader2Icon size={16} className="mr-2 inline animate-spin" />加载中...</div> : (
           <div className="space-y-4">
@@ -877,7 +877,7 @@ function ProfileTab({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="space-y-3">
       <ReadOnlyHint canWrite={canWrite} />
-      {error ? <div className="text-xs text-rose-600">{error}</div> : null}
+      {error ? <div className="text-xs text-rose-600">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
       <div className="rounded-2xl border border-[#e4e8f0] bg-white p-5">
         {loading ? <div className="text-xs text-[#8b95a6]"><Loader2Icon size={16} className="mr-2 inline animate-spin" />加载中...</div> : (
           <div className="space-y-4">

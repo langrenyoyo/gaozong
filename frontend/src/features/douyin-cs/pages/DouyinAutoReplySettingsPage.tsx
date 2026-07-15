@@ -311,10 +311,13 @@ export default function DouyinAutoReplySettingsPage() {
         <aside className="min-h-0 overflow-y-auto border-r border-[#e4e8f0] bg-white p-4">
           <div className="mb-3 text-xs font-bold text-slate-700">企业号配置</div>
           {loading && items.length === 0 ? (
-            <div className="grid min-h-[180px] place-items-center text-xs text-slate-500">加载中...</div>
+            <div className="flex min-h-[180px] items-center justify-center gap-2 text-xs text-slate-500">
+              <LoaderIcon size={16} className="animate-spin" />
+              加载中...
+            </div>
           ) : items.length === 0 ? (
             <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-xs leading-6 text-slate-500">
-              暂无可配置的抖音企业号
+              暂无可配置的抖音企业号，请先在抖音客服工作台绑定企业号后再配置
             </div>
           ) : (
             <div className="space-y-2">{accountCards}</div>

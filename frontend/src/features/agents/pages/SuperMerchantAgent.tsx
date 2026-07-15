@@ -415,6 +415,7 @@ export default function SuperMerchantAgent() {
   const [agents, setAgents] = useState<AiAgent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editorAgent, setEditorAgent] = useState<AiAgent | null | undefined>(undefined);
 
@@ -425,12 +426,13 @@ export default function SuperMerchantAgent() {
 
   const loadAgents = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const items = await fetchAiAgents();
       setAgents(items);
       setSelectedAgentId((current) => current && items.some((item) => item.agent_id === current) ? current : items[0]?.agent_id || null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "AI小高智能体加载失败");
+      setLoadError(error instanceof Error ? error.message : "AI小高智能体加载失败");
     } finally {
       setLoading(false);
     }
@@ -499,10 +501,11 @@ export default function SuperMerchantAgent() {
           <div className="flex items-center gap-2">
             <button
               onClick={loadAgents}
-              className="grid h-9 w-9 place-items-center rounded-xl border border-[#dfe5ee] bg-white text-[#64748b] hover:bg-[#f8fafc]"
+              disabled={loading}
+              className="grid h-9 w-9 place-items-center rounded-xl border border-[#dfe5ee] bg-white text-[#64748b] hover:bg-[#f8fafc] disabled:opacity-60"
               aria-label="刷新智能体列表"
             >
-              <RefreshCwIcon size={15} />
+              <RefreshCwIcon size={15} className={loading ? "animate-spin" : ""} />
             </button>
             <button
               onClick={() => setEditorAgent(null)}
@@ -515,8 +518,23 @@ export default function SuperMerchantAgent() {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {loading ? (
-            <div className="grid h-full place-items-center text-sm text-[#64748b]">正在加载AI小高智能体...</div>
+          {loading && agents.length === 0 ? (
+            <div className="grid h-full place-items-center text-sm text-[#64748b]">
+              <span className="inline-flex items-center gap-2"><RefreshCwIcon size={16} className="animate-spin" /> 正在加载AI小高智能体...</span>
+            </div>
+          ) : loadError && agents.length === 0 ? (
+            <div className="grid h-full place-items-center">
+              <div className="max-w-[360px] text-center">
+                <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-red-50 text-red-500">
+                  <BotIcon size={28} />
+                </div>
+                <h2 className="mt-4 text-base font-bold text-[#1a1f2e]">加载失败</h2>
+                <p className="mt-2 text-sm leading-6 text-[#8b95a6]">{loadError}</p>
+                <button onClick={loadAgents} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white">
+                  <RefreshCwIcon size={14} /> 重试
+                </button>
+              </div>
+            </div>
           ) : agents.length === 0 ? (
             <div className="grid h-full place-items-center">
               <div className="max-w-[360px] text-center">

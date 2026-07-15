@@ -308,10 +308,12 @@ function DetailPanel({
   event,
   loading,
   error,
+  onRetry,
 }: {
   event: WebhookEventDetail | null;
   loading: boolean;
   error: string | null;
+  onRetry?: () => void;
 }) {
   if (loading) {
     return (
@@ -333,6 +335,15 @@ function DetailPanel({
           <div>
             <AlertTriangleIcon className="mx-auto text-red-500" size={24} />
             <p className="mt-3 text-sm font-bold text-[#1a1f2e]">{error}</p>
+            {onRetry ? (
+              <button
+                onClick={onRetry}
+                className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-4 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
+              >
+                <RefreshCwIcon size={14} />
+                重试
+              </button>
+            ) : null}
           </div>
         </div>
       </aside>
@@ -607,27 +618,35 @@ export default function WebhookEventsPage() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto">
-            {loading ? (
+            {events.length === 0 && error ? (
+              <div className="grid h-full place-items-center px-8 text-center">
+                <div>
+                  <AlertTriangleIcon className="mx-auto text-red-500" size={24} />
+                  <p className="mt-3 text-sm font-semibold text-[#1a1f2e]">数据加载失败</p>
+                  <p className="mt-2 text-xs text-[#8b95a6]">{error}</p>
+                  <button
+                    onClick={loadEvents}
+                    disabled={loading}
+                    className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-4 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc] disabled:opacity-60"
+                  >
+                    <RefreshCwIcon size={14} className={loading ? "animate-spin" : ""} />
+                    重试
+                  </button>
+                </div>
+              </div>
+            ) : loading && events.length === 0 ? (
               <div className="grid h-full place-items-center text-xs text-[#8b95a6]">
                 <span className="inline-flex items-center gap-2">
                   <LoaderIcon size={14} className="animate-spin" />
                   加载原始事件
                 </span>
               </div>
-            ) : error ? (
-              <div className="grid h-full place-items-center px-8 text-center">
-                <div>
-                  <AlertTriangleIcon className="mx-auto text-red-500" size={24} />
-                  <p className="mt-3 text-sm font-semibold text-[#1a1f2e]">数据加载失败</p>
-                  <p className="mt-2 text-xs text-[#8b95a6]">{error}</p>
-                </div>
-              </div>
             ) : events.length === 0 ? (
               <div className="grid h-full place-items-center px-8 text-center">
                 <div>
                   <InboxIcon className="mx-auto text-[#94a3b8]" size={28} />
                   <p className="mt-3 text-sm font-semibold text-[#1a1f2e]">
-                    {hasActiveFilters ? "没有匹配的原始事件" : "暂无原始事件"}
+                    {hasActiveFilters ? "没有匹配的原始事件，或调整筛选条件后重新查询" : "暂无原始事件"}
                   </p>
                 </div>
               </div>
@@ -759,7 +778,7 @@ export default function WebhookEventsPage() {
         </main>
 
         <div className="min-h-0 overflow-hidden max-[1240px]:hidden">
-          <DetailPanel event={detail} loading={detailLoading} error={detailError} />
+          <DetailPanel event={detail} loading={detailLoading} error={detailError} onRetry={selectedId ? () => void loadDetail(selectedId) : undefined} />
         </div>
       </div>
     </section>

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { Loader2Icon } from "lucide-react";
+import { toast } from "sonner";
 import {
   getReturnVisitPrompts,
   updateReturnVisitPrompt,
@@ -264,6 +266,7 @@ function PromptsTab() {
         reason,
       });
       setPrompts((prev) => prev.map((p) => (p.prompt_key === resp.data.prompt_key ? resp.data : p)));
+      toast.success("提示词已保存");
       closeEdit();
     } catch (err) {
       setFormError(resolveError(err));
@@ -273,7 +276,10 @@ function PromptsTab() {
   };
 
   if (loading && prompts.length === 0) {
-    return <div className="text-xs text-[#8b95a6]">加载中…</div>;
+    return <div className="flex items-center gap-2 text-xs text-[#8b95a6]"><Loader2Icon size={14} className="animate-spin" /> 加载中…</div>;
+  }
+  if (!loading && prompts.length === 0 && !error) {
+    return <div className="text-xs text-[#8b95a6]">暂无提示词配置</div>;
   }
   if (error) {
     return (
@@ -518,7 +524,7 @@ function RunsTab() {
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">{error}</div>
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重新加载</button></div>
       ) : null}
 
       {/* 运行表格 */}
@@ -540,13 +546,13 @@ function RunsTab() {
             {loading && runs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-6 text-center text-[#8b95a6]">
-                  加载中…
+                  <span className="inline-flex items-center gap-2"><Loader2Icon size={14} className="animate-spin" /> 加载中…</span>
                 </td>
               </tr>
             ) : runs.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-6 text-center text-[#8b95a6]">
-                  暂无运行记录
+                  暂无运行记录，系统尚未产生回访运行记录
                 </td>
               </tr>
             ) : (
@@ -589,7 +595,7 @@ function RunsTab() {
         }}
       >
         {detailLoading ? (
-          <div className="text-xs text-[#8b95a6]">加载中…</div>
+          <div className="flex items-center gap-2 text-xs text-[#8b95a6]"><Loader2Icon size={14} className="animate-spin" /> 加载中…</div>
         ) : detailError ? (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700">
             {detailError}

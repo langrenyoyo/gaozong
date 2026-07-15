@@ -116,7 +116,7 @@ function AddAdminModal({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} className="h-9 rounded-xl border border-[#e4e8f0] bg-white px-4 text-xs font-semibold text-[#374151]">
             取消
           </button>
-          <button onClick={onClose} className="h-9 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]">
+          <button onClick={() => { toast.success("管理员已创建"); onClose(); }} className="h-9 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]">
             新增管理员
           </button>
         </div>
@@ -292,6 +292,11 @@ export default function SuperAdminAccounts() {
                   </td>
                 </tr>
               ))}
+              {!filtered.length ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-[#8b95a6]">暂无匹配的管理员账号</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

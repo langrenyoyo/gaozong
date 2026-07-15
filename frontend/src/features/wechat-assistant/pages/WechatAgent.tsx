@@ -162,6 +162,10 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   const [taskHistoryPage, setTaskHistoryPage] = useState(1);
   const [taskHistoryPageSize] = useState(20);
   const [taskHistoryLoading, setTaskHistoryLoading] = useState(false);
+  // ponytail: 任务历史独立错误状态——失败时保留已有记录不误显示空态，内联展示错误+重试
+  const [taskHistoryError, setTaskHistoryError] = useState<string | null>(null);
+  // ponytail: 页面级刷新错误状态——失败时内联展示错误+重试，不清空已有数据
+  const [pageError, setPageError] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<WechatTask | null>(null);
   const [loading, setLoading] = useState(false);
   const [runtimeLoading, setRuntimeLoading] = useState(false);
@@ -230,6 +234,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
   async function loadTaskHistory(page = taskHistoryPage) {
     setTaskHistoryLoading(true);
+    setTaskHistoryError(null);
     try {
       const history = await fetchWechatTaskHistory({
         page,
@@ -244,7 +249,10 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       setTaskHistoryTotal(history.total);
       setTaskHistoryPage(history.page);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "任务历史加载失败");
+      // ponytail: 失败保留已有 taskHistory 不清空，避免误显示空态；内联错误+重试
+      const msg = err instanceof Error ? err.message : "任务历史加载失败";
+      setTaskHistoryError(msg);
+      toast.error(msg);
     } finally {
       setTaskHistoryLoading(false);
     }
@@ -264,6 +272,8 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
   async function refreshPage() {
     setLoading(true);
+    setPageError(null);
+    setTaskHistoryError(null);
     try {
       const [statusResponse, health, runtime, staffs, tasks, history] = await Promise.all([
         fetchAgentStatus().catch(() => null),
@@ -282,7 +292,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           mode: taskModeFilter !== "all" ? taskModeFilter : undefined,
           keyword: taskKeyword.trim() || undefined,
           failure_stage: taskFailureStage.trim() || undefined,
-        }).catch(() => null),
+        }).catch((err: unknown) => {
+          // ponytail: 任务历史失败单独捕获，保留已有数据并设置内联错误，不让整个 Promise.all reject
+          setTaskHistoryError(err instanceof Error ? err.message : "任务历史加载失败");
+          return null;
+        }),
       ]);
       setAgentStatus(statusResponse?.data || null);
       setLocalOnline(Boolean(health?.success));
@@ -295,7 +309,10 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         setTaskHistoryPage(history.page);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "微信助手数据加载失败");
+      // ponytail: 页面级刷新失败保留已有数据，内联错误+重试
+      const msg = err instanceof Error ? err.message : "微信助手数据加载失败";
+      setPageError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -597,6 +614,19 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           <div className="text-sm font-bold text-[#1a1f2e]">{pageMeta.title}</div>
           <div className="mt-1 text-xs leading-5 text-[#64748b]">{pageMeta.description}</div>
         </div>
+        {pageError ? (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <span>数据加载失败：{pageError}</span>
+            <button
+              onClick={() => void refreshPage()}
+              disabled={loading}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+            >
+              <RefreshCwIcon size={13} className={loading ? "animate-spin" : ""} />
+              重试
+            </button>
+          </div>
+        ) : null}
 
         <div className="grid gap-4 xl:grid-cols-4">
           <div className="rounded-lg border border-[#dfe5ee] bg-white p-4">
@@ -1185,6 +1215,19 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             </button>
           </div>
           <div className="overflow-auto">
+            {taskHistoryError ? (
+              <div className="flex items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                <span>任务历史加载失败：{taskHistoryError}</span>
+                <button
+                  onClick={() => void loadTaskHistory()}
+                  disabled={taskHistoryLoading}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                >
+                  <RefreshCwIcon size={13} className={taskHistoryLoading ? "animate-spin" : ""} />
+                  重试
+                </button>
+              </div>
+            ) : null}
             <table className="w-full min-w-[980px] text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
@@ -1237,7 +1280,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 ) : (
                   <tr>
                     <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
-                      {taskHistoryLoading ? "正在加载任务历史" : "暂无任务记录"}
+                      {taskHistoryLoading ? (
+                        <span className="inline-flex items-center justify-center gap-2"><Loader2Icon size={14} className="animate-spin" /> 加载中...</span>
+                      ) : "暂无任务记录"}
                     </td>
                   </tr>
                 )}

@@ -5,6 +5,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   EyeIcon,
+  LoaderIcon,
   RefreshCwIcon,
   SearchIcon,
   ShieldCheckIcon,
@@ -151,12 +152,14 @@ function DetailModal({
   loading,
   error,
   onClose,
+  onRetry,
   onMarkEffectiveness,
 }: {
   detail: AiReplyDecisionLogDetail | null;
   loading: boolean;
   error: string | null;
   onClose: () => void;
+  onRetry?: () => void;
   onMarkEffectiveness: (id: number, isEffective: boolean) => void;
 }) {
   const riskFlags = safeArray(detail?.risk_flags);
@@ -184,11 +187,20 @@ function DetailModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
           {loading ? (
-            <div className="grid place-items-center py-16 text-sm text-[#8b95a6]">详情加载中...</div>
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-sm text-[#8b95a6]">
+              <LoaderIcon size={18} className="animate-spin" />
+              <span>详情加载中...</span>
+            </div>
           ) : error ? (
             <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-600">
               <AlertCircleIcon size={14} />
               {error}
+              {onRetry ? (
+                <button onClick={onRetry} className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-red-300 bg-white px-3 text-[11px] font-semibold text-red-600 hover:bg-red-50">
+                  <RefreshCwIcon size={12} />
+                  重试
+                </button>
+              ) : null}
             </div>
           ) : detail ? (
             <div className="space-y-4">
@@ -303,13 +315,15 @@ function DetailModal({
             <>
               <button
                 onClick={() => void onMarkEffectiveness(detail.id, true)}
-                className="h-9 rounded-xl bg-emerald-600 px-4 text-xs font-semibold text-white hover:bg-emerald-700"
+                disabled={loading}
+                className="h-9 rounded-xl bg-emerald-600 px-4 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
               >
                 标记有效
               </button>
               <button
                 onClick={() => void onMarkEffectiveness(detail.id, false)}
-                className="h-9 rounded-xl bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700"
+                disabled={loading}
+                className="h-9 rounded-xl bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
               >
                 标记无效
               </button>
@@ -380,7 +394,7 @@ export default function AiReplyDecisionLogsPage() {
     void loadLogs();
   }, [loadLogs]);
 
-  useEffect(() => {
+  const loadDetail = useCallback(() => {
     if (detailId === null) return;
     setDetailLoading(true);
     setDetailError(null);
@@ -390,6 +404,10 @@ export default function AiReplyDecisionLogsPage() {
       .catch((err) => setDetailError(resolveErrorMessage(err)))
       .finally(() => setDetailLoading(false));
   }, [detailId]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
 
   // 超管人工标记 AI 实发回复有效性
   const markEffectiveness = async (id: number, isEffective: boolean) => {
@@ -521,14 +539,31 @@ export default function AiReplyDecisionLogsPage() {
           <div className="m-5 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-600">
             <AlertCircleIcon size={14} />
             {error}
+            <button onClick={() => void loadLogs()} className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-red-300 bg-white px-3 text-[11px] font-semibold text-red-600 hover:bg-red-50">
+              <RefreshCwIcon size={12} />
+              重试
+            </button>
           </div>
         ) : loading && items.length === 0 ? (
-          <div className="grid h-full place-items-center text-sm text-[#8b95a6]">加载中...</div>
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-[#8b95a6]">
+            <LoaderIcon size={16} className="animate-spin" />
+            加载中...
+          </div>
         ) : items.length === 0 ? (
           <div className="grid h-full place-items-center text-center">
             <div>
               <BotIcon size={30} className="mx-auto text-[#cbd5e1]" />
-              <p className="mt-2 text-xs text-[#8b95a6]">暂无 AI 实发记录</p>
+              {hasFilters ? (
+                <>
+                  <p className="mt-2 text-xs text-[#8b95a6]">未找到符合条件的记录</p>
+                  <button onClick={resetFilters} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e4e8f0] bg-white px-4 text-xs font-semibold text-[#2563eb] hover:bg-[#eff6ff]">
+                    <RefreshCwIcon size={12} />
+                    重置筛选
+                  </button>
+                </>
+              ) : (
+                <p className="mt-2 text-xs text-[#8b95a6]">暂无 AI 实发记录，AI 自动回复发送后将在此展示</p>
+              )}
             </div>
           </div>
         ) : (
@@ -634,6 +669,7 @@ export default function AiReplyDecisionLogsPage() {
           detail={detail}
           loading={detailLoading}
           error={detailError}
+          onRetry={loadDetail}
           onClose={() => {
             setDetailId(null);
             setDetail(null);

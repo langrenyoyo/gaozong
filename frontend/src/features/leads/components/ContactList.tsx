@@ -110,18 +110,44 @@ export default function ContactList({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-2">
-        {loading ? (
+        {/* 无数据且出错：显示错误 + 重试（不清空已有数据：有数据时保留列表） */}
+        {contacts.length === 0 && error ? (
+          <div className="flex flex-col items-center gap-3 px-5 py-8 text-center text-xs leading-6 text-amber-700">
+            <span>{error}</span>
+            {onRefresh ? (
+              <button
+                onClick={onRefresh}
+                disabled={loading}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#eff6ff] px-3 font-semibold text-[#2563eb] disabled:opacity-60"
+              >
+                <RefreshCwIcon size={12} className={loading ? "animate-spin" : ""} />
+                重试
+              </button>
+            ) : null}
+          </div>
+        ) : loading && contacts.length === 0 ? (
           <div className="grid h-full place-items-center px-5 text-center text-xs text-[#8b95a6]">
             <span className="inline-flex items-center gap-2">
               <LoaderIcon size={14} className="animate-spin" />
               加载真实抖音私信会话
             </span>
           </div>
-        ) : error ? (
-          <div className="px-5 py-6 text-xs leading-6 text-amber-700">{error}</div>
-        ) : filtered.length === 0 ? (
+        ) : contacts.length === 0 ? (
           <div className="px-5 py-8 text-center text-xs leading-6 text-[#8b95a6]">
             暂无真实抖音私信会话，请完成授权并让客户发送私信。
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-5 py-8 text-center text-xs leading-6 text-[#8b95a6]">
+            <span>当前筛选条件下无匹配会话</span>
+            <button
+              onClick={() => {
+                setSearch("");
+                setActiveTag("全部");
+              }}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#eff6ff] px-3 font-semibold text-[#2563eb]"
+            >
+              重置筛选条件
+            </button>
           </div>
         ) : (
           filtered.map((contact) => {

@@ -273,10 +273,17 @@ export default function DouyinLiveCheckPage() {
         </div>
 
         {loading ? (
-          <div className="grid h-48 place-items-center text-xs text-[#8b95a6]">加载中...</div>
+          <div className="flex h-48 items-center justify-center gap-2 text-xs text-[#8b95a6]">
+            <LoaderIcon size={16} className="animate-spin" />
+            加载中...
+          </div>
         ) : error ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
-            {error}
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
+            <span>{error}</span>
+            <button onClick={loadStatus} className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-3 text-[11px] font-semibold text-amber-800 hover:bg-amber-50">
+              <RefreshCwIcon size={12} />
+              重试加载
+            </button>
           </div>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">

@@ -857,7 +857,7 @@ export default function WechatTaskPanel() {
         })()}
 
         {notifications.length === 0 ? (
-          <div className="mt-2 text-[11px] text-[#8b95a6]">暂无通知记录</div>
+          <div className="mt-2 text-[11px] text-[#8b95a6]">暂无通知记录，创建测试任务并执行后，回写成功会自动出现通知</div>
         ) : (
           <div className="mt-2 space-y-1.5">
             {notifications.slice(0, 5).map((n) => {
@@ -1023,7 +1023,7 @@ export default function WechatTaskPanel() {
             </span>
           </div>
           {detectReplyTasks.length === 0 ? (
-            <div className="mt-1 text-[10px] text-[#8b95a6]">暂无待检测回复任务</div>
+            <div className="mt-1 text-[10px] text-[#8b95a6]">暂无待检测回复任务。系统产生 detect_reply 任务后，会自动出现在此列表。</div>
           ) : (
             <div className="mt-1 space-y-1">
               {detectReplyTasks.map((t) => {
@@ -1155,6 +1155,7 @@ export default function WechatTaskPanel() {
         ) : error ? (
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-xs text-red-600">
             {error}
+            <button onClick={() => void refreshTasks()} className="ml-2 font-semibold text-[#2563eb] underline">重试</button>
           </div>
         ) : tasks.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[#d9e0ea] bg-white/60 px-4 py-6 text-center text-xs text-[#8b95a6]">

@@ -417,12 +417,18 @@ function traceItems(profile: DouyinConversationProfile | null) {
   ].filter((item): item is [string, string] => Boolean(item[1]));
 }
 
-function ErrorBanner({ message }: { message: string | null }) {
+function ErrorBanner({ message, onRetry }: { message: string | null; onRetry?: () => void }) {
   if (!message) return null;
   return (
     <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
       <AlertCircleIcon size={15} className="mt-0.5 shrink-0" />
       <span>{message}</span>
+      {onRetry ? (
+        <button onClick={onRetry} className="ml-auto inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-3 text-[11px] font-semibold text-amber-800 hover:bg-amber-50">
+          <RefreshCwIcon size={12} />
+          重试
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -2170,7 +2176,7 @@ export default function DouyinAiCsWorkbenchPage() {
       </div>
     </div>
   ) : (
-    <EmptyState text="暂无客户画像" />
+    <EmptyState text="暂无客户画像，客户画像信息待后端同步" />
   );
 
   return (
@@ -2202,7 +2208,7 @@ export default function DouyinAiCsWorkbenchPage() {
         </div>
       </header>
 
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error} onRetry={() => void loadAccounts()} />
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(200px,260px)_minmax(260px,320px)_minmax(320px,1fr)] overflow-hidden p-4 pt-3 min-[1500px]:grid-cols-[260px_320px_minmax(420px,1fr)_260px]">
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-l-lg border border-r-0 border-[#dfe5ee] bg-white">
@@ -2341,7 +2347,20 @@ export default function DouyinAiCsWorkbenchPage() {
             {loadingConversations && conversations.length === 0 ? <EmptyState text="正在加载会话..." /> : null}
             {!loadingConversations && conversations.length === 0 ? <EmptyState text="该抖音号暂无私信会话。" /> : null}
             {!loadingConversations && conversations.length > 0 && filteredConversations.length === 0 ? (
-              <EmptyState text="没有符合条件的会话。" />
+              <div className="grid min-h-[180px] place-items-center px-6 text-center text-xs text-slate-500">
+                <div>
+                  <p>没有符合条件的会话。</p>
+                  {(conversationSearch || conversationFilter !== "all") ? (
+                    <button
+                      onClick={() => { setConversationSearch(""); setConversationFilter("all"); }}
+                      className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <RefreshCwIcon size={12} />
+                      重置筛选
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
             {filteredConversations.map((conversation) => {
               const active = conversation.id === selectedConversationId;

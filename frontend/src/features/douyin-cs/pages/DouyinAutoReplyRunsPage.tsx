@@ -7,6 +7,8 @@ import {
   EyeIcon,
   ExternalLinkIcon,
   FileJsonIcon,
+  LoaderIcon,
+  RefreshCwIcon,
   SearchIcon,
   ShieldCheckIcon,
   XIcon,
@@ -283,11 +285,13 @@ function DetailModal({
   loading,
   error,
   onClose,
+  onRetry,
 }: {
   detail: AiAutoReplyRunDetail | null;
   loading: boolean;
   error: string | null;
   onClose: () => void;
+  onRetry?: () => void;
 }) {
   const [rawExpanded, setRawExpanded] = useState(false);
   const gateResults = isRecord(detail?.gate_results) ? detail.gate_results : null;
@@ -317,11 +321,20 @@ function DetailModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {loading ? (
-            <div className="grid min-h-[280px] place-items-center text-sm text-slate-500">详情加载中...</div>
+            <div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-sm text-slate-500">
+              <LoaderIcon size={18} className="animate-spin" />
+              <span>详情加载中...</span>
+            </div>
           ) : error ? (
             <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
               <AlertCircleIcon size={14} />
               {error}
+              {onRetry ? (
+                <button onClick={onRetry} className="ml-auto inline-flex h-7 items-center gap-1 rounded-md border border-red-300 bg-white px-3 text-[11px] font-semibold text-red-700 hover:bg-red-50">
+                  <RefreshCwIcon size={12} />
+                  重试
+                </button>
+              ) : null}
             </div>
           ) : detail ? (
             <div className="space-y-4">
@@ -503,7 +516,7 @@ export default function DouyinAutoReplyRunsPage() {
     void loadRuns();
   }, [loadRuns]);
 
-  useEffect(() => {
+  const loadDetail = useCallback(() => {
     if (detailId === null) return;
     setDetailLoading(true);
     setDetailError(null);
@@ -513,6 +526,10 @@ export default function DouyinAutoReplyRunsPage() {
       .catch((err) => setDetailError(resolveErrorMessage(err)))
       .finally(() => setDetailLoading(false));
   }, [detailId]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
 
   const hasFilters = useMemo(
     () =>
@@ -661,7 +678,7 @@ export default function DouyinAutoReplyRunsPage() {
             disabled={loading}
             className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-60"
           >
-            <SearchIcon size={14} />
+            {loading ? <LoaderIcon size={14} className="animate-spin" /> : <SearchIcon size={14} />}
             查询
           </button>
           {hasFilters ? (
@@ -687,14 +704,31 @@ export default function DouyinAutoReplyRunsPage() {
           <div className="m-5 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
             <AlertCircleIcon size={14} />
             {error}
+            <button onClick={() => void loadRuns()} className="ml-auto inline-flex h-7 items-center gap-1 rounded-md border border-red-300 bg-white px-3 text-[11px] font-semibold text-red-700 hover:bg-red-50">
+              <RefreshCwIcon size={12} />
+              重试
+            </button>
           </div>
         ) : loading && items.length === 0 ? (
-          <div className="grid h-full place-items-center text-sm text-slate-500">加载中...</div>
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500">
+            <LoaderIcon size={16} className="animate-spin" />
+            加载中...
+          </div>
         ) : items.length === 0 ? (
           <div className="grid h-full place-items-center text-center">
             <div>
               <BotIcon size={30} className="mx-auto text-slate-300" />
-              <p className="mt-2 text-xs text-slate-500">暂无自动回复运行记录</p>
+              {hasFilters ? (
+                <>
+                  <p className="mt-2 text-xs text-slate-500">未找到符合条件的运行记录</p>
+                  <button onClick={resetFilters} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    <RefreshCwIcon size={12} />
+                    重置筛选
+                  </button>
+                </>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">暂无自动回复运行记录，AI 自动回复触发后将在此展示</p>
+              )}
             </div>
           </div>
         ) : (
@@ -822,6 +856,7 @@ export default function DouyinAutoReplyRunsPage() {
           detail={detail}
           loading={detailLoading}
           error={detailError}
+          onRetry={loadDetail}
           onClose={() => {
             setDetailId(null);
             setDetail(null);

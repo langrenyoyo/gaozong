@@ -1313,21 +1313,24 @@ export default function LeadsManagement() {
     return fetchLeadWechatNotifyStatus(leadId);
   }, []);
 
+  // 页面首次加载与重试入口：拉取全部数据，设置 loading/error
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await refreshData();
+      initialLoadedRef.current = true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "数据加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshData]);
+
   // 页面首次加载时拉取全部数据；后续筛选只刷新列表，避免整页闪烁。
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      setError(null);
-      try {
-        await refreshData();
-        initialLoadedRef.current = true;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "数据加载失败");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1662,7 +1665,10 @@ export default function LeadsManagement() {
     return (
       <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
         <div className="grid h-full place-items-center">
-          <p className="text-sm text-[#8b95a6]">加载中...</p>
+          <p className="inline-flex items-center gap-2 text-sm text-[#8b95a6]">
+            <LoaderIcon size={16} className="animate-spin" />
+            加载中...
+          </p>
         </div>
       </section>
     );
@@ -1676,6 +1682,13 @@ export default function LeadsManagement() {
           <div className="text-center">
             <p className="text-sm font-semibold text-[#1a1f2e]">数据加载失败</p>
             <p className="mt-2 text-xs text-[#8b95a6]">{error}</p>
+            <button
+              onClick={() => void loadData()}
+              className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-[#dfe5ee] bg-white px-4 text-xs font-semibold text-[#374151] hover:bg-[#f8fafc]"
+            >
+              <RefreshCwIcon size={14} />
+              重试
+            </button>
           </div>
         </div>
       </section>
@@ -1825,8 +1838,26 @@ export default function LeadsManagement() {
 
           <div className="min-h-0 flex-1 overflow-auto">
             {pagedLeads.length === 0 ? (
-              <div className="px-5 py-12 text-center text-xs text-[#8b95a6]">
-                暂无线索数据
+              <div className="flex flex-col items-center gap-3 px-5 py-12 text-center text-xs leading-6 text-[#8b95a6]">
+                {hasActiveFilters ? (
+                  <>
+                    <span>当前筛选条件下无匹配线索</span>
+                    <button
+                      onClick={() => {
+                        setKeyword("");
+                        setSource("all");
+                        setAssignedStaffFilter("all");
+                        setStatus("全部状态");
+                        setPage(1);
+                      }}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#eff6ff] px-3 font-semibold text-[#2563eb]"
+                    >
+                      重置筛选条件
+                    </button>
+                  </>
+                ) : (
+                  <span>暂无线索数据，请点击右上角"刷新"或同步拉取线索</span>
+                )}
               </div>
             ) : (
             <table className="w-full table-fixed text-left text-xs">

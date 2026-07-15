@@ -80,7 +80,9 @@ export default function ChatPanel({ contact = null, messages = [], loading = fal
             </span>
           </div>
         ) : messages.length === 0 ? (
-          <div className="grid h-full place-items-center text-xs text-[#8b95a6]">该会话暂无已入库消息</div>
+          <div className="grid h-full place-items-center px-8 text-center text-xs leading-6 text-[#8b95a6]">
+            该会话尚未收到已入库的私信事件，请等待客户发送私信。
+          </div>
         ) : (
           messages.map((msg) => {
             const isCustomer = msg.sender === "user";
