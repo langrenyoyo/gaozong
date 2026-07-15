@@ -44,6 +44,7 @@ import type {
 } from "../../../api/types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
   short_video_live_lead: "留资管理表",
@@ -146,6 +147,14 @@ export default function DailyReports({ user }: { user: AppUser }) {
     <section className="flex h-full flex-col overflow-auto bg-[#f3f6fa]">
       <header className="border-b border-[#e4e8f0] bg-white px-6 py-4">
         <h1 className="text-[15px] font-bold text-[#1a1f2e]">每日报表</h1>
+        <p className="mt-1 text-xs text-[#8b95a6]">查看微信助手生成的每日业务报表。</p>
+        <ModuleTabs items={[
+          { label: "助手状态", path: "/wechat-assistant" },
+          { label: "微信配置", path: "/wechat-assistant/config" },
+          { label: "任务记录", path: "/wechat-assistant/tasks" },
+          { label: "下载与测试", path: "/wechat-assistant/download-test" },
+          { label: "每日报表", path: "/wechat-assistant/daily-reports" },
+        ]} />
         <p className="mt-1 text-xs text-[#8b95a6]">
           生成留资管理、每日销售反馈、销售单车成本与线索溯源四类日报；补录归因、广告指标与展厅价位；下载由后端按可信商户校验后返回。
         </p>

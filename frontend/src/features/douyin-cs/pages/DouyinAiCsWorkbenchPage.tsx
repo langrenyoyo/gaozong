@@ -61,6 +61,7 @@ import {
   type UploadDouyinImageResponse,
 } from "../api";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
@@ -2182,6 +2183,10 @@ export default function DouyinAiCsWorkbenchPage() {
             <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
               多抖音号会话工作台，当前支持测试白名单内的 AI 自动回复闭环。
             </p>
+            <ModuleTabs items={[
+              { label: "客服工作台", path: "/douyin-cs/workbench" },
+              { label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
+            ]} />
           </div>
         </div>
         <div className="flex items-center gap-3">

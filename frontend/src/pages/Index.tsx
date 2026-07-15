@@ -11,6 +11,7 @@ import ChatPanel from "../features/leads/components/ChatPanel";
 import ContactInfo from "../features/leads/components/ContactInfo";
 import ContactList from "../features/leads/components/ContactList";
 import SideNav from "../components/SideNav";
+import type { ModuleTabItem } from "../components/ModuleTabs";
 import { API_BASE_URL } from "../api/client";
 import { fetchLeads } from "../api/leads";
 import { fetchWebhookEvents } from "../api/webhookEvents";
@@ -33,7 +34,7 @@ import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
 import AdminReturnVisitsPage from "./AdminReturnVisitsPage";
-import { isAdminLike, isMockAuthUser } from "../features/capabilities";
+import { filterCapabilityNavCenters, isAdminLike, isMockAuthUser } from "../features/capabilities";
 
 interface DouyinAccount {
   name: string;
@@ -673,6 +674,13 @@ export default function Index({
   const isAdminUser = isAdminLike(user);
   const isMockUser = isMockAuthUser(user);
   const isAdminSectionActive = isAdminUser && (!isMockUser || isAdminRouteNav(superActiveNav));
+  const computeTabs = useMemo<ModuleTabItem[]>(
+    () =>
+      filterCapabilityNavCenters(user)
+        .find((center) => center.id === "compute-center")
+        ?.children.map((item) => ({ label: item.label, path: item.path })) || [],
+    [user],
+  );
 
   useEffect(() => {
     if (!isAdminRouteNav(initialActiveNav)) {
@@ -719,8 +727,9 @@ export default function Index({
   const isComputeNav =
     activeNav === "compute" ||
     activeNav === "compute-token-transactions" ||
-    activeNav === "compute-recharge-orders" ||
-    activeNav === "compute-packages";
+    activeNav === "compute-recharge-orders";
+  const isComputeConfigNav =
+    activeNav === "compute-packages" || activeNav === "compute-markup-ratios";
   const isAiEditMaterialsNav = activeNav === "ai-edit-materials";
   const isAiEditEditorNav = activeNav === "ai-edit-editor";
   const activeWechatTab: WechatAgentTab =
@@ -825,10 +834,10 @@ export default function Index({
           <DailyReports user={user} />
         ) : isWechatAssistantNav ? (
           <WechatAgent activeTab={activeWechatTab} />
-        ) : activeNav === "compute-markup-ratios" ? (
-          <SuperComputeConfig />
+        ) : isComputeConfigNav ? (
+          <SuperComputeConfig tabs={computeTabs} />
         ) : isComputeNav ? (
-          <ComputeCenter />
+          <ComputeCenter tabs={computeTabs} />
         ) : isAiEditMaterialsNav ? (
           <MaterialLibrary />
         ) : isAiEditEditorNav ? (

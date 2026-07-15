@@ -26,6 +26,8 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
+import type { ModuleTabItem } from "../../../components/ModuleTabs";
 
 // 流水类型中文标签（对齐后端 transaction_type 枚举）
 const TRANSACTION_TYPE_LABELS: Record<string, string> = {
@@ -315,7 +317,13 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
   );
 }
 
-export default function ComputeCenter() {
+const DEFAULT_COMPUTE_TABS: ModuleTabItem[] = [
+  { label: "算力概览", path: "/compute/center" },
+  { label: "算力流水", path: "/compute/token-transactions" },
+  { label: "充值订单", path: "/compute/recharge-orders" },
+];
+
+export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: ModuleTabItem[] }) {
   const [summary, setSummary] = useState<ComputeSummary | null>(null);
   const [transactions, setTransactions] = useState<ComputeTransaction[]>([]);
   const [packages, setPackages] = useState<ComputePackage[]>([]);
@@ -403,6 +411,7 @@ export default function ComputeCenter() {
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高算力</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">算力点数余额、消耗和充值记录</p>
+            <ModuleTabs items={tabs} />
           </div>
         </div>
         <button

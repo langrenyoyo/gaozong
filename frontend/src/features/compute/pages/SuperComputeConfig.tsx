@@ -29,6 +29,8 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
+import type { ModuleTabItem } from "../../../components/ModuleTabs";
 
 interface PackageFormState {
   id: number | null;
@@ -129,7 +131,12 @@ function ResultSummary({ summary }: { summary: ComputeSummary | null }) {
   );
 }
 
-export default function SuperComputeConfig() {
+const DEFAULT_COMPUTE_CONFIG_TABS: ModuleTabItem[] = [
+  { label: "套餐配置", path: "/compute/packages" },
+  { label: "上浮比例", path: "/compute/markup-ratios" },
+];
+
+export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS }: { tabs?: ModuleTabItem[] }) {
   const [packages, setPackages] = useState<ComputePackage[]>([]);
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [packageError, setPackageError] = useState<string | null>(null);
@@ -392,6 +399,7 @@ export default function SuperComputeConfig() {
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">算力套餐配置</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">平台算力套餐、商户后台充值和套餐发放</p>
+            <ModuleTabs items={tabs} />
           </div>
         </div>
         <button

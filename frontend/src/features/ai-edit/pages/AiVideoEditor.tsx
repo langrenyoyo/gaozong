@@ -36,6 +36,7 @@ import type {
   AiEditTemplate,
 } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 /** 统一错误信息（兼容 axios 形态）。 */
 function resolveError(err: unknown): string {
@@ -232,6 +233,10 @@ export default function AiVideoEditor() {
             <p className="mt-1 text-xs text-[#8b95a6]">
               选择素材与模板，创建任务；720P 草稿预览后确认 1080P 成片。任务由本机处理程序执行。
             </p>
+            <ModuleTabs items={[
+              { label: "素材库", path: "/ai-edit/materials" },
+              { label: "剪辑工作台", path: "/ai-edit/editor" },
+            ]} />
           </div>
         </div>
       </header>

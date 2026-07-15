@@ -23,6 +23,7 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 const PAGE_SIZE = 20;
 const ALL_STATUS = "all";
@@ -595,6 +596,10 @@ export default function DouyinAutoReplyRunsPage() {
             <p className="mt-1 text-xs text-[#8b95a6]">
               查看 AI 自动回复从客户消息、智能体、模型生成到发送结果的链路状态，用于排查未回复、阻断、超时和发送失败问题。
             </p>
+            <ModuleTabs items={[
+              { label: "客服工作台", path: "/douyin-cs/workbench" },
+              { label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
+            ]} />
           </div>
         </div>
       </header>

@@ -148,50 +148,28 @@ export default function SideNav({
               })
             : visibleCenters.map((center) => {
                 const isCenterActive = activeCenter.id === center.id;
-                const showChildren = expanded && isCenterActive && center.children.length > 1;
                 return (
-                  <div key={center.id} className={expanded ? "w-full" : ""}>
-                    <button
-                      onClick={() => navigateMerchantItem(center.defaultNavId, center.path)}
-                      className={`relative flex transition-smooth ${
-                        expanded
-                          ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
-                          : "w-16 flex-col items-center gap-1 rounded-xl py-2.5 text-[10px]"
-                      } ${
-                        isCenterActive
-                          ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
-                          : "text-slate-400 hover:bg-white/8 hover:text-white"
-                      }`}
-                    >
-                      <span className="shrink-0">{centerIcons[center.id]}</span>
-                      <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? center.title : center.shortLabel}</span>
-                      {center.id === "douyin-cs" && showSalesBadge ? (
-                        <span className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${expanded ? "" : "absolute right-1.5 top-1.5"}`}>
-                          6
-                        </span>
-                      ) : null}
-                    </button>
-                    {showChildren ? (
-                      <div className="mt-1.5 space-y-1 pl-8">
-                        {center.children.map((item) => {
-                          const isChildActive = activeNav === item.id;
-                          return (
-                            <button
-                              key={item.id}
-                              onClick={() => navigateMerchantItem(item.id, item.path)}
-                              className={`h-8 w-full rounded-lg px-3 text-left text-[11px] font-semibold transition-smooth ${
-                                isChildActive
-                                  ? "bg-white/12 text-white"
-                                  : "text-slate-500 hover:bg-white/8 hover:text-slate-200"
-                              }`}
-                            >
-                              <span className="block truncate">{item.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                  <button
+                    key={center.id}
+                    onClick={() => navigateMerchantItem(center.defaultNavId, center.path)}
+                    className={`relative flex transition-smooth ${
+                      expanded
+                        ? "h-10 w-full flex-row items-center gap-3 rounded-xl px-3 text-xs font-semibold"
+                        : "w-16 flex-col items-center gap-1 rounded-xl py-2.5 text-[10px]"
+                    } ${
+                      isCenterActive
+                        ? "bg-[#2563eb] text-white shadow-[0_12px_24px_rgba(37,99,235,0.28)]"
+                        : "text-slate-400 hover:bg-white/8 hover:text-white"
+                    }`}
+                  >
+                    <span className="shrink-0">{centerIcons[center.id]}</span>
+                    <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? center.title : center.shortLabel}</span>
+                    {center.id === "douyin-cs" && showSalesBadge ? (
+                      <span className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${expanded ? "" : "absolute right-1.5 top-1.5"}`}>
+                        6
+                      </span>
                     ) : null}
-                  </div>
+                  </button>
                 );
               })}
           {isMockUser && visibleAdminItems.length > 0

@@ -21,6 +21,7 @@ import { fetchAiEditMaterials } from "../api";
 import { deleteLocalMaterial, importLocalMaterial } from "../localApi";
 import type { AiEditMaterial, AiEditMaterialScope } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 type TabKey = "merchant" | "platform" | "trash";
 
@@ -134,8 +135,12 @@ export default function MaterialLibrary() {
               <ScissorsIcon size={23} />
             </div>
             <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
+              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
               <p className="mt-1 text-xs text-[#8b95a6]">私有、公共素材与回收站；本机导入由 AI小高助手处理。</p>
+              <ModuleTabs items={[
+                { label: "素材库", path: "/ai-edit/materials" },
+                { label: "剪辑工作台", path: "/ai-edit/editor" },
+              ]} />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -168,7 +173,7 @@ export default function MaterialLibrary() {
         </div>
       </header>
 
-      <nav className="flex items-center gap-1 border-b border-[#e4e8f0] bg-white px-6">
+      <nav aria-label="素材范围切换" className="flex items-center gap-1 border-b border-[#e4e8f0] bg-white px-6">
         {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
           <button
             key={key}

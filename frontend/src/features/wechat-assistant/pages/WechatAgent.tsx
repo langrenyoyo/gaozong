@@ -52,6 +52,7 @@ import type {
   WechatTaskRawResultSummary,
 } from "../types";
 import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 const DEFAULT_TEST_NICKNAME = "Aw3";
 const SOURCE_START_COMMAND = "cd E:\\work\\project\\auto_wechat\npython app\\local_agent_main.py --host 127.0.0.1 --port 19000 --server-url http://127.0.0.1:9000";
@@ -597,6 +598,13 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <p className="mt-1 text-xs text-[#8b95a6]">
                 {pageMeta.description}
               </p>
+              <ModuleTabs items={[
+                { label: "助手状态", path: "/wechat-assistant" },
+                { label: "微信配置", path: "/wechat-assistant/config" },
+                { label: "任务记录", path: "/wechat-assistant/tasks" },
+                { label: "下载与测试", path: "/wechat-assistant/download-test" },
+                { label: "每日报表", path: "/wechat-assistant/daily-reports" },
+              ]} />
             </div>
           </div>
           <button
@@ -611,10 +619,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto p-5">
-        <div className="mb-4 rounded-lg border border-[#dfe5ee] bg-white px-4 py-3">
-          <div className="text-sm font-bold text-[#1a1f2e]">{pageMeta.title}</div>
-          <div className="mt-1 text-xs leading-5 text-[#64748b]">{pageMeta.description}</div>
-        </div>
         {pageError ? (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <span>数据加载失败：{pageError}</span>
