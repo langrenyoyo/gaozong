@@ -21,6 +21,7 @@ import {
   type AiReplyDecisionSource,
 } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const PAGE_SIZE = 20;
 
@@ -50,17 +51,7 @@ const RISK_FLAG_LABELS: Record<string, string> = {
 };
 
 function resolveErrorMessage(error: unknown): string {
-  if (error && typeof error === "object") {
-    const anyError = error as {
-      response?: { data?: { message?: string; detail?: string | { message?: string; safe_message?: string } } };
-      message?: string;
-    };
-    const detail = anyError.response?.data?.detail;
-    if (detail && typeof detail === "object") return detail.safe_message || detail.message || "请求失败";
-    if (typeof detail === "string") return detail;
-    return anyError.response?.data?.message || anyError.message || "请求失败";
-  }
-  return error instanceof Error ? error.message : "请求失败";
+  return userFacingError(error, "数据加载失败，请稍后重试");
 }
 
 function safeArray<T>(value: T[] | null | undefined): T[] {
@@ -69,7 +60,7 @@ function safeArray<T>(value: T[] | null | undefined): T[] {
 
 function labelFromMap(value: string | null | undefined, labels: Record<string, string>): string {
   if (!value) return "未知";
-  return labels[value] || value;
+  return labels[value] || "未知";
 }
 
 function formatConfidence(value?: number | null): string {
@@ -137,9 +128,9 @@ function SourceList({ sources }: { sources: AiReplyDecisionSource[] }) {
         <div key={`${source.chunk_id || "chunk"}-${index}`} className="rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 py-2 text-xs">
           <div className="font-semibold text-[#1a1f2e]">{source.title || "未命名知识片段"}</div>
           <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-[#64748b]">
-            <span>chunk_id：{source.chunk_id ?? "-"}</span>
-            <span>document_id：{source.document_id ?? "-"}</span>
-            <span>score：{sourceScore(source.score)}</span>
+            <span>内容片段编号：{source.chunk_id ?? "-"}</span>
+            <span>文档编号：{source.document_id ?? "-"}</span>
+            <span>匹配分数：{sourceScore(source.score)}</span>
           </div>
         </div>
       ))}
@@ -290,8 +281,8 @@ function DetailModal({
               <section className="rounded-xl border border-[#e4e8f0] bg-white p-4">
                 <h3 className="text-xs font-bold text-[#1a1f2e]">调试信息</h3>
                 <div className="mt-3 grid gap-2 text-xs text-[#475467] md:grid-cols-2">
-                  <div>RAG：{detail.rag_used ? "已使用" : "未使用"}</div>
-                  <div>LLM：{detail.llm_used ? "已使用" : "未使用"}</div>
+                  <div>知识库参考：{detail.rag_used ? "已使用" : "未使用"}</div>
+                  <div>智能生成：{detail.llm_used ? "已使用" : "未使用"}</div>
                   <div>模型：{detail.model || "-"}</div>
                   <div>发送来源：{detail.send_source || "-"}</div>
                   <div>决策版本：{detail.decision_version || "-"}</div>
@@ -515,15 +506,15 @@ export default function AiReplyDecisionLogsPage() {
           <option value="all">全部意向</option>
           {Object.entries(LEAD_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-        <select value={ragUsed} onChange={(event) => { setRagUsed(event.target.value); setPage(1); }} aria-label="RAG 使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
-          <option value="all">RAG全部</option>
-          <option value="true">RAG已使用</option>
-          <option value="false">RAG未使用</option>
+        <select value={ragUsed} onChange={(event) => { setRagUsed(event.target.value); setPage(1); }} aria-label="知识库参考使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+          <option value="all">知识库参考全部</option>
+          <option value="true">知识库参考已使用</option>
+          <option value="false">知识库参考未使用</option>
         </select>
-        <select value={llmUsed} onChange={(event) => { setLlmUsed(event.target.value); setPage(1); }} aria-label="LLM 使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
-          <option value="all">LLM全部</option>
-          <option value="true">LLM已使用</option>
-          <option value="false">LLM未使用</option>
+        <select value={llmUsed} onChange={(event) => { setLlmUsed(event.target.value); setPage(1); }} aria-label="智能生成使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+          <option value="all">智能生成全部</option>
+          <option value="true">智能生成已使用</option>
+          <option value="false">智能生成未使用</option>
         </select>
         <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} aria-label="起始日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
         <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} aria-label="截止日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />

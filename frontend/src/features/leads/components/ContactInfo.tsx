@@ -52,21 +52,21 @@ export default function ContactInfo({ contact = null }: ContactInfoProps) {
     { label: "来源渠道", value: contact.source },
     { label: "最近消息", value: contact.lastMessage },
     { label: "线索内容", value: contact.leadContent || contact.originalMessageText },
-    { label: "lead_id", value: contact.leadId },
+    { label: "线索编号", value: contact.leadId },
   ];
   const debugRows = [
-    { label: "open_id", value: contact.customerOpenId },
-    { label: "conversation_short_id", value: contact.conversationShortId || (contact.isFallbackConversation ? contact.id : null) },
-    { label: "fallback 会话", value: contact.isFallbackConversation ? "是" : "否" },
-    { label: "from_user_id", value: contact.fromUserId },
-    { label: "to_user_id", value: contact.toUserId },
+    { label: "客户标识", value: contact.customerOpenId },
+    { label: "会话编号", value: contact.conversationShortId || (contact.isFallbackConversation ? contact.id : null) },
+    { label: "是否为备用会话", value: contact.isFallbackConversation ? "是" : "否" },
+    { label: "发送方标识", value: contact.fromUserId },
+    { label: "接收方标识", value: contact.toUserId },
   ];
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-[#e4e8f0] bg-white">
       <div className="shrink-0 border-b border-[#e4e8f0] px-4 py-5">
         <h2 className="text-sm font-bold text-[#1a1f2e]">客户画像</h2>
-        <p className="mt-1 text-[11px] text-[#8b95a6]">来自已入库 webhook-events</p>
+        <p className="mt-1 text-[11px] text-[#8b95a6]">来自已保存的事件记录</p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">

@@ -20,6 +20,7 @@ import {
 import { fetchAiEditMaterials } from "../api";
 import { deleteLocalMaterial, importLocalMaterial } from "../localApi";
 import type { AiEditMaterial, AiEditMaterialScope } from "../types";
+import { userFacingError } from "../../../lib/userFacingError";
 
 type TabKey = "merchant" | "platform" | "trash";
 
@@ -36,30 +37,20 @@ const SCOPE_LABELS: Record<AiEditMaterialScope, string> = {
 
 /** 统一错误信息：兼容 axios（9000）与 fetch（19000）两种错误形态。 */
 function resolveError(err: unknown): string {
-  if (err && typeof err === "object") {
-    const anyErr = err as {
-      response?: { data?: { message?: string; detail?: string | { message?: string } } };
-      message?: string;
-    };
-    const detail = anyErr.response?.data?.detail;
-    if (detail && typeof detail === "object" && detail.message) return detail.message;
-    if (typeof detail === "string") return detail;
-    return anyErr.response?.data?.message || anyErr.message || "请求失败";
-  }
-  return err instanceof Error ? err.message : "请求失败";
+  return userFacingError(err, "数据加载失败，请稍后重试");
 }
 
 /** 状态点：用颜色区分待分析/分析中/已分析/失败。 */
 function statusBadge(status: string | null | undefined): { label: string; className: string } {
   const s = (status || "").toLowerCase();
   if (s === "succeeded" || s === "analyzed" || s === "done")
-    return { label: status || "完成", className: "text-emerald-600 bg-emerald-50" };
+    return { label: "已完成", className: "text-emerald-600 bg-emerald-50" };
   if (s === "running" || s === "analyzing" || s === "pending")
-    return { label: status || "处理中", className: "text-amber-600 bg-amber-50" };
+    return { label: "处理中", className: "text-amber-600 bg-amber-50" };
   if (s === "failed" || s === "error")
-    return { label: status || "失败", className: "text-rose-600 bg-rose-50" };
+    return { label: "失败", className: "text-rose-600 bg-rose-50" };
   if (!status) return { label: "待分析", className: "text-slate-500 bg-slate-100" };
-  return { label: status, className: "text-slate-600 bg-slate-100" };
+  return { label: "未知状态", className: "text-slate-600 bg-slate-100" };
 }
 
 export default function MaterialLibrary() {
@@ -143,8 +134,8 @@ export default function MaterialLibrary() {
               <ScissorsIcon size={23} />
             </div>
             <div>
-              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
-              <p className="mt-1 text-xs text-[#8b95a6]">私有/公共素材与回收站；本机导入由小高AI微信助手（127.0.0.1:19000）处理。</p>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
+              <p className="mt-1 text-xs text-[#8b95a6]">私有、公共素材与回收站；本机导入由 AI小高助手处理。</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -211,7 +202,7 @@ export default function MaterialLibrary() {
             <table className="w-full text-left text-sm">
               <thead className="bg-[#f9fafb] text-xs text-[#8b95a6]">
                 <tr>
-                  <th className="px-4 py-3 font-medium">素材 ID</th>
+                <th className="px-4 py-3 font-medium">素材编号</th>
                   <th className="px-4 py-3 font-medium">范围</th>
                   <th className="px-4 py-3 font-medium">类型</th>
                   <th className="px-4 py-3 font-medium">分析状态</th>

@@ -104,7 +104,12 @@ export async function deleteLocalMaterial(materialId: string): Promise<void> {
 export async function createLocalJob(payload: {
   job_id: string;
   template_key: string;
-  materials: { material_id: string; role: string }[];
+  materials: {
+    material_id: string;
+    role: string;
+    source_start?: number;
+    source_end?: number;
+  }[];
 }): Promise<{ job_id: string; status: string }> {
   return requestLocal("/agent/ai-edit/jobs", {
     method: "POST",

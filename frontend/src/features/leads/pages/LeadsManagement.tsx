@@ -1,4 +1,4 @@
-﻿import {
+import {
   AlertTriangleIcon,
   CheckCircleIcon,
   ChevronLeftIcon,
@@ -29,6 +29,7 @@ import { fetchWebhookEvents } from "../api";
 import type { AgentStatusData, DouyinSyncResponse, Lead, LeadWechatNotifyStatus, ReportSummary, Staff, WechatDetectResponse, CheckRecord, WechatAutoDetectStatus, WebhookEvent } from "../types";
 import type { NotificationRecord } from "../../../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 // ========== 状态配置（对齐 auto_wechat） ==========
 
@@ -766,7 +767,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
         setConversationId(null);
         setEvents([]);
         setTotal(0);
-        setError(err instanceof Error ? err.message : "抖音私信记录加载失败");
+        setError(userFacingError(err, "抖音私信记录加载失败"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1108,10 +1109,10 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
             <button
               onClick={onSendToStaff}
               disabled={!canSendToStaff}
-              title={canSendToStaff ? "创建微信通知任务，Local Agent 在线后将自动执行" : notifyDisabledReason}
+              title={canSendToStaff ? "创建微信通知任务，AI小高助手在线后将自动执行" : notifyDisabledReason}
               className="h-9 w-full rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-xs font-semibold text-white shadow-[0_4px_12px_rgba(37,99,235,0.3)] disabled:cursor-not-allowed disabled:opacity-50 hover:from-blue-700 hover:to-indigo-700"
             >
-              {notifyLoading ? "创建中..." : "通知销售"}
+              {notifyLoading ? "创建中…" : "通知销售"}
             </button>
           </div>
         ) : null}
@@ -1321,7 +1322,7 @@ export default function LeadsManagement() {
       await refreshData();
       initialLoadedRef.current = true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "数据加载失败");
+      setError(userFacingError(err, "数据加载失败"));
     } finally {
       setLoading(false);
     }
@@ -1337,7 +1338,7 @@ export default function LeadsManagement() {
   useEffect(() => {
     if (!initialLoadedRef.current) return;
     void loadLeadsPage().catch((err) => {
-      toast.error(err instanceof Error ? err.message : "线索列表刷新失败");
+      toast.error(userFacingError(err, "线索列表刷新失败"));
     });
   }, [loadLeadsPage]);
 
@@ -1352,7 +1353,7 @@ export default function LeadsManagement() {
         setLeads((current) => current.map((item) => (item.id === detail.id ? { ...item, ...detail } : item)));
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : "线索详情加载失败");
+          toast.error(userFacingError(err, "线索详情加载失败"));
         }
       }
     }
@@ -1380,7 +1381,7 @@ export default function LeadsManagement() {
       } catch (err) {
         if (!cancelled) {
           setNotificationRecords([]);
-          toast.error(err instanceof Error ? err.message : "线索通知记录加载失败");
+          toast.error(userFacingError(err, "线索通知记录加载失败"));
         }
       } finally {
         if (!cancelled) {
@@ -1415,7 +1416,7 @@ export default function LeadsManagement() {
             allowed: false,
             reason: "LOAD_FAILED",
             status: "unavailable",
-            message: err instanceof Error ? err.message : "微信通知状态读取失败",
+            message: userFacingError(err, "微信通知状态读取失败"),
             lead_id: selectedId,
           });
         }
@@ -1443,7 +1444,7 @@ export default function LeadsManagement() {
       setSyncError(null);
       setSyncPhase("preview");
     } catch (err) {
-      setSyncError(err instanceof Error ? err.message : "预览请求失败");
+      setSyncError(userFacingError(err, "预览请求失败"));
       setSyncPhase("error");
     } finally {
       setSyncLoading(false);
@@ -1458,7 +1459,7 @@ export default function LeadsManagement() {
       setSyncPhase("result");
       await refreshData();
     } catch (err) {
-      setSyncError(err instanceof Error ? err.message : "同步失败");
+      setSyncError(userFacingError(err, "同步失败"));
       setSyncPhase("error");
     }
   };
@@ -1493,7 +1494,7 @@ export default function LeadsManagement() {
         setNotifyStatus(await loadWechatNotifyStatusForLead(targetLead.id));
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "分配失败";
+      const message = userFacingError(err, "分配失败");
       toast.error(message);
     } finally {
       setAssignSubmitting(false);
@@ -1575,7 +1576,7 @@ export default function LeadsManagement() {
         toast.error(result.message);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "设置自动检测目标失败");
+      toast.error(userFacingError(err, "设置自动检测目标失败"));
     }
   };
 
@@ -1588,11 +1589,11 @@ export default function LeadsManagement() {
         setAutoDetectStatus(result);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "取消自动检测失败");
+      toast.error(userFacingError(err, "取消自动检测失败"));
     }
   };
 
-  // 通知销售：只在 9000 创建微信任务，由 Local Agent 后续拉取执行
+  // 通知销售：只在主系统创建微信任务，由 AI小高助手后续拉取执行
   const handleSendToStaff = async () => {
     if (!selectedLead || !selectedLead.assigned_staff_id) return;
 
@@ -1620,7 +1621,7 @@ export default function LeadsManagement() {
         toast.error(result.message || "创建通知任务失败");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "创建通知任务失败");
+      toast.error(userFacingError(err, "创建通知任务失败"));
     } finally {
       setNotifyLoading(false);
     }

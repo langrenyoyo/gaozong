@@ -61,7 +61,7 @@ export default function ContactList({
           <div className="min-w-0">
             <h2 className="text-[15px] font-bold text-[#1a1f2e]">抖音AI小高客服</h2>
             <p className="mt-1 truncate text-[11px] text-[#8b95a6]">
-              {douyinAccountName ? `抖音企业号：${douyinAccountName}` : "真实 webhook 私信会话"}
+              {douyinAccountName ? `抖音企业号：${douyinAccountName}` : "真实事件回调私信会话"}
             </p>
           </div>
           <button

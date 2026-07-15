@@ -16,6 +16,7 @@ import { fetchLeads } from "../api/leads";
 import { fetchWebhookEvents } from "../api/webhookEvents";
 import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
+import { userFacingError } from "../lib/userFacingError";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
@@ -750,7 +751,7 @@ export default function Index({
       setChatEvents([]);
       setChatLeads([]);
       setSelectedContactId("");
-      setChatError(err instanceof Error ? err.message : "真实抖音私信会话加载失败");
+      setChatError(userFacingError(err, "数据加载失败，请稍后重试"));
     } finally {
       setChatLoading(false);
     }

@@ -27,7 +27,7 @@ export default function ChatPanel({ contact = null, messages = [], loading = fal
       <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f3f6fa]">
         <header className="shrink-0 border-b border-[#e4e8f0] bg-white px-6 py-4">
           <h1 className="text-[15px] font-bold text-[#1a1f2e]">抖音AI小高客服</h1>
-          <p className="mt-1 text-xs text-[#8b95a6]">真实 webhook 私信会话</p>
+          <p className="mt-1 text-xs text-[#8b95a6]">真实事件回调私信会话</p>
         </header>
         <div className="grid min-h-0 flex-1 place-items-center px-8 text-center">
           <p className="max-w-[320px] text-xs leading-6 text-[#8b95a6]">
@@ -138,7 +138,7 @@ export default function ChatPanel({ contact = null, messages = [], loading = fal
 
       <footer className="shrink-0 border-t border-[#e4e8f0] bg-white px-4 py-3">
         <div className="rounded-2xl border border-[#e4e8f0] bg-[#f8fafc] px-4 py-3 text-xs leading-6 text-[#64748b]">
-          当前页面只展示系统已收到并写入 webhook-events 的私信事件；不主动拉取历史私信，不发送抖音消息，不执行 AI 自动回复。
+          当前页面只展示系统已收到并保存的私信事件；不主动拉取历史私信，不发送抖音消息，不执行 AI 自动回复。
         </div>
       </footer>
     </section>

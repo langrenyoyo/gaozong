@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertCircleIcon,
@@ -25,6 +25,7 @@ import type {
   ComputeTransaction,
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 // 流水类型中文标签（对齐后端 transaction_type 枚举）
 const TRANSACTION_TYPE_LABELS: Record<string, string> = {
@@ -57,23 +58,21 @@ function formatPayMethod(value: string): string {
   return value || "-";
 }
 
-/** Token 变动展示：正数加 +，负数保留 -。 */
+/** 算力点数 变动展示：正数加 +，负数保留 -。 */
 function formatTokenChange(delta: number): string {
   return delta > 0 ? `+${delta}` : String(delta);
 }
 
 /** 从 axios 错误里提取后端 message，便于在 UI/Toast 展示可读原因。 */
 function resolveErrorMessage(err: unknown): string {
-  if (err && typeof err === "object") {
-    const anyErr = err as {
-      response?: { data?: { message?: string; detail?: string | { message?: string } } };
-      message?: string;
-    };
-    const detail = anyErr.response?.data?.detail;
-    if (detail && typeof detail === "object" && detail.message) return detail.message;
-    return anyErr.response?.data?.message || anyErr.message || "请求失败";
-  }
-  return err instanceof Error ? err.message : "请求失败";
+  return userFacingError(err, "数据加载失败，请稍后重试");
+}
+
+function rechargeStatusText(value: string): string {
+  if (value === "mock_pending" || value === "pending") return "待支付";
+  if (value === "paid") return "已支付";
+  if (value === "cancelled") return "已取消";
+  return "未知状态";
 }
 
 function StatCard({
@@ -98,7 +97,7 @@ function StatCard({
       <div className="mt-3 text-2xl font-bold text-[#1a1f2e]">
         {loading ? <span className="text-[#cbd5e1]">--</span> : value}
       </div>
-      <div className="mt-1 text-[11px] text-[#8b95a6]">Token</div>
+      <div className="mt-1 text-[11px] text-[#8b95a6]">算力点数</div>
     </div>
   );
 }
@@ -134,7 +133,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
     setErrorText(null);
     const customValue = customTokens.trim();
     if (selectedPackageId === null && (!customValue || Number(customValue) <= 0)) {
-      setErrorText("请选择套餐或输入自定义 Token 数量");
+      setErrorText("请选择套餐或输入自定义算力点数数量");
       return;
     }
     setSubmitting(true);
@@ -146,7 +145,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
       });
       setOrder(response.data);
       onSuccess();
-      toast.success("已创建充值订单（mock，未真实支付）");
+      toast.success("已创建充值订单（模拟订单，未真实支付）");
     } catch (err) {
       const message = resolveErrorMessage(err);
       setErrorText(message);
@@ -162,7 +161,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
             <h2 id="recharge-modal-title" className="text-base font-bold text-[#1a1f2e]">算力充值</h2>
-            <p className="mt-1 text-xs text-[#8b95a6]">选择套餐或自定义金额（一期 mock，不真实扣款）</p>
+            <p className="mt-1 text-xs text-[#8b95a6]">选择套餐或自定义金额（一期为模拟订单，不真实扣款）</p>
           </div>
           <button
             onClick={onClose}
@@ -179,8 +178,8 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
               <div className="grid h-20 w-20 place-items-center rounded-2xl border border-[#dbe3ef] bg-white text-[#2563eb]">
                 <QrCodeIcon size={44} />
               </div>
-              <p className="mt-4 text-sm font-bold text-[#1a1f2e]">充值订单已创建（mock）</p>
-              <p className="mt-1 text-xs text-[#8b95a6]">充值订单为 mock_pending，真实支付暂未接入。</p>
+              <p className="mt-4 text-sm font-bold text-[#1a1f2e]">充值订单已创建（模拟订单）</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">充值订单待支付，真实支付暂未接入。</p>
               <p className="mt-1 text-xs text-[#8b95a6]">不会调用微信支付或支付宝真实支付，余额以后台入账或测试接口为准。</p>
               <div className="mt-4 w-full space-y-1.5 rounded-xl bg-white px-3 py-3 text-left text-xs ring-1 ring-[#e4e8f0]">
                 <div className="flex justify-between">
@@ -188,7 +187,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                   <span className="font-semibold text-[#1a1f2e]">{order.order_no}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#8b95a6]">充值 Token</span>
+                  <span className="text-[#8b95a6]">充值算力点数</span>
                   <span className="font-semibold text-[#1a1f2e]">{order.tokens}</span>
                 </div>
                 <div className="flex justify-between">
@@ -198,12 +197,12 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                 <div className="flex justify-between">
                   <span className="text-[#8b95a6]">金额</span>
                   <span className="font-semibold text-[#1a1f2e]">
-                    {order.price_yuan === null || order.price_yuan === undefined ? "自定义 Token" : `¥${order.price_yuan}`}
+                    {order.price_yuan === null || order.price_yuan === undefined ? "自定义算力点数" : `¥${order.price_yuan}`}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#8b95a6]">状态</span>
-                  <span className="font-semibold text-amber-600">{order.status}</span>
+                  <span className="font-semibold text-amber-600">{rechargeStatusText(order.status)}</span>
                 </div>
               </div>
               <button onClick={onClose} className="mt-4 h-9 rounded-xl bg-[#2563eb] px-5 text-xs font-semibold text-white">
@@ -239,25 +238,25 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                       >
                         <div className="text-sm font-bold text-[#1a1f2e]">{pkg.name}</div>
                         <div className="mt-1 text-[11px] text-[#8b95a6]">¥{pkg.price_yuan}</div>
-                        <div className="mt-0.5 text-xs font-semibold text-[#2563eb]">{pkg.token_amount} Token</div>
+                        <div className="mt-0.5 text-xs font-semibold text-[#2563eb]">{pkg.token_amount} 算力点数</div>
                       </button>
                     );
                   })}
                 </div>
               )}
 
-              <h3 className="mt-5 text-xs font-bold text-[#1a1f2e]">自定义 Token 数量</h3>
+              <h3 className="mt-5 text-xs font-bold text-[#1a1f2e]">自定义算力点数数量</h3>
               <div className="mt-3 flex h-10 items-center rounded-xl border border-[#e4e8f0] bg-white px-3 focus-within:border-[#2563eb]">
                 <input
                   type="number"
                   min={1}
                   value={customTokens}
                   onChange={(event) => handleCustomInput(event.target.value)}
-                  aria-label="自定义 Token 数量"
-                  placeholder="输入 Token 数量"
+                  aria-label="自定义算力点数数量"
+                  placeholder="输入算力点数数量"
                   className="h-full w-full bg-transparent text-sm outline-none placeholder:text-[#9ca3af]"
                 />
-                <span className="ml-2 text-xs text-[#8b95a6]">Token</span>
+                <span className="ml-2 text-xs text-[#8b95a6]">算力点数</span>
               </div>
 
               <h3 className="mt-5 text-xs font-bold text-[#1a1f2e]">支付方式</h3>
@@ -402,8 +401,8 @@ export default function ComputeCenter() {
             <CoinsIcon size={22} />
           </div>
           <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">小高算力</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">Token 余额、消耗和充值记录</p>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高算力</h1>
+            <p className="mt-1 text-xs text-[#8b95a6]">算力点数余额、消耗和充值记录</p>
           </div>
         </div>
         <button
@@ -453,7 +452,7 @@ export default function ComputeCenter() {
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-xs text-orange-800">
             <AlertCircleIcon size={14} />
             <span>
-              当前算力余额为负（{summary.balance_tokens}），建议联系管理员核实消耗或补充 Token。
+              当前算力余额为负（{summary.balance_tokens}），建议联系管理员核实消耗或补充算力点数。
             </span>
           </div>
         ) : null}
@@ -469,7 +468,7 @@ export default function ComputeCenter() {
         ) : null}
 
         <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
-          <div className="font-semibold">充值订单为 mock_pending，真实支付暂未接入。</div>
+          <div className="font-semibold">充值订单当前为待支付，真实支付暂未接入。</div>
           <div>不会调用微信支付或支付宝真实支付；余额以后台入账或测试接口为准。</div>
         </div>
 
@@ -501,7 +500,7 @@ export default function ComputeCenter() {
               ))}
             </div>
           ) : packages.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs text-[#8b95a6]">暂无可用套餐，可在充值弹窗中使用自定义 Token 数量创建模拟订单。</div>
+            <div className="px-4 py-8 text-center text-xs text-[#8b95a6]">暂无可用套餐，可在充值弹窗中使用自定义算力点数数量创建模拟订单。</div>
           ) : (
             <div className="grid grid-cols-1 gap-3 px-4 py-4 md:grid-cols-3">
               {packages.map((pkg) => (
@@ -512,17 +511,17 @@ export default function ComputeCenter() {
                 >
                   <div className="text-sm font-bold text-[#1a1f2e]">{pkg.name}</div>
                   <div className="mt-2 text-lg font-bold text-[#2563eb]">¥{pkg.price_yuan}</div>
-                  <div className="mt-1 text-xs text-[#8b95a6]">{pkg.token_amount} Token</div>
+                  <div className="mt-1 text-xs text-[#8b95a6]">{pkg.token_amount} 算力点数</div>
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* Token 明细表 */}
+        {/* 算力点数明细表 */}
         <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
-            <h2 className="text-sm font-bold text-[#1a1f2e]">Token 明细</h2>
+            <h2 className="text-sm font-bold text-[#1a1f2e]">算力点数明细</h2>
             <button
               onClick={() => void loadTransactions(page)}
               disabled={loadingTransactions}
@@ -550,7 +549,7 @@ export default function ComputeCenter() {
           ) : transactions.length === 0 ? (
             <div className="grid place-items-center px-4 py-12 text-center">
               <CoinsIcon size={28} className="text-[#cbd5e1]" />
-              <p className="mt-2 text-xs text-[#8b95a6]">暂无 Token 明细</p>
+              <p className="mt-2 text-xs text-[#8b95a6]">暂无算力点数明细</p>
             </div>
           ) : (
             <>
@@ -560,7 +559,7 @@ export default function ComputeCenter() {
                     <th className="px-4 py-2.5 font-semibold">类型</th>
                     <th className="px-4 py-2.5 font-semibold">能力 · 模型</th>
                     <th className="px-4 py-2.5 font-semibold">实际字符</th>
-                    <th className="px-4 py-2.5 font-semibold">Token 变动</th>
+                    <th className="px-4 py-2.5 font-semibold">算力点数变动</th>
                     <th className="px-4 py-2.5 font-semibold">备注</th>
                     <th className="px-4 py-2.5 font-semibold">时间</th>
                   </tr>

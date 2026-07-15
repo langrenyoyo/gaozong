@@ -43,6 +43,7 @@ import type {
   SkippedReport,
 } from "../../../api/types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
   short_video_live_lead: "留资管理表",
@@ -225,7 +226,7 @@ function ReportsTaskTab() {
     } catch (err) {
       setRecords([]);
       setTotal(0);
-      setListError(err instanceof Error ? err.message : "任务列表加载失败");
+      setListError(userFacingError(err, "任务列表加载失败"));
     } finally {
       setListLoading(false);
     }
@@ -281,7 +282,7 @@ function ReportsTaskTab() {
       setPage(1);
       await loadList();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "日报生成失败");
+      toast.error(userFacingError(err, "日报生成失败"));
     } finally {
       setGenerating(false);
     }
@@ -298,7 +299,7 @@ function ReportsTaskTab() {
       if (code === "DAILY_REPORT_GENERATING") toast.warning("任务正在生成中，请稍后重试");
       else if (code === "PERMISSION_DENIED") toast.error("当前账号缺少所需权限");
       else if (code === "DAILY_REPORT_NOT_FOUND") toast.error("任务不存在或已不属于当前商户");
-      else toast.error(err instanceof Error ? err.message : "重试失败");
+      else toast.error(userFacingError(err, "重试失败"));
     } finally {
       setRegeneratingId(null);
     }
@@ -315,7 +316,7 @@ function ReportsTaskTab() {
       const code = getApiErrorCode(err);
       if (code === "DAILY_REPORT_NOT_FOUND") toast.error("文件不可用或已被校验拦截，请重新生成后再下载");
       else if (code === "PERMISSION_DENIED") toast.error("当前账号缺少下载该报表的权限");
-      else toast.error(err instanceof Error ? err.message : "下载失败");
+      else toast.error(userFacingError(err, "下载失败"));
     } finally {
       setDownloadingId(null);
     }
@@ -516,7 +517,7 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
     } catch (err) {
       setRecords([]);
       setTotal(0);
-      setError(err instanceof Error ? err.message : "待归因线索加载失败");
+      setError(userFacingError(err, "待归因线索加载失败"));
     } finally {
       setLoading(false);
     }
@@ -557,7 +558,7 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
       const code = getApiErrorCode(err);
       if (code === "LEAD_NOT_FOUND") toast.error("线索不属于当前商户");
       else if (code === "PERMISSION_DENIED") toast.error("缺少写权限");
-      else toast.error(err instanceof Error ? err.message : "保存失败");
+      else toast.error(userFacingError(err, "保存失败"));
     } finally {
       setSavingId(null);
     }
@@ -589,8 +590,8 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
               <th className="px-4 py-3 font-semibold">线索</th>
               <th className="px-4 py-3 font-semibold">流量类型</th>
               <th className="px-4 py-3 font-semibold">内容类型</th>
-              <th className="px-4 py-3 font-semibold">广告 ID</th>
-              <th className="px-4 py-3 font-semibold">素材 ID</th>
+              <th className="px-4 py-3 font-semibold">广告编号</th>
+              <th className="px-4 py-3 font-semibold">素材编号</th>
               <th className="px-4 py-3 font-semibold">溯源链接</th>
               <th className="px-4 py-3 text-right font-semibold">操作</th>
             </tr>
@@ -620,10 +621,10 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
                       </select>
                     </td>
                     <td className="px-4 py-2.5">
-                      <input aria-label="广告 ID" disabled={!canWrite} value={d.ad_id || ""} onChange={(e) => updateDraft(item.lead_id, { ad_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
+                      <input aria-label="广告编号" disabled={!canWrite} value={d.ad_id || ""} onChange={(e) => updateDraft(item.lead_id, { ad_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
                     </td>
                     <td className="px-4 py-2.5">
-                      <input aria-label="素材 ID" disabled={!canWrite} value={d.material_id || ""} onChange={(e) => updateDraft(item.lead_id, { material_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
+                      <input aria-label="素材编号" disabled={!canWrite} value={d.material_id || ""} onChange={(e) => updateDraft(item.lead_id, { material_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
                     </td>
                     <td className="px-4 py-2.5">
                       <input aria-label="溯源链接" disabled={!canWrite} value={d.trace_url || ""} onChange={(e) => updateDraft(item.lead_id, { trace_url: e.target.value })} className="h-8 w-56 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
@@ -668,7 +669,7 @@ function CompletenessTab() {
       setDiagnostics(resp.diagnostics || []);
     } catch (err) {
       setDiagnostics([]);
-      setError(err instanceof Error ? err.message : "完整度加载失败");
+      setError(userFacingError(err, "完整度加载失败"));
     } finally {
       setLoading(false);
     }
@@ -732,7 +733,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
       setLive({ spend: lv?.spend_amount || "", msg: lv ? String(lv.private_message_count) : "" });
     } catch (err) {
       setExisting([]);
-      setError(err instanceof Error ? err.message : "广告日数据加载失败");
+      setError(userFacingError(err, "广告日数据加载失败"));
     } finally {
       setLoading(false);
     }
@@ -762,7 +763,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
     } catch (err) {
       const code = getApiErrorCode(err);
       if (code === "PERMISSION_DENIED") toast.error("缺少写权限");
-      else toast.error(err instanceof Error ? err.message : "保存失败");
+      else toast.error(userFacingError(err, "保存失败"));
     } finally {
       setSaving(false);
     }
@@ -777,7 +778,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
           <input type="date" aria-label="指标日期" value={metricDay} onChange={(e) => setMetricDay(e.target.value)} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
         </div>
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
-        <span className="text-[11px] text-[#94a3b8]">仅录入日期、消耗与私信量，不提供广告 ID 明细输入。</span>
+        <span className="text-[11px] text-[#94a3b8]">仅录入日期、消耗与私信量，不提供广告编号明细输入。</span>
       </div>
       {error ? <div className="text-xs text-rose-600">{error} <button type="button" onClick={load} className="ml-2 font-semibold text-[#2563eb] underline">重试</button></div> : null}
       <div className="rounded-2xl border border-[#e4e8f0] bg-white p-5">
@@ -791,7 +792,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
               </button>
             </div>
             {existing.length > 0 ? (
-              <p className="text-[11px] text-[#94a3b8]">已记录 {existing.length} 条（来源：{existing.map((r) => r.source_system).join("、")}）</p>
+              <p className="text-[11px] text-[#94a3b8]">已记录 {existing.length} 条（来源：系统记录）</p>
             ) : null}
           </div>
         )}
@@ -835,7 +836,7 @@ function ProfileTab({ canWrite }: { canWrite: boolean }) {
       setMax(resp.showroom_price_max_yuan || "");
       setUpdated(resp.updated_at || null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "展厅价位加载失败");
+      setError(userFacingError(err, "展厅价位加载失败"));
     } finally {
       setLoading(false);
     }
@@ -868,7 +869,7 @@ function ProfileTab({ canWrite }: { canWrite: boolean }) {
     } catch (err) {
       const code = getApiErrorCode(err);
       if (code === "PERMISSION_DENIED") toast.error("缺少写权限");
-      else toast.error(err instanceof Error ? err.message : "保存失败");
+      else toast.error(userFacingError(err, "保存失败"));
     } finally {
       setSaving(false);
     }

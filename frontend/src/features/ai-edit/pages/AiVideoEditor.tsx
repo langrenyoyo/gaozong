@@ -92,7 +92,7 @@ export default function AiVideoEditor() {
   const [trims, setTrims] = useState<Record<string, { start: string; end: string }>>({});
   // 渲染目标：720P 草稿 / 1080P 成片（决定提交后是否进入确认环节）
   const [renderTarget, setRenderTarget] = useState<"720" | "1080">("720");
-  // 字幕 / BGM / 增稳开关（一期由模板规则决定是否生效，前端仅收集 UI 偏好，不伪造后端字段）
+  // 字幕、背景音乐和画面稳定开关（一期由模板规则决定是否生效，页面仅收集偏好，不伪造后端字段）
   const [enableSubtitle, setEnableSubtitle] = useState(true);
   const [enableBgm, setEnableBgm] = useState(true);
   const [enableStabilize, setEnableStabilize] = useState(true);
@@ -150,11 +150,19 @@ export default function AiVideoEditor() {
       toast.error("请至少选择一个素材");
       return;
     }
-    // 19000 创建任务格式：material_id + role（首尾时间一期由 19000 内部保守保留全片，设计 §7.4）
-    const jobMaterials = selectedItems.map((materialId) => ({
-      material_id: materialId,
-      role: selected[materialId],
-    }));
+    // 19000 创建任务：传入 material_id + role + 首尾时间（FIX2-6 落实，不再静默丢弃）。
+    // 字幕、背景音乐、画面稳定和分辨率一期由模板规则决定，页面收集但渲染以模板为准。
+    const jobMaterials = selectedItems.map((materialId) => {
+      const trim = trims[materialId];
+      const startSec = trim?.start ? Number(trim.start) : undefined;
+      const endSec = trim?.end ? Number(trim.end) : undefined;
+      return {
+        material_id: materialId,
+        role: selected[materialId],
+        ...(startSec != null && !Number.isNaN(startSec) ? { source_start: startSec } : {}),
+        ...(endSec != null && !Number.isNaN(endSec) ? { source_end: endSec } : {}),
+      };
+    });
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     setSubmitting(true);
     try {
@@ -168,15 +176,13 @@ export default function AiVideoEditor() {
       // 创建后立即从 9000 拉权威状态（9000 已由 19000 登记）。
       const job = await fetchAiEditJob(jobId);
       setCurrentJob(job);
-      toast.success(
-        `任务已创建（${renderTarget === "720" ? "720P 草稿" : "1080P 成片"}）：${job.job_id}`,
-      );
+      toast.success(`任务已提交：${job.job_id}（渲染规格由模板决定）`);
     } catch (err) {
       toast.error(`任务创建失败：${resolveError(err)}`);
     } finally {
       setSubmitting(false);
     }
-  }, [selectedTemplate, selectedItems, selected, renderTarget]);
+  }, [selectedTemplate, selectedItems, selected, trims]);
 
   const onCancel = useCallback(async () => {
     if (!currentJob) return;
@@ -374,6 +380,9 @@ export default function AiVideoEditor() {
                 </button>
               ))}
             </div>
+            <p className="mt-2 text-xs text-[#8b95a6]">
+              一期 pipeline 依次生成 720P 预览与 1080P 成片；此处选择查看目标，渲染规格由模板规则决定。
+            </p>
           </div>
 
           <div className="rounded-xl border border-[#e4e8f0] bg-white p-4">

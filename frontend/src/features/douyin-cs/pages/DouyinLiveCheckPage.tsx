@@ -63,7 +63,7 @@ function liveCheckErrorMessage(err: unknown): string {
       typeof parsedDetail.safe_message === "string"
         ? parsedDetail.safe_message
         : "授权链接获取失败，请检查抖音上游接口配置。";
-    const upstreamStatus = parsedDetail.upstream_status ? `上游 HTTP ${parsedDetail.upstream_status}` : "";
+    const upstreamStatus = parsedDetail.upstream_status ? `上游响应状态 ${parsedDetail.upstream_status}` : "";
     const upstreamMsg = parsedDetail.upstream_msg ? `：${parsedDetail.upstream_msg}` : "";
     return `${safeMessage}${upstreamStatus ? `（${upstreamStatus}${upstreamMsg}）` : ""}`;
   }
@@ -71,7 +71,7 @@ function liveCheckErrorMessage(err: unknown): string {
     return `抖音授权联调配置不完整：${detail}`;
   }
   if (status) {
-    return `抖音授权联调接口请求失败，HTTP ${status}`;
+    return "数据加载失败，请稍后重试";
   }
   return "无法获取抖音现场联调状态，请确认后端服务已启动。";
 }
@@ -266,7 +266,7 @@ export default function DouyinLiveCheckPage() {
           <div className="flex items-start gap-2">
             <AlertTriangleIcon size={16} className="mt-0.5 shrink-0" />
             <p>
-              本页面只用于现场观测：生成授权 URL、查看 OAuth callback 摘要、查看 webhook 请求头/body 关键字段。
+              本页面只用于现场观测：生成授权地址、查看授权回调摘要、查看事件回调关键字段。
               不展示 token，不提供主动拉取历史私信，不触发微信自动化。
             </p>
           </div>
@@ -293,10 +293,10 @@ export default function DouyinLiveCheckPage() {
                 <h2 className="font-bold text-[#1a1f2e]">配置状态</h2>
               </div>
               <Field label="联调开关" value={status?.enabled ? "已开启" : "未开启"} />
-              <Field label="授权 URL 配置" value={status?.auth_url_configured ? "完整" : "不完整"} />
+              <Field label="授权地址配置" value={status?.auth_url_configured ? "完整" : "不完整"} />
               <Field label="缺失配置" value={(status?.missing_config || []).join(", ") || "-"} />
               <Field label="OAuth 回跳地址" value={status?.auth_redirect_url || "-"} />
-              <Field label="Webhook 观测地址" value={status?.webhook_observe_url || "-"} />
+              <Field label="事件回调观测地址" value={status?.webhook_observe_url || "-"} />
               {authUrlInfo?.auth_url ? (
                 <div className="mt-3 break-all rounded-lg bg-[#f8fafc] p-3 text-[11px] leading-5 text-[#64748b]">
                   {authUrlInfo.auth_url}
@@ -326,13 +326,13 @@ export default function DouyinLiveCheckPage() {
                         <AuthStatusBadge authorized={isAuthorized} />
                       </div>
                       <p className="mt-1 break-all font-mono text-[11px] text-[#64748b]">
-                        {currentAuthCallback.open_id || "未返回 open_id"}
+                        {currentAuthCallback.open_id || "未返回账号标识"}
                       </p>
                     </div>
                   </div>
                   <Field label="授权状态" value={<AuthStatusBadge authorized={isAuthorized} />} />
                   <Field label="抖音昵称" value={currentAuthCallback.nick_name || "-"} />
-                  <Field label="open_id" value={currentAuthCallback.open_id || "-"} />
+                  <Field label="账号标识" value={currentAuthCallback.open_id || "-"} />
                   <Field label="头像" value={currentAuthCallback.avatar ? "已返回" : "-"} />
                   <Field label="授权接收时间" value={formatTime(currentAuthCallback.received_at)} />
                   <Field label="是否收到 code" value={boolText(currentAuthCallback.has_code)} />
@@ -341,39 +341,39 @@ export default function DouyinLiveCheckPage() {
                   <Field label="error" value={currentAuthCallback.error || "-"} />
                   <Field label="query keys" value={currentAuthCallback.query_keys.join(", ") || "-"} />
                   <p className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-[11px] leading-5 text-sky-800">
-                    说明：该私信能力授权回调返回 open_id / nick_name / avatar，不一定返回 code。open_id 存在表示授权回调已到达。
+                    说明：该私信能力授权回调会返回账号标识、昵称和头像。账号标识存在表示授权回调已到达。
                   </p>
                 </>
               ) : (
                 <>
                   <Field label="授权状态" value={<AuthStatusBadge authorized={false} />} />
                   <p className="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-[11px] leading-5 text-sky-800">
-                    说明：该私信能力授权回调返回 open_id / nick_name / avatar，不一定返回 code。open_id 存在表示授权回调已到达。
+                    说明：该私信能力授权回调会返回账号标识、昵称和头像。账号标识存在表示授权回调已到达。
                   </p>
                 </>
               )}
             </section>
 
             <section className="rounded-lg border border-[#e4e8f0] bg-white p-4 text-xs lg:col-span-2">
-              <h2 className="mb-3 font-bold text-[#1a1f2e]">最近真实 webhook 事件（按本次授权 open_id 过滤）</h2>
+              <h2 className="mb-3 font-bold text-[#1a1f2e]">最近真实事件回调（按本次授权账号标识过滤）</h2>
               {recentWebhookError ? (
                 <p className="text-amber-700">{recentWebhookError}</p>
               ) : currentAuthOpenId ? (
                 recentWebhookEvent ? (
                   <div className="grid gap-x-8 lg:grid-cols-2">
-                    <Field label="本次授权 open_id" value={currentAuthOpenId} />
+                    <Field label="本次授权账号标识" value={currentAuthOpenId} />
                     <Field label="匹配事件数" value={recentWebhookTotal} />
-                    <Field label="event" value={recentWebhookEvent.event || "-"} />
-                    <Field label="from_user_id" value={recentWebhookEvent.from_user_id || "-"} />
-                    <Field label="to_user_id" value={recentWebhookEvent.to_user_id || "-"} />
-                    <Field label="body open_id" value={recentWebhookEvent.body_open_id || "-"} />
-                    <Field label="body account_open_id" value={recentWebhookEvent.body_account_open_id || "-"} />
-                    <Field label="content open_id" value={recentWebhookEvent.content_open_id || "-"} />
-                    <Field label="content account_open_id" value={recentWebhookEvent.content_account_open_id || "-"} />
-                    <Field label="server_message_id" value={recentWebhookEvent.server_message_id || "-"} />
-                    <Field label="created_at" value={formatTime(recentWebhookEvent.created_at)} />
+                    <Field label="事件类型" value={recentWebhookEvent.event || "-"} />
+                    <Field label="发送方标识" value={recentWebhookEvent.from_user_id || "-"} />
+                    <Field label="接收方标识" value={recentWebhookEvent.to_user_id || "-"} />
+                    <Field label="客户标识" value={recentWebhookEvent.body_open_id || "-"} />
+                    <Field label="企业号标识" value={recentWebhookEvent.body_account_open_id || "-"} />
+                    <Field label="内容中的客户标识" value={recentWebhookEvent.content_open_id || "-"} />
+                    <Field label="内容中的企业号标识" value={recentWebhookEvent.content_account_open_id || "-"} />
+                    <Field label="消息编号" value={recentWebhookEvent.server_message_id || "-"} />
+                    <Field label="创建时间" value={formatTime(recentWebhookEvent.created_at)} />
                     <Field
-                      label="是否命中本次授权 open_id"
+                      label="是否命中本次授权账号标识"
                       value={
                         <MatchBadge
                           state={getOpenIdMatchState(currentAuthOpenId, [
@@ -389,47 +389,47 @@ export default function DouyinLiveCheckPage() {
                     />
                   </div>
                 ) : (
-                  <p className="text-[#8b95a6]">本次授权 open_id 暂无匹配的真实 webhook 事件</p>
+                  <p className="text-[#8b95a6]">本次授权账号标识暂无匹配的真实事件回调</p>
                 )
               ) : (
-                <p className="text-[#8b95a6]">暂无本次授权 open_id</p>
+                <p className="text-[#8b95a6]">暂无本次授权账号标识</p>
               )}
             </section>
 
             <section className="rounded-lg border border-[#e4e8f0] bg-white p-4 text-xs lg:col-span-2">
-              <h2 className="mb-3 font-bold text-[#1a1f2e]">最近 webhook 账号</h2>
+              <h2 className="mb-3 font-bold text-[#1a1f2e]">最近事件回调账号</h2>
               {status?.last_webhook_observe ? (
                 <div className="grid gap-x-8 lg:grid-cols-2">
                   <Field label="接收时间" value={formatTime(status.last_webhook_observe.received_at)} />
-                  <Field label="event" value={status.last_webhook_observe.event || "-"} />
-                  <Field label="from_user_id" value={status.last_webhook_observe.from_user_id || "-"} />
-                  <Field label="to_user_id" value={status.last_webhook_observe.to_user_id || "-"} />
-                  <Field label="body open_id" value={status.last_webhook_observe.body_open_id || "-"} />
-                  <Field label="body account_open_id" value={status.last_webhook_observe.body_account_open_id || "-"} />
-                  <Field label="content open_id" value={status.last_webhook_observe.content_open_id || "-"} />
-                  <Field label="content account_open_id" value={status.last_webhook_observe.content_account_open_id || "-"} />
+                  <Field label="事件类型" value={status.last_webhook_observe.event || "-"} />
+                  <Field label="发送方标识" value={status.last_webhook_observe.from_user_id || "-"} />
+                  <Field label="接收方标识" value={status.last_webhook_observe.to_user_id || "-"} />
+                  <Field label="客户标识" value={status.last_webhook_observe.body_open_id || "-"} />
+                  <Field label="企业号标识" value={status.last_webhook_observe.body_account_open_id || "-"} />
+                  <Field label="内容中的客户标识" value={status.last_webhook_observe.content_open_id || "-"} />
+                  <Field label="内容中的企业号标识" value={status.last_webhook_observe.content_account_open_id || "-"} />
                   <Field
-                    label="是否匹配当前授权 open_id"
+                    label="是否匹配当前授权账号标识"
                     value={<MatchBadge state={observedWebhookMatchState} />}
                   />
-                  <Field label="有 Authorization" value={boolText(status.last_webhook_observe.has_authorization)} />
-                  <Field label="有 X-Auth-Timestamp" value={boolText(status.last_webhook_observe.has_x_auth_timestamp)} />
-                  <Field label="有 content" value={boolText(status.last_webhook_observe.body_has_content)} />
-                  <Field label="有 open_id" value={boolText(status.last_webhook_observe.body_has_open_id)} />
-                  <Field label="有 account_open_id" value={boolText(status.last_webhook_observe.body_has_account_open_id)} />
-                  <Field label="有 conversation_short_id" value={boolText(status.last_webhook_observe.body_has_conversation_short_id)} />
-                  <Field label="有 server_message_id" value={boolText(status.last_webhook_observe.body_has_server_message_id)} />
-                  <Field label="content parse success" value={boolText(status.last_webhook_observe.content_parse_success)} />
-                  <Field label="content parse error" value={status.last_webhook_observe.content_parse_error || "-"} />
-                  <Field label="content has conversation_short_id" value={boolText(status.last_webhook_observe.content_has_conversation_short_id)} />
-                  <Field label="content has server_message_id" value={boolText(status.last_webhook_observe.content_has_server_message_id)} />
-                  <Field label="content has message_type" value={boolText(status.last_webhook_observe.content_has_message_type)} />
-                  <Field label="content message_type" value={status.last_webhook_observe.content_message_type || "-"} />
-                  <Field label="body keys" value={status.last_webhook_observe.body_keys.join(", ") || "-"} />
-                  <Field label="content keys" value={status.last_webhook_observe.content_keys.join(", ") || "-"} />
+                  <Field label="有授权信息" value={boolText(status.last_webhook_observe.has_authorization)} />
+                  <Field label="有时间信息" value={boolText(status.last_webhook_observe.has_x_auth_timestamp)} />
+                  <Field label="有内容" value={boolText(status.last_webhook_observe.body_has_content)} />
+                  <Field label="有客户标识" value={boolText(status.last_webhook_observe.body_has_open_id)} />
+                  <Field label="有企业号标识" value={boolText(status.last_webhook_observe.body_has_account_open_id)} />
+                  <Field label="有会话编号" value={boolText(status.last_webhook_observe.body_has_conversation_short_id)} />
+                  <Field label="有消息编号" value={boolText(status.last_webhook_observe.body_has_server_message_id)} />
+                  <Field label="内容解析成功" value={boolText(status.last_webhook_observe.content_parse_success)} />
+                  <Field label="内容解析错误" value={status.last_webhook_observe.content_parse_error || "-"} />
+                  <Field label="内容有会话编号" value={boolText(status.last_webhook_observe.content_has_conversation_short_id)} />
+                  <Field label="内容有消息编号" value={boolText(status.last_webhook_observe.content_has_server_message_id)} />
+                  <Field label="内容有消息类型" value={boolText(status.last_webhook_observe.content_has_message_type)} />
+                  <Field label="内容消息类型" value={status.last_webhook_observe.content_message_type || "-"} />
+                  <Field label="内容字段" value={status.last_webhook_observe.body_keys.join(", ") || "-"} />
+                  <Field label="内容字段" value={status.last_webhook_observe.content_keys.join(", ") || "-"} />
                 </div>
               ) : (
-                <p className="text-[#8b95a6]">暂无 webhook 观测记录</p>
+                <p className="text-[#8b95a6]">暂无事件回调观测记录</p>
               )}
             </section>
           </div>

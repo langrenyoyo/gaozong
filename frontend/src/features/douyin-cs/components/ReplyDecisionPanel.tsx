@@ -135,7 +135,7 @@ export function ReplyDecisionPanel({
         <div className="flex flex-wrap items-center gap-2">
           <ShieldCheckIcon size={15} className="shrink-0" />
           <span className="font-bold">仅生成建议，不会自动发送</span>
-          <Chip tone="emerald">auto_send={String(Boolean(reply.auto_send))}</Chip>
+          <Chip tone="emerald">自动发送：{reply.auto_send ? "是" : "否"}</Chip>
         </div>
       </div>
 
@@ -219,19 +219,19 @@ export function ReplyDecisionPanel({
           <div className="divide-y divide-slate-100">
             {sources.map((chunk, index) => (
               <div key={`${chunk.document_id}-${chunk.chunk_id}-${index}`} className="px-3 py-2 text-xs text-slate-600">
-                #{chunk.chunk_id} · 文档 {chunk.document_id} · {chunk.title} · score {chunk.score}
+                内容片段 #{chunk.chunk_id} · 文档 {chunk.document_id} · {chunk.title} · 匹配分数 {chunk.score}
               </div>
             ))}
           </div>
         ) : (
-          <div className="px-3 py-2 text-xs text-slate-500">暂无 RAG 来源。</div>
+          <div className="px-3 py-2 text-xs text-slate-500">暂无知识库参考来源。</div>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-        <span>decision_version: {reply.decision_version || "unknown"}</span>
-        <span>llm_used: {String(reply.llm_used)}</span>
-        <span>rag_used: {String(reply.rag_used)}</span>
+        <span>决策版本：{reply.decision_version || "未知"}</span>
+        <span>智能生成：{reply.llm_used ? "已使用" : "未使用"}</span>
+        <span>知识库参考：{reply.rag_used ? "已使用" : "未使用"}</span>
       </div>
 
       <div className="flex items-center gap-2">

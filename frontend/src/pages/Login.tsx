@@ -79,7 +79,7 @@ export default function Login({ onLogin, authError }: LoginProps) {
             <div className="rounded-[24px] border border-white/70 bg-white/88 p-8 shadow-[0_28px_80px_rgba(15,23,42,0.24)] backdrop-blur-md">
               <div>
                 <h2 className="text-[34px] font-extrabold italic leading-none text-[#323845]">
-                  <span className="text-[#4b55ff]">W</span>elcome
+                  <span className="text-[#4b55ff]">欢</span>迎
                 </h2>
                 <p className="mt-4 text-sm font-bold text-[#64748b]">欢迎使用 小高AI系统</p>
                 {authError ? (

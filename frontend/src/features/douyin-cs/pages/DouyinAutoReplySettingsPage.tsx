@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -21,6 +21,7 @@ import type {
   DouyinAutoReplySettingItem,
   DouyinAutoReplySettingUpdateRequest,
 } from "../types";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const DEFAULT_DIRECT_LLM_POLICY: DirectLlmPolicy = {
   direct_llm_auto_send_enabled: false,
@@ -50,17 +51,7 @@ const SIMPLE_ENABLED_DIRECT_LLM_POLICY: DirectLlmPolicy = {
 };
 
 function resolveErrorMessage(error: unknown): string {
-  if (error && typeof error === "object") {
-    const anyError = error as {
-      response?: { data?: { message?: string; detail?: string | { message?: string; safe_message?: string } } };
-      message?: string;
-    };
-    const detail = anyError.response?.data?.detail;
-    if (detail && typeof detail === "object") return detail.safe_message || detail.message || "请求失败";
-    if (typeof detail === "string") return detail;
-    return anyError.response?.data?.message || anyError.message || "请求失败";
-  }
-  return error instanceof Error ? error.message : "请求失败";
+  return userFacingError(error, "数据加载失败，请稍后重试");
 }
 
 function displayAccountName(item: DouyinAutoReplySettingItem | null): string {
@@ -271,7 +262,7 @@ export default function DouyinAutoReplySettingsPage() {
               item.send_enabled ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
             }`}
           >
-            {item.send_enabled ? "真实回复" : item.dry_run_enabled ? "dry-run" : "关闭"}
+            {item.send_enabled ? "真实回复" : item.dry_run_enabled ? "演练" : "关闭"}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-1 text-[10px] font-semibold">

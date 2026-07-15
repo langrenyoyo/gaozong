@@ -22,6 +22,7 @@ import type {
   AiAutoReplyRunSendRecord,
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const PAGE_SIZE = 20;
 const ALL_STATUS = "all";
@@ -37,6 +38,31 @@ const STATUS_LABELS: Record<string, string> = {
   send_skipped: "发送前跳过",
 };
 
+const MODE_LABELS: Record<string, string> = {
+  ai_auto_reply: "AI自动回复",
+  manual_takeover: "人工接管",
+  dry_run: "演练",
+};
+
+const DIAGNOSTIC_KEY_LABELS: Record<string, string> = {
+  status: "状态",
+  result: "结果",
+  reason: "原因",
+  failure_stage: "失败阶段",
+  blocked_reason: "阻断原因",
+  skip_reason: "跳过原因",
+  agent_name: "智能体名称",
+  agent_id: "智能体编号",
+  prompt_chars: "提示词长度",
+  prompt_sha256: "提示词校验值",
+  model: "模型",
+  llm_used: "是否使用智能生成",
+  rag_used: "是否使用知识库",
+  send_status: "发送状态",
+  send_source: "发送来源",
+  send_gate_passed: "发送安全检查通过",
+};
+
 const STATUS_TONES: Record<string, "slate" | "blue" | "amber" | "red" | "emerald"> = {
   skipped: "slate",
   blocked: "amber",
@@ -49,17 +75,7 @@ const STATUS_TONES: Record<string, "slate" | "blue" | "amber" | "red" | "emerald
 };
 
 function resolveErrorMessage(error: unknown): string {
-  if (error && typeof error === "object") {
-    const anyError = error as {
-      response?: { data?: { message?: string; detail?: string | { message?: string; safe_message?: string } } };
-      message?: string;
-    };
-    const detail = anyError.response?.data?.detail;
-    if (detail && typeof detail === "object") return detail.safe_message || detail.message || "请求失败";
-    if (typeof detail === "string") return detail;
-    return anyError.response?.data?.message || anyError.message || "请求失败";
-  }
-  return error instanceof Error ? error.message : "请求失败";
+  return userFacingError(error, "数据加载失败，请稍后重试");
 }
 
 function displayText(value?: string | number | null): string {
@@ -74,7 +90,11 @@ function trimInput(value: string): string | undefined {
 
 function statusLabel(value?: string | null): string {
   if (!value) return "未知";
-  return STATUS_LABELS[value] || value;
+  return STATUS_LABELS[value] || "未知状态";
+}
+
+function modeLabel(value?: string | null): string {
+  return value ? MODE_LABELS[value] || "其他模式" : "未知模式";
 }
 
 function compactId(value?: string | number | null): string {
@@ -204,7 +224,14 @@ function diagnosticEntries(record: Record<string, unknown> | null): Array<[strin
   if (!record) return [];
   return Object.entries(record)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .map(([key, value]) => [key, typeof value === "object" ? formatJson(redactSensitiveDiagnostics(value)) : String(value)]);
+    .map(([key, value], index) => [
+      DIAGNOSTIC_KEY_LABELS[key] || `字段${index + 1}`,
+      typeof value === "object"
+        ? formatJson(redactSensitiveDiagnostics(value))
+        : typeof value === "boolean"
+          ? booleanText(value)
+          : String(value),
+    ]);
 }
 
 function Chip({
@@ -268,12 +295,12 @@ function SendRecordBlock({ sendRecord }: { sendRecord?: AiAutoReplyRunSendRecord
 
   return (
     <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs md:grid-cols-2">
-      <Field label="发送流水 ID" value={sendRecord.id} />
-      <Field label="发送状态" value={sendRecord.send_status} />
-      <Field label="发送来源" value={sendRecord.send_source} />
+      <Field label="发送流水编号" value={sendRecord.id} />
+      <Field label="发送状态" value={statusLabel(sendRecord.send_status)} />
+      <Field label="发送来源" value={sendRecord.send_source ? "系统发送" : "-"} />
       <Field label="是否自动发送" value={booleanText(sendRecord.auto_send)} />
       <Field label="是否人工确认" value={booleanText(sendRecord.manual_confirmed)} />
-      <Field label="上游消息 ID" value={sendRecord.upstream_msg_id} />
+      <Field label="上游消息编号" value={sendRecord.upstream_msg_id} />
       <Field label="发送时间" value={formatDateTimeLocal(sendRecord.sent_at)} />
       <Field label="错误信息" value={sendRecord.error_message} />
     </div>
@@ -349,16 +376,16 @@ function DetailModal({
               <section className="rounded-md border border-slate-200 bg-white p-4">
                 <h3 className="text-xs font-bold text-slate-900">基础信息</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <Field label="运行 ID" value={detail.id} />
+                  <Field label="运行编号" value={detail.id} />
                   <Field label="企业号" value={detail.account_open_id} />
                   <Field label="会话" value={detail.conversation_short_id} />
                   <Field label="客户" value={detail.customer_open_id} />
                   <Field label="智能体" value={agentNameFromGate(agent, detail.agent_id)} />
-                  <Field label="运行模式" value={detail.mode} />
-                  <Field label="触发事件 ID" value={detail.trigger_event_id} />
-                  <Field label="触发事件 Key" value={detail.trigger_event_key} />
-                  <Field label="触发消息 ID" value={detail.trigger_server_message_id} />
-                  <Field label="决策日志 ID" value={detail.decision_log_id} />
+                  <Field label="运行模式" value={modeLabel(detail.mode)} />
+                  <Field label="触发事件编号" value={detail.trigger_event_id} />
+                  <Field label="触发事件标识" value={detail.trigger_event_key} />
+                  <Field label="触发消息编号" value={detail.trigger_server_message_id} />
+                  <Field label="决策日志编号" value={detail.decision_log_id} />
                   <Field label="创建时间" value={formatDateTimeLocal(detail.created_at)} />
                   <Field label="更新时间" value={formatDateTimeLocal(detail.updated_at)} />
                 </div>
@@ -401,8 +428,8 @@ function DetailModal({
               <section className="rounded-md border border-slate-200 bg-white p-4">
                 <h3 className="text-xs font-bold text-slate-900">模型信息</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <Field label="模型状态" value={gateStatusText(model)} />
-                  <Field label="是否使用模型" value={booleanText(detail.llm_used)} />
+                  <Field label="智能生成状态" value={gateStatusText(model)} />
+                  <Field label="是否使用智能生成" value={booleanText(detail.llm_used)} />
                   <Field label="是否使用知识库" value={booleanText(detail.rag_used)} />
                 </div>
               </section>
@@ -430,7 +457,7 @@ function DetailModal({
                   className="inline-flex items-center gap-2 text-xs font-bold text-slate-900"
                 >
                   <FileJsonIcon size={15} />
-                  原始诊断 JSON
+                  完整诊断信息
                   <span className="text-[11px] font-semibold text-slate-500">
                     {rawExpanded ? "收起" : "展开"}
                   </span>
@@ -577,7 +604,7 @@ export default function DouyinAutoReplyRunsPage() {
           <ShieldCheckIcon size={15} className="mt-0.5 shrink-0" />
           <div>
             <div className="font-bold">此页面只展示自动回复运行结果，不提供任何写入操作入口。</div>
-            <div>真实发送只可能由新私信 webhook 触发，并由后端门禁控制；sent 表示已发送，blocked / skipped 表示被门禁阻断或跳过。</div>
+            <div>真实发送只可能由新私信事件回调触发，并由系统安全检查控制；“已发送”表示发送成功，“已阻断”或“已跳过”表示未执行发送。</div>
           </div>
         </div>
       </div>
@@ -626,8 +653,8 @@ export default function DouyinAutoReplyRunsPage() {
               setCustomerOpenId(event.target.value);
               setPage(1);
             }}
-            placeholder="客户 open_id"
-            aria-label="客户 open_id"
+            placeholder="客户标识"
+            aria-label="客户标识"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
@@ -738,7 +765,7 @@ export default function DouyinAutoReplyRunsPage() {
                 <th className="w-[130px] px-4 py-3 font-semibold">时间</th>
                 <th className="w-[150px] px-4 py-3 font-semibold">企业号</th>
                 <th className="w-[140px] px-4 py-3 font-semibold">客户</th>
-                <th className="w-[140px] px-4 py-3 font-semibold">会话ID</th>
+                <th className="w-[140px] px-4 py-3 font-semibold">会话编号</th>
                 <th className="w-[180px] px-4 py-3 font-semibold">客户最新消息</th>
                 <th className="w-[100px] px-4 py-3 font-semibold">运行状态</th>
                 <th className="w-[100px] px-4 py-3 font-semibold">运行模式</th>
@@ -776,7 +803,7 @@ export default function DouyinAutoReplyRunsPage() {
                   <td className="px-4 py-3">
                     <Chip tone={STATUS_TONES[item.status] || "slate"}>{statusLabel(item.status)}</Chip>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{displayText(item.mode)}</td>
+                  <td className="px-4 py-3 text-slate-600">{modeLabel(item.mode)}</td>
                   <td className="px-4 py-3">
                     <div className="line-clamp-2 text-slate-600" title={blockReasonText(item)}>
                       {blockReasonText(item)}
@@ -798,7 +825,7 @@ export default function DouyinAutoReplyRunsPage() {
                   <td className="px-4 py-3 text-slate-600">
                     {booleanText(sendRecord?.auto_send ?? item.final_auto_send ?? item.upstream_auto_send)}
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{displayText(sendRecord?.send_status || item.status)}</td>
+                  <td className="px-4 py-3 text-slate-600">{statusLabel(sendRecord?.send_status || item.status)}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
                       <button

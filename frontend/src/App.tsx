@@ -27,6 +27,7 @@ import {
   isAdminLike,
   PERMISSIONS,
 } from "./features/capabilities";
+import { userFacingError } from "./lib/userFacingError";
 
 const queryClient = new QueryClient();
 const adminRoutes = [
@@ -178,7 +179,7 @@ interface AuthErrorState {
 }
 
 function classifyAuthError(error: unknown): AuthErrorState {
-  const message = error instanceof Error ? error.message : "外部登录失败，请重新登录";
+  const message = userFacingError(error, "外部登录失败，请重新登录");
   if (message.includes("账号未绑定商户")) {
     return {
       kind: "externalMerchantNotBound",

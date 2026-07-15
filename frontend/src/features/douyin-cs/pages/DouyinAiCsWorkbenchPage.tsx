@@ -1,4 +1,4 @@
-﻿import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircleIcon,
   BotIcon,
@@ -60,6 +60,7 @@ import {
   type AiAutoReplyRunListItem,
   type UploadDouyinImageResponse,
 } from "../api";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
@@ -91,7 +92,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function liveCheckErrorMessage(err: unknown): string {
-  if (!isRecord(err)) return "无法连接 9000 授权服务，请确认主后端已启动。";
+  if (!isRecord(err)) return "数据加载失败，请稍后重试";
   const response = isRecord(err.response) ? err.response : null;
   const status = typeof response?.status === "number" ? response.status : undefined;
   const data = response && isRecord(response.data) ? response.data : null;
@@ -106,16 +107,12 @@ function liveCheckErrorMessage(err: unknown): string {
   if (status === 403 && detail.toLowerCase().includes("disabled")) {
     return LIVE_CHECK_DISABLED_MESSAGE;
   }
-  if (status === 400 && detail) {
-    return `抖音授权信息不完整：${detail}`;
-  }
-  if (status === 502 && detail) {
-    return `抖音授权上游接口失败：${detail}`;
-  }
+  if (status === 400 && detail) return "抖音授权信息不完整，请检查配置后重试";
+  if (status === 502 && detail) return "抖音授权服务暂时不可用，请稍后重试";
   if (status) {
-    return `抖音授权接口请求失败，HTTP ${status}`;
+    return "数据加载失败，请稍后重试";
   }
-  return "无法连接 9000 授权服务，请确认主后端已启动。";
+  return "数据加载失败，请稍后重试";
 }
 
 function formatTime(value?: string | null) {
@@ -410,8 +407,8 @@ function traceItems(profile: DouyinConversationProfile | null) {
   if (!profile?.trace) return [];
   return [
     ["事件键", profile.trace.event_key],
-    ["会话短 ID", profile.trace.conversation_short_id],
-    ["消息 ID", profile.trace.server_message_id],
+    ["会话编号", profile.trace.conversation_short_id],
+    ["消息编号", profile.trace.server_message_id],
     ["来源", profile.trace.source],
     ["时间", formatTime(profile.trace.created_at)],
   ].filter((item): item is [string, string] => Boolean(item[1]));
@@ -581,10 +578,7 @@ function resourceMissingText(reason?: string | null): string {
 }
 
 function downloadErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) {
-    return err.message;
-  }
-  return "资源下载失败，请稍后重试";
+  return userFacingError(err, "资源下载失败，请稍后重试");
 }
 
 function formatFileSize(bytes: number): string {
@@ -644,10 +638,10 @@ function uploadImageResponseMessage(response: UploadDouyinImageResponse): string
   if (response.error?.safe_message) {
     return response.error.safe_message;
   }
-  if (response.error?.message) {
+  if (response.error?.message && !/[A-Za-z]{2,}/.test(response.error.message)) {
     return response.error.message;
   }
-  return response.message || "图片上传失败，请稍后重试";
+  return response.message && !/[A-Za-z]{2,}/.test(response.message) ? response.message : "图片上传失败，请稍后重试";
 }
 
 function authorizationStatusText(value?: string | null): string {
@@ -723,7 +717,7 @@ function extractBindErrorText(err: unknown): string {
   if (isRecord(detail) && typeof detail.message === "string" && detail.message) return detail.message;
   if (typeof detail === "string" && detail) return detail;
   const status = typeof response?.status === "number" ? response.status : undefined;
-  if (status) return `绑定抖音号失败，HTTP ${status}。`;
+  if (status) return "绑定抖音号失败，请稍后重试";
   return "绑定抖音号失败，请稍后重试。";
 }
 
@@ -898,7 +892,7 @@ export default function DouyinAiCsWorkbenchPage() {
         ) {
           return;
         }
-        setAccountModeError(err instanceof Error ? err.message : "企业号托管模式加载失败");
+        setAccountModeError(userFacingError(err, "企业号托管模式加载失败"));
         if (!cachedMode) setChatAssistMode("manual_takeover");
       })
       .finally(() => {
@@ -980,7 +974,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setAccounts([]);
       setSelectedAccountId(null);
       setAccountListSource(null);
-      setError(err instanceof Error ? err.message : "抖音企业号列表加载失败");
+      setError(userFacingError(err, "抖音企业号列表加载失败"));
       return [];
     } finally {
       if (accountRequestSeqRef.current === requestSeq) setLoadingAccounts(false);
@@ -1056,7 +1050,7 @@ export default function DouyinAiCsWorkbenchPage() {
         setConversations([]);
         setSelectedConversationId(null);
       }
-      setError(err instanceof Error ? err.message : "会话列表加载失败");
+      setError(userFacingError(err, "会话列表加载失败"));
       return [];
     } finally {
       if (conversationRequestSeqRef.current === requestSeq && selectedAccountOpenIdRef.current === accountOpenId) {
@@ -1135,7 +1129,7 @@ export default function DouyinAiCsWorkbenchPage() {
       .catch((err) => {
         if (controller.signal.aborted || !isCurrentRequest()) return;
         if (!cachedMessages) setMessages([]);
-        setError(err instanceof Error ? err.message : "聊天详情加载失败");
+        setError(userFacingError(err, "聊天详情加载失败"));
       })
       .finally(() => {
         if (isCurrentRequest()) setLoadingMessages(false);
@@ -1234,7 +1228,7 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setAutoReplyRunError(err instanceof Error ? err.message : "自动回复状态加载失败");
+      setAutoReplyRunError(userFacingError(err, "自动回复状态加载失败"));
     } finally {
       if (
         autoReplyRunRequestSeqRef.current === requestSeq &&
@@ -1300,7 +1294,7 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return;
       }
-      setConversationAutopilotError(err instanceof Error ? err.message : "会话托管状态加载失败");
+      setConversationAutopilotError(userFacingError(err, "会话托管状态加载失败"));
     } finally {
       if (
         conversationAutopilotRequestSeqRef.current === requestSeq &&
@@ -1763,7 +1757,7 @@ export default function DouyinAiCsWorkbenchPage() {
       accountModeCacheRef.current[accountOpenId] = previousMode;
       if (selectedAccountOpenIdRef.current === accountOpenId) {
         setChatAssistMode(previousMode);
-        setAccountModeError(err instanceof Error ? err.message : "企业号托管模式保存失败");
+        setAccountModeError(userFacingError(err, "企业号托管模式保存失败"));
       }
     } finally {
       if (selectedAccountOpenIdRef.current === accountOpenId) {
@@ -1783,7 +1777,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setAgentOptions(data.items || []);
       setSelectedAgentIdForConfig(data.default_agent_id || account.bound_agent_id || "");
     } catch (err) {
-      setAgentConfigError(err instanceof Error ? err.message : "智能体列表加载失败");
+      setAgentConfigError(userFacingError(err, "智能体列表加载失败"));
     } finally {
       setLoadingAgentConfig(false);
     }
@@ -1829,7 +1823,7 @@ export default function DouyinAiCsWorkbenchPage() {
         binding_status: "active",
       });
     } catch (err) {
-      setAgentConfigError(err instanceof Error ? err.message : "智能体绑定保存失败");
+      setAgentConfigError(userFacingError(err, "智能体绑定保存失败"));
     } finally {
       setSavingAgentConfig(false);
     }
@@ -1853,7 +1847,7 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       setSelectedAgentIdForConfig("");
     } catch (err) {
-      setAgentConfigError(err instanceof Error ? err.message : "智能体解绑失败");
+      setAgentConfigError(userFacingError(err, "智能体解绑失败"));
     } finally {
       setSavingAgentConfig(false);
     }
@@ -1896,7 +1890,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setUploadFile(null);
     } catch (err) {
       setUploadError(
-        err instanceof Error && err.message ? err.message : "图片上传失败，请稍后重试",
+        userFacingError(err, "图片上传失败，请稍后重试"),
       );
     } finally {
       setUploadingImage(false);
@@ -1929,10 +1923,7 @@ export default function DouyinAiCsWorkbenchPage() {
       await loadConversationDetail(selectedConversation.id);
       await loadConversations(selectedAccount);
     } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : "发送失败";
+      const message = userFacingError(err, "发送失败，请稍后重试");
       setSendError(message);
     } finally {
       setSendingMessage(false);
@@ -2145,7 +2136,7 @@ export default function DouyinAiCsWorkbenchPage() {
           <div className="font-semibold text-slate-500">线索信息</div>
           <div className="mt-1 grid gap-2 rounded-md bg-white px-3 py-2 text-slate-800 ring-1 ring-slate-200">
             <div className="flex justify-between gap-3">
-              <span className="text-slate-500">线索 ID</span>
+              <span className="text-slate-500">线索编号</span>
               <span className="text-right">{profileFieldText(profile?.lead?.id)}</span>
             </div>
             <div className="flex justify-between gap-3">
@@ -3070,7 +3061,7 @@ export default function DouyinAiCsWorkbenchPage() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span>open_id</span>
+                      <span>账号标识</span>
                       <span className="max-w-[132px] truncate text-right font-mono">
                         {compactOpenId(authOpenId)}
                       </span>
@@ -3091,7 +3082,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
                   {authUrlInfo?.auth_url ? (
                     <div className="mt-4">
-                      <div className="mb-1 font-semibold text-slate-500">授权 URL</div>
+                      <div className="mb-1 font-semibold text-slate-500">授权地址</div>
                       <div className="max-h-24 overflow-auto break-all rounded-md bg-slate-50 p-2 font-mono text-[10px] leading-4 text-slate-500">
                         {authUrlInfo.auth_url}
                       </div>
@@ -3186,12 +3177,12 @@ export default function DouyinAiCsWorkbenchPage() {
 
               {uploadResult ? (
                 <div className="space-y-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-xs leading-5 text-emerald-800">
-                  <div className="font-bold">图片上传成功，已获得 image_id。当前不会自动发送图片。</div>
+                  <div className="font-bold">图片上传成功，已获得图片编号。当前不会自动发送图片。</div>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <span className="min-w-0 break-all">image_id：{uploadResult.image_id || "-"}</span>
+                    <span className="min-w-0 break-all">图片编号：{uploadResult.image_id || "-"}</span>
                     <span>状态：{uploadResult.upload_status || "success"}</span>
                     <span>尺寸：{uploadResult.width || "-"} × {uploadResult.height || "-"}</span>
-                    <span>md5：{uploadResult.md5 || "-"}</span>
+                    <span>文件校验值：{uploadResult.md5 || "-"}</span>
                   </div>
                   {uploadResult.image_id ? (
                     <button

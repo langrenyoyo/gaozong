@@ -1,4 +1,4 @@
-﻿import {
+import {
   CheckCircle2Icon,
   Loader2Icon,
   MonitorCogIcon,
@@ -33,6 +33,7 @@ import {
   type LocalWechatWindowsDiagnostic,
 } from "../api";
 import type { AgentServerUrlResponse } from "../types";
+import { userFacingError, userFacingState } from "../../../lib/userFacingError";
 
 const DEFAULT_PAYLOAD = {
   nickname: "Aw3",
@@ -51,10 +52,12 @@ function BooleanPill({ value, label }: { value?: boolean; label: string }) {
       }`}
     >
       {value ? <CheckCircle2Icon size={12} /> : <XCircleIcon size={12} />}
-      {label}: {value ? "true" : "false"}
+      {label ? `${label}：` : ""}{value ? "是" : "否"}
     </span>
   );
 }
+
+const booleanText = (value: unknown) => (value ? "是" : "否");
 
 export default function LocalWechatAgentTestPanel() {
   const [health, setHealth] = useState<LocalAgentHealth | null>(null);
@@ -102,7 +105,7 @@ export default function LocalWechatAgentTestPanel() {
       setHealth(null);
       setAgentVersion(null);
       setServerUrlInfo(null);
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
     } finally {
       setChecking(false);
     }
@@ -120,37 +123,37 @@ export default function LocalWechatAgentTestPanel() {
   const handleRunTest = async () => {
     setRunning(true);
     setOfflineMessage(null);
-    setAgentTestMessage("正在执行本机微信测试，请勿操作鼠标键盘...");
+    setAgentTestMessage("正在执行本机微信测试，请勿操作鼠标键盘…");
     const controller = new AbortController();
     const timers = [
-      window.setTimeout(() => setAgentTestMessage("本机 Agent 仍在处理，请稍候..."), 10000),
-      window.setTimeout(() => setAgentTestMessage("本机 Agent 仍在初始化 OCR。请确认已复制完整 dist\\小高AI微信助手 目录，不要只复制 exe。"), 60000),
+      window.setTimeout(() => setAgentTestMessage("AI小高助手仍在处理，请稍候…"), 10000),
+      window.setTimeout(() => setAgentTestMessage("AI小高助手仍在初始化文字识别。请确认已复制完整程序目录。"), 60000),
       window.setTimeout(() => {
         controller.abort();
-        setAgentTestMessage("本机微信测试超时，可能卡在 OCR 初始化或微信自动化步骤，请重启小高AI微信助手后重试。");
+        setAgentTestMessage("本机微信测试超时，可能卡在文字识别初始化或微信自动化步骤，请重启小高AI微信助手后重试。");
       }, 180000),
     ];
     try {
       const next = await startLocalWechatTest(DEFAULT_PAYLOAD, controller.signal);
       setResult(next);
       if (next.success) {
-        toast.success("本机微信 Agent paste-only 测试完成");
+        toast.success("本机微信仅粘贴测试完成");
       } else if (next.failure_stage === "ocr_model_missing") {
-        const message = "小高AI微信助手缺少 OCR 模型文件，请重新复制完整 dist\\小高AI微信助手 目录，不要只复制 exe。";
+        const message = "小高AI微信助手缺少文字识别模型文件，请重新复制完整程序目录。";
         setAgentTestMessage(message);
         toast.error(message);
       } else if (next.failure_stage === "ocr_not_ready" || next.failure_stage === "ocr_initializing") {
-        setAgentTestMessage("OCR 模型尚未就绪，请先点击 OCR 预热。");
-        toast.warning("OCR 模型尚未就绪，请先点击 OCR 预热。");
+        setAgentTestMessage("文字识别模型尚未就绪，请先点击文字识别预热。");
+        toast.warning("文字识别模型尚未就绪，请先点击文字识别预热。");
       } else {
-        toast.warning(next.message || "本机微信 Agent 测试未通过");
+        toast.warning(userFacingError(next.message, "本机微信测试未通过"));
       }
     } catch (error) {
       if ((error as Error)?.name === "AbortError") {
         toast.error("本机微信测试超时");
       } else {
-        setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-        toast.error("本机微信 Agent 未启动");
+        setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+        toast.error("AI小高助手未启动");
       }
     } finally {
       timers.forEach((timer) => window.clearTimeout(timer));
@@ -167,13 +170,13 @@ export default function LocalWechatAgentTestPanel() {
       const next = await warmupLocalWechatOcr();
       setOcrStatus(next);
       if (next.failure_stage === "ocr_model_missing") {
-        toast.error(next.message || "小高AI微信助手缺少 OCR 模型文件，请重新复制完整 dist\\小高AI微信助手 目录，不要只复制 exe。");
+        toast.error(userFacingError(next.message, "AI小高助手缺少文字识别文件，请重新复制完整程序目录。"));
       } else {
-        toast.info(next.message || "OCR 模型正在初始化，请稍候");
+        toast.info(userFacingError(next.message, "文字识别模型正在初始化，请稍候"));
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("OCR 预热请求失败");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("文字识别预热请求失败");
     } finally {
       setWarmingOcr(false);
     }
@@ -188,11 +191,11 @@ export default function LocalWechatAgentTestPanel() {
       if (next.wechat_detected) {
         toast.success("已检测到本机微信窗口");
       } else {
-        toast.warning("本机 Agent 已启动，但未找到微信窗口");
+        toast.warning("本机 AI小高助手 已启动，但未找到微信窗口");
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("本机微信 Agent 未启动");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("AI小高助手未启动");
     } finally {
       setDiagnosing(false);
       refreshHealth();
@@ -208,11 +211,11 @@ export default function LocalWechatAgentTestPanel() {
       if (next.foreground_success) {
         toast.success("微信前台焦点交接成功");
       } else {
-        toast.warning(next.message || "微信前台焦点交接失败");
+        toast.warning(userFacingError(next.message, "微信前台焦点交接失败"));
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("本机微信 Agent 未启动");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("AI小高助手未启动");
     } finally {
       setForegroundChecking(false);
       refreshHealth();
@@ -228,11 +231,11 @@ export default function LocalWechatAgentTestPanel() {
       if (next.success && next.verified) {
         toast.success("搜索框诊断完成");
       } else {
-        toast.warning(next.message || "搜索框诊断未通过");
+        toast.warning(userFacingError(next.message, "搜索框诊断未通过"));
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("本机微信 Agent 未启动");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("AI小高助手未启动");
     } finally {
       setSearchChecking(false);
       refreshHealth();
@@ -249,11 +252,11 @@ export default function LocalWechatAgentTestPanel() {
       if (next.success) {
         toast.success(next.message || "搜索框坐标已保存");
       } else {
-        toast.warning(next.message || "搜索框标定失败");
+        toast.warning(userFacingError(next.message, "搜索框标定失败"));
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("本机微信 Agent 未启动");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("AI小高助手未启动");
     } finally {
       setCalibratingSearch(false);
       refreshHealth();
@@ -271,11 +274,11 @@ export default function LocalWechatAgentTestPanel() {
       } else if (next.search_text_verified && !next.search_result_detected) {
         toast.warning("未在搜索结果中识别到 Aw3，已阻止点击结果。");
       } else {
-        toast.warning(next.message || "搜索结果诊断未通过");
+        toast.warning(userFacingError(next.message, "搜索结果诊断未通过"));
       }
     } catch {
-      setOfflineMessage("未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手");
-      toast.error("本机微信 Agent 未启动");
+      setOfflineMessage("未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手");
+      toast.error("AI小高助手未启动");
     } finally {
       setSearchResultChecking(false);
       refreshHealth();
@@ -317,13 +320,13 @@ export default function LocalWechatAgentTestPanel() {
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-[15px] font-bold text-[#1a1f2e]">本机 WeChat Agent</h2>
+              <h2 className="text-[15px] font-bold text-[#1a1f2e]">AI小高助手</h2>
               <span className="rounded-md bg-[#f1f5f9] px-2 py-1 text-[11px] font-semibold text-[#475569]">
                 {LOCAL_AGENT_BASE_URL}
               </span>
             </div>
             <p className="mt-1 text-xs text-[#64748b]">
-              浏览器直连当前电脑的 127.0.0.1:19000，只验证 Aw3 paste-only，不调用主系统后端。            </p>
+              浏览器直连当前电脑的本地助手，只验证 Aw3 的仅粘贴操作，不调用主系统。            </p>
           </div>
         </div>
 
@@ -334,7 +337,7 @@ export default function LocalWechatAgentTestPanel() {
             className="flex h-9 items-center gap-1.5 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] disabled:opacity-50"
           >
             {checking ? <Loader2Icon size={14} className="animate-spin" /> : <PlugZapIcon size={14} />}
-            检查 Agent
+            检查助手
           </button>
           <button
             onClick={handleDiagnoseWindows}
@@ -380,7 +383,7 @@ export default function LocalWechatAgentTestPanel() {
             className="flex h-9 items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 text-xs font-semibold text-sky-700 disabled:opacity-50"
           >
             {warmingOcr || ocrStatus?.initializing ? <Loader2Icon size={14} className="animate-spin" /> : <PlugZapIcon size={14} />}
-            OCR 预热
+            文字识别预热
           </button>
           <button
             onClick={handleRunTest}
@@ -407,50 +410,50 @@ export default function LocalWechatAgentTestPanel() {
 
       {ocrStatus?.failure_stage === "ocr_model_missing" ? (
         <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
-          小高AI微信助手缺少 OCR 模型文件，请重新复制完整 dist\小高AI微信助手 目录，不要只复制 exe。
+          AI小高助手缺少文字识别文件，请重新复制完整程序目录。
         </div>
       ) : null}
 
       {ocrStatus?.model_source === "bundled" && ocrStatus?.model_ready ? (
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-          OCR 模型已内置，可以开始微信测试。OCR 不会在测试机联网下载模型。
+          文字识别功能已就绪，可以开始微信测试，测试期间不会联网下载识别文件。
         </div>
       ) : null}
       <div className="mt-4 grid gap-3 lg:grid-cols-4">
 
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
-          <div className="text-[11px] font-semibold uppercase text-[#94a3b8]">Agent 状态</div>
+          <div className="text-[11px] font-semibold text-[#94a3b8]">助手状态</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={health?.success} label="online" />
-            <BooleanPill value={health?.wechat_agent} label="wechat_agent" />
+            <BooleanPill value={health?.success} label="在线" />
+            <BooleanPill value={health?.wechat_agent} label="微信助手" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            hostname: <span className="font-semibold text-[#334155]">{health?.agent_machine?.hostname || "-"}</span>
+              设备名称：<span className="font-semibold text-[#334155]">{health?.agent_machine?.hostname || "-"}</span>
           </div>
           {/* P0-FE-MAIN-1: server_url 展示 */}
           <div className="mt-1 text-[11px] text-[#64748b]">
             {serverUrlInfo?.configured ? (
-              <span className="font-semibold text-emerald-700">server_url: {serverUrlInfo.server_url}</span>
+              <span className="font-semibold text-emerald-700">服务地址：{serverUrlInfo.server_url}</span>
             ) : (
-              <span className="font-semibold text-amber-600">server_url: 未配置（任务拉取不可用）</span>
+              <span className="font-semibold text-amber-600">服务地址：未配置（任务拉取不可用）</span>
             )}
           </div>
           {/* 版本信息 */}
           {agentVersion ? (
             <div className="mt-2 text-[11px] text-[#64748b]">
               <div>
-                版本: <span className="font-semibold text-[#334155]">{agentVersion.build_version}</span>
+                版本：<span className="font-semibold text-[#334155]">{agentVersion.build_version}</span>
                 {agentVersion.exe_mode && (
-                  <span className="ml-1 rounded bg-blue-50 px-1 text-blue-600">exe</span>
+                  <span className="ml-1 rounded bg-blue-50 px-1 text-blue-600">程序</span>
                 )}
               </div>
               <div>
-                构建: <span className="text-[#334155]">{agentVersion.build_time}</span>
+                构建时间：<span className="text-[#334155]">{agentVersion.build_time}</span>
                 {" | "}
-                commit: <span className="font-mono text-[#334155]">{agentVersion.git_commit}</span>
+                版本编号：<span className="font-mono text-[#334155]">{agentVersion.git_commit}</span>
               </div>
               <div>
-                路由数: <span className="font-semibold text-[#334155]">{agentVersion.routes?.length ?? "-"}</span>
+              可用功能数：<span className="font-semibold text-[#334155]">{agentVersion.routes?.length ?? "-"}</span>
               </div>
             </div>
           ) : null}
@@ -464,60 +467,60 @@ export default function LocalWechatAgentTestPanel() {
         </div>
 
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
-          <div className="text-[11px] font-semibold uppercase text-[#94a3b8]">OCR 状态</div>
+          <div className="text-[11px] font-semibold text-[#94a3b8]">文字识别状态</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={ocrStatus?.ocr_available} label="available" />
-            <BooleanPill value={ocrStatus?.ocr_initialized} label="ocr_initialized" />
-            <BooleanPill value={ocrStatus?.model_ready} label="model_ready" />
-            <BooleanPill value={ocrStatus?.initializing} label="initializing" />
+            <BooleanPill value={ocrStatus?.ocr_available} label="可用" />
+            <BooleanPill value={ocrStatus?.ocr_initialized} label="已初始化" />
+            <BooleanPill value={ocrStatus?.model_ready} label="模型就绪" />
+            <BooleanPill value={ocrStatus?.initializing} label="初始化中" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            last_error: <span className="font-semibold text-[#334155]">{ocrStatus?.last_error || "-"}</span>
+            最近错误：<span className="font-semibold text-[#334155]">{ocrStatus?.last_error || "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            cache_dir: <span className="font-mono text-[#334155]">{ocrStatus?.cache_dir || "-"}</span>
+            缓存目录：<span className="font-mono text-[#334155]">{ocrStatus?.cache_dir || "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            model_source: <span className="font-semibold text-[#334155]">{ocrStatus?.model_source || "-"}</span>
+            文件来源：<span className="font-semibold text-[#334155]">{ocrStatus?.model_source === "bundled" ? "随程序内置" : ocrStatus?.model_source ? "本机文件" : "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            model_dir: <span className="font-mono text-[#334155]">{ocrStatus?.model_dir || "-"}</span>
+            模型目录：<span className="font-mono text-[#334155]">{ocrStatus?.model_dir || "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            download_enabled: <span className="font-semibold text-[#334155]">{String(ocrStatus?.download_enabled ?? "-")}</span>
+            允许下载：<span className="font-semibold text-[#334155]">{ocrStatus ? booleanText(ocrStatus.download_enabled) : "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            model_files:{" "}
+            模型文件：{" "}
             <span className="font-semibold text-[#334155]">
               {ocrStatus?.model_files_count ?? "-"} / {ocrStatus?.model_total_size_mb ?? "-"} MB
             </span>
           </div>
           {ocrStatus?.download_enabled === false ? (
             <div className="mt-2 text-[11px] font-semibold text-emerald-700">
-              OCR 不会在测试机联网下载模型。
+              文字识别功能不会在测试机联网下载文件。
             </div>
           ) : null}
         </div>
 
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
-          <div className="text-[11px] font-semibold uppercase text-[#94a3b8]">open_chat</div>
+          <div className="text-[11px] font-semibold text-[#94a3b8]">打开会话</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={result?.open_chat?.success} label="success" />
-            <BooleanPill value={result?.open_chat?.chat_verified} label="chat_verified" />
+            <BooleanPill value={result?.open_chat?.success} label="成功" />
+            <BooleanPill value={result?.open_chat?.chat_verified} label="会话已验证" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            open_chat 不是最终联系人确认
+            打开会话不是最终联系人确认
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={result?.open_chat?.search_action_completed} label="search_action_completed" />
-            <BooleanPill value={result?.open_chat?.search_keyword_pasted} label="search_keyword_pasted" />
-            <BooleanPill value={result?.open_chat?.maybe_chat_opened} label="maybe_chat_opened" />
+            <BooleanPill value={result?.open_chat?.search_action_completed} label="搜索已完成" />
+            <BooleanPill value={result?.open_chat?.search_keyword_pasted} label="关键词已粘贴" />
+            <BooleanPill value={result?.open_chat?.maybe_chat_opened} label="可能已打开" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            confidence:{" "}
+            可信度：{" "}
             <span className="font-semibold text-[#334155]">{result?.open_chat?.confidence ?? "-"}</span>
             <span className="mx-2 text-[#cbd5e1]">|</span>
-            stage: <span className="font-semibold text-[#334155]">{result?.open_chat?.failure_stage || "-"}</span>
+            阶段：<span className="font-semibold text-[#334155]">{userFacingState(result?.open_chat?.failure_stage)}</span>
           </div>
           {/* open_chat search_text_debug 诊断（P0-4A-6B-3） */}
           {(() => {
@@ -526,29 +529,29 @@ export default function LocalWechatAgentTestPanel() {
             return (
               <div className="mt-2 rounded-lg border border-[#e2e8f0] bg-white p-2 text-[11px]">
                 <div className="mb-1 font-semibold text-[#334155]">
-                  search_text_debug（P0-4A-6B-3）
+                  搜索文字诊断（P0-4A-6B-3）
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#64748b]">
                   <div>
-                    method: <span className="font-medium text-[#334155]">{openChatDebug.method || "-"}</span>
+                    方法：<span className="font-medium text-[#334155]">{openChatDebug.method || "-"}</span>
                   </div>
                   <div>
-                    verified: <BooleanPill value={openChatDebug.verified} label="" />
+                    已验证：<BooleanPill value={openChatDebug.verified} label="" />
                   </div>
                   <div>
-                    expected: <span className="font-mono text-[#334155]">{openChatDebug.expected || "-"}</span>
+                    预期文字：<span className="font-mono text-[#334155]">{openChatDebug.expected || "-"}</span>
                   </div>
                   <div>
-                    click_in_box: <BooleanPill value={openChatDebug.click_point_inside_search_box} label="" />
+                    已点击搜索框：<BooleanPill value={openChatDebug.click_point_inside_search_box} label="" />
                   </div>
                   <div className="col-span-2">
-                    搜索框 OCR: <span className="font-mono text-[#334155]">{openChatDebug.ocr_text || "(无)"}</span>
+                    搜索框文字识别结果：<span className="font-mono text-[#334155]">{openChatDebug.ocr_text || "（无）"}</span>
                   </div>
                   <div className="col-span-2">
-                    归一化 OCR: <span className="font-mono text-[#334155]">{openChatDebug.normalized_ocr_text || "(无)"}</span>
+                    规范化识别结果：<span className="font-mono text-[#334155]">{openChatDebug.normalized_ocr_text || "（无）"}</span>
                   </div>
                   <div className="col-span-2">
-                    结果区 OCR: <span className="font-mono text-[#334155]">{openChatDebug.result_area_ocr_text ?? "(未采集)"}</span>
+                    结果区文字识别结果：<span className="font-mono text-[#334155]">{openChatDebug.result_area_ocr_text ?? "（未采集）"}</span>
                   </div>
                   <div>
                     结果区包含: <BooleanPill value={openChatDebug.result_area_contains_expected ?? false} label="Aw3" />
@@ -583,19 +586,19 @@ export default function LocalWechatAgentTestPanel() {
               onClick={() => {
                 try {
                   navigator.clipboard.writeText(JSON.stringify(result.open_chat, null, 2));
-                  toast.success("已复制 open_chat debug JSON 到剪贴板");
+                  toast.success("已复制打开会话诊断数据");
                 } catch {
                   toast.error("复制失败");
                 }
               }}
             >
-              复制 open_chat debug JSON
+              复制打开会话诊断数据
             </button>
           )}
           {/* search_text_not_verified 专用提示 */}
           {result?.open_chat?.failure_stage === "search_text_not_verified" && (
             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
-              Aw3 已粘贴，但搜索文本验证失败。请查看 search_text_debug 的 OCR 文本、结果区证据和泄漏检测。
+              Aw3 已粘贴，但搜索文字验证失败。请查看搜索文字诊断中的识别结果、结果区证据和误粘贴检测。
             </div>
           )}
           {/* 组合证据通过提示 */}
@@ -609,25 +612,25 @@ export default function LocalWechatAgentTestPanel() {
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
           <div className="text-[11px] font-semibold uppercase text-[#94a3b8]">验证结果</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={result?.verify?.verified} label="verified" />
-            <BooleanPill value={result?.verify?.partial_match} label="partial" />
-            <BooleanPill value={result?.verify?.manual_review_required} label="manual" />
+            <BooleanPill value={result?.verify?.verified} label="已验证" />
+            <BooleanPill value={result?.verify?.partial_match} label="部分匹配" />
+            <BooleanPill value={result?.verify?.manual_review_required} label="需人工复核" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            strategy: <span className="font-semibold text-[#334155]">{result?.verify?.strategy || "-"}</span>
+            策略：<span className="font-semibold text-[#334155]">{result?.verify?.strategy || "-"}</span>
             <span className="mx-2 text-[#cbd5e1]">|</span>
-            OCR: <span className="font-semibold text-[#334155]">{result?.verify?.ocr_text || "-"}</span>
+            文字识别结果：<span className="font-semibold text-[#334155]">{result?.verify?.ocr_text || "-"}</span>
           </div>
         </div>
 
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
-          <div className="text-[11px] font-semibold uppercase text-[#94a3b8]">动作结果</div>
+          <div className="text-[11px] font-semibold text-[#94a3b8]">动作结果</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <BooleanPill value={result?.action?.pasted} label="pasted" />
-            <BooleanPill value={result?.action?.sent} label="sent" />
+            <BooleanPill value={result?.action?.pasted} label="已粘贴" />
+            <BooleanPill value={result?.action?.sent} label="已发送" />
           </div>
           <div className="mt-2 text-[11px] text-[#64748b]">
-            failure_stage: <span className="font-semibold text-[#334155]">{result?.failure_stage || "-"}</span>
+            失败阶段：<span className="font-semibold text-[#334155]">{userFacingState(result?.failure_stage)}</span>
           </div>
         </div>
       </div>
@@ -639,13 +642,13 @@ export default function LocalWechatAgentTestPanel() {
 
       {verifyFailedAfterOpen ? (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-          自动打开 Aw3 后，OCR 未确认顶部标题为 Aw3，已阻止粘贴。
+          自动打开 Aw3 后，文字识别未确认顶部标题为 Aw3，已阻止粘贴。
         </div>
       ) : null}
 
       {windowsDiagnostic && !windowsDiagnostic.wechat_detected ? (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-          本机 Agent 已启动，但未找到微信窗口。请确认微信已打开、未最小化、未托盘隐藏，且 小高AI微信助手 与微信使用相同权限启动。        </div>
+          本机 AI小高助手 已启动，但未找到微信窗口。请确认微信已打开、未最小化、未托盘隐藏，且 小高AI微信助手 与微信使用相同权限启动。        </div>
       ) : null}
 
       {windowsDiagnostic ? (
@@ -664,12 +667,12 @@ export default function LocalWechatAgentTestPanel() {
               <table className="w-full min-w-[720px] text-left text-[11px]">
                 <thead className="text-[#64748b]">
                   <tr className="border-b border-[#edf1f6]">
-                    <th className="py-2 pr-2 font-semibold">hwnd</th>
-                    <th className="py-2 pr-2 font-semibold">title</th>
-                    <th className="py-2 pr-2 font-semibold">class_name</th>
-                    <th className="py-2 pr-2 font-semibold">process</th>
-                    <th className="py-2 pr-2 font-semibold">visible</th>
-                    <th className="py-2 pr-2 font-semibold">iconic</th>
+                    <th className="py-2 pr-2 font-semibold">窗口句柄</th>
+                    <th className="py-2 pr-2 font-semibold">窗口标题</th>
+                    <th className="py-2 pr-2 font-semibold">窗口类别</th>
+                    <th className="py-2 pr-2 font-semibold">进程</th>
+                    <th className="py-2 pr-2 font-semibold">是否可见</th>
+                    <th className="py-2 pr-2 font-semibold">是否最小化</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -690,7 +693,7 @@ export default function LocalWechatAgentTestPanel() {
           {windowsDiagnostic.notes?.length ? (
             <div className="mt-3 grid gap-1 text-[11px] text-[#64748b]">
               {windowsDiagnostic.notes.map((note) => (
-                <div key={note}>note: {note}</div>
+                <div key={note}>说明：{note}</div>
               ))}
             </div>
           ) : null}
@@ -705,9 +708,9 @@ export default function LocalWechatAgentTestPanel() {
       {foregroundDebug ? (
         <div className="mt-3 rounded-lg border border-[#edf1f6] bg-white p-3">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <BooleanPill value={foregroundDebug.is_wechat_foreground} label="foreground_success" />
+            <BooleanPill value={foregroundDebug.is_wechat_foreground} label="前台切换成功" />
             <span className="font-semibold text-[#334155]">
-              failure_stage: {foregroundDiagnostic?.failure_stage || result?.failure_stage || "-"}
+              失败阶段：{userFacingState(foregroundDiagnostic?.failure_stage || result?.failure_stage)}
             </span>
           </div>
           <div className="mt-3 grid gap-2 text-[11px] text-[#64748b] md:grid-cols-2">
@@ -723,25 +726,25 @@ export default function LocalWechatAgentTestPanel() {
               前台之后：{foregroundDebug.foreground_after_title || "-"} /{" "}
               {foregroundDebug.foreground_after_process_name || "-"}
             </div>
-            <div>reason: {foregroundDebug.reason || "-"}</div>
+            <div>原因：{foregroundDebug.reason || "-"}</div>
           </div>
           {foregroundDebug.attempts?.length ? (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[680px] text-left text-[11px]">
                 <thead className="text-[#64748b]">
                   <tr className="border-b border-[#edf1f6]">
-                    <th className="py-2 pr-2 font-semibold">method</th>
-                    <th className="py-2 pr-2 font-semibold">success</th>
-                    <th className="py-2 pr-2 font-semibold">after_title</th>
-                    <th className="py-2 pr-2 font-semibold">after_process</th>
-                    <th className="py-2 pr-2 font-semibold">error</th>
+                    <th className="py-2 pr-2 font-semibold">方法</th>
+                    <th className="py-2 pr-2 font-semibold">是否成功</th>
+                    <th className="py-2 pr-2 font-semibold">处理后标题</th>
+                    <th className="py-2 pr-2 font-semibold">处理后进程</th>
+                    <th className="py-2 pr-2 font-semibold">错误信息</th>
                   </tr>
                 </thead>
                 <tbody>
                   {foregroundDebug.attempts.map((attempt, index) => (
                     <tr key={`${attempt.method}-${index}`} className="border-b border-[#f1f5f9] text-[#334155]">
                       <td className="py-2 pr-2 font-mono">{attempt.method}</td>
-                      <td className="py-2 pr-2">{String(attempt.success)}</td>
+                      <td className="py-2 pr-2">{booleanText(attempt.success)}</td>
                       <td className="py-2 pr-2">{attempt.foreground_after_title || "-"}</td>
                       <td className="py-2 pr-2">{attempt.foreground_after_process_name || "-"}</td>
                       <td className="py-2 pr-2">{attempt.error || "-"}</td>
@@ -757,16 +760,16 @@ export default function LocalWechatAgentTestPanel() {
       {searchDiagnostic ? (
         <div className="mt-3 rounded-lg border border-[#edf1f6] bg-white p-3">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <BooleanPill value={searchDiagnostic.success} label="search_debug" />
-            <BooleanPill value={searchDiagnostic.clicked} label="clicked" />
-            <BooleanPill value={searchDiagnostic.focused} label="focused" />
-            <BooleanPill value={searchDiagnostic.verified} label="verified" />
-            <BooleanPill value={searchFocus?.search_text_verified} label="search_text_verified" />
-            <BooleanPill value={searchDiagnostic.manual} label="manual" />
+            <BooleanPill value={searchDiagnostic.success} label="诊断成功" />
+            <BooleanPill value={searchDiagnostic.clicked} label="已点击" />
+            <BooleanPill value={searchDiagnostic.focused} label="已聚焦" />
+            <BooleanPill value={searchDiagnostic.verified} label="已验证" />
+            <BooleanPill value={searchFocus?.search_text_verified} label="搜索文字已验证" />
+            <BooleanPill value={searchDiagnostic.manual} label="人工操作" />
             <span className="font-semibold text-[#334155]">
-              failure_stage: {searchDiagnostic.failure_stage || "-"}
+              失败阶段：{userFacingState(searchDiagnostic.failure_stage)}
             </span>
-            <span className="text-[#64748b]">message: {searchDiagnostic.message || "-"}</span>
+            <span className="text-[#64748b]">提示：{searchDiagnostic.message || "-"}</span>
           </div>
           {searchDiagnostic.click_point?.success === false ? (
             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
@@ -786,29 +789,29 @@ export default function LocalWechatAgentTestPanel() {
           ) : null}
           <div className="mt-3 grid gap-2 text-[11px] text-[#64748b] md:grid-cols-2">
             <div>
-              click_point: x={searchDiagnostic.click_point?.x ?? "-"} / y={searchDiagnostic.click_point?.y ?? "-"}
+              点击位置：横坐标 {searchDiagnostic.click_point?.x ?? "-"} / 纵坐标 {searchDiagnostic.click_point?.y ?? "-"}
             </div>
-            <div>strategy: {searchDiagnostic.click_point?.strategy || "-"}</div>
-            <div>confidence: {searchDiagnostic.click_point?.confidence ?? "-"}</div>
+            <div>定位策略：{searchDiagnostic.click_point?.strategy || "-"}</div>
+            <div>可信度：{searchDiagnostic.click_point?.confidence ?? "-"}</div>
             <div>
-              search_box_rect:{" "}
+              搜索框范围：{" "}
               {searchDiagnostic.click_point?.search_box_rect
                 ? `${searchDiagnostic.click_point.search_box_rect.left},${searchDiagnostic.click_point.search_box_rect.top},${searchDiagnostic.click_point.search_box_rect.right},${searchDiagnostic.click_point.search_box_rect.bottom}`
                 : "-"}
             </div>
-            <div>search_text_verified: {String(Boolean(searchFocus?.search_text_verified))}</div>
-            <div>text_pasted_into_search_box: {String(Boolean(searchDiagnostic.text_pasted_into_search_box))}</div>
-            <div>text_leaked_to_chat_input: {String(Boolean(searchDiagnostic.text_leaked_to_chat_input))}</div>
-            <div>focus_reason: {searchDiagnostic.search_focus?.reason || "-"}</div>
-            <div>focus_control: {searchDiagnostic.search_focus?.focus_control?.name || "-"}</div>
-            <div>overlay: {searchDiagnostic.screenshots?.overlay || "-"}</div>
-            <div>after_paste: {searchDiagnostic.screenshots?.after_paste || "-"}</div>
+            <div>搜索文字已验证：{booleanText(searchFocus?.search_text_verified)}</div>
+            <div>文字已粘贴到搜索框：{booleanText(searchDiagnostic.text_pasted_into_search_box)}</div>
+            <div>文字误入会话输入框：{booleanText(searchDiagnostic.text_leaked_to_chat_input)}</div>
+            <div>聚焦原因：{searchDiagnostic.search_focus?.reason || "-"}</div>
+            <div>聚焦控件：{searchDiagnostic.search_focus?.focus_control?.name || "-"}</div>
+            <div>标注截图：{searchDiagnostic.screenshots?.overlay || "-"}</div>
+            <div>粘贴后截图：{searchDiagnostic.screenshots?.after_paste || "-"}</div>
           </div>
           {searchDiagnostic.screenshots?.overlay ? (
             <div className="mt-3 overflow-hidden rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-2">
               <img
                 src={`file:///${searchDiagnostic.screenshots.overlay.replaceAll("\\", "/")}`}
-                alt="search box overlay"
+                alt="搜索框标注截图"
                 className="max-h-64 w-full object-contain"
               />
             </div>
@@ -821,26 +824,26 @@ export default function LocalWechatAgentTestPanel() {
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#64748b]">
                 <div>
-                  method: <span className="font-medium text-[#334155]">{searchFocus.search_text_debug.method || "-"}</span>
+                  方法：<span className="font-medium text-[#334155]">{searchFocus.search_text_debug.method || "-"}</span>
                 </div>
                 <div>
-                  verified: <BooleanPill value={searchFocus.search_text_debug.verified} label="" />
+                  已验证：<BooleanPill value={searchFocus.search_text_debug.verified} label="" />
                 </div>
                 <div>
-                  expected: <span className="font-mono text-[#334155]">{searchFocus.search_text_debug.expected || "-"}</span>
+                  预期文字：<span className="font-mono text-[#334155]">{searchFocus.search_text_debug.expected || "-"}</span>
                 </div>
                 <div>
-                  normalized: <span className="font-mono text-[#334155]">{searchFocus.search_text_debug.normalized_expected || "-"}</span>
+                  规范化文字：<span className="font-mono text-[#334155]">{searchFocus.search_text_debug.normalized_expected || "-"}</span>
                 </div>
                 <div className="col-span-2">
-                  OCR 结果: <span className="font-mono text-[#334155]">{searchFocus.search_text_debug.ocr_text || "(无)"}</span>
+                  文字识别结果：<span className="font-mono text-[#334155]">{searchFocus.search_text_debug.ocr_text || "（无）"}</span>
                 </div>
                 <div className="col-span-2">
-                  归一化 OCR: <span className="font-mono text-[#334155]">{searchFocus.search_text_debug.normalized_ocr_text || "(无)"}</span>
+                  规范化识别结果：<span className="font-mono text-[#334155]">{searchFocus.search_text_debug.normalized_ocr_text || "（无）"}</span>
                 </div>
                 {searchFocus.search_text_debug.ocr_items?.length ? (
                   <div className="col-span-2">
-                    OCR 条目: {searchFocus.search_text_debug.ocr_items.map((item, i) => (
+                    识别条目：{searchFocus.search_text_debug.ocr_items.map((item, i) => (
                       <span key={i} className="mr-2 inline-block rounded bg-[#eef2f7] px-1.5 py-0.5 font-mono">
                         {item.text}({(item.confidence ?? 0).toFixed(2)})
                       </span>
@@ -869,7 +872,7 @@ export default function LocalWechatAgentTestPanel() {
                   <div className="col-span-2 mt-1 overflow-hidden rounded-lg border border-[#edf1f6] bg-white p-1">
                     <img
                       src={`file:///${searchFocus.search_text_debug.search_box_overlay_path.replaceAll("\\", "/")}`}
-                      alt="search text debug overlay"
+                      alt="搜索文字诊断标注截图"
                       className="max-h-64 w-full object-contain"
                     />
                   </div>
@@ -880,7 +883,7 @@ export default function LocalWechatAgentTestPanel() {
           {searchDiagnostic.notes?.length ? (
             <div className="mt-3 grid gap-1 text-[11px] text-[#64748b]">
               {searchDiagnostic.notes.map((note) => (
-                <div key={note}>note: {note}</div>
+                <div key={note}>说明：{note}</div>
               ))}
             </div>
           ) : null}
@@ -888,7 +891,7 @@ export default function LocalWechatAgentTestPanel() {
       ) : null}
       {searchCalibration ? (
         <div className="mt-3 rounded-lg border border-[#edf1f6] bg-white px-3 py-2 text-xs text-[#475569]">
-          标定结果：{String(searchCalibration.success)} / relative=({searchCalibration.relative_x ?? "-"},{" "}
+          标定结果：{searchCalibration.success ? "成功" : "失败"} / 相对位置=({searchCalibration.relative_x ?? "-"},{" "}
           {searchCalibration.relative_y ?? "-"}) / {searchCalibration.config_path || searchCalibration.message || "-"}
         </div>
       ) : null}
@@ -897,16 +900,16 @@ export default function LocalWechatAgentTestPanel() {
       {searchResultDiagnostic ? (
         <div className="mt-3 rounded-lg border border-[#edf1f6] bg-white p-3">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <BooleanPill value={searchResultDiagnostic.search_text_verified} label="search_text_verified" />
-            <BooleanPill value={searchResultDiagnostic.search_result_detected} label="result_detected" />
+            <BooleanPill value={searchResultDiagnostic.search_text_verified} label="搜索文字已验证" />
+            <BooleanPill value={searchResultDiagnostic.search_result_detected} label="已找到结果" />
             <span className="font-semibold text-[#334155]">
-              method: {searchResultDiagnostic.search_result?.method || "-"}
+              方法：{searchResultDiagnostic.search_result?.method || "-"}
             </span>
             <span className="text-[#64748b]">
-              confidence: {searchResultDiagnostic.search_result?.confidence ?? "-"}
+              可信度：{searchResultDiagnostic.search_result?.confidence ?? "-"}
             </span>
             <span className="font-semibold text-[#334155]">
-              failure_stage: {searchResultDiagnostic.failure_stage || "-"}
+              失败阶段：{userFacingState(searchResultDiagnostic.failure_stage)}
             </span>
           </div>
           {/* 搜索框未确认 Aw3 提示 */}
@@ -931,13 +934,13 @@ export default function LocalWechatAgentTestPanel() {
           {searchResultDiagnostic.search_result?.rect ? (
             <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[#64748b]">
               <div>
-                result_rect: ({searchResultDiagnostic.search_result.rect.left},{" "}
+                结果范围：({searchResultDiagnostic.search_result.rect.left},{" "}
                 {searchResultDiagnostic.search_result.rect.top}) → ({" "}
                 {searchResultDiagnostic.search_result.rect.right},{" "}
                 {searchResultDiagnostic.search_result.rect.bottom})
               </div>
               <div>
-                click_point: ({searchResultDiagnostic.search_result.click_point?.x ?? "-"},{" "}
+                点击位置：({searchResultDiagnostic.search_result.click_point?.x ?? "-"},{" "}
                 {searchResultDiagnostic.search_result.click_point?.y ?? "-"})
               </div>
             </div>
@@ -947,7 +950,7 @@ export default function LocalWechatAgentTestPanel() {
             <div className="mt-2 overflow-hidden rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-2">
               <img
                 src={`file:///${searchResultDiagnostic.screenshots.overlay.replaceAll("\\", "/")}`}
-                alt="search result overlay"
+                alt="搜索结果标注截图"
                 className="max-h-64 w-full object-contain"
               />
             </div>
@@ -960,26 +963,26 @@ export default function LocalWechatAgentTestPanel() {
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#64748b]">
                 <div>
-                  method: <span className="font-medium text-[#334155]">{searchResultDiagnostic.search_text_debug.method || "-"}</span>
+                  方法：<span className="font-medium text-[#334155]">{searchResultDiagnostic.search_text_debug.method || "-"}</span>
                 </div>
                 <div>
-                  verified: <BooleanPill value={searchResultDiagnostic.search_text_debug.verified} label="" />
+                  已验证：<BooleanPill value={searchResultDiagnostic.search_text_debug.verified} label="" />
                 </div>
                 <div>
-                  expected: <span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.expected || "-"}</span>
+                  预期文字：<span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.expected || "-"}</span>
                 </div>
                 <div>
-                  normalized: <span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.normalized_expected || "-"}</span>
+                  规范化文字：<span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.normalized_expected || "-"}</span>
                 </div>
                 <div className="col-span-2">
-                  OCR 结果: <span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.ocr_text || "(无)"}</span>
+                  文字识别结果：<span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.ocr_text || "（无）"}</span>
                 </div>
                 <div className="col-span-2">
-                  归一化 OCR: <span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.normalized_ocr_text || "(无)"}</span>
+                  规范化识别结果：<span className="font-mono text-[#334155]">{searchResultDiagnostic.search_text_debug.normalized_ocr_text || "（无）"}</span>
                 </div>
                 {searchResultDiagnostic.search_text_debug.ocr_items?.length ? (
                   <div className="col-span-2">
-                    OCR 条目: {searchResultDiagnostic.search_text_debug.ocr_items.map((item, i) => (
+                    识别条目：{searchResultDiagnostic.search_text_debug.ocr_items.map((item, i) => (
                       <span key={i} className="mr-2 inline-block rounded bg-[#eef2f7] px-1.5 py-0.5 font-mono">
                         {item.text}({(item.confidence ?? 0).toFixed(2)})
                       </span>
@@ -1009,7 +1012,7 @@ export default function LocalWechatAgentTestPanel() {
                   <div className="col-span-2 overflow-hidden rounded-lg border border-[#edf1f6] bg-white p-1">
                     <img
                       src={`file:///${searchResultDiagnostic.search_text_debug.search_box_overlay_path.replaceAll("\\", "/")}`}
-                      alt="search text debug overlay"
+                      alt="搜索文字诊断标注截图"
                       className="max-h-64 w-full object-contain"
                     />
                   </div>
@@ -1028,9 +1031,9 @@ export default function LocalWechatAgentTestPanel() {
 
       {result?.evidence ? (
         <div className="mt-3 grid gap-1.5 text-[11px] text-[#64748b]">
-          <div>before: {result.evidence.before || "-"}</div>
-          <div>after: {result.evidence.after || "-"}</div>
-          <div>verify: {result.evidence.verify_json || "-"}</div>
+          <div>处理前：{result.evidence.before || "-"}</div>
+          <div>处理后：{result.evidence.after || "-"}</div>
+          <div>验证结果：{result.evidence.verify_json || "-"}</div>
         </div>
       ) : null}
     </div>

@@ -27,6 +27,7 @@ import {
   type AdminWhitelistEntry,
 } from "../api/adminAutoreplyRollout";
 import { formatDateTimeLocal } from "../lib/datetime";
+import { userFacingError } from "../lib/userFacingError";
 
 type WhitelistType = "account" | "customer" | "conversation";
 
@@ -43,8 +44,8 @@ const reasonText: Record<string, string> = {
   env_real_send_disabled: "系统级真实发送熔断中",
   env_account_whitelist_empty: "系统级企业号白名单为空",
   env_customer_or_conversation_whitelist_empty: "系统级客户或会话白名单为空",
-  db_auto_reply_disabled: "DB 自动回复关闭",
-  db_real_send_disabled: "DB 真实发送关闭",
+  db_auto_reply_disabled: "配置中的自动回复已关闭",
+  db_real_send_disabled: "配置中的真实发送已关闭",
 };
 
 const blockedReasonText: Record<string, string> = {
@@ -54,20 +55,34 @@ const blockedReasonText: Record<string, string> = {
   account_disabled: "企业号自动回复关闭",
   account_send_disabled: "企业号真实发送关闭",
   agent_not_bound: "未绑定智能体",
-  post_llm_gate_blocked: "大模型后置门禁阻断",
+  post_llm_gate_blocked: "生成内容安全检查阻断",
   manual_takeover: "会话人工接管",
   send_context_unavailable: "发送上下文不可用",
-  rag_miss: "知识库未命中",
+  rag_miss: "知识库没有匹配内容",
+};
+
+const ENTRY_TYPE_LABELS: Record<string, string> = {
+  account: "企业号",
+  customer: "客户",
+  conversation: "会话",
+};
+
+const RUN_MODE_LABELS: Record<string, string> = {
+  ai_auto_reply: "AI自动回复",
+  manual_takeover: "人工接管",
+  dry_run: "演练",
+};
+
+const RUN_STATUS_LABELS: Record<string, string> = {
+  sent: "已发送",
+  blocked: "已阻断",
+  skipped: "已跳过",
+  failed: "失败",
+  pending: "待处理",
 };
 
 function resolveErrorMessage(err: unknown): string {
-  const data = (err as { response?: { status?: number; data?: { detail?: unknown; message?: string } } })?.response?.data;
-  const detail = data?.detail;
-  if (detail && typeof detail === "object") {
-    return (detail as { message?: string }).message || "请求失败";
-  }
-  if (typeof detail === "string") return detail;
-  return data?.message || (err instanceof Error ? err.message : "请求失败");
+  return userFacingError(err, "数据加载失败，请稍后重试");
 }
 
 function isForbidden(err: unknown): boolean {
@@ -76,13 +91,47 @@ function isForbidden(err: unknown): boolean {
 
 function readableReason(value?: string | null): string {
   if (!value) return "-";
-  return blockedReasonText[value] || reasonText[value] || value;
+  return blockedReasonText[value] || reasonText[value] || "其他原因";
 }
 
 function boolText(value: boolean | null | undefined): string {
   if (value === true) return "是";
   if (value === false) return "否";
   return "-";
+}
+
+const diagnosticKeyText: Record<string, string> = {
+  auto_reply_enabled: "自动回复开关",
+  real_send_enabled: "真实发送开关",
+  allow_full_rollout: "全量放开",
+  merchant_id: "商户编号",
+  account_open_id: "企业号编号",
+  agent_id: "智能体编号",
+  status: "状态",
+  mode: "运行模式",
+  blocked_reason: "阻断原因",
+  fallback_reason: "备用处理原因",
+  final_auto_send: "最终自动发送",
+  send_gate_passed: "发送安全检查通过",
+  rag_used: "是否使用知识库",
+  rag_sources_count: "知识库来源数量",
+  reason: "原因",
+  updated_at: "更新时间",
+  updated_by: "更新人",
+};
+
+function localizeDiagnosticSnapshot(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(localizeDiagnosticSnapshot);
+  if (!value || typeof value !== "object") {
+    if (typeof value === "boolean") return boolText(value);
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item], index) => [
+      diagnosticKeyText[key] || `字段${index + 1}`,
+      localizeDiagnosticSnapshot(item),
+    ]),
+  );
 }
 
 function StatusPill({
@@ -239,7 +288,7 @@ export default function AdminAutoreplyRolloutPage() {
       const response = await updateAutoreplyRolloutGlobal({ ...globalForm, reason });
       setSummary(response.data);
       setGlobalForm((current) => ({ ...current, reason: "" }));
-      toast.success(envRealSendDisabled ? "DB 配置已保存，当前仍受系统熔断限制，不会真实发送。" : "全局配置已保存");
+      toast.success(envRealSendDisabled ? "配置已保存，当前仍受系统熔断限制，不会真实发送。" : "全局配置已保存");
     } catch (err) {
       toast.error(resolveErrorMessage(err));
     } finally {
@@ -262,7 +311,7 @@ export default function AdminAutoreplyRolloutPage() {
         reason: reasonValue,
       });
       await reloadSummaryAndAccounts();
-      toast.success(field === "real_send_enabled" ? "DB 真实发送已暂停" : "DB 自动回复已暂停");
+      toast.success(field === "real_send_enabled" ? "真实发送已暂停" : "自动回复已暂停");
     } catch (err) {
       toast.error(resolveErrorMessage(err));
     }
@@ -301,7 +350,7 @@ export default function AdminAutoreplyRolloutPage() {
       reason: whitelistForm.reason.trim(),
     };
     if (!payload.merchant_id || !payload.value || !payload.reason) {
-      toast.error("merchant_id、value 和 reason 必填");
+      toast.error("商户编号、白名单值和原因均为必填项");
       return;
     }
     setAddingWhitelist(true);
@@ -362,9 +411,9 @@ export default function AdminAutoreplyRolloutPage() {
       { label: "企业号白名单", value: summary.counts.account_whitelist_count },
       { label: "客户白名单", value: summary.counts.customer_whitelist_count },
       { label: "会话白名单", value: summary.counts.conversation_whitelist_count },
-      { label: "enabled 企业号", value: summary.counts.enabled_account_count },
-      { label: "send_enabled 企业号", value: summary.counts.send_enabled_account_count },
-      { label: "dry-run", value: summary.recent_stats.dry_run_count },
+      { label: "已开启企业号", value: summary.counts.enabled_account_count },
+      { label: "已开启发送企业号", value: summary.counts.send_enabled_account_count },
+      { label: "演练次数", value: summary.recent_stats.dry_run_count },
       { label: "发送候选", value: summary.recent_stats.real_send_candidate_count },
       { label: "已发送", value: summary.recent_stats.sent_count },
       { label: "已阻断", value: summary.recent_stats.blocked_count },
@@ -392,7 +441,7 @@ export default function AdminAutoreplyRolloutPage() {
           </div>
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">自动回复灰度与发送控制</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">只配置 DB 管理层意图，最终发送仍由后端 gate 裁决</p>
+            <p className="mt-1 text-xs text-[#8b95a6]">只配置管理层意图，最终发送仍由系统安全检查决定</p>
           </div>
         </div>
         <button
@@ -416,14 +465,14 @@ export default function AdminAutoreplyRolloutPage() {
         {envRealSendDisabled ? (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-6 text-red-700">
             <b>系统级真实发送熔断中，前端配置不会触发真实发送。</b>
-            <span className="ml-2">允许保存 DB 配置用于演练，但真实发送仍不可用。</span>
+            <span className="ml-2">允许保存配置用于演练，但真实发送仍不可用。</span>
           </div>
         ) : null}
         {summary ? (
           <>
             <section className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <SectionTitle title="总览状态" hint="env 仅显示布尔状态，不展示原始环境变量值" />
+                <SectionTitle title="总览状态" hint="运行环境仅显示开关状态，不展示原始配置值" />
                 <div
                   className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
                     realSendPossible ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
@@ -434,12 +483,12 @@ export default function AdminAutoreplyRolloutPage() {
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-3 xl:grid-cols-6">
-                <div>env 自动回复：<StatusPill active={summary.env_fuse.auto_reply_env_enabled} /></div>
-                <div>env 真实发送：<StatusPill active={summary.env_fuse.real_send_env_enabled} activeText="未熔断" inactiveText="熔断中" /></div>
-                <div>env full rollout：<StatusPill active={summary.env_fuse.allow_full_rollout_env} /></div>
-                <div>DB 自动回复：<StatusPill active={summary.db_config.auto_reply_enabled} /></div>
-                <div>DB 真实发送：<StatusPill active={summary.db_config.real_send_enabled} /></div>
-                <div>DB full rollout：<StatusPill active={summary.db_config.allow_full_rollout} /></div>
+                <div>运行环境自动回复：<StatusPill active={summary.env_fuse.auto_reply_env_enabled} /></div>
+                <div>运行环境真实发送：<StatusPill active={summary.env_fuse.real_send_env_enabled} activeText="未熔断" inactiveText="熔断中" /></div>
+                <div>运行环境全量放开：<StatusPill active={summary.env_fuse.allow_full_rollout_env} /></div>
+                <div>配置中的自动回复：<StatusPill active={summary.db_config.auto_reply_enabled} /></div>
+                <div>配置中的真实发送：<StatusPill active={summary.db_config.real_send_enabled} /></div>
+                <div>配置中的全量放开：<StatusPill active={summary.db_config.allow_full_rollout} /></div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
                 {stats.map((item) => (
@@ -450,20 +499,20 @@ export default function AdminAutoreplyRolloutPage() {
 
             <section className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(360px,0.75fr)_minmax(0,1.25fr)]">
               <div className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                <SectionTitle title="全局控制" hint="修改后端 DB 管理层开关，不修改 env 熔断" />
+                <SectionTitle title="全局控制" hint="修改管理层开关，不修改运行环境熔断设置" />
                 <div className="mt-4 space-y-3">
                   <ToggleInput
-                    label="DB 自动回复启用"
+                    label="自动回复启用"
                     checked={globalForm.auto_reply_enabled}
                     onChange={(checked) => setGlobalForm((current) => ({ ...current, auto_reply_enabled: checked }))}
                   />
                   <ToggleInput
-                    label="DB 真实发送启用"
+                    label="真实发送启用"
                     checked={globalForm.real_send_enabled}
                     onChange={(checked) => setGlobalForm((current) => ({ ...current, real_send_enabled: checked }))}
                   />
                   <ToggleInput
-                    label="DB full rollout 启用"
+                    label="全量放开启用"
                     checked={globalForm.allow_full_rollout}
                     onChange={(checked) => setGlobalForm((current) => ({ ...current, allow_full_rollout: checked }))}
                   />
@@ -500,16 +549,16 @@ export default function AdminAutoreplyRolloutPage() {
               </div>
 
               <div className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                <SectionTitle title="企业号控制" hint="send_enabled 开启不代表一定会真实发送，仍需所有后端 gate 通过" />
+                <SectionTitle title="企业号控制" hint="开启发送不代表一定会真实发送，仍需通过全部安全检查" />
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full min-w-[980px] text-left text-xs">
                     <thead className="bg-[#f8fafc] text-[#64748b]">
                       <tr>
                         <th className="px-3 py-2 font-semibold">企业号</th>
-                        <th className="px-3 py-2 font-semibold">merchant_id</th>
-                        <th className="px-3 py-2 font-semibold">enabled</th>
-                        <th className="px-3 py-2 font-semibold">send_enabled</th>
-                        <th className="px-3 py-2 font-semibold">Agent</th>
+                        <th className="px-3 py-2 font-semibold">商户编号</th>
+                        <th className="px-3 py-2 font-semibold">是否开启</th>
+                        <th className="px-3 py-2 font-semibold">是否允许发送</th>
+                        <th className="px-3 py-2 font-semibold">AI智能体</th>
                         <th className="px-3 py-2 font-semibold">今日统计</th>
                         <th className="px-3 py-2 font-semibold">最后阻断</th>
                       </tr>
@@ -549,7 +598,7 @@ export default function AdminAutoreplyRolloutPage() {
                           </td>
                           <td className="px-3 py-3 text-[#475467]">{account.bound_agent_name || account.bound_agent_id || "-"}</td>
                           <td className="px-3 py-3 text-[#475467]">
-                            dry-run {account.today_dry_run_count} / sent {account.today_sent_count} / blocked {account.today_blocked_count}
+                            演练 {account.today_dry_run_count} / 已发送 {account.today_sent_count} / 已阻断 {account.today_blocked_count}
                           </td>
                           <td className="px-3 py-3 text-[#64748b]">{readableReason(account.last_blocked_reason)}</td>
                         </tr>
@@ -580,18 +629,18 @@ export default function AdminAutoreplyRolloutPage() {
                     <option value="conversation">会话</option>
                   </select>
                   <input
-                    aria-label="merchant_id"
+                    aria-label="商户编号"
                     value={whitelistForm.merchant_id}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, merchant_id: event.target.value }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                    placeholder="merchant_id"
+                    placeholder="输入商户编号"
                   />
                   <input
-                    aria-label="account_open_id"
+                    aria-label="企业号标识"
                     value={whitelistForm.account_open_id || ""}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, account_open_id: event.target.value }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                    placeholder="account_open_id（客户/会话可选）"
+                    placeholder="企业号标识（客户/会话可选）"
                   />
                   <input
                     aria-label="白名单值"
@@ -625,9 +674,9 @@ export default function AdminAutoreplyRolloutPage() {
                     <thead className="bg-[#f8fafc] text-[#64748b]">
                       <tr>
                         <th className="px-3 py-2 font-semibold">类型</th>
-                        <th className="px-3 py-2 font-semibold">merchant_id</th>
+                        <th className="px-3 py-2 font-semibold">商户编号</th>
                         <th className="px-3 py-2 font-semibold">企业号</th>
-                        <th className="px-3 py-2 font-semibold">value</th>
+                        <th className="px-3 py-2 font-semibold">白名单值</th>
                         <th className="px-3 py-2 font-semibold">状态</th>
                         <th className="px-3 py-2 font-semibold">原因 / 操作人</th>
                         <th className="px-3 py-2 font-semibold">操作</th>
@@ -636,7 +685,7 @@ export default function AdminAutoreplyRolloutPage() {
                     <tbody className="divide-y divide-[#eef2f6]">
                       {whitelist.map((entry) => (
                         <tr key={entry.id}>
-                          <td className="px-3 py-3">{entry.entry_type}</td>
+                          <td className="px-3 py-3">{ENTRY_TYPE_LABELS[entry.entry_type] || "其他"}</td>
                           <td className="px-3 py-3">{entry.merchant_id}</td>
                           <td className="px-3 py-3">{entry.account_open_id_masked || "-"}</td>
                           <td className="px-3 py-3">{entry.value_masked || "-"}</td>
@@ -678,7 +727,7 @@ export default function AdminAutoreplyRolloutPage() {
 
             <section className="mt-5 rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <SectionTitle title="审计与回滚" hint="只展示 run 摘要，不展示完整客户消息、完整提示词或原始响应" />
+                <SectionTitle title="审计与回滚" hint="只展示运行记录摘要，不展示完整客户消息、完整提示词或原始响应" />
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -686,45 +735,45 @@ export default function AdminAutoreplyRolloutPage() {
                     className="inline-flex h-8 items-center gap-1 rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-700"
                   >
                     <RotateCcwIcon size={13} />
-                    关闭 DB 真实发送
+                    关闭真实发送
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleEmergencyPause("auto_reply_enabled")}
                     className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-700"
                   >
-                    关闭 DB 自动回复
+                    关闭自动回复
                   </button>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <input
-                  aria-label="筛选 mode"
+                  aria-label="筛选运行模式"
                   value={runsFilter.mode}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, mode: event.target.value }))}
                   className="h-9 w-[160px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                  placeholder="mode"
+                  placeholder="运行模式"
                 />
                 <input
-                  aria-label="筛选 status"
+                  aria-label="筛选运行状态"
                   value={runsFilter.status}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, status: event.target.value }))}
                   className="h-9 w-[140px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                  placeholder="status"
+                  placeholder="运行状态"
                 />
                 <input
-                  aria-label="筛选 blocked_reason"
+                  aria-label="筛选阻断原因"
                   value={runsFilter.blocked_reason}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, blocked_reason: event.target.value }))}
                   className="h-9 w-[190px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                  placeholder="blocked_reason"
+                  placeholder="阻断原因"
                 />
                 <input
-                  aria-label="筛选 account_open_id"
+                  aria-label="筛选企业号标识"
                   value={runsFilter.account_open_id}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, account_open_id: event.target.value }))}
                   className="h-9 w-[200px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
-                  placeholder="account_open_id"
+                  placeholder="企业号标识"
                 />
                 <button
                   type="button"
@@ -739,12 +788,12 @@ export default function AdminAutoreplyRolloutPage() {
                 <table className="w-full min-w-[1160px] text-left text-xs">
                   <thead className="bg-[#f8fafc] text-[#64748b]">
                     <tr>
-                      <th className="px-3 py-2 font-semibold">run</th>
-                      <th className="px-3 py-2 font-semibold">mode / status</th>
+                      <th className="px-3 py-2 font-semibold">运行记录</th>
+                      <th className="px-3 py-2 font-semibold">模式 / 状态</th>
                       <th className="px-3 py-2 font-semibold">发送门禁</th>
-                      <th className="px-3 py-2 font-semibold">阻断 / fallback</th>
-                      <th className="px-3 py-2 font-semibold">RAG</th>
-                      <th className="px-3 py-2 font-semibold">rollout 快照</th>
+                      <th className="px-3 py-2 font-semibold">阻断 / 备用处理</th>
+                      <th className="px-3 py-2 font-semibold">知识库参考</th>
+                      <th className="px-3 py-2 font-semibold">放开配置快照</th>
                       <th className="px-3 py-2 font-semibold">时间</th>
                     </tr>
                   </thead>
@@ -755,23 +804,28 @@ export default function AdminAutoreplyRolloutPage() {
                           <div className="font-bold text-[#1a1f2e]">#{run.run_id}</div>
                           <div className="mt-1 text-[11px] text-[#8b95a6]">{run.account_open_id_masked || "-"}</div>
                         </td>
-                        <td className="px-3 py-3 text-[#475467]">{run.mode || "-"} / {run.status || "-"}</td>
                         <td className="px-3 py-3 text-[#475467]">
-                          final_auto_send={boolText(run.final_auto_send)}
+                          {RUN_MODE_LABELS[run.mode || ""] || "其他模式"} / {RUN_STATUS_LABELS[run.status || ""] || "未知状态"}
+                        </td>
+                        <td className="px-3 py-3 text-[#475467]">
+                          最终自动发送：{boolText(run.final_auto_send)}
                           <br />
-                          send_gate_passed={boolText(run.send_gate_passed)}
+                          发送安全检查通过：{boolText(run.send_gate_passed)}
                         </td>
                         <td className="px-3 py-3 text-[#64748b]">
                           {readableReason(run.blocked_reason)}
                           <br />
-                          fallback：{readableReason(run.fallback_reason)}
+                          备用处理：{readableReason(run.fallback_reason)}
                         </td>
                         <td className="px-3 py-3 text-[#475467]">
-                          {run.rag_used ? "已使用" : "未使用"} · sources {run.rag_sources_count}
+                          {run.rag_used ? "已使用" : "未使用"} · 来源数量 {run.rag_sources_count}
                         </td>
                         <td className="px-3 py-3">
                           <pre className="max-h-20 overflow-auto rounded-lg bg-[#f8fafc] p-2 text-[10px] leading-4 text-[#64748b]">
-                            {JSON.stringify({ db: run.db_rollout || {}, env: run.env_rollout || {} }, null, 2)}
+                            {JSON.stringify({
+                              配置: localizeDiagnosticSnapshot(run.db_rollout || {}),
+                              运行环境: localizeDiagnosticSnapshot(run.env_rollout || {}),
+                            }, null, 2)}
                           </pre>
                         </td>
                         <td className="px-3 py-3 text-[#64748b]">{formatDateTimeLocal(run.created_at)}</td>
@@ -779,7 +833,7 @@ export default function AdminAutoreplyRolloutPage() {
                     ))}
                     {!runs.length ? (
                       <tr>
-                        <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无 run 记录，系统产生自动回复 run 后会自动出现在此列表</td>
+                        <td colSpan={7} className="px-3 py-8 text-center text-[#98a2b3]">暂无运行记录，系统产生自动回复记录后会自动出现在此列表</td>
                       </tr>
                     ) : null}
                   </tbody>

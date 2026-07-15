@@ -1,4 +1,4 @@
-﻿import {
+import {
   BotIcon,
   BookOpenIcon,
   ClockIcon,
@@ -26,6 +26,7 @@ import {
   updateAgentKnowledgeCategories,
 } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 interface ChatMessage {
   id: string;
@@ -349,7 +350,7 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
         toast.error(result.error);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "回复预览失败");
+      toast.error(userFacingError(error, "回复预览失败"));
       setMessages((current) => [...current, { id: `ai-error-${Date.now()}`, sender: "ai", content: "回复预览失败，请稍后重试。" }]);
     } finally {
       setSending(false);
@@ -432,7 +433,7 @@ export default function SuperMerchantAgent() {
       setAgents(items);
       setSelectedAgentId((current) => current && items.some((item) => item.agent_id === current) ? current : items[0]?.agent_id || null);
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "AI小高智能体加载失败");
+      setLoadError(userFacingError(error, "AI小高智能体加载失败"));
     } finally {
       setLoading(false);
     }
@@ -468,7 +469,7 @@ export default function SuperMerchantAgent() {
       await loadAgents();
       setSelectedAgentId(saved.agent_id);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "智能体保存失败");
+      toast.error(userFacingError(error, "智能体保存失败"));
     } finally {
       setSaving(false);
     }
@@ -481,7 +482,7 @@ export default function SuperMerchantAgent() {
       toast.success("智能体已删除");
       await loadAgents();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "智能体删除失败");
+      toast.error(userFacingError(error, "智能体删除失败"));
     }
   };
 
@@ -520,7 +521,7 @@ export default function SuperMerchantAgent() {
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {loading && agents.length === 0 ? (
             <div className="grid h-full place-items-center text-sm text-[#64748b]">
-              <span className="inline-flex items-center gap-2"><RefreshCwIcon size={16} className="animate-spin" /> 正在加载AI小高智能体...</span>
+              <span className="inline-flex items-center gap-2"><RefreshCwIcon size={16} className="animate-spin" /> 正在加载AI小高智能体…</span>
             </div>
           ) : loadError && agents.length === 0 ? (
             <div className="grid h-full place-items-center">

@@ -24,6 +24,7 @@ import { fetchAgentStatus } from "../../../api/agent";
 import { getApiErrorCode, isLocalAgentAuthErrorCode } from "../../../api/client";
 import type { AgentStatusData } from "../../../api/types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError, userFacingState, userFacingText } from "../../../lib/userFacingError";
 import {
   LOCAL_AGENT_BASE_URL,
   checkLocalAgentHealth,
@@ -60,7 +61,7 @@ export type WechatAgentTab = "status" | "config" | "tasks" | "download-test";
 
 const TAB_META: Record<WechatAgentTab, { title: string; description: string }> = {
   status: {
-    title: "Local Agent状态",
+    title: "AI小高助手状态",
     description: "查看本机实时连接、接收任务开关和 9000 服务端心跳记录。",
   },
   config: {
@@ -69,11 +70,11 @@ const TAB_META: Record<WechatAgentTab, { title: string; description: string }> =
   },
   tasks: {
     title: "任务记录",
-    description: "查询微信任务历史、执行状态和失败阶段，完整 raw_result 仅在详情中查看。",
+    description: "查询微信任务历史、执行状态和失败阶段，完整执行记录仅在详情中查看。",
   },
   "download-test": {
     title: "下载/测试",
-    description: "查看启动说明、复制命令，并使用本机 Agent 测试与诊断工具。",
+    description: "查看启动说明、复制命令，并使用 AI小高助手测试与诊断工具。",
   },
 };
 
@@ -89,7 +90,7 @@ function taskStatusText(status?: string | null): string {
   if (status === "blocked") return "已阻断";
   if (status === "failed") return "失败";
   if (status === "completed") return "已完成";
-  return status || "-";
+  return status ? "未知状态" : "-";
 }
 
 function taskStatusClass(status?: string | null): string {
@@ -127,7 +128,7 @@ function rawSummaryText(summary?: WechatTaskRawResultSummary | null): string {
     summary.write_action ? `动作:${summary.write_action}` : "",
     summary.verify_strategy ? `策略:${summary.verify_strategy}` : "",
     summary.manual_review_reason ? `复核:${summary.manual_review_reason}` : "",
-    summary.failure_stage ? `阶段:${summary.failure_stage}` : "",
+    summary.failure_stage ? `阶段:${userFacingState(summary.failure_stage)}` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" / ") : "-";
 }
@@ -142,7 +143,7 @@ function staffStatusText(status?: string | null): string {
   if (status === "active") return "启用";
   if (status === "disabled" || status === "inactive") return "停用";
   if (status === "deleted") return "已删除";
-  return status || "-";
+  return status ? "未知状态" : "-";
 }
 
 function staffStatusClass(status?: string | null): string {
@@ -250,7 +251,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       setTaskHistoryPage(history.page);
     } catch (err) {
       // ponytail: 失败保留已有 taskHistory 不清空，避免误显示空态；内联错误+重试
-      const msg = err instanceof Error ? err.message : "任务历史加载失败";
+      const msg = userFacingError(err, "数据加载失败，请稍后重试");
       setTaskHistoryError(msg);
       toast.error(msg);
     } finally {
@@ -263,7 +264,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       return await fetchBrowserPendingWechatTasks({ limit: 20 });
     } catch (err) {
       if (isLocalAgentAuthErrorCode(getApiErrorCode(err))) {
-        toast.warning("Local Agent 尚未完成授权或当前任务接口需要 Agent token");
+        toast.warning("AI小高助手尚未完成授权或当前任务接口需要访问凭证");
         return [];
       }
       throw err;
@@ -294,7 +295,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           failure_stage: taskFailureStage.trim() || undefined,
         }).catch((err: unknown) => {
           // ponytail: 任务历史失败单独捕获，保留已有数据并设置内联错误，不让整个 Promise.all reject
-          setTaskHistoryError(err instanceof Error ? err.message : "任务历史加载失败");
+          setTaskHistoryError(userFacingError(err, "数据加载失败，请稍后重试"));
           return null;
         }),
       ]);
@@ -310,7 +311,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       }
     } catch (err) {
       // ponytail: 页面级刷新失败保留已有数据，内联错误+重试
-      const msg = err instanceof Error ? err.message : "微信助手数据加载失败";
+      const msg = userFacingError(err, "数据加载失败，请稍后重试");
       setPageError(msg);
       toast.error(msg);
     } finally {
@@ -332,7 +333,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       setLocalOnline(Boolean(health?.success));
       setRuntimeStatus(runtime);
       if (!health?.success) {
-        toast.warning("未检测到本机 Local Agent");
+        toast.warning("未检测到 AI小高助手");
       }
     } finally {
       setRuntimeLoading(false);
@@ -345,9 +346,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       const runtime = await enableLocalAgentTaskPolling();
       setRuntimeStatus(runtime);
       setLocalOnline(true);
-      toast.success("本机 Agent 已开始接收任务");
+        toast.success("AI小高助手已开始接收任务");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "开始接收任务失败");
+      toast.error("开始接收任务失败，请稍后重试");
     } finally {
       setRuntimeLoading(false);
     }
@@ -359,9 +360,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       const runtime = await disableLocalAgentTaskPolling();
       setRuntimeStatus(runtime);
       setLocalOnline(true);
-      toast.success("本机 Agent 已暂停接收任务");
+        toast.success("AI小高助手已暂停接收任务");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "暂停接收任务失败");
+      toast.error("暂停接收任务失败，请稍后重试");
     } finally {
       setRuntimeLoading(false);
     }
@@ -448,7 +449,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       toast.success("销售微信已保存");
       await loadStaffList();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "保存销售微信失败");
+      toast.error("保存销售微信失败，请稍后重试");
     } finally {
       setSavingStaff(false);
     }
@@ -480,7 +481,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       toast.success("销售微信已更新");
       await loadStaffList();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "保存销售微信失败");
+      toast.error("保存销售微信失败，请稍后重试");
     } finally {
       setSavingStaff(false);
     }
@@ -505,7 +506,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       }
       await loadStaffList();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "销售状态更新失败");
+      toast.error("销售状态更新失败，请稍后重试");
     } finally {
       setStaffActionId(null);
     }
@@ -528,7 +529,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         setTestResult({
           localAgentOnline: false,
           executed: false,
-          message: "未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手",
+          message: "未检测到 AI小高助手，请先在当前电脑启动 小高AI微信助手",
         });
         return;
       }
@@ -546,15 +547,15 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         executed: Boolean(result.success),
         pollResult: result,
         message: result.success
-          ? "测试任务已由本机 Agent 执行，请查看任务结果确认 pasted / sent 状态。"
-          : result.failure_stage || result.message || "测试任务执行失败",
+          ? "测试任务已由 AI小高助手执行，请查看任务结果确认粘贴和发送状态。"
+          : userFacingState(result.failure_stage, userFacingText(result.message, "测试任务执行失败")),
       });
       await refreshPage();
     } catch (err) {
       setTestResult({
         localAgentOnline: true,
         executed: false,
-        message: err instanceof Error ? err.message : "测试失败",
+        message: "数据加载失败，请稍后重试",
       });
     } finally {
       setTesting(false);
@@ -568,7 +569,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       const detail = await fetchWechatTask(task.id);
       setSelectedTask(detail);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "任务详情加载失败");
+      toast.error("任务详情加载失败，请稍后重试");
     } finally {
       setTaskDetailLoading(false);
     }
@@ -630,11 +631,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
 
         <div className="grid gap-4 xl:grid-cols-4">
           <div className="rounded-lg border border-[#dfe5ee] bg-white p-4">
-            <div className="text-xs font-semibold text-[#64748b]">Local Agent</div>
+            <div className="text-xs font-semibold text-[#64748b]">AI小高助手</div>
             <div className={onlineText === "在线" ? "mt-2 text-2xl font-bold text-emerald-600" : "mt-2 text-2xl font-bold text-rose-600"}>
               {onlineText}
             </div>
-            <div className="mt-2 text-[11px] text-[#8b95a6]">必须在本地 Windows 电脑运行</div>
+              <div className="mt-2 text-[11px] text-[#8b95a6]">必须在本地电脑运行</div>
           </div>
           <div className="rounded-lg border border-[#dfe5ee] bg-white p-4">
             <div className="text-xs font-semibold text-[#64748b]">最近心跳</div>
@@ -658,7 +659,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
             <div className="flex items-center gap-2">
               <PowerIcon size={16} className={localOnline ? "text-emerald-600" : "text-rose-600"} />
-              <h2 className="text-sm font-bold text-[#1a1f2e]">本机 Local Agent</h2>
+              <h2 className="text-sm font-bold text-[#1a1f2e]">AI小高助手</h2>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -696,7 +697,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="rounded-md border border-slate-200 px-3 py-3">
                 <div className="text-[11px] font-semibold text-slate-500">接收任务</div>
                 <div className={runtimeStatus?.task_polling_enabled ? "mt-1 text-sm font-bold text-emerald-600" : "mt-1 text-sm font-bold text-amber-700"}>
-                  {runtimeStatus?.task_polling_enabled ? "正在接收 9000 任务" : localOnline ? "已连接，未接收任务" : "Local Agent 未启动"}
+                  {runtimeStatus?.task_polling_enabled ? "正在接收任务" : localOnline ? "已连接，未接收任务" : "AI小高助手未启动"}
                 </div>
               </div>
               <div className="rounded-md border border-slate-200 px-3 py-3">
@@ -718,15 +719,15 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             </div>
 
             <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800" : "rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-6 text-rose-800"}>
-              <div className="font-bold">{localOnline ? "Local Agent 在线" : "Local Agent 未启动"}</div>
-              <div>浏览器只能检测当前电脑的 127.0.0.1:19000，不能直接保证启动 exe。启动后点击“检测连接”刷新状态。</div>
+              <div className="font-bold">{localOnline ? "AI小高助手在线" : "AI小高助手未启动"}</div>
+              <div>浏览器只能检测当前电脑上的 AI小高助手，不能直接保证启动程序。启动后点击“检测连接”刷新状态。</div>
               <div className="mt-3 rounded bg-white/70 p-2">
                 <div className="font-semibold">本机实时检测</div>
                 <div>{localOnline ? "来自 127.0.0.1:19000，当前浏览器所在电脑已连通。" : "来自 127.0.0.1:19000，当前浏览器所在电脑未连通。"}</div>
               </div>
               <div className="mt-2 rounded bg-white/70 p-2">
                 <div className="font-semibold">服务端心跳记录</div>
-                <div>来自 9000 /agent/status：{agentStatus?.agent_online ? "服务端记录最近在线" : "服务端未记录在线心跳"}，最近心跳 {formatTime(agentStatus?.last_heartbeat_at)}。</div>
+                <div>服务端状态：{agentStatus?.agent_online ? "最近在线" : "未记录在线心跳"}，最近心跳 {formatTime(agentStatus?.last_heartbeat_at)}。</div>
               </div>
               <div className="mt-2 rounded bg-white/70 p-2">
                 最近任务结果：{runtimeStatus?.last_task_result ? shortText(JSON.stringify(runtimeStatus.last_task_result), 120) : "-"}
@@ -742,7 +743,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
                 <div>
                   <div className="text-sm font-bold text-[#1a1f2e]">启动说明</div>
-                  <div className="mt-1 text-xs text-slate-500">浏览器不能直接启动本机 exe。请手动启动 Local Agent，启动后重新检测连接。</div>
+                  <div className="mt-1 text-xs text-slate-500">浏览器不能直接启动本机程序。请手动启动 AI小高助手，启动后重新检测连接。</div>
                 </div>
                 <button
                   onClick={() => void handleRefreshRuntime()}
@@ -755,7 +756,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </div>
               <div className="space-y-3 p-4 text-xs leading-6 text-slate-700">
                 <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
-                  {localOnline ? "已检测到本机 Local Agent 在线。" : "Local Agent 未启动。请先启动本机助手，然后点击重新检测连接。"}
+                  {localOnline ? "已检测到 AI小高助手在线。" : "AI小高助手未启动。请先启动本机助手，然后点击重新检测连接。"}
                 </div>
                 <div>网页按钮会调用当前电脑的 127.0.0.1:19000；宝塔服务器不能运行 19000。</div>
                 <div className="grid gap-3 lg:grid-cols-2">
@@ -771,14 +772,14 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   </button>
                 </div>
                   <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-1 font-semibold text-slate-900">exe 启动命令</div>
+                    <div className="mb-1 font-semibold text-slate-900">程序启动命令</div>
                     <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-slate-800">{EXE_START_COMMAND}</pre>
                   <button
                     onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
                       className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700"
                   >
                     <CopyIcon size={13} />
-                      复制 exe 启动命令
+                      复制程序启动命令
                   </button>
                   </div>
                 </div>
@@ -793,7 +794,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="p-4 text-xs leading-6 text-slate-700">
                 <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
                   <div className="font-bold text-slate-900">安装包下载暂未开放</div>
-                  <div className="mt-1">当前请使用本机已部署的 exe 或源码方式启动。</div>
+                  <div className="mt-1">当前请使用本机已部署的程序或源码方式启动。</div>
                   <div className="mt-1">版本 / 模式：{runtimeStatus ? `${runtimeStatus.version} / ${runtimeStatus.mode}` : "未检测"}</div>
                 </div>
               </div>
@@ -1059,7 +1060,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 />
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs font-semibold text-slate-600">执行模式由任务 mode 决定；真实派单任务需通过联系人验证、前台焦点和安全门禁。</div>
+                <div className="text-xs font-semibold text-slate-600">执行方式由任务模式决定；真实派单任务需通过联系人验证、前台焦点和安全门禁。</div>
                 <button
                   onClick={() => void handleRunTest()}
                   disabled={testing || !testMessage.trim()}
@@ -1072,17 +1073,17 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               {testResult ? (
                 <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <div>Local Agent：{testResult.localAgentOnline ? "在线" : "离线"}</div>
+                    <div>AI小高助手：{testResult.localAgentOnline ? "在线" : "离线"}</div>
                     <div>任务：{testResult.createdTaskId ? `#${testResult.createdTaskId}` : "未创建"}</div>
                     <div>执行：{testResult.executed ? "已执行" : "未执行"}</div>
                     <div>粘贴：{testResult.pollResult?.action?.pasted ? "已粘贴" : "未粘贴"}</div>
                     <div>发送：{testResult.pollResult?.action?.sent ? "已发送" : "未发送"}</div>
                     <div>联系人验证：{testResult.pollResult?.raw_result?.contact_verified ? "通过" : "-"}</div>
-                    <div className="sm:col-span-3">failure_stage：{testResult.pollResult?.failure_stage || "-"}</div>
+                    <div className="sm:col-span-3">失败阶段：{userFacingState(testResult.pollResult?.failure_stage)}</div>
                     <div className="sm:col-span-3">结果：{testResult.message}</div>
                   </div>
                   <details className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2">
-                    <summary className="cursor-pointer font-semibold text-slate-700">查看 raw_result</summary>
+                    <summary className="cursor-pointer font-semibold text-slate-700">查看完整执行记录</summary>
                     <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700">
                       {testResult.pollResult ? JSON.stringify(testResult.pollResult, null, 2) : "-"}
                     </pre>
@@ -1098,7 +1099,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
               <div>
                 <div className="text-sm font-bold text-[#1a1f2e]">高级诊断</div>
-                <div className="mt-1 text-xs text-slate-500">高级诊断用于排查微信窗口、OCR、搜索框、前台焦点等问题。普通使用无需操作。</div>
+                <div className="mt-1 text-xs text-slate-500">高级诊断用于排查微信窗口、文字识别、搜索框、前台焦点等问题。普通使用无需操作。</div>
               </div>
               <button
                 onClick={() => setAdvancedDiagnosticsOpen((value) => !value)}
@@ -1111,7 +1112,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             {advancedDiagnosticsOpen ? (
               <div className="p-4">
                 <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                  仅排查问题时使用。诊断操作可能切换微信窗口、读取 OCR 状态或执行搜索检查，不会绕过联系人验证和安全门禁。
+                  仅排查问题时使用。诊断操作可能切换微信窗口、读取文字识别状态或执行搜索检查，不会绕过联系人验证和安全门禁。
                 </div>
                 <LocalWechatAgentTestPanel />
               </div>
@@ -1172,9 +1173,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-300"
             >
               <option value="all">全部模式</option>
-              <option value="paste_only">paste_only</option>
-              <option value="single_send">single_send</option>
-              <option value="read_only">read_only</option>
+              <option value="paste_only">仅粘贴</option>
+              <option value="single_send">单条发送</option>
+              <option value="read_only">只读检测</option>
             </select>
             <div className="relative">
               <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1203,7 +1204,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 if (event.key === "Enter") void loadTaskHistory(1);
               }}
               className="h-9 rounded-md border border-slate-200 px-3 text-xs outline-none focus:border-blue-300"
-              placeholder="failure_stage"
+              placeholder="失败阶段"
             />
             <button
               onClick={() => void loadTaskHistory(1)}
@@ -1231,7 +1232,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             <table className="w-full min-w-[980px] text-left text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">任务ID</th>
+                  <th className="px-4 py-3 font-semibold">任务编号</th>
                   <th className="px-4 py-3 font-semibold">任务类型</th>
                   <th className="px-4 py-3 font-semibold">目标销售</th>
                   <th className="px-4 py-3 font-semibold">模式</th>
@@ -1260,7 +1261,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                           {taskStatusText(task.status)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-600">{task.failure_stage || "-"}</td>
+                      <td className="px-4 py-3 text-slate-600">{userFacingState(task.failure_stage)}</td>
                       <td className="px-4 py-3 text-slate-600">{formatTime(task.sent_at)}</td>
                       <td className="px-4 py-3 text-slate-600">{formatTime(task.updated_at)}</td>
                       <td className="px-4 py-3 text-slate-600">{shortText(rawSummaryText(task.raw_result_summary), 80)}</td>
@@ -1472,27 +1473,27 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 ) : null}
                 <div className="grid gap-3 text-xs sm:grid-cols-2">
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">target_nickname</div>
+                    <div className="text-[11px] font-semibold text-slate-500">目标昵称</div>
                     <div className="mt-1 text-slate-800">{selectedTask.target_nickname || "-"}</div>
                   </div>
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">status</div>
+                    <div className="text-[11px] font-semibold text-slate-500">状态</div>
                     <div className="mt-1 text-slate-800">{taskStatusText(selectedTask.status)}</div>
                   </div>
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">failure_stage</div>
-                    <div className="mt-1 text-slate-800">{selectedTask.failure_stage || "-"}</div>
+                    <div className="text-[11px] font-semibold text-slate-500">失败阶段</div>
+                    <div className="mt-1 text-slate-800">{userFacingState(selectedTask.failure_stage)}</div>
                   </div>
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">created_at / updated_at</div>
+                    <div className="text-[11px] font-semibold text-slate-500">创建时间 / 更新时间</div>
                     <div className="mt-1 text-slate-800">{formatTime(selectedTask.created_at)} / {formatTime(selectedTask.updated_at)}</div>
                   </div>
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">lead_id / staff_id</div>
+                <div className="text-[11px] font-semibold text-slate-500">线索编号 / 销售编号</div>
                     <div className="mt-1 text-slate-800">{selectedTask.lead_id || "-"} / {selectedTask.staff_id || "-"}</div>
                   </div>
                   <div className="rounded-md border border-slate-200 px-3 py-2">
-                    <div className="text-[11px] font-semibold text-slate-500">agent</div>
+                    <div className="text-[11px] font-semibold text-slate-500">执行助手</div>
                     <div className="mt-1 text-slate-800">{selectedTask.agent_hostname || "-"} / {selectedTask.agent_pid || "-"}</div>
                   </div>
                 </div>
@@ -1501,7 +1502,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   <div className="mt-1 whitespace-pre-wrap text-slate-800">{selectedTask.message || "-"}</div>
                 </div>
                 <div className="mt-3 rounded-md border border-slate-200 px-3 py-2 text-xs">
-                  <div className="text-[11px] font-semibold text-slate-500">raw_result</div>
+                  <div className="text-[11px] font-semibold text-slate-500">完整执行记录</div>
                   <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700">
                     {selectedTask.raw_result || "-"}
                   </pre>

@@ -12,6 +12,7 @@ import {
   type ReturnVisitRunDetail,
   type ReturnVisitRunsStats,
 } from "../api/adminReturnVisits";
+import { userFacingError } from "../lib/userFacingError";
 
 // Phase 9 Task 9：超管回访配置与只读运行页。
 // 两个 tab：提示词配置（可编辑）/ 运行记录（只读）。
@@ -40,7 +41,7 @@ const SCENE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_LABELS: Record<string, string> = {
-  llm: "大模型",
+  llm: "智能生成",
   keyword_fallback: "关键词兜底",
   precheck: "预检",
 };
@@ -56,12 +57,11 @@ const RISK_LABELS: Record<string, string> = {
 
 function labelOf(map: Record<string, string>, value: string | null | undefined): string {
   if (!value) return "-";
-  return map[value] || value;
+  return map[value] || "其他";
 }
 
 function resolveError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return "请求失败，请稍后再试";
+  return userFacingError(err, "数据加载失败，请稍后重试");
 }
 
 // ---- 通用展示组件 ----
@@ -539,7 +539,7 @@ function RunsTab() {
         <table className="w-full min-w-[920px] text-left text-xs">
           <thead className="bg-[#f8fafc] text-[11px] font-semibold text-[#8b95a6]">
             <tr>
-              <th className="px-4 py-2.5">ID</th>
+              <th className="px-4 py-2.5">编号</th>
               <th className="px-4 py-2.5">场景</th>
               <th className="px-4 py-2.5">状态</th>
               <th className="px-4 py-2.5">判定来源</th>
@@ -619,10 +619,10 @@ function RunsTab() {
                 ["置信度", detail.confidence != null ? Number(detail.confidence).toFixed(2) : "-"],
                 ["模型", detail.model || "-"],
                 ["失败码", detail.last_failure_stage || "-"],
-                ["上游消息 ID", detail.send_id || "-"],
+                ["上游消息编号", detail.send_id || "-"],
                 ["商户", detail.merchant_id || "-"],
-                ["线索 ID", detail.lead_id ?? "-"],
-                ["销售 ID", detail.staff_id ?? "-"],
+                ["线索编号", detail.lead_id ?? "-"],
+                ["销售编号", detail.staff_id ?? "-"],
                 ["企业号(掩码)", detail.account_open_id_masked || "-"],
                 ["会话(掩码)", detail.conversation_short_id_masked || "-"],
                 ["客户(掩码)", detail.customer_open_id_masked || "-"],

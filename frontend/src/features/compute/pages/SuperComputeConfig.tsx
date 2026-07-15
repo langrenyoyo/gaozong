@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertCircleIcon,
@@ -28,6 +28,7 @@ import type {
   ComputeSummary,
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 interface PackageFormState {
   id: number | null;
@@ -88,17 +89,7 @@ interface RatioEditState {
 }
 
 function resolveErrorMessage(err: unknown): string {
-  if (err && typeof err === "object") {
-    const anyErr = err as {
-      response?: { data?: { message?: string; detail?: string | { message?: string } } };
-      message?: string;
-    };
-    const detail = anyErr.response?.data?.detail;
-    if (detail && typeof detail === "object" && detail.message) return detail.message;
-    if (typeof detail === "string") return detail;
-    return anyErr.response?.data?.message || anyErr.message || "请求失败";
-  }
-  return err instanceof Error ? err.message : "请求失败";
+  return userFacingError(err, "数据加载失败，请稍后重试");
 }
 
 function toPositiveInteger(value: string): number | null {
@@ -130,7 +121,7 @@ function ResultSummary({ summary }: { summary: ComputeSummary | null }) {
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] md:grid-cols-4">
         <span>商户：{summary.merchant_id}</span>
-        <span>余额：{summary.balance_tokens} Token</span>
+        <span>余额：{summary.balance_tokens} 算力点数</span>
         <span>今日消耗：{summary.today_consume}</span>
         <span>累计消耗：{summary.total_consume}</span>
       </div>
@@ -300,7 +291,7 @@ export default function SuperComputeConfig() {
   const handleSavePackage = async () => {
     const payload = buildPackagePayload(packageForm);
     if (!payload) {
-      setPackageFormError("请填写套餐名称，并确保价格和 Token 数量均为大于 0 的整数。");
+      setPackageFormError("请填写套餐名称，并确保价格和算力点数数量均为大于 0 的整数。");
       return;
     }
     setSavingPackage(true);
@@ -338,11 +329,11 @@ export default function SuperComputeConfig() {
     const merchantId = rechargeMerchantId.trim();
     const tokens = toPositiveInteger(rechargeTokens);
     if (!merchantId) {
-      setRechargeError("请输入 merchant_id。");
+      setRechargeError("请输入商户编号。");
       return;
     }
     if (tokens === null) {
-      setRechargeError("Token 数量必须为大于 0 的整数。");
+      setRechargeError("算力点数数量必须为大于 0 的整数。");
       return;
     }
     setRechargeSubmitting(true);
@@ -368,7 +359,7 @@ export default function SuperComputeConfig() {
     const merchantId = grantMerchantId.trim();
     const packageId = Number(grantPackageId);
     if (!merchantId) {
-      setGrantError("请输入 merchant_id。");
+      setGrantError("请输入商户编号。");
       return;
     }
     if (!packageId || !packages.some((pkg) => pkg.id === packageId)) {
@@ -416,7 +407,7 @@ export default function SuperComputeConfig() {
       <main className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
           <div className="font-semibold">后台充值/发放为管理操作，不代表真实支付。</div>
-          <div>真实支付暂未接入；请确认 merchant_id 后再操作，页面不会调用微信支付或支付宝真实接口。</div>
+          <div>真实支付暂未接入；请确认商户编号后再操作，页面不会调用微信支付或支付宝真实接口。</div>
         </div>
 
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
@@ -424,7 +415,7 @@ export default function SuperComputeConfig() {
             <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
               <div>
                 <h2 className="text-sm font-bold text-[#1a1f2e]">套餐列表</h2>
-                <p className="mt-1 text-[11px] text-[#8b95a6]">来源：GET /admin/compute/packages</p>
+                <p className="mt-1 text-[11px] text-[#8b95a6]">来源：后台套餐配置</p>
               </div>
               <span className="rounded-full bg-[#eff6ff] px-2.5 py-1 text-[11px] font-semibold text-[#2563eb]">
                 {packages.length} 个套餐
@@ -457,7 +448,7 @@ export default function SuperComputeConfig() {
                     <tr className="border-b border-[#e4e8f0] text-[#8b95a6]">
                       <th className="px-4 py-2.5 font-semibold">套餐名称</th>
                       <th className="px-4 py-2.5 font-semibold">价格</th>
-                      <th className="px-4 py-2.5 font-semibold">Token 数量</th>
+                      <th className="px-4 py-2.5 font-semibold">算力点数数量</th>
                       <th className="px-4 py-2.5 font-semibold">状态</th>
                       <th className="px-4 py-2.5 font-semibold">更新时间</th>
                       <th className="px-4 py-2.5 font-semibold">操作</th>
@@ -542,7 +533,7 @@ export default function SuperComputeConfig() {
                     />
                   </label>
                   <label className="block text-xs font-semibold text-[#475467]">
-                    Token 数量
+                    算力点数数量
                     <input
                       type="number"
                       min={1}
@@ -698,13 +689,13 @@ export default function SuperComputeConfig() {
             <div className="flex items-center gap-2">
               <SendIcon size={16} className="text-[#2563eb]" />
               <div>
-                <h2 className="text-sm font-bold text-[#1a1f2e]">商户充值 Token</h2>
-                <p className="mt-1 text-[11px] text-[#8b95a6]">POST /admin/merchants/{`{merchant_id}`}/compute/recharge</p>
+                <h2 className="text-sm font-bold text-[#1a1f2e]">商户充值算力点数</h2>
+                <p className="mt-1 text-[11px] text-[#8b95a6]">充值接口：后台管理服务</p>
               </div>
             </div>
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="block text-xs font-semibold text-[#475467]">
-                merchant_id
+                商户编号
                 <input
                   value={rechargeMerchantId}
                   onChange={(event) => setRechargeMerchantId(event.target.value)}
@@ -713,7 +704,7 @@ export default function SuperComputeConfig() {
                 />
               </label>
               <label className="block text-xs font-semibold text-[#475467]">
-                Token 数量
+                算力点数 数量
                 <input
                   type="number"
                   min={1}
@@ -756,12 +747,12 @@ export default function SuperComputeConfig() {
               <GiftIcon size={16} className="text-[#2563eb]" />
               <div>
                 <h2 className="text-sm font-bold text-[#1a1f2e]">发放套餐</h2>
-                <p className="mt-1 text-[11px] text-[#8b95a6]">POST /admin/merchants/{`{merchant_id}`}/compute/grant-package</p>
+                <p className="mt-1 text-[11px] text-[#8b95a6]">发放接口：后台管理服务</p>
               </div>
             </div>
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="block text-xs font-semibold text-[#475467]">
-                merchant_id
+                商户编号
                 <input
                   value={grantMerchantId}
                   onChange={(event) => setGrantMerchantId(event.target.value)}
@@ -789,12 +780,12 @@ export default function SuperComputeConfig() {
               {selectedGrantPackage ? (
                 <div className="grid grid-cols-2 gap-2">
                   <span>套餐：{selectedGrantPackage.name}</span>
-                  <span>Token：{selectedGrantPackage.token_amount}</span>
+                  <span>算力点数：{selectedGrantPackage.token_amount}</span>
                   <span>价格：￥{selectedGrantPackage.price_yuan}</span>
                   <span>状态：{selectedGrantPackage.enabled ? "启用" : "禁用"}</span>
                 </div>
               ) : (
-                "选择套餐后会展示发放 Token 数量。禁用套餐不会出现在可发放列表中。"
+                "选择套餐后会展示发放算力点数数量。禁用套餐不会出现在可发放列表中。"
               )}
             </div>
             {grantError ? (

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { fetchWebhookEventDetail, fetchWebhookEvents } from "../api";
 import type { WebhookEvent, WebhookEventDetail } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError } from "../../../lib/userFacingError";
 
 const LEAD_ACTION_OPTIONS = [
   "duplicate_event",
@@ -384,7 +385,7 @@ function DetailPanel({
           <FieldRow label="事件类型" fieldKey="event" value={event.event} />
           <FieldRow label="线索结果" fieldKey="lead_action" value={event.lead_action} />
           <FieldRow label="是否重复" fieldKey="is_duplicate" value={event.is_duplicate} />
-          <FieldRow label="线索ID" fieldKey="lead_id" value={event.lead_id} />
+          <FieldRow label="线索编号" fieldKey="lead_id" value={event.lead_id} />
           <FieldRow label="接收时间" fieldKey="created_at" value={formatTime(event.created_at)} />
           <DisplayRow label="发送方" text={fromParty.text} title={fromParty.title} />
           <DisplayRow label="接收方" text={toParty.text} title={toParty.title} />
@@ -404,11 +405,11 @@ function DetailPanel({
         <details className="mt-3 rounded-xl border border-[#e4e8f0] bg-[#f8fafc]">
           <summary className="cursor-pointer px-3 py-3 text-xs font-bold text-[#334155]">调试信息</summary>
           <div className="border-t border-[#e4e8f0] px-3 py-2">
-            <FieldRow label="from_user_id" fieldKey="from_user_id" value={event.from_user_id} />
-            <FieldRow label="to_user_id" fieldKey="to_user_id" value={event.to_user_id} />
-            <FieldRow label="event_key" fieldKey="event_key" value={event.event_key} />
-            <FieldRow label="server_message_id" fieldKey="server_message_id" value={event.server_message_id} />
-            <FieldRow label="conversation_short_id" fieldKey="conversation_short_id" value={event.conversation_short_id} />
+            <FieldRow label="发送方标识" fieldKey="from_user_id" value={event.from_user_id} />
+            <FieldRow label="接收方标识" fieldKey="to_user_id" value={event.to_user_id} />
+            <FieldRow label="事件编号" fieldKey="event_key" value={event.event_key} />
+            <FieldRow label="消息编号" fieldKey="server_message_id" value={event.server_message_id} />
+            <FieldRow label="会话编号" fieldKey="conversation_short_id" value={event.conversation_short_id} />
           </div>
         </details>
 
@@ -471,7 +472,7 @@ export default function WebhookEventsPage() {
         return current;
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "原始事件加载失败";
+      const message = userFacingError(err, "数据加载失败，请稍后重试");
       setError(message);
       toast.error(message);
     } finally {
@@ -488,7 +489,7 @@ export default function WebhookEventsPage() {
       setDetail(result.data);
     } catch (err: unknown) {
       const maybeStatus = (err as { response?: { status?: number } }).response?.status;
-      const message = maybeStatus === 404 ? "事件不存在" : err instanceof Error ? err.message : "详情加载失败";
+      const message = maybeStatus === 404 ? "事件不存在" : userFacingError(err, "数据加载失败，请稍后重试");
       setDetail(null);
       setDetailError(message);
       toast.error(message);
@@ -654,13 +655,13 @@ export default function WebhookEventsPage() {
               <table className="w-full table-fixed text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-[#f8fafc] text-[#64748b] shadow-[inset_0_-1px_0_#e4e8f0]">
                   <tr>
-                    <th className="w-[70px] px-4 py-3 font-semibold">事件ID</th>
+                    <th className="w-[70px] px-4 py-3 font-semibold">事件编号</th>
                     <th className="w-[130px] px-4 py-3 font-semibold">事件类型</th>
                     <th className="w-[150px] px-4 py-3 font-semibold">线索结果</th>
                     <th className="w-[86px] px-4 py-3 font-semibold">是否重复</th>
-                    <th className="w-[90px] px-4 py-3 font-semibold">线索ID</th>
-                    <th className="w-[150px] px-4 py-3 font-semibold">消息ID</th>
-                    <th className="w-[150px] px-4 py-3 font-semibold">会话ID</th>
+                    <th className="w-[90px] px-4 py-3 font-semibold">线索编号</th>
+                    <th className="w-[150px] px-4 py-3 font-semibold">消息编号</th>
+                    <th className="w-[150px] px-4 py-3 font-semibold">会话编号</th>
                     <th className="w-[260px] px-4 py-3 font-semibold">消息内容</th>
                     <th className="w-[130px] px-4 py-3 font-semibold">提取状态</th>
                     <th className="w-[130px] px-4 py-3 font-semibold">联系方式</th>

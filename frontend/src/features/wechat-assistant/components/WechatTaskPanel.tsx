@@ -1,9 +1,9 @@
-﻿/**
+/**
  * 微信任务队列面板（P0-5A-3 / P0-FE-MAIN-1 / P0-REPLY-2）
  *
  * 展示 pending 状态的 WechatTask 列表。
  * 通过主系统后端（VITE_AUTO_WECHAT_API_BASE_URL）查询，
- * 不调用本机 Agent，不执行微信自动化。
+ * 不调用 AI小高助手，不执行微信自动化。
  *
  * P0-FE-MAIN-1 新增：
  * - 「创建测试任务并执行」按钮
@@ -18,8 +18,8 @@
  * - 检测后刷新 checks + notifications + task
  *
  * 安全约束：
- * - 测试面板用于创建本机 Agent 任务并查看回写结果
- * - 真实派单发送由任务 mode 与安全门禁共同决定
+ * - 测试面板用于创建 AI小高助手任务并查看回写结果
+ * - 真实派单发送由任务模式与安全门禁共同决定
  */
 
 import {
@@ -48,6 +48,7 @@ import { fetchChecks } from "../api";
 import { fetchStaffList, createStaff } from "../api";
 import { createLead, assignLead } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { userFacingError, userFacingState, userFacingText } from "../../../lib/userFacingError";
 import type {
   WechatTask,
   PollAndExecuteResponse,
@@ -154,7 +155,7 @@ async function createTestLeadAndAssign(staffId: number): Promise<number> {
 // ========== 工具函数 ==========
 
 function taskStatusLabel(status: string): string {
-  return TASK_STATUS_LABELS[status] || status;
+  return TASK_STATUS_LABELS[status] || "未知状态";
 }
 
 function taskStatusTone(status: string): string {
@@ -190,9 +191,9 @@ function truncate(text: string | null, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
 }
 
-/** 从 raw_result JSON 字符串中提取简要摘要 */
+/** 从执行记录中提取简要摘要 */
 function rawResultSummary(raw: string | null): string {
-  if (!raw) return "（raw_result 为空）";
+  if (!raw) return "（执行记录为空）";
   try {
     const obj = JSON.parse(raw);
     const parts: string[] = [];
@@ -261,7 +262,7 @@ export default function WechatTaskPanel() {
       const data = await fetchBrowserPendingWechatTasks({ limit: 50 });
       setTasks(data);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "任务列表加载失败";
+      const msg = userFacingError(err);
       setError(msg);
     } finally {
       setLoading(false);
@@ -391,7 +392,7 @@ export default function WechatTaskPanel() {
     [clearPollTimer, refreshTasks, refreshNotifications],
   );
 
-  /** 创建测试任务并触发 Local Agent 执行 */
+  /** 创建测试任务并触发 AI小高助手执行 */
   const handleCreateAndExecute = async () => {
     setCreating(true);
     setLatestTask(null);
@@ -410,7 +411,8 @@ export default function WechatTaskPanel() {
       leadId = await createTestLeadAndAssign(staffId);
       toast.info(`已准备测试数据：staff #${staffId}，lead #${leadId}`);
     } catch (err) {
-      toast.warning(`测试数据准备失败（将使用无关联数据创建任务）：${err instanceof Error ? err.message : "未知错误"}`);
+      userFacingError(err);
+      toast.warning("测试数据准备失败，将使用无关联数据创建任务");
     }
 
     try {
@@ -426,15 +428,15 @@ export default function WechatTaskPanel() {
       taskId = created.id;
       setLatestTaskId(taskId);
       setLatestTask(created);
-      toast.info(`已创建任务 #${taskId}（lead #${leadId} → staff #${staffId}），正在触发 Local Agent...`);
+      toast.info(`已创建任务 #${taskId}（线索 #${leadId} → 销售人员 #${staffId}），正在触发 AI小高助手…`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "创建任务失败");
+      toast.error(userFacingError(err, "创建任务失败，请稍后重试"));
       setCreating(false);
       return;
     }
 
     try {
-      // 2. 调用 Local Agent 19000 poll-and-execute
+      // 2. 调用 AI小高助手 19000 poll-and-execute
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 180000);
 
@@ -444,20 +446,20 @@ export default function WechatTaskPanel() {
       setPollResult(result);
 
       if (result.success) {
-        toast.success("Local Agent 执行完成");
+        toast.success("AI小高助手执行完成");
       } else {
-        toast.warning(`Local Agent 执行结果: ${result.failure_stage || result.message || "未成功"}`);
+        toast.warning(`AI小高助手执行结果：${userFacingState(result.failure_stage, userFacingText(result.message, "未成功"))}`);
       }
     } catch (err) {
       if ((err as Error)?.name === "AbortError") {
-        toast.error("Local Agent 执行超时（180 秒）");
+        toast.error("AI小高助手执行超时（180 秒）");
       } else {
-        toast.error("Local Agent 未启动或请求失败，请确认本机已启动小高AI微信助手");
+        toast.error("AI小高助手未启动或请求失败，请确认本机已启动小高AI微信助手");
       }
       setPollResult({
         success: false,
         failure_stage: "agent_request_failed",
-        message: err instanceof Error ? err.message : "请求失败",
+        message: userFacingError(err),
       });
     }
 
@@ -475,7 +477,7 @@ export default function WechatTaskPanel() {
   /** P0-REPLY-2：检测销售回复 */
   const handleDetectReply = async () => {
     if (!latestTask?.lead_id || !latestTask?.staff_id) {
-      toast.warning("当前任务缺少 lead_id 或 staff_id，无法检测回复");
+      toast.warning("当前任务缺少线索或销售人员信息，无法检测回复");
       return;
     }
 
@@ -497,13 +499,13 @@ export default function WechatTaskPanel() {
         } else if (result.detected_status === "manual_review") {
           toast.info("候选消息命中关键词但发送方无法确认，需人工复核");
         } else {
-          toast.info(`检测结果: ${DETECT_STATUS_LABELS[result.detected_status] || result.detected_status}`);
+          toast.info(`检测结果：${DETECT_STATUS_LABELS[result.detected_status] || "未知状态"}`);
         }
       } else {
-        toast.warning(`检测失败: ${result.failure_stage || result.message || "未知原因"}`);
+        toast.warning(`检测失败：${userFacingState(result.failure_stage, userFacingText(result.message, "未知原因"))}`);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "请求失败";
+      const msg = userFacingError(err);
       toast.error("检测回复失败: " + msg);
       setDetectResult({
         success: false,
@@ -558,20 +560,20 @@ export default function WechatTaskPanel() {
         } else if (result.message === "无待检测任务") {
           toast.info("无待检测的回复任务");
         } else {
-          toast.info(`检测结果: ${result.detect_result?.detected_status || result.message}`);
+          toast.info(`检测结果：${DETECT_STATUS_LABELS[result.detect_result?.detected_status || ""] || "未知状态"}`);
         }
       } else {
-        toast.warning(`自动检测: ${result.failure_stage || result.message || "未成功"}`);
+        toast.warning(`自动检测：${userFacingState(result.failure_stage, userFacingText(result.message, "未成功"))}`);
       }
     } catch (err) {
       if ((err as Error)?.name === "AbortError") {
         toast.error("自动检测超时（120 秒）");
       } else {
-        toast.error("Local Agent 未启动或请求失败，请确认本机已启动小高AI微信助手");
+        toast.error("AI小高助手未启动或请求失败，请确认本机已启动小高AI微信助手");
       }
       setPollDetectResult({
         success: false,
-        message: err instanceof Error ? err.message : "请求失败",
+        message: userFacingError(err),
         task: null,
         failure_stage: "agent_request_failed",
       });
@@ -593,7 +595,7 @@ export default function WechatTaskPanel() {
           <div>
             <h3 className="text-sm font-bold text-[#1a1f2e]">微信任务队列</h3>
             <p className="text-[11px] text-[#8b95a6]">
-              主系统 9000 创建任务 → Local Agent 19000 拉取执行 → 回写结果
+              主系统创建任务 → AI小高助手拉取执行 → 回写结果
             </p>
           </div>
         </div>
@@ -625,7 +627,7 @@ export default function WechatTaskPanel() {
             ) : (
               <PlayIcon size={14} />
             )}
-            {creating ? "创建中..." : pollingTask ? "执行中..." : "创建测试任务并执行"}
+            {creating ? "创建中…" : pollingTask ? "执行中…" : "创建测试任务并执行"}
           </button>
 
           {/* P0-REPLY-2：检测销售回复 */}
@@ -640,7 +642,7 @@ export default function WechatTaskPanel() {
               ) : (
                 <EyeIcon size={14} />
               )}
-              {detecting ? "检测中..." : "检测销售回复"}
+              {detecting ? "检测中…" : "检测销售回复"}
             </button>
           )}
         </div>
@@ -651,7 +653,7 @@ export default function WechatTaskPanel() {
         <InfoIcon size={14} className="mt-0.5 shrink-0" />
         <div>
           <span className="font-semibold">安全提示：</span>
-          测试面板用于创建本机 Agent 任务并查看回写结果；真实派单发送由任务 mode 与安全门禁共同决定。
+          测试面板用于创建 AI小高助手任务并查看回写结果；真实派单发送由任务模式与安全门禁共同决定。
         </div>
       </div>
 
@@ -664,7 +666,7 @@ export default function WechatTaskPanel() {
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
             <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-              <BooleanPill value={detectResult.success} label="Agent 执行" />
+              <BooleanPill value={detectResult.success} label="AI小高助手执行" />
             </div>
             <div className="rounded-lg bg-white px-2 py-1.5 text-center">
               <BooleanPill value={detectResult.write_back?.ok} label="主系统回写" />
@@ -676,19 +678,19 @@ export default function WechatTaskPanel() {
           </div>
           <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#64748b]">
             <div>
-              detected_status:{" "}
+              检测状态：{" "}
               <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${DETECT_STATUS_TONES[detectResult.detected_status] || "bg-slate-100 text-slate-700"}`}>
                 {DETECT_STATUS_LABELS[detectResult.detected_status] || detectResult.detected_status}
               </span>
             </div>
             <div>
-              matched_reply: <span className="font-semibold text-[#334155]">{detectResult.matched_reply || "-"}</span>
+              匹配回复：<span className="font-semibold text-[#334155]">{detectResult.matched_reply || "-"}</span>
             </div>
             <div>
-              failure_stage: <span className="font-semibold text-[#334155]">{detectResult.failure_stage || "-"}</span>
+              失败阶段：<span className="font-semibold text-[#334155]">{userFacingState(detectResult.failure_stage)}</span>
             </div>
             <div>
-              message: <span className="font-semibold text-[#334155]">{truncate(detectResult.message, 60)}</span>
+              提示信息：<span className="font-semibold text-[#334155]">{truncate(detectResult.message, 60)}</span>
             </div>
           </div>
           {/* 检测到的消息列表（最多展示 5 条） */}
@@ -718,7 +720,7 @@ export default function WechatTaskPanel() {
           {pollResult && (
             <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
               <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-                <BooleanPill value={pollResult.success} label="Agent 执行" />
+                <BooleanPill value={pollResult.success} label="AI小高助手执行" />
               </div>
               <div className="rounded-lg bg-white px-2 py-1.5 text-center">
                 <BooleanPill value={pollResult.action?.pasted} label="已粘贴" />
@@ -732,14 +734,14 @@ export default function WechatTaskPanel() {
           {pollResult && (
             <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-[#64748b]">
               <div>
-                failure_stage: <span className="font-semibold text-[#334155]">{pollResult.failure_stage || "-"}</span>
+                失败阶段：<span className="font-semibold text-[#334155]">{userFacingState(pollResult.failure_stage)}</span>
               </div>
               <div>
-                message: <span className="font-semibold text-[#334155]">{truncate(pollResult.message || null, 60)}</span>
+                提示信息：<span className="font-semibold text-[#334155]">{userFacingText(pollResult.message, "暂无提示")}</span>
               </div>
               {pollResult.agent_machine && (
                 <div>
-                  agent: <span className="font-semibold text-[#334155]">{pollResult.agent_machine.hostname}</span>
+                  AI小高助手：<span className="font-semibold text-[#334155]">{pollResult.agent_machine.hostname}</span>
                 </div>
               )}
               {pollResult.task && (
@@ -774,20 +776,20 @@ export default function WechatTaskPanel() {
                 <div>
                   {taskStageLabel(latestTask)}:{" "}
                   <span className={`font-semibold ${taskStageTone(latestTask)}`}>
-                    {latestTask.failure_stage || "-"}
+                    {userFacingState(latestTask.failure_stage)}
                   </span>
                 </div>
                 <div>
                   agent: <span className="font-semibold text-[#334155]">{latestTask.agent_hostname || "-"} (PID {latestTask.agent_pid ?? "-"})</span>
                 </div>
                 <div>
-                  pasted_at: <span className="font-semibold text-[#334155]">{formatTime(latestTask.pasted_at)}</span>
+                  粘贴时间：<span className="font-semibold text-[#334155]">{formatTime(latestTask.pasted_at)}</span>
                 </div>
                 <div>
-                  sent_at: <span className="font-semibold text-[#334155]">{latestTask.sent_at ? formatTime(latestTask.sent_at) : "null（禁止发送）"}</span>
+                  发送时间：<span className="font-semibold text-[#334155]">{latestTask.sent_at ? formatTime(latestTask.sent_at) : "未发送（安全策略阻止）"}</span>
                 </div>
                 <div className="col-span-2">
-                  raw_result: <span className="font-semibold text-[#334155]">{rawResultSummary(latestTask.raw_result)}</span>
+                  执行记录：<span className="font-semibold text-[#334155]">{rawResultSummary(latestTask.raw_result)}</span>
                 </div>
               </div>
             </div>
@@ -835,12 +837,12 @@ export default function WechatTaskPanel() {
             <div className="mt-2 rounded-lg border-2 border-emerald-200 bg-emerald-50 px-3 py-2">
               <div className="text-[11px] font-bold text-emerald-800">当前任务匹配的通知</div>
               <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
-                <div>通知 ID: <span className="font-semibold">#{matched.id}</span></div>
-                <div>send_status: <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${SEND_STATUS_TONES[matched.send_status] || "bg-slate-100 text-slate-700"}`}>{SEND_STATUS_LABELS[matched.send_status] || matched.send_status}</span></div>
-                <div>lead_id: <span className="font-semibold">#{matched.lead_id}</span></div>
-                <div>staff: <span className="font-semibold">{matched.staff_name || "#" + matched.staff_id}</span></div>
-                <div>send_mode: <span className="font-semibold">{matched.send_mode || "-"}</span></div>
-                <div>sent_at: <span className="font-semibold">{matched.sent_at ? formatTime(matched.sent_at) : "null（未发送）"}</span></div>
+                <div>通知编号：<span className="font-semibold">#{matched.id}</span></div>
+                <div>发送状态：<span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${SEND_STATUS_TONES[matched.send_status] || "bg-slate-100 text-slate-700"}`}>{SEND_STATUS_LABELS[matched.send_status] || "未知状态"}</span></div>
+                <div>线索编号：<span className="font-semibold">#{matched.lead_id}</span></div>
+                <div>销售人员：<span className="font-semibold">{matched.staff_name || "#" + matched.staff_id}</span></div>
+                <div>发送模式：<span className="font-semibold">{matched.send_mode || "-"}</span></div>
+                <div>发送时间：<span className="font-semibold">{matched.sent_at ? formatTime(matched.sent_at) : "未发送"}</span></div>
                 {matched.error_message && (
                   <div className="col-span-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-red-600">
                     错误: {matched.error_message}
@@ -869,18 +871,18 @@ export default function WechatTaskPanel() {
                       <span className="font-bold text-[#1a1f2e]">通知 #{n.id}</span>
                       {isMatched && <span className="text-[9px] font-semibold text-emerald-600">当前任务</span>}
                       <span className="text-[#8b95a6]">
-                        线索 #{n.lead_id} &middot; {n.customer_name || "-"} &middot; 销售: {n.staff_name || "#" + n.staff_id}
+                        线索 #{n.lead_id} &middot; {n.customer_name || "-"} &middot; 销售人员：{n.staff_name || "#" + n.staff_id}
                       </span>
                     </div>
                     <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${SEND_STATUS_TONES[n.send_status] || "bg-slate-100 text-slate-700"}`}>
-                      {SEND_STATUS_LABELS[n.send_status] || n.send_status}
+                      {SEND_STATUS_LABELS[n.send_status] || "未知状态"}
                     </span>
                   </div>
                   <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-[#64748b]">
-                    <div>send_mode: <span className="font-medium text-[#334155]">{n.send_mode || "-"}</span></div>
-                    <div>sent_at: <span className="font-medium text-[#334155]">{n.sent_at ? formatTime(n.sent_at) : "null（未发送）"}</span></div>
-                    <div>created_at: <span className="font-medium text-[#334155]">{formatTime(n.created_at)}</span></div>
-                    <div>chat_title: <span className="font-medium text-[#334155]">{n.chat_title || "-"}</span></div>
+                    <div>发送模式：<span className="font-medium text-[#334155]">{n.send_mode || "-"}</span></div>
+                    <div>发送时间：<span className="font-medium text-[#334155]">{n.sent_at ? formatTime(n.sent_at) : "未发送"}</span></div>
+                    <div>创建时间：<span className="font-medium text-[#334155]">{formatTime(n.created_at)}</span></div>
+                    <div>会话标题：<span className="font-medium text-[#334155]">{n.chat_title || "-"}</span></div>
                   </div>
                   {n.error_message && (
                     <div className="mt-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-600">
@@ -949,18 +951,18 @@ export default function WechatTaskPanel() {
                 <BooleanPill value={pollDetectResult.success} label="执行" />
               </div>
               <div className="rounded bg-white px-2 py-1 text-center">
-                <BooleanPill value={pollDetectResult.action?.pasted} label="pasted" />
+                <BooleanPill value={pollDetectResult.action?.pasted} label="已粘贴" />
               </div>
               <div className="rounded bg-white px-2 py-1 text-center">
-                <BooleanPill value={pollDetectResult.action?.sent} label="sent" />
+                <BooleanPill value={pollDetectResult.action?.sent} label="已发送" />
               </div>
             </div>
             <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-[#64748b]">
               <div>
-                message: <span className="font-semibold text-[#334155]">{pollDetectResult.message}</span>
+                提示信息：<span className="font-semibold text-[#334155]">{userFacingText(pollDetectResult.message, "暂无提示")}</span>
               </div>
               <div>
-                failure_stage: <span className="font-semibold text-[#334155]">{pollDetectResult.failure_stage || "-"}</span>
+                失败阶段：<span className="font-semibold text-[#334155]">{userFacingState(pollDetectResult.failure_stage)}</span>
               </div>
               {pollDetectResult.task && (
                 <>
@@ -975,26 +977,26 @@ export default function WechatTaskPanel() {
             </div>
             {pollDetectResult.detect_result && (
               <div className="mt-1.5 border-t border-[#e4e8f0] pt-1.5">
-                <div className="text-[10px] font-semibold text-teal-700">detect_result 详情</div>
+                <div className="text-[10px] font-semibold text-teal-700">检测结果详情</div>
                 <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-[#64748b]">
                   <div>
-                    detected_status:{" "}
+                    检测状态：{" "}
                     <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${DETECT_STATUS_TONES[pollDetectResult.detect_result.detected_status || ""] || "bg-slate-100 text-slate-700"}`}>
-                      {DETECT_STATUS_LABELS[pollDetectResult.detect_result.detected_status || ""] || pollDetectResult.detect_result.detected_status || "-"}
+                      {DETECT_STATUS_LABELS[pollDetectResult.detect_result.detected_status || ""] || "未知状态"}
                     </span>
                   </div>
                   <div>
-                    matched_reply: <span className="font-semibold text-[#334155]">{pollDetectResult.detect_result.matched_reply || "-"}</span>
+                    匹配回复：<span className="font-semibold text-[#334155]">{pollDetectResult.detect_result.matched_reply || "-"}</span>
                   </div>
                   <div>
-                    messages_read: <span className="font-semibold text-[#334155]">{pollDetectResult.detect_result.messages_read}</span>
+                    已读取消息：<span className="font-semibold text-[#334155]">{pollDetectResult.detect_result.messages_read}</span>
                   </div>
                   <div>
-                    write_back: <BooleanPill value={pollDetectResult.detect_result.write_back?.ok} label="ok" />
+                    回写结果：<BooleanPill value={pollDetectResult.detect_result.write_back?.ok} label="成功" />
                   </div>
                   {pollDetectResult.detect_result.failure_stage && (
                     <div className="col-span-2 text-red-600">
-                      failure_stage: {pollDetectResult.detect_result.failure_stage}
+                      失败阶段：{userFacingState(pollDetectResult.detect_result.failure_stage)}
                     </div>
                   )}
                 </div>
@@ -1002,7 +1004,7 @@ export default function WechatTaskPanel() {
                 {pollDetectResult.detect_result.raw_result && (
                   <details className="mt-1.5">
                     <summary className="cursor-pointer text-[10px] font-semibold text-[#8b95a6]">
-                      raw_result（点击展开）
+                      完整执行记录（点击展开）
                     </summary>
                     <pre className="mt-1 max-h-32 overflow-auto rounded bg-white p-1.5 text-[9px] font-mono text-[#475569]">
                       {JSON.stringify(pollDetectResult.detect_result.raw_result, null, 2)}
@@ -1023,7 +1025,7 @@ export default function WechatTaskPanel() {
             </span>
           </div>
           {detectReplyTasks.length === 0 ? (
-            <div className="mt-1 text-[10px] text-[#8b95a6]">暂无待检测回复任务。系统产生 detect_reply 任务后，会自动出现在此列表。</div>
+            <div className="mt-1 text-[10px] text-[#8b95a6]">暂无待检测回复任务。系统产生回复检测任务后，会自动出现在此列表。</div>
           ) : (
             <div className="mt-1 space-y-1">
               {detectReplyTasks.map((t) => {
@@ -1038,22 +1040,22 @@ export default function WechatTaskPanel() {
                           {taskStatusLabel(t.status)}
                         </span>
                         <span className="text-[#8b95a6]">
-                          目标: {t.target_nickname || "-"} · mode: {t.mode}
+                          目标：{t.target_nickname || "-"} · 模式：{MODE_LABELS[t.mode] || "未知模式"}
                         </span>
                       </div>
                       <span className="text-[#8b95a6]">{formatTime(t.updated_at)}</span>
                     </div>
                     <div className="mt-1 grid grid-cols-3 gap-x-4 gap-y-0.5 text-[10px] text-[#64748b]">
-                      <div>lead: <span className="font-semibold">#{t.lead_id ?? "-"}</span></div>
-                      <div>staff: <span className="font-semibold">#{t.staff_id ?? "-"}</span></div>
-                      <div>check: <span className="font-semibold">#{t.reply_check_id ?? "-"}</span></div>
+                      <div>线索编号：<span className="font-semibold">#{t.lead_id ?? "-"}</span></div>
+                      <div>销售编号：<span className="font-semibold">#{t.staff_id ?? "-"}</span></div>
+                      <div>检测编号：<span className="font-semibold">#{t.reply_check_id ?? "-"}</span></div>
                     </div>
                     {/* 安全字段展示 */}
                     <div className="mt-1 flex flex-wrap gap-1">
-                      <BooleanPill value={false} label="sent" />
-                      <BooleanPill value={false} label="pasted" />
+                      <BooleanPill value={false} label="已发送" />
+                      <BooleanPill value={false} label="已粘贴" />
                       <span className="inline-flex items-center rounded-md bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-700">
-                        read_only
+                        只读检测
                       </span>
                       <span className="inline-flex items-center rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
                         Aw3
@@ -1063,14 +1065,14 @@ export default function WechatTaskPanel() {
                       <div className={`mt-1 text-[10px] ${
                         shouldShowFailureReason(t) ? "text-red-600" : "text-slate-500"
                       }`}>
-                        {taskStageLabel(t)}: {t.failure_stage}
+                        {taskStageLabel(t)}：{userFacingState(t.failure_stage)}
                       </div>
                     )}
                     {/* raw_result 展示 */}
                     {rawParsed && (
                       <details className="mt-1">
                         <summary className="cursor-pointer text-[10px] text-[#8b95a6]">
-                          raw_result（点击展开）
+                          完整执行记录（点击展开）
                         </summary>
                         <pre className="mt-0.5 max-h-24 overflow-auto rounded bg-white p-1 text-[9px] font-mono text-[#475569]">
                           {JSON.stringify(rawParsed, null, 2)}
@@ -1098,12 +1100,12 @@ export default function WechatTaskPanel() {
                 <div key={c.id} className="rounded-lg border border-[#f0f2f7] bg-[#f8fafc] px-3 py-1.5">
                   <div className="flex items-center justify-between text-[10px]">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-[#1a1f2e]">check #{c.id}</span>
+                      <span className="font-bold text-[#1a1f2e]">检测记录 #{c.id}</span>
                       <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${taskStatusTone(c.check_status)}`}>
                         {taskStatusLabel(c.check_status)}
                       </span>
                       <span className="text-[#8b95a6]">
-                        lead #{c.lead_id} · staff #{c.staff_id}
+                        线索 #{c.lead_id} · 销售人员 #{c.staff_id}
                       </span>
                     </div>
                     <span className="text-[#8b95a6]">{formatTime(c.checked_at)}</span>
@@ -1135,13 +1137,13 @@ export default function WechatTaskPanel() {
           <div className="text-lg font-bold text-amber-700">
             {tasks.filter((t) => t.status === "pending").length}
           </div>
-          <div className="text-[10px] text-amber-600">pending</div>
+          <div className="text-[10px] text-amber-600">待执行</div>
         </div>
         <div className="rounded-lg bg-sky-50 px-3 py-2 text-center">
           <div className="text-lg font-bold text-sky-700">
             {tasks.filter((t) => t.status === "pasted").length}
           </div>
-          <div className="text-[10px] text-sky-600">pasted</div>
+          <div className="text-[10px] text-sky-600">已粘贴</div>
         </div>
       </div>
 
@@ -1252,7 +1254,7 @@ export default function WechatTaskPanel() {
                         <div className="flex justify-between">
                           <span className="text-[#8b95a6]">{taskStageLabel(task)}</span>
                           <span className={`font-semibold ${taskStageTone(task)}`}>
-                            {task.failure_stage || "-"}
+                            {userFacingState(task.failure_stage)}
                           </span>
                         </div>
                         <div className="flex justify-between">
@@ -1303,7 +1305,7 @@ export default function WechatTaskPanel() {
                             ? "border-amber-200 bg-amber-50 text-amber-700"
                             : "border-slate-200 bg-slate-50 text-slate-600"
                         }`}>
-                          {taskStageLabel(task)}：{task.failure_stage}
+                          {taskStageLabel(task)}：{userFacingState(task.failure_stage)}
                         </div>
                       ) : null}
                     </div>
