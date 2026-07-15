@@ -166,11 +166,11 @@ function DetailModal({
   const allowedCategoryKeys = safeArray(detail?.allowed_category_keys);
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="decision-log-detail-title">
       <div className="flex max-h-[88vh] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">AI实发记录详情</h2>
+            <h2 id="decision-log-detail-title" className="text-base font-bold text-[#1a1f2e]">AI实发记录详情</h2>
             <p className="mt-1 text-xs text-[#8b95a6]">展示 AI 自动回复和 AI 辅助发送的最终实发内容</p>
           </div>
           <button
@@ -479,35 +479,36 @@ export default function AiReplyDecisionLogsPage() {
               setPage(1);
             }}
             placeholder="搜索客户消息或实发内容"
+            aria-label="搜索客户消息或实发内容"
             className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
           />
         </label>
 
-        <select value={manualRequired} onChange={(event) => { setManualRequired(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+        <select value={manualRequired} onChange={(event) => { setManualRequired(event.target.value); setPage(1); }} aria-label="人工状态筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">全部人工状态</option>
           <option value="true">需要人工确认</option>
           <option value="false">不需要人工确认</option>
         </select>
-        <select value={intent} onChange={(event) => { setIntent(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+        <select value={intent} onChange={(event) => { setIntent(event.target.value); setPage(1); }} aria-label="意图筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">全部意图</option>
           {Object.entries(INTENT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-        <select value={leadLevel} onChange={(event) => { setLeadLevel(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+        <select value={leadLevel} onChange={(event) => { setLeadLevel(event.target.value); setPage(1); }} aria-label="意向筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">全部意向</option>
           {Object.entries(LEAD_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-        <select value={ragUsed} onChange={(event) => { setRagUsed(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+        <select value={ragUsed} onChange={(event) => { setRagUsed(event.target.value); setPage(1); }} aria-label="RAG 使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">RAG全部</option>
           <option value="true">RAG已使用</option>
           <option value="false">RAG未使用</option>
         </select>
-        <select value={llmUsed} onChange={(event) => { setLlmUsed(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+        <select value={llmUsed} onChange={(event) => { setLlmUsed(event.target.value); setPage(1); }} aria-label="LLM 使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">LLM全部</option>
           <option value="true">LLM已使用</option>
           <option value="false">LLM未使用</option>
         </select>
-        <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
-        <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
+        <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} aria-label="起始日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
+        <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} aria-label="截止日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
         {hasFilters ? (
           <button onClick={resetFilters} className="h-9 rounded-xl px-3 text-xs font-semibold text-[#2563eb] hover:bg-[#eff6ff]">
             重置

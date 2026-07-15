@@ -784,24 +784,28 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             <div className="space-y-3 p-4">
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <input
+                  aria-label="销售姓名"
                   value={staffForm.name}
                   onChange={(event) => setStaffForm((prev) => ({ ...prev, name: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="销售姓名"
                 />
                 <input
+                  aria-label="微信昵称"
                   value={staffForm.wechat_nickname}
                   onChange={(event) => setStaffForm((prev) => ({ ...prev, wechat_nickname: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="微信昵称"
                 />
                 <input
+                  aria-label="微信号"
                   value={staffForm.wechat_id}
                   onChange={(event) => setStaffForm((prev) => ({ ...prev, wechat_id: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="微信号"
                 />
                 <input
+                  aria-label="手机号"
                   value={staffForm.phone}
                   onChange={(event) => setStaffForm((prev) => ({ ...prev, phone: event.target.value }))}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
@@ -871,6 +875,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 <div className="relative w-full sm:w-64">
                   <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
+                    aria-label="搜索销售"
                     value={staffKeyword}
                     onChange={(event) => setStaffKeyword(event.target.value)}
                     onKeyDown={(event) => {
@@ -881,6 +886,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                   />
                 </div>
                 <select
+                  aria-label="筛选销售状态"
                   value={staffStatusFilter}
                   onChange={(event) => {
                     const nextStatus = event.target.value as "all" | "active" | "disabled";
@@ -939,6 +945,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                                 onClick={() => handleEditStaff(staff)}
                                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
                                 title="编辑"
+                                aria-label="编辑"
                               >
                                 <PencilIcon size={13} />
                               </button>
@@ -948,6 +955,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                                   disabled={staffActionId === staff.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-60"
                                   title="停用"
+                                  aria-label="停用"
                                 >
                                   <BanIcon size={13} />
                                 </button>
@@ -957,6 +965,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                                   disabled={staffActionId === staff.id}
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
                                   title="启用"
+                                  aria-label="启用"
                                 >
                                   <PlayIcon size={13} />
                                 </button>
@@ -966,6 +975,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                                 disabled={staffActionId === staff.id}
                                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                                 title="删除"
+                                aria-label="删除"
                               >
                                 <Trash2Icon size={13} />
                               </button>
@@ -1004,12 +1014,14 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </div>
               <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                 <input
+                  aria-label="测试销售微信昵称"
                   value={testNickname}
                   onChange={(event) => setTestNickname(event.target.value)}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
                   placeholder="测试销售微信昵称"
                 />
                 <input
+                  aria-label="测试消息"
                   value={testMessage}
                   onChange={(event) => setTestMessage(event.target.value)}
                   className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
@@ -1092,6 +1104,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
           </div>
           <div className="grid gap-3 border-b border-[#edf1f6] bg-slate-50 px-4 py-3 lg:grid-cols-[130px_150px_150px_minmax(180px,1fr)_180px_auto]">
             <select
+              aria-label="筛选任务类型"
               value={taskTypeFilter}
               onChange={(event) => {
                 setTaskTypeFilter(event.target.value);
@@ -1104,6 +1117,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <option value="detect_reply">检测回复</option>
             </select>
             <select
+              aria-label="筛选任务状态"
               value={taskStatusFilter}
               onChange={(event) => {
                 setTaskStatusFilter(event.target.value);
@@ -1119,6 +1133,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <option value="blocked">已阻断</option>
             </select>
             <select
+              aria-label="筛选任务模式"
               value={taskModeFilter}
               onChange={(event) => {
                 setTaskModeFilter(event.target.value);
@@ -1134,6 +1149,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
             <div className="relative">
               <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
+                aria-label="搜索销售昵称或客户联系方式"
                 value={taskKeyword}
                 onChange={(event) => {
                   setTaskKeyword(event.target.value);
@@ -1147,6 +1163,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               />
             </div>
             <input
+              aria-label="筛选失败阶段"
               value={taskFailureStage}
               onChange={(event) => {
                 setTaskFailureStage(event.target.value);
@@ -1252,15 +1269,16 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         ) : null}
 
         {editingStaffId ? (
-          <div className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
+          <div role="dialog" aria-modal="true" aria-labelledby="edit-staff-title" className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
             <div className="w-full max-w-xl overflow-hidden rounded-lg border border-[#dfe5ee] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
               <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
                 <div>
-                  <div className="text-sm font-bold text-[#1a1f2e]">编辑销售</div>
+                  <div id="edit-staff-title" className="text-sm font-bold text-[#1a1f2e]">编辑销售</div>
                   <div className="mt-1 text-xs text-[#8b95a6]">修改销售微信配置后会影响后续新线索分配。</div>
                 </div>
                 <button
                   onClick={closeEditStaffDialog}
+                  aria-label="关闭"
                   className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
                 >
                   <XIcon size={16} />
@@ -1383,17 +1401,18 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         ) : null}
 
         {selectedTask ? (
-          <div className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
+          <div role="dialog" aria-modal="true" aria-labelledby="task-detail-title" className="fixed inset-0 z-40 grid place-items-center bg-slate-900/30 p-5">
             <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[#dfe5ee] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
               <div className="flex items-center justify-between border-b border-[#edf1f6] px-4 py-3">
                 <div>
-                  <div className="text-sm font-bold text-[#1a1f2e]">任务详情 #{selectedTask.id}</div>
+                  <div id="task-detail-title" className="text-sm font-bold text-[#1a1f2e]">任务详情 #{selectedTask.id}</div>
                   <div className="mt-1 text-xs text-[#8b95a6]">
                     {taskTypeText(selectedTask.task_type)} / {taskModeText(selectedTask.mode)}
                   </div>
                 </div>
                 <button
                   onClick={() => setSelectedTask(null)}
+                  aria-label="关闭"
                   className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
                 >
                   <XIcon size={16} />

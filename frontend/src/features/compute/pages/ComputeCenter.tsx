@@ -157,11 +157,11 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
   };
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="recharge-modal-title" className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
       <div className="w-full max-w-[520px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">算力充值</h2>
+            <h2 id="recharge-modal-title" className="text-base font-bold text-[#1a1f2e]">算力充值</h2>
             <p className="mt-1 text-xs text-[#8b95a6]">选择套餐或自定义金额（一期 mock，不真实扣款）</p>
           </div>
           <button
@@ -253,6 +253,7 @@ function RechargeModal({ packages, loadingPackages, onClose, onSuccess }: Rechar
                   min={1}
                   value={customTokens}
                   onChange={(event) => handleCustomInput(event.target.value)}
+                  aria-label="自定义 Token 数量"
                   placeholder="输入 Token 数量"
                   className="h-full w-full bg-transparent text-sm outline-none placeholder:text-[#9ca3af]"
                 />

@@ -69,14 +69,14 @@ const roleClass: Record<AdminRole, string> = {
 
 function AddAdminModal({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="add-admin-title" className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
       <div className="w-full max-w-[500px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">新增管理员</h2>
+            <h2 id="add-admin-title" className="text-base font-bold text-[#1a1f2e]">新增管理员</h2>
             <p className="mt-1 text-xs text-[#8b95a6]">创建超管后台管理员账号并分配角色</p>
           </div>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
+          <button onClick={onClose} aria-label="关闭" className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
             <XIcon size={16} />
           </button>
         </div>
@@ -188,6 +188,7 @@ export default function SuperAdminAccounts() {
           <label className="relative">
             <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8b95a6]" />
             <input
+              aria-label="搜索账号、姓名、手机号"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               className="h-9 w-[220px] rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
@@ -195,6 +196,7 @@ export default function SuperAdminAccounts() {
             />
           </label>
           <select
+            aria-label="筛选角色"
             value={role}
             onChange={(event) => setRole(event.target.value as AdminRole | "全部角色")}
             className="h-9 w-[140px] rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
@@ -204,6 +206,7 @@ export default function SuperAdminAccounts() {
             ))}
           </select>
           <select
+            aria-label="筛选状态"
             value={status}
             onChange={(event) => setStatus(event.target.value as AdminStatus | "全部状态")}
             className="h-9 w-[140px] rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"

@@ -531,6 +531,7 @@ export default function WebhookEventsPage() {
             <div className="grid grid-cols-[160px_180px_120px_minmax(180px,1fr)_170px_170px_auto_auto] gap-2 text-xs max-[1320px]:grid-cols-4">
               <select
                 value={filters.event}
+                aria-label="事件类型筛选"
                 onChange={(event) => setFilters((prev) => ({ ...prev, event: event.target.value }))}
                 className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 font-semibold text-[#374151] outline-none"
               >
@@ -543,6 +544,7 @@ export default function WebhookEventsPage() {
               </select>
               <select
                 value={filters.leadAction}
+                aria-label="线索结果筛选"
                 onChange={(event) => setFilters((prev) => ({ ...prev, leadAction: event.target.value }))}
                 className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 font-semibold text-[#374151] outline-none"
               >
@@ -555,6 +557,7 @@ export default function WebhookEventsPage() {
               </select>
               <select
                 value={filters.isDuplicate}
+                aria-label="重复事件筛选"
                 onChange={(event) =>
                   setFilters((prev) => ({ ...prev, isDuplicate: event.target.value as Filters["isDuplicate"] }))
                 }
@@ -569,18 +572,21 @@ export default function WebhookEventsPage() {
                 <input
                   value={filters.keyword}
                   onChange={(event) => setFilters((prev) => ({ ...prev, keyword: event.target.value }))}
+                  aria-label="搜索事件键或原始内容"
                   placeholder="关键词：事件键 / 原始内容"
                   className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
                 />
               </label>
               <input
                 type="datetime-local"
+                aria-label="开始时间"
                 value={filters.startTime}
                 onChange={(event) => setFilters((prev) => ({ ...prev, startTime: event.target.value }))}
                 className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none"
               />
               <input
                 type="datetime-local"
+                aria-label="结束时间"
                 value={filters.endTime}
                 onChange={(event) => setFilters((prev) => ({ ...prev, endTime: event.target.value }))}
                 className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 outline-none"
@@ -732,6 +738,7 @@ export default function WebhookEventsPage() {
               <button
                 onClick={() => setPage((value) => Math.max(1, value - 1))}
                 disabled={safePage === 1}
+                aria-label="上一页"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#64748b] enabled:hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <ChevronLeftIcon size={14} />
@@ -742,6 +749,7 @@ export default function WebhookEventsPage() {
               <button
                 onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                 disabled={safePage === totalPages}
+                aria-label="下一页"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#64748b] enabled:hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <ChevronRightIcon size={14} />

@@ -463,6 +463,7 @@ export default function AdminAutoreplyRolloutPage() {
                     onChange={(checked) => setGlobalForm((current) => ({ ...current, allow_full_rollout: checked }))}
                   />
                   <textarea
+                    aria-label="修改原因"
                     value={globalForm.reason}
                     onChange={(event) => setGlobalForm((current) => ({ ...current, reason: event.target.value }))}
                     className="min-h-[70px] w-full resize-none rounded-xl border border-[#dbe3ef] px-3 py-2 text-xs outline-none focus:border-[#2563eb]"
@@ -564,6 +565,7 @@ export default function AdminAutoreplyRolloutPage() {
                 <SectionTitle title="测试范围 / 白名单控制" hint="value 展示只使用后端脱敏字段" />
                 <div className="mt-4 grid gap-3">
                   <select
+                    aria-label="白名单类型"
                     value={whitelistForm.entry_type}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, entry_type: event.target.value as WhitelistType }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] bg-white px-3 text-xs"
@@ -573,24 +575,28 @@ export default function AdminAutoreplyRolloutPage() {
                     <option value="conversation">会话</option>
                   </select>
                   <input
+                    aria-label="merchant_id"
                     value={whitelistForm.merchant_id}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, merchant_id: event.target.value }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] px-3 text-xs"
                     placeholder="merchant_id"
                   />
                   <input
+                    aria-label="account_open_id"
                     value={whitelistForm.account_open_id || ""}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, account_open_id: event.target.value }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] px-3 text-xs"
                     placeholder="account_open_id（客户/会话可选）"
                   />
                   <input
+                    aria-label="白名单值"
                     value={whitelistForm.value}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, value: event.target.value }))}
                     className="h-10 rounded-xl border border-[#dbe3ef] px-3 text-xs"
                     placeholder="白名单值"
                   />
                   <textarea
+                    aria-label="新增原因"
                     value={whitelistForm.reason}
                     onChange={(event) => setWhitelistForm((current) => ({ ...current, reason: event.target.value }))}
                     className="min-h-[64px] resize-none rounded-xl border border-[#dbe3ef] px-3 py-2 text-xs"
@@ -687,24 +693,28 @@ export default function AdminAutoreplyRolloutPage() {
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <input
+                  aria-label="筛选 mode"
                   value={runsFilter.mode}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, mode: event.target.value }))}
                   className="h-9 w-[160px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
                   placeholder="mode"
                 />
                 <input
+                  aria-label="筛选 status"
                   value={runsFilter.status}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, status: event.target.value }))}
                   className="h-9 w-[140px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
                   placeholder="status"
                 />
                 <input
+                  aria-label="筛选 blocked_reason"
                   value={runsFilter.blocked_reason}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, blocked_reason: event.target.value }))}
                   className="h-9 w-[190px] rounded-xl border border-[#dbe3ef] px-3 text-xs"
                   placeholder="blocked_reason"
                 />
                 <input
+                  aria-label="筛选 account_open_id"
                   value={runsFilter.account_open_id}
                   onChange={(event) => setRunsFilter((current) => ({ ...current, account_open_id: event.target.value }))}
                   className="h-9 w-[200px] rounded-xl border border-[#dbe3ef] px-3 text-xs"

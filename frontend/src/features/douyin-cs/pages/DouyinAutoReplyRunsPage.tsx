@@ -299,11 +299,11 @@ function DetailModal({
   const sendContext = firstRecord(gateResults, ["send_context", "context"]);
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/35 p-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/35 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="run-detail-title">
       <div className="flex max-h-[88vh] w-full max-w-[900px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">自动回复诊断详情</h2>
+            <h2 id="run-detail-title" className="text-sm font-bold text-slate-900">自动回复诊断详情</h2>
             <p className="mt-1 text-xs text-slate-500">只读诊断信息，不包含完整提示词和上游响应原文。</p>
           </div>
           <button
@@ -573,6 +573,7 @@ export default function DouyinAutoReplyRunsPage() {
               setStatus(event.target.value);
               setPage(1);
             }}
+            aria-label="状态筛选"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 outline-none focus:border-blue-300 focus:bg-white"
           >
             <option value={ALL_STATUS}>全部</option>
@@ -589,6 +590,7 @@ export default function DouyinAutoReplyRunsPage() {
               setPage(1);
             }}
             placeholder="企业号"
+            aria-label="企业号"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
@@ -598,6 +600,7 @@ export default function DouyinAutoReplyRunsPage() {
               setPage(1);
             }}
             placeholder="会话ID"
+            aria-label="会话ID"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
@@ -607,6 +610,7 @@ export default function DouyinAutoReplyRunsPage() {
               setPage(1);
             }}
             placeholder="客户 open_id"
+            aria-label="客户 open_id"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
@@ -616,6 +620,7 @@ export default function DouyinAutoReplyRunsPage() {
               setPage(1);
             }}
             placeholder="智能体ID"
+            aria-label="智能体ID"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <label className="relative">
@@ -627,6 +632,7 @@ export default function DouyinAutoReplyRunsPage() {
                 setPage(1);
               }}
               placeholder="关键词"
+              aria-label="关键词"
               className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
             />
           </label>
@@ -637,6 +643,7 @@ export default function DouyinAutoReplyRunsPage() {
               setCreatedFrom(event.target.value);
               setPage(1);
             }}
+            aria-label="起始时间"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
@@ -646,6 +653,7 @@ export default function DouyinAutoReplyRunsPage() {
               setCreatedTo(event.target.value);
               setPage(1);
             }}
+            aria-label="截止时间"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 outline-none focus:border-blue-300 focus:bg-white"
           />
           <button

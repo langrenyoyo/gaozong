@@ -2317,6 +2317,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 value={conversationSearch}
                 onChange={(event) => setConversationSearch(event.target.value)}
                 placeholder="搜索客户、联系方式或消息"
+                aria-label="搜索会话"
                 className="min-w-0 flex-1 bg-transparent text-slate-700 outline-none placeholder:text-slate-400"
               />
             </label>
@@ -2709,6 +2710,7 @@ export default function DouyinAiCsWorkbenchPage() {
                     rows={3}
                     className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300"
                     placeholder="输入人工回复内容，Enter 发送，Shift + Enter 换行"
+                    aria-label="人工回复内容"
                   />
                   {sendError ? (
                     <div className="mt-2 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
@@ -2811,7 +2813,7 @@ export default function DouyinAiCsWorkbenchPage() {
       </Sheet>
 
       {agentConfigAccount ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4" role="dialog" aria-modal="true" aria-labelledby="agent-config-title">
           <div className="w-full max-w-xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div className="flex items-start gap-3">
@@ -2819,7 +2821,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <WrenchIcon size={18} />
                 </span>
                 <div>
-                  <h2 className="text-sm font-bold text-[#172033]">绑定智能体</h2>
+                  <h2 id="agent-config-title" className="text-sm font-bold text-[#172033]">绑定智能体</h2>
                   <p className="mt-1 text-xs text-slate-500">
                     {agentConfigAccount.account_name} · {compactOpenId(agentConfigAccount.account_open_id)}
                   </p>
@@ -2946,7 +2948,7 @@ export default function DouyinAiCsWorkbenchPage() {
       ) : null}
 
       {authModalOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
           <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div className="flex items-start gap-3">
@@ -2954,7 +2956,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <QrCodeIcon size={18} />
                 </span>
                 <div>
-                  <h2 className="text-sm font-bold text-[#172033]">添加抖音号</h2>
+                  <h2 id="auth-modal-title" className="text-sm font-bold text-[#172033]">添加抖音号</h2>
                   <p className="mt-1 text-xs text-slate-500">
                     请使用抖音 App 扫码授权。授权页在系统内弹出，不会打开外部浏览器。
                   </p>
@@ -3108,7 +3110,7 @@ export default function DouyinAiCsWorkbenchPage() {
       ) : null}
 
       {uploadDialogOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4" role="dialog" aria-modal="true" aria-labelledby="upload-dialog-title">
           <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-[0_24px_80px_rgba(15,23,42,0.32)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div className="flex items-start gap-3">
@@ -3116,7 +3118,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   <ImagePlusIcon size={18} />
                 </span>
                 <div>
-                  <h2 className="text-sm font-bold text-[#172033]">上传图片</h2>
+                  <h2 id="upload-dialog-title" className="text-sm font-bold text-[#172033]">上传图片</h2>
                   <p className="mt-1 text-xs text-slate-500">
                     图片上传仅用于获取 image_id，不会自动发送私信。
                   </p>

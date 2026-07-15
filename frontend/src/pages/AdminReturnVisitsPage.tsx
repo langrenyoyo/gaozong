@@ -102,7 +102,7 @@ function SlidePanel({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div role="dialog" aria-modal="true" aria-labelledby="return-visit-panel-title" className="fixed inset-0 z-50 flex justify-end">
       <button
         type="button"
         aria-label="关闭"
@@ -111,7 +111,7 @@ function SlidePanel({
       />
       <aside className="relative flex h-full w-full max-w-[480px] flex-col bg-white shadow-[ -8px_0_30px_rgba(15,23,42,0.12)]">
         <header className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
-          <h3 className="text-sm font-bold text-[#1a1f2e]">{title}</h3>
+          <h3 id="return-visit-panel-title" className="text-sm font-bold text-[#1a1f2e]">{title}</h3>
           <button
             type="button"
             onClick={onClose}

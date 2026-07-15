@@ -333,6 +333,7 @@ function ReportsTaskTab() {
             <label className="mb-1 block text-xs font-semibold text-[#64748b]">报表日期（自然日）</label>
             <input
               type="date"
+              aria-label="报表日期"
               value={reportDay}
               onChange={(e) => setReportDay(e.target.value)}
               className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm text-[#1a1f2e] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30"
@@ -397,14 +398,14 @@ function ReportsTaskTab() {
       <div className="rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-center gap-3 border-b border-[#e4e8f0] px-5 py-3">
           <span className="text-sm font-bold text-[#1a1f2e]">任务列表</span>
-          <select value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs">
+          <select aria-label="筛选报表类型" value={filterType} onChange={(e) => { setFilterType(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs">
             <option value="">全部类型</option>
             <option value="short_video_live_lead">留资管理表</option>
             <option value="daily_sales_feedback">每日销售反馈表</option>
             <option value="sales_unit_cost">销售单车成本表</option>
             <option value="lead_trace">线索溯源表</option>
           </select>
-          <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs">
+          <select aria-label="筛选报表状态" value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs">
             <option value="">全部状态</option>
             <option value="generated">已完成</option>
             <option value="partial">部分完成</option>
@@ -570,7 +571,7 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-[#e4e8f0] bg-white p-4">
         <div>
           <label className="mb-1 block text-xs font-semibold text-[#64748b]">报表日期</label>
-          <input type="date" value={reportDay} onChange={(e) => { setReportDay(e.target.value); setPage(1); }} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
+          <input type="date" aria-label="报表日期" value={reportDay} onChange={(e) => { setReportDay(e.target.value); setPage(1); }} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
         </div>
         <label className="inline-flex items-center gap-1.5 text-xs text-[#1a1f2e]">
           <input type="checkbox" checked={missingOnly} onChange={(e) => { setMissingOnly(e.target.checked); setPage(1); }} className="h-3.5 w-3.5" />
@@ -609,23 +610,23 @@ function AttributionTab({ canWrite }: { canWrite: boolean }) {
                       <div className="text-[10px] text-[#94a3b8]">{item.customer_name || "未知客户"}</div>
                     </td>
                     <td className="px-4 py-2.5">
-                      <select disabled={!canWrite} value={d.traffic_type} onChange={(e) => updateDraft(item.lead_id, { traffic_type: e.target.value })} className="h-8 w-24 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]">
+                      <select aria-label="流量类型" disabled={!canWrite} value={d.traffic_type} onChange={(e) => updateDraft(item.lead_id, { traffic_type: e.target.value })} className="h-8 w-24 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]">
                         {TRAFFIC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </td>
                     <td className="px-4 py-2.5">
-                      <select disabled={!canWrite} value={d.content_type} onChange={(e) => updateDraft(item.lead_id, { content_type: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]">
+                      <select aria-label="内容类型" disabled={!canWrite} value={d.content_type} onChange={(e) => updateDraft(item.lead_id, { content_type: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]">
                         {CONTENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </td>
                     <td className="px-4 py-2.5">
-                      <input disabled={!canWrite} value={d.ad_id || ""} onChange={(e) => updateDraft(item.lead_id, { ad_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
+                      <input aria-label="广告 ID" disabled={!canWrite} value={d.ad_id || ""} onChange={(e) => updateDraft(item.lead_id, { ad_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
                     </td>
                     <td className="px-4 py-2.5">
-                      <input disabled={!canWrite} value={d.material_id || ""} onChange={(e) => updateDraft(item.lead_id, { material_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
+                      <input aria-label="素材 ID" disabled={!canWrite} value={d.material_id || ""} onChange={(e) => updateDraft(item.lead_id, { material_id: e.target.value })} className="h-8 w-28 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
                     </td>
                     <td className="px-4 py-2.5">
-                      <input disabled={!canWrite} value={d.trace_url || ""} onChange={(e) => updateDraft(item.lead_id, { trace_url: e.target.value })} className="h-8 w-56 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
+                      <input aria-label="溯源链接" disabled={!canWrite} value={d.trace_url || ""} onChange={(e) => updateDraft(item.lead_id, { trace_url: e.target.value })} className="h-8 w-56 rounded-lg border border-[#e4e8f0] bg-white px-2 text-xs disabled:bg-[#f8fafc]" />
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <button type="button" onClick={() => handleSave(item.lead_id)} disabled={!canWrite || savingId === item.lead_id} className="inline-flex h-7 items-center gap-1 rounded-lg bg-[#2563eb] px-2.5 text-[11px] font-semibold text-white disabled:opacity-50">
@@ -682,7 +683,7 @@ function CompletenessTab() {
       <div className="flex items-end gap-3 rounded-2xl border border-[#e4e8f0] bg-white p-4">
         <div>
           <label className="mb-1 block text-xs font-semibold text-[#64748b]">报表日期</label>
-          <input type="date" value={reportDay} onChange={(e) => setReportDay(e.target.value)} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
+          <input type="date" aria-label="报表日期" value={reportDay} onChange={(e) => setReportDay(e.target.value)} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
         </div>
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
       </div>
@@ -773,7 +774,7 @@ function AdMetricsTab({ canWrite }: { canWrite: boolean }) {
       <div className="flex items-end gap-3 rounded-2xl border border-[#e4e8f0] bg-white p-4">
         <div>
           <label className="mb-1 block text-xs font-semibold text-[#64748b]">指标日期</label>
-          <input type="date" value={metricDay} onChange={(e) => setMetricDay(e.target.value)} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
+          <input type="date" aria-label="指标日期" value={metricDay} onChange={(e) => setMetricDay(e.target.value)} className="h-9 w-44 rounded-xl border border-[#e4e8f0] bg-white px-3 text-sm" />
         </div>
         <button type="button" onClick={load} className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#e4e8f0] bg-white px-3 text-xs font-semibold hover:bg-[#f4f6f8]"><RefreshCwIcon size={12} />查询</button>
         <span className="text-[11px] text-[#94a3b8]">仅录入日期、消耗与私信量，不提供广告 ID 明细输入。</span>

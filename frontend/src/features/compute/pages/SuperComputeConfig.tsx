@@ -648,6 +648,7 @@ export default function SuperComputeConfig() {
                         onChange={(event) =>
                           handleEditRatioPercent(row.key, event.target.value)
                         }
+                        aria-label="上浮比例"
                         placeholder="如 33"
                         className="h-9 w-24 rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
                       />

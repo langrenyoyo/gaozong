@@ -220,6 +220,7 @@ export default function SideNav({
         <div className={`flex flex-col gap-2 pb-4 ${expanded ? "px-3" : "items-center"}`}>
           <button
             onClick={() => onExpandedChange(!expanded)}
+            aria-label={expanded ? "收起导航" : "展开导航"}
             className={`grid h-10 place-items-center rounded-xl text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
               expanded ? "w-full grid-cols-[18px_1fr] px-3 text-left text-xs" : "w-12"
             }`}
@@ -264,6 +265,7 @@ export default function SideNav({
 
           <button
             onClick={onLogout}
+            aria-label="退出登录"
             className={`mt-1 flex items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
               expanded ? "gap-3 rounded-xl px-3 py-2 text-xs" : "justify-center rounded-xl p-2"
             }`}

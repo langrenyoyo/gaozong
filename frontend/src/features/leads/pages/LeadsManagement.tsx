@@ -446,12 +446,12 @@ function SyncModal({ phase, preview, result, syncError, onConfirm, onClose }: Sy
   const items = (data?.items || []).slice(0, 5);
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="sync-modal-title" className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
       <div className="w-full max-w-[560px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         {/* 标题栏 */}
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">
+            <h2 id="sync-modal-title" className="text-base font-bold text-[#1a1f2e]">
               同步 douyinAPI 测试环境线索
             </h2>
             <p className="mt-1 text-xs text-[#8b95a6]">
@@ -464,6 +464,7 @@ function SyncModal({ phase, preview, result, syncError, onConfirm, onClose }: Sy
           {phase !== "syncing" ? (
             <button
               onClick={onClose}
+              aria-label="关闭同步弹窗"
               className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]"
             >
               <XIcon size={16} />
@@ -596,7 +597,7 @@ function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm,
   const canSubmit = selectedStaffId !== null && !submitting;
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="assign-modal-title" className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -609,12 +610,13 @@ function AssignModal({ lead, currentStaffName, staffList, submitting, onConfirm,
         {/* 标题栏 */}
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h3 className="text-base font-bold text-[#1a1f2e]">分配销售</h3>
+            <h3 id="assign-modal-title" className="text-base font-bold text-[#1a1f2e]">分配销售</h3>
             <p className="mt-1 text-xs text-[#8b95a6]">为当前线索选择接待销售</p>
           </div>
           <button
             type="button"
             onClick={onClose}
+            aria-label="关闭分配弹窗"
             disabled={submitting}
             className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8] disabled:opacity-50"
           >
@@ -1120,7 +1122,7 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
 
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-bold text-[#1a1f2e]">销售跟进</h3>
-          <button className="grid h-7 w-7 place-items-center rounded-lg text-[#8b95a6] hover:bg-[#f4f6f8]">
+          <button aria-label="更多操作" className="grid h-7 w-7 place-items-center rounded-lg text-[#8b95a6] hover:bg-[#f4f6f8]">
             <MoreHorizontalIcon size={15} />
           </button>
         </div>
@@ -1745,12 +1747,14 @@ export default function LeadsManagement() {
                     setKeyword(event.target.value);
                     setPage(1);
                   }}
+                  aria-label="搜索联系人、内容或电话"
                   placeholder="输入联系人、内容或电话"
                   className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
                 />
               </label>
               <select
                 value={status}
+                aria-label="线索状态筛选"
                 onChange={(event) => {
                   setStatus(event.target.value as LeadStatus | "全部状态");
                   setPage(1);
@@ -1764,6 +1768,7 @@ export default function LeadsManagement() {
               </select>
               <select
                 value={source}
+                aria-label="来源筛选"
                 onChange={(event) => {
                   setSource(event.target.value);
                   setPage(1);
@@ -1777,6 +1782,7 @@ export default function LeadsManagement() {
               </select>
               <select
                 value={assignedStaffFilter}
+                aria-label="分配销售筛选"
                 onChange={(event) => {
                   setAssignedStaffFilter(event.target.value);
                   setPage(1);
@@ -1985,6 +1991,7 @@ export default function LeadsManagement() {
               <button
                 onClick={() => setPage((value) => Math.max(1, value - 1))}
                 disabled={currentPage === 1}
+                aria-label="上一页"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#64748b] transition-smooth enabled:hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <ChevronLeftIcon size={14} />
@@ -2008,6 +2015,7 @@ export default function LeadsManagement() {
               <button
                 onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
                 disabled={currentPage === totalPages}
+                aria-label="下一页"
                 className="grid h-8 w-8 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#64748b] transition-smooth enabled:hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <ChevronRightIcon size={14} />

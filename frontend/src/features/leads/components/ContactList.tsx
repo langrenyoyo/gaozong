@@ -67,6 +67,7 @@ export default function ContactList({
           <button
             onClick={onRefresh}
             disabled={loading}
+            aria-label="刷新会话列表"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-[#eff6ff] px-2 text-xs font-semibold text-[#2563eb] disabled:opacity-60"
           >
             {loading ? <LoaderIcon size={12} className="animate-spin" /> : <RefreshCwIcon size={12} />}
@@ -78,6 +79,7 @@ export default function ContactList({
           <SearchIcon size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#8b95a6]" />
           <input
             type="search"
+            aria-label="搜索客户、联系方式或消息"
             placeholder="搜索客户、联系方式或消息"
             value={search}
             onChange={(event) => setSearch(event.target.value)}

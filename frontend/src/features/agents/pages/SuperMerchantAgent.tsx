@@ -183,7 +183,7 @@ function AgentEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-slate-950/36 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="agent-editor-title" className="fixed inset-0 z-30 grid place-items-center bg-slate-950/36 p-6 backdrop-blur-sm">
       <form
         onSubmit={submit}
         className="grid max-h-[88vh] w-full max-w-[760px] grid-rows-[auto_1fr_auto] overflow-hidden rounded-2xl border border-[#dfe5ee] bg-white shadow-[0_24px_90px_rgba(15,23,42,0.24)]"
@@ -194,11 +194,11 @@ function AgentEditor({
               <BotIcon size={21} />
             </div>
             <div>
-              <h2 className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
+              <h2 id="agent-editor-title" className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
               <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词、知识参考提示词和 AI 客服知识范围。</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
+          <button type="button" onClick={onClose} aria-label="关闭智能体编辑弹窗" className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
             <XIcon size={16} />
           </button>
         </header>
@@ -393,6 +393,7 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
             value={input}
             disabled={!agent || sending}
             onChange={(event) => setInput(event.target.value)}
+            aria-label="输入预览问题"
             className="h-9 bg-transparent px-2 text-sm text-[#1a1f2e] outline-none placeholder:text-[#94a3b8] disabled:cursor-not-allowed"
             placeholder={agent ? "输入客户问题" : "先选择智能体"}
           />

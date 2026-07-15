@@ -518,14 +518,14 @@ function DouyinAuthModal({
   };
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-labelledby="douyin-auth-title" className="fixed inset-0 z-30 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm">
       <div className="w-full max-w-[520px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1f2e]">接入抖音企业号</h2>
+            <h2 id="douyin-auth-title" className="text-base font-bold text-[#1a1f2e]">接入抖音企业号</h2>
             <p className="mt-1 text-xs text-[#8b95a6]">获取授权链接后扫码授权，系统将同步账号信息</p>
           </div>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
+          <button onClick={onClose} aria-label="关闭" className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
             <XIcon size={16} />
           </button>
         </div>
