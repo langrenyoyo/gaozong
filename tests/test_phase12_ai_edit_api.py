@@ -99,6 +99,27 @@ def _register_material(client, *, material_id="mat-1", merchant_id="m1", token="
     )
 
 
+def _create_job(client, *, job_id="job-1", material_id="mat-1"):
+    """创建引用素材的任务，返回创建响应。"""
+    return client.post("/ai-edit/jobs", json={
+        "job_id": job_id, "template_key": "tpl",
+        "materials": [{"material_id": material_id, "role": "main", "position": 0,
+                       "pinned_sha256": "sha-" + material_id,
+                       "source_start": 0.0, "source_end": 1.0}],
+    })
+
+
+def _job_token(job_id: str) -> tuple[str, int]:
+    """白盒读取任务当前执行令牌哈希与 attempt（公共 API 不返回令牌，见设计 §10）。"""
+    from app.models import AiEditJob
+    db = TestSession()
+    try:
+        job = db.query(AiEditJob).filter_by(job_id=job_id).one()
+        return job.execution_token_hash, job.attempt_count
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # 无权限 403
 # ---------------------------------------------------------------------------
@@ -283,16 +304,14 @@ def test_job_error_summary_redacted_in_response():
     """底层 error_summary 含绝对路径/存储键时，响应必须脱敏。"""
     client = _client(_ctx(), local_agent_tokens="m1:tok-1")
     _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
-    client.post("/ai-edit/jobs", json={
-        "job_id": "job-1", "template_key": "tpl",
-        "materials": [{"material_id": "mat-1", "role": "main", "position": 0,
-                       "pinned_sha256": "sha-mat-1", "source_start": 0.0, "source_end": 1.0}],
-    })
-    # 通过 Local Agent 回写脏错误摘要
+    _create_job(client)
+    # 通过 Local Agent 回写脏错误摘要（必须携带当前令牌 + attempt，见下方合同）
+    token, attempt = _job_token("job-1")
     client.post(
         "/ai-edit/jobs/job-1/status",
         headers={"X-Local-Agent-Token": "tok-1"},
-        json={"stage": "render_final", "progress": 100, "status": "failed",
+        json={"execution_token_hash": token, "attempt_count": attempt,
+              "stage": "render_final", "progress": 100, "status": "failed",
               "failure_code": "RENDER_FAILED",
               "error_summary": "崩溃于 E:\\secret\\raw.mp4 键 materials/m1/k.mp4"},
     )
@@ -303,3 +322,102 @@ def test_job_error_summary_redacted_in_response():
     assert "E:\\" not in summary
     assert "secret" not in summary
     assert "materials/m1/k.mp4" not in summary
+
+
+# ---------------------------------------------------------------------------
+# 状态回写令牌强制（Task 3-FIX1）：服务端不得替调用方补齐令牌/attempt
+# ---------------------------------------------------------------------------
+
+
+def test_status_update_missing_token_returns_422():
+    """缺 execution_token_hash → 422（pydantic 必填）。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"attempt_count": 0, "stage": "render_final",
+              "progress": 50, "status": "running"},
+    )
+    assert resp.status_code == 422
+
+
+def test_status_update_missing_attempt_returns_422():
+    """缺 attempt_count → 422。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    token, _ = _job_token("job-1")
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"execution_token_hash": token, "stage": "render_final",
+              "progress": 50, "status": "running"},
+    )
+    assert resp.status_code == 422
+
+
+def test_status_update_null_token_returns_422():
+    """execution_token_hash=null → 422（必填非空）。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"execution_token_hash": None, "attempt_count": 0,
+              "stage": "render_final", "progress": 50, "status": "running"},
+    )
+    assert resp.status_code == 422
+
+
+def test_status_update_wrong_token_returns_409():
+    """错误执行令牌 → 409 STALE_ATTEMPT_TOKEN（服务端不替调用方猜中令牌）。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    _, attempt = _job_token("job-1")
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"execution_token_hash": "not-the-real-token", "attempt_count": attempt,
+              "stage": "render_final", "progress": 50, "status": "running"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "STALE_ATTEMPT_TOKEN"
+
+
+def test_status_update_stale_attempt_returns_409():
+    """retry 推进 attempt 后，旧 attempt 回写 → 409（防旧 attempt 覆盖新结果）。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    # 重试：attempt 0→1，令牌轮换
+    client.post("/ai-edit/jobs/job-1/retry")
+    token, attempt = _job_token("job-1")  # attempt==1, 新令牌
+    # 仍用 attempt=0 回写 → attempt 不匹配
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"execution_token_hash": token, "attempt_count": 0,
+              "stage": "render_final", "progress": 50, "status": "running"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "STALE_ATTEMPT_TOKEN"
+
+
+def test_status_update_correct_token_returns_200():
+    """正确令牌 + attempt 组合 → 200。"""
+    client = _client(_ctx(), local_agent_tokens="m1:tok-1")
+    _register_material(client, material_id="mat-1", merchant_id="m1", token="tok-1")
+    _create_job(client)
+    token, attempt = _job_token("job-1")
+    resp = client.post(
+        "/ai-edit/jobs/job-1/status",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"execution_token_hash": token, "attempt_count": attempt,
+              "stage": "render_final", "progress": 100, "status": "succeeded"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "succeeded"

@@ -87,15 +87,15 @@ class JobCreateRequest(BaseModel):
 class JobStatusUpdateRequest(BaseModel):
     """Local Agent 回写任务状态。
 
-    execution_token_hash / attempt_count 由 19000 持有的当前令牌提供；Task 3 阶段
-    若调用方未提供则服务端按当前 attempt 更新（防旧 attempt 强校验在 service 层单测覆盖）。
-    ponytail: ceiling — Local Agent 令牌下发通道建立后强制要求这两个字段（Task 6/7）。
+    execution_token_hash + attempt_count 为必填：服务端不得从数据库替调用方补齐，
+    否则任何映射到该商户的 token 都能更新任意当前任务，令旧 attempt 防重放合同失效。
+    令牌由 19000 在创建/重试任务时持有的当前值提供（Task 6/7 下发通道）。
     """
 
     model_config = {"extra": "forbid"}
 
-    execution_token_hash: str | None = None
-    attempt_count: int | None = None
+    execution_token_hash: str = Field(..., min_length=1, max_length=128)
+    attempt_count: int = Field(..., ge=0)
     stage: str | None = None
     progress: int | None = Field(None, ge=0, le=100)
     status: str | None = None
@@ -302,15 +302,15 @@ def update_job_status(
         job = svc._get_job_for_merchant(db, job_id=job_id, merchant_id=agent.merchant_id)
     except svc.AiEditNotFound:
         raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
-    token_hash = payload.execution_token_hash or job.execution_token_hash
-    attempt = payload.attempt_count if payload.attempt_count is not None else job.attempt_count
+    # 仅用于校验任务商户归属；不从此处补齐令牌/attempt，避免服务端替调用方猜中令牌。
+    _ = job
     try:
         updated = svc.update_job_status(
             db,
             job_id=job_id,
             merchant_id=agent.merchant_id,
-            execution_token_hash=token_hash,
-            attempt_count=attempt,
+            execution_token_hash=payload.execution_token_hash,
+            attempt_count=payload.attempt_count,
             stage=payload.stage,
             progress=payload.progress,
             status=payload.status,
