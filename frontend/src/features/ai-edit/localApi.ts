@@ -6,10 +6,30 @@
 // merchant_id 由 Local Agent token 映射，前端不自报。
 
 import { LOCAL_AGENT_BASE_URL } from "../../api/localWechatAgent";
+import { fetchAiEditAgentToken } from "./api";
 import type { LocalAiEditStatus } from "./types";
 
 /** Local AI 剪辑基址（显式声明，便于合同脚本静态校验）。 */
 export const LOCAL_AI_EDIT_BASE_URL = "http://127.0.0.1:19000";
+
+/** FIX2-1：浏览器调 19000 的 token 获取/保存/发送。
+ * 9000 下发当前商户的 Local Agent token，前端 localStorage 保存，请求带 X-Local-Agent-Token。
+ * 不依赖关闭 19000 鉴权。 */
+const AGENT_TOKEN_STORAGE_KEY = "ai_edit_agent_token";
+
+/** 获取本机 Local Agent token：先 localStorage，无则向 9000 申请并保存。 */
+export async function ensureAgentToken(): Promise<string> {
+  const cached = localStorage.getItem(AGENT_TOKEN_STORAGE_KEY);
+  if (cached) return cached;
+  const { token } = await fetchAiEditAgentToken();
+  localStorage.setItem(AGENT_TOKEN_STORAGE_KEY, token);
+  return token;
+}
+
+/** 清除缓存的 token（401 时重试获取）。 */
+export function clearAgentToken(): void {
+  localStorage.removeItem(AGENT_TOKEN_STORAGE_KEY);
+}
 
 /** Local Agent 导入结果（不含绝对路径 / merchant_id）。 */
 export interface LocalAiEditMaterial {
@@ -36,13 +56,23 @@ interface LocalAgentEnvelope<T> {
 
 async function requestLocal<T>(path: string, init?: RequestInit): Promise<T> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-  });
+  // FIX2-1：请求带 X-Local-Agent-Token（9000 下发，不关鉴权）
+  const token = await ensureAgentToken();
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Local-Agent-Token": token,
+    ...(init?.headers || {}),
+  };
+  let response = await fetch(`${base}${path}`, { ...init, headers });
+  // 401 清缓存重试一次（token 失效/轮换）
+  if (response.status === 401) {
+    clearAgentToken();
+    const newToken = await ensureAgentToken();
+    response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: { ...headers, "X-Local-Agent-Token": newToken },
+    });
+  }
   if (!response.ok) {
     let code = `HTTP_${response.status}`;
     try {
@@ -74,18 +104,38 @@ export async function importLocalMaterial(
   materialId: string,
 ): Promise<LocalAiEditMaterial> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
+  // FIX2-1：带 X-Local-Agent-Token
+  const token = await ensureAgentToken();
   const params = new URLSearchParams({
     material_id: materialId,
     expected_size: String(file.size),
   });
-  const response = await fetch(
+  let response = await fetch(
     `${base}/agent/ai-edit/materials/import-stream?${params.toString()}`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Local-Agent-Token": token,
+      },
       body: file,
     },
   );
+  if (response.status === 401) {
+    clearAgentToken();
+    const newToken = await ensureAgentToken();
+    response = await fetch(
+      `${base}/agent/ai-edit/materials/import-stream?${params.toString()}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Local-Agent-Token": newToken,
+        },
+        body: file,
+      },
+    );
+  }
   if (!response.ok) {
     throw new Error(`本机素材导入失败：HTTP_${response.status}`);
   }

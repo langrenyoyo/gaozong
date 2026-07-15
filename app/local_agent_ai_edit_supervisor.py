@@ -30,7 +30,9 @@ _JOBS_FILE = "jobs.json"
 _DEFAULT_CONCURRENCY = 1
 
 _TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
-_SKIP_RECOVER_STATUSES = _TERMINAL_STATUSES + ("cancel_requested",)
+# FIX2-4：cancel_requested 不跳过恢复——取消后到队列归一为 cancelled 前进程退出，
+# 重启必须重新入队（drain 时归一 cancelled + 回写 9000），否则永久停在 cancel_requested。
+_SKIP_RECOVER_STATUSES = _TERMINAL_STATUSES
 
 # FIX1-4：终态回写失败的有界重试上限（recover 时补偿），超过则放弃记日志。
 _MAX_WRITEBACK_ATTEMPTS = 3
@@ -364,6 +366,9 @@ class AiEditSupervisor:
                     execution_token_hash=state.get("execution_token_hash", ""),
                     attempt_count=int(state.get("attempt_count", 0) or 0),
                 )
+                # FIX2-4：cancel_requested 恢复时把 key 加入 _cancelled，drain 归一 cancelled + 回写
+                if state.get("status") == "cancel_requested":
+                    self._cancelled.add(key)
                 self._queue.append(job)
                 self._status.total_enqueued += 1
                 self._status.queued_count += 1
@@ -457,6 +462,15 @@ class AiEditSupervisor:
                 pending_writeback=False,
             )
             return True
+
+    def can_retry(self, *, merchant_id: str, job_id: str) -> bool:
+        """前置可重试检查（不落盘）：任务存在、归属本商户、非运行中。FIX2-5：远端推进前先查。"""
+        with self._lock:
+            key = _task_key(merchant_id, job_id)
+            state = self._job_states.get(key)
+            if state is None or state.get("merchant_id") != merchant_id:
+                return False
+            return state.get("status") != "running"
 
     def requeue(
         self, *, merchant_id: str, job_id: str, attempt_id: str,

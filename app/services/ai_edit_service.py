@@ -58,6 +58,10 @@ class AiEditMaterialInUse(Exception):
     """素材被活动任务引用，禁止删除（调用方映射 409）。"""
 
 
+class AiEditMaterialConflict(Exception):
+    """素材 ID 冲突：同 ID 已被其他商户占用或哈希不一致（调用方映射 409，不暴露归属）。"""
+
+
 class AiEditPlatformReadOnly(Exception):
     """平台素材只读，商户不可删除/修改（调用方映射 403）。"""
 
@@ -111,10 +115,34 @@ def register_material(
     agent_client_id: str | None,
     scope: str = "merchant",
 ) -> AiEditMaterial:
-    """注册素材（幂等：material_id 已存在且未软删则返回既有行）。"""
+    """注册素材（幂等：仅同 merchant_id + 同 source_sha256 + 未软删时返回既有行）。
+
+    FIX2-2：原实现按全局 material_id 查询，发现已有记录便直接返回——跨商户猜中或碰撞
+    素材 ID 时会得到他人素材的脱敏 DTO，并使本商户素材无法建任务。改为：
+    - 同 ID 且同商户同哈希未删 → 幂等返回（正常重导入）；
+    - 同 ID 但归属其他商户 → 冲突（不暴露归属，409 MATERIAL_CONFLICT）；
+    - 同 ID 同商户但哈希不一致 → 冲突（防篡改/碰撞）；
+    - 同 ID 但已软删 → 复活（清 deleted_at/purge_after，覆盖为当前哈希）。
+    """
     existing = db.query(AiEditMaterial).filter_by(material_id=material_id).first()
     if existing is not None:
-        return existing
+        # 已软删：同商户可复活（覆盖哈希），跨商户则冲突
+        if existing.deleted_at is not None:
+            if existing.merchant_id != merchant_id:
+                raise AiEditMaterialConflict("MATERIAL_ID_RECLAIMED_BY_OTHER")
+            existing.deleted_at = None
+            existing.purge_after = None
+            existing.source_sha256 = source_sha256
+            existing.media_type = media_type
+            existing.agent_client_id = agent_client_id
+            db.flush()
+            return existing
+        # 未软删
+        if existing.merchant_id != merchant_id:
+            raise AiEditMaterialConflict("MATERIAL_ID_TAKEN_BY_OTHER")
+        if existing.source_sha256 != source_sha256:
+            raise AiEditMaterialConflict("MATERIAL_HASH_MISMATCH")
+        return existing  # 同商户同哈希未删：幂等
     material = AiEditMaterial(
         material_id=material_id,
         merchant_id=merchant_id,

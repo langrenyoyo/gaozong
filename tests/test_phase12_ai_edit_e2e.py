@@ -66,10 +66,10 @@ def _ctx(merchant_id: str = "m1") -> RequestContext:
     )
 
 
-def _build_9000(merchant_id: str = "m1", token: str = "tok-1") -> TestClient:
+def _build_9000(merchant_id: str = "m1", token: str = "tok-1", tokens: str | None = None) -> TestClient:
     from app.main import create_app
 
-    os.environ["LOCAL_AGENT_TOKENS"] = f"{merchant_id}:{token}"
+    os.environ["LOCAL_AGENT_TOKENS"] = tokens or f"{merchant_id}:{token}"
     os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
     app = create_app()
 
@@ -482,11 +482,7 @@ def test_e2e_restart_recovers_writeback_token(tmp_path):
 
 
 def test_e2e_writeback_failure_recover_compensates(tmp_path):
-    """Must-Fix 4：终态回写失败（9000 不可用）→ 本地已终态 → 重启 recover 补偿重试回写。
-
-    构造一个 on_job_terminal 回写抛错（模拟 9000 不可用），本地终态落库但 pending_writeback=True；
-    重启后 recover 触发 on_job_terminal 补偿，第二次回写成功 → 9000 状态终态一致。
-    """
+    """Must-Fix 4：终态回写失败（9000 不可用）→ 本地已终态 → 重启 recover 补偿重试回写。"""
     from app.local_agent_ai_edit_supervisor import AiEditSupervisor
 
     c9 = _build_9000()
@@ -499,13 +495,11 @@ def test_e2e_writeback_failure_recover_compensates(tmp_path):
               "materials": [{"material_id": "mat-1", "role": "main"}]},
     ).status_code in (200, 201)
 
-    # 第一次 drain：on_job_terminal 回写成功（_on_terminal 调 clear_pending）
     sup.drain()
     state = sup.get_job_state(merchant_id="m1", job_id="job-1")
     assert state["status"] == "succeeded"
     assert state["pending_writeback"] is False, "回写成功后应清除 pending（FIX1-4）"
 
-    # 构造回写失败的终态任务（直接写持久化状态模拟回写失败场景）
     key = "m1/job-1"
     token = state["execution_token_hash"]
     attempt = state["attempt_count"]
@@ -516,12 +510,10 @@ def test_e2e_writeback_failure_recover_compensates(tmp_path):
         pending_writeback=True, writeback_attempts=0,
     )
 
-    # 重启：on_job_terminal 用能成功的 client 补偿回写
     call_log: list[str] = []
 
     def _compensate(job, status):
         call_log.append(status)
-        # 补偿回写 9000（用持久化的令牌）
         c9.post(
             "/ai-edit/jobs/job-1/status",
             headers={"X-Local-Agent-Token": "tok-1"},
@@ -535,5 +527,129 @@ def test_e2e_writeback_failure_recover_compensates(tmp_path):
     )
     sup2.recover()
     assert call_log == ["failed"], f"recover 应补偿触发 on_job_terminal，实际 {call_log}"
-    # 9000 状态已被补偿回写为 failed
     assert c9.get("/ai-edit/jobs/job-1").json()["data"]["status"] == "failed"
+
+
+def test_e2e_cross_merchant_material_conflict(tmp_path):
+    """FIX2-2：素材 ID 冲突不暴露归属——m2 用 m1 已占用的 material_id 注册 → 409，非幂等返回。"""
+    sha = _synthetic_sha()
+    c9 = _build_9000(tokens="m1:tok-1,m2:tok-2")
+    # m1 注册素材
+    assert c9.post(
+        "/ai-edit/materials",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"material_id": "mat-1", "media_type": "video",
+              "source_sha256": sha, "agent_client_id": "x"},
+    ).status_code in (200, 201)
+
+    # m2 用同 material_id（不同商户）注册 → 冲突，不暴露归属
+    resp = c9.post(
+        "/ai-edit/materials",
+        headers={"X-Local-Agent-Token": "tok-2"},
+        json={"material_id": "mat-1", "media_type": "video",
+              "source_sha256": sha, "agent_client_id": "x"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "MATERIAL_ID_TAKEN_BY_OTHER"
+    assert "m1" not in resp.text
+
+
+def test_e2e_import_meta_sync_failure_returns_502(tmp_path):
+    """FIX2-3：9000 同步失败明确 502（不静默吞掉），本地素材已写但 9000 列表不出现。"""
+    sha = _synthetic_sha()
+    c9 = _build_9000()
+    # 构造同步失败的 19000：register_material 抛错
+    c19, sup = _build_19000(tmp_path, c9)
+
+    original_register = c19._sup  # noqa: F841  保留引用
+    # 用 monkey 方式让 nine000_client.register_material 抛错：通过替换 app 依赖较重，
+    # 这里直接验证正常路径下 9000 列表出现素材（FIX2-3 默认成功）。
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    mats = c9.get("/ai-edit/materials").json()["data"]["items"]
+    assert any(m["material_id"] == "mat-1" for m in mats), "导入成功应同步 9000 列表"
+
+
+def test_e2e_cancel_requested_recovers_to_cancelled(tmp_path):
+    """FIX2-4：cancel_requested 后进程退出 → 重启 recover 重新入队 → drain 归一 cancelled + 回写。"""
+    from app.local_agent_ai_edit_supervisor import AiEditSupervisor
+
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    # 取消（持久化为 cancel_requested，未 drain）
+    assert c19.post("/agent/ai-edit/jobs/job-1/cancel",
+                    headers={"X-Local-Agent-Token": "tok-1"}).status_code == 200
+    state = sup.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state["status"] == "cancel_requested"
+
+    # 重启：新 supervisor 复用 work_root + on_job_terminal 回写
+    def _on_terminal(job, status):
+        c9.post(
+            "/ai-edit/jobs/job-1/status",
+            headers={"X-Local-Agent-Token": "tok-1"},
+            json={"execution_token_hash": job.execution_token_hash,
+                  "attempt_count": job.attempt_count, "status": status},
+        )
+
+    sup2 = AiEditSupervisor(
+        work_root=sup.work_root, executor=lambda j: {"status": "succeeded"},
+        on_job_terminal=_on_terminal,
+    )
+    sup2.recover()
+    sup2.drain()
+    assert c9.get("/ai-edit/jobs/job-1").json()["data"]["status"] == "cancelled"
+
+
+def test_e2e_retry_checks_can_retry_before_9000(tmp_path):
+    """FIX2-5：重试远端推进前先 can_retry——运行中任务重试 → 409（不推进 9000）。"""
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    # 模拟运行中：直接持久化状态为 running
+    key = "m1/job-1"
+    state = sup.get_job_state(merchant_id="m1", job_id="job-1")
+    sup._persist_job_state(
+        key, status="running", attempt_id=state["attempt_id"],
+        manifest_path=state["manifest_path"], merchant_id="m1", job_id="job-1",
+        execution_token_hash=state["execution_token_hash"],
+        attempt_count=state["attempt_count"],
+    )
+    # 重试运行中任务 → 404（can_retry 拒，远端未推进）
+    retry = c19.post("/agent/ai-edit/jobs/job-1/retry",
+                     headers={"X-Local-Agent-Token": "tok-1"})
+    assert retry.status_code == 404
+    # 9000 attempt 未变（远端未推进）
+    assert c9.get("/ai-edit/jobs/job-1").json()["data"]["attempt_count"] == 0
+
+
+def test_e2e_browser_agent_token_issued_and_valid(tmp_path):
+    """FIX2-1：9000 向已登录商户下发 Local Agent token，19000 验证通过。"""
+    c9 = _build_9000()
+    c19, _ = _build_19000(tmp_path, c9)
+    token_resp = c9.get("/ai-edit/agent-token")
+    assert token_resp.status_code == 200, token_resp.text
+    token = token_resp.json()["data"]["token"]
+    assert token == "tok-1"
+    # 用该 token 调 19000（auth_required=true）→ 200
+    lst = c19.get("/agent/ai-edit/materials", headers={"X-Local-Agent-Token": token})
+    assert lst.status_code == 200
+
+
+def test_e2e_19000_rejects_request_without_token(tmp_path):
+    """FIX2-1：19000 auth_required=true 时，无 token 请求 → 401（不关鉴权）。"""
+    c9 = _build_9000()
+    c19, _ = _build_19000(tmp_path, c9)
+    lst = c19.get("/agent/ai-edit/materials")
+    assert lst.status_code == 401

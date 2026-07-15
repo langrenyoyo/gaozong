@@ -122,6 +122,9 @@ def create_ai_edit_router(
         model_config = {"extra": "forbid"}
         material_id: str = Field(..., min_length=1, max_length=64)
         role: str = Field("main", max_length=16)
+        # FIX2-6：首尾时间传入 9000（钉住使用区间，设计 §7.4 轻量调整）
+        source_start: float | None = Field(None, ge=0)
+        source_end: float | None = Field(None, gt=0)
 
     class JobCreateRequest(BaseModel):
         model_config = {"extra": "forbid"}
@@ -170,7 +173,9 @@ def create_ai_edit_router(
             status_code = 422 if code in ("INVALID_MATERIAL_ID", "SIZE_MISMATCH", "INVALID_MERCHANT_ID") else 400
             raise HTTPException(status_code=status_code,
                                 detail={"code": code, "message": "素材导入失败"})
-        # 同步 9000 元数据（本地文件已落盘，登记到 9000 才能在剪辑工作台选择）
+        # 同步 9000 元数据（本地文件已落盘，登记到 9000 才能在剪辑工作台选择）。
+        # FIX2-3：同步失败明确返回 502，前端可重试（重导入幂等，会再同步 9000），
+        # 不静默吞掉导致"本地有素材但 9000 列表没有"。
         if nine000_client is not None:
             try:
                 nine000_client.register_material(
@@ -178,9 +183,13 @@ def create_ai_edit_router(
                     media_type="video", source_sha256=record.sha256,
                     agent_client_id="local-agent",
                 )
-            except Exception as exc:  # noqa: BLE001  9000 同步失败不回滚本地文件（本地为真源）
+            except Exception as exc:  # noqa: BLE001  本地已落盘为真源，记日志 + 502 供重试
                 logger.warning("ai_edit import stage=meta_sync_error material_id=%s error=%s",
                                record.material_id, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "MATERIAL_META_SYNC_FAILED", "message": "素材已写入本机，但同步 9000 元数据失败，请重试导入"},
+                ) from exc
         return _ok({
             "material_id": record.material_id,
             "relative_path": record.relative_path,
@@ -236,7 +245,7 @@ def create_ai_edit_router(
                 os.unlink(tmp)
             except OSError:
                 pass
-        # 同步 9000 元数据（与 import 一致）
+        # 同步 9000 元数据（与 import 一致；失败明确 502 供重试，FIX2-3）
         if nine000_client is not None:
             try:
                 nine000_client.register_material(
@@ -247,6 +256,10 @@ def create_ai_edit_router(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("ai_edit import_stream stage=meta_sync_error material_id=%s error=%s",
                                record.material_id, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "MATERIAL_META_SYNC_FAILED", "message": "素材已写入本机，但同步 9000 元数据失败，请重试导入"},
+                ) from exc
         return _ok({
             "material_id": record.material_id,
             "relative_path": record.relative_path,
@@ -271,7 +284,8 @@ def create_ai_edit_router(
             if code == "MATERIAL_IN_USE_ACTIVE_JOB":
                 raise HTTPException(status_code=409, detail={"code": code, "message": "素材被活动任务引用"})
             raise HTTPException(status_code=400, detail={"code": code, "message": "删除失败"})
-        # 同步 9000 软删（与本地回收站一致；失败只记日志，本地已删为真源）
+        # 同步 9000 软删（FIX2-3：失败回滚本地软删，保持本地与 9000 一致，前端可重试）。
+        # 本地 soft_delete_material 已置 deleted_at；同步失败则撤销，使两系统状态不分裂。
         if nine000_client is not None:
             try:
                 nine000_client.delete_material(
@@ -280,6 +294,18 @@ def create_ai_edit_router(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("ai_edit delete stage=meta_sync_error material_id=%s error=%s",
                                material_id, exc)
+                # 回滚本地软删（恢复 deleted_at/purge_after），状态与 9000 一致
+                from app.local_agent_ai_edit_storage import MaterialRecord, _upsert_manifest
+                _upsert_manifest(mroot, MaterialRecord(
+                    material_id=record.material_id,
+                    relative_path=record.relative_path,
+                    sha256=record.sha256, size_bytes=record.size_bytes,
+                    deleted_at=None, purge_after=None,
+                ))
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "MATERIAL_DELETE_SYNC_FAILED", "message": "同步 9000 删除失败，本地已回滚，请重试"},
+                ) from exc
         return _ok({"material_id": record.material_id, "deleted_at": record.deleted_at.isoformat()})
 
     @router.post("/jobs")
@@ -359,8 +385,9 @@ def create_ai_edit_router(
                             "role": m.role,
                             "position": idx,
                             "pinned_sha256": _material_sha256(mroot, m.material_id),
-                            "source_start": 0.0,
-                            "source_end": None,
+                            # FIX2-6：传入前端首尾时间（无则全片）
+                            "source_start": m.source_start if m.source_start is not None else 0.0,
+                            "source_end": m.source_end,
                         }
                         for idx, m in enumerate(payload.materials)
                     ]
@@ -422,20 +449,23 @@ def create_ai_edit_router(
         job_id: str,
         ctx: LocalAgentAuthContext = Depends(require_local_agent_context),
     ):
-        """重试：19000 协调——调 9000 agent-retry 推进 attempt+轮换令牌，再重新入队。
+        """重试：19000 协调——先本地可重试检查，再调 9000 agent-retry，再重新入队。
 
-        唯一重试顺序：前端→19000 retry→9000 agent-retry；禁止前端直调 9000 /retry
-        再触发 19000，否则令牌分叉（9000 已轮换、19000 持旧令牌无法回写）。
+        FIX2-5：远端推进前先 can_retry 检查（不落盘），避免 9000 已推进而本地 requeue 失败
+        导致半提交（19000 持旧 attempt 无法回写）。requeue 仍失败的极小竞态，记 ERROR 告警，
+        9000 已推进的 attempt 由下次 retry 再推进（旧 attempt 回写被 409 拒，最终一致）。
+        唯一重试顺序：前端→19000 retry→9000 agent-retry；禁止前端直调 9000 /retry。
         """
         if not ctx.merchant_id:
             raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
         if not _is_safe_segment(job_id):
             raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND"})
-        state = supervisor.get_job_state(merchant_id=ctx.merchant_id, job_id=job_id)
-        if state is None:
-            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
         if nine000_client is None:
             raise HTTPException(status_code=503, detail={"code": "NINE000_NOT_CONFIGURED", "message": "9000 未配置"})
+        # 1. 前置可重试检查（远端推进前）
+        if not supervisor.can_retry(merchant_id=ctx.merchant_id, job_id=job_id):
+            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在或运行中不可重试"})
+        # 2. 调 9000 agent-retry（推进 attempt + 轮换令牌）
         try:
             retried = nine000_client.agent_retry_job(
                 merchant_id=ctx.merchant_id, job_id=job_id,
@@ -448,14 +478,22 @@ def create_ai_edit_router(
         new_token = str(retried.get("execution_token_hash", ""))
         new_attempt = int(retried.get("attempt_count", 0))
         new_attempt_id = f"att-{job_id}-{new_attempt}"
-        # 重新入队（supervisor.requeue 更新令牌/attempt/状态并重新排队）
+        # 3. 本地重新入队（用新令牌；竞态导致失败则告警，9000 已推进由下次 retry 覆盖）
         requeued = supervisor.requeue(
             merchant_id=ctx.merchant_id, job_id=job_id,
             attempt_id=new_attempt_id, execution_token_hash=new_token,
             attempt_count=new_attempt,
         )
         if not requeued:
-            raise HTTPException(status_code=409, detail={"code": "JOB_NOT_RETRYABLE", "message": "任务不可重试（可能仍在运行）"})
+            logger.error(
+                "ai_edit retry stage=requeue_failed_after_9000_advanced job_id=%s attempt=%s "
+                "9000 已推进但本地未入队，下次重试将再推进",
+                job_id, new_attempt,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "REQUEUE_FAILED_AFTER_9000_RETRY", "message": "9000 已重试但本地重新入队失败，请再次重试"},
+            )
         return _ok({"job_id": job_id, "status": "queued", "attempt_count": new_attempt})
 
     @router.get("/jobs/{job_id}")

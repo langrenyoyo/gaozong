@@ -44,6 +44,11 @@ function routeMock(route) {
     return route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ success: true, data: MOCK_USER, message: 'success' }) });
   }
+  // FIX2-1：浏览器获取 Local Agent token
+  if (url.includes('/ai-edit/agent-token')) {
+    return route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { token: 'mock-agent-token', merchant_id: 'm1' }, message: 'success' }) });
+  }
   if (url.includes('/ai-edit/')) {
     return route.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ success: true, data: { total: 0, items: [] }, message: 'success' }) });

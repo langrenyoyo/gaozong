@@ -50,6 +50,22 @@ def _merchant(context: RequestContext) -> str:
     return context.merchant_id
 
 
+def _merchant_agent_token(merchant_id: str) -> str | None:
+    """从 LOCAL_AGENT_TOKENS 取当前商户对应的 Local Agent token（FIX2-1）。
+
+    与 19000 共享同一 env 配置；返回该商户的 token 供浏览器调 19000。
+    """
+    import os
+    for item in os.getenv("LOCAL_AGENT_TOKENS", "").split(","):
+        text = item.strip()
+        if not text or ":" not in text:
+            continue
+        mid, token = text.split(":", 1)
+        if mid.strip() == merchant_id and token.strip():
+            return token.strip()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 请求模型
 # ---------------------------------------------------------------------------
@@ -129,6 +145,28 @@ def list_templates(
     return _ok({"total": len(items), "items": items})
 
 
+@router.get("/agent-token")
+def issue_agent_token(
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """向已登录商户下发本机 Local Agent token（FIX2-1：浏览器调 19000 的鉴权通道）。
+
+    从 LOCAL_AGENT_TOKENS 取当前 merchant_id 对应的 token（与 19000 共享 env）。
+    前端 localStorage 保存，localApi 请求带 X-Local-Agent-Token。
+    安全：9000 可信登录态 + 商户绑定；token 只在本机回环（127.0.0.1:19000）有效。
+    商户未配置 Local Agent token → 404，不暴露存在性差异。
+    """
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    token = _merchant_agent_token(merchant_id)
+    if not token:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LOCAL_AGENT_TOKEN_NOT_CONFIGURED", "message": "本机未配置 Local Agent token"},
+        )
+    return _ok({"token": token, "merchant_id": merchant_id})
+
+
 # ---------------------------------------------------------------------------
 # 素材
 # ---------------------------------------------------------------------------
@@ -157,15 +195,22 @@ def register_material(
             status_code=403,
             detail={"code": "LOCAL_AGENT_NO_MERCHANT", "message": "Local Agent token 未映射商户"},
         )
-    material = svc.register_material(
-        db,
-        merchant_id=agent.merchant_id,
-        material_id=payload.material_id,
-        media_type=payload.media_type,
-        source_sha256=payload.source_sha256,
-        agent_client_id=payload.agent_client_id,
-        scope="merchant",
-    )
+    try:
+        material = svc.register_material(
+            db,
+            merchant_id=agent.merchant_id,
+            material_id=payload.material_id,
+            media_type=payload.media_type,
+            source_sha256=payload.source_sha256,
+            agent_client_id=payload.agent_client_id,
+            scope="merchant",
+        )
+    except svc.AiEditMaterialConflict as exc:
+        # FIX2-2：冲突不暴露归属（409 通用码）
+        raise HTTPException(
+            status_code=409,
+            detail={"code": str(exc), "message": "素材 ID 冲突"},
+        ) from exc
     db.commit()
     return _ok(svc.to_material_out(material).model_dump())
 

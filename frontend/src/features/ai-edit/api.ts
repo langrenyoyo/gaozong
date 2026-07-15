@@ -23,6 +23,11 @@ export async function fetchAiEditTemplates(): Promise<AiEditListResponse<AiEditT
   return unwrap(await apiClient.get("/ai-edit/templates"));
 }
 
+/** 获取本机 Local Agent token（FIX2-1：浏览器调 19000 的鉴权通道，9000 下发）。 */
+export async function fetchAiEditAgentToken(): Promise<{ token: string; merchant_id: string }> {
+  return unwrap(await apiClient.get("/ai-edit/agent-token"));
+}
+
 /** 列素材（私有 + 平台公共，商户隔离）。 */
 export async function fetchAiEditMaterials(): Promise<AiEditListResponse<AiEditMaterial>> {
   return unwrap(await apiClient.get("/ai-edit/materials"));
