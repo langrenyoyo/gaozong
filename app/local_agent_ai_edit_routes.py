@@ -215,7 +215,7 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
         if not ctx.merchant_id:
             raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
         mroot = merchant_storage_root(storage_root, ctx.merchant_id)
-        # 校验素材存在且未被软删
+        # 校验素材存在且未被软删，标记活动引用
         from app.local_agent_ai_edit_storage import _find_manifest
         for m in payload.materials:
             rec = _find_manifest(mroot, m.material_id)
@@ -223,8 +223,35 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
                 raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND"})
             mark_active_reference(mroot, m.material_id, job_id=payload.job_id, active=True)
 
-        # FIX1-3：job_id 安全段 + 原子写 WorkerManifest
+        # FIX2-2：job_id 安全段 + 素材受控复制进 task_root/input/（Worker 在任务根内读素材）
         job_dir = _worker_manifest_dir(work_root, ctx.merchant_id, payload.job_id)
+        input_dir = job_dir / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        manifest_materials = []
+        for m in payload.materials:
+            src_rel = _material_relative_for_manifest(mroot, m.material_id)
+            src_path = mroot / src_rel
+            # 复制进任务根 input/，文件名用 material_id（已安全校验）
+            dst_name = f"{m.material_id}.mp4"
+            dst_rel = f"input/{dst_name}"
+            dst_path = job_dir / dst_rel
+            try:
+                import shutil
+                shutil.copy2(str(src_path), str(dst_path))
+            except OSError as exc:
+                # 复制失败释放已标记引用，不泄漏路径
+                for mm in payload.materials:
+                    mark_active_reference(mroot, mm.material_id, job_id=payload.job_id, active=False)
+                raise HTTPException(status_code=500, detail={"code": "MATERIAL_COPY_FAILED"}) from exc
+            manifest_materials.append({
+                "material_id": m.material_id,
+                "role": m.role,
+                "relative_path": dst_rel,  # 相对 task_root
+                "source_sha256": _material_sha256(mroot, m.material_id),
+                "duration_seconds": 10.0,
+            })
+
+        # FIX2-4：不向响应泄露绝对路径；manifest_path 仅内部使用
         manifest_path = job_dir / "manifest.json"
         manifest = {
             "schema_version": "phase12_ai_edit_worker_v1",
@@ -234,16 +261,7 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
             "target_duration_seconds": 30,
             "preview_profile": "720p",
             "final_profile": "1080p",
-            "materials": [
-                {
-                    "material_id": m.material_id,
-                    "role": m.role,
-                    "relative_path": _material_relative_for_manifest(mroot, m.material_id),
-                    "source_sha256": _material_sha256(mroot, m.material_id),
-                    "duration_seconds": 10.0,
-                }
-                for m in payload.materials
-            ],
+            "materials": manifest_materials,
         }
         _write_manifest_atomic(manifest_path, manifest)
 
@@ -254,9 +272,9 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
             merchant_id=ctx.merchant_id,
         )
         supervisor.enqueue(job)
-        # FIX1-2：不再在 HTTP 线程同步 drain；enqueue 异步触发后台处理
-        # 完成后释放活动引用由 supervisor 在 _drain_loop 完成（此处先标记 queued）
-        return _ok({"job_id": payload.job_id, "status": "queued", "manifest_path": str(manifest_path)})
+        # FIX2-7：活动引用在 supervisor _drain_loop 终态后释放（见 release_active_refs 回调）
+        # 响应不返回 manifest_path（绝对路径不外泄）
+        return _ok({"job_id": payload.job_id, "status": "queued"})
 
     @router.post("/jobs/{job_id}/cancel")
     def cancel_job(
@@ -266,10 +284,11 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
         if not ctx.merchant_id:
             raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
         if not _is_safe_segment(job_id):
-            raise HTTPException(status_code=422, detail={"code": "INVALID_JOB_ID"})
-        accepted = supervisor.cancel(job_id)
+            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND"})
+        # FIX2-1：cancel 传 merchant_id，跨商户返回 False（不暴露存在性 → 404）
+        accepted = supervisor.cancel(merchant_id=ctx.merchant_id, job_id=job_id)
         if not accepted:
-            raise HTTPException(status_code=409, detail={"code": "JOB_NOT_CANCELLABLE", "message": "任务不可取消"})
+            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在或不可取消"})
         return _ok({"job_id": job_id, "status": "cancel_requested"})
 
     @router.get("/jobs/{job_id}")
@@ -277,19 +296,23 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
         job_id: str,
         ctx: LocalAgentAuthContext = Depends(require_local_agent_context),
     ):
-        """查询任务状态（商户隔离：只看自己的任务）。"""
         if not ctx.merchant_id:
             raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
         if not _is_safe_segment(job_id):
             raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND"})
-        state = supervisor.get_job_state(job_id, merchant_id=ctx.merchant_id)
+        state = supervisor.get_job_state(merchant_id=ctx.merchant_id, job_id=job_id)
         if state is None:
             raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
+        # 不返回 manifest_path（绝对路径不外泄）
+        state.pop("manifest_path", None)
         return _ok(state)
 
     @router.get("/status")
     def status(ctx: LocalAgentAuthContext = Depends(require_local_agent_context)):
-        s = supervisor.status()
+        if not ctx.merchant_id:
+            raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
+        # FIX2-9：status 按 merchant_id 过滤（非全局计数）
+        s = supervisor.status(merchant_id=ctx.merchant_id)
         return _ok({
             "total_enqueued": s.total_enqueued,
             "completed_count": s.completed_count,
@@ -303,7 +326,7 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
 
 
 def _material_relative_for_manifest(mroot: Path, material_id: str) -> str:
-    """读取素材受管相对路径（用于 WorkerManifest）。"""
+    """读取素材受管相对路径（用于复制源）。"""
     from app.local_agent_ai_edit_storage import _find_manifest
     rec = _find_manifest(mroot, material_id)
     return rec.get("relative_path", "") if rec else ""

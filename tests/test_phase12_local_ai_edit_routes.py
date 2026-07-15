@@ -12,6 +12,7 @@
 """
 
 import base64
+import json
 import os
 from pathlib import Path
 
@@ -270,11 +271,62 @@ def test_cancel_running_job_returns_200(tmp_path):
     assert resp.json()["data"]["status"] == "cancel_requested"
 
 
-def test_cancel_nonexistent_job_returns_409(tmp_path):
-    """取消不存在/已终态任务 → 409（精确断言，非模糊）。"""
+def test_cancel_nonexistent_job_returns_404(tmp_path):
+    """取消不存在任务 → 404（不暴露存在性，FIX2-1b 跨商户同 404）。"""
     client = _build_client(tmp_path)
     resp = client.post("/agent/ai-edit/jobs/no-such/cancel", headers={"X-Local-Agent-Token": "tok-1"})
-    assert resp.status_code == 409
+    assert resp.status_code == 404
+
+
+def test_cancel_cross_merchant_returns_404(tmp_path):
+    """FIX2-1：m2 不能取消 m1 的任务 → 404（不暴露存在性）。"""
+    c1 = _build_client(tmp_path, token="tok-1", merchant="m1")
+    _import(c1, material_id="mat-1")
+    c1.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    )
+    # m2 用自己的 token 取消 m1 的任务 → 404
+    c2 = _build_client(tmp_path, token="tok-2", merchant="m2")
+    resp = c2.post("/agent/ai-edit/jobs/job-1/cancel", headers={"X-Local-Agent-Token": "tok-2"})
+    assert resp.status_code == 404
+
+
+def test_status_filtered_by_merchant(tmp_path):
+    """FIX2-9：/status 只返回当前商户计数。"""
+    c1 = _build_client(tmp_path, token="tok-1", merchant="m1")
+    _import(c1, material_id="mat-1")
+    c1.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    )
+    s1 = c1.get("/agent/ai-edit/status", headers={"X-Local-Agent-Token": "tok-1"})
+    assert s1.status_code == 200
+    # m2 的 status 应只看到自己的（0）
+    c2 = _build_client(tmp_path, token="tok-2", merchant="m2")
+    s2 = c2.get("/agent/ai-edit/status", headers={"X-Local-Agent-Token": "tok-2"})
+    assert s2.status_code == 200
+    assert s2.json()["data"]["total_enqueued"] == 0
+
+
+def test_job_response_does_not_leak_manifest_path(tmp_path):
+    """FIX2-4：响应不返回绝对路径 manifest_path。"""
+    client = _build_client(tmp_path)
+    _import(client)
+    resp = client.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    )
+    body = resp.json()["data"]
+    assert "manifest_path" not in body  # 绝对路径不外泄
+    blob = json.dumps(body, ensure_ascii=False)
+    assert str(client._work_root.resolve()) not in blob
 
 
 # ---------------------------------------------------------------------------

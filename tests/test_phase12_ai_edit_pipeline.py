@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from apps.ai_edit.contracts import WorkerManifest, WorkerMaterial
+from apps.ai_edit.media_tools import file_sha256
 from apps.ai_edit.pipeline import (
     PipelineDeps,
     run_pipeline,
@@ -34,6 +35,9 @@ from apps.ai_edit.worker_main import load_manifest, main
 
 
 def _valid_manifest(task_root: Path) -> dict:
+    # FIX2-5：manifest source_sha256 必须等于实际文件哈希（pipeline 比对防漂移）
+    src = task_root / "input" / "mat-1.mp4"
+    real_sha = file_sha256(src) if src.exists() else "sha-mat-1"
     return {
         "schema_version": "phase12_ai_edit_worker_v1",
         "job_id": "job-1",
@@ -46,7 +50,7 @@ def _valid_manifest(task_root: Path) -> dict:
             {
                 "material_id": "mat-1", "role": "main",
                 "relative_path": "input/mat-1.mp4",
-                "source_sha256": "sha-mat-1", "duration_seconds": 10.0,
+                "source_sha256": real_sha, "duration_seconds": 10.0,
             }
         ],
     }
@@ -248,16 +252,18 @@ def test_pipeline_uses_stubs_not_real_models(tmp_path):
 
 
 def test_main_runs_pipeline_and_writes_result(tmp_path):
+    """FIX2-3：main() 跑完整 pipeline（非仅预检）。无 ffmpeg 时 render 失败，
+    result.json 写入 failed + failure_stage，不伪造成功。"""
     task_root = tmp_path / "job-1" / "att-1"
     manifest_path = _make_manifest_file(task_root)
-    # main 默认走 preflight-only（Task 5）；Task 6 集成 pipeline 需显式 flag 或默认 pipeline
-    # 此处验证 main 仍能跑通并写 result.json
     code = main([str(manifest_path)])
-    assert code == 0
+    # 无真实 ffmpeg → render 失败 → 退出码非 0
+    assert code != 0
     result_file = task_root / "result.json"
     assert result_file.exists()
     data = json.loads(result_file.read_text(encoding="utf-8"))
-    assert data["status"] in ("succeeded", "review_required")
+    assert data["status"] == "failed"
+    assert data["failure_stage"] in ("render_preview", "render_final", "verify", "preflight")
 
 
 # ---------------------------------------------------------------------------

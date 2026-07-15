@@ -29,6 +29,7 @@ from apps.ai_edit.contracts import (
     WorkerMaterial,
     WorkerResult,
 )
+from apps.ai_edit.media_tools import file_sha256
 from apps.ai_edit.worker_main import load_manifest, main, run_preflight_only
 
 
@@ -245,21 +246,25 @@ def test_run_preflight_only_succeeds_for_valid_manifest(tmp_path):
     assert result.artifacts == []
 
 
-def test_main_writes_result_json_and_returns_zero(tmp_path, monkeypatch):
+def test_main_writes_result_json(tmp_path, monkeypatch):
+    """FIX2-3：main() 跑完整 pipeline 并写 result.json。无真实 ffmpeg 时 render 失败，
+    退出码非 0，result.json 记 failed（不伪造 succeeded）。"""
     task_root = tmp_path / "job-1" / "att-1"
     (task_root / "input").mkdir(parents=True)
+    # 创建素材文件 + manifest 用真实哈希（FIX2-5 pipeline 比对）
+    src = task_root / "input" / "mat-1.mp4"
+    src.write_bytes(b"fake-source-bytes")
+    payload = _valid_manifest(task_root=str(task_root))
+    payload["materials"][0]["source_sha256"] = file_sha256(src)
     manifest_path = task_root / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(_valid_manifest(task_root=str(task_root)), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    # CLI 从 argv 解析 manifest 路径
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     code = main([str(manifest_path)])
-    assert code == 0
+    # 无真实 ffmpeg → render 失败 → 退出码非 0
+    assert code != 0
     result_file = task_root / "result.json"
     assert result_file.exists()
     data = json.loads(result_file.read_text(encoding="utf-8"))
-    assert data["status"] == "succeeded"
+    assert data["status"] == "failed"
 
 
 def test_main_returns_nonzero_on_failed_preflight(tmp_path, monkeypatch):

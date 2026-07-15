@@ -2815,34 +2815,48 @@ def create_local_agent_app(
         ai_edit_worker_python = os.getenv("AI_EDIT_WORKER_PYTHON", sys.executable)
 
         def _ai_edit_executor(job):
-            # FIX1-2：真实启动 Worker 子进程（参数数组，独立进程组），注册进程句柄供取消。
-            # 异常隔离：Worker 缺失/失败返回 failed，不抛异常，保证微信路由不受影响。
+            # FIX2-8：真实启动 Worker 子进程（参数数组+独立进程组），异步读 stdout/stderr
+            # 防 PIPE 填满死锁；注册进程句柄供取消终止进程树。
             import subprocess as _sp
+            import threading as _th
             from apps.ai_edit.media_tools import terminate_process_tree
             try:
                 manifest_path = Path(job.manifest_path)
                 if not manifest_path.exists():
                     return {"status": "failed", "failure_code": "MANIFEST_NOT_FOUND"}
-                # 参数数组：python worker_main.py <manifest_path> （或直接 exe）
                 if ai_edit_worker_exe.endswith(".py"):
                     cmd = [ai_edit_worker_python, ai_edit_worker_exe, str(manifest_path)]
                 else:
                     cmd = [ai_edit_worker_exe, str(manifest_path)]
-                popen_kwargs = dict(
-                    stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, shell=False,
-                )
+                popen_kwargs = dict(stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, shell=False)
                 if sys.platform == "win32":
                     popen_kwargs["creationflags"] = _sp.CREATE_NEW_PROCESS_GROUP
                 else:
                     popen_kwargs["start_new_session"] = True
                 proc = _sp.Popen(cmd, **popen_kwargs)
-                supervisor.register_process(job.job_id, proc)
+                # FIX2-1：register_process 用复合键
+                supervisor.register_process(job.merchant_id, job.job_id, proc)
+                # FIX2-8：后台线程持续读 stdout/stderr，防 PIPE 缓冲填满导致 Worker 阻塞
+                def _drain(stream, sink):
+                    try:
+                        for line in iter(stream.readline, ""):
+                            sink.append(line)
+                    except Exception:  # noqa: BLE001
+                        pass
+                out_buf, err_buf = [], []
+                _th.Thread(target=_drain, args=(proc.stdout, out_buf), daemon=True).start()
+                _th.Thread(target=_drain, args=(proc.stderr, err_buf), daemon=True).start()
                 try:
                     proc.wait(timeout=float(os.getenv("AI_EDIT_WORKER_TIMEOUT_SECONDS", "1800")))
                 finally:
                     if proc.poll() is None:
                         terminate_process_tree(proc)
-                # 读 result.json
+                # 输出仅在失败时截取前 512 字节入诊断日志（不外泄媒体原文）
+                if proc.returncode != 0:
+                    logger.warning(
+                        "ai_edit executor stage=worker_nonzero job_id=%s rc=%s stderr_tail=%s",
+                        job.job_id, proc.returncode, "".join(err_buf)[:512],
+                    )
                 result_file = manifest_path.parent / "result.json"
                 if result_file.exists():
                     data = json.loads(result_file.read_text(encoding="utf-8"))
@@ -2852,12 +2866,29 @@ def create_local_agent_app(
                 logger.warning("ai_edit executor stage=worker_error job_id=%s error=%s", job.job_id, exc)
                 return {"status": "failed", "failure_code": "WORKER_ERROR"}
 
+        # FIX2-7：任务终态回调——释放活动素材引用（成功/失败/取消/异常均释放）
+        def _on_job_terminal(job, status):
+            try:
+                from app.local_agent_ai_edit_storage import mark_active_reference, merchant_storage_root
+                if not job.merchant_id:
+                    return
+                mroot = merchant_storage_root(ai_edit_storage_root, job.merchant_id)
+                # 读取 manifest 获取素材 ID 列表
+                manifest_path = Path(job.manifest_path)
+                if manifest_path.exists():
+                    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    for m in manifest_data.get("materials", []):
+                        mark_active_reference(mroot, m.get("material_id", ""),
+                                               job_id=job.job_id, active=False)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ai_edit on_job_terminal stage=release_error job_id=%s error=%s",
+                               job.job_id, exc)
+
         ai_edit_supervisor = AiEditSupervisor(
-            work_root=ai_edit_work_root, executor=_ai_edit_executor
+            work_root=ai_edit_work_root, executor=_ai_edit_executor,
+            on_job_terminal=_on_job_terminal,
         )
-        # 启动后台 drain 线程（异步处理队列，不阻塞 HTTP 请求）
         ai_edit_supervisor.start()
-        # 重启恢复：把未完成 running/queued 重新入队（跳过终态与 cancel_requested）
         recovered = ai_edit_supervisor.recover()
         if recovered:
             logger.info("ai_edit supervisor stage=recover requeued=%s", recovered)

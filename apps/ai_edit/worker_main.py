@@ -93,18 +93,92 @@ def write_result_atomically(result_path: Path, result: WorkerResult) -> None:
         raise
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Worker 入口：默认仅预检（Task 5），真实媒体链由 run_worker(pipeline) 触发。
+def _build_default_deps() -> "PipelineDeps":
+    """构建默认真实 PipelineDeps：ffprobe 探测 + run_media_command + stabilize。
 
-    ponytail: Task 6 pipeline 集成在 run_worker；main 保持 preflight-only 默认，
-    避免无 deps 注入时触发真实 ffmpeg（测试与本地无媒体场景安全）。
-    Task 7 监管器启动子进程时显式调用 run_worker。
+    FIX2-3：Worker CLI 必须真正执行分析/增稳/渲染/验证，不再只跑预检。
+    ffprobe/ffmpeg 缺失时 probe 返回空字典 → verify 失败（不伪造成功）。
+    """
+    import json as _json
+    import subprocess as _sp
+    from apps.ai_edit.pipeline import PipelineDeps
+    from apps.ai_edit.media_tools import run_media_command
+    from apps.ai_edit import stabilizer as _stb
+
+    ffmpeg_bin = os.getenv("AI_EDIT_FFMPEG_BINARY", "ffmpeg")
+    ffprobe_bin = os.getenv("AI_EDIT_FFPROBE_BINARY", "ffprobe")
+
+    def _probe(path):
+        """ffprobe 探测媒体（has_audio/duration/width/height）。失败返回空字典。"""
+        try:
+            out = _sp.run(
+                [ffprobe_bin, "-v", "error", "-print_format", "json",
+                 "-show_streams", "-show_format", str(path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            data = _json.loads(out.stdout or "{}")
+        except Exception:  # noqa: BLE001
+            return {"has_audio": False, "duration": 0, "width": 0, "height": 0}
+        streams = data.get("streams", []) if isinstance(data, dict) else []
+        has_audio = any(s.get("codec_type") == "audio" for s in streams)
+        vstream = next((s for s in streams if s.get("codec_type") == "video"), {})
+        fmt = data.get("format", {}) if isinstance(data, dict) else {}
+        return {
+            "has_audio": has_audio,
+            "duration": float(fmt.get("duration", 0) or 0),
+            "width": int(vstream.get("width", 0) or 0),
+            "height": int(vstream.get("height", 0) or 0),
+        }
+
+    def _analyze(manifest, task_root):
+        # 一期占位分析（真实 ASR/视觉在专项 4 接入）；返回空转写供 plan
+        return {"transcript_segments": []}
+
+    def _plan(manifest, analysis, task_root):
+        # 一期保守规划：keep 主素材全部区间（不裁剪、不替换）
+        ops = []
+        for m in manifest.materials:
+            if m.role == "main":
+                ops.append({
+                    "material_id": m.material_id,
+                    "start_seconds": 0.0,
+                    "end_seconds": m.duration_seconds,
+                    "action": "keep",
+                })
+        return {"operations": ops}
+
+    def _stabilize(src, **kw):
+        return _stb.stabilize(src, runner=run_media_command, **kw)
+
+    return PipelineDeps(
+        runner=run_media_command,
+        probe=_probe,
+        analyze=_analyze,
+        plan=_plan,
+        stabilize=_stabilize,
+        stabilize_enabled=lambda m: False,
+        ffmpeg_binary=ffmpeg_bin,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Worker CLI 入口：执行完整媒体流水线（FIX2-3）。
+
+    preflight 失败 → 直接 failed；否则调 run_pipeline（默认真实 deps）。
     """
     manifest_path = parse_manifest_path(argv)
     manifest = load_manifest(manifest_path)
-    result = run_preflight_only(manifest)
+    # 先预检 task_root + 路径结构
+    preflight = run_preflight_only(manifest)
+    if preflight.status == "failed":
+        write_result_atomically(manifest.task_root / "result.json", preflight)
+        return 1
+    # FIX2-3：执行完整 pipeline（分析/增稳/规划/渲染/验证）
+    from apps.ai_edit.pipeline import run_pipeline
+    deps = _build_default_deps()
+    result = run_pipeline(manifest, deps=deps, cancel_check=lambda: False)
     write_result_atomically(manifest.task_root / "result.json", result)
-    return 0 if result.status != "failed" else 1
+    return 0 if result.status not in ("failed", "cancelled") else 1
 
 
 def run_worker(manifest_path: Path, *, deps: "object | None" = None) -> int:

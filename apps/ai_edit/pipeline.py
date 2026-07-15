@@ -77,18 +77,56 @@ def _render(
     output_path: Path,
     profile: str,
     cancel_check: Callable[[], bool],
+    plan_operations: list[dict] | None = None,
 ) -> None:
-    """渲染单分辨率（真实 ffmpeg scale 滤镜，H.264 + AAC）。"""
+    """渲染单分辨率，由 plan operations 驱动裁剪/拼接/缩放（FIX2-6）。
+
+    若 plan_operations 含 keep 段，用 filter_complex trim+concat 仅保留指定区间；
+    无 plan 时退化为缩放完整输入（保守，不伪造裁剪）。
+    最终 scale 到目标分辨率，libx264 + aac。
+    """
     width, height = _PROFILE_DIMS[profile]
-    # FIX1-7：真实 scale 滤镜（scale=宽:高），libx264 + aac，非不存在的 scale_profile
-    cmd = [
-        deps.ffmpeg_binary, "-y",
-        "-i", str(input_path),
-        "-vf", f"scale={width}:{height}",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        str(output_path),
+    keep_ops = [
+        op for op in (plan_operations or [])
+        if op.get("action") == "keep" and op.get("end_seconds", 0) > op.get("start_seconds", 0)
     ]
+    if keep_ops:
+        # FIX2-6：plan 驱动——单主素材多 keep 段 trim+concat+scale
+        # filter_complex: [0:v]trim=start=...:end=...,setpts=PTS-STARTPTS[v0]; ... concat=n=K[v]
+        # ponytail: 一期仅处理单素材 keep 段（多素材拼接留专项 3）；broll_replace/remove 不在此渲染
+        segments = []
+        filter_parts = []
+        n = len(keep_ops)
+        for i, op in enumerate(keep_ops):
+            s, e = float(op["start_seconds"]), float(op["end_seconds"])
+            filter_parts.append(
+                f"[0:v]trim={s}:{e},setpts=PTS-STARTPTS[v{i}];"
+                f"[0:a]atrim={s}:{e},asetpts=PTS-STARTPTS[a{i}]"
+            )
+            segments.append(f"[v{i}][a{i}]")
+        concat_in = "".join(segments)
+        filter_parts.append(
+            f"{concat_in}concat=n={n}:v=1:a=1[vcat][acat];"
+            f"[vcat]scale={width}:{height}[vout]"
+        )
+        filter_complex = ";".join(filter_parts)
+        cmd = [
+            deps.ffmpeg_binary, "-y",
+            "-i", str(input_path),
+            "-filter_complex", filter_complex,
+            "-map", "[vout]", "-map", "[acat]",
+            "-c:v", "libx264", "-c:a", "aac",
+            str(output_path),
+        ]
+    else:
+        # 退化为缩放完整输入（保守）
+        cmd = [
+            deps.ffmpeg_binary, "-y",
+            "-i", str(input_path),
+            "-vf", f"scale={width}:{height}",
+            "-c:v", "libx264", "-c:a", "aac",
+            str(output_path),
+        ]
     try:
         deps.runner(
             cmd,
@@ -149,8 +187,13 @@ def run_pipeline(
             if not src.exists():
                 return WorkerResult(status="failed", failure_stage="preflight",
                                     failure_code="MATERIAL_FILE_NOT_FOUND")
+            # FIX2-5：用 manifest 钉住的 source_sha256 作 expected，比对当前文件哈希防漂移
+            actual_hash = file_sha256(src)
+            if m.source_sha256 and actual_hash != m.source_sha256:
+                return WorkerResult(status="failed", failure_stage="preflight",
+                                    failure_code="SOURCE_HASH_DRIFT")
             material_paths.append(src)
-            material_hashes[m.material_id] = file_sha256(src)
+            material_hashes[m.material_id] = actual_hash
 
         # 2. analyze（替身 ASR/视觉）
         _cancelled()
@@ -192,12 +235,14 @@ def run_pipeline(
             except OSError:
                 pass
 
-        # 5. render_preview_720p
+        # 5. render_preview_720p（FIX2-6：plan operations 驱动裁剪/拼接）
         _cancelled()
         preview_path = task_root / "output" / "preview_720p.mp4"
         preview_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_ops = plan_result.get("operations", []) if isinstance(plan_result, dict) else []
         _render(deps, stage="render_preview", input_path=render_input,
-                output_path=preview_path, profile="720p", cancel_check=cancel)
+                output_path=preview_path, profile="720p", cancel_check=cancel,
+                plan_operations=plan_ops)
         if not preview_path.exists() or preview_path.stat().st_size == 0:
             return WorkerResult(status="failed", failure_stage="render_preview",
                                 failure_code="EMPTY_OUTPUT")
@@ -209,7 +254,8 @@ def run_pipeline(
         _cancelled()
         final_path = task_root / "output" / "final_1080p.mp4"
         _render(deps, stage="render_final", input_path=render_input,
-                output_path=final_path, profile="1080p", cancel_check=cancel)
+                output_path=final_path, profile="1080p", cancel_check=cancel,
+                plan_operations=plan_ops)
         if not final_path.exists() or final_path.stat().st_size == 0:
             return WorkerResult(status="failed", failure_stage="render_final",
                                 failure_code="EMPTY_OUTPUT")
