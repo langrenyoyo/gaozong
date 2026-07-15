@@ -496,7 +496,8 @@
 - [ ] **Step 2: 写回访闭环测试**
   - 销售回复“手机号不对”命中留资转化回访。
   - 销售回复“客户问金融方案”命中金融方案回访。
-  - 长时间未回复命中沉默客户唤醒。
+  - 销售微信反馈“客户长期未回复、联系不上”等语义时，命中沉默客户唤醒。
+  - 一期不实现基于抖音会话时间的自动扫描唤醒；沉默客户唤醒仍由销售微信反馈触发。
   - 需要存在可用 `send_msg context`，否则只记录不能发送。
 
 - [ ] **Step 3: 实现语义判断**
@@ -531,26 +532,26 @@
 - Test: `tests/test_compute_service.py`
 - Test: `tests/test_compute_usage_client.py`
 
-- [ ] **Step 1: 写算力测试**
+- [x] **Step 1: 写算力测试**
   - 3 个套餐 seed 幂等。
   - 上浮比例按 6 能力配置。
   - 上报消耗必须带 `model`。
   - 余额不足不拦截，只记录风险。
 
-- [ ] **Step 2: 实现上浮比例**
+- [x] **Step 2: 实现上浮比例**
   - 新增 admin API 查询/更新。
   - `/internal/compute/usage` 根据 capability 上浮后写展示消耗。
   - 保留实际 token 字段用于审计。
 
-- [ ] **Step 3: 前端接入**
+- [x] **Step 3: 前端接入**
   - 商户算力中心显示余额、今日/昨日/累计、流水、Mock 充值。
   - 超管算力配置页管理套餐和上浮比例。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
   - Run: `pytest tests/test_compute_service.py tests/test_compute_usage_client.py && cd frontend && npm run build`
   - Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
   - Commit: `feat: 补齐小高算力套餐和上浮比例`
 
 ---
