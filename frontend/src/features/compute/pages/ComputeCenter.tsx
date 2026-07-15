@@ -33,6 +33,22 @@ const TRANSACTION_TYPE_LABELS: Record<string, string> = {
   consume: "消耗",
 };
 
+// Phase 10 §0.2：能力中文名（capability_key NULL → 历史未归类）
+const CAPABILITY_LABELS: Record<string, string> = {
+  "douyin-cs": "抖音客服",
+  "leads": "线索",
+  "agents": "智能体",
+  "wechat-assistant": "微信助手",
+  "compute": "算力",
+  "knowledge": "知识问答",
+};
+
+/** 能力中文名：未知 key 或 NULL 归一为"历史未归类"。 */
+function capabilityLabel(key?: string | null): string {
+  if (!key) return "历史未归类";
+  return CAPABILITY_LABELS[key] || key;
+}
+
 const PAGE_SIZE = 10;
 
 function formatPayMethod(value: string): string {
@@ -431,6 +447,16 @@ export default function ComputeCenter() {
           />
         </div>
 
+        {/* Phase 10 §0.2：负余额风险提示（不阻断、不写"服务已停用"） */}
+        {summary && summary.balance_tokens < 0 ? (
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-xs text-orange-800">
+            <AlertCircleIcon size={14} />
+            <span>
+              当前算力余额为负（{summary.balance_tokens}），建议联系管理员核实消耗或补充 Token。
+            </span>
+          </div>
+        ) : null}
+
         {summaryError ? (
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-600">
             <AlertCircleIcon size={14} />
@@ -527,10 +553,12 @@ export default function ComputeCenter() {
             </div>
           ) : (
             <>
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[860px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-[#e4e8f0] text-[#8b95a6]">
                     <th className="px-4 py-2.5 font-semibold">类型</th>
+                    <th className="px-4 py-2.5 font-semibold">能力 · 模型</th>
+                    <th className="px-4 py-2.5 font-semibold">实际字符</th>
                     <th className="px-4 py-2.5 font-semibold">Token 变动</th>
                     <th className="px-4 py-2.5 font-semibold">备注</th>
                     <th className="px-4 py-2.5 font-semibold">时间</th>
@@ -539,15 +567,36 @@ export default function ComputeCenter() {
                 <tbody>
                   {transactions.map((tx) => {
                     const income = tx.delta_tokens > 0;
+                    const isConsume = tx.transaction_type === "consume";
+                    // Phase 10 §0.2：充值/套餐不伪造 actual_tokens/capability_key（显示"-"）
                     return (
                       <tr key={tx.id} className="border-b border-[#f1f5f9] last:border-0">
                         <td className="px-4 py-2.5 text-[#1a1f2e]">
                           {TRANSACTION_TYPE_LABELS[tx.transaction_type] || tx.transaction_type}
                         </td>
+                        <td className="px-4 py-2.5 text-[#475467]">
+                          {isConsume ? (
+                            <span>
+                              {capabilityLabel(tx.capability_key)}
+                              {tx.model ? (
+                                <span className="ml-1 text-[10px] text-[#8b95a6]">· {tx.model}</span>
+                              ) : null}
+                            </span>
+                          ) : (
+                            <span className="text-[#cbd5e1]">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-[#475467]">
+                          {isConsume && tx.actual_tokens != null ? (
+                            tx.actual_tokens
+                          ) : (
+                            <span className="text-[#cbd5e1]">-</span>
+                          )}
+                        </td>
                         <td className={`px-4 py-2.5 font-semibold ${income ? "text-emerald-600" : "text-[#475467]"}`}>
                           {formatTokenChange(tx.delta_tokens)}
                         </td>
-                        <td className="max-w-[260px] truncate px-4 py-2.5 text-[#475467]">
+                        <td className="max-w-[220px] truncate px-4 py-2.5 text-[#475467]">
                           {tx.remark || "-"}
                         </td>
                         <td className="px-4 py-2.5 text-[#8b95a6]">

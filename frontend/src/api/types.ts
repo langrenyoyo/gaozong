@@ -668,6 +668,36 @@ export interface ComputeTransaction {
   agent_id?: string | null;
   conversation_id?: number | null;
   created_at?: string | null;
+  /** Phase 10 §0.2：实际字符量（仅 consume 行有；充值/套餐为 null，不伪造） */
+  actual_tokens?: number | null;
+  /** Phase 10 §0.2：能力 key（历史行可能为 null → 展示"历史未归类"） */
+  capability_key?: string | null;
+  /** Phase 10 §0.2：上浮基点快照（写入时的计费比例） */
+  markup_basis_points?: number | null;
+}
+
+/** Phase 10 §0.2：算力六能力 key（冻结顺序，与后端 COMPUTE_CAPABILITY_KEYS 一致）。 */
+export type ComputeCapabilityKey =
+  | "douyin-cs"
+  | "leads"
+  | "agents"
+  | "wechat-assistant"
+  | "compute"
+  | "knowledge";
+
+/** Phase 10 §0.2：算力上浮比例行（GET /admin/compute/markup-ratios items）。 */
+export interface ComputeMarkupRatio {
+  id: number;
+  capability_key: ComputeCapabilityKey;
+  /** 上浮基点（3300 = 上浮 33%） */
+  markup_basis_points: number;
+  enabled: boolean;
+}
+
+/** Phase 10 §0.2：更新单能力上浮比例（PUT /admin/compute/markup-ratios/{capability_key}）。 */
+export interface ComputeMarkupRatioUpdateRequest {
+  markup_basis_points: number;
+  enabled: boolean;
 }
 
 /** Token 明细分页数据。 */
@@ -733,6 +763,20 @@ export interface ComputeTransactionListResponse {
 export interface ComputePackageListResponse {
   success: boolean;
   data: ComputePackage[];
+  message: string;
+}
+
+/** Phase 10 §0.2：六能力上浮比例列表响应（GET /admin/compute/markup-ratios）。 */
+export interface ComputeMarkupRatioListResponse {
+  success: boolean;
+  data: ComputeMarkupRatio[];
+  message: string;
+}
+
+/** Phase 10 §0.2：单能力上浮比例响应（PUT /admin/compute/markup-ratios/{capability_key}）。 */
+export interface ComputeMarkupRatioResponse {
+  success: boolean;
+  data: ComputeMarkupRatio;
   message: string;
 }
 

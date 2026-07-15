@@ -7,6 +7,11 @@ export type {
 } from "../../api/compute";
 
 export type {
+  ComputeCapabilityKey,
+  ComputeMarkupRatio,
+  ComputeMarkupRatioListResponse,
+  ComputeMarkupRatioResponse,
+  ComputeMarkupRatioUpdateRequest,
   ComputePackage,
   ComputePackageListResponse,
   ComputeRechargeOrder,

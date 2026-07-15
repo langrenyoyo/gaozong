@@ -1,6 +1,7 @@
 export {
   createAdminComputePackage,
   createComputeRechargeOrder,
+  fetchAdminComputeMarkupRatios,
   fetchAdminComputePackages,
   fetchComputePackages,
   fetchComputeSummary,
@@ -8,5 +9,6 @@ export {
   grantMerchantComputePackage,
   rechargeMerchantCompute,
   updateAdminComputePackage,
+  updateAdminComputeMarkupRatio,
 } from "../../api/compute";
 export type * from "./types";

@@ -13,13 +13,17 @@ import {
 } from "lucide-react";
 import {
   createAdminComputePackage,
+  fetchAdminComputeMarkupRatios,
   fetchAdminComputePackages,
   grantMerchantComputePackage,
   rechargeMerchantCompute,
   updateAdminComputePackage,
+  updateAdminComputeMarkupRatio,
 } from "../api";
 import type { ComputePackageCreateRequest } from "../api";
 import type {
+  ComputeCapabilityKey,
+  ComputeMarkupRatio,
   ComputePackage,
   ComputeSummary,
 } from "../types";
@@ -40,6 +44,48 @@ const emptyPackageForm: PackageFormState = {
   token_amount: "",
   enabled: true,
 };
+
+// Phase 10 §0.2：冻结六能力顺序与中文标签（与后端 COMPUTE_CAPABILITY_KEYS 一致）
+const CAPABILITY_ROWS: { key: ComputeCapabilityKey; label: string }[] = [
+  { key: "douyin-cs", label: "抖音客服" },
+  { key: "leads", label: "线索" },
+  { key: "agents", label: "智能体" },
+  { key: "wechat-assistant", label: "微信助手" },
+  { key: "compute", label: "算力" },
+  { key: "knowledge", label: "知识问答" },
+];
+
+/**
+ * Phase 10 §0.2：百分比字符串 → 基点（纯字符串拼接，禁浮点）。
+ * 接受非负整数或最多两位小数："33"→3300，"33.5"→3350，"33.05"→3305。非法返回 null。
+ */
+function percentStringToBasisPoints(input: string): number | null {
+  const trimmed = input.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  const dotIndex = trimmed.indexOf(".");
+  const intPart = dotIndex === -1 ? trimmed : trimmed.slice(0, dotIndex);
+  const fracPart = dotIndex === -1 ? "" : trimmed.slice(dotIndex + 1);
+  const paddedFrac = (fracPart + "00").slice(0, 2);
+  return Number.parseInt(intPart + paddedFrac, 10);
+}
+
+/**
+ * Phase 10 §0.2：基点 → 百分比字符串（整数除法/取模，范围 INTEGER 内无浮点误差）。
+ * 3300→"33"，3350→"33.50"，3305→"33.05"。
+ */
+function basisPointsToPercent(bp: number): string {
+  const intPart = Math.floor(bp / 100);
+  const frac = bp % 100;
+  return frac === 0 ? String(intPart) : `${intPart}.${String(frac).padStart(2, "0")}`;
+}
+
+/** Phase 10 §0.2：单能力上浮比例的编辑态（失败不覆盖原值，保留用户输入）。 */
+interface RatioEditState {
+  percent: string;
+  enabled: boolean;
+  saving: boolean;
+  error: string | null;
+}
 
 function resolveErrorMessage(err: unknown): string {
   if (err && typeof err === "object") {
@@ -113,6 +159,12 @@ export default function SuperComputeConfig() {
   const [grantError, setGrantError] = useState<string | null>(null);
   const [grantResult, setGrantResult] = useState<ComputeSummary | null>(null);
 
+  // Phase 10 §0.2：六能力上浮比例（独立区，不嵌套套餐卡片）
+  const [ratios, setRatios] = useState<ComputeMarkupRatio[]>([]);
+  const [ratioLoading, setRatioLoading] = useState(false);
+  const [ratioError, setRatioError] = useState<string | null>(null);
+  const [ratioEdits, setRatioEdits] = useState<Record<string, RatioEditState>>({});
+
   const selectedGrantPackage = useMemo(
     () => packages.find((pkg) => String(pkg.id) === grantPackageId) || null,
     [packages, grantPackageId],
@@ -139,6 +191,95 @@ export default function SuperComputeConfig() {
   useEffect(() => {
     void loadPackages();
   }, [loadPackages]);
+
+  const loadRatios = useCallback(async () => {
+    setRatioLoading(true);
+    setRatioError(null);
+    try {
+      const response = await fetchAdminComputeMarkupRatios();
+      setRatios(response.data);
+      const edits: Record<string, RatioEditState> = {};
+      for (const r of response.data) {
+        edits[r.capability_key] = {
+          percent: basisPointsToPercent(r.markup_basis_points),
+          enabled: r.enabled,
+          saving: false,
+          error: null,
+        };
+      }
+      setRatioEdits(edits);
+    } catch (err) {
+      const message = resolveErrorMessage(err);
+      setRatios([]);
+      setRatioError(message);
+      toast.error(`上浮比例加载失败：${message}`);
+    } finally {
+      setRatioLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRatios();
+  }, [loadRatios]);
+
+  const handleEditRatioPercent = (key: string, percent: string) => {
+    setRatioEdits((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], percent, error: null },
+    }));
+  };
+
+  const handleEditRatioEnabled = (key: string, enabled: boolean) => {
+    setRatioEdits((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], enabled, error: null },
+    }));
+  };
+
+  const handleSaveRatio = async (key: ComputeCapabilityKey) => {
+    const edit = ratioEdits[key];
+    if (!edit) return;
+    const basisPoints = percentStringToBasisPoints(edit.percent);
+    if (basisPoints === null) {
+      setRatioEdits((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], error: "请输入非负数字，最多两位小数（如 33 或 33.5）。" },
+      }));
+      return;
+    }
+    setRatioEdits((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], saving: true, error: null },
+    }));
+    try {
+      const response = await updateAdminComputeMarkupRatio(key, {
+        markup_basis_points: basisPoints,
+        enabled: edit.enabled,
+      });
+      setRatios((prev) =>
+        prev.map((r) => (r.capability_key === key ? response.data : r)),
+      );
+      // 成功后用后端回显值重置编辑态（失败不覆盖原值，保留用户输入）
+      setRatioEdits((prev) => ({
+        ...prev,
+        [key]: {
+          percent: basisPointsToPercent(response.data.markup_basis_points),
+          enabled: response.data.enabled,
+          saving: false,
+          error: null,
+        },
+      }));
+      const label = CAPABILITY_ROWS.find((r) => r.key === key)?.label || key;
+      toast.success(`${label}上浮比例已保存`);
+    } catch (err) {
+      const message = resolveErrorMessage(err);
+      setRatioEdits((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], saving: false, error: message },
+      }));
+      toast.error(message);
+    }
+  };
 
   const handleEditPackage = (pkg: ComputePackage) => {
     setPackageForm({
@@ -448,6 +589,108 @@ export default function SuperComputeConfig() {
             </section>
           </aside>
         </div>
+
+        {/* Phase 10 §0.2：六能力上浮比例（独立区，不嵌套套餐卡片） */}
+        <section className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
+            <div>
+              <h2 className="text-sm font-bold text-[#1a1f2e]">能力上浮比例</h2>
+              <p className="mt-1 text-[11px] text-[#8b95a6]">
+                来源：GET/PUT /admin/compute/markup-ratios · 权限：算力配置
+              </p>
+            </div>
+            <button
+              onClick={() => void loadRatios()}
+              disabled={ratioLoading}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dbe3ef] bg-white px-3 text-[11px] font-semibold text-[#475467] disabled:opacity-60"
+            >
+              <RefreshCwIcon size={13} className={ratioLoading ? "animate-spin" : ""} />
+              刷新
+            </button>
+          </div>
+
+          {ratioError ? (
+            <div className="flex items-center gap-2 px-4 py-8 text-xs text-red-600">
+              <AlertCircleIcon size={14} />
+              <span>上浮比例加载失败：{ratioError}</span>
+              <button onClick={() => void loadRatios()} className="ml-2 underline">
+                重试
+              </button>
+            </div>
+          ) : ratioLoading && ratios.length === 0 ? (
+            <div className="space-y-2 px-4 py-4">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
+              ))}
+            </div>
+          ) : ratios.length === 0 ? (
+            <div className="grid place-items-center px-4 py-10 text-center">
+              <p className="text-xs text-[#8b95a6]">
+                暂无上浮比例配置（配置漂移请联系管理员重新初始化六能力 seed）。
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#f1f5f9]">
+              {CAPABILITY_ROWS.map((row) => {
+                const edit = ratioEdits[row.key];
+                if (!edit) return null;
+                return (
+                  <div
+                    key={row.key}
+                    className="flex flex-wrap items-center gap-3 px-4 py-3"
+                  >
+                    <span className="w-24 shrink-0 text-xs font-semibold text-[#1a1f2e]">
+                      {row.label}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={edit.percent}
+                        onChange={(event) =>
+                          handleEditRatioPercent(row.key, event.target.value)
+                        }
+                        placeholder="如 33"
+                        className="h-9 w-24 rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
+                      />
+                      <span className="text-xs text-[#8b95a6]">%</span>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[#475467]">
+                      <input
+                        type="checkbox"
+                        checked={edit.enabled}
+                        onChange={(event) =>
+                          handleEditRatioEnabled(row.key, event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-[#cbd5e1]"
+                      />
+                      启用
+                    </label>
+                    {edit.error ? (
+                      <span className="flex items-center gap-1 text-[11px] text-red-500">
+                        <AlertCircleIcon size={12} />
+                        {edit.error}
+                      </span>
+                    ) : null}
+                    <button
+                      onClick={() => void handleSaveRatio(row.key)}
+                      disabled={edit.saving}
+                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563eb] px-3 text-[11px] font-semibold text-white disabled:opacity-60"
+                    >
+                      {edit.saving ? (
+                        <RefreshCwIcon size={12} className="animate-spin" />
+                      ) : (
+                        <SaveIcon size={12} />
+                      )}
+                      {edit.saving ? "保存中" : "保存"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="border-t border-[#e4e8f0] px-4 py-2.5 text-[11px] text-[#8b95a6]">
+            百分比接受非负整数或最多两位小数；转为基点后下发后端，不设产品上限，超技术边界由后端返回错误。
+          </div>
+        </section>
 
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
           <section className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">

@@ -15,7 +15,8 @@
     "admin-autoreply:check": "node scripts/check-admin-autoreply-rollout-page.mjs",
     "newcar-auth:check": "node scripts/check-newcar-admin-entry-logout-route.mjs",
     "newcar-admin:e2e-check": "node scripts/check-newcar-admin-permission-e2e.mjs",
-    "newcar-admin-redirect:check": "node scripts/check-newcar-admin-default-redirect-runtime.mjs"
+    "newcar-admin-redirect:check": "node scripts/check-newcar-admin-default-redirect-runtime.mjs",
+    "phase10-compute:check": "node scripts/check-phase10-compute-contract.mjs"
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.6",

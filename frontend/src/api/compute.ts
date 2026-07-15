@@ -13,6 +13,10 @@
 
 import apiClient from "./client";
 import type {
+  ComputeCapabilityKey,
+  ComputeMarkupRatioListResponse,
+  ComputeMarkupRatioResponse,
+  ComputeMarkupRatioUpdateRequest,
   ComputePackage,
   ComputePackageListResponse,
   ComputeRechargeOrderRequest,
@@ -128,4 +132,26 @@ export async function grantMerchantComputePackage(
   payload: ComputeGrantPackageRequest,
 ): Promise<ComputeSummaryResponse> {
   return apiClient.post(`/admin/merchants/${encodeURIComponent(merchantId)}/compute/grant-package`, payload);
+}
+
+/**
+ * Phase 10 §0.2：读取六能力上浮比例（GET /admin/compute/markup-ratios）。
+ *
+ * 权限：auto_wechat:admin:compute_config / super_admin。前端不持有 internal token，
+ * 不直连 9100/9205，只走 9000 管理路径。
+ */
+export async function fetchAdminComputeMarkupRatios(): Promise<ComputeMarkupRatioListResponse> {
+  return apiClient.get("/admin/compute/markup-ratios");
+}
+
+/**
+ * Phase 10 §0.2：更新单能力上浮比例与启用位（PUT /admin/compute/markup-ratios/{capability_key}）。
+ *
+ * markup_basis_points 由调用方用字符串算法转基点后传入（禁浮点）。超后端技术边界由后端返回稳定错误。
+ */
+export async function updateAdminComputeMarkupRatio(
+  capabilityKey: ComputeCapabilityKey,
+  payload: ComputeMarkupRatioUpdateRequest,
+): Promise<ComputeMarkupRatioResponse> {
+  return apiClient.put(`/admin/compute/markup-ratios/${capabilityKey}`, payload);
 }
