@@ -32,6 +32,9 @@ _DEFAULT_CONCURRENCY = 1
 _TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
 _SKIP_RECOVER_STATUSES = _TERMINAL_STATUSES + ("cancel_requested",)
 
+# FIX1-4：终态回写失败的有界重试上限（recover 时补偿），超过则放弃记日志。
+_MAX_WRITEBACK_ATTEMPTS = 3
+
 
 @dataclass
 class LocalAiEditJob:
@@ -125,6 +128,10 @@ class AiEditSupervisor:
     def _persist_job_state(
         self, key: str, *, status: str, attempt_id: str,
         manifest_path: str = "", merchant_id: str = "", job_id: str = "",
+        execution_token_hash: str | None = None,
+        attempt_count: int | None = None,
+        pending_writeback: bool | None = None,
+        writeback_attempts: int | None = None,
     ) -> None:
         with self._lock:
             existing = self._job_states.get(key, {})
@@ -134,6 +141,20 @@ class AiEditSupervisor:
                 "status": status,
                 "attempt_id": attempt_id,
                 "manifest_path": manifest_path or existing.get("manifest_path", ""),
+                # FIX1-3：持久化回写凭证（令牌+attempt），否则重启后无法回写 9000
+                "execution_token_hash": execution_token_hash
+                    if execution_token_hash is not None
+                    else existing.get("execution_token_hash", ""),
+                "attempt_count": attempt_count
+                    if attempt_count is not None
+                    else existing.get("attempt_count", 0),
+                # FIX1-4：待回写标记 + 重试次数，recover 时补偿重试
+                "pending_writeback": pending_writeback
+                    if pending_writeback is not None
+                    else existing.get("pending_writeback", False),
+                "writeback_attempts": writeback_attempts
+                    if writeback_attempts is not None
+                    else existing.get("writeback_attempts", 0),
             }
             self._save_jobs()
 
@@ -153,6 +174,8 @@ class AiEditSupervisor:
                 key, status="queued", attempt_id=job.attempt_id,
                 manifest_path=job.manifest_path,
                 merchant_id=job.merchant_id, job_id=job.job_id,
+                execution_token_hash=job.execution_token_hash,
+                attempt_count=job.attempt_count,
             )
         if self._auto_start:
             self._ensure_drain_thread()
@@ -182,6 +205,8 @@ class AiEditSupervisor:
                 attempt_id=state.get("attempt_id", ""),
                 manifest_path=state.get("manifest_path", ""),
                 merchant_id=merchant_id, job_id=job_id,
+                execution_token_hash=state.get("execution_token_hash", ""),
+                attempt_count=state.get("attempt_count", 0),
             )
             proc = self._processes.get(key)
         if proc is not None:
@@ -215,8 +240,17 @@ class AiEditSupervisor:
                         key, status="cancelled", attempt_id=job.attempt_id,
                         manifest_path=job.manifest_path,
                         merchant_id=job.merchant_id, job_id=job.job_id,
+                        execution_token_hash=job.execution_token_hash,
+                        attempt_count=job.attempt_count,
+                        pending_writeback=True,
                     )
-                    self._fire_terminal(job, "cancelled")
+                    term_job = LocalAiEditJob(
+                        job_id=job.job_id, attempt_id=job.attempt_id,
+                        manifest_path=job.manifest_path, merchant_id=job.merchant_id,
+                        execution_token_hash=job.execution_token_hash,
+                        attempt_count=job.attempt_count,
+                    )
+                    self._fire_terminal(term_job, "cancelled")
                     continue
                 self._status.running_count += 1
                 self._persist_job_state(
@@ -239,12 +273,24 @@ class AiEditSupervisor:
                 else:
                     final_status = "failed"
                     self._status.failed_count += 1
+                # FIX1-4：终态标记 pending_writeback，on_job_terminal 回写成功后清除；
+                # 回写失败则 recover 时补偿重试（有界），避免 19000 succeeded/9000 queued 永久分叉。
                 self._persist_job_state(
                     key, status=final_status, attempt_id=job.attempt_id,
                     manifest_path=job.manifest_path,
                     merchant_id=job.merchant_id, job_id=job.job_id,
+                    execution_token_hash=job.execution_token_hash,
+                    attempt_count=job.attempt_count,
+                    pending_writeback=True,
                 )
-                self._fire_terminal(job, final_status)
+                # 终态任务把令牌带给 on_job_terminal 回调（回写 9000 用）
+                term_job = LocalAiEditJob(
+                    job_id=job.job_id, attempt_id=job.attempt_id,
+                    manifest_path=job.manifest_path, merchant_id=job.merchant_id,
+                    execution_token_hash=job.execution_token_hash,
+                    attempt_count=job.attempt_count,
+                )
+            self._fire_terminal(term_job, final_status)
 
     def _fire_terminal(self, job: LocalAiEditJob, status: str) -> None:
         """触发终态回调（释放活动素材引用等）。异常隔离不影响主流程。"""
@@ -274,17 +320,49 @@ class AiEditSupervisor:
             self._processes[_task_key(merchant_id, job_id)] = process
 
     def recover(self) -> int:
-        """重启恢复：跳过终态与 cancel_requested，重新入队 running/queued。"""
+        """重启恢复：跳过终态与 cancel_requested，重新入队 running/queued。
+
+        FIX1-3：恢复 execution_token_hash + attempt_count 到 LocalAiEditJob（否则回写缺凭证）。
+        FIX1-4：对终态但 pending_writeback=True 的任务，触发 on_job_terminal 补偿回写
+        （有界 _MAX_WRITEBACK_ATTEMPTS 次），避免 19000 succeeded/9000 queued 永久分叉。
+        """
         recovered = 0
+        pending: list[tuple[LocalAiEditJob, str]] = []
         with self._lock:
             for key, state in list(self._job_states.items()):
                 if state.get("status") in _SKIP_RECOVER_STATUSES:
+                    # 终态但待回写：补偿重试（有界）
+                    if state.get("pending_writeback") and state.get("execution_token_hash"):
+                        attempts = int(state.get("writeback_attempts", 0) or 0)
+                        if attempts < _MAX_WRITEBACK_ATTEMPTS:
+                            job = LocalAiEditJob(
+                                job_id=state.get("job_id", ""),
+                                attempt_id=state.get("attempt_id", ""),
+                                manifest_path=state.get("manifest_path", ""),
+                                merchant_id=state.get("merchant_id", ""),
+                                execution_token_hash=state.get("execution_token_hash", ""),
+                                attempt_count=int(state.get("attempt_count", 0) or 0),
+                            )
+                            pending.append((job, state.get("status", "failed")))
+                            self._persist_job_state(
+                                key, status=state.get("status", ""),
+                                attempt_id=state.get("attempt_id", ""),
+                                manifest_path=state.get("manifest_path", ""),
+                                merchant_id=state.get("merchant_id", ""),
+                                job_id=state.get("job_id", ""),
+                                execution_token_hash=state.get("execution_token_hash", ""),
+                                attempt_count=int(state.get("attempt_count", 0) or 0),
+                                pending_writeback=True,
+                                writeback_attempts=attempts + 1,
+                            )
                     continue
                 job = LocalAiEditJob(
                     job_id=state.get("job_id", ""),
                     attempt_id=state.get("attempt_id", ""),
                     manifest_path=state.get("manifest_path", ""),
                     merchant_id=state.get("merchant_id", ""),
+                    execution_token_hash=state.get("execution_token_hash", ""),
+                    attempt_count=int(state.get("attempt_count", 0) or 0),
                 )
                 self._queue.append(job)
                 self._status.total_enqueued += 1
@@ -292,6 +370,9 @@ class AiEditSupervisor:
                 recovered += 1
         if recovered and self._auto_start:
             self._ensure_drain_thread()
+        # 补偿待回写（锁外触发回调，避免持锁调 HTTP）
+        for job, status in pending:
+            self._fire_terminal(job, status)
         return recovered
 
     def get_job_state(self, *, merchant_id: str, job_id: str) -> dict | None:
@@ -358,3 +439,61 @@ class AiEditSupervisor:
                 merchant_id=merchant_id, job_id=job_id,
             )
             return True
+
+    def clear_pending_writeback(self, *, merchant_id: str, job_id: str) -> bool:
+        """on_job_terminal 回写 9000 成功后清除待回写标记（FIX1-4）。"""
+        with self._lock:
+            key = _task_key(merchant_id, job_id)
+            state = self._job_states.get(key)
+            if state is None or state.get("merchant_id") != merchant_id:
+                return False
+            self._persist_job_state(
+                key, status=state.get("status", ""),
+                attempt_id=state.get("attempt_id", ""),
+                manifest_path=state.get("manifest_path", ""),
+                merchant_id=merchant_id, job_id=job_id,
+                execution_token_hash=state.get("execution_token_hash", ""),
+                attempt_count=state.get("attempt_count", 0),
+                pending_writeback=False,
+            )
+            return True
+
+    def requeue(
+        self, *, merchant_id: str, job_id: str, attempt_id: str,
+        execution_token_hash: str, attempt_count: int,
+    ) -> bool:
+        """重试重新入队：校验任务存在且非运行中，更新令牌/attempt/状态后重新排队。
+
+        FIX1：19000 retry 唯一入口——9000 已轮换令牌，这里把新令牌写回持久化状态再入队，
+        使 on_job_terminal 终态回写能用新令牌命中 9000 当前 attempt。
+        """
+        with self._lock:
+            key = _task_key(merchant_id, job_id)
+            state = self._job_states.get(key)
+            if state is None or state.get("merchant_id") != merchant_id:
+                return False
+            if state.get("status") == "running":
+                return False  # 运行中不可重试
+            # 取消标记清除（重试覆盖取消）
+            self._cancelled.discard(key)
+            job = LocalAiEditJob(
+                job_id=job_id, attempt_id=attempt_id,
+                manifest_path=state.get("manifest_path", ""),
+                merchant_id=merchant_id,
+                execution_token_hash=execution_token_hash,
+                attempt_count=attempt_count,
+            )
+            self._queue.append(job)
+            self._status.total_enqueued += 1
+            self._status.queued_count += 1
+            self._persist_job_state(
+                key, status="queued", attempt_id=attempt_id,
+                manifest_path=state.get("manifest_path", ""),
+                merchant_id=merchant_id, job_id=job_id,
+                execution_token_hash=execution_token_hash,
+                attempt_count=attempt_count,
+                pending_writeback=False, writeback_attempts=0,
+            )
+        if self._auto_start:
+            self._ensure_drain_thread()
+        return True

@@ -119,6 +119,15 @@ export async function cancelLocalJob(jobId: string): Promise<{ job_id: string; s
   });
 }
 
+/** 重试任务（19000 协调：调 9000 agent-retry 推进 attempt + 重新入队）。 */
+export async function retryLocalJob(
+  jobId: string,
+): Promise<{ job_id: string; status: string; attempt_count: number }> {
+  return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+  });
+}
+
 /** 查询任务状态（商户隔离）。 */
 export async function fetchLocalJob(jobId: string): Promise<Record<string, unknown>> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });

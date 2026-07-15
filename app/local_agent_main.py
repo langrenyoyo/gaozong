@@ -2828,6 +2828,13 @@ def create_local_agent_app(
                         raise RuntimeError(f"agent_create_failed:{resp.get('status')}")
                     return resp["json"]["data"]
 
+                def agent_retry_job(self, *, merchant_id, job_id):
+                    url = f"{server_url.rstrip('/')}/ai-edit/jobs/{job_id}/agent-retry"
+                    resp = _http_post_json(url, {})
+                    if not resp.get("ok"):
+                        raise RuntimeError(f"agent_retry_failed:{resp.get('status')}")
+                    return resp["json"]["data"]
+
                 def update_job_status(self, *, merchant_id, job_id, execution_token_hash,
                                       attempt_count, status, stage=None, progress=None,
                                       failure_code=None, error_summary=None):
@@ -2848,6 +2855,35 @@ def create_local_agent_app(
                     if not resp.get("ok"):
                         raise RuntimeError(f"status_writeback_failed:{resp.get('status')}")
                     return resp["json"]["data"]
+
+                def register_material(self, *, merchant_id, material_id, media_type,
+                                      source_sha256, agent_client_id=None):
+                    url = f"{server_url.rstrip('/')}/ai-edit/materials"
+                    resp = _http_post_json(url, {
+                        "material_id": material_id, "media_type": media_type,
+                        "source_sha256": source_sha256,
+                        "agent_client_id": agent_client_id or "local-agent",
+                    })
+                    if not resp.get("ok"):
+                        raise RuntimeError(f"register_material_failed:{resp.get('status')}")
+                    return resp["json"]["data"]
+
+                def delete_material(self, *, merchant_id, material_id):
+                    url = f"{server_url.rstrip('/')}/ai-edit/materials/agent/{material_id}"
+                    # _http_post_json 只支持 POST；用 urllib 直接 DELETE
+                    import urllib.request as _ur
+                    from urllib.error import HTTPError as _HE
+                    token = _get_local_agent_token()
+                    if not token:
+                        raise RuntimeError("LOCAL_AGENT_TOKEN 未配置")
+                    req = _ur.Request(url, method="DELETE",
+                                      headers={"X-Local-Agent-Token": token})
+                    try:
+                        with _ur.urlopen(req, timeout=10) as r:
+                            import json as _j
+                            return _j.loads(r.read().decode("utf-8") or "{}")
+                    except _HE as exc:
+                        raise RuntimeError(f"delete_material_failed:{exc.code}") from exc
 
             nine000_client = _Nine000HttpClient()
 
@@ -2940,7 +2976,11 @@ def create_local_agent_app(
                         stage="completed" if status == "succeeded" else status,
                         progress=100 if status == "succeeded" else None,
                     )
-                except Exception as exc:  # noqa: BLE001
+                    # FIX1-4：回写成功清除待回写标记（recover 不再补偿该任务）
+                    ai_edit_supervisor.clear_pending_writeback(
+                        merchant_id=job.merchant_id, job_id=job.job_id,
+                    )
+                except Exception as exc:  # noqa: BLE001  回写失败保留 pending，recover 补偿
                     logger.warning("ai_edit on_job_terminal stage=writeback_error job_id=%s error=%s",
                                    job.job_id, exc)
 

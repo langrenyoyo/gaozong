@@ -203,7 +203,11 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
     deps = _stub_pipeline_deps()
 
     class _DirectNine000Client:
-        """替身 9000 client：直调 9000 TestClient（无 HTTP，不算外部网络）。"""
+        """替身 9000 client：直调 9000 TestClient（无 HTTP，不算外部网络）。
+
+        真实前端调用顺序：19000 导入→register_material；19000 创建→agent_create_job；
+        19000 重试→agent_retry_job；终态→update_job_status；19000 删除→delete_material。
+        """
 
         def agent_create_job(self, *, merchant_id, job_id, template_key, materials):
             resp = c9.post(
@@ -212,6 +216,14 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
                 json={"job_id": job_id, "template_key": template_key, "materials": materials},
             )
             assert resp.status_code in (200, 201), f"agent-create: {resp.status_code} {resp.text}"
+            return resp.json()["data"]
+
+        def agent_retry_job(self, *, merchant_id, job_id):
+            resp = c9.post(
+                f"/ai-edit/jobs/{job_id}/agent-retry",
+                headers={"X-Local-Agent-Token": token}, json={},
+            )
+            assert resp.status_code in (200, 201), f"agent-retry: {resp.status_code} {resp.text}"
             return resp.json()["data"]
 
         def update_job_status(self, *, merchant_id, job_id, execution_token_hash,
@@ -236,6 +248,26 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
             assert resp.status_code in (200, 201), f"status writeback: {resp.status_code} {resp.text}"
             return resp.json()["data"]
 
+        def register_material(self, *, merchant_id, material_id, media_type,
+                              source_sha256, agent_client_id=None):
+            resp = c9.post(
+                "/ai-edit/materials",
+                headers={"X-Local-Agent-Token": token},
+                json={"material_id": material_id, "media_type": media_type,
+                      "source_sha256": source_sha256,
+                      "agent_client_id": agent_client_id or "local-agent"},
+            )
+            assert resp.status_code in (200, 201), f"register_material: {resp.status_code} {resp.text}"
+            return resp.json()["data"]
+
+        def delete_material(self, *, merchant_id, material_id):
+            resp = c9.delete(
+                f"/ai-edit/materials/agent/{material_id}",
+                headers={"X-Local-Agent-Token": token},
+            )
+            assert resp.status_code in (200, 204), f"delete_material: {resp.status_code} {resp.text}"
+            return resp.json().get("data", {}) if resp.status_code == 200 else {}
+
     nine000_client = _DirectNine000Client()
 
     def _executor(job):
@@ -246,7 +278,7 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
         return {"status": result.status, "failure_code": getattr(result, "failure_code", None)}
 
     def _on_terminal(job, status):
-        # §5：用 agent-create 下发的令牌回写 9000 终态
+        # §5：用 agent-create 下发的令牌回写 9000 终态；成功后清除待回写标记
         if job.execution_token_hash:
             nine000_client.update_job_status(
                 merchant_id=job.merchant_id, job_id=job.job_id,
@@ -255,6 +287,7 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
                 stage="completed" if status == "succeeded" else status,
                 progress=100 if status == "succeeded" else None,
             )
+            sup.clear_pending_writeback(merchant_id=job.merchant_id, job_id=job.job_id)
 
     sup = AiEditSupervisor(
         work_root=work_root, executor=_executor, on_job_terminal=_on_terminal,
@@ -283,26 +316,6 @@ def _import_19000(client, *, material_id="mat-1", content=_SYNTHETIC_BYTES, toke
     )
 
 
-def _register_9000(client, *, material_id="mat-1", sha=None, token="tok-1"):
-    return client.post(
-        "/ai-edit/materials",
-        headers={"X-Local-Agent-Token": token},
-        json={
-            "material_id": material_id, "media_type": "video",
-            "source_sha256": sha or _synthetic_sha(), "agent_client_id": "agent-x",
-        },
-    )
-
-
-def _create_job_9000(client, *, job_id="job-1", material_id="mat-1", sha=None):
-    return client.post("/ai-edit/jobs", json={
-        "job_id": job_id, "template_key": "tpl",
-        "materials": [{"material_id": material_id, "role": "main", "position": 0,
-                       "pinned_sha256": sha or _synthetic_sha(),
-                       "source_start": 0.0, "source_end": 10.0}],
-    })
-
-
 @pytest.fixture(autouse=True)
 def _silence_compute_report(monkeypatch):
     """9100 plan 成功后 _report_usage 会调 ComputeUsageClient（网络）；替身为 no-op。"""
@@ -319,20 +332,24 @@ def _silence_compute_report(monkeypatch):
 
 
 def test_e2e_full_chain_writes_back_9000_status(tmp_path):
-    """9000 注册素材 -> 19000 导入/创建(经 9000 agent-create 领令牌) -> Worker(pipeline+9100替身)
-    -> 19000 终态回写 9000 -> 9000 GET 状态 = succeeded。
+    """真实前端顺序：19000 导入(同步 9000 元数据) -> 19000 创建(经 9000 agent-create 领令牌)
+    -> Worker(pipeline+9100替身) -> 19000 终态回写 9000 -> 9000 GET 状态 = succeeded。
 
-    绿线条件：19000 on_job_terminal 用 agent-create 下发的令牌回写 9000 status。
+    绿线条件：19000 on_job_terminal 用 agent-create 下发的令牌回写 9000 status；
+    且 19000 导入同步 9000 元数据（9000 列表出现素材）。
     """
     sha = _synthetic_sha()
     c9 = _build_9000()
     c19, sup = _build_19000(tmp_path, c9)
 
-    # 1. 9000 注册素材（token→m1，sha=本机哈希）
-    assert _register_9000(c9, sha=sha).status_code in (200, 201)
-
-    # 2. 19000 导入同一字节素材（哈希一致）
+    # 1. 19000 导入素材（内部调 9000 register_material 同步元数据；前端顺序唯一入口）
     assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+
+    # 2. 9000 列表已出现该素材（导入同步 9000 元数据，工作台可选）
+    mats = c9.get("/ai-edit/materials").json()["data"]["items"]
+    assert any(m["material_id"] == "mat-1" and m["source_sha256"] == sha for m in mats), (
+        "19000 导入未同步 9000 元数据，工作台无法选择素材"
+    )
 
     # 3. 19000 创建本机任务：内部调 9000 agent-create 领令牌 + 写 manifest + 入队
     resp = c19.post(
@@ -360,12 +377,10 @@ def test_e2e_full_chain_writes_back_9000_status(tmp_path):
 
 
 def test_e2e_cancel_writes_back_cancelled(tmp_path):
-    """取消链路：19000 create -> cancel -> drain -> 9000 状态回写为 cancelled。"""
-    sha = _synthetic_sha()
+    """取消链路：19000 导入 -> 创建 -> cancel -> drain -> 9000 状态回写为 cancelled。"""
     c9 = _build_9000()
     c19, sup = _build_19000(tmp_path, c9)
 
-    assert _register_9000(c9, sha=sha).status_code in (200, 201)
     assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
     assert c19.post(
         "/agent/ai-edit/jobs",
@@ -386,12 +401,10 @@ def test_e2e_cancel_writes_back_cancelled(tmp_path):
 
 
 def test_e2e_stale_attempt_writeback_rejected(tmp_path):
-    """旧 attempt 回写被拒：9000 retry 推进令牌后，19000 用旧令牌回写 -> 409 STALE_ATTEMPT_TOKEN。"""
-    sha = _synthetic_sha()
+    """旧 attempt 回写被拒：9000 agent-retry 推进令牌后，19000 用旧令牌回写 -> 409 STALE_ATTEMPT_TOKEN。"""
     c9 = _build_9000()
     c19, sup = _build_19000(tmp_path, c9)
 
-    assert _register_9000(c9, sha=sha).status_code in (200, 201)
     assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
     assert c19.post(
         "/agent/ai-edit/jobs",
@@ -400,9 +413,11 @@ def test_e2e_stale_attempt_writeback_rejected(tmp_path):
               "materials": [{"material_id": "mat-1", "role": "main"}]},
     ).status_code in (200, 201)
 
-    # 9000 retry：attempt 0→1，令牌轮换；旧令牌回写必须 409
+    # 9000 agent-retry：attempt 0→1，令牌轮换；旧令牌回写必须 409
     old_token, old_attempt = _job_token("job-1")
-    assert c9.post("/ai-edit/jobs/job-1/retry").status_code == 200
+    retry_resp = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                         headers={"X-Local-Agent-Token": "tok-1"}, json={})
+    assert retry_resp.status_code == 200
     resp = c9.post(
         "/ai-edit/jobs/job-1/status",
         headers={"X-Local-Agent-Token": "tok-1"},
@@ -411,3 +426,114 @@ def test_e2e_stale_attempt_writeback_rejected(tmp_path):
     )
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "STALE_ATTEMPT_TOKEN"
+
+
+def test_e2e_retry_via_19000_requeues_with_new_token(tmp_path):
+    """重试真实流程：19000 retry 调 9000 agent-retry 推进 attempt + 重新入队 + 用新令牌回写。"""
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+    assert c9.get("/ai-edit/jobs/job-1").json()["data"]["status"] == "succeeded"
+
+    # 重试：19000 调 9000 agent-retry（attempt 0→1，令牌轮换）+ 重新入队
+    retry = c19.post("/agent/ai-edit/jobs/job-1/retry",
+                     headers={"X-Local-Agent-Token": "tok-1"})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["data"]["attempt_count"] == 1
+    # 重新入队后 drain，用新令牌回写 succeeded（attempt=1）
+    sup.drain()
+    detail = c9.get("/ai-edit/jobs/job-1").json()["data"]
+    assert detail["status"] == "succeeded"
+    assert detail["attempt_count"] == 1
+
+
+def test_e2e_restart_recovers_writeback_token(tmp_path):
+    """重启恢复：终态任务持久化了令牌，重启后 recover 恢复令牌（不丢失回写凭证）。"""
+    from app.local_agent_ai_edit_supervisor import AiEditSupervisor
+
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+
+    # 模拟重启：新建 supervisor 复用同一 work_root（jobs.json 已持久化令牌）
+    sup2 = AiEditSupervisor(
+        work_root=sup.work_root, executor=lambda j: {"status": "succeeded"},
+        on_job_terminal=lambda j, s: None,
+    )
+    state = sup2.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state is not None, "重启后应恢复任务状态"
+    assert state["execution_token_hash"], "重启后应恢复执行令牌（FIX1-3）"
+    assert state["attempt_count"] == 0
+
+
+def test_e2e_writeback_failure_recover_compensates(tmp_path):
+    """Must-Fix 4：终态回写失败（9000 不可用）→ 本地已终态 → 重启 recover 补偿重试回写。
+
+    构造一个 on_job_terminal 回写抛错（模拟 9000 不可用），本地终态落库但 pending_writeback=True；
+    重启后 recover 触发 on_job_terminal 补偿，第二次回写成功 → 9000 状态终态一致。
+    """
+    from app.local_agent_ai_edit_supervisor import AiEditSupervisor
+
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+
+    # 第一次 drain：on_job_terminal 回写成功（_on_terminal 调 clear_pending）
+    sup.drain()
+    state = sup.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state["status"] == "succeeded"
+    assert state["pending_writeback"] is False, "回写成功后应清除 pending（FIX1-4）"
+
+    # 构造回写失败的终态任务（直接写持久化状态模拟回写失败场景）
+    key = "m1/job-1"
+    token = state["execution_token_hash"]
+    attempt = state["attempt_count"]
+    sup._persist_job_state(
+        key, status="failed", attempt_id=state["attempt_id"],
+        manifest_path=state["manifest_path"], merchant_id="m1", job_id="job-1",
+        execution_token_hash=token, attempt_count=attempt,
+        pending_writeback=True, writeback_attempts=0,
+    )
+
+    # 重启：on_job_terminal 用能成功的 client 补偿回写
+    call_log: list[str] = []
+
+    def _compensate(job, status):
+        call_log.append(status)
+        # 补偿回写 9000（用持久化的令牌）
+        c9.post(
+            "/ai-edit/jobs/job-1/status",
+            headers={"X-Local-Agent-Token": "tok-1"},
+            json={"execution_token_hash": job.execution_token_hash,
+                  "attempt_count": job.attempt_count, "status": status},
+        )
+
+    sup2 = AiEditSupervisor(
+        work_root=sup.work_root, executor=lambda j: {"status": "succeeded"},
+        on_job_terminal=_compensate,
+    )
+    sup2.recover()
+    assert call_log == ["failed"], f"recover 应补偿触发 on_job_terminal，实际 {call_log}"
+    # 9000 状态已被补偿回写为 failed
+    assert c9.get("/ai-edit/jobs/job-1").json()["data"]["status"] == "failed"

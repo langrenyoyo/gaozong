@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -24,16 +25,23 @@ from app.local_agent_ai_edit_storage import (
 )
 from app.local_agent_ai_edit_supervisor import AiEditSupervisor, LocalAiEditJob
 
+logger = logging.getLogger(__name__)
+
 
 class Nine000ControlClient(Protocol):
-    """9000 控制面客户端协议（§5：19000 下发令牌 + 终态回写）。
+    """9000 控制面客户端协议（§5：19000 下发令牌 + 终态回写 + 元数据同步）。
 
     生产实现为 HTTP 客户端（调 9000 base_url）；e2e 注入替身直调 TestClient。
+    唯一创建/删除/重试顺序由 19000 协调：前端→19000→9000，禁止双创建。
     """
 
     def agent_create_job(
         self, *, merchant_id: str, job_id: str, template_key: str, materials: list
     ) -> dict: ...
+
+    def agent_retry_job(self, *, merchant_id: str, job_id: str) -> dict:
+        """重试：9000 推进 attempt + 轮换令牌，返回新 execution_token_hash + attempt_count。"""
+        ...
 
     def update_job_status(
         self, *, merchant_id: str, job_id: str, execution_token_hash: str,
@@ -41,6 +49,17 @@ class Nine000ControlClient(Protocol):
         progress: int | None = None, failure_code: str | None = None,
         error_summary: str | None = None,
     ) -> dict: ...
+
+    def register_material(
+        self, *, merchant_id: str, material_id: str, media_type: str,
+        source_sha256: str, agent_client_id: str | None = None,
+    ) -> dict:
+        """19000 导入素材后同步 9000 元数据（token 鉴权，与本地文件原子一致）。"""
+        ...
+
+    def delete_material(self, *, merchant_id: str, material_id: str) -> dict:
+        """19000 删除素材后同步 9000 软删（7 天回收站，与本地一致）。"""
+        ...
 
 
 def _ok(data) -> dict:
@@ -151,6 +170,17 @@ def create_ai_edit_router(
             status_code = 422 if code in ("INVALID_MATERIAL_ID", "SIZE_MISMATCH", "INVALID_MERCHANT_ID") else 400
             raise HTTPException(status_code=status_code,
                                 detail={"code": code, "message": "素材导入失败"})
+        # 同步 9000 元数据（本地文件已落盘，登记到 9000 才能在剪辑工作台选择）
+        if nine000_client is not None:
+            try:
+                nine000_client.register_material(
+                    merchant_id=ctx.merchant_id, material_id=record.material_id,
+                    media_type="video", source_sha256=record.sha256,
+                    agent_client_id="local-agent",
+                )
+            except Exception as exc:  # noqa: BLE001  9000 同步失败不回滚本地文件（本地为真源）
+                logger.warning("ai_edit import stage=meta_sync_error material_id=%s error=%s",
+                               record.material_id, exc)
         return _ok({
             "material_id": record.material_id,
             "relative_path": record.relative_path,
@@ -206,6 +236,17 @@ def create_ai_edit_router(
                 os.unlink(tmp)
             except OSError:
                 pass
+        # 同步 9000 元数据（与 import 一致）
+        if nine000_client is not None:
+            try:
+                nine000_client.register_material(
+                    merchant_id=ctx.merchant_id, material_id=record.material_id,
+                    media_type="video", source_sha256=record.sha256,
+                    agent_client_id="local-agent",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ai_edit import_stream stage=meta_sync_error material_id=%s error=%s",
+                               record.material_id, exc)
         return _ok({
             "material_id": record.material_id,
             "relative_path": record.relative_path,
@@ -230,6 +271,15 @@ def create_ai_edit_router(
             if code == "MATERIAL_IN_USE_ACTIVE_JOB":
                 raise HTTPException(status_code=409, detail={"code": code, "message": "素材被活动任务引用"})
             raise HTTPException(status_code=400, detail={"code": code, "message": "删除失败"})
+        # 同步 9000 软删（与本地回收站一致；失败只记日志，本地已删为真源）
+        if nine000_client is not None:
+            try:
+                nine000_client.delete_material(
+                    merchant_id=ctx.merchant_id, material_id=material_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ai_edit delete stage=meta_sync_error material_id=%s error=%s",
+                               material_id, exc)
         return _ok({"material_id": record.material_id, "deleted_at": record.deleted_at.isoformat()})
 
     @router.post("/jobs")
@@ -366,6 +416,47 @@ def create_ai_edit_router(
         if not accepted:
             raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在或不可取消"})
         return _ok({"job_id": job_id, "status": "cancel_requested"})
+
+    @router.post("/jobs/{job_id}/retry")
+    def retry_job(
+        job_id: str,
+        ctx: LocalAgentAuthContext = Depends(require_local_agent_context),
+    ):
+        """重试：19000 协调——调 9000 agent-retry 推进 attempt+轮换令牌，再重新入队。
+
+        唯一重试顺序：前端→19000 retry→9000 agent-retry；禁止前端直调 9000 /retry
+        再触发 19000，否则令牌分叉（9000 已轮换、19000 持旧令牌无法回写）。
+        """
+        if not ctx.merchant_id:
+            raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
+        if not _is_safe_segment(job_id):
+            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND"})
+        state = supervisor.get_job_state(merchant_id=ctx.merchant_id, job_id=job_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
+        if nine000_client is None:
+            raise HTTPException(status_code=503, detail={"code": "NINE000_NOT_CONFIGURED", "message": "9000 未配置"})
+        try:
+            retried = nine000_client.agent_retry_job(
+                merchant_id=ctx.merchant_id, job_id=job_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "NINE000_AGENT_RETRY_FAILED", "message": "9000 重试失败"},
+            ) from exc
+        new_token = str(retried.get("execution_token_hash", ""))
+        new_attempt = int(retried.get("attempt_count", 0))
+        new_attempt_id = f"att-{job_id}-{new_attempt}"
+        # 重新入队（supervisor.requeue 更新令牌/attempt/状态并重新排队）
+        requeued = supervisor.requeue(
+            merchant_id=ctx.merchant_id, job_id=job_id,
+            attempt_id=new_attempt_id, execution_token_hash=new_token,
+            attempt_count=new_attempt,
+        )
+        if not requeued:
+            raise HTTPException(status_code=409, detail={"code": "JOB_NOT_RETRYABLE", "message": "任务不可重试（可能仍在运行）"})
+        return _ok({"job_id": job_id, "status": "queued", "attempt_count": new_attempt})
 
     @router.get("/jobs/{job_id}")
     def get_job(

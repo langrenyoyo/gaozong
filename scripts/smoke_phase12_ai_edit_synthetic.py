@@ -1,17 +1,18 @@
-"""Phase 12 Task 10 合成媒体 smoke。
+"""Phase 12 Task 10 替身媒体合同 smoke。
 
 执行包：docs/superpowers/plans/2026-07-15-phase12-ai-edit-local-mvp-execution-package.md Task 10 Step 3。
 
 用法：python scripts/smoke_phase12_ai_edit_synthetic.py --output <dir>
 
-验证（设计 §15.2 媒体强门）：
+验证（设计 §15.2 媒体强门，用替身而非真实媒体处理）：
 - 原素材 SHA-256 不变；
 - 720P/1080P 产物存在且可探测（替身 probe，CI 无真实 ffmpeg）；
 - 音频存在；
 - 输出只写 smoke 目录（不越界）。
 
-替身：合成媒体字节 + 假 ffmpeg runner（写非空产物）+ 假 ffprobe（返回 1080p has_audio）
-+ 9100 plan_ai_edit 替身 LLM。不执行真实 FFmpeg/模型/网络。
+替身（非真实合成媒体）：合成字节占位 + 假 ffmpeg runner（写非空产物）+ 假 ffprobe（返回 1080p
+has_audio）+ 9100 plan_ai_edit 替身 LLM。本 smoke 验证 pipeline 阶段机/路径强门/产物合同的
+正确性，不验证真实 ffmpeg 编解码、真实媒体探测或真实模型——那些留 Phase 13 后宝塔联调。
 """
 
 from __future__ import annotations
@@ -163,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {f}")
         return 1
 
-    print("PASS: Phase 12 AI 剪辑合成媒体 smoke 通过")
+    print("PASS: Phase 12 AI 剪辑替身媒体合同 smoke 通过")
     print(f"  原素材哈希不变：{original_sha[:12]}…")
     print(f"  720P 预览：{preview.relative_to(smoke_root)}（{preview.stat().st_size} 字节）")
     print(f"  1080P 成片：{final.relative_to(smoke_root)}（{final.stat().st_size} 字节）")

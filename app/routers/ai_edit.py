@@ -190,6 +190,30 @@ def delete_material(
     return _ok(svc.to_material_out(material).model_dump())
 
 
+@router.delete("/materials/agent/{material_id}")
+def agent_delete_material(
+    material_id: str,
+    db: Session = Depends(get_db),
+    agent: LocalAgentAuthContext = Depends(require_local_agent_context),
+):
+    """19000 Local Agent 软删素材（与本地文件删除同步，token→merchant 映射）。"""
+    if not agent.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "LOCAL_AGENT_NO_MERCHANT", "message": "Local Agent token 未映射商户"},
+        )
+    try:
+        material = svc.soft_delete_material(db, material_id=material_id, merchant_id=agent.merchant_id)
+    except svc.AiEditNotFound:
+        raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND", "message": "素材不存在"})
+    except svc.AiEditPlatformReadOnly:
+        raise HTTPException(status_code=403, detail={"code": "PLATFORM_MATERIAL_READ_ONLY", "message": "平台素材只读"})
+    except svc.AiEditMaterialInUse:
+        raise HTTPException(status_code=409, detail={"code": "MATERIAL_REFERENCED_BY_ACTIVE_JOB", "message": "素材被活动任务引用"})
+    db.commit()
+    return _ok(svc.to_material_out(material).model_dump())
+
+
 # ---------------------------------------------------------------------------
 # 任务
 # ---------------------------------------------------------------------------
@@ -313,6 +337,34 @@ def agent_create_job(
         raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND", "message": "素材不存在"})
     except svc.AiEditStatusConflict as exc:
         raise HTTPException(status_code=409, detail={"code": "JOB_CONFLICT", "message": str(exc)})
+    db.commit()
+    return _ok({
+        **svc.to_job_out(job).model_dump(),
+        "execution_token_hash": job.execution_token_hash,
+        "attempt_count": job.attempt_count,
+    })
+
+
+@router.post("/jobs/{job_id}/agent-retry")
+def agent_retry_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    agent: LocalAgentAuthContext = Depends(require_local_agent_context),
+):
+    """19000 Local Agent 重试任务：推进 attempt + 轮换令牌，返回新令牌供回写。
+
+    唯一重试顺序：前端→19000→9000 agent-retry；禁止前端直接调 9000 /retry 再调 19000
+    造成令牌分叉。retry_job 复用既有逻辑（attempt+1、令牌轮换、清失败码）。
+    """
+    if not agent.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "LOCAL_AGENT_NO_MERCHANT", "message": "Local Agent token 未映射商户"},
+        )
+    try:
+        job = svc.retry_job(db, job_id=job_id, merchant_id=agent.merchant_id)
+    except svc.AiEditNotFound:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
     db.commit()
     return _ok({
         **svc.to_job_out(job).model_dump(),

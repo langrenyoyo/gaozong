@@ -52,8 +52,8 @@ function routeMock(route) {
 }
 
 const CASES = [
-  { path: '/ai-edit/materials', expect: '小高素材库', name: 'materials' },
-  { path: '/ai-edit/editor', expect: 'AI 小高剪辑工作台', name: 'editor' },
+  { path: '/ai-edit/materials', expect: 'AI小高剪辑', name: 'materials' },
+  { path: '/ai-edit/editor', expect: 'AI小高剪辑', name: 'editor' },
 ];
 const VIEWPORTS = [
   { label: 'desktop', width: 1280, height: 800 },

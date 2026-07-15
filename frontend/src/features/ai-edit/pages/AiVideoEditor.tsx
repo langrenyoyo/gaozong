@@ -1,10 +1,11 @@
-// Phase 12 Task 9 AI 小高剪辑工作台（轻量）。
-// 冻结设计：docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md §6/§11。
+// Phase 12 Task 9 AI小高剪辑工作台（轻量）。
+// 冻结设计：docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md §5/§6/§11。
 //
-// 真实链路：模板/素材来自 9000（fetchAiEditTemplates/fetchAiEditMaterials），任务创建/查询/取消/重试
-// 走 9000（createAiEditJob/fetchAiEditJob/cancelAiEditJob/retryAiEditJob，9000 注入 merchant_id）。
-// 任务真实执行由 Local Agent Worker 完成；前端只展示真实状态，不引入假任务、假统计。
-// 过审入口已 CANCELLED_BY_CUSTOMER，本页不出现。
+// 唯一流程（Task 10-FIX1 冻结）：模板/素材来自 9000（fetchAiEditTemplates/fetchAiEditMaterials）；
+// 任务创建/取消/重试走 19000（createLocalJob/cancelLocalJob/retryLocalJob），19000 内部调 9000
+// agent-create/agent-retry 登记 + 启动/取消/重入队 Worker；任务状态查询走 9000（fetchAiEditJob，
+// 9000 为权威状态源，19000 终态回写）。不直接调 9000 /jobs 创建，否则 19000 agent-create 冲突。
+// 不引入假任务、假统计。过审入口已 CANCELLED_BY_CUSTOMER，本页不出现。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -20,33 +21,25 @@ import {
   UploadIcon,
 } from "lucide-react";
 import {
-  cancelAiEditJob,
-  createAiEditJob,
   fetchAiEditJob,
   fetchAiEditMaterials,
   fetchAiEditTemplates,
-  retryAiEditJob,
 } from "../api";
+import {
+  cancelLocalJob,
+  createLocalJob,
+  retryLocalJob,
+} from "../localApi";
 import type {
   AiEditJob,
-  AiEditJobMaterialItem,
   AiEditMaterial,
   AiEditTemplate,
 } from "../types";
+import { userFacingError } from "../../../lib/userFacingError";
 
 /** 统一错误信息（兼容 axios 形态）。 */
 function resolveError(err: unknown): string {
-  if (err && typeof err === "object") {
-    const anyErr = err as {
-      response?: { data?: { message?: string; detail?: string | { message?: string } } };
-      message?: string;
-    };
-    const detail = anyErr.response?.data?.detail;
-    if (detail && typeof detail === "object" && detail.message) return detail.message;
-    if (typeof detail === "string") return detail;
-    return anyErr.response?.data?.message || anyErr.message || "请求失败";
-  }
-  return err instanceof Error ? err.message : "请求失败";
+  return userFacingError(err, "数据加载失败，请稍后重试");
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -157,25 +150,23 @@ export default function AiVideoEditor() {
       toast.error("请至少选择一个素材");
       return;
     }
-    const jobMaterials: AiEditJobMaterialItem[] = selectedItems.map((materialId) => {
-      const trim = trims[materialId];
-      const startSec = trim?.start ? Number(trim.start) : undefined;
-      const endSec = trim?.end ? Number(trim.end) : undefined;
-      return {
-        material_id: materialId,
-        role: selected[materialId],
-        ...(startSec != null && !Number.isNaN(startSec) ? { source_start: startSec } : {}),
-        ...(endSec != null && !Number.isNaN(endSec) ? { source_end: endSec } : {}),
-      };
-    });
+    // 19000 创建任务格式：material_id + role（首尾时间一期由 19000 内部保守保留全片，设计 §7.4）
+    const jobMaterials = selectedItems.map((materialId) => ({
+      material_id: materialId,
+      role: selected[materialId],
+    }));
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     setSubmitting(true);
     try {
-      const job = await createAiEditJob({
+      // 唯一创建顺序：前端→19000 创建→19000 内部调 9000 agent-create 登记 + 启动 Worker。
+      // 不直接调 9000 /jobs，否则 19000 agent-create 会因任务已存在冲突。
+      await createLocalJob({
         job_id: jobId,
         template_key: selectedTemplate,
         materials: jobMaterials,
       });
+      // 创建后立即从 9000 拉权威状态（9000 已由 19000 登记）。
+      const job = await fetchAiEditJob(jobId);
       setCurrentJob(job);
       toast.success(
         `任务已创建（${renderTarget === "720" ? "720P 草稿" : "1080P 成片"}）：${job.job_id}`,
@@ -185,13 +176,15 @@ export default function AiVideoEditor() {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedTemplate, selectedItems, selected, trims, renderTarget]);
+  }, [selectedTemplate, selectedItems, selected, renderTarget]);
 
   const onCancel = useCallback(async () => {
     if (!currentJob) return;
     setActionLoading(true);
     try {
-      const job = await cancelAiEditJob(currentJob.job_id);
+      // 取消由 19000 协调：终止 Worker + 终态回写 9000 cancelled。
+      await cancelLocalJob(currentJob.job_id);
+      const job = await fetchAiEditJob(currentJob.job_id);
       setCurrentJob(job);
       toast.success("已请求取消任务");
     } catch (err) {
@@ -205,7 +198,9 @@ export default function AiVideoEditor() {
     if (!currentJob) return;
     setActionLoading(true);
     try {
-      const job = await retryAiEditJob(currentJob.job_id);
+      // 重试由 19000 协调：调 9000 agent-retry 推进 attempt + 重新入队（令牌轮换）。
+      await retryLocalJob(currentJob.job_id);
+      const job = await fetchAiEditJob(currentJob.job_id);
       setCurrentJob(job);
       toast.success("已重试任务");
     } catch (err) {
@@ -229,7 +224,7 @@ export default function AiVideoEditor() {
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">
-              选择素材与模板，创建任务；720P 草稿预览后确认 1080P 成片。任务由本机 Worker 执行。
+              选择素材与模板，创建任务；720P 草稿预览后确认 1080P 成片。任务由本机处理程序执行。
             </p>
           </div>
         </div>
@@ -393,7 +388,7 @@ export default function AiVideoEditor() {
                 />
               </label>
               <label className="flex items-center justify-between">
-                <span className="text-[#5a6478]">BGM 开关</span>
+                <span className="text-[#5a6478]">背景音乐开关</span>
                 <input
                   type="checkbox"
                   checked={enableBgm}
@@ -417,7 +412,7 @@ export default function AiVideoEditor() {
               />
             </div>
             <p className="mt-2 text-xs text-[#8b95a6]">
-              字幕/BGM/增稳由模板规则决定是否生效；前端只收集偏好，不伪造后端字段。
+              字幕、背景音乐和画面稳定由模板规则决定是否生效；页面只收集偏好，不伪造后端字段。
             </p>
           </div>
 
