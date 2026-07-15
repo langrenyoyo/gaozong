@@ -54,7 +54,7 @@ function statusBadge(status: string | null | undefined): { label: string; classN
   return { label: "未知状态", className: "text-slate-600 bg-slate-100" };
 }
 
-export default function MaterialLibrary() {
+export default function MaterialLibrary({ merchantId }: { merchantId?: string }) {
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +99,7 @@ export default function MaterialLibrary() {
       const materialId = `mat_${Date.now()}_${file.name.replace(/[^\w.-]/g, "_").slice(0, 32)}`;
       setImporting(true);
       try {
-        const result = await importLocalMaterial(file, materialId);
+        const result = await importLocalMaterial(file, materialId, merchantId);
         toast.success(`本机导入成功：${result.material_id}（${result.size_bytes} 字节）`);
         // 导入后刷新 9000 列表（后端同步到 9000 元数据后才会出现）。
         await load();
@@ -109,21 +109,21 @@ export default function MaterialLibrary() {
         setImporting(false);
       }
     },
-    [load],
+    [load, merchantId],
   );
 
   const onDelete = useCallback(
     async (materialId: string) => {
       if (!window.confirm("确认删除该本机素材？将进入 7 天回收站。")) return;
       try {
-        await deleteLocalMaterial(materialId);
+        await deleteLocalMaterial(materialId, merchantId);
         toast.success("已移入回收站");
         await load();
       } catch (err) {
         toast.error(`删除失败：${resolveError(err)}`);
       }
     },
-    [load],
+    [load, merchantId],
   );
 
   return (

@@ -80,7 +80,7 @@ const ROLE_LABELS: Record<MaterialRole, string> = {
   pip_replacement: "画中画替换",
 };
 
-export default function AiVideoEditor() {
+export default function AiVideoEditor({ merchantId }: { merchantId?: string }) {
   const [templates, setTemplates] = useState<AiEditTemplate[]>([]);
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -173,7 +173,7 @@ export default function AiVideoEditor() {
         job_id: jobId,
         template_key: selectedTemplate,
         materials: jobMaterials,
-      });
+      }, merchantId);
       // 创建后立即从 9000 拉权威状态（9000 已由 19000 登记）。
       const job = await fetchAiEditJob(jobId);
       setCurrentJob(job);
@@ -183,14 +183,14 @@ export default function AiVideoEditor() {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedTemplate, selectedItems, selected, trims]);
+  }, [selectedTemplate, selectedItems, selected, trims, merchantId]);
 
   const onCancel = useCallback(async () => {
     if (!currentJob) return;
     setActionLoading(true);
     try {
       // 取消由 19000 协调：终止 Worker + 终态回写 9000 cancelled。
-      await cancelLocalJob(currentJob.job_id);
+      await cancelLocalJob(currentJob.job_id, merchantId);
       const job = await fetchAiEditJob(currentJob.job_id);
       setCurrentJob(job);
       toast.success("已请求取消任务");
@@ -199,14 +199,14 @@ export default function AiVideoEditor() {
     } finally {
       setActionLoading(false);
     }
-  }, [currentJob]);
+  }, [currentJob, merchantId]);
 
   const onRetry = useCallback(async () => {
     if (!currentJob) return;
     setActionLoading(true);
     try {
       // 重试由 19000 协调：调 9000 agent-retry 推进 attempt + 重新入队（令牌轮换）。
-      await retryLocalJob(currentJob.job_id);
+      await retryLocalJob(currentJob.job_id, merchantId);
       const job = await fetchAiEditJob(currentJob.job_id);
       setCurrentJob(job);
       toast.success("已重试任务");
@@ -215,7 +215,7 @@ export default function AiVideoEditor() {
     } finally {
       setActionLoading(false);
     }
-  }, [currentJob]);
+  }, [currentJob, merchantId]);
 
   const canSubmit = currentJob == null || ["succeeded", "failed", "cancelled"].includes(currentJob.status);
   const canCancel = currentJob != null && ["running", "queued"].includes(currentJob.status);

@@ -358,6 +358,9 @@ def create_ai_edit_router(
                     "relative_path": dst_rel,
                     "source_sha256": _material_sha256(mroot, m.material_id),
                     "duration_seconds": 10.0,
+                    # FIX3-2：首尾时间写入 Worker manifest，供规划/渲染读取
+                    "source_start": m.source_start,
+                    "source_end": m.source_end,
                 })
 
             # 3. 原子写 WorkerManifest（不向响应泄露绝对路径）
@@ -462,15 +465,19 @@ def create_ai_edit_router(
             raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND"})
         if nine000_client is None:
             raise HTTPException(status_code=503, detail={"code": "NINE000_NOT_CONFIGURED", "message": "9000 未配置"})
-        # 1. 前置可重试检查（远端推进前）
-        if not supervisor.can_retry(merchant_id=ctx.merchant_id, job_id=job_id):
-            raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在或运行中不可重试"})
-        # 2. 调 9000 agent-retry（推进 attempt + 轮换令牌）
+        # 1. 原子 claim 为 retry_preparing（远端推进前，防并发重复重试，FIX3-3）
+        snapshot = supervisor.claim_retry(merchant_id=ctx.merchant_id, job_id=job_id)
+        if snapshot is None:
+            raise HTTPException(status_code=409, detail={"code": "JOB_NOT_RETRYABLE", "message": "任务不存在、运行中或正在重试"})
+        # 2. 调 9000 agent-retry（推进 attempt + 轮换令牌）；失败回退 retry_preparing
         try:
             retried = nine000_client.agent_retry_job(
                 merchant_id=ctx.merchant_id, job_id=job_id,
             )
         except Exception as exc:  # noqa: BLE001
+            supervisor.revert_retry_claim(
+                merchant_id=ctx.merchant_id, job_id=job_id, snapshot=snapshot,
+            )
             raise HTTPException(
                 status_code=502,
                 detail={"code": "NINE000_AGENT_RETRY_FAILED", "message": "9000 重试失败"},
@@ -478,16 +485,19 @@ def create_ai_edit_router(
         new_token = str(retried.get("execution_token_hash", ""))
         new_attempt = int(retried.get("attempt_count", 0))
         new_attempt_id = f"att-{job_id}-{new_attempt}"
-        # 3. 本地重新入队（用新令牌；竞态导致失败则告警，9000 已推进由下次 retry 覆盖）
+        # 3. 本地重新入队（持久化新令牌 + 置 queued）；失败回退，状态可恢复
         requeued = supervisor.requeue(
             merchant_id=ctx.merchant_id, job_id=job_id,
             attempt_id=new_attempt_id, execution_token_hash=new_token,
             attempt_count=new_attempt,
         )
         if not requeued:
+            # 极小竞态：claim 后被其他路径置 running。回退为原终态，9000 已推进由下次 retry 覆盖
+            supervisor.revert_retry_claim(
+                merchant_id=ctx.merchant_id, job_id=job_id, snapshot=snapshot,
+            )
             logger.error(
-                "ai_edit retry stage=requeue_failed_after_9000_advanced job_id=%s attempt=%s "
-                "9000 已推进但本地未入队，下次重试将再推进",
+                "ai_edit retry stage=requeue_failed_after_9000_advanced job_id=%s attempt=%s",
                 job_id, new_attempt,
             )
             raise HTTPException(

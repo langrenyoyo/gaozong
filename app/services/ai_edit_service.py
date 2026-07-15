@@ -129,7 +129,8 @@ def register_material(
         # 已软删：同商户可复活（覆盖哈希），跨商户则冲突
         if existing.deleted_at is not None:
             if existing.merchant_id != merchant_id:
-                raise AiEditMaterialConflict("MATERIAL_ID_RECLAIMED_BY_OTHER")
+                # FIX3-5：中性错误码，不暴露归属
+                raise AiEditMaterialConflict("MATERIAL_ID_CONFLICT")
             existing.deleted_at = None
             existing.purge_after = None
             existing.source_sha256 = source_sha256
@@ -139,9 +140,9 @@ def register_material(
             return existing
         # 未软删
         if existing.merchant_id != merchant_id:
-            raise AiEditMaterialConflict("MATERIAL_ID_TAKEN_BY_OTHER")
+            raise AiEditMaterialConflict("MATERIAL_ID_CONFLICT")
         if existing.source_sha256 != source_sha256:
-            raise AiEditMaterialConflict("MATERIAL_HASH_MISMATCH")
+            raise AiEditMaterialConflict("MATERIAL_ID_CONFLICT")
         return existing  # 同商户同哈希未删：幂等
     material = AiEditMaterial(
         material_id=material_id,
@@ -190,14 +191,24 @@ def get_material_for_merchant(
 def soft_delete_material(
     db: Session, *, material_id: str, merchant_id: str
 ) -> AiEditMaterial:
-    """软删除素材：平台素材只读；活动引用禁止删除；否则进 7 天回收站。"""
+    """软删除素材：平台素材只读；活动引用禁止删除；否则进 7 天回收站。
+
+    FIX3-4：幂等——同商户已软删返回既有行（200），不报错，供"远端已执行但响应丢失"重试。
+    跨商户已软删仍 404（不暴露归属）。
+    """
     material = db.query(AiEditMaterial).filter_by(material_id=material_id).first()
-    if material is None or material.deleted_at is not None:
+    if material is None:
         raise AiEditNotFound("MATERIAL_NOT_FOUND")
     if material.scope == "platform":
-        raise AiEditPlatformReadOnly("PLATFORM_MATERIAL_READ_ONLY")
+        # 平台素材只读（即使已软删也拒，平台素材不由商户删）
+        if material.deleted_at is None:
+            raise AiEditPlatformReadOnly("PLATFORM_MATERIAL_READ_ONLY")
+        return material
     if material.merchant_id != merchant_id:
         raise AiEditNotFound("MATERIAL_NOT_FOUND")
+    if material.deleted_at is not None:
+        # 同商户已软删：幂等返回（不重复设 deleted_at，保留首次回收时间）
+        return material
 
     # 活动引用：被未终态任务钉住的素材不可删
     active_refs = (

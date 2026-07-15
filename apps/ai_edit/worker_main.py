@@ -135,14 +135,16 @@ def _build_default_deps() -> "PipelineDeps":
         return {"transcript_segments": []}
 
     def _plan(manifest, analysis, task_root):
-        # 一期保守规划：keep 主素材全部区间（不裁剪、不替换）
+        # 一期保守规划：keep 主素材区间；若有 source_start/end 则按此裁剪（FIX3-2）
         ops = []
         for m in manifest.materials:
             if m.role == "main":
+                start = float(m.source_start) if m.source_start is not None else 0.0
+                end = float(m.source_end) if m.source_end is not None else float(m.duration_seconds)
                 ops.append({
                     "material_id": m.material_id,
-                    "start_seconds": 0.0,
-                    "end_seconds": m.duration_seconds,
+                    "start_seconds": start,
+                    "end_seconds": end,
                     "action": "keep",
                 })
         return {"operations": ops}

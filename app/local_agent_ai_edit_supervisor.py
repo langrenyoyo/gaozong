@@ -369,6 +369,8 @@ class AiEditSupervisor:
                 # FIX2-4：cancel_requested 恢复时把 key 加入 _cancelled，drain 归一 cancelled + 回写
                 if state.get("status") == "cancel_requested":
                     self._cancelled.add(key)
+                # FIX3-3：retry_preparing 恢复时作为 queued 重新入队（令牌可能已被 9000 推进，
+                # 回写若 409 则 on_job_terminal 记日志，最终由 pending_writeback 补偿或人工）
                 self._queue.append(job)
                 self._status.total_enqueued += 1
                 self._status.queued_count += 1
@@ -464,13 +466,53 @@ class AiEditSupervisor:
             return True
 
     def can_retry(self, *, merchant_id: str, job_id: str) -> bool:
-        """前置可重试检查（不落盘）：任务存在、归属本商户、非运行中。FIX2-5：远端推进前先查。"""
+        """前置可重试检查（不落盘）：任务存在、归属本商户、非运行中、非重试中。
+
+        FIX3-3：拒 running 与 retry_preparing（防并发重复重试 + 跨系统分叉）。
+        允许终态（succeeded/failed/cancelled/queued/cancel_requested）重试。
+        """
         with self._lock:
             key = _task_key(merchant_id, job_id)
             state = self._job_states.get(key)
             if state is None or state.get("merchant_id") != merchant_id:
                 return False
-            return state.get("status") != "running"
+            return state.get("status") not in ("running", "retry_preparing")
+
+    def claim_retry(self, *, merchant_id: str, job_id: str) -> dict | None:
+        """原子 claim 为 retry_preparing（持锁 CAS，防并发重试）。
+
+        FIX3-3：远端推进前先冻结本地状态为 retry_preparing，第二个并发请求会被 can_retry
+        拒（retry_preparing）。返回原状态快照供失败时回退。非 running/retry_preparing 才允许。
+        """
+        with self._lock:
+            key = _task_key(merchant_id, job_id)
+            state = self._job_states.get(key)
+            if state is None or state.get("merchant_id") != merchant_id:
+                return None
+            if state.get("status") in ("running", "retry_preparing"):
+                return None
+            snapshot = dict(state)
+            self._persist_job_state(
+                key, status="retry_preparing", attempt_id=state.get("attempt_id", ""),
+                manifest_path=state.get("manifest_path", ""),
+                merchant_id=merchant_id, job_id=job_id,
+                execution_token_hash=state.get("execution_token_hash", ""),
+                attempt_count=int(state.get("attempt_count", 0) or 0),
+            )
+            return snapshot
+
+    def revert_retry_claim(self, *, merchant_id: str, job_id: str, snapshot: dict) -> None:
+        """远端推进失败时回退 retry_preparing 到原状态（可恢复，FIX3-3）。"""
+        with self._lock:
+            key = _task_key(merchant_id, job_id)
+            self._persist_job_state(
+                key, status=snapshot.get("status", "failed"),
+                attempt_id=snapshot.get("attempt_id", ""),
+                manifest_path=snapshot.get("manifest_path", ""),
+                merchant_id=merchant_id, job_id=job_id,
+                execution_token_hash=snapshot.get("execution_token_hash", ""),
+                attempt_count=int(snapshot.get("attempt_count", 0) or 0),
+            )
 
     def requeue(
         self, *, merchant_id: str, job_id: str, attempt_id: str,

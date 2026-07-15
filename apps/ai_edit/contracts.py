@@ -54,11 +54,22 @@ class WorkerMaterial(BaseModel):
     relative_path: str = Field(..., min_length=1, max_length=512)
     source_sha256: str = Field(..., min_length=1, max_length=64)
     duration_seconds: float = Field(..., gt=0)
+    # FIX3-2：首尾时间写入 Worker 合同，规划/渲染按此裁剪（不再只进 9000 审计）
+    source_start: float | None = Field(default=None, ge=0)
+    source_end: float | None = Field(default=None, gt=0)
 
     @field_validator("relative_path")
     @classmethod
     def _check_relative_path(cls, v: str) -> str:
         return _validate_relative_path(v, field_name="relative_path")
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "WorkerMaterial":
+        """校验 source_end > source_start（两者都给定时）。"""
+        if self.source_start is not None and self.source_end is not None:
+            if self.source_end <= self.source_start:
+                raise ValueError("source_end 必须 > source_start")
+        return self
 
 
 class WorkerArtifact(BaseModel):

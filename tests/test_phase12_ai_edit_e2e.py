@@ -190,11 +190,13 @@ def json_dumps_keep(material_id: str) -> str:
     }, ensure_ascii=False)
 
 
-def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestClient, AiEditSupervisor]:
+def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1",
+                  failing_methods: set[str] | None = None) -> tuple[TestClient, AiEditSupervisor]:
     """19000 路由 + 监管器；executor 调真实 pipeline（替身 deps）经过 Worker 边界。
 
     nine000_client 为直调 9000 TestClient 的替身（§5 下发/回写通道）；
     on_job_terminal 用令牌回写 9000 status。
+    failing_methods：注入指定方法抛错（FIX3-4 测同步失败路径），如 {"register_material"}。
     """
     os.environ["LOCAL_AGENT_TOKENS"] = f"{merchant}:{token}"
     os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
@@ -203,12 +205,19 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
     deps = _stub_pipeline_deps()
 
     class _DirectNine000Client:
-        """替身 9000 client：直调 9000 TestClient（无 HTTP，不算外部网络）。
+        """替身 9000 client, 直调 9000 TestClient (无 HTTP, 不算外部网络).
 
-        真实前端调用顺序：19000 导入→register_material；19000 创建→agent_create_job；
-        19000 重试→agent_retry_job；终态→update_job_status；19000 删除→delete_material。
+        真实前端调用顺序: 19000 导入->register_material; 19000 创建->agent_create_job;
+        19000 重试->agent_retry_job; 终态->update_job_status; 19000 删除->delete_material.
+        failing: 注入指定方法名抛 RuntimeError (FIX3-4 测失败路径).
         """
 
+        _failing = failing_methods or set()
+
+        @staticmethod
+        def _maybe_fail(name: str) -> None:
+            if name in _DirectNine000Client._failing:
+                raise RuntimeError(f"injected_failure:{name}")
         def agent_create_job(self, *, merchant_id, job_id, template_key, materials):
             resp = c9.post(
                 "/ai-edit/jobs/agent-create",
@@ -250,6 +259,7 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
 
         def register_material(self, *, merchant_id, material_id, media_type,
                               source_sha256, agent_client_id=None):
+            _DirectNine000Client._maybe_fail("register_material")
             resp = c9.post(
                 "/ai-edit/materials",
                 headers={"X-Local-Agent-Token": token},
@@ -261,6 +271,7 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1") -> tuple[TestCli
             return resp.json()["data"]
 
         def delete_material(self, *, merchant_id, material_id):
+            _DirectNine000Client._maybe_fail("delete_material")
             resp = c9.delete(
                 f"/ai-edit/materials/agent/{material_id}",
                 headers={"X-Local-Agent-Token": token},
@@ -550,23 +561,65 @@ def test_e2e_cross_merchant_material_conflict(tmp_path):
               "source_sha256": sha, "agent_client_id": "x"},
     )
     assert resp.status_code == 409
-    assert resp.json()["detail"]["code"] == "MATERIAL_ID_TAKEN_BY_OTHER"
+    assert resp.json()["detail"]["code"] == "MATERIAL_ID_CONFLICT"
     assert "m1" not in resp.text
 
 
 def test_e2e_import_meta_sync_failure_returns_502(tmp_path):
-    """FIX2-3：9000 同步失败明确 502（不静默吞掉），本地素材已写但 9000 列表不出现。"""
-    sha = _synthetic_sha()
+    """FIX3-4：9000 同步失败明确 502（不静默吞），本地素材已写但 9000 列表不出现。"""
     c9 = _build_9000()
-    # 构造同步失败的 19000：register_material 抛错
-    c19, sup = _build_19000(tmp_path, c9)
-
-    original_register = c19._sup  # noqa: F841  保留引用
-    # 用 monkey 方式让 nine000_client.register_material 抛错：通过替换 app 依赖较重，
-    # 这里直接验证正常路径下 9000 列表出现素材（FIX2-3 默认成功）。
-    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    # 注入 register_material 抛错
+    c19, _ = _build_19000(tmp_path, c9, failing_methods={"register_material"})
+    resp = _import_19000(c19, content=_SYNTHETIC_BYTES)
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"]["code"] == "MATERIAL_META_SYNC_FAILED"
+    # 9000 列表不出现该素材（同步失败）
     mats = c9.get("/ai-edit/materials").json()["data"]["items"]
-    assert any(m["material_id"] == "mat-1" for m in mats), "导入成功应同步 9000 列表"
+    assert all(m["material_id"] != "mat-1" for m in mats)
+    # 重试导入（幂等本地文件 + 9000 同步成功）→ 200，素材出现
+    c19_ok, _ = _build_19000(tmp_path, c9)
+    assert _import_19000(c19_ok, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    mats2 = c9.get("/ai-edit/materials").json()["data"]["items"]
+    assert any(m["material_id"] == "mat-1" for m in mats2)
+
+
+def test_e2e_delete_idempotent_and_response_lost(tmp_path):
+    """FIX3-4：9000 删除幂等 + 远端已执行但响应丢失时重试不分裂。
+
+    19000 delete 同步 9000 成功；模拟响应丢失（第二次删除）→ 9000 幂等返回 200，
+    本地不回滚（已软删），状态一致。
+    """
+    c9 = _build_9000()
+    c19, _ = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    # 第一次删除：本地软删 + 9000 软删 → 200
+    assert c19.delete("/agent/ai-edit/materials/mat-1",
+                       headers={"X-Local-Agent-Token": "tok-1"}).status_code == 200
+    # 9000 已软删（幂等：再次 agent 软删返回 200，不 404）
+    again = c9.delete("/ai-edit/materials/agent/mat-1",
+                      headers={"X-Local-Agent-Token": "tok-1"})
+    assert again.status_code == 200, again.text
+
+
+def test_e2e_delete_sync_failure_rolls_back_local(tmp_path):
+    """FIX3-4：19000 delete 同步 9000 失败 → 回滚本地软删 + 502，状态不分裂。"""
+    c9 = _build_9000()
+    c19, _ = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    # 注入 delete_material 失败
+    c19_fail, _ = _build_19000(tmp_path, c9, failing_methods={"delete_material"})
+    # c19_fail 共享同一 storage_root（tmp_path 相同？不——_build_19000 每次新建 storage_root）
+    # 用 c19_fail 的 storage：先在 c19_fail 导入再删
+    assert _import_19000(c19_fail, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    resp = c19_fail.delete("/agent/ai-edit/materials/mat-1",
+                           headers={"X-Local-Agent-Token": "tok-1"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["code"] == "MATERIAL_DELETE_SYNC_FAILED"
+    # 本地已回滚：素材可再次列出（未软删）
+    lst = c19_fail.get("/agent/ai-edit/materials", headers={"X-Local-Agent-Token": "tok-1"})
+    items = lst.json()["data"]["items"]
+    mat = next((i for i in items if i["material_id"] == "mat-1"), None)
+    assert mat is not None and mat["deleted_at"] is None, "本地应回滚软删"
 
 
 def test_e2e_cancel_requested_recovers_to_cancelled(tmp_path):
@@ -607,7 +660,7 @@ def test_e2e_cancel_requested_recovers_to_cancelled(tmp_path):
 
 
 def test_e2e_retry_checks_can_retry_before_9000(tmp_path):
-    """FIX2-5：重试远端推进前先 can_retry——运行中任务重试 → 409（不推进 9000）。"""
+    """FIX2-5/FIX3-3：重试远端推进前先 claim_retry——运行中任务重试 → 409（不推进 9000）。"""
     c9 = _build_9000()
     c19, sup = _build_19000(tmp_path, c9)
     assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
@@ -626,10 +679,10 @@ def test_e2e_retry_checks_can_retry_before_9000(tmp_path):
         execution_token_hash=state["execution_token_hash"],
         attempt_count=state["attempt_count"],
     )
-    # 重试运行中任务 → 404（can_retry 拒，远端未推进）
+    # 重试运行中任务 → 409（claim_retry 拒，远端未推进）
     retry = c19.post("/agent/ai-edit/jobs/job-1/retry",
                      headers={"X-Local-Agent-Token": "tok-1"})
-    assert retry.status_code == 404
+    assert retry.status_code == 409
     # 9000 attempt 未变（远端未推进）
     assert c9.get("/ai-edit/jobs/job-1").json()["data"]["attempt_count"] == 0
 
@@ -653,3 +706,45 @@ def test_e2e_19000_rejects_request_without_token(tmp_path):
     c19, _ = _build_19000(tmp_path, c9)
     lst = c19.get("/agent/ai-edit/materials")
     assert lst.status_code == 401
+
+
+def test_e2e_agent_token_isolated_per_merchant(tmp_path):
+    """FIX3-1：A 退出 B 登录不复用 A 的 token——9000 下发各商户独立 token，跨商户隔离。"""
+    c9 = _build_9000(tokens="m1:tok-1,m2:tok-2")
+    # m1 获取 token
+    t1 = c9.get("/ai-edit/agent-token").json()["data"]["token"]
+    assert t1 == "tok-1"
+    # m2 用 m1 的 token 调 19000（若复用会误识别为 m1）→ 19000 验证 tok-1→m1，
+    # 但 m2 请求带 tok-1 会被识别为 m1（token 映射固有）。正确性在于前端不为 m2 复用 tok-1：
+    # 模拟 B 登录后前端调 agent-token 拿 tok-2（不同商户不同 token）
+    # 这里验证 9000 对 m2 上下文下发 tok-2（通过 mock context 切换）
+    c9_m2 = _build_9000(merchant_id="m2", token="tok-2", tokens="m1:tok-1,m2:tok-2")
+    t2 = c9_m2.get("/ai-edit/agent-token").json()["data"]["token"]
+    assert t2 == "tok-2"
+    assert t1 != t2, "不同商户应下发不同 token"
+
+
+def test_e2e_retry_concurrent_claim_prevents_double(tmp_path):
+    """FIX3-3：并发重试只允许一次——第一个 claim_retry 置 retry_preparing，第二个 → 409。"""
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()  # succeeded（终态可重试）
+    # 第一个 claim 成功（置 retry_preparing），但人为停在 retry_preparing（不调 9000）
+    snapshot = sup.claim_retry(merchant_id="m1", job_id="job-1")
+    assert snapshot is not None
+    # 第二个 claim → None（retry_preparing）
+    assert sup.claim_retry(merchant_id="m1", job_id="job-1") is None
+    # 路由层重试也 409
+    retry = c19.post("/agent/ai-edit/jobs/job-1/retry",
+                     headers={"X-Local-Agent-Token": "tok-1"})
+    assert retry.status_code == 409
+    # 回退后可再次 claim
+    sup.revert_retry_claim(merchant_id="m1", job_id="job-1", snapshot=snapshot)
+    assert sup.claim_retry(merchant_id="m1", job_id="job-1") is not None

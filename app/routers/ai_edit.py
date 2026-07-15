@@ -152,8 +152,8 @@ def issue_agent_token(
     """向已登录商户下发本机 Local Agent token（FIX2-1：浏览器调 19000 的鉴权通道）。
 
     从 LOCAL_AGENT_TOKENS 取当前 merchant_id 对应的 token（与 19000 共享 env）。
-    前端 localStorage 保存，localApi 请求带 X-Local-Agent-Token。
-    安全：9000 可信登录态 + 商户绑定；token 只在本机回环（127.0.0.1:19000）有效。
+    前端 sessionStorage 保存（绑定 merchant_id），localApi 请求带 X-Local-Agent-Token。
+    FIX3-1：响应加 Cache-Control: no-store，防中间缓存；退出/登录清理前端缓存。
     商户未配置 Local Agent token → 404，不暴露存在性差异。
     """
     _require_ai_edit(context)
@@ -164,7 +164,12 @@ def issue_agent_token(
             status_code=404,
             detail={"code": "LOCAL_AGENT_TOKEN_NOT_CONFIGURED", "message": "本机未配置 Local Agent token"},
         )
-    return _ok({"token": token, "merchant_id": merchant_id})
+    # FIX3-1：no-store，token 不被浏览器/中间代理缓存
+    from fastapi import Response
+    resp = _ok({"token": token, "merchant_id": merchant_id})
+    return Response(content=__import__("json").dumps(resp, ensure_ascii=False),
+                    media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------------------

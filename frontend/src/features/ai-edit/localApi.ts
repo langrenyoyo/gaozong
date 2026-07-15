@@ -12,23 +12,78 @@ import type { LocalAiEditStatus } from "./types";
 /** Local AI 剪辑基址（显式声明，便于合同脚本静态校验）。 */
 export const LOCAL_AI_EDIT_BASE_URL = "http://127.0.0.1:19000";
 
-/** FIX2-1：浏览器调 19000 的 token 获取/保存/发送。
- * 9000 下发当前商户的 Local Agent token，前端 localStorage 保存，请求带 X-Local-Agent-Token。
- * 不依赖关闭 19000 鉴权。 */
-const AGENT_TOKEN_STORAGE_KEY = "ai_edit_agent_token";
+/** FIX2-1/FIX3-1：浏览器调 19000 的 token 获取/保存/发送。
+ * 9000 下发当前商户的 Local Agent token，前端 sessionStorage 保存（会话级，绑定 merchant_id），
+ * 请求带 X-Local-Agent-Token。不依赖关闭 19000 鉴权。
+ * FIX3-1：缓存键含 merchant_id，A 退出 B 登录不会复用 A 的 token（不同键 + 退出清全部）。 */
+const AGENT_TOKEN_STORAGE_PREFIX = "ai_edit_agent_token:";
 
-/** 获取本机 Local Agent token：先 localStorage，无则向 9000 申请并保存。 */
-export async function ensureAgentToken(): Promise<string> {
-  const cached = localStorage.getItem(AGENT_TOKEN_STORAGE_KEY);
-  if (cached) return cached;
-  const { token } = await fetchAiEditAgentToken();
-  localStorage.setItem(AGENT_TOKEN_STORAGE_KEY, token);
-  return token;
+function tokenStorageKey(merchantId: string): string {
+  return `${AGENT_TOKEN_STORAGE_PREFIX}${merchantId}`;
 }
 
-/** 清除缓存的 token（401 时重试获取）。 */
-export function clearAgentToken(): void {
-  localStorage.removeItem(AGENT_TOKEN_STORAGE_KEY);
+interface CachedAgentToken {
+  token: string;
+  merchant_id: string;
+}
+
+/** 获取本机 Local Agent token：先 sessionStorage（绑定 merchantId），无则向 9000 申请。
+ * merchantId 为当前登录商户；与缓存不一致（A 退出 B 登录）自动不复用旧 token。 */
+export async function ensureAgentToken(merchantId?: string): Promise<string> {
+  // FIX3-1：遍历现有缓存，若属于其他商户则视为过期（防残留）
+  if (merchantId) {
+    const cached = readCachedToken(merchantId);
+    if (cached) return cached.token;
+    // 清理其他商户的残留 token（A 退出 B 登录场景）
+    clearAllAgentTokens();
+  } else {
+    // 无 merchantId（兼容）：取任意缓存或申请新的
+    const anyKey = Object.keys(sessionStorage).find((k) => k.startsWith(AGENT_TOKEN_STORAGE_PREFIX));
+    if (anyKey) {
+      try {
+        const any = JSON.parse(sessionStorage.getItem(anyKey) || "{}") as CachedAgentToken;
+        if (any.token) return any.token;
+      } catch {
+        // 损坏则清
+        clearAllAgentTokens();
+      }
+    }
+  }
+  const resp = await fetchAiEditAgentToken();
+  const cached: CachedAgentToken = { token: resp.token, merchant_id: resp.merchant_id };
+  sessionStorage.setItem(tokenStorageKey(resp.merchant_id), JSON.stringify(cached));
+  return resp.token;
+}
+
+function readCachedToken(merchantId: string): CachedAgentToken | null {
+  const raw = sessionStorage.getItem(tokenStorageKey(merchantId));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as CachedAgentToken;
+    if (parsed.token && parsed.merchant_id === merchantId) return parsed;
+  } catch {
+    // 损坏则清
+  }
+  sessionStorage.removeItem(tokenStorageKey(merchantId));
+  return null;
+}
+
+/** 清除当前商户缓存的 token（401 时重试获取）。 */
+export function clearAgentToken(merchantId?: string): void {
+  if (merchantId) {
+    sessionStorage.removeItem(tokenStorageKey(merchantId));
+  } else {
+    clearAllAgentTokens();
+  }
+}
+
+/** 清除所有商户的 Local Agent token 缓存（退出登录时调用，FIX3-1）。 */
+export function clearAllAgentTokens(): void {
+  for (const key of Object.keys(sessionStorage)) {
+    if (key.startsWith(AGENT_TOKEN_STORAGE_PREFIX)) {
+      sessionStorage.removeItem(key);
+    }
+  }
 }
 
 /** Local Agent 导入结果（不含绝对路径 / merchant_id）。 */
@@ -54,20 +109,20 @@ interface LocalAgentEnvelope<T> {
   message: string;
 }
 
-async function requestLocal<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestLocal<T>(path: string, init?: RequestInit, merchantId?: string): Promise<T> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
-  // FIX2-1：请求带 X-Local-Agent-Token（9000 下发，不关鉴权）
-  const token = await ensureAgentToken();
+  // FIX2-1/FIX3-1：请求带 X-Local-Agent-Token（绑定 merchantId，防跨商户残留）
+  const token = await ensureAgentToken(merchantId);
   const headers = {
     "Content-Type": "application/json",
     "X-Local-Agent-Token": token,
     ...(init?.headers || {}),
   };
   let response = await fetch(`${base}${path}`, { ...init, headers });
-  // 401 清缓存重试一次（token 失效/轮换）
+  // 401 清缓存重试一次（token 失效/轮换/商户切换）
   if (response.status === 401) {
-    clearAgentToken();
-    const newToken = await ensureAgentToken();
+    clearAgentToken(merchantId);
+    const newToken = await ensureAgentToken(merchantId);
     response = await fetch(`${base}${path}`, {
       ...init,
       headers: { ...headers, "X-Local-Agent-Token": newToken },
@@ -91,21 +146,22 @@ async function requestLocal<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** 列本机素材（按当前 token 商户隔离）。 */
-export async function fetchLocalMaterials(): Promise<{
+export async function fetchLocalMaterials(merchantId?: string): Promise<{
   total: number;
   items: LocalAiEditMaterialItem[];
 }> {
-  return requestLocal("/agent/ai-edit/materials", { method: "GET" });
+  return requestLocal("/agent/ai-edit/materials", { method: "GET" }, merchantId);
 }
 
 /** 流式导入素材（原始字节流，避免 base64 全量内存）。 */
 export async function importLocalMaterial(
   file: File,
   materialId: string,
+  merchantId?: string,
 ): Promise<LocalAiEditMaterial> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
-  // FIX2-1：带 X-Local-Agent-Token
-  const token = await ensureAgentToken();
+  // FIX2-1/FIX3-1：带 X-Local-Agent-Token（绑定 merchantId）
+  const token = await ensureAgentToken(merchantId);
   const params = new URLSearchParams({
     material_id: materialId,
     expected_size: String(file.size),
@@ -122,8 +178,8 @@ export async function importLocalMaterial(
     },
   );
   if (response.status === 401) {
-    clearAgentToken();
-    const newToken = await ensureAgentToken();
+    clearAgentToken(merchantId);
+    const newToken = await ensureAgentToken(merchantId);
     response = await fetch(
       `${base}/agent/ai-edit/materials/import-stream?${params.toString()}`,
       {
@@ -144,10 +200,10 @@ export async function importLocalMaterial(
 }
 
 /** 删除本机素材（进 7 天回收站）。 */
-export async function deleteLocalMaterial(materialId: string): Promise<void> {
+export async function deleteLocalMaterial(materialId: string, merchantId?: string): Promise<void> {
   await requestLocal(`/agent/ai-edit/materials/${encodeURIComponent(materialId)}`, {
     method: "DELETE",
-  });
+  }, merchantId);
 }
 
 /** 创建任务（由 Local Agent 生成 manifest + 启动 Worker）。 */
@@ -160,35 +216,36 @@ export async function createLocalJob(payload: {
     source_start?: number;
     source_end?: number;
   }[];
-}): Promise<{ job_id: string; status: string }> {
+}, merchantId?: string): Promise<{ job_id: string; status: string }> {
   return requestLocal("/agent/ai-edit/jobs", {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }, merchantId);
 }
 
 /** 取消任务（终止 Worker 进程树）。 */
-export async function cancelLocalJob(jobId: string): Promise<{ job_id: string; status: string }> {
+export async function cancelLocalJob(jobId: string, merchantId?: string): Promise<{ job_id: string; status: string }> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}/cancel`, {
     method: "POST",
-  });
+  }, merchantId);
 }
 
 /** 重试任务（19000 协调：调 9000 agent-retry 推进 attempt + 重新入队）。 */
 export async function retryLocalJob(
   jobId: string,
+  merchantId?: string,
 ): Promise<{ job_id: string; status: string; attempt_count: number }> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: "POST",
-  });
+  }, merchantId);
 }
 
 /** 查询任务状态（商户隔离）。 */
-export async function fetchLocalJob(jobId: string): Promise<Record<string, unknown>> {
-  return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
+export async function fetchLocalJob(jobId: string, merchantId?: string): Promise<Record<string, unknown>> {
+  return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}`, { method: "GET" }, merchantId);
 }
 
 /** 本机队列状态（按当前 token 商户过滤）。 */
-export async function fetchLocalAiEditStatus(): Promise<LocalAiEditStatus> {
-  return requestLocal("/agent/ai-edit/status", { method: "GET" });
+export async function fetchLocalAiEditStatus(merchantId?: string): Promise<LocalAiEditStatus> {
+  return requestLocal("/agent/ai-edit/status", { method: "GET" }, merchantId);
 }

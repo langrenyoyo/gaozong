@@ -23,11 +23,11 @@ import {
   filterCapabilityNavCenters,
   hasAdminPermission,
   hasPermission,
-  isMockAuthUser,
-  isAdminLike,
+  isMockAuthUser,  isAdminLike,
   PERMISSIONS,
 } from "./features/capabilities";
 import { userFacingError } from "./lib/userFacingError";
+import { clearAllAgentTokens } from "./features/ai-edit/localApi";
 
 const queryClient = new QueryClient();
 const adminRoutes = [
@@ -347,6 +347,8 @@ const App = () => {
 
   const handleLogin = (nextUser: AppUser) => {
     setAuthError(null);
+    // FIX3-1：登录时清理可能残留的旧商户 Local Agent token（防 A 退出 B 登录复用）
+    clearAllAgentTokens();
     setUser(nextUser);
   };
 
@@ -364,6 +366,7 @@ const App = () => {
       } finally {
         clearExternalToken();
         clearNewCarRedirectState();
+        clearAllAgentTokens();  // FIX3-1：退出清理 Local Agent token，防跨商户残留
         setUser(null);
         setAuthError(null);
         void redirectToNewCarLogin({ message: "正在退出登录，请稍候…", delayMs: 0, saveCurrentPath: false });
