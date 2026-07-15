@@ -13,6 +13,7 @@ import {
   CheckCircle2Icon,
   ClockIcon,
   RefreshCwIcon,
+  ScissorsIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
@@ -135,39 +136,44 @@ export default function MaterialLibrary() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="flex items-center justify-between border-b border-[#e4e8f0] bg-white px-6 py-4">
-        <div>
-          <h1 className="text-lg font-bold text-[#1a1f2e]">小高素材库</h1>
-          <p className="mt-1 text-xs text-[#8b95a6]">
-            私有/公共素材与回收站；本机导入由小高AI微信助手（127.0.0.1:19000）处理。
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={load}
-            disabled={loading}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#e4e8f0] bg-white px-3 py-2 text-xs font-medium text-[#1a1f2e] hover:bg-[#f3f6fa] disabled:opacity-50"
-          >
-            <RefreshCwIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            刷新
-          </button>
-          <button
-            type="button"
-            onClick={onPickFile}
-            disabled={importing || tab === "trash"}
-            className="inline-flex items-center gap-1 rounded-lg bg-[#1a1f2e] px-3 py-2 text-xs font-medium text-white hover:bg-[#2a3142] disabled:opacity-50"
-          >
-            <UploadIcon className="h-3.5 w-3.5" />
-            {importing ? "导入中…" : "导入本机素材"}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="video/*"
-            className="hidden"
-            onChange={onFileChange}
-          />
+      <header className="shrink-0 border-b border-[#e4e8f0] bg-white px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+              <ScissorsIcon size={23} />
+            </div>
+            <div>
+              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
+              <p className="mt-1 text-xs text-[#8b95a6]">私有/公共素材与回收站；本机导入由小高AI微信助手（127.0.0.1:19000）处理。</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              className="inline-flex items-center gap-1 rounded-lg border border-[#e4e8f0] bg-white px-3 py-2 text-xs font-medium text-[#1a1f2e] hover:bg-[#f3f6fa] disabled:opacity-50"
+            >
+              <RefreshCwIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              刷新
+            </button>
+            <button
+              type="button"
+              onClick={onPickFile}
+              disabled={importing || tab === "trash"}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#1a1f2e] px-3 py-2 text-xs font-medium text-white hover:bg-[#2a3142] disabled:opacity-50"
+            >
+              <UploadIcon className="h-3.5 w-3.5" />
+              {importing ? "导入中…" : "导入本机素材"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={onFileChange}
+            />
+          </div>
         </div>
       </header>
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2Icon } from "lucide-react";
+import { Loader2Icon, MessageCircleMoreIcon } from "lucide-react";
 import { toast } from "sonner";
 import {
   getReturnVisitPrompts,
@@ -141,11 +141,18 @@ export default function AdminReturnVisitsPage() {
   const [tab, setTab] = useState<TabKey>("prompts");
   return (
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="border-b border-[#e4e8f0] bg-white px-6 py-4">
-        <h1 className="text-base font-bold text-[#1a1f2e]">回访配置与运行记录</h1>
-        <p className="mt-1 text-[11px] text-[#8b95a6]">
-          超管维护回访话术模板与置信阈值；运行记录为只读审计视图。
-        </p>
+      <header className="shrink-0 border-b border-[#e4e8f0] bg-white px-5 py-4">
+        <div className="flex items-center gap-4">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+            <MessageCircleMoreIcon size={23} />
+          </div>
+          <div>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">回访配置与运行记录</h1>
+            <p className="mt-1 text-xs text-[#8b95a6]">
+              超管维护回访话术模板与置信阈值；运行记录为只读审计视图。
+            </p>
+          </div>
+        </div>
         <div className="mt-3 inline-flex rounded-lg border border-[#e4e8f0] bg-[#f8fafc] p-0.5 text-xs font-semibold">
           {(
             [

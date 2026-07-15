@@ -58,7 +58,7 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
   },
   {
     id: "wechat-assistant",
-    title: "小高AI微信助手",
+    title: "AI小高微信助手",
     shortLabel: "微信",
     path: "/wechat-assistant",
     defaultNavId: "ai-agent",
@@ -72,8 +72,20 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     ],
   },
   {
+    id: "ai-edit-center",
+    title: "AI小高剪辑",
+    shortLabel: "剪辑",
+    path: "/ai-edit/materials",
+    defaultNavId: "ai-edit-materials",
+    permissionCodes: [PERMISSIONS.aiEdit],
+    children: [
+      { id: "ai-edit-materials", label: "素材库", path: "/ai-edit/materials" },
+      { id: "ai-edit-editor", label: "剪辑工作台", path: "/ai-edit/editor" },
+    ],
+  },
+  {
     id: "compute-center",
-    title: "小高算力",
+    title: "AI小高算力",
     shortLabel: "算力",
     path: "/compute/center",
     defaultNavId: "compute",
@@ -84,18 +96,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "compute-recharge-orders", label: "充值订单", path: "/compute/recharge-orders" },
       { id: "compute-packages", label: "套餐配置", path: "/compute/packages", permissionCodes: [PERMISSIONS.adminComputeConfig] },
       { id: "compute-markup-ratios", label: "上浮比例", path: "/compute/markup-ratios", permissionCodes: [PERMISSIONS.adminComputeConfig] },
-    ],
-  },
-  {
-    id: "ai-edit-center",
-    title: "AI小高剪辑",
-    shortLabel: "剪辑",
-    path: "/ai-edit/materials",
-    defaultNavId: "ai-edit-materials",
-    permissionCodes: [PERMISSIONS.aiEdit],
-    children: [
-      { id: "ai-edit-materials", label: "素材库", path: "/ai-edit/materials" },
-      { id: "ai-edit-editor", label: "剪辑工作台", path: "/ai-edit/editor" },
     ],
   },
 ];

@@ -8,6 +8,7 @@ import {
   LogOutIcon,
   MessageCircleMoreIcon,
   MessagesSquareIcon,
+  ScissorsIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
@@ -38,6 +39,7 @@ const centerIcons: Record<string, React.ReactNode> = {
   "agents-center": <BotIcon size={18} />,
   "wechat-assistant": <ShieldCheckIcon size={18} />,
   "compute-center": <CoinsIcon size={18} />,
+  "ai-edit-center": <ScissorsIcon size={18} />,
 };
 
 const adminItems = [
@@ -242,7 +244,7 @@ export default function SideNav({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-semibold text-slate-200">小高AI微信助手</span>
+                      <span className="truncate text-xs font-semibold text-slate-200">AI小高微信助手</span>
                       <span className="text-[11px] font-bold text-[#8fb4ff]">v3.8</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">

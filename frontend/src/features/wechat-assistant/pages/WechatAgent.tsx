@@ -592,7 +592,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <MessageCircleIcon size={23} />
             </div>
             <div>
-              <h1 className="text-[15px] font-bold text-[#1a1f2e]">小高AI微信助手</h1>
+              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高微信助手</h1>
               <p className="mt-1 text-xs text-[#8b95a6]">
                 {pageMeta.description}
               </p>

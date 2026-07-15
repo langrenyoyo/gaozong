@@ -15,6 +15,7 @@ import {
   Loader2Icon,
   PlayIcon,
   RotateCcwIcon,
+  ScissorsIcon,
   SquareIcon,
   UploadIcon,
 } from "lucide-react";
@@ -220,11 +221,18 @@ export default function AiVideoEditor() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="border-b border-[#e4e8f0] bg-white px-6 py-4">
-        <h1 className="text-lg font-bold text-[#1a1f2e]">AI 小高剪辑工作台</h1>
-        <p className="mt-1 text-xs text-[#8b95a6]">
-          选择素材与模板，创建任务；720P 草稿预览后确认 1080P 成片。任务由本机 Worker 执行。
-        </p>
+      <header className="shrink-0 border-b border-[#e4e8f0] bg-white px-5 py-4">
+        <div className="flex items-center gap-4">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+            <ScissorsIcon size={23} />
+          </div>
+          <div>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
+            <p className="mt-1 text-xs text-[#8b95a6]">
+              选择素材与模板，创建任务；720P 草稿预览后确认 1080P 成片。任务由本机 Worker 执行。
+            </p>
+          </div>
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-6 lg:grid-cols-[minmax(0,1fr)_360px]">
