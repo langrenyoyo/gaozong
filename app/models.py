@@ -1319,11 +1319,13 @@ class AdReviewAdoptTask(Base):
 
 
 class AiEditJob(Base):
-    """AI 剪辑任务壳：只做迁入后的任务结构，不接外部 auto_edit。"""
+    """AI 剪辑任务壳：Phase 12 扩展阶段进度、attempt、执行令牌与取消/心跳。"""
 
     __tablename__ = "ai_edit_jobs"
     __table_args__ = (
         UniqueConstraint("job_id", name="uk_ai_edit_jobs_job_id"),
+        CheckConstraint("progress BETWEEN 0 AND 100", name="ck_ai_edit_jobs_progress_range"),
+        CheckConstraint("attempt_count >= 0", name="ck_ai_edit_jobs_attempt_nonnegative"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -1337,10 +1339,24 @@ class AiEditJob(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     completed_at = Column(DateTime, comment="完成时间")
+    # Phase 12 扩展：阶段/进度/设备/attempt/执行令牌/取消/心跳/指纹/版本/失败码（设计 §10）
+    stage = Column(String(32), comment="处理阶段（preflight/analyze/stabilize/plan/render_preview/render_final/verify）")
+    progress = Column(Integer, comment="进度 0..100")
+    agent_client_id = Column(String(128), comment="执行设备的 Local Agent 客户端 ID")
+    attempt_count = Column(Integer, comment="重试 attempt 计数（新 attempt 旧令牌不能覆盖新结果）")
+    execution_token_hash = Column(String(128), comment="本次 attempt 执行令牌哈希（防旧 attempt 回写）")
+    cancel_requested_at = Column(DateTime, comment="取消请求时间")
+    heartbeat_at = Column(DateTime, comment="Worker 最近心跳时间")
+    input_fingerprint = Column(String(128), comment="输入素材指纹摘要")
+    engine_version = Column(String(64), comment="渲染引擎版本")
+    template_version = Column(String(64), comment="剪辑模板版本")
+    model_version = Column(String(64), comment="规划模型版本")
+    failure_code = Column(String(64), comment="稳定失败码（机器可读）")
+    error_summary = Column(Text, comment="错误摘要（不含敏感原文）")
 
 
 class AiEditJobArtifact(Base):
-    """AI 剪辑产物：只存内部 storage_key，禁止保存或返回外部仓库绝对路径。"""
+    """AI 剪辑产物：Phase 12 扩展位置类型、设备、SHA-256、媒体属性与完整性。"""
 
     __tablename__ = "ai_edit_job_artifacts"
     __table_args__ = (
@@ -1356,4 +1372,99 @@ class AiEditJobArtifact(Base):
     file_name = Column(String(255), comment="文件名")
     mime_type = Column(String(64), comment="MIME 类型")
     file_size_bytes = Column(Integer, comment="文件大小（字节）")
+    created_at = Column(DateTime, default=datetime.now)
+    # Phase 12 扩展：位置/设备/SHA-256/媒体属性/完整性/来源产物（设计 §10）
+    location_type = Column(String(16), comment="位置类型（local/cloud）")
+    agent_client_id = Column(String(128), comment="产生产物的设备 ID")
+    content_sha256 = Column(String(64), comment="产物内容 SHA-256")
+    media_profile_json = Column(Text, comment="媒体属性 JSON（分辨率/时长/编码）")
+    integrity_status = Column(String(32), comment="完整性状态（verified/missing/corrupted）")
+    source_artifact_id = Column(String(64), comment="来源产物 ID（720P 草稿派生 1080P）")
+
+
+class AiEditMaterial(Base):
+    """AI 剪辑素材：归属、媒体属性、设备、存储和生命周期状态（Phase 12，设计 §10）。"""
+
+    __tablename__ = "ai_edit_materials"
+    __table_args__ = (
+        UniqueConstraint("material_id", name="uk_ai_edit_materials_material_id"),
+        CheckConstraint("scope IN ('merchant', 'platform')", name="ck_ai_edit_materials_scope"),
+        CheckConstraint(
+            "storage_mode IN ('local_only', 'uploading', 'cloud_available', 'local_missing')",
+            name="ck_ai_edit_materials_storage_mode",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    material_id = Column(String(64), nullable=False, comment="素材幂等 ID")
+    merchant_id = Column(String(128), comment="所属商户 ID（平台素材为空）")
+    scope = Column(String(16), nullable=False, comment="作用域（merchant/platform）")
+    media_type = Column(String(16), nullable=False, comment="媒体类型（video/audio/image）")
+    storage_mode = Column(String(32), nullable=False, comment="存储状态四态")
+    agent_client_id = Column(String(128), comment="来源设备 Local Agent 客户端 ID")
+    source_sha256 = Column(String(64), nullable=False, comment="原始素材 SHA-256")
+    parent_material_id = Column(String(64), comment="父素材 ID（增稳/转码派生）")
+    thumbnail_storage_key = Column(String(255), comment="缩略图内部存储键")
+    cloud_storage_key = Column(String(255), comment="云端产物内部存储键（主动上传后）")
+    analysis_status = Column(String(32), nullable=False, comment="分析状态")
+    stabilization_status = Column(String(32), nullable=False, comment="增稳状态")
+    deleted_at = Column(DateTime, comment="软删除时间（7 天回收站）")
+    purge_after = Column(DateTime, comment="物理清除截止时间")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AiEditMaterialAnalysis(Base):
+    """AI 剪辑素材分层分析：版本化 ASR、分镜、标签、可用区间（Phase 12）。"""
+
+    __tablename__ = "ai_edit_material_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    material_id = Column(String(64), nullable=False, comment="素材 ID")
+    source_sha256 = Column(String(64), nullable=False, comment="被分析的素材 SHA-256")
+    analysis_version = Column(String(64), nullable=False, comment="分析版本（算法+模型）")
+    transcript_json = Column(Text, nullable=False, comment="ASR 转写 JSON（严格 schema）")
+    scenes_json = Column(Text, nullable=False, comment="分镜 JSON（严格 schema）")
+    tags_json = Column(Text, nullable=False, comment="标签 JSON（严格 schema）")
+    usable_ranges_json = Column(Text, nullable=False, comment="可用区间 JSON（严格 schema）")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class AiEditTemplate(Base):
+    """AI 剪辑模板：平台模板、剪辑规则和 Prompt 版本（Phase 12）。"""
+
+    __tablename__ = "ai_edit_templates"
+    __table_args__ = (
+        UniqueConstraint("template_key", name="uk_ai_edit_templates_template_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_key = Column(String(64), nullable=False, comment="模板幂等 key")
+    name = Column(String(128), nullable=False, comment="模板名称")
+    rules_json = Column(Text, nullable=False, comment="剪辑规则 JSON（严格 schema）")
+    prompt_version = Column(String(64), nullable=False, comment="Prompt 版本")
+    enabled = Column(Boolean, nullable=False, server_default=false(), comment="是否启用")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AiEditJobMaterial(Base):
+    """AI 剪辑任务素材：角色、顺序、固定哈希和使用区间（Phase 12）。"""
+
+    __tablename__ = "ai_edit_job_materials"
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id", "material_id", "role", "position",
+            name="uk_ai_edit_job_materials_job_material_role_pos",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String(64), nullable=False, comment="任务 ID")
+    material_id = Column(String(64), nullable=False, comment="素材 ID")
+    role = Column(String(16), nullable=False, comment="素材角色（main/broll/audio）")
+    position = Column(Integer, nullable=False, comment="同角色内顺序")
+    pinned_sha256 = Column(String(64), nullable=False, comment="钉住的素材哈希（防漂移）")
+    source_start = Column(Float, comment="源片段起始秒")
+    source_end = Column(Float, comment="源片段结束秒")
     created_at = Column(DateTime, default=datetime.now)

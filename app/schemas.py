@@ -2126,7 +2126,11 @@ class AdReviewAdoptTaskOut(BaseModel):
 
 
 class AiEditJobOut(BaseModel):
-    """AI 剪辑任务输出结构。"""
+    """AI 剪辑任务输出结构（Phase 12 扩展阶段/进度/attempt/版本/失败码对外字段）。
+
+    不返回 execution_token_hash / input_fingerprint / input_json / result_json
+    等内部或可能含敏感原文的字段（设计 §10）。
+    """
 
     id: int
     merchant_id: str
@@ -2135,10 +2139,20 @@ class AiEditJobOut(BaseModel):
     source_type: Optional[str] = None
     error_message: Optional[str] = None
     completed_at: Optional[datetime] = None
+    stage: Optional[str] = None
+    progress: Optional[int] = None
+    attempt_count: Optional[int] = None
+    cancel_requested_at: Optional[datetime] = None
+    heartbeat_at: Optional[datetime] = None
+    engine_version: Optional[str] = None
+    template_version: Optional[str] = None
+    model_version: Optional[str] = None
+    failure_code: Optional[str] = None
+    error_summary: Optional[str] = None
 
 
 class AiEditJobArtifactOut(BaseModel):
-    """AI 剪辑产物输出结构（只返回内部 storage_key，不返回绝对路径）。"""
+    """AI 剪辑产物输出结构（Phase 12 扩展位置/SHA-256/完整性/媒体属性）。"""
 
     id: int
     merchant_id: str
@@ -2149,6 +2163,65 @@ class AiEditJobArtifactOut(BaseModel):
     file_name: Optional[str] = None
     mime_type: Optional[str] = None
     file_size_bytes: Optional[int] = None
+    location_type: Optional[str] = None
+    content_sha256: Optional[str] = None
+    integrity_status: Optional[str] = None
+    media_profile_json: Optional[str] = None
+    source_artifact_id: Optional[str] = None
+
+
+class AiEditMaterialOut(BaseModel):
+    """AI 剪辑素材输出结构。
+
+    设计 §10：外部 API 不返回绝对路径、storage_key、merchant_id；
+    故只暴露状态、媒体类型与内容哈希，不含内部存储键与设备/商户标识。
+    """
+
+    material_id: str
+    scope: str
+    media_type: str
+    storage_mode: str
+    source_sha256: str
+    analysis_status: str
+    stabilization_status: str
+    deleted_at: Optional[datetime] = None
+    purge_after: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AiEditMaterialAnalysisOut(BaseModel):
+    """AI 剪辑素材分析输出结构（JSON 列以严格 schema 序列化文本返回）。"""
+
+    material_id: str
+    source_sha256: str
+    analysis_version: str
+    transcript_json: str
+    scenes_json: str
+    tags_json: str
+    usable_ranges_json: str
+
+
+class AiEditTemplateOut(BaseModel):
+    """AI 剪辑模板输出结构。"""
+
+    template_key: str
+    name: str
+    rules_json: str
+    prompt_version: str
+    enabled: bool
+
+
+class AiEditJobMaterialOut(BaseModel):
+    """AI 剪辑任务素材输出结构。"""
+
+    job_id: str
+    material_id: str
+    role: str
+    position: int
+    pinned_sha256: str
+    source_start: Optional[float] = None
+    source_end: Optional[float] = None
 
 
 class AiReplyDecisionEffectivenessPatch(BaseModel):
