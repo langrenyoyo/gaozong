@@ -94,8 +94,30 @@ def write_result_atomically(result_path: Path, result: WorkerResult) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Worker 入口：默认仅预检（Task 5），真实媒体链由 run_worker(pipeline) 触发。
+
+    ponytail: Task 6 pipeline 集成在 run_worker；main 保持 preflight-only 默认，
+    避免无 deps 注入时触发真实 ffmpeg（测试与本地无媒体场景安全）。
+    Task 7 监管器启动子进程时显式调用 run_worker。
+    """
     manifest_path = parse_manifest_path(argv)
     manifest = load_manifest(manifest_path)
     result = run_preflight_only(manifest)
     write_result_atomically(manifest.task_root / "result.json", result)
     return 0 if result.status != "failed" else 1
+
+
+def run_worker(manifest_path: Path, *, deps: "object | None" = None) -> int:
+    """运行完整媒体流水线并原子写 result.json（Task 6）。
+
+    deps 为 PipelineDeps；测试注入替身，真实运行注入默认依赖。
+    ponytail: 默认 deps=None 时回退 preflight-only，防无依赖环境触发真实 ffmpeg。
+    """
+    manifest = load_manifest(manifest_path)
+    if deps is None:
+        result = run_preflight_only(manifest)
+    else:
+        from apps.ai_edit.pipeline import run_pipeline  # 延迟导入，避免 main 路径强依赖
+        result = run_pipeline(manifest, deps=deps, cancel_check=lambda: False)
+    write_result_atomically(manifest.task_root / "result.json", result)
+    return 0 if result.status not in ("failed", "cancelled") else 1
