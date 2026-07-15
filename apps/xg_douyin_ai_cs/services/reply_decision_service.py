@@ -2350,7 +2350,7 @@ def _report_llm_usage(
 ) -> None:
     """Phase 10 §0.2：LLM 成功后按字符计量上报算力消耗到 9000。
 
-    计量只看 messages 内容字符数 + reply_text 字符数；不再使用 provider 的 usage.total_tokens。
+    计量只看 messages 内容字符数 + reply_text 字符数；不再使用 provider 返回的 token 用量。
     上报失败只记日志，**绝不影响**回复建议主流程。
     安全边界：本函数不涉及 auto_send，不改变回复内容；payload/日志不含提示词或回复原文。
     """

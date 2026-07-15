@@ -138,7 +138,7 @@ def _fallback(report_day: str, reason: str, *, model: str | None = None) -> dict
 
 
 def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
-    """Phase 10 §0.2：LLM 成功后按字符计量上报；不再使用 provider usage.total_tokens，失败不影响摘要。"""
+    """Phase 10 §0.2：LLM 成功后按字符计量上报；不再使用 provider 返回的 token 用量，失败不影响摘要。"""
     if not merchant_id:
         return
     tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
