@@ -2795,6 +2795,40 @@ def create_local_agent_app(
 
         return result
 
+    # Phase 12 Task 7：AI 剪辑窄路由（独立注册，Worker 缺失不影响微信路由）。
+    # 复用既有 Local Agent token 鉴权，不接受 merchant_id 和绝对路径。
+    try:
+        from app.local_agent_ai_edit_routes import create_ai_edit_router
+        from app.local_agent_ai_edit_supervisor import AiEditSupervisor
+
+        ai_edit_work_root = Path(os.getenv(
+            "AI_EDIT_WORK_ROOT", str(Path.home() / ".auto_wechat" / "ai_edit" / "work")
+        ))
+        ai_edit_storage_root = Path(os.getenv(
+            "AI_EDIT_STORAGE_ROOT",
+            str(Path.home() / ".auto_wechat" / "ai_edit" / "materials"),
+        ))
+
+        def _ai_edit_executor(job):
+            # ponytail: 一期 in-process 替身；Task 8 打包后由 run_worker 启动子进程。
+            # 真实 Worker 缺失时返回 failed 而非抛异常，保证微信路由不受影响。
+            try:
+                from apps.ai_edit.worker_main import run_worker
+                from apps.ai_edit.pipeline import PipelineDeps  # noqa: F401  延迟导入
+                return {"status": "failed", "failure_code": "WORKER_NOT_CONFIGURED"}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ai_edit executor stage=worker_unavailable error=%s", exc)
+                return {"status": "failed", "failure_code": "WORKER_UNAVAILABLE"}
+
+        ai_edit_supervisor = AiEditSupervisor(
+            work_root=ai_edit_work_root, executor=_ai_edit_executor
+        )
+        app.include_router(create_ai_edit_router(
+            supervisor=ai_edit_supervisor, storage_root=ai_edit_storage_root,
+        ))
+    except Exception as exc:  # noqa: BLE001  AI 剪辑路由注册失败不阻塞微信主路由
+        logger.warning("ai_edit_routes stage=register_failed error=%s", exc)
+
     return app
 
 
