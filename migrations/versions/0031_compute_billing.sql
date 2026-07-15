@@ -108,6 +108,15 @@ CREATE TABLE _compute_transactions_new_0031 (
     CHECK (markup_basis_points IS NULL OR markup_basis_points >= 0)
 );
 
+-- 前置守卫：delta_tokens = BIGINT_MIN（-2^63）的历史行 abs 会溢出（actual_tokens 是 BIGINT，
+-- abs(-2^63)=2^63 超出 BIGINT_MAX）。运行时 _balance_within_bigint_range 已禁止产生该边界；
+-- 历史行若存在则迁移阻断，要求人工清理后再迁移。用 < -9223372036854775807 跨方言安全匹配。
+CREATE TEMP TABLE _guard_ct_0031 (ok INTEGER NOT NULL CHECK (ok = 1));
+INSERT INTO _guard_ct_0031 (ok)
+SELECT CASE WHEN
+    (SELECT count(*) FROM _compute_transactions_backup_0031 WHERE delta_tokens < -9223372036854775807) = 0
+THEN 1 ELSE 0 END;
+
 -- 复制旧 12 列 + 历史 consume 回填快照（actual=abs(delta)、markup=0、capability=NULL）；
 -- 充值/套餐三字段保持 NULL。历史能力无法证明，禁止伪造。
 INSERT INTO _compute_transactions_new_0031 (
@@ -124,7 +133,7 @@ SELECT
 FROM _compute_transactions_backup_0031;
 
 -- 多重集守卫：行数 + max(id) + 双向 GROUP BY 全旧 12 业务列 COUNT EXCEPT
-CREATE TEMP TABLE _guard_ct_0031 (ok INTEGER NOT NULL CHECK (ok = 1));
+-- 注：_guard_ct_0031 已在前置 BIGINT_MIN 守卫时创建，此处直接复用追加守卫。
 
 INSERT INTO _guard_ct_0031 (ok)
 SELECT CASE WHEN

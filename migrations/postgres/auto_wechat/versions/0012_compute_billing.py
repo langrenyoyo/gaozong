@@ -29,6 +29,19 @@ def upgrade() -> None:
     op.add_column("compute_transactions", sa.Column("capability_key", sa.String(length=64), nullable=True))
     op.add_column("compute_transactions", sa.Column("markup_basis_points", sa.Integer(), nullable=True))
 
+    # 1.5 前置守卫：delta_tokens = BIGINT_MIN（-2^63）的历史行 abs 会溢出（actual_tokens 是
+    # BIGINT，abs(-2^63)=2^63 超出 BIGINT_MAX）。运行时 _balance_within_bigint_range 已禁止
+    # 产生该边界；历史行若存在则迁移阻断，要求人工清理后再迁移。用 < -9223372036854775807 跨方言安全匹配。
+    bind = op.get_bind()
+    bigint_min_count = bind.execute(
+        sa.text("SELECT count(*) FROM compute_transactions WHERE delta_tokens < -9223372036854775807")
+    ).scalar()
+    if bigint_min_count:
+        raise RuntimeError(
+            "compute_transactions 存在 delta_tokens = BIGINT_MIN（-2^63）的历史行，"
+            "abs 回填会溢出 BIGINT；请人工清理或冻结该边界后再迁移。"
+        )
+
     # 2. 历史 consume 回填实际量与 0 比例快照；capability_key 保持 NULL（禁止伪造历史能力）
     op.execute(
         "UPDATE compute_transactions "

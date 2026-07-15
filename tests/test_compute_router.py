@@ -391,3 +391,21 @@ def test_internal_token_enforced(monkeypatch):
         "/internal/compute/usage", json=payload, headers={"X-Internal-Token": "secret-token"}
     )
     assert resp.status_code == 200
+
+
+def test_internal_token_production_fail_closed(monkeypatch):
+    """生产环境（APP_ENV=production）未配置 COMPUTE_INTERNAL_TOKEN 时，usage 端点 500 fail-closed，
+    避免任意 merchant_id 被自动建账扣费（Task 7-FIX1 Must-Fix 1）。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("app.routers.compute.is_production_env", lambda: True)
+    internal = _client()
+    payload = {
+        "merchant_id": "merchant-evil",
+        "tokens": 100,
+        "capability_key": "douyin-cs",
+        "source": "llm",
+        "model": "gpt",
+    }
+    resp = internal.post("/internal/compute/usage", json=payload)
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "INTERNAL_TOKEN_NOT_CONFIGURED"

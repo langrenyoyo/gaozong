@@ -185,3 +185,23 @@ def test_compute_app_internal_usage_keeps_existing_deduct_semantics():
     data = usage.json()["data"]
     assert data["balance_tokens"] == 700
     assert data["today_consume"] == 300
+
+
+def test_internal_usage_production_fail_closed(monkeypatch):
+    """9205 生产环境未配置 COMPUTE_INTERNAL_TOKEN 时，usage 端点 500 fail-closed（Task 7-FIX1 Must-Fix 1）。"""
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("apps.compute.routers.is_production_env", lambda: True)
+    _seed_markup_ratio()
+    client = _client()
+    resp = client.post(
+        "/api/compute/internal/usage",
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 100,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o",
+        },
+    )
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "INTERNAL_TOKEN_NOT_CONFIGURED"

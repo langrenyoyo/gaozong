@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.config import is_production_env
 from app.database import get_db
 from apps.compute.dependencies import (
     GatewayContext,
@@ -256,14 +257,23 @@ def admin_update_markup_ratio(
 
 
 def _get_internal_token() -> str:
-    """读取内部调用令牌；为空表示开发环境未配置。"""
+    """读取内部调用令牌；为空表示未配置。"""
     return os.getenv("COMPUTE_INTERNAL_TOKEN", "").strip()
 
 
 def _require_internal(request: Request) -> None:
-    """内部接口保护。生产前必须由 gateway 或服务间鉴权收口。"""
+    """内部接口保护：配置 COMPUTE_INTERNAL_TOKEN 时校验 X-Internal-Token。
+
+    生产环境（APP_ENV=production）缺配置即拒绝（fail-closed）；开发环境未配置则放行。
+    9205 默认仅本机/LAN 暴露，生产前仍必须由 gateway 或服务间鉴权收口。
+    """
     expected = _get_internal_token()
     if not expected:
+        if is_production_env():
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "INTERNAL_TOKEN_NOT_CONFIGURED", "message": "生产环境必须配置 COMPUTE_INTERNAL_TOKEN"},
+            )
         return
     provided = request.headers.get("X-Internal-Token", "").strip()
     if provided != expected:

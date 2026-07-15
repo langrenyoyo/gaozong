@@ -969,6 +969,46 @@ def test_sqlite_0031_upgrade_rejects_generated_column_on_transactions(tmp_path):
     _assert_no_0031_residue(db_path)
 
 
+def test_sqlite_0031_upgrade_rejects_bigint_min_delta(tmp_path):
+    """compute_transactions 有 delta_tokens = BIGINT_MIN（-2^63）历史行 → upgrade 必须事前拒绝，
+    abs 回填会溢出 BIGINT（actual_tokens 是 BIGINT，abs(-2^63)=2^63 超出 BIGINT_MAX）。
+    Task 7-FIX1 Must-Fix 2。"""
+    if not SQLITE_FILE_PHASE10.is_file():
+        pytest.skip("SQLite 0031 未实现")
+    db_path = tmp_path / "phase10_fix1_upgrade_bigint_min.db"
+    conn = migrate_sqlite.connect_readwrite(db_path)
+    try:
+        _apply_baseline_with_history(conn)
+        # 插入一行 delta_tokens = BIGINT_MIN 的历史 consume 流水（合法非 0 值，但 abs 溢出）
+        conn.execute(
+            "INSERT INTO compute_transactions "
+            "(merchant_id, transaction_type, delta_tokens, balance_after_tokens, "
+            " source, model, created_at) "
+            "VALUES (?,?,?,?,?,?, CURRENT_TIMESTAMP)",
+            ("m-evil", "consume", -9223372036854775808, -9223372036854775808, "llm", "gpt"),
+        )
+        with pytest.raises(Exception):
+            _apply_on_temp(conn, "0031")
+    finally:
+        conn.close()
+
+    conn = migrate_sqlite.connect_readonly(db_path)
+    try:
+        assert "actual_tokens" not in migrate_sqlite.get_columns(conn, "compute_transactions"), (
+            "BIGINT_MIN 场景 upgrade 被拒不应出现新列"
+        )
+        bigint_min_remaining = conn.execute(
+            "SELECT count(*) FROM compute_transactions WHERE delta_tokens < -9223372036854775807"
+        ).fetchone()[0]
+        assert bigint_min_remaining == 1, "BIGINT_MIN 历史行不得被静默删除"
+        assert conn.execute(
+            "SELECT count(*) FROM compute_transactions"
+        ).fetchone()[0] == 5, "历史流水数据不得丢失（4 基线 + 1 BIGINT_MIN）"
+    finally:
+        conn.close()
+    _assert_no_0031_residue(db_path)
+
+
 def test_sqlite_0031_upgrade_rejects_generated_column_on_markup_ratios(tmp_path):
     """compute_markup_ratios 有 VIRTUAL 生成列 → upgrade 必须事前拒绝（两表都识别生成列）。"""
     if not SQLITE_FILE_PHASE10.is_file():

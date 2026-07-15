@@ -261,3 +261,20 @@ def test_postgres_0012_downgrade_preserves_legacy_tables():
         assert f'op.drop_table("{table}"' not in downgrade, (
             f"downgrade 不得删除历史表 {table}"
         )
+
+
+def test_postgres_0012_guard_bigint_min_delta_before_abs_backfill():
+    """0012 upgrade 必须在 abs 回填前守卫 delta_tokens = BIGINT_MIN（abs(-2^63) 溢出 BIGINT_MAX）。
+    Task 7-FIX1 Must-Fix 2。"""
+    content = _content()
+    assert "-9223372036854775807" in content, (
+        "0012 必须用 delta_tokens < -9223372036854775807 守卫 BIGINT_MIN（abs 溢出）"
+    )
+    # 在 upgrade 函数体内校验守卫先于 abs 回填（排除文件头 docstring 里的 abs 字样）
+    upgrade_start = content.find("def upgrade()")
+    assert upgrade_start != -1, "0012 必须有 upgrade 函数"
+    upgrade_body = content[upgrade_start:]
+    guard_pos = upgrade_body.find("-9223372036854775807")
+    abs_pos = upgrade_body.find("abs(delta_tokens)")
+    assert guard_pos != -1 and abs_pos != -1, "upgrade 内守卫与 abs 回填都必须存在"
+    assert guard_pos < abs_pos, "BIGINT_MIN 守卫必须在 abs 回填之前"
