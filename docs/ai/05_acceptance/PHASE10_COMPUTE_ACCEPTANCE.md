@@ -27,7 +27,7 @@
 
 **Task 7 额外改动**（修复静态门禁 #4）：`reply_decision_service.py` + `daily_report_summary_service.py` 注释措辞调整（"usage.total_tokens" → "provider 返回的 token 用量"），让 `rg total_tokens` 零命中，语义不变。
 
-**Task 7-FIX1 改动**（三方评审 BLOCKED 后闭合 5 个 Must-Fix，提交号待补）：
+**Task 7-FIX1 改动**（三方评审 BLOCKED 后闭合 5 个 Must-Fix，提交 `0821759`）：
 - Must-Fix 1（高危 fail-open）：`app/routers/compute.py` + `apps/compute/routers.py` 的 `_require_internal` 改 fail-closed（生产 `APP_ENV=production` 空配置 → 500 `INTERNAL_TOKEN_NOT_CONFIGURED`，dev 仍放行）；补 9000/9205 production fail-closed 测试。
 - Must-Fix 2（高危 BIGINT_MIN）：`0031_compute_billing.sql` + `0012_compute_billing.py` 在 abs 回填前加 `delta_tokens < -9223372036854775807` 守卫（BIGINT_MIN 行 abs 溢出 BIGINT_MAX，存在则迁移阻断）；补 SQLite + PG 双数据库守卫测试。
 - Must-Fix 3/4/5：本验收文档提交链加 `b3bc6b6`/`47884ba` + 起点/终点调整；后端/迁移 1 failed 补起点 `265d719` 同命令证据；完成定义改"目标专项通过、扩展回归零新增失败"；网络零调用措辞收窄为"专项测试哨兵"。
