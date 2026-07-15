@@ -39,6 +39,9 @@ class LocalAiEditJob:
     attempt_id: str
     manifest_path: str
     merchant_id: str = ""
+    # §5 下发通道：9000 agent-create 返回的执行令牌与 attempt，供终态回写。
+    execution_token_hash: str = ""
+    attempt_count: int = 0
 
 
 @dataclass

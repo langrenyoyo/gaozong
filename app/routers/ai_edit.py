@@ -284,6 +284,43 @@ def retry_job(
     return _ok(svc.to_job_out(job).model_dump())
 
 
+@router.post("/jobs/agent-create")
+def agent_create_job(
+    payload: JobCreateRequest,
+    db: Session = Depends(get_db),
+    agent: LocalAgentAuthContext = Depends(require_local_agent_context),
+):
+    """19000 Local Agent 创建任务并领取执行令牌（设计 §5 下发通道，仅可信 19000）。
+
+    merchant_id 来自 token 映射；响应返回 execution_token_hash + attempt_count，
+    供 19000 终态回写 update_job_status。商户公共 Out（/jobs）仍脱敏不含令牌（§10）。
+    不改 status 路由的令牌强制（Task 3-FIX1 不违反）：status 仍要求调用方自带令牌。
+    """
+    if not agent.merchant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "LOCAL_AGENT_NO_MERCHANT", "message": "Local Agent token 未映射商户"},
+        )
+    try:
+        job = svc.create_job(
+            db,
+            merchant_id=agent.merchant_id,
+            job_id=payload.job_id,
+            template_key=payload.template_key,
+            materials=[m.model_dump() for m in payload.materials],
+        )
+    except svc.AiEditNotFound:
+        raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND", "message": "素材不存在"})
+    except svc.AiEditStatusConflict as exc:
+        raise HTTPException(status_code=409, detail={"code": "JOB_CONFLICT", "message": str(exc)})
+    db.commit()
+    return _ok({
+        **svc.to_job_out(job).model_dump(),
+        "execution_token_hash": job.execution_token_hash,
+        "attempt_count": job.attempt_count,
+    })
+
+
 @router.post("/jobs/{job_id}/status")
 def update_job_status(
     job_id: str,

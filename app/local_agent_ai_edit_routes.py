@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -23,6 +23,24 @@ from app.local_agent_ai_edit_storage import (
     soft_delete_material,
 )
 from app.local_agent_ai_edit_supervisor import AiEditSupervisor, LocalAiEditJob
+
+
+class Nine000ControlClient(Protocol):
+    """9000 控制面客户端协议（§5：19000 下发令牌 + 终态回写）。
+
+    生产实现为 HTTP 客户端（调 9000 base_url）；e2e 注入替身直调 TestClient。
+    """
+
+    def agent_create_job(
+        self, *, merchant_id: str, job_id: str, template_key: str, materials: list
+    ) -> dict: ...
+
+    def update_job_status(
+        self, *, merchant_id: str, job_id: str, execution_token_hash: str,
+        attempt_count: int, status: str, stage: str | None = None,
+        progress: int | None = None, failure_code: str | None = None,
+        error_summary: str | None = None,
+    ) -> dict: ...
 
 
 def _ok(data) -> dict:
@@ -61,10 +79,17 @@ def _write_manifest_atomic(manifest_path: Path, manifest: dict) -> None:
         raise
 
 
-def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, work_root: Path) -> APIRouter:
+def create_ai_edit_router(
+    *,
+    supervisor: AiEditSupervisor,
+    storage_root: Path,
+    work_root: Path,
+    nine000_client: "Nine000ControlClient | None" = None,
+) -> APIRouter:
     """创建 AI 剪辑窄路由（复用 Local Agent token 鉴权 + 商户隔离）。
 
     FIX1-1：storage_root 与 work_root 按 ctx.merchant_id 分目录，商户互不可见。
+    nine000_client：§5 下发/回写通道；为 None 时仅本地执行不回写 9000（兼容旧测试）。
     """
     router = APIRouter(prefix="/agent/ai-edit", tags=["AI剪辑本地"])
 
@@ -273,12 +298,45 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
             }
             _write_manifest_atomic(manifest_path, manifest)
 
-            # 4. 入队（失败则回滚）
+            # 4. 领取执行令牌（§5 下发通道：19000 经 9000 agent-create 拿 token 回写用）
+            execution_token_hash = ""
+            attempt_count = 0
+            if nine000_client is not None:
+                try:
+                    materials_9000 = [
+                        {
+                            "material_id": m.material_id,
+                            "role": m.role,
+                            "position": idx,
+                            "pinned_sha256": _material_sha256(mroot, m.material_id),
+                            "source_start": 0.0,
+                            "source_end": None,
+                        }
+                        for idx, m in enumerate(payload.materials)
+                    ]
+                    created = nine000_client.agent_create_job(
+                        merchant_id=ctx.merchant_id,
+                        job_id=payload.job_id,
+                        template_key=payload.template_key,
+                        materials=materials_9000,
+                    )
+                    execution_token_hash = str(created.get("execution_token_hash", ""))
+                    attempt_count = int(created.get("attempt_count", 0))
+                except Exception as exc:  # noqa: BLE001  9000 下发失败回滚活动引用
+                    _release_marked()
+                    raise HTTPException(
+                        status_code=502,
+                        detail={"code": "NINE000_AGENT_CREATE_FAILED", "message": "9000 任务下发失败"},
+                    ) from exc
+
+            # 5. 入队（失败则回滚）
             job = LocalAiEditJob(
                 job_id=payload.job_id,
                 attempt_id=f"att-{payload.job_id}",
                 manifest_path=str(manifest_path),
                 merchant_id=ctx.merchant_id,
+                execution_token_hash=execution_token_hash,
+                attempt_count=attempt_count,
             )
             supervisor.enqueue(job)
         except HTTPException:

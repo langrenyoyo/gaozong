@@ -2814,6 +2814,43 @@ def create_local_agent_app(
         )
         ai_edit_worker_python = os.getenv("AI_EDIT_WORKER_PYTHON", sys.executable)
 
+        # §5 下发/回写通道：server_url 配置时构造 9000 HTTP client（复用 _http_post_json + token）。
+        # server_url 缺失（开发态）时 nine000_client=None，仅本地执行不回写 9000。
+        nine000_client = None
+        if server_url:
+            class _Nine000HttpClient:
+                def agent_create_job(self, *, merchant_id, job_id, template_key, materials):
+                    url = f"{server_url.rstrip('/')}/ai-edit/jobs/agent-create"
+                    resp = _http_post_json(url, {
+                        "job_id": job_id, "template_key": template_key, "materials": materials,
+                    })
+                    if not resp.get("ok"):
+                        raise RuntimeError(f"agent_create_failed:{resp.get('status')}")
+                    return resp["json"]["data"]
+
+                def update_job_status(self, *, merchant_id, job_id, execution_token_hash,
+                                      attempt_count, status, stage=None, progress=None,
+                                      failure_code=None, error_summary=None):
+                    url = f"{server_url.rstrip('/')}/ai-edit/jobs/{job_id}/status"
+                    payload = {
+                        "execution_token_hash": execution_token_hash,
+                        "attempt_count": attempt_count, "status": status,
+                    }
+                    if stage is not None:
+                        payload["stage"] = stage
+                    if progress is not None:
+                        payload["progress"] = progress
+                    if failure_code is not None:
+                        payload["failure_code"] = failure_code
+                    if error_summary is not None:
+                        payload["error_summary"] = error_summary
+                    resp = _http_post_json(url, payload)
+                    if not resp.get("ok"):
+                        raise RuntimeError(f"status_writeback_failed:{resp.get('status')}")
+                    return resp["json"]["data"]
+
+            nine000_client = _Nine000HttpClient()
+
         def _ai_edit_executor(job):
             # FIX2-8：真实启动 Worker 子进程（参数数组+独立进程组），异步读 stdout/stderr
             # 防 PIPE 填满死锁；注册进程句柄供取消终止进程树。
@@ -2877,23 +2914,35 @@ def create_local_agent_app(
                 logger.warning("ai_edit executor stage=worker_error job_id=%s error=%s", job.job_id, exc)
                 return {"status": "failed", "failure_code": "WORKER_ERROR"}
 
-        # FIX2-7：任务终态回调——释放活动素材引用（成功/失败/取消/异常均释放）
+        # FIX2-7：任务终态回调——释放活动素材引用 + 回写 9000 状态（§5 转发进度）
         def _on_job_terminal(job, status):
             try:
                 from app.local_agent_ai_edit_storage import mark_active_reference, merchant_storage_root
-                if not job.merchant_id:
-                    return
-                mroot = merchant_storage_root(ai_edit_storage_root, job.merchant_id)
-                # 读取 manifest 获取素材 ID 列表
-                manifest_path = Path(job.manifest_path)
-                if manifest_path.exists():
-                    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                    for m in manifest_data.get("materials", []):
-                        mark_active_reference(mroot, m.get("material_id", ""),
-                                               job_id=job.job_id, active=False)
+                if job.merchant_id:
+                    mroot = merchant_storage_root(ai_edit_storage_root, job.merchant_id)
+                    # 读取 manifest 获取素材 ID 列表
+                    manifest_path = Path(job.manifest_path)
+                    if manifest_path.exists():
+                        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        for m in manifest_data.get("materials", []):
+                            mark_active_reference(mroot, m.get("material_id", ""),
+                                                   job_id=job.job_id, active=False)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("ai_edit on_job_terminal stage=release_error job_id=%s error=%s",
                                job.job_id, exc)
+            # §5：终态回写 9000（用 agent-create 下发的令牌；失败只记日志不阻塞本地终态）
+            if nine000_client is not None and job.execution_token_hash:
+                try:
+                    nine000_client.update_job_status(
+                        merchant_id=job.merchant_id, job_id=job.job_id,
+                        execution_token_hash=job.execution_token_hash,
+                        attempt_count=job.attempt_count, status=status,
+                        stage="completed" if status == "succeeded" else status,
+                        progress=100 if status == "succeeded" else None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("ai_edit on_job_terminal stage=writeback_error job_id=%s error=%s",
+                                   job.job_id, exc)
 
         ai_edit_supervisor = AiEditSupervisor(
             work_root=ai_edit_work_root, executor=_ai_edit_executor,
@@ -2905,7 +2954,7 @@ def create_local_agent_app(
             logger.info("ai_edit supervisor stage=recover requeued=%s", recovered)
         app.include_router(create_ai_edit_router(
             supervisor=ai_edit_supervisor, storage_root=ai_edit_storage_root,
-            work_root=ai_edit_work_root,
+            work_root=ai_edit_work_root, nine000_client=nine000_client,
         ))
     except Exception as exc:  # noqa: BLE001  AI 剪辑路由注册失败不阻塞微信主路由
         logger.warning("ai_edit_routes stage=register_failed error=%s", exc)
