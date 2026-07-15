@@ -18,6 +18,7 @@ import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
+import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
@@ -816,6 +817,8 @@ export default function Index({
           <DailyReports user={user} />
         ) : isWechatAssistantNav ? (
           <WechatAgent activeTab={activeWechatTab} />
+        ) : activeNav === "compute-markup-ratios" ? (
+          <SuperComputeConfig />
         ) : isComputeNav ? (
           <ComputeCenter />
         ) : (
