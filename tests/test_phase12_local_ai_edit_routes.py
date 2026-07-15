@@ -349,6 +349,23 @@ def test_job_create_missing_material_releases_active_reference(tmp_path):
     assert dele.status_code == 200  # 回滚后可删除
 
 
+def test_job_create_invalid_job_id_releases_active_reference(tmp_path):
+    """FIX4：非法 job_id（如 ../escape）触发 422 时，已标记的活动引用必须回滚。"""
+    client = _build_client(tmp_path)
+    _import(client, material_id="mat-1")
+    # job_id 含斜杠段 → _worker_manifest_dir 抛 422，但 mat-1 已被标记 active
+    resp = client.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "../escape", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    )
+    assert resp.status_code == 422
+    # mat-1 应可删除（活动引用已回滚，非 409）
+    dele = client.delete("/agent/ai-edit/materials/mat-1", headers={"X-Local-Agent-Token": "tok-1"})
+    assert dele.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Worker 缺失不影响微信路由
 # ---------------------------------------------------------------------------

@@ -282,6 +282,9 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
             )
             supervisor.enqueue(job)
         except HTTPException:
+            # FIX4：非法 job_id/其他校验失败时，已标记的活动引用必须回滚，
+            # 否则素材被永久锁为"活动任务引用中"无法删除。
+            _release_marked()
             raise
         except OSError as exc:
             _release_marked()
