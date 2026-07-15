@@ -36,6 +36,7 @@ from app.routers import (
     admin_autoreply_rollout,
     admin_return_visits,
     forbidden_words,
+    ai_edit,
     douyin_accounts,
     agents,
     knowledge_categories,
@@ -138,6 +139,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_autoreply_rollout.router)
     app.include_router(admin_return_visits.router)
     app.include_router(forbidden_words.router)
+    app.include_router(ai_edit.router)
     app.include_router(douyin_accounts.router)
     app.include_router(agents.router)
     app.include_router(knowledge_categories.router)
