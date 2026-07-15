@@ -200,6 +200,56 @@ def test_no_absolute_path_columns_in_9000_schema():
 
 
 # ---------------------------------------------------------------------------
+# 公共 Out 模型脱敏合同（设计 §10 第 227 行：外部 API 不返回 storage_key/
+# merchant_id/执行令牌/绝对路径；检查点 A 安全+规范审查 BLOCKED 要求）
+# ---------------------------------------------------------------------------
+
+# 设计 §10：外部 API 不返回绝对路径、storage_key、执行令牌或 merchant_id
+SENSITIVE_LEAK_FIELDS = {
+    "storage_key",
+    "merchant_id",
+    "execution_token_hash",
+    "absolute_path",
+    "source_path",
+    "local_path",
+}
+
+# Phase 12 对外公共响应模型（内部 ORM 可保留 merchant_id/storage_key，公共 Out 不得泄露）
+PUBLIC_AI_EDIT_OUT_MODELS = (
+    "AiEditJobOut",
+    "AiEditJobArtifactOut",
+    "AiEditMaterialOut",
+    "AiEditMaterialAnalysisOut",
+    "AiEditTemplateOut",
+    "AiEditJobMaterialOut",
+)
+
+
+def test_phase12_public_out_models_exclude_sensitive_fields():
+    """公共 Out 模型声明字段集不得含 storage_key/merchant_id/执行令牌/绝对路径。"""
+    import app.schemas as schemas
+
+    for name in PUBLIC_AI_EDIT_OUT_MODELS:
+        Model = getattr(schemas, name)
+        leaked = set(Model.model_fields.keys()) & SENSITIVE_LEAK_FIELDS
+        assert not leaked, f"公共 Out 模型 {name} 泄露敏感字段: {leaked}"
+
+
+def test_phase12_public_out_model_dump_excludes_sensitive_keys():
+    """model_dump() 键集不得含敏感键（防 alias/序列化机制绕过字段集断言）。"""
+    import app.schemas as schemas
+
+    for name in PUBLIC_AI_EDIT_OUT_MODELS:
+        Model = getattr(schemas, name)
+        # model_construct 跳过类型校验，全字段填 None（兼容所有类型）后 dump，验证序列化键集
+        filled = Model.model_construct(
+            **{fname: None for fname in Model.model_fields}
+        )
+        leaked = set(filled.model_dump().keys()) & SENSITIVE_LEAK_FIELDS
+        assert not leaked, f"公共 Out 模型 {name}.model_dump() 泄露敏感键: {leaked}"
+
+
+# ---------------------------------------------------------------------------
 # 迁移文件存在性（红灯）
 # ---------------------------------------------------------------------------
 

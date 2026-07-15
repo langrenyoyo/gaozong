@@ -2128,12 +2128,11 @@ class AdReviewAdoptTaskOut(BaseModel):
 class AiEditJobOut(BaseModel):
     """AI 剪辑任务输出结构（Phase 12 扩展阶段/进度/attempt/版本/失败码对外字段）。
 
-    不返回 execution_token_hash / input_fingerprint / input_json / result_json
-    等内部或可能含敏感原文的字段（设计 §10）。
+    设计 §10：不返回 merchant_id / execution_token_hash / input_fingerprint /
+    input_json / result_json 等商户隔离、执行令牌或可能含敏感原文的字段。
     """
 
     id: int
-    merchant_id: str
     job_id: str
     status: Optional[str] = None
     source_type: Optional[str] = None
@@ -2152,14 +2151,15 @@ class AiEditJobOut(BaseModel):
 
 
 class AiEditJobArtifactOut(BaseModel):
-    """AI 剪辑产物输出结构（Phase 12 扩展位置/SHA-256/完整性/媒体属性）。"""
+    """AI 剪辑产物输出结构（Phase 12 扩展位置/SHA-256/完整性/媒体属性）。
+
+    设计 §10：不返回 storage_key / merchant_id；内容经 preview / download 端点下发。
+    """
 
     id: int
-    merchant_id: str
     job_id: str
     artifact_id: str
     artifact_type: Optional[str] = None
-    storage_key: Optional[str] = None
     file_name: Optional[str] = None
     mime_type: Optional[str] = None
     file_size_bytes: Optional[int] = None
