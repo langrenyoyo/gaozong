@@ -244,7 +244,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 - 抖音AI客服：多账号工作台、企业号授权、Agent 绑定（9000 权威源）、分类知识库 RAG、结构化回复与决策日志、AI 回复记录商户只读页。
 - 自动回复 gate 体系：白名单/限频/违禁词替换/人工接管/幂等/每日上限/紧急停止（默认全关）。
 - 统一知识库训练链路（8788 → 9000 → 9100 → Milvus 副本）。
-- 小高算力：DB-1 + BE-1 完成（表结构与后端接口）。
+- 小高算力（Phase 10）：本地模拟闭环 DONE；总状态 DONE_WITH_CONCERNS（baota_production_compute_not_verified），不阻塞 Phase 12/13；字符计量+六能力上浮+三快照+前端闭环+精确权限，支付仍 mock。
 - Phase 8-A 日报（DONE）；Phase 8-B 附件投递服务侧（真机验证 deferred）。
 - Phase 9 回访闭环（DONE_WITH_CONCERNS）。
 - 数据库：PG 方案 A schema 全量（9000 约 30 表 / 9100 7 表）、双 Alembic 轨道、cutover 脚本与 Runbook、staging 演练通过、production 执行包就绪。
@@ -259,7 +259,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 | 9000/9100 PostgreSQL **production 切换** | 执行包就绪（READY_FOR_BAOTA_EXECUTION），待人工在宝塔执行 Runbook |
 | Phase 8-B 真机 Excel 附件发送验证 | PARTIAL_BLOCKED_DEFERRED，转 verify_pending 人工审计 |
 | Phase 9 宝塔生产真实发送验证 | DONE_WITH_CONCERNS 遗留项（baota_production_send_not_verified） |
-| 小高算力 USAGE-1 → FE-1 | 待做；上线前 3 项确认：权限码 `auto_wechat:compute` 登记 / `COMPUTE_INTERNAL_TOKEN` 配置 / super_admin 口径 |
+| 小高算力宝塔生产验证 | Phase 10 DONE_WITH_CONCERNS 遗留项（baota_production_compute_not_verified），不阻塞 Phase 12/13；生产验证前需确认：权限码 `auto_wechat:compute` 登记 / `COMPUTE_INTERNAL_TOKEN` 配置 / super_admin 口径 |
 | `/integrations/douyin/sync-leads` 旧链路处置 | 保留中，待决策移除或归档 |
 | webhook 验签历史矛盾收敛 | 生产强制验签已实现；历史文档曾写"不允许改回强制鉴权"，已废弃，以 `APP_ENV=production` 强制验签为准；线上实际 env 值需在生产窗口确认 |
 | douyinAPI 旧 `/auth/callback` 授权能力迁移 | 待排期 |

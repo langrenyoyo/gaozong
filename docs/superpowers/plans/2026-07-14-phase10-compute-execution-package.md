@@ -764,30 +764,32 @@ git commit -m "功能：完成小高算力上浮配置前端闭环"
 
 ## Task 7：本地模拟总验收与阶段固化
 
+> **完成状态（2026-07-15）：Task 7 已完成（提交 `47884ba`），Phase 10 终态 `DONE_WITH_CONCERNS`（唯一 concern = `baota_production_compute_not_verified`，不阻塞 Phase 12/13）。"发起三方评审"待人工 Spec/Code Quality/Security 复审。**
+
 **文件：**
 
 - Create: `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md`
 - Modify: `tests/test_phase10_compute_no_network.py`（仅当总验收发现覆盖缺口时，先红灯再补）
 
-- [ ] 后端专项：
+- [x] 后端专项：
 
 ```powershell
 python -m pytest tests/test_phase10_compute_schema.py tests/test_phase10_compute_postgres_contract.py tests/test_phase10_compute_markup_api.py tests/test_phase10_compute_metering.py tests/test_phase10_compute_no_network.py tests/test_compute_models.py tests/test_compute_service.py tests/test_compute_router.py tests/test_compute_app.py tests/test_compute_client.py tests/test_compute_usage_client.py -q
 ```
 
-- [ ] AI 相邻回归：
+- [x] AI 相邻回归：
 
 ```powershell
 python -m pytest tests/test_xg_douyin_ai_cs_app.py tests/test_xg_douyin_ai_cs_daily_report_summary.py tests/test_phase9_return_visit_judge.py tests/test_phase9_return_visit_internal_api.py tests/test_phase9_return_visit_no_network.py tests/test_xg_douyin_ai_cs_rag.py tests/test_xg_douyin_ai_cs_rag_workflow.py tests/test_xg_douyin_ai_cs_training_feedback_auto_ingest.py tests/test_xg_douyin_ai_cs_knowledge_training_ask_latency.py tests/test_xg_douyin_ai_cs_embedding_ark.py tests/test_douyin_ai_cs_proxy.py -q
 ```
 
-- [ ] 迁移回归：
+- [x] 迁移回归：
 
 ```powershell
 python -m pytest tests/test_db_migration_0010_compute.py tests/test_xiaogao_phase1_schema.py tests/test_phase9_return_visit_schema.py tests/test_db_migration_runner.py tests/test_sqlite_specific_usage_guard.py -q
 ```
 
-- [ ] 前端：
+- [x] 前端：
 
 ```powershell
 Set-Location frontend
@@ -798,7 +800,7 @@ npm run build
 Set-Location ..
 ```
 
-- [ ] 静态硬门禁：
+- [x] 静态硬门禁：
 
 ```powershell
 git diff --check
@@ -810,9 +812,9 @@ git diff --unified=0 265d719..HEAD -- app/models.py app/schemas.py apps/compute 
 
 预期：第一条无空白错误；第二条只允许测试哨兵使用的虚构 `.test` URL，禁止真实域名或密钥；后两条零命中。
 
-- [ ] 对已知无关失败采用起点对照，不修改 Phase 10 白名单外文件。回传必须列出“起点同样失败”的命令和结果，不能只写 pre-existing。
+- [x] 对已知无关失败采用起点对照，不修改 Phase 10 白名单外文件。回传必须列出“起点同样失败”的命令和结果，不能只写 pre-existing。
 
-- [ ] 生成验收文档，精确记录：
+- [x] 生成验收文档，精确记录：
   - 提交链和文件范围。
   - 字符计量、比例、快照、能力映射和权限合同。
   - 后端、迁移、前端测试数量。
@@ -824,7 +826,7 @@ git diff --unified=0 265d719..HEAD -- app/models.py app/schemas.py apps/compute 
 
 - [ ] 发起最终 Spec、Code Quality、Security 三方评审；任一 Must-Fix 必须修复并重跑对应测试后再更新验收文档。
 
-- [ ] 提交验收：
+- [x] 提交验收：
 
 ```powershell
 git add docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md
