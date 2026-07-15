@@ -200,4 +200,16 @@
     background: var(--nav-active);
     color: white;
   }
+
+  /* 减少动画偏好：仅停用装饰性/非必要运动，保留加载图标与文本、焦点和状态反馈 */
+  @media (prefers-reduced-motion: reduce) {
+    .status-dot-pulse,
+    .shimmer {
+      animation: none;
+    }
+    /* 旋转加载图标停用动画，但保留图标本体与旁置加载文本 */
+    .animate-spin {
+      animation: none;
+    }
+  }
 }
