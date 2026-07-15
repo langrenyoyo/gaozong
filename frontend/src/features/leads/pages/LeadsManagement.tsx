@@ -344,26 +344,6 @@ const AGENT_STATUS_FALLBACK: AgentStatusData = {
   status_source: "frontend_fallback",
 };
 
-const AGENT_STATUS_LABELS: Record<string, string> = {
-  online: "在线",
-  offline: "离线",
-  unknown: "状态未确认",
-};
-
-const WECHAT_STATUS_LABELS: Record<string, string> = {
-  available: "可用",
-  unavailable: "不可用",
-  unknown: "未知",
-};
-
-function agentStatusLabel(status?: string | null): string {
-  return status ? AGENT_STATUS_LABELS[status] || status : "状态未确认";
-}
-
-function wechatStatusLabel(status?: string | null): string {
-  return status ? WECHAT_STATUS_LABELS[status] || status : "未知";
-}
-
 function agentDisabledReason(agentStatus: AgentStatusData): string {
   return agentStatus.disabled_reason || "本地微信助手状态未确认，暂不可执行微信自动化";
 }
@@ -1736,16 +1716,6 @@ export default function LeadsManagement() {
               </div>
             </div>
           ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-3 border-b border-[#e4e8f0] bg-[#f8fafc] px-5 py-2 text-[11px] text-[#64748b]">
-          <span className="font-semibold text-[#1a1f2e]">本地微信助手：{agentStatusLabel(agentStatus.agent_status)}</span>
-          <span>微信状态：{wechatStatusLabel(agentStatus.wechat_status || agentStatus.wechat_available)}</span>
-          <span className={agentStatus.can_run_wechat_action ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
-            微信自动化：{agentStatus.can_run_wechat_action ? "可用" : "不可用"}
-          </span>
-          {!agentStatus.can_run_wechat_action ? (
-            <span className="min-w-0 truncate text-amber-700">原因：{agentDisabledReason(agentStatus)}</span>
-          ) : null}
         </div>
       </div>
 
