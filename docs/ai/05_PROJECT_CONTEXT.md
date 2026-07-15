@@ -244,7 +244,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 - 抖音AI客服：多账号工作台、企业号授权、Agent 绑定（9000 权威源）、分类知识库 RAG、结构化回复与决策日志、AI 回复记录商户只读页。
 - 自动回复 gate 体系：白名单/限频/违禁词替换/人工接管/幂等/每日上限/紧急停止（默认全关）。
 - 统一知识库训练链路（8788 → 9000 → 9100 → Milvus 副本）。
-- 小高算力（Phase 10）：本地模拟闭环 DONE；总状态 DONE_WITH_CONCERNS（baota_production_compute_not_verified），不阻塞 Phase 12/13；字符计量+六能力上浮+三快照+前端闭环+精确权限，支付仍 mock。
+- 小高算力（Phase 10）：本地模拟闭环 DONE；三方复审 PASS（Task 7-FIX1 `0821759` 闭合 5 Must-Fix 后放行）；总状态 DONE_WITH_CONCERNS（baota_production_compute_not_verified），不阻塞 Phase 12/13；字符计量+六能力上浮+三快照+前端闭环+精确权限，支付仍 mock。
 - Phase 8-A 日报（DONE）；Phase 8-B 附件投递服务侧（真机验证 deferred）。
 - Phase 9 回访闭环（DONE_WITH_CONCERNS）。
 - 数据库：PG 方案 A schema 全量（9000 约 30 表 / 9100 7 表）、双 Alembic 轨道、cutover 脚本与 Runbook、staging 演练通过、production 执行包就绪。

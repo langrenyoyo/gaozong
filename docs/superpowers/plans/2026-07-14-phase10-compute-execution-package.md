@@ -764,7 +764,7 @@ git commit -m "功能：完成小高算力上浮配置前端闭环"
 
 ## Task 7：本地模拟总验收与阶段固化
 
-> **完成状态（2026-07-15）：Task 7 已完成（提交 `47884ba`），Phase 10 终态 `DONE_WITH_CONCERNS`（唯一 concern = `baota_production_compute_not_verified`，不阻塞 Phase 12/13）。"发起三方评审"待人工 Spec/Code Quality/Security 复审。**
+> **完成状态（2026-07-15）：Task 7 已完成（提交 `47884ba`）；首轮三方评审 BLOCKED 5 个 Must-Fix，Task 7-FIX1（`0821759`）闭合后三方复审 PASS（Spec/Code Quality/Security 均 PASS，复审范围 `47884ba..0821759`，本地 75 passed）。Phase 10 终态 `DONE_WITH_CONCERNS`（唯一 concern = `baota_production_compute_not_verified`，不阻塞 Phase 12/13）。**
 
 **文件：**
 
@@ -824,7 +824,7 @@ git diff --unified=0 265d719..HEAD -- app/models.py app/schemas.py apps/compute 
   - 该 concern 不阻塞 Phase 12/13；统一宝塔验证只能在 Phase 13 完成后另开执行包。
   - Phase 9、Phase 8-B、Phase 11、日报真实分发状态保持 0.1，不得改写。
 
-- [ ] 发起最终 Spec、Code Quality、Security 三方评审；任一 Must-Fix 必须修复并重跑对应测试后再更新验收文档。
+- [x] 发起最终 Spec、Code Quality、Security 三方评审（2026-07-15 三方 PASS）；首轮 BLOCKED 的 5 个 Must-Fix 由 Task 7-FIX1（`0821759`）闭合后复审放行，任一 Must-Fix 已修复并重跑对应测试。
 
 - [x] 提交验收：
 
