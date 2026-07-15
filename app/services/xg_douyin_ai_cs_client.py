@@ -117,6 +117,14 @@ class XgDouyinAiCsClient:
         """
         return self._post_json("/internal/return-visits/decide-and-generate", request)
 
+    def plan_ai_edit(self, request: dict) -> dict:
+        """Phase 12：调用 9100 AI 剪辑严格规划窄接口；不复用 ask / reply-suggestion。
+
+        9000 组装 AiEditPlanRequest（merchant_id/job_id/template/target_duration/
+        transcript_segments/scenes，仅转写文本与镜头标签，不含原媒体），9100 返回 AiEditPlan。
+        """
+        return self._post_json("/internal/ai-edit/plan", request)
+
     def knowledge_training_feedback(
         self,
         *,

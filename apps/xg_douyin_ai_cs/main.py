@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apps.xg_douyin_ai_cs.config import settings
 from apps.xg_douyin_ai_cs.routers import (
     accounts,
+    ai_edit,
     ai_reply,
     categories,
     conversations,
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_training.router)
     app.include_router(daily_reports.router)
     app.include_router(return_visits.router)
+    app.include_router(ai_edit.router)
     return app
 
 

@@ -283,3 +283,77 @@ class ReturnVisitJudgment(BaseModel):
     model: str | None = Field(default=None, max_length=128)
     risk_flags: list[RiskFlagValue] = Field(default_factory=list, max_length=8)
     ambiguous: bool = False
+
+
+# ========== Phase 12 Task 4：9100 AI 剪辑严格规划协议 ==========
+
+
+class TranscriptSegment(BaseModel):
+    """主素材转写段（转写文本 + 时间区间 + 素材 ID）。extra=forbid 拒绝未知字段。"""
+
+    model_config = {"extra": "forbid"}
+    material_id: str = Field(..., min_length=1, max_length=64)
+    start_seconds: float = Field(..., ge=0)
+    end_seconds: float = Field(..., gt=0)
+    text: str = Field(..., min_length=1, max_length=2000)
+
+
+class SceneSummary(BaseModel):
+    """镜头标签 + 稳定性摘要（不含原媒体/图片）。extra=forbid 拒绝未知字段。"""
+
+    model_config = {"extra": "forbid"}
+    material_id: str = Field(..., min_length=1, max_length=64)
+    start_seconds: float = Field(..., ge=0)
+    end_seconds: float = Field(..., gt=0)
+    scene_label: str = Field(..., min_length=1, max_length=64)
+    stability_score: float | None = Field(default=None, ge=0, le=1)
+
+
+class AiEditPlanRequest(BaseModel):
+    """9000 → 9100 剪辑规划请求（设计 §9：只发转写文本、镜头标签、时长、稳定性摘要）。
+
+    extra=forbid 拒绝原媒体路径、图片、模型原始响应等不应进入规划的字段。
+    target_duration_seconds 限定 15-60 秒；transcript_segments/scenes 至少各一段。
+    """
+
+    model_config = {"extra": "forbid"}
+    merchant_id: str = Field(..., min_length=1, max_length=128)
+    job_id: str = Field(..., min_length=1, max_length=64)
+    template_key: str = Field(..., min_length=1, max_length=64)
+    template_version: str = Field(..., min_length=1, max_length=64)
+    target_duration_seconds: int = Field(..., ge=15, le=60)
+    transcript_segments: list[TranscriptSegment] = Field(..., min_length=1)
+    scenes: list[SceneSummary] = Field(..., min_length=1)
+
+
+EditAction = Literal["keep", "remove", "broll_replace"]
+PlanStatus = Literal["ok", "blocked", "failed"]
+
+
+class PlanOperation(BaseModel):
+    """单条剪辑操作（从 LLM 输出解析，extra=forbid 拒绝未知字段）。
+
+    action 仅 keep/remove/broll_replace；每段引用真实素材 ID 与合法时间区间。
+    """
+
+    model_config = {"extra": "forbid"}
+    material_id: str = Field(..., min_length=1, max_length=64)
+    start_seconds: float = Field(..., ge=0)
+    end_seconds: float = Field(..., gt=0)
+    action: EditAction
+    reason: str | None = Field(default=None, max_length=128)
+
+
+class AiEditPlan(BaseModel):
+    """剪辑计划输出（版本化；失败返回稳定错误码，不返回伪造操作）。
+
+    - status=ok：operations 经保守校验通过；
+    - status=blocked：注入/拒答，不调/不兜底，operations 为空；
+    - status=failed：空输出/越界/未知素材/重叠/非法动作/模型异常，operations 为空。
+    """
+
+    status: PlanStatus
+    plan_version: str
+    operations: list[PlanOperation] = Field(default_factory=list)
+    failure_code: str | None = None
+    model: str | None = Field(default=None, max_length=128)
