@@ -2836,14 +2836,21 @@ def create_local_agent_app(
                 proc = _sp.Popen(cmd, **popen_kwargs)
                 # FIX2-1：register_process 用复合键
                 supervisor.register_process(job.merchant_id, job.job_id, proc)
-                # FIX2-8：后台线程持续读 stdout/stderr，防 PIPE 缓冲填满导致 Worker 阻塞
-                def _drain(stream, sink):
+                # FIX3-2：有界读取 stdout/stderr（滚动末尾 _WORKER_BUF_MAX 字符），
+                # 防 PIPE 填满导致 Worker 阻塞，且不无界吃内存。
+                _WORKER_BUF_MAX = 4096
+                out_buf: list[str] = [""]
+                err_buf: list[str] = [""]
+
+                def _drain(stream, sink: list[str]) -> None:
                     try:
                         for line in iter(stream.readline, ""):
-                            sink.append(line)
+                            combined = sink[0] + line
+                            if len(combined) > _WORKER_BUF_MAX:
+                                combined = combined[-_WORKER_BUF_MAX:]
+                            sink[0] = combined
                     except Exception:  # noqa: BLE001
                         pass
-                out_buf, err_buf = [], []
                 _th.Thread(target=_drain, args=(proc.stdout, out_buf), daemon=True).start()
                 _th.Thread(target=_drain, args=(proc.stderr, err_buf), daemon=True).start()
                 try:
@@ -2851,11 +2858,15 @@ def create_local_agent_app(
                 finally:
                     if proc.poll() is None:
                         terminate_process_tree(proc)
-                # 输出仅在失败时截取前 512 字节入诊断日志（不外泄媒体原文）
+                # FIX3-2：日志只记稳定码/退出码/stderr 指纹（sha256 前缀），不记原文
+                # （FFmpeg stderr 含本地绝对路径/文件名/滤镜参数，不得进普通日志）。
                 if proc.returncode != 0:
+                    import hashlib as _hl
+                    err_text = err_buf[0]
+                    err_fingerprint = _hl.sha256(err_text.encode("utf-8", "replace")).hexdigest()[:12]
                     logger.warning(
-                        "ai_edit executor stage=worker_nonzero job_id=%s rc=%s stderr_tail=%s",
-                        job.job_id, proc.returncode, "".join(err_buf)[:512],
+                        "ai_edit executor stage=worker_nonzero job_id=%s rc=%s stderr_fingerprint=%s stderr_len=%d",
+                        job.job_id, proc.returncode, err_fingerprint, len(err_text),
                     )
                 result_file = manifest_path.parent / "result.json"
                 if result_file.exists():

@@ -225,18 +225,23 @@ class AiEditSupervisor:
             with self._lock:
                 self._status.running_count -= 1
                 self._processes.pop(key, None)
-                if status == "succeeded":
-                    self._status.completed_count += 1
-                elif status == "cancelled" or key in self._cancelled:
+                # FIX3-1：取消终态归一——复合键在 _cancelled 则 final_status 必为 cancelled，
+                # 不用 executor 返回的原始 status（Worker 被终止后通常返回 failed）。
+                if key in self._cancelled:
+                    final_status = "cancelled"
                     self._status.cancelled_count += 1
+                elif status == "succeeded":
+                    final_status = "succeeded"
+                    self._status.completed_count += 1
                 else:
+                    final_status = "failed"
                     self._status.failed_count += 1
                 self._persist_job_state(
-                    key, status=status, attempt_id=job.attempt_id,
+                    key, status=final_status, attempt_id=job.attempt_id,
                     manifest_path=job.manifest_path,
                     merchant_id=job.merchant_id, job_id=job.job_id,
                 )
-                self._fire_terminal(job, status)
+                self._fire_terminal(job, final_status)
 
     def _fire_terminal(self, job: LocalAiEditJob, status: str) -> None:
         """触发终态回调（释放活动素材引用等）。异常隔离不影响主流程。"""

@@ -215,65 +215,80 @@ def create_ai_edit_router(*, supervisor: AiEditSupervisor, storage_root: Path, w
         if not ctx.merchant_id:
             raise HTTPException(status_code=403, detail={"code": "MERCHANT_NOT_BOUND"})
         mroot = merchant_storage_root(storage_root, ctx.merchant_id)
-        # 校验素材存在且未被软删，标记活动引用
         from app.local_agent_ai_edit_storage import _find_manifest
-        for m in payload.materials:
-            rec = _find_manifest(mroot, m.material_id)
-            if rec is None or rec.get("deleted_at"):
-                raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND"})
-            mark_active_reference(mroot, m.material_id, job_id=payload.job_id, active=True)
 
-        # FIX2-2：job_id 安全段 + 素材受控复制进 task_root/input/（Worker 在任务根内读素材）
-        job_dir = _worker_manifest_dir(work_root, ctx.merchant_id, payload.job_id)
-        input_dir = job_dir / "input"
-        input_dir.mkdir(parents=True, exist_ok=True)
-        manifest_materials = []
-        for m in payload.materials:
-            src_rel = _material_relative_for_manifest(mroot, m.material_id)
-            src_path = mroot / src_rel
-            # 复制进任务根 input/，文件名用 material_id（已安全校验）
-            dst_name = f"{m.material_id}.mp4"
-            dst_rel = f"input/{dst_name}"
-            dst_path = job_dir / dst_rel
-            try:
+        # FIX3-3：统一回滚——标记引用→复制→写 manifest→enqueue 任一失败，
+        # 释放所有已标记引用，避免素材执行一次任务后永久无法删除。
+        marked: list[str] = []
+
+        def _release_marked() -> None:
+            for mid in marked:
+                try:
+                    mark_active_reference(mroot, mid, job_id=payload.job_id, active=False)
+                except Exception:  # noqa: BLE001  回滚失败不掩盖主错误
+                    pass
+
+        try:
+            # 1. 校验素材存在且未被软删，标记活动引用
+            for m in payload.materials:
+                rec = _find_manifest(mroot, m.material_id)
+                if rec is None or rec.get("deleted_at"):
+                    _release_marked()
+                    raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND"})
+                mark_active_reference(mroot, m.material_id, job_id=payload.job_id, active=True)
+                marked.append(m.material_id)
+
+            # 2. job_id 安全段 + 素材受控复制进 task_root/input/
+            job_dir = _worker_manifest_dir(work_root, ctx.merchant_id, payload.job_id)
+            input_dir = job_dir / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            manifest_materials = []
+            for m in payload.materials:
+                src_rel = _material_relative_for_manifest(mroot, m.material_id)
+                src_path = mroot / src_rel
+                dst_name = f"{m.material_id}.mp4"
+                dst_rel = f"input/{dst_name}"
+                dst_path = job_dir / dst_rel
                 import shutil
                 shutil.copy2(str(src_path), str(dst_path))
-            except OSError as exc:
-                # 复制失败释放已标记引用，不泄漏路径
-                for mm in payload.materials:
-                    mark_active_reference(mroot, mm.material_id, job_id=payload.job_id, active=False)
-                raise HTTPException(status_code=500, detail={"code": "MATERIAL_COPY_FAILED"}) from exc
-            manifest_materials.append({
-                "material_id": m.material_id,
-                "role": m.role,
-                "relative_path": dst_rel,  # 相对 task_root
-                "source_sha256": _material_sha256(mroot, m.material_id),
-                "duration_seconds": 10.0,
-            })
+                manifest_materials.append({
+                    "material_id": m.material_id,
+                    "role": m.role,
+                    "relative_path": dst_rel,
+                    "source_sha256": _material_sha256(mroot, m.material_id),
+                    "duration_seconds": 10.0,
+                })
 
-        # FIX2-4：不向响应泄露绝对路径；manifest_path 仅内部使用
-        manifest_path = job_dir / "manifest.json"
-        manifest = {
-            "schema_version": "phase12_ai_edit_worker_v1",
-            "job_id": payload.job_id,
-            "attempt_id": f"att-{payload.job_id}",
-            "task_root": str(job_dir),
-            "target_duration_seconds": 30,
-            "preview_profile": "720p",
-            "final_profile": "1080p",
-            "materials": manifest_materials,
-        }
-        _write_manifest_atomic(manifest_path, manifest)
+            # 3. 原子写 WorkerManifest（不向响应泄露绝对路径）
+            manifest_path = job_dir / "manifest.json"
+            manifest = {
+                "schema_version": "phase12_ai_edit_worker_v1",
+                "job_id": payload.job_id,
+                "attempt_id": f"att-{payload.job_id}",
+                "task_root": str(job_dir),
+                "target_duration_seconds": 30,
+                "preview_profile": "720p",
+                "final_profile": "1080p",
+                "materials": manifest_materials,
+            }
+            _write_manifest_atomic(manifest_path, manifest)
 
-        job = LocalAiEditJob(
-            job_id=payload.job_id,
-            attempt_id=f"att-{payload.job_id}",
-            manifest_path=str(manifest_path),
-            merchant_id=ctx.merchant_id,
-        )
-        supervisor.enqueue(job)
-        # FIX2-7：活动引用在 supervisor _drain_loop 终态后释放（见 release_active_refs 回调）
-        # 响应不返回 manifest_path（绝对路径不外泄）
+            # 4. 入队（失败则回滚）
+            job = LocalAiEditJob(
+                job_id=payload.job_id,
+                attempt_id=f"att-{payload.job_id}",
+                manifest_path=str(manifest_path),
+                merchant_id=ctx.merchant_id,
+            )
+            supervisor.enqueue(job)
+        except HTTPException:
+            raise
+        except OSError as exc:
+            _release_marked()
+            raise HTTPException(status_code=500, detail={"code": "MATERIAL_COPY_FAILED"}) from exc
+        except Exception as exc:  # noqa: BLE001  enqueue/写 manifest 失败回滚
+            _release_marked()
+            raise HTTPException(status_code=500, detail={"code": "JOB_CREATE_FAILED"}) from exc
         return _ok({"job_id": payload.job_id, "status": "queued"})
 
     @router.post("/jobs/{job_id}/cancel")

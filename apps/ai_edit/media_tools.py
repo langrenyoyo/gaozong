@@ -88,19 +88,24 @@ def wait_with_cancel(
 
     FIX1-6：用后台线程异步读取 stdout/stderr，防止 FFmpeg 输出填满 PIPE 缓冲后
     阻塞（裸 communicate() 在进程退出前不读会导致死锁）。
+    FIX3-2：有界读取——只保留末尾 _MAX_CAPTURE 字符的滚动缓冲，避免长任务内存膨胀。
     """
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
+    stdout_buf: list[str] = [""]
+    stderr_buf: list[str] = [""]
 
     def _pump(stream, sink: list[str]) -> None:
         try:
-            for chunk in iter(stream.readline, ""):
-                sink.append(chunk)
+            for line in iter(stream.readline, ""):
+                # 滚动缓冲：拼接后只留末尾 _MAX_CAPTURE 字符，丢弃前部
+                combined = (sink[0] + line)
+                if len(combined) > _MAX_CAPTURE:
+                    combined = combined[-_MAX_CAPTURE:]
+                sink[0] = combined
         except Exception:  # noqa: BLE001
             pass
 
-    out_thread = threading.Thread(target=_pump, args=(process.stdout, stdout_chunks), daemon=True)
-    err_thread = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks), daemon=True)
+    out_thread = threading.Thread(target=_pump, args=(process.stdout, stdout_buf), daemon=True)
+    err_thread = threading.Thread(target=_pump, args=(process.stderr, stderr_buf), daemon=True)
     out_thread.start()
     err_thread.start()
 
@@ -112,8 +117,8 @@ def wait_with_cancel(
             err_thread.join(timeout=1)
             return CommandResult(
                 rc,
-                _stdout="".join(stdout_chunks)[:_MAX_CAPTURE],
-                _stderr="".join(stderr_chunks)[:_MAX_CAPTURE],
+                _stdout=stdout_buf[0][:_MAX_CAPTURE],
+                _stderr=stderr_buf[0][:_MAX_CAPTURE],
             )
         if cancel_check():
             terminate_process_tree(process)

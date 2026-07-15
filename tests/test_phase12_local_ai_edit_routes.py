@@ -329,6 +329,26 @@ def test_job_response_does_not_leak_manifest_path(tmp_path):
     assert str(client._work_root.resolve()) not in blob
 
 
+def test_job_create_missing_material_releases_active_reference(tmp_path):
+    """FIX3-3：素材校验失败时，已标记的活动引用回滚（素材可再次删除）。"""
+    client = _build_client(tmp_path)
+    _import(client, material_id="mat-1")
+    # 第二个素材不存在 → 创建失败，但 mat-1 已被标记 active，须回滚释放
+    resp = client.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [
+                  {"material_id": "mat-1", "role": "main"},
+                  {"material_id": "mat-missing", "role": "broll"},
+              ]},
+    )
+    assert resp.status_code == 404  # mat-missing 不存在
+    # mat-1 应可删除（活动引用已回滚，非 409）
+    dele = client.delete("/agent/ai-edit/materials/mat-1", headers={"X-Local-Agent-Token": "tok-1"})
+    assert dele.status_code == 200  # 回滚后可删除
+
+
 # ---------------------------------------------------------------------------
 # Worker 缺失不影响微信路由
 # ---------------------------------------------------------------------------

@@ -91,6 +91,22 @@ def test_supervisor_cancel_marks_cancelled(tmp_path):
     assert sup.status(merchant_id="m1").cancelled_count >= 1
 
 
+def test_supervisor_cancel_normalizes_failed_to_cancelled(tmp_path):
+    """FIX3-1：任务被取消后，即使 executor 返回 failed（Worker 被终止），
+    终态持久化与计数必须归一为 cancelled，不能记 failed。"""
+    sup = AiEditSupervisor(
+        work_root=tmp_path,
+        executor=lambda j: {"status": "failed"},  # Worker 被终止后通常返回 failed
+    )
+    sup.enqueue(_job("job-1", merchant_id="m1"))
+    assert sup.cancel(merchant_id="m1", job_id="job-1") is True
+    sup.drain()
+    state = sup.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state["status"] == "cancelled"  # 归一为 cancelled，非 failed
+    assert sup.status(merchant_id="m1").cancelled_count == 1
+    assert sup.status(merchant_id="m1").failed_count == 0
+
+
 def test_supervisor_cancel_cross_merchant_rejected(tmp_path):
     """m2 不能取消 m1 的任务（复合键隔离）。"""
     sup = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
