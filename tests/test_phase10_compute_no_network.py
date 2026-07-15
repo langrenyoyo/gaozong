@@ -2,6 +2,9 @@
 
 执行包 §L644：安装 forbid_network 哨兵，具体用例只允许用局部 stub 替换
 LLM、Embedding 和 usage HTTP；不得通过关闭测试来绕过哨兵。
+
+FIX3：哨兵加调用计数 + yield 后断言，防止 except Exception 吞掉 AssertionError
+导致哨兵触发后测试仍假绿（复审 L163 宽泛捕获）。
 """
 
 from __future__ import annotations
@@ -10,18 +13,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def _forbid(*args, **kwargs):
-    raise AssertionError("Phase 10 自动测试禁止真实网络")
-
-
 @pytest.fixture(autouse=True)
 def _network_sentinel(monkeypatch):
-    """哨兵：urllib urlopen / requests Session.request 一律禁止。
+    """哨兵：urllib urlopen / requests Session.request 一律禁止 + 调用计数。
 
     同时删 ComputeUsageClient env，使其在测试中恒 disabled（跳过上报，不 urlopen），
     避免埋点在未 mock 时触网。
+    FIX3：计数 + yield 断言，保证 except Exception 吞掉 AssertionError 后测试仍失败。
     """
     import urllib.request
+
+    forbid_count = [0]
+
+    def _forbid(*args, **kwargs):
+        forbid_count[0] += 1
+        raise AssertionError("Phase 10 自动测试禁止真实网络")
 
     monkeypatch.setattr(urllib.request, "urlopen", _forbid)
     try:
@@ -32,6 +38,11 @@ def _network_sentinel(monkeypatch):
         pass
     monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
     monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
+
+    yield
+    assert forbid_count[0] == 0, (
+        f"哨兵触发 {forbid_count[0]} 次网络尝试（被 except Exception 吞掉？）"
+    )
 
 
 def test_count_helpers_do_not_touch_network():

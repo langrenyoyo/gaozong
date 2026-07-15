@@ -3,14 +3,44 @@
 红灯 L608：中文、ASCII、换行均按 Python 字符数精确计量，不做 strip。
 provider usage.total_tokens 与字符数冲突时仍使用字符数（由 daily_report /
 reply_decision 集成测试覆盖，这里只锁死 helper 公式）。
+
+FIX3：文件作用域哨兵替代全局 conftest.py，避免污染 Local Agent 测试。
 """
 
 from __future__ import annotations
+
+import pytest
 
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     count_chat_characters,
     count_embedding_characters,
 )
+
+
+@pytest.fixture(autouse=True)
+def _metering_network_sentinel(monkeypatch):
+    """算力上报默认禁用 + 网络哨兵（文件作用域，不污染其他测试）。
+
+    FIX3：替换全局 conftest.py。哨兵加计数 + yield 断言，防止 except Exception
+    吞掉 AssertionError 后测试假绿。
+    """
+    monkeypatch.delenv("COMPUTE_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_WECHAT_9000_BASE_URL", raising=False)
+
+    sentinel_count = [0]
+
+    def _sentinel(*args, **kwargs):
+        sentinel_count[0] += 1
+        raise AssertionError("测试不得对算力上报发起真实网络请求")
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.compute_usage_client.urllib_request.urlopen",
+        _sentinel,
+    )
+    yield
+    assert sentinel_count[0] == 0, (
+        f"哨兵触发 {sentinel_count[0]} 次网络尝试（被 except Exception 吞掉？）"
+    )
 
 
 def test_count_chat_characters_counts_chinese_ascii_and_newline():
