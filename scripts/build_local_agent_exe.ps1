@@ -1,6 +1,13 @@
 ﻿param(
     [string]$PythonExe = "python",
-    [string]$ServerUrl = "https://callback.misanduo.com"
+    [string]$ServerUrl = "https://callback.misanduo.com",
+    # Phase 12 Task 8：是否同时构建 AI 剪辑 Worker（Python 3.11 独立运行时）。
+    # 默认开启；Worker 重依赖（PyTorch/FunASR）较大，可传 -BuildWorker:$false 跳过。
+    [bool]$BuildWorker = $true,
+    [string]$Python311Exe = "python3.11",
+    [string]$FfmpegDir = "",
+    [string]$ModelDir = (Join-Path $PSScriptRoot "..\resources\ai_edit_models"),
+    [string]$FontDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -198,6 +205,22 @@ print('PIL ok')
     Write-Host "health: Invoke-RestMethod http://127.0.0.1:19000/health"
     Write-Host "version: Invoke-RestMethod http://127.0.0.1:19000/agent/version"
     Write-Host "=========================================="
+
+    # Phase 12 Task 8：构建 AI 剪辑 Worker（Python 3.11 独立 spec，不收进 local_agent.spec）
+    if ($BuildWorker) {
+        $WorkerBuildScript = Join-Path $PSScriptRoot "build_ai_edit_worker_exe.ps1"
+        if (-not (Test-Path $WorkerBuildScript)) {
+            throw "Worker 构建脚本缺失：$WorkerBuildScript"
+        }
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "构建 AI 剪辑 Worker（Python 3.11 独立运行时）"
+        Write-Host "=========================================="
+        & $WorkerBuildScript -Python311Exe $Python311Exe -FfmpegDir $FfmpegDir -ModelDir $ModelDir -FontDir $FontDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "AI 剪辑 Worker 构建失败"
+        }
+    }
 }
 finally {
     Pop-Location
