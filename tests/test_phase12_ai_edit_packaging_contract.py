@@ -146,3 +146,39 @@ def test_worker_requirements_covers_heavy_deps():
     assert "torch" in blob or "pytorch" in blob
     assert "funasr" in blob
     assert "opencv" in blob
+
+
+# ---------------------------------------------------------------------------
+# FIX1-8：Customer 分发门禁 + 字体强校验 + 版本锁定
+# ---------------------------------------------------------------------------
+
+
+def test_worker_build_script_has_customer_distribution_gate():
+    """Customer 分发模式必须强制校验许可证确认文件。"""
+    script = _read(PROJECT_ROOT / "scripts" / "build_ai_edit_worker_exe.ps1")
+    assert "DistributionMode" in script
+    assert "Customer" in script
+    # Customer 模式缺 LICENSE_CONFIRMED 必须 throw
+    assert "LICENSE_CONFIRMED" in script
+
+
+def test_worker_build_script_font_mandatory():
+    """字体目录强制非空（不再可省略）。"""
+    script = _read(PROJECT_ROOT / "scripts" / "build_ai_edit_worker_exe.ps1")
+    assert "FontDir" in script
+    # FontDir 是 Mandatory 参数
+    assert script.count("Mandatory") >= 3  # Python311Exe + FfmpegDir + ModelDir + FontDir
+
+
+def test_worker_requirements_versions_locked():
+    """依赖版本锁定（== ），禁止 >= 浮动（保证可复现与许可证追溯）。"""
+    reqs = _read(PROJECT_ROOT / "requirements-ai-edit-worker.txt")
+    # 排除注释行
+    dep_lines = [
+        l.strip() for l in reqs.splitlines()
+        if l.strip() and not l.strip().startswith("#")
+    ]
+    for line in dep_lines:
+        # 每个依赖必须用 == 锁定
+        assert "==" in line, f"依赖未锁定版本（缺 ==）: {line}"
+        assert ">=" not in line, f"依赖使用浮动版本 >=: {line}"

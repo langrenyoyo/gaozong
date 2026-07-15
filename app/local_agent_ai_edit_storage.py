@@ -47,19 +47,45 @@ class MaterialRecord:
     purge_after: datetime | None = None
 
 
+def _is_safe_segment(segment: str, *, max_len: int = 128) -> bool:
+    """合法受控标识段：非空、无斜杠/反斜杠/盘符/.. 段、不以点开头。
+
+    用于 material_id / merchant_id / job_id / attempt_id 等路径拼接段，
+    防止 ../ 穿越、绝对路径、盘符注入。
+    """
+    if not segment or len(segment) > max_len:
+        return False
+    if any(c in segment for c in "/\\:"):
+        return False
+    if segment in (".", "..") or segment.startswith("."):
+        return False
+    return False if segment.startswith(" ") else True
+
+
 def _is_safe_material_id(material_id: str) -> bool:
-    """合法 material_id：非空、无斜杠/反斜杠/盘符/.. 段、不以点开头。"""
-    if not material_id or len(material_id) > 128:
-        return False
-    if any(c in material_id for c in "/\\:"):
-        return False
-    if material_id in (".", "..") or material_id.startswith("."):
-        return False
-    return True
+    """合法 material_id（单段，无斜杠）。"""
+    return _is_safe_segment(material_id)
+
+
+def merchant_storage_root(root: Path, merchant_id: str) -> Path:
+    """商户隔离根：storage_root/{merchant_id}/。拒绝非法 merchant_id。"""
+    if not _is_safe_segment(merchant_id):
+        raise LocalAiEditStorageError("INVALID_MERCHANT_ID")
+    base = Path(root).resolve()
+    target = base / merchant_id
+    resolved = target.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise LocalAiEditStorageError("MERCHANT_PATH_OUT_OF_ROOT") from exc
+    return resolved
 
 
 def resolve_managed_material_path(root: Path, material_id: str) -> Path:
-    """解析受管素材路径，拒绝穿越/符号链接/绝对路径。"""
+    """解析受管素材路径，拒绝穿越/符号链接/绝对路径。
+
+    root 已是商户隔离根（merchant_storage_root 的结果）。
+    """
     if not _is_safe_material_id(material_id):
         raise LocalAiEditStorageError("INVALID_MATERIAL_ID")
     managed_root = Path(root).resolve() / "materials"

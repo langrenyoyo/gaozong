@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Python311Exe,
     [Parameter(Mandatory = $true)][string]$FfmpegDir,
     [Parameter(Mandatory = $true)][string]$ModelDir,
-    [string]$FontDir = ""
+    [Parameter(Mandatory = $true)][string]$FontDir,
+    [ValidateSet("Development", "Customer")][string]$DistributionMode = "Development"
 )
 
 # Phase 12 Task 8 AI 剪辑 Worker 独立打包脚本（Python 3.11 双运行时）。
@@ -11,8 +12,9 @@ param(
 #
 # 边界：
 # - 强制校验 Python 3.11（不接受 3.10，不修改 local_agent.spec 的 3.10）。
-# - 缺 Worker / Vid.Stab / FFmpeg / 字体 / 模型 / 许可证时明确失败（throw）。
-# - 产物复制到 dist/local-agent（与微信助手同安装目录），不监听新端口。
+# - 字体目录强制非空（中文字幕烧录依赖预检字体）。
+# - DistributionMode=Customer 时强制校验全部许可证已确认，否则 throw 禁止形成客户安装包。
+# - Development 模式仅源码级本地测试，不要求许可证完整。
 
 $ErrorActionPreference = "Stop"
 
@@ -21,6 +23,8 @@ $SpecFile = Join-Path $ProjectRoot "ai_edit_worker.spec"
 $DistDir = Join-Path $ProjectRoot "dist\local-agent"
 $WorkerExe = Join-Path $DistDir "ai_edit_worker.exe"
 $LicenseFile = Join-Path $ProjectRoot "docs\ai\13_ai_edit\THIRD_PARTY_NOTICES.md"
+# 许可证确认标记文件（Customer 模式必须存在，标识所有组件可分发依据已确认）
+$LicenseConfirmedFile = Join-Path $ProjectRoot "docs\ai\13_ai_edit\LICENSE_CONFIRMED.txt"
 
 # ---------------------------------------------------------------------------
 # 强制校验 Python 3.11
@@ -34,7 +38,7 @@ if ($pyVersion -ne "3.11") {
 }
 
 # ---------------------------------------------------------------------------
-# 缺失组件明确失败
+# 缺失组件明确失败（字体与模型强制非空）
 # ---------------------------------------------------------------------------
 if (-not (Test-Path $SpecFile)) {
     throw "Worker spec 缺失：$SpecFile"
@@ -53,14 +57,29 @@ if ($filters -notmatch "vidstab") {
 if (-not (Test-Path $ModelDir)) {
     throw "模型目录缺失：$ModelDir（FunASR/YOLO/open_clip 权重）"
 }
-if ($FontDir -and -not (Test-Path $FontDir)) {
-    throw "字体目录缺失：$FontDir（中文字幕烧录依赖）"
+# FIX1-8：字体目录强制非空（不再可空）
+if (-not $FontDir -or -not (Test-Path $FontDir)) {
+    throw "字体目录缺失或为空：FontDir（中文字幕烧录依赖预检字体，不可省略）"
+}
+$fontFiles = Get-ChildItem -Path $FontDir -File -ErrorAction SilentlyContinue
+if (-not $fontFiles -or $fontFiles.Count -eq 0) {
+    throw "字体目录为空：$FontDir（必须包含确定的中文字体文件）"
 }
 if (-not (Test-Path $LicenseFile)) {
     throw "第三方许可证文件缺失：$LicenseFile（缺可分发依据禁止形成客户安装包）"
 }
 
-Write-Host "[build_ai_edit_worker] Python=$pyVersion FfmpegDir=$FfmpegDir ModelDir=$ModelDir"
+# FIX1-8：Customer 分发模式门禁——所有组件许可证必须已确认
+if ($DistributionMode -eq "Customer") {
+    if (-not (Test-Path $LicenseConfirmedFile)) {
+        throw "Customer 分发模式要求 LICENSE_CONFIRMED.txt 存在：所有第三方组件（FFmpeg/libvidstab/libx264/FunASR/PyTorch/YOLO/open_clip/字体）商用可分发依据必须确认完毕。当前未确认，禁止形成客户安装包。"
+    }
+    Write-Host "[build_ai_edit_worker] DistributionMode=Customer：许可证已确认，允许形成客户安装包"
+} else {
+    Write-Host "[build_ai_edit_worker] DistributionMode=Development：仅源码级本地测试，不形成客户安装包"
+}
+
+Write-Host "[build_ai_edit_worker] Python=$pyVersion FfmpegDir=$FfmpegDir ModelDir=$ModelDir FontDir=$FontDir Mode=$DistributionMode"
 
 # ---------------------------------------------------------------------------
 # 安装 Worker 重依赖（Python 3.11 独立环境）

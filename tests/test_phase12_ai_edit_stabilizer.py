@@ -42,19 +42,29 @@ def test_stabilize_computes_source_hash_not_trusting_manifest(tmp_path):
 
     def fake_runner(cmd, *, timeout_seconds, cancel_check, cwd):
         calls.append({"cmd": list(cmd), "cwd": cwd})
-        # 模拟产出 motion.trf 与输出（输出在命令末尾参数，cwd 即 attempt_dir）
         (cwd / "motion.trf").write_text("transform-data")
         (cwd / "stabilized.mp4").write_bytes(b"stabilized-bytes")
         return type("R", (), {"returncode": 0})()
 
+    # FIX1-5：Worker 自算源哈希并与 expected 比对——错误哈希 → 失败，不伪造成功
     result = stb.stabilize(
         src, expected_sha256="wrong-hash-from-manifest",
         runner=fake_runner, work_root=tmp_path, attempt_id="att-1",
     )
-    # Worker 自己算哈希，不信任 manifest 的 wrong-hash
-    assert result.source_sha256 == file_sha256(src)
-    assert result.output_sha256 != result.source_sha256  # 产物哈希独立
-    assert result.output.exists()
+    assert result.status == "failed"
+    assert result.failure_code == "SOURCE_HASH_DRIFT"
+    assert result.source_sha256 == file_sha256(src)  # 仍返回自算哈希
+    assert result.output is None  # 不伪造产物
+    assert calls == []  # 哈希不匹配时不调 runner
+
+    # 正确哈希 → 成功
+    result2 = stb.stabilize(
+        src, expected_sha256=file_sha256(src),
+        runner=fake_runner, work_root=tmp_path, attempt_id="att-2",
+    )
+    assert result2.status == "succeeded"
+    assert result2.output.exists()
+    assert result2.output_sha256 != result2.source_sha256
 
 
 # ---------------------------------------------------------------------------

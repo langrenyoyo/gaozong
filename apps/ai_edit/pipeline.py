@@ -43,6 +43,32 @@ class PipelineDeps:
     render_timeout_seconds: float = 600
 
 
+def _resolve_within_task_root(path: Path, task_root: Path) -> Path:
+    """校验路径在受控任务根内（resolve + relative_to，拒符号链接越界）。
+
+    FIX1-5：原 pipeline 直接 task_root / relative_path 拼接，未做 resolve，
+    任务根内符号链接可读取外部文件。
+    """
+    root_resolved = task_root.resolve()
+    candidate = (task_root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise _StageFailure("preflight", "MATERIAL_PATH_OUT_OF_ROOT") from exc
+    # 拒最终路径段符号链接
+    raw = task_root / path if not Path(path).is_absolute() else Path(path)
+    if raw.is_symlink():
+        raise _StageFailure("preflight", "SYMLINK_REJECTED")
+    return candidate
+
+
+# 目标分辨率（宽 x 高），竖屏视频
+_PROFILE_DIMS = {
+    "720p": (720, 1280),
+    "1080p": (1080, 1920),
+}
+
+
 def _render(
     deps: PipelineDeps,
     *,
@@ -52,11 +78,15 @@ def _render(
     profile: str,
     cancel_check: Callable[[], bool],
 ) -> None:
-    """渲染单分辨率（替身或真实 ffmpeg）。"""
+    """渲染单分辨率（真实 ffmpeg scale 滤镜，H.264 + AAC）。"""
+    width, height = _PROFILE_DIMS[profile]
+    # FIX1-7：真实 scale 滤镜（scale=宽:高），libx264 + aac，非不存在的 scale_profile
     cmd = [
         deps.ffmpeg_binary, "-y",
         "-i", str(input_path),
-        "-vf", f"scale_profile={profile}",
+        "-vf", f"scale={width}:{height}",
+        "-c:v", "libx264",
+        "-c:a", "aac",
         str(output_path),
     ]
     try:
@@ -107,16 +137,20 @@ def run_pipeline(
         return False
 
     try:
-        # 1. preflight
+        # 1. preflight：task_root + 素材路径强门（resolve + relative_to + 符号链接拒绝）
         if not task_root.exists():
             return WorkerResult(status="failed", failure_stage="preflight",
                                 failure_code="TASK_ROOT_NOT_FOUND")
+        material_paths: list[Path] = []
+        material_hashes: dict[str, str] = {}
         for m in manifest.materials:
             _cancelled()
-            src = task_root / m.relative_path
+            src = _resolve_within_task_root(Path(m.relative_path), task_root)
             if not src.exists():
                 return WorkerResult(status="failed", failure_stage="preflight",
                                     failure_code="MATERIAL_FILE_NOT_FOUND")
+            material_paths.append(src)
+            material_hashes[m.material_id] = file_sha256(src)
 
         # 2. analyze（替身 ASR/视觉）
         _cancelled()
@@ -125,10 +159,10 @@ def run_pipeline(
         # 3. stabilize_optional
         if deps.stabilize_enabled(manifest):
             _cancelled()
-            main_src = task_root / manifest.materials[0].relative_path
+            main_src = material_paths[0]
             stab = deps.stabilize(
                 main_src,
-                expected_sha256=file_sha256(main_src),
+                expected_sha256=material_hashes[manifest.materials[0].material_id],
                 work_root=task_root / "stages",
                 attempt_id=manifest.attempt_id,
                 cancel_check=cancel,
@@ -139,11 +173,24 @@ def run_pipeline(
                                     failure_code=code)
             render_input = Path(stab.output)
         else:
-            render_input = task_root / manifest.materials[0].relative_path
+            render_input = material_paths[0]
 
-        # 4. plan_input（替身规划）
+        # 4. plan_input：规划结果原子写入 plan.json（不丢弃）
         _cancelled()
-        deps.plan(manifest, analysis, task_root)
+        plan_result = deps.plan(manifest, analysis, task_root)
+        plan_path = task_root / "stages" / "plan.json"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        fd_tmp = __import__("tempfile").mkstemp(prefix=".plan_", suffix=".tmp", dir=str(plan_path.parent))
+        try:
+            with __import__("os").fdopen(fd_tmp[0], "w", encoding="utf-8") as f:
+                _json.dump(plan_result, f, ensure_ascii=False)
+            __import__("os").replace(fd_tmp[1], plan_path)
+        except OSError:
+            try:
+                __import__("os").unlink(fd_tmp[1])
+            except OSError:
+                pass
 
         # 5. render_preview_720p
         _cancelled()
@@ -167,12 +214,21 @@ def run_pipeline(
             return WorkerResult(status="failed", failure_stage="render_final",
                                 failure_code="EMPTY_OUTPUT")
 
-        # 8. verify（媒体强门：可探测 + 非空）
+        # 8. verify（媒体强门：非空 + 有音频 + 时长非 0 + 分辨率匹配）
         _cancelled()
         probe = deps.probe(final_path)
         if not probe.get("has_audio"):
             return WorkerResult(status="failed", failure_stage="verify",
                                 failure_code="AUDIO_MISSING")
+        duration = float(probe.get("duration", 0) or 0)
+        if duration <= 0:
+            return WorkerResult(status="failed", failure_stage="verify",
+                                failure_code="INVALID_DURATION")
+        width = int(probe.get("width", 0) or 0)
+        height = int(probe.get("height", 0) or 0)
+        if (width, height) != _PROFILE_DIMS["1080p"]:
+            return WorkerResult(status="failed", failure_stage="verify",
+                                failure_code="RESOLUTION_MISMATCH")
 
         # 9. succeeded：注册产物
         artifacts.append(_build_artifact("art-preview", "preview_video", preview_path, task_root))

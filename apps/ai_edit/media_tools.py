@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,16 +84,36 @@ def wait_with_cancel(
     timeout_seconds: float,
     cancel_check: Callable[[], bool],
 ) -> CommandResult:
-    """等待进程结束，支持取消与超时；任一触发即终止进程树。"""
+    """等待进程结束，支持取消与超时；任一触发即终止进程树。
+
+    FIX1-6：用后台线程异步读取 stdout/stderr，防止 FFmpeg 输出填满 PIPE 缓冲后
+    阻塞（裸 communicate() 在进程退出前不读会导致死锁）。
+    """
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _pump(stream, sink: list[str]) -> None:
+        try:
+            for chunk in iter(stream.readline, ""):
+                sink.append(chunk)
+        except Exception:  # noqa: BLE001
+            pass
+
+    out_thread = threading.Thread(target=_pump, args=(process.stdout, stdout_chunks), daemon=True)
+    err_thread = threading.Thread(target=_pump, args=(process.stderr, stderr_chunks), daemon=True)
+    out_thread.start()
+    err_thread.start()
+
     deadline = time.monotonic() + timeout_seconds
     while True:
         rc = process.poll()
         if rc is not None:
-            stdout, stderr = process.communicate()
+            out_thread.join(timeout=1)
+            err_thread.join(timeout=1)
             return CommandResult(
                 rc,
-                _stdout=(stdout or "")[:_MAX_CAPTURE],
-                _stderr=(stderr or "")[:_MAX_CAPTURE],
+                _stdout="".join(stdout_chunks)[:_MAX_CAPTURE],
+                _stderr="".join(stderr_chunks)[:_MAX_CAPTURE],
             )
         if cancel_check():
             terminate_process_tree(process)
@@ -101,6 +122,16 @@ def wait_with_cancel(
             terminate_process_tree(process)
             raise MediaCommandError("TIMEOUT")
         time.sleep(0.1)
+
+
+def _new_process_group_kwargs() -> dict:
+    """独立进程组 kwargs：POSIX start_new_session，Windows CREATE_NEW_PROCESS_GROUP。
+
+    FIX1-6：独立进程组防 killpg 误杀 Local Agent 所在父进程组。
+    """
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 def run_media_command(
@@ -113,6 +144,8 @@ def run_media_command(
     """执行媒体命令（参数数组，禁止 shell=True，可取消可超时）。
 
     ponytail: command 为参数数组，绝不 shell=True（防 shell 元字符注入）。
+    独立进程组（start_new_session / CREATE_NEW_PROCESS_GROUP）防取消时误杀父进程组。
+    异步读管道防 FFmpeg 输出填满 PIPE 死锁。
     失败/超时/取消均终止进程树并抛 MediaCommandError（稳定错误码）。
     """
     if not isinstance(command, (list, tuple)) or not command:
@@ -120,14 +153,15 @@ def run_media_command(
     if any(not isinstance(a, str) for a in command):
         raise MediaCommandError("INVALID_COMMAND")
 
-    process = subprocess.Popen(
-        list(command),  # 参数数组
+    popen_kwargs = dict(
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         shell=False,  # 显式禁止 shell
     )
+    popen_kwargs.update(_new_process_group_kwargs())
+    process = subprocess.Popen(list(command), **popen_kwargs)
     try:
         result = wait_with_cancel(process, timeout_seconds, cancel_check)
     except MediaCommandError:

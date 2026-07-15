@@ -74,8 +74,16 @@ def stabilize(
         logger.warning("stabilize stage=invalid_params shakiness=%s", shakiness)
         return StabilizeResult(status="failed", failure_code="INVALID_PARAMS")
 
-    # Worker 自算源哈希
+    # Worker 自算源哈希，并与调用方传入的预期哈希比对（防漂移）
     source_hash = file_sha256(source)
+    if expected_sha256 and source_hash != expected_sha256:
+        logger.warning(
+            "stabilize stage=hash_drift attempt_id=%s expected_prefix=%s actual_prefix=%s",
+            attempt_id, expected_sha256[:12], source_hash[:12],
+        )
+        return StabilizeResult(
+            status="failed", failure_code="SOURCE_HASH_DRIFT", source_sha256=source_hash,
+        )
     logger.info(
         "stabilize stage=start attempt_id=%s source_sha256_prefix=%s",
         attempt_id, source_hash[:12],

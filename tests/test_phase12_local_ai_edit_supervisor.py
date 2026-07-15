@@ -155,3 +155,63 @@ def test_supervisor_rejects_stale_attempt_writeback(tmp_path):
     accepted = sup.writeback(job_id="job-1", attempt_id="stale-att",
                             result={"status": "succeeded"})
     assert accepted is False
+
+
+# ---------------------------------------------------------------------------
+# FIX1-4：恢复保留 manifest_path + 不重执已取消
+# ---------------------------------------------------------------------------
+
+
+def test_supervisor_recover_preserves_manifest_path(tmp_path):
+    """恢复时保留持久化的 manifest_path（不丢失）。"""
+    sup1 = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
+    sup1.enqueue(LocalAiEditJob(
+        job_id="j1", attempt_id="att-1", manifest_path="/work/j1/manifest.json",
+        merchant_id="m1",
+    ))
+    # 模拟崩溃：标记 running 后不完成
+    sup1._persist_job_state("j1", status="running", attempt_id="att-1",
+                            manifest_path="/work/j1/manifest.json", merchant_id="m1")
+    # 重启
+    sup2 = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
+    recovered = sup2.recover()
+    assert recovered == 1
+    # manifest_path 保留
+    state = sup2.get_job_state("j1", merchant_id="m1")
+    assert state["manifest_path"] == "/work/j1/manifest.json"
+
+
+def test_supervisor_recover_skips_cancelled(tmp_path):
+    """已取消任务不重执（cancel_requested 与 cancelled 跳过）。"""
+    sup1 = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
+    sup1.enqueue(LocalAiEditJob(job_id="j1", attempt_id="a1", manifest_path="/m.json"))
+    sup1.enqueue(LocalAiEditJob(job_id="j2", attempt_id="a2", manifest_path="/m2.json"))
+    # j2 取消（cancel_requested）
+    sup1.cancel("j2")
+    # j1 标记 running
+    sup1._persist_job_state("j1", status="running", attempt_id="a1", manifest_path="/m.json")
+    # 重启
+    executed: list[str] = []
+    sup2 = AiEditSupervisor(
+        work_root=tmp_path,
+        executor=lambda j: executed.append(j.job_id) or {"status": "succeeded"},
+    )
+    sup2.recover()
+    sup2.drain()
+    # j2（cancel_requested）不被重执；j1（running）被恢复执行
+    assert "j1" in executed
+    assert "j2" not in executed
+
+
+def test_supervisor_recover_skips_terminal(tmp_path):
+    """终态任务（succeeded/failed/cancelled）不重执。"""
+    sup1 = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
+    sup1._persist_job_state("done", status="succeeded", attempt_id="a",
+                            manifest_path="/m.json", merchant_id="m1")
+    sup1._persist_job_state("fail", status="failed", attempt_id="b",
+                            manifest_path="/m2.json", merchant_id="m1")
+    sup2 = AiEditSupervisor(
+        work_root=tmp_path,
+        executor=lambda j: pytest.fail(f"不应重执终态任务 {j.job_id}"),
+    )
+    assert sup2.recover() == 0

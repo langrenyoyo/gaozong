@@ -3,21 +3,19 @@
 #
 # 边界：
 # - 与 9000 主服务依赖隔离（Worker 是独立子进程，不导入 FastAPI/uvicorn）。
-# - 重依赖（PyTorch/FunASR/OpenCV/YOLO/open_clip）固定版本，随包分发需第三方许可证（见
-#   docs/ai/13_ai_edit/THIRD_PARTY_NOTICES.md）。
+# - 重依赖固定版本（==），随包分发需第三方许可证（见 docs/ai/13_ai_edit/THIRD_PARTY_NOTICES.md）。
 # - FFmpeg/ffprobe 不进 pip 依赖，由构建脚本校验外部二进制并打包。
-# - 实际版本由打包窗口锁定；本文件列最小集，构建时校验可导入。
+# - 版本由打包窗口锁定，禁止 >= 浮动版本（保证可复现与许可证追溯）。
 
 # 视觉与张量计算
-torch>=2.1
-opencv-python>=4.8
+torch==2.1.0
+opencv-python==4.8.1.78
 
 # ASR
-funasr>=1.0
+funasr==1.0.27
 
 # 视觉标签与图文匹配
-ultralytics>=8.0          # YOLO
-open-clip-torch>=2.20
+ultralytics==8.0.200          # YOLO
+open-clip-torch==2.20.0
 
-# 媒体探测（轻量，Worker 内 ffprobe 调用辅助）
-# ffmpeg-python 仅作命令构造，真实 ffmpeg 由外部二进制提供
+# 媒体探测（ffmpeg-python 仅命令构造，真实 ffmpeg 由外部二进制提供）

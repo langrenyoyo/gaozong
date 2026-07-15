@@ -176,3 +176,47 @@ def test_verify_source_hash_rejects_drift(tmp_path):
     # 不一致 → 拒绝
     with pytest.raises(Exception):
         verify_source_hash(src, "0" * 64)
+
+
+# ---------------------------------------------------------------------------
+# FIX1-6：进程组隔离（不误杀父进程组）+ 管道不死锁
+# ---------------------------------------------------------------------------
+
+
+def test_run_media_command_does_not_block_on_large_output(tmp_path):
+    """子进程输出大量数据填满管道缓冲后不应死锁（异步读管道）。"""
+    # 生成超过 PIPE 缓冲（通常 64KB）的输出
+    script = "import sys; sys.stdout.write('x' * 200000); sys.exit(0)"
+    cmd = [sys.executable, "-c", script]
+    # 若死锁，wait_with_cancel 会卡到超时 → TIMEOUT 异常；正常应快速返回 0
+    result = run_media_command(cmd, timeout_seconds=15, cancel_check=lambda: False, cwd=tmp_path)
+    assert result.returncode == 0
+
+
+def test_run_media_command_uses_isolated_process_group(tmp_path):
+    """子进程在独立进程组（start_new_session / CREATE_NEW_PROCESS_GROUP），不误杀父组。"""
+    import inspect
+    from apps.ai_edit import media_tools as mt
+
+    source = inspect.getsource(mt)
+    # 必须设置独立进程组（POSIX start_new_session 或 Windows CREATE_NEW_PROCESS_GROUP）
+    assert "start_new_session" in source or "CREATE_NEW_PROCESS_GROUP" in source
+
+
+def test_cancel_terminates_child_process_tree(tmp_path):
+    """取消终止进程树：子进程被 kill，不留残留。"""
+    # 子进程 sleep，取消后应被终止
+    cmd = [sys.executable, "-c", "import time; time.sleep(60)"]
+    import threading
+    cancel_event = threading.Event()
+
+    def cancel_check():
+        return cancel_event.is_set()
+
+    # 0.3 秒后触发取消
+    threading.Timer(0.3, cancel_event.set).start()
+    with pytest.raises(MediaCommandError) as exc_info:
+        run_media_command(cmd, timeout_seconds=10, cancel_check=cancel_check, cwd=tmp_path)
+    assert exc_info.value.failure_code == "CANCELLED"
+    # 取消后子进程不应残留（best-effort：再等一瞬）
+    time.sleep(0.2)
