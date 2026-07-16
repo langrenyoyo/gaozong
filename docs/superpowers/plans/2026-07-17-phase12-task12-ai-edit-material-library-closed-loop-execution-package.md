@@ -35,14 +35,13 @@
 
 ### 0.3 工作区保护
 
-当前已有用户改动：
+计划复审时已有用户改动：
 
 ```text
-docs/ai/01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md
-docs/待确认事项.md
+.gitignore
 ```
 
-`.superpowers/` 是未提交视觉稿。每个任务开始与提交前执行：
+每个任务必须以当时 `git status` 为准继续记录新增脏文件。`.superpowers/` 是视觉稿生成目录，不得纳入业务提交。每个任务开始与提交前执行：
 
 ```powershell
 git status --short
@@ -286,11 +285,23 @@ class AiEditMaterialProcess(Base):
 升级脚本在任何 `RENAME` 前执行：
 
 ```sql
-SELECT CASE WHEN EXISTS (
-  SELECT 1 FROM ai_edit_materials
-  WHERE merchant_id IS NOT NULL
-  GROUP BY merchant_id, source_sha256 HAVING COUNT(*) > 1
-) THEN RAISE(ABORT, '0034 duplicate merchant sha256') END;
+CREATE TEMP TABLE _guard_0034 (ok INTEGER NOT NULL CHECK (ok = 1));
+
+INSERT INTO _guard_0034 (ok)
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM ai_edit_materials
+    WHERE merchant_id IS NOT NULL
+    GROUP BY merchant_id, source_sha256
+    HAVING count(*) > 1
+) THEN 1 ELSE 0 END;
+
+INSERT INTO _guard_0034 (ok)
+SELECT CASE WHEN (
+    SELECT max(version_num) FROM schema_migrations
+) = '0033' THEN 1 ELSE 0 END;
+
+DROP TABLE _guard_0034;
 ```
 
 使用 `pragma_table_xinfo` 固定 0033 的 17 个普通列和无隐藏列；重建 `ai_edit_materials` 时逐列复制旧数据，新列保持 `NULL`。用包含 `id`、时间字段和全部旧业务列的双向 `EXCEPT` 与行数守卫证明无损。创建 `ai_edit_material_processes`、索引和版本登记。
@@ -351,8 +362,13 @@ def list_materials(db: Session, *, merchant_id: str, scope: str,
                    stage: str | None, process_status: str | None,
                    page: int, page_size: int) -> tuple[int, list[AiEditMaterial]]:
     q = db.query(AiEditMaterial)
-    q = q.filter(AiEditMaterial.deleted_at.isnot(None) if lifecycle == "trash"
-                 else AiEditMaterial.deleted_at.is_(None))
+    if lifecycle == "trash":
+        q = q.filter(
+            AiEditMaterial.deleted_at.isnot(None),
+            AiEditMaterial.purge_after.isnot(None),
+        )
+    else:
+        q = q.filter(AiEditMaterial.deleted_at.is_(None))
     q = q.filter(AiEditMaterial.scope == scope)
     if scope == "merchant":
         q = q.filter(AiEditMaterial.merchant_id == merchant_id)
@@ -381,7 +397,7 @@ def list_materials(db: Session, *, merchant_id: str, scope: str,
 
 标签筛选只匹配最新分析快照的规范 JSON 标签值和人工覆盖标签；时长、创建时间与排序在数据库查询阶段完成，禁止先分页再用 Python 过滤。为 `scope/lifecycle/category/stage/status/min_duration/max_duration/created_from/created_to/sort` 各写至少一个合同断言。
 
-`register_material` 先按 `(merchant_id, source_sha256, deleted_at IS NULL)` 查规范素材；并发首次写入捕获唯一约束 `IntegrityError` 后回查，不生成第二条记录。
+`register_material` 先按 `(merchant_id, source_sha256)` 回查全部历史行：活动行直接返回规范 ID；回收站或 `purge_after=NULL` 的已清理 tombstone 使用同一规范 ID 复活并清除删除字段；不得插入第二行。并发首次写入捕获唯一约束 `IntegrityError` 后同样按该组合回查。
 
 Local Agent 可信注册请求允许可选 `parent_material_id`，仅用于增稳衍生素材；服务必须验证父素材属于同一商户且未删除，普通商户注册接口不得自报该字段。
 
@@ -479,13 +495,37 @@ class MaterialAnalysisDeps:
 
 `run_material_analysis` 逐阶段调用依赖并写原子 `material-result.json`。关键帧最大边 720px、JPEG、每场景 1 张、总数最多 12。迁入 `auto_edit` 时只复制解析/适配器逻辑，移除 `source_path` 和原始 stdout/stderr。
 
+生产依赖不得调用未保证存在的 `funasr` 或 `scenedetect` 命令：
+
+```python
+def build_local_transcriber(model_dir: Path):
+    if not model_dir.is_dir() or not (model_dir / "configuration.json").is_file():
+        raise MaterialAnalysisError("ASR_MODEL_NOT_AVAILABLE")
+    from funasr import AutoModel
+    model = AutoModel(model=str(model_dir), disable_update=True)
+    return lambda audio_path: model.generate(input=str(audio_path))
+
+def split_scenes_with_pyscenedetect(video_path: Path) -> list[dict]:
+    from scenedetect import ContentDetector, SceneManager, open_video
+    video = open_video(str(video_path))
+    manager = SceneManager()
+    manager.add_detector(ContentDetector())
+    manager.detect_scenes(video)
+    return [
+        {"start": start.get_seconds(), "end": end.get_seconds()}
+        for start, end in manager.get_scene_list()
+    ]
+```
+
+`AI_EDIT_ASR_MODEL_DIR` 只能指向随包本地目录，`disable_update=True` 且网络哨兵必须证明不下载模型。ASR 失败只把 transcript 阶段标记失败；场景、关键帧和稳定性继续执行。
+
 - [ ] **Step 3: 实现独立持久化监督器**
 
 `MaterialOperationSupervisor` 使用 `(merchant_id, material_id, operation)` 复合键，状态文件只存受管相对清单路径、attempt 和状态。`enqueue()` 原子持久化后入队；`recover()` 把 `queued/running` 归一为新 attempt 的 `queued`；`writeback()` 拒绝旧 attempt。
 
 - [ ] **Step 4: 接入导入链路和生产 Worker**
 
-19000 导入完成并成功同步 9000 后立即创建 `operation=analyze` 清单并 `enqueue`。`worker_main.main()` 根据 `schema_version` 分派素材操作或既有剪辑流水线；不得破坏现有剪辑 manifest。终态回调逐阶段写回 9000，网络失败保留 `pending_writeback`，重启补偿。
+19000 导入完成并成功同步 9000 后立即创建 `operation=analyze` 清单并 `enqueue`。`worker_main.main()` 根据 `schema_version` 分派素材操作或既有剪辑流水线；不得破坏现有剪辑 manifest。素材操作复用现有 `_ai_edit_executor` 的参数数组、独立进程组、管道有界读取和凭据环境剥离，不另写子进程启动器。终态回调逐阶段写回 9000，网络失败保留 `pending_writeback`，重启补偿。
 
 一键增稳创建 `operation=stabilize` 清单，调用现有 `apps.ai_edit.stabilizer.stabilize`，输出到新的受管素材目录。完成后再次校验原素材 SHA-256 未变化、衍生文件可被 ffprobe 读取，再以新素材 ID 和可信 `parent_material_id` 注册 9000。失败时删除衍生临时文件，不修改原素材与父素材记录。
 
@@ -519,12 +559,26 @@ git commit -m "功能：增加本机素材自动分析流水线"
 - [ ] **Step 2: 实现严格 schema**
 
 ```python
+import base64
+import binascii
+
 class MaterialKeyframe(BaseModel):
     model_config = {"extra": "forbid"}
     scene_id: str = Field(..., min_length=1, max_length=64)
     at_seconds: float = Field(..., ge=0)
     mime_type: Literal["image/jpeg", "image/webp"]
     content_base64: str = Field(..., min_length=1, max_length=700_000)
+
+    @field_validator("content_base64")
+    @classmethod
+    def validate_frame_bytes(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("关键帧不是合法 base64") from exc
+        if len(decoded) > 512 * 1024:
+            raise ValueError("关键帧解码后不得超过 512KB")
+        return value
 
 class MaterialSemanticAnalysisRequest(BaseModel):
     model_config = {"extra": "forbid"}
@@ -534,6 +588,12 @@ class MaterialSemanticAnalysisRequest(BaseModel):
     transcript: list[TranscriptSegment] = Field(default_factory=list, max_length=100)
     scenes: list[SceneSummary] = Field(..., min_length=1, max_length=100)
     keyframes: list[MaterialKeyframe] = Field(..., min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_timeline(self):
+        if any(frame.at_seconds > self.duration_seconds for frame in self.keyframes):
+            raise ValueError("关键帧时间不得超过素材时长")
+        return self
 ```
 
 响应固定 `description/category/tags/highlights/usable_ranges/confidence/model/prompt_version`，分类只允许 `spoken/broll/highlight/uncategorized`。
@@ -596,18 +656,41 @@ git commit -m "功能：增加素材多模态语义分析"
 - [ ] **Step 2: 实现流式原子存储**
 
 ```python
-def store_material_stream(*, root: Path, merchant_key: str, material_id: str,
-                          stream: BinaryIO, expected_size: int,
-                          expected_sha256: str, suffix: str) -> StoredMaterial:
-    storage_key = build_material_storage_key(merchant_key, material_id, suffix)
+from collections.abc import AsyncIterable
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class StoredMaterial:
+    storage_key: str
+    size_bytes: int
+    sha256: str
+
+def build_material_storage_key(merchant_id: str, material_id: str, suffix: str) -> str:
+    if (not material_id or material_id.startswith(".")
+            or any(char in material_id for char in "/\\:")):
+        raise AiEditStorageError("MATERIAL_ID_INVALID")
+    merchant_key = hashlib.sha256(merchant_id.encode("utf-8")).hexdigest()[:24]
+    clean_suffix = suffix.lower().lstrip(".")
+    if clean_suffix not in {"mp4", "mov", "avi", "jpg", "jpeg", "png", "webp"}:
+        raise AiEditStorageError("MATERIAL_SUFFIX_NOT_ALLOWED")
+    return f"materials/{merchant_key}/{material_id}/source.{clean_suffix}"
+
+async def store_material_stream(*, root: Path, merchant_id: str, material_id: str,
+                                chunks: AsyncIterable[bytes], expected_size: int,
+                                expected_sha256: str, suffix: str) -> StoredMaterial:
+    storage_key = build_material_storage_key(merchant_id, material_id, suffix)
     target = resolve_ai_edit_storage_key(storage_key, root)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".upload_", dir=target.parent)
     digest, total = hashlib.sha256(), 0
     try:
         with os.fdopen(fd, "wb") as output:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                output.write(chunk); digest.update(chunk); total += len(chunk)
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                output.write(chunk)
+                digest.update(chunk)
+                total += len(chunk)
         if total != expected_size or digest.hexdigest() != expected_sha256:
             raise AiEditStorageError("MATERIAL_UPLOAD_INTEGRITY_FAILED")
         os.replace(temp_name, target)
@@ -618,15 +701,71 @@ def store_material_stream(*, root: Path, merchant_key: str, material_id: str,
                           sha256=digest.hexdigest())
 ```
 
-`merchant_key` 使用不可逆哈希目录，不把明文 `merchant_id` 放进存储键。检查每个现存父目录均非符号链接/重解析点。
+9000 路由使用 `async for` 的 `Request.stream()` 直接传给该函数。存储键使用不可逆商户哈希目录，不把明文 `merchant_id` 放进存储键。检查每个现存父目录均非符号链接/重解析点。
 
 - [ ] **Step 3: 实现 19000 到 9000 流式上传**
 
-`Nine000ControlClient.upload_material` 接收本机受管 `Path`，生产实现用标准库 `http.client` 按 1MB 发送并设置 `Content-Length`、SHA、素材 ID 与 Local Agent token；不得 `read_bytes()`。9000 收流时状态为 `running`，原子提交后才写 `cloud_available/succeeded`。
+`Nine000ControlClient.upload_material` 接收本机受管 `Path`，生产实现用标准库 `http.client` 发送原始请求体：
+
+```python
+connection.putrequest("PUT", upload_path)
+connection.putheader("Content-Length", str(source.stat().st_size))
+connection.putheader("X-Content-SHA256", expected_sha256)
+connection.putheader("X-Local-Agent-Token", self.token)
+connection.endheaders()
+with source.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        connection.send(chunk)
+response = connection.getresponse()
+```
+
+不得 `read_bytes()`。9000 收流时状态为 `running`，原子提交后才写 `cloud_available/succeeded`。
 
 - [ ] **Step 4: 实现云端预览和本地短票据**
 
 9000 云端内容接口支持单区间 Range、`Accept-Ranges: bytes` 和登录态商户隔离。本地预览先用带 Local Agent token 的 JSON 请求签发 60 秒随机票据，再由 `<video>` 使用票据 URL；票据只绑定商户、素材和到期时间，Local Agent access log 不记录票据值。
+
+由于 `<video>` 会连续发多个 Range 请求，票据在 60 秒内允许同素材重复使用，不能首请求即销毁。`app/local_agent_main.py` 给 `uvicorn.access` 增加窄过滤器，只对本地预览路径移除 query：
+
+```python
+class LocalPreviewAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) >= 3:
+            args = list(record.args)
+            path = str(args[2])
+            if path.startswith("/agent/ai-edit/materials/preview?"):
+                args[2] = path.split("?", 1)[0] + "?ticket=[REDACTED]"
+                record.args = tuple(args)
+        return True
+```
+
+测试捕获 `uvicorn.access`，断言随机票据原值不在日志。预览 `OPTIONS/GET` 继续使用现有回环 CORS/PNA 策略。
+
+Range 解析使用独立纯函数，拒绝多区间和越界：
+
+```python
+def parse_single_range(header: str | None, size: int) -> tuple[int, int]:
+    if size <= 0:
+        raise AiEditStorageError("RANGE_NOT_SATISFIABLE")
+    if not header:
+        return 0, size - 1
+    if not header.startswith("bytes=") or "," in header:
+        raise AiEditStorageError("RANGE_NOT_SATISFIABLE")
+    start_text, end_text = header[6:].split("-", 1)
+    try:
+        if not start_text:
+            length = int(end_text)
+            if length <= 0:
+                raise AiEditStorageError("RANGE_NOT_SATISFIABLE")
+            return max(0, size - length), size - 1
+        start = int(start_text)
+        end = int(end_text) if end_text else size - 1
+    except ValueError as exc:
+        raise AiEditStorageError("RANGE_NOT_SATISFIABLE") from exc
+    if start < 0 or start >= size or end < start:
+            raise AiEditStorageError("RANGE_NOT_SATISFIABLE")
+    return start, min(end, size - 1)
+```
 
 - [ ] **Step 5: 配置与测试**
 
@@ -672,7 +811,12 @@ git commit -m "功能：增加 AI 素材受控云端存储"
 
 ```python
 def restore_material(root: Path, material_id: str) -> MaterialRecord:
-    record = require_owned_record(root, material_id)
+    record = next(
+        (item for item in list_materials(root) if item.material_id == material_id),
+        None,
+    )
+    if record is None:
+        raise LocalAiEditStorageError("MATERIAL_NOT_FOUND")
     record.deleted_at = None; record.purge_after = None
     _upsert_manifest(root, record)
     return record
@@ -697,7 +841,7 @@ def _remove_manifest_record(root: Path, material_id: str) -> None:
 
 - [ ] **Step 3: 实现 19000 协调与 9000 幂等状态机**
 
-恢复顺序：本地恢复 → 9000 恢复；9000 失败则回滚本地软删。永久删除顺序：9000 prepare 只校验活动引用并返回幂等删除凭据，不新增状态枚举 → 本地清理 → 9000 finalize 删除云端、清空 `purge_after/cloud_storage_key` 并保留不可见审计 tombstone。任一步重试使用同一幂等键。
+恢复顺序：本地恢复 → 9000 恢复；9000 失败则用操作前 `deleted_at/purge_after` 快照回滚本地软删。永久删除顺序：9000 prepare 校验活动引用 → 本地清理 → 9000 finalize 再校验并删除云端、清空 `purge_after/cloud_storage_key`、置 `storage_mode=local_missing`，保留不可见审计 tombstone。prepare 后素材保持已删除，不能产生新任务引用；任一步重试使用同一 `operation_id`，不新增状态枚举或签名密钥。
 
 - [ ] **Step 4: 实现有界清理调度器**
 
@@ -748,7 +892,7 @@ export interface AiEditMaterialProcess {
 
 - [ ] **Step 2: 实现页面组件**
 
-`MaterialLibrary.tsx` 只编排状态与数据请求；筛选、网格、详情、时间轴、导入队列各自独立。`Index.tsx` 只把现有登录用户的 `super_admin` 布尔值传给素材库，不修改全局导航或路由分发。保留现有 header 与：
+`MaterialLibrary.tsx` 只编排状态与数据请求；筛选、网格、详情、时间轴、导入队列各自独立。`Index.tsx` 只用现有 `isSuperAdmin(user)` helper 计算布尔值并传给素材库，不新增用户字段，不修改全局导航或路由分发。保留现有 header 与：
 
 ```tsx
 <ModuleTabs items={[
@@ -867,7 +1011,7 @@ git commit -m "测试：完成 Task 12 素材库本地闭环验收"
 
 - [ ] **Step 1: 固定打包依赖与资源**
 
-Worker spec 显式收集 `funasr/cv2/scenedetect` 及 Task 12 新模块；仍排除 FastAPI/uvicorn。构建脚本在打包前导入检查依赖，验证 FFmpeg/ffprobe 和所需模型文件存在。不得把 token、客户路径或数据库写入包。
+`requirements-ai-edit-worker.txt` 增加固定版本 `scenedetect==0.6.7.1`；Worker spec 显式收集 `funasr/cv2/scenedetect` 及 Task 12 新模块，仍排除 FastAPI/uvicorn。构建脚本在打包前导入检查依赖，验证 FFmpeg/ffprobe，并要求 `resources/funasr_models/configuration.json` 及至少一个 `.pt` 或 `.onnx` 模型文件存在；模型目录收集到包内 `models/funasr`。不得把 token、客户路径或数据库写入包，运行时设置 `AI_EDIT_ASR_MODEL_DIR` 为包内目录并禁止在线更新。
 
 - [ ] **Step 2: 重建唯一测试 EXE**
 
@@ -917,7 +1061,7 @@ git commit -m "交付：重建支持素材库闭环的测试 EXE"
 
 ```text
 状态：检查点 C 后为 TASK12_DONE_WITH_CONCERNS；EXE smoke 后为 BUILT_FOR_CUSTOMER_TEST
-提交链：执行 git log --oneline 56faa8c..HEAD 并原样回传
+提交链：按每个 Task 固定回传中记录的哈希顺序列出，仅包含 Task 12 提交
 检查点：A PASS / B PASS / C PASS
 测试矩阵：原样回传 Task 12 全套与关联回归命令输出
 网络调用：真实外网 0；真实宝塔 0；真实付费模型 0
