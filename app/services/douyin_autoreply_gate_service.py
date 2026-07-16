@@ -157,28 +157,21 @@ def evaluate_real_send_gates(
     conversation_short_id: str | None,
     now: datetime | None = None,
 ) -> GateDecision:
-    """集中评估真实自动发送门禁；任一失败都返回稳定 reason code。"""
+    """集中评估真实自动发送门禁；任一失败都返回稳定 reason code。
+
+    一期已放开自动发送灰度（见 CLAUDE.md 小高一期确认范围第6条）：
+    不再因 env 白名单、allow_full_rollout、数据库灰度门禁阻断自动发送；
+    是否允许自动发送只由 env 总开关 DOUYIN_AUTO_REPLY_ENABLED +
+    DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED 决定，再叠加账号级 send_enabled、
+    绑定智能体、接管、频控等业务保护。
+    """
     current_time = now or datetime.now()
-    allow_full_rollout = config.DOUYIN_AUTO_REPLY_ALLOW_FULL_ROLLOUT is True
-    global_account_hit = account_open_id in config.DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST_SET
-    global_customer_hit = bool(
-        customer_open_id and customer_open_id in config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET
-    )
-    global_conversation_hit = bool(
-        conversation_short_id
-        and conversation_short_id in config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET
-    )
     gate_results: dict[str, Any] = {
         "global": {
             "auto_reply_enabled": bool(config.DOUYIN_AUTO_REPLY_ENABLED),
             "real_send_enabled": bool(config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED),
-            "allow_full_rollout": allow_full_rollout,
-            "mode": "full_rollout" if allow_full_rollout else "whitelist",
-            "account_whitelist_required": not allow_full_rollout,
-            "customer_or_conversation_whitelist_required": not allow_full_rollout,
-            "account_whitelist_hit": global_account_hit,
-            "customer_whitelist_hit": global_customer_hit,
-            "conversation_whitelist_hit": global_conversation_hit,
+            # 灰度已放开：env 白名单与 allow_full_rollout 不再阻断，仅保留 env 总开关。
+            "rollout_released": True,
         },
         "settings": _settings_snapshot(settings),
     }
@@ -186,11 +179,8 @@ def evaluate_real_send_gates(
         return GateDecision(False, "blocked", "global_auto_reply_disabled", gate_results)
     if config.DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED is not True:
         return GateDecision(False, "blocked", "global_real_send_disabled", gate_results)
-    if not allow_full_rollout and not global_account_hit:
-        return GateDecision(False, "blocked", "global_account_whitelist_missed", gate_results)
-    if not allow_full_rollout and not (global_customer_hit or global_conversation_hit):
-        return GateDecision(False, "blocked", "global_customer_or_conversation_whitelist_missed", gate_results)
 
+    # 数据库灰度门禁仅作诊断快照，不再阻断自动发送。
     db_rollout_gate = evaluate_db_rollout_gate(
         db,
         merchant_id=merchant_id,
@@ -199,8 +189,6 @@ def evaluate_real_send_gates(
         conversation_short_id=conversation_short_id,
     )
     gate_results["db_rollout"] = db_rollout_gate.snapshot
-    if not db_rollout_gate.passed:
-        return GateDecision(False, "blocked", db_rollout_gate.blocked_reason, gate_results)
 
     if settings is None:
         return GateDecision(False, "blocked", "no_autoreply_settings", gate_results)
@@ -224,7 +212,7 @@ def evaluate_real_send_gates(
         "customer_configured": bool(customer_whitelist),
         "conversation_configured": bool(conversation_whitelist),
         "required": bool(customer_whitelist or conversation_whitelist),
-        "mode": "optional_narrowing" if allow_full_rollout else "required_narrowing",
+        "mode": "optional_narrowing",
         "customer_hit": bool(customer_open_id and customer_open_id in customer_whitelist),
         "conversation_hit": bool(conversation_short_id and conversation_short_id in conversation_whitelist),
     }

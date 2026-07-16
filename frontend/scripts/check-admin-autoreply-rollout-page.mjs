@@ -50,11 +50,12 @@ for (const forbidden of ['force_send', 'bypass', 'ignore_gate', 'set_final_auto_
   if (page.includes(forbidden)) throw new Error(`页面包含禁止字段：${forbidden}`);
 }
 
-if (!sideNav.includes('admin-autoreply-rollout')) {
-  throw new Error('侧栏缺少自动回复灰度入口');
+// 一期已隐藏自动回复灰度入口：是否自动发送只由 env 开关决定，侧栏不再渲染入口。
+if (sideNav.includes('admin-autoreply-rollout')) {
+  throw new Error('侧栏不应再包含自动回复灰度入口');
 }
-if (!sideNav.includes('PERMISSIONS.adminAutoreply') || !capabilities.includes('auto_wechat:admin:autoreply')) {
-  throw new Error('侧栏缺少自动回复灰度专属权限码');
+if (!capabilities.includes('auto_wechat:admin:autoreply')) {
+  throw new Error('权限码缺少 auto_wechat:admin:autoreply');
 }
 if (!capabilities.includes('hasAdminPermission')) {
   throw new Error('权限工具缺少 hasAdminPermission');

@@ -9,7 +9,6 @@ import {
   MessageCircleMoreIcon,
   MessagesSquareIcon,
   ScissorsIcon,
-  ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -44,13 +43,6 @@ const centerIcons: Record<string, React.ReactNode> = {
 
 const adminItems = [
   {
-    id: "admin-autoreply-rollout",
-    label: "发送",
-    expandedLabel: "自动回复灰度",
-    path: "/admin/autoreply-rollout",
-    permission: PERMISSIONS.adminAutoreply,
-  },
-  {
     id: "admin-return-visits",
     label: "回访",
     expandedLabel: "回访配置",
@@ -74,7 +66,6 @@ const adminItems = [
 ];
 
 const adminIcons: Record<string, React.ReactNode> = {
-  "admin-autoreply-rollout": <ShieldAlertIcon size={18} />,
   "admin-return-visits": <MessagesSquareIcon size={18} />,
   "ai-reply-records": <MessageCircleMoreIcon size={18} />,
   "admin-forbidden-words": <ShieldCheckIcon size={18} />,

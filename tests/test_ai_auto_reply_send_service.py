@@ -458,69 +458,92 @@ def test_global_real_send_disabled_does_not_send(monkeypatch):
     assert result["reason"] == "global_real_send_disabled"
 
 
-def test_no_db_rollout_config_blocks_real_send():
+def test_no_db_rollout_config_no_longer_blocks_real_send():
+    # 一期已放开灰度：无数据库灰度配置不再阻断自动发送，仅作诊断快照。
     run_id = _insert_run()
     _insert_settings(seed_db_rollout=False)
     _insert_event()
 
-    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
         result = _send(run_id)
 
     run = _get_run(run_id)
     gate_results = json.loads(run.gate_results_json)
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "no_db_rollout_config"
-    assert gate_results["real_send"]["send_gate_passed"] is False
+    assert result["status"] == "sent"
+    assert gate_results["real_send"]["send_gate_passed"] is True
     assert gate_results["real_send"]["db_rollout"]["config_exists"] is False
-    openapi_mock.assert_not_called()
+    openapi_mock.assert_called_once()
 
 
-def test_db_auto_reply_disabled_blocks_real_send():
+def test_db_auto_reply_disabled_no_longer_blocks_real_send():
+    # 一期已放开灰度：数据库灰度 auto_reply_enabled 不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
     _replace_db_rollout(auto_reply_enabled=False, real_send_enabled=True)
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "db_auto_reply_disabled"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
-def test_db_real_send_disabled_blocks_real_send():
+def test_db_real_send_disabled_no_longer_blocks_real_send():
+    # 一期已放开灰度：数据库灰度 real_send_enabled 不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
     _replace_db_rollout(auto_reply_enabled=True, real_send_enabled=False)
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "db_real_send_disabled"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
-def test_db_whitelist_miss_blocks_real_send():
+def test_db_whitelist_miss_no_longer_blocks_real_send():
+    # 一期已放开灰度：数据库灰度白名单未命中不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
     _replace_db_rollout(account_whitelist=False, customer_whitelist=True)
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "db_account_whitelist_missed"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
-def test_db_customer_or_conversation_whitelist_miss_blocks_real_send():
+def test_db_customer_or_conversation_whitelist_miss_no_longer_blocks_real_send():
+    # 一期已放开灰度：数据库灰度 customer/conversation 白名单未命中不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
     _replace_db_rollout(account_whitelist=True, customer_whitelist=False, conversation_whitelist=False)
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "db_customer_or_conversation_whitelist_missed"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
 def test_db_whitelist_hit_allows_fake_sender():
@@ -583,7 +606,8 @@ def test_db_rollout_snapshot_does_not_store_secret_like_values():
     assert "cookie" not in payload.lower()
 
 
-def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
+def test_account_not_in_global_whitelist_still_sends(monkeypatch):
+    # 一期已放开灰度：env 账号白名单未命中不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
@@ -593,13 +617,18 @@ def test_account_not_in_global_whitelist_does_not_send(monkeypatch):
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "global_account_whitelist_missed"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
-def test_real_send_gate_blocked_persists_rollout_audit(monkeypatch):
+def test_real_send_gate_released_persists_rollout_audit(monkeypatch):
+    # 一期已放开灰度：env 白名单未命中仍能发送，db 灰度快照仍写入审计。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
@@ -610,21 +639,22 @@ def test_real_send_gate_blocked_persists_rollout_audit(monkeypatch):
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"customer-open-1"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", set())
 
-    with patch("app.services.douyin_private_message_send_service.call_douyin_openapi") as openapi_mock:
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
         result = _send(run_id)
 
     run = _get_run(run_id)
     gate_results = json.loads(run.gate_results_json)
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "global_account_whitelist_missed"
-    assert gate_results["real_send"]["send_gate_passed"] is False
-    assert gate_results["real_send"]["blocked_reason"] == "global_account_whitelist_missed"
-    assert gate_results["real_send"]["global"]["mode"] == "whitelist"
-    assert gate_results["real_send"]["global"]["account_whitelist_hit"] is False
-    openapi_mock.assert_not_called()
+    assert result["status"] == "sent"
+    assert gate_results["real_send"]["send_gate_passed"] is True
+    assert gate_results["real_send"]["global"]["rollout_released"] is True
+    openapi_mock.assert_called_once()
 
 
-def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypatch):
+def test_customer_or_conversation_not_in_global_whitelist_still_sends(monkeypatch):
+    # 一期已放开灰度：env customer/conversation 白名单未命中不再阻断自动发送。
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
@@ -634,10 +664,14 @@ def test_customer_or_conversation_not_in_global_whitelist_does_not_send(monkeypa
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST_SET", {"other-customer"})
     monkeypatch.setattr("app.config.DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST_SET", {"other-conv"})
 
-    result = _send(run_id)
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ) as openapi_mock:
+        result = _send(run_id)
 
-    assert result["status"] == "send_skipped"
-    assert result["reason"] == "global_customer_or_conversation_whitelist_missed"
+    assert result["status"] == "sent"
+    openapi_mock.assert_called_once()
 
 
 def test_account_level_customer_whitelist_miss_does_not_send(monkeypatch):

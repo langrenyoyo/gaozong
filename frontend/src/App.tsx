@@ -106,7 +106,7 @@ function defaultPathForUser(user: AppUser): string {
     return first?.path || "/";
   }
   if (isAdminLike(user)) {
-    if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
+    // 自动回复灰度入口已隐藏：是否自动发送只由 env 开关决定，不再跳转灰度控制台。
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
     if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/return-visits";
     if (hasPermission(user, PERMISSIONS.adminForbiddenWords)) return "/admin/forbidden-words";
