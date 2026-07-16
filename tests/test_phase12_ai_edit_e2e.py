@@ -200,9 +200,6 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1",
     """
     os.environ["LOCAL_AGENT_TOKENS"] = f"{merchant}:{token}"
     os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
-    # FIX5-3：e2e 用合成字节，ffprobe 无法解析 → monkeypatch 返回固定时长
-    import app.local_agent_ai_edit_routes as _routes_mod
-    _routes_mod._probe_duration = lambda _filepath: 10.0
     storage_root = tmp_path / "managed"
     work_root = tmp_path / "work"
     deps = _stub_pipeline_deps()
@@ -338,6 +335,14 @@ def _silence_compute_report(monkeypatch):
     monkeypatch.setattr(
         compute_usage_client.ComputeUsageClient, "report_usage", lambda self, **kw: None
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_probe_duration(monkeypatch):
+    """FIX6-2：e2e 用合成字节，ffprobe 无法解析 → monkeypatch 返回固定时长。
+    不直接赋值模块属性，避免永久污染同一 pytest 进程后续测试。"""
+    import app.local_agent_ai_edit_routes as _routes_mod
+    monkeypatch.setattr(_routes_mod, "_probe_duration", lambda _filepath: 10.0)
 
 
 # ---------------------------------------------------------------------------
@@ -952,3 +957,56 @@ def test_e2e_retry_preparing_survives_recover_when_9000_unavailable(tmp_path):
     sup3.drain()
     state3 = sup3.get_job_state(merchant_id="m1", job_id="job-1")
     assert state3["status"] == "succeeded"
+
+
+def test_e2e_ffprobe_failure_rejects_job_creation(tmp_path, monkeypatch):
+    """FIX6-2：ffprobe 探测失败（返回 None）→ 19000 create_job 422 FFPROBE_FAILED。
+
+    monkeypatch 覆盖 autouse fixture 的 stub，还原真实 _probe_duration，
+    然后设返回 None 模拟 ffprobe 不可用。
+    """
+    import app.local_agent_ai_edit_routes as _routes_mod
+
+    c9 = _build_9000()
+    # 先正常导入素材（autouse fixture 的 stub 生效）
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+
+    # 覆盖为返回 None（模拟 ffprobe 不可用）
+    monkeypatch.setattr(_routes_mod, "_probe_duration", lambda _filepath: None)
+    resp = c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "FFPROBE_FAILED"
+
+
+def test_e2e_worker_material_rejects_single_sided_range(tmp_path):
+    """FIX6-1：单边裁剪区间被合同校验拒绝——只填 end 超时长、只填 start >= duration。"""
+    from apps.ai_edit.contracts import WorkerMaterial
+
+    # 只填 end=20，duration=10 → 补齐 start=0，0<20 但 20>10 → 拒绝
+    with pytest.raises(ValueError, match="裁剪区间无效"):
+        WorkerMaterial(
+            material_id="m1", role="main", relative_path="input/m.mp4",
+            source_sha256="sha", duration_seconds=10.0,
+            source_end=20.0,
+        )
+    # 只填 start=10，duration=10 → 补齐 end=10，10<10 不成立 → 拒绝
+    with pytest.raises(ValueError, match="裁剪区间无效"):
+        WorkerMaterial(
+            material_id="m1", role="main", relative_path="input/m.mp4",
+            source_sha256="sha", duration_seconds=10.0,
+            source_start=10.0,
+        )
+    # 只填 start=0，duration=10 → 补齐 end=10，0<10<=10 → 接受
+    m = WorkerMaterial(
+        material_id="m1", role="main", relative_path="input/m.mp4",
+        source_sha256="sha", duration_seconds=10.0,
+        source_start=0.0,
+    )
+    assert m.source_start == 0.0
+    assert m.source_end is None

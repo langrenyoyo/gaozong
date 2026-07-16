@@ -59,6 +59,13 @@ def _import(client, *, material_id="mat-1", content=b"video-bytes", token="tok-1
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_probe_duration(monkeypatch):
+    """FIX6-2：测试用合成字节，ffprobe 无法解析 → monkeypatch 返回固定时长。"""
+    import app.local_agent_ai_edit_routes as _routes_mod
+    monkeypatch.setattr(_routes_mod, "_probe_duration", lambda _filepath: 10.0)
+
+
 # ---------------------------------------------------------------------------
 # 鉴权三态
 # ---------------------------------------------------------------------------

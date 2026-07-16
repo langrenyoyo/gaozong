@@ -65,14 +65,16 @@ class WorkerMaterial(BaseModel):
 
     @model_validator(mode="after")
     def _check_range(self) -> "WorkerMaterial":
-        """FIX5-3：校验 0 <= source_start < source_end <= duration_seconds（两者都给定时）。"""
-        if self.source_start is not None and self.source_end is not None:
-            if self.source_start < 0:
-                raise ValueError("source_start 必须 >= 0")
-            if self.source_end <= self.source_start:
-                raise ValueError("source_end 必须 > source_start")
-            if self.source_end > self.duration_seconds:
-                raise ValueError("source_end 必须 <= duration_seconds")
+        """FIX6-1：始终补齐默认值后校验 0 <= start < end <= duration_seconds。
+
+        单边填写也参与校验——只填 end 超时长、只填 start >= duration 均拒绝。
+        """
+        start = self.source_start if self.source_start is not None else 0.0
+        end = self.source_end if self.source_end is not None else self.duration_seconds
+        if not (0 <= start < end <= self.duration_seconds):
+            raise ValueError(
+                f"裁剪区间无效：0 <= {start} < {end} <= {self.duration_seconds}"
+            )
         return self
 
 
