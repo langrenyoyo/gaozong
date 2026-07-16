@@ -21,6 +21,9 @@ function buildRunQueryParams(query: AiAutoReplyRunQueryParams = {}): URLSearchPa
   appendString(params, "conversation_short_id", query.conversation_short_id);
   appendString(params, "customer_open_id", query.customer_open_id);
   appendString(params, "agent_id", query.agent_id);
+  appendString(params, "account_name", query.account_name);
+  appendString(params, "customer_name", query.customer_name);
+  appendString(params, "agent_name", query.agent_name);
   appendString(params, "status", query.status);
   appendString(params, "created_from", query.created_from);
   appendString(params, "created_to", query.created_to);

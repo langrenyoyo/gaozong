@@ -8,10 +8,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Query, Session
 
-from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
+from app.models import (
+    AiAgent,
+    AiAutoReplyRun,
+    AiReplyDecisionLog,
+    DouyinAuthorizedAccount,
+    DouyinLead,
+    DouyinPrivateMessageSend,
+    DouyinWebhookEvent,
+)
 
 
 SUMMARY_LIMIT = 120
@@ -29,6 +37,9 @@ class AiAutoReplyRunQuery:
     conversation_short_id: str | None = None
     customer_open_id: str | None = None
     agent_id: str | None = None
+    account_name: str | None = None
+    customer_name: str | None = None
+    agent_name: str | None = None
     status: str | None = None
     created_from: datetime | None = None
     created_to: datetime | None = None
@@ -39,7 +50,7 @@ def list_ai_auto_reply_runs(db: Session, query: AiAutoReplyRunQuery) -> dict[str
     """查询当前商户自动回复运行记录列表。"""
     page = max(query.page, 1)
     page_size = min(max(query.page_size, 1), PAGE_SIZE_LIMIT)
-    base_query = _apply_filters(db.query(AiAutoReplyRun), query)
+    base_query = _apply_filters(db, db.query(AiAutoReplyRun), query)
     total = base_query.count()
     rows = (
         base_query.order_by(AiAutoReplyRun.created_at.desc(), AiAutoReplyRun.id.desc())
@@ -48,11 +59,15 @@ def list_ai_auto_reply_runs(db: Session, query: AiAutoReplyRunQuery) -> dict[str
         .all()
     )
     decision_logs = _load_decision_logs(db, rows, merchant_id=query.merchant_id)
+    display_names = _load_display_names(db, rows, decision_logs, merchant_id=query.merchant_id)
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": [_build_list_item(row, decision_logs.get(row.decision_log_id)) for row in rows],
+        "items": [
+            _build_list_item(row, decision_logs.get(row.decision_log_id), display_names.get(row.id))
+            for row in rows
+        ],
     }
 
 
@@ -72,8 +87,10 @@ def get_ai_auto_reply_run_detail(
     if row is None:
         return None
 
-    decision = _load_decision_logs(db, [row], merchant_id=merchant_id).get(row.decision_log_id)
-    data = _build_list_item(row, decision)
+    decision_logs = _load_decision_logs(db, [row], merchant_id=merchant_id)
+    decision = decision_logs.get(row.decision_log_id)
+    display_names = _load_display_names(db, [row], decision_logs, merchant_id=merchant_id)
+    data = _build_list_item(row, decision, display_names.get(row.id))
     data.update(
         {
             "latest_message": _mask_sensitive_text(row.latest_message),
@@ -85,7 +102,7 @@ def get_ai_auto_reply_run_detail(
     return data
 
 
-def _apply_filters(query: Query, params: AiAutoReplyRunQuery) -> Query:
+def _apply_filters(db: Session, query: Query, params: AiAutoReplyRunQuery) -> Query:
     query = query.filter(AiAutoReplyRun.merchant_id == params.merchant_id)
     if params.account_open_id:
         query = query.filter(AiAutoReplyRun.account_open_id == params.account_open_id)
@@ -95,6 +112,53 @@ def _apply_filters(query: Query, params: AiAutoReplyRunQuery) -> Query:
         query = query.filter(AiAutoReplyRun.customer_open_id == params.customer_open_id)
     if params.agent_id:
         query = query.filter(AiAutoReplyRun.agent_id == params.agent_id)
+    if params.account_name:
+        pattern = _like_pattern(params.account_name)
+        account_ids = (
+            db.query(DouyinAuthorizedAccount.open_id)
+            .filter(DouyinAuthorizedAccount.merchant_id == params.merchant_id)
+            .filter(DouyinAuthorizedAccount.account_name.like(pattern, escape="\\"))
+            .scalar_subquery()
+        )
+        event_ids = (
+            db.query(DouyinWebhookEvent.id)
+            .filter(DouyinWebhookEvent.to_user_nick_name.like(pattern, escape="\\"))
+            .scalar_subquery()
+        )
+        query = query.filter(
+            or_(AiAutoReplyRun.account_open_id.in_(account_ids), AiAutoReplyRun.trigger_event_id.in_(event_ids))
+        )
+    if params.customer_name:
+        pattern = _like_pattern(params.customer_name)
+        event_ids = (
+            db.query(DouyinWebhookEvent.id)
+            .outerjoin(DouyinLead, DouyinWebhookEvent.lead_id == DouyinLead.id)
+            .filter(
+                or_(
+                    DouyinWebhookEvent.from_user_nick_name.like(pattern, escape="\\"),
+                    and_(DouyinLead.merchant_id == params.merchant_id, DouyinLead.customer_name.like(pattern, escape="\\")),
+                )
+            )
+            .scalar_subquery()
+        )
+        query = query.filter(AiAutoReplyRun.trigger_event_id.in_(event_ids))
+    if params.agent_name:
+        pattern = _like_pattern(params.agent_name)
+        agent_ids = (
+            db.query(AiAgent.agent_id)
+            .filter(AiAgent.merchant_id == params.merchant_id)
+            .filter(AiAgent.name.like(pattern, escape="\\"))
+            .scalar_subquery()
+        )
+        decision_ids = (
+            db.query(AiReplyDecisionLog.id)
+            .filter(AiReplyDecisionLog.merchant_id == params.merchant_id)
+            .filter(AiReplyDecisionLog.agent_name.like(pattern, escape="\\"))
+            .scalar_subquery()
+        )
+        query = query.filter(
+            or_(AiAutoReplyRun.agent_id.in_(agent_ids), AiAutoReplyRun.decision_log_id.in_(decision_ids))
+        )
     if params.status:
         query = query.filter(AiAutoReplyRun.status == params.status)
     if params.created_from is not None:
@@ -102,8 +166,7 @@ def _apply_filters(query: Query, params: AiAutoReplyRunQuery) -> Query:
     if params.created_to is not None:
         query = query.filter(AiAutoReplyRun.created_at <= params.created_to)
     if params.keyword:
-        keyword = params.keyword.replace("%", r"\%").replace("_", r"\_")
-        pattern = f"%{keyword}%"
+        pattern = _like_pattern(params.keyword)
         query = query.filter(
             or_(
                 AiAutoReplyRun.latest_message.like(pattern, escape="\\"),
@@ -112,6 +175,11 @@ def _apply_filters(query: Query, params: AiAutoReplyRunQuery) -> Query:
             )
         )
     return query
+
+
+def _like_pattern(value: str) -> str:
+    escaped = value.replace("%", r"\%").replace("_", r"\_")
+    return f"%{escaped}%"
 
 
 def _load_decision_logs(
@@ -132,18 +200,95 @@ def _load_decision_logs(
     return {record.id: record for record in records}
 
 
-def _build_list_item(row: AiAutoReplyRun, decision: AiReplyDecisionLog | None = None) -> dict[str, Any]:
+def _load_display_names(
+    db: Session,
+    rows: list[AiAutoReplyRun],
+    decision_logs: dict[int, AiReplyDecisionLog],
+    *,
+    merchant_id: str,
+) -> dict[int, dict[str, str | None]]:
+    if not rows:
+        return {}
+
+    account_ids = {row.account_open_id for row in rows if row.account_open_id}
+    accounts = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.merchant_id == merchant_id)
+        .filter(DouyinAuthorizedAccount.open_id.in_(account_ids))
+        .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
+        .all()
+        if account_ids
+        else []
+    )
+    account_names: dict[str, str] = {}
+    for account in accounts:
+        name = _optional_text(account.account_name)
+        if name and account.open_id not in account_names:
+            account_names[account.open_id] = name
+
+    event_ids = {row.trigger_event_id for row in rows if row.trigger_event_id}
+    events = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id.in_(event_ids)).all() if event_ids else []
+    events_by_id = {event.id: event for event in events}
+    lead_ids = {event.lead_id for event in events if event.lead_id}
+    leads = (
+        db.query(DouyinLead)
+        .filter(DouyinLead.merchant_id == merchant_id)
+        .filter(DouyinLead.id.in_(lead_ids))
+        .all()
+        if lead_ids
+        else []
+    )
+    leads_by_id = {lead.id: lead for lead in leads}
+
+    agent_ids = {row.agent_id for row in rows if row.agent_id}
+    agents = (
+        db.query(AiAgent)
+        .filter(AiAgent.merchant_id == merchant_id)
+        .filter(AiAgent.agent_id.in_(agent_ids))
+        .all()
+        if agent_ids
+        else []
+    )
+    agent_names = {agent.agent_id: agent.name for agent in agents if _optional_text(agent.name)}
+
+    result: dict[int, dict[str, str | None]] = {}
+    for row in rows:
+        event = events_by_id.get(row.trigger_event_id)
+        lead = leads_by_id.get(event.lead_id) if event and event.lead_id else None
+        decision = decision_logs.get(row.decision_log_id)
+        result[row.id] = {
+            "account_name": account_names.get(row.account_open_id) or _optional_text(event.to_user_nick_name if event else None),
+            "customer_name": _optional_text(event.from_user_nick_name if event else None) or _optional_text(lead.customer_name if lead else None),
+            "agent_name": agent_names.get(row.agent_id) or _optional_text(decision.agent_name if decision else None),
+        }
+    return result
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _build_list_item(
+    row: AiAutoReplyRun,
+    decision: AiReplyDecisionLog | None = None,
+    display_names: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    display_names = display_names or {}
     data = {
         "id": row.id,
         "merchant_id": row.merchant_id,
         "account_open_id": row.account_open_id,
+        "account_name": display_names.get("account_name"),
         "conversation_short_id": row.conversation_short_id,
         "customer_open_id": row.customer_open_id,
+        "customer_name": display_names.get("customer_name"),
         "trigger_event_id": row.trigger_event_id,
         "trigger_event_key": row.trigger_event_key,
         "trigger_server_message_id": row.trigger_server_message_id,
         "latest_message_summary": _summary(row.latest_message),
         "agent_id": row.agent_id,
+        "agent_name": display_names.get("agent_name"),
         "mode": row.mode,
         "status": row.status,
         "skip_reason": row.skip_reason,

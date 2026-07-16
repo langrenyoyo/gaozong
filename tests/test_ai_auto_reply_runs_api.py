@@ -9,7 +9,15 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
+from app.models import (
+    AiAgent,
+    AiAutoReplyRun,
+    AiReplyDecisionLog,
+    DouyinAuthorizedAccount,
+    DouyinLead,
+    DouyinPrivateMessageSend,
+    DouyinWebhookEvent,
+)
 
 
 engine = create_engine(
@@ -177,6 +185,67 @@ def _insert_decision_log(
         db.close()
 
 
+def _insert_run_display_names(
+    *,
+    trigger_event_id: int,
+    account_open_id: str,
+    account_name: str,
+    customer_open_id: str,
+    customer_name: str,
+    agent_id: str,
+    agent_name: str,
+    merchant_id: str = "merchant-a",
+) -> None:
+    db = TestSession()
+    try:
+        lead = DouyinLead(
+            source="douyin",
+            customer_name=customer_name,
+            source_id=customer_open_id,
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=f"conv-{trigger_event_id}",
+        )
+        db.add_all(
+            [
+                DouyinAuthorizedAccount(
+                    merchant_id=merchant_id,
+                    main_account_id=trigger_event_id,
+                    open_id=account_open_id,
+                    account_name=account_name,
+                    bind_status=1,
+                ),
+                AiAgent(
+                    agent_id=agent_id,
+                    merchant_id=merchant_id,
+                    name=agent_name,
+                    avatar_seed=agent_id,
+                    prompt="",
+                    knowledge_base_text="",
+                    status="active",
+                ),
+                lead,
+            ]
+        )
+        db.flush()
+        db.add(
+            DouyinWebhookEvent(
+                id=trigger_event_id,
+                event="im_receive_msg",
+                from_user_id=customer_open_id,
+                to_user_id=account_open_id,
+                from_user_nick_name=customer_name,
+                to_user_nick_name=account_name,
+                event_key=f"display-event-{trigger_event_id}",
+                lead_id=lead.id,
+                raw_body="{}",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_runs_api_requires_permission_and_merchant_context():
     denied = _client(_context(permission_codes=["auto_wechat:leads"])).get("/ai-auto-reply-runs")
     assert denied.status_code == 403
@@ -248,6 +317,50 @@ def test_list_runs_filters_and_limits_page_size():
     assert data["page_size"] == 100
     assert data["total"] == 1
     assert data["items"][0]["trigger_event_key"] == "match"
+
+
+def test_list_runs_filters_and_returns_user_facing_names():
+    _insert_run(
+        account_open_id="account-display",
+        conversation_short_id="conv-display",
+        customer_open_id="customer-display",
+        agent_id="agent-display",
+        trigger_event_id=101,
+        trigger_event_key="run-display",
+    )
+    _insert_run(
+        account_open_id="account-other",
+        conversation_short_id="conv-other",
+        customer_open_id="customer-other",
+        agent_id="agent-other",
+        trigger_event_id=102,
+        trigger_event_key="run-other",
+    )
+    _insert_run_display_names(
+        trigger_event_id=101,
+        account_open_id="account-display",
+        account_name="广州旗舰企业号",
+        customer_open_id="customer-display",
+        customer_name="张女士",
+        agent_id="agent-display",
+        agent_name="销售顾问",
+    )
+
+    response = _client().get(
+        "/ai-auto-reply-runs",
+        params={
+            "account_name": "旗舰",
+            "customer_name": "张女",
+            "agent_name": "销售",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["account_name"] == "广州旗舰企业号"
+    assert data["items"][0]["customer_name"] == "张女士"
+    assert data["items"][0]["agent_name"] == "销售顾问"
 
 
 def test_list_runs_includes_decision_summary_for_workbench_visibility():

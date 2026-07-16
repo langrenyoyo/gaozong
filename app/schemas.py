@@ -1517,13 +1517,16 @@ class AiAutoReplyRunListItem(BaseModel):
     id: int
     merchant_id: str
     account_open_id: str
+    account_name: Optional[str] = None
     conversation_short_id: Optional[str] = None
     customer_open_id: Optional[str] = None
+    customer_name: Optional[str] = None
     trigger_event_id: int
     trigger_event_key: str
     trigger_server_message_id: Optional[str] = None
     latest_message_summary: Optional[str] = None
     agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
     mode: str
     status: str
     skip_reason: Optional[str] = None

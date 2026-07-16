@@ -934,13 +934,16 @@ export interface AiAutoReplyRunSendRecord {
 export interface AiAutoReplyRunListItem {
   id: number;
   account_open_id?: string | null;
+  account_name?: string | null;
   conversation_short_id?: string | null;
   customer_open_id?: string | null;
+  customer_name?: string | null;
   trigger_event_id?: number | null;
   trigger_event_key?: string | null;
   trigger_server_message_id?: string | null;
   latest_message_summary?: string | null;
   agent_id?: string | number | null;
+  agent_name?: string | null;
   mode?: string | null;
   status: AiAutoReplyRunStatus | string;
   skip_reason?: string | null;
@@ -982,6 +985,9 @@ export interface AiAutoReplyRunQueryParams {
   conversation_short_id?: string;
   customer_open_id?: string;
   agent_id?: string | number;
+  account_name?: string;
+  customer_name?: string;
+  agent_name?: string;
   status?: string;
   created_from?: string;
   created_to?: string;

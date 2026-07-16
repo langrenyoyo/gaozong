@@ -98,12 +98,6 @@ function modeLabel(value?: string | null): string {
   return value ? MODE_LABELS[value] || "其他模式" : "未知模式";
 }
 
-function compactId(value?: string | number | null): string {
-  if (value === undefined || value === null) return "-";
-  const text = String(value);
-  return text.length > 22 ? `${text.slice(0, 10)}...${text.slice(-8)}` : text;
-}
-
 function formatJson(value: unknown): string {
   if (value === undefined || value === null) return "{}";
   try {
@@ -164,8 +158,12 @@ function gateResultsFromItem(item: AiAutoReplyRunListItem): Record<string, unkno
   return isRecord(value) ? value : null;
 }
 
-function agentNameFromGate(gate: Record<string, unknown> | null, fallback?: string | number | null): string {
-  return textValue(gate, "agent_name") || textValue(gate, "name") || displayText(fallback);
+function nameText(value: string | null | undefined, fallback: string): string {
+  return value?.trim() || fallback;
+}
+
+function agentNameFromGate(gate: Record<string, unknown> | null, agentName?: string | null): string {
+  return nameText(agentName || textValue(gate, "agent_name") || textValue(gate, "name"), "智能体名称未获取");
 }
 
 function promptHashFromGate(gate: Record<string, unknown> | null): string {
@@ -378,10 +376,9 @@ function DetailModal({
                 <h3 className="text-xs font-bold text-slate-900">基础信息</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                   <Field label="运行编号" value={detail.id} />
-                  <Field label="企业号" value={detail.account_open_id} />
-                  <Field label="会话" value={detail.conversation_short_id} />
-                  <Field label="客户" value={detail.customer_open_id} />
-                  <Field label="智能体" value={agentNameFromGate(agent, detail.agent_id)} />
+                  <Field label="企业号昵称" value={nameText(detail.account_name, "企业号昵称未获取")} />
+                  <Field label="客户昵称" value={nameText(detail.customer_name, "客户昵称未获取")} />
+                  <Field label="智能体名称" value={agentNameFromGate(agent, detail.agent_name)} />
                   <Field label="运行模式" value={modeLabel(detail.mode)} />
                   <Field label="触发事件编号" value={detail.trigger_event_id} />
                   <Field label="触发事件标识" value={detail.trigger_event_key} />
@@ -420,7 +417,7 @@ function DetailModal({
                 <h3 className="text-xs font-bold text-slate-900">智能体信息</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-4">
                   <Field label="智能体状态" value={gateStatusText(agent)} />
-                  <Field label="智能体名称" value={agentNameFromGate(agent, detail.agent_id)} />
+                  <Field label="智能体名称" value={agentNameFromGate(agent, detail.agent_name)} />
                   <Field label="提示词长度" value={promptCharsFromGate(agent)} />
                   <Field label="提示词指纹" value={promptHashFromGate(agent)} />
                 </div>
@@ -491,10 +488,9 @@ export default function DouyinAutoReplyRunsPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState(ALL_STATUS);
-  const [accountOpenId, setAccountOpenId] = useState("");
-  const [conversationShortId, setConversationShortId] = useState("");
-  const [customerOpenId, setCustomerOpenId] = useState("");
-  const [agentId, setAgentId] = useState("");
+  const [accountName, setAccountName] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [agentName, setAgentName] = useState("");
   const [keyword, setKeyword] = useState("");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
@@ -512,15 +508,14 @@ export default function DouyinAutoReplyRunsPage() {
       page,
       page_size: PAGE_SIZE,
       status: status === ALL_STATUS ? undefined : status,
-      account_open_id: trimInput(accountOpenId),
-      conversation_short_id: trimInput(conversationShortId),
-      customer_open_id: trimInput(customerOpenId),
-      agent_id: trimInput(agentId),
+      account_name: trimInput(accountName),
+      customer_name: trimInput(customerName),
+      agent_name: trimInput(agentName),
       keyword: trimInput(keyword),
       created_from: createdFrom || undefined,
       created_to: createdTo || undefined,
     }),
-    [accountOpenId, agentId, conversationShortId, createdFrom, createdTo, customerOpenId, keyword, page, status],
+    [accountName, agentName, createdFrom, createdTo, customerName, keyword, page, status],
   );
 
   const loadRuns = useCallback(async () => {
@@ -562,22 +557,20 @@ export default function DouyinAutoReplyRunsPage() {
   const hasFilters = useMemo(
     () =>
       status !== ALL_STATUS ||
-      Boolean(accountOpenId.trim()) ||
-      Boolean(conversationShortId.trim()) ||
-      Boolean(customerOpenId.trim()) ||
-      Boolean(agentId.trim()) ||
+      Boolean(accountName.trim()) ||
+      Boolean(customerName.trim()) ||
+      Boolean(agentName.trim()) ||
       Boolean(keyword.trim()) ||
       Boolean(createdFrom) ||
       Boolean(createdTo),
-    [accountOpenId, agentId, conversationShortId, createdFrom, createdTo, customerOpenId, keyword, status],
+    [accountName, agentName, createdFrom, createdTo, customerName, keyword, status],
   );
 
   const resetFilters = () => {
     setStatus(ALL_STATUS);
-    setAccountOpenId("");
-    setConversationShortId("");
-    setCustomerOpenId("");
-    setAgentId("");
+    setAccountName("");
+    setCustomerName("");
+    setAgentName("");
     setKeyword("");
     setCreatedFrom("");
     setCreatedTo("");
@@ -615,7 +608,7 @@ export default function DouyinAutoReplyRunsPage() {
       </div>
 
       <div className="shrink-0 border-b border-[#e4e8f0] bg-white px-5 py-3">
-        <div className="grid gap-2 xl:grid-cols-[150px_190px_190px_190px_130px_minmax(180px,1fr)_170px_170px_auto_auto]">
+        <div className="grid gap-2 xl:grid-cols-[150px_190px_190px_190px_minmax(180px,1fr)_170px_170px_auto_auto]">
           <select
             value={status}
             onChange={(event) => {
@@ -633,43 +626,33 @@ export default function DouyinAutoReplyRunsPage() {
             ))}
           </select>
           <input
-            value={accountOpenId}
+            value={accountName}
             onChange={(event) => {
-              setAccountOpenId(event.target.value);
+              setAccountName(event.target.value);
               setPage(1);
             }}
-            placeholder="企业号"
-            aria-label="企业号"
+            placeholder="企业号昵称"
+            aria-label="企业号昵称"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
-            value={conversationShortId}
+            value={customerName}
             onChange={(event) => {
-              setConversationShortId(event.target.value);
+              setCustomerName(event.target.value);
               setPage(1);
             }}
-            placeholder="会话ID"
-            aria-label="会话ID"
+            placeholder="客户昵称"
+            aria-label="客户昵称"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <input
-            value={customerOpenId}
+            value={agentName}
             onChange={(event) => {
-              setCustomerOpenId(event.target.value);
+              setAgentName(event.target.value);
               setPage(1);
             }}
-            placeholder="客户标识"
-            aria-label="客户标识"
-            className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
-          />
-          <input
-            value={agentId}
-            onChange={(event) => {
-              setAgentId(event.target.value);
-              setPage(1);
-            }}
-            placeholder="智能体ID"
-            aria-label="智能体ID"
+            placeholder="智能体名称"
+            aria-label="智能体名称"
             className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs outline-none focus:border-blue-300 focus:bg-white"
           />
           <label className="relative">
@@ -764,20 +747,18 @@ export default function DouyinAutoReplyRunsPage() {
             </div>
           </div>
         ) : (
-          <table className="min-w-[1680px] table-fixed text-left text-xs">
+          <table className="min-w-[1420px] table-fixed text-left text-xs">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="w-[130px] px-4 py-3 font-semibold">时间</th>
-                <th className="w-[150px] px-4 py-3 font-semibold">企业号</th>
-                <th className="w-[140px] px-4 py-3 font-semibold">客户</th>
-                <th className="w-[140px] px-4 py-3 font-semibold">会话编号</th>
-                <th className="w-[180px] px-4 py-3 font-semibold">客户最新消息</th>
+                <th className="w-[170px] px-4 py-3 font-semibold">企业号昵称</th>
+                <th className="w-[150px] px-4 py-3 font-semibold">客户昵称</th>
+                <th className="w-[220px] px-4 py-3 font-semibold">客户最新消息</th>
                 <th className="w-[100px] px-4 py-3 font-semibold">运行状态</th>
                 <th className="w-[100px] px-4 py-3 font-semibold">运行模式</th>
                 <th className="w-[130px] px-4 py-3 font-semibold">阻断原因</th>
                 <th className="w-[130px] px-4 py-3 font-semibold">错误原因</th>
-                <th className="w-[150px] px-4 py-3 font-semibold">智能体</th>
-                <th className="w-[140px] px-4 py-3 font-semibold">提示词指纹</th>
+                <th className="w-[150px] px-4 py-3 font-semibold">智能体名称</th>
                 <th className="w-[110px] px-4 py-3 font-semibold">是否真实发送</th>
                 <th className="w-[110px] px-4 py-3 font-semibold">发送状态</th>
                 <th className="w-[160px] px-4 py-3 font-semibold">操作</th>
@@ -791,14 +772,11 @@ export default function DouyinAutoReplyRunsPage() {
                 return (
                 <tr key={item.id} className="border-t border-slate-100 hover:bg-slate-50">
                   <td className="px-4 py-3 text-[11px] text-slate-500">{formatDateTimeLocal(item.created_at)}</td>
-                  <td className="px-4 py-3 font-mono text-[11px] text-slate-600" title={item.account_open_id || undefined}>
-                    {compactId(item.account_open_id)}
+                  <td className="px-4 py-3 text-slate-600" title={item.account_name || undefined}>
+                    {nameText(item.account_name, "企业号昵称未获取")}
                   </td>
-                  <td className="px-4 py-3 font-mono text-[11px] text-slate-600" title={item.customer_open_id || undefined}>
-                    {compactId(item.customer_open_id)}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-[11px] text-slate-600" title={item.conversation_short_id || undefined}>
-                    {compactId(item.conversation_short_id)}
+                  <td className="px-4 py-3 text-slate-600" title={item.customer_name || undefined}>
+                    {nameText(item.customer_name, "客户昵称未获取")}
                   </td>
                   <td className="px-4 py-3">
                     <div className="line-clamp-2 text-slate-600" title={item.latest_message_summary || undefined}>
@@ -820,12 +798,9 @@ export default function DouyinAutoReplyRunsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="line-clamp-2 text-slate-600" title={agentNameFromGate(gate, item.agent_id)}>
-                      {agentNameFromGate(gate, item.agent_id)}
+                    <div className="line-clamp-2 text-slate-600" title={agentNameFromGate(gate, item.agent_name)}>
+                      {agentNameFromGate(gate, item.agent_name)}
                     </div>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-[11px] text-slate-600" title={promptHashFromGate(gate)}>
-                    {compactId(promptHashFromGate(gate))}
                   </td>
                   <td className="px-4 py-3 text-slate-600">
                     {booleanText(sendRecord?.auto_send ?? item.final_auto_send ?? item.upstream_auto_send)}
