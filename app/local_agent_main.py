@@ -2828,6 +2828,7 @@ def create_local_agent_app(
     # Phase 12 Task 7：AI 剪辑窄路由（独立注册，Worker 缺失不影响微信路由）。
     # 复用既有 Local Agent token 鉴权，不接受 merchant_id 和绝对路径。
     try:
+        from pathlib import Path
         from app.local_agent_ai_edit_routes import create_ai_edit_router
         from app.local_agent_ai_edit_supervisor import AiEditSupervisor
 

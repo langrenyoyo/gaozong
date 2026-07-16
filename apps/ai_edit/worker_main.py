@@ -199,3 +199,9 @@ def run_worker(manifest_path: Path, *, deps: "object | None" = None) -> int:
         result = run_pipeline(manifest, deps=deps, cancel_check=lambda: False)
     write_result_atomically(manifest.task_root / "result.json", result)
     return 0 if result.status not in ("failed", "cancelled") else 1
+
+
+if __name__ == "__main__":
+    # PyInstaller 入口：spec 以本文件为脚本收集，缺此块则 EXE 不调用 main()。
+    raise SystemExit(main())
+

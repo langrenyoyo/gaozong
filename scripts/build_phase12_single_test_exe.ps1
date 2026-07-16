@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$Python310Exe,
     [Parameter(Mandatory = $true)][string]$Python311Exe,
     [Parameter(Mandatory = $true)][string]$FfmpegDir,
@@ -28,12 +28,15 @@ $AppName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("5bCP6auY
 $OutputExe = Join-Path $DistRoot "$AppName.exe"
 
 function Ensure-PyInstaller([string]$PyExe) {
-    & $PyExe -m PyInstaller --version 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[build] 安装 PyInstaller（$PyExe）"
-        & $PyExe -m pip install pyinstaller
-        if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败：$PyExe" }
+    # 用 import 检查而非 -m（避免 PS 5.1 把 native stderr 当终止错误）。
+    $check = & $PyExe -c "import PyInstaller; print(PyInstaller.__version__)"
+    if ($LASTEXITCODE -eq 0 -and $check) {
+        Write-Host "[build] PyInstaller $check ($PyExe)"
+        return
     }
+    Write-Host "[build] 安装 PyInstaller（$PyExe，不锁版本）"
+    & $PyExe -m pip install pyinstaller
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败：$PyExe" }
 }
 
 Push-Location $ProjectRoot

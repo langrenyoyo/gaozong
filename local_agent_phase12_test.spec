@@ -33,8 +33,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # OCR/视觉重依赖：Local Agent 侧惰性 import，AI 剪辑测试不触发
-        "easyocr", "torch", "torchvision", "PIL", "cv2", "numpy",
+        # OCR/视觉重依赖：Local Agent 侧惰性 import，AI 剪辑测试不触发。
+        # 注意 numpy 不可排除：wechat_ui.contact_searcher 顶层 import numpy，
+        # 排除会导致 EXE 启动即 ModuleNotFoundError 崩溃。
+        "easyocr", "torch", "torchvision", "PIL", "cv2",
         "ultralytics", "funasr", "open_clip",
     ],
     noarchive=False,
