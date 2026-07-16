@@ -29,7 +29,7 @@ docs/ai/04_OUTPUT_RULES.md
 
 | 目录 | 内容 |
 |---|---|
-| `00_rules/` | 预留规则扩展目录 |
+| `00_rules/` | 规则审计、周期维护报告与项目扩展 |
 | `01_product_prd/` | PRD、需求差距、需求对齐 |
 | `02_architecture/` | 架构、运行时设计、阶段迁移总方案 |
 | `03_data_and_migration/` | 数据模型、迁移、内部 webhook 和能力迁移记录 |

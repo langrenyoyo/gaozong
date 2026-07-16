@@ -165,8 +165,8 @@ P3-CONFIG-ENV-VARIABLE-COVERAGE-FIX-1 后从「高级调优」升级为模板部
 
 | 变量 | 服务 | 默认值 | 模板 | 用途 |
 |---|---|---|---|---|
-| `DOUYIN_WORKBENCH_CONVERSATION_EVENT_LIMIT` | 9000 | 2000 | 是 | 客服工作台单会话事件拉取上限 |
-| `DOUYIN_WORKBENCH_CONVERSATION_LOOKBACK_DAYS` | 9000 | 7 | 是 | 工作台会话回看天数 |
+| `DOUYIN_WORKBENCH_CONVERSATION_EVENT_LIMIT` | 9000 | 2000 | 是 | 会话列表首次事件窗口；可按需扩至 20000 |
+| `DOUYIN_WORKBENCH_CONVERSATION_LOOKBACK_DAYS` | 9000 | 7 | 是 | 账号未读统计回看天数，不限制会话列表日期 |
 | `DOUYIN_WORKBENCH_MESSAGE_LIMIT` | 9000 | 200 | 是 | 工作台消息上限 |
 | `DOUYIN_WORKBENCH_UNREAD_EVENT_LIMIT` | 9000 | 5000 | 是 | 未读事件上限 |
 
