@@ -34,6 +34,7 @@ const adminRoutes = [
   { path: "/admin/autoreply-rollout", navId: "admin-autoreply-rollout", permission: PERMISSIONS.adminAutoreply },
   { path: "/admin/return-visits", navId: "admin-return-visits", permission: PERMISSIONS.adminReturnVisitPrompts },
   { path: "/admin/ai-reply-records", navId: "ai-reply-records", permission: PERMISSIONS.adminAiReplyRecords },
+  { path: "/admin/forbidden-words", navId: "admin-forbidden-words", permission: PERMISSIONS.adminForbiddenWords },
   { path: "/admin/no-local-feature", navId: "admin-no-local-feature", message: "暂无可访问管理员功能" },
   { path: "/admin/newcar-owned", navId: "admin-newcar-owned", message: "该管理功能请在 NewCarProject 操作" },
 ];
@@ -108,6 +109,7 @@ function defaultPathForUser(user: AppUser): string {
     if (hasPermission(user, PERMISSIONS.adminAutoreply)) return "/admin/autoreply-rollout";
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
     if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/return-visits";
+    if (hasPermission(user, PERMISSIONS.adminForbiddenWords)) return "/admin/forbidden-words";
     if (hasAnyNewCarOwnedAdminPermission(user)) return "/admin/newcar-owned";
     return "/admin/no-local-feature";
   }
@@ -139,6 +141,9 @@ function canAccessPath(user: AppUser, path: string): boolean {
   if (pathname === "/admin/ai-reply-records") {
     return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminAiReplyRecords);
   }
+  if (pathname === "/admin/forbidden-words") {
+    return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminForbiddenWords);
+  }
   if (pathname === "/admin/newcar-owned" || pathname === "/admin/no-local-feature") {
     return isAdminLike(user);
   }
@@ -160,10 +165,8 @@ function resolvePostLoginPath(user: AppUser, candidateRedirect: string | null): 
 }
 
 function hasAnyNewCarOwnedAdminPermission(user: AppUser): boolean {
-  return [
-    PERMISSIONS.adminAccounts,
-    PERMISSIONS.adminForbiddenWords,
-  ].some((code) => hasPermission(user, code));
+  // adminForbiddenWords 是 9000 本地违禁词库功能，不是 NewCar 上游功能，已单独挂载本地路由。
+  return [PERMISSIONS.adminAccounts].some((code) => hasPermission(user, code));
 }
 
 function LegacyRedirect({ to }: { to: string }) {

@@ -64,12 +64,20 @@ const adminItems = [
     path: "/admin/ai-reply-records",
     permission: PERMISSIONS.adminAiReplyRecords,
   },
+  {
+    id: "admin-forbidden-words",
+    label: "违禁词",
+    expandedLabel: "违禁词配置",
+    path: "/admin/forbidden-words",
+    permission: PERMISSIONS.adminForbiddenWords,
+  },
 ];
 
 const adminIcons: Record<string, React.ReactNode> = {
   "admin-autoreply-rollout": <ShieldAlertIcon size={18} />,
   "admin-return-visits": <MessagesSquareIcon size={18} />,
   "ai-reply-records": <MessageCircleMoreIcon size={18} />,
+  "admin-forbidden-words": <ShieldCheckIcon size={18} />,
 };
 
 export default function SideNav({

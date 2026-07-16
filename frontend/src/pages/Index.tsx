@@ -34,6 +34,7 @@ import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
 import AdminReturnVisitsPage from "./AdminReturnVisitsPage";
+import SuperForbiddenWords from "./SuperForbiddenWords";
 import { filterCapabilityNavCenters, isAdminLike, isMockAuthUser } from "../features/capabilities";
 
 interface DouyinAccount {
@@ -799,6 +800,8 @@ export default function Index({
             <AdminAutoreplyRolloutPage />
           ) : superActiveNav === "admin-return-visits" ? (
             <AdminReturnVisitsPage />
+          ) : superActiveNav === "admin-forbidden-words" ? (
+            <SuperForbiddenWords />
           ) : superActiveNav === "admin-newcar-owned" ? (
             <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
           ) : superActiveNav === "admin-no-local-feature" ? (
