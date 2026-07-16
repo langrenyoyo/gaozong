@@ -42,6 +42,7 @@
 - 删除后进入 7 天回收站，支持恢复和永久删除。
 - 保留期内本地与云端副本都保留；永久删除或到期后同步清理。
 - 活动剪辑任务引用存在时禁止破坏性清理。
+- 视频可进入当前一键剪辑工作台；图片和音频在 Task 12 先完成导入、分析、预览、上传与生命周期管理，不扩展当前视频渲染或配乐协议。
 
 ### 3.2 自动分析
 
@@ -155,8 +156,10 @@ React 前端
 - `file_size_bytes`
 - `manual_override_json`
 - `manual_confirmed_at`
+- `purge_operation_id`
+- `purge_status`
 
-保留现有 `thumbnail_storage_key`、`cloud_storage_key`、`storage_mode`、`analysis_status` 与 `stabilization_status`。旧状态字段作为兼容汇总，不再是前端分阶段状态的唯一事实。
+保留现有 `thumbnail_storage_key`、`cloud_storage_key`、`storage_mode`、`analysis_status` 与 `stabilization_status`。旧状态字段作为兼容汇总，不再是前端分阶段状态的唯一事实。`purge_operation_id/purge_status` 只用于永久删除原子 claim；`purge_status` 只允许空、`preparing` 或 `completed`。claim 期间禁止恢复、新任务引用和第二次删除；completed tombstone 保留最后 operation ID，使 finalize 响应丢失后可幂等重放。
 
 增加 `(merchant_id, source_sha256)` 唯一约束，阻断并发重复导入。平台素材 `merchant_id` 为空，不受该商户私有去重约束影响。
 
@@ -180,7 +183,7 @@ status:
   not_required
 ```
 
-字段包含 `progress`、`attempt_count`、`failure_code`、脱敏 `error_summary`、`started_at`、`completed_at`、`updated_at`。`progress` 必须在 0 到 100 之间。
+字段包含 `progress`、`attempt_count`、随机 `execution_token_hash`、`failure_code`、脱敏 `error_summary`、`started_at`、`completed_at`、`updated_at`。`progress` 必须在 0 到 100 之间。阶段 claim 由 9000 单独接口执行，以当前源 SHA 和 `expected_attempt` 做 CAS，返回该阶段的新 attempt 与原始令牌；不同阶段使用独立令牌。重复注册既有素材不恢复旧原始令牌，只在需要执行时领取新 claim。状态回写必须同时匹配素材、源 SHA、阶段、attempt 和令牌，Local Agent token 本身不能替代 attempt 身份。
 
 增加 `(material_id, source_sha256, stage)` 唯一约束，确保同一源版本每阶段只有一条当前状态；重试通过 `attempt_count` 推进，不插入并发状态副本。
 
@@ -223,6 +226,8 @@ status:
 - 写入阶段状态和进度。
 - 提交本地分析结果和缩略图。
 - 流式上传云端文件。
+
+本地分析提交采用严格 JSON DTO：总请求体不超过 8MB；最多 12 张关键帧；单帧 base64 解码后不超过 512KB、最大边不超过 720px，并校验 JPEG/WEBP 魔数；禁止任何路径字段。缩略图从已校验关键帧中选择并原子写入受控存储，数据库提交后才对外可见。
 - 恢复、永久删除和到期清理协调。
 
 所有写接口必须幂等，并拒绝旧 attempt 回写。
@@ -262,6 +267,8 @@ status:
 
 如果 9000 已存在同哈希素材但当前电脑缺少文件，19000 使用规范素材 ID 补齐本机副本。重复素材不得创建第二条商户元数据。
 
+升级前已存在的本地素材由 19000 启动协调逐项重登记 9000、采用规范 ID，并只对缺少当前 SHA 分析快照的素材领取阶段 claim 后排队；不得永久保留旧 `pending` 汇总状态。
+
 ### 8.2 自动分析
 
 ```text
@@ -293,7 +300,8 @@ media_probe
 
 - 软删除后本地和云端副本均保留 7 天。
 - 恢复由 19000 协调本地清单与 9000 metadata。
-- 永久删除先校验活动任务引用，再删除本机和云端受管副本。
+- 永久删除先由 9000 在数据库中原子写入删除 claim，再删除本机和云端受管副本。claim 期间禁止恢复、新任务引用和另一永久删除；finalize 必须匹配 claim 的 operation ID。
+- 已完成永久删除的 tombstone 若因同商户同 SHA 再次导入而复活，9000 必须在同一事务清除删除字段、`purge_status` 和 `purge_operation_id`；旧 operation 的 finalize 随后只能返回中性冲突，不能删除新导入内容。
 - 9000 到期后清理云端并记录待本机同步；19000 离线时在下次启动或心跳继续清理。
 - 所有恢复和清理操作幂等。
 
@@ -344,7 +352,7 @@ media_probe
 - 支持拖拽、多选文件和文件夹。
 - 导入队列逐项展示校验、去重、写入、分析排队和失败重试。
 - 单个失败不终止批次，重复素材可定位已有记录。
-- 私有素材支持批量分析、上传云端、分类/标签、删除和用于剪辑。
+- 私有素材支持批量分析、上传云端、分类/标签和删除；只有视频显示“用于剪辑”，音频和图片本期不进入剪辑任务。
 - 回收站支持批量恢复和永久删除。
 - 平台公共素材不显示商户修改和删除入口。
 - 已通过现有超管鉴权的管理员在“平台公共”范围看到导入、分析、编辑和删除入口；普通商户继续使用同一页面的只读形态。
@@ -355,7 +363,7 @@ media_probe
 - 时间轴展示场景、高光、可用区间和不稳定区间。
 - 人工调整后标记“人工确认”。
 - 一键增稳生成衍生素材并保留来源关系。
-- 用于剪辑时携带选中素材、角色和人工确认区间进入现有工作台。
+- 视频用于剪辑时携带选中素材、角色和人工确认区间进入现有工作台；音频和图片本期只做素材库管理、分析、预览和上传，前端禁用入口，9000 创建任务与 Worker 合同再次拒绝，防止绕过前端扩展静帧/BGM 渲染协议。
 
 ### 9.6 移动端
 
