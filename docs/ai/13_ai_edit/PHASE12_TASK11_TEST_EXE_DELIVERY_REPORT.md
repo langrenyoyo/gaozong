@@ -59,11 +59,10 @@
 
 ### 3.6 相邻回归
 ```
-88 passed, 37 warnings in 16.30s
+入口回归：20 passed
+Local Agent / Task 11 相关回归：64 passed
 ```
-覆盖：`test_phase12_task11_launcher` + `test_phase12_ai_edit_worker_contract` + `test_phase12_ai_edit_pipeline` + `test_phase12_local_ai_edit_supervisor` + `test_phase12_local_ai_edit_routes` + `test_local_agent_auth`。
-
-修复 Path 导入后单独回归上述 4 套件：`53 passed`，无回归。
+覆盖：`test_p0_4a_exe_crash_fix`、`test_phase12_task11_launcher`、`test_local_agent_runtime`、`test_local_agent_auth`、`test_phase7_fix2_local_agent_auth`、`test_phase12_local_ai_edit_routes`、`test_local_agent_heartbeat`；均无新增失败。
 
 ## 4. 本轮根因修复清单
 
