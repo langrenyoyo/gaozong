@@ -82,6 +82,36 @@ def _get_local_agent_token() -> str | None:
     不进 URL/日志/异常/响应。
     """
     return os.getenv("LOCAL_AGENT_TOKEN") or None
+
+
+# Task 11 §2.3：Worker 子进程环境剥离清单（denylist）。
+# 用 denylist 而非 allowlist——保证 Worker 已有重依赖（torch/CUDA/模型缓存目录/字体路径）
+# 不被误删导致 Worker 启动失败；只剥离 Local Agent 凭据与上游鉴权/数据库地址。
+_WORKER_ENV_STRIP_EXACT = {
+    "LOCAL_AGENT_TOKEN", "DATABASE_URL", "RAG_DATABASE_URL",
+    "COMPUTE_INTERNAL_TOKEN", "NEWCAR_AUTH_ENABLED", "NEWCAR_AUTH_MOCK_ENABLED",
+}
+
+
+def _build_worker_env() -> dict:
+    """构造 Worker 子进程最小环境：剥离 Local Agent token、数据库地址、internal token。
+
+    Task 11 §2.3：Worker 不得继承 Local Agent 凭据、数据库地址或 internal token。
+    denylist 实现：删除 token 类（*_TOKEN / *INTERNAL_TOKEN*）、数据库地址（*DATABASE_URL*）、
+    NewCar 上游鉴权（NEWCAR_*）等敏感键，保留 PATH/SYSTEMROOT/TEMP/模型缓存等 Worker 运行所需。
+    """
+    env = dict(os.environ)
+    for key in list(env.keys()):
+        upper = key.upper()
+        if (key in _WORKER_ENV_STRIP_EXACT
+                or upper.endswith("_TOKEN")
+                or "INTERNAL_TOKEN" in upper
+                or upper.startswith("NEWCAR_")
+                or "DATABASE_URL" in upper):
+            del env[key]
+    return env
+
+
 # 允许跨域来源
 REACT_ALLOWED_ORIGINS = [
     "http://192.168.110.113:5173",
@@ -2904,7 +2934,8 @@ def create_local_agent_app(
                     cmd = [ai_edit_worker_python, ai_edit_worker_exe, str(manifest_path)]
                 else:
                     cmd = [ai_edit_worker_exe, str(manifest_path)]
-                popen_kwargs = dict(stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, shell=False)
+                popen_kwargs = dict(stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, shell=False,
+                                    env=_build_worker_env())
                 if sys.platform == "win32":
                     popen_kwargs["creationflags"] = _sp.CREATE_NEW_PROCESS_GROUP
                 else:
