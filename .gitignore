@@ -126,7 +126,7 @@ docker-data-staging/
 .tinycloud/
 .trae/
 .vibe/
-.windsurf/
+.windsurf
 .zcode/
 .zencoder/
 agent/
@@ -136,3 +136,6 @@ skills-lock.json
 
 # example
 phase8-visual-samples/
+
+# ai-agent-browser-automation
+docs/ai/06_ui_audit/shots/
