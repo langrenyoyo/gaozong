@@ -718,7 +718,7 @@ def _build_llm_reply(
             **_agent_response_fields(agent),
         )
 
-    # Phase 10 §0.2：主 chat 成功后立即按字符上报，再做 JSON 解析/retry（每次成功调用独立计量）
+    # 主 chat 成功后优先按供应商真实 Token 上报，缺失时估算，再做 JSON 解析/重试（每次成功调用独立计量）
     _report_llm_usage(
         request=request,
         agent=agent,

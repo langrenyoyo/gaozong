@@ -314,7 +314,7 @@ def _try_llm(
     if not isinstance(result, dict):
         return None
 
-    # Phase 10 §0.2：chat 成功后立即按字符上报（capability=wechat-assistant），再做判定
+    # chat 成功后优先按供应商真实 Token 上报，缺失时估算（capability=wechat-assistant），再做判定
     _report_usage(request, messages, result)
 
     reply_text = str(result.get("reply_text") or "").strip()

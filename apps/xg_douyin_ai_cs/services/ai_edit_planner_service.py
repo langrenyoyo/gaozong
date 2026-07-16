@@ -8,7 +8,7 @@
 - 一次 LLM 调用产出严格、版本化的剪辑计划，操作仅 keep/remove/broll_replace；
 - 保守校验：每段引用真实素材 ID、合法且不重叠区间、动作合法；
 - 失败明确返回稳定错误码，不走自由文本或规则兜底（设计 §7.2）；
-- 成功 LLM 调用按字符上报 capability_key="compute"；原媒体/图片/模型原始响应不进 payload/日志。
+- 成功 LLM 调用优先按供应商真实 Token 上报，缺失时估算，capability_key="compute"；原媒体/图片/模型原始响应不进 payload/日志。
 
 边界：不访问 9000 数据库、不持有模型令牌之外的密钥、不发送任何消息。
 """
@@ -299,7 +299,7 @@ def plan_ai_edit(
             status="failed", plan_version=PLAN_VERSION, failure_code="llm_error"
         )
     model = _normalize_model(raw.get("model"))
-    # 成功 chat 按字符上报（拒答/空输出/越界等后续失败仍计入本次 chat 消耗）
+    # 成功 chat 优先按供应商真实 Token 上报，缺失时估算（拒答/空输出/越界等后续失败仍计入本次 chat 消耗）
     _report_usage(request, messages, raw, model)
 
     # 步骤 3：解析 + 拒答检测

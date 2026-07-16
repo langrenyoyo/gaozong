@@ -532,7 +532,7 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
             type(exc).__name__,
         )
 
-    # Phase 10 §0.2：问答 chat 成功后立即按字符上报（capability=knowledge），再做解析
+    # 问答 chat 成功后优先按供应商真实 Token 上报，缺失时估算（capability=knowledge），再做解析
     _report_usage(payload.merchant_id, messages, result)
 
     answer = str(result.get("reply_text") or "").strip()
