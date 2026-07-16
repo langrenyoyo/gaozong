@@ -32,6 +32,7 @@ from app.services.agent_knowledge_category_service import (
     normalize_category_keys,
     replace_agent_categories,
 )
+from app.services.contact_extractor import mask_contacts_in_text
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -216,6 +217,19 @@ def preview_agent(
         raise _binding_not_found(exc) from exc
 
     name = payload.name.strip() or "AI小高智能体"
+    try:
+        latest_message = mask_contacts_in_text(text)
+        conversation_history = [
+            {
+                "role": "customer" if item.role == "user" else "agent",
+                "content": mask_contacts_in_text(item.content.strip()),
+            }
+            for item in payload.conversation_history
+            if item.content.strip()
+        ]
+    except ValueError as exc:
+        raise _bad_request("PREVIEW_MESSAGE_INVALID", "预览对话内容无法处理") from exc
+
     request_payload = {
         "tenant_id": context.source_system or "new_car_project",
         "account_id": "agent-preview",
@@ -232,9 +246,9 @@ def preview_agent(
             "allowed_category_keys": category_keys,
             "rag_enabled": bool(category_keys),
         },
-        "latest_message": text,
-        "max_history_messages": 1,
-        "conversation_history": [],
+        "latest_message": latest_message,
+        "max_history_messages": 10,
+        "conversation_history": conversation_history,
     }
 
     try:

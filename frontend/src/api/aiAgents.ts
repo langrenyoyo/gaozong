@@ -35,6 +35,10 @@ export interface AiAgentPreviewPayload {
   knowledge_prompt: string;
   knowledge_category_keys: string[];
   message: string;
+  conversation_history: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }>;
 }
 
 export interface AiAgentPreviewResult {
@@ -106,7 +110,7 @@ export async function trainingChat(agentId: string, message: string): Promise<Ai
 }
 
 export async function previewAiAgent(payload: AiAgentPreviewPayload): Promise<AiAgentPreviewResult> {
-  const response = await apiClient.post<unknown, ApiResponse<AiAgentPreviewResult>>("/agents/preview", payload);
+  const response = await apiClient.post<unknown, ApiResponse<AiAgentPreviewResult>>("/agents/preview", payload, { timeout: 70000 });
   return response.data;
 }
 

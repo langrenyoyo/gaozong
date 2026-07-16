@@ -204,6 +204,13 @@ class AiAgentTrainingChatResponse(BaseModel):
     message: str = "success"
 
 
+class AiAgentPreviewHistoryItem(BaseModel):
+    """AI小高智能体草稿预览历史消息。"""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
 class AiAgentPreviewRequest(BaseModel):
     """AI小高智能体草稿预览请求。"""
 
@@ -213,6 +220,7 @@ class AiAgentPreviewRequest(BaseModel):
     knowledge_prompt: str = ""
     knowledge_category_keys: list[str] = Field(default_factory=list)
     message: str = Field(..., min_length=1)
+    conversation_history: list[AiAgentPreviewHistoryItem] = Field(default_factory=list, max_length=10)
 
 
 class AiAgentPreviewResponseData(BaseModel):

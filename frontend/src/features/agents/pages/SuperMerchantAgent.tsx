@@ -330,6 +330,13 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
       return;
     }
 
+    const conversationHistory = messages
+      .filter((message) => message.id !== welcomeMessage.id && !message.id.startsWith("ai-error-"))
+      .slice(-10)
+      .map((message) => ({
+        role: message.sender === "user" ? ("user" as const) : ("assistant" as const),
+        content: message.content,
+      }));
     setMessages((current) => [...current, { id: `user-${Date.now()}`, sender: "user", content: text }]);
     setInput("");
     setSending(true);
@@ -341,10 +348,14 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
         knowledge_prompt: agent.knowledge_base_text || "",
         knowledge_category_keys: categoryKeys,
         message: text,
+        conversation_history: conversationHistory,
       });
-      setMessages((current) => [...current, { id: `ai-${Date.now()}`, sender: "ai", content: result.reply_text || "暂无回复" }]);
-      if (result.warnings?.length) {
-        toast.warning(result.warnings.join("；"));
+      setMessages((current) => [
+        ...current,
+        { id: `ai-${Date.now()}`, sender: "ai", content: result.reply_text || result.error || "暂无回复" },
+      ]);
+      if (result.warnings?.length && import.meta.env.DEV) {
+        console.warn("回复预览诊断", result.warnings);
       }
       if (result.error) {
         toast.error(result.error);

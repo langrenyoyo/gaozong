@@ -375,6 +375,46 @@ def test_agent_preview_uses_draft_config_and_forces_auto_send_false(monkeypatch)
     assert payload["agent_config"]["rag_enabled"] is True
 
 
+def test_agent_preview_forwards_masked_recent_history(monkeypatch):
+    from app.routers import agents
+
+    class FakeClient:
+        def __init__(self):
+            self.request = None
+
+        def suggest_reply(self, *, context, conversation_id, request):
+            self.request = request
+            return {"reply_text": "记得您刚才说过测试", "llm_used": True}
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(agents, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    client = _client(_context())
+    agent = _create_agent(client)
+
+    response = client.post(
+        "/agents/preview",
+        json={
+            "agent_id": agent["agent_id"],
+            "name": "草稿智能体",
+            "persona_prompt": "",
+            "knowledge_prompt": "",
+            "knowledge_category_keys": [],
+            "message": "我刚才发了什么内容",
+            "conversation_history": [
+                {"role": "user", "content": "测试，我的电话是13812345678"},
+                {"role": "assistant", "content": "您好，请问您想买车还是卖车？"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_client.request["max_history_messages"] == 10
+    assert fake_client.request["conversation_history"] == [
+        {"role": "customer", "content": "测试，我的电话是138****5678"},
+        {"role": "agent", "content": "您好，请问您想买车还是卖车？"},
+    ]
+
+
 def test_agent_preview_rejects_cross_merchant_agent(monkeypatch):
     client_a = _client(_context(merchant_id="merchant-a"))
     agent = _create_agent(client_a)
