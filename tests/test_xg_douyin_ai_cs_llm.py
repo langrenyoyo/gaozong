@@ -315,6 +315,16 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
     client = _client(tmp_path, monkeypatch)
     _seed_knowledge(client)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    reports = []
+
+    def fake_report_usage(self, **kwargs):
+        reports.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        fake_report_usage,
+    )
 
     def fake_chat(self, messages):
         assert "只能返回 JSON" in messages[0]["content"]
@@ -340,6 +350,7 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
             ),
             "model": "mock-chat",
             "elapsed_ms": 1,
+            "usage": {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21},
         }
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
@@ -369,6 +380,12 @@ def test_reply_suggestion_returns_structured_llm_decision(tmp_path, monkeypatch)
     assert data["decision_version"] == "structured_v1"
     assert data["rag_sources"] == data["source_chunks"]
     assert data["auto_send"] is True
+    assert len(reports) == 1
+    assert reports[0]["tokens"] == 21
+    assert reports[0]["usage_measurement_method"] == "provider_tokens"
+    assert reports[0]["prompt_tokens"] == 17
+    assert reports[0]["completion_tokens"] == 4
+    assert reports[0]["llm_call_stage"] == "primary"
 
 
 def test_reply_suggestion_extracts_reply_text_from_fenced_json(tmp_path, monkeypatch):
@@ -1172,6 +1189,16 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
     calls = {"count": 0}
+    reports = []
+
+    def fake_report_usage(self, **kwargs):
+        reports.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        fake_report_usage,
+    )
 
     def fake_chat(self, messages):
         calls["count"] += 1
@@ -1197,6 +1224,7 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
             ),
             "model": "mock-chat",
             "elapsed_ms": 1,
+            "usage": {"total_tokens": 19 if calls["count"] == 1 else 7},
         }
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
@@ -1226,6 +1254,11 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
     text = response.json()["reply_text"]
     assert "手机号" in text or "留个电话" in text
     assert "检测报告" in text
+    assert [item["tokens"] for item in reports] == [19, 7]
+    assert [item["llm_call_stage"] for item in reports] == [
+        "primary",
+        "retry_phone_goal",
+    ]
 
 
 def test_bound_agent_phone_goal_fallback_uses_phone_when_llm_fails(tmp_path, monkeypatch):
@@ -1958,6 +1991,16 @@ def test_reply_suggestion_retries_llm_when_reply_asks_known_budget(
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
     calls = {"count": 0}
+    reports = []
+
+    def fake_report_usage(self, **kwargs):
+        reports.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "apps.xg_douyin_ai_cs.services.reply_decision_service.ComputeUsageClient.report_usage",
+        fake_report_usage,
+    )
 
     def fake_chat(self, messages):
         calls["count"] += 1
@@ -1979,6 +2022,7 @@ def test_reply_suggestion_retries_llm_when_reply_asks_known_budget(
             ),
             "model": "mock-chat",
             "elapsed_ms": 1,
+            "usage": {"total_tokens": 20 if calls["count"] == 1 else 8},
         }
 
     monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
@@ -2002,6 +2046,11 @@ def test_reply_suggestion_retries_llm_when_reply_asks_known_budget(
     assert "预算范围是多少" not in text
     assert "30万" in text
     assert "530Li" in text
+    assert [item["tokens"] for item in reports] == [20, 8]
+    assert [item["llm_call_stage"] for item in reports] == [
+        "primary",
+        "retry_known_customer",
+    ]
 
 
 def test_reply_suggestion_plain_inventory_question_does_not_use_apology_template(

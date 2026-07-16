@@ -25,7 +25,7 @@ from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
 from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     ComputeUsageClient,
-    count_chat_characters,
+    measure_chat_usage,
 )
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
 from app.services.contact_extractor import extract_contacts_from_text, mask_contact_value, mask_contacts_in_text
@@ -725,6 +725,7 @@ def _build_llm_reply(
         conversation_id=conversation_id,
         messages=messages,
         result=result,
+        llm_call_stage="primary",
     )
     retry_warnings: list[str] = []
     decision = _parse_structured_llm_decision(result.get("reply_text"))
@@ -752,6 +753,7 @@ def _build_llm_reply(
                 conversation_id=conversation_id,
                 messages=retry_messages,
                 result=result,
+                llm_call_stage="retry_known_customer",
             )
             decision = _parse_structured_llm_decision(result.get("reply_text"))
             retry_warnings.append("llm_retry_for_known_customer_info")
@@ -787,6 +789,7 @@ def _build_llm_reply(
                 conversation_id=conversation_id,
                 messages=retry_messages,
                 result=result,
+                llm_call_stage="retry_phone_goal",
             )
             decision = _parse_structured_llm_decision(result.get("reply_text"))
             retry_warnings.append("llm_retry_for_agent_phone_goal")
@@ -2350,27 +2353,33 @@ def _report_llm_usage(
     conversation_id: int | str,
     messages: list[dict],
     result: dict,
+    llm_call_stage: str,
     capability_key: str = "douyin-cs",
 ) -> None:
-    """Phase 10 §0.2：LLM 成功后按字符计量上报算力消耗到 9000。
+    """LLM 成功后优先按供应商真实 Token 上报算力消耗到 9000。
 
-    计量只看 messages 内容字符数 + reply_text 字符数；不再使用 provider 返回的 token 用量。
+    供应商未返回有效用量时才回退估算；每次重试独立记录调用阶段。
     上报失败只记日志，**绝不影响**回复建议主流程。
     安全边界：本函数不涉及 auto_send，不改变回复内容；payload/日志不含提示词或回复原文。
     """
     if not request.merchant_id:
         return
-    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
             merchant_id=request.merchant_id,
-            tokens=tokens,
+            tokens=usage.tokens,
             source="llm",
             capability_key=capability_key,
             model=str(result.get("model") or ""),
             agent_id=agent.get("agent_id"),
             conversation_id=conversation_id,
             remark="douyin_ai_reply",
+            usage_measurement_method=usage.measurement_method,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=usage.cached_tokens,
+            llm_call_stage=llm_call_stage,
         )
     except Exception as exc:  # noqa: BLE001  双重保险：上报失败绝不影响 AI 回复主流程
         _logger.warning("compute_usage stage=report_call_error error=%s", exc)
