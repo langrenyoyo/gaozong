@@ -35,7 +35,7 @@ from apps.xg_douyin_ai_cs.llm.client import (
 from apps.xg_douyin_ai_cs.schemas import ReturnVisitJudgeRequest, ReturnVisitJudgment
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     ComputeUsageClient,
-    count_chat_characters,
+    measure_chat_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -271,18 +271,23 @@ def _report_usage(
     messages: list[dict],
     result: dict,
 ) -> None:
-    """Phase 10 §0.2：回访判定 chat 成功后按字符上报；payload/日志不含 sales_reply_text 原文。"""
+    """回访判定成功后优先按供应商真实 Token 上报。"""
     if not request.merchant_id:
         return
-    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
             merchant_id=request.merchant_id,
-            tokens=tokens,
+            tokens=usage.tokens,
             source="llm",
             capability_key="wechat-assistant",
             model=str(result.get("model") or ""),
             remark="return_visit_judge",
+            usage_measurement_method=usage.measurement_method,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=usage.cached_tokens,
+            llm_call_stage="primary",
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响回访主流程
         logger.warning("return_visit stage=compute_report_error error=%s", exc)

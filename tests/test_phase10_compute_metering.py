@@ -132,7 +132,7 @@ def test_llm_client_preserves_raw_reply_text_without_strip():
 
 
 def test_return_visit_reports_wechat_assistant_when_enabled(monkeypatch):
-    """Phase 10 §0.2：回访判定启用态上报 capability=wechat-assistant（冻结合同）。"""
+    """回访判定优先上报供应商真实 Token。"""
     captured = _enable_compute_capture(monkeypatch)
     from apps.xg_douyin_ai_cs.services.return_visit_judge_service import _report_usage
 
@@ -140,26 +140,44 @@ def test_return_visit_reports_wechat_assistant_when_enabled(monkeypatch):
     _report_usage(
         request,
         [{"role": "user", "content": "hi"}],
-        {"reply_text": "ok", "model": "stub-llm"},
+        {
+            "reply_text": "ok",
+            "model": "stub-llm",
+            "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+        },
     )
     assert len(captured) == 1
     assert captured[0]["capability_key"] == "wechat-assistant"
     assert captured[0]["model"] == "stub-llm"
+    assert captured[0]["tokens"] == 40
+    assert captured[0]["usage_measurement_method"] == "provider_tokens"
+    assert captured[0]["prompt_tokens"] == 30
+    assert captured[0]["completion_tokens"] == 10
+    assert captured[0]["llm_call_stage"] == "primary"
 
 
 def test_knowledge_ask_reports_knowledge_when_enabled(monkeypatch):
-    """Phase 10 §0.2：知识问答启用态上报 capability=knowledge。"""
+    """知识问答优先上报供应商真实 Token。"""
     captured = _enable_compute_capture(monkeypatch)
     from apps.xg_douyin_ai_cs.services.knowledge_training_service import _report_usage
 
     _report_usage(
         "m1",
         [{"role": "user", "content": "hi"}],
-        {"reply_text": "ok", "model": "stub-llm"},
+        {
+            "reply_text": "ok",
+            "model": "stub-llm",
+            "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+        },
     )
     assert len(captured) == 1
     assert captured[0]["capability_key"] == "knowledge"
     assert captured[0]["remark"] == "knowledge_training_ask"
+    assert captured[0]["tokens"] == 40
+    assert captured[0]["usage_measurement_method"] == "provider_tokens"
+    assert captured[0]["prompt_tokens"] == 30
+    assert captured[0]["completion_tokens"] == 10
+    assert captured[0]["llm_call_stage"] == "primary"
 
 
 def test_real_embedding_reports_knowledge_chars_when_enabled(monkeypatch):
@@ -177,6 +195,8 @@ def test_real_embedding_reports_knowledge_chars_when_enabled(monkeypatch):
     assert captured[0]["capability_key"] == "knowledge"
     assert captured[0]["source"] == "embedding"
     assert captured[0]["tokens"] == 5  # len("你好abc")
+    assert captured[0]["usage_measurement_method"] == "estimated_tokens"
+    assert captured[0]["llm_call_stage"] is None
 
 
 def test_mock_embedding_does_not_report_when_enabled(monkeypatch):

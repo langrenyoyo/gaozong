@@ -36,14 +36,20 @@ from apps.xg_douyin_ai_cs.services.ai_edit_planner_service import plan_ai_edit
 class _FakeLLM:
     """记录调用次数的 LLM 替身。"""
 
-    def __init__(self, reply_text: str = "", model: str = "fake-model"):
+    def __init__(
+        self,
+        reply_text: str = "",
+        model: str = "fake-model",
+        usage: dict | None = None,
+    ):
         self._reply = reply_text
         self.model = model
+        self.usage = usage
         self.call_count = 0
 
     def chat(self, messages):
         self.call_count += 1
-        return {"reply_text": self._reply, "model": self.model, "usage": None}
+        return {"reply_text": self._reply, "model": self.model, "usage": self.usage}
 
 
 class _RaisingLLM:
@@ -266,13 +272,23 @@ def _capture_compute(monkeypatch):
 
 
 def test_compute_reported_on_success(_capture_compute):
-    plan_ai_edit(_valid_request(), llm_client=_FakeLLM(_VALID_OPS))
+    plan_ai_edit(
+        _valid_request(),
+        llm_client=_FakeLLM(
+            _VALID_OPS,
+            usage={"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+        ),
+    )
     assert len(_capture_compute) == 1
     call = _capture_compute[0]
     assert call["capability_key"] == "compute"
     assert call["merchant_id"] == "m1"
     assert call["source"] == "llm"
-    assert isinstance(call["tokens"], int) and call["tokens"] > 0
+    assert call["tokens"] == 40
+    assert call["usage_measurement_method"] == "provider_tokens"
+    assert call["prompt_tokens"] == 30
+    assert call["completion_tokens"] == 10
+    assert call["llm_call_stage"] == "primary"
 
 
 def test_compute_not_reported_on_injection(_capture_compute):

@@ -346,9 +346,12 @@ def test_llm_request_error_fallback(monkeypatch):
 # ============================================================================
 
 def test_compute_usage_reported_on_success(monkeypatch):
-    """Phase 10 §0.2：按字符计量上报，provider usage.total_tokens=999999 被字符数覆盖。"""
+    """供应商返回有效用量时按真实 Token 上报。"""
     capture: dict = {}
-    _patch_llm(monkeypatch, usage={"total_tokens": 999999})
+    _patch_llm(
+        monkeypatch,
+        usage={"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40},
+    )
     _patch_compute(monkeypatch, capture=capture)
     client = _client(monkeypatch)
     resp = client.post(
@@ -360,21 +363,25 @@ def test_compute_usage_reported_on_success(monkeypatch):
     assert capture["call"]["capability_key"] == "wechat-assistant"
     assert capture["call"]["model"] == "test-llm"
     assert capture["call"]["remark"] == "daily_sales_summary"
-    # 字符数远小于 provider 伪 total_tokens，证明按字符计量而非 usage.total_tokens
-    assert capture["call"]["tokens"] < 999999
-    assert capture["call"]["tokens"] > 0
+    assert capture["call"]["tokens"] == 40
+    assert capture["call"]["usage_measurement_method"] == "provider_tokens"
+    assert capture["call"]["prompt_tokens"] == 30
+    assert capture["call"]["completion_tokens"] == 10
+    assert capture["call"]["llm_call_stage"] == "primary"
 
 
-def test_compute_usage_uses_chars_when_provider_total_tokens_zero(monkeypatch):
-    """Phase 10 §0.2：provider total_tokens=0/缺失时仍按字符上报（chat 成功即计量）。"""
+def test_compute_usage_estimates_when_provider_usage_is_missing(monkeypatch):
+    """供应商未返回有效用量时估算，摘要结果仍成功。"""
     called: dict = {}
-    _patch_llm(monkeypatch, usage={"total_tokens": 0})
+    _patch_llm(monkeypatch, usage=None)
     _patch_compute(monkeypatch, capture=called)
     client = _client(monkeypatch)
-    client.post("/internal/daily-reports/sales-summary", json=_request_body())
-    assert "call" in called  # 字符计量，chat 成功即上报
+    response = client.post("/internal/daily-reports/sales-summary", json=_request_body())
+    assert "call" in called
     assert called["call"]["capability_key"] == "wechat-assistant"
     assert called["call"]["tokens"] > 0
+    assert called["call"]["usage_measurement_method"] == "estimated_tokens"
+    assert response.json()["llm_used"] is True
 
 
 def test_compute_usage_failure_does_not_affect_summary(monkeypatch):

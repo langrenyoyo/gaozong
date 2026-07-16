@@ -32,7 +32,7 @@ from apps.xg_douyin_ai_cs.schemas import (
 )
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     ComputeUsageClient,
-    count_chat_characters,
+    measure_chat_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,18 +235,23 @@ class _Refusal(Exception):
 def _report_usage(
     request: AiEditPlanRequest, messages: list[dict], result: dict, model: str | None
 ) -> None:
-    """成功 chat 后按字符上报 compute；payload/日志不含转写原文与模型原始响应。"""
+    """成功 chat 后优先按供应商真实 Token 上报。"""
     if not request.merchant_id or not model:
         return
-    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
             merchant_id=request.merchant_id,
-            tokens=tokens,
+            tokens=usage.tokens,
             source="llm",
             capability_key="compute",
             model=model,
             remark="ai_edit_plan",
+            usage_measurement_method=usage.measurement_method,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=usage.cached_tokens,
+            llm_call_stage="primary",
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响规划主流程
         logger.warning("ai_edit_plan stage=compute_report_error error=%s", exc)

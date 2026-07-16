@@ -428,6 +428,8 @@ def _embed_with_usage(
                 capability_key="knowledge",
                 model=model,
                 remark=remark,
+                usage_measurement_method="estimated_tokens",
+                llm_call_stage=None,
             )
         except Exception as exc:  # noqa: BLE001  上报失败绝不影响 RAG 主流程
             _logger.warning("rag_embed stage=compute_report_error error=%s", exc)

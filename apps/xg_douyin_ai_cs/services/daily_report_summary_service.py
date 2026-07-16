@@ -32,7 +32,7 @@ from apps.xg_douyin_ai_cs.schemas import (
 )
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     ComputeUsageClient,
-    count_chat_characters,
+    measure_chat_usage,
 )
 
 _logger = logging.getLogger(__name__)
@@ -138,18 +138,23 @@ def _fallback(report_day: str, reason: str, *, model: str | None = None) -> dict
 
 
 def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
-    """Phase 10 §0.2：LLM 成功后按字符计量上报；不再使用 provider 返回的 token 用量，失败不影响摘要。"""
+    """LLM 成功后优先按供应商真实 Token 上报，失败不影响摘要。"""
     if not merchant_id:
         return
-    tokens = count_chat_characters(messages, str(result.get("reply_text") or ""))
+    usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
             merchant_id=merchant_id,
-            tokens=tokens,
+            tokens=usage.tokens,
             source="llm",
             capability_key="wechat-assistant",
             model=str(result.get("model") or ""),
             remark="daily_sales_summary",
+            usage_measurement_method=usage.measurement_method,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_tokens=usage.cached_tokens,
+            llm_call_stage="primary",
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响摘要主流程
         _logger.warning("daily_summary stage=compute_report_error error=%s", exc)
