@@ -50,10 +50,17 @@ def test_count_helpers_do_not_touch_network():
     from apps.xg_douyin_ai_cs.services.compute_usage_client import (
         count_chat_characters,
         count_embedding_characters,
+        measure_chat_usage,
     )
 
     assert count_chat_characters([{"role": "user", "content": "你好"}], "回复") == 4
     assert count_embedding_characters("你好") == 2
+    measurement = measure_chat_usage(
+        [{"role": "user", "content": "你好"}],
+        {"reply_text": "回复", "usage": {"total_tokens": 7}},
+    )
+    assert measurement.tokens == 7
+    assert measurement.measurement_method == "provider_tokens"
 
 
 def test_disabled_compute_client_skips_without_network():

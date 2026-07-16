@@ -15,6 +15,7 @@ from urllib import error as urllib_error
 from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     ComputeUsageClient,
     ComputeUsageConfig,
+    measure_chat_usage,
 )
 
 
@@ -25,6 +26,61 @@ def _enabled_config():
         internal_token="secret-internal-token",
         timeout_seconds=5.0,
     )
+
+
+def test_measure_chat_usage_prefers_provider_total_tokens():
+    result = {
+        "reply_text": "您好",
+        "usage": {
+            "prompt_tokens": 11,
+            "completion_tokens": 3,
+            "total_tokens": 20,
+            "prompt_tokens_details": {"cached_tokens": 7},
+        },
+    }
+
+    usage = measure_chat_usage([{"role": "user", "content": "你好"}], result)
+
+    assert usage.tokens == 20
+    assert usage.measurement_method == "provider_tokens"
+    assert usage.prompt_tokens == 11
+    assert usage.completion_tokens == 3
+    assert usage.cached_tokens == 7
+
+
+def test_measure_chat_usage_sums_input_and_output_aliases_without_total():
+    result = {
+        "reply_text": "ok",
+        "usage": {"input_tokens": 9, "output_tokens": 4},
+    }
+
+    usage = measure_chat_usage([{"role": "user", "content": "test"}], result)
+
+    assert usage.tokens == 13
+    assert usage.measurement_method == "provider_tokens"
+    assert usage.prompt_tokens == 9
+    assert usage.completion_tokens == 4
+
+
+def test_measure_chat_usage_falls_back_to_estimate_for_invalid_usage():
+    result = {"reply_text": "回复", "usage": {"total_tokens": "unknown"}}
+
+    usage = measure_chat_usage([{"role": "user", "content": "你好abcde"}], result)
+
+    assert usage.tokens > 0
+    assert usage.measurement_method == "estimated_tokens"
+    assert usage.prompt_tokens is None
+    assert usage.completion_tokens is None
+    assert usage.cached_tokens is None
+
+
+def test_measure_chat_usage_rejects_bool_and_negative_counts():
+    result = {
+        "reply_text": "ok",
+        "usage": {"total_tokens": True, "prompt_tokens": -1, "completion_tokens": 2},
+    }
+
+    assert measure_chat_usage([], result).measurement_method == "estimated_tokens"
 
 
 class _FakeResponse:

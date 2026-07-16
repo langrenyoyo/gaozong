@@ -23,6 +23,91 @@ from urllib import request as urllib_request
 _logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ChatUsageMeasurement:
+    """单次聊天模型调用的计量结果。"""
+
+    tokens: int
+    measurement_method: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cached_tokens: int | None = None
+
+
+def _nonnegative_int(value: object) -> int | None:
+    """只接受非负整数，显式排除 bool。"""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _estimate_text_tokens(text: str) -> int:
+    """供应商未返回用量时的保守估算，不引入模型专用分词依赖。"""
+    total = 0
+    ascii_run = 0
+    for char in text:
+        if ord(char) < 128:
+            ascii_run += 1
+            continue
+        total += (ascii_run + 3) // 4
+        ascii_run = 0
+        total += 1
+    return max(1, total + (ascii_run + 3) // 4)
+
+
+def measure_chat_usage(messages: list[dict], result: dict) -> ChatUsageMeasurement:
+    """优先使用供应商真实 Token，缺失时回退字符估算。"""
+    raw_usage = result.get("usage") if isinstance(result, dict) else None
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+
+    prompt_tokens = _nonnegative_int(usage.get("prompt_tokens"))
+    if prompt_tokens is None:
+        prompt_tokens = _nonnegative_int(usage.get("input_tokens"))
+    completion_tokens = _nonnegative_int(usage.get("completion_tokens"))
+    if completion_tokens is None:
+        completion_tokens = _nonnegative_int(usage.get("output_tokens"))
+    total_tokens = _nonnegative_int(usage.get("total_tokens"))
+
+    details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+    cached_tokens = (
+        _nonnegative_int(details.get("cached_tokens"))
+        if isinstance(details, dict)
+        else None
+    )
+
+    if total_tokens is not None and total_tokens > 0:
+        return ChatUsageMeasurement(
+            total_tokens,
+            "provider_tokens",
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+        )
+    if (
+        prompt_tokens is not None
+        and completion_tokens is not None
+        and prompt_tokens + completion_tokens > 0
+    ):
+        return ChatUsageMeasurement(
+            prompt_tokens + completion_tokens,
+            "provider_tokens",
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+        )
+
+    request_text = "".join(
+        item["content"]
+        for item in messages
+        if isinstance(item, dict) and isinstance(item.get("content"), str)
+    )
+    reply_text = str(result.get("reply_text") or "") if isinstance(result, dict) else ""
+    return ChatUsageMeasurement(
+        _estimate_text_tokens(request_text + reply_text),
+        "estimated_tokens",
+    )
+
+
 def count_chat_characters(messages: list[dict], reply_text: str) -> int:
     """Phase 10 §0.2 计费合同：chat 消息内容字符数总和 + 回复字符数，不做 strip。
 
