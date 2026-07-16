@@ -82,6 +82,9 @@ docker-data-staging/
 # Codex 技能安装生成物
 .adal/
 .agents/
+
+# Superpowers 技能运行时产物（brainstorm 等，不入库）
+.superpowers/
 .aider-desk/
 .augment/
 .autohand/
