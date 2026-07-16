@@ -1509,7 +1509,7 @@ def create_local_agent_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_react_allowed_origins(),
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         allow_private_network=True,
     )

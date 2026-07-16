@@ -29,6 +29,30 @@ def test_customer_frontend_private_network_preflight_is_allowed(monkeypatch, pat
     assert response.headers["access-control-allow-private-network"] == "true"
 
 
+def test_customer_frontend_delete_preflight_is_allowed(monkeypatch):
+    """素材删除必须先通过浏览器 DELETE 私网预检。"""
+    from app.local_agent_main import create_local_agent_app
+
+    origin = "https://merchant.xiaogaoai.cn"
+    monkeypatch.setenv("AI_EDIT_TEST_FRONTEND_URL", f"{origin}/")
+    client = TestClient(create_local_agent_app())
+
+    response = client.options(
+        "/agent/ai-edit/materials/mat-1",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "x-local-agent-token",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "DELETE" in response.headers["access-control-allow-methods"]
+    assert response.headers["access-control-allow-private-network"] == "true"
+
+
 def test_runtime_status_defaults_to_polling_disabled():
     from app.local_agent_main import create_local_agent_app
 
