@@ -13,9 +13,9 @@ import type {
   AiEditTemplate,
 } from "./types";
 
-/** 响应统一解包：{ success, data, message } → data。 */
-function unwrap<T>(resp: { data: { success?: boolean; data?: T; message?: string } }): T {
-  return resp.data.data as T;
+/** apiClient 已把 AxiosResponse 解成 { success, data, message }，这里只取一层 data。 */
+function unwrap<T>(resp: { data?: T }): T {
+  return resp.data as T;
 }
 
 /** 列模板（商户只读）。 */

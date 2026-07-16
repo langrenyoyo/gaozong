@@ -92,6 +92,13 @@ try {
       if (!h1.includes(c.expect)) {
         failures.push(`${vp.label}/${c.name}: h1="${h1}" 期望含"${c.expect}"`);
       }
+      const body = await page.locator('body').innerText().catch(() => '');
+      if (body.includes('素材加载失败') || body.includes('数据加载失败')) {
+        failures.push(`${vp.label}/${c.name}: 标准单层 API 响应被错误处理；body="${body.slice(0, 220)}"`);
+      }
+      if (c.name === 'materials' && !body.includes('暂无素材')) {
+        failures.push(`${vp.label}/${c.name}: 空素材响应未进入正常空态`);
+      }
       await page.screenshot({ path: resolve(SHOT_DIR, `${c.name}-${vp.label}.png`), fullPage: true });
     }
     await context.close();

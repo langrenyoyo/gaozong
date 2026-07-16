@@ -75,6 +75,12 @@ if (localApi.includes('apiClient')) {
 if (!api.includes('apiClient')) {
   throw new Error('api.ts 未使用 apiClient（9000 API）');
 }
+if (api.includes('resp.data.data')) {
+  throw new Error('api.ts 重复解包 apiClient 响应，运行时会得到 undefined');
+}
+if (!api.includes('return resp.data as T')) {
+  throw new Error('api.ts 未按 apiClient 响应拦截合同读取 envelope.data');
+}
 
 // 5. 页面存在关键能力（导入/分析/增稳/取消/重试/720P/1080P/回收站）
 const pageBlob = materialLib + '\n' + videoEditor;
