@@ -10,7 +10,7 @@
 
 ---
 
-**状态：** `APPROVED_FOR_DIRECT_BUILD`
+**状态：** `BUILT_FOR_CUSTOMER_TEST`
 
 ## 1. 最终交付
 
@@ -66,7 +66,7 @@ docs/superpowers/plans/2026-07-15-phase12-ai-edit-local-mvp-execution-package.md
 
 ## 4. Task 11-1：单入口启动器
 
-- [ ] 新建 `app/phase12_test_launcher.py`，只用标准库完成：
+- [x] 新建 `app/phase12_test_launcher.py`，只用标准库完成：
 
   1. 从 `sys._MEIPASS` 定位内部 Local Agent、Worker、FFmpeg 和 ffprobe。
   2. 用 `tkinter` 掩码框读取 token，不落盘。
@@ -75,9 +75,9 @@ docs/superpowers/plans/2026-07-15-phase12-ai-edit-local-mvp-execution-package.md
   5. 关闭启动器时终止自己启动的进程树。
   6. 端口已占用时明确提示，不杀未知进程。
 
-- [ ] 在 `app/local_agent_main.py` 复用现有 Worker 启动点，给 Worker 显式最小环境，去掉 token、9000 地址、数据库地址和 internal token。
+- [x] 在 `app/local_agent_main.py` 复用现有 Worker 启动点，给 Worker 显式最小环境，去掉 token、9000 地址、数据库地址和 internal token。
 
-- [ ] 新建一个测试文件，只验证 token 不泄露、Worker 环境隔离和端口占用三条安全边界。
+- [x] 新建一个测试文件，只验证 token 不泄露、Worker 环境隔离和端口占用三条安全边界。
 
 运行：
 
@@ -95,10 +95,10 @@ git commit -m "功能：增加单入口测试启动器"
 
 ## 5. Task 11-2：直接构建单文件
 
-- [ ] 新建轻量 Local Agent spec，排除当前测试不使用的 OCR/模型重依赖。
-- [ ] 直接复用现有 `ai_edit_worker.spec` 构建 Python 3.11 Worker。
-- [ ] 新建外层 `phase12_test_launcher.spec`，把内部 Local Agent、Worker、FFmpeg 和 ffprobe 收进一个 onefile EXE。
-- [ ] 新建 `scripts/build_phase12_single_test_exe.ps1`：
+- [x] 新建轻量 Local Agent spec，排除当前测试不使用的 OCR/模型重依赖。
+- [x] 直接复用现有 `ai_edit_worker.spec` 构建 Python 3.11 Worker。
+- [x] 新建外层 `phase12_test_launcher.spec`，把内部 Local Agent、Worker、FFmpeg 和 ffprobe 收进一个 onefile EXE。
+- [x] 新建 `scripts/build_phase12_single_test_exe.ps1`：
 
   1. 使用现有 Python 3.10 和 3.11 环境。
   2. 缺 PyInstaller 时直接安装，不锁版本。
@@ -128,10 +128,10 @@ git commit -m "构建：生成单入口 AI 剪辑测试 EXE"
 
 ## 6. Task 11-3：最小真实 smoke
 
-- [ ] 双击最终 EXE，验证 19000 `/health` 可用且鉴权开启。
-- [ ] 用随包 FFmpeg 合成 3 秒视频，启动打包后的真实 Worker，验证 720P/1080P 文件可被 ffprobe 读取且有音频。
-- [ ] 验证关闭外层 EXE 后，本次 Local Agent、Worker 和 FFmpeg 进程均退出。
-- [ ] 运行现有相邻回归：
+- [x] 双击最终 EXE，验证 19000 `/health` 可用且鉴权开启。
+- [x] 用随包 FFmpeg 合成 3 秒视频，启动打包后的真实 Worker，验证 720P/1080P 文件可被 ffprobe 读取且有音频。
+- [x] 验证关闭外层 EXE 后，本次 Local Agent、Worker 和 FFmpeg 进程均退出。
+- [x] 运行现有相邻回归：
 
 ```powershell
 & $Python310Exe -m pytest -q `
@@ -143,7 +143,7 @@ git commit -m "构建：生成单入口 AI 剪辑测试 EXE"
   tests/test_local_agent_auth.py
 ```
 
-- [ ] 更新 Task 11 报告与当前状态，记录 EXE 路径、SHA-256、真实 smoke 结果和当前缺失能力。
+- [x] 更新 Task 11 报告与当前状态，记录 EXE 路径、SHA-256、真实 smoke 结果和当前缺失能力。
 
 完成状态：
 

@@ -18,7 +18,7 @@
 
 ### FFmpeg（含 ffprobe）
 - 来源：`https://ffmpeg.org/`
-- 构建：Task 11 保存实际 `-L/-version/-buildconf`、拒绝 `--enable-nonfree`，并附 GPL 文本与源码获取说明；正式安装包再完成外部组件逐项映射
+- 构建：Task 11 实际使用 Gyan 8.1.1 full build；按用户决定未执行许可证或 buildconf 审查，本清单仅保留参考
 - 许可证：LGPL 2.1+（默认）或 GPL 2+（启用 --enable-gpl，含 libvidstab 时通常为 GPL）
 - 分发依据：LGPL/GPL 允许随包分发二进制，但需附许可证文本与源码获取说明
 - 注意：`libx264` 为 GPL 组件，启用后整体 FFmpeg 二进制按 GPL 分发
@@ -87,4 +87,4 @@ Task 11 使用独立单入口构建脚本，不调用本节正式安装包校验
 - open_clip 代码：MIT 可分发；权重协议待确认。
 - 字体：待选定具体字体并确认协议。
 
-**结论：截至 2026-07-16，正式客户安装包仍为 `NOT_BUILT`，原因是尚未启动正式安装包任务，不再以本清单作为 Task 11 构建阻断。Task 11 状态为 `APPROVED_FOR_DIRECT_BUILD`。**
+**结论：截至 2026-07-16，正式客户安装包仍为 `NOT_BUILT`，原因是尚未启动正式安装包任务，不再以本清单作为 Task 11 构建阻断。Task 11 状态为 `BUILT_FOR_CUSTOMER_TEST`。**

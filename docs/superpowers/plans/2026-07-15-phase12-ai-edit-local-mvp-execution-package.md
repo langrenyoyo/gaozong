@@ -893,7 +893,7 @@ Phase 12 全套：255 passed / 2 skipped
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前状态为 `APPROVED_FOR_DIRECT_BUILD`。执行窗口直接完成 Task 11-1~11-3，不设许可证、构建或发送审批门。
+当前状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，真实 PyInstaller、Worker、FFmpeg、19000 鉴权、9 路由注册与进程树退出 smoke 全通过；尚未在无开发环境的干净 Windows 电脑验证。
 
 冻结口径：
 
