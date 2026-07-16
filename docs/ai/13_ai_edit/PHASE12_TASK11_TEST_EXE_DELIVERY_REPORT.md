@@ -75,7 +75,6 @@
 ## 5. 当前缺失能力（一期边界，未在 Task 11 范围）
 
 - 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
-- 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
 - 测试 API / 前端 URL 已为真实值（`https://merchant.xiaogaoai.cn` / `https://merchant.xiaogaoai.cn/`，商户 `m_nc_2bba00063cc13016`），烘焙进 EXE 经 CArchive 提取确认不含占位地址 example.com。
 - 不含安装器、自动更新、卸载器、系统服务（计划 §2 明确不新增）。
 - 本轮真实 smoke 在开发机完成，尚未在无 Python、无 FFmpeg、无源码的干净 Windows 电脑验证；EXE 设计为自包含，首次甲方测试需确认零安装启动。
