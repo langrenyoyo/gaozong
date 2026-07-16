@@ -348,6 +348,7 @@ const App = () => {
 
   const handleLogin = (nextUser: AppUser) => {
     setAuthError(null);
+    queryClient.clear();
     // FIX3-1：登录时清理可能残留的旧商户 Local Agent token（防 A 退出 B 登录复用）
     clearAllAgentTokens();
     setUser(nextUser);
@@ -365,6 +366,7 @@ const App = () => {
       } catch {
         // 退出失败不阻塞本地清理，避免用户卡在旧登录态。
       } finally {
+        queryClient.clear();
         clearExternalToken();
         clearNewCarRedirectState();
         clearAllAgentTokens();  // FIX3-1：退出清理 Local Agent token，防跨商户残留
@@ -376,6 +378,7 @@ const App = () => {
   };
 
   const handleRelogin = () => {
+    queryClient.clear();
     clearExternalToken();
     clearNewCarRedirectState();
     clearAllAgentTokens();  // FIX4-3：重新登录清理 Local Agent token，防跨商户残留

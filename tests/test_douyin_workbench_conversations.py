@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event as sqlalchemy_event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -165,6 +165,8 @@ def _insert_ai_auto_send_record(
     account_open_id: str = "account_ai",
     customer_open_id: str = "customer_ai",
     upstream_msg_id: str = "msg_ai_auto",
+    content: str = "您好，可以继续沟通。",
+    auto_reply_run_id: int = 123,
 ) -> None:
     db = TestSession()
     try:
@@ -178,13 +180,13 @@ def _insert_ai_auto_send_record(
                 customer_open_id=customer_open_id,
                 account_open_id=account_open_id,
                 scene="im_reply_msg",
-                content="您好，可以继续沟通。",
+                content=content,
                 status="sent",
                 manual_confirmed=0,
                 auto_send=1,
                 send_source="ai_auto",
                 operator_id="ai_auto_reply",
-                auto_reply_run_id=123,
+                auto_reply_run_id=auto_reply_run_id,
                 upstream_msg_id=upstream_msg_id,
             )
         )
@@ -303,6 +305,66 @@ def test_ai_auto_sent_message_exposes_ai_source_metadata():
     assert data["items"][0]["operator_id"] == "ai_auto_reply"
     assert data["items"][0]["auto_send"] is True
     assert data["items"][0]["auto_reply_run_id"] == 123
+
+
+def test_conversation_send_records_are_loaded_in_one_batch():
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_batch",
+        account_open_id="account_batch",
+        text="第一条回复",
+        conversation_short_id="conv_batch",
+        server_message_id="msg_batch_1",
+        event_key="event_batch_1",
+    )
+    _insert_event(
+        event="im_send_msg",
+        open_id="customer_batch",
+        account_open_id="account_batch",
+        text="第二条回复",
+        conversation_short_id="conv_batch",
+        server_message_id="msg_batch_2",
+        event_key="event_batch_2",
+    )
+    _insert_ai_auto_send_record(
+        conversation_short_id="conv_batch",
+        account_open_id="account_batch",
+        customer_open_id="customer_batch",
+        upstream_msg_id="msg_batch_1",
+        content="第一条回复",
+        auto_reply_run_id=201,
+    )
+    _insert_ai_auto_send_record(
+        conversation_short_id="conv_batch",
+        account_open_id="account_batch",
+        customer_open_id="customer_batch",
+        upstream_msg_id="msg_batch_2",
+        content="第二条回复",
+        auto_reply_run_id=202,
+    )
+
+    statements: list[str] = []
+
+    def _capture_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    sqlalchemy_event.listen(test_engine, "before_cursor_execute", _capture_statement)
+    try:
+        response = _client().get(
+            "/integrations/douyin/conversation-messages",
+            params={"conversation_key": "conv_batch", "account_open_id": "account_batch"},
+        )
+    finally:
+        sqlalchemy_event.remove(test_engine, "before_cursor_execute", _capture_statement)
+
+    assert response.status_code == 200
+    send_record_queries = [
+        statement
+        for statement in statements
+        if "FROM douyin_private_message_sends" in statement
+    ]
+    assert len(send_record_queries) == 1
+    assert [item["auto_reply_run_id"] for item in response.json()["items"]] == [201, 202]
 
 
 def test_conversation_tags_are_empty_when_no_deterministic_signal_exists():
@@ -729,6 +791,22 @@ def test_frontend_workbench_filters_duplicate_status_tags_without_hiding_status_
     assert "retained_contact" in content
 
 
+def test_frontend_workbench_restores_cached_data_and_loads_older_conversations():
+    client_source = open("frontend/src/api/douyinAiCsClient.ts", encoding="utf-8").read()
+    page_source = open(
+        "frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx",
+        encoding="utf-8",
+    ).read()
+    app_source = open("frontend/src/App.tsx", encoding="utf-8").read()
+
+    assert "getDouyinConversationDetail" in client_source
+    assert '"/integrations/douyin/conversation-detail"' in client_source
+    assert "useQueryClient" in page_source
+    assert "douyin-workbench" in page_source
+    assert "加载更早会话" in page_source
+    assert "queryClient.clear()" in app_source
+
+
 def test_conversation_profile_returns_404_when_conversation_not_found_in_account_scope():
     _insert_event(
         open_id="customer_profile_scope",
@@ -1022,6 +1100,78 @@ def test_account_conversations_does_not_parse_unrelated_account_events():
     assert [item["last_message"] for item in items] == ["target account message"]
     assert parsed_event_ids == [target_id]
     assert not set(parsed_event_ids).intersection(unrelated_ids)
+
+
+def test_account_conversations_include_messages_older_than_seven_days():
+    _insert_event(
+        open_id="customer_old_history",
+        account_open_id="account_old_history",
+        text="三十天前的历史消息",
+        conversation_short_id="old_history_conv",
+        event_key="old_history_event",
+        created_at=datetime.now() - timedelta(days=30),
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_old_history/conversations",
+        params={"account_open_id": "account_old_history"},
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["old_history_conv"]
+
+
+def test_account_conversations_can_expand_event_window_for_older_history():
+    for index in range(101):
+        _insert_event(
+            open_id=f"customer_history_{index}",
+            account_open_id="account_history_window",
+            text=f"历史消息 {index}",
+            conversation_short_id=f"history_conv_{index}",
+            event_key=f"history_event_{index}",
+            created_at=datetime.now() - timedelta(minutes=index),
+        )
+
+    client = _client()
+    first = client.get(
+        "/integrations/douyin/accounts/account_history_window/conversations",
+        params={"account_open_id": "account_history_window", "event_limit": 100},
+    ).json()
+    expanded = client.get(
+        "/integrations/douyin/accounts/account_history_window/conversations",
+        params={"account_open_id": "account_history_window", "event_limit": 200},
+    ).json()
+
+    assert len(first["items"]) == 100
+    assert first["has_more"] is True
+    assert len(expanded["items"]) == 101
+    assert expanded["has_more"] is False
+
+
+def test_conversation_detail_loads_messages_once_for_messages_and_profile():
+    _insert_event(
+        open_id="customer_detail_once",
+        account_open_id="account_detail_once",
+        text="想看一辆二手车",
+        conversation_short_id="detail_once_conv",
+        event_key="detail_once_event",
+    )
+
+    from app.services import douyin_workbench_conversation_service as service
+
+    with patch.object(service, "_load_messages", wraps=service._load_messages) as load_messages:
+        response = _client().get(
+            "/integrations/douyin/conversation-detail",
+            params={
+                "conversation_key": "detail_once_conv",
+                "account_open_id": "account_detail_once",
+            },
+        )
+
+    assert response.status_code == 200
+    assert load_messages.call_count == 1
+    assert response.json()["messages"]["items"][0]["content"] == "想看一辆二手车"
+    assert response.json()["profile"]["conversation_id"] == "detail_once_conv"
 
 
 def test_query_conversation_messages_keeps_contact_not_found_message_visible():

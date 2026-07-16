@@ -235,6 +235,10 @@ def test_douyin_workbench_user_conversation_entries_require_douyin_ai_cs_permiss
             "/integrations/douyin/conversation-messages",
             params={"conversation_key": "conv-1", "account_open_id": "account-open-1"},
         ),
+        denied.get(
+            "/integrations/douyin/conversation-detail",
+            params={"conversation_key": "conv-1", "account_open_id": "account-open-1"},
+        ),
     ]
 
-    assert [response.status_code for response in responses] == [403, 403, 403, 403, 403]
+    assert [response.status_code for response in responses] == [403, 403, 403, 403, 403, 403]

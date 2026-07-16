@@ -21,6 +21,7 @@ from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
+    get_conversation_detail,
     get_conversation_profile,
     list_account_conversations,
     list_conversation_messages,
@@ -340,13 +341,34 @@ def sync_leads(
 def get_douyin_account_conversations(
     account_id: str,
     account_open_id: str | None = None,
+    event_limit: int | None = None,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Aggregate real private-message webhook events into workbench conversations."""
     _merchant_id_for_douyin_cs(context)
     resolved_account_open_id = account_open_id or account_id
-    return list_account_conversations(db, account_open_id=resolved_account_open_id)
+    return list_account_conversations(
+        db,
+        account_open_id=resolved_account_open_id,
+        event_limit=event_limit,
+    )
+
+
+@router.get("/conversation-detail")
+def get_douyin_conversation_detail(
+    conversation_key: str,
+    account_open_id: str,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+) -> dict:
+    """一次返回同一会话的消息和客户画像。"""
+    _merchant_id_for_douyin_cs(context)
+    return get_conversation_detail(
+        db,
+        conversation_key=conversation_key,
+        account_open_id=account_open_id,
+    )
 
 
 @router.get("/conversations/{conversation_key}/messages")

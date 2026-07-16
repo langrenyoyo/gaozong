@@ -5,6 +5,7 @@ export {
   downloadDouyinResource,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
+  getDouyinConversationDetail,
   getDouyinAccounts,
   getDouyinAiCsHealth,
   getDouyinAiCsReady,

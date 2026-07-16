@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -42,6 +42,7 @@ from app.services.lead_management_service import (
 PRIVATE_MESSAGE_EVENTS = {"im_receive_msg", "im_send_msg"}
 WORKBENCH_CONVERSATION_EVENT_LIMIT = max(100, int(os.getenv("DOUYIN_WORKBENCH_CONVERSATION_EVENT_LIMIT", "2000")))
 WORKBENCH_CONVERSATION_LOOKBACK_DAYS = max(1, int(os.getenv("DOUYIN_WORKBENCH_CONVERSATION_LOOKBACK_DAYS", "7")))
+WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT = 20000
 WORKBENCH_MESSAGE_LIMIT = max(20, int(os.getenv("DOUYIN_WORKBENCH_MESSAGE_LIMIT", "200")))
 WORKBENCH_UNREAD_EVENT_LIMIT = max(100, int(os.getenv("DOUYIN_WORKBENCH_UNREAD_EVENT_LIMIT", "5000")))
 logger = logging.getLogger(__name__)
@@ -91,15 +92,27 @@ class WorkbenchMessage:
     auto_reply_run_id: int | None = None
 
 
-def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str, Any]:
+def list_account_conversations(
+    db: Session,
+    *,
+    account_open_id: str,
+    event_limit: int | None = None,
+) -> dict[str, Any]:
     start = time.perf_counter()
+    resolved_limit = min(
+        max(100, event_limit or WORKBENCH_CONVERSATION_EVENT_LIMIT),
+        WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT,
+    )
     messages = _load_messages(
         db,
         account_open_id=account_open_id,
-        limit=WORKBENCH_CONVERSATION_EVENT_LIMIT,
-        lookback_days=WORKBENCH_CONVERSATION_LOOKBACK_DAYS,
+        limit=resolved_limit + 1,
         operation="list_account_conversations",
     )
+    # ponytail: 当前按事件窗口渐进加载；超过 2 万条时应升级为独立会话索引表。
+    has_more = len(messages) > resolved_limit and resolved_limit < WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT
+    if has_more:
+        messages = messages[-resolved_limit:]
     grouped: dict[str, list[WorkbenchMessage]] = {}
     for message in messages:
         grouped.setdefault(message.conversation_key, []).append(message)
@@ -139,7 +152,15 @@ def list_account_conversations(db: Session, *, account_open_id: str) -> dict[str
         len(items),
         _elapsed_ms(start),
     )
-    return {"items": items}
+    return {
+        "items": items,
+        "event_limit": resolved_limit,
+        "has_more": has_more,
+        "next_event_limit": min(
+            resolved_limit + WORKBENCH_CONVERSATION_EVENT_LIMIT,
+            WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT,
+        ) if has_more else None,
+    }
 
 
 def get_account_unread_counts(
@@ -329,6 +350,25 @@ def list_conversation_messages(
         limit=WORKBENCH_MESSAGE_LIMIT,
         operation="list_conversation_messages",
     )
+    result = _conversation_messages_payload(messages, conversation_key=conversation_key)
+    items = result["items"]
+    logger.info(
+        "douyin_workbench_query stage=finish operation=list_conversation_messages account_open_id=%s "
+        "conversation_key=%s message_count=%s result_count=%s elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        len(messages),
+        len(items),
+        _elapsed_ms(start),
+    )
+    return result
+
+
+def _conversation_messages_payload(
+    messages: list[WorkbenchMessage],
+    *,
+    conversation_key: str,
+) -> dict[str, Any]:
     items = []
     for message in _sort_messages([item for item in messages if item.conversation_key == conversation_key]):
         direction = _direction(message.event)
@@ -358,15 +398,6 @@ def list_conversation_messages(
                 "auto_reply_run_id": message.auto_reply_run_id,
             }
         )
-    logger.info(
-        "douyin_workbench_query stage=finish operation=list_conversation_messages account_open_id=%s "
-        "conversation_key=%s message_count=%s result_count=%s elapsed_ms=%s",
-        _mask_open_id(account_open_id),
-        _mask_open_id(conversation_key),
-        len(messages),
-        len(items),
-        _elapsed_ms(start),
-    )
     return {"items": items}
 
 
@@ -386,7 +417,8 @@ def get_conversation_profile(
             operation="get_conversation_profile",
         )
     )
-    if not messages:
+    result = _conversation_profile_payload(db, messages)
+    if result is None:
         logger.info(
             "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
             "conversation_key=%s message_count=0 result_count=0 elapsed_ms=%s",
@@ -395,18 +427,64 @@ def get_conversation_profile(
             _elapsed_ms(start),
         )
         return None
+    logger.info(
+        "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
+        "conversation_key=%s message_count=%s result_count=1 elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        len(messages),
+        _elapsed_ms(start),
+    )
+    return result
 
+
+def get_conversation_detail(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str,
+) -> dict[str, Any]:
+    """一次加载同一会话，返回消息和客户画像。"""
+    start = time.perf_counter()
+    messages = _sort_messages(
+        _load_messages(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=conversation_key,
+            limit=WORKBENCH_MESSAGE_LIMIT,
+            operation="get_conversation_detail",
+        )
+    )
+    result = {
+        "messages": _conversation_messages_payload(messages, conversation_key=conversation_key),
+        "profile": _conversation_profile_payload(db, messages),
+    }
+    logger.info(
+        "douyin_workbench_query stage=finish operation=get_conversation_detail account_open_id=%s "
+        "conversation_key=%s message_count=%s elapsed_ms=%s",
+        _mask_open_id(account_open_id),
+        _mask_open_id(conversation_key),
+        len(messages),
+        _elapsed_ms(start),
+    )
+    return result
+
+
+def _conversation_profile_payload(
+    db: Session,
+    messages: list[WorkbenchMessage],
+) -> dict[str, Any] | None:
+    if not messages:
+        return None
     first = messages[0]
     latest = messages[-1]
     lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
     raw_data = _safe_lead_raw_data(lead)
-    trace_message = latest or first
     profile_fields = merge_profile_fields(
         derive_profile_fields_from_raw_data(raw_data),
         _profile_fields_from_customer_messages(messages),
     )
-
-    result = {
+    return {
         "conversation_id": first.conversation_key,
         "conversation_key": first.conversation_key,
         "conversation_short_id": first.conversation_short_id,
@@ -422,18 +500,9 @@ def get_conversation_profile(
         "city": profile_fields.get("city"),
         "tags": build_conversation_tags(db, messages),
         "lead_score": _profile_lead_score(lead, raw_data),
-        "trace": _profile_trace(db, trace_message),
+        "trace": _profile_trace(db, latest),
         "lead": _profile_lead_payload(lead),
     }
-    logger.info(
-        "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
-        "conversation_key=%s message_count=%s result_count=1 elapsed_ms=%s",
-        _mask_open_id(account_open_id),
-        _mask_open_id(conversation_key),
-        len(messages),
-        _elapsed_ms(start),
-    )
-    return result
 
 
 def get_send_msg_context(
@@ -628,6 +697,7 @@ def _load_messages(
         if conversation_key and message.conversation_key != conversation_key:
             continue
         messages.append(message)
+    messages = _attach_message_send_records(db, messages)
     logger.info(
         "douyin_workbench_query stage=load_messages operation=%s account_open_id=%s conversation_key=%s "
         "db_row_count=%s message_count=%s query_ms=%s parse_aggregate_ms=%s",
@@ -804,7 +874,6 @@ def _row_to_message(db: Session, row: DouyinWebhookEvent) -> WorkbenchMessage | 
     conversation_short_id = _optional_str(content.get("conversation_short_id"))
     conversation_key = conversation_short_id or f"{account_open_id}:{open_id}"
     profile = _profile_for_customer(row, payload, content, open_id)
-    send_record = _find_message_send_record(db, row, account_open_id=account_open_id, open_id=open_id)
     return WorkbenchMessage(
         event_id=row.id,
         event=row.event or "",
@@ -821,47 +890,70 @@ def _row_to_message(db: Session, row: DouyinWebhookEvent) -> WorkbenchMessage | 
         nick_name=profile.get("nick_name"),
         avatar=profile.get("avatar"),
         lead_id=row.lead_id,
-        send_source=getattr(send_record, "send_source", None),
-        operator_id=getattr(send_record, "operator_id", None),
-        auto_send=bool(send_record.auto_send) if send_record is not None else None,
-        auto_reply_run_id=getattr(send_record, "auto_reply_run_id", None),
     )
 
 
-def _find_message_send_record(
+def _attach_message_send_records(
     db: Session,
-    row: DouyinWebhookEvent,
-    *,
-    account_open_id: str,
-    open_id: str,
-) -> DouyinPrivateMessageSend | None:
-    if row.event != "im_send_msg":
-        return None
-    payload = _parse_raw_body(row.raw_body) or {}
-    content = _payload_content(row, payload)
-    conversation_short_id = row.conversation_short_id or _optional_str(content.get("conversation_short_id"))
-    base_query = (
+    messages: list[WorkbenchMessage],
+) -> list[WorkbenchMessage]:
+    outbound = [item for item in messages if item.event == "im_send_msg"]
+    if not outbound:
+        return messages
+    account_open_ids = {item.account_open_id for item in outbound if item.account_open_id}
+    customer_open_ids = {item.open_id for item in outbound if item.open_id}
+    conversation_ids = {item.conversation_short_id for item in outbound if item.conversation_short_id}
+    server_message_ids = {item.server_message_id for item in outbound if item.server_message_id}
+    filters = []
+    if conversation_ids:
+        filters.append(DouyinPrivateMessageSend.conversation_short_id.in_(conversation_ids))
+    if server_message_ids:
+        filters.append(DouyinPrivateMessageSend.upstream_msg_id.in_(server_message_ids))
+    if not filters:
+        return messages
+    records = (
         db.query(DouyinPrivateMessageSend)
-        .filter(DouyinPrivateMessageSend.account_open_id == account_open_id)
-        .filter(DouyinPrivateMessageSend.customer_open_id == open_id)
-        .filter(DouyinPrivateMessageSend.conversation_short_id == conversation_short_id)
         .filter(DouyinPrivateMessageSend.status == "sent")
-    )
-    if row.server_message_id:
-        matched = (
-            base_query
-            .filter(DouyinPrivateMessageSend.upstream_msg_id == row.server_message_id)
-            .order_by(DouyinPrivateMessageSend.id.desc())
-            .first()
-        )
-        if matched is not None:
-            return matched
-    return (
-        base_query
-        .filter(DouyinPrivateMessageSend.content == normalize_message_text(content))
+        .filter(DouyinPrivateMessageSend.account_open_id.in_(account_open_ids))
+        .filter(DouyinPrivateMessageSend.customer_open_id.in_(customer_open_ids))
+        .filter(or_(*filters))
         .order_by(DouyinPrivateMessageSend.id.desc())
-        .first()
+        .all()
     )
+    by_server_message: dict[tuple[str, str, str, str], DouyinPrivateMessageSend] = {}
+    by_content: dict[tuple[str, str, str, str], DouyinPrivateMessageSend] = {}
+    for record in records:
+        scope = (
+            str(record.account_open_id or ""),
+            str(record.customer_open_id or ""),
+            str(record.conversation_short_id or ""),
+        )
+        if record.upstream_msg_id:
+            by_server_message.setdefault((*scope, str(record.upstream_msg_id)), record)
+        by_content.setdefault((*scope, str(record.content or "")), record)
+
+    result = []
+    for message in messages:
+        if message.event != "im_send_msg" or not message.conversation_short_id:
+            result.append(message)
+            continue
+        scope = (message.account_open_id, message.open_id, message.conversation_short_id)
+        record = (
+            by_server_message.get((*scope, message.server_message_id))
+            if message.server_message_id
+            else None
+        ) or by_content.get((*scope, message.content))
+        if record is None:
+            result.append(message)
+            continue
+        result.append(replace(
+            message,
+            send_source=record.send_source,
+            operator_id=record.operator_id,
+            auto_send=bool(record.auto_send),
+            auto_reply_run_id=record.auto_reply_run_id,
+        ))
+    return result
 
 
 def _payload_content(row: DouyinWebhookEvent, payload: dict[str, Any]) -> dict[str, Any]:

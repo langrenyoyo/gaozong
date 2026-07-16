@@ -1,4 +1,5 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   BotIcon,
@@ -40,8 +41,7 @@ import {
   getDouyinConversationAutopilot,
   getDouyinAccountAgents,
   getDouyinAccountConversations,
-  getDouyinConversationProfileFrom9000,
-  getDouyinConversationMessages,
+  getDouyinConversationDetail,
   listDouyinAccounts,
   markDouyinConversationRead,
   resumeDouyinConversationAutopilot,
@@ -72,10 +72,23 @@ const AUTH_POLLING_INTERVAL_MS = 2000;
 const AUTH_POLLING_TIMEOUT_MS = 120000;
 const AUTH_SUCCESS_AUTO_CLOSE_MS = 1500;
 const AUTO_REPLY_RUN_POLLING_INTERVAL_MS = 4000;
+const CONVERSATION_EVENT_PAGE_SIZE = 2000;
+const WORKBENCH_QUERY_CACHE_KEY = ["douyin-workbench", "page"] as const;
 
 type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retained_contact" | "follow_up";
 type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
 type AutoReplyRunViewItem = AiAutoReplyRunListItem & Pick<Partial<AiAutoReplyRunDetail>, "would_send_content">;
+
+interface WorkbenchPageCache {
+  accounts: DouyinAccountItem[];
+  selectedAccountId: number | null;
+  selectedConversationId: string | number | null;
+  conversations: Record<string, DouyinConversationItem[]>;
+  messages: Record<string, DouyinMessageItem[]>;
+  profiles: Record<string, DouyinConversationProfile | null>;
+  conversationEventLimits: Record<string, number>;
+  conversationHasMore: Record<string, boolean>;
+}
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
   { key: "all", label: "全部" },
@@ -744,12 +757,29 @@ function matchDeepLinkedConversation(
 }
 
 export default function DouyinAiCsWorkbenchPage() {
-  const [accounts, setAccounts] = useState<DouyinAccountItem[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
-  const [conversations, setConversations] = useState<DouyinConversationItem[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(null);
-  const [messages, setMessages] = useState<DouyinMessageItem[]>([]);
-  const [profile, setProfile] = useState<DouyinConversationProfile | null>(null);
+  const queryClient = useQueryClient();
+  const cachedWorkbench = queryClient.getQueryData<WorkbenchPageCache>(WORKBENCH_QUERY_CACHE_KEY);
+  const cachedAccounts = cachedWorkbench?.accounts || [];
+  const cachedSelectedAccountId = cachedWorkbench?.selectedAccountId ?? cachedAccounts[0]?.id ?? null;
+  const cachedSelectedAccount = cachedAccounts.find((item) => item.id === cachedSelectedAccountId) || null;
+  const cachedConversations = cachedSelectedAccount
+    ? cachedWorkbench?.conversations[cachedSelectedAccount.account_open_id] || []
+    : [];
+  const cachedSelectedConversationId = cachedWorkbench?.selectedConversationId ?? cachedConversations[0]?.id ?? null;
+  const cachedDetailKey = conversationCacheKey(
+    cachedSelectedAccount?.account_open_id,
+    cachedSelectedConversationId,
+  );
+  const [accounts, setAccounts] = useState<DouyinAccountItem[]>(cachedAccounts);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(cachedSelectedAccountId);
+  const [conversations, setConversations] = useState<DouyinConversationItem[]>(cachedConversations);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | number | null>(cachedSelectedConversationId);
+  const [messages, setMessages] = useState<DouyinMessageItem[]>(
+    cachedDetailKey ? cachedWorkbench?.messages[cachedDetailKey] || [] : [],
+  );
+  const [profile, setProfile] = useState<DouyinConversationProfile | null>(
+    cachedDetailKey ? cachedWorkbench?.profiles[cachedDetailKey] || null : null,
+  );
   const [draftReplyText, setDraftReplyText] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -769,11 +799,20 @@ export default function DouyinAiCsWorkbenchPage() {
   const [uploadImageIdCopied, setUploadImageIdCopied] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
+  const [refreshingConversations, setRefreshingConversations] = useState(false);
+  const [loadingOlderConversations, setLoadingOlderConversations] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(
+    cachedSelectedAccount
+      ? Boolean(cachedWorkbench?.conversationHasMore[cachedSelectedAccount.account_open_id])
+      : false,
+  );
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [accountListSource, setAccountListSource] = useState<string | null>(null);
+  const [accountListSource, setAccountListSource] = useState<string | null>(
+    cachedAccounts.length ? "official_bindings" : null,
+  );
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilterKey>("all");
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -810,9 +849,20 @@ export default function DouyinAiCsWorkbenchPage() {
     tone: "success" | "error";
   } | null>(null);
   const [authRedirectHandled, setAuthRedirectHandled] = useState(false);
-  const conversationsCacheRef = useRef<Record<string, DouyinConversationItem[]>>({});
-  const messagesCacheRef = useRef<Record<string, DouyinMessageItem[]>>({});
-  const profileCacheRef = useRef<Record<string, DouyinConversationProfile | null>>({});
+  const accountsCacheRef = useRef<DouyinAccountItem[]>(cachedAccounts);
+  const conversationsCacheRef = useRef<Record<string, DouyinConversationItem[]>>(
+    cachedWorkbench?.conversations || {},
+  );
+  const messagesCacheRef = useRef<Record<string, DouyinMessageItem[]>>(cachedWorkbench?.messages || {});
+  const profileCacheRef = useRef<Record<string, DouyinConversationProfile | null>>(
+    cachedWorkbench?.profiles || {},
+  );
+  const conversationEventLimitsRef = useRef<Record<string, number>>(
+    cachedWorkbench?.conversationEventLimits || {},
+  );
+  const conversationHasMoreRef = useRef<Record<string, boolean>>(
+    cachedWorkbench?.conversationHasMore || {},
+  );
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
   const markReadWatermarksRef = useRef<Record<string, string>>({});
   const selectedAccountOpenIdRef = useRef<string | null>(null);
@@ -831,8 +881,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const conversationAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
   const conversationInFlightRef = useRef<Record<string, Promise<DouyinConversationItem[]>>>({});
-  const messageInFlightRef = useRef<Record<string, Promise<DouyinMessageItem[]>>>({});
-  const profileInFlightRef = useRef<Record<string, Promise<DouyinConversationProfile | null>>>({});
+  const detailInFlightRef = useRef<Record<string, ReturnType<typeof getDouyinConversationDetail>>>({});
   const pollInFlightRef = useRef(false);
   const autoReplyRunPollInFlightRef = useRef(false);
   const authPollingStartedAtRef = useRef<number>(0);
@@ -911,6 +960,19 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [selectedConversationId]);
 
   useEffect(() => {
+    queryClient.setQueryData<WorkbenchPageCache>(WORKBENCH_QUERY_CACHE_KEY, {
+      accounts,
+      selectedAccountId,
+      selectedConversationId,
+      conversations: conversationsCacheRef.current,
+      messages: messagesCacheRef.current,
+      profiles: profileCacheRef.current,
+      conversationEventLimits: conversationEventLimitsRef.current,
+      conversationHasMore: conversationHasMoreRef.current,
+    });
+  }, [accounts, conversations, messages, profile, queryClient, selectedAccountId, selectedConversationId]);
+
+  useEffect(() => {
     return () => {
       conversationAbortRef.current?.abort();
       detailAbortRef.current?.abort();
@@ -953,12 +1015,13 @@ export default function DouyinAiCsWorkbenchPage() {
   const loadAccounts = useCallback(async (preferredOpenId?: string | null) => {
     const requestSeq = accountRequestSeqRef.current + 1;
     accountRequestSeqRef.current = requestSeq;
-    setLoadingAccounts(true);
+    setLoadingAccounts(accountsCacheRef.current.length === 0);
     setError(null);
     try {
       const data = await listDouyinAccounts();
       if (accountRequestSeqRef.current !== requestSeq) return data.items;
       const mapped = data.items;
+      accountsCacheRef.current = mapped;
       setAccounts(mapped);
       setAccountListSource("official_bindings");
       setSelectedAccountId((current) => {
@@ -972,9 +1035,11 @@ export default function DouyinAiCsWorkbenchPage() {
       return mapped;
     } catch (err) {
       if (accountRequestSeqRef.current !== requestSeq) return [];
-      setAccounts([]);
-      setSelectedAccountId(null);
-      setAccountListSource(null);
+      if (accountsCacheRef.current.length === 0) {
+        setAccounts([]);
+        setSelectedAccountId(null);
+        setAccountListSource(null);
+      }
       setError(userFacingError(err, "抖音企业号列表加载失败"));
       return [];
     } finally {
@@ -984,17 +1049,26 @@ export default function DouyinAiCsWorkbenchPage() {
 
   const loadConversations = useCallback(async (
     account: DouyinAccountItem,
-    options?: { skipDefaultSelection?: boolean; background?: boolean },
+    options?: {
+      skipDefaultSelection?: boolean;
+      background?: boolean;
+      eventLimit?: number;
+      showRefreshStatus?: boolean;
+    },
   ) => {
     const accountOpenId = account.account_open_id;
     const cached = conversationsCacheRef.current[accountOpenId];
     const hasCached = Boolean(cached);
+    const eventLimit = options?.eventLimit
+      || conversationEventLimitsRef.current[accountOpenId]
+      || CONVERSATION_EVENT_PAGE_SIZE;
     const requestSeq = conversationRequestSeqRef.current + 1;
     conversationRequestSeqRef.current = requestSeq;
     if (hasCached && !options?.background) {
       setConversations(cached);
     }
     if (!options?.background && !hasCached) setLoadingConversations(true);
+    if (options?.showRefreshStatus) setRefreshingConversations(true);
     setError(null);
     if (!options?.background) {
       conversationAbortRef.current?.abort();
@@ -1002,15 +1076,20 @@ export default function DouyinAiCsWorkbenchPage() {
     }
     const controller = new AbortController();
     conversationAbortRef.current = controller;
-    const inflightKey = accountOpenId;
+    const inflightKey = `${accountOpenId}:${eventLimit}`;
     try {
       const request =
         conversationInFlightRef.current[inflightKey] ||
         getDouyinAccountConversations(account.id, {
           account_open_id: accountOpenId,
+          event_limit: eventLimit,
           signal: controller.signal,
         })
-          .then((data) => data.items)
+          .then((data) => {
+            conversationEventLimitsRef.current[accountOpenId] = data.event_limit || eventLimit;
+            conversationHasMoreRef.current[accountOpenId] = Boolean(data.has_more);
+            return data.items;
+          })
           .finally(() => {
             delete conversationInFlightRef.current[inflightKey];
           });
@@ -1024,6 +1103,7 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       const mergedItems = applyReadWatermarks(accountOpenId, items, readWatermarksRef.current);
       conversationsCacheRef.current[accountOpenId] = mergedItems;
+      setHasMoreConversations(Boolean(conversationHasMoreRef.current[accountOpenId]));
       setConversations(mergedItems);
       setAccounts((current) =>
         current.map((item) =>
@@ -1056,16 +1136,33 @@ export default function DouyinAiCsWorkbenchPage() {
     } finally {
       if (conversationRequestSeqRef.current === requestSeq && selectedAccountOpenIdRef.current === accountOpenId) {
         setLoadingConversations(false);
+        setRefreshingConversations(false);
       }
     }
   }, []);
+
+  const loadOlderConversations = useCallback(async () => {
+    if (!selectedAccount || loadingOlderConversations) return;
+    const accountOpenId = selectedAccount.account_open_id;
+    const currentLimit = conversationEventLimitsRef.current[accountOpenId]
+      || CONVERSATION_EVENT_PAGE_SIZE;
+    setLoadingOlderConversations(true);
+    try {
+      await loadConversations(selectedAccount, {
+        skipDefaultSelection: true,
+        background: true,
+        eventLimit: currentLimit + CONVERSATION_EVENT_PAGE_SIZE,
+      });
+    } finally {
+      setLoadingOlderConversations(false);
+    }
+  }, [loadConversations, loadingOlderConversations, selectedAccount]);
 
   const loadConversationDetail = useCallback(async (
     conversationId: string | number,
     options?: { background?: boolean },
   ) => {
     const accountOpenId = selectedAccount?.account_open_id || null;
-    const accountId = selectedAccount?.id || null;
     const cacheKey = conversationCacheKey(accountOpenId, conversationId);
     const cachedMessages = cacheKey ? messagesCacheRef.current[cacheKey] : undefined;
     const cachedProfile = cacheKey ? profileCacheRef.current[cacheKey] : undefined;
@@ -1079,8 +1176,7 @@ export default function DouyinAiCsWorkbenchPage() {
     setProfileError(null);
     if (!options?.background) {
       detailAbortRef.current?.abort();
-      messageInFlightRef.current = {};
-      profileInFlightRef.current = {};
+      detailInFlightRef.current = {};
     }
     const controller = new AbortController();
     detailAbortRef.current = controller;
@@ -1088,71 +1184,38 @@ export default function DouyinAiCsWorkbenchPage() {
       detailRequestSeqRef.current === requestSeq &&
       selectedAccountOpenIdRef.current === accountOpenId &&
       selectedConversationIdRef.current === conversationId;
-    const messageKey = cacheKey ? `message::${cacheKey}` : "";
-    const profileKey = cacheKey ? `profile::${cacheKey}` : "";
-
-    const messageRequest =
-      (messageKey && messageInFlightRef.current[messageKey]) ||
-      getDouyinConversationMessages(conversationId, {
-        account_open_id: accountOpenId || undefined,
-        signal: controller.signal,
-      })
-        .then((data) => data.items)
-        .finally(() => {
-          if (messageKey) delete messageInFlightRef.current[messageKey];
+    const detailKey = cacheKey ? `detail::${cacheKey}` : "";
+    try {
+      if (!accountOpenId) return;
+      const request =
+        (detailKey && detailInFlightRef.current[detailKey])
+        || getDouyinConversationDetail(conversationId, {
+          account_open_id: accountOpenId,
+          signal: controller.signal,
+        }).finally(() => {
+          if (detailKey) delete detailInFlightRef.current[detailKey];
         });
-    if (messageKey) messageInFlightRef.current[messageKey] = messageRequest;
-
-    const profileRequest =
-      accountId === null || cachedProfile !== undefined
-        ? Promise.resolve(cachedProfile ?? null)
-        : (profileKey && profileInFlightRef.current[profileKey]) ||
-          getDouyinConversationProfileFrom9000(accountId, conversationId, {
-            account_open_id: accountOpenId || undefined,
-            signal: controller.signal,
-          })
-            .then((data) => data)
-            .finally(() => {
-              if (profileKey) delete profileInFlightRef.current[profileKey];
-            });
-    if (profileKey) profileInFlightRef.current[profileKey] = profileRequest;
-
-    const messageTask = messageRequest
-      .then((items) => {
-      if (
-        !isCurrentRequest()
-      ) {
-        return;
+      if (detailKey) detailInFlightRef.current[detailKey] = request;
+      const detail = await request;
+      if (!isCurrentRequest()) return;
+      if (cacheKey) {
+        messagesCacheRef.current[cacheKey] = detail.messages.items;
+        profileCacheRef.current[cacheKey] = detail.profile;
       }
-      if (cacheKey) messagesCacheRef.current[cacheKey] = items;
-      setMessages(items);
-    })
-      .catch((err) => {
-        if (controller.signal.aborted || !isCurrentRequest()) return;
-        if (!cachedMessages) setMessages([]);
-        setError(userFacingError(err, "聊天详情加载失败"));
-      })
-      .finally(() => {
-        if (isCurrentRequest()) setLoadingMessages(false);
-      });
-
-    const profileTask = profileRequest
-      .then((profileData) => {
-        if (!isCurrentRequest()) return;
-        if (cacheKey) profileCacheRef.current[cacheKey] = profileData;
-        setProfile(profileData);
-      })
-      .catch((profileErr) => {
-        if (controller.signal.aborted || !isCurrentRequest()) return;
-        if (cacheKey) profileCacheRef.current[cacheKey] = null;
-        setProfile(null);
-        setProfileError(profileErr instanceof Error ? profileErr.message : "客户画像加载失败");
-      })
-      .finally(() => {
-        if (isCurrentRequest()) setLoadingProfile(false);
-      });
-
-    await Promise.allSettled([messageTask, profileTask]);
+      setMessages(detail.messages.items);
+      setProfile(detail.profile);
+    } catch (err) {
+      if (controller.signal.aborted || !isCurrentRequest()) return;
+      if (!cachedMessages) setMessages([]);
+      if (cachedProfile === undefined) setProfile(null);
+      setError(userFacingError(err, "聊天详情加载失败"));
+      setProfileError("客户画像加载失败");
+    } finally {
+      if (isCurrentRequest()) {
+        setLoadingMessages(false);
+        setLoadingProfile(false);
+      }
+    }
   }, [selectedAccount]);
 
   const loadLatestAutoReplyRun = useCallback(async (
@@ -1367,13 +1430,16 @@ export default function DouyinAiCsWorkbenchPage() {
     if (selectedAccount) {
       const cachedConversations = conversationsCacheRef.current[selectedAccount.account_open_id];
       if (cachedConversations) setConversations(cachedConversations);
+      setHasMoreConversations(Boolean(conversationHasMoreRef.current[selectedAccount.account_open_id]));
       void loadConversations(selectedAccount, {
         skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
         background: Boolean(cachedConversations),
+        showRefreshStatus: Boolean(cachedConversations),
       });
     } else {
       setConversations([]);
       setSelectedConversationId(null);
+      setHasMoreConversations(false);
     }
   }, [conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccount, selectedAccountId]);
 
@@ -1484,7 +1550,12 @@ export default function DouyinAiCsWorkbenchPage() {
 
     const poll = async () => {
       if (document.visibilityState !== "visible") return;
-      if (pollInFlightRef.current || loadingConversations || loadingMessages) return;
+      if (
+        pollInFlightRef.current
+        || loadingConversations
+        || loadingMessages
+        || loadingOlderConversations
+      ) return;
       pollInFlightRef.current = true;
       const currentAccount = selectedAccount;
       const currentConversationId = selectedConversationIdRef.current;
@@ -1515,7 +1586,15 @@ export default function DouyinAiCsWorkbenchPage() {
       void poll();
     }, 8000);
     return () => window.clearInterval(timer);
-  }, [loadConversationDetail, loadConversations, loadLatestAutoReplyRun, loadingConversations, loadingMessages, selectedAccount]);
+  }, [
+    loadConversationDetail,
+    loadConversations,
+    loadLatestAutoReplyRun,
+    loadingConversations,
+    loadingMessages,
+    loadingOlderConversations,
+    selectedAccount,
+  ]);
 
   useEffect(() => {
     if (!selectedAccount || !selectedConversation?.conversation_short_id) return undefined;
@@ -2309,7 +2388,12 @@ export default function DouyinAiCsWorkbenchPage() {
 
         <aside className="flex min-h-0 flex-col overflow-hidden border border-r-0 border-[#dfe5ee] bg-white">
           <div className="border-b border-[#edf1f6] px-4 py-3">
-            <div className="text-sm font-bold text-[#172033]">会话列表</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-bold text-[#172033]">会话列表</div>
+              {refreshingConversations ? (
+                <span className="text-[11px] text-slate-400">正在更新</span>
+              ) : null}
+            </div>
             <div className="mt-0.5 truncate text-[11px] text-slate-500">
               {selectedAccount?.account_name || "未选择抖音号"}
             </div>
@@ -2418,6 +2502,17 @@ export default function DouyinAiCsWorkbenchPage() {
                 </button>
               );
             })}
+            {hasMoreConversations ? (
+              <button
+                type="button"
+                onClick={() => void loadOlderConversations()}
+                disabled={loadingOlderConversations}
+                className="mb-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingOlderConversations ? <LoaderIcon size={13} className="animate-spin" /> : null}
+                {loadingOlderConversations ? "正在加载" : "加载更早会话"}
+              </button>
+            ) : null}
           </div>
         </aside>
 

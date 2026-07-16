@@ -128,6 +128,9 @@ export interface DouyinConversationItem {
 
 export interface DouyinConversationListResponse {
   items: DouyinConversationItem[];
+  event_limit?: number;
+  has_more?: boolean;
+  next_event_limit?: number | null;
 }
 
 export interface DouyinMessageItem {
@@ -203,6 +206,11 @@ export interface DouyinConversationProfileResponse {
   success?: boolean;
   data: DouyinConversationProfile;
   message?: string;
+}
+
+export interface DouyinConversationDetailResponse {
+  messages: DouyinMessageListResponse;
+  profile: DouyinConversationProfile | null;
 }
 
 export interface DouyinConversationMarkReadRequest {
@@ -593,12 +601,34 @@ export async function getDouyinAccountAgents(
 
 export async function getDouyinAccountConversations(
   accountId: string | number,
-  params?: { account_open_id?: string; signal?: AbortSignal },
+  params?: { account_open_id?: string; event_limit?: number; signal?: AbortSignal },
 ): Promise<DouyinConversationListResponse> {
   return apiClient.get(
     `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
-    { params: { account_open_id: params?.account_open_id }, signal: params?.signal },
+    {
+      params: {
+        account_open_id: params?.account_open_id,
+        event_limit: params?.event_limit,
+      },
+      signal: params?.signal,
+    },
   ) as unknown as Promise<DouyinConversationListResponse>;
+}
+
+export async function getDouyinConversationDetail(
+  conversationId: string | number,
+  params: { account_open_id: string; signal?: AbortSignal },
+): Promise<DouyinConversationDetailResponse> {
+  return apiClient.get(
+    "/integrations/douyin/conversation-detail",
+    {
+      params: {
+        conversation_key: String(conversationId),
+        account_open_id: params.account_open_id,
+      },
+      signal: params.signal,
+    },
+  ) as unknown as Promise<DouyinConversationDetailResponse>;
 }
 
 export async function getDouyinConversationMessages(
