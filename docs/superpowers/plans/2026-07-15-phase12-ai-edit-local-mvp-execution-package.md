@@ -893,16 +893,16 @@ Phase 12 全套：255 passed / 2 skipped
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前状态为 `APPROVED_FOR_IMPLEMENTATION`。执行窗口连续完成 Task 11-1~11-3，只在构建完成、发送甲方前硬暂停一次。
+当前状态为 `APPROVED_FOR_DIRECT_BUILD`。执行窗口直接完成 Task 11-1~11-3，不设许可证、构建或发送审批门。
 
 冻结口径：
 
 ```text
-甲方最终文件：小高AI系统测试版.exe + 小高AI系统测试版.exe.sha256.txt
+甲方最终文件：小高AI系统测试版.exe（SHA-256 只写入构建报告）
 内部结构：外层控制进程 + Local Agent Python 3.10 + 按任务启动的 AI剪辑 Worker Python 3.11；两个业务子进程隔离
 测试包禁入：EasyOCR/PyTorch/torchvision/OpenCV/Pillow/FunASR/YOLO/open_clip/模型权重/字体
 正式客户安装包：NOT_BUILT
 宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
 ```
 
-Task 11 构建完成后状态为 `BUILT_PENDING_CUSTOMER_SEND_APPROVAL`；未经当前窗口快速审查并明确批准，不得发送甲方。
+Task 11 构建并完成真实 smoke 后状态为 `BUILT_FOR_CUSTOMER_TEST`，直接回传结果；Phase 13 与宝塔生产验证仍不得提前启动。

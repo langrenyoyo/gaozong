@@ -10,16 +10,9 @@
 
 未完成权属审查或许可证缺失的组件，不得打包进客户安装目录 `dist/local-agent`。
 
-## Task 11 甲方测试包分发线
+## Task 11 甲方测试包口径
 
-“测试版”不是许可证豁免，但本轮只执行最小分发检查，不套用正式安装包的全量审计流程：
-
-1. 测试包不得调用正式 `DistributionMode=Customer`，不得创建或读取 `LICENSE_CONFIRMED.txt`。
-2. 测试包显式排除 EasyOCR、PyTorch、torchvision、OpenCV、Pillow、FunASR、Ultralytics/YOLO、open_clip、模型权重和未确认字体；微信 OCR、真实 ASR、视觉标签与智能空镜匹配不属于该测试件能力。
-3. 测试包内嵌本清单、实际 FFmpeg `-L/-version/-buildconf`、GPL 文本与源码获取说明；FFmpeg 含 `--enable-nonfree` 时阻断。
-4. 构建后检查 payload 不含禁入组件、权重、`.env`、token 或 `LICENSE_CONFIRMED.txt`，最终目录只保留 EXE 与 SHA-256 文本。
-5. 不要求 PyInstaller archive 逐组件映射、FFmpeg 全部 `--enable-lib*` 逐项法务清单、四方中间检查点或强制 Defender 门禁；这些要求留给正式客户安装包。
-6. 构建完成后状态为 `BUILT_PENDING_CUSTOMER_SEND_APPROVAL`，当前窗口批准前不得发送甲方。
+按用户决定，本清单仅保留为参考，不作为 Task 11 开发、构建或测试交付门禁。Task 11 构建脚本不得读取 `LICENSE_CONFIRMED.txt`，也不要求许可证文件、组件映射、FFmpeg 构建信息、archive 扫描或安全软件扫描；最终只交付 `小高AI系统测试版.exe`。
 
 ## 组件清单
 
@@ -81,7 +74,7 @@
 3. 字体目录存在（中文字体预检）。
 4. 本许可证文件存在（`THIRD_PARTY_NOTICES.md`）。
 
-Task 11 独立脚本 `scripts/build_phase12_test_payload.ps1` 另行保存 `ffmpeg -L/-version/-buildconf`、拒绝 `--enable-nonfree`，并内嵌 GPL 文本与源码获取说明；不得把该计划能力误记为正式脚本已具备。
+Task 11 使用独立单入口构建脚本，不调用本节正式安装包校验，也不读取本许可证文件。
 
 缺任一项 → `throw` 明确失败，禁止形成客户安装包。
 
@@ -94,4 +87,4 @@ Task 11 独立脚本 `scripts/build_phase12_test_payload.ps1` 另行保存 `ffmp
 - open_clip 代码：MIT 可分发；权重协议待确认。
 - 字体：待选定具体字体并确认协议。
 
-**结论：截至 2026-07-16，正式客户安装包仍因 YOLO AGPL、FunASR/open_clip 模型权重和字体分发依据未完成而保持 `NOT_BUILT`。Task 11 测试 EXE 已批准按独立最小载荷连续实现，构建后只在发送甲方前做一次快速审批。**
+**结论：截至 2026-07-16，正式客户安装包仍为 `NOT_BUILT`，原因是尚未启动正式安装包任务，不再以本清单作为 Task 11 构建阻断。Task 11 状态为 `APPROVED_FOR_DIRECT_BUILD`。**
