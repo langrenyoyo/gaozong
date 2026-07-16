@@ -12,20 +12,20 @@
 
 ## Task 11 甲方测试包分发线
 
-“测试版”不是许可证豁免。Task 11 只允许构建最小许可安全载荷，并在检查点 D2 前保持 `BUILT_PENDING_APPROVAL`、`BLOCKED_BY_DISTRIBUTION_EVIDENCE` 或 `BLOCKED_BY_BUILD_OR_SMOKE`：
+“测试版”不是许可证豁免，但本轮只执行最小分发检查，不套用正式安装包的全量审计流程：
 
 1. 测试包不得调用正式 `DistributionMode=Customer`，不得创建或读取 `LICENSE_CONFIRMED.txt`。
 2. 测试包显式排除 EasyOCR、PyTorch、torchvision、OpenCV、Pillow、FunASR、Ultralytics/YOLO、open_clip、模型权重和未确认字体；微信 OCR、真实 ASR、视觉标签与智能空镜匹配不属于该测试件能力。
-3. 测试包仅可包含实际运行需要且已附可分发依据的 Python 运行时、Tcl/Tk、PyInstaller bootloader、Local Agent 控制面、AI 剪辑 Worker、FFmpeg/ffprobe 和对应许可证文本；必须按实际 PyInstaller archive 清单核对，不能只审 requirements 文件。
-4. FFmpeg 构建参数含 `--enable-nonfree` 时禁止分发；允许构建也必须按实际组件采用的许可证口径内嵌文本、完整构建信息和源码获取说明。Task 11 当前要求 Vid.Stab，因此按 GPL 口径审查。
-5. 构建后必须扫描 payload 与 PyInstaller archive；禁入组件、权重、`.env`、token 和正式许可证确认标记任一命中即阻断。
-6. 四方检查点 D2 PASS 且当前窗口明确批准前，不得把测试 EXE 发送甲方。
+3. 测试包内嵌本清单、实际 FFmpeg `-L/-version/-buildconf`、GPL 文本与源码获取说明；FFmpeg 含 `--enable-nonfree` 时阻断。
+4. 构建后检查 payload 不含禁入组件、权重、`.env`、token 或 `LICENSE_CONFIRMED.txt`，最终目录只保留 EXE 与 SHA-256 文本。
+5. 不要求 PyInstaller archive 逐组件映射、FFmpeg 全部 `--enable-lib*` 逐项法务清单、四方中间检查点或强制 Defender 门禁；这些要求留给正式客户安装包。
+6. 构建完成后状态为 `BUILT_PENDING_CUSTOMER_SEND_APPROVAL`，当前窗口批准前不得发送甲方。
 
 ## 组件清单
 
 ### FFmpeg（含 ffprobe）
 - 来源：`https://ffmpeg.org/`
-- 构建：Task 11 优先使用可枚举的最小 Windows GPL 构建；如使用 Gyan full build，必须按 `-buildconf` 覆盖全部 `--enable-lib*` 外部组件的独立许可证映射，未知项即阻断
+- 构建：Task 11 保存实际 `-L/-version/-buildconf`、拒绝 `--enable-nonfree`，并附 GPL 文本与源码获取说明；正式安装包再完成外部组件逐项映射
 - 许可证：LGPL 2.1+（默认）或 GPL 2+（启用 --enable-gpl，含 libvidstab 时通常为 GPL）
 - 分发依据：LGPL/GPL 允许随包分发二进制，但需附许可证文本与源码获取说明
 - 注意：`libx264` 为 GPL 组件，启用后整体 FFmpeg 二进制按 GPL 分发
@@ -81,7 +81,7 @@
 3. 字体目录存在（中文字体预检）。
 4. 本许可证文件存在（`THIRD_PARTY_NOTICES.md`）。
 
-Task 11 独立脚本 `scripts/build_phase12_test_payload.ps1` 另行强制保存 `ffmpeg -L/-version/-buildconf`、拒绝 `--enable-nonfree`，并要求全部 `--enable-lib*` 外部组件与许可证映射精确一致；不得把该计划能力误记为正式脚本已具备。
+Task 11 独立脚本 `scripts/build_phase12_test_payload.ps1` 另行保存 `ffmpeg -L/-version/-buildconf`、拒绝 `--enable-nonfree`，并内嵌 GPL 文本与源码获取说明；不得把该计划能力误记为正式脚本已具备。
 
 缺任一项 → `throw` 明确失败，禁止形成客户安装包。
 
@@ -94,4 +94,4 @@ Task 11 独立脚本 `scripts/build_phase12_test_payload.ps1` 另行强制保存
 - open_clip 代码：MIT 可分发；权重协议待确认。
 - 字体：待选定具体字体并确认协议。
 
-**结论：截至 2026-07-16，正式客户安装包仍因 YOLO AGPL、FunASR/open_clip 模型权重和字体分发依据未完成而保持 `NOT_BUILT`。Task 11 测试 EXE 只允许走独立最小载荷与独立四方分发审查；当前状态为预检/合同冻结，尚未构建、尚未批准对外交付。**
+**结论：截至 2026-07-16，正式客户安装包仍因 YOLO AGPL、FunASR/open_clip 模型权重和字体分发依据未完成而保持 `NOT_BUILT`。Task 11 测试 EXE 已批准按独立最小载荷连续实现，构建后只在发送甲方前做一次快速审批。**

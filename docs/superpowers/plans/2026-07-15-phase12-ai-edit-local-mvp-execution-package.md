@@ -887,13 +887,13 @@ Phase 12 全套：255 passed / 2 skipped
 
 ## Task 11：甲方测试专用单入口 EXE（内部双运行时）
 
-检查点 C 已于 2026-07-16 三方 PASS，Task 11 允许启动。详细任务、红绿灯、分层检查点和四方验收只以以下独立执行包为准：
+检查点 C 已于 2026-07-16 三方 PASS，Task 11 允许启动。详细任务与最终验收只以以下独立执行包为准：
 
 ```text
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前批准范围仅为该执行包的 Task 11-0/11-1，完成后在检查点 D0 硬暂停。不得依据本摘要跳过合同冻结直接构建。
+当前状态为 `APPROVED_FOR_IMPLEMENTATION`。执行窗口连续完成 Task 11-1~11-3，只在构建完成、发送甲方前硬暂停一次。
 
 冻结口径：
 
@@ -905,4 +905,4 @@ docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution
 宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
 ```
 
-Task 11 完成后仍须检查点 D2 四方 PASS；未经当前窗口明确批准，不得发送甲方。
+Task 11 构建完成后状态为 `BUILT_PENDING_CUSTOMER_SEND_APPROVAL`；未经当前窗口快速审查并明确批准，不得发送甲方。
