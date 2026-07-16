@@ -122,6 +122,7 @@ function applyAiAutoReplyEnabled(
     min_confidence: 0,
     require_rag: false,
     require_rag_sources: false,
+    allowed_intents: [],
     blocked_risk_flags: [],
     direct_llm_policy: SIMPLE_ENABLED_DIRECT_LLM_POLICY,
   };
@@ -140,6 +141,7 @@ function normalizeSimpleForm(current: DouyinAutoReplySettingUpdateRequest): Douy
     min_confidence: 0,
     require_rag: false,
     require_rag_sources: false,
+    allowed_intents: [],
     blocked_risk_flags: [],
     direct_llm_policy: SIMPLE_ENABLED_DIRECT_LLM_POLICY,
   };
@@ -321,8 +323,8 @@ export default function DouyinAutoReplySettingsPage() {
               <ShieldCheckIcon size={17} className="mt-0.5 shrink-0 text-blue-600" />
               <div className="text-xs leading-6 text-blue-800">
                 <div className="font-bold">开启后，客户发送私信时，AI 会自动生成回复并发送。</div>
-                <div>当前为简化模式：暂不启用价格、库存、金融、车况、联系方式等拦截规则。</div>
-                <div>后续如需增加拦截规则，可在确认规则后再配置。</div>
+                <div>系统仍会阻断涉及确定库存、价格、金融、车况、微信等需要人工确认的回复。</div>
+                <div>全局开关、灰度范围、人工接管、频率和发送校验继续生效。</div>
               </div>
             </div>
           </div>
@@ -368,8 +370,8 @@ export default function DouyinAutoReplySettingsPage() {
                         <div className="text-sm font-bold text-slate-900">AI 自动回复</div>
                         <div className="mt-2 text-xs leading-6 text-slate-600">
                           <div>开启后，客户发送私信时，AI 会自动生成回复并发送。</div>
-                          <div>当前为简化模式：暂不启用价格、库存、金融、车况、联系方式等拦截规则。</div>
-                          <div>后续如需增加拦截规则，可在确认规则后再配置。</div>
+                          <div>系统仍会阻断涉及确定库存、价格、金融、车况、微信等需要人工确认的回复。</div>
+                          <div>全局开关、灰度范围、人工接管、频率和发送校验继续生效。</div>
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-3">

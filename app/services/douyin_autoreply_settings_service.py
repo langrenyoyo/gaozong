@@ -246,10 +246,35 @@ def mode_from_settings(settings: DouyinAccountAutoreplySetting | None) -> str:
     return AUTOREPLY_MODE_MANUAL_TAKEOVER
 
 
-def values_for_mode(mode: str) -> dict[str, bool]:
+def values_for_mode(mode: str) -> dict[str, Any]:
     """把企业号托管模式映射到现有自动回复配置字段。"""
     if mode == AUTOREPLY_MODE_AI_AUTO:
-        return {"enabled": True, "send_enabled": True}
+        return {
+            "enabled": True,
+            "dry_run_enabled": False,
+            "send_enabled": True,
+            "min_confidence": 0,
+            "require_rag": False,
+            "require_rag_sources": False,
+            "allowed_intents": [],
+            "blocked_risk_flags": [],
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "aggressive",
+                "allow_greeting_auto_send": True,
+                "allow_general_intro_auto_send": True,
+                "allow_need_clarification_auto_send": True,
+                "allow_brand_general_intro_auto_send": True,
+                "specific_model_strategy": "safe_clarify",
+                "contact_guidance_level": "soft_guidance",
+                "require_rag_for_specific_inventory": False,
+                "forbid_inventory_claim": False,
+                "forbid_price_claim": False,
+                "forbid_finance_claim": False,
+                "forbid_vehicle_condition_claim": False,
+                "min_confidence_for_direct_send": 0,
+            },
+        }
     if mode == AUTOREPLY_MODE_MANUAL_TAKEOVER:
         return {"enabled": True, "send_enabled": False}
     raise ValueError(f"unsupported autoreply mode: {mode}")

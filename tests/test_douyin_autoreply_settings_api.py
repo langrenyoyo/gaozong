@@ -99,6 +99,7 @@ def _insert_settings(
     blocked_risk_flags: list[str] | None = None,
     customer_whitelist_open_ids: list[str] | None = None,
     conversation_whitelist_ids: list[str] | None = None,
+    direct_llm_policy: dict | None = None,
 ):
     db = TestSession()
     try:
@@ -119,6 +120,7 @@ def _insert_settings(
             max_replies_per_account_per_hour=5,
             min_interval_seconds=90,
             max_auto_replies_per_conversation_per_day=8,
+            direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
         )
         db.add(row)
         db.commit()
@@ -235,6 +237,13 @@ def test_get_settings_detail_cannot_cross_merchant_and_returns_existing_values()
 def test_put_settings_mode_switch_maps_to_existing_account_settings_independently():
     _insert_account(account_open_id="account-a")
     _insert_account(account_open_id="account-b")
+    _insert_settings(
+        account_open_id="account-a",
+        enabled=True,
+        send_enabled=False,
+        allowed_intents=["greeting"],
+        direct_llm_policy={"direct_llm_auto_send_enabled": False},
+    )
     _insert_settings(account_open_id="account-b", enabled=True, send_enabled=False)
 
     ai_response = _client().put("/douyin-autoreply/settings/account-a/mode", json={"mode": "ai_auto"})
@@ -247,6 +256,13 @@ def test_put_settings_mode_switch_maps_to_existing_account_settings_independentl
     assert ai_response.json()["data"]["mode"] == "ai_auto"
     assert ai_response.json()["data"]["enabled"] is True
     assert ai_response.json()["data"]["send_enabled"] is True
+    assert ai_response.json()["data"]["min_confidence"] == 0
+    assert ai_response.json()["data"]["require_rag"] is False
+    assert ai_response.json()["data"]["require_rag_sources"] is False
+    assert ai_response.json()["data"]["allowed_intents"] == []
+    assert ai_response.json()["data"]["blocked_risk_flags"] == []
+    assert ai_response.json()["data"]["direct_llm_policy"]["direct_llm_auto_send_enabled"] is True
+    assert ai_response.json()["data"]["direct_llm_policy"]["policy_level"] == "aggressive"
 
     assert manual_response.status_code == 200
     assert manual_response.json()["data"]["mode"] == "manual_takeover"
@@ -263,6 +279,9 @@ def test_put_settings_mode_switch_maps_to_existing_account_settings_independentl
         }
         assert rows["account-a"].enabled is True
         assert rows["account-a"].send_enabled is True
+        assert json.loads(rows["account-a"].allowed_intents_json) == []
+        assert json.loads(rows["account-a"].blocked_risk_flags_json) == []
+        assert json.loads(rows["account-a"].direct_llm_policy_json)["direct_llm_auto_send_enabled"] is True
         assert rows["account-b"].enabled is True
         assert rows["account-b"].send_enabled is False
     finally:

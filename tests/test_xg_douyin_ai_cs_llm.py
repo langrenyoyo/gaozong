@@ -593,8 +593,9 @@ def test_reply_suggestion_conversation_history_limits_total_prompt_length(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["auto_send"] is False
-    assert "llm_requested_auto_send" in data["risk_flags"]
+    assert data["auto_send"] is True
+    assert "llm_requested_auto_send" not in data["risk_flags"]
+    assert "llm_requested_auto_send_ignored" in data["warnings"]
 
     user_payload = json.loads(seen["messages"][1]["content"])
     history = user_payload["conversation_history"]
@@ -890,7 +891,7 @@ def test_direct_llm_general_intro_keeps_safe_generic_reply(tmp_path, monkeypatch
     data = response.json()
     assert data["intent"] == "service_general_intro"
     assert data["manual_required"] is False
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert data["risk_flags"] == []
     assert "具体车源会实时变化" in data["reply_text"]
     assert "加微信" not in data["reply_text"]
@@ -937,7 +938,7 @@ def test_direct_llm_general_intro_sanitizes_promise_copy(tmp_path, monkeypatch):
     data = response.json()
     assert data["intent"] == "service_general_intro"
     assert data["manual_required"] is False
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
     assert data["risk_flags"] == []
     assert "主要经营奔驰、宝马、奥迪等精品二手BBA车型" in data["reply_text"]
     assert "选车方向" in data["reply_text"]
@@ -2316,9 +2317,8 @@ def test_reply_suggestion_prompt_injection_requires_manual(tmp_path, monkeypatch
     assert data["auto_send"] is False
 
 
-def test_reply_suggestion_llm_requested_auto_send_is_forced_false(tmp_path, monkeypatch):
+def test_reply_suggestion_ignores_llm_auto_send_and_respects_disabled_policy(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
-    _seed_knowledge(client)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
 
     def fake_chat(self, messages):
@@ -2349,7 +2349,7 @@ def test_reply_suggestion_llm_requested_auto_send_is_forced_false(tmp_path, monk
             "tenant_id": "demo_tenant",
             "merchant_id": "demo_bba",
             "account_id": 1,
-            "latest_message": "我想了解奥迪A6",
+            "latest_message": "你好",
         },
     )
 
@@ -2357,7 +2357,67 @@ def test_reply_suggestion_llm_requested_auto_send_is_forced_false(tmp_path, monk
     data = response.json()
     assert data["reply_text"] == "可以自动回复"
     assert data["auto_send"] is False
-    assert "llm_requested_auto_send" in data["risk_flags"]
+    assert "llm_requested_auto_send" not in data["risk_flags"]
+    assert "llm_requested_auto_send_ignored" in data["warnings"]
+
+
+def test_bound_agent_direct_llm_enabled_policy_is_not_treated_as_config_fallback(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+
+    def fake_chat(self, messages):
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "您好，请问您想买车还是卖车？留个手机号，我按您的需求整理资料。",
+                    "intent": "confirm_lead",
+                    "lead_level": "low",
+                    "tags": ["greeting"],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.95,
+                    "auto_send": True,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "tenant-1",
+            "merchant_id": "merchant-1",
+            "account_id": "account-1",
+            "agent_id": "agent-1",
+            "agent_config": {
+                "agent_id": "agent-1",
+                "agent_name": "测试智能体",
+                "system_prompt": "自然回答客户问题，并引导客户留下手机号。",
+                "status": "active",
+                "rag_enabled": False,
+            },
+            "latest_message": "我想买车",
+            "direct_llm_policy": {
+                "direct_llm_auto_send_enabled": True,
+                "policy_level": "aggressive",
+                "min_confidence_for_direct_send": 0,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "confirm_lead"
+    assert data["auto_send"] is True
+    assert data["manual_required"] is False
+    assert "agent_config_fallback_auto_send_blocked" not in data["risk_flags"]
+    assert "llm_requested_auto_send" not in data["risk_flags"]
+    assert "llm_requested_auto_send_ignored" in data["warnings"]
 
 
 def test_direct_llm_without_policy_keeps_auto_send_false(tmp_path, monkeypatch):
@@ -2400,7 +2460,7 @@ def test_direct_llm_without_policy_keeps_auto_send_false(tmp_path, monkeypatch):
     data = response.json()
     assert data["manual_required"] is False
     assert data["risk_flags"] == []
-    assert data["auto_send"] is True
+    assert data["auto_send"] is False
 
 
 def test_direct_llm_standard_policy_allows_low_risk_auto_send(tmp_path, monkeypatch):

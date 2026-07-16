@@ -1028,14 +1028,9 @@ Milvus search 失败时继续 fallback 到 SQLite，日志包含 `fallback_reaso
 
 ### auto_send gate 收口
 
-本轮发现并修复一个正式 Agent fallback 缺口：带 `agent_config` 的正式 AI 客服链路在 RAG 未命中、分类为空或 `rag_enabled=false` 时会走 direct LLM fallback，旧逻辑可能返回 `auto_send=true`。现在 `reply_decision_service` 会在带 `agent_config` 的 direct fallback 响应上强制：
+正式链路的 `agent_config` 由 9000 在完成企业号归属、授权、智能体归属和绑定校验后注入，9100 不再把它视为降级配置。RAG 未命中、分类为空或 `rag_enabled=false` 时，直接模型回复是否成为候选由账号 `direct_llm_policy` 和 9000 后置门禁共同决定。
 
-1. `auto_send=false`
-2. `manual_required=true`
-3. `manual_required_reason=RAG未命中或关闭，需要人工确认`
-4. `risk_flags` 增加 `agent_config_fallback_auto_send_blocked`
-
-该收口不改变 9000 对外接口 schema，不改变 `/knowledge-training/ask` 和 `/feedback` schema，不改默认 sqlite 行为，也不放开任何真实发送链路。
+模型返回的 `auto_send` 不可信且不会直接控制发送；值为 true 时仅记录 `llm_requested_auto_send_ignored` 诊断。真实发送仍须通过 9000 的全局开关、灰度范围、账号设置、人工接管、频率、幂等、最新消息和发送上下文校验。
 
 ### 测试结果
 

@@ -356,11 +356,6 @@ def build_reply_suggestion(
         decision_version=DIRECT_LLM_DECISION_VERSION,
         fallback_reason=fallback_reason,
     )
-    direct_llm_response = _force_agent_config_fallback_auto_send_false(
-        direct_llm_response,
-        request=request,
-        conversation_id=conversation_id,
-    )
     if direct_llm_response.llm_used:
         return direct_llm_response
 
@@ -386,7 +381,6 @@ def build_reply_suggestion(
             conversation_history=request.conversation_history,
             customer_memory=request.customer_memory,
             rag_used=False,
-            llm_raw_auto_send=False,
             direct_llm_policy=request.direct_llm_policy,
             allow_phone_lead_capture=agent_phone_goal,
         )
@@ -432,7 +426,6 @@ def build_reply_suggestion(
         conversation_history=request.conversation_history,
         customer_memory=request.customer_memory,
         rag_used=False,
-        llm_raw_auto_send=False,
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
     )
@@ -815,13 +808,14 @@ def _build_llm_reply(
                 confidence=0.5,
             )
             retry_warnings.append("llm_retry_failed_used_agent_goal_fallback")
+    if decision.get("llm_raw_auto_send"):
+        retry_warnings.append("llm_requested_auto_send_ignored")
     decision = _apply_safety_postprocess(
         decision,
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
         customer_memory=request.customer_memory,
         rag_used=rag_used,
-        llm_raw_auto_send=decision.get("llm_raw_auto_send"),
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
     )
@@ -864,31 +858,6 @@ def _build_llm_reply(
         fallback_reason=fallback_reason,
         **_agent_response_fields(agent),
     )
-
-
-def _force_agent_config_fallback_auto_send_false(
-    response: ReplySuggestionResponse,
-    *,
-    request: ReplySuggestionRequest,
-    conversation_id: int | str,
-) -> ReplySuggestionResponse:
-    if request.agent_config is None or (response.auto_send is not True and response.manual_required is True):
-        return response
-    _logger.warning(
-        "reply_suggestion_direct_fallback_auto_send_blocked "
-        "tenant_id=%s merchant_id=%s conversation_id=%s agent_id=%s",
-        request.tenant_id,
-        request.merchant_id,
-        conversation_id,
-        request.agent_id,
-    )
-    response.auto_send = False
-    response.manual_required = True
-    response.manual_required_reason = response.manual_required_reason or "RAG未命中或关闭，需要人工确认"
-    response.risk_flags = _dedupe(
-        [*list(response.risk_flags or []), "agent_config_fallback_auto_send_blocked"]
-    )
-    return response
 
 
 def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks) -> list[dict]:
@@ -1326,7 +1295,6 @@ def _apply_safety_postprocess(
     *,
     latest_message: str,
     rag_used: bool,
-    llm_raw_auto_send: object,
     conversation_history: object = None,
     customer_memory: object = None,
     direct_llm_policy: object = None,
@@ -1344,9 +1312,6 @@ def _apply_safety_postprocess(
         and policy.get("specific_model_strategy") == "safe_clarify"
         and policy.get("policy_level") in {"standard", "aggressive"}
     )
-
-    if llm_raw_auto_send:
-        risk_flags.append("llm_requested_auto_send")
 
     if _contains_any(text, PROMPT_INJECTION_KEYWORDS):
         risk_flags.append("prompt_injection")
@@ -2109,6 +2074,8 @@ def _direct_llm_auto_send_allowed(
         return False
     if rag_used:
         return True
+    if direct_llm_policy.get("direct_llm_auto_send_enabled") is not True:
+        return False
     if any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags):
         return False
     return bool(str(decision.get("reply_text") or "").strip())

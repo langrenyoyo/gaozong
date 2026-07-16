@@ -186,6 +186,9 @@ gate 链（`app/services/douyin_autoreply_gate_service.py` 等）：
 4. 幂等去重（`already_sent`）；人工发送后标记 manual_takeover。
 5. 紧急停止（`POST /automation/emergency-stop`）。
 
+- 切换为“AI 托管”时会写入完整的直接模型回复启用策略，并清空历史意图白名单和风险白名单；切换为人工接管只关闭账号真实回复，不删除其他配置。
+- 9000 完成绑定校验后注入的 `agent_config` 是可信上下文，9100 不再因未命中知识而把它视为降级配置。模型返回的 `auto_send` 永远不直接控制发送，值为 true 时仅记录 `llm_requested_auto_send_ignored`；最终候选仍由账号策略、安全后处理和 9000 gate 计算。
+
 ### 8.3 回访（Phase 9，DONE_WITH_CONCERNS）
 
 - 回访提示词驱动"微信销售反馈 → 抖音回访"闭环已落地（配置/运行记录/审计接口 + 分层崩溃恢复 + 安全阻断）。
