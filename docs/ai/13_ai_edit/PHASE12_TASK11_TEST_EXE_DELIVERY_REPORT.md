@@ -1,7 +1,6 @@
 # Phase 12 Task 11 单入口测试 EXE 交付报告
 
-> **状态：** `BUILT_LOCAL_SMOKE_ONLY`
-> **阻断：** `test_endpoint_config_placeholder`
+> **状态：** `BUILT_FOR_CUSTOMER_TEST`
 > **交付物：** `小高AI系统测试版.exe`（仅此一个文件）
 > **执行窗口：** 基于 `b4779ae`（解除 Task 11 开发与构建门禁），使用 executing-plans 直接完成 Task 11-1~11-3，不设中间检查点、许可证审查、构建审批或发送审批。
 
@@ -10,12 +9,12 @@
 | 项 | 值 |
 |---|---|
 | EXE 路径 | `dist/phase12-task11/小高AI系统测试版.exe` |
-| 大小 | 248,602,640 字节（约 237 MB） |
-| SHA-256 | `707701B8145055FFD4EF385EBCA95497311B98C17A04D2ED583386FB092C2D40` |
+| 大小 | 248,982,387 字节（约 237 MB） |
+| SHA-256 | `173AF6C255E59DFC89517CC2C0E330FBE3FCB3D6B490FB1790133B8DF40578E0` |
 | 构建脚本 | `scripts/build_phase12_single_test_exe.ps1` |
 | 双 Python | Local Agent = Python 3.10（`demo_auto_wechat`），Worker = Python 3.11（`zws`） |
 | 随包 FFmpeg | Gyan 8.1.1-full_build（ffmpeg.exe / ffprobe.exe） |
-| 烘焙配置 | `phase12_test_config.json`（test_api_url / frontend_url / merchant_id，运行时不依赖环境变量） |
+| 烘焙配置 | `phase12_test_config.json`（test_api_url=`https://merchant.xiaogaoai.cn` / frontend_url=`https://merchant.xiaogaoai.cn/` / merchant_id=`m_nc_2bba00063cc13016`，运行时不依赖环境变量，已从 EXE CArchive 提取验证不含 example.com） |
 
 ## 2. 运行安全边界（计划 §2，全部保留）
 
@@ -76,11 +75,12 @@
 ## 5. 当前缺失能力（一期边界，未在 Task 11 范围）
 
 - 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
-- 测试 API / 前端 URL 为占位值（`https://test-api.example.com` / `https://test.example.com`），心跳上报与业务页面必然不可用；启动器没有运行时覆盖入口，因此当前 EXE 不能作为甲方业务测试件。
+- 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
+- 测试 API / 前端 URL 已为真实值（`https://merchant.xiaogaoai.cn` / `https://merchant.xiaogaoai.cn/`，商户 `m_nc_2bba00063cc13016`），烘焙进 EXE 经 CArchive 提取确认不含占位地址 example.com。
 - 不含安装器、自动更新、卸载器、系统服务（计划 §2 明确不新增）。
 - 本轮真实 smoke 在开发机完成，尚未在无 Python、无 FFmpeg、无源码的干净 Windows 电脑验证；EXE 设计为自包含，首次甲方测试需确认零安装启动。
 - **未进入 Phase 13、未做宝塔生产验证**（本轮硬约束）。
 
 ## 6. 结论
 
-`BUILT_LOCAL_SMOKE_ONLY` —— `小高AI系统测试版.exe` 已完成真实 PyInstaller + Worker + FFmpeg 本地 smoke，token 不入包、19000 回环鉴权保持开启、Worker 凭据隔离生效；但测试端点仍为占位地址。提供真实测试 API、前端地址和商户 ID 后必须重新构建并更新 SHA-256，方可标记 `BUILT_FOR_CUSTOMER_TEST`。
+`BUILT_FOR_CUSTOMER_TEST` —— `小高AI系统测试版.exe` 已用真实测试 API、前端地址与商户 ID 重新构建，烘焙配置经 CArchive 提取确认不含占位地址；EXE 内部 Local Agent 启动 / `/health` 200 / 19000 回环鉴权三态（MISSING/INVALID/correct）全部通过；token 不入包、19000 鉴权保持开启、Worker 凭据隔离生效。上一轮 88 项回归不再重跑（用户指令），仅执行启动器相关真实启动 smoke。
