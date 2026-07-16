@@ -151,7 +151,7 @@
 | 需求点 | 当前状态 | 证据 | 缺口/建议 |
 |---|---|---|---|
 | 商户管理（列表/新增/编辑/延期/充值/套餐发放/启停/重置密码） | **未实现** | `SuperMerchantManagement.tsx:23`「真实接口暂未接入」 | 后端模型/接口/前端全缺 |
-| 违禁词管理 | **未实现** | `SuperForbiddenWords.tsx:23` | 全缺 |
+| 违禁词管理 | **已实现** | `app/routers/forbidden_words.py`、`SuperForbiddenWords.tsx` 接通 `/admin/forbidden-words` | 后端词库只读 + 词条 CRUD + 启停；前端已挂载 |
 | 回访提示词管理 | **未实现** | `SuperFollowUpPrompts.tsx:23` | 全缺 |
 | AI 回复记录 | 部分实现 | `SuperAiReplyRecords.tsx`、9100 LLM log | 后端查询闭环待确认 |
 | 算力配置（套餐管理） | **已实现** | `SuperComputeConfig.tsx`（`88ea1e5`） | 唯一接入真实接口的超管页 |

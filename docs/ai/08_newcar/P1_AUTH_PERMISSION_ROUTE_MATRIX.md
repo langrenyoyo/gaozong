@@ -32,7 +32,7 @@
 | `auto_wechat:leads` | AI 小高线索 |
 | `auto_wechat:agent` | 小高 AI 微信助手 |
 | `auto_wechat:compute` | 小高算力 |
-| `auto_wechat:admin:forbidden_words` | 外部违禁词管理 |
+| `auto_wechat:admin:forbidden_words` | 违禁词管理（权限码由上游登记，管理接口与页面在 9000 本地实现） |
 | `auto_wechat:admin:accounts` | 外部账号管理 |
 | `auto_wechat:admin:ai_reply_records` | AI 回复记录 |
 | `auto_wechat:admin:compute_config` | 算力配置管理 |
@@ -57,8 +57,9 @@
 | 登录态 | `GET /auth/me` | 是 | `auto_wechat:use` + 本地商户绑定 | 统一恢复登录态和可信 `merchant_id` |
 | 抖音 AI 客服 | `/integrations/douyin-ai-cs/*` | 是 | `auto_wechat:douyin_ai_cs` | reply-suggestion、RAG documents/train、账号 agent 查询 |
 | 抖音企业号管理 | `/integrations/douyin/accounts/*` | 是 | `auto_wechat:douyin_ai_cs` | 账号列表、Agent 绑定、取消授权、删除 |
-| 抖音自动回复配置 | `/douyin-autoreply/settings/*` | 是 | `auto_wechat:douyin_ai_cs` | 配置、模式、托管相关接口仍保持 `auto_send=false` 边界 |
+| 抖音自动回复配置 | `/douyin-autoreply/settings/*` | 是 | `auto_wechat:douyin_ai_cs` | 配置、模式、托管相关接口；一期已放开自动发送灰度，是否自动发送由 env 总开关决定 |
 | AI 回复记录 | `/ai-reply-decision-logs/*` | 是 | `auto_wechat:douyin_ai_cs` | 商户侧只读记录 |
+| 违禁词管理 | `/admin/forbidden-words`、`/admin/forbidden-word-libraries` | 是 | `auto_wechat:admin:forbidden_words` | 9000 本地实现：词库只读 + 词条 CRUD + 启停；前端超管页已挂载 |
 | 自动回复运行记录 | `/ai-auto-reply-runs/*` | 是 | `auto_wechat:douyin_ai_cs` | 商户侧运行记录 |
 | AI 小高线索 | `/leads/*` | 是 | `auto_wechat:leads` | 通过 `lead_management_service.require_leads_context()` 校验权限和商户上下文 |
 | 报表 | `/reports/summary` | 是 | `auto_wechat:leads` | 同样复用 `require_leads_context()` |

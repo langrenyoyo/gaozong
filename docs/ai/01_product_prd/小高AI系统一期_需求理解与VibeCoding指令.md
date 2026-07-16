@@ -243,7 +243,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 - 唯一跨服务对接：上游超管"充值/发放套餐"调 auto_wechat `admin recharge/grant`。
 
 ### 3.2 违禁词管理（9000，全新）
-- 权限码 `auto_wechat:admin:forbidden_words` 已定义，前端占位、后端未实现（used-car 有部分代码可参考）。
+- 权限码 `auto_wechat:admin:forbidden_words` 已定义；后端已实现（`app/routers/forbidden_words.py`：词库只读 + 词条 CRUD + 启停），前端超管页已挂载并接通真实 API（`/admin/forbidden-words`）。
 - 3 类词库**预置固定**：二手车销售基础违禁词 / 金融方案合规词库 / 车况承诺风险词。管理员只维护词列表。
 - **全局级**，所有商户共享。
 - 词库结构：**违禁词 → 安全词，每词单独映射**。

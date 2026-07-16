@@ -1,5 +1,7 @@
 # P1-AUTOREPLY-ADMIN-ROLLOUT-CONSOLE-DESIGN
 
+> **当前状态注记（2026-07-16）**：一期已放开自动发送灰度。`ALLOW_FULL_ROLLOUT`、env 账号/客户/会话白名单、数据库灰度门禁（`evaluate_db_rollout_gate`）均不再阻断真实发送；是否自动发送只由 env `DOUYIN_AUTO_REPLY_ENABLED` + `DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED` 决定，数据库灰度配置与白名单仅保留为诊断快照。超管后台"自动回复灰度"入口已在前端侧栏隐藏（页面/路由/权限码保留不删）。本文下述控制台设计为历史背景，灰度阻断行为以 `docs/ai/05_PROJECT_CONTEXT.md` 第 8.2 节当前事实为准。
+
 ## 1. 为什么需要管理员控制台
 
 当前抖音 AI 自动回复真实发送候选链路由多层配置共同决定：

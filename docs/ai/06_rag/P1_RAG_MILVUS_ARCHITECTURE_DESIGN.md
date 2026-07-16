@@ -1030,7 +1030,7 @@ Milvus search 失败时继续 fallback 到 SQLite，日志包含 `fallback_reaso
 
 正式链路的 `agent_config` 由 9000 在完成企业号归属、授权、智能体归属和绑定校验后注入，9100 不再把它视为降级配置。RAG 未命中、分类为空或 `rag_enabled=false` 时，直接模型回复是否成为候选由账号 `direct_llm_policy` 和 9000 后置门禁共同决定。
 
-模型返回的 `auto_send` 不可信且不会直接控制发送；值为 true 时仅记录 `llm_requested_auto_send_ignored` 诊断。真实发送仍须通过 9000 的全局开关、灰度范围、账号设置、人工接管、频率、幂等、最新消息和发送上下文校验。
+模型返回的 `auto_send` 不可信且不会直接控制发送；值为 true 时仅记录 `llm_requested_auto_send_ignored` 诊断。真实发送仍须通过 9000 的全局开关（env `DOUYIN_AUTO_REPLY_ENABLED` + `DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED`）、账号设置、人工接管、频率、幂等、最新消息和发送上下文校验。一期已放开自动发送灰度，env 白名单与数据库 rollout/whitelist 不再阻断真实发送（详见 `docs/ai/05_PROJECT_CONTEXT.md` 第 8.2 节）。
 
 ### 测试结果
 

@@ -1,5 +1,7 @@
 # P1-NEWCAR-ADMIN-PERMISSION-E2E-VERIFY-1
 
+> **状态注记（2026-07-16）**：本文为该轮 E2E 验证的历史记录。两处结论已变更：(1) `auto_wechat:admin:forbidden_words` 的违禁词管理已改为 9000 本地功能（前端页已挂载、接通 `/admin/forbidden-words`），不再跳"NewCar-owned"提示页；(2) "自动回复灰度"控制台入口已在前端隐藏，自动发送灰度门禁已放开。当前事实以 `docs/ai/05_PROJECT_CONTEXT.md` 第 8.2 节和 `docs/ai/08_newcar/P1_AUTH_PERMISSION_ROUTE_MATRIX.md` 为准。
+
 ## 1. 任务目标
 
 验证 NewCarProject 新增管理员权限码后，auto_wechat 能识别 `auto_wechat:admin:autoreply` 并放行管理员自动回复灰度控制台。

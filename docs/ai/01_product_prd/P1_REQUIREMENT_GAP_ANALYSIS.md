@@ -166,7 +166,8 @@ cb19393 refactor: 统一抖音 OpenAPI client 和安全错误处理
 | 小高算力 | 余额不足拦截 | 未实现 | `app/services/compute_service.py` | 注释明确一期不做余额不足拦截，可负余额 | P2 |
 | 小高算力 | usage 记账接口 | 已实现 | `/internal/compute/usage`；`compute_usage_client.py` | 9100 LLM 成功后可上报，失败不影响回复 | P1 |
 | 超级管理员 | 商户管理、新增/编辑、延期、启停、重置密码 | 未实现 | `frontend/src/pages/SuperMerchantManagement.tsx` | 页面提示真实接口暂未接入 | P1 |
-| 超级管理员 | 违禁词、回访提示词 | 未实现 | `SuperForbiddenWords.tsx`；`SuperFollowUpPrompts.tsx` | 页面提示真实接口暂未接入 | P2 |
+| 超级管理员 | 违禁词 | 已实现 | `app/routers/forbidden_words.py`、`SuperForbiddenWords.tsx` 接通 `/admin/forbidden-words` | 后端词库只读+词条 CRUD+启停，前端已挂载 | P2 |
+| 超级管理员 | 回访提示词 | 未实现 | `SuperFollowUpPrompts.tsx` | 页面提示真实接口暂未接入 | P2 |
 | 超级管理员 | AI回复记录 | 部分实现 | `SuperAiReplyRecords.tsx`；9100 LLM log | 前端有页面，后端查询闭环需继续确认 | P2 |
 | 超级管理员 | 算力配置 | 部分实现 | `SuperComputeConfig.tsx`；`app/routers/compute.py` | 后端有，前端未接 | P1 |
 | 超级管理员 | 管理员账号管理 | 部分实现/未实现 | `SuperAdminAccounts.tsx` | 前端页面存在，真实后端不足 | P2 |
