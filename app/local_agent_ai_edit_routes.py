@@ -28,6 +28,30 @@ from app.local_agent_ai_edit_supervisor import AiEditSupervisor, LocalAiEditJob
 logger = logging.getLogger(__name__)
 
 
+def _probe_duration(filepath: str) -> float:
+    """用 ffprobe 获取视频实际时长（秒）。
+
+    成功返回真实时长；ffprobe 不可用或非视频文件时回退 10.0（保守默认，非真实媒体场景）。
+    ponytail: subprocess 直接调 ffprobe，不引入新依赖。
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", filepath],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(result.stdout)
+        fmt = data.get("format", {}) if isinstance(data, dict) else {}
+        duration = float(fmt.get("duration", 0) or 0)
+        if duration > 0:
+            return duration
+    except Exception:
+        pass
+    # ffprobe 不可用 / 非视频文件 → 保守默认（ponytail: 真实媒体场景 ffprobe 必成功）
+    return 10.0
+
+
 class Nine000ControlClient(Protocol):
     """9000 控制面客户端协议（§5：19000 下发令牌 + 终态回写 + 元数据同步）。
 
@@ -39,8 +63,13 @@ class Nine000ControlClient(Protocol):
         self, *, merchant_id: str, job_id: str, template_key: str, materials: list
     ) -> dict: ...
 
-    def agent_retry_job(self, *, merchant_id: str, job_id: str) -> dict:
-        """重试：9000 推进 attempt + 轮换令牌，返回新 execution_token_hash + attempt_count。"""
+    def agent_retry_job(
+        self, *, merchant_id: str, job_id: str, expected_attempt: int | None = None
+    ) -> dict:
+        """重试：9000 推进 attempt + 轮换令牌，返回新 execution_token_hash + attempt_count。
+
+        FIX4-1：expected_attempt 幂等——retry_preparing 崩溃恢复时传旧 attempt 防重复推进。
+        """
         ...
 
     def update_job_status(
@@ -352,12 +381,14 @@ def create_ai_edit_router(
                 dst_path = job_dir / dst_rel
                 import shutil
                 shutil.copy2(str(src_path), str(dst_path))
+                # FIX4-2：用 ffprobe 探测实际时长，替换写死 10.0
+                actual_duration = _probe_duration(str(src_path))
                 manifest_materials.append({
                     "material_id": m.material_id,
                     "role": m.role,
                     "relative_path": dst_rel,
                     "source_sha256": _material_sha256(mroot, m.material_id),
-                    "duration_seconds": 10.0,
+                    "duration_seconds": actual_duration,
                     # FIX3-2：首尾时间写入 Worker manifest，供规划/渲染读取
                     "source_start": m.source_start,
                     "source_end": m.source_end,

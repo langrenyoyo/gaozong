@@ -86,6 +86,8 @@ def _render(
     最终 scale 到目标分辨率，libx264 + aac。
     """
     width, height = _PROFILE_DIMS[profile]
+    # FIX4-2：检测原本有 keep 但全部区间无效 → 报错，禁止退化为整片成功
+    had_keep = any(op.get("action") == "keep" for op in (plan_operations or []))
     keep_ops = [
         op for op in (plan_operations or [])
         if op.get("action") == "keep" and op.get("end_seconds", 0) > op.get("start_seconds", 0)
@@ -119,7 +121,10 @@ def _render(
             str(output_path),
         ]
     else:
-        # 退化为缩放完整输入（保守）
+        # FIX4-2：原本有 keep 区间但全部无效（start>=end）→ 报错，禁止退化为整片
+        if had_keep:
+            raise _StageFailure(stage, "INVALID_KEEP_RANGE")
+        # 无 keep 区间 → 退化为缩放完整输入（保守，一期无 plan 时的默认行为）
         cmd = [
             deps.ffmpeg_binary, "-y",
             "-i", str(input_path),

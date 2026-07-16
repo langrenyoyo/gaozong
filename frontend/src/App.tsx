@@ -318,6 +318,7 @@ const App = () => {
     void restoreAuth();
 
     const onAuthExpired = () => {
+      clearAllAgentTokens();  // FIX4-3：鉴权过期清理 Local Agent token，防残留
       if (redirectToNewCarLogin({ message: "登录已过期，正在重新登录…" })) {
         return;
       }
@@ -377,6 +378,7 @@ const App = () => {
   const handleRelogin = () => {
     clearExternalToken();
     clearNewCarRedirectState();
+    clearAllAgentTokens();  // FIX4-3：重新登录清理 Local Agent token，防跨商户残留
     setUser(null);
     setAuthError(null);
     void redirectToNewCarLogin({ message: "正在前往统一登录，请稍候…", delayMs: 0, saveCurrentPath: false });

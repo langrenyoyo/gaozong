@@ -315,8 +315,18 @@ def cancel_job(db: Session, *, job_id: str, merchant_id: str) -> AiEditJob:
     return job
 
 
-def retry_job(db: Session, *, job_id: str, merchant_id: str) -> AiEditJob:
+def retry_job(
+    db: Session, *, job_id: str, merchant_id: str, expected_attempt: int | None = None
+) -> AiEditJob:
+    """重试任务：推进 attempt + 轮换令牌。
+
+    expected_attempt 用于幂等调用：若当前 attempt 已 >= expected_attempt（retry_preparing
+    崩溃恢复场景，9000 已推进但本地未持久化新令牌），直接返回当前令牌不重复推进。
+    """
     job = _get_job_for_merchant(db, job_id=job_id, merchant_id=merchant_id)
+    # FIX4-1：幂等——retry_preparing 崩溃恢复时 expected_attempt 已到达，返回当前令牌
+    if expected_attempt is not None and (job.attempt_count or 0) >= expected_attempt:
+        return job
     next_attempt = (job.attempt_count or 0) + 1
     job.attempt_count = next_attempt
     job.execution_token_hash = _new_execution_token_hash(job_id, merchant_id, next_attempt)

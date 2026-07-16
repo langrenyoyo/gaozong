@@ -28,27 +28,12 @@ interface CachedAgentToken {
 }
 
 /** 获取本机 Local Agent token：先 sessionStorage（绑定 merchantId），无则向 9000 申请。
- * merchantId 为当前登录商户；与缓存不一致（A 退出 B 登录）自动不复用旧 token。 */
-export async function ensureAgentToken(merchantId?: string): Promise<string> {
-  // FIX3-1：遍历现有缓存，若属于其他商户则视为过期（防残留）
-  if (merchantId) {
-    const cached = readCachedToken(merchantId);
-    if (cached) return cached.token;
-    // 清理其他商户的残留 token（A 退出 B 登录场景）
-    clearAllAgentTokens();
-  } else {
-    // 无 merchantId（兼容）：取任意缓存或申请新的
-    const anyKey = Object.keys(sessionStorage).find((k) => k.startsWith(AGENT_TOKEN_STORAGE_PREFIX));
-    if (anyKey) {
-      try {
-        const any = JSON.parse(sessionStorage.getItem(anyKey) || "{}") as CachedAgentToken;
-        if (any.token) return any.token;
-      } catch {
-        // 损坏则清
-        clearAllAgentTokens();
-      }
-    }
-  }
+ * FIX4-3：merchantId 必填，移除无值任取缓存的误用入口。 */
+export async function ensureAgentToken(merchantId: string): Promise<string> {
+  const cached = readCachedToken(merchantId);
+  if (cached) return cached.token;
+  // 清理其他商户的残留 token（A 退出 B 登录场景）
+  clearAllAgentTokens();
   const resp = await fetchAiEditAgentToken();
   const cached: CachedAgentToken = { token: resp.token, merchant_id: resp.merchant_id };
   sessionStorage.setItem(tokenStorageKey(resp.merchant_id), JSON.stringify(cached));
@@ -68,13 +53,9 @@ function readCachedToken(merchantId: string): CachedAgentToken | null {
   return null;
 }
 
-/** 清除当前商户缓存的 token（401 时重试获取）。 */
-export function clearAgentToken(merchantId?: string): void {
-  if (merchantId) {
-    sessionStorage.removeItem(tokenStorageKey(merchantId));
-  } else {
-    clearAllAgentTokens();
-  }
+/** 清除当前商户缓存的 token（401 时重试获取）。FIX4-3：merchantId 必填。 */
+export function clearAgentToken(merchantId: string): void {
+  sessionStorage.removeItem(tokenStorageKey(merchantId));
 }
 
 /** 清除所有商户的 Local Agent token 缓存（退出登录时调用，FIX3-1）。 */
@@ -109,7 +90,7 @@ interface LocalAgentEnvelope<T> {
   message: string;
 }
 
-async function requestLocal<T>(path: string, init?: RequestInit, merchantId?: string): Promise<T> {
+async function requestLocal<T>(path: string, init: RequestInit | undefined, merchantId: string): Promise<T> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
   // FIX2-1/FIX3-1：请求带 X-Local-Agent-Token（绑定 merchantId，防跨商户残留）
   const token = await ensureAgentToken(merchantId);
@@ -146,7 +127,7 @@ async function requestLocal<T>(path: string, init?: RequestInit, merchantId?: st
 }
 
 /** 列本机素材（按当前 token 商户隔离）。 */
-export async function fetchLocalMaterials(merchantId?: string): Promise<{
+export async function fetchLocalMaterials(merchantId: string): Promise<{
   total: number;
   items: LocalAiEditMaterialItem[];
 }> {
@@ -157,7 +138,7 @@ export async function fetchLocalMaterials(merchantId?: string): Promise<{
 export async function importLocalMaterial(
   file: File,
   materialId: string,
-  merchantId?: string,
+  merchantId: string,
 ): Promise<LocalAiEditMaterial> {
   const base = LOCAL_AGENT_BASE_URL || LOCAL_AI_EDIT_BASE_URL;
   // FIX2-1/FIX3-1：带 X-Local-Agent-Token（绑定 merchantId）
@@ -200,7 +181,7 @@ export async function importLocalMaterial(
 }
 
 /** 删除本机素材（进 7 天回收站）。 */
-export async function deleteLocalMaterial(materialId: string, merchantId?: string): Promise<void> {
+export async function deleteLocalMaterial(materialId: string, merchantId: string): Promise<void> {
   await requestLocal(`/agent/ai-edit/materials/${encodeURIComponent(materialId)}`, {
     method: "DELETE",
   }, merchantId);
@@ -216,7 +197,7 @@ export async function createLocalJob(payload: {
     source_start?: number;
     source_end?: number;
   }[];
-}, merchantId?: string): Promise<{ job_id: string; status: string }> {
+}, merchantId: string): Promise<{ job_id: string; status: string }> {
   return requestLocal("/agent/ai-edit/jobs", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -224,7 +205,7 @@ export async function createLocalJob(payload: {
 }
 
 /** 取消任务（终止 Worker 进程树）。 */
-export async function cancelLocalJob(jobId: string, merchantId?: string): Promise<{ job_id: string; status: string }> {
+export async function cancelLocalJob(jobId: string, merchantId: string): Promise<{ job_id: string; status: string }> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}/cancel`, {
     method: "POST",
   }, merchantId);
@@ -233,7 +214,7 @@ export async function cancelLocalJob(jobId: string, merchantId?: string): Promis
 /** 重试任务（19000 协调：调 9000 agent-retry 推进 attempt + 重新入队）。 */
 export async function retryLocalJob(
   jobId: string,
-  merchantId?: string,
+  merchantId: string,
 ): Promise<{ job_id: string; status: string; attempt_count: number }> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: "POST",
@@ -241,11 +222,11 @@ export async function retryLocalJob(
 }
 
 /** 查询任务状态（商户隔离）。 */
-export async function fetchLocalJob(jobId: string, merchantId?: string): Promise<Record<string, unknown>> {
+export async function fetchLocalJob(jobId: string, merchantId: string): Promise<Record<string, unknown>> {
   return requestLocal(`/agent/ai-edit/jobs/${encodeURIComponent(jobId)}`, { method: "GET" }, merchantId);
 }
 
 /** 本机队列状态（按当前 token 商户过滤）。 */
-export async function fetchLocalAiEditStatus(merchantId?: string): Promise<LocalAiEditStatus> {
+export async function fetchLocalAiEditStatus(merchantId: string): Promise<LocalAiEditStatus> {
   return requestLocal("/agent/ai-edit/status", { method: "GET" }, merchantId);
 }

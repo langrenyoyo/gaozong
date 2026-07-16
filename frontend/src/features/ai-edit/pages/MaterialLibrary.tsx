@@ -54,7 +54,7 @@ function statusBadge(status: string | null | undefined): { label: string; classN
   return { label: "未知状态", className: "text-slate-600 bg-slate-100" };
 }
 
-export default function MaterialLibrary({ merchantId }: { merchantId?: string }) {
+export default function MaterialLibrary({ merchantId }: { merchantId: string }) {
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

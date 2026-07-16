@@ -395,16 +395,27 @@ def agent_create_job(
     })
 
 
+class AgentRetryRequest(BaseModel):
+    """FIX4-1：agent-retry 幂等请求，expected_attempt 用于崩溃恢复场景。"""
+    model_config = {"extra": "forbid"}
+
+    expected_attempt: int | None = Field(None, ge=0, description="若当前 attempt 已 >= 此值则幂等返回")
+
+
 @router.post("/jobs/{job_id}/agent-retry")
 def agent_retry_job(
     job_id: str,
+    payload: AgentRetryRequest = AgentRetryRequest(),
     db: Session = Depends(get_db),
     agent: LocalAgentAuthContext = Depends(require_local_agent_context),
 ):
     """19000 Local Agent 重试任务：推进 attempt + 轮换令牌，返回新令牌供回写。
 
     唯一重试顺序：前端→19000→9000 agent-retry；禁止前端直接调 9000 /retry 再调 19000
-    造成令牌分叉。retry_job 复用既有逻辑（attempt+1、令牌轮换、清失败码）。
+    造成令牌分叉。
+
+    FIX4-1：expected_attempt 幂等——retry_preparing 崩溃恢复时传旧 attempt，
+    若 9000 已推进则直接返回当前令牌不重复推进。
     """
     if not agent.merchant_id:
         raise HTTPException(
@@ -412,7 +423,10 @@ def agent_retry_job(
             detail={"code": "LOCAL_AGENT_NO_MERCHANT", "message": "Local Agent token 未映射商户"},
         )
     try:
-        job = svc.retry_job(db, job_id=job_id, merchant_id=agent.merchant_id)
+        job = svc.retry_job(
+            db, job_id=job_id, merchant_id=agent.merchant_id,
+            expected_attempt=payload.expected_attempt,
+        )
     except svc.AiEditNotFound:
         raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
     db.commit()

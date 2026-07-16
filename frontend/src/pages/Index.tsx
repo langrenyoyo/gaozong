@@ -839,9 +839,9 @@ export default function Index({
         ) : isComputeNav ? (
           <ComputeCenter tabs={computeTabs} />
         ) : isAiEditMaterialsNav ? (
-          <MaterialLibrary merchantId={user?.merchantId || undefined} />
+          <MaterialLibrary merchantId={user?.merchantId ?? ""} />
         ) : isAiEditEditorNav ? (
-          <AiVideoEditor merchantId={user?.merchantId || undefined} />
+          <AiVideoEditor merchantId={user?.merchantId ?? ""} />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">

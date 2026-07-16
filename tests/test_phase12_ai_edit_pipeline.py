@@ -87,7 +87,7 @@ def _fake_deps(tmp_path: Path, *, stabilize_fail: bool = False) -> PipelineDeps:
         return {"transcript_segments": [{"asset_id": "mat-1", "start": 0.0, "end": 10.0, "text": "测试口播"}]}
 
     def fake_plan(manifest, analysis, task_root):
-        return {"operations": [{"material_id": "mat-1", "start": 0.0, "end": 10.0, "action": "keep"}]}
+        return {"operations": [{"material_id": "mat-1", "start_seconds": 0.0, "end_seconds": 10.0, "action": "keep"}]}
 
     def fake_stabilize(src, **kw):
         if stabilize_fail:

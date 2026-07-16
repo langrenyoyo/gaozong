@@ -136,6 +136,8 @@ def _build_default_deps() -> "PipelineDeps":
 
     def _plan(manifest, analysis, task_root):
         # 一期保守规划：keep 主素材区间；若有 source_start/end 则按此裁剪（FIX3-2）
+        # FIX4-2：duration_seconds 现为 ffprobe 实际时长；区间校验由 pipeline._render 执行，
+        # 无效区间（start>=end 或越界）会导致 INVALID_KEEP_RANGE 而非退化为整片
         ops = []
         for m in manifest.materials:
             if m.role == "main":

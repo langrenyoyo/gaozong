@@ -321,15 +321,20 @@ class AiEditSupervisor:
         with self._lock:
             self._processes[_task_key(merchant_id, job_id)] = process
 
-    def recover(self) -> int:
-        """重启恢复：跳过终态与 cancel_requested，重新入队 running/queued。
+    def recover(self) -> dict:
+        """重启恢复：跳过终态，重新入队 running/queued/cancel_requested。
 
         FIX1-3：恢复 execution_token_hash + attempt_count 到 LocalAiEditJob（否则回写缺凭证）。
         FIX1-4：对终态但 pending_writeback=True 的任务，触发 on_job_terminal 补偿回写
         （有界 _MAX_WRITEBACK_ATTEMPTS 次），避免 19000 succeeded/9000 queued 永久分叉。
+
+        FIX4-1：retry_preparing 任务不直接入队（磁盘仍是旧令牌，执行完必被 9000 拒），
+        收集到 retry_pending 列表供调用方用 expected_attempt 幂等重取令牌后 requeue。
+        返回值 {"recovered": int, "retry_pending": [(merchant_id, job_id, old_attempt), ...]}
         """
         recovered = 0
         pending: list[tuple[LocalAiEditJob, str]] = []
+        retry_pending: list[tuple[str, str, int]] = []  # (merchant_id, job_id, old_attempt)
         with self._lock:
             for key, state in list(self._job_states.items()):
                 if state.get("status") in _SKIP_RECOVER_STATUSES:
@@ -358,6 +363,26 @@ class AiEditSupervisor:
                                 writeback_attempts=attempts + 1,
                             )
                     continue
+                # FIX4-1：retry_preparing 不直接入队——磁盘旧令牌执行必被 9000 拒，
+                # 收集到 retry_pending 供调用方用 expected_attempt 幂等重取令牌后 requeue
+                if state.get("status") == "retry_preparing":
+                    old_attempt = int(state.get("attempt_count", 0) or 0)
+                    retry_pending.append((
+                        state.get("merchant_id", ""),
+                        state.get("job_id", ""),
+                        old_attempt,
+                    ))
+                    # 恢复到 claim 前状态（queued），避免卡在 retry_preparing
+                    self._persist_job_state(
+                        key, status="queued",
+                        attempt_id=state.get("attempt_id", ""),
+                        manifest_path=state.get("manifest_path", ""),
+                        merchant_id=state.get("merchant_id", ""),
+                        job_id=state.get("job_id", ""),
+                        execution_token_hash=state.get("execution_token_hash", ""),
+                        attempt_count=old_attempt,
+                    )
+                    continue
                 job = LocalAiEditJob(
                     job_id=state.get("job_id", ""),
                     attempt_id=state.get("attempt_id", ""),
@@ -369,8 +394,6 @@ class AiEditSupervisor:
                 # FIX2-4：cancel_requested 恢复时把 key 加入 _cancelled，drain 归一 cancelled + 回写
                 if state.get("status") == "cancel_requested":
                     self._cancelled.add(key)
-                # FIX3-3：retry_preparing 恢复时作为 queued 重新入队（令牌可能已被 9000 推进，
-                # 回写若 409 则 on_job_terminal 记日志，最终由 pending_writeback 补偿或人工）
                 self._queue.append(job)
                 self._status.total_enqueued += 1
                 self._status.queued_count += 1
@@ -380,7 +403,7 @@ class AiEditSupervisor:
         # 补偿待回写（锁外触发回调，避免持锁调 HTTP）
         for job, status in pending:
             self._fire_terminal(job, status)
-        return recovered
+        return {"recovered": recovered, "retry_pending": retry_pending}
 
     def get_job_state(self, *, merchant_id: str, job_id: str) -> dict | None:
         """查询任务状态（商户隔离：merchant_id 不匹配返回 None）。"""

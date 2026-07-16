@@ -2828,9 +2828,12 @@ def create_local_agent_app(
                         raise RuntimeError(f"agent_create_failed:{resp.get('status')}")
                     return resp["json"]["data"]
 
-                def agent_retry_job(self, *, merchant_id, job_id):
+                def agent_retry_job(self, *, merchant_id, job_id, expected_attempt=None):
                     url = f"{server_url.rstrip('/')}/ai-edit/jobs/{job_id}/agent-retry"
-                    resp = _http_post_json(url, {})
+                    body = {}
+                    if expected_attempt is not None:
+                        body["expected_attempt"] = expected_attempt
+                    resp = _http_post_json(url, body)
                     if not resp.get("ok"):
                         raise RuntimeError(f"agent_retry_failed:{resp.get('status')}")
                     return resp["json"]["data"]
@@ -2989,9 +2992,35 @@ def create_local_agent_app(
             on_job_terminal=_on_job_terminal,
         )
         ai_edit_supervisor.start()
-        recovered = ai_edit_supervisor.recover()
+        recover_result = ai_edit_supervisor.recover()
+        recovered = recover_result.get("recovered", 0) if isinstance(recover_result, dict) else recover_result
         if recovered:
             logger.info("ai_edit supervisor stage=recover requeued=%s", recovered)
+        # FIX4-1：retry_preparing 崩溃恢复——磁盘旧令牌执行必被 9000 拒，
+        # 用 expected_attempt 幂等重取当前令牌后 requeue
+        retry_pending = recover_result.get("retry_pending", []) if isinstance(recover_result, dict) else []
+        for mid, jid, old_attempt in retry_pending:
+            if nine000_client is None:
+                logger.warning(
+                    "ai_edit supervisor stage=recover_retry_skipped job_id=%s reason=no_nine000_client", jid)
+                continue
+            try:
+                retried = nine000_client.agent_retry_job(
+                    merchant_id=mid, job_id=jid, expected_attempt=old_attempt,
+                )
+                new_token = str(retried.get("execution_token_hash", ""))
+                new_attempt = int(retried.get("attempt_count", 0))
+                new_attempt_id = f"att-{jid}-{new_attempt}"
+                ai_edit_supervisor.requeue(
+                    merchant_id=mid, job_id=jid, attempt_id=new_attempt_id,
+                    execution_token_hash=new_token, attempt_count=new_attempt,
+                )
+                logger.info(
+                    "ai_edit supervisor stage=recover_retry job_id=%s old_attempt=%s new_attempt=%s",
+                    jid, old_attempt, new_attempt)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ai_edit supervisor stage=recover_retry_failed job_id=%s error=%s", jid, exc)
         app.include_router(create_ai_edit_router(
             supervisor=ai_edit_supervisor, storage_root=ai_edit_storage_root,
             work_root=ai_edit_work_root, nine000_client=nine000_client,

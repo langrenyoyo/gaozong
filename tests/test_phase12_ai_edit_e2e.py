@@ -748,3 +748,130 @@ def test_e2e_retry_concurrent_claim_prevents_double(tmp_path):
     # 回退后可再次 claim
     sup.revert_retry_claim(merchant_id="m1", job_id="job-1", snapshot=snapshot)
     assert sup.claim_retry(merchant_id="m1", job_id="job-1") is not None
+
+
+def test_e2e_agent_retry_idempotent_with_expected_attempt(tmp_path):
+    """FIX4-1：9000 agent-retry 幂等——expected_attempt 已达时直接返回当前令牌不重复推进。"""
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+    assert c9.get("/ai-edit/jobs/job-1").json()["data"]["status"] == "succeeded"
+    # 首次 retry：attempt 0→1
+    r1 = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                 headers={"X-Local-Agent-Token": "tok-1"}, json={})
+    assert r1.status_code == 200
+    assert r1.json()["data"]["attempt_count"] == 1
+    # 幂等 retry：expected_attempt=1，当前 attempt=1 → 直接返回，不推进到 2
+    r2 = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                 headers={"X-Local-Agent-Token": "tok-1"},
+                 json={"expected_attempt": 1})
+    assert r2.status_code == 200
+    assert r2.json()["data"]["attempt_count"] == 1, "幂等调用不应推进 attempt"
+    # expected_attempt=0，当前 attempt=1（已超过）→ 幂等返回 1
+    r3 = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                 headers={"X-Local-Agent-Token": "tok-1"},
+                 json={"expected_attempt": 0})
+    assert r3.status_code == 200
+    assert r3.json()["data"]["attempt_count"] == 1, "已超过 expected_attempt，幂等返回当前"
+    # 不带 expected_attempt → 正常推进到 2
+    r4 = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                 headers={"X-Local-Agent-Token": "tok-1"}, json={})
+    assert r4.status_code == 200
+    assert r4.json()["data"]["attempt_count"] == 2
+
+
+def test_e2e_retry_preparing_recover_gets_new_token(tmp_path):
+    """FIX4-1：retry_preparing 崩溃恢复——recover 收集 retry_pending，
+    调用方用 expected_attempt 幂等重取令牌后 requeue，Worker 用新令牌回写成功。"""
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+    # 模拟 retry_preparing 崩溃：claim_retry → agent_retry_job 成功 → 进程退出（不 requeue）
+    snapshot = sup.claim_retry(merchant_id="m1", job_id="job-1")
+    assert snapshot is not None
+    assert snapshot["status"] == "succeeded"
+    # 9000 agent-retry 推进 attempt 0→1
+    r = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                headers={"X-Local-Agent-Token": "tok-1"}, json={})
+    assert r.status_code == 200
+    assert r.json()["data"]["attempt_count"] == 1
+    new_token_9000 = r.json()["data"]["execution_token_hash"]
+    # 模拟进程退出：不调 requeue，磁盘仍是旧令牌（attempt=0）
+    # 重启 supervisor
+    sup2 = AiEditSupervisor(
+        work_root=sup.work_root,
+        executor=lambda j: {"status": "succeeded"},
+    )
+    result = sup2.recover()
+    # recover 不直接入队 retry_preparing，而是收集到 retry_pending
+    assert result["recovered"] == 0, "retry_preparing 不应计入 recovered"
+    assert len(result["retry_pending"]) == 1
+    mid, jid, old_attempt = result["retry_pending"][0]
+    assert mid == "m1"
+    assert jid == "job-1"
+    assert old_attempt == 0
+    # 调用方用 expected_attempt=0 幂等重取令牌（9000 已推进到 1，幂等返回当前令牌）
+    r2 = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                 headers={"X-Local-Agent-Token": "tok-1"},
+                 json={"expected_attempt": 0})
+    assert r2.status_code == 200
+    recovered_token = r2.json()["data"]["execution_token_hash"]
+    recovered_attempt = r2.json()["data"]["attempt_count"]
+    assert recovered_attempt == 1, "幂等应返回当前 attempt=1"
+    assert recovered_token == new_token_9000
+    # requeue 用新令牌入队
+    requeued = sup2.requeue(
+        merchant_id="m1", job_id="job-1",
+        attempt_id=f"att-job-1-{recovered_attempt}",
+        execution_token_hash=recovered_token,
+        attempt_count=recovered_attempt,
+    )
+    assert requeued
+    sup2.drain()
+    # 本地状态应为 succeeded（用新令牌执行成功）
+    state = sup2.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state is not None
+    assert state["status"] == "succeeded"
+    assert state["execution_token_hash"] == recovered_token
+    assert state["attempt_count"] == recovered_attempt
+
+
+def test_e2e_pipeline_rejects_invalid_keep_range(tmp_path):
+    """FIX4-2：无效 keep 区间（start>=end）→ pipeline 报 INVALID_KEEP_RANGE，不退化为整片。"""
+    from apps.ai_edit.pipeline import PipelineDeps, _render, _StageFailure
+    # 构造替身 deps（不执行真实 ffmpeg）
+    def _fake_runner(cmd, **kw):
+        return None
+    deps = PipelineDeps(
+        runner=_fake_runner, probe=lambda p: {"has_audio": True, "duration": 30, "width": 1920, "height": 1080},
+        analyze=lambda m, t: {"transcript_segments": []},
+        plan=lambda m, a, t: {"operations": [
+            {"material_id": "m1", "start_seconds": 20, "end_seconds": 10, "action": "keep"},
+        ]},
+        stabilize=lambda s, **kw: s,
+        stabilize_enabled=lambda m: False,
+        ffmpeg_binary="ffmpeg",
+    )
+    input_path = tmp_path / "input.mp4"
+    input_path.write_bytes(b"fake")
+    output_path = tmp_path / "output.mp4"
+    with pytest.raises(_StageFailure, match="INVALID_KEEP_RANGE"):
+        _render(deps, stage="render_preview_720p", input_path=input_path,
+                output_path=output_path, profile="720p", cancel_check=lambda: False,
+                plan_operations=[
+                    {"material_id": "m1", "start_seconds": 20, "end_seconds": 10, "action": "keep"},
+                ])

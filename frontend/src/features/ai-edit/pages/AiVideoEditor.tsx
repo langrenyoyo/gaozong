@@ -80,7 +80,7 @@ const ROLE_LABELS: Record<MaterialRole, string> = {
   pip_replacement: "画中画替换",
 };
 
-export default function AiVideoEditor({ merchantId }: { merchantId?: string }) {
+export default function AiVideoEditor({ merchantId }: { merchantId: string }) {
   const [templates, setTemplates] = useState<AiEditTemplate[]>([]);
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);

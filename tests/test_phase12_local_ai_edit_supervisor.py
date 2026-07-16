@@ -127,7 +127,7 @@ def test_supervisor_recover_requeues_running(tmp_path):
                             manifest_path="/m.json", merchant_id="m1", job_id="job-1")
     sup2 = AiEditSupervisor(work_root=tmp_path, executor=lambda j: {"status": "succeeded"})
     recovered = sup2.recover()
-    assert recovered == 1
+    assert recovered["recovered"] == 1
     sup2.drain()
     assert sup2.status(merchant_id="m1").completed_count >= 1
 
@@ -171,7 +171,7 @@ def test_supervisor_recover_skips_terminal(tmp_path):
         work_root=tmp_path,
         executor=lambda j: pytest.fail(f"不应重执终态任务 {j.job_id}"),
     )
-    assert sup2.recover() == 0
+    assert sup2.recover()["recovered"] == 0
 
 
 # ---------------------------------------------------------------------------
