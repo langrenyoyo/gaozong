@@ -68,6 +68,14 @@ TRANSACTION_BASELINE_COLUMNS = {
 # Phase 10 新增 3 列
 TRANSACTION_NEW_COLUMNS = {"actual_tokens", "capability_key", "markup_basis_points"}
 
+USAGE_MEASUREMENT_COLUMNS = {
+    "usage_measurement_method",
+    "prompt_tokens",
+    "completion_tokens",
+    "cached_tokens",
+    "llm_call_stage",
+}
+
 # 0030 基线 compute_markup_ratios 列集（0027 建表形态）
 RATIO_BASELINE_COLUMNS = {
     "id", "capability_key", "markup_basis_points", "enabled",
@@ -133,6 +141,33 @@ def test_compute_transaction_markup_nonnegative_check():
     assert "ck_compute_transactions_markup_nonnegative" in _check_constraint_names(
         models.ComputeTransaction
     ), "ComputeTransaction 缺少 ck_compute_transactions_markup_nonnegative"
+
+
+def test_compute_transaction_declares_usage_measurement_columns():
+    """真实 Token 计量字段存在，Token 明细使用 BigInteger 且全部可空。"""
+    import app.models as models
+
+    columns = models.ComputeTransaction.__table__.columns
+    assert USAGE_MEASUREMENT_COLUMNS <= set(columns.keys())
+    for name in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+        assert isinstance(columns[name].type, BigInteger)
+        assert columns[name].nullable is True
+    assert columns["usage_measurement_method"].type.length == 32
+    assert columns["llm_call_stage"].type.length == 32
+
+
+def test_compute_transaction_declares_usage_measurement_checks():
+    """计量方式、调用阶段和三项 Token 明细均受数据库约束。"""
+    import app.models as models
+
+    names = _check_constraint_names(models.ComputeTransaction)
+    assert {
+        "ck_compute_transactions_usage_measurement_method",
+        "ck_compute_transactions_prompt_tokens_nonnegative",
+        "ck_compute_transactions_completion_tokens_nonnegative",
+        "ck_compute_transactions_cached_tokens_nonnegative",
+        "ck_compute_transactions_llm_call_stage",
+    } <= names
 
 
 def test_compute_transaction_keeps_existing_merchant_created_index():

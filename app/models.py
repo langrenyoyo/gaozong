@@ -830,6 +830,28 @@ class ComputeTransaction(Base):
             "markup_basis_points IS NULL OR markup_basis_points >= 0",
             name="ck_compute_transactions_markup_nonnegative",
         ),
+        CheckConstraint(
+            "usage_measurement_method IS NULL OR usage_measurement_method IN "
+            "('provider_tokens', 'estimated_tokens', 'legacy_characters')",
+            name="ck_compute_transactions_usage_measurement_method",
+        ),
+        CheckConstraint(
+            "prompt_tokens IS NULL OR prompt_tokens >= 0",
+            name="ck_compute_transactions_prompt_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "completion_tokens IS NULL OR completion_tokens >= 0",
+            name="ck_compute_transactions_completion_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "cached_tokens IS NULL OR cached_tokens >= 0",
+            name="ck_compute_transactions_cached_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "llm_call_stage IS NULL OR llm_call_stage IN "
+            "('primary', 'retry_known_customer', 'retry_phone_goal', 'retry_combined')",
+            name="ck_compute_transactions_llm_call_stage",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -845,9 +867,14 @@ class ComputeTransaction(Base):
     conversation_id = Column(Integer, comment="AI 消耗所属会话，预留")
     created_at = Column(DateTime, default=datetime.now)
     # Phase 10 算力计费快照（§0.2 合同）：历史充值/套餐流水为空，历史能力禁止伪造
-    actual_tokens = Column(BigInteger, nullable=True, comment="AI 实际字符量")
+    actual_tokens = Column(BigInteger, nullable=True, comment="应用上浮前的基础用量")
     capability_key = Column(String(64), nullable=True, comment="六能力 key；历史未知允许空")
     markup_basis_points = Column(Integer, nullable=True, comment="本次计费上浮基点快照")
+    usage_measurement_method = Column(String(32), nullable=True, comment="用量计量方式")
+    prompt_tokens = Column(BigInteger, nullable=True, comment="供应商输入 Token")
+    completion_tokens = Column(BigInteger, nullable=True, comment="供应商输出 Token")
+    cached_tokens = Column(BigInteger, nullable=True, comment="供应商缓存命中 Token")
+    llm_call_stage = Column(String(32), nullable=True, comment="模型调用阶段")
 
 
 class ComputePackage(Base):
