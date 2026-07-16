@@ -1724,6 +1724,70 @@ def test_reply_suggestion_prompt_includes_structured_known_customer_info(
     assert "什么车型" not in text
 
 
+def test_reply_suggestion_merges_latest_profile_and_history_in_priority_order(
+    tmp_path, monkeypatch
+):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
+    seen = {}
+
+    def fake_chat(self, messages):
+        seen["payload"] = json.loads(messages[1]["content"])
+        return {
+            "reply_text": json.dumps(
+                {
+                    "reply_text": "好的，我按您现在40万预算和21款宝马530Li的需求继续跟进。",
+                    "intent": "consult_inventory",
+                    "lead_level": "high",
+                    "tags": [],
+                    "manual_required": False,
+                    "manual_required_reason": "",
+                    "risk_flags": [],
+                    "confidence": 0.86,
+                    "auto_send": False,
+                },
+                ensure_ascii=False,
+            ),
+            "model": "mock-chat",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("apps.xg_douyin_ai_cs.llm.client.OpenAICompatibleClient.chat", fake_chat)
+
+    response = client.post(
+        "/douyin/conversations/1/reply-suggestion",
+        json={
+            "tenant_id": "demo_tenant",
+            "merchant_id": "demo_bba",
+            "account_id": 1,
+            "latest_message": "我现在预算40万",
+            "customer_memory": {
+                "intent_car": "宝马530Li",
+                "car_year": "21款",
+                "budget": "30万左右",
+                "city": "杭州",
+                "contact": {
+                    "has_contact": False,
+                    "types": [],
+                    "masked_values": [],
+                },
+            },
+            "conversation_history": [
+                {"role": "customer", "content": "之前预算20万，想看奥迪A6。"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    known = seen["payload"]["known_customer_info"]
+    assert known["budget"]["value"] == "40万"
+    assert known["budget"]["source"] == "latest"
+    assert known["model"]["value"] == "宝马530Li"
+    assert known["model"]["source"] == "profile"
+    assert known["year"]["value"] == "21款"
+    assert known["city"]["value"] == "杭州"
+
+
 def test_reply_suggestion_prompt_includes_known_contact_info(
     tmp_path, monkeypatch
 ):
@@ -1771,8 +1835,14 @@ def test_reply_suggestion_prompt_includes_known_contact_info(
 
     assert response.status_code == 200
     known = seen["payload"]["known_customer_info"]
-    assert known["wechat"]["value"] == "qazwkp152"
-    assert known["phone"]["value"] == "15057903797"
+    assert known["contact"] == {
+        "has_contact": True,
+        "types": ["wechat", "phone"],
+        "masked_values": ["qa***52", "150****3797"],
+    }
+    serialized = json.dumps(seen["payload"], ensure_ascii=False)
+    assert "qazwkp152" not in serialized
+    assert "15057903797" not in serialized
     assert "联系方式" in seen["payload"]["must_not_ask_again"]
     assert "手机号、微信号" in seen["system_prompt"]
 

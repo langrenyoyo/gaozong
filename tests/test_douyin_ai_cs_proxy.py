@@ -15,6 +15,7 @@ from app.models import (
     DouyinAccountAgentBinding,
     DouyinAccountAutoreplySetting,
     DouyinAuthorizedAccount,
+    DouyinLead,
     DouyinWebhookEvent,
     KnowledgeCategory,
 )
@@ -180,6 +181,7 @@ def _insert_webhook_event(
     server_message_id: str = "msg-history-1",
     created_at: datetime | None = None,
     is_duplicate: int = 0,
+    lead_id: int | None = None,
 ) -> int:
     db = TestSession()
     try:
@@ -210,8 +212,51 @@ def _insert_webhook_event(
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             event_key=event_key,
             is_duplicate=is_duplicate,
+            lead_id=lead_id,
             raw_body=json.dumps(payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    finally:
+        db.close()
+
+
+def _insert_lead_profile() -> int:
+    db = TestSession()
+    try:
+        row = DouyinLead(
+            source="douyin",
+            source_id="customer-open-1",
+            merchant_id="dev-merchant",
+            account_open_id="account-open-1",
+            conversation_short_id="conv-memory",
+            customer_name="测试客户",
+            customer_contact="13812345678",
+            content="之前想看宝马5系",
+            lead_type="私信",
+            raw_data=json.dumps(
+                {
+                    "intent_car": "宝马5系",
+                    "car_year": "20款",
+                    "budget": "30万左右",
+                    "city": "杭州",
+                },
+                ensure_ascii=False,
+            ),
+            extracted_phone="13812345678",
+            extracted_wechat="wx_customer_88",
+            all_extracted_contacts=json.dumps(
+                {
+                    "phones": ["13812345678"],
+                    "wechats": ["wx_customer_88"],
+                },
+                ensure_ascii=False,
+            ),
+            contact_extract_status="matched",
+            status="pending",
         )
         db.add(row)
         db.commit()
@@ -848,16 +893,116 @@ def test_proxy_passes_empty_conversation_history_when_no_history(monkeypatch):
     assert fake_client.calls[0]["request"]["conversation_history"] == []
 
 
-def test_proxy_falls_back_to_empty_conversation_history_when_history_query_fails(monkeypatch):
+def test_proxy_injects_merged_customer_memory_and_masks_contacts(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    lead_id = _insert_lead_profile()
+    latest_message = "我现在预算35万，想看21款宝马530Li，电话13812345678，微信wx_customer_88"
+    _insert_webhook_event(
+        conversation_short_id="conv-memory",
+        text=latest_message,
+        event_key="memory-latest",
+        server_message_id="memory-latest-msg",
+        lead_id=lead_id,
+    )
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-memory/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": latest_message,
+        },
+    )
+
+    assert response.status_code == 200
+    request_payload = fake_client.calls[0]["request"]
+    serialized = json.dumps(request_payload, ensure_ascii=False)
+    assert "13812345678" not in serialized
+    assert "wx_customer_88" not in serialized
+    assert "138****5678" in request_payload["latest_message"]
+    assert request_payload["conversation_history"] == []
+    assert request_payload["customer_memory"] == {
+        "intent_car": "宝马530Li",
+        "car_year": "21款",
+        "budget": "35万",
+        "city": "杭州",
+        "contact": {
+            "has_contact": True,
+            "types": ["phone", "wechat"],
+            "masked_values": ["138****5678", "wx***88"],
+        },
+    }
+
+
+def test_proxy_keeps_profile_memory_when_source_message_is_older_than_history_window(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    base_time = datetime.now() - timedelta(hours=1)
+    _insert_webhook_event(
+        conversation_short_id="conv-long-memory",
+        text="预算28万，想看20款宝马530Li",
+        event_key="long-memory-source",
+        server_message_id="long-memory-source-msg",
+        created_at=base_time,
+    )
+    for index in range(10):
+        _insert_webhook_event(
+            conversation_short_id="conv-long-memory",
+            text=f"补充问题{index}",
+            event_key=f"long-memory-{index}",
+            server_message_id=f"long-memory-msg-{index}",
+            created_at=base_time + timedelta(minutes=index + 1),
+        )
+    _insert_webhook_event(
+        conversation_short_id="conv-long-memory",
+        text="还有别的配置吗",
+        event_key="long-memory-latest",
+        server_message_id="long-memory-latest-msg",
+        created_at=base_time + timedelta(minutes=20),
+    )
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-long-memory/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": "还有别的配置吗",
+        },
+    )
+
+    assert response.status_code == 200
+    request_payload = fake_client.calls[0]["request"]
+    assert len(request_payload["conversation_history"]) == 10
+    assert all("预算28万" not in item["content"] for item in request_payload["conversation_history"])
+    assert request_payload["customer_memory"]["budget"] == "28万"
+    assert request_payload["customer_memory"]["car_year"] == "20款"
+    assert request_payload["customer_memory"]["intent_car"] == "宝马530Li"
+
+
+def test_proxy_returns_explicit_failure_when_conversation_context_query_fails(monkeypatch):
     from app.routers import douyin_ai_cs_proxy
 
     fake_client = FakeDouyinAiCsClient()
     monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
 
-    def _fail_history(*args, **kwargs):
+    def _fail_context(*args, **kwargs):
         raise RuntimeError("history unavailable")
 
-    monkeypatch.setattr(douyin_ai_cs_proxy, "build_conversation_history", _fail_history)
+    monkeypatch.setattr(
+        douyin_ai_cs_proxy,
+        "build_reply_conversation_context",
+        _fail_context,
+        raising=False,
+    )
     _insert_account()
     _insert_agent_and_binding()
 
@@ -866,9 +1011,50 @@ def test_proxy_falls_back_to_empty_conversation_history_when_history_query_fails
         json={"douyin_account_id": "account-open-1", "agent_id": "agent-sales", "latest_message": "hello"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["auto_send"] is False
-    assert fake_client.calls[0]["request"]["conversation_history"] == []
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "CONVERSATION_CONTEXT_UNAVAILABLE",
+        "message": "会话记录暂时不可用，请稍后重试",
+    }
+    assert fake_client.calls == []
+
+
+def test_proxy_rejects_malformed_persisted_history_instead_of_using_empty_context(monkeypatch):
+    from app.routers import douyin_ai_cs_proxy
+
+    fake_client = FakeDouyinAiCsClient()
+    monkeypatch.setattr(douyin_ai_cs_proxy, "get_xg_douyin_ai_cs_client", lambda: fake_client)
+    _insert_account()
+    _insert_agent_and_binding()
+    db = TestSession()
+    try:
+        db.add(
+            DouyinWebhookEvent(
+                event="im_receive_msg",
+                from_user_id="customer-open-1",
+                to_user_id="account-open-1",
+                conversation_short_id="conv-malformed",
+                event_key="malformed-history",
+                is_duplicate=0,
+                raw_body="{invalid-json",
+                created_at=datetime.now(),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = _client(monkeypatch).post(
+        "/integrations/douyin-ai-cs/conversations/conv-malformed/reply-suggestion",
+        json={
+            "douyin_account_id": "account-open-1",
+            "agent_id": "agent-sales",
+            "latest_message": "你好",
+        },
+    )
+
+    assert response.status_code == 503
+    assert fake_client.calls == []
 
 
 def test_proxy_injects_active_agent_category_keys(monkeypatch):

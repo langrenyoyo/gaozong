@@ -113,6 +113,20 @@ class ConversationHistoryItem(BaseModel):
     message_id: str | None = None
 
 
+class CustomerContactMemory(BaseModel):
+    has_contact: bool = False
+    types: list[Literal["phone", "wechat"]] = Field(default_factory=list, max_length=2)
+    masked_values: list[str] = Field(default_factory=list, max_length=10)
+
+
+class CustomerMemory(BaseModel):
+    intent_car: str | None = Field(default=None, max_length=100)
+    car_year: str | None = Field(default=None, max_length=100)
+    budget: str | None = Field(default=None, max_length=100)
+    city: str | None = Field(default=None, max_length=100)
+    contact: CustomerContactMemory = Field(default_factory=CustomerContactMemory)
+
+
 class ReplySuggestionRequest(BaseModel):
     tenant_id: str
     account_id: int | str
@@ -123,6 +137,7 @@ class ReplySuggestionRequest(BaseModel):
     agent_config: AgentConfig | None = None
     max_history_messages: int = Field(default=20, ge=1, le=100)
     conversation_history: list[ConversationHistoryItem] | None = None
+    customer_memory: CustomerMemory | None = None
     conversation_short_id: str | None = None
     customer_open_id: str | None = None
     account_open_id: str | None = None

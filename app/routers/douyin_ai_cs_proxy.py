@@ -23,7 +23,7 @@ from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_bind
 from app.services.douyin_account_agent_binding_service import (
     list_account_agents_for_merchant_account,
 )
-from app.services.douyin_conversation_history_service import build_conversation_history
+from app.services.douyin_conversation_history_service import build_reply_conversation_context
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -248,22 +248,31 @@ async def create_reply_suggestion_proxy(
     )
     direct_llm_policy = parse_direct_llm_policy(autoreply_settings)
     try:
-        conversation_history = build_conversation_history(
+        reply_context = build_reply_conversation_context(
             db,
+            merchant_id=context.merchant_id,
             account_open_id=account_open_id,
             conversation_key=conversation_id,
             latest_message=request.latest_message,
             limit=10,
         )
     except Exception as exc:
-        logger.warning(
-            "douyin_ai_cs_conversation_history_fallback merchant_id=%s account_open_id=%s conversation_id=%s error=%s",
+        logger.exception(
+            "douyin_ai_cs_conversation_context_failed stage=build_conversation_context "
+            "failure_stage=conversation_context merchant_id=%s account_open_id=%s "
+            "conversation_id=%s error_type=%s",
             context.merchant_id,
             account_open_id,
             conversation_id,
-            exc,
+            type(exc).__name__,
         )
-        conversation_history = []
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CONVERSATION_CONTEXT_UNAVAILABLE",
+                "message": "会话记录暂时不可用，请稍后重试",
+            },
+        ) from exc
 
     payload = {
         "tenant_id": context.source_system,
@@ -281,9 +290,10 @@ async def create_reply_suggestion_proxy(
             "allowed_category_keys": allowed_category_keys,
             "rag_enabled": bool(allowed_category_keys),
         },
-        "latest_message": request.latest_message,
-        "max_history_messages": request.max_history_messages,
-        "conversation_history": conversation_history,
+        "latest_message": reply_context.latest_message,
+        "max_history_messages": min(request.max_history_messages, 10),
+        "conversation_history": reply_context.conversation_history,
+        "customer_memory": reply_context.customer_memory,
         "direct_llm_policy": direct_llm_policy,
     }
 

@@ -24,7 +24,7 @@ from app.services.douyin_autoreply_settings_service import (
     get_account_autoreply_settings,
     parse_direct_llm_policy,
 )
-from app.services.douyin_conversation_history_service import build_conversation_history
+from app.services.douyin_conversation_history_service import build_reply_conversation_context
 from app.services.douyin_workbench_conversation_service import get_latest_private_message_state
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
@@ -190,23 +190,43 @@ def _run_with_session(db, *, event_id: int) -> None:
     )
     history_gate: dict[str, Any] = {"status": "ok"}
     try:
-        conversation_history = build_conversation_history(
+        reply_context = build_reply_conversation_context(
             db,
+            merchant_id=binding.merchant_id or "",
             account_open_id=account_open_id,
             conversation_key=conversation_short_id,
             latest_message=latest_message,
             limit=10,
         )
     except Exception as exc:
-        logger.warning(
-            "ai_auto_reply_history_fallback stage=build_history event_id=%s account_open_id=%s conversation=%s error_type=%s",
+        logger.exception(
+            "ai_auto_reply_history_failed stage=build_conversation_context "
+            "failure_stage=conversation_context event_id=%s account_open_id=%s "
+            "conversation=%s error_type=%s",
             event.id,
             _short(account_open_id),
             conversation_short_id,
             type(exc).__name__,
         )
-        conversation_history = []
-        history_gate = {"status": "fallback_empty", "error_type": type(exc).__name__}
+        history_gate = {
+            "status": "failed",
+            "failure_stage": "build_conversation_context",
+            "error_type": type(exc).__name__,
+        }
+        _insert_terminal_run(
+            db,
+            {
+                **base,
+                "merchant_id": binding.merchant_id or "",
+                "account_open_id": account_open_id,
+                "agent_id": binding.agent.agent_id,
+            },
+            status="failed",
+            block_reason="conversation_context_unavailable",
+            error_message="会话记录暂时不可用",
+            gate_results={"history": history_gate, "agent": agent_gate},
+        )
+        return
 
     payload = {
         "tenant_id": binding.tenant_id or context.source_system,
@@ -224,8 +244,9 @@ def _run_with_session(db, *, event_id: int) -> None:
             "allowed_category_keys": allowed_category_keys,
             "rag_enabled": bool(allowed_category_keys),
         },
-        "latest_message": latest_message,
-        "conversation_history": conversation_history,
+        "latest_message": reply_context.latest_message,
+        "conversation_history": reply_context.conversation_history,
+        "customer_memory": reply_context.customer_memory,
         "max_history_messages": 10,
         "direct_llm_policy": direct_llm_policy,
     }
@@ -487,6 +508,7 @@ def _insert_terminal_run(
     status: str,
     skip_reason: str | None = None,
     block_reason: str | None = None,
+    error_message: str | None = None,
     gate_results: dict[str, Any] | None = None,
 ) -> None:
     run = AiAutoReplyRun(
@@ -494,6 +516,7 @@ def _insert_terminal_run(
         status=status,
         skip_reason=skip_reason,
         block_reason=block_reason,
+        error_message=error_message,
         gate_results_json=_json_dumps(gate_results or {}),
         created_at=datetime.now(),
         updated_at=datetime.now(),

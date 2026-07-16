@@ -176,9 +176,28 @@ tenant_id + merchant_id + douyin_account_id
   "merchant_id": "demo_bba",
   "account_id": 1,
   "latest_message": "你们有奥迪A6吗？",
-  "max_history_messages": 20
+  "max_history_messages": 10,
+  "conversation_history": [],
+  "customer_memory": {
+    "intent_car": "奥迪A6",
+    "car_year": "2021款",
+    "budget": "25万左右",
+    "city": "杭州",
+    "contact": {
+      "has_contact": true,
+      "types": ["phone"],
+      "masked_values": ["138****5678"]
+    }
+  }
 }
 ```
+
+当前约束：
+
+- 正式商户链路由 9000 注入可信 `conversation_history` 与 `customer_memory`，不接受前端伪造历史或客户画像。
+- 发送给 9100 的历史最多 10 条；`customer_memory` 按“当前消息 > 已保存画像 > 历史消息”合并。
+- 当前消息、历史消息和联系方式记忆在进入 9100 前必须脱敏；9100 在构造 LLM 请求时再次脱敏。
+- 查询成功但历史为空是新客户正常状态；数据库或消息解析异常时 9000 不调用 9100，自动回复也不得进入发送链路。
 
 响应示例：
 

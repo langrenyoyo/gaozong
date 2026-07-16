@@ -98,6 +98,38 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
     )
 
 
+def mask_contact_value(contact_type: str, value: str) -> str:
+    """生成可交给大模型的联系方式脱敏值。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if contact_type == "phone" and len(text) >= 7:
+        return f"{text[:3]}****{text[-4:]}"
+    if len(text) <= 4:
+        return "***"
+    return f"{text[:2]}***{text[-2:]}"
+
+
+def mask_contacts_in_text(text: str | None) -> str:
+    """脱敏文本中的手机号和微信号，保留其余对话语义。"""
+    value = str(text or "")
+    extracted = extract_contacts_from_text(value)
+    if extracted.status == "parse_failed":
+        raise ValueError("contact_parse_failed")
+    replacements = sorted(
+        {
+            (str(item["type"]), str(item["value"]))
+            for item in extracted.all_contacts
+            if item.get("type") and item.get("value")
+        },
+        key=lambda item: len(item[1]),
+        reverse=True,
+    )
+    for contact_type, raw_value in replacements:
+        value = value.replace(raw_value, mask_contact_value(contact_type, raw_value))
+    return value
+
+
 def _collect_matches(text: str) -> list[dict[str, str | int]]:
     matches: list[dict[str, str | int]] = []
     seen_values: set[tuple[str, str]] = set()

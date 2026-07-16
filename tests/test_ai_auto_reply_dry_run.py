@@ -603,6 +603,60 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         db.close()
 
 
+def test_history_query_failure_blocks_auto_reply_before_9100():
+    from app.services import ai_auto_reply_dry_run_service
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-history-failed")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    def _fail_context(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch.object(
+             ai_auto_reply_dry_run_service,
+             "build_reply_conversation_context",
+             _fail_context,
+             create=True,
+         ):
+        run_ai_auto_reply_dry_run(event_id)
+
+    assert fake_client.calls == []
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).one()
+        assert run.status == "failed"
+        assert run.block_reason == "conversation_context_unavailable"
+        gate_results = json.loads(run.gate_results_json)
+        assert gate_results["history"] == {
+            "status": "failed",
+            "failure_stage": "build_conversation_context",
+            "error_type": "RuntimeError",
+        }
+    finally:
+        db.close()
+
+
+def test_new_customer_with_no_prior_history_still_calls_9100():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    event_id = _insert_event(event_key="event-new-customer")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    fake_client = FakeAiCsClient()
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+        run_ai_auto_reply_dry_run(event_id)
+
+    assert len(fake_client.calls) == 1
+    assert fake_client.calls[0]["request"]["conversation_history"] == []
+
+
 def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 

@@ -1,6 +1,6 @@
 """联系方式提取 service 单元测试。"""
 
-from app.services.contact_extractor import extract_contacts_from_text
+from app.services.contact_extractor import extract_contacts_from_text, mask_contacts_in_text
 
 
 def _values(result):
@@ -78,6 +78,14 @@ def test_empty_text_returns_empty_text_status():
     assert result.status == "empty_text"
     assert result.failure_reason == "empty_text"
     assert result.raw_text == ""
+
+
+def test_mask_contacts_in_text_keeps_message_meaning_without_plain_contact_values():
+    masked = mask_contacts_in_text("预算30万，电话13812345678，微信wx_customer_88")
+
+    assert masked == "预算30万，电话138****5678，微信wx***88"
+    assert "13812345678" not in masked
+    assert "wx_customer_88" not in masked
 
 
 def test_extract_wechat_after_chinese_keyword():

@@ -46,6 +46,10 @@ WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT = 20000
 WORKBENCH_MESSAGE_LIMIT = max(20, int(os.getenv("DOUYIN_WORKBENCH_MESSAGE_LIMIT", "200")))
 WORKBENCH_UNREAD_EVENT_LIMIT = max(100, int(os.getenv("DOUYIN_WORKBENCH_UNREAD_EVENT_LIMIT", "5000")))
 logger = logging.getLogger(__name__)
+
+
+class ConversationMessageParseError(ValueError):
+    """回复上下文中的持久化消息无法完整解析。"""
 RESOURCE_URL_KEYS = (
     "file_Url",
     "file_url",
@@ -443,6 +447,7 @@ def get_conversation_detail(
     *,
     account_open_id: str,
     conversation_key: str,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """一次加载同一会话，返回消息和客户画像。"""
     start = time.perf_counter()
@@ -453,6 +458,7 @@ def get_conversation_detail(
             conversation_key=conversation_key,
             limit=WORKBENCH_MESSAGE_LIMIT,
             operation="get_conversation_detail",
+            strict=strict,
         )
     )
     result = {
@@ -672,6 +678,7 @@ def _load_messages(
     limit: int | None = None,
     lookback_days: int | None = None,
     operation: str = "load_messages",
+    strict: bool = False,
 ) -> list[WorkbenchMessage]:
     query_start = time.perf_counter()
     rows = _query_message_rows(
@@ -687,7 +694,7 @@ def _load_messages(
     parse_start = time.perf_counter()
     messages: list[WorkbenchMessage] = []
     for row in rows:
-        message = _row_to_message(db, row)
+        message = _row_to_message(db, row, strict=True) if strict else _row_to_message(db, row)
         if message is None:
             continue
         if account_open_id and message.account_open_id != account_open_id:
@@ -855,9 +862,16 @@ def _event_derived_accounts(db: Session) -> list[dict[str, Any]]:
     )
 
 
-def _row_to_message(db: Session, row: DouyinWebhookEvent) -> WorkbenchMessage | None:
+def _row_to_message(
+    db: Session,
+    row: DouyinWebhookEvent,
+    *,
+    strict: bool = False,
+) -> WorkbenchMessage | None:
     payload = _parse_raw_body(row.raw_body)
     if payload is None:
+        if strict:
+            raise ConversationMessageParseError(f"message_raw_body_invalid:{row.id}")
         return None
     content = _payload_content(row, payload)
     message_type = _message_type(row, content)
@@ -869,6 +883,8 @@ def _row_to_message(db: Session, row: DouyinWebhookEvent) -> WorkbenchMessage | 
     account_open_id = _account_open_id(row, payload, content)
     open_id = _customer_open_id(row, payload, content)
     if not account_open_id or not open_id:
+        if strict:
+            raise ConversationMessageParseError(f"message_participant_missing:{row.id}")
         return None
 
     conversation_short_id = _optional_str(content.get("conversation_short_id"))

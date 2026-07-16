@@ -28,7 +28,7 @@ from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     count_chat_characters,
 )
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
-from app.services.contact_extractor import extract_contacts_from_text
+from app.services.contact_extractor import extract_contacts_from_text, mask_contact_value, mask_contacts_in_text
 
 _logger = logging.getLogger(__name__)
 
@@ -375,6 +375,7 @@ def build_reply_suggestion(
                 reply_text=_build_agent_phone_goal_fallback_reply(
                     latest_message=request.latest_message,
                     conversation_history=request.conversation_history,
+                    customer_memory=request.customer_memory,
                 )
                 if agent_phone_goal
                 else "目前奥迪A6暂时没有现车，可以看看同级别的宝马5系和奔驰E级。",
@@ -383,6 +384,7 @@ def build_reply_suggestion(
             ),
             latest_message=request.latest_message,
             conversation_history=request.conversation_history,
+            customer_memory=request.customer_memory,
             rag_used=False,
             llm_raw_auto_send=False,
             direct_llm_policy=request.direct_llm_policy,
@@ -420,6 +422,7 @@ def build_reply_suggestion(
             reply_text=_build_agent_phone_goal_fallback_reply(
                 latest_message=request.latest_message,
                 conversation_history=request.conversation_history,
+                customer_memory=request.customer_memory,
             )
             if agent_phone_goal
             else "请问您更关注预算、品牌，还是具体车型？我可以先帮您筛一批合适的车。",
@@ -427,6 +430,7 @@ def build_reply_suggestion(
         ),
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
         rag_used=False,
         llm_raw_auto_send=False,
         direct_llm_policy=request.direct_llm_policy,
@@ -734,10 +738,12 @@ def _build_llm_reply(
     known_customer_info = _build_known_customer_context(
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
     )
     slots = _extract_customer_requirements(
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
     )
     if _is_reply_reasking_known_slots(str(decision.get("reply_text") or ""), slots):
         retry_messages = _build_llm_retry_messages(
@@ -804,6 +810,7 @@ def _build_llm_reply(
                 reply_text=_build_agent_phone_goal_fallback_reply(
                     latest_message=request.latest_message,
                     conversation_history=request.conversation_history,
+                    customer_memory=request.customer_memory,
                 ),
                 confidence=0.5,
             )
@@ -812,6 +819,7 @@ def _build_llm_reply(
         decision,
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
         rag_used=rag_used,
         llm_raw_auto_send=decision.get("llm_raw_auto_send"),
         direct_llm_policy=request.direct_llm_policy,
@@ -959,11 +967,14 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     known_requirements = _extract_customer_requirements(
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
     )
     known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
     )
+    safe_latest_message = mask_contacts_in_text(request.latest_message)
     user_prompt = json.dumps(
         {
             "merchant": {
@@ -991,8 +1002,8 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
                     "forbidden_channels": ["微信", "个人号"],
                 },
             },
-            "latest_customer_message": request.latest_message,
-            "customer_message": request.latest_message,
+            "latest_customer_message": safe_latest_message,
+            "customer_message": safe_latest_message,
             "conversation_history": conversation_history,
             "conversation_history_policy": CONVERSATION_HISTORY_POLICY,
             "known_customer_requirements": known_requirements,
@@ -1317,6 +1328,7 @@ def _apply_safety_postprocess(
     rag_used: bool,
     llm_raw_auto_send: object,
     conversation_history: object = None,
+    customer_memory: object = None,
     direct_llm_policy: object = None,
     allow_phone_lead_capture: bool = False,
 ) -> dict[str, Any]:
@@ -1451,6 +1463,7 @@ def _apply_safety_postprocess(
         decision,
         latest_message=text,
         conversation_history=conversation_history,
+        customer_memory=customer_memory,
         rag_used=rag_used,
     )
     final_risk_flags = list(decision.get("risk_flags") or [])
@@ -1491,6 +1504,7 @@ def _apply_relevance_postprocess(
     *,
     latest_message: str,
     conversation_history: object,
+    customer_memory: object,
     rag_used: bool,
 ) -> dict[str, Any]:
     """根据最近对话修正复读、漏读客户信息和车型截断问题。"""
@@ -1500,6 +1514,7 @@ def _apply_relevance_postprocess(
     slots = _extract_customer_requirements(
         latest_message=latest_message,
         conversation_history=conversation_history,
+        customer_memory=customer_memory,
     )
     recent_ai_replies = _recent_ai_replies(conversation_history)
     reply_text = str(decision.get("reply_text") or "")
@@ -1552,8 +1567,10 @@ def _extract_customer_requirements(
     *,
     latest_message: str,
     conversation_history: object,
+    customer_memory: object = None,
 ) -> dict[str, Any]:
     latest_slots = _extract_requirement_slots_from_text(str(latest_message or ""))
+    memory_slots = _customer_memory_slots(customer_memory)
     customer_texts = [
         item["content"]
         for item in _sanitize_conversation_history(conversation_history)
@@ -1568,7 +1585,7 @@ def _extract_customer_requirements(
         for text in customer_texts[:-3]
     ]
 
-    slots = dict(latest_slots)
+    slots = _merge_requirement_slots(dict(latest_slots), memory_slots)
     latest_has_current_vehicle_need = bool(
         latest_slots.get("model")
         or latest_slots.get("brand")
@@ -1638,10 +1655,12 @@ def _build_agent_phone_goal_fallback_reply(
     *,
     latest_message: str,
     conversation_history: object,
+    customer_memory: object = None,
 ) -> str:
     slots = _extract_customer_requirements(
         latest_message=latest_message,
         conversation_history=conversation_history,
+        customer_memory=customer_memory,
     )
     subject = _format_natural_requirement_sentence(slots)
     if subject:
@@ -1659,24 +1678,29 @@ def _build_known_customer_context(
     *,
     latest_message: str,
     conversation_history: object,
+    customer_memory: object = None,
 ) -> dict[str, Any]:
     latest_slots = _extract_requirement_slots_from_text(str(latest_message or ""))
+    memory_slots = _customer_memory_slots(customer_memory)
     merged = _extract_customer_requirements(
         latest_message=latest_message,
         conversation_history=conversation_history,
+        customer_memory=customer_memory,
     )
     contacts = _extract_known_contacts(
         latest_message=latest_message,
         conversation_history=conversation_history,
+        customer_memory=customer_memory,
     )
 
     def field(name: str, label: str | None = None) -> dict[str, Any]:
         value = merged.get(name)
         latest_value = latest_slots.get(name)
         from_latest = bool(value and latest_value == value)
+        from_profile = bool(value and memory_slots.get(name) == value)
         return {
             "value": value,
-            "source": "latest" if from_latest else ("history" if value else None),
+            "source": "latest" if from_latest else ("profile" if from_profile else ("history" if value else None)),
             "updated_from_latest_message": from_latest,
             "label": label or name,
         }
@@ -1695,7 +1719,7 @@ def _build_known_customer_context(
         must_not_ask_again.append("车型")
     if merged.get("years"):
         must_not_ask_again.append("年份")
-    if contacts.get("phone") or contacts.get("wechat"):
+    if contacts.get("has_contact"):
         must_not_ask_again.append("联系方式")
 
     return {
@@ -1708,7 +1732,7 @@ def _build_known_customer_context(
                 "value": merged.get("years"),
             },
             "city": field("city", "城市"),
-            **contacts,
+            "contact": contacts,
             "concerns": normalized_concerns,
         },
         "conversation_task": _build_conversation_task(latest_message, merged),
@@ -1720,43 +1744,56 @@ def _extract_known_contacts(
     *,
     latest_message: str,
     conversation_history: object,
-) -> dict[str, dict[str, Any]]:
+    customer_memory: object = None,
+) -> dict[str, Any]:
     latest_contacts = extract_contacts_from_text(latest_message)
-    history_contacts: list[tuple[str, str]] = []
+    contact_types = [str(item["type"]) for item in latest_contacts.all_contacts]
+    masked_values = [
+        mask_contact_value(str(item["type"]), str(item["value"]))
+        for item in latest_contacts.all_contacts
+    ]
+    memory_contact = getattr(customer_memory, "contact", None)
+    contact_types.extend(str(item) for item in (getattr(memory_contact, "types", None) or []))
+    masked_values.extend(
+        _safe_masked_contact_value(item)
+        for item in (getattr(memory_contact, "masked_values", None) or [])
+    )
     if isinstance(conversation_history, list):
         for item in conversation_history:
             if str(getattr(item, "role", "") or "").strip() != "customer":
                 continue
             extracted = extract_contacts_from_text(getattr(item, "content", None))
-            history_contacts.extend((str(contact["type"]), str(contact["value"])) for contact in extracted.all_contacts)
+            contact_types.extend(str(contact["type"]) for contact in extracted.all_contacts)
+            masked_values.extend(
+                mask_contact_value(str(contact["type"]), str(contact["value"]))
+                for contact in extracted.all_contacts
+            )
+    return {
+        "has_contact": bool(contact_types) or bool(getattr(memory_contact, "has_contact", False)),
+        "types": list(dict.fromkeys(contact_types)),
+        "masked_values": list(dict.fromkeys(masked_values)),
+    }
 
-    def contact_field(contact_type: str, label: str) -> dict[str, Any] | None:
-        latest_value = getattr(latest_contacts, contact_type, None)
-        if latest_value:
-            return {
-                "value": latest_value,
-                "source": "latest",
-                "updated_from_latest_message": True,
-                "label": label,
-            }
-        history_value = next((value for item_type, value in history_contacts if item_type == contact_type), None)
-        if history_value:
-            return {
-                "value": history_value,
-                "source": "history",
-                "updated_from_latest_message": False,
-                "label": label,
-            }
-        return None
 
-    result: dict[str, dict[str, Any]] = {}
-    phone = contact_field("phone", "手机号")
-    wechat = contact_field("wechat", "微信号")
-    if phone:
-        result["phone"] = phone
-    if wechat:
-        result["wechat"] = wechat
-    return result
+def _safe_masked_contact_value(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or "*" in text:
+        return text
+    masked = mask_contacts_in_text(text)
+    return masked if masked != text else mask_contact_value("wechat", text)
+
+
+def _customer_memory_slots(customer_memory: object) -> dict[str, Any]:
+    intent_car = _optional_text(getattr(customer_memory, "intent_car", None))
+    return {
+        "budget": _optional_text(getattr(customer_memory, "budget", None)),
+        "brand": _extract_brand(intent_car or "", intent_car),
+        "model": intent_car,
+        "years": _optional_text(getattr(customer_memory, "car_year", None)),
+        "usage": None,
+        "city": _optional_text(getattr(customer_memory, "city", None)),
+        "concerns": [],
+    }
 
 
 def _build_conversation_task(latest_message: str, slots: dict[str, Any]) -> str:
@@ -2224,7 +2261,7 @@ def _sanitize_conversation_history(history: object) -> list[dict[str, str]]:
         if role not in ALLOWED_HISTORY_ROLES:
             continue
 
-        content = _mask_phone_numbers(str(getattr(item, "content", "") or "").strip())
+        content = mask_contacts_in_text(str(getattr(item, "content", "") or "").strip())
         content = re.sub(r"\s+", " ", content)
         if not content:
             continue
