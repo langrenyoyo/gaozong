@@ -185,6 +185,11 @@ class ComputeUsageClient:
         agent_id: str | None = None,
         conversation_id: int | None = None,
         remark: str | None = None,
+        usage_measurement_method: str | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        cached_tokens: int | None = None,
+        llm_call_stage: str | None = None,
     ) -> bool:
         """上报一次算力消耗。成功返回 True，跳过/失败返回 False，**绝不抛异常**。
 
@@ -224,6 +229,11 @@ class ComputeUsageClient:
             "agent_id": agent_id,
             "conversation_id": _normalize_conversation_id(conversation_id),
             "remark": remark,
+            "usage_measurement_method": usage_measurement_method,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+            "llm_call_stage": llm_call_stage,
         }
         req = urllib_request.Request(
             f"{self.config.base_url}{self.USAGE_PATH}",
@@ -263,10 +273,13 @@ class ComputeUsageClient:
             return False
 
         _logger.info(
-            "compute_usage stage=reported merchant_id=%s tokens=%s capability=%s model=%s",
+            "compute_usage stage=reported merchant_id=%s tokens=%s capability=%s "
+            "model=%s measurement=%s llm_call_stage=%s",
             merchant_id,
             tokens,
             capability_key,
             model,
+            usage_measurement_method,
+            llm_call_stage,
         )
         return True

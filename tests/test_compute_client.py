@@ -49,6 +49,11 @@ def test_compute_client_posts_internal_usage_with_timeout_and_token(monkeypatch)
         capability_key="douyin-cs",
         source="llm",
         model="mock-model",
+        usage_measurement_method="provider_tokens",
+        prompt_tokens=7,
+        completion_tokens=2,
+        cached_tokens=3,
+        llm_call_stage="primary",
     )
 
     assert seen["url"] == "http://compute.test/api/compute/internal/usage"
@@ -58,6 +63,11 @@ def test_compute_client_posts_internal_usage_with_timeout_and_token(monkeypatch)
     assert seen["body"]["tokens"] == 9
     assert seen["body"]["capability_key"] == "douyin-cs"
     assert seen["body"]["model"] == "mock-model"
+    assert seen["body"]["usage_measurement_method"] == "provider_tokens"
+    assert seen["body"]["prompt_tokens"] == 7
+    assert seen["body"]["completion_tokens"] == 2
+    assert seen["body"]["cached_tokens"] == 3
+    assert seen["body"]["llm_call_stage"] == "primary"
     header_map = {str(k).lower(): v for k, v in seen["headers"].items()}
     assert header_map["x-internal-token"] == "secret-token"
     assert data["data"]["balance_tokens"] == 7

@@ -122,6 +122,11 @@ class ComputeClient:
         agent_id: str | None = None,
         conversation_id: int | None = None,
         remark: str | None = None,
+        usage_measurement_method: str | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        cached_tokens: int | None = None,
+        llm_call_stage: str | None = None,
     ) -> dict[str, Any]:
         """上报一次 AI 算力消耗（capability_key/model 必填，对齐 §0.2 严格合同）。"""
         return self._request(
@@ -136,5 +141,10 @@ class ComputeClient:
                 "agent_id": agent_id,
                 "conversation_id": conversation_id,
                 "remark": remark,
+                "usage_measurement_method": usage_measurement_method,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cached_tokens": cached_tokens,
+                "llm_call_stage": llm_call_stage,
             },
         )

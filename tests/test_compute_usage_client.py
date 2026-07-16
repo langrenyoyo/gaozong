@@ -129,6 +129,11 @@ def test_report_usage_success_sends_post_with_correct_header_and_payload(monkeyp
         agent_id="agent_bba",
         conversation_id=1,
         remark="douyin_ai_reply",
+        usage_measurement_method="provider_tokens",
+        prompt_tokens=100,
+        completion_tokens=23,
+        cached_tokens=50,
+        llm_call_stage="primary",
     )
 
     assert ok is True
@@ -147,6 +152,11 @@ def test_report_usage_success_sends_post_with_correct_header_and_payload(monkeyp
         "agent_id": "agent_bba",
         "conversation_id": 1,
         "remark": "douyin_ai_reply",
+        "usage_measurement_method": "provider_tokens",
+        "prompt_tokens": 100,
+        "completion_tokens": 23,
+        "cached_tokens": 50,
+        "llm_call_stage": "primary",
     }
     # header 携带内部 token（urllib 会归一化 header 大小写，统一小写比较）
     header_map = {str(k).lower(): v for k, v in seen["headers"].items()}

@@ -302,6 +302,11 @@ def report_usage(
             agent_id=payload.agent_id,
             conversation_id=payload.conversation_id,
             remark=payload.remark,
+            usage_measurement_method=payload.usage_measurement_method,
+            prompt_tokens=payload.prompt_tokens,
+            completion_tokens=payload.completion_tokens,
+            cached_tokens=payload.cached_tokens,
+            llm_call_stage=payload.llm_call_stage,
         )
     except ValueError as exc:
         code = str(exc)
@@ -314,6 +319,9 @@ def report_usage(
             "COMPUTE_VALUE_OUT_OF_RANGE": "计费值超出范围",
             "COMPUTE_BALANCE_OUT_OF_RANGE": "账户余额变动超出范围",
             "COMPUTE_ACCOUNT_MISSING": "商户算力账户不存在",
+            "USAGE_MEASUREMENT_METHOD_INVALID": "无效的用量计量方式",
+            "TOKEN_DETAIL_OUT_OF_RANGE": "模型用量明细超出范围",
+            "LLM_CALL_STAGE_INVALID": "无效的模型调用阶段",
         }
         raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, payload.merchant_id)

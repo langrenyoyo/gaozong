@@ -1242,11 +1242,12 @@ class ComputeGrantPackageRequest(BaseModel):
 class ComputeUsageRequest(BaseModel):
     """内部 AI 消耗上报请求（供 9100/19000 埋点）。
 
-    Phase 10 §0.2：tokens 语义为实际字符量；capability_key/model 必填，source 受控。
+    tokens 是应用上浮前的基础用量；新客户端附带计量方式和供应商用量明细，
+    旧客户端省略新字段时仍保持兼容。
     """
 
     merchant_id: str = Field(..., max_length=128, description="商户 ID")
-    tokens: int = Field(..., gt=0, description="本次实际字符量（按能力上浮后扣费）")
+    tokens: int = Field(..., gt=0, le=9_223_372_036_854_775_807, description="本次基础用量")
     capability_key: Literal[
         "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge"
     ] = Field(..., description="算力能力 key（六值之一）")
@@ -1255,6 +1256,15 @@ class ComputeUsageRequest(BaseModel):
     agent_id: Optional[str] = Field(None, description="智能体 ID")
     conversation_id: Optional[int] = Field(None, description="会话 ID")
     remark: Optional[str] = None
+    usage_measurement_method: Optional[
+        Literal["provider_tokens", "estimated_tokens", "legacy_characters"]
+    ] = None
+    prompt_tokens: Optional[int] = Field(None, ge=0, le=9_223_372_036_854_775_807)
+    completion_tokens: Optional[int] = Field(None, ge=0, le=9_223_372_036_854_775_807)
+    cached_tokens: Optional[int] = Field(None, ge=0, le=9_223_372_036_854_775_807)
+    llm_call_stage: Optional[
+        Literal["primary", "retry_known_customer", "retry_phone_goal", "retry_combined"]
+    ] = None
 
     @field_validator("merchant_id")
     @classmethod

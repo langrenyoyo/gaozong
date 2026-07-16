@@ -25,6 +25,17 @@ from apps.compute.schemas import ComputePackageCreate, ComputePackageUpdate, Com
 TRANSACTION_TYPES = ("recharge", "grant_package", "consume")
 USAGE_SOURCES = ("llm", "embedding", "other")
 CONSUME_TYPE = "consume"
+USAGE_MEASUREMENT_METHODS = (
+    "provider_tokens",
+    "estimated_tokens",
+    "legacy_characters",
+)
+LLM_CALL_STAGES = (
+    "primary",
+    "retry_known_customer",
+    "retry_phone_goal",
+    "retry_combined",
+)
 
 # Phase 10 §0.2 算力计费合同：六能力 key 与基点计费常量
 COMPUTE_CAPABILITY_KEYS = (
@@ -52,6 +63,17 @@ def _balance_within_bigint_range(value: int) -> bool:
     旧 abs 判断会错误拒绝合法下界 -2^63。升级路径：列域改 numeric 则放开此区间。
     """
     return POSTGRES_BIGINT_MIN <= value <= POSTGRES_BIGINT_MAX
+
+
+def _validate_token_detail(value: int | None) -> int | None:
+    """校验供应商 Token 明细，避免绕过 DTO 的内部调用写入越界值。"""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("TOKEN_DETAIL_OUT_OF_RANGE")
+    if not 0 <= value <= POSTGRES_BIGINT_MAX:
+        raise ValueError("TOKEN_DETAIL_OUT_OF_RANGE")
+    return value
 
 
 def calculate_billed_tokens(actual_tokens: int, markup_basis_points: int) -> int:
@@ -136,6 +158,11 @@ def _write_transaction(
     actual_tokens: int | None = None,
     capability_key: str | None = None,
     markup_basis_points: int | None = None,
+    usage_measurement_method: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    cached_tokens: int | None = None,
+    llm_call_stage: str | None = None,
     autocommit: bool = True,
 ) -> ComputeTransaction:
     """写入一条流水并同步更新账户余额（含 balance_after_tokens 与计费快照）。
@@ -184,6 +211,11 @@ def _write_transaction(
         actual_tokens=actual_tokens,
         capability_key=capability_key,
         markup_basis_points=markup_basis_points,
+        usage_measurement_method=usage_measurement_method,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+        llm_call_stage=llm_call_stage,
     )
     db.add(tx)
     if autocommit:
@@ -395,11 +427,16 @@ def record_usage(
     agent_id: str | None = None,
     conversation_id: int | None = None,
     remark: str | None = None,
+    usage_measurement_method: str | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    cached_tokens: int | None = None,
+    llm_call_stage: str | None = None,
 ) -> ComputeAccount:
     """内部 AI 消耗上报：按能力上浮计费，写 consume 流水（一期不拦截余额，允许负）。
 
-    tokens 语义冻结为实际字符量；按 capability_key 读取唯一比例行计算计费量，
-    写入 actual_tokens/capability_key/markup_basis_points 三个快照列。
+    tokens 是应用上浮前的基础用量；按 capability_key 读取唯一比例行计算计费量，
+    并保存计量方式、供应商明细和调用阶段。旧调用省略计量方式时标记为 legacy_characters。
     Phase 10 §0.2：账户创建与流水写入只做一次顶层 commit（get_or_create_account +
     _write_transaction 均 autocommit=False），避免"账户已建、流水未写"半成品；并发首次
     建账由 get_or_create_account 的 SAVEPOINT + IntegrityError 恢复兜底，失败方不漏记。
@@ -414,6 +451,19 @@ def record_usage(
         raise ValueError("MODEL_INVALID")
     if source not in USAGE_SOURCES:
         raise ValueError("INVALID_SOURCE")
+    measurement_method = (
+        "legacy_characters"
+        if usage_measurement_method is None
+        else str(usage_measurement_method).strip()
+    )
+    if measurement_method not in USAGE_MEASUREMENT_METHODS:
+        raise ValueError("USAGE_MEASUREMENT_METHOD_INVALID")
+    normalized_stage = None if llm_call_stage is None else str(llm_call_stage).strip()
+    if normalized_stage is not None and normalized_stage not in LLM_CALL_STAGES:
+        raise ValueError("LLM_CALL_STAGE_INVALID")
+    prompt_tokens = _validate_token_detail(prompt_tokens)
+    completion_tokens = _validate_token_detail(completion_tokens)
+    cached_tokens = _validate_token_detail(cached_tokens)
     ratio = (
         db.query(ComputeMarkupRatio)
         .filter(ComputeMarkupRatio.capability_key == capability_key)
@@ -437,6 +487,11 @@ def record_usage(
         actual_tokens=tokens,
         capability_key=capability_key,
         markup_basis_points=effective_markup,
+        usage_measurement_method=measurement_method,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+        llm_call_stage=normalized_stage,
         autocommit=False,
     )
     db.commit()  # 顶层一次 commit：账户 + 流水原子持久化（合同）

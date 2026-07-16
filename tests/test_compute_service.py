@@ -278,6 +278,78 @@ def test_record_usage_decreases_balance(db):
     assert tx.markup_basis_points == 0
 
 
+def test_record_usage_snapshots_provider_measurement(db):
+    _seed_ratio(db)
+
+    compute_service.record_usage(
+        db,
+        "m_provider",
+        18,
+        capability_key="douyin-cs",
+        model="model-a",
+        usage_measurement_method="provider_tokens",
+        prompt_tokens=12,
+        completion_tokens=6,
+        cached_tokens=4,
+        llm_call_stage="primary",
+    )
+
+    tx = compute_service.list_transactions(
+        db, "m_provider", transaction_type="consume"
+    )["items"][0]
+    assert tx.actual_tokens == 18
+    assert tx.usage_measurement_method == "provider_tokens"
+    assert tx.prompt_tokens == 12
+    assert tx.completion_tokens == 6
+    assert tx.cached_tokens == 4
+    assert tx.llm_call_stage == "primary"
+
+
+def test_record_usage_defaults_old_payload_to_legacy_characters(db):
+    _seed_ratio(db)
+
+    compute_service.record_usage(
+        db, "m_legacy", 18, capability_key="douyin-cs", model="model-a"
+    )
+
+    tx = compute_service.list_transactions(
+        db, "m_legacy", transaction_type="consume"
+    )["items"][0]
+    assert tx.usage_measurement_method == "legacy_characters"
+    assert tx.prompt_tokens is None
+    assert tx.completion_tokens is None
+    assert tx.cached_tokens is None
+    assert tx.llm_call_stage is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("usage_measurement_method", "unknown", "USAGE_MEASUREMENT_METHOD_INVALID"),
+        ("prompt_tokens", -1, "TOKEN_DETAIL_OUT_OF_RANGE"),
+        ("completion_tokens", -1, "TOKEN_DETAIL_OUT_OF_RANGE"),
+        ("cached_tokens", -1, "TOKEN_DETAIL_OUT_OF_RANGE"),
+        ("prompt_tokens", POSTGRES_BIGINT_MAX + 1, "TOKEN_DETAIL_OUT_OF_RANGE"),
+        ("llm_call_stage", "unknown", "LLM_CALL_STAGE_INVALID"),
+    ],
+)
+def test_record_usage_rejects_invalid_measurement_details(db, field, value, error):
+    _seed_ratio(db)
+    kwargs = {field: value}
+
+    with pytest.raises(ValueError, match=error):
+        compute_service.record_usage(
+            db,
+            "m_invalid",
+            18,
+            capability_key="douyin-cs",
+            model="model-a",
+            **kwargs,
+        )
+
+    assert compute_service.list_transactions(db, "m_invalid")["total"] == 0
+
+
 def test_record_usage_rejects_invalid_source(db):
     _seed_ratio(db)
     with pytest.raises(ValueError, match="INVALID_SOURCE"):
@@ -677,3 +749,36 @@ def test_compute_usage_request_rejects_blank_merchant_id():
         model="gpt",
     )
     assert ok.merchant_id == "m_valid"
+
+
+def test_compute_usage_request_accepts_provider_measurement_details():
+    from app.schemas import ComputeUsageRequest
+
+    payload = ComputeUsageRequest(
+        merchant_id="m1",
+        tokens=18,
+        capability_key="douyin-cs",
+        model="model-a",
+        usage_measurement_method="provider_tokens",
+        prompt_tokens=12,
+        completion_tokens=6,
+        cached_tokens=4,
+        llm_call_stage="primary",
+    )
+
+    assert payload.prompt_tokens == 12
+    assert payload.usage_measurement_method == "provider_tokens"
+
+
+def test_compute_usage_request_keeps_legacy_client_compatible():
+    from app.schemas import ComputeUsageRequest
+
+    payload = ComputeUsageRequest(
+        merchant_id="m1",
+        tokens=18,
+        capability_key="douyin-cs",
+        model="model-a",
+    )
+
+    assert payload.usage_measurement_method is None
+    assert payload.llm_call_stage is None

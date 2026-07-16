@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401  触发 ORM 注册
 from app.database import Base, get_db
-from app.models import ComputeMarkupRatio
+from app.models import ComputeMarkupRatio, ComputeTransaction
 from datetime import datetime
 
 
@@ -175,16 +175,29 @@ def test_compute_app_internal_usage_keeps_existing_deduct_semantics():
         "/api/compute/internal/usage",
         json={
             "merchant_id": "merchant-a",
-            "tokens": 300,
+            "tokens": 18,
             "capability_key": "douyin-cs",
             "source": "llm",
             "model": "gpt-4o",
+            "usage_measurement_method": "provider_tokens",
+            "prompt_tokens": 12,
+            "completion_tokens": 6,
+            "cached_tokens": 4,
+            "llm_call_stage": "primary",
         },
     )
     assert usage.status_code == 200
     data = usage.json()["data"]
-    assert data["balance_tokens"] == 700
-    assert data["today_consume"] == 300
+    assert data["balance_tokens"] == 982
+    assert data["today_consume"] == 18
+    db = TestSession()
+    tx = db.query(ComputeTransaction).filter_by(transaction_type="consume").one()
+    assert tx.usage_measurement_method == "provider_tokens"
+    assert tx.prompt_tokens == 12
+    assert tx.completion_tokens == 6
+    assert tx.cached_tokens == 4
+    assert tx.llm_call_stage == "primary"
+    db.close()
 
 
 def test_internal_usage_production_fail_closed(monkeypatch):
