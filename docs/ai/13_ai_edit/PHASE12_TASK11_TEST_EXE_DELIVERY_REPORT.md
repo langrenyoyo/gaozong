@@ -9,8 +9,8 @@
 | 项 | 值 |
 |---|---|
 | EXE 路径 | `dist/phase12-task11/小高AI系统测试版.exe` |
-| 大小 | 248,983,506 字节（约 237 MB） |
-| SHA-256 | `20C7918B49B46C1173875888C33B673E750C9F5F42D3263CD468CE2CBC8C821C` |
+| 大小 | 593,377,409 字节（约 566 MB） |
+| SHA-256 | `C1F5930B40D8F6A0E15D872A6EC8983847908B6EF20FEB4A92BB4C433058CF07` |
 | 构建脚本 | `scripts/build_phase12_single_test_exe.ps1` |
 | 双 Python | Local Agent = Python 3.10（`demo_auto_wechat`），Worker = Python 3.11（`zws`） |
 | 随包 FFmpeg | Gyan 8.1.1-full_build（ffmpeg.exe / ffprobe.exe） |
@@ -64,6 +64,13 @@ Local Agent / Task 11 相关回归：64 passed
 ```
 覆盖：`test_p0_4a_exe_crash_fix`、`test_phase12_task11_launcher`、`test_local_agent_runtime`、`test_local_agent_auth`、`test_phase7_fix2_local_agent_auth`、`test_phase12_local_ai_edit_routes`、`test_local_agent_heartbeat`；均无新增失败。
 
+### 3.7 离线 EasyOCR 真实 smoke
+
+- 内层 Local Agent EXE 的 `GET /agent/ocr/status`：`ocr_available=true`、`model_source=bundled`、模型文件 `2` 个、总计 `100.23 MB`、`download_enabled=false`。
+- `POST /agent/ocr/warmup` 后：`ocr_initialized=true`、`model_ready=true`、`last_error=null`。
+- 外层单入口 EXE CArchive 已包含 `local_agent_phase12_test.exe`、`models\\easyocr\\craft_mlt_25k.pth`、`models\\easyocr\\zh_sim_g2.pth`。
+- 验证脚本：`scripts/smoke_phase12_task11_ocr.py`；全程仅访问 `127.0.0.1:19000`，未联网、未操作真实发送。
+
 ## 4. 本轮根因修复清单
 
 | 文件 | 问题 | 修复 |
@@ -71,6 +78,7 @@ Local Agent / Task 11 相关回归：64 passed
 | `apps/ai_edit/worker_main.py` | 无 `if __name__ == "__main__"` 块，PyInstaller EXE 收集后不调用 `main()`，静默 rc=0 退出 | 末尾补 `if __name__ == "__main__": raise SystemExit(main())` |
 | `app/local_agent_main.py` | ai_edit 注册块用 `Path` 但块内无导入 → 打包后 `name 'Path' is not defined`，9 路由静默未注册 | 块内补 `from pathlib import Path` |
 | `local_agent_phase12_test.spec` | excludes 含 `numpy`，但 `wechat_ui/contact_searcher.py` 顶层 `import numpy` → EXE 启动即 `ModuleNotFoundError` 崩溃 | 从 excludes 移除 `numpy`，注释说明不可排除原因 |
+| `local_agent_phase12_test.spec` / `phase12_test_launcher.spec` | 内层 EXE 排除了 `easyocr/torch/PIL/cv2`，外层未收集离线模型 → OCR 状态显示依赖不可用、模型为 0 | 内层显式收集 OCR 运行时，外层收集两个模型文件，构建脚本增加依赖/模型前置校验 |
 | `scripts/build_phase12_single_test_exe.ps1` | UTF-8 no-BOM 在 PS 5.1 被读为 GBK → 中文字面量解析错误 | 改 UTF-8 BOM；`Ensure-PyInstaller` 用 `import` 检查替代 `-m`（避免 PS 5.1 把 native stderr 当终止错误） |
 | `app/phase12_test_launcher.py` | 新建：标准库单入口启动器（tkinter 掩码 token、端口占用只读探测不杀进程、Job Object 进程树清理） | — |
 | `app/local_agent_main.py` | 公网 HTTPS 前端访问回环地址时 CORS/PNA 预检返回 400 | 从烘焙前端 URL 提取精确 origin，并启用 Private Network Access 预检 |
@@ -87,4 +95,4 @@ Local Agent / Task 11 相关回归：64 passed
 
 ## 6. 结论
 
-`BUILT_FOR_CUSTOMER_TEST` —— `小高AI系统测试版.exe` 已用带 `/api` 的真实测试 API、前端地址与商户 ID 重建；CArchive 配置提取、`/health`、公网前端 CORS/PNA 预检、19000 鉴权三态、9 路由、单 App 初始化与端口释放均通过。token 不入包，干净电脑不再依赖开发环境 token 映射，Worker 凭据隔离保持生效；新包仍需在干净虚拟机复测。
+`BUILT_FOR_CUSTOMER_TEST` —— `小高AI系统测试版.exe` 已用带 `/api` 的真实测试 API、前端地址与商户 ID 重建；CArchive 配置和 OCR 模型提取、`/health`、公网前端 CORS/PNA 预检、19000 鉴权三态、9 路由、单 App 初始化、EasyOCR 预热与端口释放均通过。token 不入包，干净电脑不再依赖开发环境 token 映射，Worker 凭据隔离保持生效；新包仍需在干净虚拟机复测。

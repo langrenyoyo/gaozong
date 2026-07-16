@@ -23,6 +23,15 @@ for name in ("local_agent_phase12_test.exe", "ai_edit_worker.exe",
         raise SystemExit(f"phase12_test_launcher.spec: 随包资源缺失 {src}")
     datas.append((str(src), "."))
 
+REQUIRED_OCR_MODEL_FILES = ("craft_mlt_25k.pth", "zh_sim_g2.pth")
+ocr_model_dir = bundle_dir / "models" / "easyocr"
+ocr_model_target = Path("models/easyocr")
+for name in REQUIRED_OCR_MODEL_FILES:
+    src = ocr_model_dir / name
+    if not src.exists():
+        raise SystemExit(f"phase12_test_launcher.spec: OCR 模型缺失 {src}")
+    datas.append((str(src), str(ocr_model_target)))
+
 
 a = Analysis(
     ["app\\phase12_test_launcher.py"],

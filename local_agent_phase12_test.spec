@@ -1,11 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Phase 12 Task 11 轻量 Local Agent 测试 spec（Python 3.10 onefile）。
+"""Phase 12 Task 11 Local Agent 测试 spec（Python 3.10 onefile）。
 
 与 local_agent.spec 的区别：
 - onefile（单 exe，供外层 phase12_test_launcher.spec 作为随包资源收集）；
-- 排除当前 AI 剪辑测试不使用的 OCR/视觉重依赖（easyocr/torch/torchvision/PIL/cv2/numpy/
-  ultralytics/funasr/open_clip）——这些在 Local Agent 侧均为函数内惰性 import，
-  AI 剪辑路径不触发；Worker 侧重依赖由独立 ai_edit_worker.spec 打包，不在此收集。
+- 收集微信测试需要的 EasyOCR、PyTorch、Pillow 与 OpenCV；
+- AI 剪辑 Worker 侧的 ultralytics/funasr/open_clip 仍由独立 ai_edit_worker.spec 管理。
 
 token 安全：token 运行时由外层启动器经环境变量注入，不进源码/spec/argv。
 """
@@ -14,9 +13,10 @@ from PyInstaller.utils.hooks import collect_all
 datas = []
 binaries = []
 hiddenimports = ["app.local_agent_build_info"]
+OCR_RUNTIME_PACKAGES = ("easyocr", "torch", "torchvision", "PIL", "cv2")
 
-# 仅收集 Local Agent 启动必需的纯 Python 包；重依赖按需排除。
-for package_name in ("pydantic",):
+# EasyOCR 在业务代码中惰性导入，必须显式收集，否则 EXE 能启动但文字识别不可用。
+for package_name in ("pydantic", *OCR_RUNTIME_PACKAGES):
     package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
     datas += package_datas
     binaries += package_binaries
@@ -33,10 +33,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # OCR/视觉重依赖：Local Agent 侧惰性 import，AI 剪辑测试不触发。
-        # 注意 numpy 不可排除：wechat_ui.contact_searcher 顶层 import numpy，
-        # 排除会导致 EXE 启动即 ModuleNotFoundError 崩溃。
-        "easyocr", "torch", "torchvision", "PIL", "cv2",
+        # AI 剪辑 Worker 专属重依赖不进入 Local Agent。
         "ultralytics", "funasr", "open_clip",
     ],
     noarchive=False,

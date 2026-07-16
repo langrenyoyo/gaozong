@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+from pathlib import Path
 from unittest import mock
 
 from fastapi import Depends, FastAPI
@@ -17,6 +18,43 @@ from app.auth.local_agent_auth import LocalAgentAuthContext, require_local_agent
 from app import phase12_test_launcher
 from app.local_agent_main import _build_worker_env
 from app.phase12_test_launcher import _agent_env, _local_agent_command, _port_is_free
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_task11_inner_local_agent_packages_ocr_runtime():
+    """单入口 EXE 的内嵌 Local Agent 必须包含微信文字识别运行时。"""
+    spec = (PROJECT_ROOT / "local_agent_phase12_test.spec").read_text(encoding="utf-8")
+    analysis_excludes = spec.split("excludes=[", 1)[1].split("]", 1)[0]
+
+    assert "OCR_RUNTIME_PACKAGES" in spec
+    for package in ("easyocr", "torch", "torchvision", "PIL", "cv2"):
+        assert package in spec.split("a = Analysis", 1)[0]
+        assert f'"{package}"' not in analysis_excludes
+
+
+def test_task11_outer_launcher_embeds_offline_ocr_models():
+    """甲方只复制一个 EXE 时，外层启动器必须携带两个离线模型。"""
+    spec = (PROJECT_ROOT / "phase12_test_launcher.spec").read_text(encoding="utf-8")
+
+    assert "REQUIRED_OCR_MODEL_FILES" in spec
+    assert "craft_mlt_25k.pth" in spec
+    assert "zh_sim_g2.pth" in spec
+    assert 'Path("models/easyocr")' in spec
+
+
+def test_task11_build_script_validates_and_stages_ocr_runtime():
+    """构建应在产包前验证依赖和模型，禁止再次生成可启动但无文字识别的包。"""
+    script = (PROJECT_ROOT / "scripts" / "build_phase12_single_test_exe.ps1").read_text(
+        encoding="utf-8-sig"
+    )
+
+    assert "resources\\easyocr_models" in script
+    assert "import easyocr, torch, cv2" in script
+    assert "from PIL import Image" in script
+    assert "$OcrModelBundleDir" in script
+    assert "Copy-Item" in script
 
 
 # ---------- 边界 1：Worker 子进程环境隔离（token / DB / internal token 不外泄） ----------

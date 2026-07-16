@@ -24,6 +24,8 @@ $BundleDir = Join-Path $ProjectRoot "build\phase12-task11-bundle"
 $InnerLocalAgentSpec = Join-Path $ProjectRoot "local_agent_phase12_test.spec"
 $WorkerSpec = Join-Path $ProjectRoot "ai_edit_worker.spec"
 $OuterLauncherSpec = Join-Path $ProjectRoot "phase12_test_launcher.spec"
+$OcrModelSource = Join-Path $ProjectRoot "resources\easyocr_models"
+$OcrModelBundleDir = Join-Path $BundleDir "models\easyocr"
 $AppName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("5bCP6auYQUnns7vnu5/mtYvor5XniYg="))
 $OutputExe = Join-Path $DistRoot "$AppName.exe"
 
@@ -51,8 +53,29 @@ try {
     if (-not (Test-Path $WorkerSpec)) { throw "spec 缺失：$WorkerSpec" }
     if (-not (Test-Path $OuterLauncherSpec)) { throw "spec 缺失：$OuterLauncherSpec" }
 
+    Write-Host "[build] 校验 Local Agent 文字识别依赖"
+    $ocrDependencyCheck = "import easyocr, torch, cv2; from PIL import Image; print(easyocr.__version__, torch.__version__, cv2.__version__)"
+    $ocrDependencyOutput = & $Python310Exe -c $ocrDependencyCheck
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python 3.10 环境缺少 easyocr / torch / cv2 / Pillow：$Python310Exe"
+    }
+    Write-Host "[build] OCR runtime: $ocrDependencyOutput"
+
+    $requiredOcrModels = @("craft_mlt_25k.pth", "zh_sim_g2.pth")
+    foreach ($modelName in $requiredOcrModels) {
+        $modelPath = Join-Path $OcrModelSource $modelName
+        if (-not (Test-Path $modelPath)) {
+            throw "EasyOCR 离线模型缺失：$modelPath"
+        }
+    }
+
     New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $BundleDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $OcrModelBundleDir | Out-Null
+    foreach ($modelName in $requiredOcrModels) {
+        Copy-Item -LiteralPath (Join-Path $OcrModelSource $modelName) `
+            -Destination (Join-Path $OcrModelBundleDir $modelName) -Force
+    }
 
     # ---- 1. 内部 Local Agent（Python 3.10 轻量 onefile）----
     Write-Host "[build] 1/3 内部 Local Agent（Python 3.10）"
