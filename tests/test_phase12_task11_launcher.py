@@ -5,15 +5,34 @@
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 from unittest import mock
 
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+
+from app.auth.local_agent_auth import LocalAgentAuthContext, require_local_agent_context
+from app import phase12_test_launcher
 from app.local_agent_main import _build_worker_env
 from app.phase12_test_launcher import _agent_env, _local_agent_command, _port_is_free
 
 
 # ---------- 边界 1：Worker 子进程环境隔离（token / DB / internal token 不外泄） ----------
+
+def test_launcher_reads_baked_api_frontend_and_merchant(tmp_path, monkeypatch):
+    config = {
+        "test_api_url": "https://merchant.xiaogaoai.cn/api",
+        "frontend_url": "https://merchant.xiaogaoai.cn/",
+        "merchant_id": "m_nc_2bba00063cc13016",
+    }
+    (tmp_path / "phase12_test_config.json").write_text(
+        json.dumps(config), encoding="utf-8"
+    )
+    monkeypatch.setattr(phase12_test_launcher, "_resource_dir", lambda: tmp_path)
+
+    assert phase12_test_launcher._load_baked_config() == config
 
 def test_worker_env_strips_secrets(monkeypatch):
     """_build_worker_env 必须剥离 Local Agent 凭据、数据库地址与 internal token。"""
@@ -24,6 +43,9 @@ def test_worker_env_strips_secrets(monkeypatch):
     monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
     monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
     monkeypatch.setenv("SOME_CUSTOM_TOKEN", "should-be-stripped")
+    monkeypatch.setenv("LOCAL_AGENT_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("LOCAL_AGENT_MERCHANT_ID", "m_test_001")
+    monkeypatch.setenv("LOCAL_AGENT_TOKENS", "m_test_001:agent-secret-xxx")
     monkeypatch.setenv("PATH", "C:\\windows\\system32")
 
     env = _build_worker_env()
@@ -36,6 +58,9 @@ def test_worker_env_strips_secrets(monkeypatch):
     assert "NEWCAR_AUTH_ENABLED" not in env
     assert "NEWCAR_AUTH_MOCK_ENABLED" not in env
     assert "SOME_CUSTOM_TOKEN" not in env
+    assert "LOCAL_AGENT_AUTH_REQUIRED" not in env
+    assert "LOCAL_AGENT_MERCHANT_ID" not in env
+    assert "LOCAL_AGENT_TOKENS" not in env
     # Worker 运行所需的环境保留
     assert env["PATH"] == "C:\\windows\\system32"
 
@@ -74,12 +99,36 @@ def test_token_only_in_env_under_local_agent_token_key():
     env = _agent_env(
         token, worker_exe="ai_edit_worker.exe", ffmpeg_exe="ffmpeg.exe",
         ffprobe_exe="ffprobe.exe", frontend_url="https://test.example.com",
+        merchant_id="m_test_001",
     )
     assert env["LOCAL_AGENT_TOKEN"] == token
+    assert env["LOCAL_AGENT_MERCHANT_ID"] == "m_test_001"
+    assert env["LOCAL_AGENT_AUTH_REQUIRED"] == "true"
     for key, value in env.items():
         if key == "LOCAL_AGENT_TOKEN":
             continue
         assert token not in str(value), f"token 泄露到环境键 {key}"
+
+
+def test_singular_agent_token_is_bound_to_baked_merchant(monkeypatch):
+    """干净电脑无需外部 LOCAL_AGENT_TOKENS，也能完成严格商户鉴权。"""
+    monkeypatch.setenv("LOCAL_AGENT_AUTH_REQUIRED", "true")
+    monkeypatch.delenv("LOCAL_AGENT_TOKENS", raising=False)
+    monkeypatch.setenv("LOCAL_AGENT_TOKEN", "agent-secret-xxx")
+    monkeypatch.setenv("LOCAL_AGENT_MERCHANT_ID", "m_test_001")
+
+    app = FastAPI()
+
+    @app.get("/probe")
+    def probe(ctx: LocalAgentAuthContext = Depends(require_local_agent_context)):
+        return {"merchant_id": ctx.merchant_id}
+
+    response = TestClient(app).get(
+        "/probe", headers={"X-Local-Agent-Token": "agent-secret-xxx"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"merchant_id": "m_test_001"}
 
 
 # ---------- 边界 3：端口占用只读检测，绝不杀未知进程 ----------

@@ -12,7 +12,7 @@
 
 **状态：** `BUILT_FOR_CUSTOMER_TEST`
 
-**构建证据：** EXE 已烘焙 `https://merchant.xiaogaoai.cn` 和商户 `m_nc_2bba00063cc13016`，CArchive 提取确认不含占位地址；SHA-256 为 `173AF6C255E59DFC89517CC2C0E330FBE3FCB3D6B490FB1790133B8DF40578E0`。
+**构建证据：** EXE 已烘焙 API `https://merchant.xiaogaoai.cn/api`、前端 `https://merchant.xiaogaoai.cn/` 和商户 `m_nc_2bba00063cc13016`；CArchive 配置、CORS/PNA 预检、严格鉴权、单 token 商户绑定、9 路由、单 App 初始化与端口释放均通过。SHA-256 为 `20C7918B49B46C1173875888C33B673E750C9F5F42D3263CD468CE2CBC8C821C`。
 
 ## 1. 最终交付
 
@@ -153,4 +153,4 @@ git commit -m "构建：生成单入口 AI 剪辑测试 EXE"
 BUILT_FOR_CUSTOMER_TEST
 ```
 
-真实端点构建与启动 smoke 已完成；尚未在无开发环境的干净 Windows 电脑验证。Phase 13 与宝塔生产验证仍不启动。
+旧包已在干净虚拟机暴露 CORS/PNA、API 基址和商户 token 绑定问题；修复后的新包已完成打包后运行态 smoke，仍需重新复制到干净虚拟机执行零安装复测。Phase 13 与宝塔生产验证仍不启动。

@@ -893,7 +893,7 @@ Phase 12 全套：255 passed / 2 skipped
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，EXE 已用真实测试 API / 前端地址 / 商户 ID 重建，CArchive 提取确认不含占位地址，真实启动、19000 鉴权三态、9 路由注册与进程树退出通过；尚未在无开发环境的干净 Windows 电脑验证。
+当前状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，EXE 已用 API `https://merchant.xiaogaoai.cn/api`、前端地址和商户 ID 重建；CArchive 配置、CORS/PNA 预检、19000 鉴权三态、9 路由注册、单 App 初始化与进程树退出通过。旧包已在干净虚拟机暴露边界问题，修复后的新包待重新复制复测。
 
 冻结口径：
 

@@ -96,17 +96,36 @@ def test_startup_exception_is_caught_and_reported(capsys):
 
 def test_route_summary_does_not_require_build_info(capsys):
     module = _import_with_missing_build_info("app.local_agent_exe_entry")
+    app = object()
 
-    with patch.object(module, "create_local_agent_app") as mock_create, \
-         patch.object(module, "get_route_paths", return_value=["/agent/version", "/agent/wechat/search-result-debug"]):
-        mock_create.return_value = object()
-        module._print_startup_message("127.0.0.1", 19000)
+    with patch.object(
+        module,
+        "get_route_paths",
+        return_value=["/agent/version", "/agent/wechat/search-result-debug"],
+    ):
+        module._print_startup_message(app, "127.0.0.1", 19000)
 
     output = capsys.readouterr().out
     assert "build_version: dev-source" in output
     assert "/agent/wechat/search-result-debug [OK]" in output
     assert "✔" not in output
     assert "⚠" not in output
+
+
+def test_exe_main_creates_local_agent_app_once(monkeypatch):
+    from app import local_agent_exe_entry
+
+    monkeypatch.delenv("AUTO_WECHAT_SERVER_URL", raising=False)
+    app = object()
+    with patch.object(local_agent_exe_entry, "_port_is_available", return_value=True), \
+         patch.object(local_agent_exe_entry, "create_local_agent_app", return_value=app) as create_app, \
+         patch.object(local_agent_exe_entry, "get_route_paths", return_value=[]), \
+         patch.object(local_agent_exe_entry.uvicorn, "run") as run:
+        exit_code = local_agent_exe_entry.main([])
+
+    assert exit_code == 0
+    create_app.assert_called_once_with(host="127.0.0.1", port=19000, server_url=None)
+    assert run.call_args.args[0] is app
 
 
 def test_build_script_contains_hidden_import_local_agent_build_info():

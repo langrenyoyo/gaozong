@@ -50,6 +50,21 @@ def _resolve_resource(name: str) -> Path:
     return path
 
 
+def _load_baked_config() -> dict:
+    """读取构建期烘焙的随包配置 phase12_test_config.json（test_api_url / frontend_url）。
+
+    URL 在构建期写入 EXE，运行时不依赖环境变量；缺文件回退空 dict（main 会提示配置缺失）。
+    """
+    import json
+    path = _resource_dir() / "phase12_test_config.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def _port_is_free(host: str, port: int) -> bool:
     """检测 (host, port) 是否可绑定（即未被占用）。
 
@@ -78,7 +93,7 @@ def _local_agent_command(
 
 def _agent_env(
     token: str, *, worker_exe: str, ffmpeg_exe: str, ffprobe_exe: str,
-    frontend_url: str,
+    frontend_url: str, merchant_id: str,
 ) -> dict:
     """构造内部 Local Agent 子进程环境变量。
 
@@ -87,7 +102,10 @@ def _agent_env(
     最小环境启动 Worker（见 local_agent_main._build_worker_env）。
     """
     env = dict(os.environ)
+    env.pop("LOCAL_AGENT_TOKENS", None)
     env["LOCAL_AGENT_TOKEN"] = token
+    env["LOCAL_AGENT_MERCHANT_ID"] = merchant_id
+    env["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
     env["AI_EDIT_WORKER_EXE"] = worker_exe
     env["AI_EDIT_FFMPEG_BINARY"] = ffmpeg_exe
     env["AI_EDIT_FFPROBE_BINARY"] = ffprobe_exe
@@ -229,10 +247,12 @@ def _notify(title: str, message: str) -> None:
 
 
 def main() -> int:
-    test_api_url = os.getenv("AI_EDIT_TEST_API_URL", "")
-    frontend_url = os.getenv("AI_EDIT_TEST_FRONTEND_URL", "")
-    if not test_api_url or not frontend_url:
-        _notify("配置缺失", "未注入测试 API / 前端地址，构建脚本异常。")
+    cfg = _load_baked_config()
+    test_api_url = cfg.get("test_api_url", "")
+    frontend_url = cfg.get("frontend_url", "")
+    merchant_id = cfg.get("merchant_id", "")
+    if not test_api_url or not frontend_url or not merchant_id:
+        _notify("配置缺失", "未注入测试 API / 前端地址 / 商户 ID，构建脚本异常。")
         return 2
 
     # 1. 定位随包内部 Local Agent / Worker / FFmpeg / ffprobe。
@@ -266,6 +286,7 @@ def main() -> int:
     env = _agent_env(
         token, worker_exe=str(worker_exe), ffmpeg_exe=str(ffmpeg_exe),
         ffprobe_exe=str(ffprobe_exe), frontend_url=frontend_url,
+        merchant_id=merchant_id,
     )
     job = _create_kill_on_close_job()
     proc = _sp.Popen(cmd, env=env, shell=False)

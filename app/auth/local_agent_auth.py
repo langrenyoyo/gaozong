@@ -32,6 +32,10 @@ def _auth_required() -> bool:
 def _token_map() -> dict[str, str]:
     """解析 merchant_id:token 配置，忽略不完整项。"""
     result: dict[str, str] = {}
+    singular_token = os.getenv("LOCAL_AGENT_TOKEN", "").strip()
+    singular_merchant_id = os.getenv("LOCAL_AGENT_MERCHANT_ID", "").strip()
+    if singular_token and singular_merchant_id:
+        result[singular_token] = singular_merchant_id
     for item in os.getenv("LOCAL_AGENT_TOKENS", "").split(","):
         text = item.strip()
         if not text or ":" not in text:
@@ -39,7 +43,7 @@ def _token_map() -> dict[str, str]:
         merchant_id, token = text.split(":", 1)
         merchant_id = merchant_id.strip()
         token = token.strip()
-        if merchant_id and token:
+        if merchant_id and token and token not in result:
             result[token] = merchant_id
     return result
 

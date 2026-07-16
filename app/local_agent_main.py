@@ -90,6 +90,7 @@ def _get_local_agent_token() -> str | None:
 _WORKER_ENV_STRIP_EXACT = {
     "LOCAL_AGENT_TOKEN", "DATABASE_URL", "RAG_DATABASE_URL",
     "COMPUTE_INTERNAL_TOKEN", "NEWCAR_AUTH_ENABLED", "NEWCAR_AUTH_MOCK_ENABLED",
+    "LOCAL_AGENT_AUTH_REQUIRED", "LOCAL_AGENT_MERCHANT_ID", "LOCAL_AGENT_TOKENS",
 }
 
 
@@ -119,6 +120,20 @@ REACT_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://douyinapi.misanduo.com",
 ]
+
+
+def _react_allowed_origins() -> list[str]:
+    origins = list(REACT_ALLOWED_ORIGINS)
+    frontend_url = os.getenv("AI_EDIT_TEST_FRONTEND_URL", "").strip()
+    if frontend_url:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(frontend_url)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin not in origins:
+                origins.append(origin)
+    return origins
 
 # P1-AUTO-1C：运行锁，确保同一时间只有一个微信 UI 任务
 _wechat_task_lock: threading.Lock | None = None
@@ -1493,10 +1508,10 @@ def create_local_agent_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=REACT_ALLOWED_ORIGINS,
+        allow_origins=_react_allowed_origins(),
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
-
+        allow_private_network=True,
     )
 
     # P1-AUTO-1C：初始化运行锁

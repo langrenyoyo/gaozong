@@ -130,8 +130,9 @@ def _port_is_available(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) != 0
 
 
-def _print_startup_message(host: str, port: int, server_url: str | None = None) -> None:
-    app = create_local_agent_app(host=host, port=port, server_url=server_url)
+def _print_startup_message(
+    app, host: str, port: int, server_url: str | None = None,
+) -> None:
     routes = get_route_paths(app)
 
     print("=" * 50)
@@ -188,10 +189,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("local agent startup failed: port_in_use host=%s port=%s", host, port)
         return 1
 
-    _print_startup_message(host, port, server_url)
+    logger.info("local agent app creating: host=%s port=%s", host, port)
+    app = create_local_agent_app(host=host, port=port, server_url=server_url)
+    logger.info("local agent app created: route_count=%s", len(get_route_paths(app)))
+    _print_startup_message(app, host, port, server_url)
     logger.info("local agent uvicorn starting: health_url=http://%s:%s/health", host, port)
     uvicorn.run(
-        create_local_agent_app(host=host, port=port, server_url=server_url),
+        app,
         host=host,
         port=port,
         log_config=None,

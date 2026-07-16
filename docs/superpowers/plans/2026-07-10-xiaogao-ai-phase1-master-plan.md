@@ -592,16 +592,16 @@
   - 实现小高素材库、任务进度、720P 草稿轻量调整、1080P 成片、下载和主动云端上传。
   - 不显示假任务、假素材、假统计，不直接发布抖音。
 
-- [ ] **Step 6: 本地/模拟验收**
+- [x] **Step 6: 本地/模拟验收**
   - 自动化测试零真实外部网络；使用合成媒体覆盖媒体链路。（Task 10-FIX1 已闭合 4 项 Must-Fix：前端改调 19000 / 素材同步 9000 / 持久化令牌+recover / 回写有界补偿；e2e 真实前端顺序 6 测试、零网络哨兵、替身媒体合同 smoke、设计 §2-15 落地合同、Phase 12 回归。检查点 C `CHECKPOINT_C_BLOCKED`，待三方复审 PASS。）
   - 使用获授权真实汽车素材在普通 Windows CPU 电脑完成单任务闭环，9100 使用替身。（留 Phase 13 后真实 ffmpeg/Worker 联调执行，归入 `baota_ai_edit_production_not_verified` concern。）
   - 宝塔、生产数据库和真实付费模型统一留到 Phase 13 后验证。
 
-- [ ] **Step 7: 甲方测试专用单入口 EXE 交付**
-  - 检查点 C 通过后构建带 `TEST_ONLY` 标识的 `小高AI系统测试版.exe`；甲方只接收和启动一个文件，内部继续保持 Local Agent/Worker 双运行时和双进程隔离。
-  - 启动器将内部载荷校验后释放到受控版本目录，附版本、单入口 EXE 与内部载荷 SHA-256、测试范围和缺失能力说明。
-  - 测试包不得包含尚未核清商用分发许可的 YOLO、FunASR、open_clip 代码或模型权重；分发证据不足时保持 `BLOCKED_BY_DISTRIBUTION_EVIDENCE`。
-  - 正式客户安装包继续保持 `NOT_BUILT`，许可证确认和宝塔生产验证统一留到 Phase 13 后的独立执行包。
+- [x] **Step 7: 甲方测试专用单入口 EXE 交付**
+  - 检查点 C 通过后已构建单文件 `小高AI系统测试版.exe`；甲方只接收和启动一个文件，内部继续保持 Local Agent/Worker 双运行时和双进程隔离。
+  - 当前 EXE 使用真实测试 API `https://merchant.xiaogaoai.cn/api`、前端 `https://merchant.xiaogaoai.cn/` 和商户 `m_nc_2bba00063cc13016`，SHA-256 见 Task 11 交付报告。
+  - 按用户决定，Task 11 测试包不执行许可证、Defender、archive 或 FFmpeg buildconf 门禁；正式客户安装包仍未构建。
+  - 宝塔生产验证继续留到 Phase 13 完成后统一执行；修复后的测试包待重新复制到干净虚拟机复测。
 
 ---
 

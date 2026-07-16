@@ -2,7 +2,31 @@
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.mark.parametrize("path", ["/health", "/runtime/status"])
+def test_customer_frontend_private_network_preflight_is_allowed(monkeypatch, path):
+    from app.local_agent_main import create_local_agent_app
+
+    origin = "https://merchant.xiaogaoai.cn"
+    monkeypatch.setenv("AI_EDIT_TEST_FRONTEND_URL", f"{origin}/")
+    client = TestClient(create_local_agent_app())
+
+    response = client.options(
+        path,
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-local-agent-token",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.headers["access-control-allow-private-network"] == "true"
 
 
 def test_runtime_status_defaults_to_polling_disabled():
