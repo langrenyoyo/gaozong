@@ -29,7 +29,6 @@ import {
   LOCAL_AGENT_BASE_URL,
   checkLocalAgentHealth,
   createStaff,
-  createWechatTask,
   deleteStaff,
   disableLocalAgentTaskPolling,
   disableStaff,
@@ -40,12 +39,12 @@ import {
   fetchWechatTaskHistory,
   fetchWechatTask,
   fetchStaffList,
-  pollAndExecuteWechatTask,
+  startLocalWechatTest,
   updateStaff,
 } from "../api";
 import type {
   LocalAgentRuntimeStatus,
-  PollAndExecuteResponse,
+  LocalWechatTestResult,
   Staff,
   WechatTask,
   WechatTaskHistoryItem,
@@ -175,14 +174,12 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   const [savingStaff, setSavingStaff] = useState(false);
   const [staffActionId, setStaffActionId] = useState<number | null>(null);
   const [testing, setTesting] = useState(false);
-  const [testNickname, setTestNickname] = useState(DEFAULT_TEST_NICKNAME);
   const [testMessage, setTestMessage] = useState("小高AI微信助手测试消息");
   const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
   const [testResult, setTestResult] = useState<{
-    createdTaskId?: number;
     localAgentOnline?: boolean;
     executed?: boolean;
-    pollResult?: PollAndExecuteResponse | null;
+    localResult?: LocalWechatTestResult | null;
     message: string;
   } | null>(null);
   const [staffKeyword, setStaffKeyword] = useState("");
@@ -514,7 +511,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   }
 
   async function handleRunTest() {
-    const nickname = testNickname.trim() || DEFAULT_TEST_NICKNAME;
     const message = testMessage.trim();
     if (!message) {
       toast.warning("请填写测试内容");
@@ -535,20 +531,22 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         return;
       }
 
-      const task = await createWechatTask({
-        task_type: "notify_sales",
-        target_nickname: nickname,
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 180000);
+      const result = await startLocalWechatTest({
+        nickname: DEFAULT_TEST_NICKNAME,
         message,
         mode: "paste_only",
-      });
-      const result = await pollAndExecuteWechatTask(task.id);
+        engine: "easyocr",
+        position: "right",
+        confirm_before_send: false,
+      }, controller.signal).finally(() => window.clearTimeout(timeout));
       setTestResult({
-        createdTaskId: task.id,
         localAgentOnline: true,
         executed: Boolean(result.success),
-        pollResult: result,
+        localResult: result,
         message: result.success
-          ? "测试任务已由 AI小高助手执行，请查看任务结果确认粘贴和发送状态。"
+          ? "本机微信仅粘贴测试已完成。"
           : userFacingState(result.failure_stage, userFacingText(result.message, "测试任务执行失败")),
       });
       await refreshPage();
@@ -1050,9 +1048,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                 <input
                   aria-label="测试销售微信昵称"
-                  value={testNickname}
-                  onChange={(event) => setTestNickname(event.target.value)}
-                  className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
+                  value={DEFAULT_TEST_NICKNAME}
+                  readOnly
+                  className="h-10 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600"
                   placeholder="测试销售微信昵称"
                 />
                 <input
@@ -1078,18 +1076,18 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                   <div className="grid gap-2 sm:grid-cols-3">
                     <div>AI小高助手：{testResult.localAgentOnline ? "在线" : "离线"}</div>
-                    <div>任务：{testResult.createdTaskId ? `#${testResult.createdTaskId}` : "未创建"}</div>
+                    <div>测试：本机仅粘贴</div>
                     <div>执行：{testResult.executed ? "已执行" : "未执行"}</div>
-                    <div>粘贴：{testResult.pollResult?.action?.pasted ? "已粘贴" : "未粘贴"}</div>
-                    <div>发送：{testResult.pollResult?.action?.sent ? "已发送" : "未发送"}</div>
-                    <div>联系人验证：{testResult.pollResult?.raw_result?.contact_verified ? "通过" : "-"}</div>
-                    <div className="sm:col-span-3">失败阶段：{userFacingState(testResult.pollResult?.failure_stage)}</div>
+                    <div>粘贴：{testResult.localResult?.action?.pasted ? "已粘贴" : "未粘贴"}</div>
+                    <div>发送：{testResult.localResult?.action?.sent ? "已发送" : "未发送"}</div>
+                    <div>联系人验证：{testResult.localResult?.verify?.verified ? "通过" : "-"}</div>
+                    <div className="sm:col-span-3">失败阶段：{userFacingState(testResult.localResult?.failure_stage)}</div>
                     <div className="sm:col-span-3">结果：{testResult.message}</div>
                   </div>
                   <details className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2">
                     <summary className="cursor-pointer font-semibold text-slate-700">查看完整执行记录</summary>
                     <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700">
-                      {testResult.pollResult ? JSON.stringify(testResult.pollResult, null, 2) : "-"}
+                      {testResult.localResult ? JSON.stringify(testResult.localResult, null, 2) : "-"}
                     </pre>
                   </details>
                 </div>

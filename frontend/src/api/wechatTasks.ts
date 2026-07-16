@@ -8,16 +8,10 @@
 import apiClient from "./client";
 import type {
   WechatTask,
-  WechatTaskCreateRequest,
   WechatTaskHistoryItem,
   WechatTaskHistoryParams,
   WechatTaskHistoryResponse,
 } from "./types";
-
-/** 创建微信任务。 */
-export async function createWechatTask(payload: WechatTaskCreateRequest): Promise<WechatTask> {
-  return apiClient.post("/wechat-tasks", payload);
-}
 
 function historyItemToWechatTask(item: WechatTaskHistoryItem): WechatTask {
   return {

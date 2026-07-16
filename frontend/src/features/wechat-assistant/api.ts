@@ -9,7 +9,6 @@ export {
   resumeAutomation,
 } from "../../api/automation";
 export {
-  createWechatTask,
   fetchBrowserPendingWechatTasks,
   fetchWechatTaskHistory,
   fetchWechatTaskDetail,

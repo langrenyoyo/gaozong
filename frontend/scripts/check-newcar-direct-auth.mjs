@@ -165,9 +165,15 @@ assertNotIncludes(newcarRedirect, 'sessionStorage.getItem(NEWCAR_REDIRECTING_KEY
 assertIncludes(wechatTasks, "fetchBrowserPendingWechatTasks", "wechat task api exposes a browser pending list helper");
 assertIncludes(wechatTasks, 'status: "pending"', "browser pending helper queries GET /wechat-tasks with status=pending");
 assertIncludes(wechatTasks, 'apiClient.get("/wechat-tasks/pending"', "Local Agent pending poll endpoint remains available");
+assertNotIncludes(wechatTasks, 'apiClient.post("/wechat-tasks"', "browser must not call the disabled generic WeChat task creation endpoint");
+assertNotIncludes(wechatTasks, "createWechatTask", "frontend must not expose the disabled generic WeChat task creation helper");
 assertIncludes(wechatAgentPage, "fetchBrowserPendingWechatTasks({ limit: 20 })", "wechat assistant page uses browser pending task helper");
 assertIncludes(wechatTaskPanel, "fetchBrowserPendingWechatTasks({ limit: 50 })", "wechat task panel uses browser pending task helper");
 assertIncludes(wechatTaskPanel, 'fetchBrowserPendingWechatTasks({ task_type: "detect_reply", limit: 10 })', "detect reply list uses browser pending task helper");
+assertIncludes(wechatAgentPage, "startLocalWechatTest", "wechat assistant paste test uses the Local Agent safety route");
+assertIncludes(wechatTaskPanel, "startLocalWechatTest", "legacy task panel paste test uses the Local Agent safety route");
+assertNotIncludes(wechatAgentPage, "createWechatTask", "wechat assistant page must not use the disabled generic task creation route");
+assertNotIncludes(wechatTaskPanel, "createWechatTask", "legacy task panel must not use the disabled generic task creation route");
 assertNotIncludes(wechatAgentPage, "fetchPendingWechatTasks", "wechat assistant page no longer calls the Local Agent pending poll helper");
 assertNotIncludes(wechatTaskPanel, "fetchPendingWechatTasks", "wechat task panel no longer calls the Local Agent pending poll helper");
 

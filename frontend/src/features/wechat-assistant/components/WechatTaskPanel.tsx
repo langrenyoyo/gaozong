@@ -2,14 +2,12 @@
  * 微信任务队列面板（P0-5A-3 / P0-FE-MAIN-1 / P0-REPLY-2）
  *
  * 展示 pending 状态的 WechatTask 列表。
- * 通过主系统后端（VITE_AUTO_WECHAT_API_BASE_URL）查询，
- * 不调用 AI小高助手，不执行微信自动化。
+ * 任务列表通过主系统后端（VITE_AUTO_WECHAT_API_BASE_URL）查询；
+ * 本机仅粘贴测试单独调用 AI小高助手。
  *
  * P0-FE-MAIN-1 新增：
- * - 「创建测试任务并执行」按钮
- * - 调 POST /wechat-tasks 创建 paste_only Aw3 任务
- * - 调 POST 19000 /agent/tasks/poll-and-execute 触发执行
- * - 每 2 秒轮询 GET /wechat-tasks/{task_id} 刷新状态
+ * - 「执行本机仅粘贴测试」按钮
+ * - 调 POST 19000 /agent/wechat/test 触发本机安全测试
  *
  * P0-REPLY-2 新增：
  * - 「检测销售回复」按钮
@@ -38,20 +36,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
-  createWechatTask,
   fetchBrowserPendingWechatTasks,
   fetchWechatTask,
+  startLocalWechatTest,
 } from "../api";
-import { pollAndExecuteWechatTask, detectReply, pollAndDetectReply } from "../api";
+import { detectReply, pollAndDetectReply } from "../api";
 import { fetchNotificationRecords } from "../api";
 import { fetchChecks } from "../api";
-import { fetchStaffList, createStaff } from "../api";
-import { createLead, assignLead } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError, userFacingState, userFacingText } from "../../../lib/userFacingError";
 import type {
   WechatTask,
-  PollAndExecuteResponse,
+  LocalWechatTestResult,
   NotificationRecord,
   AgentReplyDetectResponse,
   CheckRecord,
@@ -129,28 +125,6 @@ const DETECT_STATUS_TONES: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
   blocked: "bg-slate-100 text-slate-700",
 };
-
-/** P0-FE-MAIN-2A：确保存在 Aw3 销售，返回 staff_id */
-async function ensureAw3Staff(): Promise<number> {
-  const list = await fetchStaffList("active");
-  const existing = list.find((s) => s.wechat_nickname === "Aw3");
-  if (existing) return existing.id;
-  const created = await createStaff({ name: "Aw3", wechat_nickname: "Aw3" });
-  return created.id;
-}
-
-/** P0-FE-MAIN-2A：创建测试线索并分配给销售，返回 lead_id */
-async function createTestLeadAndAssign(staffId: number): Promise<number> {
-  const ts = Date.now();
-  const lead = await createLead({
-    source: "test",
-    customer_name: "测试客户-" + ts,
-    content: "[P0-FE-MAIN-2A 自动创建的测试线索]",
-    source_id: "test_" + ts,
-  });
-  await assignLead(lead.id, staffId);
-  return lead.id;
-}
 
 // ========== 工具函数 ==========
 
@@ -231,11 +205,11 @@ export default function WechatTaskPanel() {
   const [error, setError] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
 
-  // P0-FE-MAIN-1：创建任务并执行的状态
+  // P0-FE-MAIN-1：本机仅粘贴测试状态
   const [creating, setCreating] = useState(false);
   const [latestTaskId, setLatestTaskId] = useState<number | null>(null);
   const [latestTask, setLatestTask] = useState<WechatTask | null>(null);
-  const [pollResult, setPollResult] = useState<PollAndExecuteResponse | null>(null);
+  const [pollResult, setPollResult] = useState<LocalWechatTestResult | null>(null);
   const [pollingTask, setPollingTask] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -392,7 +366,7 @@ export default function WechatTaskPanel() {
     [clearPollTimer, refreshTasks, refreshNotifications],
   );
 
-  /** 创建测试任务并触发 AI小高助手执行 */
+  /** 执行本机微信仅粘贴测试，不创建已停用的通用任务。 */
   const handleCreateAndExecute = async () => {
     setCreating(true);
     setLatestTask(null);
@@ -400,49 +374,18 @@ export default function WechatTaskPanel() {
     setPollResult(null);
     clearPollTimer();
 
-    let taskId: number | null = null;
-
-    // P0-FE-MAIN-2A：先确保 Aw3 销售 + 创建测试线索
-    let staffId: number | null = null;
-    let leadId: number | null = null;
-
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
-      staffId = await ensureAw3Staff();
-      leadId = await createTestLeadAndAssign(staffId);
-      toast.info(`已准备测试数据：staff #${staffId}，lead #${leadId}`);
-    } catch (err) {
-      userFacingError(err);
-      toast.warning("测试数据准备失败，将使用无关联数据创建任务");
-    }
-
-    try {
-      // 1. 在主系统创建 paste_only Aw3 测试任务（带 lead_id / staff_id）
-      const created = await createWechatTask({
-        task_type: "notify_sales",
-        target_nickname: "Aw3",
-        message: "[P0-FE-MAIN-2A 测试] paste_only 任务，lead #" + (leadId ?? "?") + " → staff #" + (staffId ?? "?"),
-        mode: "paste_only",
-        lead_id: leadId ?? undefined,
-        staff_id: staffId ?? undefined,
-      });
-      taskId = created.id;
-      setLatestTaskId(taskId);
-      setLatestTask(created);
-      toast.info(`已创建任务 #${taskId}（线索 #${leadId} → 销售人员 #${staffId}），正在触发 AI小高助手…`);
-    } catch (err) {
-      toast.error(userFacingError(err, "创建任务失败，请稍后重试"));
-      setCreating(false);
-      return;
-    }
-
-    try {
-      // 2. 调用 AI小高助手 19000 poll-and-execute
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 180000);
-
-      // P1-AUTO-1D-FIX2：传入刚创建的 task_id，避免被旧 pending 队列阻塞
-      const result = await pollAndExecuteWechatTask(taskId, controller.signal);
-      window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => controller.abort(), 180000);
+      const result = await startLocalWechatTest({
+        nickname: "Aw3",
+        message: "[AUTO_WECHAT_TEST] 本机微信仅粘贴测试",
+        mode: "paste_only",
+        engine: "easyocr",
+        position: "right",
+        confirm_before_send: false,
+      }, controller.signal);
       setPollResult(result);
 
       if (result.success) {
@@ -461,11 +404,8 @@ export default function WechatTaskPanel() {
         failure_stage: "agent_request_failed",
         message: userFacingError(err),
       });
-    }
-
-    // 3. 开始轮询任务状态
-    if (taskId) {
-      startPollingTask(taskId);
+    } finally {
+      if (timeout) window.clearTimeout(timeout);
     }
 
     setCreating(false);
@@ -595,7 +535,7 @@ export default function WechatTaskPanel() {
           <div>
             <h3 className="text-sm font-bold text-[#1a1f2e]">微信任务队列</h3>
             <p className="text-[11px] text-[#8b95a6]">
-              主系统创建任务 → AI小高助手拉取执行 → 回写结果
+              业务任务由主系统创建，本机测试不写入通用任务队列
             </p>
           </div>
         </div>
@@ -616,7 +556,7 @@ export default function WechatTaskPanel() {
             刷新
           </button>
 
-          {/* P0-FE-MAIN-1：创建测试任务并执行 */}
+          {/* P0-FE-MAIN-1：执行本机仅粘贴测试 */}
           <button
             onClick={handleCreateAndExecute}
             disabled={creating || pollingTask}
@@ -627,7 +567,7 @@ export default function WechatTaskPanel() {
             ) : (
               <PlayIcon size={14} />
             )}
-            {creating ? "创建中…" : pollingTask ? "执行中…" : "创建测试任务并执行"}
+            {creating || pollingTask ? "执行中…" : "执行本机粘贴测试"}
           </button>
 
           {/* P0-REPLY-2：检测销售回复 */}
@@ -726,7 +666,7 @@ export default function WechatTaskPanel() {
                 <BooleanPill value={pollResult.action?.pasted} label="已粘贴" />
               </div>
               <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-                <BooleanPill value={pollResult.write_back?.ok} label="回写成功" />
+                <BooleanPill value={pollResult.verify?.verified} label="联系人验证" />
               </div>
             </div>
           )}
@@ -744,9 +684,9 @@ export default function WechatTaskPanel() {
                   AI小高助手：<span className="font-semibold text-[#334155]">{pollResult.agent_machine.hostname}</span>
                 </div>
               )}
-              {pollResult.task && (
+              {pollResult.request && (
                 <div>
-                  拉取任务: <span className="font-semibold text-[#334155]">#{pollResult.task.id} → {pollResult.task.target_nickname}</span>
+                  测试目标: <span className="font-semibold text-[#334155]">{pollResult.request.nickname} · {pollResult.request.mode}</span>
                 </div>
               )}
             </div>
@@ -859,7 +799,7 @@ export default function WechatTaskPanel() {
         })()}
 
         {notifications.length === 0 ? (
-          <div className="mt-2 text-[11px] text-[#8b95a6]">暂无通知记录，创建测试任务并执行后，回写成功会自动出现通知</div>
+          <div className="mt-2 text-[11px] text-[#8b95a6]">暂无通知记录</div>
         ) : (
           <div className="mt-2 space-y-1.5">
             {notifications.slice(0, 5).map((n) => {
@@ -1161,7 +1101,7 @@ export default function WechatTaskPanel() {
           </div>
         ) : tasks.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[#d9e0ea] bg-white/60 px-4 py-6 text-center text-xs text-[#8b95a6]">
-            暂无待执行任务。点击上方「创建测试任务并执行」以创建 Aw3 paste_only 测试任务。
+            暂无待执行任务。
           </div>
         ) : (
           <div className="space-y-2">
