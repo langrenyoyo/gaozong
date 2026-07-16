@@ -59,7 +59,8 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("merchant");
-  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const importing = importProgress !== null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -92,21 +93,39 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
 
   const onFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
+      const files = Array.from(e.target.files || []);
       e.target.value = "";
-      if (!file) return;
-      // 本机素材 ID：时间戳 + 文件名片段，避免冲突；后端按商户隔离。
-      const materialId = `mat_${Date.now()}_${file.name.replace(/[^\w.-]/g, "_").slice(0, 32)}`;
-      setImporting(true);
+      if (files.length === 0) return;
+
+      const batchId = Date.now();
+      const failed: { name: string; reason: string }[] = [];
+      let succeeded = 0;
+      setImportProgress({ current: 0, total: files.length });
       try {
-        const result = await importLocalMaterial(file, materialId, merchantId);
-        toast.success(`本机导入成功：${result.material_id}（${result.size_bytes} 字节）`);
-        // 导入后刷新 9000 列表（后端同步到 9000 元数据后才会出现）。
-        await load();
-      } catch (err) {
-        toast.error(`本机导入失败：${resolveError(err)}`);
+        for (const [index, file] of files.entries()) {
+          setImportProgress({ current: index + 1, total: files.length });
+          const safeName = file.name.replace(/[^\w.-]/g, "_").slice(0, 32);
+          const materialId = `mat_${batchId}_${index}_${safeName}`;
+          try {
+            await importLocalMaterial(file, materialId, merchantId);
+            succeeded += 1;
+          } catch (err) {
+            failed.push({ name: file.name, reason: resolveError(err) });
+          }
+        }
+
+        // 19000 同步 9000 元数据后，整个批次只刷新一次列表。
+        if (succeeded > 0) await load();
+        if (failed.length === 0) {
+          toast.success(`批量导入完成：${succeeded} 个`);
+        } else {
+          const description = failed.map((item) => `${item.name}（${item.reason}）`).join("；");
+          const summary = `批量导入完成：成功 ${succeeded} 个，失败 ${failed.length} 个`;
+          if (succeeded > 0) toast.warning(summary, { description });
+          else toast.error(summary, { description });
+        }
       } finally {
-        setImporting(false);
+        setImportProgress(null);
       }
     },
     [load, merchantId],
@@ -160,12 +179,15 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               className="inline-flex items-center gap-1 rounded-lg bg-[#1a1f2e] px-3 py-2 text-xs font-medium text-white hover:bg-[#2a3142] disabled:opacity-50"
             >
               <UploadIcon className="h-3.5 w-3.5" />
-              {importing ? "导入中…" : "导入本机素材"}
+              {importProgress
+                ? `导入中 ${importProgress.current}/${importProgress.total}`
+                : "批量导入素材"}
             </button>
             <input
               ref={fileInputRef}
               type="file"
               accept="video/*"
+              multiple
               className="hidden"
               onChange={onFileChange}
             />

@@ -103,6 +103,57 @@ try {
     }
     await context.close();
   }
+
+  const batchContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const batchPage = await batchContext.newPage();
+  const batchImports = [];
+  let materialListRequests = 0;
+  await batchPage.route('**/*', (route) => {
+    const url = route.request().url();
+    if (url.includes('127.0.0.1:19000/agent/ai-edit/materials/import-stream')) {
+      const materialId = new URL(url).searchParams.get('material_id');
+      batchImports.push(materialId);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            material_id: materialId,
+            relative_path: `materials/${materialId}.mp4`,
+            sha256: 'a'.repeat(64),
+            size_bytes: 3,
+          },
+          message: 'success',
+        }),
+      });
+    }
+    if ((url.includes('127.0.0.1:9000') || url.includes(':9000')) && url.includes('/ai-edit/materials')) {
+      materialListRequests += 1;
+    }
+    return routeMock(route);
+  });
+
+  await batchPage.goto(`${ORIGIN}/ai-edit/materials`, { waitUntil: 'networkidle' });
+  await batchPage.locator('input[type="file"]').setInputFiles([
+    { name: 'batch-a.mp4', mimeType: 'video/mp4', buffer: Buffer.from('aaa') },
+    { name: 'batch-b.mp4', mimeType: 'video/mp4', buffer: Buffer.from('bbb') },
+  ]);
+  try {
+    await batchPage.getByText('批量导入完成：2 个').waitFor({ timeout: 8000 });
+  } catch {
+    failures.push('batch-import: 未显示双文件批量导入成功汇总');
+  }
+  if (batchImports.length !== 2) {
+    failures.push(`batch-import: 期望 2 次流式导入，实际 ${batchImports.length}`);
+  }
+  if (new Set(batchImports).size !== 2) {
+    failures.push('batch-import: material_id 未保持批次内唯一');
+  }
+  if (materialListRequests !== 2) {
+    failures.push(`batch-import: 素材列表应初始读取一次、批次结束刷新一次，实际 ${materialListRequests}`);
+  }
+  await batchContext.close();
 } finally {
   await browser.close();
 }

@@ -91,6 +91,18 @@ const missing = requiredCapabilities.filter((c) => !pageBlob.includes(c));
 if (missing.length > 0) {
   throw new Error(`页面缺少关键能力: ${missing.join('、')}`);
 }
+if (!materialLib.includes('multiple')) {
+  throw new Error('MaterialLibrary 文件选择框未启用多选');
+}
+if (/files\?\.\[0\]/.test(materialLib)) {
+  throw new Error('MaterialLibrary 仍只处理 files[0]，批量导入会丢文件');
+}
+if (!materialLib.includes('Array.from(e.target.files || [])')) {
+  throw new Error('MaterialLibrary 未把完整 FileList 转为批量文件数组');
+}
+if (!materialLib.includes('importProgress.current') || !materialLib.includes('importProgress.total')) {
+  throw new Error('MaterialLibrary 缺少批量导入进度显示');
+}
 
 // 6. 禁止：一键过审入口、假素材、假任务、假统计
 const forbiddenPatterns = [
