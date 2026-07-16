@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI、SQLAlchemy、SQLite 顺序迁移、PostgreSQL Alembic、React + TypeScript + Vite、PyInstaller、Python 3.11 Worker、FFmpeg/ffprobe、Vid.Stab、FunASR、PySceneDetect、OpenCV、YOLO、open_clip。
 
-**计划状态：** `FROZEN`。Phase 12 实现仍为 `NOT_STARTED`，执行时按 Task 0-10 和检查点 A/B/C 推进。
+**计划状态：** `DONE_WITH_CONCERNS`（2026-07-16 检查点 C 三方 PASS）。唯一 concern `baota_ai_edit_production_not_verified`。
 
 ---
 
@@ -857,23 +857,19 @@ git diff --check
 
 在普通 Windows CPU 测试电脑上通过 UI 选择已授权汽车口播 MP4，完成导入、分析、可选增稳、9100 替身规划、轻量调整、720P 预览、1080P 成片和下载。确认原文件哈希不变、取消有效、重启可恢复。不得连接宝塔或真实付费模型。
 
-- [ ] **Step 6: 同步文档状态**
-
-仅在代码、自动化和本地人工验收均通过后更新：
+- [x] **Step 6: 同步文档状态**（2026-07-16 检查点 C 三方 PASS）
 
 ```text
 Phase 12 代码与本地/模拟闭环：DONE
 Phase 12：DONE_WITH_CONCERNS
 唯一 concern：baota_ai_edit_production_not_verified
 宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
+检查点 C：Spec/Code Quality/Security 三方 PASS
+提交链：47444b5→8b9f76c→0b6d00c（FIX4/FIX5/FIX6 累计闭合 8 项 Must-Fix）
+Phase 12 全套：255 passed / 2 skipped
 ```
 
-- [ ] **Step 7: 提交**
-
-```powershell
-git add tests/test_phase12_ai_edit_e2e.py tests/test_phase12_ai_edit_no_network.py tests/test_phase12_ai_edit_final_contract.py scripts/smoke_phase12_ai_edit_synthetic.py docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md docs/ai/05_PROJECT_CONTEXT.md docs/superpowers/plans/2026-07-10-xiaogao-ai-phase1-master-plan.md
-git commit -m "测试：完成 Phase 12 AI剪辑本地闭环验收"
-```
+- [x] **Step 7: 提交**（已完成，见提交链）
 
 ### 检查点 C：阶段总验收
 
