@@ -28,16 +28,17 @@ from app.local_agent_ai_edit_supervisor import AiEditSupervisor, LocalAiEditJob
 logger = logging.getLogger(__name__)
 
 
-def _probe_duration(filepath: str) -> float:
+def _probe_duration(filepath: str) -> float | None:
     """用 ffprobe 获取视频实际时长（秒）。
 
-    成功返回真实时长；ffprobe 不可用或非视频文件时回退 10.0（保守默认，非真实媒体场景）。
-    ponytail: subprocess 直接调 ffprobe，不引入新依赖。
+    成功返回真实时长；ffprobe 不可用/零时长/非法媒体 → 返回 None（禁止伪造时长）。
+    FIX5-3：使用 AI_EDIT_FFPROBE_BINARY 配置路径，失败不猜测。
     """
     import subprocess
+    ffprobe_bin = os.getenv("AI_EDIT_FFPROBE_BINARY", "ffprobe")
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
+            [ffprobe_bin, "-v", "quiet", "-print_format", "json",
              "-show_format", "-show_streams", filepath],
             capture_output=True, text=True, timeout=30,
         )
@@ -48,8 +49,7 @@ def _probe_duration(filepath: str) -> float:
             return duration
     except Exception:
         pass
-    # ffprobe 不可用 / 非视频文件 → 保守默认（ponytail: 真实媒体场景 ffprobe 必成功）
-    return 10.0
+    return None
 
 
 class Nine000ControlClient(Protocol):
@@ -381,8 +381,15 @@ def create_ai_edit_router(
                 dst_path = job_dir / dst_rel
                 import shutil
                 shutil.copy2(str(src_path), str(dst_path))
-                # FIX4-2：用 ffprobe 探测实际时长，替换写死 10.0
+                # FIX5-3：用 ffprobe 探测实际时长，失败返回 None → 拒绝创建
                 actual_duration = _probe_duration(str(src_path))
+                if actual_duration is None:
+                    _release_marked()
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"code": "FFPROBE_FAILED",
+                                "message": f"无法探测素材时长：{m.material_id}"},
+                    )
                 manifest_materials.append({
                     "material_id": m.material_id,
                     "role": m.role,

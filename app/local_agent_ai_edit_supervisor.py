@@ -363,8 +363,9 @@ class AiEditSupervisor:
                                 writeback_attempts=attempts + 1,
                             )
                     continue
-                # FIX4-1：retry_preparing 不直接入队——磁盘旧令牌执行必被 9000 拒，
-                # 收集到 retry_pending 供调用方用 expected_attempt 幂等重取令牌后 requeue
+                # FIX5-2：retry_preparing 保持原状态不改成 queued——
+                # 若调用方处理失败（9000 不可用），下次 recover 仍识别为 retry_preparing 继续重试。
+                # 只有 requeue 成功拿到新令牌后才由 requeue 改成 queued。
                 if state.get("status") == "retry_preparing":
                     old_attempt = int(state.get("attempt_count", 0) or 0)
                     retry_pending.append((
@@ -372,16 +373,6 @@ class AiEditSupervisor:
                         state.get("job_id", ""),
                         old_attempt,
                     ))
-                    # 恢复到 claim 前状态（queued），避免卡在 retry_preparing
-                    self._persist_job_state(
-                        key, status="queued",
-                        attempt_id=state.get("attempt_id", ""),
-                        manifest_path=state.get("manifest_path", ""),
-                        merchant_id=state.get("merchant_id", ""),
-                        job_id=state.get("job_id", ""),
-                        execution_token_hash=state.get("execution_token_hash", ""),
-                        attempt_count=old_attempt,
-                    )
                     continue
                 job = LocalAiEditJob(
                     job_id=state.get("job_id", ""),

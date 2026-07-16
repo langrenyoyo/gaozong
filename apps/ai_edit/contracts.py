@@ -65,10 +65,14 @@ class WorkerMaterial(BaseModel):
 
     @model_validator(mode="after")
     def _check_range(self) -> "WorkerMaterial":
-        """校验 source_end > source_start（两者都给定时）。"""
+        """FIX5-3：校验 0 <= source_start < source_end <= duration_seconds（两者都给定时）。"""
         if self.source_start is not None and self.source_end is not None:
+            if self.source_start < 0:
+                raise ValueError("source_start 必须 >= 0")
             if self.source_end <= self.source_start:
                 raise ValueError("source_end 必须 > source_start")
+            if self.source_end > self.duration_seconds:
+                raise ValueError("source_end 必须 <= duration_seconds")
         return self
 
 

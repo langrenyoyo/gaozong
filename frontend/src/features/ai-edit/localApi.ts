@@ -35,8 +35,8 @@ export async function ensureAgentToken(merchantId: string): Promise<string> {
   // 清理其他商户的残留 token（A 退出 B 登录场景）
   clearAllAgentTokens();
   const resp = await fetchAiEditAgentToken();
-  const cached: CachedAgentToken = { token: resp.token, merchant_id: resp.merchant_id };
-  sessionStorage.setItem(tokenStorageKey(resp.merchant_id), JSON.stringify(cached));
+  const nextCached: CachedAgentToken = { token: resp.token, merchant_id: resp.merchant_id };
+  sessionStorage.setItem(tokenStorageKey(resp.merchant_id), JSON.stringify(nextCached));
   return resp.token;
 }
 

@@ -200,6 +200,9 @@ def _build_19000(tmp_path, c9, *, merchant="m1", token="tok-1",
     """
     os.environ["LOCAL_AGENT_TOKENS"] = f"{merchant}:{token}"
     os.environ["LOCAL_AGENT_AUTH_REQUIRED"] = "true"
+    # FIX5-3：e2e 用合成字节，ffprobe 无法解析 → monkeypatch 返回固定时长
+    import app.local_agent_ai_edit_routes as _routes_mod
+    _routes_mod._probe_duration = lambda _filepath: 10.0
     storage_root = tmp_path / "managed"
     work_root = tmp_path / "work"
     deps = _stub_pipeline_deps()
@@ -768,23 +771,24 @@ def test_e2e_agent_retry_idempotent_with_expected_attempt(tmp_path):
                  headers={"X-Local-Agent-Token": "tok-1"}, json={})
     assert r1.status_code == 200
     assert r1.json()["data"]["attempt_count"] == 1
-    # 幂等 retry：expected_attempt=1，当前 attempt=1 → 直接返回，不推进到 2
+    # FIX5-2：expected_attempt=1，当前 attempt=1 → 1>1 为 False，正常推进到 2
     r2 = c9.post("/ai-edit/jobs/job-1/agent-retry",
                  headers={"X-Local-Agent-Token": "tok-1"},
                  json={"expected_attempt": 1})
     assert r2.status_code == 200
-    assert r2.json()["data"]["attempt_count"] == 1, "幂等调用不应推进 attempt"
-    # expected_attempt=0，当前 attempt=1（已超过）→ 幂等返回 1
+    assert r2.json()["data"]["attempt_count"] == 2, "expected==current 应推进"
+    # FIX5-2：expected_attempt=2，当前 attempt=2 → 2>2 为 False，推进到 3
     r3 = c9.post("/ai-edit/jobs/job-1/agent-retry",
                  headers={"X-Local-Agent-Token": "tok-1"},
-                 json={"expected_attempt": 0})
+                 json={"expected_attempt": 2})
     assert r3.status_code == 200
-    assert r3.json()["data"]["attempt_count"] == 1, "已超过 expected_attempt，幂等返回当前"
-    # 不带 expected_attempt → 正常推进到 2
+    assert r3.json()["data"]["attempt_count"] == 3
+    # FIX5-2：expected_attempt=2，当前 attempt=3 → 3>2 为 True，幂等返回 3
     r4 = c9.post("/ai-edit/jobs/job-1/agent-retry",
-                 headers={"X-Local-Agent-Token": "tok-1"}, json={})
+                 headers={"X-Local-Agent-Token": "tok-1"},
+                 json={"expected_attempt": 2})
     assert r4.status_code == 200
-    assert r4.json()["data"]["attempt_count"] == 2
+    assert r4.json()["data"]["attempt_count"] == 3, "已超过 expected，幂等返回当前"
 
 
 def test_e2e_retry_preparing_recover_gets_new_token(tmp_path):
@@ -875,3 +879,76 @@ def test_e2e_pipeline_rejects_invalid_keep_range(tmp_path):
                 plan_operations=[
                     {"material_id": "m1", "start_seconds": 20, "end_seconds": 10, "action": "keep"},
                 ])
+
+
+def test_e2e_agent_retry_advances_when_expected_equals_current(tmp_path):
+    """FIX5-2：expected_attempt == current → 正常推进（9000 推进前崩溃场景）。
+
+    崩溃发生在 claim_retry 之后、agent_retry_job 之前——9000 attempt 仍为旧值。
+    expected=0, current=0 → 0>0 为 False → 推进到 1。
+    """
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+    # 9000 当前 attempt=0；expected_attempt=0 → 0>0 False → 推进到 1
+    r = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                headers={"X-Local-Agent-Token": "tok-1"},
+                json={"expected_attempt": 0})
+    assert r.status_code == 200
+    assert r.json()["data"]["attempt_count"] == 1, "expected==current 应推进"
+
+
+def test_e2e_retry_preparing_survives_recover_when_9000_unavailable(tmp_path):
+    """FIX5-2：恢复时 9000 不可用 → retry_preparing 保持原状态，
+    下次 recover 仍识别为 retry_preparing 继续重试。"""
+    from app.local_agent_ai_edit_supervisor import AiEditSupervisor
+
+    c9 = _build_9000()
+    c19, sup = _build_19000(tmp_path, c9)
+    assert _import_19000(c19, content=_SYNTHETIC_BYTES).status_code in (200, 201)
+    assert c19.post(
+        "/agent/ai-edit/jobs",
+        headers={"X-Local-Agent-Token": "tok-1"},
+        json={"job_id": "job-1", "template_key": "tpl",
+              "materials": [{"material_id": "mat-1", "role": "main"}]},
+    ).status_code in (200, 201)
+    sup.drain()
+    # 模拟 retry_preparing 崩溃：claim_retry 成功但 agent_retry_job 前进程退出
+    snapshot = sup.claim_retry(merchant_id="m1", job_id="job-1")
+    assert snapshot is not None
+    # 不调 agent_retry_job（模拟 9000 不可用或崩溃）
+    # 重启 supervisor — recover 收集 retry_pending，保持 retry_preparing
+    sup2 = AiEditSupervisor(work_root=sup.work_root, executor=lambda j: {"status": "succeeded"})
+    result = sup2.recover()
+    assert len(result["retry_pending"]) == 1
+    # 状态仍为 retry_preparing（未改成 queued）
+    state = sup2.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state["status"] == "retry_preparing", "FIX5-2：应保持 retry_preparing"
+    # 模拟外部处理 retry_pending 失败（9000 仍不可用）→ 再次 recover
+    sup3 = AiEditSupervisor(work_root=sup.work_root, executor=lambda j: {"status": "succeeded"})
+    result2 = sup3.recover()
+    assert len(result2["retry_pending"]) == 1, "下次 recover 仍可重试"
+    # 成功处理：用 expected_attempt 调 agent-retry → 推进 → requeue
+    r = c9.post("/ai-edit/jobs/job-1/agent-retry",
+                headers={"X-Local-Agent-Token": "tok-1"},
+                json={"expected_attempt": 0})
+    assert r.status_code == 200
+    new_token = r.json()["data"]["execution_token_hash"]
+    new_attempt = r.json()["data"]["attempt_count"]
+    assert new_attempt == 1
+    requeued = sup3.requeue(
+        merchant_id="m1", job_id="job-1",
+        attempt_id=f"att-job-1-{new_attempt}",
+        execution_token_hash=new_token, attempt_count=new_attempt,
+    )
+    assert requeued
+    sup3.drain()
+    state3 = sup3.get_job_state(merchant_id="m1", job_id="job-1")
+    assert state3["status"] == "succeeded"

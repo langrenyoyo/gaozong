@@ -320,12 +320,13 @@ def retry_job(
 ) -> AiEditJob:
     """重试任务：推进 attempt + 轮换令牌。
 
-    expected_attempt 用于幂等调用：若当前 attempt 已 >= expected_attempt（retry_preparing
-    崩溃恢复场景，9000 已推进但本地未持久化新令牌），直接返回当前令牌不重复推进。
+    expected_attempt 用于幂等调用：若当前 attempt > expected_attempt（已推进过），
+    直接返回当前令牌不重复推进。当前 attempt == expected_attempt 时正常推进到 +1。
+    FIX5-2：收紧为 > 而非 >=，避免 attempt=0 时 expected=0 误判为幂等。
     """
     job = _get_job_for_merchant(db, job_id=job_id, merchant_id=merchant_id)
-    # FIX4-1：幂等——retry_preparing 崩溃恢复时 expected_attempt 已到达，返回当前令牌
-    if expected_attempt is not None and (job.attempt_count or 0) >= expected_attempt:
+    # FIX5-2：仅当前 attempt 已超过 expected 时幂等（已推进过）
+    if expected_attempt is not None and (job.attempt_count or 0) > expected_attempt:
         return job
     next_attempt = (job.attempt_count or 0) + 1
     job.attempt_count = next_attempt
