@@ -893,7 +893,7 @@ Phase 12 全套：255 passed / 2 skipped
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，真实 PyInstaller、Worker、FFmpeg、19000 鉴权、9 路由注册与进程树退出 smoke 全通过；尚未在无开发环境的干净 Windows 电脑验证。
+当前状态为 `BUILT_LOCAL_SMOKE_ONLY`。Task 11-1~11-3 的本地真实 PyInstaller、Worker、FFmpeg、19000 鉴权、9 路由注册与进程树退出 smoke 全通过；但 EXE 烘焙的是 `example.com` 占位测试端点，唯一 blocker 为 `test_endpoint_config_placeholder`，尚不能用于甲方业务测试，也未在无开发环境的干净 Windows 电脑验证。
 
 冻结口径：
 

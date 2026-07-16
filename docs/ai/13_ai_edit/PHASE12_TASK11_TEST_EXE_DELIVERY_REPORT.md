@@ -1,6 +1,7 @@
 # Phase 12 Task 11 单入口测试 EXE 交付报告
 
-> **状态：** `BUILT_FOR_CUSTOMER_TEST`
+> **状态：** `BUILT_LOCAL_SMOKE_ONLY`
+> **阻断：** `test_endpoint_config_placeholder`
 > **交付物：** `小高AI系统测试版.exe`（仅此一个文件）
 > **执行窗口：** 基于 `b4779ae`（解除 Task 11 开发与构建门禁），使用 executing-plans 直接完成 Task 11-1~11-3，不设中间检查点、许可证审查、构建审批或发送审批。
 
@@ -75,11 +76,11 @@
 ## 5. 当前缺失能力（一期边界，未在 Task 11 范围）
 
 - 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
-- 测试 API / 前端 URL 为占位值（`https://test-api.example.com` / `https://test.example.com`），心跳上报必然失败（预期）。
+- 测试 API / 前端 URL 为占位值（`https://test-api.example.com` / `https://test.example.com`），心跳上报与业务页面必然不可用；启动器没有运行时覆盖入口，因此当前 EXE 不能作为甲方业务测试件。
 - 不含安装器、自动更新、卸载器、系统服务（计划 §2 明确不新增）。
 - 本轮真实 smoke 在开发机完成，尚未在无 Python、无 FFmpeg、无源码的干净 Windows 电脑验证；EXE 设计为自包含，首次甲方测试需确认零安装启动。
 - **未进入 Phase 13、未做宝塔生产验证**（本轮硬约束）。
 
 ## 6. 结论
 
-`BUILT_FOR_CUSTOMER_TEST` —— `小高AI系统测试版.exe` 已完成真实 PyInstaller + Worker + FFmpeg smoke 验证，token 不入包、19000 回环鉴权保持开启、Worker 凭据隔离生效。直接回传，不等待许可证审查、构建审批或发送审批。
+`BUILT_LOCAL_SMOKE_ONLY` —— `小高AI系统测试版.exe` 已完成真实 PyInstaller + Worker + FFmpeg 本地 smoke，token 不入包、19000 回环鉴权保持开启、Worker 凭据隔离生效；但测试端点仍为占位地址。提供真实测试 API、前端地址和商户 ID 后必须重新构建并更新 SHA-256，方可标记 `BUILT_FOR_CUSTOMER_TEST`。

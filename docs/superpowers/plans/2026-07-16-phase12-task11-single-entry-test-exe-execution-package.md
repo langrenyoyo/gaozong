@@ -10,7 +10,9 @@
 
 ---
 
-**状态：** `BUILT_FOR_CUSTOMER_TEST`
+**状态：** `BUILT_LOCAL_SMOKE_ONLY`
+
+**阻断：** `test_endpoint_config_placeholder`。当前 EXE 烘焙的是 `https://test-api.example.com` / `https://test.example.com`，仅能证明本地打包与媒体链，不能用于甲方业务测试。
 
 ## 1. 最终交付
 
@@ -145,10 +147,10 @@ git commit -m "构建：生成单入口 AI 剪辑测试 EXE"
 
 - [x] 更新 Task 11 报告与当前状态，记录 EXE 路径、SHA-256、真实 smoke 结果和当前缺失能力。
 
-完成状态：
+本地 smoke 完成状态：
 
 ```text
-BUILT_FOR_CUSTOMER_TEST
+BUILT_LOCAL_SMOKE_ONLY
 ```
 
-直接回传结果，不再等待许可证审查、构建审批或发送审批。Phase 13 与宝塔生产验证仍不启动。
+提供真实测试 API、前端地址和商户 ID 后重新构建，确认 EXE 烘焙配置正确并在干净 Windows 电脑启动，才可更新为 `BUILT_FOR_CUSTOMER_TEST`。不再等待许可证审查；Phase 13 与宝塔生产验证仍不启动。
