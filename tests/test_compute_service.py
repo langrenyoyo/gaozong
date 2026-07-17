@@ -151,6 +151,117 @@ def test_list_transactions_pagination_and_filter(db):
     assert len(page2["items"]) == 1
 
 
+# 3a. 商户公开流水投影：只暴露 7 字段公开合同
+def test_list_merchant_transactions_projects_public_business_contract(db):
+    _seed_ratio(db)
+    compute_service.recharge_merchant(
+        db, "m_public", 1000, remark="内部充值备注", operator_id="admin-secret"
+    )
+    compute_service.record_usage(
+        db,
+        "m_public",
+        18,
+        capability_key="douyin-cs",
+        source="llm",
+        model="internal-model",
+        agent_id="internal-agent",
+        conversation_id=42,
+        remark="douyin_ai_reply",
+        usage_measurement_method="provider_tokens",
+        prompt_tokens=12,
+        completion_tokens=6,
+        llm_call_stage="primary",
+    )
+
+    result = compute_service.list_merchant_transactions(db, "m_public")
+
+    assert result["total"] == 2
+    consume, recharge = result["items"]
+    assert set(consume) == {
+        "id",
+        "type",
+        "type_label",
+        "business_scene",
+        "points_change",
+        "balance_after",
+        "created_at",
+    }
+    assert consume["type"] == "consume"
+    assert consume["type_label"] == "消耗"
+    assert consume["business_scene"] == "抖音自动回复"
+    assert consume["points_change"] == -18
+    assert consume["balance_after"] == 982
+    assert recharge["type"] == "recharge"
+    assert recharge["type_label"] == "充值"
+    assert recharge["business_scene"] == "算力充值"
+    assert recharge["points_change"] == 1000
+
+
+# 3b. 未知历史来源不泄露内部编码，统一降级为"AI 服务"
+def test_list_merchant_transactions_hides_unknown_internal_codes(db):
+    db.add(
+        ComputeTransaction(
+            merchant_id="m_legacy",
+            transaction_type="legacy_internal_type",
+            delta_tokens=-3,
+            balance_after_tokens=7,
+            source="secret_source",
+            remark="secret_remark",
+            model="secret_model",
+            agent_id="secret_agent",
+            conversation_id=99,
+            capability_key="secret_capability",
+        )
+    )
+    db.commit()
+
+    item = compute_service.list_merchant_transactions(db, "m_legacy")["items"][0]
+
+    assert item["type"] == "other"
+    assert item["type_label"] == "其他"
+    assert item["business_scene"] == "AI 服务"
+    assert "secret" not in repr(item)
+
+
+# 3c. 当前真实调用方与能力兜底的中文场景映射
+@pytest.mark.parametrize(
+    ("remark", "capability_key", "expected_scene"),
+    [
+        ("douyin_ai_reply", "douyin-cs", "抖音自动回复"),
+        ("daily_sales_summary", "wechat-assistant", "每日销售报表"),
+        ("return_visit_judge", "wechat-assistant", "客户回访"),
+        ("knowledge_training_ask", "knowledge", "知识问答"),
+        ("knowledge_training_ingest", "knowledge", "知识库训练"),
+        ("knowledge_search", "knowledge", "知识库检索"),
+        ("ai_edit_plan", "compute", "AI小高剪辑"),
+        (None, "douyin-cs", "抖音客服"),
+        (None, "wechat-assistant", "AI小高微信助手"),
+        (None, "agents", "智能体服务"),
+        (None, "leads", "线索服务"),
+    ],
+)
+def test_list_merchant_transactions_maps_current_business_scenes(
+    db, remark, capability_key, expected_scene
+):
+    db.add(
+        ComputeTransaction(
+            merchant_id="m_scene",
+            transaction_type="consume",
+            delta_tokens=-1,
+            balance_after_tokens=9,
+            source="llm",
+            remark=remark,
+            model="internal-model",
+            capability_key=capability_key,
+        )
+    )
+    db.commit()
+
+    item = compute_service.list_merchant_transactions(db, "m_scene")["items"][0]
+
+    assert item["business_scene"] == expected_scene
+
+
 # 4. enabled packages 过滤
 def test_list_enabled_packages_filters_disabled(db):
     compute_service.create_package(

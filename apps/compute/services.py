@@ -309,6 +309,91 @@ def list_transactions(
     }
 
 
+# 商户公开流水投影常量：稳定类型标签、固定场景、备注场景、能力兜底场景
+MERCHANT_TRANSACTION_TYPE_LABELS = {
+    "recharge": "充值",
+    "grant_package": "套餐发放",
+    "consume": "消耗",
+}
+
+MERCHANT_TRANSACTION_SCENES = {
+    "recharge": "算力充值",
+    "grant_package": "套餐发放",
+}
+
+MERCHANT_REMARK_SCENES = {
+    "douyin_ai_reply": "抖音自动回复",
+    "daily_sales_summary": "每日销售报表",
+    "return_visit_judge": "客户回访",
+    "knowledge_training_ask": "知识问答",
+    "knowledge_training_ingest": "知识库训练",
+    "knowledge_search": "知识库检索",
+    "ai_edit_plan": "AI小高剪辑",
+}
+
+MERCHANT_CAPABILITY_SCENES = {
+    "douyin-cs": "抖音客服",
+    "leads": "线索服务",
+    "agents": "智能体服务",
+    "wechat-assistant": "AI小高微信助手",
+    "compute": "AI小高剪辑",
+    "knowledge": "知识库服务",
+}
+
+
+def _merchant_business_scene(transaction: ComputeTransaction) -> str:
+    """把内部来源收敛为商户可理解的中文使用场景，未知值不回显内部编码。"""
+    fixed_scene = MERCHANT_TRANSACTION_SCENES.get(transaction.transaction_type)
+    if fixed_scene:
+        return fixed_scene
+    if transaction.transaction_type != CONSUME_TYPE:
+        return "AI 服务"
+    return (
+        MERCHANT_REMARK_SCENES.get(str(transaction.remark or ""))
+        or MERCHANT_CAPABILITY_SCENES.get(str(transaction.capability_key or ""))
+        or "AI 服务"
+    )
+
+
+def _project_merchant_transaction(transaction: ComputeTransaction) -> dict:
+    """生成商户公开流水；只能在此白名单中增加字段。"""
+    public_type = (
+        transaction.transaction_type
+        if transaction.transaction_type in MERCHANT_TRANSACTION_TYPE_LABELS
+        else "other"
+    )
+    return {
+        "id": transaction.id,
+        "type": public_type,
+        "type_label": MERCHANT_TRANSACTION_TYPE_LABELS.get(public_type, "其他"),
+        "business_scene": _merchant_business_scene(transaction),
+        "points_change": transaction.delta_tokens,
+        "balance_after": transaction.balance_after_tokens,
+        "created_at": transaction.created_at,
+    }
+
+
+def list_merchant_transactions(
+    db: Session,
+    merchant_id: str,
+    transaction_type: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    """分页返回商户公开流水投影，不暴露账本内部诊断字段。"""
+    result = list_transactions(
+        db,
+        merchant_id,
+        transaction_type=transaction_type,
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        **result,
+        "items": [_project_merchant_transaction(item) for item in result["items"]],
+    }
+
+
 def list_enabled_packages(db: Session) -> list[ComputePackage]:
     """商户充值弹窗只看启用套餐（对齐 PRD 2.7.4 套餐充值）。"""
     return (
