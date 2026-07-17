@@ -651,7 +651,6 @@ export interface ComputeSummary {
   total_consume: number;
 }
 
-/** 算力 Token 流水（GET /compute/transactions items）。 */
 /** 商户可见的算力点数流水。 */
 export interface ComputeTransaction {
   id: number;

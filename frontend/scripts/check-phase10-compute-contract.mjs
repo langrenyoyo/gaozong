@@ -57,14 +57,30 @@ const PUBLIC_FIELDS = [
   'balance_after',
   'created_at',
 ];
-for (const field of PUBLIC_FIELDS) {
-  if (!merchantTransactionType.includes(`${field}:`)) {
-    throw new Error(`ComputeTransaction 缺少商户公开字段：${field}`);
-  }
+
+// 提取 ComputeTransaction 接口正文中的全部声明字段（形如 `name:` 或 `name?:`）
+const declaredFields = [
+  ...merchantTransactionType.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\??:/gm),
+].map((match) => match[1]);
+
+const missingFields = PUBLIC_FIELDS.filter(
+  (field) => !declaredFields.includes(field),
+);
+const extraFields = declaredFields.filter(
+  (field) => !PUBLIC_FIELDS.includes(field),
+);
+if (missingFields.length || extraFields.length) {
+  throw new Error(
+    `ComputeTransaction 字段必须精确等于 7 个公开字段；缺少：${
+      missingFields.join(',') || '无'
+    }；多余：${extraFields.join(',') || '无'}`,
+  );
 }
 
+// 私有字段：内部计量与诊断字段，既不得声明在接口，也不得被 ComputeCenter 读取
 const PRIVATE_FIELDS = [
   'merchant_id',
+  'tenant_id',
   'transaction_type',
   'delta_tokens',
   'balance_after_tokens',
@@ -76,6 +92,11 @@ const PRIVATE_FIELDS = [
   'actual_tokens',
   'capability_key',
   'markup_basis_points',
+  'usage_measurement_method',
+  'prompt_tokens',
+  'completion_tokens',
+  'cached_tokens',
+  'llm_call_stage',
 ];
 for (const field of PRIVATE_FIELDS) {
   if (merchantTransactionType.includes(`${field}:`)) {
