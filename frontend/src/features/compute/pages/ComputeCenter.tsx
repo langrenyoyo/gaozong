@@ -29,29 +29,6 @@ import { userFacingError } from "../../../lib/userFacingError";
 import ModuleTabs from "../../../components/ModuleTabs";
 import type { ModuleTabItem } from "../../../components/ModuleTabs";
 
-// 流水类型中文标签（对齐后端 transaction_type 枚举）
-const TRANSACTION_TYPE_LABELS: Record<string, string> = {
-  recharge: "充值",
-  grant_package: "发放套餐",
-  consume: "消耗",
-};
-
-// Phase 10 §0.2：能力中文名（capability_key NULL → 历史未归类）
-const CAPABILITY_LABELS: Record<string, string> = {
-  "douyin-cs": "抖音客服",
-  "leads": "线索",
-  "agents": "智能体",
-  "wechat-assistant": "微信助手",
-  "compute": "算力",
-  "knowledge": "知识问答",
-};
-
-/** 能力中文名：未知 key 或 NULL 归一为"历史未归类"。 */
-function capabilityLabel(key?: string | null): string {
-  if (!key) return "历史未归类";
-  return CAPABILITY_LABELS[key] || key;
-}
-
 const PAGE_SIZE = 10;
 
 function formatPayMethod(value: string): string {
@@ -562,52 +539,31 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
             </div>
           ) : (
             <>
-              <table className="w-full min-w-[860px] text-left text-xs">
+              <table className="w-full min-w-[720px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-[#e4e8f0] text-[#8b95a6]">
                     <th className="px-4 py-2.5 font-semibold">类型</th>
-                    <th className="px-4 py-2.5 font-semibold">能力 · 模型</th>
-                    <th className="px-4 py-2.5 font-semibold">实际字符</th>
+                    <th className="px-4 py-2.5 font-semibold">使用场景</th>
                     <th className="px-4 py-2.5 font-semibold">算力点数变动</th>
-                    <th className="px-4 py-2.5 font-semibold">备注</th>
+                    <th className="px-4 py-2.5 font-semibold">变动后余额</th>
                     <th className="px-4 py-2.5 font-semibold">时间</th>
                   </tr>
                 </thead>
                 <tbody>
                   {transactions.map((tx) => {
-                    const income = tx.delta_tokens > 0;
-                    const isConsume = tx.transaction_type === "consume";
-                    // Phase 10 §0.2：充值/套餐不伪造 actual_tokens/capability_key（显示"-"）
+                    const income = tx.points_change > 0;
                     return (
                       <tr key={tx.id} className="border-b border-[#f1f5f9] last:border-0">
-                        <td className="px-4 py-2.5 text-[#1a1f2e]">
-                          {TRANSACTION_TYPE_LABELS[tx.transaction_type] || tx.transaction_type}
+                        <td className="px-4 py-2.5 text-[#1a1f2e]">{tx.type_label}</td>
+                        <td className="px-4 py-2.5 text-[#475467]">{tx.business_scene}</td>
+                        <td
+                          className={`px-4 py-2.5 font-semibold ${
+                            income ? "text-emerald-600" : "text-[#475467]"
+                          }`}
+                        >
+                          {formatTokenChange(tx.points_change)}
                         </td>
-                        <td className="px-4 py-2.5 text-[#475467]">
-                          {isConsume ? (
-                            <span>
-                              {capabilityLabel(tx.capability_key)}
-                              {tx.model ? (
-                                <span className="ml-1 text-[10px] text-[#8b95a6]">· {tx.model}</span>
-                              ) : null}
-                            </span>
-                          ) : (
-                            <span className="text-[#cbd5e1]">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 text-[#475467]">
-                          {isConsume && tx.actual_tokens != null ? (
-                            tx.actual_tokens
-                          ) : (
-                            <span className="text-[#cbd5e1]">-</span>
-                          )}
-                        </td>
-                        <td className={`px-4 py-2.5 font-semibold ${income ? "text-emerald-600" : "text-[#475467]"}`}>
-                          {formatTokenChange(tx.delta_tokens)}
-                        </td>
-                        <td className="max-w-[220px] truncate px-4 py-2.5 text-[#475467]">
-                          {tx.remark || "-"}
-                        </td>
+                        <td className="px-4 py-2.5 text-[#475467]">{tx.balance_after}</td>
                         <td className="px-4 py-2.5 text-[#8b95a6]">
                           {formatDateTimeLocal(tx.created_at)}
                         </td>

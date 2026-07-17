@@ -1,7 +1,8 @@
 // Phase 10 Task 6 前端算力合同（静态门禁）。
-// 断言：API 两个冻结管理路径、流水三快照字段、超管六能力编辑、商户实际量/计费量展示，
-// 且算力前端源码不出现错误路径 /api/compute/admin/markup-ratios、internal token 或 9100/9205 直连。
-// 禁止项只扫算力代码（compute API + 两个页面），不管 pre-existing 的非算力文件。
+// 断言：API 两个冻结管理路径、商户流水只允许 7 个公开字段（不含内部计量与诊断字段）、
+// 超管六能力比例编辑，且算力前端源码不出现错误路径 /api/compute/admin/markup-ratios、
+// internal token 或 9100/9205 直连，不得持有内部令牌或直连内部服务。
+// 管理员上浮配置类型继续保留；禁止项只扫算力代码（compute API + 两个页面），不管 pre-existing 的非算力文件。
 // 用法：node scripts/check-phase10-compute-contract.mjs  退出码 0 = 通过。
 
 import { readFileSync } from 'node:fs';
@@ -13,6 +14,12 @@ const srcRoot = resolve(scriptDir, '..', 'src');
 
 function readFile(rel) {
   return readFileSync(resolve(srcRoot, rel), 'utf8');
+}
+
+function readInterface(source, name) {
+  const match = source.match(new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`));
+  if (!match) throw new Error(`types.ts 缺少 ${name} 接口`);
+  return match[1];
 }
 
 const computeApi = readFile('api/compute.ts');
@@ -39,10 +46,51 @@ if (!computeApi.includes('/admin/compute/markup-ratios')) {
   throw new Error('compute.ts 未调用冻结路径 /admin/compute/markup-ratios');
 }
 
-// 2. ComputeTransaction 含三快照字段（Phase 10 §0.2 计费快照）
-for (const field of ['actual_tokens', 'capability_key', 'markup_basis_points']) {
-  if (!typesTs.includes(field)) {
-    throw new Error(`types.ts ComputeTransaction 缺少计费快照字段：${field}`);
+// 2. 商户流水只允许 7 个公开字段，不得暴露内部计量与诊断字段
+const merchantTransactionType = readInterface(typesTs, 'ComputeTransaction');
+const PUBLIC_FIELDS = [
+  'id',
+  'type',
+  'type_label',
+  'business_scene',
+  'points_change',
+  'balance_after',
+  'created_at',
+];
+for (const field of PUBLIC_FIELDS) {
+  if (!merchantTransactionType.includes(`${field}:`)) {
+    throw new Error(`ComputeTransaction 缺少商户公开字段：${field}`);
+  }
+}
+
+const PRIVATE_FIELDS = [
+  'merchant_id',
+  'transaction_type',
+  'delta_tokens',
+  'balance_after_tokens',
+  'source',
+  'remark',
+  'model',
+  'agent_id',
+  'conversation_id',
+  'actual_tokens',
+  'capability_key',
+  'markup_basis_points',
+];
+for (const field of PRIVATE_FIELDS) {
+  if (merchantTransactionType.includes(`${field}:`)) {
+    throw new Error(`ComputeTransaction 不得暴露内部字段：${field}`);
+  }
+}
+
+for (const access of PRIVATE_FIELDS.map((field) => `tx.${field}`)) {
+  if (computeCenter.includes(access)) {
+    throw new Error(`ComputeCenter 不得读取内部字段：${access}`);
+  }
+}
+for (const heading of ['类型', '使用场景', '算力点数变动', '变动后余额', '时间']) {
+  if (!computeCenter.includes(`>${heading}<`)) {
+    throw new Error(`ComputeCenter 缺少商户流水列：${heading}`);
   }
 }
 
@@ -62,14 +110,6 @@ for (const cap of ['douyin-cs', 'leads', 'agents', 'wechat-assistant', 'compute'
   if (!superConfig.includes(cap)) {
     throw new Error(`SuperComputeConfig 缺少冻结能力：${cap}`);
   }
-}
-
-// 3b. 商户页展示实际量与计费量
-if (!computeCenter.includes('actual_tokens')) {
-  throw new Error('ComputeCenter 未展示实际字符量 actual_tokens');
-}
-if (!computeCenter.includes('历史未归类')) {
-  throw new Error('ComputeCenter 缺少 capability_key=NULL 的"历史未归类"兜底');
 }
 
 // 4. 算力前端源码禁止项扫描（只扫算力文件，避免误伤 pre-existing 非算力文件）

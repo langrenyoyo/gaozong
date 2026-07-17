@@ -1185,7 +1185,7 @@ class ComputeTransactionOut(BaseModel):
     business_scene: str = Field(..., description="商户可理解的中文使用场景")
     points_change: int = Field(..., description="算力点数变动，正数为增加、负数为消耗")
     balance_after: int = Field(..., description="变动后的算力点数余额")
-    created_at: Optional[datetime] = None
+    created_at: Optional[datetime]
 
 
 class ComputeTransactionListData(BaseModel):

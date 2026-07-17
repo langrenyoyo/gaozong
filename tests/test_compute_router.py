@@ -447,7 +447,8 @@ def test_internal_token_production_fail_closed(monkeypatch):
 
 def test_compute_transaction_openapi_hides_internal_fields():
     schema = _client(_context()).get("/openapi.json").json()
-    properties = schema["components"]["schemas"]["ComputeTransactionOut"]["properties"]
+    transaction_schema = schema["components"]["schemas"]["ComputeTransactionOut"]
+    properties = transaction_schema["properties"]
     assert set(properties) == {
         "id",
         "type",
@@ -457,3 +458,4 @@ def test_compute_transaction_openapi_hides_internal_fields():
         "balance_after",
         "created_at",
     }
+    assert set(transaction_schema["required"]) == set(properties)

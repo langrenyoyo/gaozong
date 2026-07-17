@@ -652,28 +652,20 @@ export interface ComputeSummary {
 }
 
 /** 算力 Token 流水（GET /compute/transactions items）。 */
+/** 商户可见的算力点数流水。 */
 export interface ComputeTransaction {
   id: number;
-  merchant_id: string;
-  /** 流水类型: recharge(充值) / grant_package(发放套餐) / consume(消耗) */
-  transaction_type: string;
-  /** Token 变动（正为增加，负为消耗） */
-  delta_tokens: number;
+  /** 稳定流水类型 */
+  type: "recharge" | "grant_package" | "consume" | "other";
+  /** 流水类型中文名称 */
+  type_label: string;
+  /** 中文业务使用场景 */
+  business_scene: string;
+  /** 算力点数变动，正数为增加、负数为消耗 */
+  points_change: number;
   /** 变动后余额 */
-  balance_after_tokens: number;
-  /** 来源: manual_recharge / package_grant / llm / embedding / other */
-  source: string;
-  remark?: string | null;
-  model?: string | null;
-  agent_id?: string | null;
-  conversation_id?: number | null;
-  created_at?: string | null;
-  /** Phase 10 §0.2：实际字符量（仅 consume 行有；充值/套餐为 null，不伪造） */
-  actual_tokens?: number | null;
-  /** Phase 10 §0.2：能力 key（历史行可能为 null → 展示"历史未归类"） */
-  capability_key?: string | null;
-  /** Phase 10 §0.2：上浮基点快照（写入时的计费比例） */
-  markup_basis_points?: number | null;
+  balance_after: number;
+  created_at: string | null;
 }
 
 /** Phase 10 §0.2：算力六能力 key（冻结顺序，与后端 COMPUTE_CAPABILITY_KEYS 一致）。 */
