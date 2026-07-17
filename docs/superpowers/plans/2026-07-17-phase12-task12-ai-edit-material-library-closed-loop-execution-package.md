@@ -444,7 +444,7 @@ CheckConstraint(
 
 迁移合同测试必须分别构造“空 status + 非空 operation”“非空 status + 空 operation”“未知 status”三类红灯，并静态断言 ORM、SQLite、PG 三方均存在两个约束名。
 
-`AiEditMaterial` 增加规格中的 12 列，并增加 `(merchant_id, source_sha256)` 唯一约束。ORM、SQLite 0034、PostgreSQL 0015 三方还必须固定以下同名数据库信任边界：`ck_ai_edit_materials_media_type` 只允许 `video/audio/image`；`ck_ai_edit_materials_scope_owner` 要求 `scope='merchant'` 时 `merchant_id` 非空、`scope='platform'` 时为空；`ck_ai_edit_materials_source_sha256` 要求 `source_sha256` 是 64 位小写十六进制；`ck_ai_edit_material_process_token_hash` 要求 `AiEditMaterialProcess.execution_token_hash` 是 64 位小写十六进制。SQLite 哈希约束使用 `length(value)=64 AND value NOT GLOB '*[^0-9a-f]*'`，不能误用只验证首字符的 `GLOB '[0-9a-f]*'`；PostgreSQL 使用 `^[0-9a-f]{64}$`。`AiEditMaterialOut` 只增加安全展示与媒体字段以及 `processes: list[AiEditMaterialProcessOut]`，不得暴露内部键、`purge_operation_id` 或 `execution_token_hash`。
+`AiEditMaterial` 增加规格中的 12 列，并增加 `(merchant_id, source_sha256)` 唯一约束。ORM、SQLite 0034、PostgreSQL 0015 三方还必须固定以下同名数据库信任边界：`ck_ai_edit_materials_media_type` 只允许 `video/audio/image`；`ck_ai_edit_materials_scope_merchant` 要求 `scope='merchant'` 时 `merchant_id` 非空、`scope='platform'` 时为空；`ck_ai_edit_materials_source_sha256` 要求素材 `source_sha256` 是 64 位小写十六进制；`ck_ai_edit_material_process_source_sha256` 对过程表源哈希施加相同约束；`ck_ai_edit_material_process_token_hash` 要求 `AiEditMaterialProcess.execution_token_hash` 是 64 位小写十六进制。SQLite 哈希约束使用 `length(value)=64 AND value NOT GLOB '*[^0-9a-f]*'`，不能误用只验证首字符的 `GLOB '[0-9a-f]*'`；PostgreSQL 使用 `^[0-9a-f]{64}$`。`AiEditMaterialOut` 只增加安全展示与媒体字段以及 `processes: list[AiEditMaterialProcessOut]`，不得暴露内部键、`purge_operation_id` 或 `execution_token_hash`。
 
 12 列的类型按下列合同锁定，`file_size_bytes` 必须用 `BigInteger`，避免接近 2GB 的视频溢出 PostgreSQL `INTEGER`：
 
@@ -599,6 +599,38 @@ git commit -m "修复：闭合 Task 12 检查点 A 数据守卫"
 ```
 
 FIX1 提交后必须再次硬暂停。执行窗口只回传提交号、红绿灯、五类 Must-Fix 对照、事务不变证据、网络/数据库连接数和白名单证明；测试窗口在独立 worktree 检出准确提交后复核。只有测试窗口 `TEST_PASS` 且规范、数据库、安全三方全部 PASS，审批窗口才可把检查点 A 改为 PASS 并批准 Task 12-3。
+
+### Task 12-2-FIX1A：送测前假绿整改
+
+FIX1 提交 `f47545e` 的父提交正确且七文件白名单合规，但审批窗口送测前探针仍复现以下假绿，因此不得交给测试窗口、不得进入 Task 12-3：
+
+```text
+A  ai_edit_material_analyses 增加 VIRTUAL 生成列后升级仍成功：head=0034，hidden=2
+B  0033 同名索引归属表正确但列错误时升级仍成功，并被静默改回 source_sha256
+C  0034 缺失 idx_ai_edit_materials_sha256 时降级仍成功：head=0033
+D  ai_edit_material_processes 增加普通列时降级仍成功：head=0033，额外列被删除
+E  audit_duplicates() 直接传活动 SQLite 路径时未拒绝
+```
+
+FIX1A 必须闭合：
+
+1. **升级表结构精确守卫**：`ai_edit_material_analyses` 同时校验总列数等于 9、冻结列名均为 `hidden=0`、不存在隐藏列；分别测试额外普通列、VIRTUAL 和 STORED 生成列。升级前还要显式拒绝 `_ai_edit_materials_backup_0034`、`_ai_edit_materials_new_0034`、`_guard_am_0034` 等中间对象，不依赖后续 DDL 偶然报错。
+2. **升级索引精确守卫**：0033 三个既有索引必须逐个验证存在、归属表、唯一性和有序列集，并拒绝未知显式索引；不得把错误列、错误唯一性、缺失或额外索引静默重建成目标结构。新增索引仍要求迁移前不存在。
+3. **降级三表与索引精确守卫**：`ai_edit_materials`、`ai_edit_material_analyses`、`ai_edit_material_processes` 都必须分别校验总列数、冻结列名和 `hidden=0`；0034 五个显式索引必须逐个验证存在、归属、唯一性和有序列集，并拒绝未知显式索引。补过程表/分析表额外列与生成列、缺索引、错列、错唯一性和中间对象探针。
+4. **盘点函数封死旁路**：`audit_duplicates()` 和 `report_duplicates()` 即使被模块调用，也必须拒绝 `ACTIVE_SQLITE`、不存在路径和非文件路径；只能接受 `snapshot_sqlite()` 生成的已存在副本。CLI 的 snapshot-only 边界保持不变。
+5. **测试证据去假绿**：所有拒绝类迁移测试使用统一快照 helper，对比失败前后的 head、三表 `sqlite_master`/`table_xinfo`、全部显式索引定义、完整数据和中间对象；往返测试至少准备两条素材和两条分析快照，比较 17/9 个完整列的多重集，而不是只比较行数和五个素材字段。PG guard 顺序测试必须截取 `upgrade()`/`downgrade()` 函数体，验证实际 `bind.execute(...)` 调用位于首个 `op.*` DDL 前，不能用模块级常量定义位置冒充执行顺序。
+
+审批同时确认两项非阻断裁决：`ck_ai_edit_materials_scope_merchant` 作为三方统一约束名予以接受；过程表 `ck_ai_edit_material_process_source_sha256` 属于同一哈希信任边界，予以接受。执行窗口不得再自行改名或扩展约束。
+
+FIX1A 继续使用 FIX1 的七文件白名单，父提交必须精确为 `f47545e`。执行窗口必须使用独立 worktree，不得只在审批窗口工作目录切换分支。至少运行聚焦套件和 93 项迁移矩阵，并使用提交差异执行空白检查：
+
+```powershell
+python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_duplicate_audit.py -q --basetemp=.tmp/task12-fix1a-focused
+python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_ai_edit_schema.py tests/test_phase12_ai_edit_postgres_contract.py tests/test_compute_usage_measurement_sqlite_migration.py tests/test_db_migration_runner.py -q --basetemp=.tmp/task12-fix1a-migrations
+git diff --check f47545e HEAD
+```
+
+提交信息固定为 `修复：补齐 Task 12 迁移精确结构守卫`。提交后硬暂停，只回传自测事实，不宣布任何 PASS。测试窗口继续待命，直到审批窗口签发新的准确提交号。
 
 ---
 
