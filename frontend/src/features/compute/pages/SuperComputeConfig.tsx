@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertCircleIcon,
@@ -29,8 +30,6 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
-import ModuleTabs from "../../../components/ModuleTabs";
-import type { ModuleTabItem } from "../../../components/ModuleTabs";
 
 interface PackageFormState {
   id: number | null;
@@ -131,12 +130,21 @@ function ResultSummary({ summary }: { summary: ComputeSummary | null }) {
   );
 }
 
-const DEFAULT_COMPUTE_CONFIG_TABS: ModuleTabItem[] = [
-  { label: "套餐配置", path: "/compute/packages" },
-  { label: "上浮比例", path: "/compute/markup-ratios" },
+type ComputeConfigView = "ratios" | "packages" | "merchant-grant";
+
+const CONFIG_VIEWS: Array<{ id: ComputeConfigView; label: string }> = [
+  { id: "ratios", label: "计费比例" },
+  { id: "packages", label: "套餐管理" },
+  { id: "merchant-grant", label: "商户发放" },
 ];
 
-export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS }: { tabs?: ModuleTabItem[] }) {
+function normalizeConfigView(value: string | null): ComputeConfigView {
+  return CONFIG_VIEWS.some((item) => item.id === value)
+    ? (value as ComputeConfigView)
+    : "ratios";
+}
+
+export default function SuperComputeConfig() {
   const [packages, setPackages] = useState<ComputePackage[]>([]);
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [packageError, setPackageError] = useState<string | null>(null);
@@ -163,6 +171,12 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
   const [ratioError, setRatioError] = useState<string | null>(null);
   const [ratioEdits, setRatioEdits] = useState<Record<string, RatioEditState>>({});
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeView = normalizeConfigView(searchParams.get("view"));
+  const selectView = (view: ComputeConfigView) => {
+    setSearchParams({ view }, { replace: true });
+  };
+
   const selectedGrantPackage = useMemo(
     () => packages.find((pkg) => String(pkg.id) === grantPackageId) || null,
     [packages, grantPackageId],
@@ -185,10 +199,6 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
       setLoadingPackages(false);
     }
   }, []);
-
-  useEffect(() => {
-    void loadPackages();
-  }, [loadPackages]);
 
   const loadRatios = useCallback(async () => {
     setRatioLoading(true);
@@ -217,8 +227,12 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
   }, []);
 
   useEffect(() => {
-    void loadRatios();
-  }, [loadRatios]);
+    if (activeView === "ratios") {
+      void loadRatios();
+    } else {
+      void loadPackages();
+    }
+  }, [activeView, loadPackages, loadRatios]);
 
   const handleEditRatioPercent = (key: string, percent: string) => {
     setRatioEdits((prev) => ({
@@ -389,6 +403,15 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
     }
   };
 
+  const handleRefresh = () => {
+    if (activeView === "ratios") {
+      void loadRatios();
+    } else {
+      void loadPackages();
+    }
+  };
+  const refreshLoading = activeView === "ratios" ? ratioLoading : loadingPackages;
+
   return (
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
       <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
@@ -397,28 +420,147 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
             <CpuIcon size={22} />
           </div>
           <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">算力套餐配置</h1>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">算力配置</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">平台算力套餐、商户后台充值和套餐发放</p>
-            <ModuleTabs items={tabs} />
+            <nav aria-label="算力配置视图" className="mt-3 inline-flex rounded-lg border border-[#e4e8f0] bg-[#f8fafc] p-0.5 text-xs font-semibold">
+              {CONFIG_VIEWS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={activeView === item.id}
+                  onClick={() => selectView(item.id)}
+                  className={`rounded-md px-4 py-1.5 transition ${
+                    activeView === item.id
+                      ? "bg-white text-[#2563eb] shadow-sm"
+                      : "text-[#8b95a6] hover:text-[#475467]"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
           </div>
         </div>
         <button
-          onClick={() => void loadPackages()}
-          disabled={loadingPackages}
+          onClick={handleRefresh}
+          disabled={refreshLoading}
           className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#dbe3ef] bg-white px-4 text-xs font-semibold text-[#475467] disabled:opacity-60"
         >
-          <RefreshCwIcon size={14} className={loadingPackages ? "animate-spin" : ""} />
+          <RefreshCwIcon size={14} className={refreshLoading ? "animate-spin" : ""} />
           刷新
         </button>
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto p-5">
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
-          <div className="font-semibold">后台充值/发放为管理操作，不代表真实支付。</div>
-          <div>真实支付暂未接入；请确认商户编号后再操作，页面不会调用微信支付或支付宝真实接口。</div>
-        </div>
+        {activeView === "ratios" ? (
+          <>
+        {/* Phase 10 §0.2：六能力上浮比例（独立区，不嵌套套餐卡片） */}
+        <section className="rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
+            <div>
+              <h2 className="text-sm font-bold text-[#1a1f2e]">能力上浮比例</h2>
+              <p className="mt-1 text-[11px] text-[#8b95a6]">
+                设置各项 AI 能力的计费加成比例
+              </p>
+            </div>
+            <button
+              onClick={() => void loadRatios()}
+              disabled={ratioLoading}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dbe3ef] bg-white px-3 text-[11px] font-semibold text-[#475467] disabled:opacity-60"
+            >
+              <RefreshCwIcon size={13} className={ratioLoading ? "animate-spin" : ""} />
+              刷新
+            </button>
+          </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
+          {ratioError ? (
+            <div className="flex items-center gap-2 px-4 py-8 text-xs text-red-600">
+              <AlertCircleIcon size={14} />
+              <span>上浮比例加载失败：{ratioError}</span>
+              <button onClick={() => void loadRatios()} className="ml-2 underline">
+                重试
+              </button>
+            </div>
+          ) : ratioLoading && ratios.length === 0 ? (
+            <div className="space-y-2 px-4 py-4">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
+              ))}
+            </div>
+          ) : ratios.length === 0 ? (
+            <div className="grid place-items-center px-4 py-10 text-center">
+              <p className="text-xs text-[#8b95a6]">
+                算力比例配置异常，请联系管理员处理。
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#f1f5f9]">
+              {CAPABILITY_ROWS.map((row) => {
+                const edit = ratioEdits[row.key];
+                if (!edit) return null;
+                return (
+                  <div
+                    key={row.key}
+                    className="flex flex-wrap items-center gap-3 px-4 py-3"
+                  >
+                    <span className="w-24 shrink-0 text-xs font-semibold text-[#1a1f2e]">
+                      {row.label}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={edit.percent}
+                        onChange={(event) =>
+                          handleEditRatioPercent(row.key, event.target.value)
+                        }
+                        aria-label="上浮比例"
+                        placeholder="如 33"
+                        className="h-9 w-24 rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
+                      />
+                      <span className="text-xs text-[#8b95a6]">%</span>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[#475467]">
+                      <input
+                        type="checkbox"
+                        checked={edit.enabled}
+                        onChange={(event) =>
+                          handleEditRatioEnabled(row.key, event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-[#cbd5e1]"
+                      />
+                      启用
+                    </label>
+                    {edit.error ? (
+                      <span className="flex items-center gap-1 text-[11px] text-red-500">
+                        <AlertCircleIcon size={12} />
+                        {edit.error}
+                      </span>
+                    ) : null}
+                    <button
+                      onClick={() => void handleSaveRatio(row.key)}
+                      disabled={edit.saving}
+                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563eb] px-3 text-[11px] font-semibold text-white disabled:opacity-60"
+                    >
+                      {edit.saving ? (
+                        <RefreshCwIcon size={12} className="animate-spin" />
+                      ) : (
+                        <SaveIcon size={12} />
+                      )}
+                      {edit.saving ? "保存中" : "保存"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="border-t border-[#e4e8f0] px-4 py-2.5 text-[11px] text-[#8b95a6]">
+            百分比接受非负整数或最多两位小数；转为基点后下发后端，不设产品上限，超技术边界由后端返回错误。
+          </div>
+        </section>
+          </>
+        ) : null}
+
+        {activeView === "packages" ? (
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
           <section className="rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
               <div>
@@ -588,110 +730,14 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
             </section>
           </aside>
         </div>
+        ) : null}
 
-        {/* Phase 10 §0.2：六能力上浮比例（独立区，不嵌套套餐卡片） */}
-        <section className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
-            <div>
-              <h2 className="text-sm font-bold text-[#1a1f2e]">能力上浮比例</h2>
-              <p className="mt-1 text-[11px] text-[#8b95a6]">
-                来源：GET/PUT /admin/compute/markup-ratios · 权限：算力配置
-              </p>
-            </div>
-            <button
-              onClick={() => void loadRatios()}
-              disabled={ratioLoading}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dbe3ef] bg-white px-3 text-[11px] font-semibold text-[#475467] disabled:opacity-60"
-            >
-              <RefreshCwIcon size={13} className={ratioLoading ? "animate-spin" : ""} />
-              刷新
-            </button>
-          </div>
-
-          {ratioError ? (
-            <div className="flex items-center gap-2 px-4 py-8 text-xs text-red-600">
-              <AlertCircleIcon size={14} />
-              <span>上浮比例加载失败：{ratioError}</span>
-              <button onClick={() => void loadRatios()} className="ml-2 underline">
-                重试
-              </button>
-            </div>
-          ) : ratioLoading && ratios.length === 0 ? (
-            <div className="space-y-2 px-4 py-4">
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
-              ))}
-            </div>
-          ) : ratios.length === 0 ? (
-            <div className="grid place-items-center px-4 py-10 text-center">
-              <p className="text-xs text-[#8b95a6]">
-                暂无上浮比例配置（配置漂移请联系管理员重新初始化六能力 seed）。
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-[#f1f5f9]">
-              {CAPABILITY_ROWS.map((row) => {
-                const edit = ratioEdits[row.key];
-                if (!edit) return null;
-                return (
-                  <div
-                    key={row.key}
-                    className="flex flex-wrap items-center gap-3 px-4 py-3"
-                  >
-                    <span className="w-24 shrink-0 text-xs font-semibold text-[#1a1f2e]">
-                      {row.label}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        value={edit.percent}
-                        onChange={(event) =>
-                          handleEditRatioPercent(row.key, event.target.value)
-                        }
-                        aria-label="上浮比例"
-                        placeholder="如 33"
-                        className="h-9 w-24 rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
-                      />
-                      <span className="text-xs text-[#8b95a6]">%</span>
-                    </div>
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[#475467]">
-                      <input
-                        type="checkbox"
-                        checked={edit.enabled}
-                        onChange={(event) =>
-                          handleEditRatioEnabled(row.key, event.target.checked)
-                        }
-                        className="h-4 w-4 rounded border-[#cbd5e1]"
-                      />
-                      启用
-                    </label>
-                    {edit.error ? (
-                      <span className="flex items-center gap-1 text-[11px] text-red-500">
-                        <AlertCircleIcon size={12} />
-                        {edit.error}
-                      </span>
-                    ) : null}
-                    <button
-                      onClick={() => void handleSaveRatio(row.key)}
-                      disabled={edit.saving}
-                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563eb] px-3 text-[11px] font-semibold text-white disabled:opacity-60"
-                    >
-                      {edit.saving ? (
-                        <RefreshCwIcon size={12} className="animate-spin" />
-                      ) : (
-                        <SaveIcon size={12} />
-                      )}
-                      {edit.saving ? "保存中" : "保存"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          <div className="border-t border-[#e4e8f0] px-4 py-2.5 text-[11px] text-[#8b95a6]">
-            百分比接受非负整数或最多两位小数；转为基点后下发后端，不设产品上限，超技术边界由后端返回错误。
-          </div>
-        </section>
-
+        {activeView === "merchant-grant" ? (
+        <>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
+          <div className="font-semibold">后台充值/发放为管理操作，不代表真实支付。</div>
+          <div>真实支付暂未接入；请确认商户编号后再操作，页面不会调用微信支付或支付宝真实接口。</div>
+        </div>
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
           <section className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="flex items-center gap-2">
@@ -815,6 +861,8 @@ export default function SuperComputeConfig({ tabs = DEFAULT_COMPUTE_CONFIG_TABS 
             </div>
           </section>
         </div>
+        </>
+        ) : null}
       </main>
     </section>
   );

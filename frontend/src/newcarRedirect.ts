@@ -16,6 +16,7 @@ const ALLOWED_REDIRECT_PATH_PREFIXES = [
   "/admin/autoreply-rollout",
   "/admin/return-visits",
   "/admin/ai-reply-records",
+  "/admin/compute-config",
   "/douyin-cs",
   "/leads",
   "/compute",

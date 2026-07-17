@@ -94,8 +94,6 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
       { id: "compute", label: "算力中心", path: "/compute/center" },
       { id: "compute-token-transactions", label: "算力流水", path: "/compute/token-transactions" },
       { id: "compute-recharge-orders", label: "充值订单", path: "/compute/recharge-orders" },
-      { id: "compute-packages", label: "套餐配置", path: "/compute/packages", permissionCodes: [PERMISSIONS.adminComputeConfig] },
-      { id: "compute-markup-ratios", label: "上浮比例", path: "/compute/markup-ratios", permissionCodes: [PERMISSIONS.adminComputeConfig] },
     ],
   },
 ];
