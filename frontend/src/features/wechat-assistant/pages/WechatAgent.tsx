@@ -34,7 +34,6 @@ import {
   enableStaff,
   enableLocalAgentTaskPolling,
   fetchBrowserPendingWechatTasks,
-  fetchLocalAgentRuntimeStatus,
   fetchWechatTaskHistory,
   fetchWechatTask,
   fetchStaffList,
@@ -128,12 +127,6 @@ function rawSummaryText(summary?: WechatTaskRawResultSummary | null): string {
   return parts.length ? parts.join(" / ") : "-";
 }
 
-function agentOnlineText(status: AgentStatusData | null, localOnline: boolean | null): string {
-  if (localOnline) return "在线";
-  if (status?.agent_online) return "在线";
-  return "离线";
-}
-
 function staffStatusText(status?: string | null): string {
   if (status === "active") return "启用";
   if (status === "disabled" || status === "inactive") return "停用";
@@ -147,10 +140,18 @@ function staffStatusClass(status?: string | null): string {
   return "bg-amber-50 text-amber-700";
 }
 
-export default function WechatAgent({ activeTab = "status" }: { activeTab?: WechatAgentTab }) {
+export default function WechatAgent({
+  activeTab = "status",
+  localAgentOnline = false,
+  localAgentRuntimeStatus: runtimeStatus = null,
+  onRefreshLocalAgentStatus = async () => false,
+}: {
+  activeTab?: WechatAgentTab;
+  localAgentOnline?: boolean;
+  localAgentRuntimeStatus?: LocalAgentRuntimeStatus | null;
+  onRefreshLocalAgentStatus?: () => Promise<boolean>;
+}) {
   const [agentStatus, setAgentStatus] = useState<AgentStatusData | null>(null);
-  const [localOnline, setLocalOnline] = useState<boolean | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [pendingTasks, setPendingTasks] = useState<WechatTask[]>([]);
   const [taskHistory, setTaskHistory] = useState<WechatTaskHistoryItem[]>([]);
@@ -270,10 +271,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     setPageError(null);
     setTaskHistoryError(null);
     try {
-      const [statusResponse, health, runtime, staffs, tasks, history] = await Promise.all([
+      const [, statusResponse, staffs, tasks, history] = await Promise.all([
+        onRefreshLocalAgentStatus(),
         fetchAgentStatus().catch(() => null),
-        checkLocalAgentHealth().catch(() => null),
-        fetchLocalAgentRuntimeStatus().catch(() => null),
         fetchStaffList({
           status: staffStatusFilter,
           keyword: staffKeyword.trim() || undefined,
@@ -294,8 +294,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         }),
       ]);
       setAgentStatus(statusResponse?.data || null);
-      setLocalOnline(Boolean(health?.success));
-      setRuntimeStatus(runtime);
       setStaffList(staffs);
       setPendingTasks(tasks);
       if (history) {
@@ -320,13 +318,8 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   async function handleRefreshRuntime() {
     setRuntimeLoading(true);
     try {
-      const [health, runtime] = await Promise.all([
-        checkLocalAgentHealth().catch(() => null),
-        fetchLocalAgentRuntimeStatus().catch(() => null),
-      ]);
-      setLocalOnline(Boolean(health?.success));
-      setRuntimeStatus(runtime);
-      if (!health?.success) {
+      const online = await onRefreshLocalAgentStatus();
+      if (!online) {
         toast.warning("未检测到 AI小高助手");
       }
     } finally {
@@ -337,10 +330,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   async function handleEnablePolling() {
     setRuntimeLoading(true);
     try {
-      const runtime = await enableLocalAgentTaskPolling();
-      setRuntimeStatus(runtime);
-      setLocalOnline(true);
-        toast.success("AI小高助手已开始接收任务");
+      await enableLocalAgentTaskPolling();
+      await onRefreshLocalAgentStatus();
+      toast.success("AI小高助手已开始接收任务");
     } catch (err) {
       toast.error("开始接收任务失败，请稍后重试");
     } finally {
@@ -351,10 +343,9 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   async function handleDisablePolling() {
     setRuntimeLoading(true);
     try {
-      const runtime = await disableLocalAgentTaskPolling();
-      setRuntimeStatus(runtime);
-      setLocalOnline(true);
-        toast.success("AI小高助手已暂停接收任务");
+      await disableLocalAgentTaskPolling();
+      await onRefreshLocalAgentStatus();
+      toast.success("AI小高助手已暂停接收任务");
     } catch (err) {
       toast.error("暂停接收任务失败，请稍后重试");
     } finally {
@@ -566,7 +557,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     }
   }
 
-  const onlineText = agentOnlineText(agentStatus, localOnline);
+  const onlineText = localAgentOnline ? "在线" : "离线";
   const pageMeta = TAB_META[activeTab];
   const todayTaskCount = pendingTasks.filter((task) => {
     const created = task.created_at ? new Date(task.created_at) : null;
@@ -652,7 +643,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
             <div className="flex items-center gap-2">
-              <PowerIcon size={16} className={localOnline ? "text-emerald-600" : "text-rose-600"} />
+              <PowerIcon size={16} className={localAgentOnline ? "text-emerald-600" : "text-rose-600"} />
               <h2 className="text-sm font-bold text-[#1a1f2e]">AI小高助手</h2>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -666,7 +657,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </button>
               <button
                 onClick={() => void handleEnablePolling()}
-                disabled={!localOnline || runtimeLoading || runtimeStatus?.task_polling_enabled === true}
+                disabled={!localAgentOnline || runtimeLoading || runtimeStatus?.task_polling_enabled === true}
                 className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
               >
                 <PlayIcon size={14} />
@@ -674,7 +665,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </button>
               <button
                 onClick={() => void handleDisablePolling()}
-                disabled={!localOnline || runtimeLoading || runtimeStatus?.task_polling_enabled !== true}
+                disabled={!localAgentOnline || runtimeLoading || runtimeStatus?.task_polling_enabled !== true}
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
               >
                 <PauseIcon size={14} />
@@ -691,7 +682,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="rounded-md border border-slate-200 px-3 py-3">
                 <div className="text-[11px] font-semibold text-slate-500">接收任务</div>
                 <div className={runtimeStatus?.task_polling_enabled ? "mt-1 text-sm font-bold text-emerald-600" : "mt-1 text-sm font-bold text-amber-700"}>
-                  {runtimeStatus?.task_polling_enabled ? "正在接收任务" : localOnline ? "已连接，未接收任务" : "AI小高助手未启动"}
+                  {runtimeStatus?.task_polling_enabled ? "正在接收任务" : localAgentOnline ? "已连接，未接收任务" : "AI小高助手未启动"}
                 </div>
               </div>
               <div className="rounded-md border border-slate-200 px-3 py-3">
@@ -712,12 +703,12 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </div>
             </div>
 
-            <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800" : "rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-6 text-rose-800"}>
-              <div className="font-bold">{localOnline ? "AI小高助手在线" : "AI小高助手未启动"}</div>
+            <div className={localAgentOnline ? "rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800" : "rounded-md border border-rose-200 bg-rose-50 p-3 text-xs leading-6 text-rose-800"}>
+              <div className="font-bold">{localAgentOnline ? "AI小高助手在线" : "AI小高助手未启动"}</div>
               <div>浏览器只能检测当前电脑上的 AI小高助手，不能直接保证启动程序。启动后点击“检测连接”刷新状态。</div>
               <div className="mt-3 rounded bg-white/70 p-2">
                 <div className="font-semibold">本机实时检测</div>
-                <div>{localOnline ? "来自 127.0.0.1:19000，当前浏览器所在电脑已连通。" : "来自 127.0.0.1:19000，当前浏览器所在电脑未连通。"}</div>
+                <div>{localAgentOnline ? "来自 127.0.0.1:19000，当前浏览器所在电脑已连通。" : "来自 127.0.0.1:19000，当前浏览器所在电脑未连通。"}</div>
               </div>
               <div className="mt-2 rounded bg-white/70 p-2">
                 <div className="font-semibold">服务端心跳记录</div>
@@ -748,8 +739,8 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               </button>
             </div>
             <div className="space-y-3 p-4 text-xs leading-6 text-slate-700">
-              <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
-                {localOnline ? "已检测到小高AI系统测试版正在运行。" : "未检测到程序，请先启动“小高AI系统测试版.exe”。"}
+              <div className={localAgentOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
+                {localAgentOnline ? "已检测到小高AI系统测试版正在运行。" : "未检测到程序，请先启动“小高AI系统测试版.exe”。"}
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
                 <div>1. 双击打开“小高AI系统测试版.exe”。</div>

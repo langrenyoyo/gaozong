@@ -241,6 +241,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 - 主要页面：线索/销售/检测/报表、微信助手（WechatAgent）、本机 Agent 面板、抖音AI客服工作台（DouyinAiCsWorkbenchPage）、抖音直播间检测、webhook 事件、超管后台系列（商户、账号、AI 回复记录、算力配置、跟进话术、违禁词、商户 Agent 绑定）、回访配置与运行记录、日报管理、能力中心（ComputeCenter 可作支付 mock 参考）。其中违禁词管理页已挂载并接通真实后端 API（`/admin/forbidden-words`，复用 `auto_wechat:admin:forbidden_words` 权限）；"自动回复灰度"入口已在超管侧栏隐藏，页面/路由/权限码保留不删。
 - TS 配置约束（稳定约束，禁止改动）：`ignoreDeprecations: "5.0"`（TS 5.9.3 不支持 "6.0"）、`composite: true`、`emitDeclarationOnly: true`（不与 noEmit 组合）；禁止自动升级或重构 TS 配置。
 - 离线提示文案："未检测到本机微信 Agent，请先在当前电脑启动 小高AI微信助手"。Local Agent 名称为**小高AI微信助手**，禁止使用"萌猫微信助手"。
+- 微信助手页面与侧栏底部“小高AI系统测试版”共享同一份本机状态和版本：只以浏览器所在电脑 `127.0.0.1:19000` 的 `/health` 与运行状态接口为准，每 5 秒及窗口重新聚焦时刷新；本机离线时两处都显示“离线”，版本显示 `-`。9000 `/agent/status` 的心跳只用于诊断，不得回退为当前电脑在线判定。
 
 ------
 

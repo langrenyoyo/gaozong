@@ -29,6 +29,8 @@ interface SideNavProps {
   onExpandedChange?: (expanded: boolean) => void;
   onLogout?: () => void;
   showSalesBadge?: boolean;
+  localAgentOnline?: boolean;
+  localAgentVersion?: string | null;
   user?: AppUser;
 }
 
@@ -78,6 +80,8 @@ export default function SideNav({
   onExpandedChange = () => {},
   onLogout = () => {},
   showSalesBadge = false,
+  localAgentOnline = false,
+  localAgentVersion = null,
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
 }: SideNavProps) {
   const isAdminUser = isAdminLike(user);
@@ -221,14 +225,14 @@ export default function SideNav({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs font-semibold text-slate-200">AI小高微信助手</span>
-                      <span className="text-[11px] font-bold text-[#8fb4ff]">v3.8</span>
+                      <span className="truncate text-xs font-semibold text-slate-200">小高AI系统测试版</span>
+                      <span className="text-[11px] font-bold text-[#8fb4ff]">{localAgentVersion || "-"}</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">
                       <span className="text-slate-500">状态</span>
-                      <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-400">
-                        <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" />
-                        在线
+                      <span className={localAgentOnline ? "inline-flex items-center gap-1.5 font-semibold text-emerald-400" : "inline-flex items-center gap-1.5 font-semibold text-rose-400"}>
+                        <span className={localAgentOnline ? "h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : "h-2 w-2 rounded-full bg-rose-400 shadow-[0_0_0_4px_rgba(251,113,133,0.12)]"} />
+                        {localAgentOnline ? "在线" : "离线"}
                       </span>
                     </div>
                   </div>
@@ -236,7 +240,7 @@ export default function SideNav({
               ) : (
                 <div className="relative grid h-8 w-8 place-items-center rounded-xl bg-[#22304b] text-[#8fb4ff]">
                   <CpuIcon size={16} />
-                  <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#182238] bg-emerald-400" />
+                  <span className={localAgentOnline ? "absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#182238] bg-emerald-400" : "absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#182238] bg-rose-400"} />
                 </div>
               )}
             </div>

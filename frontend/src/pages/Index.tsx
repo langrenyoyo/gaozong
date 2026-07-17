@@ -26,6 +26,8 @@ import AiVideoEditor from "../features/ai-edit/pages/AiVideoEditor";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
+import { checkLocalAgentHealth, fetchLocalAgentRuntimeStatus } from "../features/wechat-assistant/api";
+import type { LocalAgentRuntimeStatus } from "../features/wechat-assistant/types";
 import DailyReports from "../features/wechat-assistant/pages/DailyReports";
 import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
 import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
@@ -665,6 +667,8 @@ export default function Index({
   const [chatLeads, setChatLeads] = useState<Lead[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [localAgentOnline, setLocalAgentOnline] = useState(false);
+  const [localAgentRuntimeStatus, setLocalAgentRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
   const conversations = useMemo(() => buildConversations(chatEvents, chatLeads), [chatEvents, chatLeads]);
   const selectedContact =
     conversations.contacts.find((contact) => contact.id === selectedContactId) ||
@@ -710,6 +714,33 @@ export default function Index({
     },
     [isMockUser],
   );
+
+  const refreshLocalAgentStatus = useCallback(async (): Promise<boolean> => {
+    const health = await checkLocalAgentHealth().catch(() => null);
+    if (!health?.success) {
+      setLocalAgentOnline(false);
+      setLocalAgentRuntimeStatus(null);
+      return false;
+    }
+
+    const runtime = await fetchLocalAgentRuntimeStatus().catch(() => null);
+    setLocalAgentOnline(true);
+    setLocalAgentRuntimeStatus(runtime);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (user.role !== "merchant") return;
+
+    void refreshLocalAgentStatus();
+    const intervalId = window.setInterval(() => void refreshLocalAgentStatus(), 5000);
+    const handleFocus = () => void refreshLocalAgentStatus();
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [refreshLocalAgentStatus, user.role]);
 
   const isLeadConversationNav = activeNav === "chat";
   const isDouyinWorkbenchNav = activeNav === "douyin-ai-cs";
@@ -791,6 +822,8 @@ export default function Index({
           onExpandedChange={setIsNavExpanded}
           onLogout={onLogout}
           showSalesBadge={Boolean(douyinAccount)}
+          localAgentOnline={localAgentOnline}
+          localAgentVersion={localAgentRuntimeStatus?.version || null}
           user={user}
         />
         {isAdminSectionActive ? (
@@ -836,7 +869,12 @@ export default function Index({
         ) : isDailyReportsNav ? (
           <DailyReports user={user} />
         ) : isWechatAssistantNav ? (
-          <WechatAgent activeTab={activeWechatTab} />
+          <WechatAgent
+            activeTab={activeWechatTab}
+            localAgentOnline={localAgentOnline}
+            localAgentRuntimeStatus={localAgentRuntimeStatus}
+            onRefreshLocalAgentStatus={refreshLocalAgentStatus}
+          />
         ) : isComputeConfigNav ? (
           <SuperComputeConfig tabs={computeTabs} />
         ) : isComputeNav ? (

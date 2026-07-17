@@ -166,6 +166,30 @@ def test_wechat_assistant_test_nickname_is_user_editable():
     assert "!testNickname.trim()" in source
 
 
+def test_wechat_assistant_online_status_never_falls_back_to_server_heartbeat():
+    source = Path("frontend/src/features/wechat-assistant/pages/WechatAgent.tsx").read_text(encoding="utf-8")
+
+    assert "function agentOnlineText" not in source
+    assert 'const onlineText = localAgentOnline ? "在线" : "离线";' in source
+
+
+def test_wechat_assistant_status_and_version_are_shared_with_side_nav():
+    index_source = Path("frontend/src/pages/Index.tsx").read_text(encoding="utf-8")
+    side_nav_source = Path("frontend/src/components/SideNav.tsx").read_text(encoding="utf-8")
+
+    assert "checkLocalAgentHealth" in index_source
+    assert "fetchLocalAgentRuntimeStatus" in index_source
+    assert index_source.count("localAgentOnline={localAgentOnline}") == 2
+    assert "localAgentRuntimeStatus={localAgentRuntimeStatus}" in index_source
+    assert "localAgentVersion={localAgentRuntimeStatus?.version || null}" in index_source
+    assert "window.setInterval" in index_source
+
+    assert "小高AI系统测试版" in side_nav_source
+    assert 'localAgentOnline ? "在线" : "离线"' in side_nav_source
+    assert "localAgentVersion || \"-\"" in side_nav_source
+    assert "v3.8" not in side_nav_source
+
+
 def test_frontend_docker_dev_uses_browser_api_proxy_instead_of_loopback_9000():
     compose_source = Path("docker-compose.dev.yml").read_text(encoding="utf-8")
     env_example_source = Path(".env.development.example").read_text(encoding="utf-8")
