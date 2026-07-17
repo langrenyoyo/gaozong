@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI、SQLAlchemy、SQLite 顺序迁移、PostgreSQL Alembic、React 19、TypeScript、Vite、PyInstaller、Python 3.11 Worker、FFmpeg/ffprobe、FunASR、PySceneDetect/OpenCV 适配器、OpenAI-compatible 多模态消息。
 
-**计划状态：** `READY_FOR_EXECUTION`。设计提交 `56faa8c`；生产验证保持 `NOT_STARTED`。
+**计划状态：** `CHECKPOINT_A_BLOCKED`。当前执行包为 `PHASE12-TASK12-2-FIX1A / 12.2-FIX1A-R2`；生产验证保持 `NOT_STARTED`。
 
 ---
 
@@ -602,7 +602,7 @@ FIX1 提交后必须再次硬暂停。执行窗口只回传提交号、红绿灯
 
 ### Task 12-2-FIX1A：送测前假绿整改
 
-FIX1 提交 `f47545e` 的父提交正确且七文件白名单合规，但审批窗口送测前探针仍复现以下假绿，因此不得交给测试窗口、不得进入 Task 12-3：
+FIX1 提交 `f47545ecd9334c0bd65293e7e64448941f8b592a` 的父提交正确且七文件白名单合规，但审批窗口送测前探针仍复现以下假绿，因此不得交给测试窗口、不得进入 Task 12-3：
 
 ```text
 A  ai_edit_material_analyses 增加 VIRTUAL 生成列后升级仍成功：head=0034，hidden=2
@@ -615,22 +615,32 @@ E  audit_duplicates() 直接传活动 SQLite 路径时未拒绝
 FIX1A 必须闭合：
 
 1. **升级表结构精确守卫**：`ai_edit_material_analyses` 同时校验总列数等于 9、冻结列名均为 `hidden=0`、不存在隐藏列；分别测试额外普通列、VIRTUAL 和 STORED 生成列。升级前还要显式拒绝 `_ai_edit_materials_backup_0034`、`_ai_edit_materials_new_0034`、`_guard_am_0034` 等中间对象，不依赖后续 DDL 偶然报错。
-2. **升级索引精确守卫**：0033 三个既有索引必须逐个验证存在、归属表、唯一性和有序列集，并拒绝未知显式索引；不得把错误列、错误唯一性、缺失或额外索引静默重建成目标结构。新增索引仍要求迁移前不存在。
-3. **降级三表与索引精确守卫**：`ai_edit_materials`、`ai_edit_material_analyses`、`ai_edit_material_processes` 都必须分别校验总列数、冻结列名和 `hidden=0`；0034 五个显式索引必须逐个验证存在、归属、唯一性和有序列集，并拒绝未知显式索引。补过程表/分析表额外列与生成列、缺索引、错列、错唯一性和中间对象探针。
-4. **盘点函数封死旁路**：`audit_duplicates()` 和 `report_duplicates()` 即使被模块调用，也必须拒绝 `ACTIVE_SQLITE`、不存在路径和非文件路径；只能接受 `snapshot_sqlite()` 生成的已存在副本。CLI 的 snapshot-only 边界保持不变。
+2. **升级索引精确守卫**：0033 三个既有索引必须逐个验证存在、归属表、`origin='c'`、`partial=0`、唯一性和 `pragma_index_xinfo` 的有序键列、`desc=0`、`coll='BINARY'`；索引名全集必须精确等于冻结集合，不得忽略 `origin='u'/'pk'` 的未知自动索引。禁止把错误列、错误唯一性、partial、DESC、COLLATE、表达式、缺失或额外索引静默重建成目标结构。新增索引仍要求迁移前不存在。
+3. **降级三表与索引精确守卫**：`ai_edit_materials`、`ai_edit_material_analyses`、`ai_edit_material_processes` 都必须分别校验总列数、冻结列名和 `hidden=0`；0034 五个索引采用与升级相同的完整语义校验，两个表的索引名全集必须精确等于冻结集合。补过程表 STORED、分析表 VIRTUAL/STORED、错唯一性、partial、DESC、COLLATE、未知自动索引和中间对象探针。
+4. **盘点函数封死旁路**：`audit_duplicates()` 和 `report_duplicates()` 即使被模块调用，也必须拒绝 `ACTIVE_SQLITE`、不存在路径和非文件路径。CLI 只能使用 `snapshot_sqlite()` 生成的副本；模块内部 helper 可接受其他已存在、解析后不等于活动库的普通 SQLite 副本，但始终以 `PRAGMA query_only=ON` 打开。
 5. **测试证据去假绿**：所有拒绝类迁移测试使用统一快照 helper，对比失败前后的 head、三表 `sqlite_master`/`table_xinfo`、全部显式索引定义、完整数据和中间对象；往返测试至少准备两条素材和两条分析快照，比较 17/9 个完整列的多重集，而不是只比较行数和五个素材字段。PG guard 顺序测试必须截取 `upgrade()`/`downgrade()` 函数体，验证实际 `bind.execute(...)` 调用位于首个 `op.*` DDL 前，不能用模块级常量定义位置冒充执行顺序。
 
 审批同时确认两项非阻断裁决：`ck_ai_edit_materials_scope_merchant` 作为三方统一约束名予以接受；过程表 `ck_ai_edit_material_process_source_sha256` 属于同一哈希信任边界，予以接受。执行窗口不得再自行改名或扩展约束。
 
-FIX1A 继续使用 FIX1 的七文件白名单，父提交必须精确为 `f47545e`。执行窗口必须使用独立 worktree，不得只在审批窗口工作目录切换分支。至少运行聚焦套件和 93 项迁移矩阵，并使用提交差异执行空白检查：
+候选 `438ee894914a9432df8a0043fc629ae9b7d0f1c3` 已闭合 A-E，但索引守卫只比较唯一性和列名，审批探针确认 partial 与 DESC 漂移在升级/降级中仍会静默成功；同时缺少上一版明文要求的过程表 STORED、分析表 VIRTUAL/STORED 和降级错唯一性测试。因此该候选结论为 R1，执行包升级为 `12.2-FIX1A-R2`。
+
+R2 只允许修改以下三个文件：
+
+```text
+migrations/versions/0034_ai_edit_material_library.sql
+migrations/downgrades/0034_ai_edit_material_library.sql
+tests/test_phase12_task12_material_schema.py
+```
+
+R2 父提交必须精确为 `438ee894914a9432df8a0043fc629ae9b7d0f1c3`，使用独立 worktree，不得 amend/rebase/squash/merge。删除已被有效调用顺序测试取代的 `test_pg_0015_guard_before_ddl`，避免保留假证据。至少运行聚焦套件和迁移矩阵，并使用提交差异执行空白检查：
 
 ```powershell
 python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_duplicate_audit.py -q --basetemp=.tmp/task12-fix1a-focused
 python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_ai_edit_schema.py tests/test_phase12_ai_edit_postgres_contract.py tests/test_compute_usage_measurement_sqlite_migration.py tests/test_db_migration_runner.py -q --basetemp=.tmp/task12-fix1a-migrations
-git diff --check f47545e HEAD
+git diff --check 438ee894914a9432df8a0043fc629ae9b7d0f1c3 HEAD
 ```
 
-提交信息固定为 `修复：补齐 Task 12 迁移精确结构守卫`。提交后硬暂停，只回传自测事实，不宣布任何 PASS。测试窗口继续待命，直到审批窗口签发新的准确提交号。
+提交信息固定为 `修复：收紧 Task 12 索引语义守卫`。提交后硬暂停，只回传自测事实，不宣布任何 PASS。测试窗口继续待命，直到审批窗口签发新的准确提交号。
 
 ---
 
