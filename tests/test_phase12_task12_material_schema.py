@@ -163,3 +163,93 @@ def test_task12_material_annotations_patch_strict():
     forbidden = {"source_sha256", "scope", "storage_mode", "manual_override_json"}
     leaked = forbidden & fields
     assert not leaked, f"人工确认 DTO 允许覆盖受保护字段: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# purge 配对 CHECK：三类违规必须在数据库层被拒绝（执行包 Task 12-2 Step 1）。
+# 用 ORM metadata create_all 建表，验证 CHECK 约束在数据库层生效。
+# ---------------------------------------------------------------------------
+
+import sqlite3
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
+from app.database import Base
+import app.models  # noqa: F401
+
+
+def _make_db() -> str:
+    """用 ORM metadata 建内存库的文件镜像（CREATE TABLE 含全部 CHECK），返回路径。"""
+    import tempfile
+    from pathlib import Path
+
+    d = tempfile.mkdtemp(prefix="task12_purge_check_")
+    path = str(Path(d) / "t.db")
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(bind=engine, tables=[app.models.AiEditMaterial.__table__])
+    engine.dispose()
+    return path
+
+
+def _seed_material_row(db_path: str, **overrides) -> None:
+    """直接插入一行 ai_edit_materials（绕过 service，验证数据库约束）。"""
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    cols = {
+        "material_id": "mat-1", "merchant_id": "m1", "scope": "merchant",
+        "media_type": "video", "storage_mode": "local_only",
+        "source_sha256": "a" * 64, "analysis_status": "pending",
+        "stabilization_status": "pending",
+    }
+    cols.update(overrides)
+    names = ", ".join(cols.keys())
+    placeholders = ", ".join("?" for _ in cols)
+    conn.execute(
+        f"INSERT INTO ai_edit_materials ({names}) VALUES ({placeholders})",
+        list(cols.values()),
+    )
+    conn.close()
+
+
+def _assert_insert_rejected(db_path: str, **overrides):
+    import pytest
+
+    try:
+        _seed_material_row(db_path, **overrides)
+    except sqlite3.IntegrityError:
+        return
+    pytest.fail(f"数据库应拒绝插入: {overrides}")
+
+
+def test_purge_pair_rejects_status_without_operation():
+    """非空 purge_status + 空 purge_operation_id 必须被数据库 CHECK 拒绝。"""
+    _assert_insert_rejected(_make_db(), purge_status="preparing", purge_operation_id=None)
+
+
+def test_purge_pair_rejects_operation_without_status():
+    """空 purge_status + 非空 purge_operation_id 必须被数据库 CHECK 拒绝。"""
+    _assert_insert_rejected(_make_db(), purge_status=None, purge_operation_id="op-1")
+
+
+def test_purge_status_rejects_unknown_value():
+    """未知 purge_status 必须被数据库 CHECK 拒绝。"""
+    _assert_insert_rejected(
+        _make_db(), purge_status="unknown_status", purge_operation_id="op-1"
+    )
+
+
+def test_purge_pair_allows_both_null():
+    """同空允许（正常素材无删除 claim）。"""
+    _seed_material_row(_make_db(), purge_status=None, purge_operation_id=None)
+
+
+def test_purge_pair_allows_both_set():
+    """同非空允许（preparing/completed + operation_id）。"""
+    _seed_material_row(_make_db(), purge_status="completed", purge_operation_id="op-1")
+
+
+def test_migration_constraint_names_match_across_dialects():
+    """SQLite 0034 与 PostgreSQL 0015 必须存在两个 purge 约束名，且名称一致。"""
+    sql_up = (PROJECT_ROOT / "migrations/versions/0034_ai_edit_material_library.sql").read_text(encoding="utf-8")
+    pg_up = (PROJECT_ROOT / "migrations/postgres/auto_wechat/versions/0015_ai_edit_material_library.py").read_text(encoding="utf-8")
+    for name in ("ck_ai_edit_materials_purge_status", "ck_ai_edit_materials_purge_pair"):
+        assert name in sql_up, f"SQLite 0034 缺少约束名 {name}"
+        assert name in pg_up, f"PostgreSQL 0015 缺少约束名 {name}"

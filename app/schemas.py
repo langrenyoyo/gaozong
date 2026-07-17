@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Phase 8 Task 3：trace_url 安全校验用控制字符集，禁止 \x00-\x1f 与 \x7f
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -2191,6 +2191,69 @@ class AiEditJobArtifactOut(BaseModel):
     source_artifact_id: Optional[str] = None
 
 
+class AiEditMaterialProcessOut(BaseModel):
+    """AI 剪辑素材阶段处理输出：只暴露状态与进度，不返回 execution_token_hash。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str
+    status: str
+    progress: int
+    attempt_count: int
+    failure_code: Optional[str] = None
+    error_summary: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class MaterialRange(BaseModel):
+    """素材可用/高光区间（严格，不允许客户端覆盖 AI 快照）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    start_seconds: float = Field(..., ge=0)
+    end_seconds: float = Field(..., gt=0)
+
+
+class AiEditMaterialAnnotationsPatch(BaseModel):
+    """人工确认 DTO：extra=forbid，不可覆盖 source_sha256/scope/storage_mode/AI 快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+    description: Optional[str] = Field(default=None, max_length=2000)
+    category: Optional[Literal["spoken", "broll", "highlight", "uncategorized"]] = None
+    tags: Optional[list[str]] = Field(default=None, max_length=50)
+    usable_ranges: Optional[list[MaterialRange]] = Field(default=None, max_length=100)
+
+
+class AiEditMaterialDetailOut(BaseModel):
+    """素材详情：当前有效分析、人工覆盖与时间轴。
+
+    外部 API 不返回 storage_key / merchant_id / 绝对路径 / purge_operation_id /
+    execution_token_hash；只暴露安全展示与媒体字段、当前有效标签/区间/转写。
+    """
+
+    material_id: str
+    scope: str
+    media_type: str
+    storage_mode: str
+    source_sha256: str
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+    file_size_bytes: Optional[int] = None
+    tags: list[str] = Field(default_factory=list)
+    usable_ranges: list[MaterialRange] = Field(default_factory=list)
+    highlights: list[MaterialRange] = Field(default_factory=list)
+    processes: list[AiEditMaterialProcessOut] = Field(default_factory=list)
+    deleted_at: Optional[datetime] = None
+    purge_after: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
 class AiEditMaterialOut(BaseModel):
     """AI 剪辑素材输出结构。
 
@@ -2205,6 +2268,12 @@ class AiEditMaterialOut(BaseModel):
     source_sha256: str
     analysis_status: str
     stabilization_status: str
+    display_name: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+    processes: list[AiEditMaterialProcessOut] = Field(default_factory=list)
     deleted_at: Optional[datetime] = None
     purge_after: Optional[datetime] = None
     created_at: Optional[datetime] = None

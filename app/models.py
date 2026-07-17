@@ -1415,10 +1415,24 @@ class AiEditMaterial(Base):
     __tablename__ = "ai_edit_materials"
     __table_args__ = (
         UniqueConstraint("material_id", name="uk_ai_edit_materials_material_id"),
+        # Task 12：同商户同源 SHA 规范 ID 去重（不能只靠 service 校验）。
+        UniqueConstraint(
+            "merchant_id", "source_sha256", name="uk_ai_edit_materials_merchant_sha256"
+        ),
         CheckConstraint("scope IN ('merchant', 'platform')", name="ck_ai_edit_materials_scope"),
         CheckConstraint(
             "storage_mode IN ('local_only', 'uploading', 'cloud_available', 'local_missing')",
             name="ck_ai_edit_materials_storage_mode",
+        ),
+        # Task 12：purge_status/purge_operation_id 必须同为空或同非空。
+        CheckConstraint(
+            "purge_status IS NULL OR purge_status IN ('preparing','completed')",
+            name="ck_ai_edit_materials_purge_status",
+        ),
+        CheckConstraint(
+            "(purge_status IS NULL AND purge_operation_id IS NULL) OR "
+            "(purge_status IS NOT NULL AND purge_operation_id IS NOT NULL)",
+            name="ck_ai_edit_materials_purge_pair",
         ),
     )
 
@@ -1439,6 +1453,19 @@ class AiEditMaterial(Base):
     purge_after = Column(DateTime, comment="物理清除截止时间")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Task 12：展示、媒体属性与永久删除生命周期列（12 列）。
+    display_name = Column(String(255), comment="展示名")
+    description = Column(Text, comment="当前 AI/人工描述")
+    category = Column(String(32), comment="分类（spoken/broll/highlight/uncategorized）")
+    duration_seconds = Column(Float, comment="时长（秒）")
+    width = Column(Integer, comment="宽")
+    height = Column(Integer, comment="高")
+    fps = Column(Float, comment="帧率")
+    file_size_bytes = Column(BigInteger, comment="文件字节数（BigInteger 防 2GB 溢出）")
+    manual_override_json = Column(Text, comment="人工覆盖严格 JSON")
+    manual_confirmed_at = Column(DateTime, comment="人工确认时间")
+    purge_operation_id = Column(String(64), comment="永久删除操作 ID")
+    purge_status = Column(String(16), comment="永久删除状态（preparing/completed）")
 
 
 class AiEditMaterialAnalysis(Base):
@@ -1455,6 +1482,50 @@ class AiEditMaterialAnalysis(Base):
     tags_json = Column(Text, nullable=False, comment="标签 JSON（严格 schema）")
     usable_ranges_json = Column(Text, nullable=False, comment="可用区间 JSON（严格 schema）")
     created_at = Column(DateTime, default=datetime.now)
+
+
+class AiEditMaterialProcess(Base):
+    """AI 剪辑素材分阶段处理状态：每阶段独立 attempt/令牌/CAS 回写（Task 12）。
+
+    五阶段：media_probe / transcript / content_analysis / stability / cloud_upload。
+    execution_token_hash 只存 SHA-256，原始令牌只下发 19000 一次，不进公共 DTO。
+    """
+
+    __tablename__ = "ai_edit_material_processes"
+    __table_args__ = (
+        UniqueConstraint(
+            "material_id", "source_sha256", "stage",
+            name="uk_ai_edit_material_process_stage",
+        ),
+        CheckConstraint(
+            "stage IN ('media_probe','transcript','content_analysis','stability','cloud_upload')",
+            name="ck_ai_edit_material_process_stage",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed','not_required')",
+            name="ck_ai_edit_material_process_status",
+        ),
+        CheckConstraint(
+            "progress BETWEEN 0 AND 100", name="ck_ai_edit_material_process_progress"
+        ),
+        CheckConstraint(
+            "attempt_count >= 0", name="ck_ai_edit_material_process_attempt"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    material_id = Column(String(64), nullable=False, comment="素材 ID")
+    source_sha256 = Column(String(64), nullable=False, comment="被处理的素材 SHA-256")
+    stage = Column(String(32), nullable=False, comment="阶段")
+    status = Column(String(32), nullable=False, comment="状态")
+    progress = Column(Integer, nullable=False, server_default="0", comment="进度 0-100")
+    attempt_count = Column(Integer, nullable=False, server_default="0", comment="尝试次数")
+    execution_token_hash = Column(String(64), nullable=False, comment="执行令牌 SHA-256（不存原始）")
+    failure_code = Column(String(64), comment="失败错误码")
+    error_summary = Column(Text, comment="脱敏错误摘要")
+    started_at = Column(DateTime, comment="开始时间")
+    completed_at = Column(DateTime, comment="完成时间")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class AiEditTemplate(Base):
