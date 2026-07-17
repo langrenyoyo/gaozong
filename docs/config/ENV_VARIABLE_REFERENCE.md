@@ -70,7 +70,7 @@
 | `DOUYIN_WEBHOOK_AUTH_REQUIRED` | 9000 | false | 是 | security | 入站 webhook 强制验签 |
 | `DOUYIN_RESOURCE_ALLOWED_HOSTS` | 9000 | 空 | dev/lan/prod | security | live-check 资源下载 SSRF 白名单 |
 | `PUBLIC_BASE_URL` | 9000 | 空 | 是 | douyin | 9000 对外可访问地址 |
-| `DY_AUTH_REDIRECT_URL` | 9000 | 空 | 是 | douyin | OAuth 回跳地址（后端接收） |
+| `DY_AUTH_REDIRECT_URL` | 9000 | 空 | 是 | douyin | OAuth 回跳地址，必须指向 `/integrations/douyin/live-check/auth-redirect`；`oauth-callback` 仅观察不写库 |
 | `DY_AUTH_REDIRECT_FRONTEND_URL` | 9000 | 空 | 是 | douyin | 授权完成后跳回前端地址 |
 | `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` | 9000 | 空 | 是 | security | OAuth 前端 origin 白名单 |
 | `DY_CALLBACK_URL` | 9000 | 空 | 是 | douyin | 抖音事件回调地址 |

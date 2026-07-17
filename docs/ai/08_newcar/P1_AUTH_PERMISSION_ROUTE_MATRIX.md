@@ -170,11 +170,11 @@ python -m pytest tests/test_douyin_sync.py tests/test_lead_notification_records_
 
 | Method | Path | 函数 | 当前认证/权限依赖 | merchant_id 使用 | 前端调用证据 | 分类 | 建议处理 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | `/integrations/douyin/live-check/auth-url` | `get_auth_url` | 无，仅 `_ensure_enabled()` | 无 | `frontend/src/api/douyinLiveCheck.ts` 已封装 | 调试/联调授权入口 | 需要人工确认；若商户前端继续可点授权，补 NewCar 登录态 + `auto_wechat:douyin_ai_cs`；若只联调，改内部白名单或隐藏 |
+| GET | `/integrations/douyin/live-check/auth-url` | `get_auth_url` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` | 使用可信当前商户创建一次性 OAuth state | `frontend/src/api/douyinLiveCheck.ts` 已封装 | 商户授权入口 | 保持必需登录态和权限；不得退回无商户 state |
 | GET | `/integrations/douyin/live-check/oauth-callback` | `oauth_callback` | 无，仅 `_ensure_enabled()` | 无 | 测试覆盖，未见前端直接调用 | OAuth callback/观察入口 | 不加浏览器登录态；按 OAuth state、来源和回调安全边界处理 |
-| GET | `/integrations/douyin/live-check/auth-redirect` | `auth_redirect` | `get_request_context_optional` | optional context 传给 `sync_bind_info_accounts` | 测试覆盖，302 回前端 | OAuth/GMP 授权回跳入口 | 不直接改 required 登录态，避免授权回调断链；需专项确认 state 与商户归属绑定 |
-| GET | `/integrations/douyin/live-check/status` | `status` | `get_request_context_optional` | 有 context 时按商户查账号状态，否则用内存观察态 | `frontend/src/api/douyinLiveCheck.ts` 已封装 | 浏览器业务/联调状态混合 | 若面向商户前端，补 NewCar 登录态 + `auto_wechat:douyin_ai_cs`；若仅联调，内部白名单 |
-| GET | `/integrations/douyin/live-check/accounts` | `accounts` | 第二轮已加固：`get_request_context_required` + `auto_wechat:douyin_ai_cs` | 无；服务返回持久账号/事件兜底列表 | `frontend/src/api/douyinLiveCheck.ts` 和测试已调用 | 浏览器业务/联调混合 | 已加固入口门禁；后续仍需确认是否只返回当前 merchant 绑定账号 |
+| GET | `/integrations/douyin/live-check/auth-redirect` | `auth_redirect` | OAuth state 校验，不依赖浏览器登录态 | 从 state 还原可信商户并同步授权账号 | 测试覆盖，302 回前端 | OAuth/GMP 授权回跳入口 | `DY_AUTH_REDIRECT_URL` 必须指向本接口；`oauth-callback` 仅观察不写库 |
+| GET | `/integrations/douyin/live-check/status` | `status` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` | 按当前商户和本次 state 查询授权结果 | `frontend/src/api/douyinLiveCheck.ts` 已封装 | 浏览器授权状态 | 历史账号和进程内回调不得作为本次授权成功依据 |
+| GET | `/integrations/douyin/live-check/accounts` | `accounts` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` | 只返回当前商户持久化有效账号 | `frontend/src/api/douyinLiveCheck.ts` 和测试已调用 | 浏览器业务账号列表 | 保持当前商户隔离，不使用内存或事件兜底 |
 | POST | `/integrations/douyin/live-check/accounts/sync-bind-info` | `sync_accounts_bind_info` | 第二轮已加固：`get_request_context_required` + `auto_wechat:douyin_ai_cs` | context 传给 `sync_bind_info_accounts` 写入/保护账号 `merchant_id` | 测试已调用 | 浏览器业务/联调混合 | 已加固入口门禁 |
 | POST | `/integrations/douyin/live-check/accounts/bind-authorized-open-id` | `bind_authorized_open_id` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` | 强制使用 `context.merchant_id` | `frontend/src/api/douyinLiveCheck.ts` 已封装 | 浏览器业务接口 | 保持现状 |
 | POST | `/integrations/douyin/live-check/messages/send` | `send_message` | 第二轮已加固：`get_request_context_required` + `auto_wechat:douyin_ai_cs` | 入口校验登录态和权限；原 service 仍通过账号绑定反查商户做人工接管记录 | `frontend/src/api/douyinAiCsClient.ts` 已调用 | 浏览器业务/高风险发送接口 | 已加固入口门禁；未改变 manual_confirmed、send_context、24h 等原安全检查 |
@@ -268,6 +268,8 @@ python -m pytest tests/test_douyin_sync.py tests/test_lead_notification_records_
 | 接口 | 实际新增权限 |
 | --- | --- |
 | `GET /integrations/douyin/live-check/accounts` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` |
+| `GET /integrations/douyin/live-check/auth-url` | `get_request_context_required` + `auto_wechat:douyin_ai_cs`，创建绑定当前商户的 OAuth state |
+| `GET /integrations/douyin/live-check/status` | `get_request_context_required` + `auto_wechat:douyin_ai_cs`，按当前商户与本次 state 轮询 |
 | `POST /integrations/douyin/live-check/accounts/sync-bind-info` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` |
 | `POST /integrations/douyin/live-check/messages/send` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` |
 | `POST /integrations/douyin/live-check/resources/download` | `get_request_context_required` + `auto_wechat:douyin_ai_cs` |
@@ -279,7 +281,6 @@ python -m pytest tests/test_douyin_sync.py tests/test_lead_notification_records_
 | 接口 | 原因 |
 | --- | --- |
 | `GET /integrations/douyin/live-check/oauth-callback` | OAuth callback，不应套 NewCar 浏览器登录态 |
-| `GET /integrations/douyin/live-check/auth-redirect` | GMP 授权 302 回跳入口，需要 OAuth state / 商户绑定专项设计 |
 | `POST /integrations/douyin/live-check/webhook-observe`、`POST /integrations/douyin/live-check/callback` | Webhook callback，应按签名、来源、幂等处理 |
 | `POST /checks/run` | 历史检测/调试入口，不属于本轮浏览器查询补洞范围 |
 | `POST /replies/agent-write-back`、`POST /agent/heartbeat` | Local Agent 内部接口，不应套 NewCar 浏览器权限 |

@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from app import config
 from app.auth.context import RequestContext
 from app.auth.dependencies import (
-    get_request_context_optional,
     get_request_context_required,
     require_permission,
 )
@@ -310,11 +309,16 @@ def auth_redirect(
 
 @router.get("/status", response_model=DouyinLiveCheckStatusResponse)
 def status(
-    context: RequestContext | None = Depends(get_request_context_optional),
+    state: str | None = None,
+    context: RequestContext = Depends(get_request_context_required),
     db: Session = Depends(get_db),
 ) -> DouyinLiveCheckStatusResponse:
+    require_permission("auto_wechat:douyin_ai_cs")(context)
+    _require_merchant_id(context)
     _ensure_enabled()
-    return DouyinLiveCheckStatusResponse(data=get_live_check_status(db=db, context=context))
+    return DouyinLiveCheckStatusResponse(
+        data=get_live_check_status(db=db, context=context, state=state)
+    )
 
 
 @router.get("/accounts", response_model=DouyinLiveCheckAccountsResponse)

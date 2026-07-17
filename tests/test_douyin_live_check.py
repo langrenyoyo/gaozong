@@ -2409,6 +2409,93 @@ def test_auth_status_reads_latest_authorized_account_from_db_for_current_merchan
     assert polling["received_at"].startswith("2026-06-22T10:30:00")
 
 
+def test_auth_status_for_new_state_ignores_existing_account_until_current_attempt_syncs():
+    client = _client_with_context("merchant-auth-state")
+    state = _seed_oauth_state(state="state-current-attempt", merchant_id="merchant-auth-state")
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=config.DY_MAIN_ACCOUNT_ID,
+                open_id="account_old_attempt",
+                merchant_id="merchant-auth-state",
+                bind_status=1,
+                account_name="历史授权账号",
+                last_synced_at=datetime.now() - timedelta(minutes=5),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        pending_resp = client.get(
+            "/integrations/douyin/live-check/status",
+            params={"state": state},
+        )
+
+    assert pending_resp.status_code == 200
+    assert pending_resp.json()["data"]["auth_polling"] == {
+        "status": "pending",
+        "open_id": None,
+        "nickname": None,
+        "received_at": None,
+    }
+
+    db = TestSession()
+    try:
+        state_row = db.query(DouyinOAuthState).filter_by(state=state).one()
+        state_row.consumed_at = datetime.now()
+        db.add(
+            DouyinAuthorizedAccount(
+                main_account_id=config.DY_MAIN_ACCOUNT_ID,
+                open_id="account_current_attempt",
+                merchant_id="merchant-auth-state",
+                bind_status=1,
+                account_name="本次授权账号",
+                last_synced_at=datetime.now() + timedelta(seconds=1),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        authorized_resp = client.get(
+            "/integrations/douyin/live-check/status",
+            params={"state": state},
+        )
+
+    assert authorized_resp.status_code == 200
+    polling = authorized_resp.json()["data"]["auth_polling"]
+    assert polling["status"] == "authorized"
+    assert polling["open_id"] == "account_current_attempt"
+
+
+def test_auth_status_rejects_state_owned_by_other_merchant():
+    client = _client_with_context("merchant-current")
+    state = _seed_oauth_state(state="state-other-merchant", merchant_id="merchant-other")
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get(
+            "/integrations/douyin/live-check/status",
+            params={"state": state},
+        )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "DOUYIN_OAUTH_STATE_INVALID"
+
+
+def test_auth_status_requires_douyin_ai_cs_permission():
+    client = _client_with_required_context(permission_codes=[])
+
+    with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
+        resp = client.get("/integrations/douyin/live-check/status")
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
 def test_auth_status_returns_pending_before_authorization():
     client = _client_with_context("merchant-auth")
 

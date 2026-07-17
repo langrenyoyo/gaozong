@@ -807,6 +807,24 @@ def test_frontend_workbench_restores_cached_data_and_loads_older_conversations()
     assert "queryClient.clear()" in app_source
 
 
+def test_frontend_douyin_authorization_is_scoped_to_current_state_and_verified_account():
+    api_source = open("frontend/src/api/douyinLiveCheck.ts", encoding="utf-8").read()
+    type_source = open("frontend/src/api/types.ts", encoding="utf-8").read()
+    page_source = open(
+        "frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx",
+        encoding="utf-8",
+    ).read()
+
+    assert "state: string | null" in type_source
+    assert "state?: string" in api_source
+    assert "params: state ? { state } : undefined" in api_source
+    assert "refreshAuthStatus(authUrlResult.data.state || undefined)" in page_source
+    assert "const accountFound = Boolean(" in page_source
+    assert "setAuthAccountRefreshDone(accountFound)" in page_source
+    assert "if (!accountFound)" in page_source
+    assert "authCallback?.open_id" not in page_source
+
+
 def test_conversation_profile_returns_404_when_conversation_not_found_in_account_scope():
     _insert_event(
         open_id="customer_profile_scope",

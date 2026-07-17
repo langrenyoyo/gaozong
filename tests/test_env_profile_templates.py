@@ -456,6 +456,26 @@ def test_compose_files_use_explicit_local_env_profiles():
     assert 'NEWCAR_AUTH_MOCK_ENABLED: "${NEWCAR_AUTH_MOCK_ENABLED:-true}"' in development
 
 
+def test_douyin_oauth_templates_use_persisting_redirect_and_dev_compose_passes_runtime_guards():
+    templates = [
+        ".env.development.example",
+        ".env.lan.example",
+        ".env.production.example",
+    ]
+    for template in templates:
+        source = read(template)
+        redirect_line = next(
+            line for line in source.splitlines() if line.startswith("DY_AUTH_REDIRECT_URL=")
+        )
+        assert "/integrations/douyin/live-check/auth-redirect" in redirect_line, template
+        assert "/oauth-callback" not in redirect_line, template
+
+    development = read("docker-compose.dev.yml")
+    assert 'DY_OAUTH_STATE_TTL_SECONDS: "${DY_OAUTH_STATE_TTL_SECONDS:-900}"' in development
+    assert 'DY_AUTH_REDIRECT_ALLOWED_ORIGINS: "${DY_AUTH_REDIRECT_ALLOWED_ORIGINS:-}"' in development
+    assert 'DY_LIVE_CHECK_ENABLED: "${DY_LIVE_CHECK_ENABLED:-false}"' in development
+
+
 def test_production_pg_scripts_default_to_production_local_env():
     script_paths = sorted(Path("scripts").glob("production_pg_*.sh"))
     assert script_paths

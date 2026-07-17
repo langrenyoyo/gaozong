@@ -12,7 +12,7 @@
 | `DY_GMP_SECRET_KEY` | 主动调用 OpenAPI 的签名密钥 |
 | `DY_MAIN_ACCOUNT_ID` | 火山主账号 ID |
 | `DY_ACCOUNT_NAME` | 火山账号名称 |
-| `DY_AUTH_REDIRECT_URL` | 授权成功后的 302 回跳地址 |
+| `DY_AUTH_REDIRECT_URL` | 授权成功后的 302 回跳地址，必须指向 9000 `/integrations/douyin/live-check/auth-redirect`；`oauth-callback` 仅观察不写库 |
 | `DY_CALLBACK_URL` | 抖音私信事件回调地址 |
 | `DY_CALLBACK_EVENTS` | 回调事件列表，逗号分隔 |
 
@@ -47,6 +47,7 @@ Authorization: signature
 | 能力 | 上游 path | 本地接口 |
 | --- | --- | --- |
 | 获取授权页 | `/get_aweme_auth_url` | `GET /integrations/douyin/live-check/auth-url` |
+| 授权回跳并同步账号 | 回跳参数 | `GET /integrations/douyin/live-check/auth-redirect` |
 | 同步授权账号 | `/list_bind_info` | `POST /integrations/douyin/live-check/accounts/sync-bind-info` |
 | 人工发送文本私信 | `/send_msg` | `POST /integrations/douyin/live-check/messages/send` |
 | 下载多媒体资源 | `/download_resource` | `POST /integrations/douyin/live-check/resources/download` |

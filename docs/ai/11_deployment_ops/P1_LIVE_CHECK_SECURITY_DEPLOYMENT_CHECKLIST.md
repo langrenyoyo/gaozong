@@ -47,6 +47,7 @@ unknown_applied_versions 为空
 | `DY_CALLBACK_EVENTS` | 按测试事件订阅 | 明确订阅所需事件，通常含 `im_receive_msg,im_send_msg,im_enter_direct_msg` | 三类私信事件 | 事件缺失会影响线索、发送上下文或观察数据 |
 | `DY_LIVE_CHECK_FORWARD_TO_FORMAL` | 默认 `false`，只在联调时临时开启 | 默认应为 `false`；如开启必须保证签名头由可信上游传入 | `false` | 开启后会进入正式管线，必须保持验签和幂等边界 |
 | `DY_OAUTH_STATE_TTL_SECONDS` | 默认 900 秒 | 默认 900 秒，按业务窗口评估后再改 | `900` | 过长增加重放窗口，过短影响扫码授权体验 |
+| `DY_AUTH_REDIRECT_URL` | 指向 9000 `/integrations/douyin/live-check/auth-redirect` | 指向公网 9000 同一路由 | 空 | 指向 `/oauth-callback` 只会记录观察摘要，不会同步当前商户账号 |
 | `DY_AUTH_REDIRECT_FRONTEND_URL` | 配置本地或联调前端 origin | 配置生产可信前端 origin | 空，代码兜底固定安全 origin | 配错会导致授权完成后回不到前端 |
 | `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` | 显式列出本地和局域网 origin | 必须显式配置生产前端 origin；禁止 localhost、127.0.0.1、192.168.* | 空 | production 为空会拒绝跳转；误配内网地址会被拒绝 |
 | `DOUYIN_RESOURCE_ALLOWED_HOSTS` | 可为空，至少拦截内网和危险 scheme | 上线前建议确认抖音真实资源域名后显式配置 | 空 | 为空时没有域名白名单，只做协议和内网拦截 |
@@ -54,10 +55,11 @@ unknown_applied_versions 为空
 
 生产特别注意：
 
-1. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 必须显式配置真实可信前端 origin。
-2. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 不得包含 `localhost`、`127.0.0.1`、`192.168.*`、`10.*`、`172.16.*` 到 `172.31.*` 等内网地址。
-3. `DOUYIN_RESOURCE_ALLOWED_HOSTS` 当前可为空，但上线前建议向抖音官方或实际回调样本确认资源域名后配置。
-4. 生产必须从 `.env.production.example` 复制为 `.env.production.local` 后填写真实值，不得把 development / LAN 示例复制到生产。
+1. `DY_AUTH_REDIRECT_URL` 必须指向 `/integrations/douyin/live-check/auth-redirect`，不得指向只观察不写库的 `/oauth-callback`。
+2. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 必须显式配置真实可信前端 origin。
+3. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 不得包含 `localhost`、`127.0.0.1`、`192.168.*`、`10.*`、`172.16.*` 到 `172.31.*` 等内网地址。
+4. `DOUYIN_RESOURCE_ALLOWED_HOSTS` 当前可为空，但上线前建议向抖音官方或实际回调样本确认资源域名后配置。
+5. 生产必须从 `.env.production.example` 复制为 `.env.production.local` 后填写真实值，不得把 development / LAN 示例复制到生产。
 
 ## 5. 安全边界最终状态
 
@@ -116,6 +118,9 @@ unknown_applied_versions 为空
 | 成功后一次性消费 | 写入 `consumed_at` | `consume_oauth_state` |
 | query `merchant_id` 不参与绑定 | 使用 state 还原 `RequestContext` | `test_auth_redirect_uses_state_merchant_and_ignores_forged_merchant_id_and_redirect` |
 | 重放 state 拒绝 | 已消费返回 `DOUYIN_OAUTH_STATE_REPLAYED` | `test_auth_redirect_consumed_state_rejects_replay` |
+| 商户前端状态按本次 state 轮询 | 仅查询同商户、state 创建后同步的有效账号；历史账号和全局回调不参与本次成功判定 | `test_auth_status_for_new_state_ignores_existing_account_until_current_attempt_syncs` |
+| 跨商户 state 拒绝 | 当前登录商户与 state 归属不一致时返回 `DOUYIN_OAUTH_STATE_INVALID` | `test_auth_status_rejects_state_owned_by_other_merchant` |
+| 弹窗关闭前验证正式账号列表 | 只有本次 open_id 已出现在 `/integrations/douyin/accounts` 后才允许关闭 | `test_frontend_douyin_authorization_is_scoped_to_current_state_and_verified_account` |
 
 ### 5.6 OAuth Redirect
 
@@ -136,12 +141,13 @@ unknown_applied_versions 为空
 2. 确认 `DY_SECRET_KEY` 与抖音 webhook 签名密钥一致，且未提交到仓库。
 3. 确认 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 只包含生产可信前端 origin。
 4. 确认 `DY_AUTH_REDIRECT_FRONTEND_URL` 命中 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`。
-5. 确认生产 `DY_CALLBACK_URL` 指向预期正式入口或观察入口，不混用历史调试地址。
-6. 确认 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=false`，除非现场需要临时观察并已确认签名头可用。
-7. 确认迁移 `0024_douyin_oauth_states` 已应用到目标库。
-8. 确认 `DOUYIN_RESOURCE_ALLOWED_HOSTS` 是否需要按抖音官方资源域名显式配置。
-9. 确认宝塔 / Nginx 反代只暴露必要 `/api/*`、webhook、OAuth callback 路径。
-10. 确认不在生产保留 localhost / 127.0.0.1 / 局域网地址作为授权跳转白名单。
+5. 确认 `DY_AUTH_REDIRECT_URL` 指向公网 9000 `/integrations/douyin/live-check/auth-redirect`。
+6. 确认生产 `DY_CALLBACK_URL` 指向预期正式入口或观察入口，不混用历史调试地址。
+7. 确认 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=false`，除非现场需要临时观察并已确认签名头可用。
+8. 确认迁移 `0024_douyin_oauth_states` 已应用到目标库。
+9. 确认 `DOUYIN_RESOURCE_ALLOWED_HOSTS` 是否需要按抖音官方资源域名显式配置。
+10. 确认宝塔 / Nginx 反代只暴露必要 `/api/*`、webhook、OAuth callback 路径。
+11. 确认不在生产保留 localhost / 127.0.0.1 / 局域网地址作为授权跳转白名单。
 
 ## 7. 回滚注意事项
 

@@ -18,8 +18,10 @@ export async function fetchDouyinLiveCheckAuthUrl(): Promise<DouyinLiveCheckAuth
   return apiClient.get("/integrations/douyin/live-check/auth-url");
 }
 
-export async function fetchDouyinLiveCheckStatus(): Promise<DouyinLiveCheckStatusResponse> {
-  return apiClient.get("/integrations/douyin/live-check/status");
+export async function fetchDouyinLiveCheckStatus(state?: string): Promise<DouyinLiveCheckStatusResponse> {
+  return apiClient.get("/integrations/douyin/live-check/status", {
+    params: state ? { state } : undefined,
+  });
 }
 
 export async function fetchDouyinLiveCheckAccounts(): Promise<DouyinLiveCheckAccountsResponse> {

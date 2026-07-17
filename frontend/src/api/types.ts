@@ -254,6 +254,7 @@ export interface DouyinLiveCheckAuthUrlData {
   auth_url: string | null;
   auth_redirect_url: string | null;
   callback_url: string | null;
+  state: string | null;
 }
 
 export interface DouyinLiveCheckAccount {

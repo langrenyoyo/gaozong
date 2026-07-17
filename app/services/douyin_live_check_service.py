@@ -816,7 +816,62 @@ def _auth_polling_status(
     db: Session | None,
     context: RequestContext | None,
     oauth_callback: dict[str, Any] | None,
+    state: str | None = None,
 ) -> dict[str, Any]:
+    merchant_id = context.merchant_id if context and context.merchant_id else None
+    state_text = _optional_str(state)
+    if state_text:
+        state_row = (
+            db.query(DouyinOAuthState).filter(DouyinOAuthState.state == state_text).first()
+            if db is not None
+            else None
+        )
+        if (
+            state_row is None
+            or not merchant_id
+            or state_row.merchant_id != merchant_id
+            or state_row.source_system != "new_car_project"
+        ):
+            logger.warning(
+                "douyin auth status stage=oauth_state_poll status=rejected "
+                "failure_stage=oauth_state_scope_invalid state_present=true merchant_id_present=%s",
+                bool(merchant_id),
+            )
+            raise _oauth_state_error("DOUYIN_OAUTH_STATE_INVALID")
+        if state_row.expires_at and state_row.expires_at < _now() and state_row.consumed_at is None:
+            return {
+                "status": "expired",
+                "open_id": None,
+                "nickname": None,
+                "received_at": None,
+            }
+        if state_row.consumed_at is None:
+            return _pending_auth_polling_status()
+
+        row = (
+            db.query(DouyinAuthorizedAccount)
+            .filter(
+                DouyinAuthorizedAccount.merchant_id == merchant_id,
+                DouyinAuthorizedAccount.main_account_id == config.DY_MAIN_ACCOUNT_ID,
+                DouyinAuthorizedAccount.bind_status == 1,
+                DouyinAuthorizedAccount.last_synced_at >= state_row.created_at,
+            )
+            .order_by(DouyinAuthorizedAccount.last_synced_at.desc(), DouyinAuthorizedAccount.id.desc())
+            .first()
+        )
+        if row is None:
+            return _pending_auth_polling_status()
+        logger.info(
+            "douyin auth status stage=oauth_state_poll status=authorized "
+            "state_present=true merchant_id_present=true"
+        )
+        return {
+            "status": "authorized",
+            "open_id": row.open_id,
+            "nickname": row.account_name,
+            "received_at": _datetime_text(row.last_synced_at),
+        }
+
     if oauth_callback and oauth_callback.get("error"):
         return {
             "status": "failed",
@@ -825,7 +880,6 @@ def _auth_polling_status(
             "received_at": _datetime_text(oauth_callback.get("received_at")),
         }
 
-    merchant_id = context.merchant_id if context and context.merchant_id else None
     if db is not None and merchant_id:
         row = (
             db.query(DouyinAuthorizedAccount)
@@ -859,12 +913,13 @@ def _auth_polling_status(
 def get_live_check_status(
     db: Session | None = None,
     context: RequestContext | None = None,
+    state: str | None = None,
 ) -> dict[str, Any]:
     with _state_lock:
         oauth_callback = dict(_last_oauth_callback) if _last_oauth_callback else None
         webhook_observe = dict(_last_webhook_observe) if _last_webhook_observe else None
     auth_url_info = build_auth_url()
-    auth_polling = _auth_polling_status(db, context, oauth_callback)
+    auth_polling = _auth_polling_status(db, context, oauth_callback, state)
     return {
         "enabled": config.DY_LIVE_CHECK_ENABLED,
         "auth_url_configured": auth_url_info["configured"],

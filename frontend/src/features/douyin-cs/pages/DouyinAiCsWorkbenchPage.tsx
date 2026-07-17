@@ -823,6 +823,7 @@ export default function DouyinAiCsWorkbenchPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFrameFailed, setAuthFrameFailed] = useState(false);
   const [authAccountRefreshDone, setAuthAccountRefreshDone] = useState(false);
+  const [authAccountRefreshAttempted, setAuthAccountRefreshAttempted] = useState(false);
   const [authPollingTimedOut, setAuthPollingTimedOut] = useState(false);
   const [chatAssistMode, setChatAssistMode] = useState<ChatAssistMode>("manual_takeover");
   const [loadingAccountMode, setLoadingAccountMode] = useState(false);
@@ -893,15 +894,16 @@ export default function DouyinAiCsWorkbenchPage() {
   const activeBindingReady = hasActiveAgentBinding(selectedAccount);
   const effectiveChatAssistMode: ChatAssistMode = activeBindingReady ? chatAssistMode : "manual_takeover";
   const authPolling = authStatus?.auth_polling || null;
-  const authCallback = authStatus?.last_oauth_callback || null;
-  const authOpenId = authPolling ? authPolling.open_id : authCallback?.open_id || null;
-  const authNickname = authPolling ? authPolling.nickname : authCallback?.nick_name || null;
-  const authReceivedAt = authPolling ? authPolling.received_at : authCallback?.received_at || null;
-  const authAuthorized = authPolling ? authPolling.status === "authorized" : Boolean(authOpenId);
+  const authOpenId = authPolling?.open_id || null;
+  const authNickname = authPolling?.nickname || null;
+  const authReceivedAt = authPolling?.received_at || null;
+  const authAuthorized = authPolling?.status === "authorized";
   const authStatusText = authPollingTimedOut
     ? "授权超时"
-    : authPolling?.status === "failed" || authCallback?.error
+    : authPolling?.status === "failed"
       ? "授权失败"
+      : authPolling?.status === "expired"
+        ? "授权已过期"
       : authAuthorized
         ? "授权成功"
         : "授权中";
@@ -1616,7 +1618,7 @@ export default function DouyinAiCsWorkbenchPage() {
     return () => window.clearInterval(timer);
   }, [loadLatestAutoReplyRun, selectedAccount, selectedConversation]);
 
-  const refreshAuthStatus = useCallback(async () => {
+  const refreshAuthStatus = useCallback(async (state?: string) => {
     if (
       authPollingStartedAtRef.current &&
       Date.now() - authPollingStartedAtRef.current >= AUTH_POLLING_TIMEOUT_MS
@@ -1627,12 +1629,12 @@ export default function DouyinAiCsWorkbenchPage() {
     }
     setAuthStatusLoading(true);
     try {
-      const result = await fetchDouyinLiveCheckStatus();
+      const result = await fetchDouyinLiveCheckStatus(state);
       setAuthStatus(result.data);
       if (result.data.auth_polling?.status === "failed") {
         setAuthError("授权失败，请重新扫码");
-      } else if (result.data.last_oauth_callback?.error) {
-        setAuthError(result.data.last_oauth_callback.error_description || result.data.last_oauth_callback.error);
+      } else if (result.data.auth_polling?.status === "expired") {
+        setAuthError("授权已过期，请重新扫码");
       } else {
         setAuthError(null);
       }
@@ -1654,6 +1656,7 @@ export default function DouyinAiCsWorkbenchPage() {
     setAuthStatus(null);
     setAuthFrameFailed(false);
     setAuthAccountRefreshDone(false);
+    setAuthAccountRefreshAttempted(false);
     setAuthPollingTimedOut(false);
     authPollingStartedAtRef.current = Date.now();
     if (authAutoCloseTimerRef.current) {
@@ -1661,10 +1664,7 @@ export default function DouyinAiCsWorkbenchPage() {
       authAutoCloseTimerRef.current = null;
     }
     try {
-      const [authUrlResult] = await Promise.all([
-        fetchDouyinLiveCheckAuthUrl(),
-        refreshAuthStatus(),
-      ]);
+      const authUrlResult = await fetchDouyinLiveCheckAuthUrl();
       setAuthUrlInfo(authUrlResult.data);
       if (!authUrlResult.data.configured || !authUrlResult.data.auth_url) {
         setAuthError(
@@ -1672,6 +1672,10 @@ export default function DouyinAiCsWorkbenchPage() {
             ? `抖音授权信息不完整：${authUrlResult.data.missing.join("，")}`
             : "未返回可用的抖音授权 URL。",
         );
+      } else if (!authUrlResult.data.state) {
+        setAuthError("未返回本次授权标识，请重新打开授权弹窗");
+      } else {
+        await refreshAuthStatus(authUrlResult.data.state || undefined);
       }
     } catch (err) {
       setAuthError(liveCheckErrorMessage(err));
@@ -1681,22 +1685,31 @@ export default function DouyinAiCsWorkbenchPage() {
   }
 
   async function refreshAccountsAfterAuth() {
-    await loadAccounts(authOpenId);
-    setAuthAccountRefreshDone(true);
+    const refreshedAccounts = await loadAccounts(authOpenId);
+    const accountFound = Boolean(
+      authOpenId && refreshedAccounts.some((item) => item.account_open_id === authOpenId),
+    );
+    setAuthAccountRefreshDone(accountFound);
+    if (!accountFound) {
+      setAuthError("授权完成，但本次抖音号尚未进入当前账号列表，请稍后重试");
+    }
+    return accountFound;
   }
 
   useEffect(() => {
     if (!authModalOpen || authAuthorized || authPollingTimedOut) return undefined;
+    if (!authUrlInfo?.state) return undefined;
     const timer = window.setInterval(() => {
-      void refreshAuthStatus();
+      void refreshAuthStatus(authUrlInfo.state || undefined);
     }, AUTH_POLLING_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [authAuthorized, authModalOpen, authPollingTimedOut, refreshAuthStatus]);
+  }, [authAuthorized, authModalOpen, authPollingTimedOut, authUrlInfo?.state, refreshAuthStatus]);
 
   useEffect(() => {
-    if (!authModalOpen || !authAuthorized || authAccountRefreshDone) return;
+    if (!authModalOpen || !authAuthorized || authAccountRefreshAttempted) return;
+    setAuthAccountRefreshAttempted(true);
     void refreshAccountsAfterAuth();
-  }, [authAccountRefreshDone, authAuthorized, authModalOpen]);
+  }, [authAccountRefreshAttempted, authAuthorized, authModalOpen]);
 
   useEffect(() => {
     if (!authModalOpen || !authAuthorized || !authAccountRefreshDone) return undefined;
@@ -3089,9 +3102,9 @@ export default function DouyinAiCsWorkbenchPage() {
                 </div>
               ) : null}
 
-              {authAuthorized ? (
+              {authAccountRefreshDone ? (
                 <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
-                  授权成功，{authAccountRefreshDone ? "抖音号列表已刷新，即将关闭弹窗。" : "正在刷新抖音号列表..."}
+                  授权成功，抖音号列表已刷新，即将关闭弹窗。
                 </div>
               ) : null}
 
@@ -3191,7 +3204,7 @@ export default function DouyinAiCsWorkbenchPage() {
 
                   <div className="mt-4 grid gap-2">
                     <button
-                      onClick={() => void refreshAuthStatus()}
+                      onClick={() => void refreshAuthStatus(authUrlInfo?.state || undefined)}
                       disabled={authStatusLoading}
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                     >
