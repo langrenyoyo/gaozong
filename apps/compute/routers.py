@@ -1,6 +1,9 @@
 """小高算力能力服务业务路由。"""
 
+import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -12,7 +15,6 @@ from apps.compute.dependencies import (
     get_gateway_context,
     require_compute_config_admin,
     require_merchant_context,
-    require_super_admin,
 )
 from apps.compute.schemas import (
     ComputeAdminRechargeRequest,
@@ -32,6 +34,8 @@ from apps.compute.schemas import (
 )
 from apps.compute import services as compute_service
 
+logger = logging.getLogger(__name__)
+
 
 def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
@@ -39,6 +43,46 @@ def _bad_request(code: str, message: str) -> HTTPException:
 
 def _not_found(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": code, "message": message})
+
+
+def _safe_log_value(value: object) -> str:
+    """日志安全值：折叠空白、限长，避免注入与超长目标摘要。"""
+    return " ".join(str(value).split())[:128] or "-"
+
+
+@contextmanager
+def _admin_compute_action(
+    context: GatewayContext,
+    *,
+    operation: str,
+    target: str,
+) -> Iterator[None]:
+    """管理员算力写操作结构化日志：成功/失败双态，固定字段，不记录内部令牌或 remark 全文。
+
+    ponytail: 独立服务自行实现，不与 9000 共抽模块；操作人取 gateway 注入的 user_id。
+    """
+    operator_id = _safe_log_value(context.get("user_id"))
+    safe_target = _safe_log_value(target)
+    try:
+        yield
+    except Exception as exc:
+        logger.warning(
+            "compute_admin_action operation=%s operator_id=%s target=%s "
+            "status=failed failure_stage=%s error_type=%s",
+            operation,
+            operator_id,
+            safe_target,
+            operation,
+            type(exc).__name__,
+        )
+        raise
+    logger.info(
+        "compute_admin_action operation=%s operator_id=%s target=%s "
+        "status=success failure_stage=none error_type=none",
+        operation,
+        operator_id,
+        safe_target,
+    )
 
 
 router = APIRouter(prefix="/api/compute", tags=["小高算力"])
@@ -112,7 +156,7 @@ def admin_list_packages(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员查看全部套餐。"""
-    require_super_admin(context)
+    require_compute_config_admin(context)
     packages = compute_service.list_admin_packages(db)
     return {"success": True, "data": packages, "message": "success"}
 
@@ -124,8 +168,11 @@ def admin_create_package(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员创建套餐。"""
-    require_super_admin(context)
-    pkg = compute_service.create_package(db, payload)
+    with _admin_compute_action(
+        context, operation="create_package", target=f"package_name={payload.name}"
+    ):
+        require_compute_config_admin(context)
+        pkg = compute_service.create_package(db, payload)
     return {"success": True, "data": pkg, "message": "success"}
 
 
@@ -137,11 +184,15 @@ def admin_update_package(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员更新套餐。"""
-    require_super_admin(context)
-    pkg = compute_service.get_package(db, package_id)
-    if pkg is None:
-        raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
-    pkg = compute_service.update_package(db, pkg, payload)
+    fields = ",".join(sorted(payload.model_dump(exclude_unset=True).keys())) or "-"
+    with _admin_compute_action(
+        context, operation="update_package", target=f"package_id={package_id},fields={fields}"
+    ):
+        require_compute_config_admin(context)
+        pkg = compute_service.get_package(db, package_id)
+        if pkg is None:
+            raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
+        pkg = compute_service.update_package(db, pkg, payload)
     return {"success": True, "data": pkg, "message": "success"}
 
 
@@ -152,12 +203,15 @@ def admin_disable_package(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员禁用套餐；不删除历史数据。"""
-    require_super_admin(context)
-    pkg = compute_service.get_package(db, package_id)
-    if pkg is None:
-        raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
-    payload = ComputePackageUpdate(enabled=False)
-    pkg = compute_service.update_package(db, pkg, payload)
+    with _admin_compute_action(
+        context, operation="disable_package", target=f"package_id={package_id}"
+    ):
+        require_compute_config_admin(context)
+        pkg = compute_service.get_package(db, package_id)
+        if pkg is None:
+            raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
+        payload = ComputePackageUpdate(enabled=False)
+        pkg = compute_service.update_package(db, pkg, payload)
     return {"success": True, "data": pkg, "message": "success"}
 
 
@@ -169,17 +223,22 @@ def admin_recharge_merchant(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员给商户充值 Token。"""
-    require_super_admin(context)
-    try:
-        compute_service.recharge_merchant(
-            db,
-            merchant_id,
-            payload.tokens,
-            remark=payload.remark,
-            operator_id=context.get("user_id"),
-        )
-    except ValueError as exc:
-        raise _bad_request(str(exc), "充值 Token 数量必须大于 0") from exc
+    with _admin_compute_action(
+        context,
+        operation="recharge_merchant",
+        target=f"merchant_id={merchant_id},points={payload.tokens}",
+    ):
+        require_compute_config_admin(context)
+        try:
+            compute_service.recharge_merchant(
+                db,
+                merchant_id,
+                payload.tokens,
+                remark=payload.remark,
+                operator_id=context.get("user_id"),
+            )
+        except ValueError as exc:
+            raise _bad_request(str(exc), "充值 Token 数量必须大于 0") from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
 
@@ -192,18 +251,23 @@ def admin_grant_package(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """管理员给商户发放套餐。"""
-    require_super_admin(context)
-    try:
-        compute_service.grant_package_to_merchant(
-            db, merchant_id, payload.package_id, operator_id=context.get("user_id")
-        )
-    except ValueError as exc:
-        code = str(exc)
-        message_map = {
-            "PACKAGE_NOT_FOUND": "套餐不存在",
-            "PACKAGE_DISABLED": "套餐已禁用，无法发放",
-        }
-        raise _bad_request(code, message_map.get(code, code)) from exc
+    with _admin_compute_action(
+        context,
+        operation="grant_package",
+        target=f"merchant_id={merchant_id},package_id={payload.package_id}",
+    ):
+        require_compute_config_admin(context)
+        try:
+            compute_service.grant_package_to_merchant(
+                db, merchant_id, payload.package_id, operator_id=context.get("user_id")
+            )
+        except ValueError as exc:
+            code = str(exc)
+            message_map = {
+                "PACKAGE_NOT_FOUND": "套餐不存在",
+                "PACKAGE_DISABLED": "套餐已禁用，无法发放",
+            }
+            raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
 
@@ -239,20 +303,23 @@ def admin_update_markup_ratio(
     context: GatewayContext = Depends(get_gateway_context),
 ):
     """更新指定能力的上浮比例与启用位（不允许改 capability_key）。"""
-    require_compute_config_admin(context)
-    try:
-        ratio = compute_service.update_markup_ratio(
-            db, capability_key, payload.markup_basis_points, payload.enabled
-        )
-    except ValueError as exc:
-        code = str(exc)
-        if code == "MARKUP_RATIO_DRIFT":
-            raise HTTPException(
-                status_code=500,
-                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
-            ) from exc
-        message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
-        raise _bad_request(code, message_map.get(code, code)) from exc
+    with _admin_compute_action(
+        context, operation="update_markup_ratio", target=f"capability={capability_key}"
+    ):
+        require_compute_config_admin(context)
+        try:
+            ratio = compute_service.update_markup_ratio(
+                db, capability_key, payload.markup_basis_points, payload.enabled
+            )
+        except ValueError as exc:
+            code = str(exc)
+            if code == "MARKUP_RATIO_DRIFT":
+                raise HTTPException(
+                    status_code=500,
+                    detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+                ) from exc
+            message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
+            raise _bad_request(code, message_map.get(code, code)) from exc
     return {"success": True, "data": ratio, "message": "success"}
 
 

@@ -8,7 +8,10 @@
 一期不做：真实支付、支付回调、余额不足拦截、退款、复杂 billing。
 """
 
+import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -35,6 +38,8 @@ from app.schemas import (
 )
 from app.services import compute_service
 
+logger = logging.getLogger(__name__)
+
 
 def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
@@ -42,6 +47,50 @@ def _bad_request(code: str, message: str) -> HTTPException:
 
 def _not_found(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": code, "message": message})
+
+
+# 算力配置精确权限：super_admin / mock 沿用 RequestContext.has_permission 现有兜底。
+COMPUTE_CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
+
+
+def _safe_log_value(value: object) -> str:
+    """日志安全值：折叠空白、限长，避免注入与超长目标摘要。"""
+    return " ".join(str(value).split())[:128] or "-"
+
+
+@contextmanager
+def _admin_compute_action(
+    context: RequestContext,
+    *,
+    operation: str,
+    target: str,
+) -> Iterator[None]:
+    """管理员算力写操作结构化日志：成功/失败双态，固定字段，不记录内部令牌或 remark 全文。
+
+    ponytail: 单文件上下文管理器，不抽跨服务公共模块（独立服务 apps.compute.routers 各自实现）。
+    """
+    operator_id = _safe_log_value(context.user_id)
+    safe_target = _safe_log_value(target)
+    try:
+        yield
+    except Exception as exc:
+        logger.warning(
+            "compute_admin_action operation=%s operator_id=%s target=%s "
+            "status=failed failure_stage=%s error_type=%s",
+            operation,
+            operator_id,
+            safe_target,
+            operation,
+            type(exc).__name__,
+        )
+        raise
+    logger.info(
+        "compute_admin_action operation=%s operator_id=%s target=%s "
+        "status=success failure_stage=none error_type=none",
+        operation,
+        operator_id,
+        safe_target,
+    )
 
 
 # ============ 商户侧 /compute ============
@@ -129,12 +178,12 @@ def create_recharge_order(
 admin_router = APIRouter(prefix="/admin", tags=["超管-算力配置"])
 
 
-def _require_admin(context: RequestContext) -> RequestContext:
-    """管理员接口仅允许 super_admin（PRD 第三章为超级管理员专属功能）。"""
-    if not (context.is_mock_auth() or context.super_admin):
+def _require_compute_config_admin(context: RequestContext) -> RequestContext:
+    """算力配置：精确权限 auto_wechat:admin:compute_config / super_admin / mock。"""
+    if not context.has_permission(COMPUTE_CONFIG_PERMISSION):
         raise HTTPException(
             status_code=403,
-            detail={"code": "SUPER_ADMIN_REQUIRED", "message": "仅超级管理员可操作"},
+            detail={"code": "PERMISSION_DENIED", "message": "缺少算力配置权限"},
         )
     return context
 
@@ -145,7 +194,7 @@ def admin_list_packages(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员查看全部套餐（含禁用，对齐 PRD 3.5）。"""
-    _require_admin(context)
+    _require_compute_config_admin(context)
     packages = compute_service.list_admin_packages(db)
     return {"success": True, "data": packages, "message": "success"}
 
@@ -157,8 +206,11 @@ def admin_create_package(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员创建套餐（对齐 PRD 3.5）。"""
-    _require_admin(context)
-    pkg = compute_service.create_package(db, payload)
+    with _admin_compute_action(
+        context, operation="create_package", target=f"package_name={payload.name}"
+    ):
+        _require_compute_config_admin(context)
+        pkg = compute_service.create_package(db, payload)
     return {"success": True, "data": pkg, "message": "success"}
 
 
@@ -170,11 +222,15 @@ def admin_update_package(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员更新套餐（对齐 PRD 3.5）。"""
-    _require_admin(context)
-    pkg = compute_service.get_package(db, package_id)
-    if pkg is None:
-        raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
-    pkg = compute_service.update_package(db, pkg, payload)
+    fields = ",".join(sorted(payload.model_dump(exclude_unset=True).keys())) or "-"
+    with _admin_compute_action(
+        context, operation="update_package", target=f"package_id={package_id},fields={fields}"
+    ):
+        _require_compute_config_admin(context)
+        pkg = compute_service.get_package(db, package_id)
+        if pkg is None:
+            raise _not_found("PACKAGE_NOT_FOUND", "套餐不存在")
+        pkg = compute_service.update_package(db, pkg, payload)
     return {"success": True, "data": pkg, "message": "success"}
 
 
@@ -191,17 +247,22 @@ def admin_recharge_merchant(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员给商户充值 Token（对齐 PRD 3.1.4 充值）。"""
-    _require_admin(context)
-    try:
-        compute_service.recharge_merchant(
-            db,
-            merchant_id,
-            payload.tokens,
-            remark=payload.remark,
-            operator_id=context.user_id,
-        )
-    except ValueError as exc:
-        raise _bad_request(str(exc), "充值 Token 数量必须大于 0") from exc
+    with _admin_compute_action(
+        context,
+        operation="recharge_merchant",
+        target=f"merchant_id={merchant_id},points={payload.tokens}",
+    ):
+        _require_compute_config_admin(context)
+        try:
+            compute_service.recharge_merchant(
+                db,
+                merchant_id,
+                payload.tokens,
+                remark=payload.remark,
+                operator_id=context.user_id,
+            )
+        except ValueError as exc:
+            raise _bad_request(str(exc), "充值 Token 数量必须大于 0") from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
 
@@ -219,33 +280,28 @@ def admin_grant_package(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员给商户发放套餐（对齐 PRD 3.1.4 发放套餐）。"""
-    _require_admin(context)
-    try:
-        compute_service.grant_package_to_merchant(
-            db, merchant_id, payload.package_id, operator_id=context.user_id
-        )
-    except ValueError as exc:
-        code = str(exc)
-        message_map = {
-            "PACKAGE_NOT_FOUND": "套餐不存在",
-            "PACKAGE_DISABLED": "套餐已禁用，无法发放",
-        }
-        raise _bad_request(code, message_map.get(code, code)) from exc
+    with _admin_compute_action(
+        context,
+        operation="grant_package",
+        target=f"merchant_id={merchant_id},package_id={payload.package_id}",
+    ):
+        _require_compute_config_admin(context)
+        try:
+            compute_service.grant_package_to_merchant(
+                db, merchant_id, payload.package_id, operator_id=context.user_id
+            )
+        except ValueError as exc:
+            code = str(exc)
+            message_map = {
+                "PACKAGE_NOT_FOUND": "套餐不存在",
+                "PACKAGE_DISABLED": "套餐已禁用，无法发放",
+            }
+            raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, merchant_id)
     return {"success": True, "data": summary, "message": "success"}
 
 
 # ============ 算力上浮配置 /admin/compute/markup-ratios ============
-
-
-def _require_compute_config_admin(context: RequestContext) -> RequestContext:
-    """算力配置：精确权限 auto_wechat:admin:compute_config / super_admin / mock。"""
-    if not context.has_permission("auto_wechat:admin:compute_config"):
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "PERMISSION_DENIED", "message": "缺少算力配置权限"},
-        )
-    return context
 
 
 @admin_router.get(
@@ -281,20 +337,23 @@ def admin_update_markup_ratio(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """更新指定能力的上浮比例与启用位（不允许改 capability_key）。"""
-    _require_compute_config_admin(context)
-    try:
-        ratio = compute_service.update_markup_ratio(
-            db, capability_key, payload.markup_basis_points, payload.enabled
-        )
-    except ValueError as exc:
-        code = str(exc)
-        if code == "MARKUP_RATIO_DRIFT":
-            raise HTTPException(
-                status_code=500,
-                detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
-            ) from exc
-        message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
-        raise _bad_request(code, message_map.get(code, code)) from exc
+    with _admin_compute_action(
+        context, operation="update_markup_ratio", target=f"capability={capability_key}"
+    ):
+        _require_compute_config_admin(context)
+        try:
+            ratio = compute_service.update_markup_ratio(
+                db, capability_key, payload.markup_basis_points, payload.enabled
+            )
+        except ValueError as exc:
+            code = str(exc)
+            if code == "MARKUP_RATIO_DRIFT":
+                raise HTTPException(
+                    status_code=500,
+                    detail={"code": code, "message": "算力上浮比例配置漂移，请联系管理员"},
+                ) from exc
+            message_map = {"INVALID_CAPABILITY": "无效的算力能力"}
+            raise _bad_request(code, message_map.get(code, code)) from exc
     return {"success": True, "data": ratio, "message": "success"}
 
 

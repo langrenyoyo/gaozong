@@ -760,8 +760,6 @@ export default function Index({
     activeNav === "compute" ||
     activeNav === "compute-token-transactions" ||
     activeNav === "compute-recharge-orders";
-  const isComputeConfigNav =
-    activeNav === "compute-packages" || activeNav === "compute-markup-ratios";
   const isAiEditMaterialsNav = activeNav === "ai-edit-materials";
   const isAiEditEditorNav = activeNav === "ai-edit-editor";
   const activeWechatTab: WechatAgentTab =
@@ -835,6 +833,8 @@ export default function Index({
             <AdminReturnVisitsPage />
           ) : superActiveNav === "admin-forbidden-words" ? (
             <SuperForbiddenWords />
+          ) : superActiveNav === "admin-compute-config" ? (
+            <SuperComputeConfig />
           ) : superActiveNav === "admin-newcar-owned" ? (
             <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
           ) : superActiveNav === "admin-no-local-feature" ? (
@@ -875,8 +875,6 @@ export default function Index({
             localAgentRuntimeStatus={localAgentRuntimeStatus}
             onRefreshLocalAgentStatus={refreshLocalAgentStatus}
           />
-        ) : isComputeConfigNav ? (
-          <SuperComputeConfig tabs={computeTabs} />
         ) : isComputeNav ? (
           <ComputeCenter tabs={computeTabs} />
         ) : isAiEditMaterialsNav ? (

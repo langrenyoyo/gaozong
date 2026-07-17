@@ -27,6 +27,16 @@ const typesTs = readFile('api/types.ts');
 const superConfig = readFile('features/compute/pages/SuperComputeConfig.tsx');
 const computeCenter = readFile('features/compute/pages/ComputeCenter.tsx');
 
+// 管理员算力配置统一入口涉及的源码（Task 4 扩展读取范围）
+const app = readFile('App.tsx');
+const newcarRedirect = readFile('newcarRedirect.ts');
+const sideNav = readFile('components/SideNav.tsx');
+const capabilities = readFile('features/capabilities.ts');
+const routes = readFile('features/routes.ts');
+const computeRoutes = readFile('features/compute/routes.ts');
+const indexPage = readFile('pages/Index.tsx');
+const legacyRoutes = routes;
+
 // 算力前端源码（禁止项只扫这一组，避免误伤 pre-existing 非算力文件）
 const computeSources = [
   { path: 'api/compute.ts', content: computeApi },
@@ -149,5 +159,21 @@ for (const { needle, reason } of FORBIDDEN) {
     }
   }
 }
+
+// 5. 管理员算力配置统一入口静态合同（Task 4 红灯）
+if (!app.includes('path: "/admin/compute-config"')) throw new Error('缺少管理员算力配置路由');
+if (!app.includes('PERMISSIONS.adminComputeConfig')) throw new Error('管理员路由未绑定精确权限');
+if (!sideNav.includes('id: "admin-compute-config"')) throw new Error('管理员侧栏缺少算力配置');
+if (!indexPage.includes('superActiveNav === "admin-compute-config"')) throw new Error('Index 缺少管理员算力配置分发');
+if (capabilities.includes('id: "compute-packages"')) throw new Error('普通算力导航仍包含套餐配置');
+if (capabilities.includes('id: "compute-markup-ratios"')) throw new Error('普通算力导航仍包含计费比例');
+if (!legacyRoutes.includes('{ from: "/compute/packages", to: "/admin/compute-config?view=packages" }')) throw new Error('套餐旧地址未兼容跳转');
+if (!legacyRoutes.includes('{ from: "/compute/markup-ratios", to: "/admin/compute-config?view=ratios" }')) throw new Error('比例旧地址未兼容跳转');
+for (const label of ['计费比例', '套餐管理', '商户发放']) {
+  if (!superConfig.includes(label)) throw new Error(`算力配置缺少视图：${label}`);
+}
+if (superConfig.includes('<ModuleTabs')) throw new Error('算力配置仍使用路由式二级导航');
+if (superConfig.includes('/admin/compute/markup-ratios')) throw new Error('页面显示内部接口路径');
+if (superConfig.includes('seed')) throw new Error('页面显示内部初始化术语');
 
 console.log('Phase 10 算力前端合同：PASS');

@@ -32,6 +32,8 @@ export const legacyRouteRedirects: LegacyRouteRedirect[] = [
   { from: "/agents/edit", to: "/agents" },
   { from: "/agents/knowledge-categories", to: "/agents" },
   { from: "/compute", to: "/compute/center" },
+  { from: "/compute/packages", to: "/admin/compute-config?view=packages" },
+  { from: "/compute/markup-ratios", to: "/admin/compute-config?view=ratios" },
   { from: "/knowledge-base", to: "/douyin-cs/workbench" },
   { from: "/knowledge-categories", to: "/douyin-cs/workbench" },
   { from: "/knowledge/base", to: "/douyin-cs/workbench" },
