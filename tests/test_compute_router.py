@@ -20,6 +20,9 @@ from app.database import Base, get_db
 from app.models import ComputeMarkupRatio, ComputeTransaction
 from datetime import datetime
 
+# 算力配置精确权限（与 app/routers/compute.py 保持一致）
+CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
+
 
 engine = create_engine(
     "sqlite:///:memory:",
@@ -237,10 +240,86 @@ def test_merchant_isolation():
 
 
 def test_admin_requires_super_admin():
-    client = _client(_context(super_admin=False, permission_codes=["auto_wechat:compute"]))
+    """仅 super_admin 不再是唯一通行证：精确权限也应放行（见下方矩阵测试）。
+    保留超管直接访问的绿灯，确认 super_admin 仍可进入。"""
+    client = _client(_context(super_admin=True))
     resp = client.get("/admin/compute/packages")
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "SUPER_ADMIN_REQUIRED"
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "permission_codes",
+    [
+        ["auto_wechat:compute"],
+        ["auto_wechat:admin:accounts"],
+        [],
+    ],
+)
+def test_compute_config_rejects_unrelated_permissions(permission_codes):
+    """冻结拒绝矩阵：普通商户权限、其他管理员权限、无权限均 403 PERMISSION_DENIED。"""
+    client = _client(_context(super_admin=False, permission_codes=permission_codes))
+    response = client.get("/admin/compute/packages")
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_compute_config_permission_manages_packages_and_merchant_points():
+    """仅持精确权限（非超管）可完成套餐管理与商户充值/发放全流程。"""
+    admin = _client(_context(super_admin=False, permission_codes=[CONFIG_PERMISSION]))
+    created = admin.post(
+        "/admin/compute/packages",
+        json={"name": "标准版", "price_yuan": 299, "token_amount": 350000},
+    )
+    assert created.status_code == 200
+    package_id = created.json()["data"]["id"]
+    assert admin.get("/admin/compute/packages").status_code == 200
+    assert admin.put(
+        f"/admin/compute/packages/{package_id}",
+        json={"price_yuan": 399, "enabled": True},
+    ).status_code == 200
+    assert admin.post(
+        "/admin/merchants/merchant-a/compute/recharge",
+        json={"tokens": 1000, "remark": "审批备注"},
+    ).status_code == 200
+    assert admin.post(
+        "/admin/merchants/merchant-a/compute/grant-package",
+        json={"package_id": package_id},
+    ).status_code == 200
+
+
+def test_compute_config_write_logs_are_structured_and_do_not_leak_remark(caplog):
+    """写操作结构化日志：固定字段、success/failed 双态，且不得泄露 remark 全文。"""
+    caplog.set_level("INFO", logger="app.routers.compute")
+    admin = _client(_context(
+        user_id="admin-log",
+        super_admin=False,
+        permission_codes=[CONFIG_PERMISSION],
+    ))
+    response = admin.post(
+        "/admin/merchants/merchant-a/compute/recharge",
+        json={"tokens": 1000, "remark": "secret-remark-must-not-appear"},
+    )
+    assert response.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("compute_admin_action" in message for message in messages)
+    assert any("operation=recharge_merchant" in message for message in messages)
+    assert any("operator_id=admin-log" in message for message in messages)
+    assert any("status=success" in message for message in messages)
+    assert all("secret-remark-must-not-appear" not in message for message in messages)
+
+    # 不存在的套餐编号触发更新失败，验证 status=failed 与 failure_stage/error_type
+    caplog.clear()
+    caplog.set_level("WARNING", logger="app.routers.compute")
+    fail_resp = admin.put(
+        "/admin/compute/packages/9999",
+        json={"price_yuan": 399, "enabled": True},
+    )
+    assert fail_resp.status_code == 404
+    fail_messages = [record.getMessage() for record in caplog.records]
+    assert any("operation=update_package" in message for message in fail_messages)
+    assert any("status=failed" in message for message in fail_messages)
+    assert any("failure_stage=update_package" in message for message in fail_messages)
+    assert any("error_type=" in message for message in fail_messages)
 
 
 def test_admin_package_crud():
