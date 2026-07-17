@@ -13,6 +13,7 @@ import {
   DownloadIcon,
   FileSpreadsheetIcon,
   Loader2Icon,
+  MessageCircleIcon,
   RefreshCwIcon,
   SaveIcon,
 } from "lucide-react";
@@ -148,7 +149,7 @@ export default function DailyReports({ user }: { user: AppUser }) {
       <header className="border-b border-[#e4e8f0] bg-white px-5 py-4">
         <div className="flex items-center gap-4">
           <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
-            <FileSpreadsheetIcon size={23} />
+            <MessageCircleIcon size={23} />
           </div>
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高微信助手</h1>
