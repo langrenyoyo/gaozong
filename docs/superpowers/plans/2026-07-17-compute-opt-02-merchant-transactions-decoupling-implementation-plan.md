@@ -453,8 +453,10 @@ class ComputeTransactionOut(BaseModel):
     business_scene: str = Field(..., description="商户可理解的中文使用场景")
     points_change: int = Field(..., description="算力点数变动，正数为增加、负数为消耗")
     balance_after: int = Field(..., description="变动后的算力点数余额")
-    created_at: Optional[datetime] = None
+    created_at: Optional[datetime]
 ```
+
+`created_at` 是“字段必填、值可空”：投影固定输出该键，历史异常数据允许值为 `None`，不得写成带默认值的可选字段。
 
 同时把 `ComputeTransactionListData`、`ComputeTransactionListResponse` 的文档字符串从“Token 明细”改为“商户算力点数流水”，不改分页字段。
 
@@ -494,7 +496,8 @@ python -m pytest tests/test_compute_router.py tests/test_compute_app.py -q
 ```python
 def test_compute_transaction_openapi_hides_internal_fields():
     schema = _client(_context()).get("/openapi.json").json()
-    properties = schema["components"]["schemas"]["ComputeTransactionOut"]["properties"]
+    transaction_schema = schema["components"]["schemas"]["ComputeTransactionOut"]
+    properties = transaction_schema["properties"]
     assert set(properties) == {
         "id",
         "type",
@@ -504,6 +507,7 @@ def test_compute_transaction_openapi_hides_internal_fields():
         "balance_after",
         "created_at",
     }
+    assert set(transaction_schema["required"]) == set(properties)
 ```
 
 运行：
@@ -627,9 +631,11 @@ export interface ComputeTransaction {
   points_change: number;
   /** 变动后余额 */
   balance_after: number;
-  created_at?: string | null;
+  created_at: string | null;
 }
 ```
+
+`created_at` 必须保持 required nullable，与后端固定输出 7 个键的合同一致；不得把静态检查放宽为同时接受可选字段。
 
 保留 `ComputeCapabilityKey` 和管理员上浮比例类型；商户类型收敛不等于删除管理员内部配置类型。
 
