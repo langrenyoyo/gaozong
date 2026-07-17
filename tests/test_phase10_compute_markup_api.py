@@ -20,7 +20,7 @@ import app.models  # noqa: F401  触发 ORM 注册
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import ComputeMarkupRatio
+from app.models import ComputeMarkupRatio, ComputeTransaction
 from apps.compute.services import COMPUTE_CAPABILITY_KEYS
 
 CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
@@ -232,14 +232,24 @@ def test_9000_update_affects_new_usage_not_old_snapshot():
         json={"merchant_id": "merchant-a", "tokens": 1000, "capability_key": "douyin-cs", "source": "llm", "model": "gpt"},
     )
 
-    txs = admin.get("/compute/transactions?transaction_type=consume").json()["data"]["items"]
+    # 从内部测试数据库直接读流水，不依赖商户公开接口透出内部字段（COMPUTE-OPT-02 已脱敏）
+    db = TestSession()
+    try:
+        txs = (
+            db.query(ComputeTransaction)
+            .filter_by(merchant_id="merchant-a", transaction_type="consume")
+            .order_by(ComputeTransaction.id.desc())
+            .all()
+        )
+    finally:
+        db.close()
     assert len(txs) == 2
     # id 倒序：最新在前（markup=3300/delta=-1330），旧（markup=0/delta=-1000）
-    assert txs[0]["markup_basis_points"] == 3300
-    assert txs[0]["delta_tokens"] == -1330
-    assert txs[0]["actual_tokens"] == 1000
-    assert txs[1]["markup_basis_points"] == 0
-    assert txs[1]["delta_tokens"] == -1000
+    assert txs[0].markup_basis_points == 3300
+    assert txs[0].delta_tokens == -1330
+    assert txs[0].actual_tokens == 1000
+    assert txs[1].markup_basis_points == 0
+    assert txs[1].delta_tokens == -1000
 
 
 # ============ 9205 GET/PUT /api/compute/admin/markup-ratios ============
