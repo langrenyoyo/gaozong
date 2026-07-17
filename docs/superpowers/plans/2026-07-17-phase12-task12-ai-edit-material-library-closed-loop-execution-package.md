@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI、SQLAlchemy、SQLite 顺序迁移、PostgreSQL Alembic、React 19、TypeScript、Vite、PyInstaller、Python 3.11 Worker、FFmpeg/ffprobe、FunASR、PySceneDetect/OpenCV 适配器、OpenAI-compatible 多模态消息。
 
-**计划状态：** `CHECKPOINT_A_BLOCKED`。当前执行包为 `PHASE12-TASK12-2-FIX1A / 12.2-FIX1A-R2`；生产验证保持 `NOT_STARTED`。
+**计划状态：** `CHECKPOINT_A_BLOCKED`。Task 12-2-FIX1A 候选已独立测试通过，当前执行包为 `PHASE12-TASK12-2-INTEGRATE / 12.2-INTEGRATE-R1`；生产验证保持 `NOT_STARTED`。
 
 ---
 
@@ -641,6 +641,22 @@ git diff --check 438ee894914a9432df8a0043fc629ae9b7d0f1c3 HEAD
 ```
 
 提交信息固定为 `修复：收紧 Task 12 索引语义守卫`。提交后硬暂停，只回传自测事实，不宣布任何 PASS。测试窗口继续待命，直到审批窗口签发新的准确提交号。
+
+### Task 12-2-INTEGRATE：检查点 A 候选与主线集成
+
+Task 12-2-FIX1A 冻结候选 `b8d9bbd43d3d01c850541c586892b86bb1147fde` 已通过独立测试，但与包含审批计划、状态文档和并行 Phase 10 前端提交的主线互不为祖先，不能直接 fast-forward。任何 merge 都产生新哈希并使候选测试失效，因此先单开集成任务，集成提交再次独立测试后才允许检查点 A 放行。
+
+集成合同：
+
+1. 集成分支从 `b8d9bbd43d3d01c850541c586892b86bb1147fde` 创建；第一父提交必须精确为该候选。
+2. 第二父提交必须是包含本执行包的 `Plan-Commit`，完整哈希由审批交接绑定；执行窗口不得改用当时分支名所指向的其他提交。
+3. 只允许执行一次 `git merge --no-ff <Plan-Commit>`，提交信息固定为 `集成：合并 Task 12 数据守卫与主线`。
+4. 禁止手工修改文件、解决冲突、cherry-pick、rebase、squash、amend 或额外提交。若出现冲突，立即 `git merge --abort` 并回传 `REPLAN`。
+5. 审批交接同时提供 `Expected-Merge-Tree`；集成提交的 tree 必须精确相等，否则拒绝候选。
+6. 合并后重跑 Task 12 聚焦套件与迁移矩阵，并运行 `frontend` 的 `npm run phase10-compute:check` 和 `npm run build`。不连接真实 PostgreSQL、生产数据库、宝塔、外网或付费模型。
+7. 集成提交后硬暂停，由审批窗口审查后再交独立测试窗口；未获得集成提交的 `TEST_PASS` 前不得进入 Task 12-3。
+
+集成任务不设文件白名单，因为禁止产生任何手工文件差异；最终 tree 只能是 Git 对两个冻结父提交的无冲突自动合并结果。
 
 ---
 
