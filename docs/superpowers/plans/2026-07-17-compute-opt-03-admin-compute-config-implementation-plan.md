@@ -15,10 +15,12 @@
 ### 0.1 执行包身份
 
 - Task-ID：`COMPUTE-OPT-03`
-- Plan-Revision：`R2`
-- Execution-Package-ID：`COMPUTE-OPT-03-R2-ADMIN-CONFIG-20260717`
+- Plan-Revision：`R3`
+- Execution-Package-ID：`COMPUTE-OPT-03-R3-ADMIN-CONFIG-20260717`
 - 业务代码起点：`1b4c755f5150b70936b3957f7acc9fa4088eff5e`
-- 执行基线：以审批窗口随本计划下发的 `PLAN_APPROVED` 完整提交哈希为准；该提交只能比业务代码起点多本计划文件。
+- 既有并发提交：`35596daac1d148651a9b7a08333d24731981ddbf`，仅增加 `.gitignore` 的 `.tmp/` 忽略规则，不属于本任务施工差异，执行窗口不得修改或回滚。
+- R2 计划落盘提交：`ce8f334a692b7cf2497c87712d509ad50d9e11e1`，仅新增本计划文件。
+- 执行基线：以审批窗口随 R3 下发的 `PLAN_APPROVED` 完整提交哈希为准；该提交只允许在上述两个既有提交之上原位修正本计划元数据。
 - 目标分支：`master`
 - 风险等级：`L3`（算力写入 + 管理员权限）
 
@@ -28,7 +30,7 @@
 2. 9000 与独立算力服务的计费比例接口已允许精确权限；套餐、充值和发放仍只允许超级管理员。
 3. 独立算力服务 `get_gateway_context()` 当前要求商户编号或超级管理员标记，导致“仅有精确算力配置权限且无商户编号”的管理员在权限判断前被 401 阻断。
 4. `/compute/packages` 与 `/compute/markup-ratios` 仍属于商户能力路由，不符合管理员单入口设计。
-5. 执行窗口 R1 预检时曾观察到主工作区 `.gitignore` 并发改动；当前状态可能继续变化，施工前必须以实际 `git status --short` 建立禁止提交清单，不得触碰任何非本任务改动。
+5. 执行窗口 R1 预检时观察到的 `.gitignore` 并发改动已由其他窗口提交为 `35596daac1d148651a9b7a08333d24731981ddbf`；本任务只把它视为冻结基线，不审查、不修改、不回滚。
 
 ### 0.3 允许修改文件
 
@@ -71,7 +73,7 @@ docs/superpowers/specs/2026-07-16-compute-token-optimization-design.md
 
 - [ ] 在独立 worktree 和独立任务分支中执行。
 - [ ] `git rev-parse HEAD` 必须精确等于审批窗口下发的执行基线。
-- [ ] `git diff --name-only <业务代码起点>..HEAD` 在施工前只能出现本计划文件。
+- [ ] 施工前执行 `git diff --name-status 1b4c755f5150b70936b3957f7acc9fa4088eff5e..HEAD`，结果必须精确为 `.gitignore` 修改和本计划文件新增；不得出现业务代码。
 - [ ] 记录主工作区 `git status --short`，把所有既有改动列入禁止提交清单。
 - [ ] 任一代码事实与本计划冲突时返回 `PLAN_GAP`，不得自行扩大白名单。
 
