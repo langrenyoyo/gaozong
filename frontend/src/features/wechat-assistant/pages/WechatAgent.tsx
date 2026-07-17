@@ -1,7 +1,6 @@
 import {
   CheckCircle2Icon,
   ClockIcon,
-  CopyIcon,
   BanIcon,
   EyeIcon,
   PencilIcon,
@@ -54,8 +53,6 @@ import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
 import ModuleTabs from "../../../components/ModuleTabs";
 
 const DEFAULT_TEST_NICKNAME = "Aw3";
-const SOURCE_START_COMMAND = "cd E:\\work\\project\\auto_wechat\npython app\\local_agent_main.py --host 127.0.0.1 --port 19000 --server-url http://127.0.0.1:9000";
-const EXE_START_COMMAND = 'Start-Process ".\\dist\\local-agent\\小高AI微信助手.exe"';
 
 export type WechatAgentTab = "status" | "config" | "tasks" | "download-test";
 
@@ -73,8 +70,8 @@ const TAB_META: Record<WechatAgentTab, { title: string; description: string }> =
     description: "查询微信任务历史、执行状态和失败阶段，完整执行记录仅在详情中查看。",
   },
   "download-test": {
-    title: "下载/测试",
-    description: "查看启动说明、复制命令，并使用 AI小高助手测试与诊断工具。",
+    title: "测试",
+    description: "启动本机程序后，使用微信助手测试与诊断工具。",
   },
 };
 
@@ -366,15 +363,6 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
     }
   }
 
-  async function handleCopyCommand(command: string) {
-    try {
-      await navigator.clipboard.writeText(command);
-      toast.success("启动命令已复制");
-    } catch {
-      toast.error("复制失败，请手动选择命令文本");
-    }
-  }
-
   function resetStaffForm() {
     setStaffForm({
       name: "",
@@ -600,7 +588,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 { label: "助手状态", path: "/wechat-assistant" },
                 { label: "微信配置", path: "/wechat-assistant/config" },
                 { label: "任务记录", path: "/wechat-assistant/tasks" },
-                { label: "下载与测试", path: "/wechat-assistant/download-test" },
+                { label: "测试", path: "/wechat-assistant/download-test" },
                 { label: "每日报表", path: "/wechat-assistant/daily-reports" },
               ]} />
             </div>
@@ -740,68 +728,31 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
         ) : null}
 
         {activeTab === "download-test" ? (
-          <>
-            <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
-                <div>
-                  <div className="text-sm font-bold text-[#1a1f2e]">启动说明</div>
-                  <div className="mt-1 text-xs text-slate-500">浏览器不能直接启动本机程序。请手动启动 AI小高助手，启动后重新检测连接。</div>
-                </div>
-                <button
-                  onClick={() => void handleRefreshRuntime()}
-                  disabled={runtimeLoading}
-                  className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  <RefreshCwIcon size={14} className={runtimeLoading ? "animate-spin" : ""} />
-                  重新检测连接
-                </button>
+          <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#edf1f6] px-4 py-3">
+              <div>
+                <div className="text-sm font-bold text-[#1a1f2e]">启动本机程序</div>
+                <div className="mt-1 text-xs text-slate-500">请在当前电脑启动“小高AI系统测试版.exe”。</div>
               </div>
-              <div className="space-y-3 p-4 text-xs leading-6 text-slate-700">
-                <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
-                  {localOnline ? "已检测到 AI小高助手在线。" : "AI小高助手未启动。请先启动本机助手，然后点击重新检测连接。"}
-                </div>
-                <div>网页按钮会调用当前电脑的 127.0.0.1:19000；宝塔服务器不能运行 19000。</div>
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-1 font-semibold text-slate-900">源码启动命令</div>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-slate-800">{SOURCE_START_COMMAND}</pre>
-                  <button
-                    onClick={() => void handleCopyCommand(SOURCE_START_COMMAND)}
-                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700"
-                  >
-                    <CopyIcon size={13} />
-                      复制源码启动命令
-                  </button>
-                </div>
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-1 font-semibold text-slate-900">程序启动命令</div>
-                    <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-slate-800">{EXE_START_COMMAND}</pre>
-                  <button
-                    onClick={() => void handleCopyCommand(EXE_START_COMMAND)}
-                      className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700"
-                  >
-                    <CopyIcon size={13} />
-                      复制程序启动命令
-                  </button>
-                  </div>
-                </div>
+              <button
+                onClick={() => void handleRefreshRuntime()}
+                disabled={runtimeLoading}
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <RefreshCwIcon size={14} className={runtimeLoading ? "animate-spin" : ""} />
+                重新检测连接
+              </button>
+            </div>
+            <div className="space-y-3 p-4 text-xs leading-6 text-slate-700">
+              <div className={localOnline ? "rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 font-semibold text-emerald-700" : "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800"}>
+                {localOnline ? "已检测到小高AI系统测试版正在运行。" : "未检测到程序，请先启动“小高AI系统测试版.exe”。"}
               </div>
-            </section>
-
-            <section className="mt-4 rounded-lg border border-[#dfe5ee] bg-white">
-              <div className="border-b border-[#edf1f6] px-4 py-3">
-                <div className="text-sm font-bold text-[#1a1f2e]">安装包下载</div>
-                <div className="mt-1 text-xs text-slate-500">当前没有真实下载接口，不提供假下载入口。</div>
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                <div>1. 双击打开“小高AI系统测试版.exe”。</div>
+                <div>2. 返回本页面，点击“重新检测连接”。</div>
               </div>
-              <div className="p-4 text-xs leading-6 text-slate-700">
-                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-                  <div className="font-bold text-slate-900">安装包下载暂未开放</div>
-                  <div className="mt-1">当前请使用本机已部署的程序或源码方式启动。</div>
-                  <div className="mt-1">版本 / 模式：{runtimeStatus ? `${runtimeStatus.version} / ${runtimeStatus.mode}` : "未检测"}</div>
-                </div>
-              </div>
-            </section>
-          </>
+            </div>
+          </section>
         ) : null}
 
         {activeTab === "config" ? (

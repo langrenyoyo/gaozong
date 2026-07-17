@@ -152,7 +152,7 @@ export default function DailyReports({ user }: { user: AppUser }) {
           { label: "助手状态", path: "/wechat-assistant" },
           { label: "微信配置", path: "/wechat-assistant/config" },
           { label: "任务记录", path: "/wechat-assistant/tasks" },
-          { label: "下载与测试", path: "/wechat-assistant/download-test" },
+          { label: "测试", path: "/wechat-assistant/download-test" },
           { label: "每日报表", path: "/wechat-assistant/daily-reports" },
         ]} />
         <p className="mt-1 text-xs text-[#8b95a6]">

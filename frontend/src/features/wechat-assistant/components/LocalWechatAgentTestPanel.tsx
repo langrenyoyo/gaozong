@@ -416,7 +416,7 @@ export default function LocalWechatAgentTestPanel() {
 
       {ocrStatus?.model_source === "bundled" && ocrStatus?.model_ready ? (
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
-          文字识别功能已就绪，可以开始微信测试，测试期间不会联网下载识别文件。
+          文字识别功能已就绪，可以开始微信测试。
         </div>
       ) : null}
       <div className="mt-4 grid gap-3 lg:grid-cols-4">
@@ -487,19 +487,11 @@ export default function LocalWechatAgentTestPanel() {
             模型目录：<span className="font-mono text-[#334155]">{ocrStatus?.model_dir || "-"}</span>
           </div>
           <div className="mt-1 text-[11px] text-[#64748b]">
-            允许下载：<span className="font-semibold text-[#334155]">{ocrStatus ? booleanText(ocrStatus.download_enabled) : "-"}</span>
-          </div>
-          <div className="mt-1 text-[11px] text-[#64748b]">
             模型文件：{" "}
             <span className="font-semibold text-[#334155]">
               {ocrStatus?.model_files_count ?? "-"} / {ocrStatus?.model_total_size_mb ?? "-"} MB
             </span>
           </div>
-          {ocrStatus?.download_enabled === false ? (
-            <div className="mt-2 text-[11px] font-semibold text-emerald-700">
-              文字识别功能不会在测试机联网下载文件。
-            </div>
-          ) : null}
         </div>
 
         <div className="rounded-lg border border-[#edf1f6] bg-[#f8fafc] p-3">
