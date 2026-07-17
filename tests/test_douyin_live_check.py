@@ -13,8 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import importlib
 import hashlib
 import time
-from datetime import datetime, timedelta
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,8 +46,10 @@ from app.models import (
     DouyinWebhookEvent,
 )
 from app.services.douyin_live_check_service import (
+    _auth_polling_status,
     _openapi_endpoint_config,
     build_signed_openapi_request_body_and_headers,
+    consume_oauth_state,
     reset_live_check_state,
 )
 from app.services.douyin_openapi_client import call_douyin_openapi
@@ -2470,6 +2473,52 @@ def test_auth_status_for_new_state_ignores_existing_account_until_current_attemp
     polling = authorized_resp.json()["data"]["auth_polling"]
     assert polling["status"] == "authorized"
     assert polling["open_id"] == "account_current_attempt"
+
+
+def test_auth_status_handles_postgres_timezone_aware_oauth_expiration():
+    state_row = SimpleNamespace(
+        merchant_id="merchant-auth-state",
+        source_system="new_car_project",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        consumed_at=None,
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = state_row
+    context = RequestContext(
+        user_id="user-1",
+        merchant_id="merchant-auth-state",
+        merchant_ids=["merchant-auth-state"],
+        permission_codes=["auto_wechat:douyin_ai_cs"],
+    )
+
+    result = _auth_polling_status(db, context, None, "state-postgres-aware")
+
+    assert result == {
+        "status": "pending",
+        "open_id": None,
+        "nickname": None,
+        "received_at": None,
+    }
+
+
+def test_consume_oauth_state_handles_postgres_timezone_aware_expiration():
+    state_row = SimpleNamespace(
+        merchant_id="merchant-auth-state",
+        user_id="user-1",
+        source_system="new_car_project",
+        redirect_target="https://merchant.example.com/douyin-ai-cs",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        consumed_at=None,
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = state_row
+
+    context, redirect_target = consume_oauth_state(db, "state-postgres-aware")
+
+    assert context.merchant_id == "merchant-auth-state"
+    assert redirect_target == "https://merchant.example.com/douyin-ai-cs"
+    assert state_row.consumed_at is not None
+    db.commit.assert_called_once_with()
 
 
 def test_auth_status_rejects_state_owned_by_other_merchant():

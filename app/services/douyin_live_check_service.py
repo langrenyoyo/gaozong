@@ -51,6 +51,11 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def _is_expired(expires_at: datetime, now: datetime) -> bool:
+    """兼容 SQLite 无时区时间与 PostgreSQL 带时区时间。"""
+    return expires_at.timestamp() < now.timestamp()
+
+
 def _preview(value: str | None, head: int = 4, tail: int = 4) -> str | None:
     return preview(value, head=head, tail=tail)
 
@@ -345,7 +350,7 @@ def consume_oauth_state(db: Session, state: str | None) -> tuple[RequestContext,
     now = _now()
     if row.consumed_at is not None:
         raise _oauth_state_error("DOUYIN_OAUTH_STATE_REPLAYED")
-    if row.expires_at and row.expires_at < now:
+    if row.expires_at and _is_expired(row.expires_at, now):
         raise _oauth_state_error("DOUYIN_OAUTH_STATE_EXPIRED")
     if row.source_system != "new_car_project" or not row.merchant_id:
         raise _oauth_state_error("DOUYIN_OAUTH_STATE_INVALID")
@@ -838,7 +843,11 @@ def _auth_polling_status(
                 bool(merchant_id),
             )
             raise _oauth_state_error("DOUYIN_OAUTH_STATE_INVALID")
-        if state_row.expires_at and state_row.expires_at < _now() and state_row.consumed_at is None:
+        if (
+            state_row.expires_at
+            and _is_expired(state_row.expires_at, _now())
+            and state_row.consumed_at is None
+        ):
             return {
                 "status": "expired",
                 "open_id": None,
