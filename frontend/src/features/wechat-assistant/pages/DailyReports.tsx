@@ -151,7 +151,7 @@ export default function DailyReports({ user }: { user: AppUser }) {
             <FileSpreadsheetIcon size={23} />
           </div>
           <div>
-            <h1 className="text-[15px] font-bold text-[#1a1f2e]">每日报表</h1>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高微信助手</h1>
             <p className="mt-1 text-xs text-[#8b95a6]">查看微信助手生成的每日业务报表。</p>
             <ModuleTabs items={[
               { label: "助手状态", path: "/wechat-assistant" },
