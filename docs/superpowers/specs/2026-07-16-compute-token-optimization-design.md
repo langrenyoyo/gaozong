@@ -126,7 +126,7 @@
 
 ## 6. 阶段三：管理员算力配置接入
 
-> **当前状态（2026-07-17）：候选已实现、待独立测试。** 执行包 `COMPUTE-OPT-03-R3-ADMIN-CONFIG-20260717` 已落地候选提交链 `4aa3e44`（后端权限统一）+ `397e7c2`（前端单入口）+ `fa1d0c0`（文档）+ `ea6a5d9`（页面文案收敛）；后端 compute 冻结集 `179 passed，1 个已由基线对照确认的既有失败`（失败用例 `test_phase10_compute_markup_api.py::test_9000_update_affects_new_usage_not_old_snapshot`，COMPUTE-OPT-02 公开投影残留，超出本阶段边界）；前端静态合同与构建通过；浏览器视口矩阵与精确权限登录态验证标记 `BLOCKED_ENVIRONMENT`，留待测试窗口。详见 `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md` §9。未启动服务、未连宝塔、未进入生产验证。
+> **当前状态（2026-07-17）：候选已实现、待独立测试。** 执行包 `COMPUTE-OPT-03-R3-ADMIN-CONFIG-20260717` 已落地候选提交链 `4aa3e44`（后端权限统一）+ `397e7c2`（前端单入口）+ `fa1d0c0`（文档）+ `ea6a5d9`（页面文案收敛）；COMPUTE-OPT-03 R1 修正 `test_9000_update_affects_new_usage_not_old_snapshot`（提交 `7ac4a7e`，改为从内部 `ComputeTransaction` 读取快照，不再走商户公开接口），后端 compute 冻结集（11 文件）`180 passed, 0 failed`（退出码 0）；前端静态合同与构建通过；浏览器视口矩阵与精确权限登录态验证标记 `BLOCKED_ENVIRONMENT`，留待测试窗口。详见 `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md` §9。未启动服务、未连宝塔、未进入生产验证。
 
 ### 6.1 路由与导航
 
