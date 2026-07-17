@@ -63,9 +63,9 @@ def list_transactions(
     db: Session = Depends(get_db),
     context: GatewayContext = Depends(get_gateway_context),
 ):
-    """Token 明细分页。"""
+    """商户算力点数流水分页。"""
     merchant_id = require_merchant_context(context)
-    data = compute_service.list_transactions(
+    data = compute_service.list_merchant_transactions(
         db,
         merchant_id,
         transaction_type=transaction_type,

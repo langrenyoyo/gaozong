@@ -1177,29 +1177,19 @@ class ComputeSummaryOut(BaseModel):
 
 
 class ComputeTransactionOut(BaseModel):
-    """算力 Token 流水。"""
+    """商户可见的算力点数流水，不包含内部计量与诊断字段。"""
 
     id: int
-    merchant_id: str
-    transaction_type: str = Field(..., description="流水类型: recharge / grant_package / consume")
-    delta_tokens: int = Field(..., description="Token 变动（正为增加，负为消耗）")
-    balance_after_tokens: int = Field(..., description="变动后余额")
-    source: str = Field(..., description="来源: manual_recharge / package_grant / llm / embedding / other")
-    remark: Optional[str] = None
-    model: Optional[str] = None
-    agent_id: Optional[str] = None
-    conversation_id: Optional[int] = None
+    type: str = Field(..., description="稳定流水类型：recharge / grant_package / consume / other")
+    type_label: str = Field(..., description="流水类型中文名称")
+    business_scene: str = Field(..., description="商户可理解的中文使用场景")
+    points_change: int = Field(..., description="算力点数变动，正数为增加、负数为消耗")
+    balance_after: int = Field(..., description="变动后的算力点数余额")
     created_at: Optional[datetime] = None
-    # Phase 10 §0.2 计费快照：历史/充值/套餐为 None，consume 保存实际值、能力、比例快照
-    actual_tokens: Optional[int] = None
-    capability_key: Optional[str] = None
-    markup_basis_points: Optional[int] = None
-
-    model_config = {"from_attributes": True}
 
 
 class ComputeTransactionListData(BaseModel):
-    """Token 明细分页数据。"""
+    """商户算力点数流水分页数据。"""
 
     page: int
     page_size: int
@@ -1287,7 +1277,7 @@ class ComputeSummaryResponse(BaseModel):
 
 
 class ComputeTransactionListResponse(BaseModel):
-    """Token 明细列表响应。"""
+    """商户算力点数流水列表响应。"""
 
     success: bool = True
     data: ComputeTransactionListData

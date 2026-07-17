@@ -138,6 +138,7 @@ def test_transactions_after_recharge_and_consume():
             "capability_key": "douyin-cs",
             "source": "llm",
             "model": "gpt-4o-mini",
+            "remark": "douyin_ai_reply",
         },
     )
 
@@ -145,6 +146,20 @@ def test_transactions_after_recharge_and_consume():
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["total"] == 2  # recharge + consume
+
+    item = data["items"][0]
+    assert set(item) == {
+        "id",
+        "type",
+        "type_label",
+        "business_scene",
+        "points_change",
+        "balance_after",
+        "created_at",
+    }
+    assert item["business_scene"] == "抖音自动回复"
+    assert item["points_change"] == -300
+    assert item["balance_after"] == 700
 
     summary = client.get("/compute/summary").json()["data"]
     assert summary["balance_tokens"] == 700
@@ -210,6 +225,12 @@ def test_merchant_isolation():
     assert client_a.get("/compute/summary").json()["data"]["balance_tokens"] == 1000
     assert client_b.get("/compute/summary").json()["data"]["balance_tokens"] == 500
     assert client_a.get("/compute/transactions").json()["data"]["total"] == 1
+    a_items = client_a.get("/compute/transactions").json()["data"]["items"]
+    assert len(a_items) == 1
+    assert all(set(item) == {
+        "id", "type", "type_label", "business_scene",
+        "points_change", "balance_after", "created_at",
+    } for item in a_items)
 
 
 # ============ 管理员侧 ============
@@ -422,3 +443,17 @@ def test_internal_token_production_fail_closed(monkeypatch):
     resp = internal.post("/internal/compute/usage", json=payload)
     assert resp.status_code == 500
     assert resp.json()["detail"]["code"] == "INTERNAL_TOKEN_NOT_CONFIGURED"
+
+
+def test_compute_transaction_openapi_hides_internal_fields():
+    schema = _client(_context()).get("/openapi.json").json()
+    properties = schema["components"]["schemas"]["ComputeTransactionOut"]["properties"]
+    assert set(properties) == {
+        "id",
+        "type",
+        "type_label",
+        "business_scene",
+        "points_change",
+        "balance_after",
+        "created_at",
+    }

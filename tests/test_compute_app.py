@@ -218,3 +218,27 @@ def test_internal_usage_production_fail_closed(monkeypatch):
     )
     assert resp.status_code == 500
     assert resp.json()["detail"]["code"] == "INTERNAL_TOKEN_NOT_CONFIGURED"
+
+
+def test_compute_app_transactions_use_merchant_public_contract():
+    admin = _admin_client()
+    admin.post(
+        "/api/compute/admin/accounts/merchant-a/recharge",
+        json={"tokens": 1000, "remark": "internal-secret"},
+    )
+
+    response = _client().get("/api/compute/transactions")
+
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert set(item) == {
+        "id",
+        "type",
+        "type_label",
+        "business_scene",
+        "points_change",
+        "balance_after",
+        "created_at",
+    }
+    assert item["business_scene"] == "算力充值"
+    assert "internal-secret" not in repr(item)
