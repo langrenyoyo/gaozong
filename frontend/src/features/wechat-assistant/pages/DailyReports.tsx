@@ -145,19 +145,26 @@ export default function DailyReports({ user }: { user: AppUser }) {
 
   return (
     <section className="flex h-full flex-col overflow-auto bg-[#f3f6fa]">
-      <header className="border-b border-[#e4e8f0] bg-white px-6 py-4">
-        <h1 className="text-[15px] font-bold text-[#1a1f2e]">每日报表</h1>
-        <p className="mt-1 text-xs text-[#8b95a6]">查看微信助手生成的每日业务报表。</p>
-        <ModuleTabs items={[
-          { label: "助手状态", path: "/wechat-assistant" },
-          { label: "微信配置", path: "/wechat-assistant/config" },
-          { label: "任务记录", path: "/wechat-assistant/tasks" },
-          { label: "测试", path: "/wechat-assistant/download-test" },
-          { label: "每日报表", path: "/wechat-assistant/daily-reports" },
-        ]} />
-        <p className="mt-1 text-xs text-[#8b95a6]">
-          生成留资管理、每日销售反馈、销售单车成本与线索溯源四类日报；补录归因、广告指标与展厅价位；下载由后端按可信商户校验后返回。
-        </p>
+      <header className="border-b border-[#e4e8f0] bg-white px-5 py-4">
+        <div className="flex items-center gap-4">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
+            <FileSpreadsheetIcon size={23} />
+          </div>
+          <div>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">每日报表</h1>
+            <p className="mt-1 text-xs text-[#8b95a6]">查看微信助手生成的每日业务报表。</p>
+            <ModuleTabs items={[
+              { label: "助手状态", path: "/wechat-assistant" },
+              { label: "微信配置", path: "/wechat-assistant/config" },
+              { label: "任务记录", path: "/wechat-assistant/tasks" },
+              { label: "测试", path: "/wechat-assistant/download-test" },
+              { label: "每日报表", path: "/wechat-assistant/daily-reports" },
+            ]} />
+            <p className="mt-1 text-xs text-[#8b95a6]">
+              生成留资管理、每日销售反馈、销售单车成本与线索溯源四类日报；补录归因、广告指标与展厅价位；下载由后端按可信商户校验后返回。
+            </p>
+          </div>
+        </div>
       </header>
 
       <div className="border-b border-[#e4e8f0] bg-white px-6">
