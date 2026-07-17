@@ -57,6 +57,7 @@
 - **并发建账**：`get_or_create_account` SAVEPOINT + IntegrityError 恢复；`record_usage` 顶层单 commit（账户+流水原子）。
 - **负余额**：不阻断，写 `stage=negative_balance` 结构化 warning；前端风险提示不写"服务已停用"。
 - **前端字符串转基点**：`parseInt(intPart + paddedFrac, 10)` 纯字符串拼接，零浮点（`"33.5"→"33"+"50"→3350`）。
+- **商户公开流水**：内部账本继续保存真实 Token、计量方式、调用阶段和诊断字段；商户公开流水是独立 7 字段投影（`id`/`type`/`type_label`/`business_scene`/`points_change`/`balance_after`/`created_at`），由 `list_merchant_transactions` 在服务层投影，9000 与独立算力服务商户路由共同调用，不承担内部计量诊断职责。
 
 ---
 
