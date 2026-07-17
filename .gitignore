@@ -61,6 +61,7 @@ CLAUDE.md
 # Test/debug temporary files
 test_cors_leads.json
 test_wechat_debug.json
+.tmp/*
 
 # pytest 运行临时目录（本地运行残留，不应提交）
 .pytest_tmp_*/
