@@ -1,5 +1,12 @@
 # Phase 12 AI剪辑本地 MVP 实施计划（Implementation Plan）
 
+> 冻结快照 / 基础 MVP 历史追溯用，非 Task 12 当前施工蓝图。
+>
+> 本计划已于 2026-07-16 完成，正文保留当时的平台素材和回收站合同以解释现有代码来源；
+> 后续素材库增强必须以
+> `docs/superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md`
+> 的私有素材单视图规格为准，不得继续执行本文未勾选项或把本文当新执行包。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在 `auto_wechat` 中迁入“小高素材库 + AI 小高剪辑”本地 MVP，让商户在安装小高AI微信助手的同一台 Windows 电脑完成素材导入、分析、可选增稳、模拟 AI 规划、轻量调整、720P 预览和 1080P 成片。

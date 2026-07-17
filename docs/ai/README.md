@@ -71,6 +71,7 @@ docs/ai/04_OUTPUT_RULES.md
 | AI剪辑 Phase 12 迁入准备 | `13_ai_edit/auto_edit_Phase12_AI剪辑迁入准备审计报告.md` |
 | 小高素材库 / 视频增稳 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
 | Phase 12 AI剪辑本地 MVP 冻结设计 | `13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md` |
+| Phase 12 Task 12 私有素材闭环规格 | `../superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md` |
 
 ## 历史追溯 / 归档入口
 
@@ -79,6 +80,7 @@ docs/ai/04_OUTPUT_RULES.md
 | 内容 | 文件 |
 |---|---|
 | 2026-07-14 基线重构前的历史里程碑流水账（旧 05_PROJECT_CONTEXT 冻结快照） | `archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md` |
+| Phase 12 Task 12 平台公共与用户回收站旧执行包 | `archive/2026-07-17_Phase12_Task12_平台公共与回收站旧执行包_冻结快照.md` |
 
 ## 归档规则
 
