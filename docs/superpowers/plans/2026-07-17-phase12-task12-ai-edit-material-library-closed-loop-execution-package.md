@@ -283,7 +283,7 @@ assert.match(page, /ImportQueue/);
 
 - [ ] **Step 5: 运行红灯并提交**
 
-重复盘点脚本不得导入 `app.database` 或读取 `DATABASE_URL/SMOKE_DATABASE_URL`。参数解析与目标校验按下面的纯函数落地，必须二选一显式传 `--database-url` 或 `--snapshot-mainline-sqlite`；SQLite URL 只接受已存在且不是仓库活动库 `data/auto_wechat.db` 的本地副本，PostgreSQL 只接受显式 `--allow-local-test-postgres`、回环主机和 `_test/_staging` 数据库：
+重复盘点脚本不得导入 `app.database`，不得读取 `DATABASE_URL/SMOKE_DATABASE_URL`，也不得接受数据库 URL 或 PostgreSQL 连接参数。命令行只允许显式传入 `--snapshot-mainline-sqlite`：脚本用 SQLite backup API 制作仓库活动库的事务一致性临时副本，只读查询副本后销毁。PostgreSQL 0015 本阶段只做静态迁移合同审查；任何真实 PostgreSQL 盘点必须另开审批任务，通过受控配置文件或环境注入连接信息，不能把凭据放入命令参数：
 
 ```python
 from argparse import ArgumentParser
@@ -294,7 +294,6 @@ import logging
 import sys
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL, make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -303,14 +302,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from migrations.migrate_sqlite import MAINLINE_DB, backup_database
 
 ACTIVE_SQLITE = Path(MAINLINE_DB).resolve()
-LOCAL_PG_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 def parse_args(argv: list[str] | None = None):
     parser = ArgumentParser(description="只读盘点 Task 12 重复素材")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--database-url")
-    source.add_argument("--snapshot-mainline-sqlite", action="store_true")
-    parser.add_argument("--allow-local-test-postgres", action="store_true")
+    parser.add_argument("--snapshot-mainline-sqlite", action="store_true", required=True)
     return parser.parse_args(argv)
 
 def snapshot_sqlite(source: str, destination: str) -> Path:
@@ -329,30 +324,6 @@ def snapshot_sqlite(source: str, destination: str) -> Path:
         migration_logger.disabled = was_disabled
     return destination_path
 
-def validate_database_target(raw: str, *, allow_local_test_postgres: bool) -> URL:
-    url = make_url(raw)
-    if url.drivername.startswith("sqlite"):
-        if not url.database or url.database == ":memory:":
-            raise ValueError("盘点必须使用已落盘的 SQLite 数据库副本")
-        copy_path = Path(url.database).expanduser().resolve()
-        if copy_path == ACTIVE_SQLITE:
-            raise ValueError("禁止直接盘点仓库活动 SQLite，必须先制作副本")
-        if not copy_path.is_file():
-            raise ValueError("SQLite 数据库副本不存在")
-        return url
-    if url.drivername not in {"postgresql", "postgresql+psycopg"}:
-        raise ValueError("只允许 SQLite 副本或本地测试 PostgreSQL")
-    if not allow_local_test_postgres:
-        raise ValueError("本地测试 PostgreSQL 必须显式批准")
-    if (url.host or "").lower() not in LOCAL_PG_HOSTS:
-        raise ValueError("拒绝非回环 PostgreSQL 主机")
-    database = (url.database or "").lower()
-    if not database.endswith(("_test", "_staging")):
-        raise ValueError("PostgreSQL 数据库名必须以 _test 或 _staging 结尾")
-    if url.query:
-        raise ValueError("盘点 URL 禁止 query 参数")
-    return url
-
 DUPLICATE_SQL = text("""
     SELECT merchant_id, source_sha256, count(*) AS duplicate_count
     FROM ai_edit_materials
@@ -362,28 +333,23 @@ DUPLICATE_SQL = text("""
     ORDER BY source_sha256
 """)
 
-def audit_duplicates(url: URL) -> list[dict[str, object]]:
-    engine = create_engine(url, future=True)
+def audit_duplicates(copy_path: Path) -> list[dict[str, object]]:
+    if copy_path.resolve() == ACTIVE_SQLITE or not copy_path.is_file():
+        raise ValueError("盘点目标必须是已存在的临时 SQLite 副本")
+    engine = create_engine(f"sqlite+pysqlite:///{copy_path.as_posix()}", future=True)
     try:
         with engine.connect() as conn:
             transaction = conn.begin()
             try:
-                if url.drivername.startswith("postgresql"):
-                    conn.exec_driver_sql("SET TRANSACTION READ ONLY")
-                else:
-                    conn.exec_driver_sql("PRAGMA query_only = ON")
+                conn.exec_driver_sql("PRAGMA query_only = ON")
                 return [dict(row) for row in conn.execute(DUPLICATE_SQL).mappings()]
             finally:
                 transaction.rollback()
     finally:
         engine.dispose()
 
-def report_duplicates(database_url: str, *, allow_local_test_postgres: bool) -> int:
-    url = validate_database_target(
-        database_url,
-        allow_local_test_postgres=allow_local_test_postgres,
-    )
-    rows = audit_duplicates(url)
+def report_duplicates(copy_path: Path) -> int:
+    rows = audit_duplicates(copy_path)
     for row in rows:
         merchant_fingerprint = sha256(str(row["merchant_id"]).encode("utf-8")).hexdigest()[:12]
         source_fingerprint = str(row["source_sha256"])[:12]
@@ -393,22 +359,15 @@ def report_duplicates(database_url: str, *, allow_local_test_postgres: bool) -> 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if args.snapshot_mainline_sqlite:
-        with TemporaryDirectory(prefix="auto_wechat_task12_audit_") as temp_dir:
-            copy_path = snapshot_sqlite(ACTIVE_SQLITE, Path(temp_dir) / "audit.db")
-            return report_duplicates(
-                f"sqlite+pysqlite:///{copy_path.as_posix()}",
-                allow_local_test_postgres=False,
-            )
-    return report_duplicates(
-        args.database_url,
-        allow_local_test_postgres=args.allow_local_test_postgres,
-    )
+    assert args.snapshot_mainline_sqlite
+    with TemporaryDirectory(prefix="auto_wechat_task12_audit_") as temp_dir:
+        copy_path = snapshot_sqlite(ACTIVE_SQLITE, Path(temp_dir) / "audit.db")
+        return report_duplicates(copy_path)
 ```
 
-脚本复用 `migrations/migrate_sqlite.py::backup_database()` 的 SQLite backup API 制作活动库事务一致性快照，禁止 `Copy-Item` 主文件，因为 WAL 中未检查点的数据不会被普通文件复制捕获。`--snapshot-mainline-sqlite` 由脚本内部 `TemporaryDirectory` 生成随机目录并在成功、重复返回码或异常时统一清理，实际审计仍只连接副本；不得把副本路径打印到日志。PostgreSQL 在查询前执行 `SET TRANSACTION READ ONLY`，查询结束统一回滚并 `engine.dispose()`。输出只含重复组总数与 `sha256(merchant_id)[:12]`、`source_sha256[:12]`、计数，不回显 URL、用户名、密码、原 merchant ID。
+脚本复用 `migrations/migrate_sqlite.py::backup_database()` 的 SQLite backup API 制作活动库事务一致性快照，禁止 `Copy-Item` 主文件，因为 WAL 中未检查点的数据不会被普通文件复制捕获。`--snapshot-mainline-sqlite` 由脚本内部 `TemporaryDirectory` 生成随机目录并在成功、重复返回码或异常时统一清理，实际审计仍只连接副本；不得把副本路径打印到日志。输出只含重复组总数与 `sha256(merchant_id)[:12]`、`source_sha256[:12]`、计数，不回显原 merchant ID。
 
-`tests/test_phase12_task12_duplicate_audit.py` 至少固定：缺参数拒绝、活动 SQLite 作为 `--database-url` 拒绝、不存在副本拒绝、快照目标覆盖源拒绝、备份 helper 对已存在目标拒绝、远程 PG 拒绝、未显式批准 PG 拒绝、非测试库名拒绝、本地 `_test` PG 纯校验通过。另用临时 SQLite 开启 `PRAGMA journal_mode=WAL`，关闭自动 checkpoint，在另一个连接保持未提交读事务后插入同商户同 SHA 两行；monkeypatch 模块级 `ACTIVE_SQLITE` 指向临时源库，调用 `main(["--snapshot-mainline-sqlite"])`，断言返回重复码 2、输出 `duplicate_groups=1`，并用替身 `TemporaryDirectory` 记录路径后断言退出时目录已删除，证明 WAL 数据不漏且完整副本不残留。测试不得触碰仓库活动库。
+`tests/test_phase12_task12_duplicate_audit.py` 至少固定：缺参数拒绝、未知参数拒绝、`--database-url` 拒绝、`--allow-local-test-postgres` 拒绝、盘点函数直接指向活动 SQLite 拒绝、不存在副本拒绝、快照目标覆盖源拒绝、备份 helper 对已存在目标拒绝。另用临时 SQLite 开启 `PRAGMA journal_mode=WAL`，关闭自动 checkpoint，在另一个连接保持未提交读事务后插入同商户同 SHA 两行；monkeypatch 模块级 `ACTIVE_SQLITE` 指向临时源库，调用 `main(["--snapshot-mainline-sqlite"])`，断言返回重复码 2、输出 `duplicate_groups=1`，并用替身 `TemporaryDirectory` 记录路径后断言退出时目录已删除，证明 WAL 数据不漏且完整副本不残留。测试不得触碰仓库活动库。
 
 ```powershell
 python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_material_api.py tests/test_phase12_task12_material_analysis.py tests/test_phase12_task12_material_cloud.py -q
@@ -418,13 +377,7 @@ python scripts/audit_phase12_task12_duplicate_materials.py --snapshot-mainline-s
 if ($LASTEXITCODE -ne 0) { throw 'Task 12 重复素材盘点失败' }
 ```
 
-Expected：合同测试因 `AiEditMaterialProcess`、0034/0015、回收站查询、自动分析、云端存储和新组件缺失而失败；不得出现 fixture 导入错误。盘点脚本只连接上面显式创建的开发库副本，不读取环境数据库 URL；结果写入固定回传，非 0 时不提交“可继续 Task 12-2”的结论，立即硬暂停。若需盘点 PostgreSQL，操作者必须先显式设置当前 PowerShell 会话的 `$env:TASK12_AUDIT_DATABASE_URL`，再运行下面命令；脚本仍会拒绝非回环主机、非 `_test/_staging` 库和带 query 的 URL。本计划任何步骤都不连接生产或未知远程数据库。
-
-```powershell
-if (-not $env:TASK12_AUDIT_DATABASE_URL) { throw '缺少显式 TASK12_AUDIT_DATABASE_URL' }
-python scripts/audit_phase12_task12_duplicate_materials.py --database-url $env:TASK12_AUDIT_DATABASE_URL --allow-local-test-postgres
-if ($LASTEXITCODE -ne 0) { throw 'Task 12 PostgreSQL 测试副本重复素材盘点失败' }
-```
+Expected：合同测试因 `AiEditMaterialProcess`、0034/0015、回收站查询、自动分析、云端存储和新组件缺失而失败；不得出现 fixture 导入错误。盘点脚本只连接内部生成的活动 SQLite 临时副本，不读取环境数据库 URL，也不具备 PostgreSQL 连接入口；结果写入固定回传，非 0 时不提交“可继续 Task 12-2”的结论，立即硬暂停。本计划任何步骤都不连接生产或未知远程数据库。
 
 ```powershell
 git add tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_material_api.py tests/test_phase12_task12_material_analysis.py tests/test_phase12_task12_material_cloud.py tests/test_phase12_task12_duplicate_audit.py frontend/scripts/check-phase12-task12-material-library-contract.mjs scripts/audit_phase12_task12_duplicate_materials.py
@@ -491,7 +444,7 @@ CheckConstraint(
 
 迁移合同测试必须分别构造“空 status + 非空 operation”“非空 status + 空 operation”“未知 status”三类红灯，并静态断言 ORM、SQLite、PG 三方均存在两个约束名。
 
-`AiEditMaterial` 增加规格中的 12 列，并增加 `(merchant_id, source_sha256)` 唯一约束。`AiEditMaterialOut` 只增加安全展示与媒体字段以及 `processes: list[AiEditMaterialProcessOut]`，不得暴露内部键、`purge_operation_id` 或 `execution_token_hash`。
+`AiEditMaterial` 增加规格中的 12 列，并增加 `(merchant_id, source_sha256)` 唯一约束。ORM、SQLite 0034、PostgreSQL 0015 三方还必须固定以下同名数据库信任边界：`ck_ai_edit_materials_media_type` 只允许 `video/audio/image`；`ck_ai_edit_materials_scope_owner` 要求 `scope='merchant'` 时 `merchant_id` 非空、`scope='platform'` 时为空；`ck_ai_edit_materials_source_sha256` 要求 `source_sha256` 是 64 位小写十六进制；`ck_ai_edit_material_process_token_hash` 要求 `AiEditMaterialProcess.execution_token_hash` 是 64 位小写十六进制。SQLite 哈希约束使用 `length(value)=64 AND value NOT GLOB '*[^0-9a-f]*'`，不能误用只验证首字符的 `GLOB '[0-9a-f]*'`；PostgreSQL 使用 `^[0-9a-f]{64}$`。`AiEditMaterialOut` 只增加安全展示与媒体字段以及 `processes: list[AiEditMaterialProcessOut]`，不得暴露内部键、`purge_operation_id` 或 `execution_token_hash`。
 
 12 列的类型按下列合同锁定，`file_size_bytes` 必须用 `BigInteger`，避免接近 2GB 的视频溢出 PostgreSQL `INTEGER`：
 
@@ -540,7 +493,7 @@ GROUP BY merchant_id, source_sha256
 HAVING count(*) > 1;
 ```
 
-`scripts/audit_phase12_task12_duplicate_materials.py` 使用 Task 12-1 冻结的独立只读 engine，不导入 `app.database`，不读取任何环境数据库 URL。它输出总重复组数与脱敏的 `sha256(merchant_id)[:12] + source_sha256[:12] + count`，不打印原 merchant ID；PG 本地测试环境复用同一 SQLAlchemy 查询。若任何副本返回重复，Task 12-2 不得开始，硬暂停并单开 `Task 12-2-FIX-DATA`：先固定规范行选择、`ai_edit_job_materials` 引用迁移、分析快照归属、本地清单协调与逐行审计，再经数据库 Reviewer 批准；0034/0015 永不静默删除或合并历史行。无重复时把查询结果 0 行作为检查点 A 证据。
+`scripts/audit_phase12_task12_duplicate_materials.py` 只使用 Task 12-1 冻结的 SQLite backup API 和独立只读 engine，不导入 `app.database`，不读取任何环境数据库 URL，不接受数据库 URL，也不连接 PostgreSQL。它输出总重复组数与脱敏的 `sha256(merchant_id)[:12] + source_sha256[:12] + count`，不打印原 merchant ID。若活动库临时副本返回重复，Task 12-2 不得开始，硬暂停并单开 `Task 12-2-FIX-DATA`：先固定规范行选择、`ai_edit_job_materials` 引用迁移、分析快照归属、本地清单协调与逐行审计，再经数据库 Reviewer 批准；0034/0015 永不静默删除或合并历史行。无重复时把查询结果 0 行作为检查点 A 证据。
 
 - [ ] **Step 2: 写 SQLite 0034 升降级**
 
@@ -566,9 +519,9 @@ SELECT CASE WHEN (
 DROP TABLE _guard_0034;
 ```
 
-使用 `pragma_table_xinfo` 固定 0033 的 `ai_edit_materials` 17 个普通列和无隐藏列；同时固定 `ai_edit_material_analyses` 当前 9 个普通列不变，防实现窗口为了 description/category/highlights 擅自扩快照表。重建 `ai_edit_materials` 时逐列复制旧数据，12 个新列保持 `NULL`。用包含 `id`、时间字段和全部旧业务列的双向 `EXCEPT` 与行数守卫证明无损。创建 `ai_edit_material_processes`、索引和版本登记。
+使用 `pragma_table_xinfo` 固定 0033 的 `ai_edit_materials` 17 个普通列和无隐藏列；同时固定 `ai_edit_material_analyses` 当前 9 个普通列不变，防实现窗口为了 description/category/highlights 擅自扩快照表。升级前还必须拒绝预存的 `ai_edit_material_processes`、迁移中间表，以及名称冲突但归属表、列顺序或唯一性不正确的索引；不得用 `IF NOT EXISTS` 把对象漂移当作成功。重建 `ai_edit_materials` 前显式拒绝非法 `media_type`、scope/merchant 配对和 `source_sha256`，不得借重建静默修复历史脏数据。重建时逐列复制旧数据，12 个新列保持 `NULL`。用包含 `id`、时间字段和全部旧业务列的双向 `EXCEPT` 与行数守卫证明无损。创建 `ai_edit_material_processes`、索引和版本登记；过程表的阶段、状态、进度、attempt 和令牌哈希 CHECK 必须使用与 ORM/PG 一致的显式约束名。
 
-降级只在 head 精确为 `0034` 时执行，拒绝未知列、隐藏列和后续版本；在任何 `DROP/RENAME` 前用 guard 查询 `purge_status IS NOT NULL`，存在 preparing 或 completed 都让 CHECK 失败并整体回滚，防丢失删除 claim 与 finalize 重放能力。迁移测试分别构造 preparing/completed，验证结构、数据、0034 登记和中间表状态原样保留。通过后恢复 0033 的 17 列并保留全部旧数据，`ai_edit_material_analyses` 始终保持 0032 建立的 9 列不变。
+降级只在 head 精确为 `0034` 时执行；在任何 `DROP/RENAME` 前用 `pragma_table_xinfo` 精确冻结 `ai_edit_materials`、`ai_edit_material_processes` 和 `ai_edit_material_analyses` 的总列数、列名全集与 `hidden=0`，拒绝缺失列、额外列、VIRTUAL/STORED 生成列和后续版本；同时校验 0034 自身索引的归属表、列顺序和唯一性。在任何 `DROP/RENAME` 前用 guard 查询 `purge_status IS NOT NULL`，存在 preparing 或 completed 都让 CHECK 失败并整体回滚，防丢失删除 claim 与 finalize 重放能力。迁移测试分别构造 preparing/completed，验证结构、数据、0034 登记和中间表状态原样保留。通过后恢复 0033 的 17 列并保留全部旧数据，`ai_edit_material_analyses` 始终保持 0032 建立的 9 列不变。
 
 - [ ] **Step 3: 写 PostgreSQL 0015**
 
@@ -577,7 +530,7 @@ revision = "0015_ai_edit_material_library"
 down_revision = "0014_compute_usage_measurement"
 ```
 
-`upgrade()` 只 `add_column/create_table/create_index/create_unique_constraint/create_check_constraint`，不 `create_all`。两个 purge CHECK 必须由 `op.create_check_constraint` 显式创建，不能依赖 ORM。`downgrade()` 只删除 0015 自身对象。历史重复 `(merchant_id, source_sha256)` 用前置 SQL 检查抛错，不删除或合并历史行。PG `downgrade()` 在删 claim 字段前执行下面的只读 guard；preparing/completed 任一存在都抛错，与 SQLite 降级保护一致：
+`upgrade()` 只 `add_column/create_table/create_index/create_unique_constraint/create_check_constraint`，不 `create_all`。purge、media_type、scope/merchant 配对、`source_sha256` 和 `execution_token_hash` CHECK 必须由 Alembic 显式创建，不能只依赖 ORM。`downgrade()` 只删除 0015 自身对象。历史重复 `(merchant_id, source_sha256)` 以及非法 `media_type`、scope/merchant 配对和 `source_sha256` 都必须在任何 DDL 前用只读 SQL 检查抛错，不删除、合并或修复历史行。PG `downgrade()` 在删 claim 字段前执行下面的只读 guard；preparing/completed 任一存在都抛错，与 SQLite 降级保护一致：
 
 ```python
 bind = op.get_bind()
@@ -588,7 +541,7 @@ if claim_exists is not None:
     raise RuntimeError("存在永久删除 claim 或 completed tombstone，拒绝降级 0015")
 ```
 
-PostgreSQL 迁移测试分别构造 preparing/completed，证明两者均在任何对象删除前拒绝且事务无变化；静态合同测试断言 guard 位于任何 `drop_constraint/drop_column` 之前。
+PostgreSQL 迁移测试分别构造 preparing/completed，证明两者均在任何对象删除前拒绝且事务无变化；静态合同测试断言历史脏数据 guard 位于任何升级 DDL 之前，降级 guard 位于任何 `drop_constraint/drop_column` 之前，并逐项枚举 12 列、过程表、索引和全部命名 CHECK。PG 0015 本检查点不连接真实 PostgreSQL。
 
 PG 参考代码只展示 revision 链，完整实现必须逐项写 12 个 `op.add_column`、`ai_edit_material_processes` 表（含 `execution_token_hash`）、唯一约束和必要索引；不能把 `revision/down_revision` 两行当完整 Alembic 文件。所有对象名与 ORM/SQLite 完全一致，静态合同测试逐个枚举。
 
@@ -608,6 +561,44 @@ git commit -m "功能：增加 Task 12 素材库数据迁移"
 ```
 
 检查点 A 回传必须逐项证明：历史素材无损、重复数据显式拒绝、升级失败整体回滚、降级可再次升级、PG revision 链正确、公共 DTO 无路径/存储键/商户 ID。未获规范、数据库、安全三方 PASS 前不得进入 Task 12-3。
+
+### Task 12-2-FIX1：检查点 A 数据与安全合同整改
+
+检查点 A 已于 2026-07-17 独立探针确认存在迁移假成功，状态为 `CHECKPOINT_A_BLOCKED`。FIX1 只允许闭合以下五类根因，不得进入 Task 12-3：
+
+1. SQLite 升级拒绝预存或漂移的过程表、中间表和同名错误索引；所有迁移对象先验证所有权与精确结构，再创建或删除，不得用 `IF NOT EXISTS` 吞掉漂移。
+2. SQLite 降级用 `pragma_table_xinfo` 精确冻结三张相关表和 0034 索引，拒绝缺失列、额外列、隐藏列以及 VIRTUAL/STORED 生成列；任一 guard 失败后 head、数据、索引和中间对象整体不变。
+3. ORM、SQLite、PG 三方增加并命名 `media_type`、scope/merchant 配对、`source_sha256`、`execution_token_hash` CHECK；升级前显式拒绝历史脏值，不得静默修复。哈希格式 CHECK 只证明数据库值形态；原始执行令牌只下发一次、数据库只存摘要的端到端证明仍是 Task 12-3 开工门禁。
+4. 重复盘点脚本删除 `--database-url` 与 `--allow-local-test-postgres`，只保留 `--snapshot-mainline-sqlite`。PG 0015 本检查点只做静态合同测试，真实 PostgreSQL 盘点另行审批。
+5. 补持久化行为测试：预存残缺过程表、错误索引归属、缺失/额外/VIRTUAL/STORED 列、preparing/completed 降级阻断、失败事务原子性、历史素材与分析快照升级→降级→再升级多重集一致，以及四类数据库 CHECK 的合法/非法值。PG 静态测试必须固定 revision 链、12 列、对象范围、命名约束、guard-before-DDL 和禁止操作历史表。
+
+**FIX1 白名单：**
+
+```text
+app/models.py
+migrations/versions/0034_ai_edit_material_library.sql
+migrations/downgrades/0034_ai_edit_material_library.sql
+migrations/postgres/auto_wechat/versions/0015_ai_edit_material_library.py
+scripts/audit_phase12_task12_duplicate_materials.py
+tests/test_phase12_task12_material_schema.py
+tests/test_phase12_task12_duplicate_audit.py
+```
+
+先用新增探针保持红灯，再做最小修复。至少执行：
+
+```powershell
+python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_duplicate_audit.py -q --basetemp=.tmp/task12-fix1-focused
+python -m pytest tests/test_phase12_task12_material_schema.py tests/test_phase12_ai_edit_schema.py tests/test_phase12_ai_edit_postgres_contract.py tests/test_compute_usage_measurement_sqlite_migration.py tests/test_db_migration_runner.py -q --basetemp=.tmp/task12-fix1-migrations
+```
+
+提交时只暂存白名单文件，提交信息固定为：
+
+```powershell
+git add app/models.py migrations/versions/0034_ai_edit_material_library.sql migrations/downgrades/0034_ai_edit_material_library.sql migrations/postgres/auto_wechat/versions/0015_ai_edit_material_library.py scripts/audit_phase12_task12_duplicate_materials.py tests/test_phase12_task12_material_schema.py tests/test_phase12_task12_duplicate_audit.py
+git commit -m "修复：闭合 Task 12 检查点 A 数据守卫"
+```
+
+FIX1 提交后必须再次硬暂停。执行窗口只回传提交号、红绿灯、五类 Must-Fix 对照、事务不变证据、网络/数据库连接数和白名单证明；测试窗口在独立 worktree 检出准确提交后复核。只有测试窗口 `TEST_PASS` 且规范、数据库、安全三方全部 PASS，审批窗口才可把检查点 A 改为 PASS 并批准 Task 12-3。
 
 ---
 
