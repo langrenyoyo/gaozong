@@ -63,12 +63,20 @@ const adminItems = [
     path: "/admin/forbidden-words",
     permission: PERMISSIONS.adminForbiddenWords,
   },
+  {
+    id: "admin-compute-config",
+    label: "算力",
+    expandedLabel: "算力配置",
+    path: "/admin/compute-config",
+    permission: PERMISSIONS.adminComputeConfig,
+  },
 ];
 
 const adminIcons: Record<string, React.ReactNode> = {
   "admin-return-visits": <MessagesSquareIcon size={18} />,
   "ai-reply-records": <MessageCircleMoreIcon size={18} />,
   "admin-forbidden-words": <ShieldCheckIcon size={18} />,
+  "admin-compute-config": <CoinsIcon size={18} />,
 };
 
 export default function SideNav({

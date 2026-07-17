@@ -277,3 +277,42 @@ def test_list_drift_when_rows_missing():
     resp = client.get("/admin/compute/markup-ratios")
     assert resp.status_code == 500
     assert resp.json()["detail"]["code"] == "MARKUP_RATIO_DRIFT"
+
+
+def test_9000_update_markup_ratio_logs_structured_action(caplog):
+    """9000 比例更新写结构化日志：operation/target/status 固定，不泄露请求头或内部令牌。"""
+    _seed_six_ratios()
+    caplog.set_level("INFO", logger="app.routers.compute")
+    admin = _client_9000(permission_codes=[CONFIG_PERMISSION])
+    resp = admin.put(
+        "/admin/compute/markup-ratios/douyin-cs",
+        json={"markup_basis_points": 3300, "enabled": True},
+    )
+    assert resp.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("compute_admin_action" in message for message in messages)
+    assert any("operation=update_markup_ratio" in message for message in messages)
+    assert any("target=capability=douyin-cs" in message for message in messages)
+    assert any("status=success" in message for message in messages)
+    # 不得记录 Authorization / X-Internal-Token / 内部令牌字样
+    assert all("X-Internal-Token" not in message for message in messages)
+    assert all("Authorization" not in message for message in messages)
+
+
+def test_9205_update_markup_ratio_logs_structured_action(caplog):
+    """独立算力服务比例更新写结构化日志：字段与 9000 完全一致，不泄露请求头或内部令牌。"""
+    _seed_six_ratios()
+    caplog.set_level("INFO", logger="apps.compute.routers")
+    admin = _client_9205(permission_codes=[CONFIG_PERMISSION])
+    resp = admin.put(
+        "/api/compute/admin/markup-ratios/douyin-cs",
+        json={"markup_basis_points": 3300, "enabled": True},
+    )
+    assert resp.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("compute_admin_action" in message for message in messages)
+    assert any("operation=update_markup_ratio" in message for message in messages)
+    assert any("target=capability=douyin-cs" in message for message in messages)
+    assert any("status=success" in message for message in messages)
+    assert all("X-Internal-Token" not in message for message in messages)
+    assert all("Authorization" not in message for message in messages)

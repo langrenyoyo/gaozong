@@ -13,6 +13,10 @@ from fastapi import Header, HTTPException
 
 GatewayContext = dict[str, Any]
 
+# 算力配置精确权限：放在 get_gateway_context 之前，使上下文解析先识别该权限，
+# 避免"仅有精确权限且无商户编号"的配置管理员在权限判断前被 401 阻断。
+COMPUTE_CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
+
 
 def get_gateway_context(
     x_gateway_merchant_id: str | None = Header(default=None, alias="X-Gateway-Merchant-Id"),
@@ -23,9 +27,21 @@ def get_gateway_context(
 ) -> GatewayContext:
     """读取 9000 gateway 注入的可信上下文。
 
-    本阶段不建立前端直连信任模型；缺少上下文时返回 401。
+    先解析 permission_codes，再执行上下文存在性检查：仅持算力配置精确权限或
+    super_admin 的请求即使无商户编号也放行（管理员配置入口需要）；其余缺少商户编号的
+    请求仍 401。只信任网关注入的 X-Gateway-Permissions，不增加正文或查询参数信任入口。
     """
-    if not x_gateway_merchant_id and x_gateway_super_admin != "true":
+    permission_codes = [
+        item.strip()
+        for item in (x_gateway_permissions or "").split(",")
+        if item.strip()
+    ]
+    is_compute_config_admin = COMPUTE_CONFIG_PERMISSION in permission_codes
+    if (
+        not x_gateway_merchant_id
+        and x_gateway_super_admin != "true"
+        and not is_compute_config_admin
+    ):
         raise HTTPException(
             status_code=401,
             detail={
@@ -33,11 +49,6 @@ def get_gateway_context(
                 "message": "缺少 gateway 注入的可信上下文",
             },
         )
-    permission_codes = [
-        item.strip()
-        for item in (x_gateway_permissions or "").split(",")
-        if item.strip()
-    ]
     return {
         "merchant_id": x_gateway_merchant_id,
         "tenant_id": x_gateway_tenant_id,
@@ -62,20 +73,6 @@ def require_merchant_context(context: GatewayContext) -> str:
             detail={"code": "MERCHANT_ID_REQUIRED", "message": "缺少可信商户上下文"},
         )
     return str(merchant_id)
-
-
-def require_super_admin(context: GatewayContext) -> GatewayContext:
-    """超管接口只允许 gateway 标记的 super_admin。"""
-    if not context.get("super_admin"):
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "SUPER_ADMIN_REQUIRED", "message": "仅超级管理员可操作"},
-        )
-    return context
-
-
-# 算力配置精确权限：套餐/充值/发放沿用 require_super_admin，配置比例单独收口到此权限
-COMPUTE_CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
 
 
 def require_compute_config_admin(context: GatewayContext) -> GatewayContext:

@@ -99,6 +99,35 @@ def _admin_client() -> TestClient:
     return TestClient(app)
 
 
+# 算力配置精确权限（与 apps/compute/dependencies.py 保持一致）
+CONFIG_PERMISSION = "auto_wechat:admin:compute_config"
+
+
+def _config_admin_client() -> TestClient:
+    """仅持精确权限、无 super_admin、无 merchant_id 的算力配置管理员客户端。"""
+    from apps.compute.main import create_app
+    from apps.compute.dependencies import get_gateway_context
+
+    app = create_app()
+
+    def _override_get_db():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_gateway_context] = lambda: {
+        "merchant_id": None,
+        "tenant_id": "tenant-a",
+        "user_id": "config-admin",
+        "super_admin": False,
+        "permission_codes": [CONFIG_PERMISSION],
+    }
+    return TestClient(app)
+
+
 def test_compute_app_root_health_and_openapi():
     client = _client()
 
@@ -242,3 +271,169 @@ def test_compute_app_transactions_use_merchant_public_contract():
     }
     assert item["business_scene"] == "算力充值"
     assert "internal-secret" not in repr(item)
+
+
+# ============ Task 3：精确权限管理员 + 网关上下文解析顺序 ============
+
+
+def _seed_six_capability_ratios():
+    """按冻结六能力顺序写入比例行，供比例接口读取。"""
+    from apps.compute.services import COMPUTE_CAPABILITY_KEYS
+
+    db = TestSession()
+    for key in COMPUTE_CAPABILITY_KEYS:
+        db.add(
+            ComputeMarkupRatio(
+                capability_key=key,
+                markup_basis_points=0,
+                enabled=True,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+    db.commit()
+    db.close()
+
+
+def test_gateway_context_allows_compute_config_admin_without_merchant():
+    """仅持精确权限、无商户编号、非超管也能通过网关上下文解析（不被 401 阻断）。"""
+    from apps.compute.dependencies import get_gateway_context
+
+    context = get_gateway_context(
+        x_gateway_merchant_id=None,
+        x_gateway_tenant_id="tenant-a",
+        x_gateway_user_id="config-admin",
+        x_gateway_permissions="auto_wechat:admin:compute_config",
+        x_gateway_super_admin=None,
+    )
+    assert context["merchant_id"] is None
+    assert context["super_admin"] is False
+    assert context["permission_codes"] == ["auto_wechat:admin:compute_config"]
+
+
+def test_gateway_context_rejects_plain_merchant_without_merchant():
+    """仅 auto_wechat:compute 且无商户编号仍必须 401 GATEWAY_CONTEXT_REQUIRED。"""
+    from apps.compute.dependencies import get_gateway_context
+    from fastapi import HTTPException
+    import pytest as _pytest
+
+    with _pytest.raises(HTTPException) as exc_info:
+        get_gateway_context(
+            x_gateway_merchant_id=None,
+            x_gateway_tenant_id="tenant-a",
+            x_gateway_user_id="u",
+            x_gateway_permissions="auto_wechat:compute",
+            x_gateway_super_admin=None,
+        )
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["code"] == "GATEWAY_CONTEXT_REQUIRED"
+
+
+def test_compute_config_admin_manages_packages_and_points_without_merchant():
+    """仅持精确权限的管理员可创建/查询/更新/禁用套餐，并充值、发放、读写比例。"""
+    admin = _config_admin_client()
+
+    # 创建套餐
+    created = admin.post(
+        "/api/compute/admin/packages",
+        json={"name": "标准版", "price_yuan": 299, "token_amount": 350000},
+    )
+    assert created.status_code == 200
+    package_id = created.json()["data"]["id"]
+
+    # 查询
+    listed = admin.get("/api/compute/admin/packages")
+    assert listed.status_code == 200
+    assert len(listed.json()["data"]) == 1
+
+    # 更新
+    updated = admin.put(
+        f"/api/compute/admin/packages/{package_id}",
+        json={"price_yuan": 399, "enabled": True},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["price_yuan"] == 399
+
+    # 充值 + 发放
+    assert admin.post(
+        "/api/compute/admin/accounts/merchant-a/recharge",
+        json={"tokens": 1000, "remark": "审批备注"},
+    ).status_code == 200
+    assert admin.post(
+        "/api/compute/admin/accounts/merchant-a/grant-package",
+        json={"package_id": package_id},
+    ).status_code == 200
+
+    # 禁用套餐
+    disabled = admin.delete(f"/api/compute/admin/packages/{package_id}")
+    assert disabled.status_code == 200
+    assert disabled.json()["data"]["enabled"] is False
+
+    # 比例读写
+    _seed_six_capability_ratios()
+    assert admin.get("/api/compute/admin/markup-ratios").status_code == 200
+    ratio = admin.put(
+        "/api/compute/admin/markup-ratios/douyin-cs",
+        json={"markup_basis_points": 3300, "enabled": True},
+    )
+    assert ratio.status_code == 200
+    assert ratio.json()["data"]["markup_basis_points"] == 3300
+
+
+def test_compute_app_disable_package_logs_structured_action(caplog):
+    """禁用套餐写结构化日志：operation=disable_package，不泄露请求头或内部令牌。"""
+    caplog.set_level("INFO", logger="apps.compute.routers")
+    admin = _config_admin_client()
+    created = admin.post(
+        "/api/compute/admin/packages",
+        json={"name": "标准版", "price_yuan": 299, "token_amount": 350000},
+    )
+    package_id = created.json()["data"]["id"]
+
+    caplog.clear()
+    caplog.set_level("INFO", logger="apps.compute.routers")
+    resp = admin.delete(f"/api/compute/admin/packages/{package_id}")
+    assert resp.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("compute_admin_action" in message for message in messages)
+    assert any("operation=disable_package" in message for message in messages)
+    assert any("status=success" in message for message in messages)
+    assert all("X-Internal-Token" not in message for message in messages)
+    assert all("Authorization" not in message for message in messages)
+
+
+def test_compute_app_unauthorized_write_logs_failure_without_token(caplog):
+    """无权限写入失败也留失败日志，且不记录请求头或内部令牌。"""
+    caplog.set_level("WARNING", logger="apps.compute.routers")
+    # 仅商户权限、无商户编号 -> 网关上下文 401，不进路由日志
+    # 改用有商户编号但仅 compute 权限的客户端触发 403 失败日志
+    from apps.compute.main import create_app
+    from apps.compute.dependencies import get_gateway_context
+
+    app = create_app()
+
+    def _override_get_db():
+        db = TestSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_gateway_context] = lambda: {
+        "merchant_id": "merchant-a",
+        "tenant_id": "tenant-a",
+        "user_id": "merchant-user",
+        "super_admin": False,
+        "permission_codes": ["auto_wechat:compute"],
+    }
+    client = TestClient(app)
+    resp = client.post(
+        "/api/compute/admin/packages",
+        json={"name": "越权", "price_yuan": 99, "token_amount": 100},
+    )
+    assert resp.status_code == 403
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("status=failed" in message for message in messages)
+    assert all("X-Internal-Token" not in message for message in messages)
+    assert all("Authorization" not in message for message in messages)

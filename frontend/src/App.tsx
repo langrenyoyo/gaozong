@@ -35,6 +35,7 @@ const adminRoutes = [
   { path: "/admin/return-visits", navId: "admin-return-visits", permission: PERMISSIONS.adminReturnVisitPrompts },
   { path: "/admin/ai-reply-records", navId: "ai-reply-records", permission: PERMISSIONS.adminAiReplyRecords },
   { path: "/admin/forbidden-words", navId: "admin-forbidden-words", permission: PERMISSIONS.adminForbiddenWords },
+  { path: "/admin/compute-config", navId: "admin-compute-config", permission: PERMISSIONS.adminComputeConfig },
   { path: "/admin/no-local-feature", navId: "admin-no-local-feature", message: "暂无可访问管理员功能" },
   { path: "/admin/newcar-owned", navId: "admin-newcar-owned", message: "该管理功能请在 NewCarProject 操作" },
 ];
@@ -110,6 +111,7 @@ function defaultPathForUser(user: AppUser): string {
     if (hasPermission(user, PERMISSIONS.adminAiReplyRecords)) return "/admin/ai-reply-records";
     if (hasPermission(user, PERMISSIONS.adminReturnVisitPrompts)) return "/admin/return-visits";
     if (hasPermission(user, PERMISSIONS.adminForbiddenWords)) return "/admin/forbidden-words";
+    if (hasPermission(user, PERMISSIONS.adminComputeConfig)) return "/admin/compute-config";
     if (hasAnyNewCarOwnedAdminPermission(user)) return "/admin/newcar-owned";
     return "/admin/no-local-feature";
   }
@@ -144,6 +146,9 @@ function canAccessPath(user: AppUser, path: string): boolean {
   if (pathname === "/admin/forbidden-words") {
     return isAdminLike(user) && hasPermission(user, PERMISSIONS.adminForbiddenWords);
   }
+  if (pathname === "/admin/compute-config") {
+    return hasPermission(user, PERMISSIONS.adminComputeConfig);
+  }
   if (pathname === "/admin/newcar-owned" || pathname === "/admin/no-local-feature") {
     return isAdminLike(user);
   }
@@ -171,7 +176,10 @@ function hasAnyNewCarOwnedAdminPermission(user: AppUser): boolean {
 
 function LegacyRedirect({ to }: { to: string }) {
   const location = useLocation();
-  return <Navigate to={`${to}${location.search || ""}`} replace />;
+  const sourceQuery = location.search.startsWith("?") ? location.search.slice(1) : location.search;
+  const separator = to.includes("?") ? "&" : "?";
+  const destination = sourceQuery ? `${to}${separator}${sourceQuery}` : to;
+  return <Navigate to={`${destination}${location.hash || ""}`} replace />;
 }
 
 type AuthErrorKind = "externalMerchantNotBound" | "permissionDenied" | "exchangeCodeFailed" | "tokenExpired" | "generic";
