@@ -182,6 +182,7 @@ def test_list_merchant_transactions_hides_unknown_internal_codes(db):
         ("knowledge_training_ingest", "knowledge", "知识库训练"),
         ("knowledge_search", "knowledge", "知识库检索"),
         ("ai_edit_plan", "compute", "AI小高剪辑"),
+        (None, "douyin-cs", "抖音客服"),
         (None, "wechat-assistant", "AI小高微信助手"),
         (None, "agents", "智能体服务"),
         (None, "leads", "线索服务"),
@@ -353,7 +354,26 @@ git commit -m "新增商户算力流水公开投影"
 
 - [ ] **Step 1：先写 9000 接口字段白名单红灯**
 
-在 `tests/test_compute_router.py::test_transactions_after_recharge_and_consume` 取得 `data` 后增加：
+先在 `tests/test_compute_router.py::test_transactions_after_recharge_and_consume` 的内部用量上报请求中增加真实生产调用使用的备注：
+
+```python
+            "remark": "douyin_ai_reply",
+```
+
+完整请求体应为：
+
+```python
+        json={
+            "merchant_id": "merchant-a",
+            "tokens": 300,
+            "capability_key": "douyin-cs",
+            "source": "llm",
+            "model": "gpt-4o-mini",
+            "remark": "douyin_ai_reply",
+        },
+```
+
+然后在取得 `data` 后增加：
 
 ```python
     item = data["items"][0]
