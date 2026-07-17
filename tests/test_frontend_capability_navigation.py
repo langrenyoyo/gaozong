@@ -156,6 +156,16 @@ def test_wechat_assistant_uses_browser_pending_task_api_instead_of_agent_poll_en
     assert "fetchPendingWechatTasks" not in panel_source
 
 
+def test_wechat_assistant_test_nickname_is_user_editable():
+    source = Path("frontend/src/features/wechat-assistant/pages/WechatAgent.tsx").read_text(encoding="utf-8")
+
+    assert "DEFAULT_TEST_NICKNAME" not in source
+    assert "value={testNickname}" in source
+    assert "setTestNickname(event.target.value)" in source
+    assert "nickname: testNickname.trim()" in source
+    assert "!testNickname.trim()" in source
+
+
 def test_frontend_docker_dev_uses_browser_api_proxy_instead_of_loopback_9000():
     compose_source = Path("docker-compose.dev.yml").read_text(encoding="utf-8")
     env_example_source = Path(".env.development.example").read_text(encoding="utf-8")

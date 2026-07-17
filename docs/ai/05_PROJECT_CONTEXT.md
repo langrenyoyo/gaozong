@@ -223,7 +223,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
   3. OCR/截图失败不能伪造成功；检测链路保持只读。
   4. 真实派单发送必须有：联系人验证、前台焦点、违禁词替换、人工接管、限频、失败回写、幂等、紧急停止（Alt+Q + `/automation/emergency-stop`）。
   5. 诊断接口（search-debug 等）不得返回原始 UIA 对象，必须安全 JSON 序列化。
-- 旧"Aw3 唯一联系人 / sent=false"Demo 硬门禁已收缩到 Local Agent 调试端点（`run_local_wechat_test` 的 `ONLY_ALLOWED_NICKNAME="Aw3"`）；业务发送靠 gate 组合保护，不再靠 Aw3 硬编码。
+- Local Agent 调试端点 `run_local_wechat_test` 已取消 Aw3 唯一联系人限制，接受任意非空联系人昵称；测试仍固定仅粘贴不发送，并继续执行搜索焦点、搜索文字、联系人验证、前台焦点和紧急停止门禁。业务发送同样不依赖 Aw3 硬编码，靠 gate 组合保护。
 - 发送方识别技术结论（长期有效）：纯 UIA 无法可靠读取 Qt 微信标题/气泡归属；采用截图像素分析识别 sender（self/friend/system），真机验证零误判。
 - 有效确认回复判定规则（关键词/长度/超时，`check_configs` 可配）与微信 UI 检测逻辑（窗口定位、发送方级联识别、兜底模式需人工复核）见专题文档：`docs/ai/10_local_agent_wechat/WECHAT_REPLY_DETECTION_RULES.md`。
 

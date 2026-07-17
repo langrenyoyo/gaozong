@@ -367,7 +367,7 @@ Local Agent 上报字段包括：
 
 当前强约束：
 
-- `target_nickname` 只允许 `Aw3`
+- `target_nickname` 必须是非空真实销售微信昵称，不限制为 `Aw3`
 - `notify_sales` 只允许 `mode=paste_only`
 - `detect_reply` 允许 `mode=read_only`，兼容部分 `paste_only`
 - `sent=true` 全局拒绝
@@ -507,7 +507,7 @@ Local Agent 上报字段包括：
 | `/agent/version` | GET | 查询版本与构建信息 |
 | `/agent/ocr/status` | GET | 查询 OCR 状态 |
 | `/agent/ocr/warmup` | POST | 预热 OCR |
-| `/agent/wechat/test` | POST | Aw3 测试链路，自动定位 Aw3，verify OCR，paste_only，sent=false |
+| `/agent/wechat/test` | POST | 任意非空昵称测试链路，自动定位并验证联系人，paste_only，sent=false |
 | `/agent/wechat/windows` | GET | 枚举/诊断微信窗口 |
 | `/agent/wechat/foreground-debug` | POST | 前台焦点诊断 |
 | `/agent/wechat/search-debug` | POST | 搜索框诊断 |
@@ -557,7 +557,7 @@ GET {server_url}/wechat-tasks/pending?task_type=notify_sales&limit=1
 当前执行约束：
 
 - 只处理 `task_type=notify_sales`
-- 只允许 `target_nickname=Aw3`
+- `target_nickname` 使用任务携带的非空真实销售微信昵称
 - 只允许 `mode=paste_only`
 - 前置 OCR 就绪检查
 - 前置微信窗口就绪检查
@@ -587,7 +587,7 @@ GET {server_url}/wechat-tasks/pending?task_type=detect_reply&limit=1
 当前执行约束：
 
 - 只处理 `task_type=detect_reply`
-- 只允许 `target_nickname=Aw3`
+- `target_nickname` 使用任务携带的非空真实销售微信昵称
 - 只读读取消息
 - 不调用输入粘贴
 - 不发送
@@ -664,7 +664,7 @@ http://192.168.110.113:9000
 | 本机 Agent 在线检测 | 19000 `/health` | 不涉及 | 支持 | 有 | 否 | 浏览器直连 127.0.0.1:19000 |
 | 主后端 Agent 状态卡 | 9000 `/agent/status` | 支持 | 通过心跳间接支持 | 有 | 否 | 心跳已最小补齐窗口状态：ready/unavailable/unknown |
 | Local Agent 心跳 | 19000 → 9000 `/agent/heartbeat` | 支持 | 支持 | 有 | 否 | 单机演示可用 |
-| 创建通知销售任务 | 9000 `/wechat-tasks` | 支持 | 不涉及 | 有 | 否 | 只允许 Aw3 + paste_only |
+| 创建通知销售任务 | 9000 `/wechat-tasks` | 支持 | 不涉及 | 有 | 否 | 真实非空昵称；支持 paste_only / single_send |
 | 执行通知销售任务 | 19000 `/agent/tasks/poll-and-execute` | 支持任务查询/回写 | 支持 | 有 | 否 | 支持 `task_id`，sent=false |
 | 创建/执行回复检测任务 | 9000 `/wechat-tasks` + 19000 `/agent/tasks/poll-and-detect` + 9000 `/replies/agent-write-back` | 支持；Docker 运行态已补注册 `/replies/agent-write-back` | 支持 | 有 | 否 | read_only，`task_id=10` 已验证 `detected_status=replied`，`action.sent=false`，`action.pasted=false` |
 | 查询任务详情 | 9000 `/wechat-tasks/{task_id}` | 支持 | 不涉及 | 有 | 否 | 前端依赖任务状态 |
@@ -673,7 +673,7 @@ http://192.168.110.113:9000
 | 前台焦点诊断 | 19000 `/agent/wechat/foreground-debug` | 不涉及 | 支持 | 有 | 否 | 用于定位焦点问题 |
 | 搜索诊断 | 19000 `/agent/wechat/search-debug` | 不涉及 | 支持 | 有 | 否 | 已有安全 JSON 序列化测试 |
 | OCR 状态/预热 | 19000 `/agent/ocr/status`、`/agent/ocr/warmup` | 不涉及 | 支持 | 有 | 否 | exe 需携带模型 |
-| Aw3 测试链路 | 19000 `/agent/wechat/test` | 不涉及 | 支持 | 有 | 否 | 当前已自动定位 Aw3 + paste_only + sent=false |
+| 联系人测试链路 | 19000 `/agent/wechat/test` | 不涉及 | 支持 | 有 | 否 | 接受任意非空昵称，自动定位并验证联系人，固定 paste_only + sent=false |
 | 下载 exe | 前端“下载/测试”入口 | 未提供下载接口 | 有打包产物路径，前端已展示人工分发契约 | 前端构建验证 | 否，按人工分发验收 | 当前不做在线下载服务 |
 | 商户/权限隔离 | 状态与任务接口 | 未支持 | 未支持 | 未见 | 生产阻塞，演示非阻塞 | 多客户产品化前必须补 |
 | 错误回传 | 任务 result | 支持 | 支持 | 有 | 否 | 有 `error_code`、`failure_stage`、`message` |
@@ -810,7 +810,7 @@ dist/local-agent/小高AI微信助手.exe
 - 能访问 9000 主后端地址。
 - OCR 模型存在且可加载。
 - 日志目录 `logs/` 可写。
-- 当前安全边界保持 Aw3、paste_only、read_only、sent=false。
+- 当前安全边界允许任意非空联系人昵称，并继续保持联系人验证、paste_only、read_only、sent=false。
 
 建议验收步骤：
 

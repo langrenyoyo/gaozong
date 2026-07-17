@@ -62,7 +62,7 @@ class UTF8JSONResponse(JSONResponse):
 
 
 AGENT_SERVICE_NAME = "auto_wechat_local_agent"
-ONLY_ALLOWED_NICKNAME = "Aw3"
+DEFAULT_DEBUG_NICKNAME = "Aw3"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 19000
 HEARTBEAT_INTERVAL_SECONDS = 10
@@ -140,7 +140,7 @@ _wechat_task_lock: threading.Lock | None = None
 
 
 class LocalWechatTestRequest(BaseModel):
-    nickname: str = Field(ONLY_ALLOWED_NICKNAME)
+    nickname: str = Field(DEFAULT_DEBUG_NICKNAME, max_length=100)
     message: str = Field("[AUTO_WECHAT_TEST] P0-4A local agent paste only")
     mode: Literal["paste_only", "single_send"] = "paste_only"
     engine: str = "easyocr"
@@ -154,7 +154,7 @@ class LocalWechatForegroundDebugRequest(BaseModel):
 
 
 class LocalWechatSearchDebugRequest(BaseModel):
-    nickname: str = Field(ONLY_ALLOWED_NICKNAME)
+    nickname: str = Field(DEFAULT_DEBUG_NICKNAME)
     position: str = "right"
 
 
@@ -170,7 +170,7 @@ class AgentReplyDetectRequest(BaseModel):
     lead_id: int = Field(..., description="线索 ID")
     staff_id: int = Field(..., description="销售 ID")
     task_id: int | None = Field(None, description="关联任务 ID")
-    target_nickname: str = Field(ONLY_ALLOWED_NICKNAME, description="目标联系人昵称")
+    target_nickname: str = Field(DEFAULT_DEBUG_NICKNAME, description="目标联系人昵称")
 
 
 class PollAndDetectRequest(BaseModel):
@@ -1383,11 +1383,23 @@ def _detect_reply_for_task(
     return result
 
 def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
-    """Run the local Aw3 paste-only test: OCR ready -> ready -> foreground -> open -> verify -> paste."""
+    """执行本机联系人仅粘贴测试：就绪检查、打开联系人、验证、粘贴。"""
     result = _base_response(request)
+    nickname = request.nickname.strip()
+    result["request"]["nickname"] = nickname
+    nickname_summary = _fingerprint_text(nickname)
+    logger.info(
+        "run_local_wechat_test stage=input_validation nickname_summary=%s mode=%s",
+        nickname_summary,
+        request.mode,
+    )
 
-    if request.nickname != ONLY_ALLOWED_NICKNAME:
-        return _fail(result, "only_aw3_allowed_for_p0_4a", "P0-4A only allows nickname=Aw3")
+    if not nickname:
+        logger.warning(
+            "run_local_wechat_test stage=input_validation result=blocked "
+            "failure_stage=target_nickname_empty"
+        )
+        return _fail(result, "target_nickname_empty", "目标联系人昵称不能为空")
 
     if request.mode == "single_send" and not request.allow_single_send_debug:
         return _fail(result, "single_send_debug_disabled", "P0-4A disables single_send by default")
@@ -1424,20 +1436,32 @@ def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
     result["evidence"]["before"] = _safe_screenshot("before_open_chat")
 
     try:
-        open_result = open_chat_by_nickname(ONLY_ALLOWED_NICKNAME)
+        open_result = open_chat_by_nickname(nickname)
     except Exception as exc:
         result["open_chat"] = _normalize_open_chat_result(
             {"success": False, "failure_stage": "exception"},
-            ONLY_ALLOWED_NICKNAME,
+            nickname,
         )
-        return _fail(result, "open_chat_failed", f"WeChat focused, but automatic Aw3 open failed: {exc}")
+        logger.error(
+            "run_local_wechat_test stage=open_chat nickname_summary=%s "
+            "failure_stage=open_chat_failed",
+            nickname_summary,
+            exc_info=True,
+        )
+        return _fail(result, "open_chat_failed", f"微信已聚焦，但自动打开联系人失败: {exc}")
 
-    result["open_chat"] = _normalize_open_chat_result(open_result, ONLY_ALLOWED_NICKNAME)
+    result["open_chat"] = _normalize_open_chat_result(open_result, nickname)
     if not result["open_chat"]["success"]:
         result["open_chat"]["failure_stage"] = result["open_chat"]["failure_stage"] or "open_chat_failed"
-        return _fail(result, "open_chat_failed", "WeChat focused, but automatic search/open Aw3 failed")
+        logger.warning(
+            "run_local_wechat_test stage=open_chat nickname_summary=%s result=blocked "
+            "failure_stage=%s",
+            nickname_summary,
+            result["open_chat"]["failure_stage"],
+        )
+        return _fail(result, "open_chat_failed", "微信已聚焦，但自动搜索或打开联系人失败")
 
-    verify_result = verify_current_chat_contact(ONLY_ALLOWED_NICKNAME)
+    verify_result = verify_current_chat_contact(nickname)
     result["verify"] = {
         "verified": bool(verify_result.get("verified")),
         "strategy": verify_result.get("strategy"),
@@ -1452,6 +1476,12 @@ def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
 
     ok, failure_stage, message = _verify_is_sendable(verify_result)
     if not ok:
+        logger.warning(
+            "run_local_wechat_test stage=contact_verify nickname_summary=%s result=blocked "
+            "failure_stage=%s",
+            nickname_summary,
+            failure_stage or "contact_verify_failed",
+        )
         return _fail(result, failure_stage or "contact_verify_failed", message or "contact verify failed; paste blocked")
 
     if not is_automation_allowed():
@@ -1492,6 +1522,10 @@ def run_local_wechat_test(request: LocalWechatTestRequest) -> dict:
     result["success"] = True
     result["failure_stage"] = None
     result["message"] = "local agent open_chat and paste_only completed"
+    logger.info(
+        "run_local_wechat_test stage=completed nickname_summary=%s result=success pasted=true sent=false",
+        nickname_summary,
+    )
     return result
 
 

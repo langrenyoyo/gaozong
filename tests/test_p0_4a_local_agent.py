@@ -73,18 +73,20 @@ def test_local_agent_health():
     assert data["wechat_agent"] is True
 
 
-def test_local_agent_rejects_non_aw3():
-    with patch("app.local_agent_main.write_text_to_input") as mock_write:
+def test_local_agent_rejects_blank_test_nickname():
+    with patch("app.local_agent_main.open_chat_by_nickname") as mock_open, \
+         patch("app.local_agent_main.write_text_to_input") as mock_write:
         response = _client().post("/agent/wechat/test", json={
-            "nickname": "NotAw3",
+            "nickname": "   ",
             "message": "should not send",
         })
 
     data = response.json()
     assert data["success"] is False
-    assert data["failure_stage"] == "only_aw3_allowed_for_p0_4a"
+    assert data["failure_stage"] == "target_nickname_empty"
     assert data["action"]["pasted"] is False
     assert data["action"]["sent"] is False
+    mock_open.assert_not_called()
     mock_write.assert_not_called()
 
 
@@ -1815,18 +1817,30 @@ def test_local_agent_test_does_not_send_enter():
     mock_write.assert_called_once()
 
 
-def test_local_agent_test_rejects_adong_even_with_open_chat():
-    with patch("app.local_agent_main.open_chat_by_nickname") as mock_open, \
-         patch("app.local_agent_main.write_text_to_input") as mock_write:
+def test_local_agent_test_accepts_non_aw3_after_contact_verification():
+    nickname = "销售小李"
+    with patch("app.local_agent_main.is_automation_allowed", return_value=True), \
+         patch("app.local_agent_main.find_wechat_window", return_value=_window()), \
+         patch("app.local_agent_main.check_wechat_ready_for_automation", return_value={"success": True}), \
+         patch("app.local_agent_main.ensure_wechat_foreground", return_value={"success": True}), \
+         patch("app.local_agent_main.open_chat_by_nickname",
+               return_value=_open_chat(nickname=nickname, search_keyword=nickname)) as mock_open, \
+         patch("app.local_agent_main.verify_current_chat_contact",
+               return_value=_verified(ocr_text=nickname)) as mock_verify, \
+         patch("app.local_agent_main.write_text_to_input",
+               return_value={"success": True, "pasted": True, "sent": False}) as mock_write:
         data = _client().post("/agent/wechat/test", json={
-            "nickname": "NotAw3",
-            "message": "blocked",
+            "nickname": nickname,
+            "message": "paste only",
         }).json()
 
-    assert data["success"] is False
-    assert data["failure_stage"] == "only_aw3_allowed_for_p0_4a"
-    mock_open.assert_not_called()
-    mock_write.assert_not_called()
+    assert data["success"] is True
+    assert data["request"]["nickname"] == nickname
+    assert data["open_chat"]["nickname"] == nickname
+    assert data["action"] == {"pasted": True, "sent": False}
+    mock_open.assert_called_once_with(nickname)
+    mock_verify.assert_called_once_with(nickname)
+    mock_write.assert_called_once()
 
 
 def test_local_agent_test_returns_open_chat_result_schema():

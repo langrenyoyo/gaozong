@@ -845,7 +845,7 @@ POST /agent/tasks/poll-and-execute
 
 1. 19000 `poll-and-execute` 会拉取 9000 `/wechat-tasks/{task_id}` 或 `/wechat-tasks/pending?task_type=notify_sales&limit=1`。
 2. 只处理 `notify_sales`。
-3. 当前只允许 `target_nickname=Aw3`。
+3. `target_nickname` 使用任务携带的非空真实销售微信昵称，不限制为 `Aw3`。
 4. 当前只允许 `mode=paste_only`。
 5. 当前运行锁 `_wechat_task_lock` 与检测任务共享。
 
@@ -1343,7 +1343,7 @@ Webhook 注意：
 
 1. 19000 `poll-and-execute` 与 `poll-and-detect` 已共享运行锁。
 2. `poll-and-detect` 已要求只读，不粘贴、不发送。
-3. 当前演示阶段仍限制 `target_nickname=Aw3`。
+3. 当前调试端点与业务任务均接受请求或任务携带的非空 `target_nickname`，不再限制为 `Aw3`；联系人验证和前台焦点门禁仍强制执行。
 4. 当前 `wechat_task_service` 会拒绝 `sent=true`。
 5. 当前 webhook 日志会记录 `webhook_auth_required` 和 `source_path`。
 

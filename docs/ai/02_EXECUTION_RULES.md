@@ -767,8 +767,8 @@ AI 的职责是：
 6.  真实发送必须经后端 gate：联系人验证、前台焦点、违禁词替换、
     人工接管、限频、失败回写、幂等、紧急停止
     （一期已废止旧的"只允许 paste_only / sent=false"硬门禁）
-7.  Aw3 唯一联系人限制仅约束 Local Agent 调试端点（run_local_wechat_test），
-    业务发送不依赖 Aw3 硬编码，靠 gate 组合保护
+7.  Local Agent 调试端点（run_local_wechat_test）接受任意非空联系人昵称，
+    但必须继续通过搜索焦点、搜索文字、联系人验证和前台焦点门禁；不得因取消 Aw3 硬编码而绕过验证
 8.  9000 不直接操作微信
 9.  微信操作只发生在客户机本地 19000 Local Agent
 10. poll-and-execute 与 poll-and-detect 共享运行锁，避免并发操作微信

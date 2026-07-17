@@ -190,7 +190,7 @@ Local Agent
 1. 当前模型存在 `DouyinWebhookEvent` / `douyin_webhook_events`，PRD 目标为 `lead_source_events`。
 2. 当前 `process_webhook_event` 对 `im_receive_msg` 会直接 upsert 到 `DouyinLead`，尚未按 PRD 完成手机号 / 微信号提取后再判定有效线索。
 3. 当前 `DouyinLead.status` 仍使用 `pending/assigned/replied/timeout/closed` 等旧状态，未覆盖 PRD 状态全集。
-4. 当前 Local Agent 安全门禁仍带有演示阶段 `Aw3` 限制，产品化需在接口契约与安全策略中重新定义。
+4. 当前 Local Agent 调试端点与业务任务均使用请求或任务携带的非空联系人昵称；取消 `Aw3` 硬编码后，搜索焦点、搜索文字、联系人验证和前台焦点仍是强制安全门禁。
 
 ------
 

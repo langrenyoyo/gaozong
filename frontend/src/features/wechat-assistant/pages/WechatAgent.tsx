@@ -52,8 +52,6 @@ import type {
 import LocalWechatAgentTestPanel from "../components/LocalWechatAgentTestPanel";
 import ModuleTabs from "../../../components/ModuleTabs";
 
-const DEFAULT_TEST_NICKNAME = "Aw3";
-
 export type WechatAgentTab = "status" | "config" | "tasks" | "download-test";
 
 const TAB_META: Record<WechatAgentTab, { title: string; description: string }> = {
@@ -171,6 +169,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   const [savingStaff, setSavingStaff] = useState(false);
   const [staffActionId, setStaffActionId] = useState<number | null>(null);
   const [testing, setTesting] = useState(false);
+  const [testNickname, setTestNickname] = useState("");
   const [testMessage, setTestMessage] = useState("小高AI微信助手测试消息");
   const [advancedDiagnosticsOpen, setAdvancedDiagnosticsOpen] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -499,7 +498,12 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
   }
 
   async function handleRunTest() {
+    const nickname = testNickname.trim();
     const message = testMessage.trim();
+    if (!nickname) {
+      toast.warning("请填写测试销售微信昵称");
+      return;
+    }
     if (!message) {
       toast.warning("请填写测试内容");
       return;
@@ -522,7 +526,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 180000);
       const result = await startLocalWechatTest({
-        nickname: DEFAULT_TEST_NICKNAME,
+        nickname: testNickname.trim(),
         message,
         mode: "paste_only",
         engine: "easyocr",
@@ -999,10 +1003,11 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
               <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                 <input
                   aria-label="测试销售微信昵称"
-                  value={DEFAULT_TEST_NICKNAME}
-                  readOnly
-                  className="h-10 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600"
-                  placeholder="测试销售微信昵称"
+                  value={testNickname}
+                  onChange={(event) => setTestNickname(event.target.value)}
+                  maxLength={100}
+                  className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-300"
+                  placeholder="测试销售微信昵称，必填"
                 />
                 <input
                   aria-label="测试消息"
@@ -1016,7 +1021,7 @@ export default function WechatAgent({ activeTab = "status" }: { activeTab?: Wech
                 <div className="text-xs font-semibold text-slate-600">执行方式由任务模式决定；真实派单任务需通过联系人验证、前台焦点和安全门禁。</div>
                 <button
                   onClick={() => void handleRunTest()}
-                  disabled={testing || !testMessage.trim()}
+                  disabled={testing || !testNickname.trim() || !testMessage.trim()}
                   className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {testing ? <Loader2Icon size={14} className="animate-spin" /> : <PlayIcon size={14} />}
