@@ -11,7 +11,7 @@
 
 不使用固定模板绕过模型，不降低客户记忆、安全后处理、人工接管、频率、幂等和真实发送校验。
 
-**实施状态：** 阶段一“真实 Token 计量”与阶段二“商户流水解耦”已完成；阶段三、阶段四仍按本设计顺序待实施。阶段一已落地 PostgreSQL `0014`、SQLite `0033`、旧请求兼容、供应商用量优先、估算标记及抖音重试阶段独立入账。阶段二已落地商户公开 7 字段流水投影（`list_merchant_transactions`）、9000 与独立算力服务商户路由收敛、前端五列表格与字段白名单静态门禁，内部计量与诊断字段不再向普通商户公开。
+**实施状态：** 阶段一“真实 Token 计量”与阶段二“商户流水解耦”已完成；阶段三“管理员算力配置接入”已完成并推送；阶段四“提示词与重试优化”仍待执行。阶段一已落地 PostgreSQL `0014`、SQLite `0033`、旧请求兼容、供应商用量优先、估算标记及抖音重试阶段独立入账。阶段二已落地商户公开 7 字段流水投影（`list_merchant_transactions`）、9000 与独立算力服务商户路由收敛、前端五列表格与字段白名单静态门禁，内部计量与诊断字段不再向普通商户公开。阶段三已落地统一入口 `/admin/compute-config`、三视图、统一精确权限码与结构化审计日志，独立测试通过，最终合并提交 `417d68c0bda167a945f45279ec62a5eb1a950941` 已推送 master，生产宝塔验证未执行。
 
 ## 2. 当前事实
 
@@ -126,7 +126,7 @@
 
 ## 6. 阶段三：管理员算力配置接入
 
-> **当前状态（2026-07-17）：候选已实现、待独立测试。** 执行包 `COMPUTE-OPT-03-R3-ADMIN-CONFIG-20260717` 已落地候选提交链 `4aa3e44`（后端权限统一）+ `397e7c2`（前端单入口）+ `fa1d0c0`（文档）+ `ea6a5d9`（页面文案收敛）；COMPUTE-OPT-03 R1 修正 `test_9000_update_affects_new_usage_not_old_snapshot`（提交 `7ac4a7e`，改为从内部 `ComputeTransaction` 读取快照，不再走商户公开接口），后端 compute 冻结集（11 文件）`180 passed, 0 failed`（退出码 0）；前端静态合同与构建通过；浏览器视口矩阵与精确权限登录态验证标记 `BLOCKED_ENVIRONMENT`，留待测试窗口。详见 `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md` §9。未启动服务、未连宝塔、未进入生产验证。
+> **当前状态（2026-07-18）：独立测试通过、已推送，生产宝塔验证未执行。** 执行包 `COMPUTE-OPT-03-R3-ADMIN-CONFIG-20260717` 已落地候选提交链 `4aa3e44`（后端权限统一）+ `397e7c2`（前端单入口）+ `fa1d0c0`（文档）+ `ea6a5d9`（页面文案收敛）；COMPUTE-OPT-03 R1 修正 `test_9000_update_affects_new_usage_not_old_snapshot`（提交 `7ac4a7e`，改为从内部 `ComputeTransaction` 读取快照，不再走商户公开接口）；最终合并提交 `417d68c0bda167a945f45279ec62a5eb1a950941`（双父 `dc3d862` + `2b6f554`，解决 Index.tsx 冲突）已通过独立测试并推送 master。后端 compute 冻结集（11 文件）`180 passed, 0 failed`（退出码 0）；前端静态合同、构建与类型检查通过；Edge headless + CDP 纯文本 JSON 验收覆盖两视口、三视图、旧地址重定向、页面状态、四类成功操作和权限拒绝。生产宝塔验证未执行。详见 `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md` §9。
 
 ### 6.1 路由与导航
 
