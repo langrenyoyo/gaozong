@@ -571,8 +571,20 @@ for (const field of PUBLIC_FIELDS) {
   }
 }
 
-const PRIVATE_FIELDS = [
+const declaredFields = [
+  ...merchantTransactionType.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\??:/gm),
+].map((match) => match[1]);
+const missingFields = PUBLIC_FIELDS.filter((field) => !declaredFields.includes(field));
+const extraFields = declaredFields.filter((field) => !PUBLIC_FIELDS.includes(field));
+if (missingFields.length || extraFields.length) {
+  throw new Error(
+    `ComputeTransaction 字段必须精确等于 7 个公开字段；缺少：${missingFields.join(',') || '无'}；多余：${extraFields.join(',') || '无'}`,
+  );
+}
+
+const INTERNAL_FIELDS = [
   'merchant_id',
+  'tenant_id',
   'transaction_type',
   'delta_tokens',
   'balance_after_tokens',
@@ -584,14 +596,13 @@ const PRIVATE_FIELDS = [
   'actual_tokens',
   'capability_key',
   'markup_basis_points',
+  'usage_measurement_method',
+  'prompt_tokens',
+  'completion_tokens',
+  'cached_tokens',
+  'llm_call_stage',
 ];
-for (const field of PRIVATE_FIELDS) {
-  if (merchantTransactionType.includes(`${field}:`)) {
-    throw new Error(`ComputeTransaction 不得暴露内部字段：${field}`);
-  }
-}
-
-for (const access of PRIVATE_FIELDS.map((field) => `tx.${field}`)) {
+for (const access of INTERNAL_FIELDS.map((field) => `tx.${field}`)) {
   if (computeCenter.includes(access)) {
     throw new Error(`ComputeCenter 不得读取内部字段：${access}`);
   }
