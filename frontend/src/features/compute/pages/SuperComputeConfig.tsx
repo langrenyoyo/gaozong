@@ -553,7 +553,7 @@ export default function SuperComputeConfig() {
             </div>
           )}
           <div className="border-t border-[#e4e8f0] px-4 py-2.5 text-[11px] text-[#8b95a6]">
-            百分比接受非负整数或最多两位小数；转为基点后下发后端，不设产品上限，超技术边界由后端返回错误。
+            支持输入非负数，最多保留两位小数；数值过大时会提示重新填写。
           </div>
         </section>
           </>
