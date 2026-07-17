@@ -47,7 +47,7 @@ unknown_applied_versions 为空
 | `DY_CALLBACK_EVENTS` | 按测试事件订阅 | 明确订阅所需事件，通常含 `im_receive_msg,im_send_msg,im_enter_direct_msg` | 三类私信事件 | 事件缺失会影响线索、发送上下文或观察数据 |
 | `DY_LIVE_CHECK_FORWARD_TO_FORMAL` | 默认 `false`，只在联调时临时开启 | 默认应为 `false`；如开启必须保证签名头由可信上游传入 | `false` | 开启后会进入正式管线，必须保持验签和幂等边界 |
 | `DY_OAUTH_STATE_TTL_SECONDS` | 默认 900 秒 | 默认 900 秒，按业务窗口评估后再改 | `900` | 过长增加重放窗口，过短影响扫码授权体验 |
-| `DY_AUTH_REDIRECT_URL` | 指向 9000 `/integrations/douyin/live-check/auth-redirect` | 指向公网 9000 同一路由 | 空 | 指向 `/oauth-callback` 只会记录观察摘要，不会同步当前商户账号 |
+| `DY_AUTH_REDIRECT_URL` | 指向创建 OAuth state 的同一套 9000 `/integrations/douyin/live-check/auth-redirect` | `https://merchant.xiaogaoai.cn/api/integrations/douyin/live-check/auth-redirect` | 空 | 指向其他服务器会导致 state 与账号同步分离，授权永久 pending；指向 `/oauth-callback` 只观察不写库 |
 | `DY_AUTH_REDIRECT_FRONTEND_URL` | 配置本地或联调前端 origin | 配置生产可信前端 origin | 空，代码兜底固定安全 origin | 配错会导致授权完成后回不到前端 |
 | `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` | 显式列出本地和局域网 origin | 必须显式配置生产前端 origin；禁止 localhost、127.0.0.1、192.168.* | 空 | production 为空会拒绝跳转；误配内网地址会被拒绝 |
 | `DOUYIN_RESOURCE_ALLOWED_HOSTS` | 可为空，至少拦截内网和危险 scheme | 上线前建议确认抖音真实资源域名后显式配置 | 空 | 为空时没有域名白名单，只做协议和内网拦截 |
@@ -55,7 +55,7 @@ unknown_applied_versions 为空
 
 生产特别注意：
 
-1. `DY_AUTH_REDIRECT_URL` 必须指向 `/integrations/douyin/live-check/auth-redirect`，不得指向只观察不写库的 `/oauth-callback`。
+1. `DY_AUTH_REDIRECT_URL` 必须回到创建 OAuth state 的同一套 9000；当前生产值为 `https://merchant.xiaogaoai.cn/api/integrations/douyin/live-check/auth-redirect`。不得指向不同服务器上的 `callback.misanduo.com`，也不得指向只观察不写库的 `/oauth-callback`。
 2. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 必须显式配置真实可信前端 origin。
 3. `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 不得包含 `localhost`、`127.0.0.1`、`192.168.*`、`10.*`、`172.16.*` 到 `172.31.*` 等内网地址。
 4. `DOUYIN_RESOURCE_ALLOWED_HOSTS` 当前可为空，但上线前建议向抖音官方或实际回调样本确认资源域名后配置。
@@ -141,7 +141,7 @@ unknown_applied_versions 为空
 2. 确认 `DY_SECRET_KEY` 与抖音 webhook 签名密钥一致，且未提交到仓库。
 3. 确认 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS` 只包含生产可信前端 origin。
 4. 确认 `DY_AUTH_REDIRECT_FRONTEND_URL` 命中 `DY_AUTH_REDIRECT_ALLOWED_ORIGINS`。
-5. 确认 `DY_AUTH_REDIRECT_URL` 指向公网 9000 `/integrations/douyin/live-check/auth-redirect`。
+5. 确认 `DY_AUTH_REDIRECT_URL` 为 `https://merchant.xiaogaoai.cn/api/integrations/douyin/live-check/auth-redirect`，并与创建 OAuth state 的商户站 9000 使用同一数据库。
 6. 确认生产 `DY_CALLBACK_URL` 指向预期正式入口或观察入口，不混用历史调试地址。
 7. 确认 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=false`，除非现场需要临时观察并已确认签名头可用。
 8. 确认迁移 `0024_douyin_oauth_states` 已应用到目标库。

@@ -476,6 +476,19 @@ def test_douyin_oauth_templates_use_persisting_redirect_and_dev_compose_passes_r
     assert 'DY_LIVE_CHECK_ENABLED: "${DY_LIVE_CHECK_ENABLED:-false}"' in development
 
 
+def test_production_douyin_oauth_redirect_stays_with_merchant_api_state_store():
+    production = read(".env.production.example")
+
+    assert (
+        "DY_AUTH_REDIRECT_URL=https://merchant.xiaogaoai.cn/api/integrations/douyin/live-check/auth-redirect"
+        in production
+    )
+    assert (
+        "DY_CALLBACK_URL=https://callback.misanduo.com/integrations/douyin/live-check/webhook-observe"
+        in production
+    )
+
+
 def test_production_pg_scripts_default_to_production_local_env():
     script_paths = sorted(Path("scripts").glob("production_pg_*.sh"))
     assert script_paths

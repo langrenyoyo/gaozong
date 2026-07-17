@@ -12,11 +12,13 @@
 | `DY_GMP_SECRET_KEY` | 主动调用 OpenAPI 的签名密钥 |
 | `DY_MAIN_ACCOUNT_ID` | 火山主账号 ID |
 | `DY_ACCOUNT_NAME` | 火山账号名称 |
-| `DY_AUTH_REDIRECT_URL` | 授权成功后的 302 回跳地址，必须指向 9000 `/integrations/douyin/live-check/auth-redirect`；`oauth-callback` 仅观察不写库 |
+| `DY_AUTH_REDIRECT_URL` | 授权成功后的 302 回跳地址，必须回到创建 OAuth state 的同一套 9000；当前生产值为 `https://merchant.xiaogaoai.cn/api/integrations/douyin/live-check/auth-redirect`；`oauth-callback` 仅观察不写库 |
 | `DY_CALLBACK_URL` | 抖音私信事件回调地址 |
 | `DY_CALLBACK_EVENTS` | 回调事件列表，逗号分隔 |
 
 `DY_OPENAPI_BASE_URL + DY_OPENAPI_PREFIX` 优先级高于旧 `DY_BASE_URL`。
+
+OAuth 授权回跳与私信事件回调是两条独立链路：`DY_AUTH_REDIRECT_URL` 必须回到商户站 9000，以便在同一数据库消费 state 并同步账号；`DY_CALLBACK_URL` 继续使用既有事件回调域名，不随 OAuth 回跳迁移。
 
 ## 签名规则
 
