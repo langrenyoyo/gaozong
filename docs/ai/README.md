@@ -29,6 +29,8 @@ docs/ai/04_OUTPUT_RULES.md
 
 三权分离模块已接入但默认关闭；安装不等于任务启用。每项任务仍按 L0～L3 逐项判定，只有任务决定启用后才按需读取角色 Prompt，不加入默认 Required Reading。
 
+工作流模块内提到的 `Install-AICodingRule.ps1` 属于 AICoding-RULE 基线仓库；本项目不提供该安装脚本，也不以该脚本作为任务启用入口。
+
 | 入口 | 用途 |
 |---|---|
 | `workflows/three-authority-vibecoding/README.md` | 三权分离总入口、角色边界和标准流程 |
