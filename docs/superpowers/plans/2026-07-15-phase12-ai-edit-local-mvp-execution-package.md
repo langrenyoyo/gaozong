@@ -1,13 +1,9 @@
 # Phase 12 AI剪辑本地 MVP 实施计划（Implementation Plan）
 
-> 冻结快照 / 基础 MVP 历史追溯用，非 Task 12 当前施工蓝图。
+> **状态：`FROZEN_BY_CUSTOMER`（2026-07-18）。** 本文件只用于基础 MVP 历史追溯，不是当前施工蓝图；不得继续执行、复测、构建、分发或生产验证。甲方书面指示只是恢复前提，仍须基于届时主线重新探索、规划和审批。
 >
 > 本计划已于 2026-07-16 完成，正文保留当时的平台素材和回收站合同以解释现有代码来源；
-> 后续素材库增强必须以
-> `docs/superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md`
-> 的私有素材单视图规格为准，不得继续执行本文未勾选项或把本文当新执行包。
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 已落地代码、迁移、数据、测试和历史报告保留，不删除、不回退。
 
 **Goal:** 在 `auto_wechat` 中迁入“小高素材库 + AI 小高剪辑”本地 MVP，让商户在安装小高AI微信助手的同一台 Windows 电脑完成素材导入、分析、可选增稳、模拟 AI 规划、轻量调整、720P 预览和 1080P 成片。
 
@@ -15,7 +11,7 @@
 
 **Tech Stack:** FastAPI、SQLAlchemy、SQLite 顺序迁移、PostgreSQL Alembic、React + TypeScript + Vite、PyInstaller、Python 3.11 Worker、FFmpeg/ffprobe、Vid.Stab、FunASR、PySceneDetect、OpenCV、YOLO、open_clip。
 
-**计划状态：** `DONE_WITH_CONCERNS`（2026-07-16 检查点 C 三方 PASS）。唯一 concern `baota_ai_edit_production_not_verified`。
+**历史计划状态：** `DONE_WITH_CONCERNS`（2026-07-16 检查点 C 三方 PASS）。当前状态以页首 `FROZEN_BY_CUSTOMER` 为准。
 
 ---
 
@@ -860,17 +856,19 @@ cd ..
 git diff --check
 ```
 
-- [ ] **Step 5: 执行本地真实素材人工验收**
+- [ ] **Step 5: 执行本地真实素材人工验收（FROZEN_BY_CUSTOMER，禁止执行）**
 
 在普通 Windows CPU 测试电脑上通过 UI 选择已授权汽车口播 MP4，完成导入、分析、可选增稳、9100 替身规划、轻量调整、720P 预览、1080P 成片和下载。确认原文件哈希不变、取消有效、重启可恢复。不得连接宝塔或真实付费模型。
 
 - [x] **Step 6: 同步文档状态**（2026-07-16 检查点 C 三方 PASS）
 
+以下为 2026-07-16 的历史状态快照，不是当前执行结论：
+
 ```text
 Phase 12 代码与本地/模拟闭环：DONE
 Phase 12：DONE_WITH_CONCERNS
 唯一 concern：baota_ai_edit_production_not_verified
-宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
+历史宝塔生产验证：NOT_STARTED（现已冻结）
 检查点 C：Spec/Code Quality/Security 三方 PASS
 提交链：47444b5→8b9f76c→0b6d00c（FIX4/FIX5/FIX6 累计闭合 8 项 Must-Fix）
 Phase 12 全套：255 passed / 2 skipped
@@ -888,28 +886,28 @@ Phase 12 全套：255 passed / 2 skipped
 - 本地素材不泄露，商户隔离、路径安全、取消、恢复和媒体强门有效。
 - 前端不造假、不重叠，双分辨率真实产物可用。
 
-三方 PASS 后 Phase 12 才可标记 `DONE_WITH_CONCERNS`。当前按用户指令先执行 Task 11 甲方测试专用单入口 EXE，再决定是否进入 Phase 13；不得提前启动宝塔验证。
+三方 PASS 后 Phase 12 曾标记为 `DONE_WITH_CONCERNS`。自 2026-07-18 起 AI剪辑为 `FROZEN_BY_CUSTOMER`，不得继续 Task 11/12、人工验收或宝塔验证。
 
 ---
 
-## Task 11：甲方测试专用单入口 EXE（内部双运行时）
+## Task 11：甲方测试专用单入口 EXE（历史记录，禁止复测或分发）
 
-检查点 C 已于 2026-07-16 三方 PASS，Task 11 允许启动。详细任务与最终验收只以以下独立执行包为准：
+检查点 C 已于 2026-07-16 三方 PASS，Task 11 随后完成。原启动授权已失效，详细任务只作为历史追溯：
 
 ```text
 docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md
 ```
 
-当前状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，EXE 已用 API `https://merchant.xiaogaoai.cn/api`、前端地址和商户 ID 重建；CArchive 配置、CORS/PNA 预检、19000 鉴权三态、9 路由注册、单 App 初始化与进程树退出通过。旧包已在干净虚拟机暴露边界问题，修复后的新包待重新复制复测。
+历史状态为 `BUILT_FOR_CUSTOMER_TEST`。Task 11-1~11-3 已完成，EXE 已用 API `https://merchant.xiaogaoai.cn/api`、前端地址和商户 ID 重建；CArchive 配置、CORS/PNA 预检、19000 鉴权三态、9 路由注册、单 App 初始化与进程树退出通过。该包不再复制复测、重建、升级或分发。
 
-冻结口径：
+历史构建口径：
 
 ```text
 甲方最终文件：小高AI系统测试版.exe（SHA-256 只写入构建报告）
 内部结构：外层控制进程 + Local Agent Python 3.10 + 按任务启动的 AI剪辑 Worker Python 3.11；两个业务子进程隔离
 测试包禁入：EasyOCR/PyTorch/torchvision/OpenCV/Pillow/FunASR/YOLO/open_clip/模型权重/字体
 正式客户安装包：NOT_BUILT
-宝塔生产验证：NOT_STARTED，Phase 13 后统一执行
+历史宝塔生产验证：NOT_STARTED（现已冻结）
 ```
 
-Task 11 构建并完成真实 smoke 后状态为 `BUILT_FOR_CUSTOMER_TEST`，直接回传结果；Phase 13 与宝塔生产验证仍不得提前启动。
+Task 11 的历史构建状态保留为 `BUILT_FOR_CUSTOMER_TEST`；当前冻结状态优先，不得继续任何后续动作。

@@ -1,10 +1,10 @@
 # 小高AI系统一期 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **执行边界：** 本文件不直接授权开工；只能执行另行获批且未标记为 `FROZEN_BY_CUSTOMER` / `CANCELLED_BY_CUSTOMER` 的阶段。
 
-**Goal:** 在 `auto_wechat` 中完成小高AI系统一期扩展：抖音AI客服自动回复闭环、线索与留资口径、微信助手真实派单与日报、违禁词、回访提示词、AI回复记录、算力配置，以及“小高素材库 + AI 小高剪辑”本地 MVP。
+**Goal:** 在 `auto_wechat` 中完成当前未冻结的一期扩展：抖音AI客服自动回复闭环、线索与留资口径、微信助手真实派单与日报、违禁词、回访提示词、AI回复记录和算力配置。AI剪辑历史成果保留但已冻结，一键过审已取消。
 
-**Architecture:** `auto_wechat` 9000 继续作为控制面，负责登录态消费、权限、商户隔离、任务持久化、审计和前端 API；9100 `apps/xg_douyin_ai_cs` 保持抖音AI客服/RAG/LLM 独立服务；19000 Local Agent 除本机微信 UI 自动化外，新增本地素材与剪辑任务协调，但重型媒体处理固定由随包 Python 3.11 `ai_edit_worker.exe` 子进程执行。`douyinAPI`、`auto_edit` 和 BrollStudio 只作为迁移来源，不作为长期生产依赖。
+**Architecture:** `auto_wechat` 9000 继续作为控制面，负责登录态消费、权限、商户隔离、任务持久化、审计和前端 API；9100 `apps/xg_douyin_ai_cs` 保持抖音AI客服/RAG/LLM 独立服务；19000 Local Agent 负责本机微信 UI 自动化。AI剪辑协调和 Worker 只作为已冻结历史能力保留，`douyinAPI`、`auto_edit` 和 BrollStudio 不得成为新的迁入或运行时依赖。
 
 **Tech Stack:** FastAPI、SQLAlchemy、PostgreSQL 目标迁移、SQLite 开发兼容、React + TypeScript + Vite、Local Agent Windows UI Automation/OCR、Milvus/RAG、抖音 OpenAPI、Excel 导出。
 
@@ -25,7 +25,7 @@
 9. 回访提示词：全局 3 类模板，微信销售回复触发 LLM/关键字判断，再发抖音回访私信。
 10. AI 回复记录：展示 AI 实发内容 `DouyinPrivateMessageSend.content`，与 `AiReplyDecisionLog` 关联，支持超管标记有效。
 11. 一键过审：客户已取消（`CANCELLED_BY_CUSTOMER`）；保留历史代码和兼容字段，不继续实施。
-12. AI 剪辑：迁入 `auto_edit` 剪辑内核和 BrollStudio 自动增稳能力，交付“小高素材库 + AI 小高剪辑”本地 MVP；19000 监管随包剪辑子进程，素材默认本地保存。
+12. AI 剪辑：`FROZEN_BY_CUSTOMER`；已落地基础 MVP 和历史测试包保留，但不继续开发、测试、构建、分发或生产验证。
 13. 自动发送放开：删除旧硬门禁，但保留违禁词、人工接管、限频、失败回写、幂等、紧急停止等运行保护。
 14. 上游边界：登录、商户管理、管理员账号、功能授权在 NewCarProject/used-car，不在 auto_wechat 重建。
 15. 前端旧口径清理：移除 `auto_send=false`、`sent=false`、假数据、假 CRUD、回复建议等旧文案。
@@ -39,7 +39,7 @@
 - 不绕过微信前台焦点、联系人校验、OCR/置信度保护、紧急停止。
 - 不让违禁词命中阻断发送；一期统一替换后继续发送。
 - 不做真实支付，充值订单保持 Mock。
-- 不让 AI剪辑直接发布抖音，不做远程设备控制、商户间素材共享或完整多轨编辑器。
+- AI剪辑冻结期间不恢复入口、任务、Worker、素材闭环、测试或发布。
 
 ---
 
@@ -566,11 +566,13 @@
 
 ---
 
-### Phase 12: 小高素材库与 AI 小高剪辑本地 MVP
+### Phase 12: 小高素材库与 AI 小高剪辑本地 MVP（FROZEN_BY_CUSTOMER）
 
-**目的:** 将 `auto_edit` 剪辑内核和 BrollStudio 自动增稳能力迁入本仓库，在安装小高AI微信助手的同一台 Windows 电脑完成真实可操作的本地剪辑闭环。
+**当前状态（2026-07-18）:** 甲方要求停止 AI剪辑开发。Task 12、测试包复测/重建/分发、正式打包和生产验证全部冻结。甲方书面指示只是恢复前提，仍须基于届时主线重新探索、规划和审批。以下已勾选步骤只记录历史完成事实，未完成或后续事项均不得继续执行。
 
-**冻结设计:** `docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`
+**历史目的:** 将 `auto_edit` 剪辑内核和 BrollStudio 自动增稳能力迁入本仓库，在安装小高AI微信助手的同一台 Windows 电脑完成真实可操作的本地剪辑闭环。
+
+**历史设计:** `docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`
 
 - [x] **Step 1: 数据、权限与迁移**
   - 扩展现有 AI剪辑任务/产物壳，增加素材、分析、模板和任务素材关系。
@@ -594,14 +596,14 @@
 
 - [x] **Step 6: 本地/模拟验收**
   - 自动化测试零真实外部网络；使用合成媒体覆盖媒体链路。基础 MVP Task 10-FIX1~FIX6 已闭合，检查点 A/B/C 均 PASS；Task 12 私有素材增强另按新检查点执行，不继承基础 MVP 的通过结论。
-  - 使用获授权真实汽车素材在普通 Windows CPU 电脑完成单任务闭环，9100 使用替身。（留 Phase 13 后真实 ffmpeg/Worker 联调执行，归入 `baota_ai_edit_production_not_verified` concern。）
-  - 宝塔、生产数据库和真实付费模型统一留到 Phase 13 后验证。
+  - 使用获授权真实汽车素材在普通 Windows CPU 电脑完成单任务闭环，9100 使用替身。（历史未完成的真实 ffmpeg/Worker 联调已冻结。）
+  - 宝塔、生产数据库和真实付费模型验证均已冻结。
 
 - [x] **Step 7: 甲方测试专用单入口 EXE 交付**
   - 检查点 C 通过后已构建单文件 `小高AI系统测试版.exe`；甲方只接收和启动一个文件，内部继续保持 Local Agent/Worker 双运行时和双进程隔离。
   - 当前 EXE 使用真实测试 API `https://merchant.xiaogaoai.cn/api`、前端 `https://merchant.xiaogaoai.cn/` 和商户 `m_nc_2bba00063cc13016`，SHA-256 见 Task 11 交付报告。
   - 按用户决定，Task 11 测试包不执行许可证、Defender、archive 或 FFmpeg buildconf 门禁；正式客户安装包仍未构建。
-  - 宝塔生产验证继续留到 Phase 13 完成后统一执行；修复后的测试包待重新复制到干净虚拟机复测。
+  - 宝塔生产验证和干净虚拟机复测均已冻结；测试包只保留历史证据，不再重建、升级或分发。
 
 ---
 
@@ -628,7 +630,7 @@
 - [ ] **Step 2: 更新入口**
   - 商户默认进抖音AI客服。
   - 超管默认进 AI回复记录。
-  - 小高素材库和 AI 小高剪辑位于 `auto_wechat:ai_edit` 能力中心；不展示已取消的一键过审入口。
+  - 隐藏 AI剪辑和已取消一键过审入口；保留历史权限码和代码，不删除数据。
 
 - [ ] **Step 3: 工具栏补齐**
   - 表情至少支持插入文本表情。
@@ -652,7 +654,7 @@
 | 微信派单 | `pytest tests/test_p0_5a_wechat_tasks.py tests/test_lead_notifications.py -v` |
 | 数据迁移 | `pytest tests/test_xiaogao_phase1_schema.py tests/test_db_migration_0001.py -v` |
 | 算力 | `pytest tests/test_compute_service.py tests/test_compute_usage_client.py -v` |
-| AI剪辑 | 按 Phase 12 逐任务执行包运行素材、任务、19000、Worker、媒体和前端专项测试 |
+| AI剪辑 | `FROZEN_BY_CUSTOMER`，冻结期间不运行专项测试或复测历史测试包 |
 | 前端 | `cd frontend && npm run build` |
 | UI 合同 | `node frontend/scripts/check-xiaogao-phase1-ui-contract.mjs` |
 | 全量回归 | `pytest` |
@@ -668,7 +670,7 @@
 5. 违禁词替换服务出现误替换时，可禁用对应词或词库；发送链路继续可人工接管。
 6. 日报发送失败不影响数据持久化，可从 `daily_report_jobs` 人工重新生成或重发。
 7. 一键过审已取消，不进入新的发布或验证流程。
-8. AI剪辑按控制面、19000 协调层和随包 Worker 分层关闭；回滚不得删除原素材或已确认成片。
+8. AI剪辑当前无新发布或回滚动作；冻结不得删除原素材、已确认成片、代码、迁移或数据。
 
 ---
 
@@ -683,7 +685,7 @@
 7. 每日 5 类报表可由 SQL 今日数据生成 Excel，并按配置发送。
 8. 小高算力套餐、Mock 充值、上浮比例、模型埋点可用。
 9. 一键过审保持 `CANCELLED_BY_CUSTOMER`，不作为一期验收项。
-10. 小高素材库和 AI 小高剪辑可在同机完成本地导入、分析、可选增稳、模拟规划、720P 草稿、轻量调整、1080P 成片和下载。
+10. AI剪辑不作为当前验收项；历史基础 MVP 结论保留，冻结期间不复测。
 11. 商户管理、管理员账号管理不在 auto_wechat 出现假 CRUD。
 12. 前端没有旧门禁文案和“回复建议不会发送”口径。
 
@@ -698,9 +700,7 @@
 3. `phase1-douyin-auto-reply`
 4. `phase1-wechat-feedback-reports`
 5. `phase1-compute`
-6. `phase1-ad-review`
-7. `phase1-ai-edit-boundary`
-8. `phase1-frontend-contract`
+6. `phase1-frontend-contract`
 
 每个分支合并前必须至少完成对应阶段的专项测试和前端构建。
 
@@ -779,7 +779,7 @@ Code Quality Reviewer 结论：
 5. Phase 8 日报依赖 Phase 7 的销售反馈结构化数据。
 6. Phase 9 回访闭环依赖 Phase 2、Phase 3、Phase 7。
 7. Phase 11 一键过审已由客户取消，不恢复执行。
-8. Phase 12 基础 MVP 已完成；Task 12 按私有素材单视图、自动分析、商户私有云端上传和内部 7 天清理规格继续，完成后进入 Phase 13 前端总收口，再统一制定宝塔生产验证执行包。
+8. Phase 12 基础 MVP 的完成结论保留，但 AI剪辑当前为 `FROZEN_BY_CUSTOMER`；Task 12、测试包复测/分发和生产验证不得继续，恢复必须等待甲方新的书面指示并重新审批。
 
 ### 审批判定
 

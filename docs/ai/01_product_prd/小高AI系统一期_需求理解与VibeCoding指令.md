@@ -5,7 +5,7 @@
 > **生效日期**：2026-07-09
 > **性质**：一期需求已冻结，本文档为权威理解。当本文档与 CLAUDE.md 旧约束冲突时，**以本文档为准**（见第 8 章「已推翻的旧约束」）。
 >
-> **2026-07-10 修订**：按一期确认结果同步范围：AI剪辑、一键过审纳入小高AI系统一期。AI剪辑由 `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` 仓库；一键过审复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI`。本文档若与 `CLAUDE.md` 旧口径冲突，以本次确认后的一期计划为准。
+> **2026-07-18 范围勘误**：AI剪辑已按甲方要求暂停开发（`FROZEN_BY_CUSTOMER`），一键过审已由客户取消（`CANCELLED_BY_CUSTOMER`）。两者的既有代码、迁移、数据、测试和历史记录保留，但不得继续开发、复测、重建、分发或生产验证；本文后续相关细节仅用于解释历史需求，不再构成施工指令。甲方新的书面指示只是 AI剪辑恢复前提，仍须基于届时主线重新探索、规划和审批。
 
 ---
 
@@ -31,10 +31,10 @@
 | 抖音企业号管理 | 9000 auto_wechat | 企业号授权+绑定 |
 | AI小高助手（微信代理） | 9000 + 19000 Local Agent | 微信自动化 |
 | 小高算力 | 9000 auto_wechat | Token 账户/消耗/套餐 |
-| AI剪辑 | `auto_edit` → 后续迁入 auto_wechat | 先独立完成，迁入后保持模块边界 |
-| 一键过审 | 9000 auto_wechat | 复制改造 douyinAPI 现有实现，运行时解耦 |
+| AI剪辑 | auto_wechat 历史能力 | `FROZEN_BY_CUSTOMER`；书面恢复指示后仍须重新探索、规划和审批 |
+| 一键过审 | 9000 auto_wechat 历史能力 | `CANCELLED_BY_CUSTOMER`，保留历史代码和兼容字段 |
 
-> ⚠️ **范围澄清**：一期包含 AI剪辑和一键过审，但不把外部仓库作为长期生产依赖。`auto_edit` 先由同事独立完成，后续迁入本仓库；`douyinAPI` 只作为一键过审 OAuth、拒审建议和采纳能力的复制改造来源。
+> ⚠️ **范围澄清**：AI剪辑当前冻结，一键过审已取消。外部仓库和历史设计只允许追溯，不得作为恢复施工、运行时依赖或发布依据。
 
 ---
 
@@ -63,8 +63,8 @@
 ```
 
 **外部资源**：
-- `E:\work\project\douyinAPI`：一键过审参考实现，复制改造 OAuth、拒审建议和采纳能力后，auto_wechat 运行时不依赖该项目。
-- `E:\work\project\auto_edit`：AI剪辑先行实现来源，后续源码迁入 `auto_wechat` 仓库并保持独立模块边界。
+- `E:\work\project\douyinAPI`：一键过审历史参考实现；该能力已取消，不得继续复制改造。
+- `E:\work\project\auto_edit`：AI剪辑历史迁入来源；冻结期间只读，不得继续迁入或形成运行时依赖。
 - `E:\work\project\react_base_back`：前端 UI 参考（算力页 ComputeCenter.tsx）。
 
 ---
@@ -125,7 +125,7 @@ auto_wechat:douyin_ai_cs                抖音AI客服（2.2）
 auto_wechat:leads                       线索（2.3）
 auto_wechat:agent                       智能体(2.4) + 微信助手(2.6) 共用
 auto_wechat:compute                     算力（2.7）
-auto_wechat:ai_edit                     AI剪辑与一键过审共用入口权限
+auto_wechat:ai_edit                     AI剪辑历史兼容入口权限（当前冻结，不得恢复入口）
 auto_wechat:admin:autoreply             自动回复管理
 auto_wechat:admin:ai_reply_records      AI回复记录（3.4）
 auto_wechat:admin:compute_config        算力配置（3.5）
@@ -155,8 +155,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 2.5 企业号 | ✅已有 | 9000 | 补列表展示字段 |
 | 2.6 微信助手 | ⚠️改造 | 9000+19000 | 放开自动发送+规则勘误+SalesStaff改造 |
 | 2.7 算力 | ✅后端已实现 | 9000 | FE-1+支付mock+3套餐seed+上浮比例 |
-| 一键过审 | 🆕迁入 | 9000 | 复制改造 douyinAPI，运行时解耦 |
-| AI剪辑 | 🆕迁入预留 | auto_edit → auto_wechat | 先独立完成，后续源码迁入 |
+| 一键过审 | 客户取消 | 9000 | 保留历史代码和兼容字段，不恢复执行 |
+| AI剪辑 | 甲方冻结 | auto_wechat | 保留既有成果，停止后续开发、测试和发布 |
 | 3.1 商户管理 | ⛔上游 | used-car | 仅充值/发放套餐跨调 |
 | 3.2 违禁词 | 🆕全新 | 9000 | 词库→违禁词→安全词，替换后仍发 |
 | 3.3 回访提示词 | 🆕全新 | 9000 | 微信→抖音回访闭环 |
@@ -303,8 +303,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | `compute_markup_ratios`（新） | 按 6 功能模块的上浮比例 | 3.5 |
 | `compute_packages` | 写入 3 个 seed（不强制，可初始化脚本） | 2.7/3.5 |
 | `douyin_authorized_accounts` | 删除时 `douyin_account_agent_bindings` 级联处理 | 2.5 |
-| `ad_review_*` | 一键过审 OAuth、建议快照和采纳任务 | 一键过审 |
-| `ai_edit_jobs` / `ai_edit_job_artifacts` | AI剪辑迁入后的任务壳和产物映射 | AI剪辑 |
+| `ad_review_*` | 已取消一键过审的历史表，保留不回退 | 一键过审历史兼容 |
+| `ai_edit_jobs` / `ai_edit_job_artifacts` | 已落地 AI剪辑任务壳和产物映射，冻结期间不继续扩展 | AI剪辑历史兼容 |
 
 ---
 
@@ -317,7 +317,7 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 抖音客服仅输出回复建议 | **抖音侧放开自动发送**，触发条件为企业号绑定智能体并开启 AI 托管 |
 | 9100 reply_suggestion 调试入口作为用户功能 | **一期移除**，保留内部兼容不作为用户主链路 |
 | 微信助手只做粘贴验证 | **微信侧放开自动发送**，但必须走联系人验证和运行保护 |
-| AI剪辑与一键过审排除在本轮范围外 | **一期纳入**，AI剪辑迁入预留，一键过审复制改造 douyinAPI |
+| AI剪辑与一键过审曾纳入一期 | **当前已失效**：AI剪辑 `FROZEN_BY_CUSTOMER`，一键过审 `CANCELLED_BY_CUSTOMER` |
 
 **配套必须**（放开自动发送后强制）：违禁词过滤、人工接管降级、限频、失败回写、幂等、紧急停止。
 
@@ -341,8 +341,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 - 2.2 移除 reply_suggestion + 放开自动发送
 - 2.6 微信助手重构 + 5 个规则字段
 - 3.4 AI回复记录（实发展示 + is_effective/model）
-- 一键过审复制改造 douyinAPI 实现
-- AI剪辑等待 auto_edit 迁入后接真实任务
+- 一键过审不得恢复开发；历史实现只供追溯
+- AI剪辑停止迁入、真实任务、复测、重建、分发和生产验证；书面恢复指示后仍须重新审批
 
 ### 阶段 4 · 前端 + 埋点
 - FE-1 算力页（参考 ComputeCenter.tsx）
@@ -360,8 +360,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 3.3 微信→抖音回访闭环 | **一期需跑通简化版**（LLM + 关键字兜底） |
 | 3.5 上浮比例粒度 | 按**功能模块（6 能力）** |
 | 2.5 抖音号数字 ID | **抖音不返回**，前端隐藏/占位 |
-| AI剪辑 | `auto_edit` 先独立完成，后续源码迁入 `auto_wechat` |
-| 一键过审 | 复制改造 `douyinAPI` 现有实现，运行时不依赖 `douyinAPI` |
+| AI剪辑 | `FROZEN_BY_CUSTOMER`；保留既有成果，书面恢复指示后仍须重新探索、规划和审批 |
+| 一键过审 | `CANCELLED_BY_CUSTOMER`；不恢复执行 |
 
 ---
 
@@ -373,8 +373,8 @@ auto_wechat:admin:return_visit_prompts  回访提示词（3.3）
 | 权限码全貌 | `frontend/src/features/capabilities.ts` | 功能授权映射 |
 | 能力网关 | `app/routers/capability_gateway.py` | 6 能力健康检查 |
 | 算力服务 | `app/routers/compute.py` + `apps.compute.services` | 余额/消耗/套餐 |
-| 过审 OAuth 参考 | `E:\work\project\douyinAPI\app.py` | 一键过审 OAuth、拒审建议和采纳能力参考 |
-| AI剪辑迁入来源 | `E:\work\project\auto_edit` | 先独立完成，后续源码迁入 auto_wechat |
+| 过审 OAuth 历史参考 | `E:\work\project\douyinAPI\app.py` | 已取消能力的追溯资料，不得继续实现 |
+| AI剪辑历史迁入来源 | `E:\work\project\auto_edit` | 冻结期间只读，不得继续迁入 |
 | 算力页 UI | `E:\work\project\react_base_back\src\pages\ComputeCenter.tsx` | FE-1 参考 |
 | 项目记忆 | `C:\Users\A\.claude\projects\e--work-project-auto-wechat\memory\xg-phase1-*.md` | 9 条一期决策详情 |
 

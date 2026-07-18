@@ -1,8 +1,9 @@
 # Phase 12 Task 11 单入口测试 EXE 交付报告
 
-> **状态：** `BUILT_FOR_CUSTOMER_TEST`
+> **当前状态：** `FROZEN_BY_CUSTOMER`（2026-07-18），禁止复测、重建、升级或继续分发
+> **历史构建状态：** `BUILT_FOR_CUSTOMER_TEST`
 > **交付物：** `小高AI系统测试版.exe`（仅此一个文件）
-> **执行窗口：** 基于 `b4779ae`（解除 Task 11 开发与构建门禁），使用 executing-plans 直接完成 Task 11-1~11-3，不设中间检查点、许可证审查、构建审批或发送审批。
+> **历史执行窗口：** 基于 `b4779ae` 完成 Task 11-1~11-3；该授权已失效，正文仅供追溯
 
 ## 1. 最终交付
 
@@ -92,9 +93,9 @@ AI剪辑路由 + 微信自动化冻结基线：105 passed
 - 真实 ASR / 视觉分析未接入：Worker `_analyze` 返回空转写，`_plan` 仅 keep 主素材区间；增稳 `stabilize_enabled=False`。一期 AI 剪辑 smoke 只验证 ffmpeg 渲染链（720P/1080P 合成 + 音频），不验证智能剪辑决策。
 - 测试 API / 前端 URL 已为真实值（`https://merchant.xiaogaoai.cn/api` / `https://merchant.xiaogaoai.cn/`，商户 `m_nc_2bba00063cc13016`），烘焙进 EXE 经 CArchive 提取确认。
 - 不含安装器、自动更新、卸载器、系统服务（计划 §2 明确不新增）。
-- 旧包已在干净虚拟机暴露 CORS/PNA、错误 API 基址和商户 token 绑定问题；当前新包已在开发机以打包后内部 EXE 完成 GET/DELETE 预检、鉴权三态、9 路由、真实 Worker+FFmpeg 和离线 OCR 验证，仍需重新复制到干净虚拟机做最终零安装复测。
+- 旧包已在干净虚拟机暴露 CORS/PNA、错误 API 基址和商户 token 绑定问题；当前新包已在开发机以打包后内部 EXE 完成 GET/DELETE 预检、鉴权三态、9 路由、真实 Worker+FFmpeg 和离线 OCR 验证。干净机最终复测是冻结前尚未完成的历史缺口，当前禁止继续执行。
 - **未进入 Phase 13、未做宝塔生产验证**（本轮硬约束）。
 
 ## 6. 结论
 
-`BUILT_FOR_CUSTOMER_TEST` —— `小高AI系统测试版.exe` 已用带 `/api` 的真实测试 API、前端地址与商户 ID 重建；CArchive 配置和 OCR 模型提取、`/health`、公网前端 GET/DELETE CORS/PNA 预检、19000 鉴权三态、9 路由、真实 Worker+FFmpeg、EasyOCR 预热与端口释放均通过。token 不入包，干净电脑不再依赖开发环境 token 映射，Worker 凭据隔离保持生效；新包仍需在干净虚拟机复测。
+历史构建结论为 `BUILT_FOR_CUSTOMER_TEST`：`小高AI系统测试版.exe` 已用带 `/api` 的真实测试 API、前端地址与商户 ID 重建；CArchive 配置和 OCR 模型提取、`/health`、公网前端 GET/DELETE CORS/PNA 预检、19000 鉴权三态、9 路由、真实 Worker+FFmpeg、EasyOCR 预热与端口释放均通过。token 不入包，干净电脑不再依赖开发环境 token 映射，Worker 凭据隔离保持生效。冻结期间不得继续干净机复测、重建、升级或分发。

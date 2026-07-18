@@ -1,16 +1,18 @@
 # AI 剪辑 Worker 第三方许可证清单
 
+> **状态：`FROZEN_BY_CUSTOMER`（2026-07-18）。** 当前不构建或分发 AI剪辑 Worker；本清单只保留历史合规信息。
+>
 > 冻结设计：`docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md` §12.2。
 > 执行包：`docs/superpowers/plans/2026-07-15-phase12-ai-edit-local-mvp-execution-package.md` Task 8 Step 3。
 > Task 11 测试交付执行包：`docs/superpowers/plans/2026-07-16-phase12-task11-single-entry-test-exe-execution-package.md`。
 
-## 分发门禁
+## 历史分发门禁（冻结期间不执行）
 
-**缺少可分发依据时禁止形成客户安装包。** 本清单覆盖随 `ai_edit_worker.exe` 分发的全部第三方二进制与权重。源码级本地测试不阻塞，但对外交付前必须逐项确认下列组件的许可证允许随包分发，并在 `scripts/build_ai_edit_worker_exe.ps1` 构建时校验许可证文件存在。
+冻结期间源码测试、构建和分发全部停止。以下内容只记录恢复前必须重新审查的历史合规要求，不构成当前测试、构建或交付授权。
 
-未完成权属审查或许可证缺失的组件，不得打包进客户安装目录 `dist/local-agent`。
+即使未来收到甲方书面恢复指示，也必须重新审批权属和许可证后才能形成客户安装包。
 
-## Task 11 甲方测试包口径
+## Task 11 甲方测试包历史口径
 
 按用户决定，本清单仅保留为参考，不作为 Task 11 开发、构建或测试交付门禁。Task 11 构建脚本不得读取 `LICENSE_CONFIRMED.txt`，也不要求许可证文件、组件映射、FFmpeg 构建信息、archive 扫描或安全软件扫描；最终只交付 `小高AI系统测试版.exe`。
 
@@ -65,7 +67,7 @@
 - 用途：Worker 字幕烧录，依赖预检确定字体，不依赖宿主机字体
 - 分发依据：OFL/免费授权字体可分发，附字体许可证文本；商用收费字体不可随包分发
 
-## 校验要求
+## 历史校验要求（冻结期间不执行）
 
 正式脚本 `scripts/build_ai_edit_worker_exe.ps1` 当前只强制校验：
 
@@ -78,7 +80,7 @@ Task 11 使用独立单入口构建脚本，不调用本节正式安装包校验
 
 缺任一项 → `throw` 明确失败，禁止形成客户安装包。
 
-## 权属审查状态（2026-07-15）
+## 历史权属审查状态（2026-07-15）
 
 - FFmpeg/libvidstab/libx264：所选构建包含 GPL 组件时整体按 GPL 分发；须附 GPL 文本、构建信息和源码获取说明（待 Task 11 实际构建证据确认）。
 - PyTorch：BSD 3-Clause 可分发。
@@ -87,4 +89,4 @@ Task 11 使用独立单入口构建脚本，不调用本节正式安装包校验
 - open_clip 代码：MIT 可分发；权重协议待确认。
 - 字体：待选定具体字体并确认协议。
 
-**结论：截至 2026-07-16，正式客户安装包仍为 `NOT_BUILT`，原因是尚未启动正式安装包任务，不再以本清单作为 Task 11 构建阻断。Task 11 已用真实测试端点重建，状态为 `BUILT_FOR_CUSTOMER_TEST`。**
+**历史结论：截至 2026-07-16，正式客户安装包为 `NOT_BUILT`，Task 11 历史构建状态为 `BUILT_FOR_CUSTOMER_TEST`。当前状态为 `FROZEN_BY_CUSTOMER`，不得继续测试、构建或分发。**

@@ -42,7 +42,7 @@ docs/ai/04_OUTPUT_RULES.md
 | `10_local_agent_wechat/` | Local Agent、微信自动化、安全边界和探索报告 |
 | `11_deployment_ops/` | Docker、本地/宝塔部署、OpenAPI、live-check 安全清单 |
 | `12_legacy_research/` | 历史代码计划、旧探索和低频参考资料 |
-| `13_ai_edit/` | AI剪辑、小高素材库、冻结设计与外部能力迁入评估 |
+| `13_ai_edit/` | AI剪辑历史设计与评估；模块当前为 `FROZEN_BY_CUSTOMER`，不可作为施工入口 |
 | `06_ui_audit/` | UI/UX 基准审查、响应式和视觉回归记录 |
 | `archive/` | 冻结历史快照（非当前事实，仅追溯用） |
 
@@ -68,10 +68,10 @@ docs/ai/04_OUTPUT_RULES.md
 | NewCar 权限 | `08_newcar/P1_AUTH_PERMISSION_ROUTE_MATRIX.md` |
 | car-porject-main 对接 | `09_car_project/P1_CAR_PROJECT_DOUYIN_CS_TRAINING_CONVERSATION_LINK_AUDIT.md` |
 | 本地 Docker | `11_deployment_ops/LOCAL_DOCKER_DEV.md` |
-| AI剪辑 Phase 12 迁入准备 | `13_ai_edit/auto_edit_Phase12_AI剪辑迁入准备审计报告.md` |
-| 小高素材库 / 视频增稳 | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
-| Phase 12 AI剪辑本地 MVP 冻结设计 | `13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md` |
-| Phase 12 Task 12 私有素材闭环规格 | `../superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md` |
+| AI剪辑 Phase 12 迁入准备（冻结参考） | `13_ai_edit/auto_edit_Phase12_AI剪辑迁入准备审计报告.md` |
+| 小高素材库 / 视频增稳（冻结参考） | `13_ai_edit/BrollStudio_空镜素材复用与视频增稳评估报告.md` |
+| Phase 12 AI剪辑本地 MVP 历史设计 | `13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`（`FROZEN_BY_CUSTOMER`） |
+| Phase 12 Task 12 私有素材闭环冻结规格 | `../superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md`（不可执行） |
 
 ## 历史追溯 / 归档入口
 
