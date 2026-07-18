@@ -64,6 +64,14 @@ docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
 
 ------
 
+# 可选三权分离治理
+
+本项目已接入审批、执行、测试三权分离模块，但模块安装不等于任务启用。每项任务仍须按 L0～L3 逐项判定；启用条件和降级边界以 `docs/ai/workflows/three-authority-vibecoding/activation-rules.md` 为准。
+
+该模块默认关闭，不改变 Required Reading。只有任务决定启用后，才按需阅读 `docs/ai/workflows/three-authority-vibecoding/README.md` 及对应角色 Prompt；不得把三份角色 Prompt 加入默认 Required Reading。
+
+------
+
 # AI 文档自治维护要求
 
 `docs/ai` 活动文档（本文件、AGENTS.md、README.md、01~05 规则与上下文文件）由 AI 自主维护，开发者只审阅 Git diff 和高风险业务结论。

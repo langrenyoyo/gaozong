@@ -103,6 +103,14 @@
 
 ------
 
+# 1C. 可选三权分离治理入口
+
+对于中高风险任务，应避免由同一 AI 上下文同时完成方案制定、代码施工、独立验收和最终批准。
+
+项目可按风险选择审批、执行和测试角色分离。三权模块安装不等于任务启用，默认关闭，不改变 Required Reading，也不得把三份角色 Prompt 加入默认 Required Reading。每项任务仍须按 L0～L3 逐项判定；启用条件、降级边界和角色职责以 `docs/ai/workflows/three-authority-vibecoding/activation-rules.md` 和该目录 `README.md` 为准。
+
+------
+
 # 2. 最小修改原则
 
 只修改当前任务直接相关内容。
