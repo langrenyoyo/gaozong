@@ -40,13 +40,15 @@ Required-Tests 可执行
 发布任务的 Release-Artifact-Required、构建命令和制品位置明确
 ~~~
 
-哈希无法解析或 Actual-HEAD 不一致时停止，不得测试其他代码：
+Actual-HEAD 无法解析或与请求的 Candidate-Commit 不一致时停止，不得测试其他代码。请求的完整候选哈希仍必须原样回显，只有实际读取结果可以记为 UNKNOWN：
 
 ~~~text
-TEST_BLOCKED <requested-hash-or-NONE> reason=HASH_NOT_VERIFIED
+TEST_BLOCKED <full-candidate-hash> reason=HASH_NOT_VERIFIED
+Requested-Candidate-Commit: <full-candidate-hash>
+Actual-HEAD: <actual-full-hash-or-UNKNOWN>
 ~~~
 
-环境或必要依赖不足且无充分替代证据时输出 TEST_BLOCKED reason=BLOCKED_ENVIRONMENT。任何阻塞都不等于 PASS。
+环境或必要依赖不足且无充分替代证据时输出 `TEST_BLOCKED <full-candidate-hash> reason=BLOCKED_ENVIRONMENT`。任何阻塞都必须保留请求的完整 Candidate-Commit，也都不等于 PASS。
 
 ## 独立测试
 
@@ -93,7 +95,7 @@ TEST_BLOCKED 用于环境/依赖不足且无替代证据，或候选哈希无法
 PASS <full-candidate-hash>
 CONDITIONAL_PASS <full-candidate-hash>
 FAIL <full-candidate-hash>
-TEST_BLOCKED <full-candidate-hash-or-NONE> reason=<code>
+TEST_BLOCKED <full-candidate-hash> reason=<code>
 SPEC_GAP <full-candidate-hash>
 ~~~
 

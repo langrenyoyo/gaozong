@@ -69,10 +69,13 @@ Candidate-Commit 是审批和测试共同引用的不可变审查对象。执行
 ## 推送、发布与 Owner 证据
 
 - APPROVE_PUSH 的正式信封必须包含 Push-Remote、Push-Ref、Push-Mode=fast-forward-only 和 Expected-Remote-Hash。推送前后都核对远端实际哈希，并使用完整 Candidate-Commit 的显式 refspec。
-- 本工作流禁止强制推送。远端偏离 Expected-Remote-Hash 或普通推送失败时停止并 REPLAN，不得改用 `--force`、`--force-with-lease` 或删除远端引用。
+- 本工作流禁止强制推送。远端偏离 Expected-Remote-Hash 或普通推送失败时，执行窗口必须停止并重新读取精确 Push-Ref；只有实际哈希等于 Candidate-Commit 才可输出 PUSHED。远端仍等于 Expected-Remote-Hash、其他哈希或 UNKNOWN 时，执行窗口只回传证据和原因码 REMOTE_DRIFT 或 PUSH_OUTCOME_UNKNOWN，由审批窗口输出 REPLAN；旧 APPROVE_PUSH 不得重试，不得改用 `--force`、`--force-with-lease` 或删除远端引用。
 - 需要发布时，TEST_REQUEST 必须声明 Release-Artifact-Required、构建命令和制品位置。测试窗口或隔离 CI 从完整 Candidate-Commit 的干净工作树构建一次不可变制品，计算 Artifact-Digest，并在独立测试报告中记录 Artifact-Source-Commit、构建证据和制品测试结果。
 - APPROVE_RELEASE 必须绑定 Task-ID、完整 Candidate-Commit、目标环境和同一制品版本/Artifact-Digest；L3 或项目策略要求 Owner 时，还必须绑定决定、Owner 身份和带时区时间戳。
-- 发布动作只能提升或部署已测试、已批准的同一制品，不得重新构建。制品缺失、重建或摘要变化时，旧测试、发布批准和 Owner-Evidence 立即失效，必须对新制品重新测试和批准。
+- 发布动作只能提升或部署已测试、已批准的同一制品，不得重新构建。发布前制品缺失、需要重建或摘要变化，且尚无部署副作用、Candidate-Commit 未变化时，旧测试、APPROVE_RELEASE 和 Owner-Evidence 立即失效；执行窗口只回报原因码 ARTIFACT_INVALIDATED 和证据，由审批窗口重新输出 TEST_REQUEST。
+- 发布开始前，若部署策略、目标环境或其他发布前提变化或失效，执行窗口或获授权发布者只回传证据，由审批窗口输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
+- 发布已经开始后如失败、部分成功或结果未知，执行窗口不得输出 RELEASED 或自行测试，必须回传每个目标的实际 Artifact-Digest、健康检查、执行步骤和回滚情况。已知失败或部分成功使用原因码 RELEASE_PARTIAL，包括 0 个或仅部分目标成功；结果无法确认时才使用 RELEASE_OUTCOME_UNKNOWN。由审批窗口输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
+- 全部目标的实际 Artifact-Digest 均与批准摘要一致（每个目标的逐项匹配结果均一致地为“与批准摘要一致”），且健康检查均通过，才可输出 RELEASED。
 - 任一绑定字段变化都会使旧 Owner-Evidence 失效；批准推送不隐含批准发布，批准发布也不隐含推送。
 
 ## 必须 REPLAN
@@ -102,12 +105,21 @@ REPLAN 必须废止旧 Plan-Revision；已有候选不能跨计划复用。
 
 ## 原因码
 
-原因码用于补充状态，不创建新的平行状态。例如：
+原因码用于补充状态，不创建新的平行状态。候选前使用 `<STATE> <Task-ID> <Plan-Revision> <Base-Commit>`；候选后使用 `<STATE> <full-candidate-hash>`。候选已存在时，REPLAN 和 REJECT_SCOPE 必须使用完整候选哈希。
+
+例如：
 
 ~~~text
+<STATE> <Task-ID> <Plan-Revision> <Base-Commit> reason=BASE_DRIFT
+<STATE> <full-candidate-hash> reason=BLOCKED_ENVIRONMENT
 TEST_BLOCKED <full-hash> reason=BLOCKED_ENVIRONMENT
-REPLAN <Task-ID> <Plan-Revision> <Base-Commit> reason=BASE_DRIFT
-REJECT_SCOPE <Task-ID> <Plan-Revision> <Base-Commit> reason=SCOPE_CONFLICT
+REPLAN <full-candidate-hash> reason=BASE_DRIFT
+REJECT_SCOPE <full-candidate-hash> reason=SCOPE_CONFLICT
+REPLAN <full-candidate-hash> reason=REMOTE_DRIFT
+REPLAN <full-candidate-hash> reason=PUSH_OUTCOME_UNKNOWN
+TEST_REQUEST <full-candidate-hash> reason=ARTIFACT_INVALIDATED
+REPLAN <full-candidate-hash> reason=RELEASE_PARTIAL
+REPLAN <full-candidate-hash> reason=RELEASE_OUTCOME_UNKNOWN
 ~~~
 
 原因码永远不能替代状态或被解释为 PASS。

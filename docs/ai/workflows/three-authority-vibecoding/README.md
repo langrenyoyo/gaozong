@@ -59,9 +59,16 @@ PLAN_APPROVED <Task-ID> <Plan-Revision> <Base-Commit>
   FAIL -> R1 / R2 / REPLAN / REJECT_SCOPE
   TEST_BLOCKED -> TEST_REQUEST / REPLAN / REJECT_SCOPE
   SPEC_GAP -> REPLAN / REJECT_SCOPE
+  APPROVE_PUSH -> REPLAN
+  APPROVE_RELEASE -> TEST_REQUEST
+  APPROVE_RELEASE -> REPLAN
 ~~~
 
 本地候选提交只是不可变审查对象，不代表允许推送、合并或发布。完整状态与合法转换见 [状态机](state-machine.md)。
+
+批准动作失败时，执行窗口或获授权发布者只回传事实、实际证据和原因码，TEST_REQUEST、REPLAN、REJECT_SCOPE 由审批窗口裁决。推送后只有精确 Push-Ref 的远端实际哈希等于 Candidate-Commit 才可输出 PUSHED；REMOTE_DRIFT 或 PUSH_OUTCOME_UNKNOWN 均由审批窗口转入 REPLAN，旧 APPROVE_PUSH 不得重放。
+
+发布前且没有部署副作用、Candidate-Commit 未变化时，制品缺失、需要重建或摘要变化使用 ARTIFACT_INVALIDATED，由审批窗口重新输出 TEST_REQUEST，旧测试、批准和 Owner 证据失效。发布开始前，若部署策略、目标环境或其他发布前提变化或失效，执行窗口或获授权发布者只回传证据，由审批窗口输出 `REPLAN <full-candidate-hash>`；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放。发布已经开始后的已知失败或部分成功使用 RELEASE_PARTIAL（包括 0 个目标成功），结果未知使用 RELEASE_OUTCOME_UNKNOWN，由审批窗口转入 REPLAN；旧批准和 Owner 证据不得重放。只有全部目标的实际 Artifact-Digest 均逐一等于批准摘要，且健康检查均通过，才可输出 RELEASED。
 
 ## Git 哈希证据链
 

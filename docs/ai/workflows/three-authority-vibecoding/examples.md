@@ -97,3 +97,62 @@ Unblock-Condition: 提供隔离数据库并重新发出同一哈希的 TEST_REQU
 ~~~
 
 此时不得输出 PASS 或 CONDITIONAL_PASS，也不得输出 APPROVE_PUSH/APPROVE_RELEASE。环境恢复后可以对同一冻结候选重新发出 TEST_REQUEST；若候选代码变化，则必须使用新哈希从 CANDIDATE_READY 重新开始。
+
+## 6. 推送失败只回传证据，由审批窗口裁决
+
+候选 `6666666666666666666666666666666666666666` 已取得 APPROVE_PUSH，但执行窗口在推送前发现精确 Push-Ref 已偏离 Expected-Remote-Hash：
+
+~~~text
+Candidate-Commit: 6666666666666666666666666666666666666666
+Push-Ref: refs/heads/main
+Expected-Remote-Hash: 5555555555555555555555555555555555555555
+Actual-Remote-Hash: 7777777777777777777777777777777777777777
+Reason-Code: REMOTE_DRIFT
+~~~
+
+执行窗口停止并只回传事实、命令结果和原因码，不输出 REPLAN。审批窗口核对证据后裁决：
+
+~~~text
+REPLAN 6666666666666666666666666666666666666666 reason=REMOTE_DRIFT
+~~~
+
+即使推送命令返回非零或异常，执行窗口也必须重新读取精确 Push-Ref；若远端实际哈希等于 Candidate-Commit，则说明远端已接受候选，应输出 `PUSHED 6666666666666666666666666666666666666666`，不得进入 REPLAN。
+
+如果推送命令返回异常，重新读取精确 Push-Ref 后仍无法确认远端实际哈希，则执行窗口改为回传：
+
+~~~text
+Actual-Remote-Hash: UNKNOWN
+Reason-Code: PUSH_OUTCOME_UNKNOWN
+~~~
+
+审批窗口输出 `REPLAN 6666666666666666666666666666666666666666 reason=PUSH_OUTCOME_UNKNOWN`。无论哪种失败，旧 APPROVE_PUSH 都不得重放、重试或升级为强制推送。
+
+## 7. 发布失败按是否产生部署副作用分流
+
+候选 `7777777777777777777777777777777777777777` 在发布开始前发现已批准制品缺失。Candidate-Commit 未变化，且尚无部署副作用：
+
+~~~text
+Candidate-Commit: 7777777777777777777777777777777777777777
+Deployment-Side-Effects: NONE
+Reason-Code: ARTIFACT_INVALIDATED
+~~~
+
+执行窗口只回传证据，不自行发出测试请求。旧测试结论、APPROVE_RELEASE 与 Owner-Evidence 立即失效，由审批窗口裁决：
+
+~~~text
+TEST_REQUEST 7777777777777777777777777777777777777777 reason=ARTIFACT_INVALIDATED
+~~~
+
+若发布已经开始，已知失败或部分成功统一使用 RELEASE_PARTIAL，包括 0 个目标成功。执行窗口回传每个目标的实际 Artifact-Digest、健康检查、已执行步骤和回滚情况，审批窗口输出：
+
+~~~text
+REPLAN 7777777777777777777777777777777777777777 reason=RELEASE_PARTIAL
+~~~
+
+若无法确认各目标的实际结果，则执行窗口回传同类证据并使用 RELEASE_OUTCOME_UNKNOWN，审批窗口输出：
+
+~~~text
+REPLAN 7777777777777777777777777777777777777777 reason=RELEASE_OUTCOME_UNKNOWN
+~~~
+
+发布已开始后的两条分支都不得重放旧 APPROVE_RELEASE 或 Owner-Evidence，必须重新规划、重新批准并在适用时取得新的 Owner 证据。ARTIFACT_INVALIDATED、RELEASE_PARTIAL 和 RELEASE_OUTCOME_UNKNOWN 都只是原因码，不是新增状态。
