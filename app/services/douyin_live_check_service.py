@@ -48,9 +48,10 @@ def reset_live_check_state() -> None:
 
 
 def _now() -> datetime:
-    # 系统生成时间统一 aware UTC，写入 PG TIMESTAMPTZ 不依赖会话时区。
-    # _is_expired 用 .timestamp() 比较，naive/aware 均兼容，故改 aware 不影响 OAuth state。
-    return datetime.now(timezone.utc)
+    # 保持 naive（SQLite 原有时间语义）。_is_expired 用 .timestamp() 比较时 naive 按本机时区解释，
+    # 若改 UTC aware 会与 SQLite 读回的 naive 混用导致 OAuth state 误判过期。
+    # 上游来源时间（bind_time 等）用 parse_upstream_datetime 返回 aware；取消/删除时间用 datetime.now(timezone.utc)。
+    return datetime.now()
 
 
 def _is_expired(expires_at: datetime, now: datetime) -> bool:

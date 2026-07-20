@@ -2,163 +2,279 @@
 
 背景：SQLite 时代 ORM/写入用 String/Text + str/json.dumps，与生产 PostgreSQL 的
 TIMESTAMPTZ/JSONB schema 不一致，导致 auth-redirect 写入抛 ProgrammingError、授权账号
-无法进入客服工作台列表。本测试收敛契约：时间写 aware datetime，JSON 写 dict。
+无法进入客服工作台列表。本测试收敛契约：上游时间写 aware datetime，JSON 写 dict。
 
-本文件分两类：
-1. 时间解析 helper 单元测试（纯逻辑，无 DB，本地必须可跑）；
-2. 真实 PostgreSQL upsert 集成测试（需安全 PG，缺环境回报阻塞，绝不写成通过）。
+设计（R2 返修审批要求）：
+1. 时间解析 helper 单元测试（纯逻辑，无 DB，本地必须可跑）。
+2. 真实 PostgreSQL 集成测试：用 Alembic 初始化到 0015 的一次性库，禁止 ORM 建表/删表，
+   只写入并清理唯一测试行；真实调用 sync_bind_info_accounts 与 bind_authorized_account_by_open_id
+   两条 service 路径，验证新增/更新/时间类型/JSONB 往返。
+3. 安全门：PG URL 只允许 postgresql+psycopg + 白名单 host + 库名 _test/_staging 后缀；
+   缺安全 PG 环境时守卫测试 fail（代表 TEST_BLOCKED），不假通过。
 """
 
 import os
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from datetime import datetime, timezone, timedelta
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from app.services.douyin_live_check_service import parse_upstream_datetime
 
 
-# Asia/Shanghai = UTC+8
-SHANGHAI_OFFSET = timezone(timedelta(hours=8))
-
-
 # ---------------------------------------------------------------------------
-# 1. 时间解析 helper 单元测试（无 DB 依赖，本地可跑）
+# 1. 时间解析 helper 单元测试（无 DB，本地可跑）
 # ---------------------------------------------------------------------------
 
 def test_parse_none_and_empty_returns_none():
-    """None/空串返回 None，不得静默写当前时间。"""
     assert parse_upstream_datetime(None) is None
     assert parse_upstream_datetime("") is None
 
 
 def test_parse_space_separated_naive_interpreted_as_shanghai():
-    """无时区 'YYYY-MM-DD HH:MM:SS' 按 Asia/Shanghai 解释再转 UTC。"""
     result = parse_upstream_datetime("2025-12-15 16:12:46")
-    assert result is not None
-    assert result.tzinfo is not None  # aware
+    assert result is not None and result.tzinfo is not None
     # 2025-12-15 16:12:46 +08:00 == 08:12:46 UTC
-    expected_utc = datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
-    assert result == expected_utc
+    assert result == datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
 
 
 def test_parse_t_separator():
-    """'T' 分隔格式同样按 Asia/Shanghai 解释。"""
-    result = parse_upstream_datetime("2025-12-15T16:12:46")
-    expected_utc = datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
-    assert result == expected_utc
+    assert parse_upstream_datetime("2025-12-15T16:12:46") == \
+        datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
 
 
 def test_parse_z_suffix_keeps_instant_as_utc():
-    """带 'Z' 的时间保留瞬时语义，按 UTC 解释。"""
-    result = parse_upstream_datetime("2025-12-15T08:12:46Z")
-    expected_utc = datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
-    assert result == expected_utc
+    assert parse_upstream_datetime("2025-12-15T08:12:46Z") == \
+        datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
 
 
 def test_parse_offset_keeps_instant_and_converts_to_utc():
-    """带偏移的时间保留瞬时语义并转 UTC。"""
-    result = parse_upstream_datetime("2025-12-15T16:12:46+08:00")
-    expected_utc = datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
-    assert result == expected_utc
+    assert parse_upstream_datetime("2025-12-15T16:12:46+08:00") == \
+        datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
 
 
 def test_parse_invalid_raises():
-    """非法格式必须抛稳定错误，禁止静默写 None 或当前时间。"""
     with pytest.raises(Exception):
         parse_upstream_datetime("not-a-date")
 
 
 def test_parse_result_is_aware_for_pg_timestamptz():
-    """所有非 None 解析结果必须是 aware datetime，才能写入 PG TIMESTAMPTZ。"""
     for raw in ("2025-12-15 16:12:46", "2025-12-15T16:12:46",
                 "2025-12-15T08:12:46Z", "2025-12-15T16:12:46+08:00"):
         result = parse_upstream_datetime(raw)
-        assert result is not None
-        assert result.tzinfo is not None
+        assert result is not None and result.tzinfo is not None
 
 
 # ---------------------------------------------------------------------------
-# 2. 真实 PostgreSQL upsert 集成测试
-#    安全门：PG URL 只允许 postgresql+psycopg 且库名以 _test/_staging 结尾。
-#    缺少安全 PG 环境必须回报阻塞，不能写成通过。
+# 2. 安全 PG URL 守卫
 # ---------------------------------------------------------------------------
+
+ALLOWED_HOSTS = {"localhost", "127.0.0.1", "postgres"}
+
 
 def _safe_pg_url() -> str | None:
-    """从环境读取安全 PG URL，校验协议与库名后缀；不合规返回 None。"""
-    url = os.getenv("DOUYIN_AUTH_PG_TEST_URL", "").strip()
+    """校验 SMOKE_DATABASE_URL：postgresql+psycopg + 白名单 host + 库名 _test/_staging。
+
+    不合规返回 None（仅缺 env 时）；协议/host/库名不合规直接 fail（避免误连）。
+    """
+    url = os.getenv("SMOKE_DATABASE_URL", "").strip()
     if not url:
         return None
     if not url.startswith("postgresql+psycopg://"):
-        pytest.fail("DOUYIN_AUTH_PG_TEST_URL 必须使用 postgresql+psycopg 协议")
-    # 库名以 _test 或 _staging 结尾
-    db_part = url.rsplit("/", 1)[-1].split("?")[0]
+        pytest.fail("SMOKE_DATABASE_URL 必须使用 postgresql+psycopg 协议")
+    after_scheme = url.split("://", 1)[1]
+    host_part, _, db_part = after_scheme.partition("@")
+    db_part = db_part.split("/", 1)[-1].split("?")[0]
+    host = host_part.rsplit("@", 1)[-1]  # user:pass@host:port → host:port
+    host = host.split(":")[0]
+    if host not in ALLOWED_HOSTS:
+        pytest.fail(f"PG host 必须在白名单 {ALLOWED_HOSTS}，实际: {host}")
     if not (db_part.endswith("_test") or db_part.endswith("_staging")):
         pytest.fail(f"测试目标库必须以 _test/_staging 结尾，实际: {db_part}")
     return url
 
 
-@pytest.mark.skipif(
-    not os.getenv("DOUYIN_AUTH_PG_TEST_URL", "").strip(),
-    reason="缺少安全 PG 测试环境（DOUYIN_AUTH_PG_TEST_URL 未设置）",
+def test_blocks_when_no_safe_pg_environment():
+    """安全门：无安全 PG 环境时必须 fail（代表 TEST_BLOCKED），不能假通过。"""
+    if os.getenv("SMOKE_DATABASE_URL", "").strip():
+        pytest.skip("存在 PG 测试环境，本守卫测试不适用")
+    pytest.fail(
+        "TEST_BLOCKED: 缺少安全 PG 测试环境（SMOKE_DATABASE_URL 未设置）。"
+        "请用一次性 Docker PG（库名以 _test/_staging 结尾）并 alembic 初始化到 0015 后重跑。"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. 真实 PostgreSQL 集成测试（需安全 PG，一次性库，禁 ORM 建表/删表）
+# ---------------------------------------------------------------------------
+
+pg_required = pytest.mark.skipif(
+    not os.getenv("SMOKE_DATABASE_URL", "").strip(),
+    reason="缺少安全 PG 测试环境（SMOKE_DATABASE_URL 未设置）",
 )
-def test_pg_upsert_writes_datetime_and_dict_without_programming_error():
-    """A1/A2/A6：真实 PG upsert 写 aware datetime / dict 不抛 ProgrammingError。"""
+
+
+def _ensure_alembic_head(url: str) -> str:
+    """用 Alembic 把一次性库初始化到 0015 head。禁 ORM 建表，schema 由 0004 迁移声明。"""
+    import subprocess
+    env = {**os.environ, "DATABASE_URL": url}
+    up = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c",
+         "migrations/postgres/auto_wechat/alembic.ini", "upgrade", "head"],
+        env=env, capture_output=True, text=True,
+    )
+    if up.returncode != 0:
+        pytest.fail(f"alembic upgrade head 失败: {up.stderr[:500]}")
+    cur = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c",
+         "migrations/postgres/auto_wechat/alembic.ini", "current"],
+        env=env, capture_output=True, text=True,
+    )
+    return cur.stdout.strip().splitlines()[-1] if cur.returncode == 0 else "unknown"
+
+
+def _make_context(merchant_id: str = "merchant_test_r2"):
+    """构造可信 RequestContext，merchant_id 来自服务端（非前端）。
+
+    RequestContext 无 tenant_id 字段；service 用 getattr(context,'tenant_id',None) 安全取。
+    """
+    from app.auth.context import RequestContext
+    return RequestContext(
+        user_id="user_test_r2",
+        merchant_id=merchant_id,
+        source_system="new_car_project",
+    )
+
+
+def _patch_upstream(monkeypatch, upstream_item):
+    """monkeypatch service 模块内的 call_douyin_openapi，返回固定上游 /list_bind_info。"""
+    from app.services import douyin_live_check_service as svc
+
+    def _fake_call(path, payload):
+        if path == "/list_bind_info":
+            return {"payload": {"code": 0, "msg": "success",
+                                "data": {"bind_list": [upstream_item]}},
+                    "debug": {"upstream_url": "test"}}
+        raise AssertionError(f"非预期上游调用: {path}")
+
+    monkeypatch.setattr(svc, "call_douyin_openapi", _fake_call)
+
+
+@pg_required
+def test_pg_sync_bind_info_accounts_writes_datetime_and_dict(monkeypatch):
+    """A1/A2/A6：sync_bind_info_accounts 真实路径写 aware datetime/dict 不抛 ProgrammingError。"""
     url = _safe_pg_url()
-    from sqlalchemy import inspect, text
-    from sqlalchemy.dialects.postgresql import JSONB
+    rev = _ensure_alembic_head(url)
+    assert "0015" in rev, f"PG 库未初始化到 0015，当前: {rev}"
+
+    from sqlalchemy import create_engine, inspect
     from sqlalchemy.orm import sessionmaker
-    from sqlalchemy import create_engine
-    from app.models import Base, DouyinAuthorizedAccount
+    from app.models import DouyinAuthorizedAccount
+    from app.services.douyin_live_check_service import sync_bind_info_accounts
+
+    open_id = "test_pg_sync_open_id_r2"
+    upstream_item = {
+        "open_id": open_id,
+        "user_id": "2106745398",
+        "union_id": "union-test-r2",
+        "account_name": "海赫科技",
+        "avatar_url": "https://avatar.example.com/a.png",
+        "bind_status": 1,
+        "account_type": 1,
+        "bind_time": "2025-12-15 16:12:46",  # 无时区，按 Asia/Shanghai 解释
+        "unbind_time": None,
+        "created_at": "2025-12-15 14:17:43",
+    }
+    _patch_upstream(monkeypatch, upstream_item)
 
     engine = create_engine(url)
-    # 仅在隔离测试库建本表，不触碰其它表。
-    DouyinAuthorizedAccount.__table__.create(engine, checkfirst=True)
+    db = sessionmaker(bind=engine)()
     try:
-        Session = sessionmaker(bind=engine)
-        db = Session()
-        try:
-            open_id = "test_pg_upsert_open_id_r2"
-            db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).delete()
-            row = DouyinAuthorizedAccount(
-                main_account_id=2124269908,
-                open_id=open_id,
-                merchant_id="merchant_test_r2",
-                bind_status=1,
-                bind_time=parse_upstream_datetime("2025-12-15 16:12:46"),
-                unbind_time=None,
-                source_created_at=parse_upstream_datetime("2025-12-15 14:17:43"),
-                raw_body_json={"open_id": open_id, "account_name": "海赫科技"},
-            )
-            db.add(row)
-            db.commit()  # 关键：旧契约在此抛 ProgrammingError
+        # 只清唯一测试行，禁删表
+        db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).delete()
+        db.commit()
 
-            # A2：时间为 aware datetime
-            refreshed = db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).one()
-            assert refreshed.bind_time.tzinfo is not None
-            # A6：PG 读回为 dict（JSONB）
-            assert isinstance(refreshed.raw_body_json, dict)
-            assert refreshed.raw_body_json["open_id"] == open_id
+        # A1：不抛 ProgrammingError（走到这里即通过 A1）
+        result = sync_bind_info_accounts(db, page_num=1, page_size=20,
+                                         name_or_open_id=open_id,
+                                         context=_make_context())
+        assert result["upserted"] >= 1
+        assert result["active_count"] >= 1
 
-            # 列类型必须是原生 TIMESTAMPTZ/JSONB（确认未走 VARCHAR/TEXT）
-            cols = {c["name"]: c["type"] for c in inspect(engine).get_columns("douyin_authorized_accounts")}
-            type_name = str(cols["bind_time"]).upper()
-            assert "TIMESTAMP" in type_name, f"bind_time 应为 TIMESTAMP 系，实际 {cols['bind_time']}"
-            assert isinstance(cols["raw_body_json"], JSONB) or "JSONB" in str(cols["raw_body_json"]).upper()
-        finally:
-            db.rollback()
-            db.close()
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).one()
+        # A2：时间为 aware datetime
+        assert row.bind_time is not None
+        assert row.bind_time.tzinfo is not None, "bind_time 必须是 aware datetime"
+        assert row.bind_time == datetime(2025, 12, 15, 8, 12, 46, tzinfo=timezone.utc)
+        # A6：PG 读回 raw_body_json 为 dict（JSONB）
+        assert isinstance(row.raw_body_json, dict)
+        assert row.raw_body_json["open_id"] == open_id
+
+        # 列类型确认是原生 TIMESTAMPTZ/JSONB（未走 VARCHAR/TEXT）
+        cols = {c["name"]: c["type"]
+                for c in inspect(engine).get_columns("douyin_authorized_accounts")}
+        assert "TIMESTAMP" in str(cols["bind_time"]).upper()
+        assert "JSONB" in str(cols["raw_body_json"]).upper()
+
+        # 更新路径：account_name 变更应更新同一行，时间仍 aware
+        upstream_item["account_name"] = "海赫科技-更新"
+        sync_bind_info_accounts(db, page_num=1, page_size=20,
+                                name_or_open_id=open_id, context=_make_context())
+        row2 = db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).one()
+        assert row2.account_name == "海赫科技-更新"
+        assert row2.bind_time.tzinfo is not None
     finally:
-        DouyinAuthorizedAccount.__table__.drop(engine, checkfirst=True)
+        db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).delete()
+        db.commit()
+        db.close()
         engine.dispose()
 
 
-def test_pg_url_when_absent_blocks_not_passes():
-    """安全门：无安全 PG 环境时本套件不能假装通过；此处断言 skip 条件成立。"""
-    if os.getenv("DOUYIN_AUTH_PG_TEST_URL", "").strip():
-        pytest.skip("存在 PG 测试环境，本守卫测试不适用")
-    # 无环境时，_safe_pg_url 返回 None，表示阻塞而非通过
-    assert _safe_pg_url() is None
+@pg_required
+def test_pg_bind_authorized_account_by_open_id_writes_datetime_and_dict(monkeypatch):
+    """A1/A2/A6：bind_authorized_account_by_open_id 第二条真实路径。"""
+    url = _safe_pg_url()
+    _ensure_alembic_head(url)
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models import DouyinAuthorizedAccount
+    from app.services.douyin_live_check_service import bind_authorized_account_by_open_id
+
+    open_id = "test_pg_bind_open_id_r2"
+    upstream_item = {
+        "open_id": open_id,
+        "user_id": "u2",
+        "union_id": "union2",
+        "account_name": "测试绑定",
+        "avatar_url": "",
+        "bind_status": 1,
+        "account_type": 1,
+        "bind_time": "2025-12-15 20:16:39",
+        "unbind_time": None,
+        "created_at": "2025-12-15 16:44:56",
+    }
+    _patch_upstream(monkeypatch, upstream_item)
+
+    engine = create_engine(url)
+    db = sessionmaker(bind=engine)()
+    try:
+        db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).delete()
+        db.commit()
+
+        result = bind_authorized_account_by_open_id(db, open_id=open_id,
+                                                    context=_make_context())
+        assert result is not None
+
+        row = db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).one()
+        assert row.bind_time.tzinfo is not None
+        assert isinstance(row.raw_body_json, dict)
+        assert row.raw_body_json["account_name"] == "测试绑定"
+        assert str(row.merchant_id) == "merchant_test_r2"
+    finally:
+        db.query(DouyinAuthorizedAccount).filter_by(open_id=open_id).delete()
+        db.commit()
+        db.close()
+        engine.dispose()
