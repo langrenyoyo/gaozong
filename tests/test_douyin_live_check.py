@@ -1317,7 +1317,7 @@ def test_accounts_prefers_persisted_bind_info_and_keeps_webhook_fallback():
                 merchant_id="merchant-1",
                 account_name="Persisted Account",
                 bind_status=1,
-                raw_body_json="{}",
+                raw_body_json={},
             )
         )
         db.commit()

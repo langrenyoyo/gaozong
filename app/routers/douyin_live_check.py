@@ -72,6 +72,19 @@ router = APIRouter(
 )
 
 
+def _safe_sqlstate(exc: BaseException) -> str | None:
+    """从 DB 异常取 SQLSTATE 稳定错误码；不含值，安全可入日志。
+
+    psycopg 的 ProgrammingError 等异常带 diag.sqlstate（如 42804），是脱敏的诊断码，
+    不含参数/列值。缺失时返回 None。非 DB 异常无 diag 属性也返回 None。
+    """
+    diag = getattr(exc, "diag", None)
+    if diag is None:
+        return None
+    sqlstate = getattr(diag, "sqlstate", None)
+    return str(sqlstate) if sqlstate else None
+
+
 def _ensure_enabled() -> None:
     if not config.DY_LIVE_CHECK_ENABLED:
         raise HTTPException(
@@ -278,12 +291,18 @@ def auth_redirect(
             context=trusted_context,
         )
     except Exception as exc:
-        # 同步失败：仅记录 error 类型与摘要，绝不打印 secret/token/Authorization
+        # 同步失败：只记 stage/failure_stage/异常类型/SQLSTATE 与安全哨兵，禁 str(exc)，
+        # 禁原始 sync_key/open_id/SQL 参数/JSON（R2 §Permission-Boundary）。
+        sqlstate = _safe_sqlstate(exc)
         logger.error(
-            "douyin auth-redirect 同步失败: sync_key=%s, error_type=%s, open_id=%s",
-            sync_key,
+            "douyin auth-redirect 同步失败: stage=auth_redirect_sync "
+            "failure_stage=sync_bind_info_accounts error_type=%s sqlstate=%s "
+            "has_sync_key=%s has_open_id=%s has_upstream_payload=%s",
             type(exc).__name__,
-            open_id,
+            sqlstate,
+            bool(sync_key),
+            bool(open_id),
+            bool(sync_result) if "sync_result" in locals() else False,
         )
         return RedirectResponse(
             url=_auth_redirect_url(frontend_base, "auth=sync_failed"),

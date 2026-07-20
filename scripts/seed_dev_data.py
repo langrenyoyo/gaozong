@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -392,11 +392,11 @@ def _seed_douyin_accounts(db) -> dict[str, int]:
                 "avatar_url": "",
                 "bind_status": account["bind_status"],
                 "account_type": 1,
-                "bind_time": "2026-06-18 10:00:00",
+                "bind_time": NOW.replace(tzinfo=timezone(timedelta(hours=8))),
                 "unbind_time": None,
-                "source_created_at": "2026-06-18 10:00:00",
+                "source_created_at": NOW.replace(tzinfo=timezone(timedelta(hours=8))),
                 "last_synced_at": NOW,
-                "raw_body_json": _json({"dev_seed": True, "open_id": account["open_id"]}),
+                "raw_body_json": {"dev_seed": True, "open_id": account["open_id"]},
             },
             stats,
         )

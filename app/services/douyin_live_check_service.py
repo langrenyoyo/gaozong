@@ -4,7 +4,7 @@ import json
 import logging
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -48,7 +48,9 @@ def reset_live_check_state() -> None:
 
 
 def _now() -> datetime:
-    return datetime.now()
+    # 系统生成时间统一 aware UTC，写入 PG TIMESTAMPTZ 不依赖会话时区。
+    # _is_expired 用 .timestamp() 比较，naive/aware 均兼容，故改 aware 不影响 OAuth state。
+    return datetime.now(timezone.utc)
 
 
 def _is_expired(expires_at: datetime, now: datetime) -> bool:
@@ -58,6 +60,59 @@ def _is_expired(expires_at: datetime, now: datetime) -> bool:
 
 def _preview(value: str | None, head: int = 4, tail: int = 4) -> str | None:
     return preview(value, head=head, tail=tail)
+
+
+# 抖音 /list_bind_info 的 bind_time 等为无时区字符串（如 "2025-12-15 16:12:46"），
+# 业务发生在中国，统一按 Asia/Shanghai（UTC+8）解释后转 UTC，写入 PG TIMESTAMPTZ。
+# ceiling：硬编码 +08:00 偏移，不读 PG 会话时区；若未来上游改返回带时区或 ISO8601 格式，
+# 已在下方分支覆盖。升级路径：抽到 app/timezones.py 统一管理多业务时区。
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def parse_upstream_datetime(raw: str | None) -> datetime | None:
+    """解析上游无时区时间字符串为 aware datetime，统一转 UTC。
+
+    规则（R2 §4.3）：
+    - None / 空串 / 纯空白 → None（不得静默写当前时间）；
+    - 无时区（空格或 T 分隔）→ 按 Asia/Shanghai(UTC+8) 解释，再转 UTC；
+    - 带 'Z' → 按 UTC 解释；
+    - 带偏移（±HH:MM）→ 保留瞬时语义，转 UTC；
+    - 非法格式 → 抛 ValueError，禁止静默降级为 None 或 now()。
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+
+    # 优先尝试带时区/偏移/Z 的 fromisoformat（Python 3.11+ 支持 'Z'）。
+    if "Z" in text or "+" in text[10:] or text.endswith(("+00:00",)) or _has_offset(text):
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"上游时间格式非法: {raw!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_SHANGHAI_TZ)
+        return parsed.astimezone(timezone.utc)
+
+    # 无时区：按 Asia/Shanghai 解释。兼容空格与 T 分隔。
+    normalized = text.replace("T", " ")
+    try:
+        parsed = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"上游时间格式非法: {raw!r}") from exc
+    return parsed.replace(tzinfo=_SHANGHAI_TZ).astimezone(timezone.utc)
+
+
+def _has_offset(text: str) -> bool:
+    """判断字符串尾部是否带 ±HH:MM 偏移。"""
+    if len(text) < 6:
+        return False
+    tail = text[-6:]
+    return tail[0] in ("+", "-") and tail[3] == ":"
 
 
 def _content_info(payload: dict[str, Any]) -> dict[str, Any]:
@@ -483,11 +538,11 @@ def sync_bind_info_accounts(
         row.avatar_url = _optional_str(item.get("avatar_url"))
         row.bind_status = bind_status
         row.account_type = _int_or_none(item.get("account_type"))
-        row.bind_time = _optional_str(item.get("bind_time"))
-        row.unbind_time = _optional_str(item.get("unbind_time"))
-        row.source_created_at = _optional_str(item.get("created_at"))
+        row.bind_time = parse_upstream_datetime(item.get("bind_time"))
+        row.unbind_time = parse_upstream_datetime(item.get("unbind_time"))
+        row.source_created_at = parse_upstream_datetime(item.get("created_at"))
         row.last_synced_at = _now()
-        row.raw_body_json = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+        row.raw_body_json = item  # dict 写入 JSONB，禁止 json.dumps 回退
         row.updated_at = _now()
         upserted += 1
         if bind_status == 1:
@@ -628,10 +683,10 @@ def bind_authorized_account_by_open_id(
     row.avatar_url = _optional_str(matched.get("avatar_url"))
     row.bind_status = bind_status
     row.account_type = _int_or_none(matched.get("account_type"))
-    row.bind_time = _optional_str(matched.get("bind_time"))
-    row.unbind_time = _optional_str(matched.get("unbind_time"))
-    row.source_created_at = _optional_str(matched.get("created_at"))
-    row.raw_body_json = json.dumps(matched, ensure_ascii=False, separators=(",", ":"))
+    row.bind_time = parse_upstream_datetime(matched.get("bind_time"))
+    row.unbind_time = parse_upstream_datetime(matched.get("unbind_time"))
+    row.source_created_at = parse_upstream_datetime(matched.get("created_at"))
+    row.raw_body_json = matched  # dict 写入 JSONB，禁止 json.dumps 回退
     row.last_synced_at = now
     row.updated_at = now
     db.commit()

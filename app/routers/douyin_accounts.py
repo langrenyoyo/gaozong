@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -191,11 +191,11 @@ def cancel_douyin_account_authorization(
     """本地标记企业号取消授权，并将 active 绑定置为 invalid。"""
     merchant_id = _require_context(context)
     row = _find_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if row.bind_status != 0:
         row.bind_status = 0
     if not row.unbind_time:
-        row.unbind_time = now.isoformat(timespec="seconds")
+        row.unbind_time = now
     row.updated_at = now
     db.commit()
 
@@ -227,11 +227,11 @@ def delete_douyin_account(
     """本地软删除企业号，并将 active 绑定置为 deleted。"""
     merchant_id = _require_context(context)
     row = _find_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if row.bind_status != 4:
         row.bind_status = 4
     if not row.unbind_time:
-        row.unbind_time = now.isoformat(timespec="seconds")
+        row.unbind_time = now
     row.updated_at = now
     db.commit()
 
