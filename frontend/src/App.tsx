@@ -1,16 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
-import apiClient from "./api/client";
 import {
   exchangeExternalCode,
   fetchCurrentAuthUser,
   fetchCurrentAuthUserWithoutRedirect,
+  logoutAutoWechat,
+  switchToInternalSystem,
   type AuthContextData,
   type PermissionItem,
 } from "./api/auth";
+import { setNewCarAuthRedirectSuppressed } from "./api/client";
 import { clearExternalToken, getExternalToken, setExternalToken } from "./authToken";
 import {
   addNewCarRedirectNoticeListener,
@@ -23,7 +26,8 @@ import {
   filterCapabilityNavCenters,
   hasAdminPermission,
   hasPermission,
-  isMockAuthUser,  isAdminLike,
+  isMockAuthUser,
+  isAdminLike,
   PERMISSIONS,
 } from "./features/capabilities";
 import { userFacingError } from "./lib/userFacingError";
@@ -189,6 +193,8 @@ interface AuthErrorState {
   message: string;
 }
 
+type LogoutViewState = "idle" | "pending" | "succeeded" | "failed";
+
 function classifyAuthError(error: unknown): AuthErrorState {
   const message = userFacingError(error, "外部登录失败，请重新登录");
   if (message.includes("账号未绑定商户")) {
@@ -260,11 +266,52 @@ function AuthErrorScreen({
   );
 }
 
+function LogoutStatusScreen({ state, onRetry, onRelogin }: { state: Exclude<LogoutViewState, "idle">; onRetry: () => void; onRelogin: () => void }) {
+  const failed = state === "failed";
+  const succeeded = state === "succeeded";
+  const title = state === "pending" ? "正在退出..." : failed ? "退出失败，请重试" : "已退出";
+  const description =
+    state === "pending"
+      ? "正在注销当前系统登录态。"
+      : failed
+        ? "本地登录状态已清理，可在当前页面重试注销。"
+        : "当前系统的本地登录状态已清理。";
+
+  return (
+    <div role="status" aria-live="polite" className="grid min-h-screen place-items-center bg-[#070d18] px-6 text-white">
+      <div className="w-full max-w-sm text-center">
+        <div className="text-base font-semibold">{title}</div>
+        <p className="mt-2 text-sm leading-6 text-slate-400">{description}</p>
+        {succeeded ? (
+          <button
+            type="button"
+            onClick={onRelogin}
+            className="mt-5 h-10 rounded-md bg-[#2563eb] px-4 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
+          >
+            重新登录
+          </button>
+        ) : failed ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-5 h-10 rounded-md bg-[#2563eb] px-4 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
+          >
+            重试退出
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const App = () => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<AuthErrorState | null>(null);
   const [loginRedirectNotice, setLoginRedirectNotice] = useState<string | null>(null);
+  const [logoutViewState, setLogoutViewState] = useState<LogoutViewState>("idle");
+  const [switchingToNewCar, setSwitchingToNewCar] = useState(false);
+  const logoutRetryTokenRef = useRef<string | null>(null);
   const externalMerchantNotBound = authError?.kind === "externalMerchantNotBound";
 
   useEffect(() => {
@@ -365,30 +412,48 @@ const App = () => {
     setUser(nextUser);
   };
 
+  const performLogout = async (retryToken: string | null) => {
+    setNewCarAuthRedirectSuppressed(true);
+    setLogoutViewState("pending");
+    setUser(null);
+    logoutRetryTokenRef.current = retryToken;
+    try {
+      await logoutAutoWechat(retryToken);
+      logoutRetryTokenRef.current = null;
+      setLogoutViewState("succeeded");
+    } catch {
+      setLogoutViewState("failed");
+    } finally {
+      queryClient.clear();
+      clearExternalToken();
+      clearNewCarRedirectState();
+      clearAllAgentTokens();  // FIX3-1：退出清理 Local Agent token，防跨商户残留
+      setUser(null);
+      setAuthError(null);
+    }
+  };
+
   const handleLogout = () => {
-    const token = getExternalToken();
-    void (async () => {
-      try {
-        if (token) {
-          await apiClient.post("/auth/logout", {}, { headers: { Authorization: `Bearer ${token}` } });
-        } else {
-          await apiClient.post("/auth/logout", {});
-        }
-      } catch {
-        // 退出失败不阻塞本地清理，避免用户卡在旧登录态。
-      } finally {
-        queryClient.clear();
-        clearExternalToken();
-        clearNewCarRedirectState();
-        clearAllAgentTokens();  // FIX3-1：退出清理 Local Agent token，防跨商户残留
-        setUser(null);
-        setAuthError(null);
-        void redirectToNewCarLogin({ message: "正在退出登录，请稍候…", delayMs: 0, saveCurrentPath: false });
-      }
-    })();
+    void performLogout(getExternalToken());
+  };
+
+  const handleSwitchToNewCar = async () => {
+    if (switchingToNewCar) return;
+    setSwitchingToNewCar(true);
+    try {
+      const redirectUrl = await switchToInternalSystem();
+      window.location.assign(redirectUrl);
+    } catch (error) {
+      toast.error(userFacingError(error, "切换到 NewCar 失败，请稍后重试。"));
+    } finally {
+      setSwitchingToNewCar(false);
+    }
   };
 
   const handleRelogin = () => {
+    setNewCarAuthRedirectSuppressed(false);
+    setLogoutViewState("idle");
+    logoutRetryTokenRef.current = null;
     queryClient.clear();
     clearExternalToken();
     clearNewCarRedirectState();
@@ -405,10 +470,26 @@ const App = () => {
 
   const renderIndex = (initialActiveNav: string) =>
     user && !externalMerchantNotBound ? (
-      <Index user={user} onLogout={handleLogout} initialActiveNav={initialActiveNav} />
+      <Index
+        user={user}
+        onLogout={handleLogout}
+        onSwitchToNewCar={handleSwitchToNewCar}
+        switchingToNewCar={switchingToNewCar}
+        initialActiveNav={initialActiveNav}
+      />
     ) : (
       <Login onLogin={handleLogin} authError={authError?.message || null} />
     );
+
+  if (logoutViewState !== "idle") {
+    return (
+      <LogoutStatusScreen
+        state={logoutViewState}
+        onRetry={() => void performLogout(logoutRetryTokenRef.current)}
+        onRelogin={handleRelogin}
+      />
+    );
+  }
 
   if (loginRedirectNotice) {
     return (

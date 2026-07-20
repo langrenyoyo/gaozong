@@ -644,10 +644,14 @@ function isAdminRouteNav(navId: string): boolean {
 export default function Index({
   user,
   onLogout = () => {},
+  onSwitchToNewCar = () => {},
+  switchingToNewCar = false,
   initialActiveNav = "chat",
 }: {
   user: AppUser;
   onLogout?: () => void;
+  onSwitchToNewCar?: () => void;
+  switchingToNewCar?: boolean;
   initialActiveNav?: string;
 }) {
   const [activeNav, setActiveNav] = useState(initialActiveNav);
@@ -819,6 +823,8 @@ export default function Index({
           expanded={isNavExpanded}
           onExpandedChange={setIsNavExpanded}
           onLogout={onLogout}
+          onSwitchToNewCar={onSwitchToNewCar}
+          switchingToNewCar={switchingToNewCar}
           showSalesBadge={Boolean(douyinAccount)}
           localAgentOnline={localAgentOnline}
           localAgentVersion={localAgentRuntimeStatus?.version || null}

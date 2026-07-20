@@ -18,6 +18,12 @@ const apiClient = axios.create({
   timeout: 10000,
 });
 
+let newCarAuthRedirectSuppressed = false;
+
+export function setNewCarAuthRedirectSuppressed(suppressed: boolean): void {
+  newCarAuthRedirectSuppressed = suppressed;
+}
+
 export function getApiErrorCode(error: unknown): string | null {
   const data = (error as { response?: { data?: unknown } })?.response?.data;
   if (!data || typeof data !== "object") {
@@ -79,7 +85,7 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    if (shouldRedirectToNewCarLogin(error)) {
+    if (!newCarAuthRedirectSuppressed && shouldRedirectToNewCarLogin(error)) {
       clearExternalToken();
       if (!redirectToNewCarLogin({ message: "登录已过期，正在重新登录…" })) {
         window.dispatchEvent(new Event("external-auth-expired"));
