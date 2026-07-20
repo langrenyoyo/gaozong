@@ -25,6 +25,19 @@ docs/ai/04_OUTPUT_RULES.md
 | `04_OUTPUT_RULES.md` | 汇报格式和风险说明 |
 | `05_PROJECT_CONTEXT.md` | **当前项目事实文档**（只保存当前有效上下文，不记录里程碑流水账） |
 
+## 可选高级治理工作流
+
+三权分离模块已接入但默认关闭；安装不等于任务启用。每项任务仍按 L0～L3 逐项判定，只有任务决定启用后才按需读取角色 Prompt，不加入默认 Required Reading。
+
+工作流模块内提到的 `Install-AICodingRule.ps1` 属于 AICoding-RULE 基线仓库；本项目不提供该安装脚本，也不以该脚本作为任务启用入口。
+
+| 入口 | 用途 |
+|---|---|
+| `workflows/three-authority-vibecoding/README.md` | 三权分离总入口、角色边界和标准流程 |
+| `workflows/three-authority-vibecoding/activation-rules.md` | L0～L3 风险判定、启用与降级规则 |
+| `prompts/three-authority-vibecoding/README.md` | 审批、执行、测试窗口 Prompt 导航，仅在任务启用后读取 |
+| `templates/three-authority-vibecoding/README.md` | 执行包、执行报告、测试请求、独立测试报告和审批记录模板 |
+
 ## 分阶段归档
 
 | 目录 | 内容 |
