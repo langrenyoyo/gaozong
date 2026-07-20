@@ -75,18 +75,22 @@ router = APIRouter(
 def _safe_sqlstate(exc: BaseException) -> str | None:
     """从 DB 异常取 SQLSTATE 稳定错误码；不含值，安全可入日志。
 
-    SQLAlchemy 包装异常（StatementError/ProgrammingError 等）把底层驱动异常放在 exc.orig；
-    psycopg 的 diag.sqlstate（如 42804）在那里。逐层解包 exc / exc.orig，缺失返回 None。
+    读取顺序（psycopg 驱动异常直接属性优先于 diag）：
+      exc.sqlstate → exc.diag.sqlstate → exc.orig.sqlstate → exc.orig.diag.sqlstate。
+    DatatypeMismatch 等场景下 exception.sqlstate='42804' 而 exception.diag.sqlstate=None，
+    只读 diag.sqlstate 会丢失根因码。逐层解包，缺失返回 None。
     """
     for candidate in (exc, getattr(exc, "orig", None)):
         if candidate is None:
             continue
+        direct = getattr(candidate, "sqlstate", None)
+        if direct:
+            return str(direct)
         diag = getattr(candidate, "diag", None)
-        if diag is None:
-            continue
-        sqlstate = getattr(diag, "sqlstate", None)
-        if sqlstate:
-            return str(sqlstate)
+        if diag is not None:
+            via_diag = getattr(diag, "sqlstate", None)
+            if via_diag:
+                return str(via_diag)
     return None
 
 
