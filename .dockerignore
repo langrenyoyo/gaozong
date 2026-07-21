@@ -66,3 +66,13 @@ frontend/.vite/
 *.sqlite
 *.sqlite3
 docker-data/
+
+
+# Python test and tool caches
+**/.pytest_cache
+**/__pycache__
+**/*.py[cod]
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
