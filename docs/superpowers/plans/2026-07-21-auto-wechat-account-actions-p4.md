@@ -15,7 +15,7 @@
 - `Task-ID`：`P1-AUTO-WECHAT-ACCOUNT-ACTIONS-P4-1`
 - `Plan-Revision`：`P4`
 - `Plan-Identifier`：本文件路径
-- `Target-Integration-Base`：`137db8ecc4de6c23b5579101fc0d4ae43ef9e392`
+- `Target-Integration-Base`：`1b52412da2f0be9114ca81f736e687ba24403252`（包含 `137db8e...` 之后已落地的抖音 webhook 布尔/PostgreSQL 契约修正；该组文件不属于 P4 施工范围）
 - `Previous-Candidate`：`d3e723da35d649d5403a4d5bdabd47e2147a9462`，因需求新增改密与管理员独立退出而废止，旧测试和批准不得转移。
 - `Risk-Level`：`L3`
 - `Workflow-Mode`：`full-three-authority`
