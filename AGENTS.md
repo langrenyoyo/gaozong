@@ -135,6 +135,7 @@ Output Rules
 7. 一期已放开旧的自动发送硬门禁；抖音私信、AI 自动回复和微信派单真实发送仍必须通过后端 gate 与运行保护，不得绕过违禁词替换、人工接管、限频、失败回写、幂等、紧急停止。
 8. NewCar 真实鉴权本地联调必须显式设置：`NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`（代码默认值是 mock 开发态）。
 9. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清理前端本地 token。
+10. **worktree 偏好声明（针对 superpowers skill 链）**：执行 `docs/superpowers/plans/*.md` 等 implementation plan 时，本项目声明固定偏好——**原地执行，不开 git worktree、不新建分支、不切目录**。`superpowers:using-git-worktrees` 检测到本指令即视为已声明偏好，跳过 Step 1 创建，直接在当前工作区执行；`superpowers:executing-plans` / `subagent-driven-development` 不得因"不在 worktree"而强制创建分支。此偏好覆盖 plan 文档开头 `REQUIRED SUB-SKILL` 段落隐含的隔离假设，但**不豁免**各 plan 自身的"允许范围 / 禁止事项"与发送安全、迁移、鉴权等 gate。如某高风险阶段确需隔离，必须由用户当轮显式批准后才可临时开 worktree。
 
 ## 小高AI系统一期确认范围（2026-07-10 确认，2026-07-18 勘误）
 
