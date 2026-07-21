@@ -89,6 +89,36 @@ assertIncludes(sideNav, "KeyRoundIcon", "改密动作使用钥匙图标");
 assertIncludes(sideNav, "isAdminUser ? (", "侧栏按管理员身份分支渲染底部动作");
 
 // ---------------------------------------------------------------------------
+// 账号操作区视觉结构对齐 NewCar
+// ---------------------------------------------------------------------------
+
+// 收起导航按钮使用 NewCar 深色填充样式（#22304b 填充 + 描边）。
+assertIncludes(sideNav, "bg-[#22304b]", "收起导航按钮使用 NewCar 深色填充样式");
+
+// 管理员橙色切换卡片：对齐 NewCar external-switch-card，含主标题与 NewCar 管理入口副标题。
+assertIncludes(sideNav, "bg-[#fff7ed]", "管理员切换卡片使用 NewCar 橙色填充");
+assertIncludes(sideNav, "border-[#f59e0b]", "管理员切换卡片使用 NewCar 橙色描边");
+assertIncludes(sideNav, "切换到 NewCar", "管理员橙色卡片主标题为切换到 NewCar");
+assertIncludes(sideNav, "NewCar 管理入口", "管理员橙色卡片含 NewCar 管理入口副标题");
+
+// 账号卡片：复用 NewCar avatar.svg，展示头像 + 账号 + 角色。
+assertIncludes(sideNav, 'from "../assets/avatar.svg"', "账号卡片复用 NewCar avatar.svg 资源");
+assertIncludes(sideNav, "accountMenuOpen", "账号卡片使用 popover 状态控制下拉菜单");
+assertIncludes(sideNav, "`${user.account} · ${user.roleLabel}`", "账号卡片 title 含账号与角色");
+
+// 账号菜单按身份分支：管理员只显示退出登录，商户显示修改密码 + 退出登录。
+{
+  // 管理员分支在前、商户分支（含 onChangePassword）在后；切片到 onChangePassword 即覆盖整个管理员分支。
+  const branchStart = sideNav.indexOf("isAdminUser ? (");
+  const merchantStart = sideNav.indexOf("onChangePassword", branchStart);
+  const adminBranch = sideNav.slice(branchStart, merchantStart > branchStart ? merchantStart : undefined);
+  assertNotIncludes(adminBranch, "修改密码", "管理员账号菜单只显示退出登录，不含修改密码");
+  assertIncludes(adminBranch, "onAdminLogout", "管理员账号菜单绑定管理员退出回调");
+}
+assertIncludes(sideNav, "onChangePassword", "商户账号菜单保留修改密码回调");
+assertIncludes(sideNav, "KeyRoundIcon", "商户账号菜单修改密码使用钥匙图标");
+
+// ---------------------------------------------------------------------------
 // App 状态机：401 抑制与本地状态清理
 // ---------------------------------------------------------------------------
 

@@ -14,8 +14,11 @@ import {
   ScissorsIcon,
   ShieldCheckIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppUser } from "../App";
+// 复用 NewCar 的 avatar.svg，保留其中 Avataaars 授权信息。
+import avatarUrl from "../assets/avatar.svg";
 import {
   filterCapabilityNavCenters,
   findCapabilityByNavId,
@@ -113,6 +116,12 @@ export default function SideNav({
   const visibleCenters = filterCapabilityNavCenters(user);
   const activeCenter = findCapabilityByNavId(activeNav, user);
   const navigate = useNavigate();
+  // 账号卡片下拉菜单的展开状态，对齐 NewCar account-menu：点击卡片切换、点击动作关闭、收起导航时关闭。
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const toggleExpanded = () => {
+    setAccountMenuOpen(false);
+    onExpandedChange(!expanded);
+  };
 
   const navigateMerchantItem = (id: string, path: string) => {
     onNavChange(id);
@@ -133,7 +142,7 @@ export default function SideNav({
       >
         <div className={`flex w-full items-center border-b border-white/10 py-5 ${expanded ? "justify-between px-4" : "justify-center"}`}>
           <button
-            onClick={() => onExpandedChange(!expanded)}
+            onClick={toggleExpanded}
             className={`flex min-w-0 items-center rounded-xl text-left transition-smooth ${expanded ? "gap-3" : "hover:scale-105"}`}
             aria-label={expanded ? "收起导航" : "展开导航"}
           >
@@ -225,10 +234,11 @@ export default function SideNav({
 
         <div className={`flex flex-col gap-2 pb-4 ${expanded ? "px-3" : "items-center"}`}>
           <button
-            onClick={() => onExpandedChange(!expanded)}
+            onClick={toggleExpanded}
             aria-label={expanded ? "收起导航" : "展开导航"}
-            className={`grid h-10 place-items-center rounded-xl text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
-              expanded ? "w-full grid-cols-[18px_1fr] px-3 text-left text-xs" : "w-12"
+            title={expanded ? "收起导航" : "展开导航"}
+            className={`flex h-10 items-center rounded-xl border border-white/10 bg-[#22304b] text-white transition-smooth hover:bg-[#2a3a5c] ${
+              expanded ? "w-full gap-2 px-3 text-left text-xs" : "w-12 justify-center"
             }`}
           >
             {expanded ? <ChevronLeftIcon size={16} /> : <ChevronRightIcon size={16} />}
@@ -270,63 +280,97 @@ export default function SideNav({
           ) : null}
 
           {isAdminUser ? (
-            <>
-              <button
-                type="button"
-                onClick={onSwitchToNewCar}
-                disabled={switchingToNewCar}
-                aria-label={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
-                title={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
-                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
-                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
+            <button
+              type="button"
+              onClick={onSwitchToNewCar}
+              disabled={switchingToNewCar}
+              aria-label={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
+              title={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
+              className={`flex items-center rounded-xl border border-[#f59e0b] bg-[#fff7ed] text-[#7c2d12] shadow-[0_10px_24px_rgba(245,158,11,0.22)] transition-smooth hover:bg-[#ffedd5] disabled:cursor-wait disabled:opacity-70 ${
+                expanded ? "w-full gap-2.5 px-3 py-2.5" : "h-12 w-12 justify-center"
+              }`}
+            >
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-[#f59e0b] text-[#111827]">
+                {switchingToNewCar ? <LoaderCircleIcon size={18} className="animate-spin" /> : <ExternalLinkIcon size={18} />}
+              </span>
+              {expanded ? (
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="truncate text-xs font-bold">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span>
+                  <span className="truncate text-[11px] text-[#9a3412]">NewCar 管理入口</span>
+                </span>
+              ) : null}
+            </button>
+          ) : null}
+
+          <div className={`relative ${expanded ? "w-full" : "w-12"}`}>
+            {accountMenuOpen ? (
+              <div
+                className={`absolute z-20 grid gap-1 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2.5 text-slate-700 shadow-[0_18px_44px_rgba(15,23,42,0.28)] ${
+                  expanded ? "inset-x-0 bottom-[56px]" : "bottom-[56px] left-0 w-[220px]"
                 }`}
               >
-                {switchingToNewCar ? <LoaderCircleIcon size={16} className="animate-spin" /> : <ExternalLinkIcon size={16} />}
-                {expanded ? <span className="truncate">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span> : null}
-              </button>
-              <button
-                type="button"
-                onClick={onAdminLogout}
-                disabled={adminLoggingOut}
-                aria-label={adminLoggingOut ? "正在退出登录" : "退出登录"}
-                title="退出登录"
-                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
-                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
-                }`}
-              >
-                {adminLoggingOut ? <LoaderCircleIcon size={16} className="animate-spin" /> : <LogOutIcon size={16} />}
-                {expanded ? <span className="truncate">{adminLoggingOut ? "正在退出" : "退出登录"}</span> : null}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={onChangePassword}
-                disabled={changingPassword}
-                aria-label={changingPassword ? "正在修改密码" : "修改密码"}
-                title="修改密码"
-                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
-                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
-                }`}
-              >
-                {changingPassword ? <LoaderCircleIcon size={16} className="animate-spin" /> : <KeyRoundIcon size={16} />}
-                {expanded ? <span className="truncate">{changingPassword ? "正在修改" : "修改密码"}</span> : null}
-              </button>
-              <button
-                type="button"
-                onClick={onLogout}
-                aria-label="退出登录"
-                title="退出登录"
-                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
-                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
-                }`}
-              >
-                <LogOutIcon size={16} />
-                {expanded ? <span className="truncate">{user.account} 退出</span> : null}
-              </button>
-            </>
-          )}
+                <strong className="truncate text-xs font-semibold text-[#1a1f2e]">{user.account}</strong>
+                <span className="mb-1.5 truncate text-[10px] text-slate-500">{user.roleLabel}</span>
+                {isAdminUser ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMenuOpen(false);
+                      onAdminLogout();
+                    }}
+                    disabled={adminLoggingOut}
+                    className="flex h-[34px] items-center gap-2 rounded-lg px-2 text-xs font-bold text-[#dc2626] hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {adminLoggingOut ? <LoaderCircleIcon size={14} className="animate-spin" /> : <LogOutIcon size={14} />}
+                    退出登录
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        onChangePassword();
+                      }}
+                      disabled={changingPassword}
+                      className="flex h-[34px] items-center gap-2 rounded-lg px-2 text-xs font-bold text-[#2563eb] hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {changingPassword ? <LoaderCircleIcon size={14} className="animate-spin" /> : <KeyRoundIcon size={14} />}
+                      修改密码
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAccountMenuOpen(false);
+                        onLogout();
+                      }}
+                      className="flex h-[34px] items-center gap-2 rounded-lg px-2 text-xs font-bold text-[#dc2626] hover:bg-red-50"
+                    >
+                      <LogOutIcon size={14} />
+                      退出登录
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setAccountMenuOpen((value) => !value)}
+              aria-label={`${user.account} · ${user.roleLabel}`}
+              title={`${user.account} · ${user.roleLabel}`}
+              className={`flex items-center rounded-xl bg-[#22304b] text-white transition-smooth hover:bg-[#2a3a5c] ${
+                expanded ? "w-full gap-2.5 px-2.5 py-2" : "h-12 w-12 justify-center"
+              }`}
+            >
+              <img src={avatarUrl} alt={user.account} className="h-8 w-8 shrink-0 rounded-full" />
+              {expanded ? (
+                <span className="grid min-w-0">
+                  <span className="truncate text-xs font-semibold">{user.account}</span>
+                  <span className="mt-0.5 truncate text-[10px] text-slate-400">{user.roleLabel}</span>
+                </span>
+              ) : null}
+            </button>
+          </div>
         </div>
       </div>
     </aside>
