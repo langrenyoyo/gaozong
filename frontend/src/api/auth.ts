@@ -113,3 +113,86 @@ export async function fetchCurrentAuthUserWithoutRedirect(): Promise<AuthContext
     return null;
   }
 }
+
+const SWITCH_TO_NEWCAR_ERROR = "切换到 NewCar 失败，请稍后重试。";
+const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+
+export async function switchToInternalSystem(): Promise<string> {
+  const token = getExternalToken();
+  if (!NEWCAR_AUTH_BASE_URL || !token) {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+
+  let response: Response;
+  try {
+    const baseUrl = NEWCAR_AUTH_BASE_URL.replace(/\/+$/, "");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    headers.Authorization = `Bearer ${token}`;
+    response = await fetch(`${baseUrl}/api/external-auth/switch-to-internal`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("登录已过期，无法切换到 NewCar。");
+    }
+    if (response.status === 403) {
+      throw new Error("当前账号暂无切换到 NewCar 的权限。");
+    }
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+
+  const value =
+    payload && typeof payload === "object"
+      ? (payload as { redirect_url?: unknown }).redirect_url
+      : null;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(value);
+  } catch {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+  if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
+    throw new Error(SWITCH_TO_NEWCAR_ERROR);
+  }
+  return redirectUrl.toString();
+}
+
+export async function logoutAutoWechat(token: string | null): Promise<void> {
+  const baseUrl = (API_BASE_URL || "").replace(/\/+$/, "");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/auth/logout`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error("退出失败，请重试");
+    }
+  } catch {
+    throw new Error("退出失败，请重试");
+  }
+}

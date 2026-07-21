@@ -1,20 +1,19 @@
 # 外部系统登录接入说明
 
-更新时间：2026-07-03
+更新时间：2026-07-20
 
 本文档提供给外部系统开发人员使用，用于接入当前内部商户系统维护的外部账号登录能力。
 
 ## 1. 接入边界
 
-当前版本只提供外部账号登录、一次性 code 换取外部 token、登录态校验、退出登录、权限回显和全局违禁词检查。
+当前版本提供外部账号登录、一次性 code 换取外部 token、登录态校验、管理员切换回内部系统、退出登录、权限回显和全局违禁词检查。
 
-当前版本不包含：
+接入边界分为两层：
 
-- 外部商户绑定。
-- 外部商户隔离。
-- 抖音账号、智能体、会话归属校验。
-- 9000 到 9100 的内部服务鉴权。
-- 外部商户绑定后的业务资源鉴权。
+- NewCarProject 上游 `/api/external-auth/login`、`/api/external-auth/me` 负责账号、external token 和权限，本身不提供 auto_wechat 商户绑定；其响应中的 `merchant_id` 可以为 `null`。
+- auto_wechat 9000 已通过本地 `external_merchant_bindings` 映射外部账号与商户，并由服务端 RequestContext 执行商户隔离、资源归属和权限校验。浏览器传入的 `merchant_id` 不可信，不能替代该服务端上下文。
+
+NewCarProject 不负责 auto_wechat 的抖音账号、智能体、会话和线索资源归属；这些业务边界由 9000 校验。
 
 外部账号和内部管理员共用 `users` 表，但通过 `account_scope` 隔离：
 
@@ -113,16 +112,12 @@ newcar_redirect_path
 newcar_redirect_path_saved_at
 ```
 
-该路径只用于一次登录回跳，登录成功后会立即消费并删除。当前默认登录落点为：
-
-```text
-/douyin-cs/workbench
-```
+该路径只用于一次登录回跳，登录成功后会立即消费并删除。默认登录落点按当前账号实际权限计算，不固定到某个工作台：管理员进入第一个可访问的本地管理页或明确的归属提示页，普通用户进入第一个有权限的能力中心。
 
 `newcar_redirect_path` 具备以下安全规则：
 
-- 带 TTL，当前为 10 分钟；过期后回退到 `/douyin-cs/workbench`。
-- 只允许站内业务路径，当前允许 `/douyin-cs`、`/leads`、`/compute`、`/agents`、`/wechat-assistant` 及其子路径。
+- 带 TTL，当前为 10 分钟；过期后回退到当前账号的权限默认页。
+- 只允许站内业务路径，当前允许已登记的管理员路径，以及 `/douyin-cs`、`/leads`、`/compute`、`/agents`、`/wechat-assistant` 及其子路径。
 - 拒绝空路径、外部 URL、`//` 开头路径、`/login`、`/auth/callback` 和未知路径。
 - 非法或过期路径只做安全日志记录并回退默认工作台，不向用户展示技术细节。
 - token 缺失或过期时，前端会先显示轻量提示，再跳转 NewCarProject 统一登录页。
@@ -138,27 +133,29 @@ auto_wechat 前端按错误类型区分是否自动跳转统一登录：
 - `LOCAL_AGENT_*`：表示 Local Agent 机器认证错误，不清理浏览器 `external_token`，不自动跳 NewCarProject 统一登录页。
 - 一次性 code 换 token 失败：清理 URL 中的 `code` / `source`，显示“登录凭证已失效，请重新登录。”，不展示上游完整错误体。
 
-auto_wechat 前端全局 `401` 拦截器只处理 NewCar 浏览器登录态错误。`LOCAL_AGENT_TOKEN_MISSING`、`LOCAL_AGENT_TOKEN_INVALID`、`LOCAL_AGENT_TOKEN_REQUIRED`、`LOCAL_AGENT_TOKEN_REVOKED` 以及其它 `LOCAL_AGENT_` 前缀错误会继续抛给页面处理。
+auto_wechat 前端全局 `401` 拦截器只处理 NewCar 浏览器登录态错误。`LOCAL_AGENT_TOKEN_MISSING`、`LOCAL_AGENT_TOKEN_INVALID`、`LOCAL_AGENT_TOKEN_REQUIRED`、`LOCAL_AGENT_TOKEN_REVOKED` 以及其它 `LOCAL_AGENT_` 前缀错误会继续抛给页面处理。普通用户开始退出后，该拦截器会在退出请求和成功/失败结果页期间抑制 NewCar 自动跳转，避免先前已发出的请求在 token 吊销后返回 `401` 并覆盖退出结果页；用户主动点击“重新登录”前才恢复正常跳转。
 
 `/wechat-assistant` 页面如果遇到 Local Agent token 错误，应作为业务接口错误展示轻量提示，例如“Local Agent 尚未完成授权或当前任务接口需要 Agent token”，并保持本机 `19000` 健康检查、运行状态、销售配置等其它模块可见。
 
 错误页提供的操作：
 
-- “重新登录”：清理 `external_token` 和 NewCar 回跳状态，然后跳转 NewCarProject 统一登录页；该操作不把当前错误页保存为回跳路径，重新登录成功后默认进入 `/douyin-cs/workbench`。
-- “返回工作台”：用于权限不足场景，跳转 `/douyin-cs/workbench`。
+- “重新登录”：清理 `external_token` 和 NewCar 回跳状态，然后跳转 NewCarProject 统一登录页；该操作不把当前错误页保存为回跳路径，重新登录成功后进入当前账号的权限默认页。
+- “返回工作台”：用于权限不足场景，进入当前账号的权限默认页。
 
 ### 2.6 Token 隔离
 
-外部 token 只能访问 `/api/external-auth/*` 这类外部接口。
+在 NewCarProject 后端 Origin 上，external token 只能访问 `/api/external-auth/*` 这类外部接口。
 
-外部 token 不能访问内部后台接口，例如：
+它不能访问 NewCarProject 内部后台接口，例如：
 
 - `/api/me`
 - `/api/merchants`
 - `/api/admin-users`
 - `/api/roles`
 
-内部后台 token 也不能访问外部登录态接口 `/api/external-auth/me`。
+NewCarProject 内部后台 token 也不能访问外部登录态接口 `/api/external-auth/me`。
+
+在 auto_wechat 9000 Origin 上，浏览器可以将同一个 external token 作为 Bearer 调用本地鉴权门面 `/auth/me` 和 `/auth/logout`；`/auth/logout` 再由 9000 代理调用 NewCarProject `/api/external-auth/logout`。其它 auto_wechat 业务接口是否可访问，以 9000 的 RequestContext、商户隔离和权限 gate 为准。这不表示 external token 可以访问 NewCarProject 内部 `/api/me`。
 
 ## 3. 权限要求
 
@@ -172,17 +169,20 @@ auto_wechat:use
 
 当前可分配的外部权限包括：
 
-| 权限码                               | 说明             |
-| ------------------------------------ | ---------------- |
-| `auto_wechat:use`                    | 进入外部系统     |
-| `auto_wechat:douyin_ai_cs`           | 抖音 AI 小高客服 |
-| `auto_wechat:leads`                  | AI 小高线索      |
-| `auto_wechat:agent`                  | 小高 AI 微信助手 |
-| `auto_wechat:compute`                | 小高算力         |
-| `auto_wechat:admin:forbidden_words`  | 外部违禁词管理   |
-| `auto_wechat:admin:accounts`         | 外部账号管理     |
-| `auto_wechat:admin:ai_reply_records` | AI 回复记录      |
-| `auto_wechat:admin:compute_config`   | 算力配置管理     |
+| 权限码                                      | 说明                         |
+| ------------------------------------------- | ---------------------------- |
+| `auto_wechat:use`                           | 进入外部系统                 |
+| `auto_wechat:douyin_ai_cs`                  | 抖音 AI 小高客服             |
+| `auto_wechat:leads`                         | AI 小高线索                  |
+| `auto_wechat:agent`                         | 小高 AI 微信助手             |
+| `auto_wechat:compute`                       | 小高算力                     |
+| `auto_wechat:ai_edit`                       | AI 剪辑历史兼容权限          |
+| `auto_wechat:admin:autoreply`                | 自动回复灰度历史兼容权限     |
+| `auto_wechat:admin:ai_reply_records`        | AI 回复记录                  |
+| `auto_wechat:admin:compute_config`           | 算力配置管理                 |
+| `auto_wechat:admin:accounts`                 | 外部账号管理                 |
+| `auto_wechat:admin:forbidden_words`          | 外部违禁词管理               |
+| `auto_wechat:admin:return_visit_prompts`     | 回访提示词配置               |
 
 接口返回的 `permissions` 是当前账号实际拥有的外部权限列表，外部系统应以后端返回值为准控制页面和接口能力。
 
@@ -311,7 +311,7 @@ Content-Type: application/json
 
 - `token` 只返回一次，推荐由外部系统后端写入 HttpOnly Cookie；纯前端临时接入时可暂存在内存或 sessionStorage。
 - `expires_in` 以接口实际返回为准，部署侧可通过 `EXTERNAL_SESSION_HOURS` 调整。
-- 当前版本没有外部商户绑定，所以 `merchant_id` 为 `null`，`merchant_ids` 为空数组。
+- 该示例是 NewCarProject 上游响应；上游本身不提供 auto_wechat 商户绑定，因此 `merchant_id` 为 `null`、`merchant_ids` 为空数组。auto_wechat 9000 会通过本地 `external_merchant_bindings` 解析实际商户上下文，不能使用浏览器自填字段替代。
 - 不要从 URL 长期携带 token。
 
 失败响应示例：
@@ -373,6 +373,8 @@ Authorization: Bearer <token>
 }
 ```
 
+该示例同样是 NewCarProject 上游登录态响应。`merchant_id=null` 只表示上游未提供 auto_wechat 绑定信息，不表示 9000 没有商户绑定；进入 auto_wechat 后，以 9000 `/auth/me` 返回的可信上下文和 RequestContext 为准。
+
 失败响应：
 
 ```json
@@ -388,9 +390,60 @@ Authorization: Bearer <token>
 | `401`  | token 缺失、无效、过期、账号不可用 |
 | `403`  | 账号缺少 `auto_wechat:use`         |
 
-## 6. 退出登录
+## 6. 管理员切换与普通用户退出
 
-### 6.1 POST `/api/external-auth/logout`
+### 6.1 POST `/api/external-auth/switch-to-internal`
+
+auto_wechat 使用既有管理员判定：`super_admin` 或持有任一 `auto_wechat:admin:*` 权限。管理员侧栏只显示“切换到 NewCar”，不显示 auto_wechat 退出按钮。
+
+一次性切换 code 绑定浏览器来源，因此必须由 auto_wechat 浏览器直接调用 NewCarProject，不能由 9000 代调。
+
+请求：
+
+```http
+POST /api/external-auth/switch-to-internal
+Authorization: Bearer <external_token>
+Content-Type: application/json
+```
+
+```json
+{}
+```
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "redirect_url": "https://internal.example.com/?internal_code=<one_time_code>&source=auto_wechat",
+  "internal_auth_code_expires_in": 120,
+  "internal_auth_code_expires_at": "2026-07-20T10:02:00+08:00"
+}
+```
+
+前端只读取字符串 `redirect_url`，使用标准 URL 解析，并且只允许 `http:` / `https:` 协议。前端不硬编码目标地址，不记录或展示 `internal_code`，也不在切换前清理 auto_wechat 的 external token、回跳状态或 Local Agent token。请求失败、响应不是合法 JSON 或 URL 协议非法时，保持当前页面和登录态，显示固定可读错误并允许重试。
+
+### 6.2 普通用户退出 auto_wechat
+
+普通用户侧栏只显示“退出”，不显示“切换到 NewCar”。退出时浏览器调用 auto_wechat 9000：
+
+```http
+POST /auth/logout
+Authorization: Bearer <external_token>
+Content-Type: application/json
+```
+
+```json
+{}
+```
+
+9000 再调用 NewCarProject `POST /api/external-auth/logout`。前端使用直接 `fetch`，并在发起退出前开启模块级鉴权重定向抑制，避免注销请求本身或其它已在途请求返回 `401` 后跳转 NewCar。该抑制在退出失败、重试和成功结果页持续有效，用户主动点击“重新登录”前关闭；管理员“切换到 NewCar”不读取或修改该状态。
+
+无论 9000 注销成功或失败，前端都会卸载受保护页面，并清理 React Query 缓存、`external_token`、NewCar 回跳状态、Local Agent token 和当前用户状态；浏览器 URL 保持不变，也不会自动跳转 NewCar。成功时显示“已退出”；失败时显示“退出失败，请重试”和页面内重试按钮。失败请求使用的 token 只保留在当前 React 页面实例的 `useRef` 内存中，不写回 `sessionStorage`、`localStorage`、URL 或日志。
+
+### 6.3 POST `/api/external-auth/logout`
+
+该接口由 auto_wechat 9000 注销门面调用；外部系统若直接接入上游，也可按以下合同调用。
 
 请求：
 
@@ -548,6 +601,23 @@ async function externalMe() {
 }
 ```
 
+### 8.3 auto_wechat 管理员切换与普通用户退出
+
+```text
+管理员点击“切换到 NewCar”
+  -> 浏览器直接 POST /api/external-auth/switch-to-internal
+  -> 校验 redirect_url 为 HTTP(S)
+  -> 使用返回地址进入 NewCar
+
+普通用户点击“退出”
+  -> 开启全局 401 NewCar 跳转抑制
+  -> 浏览器 POST auto_wechat 9000 /auth/logout
+  -> 9000 注销 NewCar external session
+  -> 前端无条件清理本地持久状态并保持当前 URL
+  -> 失败时仅用页面内存 token 重试
+  -> 主动点击“重新登录”前关闭抑制并跳 NewCar 登录页
+```
+
 ## 9. 安全要求
 
 外部系统必须遵守：
@@ -557,19 +627,21 @@ async function externalMe() {
 3. token 优先放 HttpOnly + Secure + SameSite Cookie；如果第一版只能放前端存储，建议用 sessionStorage，并做好 XSS 防护。
 4. 生产环境必须配置强随机 `SESSION_SECRET`，不能使用默认开发密钥。
 5. 后端返回的 `permissions` 是唯一可信权限来源。
-6. 当前版本没有外部商户绑定，不要根据前端自填 `merchant_id` 做高风险查询。
-7. 涉及抖音账号、智能体、客户会话、线索、库存等上下文时，后续必须由外部系统后端生成可信 RequestContext，不能信任浏览器自报字段。
+6. NewCarProject `/api/external-auth/login`、`/api/external-auth/me` 不提供 auto_wechat 商户绑定；其示例 `merchant_id=null` 是上游字段语义。
+7. auto_wechat 9000 已通过 `external_merchant_bindings` 和服务端 RequestContext 执行商户隔离；浏览器自填的 `merchant_id`、抖音账号、智能体或会话归属一律不可信。
+8. external token 在 NewCarProject Origin 上不能访问内部 `/api/me`；在 auto_wechat 9000 Origin 上可作为 Bearer 调用本地 `/auth/me`、`/auth/logout`，其它业务访问继续受 9000 权限和隔离 gate 约束。
+9. `switch-to-internal` 返回地址可能携带一次性 `internal_code`，不得写入日志、错误提示或持久化存储；跳转前必须校验协议为 HTTP(S)。
 
 ## 10. 和内部后台登录的区别
 
-| 能力       | 内部后台 `/api/login`       | 外部登录 `/api/external-auth/login`           |
-| ---------- | --------------------------- | --------------------------------------------- |
-| 面向对象   | 内部管理员                  | 外部系统账号                                  |
-| 账号范围   | `account_scope=internal`    | `account_scope=external`                      |
-| 返回 token | 内部 token                  | 外部 token；统一登录跳转场景先返回一次性 code |
-| 可访问接口 | 内部后台接口                | 外部系统接口                                  |
-| 角色来源   | 内部角色 RBAC               | 外部账号直配权限                              |
-| 商户关系   | 内部 `merchants` / 分配范围 | 第一版无外部商户绑定                          |
+| 能力       | NewCar 内部后台 `/api/login` | NewCar 外部登录 `/api/external-auth/login`                             |
+| ---------- | ---------------------------- | ---------------------------------------------------------------------- |
+| 面向对象   | 内部管理员                   | 外部系统账号                                                           |
+| 账号范围   | `account_scope=internal`     | `account_scope=external`                                               |
+| 返回 token | 内部 token                   | 外部 token；统一登录跳转场景先返回一次性 code                          |
+| 可访问接口 | NewCar 内部后台接口          | NewCar `/api/external-auth/*`；auto_wechat 访问另由 9000 门面校验      |
+| 角色来源   | 内部角色 RBAC                | 外部账号直配权限                                                       |
+| 商户关系   | 内部 `merchants` / 分配范围  | 上游不提供 auto_wechat 绑定；9000 通过 `external_merchant_bindings` 映射 |
 
 ## 11. 当前版本接口清单
 
@@ -578,15 +650,10 @@ async function externalMe() {
 | `POST` | `/api/external-auth/login`                 | 外部账号登录             | 无         |
 | `POST` | `/api/external-auth/exchange-code`         | 一次性 code 换外部 token | 无         |
 | `GET`  | `/api/external-auth/me`                    | 查询当前外部登录态       | 外部 token |
+| `POST` | `/api/external-auth/switch-to-internal`    | 切换回内部 NewCar 系统   | 外部 token |
 | `POST` | `/api/external-auth/logout`                | 退出外部登录             | 外部 token |
 | `POST` | `/api/external-auth/forbidden-words/check` | 全局违禁词检查           | 外部 token |
 
-## 12. 后续扩展建议
+## 12. 后续扩展边界
 
-后续如果需要完整接入 auto_wechat 业务系统，建议按以下顺序扩展：
-
-1. 一次性 code 登录，避免账号密码由多个系统直接处理。
-2. 外部商户、抖音账号、智能体绑定关系。
-3. 外部系统 RequestContext。
-4. 9000 到 9100 的 service token 或签名鉴权。
-5. 业务接口按外部商户、抖音账号、智能体做强隔离。
+一次性 code 登录、auto_wechat 本地外部商户绑定和服务端 RequestContext 已落地。后续扩展必须继续遵守：NewCarProject 负责账号、Token 和权限；9000 负责 auto_wechat 商户映射、资源归属和业务隔离；浏览器字段不得替代可信服务端上下文。9000 到 9100 的内部鉴权或其它跨服务能力应按独立接口合同推进，不得通过前端 token 或数据库直读绕过现有边界。

@@ -1,5 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
 const root = process.cwd();
 
@@ -27,6 +31,263 @@ function assertOrder(content, first, second, label) {
   }
 }
 
+async function assertRejectedWithMessage(action, expected, label) {
+  let error;
+  try {
+    await action();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof Error, `${label}: expected rejection`);
+  assert.equal(error.message, expected, `${label}: unexpected public error`);
+}
+
+function memoryStorage(initialValues = {}) {
+  const values = new Map(Object.entries(initialValues));
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return [...values.keys()][index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    },
+  };
+}
+
+function setGlobal(name, value, snapshots) {
+  snapshots.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+}
+
+function restoreGlobals(snapshots) {
+  for (const [name, descriptor] of snapshots) {
+    if (descriptor) {
+      Object.defineProperty(globalThis, name, descriptor);
+    } else {
+      delete globalThis[name];
+    }
+  }
+}
+
+async function runAuthBehaviorChecks() {
+  const output = await build({
+    entryPoints: [path.join(root, "src/api/auth.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    write: false,
+    define: {
+      "import.meta.env.DEV": "false",
+      "import.meta.env.VITE_API_BASE_URL": JSON.stringify("https://auto.example.test///"),
+      "import.meta.env.VITE_AUTO_WECHAT_API_BASE_URL": "undefined",
+      "import.meta.env.VITE_NEWCAR_AUTH_BASE_URL": JSON.stringify("https://newcar.example.test///"),
+      "import.meta.env.VITE_NEWCAR_LOGIN_URL": JSON.stringify("https://newcar.example.test/login"),
+    },
+  });
+  const tempFile = path.join(os.tmpdir(), `auto-wechat-auth-contract-${process.pid}-${Date.now()}.mjs`);
+  const snapshots = new Map();
+  const calls = [];
+
+  try {
+    fs.writeFileSync(tempFile, output.outputFiles[0].text, "utf8");
+    setGlobal("sessionStorage", memoryStorage({ external_token: "switch-token" }), snapshots);
+    setGlobal(
+      "window",
+      {
+        addEventListener() {},
+        dispatchEvent() { return true; },
+        history: { replaceState() {} },
+        location: {
+          hash: "",
+          href: "https://auto.example.test/leads",
+          origin: "https://auto.example.test",
+          pathname: "/leads",
+          replace() {},
+          search: "",
+        },
+        removeEventListener() {},
+        setTimeout,
+      },
+      snapshots,
+    );
+
+    let fetchHandler;
+    setGlobal(
+      "fetch",
+      async (url, options = {}) => {
+        calls.push({ url: String(url), options });
+        return await fetchHandler(url, options);
+      },
+      snapshots,
+    );
+
+    const authModule = await import(`${pathToFileURL(tempFile).href}?v=${Date.now()}`);
+    const switchError = "切换到 NewCar 失败，请稍后重试。";
+    const logoutError = "退出失败，请重试";
+    const jsonResponse = (body, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+    fetchHandler = async () => jsonResponse({ redirect_url: "https://internal.example.test/home?source=auto_wechat" });
+    calls.length = 0;
+    assert.equal(
+      await authModule.switchToInternalSystem(),
+      "https://internal.example.test/home?source=auto_wechat",
+      "switch returns validated redirect_url",
+    );
+    assert.equal(calls.length, 1, "switch makes one request");
+    assert.equal(calls[0].url, "https://newcar.example.test/api/external-auth/switch-to-internal");
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer switch-token");
+    assert.equal(calls[0].options.body, "{}");
+    assert.ok(calls[0].options.signal instanceof AbortSignal, "switch request carries AbortSignal");
+
+    fetchHandler = async () => jsonResponse({ detail: "RAW_401_SECRET" }, 401);
+    await assertRejectedWithMessage(
+      authModule.switchToInternalSystem,
+      "登录已过期，无法切换到 NewCar。",
+      "switch 401",
+    );
+    fetchHandler = async () => jsonResponse({ detail: "RAW_403_SECRET" }, 403);
+    await assertRejectedWithMessage(
+      authModule.switchToInternalSystem,
+      "当前账号暂无切换到 NewCar 的权限。",
+      "switch 403",
+    );
+    fetchHandler = async () => new Response("RAW_INVALID_JSON_SECRET", { status: 200 });
+    await assertRejectedWithMessage(authModule.switchToInternalSystem, switchError, "switch invalid json");
+    fetchHandler = async () => jsonResponse({ detail: "RAW_MISSING_REDIRECT_SECRET" });
+    await assertRejectedWithMessage(authModule.switchToInternalSystem, switchError, "switch missing redirect");
+    fetchHandler = async () => jsonResponse({ redirect_url: "javascript:alert('RAW_URL_SECRET')" });
+    await assertRejectedWithMessage(authModule.switchToInternalSystem, switchError, "switch unsafe redirect");
+    fetchHandler = async () => { throw new Error("RAW_NETWORK_SECRET"); };
+    await assertRejectedWithMessage(authModule.switchToInternalSystem, switchError, "switch network error");
+    fetchHandler = async () => { throw new DOMException("RAW_ABORT_SECRET", "AbortError"); };
+    await assertRejectedWithMessage(authModule.switchToInternalSystem, switchError, "switch abort");
+
+    fetchHandler = async () => jsonResponse({ ok: true });
+    calls.length = 0;
+    await authModule.logoutAutoWechat("logout-token");
+    assert.equal(calls.length, 1, "logout makes one request");
+    assert.equal(calls[0].url, "https://auto.example.test/auth/logout");
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer logout-token");
+    assert.equal(calls[0].options.body, "{}");
+    assert.ok(calls[0].options.signal instanceof AbortSignal, "logout request carries AbortSignal");
+
+    fetchHandler = async () => jsonResponse({ detail: "RAW_503_SECRET" }, 503);
+    await assertRejectedWithMessage(() => authModule.logoutAutoWechat("logout-token"), logoutError, "logout 503");
+    fetchHandler = async () => { throw new Error("RAW_LOGOUT_NETWORK_SECRET"); };
+    await assertRejectedWithMessage(
+      () => authModule.logoutAutoWechat("logout-token"),
+      logoutError,
+      "logout network error",
+    );
+    fetchHandler = async () => { throw new DOMException("RAW_LOGOUT_ABORT_SECRET", "AbortError"); };
+    await assertRejectedWithMessage(() => authModule.logoutAutoWechat("logout-token"), logoutError, "logout abort");
+  } finally {
+    restoreGlobals(snapshots);
+    fs.rmSync(tempFile, { force: true });
+  }
+}
+
+async function runClientRedirectSuppressionChecks() {
+  const output = await build({
+    entryPoints: [path.join(root, "src/api/client.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    write: false,
+    define: {
+      "import.meta.env.DEV": "false",
+      "import.meta.env.VITE_API_BASE_URL": JSON.stringify("https://auto.example.test"),
+      "import.meta.env.VITE_AUTO_WECHAT_API_BASE_URL": "undefined",
+      "import.meta.env.VITE_NEWCAR_LOGIN_URL": JSON.stringify("https://newcar.example.test/login"),
+    },
+  });
+  const tempFile = path.join(os.tmpdir(), `auto-wechat-client-contract-${process.pid}-${Date.now()}.mjs`);
+  const snapshots = new Map();
+  const replaceCalls = [];
+  let clientModule;
+
+  try {
+    fs.writeFileSync(tempFile, output.outputFiles[0].text, "utf8");
+    setGlobal("sessionStorage", memoryStorage({ external_token: "race-token" }), snapshots);
+    setGlobal(
+      "CustomEvent",
+      class ContractCustomEvent extends Event {
+        constructor(type, init = {}) {
+          super(type);
+          this.detail = init.detail;
+        }
+      },
+      snapshots,
+    );
+    setGlobal(
+      "window",
+      {
+        dispatchEvent() { return true; },
+        location: {
+          hash: "#latest",
+          href: "https://auto.example.test/leads?tab=all#latest",
+          origin: "https://auto.example.test",
+          pathname: "/leads",
+          replace(url) { replaceCalls.push(String(url)); },
+          search: "?tab=all",
+        },
+        setTimeout(callback) {
+          callback();
+          return 1;
+        },
+      },
+      snapshots,
+    );
+
+    clientModule = await import(`${pathToFileURL(tempFile).href}?v=${Date.now()}`);
+    clientModule.default.defaults.adapter = async () => {
+      const error = new Error("RAW_LATE_401_SECRET");
+      error.response = { status: 401, data: { detail: { code: "TOKEN_EXPIRED" } } };
+      throw error;
+    };
+    const triggerLate401 = () => assert.rejects(clientModule.default.get("/late-request"));
+
+    await triggerLate401();
+    assert.deepEqual(replaceCalls, ["https://newcar.example.test/login"], "normal 401 still redirects to NewCar");
+    assert.equal(sessionStorage.getItem("newcar_redirect_path"), "/leads?tab=all#latest");
+
+    replaceCalls.length = 0;
+    sessionStorage.clear();
+    sessionStorage.setItem("external_token", "race-token");
+    clientModule.setNewCarAuthRedirectSuppressed?.(true);
+    await triggerLate401();
+    assert.equal(replaceCalls.length, 0, "late 401 during logout must not replace the current URL");
+    assert.equal(sessionStorage.getItem("newcar_redirect_path"), null, "suppressed 401 must not save a return path");
+    assert.equal(sessionStorage.getItem("newcar_redirecting"), null, "suppressed 401 must not mark a redirect");
+    assert.equal(sessionStorage.getItem("external_token"), "race-token", "suppressed 401 leaves logout cleanup to App");
+
+    clientModule.setNewCarAuthRedirectSuppressed?.(false);
+    await triggerLate401();
+    assert.deepEqual(replaceCalls, ["https://newcar.example.test/login"], "re-enabled 401 redirects to NewCar");
+  } finally {
+    clientModule?.setNewCarAuthRedirectSuppressed?.(false);
+    restoreGlobals(snapshots);
+    fs.rmSync(tempFile, { force: true });
+  }
+}
+
 const authApi = read("src/api/auth.ts");
 const app = read("src/App.tsx");
 const capabilities = read("src/features/capabilities.ts");
@@ -50,6 +311,18 @@ assertIncludes(authApi, "EXTERNAL_MERCHANT_NOT_BOUND", "auth api maps unbound ex
 assertIncludes(authApi, "PERMISSION_DENIED", "auth api maps permission denied error");
 assertIncludes(authApi, "fetchCurrentAuthUserWithoutRedirect", "auth api exposes a no-redirect backend auth probe for local mock mode");
 assertIncludes(authApi, 'fetch(`${baseUrl}/auth/me`', "auth api no-redirect probe calls 9000 /auth/me");
+assertIncludes(authApi, "switchToInternalSystem", "auth api exposes browser-side NewCar switch");
+assertIncludes(authApi, "/api/external-auth/switch-to-internal", "auth api calls upstream switch-to-internal directly");
+assertIncludes(authApi, "headers.Authorization = `Bearer ${token}`", "NewCar switch sends the external bearer token");
+assertIncludes(authApi, "body: JSON.stringify({})", "NewCar switch and logout send an empty JSON object");
+assertIncludes(authApi, 'redirectUrl.protocol !== "http:"', "NewCar switch rejects non-http redirect protocols");
+assertIncludes(authApi, 'redirectUrl.protocol !== "https:"', "NewCar switch accepts only http or https redirects");
+assertIncludes(authApi, "logoutAutoWechat", "auth api exposes direct 9000 logout without global interceptors");
+assertIncludes(authApi, 'fetch(`${baseUrl}/auth/logout`', "auth api logout calls 9000 directly");
+assertIncludes(authApi, "退出失败，请重试", "auth api logout exposes only a fixed readable error");
+assertIncludes(authApi, "AUTH_REQUEST_TIMEOUT_MS = 10_000", "new auth requests use a ten second timeout");
+assertIncludes(authApi, "AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS)", "new auth requests carry an abort signal");
+assertIncludes(authApi, 'replace(/\\/+$/, "")', "new auth request base urls remove trailing slashes");
 
 assertIncludes(app, 'source === "new_car_project"', "app only consumes NewCar redirect code");
 assertIncludes(app, "assertCanEnterSystem", "app enforces auto_wechat:use");
@@ -93,6 +366,38 @@ assertIncludes(app, "sourceSystem?: string", "app user carries source system");
 assertIncludes(app, "authMode: data.auth_mode", "app maps backend auth_mode onto user");
 assertIncludes(app, "sourceSystem: data.source_system", "app maps backend source_system onto user");
 assertIncludes(app, "isMockAuthUser(user)", "app routes local mock users through full local workspace default");
+assertIncludes(app, "window.location.assign(redirectUrl)", "app uses the validated upstream NewCar redirect url");
+assertIncludes(app, 'import { Toaster, toast } from "sonner";', "app owns the global Sonner host and toast producer");
+assertIncludes(app, '<Toaster position="top-right" richColors />', "app renders the global Sonner host");
+assertIncludes(app, "logoutRetryTokenRef", "app keeps failed logout token only in page memory");
+assertIncludes(app, "logoutAutoWechat(retryToken)", "app retries logout through the same 9000 endpoint");
+assertIncludes(app, 'setLogoutViewState("pending")', "app unloads protected routes while logout is pending");
+assertIncludes(app, 'const succeeded = state === "succeeded"', "logout status distinguishes a successful logout");
+assertIncludes(app, "onRetry, onRelogin", "logout status accepts a relogin action");
+assertIncludes(app, "onRelogin={handleRelogin}", "successful logout page uses the existing relogin handler");
+assertIncludes(app, "重新登录", "successful logout page offers relogin");
+assertIncludes(app, 'role="status" aria-live="polite"', "logout status is announced accessibly");
+assertIncludes(app, 'setLogoutViewState("idle")', "relogin leaves the logout status screen");
+assertIncludes(app, "logoutRetryTokenRef.current = null", "relogin clears the in-memory retry token");
+assertOrder(
+  app.slice(app.indexOf("const performLogout")),
+  "setNewCarAuthRedirectSuppressed(true)",
+  'setLogoutViewState("pending")',
+  "logout suppresses stale 401 redirects before changing the view",
+);
+assertOrder(
+  app.slice(app.indexOf("const handleRelogin")),
+  "setNewCarAuthRedirectSuppressed(false)",
+  "redirectToNewCarLogin({ message:",
+  "explicit relogin re-enables redirects before going to NewCar",
+);
+assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(true\)/g) || []).length, 1, "only logout enables suppression");
+assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(false\)/g) || []).length, 1, "only relogin disables suppression");
+assertNotIncludes(
+  app,
+  'redirectToNewCarLogin({ message: "正在退出登录',
+  "auto_wechat logout no longer redirects to NewCar",
+);
 
 assertIncludes(capabilities, "isMockAuthUser", "capabilities expose local mock auth predicate");
 assertIncludes(capabilities, 'user.authMode === "mock"', "capabilities detect mock auth mode");
@@ -103,6 +408,22 @@ assertOrder(capabilities, "isMockAuthUser(user)", "isSuperAdmin(user)", "permiss
 assertIncludes(sideNav, "const isMockUser = isMockAuthUser(user)", "side nav detects local mock user");
 assertIncludes(sideNav, "isAdminUser && !isMockUser", "side nav does not hide merchant centers for mock admins");
 assertIncludes(sideNav, "visibleAdminItems.length > 0", "side nav can append admin entries for mock users");
+assertIncludes(sideNav, "onSwitchToNewCar", "side nav receives the NewCar switch action");
+assertIncludes(sideNav, "switchingToNewCar", "side nav exposes a stable switching state");
+assertIncludes(sideNav, "切换到 NewCar", "side nav labels the administrator switch action");
+assertIncludes(sideNav, "isAdminUser ? (", "side nav renders administrator and merchant footer actions exclusively");
+assertIncludes(sideNav, "ExternalLinkIcon", "side nav uses the standard external-link icon");
+assertIncludes(sideNav, "LoaderCircleIcon", "side nav uses the standard loading icon");
+
+assertIncludes(indexPage, "onSwitchToNewCar", "index forwards the NewCar switch action");
+assertIncludes(indexPage, "switchingToNewCar", "index forwards the NewCar switching state");
+assertNotIncludes(indexPage, 'import { Toaster } from "sonner";', "index does not own the global Sonner host");
+assertNotIncludes(indexPage, "<Toaster", "index does not render a route-scoped Sonner host");
+assert.equal(
+  (app.match(/<Toaster\b/g) || []).length + (indexPage.match(/<Toaster\b/g) || []).length,
+  1,
+  "app and index render exactly one Sonner host",
+);
 
 assertIncludes(indexPage, "const isMockUser = isMockAuthUser(user)", "index detects local mock user");
 assertIncludes(indexPage, "isAdminRouteNav", "index distinguishes admin nav from merchant nav");
@@ -129,6 +450,12 @@ assertIncludes(client, "shouldRedirectToNewCarLogin", "9000 api client scopes 40
 assertIncludes(client, "isNewCarLoginAuthErrorCode(code)", "9000 api client redirects known NewCar login auth errors");
 assertIncludes(client, "!isLocalAgentAuthErrorCode(code)", "9000 api client excludes Local Agent auth errors from NewCar redirects");
 assertIncludes(client, "!isNonLoginAuthErrorCode(code)", "9000 api client excludes permission and binding errors from NewCar redirects");
+assertIncludes(client, "setNewCarAuthRedirectSuppressed", "9000 api client exposes the logout redirect guard");
+assertIncludes(
+  client,
+  "!newCarAuthRedirectSuppressed && shouldRedirectToNewCarLogin(error)",
+  "9000 api client checks the logout redirect guard before redirecting",
+);
 
 assertIncludes(tokenStore, "sessionStorage", "token store uses sessionStorage");
 assertIncludes(tokenStore, 'EXTERNAL_TOKEN_KEY = "external_token"', "token store uses the runtime sessionStorage key");
@@ -179,5 +506,8 @@ assertNotIncludes(wechatTaskPanel, "fetchPendingWechatTasks", "wechat task panel
 
 assertIncludes(envExample, "VITE_NEWCAR_AUTH_BASE_URL=http://192.168.110.19:8790", "frontend env example documents NewCar base url");
 assertIncludes(envExample, "VITE_NEWCAR_LOGIN_URL=http://192.168.110.19:5174/login", "frontend env example documents NewCar login url");
+
+await runAuthBehaviorChecks();
+await runClientRedirectSuppressionChecks();
 
 console.log("NewCar direct code exchange check passed.");

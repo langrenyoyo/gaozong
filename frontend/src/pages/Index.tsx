@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Toaster } from "sonner";
 import {
   CheckCircle2Icon,
   ExternalLinkIcon,
@@ -644,10 +643,14 @@ function isAdminRouteNav(navId: string): boolean {
 export default function Index({
   user,
   onLogout = () => {},
+  onSwitchToNewCar = () => {},
+  switchingToNewCar = false,
   initialActiveNav = "chat",
 }: {
   user: AppUser;
   onLogout?: () => void;
+  onSwitchToNewCar?: () => void;
+  switchingToNewCar?: boolean;
   initialActiveNav?: string;
 }) {
   const [activeNav, setActiveNav] = useState(initialActiveNav);
@@ -802,7 +805,6 @@ export default function Index({
 
   return (
     <main className="h-screen overflow-hidden bg-[#f3f6fa] text-[#1a1f2e]">
-      <Toaster position="top-right" richColors />
       <div
         className={`grid h-full min-h-0 overflow-hidden ${
           isAdminSectionActive
@@ -819,6 +821,8 @@ export default function Index({
           expanded={isNavExpanded}
           onExpandedChange={setIsNavExpanded}
           onLogout={onLogout}
+          onSwitchToNewCar={onSwitchToNewCar}
+          switchingToNewCar={switchingToNewCar}
           showSalesBadge={Boolean(douyinAccount)}
           localAgentOnline={localAgentOnline}
           localAgentVersion={localAgentRuntimeStatus?.version || null}
