@@ -118,3 +118,67 @@ def test_newcar_logout_upstream_5xx_returns_sanitized_error(monkeypatch):
     body = response.json()
     assert body["detail"]["code"] == "NEWCAR_LOGOUT_UNAVAILABLE"
     assert "very-sensitive-token" not in str(body)
+
+
+# ---------------------------------------------------------------------------
+# NewCarProjectAuthClient.change_external_password() 回归（与 logout_token 同契约）
+# ---------------------------------------------------------------------------
+
+
+def test_change_external_password_real_mode_sends_bearer_and_service_header(monkeypatch):
+    calls = []
+
+    def fake_post(url, *, json, headers, timeout):
+        calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+    monkeypatch.setenv("NEWCAR_AUTH_SERVICE_TOKEN", "svc-token-xxx")
+
+    import app.auth.newcar_client as newcar_client
+
+    client = newcar_client.NewCarProjectAuthClient.from_env()
+
+    result = client.change_external_password("pwd-token", "OldPass1", "NewPass2")
+
+    assert result == {"ok": True}
+    assert calls == [
+        {
+            "url": "https://newcar.example.test/api/external-auth/password",
+            "json": {"old_password": "OldPass1", "new_password": "NewPass2"},
+            "headers": {
+                "Authorization": "Bearer pwd-token",
+                "X-NewCar-Service-Token": "svc-token-xxx",
+            },
+            "timeout": 5,
+        }
+    ]
+
+
+def test_change_external_password_timeout_maps_to_unavailable(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setenv("NEWCAR_AUTH_ENABLED", "true")
+    monkeypatch.setenv("NEWCAR_AUTH_MOCK_ENABLED", "false")
+    monkeypatch.setenv("NEWCAR_AUTH_BASE_URL", "https://newcar.example.test")
+
+    import app.auth.newcar_client as newcar_client
+
+    client = newcar_client.NewCarProjectAuthClient.from_env()
+
+    raised = None
+    try:
+        client.change_external_password("very-sensitive-token", "OldPass1", "NewPass2")
+    except Exception as exc:
+        raised = exc
+
+    assert raised is not None
+    assert raised.code == "NEWCAR_PASSWORD_UNAVAILABLE"
+    assert "very-sensitive-token" not in str(raised)
+    assert "OldPass1" not in str(raised)
+    assert "NewPass2" not in str(raised)

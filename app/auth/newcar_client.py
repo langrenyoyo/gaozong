@@ -31,6 +31,7 @@ class NewCarProjectAuthClient:
     exchange_code_url: str = ""
     me_url: str = ""
     logout_url: str = ""
+    password_url: str = ""
     login_url: str = ""
     service_token: str = ""
     timeout_seconds: int = 5
@@ -45,6 +46,7 @@ class NewCarProjectAuthClient:
             exchange_code_url=os.getenv("NEWCAR_AUTH_EXCHANGE_CODE_URL", "").strip(),
             me_url=os.getenv("NEWCAR_AUTH_ME_URL", "").strip(),
             logout_url=os.getenv("NEWCAR_AUTH_LOGOUT_URL", "").strip(),
+            password_url=os.getenv("NEWCAR_AUTH_PASSWORD_URL", "").strip(),
             login_url=os.getenv("NEWCAR_AUTH_LOGIN_URL", "").strip(),
             service_token=os.getenv("NEWCAR_AUTH_SERVICE_TOKEN", "").strip(),
             timeout_seconds=int(os.getenv("NEWCAR_AUTH_TIMEOUT_SECONDS", "5")),
@@ -110,6 +112,50 @@ class NewCarProjectAuthClient:
             raise NewCarAuthError("NEWCAR_LOGOUT_FAILED", f"NewCarProject logout failed with status {response.status_code}")
         return {"ok": True}
 
+    def change_external_password(self, token: str, old_password: str, new_password: str) -> dict[str, Any]:
+        """代理 NewCarProject 商户改密；只在请求体携带两个密码字段，不在异常或返回中暴露密码或 token。"""
+        if not self.auth_enabled or self.mock_enabled:
+            return {"ok": True, "mock": True}
+        if not token:
+            return {"ok": True, "token_present": False}
+
+        headers = {"Authorization": f"Bearer {token}"}
+        headers.update(self._service_headers())
+        payload = {"old_password": old_password, "new_password": new_password}
+        try:
+            response = httpx.post(
+                self._external_auth_url("password"),
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise NewCarAuthError("NEWCAR_PASSWORD_UNAVAILABLE", "NewCarProject password change timeout") from exc
+        except httpx.HTTPError as exc:
+            raise NewCarAuthError("NEWCAR_PASSWORD_UNAVAILABLE", "NewCarProject password change request failed") from exc
+
+        if response.status_code >= 500:
+            raise NewCarAuthError("NEWCAR_PASSWORD_UNAVAILABLE", "NewCarProject password change failed")
+        if response.status_code >= 400:
+            # 复用既有错误码解析逻辑，异常消息仅来自上游固定文案，不含密码或 token。
+            raise self._auth_error_from_response(response, default_code="NEWCAR_PASSWORD_FAILED")
+        return self._unwrap_password_payload(response)
+
+    def _unwrap_password_payload(self, response: httpx.Response) -> dict[str, Any]:
+        """解析改密成功响应，只透传白名单字段，剥离密码/token 等敏感信息。"""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise NewCarAuthError("NEWCAR_PASSWORD_UNAVAILABLE", "NewCarProject password change response is not json") from exc
+        if not isinstance(payload, dict):
+            raise NewCarAuthError("NEWCAR_PASSWORD_UNAVAILABLE", "NewCarProject password change response must be object")
+
+        result: dict[str, Any] = {"ok": True}
+        for key in ("ok", "relogin_required", "revoked_session_scope"):
+            if key in payload:
+                result[key] = payload[key]
+        return result
+
     def _exchange_code(self, code: str) -> str:
         """使用一次性 code 换取外部 token。"""
         url = self._external_auth_url("exchange-code")
@@ -171,6 +217,8 @@ class NewCarProjectAuthClient:
             return self.me_url
         if endpoint == "logout" and self.logout_url:
             return self.logout_url
+        if endpoint == "password" and self.password_url:
+            return self.password_url
         if not self.base_url:
             raise NewCarAuthError("NEWCAR_AUTH_UNAVAILABLE", "NewCarProject auth base url is not configured")
         return f"{self.base_url}/api/external-auth/{endpoint}"

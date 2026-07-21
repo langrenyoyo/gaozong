@@ -1,10 +1,17 @@
 """认证上下文调试接口。"""
 
+from __future__ import annotations
+
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.auth.newcar_client import NewCarAuthError, NewCarProjectAuthClient
+
+logger = logging.getLogger("auto_wechat.auth")
 
 
 router = APIRouter(prefix="/auth", tags=["登录权限"])
@@ -12,6 +19,28 @@ router = APIRouter(prefix="/auth", tags=["登录权限"])
 
 def _auth_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+# 改密请求体只允许两个密码字段；额外字段（user_id/merchant_id 等）按 Pydantic v2 默认 ignore 丢弃，
+# 绝不转发给 NewCarProject。
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=1)
+
+
+# 改密上游错误码到 HTTP 状态码映射：业务校验→400、账号类→403、token 类→401、上游不可达→502。
+_PASSWORD_CODE_TO_STATUS = {
+    "OLD_PASSWORD_INVALID": 400,
+    "PASSWORD_TOO_SHORT": 400,
+    "PASSWORD_UNCHANGED": 400,
+    "ACCOUNT_TYPE_NOT_ALLOWED": 403,
+    "ACCOUNT_DISABLED": 403,
+    "TOKEN_INVALID": 401,
+    "TOKEN_EXPIRED": 401,
+    "TOKEN_MISSING": 401,
+    "PERMISSION_DENIED": 403,
+    "NEWCAR_PASSWORD_UNAVAILABLE": 502,
+}
 
 
 @router.get("/me")
@@ -63,3 +92,31 @@ async def auth_logout(request: Request):
     except NewCarAuthError as exc:
         status_code = 502 if exc.code == "NEWCAR_LOGOUT_UNAVAILABLE" else 400
         raise _auth_error(status_code, exc.code, exc.message) from exc
+
+
+@router.post("/password")
+async def auth_change_password(payload: ChangePasswordRequest, request: Request):
+    """商户改密门面：仅携带两个密码字段代理到 NewCar，脱敏返回，不写密码/token 到日志或响应。"""
+    authorization = request.headers.get("Authorization", "")
+    token = ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    if not token:
+        # 缺 token 统一返回 401，与登录态校验一致；不调用上游。
+        raise _auth_error(401, "TOKEN_MISSING", "missing external token")
+
+    client = NewCarProjectAuthClient.from_env()
+    try:
+        result = client.change_external_password(token, payload.old_password, payload.new_password)
+    except NewCarAuthError as exc:
+        status_code = _PASSWORD_CODE_TO_STATUS.get(exc.code, 400)
+        # 失败日志只记录 stage/token_present/上游错误码与状态推断，禁止记录请求体、Authorization、密码。
+        logger.warning(
+            "external password proxy failed: stage=external_password_proxy failure_stage=change_external_password "
+            "token_present=%s error_code=%s status=%s",
+            True,
+            exc.code,
+            status_code,
+        )
+        raise _auth_error(status_code, exc.code, exc.message) from exc
+    return result

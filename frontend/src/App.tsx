@@ -4,11 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
+import ChangePasswordDialog from "./components/ChangePasswordDialog";
 import {
+  changeExternalPassword,
   exchangeExternalCode,
   fetchCurrentAuthUser,
   fetchCurrentAuthUserWithoutRedirect,
   logoutAutoWechat,
+  logoutCurrentBrowserOnNewCar,
   switchToInternalSystem,
   type AuthContextData,
   type PermissionItem,
@@ -312,6 +315,17 @@ const App = () => {
   const [logoutViewState, setLogoutViewState] = useState<LogoutViewState>("idle");
   const [switchingToNewCar, setSwitchingToNewCar] = useState(false);
   const logoutRetryTokenRef = useRef<string | null>(null);
+
+  // 商户改密：弹窗开关、提交中、错误文案。改密成功后进入重登录状态页。
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
+  const [passwordReloginView, setPasswordReloginView] = useState(false);
+
+  // 管理员当前浏览器退出：提交中、失败提示。token 只保留在页面内存 ref，不持久化。
+  const [adminLoggingOut, setAdminLoggingOut] = useState(false);
+  const [adminLogoutError, setAdminLogoutError] = useState<string | null>(null);
+  const adminLogoutTokenRef = useRef<string | null>(null);
   const externalMerchantNotBound = authError?.kind === "externalMerchantNotBound";
 
   useEffect(() => {
@@ -450,6 +464,82 @@ const App = () => {
     }
   };
 
+  const clearLocalPersistentAuthState = () => {
+    queryClient.clear();
+    clearExternalToken();
+    clearNewCarRedirectState();
+    clearAllAgentTokens();  // 退出/改密/重新登录统一清理 Local Agent token，防跨商户残留
+  };
+
+  const openChangePassword = () => {
+    setChangePasswordError(null);
+    setChangePasswordOpen(true);
+  };
+
+  const handleChangePassword = async (oldPassword: string, newPassword: string) => {
+    // 改密期间抑制并发 401 跳转，避免晚到 401 覆盖改密结果。
+    setNewCarAuthRedirectSuppressed(true);
+    setChangingPassword(true);
+    setChangePasswordError(null);
+    try {
+      await changeExternalPassword(oldPassword, newPassword);
+      // 成功：external token 已失效，清本地持久状态并进入重登录状态页。
+      clearLocalPersistentAuthState();
+      setUser(null);
+      setAuthError(null);
+      setChangePasswordOpen(false);
+      setPasswordReloginView(true);
+    } catch (error) {
+      const message = userFacingError(error, "修改密码失败，请重试");
+      if (message.includes("登录已过期") || message.includes("重新登录")) {
+        // 401：token 已失效，清本地持久状态并进入重登录状态页（不回退旧 token）。
+        clearLocalPersistentAuthState();
+        setUser(null);
+        setChangePasswordOpen(false);
+        setPasswordReloginView(true);
+      } else {
+        // 400/403 业务失败：保留当前登录态，恢复 401 跳转，弹窗内提示错误供重试。
+        setNewCarAuthRedirectSuppressed(false);
+        setChangePasswordError(message);
+      }
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    if (adminLoggingOut) return;
+    const token = getExternalToken();
+    // 管理员退出开始即抑制 401、卸载受保护页，token 只存页面内存 ref 供重试。
+    setNewCarAuthRedirectSuppressed(true);
+    setAdminLogoutError(null);
+    adminLogoutTokenRef.current = token;
+    setAdminLoggingOut(true);
+    setUser(null);
+    try {
+      const redirectUrl = await logoutCurrentBrowserOnNewCar(token ?? "");
+      // 成功：清本地持久状态，校验 redirect_url 后跳转 NewCar 登录页。
+      clearLocalPersistentAuthState();
+      adminLogoutTokenRef.current = null;
+      window.location.replace(redirectUrl);
+    } catch (error) {
+      // 失败：清本地持久状态并停留当前页显示重试，不跳错系统。
+      clearLocalPersistentAuthState();
+      setAdminLogoutError(userFacingError(error, "退出失败，请重试"));
+    } finally {
+      setAdminLoggingOut(false);
+    }
+  };
+
+  const retryAdminLogout = () => {
+    if (!adminLogoutTokenRef.current) {
+      // token 已不在内存，走重新登录。
+      void handleRelogin();
+      return;
+    }
+    void handleAdminLogout();
+  };
+
   const handleRelogin = () => {
     setNewCarAuthRedirectSuppressed(false);
     setLogoutViewState("idle");
@@ -475,6 +565,10 @@ const App = () => {
         onLogout={handleLogout}
         onSwitchToNewCar={handleSwitchToNewCar}
         switchingToNewCar={switchingToNewCar}
+        onChangePassword={openChangePassword}
+        changingPassword={changingPassword}
+        onAdminLogout={handleAdminLogout}
+        adminLoggingOut={adminLoggingOut}
         initialActiveNav={initialActiveNav}
       />
     ) : (
@@ -488,6 +582,44 @@ const App = () => {
         onRetry={() => void performLogout(logoutRetryTokenRef.current)}
         onRelogin={handleRelogin}
       />
+    );
+  }
+
+  // 改密成功后的重登录状态页：external token 已失效，需重新登录。
+  if (passwordReloginView) {
+    return (
+      <div role="status" aria-live="polite" className="grid min-h-screen place-items-center bg-[#070d18] px-6 text-white">
+        <div className="w-full max-w-sm text-center">
+          <div className="text-base font-semibold">密码已修改，请重新登录</div>
+          <p className="mt-2 text-sm leading-6 text-slate-400">为保障账号安全，请使用新密码重新登录。</p>
+          <button
+            type="button"
+            onClick={handleRelogin}
+            className="mt-5 h-10 rounded-md bg-[#2563eb] px-4 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
+          >
+            重新登录
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 管理员当前浏览器退出失败状态页：清本地持久状态后停留当前页，保留内存 token 供重试。
+  if (adminLogoutError) {
+    return (
+      <div role="status" aria-live="polite" className="grid min-h-screen place-items-center bg-[#070d18] px-6 text-white">
+        <div className="w-full max-w-sm text-center">
+          <div className="text-base font-semibold">退出失败，请重试</div>
+          <p className="mt-2 text-sm leading-6 text-slate-400">本地登录状态已清理，可在当前页面重试退出。</p>
+          <button
+            type="button"
+            onClick={retryAdminLogout}
+            className="mt-5 h-10 rounded-md bg-[#2563eb] px-4 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
+          >
+            重试退出
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -514,6 +646,18 @@ const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <Toaster position="top-right" richColors />
+      {user && !isAdminLike(user) ? (
+        <ChangePasswordDialog
+          open={changePasswordOpen}
+          submitting={changingPassword}
+          errorMessage={changePasswordError}
+          onOpenChange={(next) => {
+            setChangePasswordOpen(next);
+            if (!next) setChangePasswordError(null);
+          }}
+          onSubmit={handleChangePassword}
+        />
+      ) : null}
       <BrowserRouter>
         <Routes>
           <Route

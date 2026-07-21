@@ -391,8 +391,9 @@ assertOrder(
   "redirectToNewCarLogin({ message:",
   "explicit relogin re-enables redirects before going to NewCar",
 );
-assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(true\)/g) || []).length, 1, "only logout enables suppression");
-assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(false\)/g) || []).length, 1, "only relogin disables suppression");
+// P4：logout、改密、管理员退出三类敏感操作都启用并发 401 抑制；relogin 与改密业务失败恢复抑制。
+assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(true\)/g) || []).length, 3, "logout/改密/管理员退出均启用 401 抑制");
+assert.equal((app.match(/setNewCarAuthRedirectSuppressed\(false\)/g) || []).length, 2, "relogin 与改密业务失败恢复 401 跳转");
 assertNotIncludes(
   app,
   'redirectToNewCarLogin({ message: "正在退出登录',

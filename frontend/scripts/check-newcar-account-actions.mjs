@@ -1,0 +1,115 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), "utf8");
+}
+
+function assertIncludes(content, expected, label) {
+  if (!content.includes(expected)) {
+    throw new Error(`${label}: missing ${expected}`);
+  }
+}
+
+function assertNotIncludes(content, unexpected, label) {
+  if (content.includes(unexpected)) {
+    throw new Error(`${label}: still contains ${unexpected}`);
+  }
+}
+
+const app = read("src/App.tsx");
+const authApi = read("src/api/auth.ts");
+const sideNav = read("src/components/SideNav.tsx");
+const changePasswordDialog = read("src/components/ChangePasswordDialog.tsx");
+
+// ---------------------------------------------------------------------------
+// 接口路径与凭据合同
+// ---------------------------------------------------------------------------
+
+// 改密只调用 9000 门面 /auth/password，不直连 NewCar，不接受用户 ID 入参。
+assertIncludes(authApi, "`${baseUrl}/auth/password`", "改密调用 9000 /auth/password 门面");
+// 改密请求体精确为两个密码字段（JSON.stringify 内只含 old_password/new_password，无 user_id/merchant_id）。
+assertIncludes(authApi, "body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })", "改密请求体只含两个密码字段");
+{
+  const idx = authApi.indexOf("body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })");
+  const bodyLine = authApi.slice(idx, idx + 80);
+  assertNotIncludes(bodyLine, "user_id", "改密请求体不含 user_id");
+  assertNotIncludes(bodyLine, "merchant_id", "改密请求体不含 merchant_id");
+}
+
+// 管理员当前浏览器退出直调 NewCar 且携带 credentials: include。
+assertIncludes(authApi, "/api/external-auth/logout-current-browser", "管理员退出直调 NewCar logout-current-browser");
+assertIncludes(authApi, 'credentials: "include"', "管理员退出携带 credentials include");
+assertIncludes(authApi, "Authorization: `Bearer ${token}`", "管理员退出携带 Bearer token");
+
+// 普通退出仍只调 9000 /auth/logout，不改为上游当前浏览器退出。
+assertIncludes(authApi, "`${baseUrl}/auth/logout`", "普通退出仍调用 9000 /auth/logout");
+{
+  // 在 logoutAutoWechat 函数体内确认不直调 NewCar 当前浏览器退出。
+  const fnStart = authApi.indexOf("export async function logoutAutoWechat");
+  const fnEnd = authApi.indexOf("export async", fnStart + 10);
+  const logoutFn = authApi.slice(fnStart, fnEnd > fnStart ? fnEnd : undefined);
+  assertNotIncludes(logoutFn, "/api/external-auth/logout-current-browser", "普通退出不直调 NewCar 当前浏览器退出");
+}
+
+// 切换仍为 NewCar switch-to-internal。
+assertIncludes(authApi, "/api/external-auth/switch-to-internal", "切换仍由浏览器直调 NewCar switch-to-internal");
+
+// 所有外部 redirect 继续 HTTP(S) 校验与十秒超时。
+assertIncludes(authApi, "AUTH_REQUEST_TIMEOUT_MS = 10_000", "外部请求使用十秒超时常量");
+assertIncludes(authApi, "AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS)", "改密请求携带十秒中止信号");
+assertIncludes(authApi, 'redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:"', "管理员退出 redirect_url 只允许 HTTP(S)");
+
+// ---------------------------------------------------------------------------
+// 侧栏角色化动作
+// ---------------------------------------------------------------------------
+
+// 管理员同时有切换和独立退出，普通商户有改密和退出；动作按身份分支。
+assertIncludes(sideNav, "onSwitchToNewCar", "侧栏转发管理员切换动作");
+assertIncludes(sideNav, "onAdminLogout", "侧栏转发管理员退出动作");
+assertIncludes(sideNav, "onChangePassword", "侧栏转发商户改密动作");
+assertIncludes(sideNav, "onLogout", "侧栏保留普通商户退出动作");
+assertIncludes(sideNav, "切换到 NewCar", "管理员侧栏显示切换到 NewCar 文案");
+assertIncludes(sideNav, "修改密码", "普通商户侧栏显示修改密码文案");
+assertIncludes(sideNav, "KeyRoundIcon", "改密动作使用钥匙图标");
+
+// 管理员/普通商户动作分支互斥：管理员分支含切换+退出，普通分支含改密+退出。
+assertIncludes(sideNav, "isAdminUser ? (", "侧栏按管理员身份分支渲染底部动作");
+
+// ---------------------------------------------------------------------------
+// App 状态机：401 抑制与本地状态清理
+// ---------------------------------------------------------------------------
+
+// 改密开始抑制并发 401，业务失败恢复跳转。
+assertIncludes(app, "setNewCarAuthRedirectSuppressed(true)", "改密/退出开始时抑制并发 401 跳转");
+assertIncludes(app, "setNewCarAuthRedirectSuppressed(false)", "业务失败或重新登录恢复 401 跳转");
+
+// 改密成功后清本地状态并进入重登录状态页。
+assertIncludes(app, "passwordReloginView", "改密成功进入重登录状态页");
+assertIncludes(app, "密码已修改，请重新登录", "改密成功显示重登录提示");
+assertIncludes(app, "handleChangePassword", "App 持有改密提交处理器");
+
+// 管理员退出：token 只存页面内存 ref，成功后 replace 到 redirect_url，不退化为普通商户退出门面或切换动作。
+assertIncludes(app, "adminLogoutTokenRef", "管理员退出 token 只保留在页面内存 ref");
+assertIncludes(app, "logoutCurrentBrowserOnNewCar", "App 调用管理员当前浏览器退出");
+assertIncludes(app, "window.location.replace(redirectUrl)", "管理员退出成功后 replace 到 redirect_url");
+assertIncludes(app, "onAdminLogout={handleAdminLogout}", "管理员退出动作绑定 handleAdminLogout");
+assertNotIncludes(app, "logoutAutoWechat(adminLogoutTokenRef", "管理员退出不退化为普通商户 logout 门面");
+
+// 普通退出沿用内存 token 重试与晚到 401 抑制。
+assertIncludes(app, "logoutRetryTokenRef", "普通退出失败 token 只保留在页面内存");
+assertIncludes(app, "logoutAutoWechat(retryToken)", "普通退出重试继续调用 9000 /auth/logout");
+
+// ---------------------------------------------------------------------------
+// ChangePasswordDialog：不把密码写入存储/日志/URL
+// ---------------------------------------------------------------------------
+
+assertIncludes(changePasswordDialog, "type=\"password\"", "改密弹窗密码字段使用 password 类型输入");
+assertNotIncludes(changePasswordDialog, "localStorage", "改密弹窗不写入 localStorage");
+assertNotIncludes(changePasswordDialog, "sessionStorage", "改密弹窗不写入 sessionStorage");
+assertNotIncludes(changePasswordDialog, "console.log", "改密弹窗不输出日志");
+assertIncludes(changePasswordDialog, "aria-live", "改密弹窗提供可访问的 aria-live 状态");
+
+console.log("NewCar account actions contract check passed.");

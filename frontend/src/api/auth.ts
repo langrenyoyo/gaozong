@@ -196,3 +196,128 @@ export async function logoutAutoWechat(token: string | null): Promise<void> {
     throw new Error("退出失败，请重试");
   }
 }
+
+/** 商户改密结果：成功时 relogin_required 提示前端进入重登录状态。 */
+export interface ChangeExternalPasswordResult {
+  ok: boolean;
+  relogin_required?: boolean;
+  revoked_session_scope?: string;
+}
+
+/** 商户改密代理调用：只发送两个密码字段到 9000 门面，不接受用户 ID，不直连 NewCar，不输出请求体。 */
+export async function changeExternalPassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<ChangeExternalPasswordResult> {
+  const baseUrl = (API_BASE_URL || "").replace(/\/+$/, "");
+  const token = getExternalToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/auth/password`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+      signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error("修改密码失败，请稍后重试");
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(passwordErrorMessage(response.status, payload));
+  }
+
+  const data = (payload && typeof payload === "object" ? payload : {}) as Partial<ChangeExternalPasswordResult>;
+  return {
+    ok: Boolean(data.ok ?? true),
+    relogin_required: data.relogin_required,
+    revoked_session_scope: data.revoked_session_scope,
+  };
+}
+
+function passwordErrorMessage(status: number, payload: unknown): string {
+  const detail = (payload as { detail?: { code?: unknown } })?.detail;
+  const code = detail && typeof detail === "object" ? String(detail.code ?? "") : "";
+  if (status === 401 || code === "TOKEN_INVALID" || code === "TOKEN_EXPIRED" || code === "TOKEN_MISSING") {
+    return "登录已过期，请重新登录";
+  }
+  if (status === 403 || code === "ACCOUNT_DISABLED" || code === "ACCOUNT_TYPE_NOT_ALLOWED" || code === "PERMISSION_DENIED") {
+    return "当前账号暂无修改密码权限，请联系管理员。";
+  }
+  if (code === "OLD_PASSWORD_INVALID") {
+    return "原密码不正确，请重试";
+  }
+  if (code === "PASSWORD_TOO_SHORT") {
+    return "新密码至少 8 位";
+  }
+  if (code === "PASSWORD_UNCHANGED") {
+    return "新密码不能与原密码相同";
+  }
+  return "修改密码失败，请重试";
+}
+
+/** 管理员当前浏览器退出：浏览器直调 NewCar，携带 Cookie 与 Bearer，返回可信 redirect_url。 */
+export async function logoutCurrentBrowserOnNewCar(token: string): Promise<string> {
+  if (!NEWCAR_AUTH_BASE_URL || !token) {
+    throw new Error("退出失败，请重试");
+  }
+
+  let response: Response;
+  try {
+    const baseUrl = NEWCAR_AUTH_BASE_URL.replace(/\/+$/, "");
+    response = await fetch(`${baseUrl}/api/external-auth/logout-current-browser`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({}),
+      credentials: "include",
+      signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error("退出失败，请重试");
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("登录已过期，请重新登录");
+    }
+    throw new Error("退出失败，请重试");
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("退出失败，请重试");
+  }
+
+  const value =
+    payload && typeof payload === "object"
+      ? (payload as { redirect_url?: unknown }).redirect_url
+      : null;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("退出失败，请重试");
+  }
+
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(value);
+  } catch {
+    throw new Error("退出失败，请重试");
+  }
+  if (redirectUrl.protocol !== "http:" && redirectUrl.protocol !== "https:") {
+    throw new Error("退出失败，请重试");
+  }
+  return redirectUrl.toString();
+}

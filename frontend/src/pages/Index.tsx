@@ -645,12 +645,20 @@ export default function Index({
   onLogout = () => {},
   onSwitchToNewCar = () => {},
   switchingToNewCar = false,
+  onChangePassword = () => {},
+  changingPassword = false,
+  onAdminLogout = () => {},
+  adminLoggingOut = false,
   initialActiveNav = "chat",
 }: {
   user: AppUser;
   onLogout?: () => void;
   onSwitchToNewCar?: () => void;
   switchingToNewCar?: boolean;
+  onChangePassword?: () => void;
+  changingPassword?: boolean;
+  onAdminLogout?: () => void;
+  adminLoggingOut?: boolean;
   initialActiveNav?: string;
 }) {
   const [activeNav, setActiveNav] = useState(initialActiveNav);
@@ -823,6 +831,10 @@ export default function Index({
           onLogout={onLogout}
           onSwitchToNewCar={onSwitchToNewCar}
           switchingToNewCar={switchingToNewCar}
+          onChangePassword={onChangePassword}
+          changingPassword={changingPassword}
+          onAdminLogout={onAdminLogout}
+          adminLoggingOut={adminLoggingOut}
           showSalesBadge={Boolean(douyinAccount)}
           localAgentOnline={localAgentOnline}
           localAgentVersion={localAgentRuntimeStatus?.version || null}

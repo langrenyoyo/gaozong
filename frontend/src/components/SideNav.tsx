@@ -6,6 +6,7 @@ import {
   CpuIcon,
   ExternalLinkIcon,
   FilterIcon,
+  KeyRoundIcon,
   LoaderCircleIcon,
   LogOutIcon,
   MessageCircleMoreIcon,
@@ -32,6 +33,10 @@ interface SideNavProps {
   onLogout?: () => void;
   onSwitchToNewCar?: () => void;
   switchingToNewCar?: boolean;
+  onChangePassword?: () => void;
+  changingPassword?: boolean;
+  onAdminLogout?: () => void;
+  adminLoggingOut?: boolean;
   showSalesBadge?: boolean;
   localAgentOnline?: boolean;
   localAgentVersion?: string | null;
@@ -93,6 +98,10 @@ export default function SideNav({
   onLogout = () => {},
   onSwitchToNewCar = () => {},
   switchingToNewCar = false,
+  onChangePassword = () => {},
+  changingPassword = false,
+  onAdminLogout = () => {},
+  adminLoggingOut = false,
   showSalesBadge = false,
   localAgentOnline = false,
   localAgentVersion = null,
@@ -261,32 +270,62 @@ export default function SideNav({
           ) : null}
 
           {isAdminUser ? (
-            <button
-              type="button"
-              onClick={onSwitchToNewCar}
-              disabled={switchingToNewCar}
-              aria-label={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
-              title={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
-              className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
-                expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
-              }`}
-            >
-              {switchingToNewCar ? <LoaderCircleIcon size={16} className="animate-spin" /> : <ExternalLinkIcon size={16} />}
-              {expanded ? <span className="truncate">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span> : null}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onSwitchToNewCar}
+                disabled={switchingToNewCar}
+                aria-label={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
+                title={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
+                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
+                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
+                }`}
+              >
+                {switchingToNewCar ? <LoaderCircleIcon size={16} className="animate-spin" /> : <ExternalLinkIcon size={16} />}
+                {expanded ? <span className="truncate">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span> : null}
+              </button>
+              <button
+                type="button"
+                onClick={onAdminLogout}
+                disabled={adminLoggingOut}
+                aria-label={adminLoggingOut ? "正在退出登录" : "退出登录"}
+                title="退出登录"
+                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
+                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
+                }`}
+              >
+                {adminLoggingOut ? <LoaderCircleIcon size={16} className="animate-spin" /> : <LogOutIcon size={16} />}
+                {expanded ? <span className="truncate">{adminLoggingOut ? "正在退出" : "退出登录"}</span> : null}
+              </button>
+            </>
           ) : (
-            <button
-              type="button"
-              onClick={onLogout}
-              aria-label="退出登录"
-              title="退出登录"
-              className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
-                expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
-              }`}
-            >
-              <LogOutIcon size={16} />
-              {expanded ? <span className="truncate">{user.account} 退出</span> : null}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onChangePassword}
+                disabled={changingPassword}
+                aria-label={changingPassword ? "正在修改密码" : "修改密码"}
+                title="修改密码"
+                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white disabled:cursor-wait disabled:opacity-60 ${
+                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
+                }`}
+              >
+                {changingPassword ? <LoaderCircleIcon size={16} className="animate-spin" /> : <KeyRoundIcon size={16} />}
+                {expanded ? <span className="truncate">{changingPassword ? "正在修改" : "修改密码"}</span> : null}
+              </button>
+              <button
+                type="button"
+                onClick={onLogout}
+                aria-label="退出登录"
+                title="退出登录"
+                className={`mt-1 flex h-10 items-center text-left text-slate-400 transition-smooth hover:bg-white/8 hover:text-white ${
+                  expanded ? "w-full gap-3 rounded-xl px-3 text-xs" : "w-12 justify-center rounded-xl"
+                }`}
+              >
+                <LogOutIcon size={16} />
+                {expanded ? <span className="truncate">{user.account} 退出</span> : null}
+              </button>
+            </>
           )}
         </div>
       </div>
