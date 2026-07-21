@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Toaster } from "sonner";
 import {
   CheckCircle2Icon,
   ExternalLinkIcon,
@@ -806,7 +805,6 @@ export default function Index({
 
   return (
     <main className="h-screen overflow-hidden bg-[#f3f6fa] text-[#1a1f2e]">
-      <Toaster position="top-right" richColors />
       <div
         className={`grid h-full min-h-0 overflow-hidden ${
           isAdminSectionActive

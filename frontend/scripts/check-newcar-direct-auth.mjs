@@ -367,6 +367,8 @@ assertIncludes(app, "authMode: data.auth_mode", "app maps backend auth_mode onto
 assertIncludes(app, "sourceSystem: data.source_system", "app maps backend source_system onto user");
 assertIncludes(app, "isMockAuthUser(user)", "app routes local mock users through full local workspace default");
 assertIncludes(app, "window.location.assign(redirectUrl)", "app uses the validated upstream NewCar redirect url");
+assertIncludes(app, 'import { Toaster, toast } from "sonner";', "app owns the global Sonner host and toast producer");
+assertIncludes(app, '<Toaster position="top-right" richColors />', "app renders the global Sonner host");
 assertIncludes(app, "logoutRetryTokenRef", "app keeps failed logout token only in page memory");
 assertIncludes(app, "logoutAutoWechat(retryToken)", "app retries logout through the same 9000 endpoint");
 assertIncludes(app, 'setLogoutViewState("pending")', "app unloads protected routes while logout is pending");
@@ -415,6 +417,13 @@ assertIncludes(sideNav, "LoaderCircleIcon", "side nav uses the standard loading 
 
 assertIncludes(indexPage, "onSwitchToNewCar", "index forwards the NewCar switch action");
 assertIncludes(indexPage, "switchingToNewCar", "index forwards the NewCar switching state");
+assertNotIncludes(indexPage, 'import { Toaster } from "sonner";', "index does not own the global Sonner host");
+assertNotIncludes(indexPage, "<Toaster", "index does not render a route-scoped Sonner host");
+assert.equal(
+  (app.match(/<Toaster\b/g) || []).length + (indexPage.match(/<Toaster\b/g) || []).length,
+  1,
+  "app and index render exactly one Sonner host",
+);
 
 assertIncludes(indexPage, "const isMockUser = isMockAuthUser(user)", "index detects local mock user");
 assertIncludes(indexPage, "isAdminRouteNav", "index distinguishes admin nav from merchant nav");
