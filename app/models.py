@@ -278,7 +278,7 @@ class DouyinWebhookEvent(Base):
     parse_error = Column(String(255), comment="Safe content parse error")
     parsed_content_json = Column(Text, comment="Parsed content JSON object")
     event_key = Column(String(128), unique=True, index=True, comment="幂等去重键")
-    is_duplicate = Column(Integer, nullable=False, default=0, comment="是否重复事件 0/1")
+    is_duplicate = Column(Boolean, nullable=False, default=False, comment="是否重复事件 False/True")
     lead_id = Column(Integer, nullable=True, comment="关联的 douyin_leads.id（仅 im_receive_msg）")
     raw_body = Column(Text, nullable=False, comment="原始 payload JSON")
     created_at = Column(DateTime, default=datetime.now)

@@ -346,7 +346,7 @@ def test_process_webhook_creates_lead():
     event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.lead_id == lead.id).first()
     assert event is not None
     assert event.event == "im_receive_msg"
-    assert event.is_duplicate == 0
+    assert event.is_duplicate is False
 
     db.delete(lead)
     db.query(DouyinWebhookEvent).delete()
@@ -448,12 +448,12 @@ def test_process_webhook_duplicate_event():
         DouyinWebhookEvent.from_user_id == "wh_dup_001"
     ).all()
     assert len(events) == 3
-    assert events[0].is_duplicate == 0
+    assert events[0].is_duplicate is False
     # event_key 等于真实幂等键，无后缀
-    assert events[1].is_duplicate == 1
+    assert events[1].is_duplicate is True
     assert events[1].lead_id == result1["lead_id"]
     assert events[1].event_key.startswith(f"{events[0].event_key}:dup:")
-    assert events[2].is_duplicate == 1
+    assert events[2].is_duplicate is True
     assert events[2].lead_id == result1["lead_id"]
     assert events[2].event_key.startswith(f"{events[0].event_key}:dup:")
     assert events[2].event_key != events[1].event_key

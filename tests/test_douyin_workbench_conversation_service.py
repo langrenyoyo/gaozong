@@ -95,7 +95,7 @@ def _insert_event(
             conversation_short_id=conversation_short_id,
             raw_body=json.dumps({"content": content}, ensure_ascii=False),
             parsed_content_json=json.dumps(content, ensure_ascii=False),
-            is_duplicate=0,
+            is_duplicate=False,
             created_at=created_at or datetime.now(),
         )
         db.add(row)

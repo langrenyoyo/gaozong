@@ -15,7 +15,7 @@ SYSTEM_NOTICE_TEXTS = {
 
 
 def is_effective_human_outbound_message(db: Session, event: DouyinWebhookEvent) -> bool:
-    if event.event != "im_send_msg" or event.is_duplicate == 1:
+    if event.event != "im_send_msg" or event.is_duplicate:
         return False
     if outbound_skip_reason(event) is not None:
         return False

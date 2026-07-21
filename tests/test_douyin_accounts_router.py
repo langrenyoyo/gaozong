@@ -116,7 +116,7 @@ def _insert_webhook_event(
     account_open_id: str,
     customer_open_id: str,
     event_key: str,
-    is_duplicate: int = 0,
+    is_duplicate: bool = False,
 ):
     db = TestSession()
     try:

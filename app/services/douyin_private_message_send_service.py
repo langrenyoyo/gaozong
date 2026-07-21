@@ -158,7 +158,7 @@ def _send_private_message_with_context(
     excluded_im_send_msg_count = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.conversation_short_id == context["conversation_short_id"])
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.event == "im_send_msg")
         .count()
     )

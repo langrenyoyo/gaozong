@@ -527,7 +527,7 @@ def get_send_msg_context(
     rows = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.event.in_(("im_receive_msg", "im_enter_direct_msg")))
         .order_by(
             DouyinWebhookEvent.message_create_time.desc(),
@@ -580,7 +580,7 @@ def get_latest_private_message_state(
     rows = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
         .order_by(
             DouyinWebhookEvent.message_create_time.desc(),
@@ -744,7 +744,7 @@ def _query_message_rows(
             DouyinWebhookEvent.created_at,
         )
         .where(DouyinWebhookEvent.event.in_(events))
-        .where(DouyinWebhookEvent.is_duplicate == 0)
+        .where(DouyinWebhookEvent.is_duplicate.is_(False))
     )
     account_values = [item for item in ([account_open_id] if account_open_id else []) + (account_open_ids or []) if item]
     if account_values:
@@ -803,7 +803,7 @@ def _event_derived_accounts(db: Session) -> list[dict[str, Any]]:
     rows = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
         .limit(500)
         .all()

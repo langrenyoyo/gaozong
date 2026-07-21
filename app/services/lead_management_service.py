@@ -241,7 +241,7 @@ def _lead_customer_message_texts(db: Session, lead: DouyinLead) -> list[str]:
     rows = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.event == "im_receive_msg")
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.to_user_id == lead.account_open_id)
         .filter(DouyinWebhookEvent.conversation_short_id == lead.conversation_short_id)
         .order_by(DouyinWebhookEvent.message_create_time.asc(), DouyinWebhookEvent.created_at.asc(), DouyinWebhookEvent.id.asc())
