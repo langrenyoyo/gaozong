@@ -81,7 +81,7 @@ assertIncludes(sideNav, "onSwitchToNewCar", "侧栏转发管理员切换动作")
 assertIncludes(sideNav, "onAdminLogout", "侧栏转发管理员退出动作");
 assertIncludes(sideNav, "onChangePassword", "侧栏转发商户改密动作");
 assertIncludes(sideNav, "onLogout", "侧栏保留普通商户退出动作");
-assertIncludes(sideNav, "切换到 NewCar", "管理员侧栏显示切换到 NewCar 文案");
+assertIncludes(sideNav, "切换到内部系统", "管理员侧栏显示切换到内部系统文案");
 assertIncludes(sideNav, "修改密码", "普通商户侧栏显示修改密码文案");
 assertIncludes(sideNav, "KeyRoundIcon", "改密动作使用钥匙图标");
 
@@ -95,11 +95,11 @@ assertIncludes(sideNav, "isAdminUser ? (", "侧栏按管理员身份分支渲染
 // 收起导航按钮使用 NewCar 深色填充样式（#22304b 填充 + 描边）。
 assertIncludes(sideNav, "bg-[#22304b]", "收起导航按钮使用 NewCar 深色填充样式");
 
-// 管理员橙色切换卡片：对齐 NewCar external-switch-card，含主标题与 NewCar 管理入口副标题。
+// 管理员橙色切换卡片：对齐 NewCar external-switch-card，含主标题与内部系统管理入口副标题。
 assertIncludes(sideNav, "bg-[#fff7ed]", "管理员切换卡片使用 NewCar 橙色填充");
 assertIncludes(sideNav, "border-[#f59e0b]", "管理员切换卡片使用 NewCar 橙色描边");
-assertIncludes(sideNav, "切换到 NewCar", "管理员橙色卡片主标题为切换到 NewCar");
-assertIncludes(sideNav, "NewCar 管理入口", "管理员橙色卡片含 NewCar 管理入口副标题");
+assertIncludes(sideNav, "切换到内部系统", "管理员橙色卡片主标题为切换到内部系统");
+assertIncludes(sideNav, "内部系统管理入口", "管理员橙色卡片含 内部系统管理入口副标题");
 
 // 账号卡片：复用 NewCar avatar.svg，展示头像 + 账号 + 角色。
 assertIncludes(sideNav, 'from "../assets/avatar.svg"', "账号卡片复用 NewCar avatar.svg 资源");

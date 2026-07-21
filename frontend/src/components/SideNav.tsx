@@ -284,8 +284,8 @@ export default function SideNav({
               type="button"
               onClick={onSwitchToNewCar}
               disabled={switchingToNewCar}
-              aria-label={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
-              title={switchingToNewCar ? "正在切换到 NewCar" : "切换到 NewCar"}
+              aria-label={switchingToNewCar ? "正在切换到内部管理系统" : "切换到内部管理系统"}
+              title={switchingToNewCar ? "正在切换到内部管理系统" : "切换到内部管理系统"}
               className={`flex items-center rounded-xl border border-[#f59e0b] bg-[#fff7ed] text-[#7c2d12] shadow-[0_10px_24px_rgba(245,158,11,0.22)] transition-smooth hover:bg-[#ffedd5] disabled:cursor-wait disabled:opacity-70 ${
                 expanded ? "w-full gap-2.5 px-3 py-2.5" : "h-12 w-12 justify-center"
               }`}
@@ -296,7 +296,7 @@ export default function SideNav({
               {expanded ? (
                 <span className="grid min-w-0 gap-0.5">
                   <span className="truncate text-xs font-bold">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span>
-                  <span className="truncate text-[11px] text-[#9a3412]">NewCar 管理入口</span>
+                  <span className="truncate text-[11px] text-[#9a3412]">内部系统管理入口</span>
                 </span>
               ) : null}
             </button>
