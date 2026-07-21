@@ -96,9 +96,25 @@ assertIncludes(sideNav, "isAdminUser ? (", "侧栏按管理员身份分支渲染
 assertIncludes(app, "setNewCarAuthRedirectSuppressed(true)", "改密/退出开始时抑制并发 401 跳转");
 assertIncludes(app, "setNewCarAuthRedirectSuppressed(false)", "业务失败或重新登录恢复 401 跳转");
 
-// 改密成功后清本地状态并进入重登录状态页。
-assertIncludes(app, "passwordReloginView", "改密成功进入重登录状态页");
-assertIncludes(app, "密码已修改，请重新登录", "改密成功显示重登录提示");
+// R2：改密结果用四态枚举 success/relogin/unknown 代替布尔，按状态分流页面文案。
+assertIncludes(app, "PasswordResultView = \"success\" | \"relogin\" | \"unknown\"", "改密结果状态用四态枚举类型");
+assertIncludes(app, "passwordResultView", "改密结果状态变量");
+assertIncludes(app, "setPasswordResultView(\"success\")", "改密成功进入 success 状态页");
+assertIncludes(app, "setPasswordResultView(\"relogin\")", "改密 401 进入 relogin 状态页");
+assertIncludes(app, "setPasswordResultView(\"unknown\")", "改密未知进入 unknown 状态页");
+// 只有 success 才能展示“密码已修改”文案；relogin 只说登录已失效；unknown 只说结果未知。
+assertIncludes(app, "密码已修改，请重新登录", "success 状态展示“密码已修改”文案");
+assertIncludes(app, "登录已失效，请重新登录", "relogin 状态展示登录失效文案");
+assertIncludes(app, "密码修改结果未知，请重新登录确认", "unknown 状态展示结果未知文案");
+// relogin 状态页不得声称密码已修改；unknown 状态页不得声称成功或失败。
+{
+  const reloginStart = app.indexOf('passwordResultView === "relogin"');
+  const reloginBlock = app.slice(reloginStart, app.indexOf('passwordResultView === "unknown"'));
+  assertNotIncludes(reloginBlock, "密码已修改", "relogin 状态页不得声称密码已修改");
+  const unknownStart = app.indexOf('passwordResultView === "unknown"');
+  const unknownBlock = app.slice(unknownStart, unknownStart + 200);
+  assertNotIncludes(unknownBlock, "密码已修改", "unknown 状态页不得声称密码已修改");
+}
 assertIncludes(app, "handleChangePassword", "App 持有改密提交处理器");
 
 // 管理员退出：token 只存页面内存 ref，成功后 replace 到 redirect_url，不退化为普通商户退出门面或切换动作。
@@ -113,7 +129,7 @@ assertIncludes(app, "void performAdminLogout(getExternalToken())", "管理员退
 assertIncludes(app, "performAdminLogout(adminLogoutTokenRef.current)", "管理员退出重试直接使用内存 ref token");
 // R1-6：handleRelogin 清全部 P4 状态和内存 ref。
 assertIncludes(app, "setChangePasswordOpen(false)", "重新登录清理改密弹窗状态");
-assertIncludes(app, "setPasswordReloginView(false)", "重新登录清理改密重登录状态页");
+assertIncludes(app, "setPasswordResultView(null)", "重新登录清理改密结果状态页");
 assertIncludes(app, "setAdminLoggingOut(false)", "重新登录清理管理员退出 loading");
 assertIncludes(app, "setAdminLogoutError(null)", "重新登录清理管理员退出错误");
 assertIncludes(app, "adminLogoutTokenRef.current = null", "重新登录清理管理员退出内存 token");

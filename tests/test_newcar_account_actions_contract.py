@@ -143,23 +143,71 @@ def test_admin_logout_failure_keeps_memory_token_for_retry():
 # ---------------------------------------------------------------------------
 
 
-def test_change_password_unknown_and_relogin_clear_local_state():
-    """R1-3：relogin 与 unknown 都清本地持久状态、卸载受保护页、进入重登录状态页。"""
-    block = _find_block(APP_TSX, "if (outcome.status === \"business\")", "setChangingPassword(false)")
-    # relogin/unknown 共用清状态+重登录分支
+def test_change_password_success_sets_success_state():
+    """R2：成功进入 success 状态页（只有 success 可展示“密码已修改”）。"""
+    block = _find_block(APP_TSX, "if (outcome.status === \"success\")", "if (outcome.status === \"business\")")
     assert "clearLocalPersistentAuthState()" in block
     assert "setUser(null)" in block
-    assert "setPasswordReloginView(true)" in block
+    assert 'setPasswordResultView("success")' in block
+
+
+def test_change_password_relogin_sets_relogin_state():
+    """R2：401 进入 relogin 状态页，清本地、卸载受保护页，不得声称密码已修改。"""
+    block = _find_block(APP_TSX, "if (outcome.status === \"relogin\")", "// unknown")
+    assert "clearLocalPersistentAuthState()" in block
+    assert "setUser(null)" in block
+    assert 'setPasswordResultView("relogin")' in block
+    # relogin 分支不得写 success 状态
+    assert 'setPasswordResultView("success")' not in block
+
+
+def test_change_password_unknown_sets_unknown_state():
+    """R2：超时/网络/5xx/异常/非白名单进入 unknown 状态页，不得声称成功或失败。"""
+    # unknown 分支：从注释到 finally，clearLocalPersistentAuthState 在 setter 之前。
+    block = _find_block(APP_TSX, "// unknown（超时/网络", "  } finally {")
+    assert "clearLocalPersistentAuthState()" in block
+    assert "setUser(null)" in block
+    assert 'setPasswordResultView("unknown")' in block
+    # unknown 分支不得写 success/relogin 状态
+    assert 'setPasswordResultView("success")' not in block
+    assert 'setPasswordResultView("relogin")' not in block
 
 
 def test_change_password_business_keeps_session():
     """R1-2：业务失败保留登录态、恢复 401 跳转、弹窗内重试。"""
-    block = _find_block(APP_TSX, 'if (outcome.status === "business")', "      // relogin")
+    block = _find_block(APP_TSX, 'if (outcome.status === "business")', "if (outcome.status === \"relogin\")")
     assert "setNewCarAuthRedirectSuppressed(false)" in block
     assert "setChangePasswordError(outcome.message)" in block
-    # 业务失败不清 user、不进重登录状态页
-    assert "setPasswordReloginView(true)" not in block
+    # 业务失败不清 user、不进结果状态页
+    assert "setPasswordResultView(" not in block
     assert "clearLocalPersistentAuthState()" not in block
+
+
+def test_change_password_result_state_type_is_four_state_enum():
+    """R2：改密结果状态用四态枚举，不再用布尔 passwordReloginView。"""
+    assert 'type PasswordResultView = "success" | "relogin" | "unknown"' in APP_TSX
+    assert "passwordResultView" in APP_TSX
+    # 旧布尔状态名必须彻底移除
+    assert "passwordReloginView" not in APP_TSX
+    assert "setPasswordReloginView" not in APP_TSX
+
+
+def test_change_password_page_text_differs_per_state():
+    """R2-9：success/relogin/unknown 三态页面文案互不相同且语义对齐。"""
+    success_title = "密码已修改，请重新登录"
+    relogin_title = "登录已失效，请重新登录"
+    unknown_title = "密码修改结果未知，请重新登录确认"
+    # 三态标题文案均在源码中存在。
+    for title in (success_title, relogin_title, unknown_title):
+        assert title in APP_TSX, f"缺少结果状态页文案 {title}"
+    # 三态文案互不相同。
+    assert len({success_title, relogin_title, unknown_title}) == 3
+    # relogin 标题到 unknown 标题之间不得出现 success 标题文案（relogin 不得声称密码已修改）。
+    relogin_idx = APP_TSX.index(relogin_title)
+    unknown_idx = APP_TSX.index(unknown_title)
+    assert success_title not in APP_TSX[relogin_idx:unknown_idx]
+    # unknown 标题之后 200 字符内不得出现 success 标题文案（unknown 不得声称成功或失败）。
+    assert success_title not in APP_TSX[unknown_idx:unknown_idx + 200]
 
 
 def test_handle_relogin_clears_all_p4_state_and_refs():
@@ -169,7 +217,7 @@ def test_handle_relogin_clears_all_p4_state_and_refs():
         'setChangePasswordOpen(false)',
         'setChangingPassword(false)',
         'setChangePasswordError(null)',
-        'setPasswordReloginView(false)',
+        'setPasswordResultView(null)',
         'setAdminLoggingOut(false)',
         'setAdminLogoutError(null)',
         'adminLogoutTokenRef.current = null',

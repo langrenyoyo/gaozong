@@ -198,6 +198,13 @@ interface AuthErrorState {
 
 type LogoutViewState = "idle" | "pending" | "succeeded" | "failed";
 
+// 改密结果状态页：
+// - success：密码已修改，需重新登录（只有此态可展示“密码已修改”）。
+// - relogin：登录已失效（401），需重新登录，不得声称密码已修改。
+// - unknown：结果未知（超时/网络/5xx/异常 JSON/2xx 非白名单），需重新登录确认，不得声称成功或失败。
+// - null：不展示状态页。
+type PasswordResultView = "success" | "relogin" | "unknown";
+
 function classifyAuthError(error: unknown): AuthErrorState {
   const message = userFacingError(error, "外部登录失败，请重新登录");
   if (message.includes("账号未绑定商户")) {
@@ -316,11 +323,11 @@ const App = () => {
   const [switchingToNewCar, setSwitchingToNewCar] = useState(false);
   const logoutRetryTokenRef = useRef<string | null>(null);
 
-  // 商户改密：弹窗开关、提交中、错误文案。改密成功后进入重登录状态页。
+  // 商户改密：弹窗开关、提交中、错误文案。改密成功/失效/未知后进入对应结果状态页。
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
-  const [passwordReloginView, setPasswordReloginView] = useState(false);
+  const [passwordResultView, setPasswordResultView] = useState<PasswordResultView | null>(null);
 
   // 管理员当前浏览器退出：提交中、失败提示。token 只保留在页面内存 ref，不持久化。
   const [adminLoggingOut, setAdminLoggingOut] = useState(false);
@@ -484,12 +491,12 @@ const App = () => {
     try {
       const outcome = await changeExternalPassword(oldPassword, newPassword);
       if (outcome.status === "success") {
-        // 成功：external token 已失效，清本地持久状态并进入重登录状态页。
+        // 成功：external token 已失效，清本地持久状态并进入“密码已修改”结果页。
         clearLocalPersistentAuthState();
         setUser(null);
         setAuthError(null);
         setChangePasswordOpen(false);
-        setPasswordReloginView(true);
+        setPasswordResultView("success");
         return;
       }
       if (outcome.status === "business") {
@@ -498,13 +505,22 @@ const App = () => {
         setChangePasswordError(outcome.message);
         return;
       }
-      // relogin（401）或 unknown（超时/网络/5xx/异常 JSON/2xx 非白名单）：
-      // 一律清本地持久状态、卸载受保护页、进入重登录状态页，不恢复旧会话、不恢复 401 跳转。
+      if (outcome.status === "relogin") {
+        // 401 登录已失效：清本地持久状态、卸载受保护页、进入“登录已失效”结果页，不得声称密码已修改。
+        clearLocalPersistentAuthState();
+        setUser(null);
+        setAuthError(null);
+        setChangePasswordOpen(false);
+        setPasswordResultView("relogin");
+        return;
+      }
+      // unknown（超时/网络/5xx/异常 JSON/2xx 非白名单）：
+      // 清本地持久状态、卸载受保护页、进入“结果未知”结果页，不恢复旧会话、不恢复 401 跳转，不得声称成功或失败。
       clearLocalPersistentAuthState();
       setUser(null);
       setAuthError(null);
       setChangePasswordOpen(false);
-      setPasswordReloginView(true);
+      setPasswordResultView("unknown");
     } finally {
       setChangingPassword(false);
     }
@@ -557,7 +573,7 @@ const App = () => {
     setChangePasswordOpen(false);
     setChangingPassword(false);
     setChangePasswordError(null);
-    setPasswordReloginView(false);
+    setPasswordResultView(null);
     setAdminLoggingOut(false);
     setAdminLogoutError(null);
     adminLogoutTokenRef.current = null;
@@ -602,13 +618,26 @@ const App = () => {
     );
   }
 
-  // 改密成功后的重登录状态页：external token 已失效，需重新登录。
-  if (passwordReloginView) {
+  // 改密结果状态页：按 success/relogin/unknown 展示不同文案，均要求重新登录。
+  // 只有 success 才能展示“密码已修改”；relogin 只说登录已失效；unknown 只说结果未知，不得声称成功或失败。
+  if (passwordResultView) {
+    const resultTitle =
+      passwordResultView === "success"
+        ? "密码已修改，请重新登录"
+        : passwordResultView === "relogin"
+          ? "登录已失效，请重新登录"
+          : "密码修改结果未知，请重新登录确认";
+    const resultDescription =
+      passwordResultView === "success"
+        ? "为保障账号安全，请使用新密码重新登录。"
+        : passwordResultView === "relogin"
+          ? "当前登录态已失效，请重新登录后继续操作。"
+          : "由于网络或服务原因，改密结果无法确认，请重新登录后确认密码是否已更新。";
     return (
       <div role="status" aria-live="polite" className="grid min-h-screen place-items-center bg-[#070d18] px-6 text-white">
         <div className="w-full max-w-sm text-center">
-          <div className="text-base font-semibold">密码已修改，请重新登录</div>
-          <p className="mt-2 text-sm leading-6 text-slate-400">为保障账号安全，请使用新密码重新登录。</p>
+          <div className="text-base font-semibold">{resultTitle}</div>
+          <p className="mt-2 text-sm leading-6 text-slate-400">{resultDescription}</p>
           <button
             type="button"
             onClick={handleRelogin}

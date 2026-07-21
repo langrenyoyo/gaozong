@@ -455,7 +455,7 @@ Content-Type: application/json
 {
   "ok": true,
   "relogin_required": true,
-  "revoked_session_scope": "all_external"
+  "revoked_session_scope": "all"
 }
 ```
 
@@ -471,7 +471,16 @@ Content-Type: application/json
 | `403` | `ACCOUNT_DISABLED` | 账号停用 |
 | `502` | `NEWCAR_PASSWORD_UNAVAILABLE` | 上游 5xx 或超时 |
 
-停用账号在公共 external 鉴权入口统一返回 `401`（Owner 已于 2026-07-21 接受该语义）；9000 仍兼容把可达的 `ACCOUNT_DISABLED` 映射为 `403`。响应字符串不得出现 `old_password` / `new_password` 明文或 Bearer token。改密期间前端启用并发 401 跳转抑制；业务失败（400/403）恢复 401 跳转并保留登录态，token 失效（401）或成功则清本地持久状态进入重登录状态页。
+停用账号在公共 external 鉴权入口统一返回 `401`（Owner 已于 2026-07-21 接受该语义）；9000 仍兼容把可达的 `ACCOUNT_DISABLED` 映射为 `403`。响应字符串不得出现 `old_password` / `new_password` 明文或 Bearer token。
+
+前端改密结果按四态分流（`success` / `relogin` / `unknown` / `null`，取代旧布尔 `passwordReloginView`）：
+
+- `success`：严格匹配 `ok===true && relogin_required===true && revoked_session_scope==="all"`，其他 `2xx` 一律不当作成功；清本地持久状态、卸载受保护页，进入状态页展示「密码已修改，请重新登录」。只有此态可展示「密码已修改」。
+- `relogin`（`401`）：登录已失效，清本地持久状态、卸载受保护页，进入状态页展示「登录已失效，请重新登录」，不得声称密码已修改。
+- `unknown`（超时 / 网络中断 / `5xx` / 异常 JSON / `2xx` 非白名单）：清本地持久状态、卸载受保护页，进入状态页展示「密码修改结果未知，请重新登录确认」，不得声称成功或失败，不恢复旧会话。
+- `business`（`400` / `403`）：保留登录态、恢复 401 跳转，弹窗内提示错误供重试，不进入结果状态页。
+
+改密期间前端启用并发 401 跳转抑制；`business` 恢复 401 跳转并保留登录态，`success` / `relogin` / `unknown` 则清本地持久状态并进入对应结果状态页，均不恢复 401 跳转、不恢复旧会话；`handleRelogin` 将结果状态恢复为 `null`。
 
 ### 6.3 普通用户退出 auto_wechat
 
@@ -689,9 +698,11 @@ async function externalMe() {
   -> 开启全局 401 NewCar 跳转抑制
   -> 浏览器 POST auto_wechat 9000 /auth/password（仅两个密码字段）
   -> 9000 代理 NewCar /api/external-auth/password
-  -> 成功：清本地持久状态，进入“密码已修改，请重新登录”状态页
-  -> 业务失败（400/403）：保留登录态，恢复 401 跳转，弹窗内提示重试
-  -> token 失效（401）：清本地持久状态进入重登录状态页
+  -> success（严格匹配 ok+relogin_required+revoked_session_scope="all"）：清本地持久状态，进入“密码已修改，请重新登录”状态页
+  -> business（400/403）：保留登录态，恢复 401 跳转，弹窗内提示重试，不进结果状态页
+  -> relogin（401）：清本地持久状态，进入“登录已失效，请重新登录”状态页（不得声称密码已修改）
+  -> unknown（超时/网络/5xx/异常 JSON/2xx 非白名单）：清本地持久状态，进入“密码修改结果未知，请重新登录确认”状态页（不得声称成功或失败，不恢复旧会话）
+  -> handleRelogin：将结果状态恢复为 null
 
 普通用户点击“退出登录”
   -> 开启全局 401 NewCar 跳转抑制

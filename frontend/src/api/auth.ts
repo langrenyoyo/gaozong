@@ -237,8 +237,8 @@ export async function changeExternalPassword(
       signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
     });
   } catch {
-    // 超时/网络中断：结果未知。
-    return { status: "unknown", message: "修改密码失败，请重新登录" };
+    // 超时/网络中断：结果未知（不写成确定失败）。
+    return { status: "unknown", message: "修改结果未知，请重新登录确认" };
   }
 
   let payload: unknown = null;
@@ -258,9 +258,9 @@ export async function changeExternalPassword(
     return { status: "business", code: code || "", message: passwordBusinessMessage(code) };
   }
 
-  // 5xx 或其他非 2xx、或 2xx 但响应异常：结果未知。
+  // 5xx 或其他非 2xx、或 2xx 但响应异常：结果未知（不写成确定失败）。
   if (!response.ok || jsonParseFailed || typeof payload !== "object" || payload === null) {
-    return { status: "unknown", message: "修改密码失败，请重新登录" };
+    return { status: "unknown", message: "修改结果未知，请重新登录确认" };
   }
 
   // 成功必须严格匹配白名单：ok===true && relogin_required===true && revoked_session_scope==="all"。
@@ -269,7 +269,7 @@ export async function changeExternalPassword(
     data.ok === true && data.relogin_required === true && data.revoked_session_scope === "all";
   if (!isStrictSuccess) {
     // 2xx 但响应不符白名单：结果未知，不当作成功。
-    return { status: "unknown", message: "修改密码失败，请重新登录" };
+    return { status: "unknown", message: "修改结果未知，请重新登录确认" };
   }
 
   return { status: "success", result: { ok: true, relogin_required: true, revoked_session_scope: "all" } };
