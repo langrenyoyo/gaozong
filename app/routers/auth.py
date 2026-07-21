@@ -42,6 +42,25 @@ _PASSWORD_CODE_TO_STATUS = {
     "NEWCAR_PASSWORD_UNAVAILABLE": 502,
 }
 
+# 改密失败本地固定脱敏文案表：只返回本地文案，绝不透传上游 message（避免上游文案携带密码/token/内部信息）。
+_PASSWORD_CODE_MESSAGE = {
+    "OLD_PASSWORD_INVALID": "原密码不正确",
+    "PASSWORD_TOO_SHORT": "新密码不满足要求",
+    "PASSWORD_UNCHANGED": "新密码不能与原密码相同",
+    "ACCOUNT_TYPE_NOT_ALLOWED": "当前账号不支持修改密码",
+    "ACCOUNT_DISABLED": "账号已停用",
+    "TOKEN_INVALID": "登录已过期，请重新登录",
+    "TOKEN_EXPIRED": "登录已过期，请重新登录",
+    "TOKEN_MISSING": "登录已过期，请重新登录",
+    "PERMISSION_DENIED": "当前账号不支持修改密码",
+    "NEWCAR_PASSWORD_UNAVAILABLE": "修改密码失败，请稍后重试",
+}
+
+
+def _password_sanitized_message(code: str) -> str:
+    """返回改密失败本地固定文案；未知 code 用统一兜底文案，不含上游原文。"""
+    return _PASSWORD_CODE_MESSAGE.get(code, "修改密码失败，请稍后重试")
+
 
 @router.get("/me")
 async def get_me(context: RequestContext = Depends(get_request_context_required)):
@@ -118,5 +137,6 @@ async def auth_change_password(payload: ChangePasswordRequest, request: Request)
             exc.code,
             status_code,
         )
-        raise _auth_error(status_code, exc.code, exc.message) from exc
+        # 只返回本地固定脱敏文案，不透传上游 message。
+        raise _auth_error(status_code, exc.code, _password_sanitized_message(exc.code)) from exc
     return result

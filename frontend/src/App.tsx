@@ -482,34 +482,38 @@ const App = () => {
     setChangingPassword(true);
     setChangePasswordError(null);
     try {
-      await changeExternalPassword(oldPassword, newPassword);
-      // 成功：external token 已失效，清本地持久状态并进入重登录状态页。
+      const outcome = await changeExternalPassword(oldPassword, newPassword);
+      if (outcome.status === "success") {
+        // 成功：external token 已失效，清本地持久状态并进入重登录状态页。
+        clearLocalPersistentAuthState();
+        setUser(null);
+        setAuthError(null);
+        setChangePasswordOpen(false);
+        setPasswordReloginView(true);
+        return;
+      }
+      if (outcome.status === "business") {
+        // 400/403 业务失败：保留当前登录态，恢复 401 跳转，弹窗内提示错误供重试。
+        setNewCarAuthRedirectSuppressed(false);
+        setChangePasswordError(outcome.message);
+        return;
+      }
+      // relogin（401）或 unknown（超时/网络/5xx/异常 JSON/2xx 非白名单）：
+      // 一律清本地持久状态、卸载受保护页、进入重登录状态页，不恢复旧会话、不恢复 401 跳转。
       clearLocalPersistentAuthState();
       setUser(null);
       setAuthError(null);
       setChangePasswordOpen(false);
       setPasswordReloginView(true);
-    } catch (error) {
-      const message = userFacingError(error, "修改密码失败，请重试");
-      if (message.includes("登录已过期") || message.includes("重新登录")) {
-        // 401：token 已失效，清本地持久状态并进入重登录状态页（不回退旧 token）。
-        clearLocalPersistentAuthState();
-        setUser(null);
-        setChangePasswordOpen(false);
-        setPasswordReloginView(true);
-      } else {
-        // 400/403 业务失败：保留当前登录态，恢复 401 跳转，弹窗内提示错误供重试。
-        setNewCarAuthRedirectSuppressed(false);
-        setChangePasswordError(message);
-      }
     } finally {
       setChangingPassword(false);
     }
   };
 
-  const handleAdminLogout = async () => {
+  // 管理员退出内部函数接收显式 token：首次调用读取存储，重试必须直接使用 adminLogoutTokenRef.current，
+  // 不得再次读取存储或覆盖为空。
+  const performAdminLogout = async (token: string | null) => {
     if (adminLoggingOut) return;
-    const token = getExternalToken();
     // 管理员退出开始即抑制 401、卸载受保护页，token 只存页面内存 ref 供重试。
     setNewCarAuthRedirectSuppressed(true);
     setAdminLogoutError(null);
@@ -522,28 +526,41 @@ const App = () => {
       clearLocalPersistentAuthState();
       adminLogoutTokenRef.current = null;
       window.location.replace(redirectUrl);
-    } catch (error) {
-      // 失败：清本地持久状态并停留当前页显示重试，不跳错系统。
+    } catch {
+      // 失败：清本地持久状态并停留当前页显示重试，不跳错系统；内存 token 保留供重试。
       clearLocalPersistentAuthState();
-      setAdminLogoutError(userFacingError(error, "退出失败，请重试"));
+      setAdminLogoutError("退出失败，请重试");
     } finally {
       setAdminLoggingOut(false);
     }
   };
 
+  const handleAdminLogout = () => {
+    void performAdminLogout(getExternalToken());
+  };
+
   const retryAdminLogout = () => {
+    // 重试必须直接使用原内存 token，不得再次读取存储或覆盖为空。
     if (!adminLogoutTokenRef.current) {
       // token 已不在内存，走重新登录。
       void handleRelogin();
       return;
     }
-    void handleAdminLogout();
+    void performAdminLogout(adminLogoutTokenRef.current);
   };
 
   const handleRelogin = () => {
+    // 解除 401 跳转抑制，并清理全部 P3+P4 状态与内存 ref，不恢复旧会话。
     setNewCarAuthRedirectSuppressed(false);
     setLogoutViewState("idle");
     logoutRetryTokenRef.current = null;
+    setChangePasswordOpen(false);
+    setChangingPassword(false);
+    setChangePasswordError(null);
+    setPasswordReloginView(false);
+    setAdminLoggingOut(false);
+    setAdminLogoutError(null);
+    adminLogoutTokenRef.current = null;
     queryClient.clear();
     clearExternalToken();
     clearNewCarRedirectState();

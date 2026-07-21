@@ -209,9 +209,10 @@ def test_change_external_password_without_token_is_safe(monkeypatch):
 
 def test_password_facade_success_returns_upstream_payload(monkeypatch):
     def fake_post(url, *, json, headers, timeout):
+        # R1-4：成功响应白名单为 ok=true && relogin_required=true && revoked_session_scope="all"。
         return httpx.Response(
             200,
-            json={"ok": True, "relogin_required": True, "revoked_session_scope": "all_external"},
+            json={"ok": True, "relogin_required": True, "revoked_session_scope": "all"},
         )
 
     monkeypatch.setattr(httpx, "post", fake_post)
@@ -227,12 +228,84 @@ def test_password_facade_success_returns_upstream_payload(monkeypatch):
     body = response.json()
     assert body["ok"] is True
     assert body["relogin_required"] is True
-    assert body["revoked_session_scope"] == "all_external"
+    assert body["revoked_session_scope"] == "all"
     # 响应不得回显密码或 token
     serialized = str(body)
     assert "OldPass1" not in serialized
     assert "NewPass2" not in serialized
     assert "pwd-token" not in serialized
+
+
+def test_password_facade_failure_returns_fixed_sanitized_message_not_upstream(monkeypatch):
+    """R1-5：失败响应只返回本地固定脱敏文案，不透传上游 message（避免上游文案含敏感信息）。"""
+
+    def fake_post(url, *, json, headers, timeout):
+        # 上游故意返回含敏感/内部信息的 message，验证 9000 不透传。
+        return httpx.Response(
+            400,
+            json={"detail": {"code": "OLD_PASSWORD_INVALID", "message": "old_password=OldPass1 token=pwd-secret"}},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = _client(monkeypatch)
+
+    response = client.post(
+        "/auth/password",
+        json={"old_password": "OldPass1", "new_password": "NewPass2"},
+        headers={"Authorization": "Bearer pwd-token"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    # code 是稳定标识可透传，但 message 必须是本地固定文案。
+    assert body["detail"]["code"] == "OLD_PASSWORD_INVALID"
+    assert body["detail"]["message"] == "原密码不正确"
+    serialized = str(body)
+    # 上游原文与密码/token 不得出现在响应。
+    assert "old_password=OldPass1" not in serialized
+    assert "pwd-secret" not in serialized
+    assert "OldPass1" not in serialized
+    assert "NewPass2" not in serialized
+
+
+def test_password_facade_account_disabled_returns_fixed_message(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(403, json={"detail": {"code": "ACCOUNT_DISABLED", "message": "内部停用原因含 secret"}})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = _client(monkeypatch)
+
+    response = client.post(
+        "/auth/password",
+        json={"old_password": "OldPass1", "new_password": "NewPass2"},
+        headers={"Authorization": "Bearer pwd-token"},
+    )
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["detail"]["code"] == "ACCOUNT_DISABLED"
+    assert body["detail"]["message"] == "账号已停用"
+    assert "内部停用原因含 secret" not in str(body)
+
+
+def test_password_facade_5xx_returns_fixed_unavailable_message(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(503, json={"message": "upstream internal error stack trace"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = _client(monkeypatch)
+
+    response = client.post(
+        "/auth/password",
+        json={"old_password": "OldPass1", "new_password": "NewPass2"},
+        headers={"Authorization": "Bearer pwd-token"},
+    )
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["detail"]["code"] == "NEWCAR_PASSWORD_UNAVAILABLE"
+    assert body["detail"]["message"] == "修改密码失败，请稍后重试"
+    assert "upstream internal error" not in str(body)
 
 
 def test_password_facade_does_not_forward_user_id_or_merchant_id(monkeypatch):

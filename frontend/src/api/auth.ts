@@ -204,11 +204,23 @@ export interface ChangeExternalPasswordResult {
   revoked_session_scope?: string;
 }
 
+/**
+ * 改密错误类别：
+ * - business：400/403 业务失败，保留登录态、恢复 401 跳转、弹窗内重试。
+ * - relogin：401 token 已失效，清本地持久状态进入重登录状态页。
+ * - unknown：超时、网络、5xx、异常 JSON、2xx 但响应不符成功白名单；清本地持久状态、卸载受保护页、要求重新登录。
+ */
+export type ChangeExternalPasswordOutcome =
+  | { status: "success"; result: ChangeExternalPasswordResult }
+  | { status: "business"; code: string; message: string }
+  | { status: "relogin"; message: string }
+  | { status: "unknown"; message: string };
+
 /** 商户改密代理调用：只发送两个密码字段到 9000 门面，不接受用户 ID，不直连 NewCar，不输出请求体。 */
 export async function changeExternalPassword(
   oldPassword: string,
   newPassword: string,
-): Promise<ChangeExternalPasswordResult> {
+): Promise<ChangeExternalPasswordOutcome> {
   const baseUrl = (API_BASE_URL || "").replace(/\/+$/, "");
   const token = getExternalToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -225,47 +237,68 @@ export async function changeExternalPassword(
       signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
     });
   } catch {
-    throw new Error("修改密码失败，请稍后重试");
+    // 超时/网络中断：结果未知。
+    return { status: "unknown", message: "修改密码失败，请重新登录" };
   }
 
   let payload: unknown = null;
+  let jsonParseFailed = false;
   try {
     payload = await response.json();
   } catch {
-    payload = null;
+    jsonParseFailed = true;
   }
 
-  if (!response.ok) {
-    throw new Error(passwordErrorMessage(response.status, payload));
+  if (response.status === 401) {
+    return { status: "relogin", message: "登录已过期，请重新登录" };
   }
 
-  const data = (payload && typeof payload === "object" ? payload : {}) as Partial<ChangeExternalPasswordResult>;
-  return {
-    ok: Boolean(data.ok ?? true),
-    relogin_required: data.relogin_required,
-    revoked_session_scope: data.revoked_session_scope,
-  };
+  if (response.status === 400 || response.status === 403) {
+    const code = readApiErrorCodeFromPayload(payload);
+    return { status: "business", code: code || "", message: passwordBusinessMessage(code) };
+  }
+
+  // 5xx 或其他非 2xx、或 2xx 但响应异常：结果未知。
+  if (!response.ok || jsonParseFailed || typeof payload !== "object" || payload === null) {
+    return { status: "unknown", message: "修改密码失败，请重新登录" };
+  }
+
+  // 成功必须严格匹配白名单：ok===true && relogin_required===true && revoked_session_scope==="all"。
+  const data = payload as Partial<ChangeExternalPasswordResult>;
+  const isStrictSuccess =
+    data.ok === true && data.relogin_required === true && data.revoked_session_scope === "all";
+  if (!isStrictSuccess) {
+    // 2xx 但响应不符白名单：结果未知，不当作成功。
+    return { status: "unknown", message: "修改密码失败，请重新登录" };
+  }
+
+  return { status: "success", result: { ok: true, relogin_required: true, revoked_session_scope: "all" } };
 }
 
-function passwordErrorMessage(status: number, payload: unknown): string {
+function readApiErrorCodeFromPayload(payload: unknown): string | null {
   const detail = (payload as { detail?: { code?: unknown } })?.detail;
-  const code = detail && typeof detail === "object" ? String(detail.code ?? "") : "";
-  if (status === 401 || code === "TOKEN_INVALID" || code === "TOKEN_EXPIRED" || code === "TOKEN_MISSING") {
-    return "登录已过期，请重新登录";
+  if (detail && typeof detail === "object") {
+    const code = (detail as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
   }
-  if (status === 403 || code === "ACCOUNT_DISABLED" || code === "ACCOUNT_TYPE_NOT_ALLOWED" || code === "PERMISSION_DENIED") {
-    return "当前账号暂无修改密码权限，请联系管理员。";
+  return null;
+}
+
+function passwordBusinessMessage(code: string | null): string {
+  switch (code) {
+    case "OLD_PASSWORD_INVALID":
+      return "原密码不正确，请重试";
+    case "PASSWORD_TOO_SHORT":
+      return "新密码至少 8 位";
+    case "PASSWORD_UNCHANGED":
+      return "新密码不能与原密码相同";
+    case "ACCOUNT_DISABLED":
+    case "ACCOUNT_TYPE_NOT_ALLOWED":
+    case "PERMISSION_DENIED":
+      return "当前账号暂无修改密码权限，请联系管理员。";
+    default:
+      return "修改密码失败，请重试";
   }
-  if (code === "OLD_PASSWORD_INVALID") {
-    return "原密码不正确，请重试";
-  }
-  if (code === "PASSWORD_TOO_SHORT") {
-    return "新密码至少 8 位";
-  }
-  if (code === "PASSWORD_UNCHANGED") {
-    return "新密码不能与原密码相同";
-  }
-  return "修改密码失败，请重试";
 }
 
 /** 管理员当前浏览器退出：浏览器直调 NewCar，携带 Cookie 与 Bearer，返回可信 redirect_url。 */
