@@ -75,8 +75,8 @@ assertIncludes(capabilities, "auto_wechat:admin:autoreply", "权限常量保留 
 assertNotIncludes(sideNav, 'user.role === "super_admin")', "侧栏自动回复灰度不能只认 super_admin");
 assertNotIncludes(sideNav, '"admin-accounts"', "不展示 auto_wechat 本地管理员账号管理入口");
 assertIncludes(sideNav, "isAdminUser ? (", "管理员与普通用户底部动作互斥");
-assertIncludes(sideNav, "onSwitchToNewCar", "管理员侧栏提供切换到 NewCar 动作");
-assertIncludes(sideNav, "切换到 NewCar", "管理员侧栏显示切换到 NewCar 文案");
+assertIncludes(sideNav, "onSwitchToNewCar", "管理员侧栏提供切换到内部系统动作");
+assertIncludes(sideNav, "切换到内部系统", "管理员侧栏显示切换到内部管理系统 文案");
 assertIncludes(sideNav, "onClick={onLogout}", "普通用户侧栏保留退出动作");
 
 assertIncludes(authApi, "/api/external-auth/switch-to-internal", "切换由浏览器直调 NewCar");

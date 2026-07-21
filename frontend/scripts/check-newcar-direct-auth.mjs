@@ -135,7 +135,7 @@ async function runAuthBehaviorChecks() {
     );
 
     const authModule = await import(`${pathToFileURL(tempFile).href}?v=${Date.now()}`);
-    const switchError = "切换到 NewCar 失败，请稍后重试。";
+    const switchError = "切换到内部系统失败，请稍后重试。";
     const logoutError = "退出失败，请重试";
     const jsonResponse = (body, status = 200) =>
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -157,13 +157,13 @@ async function runAuthBehaviorChecks() {
     fetchHandler = async () => jsonResponse({ detail: "RAW_401_SECRET" }, 401);
     await assertRejectedWithMessage(
       authModule.switchToInternalSystem,
-      "登录已过期，无法切换到 NewCar。",
+      "登录已过期，无法切换到内部系统。",
       "switch 401",
     );
     fetchHandler = async () => jsonResponse({ detail: "RAW_403_SECRET" }, 403);
     await assertRejectedWithMessage(
       authModule.switchToInternalSystem,
-      "当前账号暂无切换到 NewCar 的权限。",
+      "当前账号暂无切换到内部系统的权限。",
       "switch 403",
     );
     fetchHandler = async () => new Response("RAW_INVALID_JSON_SECRET", { status: 200 });
@@ -411,7 +411,7 @@ assertIncludes(sideNav, "isAdminUser && !isMockUser", "side nav does not hide me
 assertIncludes(sideNav, "visibleAdminItems.length > 0", "side nav can append admin entries for mock users");
 assertIncludes(sideNav, "onSwitchToNewCar", "side nav receives the NewCar switch action");
 assertIncludes(sideNav, "switchingToNewCar", "side nav exposes a stable switching state");
-assertIncludes(sideNav, "切换到 NewCar", "side nav labels the administrator switch action");
+assertIncludes(sideNav, "切换到内部系统", "side nav labels the administrator switch action");
 assertIncludes(sideNav, "isAdminUser ? (", "side nav renders administrator and merchant footer actions exclusively");
 assertIncludes(sideNav, "ExternalLinkIcon", "side nav uses the standard external-link icon");
 assertIncludes(sideNav, "LoaderCircleIcon", "side nav uses the standard loading icon");

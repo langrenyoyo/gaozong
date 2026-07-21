@@ -465,7 +465,7 @@ const App = () => {
       const redirectUrl = await switchToInternalSystem();
       window.location.assign(redirectUrl);
     } catch (error) {
-      toast.error(userFacingError(error, "切换到 NewCar 失败，请稍后重试。"));
+      toast.error(userFacingError(error, "切换到内部系统失败，请稍后重试。"));
     } finally {
       setSwitchingToNewCar(false);
     }

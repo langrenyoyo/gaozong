@@ -114,7 +114,7 @@ export async function fetchCurrentAuthUserWithoutRedirect(): Promise<AuthContext
   }
 }
 
-const SWITCH_TO_NEWCAR_ERROR = "切换到 NewCar 失败，请稍后重试。";
+const SWITCH_TO_NEWCAR_ERROR = "切换到内部系统失败，请稍后重试。";
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 
 export async function switchToInternalSystem(): Promise<string> {
@@ -140,10 +140,10 @@ export async function switchToInternalSystem(): Promise<string> {
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error("登录已过期，无法切换到 NewCar。");
+      throw new Error("登录已过期，无法切换到内部系统。");
     }
     if (response.status === 403) {
-      throw new Error("当前账号暂无切换到 NewCar 的权限。");
+      throw new Error("当前账号暂无切换到内部系统的权限。");
     }
     throw new Error(SWITCH_TO_NEWCAR_ERROR);
   }

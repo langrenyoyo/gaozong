@@ -233,18 +233,6 @@ export default function SideNav({
         </nav>
 
         <div className={`flex flex-col gap-2 pb-4 ${expanded ? "px-3" : "items-center"}`}>
-          <button
-            onClick={toggleExpanded}
-            aria-label={expanded ? "收起导航" : "展开导航"}
-            title={expanded ? "收起导航" : "展开导航"}
-            className={`flex h-10 items-center rounded-xl border border-white/10 bg-[#22304b] text-white transition-smooth hover:bg-[#2a3a5c] ${
-              expanded ? "w-full gap-2 px-3 text-left text-xs" : "w-12 justify-center"
-            }`}
-          >
-            {expanded ? <ChevronLeftIcon size={16} /> : <ChevronRightIcon size={16} />}
-            {expanded ? <span>收起导航</span> : null}
-          </button>
-
           {user.role === "merchant" ? (
             <div
               className={`border border-white/10 bg-[#182238] shadow-[0_14px_30px_rgba(7,13,28,0.22)] ${
@@ -295,12 +283,24 @@ export default function SideNav({
               </span>
               {expanded ? (
                 <span className="grid min-w-0 gap-0.5">
-                  <span className="truncate text-xs font-bold">{switchingToNewCar ? "正在切换" : "切换到 NewCar"}</span>
+                  <span className="truncate text-xs font-bold">{switchingToNewCar ? "正在切换" : "切换到内部系统"}</span>
                   <span className="truncate text-[11px] text-[#9a3412]">内部系统管理入口</span>
                 </span>
               ) : null}
             </button>
           ) : null}
+
+          <button
+            onClick={toggleExpanded}
+            aria-label={expanded ? "收起导航" : "展开导航"}
+            title={expanded ? "收起导航" : "展开导航"}
+            className={`flex h-10 items-center rounded-xl border border-white/10 bg-[#22304b] text-white transition-smooth hover:bg-[#2a3a5c] ${
+              expanded ? "w-full gap-2 px-3 text-left text-xs" : "w-12 justify-center"
+            }`}
+          >
+            {expanded ? <ChevronLeftIcon size={16} /> : <ChevronRightIcon size={16} />}
+            {expanded ? <span>收起导航</span> : null}
+          </button>
 
           <div className={`relative ${expanded ? "w-full" : "w-12"}`}>
             {accountMenuOpen ? (
