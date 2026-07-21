@@ -20,7 +20,7 @@
 - `Risk-Level`：`L3`
 - `Workflow-Mode`：`full-three-authority`
 - `Activation-Reasons`：鉴权、权限、跨服务接口合同、会话撤销、Cookie 清理和真实外部跳转同时变化；错误可能导致越权、残留登录态或错误退出其他设备。
-- `Owner-Constraints`：只修改 `auto_wechat`；禁止修改 `E:\work\project\used-car`；不推送、不合并、不发布，直到审批窗口基于同一候选和独立测试证据另行批准。
+- `Owner-Constraints`：只修改 `auto_wechat`；禁止修改 `E:\work\project\used-car`；不推送、不合并、不发布，直到审批窗口基于同一候选和独立测试证据另行批准。Owner 已于 2026-07-21 接受停用账号在 external 鉴权入口统一返回 401，并批准复用本计划列明的现有隔离执行/测试工作树。
 - `执行工作树`：复用现有干净 `E:\work\project\auto_wechat\.worktrees\auto-wechat-admin-switch-logout-exec-p2`，仅允许快进到本计划提交；不新建工作树或分支。
 - `测试工作树`：复用现有干净 `E:\work\project\auto_wechat\.worktrees\auto-wechat-admin-switch-logout-test-p2`；不得使用留有产物的 `test-p2-r1`，测试时从候选完整哈希重新 detached checkout。
 
@@ -33,7 +33,7 @@
    - `POST /api/external-auth/logout-current-browser`：撤销当前 external 会话，读取 `new_car_internal_session`，仅在有效且同用户时撤销 internal 会话，并始终删除两个内部 Cookie，返回 `logged_out=1` 地址。
    - NewCar 前端识别 `logged_out=1`，清理 `new_car_auth_token` 并停留登录页。
 2. 上游实现使用现有 `db()` 事务，审计详情未写密码或 token 明文；CORS 开启 `allow_credentials=True`，生产要求显式 HTTPS `CORS_ORIGINS`。
-3. 上游合同缺口必须在测试交接中单独验证：公共 external 鉴权先筛 `status='active'`，所以停用账号不会进入改密路由内的 `ACCOUNT_DISABLED` 分支，当前真实响应是 401。若上游不补充可达的 403 或书面接受 401 语义，P4 不得无条件通过。
+3. 公共 external 鉴权先筛 `status='active'`，所以停用账号不会进入改密路由内的 `ACCOUNT_DISABLED` 分支，当前真实响应是 401。Owner 已接受停用账号统一 401，本计划以该语义验收；若上游未来显式返回 `ACCOUNT_DISABLED`，9000 仍兼容映射为 403。
 4. 上游 `scripts/smoke_rbac.py` 已覆盖基本改密、旧 token 失效和当前 external 退出，但未覆盖同用户 internal Cookie、异用户 Cookie、其他设备会话保留、两个 `Set-Cookie` 删除头和所有建议错误码；这些必须由独立测试补齐或明确记录未完成项。
 
 ## 文件边界
@@ -204,7 +204,7 @@ node frontend/scripts/check-newcar-account-actions.mjs
 
 - [ ] 删除/替换旧的“管理员无退出、只能切换 NewCar”结论，明确管理员有“切换到 NewCar”和“退出当前浏览器全部登录态”两个动作。
 - [ ] 写明商户改密走 9000 `/auth/password` 门面，管理员当前浏览器退出浏览器直调 NewCar 并携带 `credentials: include`，普通退出继续只撤销 auto_wechat external 会话。
-- [ ] 写明上游固定提交和当前未解决的 `ACCOUNT_DISABLED` 可达性差异；不能把未验证的上游错误码写成已完成事实。
+- [ ] 写明上游固定提交，以及 Owner 已接受停用账号在 external 鉴权入口统一返回 401；不得继续把不可达的 `ACCOUNT_DISABLED` 写成本次强制响应。
 - [ ] 写明本轮不修改 used-car、数据库、权限码和部署；文档只保留当前有效事实，不追加与旧结论并存的“补充”。
 
 ### 任务 7：完整本地验证与候选提交
@@ -237,7 +237,7 @@ npm run build
 | 编号 | 场景 | 操作 | 必须结果 |
 |---|---|---|---|
 | A1 | 商户改密成功 | 商户打开改密弹窗，提交旧密码和新密码 | 9000 收到仅两个密码字段；NewCar 改密成功；全部旧 external token 失效；前端清本地状态并停留重登录状态 |
-| A2 | 改密错误码 | 旧密码错误、少于 8 位、新旧相同、无效 token、管理员 token、停用账号 | 分别得到约定 400/401/403 code；不泄露密码/token；停用账号必须记录上游当前 401 或修正后的 403 差异 |
+| A2 | 改密错误码 | 旧密码错误、少于 8 位、新旧相同、无效 token、管理员 token、停用账号 | 业务校验得到约定 400，管理员 token 得到 403，无效/过期 token 与停用账号统一得到 401；不泄露密码/token |
 | A3 | 改密会话范围 | 同用户建立多个 external/internal 会话后改密 | 全部 active 会话撤销；成功响应要求重新登录；没有遗留可用旧 token |
 | A4 | 普通退出 | 普通商户点击退出 | 只调用 9000 `/auth/logout`；不直调 NewCar 当前浏览器退出；清本地状态；成功/失败停留当前 URL；失败可用内存 token 重试 |
 | A5 | 管理员侧栏 | 管理员登录管理页 | 同时显示“切换到 NewCar”和“退出登录”；不显示商户改密；普通商户不显示切换按钮 |
@@ -254,7 +254,7 @@ npm run build
 交给负责 `used-car` 的同事：
 
 1. 保持 `/api/external-auth/password` 与 `/api/external-auth/logout-current-browser` 请求和响应语义不变；不得要求 auto_wechat 传 `user_id`、`merchant_id`。
-2. 补充真实测试：`ACCOUNT_DISABLED` 要么让停用账号进入改密路由并返回 403，要么正式确认停用账号统一 401，且同步文档和验收码表。
+2. 补充真实测试并同步文档：停用账号在公共 external 鉴权入口统一返回 401；若未来改为可达的 `ACCOUNT_DISABLED` 403，必须作为新的接口合同变更另行通知 auto_wechat。
 3. 补充当前浏览器退出的同用户、异用户、无效 Cookie、其他设备会话和两个 Cookie 删除头测试；确认 CORS 对 auto_wechat 实际 Origin 返回精确 `Access-Control-Allow-Origin` 与 `Access-Control-Allow-Credentials: true`。
 4. 确认 `redirect_url` 只来自服务端固定 HTTPS 配置，响应不会把 token、密码或内部 Cookie 值写入正文/审计。
 5. NewCar 前端继续处理 `logged_out=1`：清理 `new_car_auth_token`、移除参数、停留登录页，不恢复旧 `cookie-session`。
@@ -262,7 +262,7 @@ npm run build
 ## 失败处理与回滚
 
 - 任一鉴权、权限、Cookie 隔离或会话撤销核心项失败：测试窗口输出 `FAIL`，审批窗口返回 `R1/R2`，新候选必须重新测试。
-- 上游错误码合同与用户确认冲突且无法由 auto_wechat 兼容：输出 `SPEC_GAP` 后由审批窗口 `REPLAN`，不得静默把 401 当 403 通过。
+- 上游实际错误码若偏离本计划已接受的“停用账号统一 401”，且无法由 auto_wechat 兼容：输出 `SPEC_GAP` 后由审批窗口 `REPLAN`，不得由执行或测试窗口自行改变合同。
 - 候选提交产生任何新对象后，旧 `CANDIDATE_READY`、`APPROVE_TEST` 和测试结论全部失效。
 - 业务回滚只允许审批窗口基于候选哈希决定；本计划不执行 `git reset --hard`、强推、生产部署或数据库回滚。
 
