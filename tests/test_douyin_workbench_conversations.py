@@ -146,7 +146,7 @@ def _insert_event(
             from_user_id=payload["from_user_id"],
             to_user_id=payload["to_user_id"],
             event_key=event_key,
-            is_duplicate=0,
+            is_duplicate=False,
             lead_id=lead_id,
             raw_body=json.dumps(payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
@@ -254,7 +254,7 @@ def _insert_media_event(
             message_type=message_type,
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             event_key=event_key,
-            is_duplicate=0,
+            is_duplicate=False,
             raw_body=json.dumps(payload, ensure_ascii=False),
             created_at=datetime.now(),
         )

@@ -129,7 +129,7 @@ def test_internal_webhook_creates_lead_for_bound_text_message_and_keeps_merchant
         assert lead.conversation_short_id == "conv_001"
         assert lead.customer_contact == "13800138000"
         assert event.lead_id == lead.id
-        assert event.is_duplicate == 0
+        assert event.is_duplicate is False
     finally:
         db.close()
 
@@ -154,8 +154,8 @@ def test_internal_webhook_duplicate_event_writes_audit_event_without_updating_le
         events = db.query(DouyinWebhookEvent).order_by(DouyinWebhookEvent.id).all()
         leads = db.query(DouyinLead).all()
         assert len(events) == 2
-        assert events[0].is_duplicate == 0
-        assert events[1].is_duplicate == 1
+        assert events[0].is_duplicate is False
+        assert events[1].is_duplicate is True
         assert len(leads) == 1
         assert leads[0].content == "首次消息 13800138000"
     finally:

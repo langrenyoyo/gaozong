@@ -253,7 +253,7 @@ def find_existing_event(db: Session, event_key: str) -> DouyinWebhookEvent | Non
         db.query(DouyinWebhookEvent)
         .filter(
             DouyinWebhookEvent.event_key == event_key,
-            DouyinWebhookEvent.is_duplicate == 0,
+            DouyinWebhookEvent.is_duplicate.is_(False),
         )
         .first()
     )
@@ -284,7 +284,7 @@ def persist_webhook_event(
         to_user_id=payload.get("to_user_id"),
         **normalized,
         event_key=event_key,
-        is_duplicate=0,
+        is_duplicate=False,
         lead_id=lead_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
@@ -311,7 +311,7 @@ def persist_duplicate_webhook_event(
         to_user_id=payload.get("to_user_id"),
         **normalized,
         event_key=build_duplicate_event_key(original_event_key),
-        is_duplicate=1,
+        is_duplicate=True,
         lead_id=lead_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
@@ -804,7 +804,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
 
 def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
     """im_send_msg 入库后的轻量后置处理，异常不影响 webhook 主链路。"""
-    if event.event != "im_send_msg" or event.is_duplicate == 1:
+    if event.event != "im_send_msg" or event.is_duplicate:
         return
     try:
         skip_reason = outbound_skip_reason(event)

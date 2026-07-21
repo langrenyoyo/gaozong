@@ -152,7 +152,7 @@ def build_event_key(payload: dict[str, Any]) -> str:
 def _find_existing_event(db: Session, event_key: str) -> DouyinWebhookEvent | None:
     return (
         db.query(DouyinWebhookEvent)
-        .filter(DouyinWebhookEvent.event_key == event_key, DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.event_key == event_key, DouyinWebhookEvent.is_duplicate.is_(False))
         .first()
     )
 
@@ -174,7 +174,7 @@ def persist_webhook_event(
         to_user_id=payload.get("to_user_id"),
         **_parse_callback_event(payload),
         event_key=event_key,
-        is_duplicate=0,
+        is_duplicate=False,
         lead_id=lead_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
@@ -197,7 +197,7 @@ def persist_duplicate_webhook_event(
         to_user_id=payload.get("to_user_id"),
         **_parse_callback_event(payload),
         event_key=_duplicate_event_key(original_event_key),
-        is_duplicate=1,
+        is_duplicate=True,
         lead_id=lead_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),

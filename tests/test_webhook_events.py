@@ -91,7 +91,7 @@ def _insert_event(
     event_key: str = "event_key_001",
     lead_id: int | None = None,
     raw_payload: dict | None = None,
-    is_duplicate: int = 0,
+    is_duplicate: bool = False,
     created_at: datetime | None = None,
 ) -> int:
     db = TestSession()
@@ -292,7 +292,7 @@ def test_list_webhook_events_infers_non_text_message():
 
 
 def test_list_webhook_events_infers_duplicate_event():
-    _insert_event(event_key="dup_001", is_duplicate=1)
+    _insert_event(event_key="dup_001", is_duplicate=True)
     client = _client()
 
     item = client.get("/webhook-events").json()["data"]["items"][0]
@@ -362,8 +362,8 @@ def test_list_webhook_events_filters_lead_action():
 
 
 def test_list_webhook_events_filters_is_duplicate():
-    _insert_event(event_key="normal_filter", is_duplicate=0)
-    _insert_event(event_key="dup_filter", is_duplicate=1)
+    _insert_event(event_key="normal_filter", is_duplicate=False)
+    _insert_event(event_key="dup_filter", is_duplicate=True)
     client = _client()
 
     items = client.get("/webhook-events?is_duplicate=true").json()["data"]["items"]
@@ -593,7 +593,7 @@ def test_get_webhook_event_detail_raw_body_parse_failure_not_500():
             from_user_id="bad_raw",
             to_user_id="account",
             event_key="bad_raw_001",
-            is_duplicate=0,
+            is_duplicate=False,
             lead_id=None,
             raw_body="{bad raw json",
             created_at=datetime.now(),

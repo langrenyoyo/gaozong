@@ -165,14 +165,14 @@ def _resolve_context(
             db.query(DouyinWebhookEvent)
             .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
             .filter(DouyinWebhookEvent.server_message_id == server_message_id)
-            .filter(DouyinWebhookEvent.is_duplicate == 0)
+            .filter(DouyinWebhookEvent.is_duplicate.is_(False))
             .first()
         )
     if row is None:
         row = (
             db.query(DouyinWebhookEvent)
             .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
-            .filter(DouyinWebhookEvent.is_duplicate == 0)
+            .filter(DouyinWebhookEvent.is_duplicate.is_(False))
             .order_by(DouyinWebhookEvent.message_create_time.desc(), DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
             .first()
         )

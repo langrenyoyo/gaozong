@@ -111,7 +111,7 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
     if filters.event:
         query = query.filter(DouyinWebhookEvent.event == filters.event)
     if filters.is_duplicate is not None:
-        query = query.filter(DouyinWebhookEvent.is_duplicate == (1 if filters.is_duplicate else 0))
+        query = query.filter(DouyinWebhookEvent.is_duplicate.is_(bool(filters.is_duplicate)))
     if filters.start_time:
         query = query.filter(DouyinWebhookEvent.created_at >= filters.start_time)
     if filters.end_time:

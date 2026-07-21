@@ -90,7 +90,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             event.event,
         )
         return
-    if int(event.is_duplicate or 0) == 1:
+    if event.is_duplicate:
         _insert_terminal_run(db, base, status="skipped", skip_reason="duplicate_event")
         return
     if not latest_message:

@@ -45,7 +45,7 @@ def require_customer_open_id_for_merchant(
         raise _forbidden(code)
     rows = (
         db.query(DouyinWebhookEvent)
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.event.in_(("im_receive_msg", "im_send_msg", "im_enter_direct_msg")))
         .filter(
             or_(

@@ -207,7 +207,7 @@ def _candidate_takeover_events(
     return (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.event == "im_send_msg")
-        .filter(DouyinWebhookEvent.is_duplicate == 0)
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
         .filter(DouyinWebhookEvent.from_user_id == account_open_id)
         .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
         .filter(DouyinWebhookEvent.created_at >= window_start)

@@ -55,7 +55,7 @@ def _insert_event(
     text: str = "你好，想了解一下A6",
     event_key: str = "event-key-1",
     server_message_id: str = "server-msg-1",
-    is_duplicate: int = 0,
+    is_duplicate: bool = False,
     created_at: datetime | None = None,
 ) -> int:
     db = TestSession()
@@ -296,7 +296,7 @@ def test_non_receive_event_does_not_create_auto_reply_run():
 def test_duplicate_event_is_skipped():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
-    event_id = _insert_event(is_duplicate=1, event_key="event-dup")
+    event_id = _insert_event(is_duplicate=True, event_key="event-dup")
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession):
         run_ai_auto_reply_dry_run(event_id)
