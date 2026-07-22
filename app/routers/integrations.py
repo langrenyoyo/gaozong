@@ -21,6 +21,9 @@ from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
+    AccountAccessError,
+    AccountMerchantDeniedError,
+    ConversationNotFoundError,
     get_conversation_detail,
     get_conversation_profile,
     list_account_conversations,
@@ -51,6 +54,42 @@ def _merchant_id_for_douyin_cs(context: RequestContext) -> str:
             detail={"code": "MERCHANT_CONTEXT_MISSING", "message": "缺少可信商户上下文"},
         )
     return context.merchant_id
+
+
+def _workbench_merchant_scope(context: RequestContext) -> str | None:
+    """工作台读取的账号归属校验上下文。
+
+    普通商户返回可信 merchant_id，service 层据此校验账号归属与 bind_status==1；
+    mock 开发态 / super_admin 返回 None 跳过校验（跨商户只读，保持 dev 兼容）。
+    """
+    merchant_id = _merchant_id_for_douyin_cs(context)
+    if context.is_mock_auth() or context.super_admin:
+        return None
+    return merchant_id
+
+
+def _account_access_http_exception(exc: Exception) -> HTTPException:
+    """把账号归属校验异常映射为防枚举的 403/404。"""
+    if isinstance(exc, AccountMerchantDeniedError):
+        return HTTPException(
+            status_code=403,
+            detail={
+                "code": "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED",
+                "message": "抖音企业号不属于当前商户",
+            },
+        )
+    return HTTPException(
+        status_code=404,
+        detail={"code": "DOUYIN_ACCOUNT_NOT_FOUND", "message": "抖音企业号不存在"},
+    )
+
+
+def _conversation_not_found_http_exception() -> HTTPException:
+    """会话不属于当前账号/商户或不存在，统一防枚举 404。"""
+    return HTTPException(
+        status_code=404,
+        detail={"code": "DOUYIN_CONVERSATION_NOT_FOUND", "message": "抖音会话不存在"},
+    )
 
 
 _WEBHOOK_RESULT_FIELDS = {
@@ -346,13 +385,17 @@ def get_douyin_account_conversations(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Aggregate real private-message webhook events into workbench conversations."""
-    _merchant_id_for_douyin_cs(context)
+    merchant_scope = _workbench_merchant_scope(context)
     resolved_account_open_id = account_open_id or account_id
-    return list_account_conversations(
-        db,
-        account_open_id=resolved_account_open_id,
-        event_limit=event_limit,
-    )
+    try:
+        return list_account_conversations(
+            db,
+            account_open_id=resolved_account_open_id,
+            event_limit=event_limit,
+            merchant_id=merchant_scope,
+        )
+    except (AccountAccessError, AccountMerchantDeniedError) as exc:
+        raise _account_access_http_exception(exc) from exc
 
 
 @router.get("/conversation-detail")
@@ -363,12 +406,19 @@ def get_douyin_conversation_detail(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """一次返回同一会话的消息和客户画像。"""
-    _merchant_id_for_douyin_cs(context)
-    return get_conversation_detail(
-        db,
-        conversation_key=conversation_key,
-        account_open_id=account_open_id,
-    )
+    merchant_scope = _workbench_merchant_scope(context)
+    try:
+        return get_conversation_detail(
+            db,
+            conversation_key=conversation_key,
+            account_open_id=account_open_id,
+            merchant_id=merchant_scope,
+            require_non_empty=True,
+        )
+    except ConversationNotFoundError as exc:
+        raise _conversation_not_found_http_exception() from exc
+    except (AccountAccessError, AccountMerchantDeniedError) as exc:
+        raise _account_access_http_exception(exc) from exc
 
 
 @router.get("/conversations/{conversation_key}/messages")
@@ -379,12 +429,18 @@ def get_douyin_conversation_messages(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message webhook events for one workbench conversation."""
-    _merchant_id_for_douyin_cs(context)
-    return list_conversation_messages(
-        db,
-        conversation_key=conversation_key,
-        account_open_id=account_open_id,
-    )
+    merchant_scope = _workbench_merchant_scope(context)
+    try:
+        return list_conversation_messages(
+            db,
+            conversation_key=conversation_key,
+            account_open_id=account_open_id,
+            merchant_id=merchant_scope,
+        )
+    except ConversationNotFoundError as exc:
+        raise _conversation_not_found_http_exception() from exc
+    except (AccountAccessError, AccountMerchantDeniedError) as exc:
+        raise _account_access_http_exception(exc) from exc
 
 
 def _get_douyin_conversation_profile_response(
@@ -392,16 +448,21 @@ def _get_douyin_conversation_profile_response(
     conversation_key: str,
     account_open_id: str | None = None,
     db: Session | None = None,
+    merchant_id: str | None = None,
 ) -> dict:
     """Return a read-only customer profile aggregated from 9000 local data."""
     if db is None:
         raise HTTPException(status_code=500, detail="db session is required")
     resolved_account_open_id = account_open_id or account_id
-    data = get_conversation_profile(
-        db,
-        account_open_id=resolved_account_open_id,
-        conversation_key=conversation_key,
-    )
+    try:
+        data = get_conversation_profile(
+            db,
+            account_open_id=resolved_account_open_id,
+            conversation_key=conversation_key,
+            merchant_id=merchant_id,
+        )
+    except (AccountAccessError, AccountMerchantDeniedError) as exc:
+        raise _account_access_http_exception(exc) from exc
     if data is None:
         raise HTTPException(
             status_code=404,
@@ -422,12 +483,13 @@ def get_douyin_conversation_profile_by_query(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return customer profile without putting conversation_id in the path."""
-    _merchant_id_for_douyin_cs(context)
+    merchant_scope = _workbench_merchant_scope(context)
     return _get_douyin_conversation_profile_response(
         account_id=account_id,
         conversation_key=conversation_id,
         account_open_id=account_open_id,
         db=db,
+        merchant_id=merchant_scope,
     )
 
 
@@ -440,12 +502,13 @@ def get_douyin_conversation_profile(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return a read-only customer profile aggregated from 9000 local data."""
-    _merchant_id_for_douyin_cs(context)
+    merchant_scope = _workbench_merchant_scope(context)
     return _get_douyin_conversation_profile_response(
         account_id=account_id,
         conversation_key=conversation_key,
         account_open_id=account_open_id,
         db=db,
+        merchant_id=merchant_scope,
     )
 
 
@@ -457,12 +520,18 @@ def get_douyin_conversation_messages_by_query(
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message events without putting conversation_key in the path."""
-    _merchant_id_for_douyin_cs(context)
-    return list_conversation_messages(
-        db,
-        conversation_key=conversation_key,
-        account_open_id=account_open_id,
-    )
+    merchant_scope = _workbench_merchant_scope(context)
+    try:
+        return list_conversation_messages(
+            db,
+            conversation_key=conversation_key,
+            account_open_id=account_open_id,
+            merchant_id=merchant_scope,
+        )
+    except ConversationNotFoundError as exc:
+        raise _conversation_not_found_http_exception() from exc
+    except (AccountAccessError, AccountMerchantDeniedError) as exc:
+        raise _account_access_http_exception(exc) from exc
 
 
 @router.post("/conversations/mark-read")
@@ -481,6 +550,8 @@ def post_douyin_conversation_mark_read(
             conversation_short_id=request.conversation_short_id,
             customer_open_id=request.customer_open_id,
         )
+    except ConversationNotFoundError as exc:
+        raise _conversation_not_found_http_exception() from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=404,

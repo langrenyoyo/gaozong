@@ -182,6 +182,7 @@ def _insert_webhook_event(
     created_at: datetime | None = None,
     is_duplicate: int = 0,
     lead_id: int | None = None,
+    merchant_id: str = "dev-merchant",
 ) -> int:
     db = TestSession()
     try:
@@ -213,6 +214,7 @@ def _insert_webhook_event(
             event_key=event_key,
             is_duplicate=is_duplicate,
             lead_id=lead_id,
+            merchant_id=merchant_id,
             raw_body=json.dumps(payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
         )
@@ -1036,6 +1038,7 @@ def test_proxy_rejects_malformed_persisted_history_instead_of_using_empty_contex
                 conversation_short_id="conv-malformed",
                 event_key="malformed-history",
                 is_duplicate=0,
+                merchant_id="dev-merchant",
                 raw_body="{invalid-json",
                 created_at=datetime.now(),
             )

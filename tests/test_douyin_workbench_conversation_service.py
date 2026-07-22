@@ -77,6 +77,7 @@ def _insert_event(
     conversation_short_id: str | None = "conv-1",
     event_key: str = "event-1",
     created_at: datetime | None = None,
+    merchant_id: str = "merchant-1",
 ):
     db = TestSession()
     try:
@@ -96,6 +97,7 @@ def _insert_event(
             raw_body=json.dumps({"content": content}, ensure_ascii=False),
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             is_duplicate=False,
+            merchant_id=merchant_id,
             created_at=created_at or datetime.now(),
         )
         db.add(row)

@@ -73,6 +73,60 @@ HIGH_INTENT_KEYWORDS = (
 MANUAL_REQUIRED_KEYWORDS = ("人工", "客服", "转人工", "真人", "电话联系", "加微信")
 
 
+class AccountAccessError(ValueError):
+    """企业号不存在、解绑、失效或删除。"""
+
+
+class AccountMerchantDeniedError(PermissionError):
+    """企业号不属于当前可信商户。"""
+
+
+class ConversationNotFoundError(LookupError):
+    """会话不属于当前账号/商户或不存在（普通商户读取防枚举 404）。"""
+
+
+def require_owned_account(
+    db: Session,
+    *,
+    account_open_id: str | None,
+    merchant_id: str | None,
+) -> DouyinAuthorizedAccount | None:
+    """统一校验企业号归属：账号存在、bind_status==1、merchant_id 匹配当前可信商户。
+
+    merchant_id 为 None/空串时跳过校验（mock 开发态 / super_admin 跨商户只读 /
+    兼容旧调用），返回 None。账号不存在或 bind_status!=1 → AccountAccessError；
+    merchant_id 不匹配 → AccountMerchantDeniedError。优先按当前商户+bind_status==1
+    精确筛选，避免同 open_id 多条绑定记录误选他商户归属。
+    """
+    if not merchant_id:
+        return None
+    if not account_open_id:
+        # 普通商户读取必须显式指定账号，禁止仅凭 conversation_key 跨商户扫描。
+        raise AccountAccessError("account_not_found")
+    account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(
+            DouyinAuthorizedAccount.open_id == account_open_id,
+            DouyinAuthorizedAccount.merchant_id == merchant_id,
+            DouyinAuthorizedAccount.bind_status == 1,
+        )
+        .order_by(DouyinAuthorizedAccount.id.desc())
+        .first()
+    )
+    if account is not None:
+        return account
+    # 回退：当前商户下无有效绑定，再判断是不存在、失效还是他商户，给出精确错误码。
+    any_account = (
+        db.query(DouyinAuthorizedAccount)
+        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
+        .order_by(DouyinAuthorizedAccount.id.desc())
+        .first()
+    )
+    if any_account is None or any_account.bind_status != 1:
+        raise AccountAccessError("account_not_found")
+    raise AccountMerchantDeniedError("account_merchant_denied")
+
+
 @dataclass(frozen=True)
 class WorkbenchMessage:
     event_id: int
@@ -101,7 +155,9 @@ def list_account_conversations(
     *,
     account_open_id: str,
     event_limit: int | None = None,
+    merchant_id: str | None = None,
 ) -> dict[str, Any]:
+    require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
     resolved_limit = min(
         max(100, event_limit or WORKBENCH_CONVERSATION_EVENT_LIMIT),
@@ -112,6 +168,7 @@ def list_account_conversations(
         account_open_id=account_open_id,
         limit=resolved_limit + 1,
         operation="list_account_conversations",
+        merchant_id=merchant_id,
     )
     # ponytail: 当前按事件窗口渐进加载；超过 2 万条时应升级为独立会话索引表。
     has_more = len(messages) > resolved_limit and resolved_limit < WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT
@@ -121,7 +178,11 @@ def list_account_conversations(
     for message in messages:
         grouped.setdefault(message.conversation_key, []).append(message)
 
-    read_states = _load_read_states(db, account_open_ids=[account_open_id])
+    read_states = _load_read_states(
+        db,
+        account_open_ids=[account_open_id],
+        merchant_id=merchant_id,
+    )
     items = []
     for conversation_key, group in grouped.items():
         ordered = _sort_messages(group)
@@ -143,7 +204,7 @@ def list_account_conversations(
                 "last_message_at": latest.created_at,
                 "unread_count": _unread_count_for_messages(ordered, read_state),
                 "lead_status": _lead_status(ordered),
-                "tags": build_conversation_tags(db, ordered),
+                "tags": build_conversation_tags(db, ordered, merchant_id=merchant_id),
             }
         )
 
@@ -186,6 +247,7 @@ def get_account_unread_counts(
         limit=WORKBENCH_UNREAD_EVENT_LIMIT,
         lookback_days=WORKBENCH_CONVERSATION_LOOKBACK_DAYS,
         operation="get_account_unread_counts",
+        merchant_id=merchant_id,
     )
     read_states = _load_read_states(db, account_open_ids=list(requested_open_ids), merchant_id=merchant_id)
     grouped: dict[tuple[str, str], list[WorkbenchMessage]] = {}
@@ -210,17 +272,13 @@ def mark_conversation_read(
     conversation_short_id: str | None = None,
     customer_open_id: str | None = None,
 ) -> DouyinConversationReadState:
-    """持久化抖音客服工作台会话已读水位。"""
-    account = (
-        db.query(DouyinAuthorizedAccount)
-        .filter(DouyinAuthorizedAccount.open_id == account_open_id)
-        .first()
-    )
-    if account is None:
-        raise ValueError("account_not_found")
-    if str(account.merchant_id or "") != str(merchant_id):
-        raise PermissionError("account_merchant_denied")
+    """持久化抖音客服工作台会话已读水位。
 
+    不得为不存在或不属于该账号/商户的会话创建已读状态；conversation_short_id /
+    customer_open_id 必须从已验证消息派生，或与派生结果严格一致（派生为空而请求值
+    非空同样拒绝），不得直接信任请求体。字段不一致统一 404 且不创建/修改状态。
+    """
+    require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     messages = _sort_messages(
         _load_messages(
             db,
@@ -228,14 +286,26 @@ def mark_conversation_read(
             conversation_key=conversation_key,
             limit=WORKBENCH_MESSAGE_LIMIT,
             operation="mark_conversation_read",
+            merchant_id=merchant_id,
         )
     )
-    latest = messages[-1] if messages else None
+    if not messages:
+        # 会话不属于该账号/商户或不存在，不得创建空已读状态。
+        raise ConversationNotFoundError("conversation_not_found")
+    latest = messages[-1]
     now = datetime.now()
-    resolved_conversation_short_id = conversation_short_id or (latest.conversation_short_id if latest else None)
-    resolved_customer_open_id = customer_open_id or (latest.open_id if latest else None)
-    last_read_at = latest.created_at if latest and latest.created_at else now
-    last_read_event_id = latest.event_id if latest else None
+    derived_short_id = latest.conversation_short_id
+    derived_customer_open_id = latest.open_id
+    if conversation_short_id is not None:
+        if not derived_short_id or str(conversation_short_id) != str(derived_short_id):
+            raise ConversationNotFoundError("conversation_short_id_mismatch")
+    if customer_open_id is not None:
+        if not derived_customer_open_id or str(customer_open_id) != str(derived_customer_open_id):
+            raise ConversationNotFoundError("customer_open_id_mismatch")
+    resolved_conversation_short_id = derived_short_id
+    resolved_customer_open_id = derived_customer_open_id
+    last_read_at = latest.created_at if latest.created_at else now
+    last_read_event_id = latest.event_id
 
     row = (
         db.query(DouyinConversationReadState)
@@ -271,13 +341,23 @@ def mark_conversation_read(
     return row
 
 
-def build_conversation_tags(db: Session, messages: list[WorkbenchMessage]) -> list[str]:
+def build_conversation_tags(
+    db: Session,
+    messages: list[WorkbenchMessage],
+    *,
+    merchant_id: str | None = None,
+) -> list[str]:
     """按一期确定性规则生成会话标签，不依赖 LLM 或人工判定。"""
     if not messages:
         return []
 
     first = messages[0]
-    lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
+    lead = _find_conversation_lead(
+        db,
+        open_id=first.open_id,
+        account_open_id=first.account_open_id,
+        merchant_id=merchant_id,
+    )
     message_text = " ".join(item.content for item in messages if item.content)
     inbound_text = " ".join(item.content for item in messages if item.event == "im_receive_msg" and item.content)
     text_blob = " ".join(part for part in [message_text, inbound_text] if part).strip()
@@ -345,7 +425,9 @@ def list_conversation_messages(
     *,
     conversation_key: str,
     account_open_id: str | None = None,
+    merchant_id: str | None = None,
 ) -> dict[str, Any]:
+    require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
     messages = _load_messages(
         db,
@@ -353,7 +435,11 @@ def list_conversation_messages(
         conversation_key=conversation_key,
         limit=WORKBENCH_MESSAGE_LIMIT,
         operation="list_conversation_messages",
+        merchant_id=merchant_id,
     )
+    # 普通商户查询不到属于该账号和商户的会话时统一 404，不得返回空数据防枚举泄露。
+    if merchant_id and not messages:
+        raise ConversationNotFoundError("conversation_not_found")
     result = _conversation_messages_payload(messages, conversation_key=conversation_key)
     items = result["items"]
     logger.info(
@@ -410,7 +496,9 @@ def get_conversation_profile(
     *,
     account_open_id: str,
     conversation_key: str,
+    merchant_id: str | None = None,
 ) -> dict[str, Any] | None:
+    require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
     messages = _sort_messages(
         _load_messages(
@@ -419,9 +507,10 @@ def get_conversation_profile(
             conversation_key=conversation_key,
             limit=WORKBENCH_MESSAGE_LIMIT,
             operation="get_conversation_profile",
+            merchant_id=merchant_id,
         )
     )
-    result = _conversation_profile_payload(db, messages)
+    result = _conversation_profile_payload(db, messages, merchant_id=merchant_id)
     if result is None:
         logger.info(
             "douyin_workbench_query stage=finish operation=get_conversation_profile account_open_id=%s "
@@ -448,8 +537,16 @@ def get_conversation_detail(
     account_open_id: str,
     conversation_key: str,
     strict: bool = False,
+    merchant_id: str | None = None,
+    require_non_empty: bool = False,
 ) -> dict[str, Any]:
-    """一次加载同一会话，返回消息和客户画像。"""
+    """一次加载同一会话，返回消息和客户画像。
+
+    require_non_empty=True 且普通商户查询不到属于该账号/商户的会话时抛
+    ConversationNotFoundError（防枚举 404）；回复链路不要求非空，保持
+    “新客户历史为空属正常上下文”语义。
+    """
+    require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
     messages = _sort_messages(
         _load_messages(
@@ -459,11 +556,14 @@ def get_conversation_detail(
             limit=WORKBENCH_MESSAGE_LIMIT,
             operation="get_conversation_detail",
             strict=strict,
+            merchant_id=merchant_id,
         )
     )
+    if require_non_empty and merchant_id and not messages:
+        raise ConversationNotFoundError("conversation_not_found")
     result = {
         "messages": _conversation_messages_payload(messages, conversation_key=conversation_key),
-        "profile": _conversation_profile_payload(db, messages),
+        "profile": _conversation_profile_payload(db, messages, merchant_id=merchant_id),
     }
     logger.info(
         "douyin_workbench_query stage=finish operation=get_conversation_detail account_open_id=%s "
@@ -479,12 +579,19 @@ def get_conversation_detail(
 def _conversation_profile_payload(
     db: Session,
     messages: list[WorkbenchMessage],
+    *,
+    merchant_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not messages:
         return None
     first = messages[0]
     latest = messages[-1]
-    lead = _find_conversation_lead(db, open_id=first.open_id, account_open_id=first.account_open_id)
+    lead = _find_conversation_lead(
+        db,
+        open_id=first.open_id,
+        account_open_id=first.account_open_id,
+        merchant_id=merchant_id,
+    )
     raw_data = _safe_lead_raw_data(lead)
     profile_fields = merge_profile_fields(
         derive_profile_fields_from_raw_data(raw_data),
@@ -504,7 +611,7 @@ def _conversation_profile_payload(
         "car_year": profile_fields.get("car_year"),
         "budget": profile_fields.get("budget"),
         "city": profile_fields.get("city"),
-        "tags": build_conversation_tags(db, messages),
+        "tags": build_conversation_tags(db, messages, merchant_id=merchant_id),
         "lead_score": _profile_lead_score(lead, raw_data),
         "trace": _profile_trace(db, latest),
         "lead": _profile_lead_payload(lead),
@@ -679,6 +786,7 @@ def _load_messages(
     lookback_days: int | None = None,
     operation: str = "load_messages",
     strict: bool = False,
+    merchant_id: str | None = None,
 ) -> list[WorkbenchMessage]:
     query_start = time.perf_counter()
     rows = _query_message_rows(
@@ -689,6 +797,7 @@ def _load_messages(
         events=events or PRIVATE_MESSAGE_EVENTS,
         limit=limit,
         lookback_days=lookback_days,
+        merchant_id=merchant_id,
     )
     query_elapsed = _elapsed_ms(query_start)
     parse_start = time.perf_counter()
@@ -704,7 +813,7 @@ def _load_messages(
         if conversation_key and message.conversation_key != conversation_key:
             continue
         messages.append(message)
-    messages = _attach_message_send_records(db, messages)
+    messages = _attach_message_send_records(db, messages, merchant_id=merchant_id)
     logger.info(
         "douyin_workbench_query stage=load_messages operation=%s account_open_id=%s conversation_key=%s "
         "db_row_count=%s message_count=%s query_ms=%s parse_aggregate_ms=%s",
@@ -728,6 +837,7 @@ def _query_message_rows(
     events: set[str],
     limit: int | None,
     lookback_days: int | None,
+    merchant_id: str | None = None,
 ) -> list[SimpleNamespace]:
     stmt = (
         select(
@@ -746,6 +856,10 @@ def _query_message_rows(
         .where(DouyinWebhookEvent.event.in_(events))
         .where(DouyinWebhookEvent.is_duplicate.is_(False))
     )
+    # 普通商户只读取 event.merchant_id 匹配当前商户的事件；账号转移或历史重复账号下，
+    # 他商户历史事件不可见。merchant_id 为 None（super_admin/mock/内部发送链路）不过滤。
+    if merchant_id:
+        stmt = stmt.where(DouyinWebhookEvent.merchant_id == merchant_id)
     account_values = [item for item in ([account_open_id] if account_open_id else []) + (account_open_ids or []) if item]
     if account_values:
         stmt = stmt.where(
@@ -912,6 +1026,8 @@ def _row_to_message(
 def _attach_message_send_records(
     db: Session,
     messages: list[WorkbenchMessage],
+    *,
+    merchant_id: str | None = None,
 ) -> list[WorkbenchMessage]:
     outbound = [item for item in messages if item.event == "im_send_msg"]
     if not outbound:
@@ -949,6 +1065,9 @@ def _attach_message_send_records(
         by_content.setdefault((*scope, str(record.content or "")), record)
 
     result = []
+    # 普通商户只允许可唯一验证的上游消息 ID 精确匹配，禁用内容兜底，避免把旧商户
+    # 的 operator_id / auto_reply_run_id 等附加到当前商户消息。super_admin/mock 保持原行为。
+    allow_content_fallback = not merchant_id
     for message in messages:
         if message.event != "im_send_msg" or not message.conversation_short_id:
             result.append(message)
@@ -958,7 +1077,9 @@ def _attach_message_send_records(
             by_server_message.get((*scope, message.server_message_id))
             if message.server_message_id
             else None
-        ) or by_content.get((*scope, message.content))
+        )
+        if record is None and allow_content_fallback:
+            record = by_content.get((*scope, message.content))
         if record is None:
             result.append(message)
             continue
@@ -1124,15 +1245,20 @@ def _lead_status(messages: list[WorkbenchMessage]) -> str:
     return "contact_not_found"
 
 
-def _find_conversation_lead(db: Session, *, open_id: str, account_open_id: str) -> DouyinLead | None:
+def _find_conversation_lead(
+    db: Session,
+    *,
+    open_id: str,
+    account_open_id: str,
+    merchant_id: str | None = None,
+) -> DouyinLead | None:
     if not open_id:
         return None
-    rows = (
-        db.query(DouyinLead)
-        .filter(DouyinLead.source_id == open_id)
-        .order_by(desc(DouyinLead.id))
-        .all()
-    )
+    query = db.query(DouyinLead).filter(DouyinLead.source_id == open_id)
+    # 普通商户资源查询本身使用可信 merchant_id：同一客户跨商户存在时画像只返回当前商户线索。
+    if merchant_id:
+        query = query.filter(DouyinLead.merchant_id == merchant_id)
+    rows = query.order_by(desc(DouyinLead.id)).all()
     for row in rows:
         raw_data = _safe_lead_raw_data(row)
         raw_account_open_id = _optional_str(raw_data.get("account_open_id"))

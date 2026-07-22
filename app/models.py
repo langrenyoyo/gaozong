@@ -280,6 +280,10 @@ class DouyinWebhookEvent(Base):
     event_key = Column(String(128), unique=True, index=True, comment="幂等去重键")
     is_duplicate = Column(Boolean, nullable=False, default=False, comment="是否重复事件 False/True")
     lead_id = Column(Integer, nullable=True, comment="关联的 douyin_leads.id（仅 im_receive_msg）")
+    # 商户隔离归属：入库时按事件方向解析企业号绑定固化，归属不明保持 NULL，
+    # 禁止回填猜测值；历史事件为 NULL 时对普通商户不可见。
+    merchant_id = Column(String(128), index=True, comment="可信商户 ID，入库时按事件归属固化")
+    tenant_id = Column(String(128), index=True, comment="可信租户 ID，随商户归属固化")
     raw_body = Column(Text, nullable=False, comment="原始 payload JSON")
     created_at = Column(DateTime, default=datetime.now)
 

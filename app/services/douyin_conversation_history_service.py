@@ -48,6 +48,7 @@ def build_reply_conversation_context(
         account_open_id=account_open_id,
         conversation_key=conversation_key,
         strict=True,
+        merchant_id=merchant_id,
     )
     messages = detail.get("messages") if isinstance(detail, dict) else None
     items = messages.get("items") if isinstance(messages, dict) else []

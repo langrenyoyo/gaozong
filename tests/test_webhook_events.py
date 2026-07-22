@@ -30,7 +30,12 @@ def setup_function():
     Base.metadata.create_all(bind=test_engine)
 
 
-def _client(permission_codes: list[str] | None = None) -> TestClient:
+def _client(
+    permission_codes: list[str] | None = None,
+    *,
+    merchant_id: str = "merchant-a",
+    super_admin: bool = True,
+) -> TestClient:
     app = create_app()
 
     def _override_get_db():
@@ -43,9 +48,10 @@ def _client(permission_codes: list[str] | None = None) -> TestClient:
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_request_context_required] = lambda: RequestContext(
         user_id="user-1",
-        merchant_id="merchant-a",
-        merchant_ids=["merchant-a"],
+        merchant_id=merchant_id,
+        merchant_ids=[merchant_id],
         permission_codes=permission_codes or ["auto_wechat:leads"],
+        super_admin=super_admin,
     )
     return TestClient(app)
 
@@ -93,6 +99,7 @@ def _insert_event(
     raw_payload: dict | None = None,
     is_duplicate: bool = False,
     created_at: datetime | None = None,
+    merchant_id: str | None = None,
 ) -> int:
     db = TestSession()
     try:
@@ -108,6 +115,7 @@ def _insert_event(
             event_key=event_key,
             is_duplicate=is_duplicate,
             lead_id=lead_id,
+            merchant_id=merchant_id,
             raw_body=json.dumps(raw_payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
         )
@@ -170,7 +178,7 @@ def test_list_webhook_events_empty():
 
 
 def test_webhook_events_require_leads_permission():
-    resp = _client(permission_codes=["auto_wechat:agent"]).get("/webhook-events")
+    resp = _client(permission_codes=["auto_wechat:agent"], super_admin=False).get("/webhook-events")
 
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
@@ -179,7 +187,7 @@ def test_webhook_events_require_leads_permission():
 def test_webhook_event_detail_requires_leads_permission():
     event_id = _insert_event(event_key="detail_permission_001")
 
-    resp = _client(permission_codes=["auto_wechat:agent"]).get(f"/webhook-events/{event_id}")
+    resp = _client(permission_codes=["auto_wechat:agent"], super_admin=False).get(f"/webhook-events/{event_id}")
 
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "PERMISSION_DENIED"
@@ -328,9 +336,9 @@ def test_list_webhook_events_only_enriches_current_page():
     enriched_ids: list[int] = []
     original = service._to_event_dict
 
-    def _tracking_to_event_dict(row, *, include_raw_body):
+    def _tracking_to_event_dict(row, *, include_raw_body, super_admin=False):
         enriched_ids.append(row.id)
-        return original(row, include_raw_body=include_raw_body)
+        return original(row, include_raw_body=include_raw_body, super_admin=super_admin)
 
     with patch.object(service, "_to_event_dict", side_effect=_tracking_to_event_dict):
         data = _client().get("/webhook-events?page=1&page_size=5").json()["data"]

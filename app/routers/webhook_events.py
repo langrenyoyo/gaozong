@@ -39,6 +39,7 @@ def list_events(
 ):
     """List raw webhook events without changing business state."""
     require_permission("auto_wechat:leads")(context)
+    super_admin = context.is_mock_auth() or context.super_admin
     data = list_webhook_events(
         db,
         WebhookEventFilters(
@@ -54,6 +55,8 @@ def list_events(
             conversation_short_id=conversation_short_id,
             lead_id=lead_id,
         ),
+        merchant_id=context.merchant_id,
+        super_admin=super_admin,
     )
     if leads_tasks_pg_shadow.is_shadow_configured():
         result = leads_tasks_pg_shadow.run_douyin_webhook_events_list_shadow_read(
@@ -79,7 +82,17 @@ def get_event(
 ):
     """Get raw webhook event detail."""
     require_permission("auto_wechat:leads")(context)
-    data = get_webhook_event_detail(db, event_id)
+    super_admin = context.is_mock_auth() or context.super_admin
+    data = get_webhook_event_detail(
+        db,
+        event_id,
+        merchant_id=context.merchant_id,
+        super_admin=super_admin,
+    )
     if data is None:
-        raise HTTPException(status_code=404, detail="webhook event not found")
+        # 他商户事件或归属未知的历史事件统一防枚举 404。
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "WEBHOOK_EVENT_NOT_FOUND", "message": "webhook 事件不存在"},
+        )
     return {"success": True, "data": data, "message": "success"}

@@ -117,6 +117,7 @@ def _insert_webhook_event(
     customer_open_id: str,
     event_key: str,
     is_duplicate: bool = False,
+    merchant_id: str | None = None,
 ):
     db = TestSession()
     try:
@@ -133,6 +134,7 @@ def _insert_webhook_event(
             raw_body=json.dumps({"content": content}, ensure_ascii=False),
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             is_duplicate=is_duplicate,
+            merchant_id=merchant_id,
         )
         db.add(row)
         db.commit()
@@ -182,18 +184,21 @@ def test_list_accounts_unread_count_before_read_state_counts_inbound_messages_on
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="inbound-1",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-open-1",
         customer_open_id="customer-2",
         event_key="inbound-2",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_send_msg",
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="outbound-1",
+        merchant_id="merchant-1",
     )
     client = _client()
 
@@ -212,18 +217,21 @@ def test_list_accounts_unread_count_before_read_state_isolated_by_account_open_i
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="account-1-inbound-1",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-open-2",
         customer_open_id="customer-2",
         event_key="account-2-inbound-1",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-open-2",
         customer_open_id="customer-3",
         event_key="account-2-inbound-2",
+        merchant_id="merchant-1",
     )
     client = _client()
 
@@ -245,18 +253,21 @@ def test_list_accounts_unread_count_before_read_state_uses_current_merchant_auth
         account_open_id="account-current",
         customer_open_id="customer-1",
         event_key="current-inbound-1",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-other",
         customer_open_id="customer-2",
         event_key="other-inbound-1",
+        merchant_id="merchant-2",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="event-only-account",
         customer_open_id="customer-3",
         event_key="event-only-inbound-1",
+        merchant_id="merchant-1",
     )
     client = _client(_context("merchant-1"))
 
@@ -276,6 +287,7 @@ def test_list_accounts_unread_count_after_read_state_sums_only_new_inbound_messa
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="read-state-inbound-1",
+        merchant_id="merchant-1",
     )
     client = _client()
     mark_read = client.post(
@@ -291,12 +303,14 @@ def test_list_accounts_unread_count_after_read_state_sums_only_new_inbound_messa
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="read-state-outbound-after-read",
+        merchant_id="merchant-1",
     )
     _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-open-1",
         customer_open_id="customer-1",
         event_key="read-state-inbound-after-read",
+        merchant_id="merchant-1",
     )
 
     response = client.get("/integrations/douyin/accounts")

@@ -272,10 +272,15 @@ def persist_webhook_event(
     payload: dict[str, Any],
     event_key: str,
     lead_id: int | None = None,
+    *,
+    merchant_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> DouyinWebhookEvent:
     """写入 webhook 事件日志
 
     仅首次收到的事件调用此函数。event_key 保持真实幂等键，不做任何后缀处理。
+    merchant_id/tenant_id 为入库时按事件方向解析企业号有效绑定固化的可信商户归属，
+    归属不明保持 NULL，禁止回填猜测值。
     """
     normalized = parse_douyin_callback_event(payload)
     event = DouyinWebhookEvent(
@@ -286,6 +291,8 @@ def persist_webhook_event(
         event_key=event_key,
         is_duplicate=False,
         lead_id=lead_id,
+        merchant_id=merchant_id,
+        tenant_id=tenant_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
     )
@@ -302,8 +309,14 @@ def persist_duplicate_webhook_event(
     payload: dict[str, Any],
     original_event_key: str,
     lead_id: int | None = None,
+    *,
+    merchant_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> DouyinWebhookEvent:
-    """写入重复 webhook 原始事件，不触发线索更新。"""
+    """写入重复 webhook 原始事件，不触发线索更新。
+
+    重复事件只继承原事件已确认的商户归属，不用当前绑定关系猜测历史归属。
+    """
     normalized = parse_douyin_callback_event(payload)
     event = DouyinWebhookEvent(
         event=payload.get("event"),
@@ -313,6 +326,8 @@ def persist_duplicate_webhook_event(
         event_key=build_duplicate_event_key(original_event_key),
         is_duplicate=True,
         lead_id=lead_id,
+        merchant_id=merchant_id,
+        tenant_id=tenant_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
     )
@@ -662,6 +677,10 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
     event_type = payload.get("event") or ""
     from_user_id = payload.get("from_user_id") or ""
 
+    # 事件商户归属：入库时按事件方向解析有效绑定账号固化，归属不明保持 NULL。
+    event_merchant_id: str | None = None
+    event_tenant_id: str | None = None
+
     # 构建幂等键，查询是否已处理
     event_key = build_event_key(payload)
     existing_event = find_existing_event(db, event_key)
@@ -672,6 +691,8 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             payload,
             original_event_key=event_key,
             lead_id=existing_event.lead_id,
+            merchant_id=existing_event.merchant_id,
+            tenant_id=existing_event.tenant_id,
         )
         # 重复事件：不插入、不更新线索，直接返回原始记录
         logger.info(
@@ -700,8 +721,9 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         # 企业号 open_id = 私信接收方 to_user_id（非客户 from_user_id）
         account_open_id = _optional_str(payload.get("to_user_id"))
 
-        # 反查企业号绑定 → 可信 merchant_id（来自 douyin_authorized_accounts，不来自 GMP/前端）
+        # 反查企业号绑定 → 可信 merchant_id/tenant_id（来自 douyin_authorized_accounts，不来自 GMP/前端）
         merchant_id: str | None = None
+        tenant_id: str | None = None
         binding_state = "merchant_unresolved"
         if account_open_id:
             account = (
@@ -718,7 +740,10 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                 binding_state = "merchant_unresolved"
             else:
                 merchant_id = account.merchant_id
+                tenant_id = account.tenant_id
                 binding_state = "bound"
+                event_merchant_id = merchant_id
+                event_tenant_id = tenant_id
 
         if not is_text_message(content):
             lead_action = "invalid_contact"
@@ -777,11 +802,17 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                         lead.id, conversation_short_id,
                     )
 
+    # 非 im_receive_msg 事件按事件方向解析商户归属，归属不明保存空归属。
+    if event_type != "im_receive_msg":
+        event_merchant_id, event_tenant_id = _resolve_event_merchant_scope(db, payload)
+
     # 首次收到的事件，写入事件日志
     event = persist_webhook_event(
         db, payload,
         event_key=event_key,
         lead_id=lead_id,
+        merchant_id=event_merchant_id,
+        tenant_id=event_tenant_id,
     )
     _post_process_im_send_msg(db, event)
 
@@ -832,7 +863,18 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
                 event.id,
             )
             return
-        merchant_id = _resolve_merchant_id_by_account(db, account_open_id) or "unknown_merchant"
+        # 商户归属必须可确认：优先用事件入库时已固化的 merchant_id，其次按账号反查有效绑定。
+        # 无法确认时跳过需要商户归属的后置写入，禁止伪造 unknown_merchant，记录结构化 failure_stage。
+        merchant_id = _optional_str(event.merchant_id) or _resolve_merchant_id_by_account(db, account_open_id)
+        if not merchant_id:
+            logger.warning(
+                "webhook im_send_msg manual_takeover_skip stage=im_send_msg_post_process "
+                "failure_stage=merchant_unresolved event_id=%s account_open_id=%s conversation=%s",
+                event.id,
+                (account_open_id or "")[:8] + "...",
+                event.conversation_short_id,
+            )
+            return
         mark_manual_takeover(
             db,
             merchant_id=merchant_id,
@@ -876,6 +918,31 @@ def _im_send_msg_participants(event: DouyinWebhookEvent) -> tuple[str | None, st
 
 
 def _resolve_merchant_id_by_account(db: Session, account_open_id: str) -> str | None:
+    merchant_id, _ = _resolve_merchant_scope_by_account(db, account_open_id)
+    return merchant_id
+
+
+def _resolve_event_account_open_id(payload: dict[str, Any]) -> str | None:
+    """按事件方向解析企业号 open_id。
+
+    im_send_msg 企业号是发送方 from_user_id；其余事件（im_receive_msg /
+    im_enter_direct_msg 等）企业号是接收方 to_user_id。归属不明返回 None。
+    """
+    if payload.get("event") == "im_send_msg":
+        return _optional_str(payload.get("from_user_id"))
+    return _optional_str(payload.get("to_user_id"))
+
+
+def _resolve_merchant_scope_by_account(
+    db: Session, account_open_id: str | None
+) -> tuple[str | None, str | None]:
+    """从有效绑定账号（bind_status==1）取得可信 (merchant_id, tenant_id)。
+
+    归属不明（账号未绑定、bind_status 非 1、merchant_id 为空）一律返回 (None, None)，
+    禁止用当前绑定关系猜测历史事件归属。
+    """
+    if not account_open_id:
+        return None, None
     account = (
         db.query(DouyinAuthorizedAccount)
         .filter(
@@ -885,4 +952,13 @@ def _resolve_merchant_id_by_account(db: Session, account_open_id: str) -> str | 
         .order_by(DouyinAuthorizedAccount.id.desc())
         .first()
     )
-    return _optional_str(account.merchant_id) if account is not None else None
+    if account is None or not account.merchant_id:
+        return None, None
+    return _optional_str(account.merchant_id), _optional_str(account.tenant_id)
+
+
+def _resolve_event_merchant_scope(
+    db: Session, payload: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """按事件方向解析账号，再从有效绑定账号取得可信商户归属。"""
+    return _resolve_merchant_scope_by_account(db, _resolve_event_account_open_id(payload))
