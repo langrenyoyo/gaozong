@@ -435,6 +435,35 @@ def test_conversation_tags_generate_retained_contact_from_lead_contact():
     assert "retained_contact" in data["items"][0]["tags"]
 
 
+def test_conversation_tags_do_not_generate_retained_contact_from_customer_contact_only():
+    """仅有 customer_contact、三个权威提取字段（extracted_phone/extracted_wechat/
+    all_extracted_contacts）均为空时，不得产生 retained_contact 或 follow_up。
+
+    customer_contact 不自动映射为权威留资字段；留资口径以提取后的独立列为准。
+    """
+    _insert_event(
+        open_id="customer_contact_only",
+        account_open_id="account_contact_only",
+        text="hello",
+        event_key="contact_only_event",
+    )
+    _insert_lead(
+        open_id="customer_contact_only",
+        account_open_id="account_contact_only",
+        customer_contact="13800000000",
+        status="assigned",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_contact_only/conversations",
+        params={"account_open_id": "account_contact_only"},
+    ).json()
+
+    tags = data["items"][0]["tags"]
+    assert "retained_contact" not in tags
+    assert "follow_up" not in tags
+
+
 def test_conversation_tags_generate_high_intent_from_lead_score():
     _insert_event(
         open_id="customer_high_intent",
@@ -1335,7 +1364,7 @@ def test_different_douyin_accounts_are_isolated():
     assert items[0]["last_message"] == "account a message"
 
 
-def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_empty():
+def test_accounts_list_hides_event_derived_account_without_binding():
     """无有效持久化绑定的事件账号不进入普通商户账号列表（B4）。"""
     _insert_event(
         open_id="customer_account_fallback",
@@ -1353,7 +1382,7 @@ def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_
     assert data["items"] == []
 
 
-def test_accounts_fallback_does_not_duplicate_authorized_account():
+def test_accounts_list_returns_single_persisted_binding_for_authorized_account():
     """当前商户有效绑定账号只返回一个持久化授权项，同账号事件不产生重复（B5）。"""
     _insert_authorized_account(open_id="account_dup", account_name="Authorized Account")
     _insert_event(
@@ -1373,7 +1402,7 @@ def test_accounts_fallback_does_not_duplicate_authorized_account():
     assert data["items"][0]["is_authorized"] is True
 
 
-def test_accounts_fallback_groups_different_account_open_ids():
+def test_accounts_list_groups_different_persisted_account_open_ids():
     """当前商户多个有效绑定账号各自返回一个持久化授权项。"""
     _insert_authorized_account(open_id="account_multi_a")
     _insert_authorized_account(open_id="account_multi_b")
@@ -1384,7 +1413,7 @@ def test_accounts_fallback_groups_different_account_open_ids():
     assert {item["account_open_id"] for item in items} == {"account_multi_a", "account_multi_b"}
 
 
-def test_event_derived_account_can_load_real_conversations():
+def test_persisted_binding_account_can_load_real_conversations():
     """有效绑定账号仍能加载所属会话（B6）。"""
     _insert_authorized_account(open_id="account_event_loads_conversations")
     _insert_event(
