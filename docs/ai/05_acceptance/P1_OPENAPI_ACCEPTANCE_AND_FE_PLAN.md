@@ -23,7 +23,7 @@ P1-E 到 P1-K 已完成抖音私信 OpenAPI 核心后端能力收口：
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `GET /integrations/douyin/live-check/auth-url` | P1-E/P1-K | 获取抖音授权页 URL | 是，`/get_aweme_auth_url` | 无业务写库 | 不需要 | 否 | 无 | 关闭 `DY_LIVE_CHECK_ENABLED` 应 403；缺 `DY_CALLBACK_URL`/`DY_AUTH_REDIRECT_URL` 应 400；上游 403 应 502 且不泄露 secret | 配置齐全并 mock 上游 `code=0,data.auth_url`，应返回 `auth_url` | 不返回 `DY_GMP_SECRET_KEY`、完整签名、完整 canonical string |
 | `POST /integrations/douyin/live-check/accounts/sync-bind-info` | P1-F/P1-K | 从上游同步已授权抖音号 | 是，`/list_bind_info` | 更新授权账号快照 | 不需要 | 是 | `douyin_authorized_accounts` | live-check 关闭应 403；上游非 0 或缺 `data.bind_list` 应 502 | mock `bind_list` 后应按 `main_account_id + open_id` upsert | 只保存账号绑定元数据和上游 item JSON，不保存密钥 |
-| `GET /integrations/douyin/live-check/accounts` | P1-F/P1-D 修复 | 给工作台返回抖音号列表 | 否 | 无 | 不需要 | 否 | 读 `douyin_authorized_accounts`、`douyin_webhook_events` | live-check 关闭应 403；无授权账号且无事件应返回空数组 | HTTP 路由始终要求可信商户上下文，只返回当前商户有效持久化绑定（`bind_status==1`）账号；无有效绑定的 webhook 事件账号不进入账号列表；内部服务 `merchant_id=None` 兼容分支保留 event-derived 账号，但当前 HTTP 路由不会进入 |
+| `GET /integrations/douyin/live-check/accounts` | P1-F/P1-D 修复 | 给工作台返回抖音号列表 | 否 | 无 | 不需要 | 否 | 读 `douyin_authorized_accounts` | live-check 关闭应 403；当前商户无 `bind_status=1` 有效绑定时返回空数组，无论是否存在历史事件 | HTTP 路由始终要求可信商户上下文，只返回当前商户有效持久化绑定（`bind_status==1`）账号；响应级 `source=persisted_bind_info_current_merchant`，条目级 `items[].source=persisted_bind_info`；内部服务 `merchant_id=None` 兼容分支保留 event-derived 账号，但当前 HTTP 路由不会进入 |
 | `POST /integrations/douyin/webhook` | P1-G | 接收 GMP 私信回调并入库 | 否 | 写入事件；文本且提取到联系方式时写/更新线索 | 不需要 | 是 | `douyin_webhook_events`、可能写 `douyin_leads` | 生产验签开启时缺签名或签名错误应 401；非法 JSON 应 400；重复事件应标记 duplicate | 发送真实/测试 `im_receive_msg`，应入库事件并按联系方式生成线索 | 保留原始 payload；验签错误不泄露密钥；重复事件不重复生成线索 |
 | `GET /webhook-events` | P1-G/原始事件页 | 只读查询 webhook 事件 | 否 | 无 | 不需要 | 否 | 读 `douyin_webhook_events` | 过滤条件无匹配应返回空列表；分页参数越界由 FastAPI 校验 | 按 `event`、`open_id`、`conversation_short_id` 等查询应返回事件摘要 | 原始详情接口才返回 `raw_body`；列表只返回摘要字段 |
 | `POST /integrations/douyin/live-check/messages/send` | P1-H/P1-K | 人工确认后发送文本私信 | 是，`/send_msg` | 会发送真实私信；记录发送尝试 | 必须 | 是 | `douyin_private_message_sends` | `manual_confirmed=false` 应 400 且不请求上游；内容为空应 400；找不到上下文应 404；上下文超过 24 小时应 400 | 有 `conversation_short_id`、`server_message_id`、双方 open_id 且 mock 上游成功时，记录 `sent` 并返回 `auto_send=false` | 后端强制 `auto_send=0`；前端只能用户点击触发；失败记录只能保存安全错误 |
@@ -265,7 +265,7 @@ curl -sS -X POST "https://douyinapi.misanduo.com/api/integrations/douyin/live-ch
 curl -sS https://douyinapi.misanduo.com/api/integrations/douyin/live-check/accounts | python3 -m json.tool
 ```
 
-期望只返回当前商户有效持久化绑定（`source=persisted_bind_info`）的授权账号；无有效绑定的 webhook 事件账号不进入账号列表。HTTP 路由始终要求可信商户上下文，内部服务 `merchant_id=None` 兼容分支保留的 event-derived 账号当前 HTTP 路由不会进入。
+期望 HTTP 路由始终要求可信商户上下文，只返回当前商户 `bind_status=1` 有效持久化绑定账号；当前商户无有效绑定时返回空数组，无论是否存在历史事件。响应级 `source=persisted_bind_info_current_merchant`，每个条目 `items[].source=persisted_bind_info`；无有效绑定的 webhook 事件账号不进入账号列表。内部服务 `merchant_id=None` 兼容分支保留的 event-derived 账号当前 HTTP 路由不会进入。
 
 ### 8.4 Webhook 原始事件
 

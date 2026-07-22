@@ -1434,7 +1434,7 @@ def test_persisted_binding_account_can_load_real_conversations():
     assert conversations[0]["lead_status"] == "contact_not_found"
 
 
-def test_accounts_fallback_keeps_webhook_events_api_unchanged():
+def test_accounts_list_keeps_webhook_events_api_unchanged():
     _insert_event(
         open_id="customer_raw_unchanged",
         account_open_id="account_raw_unchanged",
