@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import DouyinPrivateMessageSend, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.models import DouyinLead
 from app.services.douyin_live_check_service import record_oauth_callback, reset_live_check_state
 
@@ -200,6 +200,8 @@ def _insert_lead(
     open_id: str = "customer_001",
     account_open_id: str = "account_001",
     customer_contact: str | None = None,
+    extracted_phone: str | None = None,
+    extracted_wechat: str | None = None,
     lead_score: int | None = None,
     raw_data: dict | None = None,
     status: str = "pending",
@@ -215,8 +217,34 @@ def _insert_lead(
             source_id=open_id,
             customer_name=f"Customer {open_id[-3:]}",
             customer_contact=customer_contact,
+            extracted_phone=extracted_phone,
+            extracted_wechat=extracted_wechat,
             raw_data=json.dumps(raw_payload, ensure_ascii=False),
             status=status,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+    finally:
+        db.close()
+
+
+def _insert_authorized_account(
+    *,
+    open_id: str = "account_001",
+    merchant_id: str = "dev-merchant",
+    bind_status: int = 1,
+    account_name: str | None = None,
+):
+    db = TestSession()
+    try:
+        row = DouyinAuthorizedAccount(
+            main_account_id=1,
+            open_id=open_id,
+            merchant_id=merchant_id,
+            bind_status=bind_status,
+            account_name=account_name or f"Account {open_id[-3:]}",
         )
         db.add(row)
         db.commit()
@@ -395,6 +423,7 @@ def test_conversation_tags_generate_retained_contact_from_lead_contact():
         open_id="customer_contact",
         account_open_id="account_contact",
         customer_contact="13800000000",
+        extracted_phone="13800000000",
         status="pending",
     )
 
@@ -472,6 +501,7 @@ def test_conversation_tags_generate_follow_up_when_retained_contact_has_no_outbo
         open_id="customer_follow_up",
         account_open_id="account_follow_up",
         customer_contact="wechat_001",
+        extracted_wechat="wechat_001",
         status="assigned",
     )
 
@@ -502,6 +532,7 @@ def test_conversation_tags_do_not_mark_follow_up_after_outbound_message():
         open_id="customer_follow_up_sent",
         account_open_id="account_follow_up_sent",
         customer_contact="wechat_002",
+        extracted_wechat="wechat_002",
         status="assigned",
     )
 
@@ -531,6 +562,7 @@ def test_conversation_tags_remain_isolated_between_multiple_conversations():
         open_id="customer_tag_b",
         account_open_id="account_tag_isolation",
         customer_contact="13811112222",
+        extracted_phone="13811112222",
         lead_score=90,
         status="pending",
     )
@@ -564,6 +596,7 @@ def test_conversation_tags_prefer_lead_raw_account_open_id_when_same_open_id_exi
         open_id="customer_shared_open_id",
         account_open_id="account_shared_b",
         customer_contact="13822223333",
+        extracted_phone="13822223333",
         status="assigned",
     )
 
@@ -585,6 +618,7 @@ def test_conversation_profile_returns_customer_fields_from_webhook_and_lead_raw_
         open_id="customer_profile",
         account_open_id="account_profile",
         customer_contact="13800001111",
+        extracted_phone="13800001111",
         lead_score=120,
         status="assigned",
         raw_data={
@@ -861,6 +895,7 @@ def test_conversation_profile_keeps_same_conversation_key_isolated_by_account():
         open_id="customer_profile_b",
         account_open_id="account_profile_b",
         customer_contact="wechat_b",
+        extracted_wechat="wechat_b",
         raw_data={"account_open_id": "account_profile_b", "lead_score": 88},
         status="assigned",
     )
@@ -1301,6 +1336,7 @@ def test_different_douyin_accounts_are_isolated():
 
 
 def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_empty():
+    """无有效持久化绑定的事件账号不进入普通商户账号列表（B4）。"""
     _insert_event(
         open_id="customer_account_fallback",
         account_open_id="account_from_events",
@@ -1311,16 +1347,15 @@ def test_accounts_fallback_returns_event_derived_account_when_live_check_memory_
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
         data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
 
-    assert data["total"] == 1
-    assert data["source"] == "persisted_bind_info_with_live_check_memory_and_webhook_events_fallback"
-    assert data["items"][0]["account_open_id"] == "account_from_events"
-    assert data["items"][0]["source"] == "webhook_events"
-    assert data["items"][0]["is_authorized"] is False
-    assert data["items"][0]["has_events"] is True
+    # 当前商户（dev-merchant）无有效绑定 → 事件派生账号不可见
+    assert data["total"] == 0
+    assert data["source"] == "persisted_bind_info_current_merchant"
+    assert data["items"] == []
 
 
 def test_accounts_fallback_does_not_duplicate_authorized_account():
-    record_oauth_callback({"open_id": "account_dup", "nick_name": "Authorized Account"})
+    """当前商户有效绑定账号只返回一个持久化授权项，同账号事件不产生重复（B5）。"""
+    _insert_authorized_account(open_id="account_dup", account_name="Authorized Account")
     _insert_event(
         open_id="customer_dup",
         account_open_id="account_dup",
@@ -1332,23 +1367,16 @@ def test_accounts_fallback_does_not_duplicate_authorized_account():
         data = _client().get("/integrations/douyin/live-check/accounts").json()["data"]
 
     assert data["total"] == 1
+    assert data["source"] == "persisted_bind_info_current_merchant"
     assert data["items"][0]["account_open_id"] == "account_dup"
-    assert data["items"][0]["source"] == "live_check_oauth_callback"
+    assert data["items"][0]["source"] == "persisted_bind_info"
+    assert data["items"][0]["is_authorized"] is True
 
 
 def test_accounts_fallback_groups_different_account_open_ids():
-    _insert_event(
-        open_id="customer_multi_1",
-        account_open_id="account_multi_a",
-        text="message a",
-        event_key="account_multi_a_event",
-    )
-    _insert_event(
-        open_id="customer_multi_2",
-        account_open_id="account_multi_b",
-        text="message b",
-        event_key="account_multi_b_event",
-    )
+    """当前商户多个有效绑定账号各自返回一个持久化授权项。"""
+    _insert_authorized_account(open_id="account_multi_a")
+    _insert_authorized_account(open_id="account_multi_b")
 
     with patch("app.config.DY_LIVE_CHECK_ENABLED", True):
         items = _client().get("/integrations/douyin/live-check/accounts").json()["data"]["items"]
@@ -1357,6 +1385,8 @@ def test_accounts_fallback_groups_different_account_open_ids():
 
 
 def test_event_derived_account_can_load_real_conversations():
+    """有效绑定账号仍能加载所属会话（B6）。"""
+    _insert_authorized_account(open_id="account_event_loads_conversations")
     _insert_event(
         open_id="customer_from_event_account",
         account_open_id="account_event_loads_conversations",
