@@ -156,8 +156,8 @@ def test_reply_context_blocks_unbound_account():
         db.close()
 
 
-def test_build_conversation_history_legacy_empty_merchant_skips_ownership():
-    """兼容旧调用传 merchant_id='' 时跳过归属校验。"""
+def test_build_conversation_history_legacy_empty_merchant_blocks():
+    """兼容旧入口缺少 merchant_id 时显式阻断，不读取任何事件/不跨商户查询。"""
     _insert_account("acc_legacy", "merchant-1")
     _insert_event(
         account_open_id="acc_legacy", customer_open_id="cust_legacy", text="hello history",
@@ -165,10 +165,36 @@ def test_build_conversation_history_legacy_empty_merchant_skips_ownership():
     )
     db = _db()
     try:
-        history = build_conversation_history(
-            db, account_open_id="acc_legacy", conversation_key="conv_legacy",
-            latest_message="你好",
-        )
-        assert isinstance(history, list)
+        # 缺少 merchant_id 必须阻断，不得执行跨商户查询
+        with pytest.raises(ValueError):
+            build_conversation_history(
+                db, merchant_id="", account_open_id="acc_legacy",
+                conversation_key="conv_legacy", latest_message="你好",
+            )
+        # 缺少 merchant_id 参数同样阻断
+        with pytest.raises(TypeError):
+            build_conversation_history(
+                db, account_open_id="acc_legacy",
+                conversation_key="conv_legacy", latest_message="你好",
+            )
+    finally:
+        db.close()
+
+
+def test_build_conversation_history_legacy_cannot_read_other_merchant_session():
+    """兼容入口使用商户 A 时不能读取商户 B 会话（归属校验阻断）。"""
+    _insert_account("acc_cross", "merchant-2")
+    _insert_event(
+        account_open_id="acc_cross", customer_open_id="cust_cross", text="hello cross",
+        conversation_short_id="conv_cross", merchant_id="merchant-2", event_key="cross_evt",
+    )
+    db = _db()
+    try:
+        # 商户 A 读取商户 B 账号 → 归属校验阻断
+        with pytest.raises(Exception):
+            build_conversation_history(
+                db, merchant_id="merchant-1", account_open_id="acc_cross",
+                conversation_key="conv_cross", latest_message="你好",
+            )
     finally:
         db.close()

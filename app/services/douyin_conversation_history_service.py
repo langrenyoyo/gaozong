@@ -35,13 +35,20 @@ def build_reply_conversation_context(
     latest_message: str,
     limit: int = 10,
 ) -> ReplyConversationContext:
-    """组装回复链路共用的脱敏历史与可信客户记忆。"""
+    """组装回复链路共用的脱敏历史与可信客户记忆。
+
+    不得使用空 merchant_id 查询资源：需要读取会话/线索时必须先确认可信商户上下文，
+    否则显式阻断，不执行跨商户查询。
+    """
     if not account_open_id or not conversation_key:
         return ReplyConversationContext(
             latest_message=mask_contacts_in_text(latest_message),
             conversation_history=[],
             customer_memory=_build_customer_memory(latest_message=latest_message, profile=None, lead=None, items=[]),
         )
+    # 需要查询资源时必须先确认可信商户，禁止空 merchant_id 跨商户查询。
+    if not merchant_id:
+        raise ValueError("merchant_id_required")
 
     detail = get_conversation_detail(
         db,
@@ -88,15 +95,21 @@ def build_reply_conversation_context(
 def build_conversation_history(
     db: Session,
     *,
+    merchant_id: str,
     account_open_id: str,
     conversation_key: str,
     latest_message: str,
     limit: int = 10,
 ) -> list[dict[str, str]]:
-    """兼容旧调用；新回复链路应使用 build_reply_conversation_context。"""
+    """兼容旧调用；新回复链路应使用 build_reply_conversation_context。
+
+    不得使用空 merchant_id 查询资源：缺少可信商户时显式阻断，不执行跨商户查询。
+    """
+    if not merchant_id:
+        raise ValueError("merchant_id_required")
     return build_reply_conversation_context(
         db,
-        merchant_id="",
+        merchant_id=merchant_id,
         account_open_id=account_open_id,
         conversation_key=conversation_key,
         latest_message=latest_message,

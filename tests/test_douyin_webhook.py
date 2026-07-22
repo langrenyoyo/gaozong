@@ -1609,3 +1609,148 @@ def test_webhook_dispatch_skips_existing_sent_notification():
         db.close()
     finally:
         _cleanup_staff_and_related([staff_id])
+
+
+# ========== R2 返修：webhook 事件归属拒绝歧义 ==========
+
+
+def _reset_webhook_event_tables(db):
+    """清空事件/线索/接管状态，便于归属歧义用例隔离。"""
+    from app.models import ConversationAutopilotState, DouyinLead
+    db.query(ConversationAutopilotState).delete()
+    db.query(DouyinPrivateMessageSend).delete()
+    db.query(DouyinLead).delete()
+    db.query(DouyinWebhookEvent).delete()
+    db.commit()
+
+
+def test_ambiguous_two_merchant_bindings_receive_msg_keeps_null_merchant_id():
+    """同一 open_id 存在两个不同商户的有效绑定时，im_receive_msg 入库 merchant_id 为 NULL。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        # 同一企业号 open_id 绑定到两个不同商户（均 bind_status==1）
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="amb_account_001",
+            merchant_id="merchant_alpha", bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="amb_account_001",
+            merchant_id="merchant_beta", bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="amb_user_001", message_text="歧义场景")
+        payload["to_user_id"] = "amb_account_001"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        # 歧义 → merchant_id 保持 NULL，不猜测
+        assert event.merchant_id is None
+        assert event.tenant_id is None
+        # 歧义场景不创建线索（归属不明不进入任何商户线索）
+        assert result["lead_id"] is None
+    finally:
+        db.close()
+
+
+def test_ambiguous_two_merchant_bindings_send_msg_and_duplicate_keep_null():
+    """歧义场景下 im_send_msg 及重复事件不被猜测归属，merchant_id 保持 NULL。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="amb_send_account",
+            merchant_id="merchant_gamma", bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="amb_send_account",
+            merchant_id="merchant_delta", bind_status=1,
+        ))
+        db.commit()
+        # im_send_msg：企业号 = from_user_id = amb_send_account（歧义）
+        payload = _sample_payload(event="im_send_msg", from_user_id="amb_send_account", message_text="歧义发送")
+        payload["to_user_id"] = "amb_send_customer"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id is None
+        assert event.tenant_id is None
+
+        # 重复事件继承原事件已确认归属（NULL），不重新解析
+        result2 = process_webhook_event(db, payload)
+        db.commit()
+        dup = db.query(DouyinWebhookEvent).filter_by(id=result2["event_id"]).one()
+        assert dup.is_duplicate is True
+        assert dup.merchant_id is None
+        assert dup.merchant_id == event.merchant_id
+    finally:
+        db.close()
+
+
+def test_unique_binding_writes_correct_merchant_id_and_tenant():
+    """唯一有效绑定仍正确写入 merchant_id 和 tenant_id。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="unique_account_001",
+            merchant_id="unique_merchant", tenant_id="unique_tenant", bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="unique_user_001", message_text="唯一绑定")
+        payload["to_user_id"] = "unique_account_001"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id == "unique_merchant"
+        assert event.tenant_id == "unique_tenant"
+    finally:
+        db.close()
+
+
+def test_unique_merchant_but_ambiguous_tenant_writes_merchant_and_null_tenant():
+    """商户唯一但 tenant_id 歧义时，写入 merchant_id，tenant_id 保持 NULL。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        # 同一商户，两条有效绑定但 tenant_id 不同
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="amb_tenant_account",
+            merchant_id="same_merchant", tenant_id="tenant_one", bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="amb_tenant_account",
+            merchant_id="same_merchant", tenant_id="tenant_two", bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="amb_tenant_user", message_text="租户歧义")
+        payload["to_user_id"] = "amb_tenant_account"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        # 商户唯一 → 写入；tenant 歧义 → NULL
+        assert event.merchant_id == "same_merchant"
+        assert event.tenant_id is None
+    finally:
+        db.close()
+
+
+def test_no_active_binding_keeps_null_merchant_id():
+    """无有效绑定（bind_status 非 1）时 merchant_id 保持 NULL。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="unbound_account_001",
+            merchant_id="some_merchant", bind_status=0,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="unbound_user", message_text="未绑定")
+        payload["to_user_id"] = "unbound_account_001"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id is None
+        assert event.tenant_id is None
+    finally:
+        db.close()

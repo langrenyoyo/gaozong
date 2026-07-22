@@ -722,26 +722,15 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         account_open_id = _optional_str(payload.get("to_user_id"))
 
         # 反查企业号绑定 → 可信 merchant_id/tenant_id（来自 douyin_authorized_accounts，不来自 GMP/前端）
+        # 归属解析拒绝歧义：无绑定/merchant_id 空/多商户歧义一律保持 NULL，不猜测。
         merchant_id: str | None = None
         tenant_id: str | None = None
         binding_state = "merchant_unresolved"
         if account_open_id:
-            account = (
-                db.query(DouyinAuthorizedAccount)
-                .filter(
-                    DouyinAuthorizedAccount.open_id == account_open_id,
-                    DouyinAuthorizedAccount.bind_status == 1,
-                )
-                .first()
-            )
-            if account is None:
-                binding_state = "unbound_account"
-            elif not account.merchant_id:
-                binding_state = "merchant_unresolved"
-            else:
-                merchant_id = account.merchant_id
-                tenant_id = account.tenant_id
-                binding_state = "bound"
+            resolved_merchant, resolved_tenant, binding_state = _resolve_merchant_scope_by_account(db, account_open_id)
+            if binding_state == "bound":
+                merchant_id = resolved_merchant
+                tenant_id = resolved_tenant
                 event_merchant_id = merchant_id
                 event_tenant_id = tenant_id
 
@@ -918,7 +907,7 @@ def _im_send_msg_participants(event: DouyinWebhookEvent) -> tuple[str | None, st
 
 
 def _resolve_merchant_id_by_account(db: Session, account_open_id: str) -> str | None:
-    merchant_id, _ = _resolve_merchant_scope_by_account(db, account_open_id)
+    merchant_id, _tenant_id, _state = _resolve_merchant_scope_by_account(db, account_open_id)
     return merchant_id
 
 
@@ -935,30 +924,75 @@ def _resolve_event_account_open_id(payload: dict[str, Any]) -> str | None:
 
 def _resolve_merchant_scope_by_account(
     db: Session, account_open_id: str | None
-) -> tuple[str | None, str | None]:
-    """从有效绑定账号（bind_status==1）取得可信 (merchant_id, tenant_id)。
+) -> tuple[str | None, str | None, str]:
+    """从有效绑定账号（bind_status==1）取得可信 (merchant_id, tenant_id, binding_state)。
 
-    归属不明（账号未绑定、bind_status 非 1、merchant_id 为空）一律返回 (None, None)，
-    禁止用当前绑定关系猜测历史事件归属。
+    归属解析拒绝歧义，不得用无排序 .first() 或“最新记录”猜测商户：
+      - 收集 account_open_id 的所有 bind_status==1 绑定；
+      - 无绑定 → (None, None, "unbound_account")；
+      - 有绑定但 merchant_id 为空 → (None, None, "merchant_unresolved")；
+      - 存在多个不同商户 → (None, None, "merchant_ambiguous")；
+      - 商户唯一但 tenant_id 歧义 → (merchant_id, None, "bound")；
+      - 商户与租户均唯一 → (merchant_id, tenant_id, "bound")。
     """
     if not account_open_id:
-        return None, None
-    account = (
+        logger.info(
+            "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_unresolved "
+            "account_open_id=- reason=missing_account_open_id"
+        )
+        return None, None, "merchant_unresolved"
+    accounts = (
         db.query(DouyinAuthorizedAccount)
         .filter(
             DouyinAuthorizedAccount.open_id == account_open_id,
             DouyinAuthorizedAccount.bind_status == 1,
         )
-        .order_by(DouyinAuthorizedAccount.id.desc())
-        .first()
+        .all()
     )
-    if account is None or not account.merchant_id:
-        return None, None
-    return _optional_str(account.merchant_id), _optional_str(account.tenant_id)
+    if not accounts:
+        logger.info(
+            "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_unresolved "
+            "account_open_id=%s reason=no_active_binding",
+            (account_open_id or "")[:8] + "...",
+        )
+        return None, None, "unbound_account"
+    # 收集去重商户与租户（仅 merchant_id 非空的有效绑定）。
+    merchant_ids = {
+        str(account.merchant_id)
+        for account in accounts
+        if account.merchant_id
+    }
+    if not merchant_ids:
+        logger.info(
+            "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_unresolved "
+            "account_open_id=%s reason=empty_merchant_id",
+            (account_open_id or "")[:8] + "...",
+        )
+        return None, None, "merchant_unresolved"
+    if len(merchant_ids) > 1:
+        logger.warning(
+            "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_ambiguous "
+            "account_open_id=%s merchant_count=%s",
+            (account_open_id or "")[:8] + "...",
+            len(merchant_ids),
+        )
+        return None, None, "merchant_ambiguous"
+    # 商户唯一；tenant_id 歧义时只清空 tenant_id，不丢弃已确认的商户归属。
+    resolved_merchant_id = next(iter(merchant_ids))
+    tenant_ids = {
+        _optional_str(account.tenant_id)
+        for account in accounts
+        if account.tenant_id
+    }
+    resolved_tenant_id = next(iter(tenant_ids)) if len(tenant_ids) == 1 else None
+    return resolved_merchant_id, resolved_tenant_id, "bound"
 
 
 def _resolve_event_merchant_scope(
     db: Session, payload: dict[str, Any]
 ) -> tuple[str | None, str | None]:
-    """按事件方向解析账号，再从有效绑定账号取得可信商户归属。"""
-    return _resolve_merchant_scope_by_account(db, _resolve_event_account_open_id(payload))
+    """按事件方向解析账号，再从有效绑定账号取得可信商户归属（非 im_receive_msg 路径）。"""
+    merchant_id, tenant_id, _state = _resolve_merchant_scope_by_account(
+        db, _resolve_event_account_open_id(payload)
+    )
+    return merchant_id, tenant_id
