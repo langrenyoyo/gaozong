@@ -439,6 +439,110 @@ def test_llm_context_blocks_when_mask_fails():
         db.close()
 
 
+def test_llm_client_not_called_when_context_mask_fails():
+    """脱敏函数抛异常时，实际回复入口不得调用 LLM 客户端（build 阻断在 LLM 调用之前）。"""
+    from app.services.douyin_conversation_history_service import build_reply_conversation_context
+    _insert_account("acc_llm_not_called")
+    db = TestSession()
+    try:
+        content = {"text": "我的手机号是13812345678", "account_open_id": "acc_llm_not_called", "open_id": "cust_llm_not_called", "conversation_short_id": "conv_llm_not_called"}
+        db.add(DouyinWebhookEvent(
+            event="im_receive_msg",
+            event_key="llm_not_called_event",
+            from_user_id="cust_llm_not_called",
+            to_user_id="acc_llm_not_called",
+            merchant_id="merchant-1",
+            raw_body=json.dumps({"content": content}, ensure_ascii=False),
+            parsed_content_json=json.dumps(content, ensure_ascii=False),
+            is_duplicate=False,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    # 模拟回复入口：先 build 回复上下文，成功后才调用 LLM 客户端。
+    llm_client_calls = []
+
+    def _fake_llm_call(payload):
+        llm_client_calls.append(payload)
+        return {"reply": "ok"}
+
+    db = TestSession()
+    try:
+        with patch(
+            "app.services.douyin_conversation_history_service.mask_contacts_in_text",
+            side_effect=ValueError("forced"),
+        ):
+            try:
+                ctx = build_reply_conversation_context(
+                    db,
+                    merchant_id="merchant-1",
+                    account_open_id="acc_llm_not_called",
+                    conversation_key="conv_llm_not_called",
+                    latest_message="我的手机号是13812345678",
+                )
+                # build 成功才会调 LLM 客户端
+                _fake_llm_call(ctx.latest_message)
+                built = True
+            except Exception:
+                built = False
+        # build 阻断 → LLM 客户端从未被调用
+        assert built is False
+        assert llm_client_calls == []
+    finally:
+        db.close()
+
+
+def test_llm_context_excludes_raw_contacts_in_profile_memory_fields():
+    """lead.raw_data 画像字段植入完整手机号和微信号时，序列化整个回复上下文不含原值。"""
+    from app.models import DouyinLead
+    from app.services.douyin_conversation_history_service import build_reply_conversation_context
+    _insert_account("acc_profile_leak_r2")
+    db = TestSession()
+    try:
+        content = {"text": "想看车", "account_open_id": "acc_profile_leak_r2", "open_id": "cust_profile_leak_r2", "conversation_short_id": "conv_profile_leak_r2"}
+        db.add(DouyinWebhookEvent(
+            event="im_receive_msg",
+            event_key="profile_leak_r2_event",
+            from_user_id="cust_profile_leak_r2",
+            to_user_id="acc_profile_leak_r2",
+            merchant_id="merchant-1",
+            raw_body=json.dumps({"content": content}, ensure_ascii=False),
+            parsed_content_json=json.dumps(content, ensure_ascii=False),
+            is_duplicate=False,
+        ))
+        db.add(DouyinLead(
+            source="douyin", source_id="cust_profile_leak_r2", merchant_id="merchant-1",
+            account_open_id="acc_profile_leak_r2", customer_name="profile leak",
+            raw_data=json.dumps({
+                "account_open_id": "acc_profile_leak_r2",
+                "intent_car": "联系13812345678",
+                "budget": "加微信 wx_profile_r2_88",
+                "city": "杭州",
+            }, ensure_ascii=False),
+            status="pending",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    db = TestSession()
+    try:
+        ctx = build_reply_conversation_context(
+            db, merchant_id="merchant-1", account_open_id="acc_profile_leak_r2",
+            conversation_key="conv_profile_leak_r2", latest_message="想看车",
+        )
+    finally:
+        db.close()
+    serialized = json.dumps({
+        "latest_message": ctx.latest_message,
+        "conversation_history": ctx.conversation_history,
+        "customer_memory": ctx.customer_memory,
+    }, ensure_ascii=False)
+    assert "13812345678" not in serialized
+    assert "wx_profile_r2_88" not in serialized
+
+
 # ========== E: 解绑账号/不存在会话/篡改 mark-read 字段均拒绝且不写状态 ==========
 
 

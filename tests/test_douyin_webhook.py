@@ -1754,3 +1754,121 @@ def test_no_active_binding_keeps_null_merchant_id():
         assert event.tenant_id is None
     finally:
         db.close()
+
+
+# ========== R2 返修：有效绑定空值纳入歧义判断 ==========
+
+
+def test_empty_and_nonempty_merchant_binding_keeps_null_no_lead_no_takeover():
+    """同一 open_id 有效绑定同时含 merchant_id=NULL 和 merchant_id=A：
+    im_receive_msg、im_send_msg 均保持 NULL，不创建商户线索或接管状态。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="mixed_account",
+            merchant_id=None, bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="mixed_account",
+            merchant_id="merchant_a", bind_status=1,
+        ))
+        db.commit()
+
+        # im_receive_msg
+        payload = _sample_payload(from_user_id="mixed_user", message_text="空值歧义")
+        payload["to_user_id"] = "mixed_account"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id is None
+        assert event.tenant_id is None
+        assert result["lead_id"] is None
+
+        # im_send_msg（同账号歧义）不写入人工接管状态
+        send_payload = _sample_payload(event="im_send_msg", from_user_id="mixed_account", message_text="歧义发送")
+        send_payload["to_user_id"] = "mixed_send_customer"
+        send_result = process_webhook_event(db, send_payload)
+        db.commit()
+        send_event = db.query(DouyinWebhookEvent).filter_by(id=send_result["event_id"]).one()
+        assert send_event.merchant_id is None
+        assert db.query(ConversationAutopilotState).filter_by(
+            account_open_id="mixed_account"
+        ).count() == 0
+    finally:
+        db.close()
+
+
+def test_same_merchant_tenant_empty_and_nonempty_writes_merchant_null_tenant():
+    """同一商户 tenant_id 同时为空和非空：merchant 写入，tenant 保持 NULL。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="tenant_mixed_account",
+            merchant_id="same_merchant_2", tenant_id=None, bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="tenant_mixed_account",
+            merchant_id="same_merchant_2", tenant_id="tenant_x", bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="tenant_mixed_user", message_text="tenant 混杂")
+        payload["to_user_id"] = "tenant_mixed_account"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id == "same_merchant_2"
+        assert event.tenant_id is None
+    finally:
+        db.close()
+
+
+def test_same_merchant_all_empty_tenant_writes_merchant_null_tenant():
+    """所有记录商户相同、tenant 全部为空时保持确定结果（merchant 写入，tenant None）。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="all_empty_tenant_account",
+            merchant_id="merchant_all_empty", tenant_id=None, bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="all_empty_tenant_account",
+            merchant_id="merchant_all_empty", tenant_id=None, bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="all_empty_user", message_text="tenant 全空")
+        payload["to_user_id"] = "all_empty_tenant_account"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id == "merchant_all_empty"
+        assert event.tenant_id is None
+    finally:
+        db.close()
+
+
+def test_same_merchant_same_tenant_writes_both():
+    """所有记录商户相同、tenant 相同时保持确定结果（merchant 和 tenant 均写入）。"""
+    db = _db()
+    try:
+        _reset_webhook_event_tables(db)
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="deterministic_account",
+            merchant_id="deterministic_merchant", tenant_id="deterministic_tenant", bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="deterministic_account",
+            merchant_id="deterministic_merchant", tenant_id="deterministic_tenant", bind_status=1,
+        ))
+        db.commit()
+        payload = _sample_payload(from_user_id="deterministic_user", message_text="确定绑定")
+        payload["to_user_id"] = "deterministic_account"
+        result = process_webhook_event(db, payload)
+        db.commit()
+        event = db.query(DouyinWebhookEvent).filter_by(id=result["event_id"]).one()
+        assert event.merchant_id == "deterministic_merchant"
+        assert event.tenant_id == "deterministic_tenant"
+    finally:
+        db.close()

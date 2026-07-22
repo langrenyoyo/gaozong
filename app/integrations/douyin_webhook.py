@@ -927,13 +927,16 @@ def _resolve_merchant_scope_by_account(
 ) -> tuple[str | None, str | None, str]:
     """从有效绑定账号（bind_status==1）取得可信 (merchant_id, tenant_id, binding_state)。
 
-    归属解析拒绝歧义，不得用无排序 .first() 或“最新记录”猜测商户：
+    归属解析拒绝歧义，不得用无排序 .first() 或“最新记录”猜测商户；有效绑定集合
+    必须把空值纳入歧义判断：
       - 收集 account_open_id 的所有 bind_status==1 绑定；
       - 无绑定 → (None, None, "unbound_account")；
-      - 有绑定但 merchant_id 为空 → (None, None, "merchant_unresolved")；
-      - 存在多个不同商户 → (None, None, "merchant_ambiguous")；
-      - 商户唯一但 tenant_id 歧义 → (merchant_id, None, "bound")；
-      - 商户与租户均唯一 → (merchant_id, tenant_id, "bound")。
+      - 有绑定但 merchant_id 全为空 → (None, None, "merchant_unresolved")；
+      - 任一有效绑定 merchant_id 为空且存在非空记录 → (None, None, "merchant_ambiguous")；
+      - 存在多个不同非空商户 → (None, None, "merchant_ambiguous")；
+      - 商户唯一但 tenant_id 同时存在空值与非空值，或多个不同非空 tenant →
+        (merchant_id, None, "bound")；
+      - 商户与租户均唯一（或 tenant 全空）→ (merchant_id, tenant_id 或 None, "bound")。
     """
     if not account_open_id:
         logger.info(
@@ -956,12 +959,22 @@ def _resolve_merchant_scope_by_account(
             (account_open_id or "")[:8] + "...",
         )
         return None, None, "unbound_account"
-    # 收集去重商户与租户（仅 merchant_id 非空的有效绑定）。
+    # 有效绑定集合必须把空值纳入歧义判断：任一有效绑定 merchant_id 为空时，
+    # 不得根据其他非空记录确定商户，返回 NULL（merchant_ambiguous/merchant_unresolved）。
+    has_empty_merchant = any(not account.merchant_id for account in accounts)
     merchant_ids = {
         str(account.merchant_id)
         for account in accounts
         if account.merchant_id
     }
+    if has_empty_merchant and merchant_ids:
+        # 同时存在空值与非空商户：无法证明唯一归属 → 歧义。
+        logger.warning(
+            "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_ambiguous "
+            "account_open_id=%s reason=mixed_empty_and_nonempty_merchant",
+            (account_open_id or "")[:8] + "...",
+        )
+        return None, None, "merchant_ambiguous"
     if not merchant_ids:
         logger.info(
             "webhook merchant_scope stage=merchant_resolve failure_stage=merchant_unresolved "
@@ -977,14 +990,21 @@ def _resolve_merchant_scope_by_account(
             len(merchant_ids),
         )
         return None, None, "merchant_ambiguous"
-    # 商户唯一；tenant_id 歧义时只清空 tenant_id，不丢弃已确认的商户归属。
+    # 商户唯一；tenant_id 同时存在空值与非空值时 tenant_id 必须为 NULL，
+    # 所有 tenant 相同或全部为空时保持确定结果。
     resolved_merchant_id = next(iter(merchant_ids))
-    tenant_ids = {
-        _optional_str(account.tenant_id)
-        for account in accounts
-        if account.tenant_id
-    }
-    resolved_tenant_id = next(iter(tenant_ids)) if len(tenant_ids) == 1 else None
+    tenant_values = [_optional_str(account.tenant_id) for account in accounts]
+    non_empty_tenants = {t for t in tenant_values if t}
+    has_empty_tenant = any(t is None for t in tenant_values)
+    if has_empty_tenant and non_empty_tenants:
+        resolved_tenant_id = None
+    elif len(non_empty_tenants) == 1:
+        resolved_tenant_id = next(iter(non_empty_tenants))
+    elif not non_empty_tenants:
+        resolved_tenant_id = None
+    else:
+        # 多个不同非空 tenant → 歧义，tenant 置空但保留已确认商户。
+        resolved_tenant_id = None
     return resolved_merchant_id, resolved_tenant_id, "bound"
 
 

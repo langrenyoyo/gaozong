@@ -152,18 +152,24 @@ def _build_customer_memory(
     current = derive_profile_fields_from_messages([latest_message])
     saved = profile or {}
     contacts = _customer_contact_memory(latest_message=latest_message, lead=lead, items=items)
+    # customer_memory 中所有字符串字段（intent_car/car_year/budget/city 及 contact 内集合）
+    # 必须脱敏手机号和微信号；任一脱敏异常上抛阻断上下文构建，不返回部分结果。
     return {
-        "intent_car": _memory_text(current.get("intent_car") or saved.get("intent_car")),
-        "car_year": _memory_text(current.get("car_year") or saved.get("car_year")),
-        "budget": _memory_text(current.get("budget") or saved.get("budget")),
-        "city": _memory_text(current.get("city") or saved.get("city")),
+        "intent_car": _masked_memory_text(current.get("intent_car") or saved.get("intent_car")),
+        "car_year": _masked_memory_text(current.get("car_year") or saved.get("car_year")),
+        "budget": _masked_memory_text(current.get("budget") or saved.get("budget")),
+        "city": _masked_memory_text(current.get("city") or saved.get("city")),
         "contact": contacts,
     }
 
 
-def _memory_text(value: Any) -> str | None:
+def _masked_memory_text(value: Any) -> str | None:
+    """脱敏记忆字段中的手机号/微信号，并截断长度；解析异常抛错以阻断上下文构建。"""
     text = str(value or "").strip()
-    return text[:100] if text else None
+    if not text:
+        return None
+    masked = mask_contacts_in_text(text)  # 解析失败抛 ValueError，由调用方阻断
+    return masked[:100] if masked else None
 
 
 def _customer_contact_memory(

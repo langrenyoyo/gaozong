@@ -73,6 +73,21 @@ def _insert_event(*, account_open_id, customer_open_id, text, conversation_short
         db.close()
 
 
+def _insert_lead_with_profile(*, open_id, account_open_id, merchant_id, raw_data):
+    """插入带 raw_data 的线索（raw_data 可含 intent_car/budget/city 等画像字段）。"""
+    from app.models import DouyinLead
+    db = _db()
+    try:
+        db.add(DouyinLead(
+            source="douyin", source_id=open_id, merchant_id=merchant_id,
+            account_open_id=account_open_id, customer_name=open_id,
+            raw_data=json.dumps(raw_data, ensure_ascii=False), status="pending",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_llm_context_masks_contacts_and_excludes_raw_values():
     """LLM 回复上下文不含原始手机号/微信号，只含脱敏值。"""
     _insert_account("acc_llm", "merchant-1")
@@ -196,5 +211,70 @@ def test_build_conversation_history_legacy_cannot_read_other_merchant_session():
                 db, merchant_id="merchant-1", account_open_id="acc_cross",
                 conversation_key="conv_cross", latest_message="你好",
             )
+    finally:
+        db.close()
+
+
+def test_llm_context_excludes_raw_contacts_in_profile_memory_fields():
+    """lead.raw_data/profile 的 intent_car/budget/city 等字段植入完整手机号和微信号时，
+    序列化整个 ReplyConversationContext 后不得出现原值。"""
+    _insert_account("acc_profile_leak", "merchant-1")
+    _insert_event(
+        account_open_id="acc_profile_leak", customer_open_id="cust_profile_leak",
+        text="想看车",
+        conversation_short_id="conv_profile_leak", merchant_id="merchant-1", event_key="profile_leak_evt",
+    )
+    # raw_data 的画像字段植入完整手机号和微信号
+    _insert_lead_with_profile(
+        open_id="cust_profile_leak", account_open_id="acc_profile_leak",
+        merchant_id="merchant-1",
+        raw_data={
+            "account_open_id": "acc_profile_leak",
+            "intent_car": "联系13812345678",
+            "budget": "加微信 wx_profile_88",
+            "city": "杭州",
+        },
+    )
+    db = _db()
+    try:
+        ctx = build_reply_conversation_context(
+            db, merchant_id="merchant-1", account_open_id="acc_profile_leak",
+            conversation_key="conv_profile_leak",
+            latest_message="想看车",
+        )
+    finally:
+        db.close()
+    # 序列化整个 ReplyConversationContext（latest_message + history + customer_memory）
+    serialized = json.dumps({
+        "latest_message": ctx.latest_message,
+        "conversation_history": ctx.conversation_history,
+        "customer_memory": ctx.customer_memory,
+    }, ensure_ascii=False)
+    assert "13812345678" not in serialized
+    assert "wx_profile_88" not in serialized
+
+
+def test_llm_context_blocks_and_does_not_return_partial_when_mask_fails():
+    """customer_memory 任一脱敏异常时阻断上下文构建，不返回部分结果。"""
+    from unittest.mock import patch
+    _insert_account("acc_block_partial", "merchant-1")
+    _insert_event(
+        account_open_id="acc_block_partial", customer_open_id="cust_block_partial",
+        text="我的手机号是13812345678",
+        conversation_short_id="conv_block_partial", merchant_id="merchant-1", event_key="block_partial_evt",
+    )
+    db = _db()
+    try:
+        # customer_memory 的 _masked_memory_text 调 mask_contacts_in_text；patch 抛异常 → 阻断
+        with patch(
+            "app.services.douyin_conversation_history_service.mask_contacts_in_text",
+            side_effect=ValueError("forced"),
+        ):
+            with pytest.raises(Exception):
+                build_reply_conversation_context(
+                    db, merchant_id="merchant-1", account_open_id="acc_block_partial",
+                    conversation_key="conv_block_partial",
+                    latest_message="我的手机号是13812345678",
+                )
     finally:
         db.close()
