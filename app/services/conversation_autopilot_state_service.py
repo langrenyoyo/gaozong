@@ -122,6 +122,7 @@ def mark_manual_takeover(
     until: datetime | None | object = _DEFAULT_UNTIL,
     now: datetime | None = None,
     takeover_minutes: int = 30,
+    commit: bool = True,
 ) -> ConversationAutopilotState:
     """标记会话进入人工接管，供后续人工发送链路接入。"""
     current_time = now or datetime.now()
@@ -148,7 +149,9 @@ def mark_manual_takeover(
         state.manual_takeover_until = until
     state.last_human_message_at = current_time
     state.updated_at = current_time
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()
     db.refresh(state)
     return state
 

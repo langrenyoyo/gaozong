@@ -26,6 +26,8 @@ def assign_lead(
     staff_id: int,
     remark: str | None = None,
     operator_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> DouyinLead:
     """将线索分配给销售，同时创建回复检测记录。
 
@@ -78,12 +80,14 @@ def assign_lead(
         operator_id=operator_id,
     )
 
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()
     db.refresh(lead)
     return lead
 
 
-def auto_assign_next(db: Session, lead_id: int) -> DouyinLead:
+def auto_assign_next(db: Session, lead_id: int, *, commit: bool = True) -> DouyinLead:
     """自动轮询分配：找到下一个活跃销售（按商户隔离）。
 
     商户隔离规则（P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1）：
@@ -126,4 +130,4 @@ def auto_assign_next(db: Session, lead_id: int) -> DouyinLead:
         staff_counts[s.id] = count
 
     min_staff_id = min(staff_counts, key=staff_counts.get)
-    return assign_lead(db, lead_id, min_staff_id)
+    return assign_lead(db, lead_id, min_staff_id, commit=commit)

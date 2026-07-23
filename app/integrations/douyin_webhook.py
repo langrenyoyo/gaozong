@@ -605,7 +605,7 @@ def _dispatch_lead_after_create(
 
     # 1. 按商户隔离分配销售
     try:
-        assign_service.auto_assign_next(db, lead.id)
+        assign_service.auto_assign_next(db, lead.id, commit=False)
     except ValueError as exc:
         msg = str(exc)
         if "没有可用的活跃销售人员" in msg:
@@ -621,12 +621,11 @@ def _dispatch_lead_after_create(
             )
         return diag
     except Exception as exc:
-        diag["assign_reason"] = f"assign_exception: {type(exc).__name__}"
         logger.error(
-            "webhook 留资派单分配异常: lead_id=%d, error_type=%s, %s",
-            lead.id, type(exc).__name__, exc, exc_info=True,
+            "webhook 留资派单分配异常(重新抛出): lead_id=%d, error_type=%s",
+            lead.id, type(exc).__name__, exc_info=True,
         )
-        return diag
+        raise
 
     # 重新加载 lead 获取 assigned_staff_id（auto_assign_next 内部已 commit）
     db.refresh(lead)
@@ -811,13 +810,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             if upsert_action == "created":
                 is_new_lead = True
                 if contact_result.phone or contact_result.wechat:
-                    try:
-                        _dispatch_lead_after_create(db, lead, contact_result, merchant_id)
-                    except Exception as exc:
-                        logger.error(
-                            "webhook 留资派单异常(不影响主链路): lead_id=%d, error_type=%s",
-                            lead.id, type(exc).__name__, exc_info=True,
-                        )
+                    _dispatch_lead_after_create(db, lead, contact_result, merchant_id)
 
     # 回写 lead_id 到事件
     event.lead_id = lead_id
@@ -844,60 +837,57 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
 
 
 def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
-    """im_send_msg 入库后的轻量后置处理，异常不影响 webhook 主链路。"""
+    """im_send_msg 入库后的人工接管后置处理。
+
+    预期跳过分支继续返回；非预期异常上抛并触发请求边界整体回滚。
+    """
     if event.event != "im_send_msg" or event.is_duplicate:
         return
-    try:
-        skip_reason = outbound_skip_reason(event)
-        if skip_reason:
-            logger.info(
-                "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=%s, "
-                "message_type=%s, conversation=%s",
-                event.id,
-                skip_reason,
-                event.message_type,
-                event.conversation_short_id,
-            )
-            return
-        if not is_effective_human_outbound_message(db, event):
-            logger.info(
-                "webhook im_send_msg matched ai_auto send: event_id=%s, conversation=%s",
-                event.id,
-                event.conversation_short_id,
-            )
-            return
-        account_open_id, customer_open_id = im_send_msg_participants(event)
-        if not account_open_id or not event.conversation_short_id:
-            logger.warning(
-                "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=missing_context",
-                event.id,
-            )
-            return
-        # 商户归属必须可确认：优先用事件入库时已固化的 merchant_id，其次按账号反查有效绑定。
-        # 无法确认时跳过需要商户归属的后置写入，禁止伪造 unknown_merchant，记录结构化 failure_stage。
-        merchant_id = _optional_str(event.merchant_id) or _resolve_merchant_id_by_account(db, account_open_id)
-        if not merchant_id:
-            logger.warning(
-                "webhook im_send_msg manual_takeover_skip stage=im_send_msg_post_process "
-                "failure_stage=merchant_unresolved event_id=%s account_open_id=%s conversation=%s",
-                event.id,
-                (account_open_id or "")[:8] + "...",
-                event.conversation_short_id,
-            )
-            return
-        mark_manual_takeover(
-            db,
-            merchant_id=merchant_id,
-            account_open_id=account_open_id,
-            conversation_short_id=event.conversation_short_id,
-            customer_open_id=customer_open_id,
-        )
-    except Exception as exc:
-        logger.warning(
-            "webhook im_send_msg post_process_failed: event_id=%s, error_type=%s",
+    skip_reason = outbound_skip_reason(event)
+    if skip_reason:
+        logger.info(
+            "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=%s, "
+            "message_type=%s, conversation=%s",
             event.id,
-            type(exc).__name__,
+            skip_reason,
+            event.message_type,
+            event.conversation_short_id,
         )
+        return
+    if not is_effective_human_outbound_message(db, event):
+        logger.info(
+            "webhook im_send_msg matched ai_auto send: event_id=%s, conversation=%s",
+            event.id,
+            event.conversation_short_id,
+        )
+        return
+    account_open_id, customer_open_id = im_send_msg_participants(event)
+    if not account_open_id or not event.conversation_short_id:
+        logger.warning(
+            "webhook im_send_msg manual_takeover_skip: event_id=%s, reason=missing_context",
+            event.id,
+        )
+        return
+    # 商户归属必须可确认：优先用事件入库时已固化的 merchant_id，其次按账号反查有效绑定。
+    # 无法确认时跳过需要商户归属的后置写入，禁止伪造 unknown_merchant，记录结构化 failure_stage。
+    merchant_id = _optional_str(event.merchant_id) or _resolve_merchant_id_by_account(db, account_open_id)
+    if not merchant_id:
+        logger.warning(
+            "webhook im_send_msg manual_takeover_skip stage=im_send_msg_post_process "
+            "failure_stage=merchant_unresolved event_id=%s account_open_id=%s conversation=%s",
+            event.id,
+            (account_open_id or "")[:8] + "...",
+            event.conversation_short_id,
+        )
+        return
+    mark_manual_takeover(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=event.conversation_short_id,
+        customer_open_id=customer_open_id,
+        commit=False,
+    )
 
 
 def _im_send_msg_manual_takeover_skip_reason(event: DouyinWebhookEvent) -> str | None:

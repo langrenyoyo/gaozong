@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
-from app.services.douyin_webhook_idempotency_service import claim_webhook_event
 
 
 logger = logging.getLogger("leads_internal_webhook")
@@ -329,83 +328,10 @@ def _resolve_bound_merchant_id(db: Session, account_open_id: str | None) -> tupl
 
 
 def process_internal_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    """处理 9202 internal webhook 事件，不触发任何后置 dry-run。
+    """处理 9202 internal webhook 事件。
 
-    固定顺序：只读解析 → 原子占位 → 胜出者业务处理。
+    委托 9000 共享处理核心，确保两个入口使用一致的原子占位、商户归属解析、
+    派单、im_send_msg 后置处理和事件字段合同；结果不依赖哪个入口先胜出。
     """
-    event_type = payload.get("event") or ""
-    event_key = build_event_key(payload)
-
-    # ---- 原子占位：INSERT ON CONFLICT DO NOTHING RETURNING ----
-    values = _build_internal_event_values(payload, event_key)
-    claim = claim_webhook_event(db, values=values)
-
-    # ---- 竞争失败者：写重复审计行并返回，不执行任何副作用 ----
-    if not claim.won:
-        duplicate_event = persist_duplicate_webhook_event(
-            db,
-            payload,
-            original_event_key=event_key,
-            lead_id=claim.event.lead_id,
-            merchant_id=claim.event.merchant_id,
-            tenant_id=claim.event.tenant_id,
-        )
-        return {
-            "event_id": duplicate_event.id,
-            "lead_id": claim.event.lead_id,
-            "is_new_lead": False,
-            "is_duplicate": True,
-            "lead_action": "duplicate_event",
-        }
-
-    # ---- 胜出者：执行线索副作用 ----
-    event = claim.event
-    lead_id = None
-    is_new_lead = False
-    lead_action = "not_lead_event"
-
-    if event_type == "im_receive_msg":
-        content = parse_content(payload.get("content"))
-        account_open_id = _optional_str(payload.get("to_user_id"))
-        conversation_short_id = _optional_str(content.get("conversation_short_id"))
-        merchant_id, binding_state = _resolve_bound_merchant_id(db, account_open_id)
-        if not is_text_message(content):
-            lead_action = "invalid_contact"
-        elif binding_state != "bound":
-            lead_action = binding_state
-        elif not conversation_short_id:
-            lead_action = "missing_conversation"
-        else:
-            message_text = normalize_message_text(content)
-            lead, upsert_action = upsert_lead_from_webhook(
-                db,
-                payload,
-                extract_contacts_from_text(message_text),
-                content=content,
-                message_text=message_text,
-                account_open_id=account_open_id or "",
-                conversation_short_id=conversation_short_id,
-                merchant_id=merchant_id or "",
-            )
-            lead_id = lead.id
-            lead_action = upsert_action
-            is_new_lead = upsert_action == "created"
-
-    # 回写 lead_id 到事件
-    event.lead_id = lead_id
-    db.flush()
-
-    logger.info(
-        "leads internal webhook handled: event_id=%s event=%s lead_action=%s lead_id=%s",
-        event.id,
-        event_type,
-        lead_action,
-        lead_id,
-    )
-    return {
-        "event_id": event.id,
-        "lead_id": lead_id,
-        "is_new_lead": is_new_lead,
-        "is_duplicate": False,
-        "lead_action": lead_action,
-    }
+    from app.integrations.douyin_webhook import process_webhook_event
+    return process_webhook_event(db, payload)

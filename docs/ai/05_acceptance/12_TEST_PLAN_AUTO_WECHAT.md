@@ -245,7 +245,7 @@
 1. 高频重复请求不能绕过唯一约束。
 2. 任务回写重复提交不能重复推进状态。
 3. 导出重试不能改变业务状态。
-4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1）候选已实现，待独立测试确认**：9000 与 9202 共用跨方言原子占位服务，处理顺序改为"只读解析 → 原子占位 → 胜出者副作用"；PostgreSQL 使用 `ON CONFLICT DO NOTHING RETURNING`，SQLite 使用同语义方言语句；9000/9202 各 20 路线程并发：1 条有效事件、19 条重复审计事件、1 条线索、副作用最多一次，重复请求 HTTP 200；竞争测试重复 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产并发。
+4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R2）候选已实现，执行窗口自测通过，待独立测试确认**：9000 与 9202 共用同一处理核心 `process_webhook_event`，跨方言原子占位 `ON CONFLICT DO NOTHING RETURNING`，嵌套提交已消除（请求边界统一提交），非预期异常整体回滚；执行窗口自测 A1-A14 全部通过、9000/9202/混合入口三类 20 路并发各重复 10 轮通过、真实 `BackgroundTasks` 调度验证、外层回滚日志验证、非空 lead_id 继承验证；`tests/test_douyin_webhook.py` 中 im_send_msg 后置异常测试因 R2 事务变更回归失败（文件不在允许修改范围）；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产并发。
 
 ------
 
