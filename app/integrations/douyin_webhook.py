@@ -535,7 +535,7 @@ def _dispatch_lead_after_create(
       2. 无活跃销售 → 不创建任务（reason=no_active_staff），不抛异常
       3. 销售无微信昵称 → 不创建任务（reason=staff_no_wechat_nickname）
       4. 同 lead+staff 已有 pending/pasted/sent 的 notify_sales task → 不重复创建（reason=task_exists）
-      5. 分配/建任务异常 → 记录失败原因，不阻断 webhook 主链路
+      5. 已知业务跳过（无活跃销售等）不阻断；未知异常上抛并由请求边界整体回滚
 
     返回诊断 dict（仅供日志，不影响 process_webhook_event 返回值）。
     """
@@ -627,7 +627,7 @@ def _dispatch_lead_after_create(
         )
         raise
 
-    # 重新加载 lead 获取 assigned_staff_id（auto_assign_next 内部已 commit）
+    # 重新加载 lead 获取 assigned_staff_id（auto_assign_next(commit=False) 已 flush，提交由请求边界负责）
     db.refresh(lead)
     if not lead.assigned_staff_id:
         diag["assign_reason"] = "assign_no_staff_id"
