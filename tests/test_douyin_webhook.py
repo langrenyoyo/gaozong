@@ -15,12 +15,14 @@
 
 import hashlib
 import json
+import logging
 import sys
 import os
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -1292,8 +1294,8 @@ def test_webhook_duplicate_im_send_msg_does_not_repeat_manual_takeover():
         db.close()
 
 
-def test_webhook_im_send_msg_post_process_error_does_not_affect_response():
-    """im_send_msg 后置识别异常只 warning，不影响 webhook 响应和事件入库。"""
+def test_webhook_im_send_msg_post_process_error_rolls_back_event_and_state(caplog):
+    """im_send_msg 后置异常上抛并触发整体回滚，事件和接管状态均不残留。"""
     client = _api_client()
     payload = _sample_payload(
         event="im_send_msg",
@@ -1310,18 +1312,26 @@ def test_webhook_im_send_msg_post_process_error_does_not_affect_response():
              "app.integrations.douyin_webhook.is_effective_human_outbound_message",
              side_effect=RuntimeError("matcher failed"),
          ):
-        resp = client.post("/webhook/douyin", data=body_text.encode("utf-8"), headers={"Content-Type": "application/json"})
+        with caplog.at_level(logging.ERROR, logger="integrations_router"):
+            with pytest.raises(RuntimeError, match="matcher failed"):
+                client.post(
+                    "/webhook/douyin",
+                    data=body_text.encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["is_duplicate"] is False
     db = _db()
     try:
-        event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == data["event_id"]).one()
-        assert event.event == "im_send_msg"
+        assert db.query(DouyinWebhookEvent).filter(
+            DouyinWebhookEvent.to_user_id == "error_customer_001",
+        ).count() == 0
         assert db.query(ConversationAutopilotState).count() == 0
     finally:
         db.close()
+
+    log_text = " ".join(record.getMessage() for record in caplog.records)
+    assert "stage=local_process" in log_text
+    assert "failure_stage=transaction_failed" in log_text
 
 
 # ========== P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：webhook 留资派单链路 ==========
