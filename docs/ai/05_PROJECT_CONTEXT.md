@@ -239,7 +239,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 ```
 
 - 验签环境策略：`APP_ENV=production` 强制验签（缺 `DY_SECRET_KEY` 拒绝请求）；development 允许 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 仅用于本地联调。
-- **抖音 Webhook 原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R3）候选已实现，执行窗口自测通过，待独立测试确认**（2026-07-23，父测试候选 `36abccbbf5c37df7b9b66a903a81e2d19ff6e4cf`）：9000 与 9202 共用同一处理核心 `process_webhook_event`，处理顺序为"只读解析 → 原子占位 → 胜出者副作用"；PostgreSQL 使用 `ON CONFLICT DO NOTHING RETURNING`，SQLite 使用同语义方言语句；嵌套提交已消除（`assign_lead`/`auto_assign_next`/`mark_manual_takeover` 支持 `commit=False`），统一由请求边界提交；非预期派单或后置处理异常上抛并整体回滚；旧 im_send_msg 后置异常测试已改为异常传播/整体回滚合同；混合 20 路全局 patch 已移出 worker；人工接管写入后回滚、9202 日志、跟进记录和四类归属矩阵均有测试证据；执行窗口自测：专项 28 passed、回归 163 passed（均 0 failed）、9000/9202/混合入口三类 20 路并发各重复 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL、生产并发和真实发送。
+- **抖音 Webhook 原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R3-R1）候选已实现，执行窗口自测通过，待独立测试确认**（2026-07-23，父测试候选 `be3e31b8be76b08164ad57896361588ed1404c40`）：9000 与 9202 共用同一处理核心 `process_webhook_event`，处理顺序为"只读解析 → 原子占位 → 胜出者副作用"；PostgreSQL 使用 `ON CONFLICT DO NOTHING RETURNING` + JSONB CAST，SQLite 使用同语义方言语句；嵌套提交已消除（`assign_lead`/`auto_assign_next`/`mark_manual_takeover` 支持 `commit=False`），统一由请求边界提交；非预期派单或后置处理异常上抛并整体回滚；A1-A14 冻结矩阵统一映射：A1 SQL 合同（含 JSONB CAST 断言）、A2/A3 派单+接管事务（commit 参数直接验证）、A4/A5 派单+接管后回滚（监视 rollback 调用）、A6-A8 三类 20 路并发、A9 重复继承（19 重复返回+审计行全部继承非空 lead_id 和归属）、A10 调度（BackgroundTasks）、A11 两入口日志+rollback 监视+无嵌套 commit、A12 归属矩阵（5 场景各处理两次）、A13 顺序/非线索/入口胜负、A14 范围与回归；执行窗口自测：专项 28 passed、回归 163 passed（均 0 failed）、9000/9202/混合三类 20 路各 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL、生产并发和真实发送。
 - `/leads` 只展示有效线索；原始/invalid 事件走 `GET /webhook-events`（只读）。
 - 旧拉取链路 `/integrations/douyin/sync-leads` 保留但已非事件回调归属，处置待定（见第 12 节）。
 

@@ -245,7 +245,7 @@
 1. 高频重复请求不能绕过唯一约束。
 2. 任务回写重复提交不能重复推进状态。
 3. 导出重试不能改变业务状态。
-4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R3）候选已实现，执行窗口自测通过，待独立测试确认**（父测试候选 `36abccbbf5c37df7b9b66a903a81e2d19ff6e4cf`）：9000 与 9202 共用同一处理核心 `process_webhook_event`，跨方言原子占位 `ON CONFLICT DO NOTHING RETURNING`，嵌套提交已消除（请求边界统一提交），非预期异常整体回滚；旧 im_send_msg 后置异常测试已改为异常传播/整体回滚合同（不再保留旧吞异常行为）；混合 20 路全局 patch 已移出 worker；人工接管写入后回滚、9202 日志、跟进记录和四类归属矩阵（唯一/全空/歧义/无绑定）均有测试证据；执行窗口自测：专项 28 passed、回归 163 passed（均 0 failed）、9000/9202/混合入口三类 20 路并发各重复 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产并发。
+4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R3-R1）候选已实现，执行窗口自测通过，待独立测试确认**（父测试候选 `be3e31b8be76b08164ad57896361588ed1404c40`）：9000 与 9202 共用同一处理核心 `process_webhook_event`，跨方言原子占位 `ON CONFLICT DO NOTHING RETURNING` + JSONB CAST，嵌套提交已消除（请求边界统一提交），非预期异常整体回滚；A1-A14 冻结矩阵统一映射含 JSONB CAST 断言、派单+接管 commit 参数直接验证、rollback 监视、19 重复继承非空 lead_id 和归属、归属矩阵 5 场景各处理两次；执行窗口自测：专项 28 passed、回归 163 passed（均 0 failed）、9000/9202/混合三类 20 路各 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产并发。
 
 ------
 
