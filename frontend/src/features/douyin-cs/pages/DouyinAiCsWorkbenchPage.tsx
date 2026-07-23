@@ -867,7 +867,15 @@ export default function DouyinAiCsWorkbenchPage() {
   );
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
   const markReadWatermarksRef = useRef<Record<string, string>>({});
-  const lastDetailMaxEventIdRef = useRef<number | null>(null);
+  // 会话级详情成功凭据：仅当当前详情请求成功并完成 React 状态提交后设置，
+  // 包含 account_open_id + conversation_id + request_seq + max_event_id。
+  const detailSuccessCredentialRef = useRef<{
+    account_open_id: string;
+    conversation_id: string | number;
+    request_seq: number;
+    max_event_id: number | null;
+  } | null>(null);
+  const consumedCredentialKeyRef = useRef<string | null>(null);
   const selectedAccountOpenIdRef = useRef<string | null>(null);
   const selectedConversationIdRef = useRef<string | number | null>(null);
   const accountModeCacheRef = useRef<Record<string, ChatAssistMode>>({});
@@ -1181,8 +1189,8 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!options?.background) {
       detailAbortRef.current?.abort();
       detailInFlightRef.current = {};
-      // 清除上次详情成功的事件水位，缓存消息不得作为本次详情成功的证据。
-      lastDetailMaxEventIdRef.current = null;
+      // 清除上次详情成功凭据，缓存消息不得作为本次详情成功的证据。
+      detailSuccessCredentialRef.current = null;
     }
     const controller = new AbortController();
     detailAbortRef.current = controller;
@@ -1211,14 +1219,20 @@ export default function DouyinAiCsWorkbenchPage() {
       setMessages(detail.messages.items);
       setProfile(detail.profile);
       // 从本次详情响应消息取最大有效 raw_event_id，作为已读提交水位；
-      // 缓存消息不得作为本次详情成功的证据，只在成功响应后设置。
-      lastDetailMaxEventIdRef.current = detail.messages.items.reduce(
+      // 缓存消息不得作为本次详情成功的证据，只在成功响应后设置会话级凭据。
+      const maxEventId = detail.messages.items.reduce(
         (max, item) => {
           const id = Number(item.raw_event_id);
           return Number.isFinite(id) && id > 0 && id > max ? id : max;
         },
         0,
       ) || null;
+      detailSuccessCredentialRef.current = {
+        account_open_id: accountOpenId || "",
+        conversation_id: conversationId,
+        request_seq: requestSeq,
+        max_event_id: maxEventId,
+      };
       // 递增序号触发 mark-read useEffect，确保即使缓存消息长度不变也能在成功后提交。
       setDetailSuccessSeq((seq) => seq + 1);
     } catch (err) {
@@ -1470,12 +1484,19 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!selectedConversation || !selectedAccount?.account_open_id || loadingMessages || messages.length === 0) {
       return;
     }
-    // 当前详情请求成功并完成 React 状态提交后，从本次响应消息取最大有效 raw_event_id。
-    // raw_event_id 缺失或非法时不得猜测、不得提交已读；缓存消息不得作为本次详情成功的证据。
-    const lastSeenEventId = lastDetailMaxEventIdRef.current;
-    if (!lastSeenEventId || lastSeenEventId <= 0) return;
+    // 只消费未消费的会话级详情成功凭据；再次核对当前账号、当前会话和请求序号。
+    // 切换会话时凭据属于上一会话，conversation_id 不匹配 → 不触发已读。
+    // 轮询刷新会话列表不产生新凭据 → consumedCredentialKey 已匹配 → 不触发已读。
+    const credential = detailSuccessCredentialRef.current;
+    if (!credential || !credential.max_event_id || credential.max_event_id <= 0) return;
+    if (credential.account_open_id !== selectedAccount.account_open_id) return;
+    if (credential.conversation_id !== selectedConversationId) return;
+    if (credential.request_seq !== detailRequestSeqRef.current) return;
+    const credentialKey = `${credential.account_open_id}::${credential.conversation_id}::${credential.request_seq}`;
+    if (consumedCredentialKeyRef.current === credentialKey) return;
+    consumedCredentialKeyRef.current = credentialKey;
     markConversationReadLocally(selectedConversation);
-    void persistConversationRead(selectedConversation, lastSeenEventId);
+    void persistConversationRead(selectedConversation, credential.max_event_id);
   }, [
     loadingMessages,
     markConversationReadLocally,
@@ -1483,6 +1504,7 @@ export default function DouyinAiCsWorkbenchPage() {
     persistConversationRead,
     selectedAccount?.account_open_id,
     selectedConversation,
+    selectedConversationId,
     detailSuccessSeq,
   ]);
 

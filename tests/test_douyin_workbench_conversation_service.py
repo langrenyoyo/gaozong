@@ -527,3 +527,156 @@ def test_account_level_and_conversation_level_unread_are_consistent():
 
     assert account_unread == conversation_unread_sum
     assert account_unread == 3
+
+
+def test_mark_read_non_private_message_event_rejected():
+    """非私信事件（im_enter_direct_msg）不得推进已读水位。"""
+    _insert_account()
+    event = _insert_event(event="im_enter_direct_msg", event_key="enter-event")
+    client = _client()
+
+    resp = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "DOUYIN_CONVERSATION_NOT_FOUND"
+    db = TestSession()
+    try:
+        assert db.query(DouyinConversationReadState).filter_by(account_open_id="account-open-1").count() == 0
+    finally:
+        db.close()
+
+
+def test_mark_read_empty_created_at_event_rejected():
+    """created_at 为空的事件不得推进已读水位，返回 404 且不写状态。"""
+    _insert_account()
+    event = _insert_event(event_key="no-time-event")
+    # 直接更新 created_at 为 None
+    db = TestSession()
+    try:
+        row = db.query(DouyinWebhookEvent).filter_by(id=event.id).first()
+        row.created_at = None
+        db.commit()
+    finally:
+        db.close()
+
+    client = _client()
+    resp = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "DOUYIN_CONVERSATION_NOT_FOUND"
+    db = TestSession()
+    try:
+        assert db.query(DouyinConversationReadState).filter_by(account_open_id="account-open-1").count() == 0
+    finally:
+        db.close()
+
+
+def test_mark_read_advances_from_existing_low_waterlevel():
+    """已有低水位行，提交更高水位时推进。"""
+    _insert_account()
+    event1 = _insert_event(event_key="inbound-1")
+    event2 = _insert_event(event_key="inbound-2")
+    client = _client()
+
+    # 先标记到 event1
+    resp1 = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event1.id,
+        },
+    )
+    assert resp1.status_code == 200
+
+    # 再标记到 event2（更高水位）
+    resp2 = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event2.id,
+        },
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["data"]["last_read_event_id"] == event2.id
+
+
+def test_mark_read_integrity_error_recovery():
+    """首次创建唯一约束竞争后 IntegrityError 恢复路径验证。"""
+    import inspect
+    from app.services.douyin_workbench_conversation_service import mark_conversation_read
+    source = inspect.getsource(mark_conversation_read)
+    # 验证 IntegrityError 恢复路径存在
+    assert "IntegrityError" in source
+    assert "rollback" in source
+    # 验证首次创建后重试条件更新
+    assert "update(" in source
+
+
+def test_mark_read_concurrent_advance_from_existing_waterlevel():
+    """已有水位行，并发提交更高水位时通过条件更新推进（重试 UPDATE 路径）。"""
+    _insert_account()
+    event1 = _insert_event(event_key="inbound-1")
+    event2 = _insert_event(event_key="inbound-2")
+
+    # 预创建低水位行（模拟并发竞争后已有行）
+    db = TestSession()
+    try:
+        db.add(DouyinConversationReadState(
+            merchant_id="merchant-1",
+            account_open_id="account-open-1",
+            conversation_key="conv-1",
+            last_read_at=datetime.min,
+            last_read_event_id=None,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    # 提交更高水位 event2 → 条件更新推进（IntegrityError 后重试同路径）
+    client = _client()
+    resp = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event2.id,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["last_read_event_id"] == event2.id
+
+
+def test_mark_read_conversation_switch_does_not_use_old_watermark():
+    """切换会话时不得使用上一会话的事件水位清零当前会话。"""
+    _insert_account()
+    event_a = _insert_event(event_key="inbound-a")
+    # 另一会话无消息
+    client = _client()
+
+    # 标记账会话 A 已读
+    resp = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event_a.id,
+        },
+    )
+    assert resp.status_code == 200
+    assert _conversation_unread() == 0

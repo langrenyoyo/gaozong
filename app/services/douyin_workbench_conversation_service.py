@@ -334,26 +334,50 @@ def mark_conversation_read(
     resolved_conversation_short_id = derived_short_id
     resolved_customer_open_id = derived_customer_open_id
 
-    # 验证 last_seen_event_id 属于可信商户、有效绑定账号和指定会话范围。
+    # 验证 last_seen_event_id 属于可信商户、有效绑定账号和指定会话范围，且为私信事件。
     seen_event = (
         db.query(DouyinWebhookEvent)
         .filter(
             DouyinWebhookEvent.id == last_seen_event_id,
             DouyinWebhookEvent.merchant_id == merchant_id,
             DouyinWebhookEvent.is_duplicate.is_(False),
+            DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS),
         )
         .first()
     )
     if seen_event is None:
+        logger.info(
+            "douyin_mark_read stage=mark_read failure_stage=event_not_found "
+            "merchant_id=%s account_open_id=%s last_seen_event_id=%s",
+            merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+        )
         raise ConversationNotFoundError("event_not_found")
     # 事件必须属于当前账号（from 或 to 匹配 account_open_id）。
     if seen_event.to_user_id != account_open_id and seen_event.from_user_id != account_open_id:
+        logger.info(
+            "douyin_mark_read stage=mark_read failure_stage=event_not_in_account "
+            "merchant_id=%s account_open_id=%s last_seen_event_id=%s",
+            merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+        )
         raise ConversationNotFoundError("event_not_found")
     # 事件必须属于当前会话（conversation_short_id 或 from/to 对匹配）。
     if not _event_belongs_to_conversation(seen_event, conversation_key, account_open_id, derived_short_id):
+        logger.info(
+            "douyin_mark_read stage=mark_read failure_stage=event_not_in_conversation "
+            "merchant_id=%s account_open_id=%s last_seen_event_id=%s",
+            merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+        )
         raise ConversationNotFoundError("event_not_found")
+    # created_at 为空时无法组成 (created_at, event_id) 水位，拒绝推进且不写状态。
+    if seen_event.created_at is None:
+        logger.warning(
+            "douyin_mark_read stage=mark_read failure_stage=event_created_at_missing "
+            "merchant_id=%s account_open_id=%s last_seen_event_id=%s",
+            merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+        )
+        raise ConversationNotFoundError("event_created_at_missing")
 
-    event_created_at = seen_event.created_at or now
+    event_created_at = seen_event.created_at
 
     # 数据库条件更新：仅当新水位 (created_at, event_id) 严格大于现有水位时推进。
     advance_condition = or_(
@@ -410,8 +434,18 @@ def mark_conversation_read(
                 db.add(row)
                 db.commit()
                 db.refresh(row)
+                logger.info(
+                    "douyin_mark_read stage=mark_read action=create "
+                    "merchant_id=%s account_open_id=%s last_read_event_id=%s",
+                    merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+                )
             except IntegrityError:
                 db.rollback()
+                logger.info(
+                    "douyin_mark_read stage=mark_read action=integrity_error_retry "
+                    "merchant_id=%s account_open_id=%s last_read_event_id=%s",
+                    merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+                )
                 # 并发创建胜出者已写入，重试条件更新推进水位。
                 db.execute(
                     update(DouyinConversationReadState)
@@ -434,6 +468,11 @@ def mark_conversation_read(
             return row
         # 已有水位 >= 新水位，无需前进，返回当前水位。
         db.refresh(existing)
+        logger.info(
+            "douyin_mark_read stage=mark_read action=noop_watermark_not_regressed "
+            "merchant_id=%s account_open_id=%s last_read_event_id=%s",
+            merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
+        )
         return existing
 
     # 条件更新成功，查询并返回更新后的行。
@@ -443,11 +482,9 @@ def mark_conversation_read(
         .first()
     )
     logger.info(
-        "douyin_conversation_mark_read merchant_id=%s account_open_id=%s conversation_key=%s last_read_event_id=%s",
-        merchant_id,
-        _mask_open_id(account_open_id),
-        _mask_open_id(conversation_key),
-        last_seen_event_id,
+        "douyin_mark_read stage=mark_read action=advance "
+        "merchant_id=%s account_open_id=%s last_read_event_id=%s",
+        merchant_id, _mask_open_id(account_open_id), last_seen_event_id,
     )
     return row
 

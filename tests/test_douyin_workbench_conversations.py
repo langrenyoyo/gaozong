@@ -1459,7 +1459,7 @@ def test_frontend_mark_read_request_includes_last_seen_event_id():
 
 
 def test_frontend_workbench_submits_read_after_render_with_event_id():
-    """前端工作台仅在详情渲染后提交已读，使用最大 raw_event_id。"""
+    """前端工作台仅在详情渲染后提交已读，使用会话级成功凭据。"""
     page = open(
         "frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx",
         encoding="utf-8",
@@ -1467,9 +1467,19 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     # 删除点击会话时的本地清零（onClick 不应调用 markConversationReadLocally）
     click_section = page.split("onClick={() => {", 1)[1].split("}", 1)[0]
     assert "markConversationReadLocally" not in click_section
-    # 详情成功后取最大 raw_event_id
-    assert "lastDetailMaxEventIdRef" in page
-    assert "detailSuccessSeq" in page
+    # 会话级成功凭据替代全局裸事件 ID
+    assert "detailSuccessCredentialRef" in page
+    assert "consumedCredentialKeyRef" in page
+    # 凭据包含 account_open_id + conversation_id + request_seq + max_event_id
+    credential_section = page.split("detailSuccessCredentialRef.current = {")[1].split("}")[0]
+    assert "account_open_id" in credential_section
+    assert "conversation_id" in credential_section
+    assert "request_seq" in credential_section
+    assert "max_event_id" in credential_section
+    # 已读 effect 核对当前账号、会话和请求序号
+    assert "credential.account_open_id !== selectedAccount.account_open_id" in page
+    assert "credential.conversation_id !== selectedConversationId" in page
+    assert "credential.request_seq !== detailRequestSeqRef.current" in page
     # persistConversationRead 接受 lastSeenEventId 参数
     persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     assert "lastSeenEventId" in persist_section

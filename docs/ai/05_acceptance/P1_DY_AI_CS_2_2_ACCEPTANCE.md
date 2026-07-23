@@ -2,7 +2,7 @@
 
 ## 1. 验收结论摘要
 
-1. 2.2.2 抖音企业号列表已基本满足头像、昵称、未读消息数展示；`unread_count` 已升级为真实已读/未读系统，使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位计算。
+1. 2.2.2 抖音企业号列表已基本满足头像、昵称、未读消息数展示；`unread_count` 已读/未读协议候选已实现（待独立测试确认），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位计算。
 2. 2.2.3 客户会话列表已具备客户头像、姓名、最后消息、消息时间、未读数、点击切换、搜索和标准标签筛选；在线状态仍没有真实抖音来源。
 3. 会话标签已标准化为 `manual_required`、`high_intent`、`retained_contact`、`follow_up`，前端映射为需人工、高意向、已留资、待回访。
 4. 2.2.4 聊天面板已区分客户消息、人工客服消息、系统消息和 AI 建议卡片；AI托管自动回复按安全边界降级为“AI建议模式”。
@@ -68,7 +68,7 @@ frontend DouyinAiCsWorkbenchPage
   -> 返回头像、昵称、授权状态、绑定信息、unread_count
 ```
 
-边界：`unread_count` 只按已授权企业号 `account_open_id` 聚合；当前 `douyin_webhook_events` 无 `merchant_id` 强字段，不能称为完整多商户未读系统。
+边界：`unread_count` 按已授权企业号 `account_open_id` 和可信 `merchant_id` 聚合；`douyin_webhook_events` 已有 `merchant_id` 字段（迁移 0035），按商户隔离查询。
 
 ### 4.2 会话列表调用链
 
@@ -146,7 +146,7 @@ frontend AI建议或人工输入
 4. 图片上传只获取 `image_id`，不自动发送。
 5. 工具栏里的表情、视频、文件当前是只读占位或未接入。
 6. 正式工作台画像来源是 9000 profile 接口，不依赖 9100 mock profile。
-7. 未读数已升级为真实已读/未读系统：`mark-read` 请求必填 `last_seen_event_id`，服务端验证事件归属后精确推进 `(created_at, event_id)` 单调水位，前端仅在详情成功渲染后提交。
+7. 未读数已读/未读协议候选已实现（待独立测试确认）：`mark-read` 请求必填 `last_seen_event_id`，服务端验证事件归属后精确推进 `(created_at, event_id)` 单调水位，前端仅在详情成功渲染后提交。
 8. 当前在线状态没有真实来源时显示 `unknown` / 状态未知，不伪造在线状态。
 9. 本轮验收没有调用真实抖音发送、真实 LLM、真实 Embedding、微信自动化、真实支付或数据库迁移。
 
@@ -158,7 +158,7 @@ frontend AI建议或人工输入
 4. 视频、文件、表情真实发送能力未接入，媒体工具栏仍需单独契约设计。
 5. AI托管自动发送未开放，当前不建议开放；如要开放必须独立安全评审。
 6. 客户画像字段质量依赖 webhook 与 `douyin_leads.raw_data`，不同上游 payload 的字段覆盖率仍需样本验证。
-7. `douyin_webhook_events` 仍无 `merchant_id`，当前通过已授权企业号 `account_open_id` 限定边界，不能替代强多商户隔离。
+7. `douyin_webhook_events` 已有 `merchant_id` 字段（迁移 0035），商户隔离查询已闭合；未读数按商户和已授权企业号 `account_open_id` 聚合。
 8. 会话搜索当前主要是前端过滤已加载数据，后续大量会话场景需要后端分页、搜索和标签过滤参数。
 
 ## 7. 验证记录
