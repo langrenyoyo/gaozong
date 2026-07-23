@@ -154,32 +154,6 @@ function conversationWatermark(conversation: DouyinConversationItem | null | und
   ].join("|");
 }
 
-type ConversationReadWatermark = {
-  readAt: number;
-  lastMessageAt: string | null;
-  lastMessageWatermark: string;
-  unreadCount: number;
-};
-
-function applyReadWatermarks(
-  accountOpenId: string,
-  items: DouyinConversationItem[],
-  readWatermarks: Record<string, ConversationReadWatermark>,
-) {
-  return items.map((item) => {
-    const key = conversationCacheKey(accountOpenId, item.id);
-    const read = key ? readWatermarks[key] : undefined;
-    if (!read) return item;
-    const itemTime = timeValue(item.last_message_at);
-    const readTime = timeValue(read.lastMessageAt);
-    const sameWatermark = conversationWatermark(item) === read.lastMessageWatermark;
-    if (sameWatermark || itemTime <= readTime) {
-      return { ...item, unread_count: 0 };
-    }
-    return item;
-  });
-}
-
 function accountUnreadFromConversations(accountOpenId: string, items: DouyinConversationItem[]) {
   return items
     .filter((item) => (item.account_open_id || accountOpenId) === accountOpenId)
@@ -865,8 +839,6 @@ export default function DouyinAiCsWorkbenchPage() {
   const conversationHasMoreRef = useRef<Record<string, boolean>>(
     cachedWorkbench?.conversationHasMore || {},
   );
-  const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
-  const markReadWatermarksRef = useRef<Record<string, string>>({});
   // 会话级详情成功凭据：仅当当前详情请求成功并完成 React 状态提交后设置，
   // 包含 account_open_id + conversation_id + request_seq + max_event_id。
   const detailSuccessCredentialRef = useRef<{
@@ -1113,7 +1085,7 @@ export default function DouyinAiCsWorkbenchPage() {
       ) {
         return items;
       }
-      const mergedItems = applyReadWatermarks(accountOpenId, items, readWatermarksRef.current);
+      const mergedItems = items;
       conversationsCacheRef.current[accountOpenId] = mergedItems;
       setHasMoreConversations(Boolean(conversationHasMoreRef.current[accountOpenId]));
       setConversations(mergedItems);
@@ -1401,49 +1373,14 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, []);
 
-  const markConversationReadLocally = useCallback((conversation: DouyinConversationItem) => {
-    const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
-    if (!accountOpenId) return;
-    const cacheKey = conversationCacheKey(accountOpenId, conversation.id);
-    if (!cacheKey) return;
-    const unreadCount = Number(conversation.unread_count || 0);
-    const watermark = conversationWatermark(conversation);
-    const existing = readWatermarksRef.current[cacheKey];
-    if (unreadCount <= 0 && existing?.lastMessageWatermark === watermark) return;
-    readWatermarksRef.current[cacheKey] = {
-      readAt: Date.now(),
-      lastMessageAt: conversation.last_message_at || null,
-      lastMessageWatermark: watermark,
-      unreadCount,
-    };
-    setConversations((current) => {
-      const next = current.map((item) => (item.id === conversation.id ? { ...item, unread_count: 0 } : item));
-      conversationsCacheRef.current[accountOpenId] = next;
-      return next;
-    });
-    if (unreadCount > 0) {
-      setAccounts((current) =>
-        current.map((item) =>
-          item.account_open_id === accountOpenId
-            ? { ...item, unread_count: Math.max(0, Number(item.unread_count || 0) - unreadCount) }
-            : item,
-        ),
-      );
-    }
-  }, [selectedAccount?.account_open_id]);
-
   const persistConversationRead = useCallback(async (
     conversation: DouyinConversationItem,
     lastSeenEventId: number,
+    accountOpenId: string,
   ) => {
-    const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
-    if (!accountOpenId) return;
-    const cacheKey = conversationCacheKey(accountOpenId, conversation.id);
-    if (!cacheKey) return;
-    // 本地清零与服务端提交绑定同一个事件水位。
-    const watermark = `${conversationWatermark(conversation)}|${lastSeenEventId}`;
-    if (markReadWatermarksRef.current[cacheKey] === watermark) return;
-    markReadWatermarksRef.current[cacheKey] = watermark;
+    // 不在 mark-read 成功前用缺少 event_id 的本地水位覆盖服务端未读。
+    // mark-read 成功后立即重新加载服务端会话列表，以服务端水位计算为准。
+    // mark-read 失败时保持未读可见（不本地清零），后续轮询产生新凭据再次提交。
     try {
       await markDouyinConversationRead({
         account_open_id: accountOpenId,
@@ -1452,12 +1389,17 @@ export default function DouyinAiCsWorkbenchPage() {
         conversation_short_id: conversation.conversation_short_id || null,
         customer_open_id: conversation.customer_open_id || conversation.open_id || null,
       });
+      // 成功后刷新服务端权威未读（不依赖本地水位覆盖）。
+      if (selectedAccount) {
+        void loadConversations(selectedAccount, { background: true, skipDefaultSelection: true });
+      }
     } catch (err) {
-      // 提交失败须保留重试能力。
-      delete markReadWatermarksRef.current[cacheKey];
+      // 提交失败：不清零未读，不标记已消费，保留重试能力。
+      // 清除已消费凭据，使后续轮询/详情刷新产生新凭据后可重试。
+      consumedCredentialKeyRef.current = null;
       console.warn("会话已读状态保存失败", err);
     }
-  }, [selectedAccount?.account_open_id]);
+  }, [loadConversations, selectedAccount]);
 
   useEffect(() => {
     void loadAccounts();
@@ -1494,12 +1436,13 @@ export default function DouyinAiCsWorkbenchPage() {
     if (credential.request_seq !== detailRequestSeqRef.current) return;
     const credentialKey = `${credential.account_open_id}::${credential.conversation_id}::${credential.request_seq}`;
     if (consumedCredentialKeyRef.current === credentialKey) return;
+    // 不本地清零：仅在服务端 mark-read 成功后刷新会话列表，以服务端水位计算为准。
+    // mark-read 失败时不清除 consumedCredentialKey（保持未读可见），
+    // 但清除 consumedCredentialKeyRef 使后续轮询/详情刷新可重试。
     consumedCredentialKeyRef.current = credentialKey;
-    markConversationReadLocally(selectedConversation);
-    void persistConversationRead(selectedConversation, credential.max_event_id);
+    void persistConversationRead(selectedConversation, credential.max_event_id, selectedAccount.account_open_id);
   }, [
     loadingMessages,
-    markConversationReadLocally,
     messages.length,
     persistConversationRead,
     selectedAccount?.account_open_id,

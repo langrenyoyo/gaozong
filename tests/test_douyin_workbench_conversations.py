@@ -1467,6 +1467,10 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     # 删除点击会话时的本地清零（onClick 不应调用 markConversationReadLocally）
     click_section = page.split("onClick={() => {", 1)[1].split("}", 1)[0]
     assert "markConversationReadLocally" not in click_section
+    # 删除乐观清零链路（applyReadWatermarks/readWatermarksRef/markConversationReadLocally 不得存在）
+    assert "applyReadWatermarks" not in page
+    assert "readWatermarksRef" not in page
+    assert "markConversationReadLocally" not in page
     # 会话级成功凭据替代全局裸事件 ID
     assert "detailSuccessCredentialRef" in page
     assert "consumedCredentialKeyRef" in page
@@ -1480,6 +1484,10 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     assert "credential.account_open_id !== selectedAccount.account_open_id" in page
     assert "credential.conversation_id !== selectedConversationId" in page
     assert "credential.request_seq !== detailRequestSeqRef.current" in page
+    # mark-read 失败不清零：清除已消费凭据使后续轮询可重试
+    assert "consumedCredentialKeyRef.current = null" in page
+    # mark-read 成功后刷新服务端权威未读
+    assert "loadConversations" in page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     # persistConversationRead 接受 lastSeenEventId 参数
     persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     assert "lastSeenEventId" in persist_section

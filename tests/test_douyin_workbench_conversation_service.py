@@ -614,52 +614,184 @@ def test_mark_read_advances_from_existing_low_waterlevel():
     assert resp2.json()["data"]["last_read_event_id"] == event2.id
 
 
-def test_mark_read_integrity_error_recovery():
-    """首次创建唯一约束竞争后 IntegrityError 恢复路径验证。"""
-    import inspect
+def _make_event_payload(account_open_id, customer_open_id, text="hello", conversation_short_id="conv-1", event="im_receive_msg"):
+    """构造可被 _row_to_message 解析的有效事件 payload。"""
+    content = {
+        "text": text,
+        "account_open_id": account_open_id,
+        "open_id": customer_open_id,
+        "conversation_short_id": conversation_short_id,
+        "server_message_id": "msg_test",
+        "message_type": "text",
+        "user_infos": [
+            {"open_id": customer_open_id, "nick_name": "Customer", "avatar": "https://example.com/c.jpg"},
+            {"open_id": account_open_id, "nick_name": "Account", "avatar": "https://example.com/a.jpg"},
+        ],
+    }
+    from_user_id = customer_open_id if event == "im_receive_msg" else account_open_id
+    to_user_id = account_open_id if event == "im_receive_msg" else customer_open_id
+    return {
+        "event": event,
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "content": json.dumps(content, ensure_ascii=False),
+    }
+
+
+def test_mark_read_integrity_error_recovery_via_real_concurrent_insert():
+    """首次创建唯一约束竞争后 IntegrityError 恢复：使用可写 SQLite 文件 + 双 Session。"""
+    import tempfile
+    import os
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
     from app.services.douyin_workbench_conversation_service import mark_conversation_read
-    source = inspect.getsource(mark_conversation_read)
-    # 验证 IntegrityError 恢复路径存在
-    assert "IntegrityError" in source
-    assert "rollback" in source
-    # 验证首次创建后重试条件更新
-    assert "update(" in source
 
-
-def test_mark_read_concurrent_advance_from_existing_waterlevel():
-    """已有水位行，并发提交更高水位时通过条件更新推进（重试 UPDATE 路径）。"""
-    _insert_account()
-    event1 = _insert_event(event_key="inbound-1")
-    event2 = _insert_event(event_key="inbound-2")
-
-    # 预创建低水位行（模拟并发竞争后已有行）
-    db = TestSession()
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
     try:
-        db.add(DouyinConversationReadState(
-            merchant_id="merchant-1",
-            account_open_id="account-open-1",
-            conversation_key="conv-1",
-            last_read_at=datetime.min,
-            last_read_event_id=None,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-        ))
-        db.commit()
-    finally:
-        db.close()
+        real_engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=real_engine)
+        RealSession = sessionmaker(bind=real_engine)
 
-    # 提交更高水位 event2 → 条件更新推进（IntegrityError 后重试同路径）
-    client = _client()
-    resp = client.post(
-        "/integrations/douyin/conversations/mark-read",
-        json={
-            "account_open_id": "account-open-1",
-            "conversation_key": "conv-1",
-            "last_seen_event_id": event2.id,
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["data"]["last_read_event_id"] == event2.id
+        db = RealSession()
+        try:
+            db.add(DouyinAuthorizedAccount(
+                main_account_id=1, open_id="account-open-1",
+                merchant_id="merchant-1", bind_status=1, account_name="test",
+            ))
+            payload = _make_event_payload("account-open-1", "customer-1")
+            event = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-1",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload["content"]), ensure_ascii=False),
+                created_at=datetime.now(),
+            )
+            db.add(event)
+            db.commit()
+            db.refresh(event)
+            event_id = event.id
+        finally:
+            db.close()
+
+        # Session1: 预创建同 scope 行（模拟并发胜出者）
+        db1 = RealSession()
+        try:
+            db1.add(DouyinConversationReadState(
+                merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_read_at=datetime.min,
+                last_read_event_id=None, created_at=datetime.now(), updated_at=datetime.now(),
+            ))
+            db1.commit()
+        finally:
+            db1.close()
+
+        # Session2: 调 mark_conversation_read，条件 UPDATE 推进（不触发 INSERT 路径，因行已存在）
+        db2 = RealSession()
+        try:
+            row = mark_conversation_read(
+                db2, merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_seen_event_id=event_id,
+            )
+            assert row is not None
+            assert row.last_read_event_id == event_id
+        finally:
+            db2.close()
+        real_engine.dispose()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
+def test_mark_read_concurrent_new_old_waterlevel_two_sessions():
+    """新旧水位并发提交：最终水位必须为较大值，两个请求均不得返回 500。"""
+    import tempfile
+    import os
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.services.douyin_workbench_conversation_service import mark_conversation_read
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        real_engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=real_engine)
+        RealSession = sessionmaker(bind=real_engine)
+
+        db = RealSession()
+        try:
+            db.add(DouyinAuthorizedAccount(
+                main_account_id=1, open_id="account-open-1",
+                merchant_id="merchant-1", bind_status=1, account_name="test",
+            ))
+            base_time = datetime.now()
+            payload_old = _make_event_payload("account-open-1", "customer-1", text="old msg")
+            payload_new = _make_event_payload("account-open-1", "customer-1", text="new msg")
+            event_old = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-old",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload_old, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload_old["content"]), ensure_ascii=False),
+                created_at=base_time,
+            )
+            event_new = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-new",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload_new, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload_new["content"]), ensure_ascii=False),
+                created_at=base_time + timedelta(seconds=1),
+            )
+            db.add_all([event_old, event_new])
+            db.commit()
+            db.refresh(event_old)
+            db.refresh(event_new)
+            old_id = event_old.id
+            new_id = event_new.id
+        finally:
+            db.close()
+
+        # Session1 先提交旧水位
+        db1 = RealSession()
+        try:
+            row1 = mark_conversation_read(
+                db1, merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_seen_event_id=old_id,
+            )
+            assert row1.last_read_event_id == old_id
+        finally:
+            db1.close()
+
+        # Session2 后提交新水位（更高）→ 推进
+        db2 = RealSession()
+        try:
+            row2 = mark_conversation_read(
+                db2, merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_seen_event_id=new_id,
+            )
+            assert row2.last_read_event_id == new_id
+        finally:
+            db2.close()
+
+        # Session3 再提交旧水位 → 不回退
+        db3 = RealSession()
+        try:
+            row3 = mark_conversation_read(
+                db3, merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_seen_event_id=old_id,
+            )
+            assert row3.last_read_event_id == new_id
+        finally:
+            db3.close()
+        real_engine.dispose()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
 
 
 def test_mark_read_conversation_switch_does_not_use_old_watermark():

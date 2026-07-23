@@ -11,7 +11,7 @@
 7. 2.2.5 客户信息面板已接入 9000 画像接口，不再依赖 9100 mock profile 作为正式工作台来源。
 8. 客户画像可展示姓名、头像、在线状态、来源、车型、年份、预算、城市、标签、溯源、线索评分和进度条；字段质量依赖 `douyin_webhook_events` 与 `douyin_leads.raw_data`。
 9. 9000 代理与 9100 回复决策仍保持 `auto_send=false`，当前不开放 AI 自动发送私信。
-10. 下一步建议优先确认在线状态来源，再评审媒体能力与自动发送安全方案；真实已读状态已通过 `last_seen_event_id` 协议实现。
+10. 下一步建议优先确认在线状态来源，再评审媒体能力与自动发送安全方案；已读状态协议候选已实现（待独立测试确认），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位。
 
 ## 2. 提交记录
 
@@ -31,12 +31,12 @@
 | ---- | --- | ---- | ---- | ---- | -- |
 | 2.2.2 | 企业号头像 | 已实现 | `app/services/douyin_workbench_conversation_service.py` `_profile_for_account()`、`aggregate_accounts_from_webhook_events()`；`frontend/src/pages/DouyinAiCsWorkbenchPage.tsx` 企业号卡片渲染 | 通过 | 从授权账号和 webhook profile 兜底聚合。 |
 | 2.2.2 | 企业号昵称 | 已实现 | `app/routers/douyin_accounts.py` 返回 `nickname/name`；`app/services/douyin_workbench_conversation_service.py` `account_name/name/nickname` | 通过 | 无昵称时使用账号后缀兜底。 |
-| 2.2.2 | 未读消息数 | 已实现 | `app/services/douyin_workbench_conversation_service.py:get_account_unread_counts()`；`app/routers/douyin_accounts.py` 返回 `unread_count`；`tests/test_douyin_accounts_router.py` 未读测试 | 通过 | `unread_count` 使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位计算，统计入站 `im_receive_msg` 中水位之后的消息。 |
+| 2.2.2 | 未读消息数 | 候选已实现（待独立测试确认） | `app/services/douyin_workbench_conversation_service.py:get_account_unread_counts()`；`app/routers/douyin_accounts.py` 返回 `unread_count`；`tests/test_douyin_accounts_router.py` 未读测试 | 待独立测试确认 | `unread_count` 使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位计算，统计入站 `im_receive_msg` 中水位之后的消息。 |
 | 2.2.3 | 客户头像、姓名 | 已实现 | `app/services/douyin_workbench_conversation_service.py:_profile_for_customer()`；`frontend/src/pages/DouyinAiCsWorkbenchPage.tsx` 会话 item 渲染 | 通过 | 缺失时使用 `open_id` 兜底。 |
 | 2.2.3 | 最后消息内容、消息时间 | 已实现 | `app/services/douyin_workbench_conversation_service.py:list_account_conversations()`；`frontend/src/pages/DouyinAiCsWorkbenchPage.tsx` 会话列表 | 通过 | 来自 webhook 会话聚合。 |
 | 2.2.3 | 在线状态 | 部分实现 | `app/services/douyin_workbench_conversation_service.py:get_conversation_profile()` 返回 `online_status: "unknown"`；`frontend/src/pages/DouyinAiCsWorkbenchPage.tsx:onlineStatusText()` | 降级通过 | 不伪造在线/离线，真实来源待确认。 |
 | 2.2.3 | 消息标签 | 已实现 | `build_conversation_tags()`、`_has_retained_contact()`、`_is_high_intent()`、`_is_manual_required()`、`_needs_follow_up()`；`tests/test_douyin_workbench_conversations.py` 标签用例 | 通过 | 后端稳定英文枚举，前端中文映射。 |
-| 2.2.3 | 未读消息数 | 已实现 | `list_account_conversations()` 中 `unread_count` 按 `(created_at, event_id)` 水位统计 `im_receive_msg`；前端会话 item 展示 | 通过 | 与企业号未读一致，使用 `last_seen_event_id` 水位。 |
+| 2.2.3 | 未读消息数 | 候选已实现（待独立测试确认） | `list_account_conversations()` 中 `unread_count` 按 `(created_at, event_id)` 水位统计 `im_receive_msg`；前端会话 item 展示 | 待独立测试确认 | 与企业号未读一致，使用 `last_seen_event_id` 水位。 |
 | 2.2.3 | 点击切换会话 | 已实现 | `frontend/src/pages/DouyinAiCsWorkbenchPage.tsx` `selectedConversation` 相关状态与加载逻辑 | 通过 | 切换后加载消息、建议上下文和画像。 |
 | 2.2.3 | 搜索客户 | 已实现 | `frontend/src/pages/DouyinAiCsWorkbenchPage.tsx` 搜索过滤逻辑 | 通过 | 当前主要是前端过滤已加载会话。 |
 | 2.2.3 | 按标签筛选 | 已实现 | `ConversationFilterKey`、`matchesConversationFilter()`、标签按钮 | 通过 | 基于 `conversation.tags`，不是中文文本猜测。 |
@@ -152,7 +152,7 @@ frontend AI建议或人工输入
 
 ## 6. 剩余缺口
 
-1. 企业号与会话 `unread_count` 已通过 `last_seen_event_id` + `(created_at, event_id)` 单调水位实现真实已读/未读系统（DY-CS-CONVERSATION-READ-PROTOCOL-1 候选已实现，待独立测试确认）。
+1. 企业号与会话 `unread_count` 已读/未读协议候选已实现（DY-CS-CONVERSATION-READ-PROTOCOL-1 待独立测试确认），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位。
 2. 客户在线状态仍缺少真实抖音来源，当前只能返回 `unknown` 并在前端展示状态未知。
 3. Enter 直接发送未实现，且当前不建议开放；如果后续实现，也必须只打开确认弹窗。
 4. 视频、文件、表情真实发送能力未接入，媒体工具栏仍需单独契约设计。
@@ -180,7 +180,7 @@ frontend AI建议或人工输入
 | 任务编号 | 任务名称 | 目标 | 修改范围 | 风险 | 验收方式 |
 | ---- | ---- | -- | ---- | -- | ---- |
 | `P1-DYCS-ONLINE-1` | 在线状态来源确认 | 确认抖音是否提供在线/离线事件或接口，不直接伪造状态 | 9000 聚合服务、前端状态展示、接口契约文档 | 中 | 样本 payload 验证；无来源时继续展示 unknown。 |
-| `P1-DYCS-READSTATE-1` | 真实已读/未读状态设计 | 已通过 `last_seen_event_id` + `(created_at, event_id)` 单调水位实现（DY-CS-CONVERSATION-READ-PROTOCOL-1 候选已实现，待独立测试确认） | `mark_conversation_read` 服务端、前端渲染后提交、测试 | 高 | 候选已实现，待推送与生产验证。 |
+| `P1-DYCS-READSTATE-1` | 真实已读/未读状态设计 | 候选已实现（待独立测试确认），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位（DY-CS-CONVERSATION-READ-PROTOCOL-1） | `mark_conversation_read` 服务端、前端渲染后提交、测试 | 高 | 候选已实现，待独立测试、推送与生产验证。 |
 | `P2-DYCS-MEDIA-1` | 媒体工具栏契约设计 | 明确表情、图片、视频、文件的上传、预览、确认发送边界 | 前端、9000 代理、9100 或抖音发送契约文档 | 中 | mock 接口测试；确认不自动发送。 |
 | `P3-DYCS-AUTOSEND-REVIEW` | AI自动发送安全评审 | 独立评审是否允许自动发送、触发条件、审计和回滚 | 安全方案、权限、审计、风控、人工兜底 | 高 | 安全评审通过前不进入开发。 |
 
