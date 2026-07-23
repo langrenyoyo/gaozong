@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import Base, get_db
-from app.models import DouyinAuthorizedAccount, DouyinWebhookEvent
+from app.models import DouyinAuthorizedAccount, DouyinConversationReadState, DouyinWebhookEvent
 
 
 engine = create_engine(
@@ -129,7 +129,7 @@ def test_no_read_state_keeps_legacy_unread_count():
 
 def test_mark_read_clears_current_conversation_and_persists_after_refresh():
     _insert_account()
-    _insert_event(event_key="inbound-1")
+    event = _insert_event(event_key="inbound-1")
     client = _client()
 
     response = client.post(
@@ -137,6 +137,7 @@ def test_mark_read_clears_current_conversation_and_persists_after_refresh():
         json={
             "account_open_id": "account-open-1",
             "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
             "conversation_short_id": "conv-1",
             "customer_open_id": "customer-1",
         },
@@ -150,13 +151,14 @@ def test_mark_read_clears_current_conversation_and_persists_after_refresh():
 def test_new_inbound_after_mark_read_restores_unread_count_but_outbound_does_not():
     base = datetime.now() - timedelta(minutes=5)
     _insert_account()
-    _insert_event(event_key="inbound-1", created_at=base)
+    event = _insert_event(event_key="inbound-1", created_at=base)
     client = _client()
     assert client.post(
         "/integrations/douyin/conversations/mark-read",
         json={
             "account_open_id": "account-open-1",
             "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
             "conversation_short_id": "conv-1",
             "customer_open_id": "customer-1",
         },
@@ -172,7 +174,7 @@ def test_new_inbound_after_mark_read_restores_unread_count_but_outbound_does_not
 def test_mark_read_is_isolated_by_merchant_and_account_open_id():
     _insert_account(open_id="account-open-1", merchant_id="merchant-1")
     _insert_account(open_id="account-open-2", merchant_id="merchant-1")
-    _insert_event(account_open_id="account-open-1", event_key="account-1-inbound")
+    event = _insert_event(account_open_id="account-open-1", event_key="account-1-inbound")
     _insert_event(account_open_id="account-open-2", event_key="account-2-inbound")
     client = _client(_context("merchant-1"))
 
@@ -181,6 +183,7 @@ def test_mark_read_is_isolated_by_merchant_and_account_open_id():
         json={
             "account_open_id": "account-open-1",
             "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
             "conversation_short_id": "conv-1",
             "customer_open_id": "customer-1",
         },
@@ -194,6 +197,7 @@ def test_mark_read_is_isolated_by_merchant_and_account_open_id():
         json={
             "account_open_id": "account-open-1",
             "conversation_key": "conv-1",
+            "last_seen_event_id": event.id,
             "conversation_short_id": "conv-1",
             "customer_open_id": "customer-1",
         },
@@ -203,7 +207,7 @@ def test_mark_read_is_isolated_by_merchant_and_account_open_id():
 
 def test_mark_read_supports_fallback_conversation_key_without_short_id():
     _insert_account()
-    _insert_event(conversation_short_id=None, event_key="fallback-inbound")
+    event = _insert_event(conversation_short_id=None, event_key="fallback-inbound")
     fallback_key = "account-open-1:customer-1"
     client = _client()
 
@@ -212,6 +216,7 @@ def test_mark_read_supports_fallback_conversation_key_without_short_id():
         json={
             "account_open_id": "account-open-1",
             "conversation_key": fallback_key,
+            "last_seen_event_id": event.id,
             "customer_open_id": "customer-1",
         },
     )
@@ -244,3 +249,281 @@ def test_douyin_workbench_user_conversation_entries_require_douyin_ai_cs_permiss
     ]
 
     assert [response.status_code for response in responses] == [403, 403, 403, 403, 403, 403]
+
+
+# ---- mark-read last_seen_event_id 红灯测试 ----
+
+
+def test_mark_read_missing_last_seen_event_id_returns_422():
+    """不传 last_seen_event_id 时，Pydantic 必填校验返回 422。"""
+    _insert_account()
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_mark_read_invalid_last_seen_event_id_returns_422():
+    """last_seen_event_id=0 不满足 ge=1 约束，返回 422。"""
+    _insert_account()
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": 0,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_mark_read_cross_merchant_event_returns_404():
+    """事件属于 merchant-2，用 merchant-1 提交 → 404，且不写入已读状态。"""
+    _insert_account(open_id="account-open-1", merchant_id="merchant-1")
+    # 在 merchant-1 下创建一条会话消息，使会话存在
+    _insert_event(account_open_id="account-open-1", event_key="conv-1-msg")
+    # 跨商户事件：属于 merchant-2，但账号和会话相同
+    cross_event = _insert_event(
+        account_open_id="account-open-1",
+        event_key="cross-merchant-event",
+        merchant_id="merchant-2",
+    )
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": cross_event.id,
+        },
+    )
+
+    assert response.status_code == 404
+    # 验证无已读状态写入
+    db = TestSession()
+    try:
+        assert db.query(DouyinConversationReadState).count() == 0
+    finally:
+        db.close()
+
+
+def test_mark_read_cross_account_event_returns_404():
+    """事件属于其他账号，提交时返回 404。"""
+    _insert_account(open_id="account-open-1", merchant_id="merchant-1")
+    _insert_account(open_id="account-open-2", merchant_id="merchant-1")
+    # account-open-1 的会话消息，使会话存在
+    _insert_event(account_open_id="account-open-1", event_key="conv-1-msg")
+    # 跨账号事件：属于 account-open-2
+    cross_event = _insert_event(
+        account_open_id="account-open-2",
+        customer_open_id="customer-2",
+        conversation_short_id="conv-2",
+        event_key="cross-account-event",
+    )
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": cross_event.id,
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_mark_read_cross_conversation_event_returns_404():
+    """事件属于其他会话，提交时返回 404。"""
+    _insert_account(open_id="account-open-1", merchant_id="merchant-1")
+    # conv-1 的消息，使会话存在
+    _insert_event(
+        account_open_id="account-open-1",
+        conversation_short_id="conv-1",
+        event_key="conv-1-msg",
+    )
+    # 跨会话事件：属于 conv-2，同一账号
+    cross_event = _insert_event(
+        account_open_id="account-open-1",
+        customer_open_id="customer-2",
+        conversation_short_id="conv-2",
+        event_key="cross-conversation-event",
+    )
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": cross_event.id,
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_mark_read_advances_to_exact_event_not_server_latest():
+    """标记到第 2 条事件的 event_id，第 3 条仍为未读。"""
+    base = datetime.now() - timedelta(minutes=5)
+    _insert_account()
+    _insert_event(event_key="inbound-1", created_at=base)
+    event2 = _insert_event(event_key="inbound-2", created_at=base + timedelta(minutes=1))
+    _insert_event(event_key="inbound-3", created_at=base + timedelta(minutes=2))
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event2.id,
+            "conversation_short_id": "conv-1",
+            "customer_open_id": "customer-1",
+        },
+    )
+
+    assert response.status_code == 200
+    # 第 3 条事件在已读水位之后，仍为未读
+    assert _conversation_unread() == 1
+
+
+def test_mark_read_old_request_does_not_regress_watermark():
+    """先标记到 event3，再提交 event2 → 水位不回退，返回 200。"""
+    base = datetime.now() - timedelta(minutes=5)
+    _insert_account()
+    _insert_event(event_key="inbound-1", created_at=base)
+    event2 = _insert_event(event_key="inbound-2", created_at=base + timedelta(minutes=1))
+    event3 = _insert_event(event_key="inbound-3", created_at=base + timedelta(minutes=2))
+    client = _client()
+
+    # 先标记到 event3（最新水位）
+    first = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event3.id,
+            "conversation_short_id": "conv-1",
+            "customer_open_id": "customer-1",
+        },
+    )
+    assert first.status_code == 200
+
+    # 再提交 event2（旧水位），水位不回退，返回 200
+    second = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event2.id,
+            "conversation_short_id": "conv-1",
+            "customer_open_id": "customer-1",
+        },
+    )
+    assert second.status_code == 200
+    # 全部已读，水位仍停留在 event3
+    assert _conversation_unread() == 0
+
+
+def test_mark_read_same_timestamp_larger_event_id_is_after():
+    """同时间戳下，event_id 较大的消息算"已读水位之后"（未读）。"""
+    ts = datetime.now()
+    _insert_account()
+    event1 = _insert_event(event_key="inbound-1", created_at=ts)
+    _insert_event(event_key="inbound-2", created_at=ts)
+    client = _client()
+
+    response = client.post(
+        "/integrations/douyin/conversations/mark-read",
+        json={
+            "account_open_id": "account-open-1",
+            "conversation_key": "conv-1",
+            "last_seen_event_id": event1.id,
+            "conversation_short_id": "conv-1",
+            "customer_open_id": "customer-1",
+        },
+    )
+
+    assert response.status_code == 200
+    # event2 同时间戳但 event_id 更大，视为已读水位之后，仍为未读
+    assert _conversation_unread() == 1
+
+
+def test_mark_read_duplicate_request_is_idempotent():
+    """同一 event_id 重复提交两次，均返回 200。"""
+    _insert_account()
+    event = _insert_event(event_key="inbound-1")
+    client = _client()
+    payload = {
+        "account_open_id": "account-open-1",
+        "conversation_key": "conv-1",
+        "last_seen_event_id": event.id,
+        "conversation_short_id": "conv-1",
+        "customer_open_id": "customer-1",
+    }
+
+    first = client.post("/integrations/douyin/conversations/mark-read", json=payload)
+    second = client.post("/integrations/douyin/conversations/mark-read", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert _conversation_unread() == 0
+
+
+def test_account_level_and_conversation_level_unread_are_consistent():
+    """账号级未读数等于会话级未读数之和。"""
+    _insert_account(open_id="account-open-1", merchant_id="merchant-1")
+    # conv-1：2 条入站消息
+    _insert_event(
+        account_open_id="account-open-1",
+        customer_open_id="customer-1",
+        conversation_short_id="conv-1",
+        event_key="conv-1-msg-1",
+    )
+    _insert_event(
+        account_open_id="account-open-1",
+        customer_open_id="customer-1",
+        conversation_short_id="conv-1",
+        event_key="conv-1-msg-2",
+    )
+    # conv-2：1 条入站消息
+    _insert_event(
+        account_open_id="account-open-1",
+        customer_open_id="customer-2",
+        conversation_short_id="conv-2",
+        event_key="conv-2-msg-1",
+    )
+    client = _client()
+
+    # 账号级未读
+    accounts_resp = client.get("/integrations/douyin/accounts")
+    assert accounts_resp.status_code == 200
+    account_item = next(
+        item for item in accounts_resp.json()["data"]["items"]
+        if item["account_open_id"] == "account-open-1"
+    )
+    account_unread = account_item["unread_count"]
+
+    # 会话级未读之和
+    conv_resp = client.get(
+        "/integrations/douyin/accounts/account-open-1/conversations",
+        params={"account_open_id": "account-open-1"},
+    )
+    assert conv_resp.status_code == 200
+    conversation_unread_sum = sum(item["unread_count"] for item in conv_resp.json()["items"])
+
+    assert account_unread == conversation_unread_sum
+    assert account_unread == 3

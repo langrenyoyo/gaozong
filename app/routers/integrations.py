@@ -42,6 +42,7 @@ legacy_webhook_router = APIRouter(prefix="/webhook", tags=["抖音Webhook兼容�
 class DouyinConversationMarkReadRequest(BaseModel):
     account_open_id: str = Field(..., min_length=1)
     conversation_key: str = Field(..., min_length=1)
+    last_seen_event_id: int = Field(..., ge=1)
     conversation_short_id: str | None = None
     customer_open_id: str | None = None
 
@@ -547,6 +548,7 @@ def post_douyin_conversation_mark_read(
             merchant_id=merchant_id,
             account_open_id=request.account_open_id,
             conversation_key=request.conversation_key,
+            last_seen_event_id=request.last_seen_event_id,
             conversation_short_id=request.conversation_short_id,
             customer_open_id=request.customer_open_id,
         )

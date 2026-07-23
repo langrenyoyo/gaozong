@@ -216,6 +216,7 @@ export interface DouyinConversationDetailResponse {
 export interface DouyinConversationMarkReadRequest {
   account_open_id: string;
   conversation_key: string;
+  last_seen_event_id: number;
   conversation_short_id?: string | null;
   customer_open_id?: string | null;
 }

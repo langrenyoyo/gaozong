@@ -282,7 +282,7 @@ def test_list_accounts_unread_count_before_read_state_uses_current_merchant_auth
 
 def test_list_accounts_unread_count_after_read_state_sums_only_new_inbound_messages():
     _insert_account(open_id="account-open-1")
-    _insert_webhook_event(
+    event = _insert_webhook_event(
         event="im_receive_msg",
         account_open_id="account-open-1",
         customer_open_id="customer-1",
@@ -295,6 +295,7 @@ def test_list_accounts_unread_count_after_read_state_sums_only_new_inbound_messa
         json={
             "account_open_id": "account-open-1",
             "conversation_key": "account-open-1:customer-1",
+            "last_seen_event_id": event.id,
             "customer_open_id": "customer-1",
         },
     )

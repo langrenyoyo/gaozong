@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, or_, select, update, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import normalize_message_text, parse_content
@@ -125,6 +126,30 @@ def require_owned_account(
     if any_account is None or any_account.bind_status != 1:
         raise AccountAccessError("account_not_found")
     raise AccountMerchantDeniedError("account_merchant_denied")
+
+
+def _event_belongs_to_conversation(
+    event: DouyinWebhookEvent,
+    conversation_key: str,
+    account_open_id: str,
+    derived_short_id: str | None,
+) -> bool:
+    """检查事件是否属于指定会话（conversation_short_id 或 from/to 对匹配）。"""
+    event_short_id = _optional_str(event.conversation_short_id)
+    if event_short_id:
+        if event_short_id == conversation_key:
+            return True
+        if derived_short_id and event_short_id == derived_short_id:
+            return True
+        return False
+    # 无 conversation_short_id：按 from/to 对匹配会话键。
+    pair_account, pair_customer = _conversation_pair_from_key(conversation_key, account_open_id)
+    if pair_account and pair_customer:
+        return (
+            (event.from_user_id == pair_customer and event.to_user_id == pair_account)
+            or (event.from_user_id == pair_account and event.to_user_id == pair_customer)
+        )
+    return False
 
 
 @dataclass(frozen=True)
@@ -269,14 +294,18 @@ def mark_conversation_read(
     merchant_id: str,
     account_open_id: str,
     conversation_key: str,
+    last_seen_event_id: int,
     conversation_short_id: str | None = None,
     customer_open_id: str | None = None,
 ) -> DouyinConversationReadState:
     """持久化抖音客服工作台会话已读水位。
 
+    前端仅在详情请求成功并完成渲染后提交 last_seen_event_id；服务端验证该事件属于
+    可信商户、有效绑定账号和指定会话范围，再据此精确推进水位，不得取服务器最新事件
+    替代。已读水位使用 (created_at, event_id) 单调前进；重复或旧请求返回当前水位。
+    并发保护落在数据库条件更新和唯一约束竞争处理上，禁止仅做应用层先读后比。
     不得为不存在或不属于该账号/商户的会话创建已读状态；conversation_short_id /
-    customer_open_id 必须从已验证消息派生，或与派生结果严格一致（派生为空而请求值
-    非空同样拒绝），不得直接信任请求体。字段不一致统一 404 且不创建/修改状态。
+    customer_open_id 必须与派生结果严格一致（派生为空而请求值非空同样拒绝）。
     """
     require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     messages = _sort_messages(
@@ -304,39 +333,121 @@ def mark_conversation_read(
             raise ConversationNotFoundError("customer_open_id_mismatch")
     resolved_conversation_short_id = derived_short_id
     resolved_customer_open_id = derived_customer_open_id
-    last_read_at = latest.created_at if latest.created_at else now
-    last_read_event_id = latest.event_id
 
-    row = (
-        db.query(DouyinConversationReadState)
+    # 验证 last_seen_event_id 属于可信商户、有效绑定账号和指定会话范围。
+    seen_event = (
+        db.query(DouyinWebhookEvent)
         .filter(
-            DouyinConversationReadState.merchant_id == merchant_id,
-            DouyinConversationReadState.account_open_id == account_open_id,
-            DouyinConversationReadState.conversation_key == conversation_key,
+            DouyinWebhookEvent.id == last_seen_event_id,
+            DouyinWebhookEvent.merchant_id == merchant_id,
+            DouyinWebhookEvent.is_duplicate.is_(False),
         )
         .first()
     )
-    if row is None:
-        row = DouyinConversationReadState(
-            merchant_id=merchant_id,
-            account_open_id=account_open_id,
-            conversation_key=conversation_key,
-            created_at=now,
+    if seen_event is None:
+        raise ConversationNotFoundError("event_not_found")
+    # 事件必须属于当前账号（from 或 to 匹配 account_open_id）。
+    if seen_event.to_user_id != account_open_id and seen_event.from_user_id != account_open_id:
+        raise ConversationNotFoundError("event_not_found")
+    # 事件必须属于当前会话（conversation_short_id 或 from/to 对匹配）。
+    if not _event_belongs_to_conversation(seen_event, conversation_key, account_open_id, derived_short_id):
+        raise ConversationNotFoundError("event_not_found")
+
+    event_created_at = seen_event.created_at or now
+
+    # 数据库条件更新：仅当新水位 (created_at, event_id) 严格大于现有水位时推进。
+    advance_condition = or_(
+        DouyinConversationReadState.last_read_at < event_created_at,
+        and_(
+            DouyinConversationReadState.last_read_at == event_created_at,
+            or_(
+                DouyinConversationReadState.last_read_event_id.is_(None),
+                DouyinConversationReadState.last_read_event_id < last_seen_event_id,
+            ),
+        ),
+    )
+    scope_filter = (
+        DouyinConversationReadState.merchant_id == merchant_id,
+        DouyinConversationReadState.account_open_id == account_open_id,
+        DouyinConversationReadState.conversation_key == conversation_key,
+    )
+    result = db.execute(
+        update(DouyinConversationReadState)
+        .where(*scope_filter, advance_condition)
+        .values(
+            last_read_at=event_created_at,
+            last_read_event_id=last_seen_event_id,
+            conversation_short_id=resolved_conversation_short_id,
+            customer_open_id=resolved_customer_open_id,
+            updated_at=now,
         )
-        db.add(row)
-    row.conversation_short_id = resolved_conversation_short_id
-    row.customer_open_id = resolved_customer_open_id
-    row.last_read_at = last_read_at
-    row.last_read_event_id = last_read_event_id
-    row.updated_at = now
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
-    db.refresh(row)
+    updated_count = result.rowcount
+
+    if updated_count == 0:
+        # 0 行更新：行不存在（首次创建）或已有水位 >= 新水位（无需前进）。
+        existing = (
+            db.query(DouyinConversationReadState)
+            .filter(*scope_filter)
+            .first()
+        )
+        if existing is None:
+            # 首次创建：处理唯一约束竞争，不得产生 500。
+            try:
+                row = DouyinConversationReadState(
+                    merchant_id=merchant_id,
+                    account_open_id=account_open_id,
+                    conversation_key=conversation_key,
+                    conversation_short_id=resolved_conversation_short_id,
+                    customer_open_id=resolved_customer_open_id,
+                    last_read_at=event_created_at,
+                    last_read_event_id=last_seen_event_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(row)
+                db.commit()
+                db.refresh(row)
+            except IntegrityError:
+                db.rollback()
+                # 并发创建胜出者已写入，重试条件更新推进水位。
+                db.execute(
+                    update(DouyinConversationReadState)
+                    .where(*scope_filter, advance_condition)
+                    .values(
+                        last_read_at=event_created_at,
+                        last_read_event_id=last_seen_event_id,
+                        conversation_short_id=resolved_conversation_short_id,
+                        customer_open_id=resolved_customer_open_id,
+                        updated_at=now,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                db.commit()
+                row = (
+                    db.query(DouyinConversationReadState)
+                    .filter(*scope_filter)
+                    .first()
+                )
+            return row
+        # 已有水位 >= 新水位，无需前进，返回当前水位。
+        db.refresh(existing)
+        return existing
+
+    # 条件更新成功，查询并返回更新后的行。
+    row = (
+        db.query(DouyinConversationReadState)
+        .filter(*scope_filter)
+        .first()
+    )
     logger.info(
         "douyin_conversation_mark_read merchant_id=%s account_open_id=%s conversation_key=%s last_read_event_id=%s",
         merchant_id,
         _mask_open_id(account_open_id),
         _mask_open_id(conversation_key),
-        last_read_event_id,
+        last_seen_event_id,
     )
     return row
 
@@ -764,15 +875,33 @@ def _unread_count_for_messages(
     messages: list[WorkbenchMessage],
     read_state: DouyinConversationReadState | None,
 ) -> int:
+    """统计未读入站消息；按 (created_at, event_id) 单调水位判断。"""
     if read_state is None:
         return sum(1 for item in messages if item.event == "im_receive_msg")
+    read_at = read_state.last_read_at
+    read_event_id = read_state.last_read_event_id
     return sum(
         1
         for item in messages
         if item.event == "im_receive_msg"
         and item.created_at is not None
-        and item.created_at > read_state.last_read_at
+        and _is_after_read_watermark(item.created_at, item.event_id, read_at, read_event_id)
     )
+
+
+def _is_after_read_watermark(
+    created_at: datetime,
+    event_id: int,
+    read_at: datetime,
+    read_event_id: int | None,
+) -> bool:
+    """判断消息是否在已读水位之后（(created_at, event_id) 元组比较）。"""
+    if created_at > read_at:
+        return True
+    if created_at == read_at:
+        # 同时间戳：event_id 必须严格大于已读水位；read_event_id 为空视为全部未读。
+        return read_event_id is None or event_id > read_event_id
+    return False
 
 
 def _load_messages(

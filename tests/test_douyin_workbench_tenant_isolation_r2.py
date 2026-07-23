@@ -107,7 +107,7 @@ def _insert_event(
         content = {"text": text, "account_open_id": account_open_id, "open_id": customer_open_id}
         if conversation_short_id is not None:
             content["conversation_short_id"] = conversation_short_id
-        db.add(DouyinWebhookEvent(
+        row = DouyinWebhookEvent(
             event=event,
             event_key=event_key,
             from_user_id=customer_open_id if event == "im_receive_msg" else account_open_id,
@@ -116,8 +116,11 @@ def _insert_event(
             raw_body=json.dumps({"content": content}, ensure_ascii=False),
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             is_duplicate=False,
-        ))
+        )
+        db.add(row)
         db.commit()
+        db.refresh(row)
+        return row
     finally:
         db.close()
 
@@ -556,6 +559,7 @@ def test_unbound_account_mark_read_rejected():
         json={
             "account_open_id": "acc_unbound",
             "conversation_key": "acc_unbound:cust",
+            "last_seen_event_id": 1,
             "customer_open_id": "cust",
         },
     )
@@ -590,7 +594,7 @@ def test_nonexistent_conversation_detail_messages_404():
 def test_mark_read_tampered_customer_open_id_rejected():
     """篡改 mark-read customer_open_id → 404，无状态写入/回显。"""
     _insert_account("acc_tamper")
-    _insert_event(account_open_id="acc_tamper", customer_open_id="cust_real_tamper", event_key="tamper_event", merchant_id="merchant-1")
+    event = _insert_event(account_open_id="acc_tamper", customer_open_id="cust_real_tamper", event_key="tamper_event", merchant_id="merchant-1")
     client = _client(_context("merchant-1"))
 
     resp = client.post(
@@ -598,6 +602,7 @@ def test_mark_read_tampered_customer_open_id_rejected():
         json={
             "account_open_id": "acc_tamper",
             "conversation_key": "acc_tamper:cust_real_tamper",
+            "last_seen_event_id": event.id,
             "customer_open_id": "tampered_id",
         },
     )
@@ -614,9 +619,10 @@ def test_mark_read_forged_short_id_when_real_has_none_rejected():
     """真实会话无 short_id，请求伪造 short_id → 404，无状态写入。"""
     _insert_account("acc_forged")
     db = TestSession()
+    forged_event_id = 0
     try:
         content = {"text": "hello no short", "account_open_id": "acc_forged", "open_id": "cust_forged"}
-        db.add(DouyinWebhookEvent(
+        event_row = DouyinWebhookEvent(
             event="im_receive_msg",
             event_key="forged_event",
             from_user_id="cust_forged",
@@ -625,8 +631,11 @@ def test_mark_read_forged_short_id_when_real_has_none_rejected():
             raw_body=json.dumps({"content": content}, ensure_ascii=False),
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             is_duplicate=False,
-        ))
+        )
+        db.add(event_row)
         db.commit()
+        db.refresh(event_row)
+        forged_event_id = event_row.id
     finally:
         db.close()
     client = _client(_context("merchant-1"))
@@ -636,6 +645,7 @@ def test_mark_read_forged_short_id_when_real_has_none_rejected():
         json={
             "account_open_id": "acc_forged",
             "conversation_key": "acc_forged:cust_forged",
+            "last_seen_event_id": forged_event_id,
             "conversation_short_id": "forged_short_value",
         },
     )

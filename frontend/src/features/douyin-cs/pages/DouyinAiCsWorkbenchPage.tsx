@@ -807,6 +807,7 @@ export default function DouyinAiCsWorkbenchPage() {
       : false,
   );
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [detailSuccessSeq, setDetailSuccessSeq] = useState(0);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -866,6 +867,7 @@ export default function DouyinAiCsWorkbenchPage() {
   );
   const readWatermarksRef = useRef<Record<string, ConversationReadWatermark>>({});
   const markReadWatermarksRef = useRef<Record<string, string>>({});
+  const lastDetailMaxEventIdRef = useRef<number | null>(null);
   const selectedAccountOpenIdRef = useRef<string | null>(null);
   const selectedConversationIdRef = useRef<string | number | null>(null);
   const accountModeCacheRef = useRef<Record<string, ChatAssistMode>>({});
@@ -1179,6 +1181,8 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!options?.background) {
       detailAbortRef.current?.abort();
       detailInFlightRef.current = {};
+      // 清除上次详情成功的事件水位，缓存消息不得作为本次详情成功的证据。
+      lastDetailMaxEventIdRef.current = null;
     }
     const controller = new AbortController();
     detailAbortRef.current = controller;
@@ -1206,6 +1210,17 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       setMessages(detail.messages.items);
       setProfile(detail.profile);
+      // 从本次详情响应消息取最大有效 raw_event_id，作为已读提交水位；
+      // 缓存消息不得作为本次详情成功的证据，只在成功响应后设置。
+      lastDetailMaxEventIdRef.current = detail.messages.items.reduce(
+        (max, item) => {
+          const id = Number(item.raw_event_id);
+          return Number.isFinite(id) && id > 0 && id > max ? id : max;
+        },
+        0,
+      ) || null;
+      // 递增序号触发 mark-read useEffect，确保即使缓存消息长度不变也能在成功后提交。
+      setDetailSuccessSeq((seq) => seq + 1);
     } catch (err) {
       if (controller.signal.aborted || !isCurrentRequest()) return;
       if (!cachedMessages) setMessages([]);
@@ -1403,22 +1418,28 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, [selectedAccount?.account_open_id]);
 
-  const persistConversationRead = useCallback(async (conversation: DouyinConversationItem) => {
+  const persistConversationRead = useCallback(async (
+    conversation: DouyinConversationItem,
+    lastSeenEventId: number,
+  ) => {
     const accountOpenId = selectedAccount?.account_open_id || conversation.account_open_id;
     if (!accountOpenId) return;
     const cacheKey = conversationCacheKey(accountOpenId, conversation.id);
     if (!cacheKey) return;
-    const watermark = conversationWatermark(conversation);
+    // 本地清零与服务端提交绑定同一个事件水位。
+    const watermark = `${conversationWatermark(conversation)}|${lastSeenEventId}`;
     if (markReadWatermarksRef.current[cacheKey] === watermark) return;
     markReadWatermarksRef.current[cacheKey] = watermark;
     try {
       await markDouyinConversationRead({
         account_open_id: accountOpenId,
         conversation_key: String(conversation.conversation_key || conversation.id),
+        last_seen_event_id: lastSeenEventId,
         conversation_short_id: conversation.conversation_short_id || null,
         customer_open_id: conversation.customer_open_id || conversation.open_id || null,
       });
     } catch (err) {
+      // 提交失败须保留重试能力。
       delete markReadWatermarksRef.current[cacheKey];
       console.warn("会话已读状态保存失败", err);
     }
@@ -1449,8 +1470,12 @@ export default function DouyinAiCsWorkbenchPage() {
     if (!selectedConversation || !selectedAccount?.account_open_id || loadingMessages || messages.length === 0) {
       return;
     }
+    // 当前详情请求成功并完成 React 状态提交后，从本次响应消息取最大有效 raw_event_id。
+    // raw_event_id 缺失或非法时不得猜测、不得提交已读；缓存消息不得作为本次详情成功的证据。
+    const lastSeenEventId = lastDetailMaxEventIdRef.current;
+    if (!lastSeenEventId || lastSeenEventId <= 0) return;
     markConversationReadLocally(selectedConversation);
-    void persistConversationRead(selectedConversation);
+    void persistConversationRead(selectedConversation, lastSeenEventId);
   }, [
     loadingMessages,
     markConversationReadLocally,
@@ -1458,6 +1483,7 @@ export default function DouyinAiCsWorkbenchPage() {
     persistConversationRead,
     selectedAccount?.account_open_id,
     selectedConversation,
+    detailSuccessSeq,
   ]);
 
   useEffect(() => {
@@ -1498,7 +1524,6 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     if (selectedConversationId) {
       const target = conversations.find((item) => item.id === selectedConversationId);
-      if (target) markConversationReadLocally(target);
       void loadConversationDetail(selectedConversationId);
       const nextAutoReplyKey = autoReplyRunCacheKey(
         selectedAccount?.account_open_id,
@@ -1534,7 +1559,7 @@ export default function DouyinAiCsWorkbenchPage() {
       setProfileError(null);
       setLoadingProfile(false);
     }
-  }, [conversations, loadConversationAutopilotState, loadConversationDetail, loadLatestAutoReplyRun, markConversationReadLocally, selectedAccount, selectedConversationId]);
+  }, [conversations, loadConversationAutopilotState, loadConversationDetail, loadLatestAutoReplyRun, selectedAccount, selectedConversationId]);
 
   useEffect(() => {
     if (conversationJumpParams && !conversationJumpHandled) return;
@@ -2468,7 +2493,6 @@ export default function DouyinAiCsWorkbenchPage() {
                 <button
                   key={conversation.id}
                   onClick={() => {
-                    markConversationReadLocally(conversation);
                     setSelectedConversationId(conversation.id);
                   }}
                   className={`mb-2 w-full rounded-md border px-3 py-3 text-left transition ${

@@ -1449,3 +1449,28 @@ def test_accounts_list_keeps_webhook_events_api_unchanged():
     assert data["total"] == 1
     assert data["items"][0]["event_key"] == "raw_unchanged"
     assert data["items"][0]["message_text"] == "raw event still visible"
+
+
+def test_frontend_mark_read_request_includes_last_seen_event_id():
+    """前端 mark-read 请求类型必须包含必填 last_seen_event_id。"""
+    source = open("frontend/src/api/douyinAiCsClient.ts", encoding="utf-8").read()
+    mark_read_section = source.split("DouyinConversationMarkReadRequest", 1)[1].split("}")[0]
+    assert "last_seen_event_id" in mark_read_section
+
+
+def test_frontend_workbench_submits_read_after_render_with_event_id():
+    """前端工作台仅在详情渲染后提交已读，使用最大 raw_event_id。"""
+    page = open(
+        "frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx",
+        encoding="utf-8",
+    ).read()
+    # 删除点击会话时的本地清零（onClick 不应调用 markConversationReadLocally）
+    click_section = page.split("onClick={() => {", 1)[1].split("}", 1)[0]
+    assert "markConversationReadLocally" not in click_section
+    # 详情成功后取最大 raw_event_id
+    assert "lastDetailMaxEventIdRef" in page
+    assert "detailSuccessSeq" in page
+    # persistConversationRead 接受 lastSeenEventId 参数
+    persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
+    assert "lastSeenEventId" in persist_section
+    assert "last_seen_event_id" in persist_section
