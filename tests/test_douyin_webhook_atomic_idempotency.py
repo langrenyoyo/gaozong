@@ -1,13 +1,13 @@
-"""抖音 Webhook 原子幂等测试（R2）。
+"""抖音 Webhook 原子幂等测试（R3）。
 
-覆盖 A1-A14 验收矩阵：
-- PostgreSQL/SQLite 占位语句合同
-- 首次/重复/并发/副作用次数/非线索事件/异常回滚/商户隔离
-- 9000/9202/混合入口各 20 路线程并发
-- 嵌套提交消除验证
-- 真实 BackgroundTasks 调度
-- 外层回滚结构化日志
-- 非空 lead_id 继承
+A1-A14 验收映射：
+- A1 SQL 合同（PostgreSQL ON CONFLICT DO NOTHING RETURNING）
+- A2 SQL 合同（SQLite 同语义，禁止 INSERT OR IGNORE）
+- A3 首次占位胜出 / A4 派单事务（commit=False）
+- A5 人工接管事务 / A6 9000 20路并发 / A7 9202 20路并发 / A8 混合20路
+- A9 调度（BackgroundTasks） / A10 两入口日志（stage/failure_stage）
+- A11 派单后回滚（事件+线索+ReplyCheck+LeadFollowupRecord）
+- A12 归属矩阵（唯一/全空/歧义/无绑定） / A13 顺序/非线索/范围
 """
 
 import json
@@ -32,6 +32,7 @@ from app.models import (
     DouyinAuthorizedAccount,
     DouyinLead,
     DouyinWebhookEvent,
+    LeadFollowupRecord,
     ReplyCheck,
     SalesStaff,
 )
@@ -255,7 +256,7 @@ def test_local_twenty_concurrent_one_valid_nineteen_duplicate(concurrent_databas
 
 
 def test_local_dispatch_called_at_most_once(concurrent_database):
-    """A6：_dispatch_lead_after_create 最多一次。"""
+    """A6：_dispatch_lead_after_create 最多一次（全局 patch 在线程池外）。"""
     from app.integrations import douyin_webhook as dw_module
     from app.integrations.douyin_webhook import process_webhook_event
     engine, Session = concurrent_database
@@ -273,17 +274,17 @@ def test_local_dispatch_called_at_most_once(concurrent_database):
     def worker(index):
         db = Session()
         try:
-            with patch.object(dw_module, "_dispatch_lead_after_create", _counting_dispatch):
-                result = process_webhook_event(db, payload)
-                db.commit()
-                return result
+            result = process_webhook_event(db, payload)
+            db.commit()
+            return result
         except Exception:
             db.rollback()
             raise
         finally:
             db.close()
 
-    results, errors = _run_twenty_workers(worker)
+    with patch.object(dw_module, "_dispatch_lead_after_create", _counting_dispatch):
+        results, errors = _run_twenty_workers(worker)
     assert all(err is None for err in errors)
     assert call_count["n"] == 1
 
@@ -416,7 +417,8 @@ def test_non_lead_event_concurrent_one_valid(concurrent_database):
 
 
 def test_local_boundary_rolls_back_after_dispatch_side_effect_failure(concurrent_database):
-    """A10：9000 外层请求边界回滚：派单失败后事件、线索、ReplyCheck 均不存在。"""
+    """A4：9000 外层请求边界回滚：派单后异常触发整体回滚，事件、线索、ReplyCheck、
+    LeadFollowupRecord 均不存在（派单已 flush，提交由请求边界负责）。"""
     from app.routers.integrations import _process_webhook_locally
     engine, Session = concurrent_database
     _setup_account_and_staff(Session)
@@ -425,20 +427,20 @@ def test_local_boundary_rolls_back_after_dispatch_side_effect_failure(concurrent
     db = Session()
     try:
         with patch(
-            "app.services.assign_service.auto_assign_next",
-            side_effect=RuntimeError("forced dispatch failure"),
+            "app.integrations.douyin_webhook._post_process_im_send_msg",
+            side_effect=RuntimeError("forced after dispatch"),
         ):
-            with pytest.raises(RuntimeError):
+            with pytest.raises(RuntimeError, match="forced after dispatch"):
                 _process_webhook_locally(db, payload)
     finally:
         db.close()
 
-    # 用新 Session 断言数据库整体回滚
     db2 = Session()
     try:
         assert db2.query(DouyinWebhookEvent).count() == 0
         assert db2.query(DouyinLead).count() == 0
         assert db2.query(ReplyCheck).count() == 0
+        assert db2.query(LeadFollowupRecord).count() == 0
     finally:
         db2.close()
 
@@ -501,6 +503,72 @@ def test_local_boundary_rollback_logs_stage_and_failure_stage(concurrent_databas
 
     log_text = " ".join(record.getMessage() for record in caplog.records)
     assert "stage=local_process" in log_text
+    assert "failure_stage=transaction_failed" in log_text
+
+
+# ========== A5: 人工接管写入后整体回滚 ==========
+
+
+def test_takeover_state_rolls_back_when_failure_occurs_after_mark(concurrent_database):
+    """A5：人工接管写入后异常 → 事件和接管状态整体回滚。"""
+    from app.integrations import douyin_webhook as dw_module
+    from app.routers.integrations import _process_webhook_locally
+    from app.models import ConversationAutopilotState
+
+    engine, Session = concurrent_database
+    _setup_account_and_staff(Session)
+    payload = _make_payload(event="im_send_msg", from_user_id="test_account_atomic")
+    original_mark = dw_module.mark_manual_takeover
+
+    def _mark_then_fail(*args, **kwargs):
+        original_mark(*args, **kwargs)
+        raise RuntimeError("forced after takeover")
+
+    db = Session()
+    try:
+        with patch.object(dw_module, "mark_manual_takeover", _mark_then_fail):
+            with pytest.raises(RuntimeError, match="forced after takeover"):
+                _process_webhook_locally(db, payload)
+    finally:
+        db.close()
+
+    db2 = Session()
+    try:
+        assert db2.query(DouyinWebhookEvent).count() == 0
+        assert db2.query(ConversationAutopilotState).count() == 0
+    finally:
+        db2.close()
+
+
+# ========== A11: 9202 回滚日志 ==========
+
+
+def test_internal_boundary_rollback_logs_stage_and_failure_stage(concurrent_database, caplog):
+    """A11：9202 外层回滚日志含 stage=internal_process failure_stage=transaction_failed。"""
+    import logging
+    from apps.leads.services import create_internal_webhook_event
+    from apps.leads.schemas import InternalWebhookEventRequest
+    engine, Session = concurrent_database
+    _setup_account_and_staff(Session)
+    payload = _make_payload()
+
+    db = Session()
+    try:
+        with patch(
+            "app.services.assign_service.auto_assign_next",
+            side_effect=RuntimeError("forced"),
+        ):
+            with caplog.at_level(logging.ERROR, logger="leads_internal_webhook_service"):
+                with pytest.raises(RuntimeError):
+                    create_internal_webhook_event(db, InternalWebhookEventRequest(
+                        payload=payload, signature_verified=True,
+                        source_path="/test", gateway_app_env="development",
+                    ))
+    finally:
+        db.close()
+
+    log_text = " ".join(record.getMessage() for record in caplog.records)
+    assert "stage=internal_process" in log_text
     assert "failure_stage=transaction_failed" in log_text
 
 
@@ -629,10 +697,9 @@ def test_mixed_local_internal_twenty_concurrent_is_winner_independent(concurrent
             db = Session()
             try:
                 handler = process_webhook_event if index < 10 else process_internal_webhook_event
-                with patch.object(dw_module, "_dispatch_lead_after_create", _counting_dispatch):
-                    result = handler(db, payload)
-                    db.commit()
-                    results[index] = result
+                result = handler(db, payload)
+                db.commit()
+                results[index] = result
             except Exception as exc:
                 db.rollback()
                 errors[index] = exc
@@ -641,10 +708,11 @@ def test_mixed_local_internal_twenty_concurrent_is_winner_independent(concurrent
         except Exception as exc:
             errors[index] = exc
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(worker, i) for i in range(20)]
-        for f in futures:
-            f.result(timeout=60)
+    with patch.object(dw_module, "_dispatch_lead_after_create", _counting_dispatch):
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [executor.submit(worker, i) for i in range(20)]
+            for f in futures:
+                f.result(timeout=60)
 
     assert all(err is None for err in errors), f"Errors: {[e for e in errors if e]}"
     assert sum(r["is_duplicate"] is False for r in results) == 1
@@ -755,5 +823,179 @@ def test_duplicate_results_inherit_non_null_lead_and_scope(concurrent_database):
         assert dup.lead_id == r1["lead_id"]
         assert dup.merchant_id == "merchant_atomic"
         assert dup.tenant_id == "tenant_atomic"
+    finally:
+        db3.close()
+
+
+# ========== A12: 归属矩阵 ==========
+
+
+def test_scope_same_merchant_same_tenant_is_inherited_by_duplicate(concurrent_database):
+    """A12a：唯一 merchant+tenant → 重复审计行继承原值。"""
+    from app.integrations.douyin_webhook import process_webhook_event
+    engine, Session = concurrent_database
+    _setup_account_and_staff(Session, account="acc_scope_a", merchant="m_scope_a", tenant="t_scope_a")
+    payload = _make_payload(account="acc_scope_a", text="hello scope a")
+
+    db1 = Session()
+    try:
+        r1 = process_webhook_event(db1, payload)
+        db1.commit()
+    finally:
+        db1.close()
+
+    db2 = Session()
+    try:
+        r2 = process_webhook_event(db2, payload)
+        db2.commit()
+    finally:
+        db2.close()
+    assert r2["is_duplicate"] is True
+
+    db3 = Session()
+    try:
+        orig = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=False).one()
+        dup = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=True).first()
+        assert dup is not None
+        assert orig.merchant_id == "m_scope_a"
+        assert dup.merchant_id == orig.merchant_id
+        assert orig.tenant_id == "t_scope_a"
+        assert dup.tenant_id == orig.tenant_id
+    finally:
+        db3.close()
+
+
+def test_scope_same_merchant_all_tenant_null_keeps_tenant_null(concurrent_database):
+    """A12b：同商户 tenant 全空 → 重复审计行 merchant 继承，tenant 保持 None。"""
+    from app.integrations.douyin_webhook import process_webhook_event
+    engine, Session = concurrent_database
+    _setup_account_and_staff(Session, account="acc_scope_b", merchant="m_scope_b", tenant=None)
+    payload = _make_payload(account="acc_scope_b", text="hello scope b")
+
+    db1 = Session()
+    try:
+        r1 = process_webhook_event(db1, payload)
+        db1.commit()
+    finally:
+        db1.close()
+
+    db2 = Session()
+    try:
+        r2 = process_webhook_event(db2, payload)
+        db2.commit()
+    finally:
+        db2.close()
+    assert r2["is_duplicate"] is True
+
+    db3 = Session()
+    try:
+        orig = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=False).one()
+        dup = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=True).first()
+        assert orig.merchant_id == "m_scope_b"
+        assert orig.tenant_id is None
+        assert dup.merchant_id == "m_scope_b"
+        assert dup.tenant_id is None
+    finally:
+        db3.close()
+
+
+def test_scope_empty_and_nonempty_tenant_is_ambiguous_null(concurrent_database):
+    """A12c：tenant 空/非空混杂 → merchant 写入，tenant None。"""
+    from app.integrations.douyin_webhook import process_webhook_event
+    engine, Session = concurrent_database
+    # 两条同 open_id 绑定：tenant 一个空一个非空
+    db = Session()
+    try:
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="acc_scope_c",
+            merchant_id="m_scope_c", tenant_id=None, bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="acc_scope_c",
+            merchant_id="m_scope_c", tenant_id="t_scope_c", bind_status=1,
+        ))
+        db.add(SalesStaff(name="销售c", status="active", merchant_id="m_scope_c",
+                          wechat_nickname="微信c", enable_lead_assignment=True))
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _make_payload(account="acc_scope_c", text="hello scope c")
+    db1 = Session()
+    try:
+        r1 = process_webhook_event(db1, payload)
+        db1.commit()
+    finally:
+        db1.close()
+    assert r1["is_duplicate"] is False
+
+    db3 = Session()
+    try:
+        orig = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=False).one()
+        assert orig.merchant_id == "m_scope_c"
+        assert orig.tenant_id is None
+    finally:
+        db3.close()
+
+
+def test_scope_empty_and_nonempty_merchant_stays_null_without_lead(concurrent_database):
+    """A12d：merchant 空/非空混杂 → merchant_id=None，不创建线索。"""
+    from app.integrations.douyin_webhook import process_webhook_event
+    engine, Session = concurrent_database
+    db = Session()
+    try:
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=1, open_id="acc_scope_d",
+            merchant_id=None, tenant_id=None, bind_status=1,
+        ))
+        db.add(DouyinAuthorizedAccount(
+            main_account_id=2, open_id="acc_scope_d",
+            merchant_id="m_scope_d", tenant_id="t_scope_d", bind_status=1,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    payload = _make_payload(account="acc_scope_d", text="hello scope d")
+    db1 = Session()
+    try:
+        r1 = process_webhook_event(db1, payload)
+        db1.commit()
+    finally:
+        db1.close()
+    assert r1["is_duplicate"] is False
+    assert r1["lead_id"] is None
+
+    db3 = Session()
+    try:
+        orig = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=False).one()
+        assert orig.merchant_id is None
+        assert orig.tenant_id is None
+        assert db3.query(DouyinLead).count() == 0
+    finally:
+        db3.close()
+
+
+def test_scope_unbound_account_stays_null_without_lead(concurrent_database):
+    """A12e：无有效绑定 → merchant_id=None，不创建线索。"""
+    from app.integrations.douyin_webhook import process_webhook_event
+    engine, Session = concurrent_database
+    # 不预置绑定
+    payload = _make_payload(account="acc_unbound_scope", text="hello unbound")
+    db1 = Session()
+    try:
+        r1 = process_webhook_event(db1, payload)
+        db1.commit()
+    finally:
+        db1.close()
+    assert r1["is_duplicate"] is False
+    assert r1["lead_id"] is None
+
+    db3 = Session()
+    try:
+        orig = db3.query(DouyinWebhookEvent).filter_by(is_duplicate=False).one()
+        assert orig.merchant_id is None
+        assert orig.tenant_id is None
+        assert db3.query(DouyinLead).count() == 0
     finally:
         db3.close()
