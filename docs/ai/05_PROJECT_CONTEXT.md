@@ -239,6 +239,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 ```
 
 - 验签环境策略：`APP_ENV=production` 强制验签（缺 `DY_SECRET_KEY` 拒绝请求）；development 允许 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 仅用于本地联调。
+- **抖音 Webhook 原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1）候选已实现，待独立测试确认**（2026-07-23）：9000 与 9202 共用跨方言原子占位服务 `douyin_webhook_idempotency_service`，处理顺序改为"只读解析 → 原子占位 → 胜出者副作用"；PostgreSQL 使用 `ON CONFLICT DO NOTHING RETURNING`，SQLite 使用同语义方言语句，禁止 `INSERT OR IGNORE` 或先查再插降级；只有占位胜出者执行线索、派单、im_send_msg 后置处理和自动回复调度，竞争失败者写派生键重复审计行并返回成功；20 路线程并发测试（9000/9202 各重复 10 轮）验证仅 1 条有效事件、19 条重复审计事件、1 条线索、副作用最多一次；候选尚未推送、合并或发布，未验证真实 PostgreSQL、生产并发和真实发送。
 - `/leads` 只展示有效线索；原始/invalid 事件走 `GET /webhook-events`（只读）。
 - 旧拉取链路 `/integrations/douyin/sync-leads` 保留但已非事件回调归属，处置待定（见第 12 节）。
 

@@ -35,6 +35,7 @@ from app.models import (
 from app.services import assign_service, wechat_task_service
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
+from app.services.douyin_webhook_idempotency_service import claim_webhook_event
 from app.services.douyin_outbound_message_classifier import (
     im_send_msg_participants,
     is_effective_human_outbound_message,
@@ -265,6 +266,30 @@ def find_existing_event(db: Session, event_key: str) -> DouyinWebhookEvent | Non
 def build_duplicate_event_key(original_event_key: str) -> str:
     """生成重复 webhook 到达记录的派生唯一键。"""
     return f"{original_event_key}:dup:{uuid.uuid4().hex}"
+
+
+def _build_webhook_event_values(
+    payload: dict[str, Any],
+    event_key: str,
+    *,
+    merchant_id: str | None,
+    tenant_id: str | None,
+) -> dict[str, Any]:
+    """构造事件完整字段值字典（不写数据库），供原子占位使用。"""
+    normalized = parse_douyin_callback_event(payload)
+    return {
+        "event": payload.get("event"),
+        "from_user_id": payload.get("from_user_id"),
+        "to_user_id": payload.get("to_user_id"),
+        **normalized,
+        "event_key": event_key,
+        "is_duplicate": False,
+        "lead_id": None,
+        "merchant_id": merchant_id,
+        "tenant_id": tenant_id,
+        "raw_body": json.dumps(payload, ensure_ascii=False),
+        "created_at": datetime.now(),
+    }
 
 
 def persist_webhook_event(
@@ -663,7 +688,11 @@ def _dispatch_lead_after_create(
 
 
 def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    """处理单个 webhook 事件
+    """处理单个 webhook 事件。
+
+    固定顺序：只读解析 → 原子占位 → 胜出者业务处理。
+    占位使用 ON CONFLICT DO NOTHING RETURNING，只有胜出者执行线索、派单、
+    im_send_msg 后置处理和自动回复调度等副作用。
 
     返回：
         {
@@ -675,54 +704,21 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         }
     """
     event_type = payload.get("event") or ""
-    from_user_id = payload.get("from_user_id") or ""
 
-    # 事件商户归属：入库时按事件方向解析有效绑定账号固化，归属不明保持 NULL。
+    # 构建幂等键
+    event_key = build_event_key(payload)
+
+    # ---- 只读解析：解析内容和商户归属，不做任何写入或副作用 ----
     event_merchant_id: str | None = None
     event_tenant_id: str | None = None
+    lead_context: dict[str, Any] | None = None
 
-    # 构建幂等键，查询是否已处理
-    event_key = build_event_key(payload)
-    existing_event = find_existing_event(db, event_key)
-
-    if existing_event is not None:
-        duplicate_event = persist_duplicate_webhook_event(
-            db,
-            payload,
-            original_event_key=event_key,
-            lead_id=existing_event.lead_id,
-            merchant_id=existing_event.merchant_id,
-            tenant_id=existing_event.tenant_id,
-        )
-        # 重复事件：不插入、不更新线索，直接返回原始记录
-        logger.info(
-            "webhook 重复事件: event_id=%d, event=%s, event_key=%s...12s",
-            duplicate_event.id,
-            event_type,
-            event_key[:12],
-        )
-        return {
-            "event_id": duplicate_event.id,
-            "lead_id": existing_event.lead_id,
-            "is_new_lead": False,
-            "is_duplicate": True,
-            "lead_action": "duplicate_event",
-        }
-
-    lead_id = None
-    is_new_lead = False
-    lead_action = "not_lead_event"
-
-    # 只有 im_receive_msg 才尝试生成/更新线索
     if event_type == "im_receive_msg":
         content = parse_content(payload.get("content"))
         message_text = normalize_message_text(content)
         conversation_short_id = _optional_str(content.get("conversation_short_id"))
-        # 企业号 open_id = 私信接收方 to_user_id（非客户 from_user_id）
         account_open_id = _optional_str(payload.get("to_user_id"))
 
-        # 反查企业号绑定 → 可信 merchant_id/tenant_id（来自 douyin_authorized_accounts，不来自 GMP/前端）
-        # 归属解析拒绝歧义：无绑定/merchant_id 空/多商户歧义一律保持 NULL，不猜测。
         merchant_id: str | None = None
         tenant_id: str | None = None
         binding_state = "merchant_unresolved"
@@ -734,33 +730,72 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                 event_merchant_id = merchant_id
                 event_tenant_id = tenant_id
 
+        lead_context = {
+            "content": content,
+            "message_text": message_text,
+            "conversation_short_id": conversation_short_id,
+            "account_open_id": account_open_id,
+            "merchant_id": merchant_id,
+            "binding_state": binding_state,
+        }
+    else:
+        event_merchant_id, event_tenant_id = _resolve_event_merchant_scope(db, payload)
+
+    # ---- 原子占位：INSERT ON CONFLICT DO NOTHING RETURNING ----
+    values = _build_webhook_event_values(
+        payload,
+        event_key,
+        merchant_id=event_merchant_id,
+        tenant_id=event_tenant_id,
+    )
+    claim = claim_webhook_event(db, values=values)
+
+    # ---- 竞争失败者：写重复审计行并返回，不执行任何副作用 ----
+    if not claim.won:
+        duplicate_event = persist_duplicate_webhook_event(
+            db,
+            payload,
+            original_event_key=event_key,
+            lead_id=claim.event.lead_id,
+            merchant_id=claim.event.merchant_id,
+            tenant_id=claim.event.tenant_id,
+        )
+        logger.info(
+            "webhook 重复事件: event_id=%d, event=%s, event_key=%s...12s",
+            duplicate_event.id,
+            event_type,
+            event_key[:12],
+        )
+        return {
+            "event_id": duplicate_event.id,
+            "lead_id": claim.event.lead_id,
+            "is_new_lead": False,
+            "is_duplicate": True,
+            "lead_action": "duplicate_event",
+        }
+
+    # ---- 胜出者：执行线索副作用 ----
+    event = claim.event
+    lead_id = None
+    is_new_lead = False
+    lead_action = "not_lead_event"
+
+    if event_type == "im_receive_msg" and lead_context:
+        content = lead_context["content"]
+        message_text = lead_context["message_text"]
+        conversation_short_id = lead_context["conversation_short_id"]
+        account_open_id = lead_context["account_open_id"]
+        merchant_id = lead_context["merchant_id"]
+        binding_state = lead_context["binding_state"]
+
         if not is_text_message(content):
             lead_action = "invalid_contact"
-            logger.info(
-                "webhook 非文本私信不生成线索: event=%s, account_open_id=%s, message_type=%s",
-                event_type,
-                (account_open_id or "")[:8] + "...",
-                content.get("message_type"),
-            )
         elif binding_state != "bound":
-            # 未绑定 / 未解析商户：只记录原始事件，不进入任何商户线索
             lead_action = binding_state
-            logger.info(
-                "webhook 跳过线索(%s): account_open_id=%s, conv=%s",
-                binding_state,
-                (account_open_id or "")[:8] + "...",
-                conversation_short_id,
-            )
         elif not conversation_short_id:
             lead_action = "missing_conversation"
-            logger.info(
-                "webhook 跳过线索(缺会话ID): account_open_id=%s",
-                (account_open_id or "")[:8] + "...",
-            )
         else:
             contact_result = extract_contacts_from_text(message_text)
-            # 会话归并：已绑定企业号的文本消息总会话归并生成/更新线索；
-            # 联系方式提取为 best-effort，仅影响留资状态，不阻断线索创建。
             lead, upsert_action = upsert_lead_from_webhook(
                 db,
                 payload,
@@ -775,34 +810,20 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             lead_action = upsert_action
             if upsert_action == "created":
                 is_new_lead = True
-                # P0-DY-LEAD-CAPTURE-NOTIFY-SALES-FIX-1：新建线索且有联系方式
-                # → 按商户分配销售 + 创建 notify_sales 任务（供 19000 轮询执行）
                 if contact_result.phone or contact_result.wechat:
                     try:
                         _dispatch_lead_after_create(db, lead, contact_result, merchant_id)
                     except Exception as exc:
                         logger.error(
-                            "webhook 留资派单异常(不影响主链路): lead_id=%d, error_type=%s, %s",
-                            lead.id, type(exc).__name__, exc, exc_info=True,
+                            "webhook 留资派单异常(不影响主链路): lead_id=%d, error_type=%s",
+                            lead.id, type(exc).__name__, exc_info=True,
                         )
-                else:
-                    logger.info(
-                        "webhook 留资派单跳过(无联系方式): lead_id=%d, conv=%s",
-                        lead.id, conversation_short_id,
-                    )
 
-    # 非 im_receive_msg 事件按事件方向解析商户归属，归属不明保存空归属。
-    if event_type != "im_receive_msg":
-        event_merchant_id, event_tenant_id = _resolve_event_merchant_scope(db, payload)
+    # 回写 lead_id 到事件
+    event.lead_id = lead_id
+    db.flush()
 
-    # 首次收到的事件，写入事件日志
-    event = persist_webhook_event(
-        db, payload,
-        event_key=event_key,
-        lead_id=lead_id,
-        merchant_id=event_merchant_id,
-        tenant_id=event_tenant_id,
-    )
+    # im_send_msg 后置处理
     _post_process_im_send_msg(db, event)
 
     logger.info(

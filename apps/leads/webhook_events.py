@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import DouyinAuthorizedAccount, DouyinLead, DouyinWebhookEvent
 from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
+from app.services.douyin_webhook_idempotency_service import claim_webhook_event
 
 
 logger = logging.getLogger("leads_internal_webhook")
@@ -161,6 +162,26 @@ def _duplicate_event_key(original_event_key: str) -> str:
     return f"{original_event_key}:dup:{uuid.uuid4().hex}"
 
 
+def _build_internal_event_values(
+    payload: dict[str, Any],
+    event_key: str,
+) -> dict[str, Any]:
+    """构造 9202 internal 事件完整字段值字典（不写数据库），供原子占位使用。"""
+    return {
+        "event": payload.get("event"),
+        "from_user_id": payload.get("from_user_id"),
+        "to_user_id": payload.get("to_user_id"),
+        **_parse_callback_event(payload),
+        "event_key": event_key,
+        "is_duplicate": False,
+        "lead_id": None,
+        "merchant_id": None,
+        "tenant_id": None,
+        "raw_body": json.dumps(payload, ensure_ascii=False),
+        "created_at": datetime.now(),
+    }
+
+
 def persist_webhook_event(
     db: Session,
     payload: dict[str, Any],
@@ -189,8 +210,11 @@ def persist_duplicate_webhook_event(
     payload: dict[str, Any],
     original_event_key: str,
     lead_id: int | None = None,
+    *,
+    merchant_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> DouyinWebhookEvent:
-    """写入重复 webhook 审计事件，不更新线索。"""
+    """写入重复 webhook 审计事件，不更新线索，继承原事件归属。"""
     event = DouyinWebhookEvent(
         event=payload.get("event"),
         from_user_id=payload.get("from_user_id"),
@@ -199,6 +223,8 @@ def persist_duplicate_webhook_event(
         event_key=_duplicate_event_key(original_event_key),
         is_duplicate=True,
         lead_id=lead_id,
+        merchant_id=merchant_id,
+        tenant_id=tenant_id,
         raw_body=json.dumps(payload, ensure_ascii=False),
         created_at=datetime.now(),
     )
@@ -303,25 +329,37 @@ def _resolve_bound_merchant_id(db: Session, account_open_id: str | None) -> tupl
 
 
 def process_internal_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    """处理 9202 internal webhook 事件，不触发任何后置 dry-run。"""
+    """处理 9202 internal webhook 事件，不触发任何后置 dry-run。
+
+    固定顺序：只读解析 → 原子占位 → 胜出者业务处理。
+    """
     event_type = payload.get("event") or ""
     event_key = build_event_key(payload)
-    existing_event = _find_existing_event(db, event_key)
-    if existing_event is not None:
+
+    # ---- 原子占位：INSERT ON CONFLICT DO NOTHING RETURNING ----
+    values = _build_internal_event_values(payload, event_key)
+    claim = claim_webhook_event(db, values=values)
+
+    # ---- 竞争失败者：写重复审计行并返回，不执行任何副作用 ----
+    if not claim.won:
         duplicate_event = persist_duplicate_webhook_event(
             db,
             payload,
             original_event_key=event_key,
-            lead_id=existing_event.lead_id,
+            lead_id=claim.event.lead_id,
+            merchant_id=claim.event.merchant_id,
+            tenant_id=claim.event.tenant_id,
         )
         return {
             "event_id": duplicate_event.id,
-            "lead_id": existing_event.lead_id,
+            "lead_id": claim.event.lead_id,
             "is_new_lead": False,
             "is_duplicate": True,
             "lead_action": "duplicate_event",
         }
 
+    # ---- 胜出者：执行线索副作用 ----
+    event = claim.event
     lead_id = None
     is_new_lead = False
     lead_action = "not_lead_event"
@@ -353,7 +391,10 @@ def process_internal_webhook_event(db: Session, payload: dict[str, Any]) -> dict
             lead_action = upsert_action
             is_new_lead = upsert_action == "created"
 
-    event = persist_webhook_event(db, payload, event_key=event_key, lead_id=lead_id)
+    # 回写 lead_id 到事件
+    event.lead_id = lead_id
+    db.flush()
+
     logger.info(
         "leads internal webhook handled: event_id=%s event=%s lead_action=%s lead_id=%s",
         event.id,

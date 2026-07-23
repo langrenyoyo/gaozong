@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
@@ -13,6 +15,8 @@ from app.services import assign_service, lead_management_service, lead_service, 
 from app.services.lead_management_service import LeadListQuery
 from apps.leads.schemas import InternalWebhookEventRequest, InternalWebhookEventResponse
 from apps.leads.webhook_events import process_internal_webhook_event
+
+logger = logging.getLogger("leads_internal_webhook_service")
 
 
 def _merchant_scope(context: RequestContext) -> str | None:
@@ -102,8 +106,16 @@ def create_internal_webhook_event(db: Session, request: InternalWebhookEventRequ
             detail={"code": "WEBHOOK_SIGNATURE_NOT_VERIFIED", "message": "webhook 尚未由网关验签"},
         )
 
-    result = process_internal_webhook_event(db, request.payload)
-    db.commit()
+    try:
+        result = process_internal_webhook_event(db, request.payload)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "webhook_transaction stage=internal_process failure_stage=transaction_failed error_type=%s",
+            type(exc).__name__,
+        )
+        raise
     return InternalWebhookEventResponse(
         event_id=result.get("event_id"),
         lead_id=result.get("lead_id"),

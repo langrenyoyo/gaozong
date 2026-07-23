@@ -119,9 +119,17 @@ def _normalize_webhook_result(result: dict) -> dict:
 
 
 def _process_webhook_locally(db: Session, payload: dict) -> dict:
-    """使用 9000 本地旧逻辑处理 webhook。"""
-    result = process_webhook_event(db, payload)
-    db.commit()
+    """使用 9000 本地逻辑处理 webhook（原子占位 → 胜出者副作用）。"""
+    try:
+        result = process_webhook_event(db, payload)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "webhook_transaction stage=local_process failure_stage=transaction_failed error_type=%s",
+            type(exc).__name__,
+        )
+        raise
     return _normalize_webhook_result(result)
 
 
