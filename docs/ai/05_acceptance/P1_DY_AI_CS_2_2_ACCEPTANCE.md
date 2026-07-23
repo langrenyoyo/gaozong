@@ -184,3 +184,4 @@ frontend AI建议或人工输入
 | `P1-DYCS-READSTATE-1` | 真实已读/未读状态设计 | 已通过独立测试（候选 `8e69adc36a7df35c054774f6b482bac2887c0123`，T1 A1-A14 PASS，261 passed），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位（DY-CS-CONVERSATION-READ-PROTOCOL-1） | `mark_conversation_read` 服务端、前端渲染后提交、测试 | 高 | 已合入远端 `master@64b22280d57128d0b7124a0bd24119d7930ae09b`；尚未部署或发布；未验证真实 PostgreSQL 和生产环境。 |
 | `P2-DYCS-MEDIA-1` | 媒体工具栏契约设计 | 明确表情、图片、视频、文件的上传、预览、确认发送边界 | 前端、9000 代理、9100 或抖音发送契约文档 | 中 | mock 接口测试；确认不自动发送。 |
 | `P3-DYCS-AUTOSEND-REVIEW` | AI自动发送安全评审 | 独立评审是否允许自动发送、触发条件、审计和回滚 | 安全方案、权限、审计、风控、人工兜底 | 高 | 安全评审通过前不进入开发。 |
+
