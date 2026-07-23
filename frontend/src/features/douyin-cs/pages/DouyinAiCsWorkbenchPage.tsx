@@ -1565,7 +1565,10 @@ export default function DouyinAiCsWorkbenchPage() {
         const after = items.find((item) => item.id === currentConversationId) || null;
         const afterWatermark = conversationWatermark(after);
         const afterUnread = Number(after?.unread_count || 0);
-        if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread)) {
+        // 轮询条件显式包含"当前选中会话仍有未读"：afterUnread > 0 时重新加载详情，
+        // 从而每个轮询周期产生新详情成功凭据并重试 mark-read（不依赖偶然的 React 对象变化）。
+        // 保持 8 秒轮询节奏，不新增立即无限重试或新定时器。
+        if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread || afterUnread > 0)) {
           void loadConversationDetail(currentConversationId, { background: true });
           void loadLatestAutoReplyRun(after, currentAccount, { background: true });
         }

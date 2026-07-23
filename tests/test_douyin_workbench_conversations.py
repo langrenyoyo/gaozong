@@ -1488,6 +1488,8 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     assert "consumedCredentialKeyRef.current = null" in page
     # mark-read 成功后刷新服务端权威未读
     assert "loadConversations" in page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
+    # 轮询条件显式包含"当前选中会话仍有未读"时重新加载详情并重试
+    assert "afterUnread > 0" in page
     # persistConversationRead 接受 lastSeenEventId 参数
     persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     assert "lastSeenEventId" in persist_section

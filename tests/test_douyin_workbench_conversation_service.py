@@ -794,7 +794,227 @@ def test_mark_read_concurrent_new_old_waterlevel_two_sessions():
             os.unlink(db_path)
 
 
-def test_mark_read_conversation_switch_does_not_use_old_watermark():
+def test_mark_read_integrity_error_deterministic_concurrent_insert():
+    """确定性事务夹具真实触发唯一约束竞争：被测 Session flush 前，另一 Session 插入同 scope 胜出行。"""
+    import tempfile
+    import os
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.services.douyin_workbench_conversation_service import mark_conversation_read
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        real_engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=real_engine)
+        RealSession = sessionmaker(bind=real_engine)
+
+        # 插入 account + 事件
+        db = RealSession()
+        try:
+            db.add(DouyinAuthorizedAccount(
+                main_account_id=1, open_id="account-open-1",
+                merchant_id="merchant-1", bind_status=1, account_name="test",
+            ))
+            payload = _make_event_payload("account-open-1", "customer-1")
+            event = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-1",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload["content"]), ensure_ascii=False),
+                created_at=datetime.now(),
+            )
+            db.add(event)
+            db.commit()
+            db.refresh(event)
+            event_id = event.id
+        finally:
+            db.close()
+
+        # Session1（被测）：开事务，条件 UPDATE 返回 0 行（无现有行），进入 INSERT 路径
+        # 但在 flush 前不 commit
+        db1 = RealSession()
+        # Session2（胜出者）：在同一 scope 先插入行
+        db2 = RealSession()
+        try:
+            # Session2 插入胜出行并提交
+            db2.add(DouyinConversationReadState(
+                merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1", last_read_at=datetime.min,
+                last_read_event_id=None, created_at=datetime.now(), updated_at=datetime.now(),
+            ))
+            db2.commit()
+        finally:
+            db2.close()
+
+        # Session1 现在调 mark_conversation_read：条件 UPDATE 0 行（行已存在但水位低）→ 应推进
+        # 这里不触发 IntegrityError（因为行已存在），而是条件 UPDATE 推进
+        # 要真实触发 IntegrityError，需让 Session1 在 INSERT 时已有同 scope 行
+        # 已通过 Session2 预插入实现，但条件 UPDATE 会直接成功
+        # 为真实触发 INSERT → IntegrityError 路径，需 mock 条件 UPDATE 返回 0 行（假装行不存在）
+        from unittest.mock import patch as _patch
+        from sqlalchemy.orm import Session as OrmSession
+
+        # 删除 Session2 的行，让条件 UPDATE 返回 0（行不存在），进入 INSERT 路径
+        db2b = RealSession()
+        try:
+            db2b.query(DouyinConversationReadState).filter_by(
+                merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1",
+            ).delete()
+            db2b.commit()
+        finally:
+            db2b.close()
+
+        # 现在 mock：在 Session1 的条件 UPDATE commit 后，但在 INSERT commit 前，
+        # 由另一 Session 插入胜出行，使 INSERT 触发 IntegrityError
+        original_commit = OrmSession.commit
+        call_count = {"n": 0}
+
+        def mock_commit(self):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # 第1次 commit：条件 UPDATE（0行，行不存在）
+                return original_commit(self)
+            if call_count["n"] == 2:
+                # 第2次 commit：INSERT 前先由另一 Session 插入胜出行
+                db_r = RealSession()
+                try:
+                    db_r.add(DouyinConversationReadState(
+                        merchant_id="merchant-1", account_open_id="account-open-1",
+                        conversation_key="conv-1", last_read_at=datetime.min,
+                        last_read_event_id=None, created_at=datetime.now(), updated_at=datetime.now(),
+                    ))
+                    db_r.commit()
+                finally:
+                    db_r.close()
+                # 现在尝试 commit INSERT → 触发 IntegrityError
+                try:
+                    return original_commit(self)
+                except Exception:
+                    raise
+            # 第3次 commit：重试条件 UPDATE（恢复路径）
+            return original_commit(self)
+
+        with _patch.object(OrmSession, "commit", mock_commit):
+            try:
+                row = mark_conversation_read(
+                    db1, merchant_id="merchant-1", account_open_id="account-open-1",
+                    conversation_key="conv-1", last_seen_event_id=event_id,
+                )
+                # IntegrityError 恢复后返回有效行
+                assert row is not None
+                assert row.last_read_event_id == event_id
+            except Exception as ex:
+                # 如果 IntegrityError 未被正确恢复，标记失败
+                raise AssertionError(f"IntegrityError recovery failed: {type(ex).__name__}: {ex}") from ex
+        db1.close()
+        real_engine.dispose()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
+def test_mark_read_concurrent_threads_barrier_waterlevel():
+    """新旧水位线程并发提交（Barrier 同步）：两个调用均不得异常，最终水位为较大值。"""
+    import tempfile
+    import os
+    import threading
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.services.douyin_workbench_conversation_service import mark_conversation_read
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        real_engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False}, pool_size=5, max_overflow=5)
+        Base.metadata.create_all(bind=real_engine)
+        RealSession = sessionmaker(bind=real_engine)
+
+        # 插入 account + 两个事件
+        db = RealSession()
+        try:
+            db.add(DouyinAuthorizedAccount(
+                main_account_id=1, open_id="account-open-1",
+                merchant_id="merchant-1", bind_status=1, account_name="test",
+            ))
+            base_time = datetime.now()
+            payload_old = _make_event_payload("account-open-1", "customer-1", text="old")
+            payload_new = _make_event_payload("account-open-1", "customer-1", text="new")
+            event_old = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-old",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload_old, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload_old["content"]), ensure_ascii=False),
+                created_at=base_time,
+            )
+            event_new = DouyinWebhookEvent(
+                event="im_receive_msg", event_key="inbound-new",
+                from_user_id="customer-1", to_user_id="account-open-1",
+                merchant_id="merchant-1", is_duplicate=False,
+                conversation_short_id="conv-1",
+                raw_body=json.dumps(payload_new, ensure_ascii=False),
+                parsed_content_json=json.dumps(json.loads(payload_new["content"]), ensure_ascii=False),
+                created_at=base_time + timedelta(seconds=1),
+            )
+            db.add_all([event_old, event_new])
+            db.commit()
+            db.refresh(event_old)
+            db.refresh(event_new)
+            old_id = event_old.id
+            new_id = event_new.id
+        finally:
+            db.close()
+
+        barrier = threading.Barrier(2)
+        results = {}
+
+        def submit_watermark(session_factory, event_id, key):
+            """在工作线程中提交 mark-read。"""
+            db_t = session_factory()
+            try:
+                # 等待 Barrier 同步，两个线程同时开始
+                barrier.wait(timeout=10)
+                row = mark_conversation_read(
+                    db_t, merchant_id="merchant-1", account_open_id="account-open-1",
+                    conversation_key="conv-1", last_seen_event_id=event_id,
+                )
+                results[key] = row.last_read_event_id
+            except Exception as ex:
+                results[key] = f"ERROR: {type(ex).__name__}: {ex}"
+            finally:
+                db_t.close()
+
+        t1 = threading.Thread(target=submit_watermark, args=(RealSession, old_id, "t1"))
+        t2 = threading.Thread(target=submit_watermark, args=(RealSession, new_id, "t2"))
+        t1.start()
+        t2.start()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+
+        # 两个调用均不得异常
+        assert "t1" in results and not str(results["t1"]).startswith("ERROR"), f"t1 failed: {results.get('t1')}"
+        assert "t2" in results and not str(results["t2"]).startswith("ERROR"), f"t2 failed: {results.get('t2')}"
+
+        # 最终水位必须为较大值
+        db_final = RealSession()
+        try:
+            final_row = db_final.query(DouyinConversationReadState).filter_by(
+                merchant_id="merchant-1", account_open_id="account-open-1",
+                conversation_key="conv-1",
+            ).first()
+            assert final_row is not None
+            assert final_row.last_read_event_id == new_id, f"Expected {new_id}, got {final_row.last_read_event_id}"
+        finally:
+            db_final.close()
+        real_engine.dispose()
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
     """切换会话时不得使用上一会话的事件水位清零当前会话。"""
     _insert_account()
     event_a = _insert_event(event_key="inbound-a")
