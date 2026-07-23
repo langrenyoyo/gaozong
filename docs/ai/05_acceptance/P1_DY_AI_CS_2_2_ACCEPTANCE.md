@@ -152,7 +152,7 @@ frontend AI建议或人工输入
 
 ## 6. 剩余缺口
 
-1. 企业号与会话 `unread_count` 已读/未读协议已通过独立测试（DY-CS-CONVERSATION-READ-PROTOCOL-1 候选 `8e69adc36a7df35c054774f6b482bac2887c0123`，T1 A1-A14 PASS，261 passed），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产环境。
+1. 企业号与会话 `unread_count` 已读/未读协议已通过独立测试（DY-CS-CONVERSATION-READ-PROTOCOL-1 候选 `8e69adc36a7df35c054774f6b482bac2887c0123`，T1 A1-A14 PASS，261 passed），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位；功能已合入远端 `master@64b22280d57128d0b7124a0bd24119d7930ae09b`，尚未部署或发布，未验证真实 PostgreSQL 和生产环境。
 2. 客户在线状态仍缺少真实抖音来源，当前只能返回 `unknown` 并在前端展示状态未知。
 3. Enter 直接发送未实现，且当前不建议开放；如果后续实现，也必须只打开确认弹窗。
 4. 视频、文件、表情真实发送能力未接入，媒体工具栏仍需单独契约设计。
@@ -181,7 +181,6 @@ frontend AI建议或人工输入
 | 任务编号 | 任务名称 | 目标 | 修改范围 | 风险 | 验收方式 |
 | ---- | ---- | -- | ---- | -- | ---- |
 | `P1-DYCS-ONLINE-1` | 在线状态来源确认 | 确认抖音是否提供在线/离线事件或接口，不直接伪造状态 | 9000 聚合服务、前端状态展示、接口契约文档 | 中 | 样本 payload 验证；无来源时继续展示 unknown。 |
-| `P1-DYCS-READSTATE-1` | 真实已读/未读状态设计 | 已通过独立测试（候选 `8e69adc36a7df35c054774f6b482bac2887c0123`，T1 A1-A14 PASS，261 passed），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位（DY-CS-CONVERSATION-READ-PROTOCOL-1） | `mark_conversation_read` 服务端、前端渲染后提交、测试 | 高 | 候选尚未推送、合并或发布；未验证真实 PostgreSQL 和生产环境。 |
+| `P1-DYCS-READSTATE-1` | 真实已读/未读状态设计 | 已通过独立测试（候选 `8e69adc36a7df35c054774f6b482bac2887c0123`，T1 A1-A14 PASS，261 passed），使用 `last_seen_event_id` + `(created_at, event_id)` 单调水位（DY-CS-CONVERSATION-READ-PROTOCOL-1） | `mark_conversation_read` 服务端、前端渲染后提交、测试 | 高 | 已合入远端 `master@64b22280d57128d0b7124a0bd24119d7930ae09b`；尚未部署或发布；未验证真实 PostgreSQL 和生产环境。 |
 | `P2-DYCS-MEDIA-1` | 媒体工具栏契约设计 | 明确表情、图片、视频、文件的上传、预览、确认发送边界 | 前端、9000 代理、9100 或抖音发送契约文档 | 中 | mock 接口测试；确认不自动发送。 |
 | `P3-DYCS-AUTOSEND-REVIEW` | AI自动发送安全评审 | 独立评审是否允许自动发送、触发条件、审计和回滚 | 安全方案、权限、审计、风控、人工兜底 | 高 | 安全评审通过前不进入开发。 |
-
