@@ -5,13 +5,19 @@ from __future__ import annotations
 import logging
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
+from app import config
 from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageSend
+from app.services.ai_auto_reply_outbox_service import (
+    _expected_lease_owner,
+    _guarded_lease_update,
+)
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import (
     evaluate_manual_takeover_gate,
@@ -30,6 +36,72 @@ from app.services.douyin_workbench_conversation_service import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _checkpoint(db: Session, run: AiAutoReplyRun, *, expected_status: str, status: str) -> int:
+    """状态机检查点推进。outbox 路径走 guarded（原始 owner + 租约未过期 + 检查点续租）；
+    非 outbox 路径走原条件更新（lease_owner == run.lease_owner，兼容无租约直调）。
+    返回 rowcount；0 表示未推进（outbox 租约丢失/过期，调用方必须终止且不得覆盖恢复器或新 Worker 状态）。
+    """
+    now = datetime.now()
+    owner = _expected_lease_owner()
+    if owner:
+        return _guarded_lease_update(
+            db, run.id, expected_status=expected_status,
+            values={"status": status}, refresh_lease=True,
+        )
+    # 非 outbox：原条件更新
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run.id,
+            AiAutoReplyRun.status == expected_status,
+            AiAutoReplyRun.lease_owner == run.lease_owner,
+        )
+        .values(status=status, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount
+
+
+def _terminal(
+    db: Session,
+    run: AiAutoReplyRun,
+    *,
+    expected_status: str,
+    status: str,
+    block_reason: str | None = None,
+    error_message: str | None = None,
+    last_failure_stage: str | None = None,
+    gate_results_json: str | None = None,
+) -> int:
+    """终态写入。outbox 路径先续租确认仍持有租约（防恢复器/新 Worker 在终态窗口覆盖），
+    再 ORM 写终态并清租约；返回 0 表示租约丢失，调用方不得覆盖且不应再触发副作用。
+    非 outbox 路径走原 ORM 提交，始终返回 1。
+    """
+    owner = _expected_lease_owner()
+    if owner:
+        # 续租确认：刷新 lease_expires_at，阻止恢复器在终态写入窗口内抢占
+        confirmed = _guarded_lease_update(
+            db, run.id, expected_status=expected_status,
+            values={}, refresh_lease=True,
+        )
+        if confirmed == 0:
+            return 0
+    run.status = status
+    run.block_reason = block_reason
+    run.error_message = error_message
+    if last_failure_stage is not None:
+        run.last_failure_stage = last_failure_stage
+    if gate_results_json is not None:
+        run.gate_results_json = gate_results_json
+    # 终态清理租约（sent/failed/send_unknown/send_skipped 均不再持有租约）
+    run.lease_owner = None
+    run.lease_expires_at = None
+    run.updated_at = datetime.now()
+    db.commit()
+    return 1
 
 
 def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
@@ -190,43 +262,15 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
-    # P0#4: 发送状态检查点使用条件更新（id + expected_status + lease_owner）
-    from sqlalchemy import update as sa_update
-    now = datetime.now()
-
-    # decided → send_processing（条件更新，防租约过期后旧 worker 覆盖）
-    result = db.execute(
-        sa_update(AiAutoReplyRun)
-        .where(
-            AiAutoReplyRun.id == run.id,
-            AiAutoReplyRun.status == "decided",
-            AiAutoReplyRun.lease_owner == run.lease_owner,
-        )
-        .values(status="send_processing", updated_at=now)
-        .execution_options(synchronize_session=False)
-    )
-    db.commit()
-    if result.rowcount == 0:
+    # 发送状态机检查点：guarded 推进 decided → send_processing → send_authorized（检查点续租）
+    # outbox 路径校验原始 owner + 租约未过期；租约丢失则终止，不得覆盖恢复器或新 Worker 状态
+    if _checkpoint(db, run, expected_status="decided", status="send_processing") == 0:
         logger.warning("ai_auto_reply_send_aborted stage=send_processing race_lost run_id=%s", run.id)
         return {"status": "send_skipped", "reason": "send_processing_race_lost"}
-    db.refresh(run)
 
-    # send_processing → send_authorized（门禁全通过，即将调用真实 API；先 commit 使检查点持久化）
-    result = db.execute(
-        sa_update(AiAutoReplyRun)
-        .where(
-            AiAutoReplyRun.id == run.id,
-            AiAutoReplyRun.status == "send_processing",
-            AiAutoReplyRun.lease_owner == run.lease_owner,
-        )
-        .values(status="send_authorized", updated_at=now)
-        .execution_options(synchronize_session=False)
-    )
-    db.commit()
-    if result.rowcount == 0:
+    if _checkpoint(db, run, expected_status="send_processing", status="send_authorized") == 0:
         logger.warning("ai_auto_reply_send_aborted stage=send_authorized race_lost run_id=%s", run.id)
         return {"status": "send_skipped", "reason": "send_authorized_race_lost"}
-    db.refresh(run)
 
     try:
         send_result = _send_private_message_with_context(
@@ -242,62 +286,65 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         )
     except HTTPException as exc:
         failure_stage = _classify_send_failure(exc)
-        if failure_stage == "upstream_business_error":
-            run.status = "failed"
-        else:
-            run.status = "send_unknown"
-        run.last_failure_stage = failure_stage
-        run.error_message = _safe_error(exc.detail)
-        run.updated_at = datetime.now()
-        db.commit()
-        logger.warning(
-            "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=%s status=%s error_type=%s",
-            run.id, failure_stage, run.status, type(exc).__name__,
+        terminal_status = "failed" if failure_stage == "upstream_business_error" else "send_unknown"
+        written = _terminal(
+            db, run, expected_status="send_authorized", status=terminal_status,
+            error_message=_safe_error(exc.detail), last_failure_stage=failure_stage,
         )
-        return {"status": run.status, "reason": failure_stage}
+        if written == 0:
+            logger.warning("ai_auto_reply_send_lease_lost stage=send_failure run_id=%s", run.id)
+        else:
+            logger.warning(
+                "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=%s status=%s error_type=%s",
+                run.id, failure_stage, terminal_status, type(exc).__name__,
+            )
+        return {"status": terminal_status, "reason": failure_stage}
 
     except Exception as exc:
-        run.status = "send_unknown"
-        run.last_failure_stage = "send_network_error"
-        run.error_message = _safe_error(str(exc))
-        run.updated_at = datetime.now()
-        db.commit()
-        logger.warning(
-            "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=send_network_error status=send_unknown error_type=%s",
-            run.id, type(exc).__name__,
+        written = _terminal(
+            db, run, expected_status="send_authorized", status="send_unknown",
+            error_message=_safe_error(str(exc)), last_failure_stage="send_network_error",
         )
+        if written == 0:
+            logger.warning("ai_auto_reply_send_lease_lost stage=send_failure run_id=%s", run.id)
+        else:
+            logger.warning(
+                "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=send_network_error status=send_unknown error_type=%s",
+                run.id, type(exc).__name__,
+            )
         return {"status": "send_unknown", "reason": "send_network_error"}
 
     _sync_final_auto_send_after_success(db, run)
-    run.status = "sent"
-    run.block_reason = None
-    run.skip_reason = None
-    run.error_message = None
-    run.updated_at = datetime.now()
-    db.commit()
-    mark_ai_replied(
-        db,
-        merchant_id=run.merchant_id,
-        account_open_id=run.account_open_id,
-        conversation_short_id=run.conversation_short_id or "",
-        customer_open_id=run.customer_open_id,
+    # 成功终态：send_authorized → sent（guarded + 清租约）；租约丢失则不覆盖、不触发 mark_ai_replied，
+    # 由恢复器按 sent 流水 EXISTS 对账为 sent
+    written = _terminal(
+        db, run, expected_status="send_authorized", status="sent",
+        block_reason=None, error_message=None,
     )
+    if written == 1:
+        mark_ai_replied(
+            db,
+            merchant_id=run.merchant_id,
+            account_open_id=run.account_open_id,
+            conversation_short_id=run.conversation_short_id or "",
+            customer_open_id=run.customer_open_id,
+        )
+        return {"status": "sent", "record_id": send_result.get("record_id")}
+    logger.warning("ai_auto_reply_send_lease_lost stage=send_success run_id=%s", run.id)
     return {"status": "sent", "record_id": send_result.get("record_id")}
 
 
-def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> None:
-    run.status = "send_skipped"
-    run.block_reason = reason
-    run.updated_at = datetime.now()
-    db.commit()
+def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> int:
+    """跳过终态：decided → send_skipped（guarded + 清租约）。返回 rowcount（0=租约丢失未覆盖）。"""
+    return _terminal(db, run, expected_status="decided", status="send_skipped", block_reason=reason)
 
 
-def _mark_format_invalid(db: Session, run: AiAutoReplyRun, error_message: str) -> None:
-    run.status = "send_skipped"
-    run.block_reason = "format_invalid"
-    run.error_message = error_message
-    run.updated_at = datetime.now()
-    db.commit()
+def _mark_format_invalid(db: Session, run: AiAutoReplyRun, error_message: str) -> int:
+    """格式非法终态：decided → send_skipped(format_invalid)（guarded + 清租约）。返回 rowcount。"""
+    return _terminal(
+        db, run, expected_status="decided", status="send_skipped",
+        block_reason="format_invalid", error_message=error_message,
+    )
 
 
 def _sync_final_auto_send_after_success(db: Session, run: AiAutoReplyRun) -> None:

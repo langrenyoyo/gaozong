@@ -1510,3 +1510,138 @@ def test_latest_message_not_customer_blocks_before_calling_9100():
     assert run.status == "blocked"
     assert run.block_reason == "latest_message_not_customer"
     assert fake_client.calls == []
+
+
+# ========== 阶段 E：outbox 租约贯穿与退避状态机 ==========
+
+from app.services.ai_auto_reply_outbox_service import (  # noqa: E402
+    _set_outbox_lease_owner,
+    STATUS_PROCESSING as _OUTBOX_PROCESSING,
+    STATUS_RETRY_WAIT as _OUTBOX_RETRY_WAIT,
+    STATUS_FAILED as _OUTBOX_FAILED,
+    STATUS_DECIDED as _OUTBOX_DECIDED,
+)
+from app.services.ai_auto_reply_dry_run_service import _finish_run, _handle_llm_failure  # noqa: E402
+
+
+def _make_outbox_run(*, status=_OUTBOX_PROCESSING, attempt_count=0, owner="host:1"):
+    db = TestSession()
+    run = AiAutoReplyRun(
+        merchant_id="merchant-1",
+        account_open_id="account-open-1",
+        trigger_event_id=1,
+        trigger_event_key="evt_outbox_lease",
+        status=status,
+        attempt_count=attempt_count,
+        lease_owner=owner,
+        lease_expires_at=datetime.now() + timedelta(seconds=300),
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return db, run
+
+
+def test_finish_run_true_on_valid_lease():
+    db, run = _make_outbox_run(owner="host:1")
+    try:
+        _set_outbox_lease_owner("host:1")
+        ok = _finish_run(db, run, status=_OUTBOX_DECIDED, would_send_content="你好")
+        assert ok is True
+        db.refresh(run)
+        assert run.status == _OUTBOX_DECIDED
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_finish_run_false_on_stale_owner_does_not_overwrite():
+    """_finish_run 在租约 owner 不匹配时返回 False 且不覆盖（旧/过期 Worker 保护）。"""
+    db, run = _make_outbox_run(owner="real_owner")
+    try:
+        _set_outbox_lease_owner("stale_owner")
+        ok = _finish_run(db, run, status=_OUTBOX_DECIDED, would_send_content="你好")
+        assert ok is False
+        db.refresh(run)
+        assert run.status == _OUTBOX_PROCESSING  # 未被旧 worker 覆盖
+        assert run.lease_owner == "real_owner"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_finish_run_false_on_expired_lease():
+    db, run = _make_outbox_run(owner="host:1")
+    run.lease_expires_at = datetime.now() - timedelta(seconds=10)
+    db.commit()
+    try:
+        _set_outbox_lease_owner("host:1")
+        ok = _finish_run(db, run, status=_OUTBOX_DECIDED, would_send_content="你好")
+        assert ok is False
+        db.refresh(run)
+        assert run.status == _OUTBOX_PROCESSING
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def _llm_fail(attempt_count):
+    db, run = _make_outbox_run(attempt_count=attempt_count, owner="host:1")
+    try:
+        _set_outbox_lease_owner("host:1")
+        before = datetime.now()
+        _handle_llm_failure(db, run, error_message="boom", gate_results={"llm": {"status": "failed"}})
+        db.refresh(run)
+        return db, run, before
+    except Exception:
+        db.close()
+        raise
+
+
+def test_llm_retry_attempt_1_uses_backoff_1():
+    db, run, before = _llm_fail(1)
+    try:
+        assert run.status == _OUTBOX_RETRY_WAIT
+        assert run.last_failure_stage == "pre_send_temporary_failure"
+        assert run.lease_owner is None  # retry_wait 清租约
+        delta = (run.next_attempt_at - before).total_seconds()
+        assert 55 <= delta <= 65, f"attempt 1 退避应约 60s，实际 {delta}"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_llm_retry_attempt_2_uses_backoff_2():
+    db, run, before = _llm_fail(2)
+    try:
+        assert run.status == _OUTBOX_RETRY_WAIT
+        delta = (run.next_attempt_at - before).total_seconds()
+        assert 295 <= delta <= 305, f"attempt 2 退避应约 300s，实际 {delta}"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_llm_retry_attempt_3_uses_backoff_2():
+    db, run, before = _llm_fail(3)
+    try:
+        assert run.status == _OUTBOX_RETRY_WAIT
+        delta = (run.next_attempt_at - before).total_seconds()
+        assert 295 <= delta <= 305, f"attempt 3 退避应约 300s，实际 {delta}"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_llm_attempt_4_terminates_failed():
+    db, run, _ = _llm_fail(4)
+    try:
+        assert run.status == _OUTBOX_FAILED
+        assert run.last_failure_stage == "pre_send_temporary_failure"
+        assert run.next_attempt_at is None  # 终态不重试
+        assert run.lease_owner is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()

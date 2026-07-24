@@ -33,40 +33,13 @@ from app.services.xg_douyin_ai_cs_client import (
 
 logger = logging.getLogger(__name__)
 
-# 线程局部 outbox 租约上下文：claim 时设置，贯穿决策→发送全链路
-import threading as _threading
-_outbox_ctx = _threading.local()
-
-
-def _expected_lease_owner() -> str:
-    return getattr(_outbox_ctx, "lease_owner", "")
-
-
-def _set_outbox_lease_owner(owner: str) -> None:
-    _outbox_ctx.lease_owner = owner
-
-
-def _guarded_lease_update(db, run_id: int, *, expected_status: str,
-                          values: dict[str, Any]) -> int:
-    """条件更新：强制校验 expected_status + lease_owner + 租约未过期。返回 rowcount。"""
-    from sqlalchemy import update as sa_update
-    now = datetime.now()
-    owner = _expected_lease_owner()
-    if not owner:
-        return 0  # 非 outbox 路径不使用此函数
-    result = db.execute(
-        sa_update(AiAutoReplyRun)
-        .where(
-            AiAutoReplyRun.id == run_id,
-            AiAutoReplyRun.status == expected_status,
-            AiAutoReplyRun.lease_owner == owner,
-            AiAutoReplyRun.lease_expires_at > now,
-        )
-        .values(**values, updated_at=now)
-        .execution_options(synchronize_session=False)
-    )
-    db.commit()
-    return result.rowcount
+# 共享并发原语已下沉至 outbox service：原始 lease owner 上下文 + guarded 推进。
+# dry-run 与 send service 均从 outbox_service 导入，保证“原始 owner 显式贯穿，禁止重读 DB 当前 owner”。
+from app.services.ai_auto_reply_outbox_service import (
+    _expected_lease_owner,
+    _set_outbox_lease_owner,
+    _guarded_lease_update,
+)
 
 
 def run_ai_auto_reply_job(event_id: int) -> None:
@@ -421,7 +394,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
     )
     refreshed = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run.id).first()
     run = refreshed or run
-    _finish_run(
+    finished = _finish_run(
         db,
         run,
         status=status,
@@ -443,6 +416,13 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             },
         },
     )
+    # _finish_run=False 表示租约已丢失（被恢复器或新 Worker 接管），立即终止，不进入发送
+    if not finished:
+        logger.warning(
+            "ai_auto_reply_lease_lost stage=after_finish run_id=%s status=%s",
+            run.id, status,
+        )
+        return
     if status == "decided" and run.mode == "real_send_candidate":
         if final_result.get("auto_send") is True:
             send_ai_auto_reply_for_run(db, run_id=run.id)

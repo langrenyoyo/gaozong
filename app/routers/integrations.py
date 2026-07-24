@@ -2,7 +2,6 @@
 
 import json
 import logging
-import threading
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -51,20 +50,14 @@ class DouyinConversationMarkReadRequest(BaseModel):
 def _wake_outbox_scheduler() -> None:
     """低延迟唤醒：立即执行一轮 outbox 处理，不等待 60 秒周期。
 
-    使用非阻塞单飞锁，防止高频 webhook 形成无界并行完整扫描。
+    与 scheduler 共用 outbox service 的 cycle 单飞锁（run_outbox_cycle 内部非阻塞获取），
+    防止高频 webhook 形成无界并行完整扫描。
     """
-    if not _wake_lock.acquire(blocking=False):
-        return  # 已有唤醒在执行，跳过
     try:
         from app.services.ai_auto_reply_outbox_service import run_outbox_cycle
         run_outbox_cycle()
     except Exception as exc:
         logger.warning("ai_auto_reply_wake_failed error_type=%s", type(exc).__name__)
-    finally:
-        _wake_lock.release()
-
-
-_wake_lock = threading.Lock()
 
 
 def _merchant_id_for_douyin_cs(context: RequestContext) -> str:

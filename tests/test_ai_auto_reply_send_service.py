@@ -1380,3 +1380,109 @@ def test_ai_auto_send_preserves_run_ids_against_phase9_extension():
         assert record.return_visit_run_id is None
     finally:
         db.close()
+
+
+# ========== 阶段 E：发送检查点与终态 guarded（拒绝旧/过期 Worker） ==========
+
+from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner  # noqa: E402
+from app.services.ai_auto_reply_send_service import _checkpoint, _terminal  # noqa: E402
+
+
+def _make_leased_run(*, status, lease_owner, lease_expires_at):
+    db = TestSession()
+    run = AiAutoReplyRun(
+        merchant_id="merchant-1",
+        account_open_id="account-open-1",
+        trigger_event_id=1,
+        trigger_event_key="evt_send_lease",
+        status=status,
+        lease_owner=lease_owner,
+        lease_expires_at=lease_expires_at,
+        would_send_content="你好",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return db, run
+
+
+def test_checkpoint_aborts_on_stale_owner():
+    """检查点拒绝旧 Worker：owner 不匹配 → rowcount 0，状态不被覆盖。"""
+    db, run = _make_leased_run(status="decided", lease_owner="real_owner",
+                               lease_expires_at=datetime.now() + timedelta(seconds=300))
+    try:
+        _set_outbox_lease_owner("stale_owner")
+        rc = _checkpoint(db, run, expected_status="decided", status="send_processing")
+        assert rc == 0
+        db.refresh(run)
+        assert run.status == "decided"
+        assert run.lease_owner == "real_owner"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_checkpoint_aborts_on_expired_lease():
+    """检查点拒绝过期租约：lease_expires_at<now → rowcount 0。"""
+    db, run = _make_leased_run(status="decided", lease_owner="host:1",
+                               lease_expires_at=datetime.now() - timedelta(seconds=10))
+    try:
+        _set_outbox_lease_owner("host:1")
+        rc = _checkpoint(db, run, expected_status="decided", status="send_processing")
+        assert rc == 0
+        db.refresh(run)
+        assert run.status == "decided"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_checkpoint_refreshes_lease_on_success():
+    """检查点续租：成功推进时延长 lease_expires_at。"""
+    old_expiry = datetime.now() + timedelta(seconds=10)
+    db, run = _make_leased_run(status="decided", lease_owner="host:1", lease_expires_at=old_expiry)
+    try:
+        _set_outbox_lease_owner("host:1")
+        rc = _checkpoint(db, run, expected_status="decided", status="send_processing")
+        assert rc == 1
+        db.refresh(run)
+        assert run.status == "send_processing"
+        assert run.lease_expires_at > old_expiry
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_terminal_does_not_overwrite_when_lease_lost():
+    """终态拒绝旧/过期 Worker：状态已被新 Worker/恢复器接管 → 不覆盖，保留新租约。"""
+    db, run = _make_leased_run(status="pending", lease_owner="new_worker",
+                               lease_expires_at=datetime.now() + timedelta(seconds=300))
+    try:
+        _set_outbox_lease_owner("old_worker")
+        rc = _terminal(db, run, expected_status="send_authorized", status="sent")
+        assert rc == 0
+        db.refresh(run)
+        assert run.status == "pending"  # 未被旧 worker 覆盖
+        assert run.lease_owner == "new_worker"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_terminal_writes_and_clears_lease_on_valid_lease():
+    """终态写入：有效租约 → 写 sent 并清理租约。"""
+    db, run = _make_leased_run(status="send_authorized", lease_owner="host:1",
+                               lease_expires_at=datetime.now() + timedelta(seconds=300))
+    try:
+        _set_outbox_lease_owner("host:1")
+        rc = _terminal(db, run, expected_status="send_authorized", status="sent")
+        assert rc == 1
+        db.refresh(run)
+        assert run.status == "sent"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()

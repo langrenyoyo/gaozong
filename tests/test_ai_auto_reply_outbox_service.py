@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -20,17 +20,29 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import Base
-from app.models import AiAutoReplyRun, DouyinWebhookEvent, DouyinAuthorizedAccount
+from app.models import (
+    AiAutoReplyRun,
+    DouyinAuthorizedAccount,
+    DouyinPrivateMessageSend,
+    DouyinWebhookEvent,
+)
 from app.services.ai_auto_reply_outbox_service import (
+    _cycle_single_flight_lock,
+    _guarded_lease_update,
+    _set_outbox_lease_owner,
     enqueue_auto_reply_run,
     claim_next_batch,
     recover_expired_leases,
     compensate_missing_runs,
     manual_retry_run,
     alert_backlog,
+    run_outbox_cycle,
     STATUS_PENDING,
     STATUS_PROCESSING,
     STATUS_RETRY_WAIT,
+    STATUS_DECIDED,
+    STATUS_SEND_PROCESSING,
+    STATUS_SEND_AUTHORIZED,
     STATUS_FAILED,
     STATUS_SENT,
     STATUS_SEND_UNKNOWN,
@@ -602,3 +614,205 @@ def test_a20_retry_wait_next_attempt_in_future(db_engine):
         assert len(claimed) == 1
     finally:
         db.close()
+
+
+# ========== 阶段 E：guarded transition / 租约上下文 / 恢复对账 / 单飞 ==========
+
+
+def _make_run(db, *, status=STATUS_PENDING, lease_owner=None, lease_expires_at=None,
+              attempt_count=0, merchant_id="m_001", run_id=None):
+    run = AiAutoReplyRun(
+        id=run_id,
+        merchant_id=merchant_id, account_open_id="acc_001",
+        trigger_event_id=1, trigger_event_key=f"evt_lease_{datetime.now().timestamp()}",
+        status=status, attempt_count=attempt_count,
+        lease_owner=lease_owner, lease_expires_at=lease_expires_at,
+        created_at=datetime.now(), updated_at=datetime.now(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def _make_send_record(db, *, run_id, status="sent"):
+    record = DouyinPrivateMessageSend(
+        main_account_id=1,
+        conversation_short_id="conv-1",
+        server_message_id="srv-1",
+        from_user_id="acc_001",
+        to_user_id="cust_001",
+        content="你好",
+        status=status,
+        auto_reply_run_id=run_id,
+    )
+    db.add(record)
+    db.commit()
+    return record
+
+
+def test_guarded_lease_update_success_when_owner_and_lease_valid(db_engine):
+    """原始 owner + 租约未过期 → 推进成功，rowcount=1。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_PROCESSING, lease_owner="host:1",
+                        lease_expires_at=datetime.now() + timedelta(seconds=300))
+        _set_outbox_lease_owner("host:1")
+        rc = _guarded_lease_update(db, run.id, expected_status=STATUS_PROCESSING,
+                                  values={"status": STATUS_DECIDED})
+        assert rc == 1
+        db.refresh(run)
+        assert run.status == STATUS_DECIDED
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_guarded_lease_update_rejects_stale_owner(db_engine):
+    """旧 owner 不匹配 → rowcount=0，不覆盖（保护恢复器/新 Worker 状态）。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_PROCESSING, lease_owner="real_owner",
+                        lease_expires_at=datetime.now() + timedelta(seconds=300))
+        _set_outbox_lease_owner("stale_owner")
+        rc = _guarded_lease_update(db, run.id, expected_status=STATUS_PROCESSING,
+                                  values={"status": STATUS_DECIDED})
+        assert rc == 0
+        db.refresh(run)
+        assert run.status == STATUS_PROCESSING
+        assert run.lease_owner == "real_owner"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_guarded_lease_update_rejects_expired_lease(db_engine):
+    """过期租约 → rowcount=0，不推进。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_PROCESSING, lease_owner="host:1",
+                        lease_expires_at=datetime.now() - timedelta(seconds=10))
+        _set_outbox_lease_owner("host:1")
+        rc = _guarded_lease_update(db, run.id, expected_status=STATUS_PROCESSING,
+                                  values={"status": STATUS_DECIDED})
+        assert rc == 0
+        db.refresh(run)
+        assert run.status == STATUS_PROCESSING
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_guarded_lease_update_refresh_extends_lease(db_engine):
+    """检查点续租：refresh_lease=True 延长 lease_expires_at。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        old_expiry = datetime.now() + timedelta(seconds=10)
+        run = _make_run(db, status=STATUS_PROCESSING, lease_owner="host:1", lease_expires_at=old_expiry)
+        _set_outbox_lease_owner("host:1")
+        rc = _guarded_lease_update(db, run.id, expected_status=STATUS_PROCESSING,
+                                  values={"status": STATUS_SEND_PROCESSING}, refresh_lease=True)
+        assert rc == 1
+        db.refresh(run)
+        assert run.lease_expires_at > old_expiry
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_recover_send_authorized_with_sent_record_becomes_sent(db_engine):
+    """send_authorized 过期 + 有 sent 流水 → sent（不重发）。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_SEND_AUTHORIZED, lease_owner="dead",
+                        lease_expires_at=datetime.now() - timedelta(seconds=10))
+        _make_send_record(db, run_id=run.id, status="sent")
+        count = recover_expired_leases(db)
+        assert count == 1
+        db.refresh(run)
+        assert run.status == STATUS_SENT
+        assert run.lease_owner is None
+    finally:
+        db.close()
+
+
+def test_recover_send_authorized_without_sent_record_becomes_send_unknown(db_engine):
+    """send_authorized 过期 + 无 sent 流水 → send_unknown（不重发）。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_SEND_AUTHORIZED, lease_owner="dead",
+                        lease_expires_at=datetime.now() - timedelta(seconds=10))
+        count = recover_expired_leases(db)
+        assert count == 1
+        db.refresh(run)
+        assert run.status == STATUS_SEND_UNKNOWN
+        assert run.last_failure_stage == "send_authorized_crash_unknown"
+        assert run.lease_owner is None
+    finally:
+        db.close()
+
+
+def test_recover_count_only_counts_actual_rowcount(db_engine):
+    """recovered 仅累计实际 rowcount：非 send_authorized/processing 过期任务不计入。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        # sent 终态（租约已清）不应被恢复
+        _make_run(db, status=STATUS_SENT, lease_owner=None, lease_expires_at=None)
+        # send_authorized 未过期不应被恢复
+        _make_run(db, status=STATUS_SEND_AUTHORIZED, lease_owner="alive",
+                  lease_expires_at=datetime.now() + timedelta(seconds=300))
+        count = recover_expired_leases(db)
+        assert count == 0
+    finally:
+        db.close()
+
+
+def test_manual_retry_rejects_when_send_record_exists(db_engine):
+    """manual retry 与发送流水竞争：已存在 sent 流水时原子拒绝（NOT EXISTS 守卫，无 TOCTOU）。"""
+    engine, Session = db_engine
+    db = Session()
+    try:
+        run = _make_run(db, status=STATUS_FAILED, attempt_count=4, merchant_id="m_001")
+        run.last_failure_stage = "pre_send_temporary_failure"
+        _make_send_record(db, run_id=run.id, status="sent")
+        with pytest.raises(ValueError, match="already_sent"):
+            manual_retry_run(db, run_id=run.id, merchant_id="m_001")
+        db.refresh(run)
+        assert run.status == STATUS_FAILED  # 未被重试覆盖
+    finally:
+        db.close()
+
+
+def test_run_outbox_cycle_single_flight_skips_when_busy():
+    """scheduler 与 wake 共用 cycle 单飞锁：锁被持有时立即跳过，不创建 Session。"""
+    _cycle_single_flight_lock.acquire()
+    try:
+        with patch("app.services.ai_auto_reply_outbox_service.SessionLocal") as sl, \
+             patch("app.services.ai_auto_reply_outbox_service.recover_expired_leases") as rec:
+            run_outbox_cycle()
+            assert sl.call_count == 0
+            assert rec.call_count == 0
+    finally:
+        _cycle_single_flight_lock.release()
+
+
+def test_run_outbox_cycle_proceeds_when_lock_free():
+    """锁空闲时 run_outbox_cycle 执行完整一轮（recover→claim→compensate→alert）。"""
+    fake_db = MagicMock()
+    with patch("app.services.ai_auto_reply_outbox_service.SessionLocal", return_value=fake_db), \
+         patch("app.services.ai_auto_reply_outbox_service.recover_expired_leases") as rec, \
+         patch("app.services.ai_auto_reply_outbox_service.claim_next_batch", return_value=[]) as claim, \
+         patch("app.services.ai_auto_reply_outbox_service.compensate_missing_runs", return_value=0) as comp, \
+         patch("app.services.ai_auto_reply_outbox_service.alert_backlog") as alert:
+        run_outbox_cycle()
+        assert rec.call_count == 1
+        assert claim.call_count == 1
+        assert comp.call_count == 1
+        assert alert.call_count == 1

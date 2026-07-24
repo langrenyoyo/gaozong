@@ -999,3 +999,34 @@ def test_outbox_default_false_in_all_templates():
                 break
         else:
             assert False, f"{template.name} 缺少 AI_AUTO_REPLY_OUTBOX_ENABLED"
+
+
+def test_outbox_ten_variables_exact_defaults():
+    """outbox 十个变量在三个模板中的精确默认值（与 config.py 默认值一致）。"""
+    expected = {
+        "AI_AUTO_REPLY_OUTBOX_ENABLED": "false",
+        "AI_AUTO_REPLY_OUTBOX_INTERVAL_SECONDS": "60",
+        "AI_AUTO_REPLY_OUTBOX_BATCH_SIZE": "100",
+        "AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS": "300",
+        "AI_AUTO_REPLY_OUTBOX_MAX_RETRIES": "3",
+        "AI_AUTO_REPLY_OUTBOX_BACKOFF_1_SECONDS": "60",
+        "AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS": "300",
+        "AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS": "900",
+        "AI_AUTO_REPLY_OUTBOX_BACKLOG_COUNT_THRESHOLD": "100",
+        "AI_AUTO_REPLY_OUTBOX_BACKLOG_AGE_THRESHOLD": "300",
+    }
+    for template in [
+        ROOT / ".env.development.example",
+        ROOT / ".env.lan.example",
+        ROOT / ".env.production.example",
+    ]:
+        values: dict[str, str] = {}
+        for line in template.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("AI_AUTO_REPLY_OUTBOX_") or stripped.startswith("#"):
+                continue
+            key, _, raw = stripped.partition("=")
+            values[key] = raw.split("#", 1)[0].strip()
+        for key, want in expected.items():
+            assert key in values, f"{template.name} 缺少 {key}"
+            assert values[key] == want, f"{template.name} 中 {key} 默认值应为 {want!r}，实际 {values[key]!r}"

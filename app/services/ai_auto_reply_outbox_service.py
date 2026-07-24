@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, update as sa_update
+from sqlalchemy import and_, or_, select, update as sa_update
 from sqlalchemy.orm import Session
 
 from app import config
@@ -37,6 +37,65 @@ _PROCESS_ID = f"{socket.gethostname()}:{os.getpid()}"
 def _thread_unique_lease_owner() -> str:
     """每个线程生成唯一租约标识，避免同进程多线程竞争误读。"""
     return f"{_PROCESS_ID}:{threading.current_thread().ident}"
+
+
+# ========== 共享并发原语：lease 上下文 + guarded transition + cycle 单飞锁 ==========
+# lease 上下文为线程局部：claim 时由 dry-run 入口写入原始 owner，贯穿决策→发送全链路。
+# dry-run 与 send service 均从本模块导入这些原语，保证“原始 owner 显式贯穿，禁止重读 DB 当前 owner”。
+_outbox_ctx = threading.local()
+
+
+def _expected_lease_owner() -> str:
+    """返回当前线程的 outbox claim 原始 owner；非 outbox 路径返回空串。"""
+    return getattr(_outbox_ctx, "lease_owner", "")
+
+
+def _set_outbox_lease_owner(owner: str) -> None:
+    """设置当前线程的原始 lease owner（claim 时调用），贯穿后续 guarded 推进。"""
+    _outbox_ctx.lease_owner = owner
+
+
+def _guarded_lease_update(
+    db: Session,
+    run_id: int,
+    *,
+    expected_status: str,
+    values: dict[str, Any],
+    refresh_lease: bool = False,
+) -> int:
+    """guarded 状态推进：原子条件 UPDATE，强制校验 expected_status + 原始 lease_owner + 租约未过期。
+
+    - owner 为空（非 outbox 路径）返回 0，调用方走非租约分支。
+    - refresh_lease=True 时检查点续租（延长 lease_expires_at）。
+    - 返回 rowcount；0 表示租约已丢失/过期/状态不符，调用方必须终止且不得覆盖恢复器或新 Worker 的状态。
+    """
+    now = datetime.now()
+    owner = _expected_lease_owner()
+    if not owner:
+        return 0
+    update_values = dict(values)
+    update_values["updated_at"] = now
+    if refresh_lease:
+        update_values["lease_expires_at"] = now + timedelta(
+            seconds=config.AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS
+        )
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run_id,
+            AiAutoReplyRun.status == expected_status,
+            AiAutoReplyRun.lease_owner == owner,
+            AiAutoReplyRun.lease_expires_at > now,
+        )
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount
+
+
+# cycle 单飞锁：scheduler 与 webhook wake 共用，避免并发完整扫描形成无界并行。
+_cycle_single_flight_lock = threading.Lock()
 
 # 状态常量
 STATUS_PENDING = "pending"
@@ -232,46 +291,53 @@ def recover_expired_leases(db: Session) -> int:
     db.commit()
     count = result.rowcount
 
-    # send_authorized → 按发送流水对账（条件更新，防竞争覆盖）
-    authorized_runs = (
-        db.query(AiAutoReplyRun)
-        .filter(
+    # send_authorized → 按发送流水对账（原子 EXISTS/NOT EXISTS 条件更新，防竞争覆盖）
+    # sent_exists 以 run.id 为关联，单条 UPDATE 即可对账全部过期 send_authorized 任务
+    sent_exists = (
+        select(DouyinPrivateMessageSend.id)
+        .where(
+            DouyinPrivateMessageSend.auto_reply_run_id == AiAutoReplyRun.id,
+            DouyinPrivateMessageSend.status == "sent",
+        )
+    )
+    # 存在 sent 流水 → sent（不重发）
+    reconciled_sent = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
             AiAutoReplyRun.status == STATUS_SEND_AUTHORIZED,
             AiAutoReplyRun.lease_expires_at < now,
+            sent_exists.exists(),
         )
-        .all()
+        .values(
+            status=STATUS_SENT,
+            last_failure_stage=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
     )
-    for run in authorized_runs:
-        existing_send = (
-            db.query(DouyinPrivateMessageSend)
-            .filter(DouyinPrivateMessageSend.auto_reply_run_id == run.id)
-            .first()
+    db.commit()
+    count += reconciled_sent.rowcount
+    # 不存在 sent 流水 → send_unknown（不重发）
+    reconciled_unknown = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.status == STATUS_SEND_AUTHORIZED,
+            AiAutoReplyRun.lease_expires_at < now,
+            ~sent_exists.exists(),
         )
-        final_status = STATUS_SENT if (existing_send is not None and existing_send.status == "sent") else STATUS_SEND_UNKNOWN
-        failure_stage = None if final_status == STATUS_SENT else "send_authorized_crash_unknown"
-        # 条件更新：只在状态仍为 send_authorized 且租约已过期时推进
-        db.execute(
-            sa_update(AiAutoReplyRun)
-            .where(
-                AiAutoReplyRun.id == run.id,
-                AiAutoReplyRun.status == STATUS_SEND_AUTHORIZED,
-                AiAutoReplyRun.lease_expires_at < now,
-            )
-            .values(
-                status=final_status,
-                last_failure_stage=failure_stage,
-                lease_owner=None,
-                lease_expires_at=None,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session=False)
+        .values(
+            status=STATUS_SEND_UNKNOWN,
+            last_failure_stage="send_authorized_crash_unknown",
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
         )
-        db.commit()
-        count += 1
-    if authorized_runs:
-        logger.warning(
-            "ai_outbox_recover_authorized stage=recover_authorized reconciled=%s", len(authorized_runs),
-        )
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    count += reconciled_unknown.rowcount
 
     if count > 0:
         logger.warning(
@@ -395,21 +461,16 @@ RETRY_FAILURE_STAGES = _RETRY_WHITELIST_FAILURE_STAGES
 def manual_retry_run(db: Session, *, run_id: int, merchant_id: str) -> AiAutoReplyRun:
     """人工重试：只允许可信当前商户、明确未发送且失败阶段在白名单内的 failed run。
 
-    使用条件更新（merchant_id + failed + 白名单阶段 + 无发送流水），
-    检查唯一胜出行数，不在请求内发送。
+    使用单条原子条件 UPDATE（merchant_id + failed + 白名单阶段 + NOT EXISTS 发送流水），
+    消除"先读流水再更新"的 TOCTOU；检查唯一胜出行数，不在请求内发送。
     """
     from app.models import DouyinPrivateMessageSend
 
-    # 先检查发送流水是否存在（只读，不持锁）
-    existing_send = (
-        db.query(DouyinPrivateMessageSend)
-        .filter(DouyinPrivateMessageSend.auto_reply_run_id == run_id)
-        .first()
-    )
-    if existing_send is not None:
-        raise ValueError("already_sent")
-
     now = datetime.now()
+    sent_exists = (
+        select(DouyinPrivateMessageSend.id)
+        .where(DouyinPrivateMessageSend.auto_reply_run_id == run_id)
+    )
     result = db.execute(
         sa_update(AiAutoReplyRun)
         .where(
@@ -417,6 +478,7 @@ def manual_retry_run(db: Session, *, run_id: int, merchant_id: str) -> AiAutoRep
             AiAutoReplyRun.merchant_id == merchant_id,
             AiAutoReplyRun.status == STATUS_FAILED,
             AiAutoReplyRun.last_failure_stage.in_(RETRY_FAILURE_STAGES),
+            ~sent_exists.exists(),
         )
         .values(
             status=STATUS_RETRY_WAIT,
@@ -433,10 +495,17 @@ def manual_retry_run(db: Session, *, run_id: int, merchant_id: str) -> AiAutoRep
     db.commit()
 
     if result.rowcount == 0:
-        # 条件不满足，区分原因
+        # 原子守卫未命中，按只读状态区分原因（不影响并发安全）
         run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
         if run is None:
             raise ValueError("run_not_found")
+        existing_send = (
+            db.query(DouyinPrivateMessageSend)
+            .filter(DouyinPrivateMessageSend.auto_reply_run_id == run_id)
+            .first()
+        )
+        if existing_send is not None:
+            raise ValueError("already_sent")
         if run.merchant_id != merchant_id:
             from app.services.douyin_workbench_conversation_service import AccountMerchantDeniedError
             raise AccountMerchantDeniedError("run_merchant_denied")
@@ -456,7 +525,13 @@ def manual_retry_run(db: Session, *, run_id: int, merchant_id: str) -> AiAutoRep
 
 
 def run_outbox_cycle() -> None:
-    """执行一轮 outbox 处理周期：recover → claim → process → compensate → alert。"""
+    """执行一轮 outbox 处理周期：recover → claim → process → compensate → alert。
+
+    scheduler 与 webhook wake 共用本入口；非阻塞单飞锁防止并发完整扫描。
+    """
+    if not _cycle_single_flight_lock.acquire(blocking=False):
+        logger.info("ai_outbox_cycle_skipped reason=single_flight_busy")
+        return
     db = SessionLocal()
     try:
         recover_expired_leases(db)
@@ -484,6 +559,7 @@ def run_outbox_cycle() -> None:
         )
     finally:
         db.close()
+        _cycle_single_flight_lock.release()
 
 
 def _process_one(db: Session, run: AiAutoReplyRun) -> None:
