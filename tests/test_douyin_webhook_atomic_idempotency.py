@@ -9,7 +9,7 @@
 - A6  9000 20路并发（1 有效、19 重复、1 线索）
 - A7  9202 20路并发（同上；有效+重复 merchant_id/tenant_id 与 9000 一致）
 - A8  混合 9000/9202 20路竞争（胜负无关；全局 patch 在线程池外）
-- A9  重复继承（19 重复返回+审计行全部继承胜出者非空 lead_id 和可信归属）
+- A9  重复继承（19 重复返回继承非空 lead_id；19 审计行继承 lead_id、merchant_id、tenant_id）
 - A10 调度（BackgroundTasks：首次一次、重复零次）
 - A11 两入口日志（9000+9202 外层 rollback 实际调用 + stage/failure_stage）
 - A12 归属矩阵（唯一/全空/歧义/无绑定；每项处理两次并断言原事件+重复返回+审计行+线索数）
@@ -25,7 +25,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from fastapi import BackgroundTasks
@@ -197,12 +197,16 @@ def _spy_rollback(db):
 
 
 def test_a1_claim_statement_uses_postgresql_on_conflict_returning_with_jsonb_cast():
-    """A1：PostgreSQL 占位语句包含 ON CONFLICT DO NOTHING RETURNING，raw_body/parsed_content_json 显式 CAST AS JSONB。"""
+    """A1：PostgreSQL 占位语句包含 ON CONFLICT DO NOTHING RETURNING，raw_body 和 parsed_content_json
+    各有一个显式 CAST AS JSONB（共 2 个 CAST、2 个 AS JSONB）。"""
     statement = build_webhook_claim_statement("postgresql", _claim_values())
     sql = str(statement.compile(dialect=postgresql.dialect()))
     assert "ON CONFLICT (event_key) DO NOTHING" in sql
     assert "RETURNING" in sql and "douyin_webhook_events.id" in sql
-    assert "CAST(" in sql and "AS JSONB" in sql
+    cast_count = sql.count("CAST(")
+    jsonb_count = sql.count("AS JSONB")
+    assert cast_count == 2, f"期望 2 个 CAST，实际 {cast_count}：{sql}"
+    assert jsonb_count == 2, f"期望 2 个 AS JSONB，实际 {jsonb_count}：{sql}"
 
 
 def test_a1_sqlite_no_insert_or_ignore():
@@ -224,127 +228,151 @@ def test_a1_unsupported_dialect_raises():
 
 
 def test_a2_assign_default_commit_persists(memory_database):
-    """A2：assign_lead 默认 commit=True 直接提交到数据库。"""
+    """A2：assign_lead 默认 commit=True 直接提交（commit_count == 1）。"""
     from app.services.assign_service import assign_lead
     engine, Session = memory_database
     db = Session()
     try:
-        lead = DouyinLead(
-            source="douyin", source_id="a2_test", merchant_id="m_a2",
-            status="pending",
-        )
+        lead = DouyinLead(source="douyin", source_id="a2_test", merchant_id="m_a2", status="pending")
         db.add(lead)
         db.commit()
         db.refresh(lead)
-        staff = SalesStaff(name="销售a2", status="active", merchant_id="m_a2",
-                           enable_lead_assignment=True)
+        staff = SalesStaff(name="销售a2", status="active", merchant_id="m_a2", enable_lead_assignment=True)
         db.add(staff)
         db.commit()
         db.refresh(staff)
+
+        # 准备完成后安装 commit 计数器
+        commit_count = {"n": 0}
+        original_commit = db.commit
+        def _counting_commit():
+            commit_count["n"] += 1
+            return original_commit()
+        db.commit = _counting_commit
+
         result = assign_lead(db, lead.id, staff.id)
         assert result.assigned_staff_id == staff.id
-        # 默认 commit 后用新 Session 可读
-        db2 = Session()
-        try:
-            assert db2.query(DouyinLead).filter_by(id=lead.id).one().assigned_staff_id == staff.id
-        finally:
-            db2.close()
+        assert commit_count["n"] == 1, f"期望 1 次 commit，实际 {commit_count['n']}"
     finally:
         db.close()
 
 
-def test_a2_assign_commit_false_flushes_without_commit(memory_database):
-    """A2：auto_assign_next(commit=False) flush 后 lead 在同 Session 可见，但未提交（新 Session 不可见）。"""
+def test_a2_assign_commit_false_flushes_without_commit(tmp_path):
+    """A2：auto_assign_next(commit=False) 已 flush（同 Session 可见），commit_count == 0；
+    rollback 后独立文件数据库新 Session 证明状态未持久化。"""
     from app.services.assign_service import auto_assign_next
-    engine, Session = memory_database
+    db_path = tmp_path / "a2_nocommit.db"
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
     db = Session()
     try:
-        lead = DouyinLead(
-            source="douyin", source_id="a2_nocommit", merchant_id="m_a2b",
-            status="pending",
-        )
+        lead = DouyinLead(source="douyin", source_id="a2_nocommit", merchant_id="m_a2b", status="pending")
         db.add(lead)
         db.commit()
         db.refresh(lead)
-        staff = SalesStaff(name="销售a2b", status="active", merchant_id="m_a2b",
-                           enable_lead_assignment=True)
+        staff = SalesStaff(name="销售a2b", status="active", merchant_id="m_a2b", enable_lead_assignment=True)
         db.add(staff)
         db.commit()
         db.refresh(staff)
+
+        # 准备完成后安装 commit 计数器
+        commit_count = {"n": 0}
+        original_commit = db.commit
+        def _counting_commit():
+            commit_count["n"] += 1
+            return original_commit()
+        db.commit = _counting_commit
+
         result = auto_assign_next(db, lead.id, commit=False)
         assert result.assigned_staff_id == staff.id
+        assert commit_count["n"] == 0, f"期望 0 次 commit，实际 {commit_count['n']}"
         # flush 后同 Session 可见
         assert db.query(DouyinLead).filter_by(id=lead.id).one().assigned_staff_id == staff.id
-        # 未 commit，新 Session 不可见
+        # 在回滚前保存 ID，避免 detached 访问
+        persisted_lead_id = lead.id
+        # rollback 后用独立新 Session 证明未持久化
         db.rollback()
-        db2 = Session()
-        try:
-            assert db2.query(DouyinLead).filter_by(id=lead.id).one().assigned_staff_id is None
-        finally:
-            db2.close()
     finally:
         db.close()
+    db2 = Session()
+    try:
+        row = db2.query(DouyinLead).filter_by(id=persisted_lead_id).one()
+        assert row.assigned_staff_id is None
+    finally:
+        db2.close()
+    engine.dispose()
 
 
 # ========== A3: 人工接管事务（commit 参数）==========
 
 
 def test_a3_takeover_default_commit_persists(memory_database):
-    """A3：mark_manual_takeover 默认 commit=True 直接提交。"""
+    """A3：mark_manual_takeover 默认 commit=True 直接提交（commit_count == 1）。"""
     from app.services.conversation_autopilot_state_service import mark_manual_takeover
     engine, Session = memory_database
     db = Session()
     try:
+        commit_count = {"n": 0}
+        original_commit = db.commit
+        def _counting_commit():
+            commit_count["n"] += 1
+            return original_commit()
+        db.commit = _counting_commit
+
         state = mark_manual_takeover(
             db, merchant_id="m_a3", account_open_id="acc_a3",
             conversation_short_id="conv_a3", customer_open_id="cust_a3",
         )
         assert state.mode == "manual"
-        db2 = Session()
-        try:
-            assert db2.query(ConversationAutopilotState).filter_by(
-                merchant_id="m_a3", account_open_id="acc_a3"
-            ).one().mode == "manual"
-        finally:
-            db2.close()
+        assert commit_count["n"] == 1, f"期望 1 次 commit，实际 {commit_count['n']}"
     finally:
         db.close()
 
 
-def test_a3_takeover_commit_false_flushes_without_commit(memory_database):
-    """A3：mark_manual_takeover(commit=False) flush 后同 Session 可见，但未提交。"""
+def test_a3_takeover_commit_false_flushes_without_commit(tmp_path):
+    """A3：mark_manual_takeover(commit=False) 已 flush（同 Session 可见），commit_count == 0；
+    rollback 后独立文件数据库新 Session 证明状态未持久化。"""
     from app.services.conversation_autopilot_state_service import mark_manual_takeover
-    engine, Session = memory_database
+    db_path = tmp_path / "a3_nocommit.db"
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
     db = Session()
     try:
+        commit_count = {"n": 0}
+        original_commit = db.commit
+        def _counting_commit():
+            commit_count["n"] += 1
+            return original_commit()
+        db.commit = _counting_commit
+
         state = mark_manual_takeover(
             db, merchant_id="m_a3b", account_open_id="acc_a3b",
             conversation_short_id="conv_a3b", commit=False,
         )
         assert state.mode == "manual"
+        assert commit_count["n"] == 0, f"期望 0 次 commit，实际 {commit_count['n']}"
         # flush 后同 Session 可见
-        assert db.query(ConversationAutopilotState).filter_by(
-            merchant_id="m_a3b"
-        ).one().mode == "manual"
-        # 未 commit
+        assert db.query(ConversationAutopilotState).filter_by(merchant_id="m_a3b").one().mode == "manual"
+        # rollback
         db.rollback()
-        db2 = Session()
-        try:
-            assert db2.query(ConversationAutopilotState).filter_by(
-                merchant_id="m_a3b"
-            ).count() == 0
-        finally:
-            db2.close()
     finally:
         db.close()
+    db2 = Session()
+    try:
+        assert db2.query(ConversationAutopilotState).filter_by(merchant_id="m_a3b").count() == 0
+    finally:
+        db2.close()
+    engine.dispose()
 
 
 # ========== A4: 派单后回滚 ==========
 
 
 def test_a4_dispatch_rolls_back_event_lead_replycheck_followup(concurrent_database):
-    """A4：派单后异常 → 外层 rollback 实际调用；新 Session 断言事件/线索/ReplyCheck/
-    LeadFollowupRecord 均不存在。"""
+    """A4：派单后异常前事件/线索/ReplyCheck/LeadFollowupRecord 均已存在；
+    异常后外层 rollback 实际调用；新 Session 断言四类数据全部为 0。"""
     from app.routers.integrations import _process_webhook_locally
     engine, Session = concurrent_database
     _setup_account_and_staff(Session)
@@ -353,9 +381,17 @@ def test_a4_dispatch_rolls_back_event_lead_replycheck_followup(concurrent_databa
     db = Session()
     _, rollback_spy = _spy_rollback(db)
     try:
+        def _verify_then_fail(db_arg, event_arg):
+            """在抛错前从当前 Session 断言四类数据均已进入事务。"""
+            assert db_arg.query(DouyinWebhookEvent).count() == 1, "事件未写入"
+            assert db_arg.query(DouyinLead).count() == 1, "线索未创建"
+            assert db_arg.query(ReplyCheck).count() == 1, "ReplyCheck 未创建"
+            assert db_arg.query(LeadFollowupRecord).count() >= 1, "LeadFollowupRecord 未创建"
+            raise RuntimeError("forced after dispatch")
+
         with patch(
             "app.integrations.douyin_webhook._post_process_im_send_msg",
-            side_effect=RuntimeError("forced after dispatch"),
+            side_effect=_verify_then_fail,
         ):
             with pytest.raises(RuntimeError, match="forced after dispatch"):
                 _process_webhook_locally(db, payload)
@@ -480,6 +516,7 @@ def test_a7_internal_twenty_concurrent_with_scope_inheritance(concurrent_databas
         assert valid.merchant_id == "merchant_atomic"
         assert valid.tenant_id == "tenant_atomic"
         dups = db.query(DouyinWebhookEvent).filter_by(is_duplicate=True).all()
+        assert len(dups) == 19, f"期望 19 条重复审计事件，实际 {len(dups)}"
         for dup in dups:
             assert dup.merchant_id == valid.merchant_id
             assert dup.tenant_id == valid.tenant_id
@@ -557,7 +594,7 @@ def test_a8_mixed_twenty_concurrent(concurrent_database):
 
 
 def test_a9_all_duplicates_inherit_nonnull_lead_and_scope(concurrent_database):
-    """A9：19 个重复返回和 19 条重复审计行全部继承胜出者非空 lead_id 和可信归属。"""
+    """A9：19 个重复返回继承非空 lead_id；19 条重复审计行继承 lead_id、merchant_id、tenant_id。"""
     from app.integrations.douyin_webhook import process_webhook_event
     engine, Session = concurrent_database
     _setup_account_and_staff(Session)
