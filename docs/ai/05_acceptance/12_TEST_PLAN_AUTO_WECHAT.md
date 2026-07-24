@@ -679,7 +679,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 ## 27. AI 自动回复 outbox / 持久化任务验收（DY-CS-AUTO-REPLY-OUTBOX-1）
 
-候选 `47aa814cd1dba00e4c7b99573a6608a00d27a8d6`（R2 第六次返修，父候选 `8444d901a60d9633acbe05d671e9a9cc4dfea023`）已实现，执行窗口自测通过，待独立测试确认（2026-07-24）：
+候选 `3973bc5ad76aa8b71ebdcbb16ba994205e2c81d0`（R2 第七次返修，父候选 `8e987642cd4fbd90057771cd47c2a0ffb4b10be3`）已实现，执行窗口自测通过，待独立测试确认（2026-07-24）：
 
 - 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
 - enqueue 在 webhook 外层事务内 flush pending run（仅 flush，不 commit）；拒绝空 `account_open_id`
@@ -688,7 +688,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - **guarded transition 原语 + lease 上下文 + cycle 单飞锁下沉至 outbox service**：强制校验 `run_id`/`expected_status`/原始 `lease_owner`/`lease_expires_at>now`/`rowcount==1`
 - claim 原始 owner 显式贯穿：`send_ai_auto_reply_for_run` 增加 `lease_owner` 参数，dry-run 调用时显式传入，非 outbox 路径传空串兼容；send 不再重读 DB 当前 owner；`_finish_run` 返回 False 时立即终止不进入发送
 - **`_run_with_session_for_outbox` 与 `_process_one` 强制非空 lease_owner**：空值属于非法状态（claim 必然写入线程唯一 owner），失败关闭并输出 stage/failure_stage，不得降级为无租约处理
-- **检查点前置**：send 在第一个写库动作前先取得 guarded 检查点 `decided → send_processing`（内容规范化合并进该原子 UPDATE），gate_results 在局部 dict 累积，仅在检查点/终态原子写入；区分检查点前(`decided`)/后(`send_processing`) skip 终态
+- **检查点前置**：send 在第一个写库动作前先取得 guarded 检查点 `decided → send_processing`（内容规范化合并进该原子 UPDATE），gate_results 在局部 dict 累积，仅在检查点/终态原子写入；区分检查点前(`decided`)/后(`send_processing`) skip 终态；检查点后 8 个跳过路径（outbound_after_trigger / latest_message_not_customer / latest_message_changed / send_context_unavailable / send_context_message_changed / send_context_account_mismatch / send_context_customer_mismatch / context_expired）通过 `_mark_send_skipped_after_checkpoint(gate_results_json=...)` 传入当前局部累积 gate_json，由单条原子 guarded UPDATE 同时写状态/原因/gate_results 并清租约，保留 send_gate_passed 与 manual_takeover 诊断
 - **gate_results 纯内存累积**：`_merge_gate_results` 改为纯函数，在局部 dict 合并多次 gate section，不修改任何 Session 管理的 ORM 属性（不写 `run.gate_results_json`），由 guarded UPDATE 一次性写入
 - **终态单条原子 guarded UPDATE + 原子清租约**：`_terminal` 一次性写状态/诊断/清租约；`_finish_run` 对非 decided 终态（blocked/skipped/failed）原子清租约，`_add_run` outbox 终态 upsert 清租约，`_handle_llm_failure` retry_wait/failed 清租约；**只有马上进入真实发送的 real_send_candidate decided 继续持有租约**，dry-run 模式 decided（不进发送）补 else 分支原子清租约
 - 发送状态检查点：`decided → send_processing → send_authorized` 全部 guarded + 检查点续租 → 终态 guarded + 清租约；租约丢失 `rowcount=0` 时不覆盖恢复器或新 Worker 状态、不触发 `mark_ai_replied`；`sent` 终态 rowcount==1 后才同步决策日志
@@ -700,7 +700,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - BackgroundTasks 仅唤醒 outbox claim（受总开关控制），不直接执行旧 `run_ai_auto_reply_job`；scheduler 与 webhook wake 共用 cycle 单飞锁；`run_outbox_cycle` 在 try 内创建 Session，构造失败时 try/finally 释放单飞锁
 - manual retry 使用单条原子条件 UPDATE（merchant_id + failed + 白名单 + `NOT EXISTS` 发送流水），消除 TOCTOU
 - 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记且默认值与 `config.py` 一致
-- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：255 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed，指定回归 0 个新增失败；合计 2 个经 Base（8444d90）/ Candidate（47aa814）同环境双跑确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
+- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：258 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed（含检查点后跳过路径原子写 gate_results + 清租约 + 不调用真实发送断言），指定回归 0 个新增失败；合计 2 个经 Base（8e98764）/ Candidate（3973bc5）同环境双跑确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
 - 候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
