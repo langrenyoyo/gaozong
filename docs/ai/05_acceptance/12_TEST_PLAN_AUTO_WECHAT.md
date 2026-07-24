@@ -679,24 +679,26 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 ## 27. AI 自动回复 outbox / 持久化任务验收（DY-CS-AUTO-REPLY-OUTBOX-1）
 
-候选 `4f8c36705e14d14bbfa17e60514185b7ae75d028`（R2 第四次返修）已实现，执行窗口自测通过，待独立测试确认（2026-07-24）：
+候选 `a968d1a51fc49baec39b8ea52822dd343ba03553`（R2 第五次返修，父候选 `4f8c36705e14d14bbfa17e60514185b7ae75d028`）已实现，执行窗口自测通过，待独立测试确认（2026-07-24）：
 
 - 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
 - enqueue 在 webhook 外层事务内 flush pending run（仅 flush，不 commit）；拒绝空 `account_open_id`
 - claim 使用条件 UPDATE 原子租约（300 秒），线程唯一 lease_owner + commit 后返回；UPDATE 含退避时间条件
-- `_add_run` upsert 返回持久化 ORM 对象；`_run_with_session` 不再构造 `running`（改用 `processing`）
+- `_add_run` upsert：outbox 路径改为原子条件 UPDATE 校验 `expected_status=processing` + 原始 owner + 未过期租约 + `rowcount`，禁止 ORM setattr 逐字段覆盖；非 outbox 路径保留 ORM 兼容
 - **guarded transition 原语 + lease 上下文 + cycle 单飞锁下沉至 outbox service**：强制校验 `run_id`/`expected_status`/原始 `lease_owner`/`lease_expires_at>now`/`rowcount==1`
-- claim 原始 owner 经线程局部上下文显式贯穿 dry-run 与 send；send 不再重读 DB 当前 owner；`_finish_run` 返回 False 时立即终止不进入发送
-- 发送状态检查点：`decided → send_processing → send_authorized` 全部 guarded + 检查点续租 → `sent`/`send_unknown`/`failed`/`send_skipped` 终态 guarded + 清租约；租约丢失 `rowcount=0` 时不覆盖恢复器或新 Worker 状态、不触发 `mark_ai_replied`
+- claim 原始 owner 显式贯穿：`send_ai_auto_reply_for_run` 增加 `lease_owner` 参数，dry-run 调用时显式传入，非 outbox 路径传空串兼容；send 不再重读 DB 当前 owner；`_finish_run` 返回 False 时立即终止不进入发送
+- **检查点前置**：send 在第一个写库动作前先取得 guarded 检查点 `decided → send_processing`（内容规范化合并进该原子 UPDATE），gate_results 改为内存累积（`_merge_run_gate_results` 不再提交），仅在检查点/终态原子写入；区分检查点前(`decided`)/后(`send_processing`) skip 终态
+- **终态单条原子 guarded UPDATE**：`_terminal` 一次性写状态/诊断/清租约，消除"先续租再 ORM 提交"和 auto flush 在 guard 返回 0 前提交脏数据；`sent` 终态 rowcount==1 后才同步决策日志和 `mark_ai_replied`，租约丢失不触发副作用
+- 发送状态检查点：`decided → send_processing → send_authorized` 全部 guarded + 检查点续租 → 终态 guarded + 清租约；租约丢失 `rowcount=0` 时不覆盖恢复器或新 Worker 状态
 - `send_authorized` 崩溃对账：原子 `EXISTS`/`NOT EXISTS` UPDATE，存在 sent 发送流水 → sent，否则 → send_unknown；禁止自动重发；`recovered` 仅累计实际 rowcount
 - LLM 失败自动重试：`attempt_count <= MAX_RETRIES` → `retry_wait` + 退避（attempt 1→60s、2/3→300s、4→`failed` 终态）；`last_failure_stage=pre_send_temporary_failure`
 - send 失败分类：`error_code=upstream_business_error` → `failed`；网络/超时/HTTP/非法 → `send_unknown`
 - recover 恢复过期租约的 processing/send_processing 到 pending；send_authorized 按发送流水对账
 - compensate 补偿 15 分钟窗口内缺失的客户私信事件（保存点隔离，跳过无商户/无账号）
-- BackgroundTasks 仅唤醒 outbox claim（受总开关控制），不直接执行旧 `run_ai_auto_reply_job`；scheduler 与 webhook wake 共用 cycle 单飞锁
+- BackgroundTasks 仅唤醒 outbox claim（受总开关控制），不直接执行旧 `run_ai_auto_reply_job`；scheduler 与 webhook wake 共用 cycle 单飞锁；`run_outbox_cycle` 在 try 内创建 Session，构造失败时 try/finally 释放单飞锁
 - manual retry 使用单条原子条件 UPDATE（merchant_id + failed + 白名单 + `NOT EXISTS` 发送流水），消除 TOCTOU
 - 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记且默认值与 `config.py` 一致
-- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py -q`）：180 passed；本任务专项与 outbox 状态机直接相关测试 0 failed，指定回归 0 个新增失败；另有 1 个经 Base（8c7cd9e）/ Candidate（4f8c367）同环境双跑确认的范围外基线失败——`test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；env `test_all_code_variables_are_classified` 同为 pre-existing（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH）
+- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py -q`）：188 passed；本任务专项与 outbox 状态机直接相关测试 0 failed，指定回归 0 个新增失败；合计 2 个经 Base（8c7cd9e）/ Candidate（a968d1a）同环境双跑确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
 - 候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
