@@ -643,8 +643,8 @@ def test_a9_all_duplicates_inherit_nonnull_lead_and_scope(concurrent_database):
 # ========== A10: 调度（BackgroundTasks）==========
 
 
-def test_a10_schedule_once_for_winner_zero_for_duplicate():
-    """A10：真实 BackgroundTasks 验证首次一次、重复零次。"""
+def test_a10_winner_enqueues_persistent_duplicate_does_not():
+    """A10：胜出事件 enqueue outbox（BackgroundTasks 不再直接执行），重复事件不 enqueue。"""
     from app.routers.integrations import maybe_schedule_ai_auto_reply
 
     winner_tasks = BackgroundTasks()
@@ -653,8 +653,8 @@ def test_a10_schedule_once_for_winner_zero_for_duplicate():
         payload={"event": "im_receive_msg", "to_user_id": "account"},
         is_duplicate=False, source_path="/douyin/webhook",
     )
-    assert len(winner_tasks.tasks) == 1
-    assert winner_tasks.tasks[0].args == (101,)
+    # BackgroundTasks 不再直接添加任务（改由 outbox 调度器处理已持久化 run）
+    assert len(winner_tasks.tasks) == 0
 
     duplicate_tasks = BackgroundTasks()
     maybe_schedule_ai_auto_reply(

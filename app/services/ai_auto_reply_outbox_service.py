@@ -264,12 +264,14 @@ def compensate_missing_runs(db: Session) -> int:
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
+        # 使用保存点隔离每条插入，冲突只回滚当前条不影响此前成功的补偿
         try:
+            sp = db.begin_nested()
             db.add(run)
             db.flush()
             created += 1
         except SAIntegrityError:
-            db.rollback()
+            sp.rollback()
             logger.info(
                 "ai_outbox_compensate_skip reason=duplicate event_id=%s event_key=%s",
                 event.id, str(event.event_key)[:12],

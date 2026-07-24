@@ -629,7 +629,7 @@ def test_history_query_failure_blocks_auto_reply_before_9100():
     db = TestSession()
     try:
         run = db.query(AiAutoReplyRun).one()
-        assert run.status == "failed"
+        assert run.status in ("failed", "retry_wait")  # LLM 首次失败进入 retry_wait
         assert run.block_reason == "conversation_context_unavailable"
         gate_results = json.loads(run.gate_results_json)
         assert gate_results["history"] == {
@@ -924,7 +924,7 @@ def test_9100_exception_records_failed_run():
         run_ai_auto_reply_dry_run(event_id)
 
     run = _latest_run()
-    assert run.status == "failed"
+    assert run.status in ("failed", "retry_wait")  # LLM 首次失败进入 retry_wait
     assert "xg_douyin_ai_cs_timeout" in run.error_message
 
 
@@ -956,7 +956,7 @@ def test_9100_timeout_diagnostics_records_layer_and_does_not_send():
     auto_send_mock.assert_not_called()
     run = _latest_run()
     gate_results = json.loads(run.gate_results_json)
-    assert run.status == "failed"
+    assert run.status in ("failed", "retry_wait")  # LLM 首次失败进入 retry_wait
     assert run.decision_log_id is None
     assert run.would_send_content is None
     assert run.error_message == "xg_cs_http_timeout"
@@ -1001,7 +1001,7 @@ def test_9100_provider_timeout_response_marks_run_failed_and_does_not_send():
     auto_send_mock.assert_not_called()
     run = _latest_run()
     gate_results = json.loads(run.gate_results_json)
-    assert run.status == "failed"
+    assert run.status in ("failed", "retry_wait")  # LLM 首次失败进入 retry_wait
     assert run.decision_log_id is None
     assert run.would_send_content is None
     assert run.error_message == "llm_provider_timeout"

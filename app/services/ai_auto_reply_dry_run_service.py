@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -284,7 +284,8 @@ def _run_with_session(db, *, event_id: int) -> None:
             "updated_at": datetime.now(),
         }
     )
-    if not _add_run(db, run):
+    run = _add_run(db, run)
+    if run is None:
         return
 
     try:
@@ -309,10 +310,8 @@ def _run_with_session(db, *, event_id: int) -> None:
             llm_gate.get("timeout_seconds"),
             llm_gate.get("elapsed_ms"),
         )
-        _finish_run(
-            db,
-            run,
-            status="failed",
+        _handle_llm_failure(
+            db, run,
             error_message=str(exc),
             gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
         )
@@ -334,10 +333,8 @@ def _run_with_session(db, *, event_id: int) -> None:
             llm_gate.get("timeout_seconds"),
             llm_gate.get("elapsed_ms"),
         )
-        _finish_run(
-            db,
-            run,
-            status="failed",
+        _handle_llm_failure(
+            db, run,
             error_message=str(llm_gate.get("error") or "llm_failed"),
             gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
         )
@@ -542,13 +539,17 @@ def _insert_terminal_run(
     _add_run(db, run)
 
 
-def _add_run(db, run: AiAutoReplyRun) -> bool:
-    """插入 run；若 event_key 已存在（outbox 占位），更新现有行并保留 outbox 字段。"""
+def _add_run(db, run: AiAutoReplyRun) -> AiAutoReplyRun | None:
+    """插入 run；若 event_key 已存在（outbox 占位），更新现有行并返回持久化对象。
+
+    返回值是实际持久化的 ORM 对象（新建或已有），调用方必须使用返回值。
+    返回 None 表示真正重复且无法 upsert。
+    """
     try:
         db.add(run)
         db.commit()
         db.refresh(run)
-        return True
+        return run
     except IntegrityError:
         db.rollback()
         existing = (
@@ -574,12 +575,12 @@ def _add_run(db, run: AiAutoReplyRun) -> bool:
                 "ai_auto_reply_run_upserted stage=upsert_run event_key=%s run_id=%s",
                 _short(run.trigger_event_key), existing.id,
             )
-            return True
+            return existing
         logger.info(
             "ai_auto_reply_run_duplicate stage=insert_run event_key=%s",
             _short(run.trigger_event_key),
         )
-        return False
+        return None
 
 
 def _finish_run(
@@ -620,6 +621,53 @@ def _binding_block_reason(reason_code: str | None) -> str:
     if reason_code == "agent_binding_not_found":
         return "agent_not_bound"
     return reason_code or "agent_binding_denied"
+
+
+def _handle_llm_failure(
+    db: Session,
+    run: AiAutoReplyRun,
+    *,
+    error_message: str,
+    gate_results: dict[str, Any],
+) -> None:
+    """LLM 失败时根据 attempt_count 决定退避重试或终止。
+
+    发送前临时失败最多重试 MAX_RETRIES 次（退避 60s → 300s）；
+    超过后写 failed + last_failure_stage=pre_send_temporary_failure（人工重试白名单内）。
+    """
+    from app import config as app_config
+    max_retries = app_config.AI_AUTO_REPLY_OUTBOX_MAX_RETRIES
+    gate_json = _json_dumps(gate_results)
+    now = datetime.now()
+
+    if run.attempt_count <= max_retries:
+        backoff = (
+            app_config.AI_AUTO_REPLY_OUTBOX_BACKOFF_1_SECONDS
+            if run.attempt_count <= 1
+            else app_config.AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS
+        )
+        run.status = "retry_wait"
+        run.next_attempt_at = now + timedelta(seconds=backoff)
+        run.last_failure_stage = "pre_send_temporary_failure"
+        run.error_message = error_message
+        run.gate_results_json = gate_json
+        run.updated_at = now
+        db.commit()
+        logger.info(
+            "ai_auto_reply_llm_retry stage=llm_retry run_id=%s attempt=%s/%s backoff=%ss",
+            run.id, run.attempt_count, max_retries, backoff,
+        )
+    else:
+        run.status = "failed"
+        run.last_failure_stage = "pre_send_temporary_failure"
+        run.error_message = error_message
+        run.gate_results_json = gate_json
+        run.updated_at = now
+        db.commit()
+        logger.warning(
+            "ai_auto_reply_llm_exhausted stage=llm_exhausted run_id=%s attempts=%s",
+            run.id, run.attempt_count,
+        )
 
 
 def _decision_status(result: dict[str, Any], *, upstream_auto_send: bool) -> tuple[str, str | None]:

@@ -190,6 +190,18 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
+    # P0#3: 发送状态检查点 — decided → send_processing → send_authorized → sent/send_unknown
+    run.status = "send_processing"
+    run.updated_at = datetime.now()
+    db.commit()
+    db.refresh(run)
+
+    # send_authorized：门禁全通过，即将调用真实 API；先 commit 使检查点持久化
+    run.status = "send_authorized"
+    run.updated_at = datetime.now()
+    db.commit()
+    db.refresh(run)
+
     try:
         send_result = _send_private_message_with_context(
             db,
@@ -318,28 +330,16 @@ def _safe_error(detail: Any) -> str:
     return str(detail)
 
 
-# send_msg 失败的业务错误码白名单（这些是上游业务拒绝，不是临时故障）
-_UPSTREAM_BUSINESS_ERROR_CODES = frozenset({
-    "28003082",  # 消息对象不匹配
-    "28001001",  # 参数错误
-    "28001004",  # 账号无权限
-})
-
-
 def _classify_send_failure(exc: HTTPException) -> str:
-    """分类 send_msg HTTP 异常：upstream_business_error → failed；其余 → send_unknown。"""
+    """分类 send_msg HTTP 异常：upstream_business_error → failed；其余 → send_unknown。
+
+    优先识别稳定的 error_code=upstream_business_error；不能维护不完整的业务码白名单。
+    """
     detail = exc.detail
     if isinstance(detail, dict):
-        # 上游业务错误码 → failed（不可重试）
-        for code_key in ("upstream_code", "error_code", "code"):
-            code = str(detail.get(code_key) or "")
-            if code in _UPSTREAM_BUSINESS_ERROR_CODES:
-                return "upstream_business_error"
-        # 检查描述中是否含业务错误码
-        safe_msg = str(detail.get("safe_message") or detail.get("upstream_msg") or "")
-        for code in _UPSTREAM_BUSINESS_ERROR_CODES:
-            if code in safe_msg:
-                return "upstream_business_error"
+        error_code = str(detail.get("error_code") or "").strip()
+        if error_code == "upstream_business_error":
+            return "upstream_business_error"
     status_code = getattr(exc, "status_code", 500)
     if status_code in (408, 504):
         return "send_timeout"

@@ -262,9 +262,9 @@ def maybe_schedule_ai_auto_reply(
         )
         return
 
-    background_tasks.add_task(run_ai_auto_reply_dry_run, event_id)
+    # BackgroundTasks 仅记录已持久化任务存在，不再直接执行；实际处理由 outbox 调度器负责。
     logger.info(
-        "ai_auto_reply_schedule_added event_id=%s event=%s source_path=%s account_open_id=%s",
+        "ai_auto_reply_enqueued_persistent event_id=%s event=%s source_path=%s account_open_id=%s",
         log_extra["event_id"],
         log_extra["event"],
         log_extra["source_path"],
