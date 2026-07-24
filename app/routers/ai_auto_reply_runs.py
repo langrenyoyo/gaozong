@@ -76,6 +76,43 @@ def list_runs(
     return {"success": True, "data": data, "message": "success"}
 
 
+@router.post("/{run_id}/retry")
+def retry_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """人工重试失败的自动回复运行记录。
+
+    只允许可信当前商户、明确未发送且失败阶段在白名单内的 failed run；
+    条件更新到 retry_wait，不在请求内发送。
+    """
+    trusted_merchant_id = _require_douyin_ai_cs_merchant(context)
+    from app.services.ai_auto_reply_outbox_service import manual_retry_run
+    try:
+        run = manual_retry_run(db, run_id=run_id, merchant_id=trusted_merchant_id)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason.startswith("run_not_found"):
+            raise HTTPException(404, detail={"code": "AI_AUTO_REPLY_RUN_NOT_FOUND", "message": "运行记录不存在"})
+        if "already_sent" in reason:
+            raise HTTPException(409, detail={"code": "AI_AUTO_REPLY_RUN_ALREADY_SENT", "message": "该运行记录已发送，不可重试"})
+        if "failure_stage_not_whitelisted" in reason:
+            raise HTTPException(403, detail={"code": "AI_AUTO_REPLY_RUN_RETRY_NOT_ALLOWED", "message": "该失败阶段不在人工重试白名单内"})
+        raise HTTPException(400, detail={"code": "AI_AUTO_REPLY_RUN_RETRY_INVALID", "message": reason})
+    except PermissionError:
+        raise HTTPException(403, detail={"code": "PERMISSION_DENIED", "message": "无权操作他商户运行记录"})
+    return {
+        "success": True,
+        "data": {
+            "run_id": run.id,
+            "status": run.status,
+            "next_attempt_at": run.next_attempt_at.isoformat() if run.next_attempt_at else None,
+        },
+        "message": "已加入重试队列",
+    }
+
+
 @router.get("/{run_id}", response_model=AiAutoReplyRunDetailResponse)
 def get_run_detail(
     run_id: int,

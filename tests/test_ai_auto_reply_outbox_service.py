@@ -261,7 +261,7 @@ def test_a8_manual_retry_whitelist(db_engine):
             trigger_event_id=event.id, trigger_event_key=event.event_key,
         )
         run.status = STATUS_FAILED
-        run.last_failure_stage = "upstream_business_error"
+        run.last_failure_stage = "upstream_business_error"  # 不在白名单
         db.commit()
 
         with pytest.raises(ValueError, match="failure_stage_not_whitelisted"):
@@ -286,7 +286,7 @@ def test_a9_manual_retry_success(db_engine):
             trigger_event_id=event.id, trigger_event_key=event.event_key,
         )
         run.status = STATUS_FAILED
-        run.last_failure_stage = "send_timeout"
+        run.last_failure_stage = "pre_send_temporary_failure"
         run.attempt_count = 3
         db.commit()
 

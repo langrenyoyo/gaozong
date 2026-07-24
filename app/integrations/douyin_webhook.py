@@ -819,6 +819,20 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
     # im_send_msg 后置处理
     _post_process_im_send_msg(db, event)
 
+    # P0: 客户私信胜出事件在同事务内 enqueue outbox 任务（仅 flush，不 commit）
+    if event_type in ("im_receive_msg", "im_enter_direct_msg") and event.merchant_id:
+        from app.services.ai_auto_reply_outbox_service import enqueue_auto_reply_run
+        enqueue_auto_reply_run(
+            db,
+            merchant_id=event.merchant_id or "",
+            account_open_id=event.to_user_id or "",
+            trigger_event_id=event.id,
+            trigger_event_key=event.event_key,
+            conversation_short_id=event.conversation_short_id,
+            customer_open_id=event.from_user_id,
+            trigger_server_message_id=event.server_message_id,
+        )
+
     logger.info(
         "webhook 处理完成: event_id=%d, event=%s, is_duplicate=false, lead_action=%s, lead_id=%s",
         event.id,

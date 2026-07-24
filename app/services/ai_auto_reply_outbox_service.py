@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 _PROCESS_ID = f"{socket.gethostname()}:{os.getpid()}"
 
+
+def _thread_unique_lease_owner() -> str:
+    """每个线程生成唯一租约标识，避免同进程多线程竞争误读。"""
+    return f"{_PROCESS_ID}:{threading.current_thread().ident}"
+
 # 状态常量
 STATUS_PENDING = "pending"
 STATUS_PROCESSING = "processing"
@@ -54,10 +59,9 @@ _RECOVERABLE_STATUSES = (STATUS_PROCESSING, STATUS_SEND_PROCESSING)
 # 永不重发终态
 _TERMINAL_NO_RETRY = (STATUS_SENT, STATUS_SEND_UNKNOWN, STATUS_SEND_AUTHORIZED, STATUS_SKIPPED,
                       STATUS_BLOCKED, STATUS_SEND_SKIPPED)
-# 人工重试白名单失败阶段
+# 人工重试白名单失败阶段（仅发送前临时故障；send_unknown 终态永不重发）
 _RETRY_WHITELIST_FAILURE_STAGES = frozenset({
-    "send_network_error", "send_timeout", "send_http_error",
-    "send_invalid_response", "send_empty_response",
+    "pre_send_temporary_failure",
 })
 
 _scheduler_thread: threading.Thread | None = None
@@ -126,13 +130,14 @@ def claim_next_batch(db: Session, *, batch_size: int = 100) -> list[AiAutoReplyR
     """原子获取一批待处理任务并设置租约。
 
     使用条件 UPDATE 实现 claim：只更新 status 在可处理列表且 next_attempt_at <= now
-    的行，设置 lease_owner 和 lease_expires_at。
+    的行，设置线程唯一 lease_owner 和 lease_expires_at。
+    claim 后立即 commit，确保租约持久化，竞争失败线程不会读到他人领取的行。
     """
     now = datetime.now()
     lease_expires = now + timedelta(seconds=config.AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS)
+    lease_owner = _thread_unique_lease_owner()
 
     # 条件更新：原子 claim
-    # 先查询候选 ID（避免大表全量更新）
     candidate_ids = (
         db.query(AiAutoReplyRun.id)
         .filter(
@@ -150,7 +155,7 @@ def claim_next_batch(db: Session, *, batch_size: int = 100) -> list[AiAutoReplyR
     if not ids:
         return []
 
-    # 原子条件更新：设置租约
+    # 原子条件更新：设置线程唯一租约
     result = db.execute(
         sa_update(AiAutoReplyRun)
         .where(
@@ -159,28 +164,28 @@ def claim_next_batch(db: Session, *, batch_size: int = 100) -> list[AiAutoReplyR
         )
         .values(
             status=STATUS_PROCESSING,
-            lease_owner=_PROCESS_ID,
+            lease_owner=lease_owner,
             lease_expires_at=lease_expires,
             attempt_count=AiAutoReplyRun.attempt_count + 1,
             updated_at=now,
         )
         .execution_options(synchronize_session=False)
     )
-    db.flush()
+    db.commit()
 
-    # 读取已 claim 的行
+    # 用线程唯一 lease_owner 读取已 claim 的行（竞争失败线程不会误读）
     claimed = (
         db.query(AiAutoReplyRun)
         .filter(
             AiAutoReplyRun.id.in_(ids),
-            AiAutoReplyRun.lease_owner == _PROCESS_ID,
+            AiAutoReplyRun.lease_owner == lease_owner,
             AiAutoReplyRun.status == STATUS_PROCESSING,
         )
         .all()
     )
     logger.info(
-        "ai_outbox_claim stage=claim claimed=%s batch_size=%s process_id=%s",
-        len(claimed), batch_size, _PROCESS_ID,
+        "ai_outbox_claim stage=claim claimed=%s batch_size=%s lease_owner=%s",
+        len(claimed), batch_size, lease_owner,
     )
     return claimed
 
@@ -219,11 +224,15 @@ def recover_expired_leases(db: Session) -> int:
 
 
 def compensate_missing_runs(db: Session) -> int:
-    """补偿最近 15 分钟内缺失 pending run 的客户私信事件。"""
+    """补偿最近 15 分钟内缺失 pending run 的客户私信事件。
+
+    原子处理唯一键竞争；跳过无商户或无账号的事件。
+    """
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
     window = config.AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS
     cutoff = datetime.now() - timedelta(seconds=window)
 
-    # 查找最近窗口内的客户私信事件
     recent_events = (
         db.query(DouyinWebhookEvent)
         .filter(
@@ -236,25 +245,18 @@ def compensate_missing_runs(db: Session) -> int:
 
     created = 0
     for event in recent_events:
-        existing = (
-            db.query(AiAutoReplyRun)
-            .filter(AiAutoReplyRun.trigger_event_key == event.event_key)
-            .first()
-        )
-        if existing is not None:
-            continue
-
         merchant_id = event.merchant_id or ""
-        if not merchant_id:
+        account_open_id = event.to_user_id or ""
+        if not merchant_id or not account_open_id:
             logger.info(
-                "ai_outbox_compensate_skip reason=no_merchant event_id=%s event_key=%s",
+                "ai_outbox_compensate_skip reason=missing_merchant_or_account event_id=%s event_key=%s",
                 event.id, str(event.event_key)[:12],
             )
             continue
 
         run = AiAutoReplyRun(
             merchant_id=merchant_id,
-            account_open_id=event.to_user_id or "",
+            account_open_id=account_open_id,
             trigger_event_id=event.id,
             trigger_event_key=event.event_key,
             status=STATUS_PENDING,
@@ -262,11 +264,18 @@ def compensate_missing_runs(db: Session) -> int:
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
-        db.add(run)
-        created += 1
+        try:
+            db.add(run)
+            db.flush()
+            created += 1
+        except SAIntegrityError:
+            db.rollback()
+            logger.info(
+                "ai_outbox_compensate_skip reason=duplicate event_id=%s event_key=%s",
+                event.id, str(event.event_key)[:12],
+            )
 
     if created > 0:
-        db.flush()
         db.commit()
         logger.warning(
             "ai_outbox_compensate stage=compensate created=%s window_seconds=%s", created, window,

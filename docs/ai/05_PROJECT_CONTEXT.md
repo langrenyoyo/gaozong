@@ -217,7 +217,7 @@ gate 链（`app/services/douyin_autoreply_gate_service.py` 等）：
 
 - 切换为“AI 托管”时会写入完整的直接模型回复启用策略，并清空历史意图白名单和风险白名单；切换为人工接管只关闭账号真实回复，不删除其他配置。
 - 9000 完成绑定校验后注入的 `agent_config` 是可信上下文，9100 不再因未命中知识而把它视为降级配置。模型返回的 `auto_send` 永远不直接控制发送，值为 true 时仅记录 `llm_requested_auto_send_ignored`；最终候选仍由账号策略、安全后处理和 9000 gate 计算。
-- **AI 自动回复 outbox / 持久化任务（DY-CS-AUTO-REPLY-OUTBOX-1）候选已实现，待独立测试确认**（2026-07-24）：复用 `AiAutoReplyRun` 表作为 outbox 任务真源，新增 `lease_owner`/`lease_expires_at`/`attempt_count`/`next_attempt_at`/`last_failure_stage` 字段（SQLite 迁移 0036 + PG Alembic 0016）；enqueue 在 webhook 外层事务内 flush pending run（不 commit）；claim 使用条件 UPDATE 原子租约（300 秒）；recover 恢复过期租约；compensate 补偿 15 分钟窗口内缺失事件；60 秒周期扫描（启动立即扫描、进程内单飞）；manual retry 商户隔离+白名单；积压告警（100 条/300 秒/send_unknown）；执行窗口自测：专项 30 passed、回归 89 passed（均 0 failed）；候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境。
+- **AI 自动回复 outbox / 持久化任务（DY-CS-AUTO-REPLY-OUTBOX-1）候选已实现，待独立测试确认**（2026-07-24）：复用 `AiAutoReplyRun` 表作为 outbox 任务真源，新增 `lease_owner`/`lease_expires_at`/`attempt_count`/`next_attempt_at`/`last_failure_stage` 字段（SQLite 迁移 0036 + PG Alembic 0016）；webhook 胜出者同事务 enqueue pending run（仅 flush）；claim 使用条件 UPDATE 原子租约（300 秒，线程唯一 lease_owner + commit 后返回）；`_add_run` upsert 原地更新占位 run 并保留 outbox 字段；send 失败分类：网络/超时/HTTP/非法响应 → `send_unknown`（终态永不重发），上游业务错误码 → `failed`；recover 恢复过期租约；compensate 补偿 15 分钟窗口内缺失事件（原子 IntegrityError + 跳过无商户/无账号）；60 秒周期扫描（启动立即扫描、进程内单飞，默认关闭 `AI_AUTO_REPLY_OUTBOX_ENABLED`）；`POST /ai-auto-reply-runs/{run_id}/retry` 商户隔离 + 白名单 + 条件更新到 retry_wait；积压告警（100 条/300 秒/send_unknown）；执行窗口自测：专项 30 passed、webhook 回归 94 passed、send/dry_run 回归 100 passed（1 pre-existing 失败与 outbox 无关）；候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境。
 
 ### 8.3 回访（Phase 9，DONE_WITH_CONCERNS）
 

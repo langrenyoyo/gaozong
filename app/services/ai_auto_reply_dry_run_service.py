@@ -53,17 +53,14 @@ def run_ai_auto_reply_job(event_id: int) -> None:
 def _run_with_session_for_outbox(db: Session, *, run_id: int) -> None:
     """outbox 调度器调用的处理入口。
 
-    删除占位 pending run，让 _run_with_session 用同一 trigger_event_key 重新创建完整 run
-    并执行全部门禁+决策+发送逻辑。删除和创建在同一事务/commit 原子完成。
+    不删除占位 run；_run_with_session 中的 _existing_run 会发现它，
+    _add_run 的 upsert 路径会原地更新同一行并保留 attempt_count 等字段。
     """
     run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     if run is None:
         logger.warning("ai_outbox_process_skip reason=run_not_found run_id=%s", run_id)
         return
     event_id = run.trigger_event_id
-    # 删除占位 run，让 _run_with_session 重新创建完整 run
-    db.delete(run)
-    db.flush()
     _run_with_session(db, event_id=event_id)
 
 
@@ -78,13 +75,17 @@ def _run_with_session(db, *, event_id: int) -> None:
         logger.warning("ai_auto_reply_dry_run_event_missing stage=load_event event_id=%s", event_id)
         return
 
-    if _existing_run(db, event.event_key):
+    existing = _existing_run(db, event.event_key)
+    if existing is not None and existing.status not in ("pending", "processing", "retry_wait"):
         logger.info(
-            "ai_auto_reply_dry_run_duplicate stage=dedupe event_id=%s event_key=%s",
+            "ai_auto_reply_dry_run_duplicate stage=dedupe event_id=%s event_key=%s status=%s",
             event.id,
             _short(event.event_key),
+            existing.status,
         )
         return
+    # existing 为 pending/processing/retry_wait 时，_add_run 的 upsert 路径会原地更新，
+    # 保留 attempt_count/lease_owner 等 outbox 字段。
 
     content = _event_content(event)
     account_open_id = _account_open_id(event)
@@ -542,6 +543,7 @@ def _insert_terminal_run(
 
 
 def _add_run(db, run: AiAutoReplyRun) -> bool:
+    """插入 run；若 event_key 已存在（outbox 占位），更新现有行并保留 outbox 字段。"""
     try:
         db.add(run)
         db.commit()
@@ -549,6 +551,30 @@ def _add_run(db, run: AiAutoReplyRun) -> bool:
         return True
     except IntegrityError:
         db.rollback()
+        existing = (
+            db.query(AiAutoReplyRun)
+            .filter(AiAutoReplyRun.trigger_event_key == run.trigger_event_key)
+            .first()
+        )
+        if existing is not None:
+            for field in (
+                "status", "skip_reason", "block_reason", "error_message",
+                "gate_results_json", "mode", "merchant_id", "account_open_id",
+                "conversation_short_id", "customer_open_id", "agent_id",
+                "decision_log_id", "would_send_content", "latest_message",
+                "trigger_server_message_id",
+            ):
+                value = getattr(run, field, None)
+                if value is not None:
+                    setattr(existing, field, value)
+            existing.updated_at = datetime.now()
+            db.commit()
+            db.refresh(existing)
+            logger.info(
+                "ai_auto_reply_run_upserted stage=upsert_run event_key=%s run_id=%s",
+                _short(run.trigger_event_key), existing.id,
+            )
+            return True
         logger.info(
             "ai_auto_reply_run_duplicate stage=insert_run event_key=%s",
             _short(run.trigger_event_key),

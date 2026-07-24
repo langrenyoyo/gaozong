@@ -675,6 +675,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 数据库模型修改
 接口实现修改
 配置默认值修改
+```
 
 ## 27. AI 自动回复 outbox / 持久化任务验收（DY-CS-AUTO-REPLY-OUTBOX-1）
 
@@ -682,9 +683,9 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 - 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
 - enqueue 在 webhook 外层事务内 flush pending run，不 commit
-- claim 使用条件 UPDATE 原子租约（300 秒），进程内单飞
+- claim 使用条件 UPDATE 原子租约（300 秒），线程唯一 lease_owner + commit 后返回
 - recover 恢复过期租约的 processing/send_processing 到 pending
-- compensate 补偿 15 分钟窗口内缺失的客户私信事件
+- compensate 补偿 15 分钟窗口内缺失的客户私信事件（原子 IntegrityError 处理，跳过无商户/无账号）
 - 60 秒周期扫描（启动立即扫描）
 - manual retry 商户隔离 + 失败阶段白名单 + 条件更新到 retry_wait
 - 积压告警（100 条 / 300 秒 / send_unknown）

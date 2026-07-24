@@ -1256,7 +1256,8 @@ def test_daily_conversation_limit_blocks_auto_reply(monkeypatch):
     assert result["reason"] == "daily_conversation_limit_blocked"
 
 
-def test_openapi_failure_marks_send_failed_without_retry():
+def test_openapi_failure_marks_send_unknown_without_retry():
+    """HTTP 异常（非业务错误码）标记为 send_unknown，不可重试。"""
     run_id = _insert_run()
     _insert_settings()
     _insert_event()
@@ -1267,8 +1268,9 @@ def test_openapi_failure_marks_send_failed_without_retry():
     ) as openapi_mock:
         result = _send(run_id)
 
-    assert result["status"] == "send_failed"
-    assert _get_run(run_id).status == "send_failed"
+    assert result["status"] == "send_unknown"
+    assert _get_run(run_id).status == "send_unknown"
+    assert _get_run(run_id).last_failure_stage == "send_http_error"
     assert openapi_mock.call_count == 1
 
 

@@ -203,16 +203,32 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
             auto_reply_run_id=run.id,
         )
     except HTTPException as exc:
-        run.status = "send_failed"
+        failure_stage = _classify_send_failure(exc)
+        if failure_stage == "upstream_business_error":
+            run.status = "failed"
+        else:
+            run.status = "send_unknown"
+        run.last_failure_stage = failure_stage
         run.error_message = _safe_error(exc.detail)
         run.updated_at = datetime.now()
         db.commit()
         logger.warning(
-            "ai_auto_reply_send_failed stage=send_msg run_id=%s reason=send_msg_failed error_type=%s",
-            run.id,
-            type(exc).__name__,
+            "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=%s status=%s error_type=%s",
+            run.id, failure_stage, run.status, type(exc).__name__,
         )
-        return {"status": "send_failed", "reason": "send_msg_failed"}
+        return {"status": run.status, "reason": failure_stage}
+
+    except Exception as exc:
+        run.status = "send_unknown"
+        run.last_failure_stage = "send_network_error"
+        run.error_message = _safe_error(str(exc))
+        run.updated_at = datetime.now()
+        db.commit()
+        logger.warning(
+            "ai_auto_reply_send_failed stage=send_msg run_id=%s failure_stage=send_network_error status=send_unknown error_type=%s",
+            run.id, type(exc).__name__,
+        )
+        return {"status": "send_unknown", "reason": "send_network_error"}
 
     _sync_final_auto_send_after_success(db, run)
     run.status = "sent"
@@ -300,6 +316,38 @@ def _safe_error(detail: Any) -> str:
     if isinstance(detail, dict):
         return str(detail.get("upstream_msg") or detail.get("safe_message") or detail.get("detail") or "send failed")
     return str(detail)
+
+
+# send_msg 失败的业务错误码白名单（这些是上游业务拒绝，不是临时故障）
+_UPSTREAM_BUSINESS_ERROR_CODES = frozenset({
+    "28003082",  # 消息对象不匹配
+    "28001001",  # 参数错误
+    "28001004",  # 账号无权限
+})
+
+
+def _classify_send_failure(exc: HTTPException) -> str:
+    """分类 send_msg HTTP 异常：upstream_business_error → failed；其余 → send_unknown。"""
+    detail = exc.detail
+    if isinstance(detail, dict):
+        # 上游业务错误码 → failed（不可重试）
+        for code_key in ("upstream_code", "error_code", "code"):
+            code = str(detail.get(code_key) or "")
+            if code in _UPSTREAM_BUSINESS_ERROR_CODES:
+                return "upstream_business_error"
+        # 检查描述中是否含业务错误码
+        safe_msg = str(detail.get("safe_message") or detail.get("upstream_msg") or "")
+        for code in _UPSTREAM_BUSINESS_ERROR_CODES:
+            if code in safe_msg:
+                return "upstream_business_error"
+    status_code = getattr(exc, "status_code", 500)
+    if status_code in (408, 504):
+        return "send_timeout"
+    if status_code >= 500:
+        return "send_http_error"
+    if status_code == 422:
+        return "send_invalid_response"
+    return "send_network_error"
 
 
 def _hash_prefix(value: str | None) -> str:
