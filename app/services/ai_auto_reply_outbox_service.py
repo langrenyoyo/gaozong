@@ -567,10 +567,22 @@ def run_outbox_cycle() -> None:
 
 
 def _process_one(db: Session, run: AiAutoReplyRun) -> None:
-    """处理单个 outbox 任务，传递 claim 时产生的不可替换 lease_owner。"""
+    """处理单个 outbox 任务，传递 claim 时产生的不可替换 lease_owner。
+
+    lease_owner 为空属于非法状态（claim 必然写入线程唯一 owner），必须失败关闭并输出
+    stage/failure_stage，不得降级为无租约处理（无租约会绕过 guarded，旧 Worker 可覆盖新 Worker）。
+    """
     from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
 
-    _run_with_session_for_outbox(db, run_id=run.id, lease_owner=run.lease_owner or "")
+    lease_owner = run.lease_owner or ""
+    if not lease_owner:
+        logger.error(
+            "ai_outbox_process_blocked stage=process_one run_id=%s failure_stage=missing_lease_owner "
+            "reason=empty_lease_owner_not_allowed",
+            run.id,
+        )
+        raise RuntimeError(f"missing_lease_owner run_id={run.id}")
+    _run_with_session_for_outbox(db, run_id=run.id, lease_owner=lease_owner)
 
 
 def _scheduler_loop() -> None:

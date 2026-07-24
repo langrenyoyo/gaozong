@@ -1750,3 +1750,141 @@ def test_add_run_guarded_rejects_expired_lease_upsert():
     finally:
         _set_outbox_lease_owner("")
         db.close()
+
+
+# ========== 要求 4/6：终态原子清租约（skipped/blocked/failed/dry-run decided） ==========
+
+
+def test_finish_run_clears_lease_on_blocked_terminal():
+    """_finish_run 终态 blocked：原子清租约，仅 decided 保留租约。"""
+    db, run = _make_outbox_run(owner="host:1")
+    try:
+        _set_outbox_lease_owner("host:1")
+        ok = _finish_run(db, run, status="blocked", block_reason="rag_not_used",
+                        gate_results={"post_llm": {}})
+        assert ok is True
+        db.refresh(run)
+        assert run.status == "blocked"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_finish_run_clears_lease_on_skipped_terminal():
+    """_finish_run 终态 skipped：原子清租约。"""
+    db, run = _make_outbox_run(owner="host:1")
+    try:
+        _set_outbox_lease_owner("host:1")
+        ok = _finish_run(db, run, status="skipped", block_reason="empty_message")
+        assert ok is True
+        db.refresh(run)
+        assert run.status == "skipped"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_finish_run_clears_lease_on_failed_terminal():
+    """_finish_run 终态 failed：原子清租约。"""
+    db, run = _make_outbox_run(owner="host:1")
+    try:
+        _set_outbox_lease_owner("host:1")
+        ok = _finish_run(db, run, status="failed", error_message="boom")
+        assert ok is True
+        db.refresh(run)
+        assert run.status == "failed"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_add_run_clears_lease_on_terminal_upsert():
+    """_add_run outbox 终态 upsert（pre-gate blocked / early skipped）：原子清租约。"""
+    from app.services.ai_auto_reply_dry_run_service import _add_run
+    db = TestSession()
+    try:
+        placeholder = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_terminal_upsert",
+            status=_OUTBOX_PROCESSING, attempt_count=1,
+            lease_owner="host:1",
+            lease_expires_at=datetime.now() + timedelta(seconds=300),
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        db.add(placeholder)
+        db.commit()
+
+        challenger = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_terminal_upsert",
+            status="blocked", block_reason="agent_not_bound",
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        _set_outbox_lease_owner("host:1")
+        result = _add_run(db, challenger)
+        assert result is not None
+        db.refresh(placeholder)
+        assert placeholder.status == "blocked"
+        assert placeholder.lease_owner is None  # 终态清租约
+        assert placeholder.lease_expires_at is None
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_dry_run_decided_releases_lease_when_not_real_send():
+    """dry-run 模式 decided 不进发送，必须原子清租约（只有 real_send_candidate 的 decided 持有租约）。"""
+    from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
+    from app.services.douyin_autoreply_gate_service import GateDecision
+
+    base_time = datetime.now() - timedelta(minutes=10)
+    event_id = _insert_event(text="想了解A6", event_key="evt_dry_run_decided")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=False, dry_run_enabled=True)  # dry_run 模式
+    fake_client = FakeAiCsClient()
+
+    # 预置 outbox 占位 run：processing + lease
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(
+            AiAutoReplyRun.trigger_event_key == "evt_dry_run_decided"
+        ).first()
+        if run is None:
+            run = AiAutoReplyRun(
+                merchant_id="merchant-1", account_open_id="account-open-1",
+                trigger_event_id=event_id, trigger_event_key="evt_dry_run_decided",
+                status=_OUTBOX_PROCESSING, attempt_count=1,
+                lease_owner="host:1",
+                lease_expires_at=datetime.now() + timedelta(seconds=300),
+                created_at=datetime.now(), updated_at=datetime.now(),
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+        run_id = run.id
+    finally:
+        db.close()
+
+    # 强制 post-LLM 门禁通过 → status=decided；dry_run 模式不进发送，触发 else 分支清租约
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch(
+             "app.services.ai_auto_reply_dry_run_service.evaluate_post_llm_gates",
+             return_value=GateDecision(passed=True, status="decided", reason=None, gate_results={}),
+         ):
+        _run_with_session_for_outbox(TestSession(), run_id=run_id, lease_owner="host:1")
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "decided"
+        assert run.lease_owner is None  # dry-run decided 不进发送，清租约
+        assert run.lease_expires_at is None
+    finally:
+        db.close()

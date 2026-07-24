@@ -62,9 +62,17 @@ def run_ai_auto_reply_job(event_id: int) -> None:
 def _run_with_session_for_outbox(db: Session, *, run_id: int, lease_owner: str = "") -> None:
     """outbox 调度器调用的处理入口。
 
-    lease_owner 作为不可替换凭据贯穿决策和发送链路；
+    lease_owner 作为不可替换凭据贯穿决策和发送链路；强制非空，空值属于非法状态
+    （claim 必然写入线程唯一 owner），必须失败关闭并输出 stage/failure_stage，不得降级为无租约处理。
     所有 leased 状态推进必须校验 expected_owner + 租约未过期。
     """
+    if not lease_owner:
+        logger.error(
+            "ai_outbox_process_blocked stage=run_with_session_for_outbox run_id=%s "
+            "failure_stage=missing_lease_owner reason=empty_lease_owner_not_allowed",
+            run_id,
+        )
+        raise RuntimeError(f"missing_lease_owner run_id={run_id}")
     run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     if run is None:
         logger.warning("ai_outbox_process_skip reason=run_not_found run_id=%s", run_id)
@@ -430,6 +438,18 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             send_ai_auto_reply_for_run(db, run_id=run.id, lease_owner=_expected_lease_owner())
         else:
             _mark_send_skipped_by_decision(db, run)
+    else:
+        # 非 real_send_candidate 的 decided（dry_run 模式）或其他终态不进发送，
+        # 必须原子清理租约；_finish_run 对非 decided 已清租约，此处补 dry_run decided
+        if status == "decided" and _expected_lease_owner():
+            rowcount = _guarded_lease_update(
+                db, run.id, expected_status="decided",
+                values={"lease_owner": None, "lease_expires_at": None},
+            )
+            if rowcount == 0:
+                logger.warning(
+                    "ai_auto_reply_lease_lost stage=dry_run_decided_release run_id=%s", run.id,
+                )
 
 
 def _existing_run(db, event_key: str | None) -> AiAutoReplyRun | None:
@@ -606,6 +626,10 @@ def _add_run(db, run: AiAutoReplyRun) -> AiAutoReplyRun | None:
                 value = getattr(run, field, None)
                 if value is not None:
                     values[field] = value
+            # 终态（非 processing）原子清理租约；processing 继续 hold 租约等待 _finish_run/send
+            if run.status != "processing":
+                values["lease_owner"] = None
+                values["lease_expires_at"] = None
             now = datetime.now()
             result = db.execute(
                 sa_update(AiAutoReplyRun)
@@ -676,6 +700,10 @@ def _finish_run(
         }
         if gate_results is not None:
             values["gate_results_json"] = _json_dumps(gate_results)
+        # 终态（非 decided）原子清理租约；只有马上进入真实发送的 decided 继续持有租约
+        if status != "decided":
+            values["lease_owner"] = None
+            values["lease_expires_at"] = None
         rowcount = _guarded_lease_update(db, run.id, expected_status="processing", values=values)
         if rowcount == 0:
             logger.warning(

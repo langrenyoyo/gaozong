@@ -200,6 +200,10 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         return {"status": "send_skipped", "reason": "send_processing_race_lost"}
     db.refresh(run)
 
+    # 局部累积 gate_results：检查点后从 run 加载一次基线，后续多次合并仅在局部 dict，
+    # 由检查点/终态 guarded UPDATE 一次性写入，禁止修改 Session 管理的 ORM 属性（避免脏写）
+    gate_acc: dict[str, Any] = _json_object(run.gate_results_json)
+
     settings = get_account_autoreply_settings(
         db,
         merchant_id=run.merchant_id,
@@ -214,8 +218,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         conversation_short_id=run.conversation_short_id,
     )
     if not real_send_gate.passed:
-        gate_json = _merge_run_gate_results(
-            db, run, "real_send",
+        gate_json = _merge_gate_results(
+            gate_acc, "real_send",
             {**(real_send_gate.gate_results or {}), "send_gate_passed": False, "blocked_reason": real_send_gate.reason},
         )
         _terminal(
@@ -232,8 +236,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
-    gate_json = _merge_run_gate_results(
-        db, run, "real_send",
+    gate_json = _merge_gate_results(
+        gate_acc, "real_send",
         {**(real_send_gate.gate_results or {}), "send_gate_passed": True},
     )
 
@@ -243,7 +247,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         account_open_id=run.account_open_id,
         conversation_short_id=run.conversation_short_id or "",
     )
-    gate_json = _merge_run_gate_results(db, run, "real_send", {"manual_takeover": manual_takeover})
+    gate_json = _merge_gate_results(gate_acc, "real_send", {"manual_takeover": manual_takeover})
     if manual_takeover.get("blocked") is True:
         _terminal(
             db, run, expected_status="send_processing", status="send_skipped",
@@ -353,7 +357,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
     # 成功终态：单条原子 guarded UPDATE 写 sent + 清租约（含最终 gate_results）。
     # 仅在 guarded 成功（rowcount==1）后才同步决策日志和 mark_ai_replied；租约丢失则不覆盖、不触发副作用，
     # 由恢复器按 sent 流水 EXISTS 对账为 sent。
-    final_gate_json = _build_final_success_gate_json(run)
+    final_gate_json = _build_final_success_gate_json(gate_acc)
     written = _terminal(
         db, run, expected_status="send_authorized", status="sent",
         block_reason=None, error_message=None, gate_results_json=final_gate_json,
@@ -425,10 +429,10 @@ def _mark_send_skipped_after_checkpoint(db: Session, run: AiAutoReplyRun, reason
     return _terminal(db, run, expected_status="send_processing", status="send_skipped", block_reason=reason)
 
 
-def _build_final_success_gate_json(run: AiAutoReplyRun) -> str:
+def _build_final_success_gate_json(gate_acc: dict[str, Any]) -> str:
     """纯内存构造成功终态的 gate_results JSON（不入库），由终态原子 UPDATE 一次性写入。
-    以真实发送结果为准标记 final_auto_send=True。"""
-    gate_results = _json_object(run.gate_results_json)
+    以真实发送结果为准标记 final_auto_send=True。gate_acc 为本流程局部累积的 gate_results dict。"""
+    gate_results = dict(gate_acc)
     post_llm = gate_results.get("post_llm")
     if not isinstance(post_llm, dict):
         post_llm = {}
@@ -456,19 +460,19 @@ def _sync_decision_log_final_auto_send(db: Session, run: AiAutoReplyRun) -> None
     )
 
 
-def _merge_run_gate_results(db: Session, run: AiAutoReplyRun, section: str, value: dict[str, Any]) -> str:
-    """内存累积 gate_results（不提交）：合并到 run 内存对象返回序列化 JSON，由调用方在
-    原子 guarded UPDATE（检查点/终态）中一次性写入，避免检查点前提前提交脏数据。
+def _merge_gate_results(gate_acc: dict[str, Any], section: str, value: dict[str, Any]) -> str:
+    """纯内存累积 gate_results：在局部 dict 上合并 section，返回序列化 JSON 字符串。
+
+    不修改任何 Session 管理的 ORM 属性（不碰 run.gate_results_json），完全避免脏写。
+    gate_acc 由调用方在流程开始时从 run.gate_results_json 加载一次，后续多次合并，
+    最终由 guarded UPDATE（检查点/终态）一次性写入 run。
     """
-    gate_results = _json_object(run.gate_results_json)
-    current = gate_results.get(section)
+    current = gate_acc.get(section)
     if not isinstance(current, dict):
         current = {}
     current.update(value)
-    gate_results[section] = current
-    merged = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"), default=str)
-    run.gate_results_json = merged  # 仅内存对象，未 flush/commit
-    return merged
+    gate_acc[section] = current
+    return json.dumps(gate_acc, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def _json_object(raw: str | None) -> dict[str, Any]:

@@ -1588,3 +1588,73 @@ def test_send_lease_lost_before_first_checkpoint_does_not_overwrite():
         assert run.lease_owner == "real_owner"
     finally:
         db.close()
+
+
+def test_stale_worker_loses_lease_after_first_checkpoint_preserves_new_worker_state():
+    """要求 3 并发回归：第一检查点成功 + 局部累积 gate_results → 另一 Session 接管
+    （换 owner + 改 gate_results）→ 旧 Worker 第二检查点 rowcount=0 → commit 后
+    状态/owner/租约/gate_results 全部保持新 Worker 的值。"""
+    from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+    from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+    from app.services.douyin_autoreply_gate_service import GateDecision
+
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    # run 初始为 outbox 占位态：decided + 旧 worker owner + 有效租约
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        run.status = "decided"
+        run.lease_owner = "old_worker"
+        run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+        run.gate_results_json = '{"pre_llm":{}}'
+        db.commit()
+    finally:
+        db.close()
+
+    takeover_done = {"done": False}
+
+    def _evaluate_real_send_gates(*args, **kwargs):
+        # 旧 Worker 已通过第一检查点（decided→send_processing，写入了 real_send gate_results）。
+        # 在此暂停点注入"另一 Session 接管"：换 owner + 改写 gate_results，模拟恢复器/新 Worker 抢占。
+        if not takeover_done["done"]:
+            takeover_done["done"] = True
+            tk = TestSession()
+            try:
+                tk_run = tk.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+                tk_run.lease_owner = "new_worker"
+                tk_run.gate_results_json = '{"hijacked":"by_new_worker"}'
+                tk.commit()
+            finally:
+                tk.close()
+        return GateDecision(passed=True, status="ok", reason=None, gate_results={})
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ), patch(
+        "app.services.ai_auto_reply_send_service.evaluate_real_send_gates",
+        side_effect=_evaluate_real_send_gates,
+    ):
+        db = TestSession()
+        try:
+            result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="old_worker")
+        finally:
+            _set_outbox_lease_owner("")
+            db.close()
+
+    # 旧 Worker 第二检查点 rowcount=0（owner 已被新 Worker 抢占），链路终止
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "send_authorized_race_lost"
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        # 状态、owner、租约、gate_results 全部保持新 Worker 的值，未被旧 Worker 覆盖
+        assert run.status == "send_processing"
+        assert run.lease_owner == "new_worker"
+        assert run.lease_expires_at is not None
+        assert json.loads(run.gate_results_json) == {"hijacked": "by_new_worker"}
+    finally:
+        db.close()
