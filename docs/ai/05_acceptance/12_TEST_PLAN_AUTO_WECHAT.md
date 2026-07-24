@@ -245,7 +245,7 @@
 1. 高频重复请求不能绕过唯一约束。
 2. 任务回写重复提交不能重复推进状态。
 3. 导出重试不能改变业务状态。
-4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1/R3-R2）候选已实现，执行窗口自测通过，待独立测试确认**（父测试候选 `4ed34cd1c64c74a5e5c7ece0e84a4aa3e8cb4117`）：9000 与 9202 共用同一处理核心 `process_webhook_event`，跨方言原子占位 `ON CONFLICT DO NOTHING RETURNING` + 2 个 JSONB CAST，嵌套提交已消除（commit 计数器验证默认 1 次、commit=False 0 次），非预期异常整体回滚（A4 异常前断言四类数据已入事务、异常后 rollback 监视 + 新 Session 断言全部为 0）；19 个重复返回继承非空 lead_id，19 条重复审计行继承 lead_id、merchant_id、tenant_id；执行窗口自测：专项 28 passed、回归 163 passed（均 0 failed）、9000/9202/混合三类 20 路各 10 轮通过；候选尚未推送、合并或发布，未验证真实 PostgreSQL 和生产并发。
+4. **原子幂等（DY-CS-WEBHOOK-ATOMIC-IDEMPOTENCY-1）最终候选 `96a764e25defda5978d9c2d593e168ff411193c0` 已通过独立测试（R3-T1，A1-A14 全部验收通过，任务级结论 PASS）**：9000 与 9202 共用同一处理核心 `process_webhook_event`，跨方言原子占位 `ON CONFLICT DO NOTHING RETURNING` + 2 个 JSONB CAST，嵌套提交已消除（commit 计数器验证默认 1 次、commit=False 0 次），非预期异常整体回滚（A4 异常前断言四类数据已入事务、异常后 rollback 监视 + 新 Session 断言全部为 0）；19 个重复返回继承非空 lead_id，19 条重复审计行继承 lead_id、merchant_id、tenant_id；独立测试：专项 28 passed、三类 20 路并发各重复 10 轮共 30 passed、完整指定回归 163 passed，合计 221 passed, 0 failed；已通过普通快进推送集成至 `master@96a764e25defda5978d9c2d593e168ff411193c0`；尚未部署或发布，未验证真实 PostgreSQL、PostgreSQL MVCC 并发、生产环境和真实私信/自动回复/微信发送，未运行全仓测试。
 
 ------
 
