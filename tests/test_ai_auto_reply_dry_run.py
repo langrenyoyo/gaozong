@@ -1645,3 +1645,108 @@ def test_llm_attempt_4_terminates_failed():
     finally:
         _set_outbox_lease_owner("")
         db.close()
+
+
+# ========== 真实入口 _run_with_session_for_outbox 与 _add_run guarded ==========
+
+def test_run_with_session_for_outbox_propagates_lease_owner_and_clears_context():
+    """真实入口：lease_owner 显式贯穿到 _run_with_session，执行后线程局部上下文被清理。"""
+    from app.services.ai_auto_reply_dry_run_service import (
+        _run_with_session_for_outbox, _expected_lease_owner as _dry_expected_owner,
+    )
+    captured = {}
+
+    def _capture(db, *, event_id, expected_lease_owner=""):
+        captured["event_id"] = event_id
+        captured["owner"] = expected_lease_owner
+        return
+
+    db, run = _make_outbox_run(owner="host:9")
+    try:
+        with patch("app.services.ai_auto_reply_dry_run_service._run_with_session", _capture):
+            _run_with_session_for_outbox(db, run_id=run.id, lease_owner="host:9")
+        assert captured["event_id"] == run.trigger_event_id
+        assert captured["owner"] == "host:9"
+        # finally 已清理线程局部上下文
+        assert _dry_expected_owner() == ""
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_run_with_session_for_outbox_skips_missing_run():
+    """真实入口：run 不存在时安全跳过，不抛错。"""
+    from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
+    db = TestSession()
+    try:
+        _run_with_session_for_outbox(db, run_id=999999, lease_owner="host:1")
+        # 无异常即通过
+    finally:
+        db.close()
+
+
+def test_add_run_guarded_rejects_stale_owner_upsert():
+    """_add_run outbox 路径：占位行 lease_owner 不匹配时原子 UPDATE rowcount=0，不覆盖。"""
+    from app.services.ai_auto_reply_dry_run_service import _add_run
+    db = TestSession()
+    try:
+        # outbox 占位行：processing + real_owner + 有效租约
+        placeholder = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_add_run_stale",
+            status=_OUTBOX_PROCESSING, attempt_count=1,
+            lease_owner="real_owner",
+            lease_expires_at=datetime.now() + timedelta(seconds=300),
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        db.add(placeholder)
+        db.commit()
+
+        # 旧 worker 试图 upsert 同 event_key 的新 processing 行
+        challenger = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_add_run_stale",
+            status=_OUTBOX_DECIDED, would_send_content="你好",
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        _set_outbox_lease_owner("stale_owner")
+        result = _add_run(db, challenger)
+        assert result is None  # 租约丢失，未覆盖
+        db.refresh(placeholder)
+        assert placeholder.status == _OUTBOX_PROCESSING  # 未被旧 worker 改写
+        assert placeholder.lease_owner == "real_owner"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_add_run_guarded_rejects_expired_lease_upsert():
+    """_add_run outbox 路径：租约过期时原子 UPDATE rowcount=0，不覆盖。"""
+    from app.services.ai_auto_reply_dry_run_service import _add_run
+    db = TestSession()
+    try:
+        placeholder = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_add_run_expired",
+            status=_OUTBOX_PROCESSING, attempt_count=1,
+            lease_owner="host:1",
+            lease_expires_at=datetime.now() - timedelta(seconds=10),  # 已过期
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        db.add(placeholder)
+        db.commit()
+
+        challenger = AiAutoReplyRun(
+            merchant_id="merchant-1", account_open_id="account-open-1",
+            trigger_event_id=1, trigger_event_key="evt_add_run_expired",
+            status=_OUTBOX_DECIDED, would_send_content="你好",
+            created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        _set_outbox_lease_owner("host:1")
+        result = _add_run(db, challenger)
+        assert result is None  # 租约过期，未覆盖
+        db.refresh(placeholder)
+        assert placeholder.status == _OUTBOX_PROCESSING
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()

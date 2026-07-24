@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.context import RequestContext
@@ -425,7 +426,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         return
     if status == "decided" and run.mode == "real_send_candidate":
         if final_result.get("auto_send") is True:
-            send_ai_auto_reply_for_run(db, run_id=run.id)
+            # owner 显式贯穿到发送服务，避免默认空值隐式绕过 guarded
+            send_ai_auto_reply_for_run(db, run_id=run.id, lease_owner=_expected_lease_owner())
         else:
             _mark_send_skipped_by_decision(db, run)
 
@@ -563,7 +565,11 @@ def _add_run(db, run: AiAutoReplyRun) -> AiAutoReplyRun | None:
     """插入 run；若 event_key 已存在（outbox 占位），更新现有行并返回持久化对象。
 
     返回值是实际持久化的 ORM 对象（新建或已有），调用方必须使用返回值。
-    返回 None 表示真正重复且无法 upsert。
+    返回 None 表示真正重复且无法 upsert（含租约丢失，旧 worker 不得覆盖新 worker）。
+
+    outbox 路径（owner 非空）：用原子条件 UPDATE 校验 expected_status=processing + 原始 owner
+    + 租约未过期 + rowcount==1，一次性写入业务字段，禁止 ORM setattr 逐字段覆盖，防止旧/过期
+    Worker 在租约丢失后仍覆盖恢复器或新 Worker 的状态。非 outbox 路径保留原 ORM upsert 兼容。
     """
     try:
         db.add(run)
@@ -577,38 +583,75 @@ def _add_run(db, run: AiAutoReplyRun) -> AiAutoReplyRun | None:
             .filter(AiAutoReplyRun.trigger_event_key == run.trigger_event_key)
             .first()
         )
-        if existing is not None:
-            # outbox 路径：校验现有行租约归属，防止旧 worker 覆盖新 worker
-            owner = _expected_lease_owner()
-            if owner and existing.lease_owner != owner:
-                logger.warning(
-                    "ai_auto_reply_lease_lost stage=upsert_run event_key=%s expected_owner=%s actual_owner=%s",
-                    _short(run.trigger_event_key), owner[:16], (existing.lease_owner or "")[:16],
-                )
-                return None
+        if existing is None:
+            logger.info(
+                "ai_auto_reply_run_duplicate stage=insert_run event_key=%s",
+                _short(run.trigger_event_key),
+            )
+            return None
+
+        owner = _expected_lease_owner()
+        if owner:
+            # outbox 路径：原子 guarded upsert，校验 processing + 原始 owner + 未过期租约 + rowcount
+            values: dict[str, Any] = {
+                "status": run.status,
+                "updated_at": datetime.now(),
+            }
             for field in (
-                "status", "skip_reason", "block_reason", "error_message",
-                "gate_results_json", "mode", "merchant_id", "account_open_id",
-                "conversation_short_id", "customer_open_id", "agent_id",
-                "decision_log_id", "would_send_content", "latest_message",
-                "trigger_server_message_id",
+                "skip_reason", "block_reason", "error_message", "gate_results_json",
+                "mode", "merchant_id", "account_open_id", "conversation_short_id",
+                "customer_open_id", "agent_id", "decision_log_id", "would_send_content",
+                "latest_message", "trigger_server_message_id",
             ):
                 value = getattr(run, field, None)
                 if value is not None:
-                    setattr(existing, field, value)
-            existing.updated_at = datetime.now()
+                    values[field] = value
+            now = datetime.now()
+            result = db.execute(
+                sa_update(AiAutoReplyRun)
+                .where(
+                    AiAutoReplyRun.id == existing.id,
+                    AiAutoReplyRun.status == "processing",
+                    AiAutoReplyRun.lease_owner == owner,
+                    AiAutoReplyRun.lease_expires_at > now,
+                )
+                .values(**values)
+                .execution_options(synchronize_session=False)
+            )
             db.commit()
+            if result.rowcount == 0:
+                logger.warning(
+                    "ai_auto_reply_lease_lost stage=upsert_run event_key=%s expected_owner=%s "
+                    "actual_owner=%s reason=status_or_lease_mismatch",
+                    _short(run.trigger_event_key), owner[:16], (existing.lease_owner or "")[:16],
+                )
+                return None
             db.refresh(existing)
             logger.info(
                 "ai_auto_reply_run_upserted stage=upsert_run event_key=%s run_id=%s",
                 _short(run.trigger_event_key), existing.id,
             )
             return existing
+
+        # 非 outbox 路径：保留原 ORM upsert 行为
+        for field in (
+            "status", "skip_reason", "block_reason", "error_message",
+            "gate_results_json", "mode", "merchant_id", "account_open_id",
+            "conversation_short_id", "customer_open_id", "agent_id",
+            "decision_log_id", "would_send_content", "latest_message",
+            "trigger_server_message_id",
+        ):
+            value = getattr(run, field, None)
+            if value is not None:
+                setattr(existing, field, value)
+        existing.updated_at = datetime.now()
+        db.commit()
+        db.refresh(existing)
         logger.info(
-            "ai_auto_reply_run_duplicate stage=insert_run event_key=%s",
-            _short(run.trigger_event_key),
+            "ai_auto_reply_run_upserted stage=upsert_run event_key=%s run_id=%s",
+            _short(run.trigger_event_key), existing.id,
         )
-        return None
+        return existing
 
 
 def _finish_run(
@@ -655,14 +698,21 @@ def _finish_run(
 
 
 def _mark_send_skipped_by_decision(db, run: AiAutoReplyRun) -> None:
-    run.status = "send_skipped"
-    run.block_reason = "auto_send_disabled_by_decision"
-    run.updated_at = datetime.now()
-    db.commit()
-    logger.info(
-        "ai_auto_reply_send_skipped stage=decision_gate run_id=%s reason=auto_send_disabled_by_decision",
-        run.id,
+    """decided → send_skipped（决策不发）：走 guarded 原子终态，清租约，不再裸 ORM 提交。"""
+    from app.services.ai_auto_reply_send_service import _terminal
+    written = _terminal(
+        db, run, expected_status="decided", status="send_skipped",
+        block_reason="auto_send_disabled_by_decision",
     )
+    if written == 1:
+        logger.info(
+            "ai_auto_reply_send_skipped stage=decision_gate run_id=%s reason=auto_send_disabled_by_decision",
+            run.id,
+        )
+    else:
+        logger.warning(
+            "ai_auto_reply_lease_lost stage=decision_skip run_id=%s", run.id,
+        )
 
 
 def _binding_block_reason(reason_code: str | None) -> str:

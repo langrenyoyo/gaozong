@@ -528,12 +528,14 @@ def run_outbox_cycle() -> None:
     """执行一轮 outbox 处理周期：recover → claim → process → compensate → alert。
 
     scheduler 与 webhook wake 共用本入口；非阻塞单飞锁防止并发完整扫描。
+    Session 在取得单飞锁后、try 内创建，确保 Session 构造失败时锁也能释放。
     """
     if not _cycle_single_flight_lock.acquire(blocking=False):
         logger.info("ai_outbox_cycle_skipped reason=single_flight_busy")
         return
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         recover_expired_leases(db)
 
         batch = claim_next_batch(db, batch_size=config.AI_AUTO_REPLY_OUTBOX_BATCH_SIZE)
@@ -553,12 +555,14 @@ def run_outbox_cycle() -> None:
         compensate_missing_runs(db)
         alert_backlog(db)
     except Exception as exc:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception(
             "ai_outbox_cycle_error stage=cycle error_type=%s", type(exc).__name__,
         )
     finally:
-        db.close()
+        if db is not None:
+            db.close()
         _cycle_single_flight_lock.release()
 
 

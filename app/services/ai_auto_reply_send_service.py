@@ -17,6 +17,7 @@ from app.models import AiAutoReplyRun, AiReplyDecisionLog, DouyinPrivateMessageS
 from app.services.ai_auto_reply_outbox_service import (
     _expected_lease_owner,
     _guarded_lease_update,
+    _set_outbox_lease_owner,
 )
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import (
@@ -39,16 +40,19 @@ logger = logging.getLogger(__name__)
 
 
 def _checkpoint(db: Session, run: AiAutoReplyRun, *, expected_status: str, status: str) -> int:
-    """状态机检查点推进。outbox 路径走 guarded（原始 owner + 租约未过期 + 检查点续租）；
-    非 outbox 路径走原条件更新（lease_owner == run.lease_owner，兼容无租约直调）。
-    返回 rowcount；0 表示未推进（outbox 租约丢失/过期，调用方必须终止且不得覆盖恢复器或新 Worker 状态）。
+    """状态机检查点推进：单条原子 guarded UPDATE。
+
+    outbox 路径强制原始 owner + 租约未过期 + expected_status + 检查点续租；
+    非 outbox 路径校验 lease_owner == run.lease_owner（兼容无租约直调）。
+    返回 rowcount；0 表示未推进（租约丢失/过期/状态不符），调用方必须终止且不得覆盖恢复器或新 Worker 状态。
     """
     now = datetime.now()
     owner = _expected_lease_owner()
+    update_values: dict[str, Any] = {"status": status, "updated_at": now}
     if owner:
         return _guarded_lease_update(
             db, run.id, expected_status=expected_status,
-            values={"status": status}, refresh_lease=True,
+            values=update_values, refresh_lease=True,
         )
     # 非 outbox：原条件更新
     result = db.execute(
@@ -58,7 +62,7 @@ def _checkpoint(db: Session, run: AiAutoReplyRun, *, expected_status: str, statu
             AiAutoReplyRun.status == expected_status,
             AiAutoReplyRun.lease_owner == run.lease_owner,
         )
-        .values(status=status, updated_at=now)
+        .values(**update_values)
         .execution_options(synchronize_session=False)
     )
     db.commit()
@@ -76,36 +80,66 @@ def _terminal(
     last_failure_stage: str | None = None,
     gate_results_json: str | None = None,
 ) -> int:
-    """终态写入。outbox 路径先续租确认仍持有租约（防恢复器/新 Worker 在终态窗口覆盖），
-    再 ORM 写终态并清租约；返回 0 表示租约丢失，调用方不得覆盖且不应再触发副作用。
-    非 outbox 路径走原 ORM 提交，始终返回 1。
+    """终态写入：单条原子 guarded UPDATE，同时写状态、诊断字段并清理租约。
+
+    outbox 路径 WHERE expected_status + 原始 owner + 租约未过期，一次性写入 status/诊断/清租约，
+    消除"先续租再 ORM 提交"和 SQLAlchemy auto flush 在 guard 返回 0 前提交脏数据的问题。
+    返回 rowcount；0 表示租约已丢失，调用方不得覆盖、不得再触发 mark_ai_replied 等副作用。
+    非 outbox 路径走原子条件更新，返回 rowcount（兼容无租约直调，状态不符返回 0）。
     """
+    now = datetime.now()
+    update_values: dict[str, Any] = {
+        "status": status,
+        "lease_owner": None,
+        "lease_expires_at": None,
+        "updated_at": now,
+    }
+    if block_reason is not None:
+        update_values["block_reason"] = block_reason
+    if error_message is not None:
+        update_values["error_message"] = error_message
+    if last_failure_stage is not None:
+        update_values["last_failure_stage"] = last_failure_stage
+    if gate_results_json is not None:
+        update_values["gate_results_json"] = gate_results_json
     owner = _expected_lease_owner()
     if owner:
-        # 续租确认：刷新 lease_expires_at，阻止恢复器在终态写入窗口内抢占
-        confirmed = _guarded_lease_update(
-            db, run.id, expected_status=expected_status,
-            values={}, refresh_lease=True,
+        return _guarded_lease_update(
+            db, run.id, expected_status=expected_status, values=update_values,
         )
-        if confirmed == 0:
-            return 0
-    run.status = status
-    run.block_reason = block_reason
-    run.error_message = error_message
-    if last_failure_stage is not None:
-        run.last_failure_stage = last_failure_stage
-    if gate_results_json is not None:
-        run.gate_results_json = gate_results_json
-    # 终态清理租约（sent/failed/send_unknown/send_skipped 均不再持有租约）
-    run.lease_owner = None
-    run.lease_expires_at = None
-    run.updated_at = datetime.now()
+    # 非 outbox：原子条件更新（expected_status + lease_owner == run.lease_owner）
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run.id,
+            AiAutoReplyRun.status == expected_status,
+            AiAutoReplyRun.lease_owner == run.lease_owner,
+        )
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
-    return 1
+    return result.rowcount
 
 
-def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
-    """按 run 执行一次 AI 自动回复真实发送；所有失败路径均不重试。"""
+def send_ai_auto_reply_for_run(db: Session, *, run_id: int, lease_owner: str = "") -> dict[str, Any]:
+    """按 run 执行一次 AI 自动回复真实发送；所有失败路径均不重试。
+
+    lease_owner 为 outbox 原始 owner（显式贯穿，非空时设置线程局部上下文供 guarded 使用）；
+    非 outbox 路径传空串，走无租约兼容分支。所有 leased 路径在第一个写库动作前先取得 guarded 检查点，
+    检查点前只允许内存计算；终态由单条原子 guarded UPDATE 写入并清租约，guarded 成功后再更新决策日志。
+    """
+    # 显式 owner 贯穿：非空则写入线程局部上下文，供 _checkpoint/_terminal 的 guarded 使用
+    if lease_owner:
+        _set_outbox_lease_owner(lease_owner)
+    try:
+        return _send_ai_auto_reply_for_run_impl(db, run_id=run_id)
+    finally:
+        if lease_owner:
+            _set_outbox_lease_owner("")
+
+
+def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, Any]:
     run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     if run is None:
         return {"status": "skipped", "reason": "run_not_found"}
@@ -154,10 +188,17 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         _mark_send_skipped(db, run, "empty_content")
         logger.info("ai_auto_reply_send_skipped stage=content_check run_id=%s reason=empty_content", run.id)
         return {"status": "send_skipped", "reason": "empty_content"}
+
+    # 第一个 guarded 检查点：decided → send_processing，取得该 run 的写入权并续租。
+    # 此后所有 gate_results 合并、内容规范化才允许通过原子 UPDATE 写入 run。
+    # 内容规范化（would_send_content）也合并进本检查点的原子 UPDATE，避免检查点前提前提交。
+    checkpoint_values: dict[str, Any] = {"status": "send_processing"}
     if content != (run.would_send_content or "").strip():
-        run.would_send_content = content
-        run.updated_at = datetime.now()
-        db.commit()
+        checkpoint_values["would_send_content"] = content
+    if _checkpoint_with_values(db, run, expected_status="decided", values=checkpoint_values) == 0:
+        logger.warning("ai_auto_reply_send_aborted stage=send_processing race_lost run_id=%s", run.id)
+        return {"status": "send_skipped", "reason": "send_processing_race_lost"}
+    db.refresh(run)
 
     settings = get_account_autoreply_settings(
         db,
@@ -173,17 +214,14 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         conversation_short_id=run.conversation_short_id,
     )
     if not real_send_gate.passed:
-        _merge_run_gate_results(
-            db,
-            run,
-            "real_send",
-            {
-                **(real_send_gate.gate_results or {}),
-                "send_gate_passed": False,
-                "blocked_reason": real_send_gate.reason,
-            },
+        gate_json = _merge_run_gate_results(
+            db, run, "real_send",
+            {**(real_send_gate.gate_results or {}), "send_gate_passed": False, "blocked_reason": real_send_gate.reason},
         )
-        _mark_send_skipped(db, run, real_send_gate.reason or "real_send_gate_blocked")
+        _terminal(
+            db, run, expected_status="send_processing", status="send_skipped",
+            block_reason=real_send_gate.reason or "real_send_gate_blocked", gate_results_json=gate_json,
+        )
         logger.info(
             "ai_auto_reply_gate_blocked stage=real_send_gate run_id=%s account_open_id_sha8=%s "
             "blocked_by=%s send_enabled=%s",
@@ -194,14 +232,9 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         )
         return {"status": "send_skipped", "reason": real_send_gate.reason}
 
-    _merge_run_gate_results(
-        db,
-        run,
-        "real_send",
-        {
-            **(real_send_gate.gate_results or {}),
-            "send_gate_passed": True,
-        },
+    gate_json = _merge_run_gate_results(
+        db, run, "real_send",
+        {**(real_send_gate.gate_results or {}), "send_gate_passed": True},
     )
 
     manual_takeover = evaluate_manual_takeover_gate(
@@ -210,9 +243,12 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         account_open_id=run.account_open_id,
         conversation_short_id=run.conversation_short_id or "",
     )
-    _merge_run_gate_results(db, run, "real_send", {"manual_takeover": manual_takeover})
+    gate_json = _merge_run_gate_results(db, run, "real_send", {"manual_takeover": manual_takeover})
     if manual_takeover.get("blocked") is True:
-        _mark_send_skipped(db, run, "manual_takeover_blocked")
+        _terminal(
+            db, run, expected_status="send_processing", status="send_skipped",
+            block_reason="manual_takeover_blocked", gate_results_json=gate_json,
+        )
         logger.info("ai_auto_reply_send_skipped stage=manual_takeover run_id=%s reason=manual_takeover_blocked", run.id)
         return {"status": "send_skipped", "reason": "manual_takeover_blocked"}
 
@@ -224,15 +260,15 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         trigger_server_message_id=run.trigger_server_message_id,
     )
     if latest_state.get("has_outbound_after_trigger") is True:
-        _mark_send_skipped(db, run, "outbound_after_trigger")
+        _mark_send_skipped_after_checkpoint(db, run, "outbound_after_trigger")
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=outbound_after_trigger", run.id)
         return {"status": "send_skipped", "reason": "outbound_after_trigger"}
     if latest_state.get("latest_is_customer_message") is not True:
-        _mark_send_skipped(db, run, "latest_message_not_customer")
+        _mark_send_skipped_after_checkpoint(db, run, "latest_message_not_customer")
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_not_customer", run.id)
         return {"status": "send_skipped", "reason": "latest_message_not_customer"}
     if latest_state.get("latest_server_message_id") != run.trigger_server_message_id:
-        _mark_send_skipped(db, run, "latest_message_changed")
+        _mark_send_skipped_after_checkpoint(db, run, "latest_message_changed")
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_changed", run.id)
         return {"status": "send_skipped", "reason": "latest_message_changed"}
 
@@ -242,35 +278,35 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         customer_open_id=run.customer_open_id,
     )
     if send_context is None:
-        _mark_send_skipped(db, run, "send_context_unavailable")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_unavailable")
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_unavailable", run.id)
         return {"status": "send_skipped", "reason": "send_context_unavailable"}
     if send_context.get("server_message_id") != run.trigger_server_message_id:
-        _mark_send_skipped(db, run, "send_context_message_changed")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_message_changed")
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_message_changed", run.id)
         return {"status": "send_skipped", "reason": "send_context_message_changed"}
     if send_context.get("account_open_id") != run.account_open_id:
-        _mark_send_skipped(db, run, "send_context_account_mismatch")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_account_mismatch")
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_account_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_account_mismatch"}
     if send_context.get("customer_open_id") != run.customer_open_id:
-        _mark_send_skipped(db, run, "send_context_customer_mismatch")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_customer_mismatch")
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_customer_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_customer_mismatch"}
     if _is_context_expired(send_context.get("message_create_time")):
-        _mark_send_skipped(db, run, "context_expired")
+        _mark_send_skipped_after_checkpoint(db, run, "context_expired")
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
-    # 发送状态机检查点：guarded 推进 decided → send_processing → send_authorized（检查点续租）
-    # outbox 路径校验原始 owner + 租约未过期；租约丢失则终止，不得覆盖恢复器或新 Worker 状态
-    if _checkpoint(db, run, expected_status="decided", status="send_processing") == 0:
-        logger.warning("ai_auto_reply_send_aborted stage=send_processing race_lost run_id=%s", run.id)
-        return {"status": "send_skipped", "reason": "send_processing_race_lost"}
-
-    if _checkpoint(db, run, expected_status="send_processing", status="send_authorized") == 0:
+    # 第二个 guarded 检查点：send_processing → send_authorized（门禁全通过，即将调用真实 API；检查点续租）
+    # 把累积的 gate_results 与状态一起原子写入，避免在调用上游前留有未持久化的脏数据
+    if _checkpoint_with_values(
+        db, run, expected_status="send_processing",
+        values={"status": "send_authorized", "gate_results_json": gate_json},
+    ) == 0:
         logger.warning("ai_auto_reply_send_aborted stage=send_authorized race_lost run_id=%s", run.id)
         return {"status": "send_skipped", "reason": "send_authorized_race_lost"}
+    db.refresh(run)
 
     try:
         send_result = _send_private_message_with_context(
@@ -314,14 +350,16 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
             )
         return {"status": "send_unknown", "reason": "send_network_error"}
 
-    _sync_final_auto_send_after_success(db, run)
-    # 成功终态：send_authorized → sent（guarded + 清租约）；租约丢失则不覆盖、不触发 mark_ai_replied，
-    # 由恢复器按 sent 流水 EXISTS 对账为 sent
+    # 成功终态：单条原子 guarded UPDATE 写 sent + 清租约（含最终 gate_results）。
+    # 仅在 guarded 成功（rowcount==1）后才同步决策日志和 mark_ai_replied；租约丢失则不覆盖、不触发副作用，
+    # 由恢复器按 sent 流水 EXISTS 对账为 sent。
+    final_gate_json = _build_final_success_gate_json(run)
     written = _terminal(
         db, run, expected_status="send_authorized", status="sent",
-        block_reason=None, error_message=None,
+        block_reason=None, error_message=None, gate_results_json=final_gate_json,
     )
     if written == 1:
+        _sync_decision_log_final_auto_send(db, run)
         mark_ai_replied(
             db,
             merchant_id=run.merchant_id,
@@ -334,34 +372,83 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
     return {"status": "sent", "record_id": send_result.get("record_id")}
 
 
+def _checkpoint_with_values(
+    db: Session, run: AiAutoReplyRun, *, expected_status: str, values: dict[str, Any],
+) -> int:
+    """带额外字段的 guarded 检查点：原子 UPDATE 写 status + 附加 values（如 gate_results_json/
+    would_send_content），同时检查点续租。返回 rowcount；0 表示租约丢失，调用方必须终止。"""
+    return _guarded_lease_update(
+        db, run.id, expected_status=expected_status, values=values, refresh_lease=True,
+    ) if _expected_lease_owner() else _non_outbox_checkpoint_with_values(
+        db, run, expected_status=expected_status, values=values,
+    )
+
+
+def _non_outbox_checkpoint_with_values(
+    db: Session, run: AiAutoReplyRun, *, expected_status: str, values: dict[str, Any],
+) -> int:
+    now = datetime.now()
+    update_values = dict(values)
+    update_values["updated_at"] = now
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run.id,
+            AiAutoReplyRun.status == expected_status,
+            AiAutoReplyRun.lease_owner == run.lease_owner,
+        )
+        .values(**update_values)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount
+
+
 def _mark_send_skipped(db: Session, run: AiAutoReplyRun, reason: str) -> int:
-    """跳过终态：decided → send_skipped（guarded + 清租约）。返回 rowcount（0=租约丢失未覆盖）。"""
+    """跳过终态（检查点前，run 仍为 decided）：decided → send_skipped（guarded + 清租约）。
+
+    返回 rowcount（0=租约丢失未覆盖）；非 outbox 路径直接条件更新。
+    """
     return _terminal(db, run, expected_status="decided", status="send_skipped", block_reason=reason)
 
 
 def _mark_format_invalid(db: Session, run: AiAutoReplyRun, error_message: str) -> int:
-    """格式非法终态：decided → send_skipped(format_invalid)（guarded + 清租约）。返回 rowcount。"""
+    """格式非法终态（检查点前，run 仍为 decided）：decided → send_skipped(format_invalid)（guarded + 清租约）。"""
     return _terminal(
         db, run, expected_status="decided", status="send_skipped",
         block_reason="format_invalid", error_message=error_message,
     )
 
 
-def _sync_final_auto_send_after_success(db: Session, run: AiAutoReplyRun) -> None:
-    """发送成功后以真实发送结果为准，同步 run 快照和决策日志。"""
+def _mark_send_skipped_after_checkpoint(db: Session, run: AiAutoReplyRun, reason: str) -> int:
+    """跳过终态（检查点后，run 已 send_processing）：send_processing → send_skipped（guarded + 清租约）。"""
+    return _terminal(db, run, expected_status="send_processing", status="send_skipped", block_reason=reason)
+
+
+def _build_final_success_gate_json(run: AiAutoReplyRun) -> str:
+    """纯内存构造成功终态的 gate_results JSON（不入库），由终态原子 UPDATE 一次性写入。
+    以真实发送结果为准标记 final_auto_send=True。"""
     gate_results = _json_object(run.gate_results_json)
     post_llm = gate_results.get("post_llm")
     if not isinstance(post_llm, dict):
         post_llm = {}
     post_llm["final_auto_send"] = True
     gate_results["post_llm"] = post_llm
-    run.gate_results_json = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"), default=str)
 
-    if run.decision_log_id:
-        decision = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).first()
-        if decision is not None:
-            decision.final_auto_send = 1
 
+def _sync_decision_log_final_auto_send(db: Session, run: AiAutoReplyRun) -> None:
+    """发送成功终态 guarded 写入后，同步决策日志 final_auto_send=1（仅在租约仍持有时调用）。"""
+    if not run.decision_log_id:
+        logger.info(
+            "ai_auto_reply_send_finalized stage=send_success run_id=%s decision_log_id=None final_auto_send=True",
+            run.id,
+        )
+        return
+    decision = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).first()
+    if decision is not None:
+        decision.final_auto_send = 1
+        db.commit()
     logger.info(
         "ai_auto_reply_send_finalized stage=send_success run_id=%s decision_log_id=%s final_auto_send=True",
         run.id,
@@ -369,15 +456,19 @@ def _sync_final_auto_send_after_success(db: Session, run: AiAutoReplyRun) -> Non
     )
 
 
-def _merge_run_gate_results(db: Session, run: AiAutoReplyRun, section: str, value: dict[str, Any]) -> None:
+def _merge_run_gate_results(db: Session, run: AiAutoReplyRun, section: str, value: dict[str, Any]) -> str:
+    """内存累积 gate_results（不提交）：合并到 run 内存对象返回序列化 JSON，由调用方在
+    原子 guarded UPDATE（检查点/终态）中一次性写入，避免检查点前提前提交脏数据。
+    """
     gate_results = _json_object(run.gate_results_json)
     current = gate_results.get(section)
     if not isinstance(current, dict):
         current = {}
     current.update(value)
     gate_results[section] = current
-    run.gate_results_json = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"), default=str)
-    db.commit()
+    merged = json.dumps(gate_results, ensure_ascii=False, separators=(",", ":"), default=str)
+    run.gate_results_json = merged  # 仅内存对象，未 flush/commit
+    return merged
 
 
 def _json_object(raw: str | None) -> dict[str, Any]:

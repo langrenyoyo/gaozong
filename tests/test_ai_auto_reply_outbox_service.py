@@ -816,3 +816,30 @@ def test_run_outbox_cycle_proceeds_when_lock_free():
         assert claim.call_count == 1
         assert comp.call_count == 1
         assert alert.call_count == 1
+
+
+def test_run_outbox_cycle_releases_lock_when_session_construction_fails():
+    """Session 构造失败时单飞锁也释放：后续周期可正常获取锁并执行。"""
+    call_count = {"n": 0}
+
+    def _flaky_sessionlocal():
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("session construction failed")
+        fake_db = MagicMock()
+        return fake_db
+
+    with patch("app.services.ai_auto_reply_outbox_service.SessionLocal", side_effect=_flaky_sessionlocal), \
+         patch("app.services.ai_auto_reply_outbox_service.recover_expired_leases") as rec, \
+         patch("app.services.ai_auto_reply_outbox_service.claim_next_batch", return_value=[]) as claim, \
+         patch("app.services.ai_auto_reply_outbox_service.compensate_missing_runs", return_value=0) as comp, \
+         patch("app.services.ai_auto_reply_outbox_service.alert_backlog") as alert:
+        # 第一次：Session 构造失败，锁必须被释放
+        run_outbox_cycle()
+        assert rec.call_count == 0  # 未进入业务逻辑
+        # 第二次：锁已被释放，应正常进入业务逻辑
+        run_outbox_cycle()
+        assert rec.call_count == 1
+        assert claim.call_count == 1
+        assert comp.call_count == 1
+        assert alert.call_count == 1

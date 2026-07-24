@@ -1486,3 +1486,105 @@ def test_terminal_writes_and_clears_lease_on_valid_lease():
     finally:
         _set_outbox_lease_owner("")
         db.close()
+
+
+def test_terminal_is_single_atomic_update_no_orm_dirty_flush():
+    """终态为单条原子 guarded UPDATE：租约已丢失时 rowcount=0，且不写任何脏 ORM 数据。
+
+    回归：旧实现先续租再 ORM 提交，auto flush 可能在 guard 返回 0 前提交脏数据。
+    现实现租约丢失返回 0，run 状态/租约不被覆盖。
+    """
+    db, run = _make_leased_run(status="send_authorized", lease_owner="new_worker",
+                               lease_expires_at=datetime.now() + timedelta(seconds=300))
+    try:
+        _set_outbox_lease_owner("old_worker")
+        rc = _terminal(
+            db, run, expected_status="send_authorized", status="sent",
+            block_reason=None, error_message=None,
+            gate_results_json='{"post_llm":{"final_auto_send":true}}',
+        )
+        assert rc == 0
+        db.refresh(run)
+        # 未被旧 worker 覆盖：状态、租约、gate_results 均保持新 worker 的值
+        assert run.status == "send_authorized"
+        assert run.lease_owner == "new_worker"
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
+def test_send_accepts_explicit_lease_owner_and_uses_guarded_path():
+    """显式 lease_owner 贯穿：传入真实 owner 时走 guarded 路径，
+    内容规范化与第一个检查点合一，不在检查点前提前提交。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value={"payload": {"code": 0, "data": {"msg_id": "upstream-msg-1"}}},
+    ):
+        from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+        from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+
+        db = TestSession()
+        try:
+            # 先把 run 置为 outbox 占位态：decided + 真实 owner + 有效租约
+            run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+            run.status = "decided"
+            run.lease_owner = "claim_host:1"
+            run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+            db.commit()
+            result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="claim_host:1")
+        finally:
+            _set_outbox_lease_owner("")
+            db.close()
+
+    assert result["status"] == "sent"
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "sent"
+        assert run.lease_owner is None  # 终态清租约
+        assert run.lease_expires_at is None
+    finally:
+        db.close()
+
+
+def test_send_lease_lost_before_first_checkpoint_does_not_overwrite():
+    """检查点前零写入：若租约已丢失（owner 不匹配），第一个检查点 rowcount=0，
+    整个发送链路终止，不覆盖新 worker 的状态。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        run.status = "decided"
+        run.lease_owner = "real_owner"
+        run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+        db.commit()
+    finally:
+        db.close()
+
+    from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+    from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+
+    db = TestSession()
+    try:
+        # 传入与 run.lease_owner 不匹配的 stale owner
+        result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="stale_owner")
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "send_processing_race_lost"
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "decided"  # 未被旧 worker 覆盖
+        assert run.lease_owner == "real_owner"
+    finally:
+        db.close()
