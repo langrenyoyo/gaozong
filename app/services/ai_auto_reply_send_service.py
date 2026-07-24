@@ -264,15 +264,15 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         trigger_server_message_id=run.trigger_server_message_id,
     )
     if latest_state.get("has_outbound_after_trigger") is True:
-        _mark_send_skipped_after_checkpoint(db, run, "outbound_after_trigger")
+        _mark_send_skipped_after_checkpoint(db, run, "outbound_after_trigger", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=outbound_after_trigger", run.id)
         return {"status": "send_skipped", "reason": "outbound_after_trigger"}
     if latest_state.get("latest_is_customer_message") is not True:
-        _mark_send_skipped_after_checkpoint(db, run, "latest_message_not_customer")
+        _mark_send_skipped_after_checkpoint(db, run, "latest_message_not_customer", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_not_customer", run.id)
         return {"status": "send_skipped", "reason": "latest_message_not_customer"}
     if latest_state.get("latest_server_message_id") != run.trigger_server_message_id:
-        _mark_send_skipped_after_checkpoint(db, run, "latest_message_changed")
+        _mark_send_skipped_after_checkpoint(db, run, "latest_message_changed", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=latest_message run_id=%s reason=latest_message_changed", run.id)
         return {"status": "send_skipped", "reason": "latest_message_changed"}
 
@@ -282,23 +282,23 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         customer_open_id=run.customer_open_id,
     )
     if send_context is None:
-        _mark_send_skipped_after_checkpoint(db, run, "send_context_unavailable")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_unavailable", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_unavailable", run.id)
         return {"status": "send_skipped", "reason": "send_context_unavailable"}
     if send_context.get("server_message_id") != run.trigger_server_message_id:
-        _mark_send_skipped_after_checkpoint(db, run, "send_context_message_changed")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_message_changed", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_message_changed", run.id)
         return {"status": "send_skipped", "reason": "send_context_message_changed"}
     if send_context.get("account_open_id") != run.account_open_id:
-        _mark_send_skipped_after_checkpoint(db, run, "send_context_account_mismatch")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_account_mismatch", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_account_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_account_mismatch"}
     if send_context.get("customer_open_id") != run.customer_open_id:
-        _mark_send_skipped_after_checkpoint(db, run, "send_context_customer_mismatch")
+        _mark_send_skipped_after_checkpoint(db, run, "send_context_customer_mismatch", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_customer_mismatch", run.id)
         return {"status": "send_skipped", "reason": "send_context_customer_mismatch"}
     if _is_context_expired(send_context.get("message_create_time")):
-        _mark_send_skipped_after_checkpoint(db, run, "context_expired")
+        _mark_send_skipped_after_checkpoint(db, run, "context_expired", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
@@ -424,9 +424,18 @@ def _mark_format_invalid(db: Session, run: AiAutoReplyRun, error_message: str) -
     )
 
 
-def _mark_send_skipped_after_checkpoint(db: Session, run: AiAutoReplyRun, reason: str) -> int:
-    """跳过终态（检查点后，run 已 send_processing）：send_processing → send_skipped（guarded + 清租约）。"""
-    return _terminal(db, run, expected_status="send_processing", status="send_skipped", block_reason=reason)
+def _mark_send_skipped_after_checkpoint(
+    db: Session, run: AiAutoReplyRun, reason: str, *, gate_results_json: str | None = None,
+) -> int:
+    """跳过终态（检查点后，run 已 send_processing）：send_processing → send_skipped。
+
+    单条原子 guarded UPDATE 写状态、原因、gate_results 并清租约；gate_results_json 传入
+    当前局部累积的 gate_json，保证 send_gate_passed/manual_takeover 等诊断不丢失。
+    """
+    return _terminal(
+        db, run, expected_status="send_processing", status="send_skipped",
+        block_reason=reason, gate_results_json=gate_results_json,
+    )
 
 
 def _build_final_success_gate_json(gate_acc: dict[str, Any]) -> str:

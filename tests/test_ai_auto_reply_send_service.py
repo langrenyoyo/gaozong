@@ -1658,3 +1658,181 @@ def test_stale_worker_loses_lease_after_first_checkpoint_preserves_new_worker_st
         assert json.loads(run.gate_results_json) == {"hijacked": "by_new_worker"}
     finally:
         db.close()
+
+
+# ========== 要求 6：检查点后跳过路径原子清租约 + 保留 gate_results ==========
+
+def _send_outbox_with_outbound_after_trigger(run_id):
+    """outbox 路径触发 outbound_after_trigger 跳过：返回 result 与 run 快照。"""
+    from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+    from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+
+    with patch(
+        "app.services.ai_auto_reply_send_service.get_latest_private_message_state",
+        return_value={
+            "latest_is_customer_message": True,
+            "latest_server_message_id": "server-msg-1",
+            "has_outbound_after_trigger": True,
+        },
+    ), patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+    ) as openapi_mock:
+        db = TestSession()
+        try:
+            result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="claim_host:1")
+        finally:
+            _set_outbox_lease_owner("")
+            db.close()
+        return result, openapi_mock
+
+
+def test_checkpoint_skip_outbound_after_trigger_clears_lease_and_keeps_gate_results():
+    """检查点后跳过(outbound_after_trigger)：单条原子 guarded 写状态/原因/gate_results 并清租约。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    # run 置为 outbox 占位态：decided + lease
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        run.status = "decided"
+        run.lease_owner = "claim_host:1"
+        run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+        db.commit()
+    finally:
+        db.close()
+
+    result, openapi_mock = _send_outbox_with_outbound_after_trigger(run_id)
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "outbound_after_trigger"
+    openapi_mock.assert_not_called()  # 不调用真实发送
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "send_skipped"
+        assert run.block_reason == "outbound_after_trigger"
+        assert run.lease_owner is None  # 租约已清空
+        assert run.lease_expires_at is None
+        gate = json.loads(run.gate_results_json)
+        # gate_results 保留 send_gate_passed 与 manual_takeover
+        assert gate["real_send"]["send_gate_passed"] is True
+        assert "manual_takeover" in gate["real_send"]
+    finally:
+        db.close()
+
+
+def test_checkpoint_skip_latest_message_changed_clears_lease_and_keeps_gate_results():
+    """检查点后跳过(latest_message_changed)：清租约 + 保留 gate_results。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        run.status = "decided"
+        run.lease_owner = "claim_host:1"
+        run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+        db.commit()
+    finally:
+        db.close()
+
+    from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+    from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+
+    with patch(
+        "app.services.ai_auto_reply_send_service.get_latest_private_message_state",
+        return_value={
+            "latest_is_customer_message": True,
+            "latest_server_message_id": "server-msg-OTHER",  # 与 trigger 不符
+            "has_outbound_after_trigger": False,
+        },
+    ), patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+    ) as openapi_mock:
+        db = TestSession()
+        try:
+            result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="claim_host:1")
+        finally:
+            _set_outbox_lease_owner("")
+            db.close()
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "latest_message_changed"
+    openapi_mock.assert_not_called()
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "send_skipped"
+        assert run.block_reason == "latest_message_changed"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+        gate = json.loads(run.gate_results_json)
+        assert gate["real_send"]["send_gate_passed"] is True
+        assert "manual_takeover" in gate["real_send"]
+    finally:
+        db.close()
+
+
+def test_checkpoint_skip_context_expired_clears_lease_and_keeps_gate_results():
+    """检查点后跳过(context_expired)：清租约 + 保留 gate_results。"""
+    run_id = _insert_run()
+    _insert_settings()
+    _insert_event()
+
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        run.status = "decided"
+        run.lease_owner = "claim_host:1"
+        run.lease_expires_at = datetime.now() + timedelta(seconds=300)
+        db.commit()
+    finally:
+        db.close()
+
+    from app.services.ai_auto_reply_outbox_service import _set_outbox_lease_owner
+    from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
+    from app.services.douyin_workbench_conversation_service import get_send_msg_context
+
+    with patch(
+        "app.services.ai_auto_reply_send_service.get_latest_private_message_state",
+        return_value={
+            "latest_is_customer_message": True,
+            "latest_server_message_id": "server-msg-1",
+            "has_outbound_after_trigger": False,
+        },
+    ), patch(
+        "app.services.ai_auto_reply_send_service.get_send_msg_context",
+        return_value={
+            "server_message_id": "server-msg-1",
+            "account_open_id": "account-open-1",
+            "customer_open_id": "customer-open-1",
+            "message_create_time": datetime.now() - timedelta(hours=48),  # _is_context_expired 判定过期
+        },
+    ), patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+    ) as openapi_mock:
+        db = TestSession()
+        try:
+            result = send_ai_auto_reply_for_run(db, run_id=run_id, lease_owner="claim_host:1")
+        finally:
+            _set_outbox_lease_owner("")
+            db.close()
+
+    assert result["status"] == "send_skipped"
+    assert result["reason"] == "context_expired"
+    openapi_mock.assert_not_called()
+    db = TestSession()
+    try:
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).one()
+        assert run.status == "send_skipped"
+        assert run.block_reason == "context_expired"
+        assert run.lease_owner is None
+        assert run.lease_expires_at is None
+        gate = json.loads(run.gate_results_json)
+        assert gate["real_send"]["send_gate_passed"] is True
+        assert "manual_takeover" in gate["real_send"]
+    finally:
+        db.close()
