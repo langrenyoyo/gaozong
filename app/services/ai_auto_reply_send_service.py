@@ -190,16 +190,42 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int) -> dict[str, Any]:
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=context_expired", run.id)
         return {"status": "send_skipped", "reason": "context_expired"}
 
-    # P0#3: 发送状态检查点 — decided → send_processing → send_authorized → sent/send_unknown
-    run.status = "send_processing"
-    run.updated_at = datetime.now()
+    # P0#4: 发送状态检查点使用条件更新（id + expected_status + lease_owner）
+    from sqlalchemy import update as sa_update
+    now = datetime.now()
+
+    # decided → send_processing（条件更新，防租约过期后旧 worker 覆盖）
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run.id,
+            AiAutoReplyRun.status == "decided",
+            AiAutoReplyRun.lease_owner == run.lease_owner,
+        )
+        .values(status="send_processing", updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
+    if result.rowcount == 0:
+        logger.warning("ai_auto_reply_send_aborted stage=send_processing race_lost run_id=%s", run.id)
+        return {"status": "send_skipped", "reason": "send_processing_race_lost"}
     db.refresh(run)
 
-    # send_authorized：门禁全通过，即将调用真实 API；先 commit 使检查点持久化
-    run.status = "send_authorized"
-    run.updated_at = datetime.now()
+    # send_processing → send_authorized（门禁全通过，即将调用真实 API；先 commit 使检查点持久化）
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run.id,
+            AiAutoReplyRun.status == "send_processing",
+            AiAutoReplyRun.lease_owner == run.lease_owner,
+        )
+        .values(status="send_authorized", updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
+    if result.rowcount == 0:
+        logger.warning("ai_auto_reply_send_aborted stage=send_authorized race_lost run_id=%s", run.id)
+        return {"status": "send_skipped", "reason": "send_authorized_race_lost"}
     db.refresh(run)
 
     try:

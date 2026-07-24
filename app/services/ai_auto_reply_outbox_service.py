@@ -100,6 +100,13 @@ def enqueue_auto_reply_run(
         )
         return None
 
+    if not account_open_id:
+        logger.info(
+            "ai_outbox_enqueue_skipped reason=empty_account_open_id event_id=%s",
+            trigger_event_id,
+        )
+        return None
+
     run = AiAutoReplyRun(
         merchant_id=merchant_id,
         account_open_id=account_open_id,
@@ -155,12 +162,16 @@ def claim_next_batch(db: Session, *, batch_size: int = 100) -> list[AiAutoReplyR
     if not ids:
         return []
 
-    # 原子条件更新：设置线程唯一租约
+    # 原子条件更新：设置线程唯一租约（含退避时间条件，防并发绕过退避）
     result = db.execute(
         sa_update(AiAutoReplyRun)
         .where(
             AiAutoReplyRun.id.in_(ids),
             AiAutoReplyRun.status.in_(_PROCESSABLE_STATUSES),
+            or_(
+                AiAutoReplyRun.next_attempt_at.is_(None),
+                AiAutoReplyRun.next_attempt_at <= now,
+            ),
         )
         .values(
             status=STATUS_PROCESSING,
@@ -194,8 +205,15 @@ def claim_next_batch(db: Session, *, batch_size: int = 100) -> list[AiAutoReplyR
 
 
 def recover_expired_leases(db: Session) -> int:
-    """恢复租约过期的 processing/send_processing 任务到 pending。"""
+    """恢复租约过期的 processing/send_processing 任务到 pending。
+
+    send_authorized 任务按发送流水对账：存在 sent 流水 → sent，否则 → send_unknown。
+    两种情况都禁止自动重发。
+    """
+    from app.models import DouyinPrivateMessageSend
     now = datetime.now()
+
+    # processing/send_processing → pending
     result = db.execute(
         sa_update(AiAutoReplyRun)
         .where(
@@ -213,9 +231,41 @@ def recover_expired_leases(db: Session) -> int:
     )
     db.commit()
     count = result.rowcount
+
+    # send_authorized → 按发送流水对账
+    authorized_runs = (
+        db.query(AiAutoReplyRun)
+        .filter(
+            AiAutoReplyRun.status == STATUS_SEND_AUTHORIZED,
+            AiAutoReplyRun.lease_expires_at < now,
+        )
+        .all()
+    )
+    for run in authorized_runs:
+        existing_send = (
+            db.query(DouyinPrivateMessageSend)
+            .filter(DouyinPrivateMessageSend.auto_reply_run_id == run.id)
+            .first()
+        )
+        if existing_send is not None and existing_send.status == "sent":
+            run.status = STATUS_SENT
+            run.last_failure_stage = None
+        else:
+            run.status = STATUS_SEND_UNKNOWN
+            run.last_failure_stage = "send_authorized_crash_unknown"
+        run.lease_owner = None
+        run.lease_expires_at = None
+        run.updated_at = now
+        count += 1
+    if authorized_runs:
+        db.commit()
+        logger.warning(
+            "ai_outbox_recover_authorized stage=recover_authorized reconciled=%s", len(authorized_runs),
+        )
+
     if count > 0:
         logger.warning(
-            "ai_outbox_recover stage=recover recovered=%s reason=lease_expired", count,
+            "ai_outbox_recover stage=recover recovered=%s reason=lease_expired_or_authorized", count,
         )
     return count
 
@@ -335,36 +385,56 @@ RETRY_FAILURE_STAGES = _RETRY_WHITELIST_FAILURE_STAGES
 def manual_retry_run(db: Session, *, run_id: int, merchant_id: str) -> AiAutoReplyRun:
     """人工重试：只允许可信当前商户、明确未发送且失败阶段在白名单内的 failed run。
 
-    条件更新到 retry_wait，不在请求内发送。
+    使用条件更新（merchant_id + failed + 白名单阶段 + 无发送流水），
+    检查唯一胜出行数，不在请求内发送。
     """
-    run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
-    if run is None:
-        raise ValueError("run_not_found")
-    if run.merchant_id != merchant_id:
-        from app.services.douyin_workbench_conversation_service import AccountMerchantDeniedError
-        raise AccountMerchantDeniedError("run_merchant_denied")
-    if run.status != STATUS_FAILED:
-        raise ValueError(f"run_not_failed:{run.status}")
-    if run.last_failure_stage not in RETRY_FAILURE_STAGES:
-        raise ValueError(f"failure_stage_not_whitelisted:{run.last_failure_stage}")
-    # 已发送记录存在则禁止重试
     from app.models import DouyinPrivateMessageSend
+
+    # 先检查发送流水是否存在（只读，不持锁）
     existing_send = (
         db.query(DouyinPrivateMessageSend)
-        .filter(DouyinPrivateMessageSend.auto_reply_run_id == run.id)
+        .filter(DouyinPrivateMessageSend.auto_reply_run_id == run_id)
         .first()
     )
     if existing_send is not None:
         raise ValueError("already_sent")
 
-    run.status = STATUS_RETRY_WAIT
-    run.attempt_count = 0
-    run.next_attempt_at = datetime.now()
-    run.last_failure_stage = None
-    run.error_message = None
-    run.updated_at = datetime.now()
+    now = datetime.now()
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(
+            AiAutoReplyRun.id == run_id,
+            AiAutoReplyRun.merchant_id == merchant_id,
+            AiAutoReplyRun.status == STATUS_FAILED,
+            AiAutoReplyRun.last_failure_stage.in_(RETRY_FAILURE_STAGES),
+        )
+        .values(
+            status=STATUS_RETRY_WAIT,
+            attempt_count=0,
+            next_attempt_at=now,
+            last_failure_stage=None,
+            error_message=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
-    db.refresh(run)
+
+    if result.rowcount == 0:
+        # 条件不满足，区分原因
+        run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
+        if run is None:
+            raise ValueError("run_not_found")
+        if run.merchant_id != merchant_id:
+            from app.services.douyin_workbench_conversation_service import AccountMerchantDeniedError
+            raise AccountMerchantDeniedError("run_merchant_denied")
+        if run.status != STATUS_FAILED:
+            raise ValueError(f"run_not_failed:{run.status}")
+        raise ValueError(f"failure_stage_not_whitelisted:{run.last_failure_stage}")
+
+    run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     logger.info(
         "ai_outbox_manual_retry stage=manual_retry run_id=%s merchant_id=%s status=retry_wait",
         run_id, merchant_id,

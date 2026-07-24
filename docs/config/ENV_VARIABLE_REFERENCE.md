@@ -318,3 +318,18 @@ dev/lan 当前用 SQLite，模板只配 `SQLALCHEMY_*`；production 用 PostgreS
 2. `tests/test_env_profile_templates.py` 会扫描代码读取点，未分类变量会导致测试失败。
 3. 模板只收录第 1 节「模板部署变量」中标记「是」的变量，且须遵守 profile 边界（prod 不含 Local Agent 进程变量、不含 SQLite 主库 URL、不含真实密钥）。
 4. 历史兼容 / 灰度 / 废弃变量**永远不重新进入模板**。
+
+## AI 自动回复 outbox 持久化任务调度
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `AI_AUTO_REPLY_OUTBOX_ENABLED` | `false` | 是否启用 outbox 后台调度器（60 秒周期扫描、租约恢复、补偿和积压告警） |
+| `AI_AUTO_REPLY_OUTBOX_INTERVAL_SECONDS` | `60` | 调度器扫描间隔（秒） |
+| `AI_AUTO_REPLY_OUTBOX_BATCH_SIZE` | `100` | 每批 claim 最大任务数 |
+| `AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS` | `300` | processing/send_processing 租约时长（秒） |
+| `AI_AUTO_REPLY_OUTBOX_MAX_RETRIES` | `3` | LLM 失败自动重试上限 |
+| `AI_AUTO_REPLY_OUTBOX_BACKOFF_1_SECONDS` | `60` | 第一次重试退避（秒） |
+| `AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS` | `300` | 第二次及以后重试退避（秒） |
+| `AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS` | `900` | 补偿扫描窗口（秒） |
+| `AI_AUTO_REPLY_OUTBOX_BACKLOG_COUNT_THRESHOLD` | `100` | 积压告警数量阈值 |
+| `AI_AUTO_REPLY_OUTBOX_BACKLOG_AGE_THRESHOLD` | `300` | 积压告警最老任务年龄阈值（秒） |

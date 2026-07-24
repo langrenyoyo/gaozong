@@ -47,6 +47,15 @@ class DouyinConversationMarkReadRequest(BaseModel):
     customer_open_id: str | None = None
 
 
+def _wake_outbox_scheduler() -> None:
+    """低延迟唤醒：立即执行一轮 outbox 处理，不等待 60 秒周期。"""
+    try:
+        from app.services.ai_auto_reply_outbox_service import run_outbox_cycle
+        run_outbox_cycle()
+    except Exception as exc:
+        logger.warning("ai_auto_reply_wake_failed error_type=%s", type(exc).__name__)
+
+
 def _merchant_id_for_douyin_cs(context: RequestContext) -> str:
     require_permission("auto_wechat:douyin_ai_cs")(context)
     if not context.merchant_id:
@@ -262,7 +271,11 @@ def maybe_schedule_ai_auto_reply(
         )
         return
 
-    # BackgroundTasks 仅记录已持久化任务存在，不再直接执行；实际处理由 outbox 调度器负责。
+    # BackgroundTasks 仅唤醒 outbox claim 流程，不直接执行旧 run_ai_auto_reply_job。
+    # 受总开关控制；关闭时不处理任务（由周期调度器在启用时接管）。
+    from app import config as _config
+    if _config.AI_AUTO_REPLY_OUTBOX_ENABLED:
+        background_tasks.add_task(_wake_outbox_scheduler)
     logger.info(
         "ai_auto_reply_enqueued_persistent event_id=%s event=%s source_path=%s account_open_id=%s",
         log_extra["event_id"],

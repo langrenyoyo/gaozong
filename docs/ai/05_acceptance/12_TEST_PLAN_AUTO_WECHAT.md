@@ -682,19 +682,19 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 候选已实现，待独立测试确认（2026-07-24）：
 
 - 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
-- enqueue 在 webhook 外层事务内 flush pending run，不 commit
-- claim 使用条件 UPDATE 原子租约（300 秒），线程唯一 lease_owner + commit 后返回
-- recover 恢复过期租约的 processing/send_processing 到 pending
-- compensate 补偿 15 分钟窗口内缺失的客户私信事件（原子 IntegrityError 处理，跳过无商户/无账号）
-- 60 秒周期扫描（启动立即扫描）
-- manual retry 商户隔离 + 失败阶段白名单 + 条件更新到 retry_wait
-- 积压告警（100 条 / 300 秒 / send_unknown）
-- 执行窗口自测：A1-A20 专项 30 passed、回归 89 passed（均 0 failed）
+- enqueue 在 webhook 外层事务内 flush pending run（仅 flush，不 commit）；拒绝空 `account_open_id`
+- claim 使用条件 UPDATE 原子租约（300 秒），线程唯一 lease_owner + commit 后返回；UPDATE 含退避时间条件
+- `_add_run` upsert 返回持久化 ORM 对象；`_run_with_session` 不再构造 `running`（改用 `processing`）
+- 发送状态检查点：`decided → send_processing → send_authorized`（条件更新含 lease_owner 校验 + commit）→ `sent`/`send_unknown`
+- `send_authorized` 崩溃对账：存在 sent 发送流水 → sent，否则 → send_unknown；禁止自动重发
+- LLM 失败自动重试：`attempt_count <= MAX_RETRIES` → `retry_wait` + 退避（60s/300s）；超过 → `failed` + `last_failure_stage=pre_send_temporary_failure`
+- send 失败分类：`error_code=upstream_business_error` → `failed`；网络/超时/HTTP/非法 → `send_unknown`
+- recover 恢复过期租约的 processing/send_processing 到 pending；send_authorized 按发送流水对账
+- compensate 补偿 15 分钟窗口内缺失的客户私信事件（保存点隔离，跳过无商户/无账号）
+- BackgroundTasks 仅唤醒 outbox claim（受总开关控制），不直接执行旧 `run_ai_auto_reply_job`
+- manual retry 使用条件更新（merchant_id + failed + 白名单 + 无发送流水）
+- 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记
+- 执行窗口自测：专项 30 passed、回归 89+105=194 passed（1 pre-existing 失败在 base 8c7cd9e 同样失败）
 - 候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境
-依赖修改
-服务启动
-数据库迁移
-真机微信自动化
-```
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。

@@ -255,6 +255,17 @@ TEMPLATE_VARIABLES = {
     "DOUYIN_AUTO_REPLY_ACCOUNT_WHITELIST",
     "DOUYIN_AUTO_REPLY_CUSTOMER_WHITELIST",
     "DOUYIN_AUTO_REPLY_CONVERSATION_WHITELIST",
+    # AI 自动回复 outbox 持久化任务调度
+    "AI_AUTO_REPLY_OUTBOX_ENABLED",
+    "AI_AUTO_REPLY_OUTBOX_INTERVAL_SECONDS",
+    "AI_AUTO_REPLY_OUTBOX_BATCH_SIZE",
+    "AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS",
+    "AI_AUTO_REPLY_OUTBOX_MAX_RETRIES",
+    "AI_AUTO_REPLY_OUTBOX_BACKOFF_1_SECONDS",
+    "AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS",
+    "AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS",
+    "AI_AUTO_REPLY_OUTBOX_BACKLOG_COUNT_THRESHOLD",
+    "AI_AUTO_REPLY_OUTBOX_BACKLOG_AGE_THRESHOLD",
     # local agent gate
     "LOCAL_AGENT_AUTH_REQUIRED",
     "LOCAL_AGENT_TOKENS",
@@ -949,3 +960,42 @@ def test_staging_compose_documents_override_only():
     source = read("docker-compose.staging.yml")
     assert "不能单独运行" in source
     assert "禁止用于 production" in source
+
+
+def test_outbox_variables_in_all_templates():
+    """AI 自动回复 outbox 变量必须在三个模板都出现。"""
+    outbox_vars = {
+        "AI_AUTO_REPLY_OUTBOX_ENABLED",
+        "AI_AUTO_REPLY_OUTBOX_INTERVAL_SECONDS",
+        "AI_AUTO_REPLY_OUTBOX_BATCH_SIZE",
+        "AI_AUTO_REPLY_OUTBOX_LEASE_SECONDS",
+        "AI_AUTO_REPLY_OUTBOX_MAX_RETRIES",
+        "AI_AUTO_REPLY_OUTBOX_BACKOFF_1_SECONDS",
+        "AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS",
+        "AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS",
+        "AI_AUTO_REPLY_OUTBOX_BACKLOG_COUNT_THRESHOLD",
+        "AI_AUTO_REPLY_OUTBOX_BACKLOG_AGE_THRESHOLD",
+    }
+    dev = extract_template_vars(ROOT / ".env.development.example")
+    lan = extract_template_vars(ROOT / ".env.lan.example")
+    prod = extract_template_vars(ROOT / ".env.production.example")
+
+    assert outbox_vars <= dev, f"dev 缺 outbox 变量：{sorted(outbox_vars - dev)}"
+    assert outbox_vars <= lan, f"lan 缺 outbox 变量：{sorted(outbox_vars - lan)}"
+    assert outbox_vars <= prod, f"prod 缺 outbox 变量：{sorted(outbox_vars - prod)}"
+
+
+def test_outbox_default_false_in_all_templates():
+    """outbox 总开关在三个模板中默认 false。"""
+    for template in [
+        ROOT / ".env.development.example",
+        ROOT / ".env.lan.example",
+        ROOT / ".env.production.example",
+    ]:
+        lines = template.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            if line.strip().startswith("AI_AUTO_REPLY_OUTBOX_ENABLED="):
+                assert "=false" in line.strip().lower(), f"{template.name} 中 OUTBOX_ENABLED 默认值不是 false"
+                break
+        else:
+            assert False, f"{template.name} 缺少 AI_AUTO_REPLY_OUTBOX_ENABLED"

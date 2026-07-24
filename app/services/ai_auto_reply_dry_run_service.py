@@ -274,7 +274,7 @@ def _run_with_session(db, *, event_id: int) -> None:
             "merchant_id": binding.merchant_id or "",
             "account_open_id": account_open_id,
             "agent_id": binding.agent.agent_id,
-            "status": "running",
+            "status": "processing",
             "gate_results_json": _json_dumps({
                 "pre_llm": pre_gate.gate_results or {},
                 "history": history_gate,
