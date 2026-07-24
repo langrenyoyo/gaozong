@@ -443,7 +443,7 @@ class AiReplyDecisionLog(Base):
 
 
 class AiAutoReplyRun(Base):
-    """Webhook 自动回复 dry-run 运行记录，不代表真实发送。"""
+    """AI 自动回复运行记录 + 持久化 outbox（复用同一张表）。"""
 
     __tablename__ = "ai_auto_reply_runs"
     __table_args__ = (
@@ -455,6 +455,9 @@ class AiAutoReplyRun(Base):
         Index("idx_ai_auto_reply_runs_agent", "agent_id"),
         Index("idx_ai_auto_reply_runs_decision_log", "decision_log_id"),
         Index("idx_ai_auto_reply_runs_created", "created_at"),
+        # outbox 调度/租约索引
+        Index("idx_ai_auto_reply_runs_status_next_attempt", "status", "next_attempt_at"),
+        Index("idx_ai_auto_reply_runs_lease", "lease_owner", "lease_expires_at"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -475,6 +478,12 @@ class AiAutoReplyRun(Base):
     decision_log_id = Column(Integer)
     would_send_content = Column(Text)
     error_message = Column(Text)
+    # outbox 持久化任务字段
+    lease_owner = Column(String(128), comment="当前持有租约的进程标识")
+    lease_expires_at = Column(DateTime, comment="租约过期时间")
+    attempt_count = Column(Integer, nullable=False, default=0, comment="累计尝试次数（含首次）")
+    next_attempt_at = Column(DateTime, comment="下次可处理时间；retry_wait 退避后填入")
+    last_failure_stage = Column(String(128), comment="最后失败阶段，用于诊断和重试白名单")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

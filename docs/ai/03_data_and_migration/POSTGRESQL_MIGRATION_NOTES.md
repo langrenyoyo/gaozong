@@ -2715,3 +2715,15 @@ P3-E-9100 闭环交付 9100 RAG metadata SQLite -> PostgreSQL 全套：迁移脚
 1. `P3-E-9100` production 切换：按 Z5 Runbook（roadmap 第 34 节）在审批窗口执行 staging 演练 + production apply。
 2. chunks 大表迁移前评估行数（embedding_json 约 15-30 KB/行，数万行级 apply 需评估耗时，见 roadmap 34.6）。
 
+
+---
+
+## 9000 Alembic 0016：AI 自动回复 outbox 持久化任务字段（DY-CS-AUTO-REPLY-OUTBOX-1）
+
+- 候选已实现，待独立测试确认（2026-07-24）。
+- 版本：0016，down_revision=0015。
+- 范围：`ai_auto_reply_runs` 新增 `lease_owner`/`lease_expires_at`/`attempt_count`/`next_attempt_at`/`last_failure_stage`；新增调度/租约索引。
+- `lease_expires_at` 和 `next_attempt_at` 使用 `DateTime(timezone=True)`，对齐 ORM 与 PG 运行契约。
+- `attempt_count` 为 `Integer NOT NULL DEFAULT 0`。
+- SQLite 对应迁移 0036，字段合同一致。
+- 尚未执行 production apply；未验证真实 PostgreSQL MVCC 并发。

@@ -675,6 +675,21 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 数据库模型修改
 接口实现修改
 配置默认值修改
+
+## 27. AI 自动回复 outbox / 持久化任务验收（DY-CS-AUTO-REPLY-OUTBOX-1）
+
+候选已实现，待独立测试确认（2026-07-24）：
+
+- 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
+- enqueue 在 webhook 外层事务内 flush pending run，不 commit
+- claim 使用条件 UPDATE 原子租约（300 秒），进程内单飞
+- recover 恢复过期租约的 processing/send_processing 到 pending
+- compensate 补偿 15 分钟窗口内缺失的客户私信事件
+- 60 秒周期扫描（启动立即扫描）
+- manual retry 商户隔离 + 失败阶段白名单 + 条件更新到 retry_wait
+- 积压告警（100 条 / 300 秒 / send_unknown）
+- 执行窗口自测：A1-A20 专项 30 passed、回归 89 passed（均 0 failed）
+- 候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境
 依赖修改
 服务启动
 数据库迁移

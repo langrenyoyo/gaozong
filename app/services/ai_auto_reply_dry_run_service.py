@@ -50,6 +50,23 @@ def run_ai_auto_reply_job(event_id: int) -> None:
         db.close()
 
 
+def _run_with_session_for_outbox(db: Session, *, run_id: int) -> None:
+    """outbox 调度器调用的处理入口。
+
+    删除占位 pending run，让 _run_with_session 用同一 trigger_event_key 重新创建完整 run
+    并执行全部门禁+决策+发送逻辑。删除和创建在同一事务/commit 原子完成。
+    """
+    run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
+    if run is None:
+        logger.warning("ai_outbox_process_skip reason=run_not_found run_id=%s", run_id)
+        return
+    event_id = run.trigger_event_id
+    # 删除占位 run，让 _run_with_session 重新创建完整 run
+    db.delete(run)
+    db.flush()
+    _run_with_session(db, event_id=event_id)
+
+
 def run_ai_auto_reply_dry_run(event_id: int) -> None:
     """兼容旧调用名；实际执行受控自动回复任务。"""
     run_ai_auto_reply_job(event_id)

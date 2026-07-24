@@ -218,6 +218,10 @@ def create_app() -> FastAPI:
         ).start()
         logger.info("回访崩溃恢复一次性线程已启动（return-visit-recovery-once）")
 
+        # AI 自动回复 outbox 调度器（默认关闭，AI_AUTO_REPLY_OUTBOX_ENABLED=true 启动）
+        from app.services.ai_auto_reply_outbox_service import start_outbox_scheduler
+        start_outbox_scheduler()
+
     @app.on_event("shutdown")
     async def on_shutdown():
         await close_async_database_runtime()
@@ -229,6 +233,9 @@ def create_app() -> FastAPI:
         from app.services.desktop_overlay import stop_desktop_overlay
         stop_hotkey_listener()
         stop_desktop_overlay()
+        # 停止 AI 自动回复 outbox 调度器
+        from app.services.ai_auto_reply_outbox_service import stop_outbox_scheduler
+        stop_outbox_scheduler()
 
     @app.get("/")
     def root():
