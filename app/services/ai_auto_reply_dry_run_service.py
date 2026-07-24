@@ -46,24 +46,22 @@ def _set_outbox_lease_owner(owner: str) -> None:
     _outbox_ctx.lease_owner = owner
 
 
-def _guarded_lease_update(db, run_id: int, *, expected_status: str | None = None,
+def _guarded_lease_update(db, run_id: int, *, expected_status: str,
                           values: dict[str, Any]) -> int:
-    """条件更新：校验 lease_owner + 可选 expected_status + 租约未过期。返回 rowcount。"""
+    """条件更新：强制校验 expected_status + lease_owner + 租约未过期。返回 rowcount。"""
     from sqlalchemy import update as sa_update
     now = datetime.now()
     owner = _expected_lease_owner()
     if not owner:
         return 0  # 非 outbox 路径不使用此函数
-    conditions = [
-        AiAutoReplyRun.id == run_id,
-        AiAutoReplyRun.lease_owner == owner,
-        AiAutoReplyRun.lease_expires_at > now,
-    ]
-    if expected_status:
-        conditions.append(AiAutoReplyRun.status == expected_status)
     result = db.execute(
         sa_update(AiAutoReplyRun)
-        .where(*conditions)
+        .where(
+            AiAutoReplyRun.id == run_id,
+            AiAutoReplyRun.status == expected_status,
+            AiAutoReplyRun.lease_owner == owner,
+            AiAutoReplyRun.lease_expires_at > now,
+        )
         .values(**values, updated_at=now)
         .execution_options(synchronize_session=False)
     )
@@ -643,8 +641,8 @@ def _finish_run(
     would_send_content: str | None = None,
     error_message: str | None = None,
     gate_results: dict[str, Any] | None = None,
-) -> None:
-    # outbox 路径：使用条件更新校验 lease_owner，失败则放弃（旧 worker 不覆盖新 worker）
+) -> bool:
+    # outbox 路径：使用条件更新校验 lease_owner + expected_status，失败返回 False 终止
     if _expected_lease_owner():
         values: dict[str, Any] = {
             "status": status,
@@ -655,13 +653,14 @@ def _finish_run(
         }
         if gate_results is not None:
             values["gate_results_json"] = _json_dumps(gate_results)
-        rowcount = _guarded_lease_update(db, run.id, values=values)
+        rowcount = _guarded_lease_update(db, run.id, expected_status="processing", values=values)
         if rowcount == 0:
             logger.warning(
                 "ai_auto_reply_lease_lost stage=finish_run run_id=%s owner=%s",
                 run.id, _expected_lease_owner(),
             )
-        return
+            return False
+        return True
     # 非 outbox 路径：直接赋值提交
     run.status = status
     run.block_reason = block_reason
@@ -672,6 +671,7 @@ def _finish_run(
         run.gate_results_json = _json_dumps(gate_results)
     run.updated_at = datetime.now()
     db.commit()
+    return True
 
 
 def _mark_send_skipped_by_decision(db, run: AiAutoReplyRun) -> None:
@@ -724,7 +724,7 @@ def _handle_llm_failure(
             "lease_expires_at": None,
         }
         if _expected_lease_owner():
-            rowcount = _guarded_lease_update(db, run.id, values=values)
+            rowcount = _guarded_lease_update(db, run.id, expected_status="processing", values=values)
             if rowcount == 0:
                 logger.warning("ai_auto_reply_lease_lost stage=llm_retry run_id=%s", run.id)
                 return
@@ -746,7 +746,7 @@ def _handle_llm_failure(
             "lease_expires_at": None,
         }
         if _expected_lease_owner():
-            rowcount = _guarded_lease_update(db, run.id, values=values)
+            rowcount = _guarded_lease_update(db, run.id, expected_status="processing", values=values)
             if rowcount == 0:
                 logger.warning("ai_auto_reply_lease_lost stage=llm_exhausted run_id=%s", run.id)
                 return
