@@ -33,6 +33,43 @@ from app.services.xg_douyin_ai_cs_client import (
 
 logger = logging.getLogger(__name__)
 
+# 线程局部 outbox 租约上下文：claim 时设置，贯穿决策→发送全链路
+import threading as _threading
+_outbox_ctx = _threading.local()
+
+
+def _expected_lease_owner() -> str:
+    return getattr(_outbox_ctx, "lease_owner", "")
+
+
+def _set_outbox_lease_owner(owner: str) -> None:
+    _outbox_ctx.lease_owner = owner
+
+
+def _guarded_lease_update(db, run_id: int, *, expected_status: str | None = None,
+                          values: dict[str, Any]) -> int:
+    """条件更新：校验 lease_owner + 可选 expected_status + 租约未过期。返回 rowcount。"""
+    from sqlalchemy import update as sa_update
+    now = datetime.now()
+    owner = _expected_lease_owner()
+    if not owner:
+        return 0  # 非 outbox 路径不使用此函数
+    conditions = [
+        AiAutoReplyRun.id == run_id,
+        AiAutoReplyRun.lease_owner == owner,
+        AiAutoReplyRun.lease_expires_at > now,
+    ]
+    if expected_status:
+        conditions.append(AiAutoReplyRun.status == expected_status)
+    result = db.execute(
+        sa_update(AiAutoReplyRun)
+        .where(*conditions)
+        .values(**values, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return result.rowcount
+
 
 def run_ai_auto_reply_job(event_id: int) -> None:
     """后台执行 webhook 自动回复 dry-run，只记录决策，不发送消息。"""
@@ -50,18 +87,22 @@ def run_ai_auto_reply_job(event_id: int) -> None:
         db.close()
 
 
-def _run_with_session_for_outbox(db: Session, *, run_id: int) -> None:
+def _run_with_session_for_outbox(db: Session, *, run_id: int, lease_owner: str = "") -> None:
     """outbox 调度器调用的处理入口。
 
-    不删除占位 run；_run_with_session 中的 _existing_run 会发现它，
-    _add_run 的 upsert 路径会原地更新同一行并保留 attempt_count 等字段。
+    lease_owner 作为不可替换凭据贯穿决策和发送链路；
+    所有 leased 状态推进必须校验 expected_owner + 租约未过期。
     """
     run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     if run is None:
         logger.warning("ai_outbox_process_skip reason=run_not_found run_id=%s", run_id)
         return
     event_id = run.trigger_event_id
-    _run_with_session(db, event_id=event_id)
+    _set_outbox_lease_owner(lease_owner)
+    try:
+        _run_with_session(db, event_id=event_id, expected_lease_owner=lease_owner)
+    finally:
+        _set_outbox_lease_owner("")
 
 
 def run_ai_auto_reply_dry_run(event_id: int) -> None:
@@ -69,7 +110,7 @@ def run_ai_auto_reply_dry_run(event_id: int) -> None:
     run_ai_auto_reply_job(event_id)
 
 
-def _run_with_session(db, *, event_id: int) -> None:
+def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> None:
     event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == event_id).first()
     if event is None:
         logger.warning("ai_auto_reply_dry_run_event_missing stage=load_event event_id=%s", event_id)
@@ -86,6 +127,7 @@ def _run_with_session(db, *, event_id: int) -> None:
         return
     # existing 为 pending/processing/retry_wait 时，_add_run 的 upsert 路径会原地更新，
     # 保留 attempt_count/lease_owner 等 outbox 字段。
+    # 当 expected_lease_owner 非空时，校验现有行租约归属，防止旧 worker 覆盖新 worker。
 
     content = _event_content(event)
     account_open_id = _account_open_id(event)
@@ -558,6 +600,14 @@ def _add_run(db, run: AiAutoReplyRun) -> AiAutoReplyRun | None:
             .first()
         )
         if existing is not None:
+            # outbox 路径：校验现有行租约归属，防止旧 worker 覆盖新 worker
+            owner = _expected_lease_owner()
+            if owner and existing.lease_owner != owner:
+                logger.warning(
+                    "ai_auto_reply_lease_lost stage=upsert_run event_key=%s expected_owner=%s actual_owner=%s",
+                    _short(run.trigger_event_key), owner[:16], (existing.lease_owner or "")[:16],
+                )
+                return None
             for field in (
                 "status", "skip_reason", "block_reason", "error_message",
                 "gate_results_json", "mode", "merchant_id", "account_open_id",
@@ -594,6 +644,25 @@ def _finish_run(
     error_message: str | None = None,
     gate_results: dict[str, Any] | None = None,
 ) -> None:
+    # outbox 路径：使用条件更新校验 lease_owner，失败则放弃（旧 worker 不覆盖新 worker）
+    if _expected_lease_owner():
+        values: dict[str, Any] = {
+            "status": status,
+            "block_reason": block_reason,
+            "decision_log_id": decision_log_id,
+            "would_send_content": would_send_content,
+            "error_message": error_message,
+        }
+        if gate_results is not None:
+            values["gate_results_json"] = _json_dumps(gate_results)
+        rowcount = _guarded_lease_update(db, run.id, values=values)
+        if rowcount == 0:
+            logger.warning(
+                "ai_auto_reply_lease_lost stage=finish_run run_id=%s owner=%s",
+                run.id, _expected_lease_owner(),
+            )
+        return
+    # 非 outbox 路径：直接赋值提交
     run.status = status
     run.block_reason = block_reason
     run.decision_log_id = decision_log_id
@@ -632,8 +701,7 @@ def _handle_llm_failure(
 ) -> None:
     """LLM 失败时根据 attempt_count 决定退避重试或终止。
 
-    发送前临时失败最多重试 MAX_RETRIES 次（退避 60s → 300s）；
-    超过后写 failed + last_failure_stage=pre_send_temporary_failure（人工重试白名单内）。
+    outbox 路径使用条件更新校验 lease_owner；retry_wait 清理租约，failed 保留诊断。
     """
     from app import config as app_config
     max_retries = app_config.AI_AUTO_REPLY_OUTBOX_MAX_RETRIES
@@ -646,24 +714,46 @@ def _handle_llm_failure(
             if run.attempt_count <= 1
             else app_config.AI_AUTO_REPLY_OUTBOX_BACKOFF_2_SECONDS
         )
-        run.status = "retry_wait"
-        run.next_attempt_at = now + timedelta(seconds=backoff)
-        run.last_failure_stage = "pre_send_temporary_failure"
-        run.error_message = error_message
-        run.gate_results_json = gate_json
-        run.updated_at = now
-        db.commit()
+        values = {
+            "status": "retry_wait",
+            "next_attempt_at": now + timedelta(seconds=backoff),
+            "last_failure_stage": "pre_send_temporary_failure",
+            "error_message": error_message,
+            "gate_results_json": gate_json,
+            "lease_owner": None,
+            "lease_expires_at": None,
+        }
+        if _expected_lease_owner():
+            rowcount = _guarded_lease_update(db, run.id, values=values)
+            if rowcount == 0:
+                logger.warning("ai_auto_reply_lease_lost stage=llm_retry run_id=%s", run.id)
+                return
+        else:
+            for k, v in values.items():
+                setattr(run, k, v)
+            db.commit()
         logger.info(
             "ai_auto_reply_llm_retry stage=llm_retry run_id=%s attempt=%s/%s backoff=%ss",
             run.id, run.attempt_count, max_retries, backoff,
         )
     else:
-        run.status = "failed"
-        run.last_failure_stage = "pre_send_temporary_failure"
-        run.error_message = error_message
-        run.gate_results_json = gate_json
-        run.updated_at = now
-        db.commit()
+        values = {
+            "status": "failed",
+            "last_failure_stage": "pre_send_temporary_failure",
+            "error_message": error_message,
+            "gate_results_json": gate_json,
+            "lease_owner": None,
+            "lease_expires_at": None,
+        }
+        if _expected_lease_owner():
+            rowcount = _guarded_lease_update(db, run.id, values=values)
+            if rowcount == 0:
+                logger.warning("ai_auto_reply_lease_lost stage=llm_exhausted run_id=%s", run.id)
+                return
+        else:
+            for k, v in values.items():
+                setattr(run, k, v)
+            db.commit()
         logger.warning(
             "ai_auto_reply_llm_exhausted stage=llm_exhausted run_id=%s attempts=%s",
             run.id, run.attempt_count,

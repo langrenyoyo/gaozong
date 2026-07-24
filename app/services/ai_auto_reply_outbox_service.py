@@ -232,7 +232,7 @@ def recover_expired_leases(db: Session) -> int:
     db.commit()
     count = result.rowcount
 
-    # send_authorized → 按发送流水对账
+    # send_authorized → 按发送流水对账（条件更新，防竞争覆盖）
     authorized_runs = (
         db.query(AiAutoReplyRun)
         .filter(
@@ -247,18 +247,28 @@ def recover_expired_leases(db: Session) -> int:
             .filter(DouyinPrivateMessageSend.auto_reply_run_id == run.id)
             .first()
         )
-        if existing_send is not None and existing_send.status == "sent":
-            run.status = STATUS_SENT
-            run.last_failure_stage = None
-        else:
-            run.status = STATUS_SEND_UNKNOWN
-            run.last_failure_stage = "send_authorized_crash_unknown"
-        run.lease_owner = None
-        run.lease_expires_at = None
-        run.updated_at = now
+        final_status = STATUS_SENT if (existing_send is not None and existing_send.status == "sent") else STATUS_SEND_UNKNOWN
+        failure_stage = None if final_status == STATUS_SENT else "send_authorized_crash_unknown"
+        # 条件更新：只在状态仍为 send_authorized 且租约已过期时推进
+        db.execute(
+            sa_update(AiAutoReplyRun)
+            .where(
+                AiAutoReplyRun.id == run.id,
+                AiAutoReplyRun.status == STATUS_SEND_AUTHORIZED,
+                AiAutoReplyRun.lease_expires_at < now,
+            )
+            .values(
+                status=final_status,
+                last_failure_stage=failure_stage,
+                lease_owner=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        db.commit()
         count += 1
     if authorized_runs:
-        db.commit()
         logger.warning(
             "ai_outbox_recover_authorized stage=recover_authorized reconciled=%s", len(authorized_runs),
         )
@@ -461,6 +471,8 @@ def run_outbox_cycle() -> None:
                     "ai_outbox_process_error stage=process_one run_id=%s error_type=%s",
                     run.id, type(exc).__name__,
                 )
+                # 异常后关闭旧 Session 再创建新 Session（修复泄漏）
+                db.close()
                 db = SessionLocal()
 
         compensate_missing_runs(db)
@@ -475,14 +487,10 @@ def run_outbox_cycle() -> None:
 
 
 def _process_one(db: Session, run: AiAutoReplyRun) -> None:
-    """处理单个 outbox 任务。
-
-    延迟到 ai_auto_reply_dry_run_service._run_with_session 处理；
-    本函数负责在处理前/后更新 outbox 状态。
-    """
+    """处理单个 outbox 任务，传递 claim 时产生的不可替换 lease_owner。"""
     from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
 
-    _run_with_session_for_outbox(db, run_id=run.id)
+    _run_with_session_for_outbox(db, run_id=run.id, lease_owner=run.lease_owner or "")
 
 
 def _scheduler_loop() -> None:
