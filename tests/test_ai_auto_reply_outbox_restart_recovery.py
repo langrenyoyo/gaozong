@@ -255,6 +255,3 @@ def test_r11_all_restart_paths_create_no_unexpected_send_record(tmp_path):
         engine.dispose()
     assert count == 0
     assert cycled["external_calls"] == 0
-
-
-
