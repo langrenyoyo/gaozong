@@ -10,8 +10,12 @@ import json
 import logging
 import os
 import sys
+import time
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from sqlalchemy.engine import make_url
 
 # 子进程需把项目根加入 sys.path，确保 import app.* 可用（cwd=ROOT 但脚本路径在 tests/helpers 下）
 _ROOT = Path(__file__).resolve().parents[2]
@@ -19,15 +23,48 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 
+# PostgreSQL 专用测试库安全门：仅允许固定本地 host 和专用库名
+_PG_ALLOWED_HOSTS = {
+    "127.0.0.1",
+    "localhost",
+    "postgres",
+    "auto-wechat-postgres-dev",
+}
+_PG_TEST_DATABASE = "auto_wechat_outbox_test"
+
+
+def _validate_smoke_database_url(url: str) -> str:
+    """校验 SMOKE_DATABASE_URL 只能指向固定本地专用测试库，禁止 query/fragment。"""
+    if not url:
+        raise ValueError("SMOKE_DATABASE_URL 未设置")
+    if "?" in url or "#" in url:
+        raise ValueError("SMOKE_DATABASE_URL 禁止 query 或 fragment")
+    parsed = make_url(url)
+    if parsed.drivername != "postgresql+psycopg":
+        raise ValueError("SMOKE_DATABASE_URL 必须使用 postgresql+psycopg")
+    if parsed.host not in _PG_ALLOWED_HOSTS:
+        raise ValueError("SMOKE_DATABASE_URL host 不在本地白名单")
+    if parsed.database != _PG_TEST_DATABASE:
+        raise ValueError("SMOKE_DATABASE_URL 必须指向 auto_wechat_outbox_test")
+    return url
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--database", required=True)
+    database = parser.add_mutually_exclusive_group(required=True)
+    database.add_argument("--database")
+    database.add_argument("--postgres-smoke", action="store_true")
     parser.add_argument("--log", required=True)
     parser.add_argument("--audit", required=True)
     parser.add_argument("--action", required=True, choices=(
         "seed", "inspect", "cycle", "claim-crash",
         "start-disabled", "process-empty-owner",
+        "claim-once", "guarded-block-once",
     ))
+    parser.add_argument("--namespace", default="restart_test")
+    parser.add_argument("--ready-file")
+    parser.add_argument("--start-file")
+    parser.add_argument("--lease-owner")
     parser.add_argument("--status", default="pending")
     parser.add_argument("--run-id", type=int)
     parser.add_argument(
@@ -37,15 +74,26 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _configure_environment(args: argparse.Namespace) -> None:
-    """在 import app.database 前绑定临时库与安全开关，剥离生产配置。"""
-    db_path = Path(args.database).resolve()
-    os.environ["AUTO_WECHAT_ENV_FILE"] = str(db_path.parent / "missing.env")
+def _configure_environment(args: argparse.Namespace) -> str:
+    """在 import app.database 前绑定后端与安全开关，剥离生产配置。返回 backend。"""
+    if args.postgres_smoke:
+        database_url = _validate_smoke_database_url(
+            os.environ.get("SMOKE_DATABASE_URL", "").strip()
+        )
+        env_dir = Path(args.log).resolve().parent
+        backend = "postgresql"
+    else:
+        db_path = Path(args.database).resolve()
+        database_url = f"sqlite:///{db_path.as_posix()}"
+        env_dir = db_path.parent
+        backend = "sqlite"
+    os.environ["AUTO_WECHAT_ENV_FILE"] = str(env_dir / "missing.env")
     os.environ["APP_ENV"] = "development"
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
+    os.environ["DATABASE_URL"] = database_url
     os.environ["AI_AUTO_REPLY_OUTBOX_ENABLED"] = "false"
     os.environ["DOUYIN_AUTO_REPLY_ENABLED"] = "false"
     os.environ["DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED"] = "false"
+    return backend
 
 
 def _configure_logging(path: str) -> None:
@@ -69,11 +117,13 @@ def _append_audit(path: str, payload: dict) -> None:
         os.fsync(stream.fileno())
 
 
-def _run_safe_cycle(db, audit_path: str) -> dict:
+def _run_safe_cycle(db, audit_path: str, *, backend: str = "sqlite") -> dict:
     """执行真实 run_outbox_cycle，但把 dry-run 入口替换为安全终态处理器。
 
     安全处理器用真实 guarded UPDATE 将任务推进到 blocked 并清租约，不调用 LLM、9100、
     抖音、微信或网络；任何外部调用均触发 AssertionError。返回外部调用计数与已处理 run_id。
+    PostgreSQL 专用数据库连接不计入 external_calls（业务外部入口在两后端都 patch 为调用即失败；
+    socket.socket.connect 仅 SQLite 模式 patch，因为 PostgreSQL 自身需要数据库传输）。
     """
     from unittest.mock import patch
     from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
@@ -123,10 +173,21 @@ def _run_safe_cycle(db, audit_path: str) -> dict:
         calls["processed_run_ids"].append(run_id)
 
     sends_before = db.query(DouyinPrivateMessageSend).count()
-    with patch.object(dry_run, "_run_with_session_for_outbox", side_effect=_safe_handler), \
-         patch.object(dry_run, "get_xg_douyin_ai_cs_client", side_effect=_forbidden_external), \
-         patch.object(send_service, "_send_private_message_with_context", side_effect=_forbidden_external), \
-         patch("socket.socket.connect", side_effect=_forbidden_external):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch.object(dry_run, "_run_with_session_for_outbox", side_effect=_safe_handler)
+        )
+        stack.enter_context(
+            patch.object(dry_run, "get_xg_douyin_ai_cs_client", side_effect=_forbidden_external)
+        )
+        stack.enter_context(
+            patch.object(send_service, "_send_private_message_with_context", side_effect=_forbidden_external)
+        )
+        # PostgreSQL 自身需要数据库传输，仅在 SQLite 模式 patch socket
+        if backend == "sqlite":
+            stack.enter_context(
+                patch("socket.socket.connect", side_effect=_forbidden_external)
+            )
         run_outbox_cycle()
     if db.query(DouyinPrivateMessageSend).count() != sends_before:
         raise AssertionError("unexpected send record")
@@ -135,6 +196,28 @@ def _run_safe_cycle(db, audit_path: str) -> dict:
     if calls["count"] != 0:
         raise AssertionError(f"forbidden external calls detected: {calls['count']}")
     return calls
+
+
+def _wait_for_start(
+    ready_file: str | None,
+    start_file: str | None,
+    *,
+    gate_root: Path,
+) -> None:
+    """claim-once 文件门禁：写 ready 文件后等待父进程写 start 文件放行。"""
+    if not ready_file or not start_file:
+        raise ValueError("claim-once 需要 ready-file 和 start-file")
+    ready = Path(ready_file).resolve()
+    start = Path(start_file).resolve()
+    root = gate_root.resolve()
+    if ready.parent != root or start.parent != root:
+        raise ValueError("ready/start 文件必须位于当前 pytest 临时目录")
+    ready.write_text(str(os.getpid()), encoding="utf-8")
+    deadline = time.monotonic() + 15
+    while not start.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("claim start gate timeout")
+        time.sleep(0.02)
 
 
 def _times(timing: str) -> tuple[datetime | None, datetime | None]:
@@ -151,22 +234,27 @@ def _times(timing: str) -> tuple[datetime | None, datetime | None]:
 
 def main() -> int:
     args = _parser().parse_args()
-    _configure_environment(args)
+    backend = _configure_environment(args)
     _configure_logging(args.log)
 
     from app.database import Base, SessionLocal, engine
     from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
 
-    Base.metadata.create_all(bind=engine)
+    # PostgreSQL 只走 Alembic，禁止 create_all；仅 SQLite 建临时表
+    if backend == "sqlite":
+        Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         if args.action == "claim-crash":
             from app.services.ai_auto_reply_outbox_service import claim_next_batch
+            merchant_id = f"outbox_pg_test_{args.namespace}"
+            account_open_id = f"outbox_pg_account_{args.namespace}"
+            trigger_event_key = f"{args.namespace}-{args.action}-{os.getpid()}-{datetime.now().timestamp()}"
             run = AiAutoReplyRun(
-                merchant_id="restart_test_merchant",
-                account_open_id="restart_test_account",
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
                 trigger_event_id=1,
-                trigger_event_key=f"restart-crash-{os.getpid()}-{datetime.now().timestamp()}",
+                trigger_event_key=trigger_event_key,
                 status="pending",
                 attempt_count=0,
                 created_at=datetime.now(),
@@ -190,12 +278,15 @@ def main() -> int:
             os._exit(23)
 
         if args.action == "seed":
+            merchant_id = f"outbox_pg_test_{args.namespace}"
+            account_open_id = f"outbox_pg_account_{args.namespace}"
+            trigger_event_key = f"{args.namespace}-{args.action}-{os.getpid()}-{datetime.now().timestamp()}"
             lease_expires_at, next_attempt_at = _times(args.timing)
             run = AiAutoReplyRun(
-                merchant_id="restart_test_merchant",
-                account_open_id="restart_test_account",
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
                 trigger_event_id=1,
-                trigger_event_key=f"restart-{os.getpid()}-{datetime.now().timestamp()}",
+                trigger_event_key=trigger_event_key,
                 status=args.status,
                 attempt_count=0,
                 lease_owner="dead-worker" if lease_expires_at else None,
@@ -212,7 +303,7 @@ def main() -> int:
                     main_account_id=1,
                     conversation_short_id="restart-conversation",
                     server_message_id=f"restart-server-{run.id}",
-                    from_user_id="restart_test_account",
+                    from_user_id=account_open_id,
                     to_user_id="restart_test_customer",
                     content="restart-test-content",
                     status="sent",
@@ -230,7 +321,7 @@ def main() -> int:
             return 0
 
         if args.action == "cycle":
-            result = _run_safe_cycle(db, args.audit)
+            result = _run_safe_cycle(db, args.audit, backend=backend)
             _emit(
                 pid=os.getpid(),
                 action=args.action,
@@ -259,6 +350,47 @@ def main() -> int:
                 _emit(pid=os.getpid(), action=args.action, error_type=type(exc).__name__)
                 return 19
             raise AssertionError("empty lease owner was not rejected")
+
+        if args.action == "claim-once":
+            from app.services.ai_auto_reply_outbox_service import claim_next_batch
+            _wait_for_start(
+                args.ready_file,
+                args.start_file,
+                gate_root=Path(args.log).resolve().parent,
+            )
+            claimed = claim_next_batch(db, batch_size=1)
+            _emit(
+                pid=os.getpid(),
+                action=args.action,
+                run_ids=[run.id for run in claimed],
+                lease_owners=[run.lease_owner for run in claimed],
+            )
+            return 0
+
+        if args.action == "guarded-block-once":
+            if not args.run_id or not args.lease_owner:
+                raise ValueError("guarded-block-once 需要 run-id 和 lease-owner")
+            from app.services.ai_auto_reply_outbox_service import (
+                _guarded_lease_update,
+                _set_outbox_lease_owner,
+            )
+            _set_outbox_lease_owner(args.lease_owner)
+            try:
+                rowcount = _guarded_lease_update(
+                    db,
+                    args.run_id,
+                    expected_status="processing",
+                    values={
+                        "status": "blocked",
+                        "block_reason": "pg_stale_worker_must_not_write",
+                        "lease_owner": None,
+                        "lease_expires_at": None,
+                    },
+                )
+            finally:
+                _set_outbox_lease_owner("")
+            _emit(pid=os.getpid(), action=args.action, rowcount=rowcount)
+            return 0
 
         raise RuntimeError(f"action_not_implemented:{args.action}")
     finally:
