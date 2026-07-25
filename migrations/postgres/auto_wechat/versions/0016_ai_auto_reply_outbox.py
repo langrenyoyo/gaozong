@@ -1,7 +1,7 @@
 """AI 自动回复 outbox 持久化任务字段
 
 Revision ID: 0016
-Revises: 0015
+Revises: 0015_ai_edit_material_library
 Create Date: 2026-07-24
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "0016"
-down_revision = "0015"
+down_revision = "0015_ai_edit_material_library"
 branch_labels = None
 depends_on = None
 
