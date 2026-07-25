@@ -91,3 +91,53 @@ def test_r1_new_process_reads_committed_pending_run(tmp_path):
     assert inspected["run_id"] == seeded["run_id"]
     assert inspected["status"] == "pending"
     assert _read_run(db_path, seeded["run_id"])["status"] == "pending"
+
+
+def _audit_rows(tmp_path: Path) -> list[dict]:
+    path = tmp_path / "audit.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_r2_pending_is_processed_once_after_restart(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(tmp_path, db_path, "seed", "--status", "pending")
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
+    row = _read_run(db_path, seeded["run_id"])
+    assert seeded["pid"] != cycled["pid"]
+    assert row["status"] == "blocked"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+    assert [r["run_id"] for r in _audit_rows(tmp_path) if r["event"] == "processed"] == [seeded["run_id"]]
+    assert cycled["external_calls"] == 0
+
+
+def test_r9_disabled_scheduler_does_not_claim(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(tmp_path, db_path, "seed", "--status", "pending")
+    _run_worker(tmp_path, db_path, "start-disabled")
+    assert _read_run(db_path, seeded["run_id"])["status"] == "pending"
+    assert "reason=disabled" in (tmp_path / "worker.log").read_text(encoding="utf-8")
+
+
+def test_r10_empty_owner_fails_closed_with_diagnostic_log(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(tmp_path, db_path, "seed", "--status", "processing")
+    _, payload = _run_worker(
+        tmp_path, db_path, "process-empty-owner",
+        "--run-id", str(seeded["run_id"]),
+        expected_code=19,
+    )
+    row = _read_run(db_path, seeded["run_id"])
+    log_text = (tmp_path / "worker.log").read_text(encoding="utf-8")
+    assert payload["error_type"] == "RuntimeError"
+    assert row["status"] == "processing"
+    assert row["lease_owner"] is None
+    assert "stage=process_one" in log_text
+    assert "failure_stage=missing_lease_owner" in log_text
+

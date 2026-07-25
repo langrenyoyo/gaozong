@@ -61,6 +61,78 @@ def _emit(**values) -> None:
     print(json.dumps(values, ensure_ascii=True, sort_keys=True), flush=True)
 
 
+def _append_audit(path: str, payload: dict) -> None:
+    """向测试审计标记文件追加一条结构化记录（fsync 保证跨进程可见）。"""
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _run_safe_cycle(db, audit_path: str) -> dict:
+    """执行真实 run_outbox_cycle，但把 dry-run 入口替换为安全终态处理器。
+
+    安全处理器用真实 guarded UPDATE 将任务推进到 blocked 并清租约，不调用 LLM、9100、
+    抖音、微信或网络；任何外部调用均触发 AssertionError。返回外部调用计数与已处理 run_id。
+    """
+    from unittest.mock import patch
+    from app.models import AiAutoReplyRun, DouyinPrivateMessageSend
+    from app.services import ai_auto_reply_dry_run_service as dry_run
+    from app.services import ai_auto_reply_send_service as send_service
+    from app.services.ai_auto_reply_outbox_service import (
+        _guarded_lease_update,
+        _set_outbox_lease_owner,
+        run_outbox_cycle,
+    )
+
+    calls = {"count": 0, "processed_run_ids": []}
+
+    def _forbidden_external(*args, **kwargs):
+        calls["count"] += 1
+        raise AssertionError("restart test forbids external calls")
+
+    def _safe_handler(session, *, run_id: int, lease_owner: str):
+        recovered_failure_stage = session.get(AiAutoReplyRun, run_id).last_failure_stage
+        _set_outbox_lease_owner(lease_owner)
+        try:
+            rowcount = _guarded_lease_update(
+                session,
+                run_id,
+                expected_status="processing",
+                values={
+                    "status": "blocked",
+                    "block_reason": "restart_test_no_external_send",
+                    "last_failure_stage": None,
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                },
+            )
+        finally:
+            _set_outbox_lease_owner("")
+        if rowcount != 1:
+            raise RuntimeError(f"safe_terminal_guard_failed:{run_id}")
+        _append_audit(
+            audit_path,
+            {
+                "event": "processed",
+                "pid": os.getpid(),
+                "run_id": run_id,
+                "recovered_failure_stage": recovered_failure_stage,
+            },
+        )
+        calls["processed_run_ids"].append(run_id)
+
+    sends_before = db.query(DouyinPrivateMessageSend).count()
+    with patch.object(dry_run, "_run_with_session_for_outbox", side_effect=_safe_handler), \
+         patch.object(dry_run, "get_xg_douyin_ai_cs_client", side_effect=_forbidden_external), \
+         patch.object(send_service, "_send_private_message_with_context", side_effect=_forbidden_external), \
+         patch("socket.socket.connect", side_effect=_forbidden_external):
+        run_outbox_cycle()
+    if db.query(DouyinPrivateMessageSend).count() != sends_before:
+        raise AssertionError("unexpected send record")
+    return calls
+
+
 def _times(timing: str) -> tuple[datetime | None, datetime | None]:
     """根据 timing 返回 (lease_expires_at, next_attempt_at)；none 表示无租约无退避。"""
     now = datetime.now()
@@ -111,6 +183,37 @@ def main() -> int:
                 raise RuntimeError("run_not_found")
             _emit(pid=os.getpid(), action=args.action, run_id=run.id, status=run.status)
             return 0
+
+        if args.action == "cycle":
+            result = _run_safe_cycle(db, args.audit)
+            _emit(
+                pid=os.getpid(),
+                action=args.action,
+                external_calls=result["count"],
+                processed_count=len(result["processed_run_ids"]),
+                run_ids=result["processed_run_ids"],
+            )
+            return 0
+
+        if args.action == "start-disabled":
+            from app.services.ai_auto_reply_outbox_service import (
+                start_outbox_scheduler,
+                stop_outbox_scheduler,
+            )
+            start_outbox_scheduler()
+            stop_outbox_scheduler()
+            _emit(pid=os.getpid(), action=args.action, status="disabled")
+            return 0
+
+        if args.action == "process-empty-owner":
+            from app.services.ai_auto_reply_outbox_service import _process_one
+            run = db.get(AiAutoReplyRun, args.run_id)
+            try:
+                _process_one(db, run)
+            except RuntimeError as exc:
+                _emit(pid=os.getpid(), action=args.action, error_type=type(exc).__name__)
+                return 19
+            raise AssertionError("empty lease owner was not rejected")
 
         raise RuntimeError(f"action_not_implemented:{args.action}")
     finally:
