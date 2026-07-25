@@ -704,4 +704,14 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - 独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS）：主专项 258 passed、迁移/API/合同 49 passed、并发热点 10 轮 40 passed，合计 347 passed；另有 2 个经 Base（8e98764）/ Candidate（a245e23）同环境对照确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
 - 已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`；未验证真实 PostgreSQL/MVCC，未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
 
+## 28. AI 自动回复 outbox 重启恢复测试（DY-CS-AUTO-REPLY-OUTBOX-RESTART-RECOVERY-1）
+
+最终候选 `a7f924d02712fd942a1b9f069bf4b9c40bf6c8fe`（R1，父候选 `e18b3524b4d51dc3f51b03bb387510355f92ab1b`）已通过独立测试 Test-Revision R1-T1，R1-R11 全部通过，任务级结论 PASS（2026-07-25）：
+
+- pytest 父进程编排全新 Python 子进程，共享 `tmp_path` 临时文件 SQLite，验证 outbox 仅依赖已提交数据库状态完成恢复、领取、对账和去重，全程禁止真实外部动作
+- 子进程在 `import app.database` 前绑定临时 `DATABASE_URL`、剥离继承的 TOKEN/SECRET/PASSWORD/API_KEY、关闭自动回复与真实发送开关；安全处理器用真实 guarded UPDATE 推进到 `blocked` 终态并清租约，LLM/9100/抖音/微信/socket 全部 patch 为"调用即失败"
+- R1 进程隔离与落盘；R2 `pending` 重启安全处理一次；R3 真实 claim 后 `os._exit` 过期恢复处理一次（`recovered_failure_stage=lease_expired`）；R4 过期 `send_processing` 恢复一次；R5 `retry_wait` 未到期不领取、到期领取一次；R6 `send_authorized` 有 sent 流水对账为 `sent` 不重发；R7 无流水对账为 `send_unknown` 不重发；R8 连续两次重启不重复副作用；R9 调度器关闭不领取（日志含 `reason=disabled`）；R10 空 `lease_owner` 失败关闭（日志含 `stage=process_one`/`failure_stage=missing_lease_owner`）；R11 外部调用为零（`_run_safe_cycle` 强制断言 `calls["count"]==0`，R3/R4/R5/R8 断言 `external_calls==0`）
+- 独立测试数字：专项 `11 passed, 0 failed`；连续 10 轮共 `110 passed, 0 failed`；完整指定回归 `248 passed`、1 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域），Candidate 0 个新增失败
+- 已通过普通快进推送集成至 `master@a7f924d02712fd942a1b9f069bf4b9c40bf6c8fe`；本地跨进程 SQLite 测试不能替代 PostgreSQL MVCC 与生产恢复验证；未验证真实 PostgreSQL/MVCC、生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
+
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
