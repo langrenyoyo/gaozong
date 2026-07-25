@@ -679,7 +679,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 ## 27. AI 自动回复 outbox / 持久化任务验收（DY-CS-AUTO-REPLY-OUTBOX-1）
 
-候选 `3973bc5ad76aa8b71ebdcbb16ba994205e2c81d0`（R2 第七次返修，父候选 `8e987642cd4fbd90057771cd47c2a0ffb4b10be3`）已实现，执行窗口自测通过，待独立测试确认（2026-07-24）：
+最终候选 `a245e231ad03e153d6b605801ded60ddbd2da1d3`（R2 第七次返修，父候选 `8e987642cd4fbd90057771cd47c2a0ffb4b10be3`）已通过独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS），并已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`（2026-07-25）：
 
 - 复用 `AiAutoReplyRun` 表，新增 5 个 outbox 字段（SQLite 0036 + PG Alembic 0016）
 - enqueue 在 webhook 外层事务内 flush pending run（仅 flush，不 commit）；拒绝空 `account_open_id`
@@ -700,7 +700,8 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - BackgroundTasks 仅唤醒 outbox claim（受总开关控制），不直接执行旧 `run_ai_auto_reply_job`；scheduler 与 webhook wake 共用 cycle 单飞锁；`run_outbox_cycle` 在 try 内创建 Session，构造失败时 try/finally 释放单飞锁
 - manual retry 使用单条原子条件 UPDATE（merchant_id + failed + 白名单 + `NOT EXISTS` 发送流水），消除 TOCTOU
 - 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记且默认值与 `config.py` 一致
-- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：258 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed（含检查点后跳过路径原子写 gate_results + 清租约 + 不调用真实发送断言），指定回归 0 个新增失败；合计 2 个经 Base（8e98764）/ Candidate（3973bc5）同环境双跑确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
-- 候选尚未推送、合并或发布，未验证真实 PostgreSQL MVCC 并发和生产环境
+- 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：258 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed（含检查点后跳过路径原子写 gate_results + 清租约 + 不调用真实发送断言），指定回归 0 个新增失败
+- 独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS）：主专项 258 passed、迁移/API/合同 49 passed、并发热点 10 轮 40 passed，合计 347 passed；另有 2 个经 Base（8e98764）/ Candidate（a245e23）同环境对照确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
+- 已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`；未验证真实 PostgreSQL/MVCC，未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
