@@ -163,13 +163,14 @@ def test_r3_claimed_processing_survives_abrupt_exit_and_recovers(tmp_path):
     run_id = crash["run_id"]
     assert _read_run(db_path, run_id)["status"] == "processing"
     _update_run(db_path, run_id, lease_expires_at="2000-01-01 00:00:00.000000")
-    _run_worker(tmp_path, db_path, "cycle")
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
     row = _read_run(db_path, run_id)
     assert row["status"] == "blocked"
     assert row["lease_owner"] is None
     processed = [r for r in _audit_rows(tmp_path) if r["event"] == "processed"]
     assert len(processed) == 1
     assert processed[0]["recovered_failure_stage"] == "lease_expired"
+    assert cycled["external_calls"] == 0
 
 
 def test_r4_expired_send_processing_recovers_once(tmp_path):
@@ -178,9 +179,10 @@ def test_r4_expired_send_processing_recovers_once(tmp_path):
         tmp_path, db_path, "seed",
         "--status", "send_processing", "--timing", "expired",
     )
-    _run_worker(tmp_path, db_path, "cycle")
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
     assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
     assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+    assert cycled["external_calls"] == 0
 
 
 def test_r5_retry_wait_respects_due_time_across_processes(tmp_path):
@@ -189,13 +191,15 @@ def test_r5_retry_wait_respects_due_time_across_processes(tmp_path):
         tmp_path, db_path, "seed",
         "--status", "retry_wait", "--timing", "future",
     )
-    _run_worker(tmp_path, db_path, "cycle")
+    _, not_due = _run_worker(tmp_path, db_path, "cycle")
     assert _read_run(db_path, seeded["run_id"])["status"] == "retry_wait"
     assert _audit_rows(tmp_path) == []
+    assert not_due["external_calls"] == 0
     _update_run(db_path, seeded["run_id"], next_attempt_at="2000-01-01 00:00:00.000000")
-    _run_worker(tmp_path, db_path, "cycle")
+    _, due = _run_worker(tmp_path, db_path, "cycle")
     assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
     assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+    assert due["external_calls"] == 0
 
 
 def test_r8_second_restart_does_not_repeat_terminal_side_effect(tmp_path):
@@ -206,6 +210,8 @@ def test_r8_second_restart_does_not_repeat_terminal_side_effect(tmp_path):
     assert first["pid"] != second["pid"]
     assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
     assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+    assert first["external_calls"] == 0
+    assert second["external_calls"] == 0
 
 
 def test_r6_send_authorized_with_sent_flow_reconciles_without_processing(tmp_path):

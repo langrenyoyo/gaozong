@@ -130,6 +130,10 @@ def _run_safe_cycle(db, audit_path: str) -> dict:
         run_outbox_cycle()
     if db.query(DouyinPrivateMessageSend).count() != sends_before:
         raise AssertionError("unexpected send record")
+    # R11：被禁止的外部调用（LLM/9100/抖音/微信/网络）若被 run_outbox_cycle 内部
+    # try/except 吞掉，仍会令 calls["count"] 非零；强制为零，否则子进程失败。
+    if calls["count"] != 0:
+        raise AssertionError(f"forbidden external calls detected: {calls['count']}")
     return calls
 
 
