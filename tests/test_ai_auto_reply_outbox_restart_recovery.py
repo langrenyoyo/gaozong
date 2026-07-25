@@ -208,3 +208,53 @@ def test_r8_second_restart_does_not_repeat_terminal_side_effect(tmp_path):
     assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
 
 
+def test_r6_send_authorized_with_sent_flow_reconciles_without_processing(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(
+        tmp_path, db_path, "seed",
+        "--status", "send_authorized", "--timing", "expired",
+        "--with-sent-record",
+    )
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
+    row = _read_run(db_path, seeded["run_id"])
+    assert row["status"] == "sent"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+    assert _audit_rows(tmp_path) == []
+    assert cycled["external_calls"] == 0
+
+
+def test_r7_send_authorized_without_flow_becomes_unknown_without_processing(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(
+        tmp_path, db_path, "seed",
+        "--status", "send_authorized", "--timing", "expired",
+    )
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
+    row = _read_run(db_path, seeded["run_id"])
+    assert row["status"] == "send_unknown"
+    assert row["last_failure_stage"] == "send_authorized_crash_unknown"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+    assert _audit_rows(tmp_path) == []
+    assert cycled["external_calls"] == 0
+
+
+def test_r11_all_restart_paths_create_no_unexpected_send_record(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _run_worker(tmp_path, db_path, "seed", "--status", "pending")
+    _, cycled = _run_worker(tmp_path, db_path, "cycle")
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    Session = sessionmaker(bind=engine)
+    try:
+        with Session() as db:
+            count = db.execute(
+                text("SELECT COUNT(*) FROM douyin_private_message_sends"),
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert count == 0
+    assert cycled["external_calls"] == 0
+
+
+

@@ -203,6 +203,18 @@ def main() -> int:
             db.add(run)
             db.commit()
             db.refresh(run)
+            if args.with_sent_record:
+                db.add(DouyinPrivateMessageSend(
+                    main_account_id=1,
+                    conversation_short_id="restart-conversation",
+                    server_message_id=f"restart-server-{run.id}",
+                    from_user_id="restart_test_account",
+                    to_user_id="restart_test_customer",
+                    content="restart-test-content",
+                    status="sent",
+                    auto_reply_run_id=run.id,
+                ))
+                db.commit()
             _emit(pid=os.getpid(), action=args.action, run_id=run.id, status=run.status)
             return 0
 
