@@ -69,9 +69,14 @@
 
 现有 `--database <sqlite-path>` 模式保持不变。解析器新增与 `--database` 互斥的 `--postgres-smoke` 标志；该模式只从继承环境读取并校验 `SMOKE_DATABASE_URL`，再在导入 `app.database` 前将其映射为子进程 `DATABASE_URL`。URL 不进入 argv。
 
-Worker 新增 `--namespace`、`--ready-file` 和 `--start-file` 三个有限字符串/路径参数；PostgreSQL 专项必须传唯一 namespace，并只允许 ready/start 文件位于 pytest 临时目录。Worker 继续只接受枚举动作，不接受任意 SQL、模块名、Python 表达式、URL 或 shell 命令。
+Worker 新增 `--namespace`、`--ready-file`、`--start-file` 和 `--lease-owner` 四个有限字符串/路径参数；PostgreSQL 专项必须传唯一 namespace，并只允许 ready/start 文件位于 pytest 临时目录。Worker 继续只接受枚举动作，不接受任意 SQL、模块名、Python 表达式、URL 或 shell 命令。
 
-唯一新增枚举动作是 `claim-once`：等待 start 文件后调用一次真实 `claim_next_batch`，提交并输出领取到的 run_id、lease_owner 和进程 PID。其余场景继续复用现有动作与真实 service 入口：
+新增枚举动作严格限定为两个：
+
+- `claim-once`：等待 start 文件后调用一次真实 `claim_next_batch`，提交并输出领取到的 run_id、lease_owner 和进程 PID。
+- `guarded-block-once`：设置命令参数指定的旧 lease_owner，调用一次真实 `_guarded_lease_update(expected_status="processing")` 尝试写固定 `blocked` 终态并清租约，输出 rowcount 后清空线程局部 owner；不接受任意状态或 values。
+
+其余场景继续复用现有动作与真实 service 入口：
 
 - 读取已提交状态。
 - claim 后按既有退出码异常退出。
