@@ -32,7 +32,7 @@
 - 不修改 `app/` 业务代码、模型、0016 或其他迁移、Compose、环境模板和配置默认值。
 - 不连接默认开发库、staging、production 或任何非白名单 host。
 - 不读取隐式 `DATABASE_URL`，不把连接 URL、密码或 token 放入命令行、日志、断言或提交。
-- 不调用 LLM、9100、抖音、微信或真实 socket，不发送真实消息，不创建非测试预置的发送流水。
+- 除连接专用 PostgreSQL 测试库所需的数据库传输外，不调用 LLM、9100、抖音、微信或其他 socket；不发送真实消息，不创建非测试预置的发送流水。
 - 不在发现缺陷后顺手修改业务实现；出现业务或迁移缺陷时停止并回传 `REPAIR_REQUIRED`。
 - 不修改、取消暂存或提交当前已有的两份治理计划。
 
@@ -104,7 +104,7 @@ Worker 新增 `--namespace`、`--ready-file` 和 `--start-file` 三个有限字�
 | P6 | retry_wait | 未到期时 0 个领取；父进程推进为到期后仅领取 1 次 |
 | P7 | send_authorized 对账 | 有 sent 流水时变为 sent；无流水时变为 send_unknown；两者均清租约且不进入处理器 |
 | P8 | 旧 Worker 防覆盖 | 新 Worker 接管后，旧 owner guarded update 的 rowcount 为 0，新状态、owner 和租约保持不变 |
-| P9 | 外部副作用为零 | 所有 cycle 的 external_calls=0；除 P7 显式预置外无发送流水；不调用 LLM/9100/抖音/微信/socket |
+| P9 | 外部副作用为零 | 所有 cycle 的 business_external_calls=0；除 P7 显式预置外无发送流水；不调用 LLM/9100/抖音/微信或非数据库 socket；专用 PostgreSQL 连接不计为业务外部调用 |
 
 ## 9. 回归与稳定性
 
@@ -123,7 +123,7 @@ Worker 新增 `--namespace`、`--ready-file` 和 `--start-file` 三个有限字�
 - Alembic 未到 head、0016 schema 不一致：`REPAIR_REQUIRED`，停止并保留脱敏证据。
 - 出现重复 claim、租约未过期被领取、旧 owner 覆盖或自动重发：P0 并发安全缺陷，停止，不修改业务代码。
 - 子进程超时：终止全部子进程，记录动作、PID、run_id、stage 和 failure_stage，不记录 URL 或敏感值。
-- 外部调用计数非零或产生意外发送流水：测试立即失败。
+- 业务外部调用计数非零、出现非数据库 socket 或产生意外发送流水：测试立即失败。
 
 ## 11. 候选与闭环顺序
 
@@ -140,7 +140,7 @@ Worker 新增 `--namespace`、`--ready-file` 和 `--start-file` 三个有限字�
 - P1-P9 全部通过，P4 十轮稳定。
 - 真实 PostgreSQL 用例 0 skipped。
 - Candidate 0 个新增回归失败。
-- 外部调用和意外发送流水均为 0。
+- 业务外部调用、非数据库 socket 和意外发送流水均为 0；只允许专用 PostgreSQL 数据库连接。
 - 测试数据精确清理，无遗留子进程。
 - 未修改业务代码、迁移、Compose、环境模板或配置。
 - 未连接 staging/production，未部署、未发布、未生产迁移、未真实发送。
