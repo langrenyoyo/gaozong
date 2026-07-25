@@ -156,6 +156,35 @@ def main() -> int:
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
+        if args.action == "claim-crash":
+            from app.services.ai_auto_reply_outbox_service import claim_next_batch
+            run = AiAutoReplyRun(
+                merchant_id="restart_test_merchant",
+                account_open_id="restart_test_account",
+                trigger_event_id=1,
+                trigger_event_key=f"restart-crash-{os.getpid()}-{datetime.now().timestamp()}",
+                status="pending",
+                attempt_count=0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            db.add(run)
+            db.commit()
+            claimed = claim_next_batch(db, batch_size=1)
+            if len(claimed) != 1:
+                raise AssertionError(f"expected one claimed run, got {len(claimed)}")
+            payload = {
+                "event": "claim_committed",
+                "pid": os.getpid(),
+                "run_id": claimed[0].id,
+                "lease_owner": claimed[0].lease_owner,
+            }
+            _append_audit(args.audit, payload)
+            _emit(action=args.action, **payload)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(23)
+
         if args.action == "seed":
             lease_expires_at, next_attempt_at = _times(args.timing)
             run = AiAutoReplyRun(

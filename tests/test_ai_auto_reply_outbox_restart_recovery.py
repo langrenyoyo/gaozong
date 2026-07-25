@@ -81,6 +81,21 @@ def _read_run(db_path: Path, run_id: int) -> dict:
         engine.dispose()
 
 
+def _update_run(db_path: Path, run_id: int, **values) -> None:
+    """父进程直接推进测试库时间字段（lease_expires_at / next_attempt_at），避免真实等待。"""
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    Session = sessionmaker(bind=engine)
+    assignments = ", ".join(f"{name}=:{name}" for name in values)
+    try:
+        with Session.begin() as db:
+            db.execute(
+                text(f"UPDATE ai_auto_reply_runs SET {assignments} WHERE id=:run_id"),
+                {"run_id": run_id, **values},
+            )
+    finally:
+        engine.dispose()
+
+
 def test_r1_new_process_reads_committed_pending_run(tmp_path):
     db_path = tmp_path / "restart.db"
     _, seeded = _run_worker(tmp_path, db_path, "seed", "--status", "pending")
@@ -140,4 +155,56 @@ def test_r10_empty_owner_fails_closed_with_diagnostic_log(tmp_path):
     assert row["lease_owner"] is None
     assert "stage=process_one" in log_text
     assert "failure_stage=missing_lease_owner" in log_text
+
+
+def test_r3_claimed_processing_survives_abrupt_exit_and_recovers(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, crash = _run_worker(tmp_path, db_path, "claim-crash", expected_code=23)
+    run_id = crash["run_id"]
+    assert _read_run(db_path, run_id)["status"] == "processing"
+    _update_run(db_path, run_id, lease_expires_at="2000-01-01 00:00:00.000000")
+    _run_worker(tmp_path, db_path, "cycle")
+    row = _read_run(db_path, run_id)
+    assert row["status"] == "blocked"
+    assert row["lease_owner"] is None
+    processed = [r for r in _audit_rows(tmp_path) if r["event"] == "processed"]
+    assert len(processed) == 1
+    assert processed[0]["recovered_failure_stage"] == "lease_expired"
+
+
+def test_r4_expired_send_processing_recovers_once(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(
+        tmp_path, db_path, "seed",
+        "--status", "send_processing", "--timing", "expired",
+    )
+    _run_worker(tmp_path, db_path, "cycle")
+    assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
+    assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+
+
+def test_r5_retry_wait_respects_due_time_across_processes(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(
+        tmp_path, db_path, "seed",
+        "--status", "retry_wait", "--timing", "future",
+    )
+    _run_worker(tmp_path, db_path, "cycle")
+    assert _read_run(db_path, seeded["run_id"])["status"] == "retry_wait"
+    assert _audit_rows(tmp_path) == []
+    _update_run(db_path, seeded["run_id"], next_attempt_at="2000-01-01 00:00:00.000000")
+    _run_worker(tmp_path, db_path, "cycle")
+    assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
+    assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+
+
+def test_r8_second_restart_does_not_repeat_terminal_side_effect(tmp_path):
+    db_path = tmp_path / "restart.db"
+    _, seeded = _run_worker(tmp_path, db_path, "seed", "--status", "pending")
+    _, first = _run_worker(tmp_path, db_path, "cycle")
+    _, second = _run_worker(tmp_path, db_path, "cycle")
+    assert first["pid"] != second["pid"]
+    assert _read_run(db_path, seeded["run_id"])["status"] == "blocked"
+    assert [r["event"] for r in _audit_rows(tmp_path)].count("processed") == 1
+
 
