@@ -1,13 +1,56 @@
 """ORM 模型定义"""
 
+import json
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, false, ForeignKey, Index, Integer, JSON, Numeric, String, Text, text, UniqueConstraint,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, false, ForeignKey, Index, Integer, JSON, Numeric, String, Text, text, TypeDecorator, UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+
+
+class _GateResultsJSON(TypeDecorator):
+    """AiAutoReplyRun.gate_results_json 方言感知类型。
+
+    对外 Python 值统一为 ``str | None``：业务层用 ``json.dumps`` 写、``json.loads`` 读，
+    该契约不变。底层按方言区分存储：
+    - PostgreSQL：底层 JSONB。写入前把合法 JSON 字符串解析为对象/数组，避免 JSONB
+      把字符串当标量再次编码（双重编码）；读回对象/数组后重新序列化为字符串。
+    - SQLite：底层 TEXT，直接存取字符串，保持现有语义。
+    ``None`` 写为 SQL NULL；非法 JSON 字符串在 PostgreSQL 写入前抛 ``JSONDecodeError``，
+    不得静默篡改或双重编码。
+
+    范围限制：仅用于 ``AiAutoReplyRun.gate_results_json``。其余 Text 声明的 JSON 字段
+    （webhook、发送流水、决策日志、ReturnVisitRun 等）的统一返修复在独立任务
+    ``P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1``，不得在本任务扩散。
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(JSONB(none_as_null=True))
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            # 写入前解析为对象/数组：JSONB 存原生结构而非字符串标量，杜绝双重编码
+            return json.loads(value)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            # JSONB 读回对象/数组，重新序列化为字符串，保持业务层 json.loads 语义
+            return json.dumps(value, ensure_ascii=False)
+        return value
 
 
 class SalesStaff(Base):
@@ -474,7 +517,7 @@ class AiAutoReplyRun(Base):
     status = Column(String(32), nullable=False)
     skip_reason = Column(String(128))
     block_reason = Column(String(128))
-    gate_results_json = Column(Text)
+    gate_results_json = Column(_GateResultsJSON())
     decision_log_id = Column(Integer)
     would_send_content = Column(Text)
     error_message = Column(Text)

@@ -1,12 +1,15 @@
 """PostgreSQL Alembic 0016 AI 自动回复 outbox 静态合同测试。
 
-不连接真实 PostgreSQL；验证迁移脚本结构与 revision graph 可解析。
+不连接真实 PostgreSQL；验证迁移脚本结构、revision graph 可解析与 ORM 跨方言类型映射。
 """
 
 import importlib.util
 from pathlib import Path
 
 from alembic.script import ScriptDirectory
+from sqlalchemy.dialects import postgresql, sqlite
+
+from app.models import AiAutoReplyRun
 
 
 PG_MIGRATION_PATH = Path("migrations/postgres/auto_wechat/versions/0016_ai_auto_reply_outbox.py")
@@ -77,3 +80,36 @@ def test_downgrade_removes_all_additions():
     drop_column_count = source.count("drop_column(")
     assert drop_index_count == 2
     assert drop_column_count == 5
+
+
+def test_gate_results_json_compiles_to_jsonb_on_postgresql():
+    """#1 AiAutoReplyRun.gate_results_json 在 PostgreSQL 方言编译为 JSONB，
+    与 0006 迁移的 JSONB 列对齐，避免 ORM insert 时 text/jsonb 类型不匹配。"""
+    column = AiAutoReplyRun.__table__.c.gate_results_json
+    compiled = str(column.type.compile(dialect=postgresql.dialect())).upper()
+    assert "JSONB" in compiled, f"PostgreSQL 方言应编译为 JSONB，实际: {compiled}"
+
+
+def test_gate_results_json_compiles_to_text_on_sqlite():
+    """#2 SQLite 方言编译为 TEXT，保持现有字符串语义（业务层 json.dumps/json.loads）。"""
+    column = AiAutoReplyRun.__table__.c.gate_results_json
+    compiled = str(column.type.compile(dialect=sqlite.dialect())).upper()
+    assert compiled == "TEXT", f"SQLite 方言应编译为 TEXT，实际: {compiled}"
+    assert "JSON" not in compiled, f"SQLite 不应编译为 JSON，实际: {compiled}"
+
+
+def test_gate_results_json_none_binds_as_sql_null():
+    """#3 Python None 在 PostgreSQL 方言下绑定返回 SQL NULL（none_as_null 语义），
+    保留现有 NULL 语义；不得把 None 双重编码为 JSON 字符串 'null'。"""
+    column = AiAutoReplyRun.__table__.c.gate_results_json
+    dialect = postgresql.dialect()
+    bound = column.type.process_bind_param(None, dialect)
+    assert bound is None
+
+
+def test_gate_results_json_none_binds_as_sql_null_sqlite():
+    """#3 SQLite 方言下 None 同样绑定返回 SQL NULL。"""
+    column = AiAutoReplyRun.__table__.c.gate_results_json
+    dialect = sqlite.dialect()
+    bound = column.type.process_bind_param(None, dialect)
+    assert bound is None

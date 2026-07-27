@@ -15,6 +15,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 # 子进程需把项目根加入 sys.path，确保 import app.* 可用（cwd=ROOT 但脚本路径在 tests/helpers 下）
@@ -115,6 +116,36 @@ def _append_audit(path: str, payload: dict) -> None:
         stream.write(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _claim_test_webhook_event(db, *, event_key: str, account_open_id: str):
+    """复用 webhook 原子占位 helper 创建测试事件。
+
+    走 ``claim_webhook_event`` 的跨方言 JSONB CAST 路径：PostgreSQL 下 raw_body
+    被显式 CAST 为 JSONB，存为对象而非字符串标量；SQLite 下走同语义 sqlite_insert，
+    raw_body 仍为 TEXT 字符串。禁止用 ``db.add(DouyinWebhookEvent(raw_body=str))``
+    直接 INSERT，那会在 PG JSONB 列上产生双重编码。占位必须胜出（event_key 唯一）。
+    不修改 webhook 业务服务或 ORM 字段，仅供测试夹具使用。
+    """
+    from app.services.douyin_webhook_idempotency_service import claim_webhook_event
+
+    values = {
+        "event": "im_receive_msg",
+        "event_key": event_key,
+        "from_user_id": "restart_test_customer",
+        "to_user_id": account_open_id,
+        "is_duplicate": False,
+        "raw_body": json.dumps(
+            {"event": "im_receive_msg", "to_user_id": account_open_id},
+            ensure_ascii=False,
+        ),
+        "created_at": datetime.now(),
+    }
+    claim = claim_webhook_event(db, values=values)
+    if not claim.won:
+        raise AssertionError(f"webhook 测试夹具占位失败，event_key 唯一性被破坏: {event_key}")
+    db.commit()
+    return claim.event
 
 
 def _run_safe_cycle(db, audit_path: str, *, backend: str = "sqlite") -> dict:
@@ -250,10 +281,13 @@ def main() -> int:
             merchant_id = f"outbox_pg_test_{args.namespace}"
             account_open_id = f"outbox_pg_account_{args.namespace}"
             trigger_event_key = f"{args.namespace}-{args.action}-{os.getpid()}-{datetime.now().timestamp()}"
+            event = _claim_test_webhook_event(
+                db, event_key=trigger_event_key, account_open_id=account_open_id,
+            )
             run = AiAutoReplyRun(
                 merchant_id=merchant_id,
                 account_open_id=account_open_id,
-                trigger_event_id=1,
+                trigger_event_id=event.id,
                 trigger_event_key=trigger_event_key,
                 status="pending",
                 attempt_count=0,
@@ -282,10 +316,13 @@ def main() -> int:
             account_open_id = f"outbox_pg_account_{args.namespace}"
             trigger_event_key = f"{args.namespace}-{args.action}-{os.getpid()}-{datetime.now().timestamp()}"
             lease_expires_at, next_attempt_at = _times(args.timing)
+            event = _claim_test_webhook_event(
+                db, event_key=trigger_event_key, account_open_id=account_open_id,
+            )
             run = AiAutoReplyRun(
                 merchant_id=merchant_id,
                 account_open_id=account_open_id,
-                trigger_event_id=1,
+                trigger_event_id=event.id,
                 trigger_event_key=trigger_event_key,
                 status=args.status,
                 attempt_count=0,
@@ -299,16 +336,30 @@ def main() -> int:
             db.commit()
             db.refresh(run)
             if args.with_sent_record:
-                db.add(DouyinPrivateMessageSend(
-                    main_account_id=1,
-                    conversation_short_id="restart-conversation",
-                    server_message_id=f"restart-server-{run.id}",
-                    from_user_id=account_open_id,
-                    to_user_id="restart_test_customer",
-                    content="restart-test-content",
-                    status="sent",
-                    auto_reply_run_id=run.id,
-                ))
+                # P7 对账夹具：仅写 P7 对账所需字段，省略 request_body_json/response_body_json
+                # 两个范围外 JSONB 字段（其统一返修复在独立任务），禁止任意 SQL 参数入口。
+                # 用 raw text INSERT 而非 ORM sa_insert：PG 下 manual_confirmed/auto_send 列为
+                # boolean（ORM 声明 Integer，属范围外字段类型不一致），省略这两列让其取列默认值，
+                # 避开范围外类型 cast 失败。动作固定，不接受任意 SQL 参数。
+                db.execute(
+                    text(
+                        "INSERT INTO douyin_private_message_sends "
+                        "(main_account_id, conversation_short_id, server_message_id, "
+                        " from_user_id, to_user_id, content, status, auto_reply_run_id) "
+                        "VALUES (:main_account_id, :conversation_short_id, :server_message_id, "
+                        "        :from_user_id, :to_user_id, :content, :status, :auto_reply_run_id)"
+                    ),
+                    {
+                        "main_account_id": 1,
+                        "conversation_short_id": "restart-conversation",
+                        "server_message_id": f"restart-server-{run.id}",
+                        "from_user_id": account_open_id,
+                        "to_user_id": "restart_test_customer",
+                        "content": "restart-test-content",
+                        "status": "sent",
+                        "auto_reply_run_id": run.id,
+                    },
+                )
                 db.commit()
             _emit(pid=os.getpid(), action=args.action, run_id=run.id, status=run.status)
             return 0
