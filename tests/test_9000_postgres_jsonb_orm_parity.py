@@ -693,33 +693,27 @@ def test_json_null_text_maps_to_sql_null_in_postgres(pg_case, pg_engine):
         assert is_null is True, f"{null_text!r} 原始列应为 NULL"
 
 
-def test_pg_url_rejects_unsafe_targets():
-    """_pg_url 的 URL 边界回归保护（当前实现本身检查正确）。"""
-    from sqlalchemy.engine import make_url
-    bad_urls = [
+@pytest.mark.parametrize(
+    "url",
+    [
         "sqlite:///tmp.db",
         "postgresql+psycopg://u:p@10.0.0.5:5432/auto_wechat_outbox_test",
         "postgresql+psycopg://u:p@127.0.0.1:5433/auto_wechat_outbox_test",
         "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat",
         "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat_outbox_test?sslmode=require",
         "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat_outbox_test#frag",
-    ]
-    for bad in bad_urls:
-        parsed = make_url(bad)
-        # 模拟 _pg_url 的检查逻辑（不依赖 SMOKE_DATABASE_URL 环境变量）
-        assert parsed.drivername != "postgresql+psycopg" or parsed.host not in ("127.0.0.1", "localhost") \
-            or parsed.port != 5432 or parsed.database != "auto_wechat_outbox_test" \
-            or parsed.query or "#" in bad, f"应拒绝不安全 URL: {bad}"
+    ],
+)
+def test_pg_url_rejects_unsafe_targets(monkeypatch, url):
+    """_pg_url 的 URL 边界回归保护：直接调用 _pg_url()，断言 pytest.fail 异常。"""
+    monkeypatch.setenv("SMOKE_DATABASE_URL", url)
+    with pytest.raises(pytest.fail.Exception):
+        _pg_url()
 
 
-def test_pg_url_accepts_dedicated_local():
-    """_pg_url 接受唯一正确的专用本地 URL。"""
-    from sqlalchemy.engine import make_url
-    good = "postgresql+psycopg://auto_wechat:change_me@127.0.0.1:5432/auto_wechat_outbox_test"
-    parsed = make_url(good)
-    assert parsed.drivername == "postgresql+psycopg"
-    assert parsed.host == "127.0.0.1"
-    assert parsed.port == 5432
-    assert parsed.database == "auto_wechat_outbox_test"
-    assert not parsed.query
-    assert "#" not in good
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_pg_url_accepts_dedicated_local(monkeypatch, host):
+    """_pg_url 接受唯一正确的专用本地 URL，覆盖两个允许主机。"""
+    url = f"postgresql+psycopg://auto_wechat:change_me@{host}:5432/auto_wechat_outbox_test"
+    monkeypatch.setenv("SMOKE_DATABASE_URL", url)
+    assert _pg_url() == url
