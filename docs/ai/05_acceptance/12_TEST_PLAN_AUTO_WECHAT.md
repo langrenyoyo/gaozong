@@ -702,7 +702,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记且默认值与 `config.py` 一致
 - 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：258 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed（含检查点后跳过路径原子写 gate_results + 清租约 + 不调用真实发送断言），指定回归 0 个新增失败
 - 独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS）：主专项 258 passed、迁移/API/合同 49 passed、并发热点 10 轮 40 passed，合计 347 passed；另有 2 个经 Base（8e98764）/ Candidate（a245e23）同环境对照确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
-- 已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`；未验证真实 PostgreSQL/MVCC，未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
+- 已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`；PostgreSQL/MVCC 验证见第 29 节（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1，P1-P9、C1-C4 全部 PASS），未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
 
 ## 28. AI 自动回复 outbox 重启恢复测试（DY-CS-AUTO-REPLY-OUTBOX-RESTART-RECOVERY-1）
 
@@ -712,6 +712,20 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - 子进程在 `import app.database` 前绑定临时 `DATABASE_URL`、剥离继承的 TOKEN/SECRET/PASSWORD/API_KEY、关闭自动回复与真实发送开关；安全处理器用真实 guarded UPDATE 推进到 `blocked` 终态并清租约，LLM/9100/抖音/微信/socket 全部 patch 为"调用即失败"
 - R1 进程隔离与落盘；R2 `pending` 重启安全处理一次；R3 真实 claim 后 `os._exit` 过期恢复处理一次（`recovered_failure_stage=lease_expired`）；R4 过期 `send_processing` 恢复一次；R5 `retry_wait` 未到期不领取、到期领取一次；R6 `send_authorized` 有 sent 流水对账为 `sent` 不重发；R7 无流水对账为 `send_unknown` 不重发；R8 连续两次重启不重复副作用；R9 调度器关闭不领取（日志含 `reason=disabled`）；R10 空 `lease_owner` 失败关闭（日志含 `stage=process_one`/`failure_stage=missing_lease_owner`）；R11 外部调用为零（`_run_safe_cycle` 强制断言 `calls["count"]==0`，R3/R4/R5/R8 断言 `external_calls==0`）
 - 独立测试数字：专项 `11 passed, 0 failed`；连续 10 轮共 `110 passed, 0 failed`；完整指定回归 `248 passed`、1 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域），Candidate 0 个新增失败
-- 已通过普通快进推送集成至 `master@a7f924d02712fd942a1b9f069bf4b9c40bf6c8fe`；本地跨进程 SQLite 测试不能替代 PostgreSQL MVCC 与生产恢复验证；未验证真实 PostgreSQL/MVCC、生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
+- 已通过普通快进推送集成至 `master@a7f924d02712fd942a1b9f069bf4b9c40bf6c8fe`；本地跨进程 SQLite 重启恢复测试已在专用 PostgreSQL 数据库补齐 MVCC 验证（见第 29 节 DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1，P1-P9、C1-C4 全部 PASS），未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
+
+## 29. AI 自动回复 outbox PostgreSQL/MVCC 恢复测试（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1）
+
+最终候选 `df8644d828680a75ff955db59c546d4ba1caa729`（R1，父候选 `70f3e22b175e415ec6b1824e1e8f2e6a0a96ea6d`，含 R1-REPAIR-1/R1-REPAIR-2 返修）已通过独立测试 Test-Revision R1-T1，P1-P9、C1-C4 全部 PASS，任务级结论 PASS（2026-07-27）：
+
+- 在本地专用 PostgreSQL 测试库 `auto_wechat_outbox_test`（Alembic 0016 head）验证 outbox 跨进程可见性、20 路 MVCC 领取竞争、租约恢复、发送对账与旧 Worker 防覆盖语义，全程禁止真实外部动作
+- R1-REPAIR-1 修复 0016 迁移链断裂：`down_revision` 从错误缩写 `"0015"` 修正为真实前驱 `"0015_ai_edit_material_library"`，迁移图唯一 head=0016；静态合同测试改为断言完整真实 revision 并新增 `ScriptDirectory` 图解析测试
+- R1-REPAIR-2 对齐 `AiAutoReplyRun.gate_results_json` 跨方言类型：`JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")`，SQLite 编译 JSON、PostgreSQL 编译 JSONB、`none_as_null=True`；不修 `ReturnVisitRun.gate_results_json`
+- P1 安全门合同（`--postgres-smoke`/`--namespace`/`--ready-file`/`--start-file`/`--lease-owner` CLI 暴露、`_validate_smoke_database_url` 安全门）；P2 Alembic 0016 schema（jsonb/tz 字段/索引/`alembic_version=0016`）；P3 跨进程提交可见性
+- P4 20 路子进程文件门禁 claim 连续 10 轮单胜（`attempt_count=1`/`lease_owner` 非空/胜出者 `run_ids` 唯一）；P5 `os._exit(23)` 后租约未过期不领取/过期恢复一次（`recovered_failure_stage=lease_expired`）；P6 `retry_wait` 到期边界；P7 `send_authorized` 有/无 sent 流水对账（`sent`/`send_unknown`，租约清空，仅 True 分支 1 条预置流水）；P8 旧 owner `guarded-block-once` `rowcount=0` 不覆盖新 owner/新租约/新诊断值（`block_reason='pg_new_owner_state'` 保持）；P9 `external_calls=0`/意外流水 0/namespace 残留 0/日志无明文凭据
+- C1-C4 跨方言 JSONB 合同与 `_claim_test_webhook_event` 注释准确性（helper 规避 ORM Text→JSONB 类型错误，不声称已存为对象；webhook JSON 字符串标量双重编码问题仍归独立 parity 任务）
+- 独立测试数字：schema 合同 `11 passed`、PostgreSQL 专项 `22 passed, 0 skipped`、连续 10 轮共 `220 passed`、SQLite 重启恢复 `11 passed`、状态机回归 `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）、webhook 回归 `89 passed`，Candidate 0 个新增失败
+- `external_calls=0`、意外流水=0、namespace 残留=0、遗留子进程=0；专用 PostgreSQL 数据库连接是唯一允许的网络传输
+- 已通过普通快进推送集成至 `master@df8644d828680a75ff955db59c546d4ba1caa729`；只验证本地专用 PostgreSQL 数据库，不等于生产验证，未验证生产调度、生产迁移和生产恢复，未连接 staging/production，未真实发送，未运行全仓测试，尚未部署或发布
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
