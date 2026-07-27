@@ -1,7 +1,7 @@
 """抖音 Webhook 原子幂等测试（R3-R1）。
 
 冻结 R3 A1-A14 验收映射：
-- A1  SQL 合同（PostgreSQL ON CONFLICT DO NOTHING RETURNING + JSONB CAST）
+- A1  SQL 合同（PostgreSQL ON CONFLICT DO NOTHING RETURNING，由列类型完成 JSONB 绑定，无手工 CAST）
 - A2  派单事务（commit=True 默认提交；commit=False 已 flush 未 commit）
 - A3  人工接管事务（commit=True 默认提交；commit=False 已 flush 未 commit）
 - A4  派单后回滚（事件+线索+ReplyCheck+LeadFollowupRecord 整体回滚；监视 rollback）
@@ -196,17 +196,14 @@ def _spy_rollback(db):
 # ========== A1: SQL 合同（PostgreSQL）==========
 
 
-def test_a1_claim_statement_uses_postgresql_on_conflict_returning_with_jsonb_cast():
-    """A1：PostgreSQL 占位语句包含 ON CONFLICT DO NOTHING RETURNING，raw_body 和 parsed_content_json
-    各有一个显式 CAST AS JSONB（共 2 个 CAST、2 个 AS JSONB）。"""
+def test_a1_claim_statement_uses_postgresql_on_conflict_returning_without_manual_jsonb_cast():
+    """A1：由列类型完成 JSONB 参数绑定，语句保留原子占位且没有手工 CAST。"""
     statement = build_webhook_claim_statement("postgresql", _claim_values())
     sql = str(statement.compile(dialect=postgresql.dialect()))
     assert "ON CONFLICT (event_key) DO NOTHING" in sql
     assert "RETURNING" in sql and "douyin_webhook_events.id" in sql
-    cast_count = sql.count("CAST(")
-    jsonb_count = sql.count("AS JSONB")
-    assert cast_count == 2, f"期望 2 个 CAST，实际 {cast_count}：{sql}"
-    assert jsonb_count == 2, f"期望 2 个 AS JSONB，实际 {jsonb_count}：{sql}"
+    assert "CAST(" not in sql
+    assert " AS JSONB" not in sql
 
 
 def test_a1_sqlite_no_insert_or_ignore():

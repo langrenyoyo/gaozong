@@ -10,8 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import cast
-from sqlalchemy.dialects.postgresql import JSONB, insert as postgresql_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -30,20 +29,15 @@ class WebhookEventClaim:
 def build_webhook_claim_statement(dialect_name: str, values: dict[str, Any]):
     """构造跨方言原子占位语句。
 
-    PostgreSQL 使用 ON CONFLICT (event_key) DO NOTHING RETURNING id，
-    raw_body/parsed_content_json 显式 CAST 为 JSONB（ORM 声明 Text，但 PG 真实列为 JSONB）。
-    SQLite 使用 ON CONFLICT (event_key) DO NOTHING RETURNING id，禁止 INSERT OR IGNORE。
+    PostgreSQL 与 SQLite 均使用 ON CONFLICT (event_key) DO NOTHING RETURNING id，
+    JSONB 参数绑定由表列类型（_JSONStringJSONB）完成，不再手工 CAST。
     不支持的方言显式失败，不降级为先查再插。
     """
     table = DouyinWebhookEvent.__table__
     if dialect_name == "postgresql":
-        postgres_values = dict(values)
-        postgres_values["raw_body"] = cast(values["raw_body"], JSONB)
-        if values.get("parsed_content_json") is not None:
-            postgres_values["parsed_content_json"] = cast(values["parsed_content_json"], JSONB)
         return (
             postgresql_insert(table)
-            .values(**postgres_values)
+            .values(**values)
             .on_conflict_do_nothing(index_elements=[table.c.event_key])
             .returning(table.c.id)
         )
