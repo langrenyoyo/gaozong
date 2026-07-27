@@ -18,6 +18,7 @@ from app.models import (
     AiAutoReplyRun,
     AiReplyDecisionLog,
     DouyinAuthorizedAccount,
+    DouyinLead,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
     _JSONStringJSONB,
@@ -258,6 +259,9 @@ JSON_STRING_COLUMNS = (
     (AiReplyDecisionLog, "source_chunks_json"),
     (AiReplyDecisionLog, "allowed_category_keys_json"),
     (AiReplyDecisionLog, "raw_response_json"),
+    # DouyinLead 第二批提前对齐：生产 PG 列为 jsonb，ORM 曾误声明 Text 导致 500
+    (DouyinLead, "raw_data"),
+    (DouyinLead, "all_extracted_contacts"),
 )
 
 
