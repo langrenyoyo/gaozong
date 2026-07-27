@@ -2726,7 +2726,18 @@ P3-E-9100 闭环交付 9100 RAG metadata SQLite -> PostgreSQL 全套：迁移脚
 - `lease_expires_at` 和 `next_attempt_at` 使用 `DateTime(timezone=True)`，对齐 ORM 与 PG 运行契约。
 - `attempt_count` 为 `Integer NOT NULL DEFAULT 0`。
 - SQLite 对应迁移 0036，字段合同一致。
-- `_GateResultsJSON` 跨方言合同（R1-REPAIR-2A）：`AiAutoReplyRun.gate_results_json` 改为自定义 `TypeDecorator`（`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`），PostgreSQL 写入前 `json.loads` 解析为对象/数组避免双重编码、读回后 `json.dumps` 重新序列化为字符串，对外保持 `str|None` 契约，`None` 写为 SQL NULL，非法 JSON 字符串在 PostgreSQL 写入前抛 `JSONDecodeError`；静态合同测试断言跨方言类型与 `ScriptDirectory` 图解析。不修 `ReturnVisitRun.gate_results_json`（其 PG 迁移本就是 Text，一致）。
+- `_GateResultsJSON` 跨方言合同（R1-REPAIR-2A）：`AiAutoReplyRun.gate_results_json` 改为自定义 `TypeDecorator`（`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`），PostgreSQL 写入前 `json.loads` 解析为对象/数组避免双重编码、读回后 `json.dumps` 重新序列化为字符串，对外保持 `str|None` 契约，`None` 写为 SQL NULL，非法 JSON 字符串在 PostgreSQL 写入前抛 `JSONDecodeError`；静态合同测试断言跨方言类型与 `ScriptDirectory` 图解析。不修 `ReturnVisitRun.gate_results_json`（其 PG 迁移本就是 Text，一致）。该类型后续泛化为共享类型 `_JSONStringJSONB`（见下方 JSONB/ORM 一致性段落）。
 - 真实本地 PostgreSQL/MVCC 验证（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1 R1-T1 PASS）：在专用测试库 `auto_wechat_outbox_test`（Alembic 0016 head）验证跨进程可见性、20 路领取竞争、租约恢复、发送对账与旧 Worker 防覆盖；P1-P9、C1-C4 全部 PASS，专项 `22 passed`、连续 10 轮 `220 passed`、`external_calls=0`/意外流水=0/namespace 残留=0/遗留子进程=0。
-- webhook JSONB 双重编码问题（`persist_webhook_event`/`persist_duplicate_webhook_event` 仍走 ORM `Text` 写 `jsonb` 列，仅 `build_webhook_claim_statement` 首次占位用显式 `cast(JSONB)`）仍归独立 parity 任务统一返修，本任务未修，不得声称已修。
+- webhook JSONB 双重编码问题已由 `P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1` 闭合（见下方 JSONB/ORM 一致性段落）：`persist_webhook_event`/`persist_duplicate_webhook_event` 走 ORM `_JSONStringJSONB` 写 `jsonb` 列，`build_webhook_claim_statement` 移除手工 `cast(JSONB)` 由列类型绑定。
 - 尚未执行生产迁移、生产调度和生产恢复；只验证本地专用 PostgreSQL 数据库，不等于生产验证；未连接 staging/production；未运行全仓测试；尚未部署或发布。
+
+## 9000 PostgreSQL JSONB/ORM 一致性首批返修（P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1）
+
+- 最终候选 `9a2f1aabb7725de6e12822ce194c1d8ad15c2904`（Base `1042a07ab3b4267586ea5b9fc5e69ceed9f1099a`），已通过独立测试 R1-T1（J1-J16、B1-B8 全部 PASS），`9a2f1aa` 已进入远端 `master@020ab730bae8ac2c570ce4e0e185f203b62b08e4` 的线性历史。
+- 共享类型 `_JSONStringJSONB`（`_GateResultsJSON` 泛化）：`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`；PG 写入前 `json.loads` 解析避免双重编码、读回 `json.dumps` 重新序列化为字符串；JSON 文本 `"null"` 含空白形式跨方言统一映射为 SQL NULL；非法 JSON 在 PG 写入前抛 `JSONDecodeError`。
+- 首批 11 个 JSON 字符串字段映射：`AiAutoReplyRun.gate_results_json`、`DouyinWebhookEvent.raw_body`/`parsed_content_json`、`DouyinPrivateMessageSend.request_body_json`/`response_body_json`、`AiReplyDecisionLog` 的 `risk_flags_json`/`tags_json`/`rag_sources_json`/`source_chunks_json`/`allowed_category_keys_json`/`raw_response_json`。
+- 共享类型 `_IntegerBoolean`：`impl=Integer`，PostgreSQL 编译 BOOLEAN、SQLite 编译 INTEGER；绑定时 0/1 转 False/True，读回仍为严格 int 0/1，损坏值抛 `ValueError`，`None` 写 SQL NULL。映射 7 个字段：`DouyinPrivateMessageSend.manual_confirmed`/`auto_send`、`AiReplyDecisionLog.manual_required`/`llm_used`/`rag_used`/`upstream_auto_send`/`final_auto_send`；`is_effective` 保持普通 `Boolean`。
+- webhook 原子占位移除手工 `cast(JSONB)`，由列类型完成 JSONB 参数绑定。
+- JSONB 文本筛选显式 `cast(column, Text).like(...)`：`webhook_event_service.py`、`douyin_merchant_isolation.py`、`douyin_workbench_conversation_service.py`、`ai_reply_decision_log_query_service.py`。
+- `020ab730bae8ac2c570ce4e0e185f203b62b08e4` 将 `DouyinLead.raw_data`/`all_extracted_contacts` 改用 `_JSONStringJSONB`，该提交不属于 `9a2f1aa` 的 R1 独立测试报告覆盖范围，不继承 38 passed 结论。
+- 只验证本地专用 PostgreSQL 数据库，不等于生产验证；未验证生产调度、生产迁移和生产恢复；未连接 staging/production；未运行全仓测试；尚未部署或发布。
