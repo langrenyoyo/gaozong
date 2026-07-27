@@ -12,20 +12,12 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 
-class _GateResultsJSON(TypeDecorator):
-    """AiAutoReplyRun.gate_results_json 方言感知类型。
+class _JSONStringJSONB(TypeDecorator):
+    """保持字符串 JSON 业务合同的方言感知类型。
 
-    对外 Python 值统一为 ``str | None``：业务层用 ``json.dumps`` 写、``json.loads`` 读，
-    该契约不变。底层按方言区分存储：
-    - PostgreSQL：底层 JSONB。写入前把合法 JSON 字符串解析为对象/数组，避免 JSONB
-      把字符串当标量再次编码（双重编码）；读回对象/数组后重新序列化为字符串。
-    - SQLite：底层 TEXT，直接存取字符串，保持现有语义。
-    ``None`` 写为 SQL NULL；非法 JSON 字符串在 PostgreSQL 写入前抛 ``JSONDecodeError``，
-    不得静默篡改或双重编码。
-
-    范围限制：仅用于 ``AiAutoReplyRun.gate_results_json``。其余 Text 声明的 JSON 字段
-    （webhook、发送流水、决策日志、ReturnVisitRun 等）的统一返修复在独立任务
-    ``P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1``，不得在本任务扩散。
+    业务层统一写入和读取 ``str | None``。PostgreSQL 使用 JSONB，写入前解析
+    JSON 字符串以避免双重编码，读回后重新序列化为字符串；SQLite 继续使用
+    TEXT。``None`` 保持 SQL NULL，PostgreSQL 非法 JSON 直接失败。
     """
 
     impl = Text
@@ -40,7 +32,7 @@ class _GateResultsJSON(TypeDecorator):
         if value is None:
             return None
         if dialect.name == "postgresql":
-            # 写入前解析为对象/数组：JSONB 存原生结构而非字符串标量，杜绝双重编码
+            # PostgreSQL 保存原生 JSON 值，禁止把 JSON 文本再次编码成字符串标量。
             return json.loads(value)
         return value
 
@@ -48,7 +40,7 @@ class _GateResultsJSON(TypeDecorator):
         if value is None:
             return None
         if dialect.name == "postgresql":
-            # JSONB 读回对象/数组，重新序列化为字符串，保持业务层 json.loads 语义
+            # 业务层仍按字符串 JSON 消费，不扩散 dict/list 合同。
             return json.dumps(value, ensure_ascii=False)
         return value
 
@@ -319,7 +311,7 @@ class DouyinWebhookEvent(Base):
     to_user_avatar = Column(String(1000), comment="Receiver avatar from user_infos")
     parse_status = Column(String(32), comment="content parse status: parsed/empty/parse_failed")
     parse_error = Column(String(255), comment="Safe content parse error")
-    parsed_content_json = Column(Text, comment="Parsed content JSON object")
+    parsed_content_json = Column(_JSONStringJSONB(), comment="Parsed content JSON object")
     event_key = Column(String(128), unique=True, index=True, comment="幂等去重键")
     is_duplicate = Column(Boolean, nullable=False, default=False, comment="是否重复事件 False/True")
     lead_id = Column(Integer, nullable=True, comment="关联的 douyin_leads.id（仅 im_receive_msg）")
@@ -327,7 +319,7 @@ class DouyinWebhookEvent(Base):
     # 禁止回填猜测值；历史事件为 NULL 时对普通商户不可见。
     merchant_id = Column(String(128), index=True, comment="可信商户 ID，入库时按事件归属固化")
     tenant_id = Column(String(128), index=True, comment="可信租户 ID，随商户归属固化")
-    raw_body = Column(Text, nullable=False, comment="原始 payload JSON")
+    raw_body = Column(_JSONStringJSONB(), nullable=False, comment="原始 payload JSON")
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -419,8 +411,8 @@ class DouyinPrivateMessageSend(Base):
     account_open_id = Column(String(255), comment="Authorized account open_id")
     scene = Column(String(64), nullable=False, default="im_reply_msg")
     content = Column(Text, nullable=False)
-    request_body_json = Column(Text, comment="Sanitized upstream request JSON")
-    response_body_json = Column(Text, comment="Upstream response JSON")
+    request_body_json = Column(_JSONStringJSONB(), comment="Sanitized upstream request JSON")
+    response_body_json = Column(_JSONStringJSONB(), comment="Upstream response JSON")
     upstream_msg_id = Column(String(255), comment="Upstream data.msg_id")
     status = Column(String(20), nullable=False, default="pending", comment="pending/sent/failed")
     error_code = Column(String(64), comment="Upstream or local error code")
@@ -466,17 +458,17 @@ class AiReplyDecisionLog(Base):
     confidence = Column(Float, comment="模型置信度")
     manual_required = Column(Integer, nullable=False, default=1, comment="最终是否需要人工确认 0/1")
     manual_required_reason = Column(Text, comment="需要人工确认原因")
-    risk_flags_json = Column(Text, comment="最终风险标记 JSON")
-    tags_json = Column(Text, comment="客户标签 JSON")
-    rag_sources_json = Column(Text, comment="RAG 来源 JSON")
-    source_chunks_json = Column(Text, comment="旧版 source_chunks JSON")
-    allowed_category_keys_json = Column(Text, comment="9000 注入的可信知识分类 key JSON")
+    risk_flags_json = Column(_JSONStringJSONB(), comment="最终风险标记 JSON")
+    tags_json = Column(_JSONStringJSONB(), comment="客户标签 JSON")
+    rag_sources_json = Column(_JSONStringJSONB(), comment="RAG 来源 JSON")
+    source_chunks_json = Column(_JSONStringJSONB(), comment="旧版 source_chunks JSON")
+    allowed_category_keys_json = Column(_JSONStringJSONB(), comment="9000 注入的可信知识分类 key JSON")
     llm_used = Column(Integer, nullable=False, default=0, comment="是否使用 LLM 0/1")
     rag_used = Column(Integer, nullable=False, default=0, comment="是否使用 RAG 0/1")
     upstream_auto_send = Column(Integer, nullable=False, default=0, comment="9100 原始响应是否请求自动发送 0/1")
     final_auto_send = Column(Integer, nullable=False, default=0, comment="9000 最终返回是否自动发送，必须为 0")
     decision_version = Column(String(64), comment="决策版本")
-    raw_response_json = Column(Text, comment="9100 原始响应 JSON 副本")
+    raw_response_json = Column(_JSONStringJSONB(), comment="9100 原始响应 JSON 副本")
     error_message = Column(Text, comment="日志记录错误信息，预留")
     # 小高 AI 一期：有效性与模型字段（超管人工标记 + 实际模型留痕）
     is_effective = Column(Boolean, nullable=True, comment="超管人工标记：null 未标记 / true 有效 / false 无效")
@@ -517,7 +509,7 @@ class AiAutoReplyRun(Base):
     status = Column(String(32), nullable=False)
     skip_reason = Column(String(128))
     block_reason = Column(String(128))
-    gate_results_json = Column(_GateResultsJSON())
+    gate_results_json = Column(_JSONStringJSONB())
     decision_log_id = Column(Integer)
     would_send_content = Column(Text)
     error_message = Column(Text)
