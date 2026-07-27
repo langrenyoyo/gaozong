@@ -723,7 +723,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - R1-REPAIR-2A 对齐 `AiAutoReplyRun.gate_results_json` 方言感知类型：自定义 `TypeDecorator`（`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`），PostgreSQL 写入前 `json.loads` 解析为对象/数组避免双重编码、读回后 `json.dumps` 重新序列化为字符串，对外保持 `str|None` 契约，`None` 写为 SQL NULL，非法 JSON 字符串在 PostgreSQL 写入前抛 `JSONDecodeError`；不修 `ReturnVisitRun.gate_results_json`（其 PG 迁移本就是 Text，一致）；R2/R3 为测试加固（P7 sent 流水夹具 Core insert 省略范围外 JSONB 列、P8 新租约与新 Worker 诊断值防覆盖断言）
 - P1 安全门合同（`--postgres-smoke`/`--namespace`/`--ready-file`/`--start-file`/`--lease-owner` CLI 暴露、`_validate_smoke_database_url` 安全门）；P2 Alembic 0016 schema（jsonb/tz 字段/索引/`alembic_version=0016`）；P3 跨进程提交可见性
 - P4 20 路子进程文件门禁 claim 连续 10 轮单胜（`attempt_count=1`/`lease_owner` 非空/胜出者 `run_ids` 唯一）；P5 `os._exit(23)` 后租约未过期不领取/过期恢复一次（`recovered_failure_stage=lease_expired`）；P6 `retry_wait` 到期边界；P7 `send_authorized` 有/无 sent 流水对账（`sent`/`send_unknown`，租约清空，仅 True 分支 1 条预置流水）；P8 旧 owner `guarded-block-once` `rowcount=0` 不覆盖新 owner/新租约/新诊断值（`block_reason='pg_new_owner_state'` 保持）；P9 `external_calls=0`/意外流水 0/namespace 残留 0/日志无明文凭据
-- C1 `_JSONStringJSONB`（原 `_GateResultsJSON`，后续泛化为共享类型）PostgreSQL/SQLite 类型及字符串合同；C2 SQLite 重启恢复 R1-R11 无回归；C3 outbox/send/dry-run/webhook 相邻回归无 Candidate 新增失败；C4 编译、范围、线性、工作区和差异检查
+- C1 `_GateResultsJSON` PostgreSQL/SQLite 类型及字符串合同（后续第 30 节泛化为共享类型 `_JSONStringJSONB`）；C2 SQLite 重启恢复 R1-R11 无回归；C3 outbox/send/dry-run/webhook 相邻回归无 Candidate 新增失败；C4 编译、范围、线性、工作区和差异检查
 - `_claim_test_webhook_event` 注释合同（helper 规避 ORM Text→JSONB 类型错误，不声称已存为对象；webhook JSON 字符串标量双重编码问题已由后续 parity 任务 `P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1` 闭合，见第 30 节）
 - 独立测试数字：schema 合同 `11 passed`、PostgreSQL 专项 `22 passed, 0 skipped`、连续 10 轮共 `220 passed`、SQLite 重启恢复 `11 passed`、状态机回归 `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）、webhook 回归 `89 passed`，Candidate 0 个新增失败
 - `external_calls=0`、意外流水=0、namespace 残留=0、遗留子进程=0；专用 PostgreSQL 数据库连接是唯一允许的网络传输
@@ -731,7 +731,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 ## 30. 9000 PostgreSQL JSONB/ORM 一致性首批返修（P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1）
 
-最终候选 `9a2f1aabb7725de6e12822ce194c1d8ad15c2904`（R1，Base `1042a07ab3b4267586ea5b9fc5e69ceed9f1099a`，7 个单父线性提交，8 个允许实现/测试文件）已通过独立测试 Test-Revision R1-T1，J1-J16、B1-B8 全部 PASS，任务级结论 PASS（2026-07-27）：
+最终候选 `9a2f1aabb7725de6e12822ce194c1d8ad15c2904`（R1，Base `1042a07ab3b4267586ea5b9fc5e69ceed9f1099a`，7 个单父线性提交，8 个允许实现/测试文件）已通过独立测试 R1，J1-J16、B1-B8 全部 PASS，任务级结论 PASS（2026-07-27）：
 
 - `9a2f1aa` 已进入远端 `master@020ab730bae8ac2c570ce4e0e185f203b62b08e4` 的线性历史
 - 允许范围：`app/models.py`、`app/services/douyin_webhook_idempotency_service.py`、`app/services/webhook_event_service.py`、`app/services/douyin_merchant_isolation.py`、`app/services/douyin_workbench_conversation_service.py`、`app/services/ai_reply_decision_log_query_service.py`、`tests/test_douyin_webhook_atomic_idempotency.py`、`tests/test_9000_postgres_jsonb_orm_parity.py`
@@ -741,7 +741,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - webhook 原子占位移除手工 `cast(JSONB)`，由列类型完成 JSONB 参数绑定
 - JSONB 文本筛选显式 `cast(column, Text).like(...)`（4 个服务）
 - 真实 `_pg_url()` 接受/拒绝边界：`postgresql+psycopg`/`127.0.0.1`|`localhost`/`5432`/`auto_wechat_outbox_test`/无 query fragment（6 类拒绝 + 2 主机接受，直接调用 `_pg_url()` 而非复制判断逻辑）
-- J1-J16：J1/J2 共享类型编译 JSONB/TEXT、J3 字符串合同 + JSON "null" 归一 + 非法 JSON 失败、J4 ORM 写入读回 webhook JSON 字符串、J5/J6 claim 存对象非字符串标量、J7 20 路×10 轮单胜、J9 send_service 写原生 JSONB（无真实网络）、J10 decision_service 6 字符串字段 + 风险筛选、J11 webhook/merchant/workbench 筛选 cast TEXT
+- J1-J16：J1/J2 共享类型编译 JSONB/TEXT、J3 字符串合同 + JSON "null" 归一 + 非法 JSON 失败、J4 ORM 写入读回 webhook JSON 字符串、J5/J6 claim 存对象非字符串标量、J7 20 路×10 轮单胜、J8 重复事件不产生第二个有效业务事件（由既有 webhook 原子幂等回归覆盖）、J9 send_service 写原生 JSONB（无真实网络）、J10 decision_service 6 字符串字段 + 风险筛选、J11 webhook/merchant/workbench 筛选 cast TEXT、J12 SQLite 相邻回归无回归、J13 namespace 残留 0（pg_case fixture finally 断言四表计数 (0,0,0,0)）、J14 Alembic 0016 schema 且无 `create_all`、J15 Candidate 新增失败 0、J16 编译/范围/线性/工作区/差异检查通过；全程无真实外部调用（`call_douyin_openapi` 全程 patch 为本地替身）、无遗留线程或子进程（ThreadPoolExecutor 正常关闭、pg_case fixture 清理）
 - B1-B8：B1 `_IntegerBoolean` PG=BOOLEAN/SQLite=INTEGER、B2 0/1/False/True/None 双方言绑定、B3 非法值抛 ValueError、B4 7 字段使用该类型且 `is_effective` 不变、B5 真实 PG 写入成功、B6 新 Session 读回严格 int 0/1（`type(value) is int`）+ PG `pg_typeof=boolean`、B7 manual_required/llm_used/rag_used 查询筛选限定本 namespace 命中、B8 J1-J16 与 SQLite 回归
 - 独立测试数字：PostgreSQL 专项 `38 passed, 0 skipped`（J7 内部 20 路×10 轮单胜，专项另连续 3 轮通过）、webhook/atomic/workbench `157 passed`、outbox/send/dry-run `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，IndexError 行 580，Base/Candidate 同环境一致）、PostgreSQL MVCC `22 passed`、SQLite 重启恢复 `11 passed`，Candidate 0 个新增失败
 - `020ab730bae8ac2c570ce4e0e185f203b62b08e4` 将 `DouyinLead.raw_data`/`all_extracted_contacts` 改用 `_JSONStringJSONB`，该提交不属于 `9a2f1aa` 的 R1 独立测试报告覆盖范围，不继承 38 passed 结论

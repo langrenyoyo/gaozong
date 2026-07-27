@@ -2733,7 +2733,7 @@ P3-E-9100 闭环交付 9100 RAG metadata SQLite -> PostgreSQL 全套：迁移脚
 
 ## 9000 PostgreSQL JSONB/ORM 一致性首批返修（P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1）
 
-- 最终候选 `9a2f1aabb7725de6e12822ce194c1d8ad15c2904`（Base `1042a07ab3b4267586ea5b9fc5e69ceed9f1099a`），已通过独立测试 R1-T1（J1-J16、B1-B8 全部 PASS），`9a2f1aa` 已进入远端 `master@020ab730bae8ac2c570ce4e0e185f203b62b08e4` 的线性历史。
+- 最终候选 `9a2f1aabb7725de6e12822ce194c1d8ad15c2904`（Base `1042a07ab3b4267586ea5b9fc5e69ceed9f1099a`），已通过独立测试 R1（J1-J16、B1-B8 全部 PASS），`9a2f1aa` 已进入远端 `master@020ab730bae8ac2c570ce4e0e185f203b62b08e4` 的线性历史。
 - 共享类型 `_JSONStringJSONB`（`_GateResultsJSON` 泛化）：`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`；PG 写入前 `json.loads` 解析避免双重编码、读回 `json.dumps` 重新序列化为字符串；JSON 文本 `"null"` 含空白形式跨方言统一映射为 SQL NULL；非法 JSON 在 PG 写入前抛 `JSONDecodeError`。
 - 首批 11 个 JSON 字符串字段映射：`AiAutoReplyRun.gate_results_json`、`DouyinWebhookEvent.raw_body`/`parsed_content_json`、`DouyinPrivateMessageSend.request_body_json`/`response_body_json`、`AiReplyDecisionLog` 的 `risk_flags_json`/`tags_json`/`rag_sources_json`/`source_chunks_json`/`allowed_category_keys_json`/`raw_response_json`。
 - 共享类型 `_IntegerBoolean`：`impl=Integer`，PostgreSQL 编译 BOOLEAN、SQLite 编译 INTEGER；绑定时 0/1 转 False/True，读回仍为严格 int 0/1，损坏值抛 `ValueError`，`None` 写 SQL NULL。映射 7 个字段：`DouyinPrivateMessageSend.manual_confirmed`/`auto_send`、`AiReplyDecisionLog.manual_required`/`llm_used`/`rag_used`/`upstream_auto_send`/`final_auto_send`；`is_effective` 保持普通 `Boolean`。
