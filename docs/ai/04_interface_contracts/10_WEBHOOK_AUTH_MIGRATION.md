@@ -118,7 +118,7 @@ douyinAPI 当前行为：
 | timestamp 过期 | HTTP 401 |
 | 签名不匹配 | HTTP 401 |
 
-重要结论：缺少签名头时直接放行是 douyinAPI demo 兼容行为，不能迁移为 auto_wechat 生产行为。
+重要结论（2026-07-27 修订）：抖音 GMP 真实事件回调确认不携带签名头，auto_wechat 已采纳 douyinAPI 的"缺签名头放行"行为作为生产行为：`verify_signature()` 缺少 `X-Auth-Timestamp` 或 `Authorization` 时记 warning 后放行，鉴权由 nginx 上游承担；携带签名头时仍强校验。原"不能迁移"结论已失效。
 
 ### 1.8 日志现状
 
@@ -232,11 +232,12 @@ review_auth_records
 
 不能直接迁移：
 
-1. 缺少签名头直接放行。
-2. 全局 `DY_SECRET_KEY` 固化为长期方案。
-3. 在日志中全文记录 `Authorization`、expected signature、actual signature。
-4. 直接依赖 douyinAPI 运行时服务。
-5. 巨量一键过审和 OceanEngine 授权逻辑。
+1. 全局 `DY_SECRET_KEY` 固化为长期方案。
+2. 在日志中全文记录 `Authorization`、expected signature、actual signature。
+3. 直接依赖 douyinAPI 运行时服务。
+4. 巨量一键过审和 OceanEngine 授权逻辑。
+
+> 注：原列项"缺少签名头直接放行"已于 2026-07-27 经抖音 GMP 真实回调验证后采纳为 auto_wechat 生产行为，移出本列表。
 
 ------
 
@@ -291,13 +292,13 @@ SHA256(DY_SECRET_KEY + body + "-" + timestamp)
 
 当前处理：
 
-1. 缺少 `X-Auth-Timestamp` 或 `Authorization`：抛 `WebhookSignatureError`，HTTP 401。
+1. 缺少 `X-Auth-Timestamp` 或 `Authorization`：记 warning 后放行（抖音 GMP 回调不带签名头，2026-07-27 起）。
 2. `DY_SECRET_KEY` 缺失：抛 `WebhookSignatureError`，HTTP 500。
 3. timestamp 非法：HTTP 401。
 4. timestamp 过期：HTTP 401。
 5. 签名不匹配：HTTP 401。
 
-结论：auto_wechat 当前验签函数比 douyinAPI 的入站验签更接近生产安全要求，因为缺少签名头不会放行。
+结论：auto_wechat 当前验签函数在携带签名头时强校验，缺签名头时放行（对齐抖音 GMP 真实回调行为），鉴权由 nginx 上游承担。
 
 ### 2.4 当前配置
 
@@ -391,14 +392,14 @@ tests/test_douyin_webhook.py
 已覆盖：
 
 1. 正确签名通过。
-2. 缺少签名头失败。
-3. 缺少 timestamp 失败。
+2. 缺少签名头放行（2026-07-27 起）。
+3. 缺少 timestamp 放行（缺任一签名头即放行）。
 4. 错误签名失败。
 5. timestamp 过期失败。
 6. 鉴权关闭时两个 webhook 路径可无签名接收。
 7. 鉴权开启时 `/integrations/douyin/webhook` 正确签名成功。
-8. 鉴权开启时缺签名或错签名失败。
-9. 鉴权开启时 `/webhook/douyin` 无签名失败。
+8. 鉴权开启时缺签名放行、错签名失败。
+9. 鉴权开启时 `/webhook/douyin` 无签名放行。
 10. 两个路径共享幂等。
 
 当前测试仍保留“默认免验签”场景，用于开发 / 联调兼容。
@@ -439,13 +440,12 @@ douyinAPI：
 
 1. 缺少签名头时记录 warning 后放行。
 2. 适合 demo 联调。
-3. 不符合 auto_wechat 生产强制验签要求。
 
 auto_wechat：
 
-1. `verify_signature()` 缺头时会 401。
-2. 但总开关默认 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`。
-3. 生产环境强制验签尚未落地。
+1. `verify_signature()` 缺签名头时记 warning 后放行（2026-07-27 起，对齐抖音 GMP 真实回调行为）。
+2. 携带签名头时强校验 SHA256；总开关 `DOUYIN_WEBHOOK_AUTH_REQUIRED` 控制是否进入验签分支。
+3. production 下 `is_douyin_webhook_auth_required()` 仍强制进入验签，但缺头不再 401；鉴权由 nginx 上游承担。
 
 ### 3.3 密钥模型差异
 
@@ -529,7 +529,7 @@ Content-Type: application/json
 
 ```text
 参考 douyinAPI 的签名计算和测试样例；
-保留 auto_wechat 当前更严格的缺头拒绝行为；
+缺签名头放行（对齐抖音 GMP 真实回调，鉴权由 nginx 上游承担），携带签名头时强校验；
 在 auto_wechat 内部抽象独立 webhook_auth 工具或 service；
 开发 / 联调环境保留免验签能力；
 生产环境强制验签；
@@ -764,8 +764,8 @@ raw_body = await request.body()
 | 非线索事件 | 200 | `{"code":0,"msg":"success"}` | 是 | INFO | 否 |
 | 无效线索 | 200 | `{"code":0,"msg":"success"}` | 是 | INFO | 否 |
 | body 非法 JSON | 400 | `{"code":400,"msg":"invalid json"}` | 否，或进入安全失败日志 | WARNING | 否 |
-| 缺少 Authorization | 401 | `{"code":401,"msg":"unauthorized"}` | 否 | WARNING | 高频报警 |
-| 缺少 X-Auth-Timestamp | 401 | `{"code":401,"msg":"unauthorized"}` | 否 | WARNING | 高频报警 |
+| 缺少 Authorization | 200 | `{"code":0,"msg":"success"}` | 是（抖音 GMP 回调缺头放行） | WARNING | 否 |
+| 缺少 X-Auth-Timestamp | 200 | `{"code":0,"msg":"success"}` | 是（抖音 GMP 回调缺头放行） | WARNING | 否 |
 | timestamp 非法 | 401 | `{"code":401,"msg":"invalid timestamp"}` | 否 | WARNING | 高频报警 |
 | timestamp 过期 | 401 | `{"code":401,"msg":"request expired"}` | 否 | WARNING | 高频报警 |
 | 签名不匹配 | 401 | `{"code":401,"msg":"signature mismatch"}` | 否 | WARNING | 是 |
@@ -869,8 +869,8 @@ auto_wechat:9000/webhook/douyin
 |---|---|---|
 | 正确签名 | 原始 body + 正确 timestamp + 正确 signature | HTTP 200 |
 | 错误签名 | signature 任意改动 | HTTP 401 |
-| 缺少 Authorization | 无 `Authorization` | HTTP 401 |
-| 缺少 X-Auth-Timestamp | 无 `X-Auth-Timestamp` | HTTP 401 |
+| 缺少 Authorization | 无 `Authorization` | HTTP 200（抖音 GMP 回调缺头放行） |
+| 缺少 X-Auth-Timestamp | 无 `X-Auth-Timestamp` | HTTP 200（抖音 GMP 回调缺头放行） |
 | timestamp 非数字 | `X-Auth-Timestamp=abc` | HTTP 401 |
 | timestamp 过期 | 超过允许窗口 | HTTP 401 |
 | body 改一个空格 | 签名使用旧 body，请求发送新 body | HTTP 401 |
@@ -945,7 +945,7 @@ auto_wechat:9000/webhook/douyin
 后续代码方案：
 
 1. 增加环境识别。
-2. 生产环境强制验签。
+2. 生产环境强制验签（携带签名头时强校验；抖音 GMP 回调缺签名头时放行，鉴权由 nginx 上游承担）。
 3. `SECRET_KEY` 缺失时启动失败或请求拒绝。
 4. 更新 `.env.example` 和部署说明。
 5. 注意：配置默认值修改必须在代码修改计划和用户确认后执行。
@@ -1011,7 +1011,7 @@ auto_wechat:9000/webhook/douyin
 1. 当前本轮不修改默认值。
 2. 下一阶段代码修改计划中引入 `APP_ENV` 或等价环境识别。
 3. 开发环境允许 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`。
-4. 生产环境强制验签，即使配置为 false 也应启动失败或拒绝请求。
+4. 生产环境强制进入验签分支，但抖音 GMP 回调缺签名头时放行（鉴权由 nginx 上游承担）；携带签名头时配置为 false 仍可被强制验签拒绝。
 5. `.env.example` 后续需要调整注释，明确 false 仅限开发 / 联调。
 
 ------
@@ -1040,7 +1040,7 @@ signature = sha256Hex(SECRET_KEY + body + "-" + timestamp)
 1. 以最新冻结 PRD 为准。
 2. 旧口径保留为历史联调背景。
 3. `false` 只能作为开发 / 联调兼容能力。
-4. 生产验收必须强制验签。
+4. 生产验收强制进入验签分支，但抖音 GMP 回调缺签名头放行（鉴权由 nginx 上游承担），携带签名头时强校验。
 
 ### 16.2 代码与目标差距
 

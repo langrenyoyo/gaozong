@@ -88,7 +88,7 @@
 - 正式 webhook 共用 `_handle_douyin_webhook`。
 - production 下 `config.is_douyin_webhook_auth_required()` 强制验签；非生产环境按 `DOUYIN_WEBHOOK_AUTH_REQUIRED` 配置。
 - `verify_signature` 校验 timestamp、signature，并使用 HMAC 比较。
-- 缺签名、签名错误、timestamp 过期会拒绝。
+- 抖音 GMP 回调确认不带签名头：缺签名头时记 warning 后放行（2026-07-27 起，鉴权由 nginx 上游承担）；签名错误、timestamp 过期仍拒绝。
 - 事件持久化使用 event_key 做幂等；重复事件不会重复调度自动回复。
 - `webhook-observe` / `callback` 在默认观察模式下不进入正式处理；但当 `DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 时，会以 `skip_signature_verification=True` 调用正式处理管线，这是明确的加固风险点。
 
@@ -177,8 +177,8 @@
 - 资源下载、图片上传的基础输入校验和敏感字段不泄露。
 - OAuth callback 观察摘要不暴露完整 code。
 - auth status 按当前商户过滤。
-- 正式 webhook 签名成功、缺头、错签、timestamp 过期。
-- production 下正式 webhook 缺签名拒绝。
+- 正式 webhook 签名成功、缺头放行、错签、timestamp 过期。
+- production 下抖音 GMP 无签名回调放行（缺头不再 401）。
 - `/webhook/douyin` 和 `/integrations/douyin/webhook` 共用正式行为。
 - webhook duplicate event 幂等。
 - `im_send_msg` 不创建 lead、不触发自动回复调度。
@@ -233,7 +233,7 @@
 
 - 观察模式：`DY_LIVE_CHECK_FORWARD_TO_FORMAL=false` 时，只记录 live-check 观察摘要，不写入正式 `douyin_webhook_events` / `douyin_leads`。
 - 转正式管线模式：`DY_LIVE_CHECK_FORWARD_TO_FORMAL=true` 时，复用正式 `_handle_douyin_webhook()` 入口，不再设置跳过签名校验。
-- 缺少 `X-Auth-Timestamp` 或 `Authorization` 时，按正式 webhook 规则返回 401，不进入正式管线。
+- 缺少 `X-Auth-Timestamp` 或 `Authorization` 时，抖音 GMP 回调放行（2026-07-27 起缺头记 warning 不 401）；非 GMP 来源若携带签名头则按正式规则校验。
 - 签名错误时，按正式 webhook 规则返回 401，不进入正式管线。
 - 签名正确时，继续进入正式 webhook 处理流程，保留 timestamp 漂移检查、raw event 留存、event_key 幂等、线索写入和自动回复 dry-run 调度边界。
 - 重复 event_key 仍按正式 webhook 幂等逻辑处理，不重复创建正式线索。

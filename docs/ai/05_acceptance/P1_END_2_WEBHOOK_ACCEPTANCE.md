@@ -58,13 +58,19 @@ https://callback.misanduo.com/webhook/douyin
 | `DOUYIN_WEBHOOK_AUTH_REQUIRED` | `false` | 入站 webhook 不强制签名校验 |
 
 - `false`：GMP 推送直接解析处理，符合业务确认
-- `true`：恢复 `X-Auth-Timestamp` + `Authorization` 签名校验（调试/审计用）
+- `true`：恢复 `X-Auth-Timestamp` + `Authorization` 签名校验（调试/审计用，仅当请求实际携带签名头时强校验）
 
 **关键约束**：
 
 1. 文档鉴权章节适用于外部系统主动调用 GMP OpenAPI，**不适用**于 GMP 推送 callback_url 的入站 webhook。
 2. 不允许默认改回强制鉴权。
 3. `verify_signature` 逻辑保留，通过开关控制。
+
+### 2026-07-27 代码级修正（缺签名头放行）
+
+2026-06-13 的原方案只在开关层关闭鉴权；`APP_ENV=production` 时 `is_douyin_webhook_auth_required()` 仍会无视 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false` 强制返回 true，导致线上 production 环境再次对抖音 GMP 无签名回调返回 401（nginx 访问日志确认 `POST /webhook/douyin 401`，来源字节机房 IP）。
+
+本次将缺签名头行为从开关级提升到代码级：`verify_signature()` 缺少 `X-Auth-Timestamp` 或 `Authorization` 时，不再抛 401，改为记录 warning 后放行；携带签名头时仍强校验 SHA256。鉴权由 nginx 上游 IP 白名单或路径 token 承担（待补），应用层不再因缺头误杀抖音 GMP 真实回调。
 
 ## 授权返回链接（与事件回调无关）
 
@@ -114,9 +120,9 @@ python -m pytest tests/test_douyin_sync.py tests/test_douyin_webhook.py -v
 - `false` + 兼容路径无签名 → 200 + 创建线索
 - `false` + 跨路径幂等（共享 event_key）
 - `true` + 正确签名 → 200
-- `true` + 无签名 → 401
+- `true` + 无签名 → 200（2026-07-27 起缺头放行，见上文代码级修正）
 - `true` + 错签名 → 401
-- `true` + 兼容路径无签名 → 401
+- `true` + 兼容路径无签名 → 200
 
 ## 问题复盘
 
@@ -126,7 +132,9 @@ python -m pytest tests/test_douyin_sync.py tests/test_douyin_webhook.py -v
 
 **原因**：未区分"外部系统主动调用 GMP API"与"GMP 推送事件到 callback_url"。
 
-**修复**：新增 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`，默认关闭入站强制鉴权。
+**修复（2026-06-13）**：新增 `DOUYIN_WEBHOOK_AUTH_REQUIRED=false`，默认关闭入站强制鉴权。
+
+**修复（2026-07-27）**：`verify_signature()` 缺签名头从抛 401 改为记 warning 放行，解决 production 环境强制验签下 GMP 无签名回调被 401 的问题。
 
 **状态**：已修复，线上日志验证通过。
 

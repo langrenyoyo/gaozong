@@ -4,7 +4,8 @@
 验签、解析、幂等去重、写入 douyin_leads。
 
 与 douyinAPI 的区别：
-- 缺少签名头必须 401（修复 douyinAPI 的签名跳过漏洞）
+- 抖音 GMP 回调确认不携带签名头，缺少签名头时放行（鉴权由 nginx 字节机房
+  IP 白名单承担，见 nginx /webhook/ location 的 allow 段）；携带签名头时仍强校验
 - 不创建 conversation/message 表，信息存入 douyin_leads.raw_data
 - 复用 auto_wechat 的 assign_service / reply_check / wechat_task
 """
@@ -63,20 +64,22 @@ def verify_signature(
     timestamp_str: str | None,
     signature: str | None,
 ) -> None:
-    """校验 GMP Webhook 签名
+    """校验 GMP Webhook 签名（可选）
 
-    规则：SHA256(SECRET_KEY + body + "-" + timestamp)
-    必须同时提供 timestamp 和 signature，否则拒绝。
+    抖音 GMP 回调确认不携带签名头，缺少签名头时放行（鉴权由 nginx 字节机房
+    IP 白名单承担，见 nginx /webhook/ location 的 allow 段）。
+    若请求携带签名头，则强校验 SHA256(SECRET_KEY + body + "-" + timestamp)，
     时间戳漂移超过 DY_ALLOWED_DRIFT_SECONDS 秒则拒绝。
 
     Raises:
-        WebhookSignatureError: 签名校验失败
+        WebhookSignatureError: 携带签名头但校验失败
     """
     if not timestamp_str or not signature:
-        raise WebhookSignatureError(
-            "缺少签名头 X-Auth-Timestamp 或 Authorization",
-            status_code=401,
+        # 抖音 GMP 回调不带签名，缺头放行；鉴权由 nginx IP 白名单承担
+        logger.warning(
+            "webhook 缺少签名头，抖音 GMP 回调放行 stage=verify_signature"
         )
+        return
 
     if not DY_SECRET_KEY:
         raise WebhookSignatureError(

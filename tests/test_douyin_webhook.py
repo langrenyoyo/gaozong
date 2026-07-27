@@ -207,22 +207,18 @@ def test_verify_signature_success():
 
 
 def test_verify_signature_missing_headers():
-    """无签名头 → 401"""
-    try:
-        verify_signature(b'{"event":"test"}', None, None)
-        assert False, "应抛出 WebhookSignatureError"
-    except WebhookSignatureError as e:
-        assert e.status_code == 401
-        assert "缺少签名头" in e.message
+    """无签名头（抖音 GMP 回调）→ 放行
+
+    抖音 GMP 回调确认不携带签名头，缺头放行，鉴权由 nginx IP 白名单承担。
+    """
+    # 不抛异常即通过
+    verify_signature(b'{"event":"test"}', None, None)
 
 
 def test_verify_signature_missing_timestamp():
-    """只有 Authorization，缺少 X-Auth-Timestamp → 401"""
-    try:
-        verify_signature(b'{"event":"test"}', None, "some_signature")
-        assert False
-    except WebhookSignatureError as e:
-        assert e.status_code == 401
+    """只有 Authorization 缺 X-Auth-Timestamp → 放行（抖音 GMP 场景）"""
+    # 缺任一签名头即放行
+    verify_signature(b'{"event":"test"}', None, "some_signature")
 
 
 def test_verify_signature_wrong_signature():
@@ -980,18 +976,23 @@ def test_webhook_api_auth_required_success():
 
 
 def test_webhook_api_auth_required_no_signature():
-    """auth_required=true：POST /integrations/douyin/webhook 无签名头 → 401"""
+    """auth_required=true：POST /integrations/douyin/webhook 无签名头 → 放行
+
+    抖音 GMP 回调不带签名，缺头放行；鉴权由 nginx 上游承担。
+    """
     client = _api_client()
+    payload = _sample_payload(from_user_id=f"no_sig_api_{int(time.time())}")
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
          patch("app.config.APP_ENV", "development"):
         resp = client.post(
             "/integrations/douyin/webhook",
-            data=b'{"event":"test"}',
+            data=body_text.encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 def test_webhook_api_auth_required_wrong_signature():
@@ -1018,22 +1019,24 @@ def test_webhook_api_auth_required_wrong_signature():
 
 
 def test_webhook_legacy_api_auth_required_no_signature():
-    """auth_required=true：POST /webhook/douyin 无签名头 → 401"""
+    """auth_required=true：POST /webhook/douyin 无签名头 → 放行"""
     client = _api_client()
+    payload = _sample_payload(from_user_id=f"no_sig_legacy_{int(time.time())}")
+    body_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     with patch("app.config.DOUYIN_WEBHOOK_AUTH_REQUIRED", True), \
          patch("app.config.APP_ENV", "development"):
         resp = client.post(
             "/webhook/douyin",
-            data=b'{"event":"test"}',
+            data=body_text.encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 def test_webhook_production_forces_auth_when_config_false():
-    """production：即使 DOUYIN_WEBHOOK_AUTH_REQUIRED=false，无签名也必须拒绝"""
+    """production：抖音 GMP 回调不带签名，缺头放行（鉴权由 nginx 上游承担）"""
     client = _api_client()
 
     payload = _sample_payload(from_user_id=f"prod_noauth_{int(time.time())}")
@@ -1047,7 +1050,7 @@ def test_webhook_production_forces_auth_when_config_false():
             headers={"Content-Type": "application/json"},
         )
 
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
 def test_webhook_production_missing_secret_rejects_request():
@@ -1074,7 +1077,7 @@ def test_webhook_production_missing_secret_rejects_request():
 
 
 def test_webhook_both_paths_force_auth_in_production():
-    """production：两个 webhook 路径都不能绕过验签"""
+    """production：抖音 GMP 回调不带签名，两个路径都缺头放行"""
     client = _api_client()
 
     payload = _sample_payload(from_user_id=f"prod_paths_{int(time.time())}")
@@ -1090,8 +1093,8 @@ def test_webhook_both_paths_force_auth_in_production():
             headers=headers,
         )
 
-    assert legacy_resp.status_code == 401
-    assert main_resp.status_code == 401
+    assert legacy_resp.status_code == 200
+    assert main_resp.status_code == 200
 
 
 def test_webhook_im_send_msg_matching_ai_auto_send_does_not_mark_manual_takeover():
