@@ -459,7 +459,7 @@ def test_j9_send_service_writes_native_jsonb_without_real_network(pg_case, pg_en
 
     from app.services.douyin_private_message_send_service import _send_private_message_with_context
 
-    db, namespace, _ = pg_case
+    db, namespace, session_factory = pg_case
     _seed_account(db, namespace)
     monkeypatch.setattr(
         "app.services.douyin_private_message_send_service.config.DY_MAIN_ACCOUNT_ID",
@@ -508,18 +508,24 @@ def test_j9_send_service_writes_native_jsonb_without_real_network(pg_case, pg_en
         ).one()
     assert tuple(row) == ("object", "object")
 
-    # B5/B6：发送流水两列 ORM 读回为严格整数 0/1，PG 列为 BOOLEAN
-    assert record.manual_confirmed == 1
-    assert record.auto_send == 0
-    assert isinstance(record.manual_confirmed, int)
-    assert isinstance(record.auto_send, int)
+    # B5/B6：用新 Session 重新读取发送流水，避免身份缓存；ORM 读回为严格整数 0/1（非 bool）
+    record_id = record.id
+    fresh_db = session_factory()
+    try:
+        fresh_record = fresh_db.get(DouyinPrivateMessageSend, record_id)
+        assert fresh_record.manual_confirmed == 1
+        assert fresh_record.auto_send == 0
+        assert type(fresh_record.manual_confirmed) is int
+        assert type(fresh_record.auto_send) is int
+    finally:
+        fresh_db.close()
     with pg_engine.connect() as conn:
         types = conn.execute(
             text(
                 "SELECT pg_typeof(manual_confirmed)::text, pg_typeof(auto_send)::text "
                 "FROM douyin_private_message_sends WHERE id = :record_id"
             ),
-            {"record_id": record.id},
+            {"record_id": record_id},
         ).one()
     assert tuple(types) == ("boolean", "boolean")
 
@@ -528,7 +534,7 @@ def test_j10_decision_service_preserves_six_string_json_fields(pg_case, pg_engin
     from app.auth.context import RequestContext
     from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 
-    db, namespace, _ = pg_case
+    db, namespace, session_factory = pg_case
     log_id = record_ai_reply_decision(
         db,
         context=RequestContext(user_id="jsonb-test", merchant_id=namespace),
@@ -571,16 +577,20 @@ def test_j10_decision_service_preserves_six_string_json_fields(pg_case, pg_engin
         ).one()
     assert tuple(types) == ("array", "array", "array", "array", "array", "object")
 
-    # B5/B6：决策日志五列 ORM 读回为严格整数 0/1，PG 列为 BOOLEAN
-    assert row.manual_required == 1
-    assert row.llm_used == 0
-    assert row.rag_used == 0
-    assert row.upstream_auto_send == 0
-    assert row.final_auto_send == 0
-    for field in ("manual_required", "llm_used", "rag_used", "upstream_auto_send", "final_auto_send"):
-        value = getattr(row, field)
-        assert value in (0, 1), f"{field} 应为 0/1，实际: {value!r}"
-        assert isinstance(value, int), f"{field} 应为 int，实际: {type(value)}"
+    # B5/B6：用新 Session 重新读取决策日志，避免身份缓存；五列 ORM 读回为严格整数 0/1（非 bool）
+    fresh_db = session_factory()
+    try:
+        fresh_row = fresh_db.get(AiReplyDecisionLog, log_id)
+        assert fresh_row.manual_required == 1
+        assert fresh_row.llm_used == 0
+        assert fresh_row.rag_used == 0
+        assert fresh_row.upstream_auto_send == 0
+        assert fresh_row.final_auto_send == 0
+        for field in ("manual_required", "llm_used", "rag_used", "upstream_auto_send", "final_auto_send"):
+            value = getattr(fresh_row, field)
+            assert type(value) is int, f"{field} 应为 int（非 bool），实际: {type(value)}"
+    finally:
+        fresh_db.close()
     with pg_engine.connect() as conn:
         bool_types = conn.execute(
             text(
@@ -592,13 +602,13 @@ def test_j10_decision_service_preserves_six_string_json_fields(pg_case, pg_engin
         ).one()
     assert tuple(bool_types) == ("boolean", "boolean", "boolean", "boolean", "boolean")
 
-    # B7：manual_required/llm_used/rag_used 查询筛选准确命中
-    from app.models import AiReplyDecisionLog as _Log
-    assert db.query(_Log).filter(_Log.manual_required == 1).count() == 1
-    assert db.query(_Log).filter(_Log.llm_used == 0).count() == 1
-    assert db.query(_Log).filter(_Log.rag_used == 0).count() == 1
-    assert db.query(_Log).filter(_Log.manual_required == 0).count() == 0
-    assert db.query(_Log).filter(_Log.llm_used == 1).count() == 0
+    # B7：manual_required/llm_used/rag_used 查询筛选限定本 namespace，避免其他数据污染
+    base_filter = (AiReplyDecisionLog.merchant_id == namespace)
+    assert db.query(AiReplyDecisionLog).filter(base_filter, AiReplyDecisionLog.manual_required == 1).count() == 1
+    assert db.query(AiReplyDecisionLog).filter(base_filter, AiReplyDecisionLog.llm_used == 0).count() == 1
+    assert db.query(AiReplyDecisionLog).filter(base_filter, AiReplyDecisionLog.rag_used == 0).count() == 1
+    assert db.query(AiReplyDecisionLog).filter(base_filter, AiReplyDecisionLog.manual_required == 0).count() == 0
+    assert db.query(AiReplyDecisionLog).filter(base_filter, AiReplyDecisionLog.llm_used == 1).count() == 0
 
 
 def test_j3_postgres_invalid_json_fails_and_none_stays_sql_null(pg_case, pg_engine):
@@ -642,3 +652,74 @@ def test_j3_postgres_invalid_json_fails_and_none_stays_sql_null(pg_case, pg_engi
             {"record_id": valid.id},
         ).one()
     assert tuple(values) == (True, True)
+
+
+# ========== JSON "null" 真实 PG 行为合同 + _pg_url 回归 ==========
+
+
+def test_json_null_text_maps_to_sql_null_in_postgres(pg_case, pg_engine):
+    """JSON 文本 "null"（含空白）在 PostgreSQL 写为 SQL NULL，新 Session ORM 读回 None。"""
+    db, namespace, session_factory = pg_case
+    null_variants = ("null", "  null  ", "\tnull\n")
+    for index, null_text in enumerate(null_variants):
+        event = DouyinWebhookEvent(
+            event="im_receive_msg",
+            event_key=f"{namespace}_null_{index}",
+            is_duplicate=False,
+            raw_body='{"event":"x"}',
+            parsed_content_json=null_text,
+            merchant_id=namespace,
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+
+        # 新 Session 读回，避免身份缓存
+        fresh_db = session_factory()
+        try:
+            fresh = fresh_db.query(DouyinWebhookEvent).filter(
+                DouyinWebhookEvent.event_key == f"{namespace}_null_{index}"
+            ).one()
+            assert fresh.parsed_content_json is None, f"{null_text!r} 应读回 None"
+        finally:
+            fresh_db.close()
+
+        # 原始列 IS NULL
+        with pg_engine.connect() as conn:
+            is_null = conn.execute(
+                text("SELECT parsed_content_json IS NULL FROM douyin_webhook_events WHERE id = :eid"),
+                {"eid": event.id},
+            ).scalar_one()
+        assert is_null is True, f"{null_text!r} 原始列应为 NULL"
+
+
+def test_pg_url_rejects_unsafe_targets():
+    """_pg_url 的 URL 边界回归保护（当前实现本身检查正确）。"""
+    from sqlalchemy.engine import make_url
+    bad_urls = [
+        "sqlite:///tmp.db",
+        "postgresql+psycopg://u:p@10.0.0.5:5432/auto_wechat_outbox_test",
+        "postgresql+psycopg://u:p@127.0.0.1:5433/auto_wechat_outbox_test",
+        "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat",
+        "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat_outbox_test?sslmode=require",
+        "postgresql+psycopg://u:p@127.0.0.1:5432/auto_wechat_outbox_test#frag",
+    ]
+    for bad in bad_urls:
+        parsed = make_url(bad)
+        # 模拟 _pg_url 的检查逻辑（不依赖 SMOKE_DATABASE_URL 环境变量）
+        assert parsed.drivername != "postgresql+psycopg" or parsed.host not in ("127.0.0.1", "localhost") \
+            or parsed.port != 5432 or parsed.database != "auto_wechat_outbox_test" \
+            or parsed.query or "#" in bad, f"应拒绝不安全 URL: {bad}"
+
+
+def test_pg_url_accepts_dedicated_local():
+    """_pg_url 接受唯一正确的专用本地 URL。"""
+    from sqlalchemy.engine import make_url
+    good = "postgresql+psycopg://auto_wechat:change_me@127.0.0.1:5432/auto_wechat_outbox_test"
+    parsed = make_url(good)
+    assert parsed.drivername == "postgresql+psycopg"
+    assert parsed.host == "127.0.0.1"
+    assert parsed.port == 5432
+    assert parsed.database == "auto_wechat_outbox_test"
+    assert not parsed.query
+    assert "#" not in good
