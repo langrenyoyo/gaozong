@@ -421,3 +421,153 @@ def test_b2_b3_integer_boolean_bind_contract():
             col.process_bind_param(bad, pg)
         with pytest.raises(ValueError):
             col.process_bind_param(bad, sq)
+
+
+# ========== Task 5: 真实写入路径与失败边界 ==========
+
+
+def test_j9_send_service_writes_native_jsonb_without_real_network(pg_case, pg_engine, monkeypatch):
+    from datetime import datetime
+    from unittest.mock import patch
+
+    from app.services.douyin_private_message_send_service import _send_private_message_with_context
+
+    db, namespace, _ = pg_case
+    _seed_account(db, namespace)
+    monkeypatch.setattr(
+        "app.services.douyin_private_message_send_service.config.DY_MAIN_ACCOUNT_ID",
+        1,
+    )
+    send_context = {
+        "conversation_short_id": f"{namespace}_send_conversation",
+        "conversation_id": f"{namespace}_send_conversation",
+        "server_message_id": f"{namespace}_incoming_message",
+        "msg_id": f"{namespace}_incoming_message",
+        "account_open_id": f"{namespace}_account",
+        "customer_open_id": f"{namespace}_customer",
+        "message_create_time": datetime.now(),
+        "scene": "im_receive_msg",
+    }
+    fake_result = {
+        "payload": {"code": 0, "data": {"msg_id": f"{namespace}_upstream"}}
+    }
+
+    with patch(
+        "app.services.douyin_private_message_send_service.call_douyin_openapi",
+        return_value=fake_result,
+    ) as fake_call:
+        result = _send_private_message_with_context(
+            db,
+            content="JSONB 测试回复",
+            send_context=send_context,
+            manual_confirmed=True,
+            auto_send=False,
+            send_source="manual",
+            operator_id="jsonb_parity_test",
+        )
+
+    assert fake_call.call_count == 1
+    record = db.get(DouyinPrivateMessageSend, result["record_id"])
+    assert json.loads(record.request_body_json)["content"] == "JSONB 测试回复"
+    assert json.loads(record.response_body_json)["code"] == 0
+
+    with pg_engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT jsonb_typeof(request_body_json), jsonb_typeof(response_body_json) "
+                "FROM douyin_private_message_sends WHERE id = :record_id"
+            ),
+            {"record_id": record.id},
+        ).one()
+    assert tuple(row) == ("object", "object")
+
+
+def test_j10_decision_service_preserves_six_string_json_fields(pg_case, pg_engine):
+    from app.auth.context import RequestContext
+    from app.services.ai_reply_decision_log_service import record_ai_reply_decision
+
+    db, namespace, _ = pg_case
+    log_id = record_ai_reply_decision(
+        db,
+        context=RequestContext(user_id="jsonb-test", merchant_id=namespace),
+        conversation_id=f"{namespace}_decision_conversation",
+        account_open_id=f"{namespace}_account",
+        latest_message="测试消息",
+        agent_id="jsonb-agent",
+        agent_name="JSONB 智能体",
+        allowed_category_keys=["base"],
+        upstream_raw_result={"reply_text": "回复", "source": "test"},
+        final_result={
+            "reply_text": "回复",
+            "manual_required": True,
+            "risk_flags": ["jsonb_risk"],
+            "tags": ["jsonb_tag"],
+            "rag_sources": [{"id": "source-1"}],
+            "source_chunks": [{"id": "chunk-1"}],
+        },
+        upstream_auto_send=False,
+    )
+    assert log_id is not None
+
+    row = db.get(AiReplyDecisionLog, log_id)
+    assert json.loads(row.risk_flags_json) == ["jsonb_risk"]
+    assert json.loads(row.tags_json) == ["jsonb_tag"]
+    assert json.loads(row.rag_sources_json) == [{"id": "source-1"}]
+    assert json.loads(row.source_chunks_json) == [{"id": "chunk-1"}]
+    assert json.loads(row.allowed_category_keys_json) == ["base"]
+    assert json.loads(row.raw_response_json)["source"] == "test"
+
+    with pg_engine.connect() as conn:
+        types = conn.execute(
+            text(
+                "SELECT jsonb_typeof(risk_flags_json), jsonb_typeof(tags_json), "
+                "jsonb_typeof(rag_sources_json), jsonb_typeof(source_chunks_json), "
+                "jsonb_typeof(allowed_category_keys_json), jsonb_typeof(raw_response_json) "
+                "FROM ai_reply_decision_logs WHERE id = :log_id"
+            ),
+            {"log_id": log_id},
+        ).one()
+    assert tuple(types) == ("array", "array", "array", "array", "array", "object")
+
+
+def test_j3_postgres_invalid_json_fails_and_none_stays_sql_null(pg_case, pg_engine):
+    from sqlalchemy.exc import StatementError
+
+    db, namespace, _ = pg_case
+    invalid = DouyinPrivateMessageSend(
+        main_account_id=1,
+        conversation_short_id=f"{namespace}_invalid",
+        server_message_id=f"{namespace}_invalid_message",
+        from_user_id=f"{namespace}_account",
+        to_user_id=f"{namespace}_customer",
+        content="测试",
+        request_body_json="{bad",
+    )
+    db.add(invalid)
+    with pytest.raises(StatementError) as exc_info:
+        db.commit()
+    assert isinstance(exc_info.value.orig, json.JSONDecodeError)
+    db.rollback()
+
+    valid = DouyinPrivateMessageSend(
+        main_account_id=1,
+        conversation_short_id=f"{namespace}_null",
+        server_message_id=f"{namespace}_null_message",
+        from_user_id=f"{namespace}_account",
+        to_user_id=f"{namespace}_customer",
+        content="测试",
+        request_body_json=None,
+        response_body_json=None,
+    )
+    db.add(valid)
+    db.commit()
+
+    with pg_engine.connect() as conn:
+        values = conn.execute(
+            text(
+                "SELECT request_body_json IS NULL, response_body_json IS NULL "
+                "FROM douyin_private_message_sends WHERE id = :record_id"
+            ),
+            {"record_id": valid.id},
+        ).one()
+    assert tuple(values) == (True, True)
