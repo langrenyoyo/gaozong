@@ -8,7 +8,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -715,32 +715,48 @@ def test_p8_stale_owner_guarded_update_returns_zero(tmp_path):
         with _isolated_namespace(engine, namespace):
             seeded = _run_worker(tmp_path, url, "seed", namespace=namespace, status="processing")
             run_id = seeded["run_id"]
-            # Session B 原子更新为 new-owner 与新的未过期租约并提交
+            # Session B 原子接管：写入 new-owner、新租约（固定未过期时间）与新 Worker 诊断标记
+            takeover_expiry = "2099-01-01 00:00:00+00"
             with engine.begin() as conn:
                 conn.execute(
                     text(
                         "UPDATE ai_auto_reply_runs SET lease_owner='new-owner', "
-                        "lease_expires_at=now() + interval '300 seconds' WHERE id=:run_id"
+                        "lease_expires_at=:expiry, block_reason='pg_new_owner_state' "
+                        "WHERE id=:run_id"
                     ),
-                    {"run_id": run_id},
+                    {"run_id": run_id, "expiry": takeover_expiry},
                 )
-            # 全新 Worker 用旧 owner 执行 guarded-block-once
+            # 保存 Session B 接管后的 lease_expires_at 精确值
+            with engine.connect() as conn:
+                takeover_row = conn.execute(
+                    text("SELECT lease_expires_at FROM ai_auto_reply_runs WHERE id=:run_id"),
+                    {"run_id": run_id},
+                ).mappings().one()
+            takeover_lease_expires_at = takeover_row["lease_expires_at"]
+            # 全新 Worker 用旧 owner 执行 guarded-block-once（尝试写 blocked 终态）
             stale = _run_worker(
                 tmp_path, url, "guarded-block-once", namespace=namespace,
                 run_id=run_id, lease_owner="old-owner",
             )
             assert stale["rowcount"] == 0
+            # 旧 Worker 执行后重新读取，验证未被覆盖
             with engine.connect() as conn:
                 row = conn.execute(
                     text(
-                        "SELECT status, lease_owner, block_reason FROM ai_auto_reply_runs WHERE id=:run_id"
+                        "SELECT status, lease_owner, lease_expires_at, block_reason "
+                        "FROM ai_auto_reply_runs WHERE id=:run_id"
                     ),
                     {"run_id": run_id},
                 ).mappings().one()
-            # 仍为 new-owner、新租约与 processing 诊断值，未被旧 worker 覆盖
+            # status/lease_owner 保持新 Worker 的值，未被旧 worker 覆盖
             assert row["status"] == "processing"
             assert row["lease_owner"] == "new-owner"
-            assert row["block_reason"] is None
+            # lease_expires_at 与接管后的值完全一致且未过期
+            assert row["lease_expires_at"] == takeover_lease_expires_at
+            assert row["lease_expires_at"] > datetime.now(timezone.utc)
+            # block_reason 保持新 Worker 写入的固定诊断标记，未被旧 worker 的
+            # "pg_stale_worker_must_not_write" 覆盖
+            assert row["block_reason"] == "pg_new_owner_state"
     finally:
         engine.dispose()
 
