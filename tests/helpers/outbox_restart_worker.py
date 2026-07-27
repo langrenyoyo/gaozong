@@ -15,7 +15,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import false, insert, text, true
 from sqlalchemy.engine import make_url
 
 # 子进程需把项目根加入 sys.path，确保 import app.* 可用（cwd=ROOT 但脚本路径在 tests/helpers 下）
@@ -121,11 +121,15 @@ def _append_audit(path: str, payload: dict) -> None:
 def _claim_test_webhook_event(db, *, event_key: str, account_open_id: str):
     """复用 webhook 原子占位 helper 创建测试事件。
 
-    走 ``claim_webhook_event`` 的跨方言 JSONB CAST 路径：PostgreSQL 下 raw_body
-    被显式 CAST 为 JSONB，存为对象而非字符串标量；SQLite 下走同语义 sqlite_insert，
-    raw_body 仍为 TEXT 字符串。禁止用 ``db.add(DouyinWebhookEvent(raw_body=str))``
-    直接 INSERT，那会在 PG JSONB 列上产生双重编码。占位必须胜出（event_key 唯一）。
-    不修改 webhook 业务服务或 ORM 字段，仅供测试夹具使用。
+    走 ``claim_webhook_event`` 的跨方言 CAST 路径：解决 ORM ``Column(Text)`` 在
+    PostgreSQL 下编译为 ``::VARCHAR`` 触发 ``jsonb`` 列 ``DatatypeMismatch`` 的类型
+    错误（占位 helper 对 raw_body/parsed_content_json 显式 ``cast(..., JSONB)``）。
+    SQLite 下走同语义 ``sqlite_insert``，raw_body 为 TEXT 字符串。
+
+    注意：webhook 业务路径仍存在 JSON 字符串标量写入 jsonb 列的双重编码问题
+    （``persist_webhook_event`` 等），该问题归独立 parity 任务统一返修，本 helper
+    不声称已把 raw_body 存为对象，仅规避测试夹具占位的类型错误。占位必须胜出
+    （event_key 唯一）。不修改 webhook 业务服务或 ORM 字段，仅供测试夹具使用。
     """
     from app.services.douyin_webhook_idempotency_service import claim_webhook_event
 
@@ -336,29 +340,26 @@ def main() -> int:
             db.commit()
             db.refresh(run)
             if args.with_sent_record:
-                # P7 对账夹具：仅写 P7 对账所需字段，省略 request_body_json/response_body_json
-                # 两个范围外 JSONB 字段（其统一返修复在独立任务），禁止任意 SQL 参数入口。
-                # 用 raw text INSERT 而非 ORM sa_insert：PG 下 manual_confirmed/auto_send 列为
-                # boolean（ORM 声明 Integer，属范围外字段类型不一致），省略这两列让其取列默认值，
-                # 避开范围外类型 cast 失败。动作固定，不接受任意 SQL 参数。
+                # P7 对账夹具：用 Core insert 省略 request_body_json/response_body_json
+                # 两个范围外 JSONB 字段（其统一返修复在独立任务），让 DB 用列默认 NULL，
+                # 避免 ORM Text 编译 ::VARCHAR 触发 jsonb 类型不匹配。manual_confirmed/
+                # auto_send 用 SQLAlchemy true()/false() 字面量（方言适配：PG→boolean、
+                # SQLite→0/1），scene/send_source 显式设。动作固定，不接受任意 SQL 参数。
                 db.execute(
-                    text(
-                        "INSERT INTO douyin_private_message_sends "
-                        "(main_account_id, conversation_short_id, server_message_id, "
-                        " from_user_id, to_user_id, content, status, auto_reply_run_id) "
-                        "VALUES (:main_account_id, :conversation_short_id, :server_message_id, "
-                        "        :from_user_id, :to_user_id, :content, :status, :auto_reply_run_id)"
-                    ),
-                    {
-                        "main_account_id": 1,
-                        "conversation_short_id": "restart-conversation",
-                        "server_message_id": f"restart-server-{run.id}",
-                        "from_user_id": account_open_id,
-                        "to_user_id": "restart_test_customer",
-                        "content": "restart-test-content",
-                        "status": "sent",
-                        "auto_reply_run_id": run.id,
-                    },
+                    insert(DouyinPrivateMessageSend).values(
+                        main_account_id=1,
+                        conversation_short_id="restart-conversation",
+                        server_message_id=f"restart-server-{run.id}",
+                        from_user_id=account_open_id,
+                        to_user_id="restart_test_customer",
+                        content="restart-test-content",
+                        scene="im_reply_msg",
+                        send_source="ai_auto",
+                        manual_confirmed=true(),
+                        auto_send=false(),
+                        status="sent",
+                        auto_reply_run_id=run.id,
+                    )
                 )
                 db.commit()
             _emit(pid=os.getpid(), action=args.action, run_id=run.id, status=run.status)

@@ -464,3 +464,326 @@ def test_p_namespace_cleanup_includes_webhook_events(tmp_path):
     finally:
         engine.dispose()
 
+
+# ========== P4 20 路 MVCC 竞争 / P5-P9 恢复对账与防覆盖 ==========
+
+
+def _run_claim_race(tmp_path: Path, url: str, namespace: str, workers: int = 20):
+    """20 个全新 Python 子进程共享文件门禁，同时 claim 同一 pending run。"""
+    tmp_path.mkdir(parents=True, exist_ok=False)
+    start_file = tmp_path / "start"
+    processes = []
+    ready_files = []
+    try:
+        for index in range(workers):
+            ready = tmp_path / f"ready-{index}"
+            ready_files.append(ready)
+            process = subprocess.Popen(
+                [
+                    sys.executable, str(WORKER),
+                    "--postgres-smoke",
+                    "--namespace", namespace,
+                    "--log", str(tmp_path / f"worker-{index}.log"),
+                    "--audit", str(tmp_path / "audit.jsonl"),
+                    "--action", "claim-once",
+                    "--ready-file", str(ready),
+                    "--start-file", str(start_file),
+                ],
+                cwd=ROOT,
+                env=_worker_env(url),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            processes.append(process)
+        deadline = time.monotonic() + 15
+        while not all(path.exists() for path in ready_files):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("20 路 claim ready gate timeout")
+            time.sleep(0.02)
+        start_file.write_text("start", encoding="utf-8")
+        payloads = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=30)
+            assert process.returncode == 0, stderr
+            payloads.append(json.loads([line for line in stdout.splitlines() if line][-1]))
+        return payloads
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+
+def test_p4_twenty_concurrent_claim_single_winner_ten_rounds(tmp_path):
+    url = _pg_url()
+    engine = create_engine(url)
+    try:
+        for round_index in range(10):
+            namespace = _namespace()
+            round_dir = tmp_path / f"round-{round_index}"
+            with _isolated_namespace(engine, namespace):
+                seeded = _run_worker(round_dir.parent, url, "seed", namespace=namespace)
+                run_id = seeded["run_id"]
+                payloads = _run_claim_race(round_dir, url, namespace)
+                winners = [payload for payload in payloads if payload["run_ids"]]
+                assert len(winners) == 1, f"round {round_index}: 期望 1 个胜出，实际 {len(winners)}"
+                assert winners[0]["run_ids"] == [run_id]
+                assert len({owner for payload in winners for owner in payload["lease_owners"]}) == 1
+                with engine.connect() as conn:
+                    row = conn.execute(
+                        text(
+                            "SELECT status, attempt_count, lease_owner FROM ai_auto_reply_runs "
+                            "WHERE id=:run_id"
+                        ),
+                        {"run_id": run_id},
+                    ).mappings().one()
+                assert row["status"] == "processing"
+                assert row["attempt_count"] == 1
+                assert row["lease_owner"]
+    finally:
+        engine.dispose()
+
+
+def test_p5_claim_crash_recovers_after_lease_expiry(tmp_path):
+    url = _pg_url()
+    namespace = _namespace()
+    engine = create_engine(url)
+    try:
+        with _isolated_namespace(engine, namespace):
+            crash = _run_worker(tmp_path, url, "claim-crash", namespace=namespace, expected_code=23)
+            run_id = crash["run_id"]
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT status, lease_owner FROM ai_auto_reply_runs WHERE id=:run_id"),
+                    {"run_id": run_id},
+                ).mappings().one()
+            assert row["status"] == "processing"
+            assert row["lease_owner"]
+            # 租约未过期时第二个 claim-once 返回空（需完整门禁文件）
+            race_dir = tmp_path / "p5-second-claim"
+            race_dir.mkdir(parents=True, exist_ok=False)
+            start_file = race_dir / "start"
+            ready_file = race_dir / "ready-0"
+            # 启动 claim-once 子进程并等待其 ready
+            proc = subprocess.Popen(
+                [
+                    sys.executable, str(WORKER),
+                    "--postgres-smoke", "--namespace", namespace,
+                    "--log", str(race_dir / "worker.log"),
+                    "--audit", str(race_dir / "audit.jsonl"),
+                    "--action", "claim-once",
+                    "--ready-file", str(ready_file),
+                    "--start-file", str(start_file),
+                ],
+                cwd=ROOT, env=_worker_env(url),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not ready_file.exists():
+                    if time.monotonic() >= deadline:
+                        proc.kill()
+                        raise TimeoutError("second claim ready timeout")
+                    time.sleep(0.02)
+                start_file.write_text("start", encoding="utf-8")
+                stdout, stderr = proc.communicate(timeout=30)
+                assert proc.returncode == 0, stderr
+                second = json.loads([line for line in stdout.splitlines() if line][-1])
+                assert second["run_ids"] == []
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            # 推进租约过期（UTC 过去时间）
+            with engine.begin() as conn:
+                conn.execute(
+                    text("UPDATE ai_auto_reply_runs SET lease_expires_at = '2000-01-01 00:00:00+00' WHERE id=:run_id"),
+                    {"run_id": run_id},
+                )
+            cycled = _run_worker(tmp_path, url, "cycle", namespace=namespace)
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT status, lease_owner, lease_expires_at, last_failure_stage "
+                        "FROM ai_auto_reply_runs WHERE id=:run_id"
+                    ),
+                    {"run_id": run_id},
+                ).mappings().one()
+            assert row["status"] == "blocked"
+            assert row["lease_owner"] is None
+            assert row["lease_expires_at"] is None
+            processed = [r for r in _audit_rows(tmp_path) if r["event"] == "processed"]
+            assert len(processed) == 1
+            assert processed[0]["recovered_failure_stage"] == "lease_expired"
+            assert cycled["external_calls"] == 0
+    finally:
+        engine.dispose()
+
+
+def test_p6_retry_wait_respects_due_time_across_processes(tmp_path):
+    url = _pg_url()
+    namespace = _namespace()
+    engine = create_engine(url)
+    try:
+        with _isolated_namespace(engine, namespace):
+            seeded = _run_worker(
+                tmp_path, url, "seed", namespace=namespace, status="retry_wait", timing="future",
+            )
+            not_due = _run_worker(tmp_path, url, "cycle", namespace=namespace)
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT status FROM ai_auto_reply_runs WHERE id=:run_id"),
+                    {"run_id": seeded["run_id"]},
+                ).mappings().one()
+            assert row["status"] == "retry_wait"
+            assert _audit_rows(tmp_path) == []
+            assert not_due["external_calls"] == 0
+            # 推进到期（UTC 过去时间）
+            with engine.begin() as conn:
+                conn.execute(
+                    text("UPDATE ai_auto_reply_runs SET next_attempt_at = '2000-01-01 00:00:00+00' WHERE id=:run_id"),
+                    {"run_id": seeded["run_id"]},
+                )
+            due = _run_worker(tmp_path, url, "cycle", namespace=namespace)
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT status FROM ai_auto_reply_runs WHERE id=:run_id"),
+                    {"run_id": seeded["run_id"]},
+                ).mappings().one()
+            assert row["status"] == "blocked"
+            processed = [r for r in _audit_rows(tmp_path) if r["event"] == "processed"]
+            assert len(processed) == 1
+            assert due["external_calls"] == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("with_sent_record", "expected_status", "expected_failure_stage"),
+    [
+        (True, "sent", None),
+        (False, "send_unknown", "send_authorized_crash_unknown"),
+    ],
+)
+def test_p7_send_authorized_reconciliation(tmp_path, with_sent_record, expected_status, expected_failure_stage):
+    url = _pg_url()
+    namespace = _namespace()
+    engine = create_engine(url)
+    try:
+        with _isolated_namespace(engine, namespace):
+            seeded = _run_worker(
+                tmp_path, url, "seed", namespace=namespace,
+                status="send_authorized", timing="expired",
+                with_sent_record=with_sent_record,
+            )
+            cycled = _run_worker(tmp_path, url, "cycle", namespace=namespace)
+            assert cycled["external_calls"] == 0
+            assert cycled["processed_count"] == 0
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT status, lease_owner, lease_expires_at, last_failure_stage "
+                        "FROM ai_auto_reply_runs WHERE id=:run_id"
+                    ),
+                    {"run_id": seeded["run_id"]},
+                ).mappings().one()
+            assert row["status"] == expected_status
+            assert row["lease_owner"] is None
+            assert row["lease_expires_at"] is None
+            assert row["last_failure_stage"] == expected_failure_stage
+            assert _audit_rows(tmp_path) == []
+            # P7 True 分支只能有 1 条预置 sent 流水；False 分支无流水
+            with engine.connect() as conn:
+                send_count = conn.execute(
+                    text(
+                        "SELECT count(*) FROM douyin_private_message_sends WHERE auto_reply_run_id=:run_id"
+                    ),
+                    {"run_id": seeded["run_id"]},
+                ).scalar_one()
+            assert send_count == (1 if with_sent_record else 0)
+    finally:
+        engine.dispose()
+
+
+def test_p8_stale_owner_guarded_update_returns_zero(tmp_path):
+    url = _pg_url()
+    namespace = _namespace()
+    engine = create_engine(url)
+    try:
+        with _isolated_namespace(engine, namespace):
+            seeded = _run_worker(tmp_path, url, "seed", namespace=namespace, status="processing")
+            run_id = seeded["run_id"]
+            # Session B 原子更新为 new-owner 与新的未过期租约并提交
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE ai_auto_reply_runs SET lease_owner='new-owner', "
+                        "lease_expires_at=now() + interval '300 seconds' WHERE id=:run_id"
+                    ),
+                    {"run_id": run_id},
+                )
+            # 全新 Worker 用旧 owner 执行 guarded-block-once
+            stale = _run_worker(
+                tmp_path, url, "guarded-block-once", namespace=namespace,
+                run_id=run_id, lease_owner="old-owner",
+            )
+            assert stale["rowcount"] == 0
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT status, lease_owner, block_reason FROM ai_auto_reply_runs WHERE id=:run_id"
+                    ),
+                    {"run_id": run_id},
+                ).mappings().one()
+            # 仍为 new-owner、新租约与 processing 诊断值，未被旧 worker 覆盖
+            assert row["status"] == "processing"
+            assert row["lease_owner"] == "new-owner"
+            assert row["block_reason"] is None
+    finally:
+        engine.dispose()
+
+
+def test_p9_no_unexpected_side_effects_across_all_paths(tmp_path):
+    url = _pg_url()
+    namespace = _namespace()
+    engine = create_engine(url)
+    try:
+        with _isolated_namespace(engine, namespace):
+            # 非 P7 预置场景：cycle 后发送流水必须为 0
+            seeded = _run_worker(tmp_path, url, "seed", namespace=namespace)
+            cycled = _run_worker(tmp_path, url, "cycle", namespace=namespace)
+            assert cycled["external_calls"] == 0
+            with engine.connect() as conn:
+                send_count = conn.execute(
+                    text(
+                        "SELECT count(*) FROM douyin_private_message_sends WHERE auto_reply_run_id=:run_id"
+                    ),
+                    {"run_id": seeded["run_id"]},
+                ).scalar_one()
+            assert send_count == 0
+            # audit 只允许 processed，不得出现发送事件
+            audit_events = {r.get("event") for r in _audit_rows(tmp_path)}
+            assert audit_events <= {"processed"}
+            # namespace 残留为 0（由 _isolated_namespace finally 清理并断言）
+            # 日志不得泄露真实凭据：禁止明文密码 change_me；SQLAlchemy 脱敏 url（密码为 ***）可接受
+            log_dir = tmp_path
+            for log_file in log_dir.glob("worker-*.log"):
+                log_text = log_file.read_text(encoding="utf-8", errors="ignore")
+                assert "change_me" not in log_text, f"日志含明文密码: {log_file}"
+                # 真实密码不得出现（脱敏 url 的 *** 不算）
+                assert "auto_wechat:change_me" not in log_text
+    finally:
+        engine.dispose()
+
+
+def _audit_rows(tmp_path: Path) -> list[dict]:
+    path = tmp_path / "audit.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
