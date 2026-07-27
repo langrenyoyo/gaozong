@@ -716,14 +716,15 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 
 ## 29. AI 自动回复 outbox PostgreSQL/MVCC 恢复测试（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1）
 
-最终候选 `df8644d828680a75ff955db59c546d4ba1caa729`（R1，父候选 `70f3e22b175e415ec6b1824e1e8f2e6a0a96ea6d`，含 R1-REPAIR-1/R1-REPAIR-2 返修）已通过独立测试 Test-Revision R1-T1，P1-P9、C1-C4 全部 PASS，任务级结论 PASS（2026-07-27）：
+最终候选 `df8644d828680a75ff955db59c546d4ba1caa729`（R1，Implementation-Base `70f3e22b175e415ec6b1824e1e8f2e6a0a96ea6d`，直接父提交 `08ccdac9dd3128784d150b691eb52437ae28b169`，含 R1-REPAIR-1/R1-REPAIR-2A 返修及 R2/R3 测试加固）已通过独立测试 Test-Revision R1-T1，P1-P9、C1-C4 全部 PASS，任务级结论 PASS（2026-07-27）：
 
 - 在本地专用 PostgreSQL 测试库 `auto_wechat_outbox_test`（Alembic 0016 head）验证 outbox 跨进程可见性、20 路 MVCC 领取竞争、租约恢复、发送对账与旧 Worker 防覆盖语义，全程禁止真实外部动作
 - R1-REPAIR-1 修复 0016 迁移链断裂：`down_revision` 从错误缩写 `"0015"` 修正为真实前驱 `"0015_ai_edit_material_library"`，迁移图唯一 head=0016；静态合同测试改为断言完整真实 revision 并新增 `ScriptDirectory` 图解析测试
-- R1-REPAIR-2 对齐 `AiAutoReplyRun.gate_results_json` 跨方言类型：`JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")`，SQLite 编译 JSON、PostgreSQL 编译 JSONB、`none_as_null=True`；不修 `ReturnVisitRun.gate_results_json`
+- R1-REPAIR-2A 对齐 `AiAutoReplyRun.gate_results_json` 方言感知类型：自定义 `TypeDecorator`（`impl=Text`，PostgreSQL 用 `JSONB(none_as_null=True)`、SQLite 用 `Text()`），PostgreSQL 写入前 `json.loads` 解析为对象/数组避免双重编码、读回后 `json.dumps` 重新序列化为字符串，对外保持 `str|None` 契约，`None` 写为 SQL NULL，非法 JSON 字符串在 PostgreSQL 写入前抛 `JSONDecodeError`；不修 `ReturnVisitRun.gate_results_json`（其 PG 迁移本就是 Text，一致）；R2/R3 为测试加固（P7 sent 流水夹具 Core insert 省略范围外 JSONB 列、P8 新租约与新 Worker 诊断值防覆盖断言）
 - P1 安全门合同（`--postgres-smoke`/`--namespace`/`--ready-file`/`--start-file`/`--lease-owner` CLI 暴露、`_validate_smoke_database_url` 安全门）；P2 Alembic 0016 schema（jsonb/tz 字段/索引/`alembic_version=0016`）；P3 跨进程提交可见性
 - P4 20 路子进程文件门禁 claim 连续 10 轮单胜（`attempt_count=1`/`lease_owner` 非空/胜出者 `run_ids` 唯一）；P5 `os._exit(23)` 后租约未过期不领取/过期恢复一次（`recovered_failure_stage=lease_expired`）；P6 `retry_wait` 到期边界；P7 `send_authorized` 有/无 sent 流水对账（`sent`/`send_unknown`，租约清空，仅 True 分支 1 条预置流水）；P8 旧 owner `guarded-block-once` `rowcount=0` 不覆盖新 owner/新租约/新诊断值（`block_reason='pg_new_owner_state'` 保持）；P9 `external_calls=0`/意外流水 0/namespace 残留 0/日志无明文凭据
-- C1-C4 跨方言 JSONB 合同与 `_claim_test_webhook_event` 注释准确性（helper 规避 ORM Text→JSONB 类型错误，不声称已存为对象；webhook JSON 字符串标量双重编码问题仍归独立 parity 任务）
+- C1 `_GateResultsJSON` PostgreSQL/SQLite 类型及字符串合同；C2 SQLite 重启恢复 R1-R11 无回归；C3 outbox/send/dry-run/webhook 相邻回归无 Candidate 新增失败；C4 编译、范围、线性、工作区和差异检查
+- `_claim_test_webhook_event` 注释合同（helper 规避 ORM Text→JSONB 类型错误，不声称已存为对象；webhook JSON 字符串标量双重编码问题仍归独立 parity 任务 `P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1`，本任务未修）
 - 独立测试数字：schema 合同 `11 passed`、PostgreSQL 专项 `22 passed, 0 skipped`、连续 10 轮共 `220 passed`、SQLite 重启恢复 `11 passed`、状态机回归 `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）、webhook 回归 `89 passed`，Candidate 0 个新增失败
 - `external_calls=0`、意外流水=0、namespace 残留=0、遗留子进程=0；专用 PostgreSQL 数据库连接是唯一允许的网络传输
 - 已通过普通快进推送集成至 `master@df8644d828680a75ff955db59c546d4ba1caa729`；只验证本地专用 PostgreSQL 数据库，不等于生产验证，未验证生产调度、生产迁移和生产恢复，未连接 staging/production，未真实发送，未运行全仓测试，尚未部署或发布
