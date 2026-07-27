@@ -16,11 +16,19 @@ from sqlalchemy.orm import sessionmaker
 from app.models import (
     AiAutoReplyRun,
     AiReplyDecisionLog,
+    DouyinAuthorizedAccount,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
     _JSONStringJSONB,
 )
+from app.services.ai_reply_decision_log_query_service import (
+    AiReplyDecisionLogQuery,
+    list_ai_reply_decision_logs,
+)
+from app.services.douyin_merchant_isolation import require_customer_open_id_for_merchant
 from app.services.douyin_webhook_idempotency_service import claim_webhook_event
+from app.services.douyin_workbench_conversation_service import list_conversation_messages
+from app.services.webhook_event_service import WebhookEventFilters, list_webhook_events
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -262,3 +270,154 @@ def test_j3_shared_type_preserves_string_json_contract():
 
     with pytest.raises(json.JSONDecodeError):
         column_type.process_bind_param("{bad", pg)
+
+
+def _seed_account(db, namespace: str) -> None:
+    db.add(
+        DouyinAuthorizedAccount(
+            merchant_id=namespace,
+            main_account_id=1,
+            open_id=f"{namespace}_account",
+            bind_status=1,
+            raw_body_json={"source": "jsonb_parity"},
+        )
+    )
+    db.commit()
+
+
+def test_j11_webhook_and_merchant_filters_cast_jsonb_to_text(pg_case):
+    db, namespace, _ = pg_case
+    _seed_account(db, namespace)
+    values = _claim_values(namespace, suffix="filter")
+    hidden_customer = f"{namespace}_hidden_customer"
+    payload = json.loads(values["raw_body"])
+    payload["open_id"] = hidden_customer
+    payload["account_open_id"] = f"{namespace}_account"
+    values["raw_body"] = json.dumps(payload, ensure_ascii=False)
+    values["from_user_id"] = f"{namespace}_other_from"
+    values["to_user_id"] = f"{namespace}_other_to"
+    claim_webhook_event(db, values=values)
+    db.commit()
+
+    result = list_webhook_events(
+        db,
+        WebhookEventFilters(keyword=hidden_customer),
+        super_admin=True,
+    )
+    assert result["total"] == 1
+
+    require_customer_open_id_for_merchant(
+        db,
+        merchant_id=namespace,
+        customer_open_id=hidden_customer,
+    )
+
+
+def test_j11_workbench_conversation_filter_casts_jsonb_to_text(pg_case):
+    db, namespace, _ = pg_case
+    _seed_account(db, namespace)
+    values = _claim_values(namespace, suffix="workbench")
+    conversation_key = f"{namespace}_raw_only_conversation"
+    parsed = json.loads(values["parsed_content_json"])
+    parsed["conversation_short_id"] = conversation_key
+    payload = json.loads(values["raw_body"])
+    payload["content"] = json.dumps(parsed, ensure_ascii=False)
+    values["conversation_short_id"] = None
+    values["parsed_content_json"] = json.dumps(parsed, ensure_ascii=False)
+    values["raw_body"] = json.dumps(payload, ensure_ascii=False)
+    claim_webhook_event(db, values=values)
+    db.commit()
+
+    result = list_conversation_messages(
+        db,
+        conversation_key=conversation_key,
+        account_open_id=f"{namespace}_account",
+        merchant_id=namespace,
+    )
+    assert len(result["items"]) == 1
+
+
+def test_j10_decision_risk_filter_casts_jsonb_to_text(pg_case):
+    db, namespace, _ = pg_case
+    decision = AiReplyDecisionLog(
+        merchant_id=namespace,
+        conversation_id=f"{namespace}_conversation",
+        manual_required=1,
+        risk_flags_json='["jsonb_risk"]',
+    )
+    db.add(decision)
+    db.flush()
+    db.add(
+        DouyinPrivateMessageSend(
+            main_account_id=1,
+            conversation_short_id=f"{namespace}_conversation",
+            server_message_id=f"{namespace}_server_message",
+            from_user_id=f"{namespace}_account",
+            to_user_id=f"{namespace}_customer",
+            content="测试",
+            status="sent",
+            send_source="ai_auto",
+            decision_log_id=decision.id,
+        )
+    )
+    db.commit()
+
+    result = list_ai_reply_decision_logs(
+        db,
+        AiReplyDecisionLogQuery(merchant_id=namespace, risk_flag="jsonb_risk"),
+    )
+    assert result["total"] == 1
+
+
+# ========== B1-B8 _IntegerBoolean 合同与真实写入 ==========
+
+
+INTEGER_BOOLEAN_COLUMNS = (
+    (DouyinPrivateMessageSend, "manual_confirmed"),
+    (DouyinPrivateMessageSend, "auto_send"),
+    (AiReplyDecisionLog, "manual_required"),
+    (AiReplyDecisionLog, "llm_used"),
+    (AiReplyDecisionLog, "rag_used"),
+    (AiReplyDecisionLog, "upstream_auto_send"),
+    (AiReplyDecisionLog, "final_auto_send"),
+)
+
+
+@pytest.mark.parametrize(("model", "column_name"), INTEGER_BOOLEAN_COLUMNS)
+def test_b1_b4_integer_boolean_compiles_and_attached(model, column_name):
+    from app.models import _IntegerBoolean
+    column_type = model.__table__.c[column_name].type
+    assert isinstance(column_type, _IntegerBoolean)
+    assert str(column_type.compile(dialect=postgresql.dialect())).upper() == "BOOLEAN"
+    assert str(column_type.compile(dialect=sqlite.dialect())).upper() == "INTEGER"
+
+
+def test_b2_b3_integer_boolean_bind_contract():
+    from app.models import _IntegerBoolean
+    col = _IntegerBoolean()
+    pg = postgresql.dialect()
+    sq = sqlite.dialect()
+    # None 保持 NULL
+    assert col.process_bind_param(None, pg) is None
+    assert col.process_bind_param(None, sq) is None
+    # 0/1 双方言
+    assert col.process_bind_param(0, pg) is False
+    assert col.process_bind_param(1, pg) is True
+    assert col.process_bind_param(0, sq) == 0
+    assert col.process_bind_param(1, sq) == 1
+    # bool 双方言
+    assert col.process_bind_param(False, pg) is False
+    assert col.process_bind_param(True, pg) is True
+    assert col.process_bind_param(False, sq) == 0
+    assert col.process_bind_param(True, sq) == 1
+    # 读回仍为 0/1
+    assert col.process_result_value(True, pg) == 1
+    assert col.process_result_value(False, pg) == 0
+    assert col.process_result_value(1, sq) == 1
+    assert col.process_result_value(0, sq) == 0
+    # 非法值明确失败
+    for bad in (2, "1", -1):
+        with pytest.raises(ValueError):
+            col.process_bind_param(bad, pg)
+        with pytest.raises(ValueError):
+            col.process_bind_param(bad, sq)

@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import Text, cast, or_
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import parse_content
@@ -51,7 +51,7 @@ def require_customer_open_id_for_merchant(
             or_(
                 DouyinWebhookEvent.from_user_id == customer_open_id,
                 DouyinWebhookEvent.to_user_id == customer_open_id,
-                DouyinWebhookEvent.raw_body.like(f"%{customer_open_id}%"),
+                cast(DouyinWebhookEvent.raw_body, Text).like(f"%{customer_open_id}%"),
             )
         )
         .order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())

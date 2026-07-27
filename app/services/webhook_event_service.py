@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import Text, cast, or_
 from sqlalchemy.orm import Session
 
 from app.integrations.douyin_webhook import is_text_message, normalize_message_text, parse_content
@@ -150,7 +150,7 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
         query = query.filter(DouyinWebhookEvent.created_at <= filters.end_time)
     if filters.keyword:
         like = f"%{filters.keyword}%"
-        query = query.filter(or_(DouyinWebhookEvent.event_key.like(like), DouyinWebhookEvent.raw_body.like(like)))
+        query = query.filter(or_(DouyinWebhookEvent.event_key.like(like), cast(DouyinWebhookEvent.raw_body, Text).like(like)))
     if filters.lead_id is not None:
         query = query.filter(DouyinWebhookEvent.lead_id == filters.lead_id)
     if filters.conversation_short_id:
@@ -158,7 +158,7 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
         query = query.filter(
             or_(
                 DouyinWebhookEvent.conversation_short_id == filters.conversation_short_id,
-                DouyinWebhookEvent.raw_body.like(like),
+                cast(DouyinWebhookEvent.raw_body, Text).like(like),
             )
         )
     if filters.open_id:
@@ -167,7 +167,7 @@ def _apply_db_filters(query, filters: WebhookEventFilters):
             or_(
                 DouyinWebhookEvent.from_user_id == filters.open_id,
                 DouyinWebhookEvent.to_user_id == filters.open_id,
-                DouyinWebhookEvent.raw_body.like(like),
+                cast(DouyinWebhookEvent.raw_body, Text).like(like),
             )
         )
     return query

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_
+from sqlalchemy import Text, cast, func, or_
 from sqlalchemy.orm import Query, Session
 
 from app.models import AiReplyDecisionLog, DouyinPrivateMessageSend
@@ -166,7 +166,7 @@ def _apply_filters(query: Query, params: AiReplyDecisionLogQuery) -> Query:
         query = query.filter(AiReplyDecisionLog.lead_level == params.lead_level)
     if params.risk_flag:
         escaped = params.risk_flag.replace("%", r"\%").replace("_", r"\_")
-        query = query.filter(AiReplyDecisionLog.risk_flags_json.like(f'%"{escaped}"%', escape="\\"))
+        query = query.filter(cast(AiReplyDecisionLog.risk_flags_json, Text).like(f'%"{escaped}"%', escape="\\"))
     if params.rag_used is not None:
         query = query.filter(AiReplyDecisionLog.rag_used == _bool_to_int(params.rag_used))
     if params.llm_used is not None:

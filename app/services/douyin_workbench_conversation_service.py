@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import desc, or_, select, update, and_
+from sqlalchemy import Text, and_, cast, desc, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1040,7 +1040,7 @@ def _query_message_rows(
             stmt = stmt.where(
                 or_(
                     DouyinWebhookEvent.conversation_short_id == conversation_key,
-                    DouyinWebhookEvent.raw_body.like(f"%{conversation_key}%"),
+                    cast(DouyinWebhookEvent.raw_body, Text).like(f"%{conversation_key}%"),
                     (
                         (DouyinWebhookEvent.from_user_id == pair_customer)
                         & (DouyinWebhookEvent.to_user_id == pair_account)
@@ -1055,7 +1055,7 @@ def _query_message_rows(
             stmt = stmt.where(
                 or_(
                     DouyinWebhookEvent.conversation_short_id == conversation_key,
-                    DouyinWebhookEvent.raw_body.like(f"%{conversation_key}%"),
+                    cast(DouyinWebhookEvent.raw_body, Text).like(f"%{conversation_key}%"),
                 )
             )
     if lookback_days:

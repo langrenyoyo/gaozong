@@ -45,6 +45,47 @@ class _JSONStringJSONB(TypeDecorator):
         return value
 
 
+class _IntegerBoolean(TypeDecorator):
+    """保持整数 0/1 业务合同的方言感知布尔类型。
+
+    业务层和 SQLite 现有合同统一使用整数 0/1（含 None），查询条件也按 0/1 比较。
+    PostgreSQL 真实列为 BOOLEAN：绑定时把 0/1 转为 False/True，读回把 False/True
+    转为 0/1；SQLite 继续使用 INTEGER。只接受 bool 或整数 0/1，其他值抛 ValueError；
+    None 保持 SQL NULL。
+    """
+
+    impl = Integer
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(Boolean())
+        return dialect.type_descriptor(Integer())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            bound = value
+        elif isinstance(value, int) and value in (0, 1):
+            bound = bool(value)
+        else:
+            raise ValueError(f"_IntegerBoolean 只接受 bool 或整数 0/1，拒绝: {value!r}")
+        if dialect.name == "postgresql":
+            return bound
+        return int(bound)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int) and value in (0, 1):
+            return value
+        # PostgreSQL boolean 列读回可能是其他表示，统一归一
+        return 1 if value else 0
+
+
 class SalesStaff(Base):
     """销售人员表"""
     __tablename__ = "sales_staff"
@@ -417,8 +458,8 @@ class DouyinPrivateMessageSend(Base):
     status = Column(String(20), nullable=False, default="pending", comment="pending/sent/failed")
     error_code = Column(String(64), comment="Upstream or local error code")
     error_message = Column(String(500), comment="Safe error message")
-    manual_confirmed = Column(Integer, nullable=False, default=1, comment="Must be 1 before upstream call")
-    auto_send = Column(Integer, nullable=False, default=0, comment="P1-H must always be 0")
+    manual_confirmed = Column(_IntegerBoolean(), nullable=False, default=1, comment="Must be 1 before upstream call")
+    auto_send = Column(_IntegerBoolean(), nullable=False, default=0, comment="P1-H must always be 0")
     decision_log_id = Column(Integer, index=True, comment="AI 回复决策日志 ID，自动发送时写入")
     auto_reply_run_id = Column(Integer, unique=True, comment="自动回复 run ID，用于防重复发送")
     send_source = Column(String(32), nullable=False, default="manual", index=True, comment="manual/ai_auto")
@@ -456,17 +497,17 @@ class AiReplyDecisionLog(Base):
     intent = Column(String(64), comment="结构化客户意图")
     lead_level = Column(String(32), comment="结构化意向等级")
     confidence = Column(Float, comment="模型置信度")
-    manual_required = Column(Integer, nullable=False, default=1, comment="最终是否需要人工确认 0/1")
+    manual_required = Column(_IntegerBoolean(), nullable=False, default=1, comment="最终是否需要人工确认 0/1")
     manual_required_reason = Column(Text, comment="需要人工确认原因")
     risk_flags_json = Column(_JSONStringJSONB(), comment="最终风险标记 JSON")
     tags_json = Column(_JSONStringJSONB(), comment="客户标签 JSON")
     rag_sources_json = Column(_JSONStringJSONB(), comment="RAG 来源 JSON")
     source_chunks_json = Column(_JSONStringJSONB(), comment="旧版 source_chunks JSON")
     allowed_category_keys_json = Column(_JSONStringJSONB(), comment="9000 注入的可信知识分类 key JSON")
-    llm_used = Column(Integer, nullable=False, default=0, comment="是否使用 LLM 0/1")
-    rag_used = Column(Integer, nullable=False, default=0, comment="是否使用 RAG 0/1")
-    upstream_auto_send = Column(Integer, nullable=False, default=0, comment="9100 原始响应是否请求自动发送 0/1")
-    final_auto_send = Column(Integer, nullable=False, default=0, comment="9000 最终返回是否自动发送，必须为 0")
+    llm_used = Column(_IntegerBoolean(), nullable=False, default=0, comment="是否使用 LLM 0/1")
+    rag_used = Column(_IntegerBoolean(), nullable=False, default=0, comment="是否使用 RAG 0/1")
+    upstream_auto_send = Column(_IntegerBoolean(), nullable=False, default=0, comment="9100 原始响应是否请求自动发送 0/1")
+    final_auto_send = Column(_IntegerBoolean(), nullable=False, default=0, comment="9000 最终返回是否自动发送，必须为 0")
     decision_version = Column(String(64), comment="决策版本")
     raw_response_json = Column(_JSONStringJSONB(), comment="9100 原始响应 JSON 副本")
     error_message = Column(Text, comment="日志记录错误信息，预留")
