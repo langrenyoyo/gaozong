@@ -31,6 +31,11 @@ class _JSONStringJSONB(TypeDecorator):
     def process_bind_param(self, value, dialect):
         if value is None:
             return None
+        # JSON 文本 "null"（含前后空白）跨方言统一映射为 SQL NULL：PostgreSQL 的 JSONB
+        # 会把 "null" 静默转成 SQL NULL，SQLite 则保留字符串标量，行为不一致。
+        # 这里在两个方言都显式归一为 Python None（SQL NULL），消除跨方言差异。
+        if isinstance(value, str) and value.strip() == "null":
+            return None
         if dialect.name == "postgresql":
             # PostgreSQL 保存原生 JSON 值，禁止把 JSON 文本再次编码成字符串标量。
             return json.loads(value)
@@ -82,8 +87,8 @@ class _IntegerBoolean(TypeDecorator):
             return int(value)
         if isinstance(value, int) and value in (0, 1):
             return value
-        # PostgreSQL boolean 列读回可能是其他表示，统一归一
-        return 1 if value else 0
+        # 损坏值（如 "0"、2、字符串）明确失败，不静默归一
+        raise ValueError(f"_IntegerBoolean 读回值必须为 bool 或整数 0/1，拒绝: {value!r}")
 
 
 class SalesStaff(Base):
