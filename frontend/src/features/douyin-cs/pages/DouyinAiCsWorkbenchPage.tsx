@@ -1693,7 +1693,9 @@ export default function DouyinAiCsWorkbenchPage() {
     if (credential.account_open_id !== selectedAccount.account_open_id) return;
     if (credential.conversation_id !== selectedConversationId) return;
     if (credential.request_seq !== detailRequestSeqRef.current) return;
-    const credentialKey = `${credential.account_open_id}::${credential.conversation_id}::${credential.request_seq}`;
+    // 去重键按 (账号, 会话, 最大事件 id)：同一会话同一 max_event_id 只提交一次 mark-read，
+    // 避免增量同步重复递增 seq 导致高频重复提交；新消息到来时 max_event_id 变化才重提交（已读水位单调推进）。
+    const credentialKey = `${credential.account_open_id}::${credential.conversation_id}::${credential.max_event_id}`;
     if (consumedCredentialKeyRef.current === credentialKey) return;
     // 不本地清零：仅在服务端 mark-read 成功后刷新会话列表，以服务端水位计算为准。
     // mark-read 失败时不清除 consumedCredentialKey（保持未读可见），
