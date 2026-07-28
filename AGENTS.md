@@ -136,6 +136,11 @@ Output Rules
 8. NewCar 真实鉴权本地联调必须显式设置：`NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`（代码默认值是 mock 开发态）。
 9. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清理前端本地 token。
 10. **worktree 偏好声明（针对 superpowers skill 链）**：执行 `docs/superpowers/plans/*.md` 等 implementation plan 时，本项目声明固定偏好——**原地执行，不开 git worktree、不新建分支、不切目录**。`superpowers:using-git-worktrees` 检测到本指令即视为已声明偏好，跳过 Step 1 创建，直接在当前工作区执行；`superpowers:executing-plans` / `subagent-driven-development` 不得因"不在 worktree"而强制创建分支。此偏好覆盖 plan 文档开头 `REQUIRED SUB-SKILL` 段落隐含的隔离假设，但**不豁免**各 plan 自身的"允许范围 / 禁止事项"与发送安全、迁移、鉴权等 gate。如某高风险阶段确需隔离，必须由用户当轮显式批准后才可临时开 worktree。
+11. **执行窗口协作纪律（2026-07-28 用户硬约束）**：以下四条对执行窗口、测试窗口及所有子 agent 等效生效，与三权分离或 plan 文档的允许范围叠加，不得因任何理由放宽：
+    1. **禁止范围外发散**：未经用户当轮显式允许，不得对当前任务"允许范围"之外的文件、模块、能力做任何修改或"顺手实现"；遇到范围外问题只记录回传，不顺带改。
+    2. **文档影响同步**：本轮改动使 `docs/` 下哪份文档结论过期的，必须在任务结束前按"AI 文档自治维护要求"受影响同轮更新；不得只改代码、留下过期文档结论。治理规则文件（01~04）的较高修改门槛不变。
+    3. **不确认即停**：对需求、调用链、数据流、权限校验、影响面或方案中任一不确定的，必须先向用户/审批窗口确认后再动手，禁止凭假设推进；满足不了 Reading Completion Gate 时按其规则继续阅读而非编码。
+    4. **任务展开先复述**：每个新需求或新任务（含 plan 内每个 Task）展开前，必须先复述该任务的允许范围、调用链、数据来源与去向、权限校验点、风险等级、最小修改方案与验收标准，经确认后再进入实现。
 
 ## 小高AI系统一期确认范围（2026-07-10 确认，2026-07-18 勘误）
 
