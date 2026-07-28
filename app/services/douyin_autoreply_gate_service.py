@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -238,7 +238,10 @@ def evaluate_real_send_gates(
     }
     last_sent_at = limits.get("last_sent_at")
     if isinstance(last_sent_at, datetime) and min_interval_seconds > 0:
-        elapsed = (current_time - last_sent_at).total_seconds()
+        # last_sent_at 来自 PostgreSQL DateTime(timezone=True) 可能为 aware，
+        # 与 naive current_time 相减触发 TypeError；按对端时区取同基准 now。
+        now_ref = datetime.now(timezone.utc) if last_sent_at.tzinfo else datetime.now()
+        elapsed = (now_ref - last_sent_at).total_seconds()
         if elapsed < min_interval_seconds:
             return GateDecision(False, "blocked", "min_interval_blocked", gate_results)
     if daily_limit > 0 and int(limits["conversation_day_count"]) >= daily_limit:
