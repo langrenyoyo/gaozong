@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, desc, or_, select, update
+from sqlalchemy import Text, and_, cast, desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -173,6 +173,24 @@ class WorkbenchMessage:
     operator_id: str | None = None
     auto_send: bool | None = None
     auto_reply_run_id: int | None = None
+
+
+WORKBENCH_CURSOR_DEFAULT_LIMIT = 100
+WORKBENCH_CURSOR_MAX_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class WorkbenchEventRowPage:
+    rows: list[SimpleNamespace]
+    scanned_event_ids: list[int]
+    has_more: bool
+
+
+@dataclass(frozen=True)
+class WorkbenchMessagePage:
+    messages: list[WorkbenchMessage]
+    scanned_event_ids: list[int]
+    has_more: bool
 
 
 def list_account_conversations(
@@ -574,21 +592,64 @@ def list_conversation_messages(
     conversation_key: str,
     account_open_id: str | None = None,
     merchant_id: str | None = None,
+    after_event_id: int | None = None,
+    before_event_id: int | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
-    messages = _load_messages(
-        db,
-        account_open_id=account_open_id,
-        conversation_key=conversation_key,
-        limit=WORKBENCH_MESSAGE_LIMIT,
-        operation="list_conversation_messages",
-        merchant_id=merchant_id,
-    )
+    resolved_limit = min(limit or WORKBENCH_CURSOR_DEFAULT_LIMIT, WORKBENCH_CURSOR_MAX_LIMIT)
+    cursor_mode = after_event_id is not None or before_event_id is not None or limit is not None
+    if not cursor_mode:
+        # 无游标无 limit：旧最近 200 条兼容路径，行为不漂移
+        messages = _load_messages(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=conversation_key,
+            limit=WORKBENCH_MESSAGE_LIMIT,
+            operation="list_conversation_messages",
+            merchant_id=merchant_id,
+        )
+        scanned_ids = [item.event_id for item in messages]
+        page_has_more = False
+    else:
+        page = _load_message_page(
+            db,
+            account_open_id=account_open_id or "",
+            conversation_key=conversation_key,
+            merchant_id=merchant_id,
+            after_event_id=after_event_id,
+            before_event_id=before_event_id,
+            limit=resolved_limit,
+        )
+        messages = page.messages
+        scanned_ids = page.scanned_event_ids
+        page_has_more = page.has_more
     # 普通商户查询不到属于该账号和商户的会话时统一 404，不得返回空数据防枚举泄露。
-    if merchant_id and not messages:
+    if merchant_id and not messages and not _conversation_exists(
+        db,
+        account_open_id=account_open_id or "",
+        conversation_key=conversation_key,
+        merchant_id=merchant_id,
+    ):
         raise ConversationNotFoundError("conversation_not_found")
     result = _conversation_messages_payload(messages, conversation_key=conversation_key)
+    latest_event_id = _latest_visible_event_id(
+        db,
+        account_open_id=account_open_id or "",
+        conversation_key=conversation_key,
+        merchant_id=merchant_id,
+    )
+    # 初始受限页（after=None）next_after_event_id 必须是会话当前 latest_event_id，
+    # 不是该页最老事件；否则后续补拉从错误水位起步。
+    result.update(
+        {
+            "latest_event_id": latest_event_id,
+            "next_after_event_id": max(scanned_ids, default=after_event_id or latest_event_id),
+            "next_before_event_id": min(scanned_ids, default=before_event_id or latest_event_id or 0),
+            "has_more": page_has_more,
+        }
+    )
     items = result["items"]
     logger.info(
         "douyin_workbench_query stage=finish operation=list_conversation_messages account_open_id=%s "
@@ -709,8 +770,18 @@ def get_conversation_detail(
     )
     if require_non_empty and merchant_id and not messages:
         raise ConversationNotFoundError("conversation_not_found")
+    message_payload = _conversation_messages_payload(messages, conversation_key=conversation_key)
+    message_ids = [item.event_id for item in messages]
+    message_payload.update(
+        {
+            "latest_event_id": max(message_ids, default=0),
+            "next_after_event_id": max(message_ids, default=0),
+            "next_before_event_id": min(message_ids, default=0),
+            "has_more": len(messages) >= WORKBENCH_MESSAGE_LIMIT,
+        }
+    )
     result = {
-        "messages": _conversation_messages_payload(messages, conversation_key=conversation_key),
+        "messages": message_payload,
         "profile": _conversation_profile_payload(db, messages, merchant_id=merchant_id),
     }
     logger.info(
@@ -994,17 +1065,15 @@ def _load_messages(
     return messages
 
 
-def _query_message_rows(
-    db: Session,
+def _build_message_rows_statement(
     *,
     account_open_id: str | None,
     account_open_ids: list[str] | None,
     conversation_key: str | None,
     events: set[str],
-    limit: int | None,
     lookback_days: int | None,
-    merchant_id: str | None = None,
-) -> list[SimpleNamespace]:
+    merchant_id: str | None,
+):
     stmt = (
         select(
             DouyinWebhookEvent.id,
@@ -1060,6 +1129,28 @@ def _query_message_rows(
             )
     if lookback_days:
         stmt = stmt.where(DouyinWebhookEvent.created_at >= datetime.now() - timedelta(days=lookback_days))
+    return stmt
+
+
+def _query_message_rows(
+    db: Session,
+    *,
+    account_open_id: str | None,
+    account_open_ids: list[str] | None,
+    conversation_key: str | None,
+    events: set[str],
+    limit: int | None,
+    lookback_days: int | None,
+    merchant_id: str | None = None,
+) -> list[SimpleNamespace]:
+    stmt = _build_message_rows_statement(
+        account_open_id=account_open_id,
+        account_open_ids=account_open_ids,
+        conversation_key=conversation_key,
+        events=events,
+        lookback_days=lookback_days,
+        merchant_id=merchant_id,
+    )
     stmt = stmt.order_by(DouyinWebhookEvent.created_at.desc(), DouyinWebhookEvent.id.desc())
     if limit:
         stmt = stmt.limit(limit)
@@ -1068,6 +1159,121 @@ def _query_message_rows(
     result = [SimpleNamespace(**dict(row)) for row in rows]
     result.reverse()
     return result
+
+
+def _query_message_row_page(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str | None,
+    merchant_id: str | None,
+    after_event_id: int | None,
+    before_event_id: int | None,
+    limit: int,
+) -> WorkbenchEventRowPage:
+    stmt = _build_message_rows_statement(
+        account_open_id=account_open_id,
+        account_open_ids=None,
+        conversation_key=conversation_key,
+        events=PRIVATE_MESSAGE_EVENTS,
+        lookback_days=None,
+        merchant_id=merchant_id,
+    )
+    descending = before_event_id is not None or (after_event_id is None and before_event_id is None)
+    if after_event_id is not None:
+        stmt = stmt.where(DouyinWebhookEvent.id > after_event_id)
+    if before_event_id is not None:
+        stmt = stmt.where(DouyinWebhookEvent.id < before_event_id)
+    order = DouyinWebhookEvent.id.desc() if descending else DouyinWebhookEvent.id.asc()
+    rows = db.execute(stmt.order_by(order).limit(limit + 1)).mappings().all()
+    db.rollback()
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    # 额外一行只判 has_more，不得进入 scanned_event_ids，否则游标跳过未返回事件
+    if descending:
+        page_rows = list(reversed(page_rows))
+    normalized = [SimpleNamespace(**dict(row)) for row in page_rows]
+    return WorkbenchEventRowPage(
+        rows=normalized,
+        scanned_event_ids=[int(row.id) for row in normalized],
+        has_more=has_more,
+    )
+
+
+def _load_message_page(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str,
+    merchant_id: str | None,
+    after_event_id: int | None,
+    before_event_id: int | None,
+    limit: int,
+) -> WorkbenchMessagePage:
+    row_page = _query_message_row_page(
+        db,
+        account_open_id=account_open_id,
+        conversation_key=conversation_key,
+        merchant_id=merchant_id,
+        after_event_id=after_event_id,
+        before_event_id=before_event_id,
+        limit=limit,
+    )
+    messages = []
+    # 解析页时按 account_open_id / conversation_key 双重过滤：坏事件不形成消息但推进水位
+    for row in row_page.rows:
+        message = _row_to_message(db, row)
+        if (
+            message is not None
+            and message.account_open_id == account_open_id
+            and message.conversation_key == conversation_key
+        ):
+            messages.append(message)
+    return WorkbenchMessagePage(
+        messages=_attach_message_send_records(db, messages, merchant_id=merchant_id),
+        scanned_event_ids=row_page.scanned_event_ids,
+        has_more=row_page.has_more,
+    )
+
+
+def _conversation_exists(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str,
+    merchant_id: str | None,
+) -> bool:
+    stmt = _build_message_rows_statement(
+        account_open_id=account_open_id,
+        account_open_ids=None,
+        conversation_key=conversation_key,
+        events=PRIVATE_MESSAGE_EVENTS,
+        lookback_days=None,
+        merchant_id=merchant_id,
+    ).with_only_columns(DouyinWebhookEvent.id).limit(1)
+    exists = db.execute(stmt).scalar_one_or_none() is not None
+    db.rollback()
+    return exists
+
+
+def _latest_visible_event_id(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_key: str | None,
+    merchant_id: str | None,
+) -> int:
+    stmt = _build_message_rows_statement(
+        account_open_id=account_open_id,
+        account_open_ids=None,
+        conversation_key=conversation_key,
+        events=PRIVATE_MESSAGE_EVENTS,
+        lookback_days=None,
+        merchant_id=merchant_id,
+    ).with_only_columns(func.max(DouyinWebhookEvent.id))
+    value = db.execute(stmt).scalar_one_or_none()
+    db.rollback()
+    return int(value or 0)
 
 
 def _conversation_pair_from_key(conversation_key: str, account_open_id: str | None) -> tuple[str | None, str | None]:
