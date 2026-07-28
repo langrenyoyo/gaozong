@@ -19,7 +19,7 @@ import os
 import socket
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import and_, or_, select, update as sa_update
@@ -416,8 +416,6 @@ def compensate_missing_runs(db: Session) -> int:
 
 def alert_backlog(db: Session) -> None:
     """检查积压并输出脱敏结构化告警。"""
-    now = datetime.now()
-
     backlog_count = (
         db.query(AiAutoReplyRun)
         .filter(AiAutoReplyRun.status.in_(_PROCESSABLE_STATUSES + _RECOVERABLE_STATUSES))
@@ -430,7 +428,12 @@ def alert_backlog(db: Session) -> None:
         .order_by(AiAutoReplyRun.created_at)
         .first()
     )
-    oldest_age = (now - oldest[0]).total_seconds() if oldest and oldest[0] else 0
+    oldest_age = 0
+    if oldest and oldest[0]:
+        # created_at 来自 PostgreSQL DateTime(timezone=True) 可能为 aware，
+        # naive - aware 触发 TypeError；按对端时区取同基准 now。
+        now_ref = datetime.now(timezone.utc) if oldest[0].tzinfo else datetime.now()
+        oldest_age = (now_ref - oldest[0]).total_seconds()
 
     unknown_count = (
         db.query(AiAutoReplyRun)
