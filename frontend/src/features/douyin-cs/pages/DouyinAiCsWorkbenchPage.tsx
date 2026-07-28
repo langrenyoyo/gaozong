@@ -28,6 +28,7 @@ import {
 } from "../api";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { formatDateTimeLocal } from "../../../lib/datetime";
+import { blockReasonLabel } from "../riskFlagLabels";
 import type {
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
@@ -455,7 +456,7 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
     "send_skipped:autoreply_disabled": "未发送：AI 自动回复未开启",
     "send_skipped:agent_not_bound": "未发送：企业号未绑定智能体",
     "send_skipped:no_bound_agent": "未发送：企业号未绑定智能体",
-    "send_skipped:send_context_unavailable": "未发送：发送上下文不可用",
+    "send_skipped:send_context_unavailable": `未发送原因：${blockReasonLabel("send_context_unavailable")}`,
     "send_skipped:upstream_send_failed": "未发送：抖音接口发送失败",
     "send_skipped:douyin_api_error": "未发送：抖音接口发送失败",
     "send_skipped:send_msg_failed": "未发送：抖音接口发送失败",
@@ -464,7 +465,7 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
     "blocked:autoreply_disabled": "未发送：AI 自动回复未开启",
     "blocked:agent_not_bound": "未发送：企业号未绑定智能体",
     "blocked:no_bound_agent": "未发送：企业号未绑定智能体",
-    "failed:send_context_unavailable": "未发送：发送上下文不可用",
+    "failed:send_context_unavailable": `未发送原因：${blockReasonLabel("send_context_unavailable")}`,
     "failed:upstream_send_failed": "未发送：抖音接口发送失败",
     "failed:douyin_api_error": "未发送：抖音接口发送失败",
     "failed:send_msg_failed": "未发送：抖音接口发送失败",
@@ -477,15 +478,15 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   if (reason === "manual_takeover" || reason === "manual_takeover_blocked") return "未发送：当前会话处于人工接管";
   if (reason === "autoreply_disabled") return "未发送：AI 自动回复未开启";
   if (reason === "agent_not_bound" || reason === "no_bound_agent") return "未发送：企业号未绑定智能体";
-  if (reason === "send_context_unavailable") return "未发送：发送上下文不可用";
+  if (reason === "send_context_unavailable") return `未发送原因：${blockReasonLabel(reason)}`;
   if (reason === "upstream_send_failed" || reason === "douyin_api_error" || reason === "send_msg_failed") {
     return "未发送：抖音接口发送失败";
   }
-  if (reason) return "未发送：发送上下文不可用";
-  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return "未发送：发送上下文不可用";
+  if (reason) return `未发送原因：${blockReasonLabel(reason)}`;
+  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return `未发送原因：${blockReasonLabel(run?.block_reason || run?.skip_reason)}`;
   if (run?.status === "failed" || run?.status === "send_failed") return "未发送：抖音接口发送失败";
   if (run?.status === "sent") return "AI 已自动回复";
-  if (run?.status === "decided") return "未发送：发送上下文不可用";
+  if (run?.status === "decided") return `未发送原因：${blockReasonLabel(run?.block_reason || run?.skip_reason || "auto_send_disabled_by_decision")}`;
   return "暂无自动回复运行结果。";
 }
 
