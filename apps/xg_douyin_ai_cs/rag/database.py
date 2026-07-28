@@ -216,7 +216,7 @@ def init_db(conn: sqlite3.Connection) -> None:
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           tenant_id TEXT,
           merchant_id TEXT,
-          conversation_id INTEGER,
+          conversation_id TEXT,
           model TEXT,
           status TEXT NOT NULL,
           elapsed_ms INTEGER NOT NULL DEFAULT 0,
