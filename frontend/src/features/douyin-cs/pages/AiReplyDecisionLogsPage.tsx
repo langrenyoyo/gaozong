@@ -22,6 +22,7 @@ import {
 } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import { riskFlagLabel } from "../riskFlagLabels";
 
 const PAGE_SIZE = 20;
 
@@ -39,15 +40,6 @@ const LEAD_LEVEL_LABELS: Record<string, string> = {
   medium: "中意向",
   low: "低意向",
   unknown: "未知",
-};
-
-const RISK_FLAG_LABELS: Record<string, string> = {
-  price_commitment: "价格承诺风险",
-  no_rag_source: "知识库无命中",
-  llm_json_parse_failed: "结构化解析失败",
-  llm_requested_auto_send: "模型请求自动发送",
-  proxy_forced_auto_send_false: "代理已强制关闭自动发送",
-  prompt_injection: "提示词注入风险",
 };
 
 function resolveErrorMessage(error: unknown): string {
@@ -263,7 +255,7 @@ function DetailModal({
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {riskFlags.length > 0 ? (
-                      riskFlags.map((flag) => <Chip key={flag} tone="red">{RISK_FLAG_LABELS[flag] || flag}</Chip>)
+                      riskFlags.map((flag) => <Chip key={flag} tone="red">{riskFlagLabel(flag)}</Chip>)
                     ) : (
                       <Chip tone="emerald">无风险标记</Chip>
                     )}
@@ -601,7 +593,7 @@ export default function AiReplyDecisionLogsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
-                        {riskFlags.slice(0, 2).map((flag) => <Chip key={flag} tone="red">{RISK_FLAG_LABELS[flag] || flag}</Chip>)}
+                        {riskFlags.slice(0, 2).map((flag) => <Chip key={flag} tone="red">{riskFlagLabel(flag)}</Chip>)}
                         {riskFlags.length === 0 && tags.slice(0, 2).map((tag) => <Chip key={tag} tone="blue">{tag}</Chip>)}
                         {riskFlags.length === 0 && tags.length === 0 ? <span className="text-[#8b95a6]">-</span> : null}
                       </div>

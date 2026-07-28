@@ -23,6 +23,7 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
+import { blockReasonLabel } from "../riskFlagLabels";
 import ModuleTabs from "../../../components/ModuleTabs";
 
 const PAGE_SIZE = 20;
@@ -180,7 +181,7 @@ function gateStatusText(gate: Record<string, unknown> | null): string {
 }
 
 function blockReasonText(item: AiAutoReplyRunListItem): string {
-  return item.block_reason || item.skip_reason || "-";
+  return blockReasonLabel(item.block_reason || item.skip_reason);
 }
 
 function buildConversationHref(item: {
@@ -407,8 +408,8 @@ function DetailModal({
               <section className="rounded-md border border-slate-200 bg-white p-4">
                 <h3 className="text-xs font-bold text-slate-900">原因与错误</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <Field label="跳过原因" value={detail.skip_reason} />
-                  <Field label="阻断原因" value={detail.block_reason} />
+                  <Field label="跳过原因" value={blockReasonLabel(detail.skip_reason)} />
+                  <Field label="阻断原因" value={blockReasonLabel(detail.block_reason)} />
                   <Field label="错误信息" value={detail.error_message} />
                 </div>
               </section>

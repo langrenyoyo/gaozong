@@ -9,6 +9,7 @@
 import type { ReactNode } from "react";
 
 import type { ReplySourceChunk, ReplySuggestionResponse } from "../../../api/douyinAiCsClient";
+import { riskFlagLabel } from "../riskFlagLabels";
 
 export type ReplyDecisionPanelProps = {
   reply: ReplySuggestionResponse;
@@ -32,15 +33,6 @@ const LEAD_LEVEL_TEXT: Record<string, string> = {
   medium: "中意向",
   low: "低意向",
   unknown: "未知",
-};
-
-const RISK_FLAG_TEXT: Record<string, string> = {
-  price_commitment: "价格承诺风险",
-  no_rag_source: "知识库无命中",
-  llm_json_parse_failed: "结构化解析失败",
-  llm_requested_auto_send: "模型请求自动发送",
-  proxy_forced_auto_send_false: "代理已强制关闭自动发送",
-  prompt_injection: "提示词注入风险",
 };
 
 const CONTACT_KEY_TEXT: Record<string, string> = {
@@ -198,7 +190,7 @@ export function ReplyDecisionPanel({
           </div>
           <div className="flex flex-wrap gap-2">
             {riskFlags.map((flag) => (
-              <Chip key={`risk-${flag}`} tone="red">{RISK_FLAG_TEXT[flag] || flag}</Chip>
+              <Chip key={`risk-${flag}`} tone="red">{riskFlagLabel(flag)}</Chip>
             ))}
           </div>
         </div>
