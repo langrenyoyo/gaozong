@@ -164,6 +164,51 @@ def test_merchant_a_rejected_for_merchant_b_conversation_detail_messages_profile
     assert profile.status_code == 403
 
 
+def test_merchant_cursor_from_another_merchant_returns_empty_page_without_leakage():
+    _insert_account("acc_cursor_a", merchant_id="merchant-1")
+    _insert_account("acc_cursor_b", merchant_id="merchant-2")
+    _insert_event(
+        account_open_id="acc_cursor_a",
+        customer_open_id="cust_cursor_a",
+        conversation_short_id="conv_cursor_a",
+        event_key="cursor_a_event",
+        merchant_id="merchant-1",
+    )
+    foreign_event = _insert_event(
+        account_open_id="acc_cursor_b",
+        customer_open_id="cust_cursor_b",
+        conversation_short_id="conv_cursor_b",
+        event_key="cursor_b_event",
+        merchant_id="merchant-2",
+    )
+    client = _client(_context("merchant-1"))
+
+    empty_page = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": "conv_cursor_a",
+            "account_open_id": "acc_cursor_a",
+            "after_event_id": foreign_event.id,
+        },
+    )
+    missing = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": "conv_cursor_missing",
+            "account_open_id": "acc_cursor_a",
+            "after_event_id": foreign_event.id,
+        },
+    )
+
+    assert empty_page.status_code == 200
+    assert empty_page.json() == {
+        "items": [],
+        "next_after_event_id": foreign_event.id,
+        "has_more": False,
+    }
+    assert missing.status_code == 404
+
+
 def test_merchant_a_cannot_view_merchant_b_webhook_event():
     """商户 A 篡改 event_id 查看商户 B 事件 → 404 防枚举。"""
     db = TestSession()

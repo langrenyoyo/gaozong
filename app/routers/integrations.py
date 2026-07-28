@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -80,6 +80,30 @@ def _workbench_merchant_scope(context: RequestContext) -> str | None:
     if context.is_mock_auth() or context.super_admin:
         return None
     return merchant_id
+
+
+def _validate_message_cursor_pair(after_event_id: int | None, before_event_id: int | None) -> None:
+    if after_event_id is not None and before_event_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "DOUYIN_MESSAGE_CURSOR_CONFLICT", "message": "after_event_id 和 before_event_id 不能同时传入"},
+        )
+
+
+def _message_cursor_options(
+    after_event_id: int | None,
+    before_event_id: int | None,
+    limit: int | None,
+) -> dict[str, int]:
+    return {
+        key: value
+        for key, value in {
+            "after_event_id": after_event_id,
+            "before_event_id": before_event_id,
+            "limit": limit,
+        }.items()
+        if value is not None
+    }
 
 
 def _account_access_http_exception(exc: Exception) -> HTTPException:
@@ -451,17 +475,23 @@ def get_douyin_conversation_detail(
 def get_douyin_conversation_messages(
     conversation_key: str,
     account_open_id: str | None = None,
+    after_event_id: int | None = Query(None, ge=0),
+    before_event_id: int | None = Query(None, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message webhook events for one workbench conversation."""
     merchant_scope = _workbench_merchant_scope(context)
+    _validate_message_cursor_pair(after_event_id, before_event_id)
+    cursor_options = _message_cursor_options(after_event_id, before_event_id, limit)
     try:
         return list_conversation_messages(
             db,
             conversation_key=conversation_key,
             account_open_id=account_open_id,
             merchant_id=merchant_scope,
+            **cursor_options,
         )
     except ConversationNotFoundError as exc:
         raise _conversation_not_found_http_exception() from exc
@@ -542,17 +572,23 @@ def get_douyin_conversation_profile(
 def get_douyin_conversation_messages_by_query(
     conversation_key: str,
     account_open_id: str | None = None,
+    after_event_id: int | None = Query(None, ge=0),
+    before_event_id: int | None = Query(None, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Return real private-message events without putting conversation_key in the path."""
     merchant_scope = _workbench_merchant_scope(context)
+    _validate_message_cursor_pair(after_event_id, before_event_id)
+    cursor_options = _message_cursor_options(after_event_id, before_event_id, limit)
     try:
         return list_conversation_messages(
             db,
             conversation_key=conversation_key,
             account_open_id=account_open_id,
             merchant_id=merchant_scope,
+            **cursor_options,
         )
     except ConversationNotFoundError as exc:
         raise _conversation_not_found_http_exception() from exc

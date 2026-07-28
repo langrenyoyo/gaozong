@@ -130,6 +130,8 @@ def _insert_event(
     server_message_id: str = "msg_001",
     created_at: datetime | None = None,
     lead_id: int | None = None,
+    is_duplicate: bool = False,
+    raw_body: str | None = None,
 ) -> int:
     db = TestSession()
     try:
@@ -146,9 +148,11 @@ def _insert_event(
             from_user_id=payload["from_user_id"],
             to_user_id=payload["to_user_id"],
             event_key=event_key,
-            is_duplicate=False,
+            conversation_short_id=conversation_short_id,
+            server_message_id=server_message_id,
+            is_duplicate=is_duplicate,
             lead_id=lead_id,
-            raw_body=json.dumps(payload, ensure_ascii=False),
+            raw_body=raw_body if raw_body is not None else json.dumps(payload, ensure_ascii=False),
             created_at=created_at or datetime.now(),
         )
         db.add(item)
@@ -1049,6 +1053,153 @@ def test_messages_are_sorted_by_event_time():
     ).json()["items"]
 
     assert [item["content"] for item in messages] == ["first by time", "second in db first by id"]
+
+
+def test_conversation_messages_after_cursor_skips_bad_event_but_advances_boundary():
+    conversation_key = "after_cursor_conv"
+    first_id = _insert_event(
+        open_id="customer_after_cursor",
+        account_open_id="account_after_cursor",
+        text="first",
+        conversation_short_id=conversation_key,
+        event_key="after_cursor_first",
+    )
+    bad_id = _insert_event(
+        open_id="customer_after_cursor",
+        account_open_id="account_after_cursor",
+        text="bad",
+        conversation_short_id=conversation_key,
+        event_key="after_cursor_bad",
+        raw_body="not-json",
+    )
+    third_id = _insert_event(
+        open_id="customer_after_cursor",
+        account_open_id="account_after_cursor",
+        text="third",
+        conversation_short_id=conversation_key,
+        event_key="after_cursor_third",
+    )
+    client = _client()
+
+    first_page = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={"conversation_key": conversation_key, "account_open_id": "account_after_cursor", "after_event_id": 0, "limit": 2},
+    ).json()
+    second_page = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={"conversation_key": conversation_key, "account_open_id": "account_after_cursor", "after_event_id": bad_id, "limit": 2},
+    ).json()
+
+    assert [item["raw_event_id"] for item in first_page["items"]] == [first_id]
+    assert first_page["next_after_event_id"] == bad_id
+    assert first_page["has_more"] is True
+    assert [item["raw_event_id"] for item in second_page["items"]] == [third_id]
+    assert second_page["next_after_event_id"] == third_id
+    assert second_page["has_more"] is False
+
+
+def test_conversation_messages_before_cursor_pages_all_history_in_stable_order():
+    conversation_key = "before_cursor_conv"
+    base_time = datetime.now() - timedelta(days=1)
+    expected_ids = [
+        _insert_event(
+            open_id="customer_before_cursor",
+            account_open_id="account_before_cursor",
+            text=f"history-{index}",
+            conversation_short_id=conversation_key,
+            event_key=f"before_cursor_{index}",
+            created_at=base_time + timedelta(seconds=index),
+        )
+        for index in range(205)
+    ]
+    client = _client()
+    pages = []
+    before_event_id = None
+    for _ in range(3):
+        params = {"conversation_key": conversation_key, "account_open_id": "account_before_cursor", "limit": 100}
+        if before_event_id is not None:
+            params["before_event_id"] = before_event_id
+        page = client.get("/integrations/douyin/conversation-messages", params=params).json()
+        pages.append(page)
+        before_event_id = page["next_before_event_id"]
+
+    received_ids = [item["raw_event_id"] for page in reversed(pages) for item in page["items"]]
+    assert received_ids == expected_ids
+    for page in pages:
+        assert [
+            (item["created_at"], item["raw_event_id"])
+            for item in page["items"]
+        ] == sorted((item["created_at"], item["raw_event_id"]) for item in page["items"])
+
+
+def test_conversation_messages_after_cursor_includes_late_insert_with_older_created_at():
+    conversation_key = "late_insert_conv"
+    first_id = _insert_event(
+        open_id="customer_late_insert",
+        account_open_id="account_late_insert",
+        conversation_short_id=conversation_key,
+        event_key="late_insert_first",
+        created_at=datetime.now(),
+    )
+    late_id = _insert_event(
+        open_id="customer_late_insert",
+        account_open_id="account_late_insert",
+        conversation_short_id=conversation_key,
+        event_key="late_insert_late",
+        created_at=datetime.now() - timedelta(days=1),
+    )
+
+    data = _client().get(
+        "/integrations/douyin/conversation-messages",
+        params={"conversation_key": conversation_key, "account_open_id": "account_late_insert", "after_event_id": first_id},
+    ).json()
+
+    assert [item["raw_event_id"] for item in data["items"]] == [late_id]
+
+
+def test_conversation_messages_cursor_parameter_contract():
+    client = _client()
+    common_params = {"conversation_key": "empty_incremental_conv", "account_open_id": "account_empty_incremental"}
+    invalid_params = [
+        {"after_event_id": -1},
+        {"before_event_id": -1},
+        {"after_event_id": "not-an-int"},
+        {"before_event_id": "not-an-int"},
+        {"after_event_id": 1, "before_event_id": 2},
+        {"limit": 201},
+    ]
+    for params in invalid_params:
+        response = client.get("/integrations/douyin/conversation-messages", params={**common_params, **params})
+        assert response.status_code == 422
+        path_response = client.get(
+            "/integrations/douyin/conversations/empty_incremental_conv/messages",
+            params={"account_open_id": "account_empty_incremental", **params},
+        )
+        assert path_response.status_code == 422
+    conflict = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={**common_params, "after_event_id": 1, "before_event_id": 2},
+    )
+    assert conflict.json()["detail"]["code"] == "DOUYIN_MESSAGE_CURSOR_CONFLICT"
+
+
+def test_conversation_messages_two_empty_incremental_entrypoints_match():
+    client = _client()
+    common_params = {"conversation_key": "empty_incremental_conv", "account_open_id": "account_empty_incremental"}
+    query = client.get(
+        "/integrations/douyin/conversation-messages",
+        params={**common_params, "after_event_id": 42},
+    )
+    path = client.get(
+        "/integrations/douyin/conversations/empty_incremental_conv/messages",
+        params={"account_open_id": "account_empty_incremental", "after_event_id": 42},
+    )
+    assert query.status_code == path.status_code == 200
+    assert query.json() == path.json() == {
+        "items": [],
+        "next_after_event_id": 42,
+        "has_more": False,
+    }
 
 
 def test_query_conversation_messages_supports_key_with_slash_plus_and_equals():
