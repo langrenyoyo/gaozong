@@ -51,6 +51,13 @@ SQLite 或 PostgreSQL 有 metadata != Milvus 一定已完成 upsert
 
 SQLite 当前只作为开发过渡库和早期部署过渡库。后续生产数据库目标是 PostgreSQL，业务逻辑不应继续扩散 SQLite 专属写法或依赖 SQLite 细节。
 
+### 1.6 PostgreSQL Alembic 迁移版本现状（2026-07-28）
+
+- **9000（`auto_wechat` 库）**：`migrations/postgres/auto_wechat/`，head=`0017`。0016 为 AI 自动回复 outbox 持久化任务字段；0017 为 `douyin_webhook_events` 商户账号复合索引 `(merchant_id,to_user_id,id)` / `(merchant_id,from_user_id,id)`，用 `CREATE INDEX CONCURRENTLY` + `op.get_context().autocommit_block()` 跳出 env.py 事务块执行（CONCURRENTLY 不能在事务内运行）。
+- **9100（`xg_douyin_ai_cs` 库）**：`migrations/postgres/xg_douyin_ai_cs/`，head=`0003`。0002 建 RAG metadata 7 表；0003 将 `llm_call_logs.conversation_id` 列从 `bigint` 改为 `varchar(255)`（`ALTER COLUMN ... TYPE varchar(255) USING conversation_id::text`）——根因是 9000 传入抖音 base64 会话 ID 字符串，bigint 列插入失败致 9100 返回 500 丢弃已成功 LLM 结果；改列时表为空（ROW_COUNT=0），无数据兼容风险。
+- **0017 索引与查询改写配套**：`_query_message_row_page` 用 `union_all` 双单侧子查询（各走 `to_user_id`/`from_user_id` 索引）+ Python 按 id 去重，消除 `OR (to_user_id IN (...) OR from_user_id IN (...))` 导致的 Seq Scan；5 万行 EXPLAIN 门禁验证 Bitmap Index Scan + Rows Removed by Filter=0。
+- **CONCURRENTLY 陷阱**：`env.py` 用 `context.begin_transaction()` 事务内执行迁移，与 `CREATE INDEX CONCURRENTLY`（不能在事务内）冲突；alembic 官方写法是 `with op.get_context().autocommit_block(): op.execute("CREATE INDEX CONCURRENTLY ...")`。既有迁移（≤0016）全用普通 `op.create_index` 未踩此坑。
+
 ## 2. PostgreSQL 目标架构
 
 已确认采用方案 A：一个 PostgreSQL 实例，两个 database。
