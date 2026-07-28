@@ -1335,7 +1335,8 @@ def test_account_conversations_does_not_parse_unrelated_account_events():
         ).json()["items"]
 
     assert [item["last_message"] for item in items] == ["target account message"]
-    assert parsed_event_ids == [target_id]
+    # 权威未读计数走 get_account_unread_counts，会再次解析目标事件；核心隔离断言是不解析无关账号事件
+    assert set(parsed_event_ids) == {target_id}
     assert not set(parsed_event_ids).intersection(unrelated_ids)
 
 
@@ -1649,3 +1650,99 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     assert "lastSeenEventId" in persist_section
     assert "last_seen_event_id" in persist_section
+
+
+def test_conversation_incremental_page_returns_changed_summaries_and_authoritative_unread():
+    """A11：会话摘要增量页返回有变化的会话摘要、next_after_event_id 单调推进、权威未读。"""
+    account = "account_conversation_delta"
+    first = _insert_event(
+        account_open_id=account,
+        open_id="customer-a",
+        conversation_short_id="conv-delta-a",
+        event_key="conversation-delta-a-1",
+    )
+    _insert_event(
+        account_open_id=account,
+        open_id="customer-b",
+        conversation_short_id="conv-delta-b",
+        event_key="conversation-delta-b-1",
+    )
+    changed = _insert_event(
+        account_open_id=account,
+        open_id="customer-a",
+        conversation_short_id="conv-delta-a",
+        event_key="conversation-delta-a-2",
+        text="第二条消息",
+    )
+
+    data = _client().get(
+        "/integrations/douyin/accounts/account_conversation_delta/conversations",
+        params={"after_event_id": first, "limit": 1},
+    )
+    assert data.status_code == 200
+    payload = data.json()
+    # limit=1 下先命中 conv-delta-b（id 升序，conv-delta-b-1 先于 conv-delta-a-2）
+    assert [item["conversation_key"] for item in payload["items"]] == ["conv-delta-b"]
+    assert payload["items"][0]["latest_event_id"] > first
+    assert payload["next_after_event_id"] > first
+    # latest_event_id 是全账号水位（不受 limit 截断）
+    assert payload["latest_event_id"] == changed
+    # 权威未读数来自 get_account_unread_counts，不从增量页求和
+    assert payload["account_unread_count"] == 3
+    assert payload["has_more"] is True
+
+
+def test_conversation_incremental_empty_page_after_all_changes():
+    """A11：所有变化已消费后增量页为空，next_after_event_id 保持水位。"""
+    account = "account_conversation_empty_delta"
+    first = _insert_event(
+        account_open_id=account,
+        open_id="customer-empty",
+        conversation_short_id="conv-empty-delta",
+        event_key="conversation-empty-delta-1",
+    )
+
+    page = _client().get(
+        "/integrations/douyin/accounts/account_conversation_empty_delta/conversations",
+        params={"after_event_id": first, "limit": 50},
+    )
+    assert page.status_code == 200
+    payload = page.json()
+    assert payload["items"] == []
+    assert payload["next_after_event_id"] == first
+    assert payload["has_more"] is False
+
+
+def test_conversation_incremental_after_event_id_and_event_limit_conflict_returns_422():
+    """A11：after_event_id 与 event_limit 互斥，422 + 稳定错误码。"""
+    account = "account_conversation_conflict"
+    _insert_event(
+        account_open_id=account,
+        open_id="customer-conflict",
+        conversation_short_id="conv-conflict",
+        event_key="conversation-conflict-1",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_conversation_conflict/conversations",
+        params={"after_event_id": 1, "event_limit": 10},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "DOUYIN_CONVERSATION_CURSOR_CONFLICT"
+
+
+def test_conversation_incremental_limit_over_max_returns_422():
+    """A11：limit 超过上限 422。"""
+    account = "account_conversation_limit"
+    _insert_event(
+        account_open_id=account,
+        open_id="customer-limit",
+        conversation_short_id="conv-limit",
+        event_key="conversation-limit-1",
+    )
+
+    response = _client().get(
+        "/integrations/douyin/accounts/account_conversation_limit/conversations",
+        params={"after_event_id": 0, "limit": 501},
+    )
+    assert response.status_code == 422

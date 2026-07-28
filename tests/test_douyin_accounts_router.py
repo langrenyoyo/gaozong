@@ -573,3 +573,53 @@ def test_delete_account_rejects_other_merchant_and_empty_owner_account():
     assert other.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
     assert empty.status_code == 403
     assert empty.json()["detail"]["code"] == "DOUYIN_ACCOUNT_MERCHANT_BINDING_DENIED"
+
+
+def test_list_accounts_latest_event_id_uses_current_merchant_non_duplicate_events_only():
+    """A10：账号水位只取当前商户、非重复、有效私信事件 max id。"""
+    _insert_account(open_id="account-current", merchant_id="merchant-1")
+    first = _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-current",
+        customer_open_id="customer-current",
+        event_key="latest-current",
+        merchant_id="merchant-1",
+    )
+    # 重复事件不计入水位
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-current",
+        customer_open_id="customer-duplicate",
+        event_key="latest-duplicate",
+        merchant_id="merchant-1",
+        is_duplicate=True,
+    )
+    # NULL 商户归属事件不计入水位
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-current",
+        customer_open_id="customer-null",
+        event_key="latest-null",
+        merchant_id=None,
+    )
+    # 他商户事件不计入水位
+    _insert_webhook_event(
+        event="im_receive_msg",
+        account_open_id="account-current",
+        customer_open_id="customer-other",
+        event_key="latest-other",
+        merchant_id="merchant-2",
+    )
+
+    item = _client(_context("merchant-1")).get("/integrations/douyin/accounts").json()["data"]["items"][0]
+    assert item["account_open_id"] == "account-current"
+    assert item["latest_event_id"] == first.id
+
+
+def test_list_accounts_latest_event_id_zero_when_no_events():
+    """A10：无事件账号 latest_event_id == 0。"""
+    _insert_account(open_id="account-empty", merchant_id="merchant-1")
+
+    item = _client(_context("merchant-1")).get("/integrations/douyin/accounts").json()["data"]["items"][0]
+    assert item["account_open_id"] == "account-empty"
+    assert item["latest_event_id"] == 0

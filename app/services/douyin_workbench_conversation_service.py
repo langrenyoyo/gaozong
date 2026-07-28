@@ -193,15 +193,112 @@ class WorkbenchMessagePage:
     has_more: bool
 
 
+def _conversation_summary_item(
+    db: Session,
+    *,
+    conversation_key: str,
+    ordered: list[WorkbenchMessage],
+    account_open_id: str,
+    read_state,
+    merchant_id: str | None,
+) -> dict[str, Any]:
+    """构造单个会话摘要项，复用无游标与增量两种路径。"""
+    first = ordered[0]
+    latest = ordered[-1]
+    return {
+        "id": conversation_key,
+        "conversation_id": conversation_key,
+        "conversation_key": conversation_key,
+        "conversation_short_id": first.conversation_short_id,
+        "account_id": account_open_id,
+        "account_open_id": first.account_open_id,
+        "open_id": first.open_id,
+        "nickname": first.nick_name or first.open_id,
+        "avatar": first.avatar,
+        "last_message": latest.content,
+        "last_message_at": latest.created_at,
+        "unread_count": _unread_count_for_messages(ordered, read_state),
+        "lead_status": _lead_status(ordered),
+        "tags": build_conversation_tags(db, ordered, merchant_id=merchant_id),
+        "latest_event_id": latest.event_id,
+    }
+
+
 def list_account_conversations(
     db: Session,
     *,
     account_open_id: str,
     event_limit: int | None = None,
     merchant_id: str | None = None,
+    after_event_id: int | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     require_owned_account(db, account_open_id=account_open_id, merchant_id=merchant_id)
     start = time.perf_counter()
+    cursor_mode = after_event_id is not None or limit is not None
+    if cursor_mode:
+        # 增量模式：按会话级 max event_id 过滤变化会话，不调用逐步扩大的 event_limit
+        resolved_limit = min(limit or WORKBENCH_CURSOR_DEFAULT_LIMIT, WORKBENCH_CURSOR_MAX_LIMIT)
+        row_page = _query_message_row_page(
+            db,
+            account_open_id=account_open_id,
+            conversation_key=None,
+            merchant_id=merchant_id,
+            after_event_id=after_event_id,
+            before_event_id=None,
+            limit=resolved_limit,
+        )
+        # 坏事件推进 next_after_event_id 但不形成摘要
+        grouped: dict[str, list[WorkbenchMessage]] = {}
+        for row in row_page.rows:
+            message = _row_to_message(db, row)
+            if message is not None and message.account_open_id == account_open_id:
+                grouped.setdefault(message.conversation_key, []).append(message)
+        read_states = _load_read_states(
+            db,
+            account_open_ids=[account_open_id],
+            merchant_id=merchant_id,
+        )
+        items = []
+        for conversation_key, group in grouped.items():
+            ordered = _sort_messages(group)
+            read_state = read_states.get((ordered[0].account_open_id, conversation_key))
+            items.append(
+                _conversation_summary_item(
+                    db,
+                    conversation_key=conversation_key,
+                    ordered=ordered,
+                    account_open_id=account_open_id,
+                    read_state=read_state,
+                    merchant_id=merchant_id,
+                )
+            )
+        items.sort(key=lambda item: item["last_message_at"] or datetime.min, reverse=True)
+        scanned_ids = row_page.scanned_event_ids
+        # 权威未读来自 get_account_unread_counts，不从增量页求和
+        unread_counts = get_account_unread_counts(
+            db, account_open_ids=[account_open_id], merchant_id=merchant_id
+        )
+        latest_event_id = _latest_visible_event_id(
+            db, account_open_id=account_open_id, conversation_key=None, merchant_id=merchant_id
+        )
+        logger.info(
+            "douyin_workbench_query stage=finish operation=list_account_conversations(incremental) "
+            "account_open_id=%s message_count=%s result_count=%s elapsed_ms=%s",
+            _mask_open_id(account_open_id),
+            len(row_page.rows),
+            len(items),
+            _elapsed_ms(start),
+        )
+        return {
+            "items": items,
+            "latest_event_id": latest_event_id,
+            "next_after_event_id": max(scanned_ids, default=after_event_id or latest_event_id),
+            "account_unread_count": unread_counts.get(account_open_id, 0),
+            "has_more": row_page.has_more,
+        }
+
+    # 无游标路径：旧行为不变，补兼容扩展字段
     resolved_limit = min(
         max(100, event_limit or WORKBENCH_CONVERSATION_EVENT_LIMIT),
         WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT,
@@ -229,29 +326,27 @@ def list_account_conversations(
     items = []
     for conversation_key, group in grouped.items():
         ordered = _sort_messages(group)
-        first = ordered[0]
-        latest = ordered[-1]
-        read_state = read_states.get((first.account_open_id, conversation_key))
+        read_state = read_states.get((ordered[0].account_open_id, conversation_key))
         items.append(
-            {
-                "id": conversation_key,
-                "conversation_id": conversation_key,
-                "conversation_key": conversation_key,
-                "conversation_short_id": first.conversation_short_id,
-                "account_id": account_open_id,
-                "account_open_id": first.account_open_id,
-                "open_id": first.open_id,
-                "nickname": first.nick_name or first.open_id,
-                "avatar": first.avatar,
-                "last_message": latest.content,
-                "last_message_at": latest.created_at,
-                "unread_count": _unread_count_for_messages(ordered, read_state),
-                "lead_status": _lead_status(ordered),
-                "tags": build_conversation_tags(db, ordered, merchant_id=merchant_id),
-            }
+            _conversation_summary_item(
+                db,
+                conversation_key=conversation_key,
+                ordered=ordered,
+                account_open_id=account_open_id,
+                read_state=read_state,
+                merchant_id=merchant_id,
+            )
         )
 
     items.sort(key=lambda item: item["last_message_at"] or datetime.min, reverse=True)
+    # 权威未读来自 get_account_unread_counts，不从会话页求和
+    unread_counts = get_account_unread_counts(
+        db, account_open_ids=[account_open_id], merchant_id=merchant_id
+    )
+    latest_event_id = _latest_visible_event_id(
+        db, account_open_id=account_open_id, conversation_key=None, merchant_id=merchant_id
+    )
+    scanned_ids = [item["latest_event_id"] for item in items]
     logger.info(
         "douyin_workbench_query stage=finish operation=list_account_conversations account_open_id=%s "
         "message_count=%s result_count=%s elapsed_ms=%s",
@@ -268,6 +363,10 @@ def list_account_conversations(
             resolved_limit + WORKBENCH_CONVERSATION_EVENT_LIMIT,
             WORKBENCH_CONVERSATION_MAX_EVENT_LIMIT,
         ) if has_more else None,
+        # 兼容扩展字段：无游标也返回水位与权威未读
+        "latest_event_id": latest_event_id,
+        "next_after_event_id": max(scanned_ids, default=latest_event_id),
+        "account_unread_count": unread_counts.get(account_open_id, 0),
     }
 
 
@@ -304,6 +403,43 @@ def get_account_unread_counts(
         account_open_id, _conversation_key = key
         counts[account_open_id] += _unread_count_for_messages(_sort_messages(group), read_states.get(key))
     return counts
+
+
+def get_account_latest_event_ids(
+    db: Session,
+    *,
+    account_open_ids: list[str],
+    merchant_id: str | None = None,
+) -> dict[str, int]:
+    """按企业号聚合当前商户非重复有效私信事件的最新 event_id（账号水位）。
+
+    普通商户只取 event.merchant_id 匹配、is_duplicate=False、event.in_(PRIVATE_MESSAGE_EVENTS)
+    的事件，排除重复事件、NULL 商户归属与他商户事件；无事件账号返回 0。
+    不得从 event fallback 账号扩展授权范围。
+    """
+    requested_open_ids = {str(item) for item in account_open_ids if item}
+    if not requested_open_ids:
+        return {}
+    result = {account_open_id: 0 for account_open_id in requested_open_ids}
+    # ponytail: 逐账号查询 max(id)，保证无跨账号泄露且语义清晰
+    for account_open_id in requested_open_ids:
+        per_stmt = (
+            select(func.max(DouyinWebhookEvent.id))
+            .where(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
+            .where(DouyinWebhookEvent.is_duplicate.is_(False))
+            .where(
+                or_(
+                    DouyinWebhookEvent.to_user_id == account_open_id,
+                    DouyinWebhookEvent.from_user_id == account_open_id,
+                )
+            )
+        )
+        if merchant_id:
+            per_stmt = per_stmt.where(DouyinWebhookEvent.merchant_id == merchant_id)
+        value = db.execute(per_stmt).scalar_one_or_none()
+        db.rollback()
+        result[account_open_id] = int(value or 0)
+    return result
 
 
 def mark_conversation_read(

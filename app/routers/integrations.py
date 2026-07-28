@@ -431,11 +431,22 @@ def get_douyin_account_conversations(
     account_id: str,
     account_open_id: str | None = None,
     event_limit: int | None = None,
+    after_event_id: int | None = Query(None, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ) -> dict:
     """Aggregate real private-message webhook events into workbench conversations."""
     merchant_scope = _workbench_merchant_scope(context)
+    # after_event_id 与 event_limit 互斥：增量模式禁用旧 event_limit 窗口
+    if after_event_id is not None and event_limit is not None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "DOUYIN_CONVERSATION_CURSOR_CONFLICT",
+                "message": "after_event_id 和 event_limit 不能同时传入",
+            },
+        )
     resolved_account_open_id = account_open_id or account_id
     try:
         return list_account_conversations(
@@ -443,6 +454,8 @@ def get_douyin_account_conversations(
             account_open_id=resolved_account_open_id,
             event_limit=event_limit,
             merchant_id=merchant_scope,
+            after_event_id=after_event_id,
+            limit=limit,
         )
     except (AccountAccessError, AccountMerchantDeniedError) as exc:
         raise _account_access_http_exception(exc) from exc
