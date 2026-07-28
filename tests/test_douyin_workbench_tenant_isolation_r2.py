@@ -201,11 +201,14 @@ def test_merchant_cursor_from_another_merchant_returns_empty_page_without_leakag
     )
 
     assert empty_page.status_code == 200
-    assert empty_page.json() == {
-        "items": [],
-        "next_after_event_id": foreign_event.id,
-        "has_more": False,
-    }
+    empty_payload = empty_page.json()
+    assert empty_payload["items"] == []
+    # next_after_event_id 回退为请求游标原值（foreign_event.id），不泄露 merchant-2 内容
+    assert empty_payload["next_after_event_id"] == foreign_event.id
+    assert empty_payload["has_more"] is False
+    # latest_event_id 是 merchant-1 自己的事件 ID，不得为 foreign_event.id
+    assert empty_payload["latest_event_id"] != foreign_event.id
+    assert "next_before_event_id" in empty_payload
     assert missing.status_code == 404
 
 

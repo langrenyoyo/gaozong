@@ -1195,11 +1195,15 @@ def test_conversation_messages_two_empty_incremental_entrypoints_match():
         params={"account_open_id": "account_empty_incremental", "after_event_id": 42},
     )
     assert query.status_code == path.status_code == 200
-    assert query.json() == path.json() == {
-        "items": [],
-        "next_after_event_id": 42,
-        "has_more": False,
-    }
+    query_payload = query.json()
+    path_payload = path.json()
+    # 两入口必须调用同一服务函数，返回完全一致的载荷
+    assert query_payload == path_payload
+    assert query_payload["items"] == []
+    assert query_payload["next_after_event_id"] == 42
+    assert query_payload["has_more"] is False
+    assert "latest_event_id" in query_payload
+    assert "next_before_event_id" in query_payload
 
 
 def test_query_conversation_messages_supports_key_with_slash_plus_and_equals():
