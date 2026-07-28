@@ -2506,9 +2506,6 @@ export default function DouyinAiCsWorkbenchPage() {
             <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
               多抖音号会话工作台，当前支持测试白名单内的 AI 自动回复闭环。
             </p>
-            <span className="text-xs text-slate-500">
-              {lastSuccessfulSyncAt ? `最后同步 ${formatTime(new Date(lastSuccessfulSyncAt).toISOString())}` : "尚未完成全账号同步"}
-            </span>
             <ModuleTabs items={[
               { label: "客服工作台", path: "/douyin-cs/workbench" },
               { label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
@@ -2639,7 +2636,13 @@ export default function DouyinAiCsWorkbenchPage() {
               <div className="text-sm font-bold text-[#172033]">会话列表</div>
               {refreshingConversations ? (
                 <span className="text-[11px] text-slate-400">正在更新</span>
-              ) : null}
+              ) : (
+                <span className="text-[11px] text-slate-400">
+                  {lastSuccessfulSyncAt
+                    ? `最后同步 ${formatTime(new Date(lastSuccessfulSyncAt).toISOString())}`
+                    : "尚未完成全账号同步"}
+                </span>
+              )}
             </div>
             <div className="mt-0.5 truncate text-[11px] text-slate-500">
               {selectedAccount?.account_name || "未选择抖音号"}

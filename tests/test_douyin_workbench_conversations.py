@@ -1805,3 +1805,15 @@ def test_frontend_workbench_incremental_read_and_history_safety_contracts():
     assert "selectedAccountOpenIdRef.current" in source
     assert "selectedConversationIdRef.current" in source
     assert "lastSuccessfulSyncAt" in source
+
+
+def test_frontend_workbench_renders_last_sync_in_conversation_list_header():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    tabs_index = source.index("<ModuleTabs items")
+    conversation_header_index = source.index(">会话列表</div>")
+    last_sync_index = source.index("lastSuccessfulSyncAt\n                    ? `最后同步")
+
+    assert last_sync_index > tabs_index
+    assert last_sync_index > conversation_header_index
+    assert "refreshingConversations ? (" in source[conversation_header_index:last_sync_index]
