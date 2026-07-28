@@ -218,7 +218,7 @@ def _conversation_summary_item(
         "last_message": latest.content,
         "last_message_at": latest.created_at,
         "unread_count": _unread_count_for_messages(ordered, read_state),
-        "lead_status": _lead_status(ordered),
+        "lead_status": _lead_status(db, ordered, merchant_id=merchant_id),
         "tags": build_conversation_tags(db, ordered, merchant_id=merchant_id),
         "latest_event_id": latest.event_id,
     }
@@ -1806,10 +1806,30 @@ def _merge_profile(
     }
 
 
-def _lead_status(messages: list[WorkbenchMessage]) -> str:
-    if any(item.lead_id is not None for item in messages):
-        return "captured"
-    if any(extract_contacts_from_text(item.content).status == "matched" for item in messages):
+def _lead_status(
+    db: Session,
+    messages: list[WorkbenchMessage],
+    *,
+    merchant_id: str | None = None,
+) -> str:
+    """判断会话留资状态，与 _has_retained_contact 口径对齐。
+
+    不只看消息 lead_id（只要 webhook 事件关联了 lead_id 就判已留资过于宽泛），
+    而是查 DouyinLead 表确认是否真正提取到联系方式（extracted_phone/
+    extracted_wechat/all_extracted_contacts），与 tags 判断口径一致。
+    """
+    if not messages:
+        return "contact_not_found"
+    first = messages[0]
+    lead = _find_conversation_lead(
+        db,
+        open_id=first.open_id,
+        account_open_id=first.account_open_id,
+        merchant_id=merchant_id,
+    )
+    raw_data = _safe_lead_raw_data(lead)
+    text_blob = " ".join(item.content for item in messages if item.content)
+    if _has_retained_contact(lead, messages, raw_data, text_blob):
         return "captured"
     return "contact_not_found"
 
