@@ -339,6 +339,10 @@ class WechatTask(Base):
 class DouyinWebhookEvent(Base):
     """抖音 GMP Webhook 原始事件日志"""
     __tablename__ = "douyin_webhook_events"
+    __table_args__ = (
+        Index("idx_douyin_webhook_events_merchant_to_id", "merchant_id", "to_user_id", "id"),
+        Index("idx_douyin_webhook_events_merchant_from_id", "merchant_id", "from_user_id", "id"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     event = Column(String(128), comment="事件类型: im_receive_msg / im_send_msg / im_enter_direct_msg 等")

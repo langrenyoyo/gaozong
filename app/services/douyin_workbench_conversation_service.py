@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, desc, func, or_, select, update
+from sqlalchemy import Text, and_, cast, desc, func, or_, select, union_all, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1307,25 +1307,86 @@ def _query_message_row_page(
     before_event_id: int | None,
     limit: int,
 ) -> WorkbenchEventRowPage:
-    stmt = _build_message_rows_statement(
-        account_open_id=account_open_id,
-        account_open_ids=None,
-        conversation_key=conversation_key,
-        events=PRIVATE_MESSAGE_EVENTS,
-        lookback_days=None,
-        merchant_id=merchant_id,
+    # UNION ALL 改写：构造两个单侧账号子查询，各走 (merchant_id, to_user_id, id) /
+    # (merchant_id, from_user_id, id) 索引，消除 OR 条件导致的 Seq Scan。
+    # 不改 _build_message_rows_statement 签名/内部 OR；本地内联等价过滤 + 单侧账号。
+    columns = (
+        DouyinWebhookEvent.id,
+        DouyinWebhookEvent.event,
+        DouyinWebhookEvent.from_user_id,
+        DouyinWebhookEvent.to_user_id,
+        DouyinWebhookEvent.conversation_short_id,
+        DouyinWebhookEvent.server_message_id,
+        DouyinWebhookEvent.message_type,
+        DouyinWebhookEvent.parsed_content_json,
+        DouyinWebhookEvent.lead_id,
+        DouyinWebhookEvent.raw_body,
+        DouyinWebhookEvent.created_at,
     )
+
+    def _build_single_side_stmt(account_field) -> select:
+        stmt = (
+            select(*columns)
+            .where(DouyinWebhookEvent.event.in_(PRIVATE_MESSAGE_EVENTS))
+            .where(DouyinWebhookEvent.is_duplicate.is_(False))
+        )
+        if merchant_id:
+            stmt = stmt.where(DouyinWebhookEvent.merchant_id == merchant_id)
+        if account_open_id:
+            stmt = stmt.where(account_field == account_open_id)
+        if conversation_key:
+            pair_account, pair_customer = _conversation_pair_from_key(conversation_key, account_open_id)
+            if pair_account and pair_customer:
+                stmt = stmt.where(
+                    or_(
+                        DouyinWebhookEvent.conversation_short_id == conversation_key,
+                        cast(DouyinWebhookEvent.raw_body, Text).like(f"%{conversation_key}%"),
+                        (
+                            (DouyinWebhookEvent.from_user_id == pair_customer)
+                            & (DouyinWebhookEvent.to_user_id == pair_account)
+                        ),
+                        (
+                            (DouyinWebhookEvent.from_user_id == pair_account)
+                            & (DouyinWebhookEvent.to_user_id == pair_customer)
+                        ),
+                    )
+                )
+            else:
+                stmt = stmt.where(
+                    or_(
+                        DouyinWebhookEvent.conversation_short_id == conversation_key,
+                        cast(DouyinWebhookEvent.raw_body, Text).like(f"%{conversation_key}%"),
+                    )
+                )
+        return stmt
+
+    sub_to = _build_single_side_stmt(DouyinWebhookEvent.to_user_id)
+    sub_from = _build_single_side_stmt(DouyinWebhookEvent.from_user_id)
+    merged = union_all(sub_to, sub_from).subquery()
+
+    # 外层加 cursor + order + limit(+1 判 has_more)
     descending = before_event_id is not None or (after_event_id is None and before_event_id is None)
+    outer = select(merged)
     if after_event_id is not None:
-        stmt = stmt.where(DouyinWebhookEvent.id > after_event_id)
+        outer = outer.where(merged.c.id > after_event_id)
     if before_event_id is not None:
-        stmt = stmt.where(DouyinWebhookEvent.id < before_event_id)
-    order = DouyinWebhookEvent.id.desc() if descending else DouyinWebhookEvent.id.asc()
-    rows = db.execute(stmt.order_by(order).limit(limit + 1)).mappings().all()
+        outer = outer.where(merged.c.id < before_event_id)
+    order = merged.c.id.desc() if descending else merged.c.id.asc()
+    rows = db.execute(outer.order_by(order).limit(limit + 1)).mappings().all()
     db.rollback()
-    has_more = len(rows) > limit
-    page_rows = rows[:limit]
-    # 额外一行只判 has_more，不得进入 scanned_event_ids，否则游标跳过未返回事件
+
+    # Python 层按 id 去重（保序，保留首次出现）
+    seen_ids: set[int] = set()
+    deduped_rows = []
+    for row in rows:
+        rid = int(row.id)
+        if rid not in seen_ids:
+            seen_ids.add(rid)
+            deduped_rows.append(row)
+
+    has_more = len(deduped_rows) > limit
+    page_rows = deduped_rows[:limit]
+    # 额外行只判 has_more，不得进入 scanned_event_ids
     if descending:
         page_rows = list(reversed(page_rows))
     normalized = [SimpleNamespace(**dict(row)) for row in page_rows]
