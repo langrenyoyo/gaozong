@@ -1645,8 +1645,9 @@ def test_frontend_workbench_submits_read_after_render_with_event_id():
     assert "consumedCredentialKeyRef.current = null" in page
     # mark-read 成功后刷新服务端权威未读
     assert "loadConversations" in page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
-    # 轮询条件显式包含"当前选中会话仍有未读"时重新加载详情并重试
-    assert "afterUnread > 0" in page
+    # 旧轮询 afterUnread > 0 逻辑已被 createCoalescedRunner 单飞合并替换，不再每周期重试
+    assert "afterUnread > 0" not in page
+    assert "syncAllAccountsRef" in page
     # persistConversationRead 接受 lastSeenEventId 参数
     persist_section = page.split("persistConversationRead = useCallback")[1].split("}, [")[0]
     assert "lastSeenEventId" in persist_section
@@ -1777,3 +1778,30 @@ def test_frontend_incremental_api_exposes_numeric_event_cursor_contract():
 
     # normalizeDouyinAccount 归一化 latest_event_id
     assert "latest_event_id" in ts_source, "normalizeDouyinAccount 缺少 latest_event_id 归一"
+
+
+def test_frontend_workbench_uses_one_coalesced_all_account_sync_entry():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    assert "createCoalescedRunner" in source
+    assert "runWithConcurrency(activeAccounts, 3" in source
+    assert "after_event_id: cursor" in source
+    assert 'window.addEventListener("focus"' in source
+    assert 'window.addEventListener("online"' in source
+    assert 'document.addEventListener("visibilitychange"' in source
+    assert "window.setInterval" in source
+    assert "8000" in source
+    assert "EventSource" not in source
+    assert "WebSocket" not in source
+
+
+def test_frontend_workbench_incremental_read_and_history_safety_contracts():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    assert "mergeMessagesByEventId" in source
+    assert "before_event_id" in source
+    assert "scrollHeight - previousScrollHeight" in source
+    assert "detailSuccessCredentialRef.current" in source
+    assert "selectedAccountOpenIdRef.current" in source
+    assert "selectedConversationIdRef.current" in source
+    assert "lastSuccessfulSyncAt" in source

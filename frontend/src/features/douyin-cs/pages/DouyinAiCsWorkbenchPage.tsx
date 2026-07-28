@@ -42,6 +42,7 @@ import {
   getDouyinAccountAgents,
   getDouyinAccountConversations,
   getDouyinConversationDetail,
+  getDouyinConversationMessages,
   listDouyinAccounts,
   markDouyinConversationRead,
   resumeDouyinConversationAutopilot,
@@ -62,6 +63,14 @@ import {
 } from "../api";
 import { userFacingError } from "../../../lib/userFacingError";
 import ModuleTabs from "../../../components/ModuleTabs";
+import {
+  advanceEventCursor,
+  createCoalescedRunner,
+  mergeConversationSummaries,
+  mergeMessagesByEventId,
+  retryDelayMs,
+  runWithConcurrency,
+} from "../douyinConversationIncremental";
 
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
@@ -79,6 +88,22 @@ type ConversationFilterKey = "all" | "manual_required" | "high_intent" | "retain
 type ChatAssistMode = "ai_auto_reply" | "manual_takeover";
 type AutoReplyRunViewItem = AiAutoReplyRunListItem & Pick<Partial<AiAutoReplyRunDetail>, "would_send_content">;
 
+interface AccountIncrementalState {
+  latestEventId: number;
+  lastSuccessAt: number | null;
+  failureCount: number;
+  nextRetryAt: number;
+  error: string | null;
+}
+
+interface ConversationIncrementalState {
+  newestEventId: number;
+  oldestEventId: number;
+  hasMoreBefore: boolean;
+  incrementalError: string | null;
+  historyError: string | null;
+}
+
 interface WorkbenchPageCache {
   accounts: DouyinAccountItem[];
   selectedAccountId: number | null;
@@ -88,6 +113,9 @@ interface WorkbenchPageCache {
   profiles: Record<string, DouyinConversationProfile | null>;
   conversationEventLimits: Record<string, number>;
   conversationHasMore: Record<string, boolean>;
+  accountIncremental: Record<string, AccountIncrementalState>;
+  conversationIncremental: Record<string, ConversationIncrementalState>;
+  lastSuccessfulSyncAt: number | null;
 }
 
 const CONVERSATION_FILTERS: Array<{ key: ConversationFilterKey; label: string }> = [
@@ -775,6 +803,8 @@ export default function DouyinAiCsWorkbenchPage() {
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [refreshingConversations, setRefreshingConversations] = useState(false);
   const [loadingOlderConversations, setLoadingOlderConversations] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const [hasMoreConversations, setHasMoreConversations] = useState(
     cachedSelectedAccount
       ? Boolean(cachedWorkbench?.conversationHasMore[cachedSelectedAccount.account_open_id])
@@ -839,6 +869,18 @@ export default function DouyinAiCsWorkbenchPage() {
   const conversationHasMoreRef = useRef<Record<string, boolean>>(
     cachedWorkbench?.conversationHasMore || {},
   );
+  const accountIncrementalRef = useRef<Record<string, AccountIncrementalState>>(
+    cachedWorkbench?.accountIncremental || {},
+  );
+  const conversationIncrementalRef = useRef<Record<string, ConversationIncrementalState>>(
+    cachedWorkbench?.conversationIncremental || {},
+  );
+  const lastSuccessfulSyncAtRef = useRef<number | null>(cachedWorkbench?.lastSuccessfulSyncAt || null);
+  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState<number | null>(
+    cachedWorkbench?.lastSuccessfulSyncAt || null,
+  );
+  const forceNextSyncRef = useRef(false);
+  const syncContinuationRequestedRef = useRef(false);
   // 会话级详情成功凭据：仅当当前详情请求成功并完成 React 状态提交后设置，
   // 包含 account_open_id + conversation_id + request_seq + max_event_id。
   const detailSuccessCredentialRef = useRef<{
@@ -953,6 +995,9 @@ export default function DouyinAiCsWorkbenchPage() {
       profiles: profileCacheRef.current,
       conversationEventLimits: conversationEventLimitsRef.current,
       conversationHasMore: conversationHasMoreRef.current,
+      accountIncremental: accountIncrementalRef.current,
+      conversationIncremental: conversationIncrementalRef.current,
+      lastSuccessfulSyncAt,
     });
   }, [accounts, conversations, messages, profile, queryClient, selectedAccountId, selectedConversationId]);
 
@@ -1006,6 +1051,18 @@ export default function DouyinAiCsWorkbenchPage() {
       if (accountRequestSeqRef.current !== requestSeq) return data.items;
       const mapped = data.items;
       accountsCacheRef.current = mapped;
+      // 为所有有效账号建立增量基线（若尚未存在）
+      for (const account of mapped) {
+        const accountOpenId = account.account_open_id;
+        const current = accountIncrementalRef.current[accountOpenId];
+        accountIncrementalRef.current[accountOpenId] = current || {
+          latestEventId: Math.max(0, Number(account.latest_event_id) || 0),
+          lastSuccessAt: null,
+          failureCount: 0,
+          nextRetryAt: 0,
+          error: null,
+        };
+      }
       setAccounts(mapped);
       setAccountListSource("official_bindings");
       setSelectedAccountId((current) => {
@@ -1190,6 +1247,16 @@ export default function DouyinAiCsWorkbenchPage() {
       }
       setMessages(detail.messages.items);
       setProfile(detail.profile);
+      // 建立当前会话的新旧水位（详情扩展字段）
+      if (cacheKey) {
+        conversationIncrementalRef.current[cacheKey] = {
+          newestEventId: Math.max(0, Number(detail.messages.next_after_event_id) || 0),
+          oldestEventId: Math.max(0, Number(detail.messages.next_before_event_id) || 0),
+          hasMoreBefore: Boolean(detail.messages.has_more),
+          incrementalError: null,
+          historyError: null,
+        };
+      }
       // 从本次详情响应消息取最大有效 raw_event_id，作为已读提交水位；
       // 缓存消息不得作为本次详情成功的证据，只在成功响应后设置会话级凭据。
       const maxEventId = detail.messages.items.reduce(
@@ -1220,6 +1287,198 @@ export default function DouyinAiCsWorkbenchPage() {
       }
     }
   }, [selectedAccount]);
+
+  // Step 5：当前会话消息增量补拉（after_event_id），迟到响应不覆盖选择
+  const syncSelectedConversationMessages = useCallback(async (
+    accountOpenId: string,
+    conversationId: string | number,
+  ) => {
+    const cacheKey = conversationCacheKey(accountOpenId, conversationId);
+    const state = conversationIncrementalRef.current[cacheKey];
+    if (!cacheKey || !state) return;
+    const requestSeq = detailRequestSeqRef.current + 1;
+    detailRequestSeqRef.current = requestSeq;
+    try {
+      const data = await getDouyinConversationMessages(conversationId, {
+        account_open_id: accountOpenId,
+        after_event_id: state.newestEventId,
+        limit: 100,
+      });
+      // 迟到响应保护：请求序号或选择已变则丢弃
+      if (
+        detailRequestSeqRef.current !== requestSeq
+        || selectedAccountOpenIdRef.current !== accountOpenId
+        || selectedConversationIdRef.current !== conversationId
+      ) return;
+      const merged = mergeMessagesByEventId(messagesCacheRef.current[cacheKey] || [], data.items);
+      messagesCacheRef.current[cacheKey] = merged;
+      conversationIncrementalRef.current[cacheKey] = {
+        ...state,
+        newestEventId: advanceEventCursor(state.newestEventId, data.next_after_event_id),
+        incrementalError: null,
+      };
+      setMessages(merged);
+      const maxEventId = merged.reduce(
+        (maximum, item) => Math.max(maximum, Number(item.raw_event_id ?? item.id) || 0),
+        0,
+      );
+      detailSuccessCredentialRef.current = {
+        account_open_id: accountOpenId,
+        conversation_id: conversationId,
+        request_seq: requestSeq,
+        max_event_id: maxEventId || null,
+      };
+      setDetailSuccessSeq((current) => current + 1);
+    } catch (err) {
+      // 失败只写 incrementalError，不推进 newestEventId、不清缓存、不生成已读凭据
+      conversationIncrementalRef.current[cacheKey] = {
+        ...state,
+        incrementalError: userFacingError(err, "消息增量同步失败"),
+      };
+    }
+  }, []);
+
+  // Step 6：单账号会话增量，多页有限预算
+  const syncAccountConversations = useCallback(async (account: DouyinAccountItem, forceRetry: boolean) => {
+    const accountOpenId = account.account_open_id;
+    const state = accountIncrementalRef.current[accountOpenId];
+    if (!state || (!forceRetry && Date.now() < state.nextRetryAt)) return false;
+    let cursor = state.latestEventId;
+    try {
+      for (let page = 0; page < 5; page += 1) {
+        const data = await getDouyinAccountConversations(account.id, {
+          account_open_id: accountOpenId,
+          after_event_id: cursor,
+          limit: 100,
+        });
+        const merged = mergeConversationSummaries(
+          conversationsCacheRef.current[accountOpenId] || [],
+          data.items,
+        );
+        conversationsCacheRef.current[accountOpenId] = merged;
+        cursor = advanceEventCursor(cursor, data.next_after_event_id);
+        const currentState = accountIncrementalRef.current[accountOpenId] || state;
+        accountIncrementalRef.current[accountOpenId] = {
+          ...currentState,
+          latestEventId: cursor,
+          error: null,
+        };
+        setAccounts((current) => current.map((item) =>
+          item.account_open_id === accountOpenId
+            ? { ...item, unread_count: Number(data.account_unread_count ?? item.unread_count ?? 0), latest_event_id: cursor }
+            : item,
+        ));
+        if (selectedAccountOpenIdRef.current === accountOpenId) setConversations(merged);
+        const currentConversationId = selectedConversationIdRef.current;
+        if (
+          currentConversationId !== null
+          && selectedAccountOpenIdRef.current === accountOpenId
+          && data.items.some((item) => item.id === currentConversationId)
+        ) {
+          await syncSelectedConversationMessages(accountOpenId, currentConversationId);
+        }
+        if (!data.has_more) {
+          const completedAt = Date.now();
+          accountIncrementalRef.current[accountOpenId] = {
+            ...(accountIncrementalRef.current[accountOpenId] || state),
+            latestEventId: cursor,
+            lastSuccessAt: completedAt,
+            failureCount: 0,
+            nextRetryAt: 0,
+            error: null,
+          };
+          return true;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+      // 5 页预算耗尽且仍 has_more=true，排队下一轮
+      syncContinuationRequestedRef.current = true;
+      return false;
+    } catch (err) {
+      const currentState = accountIncrementalRef.current[accountOpenId] || state;
+      const failures = currentState.failureCount + 1;
+      accountIncrementalRef.current[accountOpenId] = {
+        ...currentState,
+        latestEventId: cursor,
+        failureCount: failures,
+        nextRetryAt: Date.now() + retryDelayMs(failures),
+        error: userFacingError(err, "会话增量同步失败"),
+      };
+      return false;
+    }
+  }, [syncSelectedConversationMessages]);
+
+  // Step 7：全账号同步单飞合并入口
+  const syncAllAccountsRef = useRef<() => Promise<void>>(async () => undefined);
+
+  const syncAllAccountsRun = useCallback(async () => {
+    const activeAccounts = accountsCacheRef.current.filter(
+      (account) => account.is_authorized !== false && account.bind_status !== 0,
+    );
+    if (!activeAccounts.length) return;
+    const forceRetry = forceNextSyncRef.current;
+    forceNextSyncRef.current = false;
+    syncContinuationRequestedRef.current = false;
+    const results = new Map<string, boolean>();
+    await runWithConcurrency(activeAccounts, 3, async (account) => {
+      results.set(account.account_open_id, await syncAccountConversations(account, forceRetry));
+    });
+    if (activeAccounts.every((account) => results.get(account.account_open_id) === true)) {
+      const completedAt = Date.now();
+      lastSuccessfulSyncAtRef.current = completedAt;
+      setLastSuccessfulSyncAt(completedAt);
+    }
+    if (syncContinuationRequestedRef.current) {
+      window.setTimeout(() => { void syncAllAccountsRef.current(); }, 0);
+    }
+  }, [syncAccountConversations]);
+
+  useEffect(() => {
+    syncAllAccountsRef.current = createCoalescedRunner(syncAllAccountsRun);
+  }, [syncAllAccountsRun]);
+
+  // Step 9：历史消息分页（before_event_id）+ 滚动锚点
+  const loadOlderMessages = useCallback(async () => {
+    const accountOpenId = selectedAccountOpenIdRef.current;
+    const conversationId = selectedConversationIdRef.current;
+    const cacheKey = conversationCacheKey(accountOpenId, conversationId);
+    const state = conversationIncrementalRef.current[cacheKey];
+    const container = messageListRef.current;
+    if (!accountOpenId || conversationId === null || !state?.hasMoreBefore || loadingOlderMessages) return;
+    const previousScrollHeight = container?.scrollHeight || 0;
+    setLoadingOlderMessages(true);
+    try {
+      const data = await getDouyinConversationMessages(conversationId, {
+        account_open_id: accountOpenId,
+        before_event_id: state.oldestEventId,
+        limit: 100,
+      });
+      if (
+        selectedAccountOpenIdRef.current !== accountOpenId
+        || selectedConversationIdRef.current !== conversationId
+      ) return;
+      const merged = mergeMessagesByEventId(messagesCacheRef.current[cacheKey] || [], data.items);
+      messagesCacheRef.current[cacheKey] = merged;
+      conversationIncrementalRef.current[cacheKey] = {
+        ...state,
+        oldestEventId: Number(data.next_before_event_id ?? state.oldestEventId),
+        hasMoreBefore: Boolean(data.has_more),
+        historyError: null,
+      };
+      setMessages(merged);
+      // 滚动锚点：保持用户视觉位置不变
+      window.requestAnimationFrame(() => {
+        if (container) container.scrollTop += container.scrollHeight - previousScrollHeight;
+      });
+    } catch (err) {
+      conversationIncrementalRef.current[cacheKey] = {
+        ...state,
+        historyError: userFacingError(err, "更早消息加载失败"),
+      };
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [loadingOlderMessages]);
 
   const loadLatestAutoReplyRun = useCallback(async (
     conversation: DouyinConversationItem | null,
@@ -1537,59 +1796,36 @@ export default function DouyinAiCsWorkbenchPage() {
     }
   }, [conversationJumpHandled, conversationJumpParams, filteredConversations, selectedConversationId]);
 
+  // Step 8：替换旧当前账号整批轮询为全账号单飞合并同步 + 恢复触发
+  // mark-read 刷屏消除：旧 effect 每周期产生新详情成功凭据并重试 mark-read，
+  // 新 effect 由 createCoalescedRunner 合并多事件，不再每周期产生新凭据重试。
   useEffect(() => {
-    if (!selectedAccount) return undefined;
-
-    const poll = async () => {
-      if (document.visibilityState !== "visible") return;
-      if (
-        pollInFlightRef.current
-        || loadingConversations
-        || loadingMessages
-        || loadingOlderConversations
-      ) return;
-      pollInFlightRef.current = true;
-      const currentAccount = selectedAccount;
-      const currentConversationId = selectedConversationIdRef.current;
-      try {
-        const before = currentConversationId
-          ? conversationsCacheRef.current[currentAccount.account_open_id]?.find((item) => item.id === currentConversationId)
-          : null;
-        const beforeWatermark = conversationWatermark(before);
-        const beforeUnread = Number(before?.unread_count || 0);
-        const items = await loadConversations(currentAccount, {
-          skipDefaultSelection: true,
-          background: true,
-        });
-        if (selectedAccountOpenIdRef.current !== currentAccount.account_open_id || !currentConversationId) return;
-        const after = items.find((item) => item.id === currentConversationId) || null;
-        const afterWatermark = conversationWatermark(after);
-        const afterUnread = Number(after?.unread_count || 0);
-        // 轮询条件显式包含"当前选中会话仍有未读"：afterUnread > 0 时重新加载详情，
-        // 从而每个轮询周期产生新详情成功凭据并重试 mark-read（不依赖偶然的 React 对象变化）。
-        // 保持 8 秒轮询节奏，不新增立即无限重试或新定时器。
-        if (after && (afterWatermark !== beforeWatermark || afterUnread !== beforeUnread || afterUnread > 0)) {
-          void loadConversationDetail(currentConversationId, { background: true });
-          void loadLatestAutoReplyRun(after, currentAccount, { background: true });
-        }
-      } finally {
-        pollInFlightRef.current = false;
+    const trigger = () => { void syncAllAccountsRef.current(); };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        forceNextSyncRef.current = true;
+        trigger();
       }
     };
-
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 8000);
-    return () => window.clearInterval(timer);
-  }, [
-    loadConversationDetail,
-    loadConversations,
-    loadLatestAutoReplyRun,
-    loadingConversations,
-    loadingMessages,
-    loadingOlderConversations,
-    selectedAccount,
-  ]);
+    const onFocus = () => {
+      forceNextSyncRef.current = true;
+      trigger();
+    };
+    const onOnline = () => {
+      forceNextSyncRef.current = true;
+      trigger();
+    };
+    const timer = window.setInterval(trigger, 8000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedAccount || !selectedConversation?.conversation_short_id) return undefined;
@@ -2268,6 +2504,9 @@ export default function DouyinAiCsWorkbenchPage() {
             <p className="mt-1 text-xs leading-5 text-[#8b95a6]">
               多抖音号会话工作台，当前支持测试白名单内的 AI 自动回复闭环。
             </p>
+            <span className="text-xs text-slate-500">
+              {lastSuccessfulSyncAt ? `最后同步 ${formatTime(new Date(lastSuccessfulSyncAt).toISOString())}` : "尚未完成全账号同步"}
+            </span>
             <ModuleTabs items={[
               { label: "客服工作台", path: "/douyin-cs/workbench" },
               { label: "自动回复诊断", path: "/douyin-cs/auto-reply-runs" },
@@ -2601,7 +2840,21 @@ export default function DouyinAiCsWorkbenchPage() {
           </div>
 
           <div className="grid min-h-0 flex-1 grid-rows-[minmax(220px,1fr)_minmax(270px,42%)]">
-            <div className="min-h-0 overflow-auto bg-[#f8fafc] px-5 py-4">
+            <div ref={messageListRef} className="min-h-0 overflow-auto bg-[#f8fafc] px-5 py-4">
+              {(() => {
+                const cacheKey = conversationCacheKey(selectedAccountOpenIdRef.current, selectedConversationIdRef.current);
+                const convState = cacheKey ? conversationIncrementalRef.current[cacheKey] : null;
+                return convState?.hasMoreBefore ? (
+                  <button
+                    type="button"
+                    onClick={() => { void loadOlderMessages(); }}
+                    disabled={loadingOlderMessages}
+                    className="mb-2 w-full rounded-md border border-slate-200 bg-white py-1.5 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {loadingOlderMessages ? "正在加载..." : "加载更早消息"}
+                  </button>
+                ) : null;
+              })()}
               {loadingMessages && messages.length === 0 ? <EmptyState text="正在加载聊天消息..." /> : null}
               {!loadingMessages && messages.length === 0 ? <EmptyState text="暂无消息。" /> : null}
               <div className="space-y-3">
