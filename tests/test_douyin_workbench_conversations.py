@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -1746,3 +1747,33 @@ def test_conversation_incremental_limit_over_max_returns_422():
         params={"after_event_id": 0, "limit": 501},
     )
     assert response.status_code == 422
+
+
+def test_frontend_incremental_api_exposes_numeric_event_cursor_contract():
+    """静态前端合同：douyinAiCsClient.ts 暴露数值事件游标字段与请求参数。"""
+    ts_source = (
+        Path(__file__).resolve().parents[1]
+        / "frontend"
+        / "src"
+        / "api"
+        / "douyinAiCsClient.ts"
+    ).read_text(encoding="utf-8")
+
+    # 响应类型：会话摘要/消息/账号含 latest_event_id 等游标字段
+    required_response_fields = [
+        "latest_event_id",
+        "next_after_event_id",
+        "next_before_event_id",
+        "account_unread_count",
+        "has_more",
+    ]
+    for field in required_response_fields:
+        assert field in ts_source, f"前端类型缺少响应字段: {field}"
+
+    # 请求参数：getDouyinAccountConversations 透传 after_event_id / limit
+    assert "params?.event_limit" in ts_source, "前端缺少 event_limit 兼容保留"
+    assert "params?.after_event_id" in ts_source, "前端缺少 after_event_id 请求参数"
+    assert "params?.before_event_id" in ts_source, "前端缺少 before_event_id 请求参数"
+
+    # normalizeDouyinAccount 归一化 latest_event_id
+    assert "latest_event_id" in ts_source, "normalizeDouyinAccount 缺少 latest_event_id 归一"

@@ -31,6 +31,7 @@ export interface DouyinAccountItem {
   avatar?: string | null;
   avatar_url?: string | null;
   unread_count?: number;
+  latest_event_id?: number;
   last_active_at?: string | null;
   source?: string | null;
   is_authorized?: boolean;
@@ -122,6 +123,7 @@ export interface DouyinConversationItem {
   last_message: string;
   last_message_at: string;
   unread_count: number;
+  latest_event_id?: number;
   lead_status?: string | null;
   tags?: string[];
 }
@@ -131,6 +133,9 @@ export interface DouyinConversationListResponse {
   event_limit?: number;
   has_more?: boolean;
   next_event_limit?: number | null;
+  latest_event_id?: number;
+  next_after_event_id?: number;
+  account_unread_count?: number;
 }
 
 export interface DouyinMessageItem {
@@ -158,6 +163,10 @@ export interface DouyinMessageItem {
 
 export interface DouyinMessageListResponse {
   items: DouyinMessageItem[];
+  latest_event_id?: number;
+  next_after_event_id?: number;
+  next_before_event_id?: number;
+  has_more?: boolean;
 }
 
 export interface DouyinUserProfileResponse {
@@ -488,6 +497,7 @@ function normalizeDouyinAccount(item: DouyinAccountItem): DouyinAccountItem {
     avatar,
     avatar_url: item.avatar_url || avatar,
     unread_count: Number.isFinite(Number(item.unread_count)) ? Number(item.unread_count) : 0,
+    latest_event_id: Math.max(0, Number(item.latest_event_id) || 0),
     is_authorized: authorizationStatus === "authorized",
     authorization_status: authorizationStatus,
   };
@@ -602,7 +612,7 @@ export async function getDouyinAccountAgents(
 
 export async function getDouyinAccountConversations(
   accountId: string | number,
-  params?: { account_open_id?: string; event_limit?: number; signal?: AbortSignal },
+  params?: { account_open_id?: string; event_limit?: number; after_event_id?: number; limit?: number; signal?: AbortSignal },
 ): Promise<DouyinConversationListResponse> {
   return apiClient.get(
     `/integrations/douyin/accounts/${encodeURIComponent(String(accountId))}/conversations`,
@@ -610,6 +620,8 @@ export async function getDouyinAccountConversations(
       params: {
         account_open_id: params?.account_open_id,
         event_limit: params?.event_limit,
+        after_event_id: params?.after_event_id,
+        limit: params?.limit,
       },
       signal: params?.signal,
     },
@@ -634,7 +646,7 @@ export async function getDouyinConversationDetail(
 
 export async function getDouyinConversationMessages(
   conversationId: string | number,
-  params?: { account_open_id?: string; signal?: AbortSignal },
+  params?: { account_open_id?: string; after_event_id?: number; before_event_id?: number; limit?: number; signal?: AbortSignal },
 ): Promise<DouyinMessageListResponse> {
   return apiClient.get(
     "/integrations/douyin/conversation-messages",
@@ -642,6 +654,9 @@ export async function getDouyinConversationMessages(
       params: {
         conversation_key: String(conversationId),
         account_open_id: params?.account_open_id,
+        after_event_id: params?.after_event_id,
+        before_event_id: params?.before_event_id,
+        limit: params?.limit,
       },
       signal: params?.signal,
     },
