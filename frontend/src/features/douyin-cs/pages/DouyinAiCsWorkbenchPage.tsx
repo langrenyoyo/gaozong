@@ -997,7 +997,7 @@ export default function DouyinAiCsWorkbenchPage() {
       conversationHasMore: conversationHasMoreRef.current,
       accountIncremental: accountIncrementalRef.current,
       conversationIncremental: conversationIncrementalRef.current,
-      lastSuccessfulSyncAt,
+      lastSuccessfulSyncAt: lastSuccessfulSyncAtRef.current,
     });
   }, [accounts, conversations, messages, profile, queryClient, selectedAccountId, selectedConversationId]);
 
