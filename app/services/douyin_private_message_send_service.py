@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -249,7 +249,14 @@ def _hash_prefix(value: Any) -> str:
 def _is_context_expired(message_create_time: Any) -> bool:
     if not isinstance(message_create_time, datetime):
         return False
-    return datetime.now() - message_create_time > timedelta(hours=24)
+    # message_create_time 可能是 aware（PostgreSQL DateTime(timezone=True) 列）
+    # 或 naive（SQLite / 上游毫秒转本地时间）。datetime.now() 是 naive，
+    # naive - aware 会触发 TypeError。按对端时区特性取同基准 now，避免混用。
+    if message_create_time.tzinfo:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.now()
+    return now - message_create_time > timedelta(hours=24)
 
 
 def _optional_str(value: Any) -> str | None:
