@@ -149,7 +149,7 @@ def _plan_nodes(plan):
 
 
 def test_a12_incremental_query_avoids_seq_scan_and_limits_filter_rows(pg_engine, pg_namespace):
-    """A12：5 万行下游标查询（UNION ALL 改写）不走 Seq Scan，Rows Removed by Filter <= 5000。"""
+    """A12：5 万行下生产 _query_message_row_page 真实查询不走 Seq Scan，Rows Removed by Filter <= 5000。"""
 
     target_account, _noise_account = _seed_plan_rows(pg_engine, pg_namespace)
 
@@ -163,33 +163,44 @@ def test_a12_incremental_query_avoids_seq_scan_and_limits_filter_rows(pg_engine,
             {"target": target_account, "namespace": pg_namespace},
         ).scalar_one()
 
-    # 构造真实游标查询 SQL（UNION ALL 改写版，与 _query_message_row_page 一致）：
-    # 两个单侧子查询各走 (merchant_id, to_user_id, id) / (merchant_id, from_user_id, id) 索引
-    from app.models import DouyinWebhookEvent
+    # 捕获生产 _query_message_row_page 生成的真实 SQL（编译为 literal_binds）
+    from sqlalchemy.orm import sessionmaker as _sm
+    from app.services.douyin_workbench_conversation_service import _query_message_row_page
 
-    columns_str = (
-        "id, event, from_user_id, to_user_id, conversation_short_id, "
-        "server_message_id, message_type, parsed_content_json, lead_id, raw_body, created_at"
-    )
-    base_where = (
-        f"event IN ('im_receive_msg', 'im_send_msg') "
-        f"AND is_duplicate IS false "
-        f"AND merchant_id = '{pg_namespace}' "
-        f"AND id > {cursor}"
-    )
-    union_sql = (
-        f"SELECT * FROM ("
-        f"  (SELECT {columns_str} FROM douyin_webhook_events "
-        f"   WHERE {base_where} AND to_user_id = '{target_account}' "
-        f"   ORDER BY id ASC LIMIT 101)"
-        f"  UNION ALL"
-        f"  (SELECT {columns_str} FROM douyin_webhook_events "
-        f"   WHERE {base_where} AND from_user_id = '{target_account}' "
-        f"   ORDER BY id ASC LIMIT 101)"
-        f") AS merged ORDER BY id ASC LIMIT 101"
-    )
+    captured_sql: list[str] = []
+    session_factory = _sm(bind=pg_engine)
+    db = session_factory()
+    original_execute = db.execute
 
-    explain_sql = text(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {union_sql}")
+    def _capturing_execute(stmt, *args, **kwargs):
+        try:
+            captured_sql.append(
+                str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+            )
+        except Exception:
+            pass
+        return original_execute(stmt, *args, **kwargs)
+
+    db.execute = _capturing_execute
+    try:
+        _query_message_row_page(
+            db,
+            account_open_id=target_account,
+            conversation_key=None,
+            merchant_id=pg_namespace,
+            after_event_id=cursor,
+            before_event_id=None,
+            limit=100,
+        )
+    finally:
+        db.execute = original_execute
+        db.close()
+
+    assert captured_sql, "未捕获到生产 SQL"
+    real_sql = captured_sql[0]
+
+    # EXPLAIN 生产真实查询 SQL
+    explain_sql = text(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {real_sql}")
     with pg_engine.connect() as conn:
         result = conn.execute(explain_sql).scalar_one()
 
