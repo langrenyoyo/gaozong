@@ -701,7 +701,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - manual retry 使用单条原子条件 UPDATE（merchant_id + failed + 白名单 + `NOT EXISTS` 发送流水），消除 TOCTOU
 - 调度器默认关闭（`AI_AUTO_REPLY_OUTBOX_ENABLED=false`）；10 个 outbox 变量已在三个 env 模板登记且默认值与 `config.py` 一致
 - 执行窗口自测（`python -m pytest tests/test_ai_auto_reply_outbox_service.py tests/test_ai_auto_reply_send_service.py tests/test_ai_auto_reply_dry_run.py tests/test_env_profile_templates.py tests/test_douyin_webhook.py -q`）：258 passed；本任务专项、新增并发/租约回归与 outbox 状态机直接相关测试 0 failed（含检查点后跳过路径原子写 gate_results + 清租约 + 不调用真实发送断言），指定回归 0 个新增失败
-- 独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS）：主专项 258 passed、迁移/API/合同 49 passed、并发热点 10 轮 40 passed，合计 347 passed；另有 2 个经 Base（8e98764）/ Candidate（a245e23）同环境对照确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
+- 独立测试 Test-Revision R2-T1（A1-A16 全部验收通过，任务级结论 PASS）：主专项 258 passed、迁移/API/合同 49 passed、并发热点 10 轮 40 passed，合计 347 passed；另有 2 个经 Base（8e98764）/ Candidate（a245e23）同环境对照确认的范围外基线失败：① `test_active_binding_calls_9100_with_history_and_records_decision_log`（IndexError，后续确认根因是旧 dry-run 测试夹具未写事件 `merchant_id/tenant_id`，不是 `douyin_conversation_history_service.py` 业务服务缺陷，已由 `7011828ee73a2aa0bab88cb9c75c823a2336ec84` 的 R1-T1 闭合）；② env `test_all_code_variables_are_classified`（未登记变量均为 AI_EDIT 冻结模块 / DAILY_REPORT / LOCAL_AGENT / NEWCAR_AUTH，不在本任务 Allowed-Files）；Candidate 0 个新增失败
 - 已通过普通快进推送集成至 `master@a245e231ad03e153d6b605801ded60ddbd2da1d3`；PostgreSQL/MVCC 验证见第 29 节（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1，P1-P9、C1-C4 全部 PASS），未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
 
 ## 28. AI 自动回复 outbox 重启恢复测试（DY-CS-AUTO-REPLY-OUTBOX-RESTART-RECOVERY-1）
@@ -711,7 +711,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - pytest 父进程编排全新 Python 子进程，共享 `tmp_path` 临时文件 SQLite，验证 outbox 仅依赖已提交数据库状态完成恢复、领取、对账和去重，全程禁止真实外部动作
 - 子进程在 `import app.database` 前绑定临时 `DATABASE_URL`、剥离继承的 TOKEN/SECRET/PASSWORD/API_KEY、关闭自动回复与真实发送开关；安全处理器用真实 guarded UPDATE 推进到 `blocked` 终态并清租约，LLM/9100/抖音/微信/socket 全部 patch 为"调用即失败"
 - R1 进程隔离与落盘；R2 `pending` 重启安全处理一次；R3 真实 claim 后 `os._exit` 过期恢复处理一次（`recovered_failure_stage=lease_expired`）；R4 过期 `send_processing` 恢复一次；R5 `retry_wait` 未到期不领取、到期领取一次；R6 `send_authorized` 有 sent 流水对账为 `sent` 不重发；R7 无流水对账为 `send_unknown` 不重发；R8 连续两次重启不重复副作用；R9 调度器关闭不领取（日志含 `reason=disabled`）；R10 空 `lease_owner` 失败关闭（日志含 `stage=process_one`/`failure_stage=missing_lease_owner`）；R11 外部调用为零（`_run_safe_cycle` 强制断言 `calls["count"]==0`，R3/R4/R5/R8 断言 `external_calls==0`）
-- 独立测试数字：专项 `11 passed, 0 failed`；连续 10 轮共 `110 passed, 0 failed`；完整指定回归 `248 passed`、1 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域），Candidate 0 个新增失败
+- 独立测试数字：专项 `11 passed, 0 failed`；连续 10 轮共 `110 passed, 0 failed`；完整指定回归 `248 passed`、1 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，后续确认根因是旧 dry-run 测试夹具未写事件 `merchant_id/tenant_id`，不是 `douyin_conversation_history_service.py` 业务服务缺陷，已由 `7011828ee73a2aa0bab88cb9c75c823a2336ec84` 的 R1-T1 闭合），Candidate 0 个新增失败
 - 已通过普通快进推送集成至 `master@a7f924d02712fd942a1b9f069bf4b9c40bf6c8fe`；本地跨进程 SQLite 重启恢复测试已在专用 PostgreSQL 数据库补齐 MVCC 验证（见第 29 节 DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1，P1-P9、C1-C4 全部 PASS），未验证生产调度、迁移和恢复，未连接生产环境，未发送真实私信、自动回复或微信消息，未运行全仓测试，尚未部署或发布
 
 ## 29. AI 自动回复 outbox PostgreSQL/MVCC 恢复测试（DY-CS-AUTO-REPLY-OUTBOX-PG-MVCC-RECOVERY-1）
@@ -725,7 +725,7 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - P4 20 路子进程文件门禁 claim 连续 10 轮单胜（`attempt_count=1`/`lease_owner` 非空/胜出者 `run_ids` 唯一）；P5 `os._exit(23)` 后租约未过期不领取/过期恢复一次（`recovered_failure_stage=lease_expired`）；P6 `retry_wait` 到期边界；P7 `send_authorized` 有/无 sent 流水对账（`sent`/`send_unknown`，租约清空，仅 True 分支 1 条预置流水）；P8 旧 owner `guarded-block-once` `rowcount=0` 不覆盖新 owner/新租约/新诊断值（`block_reason='pg_new_owner_state'` 保持）；P9 `external_calls=0`/意外流水 0/namespace 残留 0/日志无明文凭据
 - C1 `_GateResultsJSON` PostgreSQL/SQLite 类型及字符串合同（后续第 30 节泛化为共享类型 `_JSONStringJSONB`）；C2 SQLite 重启恢复 R1-R11 无回归；C3 outbox/send/dry-run/webhook 相邻回归无 Candidate 新增失败；C4 编译、范围、线性、工作区和差异检查
 - `_claim_test_webhook_event` 注释合同（helper 规避 ORM Text→JSONB 类型错误，不声称已存为对象；webhook JSON 字符串标量双重编码问题已由后续 parity 任务 `P3-9000-PG-SCHEMA-ORM-JSONB-PARITY-REPAIR-1` 闭合，见第 30 节）
-- 独立测试数字：schema 合同 `11 passed`、PostgreSQL 专项 `22 passed, 0 skipped`、连续 10 轮共 `220 passed`、SQLite 重启恢复 `11 passed`、状态机回归 `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，根因在 `douyin_conversation_history_service.py`，不在本任务 Allowed-Files，属 TENANT-ISOLATION-READ-1 子任务域）、webhook 回归 `89 passed`，Candidate 0 个新增失败
+- 独立测试数字：schema 合同 `11 passed`、PostgreSQL 专项 `22 passed, 0 skipped`、连续 10 轮共 `220 passed`、SQLite 重启恢复 `11 passed`、状态机回归 `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，后续确认根因是旧 dry-run 测试夹具未写事件 `merchant_id/tenant_id`，不是 `douyin_conversation_history_service.py` 业务服务缺陷，已由 `7011828ee73a2aa0bab88cb9c75c823a2336ec84` 的 R1-T1 闭合）、webhook 回归 `89 passed`，Candidate 0 个新增失败
 - `external_calls=0`、意外流水=0、namespace 残留=0、遗留子进程=0；专用 PostgreSQL 数据库连接是唯一允许的网络传输
 - 已通过普通快进推送集成至 `master@df8644d828680a75ff955db59c546d4ba1caa729`；只验证本地专用 PostgreSQL 数据库，不等于生产验证，未验证生产调度、生产迁移和生产恢复，未连接 staging/production，未真实发送，未运行全仓测试，尚未部署或发布
 
@@ -743,8 +743,16 @@ python -m pytest tests/test_p1_auto_1d_fix4_safe_json.py -v
 - 真实 `_pg_url()` 接受/拒绝边界：`postgresql+psycopg`/`127.0.0.1`|`localhost`/`5432`/`auto_wechat_outbox_test`/无 query fragment（6 类拒绝 + 2 主机接受，直接调用 `_pg_url()` 而非复制判断逻辑）
 - J1-J16：J1/J2 共享类型编译 JSONB/TEXT、J3 字符串合同 + JSON "null" 归一 + 非法 JSON 失败、J4 ORM 写入读回 webhook JSON 字符串、J5/J6 claim 存对象非字符串标量、J7 20 路×10 轮单胜、J8 重复事件不产生第二个有效业务事件（由既有 webhook 原子幂等回归覆盖）、J9 send_service 写原生 JSONB（无真实网络）、J10 decision_service 6 字符串字段 + 风险筛选、J11 webhook/merchant/workbench 筛选 cast TEXT、J12 SQLite 相邻回归无回归、J13 namespace 残留 0（pg_case fixture finally 断言四表计数 (0,0,0,0)）、J14 Alembic 0016 schema 且无 `create_all`、J15 Candidate 新增失败 0、J16 编译/范围/线性/工作区/差异检查通过；全程无真实外部调用（`call_douyin_openapi` 全程 patch 为本地替身）、无遗留线程或子进程（ThreadPoolExecutor 正常关闭、pg_case fixture 清理）
 - B1-B8：B1 `_IntegerBoolean` PG=BOOLEAN/SQLite=INTEGER、B2 0/1/False/True/None 双方言绑定、B3 非法值抛 ValueError、B4 7 字段使用该类型且 `is_effective` 不变、B5 真实 PG 写入成功、B6 新 Session 读回严格 int 0/1（`type(value) is int`）+ PG `pg_typeof=boolean`、B7 manual_required/llm_used/rag_used 查询筛选限定本 namespace 命中、B8 J1-J16 与 SQLite 回归
-- 独立测试数字：PostgreSQL 专项 `38 passed, 0 skipped`（J7 内部 20 路×10 轮单胜，专项另连续 3 轮通过）、webhook/atomic/workbench `157 passed`、outbox/send/dry-run `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，IndexError 行 580，Base/Candidate 同环境一致）、PostgreSQL MVCC `22 passed`、SQLite 重启恢复 `11 passed`，Candidate 0 个新增失败
+- 独立测试数字：PostgreSQL 专项 `38 passed, 0 skipped`（J7 内部 20 路×10 轮单胜，专项另连续 3 轮通过）、webhook/atomic/workbench `157 passed`、outbox/send/dry-run `149 passed + 1` 个范围外基线失败（`test_active_binding_calls_9100_with_history_and_records_decision_log`，IndexError 行 580，Base/Candidate 同环境一致）、PostgreSQL MVCC `22 passed`、SQLite 重启恢复 `11 passed`，Candidate 0 个新增失败。该 `+1` 是当时同环境 Base/Candidate 对照的历史结果；后续 `7011828ee73a2aa0bab88cb9c75c823a2336ec84` 已确认其为测试夹具缺失事件商户/租户归属并通过 R1-T1 闭合，不倒改本节当时的测试数字
 - `020ab730bae8ac2c570ce4e0e185f203b62b08e4` 将 `DouyinLead.raw_data`/`all_extracted_contacts` 改用 `_JSONStringJSONB`，该提交不属于 `9a2f1aa` 的 R1 独立测试报告覆盖范围，不继承 38 passed 结论
 - 只验证本地专用 PostgreSQL 数据库，不等于生产验证，未验证生产调度、生产迁移和生产恢复，未连接 staging/production，未真实发送，未运行全仓测试，尚未部署或发布
+
+## 31. 会话历史测试夹具基线返修（DY-CS-CONVERSATION-HISTORY-TEST-FIXTURE-BASELINE-1）
+
+- Execution-Base：`dc6c9f47311e8d61448ab247ac54d1356a188abf`；最终候选 `7011828ee73a2aa0bab88cb9c75c823a2336ec84`，直接父提交为 Execution-Base，候选仅修改 `tests/test_ai_auto_reply_dry_run.py`。
+- 独立测试 R1-T1：目标历史用例 `1 passed`；NULL 商户历史隔离合同 `1 passed`；dry-run、会话历史、代理和商户隔离相邻回归 `138 passed, 0 failed`；outbox、发送和 dry-run 组合 `149 passed, 0 failed`；`py_compile` 通过。
+- 红灯根因：旧测试夹具的三条 `DouyinWebhookEvent` 未写 `merchant_id/tenant_id`；现有商户隔离正确排除 NULL 归属事件，导致历史为空，旧期望值对空数组下标访问而触发 `IndexError`。返修仅给夹具增加默认 `None` 的可选归属参数，并在该用例显式写入 `merchant-1/tenant-1`；未修改 `douyin_conversation_history_service.py`、会话查询或商户过滤。
+- 安全边界：`merchant_id=NULL` 历史事件对普通商户继续不可见；FakeAiCsClient 仅作本地替身，无真实 LLM/9100/抖音/微信调用，无真实发送、生产连接或部署，未运行全仓测试。
+- 候选已通过普通快进集成至远端 `master@7011828ee73a2aa0bab88cb9c75c823a2336ec84`。
 
 后续代码阶段应按本文逐项拆分测试用例和验收报告。
