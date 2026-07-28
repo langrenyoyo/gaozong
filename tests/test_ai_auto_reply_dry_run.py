@@ -56,6 +56,8 @@ def _insert_event(
     event_key: str = "event-key-1",
     server_message_id: str = "server-msg-1",
     is_duplicate: bool = False,
+    merchant_id: str | None = None,
+    tenant_id: str | None = None,
     created_at: datetime | None = None,
 ) -> int:
     db = TestSession()
@@ -79,6 +81,8 @@ def _insert_event(
             parsed_content_json=json.dumps(content, ensure_ascii=False),
             event_key=event_key,
             is_duplicate=is_duplicate,
+            merchant_id=merchant_id,
+            tenant_id=tenant_id,
             raw_body=json.dumps(
                 {"event": event, "from_user_id": from_user_id, "to_user_id": to_user_id, "content": content},
                 ensure_ascii=False,
@@ -547,6 +551,8 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         text="之前问过配置",
         event_key="history-customer",
         server_message_id="history-customer-msg",
+        merchant_id="merchant-1",
+        tenant_id="tenant-1",
         created_at=base_time,
     )
     _insert_event(
@@ -554,12 +560,16 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
         text="您好，我是小高客服",
         event_key="history-agent",
         server_message_id="history-agent-msg",
+        merchant_id="merchant-1",
+        tenant_id="tenant-1",
         created_at=base_time + timedelta(minutes=1),
     )
     event_id = _insert_event(
         text="现在想了解A6",
         event_key="event-active",
         server_message_id="latest-msg",
+        merchant_id="merchant-1",
+        tenant_id="tenant-1",
         created_at=base_time + timedelta(minutes=2),
     )
     _insert_account_agent_binding()
@@ -573,6 +583,7 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
     assert len(fake_client.calls) == 1
     payload = fake_client.calls[0]["request"]
     assert payload["latest_message"] == "现在想了解A6"
+    assert len(payload["conversation_history"]) == 2
     assert payload["conversation_history"] == [
         {
             "role": "customer",
