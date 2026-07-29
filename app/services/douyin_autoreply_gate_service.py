@@ -18,6 +18,7 @@ from app.services.douyin_autoreply_settings_service import (
     parse_conversation_whitelist_ids,
     parse_customer_whitelist_open_ids,
     parse_direct_llm_policy,
+    parse_manual_review_risk_flags,
 )
 
 COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
@@ -93,9 +94,17 @@ def evaluate_post_llm_gates(
     result: dict[str, Any],
     upstream_auto_send: bool,
 ) -> GateDecision:
-    """评估 9100 返回后的基础发送资格；内容风险只记录，不拦截。"""
+    """评估 9100 返回后的基础发送资格；内容风险按转人工黑名单拦截。
+
+    简化门禁（2026-07-29）：risk_flags 不再硬阻断全部转人工。
+    9100 对命中的风险已生成安全替代回复（_build_safe_direct_reply，已脱敏），
+    默认放行发送该安全回复；仅 manual_review_risk_flags（转人工黑名单）中的风险类型
+    才转人工阻断。manual_required / fallback_reason / rag_not_used / rag_sources_empty
+    不再单独阻断（与 risk_flags 重复或一期 RAG 未全开过度谨慎）。
+    """
     allowed_intents = parse_allowed_intents(settings)
     blocked_risk_flags = parse_blocked_risk_flags(settings)
+    manual_review_risk_flags = parse_manual_review_risk_flags(settings)
     risk_flags = _string_list(result.get("risk_flags"))
     rag_sources = result.get("rag_sources") or []
     source_chunks = result.get("source_chunks") or []
@@ -107,6 +116,7 @@ def evaluate_post_llm_gates(
         "manual_required": result.get("manual_required"),
         "risk_flags": risk_flags,
         "blocked_risk_flags": blocked_risk_flags,
+        "manual_review_risk_flags": manual_review_risk_flags,
         "require_rag": settings.require_rag is True,
         "rag_used": result.get("rag_used"),
         "require_rag_sources": settings.require_rag_sources is True,
@@ -126,22 +136,15 @@ def evaluate_post_llm_gates(
         return GateDecision(False, "blocked", "empty_reply_text", gate_results)
     if settings.send_enabled is not True:
         return GateDecision(False, "blocked", "account_send_disabled", gate_results)
+    # manual_required=True 是 9100 明确判定需人工（如无法生成安全回复的风险），保留阻断。
     if result.get("manual_required") is True:
         return GateDecision(False, "blocked", "manual_required", gate_results)
-    if risk_flags:
-        return GateDecision(False, "blocked", "risk_flags", gate_results)
-    if fallback_reason:
-        return GateDecision(False, "blocked", "fallback_reason", gate_results)
+    # 风险转人工：仅转人工黑名单中的风险类型阻断，其余发 9100 安全替代回复（已脱敏）。
+    manual_flags = [flag for flag in risk_flags if flag in manual_review_risk_flags]
+    if manual_flags:
+        return GateDecision(False, "blocked", "risk_flags_manual", gate_results)
     if allowed_intents and intent not in allowed_intents:
         return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
-    if blocked_risk_flags and any(flag in blocked_risk_flags for flag in risk_flags):
-        return GateDecision(False, "blocked", "risk_flags", gate_results)
-    if settings.require_rag is True and result.get("rag_used") is not True:
-        return GateDecision(False, "blocked", "rag_not_used", gate_results)
-    if settings.require_rag_sources is True and (
-        not isinstance(rag_sources, list) or len(rag_sources) == 0
-    ):
-        return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
     if confidence < float(settings.min_confidence or 0):
         return GateDecision(False, "blocked", "confidence_low", gate_results)
     return GateDecision(True, "decided", None, gate_results)

@@ -1402,14 +1402,24 @@ def _apply_safety_postprocess(
         reason = reason or SAFETY_REVIEW_REASON
 
     risk_flags = _dedupe(risk_flags)
+    safe_reply_override = (
+        not rag_used
+        and _needs_safe_direct_reply_override(
+            reply_text,
+            risk_flags,
+            allow_phone_lead_capture=allow_phone_lead_capture,
+        )
+    )
     if risk_flags:
-        decision["manual_required"] = True
-        reason = reason or SAFETY_REVIEW_REASON
-    if not rag_used and _needs_safe_direct_reply_override(
-        reply_text,
-        risk_flags,
-        allow_phone_lead_capture=allow_phone_lead_capture,
-    ):
+        # 简化门禁（2026-07-29）：生成安全替代回复后风险已被规避，不再 manual_required，
+        # 让 9100 返回 auto_send=True，由 9000 gate 放行发送安全回复；
+        # 仅未生成安全回复的风险（如 prompt_injection 等非内容风险）才保留 manual_required 转人工。
+        if safe_reply_override:
+            decision["manual_required"] = False
+        else:
+            decision["manual_required"] = True
+            reason = reason or SAFETY_REVIEW_REASON
+    if safe_reply_override:
         decision["reply_text"] = _build_safe_direct_reply(
             latest_message=text,
             risk_flags=risk_flags,
@@ -2066,14 +2076,18 @@ def _direct_llm_auto_send_allowed(
     rag_used: bool,
     direct_llm_policy: dict[str, Any],
 ) -> bool:
-    # Phase 3：auto_send 仅表示候选资格。manual_required、空回复、任意 risk_flags 均阻断；
+    # Phase 3：auto_send 仅表示候选资格。manual_required、空回复阻断；
+    # risk_flags 在已生成安全替代回复后放行（manual_required=False 表示已脱敏），
+    # 未生成安全回复的风险（prompt_injection 等）仍 manual_required=True 阻断；
     # RAG 命中且无风险时可成为候选；不直接读取 LLM 原始 auto_send。
     if decision.get("manual_required") is True:
         return False
     if not str(decision.get("reply_text") or "").strip():
         return False
     risk_flags = list(decision.get("risk_flags") or [])
-    if risk_flags:
+    if risk_flags and decision.get("manual_required") is not False:
+        # manual_required 为 None（未明确）且有 risk_flags 时保守阻断；
+        # manual_required=False 表示已生成安全替代回复，放行。
         return False
     if rag_used:
         return True

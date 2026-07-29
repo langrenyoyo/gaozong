@@ -47,6 +47,7 @@ DEFAULT_AUTOREPLY_SETTINGS = {
     "require_rag_sources": True,
     "allowed_intents": [],
     "blocked_risk_flags": [],
+    "manual_review_risk_flags": [],
     "customer_whitelist_open_ids": [],
     "conversation_whitelist_ids": [],
     "min_interval_seconds": DEFAULT_MIN_INTERVAL_SECONDS,
@@ -165,6 +166,7 @@ def build_account_autoreply_settings_view(
             "require_rag_sources": bool(settings.require_rag_sources),
             "allowed_intents": parse_allowed_intents(settings),
             "blocked_risk_flags": parse_blocked_risk_flags(settings),
+            "manual_review_risk_flags": parse_manual_review_risk_flags(settings),
             "customer_whitelist_open_ids": parse_customer_whitelist_open_ids(settings),
             "conversation_whitelist_ids": parse_conversation_whitelist_ids(settings),
             "min_interval_seconds": settings.min_interval_seconds,
@@ -218,6 +220,8 @@ def upsert_account_autoreply_settings(
         settings.allowed_intents_json = json.dumps(_unique_strings(values["allowed_intents"]), ensure_ascii=False)
     if "blocked_risk_flags" in values and values["blocked_risk_flags"] is not None:
         settings.blocked_risk_flags_json = json.dumps(_unique_strings(values["blocked_risk_flags"]), ensure_ascii=False)
+    if "manual_review_risk_flags" in values and values["manual_review_risk_flags"] is not None:
+        settings.manual_review_risk_flags_json = json.dumps(_unique_strings(values["manual_review_risk_flags"]), ensure_ascii=False)
     if "customer_whitelist_open_ids" in values and values["customer_whitelist_open_ids"] is not None:
         settings.customer_whitelist_open_ids = json.dumps(
             _unique_strings(values["customer_whitelist_open_ids"]),
@@ -258,6 +262,7 @@ def values_for_mode(mode: str) -> dict[str, Any]:
             "require_rag_sources": False,
             "allowed_intents": [],
             "blocked_risk_flags": [],
+            "manual_review_risk_flags": [],
             "direct_llm_policy": {
                 "direct_llm_auto_send_enabled": True,
                 "policy_level": "aggressive",
@@ -292,6 +297,16 @@ def parse_blocked_risk_flags(settings: DouyinAccountAutoreplySetting | None) -> 
     if settings is None:
         return []
     return _parse_string_list(settings.blocked_risk_flags_json)
+
+
+def parse_manual_review_risk_flags(settings: DouyinAccountAutoreplySetting | None) -> list[str]:
+    """解析风险转人工黑名单：列表中的风险类型转人工，其余发 9100 安全替代回复。
+
+    空列表 = 默认全放行（所有风险都发安全替代回复）。
+    """
+    if settings is None:
+        return []
+    return _parse_string_list(settings.manual_review_risk_flags_json)
 
 
 def parse_customer_whitelist_open_ids(settings: DouyinAccountAutoreplySetting | None) -> list[str]:

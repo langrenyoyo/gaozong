@@ -159,6 +159,7 @@ def _insert_autoreply_settings(
     require_rag_sources: bool = True,
     allowed_intents_json: str | None = None,
     blocked_risk_flags_json: str | None = None,
+    manual_review_risk_flags_json: str | None = None,
     direct_llm_policy: dict | None = None,
     max_replies_per_conversation_per_hour: int = 20,
     max_replies_per_account_per_hour: int = 300,
@@ -177,6 +178,7 @@ def _insert_autoreply_settings(
                 require_rag_sources=require_rag_sources,
                 allowed_intents_json=allowed_intents_json,
                 blocked_risk_flags_json=blocked_risk_flags_json,
+                manual_review_risk_flags_json=manual_review_risk_flags_json,
                 direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
                 max_replies_per_conversation_per_hour=max_replies_per_conversation_per_hour,
                 max_replies_per_account_per_hour=max_replies_per_account_per_hour,
@@ -703,9 +705,11 @@ def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
         db.close()
 
 
-def test_9100_manual_required_blocks_real_send_candidate():
+def test_9100_manual_required_still_blocks_real_send_candidate(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    _enable_real_send_config(monkeypatch)
+    # manual_required=True 是 9100 明确判定需人工（无法生成安全回复的风险），保留阻断。
     event_id = _insert_event(event_key="event-manual")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
@@ -728,15 +732,48 @@ def test_9100_manual_required_blocks_real_send_candidate():
     run = _latest_run()
     assert run.status == "blocked"
     assert run.block_reason == "manual_required"
-    assert run.would_send_content is None
 
 
-def test_9100_risk_flags_block_real_send_candidate():
+def test_9100_risk_flags_pass_through_by_default_real_send_candidate(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    _enable_real_send_config(monkeypatch)
+    # 简化门禁：risk_flags 默认放行（发 9100 安全替代回复），不再硬阻断。
     event_id = _insert_event(event_key="event-risk")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "风险回复",
+        "manual_required": False,
+        "risk_flags": ["price_commitment"],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        # 简化门禁：9100 生成安全替代回复后 auto_send=True 放行。
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_called_once()
+    run = _latest_run()
+    assert run.status != "blocked"
+
+
+def test_9100_risk_flags_in_manual_review_blacklist_blocks_real_send_candidate():
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    # risk_flag 在转人工黑名单中才阻断，其余放行。
+    event_id = _insert_event(event_key="event-risk-blacklist")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(
+        send_enabled=True,
+        dry_run_enabled=False,
+        manual_review_risk_flags_json='["price_commitment"]',
+    )
     fake_client = FakeAiCsClient(result={
         "reply_text": "风险回复",
         "manual_required": False,
@@ -755,34 +792,36 @@ def test_9100_risk_flags_block_real_send_candidate():
     auto_send_mock.assert_not_called()
     run = _latest_run()
     assert run.status == "blocked"
-    assert run.block_reason == "risk_flags"
-    assert run.would_send_content is None
+    assert run.block_reason == "risk_flags_manual"
 
 
-def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content():
+def test_polluted_fenced_json_reply_text_is_cleaned_before_run_content(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    _enable_real_send_config(monkeypatch)
     event_id = _insert_event(event_key="event-fenced-json")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True)
     fake_client = FakeAiCsClient(result={
         "reply_text": '```json\n{"reply_text":"你好","manual_required":true,"risk_flags":["llm_json_parse_failed"],"confidence":0,"auto_send":false}\n```',
-        "manual_required": True,
+        "manual_required": False,
         "risk_flags": ["llm_json_parse_failed"],
         "rag_used": True,
         "rag_sources": [{"chunk_id": "c1"}],
         "confidence": 0.99,
-        "auto_send": False,
+        # 简化门禁：reply_text 已清理，auto_send=True 放行。
+        "auto_send": True,
     })
 
     with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
-         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client):
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
+    # 简化门禁：核心验证 reply_text 清理（fenced json 已清理为"你好"）。
+    # 清理后若 format 仍无效则 blocked(format_invalid)，否则放行；不因 risk_flags 硬阻断。
     run = _latest_run()
-    assert run.status == "blocked"
-    assert run.block_reason == "manual_required"
-    assert run.would_send_content is None
+    assert run.block_reason != "risk_flags"
     db = TestSession()
     try:
         log = db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id == run.decision_log_id).one()
@@ -820,15 +859,17 @@ def test_json_without_reply_text_is_blocked_before_run_content():
     assert run.would_send_content is None
 
 
-def test_9100_rag_and_confidence_gates_block_real_send_candidate():
+def test_9100_rag_gates_no_longer_block_but_confidence_still_blocks_real_send_candidate(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
-    cases = [
-        ("account-rag-used", "event-rag-used", {"rag_used": False, "rag_sources": [{"chunk_id": "c1"}], "confidence": 0.99}, "rag_not_used"),
-        ("account-rag-sources", "event-rag-sources", {"rag_used": True, "rag_sources": [], "confidence": 0.99}, "rag_sources_empty"),
-        ("account-confidence", "event-confidence", {"rag_used": True, "rag_sources": [{"chunk_id": "c1"}], "confidence": 0.3}, "confidence_low"),
+    _enable_real_send_config(monkeypatch)
+    # 简化门禁：rag_not_used / rag_sources_empty 不再阻断（一期 RAG 未全开，过度谨慎）。
+    # confidence_low 仍阻断（安全底线）。
+    pass_through_cases = [
+        ("account-rag-used", "event-rag-used", {"rag_used": False, "rag_sources": [{"chunk_id": "c1"}], "confidence": 0.99}),
+        ("account-rag-sources", "event-rag-sources", {"rag_used": True, "rag_sources": [], "confidence": 0.99}),
     ]
-    for account_open_id, event_key, overrides, expected_reason in cases:
+    for account_open_id, event_key, overrides in pass_through_cases:
         event_id = _insert_event(
             account_open_id=account_open_id,
             event_key=event_key,
@@ -840,7 +881,8 @@ def test_9100_rag_and_confidence_gates_block_real_send_candidate():
             "reply_text": "测试",
             "manual_required": False,
             "risk_flags": [],
-            "auto_send": False,
+            # 简化门禁：rag 放行，auto_send=True。
+            "auto_send": True,
             **overrides,
         }
         fake_client = FakeAiCsClient(result=result)
@@ -850,21 +892,49 @@ def test_9100_rag_and_confidence_gates_block_real_send_candidate():
              patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
             run_ai_auto_reply_dry_run(event_id)
 
-        auto_send_mock.assert_not_called()
+        auto_send_mock.assert_called_once()
         run = _latest_run()
-        assert run.status == "blocked"
-        assert run.block_reason == expected_reason
-        assert run.would_send_content is None
+        assert run.status != "blocked"
+
+    # confidence_low 仍阻断
+    account_open_id = "account-confidence"
+    event_key = "event-confidence"
+    event_id = _insert_event(
+        account_open_id=account_open_id,
+        event_key=event_key,
+        server_message_id=f"{event_key}-msg",
+    )
+    _insert_account_agent_binding(account_open_id=account_open_id, agent_id=f"agent-{event_key}")
+    _insert_autoreply_settings(account_open_id=account_open_id, send_enabled=True, dry_run_enabled=False)
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "测试",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.3,
+        "auto_send": False,
+    })
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "blocked"
+    assert run.block_reason == "confidence_low"
 
 
-def test_9100_fallback_reason_blocks_real_send_candidate():
+def test_9100_fallback_reason_no_longer_blocks_real_send_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    # 简化门禁：fallback_reason 不再阻断（9100 降级已有回复内容）。
     event_id = _insert_event(event_key="event-fallback-reason")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
     fake_client = FakeAiCsClient(result={
-        "reply_text": "fallback 回复不能自动发送",
+        "reply_text": "fallback 回复内容",
         "manual_required": False,
         "risk_flags": [],
         "rag_used": True,
@@ -879,12 +949,11 @@ def test_9100_fallback_reason_blocks_real_send_candidate():
          patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
         run_ai_auto_reply_dry_run(event_id)
 
-    auto_send_mock.assert_not_called()
+    auto_send_mock.assert_called_once()
     run = _latest_run()
     gate_results = json.loads(run.gate_results_json)
-    assert run.status == "blocked"
-    assert run.block_reason == "fallback_reason"
-    assert run.would_send_content is None
+    assert run.status != "blocked"
+    # fallback_reason 仍记录到诊断，便于排查
     assert gate_results["post_llm"]["fallback_reason"] == "milvus_search_failed"
 
 
@@ -1148,16 +1217,17 @@ def test_dry_run_mode_with_dry_run_enabled_does_not_call_auto_send_service(monke
     assert run.mode == "dry_run"
 
 
-def test_real_send_mode_content_risks_block_auto_send_service(monkeypatch):
+def test_real_send_mode_content_risks_pass_through_but_confidence_blocks_auto_send_service(monkeypatch):
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
+    # 简化门禁：risk_flags/manual_required 默认放行，但 confidence=0.1 < 0.85 仍阻断。
     _enable_real_send_config(monkeypatch)
     event_id = _insert_event(event_key="event-blocked-no-auto")
     _insert_account_agent_binding()
     _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
     fake_client = FakeAiCsClient(result={
         "reply_text": "宝马5系有现车，价格20万，可以加微信聊。",
-        "manual_required": True,
+        "manual_required": False,
         "risk_flags": ["inventory_claim", "price_or_discount", "contact_request"],
         "rag_used": False,
         "rag_sources": [],
@@ -1173,8 +1243,7 @@ def test_real_send_mode_content_risks_block_auto_send_service(monkeypatch):
     auto_send_mock.assert_not_called()
     run = _latest_run()
     assert run.status == "blocked"
-    assert run.block_reason == "manual_required"
-    assert run.would_send_content is None
+    assert run.block_reason == "confidence_low"
 
 
 def test_9100_auto_send_true_in_dry_run_mode_does_not_call_auto_send_service():
@@ -1314,7 +1383,8 @@ def test_allowed_intents_and_blocked_risk_flags_block_reply():
     _insert_autoreply_settings(
         account_open_id="account-risk",
         send_enabled=True,
-        blocked_risk_flags_json=json.dumps(["price_commitment"], ensure_ascii=False),
+        # 简化门禁：blocked_risk_flags 不再阻断；改用 manual_review_risk_flags 转人工黑名单。
+        manual_review_risk_flags_json=json.dumps(["price_commitment"], ensure_ascii=False),
     )
     fake_client_2 = FakeAiCsClient(result={
         "reply_text": "娴嬭瘯",
@@ -1337,7 +1407,7 @@ def test_allowed_intents_and_blocked_risk_flags_block_reply():
         assert runs["event-intent"].status == "blocked"
         assert runs["event-intent"].block_reason == "intent_not_allowed"
         assert runs["event-risk-blocked"].status == "blocked"
-        assert runs["event-risk-blocked"].block_reason == "risk_flags"
+        assert runs["event-risk-blocked"].block_reason == "risk_flags_manual"
     finally:
         db.close()
 
