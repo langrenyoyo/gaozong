@@ -15,6 +15,8 @@ import {
   RefreshCwIcon,
   SearchIcon,
   SmileIcon,
+  SlidersHorizontalIcon,
+  SaveIcon,
   VideoIcon,
   WrenchIcon,
   XIcon,
@@ -50,6 +52,7 @@ import {
   sendDouyinManualMessage,
   unbindAgentFromDouyinAccount,
   updateDouyinAutoReplyMode,
+  updateDouyinAutoReplySetting,
   uploadDouyinImage,
   type DouyinAccountItem,
   type DouyinAgentItem,
@@ -60,9 +63,12 @@ import {
   type DouyinConversationAutopilotState,
   type AiAutoReplyRunDetail,
   type AiAutoReplyRunListItem,
+  type DouyinAutoReplySettingItem,
+  type DouyinAutoReplySettingUpdateRequest,
   type UploadDouyinImageResponse,
 } from "../api";
 import { userFacingError } from "../../../lib/userFacingError";
+import { riskFlagLabel } from "../riskFlagLabels";
 import ModuleTabs from "../../../components/ModuleTabs";
 import {
   advanceEventCursor,
@@ -76,6 +82,19 @@ import {
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_UPLOAD_IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
 const ALLOWED_UPLOAD_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"];
+// 风险转人工开关清单（开=转人工，关=发安全替代回复）。
+const MANUAL_REVIEW_RISK_FLAG_OPTIONS = [
+  "contact_request",
+  "price_or_discount",
+  "finance_or_loan",
+  "inventory_claim",
+  "vehicle_condition_specific",
+  "legal_or_transfer",
+  "after_sales_or_complaint",
+  "appointment_or_visit_specific",
+  "prompt_injection",
+  "no_rag_risky_question",
+];
 const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 const AUTH_POLLING_INTERVAL_MS = 2000;
@@ -799,6 +818,13 @@ export default function DouyinAiCsWorkbenchPage() {
   const [uploadResult, setUploadResult] = useState<UploadedImageData | null>(null);
   // ponytail: 客户画像在窄桌面（<1500px）折叠为右侧抽屉，宽桌面（>=1500px）保持四栏内联；布局切换走 CSS，仅 open 状态走 JS
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
+  // 自动回复设置抽屉：风险转人工开关
+  const [autoreplySettingsOpen, setAutoreplySettingsOpen] = useState(false);
+  const [autoreplySetting, setAutoreplySetting] = useState<DouyinAutoReplySettingItem | null>(null);
+  const [autoreplySettingsLoading, setAutoreplySettingsLoading] = useState(false);
+  const [autoreplySettingsSaving, setAutoreplySettingsSaving] = useState(false);
+  const [autoreplySettingsError, setAutoreplySettingsError] = useState<string | null>(null);
+  const [autoreplySettingsNotice, setAutoreplySettingsNotice] = useState<string | null>(null);
   const [uploadImageIdCopied, setUploadImageIdCopied] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingConversations, setLoadingConversations] = useState(false);
@@ -935,6 +961,55 @@ export default function DouyinAiCsWorkbenchPage() {
   useEffect(() => {
     selectedAccountOpenIdRef.current = selectedAccount?.account_open_id || null;
   }, [selectedAccount?.account_open_id]);
+
+  // 自动回复设置抽屉：加载/保存/风险开关
+  const openAutoreplySettings = useCallback(async () => {
+    const accountOpenId = selectedAccountOpenIdRef.current;
+    if (!accountOpenId) return;
+    setAutoreplySettingsOpen(true);
+    setAutoreplySettingsError(null);
+    setAutoreplySettingsNotice(null);
+    setAutoreplySettingsLoading(true);
+    try {
+      const setting = await getDouyinAutoReplySetting(accountOpenId);
+      setAutoreplySetting(setting);
+    } catch (err) {
+      setAutoreplySettingsError(userFacingError(err, "自动回复设置加载失败"));
+    } finally {
+      setAutoreplySettingsLoading(false);
+    }
+  }, []);
+
+  const handleManualReviewRiskFlagToggle = useCallback((flag: string, checked: boolean) => {
+    setAutoreplySetting((current) => {
+      if (!current) return current;
+      const exists = current.manual_review_risk_flags.includes(flag);
+      if (checked && !exists) {
+        return { ...current, manual_review_risk_flags: [...current.manual_review_risk_flags, flag] };
+      }
+      if (!checked && exists) {
+        return { ...current, manual_review_risk_flags: current.manual_review_risk_flags.filter((item) => item !== flag) };
+      }
+      return current;
+    });
+  }, []);
+
+  const saveAutoreplySettings = useCallback(async () => {
+    const accountOpenId = selectedAccountOpenIdRef.current;
+    if (!accountOpenId || !autoreplySetting) return;
+    setAutoreplySettingsSaving(true);
+    setAutoreplySettingsError(null);
+    setAutoreplySettingsNotice(null);
+    try {
+      const updated = await updateDouyinAutoReplySetting(accountOpenId, autoreplySetting);
+      setAutoreplySetting(updated);
+      setAutoreplySettingsNotice("风险转人工设置已保存。");
+    } catch (err) {
+      setAutoreplySettingsError(userFacingError(err, "保存失败，请稍后重试"));
+    } finally {
+      setAutoreplySettingsSaving(false);
+    }
+  }, [autoreplySetting]);
 
   useEffect(() => {
     const accountOpenId = selectedAccount?.account_open_id || null;
@@ -2645,8 +2720,20 @@ export default function DouyinAiCsWorkbenchPage() {
                 </span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-[11px] text-slate-500">
-              {selectedAccount?.account_name || "未选择抖音号"}
+            <div className="mt-0.5 flex items-center justify-between gap-2">
+              <span className="truncate text-[11px] text-slate-500">
+                {selectedAccount?.account_name || "未选择抖音号"}
+              </span>
+              {selectedAccount ? (
+                <button
+                  type="button"
+                  onClick={() => void openAutoreplySettings()}
+                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
+                >
+                  <SlidersHorizontalIcon size={11} />
+                  自动回复设置
+                </button>
+              ) : null}
             </div>
             <label className="mt-3 flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-500">
               <SearchIcon size={14} />
@@ -3183,6 +3270,66 @@ export default function DouyinAiCsWorkbenchPage() {
             </div>
           </SheetHeader>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{profileAsideBody}</div>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={autoreplySettingsOpen} onOpenChange={setAutoreplySettingsOpen}>
+        <SheetContent side="right" className="w-[380px] max-w-[380px] gap-0 p-0 sm:max-w-[380px]">
+          <SheetHeader className="flex h-14 flex-row items-center gap-2 border-b border-[#edf1f6] px-4">
+            <SlidersHorizontalIcon size={18} className="shrink-0 text-slate-500" />
+            <SheetTitle className="text-sm font-bold text-[#172033]">自动回复设置</SheetTitle>
+            <SheetDescription className="text-[11px] text-slate-500">风险转人工开关</SheetDescription>
+          </SheetHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            {autoreplySettingsLoading ? (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <LoaderIcon size={14} className="animate-spin" /> 加载中
+              </div>
+            ) : autoreplySettingsError ? (
+              <div className="text-xs text-red-600">{autoreplySettingsError}</div>
+            ) : autoreplySetting ? (
+              <div className="space-y-4">
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-3 text-xs leading-5 text-blue-800">
+                  开启=该类风险回复转人工确认；关闭=自动发送安全替代回复（已脱敏）。默认全部关闭（发安全回复），减少自动回复被阻断。
+                </div>
+                <div className="space-y-2">
+                  {MANUAL_REVIEW_RISK_FLAG_OPTIONS.map((flag) => {
+                    const checked = autoreplySetting.manual_review_risk_flags.includes(flag);
+                    return (
+                      <div key={flag} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                        <span className="text-xs font-semibold text-slate-700">{riskFlagLabel(flag)}</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={checked}
+                          onClick={() => handleManualReviewRiskFlagToggle(flag, !checked)}
+                          className={`relative h-6 w-12 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
+                        >
+                          <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-7" : "translate-x-1"}`} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {autoreplySettingsNotice ? (
+                  <div className="text-xs text-emerald-600">{autoreplySettingsNotice}</div>
+                ) : null}
+                <div className="flex justify-end border-t border-slate-200 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => void saveAutoreplySettings()}
+                    disabled={autoreplySettingsSaving}
+                    className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {autoreplySettingsSaving ? <LoaderIcon size={14} className="animate-spin" /> : <SaveIcon size={14} />}
+                    保存设置
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500">未加载到设置数据</div>
+            )}
+          </div>
         </SheetContent>
       </Sheet>
 
