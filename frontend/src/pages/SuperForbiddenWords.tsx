@@ -155,7 +155,7 @@ export default function SuperForbiddenWords() {
           </div>
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">违禁词配置</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">违禁词命中后替换为安全词，不拦截</p>
+            <p className="mt-1 text-xs text-[#8b95a6]">自动回复：LLM 不得使用该词，生成后检查命中转人工；人工发送/回访：替换为安全词</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -217,7 +217,7 @@ export default function SuperForbiddenWords() {
                 <tr>
                   <th className="px-4 py-3 font-semibold">词库</th>
                   <th className="px-4 py-3 font-semibold">违禁词</th>
-                  <th className="px-4 py-3 font-semibold">安全替换词</th>
+                  <th className="px-4 py-3 font-semibold">安全替换词<span className="ml-1 text-[10px] font-normal text-[#8b95a6]">仅人工/回访</span></th>
                   <th className="px-4 py-3 font-semibold">严重级别</th>
                   <th className="px-4 py-3 font-semibold">命中次数</th>
                   <th className="px-4 py-3 font-semibold">状态</th>
@@ -315,7 +315,7 @@ export default function SuperForbiddenWords() {
                 />
               </label>
               <label className="block">
-                <span className="text-xs font-medium text-[#475569]">安全替换词</span>
+                <span className="text-xs font-medium text-[#475569]">安全替换词<span className="ml-1 text-[10px] font-normal text-[#8b95a6]">仅人工发送/回访链路使用</span></span>
                 <input
                   value={form.safe_word}
                   onChange={(e) => setForm((f) => ({ ...f, safe_word: e.target.value }))}
