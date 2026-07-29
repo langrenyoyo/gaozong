@@ -1699,25 +1699,14 @@ def _apply_safety_postprocess(
         )
     )
     if risk_flags:
-        # 简化门禁（2026-07-29）：生成安全替代回复后风险已被规避，不再 manual_required，
-        # 让 9100 返回 auto_send=True，由 9000 gate 放行发送安全回复；
-        # 仅未生成安全回复的风险（如 prompt_injection 等非内容风险）才保留 manual_required 转人工。
-        if safe_reply_override:
-            decision["manual_required"] = False
-        else:
+        # V2.0 模板已包含完整安全规则，不再用旧兜底话术覆盖 LLM 回复。
+        # risk_flags 仍标记用于 9000 gate 决策，但 9100 不替换 reply_text。
+        # prompt_injection 等非内容风险保留 manual_required 转人工。
+        if "prompt_injection" in risk_flags:
             decision["manual_required"] = True
             reason = reason or SAFETY_REVIEW_REASON
-    if safe_reply_override:
-        decision["reply_text"] = _build_safe_direct_reply(
-            latest_message=text,
-            risk_flags=risk_flags,
-            intent=_optional_text(decision.get("intent")),
-        )
-    elif not rag_used:
-        decision["reply_text"] = sanitize_direct_llm_reply_text(
-            reply_text,
-            intent=_optional_text(decision.get("intent")),
-        )
+        else:
+            decision["manual_required"] = False
 
     decision["manual_required_reason"] = reason
     decision["risk_flags"] = risk_flags
