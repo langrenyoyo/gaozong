@@ -3329,7 +3329,7 @@ export default function DouyinAiCsWorkbenchPage() {
                           onClick={() => handleManualReviewRiskFlagToggle(flag, !checked)}
                           className={`relative h-5 w-10 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
                         >
-                          <span className={`absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
+                          <span className={`absolute left-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
                         </button>
                       </div>
                     );
