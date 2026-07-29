@@ -62,6 +62,18 @@ def create_agent(db: Session, context: RequestContext, payload: AiAgentCreate) -
         prompt=payload.prompt or "",
         knowledge_base_text=payload.knowledge_base_text or "",
         status="active",
+        # 商家可配置变量（固定提示词模板 V2.0）
+        store_address=payload.store_address,
+        store_phone=payload.store_phone,
+        store_wechat=payload.store_wechat,
+        business_hours=payload.business_hours,
+        sales_cities=payload.sales_cities,
+        sales_brands=payload.sales_brands,
+        purchase_cities=payload.purchase_cities,
+        purchase_brands=payload.purchase_brands,
+        after_hours_reply=payload.after_hours_reply,
+        vehicle_condition_reply=payload.vehicle_condition_reply,
+        appraiser_off_hours_reply=payload.appraiser_off_hours_reply,
     )
     db.add(agent)
     db.commit()
@@ -96,6 +108,15 @@ def update_agent(db: Session, agent: AiAgent, payload: AiAgentUpdate) -> AiAgent
         agent.avatar_url = data["avatar_url"]
     if "status" in data and data["status"] is not None:
         agent.status = data["status"]
+    # 商家可配置变量（固定提示词模板 V2.0）
+    _STORE_CONFIG_FIELDS = (
+        "store_address", "store_phone", "store_wechat", "business_hours",
+        "sales_cities", "sales_brands", "purchase_cities", "purchase_brands",
+        "after_hours_reply", "vehicle_condition_reply", "appraiser_off_hours_reply",
+    )
+    for field in _STORE_CONFIG_FIELDS:
+        if field in data:
+            setattr(agent, field, data[field])
     db.commit()
     db.refresh(agent)
     return agent
