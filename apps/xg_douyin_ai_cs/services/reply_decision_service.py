@@ -823,36 +823,17 @@ def _build_llm_reply(
                 conversation_id,
                 _safe_error_summary(exc),
             )
-            decision = _default_rule_decision(
-                reply_text=_combined_retry_safety_fallback(
-                    latest_message=request.latest_message,
-                    conversation_history=request.conversation_history,
-                    customer_memory=request.customer_memory,
-                    slots=slots,
-                    missing_phone_goal=missing_phone_goal,
-                ),
-                confidence=0.5,
-            )
-            retry_warnings.append("llm_retry_combined_failed_used_fallback")
+            # V2.0 模板已包含完整安全规则，合并纠正失败时保留 LLM 首调回复，不再用旧 fallback 覆盖
+            retry_warnings.append("llm_retry_combined_failed_kept_original")
         else:
-            # 合并纠正后仍不合格：不再调用模型，走安全降级
+            # 合并纠正后仍不合格：保留纠正后回复，不再用旧 fallback 覆盖
             still_reasking = _is_reply_reasking_known_slots(str(decision.get("reply_text") or ""), slots)
             still_missing_phone = (
                 agent_phone_goal
                 and not _reply_has_phone_lead_capture(str(decision.get("reply_text") or ""))
             )
             if still_reasking or still_missing_phone:
-                decision = _default_rule_decision(
-                    reply_text=_combined_retry_safety_fallback(
-                        latest_message=request.latest_message,
-                        conversation_history=request.conversation_history,
-                        customer_memory=request.customer_memory,
-                        slots=slots,
-                        missing_phone_goal=missing_phone_goal,
-                    ),
-                    confidence=0.5,
-                )
-                retry_warnings.append("llm_retry_combined_still_unqualified_used_fallback")
+                retry_warnings.append("llm_retry_combined_still_unqualified_kept_original")
     # 第五节：合并纠正后做确定性违禁词检查，命中即阻断转人工，不再额外重试。
     forbidden_words = list(getattr(request, "forbidden_words", None) or [])
     if forbidden_words:
