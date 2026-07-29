@@ -15,7 +15,7 @@ from apps.xg_douyin_ai_cs.llm.client import (
     OpenAICompatibleClient,
 )
 from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
-from apps.xg_douyin_ai_cs.rag.repository import log_llm_call, search_with_diagnostics
+from apps.xg_douyin_ai_cs.rag.repository import UNIFIED_KB_DOUYIN_ACCOUNT_ID, log_llm_call, search_with_diagnostics
 from apps.xg_douyin_ai_cs.schemas import (
     RecommendedVehicle,
     ReplySuggestionRequest,
@@ -347,9 +347,9 @@ def build_reply_suggestion(
     if rag_enabled:
         search_result = search_with_diagnostics(
             RagSearchRequest(
-                tenant_id=request.tenant_id,
-                merchant_id=request.merchant_id,
-                douyin_account_id=douyin_account_id,
+                tenant_id="xiaogao_system",
+                merchant_id="xiaogao_base",
+                douyin_account_id=UNIFIED_KB_DOUYIN_ACCOUNT_ID,
                 query=request.latest_message,
                 top_k=5,
                 category_keys=allowed_category_keys,
