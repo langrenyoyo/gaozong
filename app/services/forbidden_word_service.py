@@ -115,6 +115,23 @@ def _load_active_words(db: Session) -> list[tuple[ForbiddenWord, ForbiddenWordLi
     return active
 
 
+def load_forbidden_words_for_llm(db: Session) -> list[str]:
+    """加载全局启用的违禁词列表，供 9100 LLM 提示词注入与生成后确定性检查。
+
+    第五节新语义：词库告诉 LLM 哪些词不能用，不在 9000 侧生成前替换。
+    返回去重后的违禁词原文列表（不含 safe_word）。
+    """
+    active = _load_active_words(db)
+    seen: set[str] = set()
+    words: list[str] = []
+    for word, _library in active:
+        text = (word.word or "").strip()
+        if text and text.casefold() not in seen:
+            seen.add(text.casefold())
+            words.append(text)
+    return words
+
+
 def replace_forbidden_words(
     db: Session,
     *,

@@ -128,20 +128,21 @@ def _send_private_message_with_context(
     forbidden_source = _FORBIDDEN_SOURCE_BY_SEND_SOURCE.get(send_source)
     if forbidden_source is None:
         raise HTTPException(status_code=400, detail="unknown_send_source")
-    # 违禁词替换：在 request_payload 构造前替换 content_text，使上游 payload、
-    # 发送流水 content、request_body_json 三处同步为安全词；命中只替换不拦截。
-    replacement = replace_forbidden_words(
-        db,
-        merchant_id=_resolve_merchant_id_for_account(db, context["account_open_id"]) or "unknown_merchant",
-        source=forbidden_source,
-        content=content_text,
-        context={
-            "context_type": "douyin_conversation",
-            "context_id": context.get("conversation_short_id"),
-            "conversation_short_id": context.get("conversation_short_id"),
-        },
-    )
-    content_text = replacement.final_content
+    # 第五节：自动回复（auto_send=True）的违禁词已由 9100 生成后确定性检查，
+    # 不再在此处生成前替换；人工发送和回访话术仍走旧替换逻辑（命中只替换不拦截）。
+    if not auto_send:
+        replacement = replace_forbidden_words(
+            db,
+            merchant_id=_resolve_merchant_id_for_account(db, context["account_open_id"]) or "unknown_merchant",
+            source=forbidden_source,
+            content=content_text,
+            context={
+                "context_type": "douyin_conversation",
+                "context_id": context.get("conversation_short_id"),
+                "conversation_short_id": context.get("conversation_short_id"),
+            },
+        )
+        content_text = replacement.final_content
     send_scene = _default_scene(context)
     request_payload = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,

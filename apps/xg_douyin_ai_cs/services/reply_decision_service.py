@@ -829,6 +829,17 @@ def _build_llm_reply(
                     confidence=0.5,
                 )
                 retry_warnings.append("llm_retry_combined_still_unqualified_used_fallback")
+    # 第五节：合并纠正后做确定性违禁词检查，命中即阻断转人工，不再额外重试。
+    forbidden_words = list(getattr(request, "forbidden_words", None) or [])
+    if forbidden_words:
+        forbidden_hits = _check_forbidden_words(str(decision.get("reply_text") or ""), forbidden_words)
+        if forbidden_hits:
+            decision["manual_required"] = True
+            decision["manual_required_reason"] = (
+                f"回复命中违禁词，需人工确认；命中词：{'、'.join(forbidden_hits)}"
+            )
+            decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | {"forbidden_word_hit"})
+            retry_warnings.append("forbidden_word_hit")
     if decision.get("llm_raw_auto_send"):
         retry_warnings.append("llm_requested_auto_send_ignored")
     decision = _apply_safety_postprocess(
@@ -928,6 +939,13 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         system_parts.append("当前绑定 Agent 要求自然引导客户留下手机号或电话；不要引导加微信或个人号。")
     else:
         system_parts.append("不主动索要微信、电话、手机号或其他联系方式。")
+    # 第五节：违禁词注入提示词，告诉 LLM 哪些词不能使用
+    forbidden_words = list(getattr(request, "forbidden_words", None) or [])
+    if forbidden_words:
+        system_parts.append(
+            "回复中不得出现以下违禁词或其变体：" + "、".join(forbidden_words) + "。"
+            "如果无法避免，必须设置 manual_required=true。"
+        )
     system_prompt = "\n".join(system_parts)
     known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
@@ -1308,6 +1326,27 @@ def _clean_structured_reply_text(value: object) -> str | None:
     if _looks_like_structured_json(text):
         return None
     return text
+
+
+def _check_forbidden_words(reply_text: str, forbidden_words: list[str]) -> list[str]:
+    """第五节：LLM 生成后确定性违禁词检查。返回命中的违禁词原文列表（去重）。
+
+    检查在第四节合并纠正之后做——命中即阻断转人工，不额外重试。
+    日志只记录命中词，不保存完整敏感正文。
+    """
+    if not reply_text or not forbidden_words:
+        return []
+    text_lower = reply_text.casefold()
+    hits: list[str] = []
+    seen: set[str] = set()
+    for word in forbidden_words:
+        word_lower = (word or "").strip().casefold()
+        if not word_lower:
+            continue
+        if word_lower in text_lower and word_lower not in seen:
+            seen.add(word_lower)
+            hits.append(word)
+    return hits
 
 
 def _apply_safety_postprocess(

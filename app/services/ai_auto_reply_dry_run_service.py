@@ -26,6 +26,7 @@ from app.services.douyin_autoreply_settings_service import (
     parse_direct_llm_policy,
 )
 from app.services.douyin_conversation_history_service import build_reply_conversation_context
+from app.services.forbidden_word_service import load_forbidden_words_for_llm
 from app.services.douyin_workbench_conversation_service import get_latest_private_message_state
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
@@ -289,6 +290,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         "customer_memory": reply_context.customer_memory,
         "max_history_messages": 10,
         "direct_llm_policy": direct_llm_policy,
+        # 第五节：违禁词注入 9100，生成后确定性检查；9000 自动回复链路不再生成前替换。
+        "forbidden_words": load_forbidden_words_for_llm(db),
     }
     run = AiAutoReplyRun(
         **{

@@ -142,6 +142,7 @@ class ReplySuggestionRequest(BaseModel):
     customer_open_id: str | None = None
     account_open_id: str | None = None
     direct_llm_policy: dict | None = None
+    forbidden_words: list[str] | None = None
 
 
 class RecommendedVehicle(BaseModel):

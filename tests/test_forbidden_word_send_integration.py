@@ -370,12 +370,15 @@ def test_douyin_ai_auto_send_reuses_private_message_replacement():
         db2.close()
 
     request_payload = upstream.call_args.args[1]
-    assert request_payload["content"] == "我们可到店详询"
+    # 第五节：自动回复（auto_send=True）不在 9000 侧生成前替换违禁词；
+    # 9100 生成后已做确定性检查，命中则阻断转人工，未命中才到发送，content 保持原值。
+    assert request_payload["content"] == "我们现车很多"
     db3 = TestSession()
     record = db3.query(DouyinPrivateMessageSend).one()
-    assert record.content == "我们可到店详询"
+    assert record.content == "我们现车很多"
     assert record.send_source == "ai_auto"
-    assert db3.query(ForbiddenWordHitLog).filter_by(source="douyin_ai_auto").count() == 1
+    # 自动回复不再走 replace_forbidden_words，不写命中日志
+    assert db3.query(ForbiddenWordHitLog).filter_by(source="douyin_ai_auto").count() == 0
     db3.close()
 
 
