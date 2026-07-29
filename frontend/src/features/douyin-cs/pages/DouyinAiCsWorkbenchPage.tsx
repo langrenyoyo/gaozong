@@ -983,12 +983,13 @@ export default function DouyinAiCsWorkbenchPage() {
   const handleManualReviewRiskFlagToggle = useCallback((flag: string, checked: boolean) => {
     setAutoreplySetting((current) => {
       if (!current) return current;
-      const exists = current.manual_review_risk_flags.includes(flag);
+      const flags = current.manual_review_risk_flags || [];
+      const exists = flags.includes(flag);
       if (checked && !exists) {
-        return { ...current, manual_review_risk_flags: [...current.manual_review_risk_flags, flag] };
+        return { ...current, manual_review_risk_flags: [...flags, flag] };
       }
       if (!checked && exists) {
-        return { ...current, manual_review_risk_flags: current.manual_review_risk_flags.filter((item) => item !== flag) };
+        return { ...current, manual_review_risk_flags: flags.filter((item) => item !== flag) };
       }
       return current;
     });
@@ -3294,7 +3295,7 @@ export default function DouyinAiCsWorkbenchPage() {
                 </div>
                 <div className="space-y-2">
                   {MANUAL_REVIEW_RISK_FLAG_OPTIONS.map((flag) => {
-                    const checked = autoreplySetting.manual_review_risk_flags.includes(flag);
+                    const checked = (autoreplySetting.manual_review_risk_flags || []).includes(flag);
                     return (
                       <div key={flag} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
                         <span className="text-xs font-semibold text-slate-700">{riskFlagLabel(flag)}</span>
