@@ -619,6 +619,18 @@ def apply_agent_prompt(merchant_prompt: dict, agent: dict) -> dict:
         "agent_category": agent.get("agent_category"),
         "reply_style": agent.get("reply_style"),
         "business_scope": agent.get("business_scope"),
+        # 商家可配置变量（固定提示词模板 V2.0）
+        "store_address": agent.get("store_address", ""),
+        "store_phone": agent.get("store_phone", ""),
+        "store_wechat": agent.get("store_wechat", ""),
+        "business_hours": agent.get("business_hours", ""),
+        "sales_cities": agent.get("sales_cities", ""),
+        "sales_brands": agent.get("sales_brands", ""),
+        "purchase_cities": agent.get("purchase_cities", ""),
+        "purchase_brands": agent.get("purchase_brands", ""),
+        "after_hours_reply": agent.get("after_hours_reply", ""),
+        "vehicle_condition_reply": agent.get("vehicle_condition_reply", ""),
+        "appraiser_off_hours_reply": agent.get("appraiser_off_hours_reply", ""),
     }
 
 
