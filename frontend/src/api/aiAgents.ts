@@ -1,6 +1,21 @@
 import apiClient from "./client";
 
-export interface AiAgent {
+// 商家可配置变量（固定提示词模板 V2.0）
+export interface AiAgentStoreConfig {
+  store_address?: string | null;
+  store_phone?: string | null;
+  store_wechat?: string | null;
+  business_hours?: string | null;
+  sales_cities?: string | null;
+  sales_brands?: string | null;
+  purchase_cities?: string | null;
+  purchase_brands?: string | null;
+  after_hours_reply?: string | null;
+  vehicle_condition_reply?: string | null;
+  appraiser_off_hours_reply?: string | null;
+}
+
+export interface AiAgent extends AiAgentStoreConfig {
   id: number;
   agent_id: string;
   merchant_id: string;
@@ -14,7 +29,7 @@ export interface AiAgent {
   updated_at?: string | null;
 }
 
-export interface AiAgentPayload {
+export interface AiAgentPayload extends AiAgentStoreConfig {
   name: string;
   prompt: string;
   knowledge_base_text: string;

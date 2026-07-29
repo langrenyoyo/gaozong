@@ -135,6 +135,18 @@ class AiAgentCreate(BaseModel):
     prompt: str = ""
     knowledge_base_text: str = ""
     avatar_url: Optional[str] = None
+    # 商家可配置变量（固定提示词模板 V2.0）
+    store_address: Optional[str] = None
+    store_phone: Optional[str] = None
+    store_wechat: Optional[str] = None
+    business_hours: Optional[str] = None
+    sales_cities: Optional[str] = None
+    sales_brands: Optional[str] = None
+    purchase_cities: Optional[str] = None
+    purchase_brands: Optional[str] = None
+    after_hours_reply: Optional[str] = None
+    vehicle_condition_reply: Optional[str] = None
+    appraiser_off_hours_reply: Optional[str] = None
 
 
 class AiAgentUpdate(BaseModel):
@@ -145,6 +157,18 @@ class AiAgentUpdate(BaseModel):
     knowledge_base_text: Optional[str] = None
     avatar_url: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|disabled)$")
+    # 商家可配置变量（固定提示词模板 V2.0）
+    store_address: Optional[str] = None
+    store_phone: Optional[str] = None
+    store_wechat: Optional[str] = None
+    business_hours: Optional[str] = None
+    sales_cities: Optional[str] = None
+    sales_brands: Optional[str] = None
+    purchase_cities: Optional[str] = None
+    purchase_brands: Optional[str] = None
+    after_hours_reply: Optional[str] = None
+    vehicle_condition_reply: Optional[str] = None
+    appraiser_off_hours_reply: Optional[str] = None
 
 
 class AiAgentOut(BaseModel):
@@ -158,6 +182,18 @@ class AiAgentOut(BaseModel):
     avatar_url: Optional[str] = None
     prompt: str = ""
     knowledge_base_text: str = ""
+    # 商家可配置变量（固定提示词模板 V2.0）
+    store_address: Optional[str] = None
+    store_phone: Optional[str] = None
+    store_wechat: Optional[str] = None
+    business_hours: Optional[str] = None
+    sales_cities: Optional[str] = None
+    sales_brands: Optional[str] = None
+    purchase_cities: Optional[str] = None
+    purchase_brands: Optional[str] = None
+    after_hours_reply: Optional[str] = None
+    vehicle_condition_reply: Optional[str] = None
+    appraiser_off_hours_reply: Optional[str] = None
     status: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

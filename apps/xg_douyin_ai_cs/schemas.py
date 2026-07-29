@@ -104,6 +104,18 @@ class AgentConfig(BaseModel):
     allowed_category_keys: list[str] | None = None
     allowed_category_ids: list[str] | None = None
     rag_enabled: bool | None = None
+    # 商家可配置变量（固定提示词模板 V2.0）
+    store_address: str | None = None
+    store_phone: str | None = None
+    store_wechat: str | None = None
+    business_hours: str | None = None
+    sales_cities: str | None = None
+    sales_brands: str | None = None
+    purchase_cities: str | None = None
+    purchase_brands: str | None = None
+    after_hours_reply: str | None = None
+    vehicle_condition_reply: str | None = None
+    appraiser_off_hours_reply: str | None = None
 
 
 class ConversationHistoryItem(BaseModel):

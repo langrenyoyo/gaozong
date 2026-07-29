@@ -44,6 +44,17 @@ const emptyDraft: AiAgentPayload = {
   name: "",
   prompt: "",
   knowledge_base_text: "",
+  store_address: "",
+  store_phone: "",
+  store_wechat: "",
+  business_hours: "",
+  sales_cities: "",
+  sales_brands: "",
+  purchase_cities: "",
+  purchase_brands: "",
+  after_hours_reply: "",
+  vehicle_condition_reply: "",
+  appraiser_off_hours_reply: "",
 };
 
 const BASE_CATEGORY_KEY = "base";
@@ -97,6 +108,17 @@ function AgentEditor({
             prompt: agent.prompt,
             knowledge_base_text: agent.knowledge_base_text,
             avatar_url: agent.avatar_url,
+            store_address: agent.store_address || "",
+            store_phone: agent.store_phone || "",
+            store_wechat: agent.store_wechat || "",
+            business_hours: agent.business_hours || "",
+            sales_cities: agent.sales_cities || "",
+            sales_brands: agent.sales_brands || "",
+            purchase_cities: agent.purchase_cities || "",
+            purchase_brands: agent.purchase_brands || "",
+            after_hours_reply: agent.after_hours_reply || "",
+            vehicle_condition_reply: agent.vehicle_condition_reply || "",
+            appraiser_off_hours_reply: agent.appraiser_off_hours_reply || "",
           }
         : emptyDraft,
     );
@@ -236,6 +258,60 @@ function AgentEditor({
               placeholder="请填写该智能体在使用知识和组织答案时需要遵循的规则，例如优先回答车型、价格、车况、门店位置；客户有购车意向时，引导留下手机号或微信；不确定的信息不要编造。"
             />
           </label>
+
+          {/* 商家可配置变量（固定提示词模板 V2.0）：傻瓜式表单，商户只需填简单内容 */}
+          <div className="rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-4 py-4">
+            <div className="mb-3 text-xs font-bold text-[#1a1f2e]">门店信息配置</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">门店地址</span>
+                <input value={draft.store_address || ""} onChange={(e) => setDraft({ ...draft, store_address: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店详细地址" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">门店联系方式</span>
+                <input value={draft.store_phone || ""} onChange={(e) => setDraft({ ...draft, store_phone: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店联系电话" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">门店微信号</span>
+                <input value={draft.store_wechat || ""} onChange={(e) => setDraft({ ...draft, store_wechat: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店微信号" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">门店营业时间</span>
+                <input value={draft.business_hours || ""} onChange={(e) => setDraft({ ...draft, business_hours: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="如 9:00-18:00" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">销售城市范围</span>
+                <input value={draft.sales_cities || ""} onChange={(e) => setDraft({ ...draft, sales_cities: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="如 北京、上海" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">销售汽车品牌</span>
+                <input value={draft.sales_brands || ""} onChange={(e) => setDraft({ ...draft, sales_brands: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="如 奔驰、宝马、奥迪" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">收车城市范围</span>
+                <input value={draft.purchase_cities || ""} onChange={(e) => setDraft({ ...draft, purchase_cities: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="如 全国" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">收车汽车品牌</span>
+                <input value={draft.purchase_brands || ""} onChange={(e) => setDraft({ ...draft, purchase_brands: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="如 各品牌均可" />
+              </label>
+            </div>
+            <div className="mt-3 mb-3 text-xs font-bold text-[#1a1f2e]">场景回复配置</div>
+            <div className="grid grid-cols-1 gap-3">
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">销售下班时有用户留资，希望如何回复？</span>
+                <textarea value={draft.after_hours_reply || ""} onChange={(e) => setDraft({ ...draft, after_hours_reply: e.target.value })} className="min-h-[60px] resize-none rounded-lg border border-[#dfe5ee] bg-white px-3 py-2 text-sm outline-none focus:border-[#2563eb]" placeholder="如 下班后留资的回复话术" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">顾客问车况，希望如何回复？</span>
+                <textarea value={draft.vehicle_condition_reply || ""} onChange={(e) => setDraft({ ...draft, vehicle_condition_reply: e.target.value })} className="min-h-[60px] resize-none rounded-lg border border-[#dfe5ee] bg-white px-3 py-2 text-sm outline-none focus:border-[#2563eb]" placeholder="如 客户问车况时的回复话术" />
+              </label>
+              <label className="grid gap-1 text-xs">
+                <span className="font-semibold text-[#475569]">评估师下班时有用户留资，希望如何回复？</span>
+                <textarea value={draft.appraiser_off_hours_reply || ""} onChange={(e) => setDraft({ ...draft, appraiser_off_hours_reply: e.target.value })} className="min-h-[60px] resize-none rounded-lg border border-[#dfe5ee] bg-white px-3 py-2 text-sm outline-none focus:border-[#2563eb]" placeholder="如 评估师下班后留资的回复话术" />
+              </label>
+            </div>
+          </div>
 
           <section className="rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3">
             <div className="mb-3 flex items-center justify-between gap-3">

@@ -505,6 +505,18 @@ def resolve_reply_agent(
                     "reply_style": "",
                     "business_scope": config.knowledge_base_text or "",
                     "is_active": config.status in (None, "", "active"),
+                    # 商家可配置变量（固定提示词模板 V2.0）
+                    "store_address": config.store_address or "",
+                    "store_phone": config.store_phone or "",
+                    "store_wechat": config.store_wechat or "",
+                    "business_hours": config.business_hours or "",
+                    "sales_cities": config.sales_cities or "",
+                    "sales_brands": config.sales_brands or "",
+                    "purchase_cities": config.purchase_cities or "",
+                    "purchase_brands": config.purchase_brands or "",
+                    "after_hours_reply": config.after_hours_reply or "",
+                    "vehicle_condition_reply": config.vehicle_condition_reply or "",
+                    "appraiser_off_hours_reply": config.appraiser_off_hours_reply or "",
                 },
                 [],
             )
@@ -892,6 +904,54 @@ def _build_llm_reply(
     )
 
 
+def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
+    """固定提示词模板 V2.0：用商家可配置变量替换占位符，生成注入 system 的附加提示。
+
+    模板内容固定不可改（第一版不支持管理员自定义模板）。
+    11 个变量从 Agent 配置注入，空值用"未配置"占位。
+    """
+    agent_name = merchant_prompt.get("agent_name") or "AI客服"
+    store_address = merchant_prompt.get("store_address") or "未配置"
+    store_phone = merchant_prompt.get("store_phone") or "未配置"
+    store_wechat = merchant_prompt.get("store_wechat") or "未配置"
+    business_hours = merchant_prompt.get("business_hours") or "未配置"
+    sales_cities = merchant_prompt.get("sales_cities") or "未配置"
+    sales_brands = merchant_prompt.get("sales_brands") or "未配置"
+    purchase_cities = merchant_prompt.get("purchase_cities") or "未配置"
+    purchase_brands = merchant_prompt.get("purchase_brands") or "未配置"
+    after_hours_reply = merchant_prompt.get("after_hours_reply") or "未配置"
+    vehicle_condition_reply = merchant_prompt.get("vehicle_condition_reply") or "未配置"
+    appraiser_off_hours_reply = merchant_prompt.get("appraiser_off_hours_reply") or "未配置"
+
+    return "\n".join([
+        "## 商家配置信息",
+        f"智能体名称：{agent_name}",
+        f"门店地址：{store_address}",
+        f"门店联系方式：{store_phone}",
+        f"门店微信号：{store_wechat}",
+        f"门店营业时间：{business_hours}",
+        f"销售城市范围：{sales_cities}",
+        f"销售汽车品牌：{sales_brands}",
+        f"收车城市范围：{purchase_cities}",
+        f"收车汽车品牌：{purchase_brands}",
+        "",
+        "## 场景回复配置",
+        f"销售下班时有用户留资，希望如何回复：{after_hours_reply}",
+        f"顾客问车况，希望如何回复：{vehicle_condition_reply}",
+        f"评估师下班时有用户留资，希望如何回复：{appraiser_off_hours_reply}",
+        "",
+        "## 回复风格",
+        "每次回复像真实客服聊天，1到3句话，20至45个汉字，不超过60个汉字，每次最多两句话。",
+        "先回答客户问题，再自然引导下一步。不要跳过客户问题直接索要联系方式。",
+        "客户已经留下联系方式后，不得再次索要，只需回复'收到您的联系方式'并引导后续跟进。",
+        "不得编造价格、库存、车况、优惠、检测结果或金融政策。",
+        "不得使用'车源表、库存表、价格表'作为留资诱饵。",
+        "不得承诺一定审批通过、一定有车、一定优惠。",
+        "不得主动要求添加微信或个人号。",
+        "涉及过户、金融、车况等无法确认的内容，引导留下联系方式由人工确认。",
+    ])
+
+
 def _build_llm_history(history: object) -> list[dict[str, str]]:
     """LLM 载荷历史：最近 6 条、总计 ≤1200 字符、只含 role/content，联系方式脱敏。
 
@@ -930,8 +990,12 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         merchant_prompt.get("agent_category") == "bound_agent"
         and _agent_prompt_requires_phone_lead_capture(merchant_prompt.get("system_prompt"))
     )
-    # 顺序：稳定前缀（首部）→ Agent 动态提示（只注入一次）→ 留资目标短句
+    # 顺序：稳定前缀（首部）→ 固定提示词模板 V2.0（注入商家变量）→ 留资目标短句
     system_parts: list[str] = [_SYSTEM_PREFIX]
+    # 固定提示词模板 V2.0：用商家可配置变量替换模板占位符
+    fixed_prompt = _build_fixed_prompt_template(merchant_prompt)
+    if fixed_prompt:
+        system_parts.append(fixed_prompt)
     agent_system_prompt = merchant_prompt.get("system_prompt")
     if agent_system_prompt:
         system_parts.append(_sanitize_merchant_system_prompt(agent_system_prompt))
