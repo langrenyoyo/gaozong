@@ -1158,6 +1158,59 @@ def test_conversation_messages_after_cursor_includes_late_insert_with_older_crea
     assert [item["raw_event_id"] for item in data["items"]] == [late_id]
 
 
+def test_conversation_messages_after_cursor_includes_delayed_webhook_with_older_message_create_time():
+    """延迟 webhook 入库测试：消息先发生（message_create_time 早），webhook 延迟到达后入库。
+    增量游标基于 id 单调推进，不受 message_create_time 乱序影响。"""
+    from app.models import DouyinWebhookEvent
+
+    conversation_key = "delayed_webhook_conv"
+    first_id = _insert_event(
+        open_id="customer_delayed",
+        account_open_id="account_delayed",
+        conversation_short_id=conversation_key,
+        event_key="delayed_first",
+    )
+    # 延迟到达的 webhook：message_create_time 比 first 早 2 小时，但入库 id 更大
+    db = TestSession()
+    try:
+        payload = _payload(
+            open_id="customer_delayed",
+            account_open_id="account_delayed",
+            text="延迟到达的消息",
+            conversation_short_id=conversation_key,
+        )
+        item = DouyinWebhookEvent(
+            event="im_receive_msg",
+            from_user_id=payload["from_user_id"],
+            to_user_id=payload["to_user_id"],
+            conversation_short_id=conversation_key,
+            server_message_id="delayed_msg",
+            event_key="delayed_late",
+            is_duplicate=False,
+            raw_body=json.dumps(payload, ensure_ascii=False),
+            message_create_time=datetime.now() - timedelta(hours=2),
+            created_at=datetime.now(),
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        delayed_id = item.id
+    finally:
+        db.close()
+
+    data = _client().get(
+        "/integrations/douyin/conversation-messages",
+        params={
+            "conversation_key": conversation_key,
+            "account_open_id": "account_delayed",
+            "after_event_id": first_id,
+        },
+    ).json()
+
+    assert [item["raw_event_id"] for item in data["items"]] == [delayed_id]
+    assert data["has_more"] is False
+
+
 def test_conversation_messages_cursor_parameter_contract():
     client = _client()
     common_params = {"conversation_key": "empty_incremental_conv", "account_open_id": "account_empty_incremental"}
@@ -1795,6 +1848,20 @@ def test_frontend_workbench_uses_one_coalesced_all_account_sync_entry():
     assert "WebSocket" not in source
 
 
+def test_frontend_workbench_resume_triggers_force_sync_on_visibility_change():
+    """切回前台立即同步测试：visibilitychange 恢复时设 forceNextSyncRef=true 并触发同步。"""
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    # 恢复事件监听存在
+    assert 'document.addEventListener("visibilitychange"' in source
+    assert 'window.addEventListener("focus"' in source
+    assert 'window.addEventListener("online"' in source
+    # 恢复时强制下次同步越过退避
+    assert "forceNextSyncRef.current = true" in source
+    # 恢复触发调合并同步入口
+    assert "syncAllAccountsRef.current()" in source
+
+
 def test_frontend_workbench_incremental_read_and_history_safety_contracts():
     source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
 
@@ -1825,8 +1892,10 @@ def test_frontend_workbench_autoreply_switch_thumb_stays_inside_track():
     drawer = source.split("<Sheet open={autoreplySettingsOpen}", 1)[1].split("</Sheet>", 1)[0]
 
     # Bug1 修复后：圆点垂直居中（top-1/2 -translate-y-1/2），位移在容器内不溢出。
+    assert "absolute left-0 top-1/2" in drawer
     assert "top-1/2" in drawer
     assert "-translate-y-1/2" in drawer
+    assert 'checked ? "translate-x-[22px]" : "translate-x-[3px]"' in drawer
 
 
 def test_frontend_workbench_keeps_autoreply_selection_when_save_response_is_incomplete():
