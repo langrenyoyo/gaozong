@@ -33,6 +33,8 @@ from app.services.agent_knowledge_category_service import (
     replace_agent_categories,
 )
 from app.services.contact_extractor import mask_contacts_in_text
+from app.services.forbidden_word_service import load_forbidden_words_for_llm
+from app.services.douyin_autoreply_settings_service import DEFAULT_DIRECT_LLM_POLICY
 from app.services.xg_douyin_ai_cs_client import (
     XgDouyinAiCsClientError,
     get_xg_douyin_ai_cs_client,
@@ -261,6 +263,9 @@ def preview_agent(
         "latest_message": latest_message,
         "max_history_messages": 10,
         "conversation_history": conversation_history,
+        # 与自动回复路径统一：传 direct_llm_policy 和 forbidden_words
+        "direct_llm_policy": dict(DEFAULT_DIRECT_LLM_POLICY),
+        "forbidden_words": load_forbidden_words_for_llm(db),
     }
 
     try:
