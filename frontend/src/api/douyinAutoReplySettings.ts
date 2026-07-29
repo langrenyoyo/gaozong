@@ -31,6 +31,7 @@ function buildUpdatePayload(
     require_rag_sources: Boolean(payload.require_rag_sources),
     allowed_intents: safeArray(payload.allowed_intents),
     blocked_risk_flags: safeArray(payload.blocked_risk_flags),
+    manual_review_risk_flags: safeArray(payload.manual_review_risk_flags),
     customer_whitelist_open_ids: safeArray(payload.customer_whitelist_open_ids),
     conversation_whitelist_ids: safeArray(payload.conversation_whitelist_ids),
     min_interval_seconds: Number(payload.min_interval_seconds),

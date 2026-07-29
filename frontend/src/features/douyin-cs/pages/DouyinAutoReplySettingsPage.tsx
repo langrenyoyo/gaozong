@@ -22,6 +22,21 @@ import type {
   DouyinAutoReplySettingUpdateRequest,
 } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
+import { riskFlagLabel } from "../riskFlagLabels";
+
+// 可配置转人工的风险类型清单（开关开=转人工，关=发安全替代回复）。
+const MANUAL_REVIEW_RISK_FLAG_OPTIONS = [
+  "contact_request",
+  "price_or_discount",
+  "finance_or_loan",
+  "inventory_claim",
+  "vehicle_condition_specific",
+  "legal_or_transfer",
+  "after_sales_or_complaint",
+  "appointment_or_visit_specific",
+  "prompt_injection",
+  "no_rag_risky_question",
+];
 
 const DEFAULT_DIRECT_LLM_POLICY: DirectLlmPolicy = {
   direct_llm_auto_send_enabled: false,
@@ -78,6 +93,7 @@ function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplyS
     require_rag_sources: item?.require_rag_sources ?? true,
     allowed_intents: Array.isArray(item?.allowed_intents) ? item.allowed_intents : [],
     blocked_risk_flags: Array.isArray(item?.blocked_risk_flags) ? item.blocked_risk_flags : [],
+    manual_review_risk_flags: Array.isArray(item?.manual_review_risk_flags) ? item.manual_review_risk_flags : [],
     max_replies_per_conversation_per_hour:
       typeof item?.max_replies_per_conversation_per_hour === "number"
         ? item.max_replies_per_conversation_per_hour
@@ -124,6 +140,7 @@ function applyAiAutoReplyEnabled(
     require_rag_sources: false,
     allowed_intents: [],
     blocked_risk_flags: [],
+    manual_review_risk_flags: [],
     direct_llm_policy: SIMPLE_ENABLED_DIRECT_LLM_POLICY,
   };
 }
@@ -143,6 +160,7 @@ function normalizeSimpleForm(current: DouyinAutoReplySettingUpdateRequest): Douy
     require_rag_sources: false,
     allowed_intents: [],
     blocked_risk_flags: [],
+    manual_review_risk_flags: [],
     direct_llm_policy: SIMPLE_ENABLED_DIRECT_LLM_POLICY,
   };
 }
@@ -210,6 +228,20 @@ export default function DouyinAutoReplySettingsPage() {
 
   function handleAiAutoReplyEnabledChange(checked: boolean) {
     setForm((current) => applyAiAutoReplyEnabled(current, checked));
+  }
+
+  // 风险转人工开关：开关开=该风险转人工（加入 manual_review_risk_flags），关=发安全替代回复。
+  function handleManualReviewRiskFlagChange(flag: string, checked: boolean) {
+    setForm((current) => {
+      const exists = current.manual_review_risk_flags.includes(flag);
+      if (checked && !exists) {
+        return { ...current, manual_review_risk_flags: [...current.manual_review_risk_flags, flag] };
+      }
+      if (!checked && exists) {
+        return { ...current, manual_review_risk_flags: current.manual_review_risk_flags.filter((item) => item !== flag) };
+      }
+      return current;
+    });
   }
 
   async function saveSettings(payload: DouyinAutoReplySettingUpdateRequest) {
@@ -394,6 +426,46 @@ export default function DouyinAutoReplySettingsPage() {
                           />
                         </button>
                       </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-md border border-slate-200 bg-white px-4 py-4">
+                    <div className="flex items-start gap-2">
+                      <ShieldCheckIcon size={15} className="mt-0.5 shrink-0 text-slate-500" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-900">风险转人工开关</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500">
+                          开启=该类风险回复转人工确认；关闭=自动发送安全替代回复（已脱敏）。默认全部关闭（发安全回复），减少自动回复被阻断。
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {MANUAL_REVIEW_RISK_FLAG_OPTIONS.map((flag) => {
+                        const checked = form.manual_review_risk_flags.includes(flag);
+                        return (
+                          <div
+                            key={flag}
+                            className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2"
+                          >
+                            <span className="text-xs font-semibold text-slate-700">{riskFlagLabel(flag)}</span>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={checked}
+                              onClick={() => handleManualReviewRiskFlagChange(flag, !checked)}
+                              className={`relative h-6 w-12 rounded-full transition-colors ${
+                                checked ? "bg-amber-500" : "bg-slate-300"
+                              }`}
+                            >
+                              <span
+                                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                                  checked ? "translate-x-7" : "translate-x-1"
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </section>
 
