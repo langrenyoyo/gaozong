@@ -1817,3 +1817,32 @@ def test_frontend_workbench_renders_last_sync_in_conversation_list_header():
     assert last_sync_index > tabs_index
     assert last_sync_index > conversation_header_index
     assert "refreshingConversations ? (" in source[conversation_header_index:last_sync_index]
+
+
+def test_frontend_workbench_autoreply_switch_thumb_stays_inside_track():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    drawer = source.split("<Sheet open={autoreplySettingsOpen}", 1)[1].split("</Sheet>", 1)[0]
+
+    # Bug1 修复后：圆点垂直居中（top-1/2 -translate-y-1/2），位移在容器内不溢出。
+    assert "top-1/2" in drawer
+    assert "-translate-y-1/2" in drawer
+
+
+def test_frontend_workbench_keeps_autoreply_selection_when_save_response_is_incomplete():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    save_section = source.split("const saveAutoreplySettings", 1)[1].split("useEffect(() =>", 1)[0]
+
+    assert "Array.isArray(updated.manual_review_risk_flags)" in save_section
+    assert "无法确认保存结果" in save_section
+
+
+def test_frontend_workbench_account_refresh_depends_on_stable_account_id():
+    source = Path("frontend/src/features/douyin-cs/pages/DouyinAiCsWorkbenchPage.tsx").read_text(encoding="utf-8")
+
+    assert "accountsCacheRef.current.find((item) => item.id === selectedAccountId)" in source
+    assert (
+        "[conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccountId]"
+        in source
+    )

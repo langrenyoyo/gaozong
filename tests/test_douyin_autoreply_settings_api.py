@@ -503,6 +503,7 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
             "require_rag_sources": True,
             "allowed_intents": ["greeting", "basic_info", "greeting"],
             "blocked_risk_flags": ["prompt_injection"],
+            "manual_review_risk_flags": ["prompt_injection", "price_or_discount"],
             "customer_whitelist_open_ids": ["customer-a", "customer-a", "customer-b"],
             "conversation_whitelist_ids": ["conv-a"],
             "max_replies_per_conversation_per_hour": 1,
@@ -529,6 +530,7 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
     assert data["send_enabled"] is True
     assert data["allowed_intents"] == ["greeting", "basic_info"]
     assert data["blocked_risk_flags"] == ["prompt_injection"]
+    assert data["manual_review_risk_flags"] == ["prompt_injection", "price_or_discount"]
     assert data["customer_whitelist_open_ids"] == ["customer-a", "customer-b"]
     assert data["conversation_whitelist_ids"] == ["conv-a"]
     assert data["min_interval_seconds"] == 120
@@ -544,6 +546,7 @@ def test_put_settings_upserts_configuration_and_rejects_forbidden_fields():
         row = db.query(DouyinAccountAutoreplySetting).one()
         assert row.merchant_id == "merchant-a"
         assert json.loads(row.allowed_intents_json) == ["greeting", "basic_info"]
+        assert json.loads(row.manual_review_risk_flags_json) == ["prompt_injection", "price_or_discount"]
         assert json.loads(row.customer_whitelist_open_ids) == ["customer-a", "customer-b"]
         assert json.loads(row.direct_llm_policy_json)["policy_level"] == "standard"
     finally:

@@ -1458,6 +1458,7 @@ class DouyinAutoreplySettingsItem(BaseModel):
     require_rag_sources: bool = True
     allowed_intents: list[str] = Field(default_factory=list)
     blocked_risk_flags: list[str] = Field(default_factory=list)
+    manual_review_risk_flags: list[str] = Field(default_factory=list)
     customer_whitelist_open_ids: list[str] = Field(default_factory=list)
     conversation_whitelist_ids: list[str] = Field(default_factory=list)
     min_interval_seconds: int = 10
