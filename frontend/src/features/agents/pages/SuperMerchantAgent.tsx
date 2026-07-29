@@ -425,6 +425,17 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
         knowledge_category_keys: categoryKeys,
         message: text,
         conversation_history: conversationHistory,
+        store_address: agent.store_address || "",
+        store_phone: agent.store_phone || "",
+        store_wechat: agent.store_wechat || "",
+        business_hours: agent.business_hours || "",
+        sales_cities: agent.sales_cities || "",
+        sales_brands: agent.sales_brands || "",
+        purchase_cities: agent.purchase_cities || "",
+        purchase_brands: agent.purchase_brands || "",
+        after_hours_reply: agent.after_hours_reply || "",
+        vehicle_condition_reply: agent.vehicle_condition_reply || "",
+        appraiser_off_hours_reply: agent.appraiser_off_hours_reply || "",
       });
       setMessages((current) => [
         ...current,

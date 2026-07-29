@@ -257,6 +257,18 @@ class AiAgentPreviewRequest(BaseModel):
     knowledge_category_keys: list[str] = Field(default_factory=list)
     message: str = Field(..., min_length=1)
     conversation_history: list[AiAgentPreviewHistoryItem] = Field(default_factory=list, max_length=10)
+    # 商家可配置变量（固定提示词模板 V2.0）
+    store_address: Optional[str] = None
+    store_phone: Optional[str] = None
+    store_wechat: Optional[str] = None
+    business_hours: Optional[str] = None
+    sales_cities: Optional[str] = None
+    sales_brands: Optional[str] = None
+    purchase_cities: Optional[str] = None
+    purchase_brands: Optional[str] = None
+    after_hours_reply: Optional[str] = None
+    vehicle_condition_reply: Optional[str] = None
+    appraiser_off_hours_reply: Optional[str] = None
 
 
 class AiAgentPreviewResponseData(BaseModel):

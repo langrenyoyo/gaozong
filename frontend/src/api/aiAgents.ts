@@ -43,7 +43,7 @@ export interface AiAgentTrainingChatResult {
   knowledge_used: boolean;
 }
 
-export interface AiAgentPreviewPayload {
+export interface AiAgentPreviewPayload extends AiAgentStoreConfig {
   agent_id?: string | null;
   name: string;
   persona_prompt: string;
