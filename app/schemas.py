@@ -1421,6 +1421,7 @@ class DouyinAutoreplySettingsUpdate(BaseModel):
     require_rag_sources: Optional[bool] = None
     allowed_intents: Optional[list[str]] = None
     blocked_risk_flags: Optional[list[str]] = None
+    manual_review_risk_flags: Optional[list[str]] = None
     customer_whitelist_open_ids: Optional[list[str]] = None
     conversation_whitelist_ids: Optional[list[str]] = None
     min_interval_seconds: Optional[int] = Field(None, ge=0, le=86400)
