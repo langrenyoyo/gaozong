@@ -1002,7 +1002,29 @@ export default function DouyinAiCsWorkbenchPage() {
     setAutoreplySettingsError(null);
     setAutoreplySettingsNotice(null);
     try {
-      const updated = await updateDouyinAutoReplySetting(accountOpenId, autoreplySetting);
+      // 只传 UpdateRequest 需要的字段，不含 account_open_id 等只读字段（后端 extra=forbid）。
+      const payload: DouyinAutoReplySettingUpdateRequest = {
+        enabled: autoreplySetting.enabled,
+        dry_run_enabled: autoreplySetting.dry_run_enabled,
+        send_enabled: autoreplySetting.send_enabled,
+        min_confidence: autoreplySetting.min_confidence,
+        require_rag: autoreplySetting.require_rag,
+        require_rag_sources: autoreplySetting.require_rag_sources,
+        allowed_intents: autoreplySetting.allowed_intents || [],
+        blocked_risk_flags: autoreplySetting.blocked_risk_flags || [],
+        manual_review_risk_flags: autoreplySetting.manual_review_risk_flags || [],
+        customer_whitelist_open_ids: autoreplySetting.customer_whitelist_open_ids || [],
+        conversation_whitelist_ids: autoreplySetting.conversation_whitelist_ids || [],
+        min_interval_seconds: autoreplySetting.min_interval_seconds,
+        max_auto_replies_per_conversation_per_day: autoreplySetting.max_auto_replies_per_conversation_per_day,
+        max_replies_per_conversation_per_hour: autoreplySetting.max_replies_per_conversation_per_hour,
+        max_replies_per_account_per_hour: autoreplySetting.max_replies_per_account_per_hour,
+        direct_llm_policy: autoreplySetting.direct_llm_policy,
+      };
+      const updated = await updateDouyinAutoReplySetting(accountOpenId, payload);
+      if (!Array.isArray(updated.manual_review_risk_flags)) {
+        throw new Error("接口未返回风险转人工设置，无法确认保存结果，请重试。");
+      }
       setAutoreplySetting(updated);
       setAutoreplySettingsNotice("风险转人工设置已保存。");
     } catch (err) {
@@ -1742,21 +1764,22 @@ export default function DouyinAiCsWorkbenchPage() {
   }, [loadAccounts]);
 
   useEffect(() => {
-    if (selectedAccount) {
-      const cachedConversations = conversationsCacheRef.current[selectedAccount.account_open_id];
+    const account = accountsCacheRef.current.find((item) => item.id === selectedAccountId) || null;
+    if (account) {
+      const cachedConversations = conversationsCacheRef.current[account.account_open_id];
       if (cachedConversations) setConversations(cachedConversations);
-      setHasMoreConversations(Boolean(conversationHasMoreRef.current[selectedAccount.account_open_id]));
-      void loadConversations(selectedAccount, {
+      setHasMoreConversations(Boolean(conversationHasMoreRef.current[account.account_open_id]));
+      void loadConversations(account, {
         skipDefaultSelection: Boolean(conversationJumpParams && !conversationJumpHandled),
         background: Boolean(cachedConversations),
-        showRefreshStatus: Boolean(cachedConversations),
+        showRefreshStatus: false,
       });
     } else {
       setConversations([]);
       setSelectedConversationId(null);
       setHasMoreConversations(false);
     }
-  }, [conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccount, selectedAccountId]);
+  }, [conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccountId]);
 
   useEffect(() => {
     if (!selectedConversation || !selectedAccount?.account_open_id || loadingMessages || messages.length === 0) {
@@ -3304,9 +3327,9 @@ export default function DouyinAiCsWorkbenchPage() {
                           role="switch"
                           aria-checked={checked}
                           onClick={() => handleManualReviewRiskFlagToggle(flag, !checked)}
-                          className={`relative h-6 w-12 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
+                          className={`relative h-5 w-10 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
                         >
-                          <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-7" : "translate-x-1"}`} />
+                          <span className={`absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
                         </button>
                       </div>
                     );
