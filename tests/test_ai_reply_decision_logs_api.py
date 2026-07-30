@@ -284,6 +284,72 @@ def test_list_logs_filters_by_structured_fields_and_flags():
     assert data["items"][0]["tags"] == ["price", "audi"]
 
 
+def test_list_logs_intent_and_lead_level_match_multiple_synonym_keys():
+    """意图/意向多值筛选：选一个分类应命中该分类下全部同义 key 的记录（OR 匹配）。"""
+    # 两条同属"询价"分类但 intent 值不同的记录
+    price_log = _insert_log(
+        merchant_id="merchant-a",
+        conversation_id="conv-price",
+        intent="price",
+        lead_level="high",
+    )
+    _insert_send_record(decision_log_id=price_log)
+    discount_log = _insert_log(
+        merchant_id="merchant-a",
+        conversation_id="conv-discount",
+        intent="price_or_discount",
+        lead_level="high_intent",
+    )
+    _insert_send_record(decision_log_id=discount_log)
+    # 不属"询价"分类的记录
+    other_log = _insert_log(
+        merchant_id="merchant-a",
+        conversation_id="conv-other",
+        intent="inventory",
+        lead_level="low",
+    )
+    _insert_send_record(decision_log_id=other_log)
+
+    # 前端把"询价"分类的全部同义 key 一次传入（重复 intent / lead_level 参数）
+    response = _client().get(
+        "/ai-reply-decision-logs",
+        params=[
+            ("intent", "price"),
+            ("intent", "price_or_discount"),
+            ("lead_level", "high"),
+            ("lead_level", "high_intent"),
+        ],
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 2
+    conv_ids = {item["conversation_id"] for item in data["items"]}
+    assert conv_ids == {"conv-price", "conv-discount"}
+
+
+def test_list_logs_filters_by_send_source():
+    """send_source 筛选：ai_auto 只命中 AI 自动发送记录，manual 命中人工发送。"""
+    ai_log = _insert_log(merchant_id="merchant-a", conversation_id="conv-ai")
+    _insert_send_record(decision_log_id=ai_log, send_source="ai_auto")
+    manual_log = _insert_log(merchant_id="merchant-a", conversation_id="conv-manual")
+    _insert_send_record(decision_log_id=manual_log, send_source="manual")
+
+    ai_response = _client().get("/ai-reply-decision-logs", params={"send_source": "ai_auto"})
+    assert ai_response.status_code == 200
+    ai_data = ai_response.json()["data"]
+    assert ai_data["total"] == 1
+    assert ai_data["items"][0]["conversation_id"] == "conv-ai"
+    assert ai_data["items"][0]["send_source"] == "ai_auto"
+
+    manual_response = _client().get("/ai-reply-decision-logs", params={"send_source": "manual"})
+    assert manual_response.status_code == 200
+    manual_data = manual_response.json()["data"]
+    assert manual_data["total"] == 1
+    assert manual_data["items"][0]["conversation_id"] == "conv-manual"
+    assert manual_data["items"][0]["send_source"] == "manual"
+
+
 def test_list_logs_filters_by_keyword_and_date_range():
     old_log = _insert_log(
         merchant_id="merchant-a",

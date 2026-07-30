@@ -7,8 +7,9 @@ Phase 4 起：
 
 from datetime import datetime
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -83,12 +84,13 @@ def list_logs(
     conversation_id: str | None = None,
     agent_id: str | None = None,
     manual_required: bool | None = None,
-    intent: str | None = None,
-    lead_level: str | None = None,
+    intent: Optional[list[str]] = Query(default=None),
+    lead_level: Optional[list[str]] = Query(default=None),
     risk_flag: str | None = None,
     rag_used: bool | None = None,
     llm_used: bool | None = None,
     send_status: str | None = None,
+    send_source: str | None = None,
     is_effective: bool | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
@@ -119,6 +121,7 @@ def list_logs(
             rag_used=rag_used,
             llm_used=llm_used,
             send_status=send_status,
+            send_source=send_source,
             is_effective=is_effective,
             date_from=date_from,
             date_to=date_to,

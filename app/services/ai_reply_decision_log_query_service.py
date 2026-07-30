@@ -38,12 +38,14 @@ class AiReplyDecisionLogQuery:
     conversation_id: str | None = None
     agent_id: str | None = None
     manual_required: bool | None = None
-    intent: str | None = None
-    lead_level: str | None = None
+    # intent/lead_level 接受多候选值（前端按"询价/库存..."分类归并后一次传入全部同义 key），空列表视为不筛选
+    intent: list[str] | None = None
+    lead_level: list[str] | None = None
     risk_flag: str | None = None
     rag_used: bool | None = None
     llm_used: bool | None = None
     send_status: str | None = None
+    send_source: str | None = None
     is_effective: bool | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
@@ -175,9 +177,9 @@ def _apply_filters(query: Query, params: AiReplyDecisionLogQuery) -> Query:
     if params.manual_required is not None:
         query = query.filter(AiReplyDecisionLog.manual_required == _bool_to_int(params.manual_required))
     if params.intent:
-        query = query.filter(AiReplyDecisionLog.intent == params.intent)
+        query = query.filter(AiReplyDecisionLog.intent.in_(params.intent))
     if params.lead_level:
-        query = query.filter(AiReplyDecisionLog.lead_level == params.lead_level)
+        query = query.filter(AiReplyDecisionLog.lead_level.in_(params.lead_level))
     if params.risk_flag:
         escaped = params.risk_flag.replace("%", r"\%").replace("_", r"\_")
         query = query.filter(cast(AiReplyDecisionLog.risk_flags_json, Text).like(f'%"{escaped}"%', escape="\\"))
@@ -187,6 +189,8 @@ def _apply_filters(query: Query, params: AiReplyDecisionLogQuery) -> Query:
         query = query.filter(AiReplyDecisionLog.llm_used == _bool_to_int(params.llm_used))
     if params.send_status:
         query = query.filter(DouyinPrivateMessageSend.status == params.send_status)
+    if params.send_source:
+        query = query.filter(DouyinPrivateMessageSend.send_source == params.send_source)
     if params.is_effective is not None:
         query = query.filter(AiReplyDecisionLog.is_effective.is_(params.is_effective))
     if params.date_from is not None:

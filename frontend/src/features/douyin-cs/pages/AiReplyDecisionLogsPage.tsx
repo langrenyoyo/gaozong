@@ -27,10 +27,12 @@ import { riskFlagLabel, tagLabel } from "../riskFlagLabels";
 
 const PAGE_SIZE = 20;
 
-// 意图标签：把 9100 实际输出的各 intent 值归并到 6 类（询价/库存/试驾/留资·联系/投诉/未知）。
+// 意图分类：把 9100 实际输出的各 intent 值归并到 6 类（询价/库存/试驾/留资·联系/投诉/未知）。
 // 9100 可能输出 greeting/general_inquiry/consult_specific_model/consult_inventory/inquiry_inventory
 // /price_or_discount/inventory_claim/contact_request/appointment_or_visit_specific/after_sales_or_complaint
 // /brand_general_intro/need_clarification 等，甚至直接中文（如"询问门店地址"）。
+// INTENT_LABELS 用于行展示时把单个 intent 值翻译成中文；
+// INTENT_GROUPS 用于筛选下拉——按标签去重，选中时把该类全部同义 key 一次传给后端 OR 匹配。
 const INTENT_LABELS: Record<string, string> = {
   // 询价
   price: "询价",
@@ -62,7 +64,17 @@ const INTENT_LABELS: Record<string, string> = {
   unknown: "未知",
 };
 
-// 意向标签：9100 LLM 输出 lead_level，补充中文变体与可能值，未命中显未知。
+// 意图筛选分组：标签 → 同义 key 列表（按 INTENT_LABELS 反向归并），下拉按标签去重展示。
+const INTENT_GROUPS: { label: string; keys: string[] }[] = [
+  { label: "询价", keys: ["price", "price_or_discount", "inquiry_inventory", "consult_specific_model", "price_inquiry"] },
+  { label: "库存", keys: ["inventory", "consult_inventory", "inventory_claim", "inventory_inquiry", "inventory_or_model_specific"] },
+  { label: "试驾", keys: ["test_drive", "appointment_or_visit_specific"] },
+  { label: "留资/联系", keys: ["contact", "contact_request"] },
+  { label: "投诉", keys: ["complaint", "after_sales_or_complaint"] },
+  { label: "未知", keys: ["greeting", "general_inquiry", "service_general_intro", "need_clarification", "brand_general_intro", "unknown"] },
+];
+
+// 意向分类：9100 LLM 输出 lead_level，补充中文变体与可能值，未命中显未知。
 const LEAD_LEVEL_LABELS: Record<string, string> = {
   high: "高意向",
   high_intent: "高意向",
@@ -76,6 +88,20 @@ const LEAD_LEVEL_LABELS: Record<string, string> = {
   unknown: "未知",
   "未知": "未知",
 };
+
+// 意向筛选分组：标签 → 同义 key 列表，下拉按标签去重展示。
+const LEAD_LEVEL_GROUPS: { label: string; keys: string[] }[] = [
+  { label: "高意向", keys: ["high", "high_intent", "高意向"] },
+  { label: "中意向", keys: ["medium", "medium_intent", "中意向"] },
+  { label: "低意向", keys: ["low", "low_intent", "低意向"] },
+  { label: "未知", keys: ["unknown", "未知"] },
+];
+
+// 发送来源筛选：ai_auto（AI自动发送）/ manual（人工发送）。
+const SEND_SOURCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "ai_auto", label: "AI自动发送" },
+  { value: "manual", label: "人工发送" },
+];
 
 function resolveErrorMessage(error: unknown): string {
   return userFacingError(error, "数据加载失败，请稍后重试");
@@ -368,7 +394,8 @@ export default function AiReplyDecisionLogsPage() {
   const [intent, setIntent] = useState("all");
   const [leadLevel, setLeadLevel] = useState("all");
   const [ragUsed, setRagUsed] = useState("all");
-  const [llmUsed, setLlmUsed] = useState("all");
+  // 发送来源筛选：all / ai_auto / manual（取代旧的"智能生成"llm_used 筛选）
+  const [sendSource, setSendSource] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -385,15 +412,18 @@ export default function AiReplyDecisionLogsPage() {
     setLoading(true);
     setError(null);
     try {
+      // intent/leadLevel 存标签，传参时把该标签对应的全部同义 key 一次传给后端 OR 匹配
+      const intentKeys = INTENT_GROUPS.find((group) => group.label === intent)?.keys;
+      const leadLevelKeys = LEAD_LEVEL_GROUPS.find((group) => group.label === leadLevel)?.keys;
       const data = await getAiReplyDecisionLogs({
         page,
         page_size: PAGE_SIZE,
         keyword,
         manual_required: manualRequired === "all" ? null : manualRequired === "true",
-        intent: intent === "all" ? undefined : intent,
-        lead_level: leadLevel === "all" ? undefined : leadLevel,
+        intent: intentKeys,
+        lead_level: leadLevelKeys,
         rag_used: ragUsed === "all" ? null : ragUsed === "true",
-        llm_used: llmUsed === "all" ? null : llmUsed === "true",
+        send_source: sendSource === "all" ? undefined : sendSource,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
@@ -407,7 +437,7 @@ export default function AiReplyDecisionLogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, intent, keyword, leadLevel, llmUsed, manualRequired, page, ragUsed]);
+  }, [dateFrom, dateTo, intent, keyword, leadLevel, manualRequired, page, ragUsed, sendSource]);
 
   useEffect(() => {
     void loadLogs();
@@ -494,10 +524,10 @@ export default function AiReplyDecisionLogsPage() {
       intent !== "all" ||
       leadLevel !== "all" ||
       ragUsed !== "all" ||
-      llmUsed !== "all" ||
+      sendSource !== "all" ||
       Boolean(dateFrom) ||
       Boolean(dateTo),
-    [dateFrom, dateTo, intent, keyword, leadLevel, llmUsed, manualRequired, ragUsed],
+    [dateFrom, dateTo, intent, keyword, leadLevel, manualRequired, ragUsed, sendSource],
   );
 
   const resetFilters = () => {
@@ -506,7 +536,7 @@ export default function AiReplyDecisionLogsPage() {
     setIntent("all");
     setLeadLevel("all");
     setRagUsed("all");
-    setLlmUsed("all");
+    setSendSource("all");
     setDateFrom("");
     setDateTo("");
     setPage(1);
@@ -562,21 +592,20 @@ export default function AiReplyDecisionLogsPage() {
         </select>
         <select value={intent} onChange={(event) => { setIntent(event.target.value); setPage(1); }} aria-label="意图筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">全部意图</option>
-          {Object.entries(INTENT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {INTENT_GROUPS.map((group) => <option key={group.label} value={group.label}>{group.label}</option>)}
         </select>
         <select value={leadLevel} onChange={(event) => { setLeadLevel(event.target.value); setPage(1); }} aria-label="意向筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">全部意向</option>
-          {Object.entries(LEAD_LEVEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {LEAD_LEVEL_GROUPS.map((group) => <option key={group.label} value={group.label}>{group.label}</option>)}
         </select>
         <select value={ragUsed} onChange={(event) => { setRagUsed(event.target.value); setPage(1); }} aria-label="知识库参考使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
           <option value="all">知识库参考全部</option>
           <option value="true">知识库参考已使用</option>
           <option value="false">知识库参考未使用</option>
         </select>
-        <select value={llmUsed} onChange={(event) => { setLlmUsed(event.target.value); setPage(1); }} aria-label="智能生成使用筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
-          <option value="all">智能生成全部</option>
-          <option value="true">智能生成已使用</option>
-          <option value="false">智能生成未使用</option>
+        <select value={sendSource} onChange={(event) => { setSendSource(event.target.value); setPage(1); }} aria-label="发送来源筛选" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none">
+          <option value="all">发送来源全部</option>
+          {SEND_SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
         <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} aria-label="起始日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />
         <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} aria-label="截止日期" className="h-9 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] px-3 text-xs font-semibold text-[#374151] outline-none" />

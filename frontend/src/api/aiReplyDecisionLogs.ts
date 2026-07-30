@@ -71,8 +71,9 @@ export interface AiReplyDecisionLogQueryParams {
   conversation_id?: string;
   agent_id?: string | number;
   manual_required?: boolean | null;
-  intent?: string;
-  lead_level?: string;
+  // intent/lead_level 为多候选值数组：前端按"询价/库存..."分类归并后一次传入全部同义 key
+  intent?: string[];
+  lead_level?: string[];
   risk_flag?: string;
   rag_used?: boolean | null;
   llm_used?: boolean | null;
@@ -83,6 +84,8 @@ export interface AiReplyDecisionLogQueryParams {
   merchant_id?: string;
   send_status?: string;
   is_effective?: boolean | null;
+  // 发送来源筛选：ai_auto（AI自动发送）/ manual（人工发送）
+  send_source?: string;
 }
 
 // 超管人工标记 AI 实发回复有效性补丁
@@ -109,6 +112,15 @@ function appendBoolean(params: URLSearchParams, key: string, value?: boolean | n
   }
 }
 
+// 多候选值参数：重复 append 同一 key（FastAPI Query(list[...]) 解析为列表）
+function appendStringList(params: URLSearchParams, key: string, values?: string[] | null) {
+  if (!Array.isArray(values)) return;
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) params.append(key, text);
+  }
+}
+
 function buildQueryParams(query: AiReplyDecisionLogQueryParams = {}): URLSearchParams {
   const params = new URLSearchParams();
   appendString(params, "page", query.page);
@@ -117,8 +129,8 @@ function buildQueryParams(query: AiReplyDecisionLogQueryParams = {}): URLSearchP
   appendString(params, "conversation_id", query.conversation_id);
   appendString(params, "agent_id", query.agent_id);
   appendBoolean(params, "manual_required", query.manual_required);
-  appendString(params, "intent", query.intent);
-  appendString(params, "lead_level", query.lead_level);
+  appendStringList(params, "intent", query.intent);
+  appendStringList(params, "lead_level", query.lead_level);
   appendString(params, "risk_flag", query.risk_flag);
   appendBoolean(params, "rag_used", query.rag_used);
   appendBoolean(params, "llm_used", query.llm_used);
@@ -128,6 +140,7 @@ function buildQueryParams(query: AiReplyDecisionLogQueryParams = {}): URLSearchP
   appendString(params, "merchant_id", query.merchant_id);
   appendString(params, "send_status", query.send_status);
   appendBoolean(params, "is_effective", query.is_effective);
+  appendString(params, "send_source", query.send_source);
   return params;
 }
 
