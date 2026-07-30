@@ -114,6 +114,7 @@ def evaluate_post_llm_gates(
     gate_results = {
         "send_disabled": settings.send_enabled is not True,
         "manual_required": result.get("manual_required"),
+        "allow_release_manual_required": getattr(settings, "allow_release_manual_required", False) is True,
         "risk_flags": risk_flags,
         "blocked_risk_flags": blocked_risk_flags,
         "manual_review_risk_flags": manual_review_risk_flags,
@@ -137,7 +138,9 @@ def evaluate_post_llm_gates(
     if settings.send_enabled is not True:
         return GateDecision(False, "blocked", "account_send_disabled", gate_results)
     # manual_required=True 是 9100 明确判定需人工（如无法生成安全回复的风险），保留阻断。
-    if result.get("manual_required") is True:
+    # 账号级开关 allow_release_manual_required 开启时豁免该阻断，让需人工确认的回复也发送，
+    # 但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断（见下方 risk_flags 交集与发送阶段 gate）。
+    if result.get("manual_required") is True and not getattr(settings, "allow_release_manual_required", False):
         return GateDecision(False, "blocked", "manual_required", gate_results)
     # 风险转人工：仅转人工黑名单中的风险类型阻断，其余发 9100 安全替代回复（已脱敏）。
     manual_flags = [flag for flag in risk_flags if flag in manual_review_risk_flags]

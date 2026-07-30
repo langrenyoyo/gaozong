@@ -1491,7 +1491,10 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
         "detected_contacts": parsed.get("detected_contacts")
         if isinstance(parsed.get("detected_contacts"), dict)
         else None,
-        "manual_required": bool(parsed.get("manual_required", True)),
+        # LLM 未输出 manual_required 时默认放行（False）。
+        # 误阻断频发根因：空配置智能体下 LLM 倾向漏填该字段，旧默认 True 导致普通问句全转人工。
+        # 人工兜底仍由 prompt_injection 检测、RAG 风险规则等确定性逻辑保障（见 _apply_safety_postprocess）。
+        "manual_required": bool(parsed.get("manual_required", False)),
         "manual_required_reason": _optional_text(parsed.get("manual_required_reason")) or "",
         "risk_flags": _normalized_text_list(parsed.get("risk_flags")),
         "confidence": _normalize_confidence(parsed.get("confidence")),

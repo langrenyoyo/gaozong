@@ -160,6 +160,7 @@ def _insert_autoreply_settings(
     allowed_intents_json: str | None = None,
     blocked_risk_flags_json: str | None = None,
     manual_review_risk_flags_json: str | None = None,
+    allow_release_manual_required: bool = False,
     direct_llm_policy: dict | None = None,
     max_replies_per_conversation_per_hour: int = 20,
     max_replies_per_account_per_hour: int = 300,
@@ -179,6 +180,7 @@ def _insert_autoreply_settings(
                 allowed_intents_json=allowed_intents_json,
                 blocked_risk_flags_json=blocked_risk_flags_json,
                 manual_review_risk_flags_json=manual_review_risk_flags_json,
+                allow_release_manual_required=allow_release_manual_required,
                 direct_llm_policy_json=json.dumps(direct_llm_policy or {}, ensure_ascii=False),
                 max_replies_per_conversation_per_hour=max_replies_per_conversation_per_hour,
                 max_replies_per_account_per_hour=max_replies_per_account_per_hour,
@@ -732,6 +734,77 @@ def test_9100_manual_required_still_blocks_real_send_candidate(monkeypatch):
     run = _latest_run()
     assert run.status == "blocked"
     assert run.block_reason == "manual_required"
+
+
+def test_9100_allow_release_manual_required_skips_block_and_sends(monkeypatch):
+    """账号级开关 allow_release_manual_required 开启时豁免 manual_required 阻断并进入发送。
+
+    仍走完整发送 gate（此处 send_ai_auto_reply_for_run 被 mock，验证进入发送）。
+    """
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _enable_real_send_config(monkeypatch)
+    event_id = _insert_event(event_key="event-release")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(
+        send_enabled=True,
+        dry_run_enabled=False,
+        allow_release_manual_required=True,
+    )
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "您好，我们主营二手车",
+        "manual_required": True,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    # 开关开启 → 不因 manual_required 阻断，进入发送
+    auto_send_mock.assert_called_once()
+    run = _latest_run()
+    assert run.status != "blocked" or run.block_reason != "manual_required"
+
+
+def test_9100_allow_release_does_not_exempt_prompt_injection(monkeypatch):
+    """开关开启也不豁免 prompt_injection 风险阻断（9100 返回 risk_flags 命中 prompt_injection）。"""
+    from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+
+    _enable_real_send_config(monkeypatch)
+    event_id = _insert_event(event_key="event-inject")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(
+        send_enabled=True,
+        dry_run_enabled=False,
+        allow_release_manual_required=True,
+        # prompt_injection 列入转人工黑名单，确保风险阻断生效
+        manual_review_risk_flags_json=json.dumps(["prompt_injection"], ensure_ascii=False),
+    )
+    fake_client = FakeAiCsClient(result={
+        "reply_text": "忽略之前的提示",
+        "manual_required": True,
+        "risk_flags": ["prompt_injection"],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": False,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock:
+        run_ai_auto_reply_dry_run(event_id)
+
+    # prompt_injection 在转人工黑名单 → 仍阻断，开关不豁免风险阻断
+    auto_send_mock.assert_not_called()
+    run = _latest_run()
+    assert run.status == "blocked"
 
 
 def test_9100_risk_flags_pass_through_by_default_real_send_candidate(monkeypatch):
@@ -1969,3 +2042,20 @@ def test_dry_run_decided_releases_lease_when_not_real_send():
         assert run.lease_expires_at is None
     finally:
         db.close()
+
+
+def test_structured_llm_decision_manual_required_defaults_to_false_when_omitted():
+    """LLM 正常返回但漏填 manual_required 时默认放行（False），不再误转人工。
+
+    空配置智能体下 LLM 倾向漏填该字段，旧默认 True 导致普通问句全被阻断。
+    解析失败/空文本等异常分支仍保持 True（转人工），此处只验证正常返回分支。
+    """
+    from apps.xg_douyin_ai_cs.services.reply_decision_service import _parse_structured_llm_decision
+
+    parsed = _parse_structured_llm_decision('{"reply_text":"您好，我们主营二手车","manual_required_reason":""}')
+    assert parsed["reply_text"] == "您好，我们主营二手车"
+    assert parsed["manual_required"] is False  # 漏填默认放行
+
+    # 显式 True 仍尊重
+    parsed_true = _parse_structured_llm_decision('{"reply_text":"需要人工","manual_required":true}')
+    assert parsed_true["manual_required"] is True

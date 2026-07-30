@@ -11,7 +11,7 @@
 ## 1. 文档定位与更新时间
 
 - 定位：**只保存当前有效上下文**，不记录里程碑流水账，不按日期追加任务完成记录。
-- 更新时间：2026-07-29（自动回复门禁简化 + 固定提示词模板 V2.0 + LLM 上下文迁移 + 违禁词改造 + RAG 修复均已生产验证。**门禁简化**：`douyin_autoreply_gate_service.py` risk_flags 默认放行发安全替代回复，移除 manual_required/fallback_reason/rag 阻断，新增 `manual_review_risk_flags_json` 转人工黑名单（迁移 0018），9100 生成安全替代回复后 `auto_send=True`；**固定提示词模板 V2.0**：9100 `_build_fixed_prompt_template` 用甲方确认的 12 节完整模板替换旧 `_SYSTEM_PREFIX`，10 个商家变量从 `ai_agents` 表（迁移 0019 新增 11 字段）注入，前端智能体编辑改为傻瓜式表单；**旧安全后处理覆盖移除**：`_apply_safety_postprocess` 不再用 `_build_safe_direct_reply`/`sanitize_direct_llm_reply_text` 覆盖 LLM 回复，合并纠正 fallback 也不覆盖，信任 V2.0 模板；**预览与自动回复统一**：预览路由补传 `direct_llm_policy` + `forbidden_words`，两条路径走同一 9100 `build_reply_suggestion` → `build_llm_messages` → `_build_fixed_prompt_template`；**RAG 修复**：检索时使用小高统一知识库 scope（`tenant_id=xiaogao_system`/`merchant_id=xiaogao_base`/`douyin_account_id=0`），而非请求中的真实值，匹配知识库入库数据；**第五节违禁词改造**：9100 生成后确定性检查 `_check_forbidden_words`，命中阻断转人工，人工发送/回访保留旧替换逻辑；生产验证 `rag_used=true`/`rag_sources_count=5`/自动回复发送成功。前序已闭合：抖音会话增量协议（计划一 Task 1-8）、webhook 原子幂等、outbox 持久化、跨商户隔离、已读协议、mark-read 刷屏修复；NewCar 商户自助改密四态分流保持有效；AI剪辑继续保持 `FROZEN_BY_CUSTOMER`）。
+- 更新时间：2026-07-30（自动回复门禁简化 + 固定提示词模板 V2.0 + LLM 上下文迁移 + 违禁词改造 + RAG 修复均已生产验证。**门禁简化**：`douyin_autoreply_gate_service.py` risk_flags 默认放行发安全替代回复，移除 manual_required/fallback_reason/rag 阻断，新增 `manual_review_risk_flags_json` 转人工黑名单（迁移 0018），9100 生成安全替代回复后 `auto_send=True`；**固定提示词模板 V2.0**：9100 `_build_fixed_prompt_template` 用甲方确认的 12 节完整模板替换旧 `_SYSTEM_PREFIX`，10 个商家变量从 `ai_agents` 表（迁移 0019 新增 11 字段）注入，前端智能体编辑改为傻瓜式表单；**旧安全后处理覆盖移除**：`_apply_safety_postprocess` 不再用 `_build_safe_direct_reply`/`sanitize_direct_llm_reply_text` 覆盖 LLM 回复，合并纠正 fallback 也不覆盖，信任 V2.0 模板；**预览与自动回复统一**：预览路由补传 `direct_llm_policy` + `forbidden_words`，两条路径走同一 9100 `build_reply_suggestion` → `build_llm_messages` → `_build_fixed_prompt_template`；**RAG 修复**：检索时使用小高统一知识库 scope（`tenant_id=xiaogao_system`/`merchant_id=xiaogao_base`/`douyin_account_id=0`），而非请求中的真实值，匹配知识库入库数据；**第五节违禁词改造**：9100 生成后确定性检查 `_check_forbidden_words`，命中阻断转人工，人工发送/回访保留旧替换逻辑；生产验证 `rag_used=true`/`rag_sources_count=5`/自动回复发送成功。**2026-07-30 自动回复误阻断修复**：9100 `_parse_structured_llm_decision` 的 `manual_required` 默认值 True→False（LLM 漏填该字段时默认放行，减少空配置智能体下普通问句误转人工）；新增账号级开关 `allow_release_manual_required`（迁移 0020，默认关），开启后豁免 manual_required 阻断，让需人工确认的回复也发送，但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断，前端客服工作台自动回复设置抽屉提供开关；前序已闭合：抖音会话增量协议（计划一 Task 1-8）、webhook 原子幂等、outbox 持久化、跨商户隔离、已读协议、mark-read 刷屏修复；NewCar 商户自助改密四态分流保持有效；AI剪辑继续保持 `FROZEN_BY_CUSTOMER`）。
 - 同一事实只保留一份当前结论；旧结论失效时必须原位替换或删除，禁止追加"最新补充"覆盖旧结论。维护规则见 `docs/ai/01_READING_RULES.md`"AI 文档自治维护规则"。
 - 2026-07-14 之前的历史里程碑、阶段定义、逐任务迁移记录见冻结快照：`docs/ai/archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md`（仅追溯用，不是当前事实）。
 
@@ -155,7 +155,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 | 轨道 | 位置 | 说明 |
 |---|---|---|
 | SQLite 顺序迁移 | `migrations/migrate_sqlite.py` + `migrations/versions/0001~0029+.sql` | 开发/过渡库 |
-| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0019） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0）；冻结不回退已落地迁移 |
+| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0020） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0），0020 为 `douyin_account_autoreply_settings.allow_release_manual_required`（账号级放行需人工确认回复开关）；冻结不回退已落地迁移 |
 | PostgreSQL Alembic（9100） | `migrations/postgres/xg_douyin_ai_cs/`（0001 空基线 + 0002 RAG metadata 7 表 + 0003 `llm_call_logs.conversation_id` 列 bigint→varchar(255)） | |
 
 注意：`wechat_tasks` 是历史遗留——SQLite 主线库由 ORM create_all 建、不在 0001-0028 中（0029 用 `CREATE TABLE IF NOT EXISTS` 壳统一）；PG 由 0003 建。
@@ -211,7 +211,7 @@ gate 链（`app/services/douyin_autoreply_gate_service.py` 等）：
 
 1. pre-LLM gate：人工接管（manual_takeover）阻断、每小时会话限频。
 2. real-send gate：env 总开关（`DOUYIN_AUTO_REPLY_ENABLED` + `DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED`）、账号级 `send_enabled`、绑定智能体、账号级客户/会话白名单（可选收窄）、每日会话上限（real_send_limits）。
-3. **post-LLM gate（2026-07-29 简化后）**：risk_flags 默认放行发安全替代回复，不再硬阻断；`manual_review_risk_flags`（转人工黑名单，空=全放行）控制哪些风险转人工；移除了 `fallback_reason`/`rag_not_used`/`rag_sources_empty` 阻断；保留 `manual_required`（9100 明确人工信号）、`confidence_low`、`empty_reply_text`、`intent_not_allowed`。
+3. **post-LLM gate（2026-07-29 简化后，2026-07-30 增放行开关）**：risk_flags 默认放行发安全替代回复，不再硬阻断；`manual_review_risk_flags`（转人工黑名单，空=全放行）控制哪些风险转人工；移除了 `fallback_reason`/`rag_not_used`/`rag_sources_empty` 阻断；保留 `manual_required`（9100 明确人工信号）、`confidence_low`、`empty_reply_text`、`intent_not_allowed`。**2026-07-30**：`manual_required` 阻断可被账号级开关 `allow_release_manual_required`（迁移 0020，默认关）豁免——开启后需人工确认的回复也发送，但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断；9100 `_parse_structured_llm_decision` 的 `manual_required` 默认值由 True 改为 False（LLM 漏填该字段时默认放行，减少误阻断）。
 4. 发送前违禁词处理（2026-07-29 改造后）：自动回复（`auto_send=True`）不在 9000 侧替换，9100 生成后确定性检查 `_check_forbidden_words`，命中阻断转人工；人工发送/回访保留旧 `replace_forbidden_words` 替换逻辑。
 5. 幂等去重（`already_sent`）；人工发送后标记 manual_takeover。
 6. 紧急停止（`POST /automation/emergency-stop`）。

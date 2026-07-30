@@ -94,6 +94,7 @@ function defaultForm(item?: DouyinAutoReplySettingItem | null): DouyinAutoReplyS
     allowed_intents: Array.isArray(item?.allowed_intents) ? item.allowed_intents : [],
     blocked_risk_flags: Array.isArray(item?.blocked_risk_flags) ? item.blocked_risk_flags : [],
     manual_review_risk_flags: Array.isArray(item?.manual_review_risk_flags) ? item.manual_review_risk_flags : [],
+    allow_release_manual_required: Boolean(item?.allow_release_manual_required),
     max_replies_per_conversation_per_hour:
       typeof item?.max_replies_per_conversation_per_hour === "number"
         ? item.max_replies_per_conversation_per_hour

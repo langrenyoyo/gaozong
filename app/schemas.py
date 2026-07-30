@@ -1497,6 +1497,8 @@ class DouyinAutoreplySettingsUpdate(BaseModel):
     allowed_intents: Optional[list[str]] = None
     blocked_risk_flags: Optional[list[str]] = None
     manual_review_risk_flags: Optional[list[str]] = None
+    # 账号级开关：开启后豁免 manual_required 阻断（仍走完整发送 gate，不豁免 prompt_injection 等风险阻断）
+    allow_release_manual_required: Optional[bool] = None
     customer_whitelist_open_ids: Optional[list[str]] = None
     conversation_whitelist_ids: Optional[list[str]] = None
     min_interval_seconds: Optional[int] = Field(None, ge=0, le=86400)
@@ -1534,6 +1536,7 @@ class DouyinAutoreplySettingsItem(BaseModel):
     allowed_intents: list[str] = Field(default_factory=list)
     blocked_risk_flags: list[str] = Field(default_factory=list)
     manual_review_risk_flags: list[str] = Field(default_factory=list)
+    allow_release_manual_required: bool = False
     customer_whitelist_open_ids: list[str] = Field(default_factory=list)
     conversation_whitelist_ids: list[str] = Field(default_factory=list)
     min_interval_seconds: int = 10

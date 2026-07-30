@@ -1836,3 +1836,4 @@ def test_checkpoint_skip_context_expired_clears_lease_and_keeps_gate_results():
         assert "manual_takeover" in gate["real_send"]
     finally:
         db.close()
+

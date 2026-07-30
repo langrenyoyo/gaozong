@@ -843,6 +843,7 @@ export interface DouyinAutoReplySettingItem {
   allowed_intents: string[];
   blocked_risk_flags: string[];
   manual_review_risk_flags: string[];
+  allow_release_manual_required: boolean;
   customer_whitelist_open_ids: string[];
   conversation_whitelist_ids: string[];
   min_interval_seconds: number;
@@ -863,6 +864,7 @@ export interface DouyinAutoReplySettingUpdateRequest {
   allowed_intents: string[];
   blocked_risk_flags: string[];
   manual_review_risk_flags: string[];
+  allow_release_manual_required: boolean;
   customer_whitelist_open_ids: string[];
   conversation_whitelist_ids: string[];
   min_interval_seconds: number;

@@ -603,6 +603,8 @@ class DouyinAccountAutoreplySetting(Base):
     blocked_risk_flags_json = Column(_JSONStringJSONB())
     # 风险转人工黑名单：空列表=默认全放行发安全替代回复，列出某风险=该风险转人工。
     manual_review_risk_flags_json = Column(_JSONStringJSONB())
+    # 账号级开关：开启后豁免 manual_required 阻断（仍走完整发送 gate，不豁免 prompt_injection 等风险阻断）
+    allow_release_manual_required = Column(Boolean, nullable=False, default=False)
     direct_llm_policy_json = Column(_JSONStringJSONB())
     customer_whitelist_open_ids = Column(_JSONStringJSONB())
     conversation_whitelist_ids = Column(_JSONStringJSONB())
