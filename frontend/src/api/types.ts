@@ -57,6 +57,8 @@ export interface Lead {
   }>;
   raw_data: string | null;
   avatar?: string | null;
+  // 运营标签：口径与客服工作台 build_conversation_tags 一致
+  tags?: string[];
   created_at: string;
   updated_at: string;
 }

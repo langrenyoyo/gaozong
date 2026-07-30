@@ -602,6 +602,8 @@ class LeadOut(BaseModel):
     assigned_staff: Optional[dict] = None
     timeline: list[dict] = Field(default_factory=list)
     avatar: Optional[str] = None
+    # 运营标签：口径与客服工作台 build_conversation_tags 一致
+    tags: list[str] = Field(default_factory=list)
     # PG jsonb 列读出 dict，SQLite Text 读出 str；validator 已用 _safe_load_json_object 统一处理。
     # 声明 Any 避免 Pydantic 在 validator 之后对 PG dict 做类型拒绝（/leads 500）。
     raw_data: Optional[Any] = None

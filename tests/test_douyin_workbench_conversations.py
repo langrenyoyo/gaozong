@@ -1919,3 +1919,48 @@ def test_frontend_workbench_account_refresh_depends_on_stable_account_id():
         "[conversationJumpHandled, conversationJumpParams, loadConversations, selectedAccountId]"
         in source
     )
+
+
+def test_lead_operational_tags_reuse_workbench_judgement():
+    """线索运营标签复用工作台 build_conversation_tags 口径，保证两处一致。"""
+    from app.services.lead_management_service import build_lead_operational_tags
+
+    db = TestSession()
+    lead = DouyinLead(
+        source="douyin",
+        lead_type="私信",
+        customer_name="王女士",
+        content="价格多少钱，预算十万",
+        source_id="customer_tag_1",
+        account_open_id="account_tag_1",
+        conversation_short_id="conv_tag_1",
+        merchant_id="merchant-a",
+        status="pending",
+        extracted_phone="13812345678",
+    )
+    db.add(lead)
+    db.commit()
+    db.close()
+
+    _insert_event(
+        event="im_receive_msg",
+        open_id="customer_tag_1",
+        account_open_id="account_tag_1",
+        text="价格多少钱，预算十万",
+        conversation_short_id="conv_tag_1",
+        event_key="event_tag_1",
+        server_message_id="msg_tag_1",
+    )
+
+    db = TestSession()
+    fetched = db.query(DouyinLead).filter_by(conversation_short_id="conv_tag_1").one()
+    tags = build_lead_operational_tags(db, fetched)
+    db.close()
+
+    # 已留资（权威列 extracted_phone）+ 高意向关键词“价格”命中
+    assert "retained_contact" in tags
+    assert "high_intent" in tags
+    # 已留资 + status=pending + 无出站 im_send_msg → 待回访
+    assert "follow_up" in tags
+    # 未命中“人工/客服/加微信”等 → 无需人工
+    assert "manual_required" not in tags

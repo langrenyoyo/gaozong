@@ -186,6 +186,41 @@ def _lead_contact_payload(lead: DouyinLead) -> dict[str, Any]:
     }
 
 
+def build_lead_operational_tags(db: Session, lead: DouyinLead) -> list[str]:
+    """生成线索运营标签，口径与客服工作台 build_conversation_tags 完全一致。
+
+    工作台标签基于「会话消息文本 + 是否已发 im_send_msg + lead 权威列」判定；
+    本函数查 lead 对应会话的全部 webhook 事件，复用工作台判定逻辑，
+    保证线索页运营标签与工作台第一行标签一致。
+    """
+    # 延迟 import：douyin_workbench_conversation_service 已引用本模块，顶部 import 会循环
+    from app.services.douyin_workbench_conversation_service import (
+        _row_to_message,
+        build_conversation_tags,
+    )
+
+    if not lead.conversation_short_id or not lead.account_open_id:
+        return []
+    rows = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.conversation_short_id == lead.conversation_short_id)
+        .filter(
+            or_(
+                DouyinWebhookEvent.from_user_id == lead.account_open_id,
+                DouyinWebhookEvent.to_user_id == lead.account_open_id,
+            )
+        )
+        .order_by(
+            DouyinWebhookEvent.message_create_time.asc(),
+            DouyinWebhookEvent.created_at.asc(),
+            DouyinWebhookEvent.id.asc(),
+        )
+        .all()
+    )
+    messages = [msg for row in rows if (msg := _row_to_message(db, row)) is not None]
+    return build_conversation_tags(db, messages, merchant_id=lead.merchant_id)
+
+
 def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = False) -> dict[str, Any]:
     """构造兼容旧 LeadOut 的响应字典，并追加展示字段。"""
     # 销售跟进状态（纯派生：未反馈/已联系/联系方式错误），供前端 AI小高线索页面展示
@@ -221,6 +256,7 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
         "lead_score": lead_score(lead),
         "sales_followup_status": followup_status,
         "sales_followup_label": sales_followup_service.sales_followup_label(followup_status),
+        "tags": build_lead_operational_tags(db, lead),
     }
     if include_detail:
         staff = db.get(SalesStaff, lead.assigned_staff_id) if lead.assigned_staff_id else None

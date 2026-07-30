@@ -83,21 +83,13 @@ function getLeadContactValues(lead: Lead): string[] {
   return uniqueStrings([lead.phone, lead.wechat, ...(lead.all_extracted_contacts || []), lead.customer_contact]);
 }
 
-function getAuthoritativeContactValues(lead: Lead): string[] {
-  return uniqueStrings([lead.phone, lead.wechat, ...(lead.all_extracted_contacts || [])]);
-}
-
 type OperationalTagKey = "manual_required" | "follow_up" | "retained_contact" | "high_intent";
 
 interface OperationalTag {
   key: OperationalTagKey;
   label: string;
   tone: string;
-  reasons: string[];
-  cautious?: boolean;
 }
-
-const HIGH_INTENT_KEYWORDS = ["现车", "价格", "检测报告", "车况", "底价", "预算", "看车", "到店", "多少钱", "报价"];
 
 const OPERATIONAL_TAG_META: Record<OperationalTagKey, { label: string; tone: string }> = {
   manual_required: { label: "需人工", tone: "bg-rose-50 text-rose-700 ring-rose-200" },
@@ -118,86 +110,16 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return result;
 }
 
-function hasRetainedContact(lead: Lead): boolean {
-  return getAuthoritativeContactValues(lead).length > 0;
-}
-
-function isHighIntentLead(lead: Lead): boolean {
-  const level = String(lead.lead_score?.level || "").trim();
-  if (level === "高意向") return true;
-  if ((lead.lead_score?.reasons || []).some((reason) => reason.includes("高意向"))) return true;
-  const text = uniqueStrings([
-    lead.content,
-    lead.original_message_text,
-    leadDerivedValue(lead, "car_model"),
-    leadDerivedValue(lead, "budget"),
-    leadDerivedValue(lead, "city"),
-  ]).join(" ");
-  return HIGH_INTENT_KEYWORDS.some((keyword) => text.includes(keyword));
-}
-
-function hasProblematicContactExtract(lead: Lead): boolean {
-  return ["parse_failed", "failed"].includes(String(lead.contact_extract_status || ""));
-}
-
-function notificationNeedsManual(record: NotificationRecord): boolean {
-  const status = String(record.send_status || "").toLowerCase();
-  return ["failed", "blocked", "skipped"].includes(status) || Boolean(record.error_message);
-}
-
-function notificationSentToStaff(record: NotificationRecord): boolean {
-  const status = String(record.send_status || "").toLowerCase();
-  return ["pasted", "sent", "replied"].includes(status) || Boolean(record.sent_at);
-}
-
-function deriveOperationalTags(
-  lead: Lead,
-  checks: CheckRecord[] = [],
-  notificationRecords: NotificationRecord[] = [],
-): OperationalTag[] {
-  const relatedChecks = checks.filter((item) => item.lead_id === lead.id);
-  const relatedNotifications = notificationRecords.filter((item) => item.lead_id === lead.id);
-  const reasons: Record<OperationalTagKey, string[]> = {
-    manual_required: [],
-    follow_up: [],
-    retained_contact: [],
-    high_intent: [],
-  };
-
-  if (hasProblematicContactExtract(lead) && !hasRetainedContact(lead)) {
-    reasons.manual_required.push("联系方式提取失败，需要人工复核");
-  }
-  if (relatedChecks.some((item) => ["manual_review", "failed", "blocked", "invalid"].includes(item.check_status))) {
-    reasons.manual_required.push("回复检测需要人工复核");
-  }
-  if (relatedNotifications.some(notificationNeedsManual)) {
-    reasons.manual_required.push("微信通知销售失败或被阻断");
-  }
-
-  if (lead.status === "timeout" || relatedChecks.some((item) => item.check_status === "timeout")) {
-    reasons.follow_up.push("销售跟进检测已超时，建议抖音私信二次提醒");
-  }
-  // 联系方式错误 → 待回访（销售反馈号码无效，需抖音私信向客户核实）
-  // 注：「已分配+已通知+暂无反馈」属于销售跟进状态 no_feedback（未反馈），不再归为待回访
-  if (lead.sales_followup_status === "contact_invalid") {
-    reasons.follow_up.push("销售反馈联系方式错误，建议抖音私信向客户核实");
-  }
-
-  if (hasRetainedContact(lead)) {
-    reasons.retained_contact.push("已提取手机号、微信号或其他联系方式");
-  }
-  if (isHighIntentLead(lead)) {
-    reasons.high_intent.push("命中车型、预算、价格或看车等意向信号");
-  }
-
+// 运营标签口径统一到客服工作台 build_conversation_tags，由后端 LeadOut.tags 返回；
+// 前端只做 key → 文案/配色映射，不再本地派生，避免与工作台第一行标签不一致。
+function deriveOperationalTags(lead: Lead): OperationalTag[] {
+  const tags = lead.tags || [];
   return (["manual_required", "follow_up", "retained_contact", "high_intent"] as OperationalTagKey[])
-    .filter((key) => reasons[key].length > 0)
+    .filter((key) => tags.includes(key))
     .map((key) => ({
       key,
       label: OPERATIONAL_TAG_META[key].label,
       tone: OPERATIONAL_TAG_META[key].tone,
-      reasons: reasons[key],
-      cautious: key === "follow_up" && !relatedNotifications.length,
     }));
 }
 
@@ -827,8 +749,7 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
   const budget = leadDerivedValue(lead, "budget") || "未提供";
   const traceItems = leadTraceItems(lead);
   const currentStaffName = lead.assigned_staff?.name || staffName || "未分配";
-  const operationalTags = deriveOperationalTags(lead, checks, notificationRecords);
-  const followUpTag = operationalTags.find((tag) => tag.key === "follow_up");
+  const operationalTags = deriveOperationalTags(lead);
   const conversationJump = buildDouyinConversationJump(lead);
 
   // 检测按钮可用条件
@@ -907,24 +828,15 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
               {operationalTags.map((tag) => (
                 <span
                   key={tag.key}
-                  title={tag.reasons.join("；")}
                   className={`rounded-md px-2 py-1 text-[11px] font-semibold ring-1 ${tag.tone}`}
                 >
-                  {tag.cautious ? `可能${tag.label}` : tag.label}
+                  {tag.label}
                 </span>
               ))}
             </div>
           ) : (
             <p className="mt-2 text-[11px] text-[#8b95a6]">暂无明确运营标签</p>
           )}
-          {followUpTag ? (
-            <div className="mt-2 rounded-lg bg-[#f8fafc] px-3 py-2 text-[11px] leading-5 text-[#64748b]">
-              <div className="font-semibold text-[#374151]">{followUpTag.cautious ? "可能待回访依据" : "待回访依据"}</div>
-              {followUpTag.reasons.map((reason) => (
-                <div key={reason}>- {reason}</div>
-              ))}
-            </div>
-          ) : null}
         </div>
 
         <div className="mt-3">
@@ -1849,7 +1761,7 @@ export default function LeadsManagement() {
                   const city = leadDerivedValue(lead, "city") || "城市未提供";
                   const carModel = leadDerivedValue(lead, "car_model") || "车型未提供";
                   const budget = leadDerivedValue(lead, "budget") || "预算未提供";
-                  const tags = deriveOperationalTags(lead, checksData);
+                  const tags = deriveOperationalTags(lead);
                   const conversationJump = buildDouyinConversationJump(lead);
                   return (
                     <tr
@@ -1910,10 +1822,9 @@ export default function LeadsManagement() {
                             {tags.map((tag) => (
                               <span
                                 key={tag.key}
-                                title={tag.reasons.join("；")}
                                 className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${tag.tone}`}
                               >
-                                {tag.cautious ? `可能${tag.label}` : tag.label}
+                                {tag.label}
                               </span>
                             ))}
                           </div>
