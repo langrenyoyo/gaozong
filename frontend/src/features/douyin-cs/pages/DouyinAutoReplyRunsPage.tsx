@@ -63,6 +63,37 @@ const DIAGNOSTIC_KEY_LABELS: Record<string, string> = {
   send_status: "发送状态",
   send_source: "发送来源",
   send_gate_passed: "发送安全检查通过",
+  // post_llm 字段：补全人类可读标签，消除“字段N”回退
+  send_disabled: "账号发送已关闭",
+  manual_required: "需人工确认",
+  risk_flags: "命中风险标签",
+  blocked_risk_flags: "硬阻断风险黑名单",
+  manual_review_risk_flags: "转人工风险黑名单",
+  require_rag: "要求知识库",
+  require_rag_sources: "要求知识库命中",
+  rag_sources_count: "知识库命中条数",
+  source_chunks_count: "知识库切片数",
+  fallback_reason: "兜底原因",
+  confidence: "置信度",
+  min_confidence: "置信度阈值",
+  intent: "意图",
+  allowed_intents: "允许的意图",
+  upstream_auto_send: "上游要求自动发送",
+  final_auto_send: "最终是否自动发送",
+  content_gates_effective: "内容门禁生效",
+  // pre_llm settings 快照字段
+  enabled: "已启用",
+  dry_run_enabled: "演练模式",
+  min_interval_seconds: "最小发送间隔(秒)",
+  max_replies_per_account_per_hour: "每小时账号上限",
+  max_replies_per_conversation_per_hour: "每小时会话上限",
+  max_auto_replies_per_conversation_per_day: "每日会话上限",
+  // pre_llm manual_takeover / frequency 子对象字段
+  source: "接管来源",
+  blocked: "是否阻断",
+  account_count: "账号计数",
+  conversation_count: "会话计数",
+  counted_statuses: "计入状态",
 };
 
 const STATUS_TONES: Record<string, "slate" | "blue" | "amber" | "red" | "emerald"> = {
@@ -323,11 +354,13 @@ function DetailModal({
   const [rawExpanded, setRawExpanded] = useState(false);
   const gateResults = isRecord(detail?.gate_results) ? detail.gate_results : null;
   const agent = agentGate(gateResults);
-  const model = firstRecord(gateResults, ["llm", "model", "generation", "post_llm"]);
-  const history = firstRecord(gateResults, ["history", "pre_llm", "history_messages"]);
-  const manualTakeover = firstRecord(gateResults, ["manual_takeover", "autopilot", "conversation_autopilot"]);
-  const sendDecision = firstRecord(gateResults, ["send_decision", "decision", "post_llm"]);
-  const sendContext = firstRecord(gateResults, ["send_context", "context"]);
+  const postLlm = firstRecord(gateResults, ["post_llm"]); // 9100 决策后门禁：意图/置信度/风险/是否自动发送
+  const history = firstRecord(gateResults, ["history", "history_gate", "history_messages"]); // 历史上下文构建
+  const preLlm = firstRecord(gateResults, ["pre_llm"]); // 9100 决策前门禁：settings/限频/接管
+  // manual_takeover 实际嵌在 pre_llm 内，从 pre_llm 取
+  const manualTakeover = firstRecord(preLlm, ["manual_takeover"]);
+  const settingsSnapshot = firstRecord(preLlm, ["settings"]);
+  const frequency = firstRecord(preLlm, ["frequency"]);
 
   return (
     <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/35 p-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="run-detail-title">
@@ -427,19 +460,18 @@ function DetailModal({
               <section className="rounded-md border border-slate-200 bg-white p-4">
                 <h3 className="text-xs font-bold text-slate-900">模型信息</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <Field label="智能生成状态" value={gateStatusText(model)} />
+                  <Field label="智能生成状态" value={gateStatusText(postLlm)} />
                   <Field label="是否使用智能生成" value={booleanText(detail.llm_used)} />
                   <Field label="是否使用知识库" value={booleanText(detail.rag_used)} />
                 </div>
               </section>
 
               <div className="grid gap-4 lg:grid-cols-2">
-                <DiagnosticGroup title="历史消息" record={history} />
-                <DiagnosticGroup title="智能体" record={agent} />
-                <DiagnosticGroup title="模型生成" record={model} />
+                <DiagnosticGroup title="历史消息上下文" record={history} />
+                <DiagnosticGroup title="决策前门禁配置" record={settingsSnapshot} />
+                <DiagnosticGroup title="发送限频状态" record={frequency} />
                 <DiagnosticGroup title="人工接管" record={manualTakeover} />
-                <DiagnosticGroup title="发送决策" record={sendDecision} />
-                <DiagnosticGroup title="发送上下文" record={sendContext} />
+                <DiagnosticGroup title="回复决策（LLM 生成后）" record={postLlm} />
               </div>
 
               <section className="rounded-md border border-slate-200 bg-white p-4">
