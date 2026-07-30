@@ -257,6 +257,7 @@ class ReturnVisitPromptInput(BaseModel):
     fallback_message: str = Field(..., min_length=1, max_length=500)
     confidence_threshold: float = Field(..., ge=0.50, le=1.00)
     enabled: bool
+    scene_description: str | None = Field(default=None, max_length=500)
 
 
 class ReturnVisitJudgeRequest(BaseModel):
@@ -271,24 +272,8 @@ class ReturnVisitJudgeRequest(BaseModel):
     dispatch_context: dict
 
 
-# 稳定枚举（冻结合同：固定三键 / 判定来源 / 判定结果 / 风险标记六类）。
-PromptKey = Literal[
-    "retain_contact_conversion",
-    "finance_plan_followup",
-    "silent_customer_wakeup",
-]
+# 判定来源仍为枚举；场景键与判定结果放宽为 str，支持管理员自定义场景。
 JudgementSource = Literal["llm", "keyword_fallback", "precheck"]
-JudgementResult = Literal[
-    "retain_contact_conversion",
-    "finance_plan_followup",
-    "silent_customer_wakeup",
-    "ambiguous",
-    "no_match",
-    "below_threshold",
-    "prompt_disabled",
-    "suppress_hit",
-    "blocked",
-]
 RiskFlagValue = Literal[
     "prompt_injection",
     "sensitive_info",
@@ -300,14 +285,15 @@ RiskFlagValue = Literal[
 
 
 class ReturnVisitJudgment(BaseModel):
-    """回访判定输出（枚举冻结；复用 judgement_source/judgement_result + model + risk_flags）。"""
+    """回访判定输出。prompt_key/judgement_result 为 str 支持自定义场景；
+    非场景结果（ambiguous/no_match/below_threshold/prompt_disabled/suppress_hit/blocked）仍由代码生成。"""
 
-    prompt_key: PromptKey | None
+    prompt_key: str | None
     confidence: float = Field(..., ge=0, le=1)
     should_trigger: bool
     suggested_message: str | None = Field(default=None, max_length=500)
     judgement_source: JudgementSource
-    judgement_result: JudgementResult
+    judgement_result: str
     model: str | None = Field(default=None, max_length=128)
     risk_flags: list[RiskFlagValue] = Field(default_factory=list, max_length=8)
     ambiguous: bool = False

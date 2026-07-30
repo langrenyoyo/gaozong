@@ -574,20 +574,18 @@ def test_log_does_not_record_sales_reply_text(caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_prompt_key_literal_rejects_unknown():
-    """FIX1 中 4：ReturnVisitJudgment.prompt_key 非 PromptKey → ValidationError。"""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        ReturnVisitJudgment(
-            prompt_key="unknown_key",
-            confidence=0.0,
-            should_trigger=False,
-            judgement_source="llm",
-            judgement_result="no_match",
-            model=None,
-            risk_flags=[],
-        )
+def test_schema_prompt_key_accepts_custom_scene():
+    """动态场景：ReturnVisitJudgment.prompt_key 放宽为 str，支持自定义场景键。"""
+    judgment = ReturnVisitJudgment(
+        prompt_key="custom_lead_capture",
+        confidence=0.9,
+        should_trigger=True,
+        judgement_source="llm",
+        judgement_result="custom_lead_capture",
+        model="test",
+        risk_flags=[],
+    )
+    assert judgment.prompt_key == "custom_lead_capture"
 
 
 def test_schema_judgement_source_literal_rejects_unknown():
@@ -606,20 +604,18 @@ def test_schema_judgement_source_literal_rejects_unknown():
         )
 
 
-def test_schema_judgement_result_literal_rejects_unknown():
-    """FIX1 中 4：judgement_result 非 Literal → ValidationError。"""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        ReturnVisitJudgment(
-            prompt_key=None,
-            confidence=0.0,
-            should_trigger=False,
-            judgement_source="llm",
-            judgement_result="unknown_result",
-            model=None,
-            risk_flags=[],
-        )
+def test_schema_judgement_result_accepts_custom_scene():
+    """动态场景：judgement_result 放宽为 str，支持自定义场景结果。"""
+    judgment = ReturnVisitJudgment(
+        prompt_key=None,
+        confidence=0.0,
+        should_trigger=False,
+        judgement_source="llm",
+        judgement_result="custom_result",
+        model=None,
+        risk_flags=[],
+    )
+    assert judgment.judgement_result == "custom_result"
 
 
 def test_schema_risk_flag_literal_rejects_unknown():
