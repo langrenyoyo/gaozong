@@ -1812,11 +1812,10 @@ def _lead_status(
     *,
     merchant_id: str | None = None,
 ) -> str:
-    """判断会话留资状态，与 _has_retained_contact 口径对齐。
+    """返回会话关联线索的实际状态（pending/assigned/replied/timeout/closed）。
 
-    不只看消息 lead_id（只要 webhook 事件关联了 lead_id 就判已留资过于宽泛），
-    而是查 DouyinLead 表确认是否真正提取到联系方式（extracted_phone/
-    extracted_wechat/all_extracted_contacts），与 tags 判断口径一致。
+    留资判断由 build_conversation_tags 的 retained_contact 标签处理，不在此混入。
+    无线索关联时返回 contact_not_found。
     """
     if not messages:
         return "contact_not_found"
@@ -1827,11 +1826,9 @@ def _lead_status(
         account_open_id=first.account_open_id,
         merchant_id=merchant_id,
     )
-    raw_data = _safe_lead_raw_data(lead)
-    text_blob = " ".join(item.content for item in messages if item.content)
-    if _has_retained_contact(lead, messages, raw_data, text_blob):
-        return "captured"
-    return "contact_not_found"
+    if lead is None:
+        return "contact_not_found"
+    return lead.status or "pending"
 
 
 def _find_conversation_lead(
