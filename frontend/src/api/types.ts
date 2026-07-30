@@ -56,6 +56,7 @@ export interface Lead {
     created_at: string | null;
   }>;
   raw_data: string | null;
+  avatar?: string | null;
   created_at: string;
   updated_at: string;
 }

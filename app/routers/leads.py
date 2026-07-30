@@ -67,7 +67,7 @@ def list_leads(
         db,
         query,
     )
-    items = [lead_management_service.build_lead_payload(db, lead) for lead in leads]
+    items = [lead_management_service.build_lead_payload(db, lead, include_detail=True) for lead in leads]
     if leads_tasks_pg_shadow.is_shadow_configured():
         record_shadow_result(
             leads_tasks_pg_shadow.run_douyin_leads_list_shadow_read(

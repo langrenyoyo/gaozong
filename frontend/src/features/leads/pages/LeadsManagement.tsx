@@ -1862,7 +1862,7 @@ export default function LeadsManagement() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
                           <img
-                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${lead.customer_name || lead.id}&backgroundColor=b6e3f4,c0aede,d1d4f9`}
+                            src={lead.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${lead.customer_name || lead.id}&backgroundColor=b6e3f4,c0aede,d1d4f9`}
                             alt={lead.customer_name || "-"}
                             className="h-9 w-9 rounded-full bg-[#e0edff]"
                           />

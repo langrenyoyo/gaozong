@@ -601,6 +601,7 @@ class LeadOut(BaseModel):
     sales_followup_label: Optional[str] = None
     assigned_staff: Optional[dict] = None
     timeline: list[dict] = Field(default_factory=list)
+    avatar: Optional[str] = None
     # PG jsonb 列读出 dict，SQLite Text 读出 str；validator 已用 _safe_load_json_object 统一处理。
     # 声明 Any 避免 Pydantic 在 validator 之后对 PG dict 做类型拒绝（/leads 500）。
     raw_data: Optional[Any] = None
@@ -677,6 +678,30 @@ class LeadOut(BaseModel):
             if isinstance(item, str) and item.strip() and item.strip() not in contact_values:
                 contact_values.append(item.strip())
         data["all_extracted_contacts"] = contact_values
+
+        # 通过 source_id (open_id) 查 webhook 事件获取真实头像
+        source_id = data.get("source_id")
+        merchant_id = data.get("merchant_id")
+        if source_id and not data.get("avatar"):
+            try:
+                from app.database import SessionLocal
+                from app.models import DouyinWebhookEvent
+                _db = SessionLocal()
+                try:
+                    _event = (
+                        _db.query(DouyinWebhookEvent)
+                        .filter(DouyinWebhookEvent.from_user_id == source_id)
+                        .filter(DouyinWebhookEvent.from_user_avatar.isnot(None))
+                        .order_by(DouyinWebhookEvent.id.desc())
+                        .first()
+                    )
+                    if _event and _event.from_user_avatar:
+                        data["avatar"] = _event.from_user_avatar
+                finally:
+                    _db.close()
+            except Exception:
+                pass
+
         return data
 
     model_config = {"from_attributes": True}
