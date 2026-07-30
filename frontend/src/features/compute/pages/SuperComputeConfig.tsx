@@ -350,7 +350,7 @@ export default function SuperComputeConfig() {
     const merchantId = rechargeMerchantId.trim();
     const tokens = toPositiveInteger(rechargeTokens);
     if (!merchantId) {
-      setRechargeError("请输入商户编号。");
+      setRechargeError("请输入商户登录账号。");
       return;
     }
     if (tokens === null) {
@@ -380,7 +380,7 @@ export default function SuperComputeConfig() {
     const merchantId = grantMerchantId.trim();
     const packageId = Number(grantPackageId);
     if (!merchantId) {
-      setGrantError("请输入商户编号。");
+      setGrantError("请输入商户登录账号。");
       return;
     }
     if (!packageId || !packages.some((pkg) => pkg.id === packageId)) {
@@ -736,7 +736,7 @@ export default function SuperComputeConfig() {
         <>
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
           <div className="font-semibold">后台充值/发放为管理操作，不代表真实支付。</div>
-          <div>真实支付暂未接入；请确认商户编号后再操作，页面不会调用微信支付或支付宝真实接口。</div>
+          <div>真实支付暂未接入；请确认商户登录账号后再操作，页面不会调用微信支付或支付宝真实接口。</div>
         </div>
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
           <section className="rounded-xl border border-[#e4e8f0] bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -749,7 +749,7 @@ export default function SuperComputeConfig() {
             </div>
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="block text-xs font-semibold text-[#475467]">
-                商户编号
+                商户登录账号
                 <input
                   value={rechargeMerchantId}
                   onChange={(event) => setRechargeMerchantId(event.target.value)}
@@ -806,7 +806,7 @@ export default function SuperComputeConfig() {
             </div>
             <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="block text-xs font-semibold text-[#475467]">
-                商户编号
+                商户登录账号
                 <input
                   value={grantMerchantId}
                   onChange={(event) => setGrantMerchantId(event.target.value)}

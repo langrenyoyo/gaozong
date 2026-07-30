@@ -37,6 +37,7 @@ from app.schemas import (
     ComputeUsageRequest,
 )
 from app.services import compute_service
+from app.models import ExternalMerchantBinding
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,27 @@ def list_recharge_orders(
 admin_router = APIRouter(prefix="/admin", tags=["超管-算力配置"])
 
 
+def _resolve_merchant_id_by_account(db: Session, account: str) -> str:
+    """通过商户登录账号反查 merchant_id（ExternalMerchantBinding.external_account）。"""
+    account = account.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail={"code": "ACCOUNT_REQUIRED", "message": "请输入商户登录账号"})
+    row = (
+        db.query(ExternalMerchantBinding)
+        .filter(
+            ExternalMerchantBinding.external_account == account,
+            ExternalMerchantBinding.status == "active",
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "MERCHANT_NOT_FOUND", "message": f"未找到登录账号 '{account}' 对应的商户"},
+        )
+    return row.merchant_id
+
+
 def _require_compute_config_admin(context: RequestContext) -> RequestContext:
     """算力配置：精确权限 auto_wechat:admin:compute_config / super_admin / mock。"""
     if not context.has_permission(COMPUTE_CONFIG_PERMISSION):
@@ -253,6 +275,18 @@ def admin_update_package(
     return {"success": True, "data": pkg, "message": "success"}
 
 
+@admin_router.get("/compute/resolve-merchant")
+def admin_resolve_merchant(
+    account: str,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """通过商户登录账号反查 merchant_id（供管理员充值/发放套餐时使用）。"""
+    _require_compute_config_admin(context)
+    merchant_id = _resolve_merchant_id_by_account(db, account)
+    return {"success": True, "data": {"merchant_id": merchant_id}, "message": "success"}
+
+
 @admin_router.post(
     "/merchants/{merchant_id}/compute/recharge", response_model=ComputeSummaryResponse
 )
@@ -266,23 +300,27 @@ def admin_recharge_merchant(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员给商户充值 Token（对齐 PRD 3.1.4 充值）。"""
+    # 如果传入的是登录账号而非 merchant_id，先反查
+    resolved_id = merchant_id
+    if not merchant_id.startswith("m_"):
+        resolved_id = _resolve_merchant_id_by_account(db, merchant_id)
     with _admin_compute_action(
         context,
         operation="recharge_merchant",
-        target=f"merchant_id={merchant_id},points={payload.tokens}",
+        target=f"merchant_id={resolved_id},points={payload.tokens}",
     ):
         _require_compute_config_admin(context)
         try:
             compute_service.recharge_merchant(
                 db,
-                merchant_id,
+                resolved_id,
                 payload.tokens,
                 remark=payload.remark,
                 operator_id=context.user_id,
             )
         except ValueError as exc:
             raise _bad_request(str(exc), "充值 Token 数量必须大于 0") from exc
-    summary = compute_service.get_summary(db, merchant_id)
+    summary = compute_service.get_summary(db, resolved_id)
     return {"success": True, "data": summary, "message": "success"}
 
 
@@ -299,15 +337,19 @@ def admin_grant_package(
     context: RequestContext = Depends(get_request_context_required),
 ):
     """管理员给商户发放套餐（对齐 PRD 3.1.4 发放套餐）。"""
+    # 如果传入的是登录账号而非 merchant_id，先反查
+    resolved_id = merchant_id
+    if not merchant_id.startswith("m_"):
+        resolved_id = _resolve_merchant_id_by_account(db, merchant_id)
     with _admin_compute_action(
         context,
         operation="grant_package",
-        target=f"merchant_id={merchant_id},package_id={payload.package_id}",
+        target=f"merchant_id={resolved_id},package_id={payload.package_id}",
     ):
         _require_compute_config_admin(context)
         try:
             compute_service.grant_package_to_merchant(
-                db, merchant_id, payload.package_id, operator_id=context.user_id
+                db, resolved_id, payload.package_id, operator_id=context.user_id
             )
         except ValueError as exc:
             code = str(exc)
@@ -316,7 +358,7 @@ def admin_grant_package(
                 "PACKAGE_DISABLED": "套餐已禁用，无法发放",
             }
             raise _bad_request(code, message_map.get(code, code)) from exc
-    summary = compute_service.get_summary(db, merchant_id)
+    summary = compute_service.get_summary(db, resolved_id)
     return {"success": True, "data": summary, "message": "success"}
 
 
