@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   getReturnVisitPrompts,
   updateReturnVisitPrompt,
+  createReturnVisitPrompt,
   listReturnVisitRuns,
   getReturnVisitRunsStats,
   getReturnVisitRun,
@@ -183,21 +184,64 @@ export default function AdminReturnVisitsPage() {
 // ---- 提示词配置 tab ----
 
 interface PromptFormState {
+  name: string;
+  scene_description: string;
   template_text: string;
   fallback_message: string;
   confidence_threshold: string;
   enabled: boolean;
+  action_type: string;
+  trigger_source_type: string;
+  silence_hours: string;
+  cooldown_hours: string;
   reason: string;
 }
 
+const ACTION_TYPE_OPTIONS = [
+  { value: "", label: "无（仅发话术）" },
+  { value: "notify_sales", label: "通知销售跟进" },
+  { value: "send_light_reminder", label: "轻提醒（仅发话术）" },
+];
+
+const TRIGGER_SOURCE_OPTIONS = [
+  { value: "writeback", label: "销售回复触发" },
+  { value: "silent_scan", label: "客户沉默定时触发" },
+];
+
 function emptyFormFromPrompt(prompt: ReturnVisitPrompt): PromptFormState {
   return {
+    name: prompt.name || "",
+    scene_description: prompt.scene_description || "",
     template_text: prompt.template_text || "",
     fallback_message: prompt.fallback_message || "",
     confidence_threshold: String(prompt.confidence_threshold ?? THRESHOLD_MIN),
     enabled: !!prompt.enabled,
+    action_type: prompt.action_type || "",
+    trigger_source_type: prompt.trigger_source_type || "writeback",
+    silence_hours: prompt.silence_hours != null ? String(prompt.silence_hours) : "",
+    cooldown_hours: prompt.cooldown_hours != null ? String(prompt.cooldown_hours) : "",
     reason: "",
   };
+}
+
+function emptyCreateForm(): PromptFormState {
+  return {
+    name: "",
+    scene_description: "",
+    template_text: "",
+    fallback_message: "",
+    confidence_threshold: String(THRESHOLD_MIN),
+    enabled: true,
+    action_type: "",
+    trigger_source_type: "writeback",
+    silence_hours: "",
+    cooldown_hours: "",
+    reason: "",
+  };
+}
+
+function sceneLabel(prompt: ReturnVisitPrompt): string {
+  return prompt.name || SCENE_LABELS[prompt.prompt_key] || prompt.prompt_key;
 }
 
 function PromptsTab() {
@@ -205,6 +249,7 @@ function PromptsTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ReturnVisitPrompt | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState<PromptFormState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -228,55 +273,106 @@ function PromptsTab() {
 
   const openEdit = (prompt: ReturnVisitPrompt) => {
     setEditing(prompt);
+    setIsCreating(false);
     setForm(emptyFormFromPrompt(prompt));
+    setFormError(null);
+  };
+
+  const openCreate = () => {
+    setEditing(null);
+    setIsCreating(true);
+    setForm(emptyCreateForm());
     setFormError(null);
   };
 
   const closeEdit = () => {
     setEditing(null);
+    setIsCreating(false);
     setForm(null);
     setFormError(null);
   };
 
-  const submit = async () => {
-    if (!editing || !form) return;
+  const validateForm = (form: PromptFormState, isCreating: boolean): string | null => {
+    if (isCreating && !form.name.trim()) return "场景名称必填";
+    if (isCreating && !form.scene_description.trim()) return "触发描述必填";
     const template = form.template_text.trim();
     const fallback = form.fallback_message.trim();
-    const reason = form.reason.trim();
+    if (!template || template.length > TEXT_LIMIT) return "模板话术必填，且不超过 500 字";
+    if (!fallback || fallback.length > TEXT_LIMIT) return "兜底文案必填，且不超过 500 字";
     const threshold = Number(form.confidence_threshold);
-
-    if (!template || template.length > TEXT_LIMIT) {
-      setFormError("模板话术必填，且不超过 500 字");
-      return;
-    }
-    if (!fallback || fallback.length > TEXT_LIMIT) {
-      setFormError("兜底文案必填，且不超过 500 字");
-      return;
-    }
     if (!Number.isFinite(threshold) || threshold < THRESHOLD_MIN || threshold > THRESHOLD_MAX) {
-      setFormError(`置信阈值必须在 ${THRESHOLD_MIN} ~ ${THRESHOLD_MAX} 之间`);
-      return;
+      return `置信阈值必须在 ${THRESHOLD_MIN} ~ ${THRESHOLD_MAX} 之间`;
     }
-    if (!reason) {
-      setFormError("变更原因必填");
-      return;
-    }
+    if (!form.reason.trim()) return "变更原因必填";
+    return null;
+  };
+
+  const buildPayloadFields = (form: PromptFormState) => {
+    const threshold = Number(form.confidence_threshold);
+    const silenceHours = form.silence_hours.trim() ? Number(form.silence_hours) : null;
+    const cooldownHours = form.cooldown_hours.trim() ? Number(form.cooldown_hours) : null;
+    return {
+      template_text: form.template_text.trim(),
+      fallback_message: form.fallback_message.trim(),
+      confidence_threshold: threshold,
+      enabled: form.enabled,
+      reason: form.reason.trim(),
+      scene_description: form.scene_description.trim() || null,
+      action_type: form.action_type || null,
+      action_payload: null,
+      silence_hours: silenceHours,
+      trigger_source_type: form.trigger_source_type || "writeback",
+      cooldown_hours: cooldownHours,
+    };
+  };
+
+  const submit = async () => {
+    if (!editing || !form) return;
+    const err = validateForm(form, false);
+    if (err) { setFormError(err); return; }
 
     setSaving(true);
     setFormError(null);
     try {
-      const resp = await updateReturnVisitPrompt(editing.prompt_key, {
-        template_text: template,
-        fallback_message: fallback,
-        confidence_threshold: threshold,
-        enabled: form.enabled,
-        reason,
-      });
+      const resp = await updateReturnVisitPrompt(editing.prompt_key, buildPayloadFields(form));
       setPrompts((prev) => prev.map((p) => (p.prompt_key === resp.data.prompt_key ? resp.data : p)));
       toast.success("提示词已保存");
       closeEdit();
-    } catch (err) {
-      setFormError(resolveError(err));
+    } catch (e) {
+      setFormError(resolveError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createSubmit = async () => {
+    if (!form) return;
+    const err = validateForm(form, true);
+    if (err) { setFormError(err); return; }
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      const fields = buildPayloadFields(form);
+      const resp = await createReturnVisitPrompt({
+        name: form.name.trim(),
+        scene_description: form.scene_description.trim(),
+        template_text: fields.template_text,
+        fallback_message: fields.fallback_message,
+        confidence_threshold: fields.confidence_threshold,
+        enabled: fields.enabled,
+        action_type: fields.action_type,
+        action_payload: fields.action_payload,
+        silence_hours: fields.silence_hours,
+        trigger_source_type: fields.trigger_source_type,
+        cooldown_hours: fields.cooldown_hours,
+        reason: fields.reason,
+      });
+      setPrompts((prev) => [...prev, resp.data]);
+      toast.success("场景已创建");
+      closeEdit();
+    } catch (e) {
+      setFormError(resolveError(e));
     } finally {
       setSaving(false);
     }
@@ -301,6 +397,15 @@ function PromptsTab() {
 
   return (
     <div>
+      <div className="mb-3 flex justify-end">
+        <button
+          type="button"
+          onClick={openCreate}
+          className="rounded-md bg-[#2563eb] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#1d4ed8]"
+        >
+          + 新增场景
+        </button>
+      </div>
       <div className="overflow-hidden rounded-xl border border-[#e4e8f0] bg-white">
         <table className="w-full text-left text-xs">
           <thead className="bg-[#f8fafc] text-[11px] font-semibold text-[#8b95a6]">
@@ -317,7 +422,7 @@ function PromptsTab() {
             {prompts.map((p) => (
               <tr key={p.prompt_key} className="border-t border-[#eef1f6] align-top">
                 <td className="px-4 py-3 font-semibold text-[#1a1f2e]">
-                  {labelOf(SCENE_LABELS, p.prompt_key)}
+                  {sceneLabel(p)}
                   <div className="mt-0.5 text-[10px] font-normal text-[#8b95a6]">{p.prompt_key}</div>
                 </td>
                 <td className="px-4 py-3">
@@ -346,8 +451,8 @@ function PromptsTab() {
       </div>
 
       <SlidePanel
-        open={!!editing && !!form}
-        title={editing ? `编辑 · ${labelOf(SCENE_LABELS, editing.prompt_key)}` : ""}
+        open={(!!editing || isCreating) && !!form}
+        title={isCreating ? "新增回访场景" : (editing ? `编辑 · ${sceneLabel(editing)}` : "")}
         onClose={closeEdit}
         footer={
           form ? (
@@ -363,7 +468,7 @@ function PromptsTab() {
                 </button>
                 <button
                   type="button"
-                  onClick={submit}
+                  onClick={isCreating ? createSubmit : submit}
                   disabled={saving}
                   className="rounded-md bg-[#2563eb] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
                 >
@@ -376,6 +481,26 @@ function PromptsTab() {
       >
         {form ? (
           <div className="space-y-4">
+            {isCreating ? (
+              <Field label="场景名称" hint="必填，如：客户留资">
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  maxLength={100}
+                  className="w-full rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+                />
+              </Field>
+            ) : null}
+            <Field label="触发描述（内容预览）" hint={isCreating ? "必填，描述什么情况触发该场景，注入 AI 判定" : "描述什么情况触发该场景，注入 AI 判定"}>
+              <textarea
+                value={form.scene_description}
+                onChange={(e) => setForm({ ...form, scene_description: e.target.value })}
+                maxLength={500}
+                rows={3}
+                className="w-full resize-y rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+              />
+            </Field>
             <Field label="模板话术" hint={`1 ~ ${TEXT_LIMIT} 字，保存管理员原文（命中违禁词仅告警不替换）`}>
               <textarea
                 value={form.template_text}
@@ -422,6 +547,54 @@ function PromptsTab() {
                   />
                   {form.enabled ? "启用该提示词" : "停用该提示词"}
                 </label>
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="命中后动作" hint="命中场景后执行的动作">
+                <select
+                  value={form.action_type}
+                  onChange={(e) => setForm({ ...form, action_type: e.target.value })}
+                  className="w-full rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+                >
+                  {ACTION_TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="触发来源" hint="该场景由什么触发">
+                <select
+                  value={form.trigger_source_type}
+                  onChange={(e) => setForm({ ...form, trigger_source_type: e.target.value })}
+                  className="w-full rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+                >
+                  {TRIGGER_SOURCE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="沉默触发小时数" hint="仅沉默扫描触发用；空=不适用">
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={form.silence_hours}
+                  onChange={(e) => setForm({ ...form, silence_hours: e.target.value })}
+                  placeholder="如 24"
+                  className="w-full rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+                />
+              </Field>
+              <Field label="冷却小时数" hint="同会话该时长内只发一次，空=默认24">
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={form.cooldown_hours}
+                  onChange={(e) => setForm({ ...form, cooldown_hours: e.target.value })}
+                  placeholder="默认 24"
+                  className="w-full rounded-md border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] focus:border-[#2563eb] focus:outline-none"
+                />
               </Field>
             </div>
             <Field label="变更原因" hint="必填，将写入管理员审计日志">

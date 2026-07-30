@@ -13,6 +13,12 @@ export interface ReturnVisitPrompt {
   confidence_threshold: number;
   enabled: boolean;
   sort_order: number;
+  scene_description?: string | null;
+  action_type?: string | null;
+  action_payload?: Record<string, unknown> | null;
+  silence_hours?: number | null;
+  trigger_source_type?: string | null;
+  cooldown_hours?: number | null;
   updated_at?: string | null;
 }
 
@@ -21,6 +27,27 @@ export interface ReturnVisitPromptUpdateRequest {
   fallback_message: string;
   confidence_threshold: number;
   enabled: boolean;
+  reason: string;
+  scene_description?: string | null;
+  action_type?: string | null;
+  action_payload?: Record<string, unknown> | null;
+  silence_hours?: number | null;
+  trigger_source_type?: string | null;
+  cooldown_hours?: number | null;
+}
+
+export interface ReturnVisitPromptCreateRequest {
+  name: string;
+  scene_description: string;
+  template_text: string;
+  fallback_message: string;
+  confidence_threshold: number;
+  enabled: boolean;
+  action_type?: string | null;
+  action_payload?: Record<string, unknown> | null;
+  silence_hours?: number | null;
+  trigger_source_type?: string;
+  cooldown_hours?: number | null;
   reason: string;
 }
 
@@ -100,6 +127,12 @@ export async function updateReturnVisitPrompt(
   payload: ReturnVisitPromptUpdateRequest,
 ): Promise<ApiResponse<ReturnVisitPrompt>> {
   return apiClient.put(`/admin/return-visit-prompts/${encodeURIComponent(promptKey)}`, payload);
+}
+
+export async function createReturnVisitPrompt(
+  payload: ReturnVisitPromptCreateRequest,
+): Promise<ApiResponse<ReturnVisitPrompt>> {
+  return apiClient.post("/admin/return-visit-prompts", payload);
 }
 
 export async function listReturnVisitRuns(
