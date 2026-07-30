@@ -621,7 +621,10 @@ def test_detail_invalid_json_returns_empty_structures():
 
 
 def test_no_write_send_endpoints():
-    """回访管理 API 不提供 POST send/retry/requeue/立即发送端点。"""
+    """回访管理 API 不提供 send/retry/requeue/立即发送端点。
+
+    允许的 POST 仅为 /admin/return-visit-prompts（场景配置创建，非发送）。
+    """
     client = _client(_context())
     spec = client.get("/openapi.json").json()
     paths = spec.get("paths", {})
@@ -631,6 +634,9 @@ def test_no_write_send_endpoints():
     forbidden_substrings = ("retry", "send", "requeue", "resend", "trigger-now")
     for path, methods in return_visit_paths.items():
         for method in methods:
+            # 允许 POST /admin/return-visit-prompts（场景配置创建）；禁其它 POST 发送类端点
+            if method.upper() == "POST" and path.rstrip("/").endswith("/return-visit-prompts"):
+                continue
             assert method.upper() != "POST", f"不应有 POST 端点: {method} {path}"
             lowered = path.lower()
             for bad in forbidden_substrings:

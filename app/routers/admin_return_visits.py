@@ -24,10 +24,9 @@ from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required
 from app.database import get_db
 from app.models import ReturnVisitPrompt, ReturnVisitRun
-from app.schemas import ReturnVisitPromptUpdateRequest
+from app.schemas import ReturnVisitPromptCreateRequest, ReturnVisitPromptUpdateRequest
 from app.services.autoreply_admin_rollout_service import record_admin_audit
 from app.services.forbidden_word_service import replace_forbidden_words
-from app.services.return_visit_run_service import PROMPT_KEYS
 
 
 router = APIRouter(prefix="/admin", tags=["管理员-回访配置与审计"])
@@ -64,11 +63,10 @@ def list_prompts(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """返回三键回访提示词配置（scope 必须 global）。"""
+    """返回所有回访提示词配置（含自定义场景；scope 必须 global）。"""
     _require_admin(context)
     rows = (
         db.query(ReturnVisitPrompt)
-        .filter(ReturnVisitPrompt.prompt_key.in_(PROMPT_KEYS))
         .order_by(ReturnVisitPrompt.sort_order, ReturnVisitPrompt.id)
         .all()
     )
@@ -77,6 +75,59 @@ def list_prompts(
         "data": {"total": len(rows), "items": [_prompt_response(row) for row in rows]},
         "message": "success",
     }
+
+
+@router.post("/return-visit-prompts")
+def create_prompt(
+    payload: ReturnVisitPromptCreateRequest,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """新建回访场景（系统生成 custom_ key，写审计）。"""
+    _require_admin(context)
+    # 系统生成 key：custom_<毫秒时间戳>，保证唯一
+    prompt_key = f"custom_{int(datetime.now().timestamp() * 1000)}"
+    merchant_id = context.merchant_id or "global"
+    replace_forbidden_words(
+        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
+        content=payload.template_text,
+    )
+    replace_forbidden_words(
+        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
+        content=payload.fallback_message,
+    )
+    prompt = ReturnVisitPrompt(
+        prompt_key=prompt_key,
+        name=payload.name,
+        scene_type=None,
+        template_text=payload.template_text,
+        scope="global",
+        enabled=payload.enabled,
+        sort_order=0,
+        confidence_threshold=payload.confidence_threshold,
+        fallback_message=payload.fallback_message,
+        scene_description=payload.scene_description,
+        action_type=payload.action_type,
+        action_payload_json=json.dumps(payload.action_payload, ensure_ascii=False) if payload.action_payload else None,
+        silence_hours=payload.silence_hours,
+        trigger_source_type=payload.trigger_source_type or "writeback",
+        cooldown_hours=payload.cooldown_hours,
+    )
+    db.add(prompt)
+    db.flush()
+    record_admin_audit(
+        db,
+        action="return_visit_prompt_create",
+        target_type="return_visit_prompt",
+        target_id=prompt_key,
+        before=None,
+        after=_prompt_summary(prompt),
+        reason=payload.reason,
+        operator_id=context.user_id,
+        operator_name=context.display_name or context.username,
+        commit=True,
+    )
+    return {"success": True, "data": _prompt_response(prompt), "message": "success"}
 
 
 @router.put("/return-visit-prompts/{prompt_key}")
@@ -92,8 +143,6 @@ def update_prompt(
     再 record_admin_audit 留痕，最后一次 commit。不触发发送。
     """
     _require_admin(context)
-    if prompt_key not in PROMPT_KEYS:
-        raise _not_found("RETURN_VISIT_PROMPT_NOT_FOUND", f"未知回访提示词 key: {prompt_key}")
     prompt = (
         db.query(ReturnVisitPrompt)
         .filter(ReturnVisitPrompt.prompt_key == prompt_key)
@@ -122,6 +171,12 @@ def update_prompt(
     prompt.fallback_message = payload.fallback_message
     prompt.confidence_threshold = payload.confidence_threshold
     prompt.enabled = payload.enabled
+    prompt.scene_description = payload.scene_description
+    prompt.action_type = payload.action_type
+    prompt.action_payload_json = json.dumps(payload.action_payload, ensure_ascii=False) if payload.action_payload else None
+    prompt.silence_hours = payload.silence_hours
+    prompt.trigger_source_type = payload.trigger_source_type or "writeback"
+    prompt.cooldown_hours = payload.cooldown_hours
     prompt.updated_at = datetime.now()
 
     after = _prompt_summary(prompt)
@@ -251,10 +306,28 @@ def _prompt_summary(prompt: ReturnVisitPrompt) -> dict[str, Any]:
         "fallback_message": prompt.fallback_message,
         "confidence_threshold": prompt.confidence_threshold,
         "enabled": bool(prompt.enabled),
+        "scene_description": prompt.scene_description,
+        "action_type": prompt.action_type,
+        "action_payload_json": prompt.action_payload_json,
+        "silence_hours": prompt.silence_hours,
+        "trigger_source_type": prompt.trigger_source_type,
+        "cooldown_hours": prompt.cooldown_hours,
     }
 
 
 def _prompt_response(prompt: ReturnVisitPrompt) -> dict[str, Any]:
+    import json as _json
+    raw_payload = prompt.action_payload_json
+    action_payload: dict = {}
+    if isinstance(raw_payload, dict):
+        action_payload = raw_payload
+    elif isinstance(raw_payload, str) and raw_payload.strip():
+        try:
+            parsed = _json.loads(raw_payload)
+            if isinstance(parsed, dict):
+                action_payload = parsed
+        except (TypeError, ValueError):
+            action_payload = {}
     return {
         "prompt_key": prompt.prompt_key,
         "name": prompt.name,
@@ -264,6 +337,12 @@ def _prompt_response(prompt: ReturnVisitPrompt) -> dict[str, Any]:
         "confidence_threshold": prompt.confidence_threshold,
         "enabled": bool(prompt.enabled),
         "sort_order": prompt.sort_order,
+        "scene_description": prompt.scene_description,
+        "action_type": prompt.action_type,
+        "action_payload": action_payload,
+        "silence_hours": prompt.silence_hours,
+        "trigger_source_type": prompt.trigger_source_type,
+        "cooldown_hours": prompt.cooldown_hours,
         "updated_at": prompt.updated_at,
     }
 

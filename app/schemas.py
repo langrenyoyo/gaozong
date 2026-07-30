@@ -1173,6 +1173,8 @@ class ReturnVisitPromptUpdateRequest(BaseModel):
 
     严格校验：template_text/fallback_message 1..500；confidence_threshold 0.50..1.00；
     enabled bool；reason 非空；未知字段 422（extra=forbid）。
+    新增场景配置字段（2026-07-30）：scene_description/action_type/action_payload/
+    silence_hours/trigger_source_type/cooldown_hours。
     """
 
     model_config = {"extra": "forbid"}
@@ -1182,6 +1184,12 @@ class ReturnVisitPromptUpdateRequest(BaseModel):
     confidence_threshold: float = Field(..., ge=0.50, le=1.00)
     enabled: bool
     reason: str = Field(..., min_length=1)
+    scene_description: Optional[str] = Field(default=None, max_length=500)
+    action_type: Optional[str] = Field(default=None, max_length=32)
+    action_payload: Optional[dict] = None
+    silence_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    trigger_source_type: Optional[str] = Field(default=None, max_length=32)
+    cooldown_hours: Optional[int] = Field(default=None, ge=1, le=720)
 
     @field_validator("reason")
     @classmethod
@@ -1189,6 +1197,68 @@ class ReturnVisitPromptUpdateRequest(BaseModel):
         # 审计合同：reason 非空；min_length 拦不住纯空白（"   " 长度≥1），须 strip 后校验
         if not v.strip():
             raise ValueError("reason 不能为纯空白")
+        return v
+
+    @field_validator("action_type")
+    @classmethod
+    def _action_type_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        if v not in ("notify_sales", "send_light_reminder"):
+            raise ValueError("action_type 只能为 notify_sales / send_light_reminder")
+        return v
+
+    @field_validator("trigger_source_type")
+    @classmethod
+    def _trigger_source_type_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return "writeback"
+        if v not in ("writeback", "silent_scan"):
+            raise ValueError("trigger_source_type 只能为 writeback / silent_scan")
+        return v
+
+
+class ReturnVisitPromptCreateRequest(BaseModel):
+    """管理员创建回访场景请求（系统生成 custom_ key）。"""
+
+    model_config = {"extra": "forbid"}
+
+    name: str = Field(..., min_length=1, max_length=100)
+    scene_description: str = Field(..., min_length=1, max_length=500)
+    template_text: str = Field(..., min_length=1, max_length=500)
+    fallback_message: str = Field(..., min_length=1, max_length=500)
+    confidence_threshold: float = Field(..., ge=0.50, le=1.00)
+    enabled: bool = True
+    action_type: Optional[str] = Field(default=None, max_length=32)
+    action_payload: Optional[dict] = None
+    silence_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    trigger_source_type: Optional[str] = Field(default="writeback", max_length=32)
+    cooldown_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    reason: str = Field(..., min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_non_empty_after_strip(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("reason 不能为纯空白")
+        return v
+
+    @field_validator("action_type")
+    @classmethod
+    def _action_type_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        if v not in ("notify_sales", "send_light_reminder"):
+            raise ValueError("action_type 只能为 notify_sales / send_light_reminder")
+        return v
+
+    @field_validator("trigger_source_type")
+    @classmethod
+    def _trigger_source_type_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return "writeback"
+        if v not in ("writeback", "silent_scan"):
+            raise ValueError("trigger_source_type 只能为 writeback / silent_scan")
         return v
 
 
