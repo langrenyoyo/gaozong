@@ -168,3 +168,41 @@ def test_silent_trigger_idempotent_returns_existing_run():
         rvs.get_send_msg_context = orig
     finally:
         db.close()
+
+
+def test_detect_reply_replied_marks_followup_task_followed():
+    """detect_reply 检测到销售回复 → 关联 pending followup task 标 followed。"""
+    from app.models import WechatTask
+    from app.services.wechat_task_service import _update_check_and_notification_on_replied
+
+    db = _db()
+    try:
+        # 无 reply_check_id / notification，仅测 followup 联动（reply_text 提取容错）
+        task = WechatTask(
+            task_type="detect_reply",
+            lead_id=1001,
+            staff_id=2001,
+            target_nickname="销售张三",
+            message="",
+            status="pending",
+        )
+        db.add(task)
+        db.flush()
+        db.add(ReturnVisitFollowupTask(
+            return_visit_run_id=7777,
+            lead_id=1001,
+            staff_id=2001,
+            prompt_key="custom_lead_capture",
+            sla_minutes=10,
+            deadline=datetime.now() + timedelta(minutes=5),
+            status="pending",
+        ))
+        db.commit()
+
+        _update_check_and_notification_on_replied(db, task)
+
+        ft = db.query(ReturnVisitFollowupTask).filter(ReturnVisitFollowupTask.lead_id == 1001).one()
+        assert ft.status == "followed"
+        assert ft.actual_followup_at is not None
+    finally:
+        db.close()

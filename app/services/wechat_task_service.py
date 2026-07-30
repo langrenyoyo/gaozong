@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck, DouyinLead, SalesStaff
+from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck, DouyinLead, SalesStaff, ReturnVisitFollowupTask
 from app.services.sales_feedback_parser import parse_and_persist_sales_feedback
 
 logger = logging.getLogger(__name__)
@@ -923,6 +923,26 @@ def _update_check_and_notification_on_replied(db: Session, task: WechatTask) -> 
                 logger.info(
                     "_update_check_and_notification_on_replied: "
                     "LeadNotification #%d send_status=replied", notif.id,
+                )
+
+        # 回访跟进 SLA 联动：销售回复客户 → 标记关联 pending followup task 为 followed
+        if task.lead_id and task.staff_id:
+            followups = (
+                db.query(ReturnVisitFollowupTask)
+                .filter(ReturnVisitFollowupTask.lead_id == task.lead_id)
+                .filter(ReturnVisitFollowupTask.staff_id == task.staff_id)
+                .filter(ReturnVisitFollowupTask.status == "pending")
+                .all()
+            )
+            now = datetime.now()
+            for ft in followups:
+                ft.status = "followed"
+                ft.actual_followup_at = now
+            if followups:
+                logger.info(
+                    "_update_check_and_notification_on_replied: "
+                    "%d 个回访跟进任务标记 followed（lead_id=%s staff_id=%s）",
+                    len(followups), task.lead_id, task.staff_id,
                 )
 
         return reply_text
