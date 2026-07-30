@@ -1096,6 +1096,13 @@ class ReturnVisitPrompt(Base):
     # Phase 9 增量（C6/F10）：confidence_threshold 仅约束 LLM；fallback_message NOT NULL 回填已批准三条文案，无占位默认
     confidence_threshold = Column(Float, nullable=False, default=0.90, server_default=text("0.90"), comment="场景置信度阈值 0.50-1.00，仅约束 LLM")
     fallback_message = Column(Text, nullable=False, comment="LLM 不可用且关键词触发词命中时兜底文案（已批准三条）")
+    # 动态场景增量（2026-07-30）：场景描述/命中动作/沉默触发/冷却，均默认空以保持三键行为不变
+    scene_description = Column(Text, comment="触发描述/内容预览，注入 LLM system prompt 动态枚举场景")
+    action_type = Column(String(32), comment="命中后动作类型：notify_sales/send_light_reminder，空=只发话术")
+    action_payload_json = Column(_JSONStringJSONB(), comment="动作参数 JSON，如 notify_sales 的 sla_minutes/notify_message")
+    silence_hours = Column(Integer, comment="沉默触发阈值小时数，仅 trigger_source_type=silent_scan 场景生效")
+    trigger_source_type = Column(String(32), default="writeback", comment="触发源类型：writeback/silent_scan")
+    cooldown_hours = Column(Integer, comment="G7 冷却时长小时数，空=默认24")
 
 
 class ReturnVisitRun(Base):
@@ -1146,6 +1153,29 @@ class ReturnVisitRun(Base):
     lease_owner = Column(String(64), comment="租约持有者（崩溃恢复单飞）")
     lease_expires_at = Column(DateTime, comment="租约过期时间")
     attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"), comment="崩溃恢复尝试计数")
+
+
+class ReturnVisitFollowupTask(Base):
+    """回访跟进 SLA 任务：命中 notify_sales 场景后，追踪销售是否在 SLA 内跟进。"""
+
+    __tablename__ = "return_visit_followup_tasks"
+    __table_args__ = (
+        Index("idx_return_visit_followup_tasks_run", "return_visit_run_id"),
+        Index("idx_return_visit_followup_tasks_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    return_visit_run_id = Column(Integer, nullable=False, comment="关联回访运行 ID")
+    lead_id = Column(Integer, comment="关联线索 ID")
+    staff_id = Column(Integer, comment="关联销售 ID")
+    prompt_key = Column(String(64), comment="命中的回访场景 key")
+    sla_minutes = Column(Integer, comment="要求的跟进时限分钟数")
+    deadline = Column(DateTime, comment="SLA 截止时间（创建时刻 + sla_minutes）")
+    actual_followup_at = Column(DateTime, comment="销售实际跟进时间（detect_reply 回写）")
+    status = Column(String(20), nullable=False, default="pending", comment="pending/followed/timeout/cancelled")
+    wechat_task_id = Column(Integer, comment="关联 notify_sales WechatTask.id")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class SalesLeadFeedback(Base):
