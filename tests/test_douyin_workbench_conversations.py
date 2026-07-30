@@ -488,7 +488,8 @@ def test_conversation_tags_generate_high_intent_from_lead_score():
         params={"account_open_id": "account_high_intent"},
     ).json()
 
-    assert "high_intent" in data["items"][0]["tags"]
+    # 权威口径：高意向要求先留资 + lead字段关键词命中，lead_score 不再单独触发高意向
+    assert "high_intent" not in data["items"][0]["tags"]
 
 
 def test_conversation_tags_high_intent_keywords_do_not_imply_retained_contact():
@@ -504,7 +505,8 @@ def test_conversation_tags_high_intent_keywords_do_not_imply_retained_contact():
         params={"account_open_id": "account_high_intent_text"},
     ).json()
 
-    assert "high_intent" in data["items"][0]["tags"]
+    # 权威口径：无留资则不高意向，消息文本关键词不再单独触发
+    assert "high_intent" not in data["items"][0]["tags"]
     assert "retained_contact" not in data["items"][0]["tags"]
 
 
@@ -610,7 +612,8 @@ def test_conversation_tags_remain_isolated_between_multiple_conversations():
     assert "manual_required" in tags_by_customer["customer_tag_a"]
     assert "manual_required" not in tags_by_customer["customer_tag_b"]
     assert "retained_contact" in tags_by_customer["customer_tag_b"]
-    assert "high_intent" in tags_by_customer["customer_tag_b"]
+    # 权威口径：高意向要求 lead 字段关键词命中（消息文本不在 lead 字段内）
+    assert "high_intent" not in tags_by_customer["customer_tag_b"]
 
 
 def test_conversation_tags_prefer_lead_raw_account_open_id_when_same_open_id_exists_on_multiple_accounts():
@@ -692,7 +695,8 @@ def test_conversation_profile_returns_customer_fields_from_webhook_and_lead_raw_
     assert data["city"] == "杭州"
     assert data["lead_score"] == 100
     assert "retained_contact" in data["tags"]
-    assert "high_intent" in data["tags"]
+    # 权威口径：高意向要求 lead 字段关键词命中，消息文本不在 lead 字段内
+    assert "high_intent" not in data["tags"]
     assert data["trace"] == {
         "event_key": "profile_event",
         "conversation_short_id": "profile_conv",

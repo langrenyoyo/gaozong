@@ -36,7 +36,9 @@ from app.services.douyin_live_check_service import (
 from app.services.douyin_outbound_message_classifier import is_effective_human_outbound_message
 from app.services.lead_management_service import (
     has_retained_contact as lead_has_retained_contact,
+    is_high_intent as lead_is_high_intent,
     lead_score as compute_lead_score,
+    HIGH_INTENT_KEYWORDS as LEAD_HIGH_INTENT_KEYWORDS,
 )
 
 
@@ -1957,14 +1959,12 @@ def _has_retained_contact(
     raw_data: dict[str, Any],
     text_blob: str,
 ) -> bool:
-    del text_blob
+    """留资口径统一到权威独立列（extracted_phone/extracted_wechat/all_extracted_contacts）。
+
+    不再从消息文本或 raw_data 宽口径判断，与线索页面 has_retained_contact 一致。
+    """
     if lead and lead_has_retained_contact(lead):
         return True
-    if _extract_raw_contact_values(raw_data):
-        return True
-    for item in messages:
-        if extract_contacts_from_text(item.content).status == "matched":
-            return True
     return False
 
 
@@ -1974,37 +1974,13 @@ def _is_high_intent(
     text_blob: str,
     has_retained_contact: bool,
 ) -> bool:
-    if raw_data.get("lead_score") is not None:
-        try:
-            if int(raw_data.get("lead_score")) >= 80:
-                return True
-        except (TypeError, ValueError):
-            pass
-    lead_score_data = raw_data.get("lead_score")
-    if isinstance(lead_score_data, dict):
-        score_value = lead_score_data.get("score")
-        try:
-            if score_value is not None and int(score_value) >= 80:
-                return True
-        except (TypeError, ValueError):
-            pass
-        level_value = str(lead_score_data.get("level") or "").strip().lower()
-        if level_value in {"high", "high_intent", "high-intent", "高", "高意向"}:
-            return True
+    """高意向口径统一到线索页面 is_high_intent：要求先留资 + 关键词命中。
 
-    intent_level = str(raw_data.get("intent_level") or raw_data.get("purchase_intent_level") or "").strip().lower()
-    if intent_level in {"high", "high_intent", "high-intent", "高", "高意向"}:
-        return True
-
-    if lead is not None:
-        lead_score_payload = compute_lead_score(lead)
-        try:
-            if int(lead_score_payload.get("score") or 0) >= 80:
-                return True
-        except (TypeError, ValueError):
-            pass
-
-    return any(keyword in text_blob for keyword in HIGH_INTENT_KEYWORDS)
+    直接复用 lead_management_service.is_high_intent，与线索页面完全一致。
+    """
+    if lead is None:
+        return has_retained_contact and any(keyword in text_blob for keyword in LEAD_HIGH_INTENT_KEYWORDS)
+    return lead_is_high_intent(lead)
 
 
 def _is_manual_required(
