@@ -538,7 +538,11 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
     # 问答 chat 成功后优先按供应商真实 Token 上报，缺失时估算（capability=knowledge），再做解析
     _report_usage(payload.merchant_id, messages, result)
 
-    answer = str(result.get("reply_text") or "").strip()
+    # LLM 可能返回 JSON 结构（V2.0 模板要求）或纯文本，用结构化解析兜底
+    raw_answer = str(result.get("reply_text") or "").strip()
+    from apps.xg_douyin_ai_cs.services.reply_decision_service import _sanitize_structured_llm_reply_content
+    sanitized = _sanitize_structured_llm_reply_content(raw_answer)
+    answer = (sanitized.content or "").strip()
     if answer:
         return answer, _elapsed_ms(started), False, ""
     return (
