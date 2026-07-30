@@ -451,3 +451,15 @@ def report_usage(
         raise _bad_request(code, message_map.get(code, code)) from exc
     summary = compute_service.get_summary(db, payload.merchant_id)
     return {"success": True, "data": summary, "message": "success"}
+
+
+@internal_router.get("/compute/balance/{merchant_id}")
+def check_balance(
+    merchant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_internal),
+):
+    """内部余额查询（供 9100 LLM 调用前检查余额是否充足）。"""
+    summary = compute_service.get_summary(db, merchant_id)
+    return {"success": True, "data": summary, "message": "success"}

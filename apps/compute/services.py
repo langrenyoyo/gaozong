@@ -269,15 +269,46 @@ def _summarize_consume(db: Session, merchant_id: str) -> tuple[int, int, int]:
 
 
 def get_summary(db: Session, merchant_id: str) -> dict:
-    """返回余额 + 今日/昨日/累计消耗（对齐 PRD 2.7.1 / 2.7.2）。"""
+    """返回余额 + 今日/昨日/累计消耗 + 7天消耗预估（对齐 PRD 2.7.1 / 2.7.2）。"""
     account = get_or_create_account(db, merchant_id)
     today_consume, yesterday_consume, total_consume = _summarize_consume(db, merchant_id)
+
+    # 7 天消耗预估：过去 7 天总消耗 → 日均 → 预估未来 7 天消耗 → 与余额比较
+    now = _now()
+    seven_days_ago = _start_of_day(now) - timedelta(days=6)
+    consume_rows_7d = (
+        db.query(ComputeTransaction)
+        .filter(
+            ComputeTransaction.merchant_id == merchant_id,
+            ComputeTransaction.transaction_type == CONSUME_TYPE,
+        )
+        .all()
+    )
+    consume_7d = 0
+    for row in consume_rows_7d:
+        created = row.created_at
+        if not created:
+            continue
+        if created.tzinfo is not None:
+            created = created.astimezone().replace(tzinfo=None)
+        if created >= seven_days_ago:
+            consume_7d += abs(row.delta_tokens)
+    daily_avg = consume_7d // 7 if consume_7d > 0 else 0
+    projected_7d = daily_avg * 7
+    balance = account.balance_tokens
+    days_remaining = (balance // daily_avg) if daily_avg > 0 and balance > 0 else None
+
     return {
         "merchant_id": merchant_id,
-        "balance_tokens": account.balance_tokens,
+        "balance_tokens": balance,
         "today_consume": today_consume,
         "yesterday_consume": yesterday_consume,
         "total_consume": total_consume,
+        "consume_7d": consume_7d,
+        "daily_avg_consume": daily_avg,
+        "projected_7d_consume": projected_7d,
+        "days_remaining": days_remaining,
+        "balance_warning": balance > 0 and days_remaining is not None and days_remaining <= 7,
     }
 
 

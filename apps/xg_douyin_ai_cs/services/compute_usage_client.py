@@ -170,9 +170,31 @@ class ComputeUsageClient:
     """9100 → 9000 算力消耗上报客户端。"""
 
     USAGE_PATH = "/internal/compute/usage"
+    BALANCE_PATH = "/internal/compute/balance"
 
     def __init__(self, config: ComputeUsageConfig | None = None):
         self.config = config or load_compute_usage_config()
+
+    def check_balance(self, *, merchant_id: str) -> int | None:
+        """查询商户算力余额。返回余额整数，查询失败返回 None（不阻断主流程）。
+
+        供 LLM 调用前检查余额是否充足，余额 ≤ 0 时阻断。
+        """
+        if not self.config.enabled or not merchant_id.strip():
+            return None
+        try:
+            url = f"{self.config.base_url}{self.BALANCE_PATH}/{merchant_id.strip()}"
+            response = httpx.get(
+                url,
+                headers={"X-Internal-Token": self.config.internal_token},
+                timeout=self.config.timeout_seconds,
+            )
+            if response.status_code != 200:
+                return None
+            data = response.json()
+            return int(data.get("data", {}).get("balance_tokens", 0))
+        except Exception:
+            return None
 
     def report_usage(
         self,

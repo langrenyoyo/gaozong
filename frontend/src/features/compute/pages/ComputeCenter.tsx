@@ -465,11 +465,21 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS, activeNav =
         </div>
 
         {/* Phase 10 §0.2：负余额风险提示（不阻断、不写"服务已停用"） */}
-        {summary && summary.balance_tokens < 0 ? (
+        {summary && summary.balance_tokens <= 0 ? (
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-xs text-red-800">
+            <AlertCircleIcon size={14} />
+            <span>
+              算力余额不足（{summary.balance_tokens}），AI 自动回复已暂停。请及时充值。
+            </span>
+          </div>
+        ) : null}
+
+        {/* 7 天消耗预估预警 */}
+        {summary && summary.balance_tokens > 0 && summary.balance_warning ? (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-xs text-orange-800">
             <AlertCircleIcon size={14} />
             <span>
-              当前算力余额为负（{summary.balance_tokens}），建议联系管理员核实消耗或补充算力点数。
+              按当前消耗速度（日均 {summary.daily_avg_consume} 点），算力余额可能在 {summary.days_remaining} 天内消耗完毕，请尽快充值。
             </span>
           </div>
         ) : null}

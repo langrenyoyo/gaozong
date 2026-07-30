@@ -668,6 +668,39 @@ def _build_llm_reply(
     messages = build_llm_messages(request, merchant_prompt, source_chunks)
     client = OpenAICompatibleClient()
     agent_phone_goal = _agent_requires_phone_lead_capture(agent)
+
+    # 算力余额检查：LLM 调用前查余额，余额 ≤ 0 时阻断
+    _balance_client = ComputeUsageClient()
+    balance = _balance_client.check_balance(merchant_id=str(request.merchant_id or ""))
+    if balance is not None and balance <= 0:
+        _logger.warning(
+            "reply_suggestion_balance_blocked merchant_id=%s balance=%s",
+            request.merchant_id,
+            balance,
+        )
+        return ReplySuggestionResponse(
+            reply_text="算力余额不足，请及时充值后再试。",
+            match_level="insufficient_balance",
+            target_category=None,
+            target_vehicle_name=None,
+            recommended_vehicles=[],
+            lead_capture_required=False,
+            confidence=0.0,
+            manual_required=True,
+            manual_required_reason="算力余额不足",
+            auto_send=False,
+            warnings=["insufficient_balance"],
+            intent=None,
+            lead_level=None,
+            tags=[],
+            detected_vehicle=None,
+            detected_contacts=None,
+            risk_flags=[],
+            decision_version=decision_version,
+            fallback_reason=fallback_reason,
+            **_agent_response_fields(agent),
+        )
+
     try:
         result = client.chat(messages)
     except LLMNotConfiguredError:

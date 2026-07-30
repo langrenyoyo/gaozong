@@ -650,6 +650,16 @@ export interface ComputeSummary {
   yesterday_consume: number;
   /** 累计消耗（Token） */
   total_consume: number;
+  /** 过去 7 天总消耗 */
+  consume_7d?: number;
+  /** 日均消耗 */
+  daily_avg_consume?: number;
+  /** 预估未来 7 天消耗 */
+  projected_7d_consume?: number;
+  /** 按当前消耗速度余额还能用多少天 */
+  days_remaining?: number | null;
+  /** 余额预警（7 天内可能消耗完毕） */
+  balance_warning?: boolean;
 }
 
 /** 商户可见的算力点数流水。 */
