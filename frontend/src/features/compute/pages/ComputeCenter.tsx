@@ -370,19 +370,6 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS, activeNav =
     }
   }, []);
 
-  useEffect(() => {
-    void loadSummary();
-    void loadPackages();
-    void loadTransactions(1);
-  }, [loadSummary, loadPackages, loadTransactions]);
-
-  const handleRechargeSuccess = useCallback(() => {
-    // mock 订单现在写入流水并改余额，刷新全部数据
-    void loadSummary();
-    void loadTransactions(page);
-    void loadRechargeOrders(rechargePage);
-  }, [loadSummary, loadTransactions, page, rechargePage]);
-
   const loadRechargeOrders = useCallback(async (targetPage: number) => {
     setLoadingRechargeOrders(true);
     setRechargeError(null);
@@ -402,6 +389,20 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS, activeNav =
       setLoadingRechargeOrders(false);
     }
   }, []);
+
+  useEffect(() => {
+    void loadSummary();
+    void loadPackages();
+    void loadTransactions(1);
+    void loadRechargeOrders(1);
+  }, [loadSummary, loadPackages, loadTransactions, loadRechargeOrders]);
+
+  const handleRechargeSuccess = useCallback(() => {
+    // mock 订单现在写入流水并改余额，刷新全部数据
+    void loadSummary();
+    void loadTransactions(page);
+    void loadRechargeOrders(rechargePage);
+  }, [loadSummary, loadTransactions, page, rechargePage]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const rechargeTotalPages = Math.max(1, Math.ceil(rechargeTotal / PAGE_SIZE));
