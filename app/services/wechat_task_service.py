@@ -427,6 +427,7 @@ def submit_wechat_task_result(
         _try_set_auto_detect_target(db, task)
         # P1-AUTO-1：notify_sales pasted 成功后自动创建 detect_reply task
         _auto_create_detect_reply_task(db, task)
+        _report_wechat_task_compute_usage(db, task)
         logger.info("WechatTask %s: paste_only 完成", task.id)
         return task
 
@@ -458,6 +459,7 @@ def submit_wechat_task_result(
         _try_set_auto_detect_target(db, task)
         # sent 后同样需要后续回复检测
         _auto_create_detect_reply_task(db, task)
+        _report_wechat_task_compute_usage(db, task)
         logger.info("WechatTask %s: single_send 发送完成", task.id)
         return task
 
@@ -470,6 +472,41 @@ def submit_wechat_task_result(
                                 error_message="未匹配的结果组合")
     logger.warning("WechatTask %s: 未匹配的结果组合", task.id)
     return task
+
+
+def _report_wechat_task_compute_usage(db: Session, task: WechatTask) -> None:
+    """微信助手任务完成时上报算力消耗：按消息字符数÷2 估算 token。
+
+    仅在任务执行成功（sent/pasted/completed）时上报，失败/blocked 不扣。
+    """
+    if task.status not in ("sent", "pasted", "completed"):
+        return
+    # 通过 lead_id 反查 merchant_id
+    merchant_id = None
+    if task.lead_id:
+        lead = db.query(DouyinLead).filter(DouyinLead.id == task.lead_id).first()
+        if lead:
+            merchant_id = lead.merchant_id
+    if not merchant_id:
+        return
+    message_text = str(task.message or "").strip()
+    if not message_text:
+        return
+    tokens = max(1, len(message_text) // 2)
+    try:
+        from app.services.compute_service import record_usage as _record_usage
+        _record_usage(
+            db,
+            merchant_id,
+            tokens,
+            capability_key="wechat-assistant",
+            source="other",
+            model="message-token-estimate",
+            remark=f"微信助手任务 task_id={task.id}",
+            usage_measurement_method="estimated_tokens",
+        )
+    except Exception as exc:
+        logger.warning("wechat_task_compute_usage stage=report_error task_id=%s error=%s", task.id, exc)
 
 
 def _update_linked_notification(

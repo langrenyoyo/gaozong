@@ -836,6 +836,25 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             trigger_server_message_id=event.server_message_id,
         )
 
+    # 线索服务算力消耗：im_receive_msg 客户私信入站时按消息字符数÷2 估算 token 上报
+    if event_type == "im_receive_msg" and event.merchant_id and lead_context:
+        _text = lead_context.get("message_text") or ""
+        if _text.strip():
+            from app.services.compute_service import record_usage as _record_usage
+            try:
+                _record_usage(
+                    db,
+                    event.merchant_id,
+                    max(1, len(_text) // 2),
+                    capability_key="leads",
+                    source="other",
+                    model="message-token-estimate",
+                    remark="线索服务私信入站",
+                    usage_measurement_method="estimated_tokens",
+                )
+            except Exception as exc:
+                logger.warning("webhook_compute_usage stage=leads_report_error event_id=%s error=%s", event.id, exc)
+
     logger.info(
         "webhook 处理完成: event_id=%d, event=%s, is_duplicate=false, lead_action=%s, lead_id=%s",
         event.id,
