@@ -645,3 +645,50 @@ def test_patch_effectiveness_masks_sensitive_reason_in_record_and_audit():
         assert "wxid_abcd1234" not in json.dumps(audit.after_json or {}, ensure_ascii=False)
     finally:
         db.close()
+
+
+def test_batch_effectiveness_marks_only_sent_logs_and_writes_audit():
+    """批量标记仅作用于已实发记录，未发送的跳过，逐条写审计。"""
+    log_a = _insert_log(merchant_id="merchant-a", account_open_id="account-1")
+    log_b = _insert_log(merchant_id="merchant-a", account_open_id="account-2")
+    log_c = _insert_log(merchant_id="merchant-a", account_open_id="account-3")  # 无发送流水
+    _insert_send_record(decision_log_id=log_a)
+    _insert_send_record(decision_log_id=log_b)
+
+    admin_context = _context(
+        merchant_id=None,
+        permission_codes=["auto_wechat:admin:ai_reply_records"],
+        super_admin=True,
+    )
+    response = _client(admin_context).post(
+        "/ai-reply-decision-logs/batch-effectiveness",
+        json={"log_ids": [log_a, log_b, log_c], "is_effective": False, "effectiveness_reason": "批量垃圾"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert set(data["updated_ids"]) == {log_a, log_b}
+    assert data["skipped_ids"] == [log_c]
+
+    db = TestSession()
+    try:
+        audits = db.query(AutoReplyAdminAuditLog).all()
+        assert len(audits) == 2
+        for audit in audits:
+            assert audit.action == "mark_ai_reply_effectiveness"
+            assert audit.reason == "批量垃圾"
+        logs = {log.id: log for log in db.query(AiReplyDecisionLog).filter(AiReplyDecisionLog.id.in_([log_a, log_b, log_c])).all()}
+        assert logs[log_a].is_effective is False
+        assert logs[log_b].is_effective is False
+        assert logs[log_c].is_effective is None  # 跳过未改
+    finally:
+        db.close()
+
+
+def test_batch_effectiveness_requires_admin():
+    """批量标记仅超管可用。"""
+    response = _client().post(
+        "/ai-reply-decision-logs/batch-effectiveness",
+        json={"log_ids": [1], "is_effective": True},
+    )
+    assert response.status_code == 403

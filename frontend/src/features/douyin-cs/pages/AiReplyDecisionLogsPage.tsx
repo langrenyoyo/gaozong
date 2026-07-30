@@ -16,30 +16,65 @@ import {
   getAiReplyDecisionLogDetail,
   getAiReplyDecisionLogs,
   patchAiReplyDecisionLogEffectiveness,
+  batchPatchAiReplyDecisionLogEffectiveness,
   type AiReplyDecisionLogDetail,
   type AiReplyDecisionLogListItem,
   type AiReplyDecisionSource,
 } from "../api";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
-import { riskFlagLabel } from "../riskFlagLabels";
+import { riskFlagLabel, tagLabel } from "../riskFlagLabels";
 
 const PAGE_SIZE = 20;
 
+// 意图标签：把 9100 实际输出的各 intent 值归并到 6 类（询价/库存/试驾/留资·联系/投诉/未知）。
+// 9100 可能输出 greeting/general_inquiry/consult_specific_model/consult_inventory/inquiry_inventory
+// /price_or_discount/inventory_claim/contact_request/appointment_or_visit_specific/after_sales_or_complaint
+// /brand_general_intro/need_clarification 等，甚至直接中文（如"询问门店地址"）。
 const INTENT_LABELS: Record<string, string> = {
+  // 询价
   price: "询价",
+  price_or_discount: "询价",
+  inquiry_inventory: "询价",
+  consult_specific_model: "询价",
+  price_inquiry: "询价",
+  // 库存
   inventory: "库存",
+  consult_inventory: "库存",
+  inventory_claim: "库存",
+  inventory_inquiry: "库存",
+  inventory_or_model_specific: "库存",
+  // 试驾
   test_drive: "试驾",
+  appointment_or_visit_specific: "试驾",
+  // 留资/联系
   contact: "留资/联系",
+  contact_request: "留资/联系",
+  // 投诉
   complaint: "投诉",
+  after_sales_or_complaint: "投诉",
+  // 其它归未知
+  greeting: "未知",
+  general_inquiry: "未知",
+  service_general_intro: "未知",
+  need_clarification: "未知",
+  brand_general_intro: "未知",
   unknown: "未知",
 };
 
+// 意向标签：9100 LLM 输出 lead_level，补充中文变体与可能值，未命中显未知。
 const LEAD_LEVEL_LABELS: Record<string, string> = {
   high: "高意向",
+  high_intent: "高意向",
+  "高意向": "高意向",
   medium: "中意向",
+  medium_intent: "中意向",
+  "中意向": "中意向",
   low: "低意向",
+  low_intent: "低意向",
+  "低意向": "低意向",
   unknown: "未知",
+  "未知": "未知",
 };
 
 function resolveErrorMessage(error: unknown): string {
@@ -251,7 +286,7 @@ function DetailModal({
                 <h3 className="text-xs font-bold text-[#1a1f2e]">标签与风险</h3>
                 <div className="mt-3 space-y-3">
                   <div className="flex flex-wrap gap-1.5">
-                    {tags.length > 0 ? tags.map((tag) => <Chip key={tag} tone="blue">{tag}</Chip>) : <span className="text-xs text-[#8b95a6]">暂无标签</span>}
+                    {tags.length > 0 ? tags.map((tag) => <Chip key={tag} tone="blue">{tagLabel(tag)}</Chip>) : <span className="text-xs text-[#8b95a6]">暂无标签</span>}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {riskFlags.length > 0 ? (
@@ -342,6 +377,7 @@ export default function AiReplyDecisionLogsPage() {
   const [detail, setDetail] = useState<AiReplyDecisionLogDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -414,6 +450,40 @@ export default function AiReplyDecisionLogsPage() {
       setDetailError(resolveErrorMessage(err));
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // 列表快捷标记：不弹窗，使用默认原因（后端要求 is_effective 标记必须带原因）
+  const quickMarkEffectiveness = async (id: number, isEffective: boolean) => {
+    setError(null);
+    try {
+      await patchAiReplyDecisionLogEffectiveness(id, {
+        is_effective: isEffective,
+        effectiveness_reason: isEffective ? "快捷标记为有效" : "快捷标记为无效",
+      });
+      await loadLogs();
+    } catch (err) {
+      setError(resolveErrorMessage(err));
+    }
+  };
+
+  // 批量标记有效性（批量正常/批量垃圾）
+  const batchMarkEffectiveness = async (isEffective: boolean) => {
+    if (selectedIds.size === 0) return;
+    setError(null);
+    setLoading(true);
+    try {
+      await batchPatchAiReplyDecisionLogEffectiveness(
+        Array.from(selectedIds),
+        isEffective,
+        isEffective ? "批量标记为有效" : "批量标记为无效",
+      );
+      setSelectedIds(new Set());
+      await loadLogs();
+    } catch (err) {
+      setError(resolveErrorMessage(err));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -550,17 +620,61 @@ export default function AiReplyDecisionLogsPage() {
             </div>
           </div>
         ) : (
+          <>
+          {selectedIds.size > 0 ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-xs">
+              <span className="font-semibold text-blue-800">已选 {selectedIds.size} 条</span>
+              <button
+                onClick={() => void batchMarkEffectiveness(true)}
+                disabled={loading}
+                className="inline-flex h-8 items-center gap-1 rounded-md bg-emerald-600 px-3 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                批量正常
+              </button>
+              <button
+                onClick={() => void batchMarkEffectiveness(false)}
+                disabled={loading}
+                className="inline-flex h-8 items-center gap-1 rounded-md bg-red-600 px-3 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                批量垃圾
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                disabled={loading}
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-3 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                取消选择
+              </button>
+            </div>
+          ) : null}
           <table className="w-full table-fixed text-left text-xs">
             <thead className="bg-[#f8fafc] text-[#64748b]">
               <tr>
-                <th className="w-[18%] px-4 py-3 font-semibold">客户消息</th>
-                <th className="w-[22%] px-4 py-3 font-semibold">AI实发内容</th>
-                <th className="w-[10%] px-4 py-3 font-semibold">意图</th>
-                <th className="w-[10%] px-4 py-3 font-semibold">意向</th>
-                <th className="w-[10%] px-4 py-3 font-semibold">人工确认</th>
+                <th className="w-[4%] px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={items.length > 0 && items.every((item) => selectedIds.has(item.id))}
+                    onChange={(e) => {
+                      setSelectedIds((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) {
+                          items.forEach((item) => next.add(item.id));
+                        } else {
+                          items.forEach((item) => next.delete(item.id));
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                </th>
+                <th className="w-[12%] px-4 py-3 font-semibold">抖音号昵称</th>
+                <th className="w-[16%] px-4 py-3 font-semibold">客户消息</th>
+                <th className="w-[18%] px-4 py-3 font-semibold">AI实发内容</th>
+                <th className="w-[8%] px-4 py-3 font-semibold">意图</th>
+                <th className="w-[8%] px-4 py-3 font-semibold">意向</th>
                 <th className="w-[12%] px-4 py-3 font-semibold">风险/标签</th>
                 <th className="w-[10%] px-4 py-3 font-semibold">状态</th>
-                <th className="w-[8%] px-4 py-3 font-semibold">操作</th>
+                <th className="w-[12%] px-4 py-3 font-semibold">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -569,11 +683,33 @@ export default function AiReplyDecisionLogsPage() {
                 const tags = safeArray(item.tags);
                 return (
                   <tr key={item.id} className="border-t border-[#f0f2f7] hover:bg-[#f8fafc]">
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={(e) => {
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) {
+                              next.add(item.id);
+                            } else {
+                              next.delete(item.id);
+                            }
+                            return next;
+                          });
+                        }}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="line-clamp-2 text-[#374151]" title={item.account_name || item.account_open_id || undefined}>
+                        {item.account_name || item.account_open_id || "-"}
+                      </div>
+                      <div className="mt-1 text-[10px] text-[#8b95a6]">{displaySendTime(item) ? formatDateTimeLocal(displaySendTime(item)) : "-"}</div>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="line-clamp-2 text-[#374151]" title={item.latest_message_summary || undefined}>
                         {item.latest_message_summary || "-"}
                       </div>
-                      <div className="mt-1 text-[10px] text-[#8b95a6]">{displaySendTime(item) ? formatDateTimeLocal(displaySendTime(item)) : "-"}</div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="line-clamp-2 text-[#374151]" title={item.sent_content_summary || undefined}>
@@ -584,17 +720,9 @@ export default function AiReplyDecisionLogsPage() {
                     <td className="px-4 py-3 text-[#374151]">{labelFromMap(item.intent, INTENT_LABELS)}</td>
                     <td className="px-4 py-3 text-[#374151]">{labelFromMap(item.lead_level, LEAD_LEVEL_LABELS)}</td>
                     <td className="px-4 py-3">
-                      <Chip tone={item.manual_required ? "amber" : "emerald"}>{item.manual_required ? "需要" : "不需要"}</Chip>
-                      {item.manual_required_reason ? (
-                        <div className="mt-1 line-clamp-1 text-[10px] text-[#8b95a6]" title={item.manual_required_reason}>
-                          {item.manual_required_reason}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
                         {riskFlags.slice(0, 2).map((flag) => <Chip key={flag} tone="red">{riskFlagLabel(flag)}</Chip>)}
-                        {riskFlags.length === 0 && tags.slice(0, 2).map((tag) => <Chip key={tag} tone="blue">{tag}</Chip>)}
+                        {riskFlags.length === 0 && tags.slice(0, 2).map((tag) => <Chip key={tag} tone="blue">{tagLabel(tag)}</Chip>)}
                         {riskFlags.length === 0 && tags.length === 0 ? <span className="text-[#8b95a6]">-</span> : null}
                       </div>
                     </td>
@@ -607,19 +735,36 @@ export default function AiReplyDecisionLogsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => setDetailId(item.id)}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e4e8f0] bg-white px-2.5 text-[11px] font-semibold text-[#2563eb] hover:bg-[#eff6ff]"
-                      >
-                        <EyeIcon size={13} />
-                        查看
-                      </button>
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          onClick={() => setDetailId(item.id)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e4e8f0] bg-white px-2.5 text-[11px] font-semibold text-[#2563eb] hover:bg-[#eff6ff]"
+                        >
+                          <EyeIcon size={13} />
+                          查看
+                        </button>
+                        <button
+                          onClick={() => void quickMarkEffectiveness(item.id, true)}
+                          disabled={loading}
+                          className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                        >
+                          标记有效
+                        </button>
+                        <button
+                          onClick={() => void quickMarkEffectiveness(item.id, false)}
+                          disabled={loading}
+                          className="inline-flex h-8 items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 text-[11px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+                        >
+                          标记无效
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          </>
         )}
       </main>
 

@@ -6,6 +6,7 @@ Phase 4 起：
 """
 
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
@@ -16,6 +17,7 @@ from app.auth.dependencies import get_request_context_required
 from app.database import get_db
 from app.models import AiReplyDecisionLog, DouyinPrivateMessageSend
 from app.schemas import (
+    AiReplyDecisionBatchEffectivenessPatch,
     AiReplyDecisionEffectivenessPatch,
     AiReplyDecisionLogDetailResponse,
     AiReplyDecisionLogListResponse,
@@ -30,6 +32,7 @@ from app.services.autoreply_admin_rollout_service import record_admin_audit
 
 
 router = APIRouter(prefix="/ai-reply-decision-logs", tags=["AI回复记录"])
+logger = logging.getLogger(__name__)
 
 ADMIN_AI_REPLY_RECORDS_PERMISSION = "auto_wechat:admin:ai_reply_records"
 MERCHANT_DOUYIN_AI_CS_PERMISSION = "auto_wechat:douyin_ai_cs"
@@ -259,3 +262,90 @@ def patch_log_effectiveness(
 
     data = get_ai_reply_decision_log_detail(db, merchant_id=None, log_id=log_id)
     return {"success": True, "data": data, "message": "success"}
+
+
+@router.post("/batch-effectiveness")
+def batch_patch_log_effectiveness(
+    payload: AiReplyDecisionBatchEffectivenessPatch,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """超管批量标记 AI 实发回复有效性（批量正常/批量垃圾）。
+
+    仅超管；只标记已实发（有关联发送流水）的记录；未发送的记录跳过；
+    原因入库前脱敏。返回更新成功与跳过的 id。
+    """
+    _require_admin_ai_reply_records(context)
+    reason = (
+        payload.effectiveness_reason.strip()
+        if payload.effectiveness_reason is not None
+        else "批量标记"
+    )
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "EFFECTIVENESS_REASON_REQUIRED", "message": "有效性原因不能为空"},
+        )
+    if len(reason) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "EFFECTIVENESS_REASON_TOO_LONG", "message": "有效性原因不能超过 500 字"},
+        )
+    masked_reason = mask_ai_reply_sensitive_text(reason)
+
+    # 一次性查出所有已实发的目标记录（与单条口径一致：必须有关联发送流水）
+    rows = (
+        db.query(AiReplyDecisionLog)
+        .join(
+            DouyinPrivateMessageSend,
+            DouyinPrivateMessageSend.decision_log_id == AiReplyDecisionLog.id,
+        )
+        .filter(AiReplyDecisionLog.id.in_(payload.log_ids))
+        .filter(
+            or_(
+                DouyinPrivateMessageSend.send_source == "ai_auto",
+                DouyinPrivateMessageSend.decision_log_id.isnot(None),
+            )
+        )
+        .all()
+    )
+    updated_ids: list[int] = []
+    for row in rows:
+        before = {
+            "is_effective": row.is_effective,
+            "effectiveness_reason": row.effectiveness_reason,
+        }
+        row.is_effective = payload.is_effective
+        row.effectiveness_reason = masked_reason
+        after = {
+            "is_effective": row.is_effective,
+            "effectiveness_reason": row.effectiveness_reason,
+        }
+        record_admin_audit(
+            db,
+            action="mark_ai_reply_effectiveness",
+            merchant_id=row.merchant_id,
+            account_open_id=row.account_open_id,
+            target_type="ai_reply_decision_log",
+            target_id=str(row.id),
+            before=before,
+            after=after,
+            reason=masked_reason,
+            operator_id=context.user_id,
+            operator_name=context.display_name or context.username,
+            commit=False,
+        )
+        updated_ids.append(row.id)
+    db.flush()
+    db.commit()
+
+    skipped_ids = [lid for lid in payload.log_ids if lid not in set(updated_ids)]
+    logger.info(
+        "ai_reply_batch_effectiveness stage=batch_mark updated=%s skipped=%s is_effective=%s operator=%s",
+        len(updated_ids), len(skipped_ids), payload.is_effective, context.user_id,
+    )
+    return {
+        "success": True,
+        "data": {"updated_ids": updated_ids, "skipped_ids": skipped_ids},
+        "message": f"已标记 {len(updated_ids)} 条，跳过 {len(skipped_ids)} 条",
+    }

@@ -2391,6 +2391,14 @@ class AiReplyDecisionEffectivenessPatch(BaseModel):
     effectiveness_reason: Optional[str] = None
 
 
+class AiReplyDecisionBatchEffectivenessPatch(BaseModel):
+    """超管批量标记 AI 回复决策有效性。"""
+
+    log_ids: list[int] = Field(..., min_length=1, max_length=500)
+    is_effective: bool
+    effectiveness_reason: Optional[str] = None
+
+
 class SalesFeedbackParseRequest(BaseModel):
     """销售反馈解析请求（Phase 7）。"""
 

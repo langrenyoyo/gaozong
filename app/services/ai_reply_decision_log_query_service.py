@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import Text, cast, func, or_
 from sqlalchemy.orm import Query, Session
 
-from app.models import AiReplyDecisionLog, DouyinPrivateMessageSend
+from app.models import AiReplyDecisionLog, DouyinAuthorizedAccount, DouyinPrivateMessageSend
 
 
 SUMMARY_LIMIT = 120
@@ -100,11 +100,25 @@ def list_ai_reply_decision_logs(db: Session, query: AiReplyDecisionLogQuery) -> 
         .all()
     )
 
+    # 批量查本页 account_open_id → account_name 昵称映射，避免逐行 N+1
+    account_open_ids = {decision.account_open_id for _, decision in rows if decision.account_open_id}
+    account_name_map: dict[str, str] = {}
+    if account_open_ids:
+        accounts = (
+            db.query(DouyinAuthorizedAccount.open_id, DouyinAuthorizedAccount.account_name)
+            .filter(DouyinAuthorizedAccount.open_id.in_(account_open_ids))
+            .all()
+        )
+        account_name_map = {oid: name for oid, name in accounts if name}
+
     return {
         "page": page,
         "page_size": page_size,
         "total": total,
-        "items": [_build_list_item(send, decision) for send, decision in rows],
+        "items": [
+            _build_list_item(send, decision, account_name_map.get(decision.account_open_id))
+            for send, decision in rows
+        ],
     }
 
 
@@ -195,12 +209,14 @@ def _apply_filters(query: Query, params: AiReplyDecisionLogQuery) -> Query:
 def _build_list_item(
     send: DouyinPrivateMessageSend,
     decision: AiReplyDecisionLog,
+    account_name: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": decision.id,
         "send_record_id": send.id,
         "merchant_id": decision.merchant_id,
         "account_open_id": decision.account_open_id,
+        "account_name": account_name,
         "conversation_id": decision.conversation_id,
         "agent_id": decision.agent_id,
         "agent_name": decision.agent_name,

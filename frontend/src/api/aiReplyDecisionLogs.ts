@@ -4,6 +4,7 @@ export interface AiReplyDecisionLogListItem {
   id: number;
   merchant_id: string;
   account_open_id?: string | null;
+  account_name?: string | null;
   conversation_id?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
@@ -156,5 +157,23 @@ export async function patchAiReplyDecisionLogEffectiveness(
     `/ai-reply-decision-logs/${encodeURIComponent(String(id))}/effectiveness`,
     payload,
   )) as unknown as ApiResponse<AiReplyDecisionLogDetail>;
+  return response.data;
+}
+
+export interface AiReplyDecisionBatchEffectivenessResult {
+  updated_ids: number[];
+  skipped_ids: number[];
+}
+
+// 超管批量标记 AI 实发回复有效性（批量正常/批量垃圾）
+export async function batchPatchAiReplyDecisionLogEffectiveness(
+  logIds: number[],
+  isEffective: boolean,
+  reason?: string,
+): Promise<AiReplyDecisionBatchEffectivenessResult> {
+  const response = (await apiClient.post(
+    `/ai-reply-decision-logs/batch-effectiveness`,
+    { log_ids: logIds, is_effective: isEffective, effectiveness_reason: reason },
+  )) as unknown as ApiResponse<AiReplyDecisionBatchEffectivenessResult>;
   return response.data;
 }

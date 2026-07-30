@@ -26,6 +26,7 @@ export {
   getAiReplyDecisionLogDetail,
   getAiReplyDecisionLogs,
   patchAiReplyDecisionLogEffectiveness,
+  batchPatchAiReplyDecisionLogEffectiveness,
 } from "../../api/aiReplyDecisionLogs";
 
 export {

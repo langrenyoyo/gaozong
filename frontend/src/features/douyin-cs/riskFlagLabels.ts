@@ -25,7 +25,31 @@ export const RISK_FLAG_LABELS: Record<string, string> = {
   llm_json_parse_failed: "结构化解析失败",
   llm_requested_auto_send: "模型请求自动发送",
   proxy_forced_auto_send_false: "代理已强制关闭自动发送",
+  // 意图类 risk_flag 补充（9100 LLM 可能直接输出）
+  inquiry_inventory: "询问库存",
+  consult_specific_model: "咨询具体车型",
+  consult_inventory: "咨询库存",
 };
+
+// tags（9100 LLM 自由输出标签）常见值中文映射；未命中回退原值。
+export const TAG_LABELS: Record<string, string> = {
+  high_intent: "高意向",
+  medium_intent: "中意向",
+  low_intent: "低意向",
+  contact_provided: "已留资",
+  no_contact: "未留资",
+  price_inquiry: "询价",
+  inventory_inquiry: "问库存",
+  test_drive_request: "试驾",
+  complaint: "投诉",
+  greeting: "打招呼",
+  general_inquiry: "一般咨询",
+};
+
+// 单个 tag → 中文（未命中回退原值）
+export function tagLabel(tag: string): string {
+  return TAG_LABELS[tag] || tag;
+}
 
 // block_reason / skip_reason 中文标签（9000 gate 阻断/跳过原因全集）
 export const BLOCK_REASON_LABELS: Record<string, string> = {
