@@ -44,8 +44,11 @@ from app.models import (
     DouyinLead,
     DouyinPrivateMessageSend,
     LeadNotification,
+    ReturnVisitFollowupTask,
     ReturnVisitPrompt,
     ReturnVisitRun,
+    SalesStaff,
+    WechatTask,
 )
 from app.services.conversation_autopilot_state_service import evaluate_manual_takeover_gate
 from app.services.douyin_private_message_send_service import _send_private_message_with_context
@@ -54,6 +57,7 @@ from app.services.douyin_workbench_conversation_service import (
     get_send_msg_context,
 )
 from app.services.xg_douyin_ai_cs_client import get_xg_douyin_ai_cs_client
+from app.services.wechat_task_service import create_wechat_task
 
 logger = logging.getLogger(__name__)
 
@@ -421,11 +425,22 @@ def _claim_run_for_processing(db: Session, run_id: int) -> bool:
     return result.rowcount > 0
 
 
+def _parse_json_object(raw: str | None) -> dict:
+    """安全解析 JSON 字符串为 dict；None/异常返回空 dict。"""
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _load_prompt_inputs(db: Session) -> dict:
-    """从 DB 读三键 ReturnVisitPrompt（9100 不读 DB，9000 传入完整 prompt 输入）。"""
+    """从 DB 读所有启用的 ReturnVisitPrompt（含自定义场景；9100 不读 DB，9000 传入完整 prompt 输入）。"""
     prompts = (
         db.query(ReturnVisitPrompt)
-        .filter(ReturnVisitPrompt.prompt_key.in_(PROMPT_KEYS))
+        .filter(ReturnVisitPrompt.enabled.is_(True))
         .all()
     )
     return {
@@ -434,6 +449,10 @@ def _load_prompt_inputs(db: Session) -> dict:
             "fallback_message": p.fallback_message or "",
             "confidence_threshold": float(p.confidence_threshold),
             "enabled": bool(p.enabled),
+            "scene_description": p.scene_description or "",
+            "action_type": p.action_type,
+            "action_payload": _parse_json_object(p.action_payload_json),
+            "cooldown_hours": p.cooldown_hours,
         }
         for p in prompts
     }
@@ -441,10 +460,21 @@ def _load_prompt_inputs(db: Session) -> dict:
 
 def _judge_via_9100(run: ReturnVisitRun, prompt_inputs: dict) -> dict:
     """调 9100 回访判定；响应由 9000 Pydantic schema 校验，不信任任意 JSON。"""
+    # 9100 ReturnVisitPromptInput extra=forbid，只传 9100 判定所需字段（动作/冷却等 9000 自用字段不传）
+    judge_prompts = {
+        key: {
+            "template_text": v["template_text"],
+            "fallback_message": v["fallback_message"],
+            "confidence_threshold": v["confidence_threshold"],
+            "enabled": v["enabled"],
+            "scene_description": v.get("scene_description"),
+        }
+        for key, v in prompt_inputs.items()
+    }
     request = {
         "merchant_id": run.merchant_id,
         "lead_id": run.lead_id,
-        "prompts": prompt_inputs,
+        "prompts": judge_prompts,
         "sales_reply_text": run.trigger_text or "",
         "dispatch_context": {
             "dispatch_notification_id": run.dispatch_notification_id,
@@ -458,12 +488,13 @@ def _judge_via_9100(run: ReturnVisitRun, prompt_inputs: dict) -> dict:
     return validated.model_dump()
 
 
-def _map_judgment_terminal(judgment: dict) -> dict | None:
+def _map_judgment_terminal(judgment: dict, prompt_keys: set[str]) -> dict | None:
     """判定结果 → 终态映射。
 
     no_match/ambiguous/suppress_hit → not_needed；below_threshold → confidence_low；
     disabled → prompt_disabled；risk（含拒答/注入/敏感/未知 risk）→ blocked；
     命中场景 key → 非终态（返回 None 进门禁）；关键词 confidence=0.5 由 G9 阈值拦截。
+    prompt_keys 为本次加载的场景键集合（支持自定义场景）。
     """
     result = judgment.get("judgement_result")
     risk_flags = judgment.get("risk_flags") or []
@@ -475,12 +506,12 @@ def _map_judgment_terminal(judgment: dict) -> dict | None:
         return {"status": "prompt_disabled", "code": "prompt_disabled"}
     if result == "below_threshold":
         return {"status": "confidence_low", "code": "below_threshold"}
-    if result in PROMPT_KEYS:
+    if result in prompt_keys:
         return None  # 命中场景，进入门禁
     return {"status": "not_needed", "code": "unknown_result"}  # 未知保守 not_needed
 
 
-def _validate_judgment_contract(judgment: dict) -> str | None:
+def _validate_judgment_contract(judgment: dict, prompt_keys: set[str]) -> str | None:
     """9000 侧跨字段合同校验（只拦字段自相矛盾，不拦合法的 should_trigger=False）。
 
     检查点 B-FIX2（问题 2 修正）：合法的 should_trigger=False 终态（blocked / prompt_disabled /
@@ -488,7 +519,7 @@ def _validate_judgment_contract(judgment: dict) -> str | None:
     不在此拦截。本函数只拦 9100 字段自相矛盾：
     - 来源枚举必须合法（llm/keyword_fallback/precheck）。
     - 命中场景 key 时 must should_trigger=True + ambiguous=False + prompt_key==result（否则字段矛盾）。
-    - precheck 不命中具体场景（prompt_key 必须非 PROMPT_KEYS）。
+    - precheck 不命中具体场景（prompt_key 必须非场景键）。
     违反返回稳定 code（统一映射 not_needed，绝不进入发送）。
     """
     source = judgment.get("judgement_source")
@@ -501,10 +532,10 @@ def _validate_judgment_contract(judgment: dict) -> str | None:
         return "contract_invalid_source"
     # 仅当判定"命中场景 key"时校验四字段一致性；非命中终态 should_trigger=False / ambiguous=True
     # 是 9100 的合法表达（如 result=ambiguous + ambiguous=True），由 _map_judgment_terminal 处理。
-    if result in PROMPT_KEYS:
+    if result in prompt_keys:
         if should_trigger is not True or ambiguous is not False or prompt_key != result:
             return "contract_hit_inconsistent"
-    if source == "precheck" and prompt_key in PROMPT_KEYS:
+    if source == "precheck" and prompt_key in prompt_keys:
         return "contract_precheck_has_prompt_key"
     return None
 
@@ -526,7 +557,77 @@ def _hourly_send_limit(setting: DouyinAccountAutoreplySetting | None = None) -> 
     return value if value > 0 else _HOURLY_SEND_LIMIT_FALLBACK
 
 
-def _evaluate_gates(db: Session, run: ReturnVisitRun, judgment: dict) -> dict:
+def _orchestrate_post_hit_action(db: Session, run: ReturnVisitRun, prompt_inputs: dict) -> None:
+    """命中场景且发送成功后的确定性动作编排（非 LLM tool）。
+
+    - notify_sales：查销售微信昵称 → 调 create_wechat_task(notify_sales) 复用 Local Agent 链路；
+      建 ReturnVisitFollowupTask（deadline=now+sla_minutes）做 SLA 计时。
+    - send_light_reminder：仅发话术（已由主流程发送），无附加动作。
+    - None/空：三键场景现有行为，无附加动作。
+    动作内部异常不回滚主发送（已 commit），仅记录 last_failure_stage 旁路日志。
+    """
+    scene_input = prompt_inputs.get(run.prompt_key or "") or {}
+    action_type = scene_input.get("action_type")
+    if not action_type:
+        return  # 三键场景或未配置动作
+    if action_type == "send_light_reminder":
+        return  # 轻提醒已由主流程发送，无附加动作
+
+    if action_type != "notify_sales":
+        logger.warning(
+            "return_visit_action_unknown run_id=%s action_type=%s prompt_key=%s",
+            run.id, action_type, run.prompt_key,
+        )
+        return
+
+    payload = scene_input.get("action_payload") or {}
+    sla_minutes = int(payload.get("sla_minutes") or 0)
+    notify_message = str(payload.get("notify_message") or "").strip()
+    if not run.staff_id:
+        logger.info("return_visit_action_skip run_id=%s reason=no_staff", run.id)
+        return
+    staff = db.query(SalesStaff).filter(SalesStaff.id == run.staff_id).first()
+    target_nickname = (staff.wechat_nickname or "").strip() if staff else ""
+    if not target_nickname:
+        logger.info("return_visit_action_skip run_id=%s reason=no_staff_wechat staff_id=%s", run.id, run.staff_id)
+        return
+
+    try:
+        task = create_wechat_task(
+            db,
+            task_type="notify_sales",
+            lead_id=run.lead_id,
+            staff_id=run.staff_id,
+            target_nickname=target_nickname,
+            message=notify_message,
+            mode="single_send",
+            commit=False,
+        )
+        followup = ReturnVisitFollowupTask(
+            return_visit_run_id=run.id,
+            lead_id=run.lead_id,
+            staff_id=run.staff_id,
+            prompt_key=run.prompt_key,
+            sla_minutes=sla_minutes or None,
+            deadline=(datetime.now() + timedelta(minutes=sla_minutes)) if sla_minutes else None,
+            status="pending",
+            wechat_task_id=task.id,
+        )
+        db.add(followup)
+        db.commit()
+        logger.info(
+            "return_visit_action_notify_sales run_id=%s staff_id=%s wechat_task_id=%s sla_minutes=%s",
+            run.id, run.staff_id, task.id, sla_minutes,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "return_visit_action_failed run_id=%s action_type=notify_sales error_type=%s",
+            run.id, type(exc).__name__,
+        )
+
+
+def _evaluate_gates(db: Session, run: ReturnVisitRun, judgment: dict, prompt_inputs: dict) -> dict:
     """G1-G10 门禁（send_authorized 前按固定顺序）。
 
     返回 {passed, code, results, content?, status_hint?}。
@@ -636,8 +737,11 @@ def _evaluate_gates(db: Session, run: ReturnVisitRun, judgment: dict) -> dict:
     if hourly_count >= limit:
         return {"passed": False, "code": "rate_limited", "results": results}
 
-    # G7: 24h 冷却（JOIN DouyinPrivateMessageSend.return_visit_run_id，只计 run/send 均 sent，时间只用 send.sent_at）
-    cooldown_since = datetime.now() - timedelta(hours=_COOLDOWN_HOURS)
+    # G7: 冷却（JOIN DouyinPrivateMessageSend.return_visit_run_id，只计 run/send 均 sent，时间只用 send.sent_at）
+    # 冷却时长读场景配置 cooldown_hours，缺失回落 24h（_COOLDOWN_HOURS）
+    scene_input = prompt_inputs.get(run.prompt_key or "") or {}
+    cooldown_hours = scene_input.get("cooldown_hours") or _COOLDOWN_HOURS
+    cooldown_since = datetime.now() - timedelta(hours=cooldown_hours)
     recent = (
         db.query(ReturnVisitRun)
         .join(
@@ -779,7 +883,8 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
     )
 
     # 跨字段合同校验（阻断 2：should_trigger=False/ambiguous=True/来源非法等不得进入发送）
-    contract_code = _validate_judgment_contract(judgment)
+    prompt_keys = set(prompt_inputs.keys())
+    contract_code = _validate_judgment_contract(judgment, prompt_keys)
     if contract_code is not None:
         _set_run_status(db, run_id, send_status="not_needed", last_failure_stage=contract_code)
         _safe_commit(db)
@@ -790,7 +895,7 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         return
 
     # 3. 终态映射
-    terminal = _map_judgment_terminal(judgment)
+    terminal = _map_judgment_terminal(judgment, prompt_keys)
     if terminal is not None:
         _set_run_status(
             db,
@@ -806,7 +911,7 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         return
 
     # 4. G1-G10 门禁
-    gate = _evaluate_gates(db, run, judgment)
+    gate = _evaluate_gates(db, run, judgment, prompt_inputs)
     _save_gate_results(db, run_id, "gates", gate["results"])
     if not gate["passed"]:
         status = gate.get("status_hint") or _GATE_BLOCK_STATUS.get(gate["code"], "failed")
@@ -879,6 +984,9 @@ def _process_run_with_session(db: Session, run_id: int) -> None:
         "return_visit_process run_id=%s stage=send_done status=%s failure_stage=%s",
         run_id, outcome["status"], outcome.get("failure_stage"),
     )
+    # 命中后动作编排：仅发送成功时执行；三键场景 action_type 为空，行为不变
+    if outcome["status"] == "sent":
+        _orchestrate_post_hit_action(db, run, prompt_inputs)
 
 
 # ---------------------------------------------------------------------------
