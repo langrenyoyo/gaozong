@@ -496,18 +496,19 @@ def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
 
 
 def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tuple[str, int, bool, str]:
+    # 统一使用 V2.0 固定提示词模板，与预览/自动回复一致。
+    # training/ask 无 Agent 配置，变量用"未配置"占位。
+    from apps.xg_douyin_ai_cs.services.reply_decision_service import _build_fixed_prompt_template
+
+    merchant_prompt = {
+        "agent_name": "AI客服",
+        "merchant_name": "小高知识库训练",
+    }
+    system_prompt = _build_fixed_prompt_template(merchant_prompt)
     messages = [
         {
             "role": "system",
-            "content": "\n".join(
-                [
-                    "你是小高知识库训练助手。",
-                    "你帮助商家把客户问题转成可用的回复建议。",
-                    "不能承诺不确定的库存、价格、金融方案。",
-                    "不要自动发送任何消息。",
-                    "回答要简洁自然，只输出给商家参考的答案。",
-                ]
-            ),
+            "content": system_prompt,
         },
         {
             "role": "user",
