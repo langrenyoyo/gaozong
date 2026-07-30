@@ -505,6 +505,8 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
         "merchant_name": "小高知识库训练",
     }
     system_prompt = _build_fixed_prompt_template(merchant_prompt)
+    # training/ask 只需纯文本回复，覆盖 V2.0 模板的 JSON 输出要求
+    system_prompt += "\n\n## 训练问答输出要求\n本次为训练问答测试，请直接输出一条可用于商家的回复文本，不要输出 JSON 结构。"
     messages = [
         {
             "role": "system",
