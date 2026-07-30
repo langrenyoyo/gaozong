@@ -98,6 +98,15 @@ export async function createComputeRechargeOrder(
   return apiClient.post("/compute/recharge-orders", payload);
 }
 
+/** 充值订单历史列表（GET /compute/recharge-orders，查 recharge 类型流水）。 */
+export async function fetchComputeRechargeOrders(
+  params: ComputeTransactionQuery = {},
+): Promise<ComputeTransactionListResponse> {
+  return apiClient.get("/compute/recharge-orders", {
+    params: compactParams(params),
+  });
+}
+
 /** 管理员获取全部套餐（GET /admin/compute/packages，包含禁用套餐）。 */
 export async function fetchAdminComputePackages(): Promise<ComputePackageListResponse> {
   return apiClient.get("/admin/compute/packages");

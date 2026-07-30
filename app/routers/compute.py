@@ -173,6 +173,25 @@ def create_recharge_order(
     return {"success": True, "data": order, "message": "success"}
 
 
+@router.get("/recharge-orders", response_model=ComputeTransactionListResponse)
+def list_recharge_orders(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """商户充值订单历史（查 recharge 类型流水，含充值前后余额变动）。"""
+    merchant_id = _require_merchant(context)
+    data = compute_service.list_merchant_transactions(
+        db,
+        merchant_id,
+        transaction_type="recharge",
+        page=page,
+        page_size=page_size,
+    )
+    return {"success": True, "data": data, "message": "success"}
+
+
 # ============ 管理员侧 /admin ============
 
 admin_router = APIRouter(prefix="/admin", tags=["超管-算力配置"])

@@ -626,8 +626,8 @@ def create_mock_recharge_order(
 ) -> dict:
     """商户充值订单（一期 mock）。
 
-    仅生成订单号/付款码占位，不接真实支付、不实际到账、不改余额、不写流水。
-    套餐充值取套餐 Token；自定义金额取 custom_tokens；两者都未提供则报错。
+    生成订单号占位，不接真实支付。但写入一条 recharge 流水记录充值前后余额变动，
+    使充值订单在流水列表中可追溯。
     """
     tokens: int | None = None
     price_yuan: int | None = None
@@ -642,11 +642,31 @@ def create_mock_recharge_order(
     else:
         raise ValueError("RECHARGE_TARGET_REQUIRED")
 
+    order_no = f"CO{uuid4().hex[:16].upper()}"
+
+    # 写入充值流水（mock 到账），记录充值前后余额变动
+    account = get_or_create_account(db, merchant_id, autocommit=False)
+    balance_before = account.balance_tokens
+    _write_transaction(
+        db,
+        account,
+        transaction_type="recharge",
+        delta_tokens=tokens,
+        source="recharge_order",
+        remark=f"充值订单 {order_no}（mock 到账）",
+        autocommit=False,
+    )
+    db.commit()
+    db.refresh(account)
+    balance_after = account.balance_tokens
+
     return {
-        "order_no": f"CO{uuid4().hex[:16].upper()}",
+        "order_no": order_no,
         "pay_method": payload.pay_method,
         "tokens": tokens,
         "price_yuan": price_yuan,
         "pay_qr_code": f"mock://pay/{payload.pay_method}",
-        "status": "mock_pending",
+        "status": "mock_completed",
+        "balance_before": balance_before,
+        "balance_after": balance_after,
     }

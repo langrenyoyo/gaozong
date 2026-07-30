@@ -15,6 +15,7 @@ import {
 import {
   createComputeRechargeOrder,
   fetchComputePackages,
+  fetchComputeRechargeOrders,
   fetchComputeSummary,
   fetchComputeTransactions,
 } from "../api";
@@ -300,7 +301,7 @@ const DEFAULT_COMPUTE_TABS: ModuleTabItem[] = [
   { label: "充值订单", path: "/compute/recharge-orders" },
 ];
 
-export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: ModuleTabItem[] }) {
+export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS, activeNav = "compute" }: { tabs?: ModuleTabItem[]; activeNav?: string }) {
   const [summary, setSummary] = useState<ComputeSummary | null>(null);
   const [transactions, setTransactions] = useState<ComputeTransaction[]>([]);
   const [packages, setPackages] = useState<ComputePackage[]>([]);
@@ -313,6 +314,11 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
   const [transactionError, setTransactionError] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
   const [showRecharge, setShowRecharge] = useState(false);
+  const [rechargeOrders, setRechargeOrders] = useState<ComputeTransaction[]>([]);
+  const [rechargePage, setRechargePage] = useState(1);
+  const [rechargeTotal, setRechargeTotal] = useState(0);
+  const [loadingRechargeOrders, setLoadingRechargeOrders] = useState(false);
+  const [rechargeError, setRechargeError] = useState<string | null>(null);
 
   const loadSummary = useCallback(async () => {
     setLoadingSummary(true);
@@ -371,12 +377,34 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
   }, [loadSummary, loadPackages, loadTransactions]);
 
   const handleRechargeSuccess = useCallback(() => {
-    // mock 订单不入账，余额可能不变属正常；刷新以保持流水与最新余额一致
+    // mock 订单现在写入流水并改余额，刷新全部数据
     void loadSummary();
     void loadTransactions(page);
-  }, [loadSummary, loadTransactions, page]);
+    void loadRechargeOrders(rechargePage);
+  }, [loadSummary, loadTransactions, page, rechargePage]);
+
+  const loadRechargeOrders = useCallback(async (targetPage: number) => {
+    setLoadingRechargeOrders(true);
+    setRechargeError(null);
+    try {
+      const response = await fetchComputeRechargeOrders({
+        page: targetPage,
+        page_size: PAGE_SIZE,
+      });
+      setRechargeOrders(response.data.items);
+      setRechargeTotal(response.data.total);
+      setRechargePage(response.data.page);
+    } catch (err) {
+      setRechargeOrders([]);
+      setRechargeTotal(0);
+      setRechargeError(resolveErrorMessage(err));
+    } finally {
+      setLoadingRechargeOrders(false);
+    }
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rechargeTotalPages = Math.max(1, Math.ceil(rechargeTotal / PAGE_SIZE));
 
   return (
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
@@ -401,6 +429,9 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto p-5">
+        {/* Tab 1：算力概览（余额 + 套餐） */}
+        {(activeNav === "compute" || activeNav === "compute-center") && (
+        <>
         {/* 统计卡片：余额 / 今日 / 昨日 / 累计（一期不含累计充值） */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatCard
@@ -503,7 +534,12 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
             </div>
           )}
         </div>
+        </>
+        )}
 
+        {/* Tab 2：算力流水明细 */}
+        {(activeNav === "compute-token-transactions") && (
+        <>
         {/* 算力点数明细表 */}
         <div className="mt-5 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
@@ -599,6 +635,108 @@ export default function ComputeCenter({ tabs = DEFAULT_COMPUTE_TABS }: { tabs?: 
             </>
           )}
         </div>
+        </>
+        )}
+
+        {/* Tab 3：充值订单历史 */}
+        {activeNav === "compute-recharge-orders" && (
+        <>
+        <div className="rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center justify-between border-b border-[#e4e8f0] px-4 py-3">
+            <h2 className="text-sm font-bold text-[#1a1f2e]">充值订单</h2>
+            <button
+              onClick={() => void loadRechargeOrders(rechargePage)}
+              disabled={loadingRechargeOrders}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e4e8f0] bg-white px-3 text-xs font-semibold text-[#475467] disabled:opacity-60"
+            >
+              <RefreshCwIcon size={13} className={loadingRechargeOrders ? "animate-spin" : ""} />
+              刷新
+            </button>
+          </div>
+
+          {rechargeError ? (
+            <div className="flex items-center gap-2 px-4 py-6 text-xs text-red-600">
+              <AlertCircleIcon size={14} />
+              <span>充值订单加载失败：{rechargeError}</span>
+              <button onClick={() => void loadRechargeOrders(rechargePage)} className="ml-2 underline">
+                重试
+              </button>
+            </div>
+          ) : loadingRechargeOrders && rechargeOrders.length === 0 ? (
+            <div className="space-y-2 px-4 py-4">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-9 animate-pulse rounded-lg bg-[#f1f5f9]" />
+              ))}
+            </div>
+          ) : rechargeOrders.length === 0 ? (
+            <div className="grid place-items-center px-4 py-12 text-center">
+              <CoinsIcon size={28} className="text-[#cbd5e1]" />
+              <p className="mt-2 text-xs text-[#8b95a6]">暂无充值订单</p>
+            </div>
+          ) : (
+            <>
+              <table className="w-full min-w-[720px] text-left text-xs">
+                <thead>
+                  <tr className="border-b border-[#e4e8f0] text-[#8b95a6]">
+                    <th className="px-4 py-2.5 font-semibold">类型</th>
+                    <th className="px-4 py-2.5 font-semibold">使用场景</th>
+                    <th className="px-4 py-2.5 font-semibold">充值点数</th>
+                    <th className="px-4 py-2.5 font-semibold">变动后余额</th>
+                    <th className="px-4 py-2.5 font-semibold">时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rechargeOrders.map((tx) => {
+                    const income = tx.points_change > 0;
+                    return (
+                      <tr key={tx.id} className="border-b border-[#f1f5f9] last:border-0">
+                        <td className="px-4 py-2.5 text-[#1a1f2e]">{tx.type_label}</td>
+                        <td className="px-4 py-2.5 text-[#475567]">{tx.business_scene}</td>
+                        <td
+                          className={`px-4 py-2.5 font-semibold ${
+                            income ? "text-emerald-600" : "text-[#475567]"
+                          }`}
+                        >
+                          {formatTokenChange(tx.points_change)}
+                        </td>
+                        <td className="px-4 py-2.5 text-[#475567]">{tx.balance_after}</td>
+                        <td className="px-4 py-2.5 text-[#8b95a6]">
+                          {formatDateTimeLocal(tx.created_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              <div className="flex items-center justify-between border-t border-[#e4e8f0] px-4 py-3 text-xs text-[#8b95a6]">
+                <span>
+                  共 {rechargeTotal} 条，第 {rechargePage}/{rechargeTotalPages} 页
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void loadRechargeOrders(rechargePage - 1)}
+                    disabled={rechargePage <= 1 || loadingRechargeOrders}
+                    className="grid h-7 w-7 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#475467] disabled:opacity-40"
+                    aria-label="上一页"
+                  >
+                    <ChevronLeftIcon size={14} />
+                  </button>
+                  <button
+                    onClick={() => void loadRechargeOrders(rechargePage + 1)}
+                    disabled={rechargePage >= rechargeTotalPages || loadingRechargeOrders}
+                    className="grid h-7 w-7 place-items-center rounded-lg border border-[#e4e8f0] bg-white text-[#475567] disabled:opacity-40"
+                    aria-label="下一页"
+                  >
+                    <ChevronRightIcon size={14} />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        </>
+        )}
       </main>
 
       {showRecharge ? (

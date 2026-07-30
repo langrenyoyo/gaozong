@@ -4,6 +4,7 @@ export {
   fetchAdminComputeMarkupRatios,
   fetchAdminComputePackages,
   fetchComputePackages,
+  fetchComputeRechargeOrders,
   fetchComputeSummary,
   fetchComputeTransactions,
   grantMerchantComputePackage,

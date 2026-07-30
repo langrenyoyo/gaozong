@@ -892,7 +892,7 @@ export default function Index({
             onRefreshLocalAgentStatus={refreshLocalAgentStatus}
           />
         ) : isComputeNav ? (
-          <ComputeCenter tabs={computeTabs} />
+          <ComputeCenter tabs={computeTabs} activeNav={activeNav} />
         ) : isAiEditMaterialsNav ? (
           <MaterialLibrary merchantId={user?.merchantId ?? ""} />
         ) : isAiEditEditorNav ? (
