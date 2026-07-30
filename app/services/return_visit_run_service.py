@@ -326,6 +326,98 @@ def trigger_return_visit_from_writeback(
     return run
 
 
+def trigger_return_visit_from_silent_scan(
+    db: Session,
+    *,
+    merchant_id: str,
+    lead_id: int,
+    staff_id: int | None,
+    prompt_key: str,
+    conversation_short_id: str,
+    account_open_id: str,
+    customer_open_id: str,
+    trigger_text: str,
+    silence_hours: int,
+) -> ReturnVisitRun | None:
+    """沉默扫描触发回访 run（trigger_source=silent_scan）。
+
+    与销售回复触发不同：不依赖派单通知锚点，幂等键用
+    merchant+conversation+prompt_key+沉默窗口，保证同一会话同一沉默场景
+    在一个窗口内只触发一次（防重复提醒）。
+    """
+    send_context = get_send_msg_context(
+        db,
+        conversation_short_id=conversation_short_id,
+        customer_open_id=customer_open_id,
+    )
+    if send_context is None:
+        logger.info(
+            "return_visit_silent_trigger lead_id=%s stage=no_send_context skip=true",
+            lead_id,
+        )
+        return None
+    context_server_message_id = send_context.get("server_message_id")
+
+    trigger_message_fp = hashlib.sha256((trigger_text or "").encode("utf-8")).hexdigest()
+    # 幂等键含 silence_hours 窗口：窗口变更（如从24h调到48h）才允许重新触发
+    idempotency_key = hashlib.sha256(
+        f"silent:{merchant_id}:{conversation_short_id}:{prompt_key}:{silence_hours}".encode("utf-8")
+    ).hexdigest()
+
+    existing = (
+        db.query(ReturnVisitRun)
+        .filter(ReturnVisitRun.idempotency_key == idempotency_key)
+        .first()
+    )
+    if existing is not None:
+        logger.info(
+            "return_visit_silent_trigger lead_id=%s stage=idempotent_existing run_id=%s",
+            lead_id, existing.id,
+        )
+        return existing
+
+    run = ReturnVisitRun(
+        merchant_id=merchant_id,
+        lead_id=lead_id,
+        staff_id=staff_id,
+        reply_check_id=None,
+        dispatch_notification_id=None,
+        trigger_source="silent_scan",
+        trigger_text=trigger_text,
+        prompt_key=prompt_key,
+        send_status="pending_judgement",
+        attempt_count=1,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        customer_open_id=customer_open_id,
+        context_server_message_id=context_server_message_id,
+        trigger_message_fp=trigger_message_fp,
+        idempotency_key=idempotency_key,
+    )
+    db.add(run)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(ReturnVisitRun)
+            .filter(ReturnVisitRun.idempotency_key == idempotency_key)
+            .first()
+        )
+        logger.info(
+            "return_visit_silent_trigger lead_id=%s stage=idempotent_race run_id=%s",
+            lead_id, existing.id if existing else None,
+        )
+        return existing
+
+    logger.info(
+        "return_visit_silent_trigger lead_id=%s stage=run_created run_id=%s "
+        "prompt_key=%s silence_hours=%s send_status=pending_judgement",
+        lead_id, run.id, prompt_key, silence_hours,
+    )
+    return run
+
+
 # ---------------------------------------------------------------------------
 # Phase 9 Task 6：统一处理入口 process_return_visit_run
 # ---------------------------------------------------------------------------

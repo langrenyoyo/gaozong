@@ -373,6 +373,16 @@ DAILY_REPORT_TIMEZONE = _parse_daily_report_timezone()
 DAILY_REPORT_SCHEDULER_ENABLED = _env_bool("DAILY_REPORT_SCHEDULER_ENABLED", False)
 DAILY_REPORT_SCHEDULE_LOCAL_TIME = _parse_daily_report_schedule_time()
 
+# ---------- 回访沉默扫描调度器（默认关闭，仅显式启用）----------
+RETURN_VISIT_SILENT_SCAN_ENABLED = _env_bool("RETURN_VISIT_SILENT_SCAN_ENABLED", False)
+RETURN_VISIT_SILENT_SCAN_INTERVAL_SECONDS = int(
+    os.getenv("RETURN_VISIT_SILENT_SCAN_INTERVAL_SECONDS", "3600").strip() or "3600"
+)
+# 单轮扫描会话上限，防止全表扫描压垮 DB
+RETURN_VISIT_SILENT_SCAN_BATCH_SIZE = int(
+    os.getenv("RETURN_VISIT_SILENT_SCAN_BATCH_SIZE", "200").strip() or "200"
+)
+
 # ---------- Phase 8-B 日报附件投递（默认关闭，灰度 allowlist）----------
 # 总开关关闭时只创建 held 投递，不创建可执行任务；production 禁 insecure HTTP。
 DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED = _env_bool("DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED", False)

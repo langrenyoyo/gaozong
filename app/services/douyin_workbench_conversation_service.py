@@ -1037,6 +1037,8 @@ def get_latest_private_message_state(
         "latest_created_at": None,
         "latest_is_customer_message": False,
         "has_outbound_after_trigger": False,
+        "last_customer_message_at": None,
+        "customer_silence_hours": None,
     }
     if not account_open_id or not conversation_short_id:
         return result
@@ -1075,6 +1077,18 @@ def get_latest_private_message_state(
                 "latest_is_customer_message": latest.event == "im_receive_msg",
             }
         )
+
+    # 计算客户沉默时长：最后一条客户入站消息距今小时数（无客户消息则为 None）
+    last_customer_at = None
+    for row in filtered:
+        if row.event == "im_receive_msg":
+            last_customer_at = row.message_create_time or row.created_at
+            break
+    if last_customer_at is not None:
+        result["last_customer_message_at"] = last_customer_at
+        # aware/naive 统一基准，避免 naive - aware TypeError
+        now_ref = datetime.now(last_customer_at.tzinfo) if last_customer_at.tzinfo else datetime.now()
+        result["customer_silence_hours"] = (now_ref - last_customer_at).total_seconds() / 3600.0
 
     if trigger_server_message_id:
         seen_trigger = False

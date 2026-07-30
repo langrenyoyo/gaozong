@@ -63,6 +63,7 @@ except ImportError:
 from app.scheduler.check_scheduler import scheduler
 from app.scheduler.wechat_auto_detect_scheduler import wechat_auto_detect_scheduler
 from app.scheduler.daily_report_scheduler import daily_report_scheduler
+from app.scheduler.return_visit_silent_scan_scheduler import return_visit_silent_scan_scheduler
 
 # 配置日志
 logging.basicConfig(
@@ -222,12 +223,17 @@ def create_app() -> FastAPI:
         from app.services.ai_auto_reply_outbox_service import start_outbox_scheduler
         start_outbox_scheduler()
 
+        # 回访沉默扫描调度器（默认关闭，RETURN_VISIT_SILENT_SCAN_ENABLED=true 启动）
+        if config.RETURN_VISIT_SILENT_SCAN_ENABLED:
+            return_visit_silent_scan_scheduler.start()
+
     @app.on_event("shutdown")
     async def on_shutdown():
         await close_async_database_runtime()
         scheduler.stop()
         daily_report_scheduler.stop()
         wechat_auto_detect_scheduler.stop()
+        return_visit_silent_scan_scheduler.stop()
         # P8-4：释放热键 + 关闭桌面提示
         from app.services.hotkey_listener import stop_hotkey_listener
         from app.services.desktop_overlay import stop_desktop_overlay
