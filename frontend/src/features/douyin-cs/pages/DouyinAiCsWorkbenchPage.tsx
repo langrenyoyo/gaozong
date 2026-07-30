@@ -29,6 +29,7 @@ import {
   fetchDouyinLiveCheckStatus,
 } from "../api";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { blockReasonLabel } from "../riskFlagLabels";
 import type {
@@ -95,6 +96,19 @@ const MANUAL_REVIEW_RISK_FLAG_OPTIONS = [
   "prompt_injection",
   "no_rag_risky_question",
 ];
+// 风险开关傻瓜化说明（hover 提示），用语面向不懂技术的商户。
+const RISK_FLAG_HINTS: Record<string, string> = {
+  contact_request: "回复里出现了“加微信”“留电话”这类要联系方式的话。开=交人工确认，防止乱留联系方式。",
+  price_or_discount: "回复里提到了价格或优惠。开=交人工，价格只能由销售报，AI 别乱承诺。",
+  finance_or_loan: "回复里提到了贷款、金融方案。开=交人工，金融信息容易出错。",
+  inventory_claim: "回复里承诺了“有现车”“库存”。开=交人工，避免说有车实际没有。",
+  vehicle_condition_specific: "回复里说了具体车况。开=交人工，车况要核实再说。",
+  legal_or_transfer: "回复里提到过户、手续。开=交人工，手续问题不能乱答。",
+  after_sales_or_complaint: "回复里涉及售后或投诉。开=交人工，投诉要专人处理。",
+  appointment_or_visit_specific: "回复里约定了到店时间。开=交人工，预约要确认。",
+  prompt_injection: "客户可能想用话术套出 AI 的规则或绕过限制。开=交人工判断，防止被套路。",
+  no_rag_risky_question: "客户问了高风险问题，但知识库里没查到相关内容。开=交人工，没把握的别乱答。",
+};
 const UPLOAD_IMAGE_VALIDATION_MESSAGE =
   "请选择 jpg/jpeg/png/bmp/webp 格式图片，且大小不超过 10MB。";
 const AUTH_POLLING_INTERVAL_MS = 2000;
@@ -3303,7 +3317,7 @@ export default function DouyinAiCsWorkbenchPage() {
           <SheetHeader className="flex h-14 flex-row items-center gap-2 border-b border-[#edf1f6] px-4">
             <SlidersHorizontalIcon size={18} className="shrink-0 text-slate-500" />
             <SheetTitle className="text-sm font-bold text-[#172033]">自动回复设置</SheetTitle>
-            <SheetDescription className="text-[11px] text-slate-500">风险转人工开关</SheetDescription>
+            <SheetDescription className="text-[11px] text-slate-500">自动回复发送策略与风险开关</SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
             {autoreplySettingsLoading ? (
@@ -3313,35 +3327,19 @@ export default function DouyinAiCsWorkbenchPage() {
             ) : autoreplySettingsError ? (
               <div className="text-xs text-red-600">{autoreplySettingsError}</div>
             ) : autoreplySetting ? (
-              <div className="space-y-4">
-                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-3 text-xs leading-5 text-blue-800">
-                  开启=该类风险回复转人工确认；关闭=自动发送安全替代回复（已脱敏）。默认全部关闭（发安全回复），减少自动回复被阻断。
-                </div>
-                <div className="space-y-2">
-                  {MANUAL_REVIEW_RISK_FLAG_OPTIONS.map((flag) => {
-                    const checked = (autoreplySetting.manual_review_risk_flags || []).includes(flag);
-                    return (
-                      <div key={flag} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-                        <span className="text-xs font-semibold text-slate-700">{riskFlagLabel(flag)}</span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={checked}
-                          onClick={() => handleManualReviewRiskFlagToggle(flag, !checked)}
-                          className={`relative h-5 w-10 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
-                        >
-                          <span className={`absolute left-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="space-y-2 border-t border-slate-200 pt-3">
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
-                    开启后，需人工确认（manual_required）的回复不再阻断，自动发送；仍走完整发送安全检查，不豁免提示词注入等风险阻断。
-                  </div>
+              <div className="space-y-5">
+                {/* 分组 1：发送策略 */}
+                <section className="space-y-2">
+                  <h3 className="text-xs font-bold text-slate-900">发送策略</h3>
                   <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-                    <span className="text-xs font-semibold text-slate-700">放行需人工确认的回复</span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help text-xs font-semibold text-slate-700">放行需人工确认的回复</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px] text-left">
+                        开=AI 觉得“需要人工再确认”的回复，也照样自动发出去。关=这类回复先拦下来，等人工处理。开了能少被拦截，但回复可能不够完美。
+                      </TooltipContent>
+                    </Tooltip>
                     <button
                       type="button"
                       role="switch"
@@ -3358,7 +3356,128 @@ export default function DouyinAiCsWorkbenchPage() {
                       <span className={`absolute left-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${autoreplySetting.allow_release_manual_required ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
                     </button>
                   </div>
-                </div>
+                  <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help text-xs font-semibold text-slate-700">最低置信度</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[260px] text-left">
+                        AI 对自己回复有多大的把握。低于这个数就不自动发，留给人工。0=不卡，什么都发；0.9=很严格，只有很有把握才发。
+                      </TooltipContent>
+                    </Tooltip>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={autoreplySetting.min_confidence}
+                      onChange={(e) =>
+                        setAutoreplySetting((current) =>
+                          current
+                            ? { ...current, min_confidence: Math.min(1, Math.max(0, Number(e.target.value) || 0)) }
+                            : current,
+                        )
+                      }
+                      className="h-7 w-20 rounded-md border border-slate-300 px-2 text-xs text-slate-800"
+                    />
+                  </div>
+                </section>
+
+                {/* 分组 2：发送频率上限 */}
+                <section className="space-y-2 border-t border-slate-200 pt-3">
+                  <h3 className="text-xs font-bold text-slate-900">发送频率上限</h3>
+                  {[
+                    {
+                      label: "同会话每小时上限",
+                      tip: "和同一个客户，1 小时内最多自动发几条。防止对客户刷屏。",
+                      key: "max_replies_per_conversation_per_hour" as const,
+                      min: 0,
+                      max: 1000,
+                    },
+                    {
+                      label: "同账号每小时上限",
+                      tip: "你这个抖音号，1 小时内最多自动发几条。防止被抖音限流。",
+                      key: "max_replies_per_account_per_hour" as const,
+                      min: 0,
+                      max: 1000,
+                    },
+                    {
+                      label: "同会话每日上限",
+                      tip: "和同一个客户，一天最多自动发几条。",
+                      key: "max_auto_replies_per_conversation_per_day" as const,
+                      min: 0,
+                      max: 1000,
+                    },
+                    {
+                      label: "最小发送间隔(秒)",
+                      tip: "给同一个客户两次自动回复之间最少隔几秒。防止连发骚扰。",
+                      key: "min_interval_seconds" as const,
+                      min: 0,
+                      max: 86400,
+                    },
+                  ].map((item) => (
+                    <div key={item.key} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help text-xs font-semibold text-slate-700">{item.label}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[260px] text-left">
+                          {item.tip}
+                        </TooltipContent>
+                      </Tooltip>
+                      <input
+                        type="number"
+                        min={item.min}
+                        max={item.max}
+                        value={autoreplySetting[item.key]}
+                        onChange={(e) =>
+                          setAutoreplySetting((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  [item.key]: Math.min(item.max, Math.max(item.min, Math.floor(Number(e.target.value) || 0))),
+                                }
+                              : current,
+                          )
+                        }
+                        className="h-7 w-20 rounded-md border border-slate-300 px-2 text-xs text-slate-800"
+                      />
+                    </div>
+                  ))}
+                </section>
+
+                {/* 分组 3：风险转人工开关 */}
+                <section className="space-y-2 border-t border-slate-200 pt-3">
+                  <h3 className="text-xs font-bold text-slate-900">风险转人工开关</h3>
+                  <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] leading-5 text-blue-800">
+                    下面这些是“风险类型”。开=遇到这类回复交给人工处理；关=AI 自动发一条安全的替代回复。
+                  </div>
+                  {MANUAL_REVIEW_RISK_FLAG_OPTIONS.map((flag) => {
+                    const checked = (autoreplySetting.manual_review_risk_flags || []).includes(flag);
+                    return (
+                      <div key={flag} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="cursor-help text-xs font-semibold text-slate-700">{riskFlagLabel(flag)}</span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-[260px] text-left">
+                            {RISK_FLAG_HINTS[flag] || "开=遇到这类风险回复转人工；关=自动发安全替代回复。"}
+                          </TooltipContent>
+                        </Tooltip>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={checked}
+                          onClick={() => handleManualReviewRiskFlagToggle(flag, !checked)}
+                          className={`relative h-5 w-10 rounded-full transition-colors ${checked ? "bg-amber-500" : "bg-slate-300"}`}
+                        >
+                          <span className={`absolute left-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-[22px]" : "translate-x-[3px]"}`} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </section>
+
                 {autoreplySettingsNotice ? (
                   <div className="text-xs text-emerald-600">{autoreplySettingsNotice}</div>
                 ) : null}
