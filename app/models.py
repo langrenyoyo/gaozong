@@ -1526,6 +1526,14 @@ class AiEditJob(Base):
     model_version = Column(String(64), comment="规划模型版本")
     failure_code = Column(String(64), comment="稳定失败码（机器可读）")
     error_summary = Column(Text, comment="错误摘要（不含敏感原文）")
+    # LAS speech_auto 云端混剪字段（2026-07-31 重做）
+    las_task_id = Column(String(128), comment="LAS 返回的 task_id")
+    las_idempotent_id = Column(String(128), comment="提交 LAS 的幂等 ID（持久化复用，重试不重复创建）")
+    las_script = Column(Text, comment="本次成片创作指令（自然语言，≤4000 字）")
+    las_template = Column(String(64), comment="LAS 行业模板，固定 automotive_headtalk")
+    las_business_code = Column(String(64), comment="LAS 业务码（0=成功，非 0=业务失败）")
+    las_error_msg = Column(Text, comment="LAS 失败错误信息")
+    las_metadata_json = Column(Text, comment="LAS 轮询返回的完整 metadata JSON")
 
 
 class AiEditJobArtifact(Base):
@@ -1612,6 +1620,9 @@ class AiEditMaterial(Base):
     manual_confirmed_at = Column(DateTime, comment="人工确认时间")
     purge_operation_id = Column(String(64), comment="永久删除操作 ID")
     purge_status = Column(String(16), comment="永久删除状态（preparing/completed）")
+    # LAS speech_auto 字段（2026-07-31 重做）：TOS 预签名地址喂给 LAS
+    tos_presigned_url = Column(Text, comment="喂给 LAS 的 TOS 预签名 https URL")
+    tos_presigned_expires_at = Column(DateTime, comment="预签名 URL 过期时间")
 
 
 class AiEditMaterialAnalysis(Base):
