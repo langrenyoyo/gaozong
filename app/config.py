@@ -383,6 +383,23 @@ RETURN_VISIT_SILENT_SCAN_BATCH_SIZE = int(
     os.getenv("RETURN_VISIT_SILENT_SCAN_BATCH_SIZE", "200").strip() or "200"
 )
 
+# ---------- AI剪辑 LAS speech_auto 云端混剪（火山引擎 LAS）----------
+# 鉴权与端点（生产从环境变量注入，不入库不入日志原文）
+LAS_API_KEY = os.getenv("LAS_API_KEY", "").strip()
+LAS_BASE_URL = os.getenv("LAS_BASE_URL", "https://operator.las.cn-beijing.volces.com").strip().rstrip("/")
+LAS_POLL_INTERVAL_SECONDS = int(os.getenv("LAS_POLL_INTERVAL_SECONDS", "15").strip() or "15")
+LAS_MAX_WAIT_SECONDS = int(os.getenv("LAS_MAX_WAIT_SECONDS", "1800").strip() or "1800")
+# 预签名 URL 有效期（秒），须大于 LAS_MAX_WAIT_SECONDS
+LAS_TOS_PRESIGN_EXPIRES_SECONDS = int(
+    os.getenv("LAS_TOS_PRESIGN_EXPIRES_SECONDS", str(60 * 60 * 24 * 7)).strip() or str(60 * 60 * 24 * 7)
+)
+# TOS 对象存储凭证（素材上传 + 产物长期保存）
+TOS_ACCESS_KEY = os.getenv("TOS_ACCESS_KEY", "").strip()
+TOS_SECRET_KEY = os.getenv("TOS_SECRET_KEY", "").strip()
+TOS_BUCKET = os.getenv("TOS_BUCKET", "").strip()
+TOS_REGION = os.getenv("TOS_REGION", "cn-beijing").strip()
+TOS_ENDPOINT = os.getenv("TOS_ENDPOINT", "").strip()
+
 # ---------- Phase 8-B 日报附件投递（默认关闭，灰度 allowlist）----------
 # 总开关关闭时只创建 held 投递，不创建可执行任务；production 禁 insecure HTTP。
 DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED = _env_bool("DAILY_REPORT_ATTACHMENT_DELIVERY_ENABLED", False)
