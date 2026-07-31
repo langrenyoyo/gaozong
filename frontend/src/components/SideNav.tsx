@@ -42,6 +42,7 @@ interface SideNavProps {
   onAdminLogout?: () => void;
   adminLoggingOut?: boolean;
   showSalesBadge?: boolean;
+  pendingReviewCount?: number;
   localAgentOnline?: boolean;
   localAgentVersion?: string | null;
   user?: AppUser;
@@ -108,6 +109,7 @@ export default function SideNav({
   onAdminLogout = () => {},
   adminLoggingOut = false,
   showSalesBadge = false,
+  pendingReviewCount = 0,
   localAgentOnline = false,
   localAgentVersion = null,
   user = { account: "18578790007", role: "merchant", roleLabel: "商户账号" },
@@ -228,6 +230,11 @@ export default function SideNav({
                   >
                     <span className="shrink-0">{adminIcons[item.id]}</span>
                     <span className={expanded ? "truncate" : "leading-tight"}>{expanded ? item.expandedLabel : item.label}</span>
+                    {item.id === "ai-reply-records" && pendingReviewCount > 0 ? (
+                      <span className={`grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ${expanded ? "" : "absolute right-1.5 top-1.5"}`}>
+                        {pendingReviewCount > 99 ? "99+" : pendingReviewCount}
+                      </span>
+                    ) : null}
                   </button>
                 );
               })

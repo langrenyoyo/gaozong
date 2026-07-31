@@ -131,6 +131,26 @@ def list_logs(
     return {"success": True, "data": data, "message": "success"}
 
 
+@router.get("/pending-review/count")
+def get_pending_review_count(
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """待审核回复计数：manual_required=true 且尚未标记有效性的回复数。
+
+    用于侧栏红点提示：有 AI 回复被阻断待审核时显示数字。
+    """
+    trusted_merchant_id = _resolve_read_merchant_scope(context, None)
+    query = db.query(AiReplyDecisionLog).filter(
+        AiReplyDecisionLog.manual_required == 1,
+        AiReplyDecisionLog.is_effective.is_(None),
+    )
+    if trusted_merchant_id is not None:
+        query = query.filter(AiReplyDecisionLog.merchant_id == trusted_merchant_id)
+    count = query.count()
+    return {"success": True, "data": {"count": count}, "message": "success"}
+
+
 @router.get("/{log_id}", response_model=AiReplyDecisionLogDetailResponse)
 def get_log_detail(
     log_id: int,

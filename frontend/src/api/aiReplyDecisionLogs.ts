@@ -173,6 +173,14 @@ export async function patchAiReplyDecisionLogEffectiveness(
   return response.data;
 }
 
+// 待审核回复计数（manual_required=true 且未标记有效性）
+export async function getPendingReviewCount(): Promise<number> {
+  const response = (await apiClient.get(
+    "/ai-reply-decision-logs/pending-review/count",
+  )) as unknown as ApiResponse<{ count: number }>;
+  return response.data.count;
+}
+
 export interface AiReplyDecisionBatchEffectivenessResult {
   updated_ids: number[];
   skipped_ids: number[];

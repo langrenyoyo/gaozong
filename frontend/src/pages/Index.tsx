@@ -33,6 +33,7 @@ import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReply
 import { AppUser } from "../App";
 import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
 import SuperAiReplyRecords from "./SuperAiReplyRecords";
+import { getPendingReviewCount } from "../features/douyin-cs/api";
 import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
 import AdminReturnVisitsPage from "./AdminReturnVisitsPage";
 import SuperForbiddenWords from "./SuperForbiddenWords";
@@ -680,6 +681,7 @@ export default function Index({
   const [chatError, setChatError] = useState<string | null>(null);
   const [localAgentOnline, setLocalAgentOnline] = useState(false);
   const [localAgentRuntimeStatus, setLocalAgentRuntimeStatus] = useState<LocalAgentRuntimeStatus | null>(null);
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const conversations = useMemo(() => buildConversations(chatEvents, chatLeads), [chatEvents, chatLeads]);
   const selectedContact =
     conversations.contacts.find((contact) => contact.id === selectedContactId) ||
@@ -811,6 +813,17 @@ export default function Index({
     void loadChatEvents();
   }, [loadChatEvents]);
 
+  // 待审核回复计数（侧栏红点），每 60 秒刷新一次
+  useEffect(() => {
+    if (!user) return;
+    const loadCount = () => {
+      getPendingReviewCount().then(setPendingReviewCount).catch(() => {});
+    };
+    loadCount();
+    const timer = setInterval(loadCount, 60000);
+    return () => clearInterval(timer);
+  }, [user]);
+
   return (
     <main className="h-screen overflow-hidden bg-[#f3f6fa] text-[#1a1f2e]">
       <div
@@ -836,6 +849,7 @@ export default function Index({
           onAdminLogout={onAdminLogout}
           adminLoggingOut={adminLoggingOut}
           showSalesBadge={Boolean(douyinAccount)}
+          pendingReviewCount={pendingReviewCount}
           localAgentOnline={localAgentOnline}
           localAgentVersion={localAgentRuntimeStatus?.version || null}
           user={user}

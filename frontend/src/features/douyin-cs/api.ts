@@ -44,6 +44,8 @@ export {
   getAiAutoReplyRuns,
 } from "../../api/aiAutoReplyRuns";
 
+export { getPendingReviewCount } from "../../api/aiReplyDecisionLogs";
+
 export {
   bindAuthorizedOpenId,
   fetchDouyinLiveCheckAuthUrl,
