@@ -69,7 +69,7 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
         }
         if analysis is None:
             analysis = AiEditMaterialAnalysis(
-                material_id=material_id,
+                material_id=str(material_id),
                 source_sha256=material.source_sha256,
                 analysis_version="ark_v1",
                 transcript_json=json.dumps(analysis_data, ensure_ascii=False),
