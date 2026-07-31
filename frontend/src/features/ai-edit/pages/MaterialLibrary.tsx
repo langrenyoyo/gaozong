@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   ClapperboardIcon,
   FilmIcon,
+  LoaderIcon,
   PlayIcon,
   SearchIcon,
   Trash2Icon,
@@ -21,13 +22,14 @@ type CategoryKey = "全部" | "口播" | "高光";
 const TYPE_CLASS: Record<string, string> = {
   口播: "bg-[#eff6ff] text-[#2563eb]",
   高光: "bg-[#d1fae5] text-[#047857]",
+  分析中: "bg-slate-100 text-slate-500",
 };
 
-function materialCategory(m: AiEditMaterial): "口播" | "高光" | "未分类" {
+function materialCategory(m: AiEditMaterial): "口播" | "高光" | "分析中" {
   const c = (m.category || "").trim();
   if (c === "口播" || c === "spoken") return "口播";
   if (c === "高光" || c === "broll" || c === "highlight") return "高光";
-  return "未分类";
+  return "分析中";
 }
 
 function materialDate(m: AiEditMaterial): string {
@@ -81,6 +83,14 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
     void load();
   }, [load]);
 
+  // 有素材分析中时，每 5 秒自动刷新列表（分析完成后自动更新标签/文案）
+  const hasAnalyzing = materials.some((m) => m.analysis_status === "analyzing" || m.analysis_status === "pending");
+  useEffect(() => {
+    if (!hasAnalyzing) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [hasAnalyzing, load]);
+
   const filtered = useMemo(() => {
     return materials.filter((m) => {
       const mc = materialCategory(m);
@@ -120,7 +130,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
       let fail = 0;
       for (const file of files) {
         try {
-          await uploadMaterialToTos(file, tosCategory);
+          await uploadMaterialToTos(file);
           ok += 1;
         } catch {
           fail += 1;
@@ -262,11 +272,16 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
                             <div className="mt-1 text-[11px] text-[#98a2b3]">
                               {item.duration_seconds ? `时长 ${formatDuration(item.duration_seconds)}` : (item.tos_presigned_url ? "已上传到云" : "本机")}
                             </div>
-                            {mc !== "未分类" ? (
+                            {mc !== "分析中" ? (
                               <span className={`mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${TYPE_CLASS[mc]}`}>
                                 {mc}
                               </span>
-                            ) : null}
+                            ) : (
+                              <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                                <LoaderIcon size={10} className="animate-spin" />
+                                分析中
+                              </span>
+                            )}
                           </div>
                         </button>
                       );
