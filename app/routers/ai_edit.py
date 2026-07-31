@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -218,6 +218,93 @@ def register_material(
         ) from exc
     db.commit()
     return _ok(svc.to_material_out(material).model_dump())
+
+
+@router.post("/materials/upload-tos")
+def upload_material_to_tos(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """上传素材到 TOS 并生成预签名 URL（喂给 LAS speech_auto）。
+
+    纯 LAS 云端方案：本地文件 → TOS 直传 → 预签名 https URL。
+    上传后创建/更新 AiEditMaterial（storage_mode=cloud_available，写 tos_presigned_url）。
+    仅 auto_wechat:ai_edit 权限 + 商户隔离。
+    """
+    import hashlib
+    import uuid
+    from datetime import datetime, timedelta
+
+    from app import config
+    from app.services.las_tos_uploader import TOSUploader, UploadError
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+
+    # 校验文件类型（仅视频）
+    filename = file.filename or "material.mp4"
+    allowed_exts = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".flv", ".webm")
+    if not filename.lower().endswith(allowed_exts):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_VIDEO_TYPE", "message": "仅支持视频文件"})
+
+    # 读文件内容（限制大小 500MB）
+    content = file.file.read()
+    max_size = 500 * 1024 * 1024
+    if len(content) > max_size:
+        raise HTTPException(status_code=413, detail={"code": "FILE_TOO_LARGE", "message": "文件不能超过 500MB"})
+
+    source_sha256 = hashlib.sha256(content).hexdigest()
+
+    # 写临时文件供 TOSUploader 上传
+    import os
+    import tempfile
+    tmp_path = os.path.join(tempfile.gettempdir(), f"ai-edit-tos-{uuid.uuid4().hex}-{filename}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        try:
+            uploader = TOSUploader(prefix=f"ai-edit/{merchant_id}")
+            presigned_url = uploader.upload_and_presign(tmp_path)
+            tos_key = uploader._key_for(tmp_path)
+        except UploadError as exc:
+            raise HTTPException(status_code=502, detail={"code": "TOS_UPLOAD_FAILED", "message": str(exc)})
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    expires_at = datetime.now() + timedelta(seconds=config.LAS_TOS_PRESIGN_EXPIRES_SECONDS)
+
+    # 创建/更新素材记录（storage_mode=cloud_available，写 tos 字段）
+    material_id = f"tos-{uuid.uuid4().hex[:16]}"
+    from app.models import AiEditMaterial
+    material = AiEditMaterial(
+        material_id=material_id,
+        merchant_id=merchant_id,
+        scope="merchant",
+        media_type="video",
+        storage_mode="cloud_available",
+        agent_client_id=None,
+        source_sha256=source_sha256,
+        analysis_status="pending",
+        stabilization_status="pending",
+        display_name=filename,
+        tos_presigned_url=presigned_url,
+        tos_presigned_expires_at=expires_at,
+    )
+    db.add(material)
+    db.commit()
+    db.refresh(material)
+    return _ok({
+        "material_id": material.material_id,
+        "tos_key": tos_key,
+        "tos_presigned_url": presigned_url,
+        "tos_presigned_expires_at": expires_at.isoformat(),
+        "source_sha256": source_sha256,
+        "display_name": filename,
+    })
 
 
 @router.delete("/materials/{material_id}")
