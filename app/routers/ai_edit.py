@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -223,7 +223,7 @@ def register_material(
 @router.post("/materials/upload-tos")
 def upload_material_to_tos(
     file: UploadFile = File(...),
-    category: str = "",
+    category: str = Form(""),
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
@@ -280,25 +280,40 @@ def upload_material_to_tos(
 
     expires_at = datetime.now() + timedelta(seconds=config.LAS_TOS_PRESIGN_EXPIRES_SECONDS)
 
-    # 创建/更新素材记录（storage_mode=cloud_available，写 tos 字段）
-    material_id = f"tos-{uuid.uuid4().hex[:16]}"
+    # 幂等：同 merchant_id + source_sha256 已存在则更新（刷新预签名 URL），不存在才新建
     from app.models import AiEditMaterial
-    material = AiEditMaterial(
-        material_id=material_id,
-        merchant_id=merchant_id,
-        scope="merchant",
-        media_type="video",
-        storage_mode="cloud_available",
-        agent_client_id=None,
-        source_sha256=source_sha256,
-        analysis_status="pending",
-        stabilization_status="pending",
-        display_name=filename,
-        tos_presigned_url=presigned_url,
-        tos_presigned_expires_at=expires_at,
-        category=(category.strip() or None),
+    material = (
+        db.query(AiEditMaterial)
+        .filter(AiEditMaterial.merchant_id == merchant_id)
+        .filter(AiEditMaterial.source_sha256 == source_sha256)
+        .first()
     )
-    db.add(material)
+    if material is not None:
+        material.display_name = filename
+        material.tos_presigned_url = presigned_url
+        material.tos_presigned_expires_at = expires_at
+        material.storage_mode = "cloud_available"
+        if category.strip():
+            material.category = category.strip()
+        material.updated_at = datetime.now()
+    else:
+        material_id = f"tos-{uuid.uuid4().hex[:16]}"
+        material = AiEditMaterial(
+            material_id=material_id,
+            merchant_id=merchant_id,
+            scope="merchant",
+            media_type="video",
+            storage_mode="cloud_available",
+            agent_client_id=None,
+            source_sha256=source_sha256,
+            analysis_status="pending",
+            stabilization_status="pending",
+            display_name=filename,
+            tos_presigned_url=presigned_url,
+            tos_presigned_expires_at=expires_at,
+            category=(category.strip() or None),
+        )
+        db.add(material)
     db.commit()
     db.refresh(material)
     return _ok({
