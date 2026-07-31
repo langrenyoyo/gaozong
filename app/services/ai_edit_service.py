@@ -395,6 +395,7 @@ def to_material_out(material: AiEditMaterial) -> AiEditMaterialOut:
         display_name=material.display_name,
         tos_presigned_url=material.tos_presigned_url,
         tos_presigned_expires_at=material.tos_presigned_expires_at,
+        category=material.category,
     )
 
 

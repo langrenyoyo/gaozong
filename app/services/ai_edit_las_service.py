@@ -189,6 +189,61 @@ def _persist_artifacts(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -
         db.add(artifact)
 
 
+def list_las_jobs(
+    db: Session,
+    *,
+    merchant_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """查 LAS 混剪任务列表（商户隔离，分页 + 状态筛选）。"""
+    query = (
+        db.query(AiEditJob)
+        .filter(AiEditJob.merchant_id == merchant_id)
+        .filter(AiEditJob.source_type == "las_speech_auto")
+    )
+    if status:
+        query = query.filter(AiEditJob.status == status)
+    total = query.count()
+    rows = (
+        query.order_by(AiEditJob.created_at.desc(), AiEditJob.id.desc())
+        .offset(max(page - 1, 0) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": [_las_job_summary(db, j) for j in rows],
+    }
+
+
+def _las_job_summary(db: Session, job: AiEditJob) -> dict[str, Any]:
+    """单条任务摘要 + 产物（列表项）。"""
+    artifacts = (
+        db.query(AiEditJobArtifact)
+        .filter(AiEditJobArtifact.job_id == job.id)
+        .all()
+    )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "stage": job.stage,
+        "progress": job.progress,
+        "las_task_id": job.las_task_id,
+        "error_message": job.las_error_msg,
+        "failure_code": job.failure_code,
+        "created_at": job.created_at,
+        "completed_at": job.completed_at,
+        "artifacts": [
+            {"artifact_type": a.artifact_type, "url": a.storage_key, "file_name": a.file_name}
+            for a in artifacts
+        ],
+    }
+
+
 def get_las_job_status(db: Session, *, merchant_id: str, job_id: int) -> dict[str, Any] | None:
     """查 LAS 任务状态 + 产物（脱敏：不返回 tos_path 原始，只返回 url 预览链接）。"""
     job = (

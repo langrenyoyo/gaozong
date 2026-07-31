@@ -223,6 +223,7 @@ def register_material(
 @router.post("/materials/upload-tos")
 def upload_material_to_tos(
     file: UploadFile = File(...),
+    category: str = "",
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
@@ -293,6 +294,7 @@ def upload_material_to_tos(
         display_name=filename,
         tos_presigned_url=presigned_url,
         tos_presigned_expires_at=expires_at,
+        category=(category.strip() or None),
     )
     db.add(material)
     db.commit()
@@ -578,6 +580,29 @@ class LasJobCreateRequest(BaseModel):
     template: str = Field(default="automotive_headtalk", description="行业模板")
     output_tos_path: str | None = Field(default=None, description="产物输出 TOS 目录，可空")
     idempotent_id: str | None = Field(default=None, description="幂等 ID，复用可避免重复创建")
+
+
+@router.get("/las/jobs")
+def list_las_jobs_route(
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """查 LAS 混剪任务列表（商户隔离，分页 + 状态筛选）。"""
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    data = las_svc.list_las_jobs(
+        db,
+        merchant_id=merchant_id,
+        page=page,
+        page_size=min(max(page_size, 1), 100),
+        status=status,
+    )
+    return _ok(data)
 
 
 @router.post("/las/jobs")
