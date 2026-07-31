@@ -589,7 +589,12 @@ def record_usage(
     if ratio is None:
         raise ValueError("MARKUP_RATIO_NOT_FOUND")
     effective_markup = ratio.markup_basis_points if ratio.enabled else 0
-    billed_tokens = calculate_billed_tokens(tokens, effective_markup)
+    # custom 模式：按固定单次定额计费（忽略传入 actual tokens）；actual 模式：按实际用量
+    if ratio.enabled and getattr(ratio, "consumption_mode", "actual") == "custom" and ratio.fixed_tokens_per_call:
+        base_tokens = int(ratio.fixed_tokens_per_call)
+    else:
+        base_tokens = tokens
+    billed_tokens = calculate_billed_tokens(base_tokens, effective_markup)
     account = get_or_create_account(db, merchant_id, autocommit=False)
     _write_transaction(
         db,
@@ -631,10 +636,17 @@ def update_markup_ratio(
     capability_key: str,
     markup_basis_points: int,
     enabled: bool,
+    consumption_mode: str = "actual",
+    fixed_tokens_per_call: int | None = None,
 ) -> ComputeMarkupRatio:
-    """更新指定能力的上浮比例与启用位；未知能力拒绝，不允许改 capability_key。"""
+    """更新指定能力的上浮比例、启用位、消耗模式与固定单次定额；未知能力拒绝，不允许改 capability_key。
+
+    consumption_mode：actual=按实际用量计费；custom=按固定单次定额计费。
+    """
     if capability_key not in COMPUTE_CAPABILITY_KEYS:
         raise ValueError("INVALID_CAPABILITY")
+    if consumption_mode not in ("actual", "custom"):
+        raise ValueError("INVALID_CONSUMPTION_MODE")
     ratio = (
         db.query(ComputeMarkupRatio)
         .filter(ComputeMarkupRatio.capability_key == capability_key)
@@ -645,6 +657,8 @@ def update_markup_ratio(
         raise ValueError("MARKUP_RATIO_DRIFT")
     ratio.markup_basis_points = markup_basis_points
     ratio.enabled = enabled
+    ratio.consumption_mode = consumption_mode
+    ratio.fixed_tokens_per_call = fixed_tokens_per_call if consumption_mode == "custom" else None
     ratio.updated_at = _now()
     db.commit()
     db.refresh(ratio)

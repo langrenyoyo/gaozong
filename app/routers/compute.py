@@ -404,7 +404,12 @@ def admin_update_markup_ratio(
         _require_compute_config_admin(context)
         try:
             ratio = compute_service.update_markup_ratio(
-                db, capability_key, payload.markup_basis_points, payload.enabled
+                db,
+                capability_key,
+                payload.markup_basis_points,
+                payload.enabled,
+                consumption_mode=payload.consumption_mode,
+                fixed_tokens_per_call=payload.fixed_tokens_per_call,
             )
         except ValueError as exc:
             code = str(exc)

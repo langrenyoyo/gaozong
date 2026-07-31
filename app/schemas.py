@@ -2212,22 +2212,26 @@ class ComputeMarkupRatioOut(BaseModel):
 
     id: int
     capability_key: Literal[
-        "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge"
+        "douyin-cs", "leads", "agents", "wechat-assistant", "compute", "knowledge", "ai_edit"
     ]
     markup_basis_points: int
     enabled: bool = True
+    consumption_mode: str = "actual"
+    fixed_tokens_per_call: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
 
 class ComputeMarkupRatioUpdate(BaseModel):
-    """算力上浮比例更新请求（只允许改 markup/enabled，禁止改 capability_key）。"""
+    """算力上浮比例更新请求（只允许改 markup/enabled/consumption，禁止改 capability_key）。"""
 
     model_config = {"extra": "forbid"}
     markup_basis_points: int = Field(
         ..., ge=0, le=2_147_483_647, description="上浮基点（非负，≤ PostgreSQL INTEGER 上界）"
     )
     enabled: bool = Field(..., description="是否启用该能力的上浮")
+    consumption_mode: str = Field(default="actual", description="消耗模式 actual/custom")
+    fixed_tokens_per_call: Optional[int] = Field(default=None, ge=1, description="custom 模式固定单次 Token 定额")
 
 
 class ComputeMarkupRatioListResponse(BaseModel):
