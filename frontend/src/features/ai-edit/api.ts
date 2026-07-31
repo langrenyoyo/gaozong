@@ -46,9 +46,10 @@ export interface TosUploadResult {
 }
 
 /** 上传素材到 TOS 生成预签名 URL（喂给 LAS 混剪）。 */
-export async function uploadMaterialToTos(file: File): Promise<TosUploadResult> {
+export async function uploadMaterialToTos(file: File, category?: string): Promise<TosUploadResult> {
   const form = new FormData();
   form.append("file", file);
+  if (category) form.append("category", category);
   return unwrap(await apiClient.post("/ai-edit/materials/upload-tos", form, {
     headers: { "Content-Type": "multipart/form-data" },
   }));

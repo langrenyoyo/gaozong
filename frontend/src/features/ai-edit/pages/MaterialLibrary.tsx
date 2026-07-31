@@ -106,7 +106,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
       let fail = 0;
       for (const file of files) {
         try {
-          await uploadMaterialToTos(file);
+          await uploadMaterialToTos(file, tosCategory);
           ok += 1;
         } catch {
           fail += 1;

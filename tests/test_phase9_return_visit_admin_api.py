@@ -641,3 +641,85 @@ def test_no_write_send_endpoints():
             lowered = path.lower()
             for bad in forbidden_substrings:
                 assert bad not in lowered, f"路径不应含发送类关键字 {bad}: {path}"
+
+
+def test_create_prompt_creates_custom_scene_and_writes_audit():
+    """POST /admin/return-visit-prompts 创建自定义场景，系统生成 custom_ key + 审计。"""
+    _seed_prompts()
+    client = _client(_context())
+    response = client.post(
+        "/admin/return-visit-prompts",
+        json={
+            "name": "客户留资",
+            "scene_description": "客户表达价格/到店/试驾意向时优先确认称呼手机号",
+            "template_text": "您好，请提供您的称呼和联系方式",
+            "fallback_message": "请稍后人工跟进",
+            "confidence_threshold": 0.85,
+            "enabled": True,
+            "action_type": "notify_sales",
+            "trigger_source_type": "writeback",
+            "reason": "新增客户留资场景",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["prompt_key"].startswith("custom_")
+    assert data["name"] == "客户留资"
+    assert data["scene_description"] == "客户表达价格/到店/试驾意向时优先确认称呼手机号"
+    assert data["action_type"] == "notify_sales"
+    assert data["trigger_source_type"] == "writeback"
+    # 审计写入
+    db = TestSession()
+    try:
+        audit = db.query(AutoReplyAdminAuditLog).filter(AutoReplyAdminAuditLog.action == "return_visit_prompt_create").one()
+        assert audit.target_id == data["prompt_key"]
+    finally:
+        db.close()
+
+
+def test_create_prompt_rejects_invalid_action_type():
+    """POST 创建场景 action_type 非法 → 422。"""
+    _seed_prompts()
+    client = _client(_context())
+    response = client.post(
+        "/admin/return-visit-prompts",
+        json={
+            "name": "测试场景",
+            "scene_description": "描述",
+            "template_text": "话术",
+            "fallback_message": "兜底",
+            "confidence_threshold": 0.85,
+            "enabled": True,
+            "action_type": "invalid_action",
+            "reason": "测试",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_update_prompt_writes_new_fields():
+    """PUT 更新场景可写 scene_description/action_type/cooldown_hours 等新字段。"""
+    _seed_prompts()
+    client = _client(_context())
+    response = client.put(
+        "/admin/return-visit-prompts/retain_contact_conversion",
+        json={
+            "template_text": "更新话术",
+            "fallback_message": "更新兜底",
+            "confidence_threshold": 0.80,
+            "enabled": False,
+            "reason": "测试新字段",
+            "scene_description": "新描述",
+            "action_type": "send_light_reminder",
+            "silence_hours": 24,
+            "trigger_source_type": "silent_scan",
+            "cooldown_hours": 48,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["scene_description"] == "新描述"
+    assert data["action_type"] == "send_light_reminder"
+    assert data["silence_hours"] == 24
+    assert data["trigger_source_type"] == "silent_scan"
+    assert data["cooldown_hours"] == 48

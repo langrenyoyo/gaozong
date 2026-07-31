@@ -155,7 +155,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 | 轨道 | 位置 | 说明 |
 |---|---|---|
 | SQLite 顺序迁移 | `migrations/migrate_sqlite.py` + `migrations/versions/0001~0029+.sql` | 开发/过渡库 |
-| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0022） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0），0020 为 `douyin_account_autoreply_settings.allow_release_manual_required`（账号级放行需人工确认回复开关），0021 为回访动态场景配置 + ReturnVisitFollowupTask 表，0022 为 `ai_edit_jobs`/`ai_edit_materials` LAS 字段；冻结不回退已落地迁移 |
+| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0024） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0），0020 为 `douyin_account_autoreply_settings.allow_release_manual_required`（账号级放行需人工确认回复开关），0021 为回访动态场景配置 + ReturnVisitFollowupTask 表，0022 为 `ai_edit_jobs`/`ai_edit_materials` LAS 字段，0023 为 `compute_markup_ratios` 补 ai_edit 行，0024 为 `compute_markup_ratios` 加消耗模式 consumption_mode/fixed_tokens_per_call；冻结不回退已落地迁移 |
 | PostgreSQL Alembic（9100） | `migrations/postgres/xg_douyin_ai_cs/`（0001 空基线 + 0002 RAG metadata 7 表 + 0003 `llm_call_logs.conversation_id` 列 bigint→varchar(255)） | |
 
 注意：`wechat_tasks` 是历史遗留——SQLite 主线库由 ORM create_all 建、不在 0001-0028 中（0029 用 `CREATE TABLE IF NOT EXISTS` 壳统一）；PG 由 0003 建。
