@@ -1,11 +1,27 @@
 """联系方式提取纯 service。"""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
 ContactExtractStatus = Literal["matched", "not_matched", "empty_text", "parse_failed"]
+
+# 联系方式确定性状态机五态：9000 判定，9100 消费
+ContactStatus = Literal["NONE", "PARTIAL", "VALID", "INVALID", "AMBIGUOUS"]
+
+
+@dataclass(frozen=True)
+class ContactState:
+    """联系方式确定性状态。不暴露完整号码，仅保留脱敏值。"""
+
+    status: ContactStatus
+    type: str | None = None  # "mobile" | "wechat" | None
+    normalized_value: str | None = None
+    masked_value: str | None = None
+    source_message_ids: list[int] = field(default_factory=list)
+    fragment_count: int = 1
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -244,3 +260,125 @@ def _detect_partial_phone(text: str) -> str | None:
             continue
         return digits
     return None
+
+
+# ---- 联系方式确定性状态机（9000 判定，9100 消费） ----
+# 手机号常见分隔符：空格、短横、破折号、中划线、点、括号
+_PHONE_SEPARATORS = " -—–·.()（）"
+# 完整 11 位中国大陆手机号
+_FULL_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+# 宽松匹配：允许号码中间夹分隔符，可选区号前缀（+86 / 0086）
+_PHONE_LOOSE_RE = re.compile(
+    r"(?<!\d)(?:(?:\+|00)?86[\s \-—–·.()（）]*)?(1[3-9][\d \-—–·.()（）]{8,16}\d)(?!\d)"
+)
+# 歧义片段：数字 + 短非分隔符段（字母/中文）+ 数字，疑似被打断的号码
+_AMBIGUOUS_FRAGMENT_RE = re.compile(r"(?<!\d)(\d{3,}[^\d\s\-—–·.()（）]{1,3}\d{3,})")
+
+
+def normalize_phone_digits(text: str | None) -> str:
+    """剥离手机号常见分隔符，返回纯数字串（不去除其他文字）。
+
+    仅用于号码判定；区号前缀（+86/0086）在宽松匹配里作为可选项处理。
+    """
+    s = str(text or "")
+    for ch in _PHONE_SEPARATORS:
+        s = s.replace(ch, "")
+    return s
+
+
+def _extract_loose_phone(text: str) -> str | None:
+    """从含分隔符/区号前缀的文本中提取规范化后的完整手机号（纯 11 位数字）。"""
+    s = str(text or "")
+    if not s.strip():
+        return None
+    for match in _PHONE_LOOSE_RE.finditer(s):
+        digits = normalize_phone_digits(match.group(1))
+        if _FULL_PHONE_RE.match(digits):
+            return digits
+    return None
+
+
+def _mask_partial_phone(digits: str) -> str:
+    """对不完整/无效号码片段做脱敏。"""
+    if len(digits) >= 7:
+        return f"{digits[:3]}***{digits[-2:]}"
+    return "***"
+
+
+def analyze_contact_state(
+    text: str | None,
+    *,
+    fragment_count: int = 1,
+    source_message_ids: list[int] | None = None,
+) -> ContactState:
+    """对单段文本做确定性联系方式状态判定。
+
+    判定顺序：完整手机号（含分隔符/区号）→ 完整微信号 → 整段疑似号码片段 →
+    夹在文字中的不完整号码 → 歧义片段 → 无联系方式。
+    不把号码是否合法交给 LLM；返回值仅含脱敏号码。
+    """
+    msg_ids = list(source_message_ids or [])
+    raw = str(text or "")
+
+    # 1. 完整手机号（兼容 138-0013-8000 / +86 138 0013 8000）
+    loose_phone = _extract_loose_phone(raw)
+    if loose_phone:
+        return ContactState(
+            status="VALID",
+            type="mobile",
+            normalized_value=loose_phone,
+            masked_value=mask_contact_value("phone", loose_phone),
+            source_message_ids=msg_ids,
+            fragment_count=fragment_count,
+            reason_code="valid_mobile",
+        )
+
+    extracted = extract_contacts_from_text(raw)
+    # 2. 完整微信号
+    if extracted.wechat:
+        return ContactState(
+            status="VALID",
+            type="wechat",
+            normalized_value=extracted.wechat,
+            masked_value=mask_contact_value("wechat", extracted.wechat),
+            source_message_ids=msg_ids,
+            fragment_count=fragment_count,
+            reason_code="valid_wechat",
+        )
+
+    # 3. 整段疑似号码（仅分隔符+数字）→ 按位数判 PARTIAL/INVALID
+    digits = normalize_phone_digits(raw)
+    if digits.isdigit() and len(digits) >= 7:
+        if len(digits) == 11:
+            return ContactState(
+                "INVALID", "mobile", None, _mask_partial_phone(digits),
+                msg_ids, fragment_count, "invalid_mobile_prefix",
+            )
+        if len(digits) > 11:
+            return ContactState(
+                "INVALID", "mobile", None, _mask_partial_phone(digits),
+                msg_ids, fragment_count, "mobile_too_long",
+            )
+        # 7-10 位
+        return ContactState(
+            "PARTIAL", "mobile", None, _mask_partial_phone(digits),
+            msg_ids, fragment_count, "mobile_too_short",
+        )
+
+    # 4. 夹在文字中的 7-10 位不完整号码片段
+    partial = _detect_partial_phone(raw)
+    if partial:
+        return ContactState(
+            "PARTIAL", "mobile", None, _mask_partial_phone(partial),
+            msg_ids, fragment_count, "mobile_too_short",
+        )
+
+    # 5. 歧义片段：数字被单个非分隔符字符打断，疑似号码但不完整
+    if _AMBIGUOUS_FRAGMENT_RE.search(raw):
+        return ContactState(
+            "AMBIGUOUS", "mobile", None, None,
+            msg_ids, fragment_count, "ambiguous_fragment",
+        )
+
+    # 6. 无联系方式
+    return ContactState("NONE", None, None, None, msg_ids, fragment_count, "no_contact")

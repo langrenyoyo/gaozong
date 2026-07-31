@@ -26,6 +26,8 @@ from app.services.douyin_autoreply_settings_service import (
     parse_direct_llm_policy,
 )
 from app.services.douyin_conversation_history_service import build_reply_conversation_context
+from app.services.contact_completion_resolver import resolve_contact_with_completion
+from app.services.contact_extractor import analyze_contact_state, mask_contact_value
 from app.services.forbidden_word_service import load_forbidden_words_for_llm
 from app.services.douyin_workbench_conversation_service import get_latest_private_message_state
 from app.services.xg_douyin_ai_cs_client import (
@@ -304,6 +306,17 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         "direct_llm_policy": direct_llm_policy,
         # 第五节：违禁词注入 9100，生成后确定性检查；9000 自动回复链路不再生成前替换。
         "forbidden_words": load_forbidden_words_for_llm(db),
+        # R1 阻断项二：9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源。
+        # 仅含脱敏值，不传完整手机号/微信号。
+        **_build_request_contact_state(
+            db,
+            latest_message=latest_message,
+            merchant_id=binding.merchant_id or "",
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
+            from_user_id=customer_open_id or "",
+            customer_memory=reply_context.customer_memory,
+        ),
     }
     run = AiAutoReplyRun(
         **{
@@ -896,6 +909,83 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+# ContactAction 与 contact_state 一一对应的留资动作（9100 消费，指令 3.2）
+_CONTACT_ACTION_BY_STATE = {
+    "VALID": "CONFIRM_AND_CONVERT",
+    "PARTIAL": "REQUEST_COMPLETION",
+    "INVALID": "REQUEST_RECHECK",
+    "AMBIGUOUS": "REQUEST_CLARIFY",
+    "NONE": "NONE",
+}
+
+
+def _build_request_contact_state(
+    db,
+    *,
+    latest_message: str,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_short_id: str,
+    from_user_id: str,
+    customer_memory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源。
+
+    综合跨 AI 回复补全（事件溯源）与客户记忆已有的联系方式，仅输出脱敏值。
+    异常时不伪装为可信 request：返回空 dict 省略全部 contact 字段，
+    由 9100 用共享状态机执行 local_fallback；异常不阻断回复主链路。
+    """
+    try:
+        if not merchant_id or not account_open_id or not conversation_short_id or not from_user_id:
+            state = analyze_contact_state(latest_message)
+        else:
+            _combined, state = resolve_contact_with_completion(
+                db,
+                current_text=latest_message,
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                conversation_short_id=conversation_short_id,
+                from_user_id=from_user_id,
+            )
+        status = state.status
+        # 客户记忆已有有效联系方式 → 视为 VALID（单一可信源，与 9100 本地推断一致）
+        if status == "NONE":
+            memory = customer_memory or {}
+            mem_contact = memory.get("contact") if isinstance(memory, dict) else None
+            if isinstance(mem_contact, dict) and mem_contact.get("has_contact"):
+                status = "VALID"
+        masked = state.masked_value
+        if status == "VALID" and not masked and (customer_memory or {}).get("contact", {}).get("masked_values"):
+            masked = (customer_memory or {}).get("contact", {}).get("masked_values", [None])[0]
+        return {
+            "contact_state": {
+                "status": status,
+                "type": state.type,
+                "masked_value": masked,
+                "fragment_count": state.fragment_count,
+                "reason_code": state.reason_code,
+            },
+            "contact_action": _CONTACT_ACTION_BY_STATE.get(status, "NONE"),
+            "contact_state_source": "request",
+        }
+    except Exception:
+        # 异常降级：不伪装为可信 request，省略全部 contact 字段，
+        # 由 9100 用共享状态机执行 local_fallback；异常不阻断主链路。
+        # 日志只记录安全上下文（脱敏标识），不记录完整手机号/微信号/客户原文。
+        import sys as _sys
+        exc_type = _sys.exc_info()[0] or RuntimeError
+        logger.warning(
+            "ai_auto_reply_contact_state_failed stage=build_request_contact_state "
+            "fallback=local merchant_id=%s douyin_account_id=%s conversation_id=%s "
+            "error_type=%s",
+            merchant_id,
+            _short(account_open_id),
+            conversation_short_id,
+            exc_type.__name__,
+        )
+        return {}
 
 
 def _json_dumps(value: Any) -> str:

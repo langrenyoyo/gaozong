@@ -504,9 +504,9 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
         "agent_name": "AI客服",
         "merchant_name": "小高知识库训练",
     }
+    # A1：训练端与自动回复端共用 V2.0 固定模板与 JSON 结构化输出契约，
+    # 不为训练端维护另一套纯文本 Prompt；内部解析结构化结果后提取 reply_text 供展示。
     system_prompt = _build_fixed_prompt_template(merchant_prompt)
-    # training/ask 只需纯文本回复，覆盖 V2.0 模板的 JSON 输出要求
-    system_prompt += "\n\n## 训练问答输出要求\n本次为训练问答测试，请直接输出一条可用于商家的回复文本，不要输出 JSON 结构。"
     messages = [
         {
             "role": "system",
@@ -563,7 +563,7 @@ def _build_user_prompt(payload: KnowledgeTrainingAskInput, source_chunks: list) 
         f"客户问题：{payload.question}",
         f"{KNOWLEDGE_BASE_NAME}：{knowledge_text or '未命中可用内容'}",
         "如果小高知识库命中 AI 抖音客服自动回复训练反馈：有用样本优先借鉴；一般样本只吸收有效信息并优化表达；不准样本只能作为避坑提醒，禁止照抄其中的 AI 原始回复。",
-        "请给出一条可直接用于商家人工参考的回复建议。",
+        "请按系统提示词的输出 Schema 返回 JSON；reply_text 字段为可直接用于商家人工参考的回复建议。",
     ]
     return "\n".join(parts)
 

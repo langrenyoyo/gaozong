@@ -155,6 +155,11 @@ class ReplySuggestionRequest(BaseModel):
     account_open_id: str | None = None
     direct_llm_policy: dict | None = None
     forbidden_words: list[str] | None = None
+    # ContactState 单一可信源（R1 阻断项二）：9000 计算后注入，9100 优先消费。
+    # 仅含脱敏值，不得传输完整手机号/微信号/原始待拼接号码。
+    contact_state: dict | None = None
+    contact_action: str | None = None
+    contact_state_source: str | None = None
 
 
 class RecommendedVehicle(BaseModel):
@@ -189,6 +194,17 @@ class ReplySuggestionResponse(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     rag_sources: list[dict] = Field(default_factory=list)
     decision_version: str | None = None
+    # A7：轻量可观测字段（不记录完整 Prompt/手机号/微信号/历史/审核轨迹）
+    prompt_version: str | None = None
+    prompt_template_hash: str | None = None
+    rag_policy_version: str | None = None
+    llm_call_count: int | None = None
+    llm_primary_ms: int | None = None
+    llm_retry_ms: int | None = None
+    reply_char_count: int | None = None
+    reply_sentence_count: int | None = None
+    reply_question_count: int | None = None
+    reply_suggestion_total_ms: int | None = None
     error_code: str | None = None
     timeout_layer: str | None = None
     elapsed_ms: int | None = None

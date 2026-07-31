@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any
@@ -34,7 +35,11 @@ from app.models import (
     WechatTask,
 )
 from app.services import assign_service, wechat_task_service
-from app.services.contact_extractor import ContactExtractResult, extract_contacts_from_text
+from app.services.contact_extractor import (
+    ContactExtractResult,
+    analyze_contact_state,
+    extract_contacts_from_text,
+)
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
 from app.services.douyin_webhook_idempotency_service import claim_webhook_event
 from app.services.douyin_outbound_message_classifier import (
@@ -222,42 +227,143 @@ def normalize_message_text(content: dict[str, Any]) -> str:
     return ""
 
 
-def _combine_recent_customer_text(
-    db, current_text: str, account_open_id: str, conversation_short_id: str, from_user_id: str, limit: int = 5
-) -> str:
-    """拼接当前消息 + 最近 N 条同会话客户消息，用于分段发送的联系方式合并提取。
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
-    客户分两条发"1770206"+"5816"时，各自不满足 11 位手机号正则；
-    拼接后"17702065816"可被正确提取。
+
+def _event_text(evt) -> str:
+    """从 webhook 事件 raw_body 解析出归一化文本。"""
+    try:
+        content = json.loads(evt.raw_body or "{}").get("content", {})
+        if isinstance(content, str):
+            content = json.loads(content)
+        return normalize_message_text(content)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+
+def _seconds_between(t1, t0) -> float:
+    """计算时间差（秒）；naive/aware 混用时退化为 0（按 id 单调，不裁剪时间窗）。"""
+    if t1 is None or t0 is None:
+        return 0.0
+    try:
+        return (t1 - t0).total_seconds()
+    except TypeError:
+        return 0.0
+
+
+def _collect_recent_customer_fragments(
+    db,
+    *,
+    account_open_id: str,
+    conversation_short_id: str,
+    from_user_id: str,
+    window_seconds: int,
+    max_messages: int,
+) -> list[str]:
+    """收集时间窗口内、中间无客服回复的连续客户消息文本（时间正序，不含当前消息）。
+
+    遇到客服回复即停止回溯，避免把客服介入后的无关数字拼入号码。
+    同时覆盖收发双方事件（im_receive_msg 的 to_user_id=账号，im_send_msg 的 from_user_id=账号）。
     """
-    if not current_text or not conversation_short_id or not from_user_id:
-        return current_text or ""
-    from app.models import DouyinWebhookEvent
-    from app.services.contact_extractor import normalize_message_text as _normalize
+    from sqlalchemy import or_
+
     recent = (
         db.query(DouyinWebhookEvent)
         .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
-        .filter(DouyinWebhookEvent.from_user_id == from_user_id)
-        .filter(DouyinWebhookEvent.to_user_id == account_open_id)
-        .filter(DouyinWebhookEvent.event == "im_receive_msg")
         .filter(DouyinWebhookEvent.is_duplicate.is_(False))
+        .filter(DouyinWebhookEvent.event.in_(("im_receive_msg", "im_send_msg")))
+        .filter(
+            or_(
+                DouyinWebhookEvent.to_user_id == account_open_id,
+                DouyinWebhookEvent.from_user_id == account_open_id,
+            )
+        )
         .order_by(DouyinWebhookEvent.id.desc())
-        .limit(limit)
+        .limit(max_messages + 5)
         .all()
     )
-    texts = []
-    for evt in reversed(recent):  # 按时间正序拼接
-        try:
-            content = json.loads(evt.raw_body or "{}").get("content", {})
-            if isinstance(content, str):
-                content = json.loads(content)
-            text = _normalize(content)
-            if text.strip():
-                texts.append(text.strip())
-        except (json.JSONDecodeError, TypeError):
+    fragments: list[str] = []
+    ref_time = None
+    skipped_current = False
+    for evt in recent:  # 最新在前
+        ref_time = ref_time or evt.created_at
+        if _seconds_between(ref_time, evt.created_at) > window_seconds:
+            break
+        is_customer = evt.event == "im_receive_msg" and (evt.from_user_id or "") == from_user_id
+        if not is_customer:
+            break  # 中间有客服回复（im_send_msg），停止回溯
+        # 跳过最新一条客户消息（即当前正在处理的消息，已 flush 入库），避免重复拼接
+        if not skipped_current:
+            skipped_current = True
             continue
-    texts.append(current_text.strip())
-    return " ".join(texts)
+        text = _event_text(evt)
+        if text and text.strip():
+            fragments.insert(0, text.strip())
+        if len(fragments) >= max_messages:
+            break
+    return fragments
+
+
+def _combine_recent_customer_text(
+    db, current_text: str, account_open_id: str, conversation_short_id: str, from_user_id: str,
+    merchant_id: str = "", limit: int = 5,
+) -> str:
+    """受控合并分段联系方式片段。
+
+    两段策略：
+    1. 连续客户消息合并（无客服回复隔断、PARTIAL 前置、时间窗、片段上限、完整校验）；
+    2. 跨 AI 回复补全（事件溯源：当前消息紧前为 AI 补全回复、其紧前为客户 PARTIAL）。
+
+    任一策略合并后必须通过完整手机号校验才采用规范化号码。不得盲拼无关数字；
+    不跨客户/会话/账号/商户合并；不修改发送 gate。
+    """
+    if not current_text or not conversation_short_id or not from_user_id:
+        return current_text or ""
+    current_state = analyze_contact_state(current_text)
+    # 当前已完整 → 无需合并
+    if current_state.status == "VALID":
+        return current_text
+    window_seconds = _env_int("DOUYIN_CONTACT_FRAGMENT_WINDOW_SECONDS", 300)
+    max_messages = _env_int("DOUYIN_CONTACT_FRAGMENT_MAX_MESSAGES", 3)
+    fragments = _collect_recent_customer_fragments(
+        db,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        from_user_id=from_user_id,
+        window_seconds=window_seconds,
+        max_messages=max_messages,
+    )
+    prev_state = analyze_contact_state(fragments[-1]).status if fragments else "NONE"
+    # 仅当当前或前序处于不完整/歧义状态时才尝试合并，避免盲拼无关数字
+    should_merge = current_state.status in ("PARTIAL", "AMBIGUOUS") or prev_state in ("PARTIAL", "AMBIGUOUS")
+    if should_merge:
+        texts = [t for t in fragments if t and t.strip()]
+        texts.append(current_text.strip())
+        combined = " ".join(texts)
+        merged_state = analyze_contact_state(combined)
+        # 合并后必须通过完整手机号校验才采用规范化号码
+        if merged_state.status == "VALID" and merged_state.normalized_value:
+            return merged_state.normalized_value
+
+    # 跨 AI 回复补全（事件溯源）：中间有 AI 补全回复时，连续合并已不适用，
+    # 用显式补全序列将客户补发片段与前序 PARTIAL 关联。
+    if merchant_id:
+        from app.services.contact_completion_resolver import resolve_contact_with_completion
+        combined_text, completion_state = resolve_contact_with_completion(
+            db,
+            current_text=current_text,
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
+            from_user_id=from_user_id,
+        )
+        if completion_state.status == "VALID" and completion_state.normalized_value:
+            return completion_state.normalized_value
+    return current_text
 
 
 def is_text_message(content: dict[str, Any]) -> bool:
@@ -838,7 +944,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             lead_action = "missing_conversation"
         else:
             # 分段合并：拼接当前消息 + 最近 5 条客户消息再提取（客户分两条发"1770206"+"5816"可拼成完整号码）
-            combined_text = _combine_recent_customer_text(db, message_text, account_open_id, conversation_short_id, from_user_id)
+            combined_text = _combine_recent_customer_text(db, message_text, account_open_id, conversation_short_id, from_user_id, merchant_id)
             contact_result = extract_contacts_from_text(combined_text)
             lead, upsert_action = upsert_lead_from_webhook(
                 db,
