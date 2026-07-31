@@ -157,17 +157,23 @@ def _analyze_via_ark(video_url: str, api_key: str) -> dict[str, Any] | None:
         )
 
         response = client.responses.create(
-            model=os.getenv("ARK_MODEL", "doubao-seed-2-0-pro-260215"),
+            model=os.getenv("ARK_MODEL", "doubao-seed-2-1-pro-260628"),
             input=[
-                {"type": "input_video", "file_id": file_obj.id},
-                {"type": "input_text", "text": prompt},
+                {"role": "user", "content": [
+                    {"type": "input_video", "file_id": file_obj.id},
+                    {"type": "input_text", "text": prompt},
+                ]},
             ],
         )
 
         # 解析模型输出
         raw_output = ""
         for item in response.output:
-            if hasattr(item, "text"):
+            if hasattr(item, "content"):
+                for part in item.content:
+                    if hasattr(part, "text"):
+                        raw_output += part.text
+            elif hasattr(item, "text"):
                 raw_output += item.text
             elif isinstance(item, dict) and "text" in item:
                 raw_output += item["text"]
