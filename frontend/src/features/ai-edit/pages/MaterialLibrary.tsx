@@ -1,68 +1,50 @@
-// Phase 12 Task 9 AI 剪辑素材库。
-// 冻结设计：docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md §10/§11。
-//
-// 三个标签页：私有素材（merchant scope）/ 平台公共（platform scope）/ 回收站（deleted_at 非空）。
-// 素材元数据来源 9000（fetchAiEditMaterials，商户隔离，公共 Out 不含 storage_key/merchant_id/绝对路径）。
-// 本机文件导入与删除走 127.0.0.1:19000（localApi，token 映射商户，前端不自报 merchant_id）。
-// 不引入假素材、假任务；不出现已取消的过审入口（CANCELLED_BY_CUSTOMER）。
+// 小高素材库（参照 react_base_back MaterialLibrary 重做，2026-07-31）。
+// 左列表（搜索 + 全部/口播/高光分类 + 日期分组卡片）+ 右详情预览 + 上传素材（TOS）。
+// 不再使用私有/公共/回收站分类。
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  AlertCircleIcon,
-  CheckCircle2Icon,
-  ClockIcon,
-  RefreshCwIcon,
-  ScissorsIcon,
-  Trash2Icon,
-  UploadIcon,
+  ClapperboardIcon,
+  FilmIcon,
+  PlayIcon,
+  SearchIcon,
+  UploadCloudIcon,
 } from "lucide-react";
 import { fetchAiEditMaterials, uploadMaterialToTos } from "../api";
-import { deleteLocalMaterial, importLocalMaterial } from "../localApi";
-import type { AiEditMaterial, AiEditMaterialScope } from "../types";
+import type { AiEditMaterial } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
-import ModuleTabs from "../../../components/ModuleTabs";
 
-type TabKey = "merchant" | "platform" | "trash";
+type CategoryKey = "全部" | "口播" | "高光";
 
-const TAB_LABELS: Record<TabKey, string> = {
-  merchant: "私有素材",
-  platform: "平台公共",
-  trash: "回收站",
+const TYPE_CLASS: Record<string, string> = {
+  口播: "bg-[#eff6ff] text-[#2563eb]",
+  高光: "bg-[#d1fae5] text-[#047857]",
 };
 
-const SCOPE_LABELS: Record<AiEditMaterialScope, string> = {
-  merchant: "私有",
-  platform: "公共",
-};
-
-/** 统一错误信息：兼容 axios（9000）与 fetch（19000）两种错误形态。 */
-function resolveError(err: unknown): string {
-  return userFacingError(err, "数据加载失败，请稍后重试");
+function materialCategory(m: AiEditMaterial): "口播" | "高光" | "未分类" {
+  const c = (m.category || "").trim();
+  if (c === "口播" || c === "spoken") return "口播";
+  if (c === "高光" || c === "broll" || c === "highlight") return "高光";
+  return "未分类";
 }
 
-/** 状态点：用颜色区分待分析/分析中/已分析/失败。 */
-function statusBadge(status: string | null | undefined): { label: string; className: string } {
-  const s = (status || "").toLowerCase();
-  if (s === "succeeded" || s === "analyzed" || s === "done")
-    return { label: "已完成", className: "text-emerald-600 bg-emerald-50" };
-  if (s === "running" || s === "analyzing" || s === "pending")
-    return { label: "处理中", className: "text-amber-600 bg-amber-50" };
-  if (s === "failed" || s === "error")
-    return { label: "失败", className: "text-rose-600 bg-rose-50" };
-  if (!status) return { label: "待分析", className: "text-slate-500 bg-slate-100" };
-  return { label: "未知状态", className: "text-slate-600 bg-slate-100" };
+function materialDate(m: AiEditMaterial): string {
+  const d = m.created_at ? new Date(m.created_at) : null;
+  if (!d || Number.isNaN(d.getTime())) return "未知日期";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export default function MaterialLibrary({ merchantId }: { merchantId: string }) {
+  void merchantId;
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>("merchant");
-  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
-  const importing = importProgress !== null;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [keyword, setKeyword] = useState("");
+  const [category, setCategory] = useState<CategoryKey>("全部");
   const [tosUploading, setTosUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [tosCategory, setTosCategory] = useState<"口播" | "高光">("口播");
   const tosFileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -70,9 +52,11 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
     setError(null);
     try {
       const resp = await fetchAiEditMaterials();
-      setMaterials(resp.items || []);
+      const items = resp.items || [];
+      setMaterials(items);
+      setSelectedId((cur) => cur || (items.length > 0 ? items[0].material_id : null));
     } catch (err) {
-      setError(resolveError(err));
+      setError(userFacingError(err, "素材加载失败，请稍后重试"));
       setMaterials([]);
     } finally {
       setLoading(false);
@@ -83,17 +67,31 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
     void load();
   }, [load]);
 
-  const filtered = materials.filter((m) => {
-    if (tab === "trash") return Boolean(m.deleted_at);
-    if (tab === "platform") return m.scope === "platform" && !m.deleted_at;
-    return m.scope === "merchant" && !m.deleted_at;
-  });
+  const filtered = useMemo(() => {
+    return materials.filter((m) => {
+      const mc = materialCategory(m);
+      const matchCategory = category === "全部" || mc === category;
+      const matchKeyword =
+        !keyword.trim() ||
+        (m.display_name || "").includes(keyword.trim()) ||
+        m.material_id.includes(keyword.trim());
+      return matchCategory && matchKeyword;
+    });
+  }, [materials, keyword, category]);
 
-  const onPickFile = useCallback(async () => {
-    fileInputRef.current?.click();
-  }, []);
+  const grouped = useMemo(() => {
+    const acc: Record<string, AiEditMaterial[]> = {};
+    for (const item of filtered) {
+      const key = materialDate(item);
+      (acc[key] = acc[key] || []).push(item);
+    }
+    return acc;
+  }, [filtered]);
 
-  const onTosPick = useCallback(() => {
+  const selected = materials.find((m) => m.material_id === selectedId) || filtered[0] || null;
+
+  const onTosPick = useCallback((cat: "口播" | "高光") => {
+    setTosCategory(cat);
     tosFileInputRef.current?.click();
   }, []);
 
@@ -116,7 +114,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
       }
       setTosUploading(false);
       if (ok > 0) {
-        toast.success(`已上传 ${ok} 个素材到云端${fail > 0 ? `，${fail} 个失败` : ""}`);
+        toast.success(`已上传 ${ok} 个素材${fail > 0 ? `，${fail} 个失败` : ""}`);
         await load();
       } else if (fail > 0) {
         setError("上传失败，请稍后重试");
@@ -125,234 +123,179 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
     [load],
   );
 
-  const onFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files || []);
-      e.target.value = "";
-      if (files.length === 0) return;
-
-      const batchId = Date.now();
-      const failed: { name: string; reason: string }[] = [];
-      let succeeded = 0;
-      setImportProgress({ current: 0, total: files.length });
-      try {
-        for (const [index, file] of files.entries()) {
-          setImportProgress({ current: index + 1, total: files.length });
-          const safeName = file.name.replace(/[^\w.-]/g, "_").slice(0, 32);
-          const materialId = `mat_${batchId}_${index}_${safeName}`;
-          try {
-            await importLocalMaterial(file, materialId, merchantId);
-            succeeded += 1;
-          } catch (err) {
-            failed.push({ name: file.name, reason: resolveError(err) });
-          }
-        }
-
-        // 19000 同步 9000 元数据后，整个批次只刷新一次列表。
-        if (succeeded > 0) await load();
-        if (failed.length === 0) {
-          toast.success(`批量导入完成：${succeeded} 个`);
-        } else {
-          const description = failed.map((item) => `${item.name}（${item.reason}）`).join("；");
-          const summary = `批量导入完成：成功 ${succeeded} 个，失败 ${failed.length} 个`;
-          if (succeeded > 0) toast.warning(summary, { description });
-          else toast.error(summary, { description });
-        }
-      } finally {
-        setImportProgress(null);
-      }
-    },
-    [load, merchantId],
-  );
-
-  const onDelete = useCallback(
-    async (materialId: string) => {
-      if (!window.confirm("确认删除该本机素材？将进入 7 天回收站。")) return;
-      try {
-        await deleteLocalMaterial(materialId, merchantId);
-        toast.success("已移入回收站");
-        await load();
-      } catch (err) {
-        toast.error(`删除失败：${resolveError(err)}`);
-      }
-    },
-    [load, merchantId],
-  );
-
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f3f6fa]">
-      <header className="shrink-0 border-b border-[#e4e8f0] bg-white px-5 py-4">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
-              <ScissorsIcon size={23} />
-            </div>
-            <div>
-              <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
-              <p className="mt-1 text-xs text-[#8b95a6]">私有、公共素材与回收站；本机导入由 AI小高助手处理。</p>
-              <ModuleTabs items={[
-                { label: "素材库", path: "/ai-edit/materials" },
-                { label: "LAS 混剪工作台", path: "/ai-edit/editor" },
-              ]} />
-            </div>
+    <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">
+      <header className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] bg-white px-5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]">
+            <ClapperboardIcon size={22} />
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={load}
-              disabled={loading}
-              className="inline-flex items-center gap-1 rounded-lg border border-[#e4e8f0] bg-white px-3 py-2 text-xs font-medium text-[#1a1f2e] hover:bg-[#f3f6fa] disabled:opacity-50"
-            >
-              <RefreshCwIcon className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-              刷新
-            </button>
-            <button
-              type="button"
-              onClick={onPickFile}
-              disabled={importing || tab === "trash"}
-              className="inline-flex items-center gap-1 rounded-lg bg-[#1a1f2e] px-3 py-2 text-xs font-medium text-white hover:bg-[#2a3142] disabled:opacity-50"
-            >
-              <UploadIcon className="h-3.5 w-3.5" />
-              {importProgress
-                ? `导入中 ${importProgress.current}/${importProgress.total}`
-                : "批量导入素材"}
-            </button>
-            <button
-              type="button"
-              onClick={onTosPick}
-              disabled={tosUploading || importing || tab === "trash"}
-              className="inline-flex items-center gap-1 rounded-lg bg-[#2563eb] px-3 py-2 text-xs font-medium text-white hover:bg-[#1d4ed8] disabled:opacity-50"
-            >
-              <UploadIcon className="h-3.5 w-3.5" />
-              {tosUploading ? "上传中…" : "上传到云(TOS)"}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*"
-              multiple
-              className="hidden"
-              onChange={onFileChange}
-            />
-            <input
-              ref={tosFileInputRef}
-              type="file"
-              accept="video/*"
-              multiple
-              className="hidden"
-              onChange={onTosUpload}
-            />
+          <div>
+            <h1 className="text-[15px] font-bold text-[#1a1f2e]">小高素材库</h1>
+            <p className="mt-1 text-xs text-[#8b95a6]">管理口播和高光视频素材</p>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => onTosPick("口播")}
+          disabled={tosUploading}
+          className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)] disabled:opacity-60"
+        >
+          <UploadCloudIcon size={14} />
+          {tosUploading ? "上传中…" : "上传素材"}
+        </button>
+        <input
+          ref={tosFileInputRef}
+          type="file"
+          accept="video/*"
+          multiple
+          className="hidden"
+          onChange={onTosUpload}
+        />
       </header>
 
-      <nav aria-label="素材范围切换" className="flex items-center gap-1 border-b border-[#e4e8f0] bg-white px-6">
-        {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            className={`border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
-              tab === key
-                ? "border-[#1a1f2e] text-[#1a1f2e]"
-                : "border-transparent text-[#8b95a6] hover:text-[#1a1f2e]"
-            }`}
-          >
-            {TAB_LABELS[key]}
-          </button>
-        ))}
-      </nav>
+      <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="flex min-h-0 flex-col border-r border-[#e4e8f0] bg-white">
+          <div className="border-b border-[#e4e8f0] p-4">
+            <label className="relative block">
+              <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8b95a6]" />
+              <input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                placeholder="输入名称搜索"
+              />
+            </label>
+            <div className="mt-3 grid grid-cols-3 rounded-xl bg-[#eef2f7] p-1">
+              {(["全部", "口播", "高光"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setCategory(item)}
+                  className={`h-8 rounded-lg text-xs font-semibold transition-colors ${
+                    category === item
+                      ? "bg-white text-[#1a1f2e] shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
+                      : "text-[#8b95a6] hover:text-[#1a1f2e]"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
-        {error ? (
-          <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-            <AlertCircleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>素材加载失败：{error}</span>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {loading ? (
+              <div className="text-xs text-[#8b95a6]">加载中…</div>
+            ) : error ? (
+              <div className="text-xs text-rose-600">{error}</div>
+            ) : Object.keys(grouped).length === 0 ? (
+              <div className="text-xs text-[#8b95a6]">暂无素材，点击右上角上传</div>
+            ) : (
+              Object.entries(grouped).map(([date, items]) => (
+                <div key={date} className="mb-4 last:mb-0">
+                  <div className="mb-2 text-xs font-bold text-[#667085]">{date}</div>
+                  <div className="grid gap-2">
+                    {items.map((item) => {
+                      const active = selected?.material_id === item.material_id;
+                      const mc = materialCategory(item);
+                      return (
+                        <button
+                          key={item.material_id}
+                          type="button"
+                          onClick={() => setSelectedId(item.material_id)}
+                          className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors ${
+                            active ? "bg-[#eff6ff] ring-1 ring-[#bfdbfe]" : "hover:bg-[#f8fafc]"
+                          }`}
+                        >
+                          <div className="relative grid h-14 w-16 shrink-0 place-items-center rounded-xl bg-[#e0edff]">
+                            <FilmIcon size={20} className="text-[#2563eb]" />
+                            <div className="absolute left-1/2 top-1/2 grid h-6 w-6 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-white/90 text-[#101828]">
+                              <PlayIcon size={12} fill="currentColor" />
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-bold text-[#1a1f2e]">
+                              {item.display_name || item.material_id}
+                            </div>
+                            <div className="mt-1 text-[11px] text-[#98a2b3]">
+                              {item.tos_presigned_url ? "已上传到云" : "本机"}
+                            </div>
+                            {mc !== "未分类" ? (
+                              <span className={`mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${TYPE_CLASS[mc]}`}>
+                                {mc}
+                              </span>
+                            ) : null}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
-        ) : loading ? (
-          <div className="grid h-32 place-items-center text-sm text-[#8b95a6]">加载中…</div>
-        ) : filtered.length === 0 ? (
-          <div className="grid h-32 place-items-center rounded-xl border border-dashed border-[#e4e8f0] bg-white text-sm text-[#8b95a6]">
-            {tab === "trash" ? "回收站为空" : "暂无素材，点击右上角导入"}
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-[#e4e8f0] bg-white">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-[#f9fafb] text-xs text-[#8b95a6]">
-                <tr>
-                <th className="px-4 py-3 font-medium">素材编号</th>
-                  <th className="px-4 py-3 font-medium">范围</th>
-                  <th className="px-4 py-3 font-medium">类型</th>
-                  <th className="px-4 py-3 font-medium">分析状态</th>
-                  <th className="px-4 py-3 font-medium">增稳状态</th>
-                  <th className="px-4 py-3 font-medium">创建时间</th>
-                  <th className="px-4 py-3 text-right font-medium">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#f1f4f9]">
-                {filtered.map((m) => {
-                  const analysis = statusBadge(m.analysis_status);
-                  const stab = statusBadge(m.stabilization_status);
-                  return (
-                    <tr key={m.material_id} className="hover:bg-[#f9fafb]">
-                      <td className="px-4 py-3 font-mono text-xs text-[#1a1f2e]">{m.material_id}</td>
-                      <td className="px-4 py-3">
-                        <span className="rounded px-1.5 py-0.5 text-xs text-slate-600 bg-slate-100">
-                          {SCOPE_LABELS[m.scope] || m.scope}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-[#5a6478]">{m.media_type || "-"}</td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded px-1.5 py-0.5 text-xs ${analysis.className}`}>
-                          {analysis.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded px-1.5 py-0.5 text-xs ${stab.className}`}>
-                          {stab.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-[#8b95a6]">
-                        {m.created_at
-                          ? new Date(m.created_at).toLocaleString("zh-CN", { hour12: false })
-                          : "-"}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {tab === "trash" ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-[#8b95a6]">
-                            <ClockIcon className="h-3.5 w-3.5" />
-                            {m.purge_after
-                              ? `将于 ${new Date(m.purge_after).toLocaleDateString("zh-CN")} 清除`
-                              : "待清除"}
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => onDelete(m.material_id)}
-                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-rose-600 hover:bg-rose-50"
-                          >
-                            <Trash2Icon className="h-3.5 w-3.5" />
-                            删除
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div className="flex items-center justify-between border-t border-[#f1f4f9] px-4 py-2 text-xs text-[#8b95a6]">
-              <span className="inline-flex items-center gap-1">
-                <CheckCircle2Icon className="h-3.5 w-3.5 text-emerald-500" />
-                共 {filtered.length} 条（来自 9000 真实素材，商户隔离）
-              </span>
-              <span className="font-mono">
-                {filtered[0]?.source_sha256?.slice(0, 12) || "—"}…
+        </aside>
+
+        {selected ? (
+          <div className="flex min-h-0 flex-col border-l border-[#e4e8f0] bg-white">
+            <div className="flex shrink-0 items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
+              <div>
+                <h2 className="text-[15px] font-bold text-[#1a1f2e]">{selected.display_name || selected.material_id}</h2>
+                <p className="mt-1 text-xs text-[#8b95a6]">
+                  {materialCategory(selected)} · {selected.tos_presigned_url ? "已上传到云（可用混剪）" : "仅本机"}
+                </p>
+              </div>
+              <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${TYPE_CLASS[materialCategory(selected)] || "bg-slate-100 text-slate-700"}`}>
+                {materialCategory(selected)}
               </span>
             </div>
+
+            <div className="shrink-0 bg-[#101828] p-4">
+              <div className="relative grid h-[min(38vh,360px)] min-h-[240px] place-items-center overflow-hidden rounded-xl bg-[#111827]">
+                {selected.tos_presigned_url ? (
+                  <video
+                    src={selected.tos_presigned_url}
+                    controls
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center text-white/60">
+                    <FilmIcon size={48} className="mx-auto" />
+                    <p className="mt-2 text-xs">素材未上传到云，无法预览</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mx-5 mt-4 min-h-0 flex-1 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-4">
+              <h3 className="text-sm font-bold text-[#1a1f2e]">素材信息</h3>
+              <p className="mt-1 text-xs text-[#98a2b3]">素材 ID 与云存储地址</p>
+              <div className="mt-3 space-y-2 text-xs text-[#475467]">
+                <div>素材 ID：{selected.material_id}</div>
+                <div>分类：{materialCategory(selected)}</div>
+                <div className="break-all">云地址：{selected.tos_presigned_url || "未上传"}</div>
+                <div>来源哈希：{selected.source_sha256?.slice(0, 12) || "-"}…</div>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 justify-end border-t border-[#e4e8f0] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => onTosPick(materialCategory(selected) === "高光" ? "高光" : "口播")}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]"
+              >
+                <UploadCloudIcon size={14} />
+                上传素材
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid place-items-center border-l border-[#e4e8f0] bg-white text-xs text-[#8b95a6]">
+            选择左侧素材查看详情
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }
