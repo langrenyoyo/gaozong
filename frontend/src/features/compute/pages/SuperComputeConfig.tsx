@@ -48,13 +48,13 @@ const emptyPackageForm: PackageFormState = {
   enabled: true,
 };
 
-// Phase 10 §0.2：能力顺序与中文标签（与后端 COMPUTE_CAPABILITY_KEYS 一致）
+// 能力顺序与中文标签。
+// agents（智能体）、compute（算力）两行无任何埋点调用点（不产生算力消耗），
+// 管理界面不展示；后端 COMPUTE_CAPABILITY_KEYS 与 seed 仍保留全部 7 行（计费合同不变，仅前端隐藏）。
 const CAPABILITY_ROWS: { key: ComputeCapabilityKey; label: string }[] = [
   { key: "douyin-cs", label: "抖音客服" },
   { key: "leads", label: "线索" },
-  { key: "agents", label: "智能体" },
   { key: "wechat-assistant", label: "微信助手" },
-  { key: "compute", label: "算力" },
   { key: "knowledge", label: "知识问答" },
   { key: "ai_edit", label: "AI剪辑" },
 ];
@@ -265,14 +265,17 @@ export default function SuperComputeConfig() {
     }));
   };
 
-  const handleSaveRatio = async (key: ComputeCapabilityKey) => {
-    const edit = ratioEdits[key];
+  // override 用于弹窗保存：弹窗把用户在 modal 内的新值直接传入，不依赖异步未生效的 ratioEdits。
+  // 否则 saveRatioModal 调用 setRatioEdits 后立即 await handleSaveRatio，闭包仍读到更新前的旧值，
+  // 导致提交给后端的还是页面加载时的原始值（表现为"改了没保存"）。
+  const handleSaveRatio = async (key: ComputeCapabilityKey, override?: Partial<RatioEditState>) => {
+    const edit = { ...ratioEdits[key], ...override };
     if (!edit) return;
     const basisPoints = percentStringToBasisPoints(edit.percent);
     if (basisPoints === null) {
       setRatioEdits((prev) => ({
         ...prev,
-        [key]: { ...prev[key], error: "请输入非负数字，最多两位小数（如 33 或 33.5）。" },
+        [key]: { ...prev[key], ...override, error: "请输入非负数字，最多两位小数（如 33 或 33.5）。" },
       }));
       return;
     }
@@ -339,19 +342,17 @@ export default function SuperComputeConfig() {
       setRatioEdits((prev) => ({ ...prev, [key]: { ...prev[key], error: "自定义消耗需填写正整数单次 Token 数" } }));
       return;
     }
-    setRatioEdits((prev) => ({
-      ...prev,
-      [key]: {
-        ...prev[key],
-        percent: ratioModal.percent,
-        enabled: ratioModal.enabled,
-        consumption_mode: ratioModal.consumption_mode,
-        fixed_tokens: ratioModal.fixed_tokens,
-        error: null,
-      },
-    }));
+    // 把弹窗内用户最新输入作为 override 直接传给 handleSaveRatio，避免异步状态未生效读到旧值
+    const override: Partial<RatioEditState> = {
+      percent: ratioModal.percent,
+      enabled: ratioModal.enabled,
+      consumption_mode: ratioModal.consumption_mode,
+      fixed_tokens: ratioModal.fixed_tokens,
+      error: null,
+    };
+    setRatioEdits((prev) => ({ ...prev, [key]: { ...prev[key], ...override } }));
     setRatioModal(null);
-    await handleSaveRatio(key);
+    await handleSaveRatio(key, override);
   };
 
   const handleEditPackage = (pkg: ComputePackage) => {
@@ -544,8 +545,8 @@ export default function SuperComputeConfig() {
             </div>
           ) : ratioLoading && ratios.length === 0 ? (
             <div className="space-y-2 px-4 py-4">
-              {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
+              {CAPABILITY_ROWS.map((row) => (
+                <div key={row.key} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
               ))}
             </div>
           ) : ratios.length === 0 ? (
