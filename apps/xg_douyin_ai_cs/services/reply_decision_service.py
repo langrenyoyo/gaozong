@@ -1524,8 +1524,16 @@ def _parse_structured_llm_decision(raw_text: object) -> dict[str, Any]:
 
 
 def _strip_structured_llm_json_fence(text: str) -> str:
-    match = re.match(r"^```\s*(?:json)?\s*(.*?)\s*```$", text.strip(), flags=re.IGNORECASE | re.DOTALL)
-    return match.group(1).strip() if match else text
+    text = text.strip()
+    # 完整 fence：```json ... ```
+    match = re.match(r"^```\s*(?:json)?\s*(.*?)\s*```$", text, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # 不完整 fence：```json { "reply_text": "..." （fence 未闭合，LLM 输出被截断）
+    match_open = re.match(r"^```\s*(?:json)?\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+    if match_open:
+        return match_open.group(1).strip()
+    return text
 
 
 class _StructuredReplyContent:
@@ -1576,14 +1584,23 @@ def _looks_like_structured_json(text: str) -> bool:
 
 
 def _extract_reply_text_loose(text: str) -> str | None:
+    # 完整 "reply_text": "..." 匹配
     match = re.search(r'"reply_text"\s*:\s*"((?:\\.|[^"\\])*)"', text, flags=re.DOTALL)
-    if not match:
-        return None
-    try:
-        value = json.loads(f'"{match.group(1)}"')
-    except (TypeError, ValueError):
-        value = match.group(1)
-    return _clean_structured_reply_text(value)
+    if match:
+        try:
+            value = json.loads(f'"{match.group(1)}"')
+        except (TypeError, ValueError):
+            value = match.group(1)
+        return _clean_structured_reply_text(value)
+    # 不完整 "reply_text": "xxx（引号未闭合，LLM 输出被截断）
+    match_partial = re.search(r'"reply_text"\s*:\s*"((?:\\.|[^"\\])*)$', text, flags=re.DOTALL)
+    if match_partial:
+        try:
+            value = json.loads(f'"{match_partial.group(1)}"')
+        except (TypeError, ValueError):
+            value = match_partial.group(1)
+        return _clean_structured_reply_text(value)
+    return None
 
 
 def _clean_structured_reply_text(value: object) -> str | None:
