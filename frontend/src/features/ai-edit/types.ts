@@ -103,3 +103,35 @@ export interface LocalAiEditStatus {
   running_count: number;
   queued_count: number;
 }
+
+// ===== LAS speech_auto 云端混剪（2026-07-31 重做）=====
+
+/** LAS 混剪任务提交请求。 */
+export interface LasJobCreateRequest {
+  video_urls: string[];
+  script: string;
+  template?: string;
+  output_tos_path?: string | null;
+  idempotent_id?: string | null;
+}
+
+/** LAS 产物项。 */
+export interface LasArtifact {
+  artifact_type: string;
+  url: string | null;
+  file_name: string | null;
+}
+
+/** LAS 任务状态响应。 */
+export interface LasJobStatus {
+  job_id: number;
+  status: string;
+  stage: string | null;
+  progress: number | null;
+  las_task_id: string | null;
+  error_message: string | null;
+  failure_code: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+  artifacts: LasArtifact[];
+}

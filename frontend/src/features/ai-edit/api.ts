@@ -11,6 +11,8 @@ import type {
   AiEditListResponse,
   AiEditMaterial,
   AiEditTemplate,
+  LasJobCreateRequest,
+  LasJobStatus,
 } from "./types";
 
 /** apiClient 已把 AxiosResponse 解成 { success, data, message }，这里只取一层 data。 */
@@ -61,4 +63,19 @@ export type {
   AiEditListResponse,
   AiEditMaterial,
   AiEditTemplate,
+  LasArtifact,
+  LasJobCreateRequest,
+  LasJobStatus,
 } from "./types";
+
+// ===== LAS speech_auto 云端混剪（2026-07-31 重做）=====
+
+/** 提交 LAS 混剪任务，返回任务初始状态（含 job_id）。 */
+export async function createLasJob(payload: LasJobCreateRequest): Promise<LasJobStatus> {
+  return unwrap(await apiClient.post("/ai-edit/las/jobs", payload));
+}
+
+/** 查询 LAS 混剪任务状态 + 产物。 */
+export async function getLasJob(jobId: number): Promise<LasJobStatus> {
+  return unwrap(await apiClient.get(`/ai-edit/las/jobs/${jobId}`));
+}

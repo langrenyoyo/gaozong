@@ -21,6 +21,7 @@ import type { ChatMessage, Contact, TagType } from "../types";
 import ComputeCenter from "../features/compute/pages/ComputeCenter";
 import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
 import MaterialLibrary from "../features/ai-edit/pages/MaterialLibrary";
+import LasRemixWorkbench from "../features/ai-edit/pages/LasRemixWorkbench";
 import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
 import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
@@ -895,12 +896,7 @@ export default function Index({
         ) : isAiEditMaterialsNav ? (
           <MaterialLibrary merchantId={user?.merchantId ?? ""} />
         ) : isAiEditEditorNav ? (
-          <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
-            <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <p className="text-sm font-bold text-[#1a1f2e]">AI 剪辑升级中</p>
-              <p className="mt-2 text-xs text-[#8b95a6]">基于 LAS speech_auto 的全新混剪工作台即将上线。</p>
-            </div>
-          </div>
+          <LasRemixWorkbench merchantId={user?.merchantId ?? ""} />
         ) : (
           <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
             <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">

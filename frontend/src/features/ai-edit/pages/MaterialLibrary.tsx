@@ -158,7 +158,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               <p className="mt-1 text-xs text-[#8b95a6]">私有、公共素材与回收站；本机导入由 AI小高助手处理。</p>
               <ModuleTabs items={[
                 { label: "素材库", path: "/ai-edit/materials" },
-                { label: "剪辑工作台", path: "/ai-edit/editor" },
+                { label: "LAS 混剪工作台", path: "/ai-edit/editor" },
               ]} />
             </div>
           </div>
