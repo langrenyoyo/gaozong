@@ -16,6 +16,7 @@ import {
 import { createLasJob, fetchAiEditMaterials, getLasJob } from "../api";
 import type { AiEditMaterial, LasJobStatus } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
+import ModuleTabs from "../../../components/ModuleTabs";
 
 const SCRIPT_EXAMPLE = `剪成一条约 60 秒的汽车真人讲解视频。开头优先保留最有吸引力的车辆信息，随后按外观、座舱、配置、车况和总结组织。删除口误与重复表述，同一信息多次录制时优先保留最后一次完整自然的口播。讲到具体部位、配置、屏幕、座椅、空间或车况时，必须优先匹配能够直接证明该信息的对应空镜；泛化空镜不能抢占更匹配的素材。默认硬切，只有口播切到重点产品细节时使用轻量转场。`;
 
@@ -132,10 +133,14 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
       <header className="flex items-center gap-3">
         <FilmIcon size={22} className="text-[#2563eb]" />
         <div>
-          <h1 className="text-base font-bold text-[#1a1f2e]">AI 一键剪辑（LAS 混剪）</h1>
+          <h1 className="text-[15px] font-bold text-[#1a1f2e]">AI小高剪辑</h1>
           <p className="mt-1 text-xs text-[#8b95a6]">
             填写素材地址与创作指令，提交后云端自动剪辑（识别口播、删口误、匹配空镜、生成字幕）。每次输出一条成片。
           </p>
+          <ModuleTabs items={[
+            { label: "素材库", path: "/ai-edit/materials" },
+            { label: "LAS 混剪工作台", path: "/ai-edit/editor" },
+          ]} />
         </div>
       </header>
 
