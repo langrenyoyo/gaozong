@@ -1422,6 +1422,9 @@ class ComputeMarkupRatio(Base):
     capability_key = Column(String(64), nullable=False, comment="能力 key")
     markup_basis_points = Column(Integer, nullable=False, default=0, comment="上浮基点，3300 表示 33%")
     enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
+    # 消耗模式：actual=按实际用量计费；custom=按固定单次定额计费（忽略传入 actual tokens）
+    consumption_mode = Column(String(16), nullable=False, default="actual", comment="消耗模式 actual/custom")
+    fixed_tokens_per_call = Column(Integer, nullable=True, comment="custom 模式固定单次 Token 定额")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
