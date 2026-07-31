@@ -13,8 +13,8 @@ import {
   PlayIcon,
   SendIcon,
 } from "lucide-react";
-import { createLasJob, getLasJob } from "../api";
-import type { LasJobStatus } from "../types";
+import { createLasJob, fetchAiEditMaterials, getLasJob } from "../api";
+import type { AiEditMaterial, LasJobStatus } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
 const SCRIPT_EXAMPLE = `剪成一条约 60 秒的汽车真人讲解视频。开头优先保留最有吸引力的车辆信息，随后按外观、座舱、配置、车况和总结组织。删除口误与重复表述，同一信息多次录制时优先保留最后一次完整自然的口播。讲到具体部位、配置、屏幕、座椅、空间或车况时，必须优先匹配能够直接证明该信息的对应空镜；泛化空镜不能抢占更匹配的素材。默认硬切，只有口播切到重点产品细节时使用轻量转场。`;
@@ -29,7 +29,37 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<LasJobStatus | null>(null);
   const [polling, setPolling] = useState(false);
+  const [showMaterialPicker, setShowMaterialPicker] = useState(false);
+  const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
+  const [materialLoading, setMaterialLoading] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cloudMaterials = materials.filter((m) => m.tos_presigned_url);
+
+  const loadMaterials = useCallback(async () => {
+    setMaterialLoading(true);
+    try {
+      const resp = await fetchAiEditMaterials();
+      setMaterials(resp.items || []);
+    } catch {
+      // 静默：素材加载失败不阻断混剪
+    } finally {
+      setMaterialLoading(false);
+    }
+  }, []);
+
+  const toggleMaterialUrl = (url: string) => {
+    const current = videoUrlsText
+      .split(/[\n,，]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const next = current.includes(url) ? current.filter((u) => u !== url) : [...current, url];
+    setVideoUrlsText(next.join("\n"));
+  };
+
+  const selectedUrls = new Set(
+    videoUrlsText.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean),
+  );
 
   const videoUrls = videoUrlsText
     .split(/[\n,，]/)
@@ -110,10 +140,47 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
       </header>
 
       <section className="rounded-xl border border-[#e4e8f0] bg-white p-5">
-        <h2 className="text-sm font-bold text-[#1a1f2e]">素材地址</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-bold text-[#1a1f2e]">素材地址</h2>
+          <button
+            type="button"
+            onClick={() => {
+              setShowMaterialPicker((v) => !v);
+              if (!showMaterialPicker) void loadMaterials();
+            }}
+            className="text-[11px] font-semibold text-[#2563eb] hover:underline"
+          >
+            {showMaterialPicker ? "收起素材库" : "从素材库选择"}
+          </button>
+        </div>
         <p className="mt-1 text-[11px] text-[#8b95a6]">
-          每行一个或用逗号分隔；支持 tos:// 或 https 预签名地址，最多 30 个。
+          每行一个或用逗号分隔；支持 tos:// 或 https 预签名地址，最多 30 个。素材库中已上传到云的素材可直接勾选。
         </p>
+        {showMaterialPicker ? (
+          <div className="mt-2 max-h-[200px] overflow-y-auto rounded-md border border-[#eef1f6] p-2">
+            {materialLoading ? (
+              <div className="text-[11px] text-[#8b95a6]">加载中…</div>
+            ) : cloudMaterials.length === 0 ? (
+              <div className="text-[11px] text-[#8b95a6]">暂无已上传到云的素材，请先在素材库上传到 TOS</div>
+            ) : (
+              cloudMaterials.map((m) => {
+                const url = m.tos_presigned_url as string;
+                const checked = selectedUrls.has(url);
+                return (
+                  <label key={m.material_id} className="flex items-center gap-2 py-1 text-xs text-[#475467]">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleMaterialUrl(url)}
+                      className="h-3.5 w-3.5 rounded border-[#cbd5e1] text-[#2563eb]"
+                    />
+                    <span className="truncate">{m.display_name || m.material_id}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        ) : null}
         <textarea
           value={videoUrlsText}
           onChange={(e) => setVideoUrlsText(e.target.value)}

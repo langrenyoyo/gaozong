@@ -40,6 +40,9 @@ export interface AiEditMaterial {
   purge_after: string | null;
   created_at: string | null;
   updated_at: string | null;
+  display_name?: string | null;
+  tos_presigned_url?: string | null;
+  tos_presigned_expires_at?: string | null;
 }
 
 /** 9000 公共任务（不含 storage_key / merchant_id / 执行令牌 / 绝对路径）。 */

@@ -35,6 +35,25 @@ export async function fetchAiEditMaterials(): Promise<AiEditListResponse<AiEditM
   return unwrap(await apiClient.get("/ai-edit/materials"));
 }
 
+/** TOS 上传素材产物（预签名 URL + 过期时间）。 */
+export interface TosUploadResult {
+  material_id: string;
+  tos_key: string;
+  tos_presigned_url: string;
+  tos_presigned_expires_at: string;
+  source_sha256: string;
+  display_name: string;
+}
+
+/** 上传素材到 TOS 生成预签名 URL（喂给 LAS 混剪）。 */
+export async function uploadMaterialToTos(file: File): Promise<TosUploadResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return unwrap(await apiClient.post("/ai-edit/materials/upload-tos", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  }));
+}
+
 /** 创建任务（9000 注入 merchant_id，前端不自报）。 */
 export async function createAiEditJob(payload: AiEditJobCreateRequest): Promise<AiEditJob> {
   return unwrap(await apiClient.post("/ai-edit/jobs", payload));

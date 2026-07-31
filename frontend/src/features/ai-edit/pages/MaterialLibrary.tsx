@@ -17,7 +17,7 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import { fetchAiEditMaterials } from "../api";
+import { fetchAiEditMaterials, uploadMaterialToTos } from "../api";
 import { deleteLocalMaterial, importLocalMaterial } from "../localApi";
 import type { AiEditMaterial, AiEditMaterialScope } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
@@ -61,7 +61,9 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
   const [tab, setTab] = useState<TabKey>("merchant");
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const importing = importProgress !== null;
+  const [tosUploading, setTosUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tosFileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,6 +92,38 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
   const onPickFile = useCallback(async () => {
     fileInputRef.current?.click();
   }, []);
+
+  const onTosPick = useCallback(() => {
+    tosFileInputRef.current?.click();
+  }, []);
+
+  const onTosUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = "";
+      if (files.length === 0) return;
+      setTosUploading(true);
+      setError(null);
+      let ok = 0;
+      let fail = 0;
+      for (const file of files) {
+        try {
+          await uploadMaterialToTos(file);
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      setTosUploading(false);
+      if (ok > 0) {
+        toast.success(`已上传 ${ok} 个素材到云端${fail > 0 ? `，${fail} 个失败` : ""}`);
+        await load();
+      } else if (fail > 0) {
+        setError("上传失败，请稍后重试");
+      }
+    },
+    [load],
+  );
 
   const onFileChange = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -183,6 +217,15 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
                 ? `导入中 ${importProgress.current}/${importProgress.total}`
                 : "批量导入素材"}
             </button>
+            <button
+              type="button"
+              onClick={onTosPick}
+              disabled={tosUploading || importing || tab === "trash"}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#2563eb] px-3 py-2 text-xs font-medium text-white hover:bg-[#1d4ed8] disabled:opacity-50"
+            >
+              <UploadIcon className="h-3.5 w-3.5" />
+              {tosUploading ? "上传中…" : "上传到云(TOS)"}
+            </button>
             <input
               ref={fileInputRef}
               type="file"
@@ -190,6 +233,14 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               multiple
               className="hidden"
               onChange={onFileChange}
+            />
+            <input
+              ref={tosFileInputRef}
+              type="file"
+              accept="video/*"
+              multiple
+              className="hidden"
+              onChange={onTosUpload}
             />
           </div>
         </div>
