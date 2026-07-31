@@ -30,12 +30,26 @@ class RequestContext:
         return self.auth_mode == "mock"
 
     def has_permission(self, permission_code: str) -> bool:
-        """判断当前上下文是否拥有指定权限。"""
-        return self.is_mock_auth() or self.super_admin or permission_code in self.permission_codes
+        """判断当前上下文是否拥有指定权限。
+
+        管理员放行规则（2026-07-31）：持有任意 auto_wechat:admin: 权限的管理员
+        自动拥有所有 auto_wechat: 功能权限，无需在 NewCarProject 逐一分配。
+        """
+        return (
+            self.is_mock_auth()
+            or self.super_admin
+            or permission_code in self.permission_codes
+            or (permission_code.startswith("auto_wechat:") and self.has_admin_permission())
+        )
 
     def has_any_permission(self, permission_codes: list[str]) -> bool:
         """判断当前上下文是否拥有任一权限。"""
-        return self.is_mock_auth() or self.super_admin or any(code in self.permission_codes for code in permission_codes)
+        return (
+            self.is_mock_auth()
+            or self.super_admin
+            or any(code in self.permission_codes for code in permission_codes)
+            or (any(code.startswith("auto_wechat:") for code in permission_codes) and self.has_admin_permission())
+        )
 
     def has_admin_permission(self) -> bool:
         """判断当前上下文是否拥有 NewCar 管理员权限。"""
