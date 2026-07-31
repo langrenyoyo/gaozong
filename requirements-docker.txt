@@ -14,5 +14,5 @@ pydantic==2.12.4
 httpx==0.28.1
 pymilvus==2.6.12
 tos==2.9.2
-volcenginesdkarkruntime>=1.0.0
+volcengine-python-sdk>=1.0.0
 mutagen>=1.47.0
