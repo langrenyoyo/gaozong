@@ -11,7 +11,7 @@
 ## 1. 文档定位与更新时间
 
 - 定位：**只保存当前有效上下文**，不记录里程碑流水账，不按日期追加任务完成记录。
-- 更新时间：2026-07-30（自动回复门禁简化 + 固定提示词模板 V2.0 + LLM 上下文迁移 + 违禁词改造 + RAG 修复均已生产验证。**门禁简化**：`douyin_autoreply_gate_service.py` risk_flags 默认放行发安全替代回复，移除 manual_required/fallback_reason/rag 阻断，新增 `manual_review_risk_flags_json` 转人工黑名单（迁移 0018），9100 生成安全替代回复后 `auto_send=True`；**固定提示词模板 V2.0**：9100 `_build_fixed_prompt_template` 用甲方确认的 12 节完整模板替换旧 `_SYSTEM_PREFIX`，10 个商家变量从 `ai_agents` 表（迁移 0019 新增 11 字段）注入，前端智能体编辑改为傻瓜式表单；**旧安全后处理覆盖移除**：`_apply_safety_postprocess` 不再用 `_build_safe_direct_reply`/`sanitize_direct_llm_reply_text` 覆盖 LLM 回复，合并纠正 fallback 也不覆盖，信任 V2.0 模板；**预览与自动回复统一**：预览路由补传 `direct_llm_policy` + `forbidden_words`，两条路径走同一 9100 `build_reply_suggestion` → `build_llm_messages` → `_build_fixed_prompt_template`；**RAG 修复**：检索时使用小高统一知识库 scope（`tenant_id=xiaogao_system`/`merchant_id=xiaogao_base`/`douyin_account_id=0`），而非请求中的真实值，匹配知识库入库数据；**第五节违禁词改造**：9100 生成后确定性检查 `_check_forbidden_words`，命中阻断转人工，人工发送/回访保留旧替换逻辑；生产验证 `rag_used=true`/`rag_sources_count=5`/自动回复发送成功。**2026-07-30 自动回复误阻断修复**：9100 `_parse_structured_llm_decision` 的 `manual_required` 默认值 True→False（LLM 漏填该字段时默认放行，减少空配置智能体下普通问句误转人工）；新增账号级开关 `allow_release_manual_required`（迁移 0020，默认关），开启后豁免 manual_required 阻断，让需人工确认的回复也发送，但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断，前端客服工作台自动回复设置抽屉提供开关；前序已闭合：抖音会话增量协议（计划一 Task 1-8）、webhook 原子幂等、outbox 持久化、跨商户隔离、已读协议、mark-read 刷屏修复；NewCar 商户自助改密四态分流保持有效；AI剪辑继续保持 `FROZEN_BY_CUSTOMER`）。
+- 更新时间：2026-07-30（自动回复门禁简化 + 固定提示词模板 V2.0 + LLM 上下文迁移 + 违禁词改造 + RAG 修复均已生产验证。**门禁简化**：`douyin_autoreply_gate_service.py` risk_flags 默认放行发安全替代回复，移除 manual_required/fallback_reason/rag 阻断，新增 `manual_review_risk_flags_json` 转人工黑名单（迁移 0018），9100 生成安全替代回复后 `auto_send=True`；**固定提示词模板 V2.0**：9100 `_build_fixed_prompt_template` 用甲方确认的 12 节完整模板替换旧 `_SYSTEM_PREFIX`，10 个商家变量从 `ai_agents` 表（迁移 0019 新增 11 字段）注入，前端智能体编辑改为傻瓜式表单；**旧安全后处理覆盖移除**：`_apply_safety_postprocess` 不再用 `_build_safe_direct_reply`/`sanitize_direct_llm_reply_text` 覆盖 LLM 回复，合并纠正 fallback 也不覆盖，信任 V2.0 模板；**预览与自动回复统一**：预览路由补传 `direct_llm_policy` + `forbidden_words`，两条路径走同一 9100 `build_reply_suggestion` → `build_llm_messages` → `_build_fixed_prompt_template`；**RAG 修复**：检索时使用小高统一知识库 scope（`tenant_id=xiaogao_system`/`merchant_id=xiaogao_base`/`douyin_account_id=0`），而非请求中的真实值，匹配知识库入库数据；**第五节违禁词改造**：9100 生成后确定性检查 `_check_forbidden_words`，命中阻断转人工，人工发送/回访保留旧替换逻辑；生产验证 `rag_used=true`/`rag_sources_count=5`/自动回复发送成功。**2026-07-30 自动回复误阻断修复**：9100 `_parse_structured_llm_decision` 的 `manual_required` 默认值 True→False（LLM 漏填该字段时默认放行，减少空配置智能体下普通问句误转人工）；新增账号级开关 `allow_release_manual_required`（迁移 0020，默认关），开启后豁免 manual_required 阻断，让需人工确认的回复也发送，但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断，前端客服工作台自动回复设置抽屉提供开关；前序已闭合：抖音会话增量协议（计划一 Task 1-8）、webhook 原子幂等、outbox 持久化、跨商户隔离、已读协议、mark-read 刷屏修复；NewCar 商户自助改密四态分流保持有效；**2026-07-31 AI剪辑恢复**：甲方书面授权解除 `FROZEN_BY_CUSTOMER`，放弃原 FFmpeg/9100规划/19000本地执行面三段架构，改为纯 LAS 云端方案（火山 LAS `las_video_remix` 算子 `speech_auto` 模式）：9000 组装参数→LAS submit→后台轮询→存产物；旧冻结代码（worker/pipeline/stabilizer/9100规划/19000执行面/旧 AiVideoEditor/Task 11 测试包）已删除，数据模型 7 表+迁移保留复用，新增 LAS 字段迁移 0022/0042，算力 capability_key 加 `ai_edit`，前端新工作台 LasRemixWorkbench；生产验证另行审批）。
 - 同一事实只保留一份当前结论；旧结论失效时必须原位替换或删除，禁止追加"最新补充"覆盖旧结论。维护规则见 `docs/ai/01_READING_RULES.md`"AI 文档自治维护规则"。
 - 2026-07-14 之前的历史里程碑、阶段定义、逐任务迁移记录见冻结快照：`docs/ai/archive/2026-07-14_05_PROJECT_CONTEXT_历史里程碑流水账快照.md`（仅追溯用，不是当前事实）。
 
@@ -30,9 +30,9 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 
 以 `docs/ai/01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md` 为一期需求权威文档；与旧文档冲突时以该文档及本节为准。
 
-1. **AI剪辑已于 2026-07-18 按甲方要求暂停开发（FROZEN_BY_CUSTOMER）**。Phase 12 基础 MVP 与 Task 11 测试包属于已落地历史事实；Task 12 私有素材闭环、测试包干净机复测、重建、分发、正式安装包和宝塔生产验证全部停止。不得删除或回退现有代码、迁移、数据、测试和历史报告。甲方新的书面指示只是恢复前提；仍须基于届时完整主线重新探索，重制规格与执行包并分别审批，生产验证另行审批。
+1. **AI剪辑已于 2026-07-31 按甲方书面授权恢复开发（原 2026-07-18 FROZEN_BY_CUSTOMER 已解除）**。已放弃原 FFmpeg/9100规划/19000本地执行面三段架构，改为纯 LAS 云端方案（火山 LAS `las_video_remix` 算子 `speech_auto` 模式）：9000 组装参数→LAS submit→后台轮询→存产物；前端新工作台 LasRemixWorkbench。旧冻结代码（worker/pipeline/stabilizer/9100规划/19000执行面/旧 AiVideoEditor/Task 11 测试包）已删除，数据模型 7 表+迁移保留复用，新增 LAS 字段迁移 0022/0042，算力 capability_key 加 `ai_edit`。设计文档 `docs/superpowers/plans/2026-07-31-ai-edit-las-remix-redesign.md`。生产验证仍需另行审批；TOS/LAS 凭证从环境变量注入，前端不持有 LAS_API_KEY。
 2. **一键过审已于 2026-07-13 被客户取消（CANCELLED_BY_CUSTOMER）**，不再是一期交付范围；不删除历史记录、不回退已落地代码和兼容字段。注意与历史 Phase 8 Task 11（日报样本对齐，已 VERIFIED）重名但无关。
-3. `auto_wechat:ai_edit` 仅作为 AI剪辑历史兼容入口权限保留；冻结期间不得恢复入口、任务、Worker 或素材链路，也不新增 `auto_wechat:ai_video` / `auto_wechat:ad_review`。
+3. `auto_wechat:ai_edit` 为 AI剪辑入口权限（2026-07-31 已恢复，承载 LAS 混剪工作台 + 素材库）；仍不新增 `auto_wechat:ai_video` / `auto_wechat:ad_review`。
 4. 微信助手规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
 5. 留资口径：`extracted_phone`、`extracted_wechat`、`all_extracted_contacts` 任一存在即为已留资。
 6. 旧的"只建议不实发""只粘贴不实发"硬门禁已废止；抖音侧与微信侧真实发送必须经后端 gate（见第 8、9 节）。
@@ -155,7 +155,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 | 轨道 | 位置 | 说明 |
 |---|---|---|
 | SQLite 顺序迁移 | `migrations/migrate_sqlite.py` + `migrations/versions/0001~0029+.sql` | 开发/过渡库 |
-| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0020） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0），0020 为 `douyin_account_autoreply_settings.allow_release_manual_required`（账号级放行需人工确认回复开关）；冻结不回退已落地迁移 |
+| PostgreSQL Alembic（9000） | `migrations/postgres/auto_wechat/`（版本 0001~0022） | 覆盖主服务运行表；0014 为算力用量计量，0015 为 AI剪辑素材库历史迁移，0016 为 AI 自动回复 outbox 持久化任务字段，0017 为 `douyin_webhook_events` 商户账号复合索引，0018 为 `douyin_account_autoreply_settings.manual_review_risk_flags_json`（风险转人工黑名单），0019 为 `ai_agents` 11 个商家可配置变量字段（固定提示词模板 V2.0），0020 为 `douyin_account_autoreply_settings.allow_release_manual_required`（账号级放行需人工确认回复开关），0021 为回访动态场景配置 + ReturnVisitFollowupTask 表，0022 为 `ai_edit_jobs`/`ai_edit_materials` LAS 字段；冻结不回退已落地迁移 |
 | PostgreSQL Alembic（9100） | `migrations/postgres/xg_douyin_ai_cs/`（0001 空基线 + 0002 RAG metadata 7 表 + 0003 `llm_call_logs.conversation_id` 列 bigint→varchar(255)） | |
 
 注意：`wechat_tasks` 是历史遗留——SQLite 主线库由 ORM create_all 建、不在 0001-0028 中（0029 用 `CREATE TABLE IF NOT EXISTS` 壳统一）；PG 由 0003 建。
@@ -332,7 +332,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 | webhook 验签历史矛盾收敛 | 生产强制验签已实现；历史文档曾写"不允许改回强制鉴权"，已废弃，以 `APP_ENV=production` 强制验签为准；线上实际 env 值需在生产窗口确认 |
 | douyinAPI 旧 `/auth/callback` 授权能力迁移 | 待排期 |
 | QPS600 目标 | 基准与灰度工具已就绪，未经生产验证 |
-| Phase 12 AI剪辑 | `FROZEN_BY_CUSTOMER`（2026-07-18）。基础 MVP、Task 11 测试包及既有代码/迁移/数据保留；停止 Task 12、干净机复测、重建、分发和生产验证。书面恢复指示后仍须重新探索、规划和审批 |
+| AI剪辑 LAS 重做 | 2026-07-31 恢复（原 2026-07-18 FROZEN_BY_CUSTOMER 已解除）。纯 LAS 云端方案：9000→LAS submit→轮询→存产物；旧 FFmpeg/9100规划/19000执行面已删除，数据模型 7 表保留复用，新增 LAS 字段迁移 0022/0042，算力 capability_key=ai_edit，前端新工作台 LasRemixWorkbench。生产验证另行审批 |
 | init-prod 脚本 `--username` 显式化同类 bug | staging 已修，生产窗口需复核 |
 
 ------
@@ -380,7 +380,7 @@ GMP/抖音私信 → callback.misanduo.com/webhook/douyin → 宝塔反代 → 9
 | Local Agent / 微信自动化专题 | `docs/ai/10_local_agent_wechat/` |
 | 部署 / Docker | `docs/ai/11_deployment_ops/LOCAL_DOCKER_DEV.md` |
 | 一期路线图与阶段状态 | `docs/superpowers/plans/2026-07-10-xiaogao-ai-phase1-master-plan.md` |
-| Phase 12 AI剪辑本地 MVP 历史设计 | `docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`（`FROZEN_BY_CUSTOMER`，不可执行） |
+| Phase 12 AI剪辑本地 MVP 历史设计 | `docs/ai/13_ai_edit/2026-07-15_Phase12_AI剪辑本地MVP设计.md`（历史设计，2026-07-31 已被 LAS 云端方案替代，旧 FFmpeg 代码已删除） |
 | Phase 12 Task 12 私有素材闭环冻结规格 | `docs/superpowers/specs/2026-07-16-phase12-task12-ai-edit-material-library-closed-loop-design.md`（不可执行） |
 | Phase 12 Task 12 新执行包 | 冻结期间不得生成；恢复必须等待甲方新的书面指示并重新审批 |
 | Phase 12 Task 12 旧执行包冻结快照 | `docs/ai/archive/2026-07-17_Phase12_Task12_平台公共与回收站旧执行包_冻结快照.md`（非当前事实，不得执行） |

@@ -146,9 +146,9 @@ Output Rules
 
 如 `docs/ai/01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md` 与旧文档冲突，以该一期确认文档为准。
 
-1. **AI剪辑已于 2026-07-18 按甲方要求暂停开发（FROZEN_BY_CUSTOMER）**。已落地的基础 MVP、代码、迁移、数据、测试和 Task 11 测试包全部保留，但不得继续开发、复测、重建、分发或生产验证。甲方新的书面指示只是恢复前提；仍须基于届时完整主线重新探索，重制规格与执行包并分别审批，生产验证另行审批。
+1. **AI剪辑已于 2026-07-31 按甲方书面授权恢复开发（原 2026-07-18 FROZEN_BY_CUSTOMER 已解除）**。已放弃原有 FFmpeg/9100规划/19000本地执行面三段架构，改为纯 LAS 云端方案（火山引擎 LAS `las_video_remix` 算子 `speech_auto` 模式）：9000 组装参数→LAS submit→后台轮询→存产物；前端新工作台 LasRemixWorkbench。旧冻结代码（worker/pipeline/stabilizer/9100规划/19000执行面/旧 AiVideoEditor/Task 11 测试包）已删除，数据模型 7 表+迁移保留复用。设计文档 `docs/superpowers/plans/2026-07-31-ai-edit-las-remix-redesign.md`。生产验证仍需另行审批；TOS/LAS 凭证从环境变量注入，前端不持有 LAS_API_KEY。
 2. **一键过审已于 2026-07-13 被客户取消（CANCELLED_BY_CUSTOMER）**，不再是一期范围；不删除历史记录、不回退已落地代码和兼容字段。
-3. `auto_wechat:ai_edit` 仅作为 AI剪辑历史兼容入口权限保留；冻结期间不得据此恢复入口或执行链路，也不新增 `auto_wechat:ai_video` 或 `auto_wechat:ad_review`。
+3. `auto_wechat:ai_edit` 为 AI剪辑入口权限（2026-07-31 已恢复，承载 LAS 混剪工作台 + 素材库）；仍不新增 `auto_wechat:ai_video` 或 `auto_wechat:ad_review`。
 4. 微信助手规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
 5. 留资口径为 `extracted_phone`、`extracted_wechat`、`all_extracted_contacts` 任一存在。
 6. 旧的"只建议不实发""只粘贴不实发"硬门禁已废止；真实发送必须经联系人验证、前台焦点、违禁词替换、人工接管、限频、失败回写、幂等、紧急停止等 gate。
