@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -476,3 +476,71 @@ def update_job_status(
         raise HTTPException(status_code=409, detail={"code": "STALE_ATTEMPT_TOKEN", "message": "执行令牌或 attempt 不匹配"})
     db.commit()
     return _ok(svc.to_job_out(updated).model_dump())
+
+
+# ---------------------------------------------------------------------------
+# LAS speech_auto 云端混剪路由（纯 LAS 方案，2026-07-31 重做）
+# ---------------------------------------------------------------------------
+
+
+class LasJobCreateRequest(BaseModel):
+    """LAS 混剪任务提交请求。"""
+
+    video_urls: list[str] = Field(..., min_length=1, max_length=30, description="视频地址（tos:// 或 https 预签名）")
+    script: str = Field(..., min_length=1, max_length=4000, description="自然语言创作指令")
+    template: str = Field(default="automotive_headtalk", description="行业模板")
+    output_tos_path: str | None = Field(default=None, description="产物输出 TOS 目录，可空")
+    idempotent_id: str | None = Field(default=None, description="幂等 ID，复用可避免重复创建")
+
+
+@router.post("/las/jobs")
+def create_las_job_route(
+    payload: LasJobCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """提交 LAS speech_auto 云端混剪任务。
+
+    纯 LAS 云端方案：9000 组装参数 → LAS submit → 写库 → 后台轮询。
+    不做本地 FFmpeg/9100 规划。
+    """
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    try:
+        job = las_svc.create_las_job(
+            db,
+            merchant_id=merchant_id,
+            video_urls=payload.video_urls,
+            script=payload.script,
+            template=payload.template,
+            output_tos_path=payload.output_tos_path,
+            idempotent_id=payload.idempotent_id,
+        )
+    except las_svc.LASError as exc:
+        raise HTTPException(status_code=502, detail={"code": "LAS_SUBMIT_FAILED", "message": str(exc)})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "LAS_INVALID_PARAM", "message": str(exc)})
+
+    # 后台轮询 LAS 任务到终态
+    background_tasks.add_task(las_svc.process_las_job, job.id)
+    return _ok(las_svc.get_las_job_status(db, merchant_id=merchant_id, job_id=job.id))
+
+
+@router.get("/las/jobs/{job_id}")
+def get_las_job_route(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """查 LAS 混剪任务状态 + 产物。"""
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    data = las_svc.get_las_job_status(db, merchant_id=merchant_id, job_id=job_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
+    return _ok(data)
