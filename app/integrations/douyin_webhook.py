@@ -222,6 +222,44 @@ def normalize_message_text(content: dict[str, Any]) -> str:
     return ""
 
 
+def _combine_recent_customer_text(
+    db, current_text: str, account_open_id: str, conversation_short_id: str, from_user_id: str, limit: int = 5
+) -> str:
+    """拼接当前消息 + 最近 N 条同会话客户消息，用于分段发送的联系方式合并提取。
+
+    客户分两条发"1770206"+"5816"时，各自不满足 11 位手机号正则；
+    拼接后"17702065816"可被正确提取。
+    """
+    if not current_text or not conversation_short_id or not from_user_id:
+        return current_text or ""
+    from app.models import DouyinWebhookEvent
+    from app.services.contact_extractor import normalize_message_text as _normalize
+    recent = (
+        db.query(DouyinWebhookEvent)
+        .filter(DouyinWebhookEvent.conversation_short_id == conversation_short_id)
+        .filter(DouyinWebhookEvent.from_user_id == from_user_id)
+        .filter(DouyinWebhookEvent.to_user_id == account_open_id)
+        .filter(DouyinWebhookEvent.event == "im_receive_msg")
+        .filter(DouyinWebhookEvent.is_duplicate.is_(False))
+        .order_by(DouyinWebhookEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+    texts = []
+    for evt in reversed(recent):  # 按时间正序拼接
+        try:
+            content = json.loads(evt.raw_body or "{}").get("content", {})
+            if isinstance(content, str):
+                content = json.loads(content)
+            text = _normalize(content)
+            if text.strip():
+                texts.append(text.strip())
+        except (json.JSONDecodeError, TypeError):
+            continue
+    texts.append(current_text.strip())
+    return " ".join(texts)
+
+
 def is_text_message(content: dict[str, Any]) -> bool:
     """判断 content 是否表示纯文本私信消息。"""
     message_type = content.get("message_type")
@@ -739,6 +777,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
             "account_open_id": account_open_id,
             "merchant_id": merchant_id,
             "binding_state": binding_state,
+            "from_user_id": _optional_str(payload.get("from_user_id")),
         }
     else:
         event_merchant_id, event_tenant_id = _resolve_event_merchant_scope(db, payload)
@@ -789,6 +828,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         account_open_id = lead_context["account_open_id"]
         merchant_id = lead_context["merchant_id"]
         binding_state = lead_context["binding_state"]
+        from_user_id = lead_context.get("from_user_id") or ""
 
         if not is_text_message(content):
             lead_action = "invalid_contact"
@@ -797,7 +837,9 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         elif not conversation_short_id:
             lead_action = "missing_conversation"
         else:
-            contact_result = extract_contacts_from_text(message_text)
+            # 分段合并：拼接当前消息 + 最近 5 条客户消息再提取（客户分两条发"1770206"+"5816"可拼成完整号码）
+            combined_text = _combine_recent_customer_text(db, message_text, account_open_id, conversation_short_id, from_user_id)
+            contact_result = extract_contacts_from_text(combined_text)
             lead, upsert_action = upsert_lead_from_webhook(
                 db,
                 payload,

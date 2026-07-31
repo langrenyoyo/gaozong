@@ -1021,7 +1021,14 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 
 不得主动使用以下表达：留个号码、留个电话、留个号、发我手机号、加微信、加个人号、加私人联系方式。
 客户主动提到"电话、手机号、微信"等内容时，回复中仍优先统一表达为"联系方式"。
-客户已经留下联系方式后：不得再次索要；不得在回复中完整重复客户的联系方式；只需回复"收到您的联系方式"；引导进入后续人工跟进流程。
+客户已经留下完整联系方式后：不得再次索要；不得在回复中完整重复客户的联系方式；
+回复"收到您的联系方式"后，主动确认一个关键转化信息（客户称呼/所在城市/意向车型/到店或线上偏好），而非直接说"安排同事跟进"。
+
+### 联系方式不完整处理规则
+客户发送了疑似不完整的号码（如只有 7-10 位数字）时：
+- 不得说"收到您的联系方式了"
+- 必须引导客户补全：例如"您发的号码好像不太完整，麻烦再核对发一下"
+- 不得将不完整号码视为已留资
 
 ## 六、留资引导原则
 
@@ -1993,6 +2000,9 @@ def _build_known_customer_context(
         must_not_ask_again.append("年份")
     if contacts.get("has_contact"):
         must_not_ask_again.append("联系方式")
+    # 不完整号码：不加入 must_not_ask_again，反而要求 LLM 追问补全
+    if contacts.get("partial_phone") and not contacts.get("has_contact"):
+        must_not_ask_again.append("请引导客户补全不完整的联系方式，不要说'收到了'")
 
     return {
         "known_customer_info": {
@@ -2044,6 +2054,7 @@ def _extract_known_contacts(
         "has_contact": bool(contact_types) or bool(getattr(memory_contact, "has_contact", False)),
         "types": list(dict.fromkeys(contact_types)),
         "masked_values": list(dict.fromkeys(masked_values)),
+        "partial_phone": latest_contacts.partial_phone,
     }
 
 

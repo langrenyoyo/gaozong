@@ -18,6 +18,8 @@ class ContactExtractResult:
     status: ContactExtractStatus
     failure_reason: str | None
     raw_text: str | None
+    # 疑似不完整手机号（7-10 位纯数字），供 LLM 追问补全
+    partial_phone: str | None = None
 
 
 _PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
@@ -86,6 +88,11 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
     wechats = [item["value"] for item in matches if item["type"] == "wechat"]
     status: ContactExtractStatus = "matched" if matches else "not_matched"
 
+    # 检测疑似不完整手机号：7-10 位纯数字（非完整 11 位 1[3-9]xxxxxxxxx）
+    partial_phone = None
+    if not phones:
+        partial_phone = _detect_partial_phone(text)
+
     return ContactExtractResult(
         phone=phones[0] if phones else None,
         wechat=wechats[0] if wechats else None,
@@ -95,6 +102,7 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
         status=status,
         failure_reason=None if matches else "contact_not_found",
         raw_text=text,
+        partial_phone=partial_phone,
     )
 
 
@@ -215,3 +223,24 @@ def _append_unique(
         "start": start,
         "end": end,
     })
+
+
+# 疑似不完整手机号：7-10 位纯数字（非完整 11 位 1[3-9]xxxxxxxxx）
+_PARTIAL_PHONE_RE = re.compile(r"(?<!\d)(\d{7,10})(?!\d)")
+
+
+def _detect_partial_phone(text: str) -> str | None:
+    """检测疑似不完整手机号（7-10 位纯数字，非完整 11 位）。
+
+    用于 LLM 追问补全：客户发了 1770206（7 位）→ 检测到 partial → LLM 引导补全。
+    """
+    for match in _PARTIAL_PHONE_RE.finditer(text):
+        digits = match.group(1)
+        # 排除完整 11 位手机号（已在主提取器处理）
+        if len(digits) == 11 and digits[0] == "1" and digits[1] in "3456789":
+            continue
+        # 排除明显非手机号的数字（如价格"100000"、年份"2024"）
+        if len(digits) <= 6:
+            continue
+        return digits
+    return None
