@@ -26,9 +26,11 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 WORKDIR /app
 
 # 安装依赖（使用 Docker 专用 requirements，排除 Windows 专用包）
-COPY requirements-docker.txt ./requirements.txt
+# requirements-docker.txt 通过 -r 引用主依赖 requirements.txt，两个都要 COPY
+COPY requirements.txt ./requirements.txt
+COPY requirements-docker.txt ./requirements-docker.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir --prefer-binary -r requirements.txt
+    pip install --no-cache-dir --prefer-binary -r requirements-docker.txt
 
 # 创建非 root 运行用户，避免容器以 root 运行（安全加固）
 RUN useradd -m app

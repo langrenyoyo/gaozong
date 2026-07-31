@@ -18,6 +18,8 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 WORKDIR /workspace
 
 # 先装依赖（利用 Docker 层缓存，源码改动不触发重装）
+# requirements-docker.txt 通过 -r 引用主依赖 requirements.txt，两个都要 COPY
+COPY requirements.txt ./requirements.txt
 COPY requirements-docker.txt ./requirements-docker.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir --prefer-binary -r requirements-docker.txt

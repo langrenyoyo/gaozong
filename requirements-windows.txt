@@ -1,0 +1,14 @@
+# Windows 专用依赖（微信 UI 自动化 + OCR）。
+# 本地 Windows 开发安装：pip install -r requirements-windows.txt（自动包含主依赖 requirements.txt）。
+# Docker/Linux 不装这些包（平台不支持，且会让镜像暴涨）。
+-r requirements.txt
+
+# 微信 UI 自动化（仅 Windows）
+uiautomation>=2.0.0
+pyperclip>=1.8.0
+
+# OCR（Local Agent 本机微信联系人识别用，重依赖）
+easyocr==1.7.2
+torch==2.12.0
+torchvision==0.27.0
+opencv-python-headless==4.13.0.92
