@@ -157,7 +157,7 @@ def _analyze_via_ark(video_url: str, api_key: str) -> dict[str, Any] | None:
         )
 
         response = client.responses.create(
-            model=os.getenv("ARK_MODEL", "doubao-seed-2-1-pro-260628"),
+            model=os.getenv("ARK_MODEL", "doubao-seed-2-0-pro-260215"),
             input=[
                 {"role": "user", "content": [
                     {"type": "input_video", "file_id": file_obj.id},
@@ -166,17 +166,16 @@ def _analyze_via_ark(video_url: str, api_key: str) -> dict[str, Any] | None:
             ],
         )
 
-        # 解析模型输出
-        raw_output = ""
-        for item in response.output:
-            if hasattr(item, "content"):
-                for part in item.content:
-                    if hasattr(part, "text"):
-                        raw_output += part.text
-            elif hasattr(item, "text"):
-                raw_output += item.text
-            elif isinstance(item, dict) and "text" in item:
-                raw_output += item["text"]
+        # 解析模型输出：优先取 output_text，回退到 output[].content[].text
+        raw_output = getattr(response, "output_text", "") or ""
+        if not raw_output:
+            for item in (response.output or []):
+                if hasattr(item, "content"):
+                    for part in (item.content or []):
+                        if hasattr(part, "text"):
+                            raw_output += part.text
+                elif hasattr(item, "text"):
+                    raw_output += item.text
 
         parsed = _parse_ark_output(raw_output)
         if parsed is not None:
