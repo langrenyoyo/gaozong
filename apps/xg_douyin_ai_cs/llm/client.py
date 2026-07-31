@@ -50,6 +50,7 @@ class OpenAICompatibleClient:
             "model": self.config.chat_model,
             "messages": messages,
             "temperature": self.config.temperature,
+            "max_tokens": 200,  # 限制回复长度：抖音私信回复应简短（≤60汉字≈200 token）
         }
         started = time.perf_counter()
         data = self._post_json("/chat/completions", payload)
