@@ -289,6 +289,9 @@ def upload_material_to_tos(
         .first()
     )
     if material is not None:
+        # 复活软删除的记录（清 deleted_at/purge_after），否则前端列表过滤掉不显示
+        material.deleted_at = None
+        material.purge_after = None
         material.display_name = filename
         material.tos_presigned_url = presigned_url
         material.tos_presigned_expires_at = expires_at
