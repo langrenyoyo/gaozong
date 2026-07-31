@@ -81,6 +81,14 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
 
         material.analysis_status = "analyzed"
         db.commit()
+
+        # 算力上报：方舟多模态分析消耗 LLM token，归类 ai_edit
+        _report_analysis_usage(
+            db,
+            merchant_id=material.merchant_id,
+            prompt_tokens=result.get("_prompt_tokens"),
+            completion_tokens=result.get("_completion_tokens"),
+        )
         logger.info(
             "material_analysis_done material_id=%s category=%s has_speech=%s",
             material_id, category, has_speech,
@@ -149,7 +157,7 @@ def _analyze_via_ark(video_url: str, api_key: str) -> dict[str, Any] | None:
         )
 
         response = client.responses.create(
-            model=os.getenv("ARK_MODEL", "doubao-seed-2-1-pro-260628"),
+            model=os.getenv("ARK_MODEL", "doubao-seed-2-0-pro-260215"),
             input=[
                 {"type": "input_video", "file_id": file_obj.id},
                 {"type": "input_text", "text": prompt},
@@ -164,7 +172,15 @@ def _analyze_via_ark(video_url: str, api_key: str) -> dict[str, Any] | None:
             elif isinstance(item, dict) and "text" in item:
                 raw_output += item["text"]
 
-        return _parse_ark_output(raw_output)
+        parsed = _parse_ark_output(raw_output)
+        if parsed is not None:
+            # 提取方舟返回的 token 用量（供算力上报）
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+            parsed["_prompt_tokens"] = prompt_tokens
+            parsed["_completion_tokens"] = completion_tokens
+        return parsed
     except Exception as exc:
         logger.warning("material_analysis_ark_error error_type=%s: %s", type(exc).__name__, exc)
         return None
@@ -200,3 +216,43 @@ def _parse_ark_output(raw: str) -> dict[str, Any] | None:
 
     logger.warning("material_analysis_parse_failed raw=%s", raw[:200])
     return None
+
+
+def _report_analysis_usage(
+    db: Session,
+    *,
+    merchant_id: str | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> None:
+    """素材分析成功后上报算力消耗（capability_key=ai_edit，归类 AI剪辑）。
+
+    按 prompt+completion token 总和计费；方舟未返回 usage 时按估算（prompt 字符数÷2）。
+    上报失败不阻断分析流程。
+    """
+    if not merchant_id:
+        return
+    # 优先用方舟返回的真实 token；缺失时估算
+    pt = int(prompt_tokens) if prompt_tokens else 0
+    ct = int(completion_tokens) if completion_tokens else 0
+    total = pt + ct
+    if total <= 0:
+        # 估算：分析 prompt 约 200 字符 ÷ 2 = 100 token
+        total = 100
+    try:
+        from app.services.compute_service import record_usage as _record_usage
+
+        _record_usage(
+            db,
+            merchant_id,
+            total,
+            capability_key="ai_edit",
+            source="llm",
+            model=os.getenv("ARK_MODEL", "doubao-seed-2-0-pro-260215"),
+            remark="AI剪辑素材分析（方舟多模态）",
+            usage_measurement_method="provider_tokens" if (pt or ct) else "estimated_tokens",
+            prompt_tokens=pt or None,
+            completion_tokens=ct or None,
+        )
+    except Exception as exc:  # noqa: BLE001 算力上报失败不阻断
+        logger.warning("material_analysis_usage_report_error merchant_id=%s error=%s", merchant_id, exc)
