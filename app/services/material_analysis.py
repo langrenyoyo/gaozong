@@ -57,7 +57,7 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
         # 写/更新 AiEditMaterialAnalysis
         analysis = (
             db.query(AiEditMaterialAnalysis)
-            .filter(AiEditMaterialAnalysis.material_id == material_id)
+            .filter(AiEditMaterialAnalysis.source_sha256 == material.source_sha256)
             .first()
         )
         transcript = result.get("transcript", "")
