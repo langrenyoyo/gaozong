@@ -60,6 +60,11 @@ export async function deleteMaterial(materialId: string): Promise<void> {
   await apiClient.delete(`/ai-edit/materials/${encodeURIComponent(materialId)}`);
 }
 
+/** 重新分析素材（方舟多模态）。 */
+export async function reanalyzeMaterial(materialId: string): Promise<void> {
+  await apiClient.post(`/ai-edit/materials/${encodeURIComponent(materialId)}/analyze`);
+}
+
 /** 创建任务（9000 注入 merchant_id，前端不自报）。 */
 export async function createAiEditJob(payload: AiEditJobCreateRequest): Promise<AiEditJob> {
   return unwrap(await apiClient.post("/ai-edit/jobs", payload));

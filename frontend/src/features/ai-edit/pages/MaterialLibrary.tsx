@@ -12,7 +12,7 @@ import {
   Trash2Icon,
   UploadCloudIcon,
 } from "lucide-react";
-import { fetchAiEditMaterials, uploadMaterialToTos, deleteMaterial } from "../api";
+import { fetchAiEditMaterials, uploadMaterialToTos, deleteMaterial, reanalyzeMaterial } from "../api";
 import type { AiEditMaterial } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
@@ -146,6 +146,19 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
         await load();
       } catch (err) {
         setError(userFacingError(err, "删除失败，请稍后重试"));
+      }
+    },
+    [load],
+  );
+
+  const onReanalyze = useCallback(
+    async (materialId: string) => {
+      try {
+        await reanalyzeMaterial(materialId);
+        toast.success("已触发重新分析，请稍候刷新");
+        await load();
+      } catch (err) {
+        setError(userFacingError(err, "重新分析失败，请稍后重试"));
       }
     },
     [load],
@@ -299,12 +312,25 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
 
             {/* 口播文案 / 片段描述（方舟多模态分析结果） */}
             <div className="mx-5 mt-4 min-h-0 flex-1 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-4">
-              <h3 className="text-sm font-bold text-[#1a1f2e]">
-                {materialCategory(selected) === "高光" ? "片段描述" : "口播文案"}
-              </h3>
-              <p className="mt-1 text-xs text-[#98a2b3]">
-                {materialCategory(selected) === "高光" ? "用于剪辑镜头匹配" : "用于匹配高光素材"}
-              </p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1a1f2e]">
+                    {materialCategory(selected) === "高光" ? "片段描述" : "口播文案"}
+                  </h3>
+                  <p className="mt-1 text-xs text-[#98a2b3]">
+                    {materialCategory(selected) === "高光" ? "用于剪辑镜头匹配" : "用于匹配高光素材"}
+                  </p>
+                </div>
+                {selected.tos_presigned_url && selected.analysis_status !== "analyzing" ? (
+                  <button
+                    type="button"
+                    onClick={() => void onReanalyze(selected.material_id)}
+                    className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#e4e8f0] bg-white px-3 text-[11px] font-semibold text-[#475467] hover:bg-[#f8fafc]"
+                  >
+                    重新分析
+                  </button>
+                ) : null}
+              </div>
               {selected.analysis_status === "analyzing" ? (
                 <div className="mt-3 rounded-xl bg-white p-3 text-xs text-[#8b95a6] ring-1 ring-[#eef2f6]">
                   AI 分析中，请稍候…

@@ -350,6 +350,35 @@ def upload_material_to_tos(
     })
 
 
+@router.post("/materials/{material_id}/analyze")
+def reanalyze_material(
+    material_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """重新分析素材（方舟多模态：判断人声 + 转写/描述）。"""
+    from app.services.material_analysis import analyze_material_async
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    from app.models import AiEditMaterial
+    material = (
+        db.query(AiEditMaterial)
+        .filter(AiEditMaterial.material_id == material_id)
+        .filter(AiEditMaterial.merchant_id == merchant_id)
+        .first()
+    )
+    if material is None:
+        raise HTTPException(status_code=404, detail={"code": "MATERIAL_NOT_FOUND", "message": "素材不存在"})
+    if not material.tos_presigned_url:
+        raise HTTPException(status_code=400, detail={"code": "NO_CLOUD_URL", "message": "素材未上传到云，无法分析"})
+    material.analysis_status = "analyzing"
+    db.commit()
+    background_tasks.add_task(analyze_material_async, material.id, material.tos_presigned_url)
+    return _ok({"material_id": material.material_id, "analysis_status": "analyzing"})
+
+
 @router.delete("/materials/{material_id}")
 def delete_material(
     material_id: str,

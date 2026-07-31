@@ -370,6 +370,7 @@ MERCHANT_CAPABILITY_SCENES = {
     "wechat-assistant": "AI小高微信助手",
     "compute": "AI小高剪辑",
     "knowledge": "知识库服务",
+    "ai_edit": "AI剪辑",
 }
 
 
