@@ -98,3 +98,16 @@ export async function createLasJob(payload: LasJobCreateRequest): Promise<LasJob
 export async function getLasJob(jobId: number): Promise<LasJobStatus> {
   return unwrap(await apiClient.get(`/ai-edit/las/jobs/${jobId}`));
 }
+
+/** LAS 任务列表响应。 */
+export interface LasJobListData {
+  page: number;
+  page_size: number;
+  total: number;
+  items: LasJobStatus[];
+}
+
+/** 查询 LAS 混剪任务列表（分页 + 状态筛选）。 */
+export async function listLasJobs(params: { status?: string; page?: number; page_size?: number } = {}): Promise<LasJobListData> {
+  return unwrap(await apiClient.get("/ai-edit/las/jobs", { params }));
+}
