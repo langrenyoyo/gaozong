@@ -11,6 +11,7 @@ import {
   RefreshCwIcon,
   SaveIcon,
   SendIcon,
+  XIcon,
 } from "lucide-react";
 import {
   createAdminComputePackage,
@@ -47,7 +48,7 @@ const emptyPackageForm: PackageFormState = {
   enabled: true,
 };
 
-// Phase 10 §0.2：冻结六能力顺序与中文标签（与后端 COMPUTE_CAPABILITY_KEYS 一致）
+// Phase 10 §0.2：能力顺序与中文标签（与后端 COMPUTE_CAPABILITY_KEYS 一致）
 const CAPABILITY_ROWS: { key: ComputeCapabilityKey; label: string }[] = [
   { key: "douyin-cs", label: "抖音客服" },
   { key: "leads", label: "线索" },
@@ -55,6 +56,7 @@ const CAPABILITY_ROWS: { key: ComputeCapabilityKey; label: string }[] = [
   { key: "wechat-assistant", label: "微信助手" },
   { key: "compute", label: "算力" },
   { key: "knowledge", label: "知识问答" },
+  { key: "ai_edit", label: "AI剪辑" },
 ];
 
 /**
@@ -85,8 +87,20 @@ function basisPointsToPercent(bp: number): string {
 interface RatioEditState {
   percent: string;
   enabled: boolean;
+  consumption_mode: "actual" | "custom";
+  fixed_tokens: string;
   saving: boolean;
   error: string | null;
+}
+
+/** 功能 Token 消耗配置编辑弹窗态 */
+interface RatioEditModalState {
+  key: ComputeCapabilityKey;
+  label: string;
+  percent: string;
+  enabled: boolean;
+  consumption_mode: "actual" | "custom";
+  fixed_tokens: string;
 }
 
 function resolveErrorMessage(err: unknown): string {
@@ -170,6 +184,7 @@ export default function SuperComputeConfig() {
   const [ratioLoading, setRatioLoading] = useState(false);
   const [ratioError, setRatioError] = useState<string | null>(null);
   const [ratioEdits, setRatioEdits] = useState<Record<string, RatioEditState>>({});
+  const [ratioModal, setRatioModal] = useState<RatioEditModalState | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const activeView = normalizeConfigView(searchParams.get("view"));
@@ -211,6 +226,8 @@ export default function SuperComputeConfig() {
         edits[r.capability_key] = {
           percent: basisPointsToPercent(r.markup_basis_points),
           enabled: r.enabled,
+          consumption_mode: (r.consumption_mode === "custom" ? "custom" : "actual"),
+          fixed_tokens: r.fixed_tokens_per_call ? String(r.fixed_tokens_per_call) : "",
           saving: false,
           error: null,
         };
@@ -267,6 +284,11 @@ export default function SuperComputeConfig() {
       const response = await updateAdminComputeMarkupRatio(key, {
         markup_basis_points: basisPoints,
         enabled: edit.enabled,
+        consumption_mode: edit.consumption_mode,
+        fixed_tokens_per_call:
+          edit.consumption_mode === "custom" && edit.fixed_tokens.trim()
+            ? Number(edit.fixed_tokens)
+            : null,
       });
       setRatios((prev) =>
         prev.map((r) => (r.capability_key === key ? response.data : r)),
@@ -277,6 +299,8 @@ export default function SuperComputeConfig() {
         [key]: {
           percent: basisPointsToPercent(response.data.markup_basis_points),
           enabled: response.data.enabled,
+          consumption_mode: response.data.consumption_mode === "custom" ? "custom" : "actual",
+          fixed_tokens: response.data.fixed_tokens_per_call ? String(response.data.fixed_tokens_per_call) : "",
           saving: false,
           error: null,
         },
@@ -291,6 +315,43 @@ export default function SuperComputeConfig() {
       }));
       toast.error(message);
     }
+  };
+
+  const openRatioModal = (key: ComputeCapabilityKey) => {
+    const edit = ratioEdits[key];
+    const label = CAPABILITY_ROWS.find((r) => r.key === key)?.label || key;
+    if (!edit) return;
+    setRatioModal({
+      key,
+      label,
+      percent: edit.percent,
+      enabled: edit.enabled,
+      consumption_mode: edit.consumption_mode,
+      fixed_tokens: edit.fixed_tokens,
+    });
+  };
+
+  const saveRatioModal = async () => {
+    if (!ratioModal) return;
+    const { key } = ratioModal;
+    const fixedTokens = ratioModal.consumption_mode === "custom" ? ratioModal.fixed_tokens.trim() : "";
+    if (ratioModal.consumption_mode === "custom" && (!fixedTokens || !/^\d+$/.test(fixedTokens) || Number(fixedTokens) <= 0)) {
+      setRatioEdits((prev) => ({ ...prev, [key]: { ...prev[key], error: "自定义消耗需填写正整数单次 Token 数" } }));
+      return;
+    }
+    setRatioEdits((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        percent: ratioModal.percent,
+        enabled: ratioModal.enabled,
+        consumption_mode: ratioModal.consumption_mode,
+        fixed_tokens: ratioModal.fixed_tokens,
+        error: null,
+      },
+    }));
+    setRatioModal(null);
+    await handleSaveRatio(key);
   };
 
   const handleEditPackage = (pkg: ComputePackage) => {
@@ -483,7 +544,7 @@ export default function SuperComputeConfig() {
             </div>
           ) : ratioLoading && ratios.length === 0 ? (
             <div className="space-y-2 px-4 py-4">
-              {[0, 1, 2, 3, 4, 5].map((i) => (
+              {[0, 1, 2, 3, 4, 5, 6].map((i) => (
                 <div key={i} className="h-12 animate-pulse rounded-xl bg-[#f1f5f9]" />
               ))}
             </div>
@@ -494,68 +555,141 @@ export default function SuperComputeConfig() {
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-[#f1f5f9]">
-              {CAPABILITY_ROWS.map((row) => {
-                const edit = ratioEdits[row.key];
-                if (!edit) return null;
-                return (
-                  <div
-                    key={row.key}
-                    className="flex flex-wrap items-center gap-3 px-4 py-3"
-                  >
-                    <span className="w-24 shrink-0 text-xs font-semibold text-[#1a1f2e]">
-                      {row.label}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        value={edit.percent}
-                        onChange={(event) =>
-                          handleEditRatioPercent(row.key, event.target.value)
-                        }
-                        aria-label="上浮比例"
-                        placeholder="如 33"
-                        className="h-9 w-24 rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
-                      />
-                      <span className="text-xs text-[#8b95a6]">%</span>
-                    </div>
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[#475467]">
-                      <input
-                        type="checkbox"
-                        checked={edit.enabled}
-                        onChange={(event) =>
-                          handleEditRatioEnabled(row.key, event.target.checked)
-                        }
-                        className="h-4 w-4 rounded border-[#cbd5e1]"
-                      />
-                      启用
-                    </label>
-                    {edit.error ? (
-                      <span className="flex items-center gap-1 text-[11px] text-red-500">
-                        <AlertCircleIcon size={12} />
-                        {edit.error}
-                      </span>
-                    ) : null}
-                    <button
-                      onClick={() => void handleSaveRatio(row.key)}
-                      disabled={edit.saving}
-                      className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563eb] px-3 text-[11px] font-semibold text-white disabled:opacity-60"
-                    >
-                      {edit.saving ? (
-                        <RefreshCwIcon size={12} className="animate-spin" />
-                      ) : (
-                        <SaveIcon size={12} />
-                      )}
-                      {edit.saving ? "保存中" : "保存"}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#f8fafc] text-[11px] font-semibold text-[#8b95a6]">
+                <tr>
+                  <th className="px-4 py-2.5">功能</th>
+                  <th className="px-4 py-2.5">Token 消耗</th>
+                  <th className="px-4 py-2.5">上浮比例</th>
+                  <th className="px-4 py-2.5">状态</th>
+                  <th className="px-4 py-2.5 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {CAPABILITY_ROWS.map((row) => {
+                  const edit = ratioEdits[row.key];
+                  if (!edit) return null;
+                  const tokenConsumption =
+                    edit.consumption_mode === "custom" && edit.fixed_tokens
+                      ? `${Number(edit.fixed_tokens).toLocaleString()}/次 + 上浮`
+                      : "实际 + 上浮";
+                  return (
+                    <tr key={row.key} className="border-t border-[#f1f5f9]">
+                      <td className="px-4 py-3 font-semibold text-[#1a1f2e]">{row.label}</td>
+                      <td className="px-4 py-3 text-[#475467]">{tokenConsumption}</td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-md bg-[#eff6ff] px-2 py-0.5 text-[11px] font-semibold text-[#2563eb]">
+                          {edit.percent || "0"}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${edit.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                          {edit.enabled ? "启用" : "停用"}
+                        </span>
+                        {edit.error ? (
+                          <div className="mt-1 flex items-center gap-1 text-[10px] text-red-500">
+                            <AlertCircleIcon size={11} />
+                            {edit.error}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openRatioModal(row.key)}
+                          disabled={edit.saving}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#dbe3ef] bg-white px-3 text-[11px] font-semibold text-[#475467] hover:bg-[#f8fafc] disabled:opacity-60"
+                        >
+                          {edit.saving ? <RefreshCwIcon size={12} className="animate-spin" /> : <Edit3Icon size={12} />}
+                          {edit.saving ? "保存中" : "编辑"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
           <div className="border-t border-[#e4e8f0] px-4 py-2.5 text-[11px] text-[#8b95a6]">
-            支持输入非负数，最多保留两位小数；数值过大时会提示重新填写。
+            实际消耗=按真实用量计费+上浮；自定义消耗=固定单次定额+上浮（与真实用量无关）。
           </div>
         </section>
+
+        {ratioModal ? (
+          <div className="fixed inset-0 z-20 grid place-items-center bg-[#0f172a]/28 p-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+            <div className="w-full max-w-[480px] rounded-2xl border border-[#e4e8f0] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
+              <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
+                <h2 className="text-base font-bold text-[#1a1f2e]">编辑 · {ratioModal.label}</h2>
+                <button type="button" onClick={() => setRatioModal(null)} className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
+                  <XIcon size={16} />
+                </button>
+              </div>
+              <div className="space-y-4 px-5 py-5">
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-[#475467]">Token 消耗规则</div>
+                  <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#eef2f7] p-1">
+                    {(["actual", "custom"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setRatioModal((m) => (m ? { ...m, consumption_mode: mode } : m))}
+                        className={`h-8 rounded-lg text-xs font-semibold transition-colors ${
+                          ratioModal.consumption_mode === mode
+                            ? "bg-white text-[#1a1f2e] shadow-[0_1px_2px_rgba(15,23,42,0.08)]"
+                            : "text-[#8b95a6] hover:text-[#1a1f2e]"
+                        }`}
+                      >
+                        {mode === "actual" ? "实际消耗" : "自定义消耗"}
+                      </button>
+                    ))}
+                  </div>
+                  {ratioModal.consumption_mode === "custom" ? (
+                    <div className="mt-2">
+                      <label className="text-xs font-semibold text-[#475467]">单次 Token 消耗量</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={ratioModal.fixed_tokens}
+                        onChange={(e) => setRatioModal((m) => (m ? { ...m, fixed_tokens: e.target.value } : m))}
+                        placeholder="如 1000"
+                        className="mt-1 h-9 w-full rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-[#8b95a6]">按 LLM 真实用量计费，再叠加下方上浮比例。</p>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-[#475467]">上浮比例（%）</label>
+                  <input
+                    value={ratioModal.percent}
+                    onChange={(e) => setRatioModal((m) => (m ? { ...m, percent: e.target.value } : m))}
+                    placeholder="如 33"
+                    className="mt-1 h-9 w-full rounded-lg border border-[#dbe3ef] px-3 text-sm outline-none focus:border-[#2563eb]"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-xs font-semibold text-[#475467]">
+                  <input
+                    type="checkbox"
+                    checked={ratioModal.enabled}
+                    onChange={(e) => setRatioModal((m) => (m ? { ...m, enabled: e.target.checked } : m))}
+                    className="h-4 w-4 rounded border-[#cbd5e1]"
+                  />
+                  启用该能力上浮
+                </label>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-[#e4e8f0] px-5 py-4">
+                <button type="button" onClick={() => setRatioModal(null)} className="h-9 rounded-xl border border-[#e4e8f0] bg-white px-4 text-xs font-semibold text-[#374151]">
+                  取消
+                </button>
+                <button type="button" onClick={() => void saveRatioModal()} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2563eb] px-4 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(37,99,235,0.22)]">
+                  <SaveIcon size={14} />
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
           </>
         ) : null}
 

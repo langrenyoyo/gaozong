@@ -688,7 +688,8 @@ export type ComputeCapabilityKey =
   | "agents"
   | "wechat-assistant"
   | "compute"
-  | "knowledge";
+  | "knowledge"
+  | "ai_edit";
 
 /** Phase 10 §0.2：算力上浮比例行（GET /admin/compute/markup-ratios items）。 */
 export interface ComputeMarkupRatio {
@@ -697,12 +698,17 @@ export interface ComputeMarkupRatio {
   /** 上浮基点（3300 = 上浮 33%） */
   markup_basis_points: number;
   enabled: boolean;
+  /** 消耗模式：actual=按实际用量；custom=固定单次定额 */
+  consumption_mode?: string;
+  fixed_tokens_per_call?: number | null;
 }
 
 /** Phase 10 §0.2：更新单能力上浮比例（PUT /admin/compute/markup-ratios/{capability_key}）。 */
 export interface ComputeMarkupRatioUpdateRequest {
   markup_basis_points: number;
   enabled: boolean;
+  consumption_mode?: string;
+  fixed_tokens_per_call?: number | null;
 }
 
 /** Token 明细分页数据。 */
