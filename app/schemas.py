@@ -2420,6 +2420,8 @@ class AiEditMaterialOut(BaseModel):
     tos_presigned_url: Optional[str] = None
     tos_presigned_expires_at: Optional[datetime] = None
     category: Optional[str] = None
+    transcript: Optional[str] = None
+    description: Optional[str] = None
     processes: list[AiEditMaterialProcessOut] = Field(default_factory=list)
     deleted_at: Optional[datetime] = None
     purge_after: Optional[datetime] = None

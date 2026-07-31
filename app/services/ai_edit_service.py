@@ -380,6 +380,25 @@ def update_job_status(
 
 
 def to_material_out(material: AiEditMaterial) -> AiEditMaterialOut:
+    # 从 ORM 对象绑定的 session 查 analysis（transcript/description）
+    transcript = None
+    description = None
+    from sqlalchemy import inspect as sa_inspect
+    session = sa_inspect(material).session
+    if session is not None:
+        analysis = (
+            session.query(AiEditMaterialAnalysis)
+            .filter(AiEditMaterialAnalysis.material_id == material.id)
+            .first()
+        )
+        if analysis and analysis.transcript_json:
+            try:
+                import json as _json
+                data = _json.loads(analysis.transcript_json)
+                transcript = data.get("transcript") if isinstance(data, dict) else None
+                description = data.get("description") if isinstance(data, dict) else None
+            except (ValueError, TypeError):
+                pass
     return AiEditMaterialOut(
         material_id=material.material_id,
         scope=material.scope,
@@ -396,6 +415,12 @@ def to_material_out(material: AiEditMaterial) -> AiEditMaterialOut:
         tos_presigned_url=material.tos_presigned_url,
         tos_presigned_expires_at=material.tos_presigned_expires_at,
         category=material.category,
+        duration_seconds=material.duration_seconds,
+        width=material.width,
+        height=material.height,
+        file_size_bytes=material.file_size_bytes,
+        transcript=transcript,
+        description=description,
     )
 
 

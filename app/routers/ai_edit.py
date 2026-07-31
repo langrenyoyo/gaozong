@@ -222,6 +222,7 @@ def register_material(
 
 @router.post("/materials/upload-tos")
 def upload_material_to_tos(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     category: str = Form(""),
     db: Session = Depends(get_db),
@@ -264,6 +265,9 @@ def upload_material_to_tos(
     try:
         with open(tmp_path, "wb") as f:
             f.write(content)
+        # 探测视频元数据（时长/分辨率/帧率），失败不阻断
+        from app.services.media_probe import probe_video
+        probe = probe_video(tmp_path)
         try:
             uploader = TOSUploader(prefix=f"ai-edit/{merchant_id}")
             presigned_url = uploader.upload_and_presign(tmp_path)
@@ -298,6 +302,12 @@ def upload_material_to_tos(
         material.storage_mode = "cloud_available"
         if category.strip():
             material.category = category.strip()
+        if probe:
+            material.duration_seconds = probe.get("duration_seconds")
+            material.width = probe.get("width")
+            material.height = probe.get("height")
+            material.fps = probe.get("fps")
+            material.file_size_bytes = len(content)
         material.updated_at = datetime.now()
     else:
         material_id = f"tos-{uuid.uuid4().hex[:16]}"
@@ -315,10 +325,21 @@ def upload_material_to_tos(
             tos_presigned_url=presigned_url,
             tos_presigned_expires_at=expires_at,
             category=(category.strip() or None),
+            duration_seconds=probe.get("duration_seconds") if probe else None,
+            width=probe.get("width") if probe else None,
+            height=probe.get("height") if probe else None,
+            fps=probe.get("fps") if probe else None,
+            file_size_bytes=len(content),
         )
         db.add(material)
     db.commit()
     db.refresh(material)
+
+    # 异步分析素材（方舟多模态：判断人声 + 转写/描述）
+    if presigned_url:
+        from app.services.material_analysis import analyze_material_async
+        background_tasks.add_task(analyze_material_async, material.id, presigned_url)
+
     return _ok({
         "material_id": material.material_id,
         "tos_key": tos_key,

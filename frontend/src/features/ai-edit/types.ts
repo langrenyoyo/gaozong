@@ -44,6 +44,12 @@ export interface AiEditMaterial {
   tos_presigned_url?: string | null;
   tos_presigned_expires_at?: string | null;
   category?: string | null;
+  duration_seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
+  file_size_bytes?: number | null;
+  transcript?: string | null;
+  description?: string | null;
 }
 
 /** 9000 公共任务（不含 storage_key / merchant_id / 执行令牌 / 绝对路径）。 */

@@ -36,6 +36,19 @@ function materialDate(m: AiEditMaterial): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
 export default function MaterialLibrary({ merchantId }: { merchantId: string }) {
   void merchantId;
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
@@ -234,7 +247,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
                               {item.display_name || item.material_id}
                             </div>
                             <div className="mt-1 text-[11px] text-[#98a2b3]">
-                              {item.tos_presigned_url ? "已上传到云" : "本机"}
+                              {item.duration_seconds ? `时长 ${formatDuration(item.duration_seconds)}` : (item.tos_presigned_url ? "已上传到云" : "本机")}
                             </div>
                             {mc !== "未分类" ? (
                               <span className={`mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${TYPE_CLASS[mc]}`}>
@@ -258,7 +271,8 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               <div>
                 <h2 className="text-[15px] font-bold text-[#1a1f2e]">{selected.display_name || selected.material_id}</h2>
                 <p className="mt-1 text-xs text-[#8b95a6]">
-                  {materialCategory(selected)} · {selected.tos_presigned_url ? "已上传到云（可用混剪）" : "仅本机"}
+                  {materialCategory(selected)}{selected.duration_seconds ? ` · 时长 ${formatDuration(selected.duration_seconds)}` : ""} · {selected.tos_presigned_url ? "已上传到云" : "仅本机"}
+                  {selected.analysis_status === "analyzing" ? " · 分析中…" : selected.analysis_status === "analyzed" ? " · 已分析" : selected.analysis_status === "failed" ? " · 分析失败" : ""}
                 </p>
               </div>
               <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${TYPE_CLASS[materialCategory(selected)] || "bg-slate-100 text-slate-700"}`}>
@@ -272,7 +286,7 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
                   <video
                     src={selected.tos_presigned_url}
                     controls
-                    className="h-full w-full object-cover"
+                    className="max-h-[360px] w-full object-contain"
                   />
                 ) : (
                   <div className="text-center text-white/60">
@@ -283,14 +297,37 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               </div>
             </div>
 
+            {/* 口播文案 / 片段描述（方舟多模态分析结果） */}
             <div className="mx-5 mt-4 min-h-0 flex-1 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-4">
+              <h3 className="text-sm font-bold text-[#1a1f2e]">
+                {materialCategory(selected) === "高光" ? "片段描述" : "口播文案"}
+              </h3>
+              <p className="mt-1 text-xs text-[#98a2b3]">
+                {materialCategory(selected) === "高光" ? "用于剪辑镜头匹配" : "用于匹配高光素材"}
+              </p>
+              {selected.analysis_status === "analyzing" ? (
+                <div className="mt-3 rounded-xl bg-white p-3 text-xs text-[#8b95a6] ring-1 ring-[#eef2f6]">
+                  AI 分析中，请稍候…
+                </div>
+              ) : selected.transcript || selected.description ? (
+                <div className="mt-3 max-h-[160px] overflow-y-auto rounded-xl bg-white p-3 text-sm leading-7 text-[#374151] ring-1 ring-[#eef2f6]">
+                  {selected.transcript || selected.description}
+                </div>
+              ) : (
+                <div className="mt-3 rounded-xl bg-white p-3 text-xs text-[#8b95a6] ring-1 ring-[#eef2f6]">
+                  {selected.analysis_status === "failed" ? "分析失败，请重新上传或检查 ARK_API_KEY 配置" : "暂无分析结果，上传后自动分析"}
+                </div>
+              )}
+            </div>
+
+            <div className="mx-5 mt-4 shrink-0 rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-4">
               <h3 className="text-sm font-bold text-[#1a1f2e]">素材信息</h3>
-              <p className="mt-1 text-xs text-[#98a2b3]">素材 ID 与云存储地址</p>
               <div className="mt-3 space-y-2 text-xs text-[#475467]">
                 <div>素材 ID：{selected.material_id}</div>
                 <div>分类：{materialCategory(selected)}</div>
-                <div className="break-all">云地址：{selected.tos_presigned_url || "未上传"}</div>
-                <div>来源哈希：{selected.source_sha256?.slice(0, 12) || "-"}…</div>
+                {selected.duration_seconds ? <div>时长：{formatDuration(selected.duration_seconds)}</div> : null}
+                {selected.width && selected.height ? <div>分辨率：{selected.width}×{selected.height}</div> : null}
+                {selected.file_size_bytes ? <div>大小：{formatFileSize(selected.file_size_bytes)}</div> : null}
               </div>
             </div>
 

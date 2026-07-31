@@ -399,6 +399,9 @@ TOS_SECRET_KEY = os.getenv("TOS_SECRET_KEY", "").strip()
 TOS_BUCKET = os.getenv("TOS_BUCKET", "").strip()
 TOS_REGION = os.getenv("TOS_REGION", "cn-beijing").strip()
 TOS_ENDPOINT = os.getenv("TOS_ENDPOINT", "").strip()
+# 方舟多模态模型（素材分析：判断人声 + 转写/描述）
+ARK_API_KEY = os.getenv("ARK_API_KEY", "").strip()
+ARK_MODEL = os.getenv("ARK_MODEL", "doubao-seed-2-1-pro-260628").strip()
 
 # ---------- Phase 8-B 日报附件投递（默认关闭，灰度 allowlist）----------
 # 总开关关闭时只创建 held 投递，不创建可执行任务；production 禁 insecure HTTP。
