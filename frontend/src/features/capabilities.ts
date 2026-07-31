@@ -72,15 +72,25 @@ export const capabilityNavCenters: CapabilityNavCenter[] = [
     ],
   },
   {
-    id: "ai-edit-center",
-    title: "AI小高剪辑",
-    shortLabel: "剪辑",
+    id: "ai-edit-materials",
+    title: "小高素材库",
+    shortLabel: "素材",
     path: "/ai-edit/materials",
     defaultNavId: "ai-edit-materials",
     permissionCodes: [PERMISSIONS.aiEdit],
     children: [
-      { id: "ai-edit-materials", label: "素材库", path: "/ai-edit/materials" },
-      { id: "ai-edit-editor", label: "剪辑工作台", path: "/ai-edit/editor" },
+      { id: "ai-edit-materials", label: "小高素材库", path: "/ai-edit/materials" },
+    ],
+  },
+  {
+    id: "ai-edit-editor",
+    title: "AI小高剪辑",
+    shortLabel: "剪辑",
+    path: "/ai-edit/editor",
+    defaultNavId: "ai-edit-editor",
+    permissionCodes: [PERMISSIONS.aiEdit],
+    children: [
+      { id: "ai-edit-editor", label: "AI小高剪辑", path: "/ai-edit/editor" },
     ],
   },
   {

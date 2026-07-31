@@ -6,6 +6,7 @@ import {
   CpuIcon,
   ExternalLinkIcon,
   FilterIcon,
+  ClapperboardIcon,
   KeyRoundIcon,
   LoaderCircleIcon,
   LogOutIcon,
@@ -52,7 +53,8 @@ const centerIcons: Record<string, React.ReactNode> = {
   "agents-center": <BotIcon size={18} />,
   "wechat-assistant": <ShieldCheckIcon size={18} />,
   "compute-center": <CoinsIcon size={18} />,
-  "ai-edit-center": <ScissorsIcon size={18} />,
+  "ai-edit-materials": <ClapperboardIcon size={18} />,
+  "ai-edit-editor": <ScissorsIcon size={18} />,
 };
 
 const adminItems = [
