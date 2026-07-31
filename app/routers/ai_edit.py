@@ -270,6 +270,8 @@ def upload_material_to_tos(
             tos_key = uploader._key_for(tmp_path)
         except UploadError as exc:
             raise HTTPException(status_code=502, detail={"code": "TOS_UPLOAD_FAILED", "message": str(exc)})
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail={"code": "TOS_UPLOAD_FAILED", "message": f"TOS 上传异常：{exc}"})
     finally:
         try:
             os.remove(tmp_path)

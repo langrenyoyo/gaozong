@@ -9,9 +9,10 @@ import {
   FilmIcon,
   PlayIcon,
   SearchIcon,
+  Trash2Icon,
   UploadCloudIcon,
 } from "lucide-react";
-import { fetchAiEditMaterials, uploadMaterialToTos } from "../api";
+import { fetchAiEditMaterials, uploadMaterialToTos, deleteMaterial } from "../api";
 import type { AiEditMaterial } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
@@ -118,6 +119,20 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
         await load();
       } else if (fail > 0) {
         setError("上传失败，请稍后重试");
+      }
+    },
+    [load],
+  );
+
+  const onDeleteMaterial = useCallback(
+    async (materialId: string) => {
+      if (!window.confirm("确定删除该素材？")) return;
+      try {
+        await deleteMaterial(materialId);
+        toast.success("素材已删除");
+        await load();
+      } catch (err) {
+        setError(userFacingError(err, "删除失败，请稍后重试"));
       }
     },
     [load],
@@ -279,7 +294,15 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
               </div>
             </div>
 
-            <div className="flex shrink-0 justify-end border-t border-[#e4e8f0] px-5 py-4">
+            <div className="flex shrink-0 items-center justify-between border-t border-[#e4e8f0] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => void onDeleteMaterial(selected.material_id)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+              >
+                <Trash2Icon size={14} />
+                删除素材
+              </button>
               <button
                 type="button"
                 onClick={() => onTosPick(materialCategory(selected) === "高光" ? "高光" : "口播")}

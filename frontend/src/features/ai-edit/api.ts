@@ -55,6 +55,11 @@ export async function uploadMaterialToTos(file: File, category?: string): Promis
   }));
 }
 
+/** 删除素材（软删除，商户隔离）。 */
+export async function deleteMaterial(materialId: string): Promise<void> {
+  await apiClient.delete(`/ai-edit/materials/${encodeURIComponent(materialId)}`);
+}
+
 /** 创建任务（9000 注入 merchant_id，前端不自报）。 */
 export async function createAiEditJob(payload: AiEditJobCreateRequest): Promise<AiEditJob> {
   return unwrap(await apiClient.post("/ai-edit/jobs", payload));
