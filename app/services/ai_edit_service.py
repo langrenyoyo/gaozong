@@ -388,7 +388,7 @@ def to_material_out(material: AiEditMaterial) -> AiEditMaterialOut:
     if session is not None:
         analysis = (
             session.query(AiEditMaterialAnalysis)
-            .filter(AiEditMaterialAnalysis.material_id == material.id)
+            .filter(AiEditMaterialAnalysis.source_sha256 == material.source_sha256)
             .first()
         )
         if analysis and analysis.transcript_json:
