@@ -45,6 +45,7 @@ COMPUTE_CAPABILITY_KEYS = (
     "wechat-assistant",
     "compute",
     "knowledge",
+    "ai_edit",
 )
 BASIS_POINT_DENOMINATOR = 10_000
 # PostgreSQL 列域上界：markup_basis_points 为 INTEGER，计费量按 BIGINT 语义校验天花板

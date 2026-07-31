@@ -158,6 +158,7 @@ def process_las_job(job_id: int) -> None:
         job.completed_at = datetime.now()
         job.las_metadata_json = str(metadata)
         db.commit()
+        _report_las_compute_usage(db, job)
         logger.info("ai_edit_las_succeeded job_id=%s artifacts=%s", job_id, len(artifacts))
     except Exception as exc:  # noqa: BLE001 后台任务异常不向上抛
         db.rollback()
@@ -219,3 +220,32 @@ def get_las_job_status(db: Session, *, merchant_id: str, job_id: int) -> dict[st
             for a in artifacts
         ],
     }
+
+
+def _report_las_compute_usage(db: Session, job: AiEditJob) -> None:
+    """LAS 混剪任务成功后上报算力消耗（capability_key=ai_edit，方案 A 专属）。
+
+    估算口径：按 script 字符数 ÷2 估算 token（视频混剪消耗主要在云端算子，
+    此处仅作商户侧配额/展示用，非 LAS 实际计费）。失败/blocked 不扣。
+    上报异常不影响主流程。
+    """
+    script = str(job.las_script or "").strip()
+    if not script:
+        return
+    tokens = max(1, len(script) // 2)
+    try:
+        from app.services.compute_service import record_usage as _record_usage
+
+        _record_usage(
+            db,
+            job.merchant_id,
+            tokens,
+            capability_key="ai_edit",
+            source="other",
+            model="las-speech-auto",
+            remark=f"AI剪辑 LAS 任务 job_id={job.id}",
+            usage_measurement_method="estimated_tokens",
+        )
+    except Exception as exc:  # noqa: BLE001 算力上报失败不阻断任务
+        logger.warning("ai_edit_las_compute_usage stage=report_error job_id=%s error=%s", job.id, exc)
+
