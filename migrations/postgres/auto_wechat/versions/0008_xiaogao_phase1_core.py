@@ -397,7 +397,7 @@ def upgrade() -> None:
         "WHERE NOT EXISTS (SELECT 1 FROM compute_packages WHERE name = '专业版')"
     )
 
-    # 7.4 算力上浮能力 6 个（markup_basis_points 默认 0 基点 = 不上浮，由业务阶段配置）
+    # 7.4 算力上浮能力（markup_basis_points 默认 0 基点 = 不上浮，由业务阶段配置）
     for _capability in (
         "douyin-cs",
         "leads",
@@ -405,6 +405,7 @@ def upgrade() -> None:
         "wechat-assistant",
         "compute",
         "knowledge",
+        "ai_edit",
     ):
         op.execute(
             f"INSERT INTO compute_markup_ratios (capability_key, markup_basis_points, enabled) "

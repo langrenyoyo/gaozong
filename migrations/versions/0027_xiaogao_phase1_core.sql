@@ -430,3 +430,7 @@ WHERE NOT EXISTS (SELECT 1 FROM compute_markup_ratios WHERE capability_key = 'co
 INSERT INTO compute_markup_ratios (capability_key, markup_basis_points, enabled, created_at, updated_at)
 SELECT 'knowledge', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM compute_markup_ratios WHERE capability_key = 'knowledge');
+
+INSERT INTO compute_markup_ratios (capability_key, markup_basis_points, enabled, created_at, updated_at)
+SELECT 'ai_edit', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM compute_markup_ratios WHERE capability_key = 'ai_edit');
