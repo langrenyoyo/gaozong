@@ -17,9 +17,6 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 
 WORKDIR /workspace
 
-# 系统依赖：ffmpeg（含 ffprobe，用于视频时长/分辨率探测）
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
-
 # 先装依赖（利用 Docker 层缓存，源码改动不触发重装）
 # requirements-docker.txt 通过 -r 引用主依赖 requirements.txt，两个都要 COPY
 COPY requirements.txt ./requirements.txt

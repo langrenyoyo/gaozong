@@ -16,3 +16,4 @@ openpyxl>=3.1.5,<4
 pymilvus>=2.6.0
 tos>=2.9.0
 volcenginesdkarkruntime>=1.0.0
+mutagen>=1.47.0
