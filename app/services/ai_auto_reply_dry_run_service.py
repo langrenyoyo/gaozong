@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import hashlib
+import time as _time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -94,12 +95,27 @@ def run_ai_auto_reply_dry_run(event_id: int) -> None:
 
 
 def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> None:
+    """处理单个自动回复 run，含分阶段 perf_counter 计时。
+
+    B1 性能基线：在关键阶段前后记录 perf_counter，结束时输出一条结构化日志。
+    纯可观测，不改任何 gate/guarded/对账逻辑。
+    """
+    t_total = _time.perf_counter()
+    timing: dict[str, float] = {}
+    run_id_for_log = "?"
+
+    # event_load
+    t0 = _time.perf_counter()
     event = db.query(DouyinWebhookEvent).filter(DouyinWebhookEvent.id == event_id).first()
+    timing["event_load_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if event is None:
         logger.warning("ai_auto_reply_dry_run_event_missing stage=load_event event_id=%s", event_id)
         return
 
+    # dedupe_check
+    t0 = _time.perf_counter()
     existing = _existing_run(db, event.event_key)
+    timing["dedupe_check_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if existing is not None and existing.status not in ("pending", "processing", "retry_wait"):
         logger.info(
             "ai_auto_reply_dry_run_duplicate stage=dedupe event_id=%s event_key=%s status=%s",
@@ -146,7 +162,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         _insert_terminal_run(db, base, status="skipped", skip_reason="conversation_missing")
         return
 
+    # agent_binding
+    t0 = _time.perf_counter()
     binding = resolve_webhook_bound_agent(db, account_open_id=account_open_id)
+    timing["agent_binding_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if not binding.allowed or binding.agent is None:
         block_reason = _binding_block_reason(binding.reason_code)
         _insert_terminal_run(
@@ -162,11 +181,14 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         )
         return
 
+    # account_settings
+    t0 = _time.perf_counter()
     settings = get_account_autoreply_settings(
         db,
         merchant_id=binding.merchant_id or "",
         account_open_id=account_open_id,
     )
+    timing["account_settings_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     direct_llm_policy = parse_direct_llm_policy(settings)
     run_mode = _select_run_mode(settings)
     base["mode"] = run_mode
@@ -178,6 +200,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         getattr(settings, "send_enabled", None),
         getattr(settings, "dry_run_enabled", None),
     )
+    # latest_message_state
+    t0 = _time.perf_counter()
     latest_message_state = get_latest_private_message_state(
         db,
         account_open_id=account_open_id,
@@ -185,6 +209,9 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         customer_open_id=customer_open_id,
         trigger_server_message_id=event.server_message_id,
     )
+    timing["latest_message_state_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+    # pre_llm_gate
+    t0 = _time.perf_counter()
     pre_gate = evaluate_pre_llm_gates(
         db,
         settings=settings,
@@ -194,6 +221,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         latest_message=latest_message,
         latest_message_state=latest_message_state,
     )
+    timing["pre_llm_gate_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if not pre_gate.passed:
         terminal_base = {
             **base,
@@ -232,6 +260,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         prompt=binding.agent.prompt or "",
     )
     history_gate: dict[str, Any] = {"status": "ok"}
+    # conversation_context
+    t0 = _time.perf_counter()
     try:
         reply_context = build_reply_conversation_context(
             db,
@@ -242,6 +272,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             limit=10,
         )
     except Exception as exc:
+        timing["conversation_context_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
         logger.exception(
             "ai_auto_reply_history_failed stage=build_conversation_context "
             "failure_stage=conversation_context event_id=%s account_open_id=%s "
@@ -270,7 +301,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             gate_results={"history": history_gate, "agent": agent_gate},
         )
         return
+    timing["conversation_context_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
 
+    # forbidden_words + contact_state
+    t0 = _time.perf_counter()
     payload = {
         "tenant_id": binding.tenant_id or context.source_system,
         "merchant_id": binding.merchant_id,
@@ -318,6 +352,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             customer_memory=reply_context.customer_memory,
         ),
     }
+    timing["forbidden_words_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+    timing["pre_llm_total_ms"] = round((_time.perf_counter() - t_total) * 1000, 1)
     run = AiAutoReplyRun(
         **{
             **base,
@@ -337,7 +373,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
     run = _add_run(db, run)
     if run is None:
         return
+    run_id_for_log = run.id
 
+    # 9100 LLM 调用
+    t0 = _time.perf_counter()
     try:
         upstream_result = get_xg_douyin_ai_cs_client().suggest_reply(
             context=context,
@@ -345,6 +384,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             request=payload,
         )
     except XgDouyinAiCsClientError as exc:
+        timing["cs_http_total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
         llm_gate = _build_llm_error_gate(exc)
         logger.warning(
             "ai_auto_reply_llm_failed stage=xg_douyin_ai_cs run_id=%s event_id=%s "
@@ -366,6 +406,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
         )
         return
+    timing["cs_http_total_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
 
     if _is_upstream_llm_error(upstream_result):
         llm_gate = _build_llm_result_error_gate(upstream_result)
@@ -390,6 +431,8 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         )
         return
 
+    # post_llm + sanitize
+    t0 = _time.perf_counter()
     final_result = dict(upstream_result)
     content_check = sanitize_ai_reply_content(final_result.get("reply_text"))
     format_invalid = content_check.format_invalid
@@ -478,6 +521,42 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
                 logger.warning(
                     "ai_auto_reply_lease_lost stage=dry_run_decided_release run_id=%s", run.id,
                 )
+
+    # B1 性能基线：输出分阶段耗时结构化日志
+    timing["post_llm_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
+    timing["end_to_end_ms"] = round((_time.perf_counter() - t_total) * 1000, 1)
+    # 从 9100 透传的指标
+    cs_obs = {}
+    if isinstance(upstream_result, dict):
+        for k in ("llm_primary_ms", "llm_retry_ms", "reply_suggestion_total_ms",
+                   "rag_embedding_ms", "rag_vector_search_ms", "merchant_prompt_ms",
+                   "rag_total_ms", "llm_call_count", "retry_reason"):
+            v = upstream_result.get(k)
+            if v is not None:
+                cs_obs[k] = v
+    logger.info(
+        "ai_auto_reply_latency stage=done run_id=%s event_id=%s "
+        "end_to_end_ms=%.1f pre_llm_total_ms=%.1f cs_http_total_ms=%.1f post_llm_ms=%.1f "
+        "event_load_ms=%.1f dedupe_check_ms=%.1f agent_binding_ms=%.1f "
+        "account_settings_ms=%.1f latest_message_state_ms=%.1f pre_llm_gate_ms=%.1f "
+        "conversation_context_ms=%.1f forbidden_words_ms=%.1f "
+        "cs_llm_primary_ms=%s cs_llm_retry_ms=%s cs_reply_suggestion_total_ms=%s "
+        "cs_rag_embedding_ms=%s cs_rag_vector_search_ms=%s cs_merchant_prompt_ms=%s "
+        "cs_rag_total_ms=%s cs_llm_call_count=%s cs_retry_reason=%s",
+        run_id_for_log, event_id,
+        timing.get("end_to_end_ms", 0), timing.get("pre_llm_total_ms", 0),
+        timing.get("cs_http_total_ms", 0), timing.get("post_llm_ms", 0),
+        timing.get("event_load_ms", 0), timing.get("dedupe_check_ms", 0),
+        timing.get("agent_binding_ms", 0), timing.get("account_settings_ms", 0),
+        timing.get("latest_message_state_ms", 0), timing.get("pre_llm_gate_ms", 0),
+        timing.get("conversation_context_ms", 0), timing.get("forbidden_words_ms", 0),
+        cs_obs.get("llm_primary_ms"), cs_obs.get("llm_retry_ms"),
+        cs_obs.get("reply_suggestion_total_ms"),
+        cs_obs.get("rag_embedding_ms"), cs_obs.get("rag_vector_search_ms"),
+        cs_obs.get("merchant_prompt_ms"),
+        cs_obs.get("rag_total_ms"), cs_obs.get("llm_call_count"),
+        cs_obs.get("retry_reason"),
+    )
 
 
 def _existing_run(db, event_key: str | None) -> AiAutoReplyRun | None:

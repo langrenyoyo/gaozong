@@ -678,6 +678,7 @@ def _build_llm_reply(
     fallback_reason: str | None = None,
 ) -> ReplySuggestionResponse:
     gen_started = time.perf_counter()
+    rag_timing: dict[str, float] = {}
     source_payload = [
         {
             "chunk_id": item.chunk_id,
@@ -687,10 +688,15 @@ def _build_llm_reply(
         }
         for item in source_chunks
     ]
+    # B1: merchant_prompt 构建 + messages 构建计时
+    t0 = time.perf_counter()
     messages = build_llm_messages(request, merchant_prompt, source_chunks)
+    rag_timing["merchant_prompt_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     client = OpenAICompatibleClient()
     agent_phone_goal = _agent_requires_phone_lead_capture(agent)
 
+    # B1: 算力余额检查计时
+    t0 = time.perf_counter()
     # 算力余额检查：LLM 调用前查余额，余额 ≤ 0 时阻断
     _balance_client = ComputeUsageClient()
     balance = _balance_client.check_balance(merchant_id=str(request.merchant_id or ""))
@@ -722,6 +728,8 @@ def _build_llm_reply(
             fallback_reason=fallback_reason,
             **_agent_response_fields(agent),
         )
+
+    rag_timing["balance_check_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
     try:
         result = client.chat(messages)
@@ -981,6 +989,10 @@ def _build_llm_reply(
             llm_primary_ms=llm_primary_ms,
             llm_retry_ms=llm_retry_ms,
         ),
+        merchant_prompt_ms=int(rag_timing.get("merchant_prompt_ms", 0) or 0),
+        rag_embedding_ms=int(rag_timing.get("rag_embedding_ms", 0) or 0),
+        rag_vector_search_ms=int(rag_timing.get("rag_vector_search_ms", 0) or 0),
+        rag_total_ms=int((rag_timing.get("merchant_prompt_ms", 0) or 0) + (rag_timing.get("rag_embedding_ms", 0) or 0) + (rag_timing.get("rag_vector_search_ms", 0) or 0) + (rag_timing.get("balance_check_ms", 0) or 0)),
         reply_suggestion_total_ms=int((time.perf_counter() - gen_started) * 1000),
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import hashlib
 import json
+import time as _time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -140,6 +141,8 @@ def send_ai_auto_reply_for_run(db: Session, *, run_id: int, lease_owner: str = "
 
 
 def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, Any]:
+    t_send_total = _time.perf_counter()
+    send_timing: dict[str, float] = {}
     run = db.query(AiAutoReplyRun).filter(AiAutoReplyRun.id == run_id).first()
     if run is None:
         return {"status": "skipped", "reason": "run_not_found"}
@@ -204,6 +207,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
     # 由检查点/终态 guarded UPDATE 一次性写入，禁止修改 Session 管理的 ORM 属性（避免脏写）
     gate_acc: dict[str, Any] = _json_object(run.gate_results_json)
 
+    # B1: real_send_gate 计时
+    t0 = _time.perf_counter()
     settings = get_account_autoreply_settings(
         db,
         merchant_id=run.merchant_id,
@@ -217,6 +222,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         customer_open_id=run.customer_open_id,
         conversation_short_id=run.conversation_short_id,
     )
+    send_timing["real_send_gate_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if not real_send_gate.passed:
         gate_json = _merge_gate_results(
             gate_acc, "real_send",
@@ -241,6 +247,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         {**(real_send_gate.gate_results or {}), "send_gate_passed": True},
     )
 
+    # B1: manual_takeover 计时
+    t0 = _time.perf_counter()
     manual_takeover = evaluate_manual_takeover_gate(
         db,
         merchant_id=run.merchant_id,
@@ -248,6 +256,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         conversation_short_id=run.conversation_short_id or "",
     )
     gate_json = _merge_gate_results(gate_acc, "real_send", {"manual_takeover": manual_takeover})
+    send_timing["manual_takeover_check_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if manual_takeover.get("blocked") is True:
         _terminal(
             db, run, expected_status="send_processing", status="send_skipped",
@@ -256,6 +265,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         logger.info("ai_auto_reply_send_skipped stage=manual_takeover run_id=%s reason=manual_takeover_blocked", run.id)
         return {"status": "send_skipped", "reason": "manual_takeover_blocked"}
 
+    # B1: latest_message_recheck + send_context 计时
+    t0 = _time.perf_counter()
     latest_state = get_latest_private_message_state(
         db,
         account_open_id=run.account_open_id,
@@ -281,6 +292,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         conversation_short_id=run.conversation_short_id or "",
         customer_open_id=run.customer_open_id,
     )
+    send_timing["latest_message_recheck_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     if send_context is None:
         _mark_send_skipped_after_checkpoint(db, run, "send_context_unavailable", gate_results_json=gate_json)
         logger.info("ai_auto_reply_send_skipped stage=send_context run_id=%s reason=send_context_unavailable", run.id)
@@ -312,6 +324,8 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         return {"status": "send_skipped", "reason": "send_authorized_race_lost"}
     db.refresh(run)
 
+    # B1: douyin_api 计时
+    t0 = _time.perf_counter()
     try:
         send_result = _send_private_message_with_context(
             db,
@@ -324,6 +338,7 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
             decision_log_id=run.decision_log_id,
             auto_reply_run_id=run.id,
         )
+        send_timing["douyin_api_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     except HTTPException as exc:
         failure_stage = _classify_send_failure(exc)
         terminal_status = "failed" if failure_stage == "upstream_business_error" else "send_unknown"
@@ -373,6 +388,19 @@ def _send_ai_auto_reply_for_run_impl(db: Session, *, run_id: int) -> dict[str, A
         )
         return {"status": "sent", "record_id": send_result.get("record_id")}
     logger.warning("ai_auto_reply_send_lease_lost stage=send_success run_id=%s", run.id)
+    # B1 性能基线：发送阶段分阶段耗时日志
+    send_timing["send_total_ms"] = round((_time.perf_counter() - t_send_total) * 1000, 1)
+    logger.info(
+        "ai_auto_reply_send_latency stage=send_done run_id=%s "
+        "send_total_ms=%.1f real_send_gate_ms=%.1f manual_takeover_check_ms=%.1f "
+        "latest_message_recheck_ms=%.1f douyin_api_ms=%.1f",
+        run.id,
+        send_timing.get("send_total_ms", 0),
+        send_timing.get("real_send_gate_ms", 0),
+        send_timing.get("manual_takeover_check_ms", 0),
+        send_timing.get("latest_message_recheck_ms", 0),
+        send_timing.get("douyin_api_ms", 0),
+    )
     return {"status": "sent", "record_id": send_result.get("record_id")}
 
 

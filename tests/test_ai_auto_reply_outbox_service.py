@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.services.ai_auto_reply_outbox_service import (
     _cycle_single_flight_lock,
+    _cycle_rearm,
     _guarded_lease_update,
     _set_outbox_lease_owner,
     enqueue_auto_reply_run,
@@ -791,7 +792,12 @@ def test_manual_retry_rejects_when_send_record_exists(db_engine):
 
 
 def test_run_outbox_cycle_single_flight_skips_when_busy():
-    """scheduler 与 wake 共用 cycle 单飞锁：锁被持有时立即跳过，不创建 Session。"""
+    """scheduler 与 wake 共用 cycle 单飞锁：锁被持有时立即跳过，不创建 Session。
+
+    B2 接力：撞锁会置位 _cycle_rearm（供持锁线程接力），finally 必须清理，
+    否则残留 set 会污染后续 run_outbox_cycle 测试（使其多跑一轮）。
+    """
+    _cycle_rearm.clear()
     _cycle_single_flight_lock.acquire()
     try:
         with patch("app.services.ai_auto_reply_outbox_service.SessionLocal") as sl, \
@@ -799,8 +805,10 @@ def test_run_outbox_cycle_single_flight_skips_when_busy():
             run_outbox_cycle()
             assert sl.call_count == 0
             assert rec.call_count == 0
+            assert _cycle_rearm.is_set(), "撞锁应置位 rearm 供接力"
     finally:
         _cycle_single_flight_lock.release()
+        _cycle_rearm.clear()
 
 
 def test_run_outbox_cycle_proceeds_when_lock_free():

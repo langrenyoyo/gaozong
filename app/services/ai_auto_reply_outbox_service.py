@@ -97,6 +97,11 @@ def _guarded_lease_update(
 # cycle 单飞锁：scheduler 与 webhook wake 共用，避免并发完整扫描形成无界并行。
 _cycle_single_flight_lock = threading.Lock()
 
+# cycle 接力标志：webhook 唤醒撞到正在运行的 cycle 时置位，持锁线程在当前 body
+# 结束后同线程再跑一轮，消除"撞锁 skip → 等周期兜底"的 60s 空窗。仅在撞锁时 set，
+# 不自发；空 batch + 未置位 → 自然退出，不会死循环。
+_cycle_rearm = threading.Event()
+
 # 状态常量
 STATUS_PENDING = "pending"
 STATUS_PROCESSING = "processing"
@@ -531,32 +536,56 @@ def run_outbox_cycle() -> None:
     """执行一轮 outbox 处理周期：recover → claim → process → compensate → alert。
 
     scheduler 与 webhook wake 共用本入口；非阻塞单飞锁防止并发完整扫描。
+    撞锁时置位 _cycle_rearm，持锁线程在 body 结束后同线程再跑一轮（不变量：
+    任意时刻仍只有一个 body 在跑），消除 webhook 唤醒撞锁后的 60s 空窗。
     Session 在取得单飞锁后、try 内创建，确保 Session 构造失败时锁也能释放。
     """
     if not _cycle_single_flight_lock.acquire(blocking=False):
-        logger.info("ai_outbox_cycle_skipped reason=single_flight_busy")
+        # cycle 在跑：置位接力，持锁线程会在当前 body 结束后再跑一轮
+        _cycle_rearm.set()
+        logger.info("ai_outbox_cycle_skipped reason=single_flight_busy rearm=true")
         return
     db = None
     try:
-        db = SessionLocal()
-        recover_expired_leases(db)
+        while True:
+            db = SessionLocal()
+            recover_expired_leases(db)
 
-        batch = claim_next_batch(db, batch_size=config.AI_AUTO_REPLY_OUTBOX_BATCH_SIZE)
-        for run in batch:
-            try:
-                _process_one(db, run)
-            except Exception as exc:
-                db.rollback()
-                logger.exception(
-                    "ai_outbox_process_error stage=process_one run_id=%s error_type=%s",
-                    run.id, type(exc).__name__,
-                )
-                # 异常后关闭旧 Session 再创建新 Session（修复泄漏）
+            batch = claim_next_batch(db, batch_size=config.AI_AUTO_REPLY_OUTBOX_BATCH_SIZE)
+            for run in batch:
+                # B1 性能基线：记录排队等待时间（run_created_at → claim 时刻）
+                if run.created_at:
+                    now_ref = datetime.now(run.created_at.tzinfo) if run.created_at.tzinfo else datetime.now()
+                    queue_wait_ms = (now_ref - run.created_at).total_seconds() * 1000
+                    # account_open_id 属 PII，不入日志；run_id 已是唯一追踪键
+                    logger.info(
+                        "ai_outbox_queue_wait stage=claim run_id=%s queue_wait_ms=%.1f status=%s "
+                        "single_flight_busy=false",
+                        run.id, queue_wait_ms, run.status,
+                    )
+                try:
+                    _process_one(db, run)
+                except Exception as exc:
+                    db.rollback()
+                    logger.exception(
+                        "ai_outbox_process_error stage=process_one run_id=%s error_type=%s",
+                        run.id, type(exc).__name__,
+                    )
+                    # 异常后关闭旧 Session 再创建新 Session（修复泄漏）
+                    db.close()
+                    db = SessionLocal()
+
+            compensate_missing_runs(db)
+            alert_backlog(db)
+
+            # 接力检查：本 body 期间若有 webhook 唤醒撞锁置位，则同线程再跑一轮
+            if _cycle_rearm.is_set():
+                _cycle_rearm.clear()
+                logger.info("ai_outbox_cycle_rearm stage=rearm")
                 db.close()
-                db = SessionLocal()
-
-        compensate_missing_runs(db)
-        alert_backlog(db)
+                db = None
+                continue
+            break
     except Exception as exc:
         if db is not None:
             db.rollback()
