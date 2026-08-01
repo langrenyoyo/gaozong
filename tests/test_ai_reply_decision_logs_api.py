@@ -12,6 +12,7 @@ from app.database import Base, get_db
 from app.models import (
     AiReplyDecisionLog,
     AutoReplyAdminAuditLog,
+    DouyinAuthorizedAccount,
     DouyinPrivateMessageSend,
 )
 
@@ -758,3 +759,50 @@ def test_batch_effectiveness_requires_admin():
         json={"log_ids": [1], "is_effective": True},
     )
     assert response.status_code == 403
+
+
+def test_list_logs_returns_account_name_not_open_id():
+    """回归：列表"抖音号昵称"列应返回 account_name 而非回退 open_id。
+
+    根因是响应 schema AiReplyDecisionLogListItem 曾漏声明 account_name 字段，
+    Pydantic 默认 extra=ignore 在 response_model 序列化时丢弃 service 已 join 的昵称，
+    前端拿不到只能回退 account_open_id。本测试守住 schema 不再漏字段。
+    """
+    db = TestSession()
+    try:
+        db.add(
+            DouyinAuthorizedAccount(
+                merchant_id="merchant-a",
+                main_account_id=123,
+                open_id="account-1",
+                account_name="海赫科技",
+                bind_status=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    log_id = _insert_log(account_open_id="account-1")
+    _insert_send_record(decision_log_id=log_id, merchant_account_open_id="account-1")
+
+    response = _client().get("/ai-reply-decision-logs")
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert len(items) == 1
+    # account_name 必须下发真实昵称，不能是 None 也不能回退成 open_id
+    assert items[0]["account_name"] == "海赫科技"
+    assert items[0]["account_open_id"] == "account-1"
+
+
+def test_list_logs_account_name_none_when_no_authorized_account():
+    """无授权账号记录时 account_name 为 None（前端回退 open_id 属预期行为）。"""
+    log_id = _insert_log(account_open_id="account-orphan")
+    _insert_send_record(decision_log_id=log_id, merchant_account_open_id="account-orphan")
+
+    response = _client().get("/ai-reply-decision-logs")
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["account_name"] is None
+    assert items[0]["account_open_id"] == "account-orphan"

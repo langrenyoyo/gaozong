@@ -1462,6 +1462,9 @@ class AiReplyDecisionLogListItem(BaseModel):
     id: int
     merchant_id: str
     account_open_id: Optional[str] = None
+    # 抖音号昵称：service 已按 open_id join douyin_authorized_accounts.account_name，
+    # 此处必须声明，否则 Pydantic 默认 extra=ignore 会在 response_model 序列化时丢弃
+    account_name: Optional[str] = None
     conversation_id: Optional[str] = None
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None
