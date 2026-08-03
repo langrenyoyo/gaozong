@@ -1010,61 +1010,22 @@ def _build_request_contact_state(
     from_user_id: str,
     customer_memory: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源。
+    """9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源（P0-B 委托公共模块）。
 
-    综合跨 AI 回复补全（事件溯源）与客户记忆已有的联系方式，仅输出脱敏值。
+    保留原私有函数签名兼容自动回复调用；实际委托 app.services.contact_state_service。
     异常时不伪装为可信 request：返回空 dict 省略全部 contact 字段，
     由 9100 用共享状态机执行 local_fallback；异常不阻断回复主链路。
     """
-    try:
-        if not merchant_id or not account_open_id or not conversation_short_id or not from_user_id:
-            state = analyze_contact_state(latest_message)
-        else:
-            _combined, state = resolve_contact_with_completion(
-                db,
-                current_text=latest_message,
-                merchant_id=merchant_id,
-                account_open_id=account_open_id,
-                conversation_short_id=conversation_short_id,
-                from_user_id=from_user_id,
-            )
-        status = state.status
-        # 客户记忆已有有效联系方式 → 视为 VALID（单一可信源，与 9100 本地推断一致）
-        if status == "NONE":
-            memory = customer_memory or {}
-            mem_contact = memory.get("contact") if isinstance(memory, dict) else None
-            if isinstance(mem_contact, dict) and mem_contact.get("has_contact"):
-                status = "VALID"
-        masked = state.masked_value
-        if status == "VALID" and not masked and (customer_memory or {}).get("contact", {}).get("masked_values"):
-            masked = (customer_memory or {}).get("contact", {}).get("masked_values", [None])[0]
-        return {
-            "contact_state": {
-                "status": status,
-                "type": state.type,
-                "masked_value": masked,
-                "fragment_count": state.fragment_count,
-                "reason_code": state.reason_code,
-            },
-            "contact_action": _CONTACT_ACTION_BY_STATE.get(status, "NONE"),
-            "contact_state_source": "request",
-        }
-    except Exception:
-        # 异常降级：不伪装为可信 request，省略全部 contact 字段，
-        # 由 9100 用共享状态机执行 local_fallback；异常不阻断主链路。
-        # 日志只记录安全上下文（脱敏标识），不记录完整手机号/微信号/客户原文。
-        import sys as _sys
-        exc_type = _sys.exc_info()[0] or RuntimeError
-        logger.warning(
-            "ai_auto_reply_contact_state_failed stage=build_request_contact_state "
-            "fallback=local merchant_id=%s douyin_account_id=%s conversation_id=%s "
-            "error_type=%s",
-            merchant_id,
-            _short(account_open_id),
-            conversation_short_id,
-            exc_type.__name__,
-        )
-        return {}
+    from app.services.contact_state_service import build_request_contact_state
+    return build_request_contact_state(
+        db,
+        latest_message=latest_message,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        conversation_short_id=conversation_short_id,
+        from_user_id=from_user_id,
+        customer_memory=customer_memory,
+    )
 
 
 def _json_dumps(value: Any) -> str:

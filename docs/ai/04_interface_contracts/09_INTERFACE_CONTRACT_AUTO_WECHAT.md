@@ -1610,3 +1610,27 @@ P0-API-1 完成后，后续文档顺序：
 2. `/internal/compute/usage` 一期不做余额不足拦截。
 3. 管理员接口仅允许 `super_admin`。
 4. 生产环境内部 usage 必须配置 `COMPUTE_INTERNAL_TOKEN`，避免外部滥用。
+
+## 10. 9100 AI 回复建议接口（P0-B Schema 2.0）
+
+### 10.1 路由
+
+- `POST /douyin/reply-suggestion`
+- `POST /douyin/conversations/{conversation_id}/reply-suggestion`
+
+响应模型为联合类型 `ReplySuggestionResponseV2 | ReplySuggestionResponse`：
+
+- **LEGACY / SHADOW**：返回 `ReplySuggestionResponse`（原响应），HTTP JSON **不含** `output_schema_version`/`decision`/`messages` 键。
+- **ENABLED**：返回 `ReplySuggestionResponseV2`（Schema 2.0），HTTP JSON **同时包含** `output_schema_version="2.0"`、`decision`、`messages`（三者整体出现，不允许部分存在）。
+
+### 10.2 Schema 2.0 约束（ENABLED）
+
+- `output_schema_version` 固定 `"2.0"`，必填。
+- `decision` 必填（`ReplyPolicyDecisionData`）。
+- `messages` 必填且恰好 1 条（P0-B 严格单消息）；`sequence=1`；`text` 去空白后非空。
+- `reply_text == messages[0].text`（兼容旧调用方）。
+- `delivery_mode = SINGLE_MESSAGE`，`max_messages = 1`。
+
+### 10.3 contact request 持久 Policy
+
+P0-B 阶段 `DOUYIN_CONTACT_REQUEST_POLICY_ENABLED` 强制 `false`（启用将启动失败）。`contact_action=LEGACY_DELEGATED`，`contact_request_policy_enforced=false`。现有 `missing_phone_goal` 继续决定首次留资引导。

@@ -20,6 +20,8 @@ from app.services.agent_knowledge_category_service import (
 from app.services.knowledge_category_service import ensure_category_usable_for_merchant
 from app.services.ai_agent_service import get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
+from app.services.forbidden_word_service import load_forbidden_words_for_llm
+from app.services.contact_state_service import build_request_contact_state
 from app.services.douyin_account_agent_binding_service import (
     list_account_agents_for_merchant_account,
 )
@@ -188,6 +190,40 @@ class RagTrainProxyRequest(BaseModel):
     force_rebuild: bool | None = None
 
 
+def _build_preview_contact_state(
+    db: Session,
+    *,
+    latest_message: str,
+    merchant_id: str,
+    account_open_id: str,
+    conversation_short_id: str,
+    from_user_id: str,
+    customer_memory: Any,
+) -> dict[str, Any]:
+    """会话预览复用公共 contact_state_service 构造 contact_state（只读，无副作用）。
+
+    会话预览无 webhook 事件上下文，from_user_id 传空，公共模块走 analyze_contact_state 本地 fallback。
+    """
+    try:
+        return build_request_contact_state(
+            db,
+            latest_message=latest_message,
+            merchant_id=merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
+            from_user_id=from_user_id,
+            customer_memory=customer_memory,
+        )
+    except Exception:
+        logger.warning(
+            "preview_contact_state_failed merchant_id=%s conversation_id=%s",
+            merchant_id,
+            conversation_short_id,
+            exc_info=True,
+        )
+        return {}
+
+
 @router.post("/conversations/{conversation_id}/reply-suggestion")
 async def create_reply_suggestion_proxy(
     conversation_id: str,
@@ -289,12 +325,35 @@ async def create_reply_suggestion_proxy(
             "status": agent.status,
             "allowed_category_keys": allowed_category_keys,
             "rag_enabled": bool(allowed_category_keys),
+            # P0-B：会话预览补齐商家变量（与自动回复一致，缺失值用空字符串）
+            "store_address": getattr(agent, "store_address", "") or "",
+            "store_phone": getattr(agent, "store_phone", "") or "",
+            "store_wechat": getattr(agent, "store_wechat", "") or "",
+            "business_hours": getattr(agent, "business_hours", "") or "",
+            "sales_cities": getattr(agent, "sales_cities", "") or "",
+            "sales_brands": getattr(agent, "sales_brands", "") or "",
+            "purchase_cities": getattr(agent, "purchase_cities", "") or "",
+            "purchase_brands": getattr(agent, "purchase_brands", "") or "",
+            "after_hours_reply": getattr(agent, "after_hours_reply", "") or "",
+            "vehicle_condition_reply": getattr(agent, "vehicle_condition_reply", "") or "",
+            "appraiser_off_hours_reply": getattr(agent, "appraiser_off_hours_reply", "") or "",
         },
         "latest_message": reply_context.latest_message,
         "max_history_messages": min(request.max_history_messages, 10),
         "conversation_history": reply_context.conversation_history,
         "customer_memory": reply_context.customer_memory,
         "direct_llm_policy": direct_llm_policy,
+        # P0-B：会话预览补齐 forbidden_words + contact_state（与自动回复共享 contact_state_service）
+        "forbidden_words": load_forbidden_words_for_llm(db),
+        **_build_preview_contact_state(
+            db,
+            latest_message=reply_context.latest_message,
+            merchant_id=context.merchant_id,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_id,
+            from_user_id="",
+            customer_memory=reply_context.customer_memory,
+        ),
     }
 
     try:

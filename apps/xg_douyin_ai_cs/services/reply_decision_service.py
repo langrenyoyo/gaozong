@@ -20,8 +20,11 @@ from apps.xg_douyin_ai_cs.rag.models import RagSearchRequest
 from apps.xg_douyin_ai_cs.rag.repository import UNIFIED_KB_DOUYIN_ACCOUNT_ID, log_llm_call, search_with_diagnostics
 from apps.xg_douyin_ai_cs.schemas import (
     RecommendedVehicle,
+    ReplyMessageData,
+    ReplyPolicyDecisionData,
     ReplySuggestionRequest,
     ReplySuggestionResponse,
+    ReplySuggestionResponseV2,
 )
 from apps.xg_douyin_ai_cs.services.agent_context import AgentContext
 from apps.xg_douyin_ai_cs.services.agent_runtime import AgentRuntimeFacade
@@ -30,6 +33,13 @@ from apps.xg_douyin_ai_cs.services.compute_usage_client import (
     measure_chat_usage,
 )
 from apps.xg_douyin_ai_cs.services.mock_workbench_service import resolve_account_agent
+from apps.xg_douyin_ai_cs.services.reply_kernel.mode import (
+    KernelMode,
+    get_kernel_runtime_settings,
+)
+from apps.xg_douyin_ai_cs.services.reply_kernel.context import ReplyContext
+from apps.xg_douyin_ai_cs.services.reply_kernel.policy import ReplyPolicyDecision, decide as kernel_decide
+from apps.xg_douyin_ai_cs.services.reply_kernel.validator import validate as kernel_validate
 from app.services.contact_extractor import (
     analyze_contact_state,
     extract_contacts_from_text,
@@ -316,10 +326,269 @@ SAME_CATEGORY_RECOMMENDATIONS = [
 ]
 
 
+def _build_reply_context(
+    *,
+    request: ReplySuggestionRequest,
+    agent: dict,
+    agent_phone_goal: bool,
+    known_customer_info: dict | None = None,
+) -> ReplyContext:
+    """从 request + known_customer 构造 ReplyContext（纯数据，无副作用）。"""
+    contact_state, _action, source = _resolve_contact_state_with_source(
+        request=request,
+        contacts=(known_customer_info or {}).get("known_customer_info", {}).get("contact", {})
+        if known_customer_info
+        else _extract_known_contacts(
+            latest_message=request.latest_message,
+            conversation_history=request.conversation_history,
+            customer_memory=request.customer_memory,
+        ),
+    )
+    latest = request.latest_message or ""
+    return ReplyContext(
+        context_mode="live",
+        latest_customer_message=latest,
+        contact_state=contact_state,
+        contact_state_source=source,
+        contact_request_status="UNKNOWN",  # P0-B 占位，policy 关闭不消费
+        agent_phone_goal=agent_phone_goal,
+        scene_suitable_for_lead=_scene_suitable_for_lead_capture(latest),
+        customer_refused_lead=_customer_refused_lead(latest),
+        known_customer_info=known_customer_info.get("known_customer_info") if known_customer_info else None,
+    )
+
+
+def _shadow_hmac_digest(secret: str, stable_identifier: str) -> bytes:
+    """HMAC-SHA256 完整摘要，用专用 shadow 密钥（不复用 LLM API Key，无固定默认）。"""
+    import hashlib
+    import hmac as _hmac
+    return _hmac.new(
+        secret.encode("utf-8"),
+        str(stable_identifier or "").encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+
+
+def _shadow_sample_id(secret: str, stable_identifier: str) -> str:
+    """假名化的 Shadow 运营标识（HMAC 摘要前 16 hex），不记录原始会话 ID。"""
+    return _shadow_hmac_digest(secret, stable_identifier).hex()[:16]
+
+
+def _should_sample_shadow(rate: float, secret: str, stable_identifier: str) -> bool:
+    """稳定采样：同一 identifier+secret 结果一致，用完整摘要前 8 字节。"""
+    if rate >= 1.0:
+        return True
+    if rate <= 0.0:
+        return False
+    digest = _shadow_hmac_digest(secret, stable_identifier)
+    bucket = int.from_bytes(digest[:8], "big") / float(2**64)
+    return bucket < rate
+
+
+def _log_shadow_diff(
+    *,
+    stable_identifier: str,
+    merchant_id: str,
+    shadow_decision: ReplyPolicyDecision,
+    legacy_response,
+    sampled: bool,
+    hard_violation: bool,
+    hmac_secret: str,
+) -> None:
+    """记录脱敏 shadow diff 日志。
+
+    采样标识用 HMAC 摘要前 16 hex（假名化的 Shadow 运营标识），不记录原始会话 ID。
+    日志不含完整消息/回复/联系方式/known_customer_info。
+    """
+    if not sampled and not hard_violation:
+        return
+    diff_codes: list[str] = []
+    legacy_hard = set(getattr(legacy_response, "risk_flags", []) or [])
+    if shadow_decision.must_not_claim_contact_received and not legacy_hard:
+        diff_codes.append("kernel_strict_not_received")
+    if shadow_decision.contact_action == "LEGACY_DELEGATED":
+        diff_codes.append("legacy_delegated")
+    sample_id = _shadow_sample_id(hmac_secret, str(stable_identifier))
+    _logger.info(
+        "reply_kernel_shadow_diff shadow_sample_id=%s merchant_id=%s sampled=%s "
+        "hard_violation=%s kernel_contact_action=%s kernel_contact_claim=%s "
+        "kernel_constraint_codes=%s diff_codes=%s",
+        sample_id,
+        merchant_id,
+        sampled,
+        hard_violation,
+        shadow_decision.contact_action,
+        shadow_decision.contact_claim,
+        shadow_decision.policy_reason_codes,
+        diff_codes,
+    )
+
+
+def _build_v2_response_from_legacy(
+    *,
+    legacy_response: ReplySuggestionResponse,
+    decision: ReplyPolicyDecision,
+) -> ReplySuggestionResponseV2:
+    """Enabled 模式：从 Legacy 响应 + Kernel Decision 构造 Schema 2.0 响应。
+
+    返回独立 V2 模型（含完整 Legacy 字段 + Schema 2.0 必填字段）。
+    reply_text = messages[0].text = legacy reply_text（兼容）。
+    """
+    reply_text = legacy_response.reply_text
+    purpose = "contact_request" if decision.contact_action != "NO_CONTACT_ACTION" else "answer"
+    if decision.primary_action == "OFF_PLATFORM_DETAIL_HANDOFF":
+        purpose = "handoff"
+    return ReplySuggestionResponseV2(
+        reply_text=reply_text,
+        output_schema_version="2.0",
+        decision=ReplyPolicyDecisionData(
+            primary_action=decision.primary_action,
+            contact_action=decision.contact_action,
+            contact_claim=decision.contact_claim,
+            contact_request_policy_enforced=decision.contact_request_policy_enforced,
+            salutation=decision.salutation,
+            must_not_claim_contact_received=decision.must_not_claim_contact_received,
+            must_not_repeat_full_contact_request=decision.must_not_repeat_full_contact_request,
+            may_request_contact_completion=decision.may_request_contact_completion,
+            delivery_mode=decision.delivery_mode,
+            max_messages=decision.max_messages,
+            policy_reason_codes=decision.policy_reason_codes,
+        ),
+        messages=[ReplyMessageData(sequence=1, purpose=purpose, text=reply_text)],
+        # Legacy 字段透传
+        match_level=legacy_response.match_level,
+        target_category=legacy_response.target_category,
+        target_vehicle_name=legacy_response.target_vehicle_name,
+        recommended_vehicles=legacy_response.recommended_vehicles,
+        lead_capture_required=legacy_response.lead_capture_required,
+        confidence=legacy_response.confidence,
+        manual_required=legacy_response.manual_required,
+        auto_send=legacy_response.auto_send,
+        llm_used=legacy_response.llm_used,
+        rag_used=legacy_response.rag_used,
+        source_chunks=legacy_response.source_chunks,
+        warnings=legacy_response.warnings,
+        agent_id=legacy_response.agent_id,
+        agent_name=legacy_response.agent_name,
+        agent_category=legacy_response.agent_category,
+        intent=legacy_response.intent,
+        lead_level=legacy_response.lead_level,
+        tags=legacy_response.tags,
+        detected_vehicle=legacy_response.detected_vehicle,
+        detected_contacts=legacy_response.detected_contacts,
+        manual_required_reason=legacy_response.manual_required_reason,
+        risk_flags=legacy_response.risk_flags,
+        rag_sources=legacy_response.rag_sources,
+        decision_version=legacy_response.decision_version,
+        prompt_version=legacy_response.prompt_version,
+        prompt_template_hash=legacy_response.prompt_template_hash,
+        rag_policy_version=legacy_response.rag_policy_version,
+        llm_call_count=legacy_response.llm_call_count,
+        llm_primary_ms=legacy_response.llm_primary_ms,
+        llm_retry_ms=legacy_response.llm_retry_ms,
+        reply_char_count=legacy_response.reply_char_count,
+        reply_sentence_count=legacy_response.reply_sentence_count,
+        reply_question_count=legacy_response.reply_question_count,
+        reply_suggestion_total_ms=legacy_response.reply_suggestion_total_ms,
+        error_code=legacy_response.error_code,
+        timeout_layer=legacy_response.timeout_layer,
+        elapsed_ms=legacy_response.elapsed_ms,
+        timeout_seconds=legacy_response.timeout_seconds,
+        provider=legacy_response.provider,
+        model=legacy_response.model,
+        fallback_reason=legacy_response.fallback_reason,
+    )
+
+
+def _dispatch_reply_with_kernel_mode(
+    *,
+    conversation_id: int | str,
+    request: ReplySuggestionRequest,
+    merchant_prompt: dict,
+    source_chunks,
+    agent: dict,
+    agent_warnings: list[str],
+    agent_phone_goal: bool,
+    rag_used: bool,
+    success_match_level: str,
+    manual_match_level: str,
+    decision_version: str,
+    fallback_reason: str | None,
+) -> ReplySuggestionResponse:
+    """三模式分流编排（P0-B Orchestrator）。
+
+    LEGACY：直接调用 _build_llm_reply，零改动。
+    SHADOW：Kernel.decide 保存 → 直接 _build_llm_reply → 差异日志 → 返回 Legacy 响应。
+    ENABLED：Kernel.decide 注入首次 Prompt → 共享 _build_llm_reply 链 → 最终 Validator → Schema 2.0。
+    """
+    settings = get_kernel_runtime_settings()
+    mode = settings.mode
+
+    if mode == KernelMode.LEGACY:
+        return _build_llm_reply(
+            conversation_id, request, merchant_prompt, source_chunks,
+            agent=agent, agent_warnings=agent_warnings, rag_used=rag_used,
+            success_match_level=success_match_level, manual_match_level=manual_match_level,
+            decision_version=decision_version, fallback_reason=fallback_reason,
+        )
+
+    # SHADOW / ENABLED：构造 ReplyContext 并 Kernel.decide（首次 LLM 前）
+    known_customer_info = _build_known_customer_context(
+        latest_message=request.latest_message,
+        conversation_history=request.conversation_history,
+        customer_memory=request.customer_memory,
+        request=request,
+    )
+    ctx = _build_reply_context(
+        request=request, agent=agent, agent_phone_goal=agent_phone_goal,
+        known_customer_info=known_customer_info,
+    )
+    shadow_decision = kernel_decide(ctx, contact_request_policy_enabled=settings.contact_request_policy_enabled)
+
+    if mode == KernelMode.SHADOW:
+        # 直接 Legacy 链（Decision 不注入 Prompt，不增加 LLM 调用）
+        legacy_response = _build_llm_reply(
+            conversation_id, request, merchant_prompt, source_chunks,
+            agent=agent, agent_warnings=agent_warnings, rag_used=rag_used,
+            success_match_level=success_match_level, manual_match_level=manual_match_level,
+            decision_version=decision_version, fallback_reason=fallback_reason,
+        )
+        # 差异日志（Legacy 最终结果后，采样 + Hard 违规 100%）
+        hard_violation = bool(set(legacy_response.risk_flags) & {
+            "hard_false_contact_confirmation", "hard_reask_contact_after_valid",
+            "hard_off_platform_detail_promise", "hard_unfounded_contact_followup_commitment",
+        })
+        sampled = _should_sample_shadow(settings.shadow_sample_rate, settings.shadow_hmac_secret, str(conversation_id))
+        _log_shadow_diff(
+            stable_identifier=str(conversation_id),
+            merchant_id=str(request.merchant_id or ""),
+            shadow_decision=shadow_decision,
+            legacy_response=legacy_response,
+            sampled=sampled,
+            hard_violation=hard_violation,
+            hmac_secret=settings.shadow_hmac_secret,
+        )
+        return legacy_response
+
+    # ENABLED：Decision 显式注入首次 Prompt（policy_decision 参数透传到 build_llm_messages）
+    legacy_response = _build_llm_reply(
+        conversation_id, request, merchant_prompt, source_chunks,
+        agent=agent, agent_warnings=agent_warnings, rag_used=rag_used,
+        success_match_level=success_match_level, manual_match_level=manual_match_level,
+        decision_version=decision_version, fallback_reason=fallback_reason,
+        policy_decision=shadow_decision,
+    )
+    # 最终 Validator（调用 P0-A 检测器，不复制关键词）
+    contact_state = known_customer_info.get("known_customer_info", {}).get("contact", {}).get("status", "NONE")
+    validation = kernel_validate(shadow_decision, legacy_response.reply_text, contact_state)
+    # Hard 风险已由 _build_llm_reply 的 P0-A 检测器产出，此处 Validator 仅校验一致性（不重复添加）
+    return _build_v2_response_from_legacy(legacy_response=legacy_response, decision=shadow_decision)
+
+
 def build_reply_suggestion(
     conversation_id: int | str,
     request: ReplySuggestionRequest,
-) -> ReplySuggestionResponse:
+) -> ReplySuggestionResponseV2 | ReplySuggestionResponse:
     """生成结构化回复决策；auto_send 仅表示候选资格，真实发送由 9000 gate 决定。"""
     douyin_account_id = request.douyin_account_id or request.account_id
     agent, agent_warnings = resolve_reply_agent(request, douyin_account_id)
@@ -380,23 +649,29 @@ def build_reply_suggestion(
         source_chunks = search_result.items
         fallback_reason = search_result.diagnostics.fallback_reason
     if source_chunks:
-        return _build_llm_reply(
-            conversation_id,
-            request,
-            merchant_prompt,
-            source_chunks,
+        return _dispatch_reply_with_kernel_mode(
+            conversation_id=conversation_id,
+            request=request,
+            merchant_prompt=merchant_prompt,
+            source_chunks=source_chunks,
             agent=agent,
             agent_warnings=agent_warnings,
+            agent_phone_goal=agent_phone_goal,
+            rag_used=True,
+            success_match_level="rag_llm_reply",
+            manual_match_level="rag_manual_required",
+            decision_version=DECISION_VERSION,
             fallback_reason=fallback_reason,
         )
 
-    direct_llm_response = _build_llm_reply(
-        conversation_id,
-        request,
-        merchant_prompt,
-        [],
+    direct_llm_response = _dispatch_reply_with_kernel_mode(
+        conversation_id=conversation_id,
+        request=request,
+        merchant_prompt=merchant_prompt,
+        source_chunks=[],
         agent=agent,
         agent_warnings=agent_warnings,
+        agent_phone_goal=agent_phone_goal,
         rag_used=False,
         success_match_level="direct_llm_reply",
         manual_match_level="direct_llm_manual_required",
@@ -676,6 +951,7 @@ def _build_llm_reply(
     manual_match_level: str = "rag_manual_required",
     decision_version: str = DECISION_VERSION,
     fallback_reason: str | None = None,
+    policy_decision: ReplyPolicyDecision | None = None,
 ) -> ReplySuggestionResponse:
     gen_started = time.perf_counter()
     rag_timing: dict[str, float] = {}
@@ -690,7 +966,7 @@ def _build_llm_reply(
     ]
     # B1: merchant_prompt 构建 + messages 构建计时
     t0 = time.perf_counter()
-    messages = build_llm_messages(request, merchant_prompt, source_chunks)
+    messages = build_llm_messages(request, merchant_prompt, source_chunks, policy_decision=policy_decision)
     rag_timing["merchant_prompt_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     client = OpenAICompatibleClient()
     agent_phone_goal = _agent_requires_phone_lead_capture(agent)
@@ -1288,7 +1564,23 @@ def _build_llm_history(history: object) -> list[dict[str, str]]:
     return compact
 
 
-def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks) -> list[dict]:
+def _build_decision_constraint_text(decision: ReplyPolicyDecision) -> str:
+    """将 Kernel Decision 约束转为 system prompt 文本（ENABLED 注入，显式参数传递）。"""
+    parts = ["## 本轮回复策略约束（由系统确定性决策，必须遵守）"]
+    if decision.must_not_claim_contact_received:
+        parts.append("- 客户尚未提供有效联系方式，不得声称已收到、已记录或已拿到联系方式")
+    if decision.must_not_repeat_full_contact_request is True:
+        parts.append("- 不得再次完整索要联系方式")
+    if decision.may_request_contact_completion is True:
+        parts.append("- 可引导客户补全不完整的联系方式")
+    if decision.primary_action == "OFF_PLATFORM_DETAIL_HANDOFF":
+        parts.append("- 客户索要资料/报价/检测报告等时，说明平台内不方便展开，引导客户提供联系方式后再沟通，不得承诺直接发送")
+    parts.append(f"- 称呼使用：{decision.salutation}")
+    parts.append(f"- 只输出一条消息，最多一个补充问题")
+    return "\n".join(parts)
+
+
+def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks, *, policy_decision=None) -> list[dict]:
     """拼装发送给大模型的 system prompt 和 user prompt。
 
     Prompt 合同：
@@ -1297,12 +1589,13 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     - 只保留一个客户消息字段（latest_message）和一个客户上下文块（known_customer）；
     - 删除 tenant/merchant/account/agent 等内部 ID，保留商户 risk_rules、主营范围与 Agent 业务目标；
     - 输出 Schema、历史不可信策略和安全规则只在 system 声明一次；联系方式继续脱敏。
+    - policy_decision（ENABLED 时传入）：显式约束注入 system prompt，非全局/隐式。
     """
     agent_phone_goal = (
         merchant_prompt.get("agent_category") == "bound_agent"
         and _agent_prompt_requires_phone_lead_capture(merchant_prompt.get("system_prompt"))
     )
-    # 顺序：固定提示词模板 V2.0（完整12节+商家变量注入）→ Agent 自定义提示 → 留资目标 → 违禁词
+    # 顺序：固定提示词模板 V2.0（完整12节+商家变量注入）→ Agent 自定义提示 → 留资目标 → 违禁词 → Decision 约束
     system_parts: list[str] = [_build_fixed_prompt_template(merchant_prompt)]
     agent_system_prompt = merchant_prompt.get("system_prompt")
     if agent_system_prompt:
@@ -1318,6 +1611,9 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
             "回复中不得出现以下违禁词或其变体：" + "、".join(forbidden_words) + "。"
             "如果无法避免，必须设置 manual_required=true。"
         )
+    # P0-B ENABLED：显式 Decision 约束注入 system prompt（policy_decision=None 时不注入）
+    if policy_decision is not None:
+        system_parts.append(_build_decision_constraint_text(policy_decision))
     system_prompt = "\n".join(system_parts)
     known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
@@ -2093,57 +2389,21 @@ _LEAD_REFUSE_KEYWORDS = (
     "不用了", "不需要", "别联系", "不要联系", "算了", "不用留", "不留",
     "不想留", "不方便",
 )
-# A5：PARTIAL/INVALID/AMBIGUOUS 状态下不得出现的虚假确认话术
-# 虚假确认：仅识别"已经完成的事实声明"，不识别未来条件表达或单独"安排同事"
-_FALSE_CONFIRM_KEYWORDS = (
-    "已收到您的联系方式", "收到您的联系方式了", "联系方式已经收到",
-    "已经记录您的联系方式", "已经记录联系方式", "已记录您的联系方式",
-    "电话已经收到", "手机号已经收到", "号码已收到", "收到您的电话",
-    "微信已经拿到", "已经拿到您的电话", "已经拿到您的微信",
-    "收到您的手机号",
+# P0-B：Hard 规则单一权威来源为 reply_hard_rules 模块。
+# 旧测试依赖的私有名在此重新导出，不保留第二套实现。
+from apps.xg_douyin_ai_cs.services.reply_hard_rules import (  # noqa: E402
+    CONTACT_VIOLATION_TO_HARD_FLAG,
+    FALSE_CONFIRM_KEYWORDS as _FALSE_CONFIRM_KEYWORDS,
+    REASK_CONTACT_KEYWORDS as _REASK_CONTACT_KEYWORDS,
+    OFF_PLATFORM_PROMISE_KEYWORDS as _OFF_PLATFORM_PROMISE_KEYWORDS,
+    OFF_PLATFORM_NEGATION_KEYWORDS as _OFF_PLATFORM_NEGATION_KEYWORDS,
+    UNFOUNDED_FOLLOWUP_KEYWORDS as _UNFOUNDED_FOLLOWUP_KEYWORDS,
+    FOLLOWUP_PRECONDITION_KEYWORDS as _FOLLOWUP_PRECONDITION_KEYWORDS,
+    contact_reply_violation as _contact_reply_violation,
+    off_platform_promise_violation as _off_platform_promise_violation,
+    unfounded_contact_followup_commitment_violation as _unfounded_contact_followup_commitment_violation,
+    violation_to_hard_flag,
 )
-# A5：VALID 状态下不得再次出现的索要话术
-_REASK_CONTACT_KEYWORDS = (
-    "留个联系方式", "留个手机号", "方便留电话", "发一下号码",
-    "留个电话", "发一下手机号", "留个手机", "方便留个电话",
-)
-# 资料/车源/报价承诺：把平台外内容"发到"客户手机/微信的肯定承诺
-_OFF_PLATFORM_PROMISE_KEYWORDS = (
-    "把检测报告发您", "把资料发您", "把报价发您", "把底价发您",
-    "把图片发您", "把车源发您", "把配置发您", "把金融方案发您",
-    "把详细信息发您", "把详情发您",
-    "检测报告发您手机", "报价发您手机", "资料发您手机",
-    "图片发您微信", "把金融方案发您手机",
-    "给您发报价", "给您发检测报告", "给您发资料", "给您发车源",
-    "给您发图片", "给您发配置", "给您发金融方案",
-    "给您发详细信息", "给您发详情",
-    "发您手机上", "发您微信",
-)
-# 否定语境：明确表示"不能/不允许/没法"把内容发给客户，不判违规
-_OFF_PLATFORM_NEGATION_KEYWORDS = (
-    "不允许把", "不能直接", "不能把", "没法在平台", "没法把",
-    "无法把", "不会承诺把", "不方便展开", "平台里不方便", "平台内不方便",
-    "不能给您发", "不会给您发", "无法给您发",
-)
-
-# 无条件联系承诺：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进，
-# 且未带"留下联系方式后/发过来后"等前置条件。
-_UNFOUNDED_FOLLOWUP_KEYWORDS = (
-    "安排同事联系您", "安排工作人员联系您", "稍后联系您",
-    "让销售联系您", "马上跟进您", "我安排同事跟进",
-)
-# 明确前置条件：存在则不判无条件承诺（属条件表达）
-_FOLLOWUP_PRECONDITION_KEYWORDS = (
-    "留下联系方式后", "提供联系方式后", "发来联系方式后",
-    "发过来后", "您留个联系方式后", "您发个联系方式后",
-)
-
-# 联系方式违规 → 不可豁免 Hard 风险标记映射
-CONTACT_VIOLATION_TO_HARD_FLAG = {
-    "false_confirm_contact": "hard_false_contact_confirmation",
-    "reask_contact_after_valid": "hard_reask_contact_after_valid",
-    "unfounded_contact_followup_commitment": "hard_unfounded_contact_followup_commitment",
-}
 
 
 def _resolve_contact_state(*, latest_message: str, contacts: dict[str, Any]) -> str:
@@ -2202,65 +2462,6 @@ def _scene_suitable_for_lead_capture(latest_message: str) -> bool:
 def _customer_refused_lead(latest_message: str) -> bool:
     """客户是否在当前消息明确拒绝留资（轻量判定，不做拒绝计数状态机）。"""
     return _contains_any(str(latest_message or ""), _LEAD_REFUSE_KEYWORDS)
-
-
-def _contact_reply_violation(contact_state: str, reply_text: str) -> str | None:
-    """生成后联系方式语义校验：返回违规类型，无违规返回 None。
-
-    非 VALID 态不得声称已收到联系方式；VALID 态不得再次完整索要。
-    仅识别"已经完成的事实声明"，不识别未来条件表达或单独"安排同事"。
-    """
-    text = str(reply_text or "")
-    # 非 VALID（NONE/PARTIAL/INVALID/AMBIGUOUS）声称已收到 → false_confirm
-    if contact_state != "VALID":
-        if _contains_any(text, _FALSE_CONFIRM_KEYWORDS):
-            return "false_confirm_contact"
-    if contact_state == "VALID":
-        if _contains_any(text, _REASK_CONTACT_KEYWORDS):
-            return "reask_contact_after_valid"
-    return None
-
-
-def _off_platform_promise_violation(reply_text: str) -> str | None:
-    """资料/车源/报价承诺检测：肯定承诺把平台外内容发到客户手机/微信。
-
-    只识别肯定承诺（"把...发您"），排除明确否定语境（"不允许把..."）。
-    不依赖 LLM 语义审核，仅确定性关键词 + 否定前缀排除。
-    """
-    text = str(reply_text or "")
-    if not text:
-        return None
-    # 含否定语境时不判违规（明确表示不能/没法发送）
-    if _contains_any(text, _OFF_PLATFORM_NEGATION_KEYWORDS):
-        return None
-    if _contains_any(text, _OFF_PLATFORM_PROMISE_KEYWORDS):
-        return "off_platform_promise"
-    return None
-
-
-def _unfounded_contact_followup_commitment_violation(
-    contact_state: str, reply_text: str
-) -> str | None:
-    """无条件联系承诺检测：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进。
-
-    仅当：
-    - contact_state != VALID（未确认有效联系方式）
-    - 回复含无条件联系承诺（安排同事联系您/稍后联系您/让销售联系您/马上跟进您）
-    - 回复不含明确前置条件（留下联系方式后/发过来后 等）
-
-    才判定违规。带前置条件的表达（"您留下联系方式后我再联系您"）不违规。
-    """
-    if contact_state == "VALID":
-        return None
-    text = str(reply_text or "")
-    if not text:
-        return None
-    if not _contains_any(text, _UNFOUNDED_FOLLOWUP_KEYWORDS):
-        return None
-    # 含明确前置条件 → 条件表达，不判无条件承诺
-    if _contains_any(text, _FOLLOWUP_PRECONDITION_KEYWORDS):
-        return None
-    return "unfounded_contact_followup_commitment"
 
 
 def _missing_phone_goal_triggered(

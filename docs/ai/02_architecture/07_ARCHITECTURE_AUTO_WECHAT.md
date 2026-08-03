@@ -517,3 +517,21 @@ P0-ARCH-1 完成后，后续文档顺序如下：
 2. `app/core/`
 
 本轮未修改上述代码文件。
+
+## P0-B 统一回复内核架构（2026-08-03）
+
+### 模块边界
+
+- **ReplyPolicyKernel**（`apps/xg_douyin_ai_cs/services/reply_kernel/`）：纯函数模块，输入 `ReplyContext` → 输出 `ReplyPolicyDecision`，无 DB/HTTP/LLM/发送/频控。
+- **reply_hard_rules**（`apps/xg_douyin_ai_cs/services/reply_hard_rules.py`）：9100 唯一 Hard 文本规则来源（关键词 + 检测器 + 违规→Hard flag 映射）。`reply_decision_service` 与 `reply_kernel.validator` 共同 import，不复制第二套。9000 Gate 保持独立 `HARD_BLOCK_RISK_FLAGS`，不运行时导入 9100 服务模块。
+- **contact_state_service**（`app/services/contact_state_service.py`）：公共只读服务，自动回复与会话预览共同调用，不 import dry-run（无循环依赖）。
+
+### 三模式调用链
+
+- **LEGACY**：`build_reply_suggestion` → `_dispatch_reply_with_kernel_mode` → `_build_llm_reply`（零改动），返回 `ReplySuggestionResponse`。
+- **SHADOW**：Kernel.decide（首次 LLM 前）→ 直接 `_build_llm_reply`（Legacy 链，Decision 不注入 Prompt）→ 差异日志（HMAC 专用密钥 `DOUYIN_REPLY_KERNEL_SHADOW_HMAC_SECRET` 假名化采样，Legacy 最终结果后）→ 返回 Legacy 响应。不改变 Prompt/LLM 次数/reply_text/risk_flags/manual_required/auto_send，不返回 Schema 2.0 字段。SHADOW 模式必须有专用 HMAC 密钥（不复用 LLM API Key，无固定默认，不静默生成随机，为空启动失败）。日志标识 `shadow_sample_id`（HMAC 摘要前 16 hex，假名化的 Shadow 运营标识，不记录原始会话 ID）。
+- **ENABLED**：Kernel.decide（首次 LLM 前，显式 `policy_decision` 参数）→ `_build_llm_reply`（共享 LLM/parse/retry/postprocess 链，Decision 注入首次 Prompt）→ 最终 Validator → 返回 `ReplySuggestionResponseV2`。
+
+### 会话预览只读边界
+
+会话预览（`douyin_ai_cs_proxy.py`）补齐 `forbidden_words`/`contact_state`/11 个商家变量，只读：无 add/flush/commit、无 Outbox、无发送服务、无频控更新。

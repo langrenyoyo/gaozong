@@ -29,7 +29,7 @@ def test_resolver_exception_omits_trustworthy_request(monkeypatch):
         raise RuntimeError("resolver boom")
 
     with patch(
-        "app.services.ai_auto_reply_dry_run_service.resolve_contact_with_completion", _boom
+        "app.services.contact_state_service.resolve_contact_with_completion", _boom
     ):
         payload = _build_request_contact_state(
             db=None, latest_message="13800138000", merchant_id="m1",
@@ -52,7 +52,7 @@ def test_valid_phone_recovers_via_local_fallback_on_exception(monkeypatch):
         raise RuntimeError("resolver boom")
 
     with patch(
-        "app.services.ai_auto_reply_dry_run_service.resolve_contact_with_completion", _boom
+        "app.services.contact_state_service.resolve_contact_with_completion", _boom
     ):
         payload = _build_request_contact_state(
             db=None, latest_message="13800138000", merchant_id="m1",
@@ -70,7 +70,7 @@ def test_partial_phone_recovers_via_local_fallback_on_exception(monkeypatch):
         raise RuntimeError("resolver boom")
 
     with patch(
-        "app.services.ai_auto_reply_dry_run_service.resolve_contact_with_completion", _boom
+        "app.services.contact_state_service.resolve_contact_with_completion", _boom
     ):
         payload = _build_request_contact_state(
             db=None, latest_message="1770206", merchant_id="m1",
@@ -120,7 +120,7 @@ def test_exception_path_no_plain_contact_in_payload(monkeypatch, caplog):
         raise RuntimeError("resolver boom with 13800138000")
 
     with patch(
-        "app.services.ai_auto_reply_dry_run_service.resolve_contact_with_completion", _boom
+        "app.services.contact_state_service.resolve_contact_with_completion", _boom
     ):
         with caplog.at_level(logging.ERROR):
             payload = _build_request_contact_state(
@@ -141,7 +141,7 @@ def test_exception_does_not_block_payload_construction(monkeypatch):
         raise RuntimeError("resolver boom")
 
     with patch(
-        "app.services.ai_auto_reply_dry_run_service.resolve_contact_with_completion", _boom
+        "app.services.contact_state_service.resolve_contact_with_completion", _boom
     ):
         payload = _build_request_contact_state(
             db=None, latest_message="你好", merchant_id="m1",

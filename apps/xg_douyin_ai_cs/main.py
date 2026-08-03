@@ -34,6 +34,9 @@ def create_app() -> FastAPI:
 
     P0 不导入 9000、19000、微信 UI、数据库或队列模块。
     """
+    # P0-B：启动时校验 KernelMode 配置（非法组合 raise，阻止启动）
+    from apps.xg_douyin_ai_cs.services.reply_kernel.mode import get_kernel_runtime_settings
+    get_kernel_runtime_settings()  # 非法组合会 raise RuntimeError
     app = FastAPI(
         title="抖音AI小高客服",
         version=settings.version,

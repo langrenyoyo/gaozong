@@ -1,8 +1,9 @@
 """抖音AI小高客服 API schema。"""
 
+from enum import Enum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ServiceStatusResponse(BaseModel):
@@ -387,3 +388,142 @@ class AiEditPlan(BaseModel):
     operations: list[PlanOperation] = Field(default_factory=list)
     failure_code: str | None = None
     model: str | None = Field(default=None, max_length=128)
+
+
+# ========== P0-B：Schema 2.0 强类型响应模型 ==========
+
+
+class PrimaryAction(str, Enum):
+    ANSWER_QUESTION = "ANSWER_QUESTION"
+    OFF_PLATFORM_DETAIL_HANDOFF = "OFF_PLATFORM_DETAIL_HANDOFF"
+    ACKNOWLEDGE_INTENT = "ACKNOWLEDGE_INTENT"
+    HANDOFF_TO_HUMAN = "HANDOFF_TO_HUMAN"
+
+
+class ContactAction(str, Enum):
+    LEGACY_DELEGATED = "LEGACY_DELEGATED"
+    ASK_CONTACT_FIRST_TIME = "ASK_CONTACT_FIRST_TIME"
+    ASK_CONTACT_COMPLETION = "ASK_CONTACT_COMPLETION"
+    ACK_CONTACT_RECEIVED = "ACK_CONTACT_RECEIVED"
+    NO_CONTACT_ACTION = "NO_CONTACT_ACTION"
+
+
+class ContactClaim(str, Enum):
+    NOT_RECEIVED = "NOT_RECEIVED"
+    RECEIVED = "RECEIVED"
+
+
+class DeliveryMode(str, Enum):
+    SINGLE_MESSAGE = "SINGLE_MESSAGE"
+
+
+class ReplyMessagePurpose(str, Enum):
+    ANSWER = "answer"
+    FOLLOW_UP = "follow_up"
+    CONTACT_REQUEST = "contact_request"
+    HANDOFF = "handoff"
+
+
+class ReplyPolicyDecisionData(BaseModel):
+    """ReplyPolicyDecision 强类型序列化模型。"""
+
+    primary_action: PrimaryAction
+    contact_action: ContactAction
+    contact_claim: ContactClaim
+    contact_request_policy_enforced: bool
+    salutation: str
+    must_not_claim_contact_received: bool | None = None
+    must_not_repeat_full_contact_request: bool | None = None
+    may_request_contact_completion: bool | None = None
+    delivery_mode: DeliveryMode = DeliveryMode.SINGLE_MESSAGE
+    max_messages: int = Field(default=1, ge=1, le=1)
+    policy_reason_codes: list[str] = Field(default_factory=list)
+
+
+class ReplyMessageData(BaseModel):
+    """单条回复消息。P0-B 严格 sequence=1。"""
+
+    sequence: int = Field(ge=1, le=1)
+    purpose: ReplyMessagePurpose
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def text_non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("text 去除空白后不得为空")
+        return v
+
+
+class ReplySuggestionResponseV2(BaseModel):
+    """Schema 2.0 响应。Enabled 模式返回；Legacy/Shadow 返回原 ReplySuggestionResponse。
+
+    约束：
+    - output_schema_version 固定 "2.0"，必填
+    - decision 必填
+    - messages 必填且恰好 1 条
+    - reply_text == messages[0].text
+    含完整 Legacy 字段，供 9000 兼容消费。
+    """
+
+    # Schema 2.0 必填字段
+    reply_text: str
+    output_schema_version: Literal["2.0"]
+    decision: ReplyPolicyDecisionData
+    messages: list[ReplyMessageData]
+
+    @field_validator("messages")
+    @classmethod
+    def messages_exactly_one(cls, v: list[ReplyMessageData]) -> list[ReplyMessageData]:
+        if len(v) != 1:
+            raise ValueError("P0-B messages 必须恰好 1 条")
+        return v
+
+    @model_validator(mode="after")
+    def reply_text_equals_messages_0_text(self) -> "ReplySuggestionResponseV2":
+        if self.messages and self.reply_text != self.messages[0].text:
+            raise ValueError("reply_text 必须等于 messages[0].text")
+        return self
+
+    # Legacy 字段（与 ReplySuggestionResponse 一致，供 9000 兼容消费）
+    match_level: str = "rag_llm_reply"
+    target_category: str | None = None
+    target_vehicle_name: str | None = None
+    recommended_vehicles: list[RecommendedVehicle] = Field(default_factory=list)
+    lead_capture_required: bool = False
+    confidence: float = 0.0
+    manual_required: bool = False
+    auto_send: bool = False
+    llm_used: bool = False
+    rag_used: bool = False
+    source_chunks: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    agent_id: str | None = None
+    agent_name: str | None = None
+    agent_category: str | None = None
+    intent: str | None = None
+    lead_level: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    detected_vehicle: str | None = None
+    detected_contacts: dict | None = None
+    manual_required_reason: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    rag_sources: list[dict] = Field(default_factory=list)
+    decision_version: str | None = None
+    prompt_version: str | None = None
+    prompt_template_hash: str | None = None
+    rag_policy_version: str | None = None
+    llm_call_count: int | None = None
+    llm_primary_ms: int | None = None
+    llm_retry_ms: int | None = None
+    reply_char_count: int | None = None
+    reply_sentence_count: int | None = None
+    reply_question_count: int | None = None
+    reply_suggestion_total_ms: int | None = None
+    error_code: str | None = None
+    timeout_layer: str | None = None
+    elapsed_ms: int | None = None
+    timeout_seconds: float | None = None
+    provider: str | None = None
+    model: str | None = None
+    fallback_reason: str | None = None

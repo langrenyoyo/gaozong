@@ -18,8 +18,14 @@ def _clear_service_token_env(monkeypatch):
     test_contact_lead_logic 等会触发 app.config 加载 .env.lan.local（含
     XG_DOUYIN_AI_CS_SERVICE_TOKEN=dev），导致 9100 校验 token 但请求未带 → 401。
     此 fixture 在每个测试前清除该 env，保证 9100 跳过 token 校验。
+    同时清除 P0-B kernel env，确保默认 LEGACY 模式（避免残留 ENABLED/SHADOW）。
     """
     monkeypatch.delenv("XG_DOUYIN_AI_CS_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("DOUYIN_UNIFIED_REPLY_KERNEL_ENABLED", raising=False)
+    monkeypatch.delenv("DOUYIN_REPLY_KERNEL_SHADOW", raising=False)
+    monkeypatch.delenv("DOUYIN_CONTACT_REQUEST_POLICY_ENABLED", raising=False)
+    from apps.xg_douyin_ai_cs.services.reply_kernel.mode import reset_kernel_runtime_settings
+    reset_kernel_runtime_settings()
 
 
 def _mock_reply(reply_text, intent="general_inquiry", confidence=0.85):
