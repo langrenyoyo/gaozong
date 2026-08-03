@@ -20,7 +20,7 @@ import {
   UploadCloudIcon,
   XIcon,
 } from "lucide-react";
-import { createLasJob, deleteLasJob, downloadLasJobVideoUrl, fetchAiEditMaterials, listLasJobs, playLasJobVideoUrl } from "../api";
+import { createLasJob, deleteLasJob, fetchAiEditMaterials, fetchDownloadUrl, fetchPlayUrl, listLasJobs } from "../api";
 import type { AiEditMaterial, LasJobStatus } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
@@ -368,6 +368,39 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
     : "";
   const [deleting, setDeleting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [mediaLoading, setMediaLoading] = useState(false);
+
+  const handlePlay = async () => {
+    if (!canPlay || mediaLoading) return;
+    setMediaLoading(true);
+    try {
+      const url = await fetchPlayUrl(job.job_id);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      toast.error(userFacingError(e, "获取播放地址失败"));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!canPlay || mediaLoading) return;
+    setMediaLoading(true);
+    try {
+      const url = await fetchDownloadUrl(job.job_id);
+      // 用 a 标签触发下载（带附件文件名，由后端 response-content-disposition 控制）
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      toast.error(userFacingError(e, "获取下载地址失败"));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -419,26 +452,26 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-[#eef1f6] px-[68px] py-3">
-        <a
-          href={canPlay ? playLasJobVideoUrl(job.job_id) : undefined}
-          target="_blank"
-          rel="noreferrer"
-          aria-disabled={!canPlay}
+        <button
+          type="button"
+          onClick={() => void handlePlay()}
+          disabled={!canPlay || mediaLoading}
           title={disabledHint}
-          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay ? "bg-[#2563eb] text-white hover:bg-[#1d4ed8]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
+          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay && !mediaLoading ? "bg-[#2563eb] text-white hover:bg-[#1d4ed8]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
         >
           <PlayIcon size={13} />
-          播放
-        </a>
-        <a
-          href={canPlay ? downloadLasJobVideoUrl(job.job_id) : undefined}
-          aria-disabled={!canPlay}
+          {mediaLoading ? "加载中…" : "播放"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleDownload()}
+          disabled={!canPlay || mediaLoading}
           title={disabledHint}
-          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay ? "bg-[#f4f6f8] text-[#475467] hover:bg-[#eef1f6]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
+          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay && !mediaLoading ? "bg-[#f4f6f8] text-[#475467] hover:bg-[#eef1f6]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
         >
           <DownloadIcon size={13} />
-          下载
-        </a>
+          {mediaLoading ? "加载中…" : "下载"}
+        </button>
         {!canPlay ? <span className="text-[11px] text-[#98a2b3]">{disabledHint}</span> : null}
         {confirming ? (
           <span className="inline-flex h-8 items-center gap-2 rounded-lg px-2 text-xs text-rose-600">

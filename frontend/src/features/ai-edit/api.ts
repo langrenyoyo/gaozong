@@ -122,14 +122,16 @@ export async function listLasJobs(params: { status?: string; page?: number; page
   return unwrap(await apiClient.get("/ai-edit/las/jobs", { params }));
 }
 
-/** 播放最终归档视频（重定向到短期预签名 URL）。 */
-export function playLasJobVideoUrl(jobId: number): string {
-  return `/api/ai-edit/las/jobs/${jobId}/video/play`;
+/** 获取播放最终归档视频的短期预签名 URL（带 Authorization header fetch）。 */
+export async function fetchPlayUrl(jobId: number): Promise<string> {
+  const r = await apiClient.get(`/ai-edit/las/jobs/${jobId}/video/play`);
+  return unwrap(r).url;
 }
 
-/** 下载最终归档视频（重定向到带附件文件名的短期预签名 URL）。 */
-export function downloadLasJobVideoUrl(jobId: number): string {
-  return `/api/ai-edit/las/jobs/${jobId}/video/download`;
+/** 获取下载最终归档视频的短期预签名 URL（带附件文件名，带 Authorization header fetch）。 */
+export async function fetchDownloadUrl(jobId: number): Promise<string> {
+  const r = await apiClient.get(`/ai-edit/las/jobs/${jobId}/video/download`);
+  return unwrap(r).url;
 }
 
 /** 删除任务（软删除 + 清理自有 TOS 归档视频，幂等）。 */

@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -737,8 +736,9 @@ def play_las_job_video_route(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """播放最终归档视频：校验商户归属/未删除/已归档，重定向到短期预签名 URL。
+    """播放最终归档视频：校验商户归属/未删除/已归档，返回短期预签名 URL（不 302 重定向）。
 
+    返回 JSON {url}，前端用 fetch（带 Authorization header）获取后跳转。
     Range 由 TOS 签名 URL 直接支持，FastAPI 不代理视频流。
     """
     from app.services import ai_edit_las_service as las_svc
@@ -751,7 +751,7 @@ def play_las_job_video_route(
             status_code=404,
             detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
         )
-    return RedirectResponse(url=url, status_code=302)
+    return _ok({"url": url})
 
 
 @router.get("/las/jobs/{job_id}/video/download")
@@ -760,9 +760,10 @@ def download_las_job_video_route(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """下载最终归档视频：校验同播放，重定向到带附件文件名的短期预签名 URL。
+    """下载最终归档视频：校验同播放，返回带附件文件名的短期预签名 URL（不 302 重定向）。
 
-    下载文件名来自安全清洗后的任务标题。前端不直接持有数据库 URL。
+    返回 JSON {url}，前端用 fetch（带 Authorization header）获取后跳转。
+    下载文件名来自安全清洗后的任务标题。
     """
     from app.services import ai_edit_las_service as las_svc
 
@@ -782,7 +783,7 @@ def download_las_job_video_route(
     # 追加 response-content-disposition 强制附件下载语义（TOS 预签名支持查询参数覆盖响应头）
     sep = "&" if "?" in url else "?"
     url = f"{url}{sep}response-content-disposition=attachment%3Bfilename%3D{quote(filename)}"
-    return RedirectResponse(url=url, status_code=302)
+    return _ok({"url": url})
 
 
 @router.delete("/las/jobs/{job_id}")
