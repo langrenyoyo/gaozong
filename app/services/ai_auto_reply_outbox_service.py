@@ -364,12 +364,21 @@ def compensate_missing_runs(db: Session) -> int:
     window = config.AI_AUTO_REPLY_OUTBOX_COMPENSATION_WINDOW_SECONDS
     cutoff = datetime.now() - timedelta(seconds=window)
 
+    # NOT EXISTS 排除已生成 run 的事件，避免每周期对已有 run 反复 INSERT 撞 unique 约束
+    # （INTERVAL=10s 下会放大成 PG duplicate key 刷屏与无意义 DB 往返）。savepoint 兜底仍保留，
+    # 防并发 webhook 与 compensate 同时 enqueue 同一 event 的窄窗口竞争。
+    has_run = (
+        db.query(AiAutoReplyRun.id)
+        .filter(AiAutoReplyRun.trigger_event_key == DouyinWebhookEvent.event_key)
+        .exists()
+    )
     recent_events = (
         db.query(DouyinWebhookEvent)
         .filter(
             DouyinWebhookEvent.event.in_(("im_receive_msg", "im_enter_direct_msg")),
             DouyinWebhookEvent.is_duplicate.is_(False),
             DouyinWebhookEvent.created_at >= cutoff,
+            ~has_run,
         )
         .all()
     )
