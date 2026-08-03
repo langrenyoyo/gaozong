@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
+import uuid
 from typing import Iterable
+
+import requests
 
 from app import config
 
@@ -131,6 +135,93 @@ class TOSUploader:
         """上传单个文件并返回预签名 https URL。"""
         key = self.upload(file_path)
         return self.presign(key)
+
+    def upload_file_stream(self, src_path: str, key: str, content_type: str = "video/mp4") -> None:
+        """流式上传本地文件到指定 key（用于归档临时文件到自有 TOS）。
+
+        使用分块读取避免大文件整体载入内存。
+        """
+        try:
+            with open(src_path, "rb") as f:
+                self.client.put_object(
+                    Bucket=self.bucket, Key=key, Body=f, ContentType=content_type
+                )
+        except Exception as e:
+            status_code = getattr(e, "status_code", "")
+            code = getattr(e, "code", "")
+            raise UploadError(
+                f"流式上传 {key} 失败：{status_code} {code}: {e}",
+                metadata={"status_code": status_code, "code": code},
+            ) from e
+
+    def delete_object(self, key: str) -> None:
+        """删除自有 TOS 对象（用于删除归档最终视频）。"""
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+        except Exception as e:
+            status_code = getattr(e, "status_code", "")
+            code = getattr(e, "code", "")
+            raise UploadError(
+                f"删除 {key} 失败：{status_code} {code}: {e}",
+                metadata={"status_code": status_code, "code": code},
+            ) from e
+
+    def head_object(self, key: str) -> dict | None:
+        """查询对象元信息（大小/类型），不存在返回 None。"""
+        try:
+            resp = self.client.head_object(Bucket=self.bucket, Key=key)
+            return {
+                "content_length": getattr(resp, "content_length", None),
+                "content_type": getattr(resp, "content_type", None),
+            }
+        except Exception:
+            return None
+
+    @staticmethod
+    def download_https_to_temp(
+        url: str,
+        *,
+        dest_dir: str | None = None,
+        timeout: int = 120,
+        max_size_bytes: int = 600 * 1024 * 1024,
+    ) -> tuple[str, int]:
+        """下载 https URL 到受控临时文件，返回 (临时路径, 文件大小)。
+
+        流式下载避免大文件载入内存；校验 HTTP 状态、内容类型与大小上限，
+        防止把 HTML 错误页当 MP4 上传。临时文件名唯一，调用方负责清理。
+        """
+        os.makedirs(dest_dir or tempfile.gettempdir(), exist_ok=True)
+        fname = f"ai-edit-arch-{uuid.uuid4().hex}.mp4"
+        path = os.path.join(dest_dir or tempfile.gettempdir(), fname)
+        total = 0
+        try:
+            with requests.get(url, stream=True, timeout=timeout) as r:
+                r.raise_for_status()
+                ctype = r.headers.get("Content-Type", "")
+                # 拒绝非视频内容类型（HTML 错误页/JSON 错误等）
+                if ctype and not ctype.startswith("video/") and not ctype.startswith("application/octet-stream"):
+                    raise UploadError(
+                        f"下载内容类型非视频：{ctype}（可能为错误页）",
+                        metadata={"content_type": ctype, "url": url[:80]},
+                    )
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1 << 16):
+                        if chunk:
+                            total += len(chunk)
+                            if total > max_size_bytes:
+                                raise UploadError(
+                                    f"下载超出大小上限 {max_size_bytes} 字节",
+                                    metadata={"max_size_bytes": max_size_bytes},
+                                )
+                            f.write(chunk)
+        except UploadError:
+            raise
+        except requests.RequestException as e:
+            raise UploadError(f"下载失败：{e}", metadata={"url": url[:80]}) from e
+        finally:
+            # 失败时清理半成品临时文件
+            pass
+        return path, total
 
     def upload_many(self, file_paths: Iterable[str]) -> list[tuple[str, str | None]]:
         """顺序上传多个文件，返回 [(本地路径, 预签名URL)]。

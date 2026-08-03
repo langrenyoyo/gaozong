@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -657,10 +658,11 @@ def list_las_jobs_route(
     page: int = 1,
     page_size: int = 20,
     status: str | None = None,
+    keyword: str | None = None,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """查 LAS 混剪任务列表（商户隔离，分页 + 状态筛选）。"""
+    """查 LAS 混剪任务列表（商户隔离，分页 + 状态筛选 + 标题搜索）。"""
     from app.services import ai_edit_las_service as las_svc
 
     _require_ai_edit(context)
@@ -671,6 +673,7 @@ def list_las_jobs_route(
         page=page,
         page_size=min(max(page_size, 1), 100),
         status=status,
+        keyword=keyword,
     )
     return _ok(data)
 
@@ -726,3 +729,82 @@ def get_las_job_route(
     if data is None:
         raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
     return _ok(data)
+
+
+@router.get("/las/jobs/{job_id}/video/play")
+def play_las_job_video_route(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """播放最终归档视频：校验商户归属/未删除/已归档，重定向到短期预签名 URL。
+
+    Range 由 TOS 签名 URL 直接支持，FastAPI 不代理视频流。
+    """
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    url = las_svc.generate_playback_url(db, merchant_id=merchant_id, job_id=job_id)
+    if not url:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
+        )
+    return RedirectResponse(url=url, status_code=302)
+
+
+@router.get("/las/jobs/{job_id}/video/download")
+def download_las_job_video_route(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """下载最终归档视频：校验同播放，重定向到带附件文件名的短期预签名 URL。
+
+    下载文件名来自安全清洗后的任务标题。前端不直接持有数据库 URL。
+    """
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    url = las_svc.generate_playback_url(db, merchant_id=merchant_id, job_id=job_id)
+    if not url:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
+        )
+    # 取任务标题生成安全下载文件名
+    title = las_svc.get_job_title(db, merchant_id=merchant_id, job_id=job_id) or ""
+    filename = las_svc.safe_filename(title, job_id)
+    from urllib.parse import quote
+
+    # 追加 response-content-disposition 强制附件下载语义（TOS 预签名支持查询参数覆盖响应头）
+    sep = "&" if "?" in url else "?"
+    url = f"{url}{sep}response-content-disposition=attachment%3Bfilename%3D{quote(filename)}"
+    return RedirectResponse(url=url, status_code=302)
+
+
+@router.delete("/las/jobs/{job_id}")
+def delete_las_job_route(
+    job_id: int,
+    db: Session = Depends(get_db),
+    context: RequestContext = Depends(get_request_context_required),
+):
+    """删除任务：软删除 + 清理自有 TOS 归档视频。幂等。"""
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    operator_id = context.user_id or "unknown"
+    result = las_svc.delete_las_job(db, merchant_id=merchant_id, job_id=job_id, operator_id=str(operator_id))
+    status = result["status"]
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "任务不存在"})
+    if status == "delete_failed":
+        # TOS 物理删除失败：任务已软删除禁用访问，但归档对象残留。不得假装成功，返回错误态供前端提示重试。
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "DELETE_PARTIALLY_FAILED", "message": "删除部分失败：归档视频未清理，请重试", "result": result},
+        )
+    return _ok(result)

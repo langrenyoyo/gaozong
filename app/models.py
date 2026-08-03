@@ -1538,6 +1538,17 @@ class AiEditJob(Base):
     las_business_code = Column(String(64), comment="LAS 业务码（0=成功，非 0=业务失败）")
     las_error_msg = Column(Text, comment="LAS 失败错误信息")
     las_metadata_json = Column(Text, comment="LAS 轮询返回的完整 metadata JSON")
+    # 结果交付闭环（迁移 0025）：标题、最终视频归档、软删除、视频标签
+    title = Column(String(255), comment="任务标题")
+    title_source = Column(String(32), comment="标题来源 metadata/script/asr/filename/fallback/manual")
+    title_generated_at = Column(DateTime, comment="标题生成时间")
+    delivery_status = Column(String(32), comment="交付归档状态 pending/archived/failed")
+    # 视频能力标签 JSON 数组字符串（script_driven/ai_subtitle/ai_clip_matching），见 service 计算
+    video_tags = Column(Text, comment="视频能力标签 JSON 数组字符串")
+    deleted_at = Column(DateTime, comment="软删除时间")
+    deleted_by = Column(String(128), comment="删除人")
+    delete_status = Column(String(32), comment="删除状态 deleting/delete_failed/deleted")
+    delete_error = Column(Text, comment="删除失败原因")
 
 
 class AiEditJobArtifact(Base):
@@ -1556,7 +1567,6 @@ class AiEditJobArtifact(Base):
     storage_key = Column(String(255), comment="内部存储键，不存绝对路径")
     file_name = Column(String(255), comment="文件名")
     mime_type = Column(String(64), comment="MIME 类型")
-    file_size_bytes = Column(Integer, comment="文件大小（字节）")
     created_at = Column(DateTime, default=datetime.now)
     # Phase 12 扩展：位置/设备/SHA-256/媒体属性/完整性/来源产物（设计 §10）
     location_type = Column(String(16), comment="位置类型（local/cloud）")
@@ -1565,6 +1575,12 @@ class AiEditJobArtifact(Base):
     media_profile_json = Column(Text, comment="媒体属性 JSON（分辨率/时长/编码）")
     integrity_status = Column(String(32), comment="完整性状态（verified/missing/corrupted）")
     source_artifact_id = Column(String(64), comment="来源产物 ID（720P 草稿派生 1080P）")
+    # 结果交付闭环（迁移 0025）：最终视频归档到自有 TOS
+    is_final_video = Column(Boolean, comment="是否最终交付视频")
+    delivery_status = Column(String(32), comment="归档状态 pending/archived/failed")
+    archive_object_key = Column(String(255), comment="自有 TOS 对象键")
+    archive_error = Column(Text, comment="归档错误")
+    file_size_bytes = Column(BigInteger, comment="归档文件大小")
 
 
 class AiEditMaterial(Base):

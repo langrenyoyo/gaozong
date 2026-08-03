@@ -16,24 +16,58 @@ import {
   RefreshCwIcon,
   SearchIcon,
   SendIcon,
+  Trash2Icon,
   UploadCloudIcon,
   XIcon,
 } from "lucide-react";
-import { createLasJob, fetchAiEditMaterials, listLasJobs } from "../api";
+import { createLasJob, deleteLasJob, downloadLasJobVideoUrl, fetchAiEditMaterials, listLasJobs, playLasJobVideoUrl } from "../api";
 import type { AiEditMaterial, LasJobStatus } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
 const SCRIPT_EXAMPLE = `剪成一条约 60 秒的汽车真人讲解视频。开头优先保留最有吸引力的车辆信息，随后按外观、座舱、配置、车况和总结组织。删除口误与重复表述，同一信息多次录制时优先保留最后一次完整自然的口播。讲到具体部位、配置、屏幕、座椅、空间或车况时，必须优先匹配能够直接证明该信息的对应空镜；泛化空镜不能抢占更匹配的素材。默认硬切，只有口播切到重点产品细节时使用轻量转场。`;
 
+// 中文任务状态映射（兼容规范状态与现有旧状态，不展示英文技术枚举）
 const STATUS_VISUALS: Record<string, { label: string; tone: string; accent: string }> = {
-  processing: { label: "处理中", tone: "bg-blue-100 text-blue-700", accent: "bg-blue-500" },
+  submitted: { label: "排队中", tone: "bg-slate-100 text-slate-700", accent: "bg-slate-400" },
+  queued: { label: "排队中", tone: "bg-slate-100 text-slate-700", accent: "bg-slate-400" },
+  running: { label: "生成中", tone: "bg-blue-100 text-blue-700", accent: "bg-blue-500" },
+  processing: { label: "生成中", tone: "bg-blue-100 text-blue-700", accent: "bg-blue-500" },
+  processing_result: { label: "正在整理视频", tone: "bg-amber-100 text-amber-700", accent: "bg-amber-500" },
+  completed: { label: "已完成", tone: "bg-emerald-100 text-emerald-700", accent: "bg-emerald-500" },
   succeeded: { label: "已完成", tone: "bg-emerald-100 text-emerald-700", accent: "bg-emerald-500" },
-  failed: { label: "失败", tone: "bg-red-100 text-red-700", accent: "bg-red-500" },
+  failed: { label: "生成失败", tone: "bg-red-100 text-red-700", accent: "bg-red-500" },
+  deleting: { label: "删除中", tone: "bg-amber-100 text-amber-700", accent: "bg-amber-500" },
+  delete_failed: { label: "删除失败", tone: "bg-red-100 text-red-700", accent: "bg-red-500" },
 };
 
-function statusOf(status: string) {
-  return STATUS_VISUALS[status] || { label: status, tone: "bg-slate-100 text-slate-700", accent: "bg-slate-400" };
+/** 计算最终展示状态：优先级 delete_failed > deleting > processing_result > failed > completed/succeeded > running/processing > submitted/queued。
+ *  综合后端 status/delivery_status/delete_status 三个字段。 */
+function computeDisplayStatus(job: { status: string; delivery_status: string | null }): string {
+  // 删除态优先（delete_status 未在列表返回，但 status 可能含 deleting；此处以 delivery/status 推断）
+  if (job.delivery_status === "failed" && job.status === "failed") {
+    // 归档失败也属失败，但需区分；交由下方 failed
+  }
+  // 规范状态优先，兼容旧状态
+  const s = job.status;
+  if (s === "delete_failed" || s === "deleting") return s;
+  if (s === "processing_result") return s;
+  if (s === "failed") return s;
+  if (s === "completed" || s === "succeeded") return s;
+  if (s === "running" || s === "processing") return s;
+  if (s === "submitted" || s === "queued") return s;
+  return s; // 未知，兜底在 statusOf 里处理
 }
+
+function statusOf(status: string) {
+  return STATUS_VISUALS[status] || { label: "处理中", tone: "bg-slate-100 text-slate-700", accent: "bg-slate-400" };
+}
+
+// 视频能力标签代码 → 中文展示（来源后端 video_tags，基于真实处理模式）
+const VIDEO_TAG_LABELS: Record<string, string> = {
+  script_driven: "口播文案驱动",
+  ai_subtitle: "AI智能字幕",
+  ai_clip_matching: "AI片段拼接",
+};
 
 function NewTaskModal({
   onClose,
@@ -181,31 +215,30 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
   const [jobs, setJobs] = useState<LasJobStatus[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [keyword, setKeyword] = useState("");
   const [showModal, setShowModal] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const resp = await listLasJobs({ status: statusFilter || undefined, page: 1, page_size: 50 });
+      const resp = await listLasJobs({ status: statusFilter || undefined, page: 1, page_size: 50, keyword: keyword.trim() || undefined });
       setJobs(resp.items || []);
       setTotal(resp.total || 0);
-    } catch {
-      // 静默
+    } catch (e) {
+      setJobs([]);
+      setTotal(0);
+      setLoadError(userFacingError(e, "任务列表加载失败"));
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, keyword]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  const filtered = useMemo(() => {
-    if (!keyword.trim()) return jobs;
-    return jobs.filter((j) => String(j.job_id).includes(keyword.trim()) || (j.las_task_id || "").includes(keyword.trim()));
-  }, [jobs, keyword]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { processing: 0, succeeded: 0, failed: 0 };
@@ -278,7 +311,7 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             className="h-9 w-full rounded-xl border border-[#e4e8f0] bg-[#f8fafc] pl-8 pr-3 text-xs outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-            placeholder="搜索任务"
+            placeholder="搜索任务标题"
           />
         </label>
         <span className="ml-auto text-xs font-semibold text-[#667085]">
@@ -287,61 +320,23 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {loading && filtered.length === 0 ? (
+        {loadError ? (
+          <div className="grid place-items-center gap-3 py-12 text-xs">
+            <div className="text-rose-600">{loadError}</div>
+            <button type="button" onClick={() => void load()} className="rounded-lg border border-[#e4e8f0] bg-white px-3 py-1.5 font-semibold text-[#374151]">
+              重试
+            </button>
+          </div>
+        ) : loading && jobs.length === 0 ? (
           <div className="text-xs text-[#8b95a6]">加载中…</div>
-        ) : filtered.length === 0 ? (
+        ) : jobs.length === 0 ? (
           <div className="grid place-items-center py-12 text-xs text-[#8b95a6]">
-            暂无任务，点击右上角“新建任务”提交混剪
+            {keyword.trim() ? "未找到匹配的任务" : "暂无任务，点击右上角“新建任务”提交混剪"}
           </div>
         ) : (
-          filtered.map((job) => {
-            const visual = statusOf(job.status);
-            return (
-              <article key={job.job_id} className="mb-2 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors hover:bg-[#f8fafc] last:mb-0">
-                <div className="flex items-start justify-between gap-4 px-5 py-4">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-lg ${visual.accent}`}>
-                      <FilmIcon size={20} />
-                    </div>
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-bold text-[#1a1f2e]">混剪任务 #{job.job_id}</h2>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-[#667085]">
-                        <span className="truncate text-[#98a2b3]">阶段：{job.stage || "-"}</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Clock3Icon size={13} />
-                          {job.created_at ? new Date(job.created_at).toLocaleString() : "-"}
-                        </span>
-                      </div>
-                      {job.error_message ? (
-                        <div className="mt-1 text-[11px] text-rose-600">{job.error_message}</div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${visual.tone}`}>
-                    {visual.label}
-                  </span>
-                </div>
-                {job.artifacts.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-2 border-t border-[#eef1f6] px-[68px] py-3">
-                    {job.artifacts.map((a) => (
-                      a.url ? (
-                        <a
-                          key={a.artifact_type}
-                          href={a.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#f4f6f8] px-3 text-xs font-semibold text-[#475467] hover:bg-[#eef1f6]"
-                        >
-                          {a.artifact_type.startsWith("video_") ? <PlayIcon size={13} /> : <DownloadIcon size={13} />}
-                          {artifactLabel(a.artifact_type)}
-                        </a>
-                      ) : null
-                    ))}
-                  </div>
-                ) : null}
-              </article>
-            );
-          })
+          jobs.map((job) => (
+            <JobCard key={job.job_id} job={job} onDeleted={() => void load()} />
+          ))
         )}
       </div>
 
@@ -350,13 +345,123 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
   );
 }
 
-function artifactLabel(type: string): string {
-  const labels: Record<string, string> = {
-    video_subtitled: "带字幕成片",
-    video_clean: "无字幕成片",
-    subtitle_srt: "字幕",
-    match_scheme: "剪辑方案",
-    result_json: "完整结果",
+/** 任务卡片：标题 + 中文状态 + 视频标签 + 播放/下载/删除。 */
+function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void }) {
+  const displayStatus = computeDisplayStatus(job);
+  const visual = statusOf(displayStatus);
+  // 播放/下载可用：已归档最终视频 + 任务可交付完成（兼容 succeeded/completed） + 未删除
+  const isDeliverable = job.status === "succeeded" || job.status === "completed";
+  const canPlay = job.has_final_video && isDeliverable;
+  // 禁用原因文案
+  const disabledHint = !canPlay
+    ? !isDeliverable
+      ? job.status === "failed"
+        ? "视频生成失败"
+        : job.status === "processing_result"
+        ? "视频正在整理"
+        : "视频尚未生成完成"
+      : !job.has_final_video
+      ? job.delivery_status === "failed"
+        ? "视频归档失败"
+        : "暂无可用视频"
+      : "暂无可用视频"
+    : "";
+  const [deleting, setDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await deleteLasJob(job.job_id);
+      toast.success("任务已删除");
+      onDeleted();
+    } catch (e) {
+      // 删除失败（含 delete_failed 部分失败）：不假装成功，任务保留可见，提示重试
+      const msg = userFacingError(e, "删除失败，部分资源未清理，请重试");
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
   };
-  return labels[type] || type;
+
+  return (
+    <article className="mb-2 rounded-xl border border-[#e4e8f0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors hover:bg-[#f8fafc] last:mb-0">
+      <div className="flex items-start justify-between gap-4 px-5 py-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-lg ${visual.accent}`}>
+            <FilmIcon size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-bold text-[#1a1f2e]">{job.title}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-[#667085]">
+              <span className="inline-flex items-center gap-1">
+                <Clock3Icon size={13} />
+                {job.created_at ? new Date(job.created_at).toLocaleString() : "-"}
+              </span>
+            </div>
+            {job.video_tags.length > 0 ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {job.video_tags.map((tag) => (
+                  <span key={tag} className="rounded-md bg-[#eff6ff] px-2 py-0.5 text-[11px] font-semibold text-[#2563eb]">
+                    {VIDEO_TAG_LABELS[tag] || tag}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {job.error_message ? (
+              <div className="mt-1 text-[11px] text-rose-600">{job.error_message}</div>
+            ) : null}
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${visual.tone}`}>
+          {visual.label}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-[#eef1f6] px-[68px] py-3">
+        <a
+          href={canPlay ? playLasJobVideoUrl(job.job_id) : undefined}
+          target="_blank"
+          rel="noreferrer"
+          aria-disabled={!canPlay}
+          title={disabledHint}
+          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay ? "bg-[#2563eb] text-white hover:bg-[#1d4ed8]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
+        >
+          <PlayIcon size={13} />
+          播放
+        </a>
+        <a
+          href={canPlay ? downloadLasJobVideoUrl(job.job_id) : undefined}
+          aria-disabled={!canPlay}
+          title={disabledHint}
+          className={`inline-flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-semibold ${canPlay ? "bg-[#f4f6f8] text-[#475467] hover:bg-[#eef1f6]" : "cursor-not-allowed bg-[#f4f6f8] text-[#9aa3b2]"}`}
+        >
+          <DownloadIcon size={13} />
+          下载
+        </a>
+        {!canPlay ? <span className="text-[11px] text-[#98a2b3]">{disabledHint}</span> : null}
+        {confirming ? (
+          <span className="inline-flex h-8 items-center gap-2 rounded-lg px-2 text-xs text-rose-600">
+            确认删除？
+            <button type="button" onClick={() => void handleDelete()} disabled={deleting} className="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-50">
+              {deleting ? "删除中…" : "确认"}
+            </button>
+            <button type="button" onClick={() => setConfirming(false)} className="text-[11px] text-[#8b95a6]">
+              取消
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={deleting}
+            className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#f4f6f8] px-3 text-xs font-semibold text-rose-600 hover:bg-[#fee2e2] disabled:opacity-50"
+          >
+            <Trash2Icon size={13} />
+            删除
+          </button>
+        )}
+      </div>
+    </article>
+  );
 }

@@ -125,23 +125,18 @@ export interface LasJobCreateRequest {
   idempotent_id?: string | null;
 }
 
-/** LAS 产物项。 */
-export interface LasArtifact {
-  artifact_type: string;
-  url: string | null;
-  file_name: string | null;
-}
-
-/** LAS 任务状态响应。 */
+/** LAS 任务状态响应（不暴露 tos:// 或内部对象键，播放下载走专门接口）。 */
 export interface LasJobStatus {
   job_id: number;
+  title: string;
   status: string;
+  delivery_status: string | null;
   stage: string | null;
   progress: number | null;
-  las_task_id: string | null;
+  video_tags: string[];
+  has_final_video: boolean;
   error_message: string | null;
   failure_code: string | null;
   created_at: string | null;
   completed_at: string | null;
-  artifacts: LasArtifact[];
 }

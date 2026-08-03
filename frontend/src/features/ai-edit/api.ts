@@ -93,7 +93,6 @@ export type {
   AiEditListResponse,
   AiEditMaterial,
   AiEditTemplate,
-  LasArtifact,
   LasJobCreateRequest,
   LasJobStatus,
 } from "./types";
@@ -118,7 +117,22 @@ export interface LasJobListData {
   items: LasJobStatus[];
 }
 
-/** 查询 LAS 混剪任务列表（分页 + 状态筛选）。 */
-export async function listLasJobs(params: { status?: string; page?: number; page_size?: number } = {}): Promise<LasJobListData> {
+/** 查询 LAS 混剪任务列表（分页 + 状态筛选 + 标题搜索）。 */
+export async function listLasJobs(params: { status?: string; page?: number; page_size?: number; keyword?: string } = {}): Promise<LasJobListData> {
   return unwrap(await apiClient.get("/ai-edit/las/jobs", { params }));
+}
+
+/** 播放最终归档视频（重定向到短期预签名 URL）。 */
+export function playLasJobVideoUrl(jobId: number): string {
+  return `/api/ai-edit/las/jobs/${jobId}/video/play`;
+}
+
+/** 下载最终归档视频（重定向到带附件文件名的短期预签名 URL）。 */
+export function downloadLasJobVideoUrl(jobId: number): string {
+  return `/api/ai-edit/las/jobs/${jobId}/video/download`;
+}
+
+/** 删除任务（软删除 + 清理自有 TOS 归档视频，幂等）。 */
+export async function deleteLasJob(jobId: number): Promise<{ deleted: boolean; status: string }> {
+  return unwrap(await apiClient.delete(`/ai-edit/las/jobs/${jobId}`));
 }
