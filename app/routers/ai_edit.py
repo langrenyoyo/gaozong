@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -760,12 +761,13 @@ def download_las_job_video_route(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """下载最终归档视频：校验同播放，返回带附件文件名的短期预签名 URL（不 302 重定向）。
+    """下载最终归档视频：校验同播放，流式代理 TOS 视频返回，强制 attachment 下载。
 
-    返回 JSON {url}，前端用 fetch（带 Authorization header）获取后跳转。
-    下载文件名来自安全清洗后的任务标题。
+    9000 从自有 TOS 拉视频流式返回，带 Content-Disposition: attachment。
+    避免 TOS CORS 拦截和跨域 download 属性失效。视频大小适中，代理带宽可接受。
     """
     from app.services import ai_edit_las_service as las_svc
+    import requests as _requests
 
     _require_ai_edit(context)
     merchant_id = _merchant(context)
@@ -775,11 +777,27 @@ def download_las_job_video_route(
             status_code=404,
             detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
         )
-    # 取任务标题生成安全下载文件名，前端用 a.download 属性指定（不追加 response-content-disposition
-    # 查询参数，会破坏 TOS 预签名 X-Tos-SignedHeaders=host 的签名匹配导致 403）
     title = las_svc.get_job_title(db, merchant_id=merchant_id, job_id=job_id) or ""
     filename = las_svc.safe_filename(title, job_id)
-    return _ok({"url": url, "filename": filename})
+    from urllib.parse import quote
+
+    # 流式从 TOS 拉取，转发给客户端（带 attachment 强制下载）
+    upstream = _requests.get(url, stream=True, timeout=120)
+    upstream.raise_for_status()
+
+    def _stream():
+        for chunk in upstream.iter_content(chunk_size=1 << 16):
+            if chunk:
+                yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Content-Length": upstream.headers.get("Content-Length", ""),
+        },
+    )
 
 
 @router.delete("/las/jobs/{job_id}")
