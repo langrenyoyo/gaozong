@@ -874,14 +874,20 @@ def _build_llm_reply(
         latest_message=request.latest_message,
         reply_text=reply_text,
     )
-    # A5：生成后联系方式语义校验——PARTIAL/INVALID/AMBIGUOUS 不得说已收到；VALID 不得重复索要
+    # A5：生成后联系方式语义校验——非 VALID 不得说已收到；VALID 不得重复索要
     contact_violation = _contact_reply_violation(contact_state, reply_text)
-    if reasking_known or missing_phone_goal or contact_violation:
+    # 资料/车源/报价承诺检测：肯定承诺把平台外内容发到客户手机/微信
+    off_platform_promise = _off_platform_promise_violation(reply_text)
+    # 无条件联系承诺检测：非 VALID 态下无条件承诺"安排/稍后联系您"
+    unfounded_followup = _unfounded_contact_followup_commitment_violation(contact_state, reply_text)
+    if reasking_known or missing_phone_goal or contact_violation or off_platform_promise or unfounded_followup:
         retry_messages = _build_llm_combined_retry_messages(
             messages,
             reasking_known=reasking_known,
             missing_phone_goal=missing_phone_goal,
             contact_violation=contact_violation,
+            off_platform_promise=off_platform_promise,
+            unfounded_followup=unfounded_followup,
             bad_reply=reply_text,
         )
         try:
@@ -920,8 +926,28 @@ def _build_llm_reply(
                 reply_text=still_reply,
             )
             still_contact_violation = _contact_reply_violation(contact_state, still_reply)
-            if still_reasking or still_missing_phone or still_contact_violation:
+            still_off_platform_promise = _off_platform_promise_violation(still_reply)
+            still_unfounded_followup = _unfounded_contact_followup_commitment_violation(contact_state, still_reply)
+            if still_reasking or still_missing_phone or still_contact_violation or still_off_platform_promise or still_unfounded_followup:
                 retry_warnings.append("llm_retry_combined_still_unqualified_kept_original")
+            # Hard 违规：retry 后仍命中联系方式/资料报价/无条件联系承诺 → 不可豁免 Hard 风险标记
+            hard_flags: list[str] = []
+            if still_contact_violation:
+                hard_flags.append(CONTACT_VIOLATION_TO_HARD_FLAG.get(
+                    still_contact_violation, "hard_false_contact_confirmation"))
+            if still_off_platform_promise:
+                hard_flags.append("hard_off_platform_detail_promise")
+            if still_unfounded_followup:
+                hard_flags.append(CONTACT_VIOLATION_TO_HARD_FLAG.get(
+                    still_unfounded_followup, "hard_unfounded_contact_followup_commitment"))
+            if hard_flags:
+                decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | set(hard_flags))
+                decision["auto_send"] = False
+                decision["manual_required"] = True  # 审计/预览，不承担不可豁免阻断
+                decision["manual_required_reason"] = (
+                    f"回复仍存在 Hard 违规，需人工确认；违规：{', '.join(hard_flags)}"
+                )
+                retry_warnings.append("hard_violation_blocked")
     # 第五节：合并纠正后做确定性违禁词检查，命中即阻断转人工，不再额外重试。
     forbidden_words = list(getattr(request, "forbidden_words", None) or [])
     if forbidden_words:
@@ -944,6 +970,12 @@ def _build_llm_reply(
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
     )
+    # Hard 违规不可豁免：_apply_safety_postprocess 可能把 manual_required 覆盖回 False，
+    # 此处重新确保 Hard 风险标记与阻断状态（不可豁免，由 9000 Gate hard_violation_unblockable 拦截）。
+    final_risk_flags = set(decision.get("risk_flags") or [])
+    if final_risk_flags & (set(CONTACT_VIOLATION_TO_HARD_FLAG.values()) | {"hard_off_platform_detail_promise"}):
+        decision["manual_required"] = True
+        decision["auto_send"] = False
     # RAG 检索降级诊断非空时阻断候选；fallback_reason 是检索诊断，不入 risk_flags。
     if fallback_reason:
         decision["auto_send"] = False
@@ -1084,7 +1116,11 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 - 方便留个联系方式吗？
 - 留个联系方式，我让工作人员详细和您沟通。
 - 您可以通过官方留资入口提交联系方式。
-- 收到您的联系方式了，我这边安排工作人员跟进。
+
+只有系统确认 contact_state 为 VALID 时，才允许确认已经收到联系方式。
+未确认有效联系方式时，不得声称已经收到、记录或拿到客户电话、手机号、微信。
+未确认有效联系方式时，不得无条件承诺"安排同事联系您/稍后联系您/让销售联系您"等后续跟进；
+必须先引导客户留下联系方式，或使用"您留下联系方式后我再安排同事联系您"等条件表达。
 
 不得主动使用以下表达：留个号码、留个电话、留个号、发我手机号、加微信、加个人号、加私人联系方式。
 客户主动提到"电话、手机号、微信"等内容时，回复中仍优先统一表达为"联系方式"。
@@ -1110,6 +1146,11 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 可以使用的理由：核实具体车型、年份、配置和车况；根据客户预算和需求整理合适车型；确认车辆当前是否可看；安排工作人员进一步介绍；预约到店看车；了解卖车车辆的基本情况；通过官方渠道进一步沟通；核实门店活动或实际成交条件。
 不得使用的理由：发送车源表；发送库存表；发送全部客户名单；虚构"内部资料"；虚构"只有留下联系方式才能查看"；虚构限时优惠；虚构名额、排名或倒计时；承诺一定有车、一定优惠或一定审批通过。
 
+客户索要资料、车源、报价、底价、检测报告、更多图片、配置或金融方案时，
+说明平台内不方便展开，自然引导客户提供绿泡泡或联系方式后再沟通。
+不得承诺后续一定发送具体资料、报告、报价、图片、配置或金融方案；
+不得承诺把上述内容发到客户手机或微信。
+
 ### 3. 留资频率
 客户尚未留下联系方式时，可以在回答问题后自然邀请。同一轮回复最多邀请一次。不得连续多句重复索要联系方式。客户第一次拒绝后，先继续回答问题，不要立即再次施压。客户明确拒绝两次后，停止主动索要联系方式，转为正常解答或提供到店信息。后续只有在出现新的合理场景，如预约看车、核实车辆或人工评估时，才能再次自然询问。
 
@@ -1133,13 +1174,10 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 ### 第二阶段：客户提出具体问题
 目标：先回答，再通过话题钩子引导客户说更多信息。
 推荐结构：亲近称呼 + 简短回答 + 追问一个相关问题引导客户继续说。
-核心原则：每次回复都必须包含"回答客户问题 + 抛出一个话题钩子引导客户继续说"。
-话题钩子示例：
-- 客户问"有奔驰E300吗" → 回答有/无 + "您对哪款配置比较感兴趣？预算大概多少？"
-- 客户问"价格多少" → 说明价格受车况影响 + "您关注哪一年的车型？方便我帮您核实准价"
-- 客户问"有什么车型" → 简列热门车型 + "您更关注轿车还是SUV？"
-- 客户问"店在哪" → 告知地址 + "您方便过来看实车吗？我帮您安排接待"
-不要只回答问题就结束，要引导客户把需求说全（预算/车型/城市/用途/到店意向等）。
+核心原则：默认一次回复只完成一个主要目的；最多补充询问一个问题；
+能够一句话自然表达时，不要扩展成完整客服长文；
+不要同时追问车型、预算和城市；不采用固定字符截断。
+客户已表达买车、试驾、看车意向时，优先自然引导留资，而非先追问配置预算城市。
 
 ### 第三阶段：客户继续追问但没有留资
 目标：继续提供有效信息，不能只重复索要联系方式。当确实需要人工核实时，可以再次邀请。
@@ -1187,7 +1225,7 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 1. 像真实客服聊天，不要像说明书或机器人。
 2. 语气亲近、自然、直接，不需要过度客套。不要说"非常感谢您的咨询""很高兴为您服务"等客套话。
 3. 先回答问题，再追问引导下一步。
-4. 回复要简短精炼，像微信聊天一样自然。简单的招呼和确认可以很短（几个字即可），回答具体问题时控制在合理范围内，不要长篇大论。
+4. 回复要简短精炼，像微信聊天一样自然。简单的招呼和确认可以很短（几个字即可），回答具体问题时控制在合理范围内，不要长篇大论。不要在一次回复中同时堆叠门店信息、车型清单、预算追问和留资，只挑当前最相关的一个动作。
 5. 不使用长篇解释、不列举多条要点。
 6. 不连续使用多个问号或感叹号。
 7. 表情符号不是必需，每次最多使用一个。
@@ -1285,6 +1323,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         latest_message=request.latest_message,
         conversation_history=request.conversation_history,
         customer_memory=request.customer_memory,
+        request=request,
     )
     safe_latest_message = mask_contacts_in_text(request.latest_message)
     user_payload = {
@@ -1375,10 +1414,13 @@ def _build_llm_combined_retry_messages(
     reasking_known: bool,
     missing_phone_goal: bool,
     contact_violation: str | None = None,
+    off_platform_promise: str | None = None,
+    unfounded_followup: str | None = None,
     bad_reply: str,
 ) -> list[dict]:
     """阶段四合并纠正：首调后一次性检查"重复询问已知信息"+"遗漏手机号目标"+
-    "联系方式语义违规"，命中任一时最多追加一次合并纠正调用（计量阶段 retry_combined）。
+    "联系方式语义违规"+"资料报价承诺违规"+"无条件联系承诺违规"，
+    命中任一时最多追加一次合并纠正调用（计量阶段 retry_combined）。
 
     单份客户上下文合同：首条 user 消息已含 known_customer，纠正消息只含触发原因、坏回复和纠正指令，
     不重复客户上下文或内部字段。
@@ -1392,13 +1434,19 @@ def _build_llm_combined_retry_messages(
         reasons.append("客户联系方式尚未完整提供，上一版回复却说已收到联系方式，不得虚假确认")
     elif contact_violation == "reask_contact_after_valid":
         reasons.append("客户已提供有效联系方式，上一版回复仍要求客户再留联系方式，不得重复索要")
+    if off_platform_promise:
+        reasons.append("上一版回复承诺把资料/报价/检测报告等内容发到客户手机或微信，平台内不得承诺直接发送")
+    if unfounded_followup:
+        reasons.append("客户尚未提供有效联系方式，上一版回复却无条件承诺安排同事联系，应改为引导客户先留联系方式")
     retry_payload = {
         "retry_reason": "；".join(reasons),
         "bad_reply": bad_reply,
         "instruction": (
             "请重新生成 1 到 3 句话的自然销售回复，接住客户最新问题；"
             "不要重复询问上文已提供的客户信息；不要编造库存、价格或检测结论；不要提微信或个人号；"
-            "联系方式不完整时引导补全而不是说已收到，已收到有效联系方式时不得再次索要。"
+            "联系方式不完整时引导补全而不是说已收到，已收到有效联系方式时不得再次索要；"
+            "客户索要资料/报价/检测报告等时，说明平台内不方便展开，引导客户留个联系方式后再沟通，"
+            "不得承诺把具体内容发到客户手机或微信；客户未留有效联系方式时不得无条件承诺安排同事联系。"
         ),
     }
     return [
@@ -2046,9 +2094,12 @@ _LEAD_REFUSE_KEYWORDS = (
     "不想留", "不方便",
 )
 # A5：PARTIAL/INVALID/AMBIGUOUS 状态下不得出现的虚假确认话术
+# 虚假确认：仅识别"已经完成的事实声明"，不识别未来条件表达或单独"安排同事"
 _FALSE_CONFIRM_KEYWORDS = (
-    "收到您的联系方式", "联系方式已经收到", "已经记录", "收到号码",
-    "安排工作人员联系您", "收到您的电话", "号码已收到", "已收到您的联系方式",
+    "已收到您的联系方式", "收到您的联系方式了", "联系方式已经收到",
+    "已经记录您的联系方式", "已经记录联系方式", "已记录您的联系方式",
+    "电话已经收到", "手机号已经收到", "号码已收到", "收到您的电话",
+    "微信已经拿到", "已经拿到您的电话", "已经拿到您的微信",
     "收到您的手机号",
 )
 # A5：VALID 状态下不得再次出现的索要话术
@@ -2056,6 +2107,43 @@ _REASK_CONTACT_KEYWORDS = (
     "留个联系方式", "留个手机号", "方便留电话", "发一下号码",
     "留个电话", "发一下手机号", "留个手机", "方便留个电话",
 )
+# 资料/车源/报价承诺：把平台外内容"发到"客户手机/微信的肯定承诺
+_OFF_PLATFORM_PROMISE_KEYWORDS = (
+    "把检测报告发您", "把资料发您", "把报价发您", "把底价发您",
+    "把图片发您", "把车源发您", "把配置发您", "把金融方案发您",
+    "把详细信息发您", "把详情发您",
+    "检测报告发您手机", "报价发您手机", "资料发您手机",
+    "图片发您微信", "把金融方案发您手机",
+    "给您发报价", "给您发检测报告", "给您发资料", "给您发车源",
+    "给您发图片", "给您发配置", "给您发金融方案",
+    "给您发详细信息", "给您发详情",
+    "发您手机上", "发您微信",
+)
+# 否定语境：明确表示"不能/不允许/没法"把内容发给客户，不判违规
+_OFF_PLATFORM_NEGATION_KEYWORDS = (
+    "不允许把", "不能直接", "不能把", "没法在平台", "没法把",
+    "无法把", "不会承诺把", "不方便展开", "平台里不方便", "平台内不方便",
+    "不能给您发", "不会给您发", "无法给您发",
+)
+
+# 无条件联系承诺：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进，
+# 且未带"留下联系方式后/发过来后"等前置条件。
+_UNFOUNDED_FOLLOWUP_KEYWORDS = (
+    "安排同事联系您", "安排工作人员联系您", "稍后联系您",
+    "让销售联系您", "马上跟进您", "我安排同事跟进",
+)
+# 明确前置条件：存在则不判无条件承诺（属条件表达）
+_FOLLOWUP_PRECONDITION_KEYWORDS = (
+    "留下联系方式后", "提供联系方式后", "发来联系方式后",
+    "发过来后", "您留个联系方式后", "您发个联系方式后",
+)
+
+# 联系方式违规 → 不可豁免 Hard 风险标记映射
+CONTACT_VIOLATION_TO_HARD_FLAG = {
+    "false_confirm_contact": "hard_false_contact_confirmation",
+    "reask_contact_after_valid": "hard_reask_contact_after_valid",
+    "unfounded_contact_followup_commitment": "hard_unfounded_contact_followup_commitment",
+}
 
 
 def _resolve_contact_state(*, latest_message: str, contacts: dict[str, Any]) -> str:
@@ -2119,16 +2207,60 @@ def _customer_refused_lead(latest_message: str) -> bool:
 def _contact_reply_violation(contact_state: str, reply_text: str) -> str | None:
     """生成后联系方式语义校验：返回违规类型，无违规返回 None。
 
-    PARTIAL/INVALID/AMBIGUOUS 时不得说已收到联系方式；VALID 时不得再次索要。
+    非 VALID 态不得声称已收到联系方式；VALID 态不得再次完整索要。
+    仅识别"已经完成的事实声明"，不识别未来条件表达或单独"安排同事"。
     """
     text = str(reply_text or "")
-    if contact_state in ("PARTIAL", "INVALID", "AMBIGUOUS"):
+    # 非 VALID（NONE/PARTIAL/INVALID/AMBIGUOUS）声称已收到 → false_confirm
+    if contact_state != "VALID":
         if _contains_any(text, _FALSE_CONFIRM_KEYWORDS):
             return "false_confirm_contact"
     if contact_state == "VALID":
         if _contains_any(text, _REASK_CONTACT_KEYWORDS):
             return "reask_contact_after_valid"
     return None
+
+
+def _off_platform_promise_violation(reply_text: str) -> str | None:
+    """资料/车源/报价承诺检测：肯定承诺把平台外内容发到客户手机/微信。
+
+    只识别肯定承诺（"把...发您"），排除明确否定语境（"不允许把..."）。
+    不依赖 LLM 语义审核，仅确定性关键词 + 否定前缀排除。
+    """
+    text = str(reply_text or "")
+    if not text:
+        return None
+    # 含否定语境时不判违规（明确表示不能/没法发送）
+    if _contains_any(text, _OFF_PLATFORM_NEGATION_KEYWORDS):
+        return None
+    if _contains_any(text, _OFF_PLATFORM_PROMISE_KEYWORDS):
+        return "off_platform_promise"
+    return None
+
+
+def _unfounded_contact_followup_commitment_violation(
+    contact_state: str, reply_text: str
+) -> str | None:
+    """无条件联系承诺检测：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进。
+
+    仅当：
+    - contact_state != VALID（未确认有效联系方式）
+    - 回复含无条件联系承诺（安排同事联系您/稍后联系您/让销售联系您/马上跟进您）
+    - 回复不含明确前置条件（留下联系方式后/发过来后 等）
+
+    才判定违规。带前置条件的表达（"您留下联系方式后我再联系您"）不违规。
+    """
+    if contact_state == "VALID":
+        return None
+    text = str(reply_text or "")
+    if not text:
+        return None
+    if not _contains_any(text, _UNFOUNDED_FOLLOWUP_KEYWORDS):
+        return None
+    # 含明确前置条件 → 条件表达，不判无条件承诺
+    if _contains_any(text, _FOLLOWUP_PRECONDITION_KEYWORDS):
+        return None
+    return "unfounded_contact_followup_commitment"
 
 
 def _missing_phone_goal_triggered(
@@ -2167,11 +2299,11 @@ def _build_agent_phone_goal_fallback_reply(
     if subject:
         return (
             f"我先按{subject}这个条件让顾问核现车和检测报告。"
-            "您方便留个手机号吗？有符合的车源，我把车况、检测报告和报价发您手机上。"
+            "您方便留个手机号吗？"
         )
     return (
         "我先让顾问按您说的条件核现车、车况和检测报告。"
-        "您方便留个手机号吗？有合适车源我把检测报告和报价发您手机上。"
+        "您方便留个手机号吗？"
     )
 
 

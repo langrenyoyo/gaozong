@@ -23,6 +23,31 @@ from app.services.douyin_autoreply_settings_service import (
 
 COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
 
+# 不可豁免 Hard 风险标记：9100 返回后 9000 Gate 无条件阻断，
+# 不受 allow_release_manual_required / manual_review_risk_flags 影响。
+HARD_BLOCK_RISK_FLAGS = frozenset(
+    {
+        "hard_false_contact_confirmation",
+        "hard_reask_contact_after_valid",
+        "hard_off_platform_detail_promise",
+        "hard_unfounded_contact_followup_commitment",
+    }
+)
+
+
+def _normalized_risk_flags(value: Any) -> list[str]:
+    """稳定、去重的 risk_flags 字符串列表。"""
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
 
 @dataclass(frozen=True)
 class GateDecision:
@@ -105,7 +130,7 @@ def evaluate_post_llm_gates(
     allowed_intents = parse_allowed_intents(settings)
     blocked_risk_flags = parse_blocked_risk_flags(settings)
     manual_review_risk_flags = parse_manual_review_risk_flags(settings)
-    risk_flags = _string_list(result.get("risk_flags"))
+    risk_flags = _normalized_risk_flags(result.get("risk_flags"))
     rag_sources = result.get("rag_sources") or []
     source_chunks = result.get("source_chunks") or []
     confidence = _float_or_zero(result.get("confidence"))
@@ -137,6 +162,12 @@ def evaluate_post_llm_gates(
         return GateDecision(False, "blocked", "empty_reply_text", gate_results)
     if settings.send_enabled is not True:
         return GateDecision(False, "blocked", "account_send_disabled", gate_results)
+    # 不可豁免 Hard 阻断：联系方式虚假确认/重复索要/资料报价承诺，
+    # 不受 allow_release_manual_required / manual_review_risk_flags 影响。
+    hard_block_flags = sorted(flag for flag in risk_flags if flag in HARD_BLOCK_RISK_FLAGS)
+    if hard_block_flags:
+        gate_results["hard_block_flags"] = hard_block_flags
+        return GateDecision(False, "blocked", "hard_violation_unblockable", gate_results)
     # manual_required=True 是 9100 明确判定需人工（如无法生成安全回复的风险），保留阻断。
     # 账号级开关 allow_release_manual_required 开启时豁免该阻断，让需人工确认的回复也发送，
     # 但仍走完整发送 gate，不豁免 prompt_injection 等风险阻断（见下方 risk_flags 交集与发送阶段 gate）。

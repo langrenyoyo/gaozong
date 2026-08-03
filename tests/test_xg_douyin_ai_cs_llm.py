@@ -1133,7 +1133,7 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
         return {
             "reply_text": json.dumps(
                 {
-                    "reply_text": "可以的，我按您30万左右看20/21款530Li这个条件让顾问核现车，重点看检测报告、事故水泡和报价。您留个手机号，有符合的车源我把检测报告、里程配置和报价发您手机上。",
+                    "reply_text": "可以的，我按您30万左右看20/21款530Li这个条件让顾问核现车，重点看检测报告、事故水泡和报价。您方便留个手机号吗？",
                     "intent": "consult_inventory",
                     "lead_level": "high",
                     "tags": [],
@@ -1205,7 +1205,7 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
         reply = (
             "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。"
             if calls["count"] == 1
-            else "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。您留个手机号，有合适车源我把资料发您手机上。"
+            else "收到，我让顾问按30万左右、20/21款530Li去核现车、检测报告和报价。您方便留个手机号吗？"
         )
         return {
             "reply_text": json.dumps(
@@ -1705,7 +1705,7 @@ def test_reply_suggestion_prompt_includes_structured_known_customer_info(
         return {
             "reply_text": json.dumps(
                 {
-                    "reply_text": "明白，您是想同时看现车报价和检测报告。按您前面说的30万左右、20或21款530Li，我让顾问优先核有没有符合的现车；如果有，再把检测报告、车况和价格一起发您看。",
+                    "reply_text": "明白，您是想同时看现车报价和检测报告。按您前面说的30万左右、20或21款530Li，我让顾问优先核有没有符合的现车；这块平台里不方便细聊，您留个联系方式，我加您再说。",
                     "intent": "consult_inventory",
                     "lead_level": "high",
                     "tags": [],

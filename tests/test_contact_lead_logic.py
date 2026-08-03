@@ -5,11 +5,14 @@
 """
 
 from apps.xg_douyin_ai_cs.services.reply_decision_service import (
+    CONTACT_VIOLATION_TO_HARD_FLAG,
     _contact_reply_violation,
     _customer_refused_lead,
     _missing_phone_goal_triggered,
+    _off_platform_promise_violation,
     _resolve_contact_state,
     _scene_suitable_for_lead_capture,
+    _unfounded_contact_followup_commitment_violation,
 )
 
 
@@ -108,7 +111,7 @@ def test_violation_false_confirm_when_partial():
 
 
 def test_violation_false_confirm_when_invalid():
-    assert _contact_reply_violation("INVALID", "收到号码了，已经记录") == "false_confirm_contact"
+    assert _contact_reply_violation("INVALID", "号码已收到，已经记录您的联系方式") == "false_confirm_contact"
 
 
 def test_violation_reask_when_valid():
@@ -141,3 +144,164 @@ def test_scene_suitable_for_lead_capture_detects_complaint():
     assert _scene_suitable_for_lead_capture("我要投诉") is False
     assert _scene_suitable_for_lead_capture("你是机器人吗") is False
     assert _scene_suitable_for_lead_capture("想看奔驰A6") is True
+
+
+# ---- P0-A：NONE/非 VALID 虚假确认 + 未来条件表达分离 ----
+
+def test_violation_false_confirm_when_none():
+    # NONE 态声称已收到 → false_confirm
+    assert _contact_reply_violation("NONE", "已收到您的联系方式了") == "false_confirm_contact"
+
+
+def test_violation_false_confirm_when_ambiguous():
+    assert _contact_reply_violation("AMBIGUOUS", "联系方式已经收到") == "false_confirm_contact"
+
+
+def test_valid_allows_confirm_received():
+    # VALID 允许确认收到
+    assert _contact_reply_violation("VALID", "已收到您的联系方式了") is None
+
+
+def test_no_violation_normal_lead_guide_when_none():
+    # 正常首次留资引导不误判
+    assert _contact_reply_violation("NONE", "您可以留个联系方式吗") is None
+
+
+def test_no_violation_future_conditional_expression():
+    # 未来条件表达不误判为已收到
+    assert _contact_reply_violation("NONE", "您留下联系方式后，我再联系您") is None
+
+
+def test_no_violation_arrange_colleague_alone():
+    # "安排同事联系您"单独出现不等于已收到
+    assert _contact_reply_violation("NONE", "好的，我安排同事联系您") is None
+
+
+def test_no_violation_plain_receipt_not_contact():
+    # "收到老板"只是收到消息，不误判为收到联系方式
+    assert _contact_reply_violation("NONE", "收到老板，我先帮您看看") is None
+
+
+def test_valid_reask_returns_specific_violation():
+    # VALID 后再次索要 → reask_contact_after_valid
+    assert _contact_reply_violation("VALID", "方便留个电话吗") == "reask_contact_after_valid"
+
+
+# ---- P0-A：资料/车源/报价承诺检测 ----
+
+def test_off_platform_promise_detect_send_report_to_phone():
+    assert _off_platform_promise_violation("我把检测报告发您手机") == "off_platform_promise"
+
+
+def test_off_platform_promise_detect_send_quote():
+    assert _off_platform_promise_violation("我给您发报价") == "off_platform_promise"
+
+
+def test_off_platform_promise_detect_send_materials():
+    assert _off_platform_promise_violation("让同事把资料发您") == "off_platform_promise"
+
+
+def test_off_platform_promise_detect_send_images_wechat():
+    assert _off_platform_promise_violation("马上把图片发您微信") == "off_platform_promise"
+
+
+def test_off_platform_promise_detect_send_finance_to_phone():
+    assert _off_platform_promise_violation("把金融方案发您手机") == "off_platform_promise"
+
+
+def test_off_platform_promise_not_triggered_by_negation():
+    # 否定语境不判违规
+    assert _off_platform_promise_violation("平台不允许把检测报告发您") is None
+    assert _off_platform_promise_violation("这里不能直接给您发报价") is None
+    assert _off_platform_promise_violation("我没法在平台里把资料发您") is None
+    assert _off_platform_promise_violation("不会承诺把具体报价发给您") is None
+
+
+def test_off_platform_promise_compliant_handoff_not_violation():
+    # 合规方向：平台内不方便细聊，引导联系方式 → 不违规
+    assert _off_platform_promise_violation(
+        "老板，这类内容平台里不方便细聊，您发个绿泡泡或联系方式，我加您再说"
+    ) is None
+
+
+def test_off_platform_promise_empty_text():
+    assert _off_platform_promise_violation("") is None
+    assert _off_platform_promise_violation(None) is None
+
+
+# ---- P0-A：Hard 风险标记映射 ----
+
+def test_contact_violation_to_hard_flag_mapping():
+    assert CONTACT_VIOLATION_TO_HARD_FLAG["false_confirm_contact"] == "hard_false_contact_confirmation"
+    assert CONTACT_VIOLATION_TO_HARD_FLAG["reask_contact_after_valid"] == "hard_reask_contact_after_valid"
+
+
+def test_off_platform_hard_flag_constant():
+    # off_platform_promise 对应 hard_off_platform_detail_promise（在 _build_llm_reply 中映射）
+    from apps.xg_douyin_ai_cs.services.reply_decision_service import _off_platform_promise_violation
+    assert _off_platform_promise_violation("把检测报告发您手机") == "off_platform_promise"
+
+
+# ---- P0-A FIX：无条件联系承诺检测 ----
+
+def test_unfounded_followup_none_arrange_colleague():
+    # NONE + 无条件"安排同事联系您" → 违规
+    assert _unfounded_contact_followup_commitment_violation("NONE", "我安排同事联系您。") == "unfounded_contact_followup_commitment"
+
+
+def test_unfounded_followup_partial_seller_contact():
+    # PARTIAL + 无条件"稍后让销售联系您" → 违规
+    assert _unfounded_contact_followup_commitment_violation("PARTIAL", "稍后让销售联系您。") == "unfounded_contact_followup_commitment"
+
+
+def test_unfounded_followup_valid_allowed():
+    # VALID + "安排同事联系您" → 不违规（已确认有效联系方式）
+    assert _unfounded_contact_followup_commitment_violation("VALID", "收到老板，我安排同事跟您沟通。") is None
+
+
+def test_unfounded_followup_precondition_not_violation():
+    # NONE + 带前置条件"您留下联系方式后我再安排同事联系您" → 不违规（条件表达）
+    assert _unfounded_contact_followup_commitment_violation("NONE", "您留下联系方式后，我再安排同事联系您。") is None
+
+
+def test_unfounded_followup_send_after_not_violation():
+    # NONE + "您发过来后我接着跟您说" → 不违规
+    assert _unfounded_contact_followup_commitment_violation("NONE", "您发过来后我接着跟您说。") is None
+
+
+def test_unfounded_followup_no_followup_keyword():
+    # 无联系承诺关键词 → 不违规
+    assert _unfounded_contact_followup_commitment_violation("NONE", "您留个联系方式，我帮您核实。") is None
+
+
+def test_unfounded_followup_hard_flag_mapping():
+    assert CONTACT_VIOLATION_TO_HARD_FLAG["unfounded_contact_followup_commitment"] == "hard_unfounded_contact_followup_commitment"
+
+
+# ---- P0-A FIX-2：残留承诺话术不得作为合规引导 ----
+
+def test_off_platform_promise_detail_info_blocked():
+    # "把详细信息发您" → off_platform_promise（不得作为合规资料引导）
+    assert _off_platform_promise_violation("让同事把详细信息发您") == "off_platform_promise"
+
+
+def test_sync_you_not_safe_substitute_for_send():
+    # "稍后把情况同步您" 在无有效联系方式且无前置条件时，含无条件联系承诺"稍后...联系您"语义
+    # 但"同步您"不是"联系您"——同步不触发 unfounded_followup（不误判），
+    # 重点是 fallback/Prompt 不得把"同步您"当合规话术，此处仅验证不误判为 off_platform
+    assert _off_platform_promise_violation("稍后把情况同步您") is None
+
+
+def test_sync_you_with_unfounded_followup_blocked():
+    # "稍后联系您"（无前置条件）→ unfounded_contact_followup_commitment
+    assert _unfounded_contact_followup_commitment_violation("NONE", "稍后联系您") == "unfounded_contact_followup_commitment"
+
+
+def test_compliant_off_platform_handoff_direction():
+    # 合规方向：平台里不方便细聊，引导联系方式 → 不违规
+    assert _off_platform_promise_violation(
+        "老板，这类内容平台里不方便细聊，您发个绿泡泡或联系方式，我加您再说"
+    ) is None
+    assert _unfounded_contact_followup_commitment_violation(
+        "NONE", "老板，这类内容平台里不方便细聊，您发个绿泡泡或联系方式，我加您再说"
+    ) is None
