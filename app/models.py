@@ -1509,8 +1509,9 @@ class AiEditJob(Base):
     job_id = Column(String(64), nullable=False, comment="任务幂等 ID")
     status = Column(String(32), comment="任务状态")
     source_type = Column(String(32), comment="来源类型")
-    input_json = Column(Text, comment="输入 JSON")
-    result_json = Column(Text, comment="结果 JSON")
+    # ORM 类型对齐 PG 迁移 0008 的 JSONB（Column(Text) 会把参数标 VARCHAR，PG 拒收）
+    input_json = Column(_JSONStringJSONB(), comment="输入 JSON")
+    result_json = Column(_JSONStringJSONB(), comment="结果 JSON")
     error_message = Column(Text, comment="错误信息")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
