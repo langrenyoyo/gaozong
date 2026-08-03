@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.context import RequestContext
-from app.auth.dependencies import get_request_context_required
+from app.auth.dependencies import get_request_context_optional, get_request_context_required
 from app.auth.local_agent_auth import LocalAgentAuthContext, require_local_agent_context
 from app.database import get_db
 from app.services import ai_edit_service as svc
@@ -755,22 +755,62 @@ def play_las_job_video_route(
     return _ok({"url": url})
 
 
-@router.get("/las/jobs/{job_id}/video/download")
-def download_las_job_video_route(
+@router.get("/las/jobs/{job_id}/video/download-link")
+def download_link_route(
     job_id: int,
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """下载最终归档视频：校验同播放，流式代理 TOS 视频返回，强制 attachment 下载。
+    """生成一次性下载链接（带 token query 参数，浏览器原生 <a href> 下载带进度条）。
 
-    9000 从自有 TOS 拉视频流式返回，带 Content-Disposition: attachment。
-    避免 TOS CORS 拦截和跨域 download 属性失效。视频大小适中，代理带宽可接受。
+    前端调此接口（带 Authorization header）拿到 {download_url, filename}，
+    再用 <a href=download_url> 触发浏览器原生下载。
+    """
+    from app.services import ai_edit_las_service as las_svc
+
+    _require_ai_edit(context)
+    merchant_id = _merchant(context)
+    # 校验视频可用（商户归属 + 已归档）
+    url = las_svc.generate_playback_url(db, merchant_id=merchant_id, job_id=job_id)
+    if not url:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
+        )
+    title = las_svc.get_job_title(db, merchant_id=merchant_id, job_id=job_id) or ""
+    filename = las_svc.safe_filename(title, job_id)
+    token = las_svc.generate_download_token(job_id, merchant_id)
+    download_url = f"/api/ai-edit/las/jobs/{job_id}/video/download?token={token}"
+    return _ok({"download_url": download_url, "filename": filename})
+
+
+@router.get("/las/jobs/{job_id}/video/download")
+def download_las_job_video_route(
+    job_id: int,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+    context: RequestContext | None = Depends(get_request_context_optional),
+):
+    """下载最终归档视频：流式代理 TOS 视频，强制 attachment 下载。
+
+    双鉴权：?token= 一次性 token（浏览器 <a href> 原生下载，绕过 header 要求）
+    或 Authorization header（token 缺失时走 header 鉴权）。
     """
     from app.services import ai_edit_las_service as las_svc
     import requests as _requests
 
-    _require_ai_edit(context)
-    merchant_id = _merchant(context)
+    # token 鉴权 OR header 鉴权
+    if token:
+        job = db.query(las_svc.AiEditJob).filter(las_svc.AiEditJob.id == job_id).first()
+        if job is None or not las_svc.verify_download_token(token, job_id, job.merchant_id):
+            raise HTTPException(status_code=403, detail={"code": "INVALID_TOKEN", "message": "下载链接无效或已过期"})
+        merchant_id = job.merchant_id
+    else:
+        if context is None:
+            raise HTTPException(status_code=401, detail={"code": "TOKEN_MISSING", "message": "未提供登录态"})
+        _require_ai_edit(context)
+        merchant_id = _merchant(context)
+
     url = las_svc.generate_playback_url(db, merchant_id=merchant_id, job_id=job_id)
     if not url:
         raise HTTPException(
@@ -781,7 +821,6 @@ def download_las_job_video_route(
     filename = las_svc.safe_filename(title, job_id)
     from urllib.parse import quote
 
-    # 流式从 TOS 拉取，转发给客户端（带 attachment 强制下载）
     upstream = _requests.get(url, stream=True, timeout=120)
     upstream.raise_for_status()
 

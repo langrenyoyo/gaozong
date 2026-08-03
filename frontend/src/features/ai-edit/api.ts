@@ -128,9 +128,9 @@ export async function fetchPlayUrl(jobId: number): Promise<string> {
   return unwrap(r).url;
 }
 
-/** 获取下载最终归档视频的短期预签名 URL + 文件名（带 Authorization header fetch）。 */
-export async function fetchDownloadUrl(jobId: number): Promise<{ url: string; filename: string }> {
-  const r = await apiClient.get(`/ai-edit/las/jobs/${jobId}/video/download`);
+/** 获取一次性下载链接（带 token query 参数，浏览器原生 <a href> 下载带进度条）。 */
+export async function fetchDownloadLink(jobId: number): Promise<{ download_url: string; filename: string }> {
+  const r = await apiClient.get(`/ai-edit/las/jobs/${jobId}/video/download-link`);
   return unwrap(r);
 }
 

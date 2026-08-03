@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -636,6 +638,48 @@ def delete_las_job(db: Session, *, merchant_id: str, job_id: int, operator_id: s
         job_id, operator_id, job.delete_status, "failed" if cleanup_failed else "ok",
     )
     return {"deleted": True, "status": job.delete_status}
+
+
+# 一次性下载 token：HMAC 签名 {job_id}:{merchant_id}:{exp}，短期有效
+# 让前端 <a href> 原生下载带进度条，token query 参数鉴权绕过 header 要求
+_DOWNLOAD_TOKEN_TTL = 120  # 秒
+
+
+def _download_signing_secret() -> str:
+    """下载 token 签名密钥：复用 DY_SECRET_KEY（生产 webhook 验签同源），兜底随机值。"""
+    return config.DY_SECRET_KEY or "ai-edit-download-fallback-secret"
+
+
+def generate_download_token(job_id: int, merchant_id: str) -> str:
+    """生成一次性下载 token（绑定 job_id + merchant_id，TTL 内有效）。"""
+    exp = int(time.time()) + _DOWNLOAD_TOKEN_TTL
+    payload = f"{job_id}:{merchant_id}:{exp}"
+    sig = hmac.new(_download_signing_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+    # token = base64(payload) + "." + sig（用 urlsafe，避免特殊字符）
+    import base64
+    return base64.urlsafe_b64encode(payload.encode()).decode() + "." + sig
+
+
+def verify_download_token(token: str, job_id: int, merchant_id: str) -> bool:
+    """验证下载 token：签名匹配 + 未过期 + job/merchant 匹配。"""
+    try:
+        import base64
+        payload_b64, sig = token.split(".", 1)
+        payload = base64.urlsafe_b64decode(payload_b64).decode()
+        expected_sig = hmac.new(_download_signing_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return False
+        parts = payload.split(":")
+        if len(parts) != 3:
+            return False
+        t_job_id, t_merchant_id, t_exp = parts
+        if int(t_job_id) != job_id or t_merchant_id != merchant_id:
+            return False
+        if int(t_exp) < int(time.time()):
+            return False
+        return True
+    except (ValueError, IndexError, TypeError):
+        return False
 
 
 def _report_las_compute_usage(db: Session, job: AiEditJob) -> None:

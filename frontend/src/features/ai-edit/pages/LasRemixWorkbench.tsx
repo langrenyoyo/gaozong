@@ -20,11 +20,9 @@ import {
   UploadCloudIcon,
   XIcon,
 } from "lucide-react";
-import { createLasJob, deleteLasJob, fetchAiEditMaterials, fetchPlayUrl, listLasJobs } from "../api";
+import { createLasJob, deleteLasJob, fetchAiEditMaterials, fetchDownloadLink, fetchPlayUrl, listLasJobs } from "../api";
 import type { AiEditMaterial, LasJobStatus } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
-import { getExternalToken } from "../../../authToken";
-import { API_BASE_URL } from "../../../api/client";
 
 const SCRIPT_EXAMPLE = `剪成一条约 60 秒的汽车真人讲解视频。开头优先保留最有吸引力的车辆信息，随后按外观、座舱、配置、车况和总结组织。删除口误与重复表述，同一信息多次录制时优先保留最后一次完整自然的口播。讲到具体部位、配置、屏幕、座椅、空间或车况时，必须优先匹配能够直接证明该信息的对应空镜；泛化空镜不能抢占更匹配的素材。默认硬切，只有口播切到重点产品细节时使用轻量转场。`;
 
@@ -390,24 +388,14 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
     if (!canPlay || mediaLoading) return;
     setMediaLoading(true);
     try {
-      // fetch 9000 下载路由（带 Authorization header，9000 已配 CORS 允许前端域），
-      // 9000 流式代理 TOS 视频返回 attachment，避免 TOS CORS 拦截
-      const token = getExternalToken();
-      const resp = await fetch(`${API_BASE_URL}/ai-edit/las/jobs/${job.job_id}/video/download`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
-      const blob = await resp.blob();
+      // 获取一次性 token 下载链接，用 <a href> 触发浏览器原生下载（带进度条）
+      const { download_url, filename } = await fetchDownloadLink(job.job_id);
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      // 从响应 Content-Disposition 提取文件名，兜底 job_id
-      const cd = resp.headers.get("content-disposition") || "";
-      const m = cd.match(/filename\*=UTF-8''(.+)/);
-      a.download = m ? decodeURIComponent(m[1]) : `job_${job.job_id}.mp4`;
+      a.href = download_url;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(a.href);
     } catch (e) {
       toast.error(userFacingError(e, "下载失败"));
     } finally {
