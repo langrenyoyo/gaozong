@@ -169,8 +169,9 @@ def process_las_job(job_id: int) -> None:
 
 def _persist_artifacts(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -> None:
     """把 LAS 产物 url 存到 AiEditJobArtifact（artifact_type 对应 5 字段，storage_key 存 url）。"""
-    # 清理旧产物（重试场景）
-    db.query(AiEditJobArtifact).filter(AiEditJobArtifact.job_id == job.id).delete()
+    # 清理旧产物（重试场景）。job_id 列为 String(64)，存 AiEditJob.job_id 字符串，
+    # 不可用 Integer 主键 job.id 比较（PG 下 varchar=integer 报 UndefinedFunction）
+    db.query(AiEditJobArtifact).filter(AiEditJobArtifact.job_id == job.job_id).delete()
     for field in DOWNLOAD_FIELDS:
         url = artifacts.get(field)
         tos_path = artifacts.get(field.replace("_url", "_tos_path"))
@@ -179,7 +180,7 @@ def _persist_artifacts(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -
         artifact_type = field.replace("_url", "")  # video_subtitled / video_clean / subtitle_srt / match_scheme / result_json
         artifact = AiEditJobArtifact(
             artifact_id=f"{job.job_id}-{artifact_type}",
-            job_id=job.id,
+            job_id=job.job_id,
             merchant_id=job.merchant_id,
             artifact_type=artifact_type,
             storage_key=tos_path or url,  # 优先 tos_path 长期保存，回退 url
@@ -222,9 +223,10 @@ def list_las_jobs(
 
 def _las_job_summary(db: Session, job: AiEditJob) -> dict[str, Any]:
     """单条任务摘要 + 产物（列表项）。"""
+    # job_id 列为 String(64)，用 AiEditJob.job_id 字符串关联，不可用 Integer 主键
     artifacts = (
         db.query(AiEditJobArtifact)
-        .filter(AiEditJobArtifact.job_id == job.id)
+        .filter(AiEditJobArtifact.job_id == job.job_id)
         .all()
     )
     return {
@@ -257,7 +259,7 @@ def get_las_job_status(db: Session, *, merchant_id: str, job_id: int) -> dict[st
         return None
     artifacts = (
         db.query(AiEditJobArtifact)
-        .filter(AiEditJobArtifact.job_id == job.id)
+        .filter(AiEditJobArtifact.job_id == job.job_id)
         .all()
     )
     return {
