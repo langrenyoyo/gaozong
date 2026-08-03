@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -85,6 +86,11 @@ def create_las_job(
         stage="submitted",
         progress=0,
         attempt_count=1,
+        # 持久化提交参数，失败后可回溯 video_urls/script/template（input_json 为 jsonb 列）
+        input_json=json.dumps(
+            {"video_urls": video_urls, "script": script, "template": template},
+            ensure_ascii=False,
+        ),
         las_task_id=las_task_id,
         las_idempotent_id=las_idempotent_id,
         las_script=script,
