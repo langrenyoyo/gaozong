@@ -775,15 +775,11 @@ def download_las_job_video_route(
             status_code=404,
             detail={"code": "VIDEO_NOT_AVAILABLE", "message": "视频不可用或任务未完成"},
         )
-    # 取任务标题生成安全下载文件名
+    # 取任务标题生成安全下载文件名，前端用 a.download 属性指定（不追加 response-content-disposition
+    # 查询参数，会破坏 TOS 预签名 X-Tos-SignedHeaders=host 的签名匹配导致 403）
     title = las_svc.get_job_title(db, merchant_id=merchant_id, job_id=job_id) or ""
     filename = las_svc.safe_filename(title, job_id)
-    from urllib.parse import quote
-
-    # 追加 response-content-disposition 强制附件下载语义（TOS 预签名支持查询参数覆盖响应头）
-    sep = "&" if "?" in url else "?"
-    url = f"{url}{sep}response-content-disposition=attachment%3Bfilename%3D{quote(filename)}"
-    return _ok({"url": url})
+    return _ok({"url": url, "filename": filename})
 
 
 @router.delete("/las/jobs/{job_id}")

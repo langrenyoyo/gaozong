@@ -388,15 +388,13 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
     if (!canPlay || mediaLoading) return;
     setMediaLoading(true);
     try {
-      const url = await fetchDownloadUrl(job.job_id);
+      const { url, filename } = await fetchDownloadUrl(job.job_id);
       // fetch blob 触发下载（避免浏览器跳转显示视频）
       const resp = await fetch(url);
       const blob = await resp.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      // 从 URL 提取文件名
-      const m = url.match(/filename=([^&]+)/);
-      a.download = m ? decodeURIComponent(m[1]) : "video.mp4";
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();

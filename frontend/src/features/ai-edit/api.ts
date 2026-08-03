@@ -128,10 +128,10 @@ export async function fetchPlayUrl(jobId: number): Promise<string> {
   return unwrap(r).url;
 }
 
-/** 获取下载最终归档视频的短期预签名 URL（带附件文件名，带 Authorization header fetch）。 */
-export async function fetchDownloadUrl(jobId: number): Promise<string> {
+/** 获取下载最终归档视频的短期预签名 URL + 文件名（带 Authorization header fetch）。 */
+export async function fetchDownloadUrl(jobId: number): Promise<{ url: string; filename: string }> {
   const r = await apiClient.get(`/ai-edit/las/jobs/${jobId}/video/download`);
-  return unwrap(r).url;
+  return unwrap(r);
 }
 
 /** 删除任务（软删除 + 清理自有 TOS 归档视频，幂等）。 */
