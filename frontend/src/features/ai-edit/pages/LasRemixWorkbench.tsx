@@ -369,13 +369,14 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
   const [deleting, setDeleting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
+  const [playUrl, setPlayUrl] = useState<string | null>(null);
 
   const handlePlay = async () => {
     if (!canPlay || mediaLoading) return;
     setMediaLoading(true);
     try {
       const url = await fetchPlayUrl(job.job_id);
-      window.open(url, "_blank", "noopener,noreferrer");
+      setPlayUrl(url);
     } catch (e) {
       toast.error(userFacingError(e, "获取播放地址失败"));
     } finally {
@@ -388,13 +389,18 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
     setMediaLoading(true);
     try {
       const url = await fetchDownloadUrl(job.job_id);
-      // 用 a 标签触发下载（带附件文件名，由后端 response-content-disposition 控制）
+      // fetch blob 触发下载（避免浏览器跳转显示视频）
+      const resp = await fetch(url);
+      const blob = await resp.blob();
       const a = document.createElement("a");
-      a.href = url;
-      a.download = "";
+      a.href = URL.createObjectURL(blob);
+      // 从 URL 提取文件名
+      const m = url.match(/filename=([^&]+)/);
+      a.download = m ? decodeURIComponent(m[1]) : "video.mp4";
       document.body.appendChild(a);
       a.click();
       a.remove();
+      URL.revokeObjectURL(a.href);
     } catch (e) {
       toast.error(userFacingError(e, "获取下载地址失败"));
     } finally {
@@ -495,6 +501,16 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
           </button>
         )}
       </div>
+      {playUrl ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setPlayUrl(null)}>
+          <div className="max-h-[90vh] max-w-[90vw] rounded-xl bg-white p-3" onClick={(e) => e.stopPropagation()}>
+            <video src={playUrl} controls autoPlay className="max-h-[80vh] max-w-[80vw] rounded-lg" />
+            <div className="mt-2 text-center">
+              <button type="button" onClick={() => setPlayUrl(null)} className="rounded-lg border border-[#e4e8f0] px-3 py-1 text-xs font-semibold text-[#374151]">关闭</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
