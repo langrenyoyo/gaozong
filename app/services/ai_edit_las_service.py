@@ -260,14 +260,20 @@ def archive_final_video(db: Session, job: AiEditJob, artifacts: dict[str, Any]) 
         logger.warning("ai_edit_archive_failed reason=no_final_video job_id=%s", job.job_id)
         return False
 
-    # 标记最终视频 artifact（清理旧标记，重置归档状态）
+    # 标记最终视频 artifact（清理旧标记，重置归档状态）。
+    # _persist_artifacts 用 db.add 新建行未 commit，这里先 flush 让新行落库，
+    # 避免 session 内 pending 对象与 bulk update 冲突导致后续字段更新丢失。
     chosen_artifact_type = chosen_field.replace("_url", "")
+    db.flush()
     db.query(AiEditJobArtifact).filter(
         AiEditJobArtifact.job_id == job.job_id
     ).update(
         {AiEditJobArtifact.is_final_video: False},
         synchronize_session=False,
     )
+    db.flush()
+    # 查询前 expire_all，确保拿到 DB 真实状态而非 session 缓存的 pending 对象
+    db.expire_all()
     final_artifact = (
         db.query(AiEditJobArtifact)
         .filter(

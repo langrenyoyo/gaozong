@@ -141,6 +141,29 @@ def test_archive_idempotent(db_session):
     mock_up.assert_not_called()  # 已归档不再上传
 
 
+def test_archive_after_persist_artifacts_writes_fields(db_session):
+    """R2真实流程：_persist_artifacts 用 db.add 未 commit，紧接着 archive_final_video
+    必须正确写入 final_artifact 的 is_final_video/archive_object_key 字段。
+
+    复现生产 bug：首次归档 job.delivery_status=archived 但 artifact 字段全 NULL。
+    """
+    job = _make_job(db_session)
+    artifacts = {"video_subtitled_url": "https://signed/sub.mp4", "video_subtitled_tos_path": "tos://las/x.mp4"}
+    # 模拟真实流程：先 _persist_artifacts（db.add 未 commit），再 archive
+    las_svc._persist_artifacts(db_session, job, artifacts)
+    with patch.object(las_svc.TOSUploader, "download_https_to_temp", return_value=("/tmp/x.mp4", 999)), \
+         patch.object(las_svc.TOSUploader, "upload_file_stream"):
+        ok = las_svc.archive_final_video(db_session, job, artifacts)
+    assert ok
+    # 关键断言：artifact 字段必须写入（非 NULL）
+    fa = las_svc._get_archived_final_artifact(db_session, job)
+    assert fa is not None, "归档后 final artifact 未标记"
+    assert fa.is_final_video is True, "is_final_video 未写入"
+    assert fa.delivery_status == "archived", "delivery_status 未写入"
+    assert fa.archive_object_key == f"ai-edit/{job.merchant_id}/{job.job_id}/final.mp4", "archive_object_key 未写入"
+    assert fa.file_size_bytes == 999, "file_size_bytes 未写入"
+
+
 # ---------- 任务列表不暴露内部地址 ----------
 
 def test_list_summary_no_tos_or_object_key(db_session):
