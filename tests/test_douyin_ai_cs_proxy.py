@@ -868,12 +868,19 @@ def test_proxy_builds_trusted_conversation_history_for_9100(monkeypatch):
             "content": "重复问一句",
             "created_at": base_time.isoformat(),
             "message_id": "msg_same_old",
+            "origin": "customer",
+            "direction": "inbound",
+            "fact_trust": "verified_customer",
         },
         {
             "role": "agent",
             "content": "您好，我是小高客服",
             "created_at": (base_time + timedelta(minutes=1)).isoformat(),
             "message_id": "msg_agent",
+            # R1-1：无 send_source/operator_id 的出站消息归 unknown_agent（无法证明人工或AI）
+            "origin": "unknown_agent",
+            "direction": "outbound",
+            "fact_trust": "unverified_agent_output",
         },
     ]
 

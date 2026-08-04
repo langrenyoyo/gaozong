@@ -24,6 +24,9 @@ class ReplyConversationContext:
     latest_message: str
     conversation_history: list[dict[str, str]]
     customer_memory: dict[str, Any]
+    # P0.2-B：暴露 lead 供 contact_state_service 严格验证历史联系方式（只读，不进 9100 payload）。
+    # lead 本身不传给 9100；build_request_contact_state 只从中提取脱敏 evidence_ref。
+    lead: Any = None
 
 
 def build_reply_conversation_context(
@@ -45,6 +48,7 @@ def build_reply_conversation_context(
             latest_message=mask_contacts_in_text(latest_message),
             conversation_history=[],
             customer_memory=_build_customer_memory(latest_message=latest_message, profile=None, lead=None, items=[]),
+            lead=None,
         )
     # 需要查询资源时必须先确认可信商户，禁止空 merchant_id 跨商户查询。
     if not merchant_id:
@@ -89,6 +93,7 @@ def build_reply_conversation_context(
             lead=lead,
             items=items,
         ),
+        lead=lead,
     )
 
 
@@ -268,11 +273,17 @@ def _to_history_item(item: dict[str, Any]) -> dict[str, str] | None:
         return None
 
     message_id = str(item.get("server_message_id") or item.get("raw_event_id") or item.get("id") or "").strip()
+    origin, fact_trust, direction = _origin_and_trust_for_message(item)
     result = {
         "role": role,
         "content": content,
         "created_at": _format_created_at(item.get("created_at")),
         "message_id": message_id,
+        # P0.2-A 历史来源分层：保留 role 兼容，新增 origin/direction/fact_trust 元数据。
+        # operator_id 等敏感字段不传给 9100；send_source 仅用于派生 origin，不原样透传。
+        "origin": origin,
+        "direction": direction,
+        "fact_trust": fact_trust,
     }
     return result
 
@@ -285,6 +296,53 @@ def _role_for_message(item: dict[str, Any]) -> str | None:
     if sender_type == "staff" or direction == "outbound":
         return "agent"
     return None
+
+
+# R2-3：send_source 明确白名单。不得使用"非 ai_auto 即人工"的过宽推断。
+# AI 自动化来源（send_source 白名单 或 auto_reply_run_id/return_visit_run_id 有值）
+_AI_SEND_SOURCES = frozenset({"ai_auto", "return_visit_auto"})
+# 明确人工来源（send_source 白名单）
+_HUMAN_SEND_SOURCES = frozenset({"manual"})
+
+
+def _origin_and_trust_for_message(item: dict[str, Any]) -> tuple[str, str, str]:
+    """P0.2-A + R1-1 + R2-3：派生历史消息来源身份与事实可信度。
+
+    返回 (origin, fact_trust, direction)：
+    - 客户入站消息：origin=customer, fact_trust=verified_customer
+    - send_source 属 AI 白名单 {ai_auto, return_visit_auto} 或 auto_reply_run_id 有值：
+      origin=ai_assistant, fact_trust=ai_generated
+    - send_source 属人工白名单 {manual}：origin=human_agent, fact_trust=human_statement
+    - send_source 为空且 operator_id 存在：origin=human_agent, fact_trust=human_statement
+    - 其他出站（含未知非空 send_source + operator_id，或空 source 无 operator_id）：
+      origin=unknown_agent, fact_trust=unverified_agent_output
+    - 系统消息：origin=system, fact_trust=system_instruction
+
+    R3 优先级冻结：未知非空 send_source 不得被 operator_id 覆盖成人工来源。
+    AI 历史只用于上下文连续性，不得成为客户事实来源（fact_trust=ai_generated）。
+    数据来源：DouyinPrivateMessageSend.send_source（经 _conversation_messages_payload 透传）。
+    """
+    sender_type = str(item.get("sender_type") or "").strip()
+    direction = str(item.get("direction") or "").strip()
+    send_source = str(item.get("send_source") or "").strip()
+    auto_reply_run_id = item.get("auto_reply_run_id")
+    operator_id = item.get("operator_id")
+    if sender_type == "customer" or direction == "inbound":
+        return "customer", "verified_customer", direction or "inbound"
+    if sender_type == "staff" or direction == "outbound":
+        # R3 优先级冻结：send_source 属 AI 白名单 或 auto_reply_run_id 有值 → ai_assistant
+        if send_source in _AI_SEND_SOURCES or auto_reply_run_id:
+            return "ai_assistant", "ai_generated", direction or "outbound"
+        # send_source 属人工白名单 → human_agent
+        if send_source in _HUMAN_SEND_SOURCES:
+            return "human_agent", "human_statement", direction or "outbound"
+        # R3：send_source 为空且 operator_id 存在 → human_agent（无来源证据时 operator_id 兜底）
+        if not send_source and operator_id:
+            return "human_agent", "human_statement", direction or "outbound"
+        # R3：未知非空 send_source（不在白名单）不得被 operator_id 覆盖成人工 → unknown_agent
+        # send_source 为空且无 operator_id → unknown_agent
+        return "unknown_agent", "unverified_agent_output", direction or "outbound"
+    return "system", "system_instruction", direction or ""
 
 
 def _drop_latest_customer_message(

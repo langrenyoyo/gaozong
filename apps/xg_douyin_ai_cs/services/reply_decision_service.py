@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from difflib import SequenceMatcher
@@ -319,6 +320,28 @@ CONCERN_KEYWORDS = (
 )
 CITY_KEYWORDS = ("广州",)
 USAGE_KEYWORDS = ("商务兼家用", "商务", "家用")
+
+# P0.2-A 历史来源信任规则：不重写完整 Prompt，只追加最小来源信任约束。
+# recent_history 中每条带 origin/fact_trust 元数据；只有客户原始消息可建立客户事实。
+_HISTORY_ORIGIN_TRUST_RULE = """## 历史来源信任规则
+recent_history 中每条消息带 origin 和 fact_trust 字段，必须按来源区分事实可信度：
+- origin=customer 且 fact_trust=verified_customer：客户原始消息，可以建立客户事实（联系方式、需求等）。
+- origin=human_agent：人工客服曾说过的内容，只表示客服历史话术，不代表客户已经提供信息。
+- origin=ai_assistant 且 fact_trust=ai_generated：历史模型生成的回复，可能包含错误，不得作为客户已提供信息的证据；只能用于保持对话连续性和避免重复，不得据此声称已收到联系方式或建立任何客户事实。
+- origin=unknown_agent 且 fact_trust=unverified_agent_output：来源未明的出站消息，不得作为客户已提供信息的证据，也不得假设为人工客服或 AI 的既定立场。
+客户事实只能来自 origin=customer 的消息，不得从人工客服话术、AI 历史回复或未知来源出站消息中推断。"""
+
+# P0.2-B 联系方式状态区分规则：current_contact_state 与 known_valid_contact 分离。
+_CONTACT_STATE_DISTINCTION_RULE = """## 联系方式状态区分规则
+known_customer.info.contact 含 current_contact_state 和 known_valid_contact 两个字段：
+- current_contact_state：客户当前消息的联系方式状态（NONE/PARTIAL/VALID/INVALID/AMBIGUOUS）。
+- known_valid_contact：历史客户消息或线索中已严格验证的完整有效联系方式（true/false）。
+- status（有效状态）：current 为 VALID 或 known_valid 为 true 时为 VALID。
+
+区分要求：
+- 当 current_contact_state != VALID 但 known_valid_contact=true 时：客户历史上已留有效联系方式，本轮不得重复索要，但不得表述为"刚刚收到""本次收到"或"您刚发的号码"；只能视为历史已有。
+- 当 current_contact_state=PARTIAL/INVALID/AMBIGUOUS 且 known_valid_contact=false 时：不得声称已收到，应引导补全或核对。
+- 确认已经收到联系方式是允许的，但不是必须出现的句式；仅在 status=VALID 时才允许确认，且不得把历史有效联系方式说成本轮刚收到。"""
 
 SAME_CATEGORY_RECOMMENDATIONS = [
     RecommendedVehicle(vehicle_name="宝马5系", price=280000, category="精品BBA"),
@@ -1246,12 +1269,42 @@ def _build_llm_reply(
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
     )
+    # 最终门禁：postprocess 改写后对最终 reply_text 重新执行联系方式 Hard 检测。
+    # 覆盖两处纵深缺口——①首调关键词漏判未触发 retry；②_apply_relevance_postprocess
+    # 改写 reply_text 引入虚假确认。contact_state 仍以首调前可信来源为准，不因 postprocess 改变。
+    # 任务第六节第13条：postprocess 后再次执行检测。
+    _final_reply_text = str(decision.get("reply_text") or "")
+    _post_violation = _contact_reply_violation(contact_state, _final_reply_text)
+    _post_off_platform = _off_platform_promise_violation(_final_reply_text)
+    _post_unfounded = _unfounded_contact_followup_commitment_violation(contact_state, _final_reply_text)
+    _post_hard_flags: list[str] = []
+    if _post_violation:
+        _post_hard_flags.append(violation_to_hard_flag(_post_violation) or "hard_false_contact_confirmation")
+    if _post_off_platform:
+        _post_hard_flags.append("hard_off_platform_detail_promise")
+    if _post_unfounded:
+        _post_hard_flags.append(violation_to_hard_flag(_post_unfounded) or "hard_unfounded_contact_followup_commitment")
+    if _post_hard_flags:
+        decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | set(_post_hard_flags))
+        decision["manual_required"] = True  # 审计/预览标记，不可豁免阻断由 9000 Gate 完成
+        decision["auto_send"] = False
+        retry_warnings.append("postprocess_hard_violation_blocked")
     # Hard 违规不可豁免：_apply_safety_postprocess 可能把 manual_required 覆盖回 False，
     # 此处重新确保 Hard 风险标记与阻断状态（不可豁免，由 9000 Gate hard_violation_unblockable 拦截）。
     final_risk_flags = set(decision.get("risk_flags") or [])
     if final_risk_flags & (set(CONTACT_VIOLATION_TO_HARD_FLAG.values()) | {"hard_off_platform_detail_promise"}):
         decision["manual_required"] = True
         decision["auto_send"] = False
+    # P0.2-C 隐私安全观测：只记录结构化状态/来源/计数，不含明文联系方式/完整消息/完整回复。
+    _log_contact_trust_observability(
+        conversation_id=conversation_id,
+        request=request,
+        contact_state=contact_state,
+        known_customer_info=known_customer_info,
+        retry_warnings=retry_warnings,
+        final_hard_flags=sorted(final_risk_flags & (set(CONTACT_VIOLATION_TO_HARD_FLAG.values()) | {"hard_off_platform_detail_promise"})),
+        merchant_id=request.merchant_id,
+    )
     # RAG 检索降级诊断非空时阻断候选；fallback_reason 是检索诊断，不入 risk_flags。
     if fallback_reason:
         decision["auto_send"] = False
@@ -1401,7 +1454,8 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 不得主动使用以下表达：留个号码、留个电话、留个号、发我手机号、加微信、加个人号、加私人联系方式。
 客户主动提到"电话、手机号、微信"等内容时，回复中仍优先统一表达为"联系方式"。
 客户已经留下完整联系方式后：不得再次索要；不得在回复中完整重复客户的联系方式；
-回复"收到您的联系方式"后，主动确认一个关键转化信息（客户称呼/所在城市/意向车型/到店或线上偏好），而非直接说"安排同事跟进"。
+确认已经收到联系方式是允许的，但不是必须出现的句式——不必每次都说"收到您的联系方式"；
+如确认收到，应主动确认一个关键转化信息（客户称呼/所在城市/意向车型/到店或线上偏好），而非直接说"安排同事跟进"。
 
 ### 联系方式不完整处理规则
 客户发送了疑似不完整的号码（如只有 7-10 位数字）时：
@@ -1541,10 +1595,13 @@ JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、ma
 
 
 def _build_llm_history(history: object) -> list[dict[str, str]]:
-    """LLM 载荷历史：最近 6 条、总计 ≤1200 字符、只含 role/content，联系方式脱敏。
+    """LLM 载荷历史：最近 6 条、总计 ≤1200 字符、联系方式脱敏。
 
     与 _sanitize_conversation_history 区别：后者保留 created_at/message_id 与 10/2500 窗口，
     供风险扫描与槽位抽取使用；本函数只产出送入模型的紧凑历史。
+
+    P0.2-A：透传 origin/direction/fact_trust 元数据，供模型区分客户/人工客服/AI历史。
+    AI 历史（fact_trust=ai_generated）只用于上下文连续性，不得作为客户事实来源。
     """
     compact: list[dict[str, str]] = []
     if not isinstance(history, list):
@@ -1557,7 +1614,18 @@ def _build_llm_history(history: object) -> list[dict[str, str]]:
         content = " ".join(content.split())
         if not content:
             continue
-        compact.append({"role": role, "content": content})
+        entry: dict[str, str] = {"role": role, "content": content}
+        # P0.2-A：透传来源元数据（可选字段，旧数据缺失时不写入）
+        origin = str(getattr(item, "origin", "") or "").strip()
+        direction = str(getattr(item, "direction", "") or "").strip()
+        fact_trust = str(getattr(item, "fact_trust", "") or "").strip()
+        if origin:
+            entry["origin"] = origin
+        if direction:
+            entry["direction"] = direction
+        if fact_trust:
+            entry["fact_trust"] = fact_trust
+        compact.append(entry)
     compact = compact[-LLM_HISTORY_MAX_ITEMS:]
     while compact and sum(len(item["content"]) for item in compact) > LLM_HISTORY_MAX_TOTAL_CHARS:
         compact.pop(0)
@@ -1614,6 +1682,10 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     # P0-B ENABLED：显式 Decision 约束注入 system prompt（policy_decision=None 时不注入）
     if policy_decision is not None:
         system_parts.append(_build_decision_constraint_text(policy_decision))
+    # P0.2-A 最小历史来源信任规则：不重写完整 Prompt，只追加来源信任约束。
+    system_parts.append(_HISTORY_ORIGIN_TRUST_RULE)
+    # P0.2-B 最小联系方式状态区分规则：current vs known_valid
+    system_parts.append(_CONTACT_STATE_DISTINCTION_RULE)
     system_prompt = "\n".join(system_parts)
     known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
@@ -2454,6 +2526,115 @@ def _resolve_contact_state_with_source(
     )
 
 
+def _pseudonymize_conversation_id(
+    conversation_id: int | str,
+    merchant_id: str = "",
+    account_open_id: str = "",
+) -> tuple[str | None, str]:
+    """R2-4：用专用密钥 HMAC 生成稳定会话伪名，不暴露原始会话标识。
+
+    输入作用域：merchant_id + account_open_id + conversation_id（三者共同决定伪名）。
+    - 同一作用域（merchant + account + conversation）稳定；
+    - 不同商户/不同账号/不同会话不相同；
+    - 密钥变化结果变化；
+    - 密钥缺失：pseudonym=None, status=hash_key_unconfigured（不泄露原值，不回退普通 SHA-256）。
+    返回 (pseudonym, status)。禁止记录密钥。
+    """
+    from apps.xg_douyin_ai_cs.config import settings
+
+    key = settings.contact_observability_hash_key
+    if not key:
+        return None, "hash_key_unconfigured"
+    import hmac as _hmac
+    payload = f"{merchant_id or ''}:{account_open_id or ''}:{conversation_id or ''}".encode("utf-8")
+    digest = _hmac.new(key.encode("utf-8"), payload, hashlib.sha256).hexdigest()[:16]
+    return digest, "hashed"
+
+
+def _history_role_origin_counts(history: object) -> tuple[dict[str, int], dict[str, int], int]:
+    """统计历史消息 role/origin 计数与 AI 历史自述命中数（只计命中类型与数量，不记原文）。
+
+    P0.2-C：history_ai_assertion_rule_hits 只记录规则命中类型和数量，不得记录命中原文。
+    """
+    role_counts: dict[str, int] = {}
+    origin_counts: dict[str, int] = {}
+    ai_assertion_hits = 0
+    if not isinstance(history, list):
+        return role_counts, origin_counts, ai_assertion_hits
+    for item in history:
+        role = str(getattr(item, "role", "") or "").strip()
+        origin = str(getattr(item, "origin", "") or "").strip()
+        if role:
+            role_counts[role] = role_counts.get(role, 0) + 1
+        if origin:
+            origin_counts[origin] = origin_counts.get(origin, 0) + 1
+        # AI 历史自述检测：origin=ai_assistant 且内容命中 FALSE_CONFIRM 关键词（只计数）
+        if origin == "ai_assistant":
+            content = str(getattr(item, "content", "") or "")
+            if any(kw in content for kw in _FALSE_CONFIRM_KEYWORDS):
+                ai_assertion_hits += 1
+    return role_counts, origin_counts, ai_assertion_hits
+
+
+def _log_contact_trust_observability(
+    *,
+    conversation_id: int | str,
+    request: ReplySuggestionRequest,
+    contact_state: str,
+    known_customer_info: dict[str, Any] | None,
+    retry_warnings: list[str],
+    final_hard_flags: list[str],
+    merchant_id: str = "",
+) -> None:
+    """P0.2-C 隐私安全观测：记录联系方式信任链结构化状态，不含明文。
+
+    允许记录：pseudonymized_conversation_id / contact_state / current_contact_state /
+    known_valid_contact / has_contact_candidate / has_contact_conflict / validator_version /
+    history_role_counts / history_origin_counts / history_ai_assertion_rule_hits /
+    retry_reason_code / final_hard_flags。
+    禁止记录：明文手机号/微信号/完整客户消息/完整 AI 回复/完整 RAG/未脱敏 Lead。
+
+    R1-2：pseudonymized_conversation_id 用专用密钥 HMAC 生成（含 merchant_id 作用域），
+    密钥缺失时输出不可关联占位值，不泄露原值，不回退普通 SHA-256。
+    """
+    try:
+        contact_info = (
+            (known_customer_info or {}).get("known_customer_info", {}).get("contact", {})
+            if isinstance(known_customer_info, dict)
+            else {}
+        )
+        req_cs = getattr(request, "contact_state", None) if isinstance(getattr(request, "contact_state", None), dict) else {}
+        role_counts, origin_counts, ai_assertion_hits = _history_role_origin_counts(request.conversation_history)
+        # R2-4：伪名输入作用域 merchant + account_open_id + conversation_id
+        account_open_id = str(getattr(request, "account_open_id", "") or getattr(request, "customer_open_id", "") or "")
+        pseudonym, pseudonym_status = _pseudonymize_conversation_id(conversation_id, merchant_id, account_open_id)
+        _logger.info(
+            "contact_trust_observability "
+            "pseudonymized_conversation_id=%s observability_pseudonym_status=%s "
+            "contact_state=%s current_contact_state=%s "
+            "known_valid_contact=%s known_valid_contact_source=%s has_contact_candidate=%s "
+            "has_contact_conflict=%s validator_version=%s "
+            "history_role_counts=%s history_origin_counts=%s history_ai_assertion_rule_hits=%d "
+            "retry_reason_code=%s final_hard_flags=%s",
+            pseudonym,
+            pseudonym_status,
+            contact_state,
+            contact_info.get("current_contact_state", contact_state),
+            contact_info.get("known_valid_contact", False),
+            contact_info.get("known_valid_contact_source"),
+            contact_info.get("has_contact_candidate", False),
+            contact_info.get("has_contact_conflict", False),
+            req_cs.get("validator_version", "unknown"),
+            role_counts,
+            origin_counts,
+            ai_assertion_hits,
+            ",".join(retry_warnings) or "none",
+            ",".join(final_hard_flags) or "none",
+        )
+    except Exception:  # noqa: BLE001 观测日志失败不得影响主链路
+        _logger.debug("contact_trust_observability_log_failed", exc_info=True)
+
+
 def _scene_suitable_for_lead_capture(latest_message: str) -> bool:
     """当前场景是否适合留资：投诉、质疑机器人、要求人工等场景不适合。"""
     return not _contains_any(str(latest_message or ""), _LEAD_UNFIT_KEYWORDS)
@@ -2535,7 +2716,24 @@ def _build_known_customer_context(
     else:
         contact_state = _resolve_contact_state(latest_message=latest_message, contacts=contacts)
         contact_action, contact_source = None, "local_fallback"
-    contacts = {**contacts, "status": contact_state, "action": contact_action, "state_source": contact_source}
+    # P0.2-B：从 request.contact_state 提取 current/known_valid 分离字段，供 Prompt 区分
+    # "当前消息收到"与"历史已有有效联系方式"（后者不得表述为"刚刚收到"）。
+    req_contact_state = getattr(request, "contact_state", None) if request is not None else None
+    req_cs_dict = req_contact_state if isinstance(req_contact_state, dict) else {}
+    current_contact_state = str(req_cs_dict.get("current_contact_state") or contact_state)
+    known_valid_contact = bool(req_cs_dict.get("known_valid_contact"))
+    contacts = {
+        **contacts,
+        "status": contact_state,
+        "action": contact_action,
+        "state_source": contact_source,
+        "current_contact_state": current_contact_state,
+        "known_valid_contact": known_valid_contact,
+        "known_valid_contact_source": req_cs_dict.get("known_valid_contact_source"),
+        "known_valid_contact_evidence_kind": req_cs_dict.get("known_valid_contact_evidence_kind"),
+        "has_contact_candidate": bool(req_cs_dict.get("has_contact_candidate")),
+        "has_contact_conflict": bool(req_cs_dict.get("has_contact_conflict")),
+    }
 
     def field(name: str, label: str | None = None) -> dict[str, Any]:
         value = merged.get(name)
@@ -2565,6 +2763,9 @@ def _build_known_customer_context(
         must_not_ask_again.append("年份")
     if contact_state == "VALID":
         must_not_ask_again.append("联系方式")
+        # P0.2-B：effective VALID 但 current!=VALID（历史有效）时，不得表述为"刚刚收到完整号码"
+        if current_contact_state != "VALID" and known_valid_contact:
+            must_not_ask_again.append("历史已有有效联系方式，不得表述为客户刚刚发送或本次刚刚收到")
     elif contact_state in ("PARTIAL", "INVALID", "AMBIGUOUS"):
         # 不完整/无效/歧义号码：不得说"收到了"，应引导补全或核对
         must_not_ask_again.append("请引导客户补全或核对不完整的联系方式，不要说'收到了'")

@@ -128,5 +128,14 @@ class Settings:
     def milvus_connect_strategy(self) -> str:
         return os.environ.get("MILVUS_CONNECT_STRATEGY", "orm").strip().lower() or "orm"
 
+    @property
+    def contact_observability_hash_key(self) -> str:
+        """R2-4：联系方式信任观测伪名专用密钥（HMAC）。
+
+        用于伪名化 conversation_id，缺失时观测日志输出 null + hash_key_unconfigured。
+        禁止记录密钥本身。
+        """
+        return os.environ.get("DOUYIN_CONTACT_OBSERVABILITY_HASH_KEY", "").strip()
+
 
 settings = Settings()

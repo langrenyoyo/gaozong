@@ -342,6 +342,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         "forbidden_words": load_forbidden_words_for_llm(db),
         # R1 阻断项二：9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源。
         # 仅含脱敏值，不传完整手机号/微信号。
+        # P0.2-B：传入 lead 做严格验证，形成 known_valid_contact；禁止 has_contact 直接升级 VALID。
         **_build_request_contact_state(
             db,
             latest_message=latest_message,
@@ -350,6 +351,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             conversation_short_id=conversation_short_id,
             from_user_id=customer_open_id or "",
             customer_memory=reply_context.customer_memory,
+            lead=reply_context.lead,
         ),
     }
     timing["forbidden_words_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
@@ -1009,9 +1011,12 @@ def _build_request_contact_state(
     conversation_short_id: str,
     from_user_id: str,
     customer_memory: dict[str, Any] | None,
+    lead: Any | None = None,
 ) -> dict[str, Any]:
-    """9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源（P0-B 委托公共模块）。
+    """9000 用共享状态机计算 ContactState，注入 9100 作为单一可信源（P0-B + P0.2-B 委托公共模块）。
 
+    P0.2-B：lead 参数传入时，对其 extracted_phone/wechat/all_extracted_contacts 做严格验证，
+    形成 known_valid_contact；禁止 has_contact 直接升级 VALID。
     保留原私有函数签名兼容自动回复调用；实际委托 app.services.contact_state_service。
     异常时不伪装为可信 request：返回空 dict 省略全部 contact 字段，
     由 9100 用共享状态机执行 local_fallback；异常不阻断回复主链路。
@@ -1025,6 +1030,7 @@ def _build_request_contact_state(
         conversation_short_id=conversation_short_id,
         from_user_id=from_user_id,
         customer_memory=customer_memory,
+        lead=lead,
     )
 
 

@@ -124,6 +124,12 @@ class ConversationHistoryItem(BaseModel):
     content: str
     created_at: str | None = None
     message_id: str | None = None
+    # P0.2-A 历史来源分层：保留 role 兼容，新增受控可选字段。
+    # origin 区分客户/人工客服/AI历史/系统；fact_trust 标注事实可信度。
+    # AI 历史（ai_assistant/ai_generated）不得作为客户事实来源。
+    origin: str | None = None
+    direction: str | None = None
+    fact_trust: str | None = None
 
 
 class CustomerContactMemory(BaseModel):

@@ -199,10 +199,12 @@ def _build_preview_contact_state(
     conversation_short_id: str,
     from_user_id: str,
     customer_memory: Any,
+    lead: Any | None = None,
 ) -> dict[str, Any]:
     """会话预览复用公共 contact_state_service 构造 contact_state（只读，无副作用）。
 
     会话预览无 webhook 事件上下文，from_user_id 传空，公共模块走 analyze_contact_state 本地 fallback。
+    P0.2-B：传入 lead 做严格验证，形成 known_valid_contact；禁止 has_contact 直接升级 VALID。
     """
     try:
         return build_request_contact_state(
@@ -213,6 +215,7 @@ def _build_preview_contact_state(
             conversation_short_id=conversation_short_id,
             from_user_id=from_user_id,
             customer_memory=customer_memory,
+            lead=lead,
         )
     except Exception:
         logger.warning(
@@ -345,6 +348,7 @@ async def create_reply_suggestion_proxy(
         "direct_llm_policy": direct_llm_policy,
         # P0-B：会话预览补齐 forbidden_words + contact_state（与自动回复共享 contact_state_service）
         "forbidden_words": load_forbidden_words_for_llm(db),
+        # P0.2-B：传入 lead 做严格验证，形成 known_valid_contact；禁止 has_contact 直接升级 VALID。
         **_build_preview_contact_state(
             db,
             latest_message=reply_context.latest_message,
@@ -353,6 +357,7 @@ async def create_reply_suggestion_proxy(
             conversation_short_id=conversation_id,
             from_user_id="",
             customer_memory=reply_context.customer_memory,
+            lead=reply_context.lead,
         ),
     }
 

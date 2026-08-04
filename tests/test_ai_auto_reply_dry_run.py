@@ -594,12 +594,19 @@ def test_active_binding_calls_9100_with_history_and_records_decision_log():
             "content": "之前问过配置",
             "created_at": payload["conversation_history"][0]["created_at"],
             "message_id": "history-customer-msg",
+            "origin": "customer",
+            "direction": "inbound",
+            "fact_trust": "verified_customer",
         },
         {
             "role": "agent",
             "content": "您好，我是小高客服",
             "created_at": payload["conversation_history"][1]["created_at"],
             "message_id": "history-agent-msg",
+            # R1-1：无 send_source/operator_id 的出站消息归 unknown_agent（无法证明人工或AI）
+            "origin": "unknown_agent",
+            "direction": "outbound",
+            "fact_trust": "unverified_agent_output",
         },
     ]
     assert payload["agent_config"]["agent_id"] == "agent-1"

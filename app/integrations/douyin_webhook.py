@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.config import (
     DY_ALLOWED_DRIFT_SECONDS,
@@ -525,16 +526,88 @@ def find_lead_by_session(
     *,
     account_open_id: str,
     conversation_short_id: str,
+    merchant_id: str,
 ) -> DouyinLead | None:
-    """按 (account_open_id, conversation_short_id) 定位唯一会话线索。"""
+    """按 (account_open_id, conversation_short_id, merchant_id) 定位唯一会话线索。
+
+    R2-5：merchant_id 改为必填参数（业务路径强制商户作用域），避免 account_open_id
+    跨商户复用时跨商户读取线索。数据库唯一约束为 (account_open_id, conversation_short_id)
+    不含 merchant_id（account_open_id 与商户绑定时天然隔离），merchant_id 过滤为额外防御。
+    """
+    if not merchant_id:
+        raise ValueError("merchant_id_required_for_lead_query")
+    query = db.query(DouyinLead).filter(
+        DouyinLead.account_open_id == account_open_id,
+        DouyinLead.conversation_short_id == conversation_short_id,
+        DouyinLead.merchant_id == merchant_id,
+    )
+    return query.first()
+
+
+def _detect_tenant_scope_conflict(
+    db: Session,
+    *,
+    account_open_id: str,
+    conversation_short_id: str,
+    current_merchant_id: str,
+) -> DouyinLead | None:
+    """R2-6：检测同 account+conversation 是否已属于其他商户。
+
+    数据库唯一约束为 (account_open_id, conversation_short_id) 不含 merchant_id。
+    当当前商户查不到 lead，但同 account+conversation 存在属于其他商户的 lead 时，
+    判定 tenant_scope_conflict，禁止读取/更新/覆盖他商户 lead。
+
+    返回冲突 lead（属于他商户）或 None。不读取/记录客户消息或联系方式明文。
+    """
+    if not current_merchant_id:
+        return None
     return (
         db.query(DouyinLead)
         .filter(
             DouyinLead.account_open_id == account_open_id,
             DouyinLead.conversation_short_id == conversation_short_id,
+            DouyinLead.merchant_id != current_merchant_id,
         )
         .first()
     )
+
+
+def _lead_scope_pseudonym(value: str) -> str:
+    """R3：Lead 作用域伪名（HMAC-SHA256 前 12 位），用于租户冲突日志，不泄露原始 ID。
+
+    使用 DOUYIN_CONTACT_OBSERVABILITY_HASH_KEY；密钥缺失返回稳定占位（不回退普通 SHA-256）。
+    """
+    key = os.environ.get("DOUYIN_CONTACT_OBSERVABILITY_HASH_KEY", "").strip()
+    if not key:
+        return "unlinked_no_key"
+    return hmac.new(key.encode("utf-8"), str(value or "").encode("utf-8"), hashlib.sha256).hexdigest()[:12]
+
+
+def _is_target_unique_violation(exc: BaseException, account_open_id: str, conversation_short_id: str) -> bool:
+    """R4：识别 IntegrityError 是否为 (account_open_id, conversation_short_id) 唯一约束冲突。
+
+    综合证据（至少一项成立即判目标唯一冲突）：
+    - PostgreSQL：constraint name 含 'douyin_leads' 或 'uq' 前缀（orig.diag.constraint_name）；
+    - SQLite：错误文本含 'UNIQUE constraint failed: douyin_leads.account_open_id' 且
+      'conversation_short_id'（目标列组合）；
+    - 冲突后作用域查询能查到同 account+conversation 记录（由调用方在 rollback 后验证）。
+
+    NOT NULL / CHECK / 外键 / 连接故障等返回 False，由调用方继续抛出。
+    """
+    err_text = str(exc) if exc is not None else ""
+    # PostgreSQL constraint name 证据
+    orig = getattr(exc, "orig", None)
+    if orig is not None:
+        diag = getattr(orig, "diag", None)
+        if diag is not None:
+            constraint_name = str(getattr(diag, "constraint_name", "") or "")
+            if constraint_name and ("douyin_leads" in constraint_name.lower() or constraint_name.lower().startswith("uq")):
+                return True
+    # SQLite 错误文本证据：UNIQUE constraint failed: douyin_leads.account_open_id, ...conversation_short_id
+    if "UNIQUE constraint failed" in err_text:
+        if "douyin_leads.account_open_id" in err_text and "conversation_short_id" in err_text:
+            return True
+    return False
 
 
 def upsert_lead_from_webhook(
@@ -596,9 +669,33 @@ def upsert_lead_from_webhook(
         db,
         account_open_id=account_open_id,
         conversation_short_id=conversation_short_id,
+        merchant_id=merchant_id,
     )
 
     if existing is None:
+        # R2-6：跨租户唯一约束防御——同 account+conversation 若已属于其他 merchant，
+        # 数据库唯一约束 (account_open_id, conversation_short_id) 会在 flush 时 IntegrityError。
+        # 此处显式检测并记录结构化错误（不记录客户消息/联系方式），禁止读取/更新/覆盖他商户 lead。
+        conflict_lead = _detect_tenant_scope_conflict(
+            db,
+            account_open_id=account_open_id,
+            conversation_short_id=conversation_short_id,
+            current_merchant_id=merchant_id or "",
+        )
+        if conflict_lead is not None:
+            # R3：不返回跨商户 conflict_lead 对象给上层，避免泄露对方商户业务数据。
+            # 日志只记结构化非敏感字段（error_code/作用域伪名/operation），不记客户消息/联系方式。
+            merchant_pseudonym = _lead_scope_pseudonym(merchant_id or "")
+            account_pseudonym = _lead_scope_pseudonym(account_open_id)
+            logger.error(
+                "error_code=tenant_scope_conflict merchant_scope_pseudonym=%s "
+                "account_scope_pseudonym=%s operation=create "
+                "stage=upsert_lead_from_webhook action=blocked_create_cross_tenant",
+                merchant_pseudonym,
+                account_pseudonym,
+            )
+            return None, "tenant_scope_conflict_blocked"
+
         # 新建线索（会话归并）
         lead = DouyinLead(
             source="douyin",
@@ -619,8 +716,49 @@ def upsert_lead_from_webhook(
             contact_extract_status=contact_result.status,
             contact_extract_reason=contact_result.failure_reason,
         )
-        db.add(lead)
-        db.flush()
+        # R5：用 SAVEPOINT（with begin_nested）隔离 Lead 插入，目标唯一约束冲突时只回滚 SAVEPOINT，
+        # 外层 Webhook 事务保持有效。禁止 db.rollback()/nested.rollback() 处理局部插入冲突。
+        # with 上下文管理器在异常时自动回滚 SAVEPOINT。
+        try:
+            with db.begin_nested():
+                db.add(lead)
+                db.flush()
+        except IntegrityError as exc:
+            # R5：目标唯一约束识别——只处理 (account_open_id, conversation_short_id) 唯一冲突。
+            is_target_unique = _is_target_unique_violation(exc, account_open_id, conversation_short_id)
+            if not is_target_unique:
+                # NOT NULL / CHECK / 外键 / 连接故障等 → 继续抛出，不伪装成租户冲突
+                raise
+            # 重新查询：同 account+conversation 当前归属哪个 merchant（禁用 autoflush 避免再次触发）
+            with db.no_autoflush:
+                race_lead = (
+                    db.query(DouyinLead)
+                    .filter(
+                        DouyinLead.account_open_id == account_open_id,
+                        DouyinLead.conversation_short_id == conversation_short_id,
+                    )
+                    .first()
+                )
+            if race_lead is not None and race_lead.merchant_id == merchant_id:
+                # 同商户已存在（并发竞争我方先到）→ 安全幂等，返回已存在记录
+                logger.info(
+                    "webhook 并发竞争同商户已存在: lead_id=%d, account_open_id=%s, conv=%s, merchant_id=%s",
+                    race_lead.id, account_open_id[:8] + "...", conversation_short_id, merchant_id,
+                )
+                return race_lead, "skipped"
+            if race_lead is not None and race_lead.merchant_id != merchant_id:
+                # 其他商户已存在 → tenant_scope_conflict（不返回 race_lead 对象）
+                merchant_pseudonym = _lead_scope_pseudonym(merchant_id or "")
+                account_pseudonym = _lead_scope_pseudonym(account_open_id)
+                logger.error(
+                    "error_code=tenant_scope_conflict merchant_scope_pseudonym=%s "
+                    "account_scope_pseudonym=%s operation=create "
+                    "stage=upsert_lead_from_webhook action=blocked_race_cross_tenant",
+                    merchant_pseudonym, account_pseudonym,
+                )
+                return None, "tenant_scope_conflict_blocked"
+            # 无记录（唯一冲突但查不到 lead，异常状态）→ 重新抛出原 IntegrityError
+            raise
         logger.info(
             "webhook 新建线索(会话归并): lead_id=%d, account_open_id=%s, conv=%s, merchant_id=%s, customer_name=%s",
             lead.id,
