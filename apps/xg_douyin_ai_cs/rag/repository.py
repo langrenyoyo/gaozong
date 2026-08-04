@@ -12,8 +12,10 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -49,6 +51,12 @@ FEEDBACK_RATING_RE = re.compile(r"【人工反馈】\s*(有用|一般|不准)")
 
 _logger = logging.getLogger(__name__)
 UNIFIED_KB_DOUYIN_ACCOUNT_ID = 0
+
+# Milvus 检索硬超时：pymilvus 的 gRPC 重试不遵守 MILVUS_TIMEOUT_SECONDS，
+# channel 关闭时 has_collection/search 实际耗 5-54 秒才抛异常，导致 9000→9100 HTTP
+# 超时（pre_send_temporary_failure）+ 重试 + 总时长 155-175 秒。
+# 此处用线程超时强制快速失败，超时立即回退 PostgreSQL 词法检索，不阻塞主流程。
+_MILVUS_SEARCH_TIMEOUT_SECONDS = float(os.getenv("MILVUS_SEARCH_HARD_TIMEOUT_SECONDS", "8"))
 
 # engine 走 database.get_rag_engine() 单例（按 rag_database_url 变化重建），
 # 不在模块级缓存 _engine，保证测试 setenv 切换 tmp_path 时隔离成立
@@ -961,7 +969,19 @@ def _search_milvus_or_fallback_with_diagnostics(
             raise ValueError("query embedding is empty")
         candidate_top_k = min(20, max(payload.top_k, payload.top_k * 3))
         search_payload = _copy_search_request(payload, top_k=candidate_top_k)
-        result = get_vector_store().search(search_payload, query_embedding=query_embedding)
+        # Milvus 调用线程超时保护：pymilvus channel 关闭时重试可达 54 秒，
+        # 超过 _MILVUS_SEARCH_TIMEOUT_SECONDS 立即抛 TimeoutError → 回退 PG。
+        # 底层 gRPC 线程无法真正取消，但主流程不阻塞，结果用 PG 回退。
+        with ThreadPoolExecutor(max_workers=1) as _executor:
+            _future = _executor.submit(
+                get_vector_store().search, search_payload, query_embedding=query_embedding
+            )
+            try:
+                result = _future.result(timeout=_MILVUS_SEARCH_TIMEOUT_SECONDS)
+            except FuturesTimeoutError as exc:
+                raise TimeoutError(
+                    f"milvus_search_hard_timeout exceeded {_MILVUS_SEARCH_TIMEOUT_SECONDS}s"
+                ) from exc
         ranked_result = _rerank_search_items(result)[: payload.top_k]
         _logger.info(
             "rag_search vector_backend=milvus fallback_reason=none tenant_id=%s "
