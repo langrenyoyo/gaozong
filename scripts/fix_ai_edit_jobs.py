@@ -29,8 +29,12 @@ from app.models import AiEditJob
 from app.services import ai_edit_las_service as las_svc
 
 
-def backfill_titles(*, job_id: int | None, limit: int, execute: bool) -> int:
-    """补全无标题任务的标题（不覆盖 manual 来源）。"""
+def backfill_titles(*, job_id: int | None, limit: int, execute: bool, regenerate: bool = False) -> int:
+    """补全无标题任务的标题（不覆盖 manual 来源）。
+
+    regenerate=True 时强制重新生成 script 来源的标题（R2: script 是模板指令不适合做标题），
+    仍保护 manual 来源。
+    """
     db = SessionLocal()
     try:
         query = db.query(AiEditJob).filter(AiEditJob.source_type == "las_speech_auto")
@@ -39,13 +43,16 @@ def backfill_titles(*, job_id: int | None, limit: int, execute: bool) -> int:
         jobs = query.order_by(AiEditJob.id.asc()).limit(limit).all()
         fixed = 0
         for job in jobs:
-            if job.title and job.title_source != "fallback":
-                print(f"[skip] job_id={job.id} 已有标题 title={job.title} source={job.title_source}")
-                continue
-            # R1：显式保护 manual 来源，即使 title=NULL 也不覆盖
+            # R1：manual 来源永远保护，即使 title=NULL 也不覆盖
             if job.title_source == "manual":
-                print(f"[skip] job_id={job.id} title_source=manual 受保护，跳过（title={job.title!r}）")
+                print(f"[skip] job_id={job.id} title_source=manual 受保护（title={job.title!r}）")
                 continue
+            # 已有非 fallback 标题：默认 skip；regenerate 时只对 script 来源重新生成
+            if job.title and job.title_source != "fallback":
+                if not regenerate or job.title_source != "script":
+                    print(f"[skip] job_id={job.id} 已有标题 title={job.title} source={job.title_source}")
+                    continue
+                print(f"[regen] job_id={job.id} script 来源标题重生成（当前 title={job.title}）")
             # 用 las_script + input_json 文件名兜底生成（不下载 ASR，历史 URL 可能过期）
             title, source = _gen_title_offline(job)
             print(f"[{'exec' if execute else 'dry'}] job_id={job.id} -> title={title!r} source={source}")
@@ -57,7 +64,7 @@ def backfill_titles(*, job_id: int | None, limit: int, execute: bool) -> int:
                 fixed += 1
         if execute:
             db.commit()
-        print(f"\n完成：{'已修改' if execute else 'dry-run(未修改)'} {fixed if execute else len([j for j in jobs if not (j.title and j.title_source!='fallback')])} 条")
+        print(f"\n完成：{'已修改' if execute else 'dry-run(未修改)'} {fixed if execute else len(jobs)} 条")
         return 0
     finally:
         db.close()
@@ -153,6 +160,7 @@ def main() -> int:
     p_title.add_argument("--job-id", type=int)
     p_title.add_argument("--limit", type=int, default=50)
     p_title.add_argument("--execute", action="store_true", help="真正执行（默认 dry-run）")
+    p_title.add_argument("--regenerate", action="store_true", help="强制重生成 script 来源的标题（保护 manual）")
 
     p_arch = sub.add_parser("archive-videos", help="归档历史视频到自有 TOS")
     p_arch.add_argument("--job-id", type=int)
@@ -161,7 +169,7 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.cmd == "backfill-titles":
-        return backfill_titles(job_id=args.job_id, limit=args.limit, execute=args.execute)
+        return backfill_titles(job_id=args.job_id, limit=args.limit, execute=args.execute, regenerate=args.regenerate)
     if args.cmd == "archive-videos":
         return archive_videos(job_id=args.job_id, limit=args.limit, execute=args.execute)
     return 1

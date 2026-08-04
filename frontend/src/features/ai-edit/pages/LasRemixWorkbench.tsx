@@ -220,19 +220,27 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
   const [keyword, setKeyword] = useState("");
   const [showModal, setShowModal] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    // silent=true（自动轮询）：失败保留旧列表不显示错误，避免抖动
+    const silent = opts?.silent ?? false;
+    if (!silent) {
+      setLoading(true);
+      setLoadError(null);
+    }
     try {
       const resp = await listLasJobs({ status: statusFilter || undefined, page: 1, page_size: 50, keyword: keyword.trim() || undefined });
       setJobs(resp.items || []);
       setTotal(resp.total || 0);
+      if (!silent) setLoadError(null);
     } catch (e) {
-      setJobs([]);
-      setTotal(0);
-      setLoadError(userFacingError(e, "任务列表加载失败"));
+      if (!silent) {
+        setJobs([]);
+        setTotal(0);
+        setLoadError(userFacingError(e, "任务列表加载失败"));
+      }
+      // silent 模式失败静默，保留旧列表
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [statusFilter, keyword]);
 
@@ -247,6 +255,18 @@ export default function LasRemixWorkbench({ merchantId }: { merchantId: string }
     }
     return c;
   }, [jobs]);
+
+  // 自动轮询：有生成中任务时每 15 秒刷新列表（LAS 文档建议 10-15s 轮询），
+  // LAS 完成或失败后任务变终态，自动停止轮询。不阻塞 LAS 后端轮询。
+  const hasGenerating = useMemo(
+    () => jobs.some((j) => j.status === "processing" || j.status === "submitted" || j.status === "running"),
+    [jobs],
+  );
+  useEffect(() => {
+    if (!hasGenerating) return;
+    const t = setInterval(() => void load({ silent: true }), 15000);
+    return () => clearInterval(t);
+  }, [hasGenerating, load]);
 
   return (
     <section className="flex h-full flex-col overflow-hidden bg-[#f3f6fa]">

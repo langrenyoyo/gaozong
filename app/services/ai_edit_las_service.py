@@ -381,20 +381,11 @@ def _clean_title_text(text: str) -> str:
 def _fill_job_title(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -> None:
     """确定性标题生成，失败兜底'混剪任务 #id'，不影响视频完成。
 
-    优先级（R1 调整为已确认顺序）：
-    车辆结构化信息（暂无）→ 口播文案（las_script）→ ASR（match_scheme.units.text）
-    → 原始素材文件名 → 兜底。
+    优先级（R2 复核：ASR 优先，script 是模板指令不适合做标题）：
+    车辆结构化信息（暂无）→ ASR（match_scheme.units.text，真实口播内容）
+    → 口播文案（las_script，仅作兜底）→ 原始素材文件名 → 兜底。
     """
-    # 1. 口播文案（las_script）—— 优先于 ASR
-    if job.las_script and job.las_script.strip():
-        script_title = _clean_title_text(job.las_script)
-        if len(script_title) >= _TITLE_MIN:
-            job.title = script_title
-            job.title_source = "script"
-            job.title_generated_at = datetime.now()
-            return
-
-    # 2. ASR 文本（下载 result_json 取 match_scheme.units.text）
+    # 1. ASR 文本（真实口播内容，优先）—— 下载 result_json 取 match_scheme.units.text
     try:
         result_url = artifacts.get("result_json_url")
         if result_url and str(result_url).startswith("http"):
@@ -412,6 +403,15 @@ def _fill_job_title(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -> N
                     return
     except Exception:  # noqa: BLE001 ASR 提取失败不阻断
         logger.debug("ai_edit_title_asr_failed job_id=%s", job.job_id, exc_info=True)
+
+    # 2. 口播文案（las_script）—— 仅作兜底（script 是模板化指令，所有任务可能相同）
+    if job.las_script and job.las_script.strip():
+        script_title = _clean_title_text(job.las_script)
+        if len(script_title) >= _TITLE_MIN:
+            job.title = script_title
+            job.title_source = "script"
+            job.title_generated_at = datetime.now()
+            return
 
     # 3. 原始素材文件名
     try:
@@ -501,8 +501,9 @@ def _las_job_summary(db: Session, job: AiEditJob) -> dict[str, Any]:
             material_count = len(urls) if isinstance(urls, list) else (1 if isinstance(urls, str) else 0)
         except (TypeError, ValueError):
             pass
-    # 预估：N×15s 基础 + 60s 固定开销；最少 60s，区间±50%（前端展示 N~M 分钟）
-    base_est = max(60, material_count * 15 + 60)
+    # 预估：LAS speech_auto 实测 5 素材→16分钟，按 N×60s + 180s 基础估算；
+    # 最少 180s，区间±50%（前端展示 N~M 分钟）。仅作伪进度参考，不影响实际完成判断。
+    base_est = max(180, material_count * 60 + 180)
     return {
         "job_id": job.id,
         "title": job.title or f"混剪任务 #{job.id}",
