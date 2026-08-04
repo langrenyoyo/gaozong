@@ -181,6 +181,27 @@ def evaluate_post_llm_gates(
         return GateDecision(False, "blocked", "intent_not_allowed", gate_results)
     if confidence < float(settings.min_confidence or 0):
         return GateDecision(False, "blocked", "confidence_low", gate_results)
+    # require_rag=true：必须获得可信 RAG 结果（Milvus 成功 + 有 chunks + fallback_reason 为空）。
+    # rag_used=true 只代表走了 RAG 路径，Milvus 失败回退 PG 词法检索时 rag_used 仍为 true
+    # 但 fallback_reason=milvus_search_failed——此时不可信，require_rag 必须阻断。
+    # chunks 优先取 source_chunks，回退 rag_sources（9100 两者同值，历史代码混用）。
+    if settings.require_rag is True:
+        upstream_rag_used = result.get("rag_used") is True
+        upstream_fallback = str(result.get("fallback_reason") or "").strip()
+        upstream_chunks = result.get("source_chunks") or result.get("rag_sources") or []
+        upstream_trusted_rag = (
+            upstream_rag_used
+            and not upstream_fallback
+            and bool(isinstance(upstream_chunks, list) and upstream_chunks)
+        )
+        if not upstream_trusted_rag:
+            return GateDecision(False, "blocked", "rag_required_but_unavailable", gate_results)
+    # require_rag_sources=true：回复必须存在知识来源（chunks 非空，不区分可信度）。
+    # 与 require_rag 分层：require_rag_sources 只要求"有来源"，不要求"可信来源"。
+    if settings.require_rag_sources is True:
+        upstream_chunks = result.get("source_chunks") or result.get("rag_sources") or []
+        if not (isinstance(upstream_chunks, list) and len(upstream_chunks) > 0):
+            return GateDecision(False, "blocked", "rag_sources_empty", gate_results)
     return GateDecision(True, "decided", None, gate_results)
 
 

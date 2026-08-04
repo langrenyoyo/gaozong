@@ -61,7 +61,8 @@ export const BLOCK_REASON_LABELS: Record<string, string> = {
   fallback_reason: "回复降级，转人工确认",
   intent_not_allowed: "回复意图不在允许范围",
   rag_not_used: "未使用知识库，不允许自动发送",
-  rag_sources_empty: "知识库无来源，不允许自动发送",
+  rag_required_but_unavailable: "要求可信知识库，但当前知识库不可用",
+  rag_sources_empty: "未检索到可用知识来源",
   // binding / context
   conversation_context_unavailable: "缺少可回复上下文",
   account_send_disabled: "账号未开启发送",

@@ -943,7 +943,9 @@ def test_9100_rag_gates_no_longer_block_but_confidence_still_blocks_real_send_ca
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
     _enable_real_send_config(monkeypatch)
-    # 简化门禁：rag_not_used / rag_sources_empty 不再阻断（一期 RAG 未全开，过度谨慎）。
+    # P0.3 契约：require_rag=false / require_rag_sources=false 时 rag_not_used / rag_sources_empty
+    # 不再阻断（一期 RAG 未全开，过度谨慎）。require_rag=true 时 rag_used=false 必须阻断
+    # rag_required_but_unavailable；require_rag_sources=true 时 rag_sources=[] 必须阻断 rag_sources_empty。
     # confidence_low 仍阻断（安全底线）。
     pass_through_cases = [
         ("account-rag-used", "event-rag-used", {"rag_used": False, "rag_sources": [{"chunk_id": "c1"}], "confidence": 0.99}),
@@ -956,7 +958,14 @@ def test_9100_rag_gates_no_longer_block_but_confidence_still_blocks_real_send_ca
             server_message_id=f"{event_key}-msg",
         )
         _insert_account_agent_binding(account_open_id=account_open_id, agent_id=f"agent-{event_key}")
-        _insert_autoreply_settings(account_open_id=account_open_id, send_enabled=True, dry_run_enabled=False)
+        # require_rag=false / require_rag_sources=false：rag 门禁不阻断（匹配生产 ai_auto 模式）
+        _insert_autoreply_settings(
+            account_open_id=account_open_id,
+            send_enabled=True,
+            dry_run_enabled=False,
+            require_rag=False,
+            require_rag_sources=False,
+        )
         result = {
             "reply_text": "测试",
             "manual_required": False,
@@ -975,6 +984,70 @@ def test_9100_rag_gates_no_longer_block_but_confidence_still_blocks_real_send_ca
         auto_send_mock.assert_called_once()
         run = _latest_run()
         assert run.status != "blocked"
+
+    # P0.3 契约：require_rag=true + rag_used=false → 阻断 rag_required_but_unavailable
+    event_id_rag_block = _insert_event(
+        account_open_id="account-rag-block",
+        event_key="event-rag-block",
+        server_message_id="event-rag-block-msg",
+    )
+    _insert_account_agent_binding(account_open_id="account-rag-block", agent_id="agent-rag-block")
+    _insert_autoreply_settings(
+        account_open_id="account-rag-block",
+        send_enabled=True,
+        dry_run_enabled=False,
+        require_rag=True,
+        require_rag_sources=False,
+    )
+    fake_client_block = FakeAiCsClient(result={
+        "reply_text": "测试",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": False,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "confidence": 0.99,
+        "auto_send": True,
+    })
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client_block), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock_block:
+        run_ai_auto_reply_dry_run(event_id_rag_block)
+    auto_send_mock_block.assert_not_called()
+    run_block = _latest_run()
+    assert run_block.status == "blocked"
+    assert run_block.block_reason == "rag_required_but_unavailable"
+
+    # P0.3 契约：require_rag_sources=true + rag_sources=[] → 阻断 rag_sources_empty
+    event_id_src_block = _insert_event(
+        account_open_id="account-src-block",
+        event_key="event-src-block",
+        server_message_id="event-src-block-msg",
+    )
+    _insert_account_agent_binding(account_open_id="account-src-block", agent_id="agent-src-block")
+    _insert_autoreply_settings(
+        account_open_id="account-src-block",
+        send_enabled=True,
+        dry_run_enabled=False,
+        require_rag=False,
+        require_rag_sources=True,
+    )
+    fake_client_src_block = FakeAiCsClient(result={
+        "reply_text": "测试",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [],
+        "confidence": 0.99,
+        "auto_send": True,
+    })
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client_src_block), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock_src:
+        run_ai_auto_reply_dry_run(event_id_src_block)
+    auto_send_mock_src.assert_not_called()
+    run_src_block = _latest_run()
+    assert run_src_block.status == "blocked"
+    assert run_src_block.block_reason == "rag_sources_empty"
 
     # confidence_low 仍阻断
     account_open_id = "account-confidence"
@@ -1009,16 +1082,20 @@ def test_9100_rag_gates_no_longer_block_but_confidence_still_blocks_real_send_ca
 def test_9100_fallback_reason_no_longer_blocks_real_send_candidate():
     from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
 
-    # 简化门禁：fallback_reason 不再阻断（9100 降级已有回复内容）。
+    # P0.3 契约：require_rag=false 时 fallback_reason 不阻断候选（知识不可信的事实断言
+    # 由 9100 _apply_safety_postprocess 的 knowledge_untrusted 守卫处理，9000 不重复阻断）。
+    # require_rag=true 时 fallback_reason=milvus_search_failed 必须阻断 rag_required_but_unavailable。
+    # 场景A：require_rag=false + fallback + 安全回复 → 放行
     event_id = _insert_event(event_key="event-fallback-reason")
     _insert_account_agent_binding()
-    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False)
+    _insert_autoreply_settings(send_enabled=True, dry_run_enabled=False, require_rag=False, require_rag_sources=False)
     fake_client = FakeAiCsClient(result={
         "reply_text": "fallback 回复内容",
         "manual_required": False,
         "risk_flags": [],
         "rag_used": True,
         "rag_sources": [{"chunk_id": "c1"}],
+        "source_chunks": [{"id": "c1"}],
         "confidence": 0.99,
         "fallback_reason": "milvus_search_failed",
         "auto_send": True,
@@ -1035,6 +1112,38 @@ def test_9100_fallback_reason_no_longer_blocks_real_send_candidate():
     assert run.status != "blocked"
     # fallback_reason 仍记录到诊断，便于排查
     assert gate_results["post_llm"]["fallback_reason"] == "milvus_search_failed"
+
+    # 场景B：require_rag=true + fallback=milvus_search_failed → 阻断 rag_required_but_unavailable
+    event_id_b = _insert_event(account_open_id="account-fallback-rag", event_key="event-fallback-rag")
+    _insert_account_agent_binding(account_open_id="account-fallback-rag", agent_id="agent-fallback-rag")
+    _insert_autoreply_settings(
+        account_open_id="account-fallback-rag",
+        send_enabled=True,
+        dry_run_enabled=False,
+        require_rag=True,
+        require_rag_sources=False,
+    )
+    fake_client_b = FakeAiCsClient(result={
+        "reply_text": "fallback 回复内容",
+        "manual_required": False,
+        "risk_flags": [],
+        "rag_used": True,
+        "rag_sources": [{"chunk_id": "c1"}],
+        "source_chunks": [{"id": "c1"}],
+        "confidence": 0.99,
+        "fallback_reason": "milvus_search_failed",
+        "auto_send": True,
+    })
+
+    with patch("app.services.ai_auto_reply_dry_run_service.SessionLocal", TestSession), \
+         patch("app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client", lambda: fake_client_b), \
+         patch("app.services.ai_auto_reply_dry_run_service.send_ai_auto_reply_for_run") as auto_send_mock_b:
+        run_ai_auto_reply_dry_run(event_id_b)
+
+    auto_send_mock_b.assert_not_called()
+    run_b = _latest_run()
+    assert run_b.status == "blocked"
+    assert run_b.block_reason == "rag_required_but_unavailable"
 
 
 def test_9100_auto_send_true_is_blocked_when_account_send_disabled():

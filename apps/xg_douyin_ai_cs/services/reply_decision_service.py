@@ -1268,6 +1268,8 @@ def _build_llm_reply(
         rag_used=rag_used,
         direct_llm_policy=request.direct_llm_policy,
         allow_phone_lead_capture=agent_phone_goal,
+        fallback_reason=fallback_reason,
+        source_chunks=source_chunks,
     )
     # 最终门禁：postprocess 改写后对最终 reply_text 重新执行联系方式 Hard 检测。
     # 覆盖两处纵深缺口——①首调关键词漏判未触发 retry；②_apply_relevance_postprocess
@@ -1305,9 +1307,9 @@ def _build_llm_reply(
         final_hard_flags=sorted(final_risk_flags & (set(CONTACT_VIOLATION_TO_HARD_FLAG.values()) | {"hard_off_platform_detail_promise"})),
         merchant_id=request.merchant_id,
     )
-    # RAG 检索降级诊断非空时阻断候选；fallback_reason 是检索诊断，不入 risk_flags。
-    if fallback_reason:
-        decision["auto_send"] = False
+    # fallback_reason 回归纯检索诊断（不入 risk_flags，不单独阻断候选）。
+    # 知识不可信时的事实声明阻断已由 _apply_safety_postprocess 的 knowledge_untrusted
+    # 守卫处理；候选资格由 _direct_llm_auto_send_allowed 统一收敛，9000 Gate 兜底。
     reply_text = decision["reply_text"]
     log_llm_call(
         tenant_id=request.tenant_id,
@@ -2125,6 +2127,27 @@ def _check_forbidden_words(reply_text: str, forbidden_words: list[str]) -> list[
     return hits
 
 
+def _is_trusted_rag_result(
+    *,
+    rag_used: bool,
+    fallback_reason: str | None,
+    source_chunks: list[dict] | None,
+) -> bool:
+    """判定 RAG 结果是否可信（Milvus 可信向量命中，非降级回退）。
+
+    内部统一判断，避免 rag_used/fallback_reason/source_chunks 三字段语义分裂。
+    - rag_used=true 只代表走了 RAG 路径，不代表 Milvus 向量检索成功；
+    - Milvus 失败回退 PostgreSQL 词法检索时 rag_used 仍为 true，但 fallback_reason 非空；
+    - 未知 fallback_reason 默认不可信（不默认放行事实断言）。
+    仅 Milvus 成功 + 有 chunks + fallback_reason 为空时才视为可信。
+    """
+    return (
+        rag_used is True
+        and not fallback_reason
+        and bool(source_chunks)
+    )
+
+
 def _apply_safety_postprocess(
     decision: dict[str, Any],
     *,
@@ -2134,6 +2157,8 @@ def _apply_safety_postprocess(
     customer_memory: object = None,
     direct_llm_policy: object = None,
     allow_phone_lead_capture: bool = False,
+    fallback_reason: str | None = None,
+    source_chunks: list[dict] | None = None,
 ) -> dict[str, Any]:
     policy = _normalize_direct_llm_policy(direct_llm_policy)
     risk_flags = list(decision.get("risk_flags") or [])
@@ -2142,6 +2167,15 @@ def _apply_safety_postprocess(
     reply_text = str(decision.get("reply_text") or "")
     combined_text = f"{text}\n{reply_text}"
     original_intent = _optional_text(decision.get("intent"))
+    # 知识可信度统一判断：trusted_rag 仅在 Milvus 可信命中时为 true。
+    # knowledge_untrusted 覆盖"Milvus 失败回退 PG 词法检索"场景——此时 rag_used=true
+    # 但来源不可信，事实声明守卫（库存/价格/金融/车况）必须按"无可信依据"处理。
+    trusted_rag = _is_trusted_rag_result(
+        rag_used=rag_used,
+        fallback_reason=fallback_reason,
+        source_chunks=source_chunks,
+    )
+    knowledge_untrusted = not trusted_rag
     allow_specific_safe_clarify = (
         not rag_used
         and policy.get("specific_model_strategy") == "safe_clarify"
@@ -2159,7 +2193,7 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _is_specific_model_or_inventory_question(text):
+    if knowledge_untrusted and _is_specific_model_or_inventory_question(text):
         if not original_intent or original_intent not in LOW_RISK_DIRECT_INTENTS:
             decision["intent"] = "consult_specific_model"
         if allow_specific_safe_clarify:
@@ -2173,29 +2207,29 @@ def _apply_safety_postprocess(
             decision["manual_required"] = True
             reason = reason or SPECIFIC_MODEL_REASON
 
-    if not rag_used and _contains_any(combined_text, INVENTORY_CLAIM_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, INVENTORY_CLAIM_KEYWORDS):
         risk_flags.append("inventory_claim")
         risk_flags.append("price_or_inventory_sensitive")
         decision["manual_required"] = True
         reason = reason or SPECIFIC_MODEL_REASON
 
-    if not rag_used and _contains_any(combined_text, PRICE_OR_DISCOUNT_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, PRICE_OR_DISCOUNT_KEYWORDS):
         risk_flags.append("price_or_discount")
         risk_flags.append("price_or_inventory_sensitive")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(combined_text, FINANCE_OR_LOAN_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, FINANCE_OR_LOAN_KEYWORDS):
         risk_flags.append("finance_or_loan")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(combined_text, VEHICLE_CONDITION_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, VEHICLE_CONDITION_KEYWORDS):
         risk_flags.append("vehicle_condition_specific")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(combined_text, LEGAL_OR_TRANSFER_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, LEGAL_OR_TRANSFER_KEYWORDS):
         risk_flags.append("legal_or_transfer")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
@@ -2203,29 +2237,29 @@ def _apply_safety_postprocess(
     contact_risky = _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS)
     if not contact_risky and not allow_phone_lead_capture:
         contact_risky = _contains_any(combined_text, CONTACT_KEYWORDS)
-    if not rag_used and contact_risky:
+    if knowledge_untrusted and contact_risky:
         risk_flags.append("contact_request")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(combined_text, COMPLAINT_KEYWORDS):
+    if knowledge_untrusted and _contains_any(combined_text, COMPLAINT_KEYWORDS):
         risk_flags.append("after_sales_or_complaint")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(text, HIGH_INTENT_KEYWORDS):
+    if knowledge_untrusted and _contains_any(text, HIGH_INTENT_KEYWORDS):
         risk_flags.append("appointment_or_visit_specific")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    if not rag_used and _contains_any(text, RISKY_MANUAL_KEYWORDS):
+    if knowledge_untrusted and _contains_any(text, RISKY_MANUAL_KEYWORDS):
         risk_flags.append("no_rag_risky_question")
         decision["manual_required"] = True
         reason = reason or RISKY_NO_RAG_REASON
 
     current_intent = _optional_text(decision.get("intent"))
     if (
-        not rag_used
+        knowledge_untrusted
         and current_intent
         and current_intent not in LOW_RISK_DIRECT_INTENTS
         and not (allow_specific_safe_clarify and current_intent in {"consult_specific_model", "consult_inventory"})
@@ -2249,6 +2283,11 @@ def _apply_safety_postprocess(
         if "prompt_injection" in risk_flags:
             decision["manual_required"] = True
             reason = reason or SAFETY_REVIEW_REASON
+        elif knowledge_untrusted:
+            # 知识不可信（Milvus 失败回退 PG / 无 RAG）时，事实声明类 risk_flags
+            #（库存/价格/金融/车况等）保留 manual_required=True，不得清零放行。
+            # 否则会被 _direct_llm_auto_send_allowed 在 rag_used=true 路径 Step4 放行。
+            pass
         else:
             decision["manual_required"] = False
 
@@ -2267,12 +2306,18 @@ def _apply_safety_postprocess(
     )
     final_risk_flags = list(decision.get("risk_flags") or [])
     no_rag_specific_floor_price = (
-        not rag_used
+        knowledge_untrusted
         and "no_rag_risky_question" in final_risk_flags
         and _is_specific_model_or_inventory_question(text)
         and _contains_any(text, ("最低", "底价", "优惠"))
     )
-    if not rag_used and ("prompt_injection" in final_risk_flags or no_rag_specific_floor_price):
+    # C类风险无条件阻断：prompt_injection 与知识可信度解耦，trusted_rag=true 时也必须阻断。
+    if "prompt_injection" in final_risk_flags:
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = decision.get("manual_required_reason") or SAFETY_REVIEW_REASON
+        decision["auto_send"] = False
+    # 知识不可信时的底价问题阻断（事实类，依赖可信知识）。
+    elif knowledge_untrusted and no_rag_specific_floor_price:
         decision["manual_required"] = True
         decision["manual_required_reason"] = decision.get("manual_required_reason") or SAFETY_REVIEW_REASON
         decision["auto_send"] = False
