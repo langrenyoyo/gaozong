@@ -2233,7 +2233,8 @@ def _apply_safety_postprocess(
             reply_text = str(decision.get("reply_text") or "")
             combined_text = f"{text}\n{reply_text}"
         elif (
-            not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
+            not any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags)
+            and not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
             and not _contains_any(history_text, PROMPT_INJECTION_KEYWORDS)
             and not _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS)
             and not _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS)
@@ -2308,11 +2309,26 @@ def _apply_safety_postprocess(
         reason = reason or RISKY_NO_RAG_REASON
 
     current_intent = _optional_text(decision.get("intent"))
+    # 知识降级时，非低风险 intent（如 consult_specific_model）默认转人工。但若 LLM 已生成
+    # 不含事实断言（库存/价格/金融/车况）且无 prompt_injection 的合规留资回复，放行不阻断。
+    # 与上方车型 elif 一致：让甲方期望的"查一下+留资"回复在 PG 降级时也能自动发送。
+    # C 类风险除外：LLM 解析失败/空输出/调用失败（DIRECT_LLM_GENERATION_FAILURE_FLAGS）
+    # 是 LLM 不可信信号，必须无条件转人工，不适用合规放行。
+    _compliant_lead_capture_reply = (
+        not any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags)
+        and not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
+        and not _contains_any(history_text, PROMPT_INJECTION_KEYWORDS)
+        and not _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS)
+        and not _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS)
+        and not _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS)
+        and not _contains_any(reply_text, VEHICLE_CONDITION_KEYWORDS)
+    )
     if (
         knowledge_untrusted
         and current_intent
         and current_intent not in LOW_RISK_DIRECT_INTENTS
         and not (allow_specific_safe_clarify and current_intent in {"consult_specific_model", "consult_inventory"})
+        and not _compliant_lead_capture_reply
     ):
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
