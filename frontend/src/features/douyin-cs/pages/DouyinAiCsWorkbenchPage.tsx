@@ -31,7 +31,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { formatDateTimeLocal } from "../../../lib/datetime";
-import { blockReasonLabel } from "../riskFlagLabels";
+import { blockReasonDetailText, blockReasonLabel } from "../riskFlagLabels";
 import type {
   DouyinLiveCheckAuthUrlData,
   DouyinLiveCheckStatusData,
@@ -515,11 +515,36 @@ function autoReplyRunReasonText(run: AutoReplyRunViewItem | null) {
   if (reason === "upstream_send_failed" || reason === "douyin_api_error" || reason === "send_msg_failed") {
     return "未发送：抖音接口发送失败";
   }
-  if (reason) return `未发送原因：${blockReasonLabel(reason)}`;
-  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") return `未发送原因：${blockReasonLabel(run?.block_reason || run?.skip_reason)}`;
+  if (reason) return `未发送原因：${blockReasonDetailText({
+    block_reason: run?.block_reason,
+    skip_reason: run?.skip_reason,
+    manual_required: run?.manual_required,
+    manual_required_reason: run?.manual_required_reason,
+    risk_flags: run?.risk_flags,
+    rag_used: run?.rag_used,
+  })}`;
+  if (run?.status === "send_skipped" || run?.status === "blocked" || run?.status === "skipped") {
+    return `未发送原因：${blockReasonDetailText({
+      block_reason: run?.block_reason,
+      skip_reason: run?.skip_reason,
+      manual_required: run?.manual_required,
+      manual_required_reason: run?.manual_required_reason,
+      risk_flags: run?.risk_flags,
+      rag_used: run?.rag_used,
+    })}`;
+  }
   if (run?.status === "failed" || run?.status === "send_failed") return "未发送：抖音接口发送失败";
   if (run?.status === "sent") return "AI 已自动回复";
-  if (run?.status === "decided") return `未发送原因：${blockReasonLabel(run?.block_reason || run?.skip_reason || "auto_send_disabled_by_decision")}`;
+  if (run?.status === "decided") {
+    return `未发送原因：${blockReasonDetailText({
+      block_reason: run?.block_reason || "auto_send_disabled_by_decision",
+      skip_reason: run?.skip_reason,
+      manual_required: run?.manual_required,
+      manual_required_reason: run?.manual_required_reason,
+      risk_flags: run?.risk_flags,
+      rag_used: run?.rag_used,
+    })}`;
+  }
   return "暂无自动回复运行结果。";
 }
 

@@ -84,3 +84,60 @@ export function blockReasonLabel(reason: string | null | undefined): string {
   if (!reason) return "-";
   return BLOCK_REASON_LABELS[reason] || reason;
 }
+
+// 列表项中需要展示真实阻断原因的 run 字段子集（后端 AiAutoReplyRunListItem 已返回）
+export interface RunBlockReasonContext {
+  block_reason?: string | null;
+  skip_reason?: string | null;
+  manual_required?: boolean | null;
+  manual_required_reason?: string | null;
+  risk_flags?: string[] | null;
+  rag_used?: boolean | null;
+}
+
+// 把 risk_flags 翻译为去重后的中文短语列表
+function riskFlagsToChinese(flags: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const flag of flags) {
+    const text = flag ? riskFlagLabel(flag) : "";
+    if (text && !seen.has(text)) {
+      seen.add(text);
+      result.push(text);
+    }
+  }
+  return result;
+}
+
+// 当 block_reason 为 auto_send_disabled_by_decision 时，补充 9100 的真实判定原因，
+// 让甲方在列表直接看到"为什么没授权发送"，而不只是统一的"决策未授权自动发送"。
+// 返回主标签 + 括号补充；无补充信息时退回主标签。
+export function blockReasonDetailText(ctx: RunBlockReasonContext): string {
+  const reason = ctx.block_reason || ctx.skip_reason;
+  const base = blockReasonLabel(reason);
+  if (reason !== "auto_send_disabled_by_decision") {
+    return base;
+  }
+  const extras: string[] = [];
+  // 优先用 9100 给出的人工确认原因（如"具体车型库存需人工确认"）
+  const mr = (ctx.manual_required_reason || "").trim();
+  if (mr) {
+    extras.push(mr);
+  }
+  // 补充风险标记中文（库存/价格/车况/联系方式等）
+  const flags = Array.isArray(ctx.risk_flags) ? ctx.risk_flags : [];
+  const flagTexts = riskFlagsToChinese(flags).filter(
+    (t) => !mr || !t.includes(mr.slice(0, 4)), // 去掉与 manual_required_reason 重复项
+  );
+  if (flagTexts.length) {
+    extras.push(flagTexts.join("、"));
+  }
+  // rag_used=true 但被阻断 → 知识不可信（Milvus 降级）的提示
+  if (ctx.rag_used === true && (mr || flags.length)) {
+    extras.push("知识库检索降级");
+  }
+  if (!extras.length) {
+    return base;
+  }
+  return `${base}（${extras.join("；")}）`;
+}

@@ -23,7 +23,7 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../../../lib/datetime";
 import { userFacingError } from "../../../lib/userFacingError";
-import { blockReasonLabel } from "../riskFlagLabels";
+import { blockReasonDetailText, blockReasonLabel } from "../riskFlagLabels";
 import ModuleTabs from "../../../components/ModuleTabs";
 
 const PAGE_SIZE = 20;
@@ -212,7 +212,15 @@ function gateStatusText(gate: Record<string, unknown> | null): string {
 }
 
 function blockReasonText(item: AiAutoReplyRunListItem): string {
-  return blockReasonLabel(item.block_reason || item.skip_reason);
+  // auto_send_disabled_by_decision 时补充 9100 真实判定原因，让甲方在列表直接看到"为什么没授权发送"
+  return blockReasonDetailText({
+    block_reason: item.block_reason,
+    skip_reason: item.skip_reason,
+    manual_required: item.manual_required,
+    manual_required_reason: item.manual_required_reason,
+    risk_flags: item.risk_flags,
+    rag_used: item.rag_used,
+  });
 }
 
 function buildConversationHref(item: {
@@ -442,7 +450,17 @@ function DetailModal({
                 <h3 className="text-xs font-bold text-slate-900">原因与错误</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                   <Field label="跳过原因" value={blockReasonLabel(detail.skip_reason)} />
-                  <Field label="阻断原因" value={blockReasonLabel(detail.block_reason)} />
+                  <Field
+                    label="阻断原因"
+                    value={blockReasonDetailText({
+                      block_reason: detail.block_reason,
+                      skip_reason: detail.skip_reason,
+                      manual_required: detail.manual_required,
+                      manual_required_reason: detail.manual_required_reason,
+                      risk_flags: detail.risk_flags,
+                      rag_used: detail.rag_used,
+                    })}
+                  />
                   <Field label="错误信息" value={detail.error_message} />
                 </div>
               </section>

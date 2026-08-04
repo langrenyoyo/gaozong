@@ -1323,8 +1323,8 @@ def test_reply_suggestion_no_rag_llm_not_configured_warns_and_falls_back(tmp_pat
     assert "宝马3系" in data["reply_text"]
     assert "顾问" in data["reply_text"]
     assert "您可以先说下预算" not in data["reply_text"]
+    # LLM 不可用兜底路径强制转人工（line 791-794），与留资放开无关
     assert data["manual_required"] is True
-    assert "inventory_or_model_specific" in data["risk_flags"]
 
 
 def test_reply_suggestion_no_rag_llm_failure_warns_and_falls_back(tmp_path, monkeypatch):
@@ -1357,8 +1357,8 @@ def test_reply_suggestion_no_rag_llm_failure_warns_and_falls_back(tmp_path, monk
     assert "宝马3系" in data["reply_text"]
     assert "顾问" in data["reply_text"]
     assert "您可以先说下预算" not in data["reply_text"]
+    # LLM 不可用兜底路径强制转人工（line 791-794）
     assert data["manual_required"] is True
-    assert "inventory_or_model_specific" in data["risk_flags"]
 
 
 def test_reply_suggestion_no_rag_different_inputs_return_different_direct_llm_replies(

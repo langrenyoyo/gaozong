@@ -343,6 +343,20 @@ known_customer.info.contact 含 current_contact_state 和 known_valid_contact �
 - 当 current_contact_state=PARTIAL/INVALID/AMBIGUOUS 且 known_valid_contact=false 时：不得声称已收到，应引导补全或核对。
 - 确认已经收到联系方式是允许的，但不是必须出现的句式；仅在 status=VALID 时才允许确认，且不得把历史有效联系方式说成本轮刚收到。"""
 
+# 知识库检索降级约束（仅 knowledge_trusted=False 时注入）。
+# 甲方的核心诉求：Milvus 故障降级时 AI 仍能自动发送合规留资回复，而非转人工。
+# 引导 LLM 在知识不可信时生成"查一下 + 索要联系方式 + 需求询问"的合规回复，
+# 而非基于不可信 chunks 生成事实断言（库存/价格/车况）。
+# Hard 守卫 #2（虚假确认）/#3（重复索要）仍兜底，本约束不削弱 P0.2 Hard Gate。
+_KNOWLEDGE_DEGRADED_LEAD_CAPTURE_RULE = """## 知识库检索降级约束（rag_trust=degraded）
+当前知识库向量检索失败，已回退到词法检索，rag_results 可能不准确。
+回复必须遵循：
+1. 不得断言车辆库存、价格、车况、金融等具体事实；用"我得查一下/需要核实"代替直接回答。
+2. 主动引导客户留下联系方式（电话/手机号），话术如"老板您留个联系方式，我等下发资料给您"。
+3. 自然过渡到询问客户需求（年份、预算、车型偏好）。
+4. 不得声称"已收到/已记下"客户未实际发送的联系方式（防欺诈硬约束）。
+合规示例：奥迪A6比较受欢迎我得查一下，老板您留个联系方式，我等下发资料给您。对了，老板对年份和预算有没有什么要求？"""
+
 SAME_CATEGORY_RECOMMENDATIONS = [
     RecommendedVehicle(vehicle_name="宝马5系", price=280000, category="精品BBA"),
     RecommendedVehicle(vehicle_name="奔驰E级", price=300000, category="精品BBA"),
@@ -989,7 +1003,16 @@ def _build_llm_reply(
     ]
     # B1: merchant_prompt 构建 + messages 构建计时
     t0 = time.perf_counter()
-    messages = build_llm_messages(request, merchant_prompt, source_chunks, policy_decision=policy_decision)
+    # 知识可信度统一判定，传给 build_llm_messages 引导降级时生成合规留资回复
+    _trusted_rag = _is_trusted_rag_result(
+        rag_used=rag_used,
+        fallback_reason=fallback_reason,
+        source_chunks=source_chunks,
+    )
+    messages = build_llm_messages(
+        request, merchant_prompt, source_chunks,
+        policy_decision=policy_decision, knowledge_trusted=_trusted_rag,
+    )
     rag_timing["merchant_prompt_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     client = OpenAICompatibleClient()
     agent_phone_goal = _agent_requires_phone_lead_capture(agent)
@@ -1650,7 +1673,7 @@ def _build_decision_constraint_text(decision: ReplyPolicyDecision) -> str:
     return "\n".join(parts)
 
 
-def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks, *, policy_decision=None) -> list[dict]:
+def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks, *, policy_decision=None, knowledge_trusted: bool = True) -> list[dict]:
     """拼装发送给大模型的 system prompt 和 user prompt。
 
     Prompt 合同：
@@ -1660,11 +1683,12 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     - 删除 tenant/merchant/account/agent 等内部 ID，保留商户 risk_rules、主营范围与 Agent 业务目标；
     - 输出 Schema、历史不可信策略和安全规则只在 system 声明一次；联系方式继续脱敏。
     - policy_decision（ENABLED 时传入）：显式约束注入 system prompt，非全局/隐式。
+    - knowledge_trusted（P0.3+ 留资放开）：RAG 结果是否可信。False 时注入降级约束，
+      引导 LLM 生成合规留资回复（查一下 + 索要联系方式 + 需求询问），而非事实断言。
     """
-    agent_phone_goal = (
-        merchant_prompt.get("agent_category") == "bound_agent"
-        and _agent_prompt_requires_phone_lead_capture(merchant_prompt.get("system_prompt"))
-    )
+    # agent_phone_goal 判定与 _build_llm_reply（line 995 _agent_requires_phone_lead_capture）对齐口径，
+    # 避免 Prompt 注入留资指令但守卫判定无留资目标的错配。
+    agent_phone_goal = _agent_requires_phone_lead_capture(merchant_prompt)
     # 顺序：固定提示词模板 V2.0（完整12节+商家变量注入）→ Agent 自定义提示 → 留资目标 → 违禁词 → Decision 约束
     system_parts: list[str] = [_build_fixed_prompt_template(merchant_prompt)]
     agent_system_prompt = merchant_prompt.get("system_prompt")
@@ -1688,6 +1712,10 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     system_parts.append(_HISTORY_ORIGIN_TRUST_RULE)
     # P0.2-B 最小联系方式状态区分规则：current vs known_valid
     system_parts.append(_CONTACT_STATE_DISTINCTION_RULE)
+    # 知识库检索降级约束：仅在 knowledge_trusted=False 时注入，引导 LLM 生成合规留资回复
+    # 而非基于不可信 chunks 生成事实断言。与 #2/#3 Hard 守卫叠加（防欺诈/防骚扰仍兜底）。
+    if not knowledge_trusted:
+        system_parts.append(_KNOWLEDGE_DEGRADED_LEAD_CAPTURE_RULE)
     system_prompt = "\n".join(system_parts)
     known_customer_context = _build_known_customer_context(
         latest_message=request.latest_message,
@@ -1721,6 +1749,9 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         },
         "recent_history": _build_llm_history(request.conversation_history),
         "latest_message": safe_latest_message,
+        # 知识可信度标注：trusted=向量检索可信；degraded=Milvus失败回退词法检索，结果可能不准确；
+        # empty=无检索结果。LLM 据此决定是否断言事实。
+        "rag_trust": "degraded" if (source_chunks and not knowledge_trusted) else ("trusted" if source_chunks else "empty"),
         "rag_results": [
             {
                 "title": item.title,
@@ -2201,6 +2232,19 @@ def _apply_safety_postprocess(
             decision["reply_text"] = _build_specific_model_safe_clarify_reply(text)
             reply_text = str(decision.get("reply_text") or "")
             combined_text = f"{text}\n{reply_text}"
+        elif (
+            not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
+            and not _contains_any(history_text, PROMPT_INJECTION_KEYWORDS)
+            and not _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS)
+            and not _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS)
+            and not _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS)
+            and not _contains_any(reply_text, VEHICLE_CONDITION_KEYWORDS)
+        ):
+            # 知识降级时客户问具体车型，若 LLM 已生成不含事实断言（库存/价格/金融/车况）的合规回复
+            # 且客户消息/历史未命中 prompt_injection，不阻断转人工，让合规留资回复通过。
+            # prompt_injection 与知识可信度解耦（C 类风险无条件阻断），此处显式跳过清零做纵深防御，
+            # 不依赖后续清零分支1（line 2325）的补救。含事实断言仍由下方 inventory_claim 等守卫拦截。
+            decision["manual_required"] = False
         else:
             risk_flags.append("inventory_or_model_specific")
             risk_flags.append("price_or_inventory_sensitive")
@@ -2237,10 +2281,16 @@ def _apply_safety_postprocess(
     contact_risky = _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS)
     if not contact_risky and not allow_phone_lead_capture:
         contact_risky = _contains_any(combined_text, CONTACT_KEYWORDS)
+    # AI 主动索要电话类联系方式不再阻断——甲方核心诉求：留资收集。
+    # 微信类（WECHAT_CONTACT_KEYWORDS）仍阻断（平台外沟通风险）；
+    # 电话类仅在 allow_phone_lead_capture=True（agent 配置留资目标）时放行；
+    # 虚假确认/重复索要仍由 Hard 守卫 #2/#3（reply_hard_rules）兜底。
     if knowledge_untrusted and contact_risky:
         risk_flags.append("contact_request")
-        decision["manual_required"] = True
-        reason = reason or SAFETY_REVIEW_REASON
+        if _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS) or not allow_phone_lead_capture:
+            # 微信类始终阻断；电话类仅在未配置留资目标时阻断
+            decision["manual_required"] = True
+            reason = reason or SAFETY_REVIEW_REASON
 
     if knowledge_untrusted and _contains_any(combined_text, COMPLAINT_KEYWORDS):
         risk_flags.append("after_sales_or_complaint")
@@ -2473,6 +2523,8 @@ def _extract_customer_requirements(
 
 
 def _agent_requires_phone_lead_capture(agent: dict | None) -> bool:
+    # agent 参数可为 agent dict 或 apply_agent_prompt 合并后的 merchant_prompt dict
+    # （两者都含 agent_category/system_prompt/business_scope/reply_style 字段，同源）。
     if not isinstance(agent, dict):
         return False
     if agent.get("agent_category") != "bound_agent":
