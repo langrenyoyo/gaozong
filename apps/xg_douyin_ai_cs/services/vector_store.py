@@ -107,6 +107,9 @@ class MilvusVectorStore:
         self._pymilvus = _load_pymilvus()
         self.config = config
         self._connected = False
+        # collection 存在性缓存：同进程内 collection 不会消失，避免每次 search 都发
+        # has_collection RPC（channel 关闭时该 RPC 耗 12-17 秒）。
+        self._collection_exists_cache: bool | None = None
 
     def upsert_chunks(self, chunks: list[dict[str, Any]]) -> dict[str, Any]:
         if not chunks:
@@ -173,15 +176,34 @@ class MilvusVectorStore:
                 ],
             )
         except Exception as exc:
-            raise VectorStoreError(
-                "MILVUS_SEARCH_FAILED",
-                _sanitize_exception(exc, self.config),
-                phase="search",
-                connected=True,
-                collection_exists=True,
-                schema_match=True,
-                error_type=type(exc).__name__,
-            ) from exc
+            # channel closed/Stream removed 时断开重连重试一次，避免半开 channel 持续失败
+            if _is_channel_closed_error(exc):
+                self._reconnect()
+                collection = self._pymilvus.Collection(name=self.config.milvus_collection, using=self._alias)
+                result = collection.search(
+                    data=[embedding],
+                    anns_field="embedding",
+                    param={"metric_type": self.config.milvus_metric_type, "params": {}},
+                    limit=int(payload.top_k),
+                    expr=expr,
+                    output_fields=[
+                        "chunk_id",
+                        "chunk_text",
+                        "document_id",
+                        "category_key",
+                        "source_title",
+                    ],
+                )
+            else:
+                raise VectorStoreError(
+                    "MILVUS_SEARCH_FAILED",
+                    _sanitize_exception(exc, self.config),
+                    phase="search",
+                    connected=True,
+                    collection_exists=True,
+                    schema_match=True,
+                    error_type=type(exc).__name__,
+                ) from exc
         mapper = _hit_to_raw_search_item if preserve_raw_ids else _hit_to_search_item
         return [mapper(hit) for hits in result for hit in hits][: int(payload.top_k)]
 
@@ -332,6 +354,9 @@ class MilvusVectorStore:
     def connect(self) -> None:
         if self._connected:
             return
+        self._do_connect()
+
+    def _do_connect(self) -> None:
         kwargs = {
             "alias": self._alias,
             "uri": self.config.milvus_uri,
@@ -352,6 +377,21 @@ class MilvusVectorStore:
                 error_type=type(exc).__name__,
             ) from exc
         self._connected = True
+
+    def _reconnect(self) -> None:
+        """断开半开 channel 并重新连接——channel closed 时复用旧 alias 会继续失败。
+
+        生产问题：Milvus 服务端过载/网络抖动导致 gRPC channel 半开，pymilvus 复用
+        同 alias 的旧 channel 持续报 'Cannot invoke RPC on closed channel'。
+        断开旧 alias 重新 connect 强制建立新 channel。
+        """
+        try:
+            self._pymilvus.connections.disconnect(self._alias)
+        except Exception:
+            pass  # alias 未连接或已断开，忽略
+        self._connected = False
+        self._collection_exists_cache = None  # 重连后失效缓存
+        self._do_connect()
 
     def build_schema(self) -> Any:
         fields = [
@@ -385,16 +425,37 @@ class MilvusVectorStore:
     def ensure_collection(self, create_if_missing: bool = False) -> dict[str, Any]:
         self.connect()
         collection_name = self.config.milvus_collection
-        try:
-            exists = self._pymilvus.utility.has_collection(collection_name, using=self._alias)
-        except Exception as exc:
-            raise VectorStoreError(
-                "MILVUS_COLLECTION_CHECK_FAILED",
-                _sanitize_exception(exc, self.config),
-                phase="has_collection",
-                connected=True,
-                error_type=type(exc).__name__,
-            ) from exc
+        # collection 存在性缓存：同进程内 collection 不会消失，避免每次 search 都发
+        # has_collection RPC（channel 关闭时该 RPC 耗 12-17 秒）。仅 create_if_missing
+        # 或缓存未命中时才查。
+        if self._collection_exists_cache is None or create_if_missing:
+            try:
+                exists = self._pymilvus.utility.has_collection(collection_name, using=self._alias)
+            except Exception as exc:
+                # channel closed/Stream removed 时断开重连重试一次
+                if _is_channel_closed_error(exc):
+                    self._reconnect()
+                    try:
+                        exists = self._pymilvus.utility.has_collection(collection_name, using=self._alias)
+                    except Exception as exc2:
+                        raise VectorStoreError(
+                            "MILVUS_COLLECTION_CHECK_FAILED",
+                            _sanitize_exception(exc2, self.config),
+                            phase="has_collection",
+                            connected=True,
+                            error_type=type(exc2).__name__,
+                        ) from exc2
+                else:
+                    raise VectorStoreError(
+                        "MILVUS_COLLECTION_CHECK_FAILED",
+                        _sanitize_exception(exc, self.config),
+                        phase="has_collection",
+                        connected=True,
+                        error_type=type(exc).__name__,
+                    ) from exc
+            self._collection_exists_cache = exists
+        else:
+            exists = self._collection_exists_cache
         if not exists:
             if not create_if_missing:
                 raise VectorStoreCollectionError(
@@ -585,12 +646,25 @@ class MilvusVectorStore:
             )
 
 
+# 模块级单例缓存：Milvus 连接复用同一 alias + 同一 VectorStore 实例，
+# 避免每次 search 新建实例导致重复 connect / channel 频繁建立。
+# 生产问题：原 get_vector_store 每次返回新 MilvusVectorStore，每个实例 connect()
+# 虽幂等（同 alias），但实例级 _connected 缓存失效，且无 channel 重连机制。
+_MILVUS_STORE_SINGLETON: MilvusVectorStore | None = None
+_SQLITE_STORE_SINGLETON: SQLiteVectorStore | None = None
+
+
 def get_vector_store(config: Settings = settings) -> VectorStore:
+    global _MILVUS_STORE_SINGLETON, _SQLITE_STORE_SINGLETON
     backend = config.rag_vector_backend
     if backend == "sqlite":
-        return SQLiteVectorStore()
+        if _SQLITE_STORE_SINGLETON is None:
+            _SQLITE_STORE_SINGLETON = SQLiteVectorStore()
+        return _SQLITE_STORE_SINGLETON
     if backend == "milvus":
-        return MilvusVectorStore(config)
+        if _MILVUS_STORE_SINGLETON is None:
+            _MILVUS_STORE_SINGLETON = MilvusVectorStore(config)
+        return _MILVUS_STORE_SINGLETON
     raise VectorStoreConfigError(
         "RAG_VECTOR_BACKEND_INVALID",
         "RAG_VECTOR_BACKEND must be one of: sqlite, milvus",
@@ -938,6 +1012,32 @@ def _classify_connect_error(exc: Exception) -> str:
     if "database" in text or "db" in text:
         return "MILVUS_DB_NOT_FOUND"
     return "MILVUS_CONNECT_FAILED"
+
+
+def _is_channel_closed_error(exc: Exception) -> bool:
+    """识别 gRPC channel 已关闭/半开类错误——此类错误断开重连可恢复。
+
+    生产日志特征：
+    - 'Cannot invoke RPC on closed channel'
+    - 'Stream removed (recvmsg:Connection timed out (110))'
+    - 'StatusCode.UNAVAILABLE'
+    - 'failed to connect to all addresses'
+    - 'channel_state=IDLE/TRANSIENT_FAILURE'
+    """
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "closed channel",
+            "stream removed",
+            "statuscode.unavailable",
+            "failed to connect to all addresses",
+            "channel_state=idle",
+            "channel_state=transient_failure",
+            "connection timed out",
+            "inactive",
+        )
+    )
 
 
 def _sanitize_exception(exc: Exception, config: Settings) -> str:
