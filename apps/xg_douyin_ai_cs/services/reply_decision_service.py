@@ -596,7 +596,7 @@ def _dispatch_reply_with_kernel_mode(
         # 差异日志（Legacy 最终结果后，采样 + Hard 违规 100%）
         hard_violation = bool(set(legacy_response.risk_flags) & {
             "hard_false_contact_confirmation", "hard_reask_contact_after_valid",
-            "hard_off_platform_detail_promise", "hard_unfounded_contact_followup_commitment",
+            "hard_off_platform_detail_promise",
         })
         sampled = _should_sample_shadow(settings.shadow_sample_rate, settings.shadow_hmac_secret, str(conversation_id))
         _log_shadow_diff(
@@ -2283,16 +2283,15 @@ def _apply_safety_postprocess(
         reason = reason or SAFETY_REVIEW_REASON
 
     contact_risky = _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS)
-    if not contact_risky and not allow_phone_lead_capture:
+    if not contact_risky:
         contact_risky = _contains_any(combined_text, CONTACT_KEYWORDS)
-    # AI 主动索要电话类联系方式不再阻断——甲方核心诉求：留资收集。
-    # 微信类（WECHAT_CONTACT_KEYWORDS）仍阻断（平台外沟通风险）；
-    # 电话类仅在 allow_phone_lead_capture=True（agent 配置留资目标）时放行；
-    # 虚假确认/重复索要仍由 Hard 守卫 #2/#3（reply_hard_rules）兜底。
+    # AI 主动索要联系方式不再阻断——甲方核心诉求：留资收集，AI 应主动引导客户留下联系方式。
+    # 电话类完全放开（不要求 agent 配置留资目标）；微信类（WECHAT_CONTACT_KEYWORDS）仍阻断
+    # （平台外沟通风险）。虚假确认/重复索要仍由 Hard 守卫 #2/#3（reply_hard_rules）兜底。
     if knowledge_untrusted and contact_risky:
         risk_flags.append("contact_request")
-        if _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS) or not allow_phone_lead_capture:
-            # 微信类始终阻断；电话类仅在未配置留资目标时阻断
+        if _contains_any(combined_text, WECHAT_CONTACT_KEYWORDS):
+            # 微信类始终阻断（平台外沟通风险）
             decision["manual_required"] = True
             reason = reason or SAFETY_REVIEW_REASON
 
@@ -2306,10 +2305,11 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
+    # 客户消息含高风险关键词（价格/现车/库存/电话等）不再强制转人工——
+    # 甲方诉求：客户正常咨询这些词是常见的，知识降级时由 LLM 生成合规留资回复即可。
+    # no_rag_risky_question 仅保留诊断标记，不设 manual_required。
     if knowledge_untrusted and _contains_any(text, RISKY_MANUAL_KEYWORDS):
         risk_flags.append("no_rag_risky_question")
-        decision["manual_required"] = True
-        reason = reason or RISKY_NO_RAG_REASON
 
     current_intent = _optional_text(decision.get("intent"))
     # 知识降级时，非低风险 intent（如 consult_specific_model）默认转人工。但若 LLM 已生成

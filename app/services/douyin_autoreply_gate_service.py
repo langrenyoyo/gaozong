@@ -25,12 +25,13 @@ COUNTED_RUN_STATUSES = ("blocked", "decided", "failed")
 
 # 不可豁免 Hard 风险标记：9100 返回后 9000 Gate 无条件阻断，
 # 不受 allow_release_manual_required / manual_review_risk_flags 影响。
+# 2026-08-04：hard_unfounded_contact_followup_commitment 移除（甲方诉求放开，
+# AI 说"安排同事联系您"不再 Hard 阻断，允许引导留资后销售跟进）。
 HARD_BLOCK_RISK_FLAGS = frozenset(
     {
         "hard_false_contact_confirmation",
         "hard_reask_contact_after_valid",
         "hard_off_platform_detail_promise",
-        "hard_unfounded_contact_followup_commitment",
     }
 )
 

@@ -128,24 +128,11 @@ def unfounded_contact_followup_commitment_violation(
 ) -> str | None:
     """无条件联系承诺检测：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进。
 
-    仅当：
-    - contact_state != VALID（未确认有效联系方式）
-    - 回复含无条件联系承诺
-    - 回复不含明确前置条件
-
-    才判定违规。带前置条件的表达（"您留下联系方式后我再联系您"）不违规。
+    甲方诉求放开（2026-08-04）：AI 说"安排同事联系您/稍后联系您"不再 Hard 阻断，
+    允许 AI 引导客户留资后由销售跟进。本检测停用，返回 None。
+    虚假确认/重复索要仍由 contact_reply_violation Hard 守卫兜底。
     """
-    if contact_state == "VALID":
-        return None
-    text = str(reply_text or "")
-    if not text:
-        return None
-    if not _contains_any(text, UNFOUNDED_FOLLOWUP_KEYWORDS):
-        return None
-    # 含明确前置条件 → 条件表达，不判无条件承诺
-    if _contains_any(text, FOLLOWUP_PRECONDITION_KEYWORDS):
-        return None
-    return "unfounded_contact_followup_commitment"
+    return None
 
 
 def violation_to_hard_flag(violation: str | None) -> str | None:

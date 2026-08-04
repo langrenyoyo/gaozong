@@ -240,7 +240,7 @@ def test_p0a_valid_reask_hard_blocked(tmp_path, monkeypatch):
 
 
 def test_p0a_unfounded_followup_hard_blocked(tmp_path, monkeypatch):
-    """NONE + 无条件"安排同事联系您" → hard_unfounded_contact_followup_commitment。"""
+    """NONE + 无条件"安排同事联系您" → 已放开（甲方诉求），不再 Hard 阻断。"""
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
 
@@ -254,12 +254,12 @@ def test_p0a_unfounded_followup_hard_blocked(tmp_path, monkeypatch):
     )
     assert response.status_code == 200
     data = response.json()
-    assert "hard_unfounded_contact_followup_commitment" in data["risk_flags"]
-    assert data["manual_required"] is True
+    # 甲方诉求放开：AI 说"安排同事联系您"不再 Hard 阻断
+    assert "hard_unfounded_contact_followup_commitment" not in data["risk_flags"]
 
 
 def test_p0a_unfounded_followup_partial_hard_blocked(tmp_path, monkeypatch):
-    """PARTIAL + "稍后让销售联系您" → hard_unfounded_contact_followup_commitment。"""
+    """PARTIAL + "稍后让销售联系您" → 已放开，不再 Hard 阻断。"""
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
 
@@ -273,7 +273,8 @@ def test_p0a_unfounded_followup_partial_hard_blocked(tmp_path, monkeypatch):
     )
     assert response.status_code == 200
     data = response.json()
-    assert "hard_unfounded_contact_followup_commitment" in data["risk_flags"]
+    # 甲方诉求放开
+    assert "hard_unfounded_contact_followup_commitment" not in data["risk_flags"]
 
 
 def test_p0a_off_platform_detail_promise_hard_blocked(tmp_path, monkeypatch):

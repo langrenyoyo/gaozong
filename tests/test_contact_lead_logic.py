@@ -245,13 +245,13 @@ def test_off_platform_hard_flag_constant():
 # ---- P0-A FIX：无条件联系承诺检测 ----
 
 def test_unfounded_followup_none_arrange_colleague():
-    # NONE + 无条件"安排同事联系您" → 违规
-    assert _unfounded_contact_followup_commitment_violation("NONE", "我安排同事联系您。") == "unfounded_contact_followup_commitment"
+    # 甲方诉求放开：NONE + 无条件"安排同事联系您" → 不再违规
+    assert _unfounded_contact_followup_commitment_violation("NONE", "我安排同事联系您。") is None
 
 
 def test_unfounded_followup_partial_seller_contact():
-    # PARTIAL + 无条件"稍后让销售联系您" → 违规
-    assert _unfounded_contact_followup_commitment_violation("PARTIAL", "稍后让销售联系您。") == "unfounded_contact_followup_commitment"
+    # 甲方诉求放开：PARTIAL + 无条件"稍后让销售联系您" → 不再违规
+    assert _unfounded_contact_followup_commitment_violation("PARTIAL", "稍后让销售联系您。") is None
 
 
 def test_unfounded_followup_valid_allowed():
@@ -293,8 +293,8 @@ def test_sync_you_not_safe_substitute_for_send():
 
 
 def test_sync_you_with_unfounded_followup_blocked():
-    # "稍后联系您"（无前置条件）→ unfounded_contact_followup_commitment
-    assert _unfounded_contact_followup_commitment_violation("NONE", "稍后联系您") == "unfounded_contact_followup_commitment"
+    # 甲方诉求放开："稍后联系您"（无前置条件）→ 不再违规
+    assert _unfounded_contact_followup_commitment_violation("NONE", "稍后联系您") is None
 
 
 def test_compliant_off_platform_handoff_direction():
