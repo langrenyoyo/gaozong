@@ -239,7 +239,7 @@ def test_p0a_valid_reask_hard_blocked(tmp_path, monkeypatch):
     assert "hard_reask_contact_after_valid" in data["risk_flags"]
 
 
-def test_p0a_unfounded_followup_hard_blocked(tmp_path, monkeypatch):
+def test_p0a_unfounded_followup_released(tmp_path, monkeypatch):
     """NONE + 无条件"安排同事联系您" → 已放开（甲方诉求），不再 Hard 阻断。"""
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")
@@ -258,7 +258,7 @@ def test_p0a_unfounded_followup_hard_blocked(tmp_path, monkeypatch):
     assert "hard_unfounded_contact_followup_commitment" not in data["risk_flags"]
 
 
-def test_p0a_unfounded_followup_partial_hard_blocked(tmp_path, monkeypatch):
+def test_p0a_unfounded_followup_partial_released(tmp_path, monkeypatch):
     """PARTIAL + "稍后让销售联系您" → 已放开，不再 Hard 阻断。"""
     client = _client(tmp_path, monkeypatch)
     monkeypatch.setenv("XG_DOUYIN_AI_LLM_API_KEY", "test-key")

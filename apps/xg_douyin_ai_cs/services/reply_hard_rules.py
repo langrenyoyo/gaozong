@@ -57,22 +57,12 @@ OFF_PLATFORM_NEGATION_KEYWORDS = (
     "无法把", "不会承诺把", "不方便展开", "平台里不方便", "平台内不方便",
     "不能给您发", "不会给您发", "无法给您发",
 )
-# 无条件联系承诺：非 VALID 态下无条件承诺"安排/稍后联系您"等后续跟进
-UNFOUNDED_FOLLOWUP_KEYWORDS = (
-    "安排同事联系您", "安排工作人员联系您", "稍后联系您",
-    "让销售联系您", "马上跟进您", "我安排同事跟进",
-)
-# 明确前置条件：存在则不判无条件承诺（属条件表达）
-FOLLOWUP_PRECONDITION_KEYWORDS = (
-    "留下联系方式后", "提供联系方式后", "发来联系方式后",
-    "发过来后", "您留个联系方式后", "您发个联系方式后",
-)
 
 # 联系方式违规 → 不可豁免 Hard 风险标记映射
+# 2026-08-04：unfounded_contact_followup_commitment 已放开停用，从映射移除。
 CONTACT_VIOLATION_TO_HARD_FLAG = {
     "false_confirm_contact": "hard_false_contact_confirmation",
     "reask_contact_after_valid": "hard_reask_contact_after_valid",
-    "unfounded_contact_followup_commitment": "hard_unfounded_contact_followup_commitment",
 }
 
 # off_platform_promise → Hard flag（单独，非联系方式违规映射）

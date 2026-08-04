@@ -2585,8 +2585,6 @@ from apps.xg_douyin_ai_cs.services.reply_hard_rules import (  # noqa: E402
     REASK_CONTACT_KEYWORDS as _REASK_CONTACT_KEYWORDS,
     OFF_PLATFORM_PROMISE_KEYWORDS as _OFF_PLATFORM_PROMISE_KEYWORDS,
     OFF_PLATFORM_NEGATION_KEYWORDS as _OFF_PLATFORM_NEGATION_KEYWORDS,
-    UNFOUNDED_FOLLOWUP_KEYWORDS as _UNFOUNDED_FOLLOWUP_KEYWORDS,
-    FOLLOWUP_PRECONDITION_KEYWORDS as _FOLLOWUP_PRECONDITION_KEYWORDS,
     contact_reply_violation as _contact_reply_violation,
     off_platform_promise_violation as _off_platform_promise_violation,
     unfounded_contact_followup_commitment_violation as _unfounded_contact_followup_commitment_violation,

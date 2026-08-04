@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from apps.xg_douyin_ai_cs.services.reply_hard_rules import (
     contact_reply_violation,
     off_platform_promise_violation,
-    unfounded_contact_followup_commitment_violation,
     violation_to_hard_flag,
 )
 from apps.xg_douyin_ai_cs.services.reply_kernel.policy import ReplyPolicyDecision
@@ -54,13 +53,6 @@ def validate(
     if op:
         violations.append(op)
         flag = violation_to_hard_flag(op)
-        if flag:
-            hard_flags.append(flag)
-
-    uf = unfounded_contact_followup_commitment_violation(contact_state, reply_text)
-    if uf:
-        violations.append(uf)
-        flag = violation_to_hard_flag(uf)
         if flag:
             hard_flags.append(flag)
 

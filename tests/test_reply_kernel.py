@@ -240,17 +240,17 @@ def test_hard_rules_single_source():
     assert hasattr(reply_hard_rules, "FALSE_CONFIRM_KEYWORDS")
     assert hasattr(reply_hard_rules, "contact_reply_violation")
     assert hasattr(reply_hard_rules, "ALL_HARD_BLOCK_RISK_FLAGS")
+    # 2026-08-04：hard_unfounded_contact_followup_commitment 已放开移除，剩 3 个
     expected = {
         "hard_false_contact_confirmation",
         "hard_reask_contact_after_valid",
         "hard_off_platform_detail_promise",
-        "hard_unfounded_contact_followup_commitment",
     }
     assert expected <= reply_hard_rules.ALL_HARD_BLOCK_RISK_FLAGS
 
 
 def test_gate_hard_set_covers_9100(monkeypatch):
-    """9000 Gate 不可豁免集合覆盖 9100 四类 Hard 风险。"""
+    """9000 Gate 不可豁免集合覆盖 9100 三类 Hard 风险。"""
     from app.services.douyin_autoreply_gate_service import HARD_BLOCK_RISK_FLAGS
     from apps.xg_douyin_ai_cs.services.reply_hard_rules import ALL_HARD_BLOCK_RISK_FLAGS
     assert ALL_HARD_BLOCK_RISK_FLAGS <= HARD_BLOCK_RISK_FLAGS

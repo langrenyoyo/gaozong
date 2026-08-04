@@ -275,7 +275,8 @@ def test_unfounded_followup_no_followup_keyword():
 
 
 def test_unfounded_followup_hard_flag_mapping():
-    assert CONTACT_VIOLATION_TO_HARD_FLAG["unfounded_contact_followup_commitment"] == "hard_unfounded_contact_followup_commitment"
+    # 甲方诉求放开：unfounded_contact_followup_commitment 已从 Hard 映射移除
+    assert "unfounded_contact_followup_commitment" not in CONTACT_VIOLATION_TO_HARD_FLAG
 
 
 # ---- P0-A FIX-2：残留承诺话术不得作为合规引导 ----
@@ -292,7 +293,7 @@ def test_sync_you_not_safe_substitute_for_send():
     assert _off_platform_promise_violation("稍后把情况同步您") is None
 
 
-def test_sync_you_with_unfounded_followup_blocked():
+def test_sync_you_with_unfounded_followup_released():
     # 甲方诉求放开："稍后联系您"（无前置条件）→ 不再违规
     assert _unfounded_contact_followup_commitment_violation("NONE", "稍后联系您") is None
 
