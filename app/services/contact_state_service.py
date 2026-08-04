@@ -180,29 +180,6 @@ def _validate_lead_contact_list(raw_value: Any) -> tuple[list[tuple[str, str]], 
     return verified, unknown_format_count
 
 
-def _derive_known_valid_from_memory(
-    customer_memory: dict[str, Any] | None,
-) -> tuple[bool, str | None, str | None, str | None]:
-    """从 customer_memory 严格验证历史/Lead 联系方式，派生 known_valid_contact。
-
-    返回 (known_valid, source_type, evidence_kind, evidence_ref)。
-    has_contact=true 只表示发现过候选，必须经严格验证才形成 known_valid。
-    不校验完整号码合法性时 known_valid=False，但保留 has_contact 候选信号供冲突检测。
-    """
-    memory = customer_memory or {}
-    if not isinstance(memory, dict):
-        return False, None, None, None
-    mem_contact = memory.get("contact") if isinstance(memory.get("contact"), dict) else None
-    if not mem_contact:
-        return False, None, None, None
-
-    # customer_memory.masked_values 是脱敏值，无法反推完整号码校验；
-    # 但 customer_memory 不直接携带原始 Lead 字段，故此处只能基于 has_contact 标记候选，
-    # 真正的 Lead 严格验证在调用方注入 lead 上下文时完成（见 build_request_contact_state 的 lead 参数）。
-    # 当仅有 customer_memory（无 lead）时，known_valid 无法确认，保持 False，避免误升级。
-    return False, None, None, None
-
-
 def build_request_contact_state(
     db,
     *,

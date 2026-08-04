@@ -740,10 +740,14 @@ def upsert_lead_from_webhook(
                     .first()
                 )
             if race_lead is not None and race_lead.merchant_id == merchant_id:
-                # 同商户已存在（并发竞争我方先到）→ 安全幂等，返回已存在记录
+                # 同商户已存在（并发竞争我方先到）→ 安全幂等，返回已存在记录。
+                # 日志脱敏口径与 tenant_scope_conflict 分支一致（伪名，不记明文标识）。
+                merchant_pseudonym = _lead_scope_pseudonym(merchant_id or "")
+                account_pseudonym = _lead_scope_pseudonym(account_open_id)
                 logger.info(
-                    "webhook 并发竞争同商户已存在: lead_id=%d, account_open_id=%s, conv=%s, merchant_id=%s",
-                    race_lead.id, account_open_id[:8] + "...", conversation_short_id, merchant_id,
+                    "webhook 并发竞争同商户已存在: lead_id=%d, merchant_scope_pseudonym=%s, "
+                    "account_scope_pseudonym=%s, operation=create action=idempotent_skip",
+                    race_lead.id, merchant_pseudonym, account_pseudonym,
                 )
                 return race_lead, "skipped"
             if race_lead is not None and race_lead.merchant_id != merchant_id:
