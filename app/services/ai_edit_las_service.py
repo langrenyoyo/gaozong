@@ -660,30 +660,48 @@ def delete_las_job(db: Session, *, merchant_id: str, job_id: int, operator_id: s
     return {"deleted": True, "status": job.delete_status}
 
 
-# 一次性下载 token：HMAC 签名 {job_id}:{merchant_id}:{exp}，短期有效
+# 短期下载 token：HMAC 签名 {job_id}:{merchant_id}:{exp}，TTL 内有效。
 # 让前端 <a href> 原生下载带进度条，token query 参数鉴权绕过 header 要求
+# （浏览器 <a> 无法附加 Authorization header，故用 token query 替代）。
+# 注意：token 在 TTL（120s）内可被重放（query 参数会进浏览器历史/访问日志/Referer），
+# 这是支持原生下载的已知 tradeoff；如需真一次性消费，升级路径为 payload 加 jti
+# 后用 Redis SETNX 一次性标记（当前未引入 Redis 持久化，按 YAGNI 暂不实现）。
 _DOWNLOAD_TOKEN_TTL = 120  # 秒
 
 
 def _download_signing_secret() -> str:
-    """下载 token 签名密钥：复用 DY_SECRET_KEY（生产 webhook 验签同源），兜底随机值。"""
-    return config.DY_SECRET_KEY or "ai-edit-download-fallback-secret"
+    """下载 token 签名密钥：复用 DY_SECRET_KEY（生产 webhook 验签同源）。
+
+    fail-closed：DY_SECRET_KEY 未配置时抛 RuntimeError 拒绝签发/校验，
+    绝不退化为硬编码公开值（否则攻击者可按同款算法自行签发任意商户 token）。
+    """
+    secret = config.DY_SECRET_KEY
+    if not secret:
+        logger.error("ai_edit_download_secret_missing DY_SECRET_KEY 未配置，下载 token 不可用")
+        raise RuntimeError("DY_SECRET_KEY 未配置，下载 token 不可用")
+    return secret
 
 
 def generate_download_token(job_id: int, merchant_id: str) -> str:
-    """生成一次性下载 token（绑定 job_id + merchant_id，TTL 内有效）。"""
+    """生成短期下载 token（绑定 job_id + merchant_id，TTL 内有效）。"""
+    import base64
+
     exp = int(time.time()) + _DOWNLOAD_TOKEN_TTL
     payload = f"{job_id}:{merchant_id}:{exp}"
     sig = hmac.new(_download_signing_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
     # token = base64(payload) + "." + sig（用 urlsafe，避免特殊字符）
-    import base64
     return base64.urlsafe_b64encode(payload.encode()).decode() + "." + sig
 
 
 def verify_download_token(token: str, job_id: int, merchant_id: str) -> bool:
-    """验证下载 token：签名匹配 + 未过期 + job/merchant 匹配。"""
+    """验证短期下载 token：签名匹配 + 未过期 + job/merchant 匹配。
+
+    secret 缺失（配置错误）时 _download_signing_secret 抛 RuntimeError，此处捕获取
+    转 False（安全拒绝下载，而非 500）；generate 路径不 catch，让签发接口 500 暴露问题。
+    """
     try:
         import base64
+
         payload_b64, sig = token.split(".", 1)
         payload = base64.urlsafe_b64decode(payload_b64).decode()
         expected_sig = hmac.new(_download_signing_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
@@ -698,7 +716,7 @@ def verify_download_token(token: str, job_id: int, merchant_id: str) -> bool:
         if int(t_exp) < int(time.time()):
             return False
         return True
-    except (ValueError, IndexError, TypeError):
+    except (ValueError, IndexError, TypeError, RuntimeError):
         return False
 
 

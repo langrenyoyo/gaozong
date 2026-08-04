@@ -761,7 +761,7 @@ def download_link_route(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """生成一次性下载链接（带 token query 参数，浏览器原生 <a href> 下载带进度条）。
+    """生成短期下载链接（带 token query 参数，浏览器原生 <a href> 下载带进度条）。
 
     前端调此接口（带 Authorization header）拿到 {download_url, filename}，
     再用 <a href=download_url> 触发浏览器原生下载。
@@ -793,7 +793,7 @@ def download_las_job_video_route(
 ):
     """下载最终归档视频：流式代理 TOS 视频，强制 attachment 下载。
 
-    双鉴权：?token= 一次性 token（浏览器 <a href> 原生下载，绕过 header 要求）
+    双鉴权：?token= 短期 token（浏览器 <a href> 原生下载，绕过 header 要求）
     或 Authorization header（token 缺失时走 header 鉴权）。
     """
     from app.services import ai_edit_las_service as las_svc

@@ -431,7 +431,7 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
     if (!canPlay || mediaLoading) return;
     setMediaLoading(true);
     try {
-      // 获取一次性 token 下载链接，用 <a href> 触发浏览器原生下载（带进度条）
+      // 获取短期 token 下载链接，用 <a href> 触发浏览器原生下载（带进度条）
       const { download_url, filename } = await fetchDownloadLink(job.job_id);
       const a = document.createElement("a");
       a.href = download_url;
