@@ -143,3 +143,6 @@ phase8-visual-samples/
 
 # ai-agent-browser-automation
 docs/ai/06_ui_audit/shots/
+
+# /code-review-graphignore
+.code-review-graphignore
