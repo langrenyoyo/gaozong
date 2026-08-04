@@ -135,6 +135,8 @@ export interface LasJobStatus {
   progress: number | null;
   video_tags: string[];
   has_final_video: boolean;
+  material_count: number;
+  estimated_seconds: number;
   error_message: string | null;
   failure_code: string | null;
   created_at: string | null;

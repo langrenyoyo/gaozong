@@ -486,6 +486,17 @@ def _las_job_summary(db: Session, job: AiEditJob) -> dict[str, Any]:
         .count()
         > 0
     )
+    # 素材数量 + 预估耗时（按素材数量估算，供前端伪进度条展示）
+    material_count = 0
+    if job.input_json:
+        try:
+            input_data = json.loads(job.input_json)
+            urls = input_data.get("video_urls") or []
+            material_count = len(urls) if isinstance(urls, list) else (1 if isinstance(urls, str) else 0)
+        except (TypeError, ValueError):
+            pass
+    # 预估：N×15s 基础 + 60s 固定开销；最少 60s，区间±50%（前端展示 N~M 分钟）
+    base_est = max(60, material_count * 15 + 60)
     return {
         "job_id": job.id,
         "title": job.title or f"混剪任务 #{job.id}",
@@ -495,6 +506,8 @@ def _las_job_summary(db: Session, job: AiEditJob) -> dict[str, Any]:
         "progress": job.progress,
         "video_tags": _parse_video_tags(job.video_tags),
         "has_final_video": has_final_video,
+        "material_count": material_count,
+        "estimated_seconds": base_est,
         "error_message": job.las_error_msg,
         "failure_code": job.failure_code,
         "created_at": job.created_at,

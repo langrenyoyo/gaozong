@@ -371,6 +371,29 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
   const [mediaLoading, setMediaLoading] = useState(false);
   const [playUrl, setPlayUrl] = useState<string | null>(null);
 
+  // 伪进度条：生成中任务按已等待时间推进，完成时 100
+  const isGenerating = displayStatus === "queued" || displayStatus === "running" || displayStatus === "processing" || displayStatus === "submitted";
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!isGenerating) return;
+    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, [isGenerating]);
+
+  const est = job.estimated_seconds || 180;
+  const elapsed = job.created_at ? Math.max(0, (Date.now() - new Date(job.created_at).getTime()) / 1000) : 0;
+  const fakeProgress = isGenerating
+    ? elapsed < est
+      ? Math.min(80, (elapsed / est) * 80)
+      : Math.min(95, 80 + ((elapsed - est) / Math.max(est, 1)) * 15)
+    : job.status === "succeeded" || job.status === "completed"
+      ? 100
+      : 0;
+  const estMin = Math.max(1, Math.floor(est / 60));
+  const estMax = Math.ceil((est * 1.5) / 60);
+  const elapsedMin = Math.floor(elapsed / 60);
+  const elapsedSec = Math.floor(elapsed % 60);
+
   const handlePlay = async () => {
     if (!canPlay || mediaLoading) return;
     setMediaLoading(true);
@@ -452,6 +475,17 @@ function JobCard({ job, onDeleted }: { job: LasJobStatus; onDeleted: () => void 
           {visual.label}
         </span>
       </div>
+      {isGenerating ? (
+        <div className="border-t border-[#eef1f6] px-[68px] py-2.5">
+          <div className="mb-1.5 flex items-center justify-between text-[11px] text-[#667085]">
+            <span>预计 {estMin}~{estMax} 分钟 · 已等待 {elapsedMin}分{elapsedSec}秒</span>
+            <span className="font-semibold text-[#2563eb]">{Math.round(fakeProgress)}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#e4e8f0]">
+            <div className="h-full rounded-full bg-[#2563eb] transition-all duration-1000 ease-out" style={{ width: `${fakeProgress}%` }} />
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2 border-t border-[#eef1f6] px-[68px] py-3">
         <button
           type="button"
