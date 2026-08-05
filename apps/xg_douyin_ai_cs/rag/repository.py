@@ -15,7 +15,6 @@ import math
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -1020,19 +1019,35 @@ def _search_milvus_or_fallback_with_diagnostics(
             raise ValueError("query embedding is empty")
         candidate_top_k = min(20, max(payload.top_k, payload.top_k * 3))
         search_payload = _copy_search_request(payload, top_k=candidate_top_k)
-        # Milvus 调用线程超时保护：pymilvus channel 关闭时重试可达 54 秒，
-        # 超过 _MILVUS_SEARCH_TIMEOUT_SECONDS 立即抛 TimeoutError → 回退 PG。
-        # 底层 gRPC 线程无法真正取消，但主流程不阻塞，结果用 PG 回退。
-        with ThreadPoolExecutor(max_workers=1) as _executor:
-            _future = _executor.submit(
-                get_vector_store().search, search_payload, query_embedding=query_embedding
-            )
+        # Milvus 调用 daemon 线程超时保护：pymilvus channel 关闭时 has_collection/
+        # search 重试可达 43-54 秒。超过 _MILVUS_SEARCH_TIMEOUT_SECONDS 立即抛
+        # TimeoutError → 回退 PG。daemon 线程不 join，主流程不阻塞（底层 gRPC
+        # 线程自行结束）。注意：不能用 ThreadPoolExecutor 的 with（__exit__ 会
+        # join 阻塞线程，导致超时形同虚设）。
+        import threading as _threading_mod
+
+        _milvus_result_box: dict = {}
+        _milvus_done = _threading_mod.Event()
+
+        def _milvus_worker():
             try:
-                result = _future.result(timeout=_MILVUS_SEARCH_TIMEOUT_SECONDS)
-            except FuturesTimeoutError as exc:
-                raise TimeoutError(
-                    f"milvus_search_hard_timeout exceeded {_MILVUS_SEARCH_TIMEOUT_SECONDS}s"
-                ) from exc
+                _milvus_result_box["result"] = get_vector_store().search(
+                    search_payload, query_embedding=query_embedding
+                )
+            except Exception as exc:
+                _milvus_result_box["error"] = exc
+            finally:
+                _milvus_done.set()
+
+        _milvus_worker_thread = _threading_mod.Thread(target=_milvus_worker, daemon=True)
+        _milvus_worker_thread.start()
+        if not _milvus_done.wait(timeout=_MILVUS_SEARCH_TIMEOUT_SECONDS):
+            raise TimeoutError(
+                f"milvus_search_hard_timeout exceeded {_MILVUS_SEARCH_TIMEOUT_SECONDS}s"
+            )
+        if "error" in _milvus_result_box:
+            raise _milvus_result_box["error"]
+        result = _milvus_result_box.get("result")
         ranked_result = _rerank_search_items(result)[: payload.top_k]
         _logger.info(
             "rag_search vector_backend=milvus fallback_reason=none tenant_id=%s "
