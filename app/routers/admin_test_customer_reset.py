@@ -72,7 +72,7 @@ def reset_session(
             conversation_short_id=body.conversation_short_id,
             level="session",
             operator_id=context.user_id or "unknown",
-            operator_name=context.user_name or "unknown",
+            operator_name=context.username or context.display_name or "unknown",
             reason=body.reason,
         )
         return {"success": True, "data": result}
@@ -104,7 +104,7 @@ def reset_requirements(
             conversation_short_id=body.conversation_short_id,
             level="requirements",
             operator_id=context.user_id or "unknown",
-            operator_name=context.user_name or "unknown",
+            operator_name=context.username or context.display_name or "unknown",
             reason=body.reason,
         )
         return {"success": True, "data": result}
@@ -136,7 +136,7 @@ def reset_full(
             conversation_short_id=body.conversation_short_id,
             level="full",
             operator_id=context.user_id or "unknown",
-            operator_name=context.user_name or "unknown",
+            operator_name=context.username or context.display_name or "unknown",
             reason=body.reason,
         )
         return {"success": True, "data": result}
