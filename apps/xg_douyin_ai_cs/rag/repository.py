@@ -411,6 +411,56 @@ def soft_delete_unified_document(*, tenant_id: str, merchant_id: str, document_i
     return {"document_id": str(document_id), "status": "deleted"}
 
 
+# Embedding 硬超时：Ark embedding 默认超时 120 秒，RAG 检索路径下若 embedding 慢会
+# 阻塞主流程，叠加 Milvus 超时回退时的二次 embedding 调用可达 240 秒。
+# 此处用 daemon 线程超时强制快速失败，超时返回空 embedding → PG 词法回退。
+_EMBEDDING_HARD_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_HARD_TIMEOUT_SECONDS", "15"))
+
+
+def _run_embed_with_hard_timeout(
+    *,
+    client: OpenAICompatibleClient,
+    text: str,
+    merchant_id: str | None,
+    remark: str | None = None,
+) -> dict:
+    """embedding 调用线程超时保护，超时返回空 embedding payload 不抛异常。
+
+    与 Milvus 8s 硬超时配套：embedding 是 RAG 检索的前置步骤，若 embedding 服务慢
+    会阻塞整个 reply-suggestion 链路导致 9000 xg_cs_http_timeout。
+    超时返回空 embedding，调用方降级为词法检索（无向量评分）。
+    用 daemon 线程 + Event 实现快速超时：daemon 线程不阻塞主进程退出，
+    超时后主流程立即返回，底层 embedding 线程自行结束（不 join）。
+    """
+    import threading
+
+    result_box: dict = {}
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result_box["result"] = _embed_with_usage(
+                client=client, text=text, merchant_id=merchant_id, remark=remark,
+            )
+        except Exception as exc:
+            result_box["error"] = exc
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    if not done.wait(timeout=_EMBEDDING_HARD_TIMEOUT_SECONDS):
+        _logger.warning(
+            "rag_embed_hard_timeout stage=embedding timeout_seconds=%s "
+            "merchant_id=%s remark=%s",
+            _EMBEDDING_HARD_TIMEOUT_SECONDS, merchant_id, remark,
+        )
+        return {"embedding": None, "model": "embedding_timeout"}
+    if "error" in result_box:
+        raise result_box["error"]
+    return result_box.get("result", {"embedding": None, "model": "no_result"})
+
+
 def _embed_with_usage(
     *,
     client: OpenAICompatibleClient,
@@ -958,9 +1008,10 @@ def _search_milvus_or_fallback_with_diagnostics(
                 vector_backend="milvus", fallback_reason="merchant_context_missing"
             ),
         )
+    query_embedding = None  # 预初始化，供 except 分支安全引用
     try:
         client = llm_client or OpenAICompatibleClient()
-        query_embedding_payload = _embed_with_usage(
+        query_embedding_payload = _run_embed_with_hard_timeout(
             client=client, text=payload.query, merchant_id=payload.merchant_id,
             remark="knowledge_search",
         )
@@ -1007,8 +1058,9 @@ def _search_milvus_or_fallback_with_diagnostics(
             len(category_keys),
             type(exc).__name__,
         )
+        # 回退 PG 时复用已算的 embedding，避免重复调用 embedding（最多 120s）导致 240s 累积
         return RagSearchResult(
-            items=_search_sqlite(payload, llm_client=llm_client),
+            items=_search_sqlite(payload, llm_client=llm_client, query_embedding=query_embedding),
             diagnostics=RagSearchDiagnostics(
                 vector_backend="milvus", fallback_reason="milvus_search_failed"
             ),
@@ -1018,6 +1070,8 @@ def _search_milvus_or_fallback_with_diagnostics(
 def _search_sqlite(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
+    *,
+    query_embedding: list[float] | None = None,
 ) -> list[RagSearchItem]:
     query_tokens = set(_tokens(payload.query))
     category_ids = _normalize_filter_values(payload.category_ids)
@@ -1050,12 +1104,13 @@ def _search_sqlite(
     skipped_invalid_embedding = 0
     vector_scored = []
     try:
-        client = llm_client or OpenAICompatibleClient()
-        query_embedding_payload = _embed_with_usage(
-            client=client, text=payload.query, merchant_id=payload.merchant_id,
-            remark="knowledge_search",
-        )
-        query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
+        if query_embedding is None:
+            client = llm_client or OpenAICompatibleClient()
+            query_embedding_payload = _run_embed_with_hard_timeout(
+                client=client, text=payload.query, merchant_id=payload.merchant_id,
+                remark="knowledge_search",
+            )
+            query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
     except Exception as exc:
         query_embedding = None
         _logger.warning(
