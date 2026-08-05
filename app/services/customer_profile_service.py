@@ -186,17 +186,34 @@ def merge_profile_with_memory(
     """DB 档案优先，合并实时派生 customer_memory，注入 9100 上下文。
 
     DB 档案（持久化）优先于实时派生（内存态，可能丢失）。
+    P-0-C 阶段3：区分 confirmed（客户明确说的）和 inferred（LLM 推断的），
+    注入 field_sources 标注每个字段来源，供 LLM 区分可信度。
     """
     if not persisted:
         return derived_memory or {}
     if not derived_memory:
         derived_memory = {}
-    # DB 档案字段优先
+    # 加载 confirmed/inferred 分层（_JSONStringJSONB 从 DB 读回是 JSON 字符串，需反序列化）
+    confirmed = persisted.get("confirmed_fields_json") or {}
+    inferred = persisted.get("inferred_fields_json") or {}
+    if isinstance(confirmed, str):
+        confirmed = json.loads(confirmed) if confirmed else {}
+    if isinstance(inferred, str):
+        inferred = json.loads(inferred) if inferred else {}
+
     merged = dict(derived_memory)
+    field_sources: dict[str, str] = {}
     for field in _PROFILE_FIELDS:
-        persisted_value = persisted.get(field)
-        if persisted_value:
-            merged[field] = persisted_value
+        # confirmed 优先覆盖顶层字段
+        if confirmed.get(field):
+            merged[field] = confirmed[field]
+            field_sources[field] = "confirmed"
+        elif inferred.get(field):
+            merged[field] = inferred[field]
+            field_sources[field] = "inferred"
+        elif merged.get(field):
+            field_sources[field] = "derived"
+    merged["field_sources"] = field_sources
     # contact 仍以 derived_memory 为准（9000 注入的可信 contact_state）
     if "contact" not in merged and persisted.get("contact_state"):
         merged["contact"] = {"has_contact": persisted.get("contact_state") == "valid"}

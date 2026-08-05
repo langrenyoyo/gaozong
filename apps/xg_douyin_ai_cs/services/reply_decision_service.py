@@ -1669,13 +1669,27 @@ JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、ma
 
 ## 附加：顾客档案推断（customer_profile_update）
 你必须输出 customer_profile_update 字段，推断客户本轮透露的信息。
-推断规则：
-- 仅基于客户当前消息和历史确认的信息推断，不从 AI 历史回复推断
-- 客户明确表述（如"我是女的""预算30万""2021款"）写入对应字段
+推断规则（严格）：
+- 只填写客户当前消息中**明确出现**的内容
+- 不得从 AI 历史回复推断
+- 不得从上下文猜测（如客户没说城市，不填城市；客户没说年份，不填年份）
 - known_customer.info 已有的字段，如果客户未更新，填 null（不重复写）
 - 无法判断的字段填 null
-- update_reason 简述推断依据（如"客户明确提到2021款奥迪A6"）
+- 违反此规则会导致回复包含错误信息
+- update_reason 简述推断依据（如"客户明确提到预算20万"）
 字段：gender（male/female/unknown）、preferred_salutation（客户要求称呼）、intent_car（意向车型）、car_year（年份）、budget（预算）、city（城市）、update_reason（推断依据）
+
+### 历史客户事实使用规则
+known_customer.info.field_sources 标注每个字段的来源：
+- confirmed：客户明确说的，可作为事实使用
+- inferred：AI 推断的，不确定，不得在回复中作为确定事实表述
+- derived：从当前消息派生的
+1. 联系方式、城市、客户明确指定的称呼——长期有效
+2. 预算、车型、年份、配置——属于购车需求，客户本轮明确表达的新需求优先于历史
+3. 历史预算与本轮预算不一致时，以本轮为准，不得把两者同时描述
+4. inferred 标注的字段（如年份/城市）不得在回复中作为确定事实使用
+5. 只有 confirmed 字段才可在回复中直接引用
+6. 联系方式已确认只用于禁止重复索要，不要求每轮提及
 
 称呼规则（重要）：
 - gender=unknown/male→默认"老板"，gender=female→"女士"
@@ -2982,6 +2996,8 @@ def _build_known_customer_context(
             # P-0-C：称呼字段（从持久化档案注入），LLM 据此称呼客户
             "salutation": merged.get("salutation") or "老板",
             "gender": merged.get("gender") or "unknown",
+            # P-0-C 阶段3：字段来源标注——confirmed=客户明确说的，inferred=AI推断的（不确定）
+            "field_sources": merged.get("field_sources") or {},
         },
         "conversation_task": _build_conversation_task(latest_message, merged),
         "must_not_ask_again": must_not_ask_again,
