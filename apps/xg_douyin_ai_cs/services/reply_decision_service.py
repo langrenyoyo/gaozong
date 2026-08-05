@@ -2269,11 +2269,20 @@ def _apply_safety_postprocess(
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
 
-    history_text = _conversation_history_text_for_risk(conversation_history)
-    if history_text and _contains_any(history_text, PROMPT_INJECTION_KEYWORDS):
+    # 历史注入检测：只检测最近2条客户消息，不检测全部历史——
+    # 避免第N轮的客户注入标记永久污染后续所有轮次（每轮都阻断）。
+    recent_customer_text = _recent_customer_messages_text(conversation_history, limit=2)
+    if recent_customer_text and _contains_any(recent_customer_text, PROMPT_INJECTION_KEYWORDS):
         risk_flags.append("prompt_injection")
         decision["manual_required"] = True
         reason = reason or SAFETY_REVIEW_REASON
+
+    # 守卫层确定性 prompt_injection 判定（只采信 text + recent_customer_text，
+    # 不采信 LLM 自己输出的 risk_flags）。定义在此处供后续所有分支统一使用。
+    _deterministic_prompt_injection = (
+        _contains_any(text, PROMPT_INJECTION_KEYWORDS)
+        or (bool(recent_customer_text) and _contains_any(recent_customer_text, PROMPT_INJECTION_KEYWORDS))
+    )
 
     if knowledge_untrusted and _is_specific_model_or_inventory_question(text):
         if not original_intent or original_intent not in LOW_RISK_DIRECT_INTENTS:
@@ -2285,8 +2294,7 @@ def _apply_safety_postprocess(
             combined_text = f"{text}\n{reply_text}"
         elif (
             not any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags)
-            and not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
-            and not _contains_any(history_text, PROMPT_INJECTION_KEYWORDS)
+            and not _deterministic_prompt_injection
             and not _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS)
             and not _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS)
             and not _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS)
@@ -2361,10 +2369,10 @@ def _apply_safety_postprocess(
     # 与上方车型 elif 一致：让甲方期望的"查一下+留资"回复在 PG 降级时也能自动发送。
     # C 类风险除外：LLM 解析失败/空输出/调用失败（DIRECT_LLM_GENERATION_FAILURE_FLAGS）
     # 是 LLM 不可信信号，必须无条件转人工，不适用合规放行。
+    # _deterministic_prompt_injection 已在上方定义（line 2283），此处复用。
     _compliant_lead_capture_reply = (
         not any(flag in DIRECT_LLM_GENERATION_FAILURE_FLAGS for flag in risk_flags)
-        and not _contains_any(text, PROMPT_INJECTION_KEYWORDS)
-        and not _contains_any(history_text, PROMPT_INJECTION_KEYWORDS)
+        and not _deterministic_prompt_injection
         and not _contains_any(reply_text, INVENTORY_CLAIM_KEYWORDS)
         and not _contains_any(reply_text, PRICE_OR_DISCOUNT_KEYWORDS)
         and not _contains_any(reply_text, FINANCE_OR_LOAN_KEYWORDS)
@@ -2392,8 +2400,9 @@ def _apply_safety_postprocess(
     if risk_flags:
         # V2.0 模板已包含完整安全规则，不再用旧兜底话术覆盖 LLM 回复。
         # risk_flags 仍标记用于 9000 gate 决策，但 9100 不替换 reply_text。
-        # prompt_injection 等非内容风险保留 manual_required 转人工。
-        if "prompt_injection" in risk_flags:
+        # prompt_injection 只采信守卫层确定性检测，不采信 LLM 自己输出的 risk_flags
+        # （doubao-seed-evolving 倾向自己标 prompt_injection 导致误阻断）
+        if _deterministic_prompt_injection:
             decision["manual_required"] = True
             reason = reason or SAFETY_REVIEW_REASON
         elif knowledge_untrusted:
@@ -2425,7 +2434,8 @@ def _apply_safety_postprocess(
         and _contains_any(text, ("最低", "底价", "优惠"))
     )
     # C类风险无条件阻断：prompt_injection 与知识可信度解耦，trusted_rag=true 时也必须阻断。
-    if "prompt_injection" in final_risk_flags:
+    # 只采信守卫层确定性检测，不采信 LLM 自己输出的 risk_flags
+    if _deterministic_prompt_injection:
         decision["manual_required"] = True
         decision["manual_required_reason"] = decision.get("manual_required_reason") or SAFETY_REVIEW_REASON
         decision["auto_send"] = False
@@ -3502,8 +3512,15 @@ def _sanitize_conversation_history(history: object) -> list[dict[str, str]]:
     return sanitized
 
 
-def _conversation_history_text_for_risk(history: object) -> str:
-    return "\n".join(item["content"] for item in _sanitize_conversation_history(history))
+def _recent_customer_messages_text(history: object, *, limit: int = 2) -> str:
+    """提取最近N条客户入站消息文本——用于注入检测，避免全部历史污染。
+
+    本函数只取最近N条 role=customer 的消息，避免第K轮的注入标记永久污染后续轮次。
+    """
+    items = _sanitize_conversation_history(history)
+    customer_items = [item for item in items if str(item.get("role") or "").strip() == "customer"]
+    recent = customer_items[-limit:] if limit > 0 else customer_items
+    return "\n".join(item["content"] for item in recent)
 
 
 def _mask_phone_numbers(text: str) -> str:
