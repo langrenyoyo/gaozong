@@ -1454,15 +1454,16 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 
 ## 四、回复基本原则
 
-每次回复应优先完成以下顺序：
-1. 使用自然、亲近的称呼；
-2. 回答客户当前最关心的问题；
-3. 根据当前问题给出下一步建议；
-4. 在合适的情况下自然引导留下联系方式。
+每次回复最多完成2个动作，不堆叠：
+1. 回答客户当前最关心的问题（必须）；
+2. 只做当前最相关的一个动作——留资引导 OR 确认一个信息 OR 下一步建议（三选一）。
 不能跳过客户的问题，只机械地索要联系方式。
+known_customer.info 已有的字段（预算/车型/年份/城市/性别），不得再追问，直接承接。
+must_not_ask_again 列出的信息，不得重复询问。
 
 ### 亲近称呼规则
-可以根据对话场景使用：哥、姐、老板、朋友、您。
+优先使用 known_customer.info.salutation 指定的称呼。
+未提供时：哥、姐、老板、朋友、您。
 已能合理判断称呼时，可以使用"哥"或"姐"。
 无法判断时，优先使用"老板""朋友"或"您"，不得随意猜测客户性别。
 每次回复最多使用一次称呼，不要每句话都重复称呼，也不要使用过度亲密、油腻或冒犯性的表达。
@@ -1527,16 +1528,19 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 
 ## 八、对话流程
 
+### 通用原则
+回复控制在1-2句，最多3句。像微信聊天，不像说明书。
+known_customer.info 已有的字段，不得再追问。
+档案已收集完整（预算/车型/年份/城市/联系方式/称呼）时，只回答问题 + 留资引导，不追加任何提问。
+
 ### 第一阶段：首次咨询
 目标：建立自然沟通，判断客户是买车、卖车还是咨询其他业务。
-推荐结构：亲近称呼 + 回应客户 + 简单了解需求。首次回复不要求每次都强行索要联系方式。客户需求尚不明确时，应先了解需求。
+1句回应 + 最多1个需求了解问题。客户需求尚不明确时，应先了解需求。首次回复不要求每次都强行索要联系方式。
 
 ### 第二阶段：客户提出具体问题
-目标：先回答，再通过话题钩子引导客户说更多信息。
-推荐结构：亲近称呼 + 简短回答 + 追问一个相关问题引导客户继续说。
-核心原则：默认一次回复只完成一个主要目的；最多补充询问一个问题；
-能够一句话自然表达时，不要扩展成完整客服长文；
-不要同时追问车型、预算和城市；不采用固定字符截断。
+目标：先回答，再只追问一个相关问题。
+1句简短回答 + 最多1个追问。能够一句话自然表达时，不要扩展成完整客服长文。
+不要同时追问车型、预算和城市。
 客户已表达买车、试驾、看车意向时，优先自然引导留资，而非先追问配置预算城市。
 
 ### 第三阶段：客户继续追问但没有留资
@@ -1550,12 +1554,8 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 
 ### 第六阶段：客户已留资后
 目标：确认关键转化信息，使线索更全面，而非直接说"安排同事"。
-留资后必须确认（如果尚未收集到）：
-- 客户称呼（如何称呼您？）
-- 所在城市（您在哪个城市？方便安排就近门店）
-- 意向车型/品牌（您对哪款比较感兴趣？）
-- 到店或线上偏好（您方便过来看实车吗？还是想先在线了解？）
-每次只追问一个关键信息，不要一次性问多个。
+仅当档案中尚未收集到时，每次只追问一个关键信息：客户称呼 / 所在城市 / 意向车型 / 到店偏好。
+档案已有该信息，不得再问。
 
 ## 九、常见场景回复策略
 
@@ -1584,14 +1584,15 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 
 1. 像真实客服聊天，不要像说明书或机器人。
 2. 语气亲近、自然、直接，不需要过度客套。不要说"非常感谢您的咨询""很高兴为您服务"等客套话。
-3. 先回答问题，再追问引导下一步。
-4. 回复要简短精炼，像微信聊天一样自然。简单的招呼和确认可以很短（几个字即可），回答具体问题时控制在合理范围内，不要长篇大论。不要在一次回复中同时堆叠门店信息、车型清单、预算追问和留资，只挑当前最相关的一个动作。
-5. 不使用长篇解释、不列举多条要点。
-6. 不连续使用多个问号或感叹号。
-7. 表情符号不是必需，每次最多使用一个。
-8. 不使用夸张营销词和强迫性表达。
-9. 不贬低同行，不攻击客户，不与客户争辩。
-10. 不让客户产生"不留下联系方式就不给回答"的感觉。
+3. 回复严格控制在1-2句，最多3句。像微信聊天，一句话能说清的不扩展成长文。
+4. 简单的招呼和确认可以很短（几个字即可），回答具体问题时控制在合理范围内。
+5. 不要在一次回复中同时堆叠门店信息、车型清单、预算追问和留资，只挑当前最相关的一个动作。
+6. 不使用长篇解释、不列举多条要点。
+7. 不连续使用多个问号或感叹号。
+8. 表情符号不是必需，每次最多使用一个。
+9. 不使用夸张营销词和强迫性表达。
+10. 不贬低同行，不攻击客户，不与客户争辩。
+11. 不让客户产生"不留下联系方式就不给回答"的感觉。
 
 ## 十一、严禁内容
 
@@ -3133,38 +3134,30 @@ def _build_contextual_customer_reply(
     fallback_to_human: bool,
 ) -> str:
     if _is_plain_greeting(latest_message) and _has_actionable_requirement(slots):
-        return f"您好，我记得您前面关注的是{_format_requirement_summary(slots)}。您是想继续了解现车和报价，还是更关注车况和检测报告？"
+        return f"您好，您前面关注的是{_format_requirement_summary(slots)}，我帮您核实下。"
 
     if _contains_any(latest_message, ("现车", "现车猫", "库存", "价格", "报价", "价位", "车况", "检测报告", "事故", "水泡", "泡水", "公里数", "里程")):
         subject = _format_natural_requirement_sentence(slots)
-        prefix = f"收到，{subject}。" if subject else "可以的，您是在问现车和价格。"
-        detail_parts = []
-        if _contains_any(latest_message, ("现车", "现车猫", "库存")):
-            detail_parts.append("现车")
-        if _contains_any(latest_message, ("价格", "报价", "价位")):
-            detail_parts.append("价格")
-        if _contains_any(latest_message, ("车况", "事故", "水泡", "泡水", "公里数", "里程", "检测报告")):
-            detail_parts.append("车况和检测报告")
-        detail = "、".join(_dedupe(detail_parts)) or "现车和报价"
+        prefix = f"收到，{subject}，" if subject else "可以的，"
         if slots.get("budget"):
-            return f"{prefix}您这个需求挺明确，我让顾问按这个方向核对一下实时库存和{detail}；有合适的车源，再重点看年份、里程、配置、价格和检测情况。"
-        return f"{prefix}现车和报价要让顾问按当天库存确认，您大概预算范围是多少？我好按年份、配置和车况帮您缩小范围。"
+            return f"{prefix}我让顾问按这个预算核一下实时库存。"
+        return f"{prefix}这个得顾问按当天库存确认。您预算大概多少？"
 
     if _has_actionable_requirement(slots):
-        return f"收到，{_format_requirement_summary(slots)}。您这个需求挺明确，我让顾问按年份、里程、配置、车况和检测报告这个方向核一下。"
+        return f"收到，{_format_requirement_summary(slots)}，我让顾问核一下。"
 
-    return "可以的，我让顾问按当天库存核一下。您先说下大概预算和想看的车型，我好帮您缩小范围。"
+    return "可以的，我让顾问核一下。您预算和车型有偏好吗？"
 
 
 def _build_human_followup_reply(slots: dict[str, Any], *, apology: bool) -> str:
     summary = _format_requirement_summary(slots)
     if apology and summary:
-        return f"不好意思，刚才回复确实没有接住您的问题。您看的是{summary}，我这边不再重复问预算车型，先让顾问按这个条件核现车和价格。"
+        return f"不好意思，您看的是{summary}，我帮您核实。"
     if apology:
-        return "不好意思，刚才回复确实没有接住您的问题。我这边先让顾问核一下现车和价格，避免继续重复问您。"
+        return "不好意思，我帮您核实下。"
     if summary:
-        return f"收到，{summary}。我帮您按这个方向核现车和价格，有合适的再把关键车况信息发您看。"
-    return "我帮您核一下现车和价格，有合适的再把关键车况信息发您看。"
+        return f"收到，{summary}，我帮您核实。"
+    return "我帮您核实下。"
 
 
 def _format_natural_requirement_sentence(slots: dict[str, Any]) -> str:
@@ -3259,23 +3252,9 @@ def _build_specific_model_safe_clarify_reply(latest_message: str) -> str:
                 "宝马": "3系、5系、X3、X5",
                 "奔驰": "C级、E级、GLC",
             }.get(vehicle, "常见车型")
-            return (
-                f"{vehicle}是我们常见经营品牌之一。您更关注 {common_models} 这类车型，还是其他款？"
-                "也可以告诉我预算和用途，我帮您先整理需求。"
-            )
-        if vehicle == "宝马5系":
-            return (
-                "宝马5系属于比较热门的中大型轿车。"
-                "您可以先说下预算、年份、里程或配置偏好，我帮您整理需求，再由顾问为您确认当前车源。"
-            )
-        return (
-            f"{vehicle}属于比较热门的车型。具体车源会实时变化，"
-            "您可以先说下预算、年份或配置偏好，我帮您整理需求，再由顾问确认当前车源。"
-        )
-    return (
-        "这个品牌或车型可以先按预算、年份或配置偏好来筛选。"
-        "具体车源会实时变化，我先帮您整理需求，再由顾问确认当前车源。"
-    )
+            return f"{vehicle}我们有，您更关注 {common_models} 哪款？"
+        return f"{vehicle}我们有，具体车源我帮您核实。"
+    return "这个车型我们有，我帮您核实下。"
 
 
 def _direct_llm_auto_send_allowed(
@@ -3382,8 +3361,8 @@ def sanitize_direct_llm_reply_text(reply_text: str, *, intent: str | None) -> st
 
 def _safe_low_risk_direct_reply(intent: str | None) -> str:
     if intent == "greeting":
-        return "您好，我是小高汽车销售顾问。请问您想了解哪个品牌或车型？也可以告诉我预算和用途，我帮您整理选车方向。"
-    return "您好！我们小高汽车主要经营奔驰、宝马、奥迪等精品二手BBA车型。具体车源会实时变化，您可以告诉我更关注轿车还是SUV，以及大概预算和用途，我先帮您整理选车方向。"
+        return "您好，我是小高汽车销售顾问，您想看哪个品牌或车型？"
+    return "您好，我们主要经营奔驰、宝马、奥迪二手BBA，您想看哪款？"
 
 
 def _extract_vehicle_hint(text: str) -> str | None:

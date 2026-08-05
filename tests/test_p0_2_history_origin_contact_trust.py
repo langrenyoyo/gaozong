@@ -433,7 +433,8 @@ def test_p0a_hard_rules_unblockable():
     assert "hard_false_contact_confirmation" in s
     assert "hard_reask_contact_after_valid" in s
     assert "hard_off_platform_detail_promise" in s
-    assert "hard_unfounded_contact_followup_commitment" in s
+    # 44cd66d: hard_unfounded_contact_followup_commitment 已放开移除
+    assert "hard_unfounded_contact_followup_commitment" not in s
 
 
 def test_p0b_kernel_shadow_startup():
