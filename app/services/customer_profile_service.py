@@ -107,12 +107,30 @@ def upsert_customer_profile(
             db.flush()
         return filtered
     except IntegrityError as exc:
-        # 唯一约束冲突（并发 upsert）→ 回滚 SAVEPOINT，幂等重试读取
+        # 唯一约束冲突（并发 upsert）→ 回滚 SAVEPOINT，重新查询已存在记录做幂等更新
+        # 对齐 webhook R4-R5 模式：冲突后 no_autoflush 重新查归属，同商户→幂等更新
         logger.warning(
             "customer_profile_upsert_conflict merchant_id=%s account_open_id=%s "
             "customer_open_id=%s error_type=%s",
             merchant_id, account_open_id, customer_open_id, type(exc).__name__,
         )
+        try:
+            with db.no_autoflush:
+                existing = db.query(CustomerProfile).filter(
+                    CustomerProfile.merchant_id == merchant_id,
+                    CustomerProfile.account_open_id == account_open_id,
+                    CustomerProfile.customer_open_id == customer_open_id,
+                ).first()
+            if existing:
+                _apply_updates(existing, filtered, source, confirmed)
+                db.flush()
+                return filtered
+        except Exception as retry_exc:
+            logger.warning(
+                "customer_profile_upsert_retry_failed merchant_id=%s account_open_id=%s "
+                "customer_open_id=%s error_type=%s",
+                merchant_id, account_open_id, customer_open_id, type(retry_exc).__name__,
+            )
         return None
     except Exception as exc:
         logger.warning(
