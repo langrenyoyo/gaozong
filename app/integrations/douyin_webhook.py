@@ -1105,6 +1105,31 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                 if contact_result.phone or contact_result.wechat:
                     _dispatch_lead_after_create(db, lead, contact_result, merchant_id)
 
+            # P-0-C 空号追问链路（块4处理顺序）：客户发来新有效联系方式时，
+            # 必须在构建 LLM 上下文之前恢复 contact_state 并取消追问任务
+            if contact_result.phone or contact_result.wechat:
+                try:
+                    from app.services.customer_profile_service import recover_contact_valid
+                    customer_open_id_raw = from_user_id or ""
+                    if customer_open_id_raw:
+                        recovered = recover_contact_valid(
+                            db,
+                            merchant_id=merchant_id,
+                            account_open_id=account_open_id,
+                            customer_open_id=customer_open_id_raw,
+                        )
+                        if recovered:
+                            logger.info(
+                                "contact_invalid_recovered_from_customer_message "
+                                "event_id=%s customer_open_id=%s",
+                                event_id, customer_open_id_raw[:12] + "...",
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "contact_invalid_recover_failed event_id=%s error=%s",
+                        event_id, str(exc)[:200],
+                    )
+
     # 回写 lead_id 到事件
     event.lead_id = lead_id
     db.flush()
@@ -1214,6 +1239,65 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
         customer_open_id=customer_open_id,
         commit=False,
     )
+
+    # P-0-C 空号追问链路（块2 Task2A）：检测人工客服消息是否含联系方式失效/恢复表达
+    _detect_contact_validity_from_outbound(
+        db,
+        merchant_id=merchant_id,
+        account_open_id=account_open_id,
+        customer_open_id=customer_open_id,
+        message_text=normalize_message_text(content),
+        source="douyin_workbench",
+        source_message_id=str(event.id),
+    )
+
+
+def _detect_contact_validity_from_outbound(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str,
+    message_text: str,
+    source: str,
+    source_message_id: str | None,
+) -> None:
+    """检测人工客服出站消息中的联系方式有效性表达（块2 Task2A/2B 共用）。
+
+    - invalid → mark_contact_invalid（状态迁移 + 版本递增）
+    - valid → recover_contact_valid（恢复 + 清除失效字段）
+    - unknown → 不修改状态
+    """
+    if not message_text or not message_text.strip():
+        return
+    if not customer_open_id:
+        return
+    try:
+        from app.services.contact_validity_analyzer import analyze_contact_validity
+        from app.services.customer_profile_service import mark_contact_invalid, recover_contact_valid
+        result = analyze_contact_validity(message_text)
+        if result.status == "invalid":
+            mark_contact_invalid(
+                db,
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                customer_open_id=customer_open_id,
+                reason=result.reason or "other",
+                source=source,
+                source_message_id=source_message_id,
+            )
+        elif result.status == "valid":
+            recover_contact_valid(
+                db,
+                merchant_id=merchant_id,
+                account_open_id=account_open_id,
+                customer_open_id=customer_open_id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "contact_validity_detect_failed merchant_id=%s customer_open_id=%s error=%s",
+            merchant_id, customer_open_id, str(exc)[:200],
+        )
 
 
 def _im_send_msg_manual_takeover_skip_reason(event: DouyinWebhookEvent) -> str | None:

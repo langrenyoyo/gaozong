@@ -1700,6 +1700,17 @@ known_customer.info.field_sources 标注每个字段的来源：
 - preferred_salutation 非空时，回复中必须使用该称呼
 - 未提供时使用 known_customer.info.salutation 或"老板"
 - 客户告知称呼后，后续所有回复都必须使用该称呼，不得变回"老板"
+
+## 联系方式失效被动追问规则（块4）
+known_customer.info.contact_invalid 标注联系方式失效状态：
+- state=INVALID 且 followup_requested_before=false（或无此字段）：
+  回答客户当前问题后，简短提醒"您之前发的联系方式好像不太对，能重新发一遍吗"
+- state=INVALID 且 followup_requested_before=true：
+  正常承接客户消息，不重复完整索要话术，等待客户补充
+- state=None 或不存在：
+  正常回复，不提联系方式失效
+
+客户本轮提供有效联系方式时：不得继续说联系方式无效。
 """
 
 
@@ -2998,6 +3009,8 @@ def _build_known_customer_context(
             "gender": merged.get("gender") or "unknown",
             # P-0-C 阶段3：字段来源标注——confirmed=客户明确说的，inferred=AI推断的（不确定）
             "field_sources": merged.get("field_sources") or {},
+            # P-0-C 空号追问链路（块4被动兜底）：联系方式失效状态注入
+            "contact_invalid": merged.get("contact_invalid"),
         },
         "conversation_task": _build_conversation_task(latest_message, merged),
         "must_not_ask_again": must_not_ask_again,

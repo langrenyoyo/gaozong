@@ -59,6 +59,11 @@ def load_customer_profile(
         "confirmed_fields_json": profile.confirmed_fields_json,
         "inferred_fields_json": profile.inferred_fields_json,
         "source": profile.source,
+        "contact_invalid_reason": profile.contact_invalid_reason,
+        "contact_invalid_at": profile.contact_invalid_at,
+        "contact_invalid_source": profile.contact_invalid_source,
+        "contact_invalid_source_message_id": profile.contact_invalid_source_message_id,
+        "contact_invalid_version": profile.contact_invalid_version,
     }
 
 
@@ -219,6 +224,17 @@ def merge_profile_with_memory(
         merged["contact"] = {"has_contact": persisted.get("contact_state") == "valid"}
     # 称呼
     merged["salutation"] = resolve_salutation(persisted)
+    # P-0-C 空号追问链路：注入联系方式失效状态（块4被动兜底用）
+    invalid_version = persisted.get("contact_invalid_version") or 0
+    if persisted.get("contact_state") == "invalid" and invalid_version > 0:
+        merged["contact_invalid"] = {
+            "state": "INVALID",
+            "reason": persisted.get("contact_invalid_reason"),
+            "version": invalid_version,
+            "invalid_at": str(persisted.get("contact_invalid_at")) if persisted.get("contact_invalid_at") else None,
+        }
+    else:
+        merged["contact_invalid"] = None
     return merged
 
 
@@ -233,3 +249,94 @@ def resolve_salutation(profile: dict[str, Any] | None) -> str:
     if gender == "female":
         return "女士"
     return "老板"  # unknown/male
+
+
+# ---- P-0-C 空号追问链路：状态迁移与恢复（块2）----
+
+def mark_contact_invalid(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str,
+    reason: str,
+    source: str,
+    source_message_id: str | None,
+) -> int | None:
+    """标记联系方式失效——状态迁移 VALID→INVALID，invalid_version 递增。
+
+    只在状态从非 INVALID 迁移到 INVALID 时递增版本号并写入失效信息。
+    如果已经是 INVALID 状态，不重复标记（幂等）。
+
+    返回：新的 invalid_version（如果发生了状态迁移），None（已经是 INVALID 或无档案）。
+    """
+    profile = db.query(CustomerProfile).filter(
+        CustomerProfile.merchant_id == merchant_id,
+        CustomerProfile.account_open_id == account_open_id,
+        CustomerProfile.customer_open_id == customer_open_id,
+    ).first()
+    if not profile:
+        return None
+
+    if profile.contact_state == "invalid":
+        # 已经是失效状态，幂等不重复标记
+        return None
+
+    # 状态迁移：VALID/none/partial → INVALID
+    old_version = profile.contact_invalid_version or 0
+    new_version = old_version + 1
+    profile.contact_state = "invalid"
+    profile.contact_invalid_reason = reason
+    profile.contact_invalid_at = datetime.now()
+    profile.contact_invalid_source = source
+    profile.contact_invalid_source_message_id = source_message_id
+    profile.contact_invalid_version = new_version
+    profile.updated_at = datetime.now()
+    db.flush()
+    logger.info(
+        "contact_invalid_marked merchant_id=%s account_open_id=%s customer_open_id=%s "
+        "version=%s reason=%s source=%s",
+        merchant_id, account_open_id, customer_open_id, new_version, reason, source,
+    )
+    return new_version
+
+
+def recover_contact_valid(
+    db: Session,
+    *,
+    merchant_id: str,
+    account_open_id: str,
+    customer_open_id: str,
+) -> bool:
+    """恢复联系方式为有效——新有效联系方式出现时调用。
+
+    清除失效状态字段，contact_state 恢复为 valid。
+    原始失效记录已在审计中保留，不删除。
+
+    返回：True（如果发生了恢复），False（已经是 valid 或无档案）。
+    """
+    profile = db.query(CustomerProfile).filter(
+        CustomerProfile.merchant_id == merchant_id,
+        CustomerProfile.account_open_id == account_open_id,
+        CustomerProfile.customer_open_id == customer_open_id,
+    ).first()
+    if not profile:
+        return False
+
+    if profile.contact_state != "invalid":
+        return False
+
+    profile.contact_state = "valid"
+    profile.contact_invalid_reason = None
+    profile.contact_invalid_at = None
+    profile.contact_invalid_source = None
+    profile.contact_invalid_source_message_id = None
+    # invalid_version 保留（用于审计追溯），不归零
+    profile.updated_at = datetime.now()
+    db.flush()
+    logger.info(
+        "contact_invalid_recovered merchant_id=%s account_open_id=%s customer_open_id=%s "
+        "version=%s（保留审计）",
+        merchant_id, account_open_id, customer_open_id, profile.contact_invalid_version,
+    )
+    return True

@@ -1774,11 +1774,17 @@ class CustomerProfile(Base):
     budget = Column(String(100), comment="预算")
     city = Column(String(100), comment="城市")
     contact_state = Column(String(16), nullable=False, default="none",
-                           comment="联系方式状态 none/partial/valid（只读镜像）")
+                           comment="联系方式状态 none/partial/valid/invalid（只读镜像）")
     # 事实确认 vs LLM 推断分层
     confirmed_fields_json = Column(_JSONStringJSONB(), comment="客户明确确认的字段集 JSON")
     inferred_fields_json = Column(_JSONStringJSONB(), comment="LLM 推断的字段集 JSON")
     source = Column(String(32), nullable=False, default="auto_reply",
                     comment="写入来源 auto_reply/preview/training")
+    # P-0-C 空号追问链路：联系方式失效状态（块2）
+    contact_invalid_reason = Column(String(64), comment="联系方式失效原因 empty_number/unreachable/wechat_add_failed/wrong_number/customer_denied/other")
+    contact_invalid_at = Column(DateTime, comment="失效时间")
+    contact_invalid_source = Column(String(32), comment="失效来源 douyin_workbench/wechat_reply")
+    contact_invalid_source_message_id = Column(String(255), comment="触发失效的消息 ID")
+    contact_invalid_version = Column(Integer, nullable=False, default=0, comment="失效版本号，每次VALID→INVALID递增")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

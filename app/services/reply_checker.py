@@ -44,6 +44,36 @@ def record_manual_reply(db: Session, lead_id: int, staff_id: int,
     if lead:
         lead.status = "replied" if is_effective else "assigned"  # 无效回复回到 assigned
 
+    # P-0-C 空号追问链路（块2 Task2B）：用统一有效性分析检测联系方式失效/恢复
+    if lead and lead.account_open_id:
+        try:
+            from app.services.contact_validity_analyzer import analyze_contact_validity
+            from app.services.customer_profile_service import mark_contact_invalid, recover_contact_valid
+            result = analyze_contact_validity(reply_content)
+            # 从 lead 解析 customer_open_id（source_id 字段存储客户 open_id）
+            customer_open_id = lead.source_id or ""
+            if customer_open_id:
+                if result.status == "invalid":
+                    mark_contact_invalid(
+                        db,
+                        merchant_id=lead.merchant_id or "",
+                        account_open_id=lead.account_open_id,
+                        customer_open_id=customer_open_id,
+                        reason=result.reason or "other",
+                        source="wechat_reply",
+                        source_message_id=str(check.id),
+                    )
+                elif result.status == "valid":
+                    recover_contact_valid(
+                        db,
+                        merchant_id=lead.merchant_id or "",
+                        account_open_id=lead.account_open_id,
+                        customer_open_id=customer_open_id,
+                    )
+        except Exception:
+            # 失效检测失败不阻断回复记录
+            pass
+
     db.commit()
     db.refresh(check)
     return check
