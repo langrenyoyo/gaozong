@@ -150,9 +150,11 @@ def _apply_updates(
     confirmed: bool,
 ) -> None:
     """应用更新到 profile 对象（confirmed 覆盖 inferred，inferred 不覆盖 confirmed）。"""
-    # 加载已有字段集
-    confirmed_set = profile.confirmed_fields_json or {}
-    inferred_set = profile.inferred_fields_json or {}
+    # 加载已有字段集（_JSONStringJSONB 从 DB 读回是 JSON 字符串，需 json.loads 解包）
+    confirmed_raw = profile.confirmed_fields_json
+    inferred_raw = profile.inferred_fields_json
+    confirmed_set = json.loads(confirmed_raw) if isinstance(confirmed_raw, str) else (confirmed_raw or {})
+    inferred_set = json.loads(inferred_raw) if isinstance(inferred_raw, str) else (inferred_raw or {})
 
     for field, value in updates.items():
         if field not in _PROFILE_FIELDS:
