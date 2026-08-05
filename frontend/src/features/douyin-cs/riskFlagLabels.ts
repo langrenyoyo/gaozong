@@ -70,6 +70,11 @@ export const BLOCK_REASON_LABELS: Record<string, string> = {
   // real_send gate
   real_send_gate_blocked: "真实发送门禁未通过",
   manual_takeover_blocked: "人工接管中，已阻断",
+  // latest_message gate（发送前校验最新消息状态）
+  latest_message_changed: "客户已发新消息，旧回复不再发送",
+  latest_message_not_customer: "最新消息不是客户消息",
+  outbound_after_trigger: "触发后已有人工客服回复",
+  send_context_unavailable: "发送上下文不可用",
   // format
   format_invalid: "回复内容格式无效",
 };
