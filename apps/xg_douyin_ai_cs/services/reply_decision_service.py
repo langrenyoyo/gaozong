@@ -1632,7 +1632,17 @@ JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、ma
 - 无法判断的字段填 null
 - update_reason 简述推断依据（如"客户明确提到2021款奥迪A6"）
 字段：gender（male/female/unknown）、preferred_salutation（客户要求称呼）、intent_car（意向车型）、car_year（年份）、budget（预算）、city（城市）、update_reason（推断依据）
-称呼规则：gender=unknown/male→"老板"，gender=female→"女士"，preferred_salutation 非空用客户要求称呼。"""
+
+称呼规则（重要）：
+- gender=unknown/male→默认"老板"，gender=female→"女士"
+- 客户告知名字或称呼时（如"喊我阿森""叫我小陈"），preferred_salutation 填加"哥/姐"后的称呼：
+  - 判断为男性或不确定：名字+哥（如"阿森"→"森哥"，"小陈"→"陈哥"）
+  - 判断为女性：名字+姐（如"小美"→"美姐"）
+  - 客户明确要求特定称呼（如"喊我张总"）直接用该称呼
+- preferred_salutation 非空时，回复中必须使用该称呼
+- 未提供时使用 known_customer.info.salutation 或"老板"
+- 客户告知称呼后，后续所有回复都必须使用该称呼，不得变回"老板"
+"""
 
 
 def _build_llm_history(history: object) -> list[dict[str, str]]:
