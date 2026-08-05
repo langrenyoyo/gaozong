@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.auth.context import RequestContext
+from app.auth.dependencies import get_request_context_required
 from app.database import SessionLocal
 from app.services.test_customer_reset_service import (
     is_reset_enabled,
@@ -36,14 +37,13 @@ class ResetRequest(BaseModel):
     confirm: bool = Field(..., description="必须为 true，二次确认")
 
 
-def _require_enabled_and_admin(request: Request) -> RequestContext:
+def _require_enabled_and_admin(context: RequestContext) -> RequestContext:
     """检查重置开关 + 管理员权限。"""
     if not is_reset_enabled():
         raise HTTPException(
             status_code=403,
             detail={"code": "TEST_CUSTOMER_RESET_DISABLED", "message": "测试客户重置未开启（TEST_CUSTOMER_RESET_ENABLED=false）"},
         )
-    context = RequestContext.from_request(request)
     if not context.has_permission("auto_wechat:admin:autoreply"):
         raise HTTPException(
             status_code=403,
@@ -53,9 +53,12 @@ def _require_enabled_and_admin(request: Request) -> RequestContext:
 
 
 @router.post("/session")
-def reset_session(request: Request, body: ResetRequest):
+def reset_session(
+    body: ResetRequest,
+    context: RequestContext = Depends(get_request_context_required),
+):
     """A. 重置当前会话上下文：清除未完成的 run + 重置 autopilot 状态。保留客户档案+联系方式。"""
-    context = _require_enabled_and_admin(request)
+    context = _require_enabled_and_admin(context)
     if not body.confirm:
         raise HTTPException(status_code=400, detail={"code": "CONFIRM_REQUIRED", "message": "confirm 必须为 true"})
 
@@ -82,9 +85,12 @@ def reset_session(request: Request, body: ResetRequest):
 
 
 @router.post("/requirements")
-def reset_requirements(request: Request, body: ResetRequest):
+def reset_requirements(
+    body: ResetRequest,
+    context: RequestContext = Depends(get_request_context_required),
+):
     """B. 重置客户需求事实：清除 intent_car/budget/car_year/city。保留联系方式+称呼+性别。"""
-    context = _require_enabled_and_admin(request)
+    context = _require_enabled_and_admin(context)
     if not body.confirm:
         raise HTTPException(status_code=400, detail={"code": "CONFIRM_REQUIRED", "message": "confirm 必须为 true"})
 
@@ -111,9 +117,12 @@ def reset_requirements(request: Request, body: ResetRequest):
 
 
 @router.post("/full")
-def reset_full(request: Request, body: ResetRequest):
+def reset_full(
+    body: ResetRequest,
+    context: RequestContext = Depends(get_request_context_required),
+):
     """C. 完全重置测试客户：删除 customer_profiles + 重置 lead 联系方式字段。"""
-    context = _require_enabled_and_admin(request)
+    context = _require_enabled_and_admin(context)
     if not body.confirm:
         raise HTTPException(status_code=400, detail={"code": "CONFIRM_REQUIRED", "message": "confirm 必须为 true"})
 
