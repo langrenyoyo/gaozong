@@ -163,7 +163,7 @@ def _reset_full(
     db.query(DouyinLead).filter(
         DouyinLead.merchant_id == merchant_id,
         DouyinLead.account_open_id == account_open_id,
-        DouyinLead.customer_open_id == customer_open_id,
+        DouyinLead.source_id == customer_open_id,
     ).update({
         "extracted_phone": None,
         "extracted_wechat": None,
@@ -209,7 +209,7 @@ def _snapshot(
     lead = db.query(DouyinLead).filter(
         DouyinLead.merchant_id == merchant_id,
         DouyinLead.account_open_id == account_open_id,
-        DouyinLead.customer_open_id == customer_open_id,
+        DouyinLead.source_id == customer_open_id,
     ).first()
     snapshot["lead_has_contact"] = bool(lead and (lead.extracted_phone or lead.extracted_wechat))
     return snapshot
