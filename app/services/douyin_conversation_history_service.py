@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,8 @@ from app.services.contact_extractor import (
 )
 from app.services.douyin_customer_profile_deriver import derive_profile_fields_from_messages
 from app.services.douyin_workbench_conversation_service import get_conversation_detail
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -37,11 +40,13 @@ def build_reply_conversation_context(
     conversation_key: str,
     latest_message: str,
     limit: int = 10,
+    customer_open_id: str | None = None,
 ) -> ReplyConversationContext:
     """组装回复链路共用的脱敏历史与可信客户记忆。
 
     不得使用空 merchant_id 查询资源：需要读取会话/线索时必须先确认可信商户上下文，
     否则显式阻断，不执行跨商户查询。
+    P-0-C：读取持久化顾客档案（customer_profiles），DB 档案优先合并到 customer_memory。
     """
     if not account_open_id or not conversation_key:
         return ReplyConversationContext(
@@ -84,15 +89,30 @@ def build_reply_conversation_context(
         {**item, "content": mask_contacts_in_text(item["content"])}
         for item in history_items
     ]
+    # P-0-C：读取持久化顾客档案，DB 档案优先合并到 customer_memory
+    customer_memory = _build_customer_memory(
+        latest_message=latest_message,
+        profile=profile,
+        lead=lead,
+        items=items,
+    )
+    if customer_open_id and merchant_id and account_open_id:
+        try:
+            from app.services.customer_profile_service import load_customer_profile, merge_profile_with_memory
+            persisted_profile = load_customer_profile(
+                db, merchant_id=merchant_id, account_open_id=account_open_id,
+                customer_open_id=customer_open_id,
+            )
+            customer_memory = merge_profile_with_memory(persisted_profile, customer_memory)
+        except Exception as exc:
+            _logger.warning(
+                "customer_profile_load_failed account_open_id=%s customer_open_id=%s error=%s",
+                account_open_id, customer_open_id, str(exc)[:200],
+            )
     return ReplyConversationContext(
         latest_message=mask_contacts_in_text(latest_message),
         conversation_history=masked_history,
-        customer_memory=_build_customer_memory(
-            latest_message=latest_message,
-            profile=profile,
-            lead=lead,
-            items=items,
-        ),
+        customer_memory=customer_memory,
         lead=lead,
     )
 

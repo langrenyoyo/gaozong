@@ -270,6 +270,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             conversation_key=conversation_short_id,
             latest_message=latest_message,
             limit=10,
+            customer_open_id=customer_open_id,
         )
     except Exception as exc:
         timing["conversation_context_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
@@ -432,6 +433,26 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             gate_results={"history": history_gate, "agent": agent_gate, "llm": llm_gate},
         )
         return
+
+    # P-0-C：持久化 LLM 推断的顾客档案（不阻断主流程）
+    _profile_update = upstream_result.get("customer_profile_update")
+    if isinstance(_profile_update, dict) and _profile_update and customer_open_id:
+        try:
+            from app.services.customer_profile_service import upsert_customer_profile
+            upsert_customer_profile(
+                db,
+                merchant_id=binding.merchant_id or "",
+                account_open_id=account_open_id,
+                customer_open_id=customer_open_id,
+                updates=_profile_update,
+                source="auto_reply",
+                confirmed=False,  # LLM 推断
+            )
+        except Exception as exc:
+            logger.warning(
+                "customer_profile_upsert_failed run_id=%s error_type=%s error=%s",
+                run.id, type(exc).__name__, str(exc)[:200],
+            )
 
     # post_llm + sanitize
     t0 = _time.perf_counter()

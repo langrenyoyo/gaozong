@@ -1743,3 +1743,42 @@ class AiEditJobMaterial(Base):
     source_start = Column(Float, comment="源片段起始秒")
     source_end = Column(Float, comment="源片段结束秒")
     created_at = Column(DateTime, default=datetime.now)
+
+
+class CustomerProfile(Base):
+    """顾客档案：LLM 推断 + 客户事实确认的持久化档案（P-0-C）。
+
+    解决 AI 跨会话遗忘 + 重复收集已确认信息的问题。
+    隔离：merchant_id + account_open_id + customer_open_id 唯一约束。
+    联系方式状态（contact_state）为只读镜像，写入走 P0.2 contact_state 链路。
+    """
+    __tablename__ = "customer_profiles"
+    __table_args__ = (
+        Index("idx_customer_profiles_merchant", "merchant_id"),
+        Index("idx_customer_profiles_account", "account_open_id"),
+        Index("idx_customer_profiles_customer", "customer_open_id"),
+        UniqueConstraint("merchant_id", "account_open_id", "customer_open_id",
+                         name="uq_customer_profiles_scope"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="商户隔离硬条件")
+    account_open_id = Column(String(255), nullable=False, comment="企业号隔离")
+    customer_open_id = Column(String(255), nullable=False, comment="客户隔离")
+    # 档案字段
+    gender = Column(String(16), nullable=False, default="unknown",
+                    comment="性别 male/female/unknown，默认 unknown→称呼老板")
+    preferred_salutation = Column(String(32), comment="客户要求称呼")
+    intent_car = Column(String(100), comment="意向车型")
+    car_year = Column(String(100), comment="年份")
+    budget = Column(String(100), comment="预算")
+    city = Column(String(100), comment="城市")
+    contact_state = Column(String(16), nullable=False, default="none",
+                           comment="联系方式状态 none/partial/valid（只读镜像）")
+    # 事实确认 vs LLM 推断分层
+    confirmed_fields_json = Column(_JSONStringJSONB(), comment="客户明确确认的字段集 JSON")
+    inferred_fields_json = Column(_JSONStringJSONB(), comment="LLM 推断的字段集 JSON")
+    source = Column(String(32), nullable=False, default="auto_reply",
+                    comment="写入来源 auto_reply/preview/training")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

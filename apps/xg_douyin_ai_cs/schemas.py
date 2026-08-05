@@ -219,6 +219,8 @@ class ReplySuggestionResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
     fallback_reason: str | None = None
+    # P-0-C：LLM 推断的顾客档案更新（性别/称呼/车型/年份/预算/城市），9000 持久化
+    customer_profile_update: dict | None = None
 
 
 # ========== Phase 8 Task 4：每日销售总结摘要 ==========
@@ -533,3 +535,5 @@ class ReplySuggestionResponseV2(BaseModel):
     provider: str | None = None
     model: str | None = None
     fallback_reason: str | None = None
+    # P-0-C：LLM 推断的顾客档案更新
+    customer_profile_update: dict | None = None
