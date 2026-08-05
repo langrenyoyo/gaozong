@@ -436,10 +436,14 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
 
     # P-0-C：持久化 LLM 推断的顾客档案（不阻断主流程）
     _profile_update = upstream_result.get("customer_profile_update")
+    logger.info(
+        "customer_profile_update_received run_id=%s has_update=%s customer_open_id=%s",
+        run.id, bool(_profile_update), customer_open_id,
+    )
     if isinstance(_profile_update, dict) and _profile_update and customer_open_id:
         try:
             from app.services.customer_profile_service import upsert_customer_profile
-            upsert_customer_profile(
+            _upserted = upsert_customer_profile(
                 db,
                 merchant_id=binding.merchant_id or "",
                 account_open_id=account_open_id,
@@ -447,6 +451,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
                 updates=_profile_update,
                 source="auto_reply",
                 confirmed=False,  # LLM 推断
+            )
+            logger.info(
+                "customer_profile_upsert_done run_id=%s upserted=%s",
+                run.id, bool(_upserted),
             )
         except Exception as exc:
             logger.warning(
