@@ -1205,7 +1205,22 @@ def _build_llm_reply(
     off_platform_promise = _off_platform_promise_violation(reply_text)
     # 无条件联系承诺检测：非 VALID 态下无条件承诺"安排/稍后联系您"
     unfounded_followup = _unfounded_contact_followup_commitment_violation(contact_state, reply_text)
-    if reasking_known or missing_phone_goal or contact_violation or off_platform_promise or unfounded_followup:
+    # 后置校验：联系方式已确认但回复冗余提及"您之前留过联系方式"等模板话术
+    # 客户本轮未询问联系方式时，不应主动提及——触发 retry 重生成
+    _redundant_contact_phrases = (
+        "您之前留过联系方式", "之前留的联系方式", "您留的联系方式我这边有",
+        "已经有您的联系方式", "您之前留的联系方式", "您已经留过联系方式",
+    )
+    _customer_asking_contact = _contains_any(
+        str(request.latest_message or ""),
+        ("联系方式", "留过", "留了", "怎么联系", "联系我", "你那边有我"),
+    )
+    redundant_contact_mention = (
+        contact_state == "VALID"
+        and not _customer_asking_contact
+        and _contains_any(reply_text, _redundant_contact_phrases)
+    )
+    if reasking_known or missing_phone_goal or contact_violation or off_platform_promise or unfounded_followup or redundant_contact_mention:
         retry_messages = _build_llm_combined_retry_messages(
             messages,
             reasking_known=reasking_known,
@@ -1213,6 +1228,7 @@ def _build_llm_reply(
             contact_violation=contact_violation,
             off_platform_promise=off_platform_promise,
             unfounded_followup=unfounded_followup,
+            redundant_contact_mention=redundant_contact_mention,
             bad_reply=reply_text,
         )
         try:
@@ -1493,9 +1509,19 @@ must_not_ask_again 列出的信息，不得重复询问。
 不得主动使用以下表达：留个号码、留个电话、留个号、发我手机号、加个人号、加私人联系方式。
 AI 引导留资时统一说"留个联系方式"，不主动提"绿泡泡""v""微信""手机号"等具体形态。
 客户主动提到绿泡泡/手机号等时，回复中仍优先统一表达为"联系方式"。
-客户已经留下完整联系方式后：不得再次索要；不得在回复中完整重复客户的联系方式；
-确认已经收到联系方式是允许的，但不是必须出现的句式——不必每次都说"收到您的联系方式"；
-确认收到后，直接说安排工作人员跟进，不追问称呼/城市/车型等画像信息。
+
+### 已确认联系方式的使用规则
+当 contact_state=VALID 时：
+1. 不得再次索要联系方式。
+2. 已确认的联系方式默认作为后台事实静默使用，不主动在每轮回复中提及。
+3. 禁止重复使用"您之前留过联系方式""已经有您的联系方式""您留的联系方式我这边有"等模板化表达。
+4. 只有以下情况可以提及联系方式：
+   - 客户主动询问是否已经留过联系方式；
+   - 客户询问销售如何联系自己；
+   - 客户明确要求安排联系，且系统需要确认承接方式；
+   - 为纠正客户对联系状态的误解而必须说明。
+5. 即使允许提及，也只说明一次，不得连续多轮重复。
+6. 回复应聚焦回答客户当前问题，不机械附加"联系方式"相关话术。
 
 ### 联系方式不完整处理规则
 客户发送了疑似不完整的联系方式（如只有 7-10 位数字）时：
@@ -1861,10 +1887,11 @@ def _build_llm_combined_retry_messages(
     contact_violation: str | None = None,
     off_platform_promise: str | None = None,
     unfounded_followup: str | None = None,
+    redundant_contact_mention: bool = False,
     bad_reply: str,
 ) -> list[dict]:
     """阶段四合并纠正：首调后一次性检查"重复询问已知信息"+"遗漏手机号目标"+
-    "联系方式语义违规"+"资料报价承诺违规"+"无条件联系承诺违规"，
+    "联系方式语义违规"+"资料报价承诺违规"+"无条件联系承诺违规"+"冗余联系方式提及"，
     命中任一时最多追加一次合并纠正调用（计量阶段 retry_combined）。
 
     单份客户上下文合同：首条 user 消息已含 known_customer，纠正消息只含触发原因、坏回复和纠正指令，
@@ -1883,6 +1910,8 @@ def _build_llm_combined_retry_messages(
         reasons.append("上一版回复承诺把资料/报价/检测报告等内容发到客户手机或绿泡泡，平台内不得承诺直接发送")
     if unfounded_followup:
         reasons.append("客户尚未提供有效联系方式，上一版回复却无条件承诺安排同事联系，应改为引导客户先留联系方式")
+    if redundant_contact_mention:
+        reasons.append("联系方式已确认，但客户本轮未询问联系方式，请静默使用该事实，不要主动提及客户以前留过联系方式")
     retry_payload = {
         "retry_reason": "；".join(reasons),
         "bad_reply": bad_reply,
