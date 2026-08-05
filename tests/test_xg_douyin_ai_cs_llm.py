@@ -1133,7 +1133,7 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
         return {
             "reply_text": json.dumps(
                 {
-                    "reply_text": "可以的，我按您30万左右看20/21款530Li这个条件让顾问核现车，重点看检测报告、事故水泡和报价。您方便留个手机号吗？",
+                    "reply_text": "可以的，我按您30万左右看20/21款530Li这个条件让顾问核现车，重点看检测报告、事故水泡和报价。您方便留个联系方式吗？",
                     "intent": "consult_inventory",
                     "lead_level": "high",
                     "tags": [],
@@ -1161,7 +1161,7 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
             "agent_config": {
                 "agent_id": "agent-phone",
                 "agent_name": "留资智能体",
-                "system_prompt": "每次回复都要自然引导客户留下手机号，检测报告、报价和车源资料通过手机发送；绝不说加微信。",
+                "system_prompt": "每次回复都要自然引导客户留下联系方式，检测报告、报价和车源资料通过手机发送；绝不说加绿泡泡。",
                 "prompt": "每次回复都要自然引导客户留下手机号。",
                 "status": "active",
             },
@@ -1174,14 +1174,14 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     data = response.json()
-    assert "手机号" in data["reply_text"] or "留个电话" in data["reply_text"]
+    assert "联系方式" in data["reply_text"]
     assert "检测报告" in data["reply_text"]
     assert "报价" in data["reply_text"] or "价格" in data["reply_text"]
     assert "微信" not in data["reply_text"]
     assert "预算范围是多少" not in data["reply_text"]
     assert "想看什么车型" not in data["reply_text"]
-    assert "每次回复都要自然引导客户留下手机号" in seen["system_prompt"]
-    assert "Direct LLM 不允许主动索要微信、电话、手机号" not in seen["system_prompt"]
+    assert "引导客户留下联系方式" in seen["system_prompt"]
+    assert "Direct LLM 不允许主动索要绿泡泡、☎️" not in seen["system_prompt"]
     assert seen["payload"]["agent"]["lead_capture_goal"]["enabled"] is True
 
 
@@ -1252,7 +1252,7 @@ def test_bound_agent_phone_goal_retries_when_llm_omits_phone(tmp_path, monkeypat
     assert response.status_code == 200
     assert calls["count"] == 2
     text = response.json()["reply_text"]
-    assert "手机号" in text or "留个电话" in text
+    assert "联系方式" in text
     assert "检测报告" in text
     assert [item["tokens"] for item in reports] == [19, 7]
     assert [item["llm_call_stage"] for item in reports] == [
@@ -1294,7 +1294,7 @@ def test_bound_agent_phone_goal_fallback_uses_phone_when_llm_fails(tmp_path, mon
 
     assert response.status_code == 200
     text = response.json()["reply_text"]
-    assert "手机号" in text or "留个电话" in text
+    assert "联系方式" in text
     assert "检测报告" in text or "报价" in text
     assert "AI 模型调用失败" not in text
     assert "您可以先说下预算" not in text
@@ -1877,7 +1877,7 @@ def test_reply_suggestion_prompt_includes_known_contact_info(
     assert "qazwkp152" not in serialized
     assert "15057903797" not in serialized
     assert "联系方式" in seen["payload"]["must_not_ask_again"]
-    assert "手机号、微信号" in seen["system_prompt"]
+    assert "联系方式" in seen["system_prompt"]
 
 
 def test_reply_suggestion_uses_history_slots_when_latest_only_mentions_detection(
