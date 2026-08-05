@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -169,8 +170,9 @@ def _apply_updates(
             if field not in confirmed_set:
                 setattr(profile, field, value_str)
 
-    profile.confirmed_fields_json = confirmed_set or None
-    profile.inferred_fields_json = inferred_set or None
+    # _JSONStringJSONB 期望 JSON 字符串（str），不是 dict
+    profile.confirmed_fields_json = json.dumps(confirmed_set, ensure_ascii=False) if confirmed_set else None
+    profile.inferred_fields_json = json.dumps(inferred_set, ensure_ascii=False) if inferred_set else None
     profile.source = source
     profile.updated_at = datetime.now()
 
