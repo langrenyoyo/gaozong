@@ -435,23 +435,49 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         return
 
     # P-0-C：持久化 LLM 推断的顾客档案（不阻断主流程）
+    # 代码层校验：只写入客户当前消息中能找到明确依据的字段（confirmed），
+    # LLM 编造的字段（消息中找不到）丢弃不写——防止"19款""广州"等编造事实落库
     _profile_update = upstream_result.get("customer_profile_update")
     if isinstance(_profile_update, dict) and _profile_update and customer_open_id:
         try:
             from app.services.customer_profile_service import upsert_customer_profile
-            _upserted = upsert_customer_profile(
-                db,
-                merchant_id=binding.merchant_id or "",
-                account_open_id=account_open_id,
-                customer_open_id=customer_open_id,
-                updates=_profile_update,
-                source="auto_reply",
-                confirmed=False,  # LLM 推断
-            )
-            logger.info(
-                "customer_profile_upsert run_id=%s upserted=%s",
-                run.id, bool(_upserted),
-            )
+            _customer_msg = str(latest_message or "")
+            _verified_updates = {}
+            for _field, _value in _profile_update.items():
+                if _field in ("update_reason",):
+                    continue
+                _val_str = str(_value or "").strip()
+                if not _val_str or _val_str == "null":
+                    continue
+                # 客户当前消息中能找到该值的明确依据 → confirmed
+                # 否则不写入（LLM 编造，如客户没说"19款"却编造写入）
+                # 正向匹配（值在客户消息中）+ 反向匹配（客户消息是值的子串，兼容"广州"→"广州市"）
+                # 反向匹配加长度约束：值不超过客户消息的1.5倍，防 LLM 在短消息上大幅扩展编造
+                _val_len = len(_val_str)
+                _msg_len = len(_customer_msg)
+                _forward = _val_str in _customer_msg
+                _reverse = _customer_msg in _val_str and _msg_len > 0 and _val_len <= _msg_len * 1.5
+                if _forward or _reverse:
+                    _verified_updates[_field] = _value
+                else:
+                    logger.info(
+                        "customer_profile_skipped_unverified run_id=%s field=%s value=%s reason=not_in_customer_message",
+                        run.id, _field, _val_str[:50],
+                    )
+            if _verified_updates:
+                _upserted = upsert_customer_profile(
+                    db,
+                    merchant_id=binding.merchant_id or "",
+                    account_open_id=account_open_id,
+                    customer_open_id=customer_open_id,
+                    updates=_verified_updates,
+                    source="auto_reply",
+                    confirmed=True,  # 代码层校验通过=客户明确说的
+                )
+                logger.info(
+                    "customer_profile_upsert run_id=%s upserted=%s verified_fields=%s",
+                    run.id, bool(_upserted), list(_verified_updates.keys()),
+                )
         except Exception as exc:
             logger.warning(
                 "customer_profile_upsert_failed run_id=%s error_type=%s error=%s",
