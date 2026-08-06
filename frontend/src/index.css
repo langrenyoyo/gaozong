@@ -4,14 +4,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-@font-face {
-  font-family: "Barlow-Regular_2";
-  src: url("/fonts/Barlow-Regular_2.ttf") format("truetype");
-  font-weight: normal;
-  font-style: normal;
-  font-display: swap;
-}
-
 @theme inline {
   --font-sans: var(--fontSans);
   --radius-sm: calc(var(--radius) - 4px);
@@ -68,7 +60,7 @@
 }
 
 :root {
-  --fontSans: "Outfit", "PingFang SC", "Microsoft YaHei", "Barlow-Regular_2", sans-serif;
+  --fontSans: "Outfit", "PingFang SC", "Microsoft YaHei", sans-serif;
   --radius: 0.5rem;
 
   --background: #f4f6f8;
