@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2Icon,
   ExternalLinkIcon,
@@ -18,26 +18,29 @@ import type { Lead, WebhookEvent } from "../api/types";
 import { apiDateTimeMs, formatDateTimeLocal } from "../lib/datetime";
 import { userFacingError } from "../lib/userFacingError";
 import type { ChatMessage, Contact, TagType } from "../types";
-import ComputeCenter from "../features/compute/pages/ComputeCenter";
-import SuperComputeConfig from "../features/compute/pages/SuperComputeConfig";
-import MaterialLibrary from "../features/ai-edit/pages/MaterialLibrary";
-import LasRemixWorkbench from "../features/ai-edit/pages/LasRemixWorkbench";
-import LeadsModulePage from "../features/leads/pages/LeadsModulePage";
-import WechatAgent from "../features/wechat-assistant/pages/WechatAgent";
 import type { WechatAgentTab } from "../features/wechat-assistant/pages/WechatAgent";
 import { checkLocalAgentHealth, fetchLocalAgentRuntimeStatus } from "../features/wechat-assistant/api";
 import type { LocalAgentRuntimeStatus } from "../features/wechat-assistant/types";
-import DailyReports from "../features/wechat-assistant/pages/DailyReports";
-import DouyinAiCsWorkbenchPage from "../features/douyin-cs/pages/DouyinAiCsWorkbenchPage";
-import DouyinAutoReplyRunsPage from "../features/douyin-cs/pages/DouyinAutoReplyRunsPage";
 import { AppUser } from "../App";
-import SuperMerchantAgent from "../features/agents/pages/SuperMerchantAgent";
-import SuperAiReplyRecords from "./SuperAiReplyRecords";
 import { getPendingReviewCount } from "../features/douyin-cs/api";
-import AdminAutoreplyRolloutPage from "./AdminAutoreplyRolloutPage";
-import AdminReturnVisitsPage from "./AdminReturnVisitsPage";
-import SuperForbiddenWords from "./SuperForbiddenWords";
 import { filterCapabilityNavCenters, isAdminLike, isMockAuthUser } from "../features/capabilities";
+
+// 页面级组件懒加载（任务 3.5）：首屏只加载当前 nav 页面，其余延迟加载。
+// 共享组件（ChatPanel/ContactInfo/ContactList/SideNav）保持静态 import，避免重复打包。
+const ComputeCenter = lazy(() => import("../features/compute/pages/ComputeCenter"));
+const SuperComputeConfig = lazy(() => import("../features/compute/pages/SuperComputeConfig"));
+const MaterialLibrary = lazy(() => import("../features/ai-edit/pages/MaterialLibrary"));
+const LasRemixWorkbench = lazy(() => import("../features/ai-edit/pages/LasRemixWorkbench"));
+const LeadsModulePage = lazy(() => import("../features/leads/pages/LeadsModulePage"));
+const WechatAgent = lazy(() => import("../features/wechat-assistant/pages/WechatAgent"));
+const DailyReports = lazy(() => import("../features/wechat-assistant/pages/DailyReports"));
+const DouyinAiCsWorkbenchPage = lazy(() => import("../features/douyin-cs/pages/DouyinAiCsWorkbenchPage"));
+const DouyinAutoReplyRunsPage = lazy(() => import("../features/douyin-cs/pages/DouyinAutoReplyRunsPage"));
+const SuperMerchantAgent = lazy(() => import("../features/agents/pages/SuperMerchantAgent"));
+const SuperAiReplyRecords = lazy(() => import("./SuperAiReplyRecords"));
+const AdminAutoreplyRolloutPage = lazy(() => import("./AdminAutoreplyRolloutPage"));
+const AdminReturnVisitsPage = lazy(() => import("./AdminReturnVisitsPage"));
+const SuperForbiddenWords = lazy(() => import("./SuperForbiddenWords"));
 
 interface DouyinAccount {
   name: string;
@@ -854,71 +857,80 @@ export default function Index({
           localAgentVersion={localAgentRuntimeStatus?.version || null}
           user={user}
         />
-        {isAdminSectionActive ? (
-          superActiveNav === "ai-reply-records" ? (
-            <SuperAiReplyRecords />
-          ) : superActiveNav === "admin-autoreply-rollout" ? (
-            <AdminAutoreplyRolloutPage />
-          ) : superActiveNav === "admin-return-visits" ? (
-            <AdminReturnVisitsPage />
-          ) : superActiveNav === "admin-forbidden-words" ? (
-            <SuperForbiddenWords />
-          ) : superActiveNav === "admin-compute-config" ? (
-            <SuperComputeConfig />
-          ) : superActiveNav === "admin-newcar-owned" ? (
-            <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
-          ) : superActiveNav === "admin-no-local-feature" ? (
-            <AdminPlaceholder message="暂无可访问管理员功能" />
-          ) : (
+        <Suspense
+          fallback={
+            <div className="grid h-full place-items-center bg-[#f3f6fa]">
+              <RefreshCwIcon size={24} className="animate-spin text-[#8b95a6]" />
+            </div>
+          }
+        >
+          {isAdminSectionActive ? (
+            superActiveNav === "ai-reply-records" ? (
+              <SuperAiReplyRecords />
+            ) : superActiveNav === "admin-autoreply-rollout" ? (
+              <AdminAutoreplyRolloutPage />
+            ) : superActiveNav === "admin-return-visits" ? (
+              <AdminReturnVisitsPage />
+            ) : superActiveNav === "admin-forbidden-words" ? (
+              <SuperForbiddenWords />
+            ) : superActiveNav === "admin-compute-config" ? (
+              <SuperComputeConfig />
+            ) : superActiveNav === "admin-newcar-owned" ? (
+              <AdminPlaceholder message="该管理功能请在 NewCarProject 操作" />
+            ) : superActiveNav === "admin-no-local-feature" ? (
+              <AdminPlaceholder message="暂无可访问管理员功能" />
+            ) : (
+              <SuperMerchantAgent />
+            )
+          ) : isLeadConversationNav ? (
+            <>
+              <ContactList
+                selectedId={selectedContact?.id || ""}
+                onSelect={setSelectedContactId}
+                douyinAccountName={douyinAccount?.name || API_BASE_URL || "未配置后端"}
+                contacts={conversations.contacts}
+                loading={chatLoading}
+                error={chatError}
+                onRefresh={loadChatEvents}
+              />
+              <ChatPanel contact={selectedContact} messages={selectedMessages} loading={chatLoading} />
+              <div className="min-h-0 overflow-hidden max-[1180px]:hidden">
+                <ContactInfo contact={selectedContact} />
+              </div>
+            </>
+          ) : isDouyinWorkbenchNav ? (
+            <DouyinAiCsWorkbenchPage />
+          ) : isDouyinAutoReplyDiagnosticsNav ? (
+            <DouyinAutoReplyRunsPage />
+          ) : isLeadsModuleNav ? (
+            <LeadsModulePage />
+          ) : isAgentModuleNav ? (
             <SuperMerchantAgent />
-          )
-        ) : isLeadConversationNav ? (
-          <>
-            <ContactList
-              selectedId={selectedContact?.id || ""}
-              onSelect={setSelectedContactId}
-              douyinAccountName={douyinAccount?.name || API_BASE_URL || "未配置后端"}
-              contacts={conversations.contacts}
-              loading={chatLoading}
-              error={chatError}
-              onRefresh={loadChatEvents}
+          ) : isDailyReportsNav ? (
+            <DailyReports user={user} />
+          ) : isWechatAssistantNav ? (
+            <WechatAgent
+              activeTab={activeWechatTab}
+              localAgentOnline={localAgentOnline}
+              localAgentRuntimeStatus={localAgentRuntimeStatus}
+              onRefreshLocalAgentStatus={refreshLocalAgentStatus}
             />
-            <ChatPanel contact={selectedContact} messages={selectedMessages} loading={chatLoading} />
-            <div className="min-h-0 overflow-hidden max-[1180px]:hidden">
-              <ContactInfo contact={selectedContact} />
+          ) : isComputeNav ? (
+            <ComputeCenter tabs={computeTabs} activeNav={activeNav} />
+          ) : isAiEditMaterialsNav ? (
+            <MaterialLibrary merchantId={user?.merchantId ?? ""} />
+          ) : isAiEditEditorNav ? (
+            <LasRemixWorkbench merchantId={user?.merchantId ?? ""} />
+          ) : (
+            <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
+              <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                <p className="text-sm font-bold text-[#1a1f2e]">模块建设中</p>
+                <p className="mt-2 text-xs text-[#8b95a6]">当前先完成抖音AI小高客服和AI小高线索两个核心页面。</p>
+              </div>
             </div>
-          </>
-        ) : isDouyinWorkbenchNav ? (
-          <DouyinAiCsWorkbenchPage />
-        ) : isDouyinAutoReplyDiagnosticsNav ? (
-          <DouyinAutoReplyRunsPage />
-        ) : isLeadsModuleNav ? (
-          <LeadsModulePage />
-        ) : isAgentModuleNav ? (
-          <SuperMerchantAgent />
-        ) : isDailyReportsNav ? (
-          <DailyReports user={user} />
-        ) : isWechatAssistantNav ? (
-          <WechatAgent
-            activeTab={activeWechatTab}
-            localAgentOnline={localAgentOnline}
-            localAgentRuntimeStatus={localAgentRuntimeStatus}
-            onRefreshLocalAgentStatus={refreshLocalAgentStatus}
-          />
-        ) : isComputeNav ? (
-          <ComputeCenter tabs={computeTabs} activeNav={activeNav} />
-        ) : isAiEditMaterialsNav ? (
-          <MaterialLibrary merchantId={user?.merchantId ?? ""} />
-        ) : isAiEditEditorNav ? (
-          <LasRemixWorkbench merchantId={user?.merchantId ?? ""} />
-        ) : (
-          <div className="grid h-full place-items-center bg-[#f3f6fa] p-8">
-            <div className="rounded-2xl border border-[#e4e8f0] bg-white px-8 py-6 text-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <p className="text-sm font-bold text-[#1a1f2e]">模块建设中</p>
-              <p className="mt-2 text-xs text-[#8b95a6]">当前先完成抖音AI小高客服和AI小高线索两个核心页面。</p>
-            </div>
-          </div>
-        )}
+          )}
+        </Suspense>
+
       </div>
       {showDouyinAuth ? (
         <DouyinAuthModal
