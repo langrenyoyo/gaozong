@@ -370,6 +370,25 @@ async def _handle_douyin_webhook(
         )
         raise HTTPException(status_code=400, detail=f"无效的 JSON payload: {exc}")
 
+    # 调试日志：记录抖音回调的原始 text 和 has_encoded（确认脱敏是否来自平台）
+    _webhook_content = payload.get("content") or {}
+    if isinstance(_webhook_content, str):
+        try:
+            _webhook_content = json.loads(_webhook_content)
+        except (json.JSONDecodeError, ValueError):
+            _webhook_content = {}
+    _raw_text = _webhook_content.get("text") or ""
+    _has_encoded = _webhook_content.get("has_encoded") or ""
+    if _raw_text:
+        logger.info(
+            "webhook_raw_text_debug source_path=%s event=%s text_len=%d has_encoded=%s text_preview=%s",
+            source_path,
+            payload.get("event"),
+            len(_raw_text),
+            _has_encoded,
+            _raw_text[:80],
+        )
+
     logger.info(
         "webhook 接收成功: source_path=%s, webhook_auth_required=%s, event=%s, from=%s",
         source_path,
