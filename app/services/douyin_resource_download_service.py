@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from ipaddress import ip_address
 from datetime import datetime
 from typing import Any
@@ -19,6 +20,8 @@ from app.services.douyin_merchant_isolation import (
     require_douyin_account_for_merchant,
 )
 from app.services.douyin_openapi_client import call_douyin_openapi
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_MEDIA_TYPES = {"image", "video"}
@@ -148,6 +151,64 @@ def download_douyin_resource(
         "conversation_short_id": conversation_short_id_text,
         "server_message_id": resolved["server_message_id"],
     }
+
+
+def decode_msg_content(
+    *,
+    main_account_id: int,
+    open_id: str,
+    guest_uid: str,
+    conversation_id: str,
+    msg_id: str,
+) -> str | None:
+    """调 /decode_msg_content 解码抖音平台掩码的私信内容，返回明文。
+
+    仅当 webhook content.has_encoded == "true" 时调用。msg_id（取自 content.server_message_id）
+    有效期 24 小时，webhook 实时事件必在窗口内。失败返回 None，调用方应保留原掩码文本不阻断。
+    参数见 OpenAPI 文档表26：main_account_id/open_id(企业号)/guest_uid(访客)/conversation_id/msg_id。
+    """
+    open_id_text = (open_id or "").strip()
+    guest_uid_text = (guest_uid or "").strip()
+    conversation_id_text = (conversation_id or "").strip()
+    msg_id_text = (msg_id or "").strip()
+    if not all([open_id_text, guest_uid_text, conversation_id_text, msg_id_text]):
+        logger.warning(
+            "decode_msg_content_skip_missing_params open_id=%s guest_uid=%s conversation_id=%s msg_id=%s",
+            bool(open_id_text), bool(guest_uid_text), bool(conversation_id_text), bool(msg_id_text),
+        )
+        return None
+
+    request_payload = {
+        "main_account_id": main_account_id,
+        "open_id": open_id_text,
+        "guest_uid": guest_uid_text,
+        "conversation_id": conversation_id_text,
+        "msg_id": msg_id_text,
+    }
+
+    try:
+        result = call_douyin_openapi("/decode_msg_content", request_payload)
+    except HTTPException as exc:
+        logger.warning(
+            "decode_msg_content_failed msg_id=%s detail=%s",
+            msg_id_text, _safe_message(exc.detail),
+        )
+        return None
+
+    upstream_payload = result["payload"]
+    if isinstance(upstream_payload, dict) and upstream_payload.get("code") == 0:
+        data = upstream_payload.get("data")
+        if isinstance(data, dict):
+            content_text = _optional_str(data.get("content"))
+            if content_text:
+                return content_text
+    logger.warning(
+        "decode_msg_content_no_content msg_id=%s code=%s msg=%s",
+        msg_id_text,
+        upstream_payload.get("code") if isinstance(upstream_payload, dict) else None,
+        _optional_str(upstream_payload.get("msg")) if isinstance(upstream_payload, dict) else None,
+    )
+    return None
 
 
 def _resolve_context(

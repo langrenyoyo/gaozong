@@ -19,6 +19,7 @@ from app.integrations.douyin_webhook import (
 )
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
+from app.services.douyin_resource_download_service import decode_msg_content
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
     AccountAccessError,
@@ -153,6 +154,35 @@ def _normalize_webhook_result(result: dict) -> dict:
         "is_duplicate": bool(result.get("is_duplicate")),
         "lead_action": str(result.get("lead_action") or "not_lead_event"),
     }
+
+
+def _try_decode_masked_text(payload: dict, content: dict) -> str | None:
+    """对抖音平台掩码私信调 /decode_msg_content 取明文。
+
+    仅 im_receive_msg（客户入站）方向触发：from_user_id=客户(guest_uid)、to_user_id=企业号(open_id)。
+    解码失败（接口异常/业务错误/空内容）返回 None，调用方保留原掩码文本不阻断 webhook。
+    """
+    # 仅对客户入站消息解码；im_send_msg（企业号发出）方向无掩码需求
+    if str(payload.get("event") or "") != "im_receive_msg":
+        return None
+    open_id = str(payload.get("to_user_id") or "").strip()      # 企业号
+    guest_uid = str(payload.get("from_user_id") or "").strip()  # 客户
+    conversation_id = str(content.get("conversation_short_id") or "").strip()
+    msg_id = str(content.get("server_message_id") or "").strip()
+    try:
+        return decode_msg_content(
+            main_account_id=config.DY_MAIN_ACCOUNT_ID,
+            open_id=open_id,
+            guest_uid=guest_uid,
+            conversation_id=conversation_id,
+            msg_id=msg_id,
+        )
+    except Exception as exc:  # noqa: BLE001 —— decode 任何异常都不阻断 webhook
+        logger.warning(
+            "webhook_decode_unexpected_error event=%s msg_id=%s error=%s",
+            payload.get("event"), msg_id, type(exc).__name__,
+        )
+        return None
 
 
 def _process_webhook_locally(db: Session, payload: dict) -> dict:
@@ -388,6 +418,22 @@ async def _handle_douyin_webhook(
             _has_encoded,
             _raw_text[:80],
         )
+
+    # 抖音平台掩码解码：has_encoded=="true" 时调 /decode_msg_content 拿明文，替换 content.text
+    # 供后续 _process_webhook_*/extract_contacts_from_text 用明文。失败保留掩码文本不阻断。
+    # ponytail 已知局限：同步调用（decode 结果要替换 text 供后续流程用，不能异步），超时由
+    # config.DY_HTTP_TIMEOUT_SECONDS(20s) 保护；msg_id 24h 有效期，webhook 实时事件必在窗口内。
+    if _has_encoded == "true" and _raw_text and config.DY_MAIN_ACCOUNT_ID:
+        _decoded = _try_decode_masked_text(payload, _webhook_content)
+        if _decoded:
+            _webhook_content["text"] = _decoded
+            payload["content"] = _webhook_content
+            logger.info(
+                "webhook_mask_decoded source_path=%s event=%s msg_id=%s decoded_len=%d",
+                source_path, payload.get("event"),
+                _webhook_content.get("server_message_id") or "",
+                len(_decoded),
+            )
 
     logger.info(
         "webhook 接收成功: source_path=%s, webhook_auth_required=%s, event=%s, from=%s",
