@@ -1773,21 +1773,32 @@ def _build_decision_constraint_text(decision: ReplyPolicyDecision) -> str:
 def _mask_latest_message_for_llm(latest_message: str) -> str:
     """对客户最新消息做 LLM 安全脱敏——脱敏前先识别联系方式。
 
-    如果客户消息含完整手机号/微信号，用语义占位替换（不把 138****8002 给 LLM，
-    LLM 会把星号当真实内容说"号码中间有星号"）。
-    无联系方式时正常脱敏（防止历史消息中的号码泄露）。
+    三种情况：
+    1. 客户消息含完整手机号/微信号（extract_contacts_in_text 能识别）→ 语义占位替换
+    2. 客户消息含抖音平台脱敏的号码（138****7002，has_encoded=true）→ 语义占位替换
+    3. 无联系方式 → 正常脱敏（防止历史消息中的号码泄露）
+
+    不把 138****7002 给 LLM——LLM 会把星号当真实内容说"号码中间有星号"。
     """
+    import re
     from app.services.contact_extractor import extract_contacts_from_text
     text = str(latest_message or "")
+
+    # 情况1：完整手机号/微信号
     contact_result = extract_contacts_from_text(text)
     if contact_result.phone or contact_result.wechat:
-        # 客户提供了完整联系方式 → 语义占位替换，LLM 完全不接触星号
-        import re
         masked = mask_contacts_in_text(text)
-        # 把脱敏后的星号号码替换为语义占位（138****8002 → [客户已提供完整手机号]）
         masked = re.sub(r'\d{3}\*+\d{0,4}', '[客户已提供完整手机号]', masked)
         return masked
-    # 无完整联系方式 → 正常脱敏（可能含 PARTIAL 片段需屏蔽）
+
+    # 情况2：抖音平台脱敏的号码（138****7002 模式，extract_contacts_in_text 无法识别因为星号不匹配完整手机号正则）
+    # 检测 \d{3}\*+\d{1,4} 模式（如 138****7002）
+    if re.search(r'\d{3}\*+\d{1,4}', text):
+        masked = mask_contacts_in_text(text)
+        masked = re.sub(r'\d{3}\*+\d{1,4}', '[客户已提供联系方式，平台已脱敏]', masked)
+        return masked
+
+    # 情况3：无联系方式 → 正常脱敏
     return mask_contacts_in_text(text)
 
 
