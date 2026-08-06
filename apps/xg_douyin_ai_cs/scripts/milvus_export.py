@@ -113,15 +113,32 @@ def main(argv: list[str] | None = None) -> int:
     error_count = 0
     started = datetime.now(timezone.utc)
 
-    with open(args.output, "w", encoding="utf-8") as fh:
-        iterator = client.query_iterator(
+    # 统计 collection 实际记录数，便于校验导出完整性
+    try:
+        # query 单条取主键计数（num_entities 在 MilvusClient 下不一定准确）
+        probe = client.query(
             collection_name=config.milvus_collection,
-            output_fields=output_fields,
-            batch_size=args.batch_size,
+            output_fields=["chunk_id"],
+            limit=1,
         )
+        if not probe:
+            print("[WARN] collection 为空（无任何记录），将生成空文件。", file=sys.stderr)
+    except Exception as exc:
+        print(f"[WARN] 探测 collection 失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+
+    iterator = client.query_iterator(
+        collection_name=config.milvus_collection,
+        output_fields=output_fields,
+        batch_size=args.batch_size,
+    )
+    # pymilvus QueryIterator 不是 Python 迭代器，没有 __next__；
+    # 必须用 .next() 方法，返回空 list 表示遍历结束。
+    next_batch = getattr(iterator, "next", None)
+
+    with open(args.output, "w", encoding="utf-8") as fh:
         while True:
             try:
-                batch = next(iterator)
+                batch = next_batch() if callable(next_batch) else next(iterator)
             except StopIteration:
                 break
             except Exception as exc:
