@@ -463,7 +463,7 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
                 if _field == "preferred_salutation" and not _forward and not _reverse:
                     # 去掉"哥""姐"后缀检查原始名字是否在客户消息中
                     _name_part = _val_str.rstrip("哥姐")
-                    if _name_part and len(_name_part) >= 2 and _name_part in _customer_msg:
+                    if _name_part and len(_name_part) >= 1 and _name_part in _customer_msg:
                         _salutation_match = True
                 if _forward or _reverse or _salutation_match:
                     _verified_updates[_field] = _value
