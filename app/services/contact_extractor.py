@@ -1,6 +1,7 @@
 """联系方式提取纯 service。"""
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -102,11 +103,48 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
 
     phones = [item["value"] for item in matches if item["type"] == "phone"]
     wechats = [item["value"] for item in matches if item["type"] == "wechat"]
+
+    # 兜底：标准匹配未命中手机号时，走独立式清洗管道（只兜底手机号，不做微信号混淆）。
+    # ponytail 已知局限：兜底号码在原文中常是散落形态（如 138a1234b5678），
+    # 后续 mask_contacts_in_text 用 value.replace 脱敏可能替换不到，原文片段保留；
+    # 这是既有脱敏策略局限，本任务只增强提取，不改脱敏逻辑。升级路径：脱敏改为基于 start/end 区间。
+    if not phones:
+        pipeline_phone = _extract_phone_with_pipeline(text)
+        if pipeline_phone:
+            matches.append({"type": "phone", "value": pipeline_phone, "start": -1, "end": -1})
+            phones = [pipeline_phone]
+
+    # 号段白名单：1[3-9]xxxxxxxxx 格式但号段不在白名单的，降级为 partial_phone（供 LLM 追问核实）。
+    # 规则文档 1.2：非合法号段仍识别为线索但可信度低；本实现不进 phones，降级 partial_phone。
+    if phones:
+        invalid_phones = [p for p in phones if not _is_operator_phone(p)]
+        if invalid_phones:
+            # 若存在白名单号码，只剔除非白名单的；全不合法时 phones 清空触发 partial_phone
+            valid_phones = [p for p in phones if _is_operator_phone(p)]
+            if valid_phones:
+                valid_set = set(valid_phones)
+                matches = [m for m in matches if not (m["type"] == "phone" and m["value"] not in valid_set)]
+                phones = valid_phones
+                invalid_phones = []  # 有有效号，无效号静默丢弃（不覆盖 partial_phone）
+            # 全部非白名单：phones 清空，降级第一个为 partial_phone
+            if not valid_phones:
+                phones = []
+                matches = [m for m in matches if m["type"] != "phone"]
+                # 取第一个非白名单 11 位号作为 partial_phone，供 LLM 追问
+                partial_phone_fallback = invalid_phones[0] if invalid_phones else None
+            else:
+                partial_phone_fallback = None
+        else:
+            partial_phone_fallback = None
+    else:
+        partial_phone_fallback = None
+
     status: ContactExtractStatus = "matched" if matches else "not_matched"
 
     # 检测疑似不完整手机号：7-10 位纯数字（非完整 11 位 1[3-9]xxxxxxxxx）
-    partial_phone = None
-    if not phones:
+    # 优先用号段白名单降级值，其次检测原文 7-10 位片段
+    partial_phone = partial_phone_fallback
+    if not phones and partial_phone is None:
         partial_phone = _detect_partial_phone(text)
 
     return ContactExtractResult(
@@ -194,6 +232,135 @@ def _collect_matches(text: str) -> list[dict[str, str | int]]:
 
     matches.sort(key=lambda item: (int(item["start"]), int(item["end"])))
     return matches
+
+
+# ---- 清洗管道：独立式手机号兜底提取（任务 2.1） ----
+# 独立式策略：每步从原文独立清洗，不基于上一步结果，避免错误累积。
+# 只兜底手机号，不做微信号混淆；不做置信度（2.3）、不做号段白名单（2.2）。
+
+# 中文数字（含大写与电话读号谐音）→ 阿拉伯数字映射（规则文档 1.3 表格 + 伪代码）
+CN_DIGIT_MAP = {
+    "零": "0", "洞": "0",
+    "一": "1", "壹": "1", "幺": "1", "妖": "1",
+    "二": "2", "贰": "2", "两": "2", "俩": "2",
+    "三": "3", "叁": "3", "仨": "3",
+    "四": "4", "肆": "4",
+    "五": "5", "伍": "5",
+    "六": "6", "陆": "6",
+    "七": "7", "柒": "7", "拐": "7",
+    "八": "8", "捌": "8", "吧": "8",
+    "九": "9", "玖": "9", "勾": "9",
+}
+
+
+def _fullwidth_to_halfwidth(text: str) -> str:
+    """S1：全角数字→半角，用 NFKC 归一化（同时转换全角字母/符号，对号码提取无害）。"""
+    return unicodedata.normalize("NFKC", str(text or ""))
+
+
+def _strip_letters(text: str) -> str:
+    """S2：剔除半角字母 [a-zA-Z]，保留其余字符。"""
+    return re.sub(r"[A-Za-z]", "", str(text or ""))
+
+
+def _strip_chinese(text: str) -> str:
+    """S3：剔除 CJK 统一汉字 [\\u4e00-\\u9fff]。"""
+    return re.sub(r"[一-鿿]", "", str(text or ""))
+
+
+def _strip_all_non_digits(text: str) -> str:
+    """S4：剔除所有非数字字符（含 emoji、标点、空白），只保留 Unicode 数字。"""
+    # re.UNICODE 使 \d 覆盖全角数字等 Unicode 数字类别；emoji 等非数字被剔除。
+    return re.sub(r"[^\d]", "", str(text or ""), flags=re.UNICODE)
+
+
+def _cn_digit_to_arabic(text: str) -> str:
+    """中文数字（含大写与电话读号谐音）映射为阿拉伯数字，非数字字符原样保留。"""
+    s = str(text or "")
+    return "".join(CN_DIGIT_MAP.get(ch, ch) for ch in s)
+
+
+def _cn_digit_then_strip(text: str) -> str:
+    """S5：先中文数字映射，再全剔非数字。"""
+    return _strip_all_non_digits(_cn_digit_to_arabic(text))
+
+
+# S0：剥离国际区号前缀（+86 / 0086 / 86 + 可选分隔符），独立式从原文清洗。
+# 规则文档 1.1 表格第 2 行要求支持区号前缀；S4 全剔后 86 前缀残留会触发 _PHONE_RE 的 (?<!\d) 断言失败。
+# 前瞻 (?=[\s\-]*1[3-9]) 确保只剥后跟合法手机号开头的区号，避免误伤号码内 86 子串。
+_COUNTRY_CODE_RE = re.compile(r"(?:\+|00)?86(?=[\s\-]*1[3-9])")
+
+
+def _strip_country_code(text: str) -> str:
+    """S0：剥离 +86/0086/86 区号前缀（允许区号前有中文/字母等非数字字符）。"""
+    return _COUNTRY_CODE_RE.sub("", str(text or ""), count=1)
+
+
+# 独立式清洗步骤序列：每步从原文独立清洗，互不依赖
+_PHONE_CLEAN_STEPS = (
+    _strip_country_code,      # S0 剥离区号前缀
+    _fullwidth_to_halfwidth,  # S1 全角→半角
+    _strip_letters,            # S2 剔字母
+    _strip_chinese,            # S3 剔中文
+    _strip_all_non_digits,     # S4 全剔非数字
+    _cn_digit_then_strip,      # S5 中文数字映射+全剔
+)
+
+
+def _extract_phone_with_pipeline(text: str) -> str | None:
+    """清洗管道兜底提取手机号。
+
+    独立式策略：每步从原文独立清洗，清洗结果用 _PHONE_RE 重试，命中即返回 11 位号码。
+    标准格式已在 _collect_matches 命中，进此函数说明标准匹配失败。
+    全不命中返回 None。只兜底手机号，不做微信号混淆。
+    平台脱敏（138****8002）清洗后不足 11 位，不会被误判。
+    """
+    s = str(text or "")
+    # 先用 _PHONE_RE 直接匹配（标准格式不走清洗）
+    m = _PHONE_RE.search(s)
+    if m:
+        return m.group(1)
+    # 独立式依次清洗：每步从原文独立清洗，命中即返回
+    for cleaner in _PHONE_CLEAN_STEPS:
+        cleaned = cleaner(s)
+        m = _PHONE_RE.search(cleaned)
+        if m:
+            return m.group(1)
+    return None
+
+
+# ---- 运营商号段白名单（任务 2.2） ----
+# 防止把普通数字串误判为手机号：1[3-9]xxxxxxxxx 格式但号段不在白名单 → 降级为 partial_phone。
+# 号段表来源：docs/ai/01_product_prd/线索识别AI技能规则.md 1.2 节 + 伪代码 VALID_PREFIXES。
+# ponytail 已知局限：号段表随工信部发放更新，新号段会漏判为 partial_phone；升级路径：定期同步工信部号段表。
+_OPERATOR_PREFIXES = frozenset({
+    # 中国移动
+    "134", "135", "136", "137", "138", "139",
+    "147", "148", "150", "151", "152", "157", "158", "159",
+    "165", "172", "178", "182", "183", "184", "187", "188",
+    "195", "197", "198",
+    # 中国联通
+    "130", "131", "132", "145", "146", "155", "156",
+    "166", "167", "171", "175", "176", "185", "186", "196",
+    # 中国电信
+    "133", "149", "153", "173", "174", "177", "180", "181", "189",
+    "190", "191", "193", "199",
+    # 中国广电
+    "192",
+})
+
+
+def _is_operator_phone(phone: str) -> bool:
+    """判断 11 位号码是否属于三大运营商有效号段。
+
+    phone 必须是 11 位纯数字且以 1[3-9] 开头。取前 3 位查白名单。
+    非白名单号段返回 False，调用方据此降级为 partial_phone。
+    """
+    if len(phone) != 11 or not phone.isdigit():
+        return False
+    if phone[0] != "1" or phone[1] not in "3456789":
+        return False
+    return phone[:3] in _OPERATOR_PREFIXES
 
 
 def _has_weak_wechat_context(text: str) -> bool:
@@ -322,7 +489,16 @@ def analyze_contact_state(
 
     # 1. 完整手机号（兼容 138-0013-8000 / +86 138 0013 8000）
     loose_phone = _extract_loose_phone(raw)
+    # step 1 未命中（含字母/中文等 _PHONE_LOOSE_RE 无法处理的形态）→ 走清洗管道兜底，与 extract 对齐
+    if not loose_phone:
+        loose_phone = _extract_phone_with_pipeline(raw)
     if loose_phone:
+        # 号段白名单校验：1[3-9]xxxxxxxxx 格式但号段不在白名单 → 降级 PARTIAL（与 extract_contacts_from_text 一致）
+        if not _is_operator_phone(loose_phone):
+            return ContactState(
+                "PARTIAL", "mobile", None, _mask_partial_phone(loose_phone),
+                msg_ids, fragment_count, "invalid_operator_prefix",
+            )
         return ContactState(
             status="VALID",
             type="mobile",
