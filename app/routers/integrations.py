@@ -11,15 +11,19 @@ from sqlalchemy.orm import Session
 from app import config
 from app.auth.context import RequestContext
 from app.auth.dependencies import get_request_context_required, require_permission
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.integrations.douyin_webhook import (
     WebhookSignatureError,
     process_webhook_event,
     verify_signature,
 )
+from app.models import DouyinMessageResourceDownload, DouyinWebhookEvent
 from app.schemas import DouyinSyncRequest, DouyinSyncResponse, WebhookResponse
 from app.services.ai_auto_reply_dry_run_service import run_ai_auto_reply_dry_run
-from app.services.douyin_resource_download_service import decode_msg_content
+from app.services.douyin_resource_download_service import (
+    decode_msg_content,
+    download_douyin_resource,
+)
 from app.services.douyin_sync_service import preview_sync_leads
 from app.services.douyin_workbench_conversation_service import (
     AccountAccessError,
@@ -343,6 +347,115 @@ def maybe_schedule_ai_auto_reply(
     )
 
 
+# webhook 自动触发素材下载的 message_type → media_type 映射（任务 5.0）
+# emoji 按图片格式回调，映射为 image；image/video 原样
+_RESOURCE_MESSAGE_TYPES = {"image": "image", "video": "video", "emoji": "image"}
+
+
+def maybe_schedule_resource_download(
+    *,
+    background_tasks: BackgroundTasks | None,
+    event_id: int | None,
+    payload: dict,
+    is_duplicate: bool,
+) -> None:
+    """webhook 收到 im_receive_msg 且 message_type ∈ {image, video, emoji} 时，
+    异步调度素材下载（复用 download_douyin_resource）。失败不阻断 webhook。
+
+    BackgroundTask 在 webhook 响应后执行，事件已落库，download_douyin_resource
+    可从持久化事件解析 open_id/url/商户归属。merchant_id 从事件固化值取（webhook
+    入库时已解析可信商户）。internal 模式事件在 9202 时本地查不到 → 优雅跳过。
+    """
+    if payload.get("event") != "im_receive_msg":
+        return
+    if background_tasks is None or event_id is None or is_duplicate:
+        return
+    content = payload.get("content")
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return
+    if not isinstance(content, dict):
+        return
+    message_type = str(content.get("message_type") or "").strip()
+    media_type = _RESOURCE_MESSAGE_TYPES.get(message_type)
+    if not media_type:
+        return
+    conversation_short_id = str(content.get("conversation_short_id") or "").strip()
+    server_message_id = str(content.get("server_message_id") or "").strip()
+    if not conversation_short_id or not server_message_id:
+        return
+    background_tasks.add_task(
+        _run_resource_download_task,
+        conversation_short_id=conversation_short_id,
+        server_message_id=server_message_id,
+        media_type=media_type,
+    )
+    logger.info(
+        "resource_download_scheduled event_id=%s message_type=%s media_type=%s",
+        event_id, message_type, media_type,
+    )
+
+
+def _run_resource_download_task(
+    *,
+    conversation_short_id: str,
+    server_message_id: str,
+    media_type: str,
+) -> None:
+    """BackgroundTask：下载抖音素材并存 DouyinMessageResourceDownload 表。
+
+    幂等：同 server_message_id 已有非 failed 记录则跳过。失败不阻断——
+    download_douyin_resource 失败已 internally 记 failed 状态并 commit，此处只记日志。
+    """
+    db = SessionLocal()
+    try:
+        # 幂等查重：同 server_message_id 已有非 failed 记录则跳过
+        existing = db.query(DouyinMessageResourceDownload).filter(
+            DouyinMessageResourceDownload.server_message_id == server_message_id,
+            DouyinMessageResourceDownload.resource_status != "failed",
+        ).first()
+        if existing:
+            logger.info(
+                "resource_download_skip_exists server_message_id=%s status=%s",
+                server_message_id, existing.resource_status,
+            )
+            return
+        # merchant_id 从持久化事件取（webhook 入库时已固化可信商户归属）
+        event = db.query(DouyinWebhookEvent).filter(
+            DouyinWebhookEvent.conversation_short_id == conversation_short_id,
+            DouyinWebhookEvent.server_message_id == server_message_id,
+            DouyinWebhookEvent.is_duplicate.is_(False),
+        ).first()
+        merchant_id = str(event.merchant_id) if event and event.merchant_id else None
+        download_douyin_resource(
+            db,
+            merchant_id=merchant_id,
+            conversation_short_id=conversation_short_id,
+            server_message_id=server_message_id,
+            media_type=media_type,
+        )
+        logger.info(
+            "resource_download_done server_message_id=%s media_type=%s",
+            server_message_id, media_type,
+        )
+    except HTTPException as exc:
+        # download_douyin_resource 失败已 internally 记 failed + commit；此处只记日志不阻断
+        logger.warning(
+            "resource_download_failed server_message_id=%s detail=%s",
+            server_message_id, str(exc.detail)[:200],
+        )
+    except Exception as exc:  # noqa: BLE001 —— 后台任务任何异常都不阻断 webhook
+        db.rollback()
+        logger.exception(
+            "resource_download_unexpected_error server_message_id=%s error=%s",
+            server_message_id, type(exc).__name__,
+        )
+    finally:
+        db.close()
+
+
 async def _handle_douyin_webhook(
     body: bytes,
     x_auth_timestamp: str | None,
@@ -460,6 +573,12 @@ async def _handle_douyin_webhook(
         payload=payload,
         is_duplicate=result.get("is_duplicate") is True,
         source_path=source_path,
+    )
+    maybe_schedule_resource_download(
+        background_tasks=background_tasks,
+        event_id=result.get("event_id"),
+        payload=payload,
+        is_duplicate=result.get("is_duplicate") is True,
     )
 
     return WebhookResponse(
