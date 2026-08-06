@@ -131,21 +131,31 @@ def main(argv: list[str] | None = None) -> int:
         output_fields=output_fields,
         batch_size=args.batch_size,
     )
-    # pymilvus QueryIterator 不是 Python 迭代器，没有 __next__；
-    # 必须用 .next() 方法，返回空 list 表示遍历结束。
-    next_batch = getattr(iterator, "next", None)
+    # pymilvus 不同版本 query_iterator 返回对象 API 不一致：
+    #   - 新版 QueryIterator：有 .next() 方法，返回 list，空 list 表示结束
+    #   - 旧版/部分版本：实现了 __next__，可用 next()
+    #   - 个别版本：直接返回 list（一次性）
+    # 这里逐项探测，兼容所有情况。
+    next_method = getattr(iterator, "next", None)
+    has_dunder_next = hasattr(iterator, "__next__")
+    if callable(next_method):
+        print("[INFO] 迭代方式：QueryIterator.next() 方法")
+    elif has_dunder_next:
+        print("[INFO] 迭代方式：__next__ 内置迭代器")
+    elif isinstance(iterator, list):
+        print(f"[INFO] 迭代方式：一次性 list（共 {len(iterator)} 条）")
+    else:
+        print(f"[ERROR] 不支持的 query_iterator 返回类型：{type(iterator).__name__}", file=sys.stderr)
+        return 1
 
     with open(args.output, "w", encoding="utf-8") as fh:
-        while True:
-            try:
-                batch = next_batch() if callable(next_batch) else next(iterator)
-            except StopIteration:
-                break
-            except Exception as exc:
-                # 迭代中偶发错误：记录后继续尝试下一批
-                print(f"[WARN] 批次拉取异常：{type(exc).__name__}: {exc}", file=sys.stderr)
-                error_count += 1
-                continue
+        # 一次性 list：直接遍历
+        if isinstance(iterator, list):
+            batches = [iterator] if iterator else []
+        else:
+            batches = _iter_batches(iterator, use_method=callable(next_method))
+
+        for batch in batches:
             if not batch:
                 break
             for row in batch:
@@ -174,6 +184,25 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     return 0 if error_count == 0 else 2
+
+
+def _iter_batches(iterator: Any, *, use_method: bool):
+    """逐批从 QueryIterator 拉取记录的生成器。
+
+    use_method=True 用 .next() 方法；否则用内置 next()。
+    空 list / StopIteration 表示遍历结束。单批异常跳过继续。
+    """
+    while True:
+        try:
+            batch = iterator.next() if use_method else next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            print(f"[WARN] 批次拉取异常：{type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
+        if not batch:
+            break
+        yield batch
 
 
 def _normalize_row(row: Any, *, include_embedding: bool) -> dict[str, Any]:
