@@ -1354,6 +1354,8 @@ def _build_llm_reply(
     # 守卫处理；候选资格由 _direct_llm_auto_send_allowed 统一收敛，9000 Gate 兜底。
     # 敏感词代码层兜底：AI 回复中出现平台禁用词时自动替换，不依赖 LLM 自觉
     reply_text = _replace_sensitive_words(str(decision["reply_text"] or ""))
+    # P0 止血：后置校验——客户已提供完整联系方式时，AI 不得说"有星号""号码不完整"
+    reply_text = _check_valid_contact_conflict(reply_text, contact_state, decision)
     decision["reply_text"] = reply_text
     log_llm_call(
         tenant_id=request.tenant_id,
@@ -1768,6 +1770,27 @@ def _build_decision_constraint_text(decision: ReplyPolicyDecision) -> str:
     return "\n".join(parts)
 
 
+def _mask_latest_message_for_llm(latest_message: str) -> str:
+    """对客户最新消息做 LLM 安全脱敏——脱敏前先识别联系方式。
+
+    如果客户消息含完整手机号/微信号，用语义占位替换（不把 138****8002 给 LLM，
+    LLM 会把星号当真实内容说"号码中间有星号"）。
+    无联系方式时正常脱敏（防止历史消息中的号码泄露）。
+    """
+    from app.services.contact_extractor import extract_contacts_from_text
+    text = str(latest_message or "")
+    contact_result = extract_contacts_from_text(text)
+    if contact_result.phone or contact_result.wechat:
+        # 客户提供了完整联系方式 → 语义占位替换，LLM 完全不接触星号
+        import re
+        masked = mask_contacts_in_text(text)
+        # 把脱敏后的星号号码替换为语义占位（138****8002 → [客户已提供完整手机号]）
+        masked = re.sub(r'\d{3}\*+\d{0,4}', '[客户已提供完整手机号]', masked)
+        return masked
+    # 无完整联系方式 → 正常脱敏（可能含 PARTIAL 片段需屏蔽）
+    return mask_contacts_in_text(text)
+
+
 def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, source_chunks, *, policy_decision=None, knowledge_trusted: bool = True) -> list[dict]:
     """拼装发送给大模型的 system prompt 和 user prompt。
 
@@ -1818,7 +1841,7 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
         customer_memory=request.customer_memory,
         request=request,
     )
-    safe_latest_message = mask_contacts_in_text(request.latest_message)
+    safe_latest_message = _mask_latest_message_for_llm(request.latest_message)
     user_payload = {
         "merchant": {
             "merchant_name": merchant_prompt.get("merchant_name"),
@@ -3365,6 +3388,40 @@ def _replace_sensitive_words(text: str) -> str:
     for old, new in _SENSITIVE_WORD_REPLACEMENTS:
         text = text.replace(old, new)
     return text
+
+
+# P0 止血：客户已提供完整联系方式时 AI 不得说"有星号""号码不完整"
+_VALID_CONTACT_CONFLICT_PHRASES = (
+    "中间有星号",
+    "号码不完整",
+    "联系方式不完整",
+    "还差几位",
+    "请补全",
+    "重新发一个完整",
+    "有星号",
+    "号码中间有",
+    "不太完整",
+)
+
+
+def _check_valid_contact_conflict(reply_text: str, contact_state: str, decision: dict) -> str:
+    """后置校验：contact_state=VALID 时不得声称号码有星号/不完整。
+
+    命中时用安全模板替换，避免 LLM 把脱敏星号当真实内容。
+    """
+    if contact_state != "VALID":
+        return reply_text
+    if not any(phrase in reply_text for phrase in _VALID_CONTACT_CONFLICT_PHRASES):
+        return reply_text
+    # 命中冲突——用安全模板替换
+    _logger.warning(
+        "valid_contact_conflict_blocked contact_state=VALID reply_contains_star_or_incomplete=true"
+    )
+    retry_warnings = decision.get("_retry_warnings") or []
+    if "valid_contact_conflict_blocked" not in retry_warnings:
+        retry_warnings.append("valid_contact_conflict_blocked")
+        decision["_retry_warnings"] = retry_warnings
+    return "收到老板，我这边联系您。"
 
 
 def _direct_llm_auto_send_allowed(

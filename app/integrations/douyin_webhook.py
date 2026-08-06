@@ -1240,19 +1240,13 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
         commit=False,
     )
 
-    # P-0-C 空号追问链路（块2 Task2A + 块3入队）：检测人工客服消息是否含联系方式失效/恢复表达
-    _detect_contact_validity_from_outbound(
-        db,
-        merchant_id=merchant_id,
-        account_open_id=account_open_id,
-        customer_open_id=customer_open_id,
-        conversation_short_id=event.conversation_short_id,
-        message_text=normalize_message_text(content),
-        source="douyin_workbench",
-        source_message_id=str(event.id),
-    )
+    # P-0-C 空号追问链路：抖音工作台触发路径已取消——webhook 不回调人工出站消息，
+    # 且生产环境客服在工作台时不需要系统追问。空号检测只保留微信反馈路径（reply_checker.py）
+    # 和前端手动标记（P1 实现）。
 
 
+# _detect_contact_validity_from_outbound 已无调用方（webhook 删除，reply_checker 直接调 mark/recover）。
+# 保留函数定义供未来前端标记 API 复用。
 def _detect_contact_validity_from_outbound(
     db: Session,
     *,
