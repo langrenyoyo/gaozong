@@ -20,6 +20,7 @@ Create Date: 2026-08-05
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0026"
 down_revision = "0025"
@@ -44,10 +45,10 @@ def upgrade() -> None:
         sa.Column("city", sa.String(length=100), nullable=True, comment="城市"),
         sa.Column("contact_state", sa.String(length=16), nullable=False, server_default="none",
                   comment="联系方式状态 none/partial/valid（只读镜像，写入走 P0.2 contact_state 链路）"),
-        # 事实确认 vs LLM 推断分层
-        sa.Column("confirmed_fields_json", sa.Text(), nullable=True,
+        # 事实确认 vs LLM 推断分层（JSONB，对齐 ORM _JSONStringJSONB）
+        sa.Column("confirmed_fields_json", JSONB(none_as_null=True), nullable=True,
                   comment="客户明确确认的字段集 JSON"),
-        sa.Column("inferred_fields_json", sa.Text(), nullable=True,
+        sa.Column("inferred_fields_json", JSONB(none_as_null=True), nullable=True,
                   comment="LLM 推断的字段集 JSON"),
         sa.Column("source", sa.String(length=32), nullable=False, server_default="auto_reply",
                   comment="写入来源 auto_reply/preview/training"),
