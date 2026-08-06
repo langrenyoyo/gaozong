@@ -1,6 +1,7 @@
 """FastAPI 应用入口"""
 
 import logging
+import os
 logger = logging.getLogger(__name__)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
