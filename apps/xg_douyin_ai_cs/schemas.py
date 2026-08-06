@@ -144,6 +144,11 @@ class CustomerMemory(BaseModel):
     budget: str | None = Field(default=None, max_length=100)
     city: str | None = Field(default=None, max_length=100)
     contact: CustomerContactMemory = Field(default_factory=CustomerContactMemory)
+    # P-0-C 阶段3：称呼/性别/字段来源/联系方式失效状态——9000 通过 HTTP 注入 9100
+    salutation: str | None = None
+    gender: str | None = None
+    field_sources: dict | None = None
+    contact_invalid: dict | None = None
 
 
 class ReplySuggestionRequest(BaseModel):

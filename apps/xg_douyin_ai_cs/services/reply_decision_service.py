@@ -3124,6 +3124,8 @@ def _customer_memory_slots(customer_memory: object) -> dict[str, Any]:
         "usage": None,
         "city": _optional_text(getattr(customer_memory, "city", None)),
         "concerns": [],
+        "salutation": _optional_text(getattr(customer_memory, "salutation", None)),
+        "gender": _optional_text(getattr(customer_memory, "gender", None)),
     }
 
 
