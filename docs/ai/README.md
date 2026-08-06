@@ -72,6 +72,8 @@ docs/ai/04_OUTPUT_RULES.md
 | PostgreSQL 生产切换 Runbook | `05_acceptance/P3-E-9100-PRODUCTION-CUTOVER-BAOTA-RUNBOOK.md` |
 | 接口契约 | `04_interface_contracts/09_INTERFACE_CONTRACT_AUTO_WECHAT.md` |
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
+| 抖音私信能力 OpenAPI（含消息解码/资源下载） | `04_interface_contracts/抖音OpenAPI/抖音私信能力对外OpenApi.docx` |
+| 线索识别 AI 技能规则 | `01_product_prd/线索识别AI技能规则.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |
 | P1-END-1 验收（改微信自动化前必读） | `05_acceptance/P1_END_1_ACCEPTANCE.md` |
 | 微信回复检测规则 | `10_local_agent_wechat/WECHAT_REPLY_DETECTION_RULES.md` |
