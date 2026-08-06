@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -21,11 +22,14 @@ from app.models import (
     SalesStaff,
 )
 from app.services import sales_followup_service
+from app.services.customer_profile_service import load_customer_profile
 from app.services.douyin_customer_profile_deriver import (
     derive_profile_fields_from_messages,
     derive_profile_fields_from_raw_data,
     merge_profile_fields,
 )
+
+logger = logging.getLogger(__name__)
 
 
 HIGH_INTENT_KEYWORDS = ("价格", "多少钱", "报价", "最低", "预算", "看车", "到店", "电话", "微信", "联系")
@@ -268,7 +272,28 @@ def build_lead_payload(db: Session, lead: DouyinLead, *, include_detail: bool = 
 def _derive_lead_profile_fields(db: Session, lead: DouyinLead, *, include_messages: bool) -> dict[str, str | None]:
     raw_fields = derive_profile_fields_from_raw_data(_safe_raw_data(lead))
     message_fields = derive_profile_fields_from_messages(_lead_customer_message_texts(db, lead)) if include_messages else {}
-    return merge_profile_fields(raw_fields, message_fields)
+    profile_fields = merge_profile_fields(raw_fields, message_fields)
+    # 4.0 客户画像三源统一：持久化档案优先覆盖消息派生（intent_car/car_year/budget/city）。
+    # lead.source_id=customer_open_id、lead.account_open_id=企业号、lead.merchant_id=商户。读表异常降级不阻断。
+    if lead.merchant_id and lead.account_open_id and lead.source_id:
+        try:
+            persisted = load_customer_profile(
+                db,
+                merchant_id=str(lead.merchant_id),
+                account_open_id=str(lead.account_open_id),
+                customer_open_id=str(lead.source_id),
+            )
+            if persisted:
+                for field in ("intent_car", "car_year", "budget", "city"):
+                    value = persisted.get(field)
+                    if value:
+                        profile_fields[field] = str(value).strip()
+        except Exception as exc:  # noqa: BLE001 —— 读表失败降级到消息派生，不阻断线索列表
+            logger.warning(
+                "lead_profile_load_failed lead_id=%s merchant_id=%s error=%s",
+                lead.id, lead.merchant_id, type(exc).__name__,
+            )
+    return profile_fields
 
 
 def _lead_customer_message_texts(db: Session, lead: DouyinLead) -> list[str]:

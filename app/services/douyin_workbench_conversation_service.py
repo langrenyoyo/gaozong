@@ -24,6 +24,7 @@ from app.models import (
     DouyinWebhookEvent,
 )
 from app.services.contact_extractor import extract_contacts_from_text
+from app.services.customer_profile_service import load_customer_profile
 from app.services.douyin_customer_profile_deriver import (
     derive_profile_fields_from_messages,
     derive_profile_fields_from_raw_data,
@@ -954,6 +955,26 @@ def _conversation_profile_payload(
         derive_profile_fields_from_raw_data(raw_data),
         _profile_fields_from_customer_messages(messages),
     )
+    # 4.0 客户画像三源统一：持久化档案优先覆盖消息派生（gender/preferred_salutation 不展示，
+    # 只覆盖 intent_car/car_year/budget/city 四个展示字段）。读表异常降级到派生结果，不阻断。
+    if merchant_id and first.account_open_id and first.open_id:
+        try:
+            persisted = load_customer_profile(
+                db,
+                merchant_id=merchant_id,
+                account_open_id=first.account_open_id,
+                customer_open_id=first.open_id,
+            )
+            if persisted:
+                for field in ("intent_car", "car_year", "budget", "city"):
+                    value = persisted.get(field)
+                    if value:
+                        profile_fields[field] = str(value).strip()
+        except Exception as exc:  # noqa: BLE001 —— 读表失败降级到消息派生，不阻断工作台
+            logger.warning(
+                "workbench_profile_load_failed account_open_id=%s customer_open_id=%s error=%s",
+                _mask_open_id(first.account_open_id), _mask_open_id(first.open_id), type(exc).__name__,
+            )
     return {
         "conversation_id": first.conversation_key,
         "conversation_key": first.conversation_key,
