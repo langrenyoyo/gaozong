@@ -230,6 +230,10 @@ DY_BASE_URL = (DY_BASE_URL_LEGACY or f"{DY_OPENAPI_BASE_URL}{DY_OPENAPI_PREFIX}"
 DY_MAIN_ACCOUNT_ID = int(os.getenv("DY_MAIN_ACCOUNT_ID", "0").strip() or "0")
 DY_ACCOUNT_NAME = os.getenv("DY_ACCOUNT_NAME", "")
 DY_HTTP_TIMEOUT_SECONDS = int(os.getenv("DY_HTTP_TIMEOUT_SECONDS", "20"))
+# 私信掩码解码单独超时：webhook 同步调用，必须比 webhook 响应超时短，避免阻塞回调
+DY_DECODE_MSG_TIMEOUT_SECONDS = float(os.getenv("DY_DECODE_MSG_TIMEOUT_SECONDS", "5"))
+# 私信掩码解码开关：出问题可一键关闭回退到掩码兜底，无需重新部署
+DOUYIN_DECODE_MASKED_ENABLED = os.getenv("DOUYIN_DECODE_MASKED_ENABLED", "true").lower() == "true"
 DY_ALLOWED_DRIFT_SECONDS = int(os.getenv("DY_ALLOWED_DRIFT_SECONDS", "300"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")
 DY_LIVE_CHECK_ENABLED = os.getenv("DY_LIVE_CHECK_ENABLED", "false").lower() == "true"

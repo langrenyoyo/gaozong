@@ -422,8 +422,14 @@ async def _handle_douyin_webhook(
     # 抖音平台掩码解码：has_encoded=="true" 时调 /decode_msg_content 拿明文，替换 content.text
     # 供后续 _process_webhook_*/extract_contacts_from_text 用明文。失败保留掩码文本不阻断。
     # ponytail 已知局限：同步调用（decode 结果要替换 text 供后续流程用，不能异步），超时由
-    # config.DY_HTTP_TIMEOUT_SECONDS(20s) 保护；msg_id 24h 有效期，webhook 实时事件必在窗口内。
-    if _has_encoded == "true" and _raw_text and config.DY_MAIN_ACCOUNT_ID:
+    # config.DY_DECODE_MSG_TIMEOUT_SECONDS(5s) 收紧保护（比 webhook 响应超时短）；msg_id 24h 有效期。
+    # 开关 DOUYIN_DECODE_MASKED_ENABLED 可一键关闭回退到掩码兜底，无需重新部署。
+    if (
+        config.DOUYIN_DECODE_MASKED_ENABLED
+        and _has_encoded == "true"
+        and _raw_text
+        and config.DY_MAIN_ACCOUNT_ID
+    ):
         _decoded = _try_decode_masked_text(payload, _webhook_content)
         if _decoded:
             _webhook_content["text"] = _decoded

@@ -187,7 +187,11 @@ def decode_msg_content(
     }
 
     try:
-        result = call_douyin_openapi("/decode_msg_content", request_payload)
+        result = call_douyin_openapi(
+            "/decode_msg_content",
+            request_payload,
+            timeout=config.DY_DECODE_MSG_TIMEOUT_SECONDS,
+        )
     except HTTPException as exc:
         logger.warning(
             "decode_msg_content_failed msg_id=%s detail=%s",

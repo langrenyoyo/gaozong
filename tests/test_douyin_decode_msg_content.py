@@ -102,9 +102,10 @@ def test_decode_payload_matches_doc_table26():
     """请求 payload 与文档表26一致：main_account_id/open_id/guest_uid/conversation_id/msg_id。"""
     captured = {}
 
-    def fake_call(path, payload):
+    def fake_call(path, payload, timeout=None):
         captured["path"] = path
         captured["payload"] = payload
+        captured["timeout"] = timeout
         return {"payload": {"code": 0, "data": {"content": "明文"}}, "debug": {}}
 
     with patch(
@@ -126,6 +127,99 @@ def test_decode_payload_matches_doc_table26():
         "conversation_id": "conv_001",
         "msg_id": "msg_001",
     }
+
+
+def test_decode_uses_short_timeout():
+    """decode 用 config.DY_DECODE_MSG_TIMEOUT_SECONDS(5s) 收紧超时，不用默认 20s。"""
+    captured = {}
+
+    def fake_call(path, payload, timeout=None):
+        captured["timeout"] = timeout
+        return {"payload": {"code": 0, "data": {"content": "明文"}}, "debug": {}}
+
+    with patch(
+        "app.services.douyin_resource_download_service.call_douyin_openapi",
+        side_effect=fake_call,
+    ), patch(
+        "app.services.douyin_resource_download_service.config.DY_DECODE_MSG_TIMEOUT_SECONDS",
+        5.0,
+    ):
+        decode_msg_content(
+            main_account_id=1234,
+            open_id="enterprise_open_id",
+            guest_uid="guest_open_id",
+            conversation_id="conv_001",
+            msg_id="msg_001",
+        )
+    assert captured["timeout"] == 5.0
+
+
+def test_webhook_decode_disabled_by_switch():
+    """开关 DOUYIN_DECODE_MASKED_ENABLED=false → webhook 不调 decode_msg_content。"""
+    import time
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    app = create_app()
+    client = TestClient(app)
+    suffix = str(int(time.time() * 1000000))
+    payload = _make_payload(text="138****8002", has_encoded="true")
+    payload["from_user_id"] = f"user_{suffix}"
+    payload["content"] = json.dumps(
+        {
+            "conversation_short_id": "conv_001",
+            "server_message_id": f"msg_{suffix}",
+            "text": "138****8002",
+            "has_encoded": "true",
+        },
+        ensure_ascii=False,
+    )
+    payload["msg_id"] = f"msg_{suffix}"
+
+    with patch("app.config.LEADS_WEBHOOK_INTERNAL_ENABLED", False), \
+         patch("app.config.NEWCAR_AUTH_ENABLED", False), \
+         patch("app.config.DOUYIN_DECODE_MASKED_ENABLED", False), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 1234), \
+         patch("app.routers.integrations.decode_msg_content") as mock_decode, \
+         patch("app.routers.integrations.maybe_schedule_ai_auto_reply"):
+        resp = client.post("/webhook/douyin", json=payload)
+    assert resp.status_code == 200
+    # 开关关闭：decode_msg_content 不应被调用
+    mock_decode.assert_not_called()
+
+
+def test_webhook_decode_triggered_when_enabled():
+    """开关 DOUYIN_DECODE_MASKED_ENABLED=true + has_encoded==true → 调 decode_msg_content。"""
+    import time
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    app = create_app()
+    client = TestClient(app)
+    suffix = str(int(time.time() * 1000000))
+    payload = _make_payload(text="138****8002", has_encoded="true")
+    payload["from_user_id"] = f"user_{suffix}"
+    payload["content"] = json.dumps(
+        {
+            "conversation_short_id": "conv_001",
+            "server_message_id": f"msg_{suffix}",
+            "text": "138****8002",
+            "has_encoded": "true",
+        },
+        ensure_ascii=False,
+    )
+    payload["msg_id"] = f"msg_{suffix}"
+
+    with patch("app.config.LEADS_WEBHOOK_INTERNAL_ENABLED", False), \
+         patch("app.config.NEWCAR_AUTH_ENABLED", False), \
+         patch("app.config.DOUYIN_DECODE_MASKED_ENABLED", True), \
+         patch("app.config.DY_MAIN_ACCOUNT_ID", 1234), \
+         patch("app.routers.integrations.decode_msg_content", return_value="13812345678") as mock_decode, \
+         patch("app.routers.integrations.maybe_schedule_ai_auto_reply"):
+        resp = client.post("/webhook/douyin", json=payload)
+    assert resp.status_code == 200
+    # 开关开启 + has_encoded==true：decode_msg_content 应被调用
+    mock_decode.assert_called_once()
 
 
 # ---- webhook has_encoded 触发（_try_decode_masked_text 辅助函数）----
@@ -158,6 +252,7 @@ def test_webhook_decode_replaces_text_on_success():
         return_value="13812345678",
     ), patch.object(integrations, "config") as mock_config:
         mock_config.DY_MAIN_ACCOUNT_ID = 1234
+        mock_config.DOUYIN_DECODE_MASKED_ENABLED = True
         # 复现 webhook 入口的 parse + decode 触发逻辑
         content = payload.get("content")
         if isinstance(content, str):
@@ -214,6 +309,7 @@ def test_webhook_decode_open_id_guest_uid_not_reversed():
         side_effect=fake_decode,
     ), patch.object(integrations, "config") as mock_config:
         mock_config.DY_MAIN_ACCOUNT_ID = 1234
+        mock_config.DOUYIN_DECODE_MASKED_ENABLED = True
         content = payload.get("content")
         if isinstance(content, str):
             content = json.loads(content)
