@@ -3416,17 +3416,21 @@ _VALID_CONTACT_CONFLICT_PHRASES = (
 
 
 def _check_valid_contact_conflict(reply_text: str, contact_state: str, decision: dict) -> str:
-    """后置校验：contact_state=VALID 时不得声称号码有星号/不完整。
+    """后置校验：不得声称号码有星号/不完整。
+
+    覆盖两种情况：
+    1. contact_state=VALID（代码层识别到完整号码）——客户确实提供了完整号码
+    2. 回复文本本身含星号相关冲突词——无论 contact_state 如何，LLM 不应说"有星号"
+       （抖音平台脱敏后号码确实是星号格式，但 LLM 不应对客户说星号相关话术）
 
     命中时用安全模板替换，避免 LLM 把脱敏星号当真实内容。
     """
-    if contact_state != "VALID":
-        return reply_text
     if not any(phrase in reply_text for phrase in _VALID_CONTACT_CONFLICT_PHRASES):
         return reply_text
     # 命中冲突——用安全模板替换
     _logger.warning(
-        "valid_contact_conflict_blocked contact_state=VALID reply_contains_star_or_incomplete=true"
+        "valid_contact_conflict_blocked contact_state=%s reply_contains_star_or_incomplete=true",
+        contact_state,
     )
     retry_warnings = decision.get("_retry_warnings") or []
     if "valid_contact_conflict_blocked" not in retry_warnings:
