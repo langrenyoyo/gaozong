@@ -453,11 +453,19 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
                 # 否则不写入（LLM 编造，如客户没说"19款"却编造写入）
                 # 正向匹配（值在客户消息中）+ 反向匹配（客户消息是值的子串，兼容"广州"→"广州市"）
                 # 反向匹配加长度约束：值不超过客户消息的1.5倍，防 LLM 在短消息上大幅扩展编造
+                # preferred_salutation 特殊处理：LLM 可能把"阿森"→"森哥"（加了哥/姐），
+                # 检查值的去后缀部分（去"哥""姐"）是否在客户消息中
                 _val_len = len(_val_str)
                 _msg_len = len(_customer_msg)
                 _forward = _val_str in _customer_msg
                 _reverse = _customer_msg in _val_str and _msg_len > 0 and _val_len <= _msg_len * 1.5
-                if _forward or _reverse:
+                _salutation_match = False
+                if _field == "preferred_salutation" and not _forward and not _reverse:
+                    # 去掉"哥""姐"后缀检查原始名字是否在客户消息中
+                    _name_part = _val_str.rstrip("哥姐")
+                    if _name_part and len(_name_part) >= 2 and _name_part in _customer_msg:
+                        _salutation_match = True
+                if _forward or _reverse or _salutation_match:
                     _verified_updates[_field] = _value
                 else:
                     logger.info(
