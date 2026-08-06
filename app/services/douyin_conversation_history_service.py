@@ -50,7 +50,7 @@ def build_reply_conversation_context(
     """
     if not account_open_id or not conversation_key:
         return ReplyConversationContext(
-            latest_message=mask_contacts_in_text(latest_message),
+            latest_message=latest_message,
             conversation_history=[],
             customer_memory=_build_customer_memory(latest_message=latest_message, profile=None, lead=None, items=[]),
             lead=None,
@@ -110,7 +110,7 @@ def build_reply_conversation_context(
                 account_open_id, customer_open_id, str(exc)[:200],
             )
     return ReplyConversationContext(
-        latest_message=mask_contacts_in_text(latest_message),
+        latest_message=latest_message,
         conversation_history=masked_history,
         customer_memory=customer_memory,
         lead=lead,
