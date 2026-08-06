@@ -1788,3 +1788,43 @@ class CustomerProfile(Base):
     contact_invalid_version = Column(Integer, nullable=False, default=0, comment="失效版本号，每次VALID→INVALID递增")
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ContactInvalidFollowupTask(Base):
+    """空号追问主动发送任务（块3）。
+
+    与回访任务独立，不复用 return_visit_followup_tasks。
+    同一 invalid_version 最多创建 2 条任务（followup_sequence=1, 2）。
+    """
+    __tablename__ = "contact_invalid_followup_tasks"
+    __table_args__ = (
+        UniqueConstraint("merchant_id", "lead_id", "invalid_version", "followup_sequence",
+                         name="uq_contact_invalid_followup"),
+        Index("idx_cift_status_scheduled", "status", "scheduled_at"),
+        Index("idx_cift_lead_version", "lead_id", "invalid_version"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False)
+    lead_id = Column(Integer, nullable=False)
+    account_open_id = Column(String(255), nullable=False)
+    conversation_short_id = Column(String(255), nullable=False)
+    customer_open_id = Column(String(255), nullable=False)
+    invalid_version = Column(Integer, nullable=False)
+    trigger_source = Column(String(32), nullable=False, comment="douyin_workbench/wechat_reply")
+    trigger_message_id = Column(String(255))
+    invalid_reason = Column(String(64), nullable=False)
+    followup_sequence = Column(Integer, nullable=False, default=1, comment="1 or 2")
+    status = Column(String(20), nullable=False, default="pending",
+                   comment="pending/processing/sent/cancelled/retry_wait/failed/dead")
+    scheduled_at = Column(DateTime, nullable=False)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    lease_owner = Column(String(128))
+    lease_expires_at = Column(DateTime)
+    sent_message_id = Column(String(255))
+    sent_at = Column(DateTime)
+    cancelled_at = Column(DateTime)
+    cancel_reason = Column(String(128))
+    last_error = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

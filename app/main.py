@@ -229,6 +229,11 @@ def create_app() -> FastAPI:
         if config.RETURN_VISIT_SILENT_SCAN_ENABLED:
             return_visit_silent_scan_scheduler.start()
 
+        # 空号追问 Worker（默认关闭，CONTACT_INVALID_FOLLOWUP_ENABLED=true 启动）
+        if os.environ.get("CONTACT_INVALID_FOLLOWUP_ENABLED", "false").strip().lower() == "true":
+            from app.services.contact_invalid_followup_service import start_followup_scheduler
+            start_followup_scheduler()
+
     @app.on_event("shutdown")
     async def on_shutdown():
         await close_async_database_runtime()
@@ -236,6 +241,12 @@ def create_app() -> FastAPI:
         daily_report_scheduler.stop()
         wechat_auto_detect_scheduler.stop()
         return_visit_silent_scan_scheduler.stop()
+        # 空号追问 Worker
+        try:
+            from app.services.contact_invalid_followup_service import stop_followup_scheduler
+            stop_followup_scheduler()
+        except Exception:
+            pass
         # P8-4：释放热键 + 关闭桌面提示
         from app.services.hotkey_listener import stop_hotkey_listener
         from app.services.desktop_overlay import stop_desktop_overlay

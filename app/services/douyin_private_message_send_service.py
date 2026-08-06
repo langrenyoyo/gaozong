@@ -30,6 +30,7 @@ _FORBIDDEN_SOURCE_BY_SEND_SOURCE = {
     "manual": "douyin_manual",
     "ai_auto": "douyin_ai_auto",
     "return_visit_auto": "douyin_return_visit",
+    "contact_invalid_followup": "douyin_contact_invalid_followup",
 }
 
 

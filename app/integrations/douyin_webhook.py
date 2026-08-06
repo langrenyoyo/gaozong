@@ -1240,12 +1240,13 @@ def _post_process_im_send_msg(db: Session, event: DouyinWebhookEvent) -> None:
         commit=False,
     )
 
-    # P-0-C 空号追问链路（块2 Task2A）：检测人工客服消息是否含联系方式失效/恢复表达
+    # P-0-C 空号追问链路（块2 Task2A + 块3入队）：检测人工客服消息是否含联系方式失效/恢复表达
     _detect_contact_validity_from_outbound(
         db,
         merchant_id=merchant_id,
         account_open_id=account_open_id,
         customer_open_id=customer_open_id,
+        conversation_short_id=event.conversation_short_id,
         message_text=normalize_message_text(content),
         source="douyin_workbench",
         source_message_id=str(event.id),
@@ -1261,6 +1262,7 @@ def _detect_contact_validity_from_outbound(
     message_text: str,
     source: str,
     source_message_id: str | None,
+    conversation_short_id: str | None = None,
 ) -> None:
     """检测人工客服出站消息中的联系方式有效性表达（块2 Task2A/2B 共用）。
 
@@ -1277,7 +1279,7 @@ def _detect_contact_validity_from_outbound(
         from app.services.customer_profile_service import mark_contact_invalid, recover_contact_valid
         result = analyze_contact_validity(message_text)
         if result.status == "invalid":
-            mark_contact_invalid(
+            new_version = mark_contact_invalid(
                 db,
                 merchant_id=merchant_id,
                 account_open_id=account_open_id,
@@ -1286,13 +1288,58 @@ def _detect_contact_validity_from_outbound(
                 source=source,
                 source_message_id=source_message_id,
             )
+            # 块3入队：状态迁移时创建追问任务（只在 VALID→INVALID 迁移时，new_version 非 None）
+            if new_version and conversation_short_id:
+                try:
+                    from app.services.contact_invalid_followup_service import create_followup_task
+                    # 查 lead_id
+                    lead = db.query(DouyinLead).filter(
+                        DouyinLead.merchant_id == merchant_id,
+                        DouyinLead.account_open_id == account_open_id,
+                        DouyinLead.source_id == customer_open_id,
+                    ).first()
+                    if lead:
+                        create_followup_task(
+                            db,
+                            merchant_id=merchant_id,
+                            lead_id=lead.id,
+                            account_open_id=account_open_id,
+                            conversation_short_id=conversation_short_id,
+                            customer_open_id=customer_open_id,
+                            invalid_version=new_version,
+                            trigger_source=source,
+                            trigger_message_id=source_message_id,
+                            invalid_reason=result.reason or "other",
+                        )
+                except Exception as exc:
+                    logger.warning("contact_invalid_followup_create_failed error=%s", str(exc)[:200])
         elif result.status == "valid":
-            recover_contact_valid(
+            recovered = recover_contact_valid(
                 db,
                 merchant_id=merchant_id,
                 account_open_id=account_open_id,
                 customer_open_id=customer_open_id,
             )
+            # 恢复时取消当前 invalid_version 下所有未发送追问任务
+            if recovered and conversation_short_id:
+                try:
+                    from app.services.contact_invalid_followup_service import cancel_pending_tasks
+                    # 查 lead_id
+                    lead = db.query(DouyinLead).filter(
+                        DouyinLead.merchant_id == merchant_id,
+                        DouyinLead.account_open_id == account_open_id,
+                        DouyinLead.source_id == customer_open_id,
+                    ).first()
+                    if lead and lead.contact_invalid_version:
+                        cancel_pending_tasks(
+                            db,
+                            merchant_id=merchant_id,
+                            lead_id=lead.id,
+                            invalid_version=lead.contact_invalid_version,
+                            cancel_reason="contact_recovered",
+                        )
+                except Exception as exc:
+                    logger.debug("contact_invalid_followup_cancel_failed error=%s", str(exc)[:200])
     except Exception as exc:
         logger.warning(
             "contact_validity_detect_failed merchant_id=%s customer_open_id=%s error=%s",
