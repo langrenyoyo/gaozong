@@ -95,11 +95,23 @@
 | 2 Lead 数量比较 | A=0 / B=1 assigned | **PASS** | 新 Lead 分配给 A（min leads=0）→ assigned_staff_id=1 验证通过 |
 | 3 连续分配 | — | NOT_TESTED | 仅 1 条新 pending lead，无法验证连续多条轮询行为 |
 
-**算法描述冻结（以 E2E 为准）**：
-- 候选筛选：active + enable_lead_assignment + merchant_id 匹配
-- Inactive staff 被 400 拒绝（assign_service.py:48-52）
-- Lead 数量比较：统计 assigned 状态线索数，取 min
-- 轮询/连续分配：NOT_TESTED（fixture 不足，需多条 pending lead）
+**算法描述冻结（以 E2E 为准，非代码推测）**：
+
+VERIFIED:
+- merchant 过滤（CODE_VERIFIED）
+- active 过滤（CODE_VERIFIED）
+- enable_lead_assignment 过滤（CODE_VERIFIED）
+- assigned 数量统计（CODE_VERIFIED）
+- min-load / 少者优先（CODE_VERIFIED + E2E_VERIFIED：A=0/B=1→分配给 A）
+- disabled direct assignment rejection（E2E_VERIFIED：C disabled→400 拒绝）
+
+NOT_VERIFIED:
+- 连续多次分配
+- tie-breaking
+- round-robin 运行行为
+
+candidate filtering: CODE_VERIFIED
+disabled direct assignment rejection: E2E_VERIFIED
 
 ### Gate B: Feedback Valid-Input Success Path
 
@@ -118,3 +130,56 @@
 
 Gate A 从 PARTIAL 升级为 PASS（inactive 过滤 + 少者优先 E2E 验证通过；连续分配 NOT_TESTED 但不阻断）。
 Gate B 登记 ISSUE-M02-007（Feedback API 输入合同不清晰），不阻断 Baseline。
+
+---
+
+## M02_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> 后续补 staging 时只补 PENDING_STAGING，不重做全套探索/E2E
+
+### VERIFIED
+
+- Webhook 会话聚合
+- 同客户新会话→新建 Lead
+- Lead Data Owner = M02（M01/M04 为 EXTERNAL_WRITER/DATA_COUPLING）
+- 商户内全部可见（merchant-level data scope）
+- Assignment：merchant 过滤 + active + enable_lead_assignment + assigned min-load
+- Reassign：owner 变更 + LeadFollowupRecord
+- Contact/identity 当前行为
+- Status 当前模型：DB 无约束 + 无独立公开 mutation API
+- Feedback parser core + invalid-input handling
+
+### NOT_VERIFIED
+
+- 连续多次分配
+- tie-breaking
+- round-robin 运行行为
+
+### PENDING_STAGING
+
+- Cross-merchant real-auth isolation
+- M01 真实 webhook→M02 Lead
+- M02→M04 真实微信通知
+- M04→M02 真实反馈持久化
+
+### KNOWN ISSUE
+
+- ISSUE-M02-007 Feedback parse-and-persist contract failure（MEDIUM）
+- reassign_count 未自增（LOW）
+
+### POLICY_PENDING / CONTRACT_GAP
+
+- Manual Create identity behavior
+- Lead vs Customer identity semantics
+- 同客户多会话多 Lead policy
+
+### LEGACY
+
+- sync-leads：Lifecycle=LEGACY + still writable + different identity
+
+### 冻结路径
+
+staging → 补 PENDING_STAGING → `M02_MODULE_BASELINE_APPROVED`
+M04 验真期间取得合格证据可复用，但必须回填 M02 验收记录
