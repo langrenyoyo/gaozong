@@ -2,13 +2,23 @@
 
 > source_baseline: c26ec227e70d
 
-## M05 → M06（shared_implementation）
+## M05 → M06（两个层次）
+
+### Business/data 层（M06 → M05 素材消费 CONTRACT）
 
 | 边 | 类型 | mechanism | 证据 |
 |---|---|---|---|
-| M05→M06 | S | shared code | 共用 ai_edit.py router + features/ai-edit/ 目录 + auto_wechat:ai_edit 权限（ai_edit.py:28, frontend routes.ts:6-7） |
+| M06→M05 | D | direct DB | create_job 校验素材 get_material_for_merchant + pinned_sha256 防漂移（ai_edit_service.py:256-269） |
 
-> 解耦候选：拆分 router/feature 目录为 M05/materials 和 M06/editor，但当前共用不阻断功能。
+> M06 消费 M05 素材是 **CONTRACT 依赖**（M06 → M05 方向），不是 M05 依赖 M06。
+
+### Implementation 层（M05 ↔ M06 shared implementation coupling，另一维度）
+
+| 边 | 类型 | mechanism | 证据 |
+|---|---|---|---|
+| M05↔M06 | S | shared code | 共用 ai_edit.py router + features/ai-edit/ 目录 + auto_wechat:ai_edit 权限（ai_edit.py:28, frontend routes.ts:6-7） |
+
+> 解耦候选：拆分 router/feature 目录为 M05/materials 和 M06/editor，但当前共用不阻断功能。这是 Implementation Coupling 维度，与 Business/data 层分开描述。
 
 ## M05 → TOS（external，素材存储）
 

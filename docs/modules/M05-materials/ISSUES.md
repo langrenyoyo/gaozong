@@ -2,6 +2,16 @@
 
 > source_baseline: c26ec227e70d | 本轮只登记不修复
 
+## HIGH
+
+### ISSUE-M05-004 预签名 URL 持久化到 DB（非 stable key）
+
+- **位置**：app/routers/ai_edit.py:301,326（tos_presigned_url 直接存 presigned HTTPS URL）；app/models.py:1644-1645
+- **事实**：上传端点将 TOS 预签名 HTTPS URL 直接持久化到 `AiEditMaterial.tos_presigned_url` 列；`cloud_storage_key`（stable TOS object key）字段存在但上传链路未写入
+- **影响**：预签名 URL 有过期时间（tos_presigned_expires_at），过期后 DB 中的 URL 失效，M06 LAS 消费时可能拿到过期 URL 导致失败；同素材复活时刷新预签名（:301）但两次上传之间窗口内 URL 可能过期
+- **根因**：上传链路设计为"存 presigned URL 喂 LAS"而非"存 stable key + 按需生成 presigned URL"
+- **建议**：改为存 `cloud_storage_key`（stable TOS path），按需动态生成 presigned URL（不在本轮修复）
+
 ## LOW
 
 ### ISSUE-M05-001 M05/M06 共用 router + feature 目录（SHARED_IMPLEMENTATION）
@@ -48,7 +58,7 @@
 | 级别 | 数量 |
 |---|---|
 | BLOCKER | 0 |
-| HIGH | 0 |
+| HIGH | 1（预签名 URL 持久化到 DB 非 stable key） |
 | MEDIUM | 0 |
 | LOW | 3（共用 router/feature / purge 无执行 / scenes 空） |
 | TEST_GAP | 1（端点级 E2E 全 MISSING） |

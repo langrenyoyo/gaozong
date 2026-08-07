@@ -57,7 +57,20 @@ M06 create_job (ai_edit_service.py:241-297)
   → 写 AiEditJobMaterial (含 pinned_sha256/source_start/source_end) (:270-280)
 ```
 
-## 5. 前端能力
+## 5. Local Agent 注册（非 M04 19000）
+
+```
+POST /ai-edit/materials (require_local_agent_context, ai_edit.py:192-221)
+  → svc.register_material (ai_edit_service.py:108-160)
+  → 仅写库不传文件 (storage_mode=local_only, service.py:152)
+```
+
+> **术语区分**：M05 的 "Local Agent 注册" 与 M04 的 19000 WeChat Local Agent **不是同一能力**。
+> - M05 Local Agent 注册：经 `require_local_agent_context`（X-Local-Agent-Token），用于 Local Agent 上报本机已有的素材文件元数据（不传文件内容，仅写 DB 记录 `storage_mode=local_only`）
+> - M04 19000 WeChat Local Agent：微信 UI 自动化执行进程（poll-and-execute/detect-reply）
+> - 两者共用 `X-Local-Agent-Token` 认证机制（同一 token→merchant_id 映射），但业务能力完全不同。为避免术语污染，M05 的注册能力命名为 **"AI Edit Local Agent Material Registration"**
+
+## 6. 前端能力
 
 ```
 MaterialLibrary.tsx (402行):

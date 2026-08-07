@@ -2,6 +2,13 @@
 
 > source_baseline: c26ec227e70d
 
+## Owner 拆分
+
+| 维度 | Owner | 说明 |
+|---|---|---|
+| Material business record owner | **M05** | AiEditMaterial/Analysis/Process/Template 表的业务数据归属 |
+| TOS object lifecycle owner | **需按代码定义** | TOS 上传由 `las_tos_uploader.py` 的 TOSUploader 完成；purge_after 7 天字段存在但无执行器（worker/script/scheduler），**IMPLEMENTED_DATA_MODEL_ONLY** |
+
 ## M05 拥有的表
 
 ### AiEditMaterial（OWNER: M05）
@@ -23,9 +30,20 @@
 | display_name / description / category / duration_seconds / width / height / fps / file_size_bytes | Task12 扩展 | |
 | manual_override_json / manual_confirmed_at | JSON/DateTime | 人工覆盖优先 |
 | purge_operation_id / purge_status | String | purge 字段已建表但无执行代码 |
-| tos_presigned_url / tos_presigned_expires_at | String/DateTime | LAS 消费 |
+| tos_presigned_url / tos_presigned_expires_at | Text/DateTime | **临时 HTTPS URL 直接入库**（ai_edit.py:301,326），非 stable key |
+| cloud_storage_key | String(255) | stable TOS object key 字段存在但**上传链路未写入** |
 
 **唯一约束**：同商户同 SHA 唯一（models.py:1593）
+
+### SHA-256 去重精确化
+
+```
+Content fingerprint: SHA-256 (source_sha256, 计算于 ai_edit.py:260)
+Deduplication scope: merchant + sha256 (唯一约束 models.py:1593, scope=merchant)
+                   scope=platform 素材可跨商户只读但不在去重 scope 内
+Behavior: 同 merchant + 同 sha256 命中 → 复活软删 + 刷新预签名（reuse, ai_edit.py:290-312）
+          不同 merchant 相同 sha256 → 各自独立创建（coexist, test_phase12_task12_material_api.py:146 确认）
+```
 
 ### AiEditMaterialAnalysis（OWNER: M05）
 定义：`models.py:1648-1661`。按 source_sha256 聚合一条，存 transcript_json/scenes_json/tags_json/usable_ranges_json + analysis_version
