@@ -130,3 +130,50 @@ GATE-M03-03 = PENDING_STAGING（Training 隔离，需真实知识库训练端）
 7. 可控的 GMP webhook 触发方式（测试客户真实发私信）
 
 满足以上条件后补验证 8 个 Gate，不重做 Docker E2E 已验证项。
+
+---
+
+## M01_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> 后续补 staging 时只补 PENDING_STAGING 的 Gate，不重做全套探索/E2E
+
+### VERIFIED（按 8 子域）
+
+- M01-A：Webhook 主/兼容入口 + 串行幂等
+- M01-B：Outbox claim/lease/retry/terminal behavior + single-flight
+- M01-C：Agent Contract→Preview 一致 + Prompt 三层 + 9100 Docker 真实调用
+- M01-D：Contact State 五态 + current/known_valid 分离 + CustomerProfile 持久/运行时边界
+- M01-E：Gate Matrix（HARD_BLOCK 3 flag + manual_required + require_rag + prompt_injection 9100 侧）
+- M01-F：发送前二次检查代码事实（send_source 4 值白名单 + AI/人工分类器）
+- M01-G：Follow-up 能力及 runtime state（回访双通道 + 空号追问 implemented/config_disabled）
+- M01-H：状态/decision/failure-stage 可观测结构
+
+### PENDING_STAGING（环境阻断，非代码失败）
+
+1. Agent Binding → Auto Reply 真实消费（GATE-M03-01）
+2. Auto Reply 客户事实隔离（GATE-M03-02）
+3. Real Send → im_send_msg 回执
+4. Manual Takeover（AI 不得继续发送）
+5. Human Workbench Send Webhook 行为（抖音工作台人工发送是否产生 im_send_msg）
+6. latest_message_changed 真实竞态
+7. 真实 Webhook Contact State 矩阵
+8. 真实 Observability 闭环（SENT/BLOCKED/FAILED/takeover 四类结果可解释）
+
+### KNOWN ISSUE
+
+- ISSUE-M01-004：AiAutoReplyRun production concurrency duplicate insert（Docker 串行 PASS / 生产并发 OPEN）
+
+### DEFERRED
+
+- Compute → M07
+
+### POLICY_PENDING
+
+- super_admin bypass → RBAC 基线
+
+### 冻结路径
+
+staging 可用 → 补 8 Gate → `M01_MODULE_BASELINE_APPROVED`
+M02/M04 验真期间取得合格证据可复用，但必须回填 M01 验收记录
