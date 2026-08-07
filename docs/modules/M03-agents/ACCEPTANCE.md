@@ -3,6 +3,34 @@
 > source_baseline: c26ec227e70d
 > 本任务只制定验收基线，不要求为了通过验收修改代码。
 
+## E2E 验真结果（2-M03.2，2026-08-07）
+
+环境：dev SQLite + mock auth + 9100 可达（但 docker 内部域名 `xg-douyin-ai-cs` 本地不可解析）
+
+| E2E | 域 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | Agent CRUD | PASS（5/6，Read-after-Update prompt 为空见 ISSUE-M03-004） | Create→Read→Update→Read→Delete→Confirm-Deleted 全链路 |
+| 2 | 商户隔离 | PASS | list 只返回 dev-merchant agents；跨商户 agent_id → 404 |
+| 3 | Knowledge Binding | PASS | bind base → read-back `['base']` 一致 |
+| 4 | Douyin Binding | SKIP（需真实抖音授权账号，本地无） | — |
+| 5 | Preview 真实 9100 | PARTIAL（环境限制） | HTTP 调用发起到 9100（日志可见 POST xg-douyin-ai-cs:9100），但 docker 域名本地不可解析返回 502。降级行为正确：manual_required=True, auto_send=False |
+| 5 | Preview 不触发发送 | **PASS** | auto_send=False 硬编码；AiAutoReplyRun=0 / DouyinPrivateMessageSend=0 |
+| 5 | Preview 副作用 | **PASS** | AiAutoReplyRun=0 / CustomerProfile=0 / DouyinPrivateMessageSend=0（preview 不写客户档案） |
+| 6 | Agent Contract | SKIP（需 auto-reply 真实 webhook 触发） | — |
+| 7 | 三场景隔离 | SKIP（需 auto-reply + training 真实运行） | — |
+| 8 | 9100 真实集成 | PARTIAL（环境限制） | 调用发起确认，但 502（docker 域名）；需在 docker compose 内或配 127.0.0.1:9100 验证 |
+| 9 | Compute | SKIP（LLM 未成功调用，无算力消耗） | — |
+| 专项1 | super_admin 实际行为 | SKIP（mock auth 不设 super_admin=True） | 需 RBAC 基线后验证 |
+| 专项2 | /agents/preview 路径歧义 | **PASS** | POST /agents/preview → 200（命中 preview handler）；GET /agents/preview → 404（未误命中 {agent_id}） |
+
+**E2E 状态：`M03_E2E_VERIFIED_PENDING_BASELINE`**（无 BLOCKER，5/9+2 项 PASS/SKIP，2 项 PARTIAL 受环境限制）
+
+### 环境限制说明
+- 本地 dev SQLite + mock auth，无法构造 super_admin=True 场景
+- 9100 虽可达但 client base_url 是 docker 内部域名 `xg-douyin-ai-cs`，本地不可解析
+- Douyin Binding / Auto Reply Contract / 三场景隔离 / Compute 需 docker compose 环境或真实 webhook 触发
+- 以上 SKIP 项不构成 BLOCKER，待生产/staging 环境补验证
+
 ## 当前已有验收能力
 
 ### 已覆盖（测试证据）

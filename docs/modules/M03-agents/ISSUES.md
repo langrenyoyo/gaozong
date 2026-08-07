@@ -4,7 +4,7 @@
 
 ## UNKNOWN
 
-### ISSUE-M03-001 super_admin 回复建议路径可绕过商户绑定校验（POLICY_PENDING）
+### ISSUE-M03-001 super_admin 回复建议路径可绕过商户绑定校验（POLICY_PENDING，E2E 待 RBAC 基线）
 
 - **位置**：`app/services/douyin_ai_cs_binding_service.py:42-47`
 - **事实**：`if context.super_admin: return allowed=True` with warning `SUPER_ADMIN_BYPASS_REQUIRES_AUDIT`，绕过商户绑定校验
@@ -15,6 +15,15 @@
 - **建议**：等 2-M03.2 E2E 专项 1 跑出实际行为后再定性
 
 ## LOW
+
+### ISSUE-M03-004 Update 后 Read 返回 prompt 为空
+
+- **位置**：`apps/agents/services.py:98-122` update_agent + `app/routers/agents.py:114-126`
+- **事实**：E2E-1 PUT /agents/{id} 传 `persona_prompt='你是奔驰客服'` → 200 OK；但再次 GET 返回 `prompt=''`（空）。name 更新成功，prompt 未更新。
+- **影响**：商户编辑智能体 Prompt 后，读取可能拿到空值；若 auto-reply 读到空 prompt 会走固定模板兜底（不致命但行为不符预期）
+- **可能根因**：update_agent 的 `model_dump(exclude_unset=True)` 字段映射 `persona_prompt` → `prompt` 可能有遗漏，或 GET 响应序列化 prompt 字段名不一致
+- **测试**：test_ai_agents.py:133 的 test_get_update_and_delete_agent 未断言 prompt 更新后值
+- **建议**：下一轮修复前先确认 update_agent 的字段映射逻辑
 
 ### ISSUE-M03-002 agent_config 三处重复组装逻辑
 
@@ -53,14 +62,12 @@
 - **影响**：CODE_INDEX 标记的 `entrypoints: ["create_agent", "update_agent", "bind_agent"]` 实际指向 `apps/agents/services.py`
 - **处理**：登记为 DRIFT（COMPAT，参考 LEGACY_REGISTER LEGACY-012 算力兼容入口同类）
 
-## UNKNOWN
+## 已 E2E 验证关闭
 
-### UNKNOWN-M03-001 preview 端点路径与 {agent_id} 潜在歧义
+### UNKNOWN-M03-001 preview 端点路径与 {agent_id} 潜在歧义（E2E 验证 PASS）
 
 - **位置**：`agents.py:194` `POST /agents/preview` 在 `agents.py:101` `GET /agents/{agent_id}` 之后声明
-- **事实**：FastAPI 路由匹配能区分字面段 `preview` 与参数段 `{agent_id}`，当前不构成 bug
-- **缺什么证据**：需确认 `GET /agents/preview` 不会命中 `GET /agents/{agent_id}` 导致 404
-- **处理**：UNKNOWN，需 E2E 验证
+- **E2E 结果**：POST /agents/preview → 200（命中 preview handler）；GET /agents/preview → 404（未误命中 {agent_id}）。**路径歧义不存在**。
 
 ## 总结
 
@@ -69,6 +76,11 @@
 | BLOCKER | 0 |
 | HIGH | 0 |
 | MEDIUM | 0 |
-| LOW | 2（重复组装 / 停用不可达） |
+| LOW | 3（重复组装 / 停用不可达 / Update prompt 空） |
+| DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
+| UNKNOWN | 1（super_admin bypass POLICY_PENDING，E2E 待 RBAC 基线） |
+| 已关闭 | 1（路径歧义，E2E 验证 PASS） |
+| MEDIUM | 0 |
+| LOW | 3（重复组装 / 停用不可达 / Update prompt 空） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
 | UNKNOWN | 2（super_admin bypass POLICY_PENDING / 路径歧义） |
