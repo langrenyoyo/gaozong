@@ -29,6 +29,7 @@ from app.config import (
 from app.models import (
     DouyinAuthorizedAccount,
     DouyinLead,
+    DouyinPrivateMessageSend,
     DouyinWebhookEvent,
     LeadNotification,
     ReplyCheck,
@@ -40,6 +41,7 @@ from app.services.contact_extractor import (
     ContactExtractResult,
     analyze_contact_state,
     extract_contacts_from_text,
+    is_lead_request_message,
 )
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
 from app.services.douyin_webhook_idempotency_service import claim_webhook_event
@@ -311,7 +313,7 @@ def _collect_recent_customer_fragments(
 
 def _combine_recent_customer_text(
     db, current_text: str, account_open_id: str, conversation_short_id: str, from_user_id: str,
-    merchant_id: str = "", limit: int = 5,
+    merchant_id: str = "", limit: int = 5, context_boost: bool = False,
 ) -> str:
     """受控合并分段联系方式片段。
 
@@ -321,6 +323,9 @@ def _combine_recent_customer_text(
 
     任一策略合并后必须通过完整手机号校验才采用规范化号码。不得盲拼无关数字；
     不跨客户/会话/账号/商户合并；不修改发送 gate。
+
+    context_boost（任务 2.4）：LEAD_REQUEST 上下文时拼接窗口从 5 分钟扩展到 10 分钟，
+    让客户回复留资引导时分段发送的号码更易拼合。
     """
     if not current_text or not conversation_short_id or not from_user_id:
         return current_text or ""
@@ -328,7 +333,9 @@ def _combine_recent_customer_text(
     # 当前已完整 → 无需合并
     if current_state.status == "VALID":
         return current_text
-    window_seconds = _env_int("DOUYIN_CONTACT_FRAGMENT_WINDOW_SECONDS", 300)
+    base_window = _env_int("DOUYIN_CONTACT_FRAGMENT_WINDOW_SECONDS", 300)
+    # context_boost：拼接窗口翻倍（5分钟→10分钟），规则文档 0.3
+    window_seconds = base_window * 2 if context_boost else base_window
     max_messages = _env_int("DOUYIN_CONTACT_FRAGMENT_MAX_MESSAGES", 3)
     fragments = _collect_recent_customer_fragments(
         db,
@@ -365,6 +372,64 @@ def _combine_recent_customer_text(
         if completion_state.status == "VALID" and completion_state.normalized_value:
             return completion_state.normalized_value
     return current_text
+
+
+# 任务 2.4：LEAD_REQUEST 上下文检测——客户当前消息紧前是否有 AI 留资引导出站消息
+_LEAD_REQUEST_WINDOW_SECONDS = _env_int("DOUYIN_LEAD_REQUEST_WINDOW_SECONDS", 300)
+_AI_SEND_SOURCES = ("ai_auto", "return_visit_auto")
+
+
+def _has_recent_lead_request(
+    db,
+    *,
+    account_open_id: str,
+    conversation_short_id: str,
+    customer_open_id: str,
+    customer_message_time,
+) -> bool:
+    """检查客户当前消息紧前是否有 AI 留资引导出站消息（5 分钟内）。
+
+    查 DouyinPrivateMessageSend（send_source ∈ ai_auto/return_visit_auto，同会话同账号同客户，
+    时间在客户消息前 5 分钟内），检查该 AI 消息内容是否含留资引导关键词。
+    不跨客户/会话/账号/商户。失败保守返回 False（不影响现有行为）。
+    """
+    if not account_open_id or not conversation_short_id or not customer_open_id or not customer_message_time:
+        return False
+    try:
+        from sqlalchemy import or_
+
+        rows = (
+            db.query(DouyinPrivateMessageSend)
+            .filter(DouyinPrivateMessageSend.conversation_short_id == conversation_short_id)
+            .filter(DouyinPrivateMessageSend.send_source.in_(_AI_SEND_SOURCES))
+            .filter(DouyinPrivateMessageSend.status == "sent")
+            .filter(
+                or_(
+                    DouyinPrivateMessageSend.account_open_id == account_open_id,
+                    DouyinPrivateMessageSend.from_user_id == account_open_id,
+                )
+            )
+            .filter(
+                or_(
+                    DouyinPrivateMessageSend.customer_open_id == customer_open_id,
+                    DouyinPrivateMessageSend.to_user_id == customer_open_id,
+                )
+            )
+            .filter(DouyinPrivateMessageSend.created_at <= customer_message_time)
+            .order_by(DouyinPrivateMessageSend.created_at.desc())
+            .limit(3)
+            .all()
+        )
+        for row in rows:
+            # 5 分钟窗口内
+            if _seconds_between(customer_message_time, row.created_at) > _LEAD_REQUEST_WINDOW_SECONDS:
+                continue
+            if is_lead_request_message(row.content):
+                return True
+        return False
+    except Exception:
+        # 检测失败保守降级：context_boost=False，不影响现有联系方式识别
+        return False
 
 
 def is_text_message(content: dict[str, Any]) -> bool:
@@ -1085,8 +1150,25 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
         elif not conversation_short_id:
             lead_action = "missing_conversation"
         else:
+            # 任务 2.4：LEAD_REQUEST 上下文检测——客户消息紧前有 AI 留资引导时 context_boost=True，
+            # 拼接窗口扩展（5→10 分钟），让分段发送的号码更易拼合。
+            # 失败保守 False（不影响现有联系方式识别）；不跨客户/会话/账号/商户。
+            context_boost = False
+            try:
+                context_boost = _has_recent_lead_request(
+                    db,
+                    account_open_id=account_open_id,
+                    conversation_short_id=conversation_short_id,
+                    customer_open_id=from_user_id,
+                    customer_message_time=event.created_at,
+                )
+            except Exception:
+                context_boost = False
             # 分段合并：拼接当前消息 + 最近 5 条客户消息再提取（客户分两条发"1770206"+"5816"可拼成完整号码）
-            combined_text = _combine_recent_customer_text(db, message_text, account_open_id, conversation_short_id, from_user_id, merchant_id)
+            combined_text = _combine_recent_customer_text(
+                db, message_text, account_open_id, conversation_short_id, from_user_id, merchant_id,
+                context_boost=context_boost,
+            )
             contact_result = extract_contacts_from_text(combined_text)
             lead, upsert_action = upsert_lead_from_webhook(
                 db,

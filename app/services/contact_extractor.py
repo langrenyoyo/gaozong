@@ -429,6 +429,27 @@ def _detect_partial_phone(text: str) -> str | None:
     return None
 
 
+# ---- LEAD_REQUEST 上下文检测（任务 2.4） ----
+# 规则文档 0.3：AI 出站消息含留资引导关键词 → 标记 LEAD_REQUEST，
+# 客户紧随其后的回复消息在联系方式识别时降权干扰词 + 拼接窗口扩展。
+# 词表来源：规则文档 0.3 + 9100 PHONE_LEAD_CAPTURE_KEYWORDS 语义对齐（本地定义避免跨 9100 import）。
+_LEAD_REQUEST_KEYWORDS = (
+    "联系方式", "手机号", "电话", "微信号", "微信", "留个", "留一下", "留资",
+    "发我", "发给您", "加我", "加您", "怎么联系", "方便", "号码",
+)
+
+
+def is_lead_request_message(text: str | None) -> bool:
+    """检测文本是否含留资引导关键词（AI 出站消息标记 LEAD_REQUEST 用）。
+
+    纯函数，不访问 DB。命中任一关键词即返回 True。
+    """
+    if not text:
+        return False
+    s = str(text)
+    return any(keyword in s for keyword in _LEAD_REQUEST_KEYWORDS)
+
+
 # ---- 联系方式确定性状态机（9000 判定，9100 消费） ----
 # 手机号常见分隔符：空格、短横、破折号、中划线、点、括号
 _PHONE_SEPARATORS = " -—–·.()（）"
