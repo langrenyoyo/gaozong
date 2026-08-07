@@ -141,6 +141,38 @@ LOCAL_AGENT_TOKENS: "dev-merchant:test-agent-token"
 
 **`M04_DOCKER_E2E_VERIFIED_PENDING_WINDOWS`**（无 BLOCKER，Gate 1/3/4/6 PASS + 5 CODE_VERIFIED，Gate 2 FAIL→ISSUE-M04-001 升级 HIGH 不阻断 Baseline）
 
+## 2-M04.3 Windows 19000 / Real WeChat E2E（2026-08-07）
+
+### 环境阻断确认
+
+| 条件 | 当前 | 需要 |
+|---|---|---|
+| 19000 Local Agent 运行 | **未运行**（curl 127.0.0.1:19000 EXIT=7） | 小高AI微信助手.exe 启动 |
+| 微信客户端登录 | 未知 | 微信已登录 |
+| 19000 server_url | 未知 | 指向 9000（docker 或本地） |
+
+### Gate 结果
+
+| Gate | 结果 | 原因 |
+|---|---|---|
+| 1 Sender Identity | ENVIRONMENT_BLOCKED | 19000 未运行 |
+| 2 Recipient Identity | ENVIRONMENT_BLOCKED | 19000 未运行 |
+| 3 Foreground Guard | ENVIRONMENT_BLOCKED | 19000 未运行 |
+| 4 Real WeChat Feedback (I-B) | ENVIRONMENT_BLOCKED | 19000 未运行 + 微信未确认 |
+| 5 Heartbeat / Offline | ENVIRONMENT_BLOCKED | 19000 未运行 |
+| 6 Full Execution Chain | ENVIRONMENT_BLOCKED | 19000 未运行 |
+
+### 解除阻断条件
+
+1. 启动小高AI微信助手.exe（19000 Local Agent）
+2. 确认微信客户端已登录
+3. 配置 19000 server_url 指向 9000（当前 docker dev `http://127.0.0.1:9000`）
+4. 配置 19000 LOCAL_AGENT_TOKEN 与 9000 一致（`test-agent-token` -> `dev-merchant`）
+
+满足后补验证 6 Gate（Sender/Recipient Identity + Foreground Guard + Real Feedback + Heartbeat + Full Chain），不重测 Docker 已完成的协议 Gate。
+
+**M04.3 状态：`M04_DOCKER_E2E_VERIFIED_PENDING_WINDOWS`**（环境阻断，6 Gate 全部 ENVIRONMENT_BLOCKED，需 19000 启动后补验证）
+
 ## E2E 验收清单（待 2-M04.2 Windows / Staging）
 
 ### CODE_VERIFIED
