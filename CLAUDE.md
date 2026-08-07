@@ -243,6 +243,68 @@ Output Rules
 
 专题文档按需从 `docs/ai/README.md` 进入，不再默认遍历整个 `docs/ai` 目录。
 
+## 阶段 1 Reality Map（AICoding Governance Wiring）
+
+阶段 1 已冻结项目现实地图，VibeCoding 默认使用它们，不绕过重新搜索。治理文件负责导航和约束，Reality Map 负责事实——**不把 SYSTEM_MAP 内容复制进 CLAUDE.md**。
+
+### Reality Map Required Reading 顺序
+
+完成上述基础阅读后，按任务涉及范围阅读：
+
+1. `docs/architecture/SYSTEM_MAP.md` — 系统组成（7 组件 / 7 模块 / 公共底座 / 外部系统 / 数据域）
+2. `docs/architecture/CODE_INDEX.yaml` — 机器索引唯一事实源（`.md` 是派生视图，禁止手工编辑）
+3. `docs/architecture/RUNTIME_ENTRYPOINTS.md` — 9 类运行入口（区分定义存在与运行可达）
+4. `docs/architecture/DEPENDENCY_MATRIX.md` — 7×7 模块依赖（Canonical Edge 事实源）
+5. `docs/architecture/LEGACY_REGISTER.md` — Legacy 定性登记簿
+6. 当前模块文档 / 当前任务 SPEC
+
+### Source of Truth 层级
+
+```
+真实运行代码 / 数据库 / 部署配置
+  ↓
+已冻结 Reality Map（SYSTEM_MAP / CODE_INDEX / RUNTIME_ENTRYPOINTS / DEPENDENCY_MATRIX / LEGACY_REGISTER）
+  ↓
+模块验真基线
+  ↓
+任务 SPEC
+  ↓
+推测
+```
+
+**文档与代码冲突时，不允许偷偷按文档改代码"让两边一致"，先报告 drift。**
+
+### Lifecycle 规则（引用 LEGACY_REGISTER 定义）
+
+5 种生命周期：`ACTIVE` / `COMPAT` / `LEGACY` / `DEAD_CANDIDATE` / `UNKNOWN`
+
+- `COMPAT ≠ 可删除`（兼容路径，GMP/外部已配置，不得顺手删）
+- `LEGACY ≠ 可删除`（已被替代但仍有调用/env 控制，默认关）
+- `DEAD_CANDIDATE ≠ DELETION_READY`（满足删除前置后才能进 DELETION_READY）
+- `UNKNOWN → 禁止无证据删除或重构`（优先于推测，直到补充证据）
+- `TECH_DEBT ≠ LEGACY`（是 `quality_flags` 不是 `lifecycle`，标了 TECH_DEBT 仍是 ACTIVE 正式运行能力）
+
+状态机：`UNKNOWN → LEGACY/COMPAT/ACTIVE → DEAD_CANDIDATE → DELETION_READY → REMOVED`
+
+`Lifecycle ≠ Deletion Eligibility`——两个独立维度。
+
+### 修改前必须定位模块和依赖
+
+修改代码前必须先确定 M01-M07 模块归属，并查询 `CODE_INDEX.yaml` 和 `DEPENDENCY_MATRIX.md`：
+
+- 属于哪个模块？
+- 数据 Owner 是谁？Consumer 是谁？
+- 是否跨模块？是否碰到 COMPAT / LEGACY / DEAD_CANDIDATE？
+- 碰到 COMPAT/LEGACY 时不得在普通业务任务中顺手删除或重构。
+
+### 标准工作流
+
+```
+Reality Map → Module Verification → Behavior Baseline → Approved Change Scope → Implementation → Regression → Update Index/Map if topology changed
+```
+
+**未完成模块验真、未冻结行为基线前，不进行该模块的大规模结构重构。**
+
 ------
 
 # Reading Completion Gate
