@@ -152,6 +152,9 @@ export interface DouyinMessageItem {
   source_url?: string | null;
   downloadable_resource?: boolean;
   resource_missing_reason?: string | null;
+  download_url?: string | null;
+  resource_media_type?: "image" | "video" | null;
+  resource_status?: "success" | "failed" | "pending" | null;
   created_at: string;
   raw_event_id?: number;
   server_message_id?: string | null;

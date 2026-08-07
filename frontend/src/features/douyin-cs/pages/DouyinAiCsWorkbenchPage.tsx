@@ -640,9 +640,49 @@ type UploadedImageData = NonNullable<UploadDouyinImageResponse["data"]>;
 
 function mediaTypeForDownload(message: DouyinMessageItem): "image" | "video" | null {
   const value = String(message.media_type || message.message_type || "").toLowerCase();
-  if (value === "image" || value === "user_local_image") return "image";
+  if (value === "image" || value === "user_local_image" || value === "emoji") return "image";
   if (value === "video" || value === "user_local_video") return "video";
   return null;
+}
+
+// 5.0 第二阶段：判断消息是否有可直接渲染的已下载资源（download_url + success）
+function renderableResource(message: DouyinMessageItem): { url: string; type: "image" | "video" } | null {
+  if (message.resource_status !== "success" || !message.download_url) return null;
+  const type = message.resource_media_type;
+  if (type === "image" || type === "video") return { url: message.download_url, type };
+  return null;
+}
+
+// 5.0 第二阶段：消息内嵌媒体渲染（图片/视频），加载失败显示占位不白屏。
+// download_url 可能是抖音临时 URL，过期则 onError 降级占位，保留手动下载 fallback。
+function MessageMedia({ url, type }: { url: string; type: "image" | "video" }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <div className="mt-2 flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-500">
+        <ImagePlusIcon size={14} />
+        <span>资源链接已失效，请使用下方下载按钮重新获取</span>
+      </div>
+    );
+  }
+  if (type === "image") {
+    return (
+      <img
+        src={url}
+        alt="消息图片"
+        onError={() => setBroken(true)}
+        className="mt-2 max-w-full rounded-md border border-slate-200"
+      />
+    );
+  }
+  return (
+    <video
+      src={url}
+      controls
+      onError={() => setBroken(true)}
+      className="mt-2 max-w-full rounded-md border border-slate-200"
+    />
+  );
 }
 
 function resourceMissingText(reason?: string | null): string {
@@ -3019,6 +3059,7 @@ export default function DouyinAiCsWorkbenchPage() {
                   const isCustomer = isCustomerMessage(message);
                   const isManual = isManualMessage(message);
                   const mediaType = mediaTypeForDownload(message);
+                  const renderable = renderableResource(message);
                   const downloadState = mediaDownloads[String(message.id)] || {};
                   const downloadableResource = Boolean(mediaType && message.downloadable_resource);
                   const canRequestDownload = Boolean(
@@ -3044,6 +3085,7 @@ export default function DouyinAiCsWorkbenchPage() {
                           {messageRoleLabel(message)}
                         </div>
                         <div>{message.content}</div>
+                        {renderable ? <MessageMedia url={renderable.url} type={renderable.type} /> : null}
                         {mediaType ? (
                           <div
                             className={`mt-2 rounded-md border px-2 py-2 text-xs ${

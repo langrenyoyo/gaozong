@@ -20,6 +20,7 @@ from app.models import (
     DouyinAuthorizedAccount,
     DouyinConversationReadState,
     DouyinLead,
+    DouyinMessageResourceDownload,
     DouyinPrivateMessageSend,
     DouyinWebhookEvent,
 )
@@ -772,7 +773,7 @@ def list_conversation_messages(
         merchant_id=merchant_id,
     ):
         raise ConversationNotFoundError("conversation_not_found")
-    result = _conversation_messages_payload(messages, conversation_key=conversation_key)
+    result = _conversation_messages_payload(db, messages, conversation_key=conversation_key)
     latest_event_id = _latest_visible_event_id(
         db,
         account_open_id=account_open_id or "",
@@ -803,13 +804,33 @@ def list_conversation_messages(
 
 
 def _conversation_messages_payload(
+    db: Session,
     messages: list[WorkbenchMessage],
     *,
     conversation_key: str,
 ) -> dict[str, Any]:
+    sorted_messages = _sort_messages([item for item in messages if item.conversation_key == conversation_key])
+    # 5.0 第二阶段：批量 join DouyinMessageResourceDownload，按 server_message_id 关联，避免 N+1。
+    # 只带 resource_status=="success" 的 download_url（failed/pending 不带）。
+    server_message_ids = [m.server_message_id for m in sorted_messages if m.server_message_id]
+    download_by_msg_id: dict[str, DouyinMessageResourceDownload] = {}
+    if server_message_ids:
+        rows = (
+            db.query(DouyinMessageResourceDownload)
+            .filter(DouyinMessageResourceDownload.server_message_id.in_(server_message_ids))
+            .filter(DouyinMessageResourceDownload.resource_status == "success")
+            .all()
+        )
+        for row in rows:
+            # 同一 server_message_id 可能有多条记录（重试），取最新一条成功记录
+            existing = download_by_msg_id.get(row.server_message_id)
+            if existing is None or (row.id or 0) > (existing.id or 0):
+                download_by_msg_id[row.server_message_id] = row
+
     items = []
-    for message in _sort_messages([item for item in messages if item.conversation_key == conversation_key]):
+    for message in sorted_messages:
         direction = _direction(message.event)
+        download = download_by_msg_id.get(message.server_message_id) if message.server_message_id else None
         items.append(
             {
                 "id": message.event_id,
@@ -828,6 +849,9 @@ def _conversation_messages_payload(
                 "resource_missing_reason": None
                 if not message.media_type or message.resource_url
                 else "resource_url_not_found",
+                "download_url": download.download_url if download else None,
+                "resource_media_type": download.media_type if download else None,
+                "resource_status": download.resource_status if download else None,
                 "created_at": message.created_at,
                 "server_message_id": message.server_message_id,
                 "send_source": message.send_source,
@@ -909,7 +933,7 @@ def get_conversation_detail(
     )
     if require_non_empty and merchant_id and not messages:
         raise ConversationNotFoundError("conversation_not_found")
-    message_payload = _conversation_messages_payload(messages, conversation_key=conversation_key)
+    message_payload = _conversation_messages_payload(db, messages, conversation_key=conversation_key)
     message_ids = [item.event_id for item in messages]
     message_payload.update(
         {
