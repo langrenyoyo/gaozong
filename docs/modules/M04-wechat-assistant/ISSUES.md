@@ -13,12 +13,15 @@
 - **升级**：MEDIUM → HIGH（Docker E2E 证明 DUPLICATE_EXECUTION_RISK）
 - **建议**：加服务端 lease/claim 机制（原子 UPDATE SET status=processing WHERE status=pending RETURNING）
 
-### ISSUE-M04-002 result report 非严格幂等，重复回写可能重复扣算力
+### ISSUE-M04-002 Result duplicate side-effect coverage incomplete
 
+- **Category**: MEDIUM
 - **位置**：wechat_task_service.py:348-352, 437-464, 462
-- **事实**：submit_wechat_task_result 无幂等键/版本号校验，重复回写直接覆盖 status/raw_result；已 sent 任务再次回写 sent=true 会重复 _report_wechat_task_compute_usage（:462）
-- **影响**：重复回写可能重复扣算力
-- **升级条件**：Docker E2E 证明相同 result 提交两次产生重复副作用/计费 → HIGH / FINANCIAL_INTEGRITY + IDEMPOTENCY
+- **Business persistence duplicate**: E2E NOT REPRODUCED（Gate 4 重复提交未产生重复业务写入）
+- **detect_reply duplicate**: DEDUP VERIFIED（Gate 4 detect_reply=1 去重正确，不重复创建）
+- **_compute_usage / financial side effect**: NOT VERIFIED（重复回写可能重复调用 _report_wechat_task_compute_usage :462，但 Docker E2E 未观察到实际算力副作用）
+- **Close condition**: M07 proves compute also dedup → close
+- **不继续笼统称 "result report 非幂等"**
 
 ## LOW
 
