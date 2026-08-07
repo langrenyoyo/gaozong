@@ -1807,14 +1807,17 @@ def _mask_latest_message_for_llm(latest_message: str) -> str:
     contact_result = extract_contacts_from_text(text)
     if contact_result.phone or contact_result.wechat:
         masked = mask_contacts_in_text(text)
+        # 手机号 138****8002 + 微信号脱敏 wx***23（字母开头+星号）
         masked = re.sub(r'\d{3}\*+\d{0,4}', '[客户已提供完整手机号]', masked)
+        masked = re.sub(r'[A-Za-z]{2}\*+\w{0,4}', '[客户已提供完整微信号]', masked)
         return masked
 
     # 情况2：抖音平台脱敏的号码（138****7002 模式，extract_contacts_in_text 无法识别因为星号不匹配完整手机号正则）
-    # 检测 \d{3}\*+\d{1,4} 模式（如 138****7002）
-    if re.search(r'\d{3}\*+\d{1,4}', text):
+    # 检测 \d{3}\*+\d{1,4} 模式（如 138****7002）或微信号脱敏 wx***23
+    if re.search(r'\d{3}\*+\d{1,4}', text) or re.search(r'[A-Za-z]{2}\*+\w{1,4}', text):
         masked = mask_contacts_in_text(text)
         masked = re.sub(r'\d{3}\*+\d{1,4}', '[客户已提供联系方式，平台已脱敏]', masked)
+        masked = re.sub(r'[A-Za-z]{2}\*+\w{1,4}', '[客户已提供联系方式，平台已脱敏]', masked)
         return masked
 
     # 情况3：无联系方式 → 正常脱敏
