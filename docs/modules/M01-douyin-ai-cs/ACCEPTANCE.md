@@ -61,3 +61,72 @@
 - 空号追问端到端（需 CONTACT_INVALID_FOLLOWUP_ENABLED=true + 真实发送）
 
 **E2E 状态：`M01_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，A-E 全 PASS，F PARTIAL）
+
+## 2-M01.2B STAGING / REAL WEBHOOK E2E（2026-08-07）
+
+### 环境阻断确认
+
+当前环境：docker compose dev（非 staging/生产），以下条件不满足 Staging E2E 要求：
+
+| 条件 | 当前值 | 需要 | 阻断的 Gate |
+|---|---|---|---|
+| APP_ENV | development | production/staging | 全部真实链路 |
+| DOUYIN_AUTO_REPLY_ENABLED | False | True | GATE-01/02/03 |
+| DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED | False | True | GATE-03 真实发送 |
+| AI_AUTO_REPLY_OUTBOX_ENABLED | False | True | GATE-01 outbox 真实运行 |
+| DATABASE_URL | SQLite | PostgreSQL | 数据持久化验证 |
+| NEWCAR_AUTH_MOCK_ENABLED | True | False | 真实商户上下文 |
+| 真实测试抖音企业号 | 无 | 有 | GATE-01/03/04 |
+| 真实测试客户账号 | 无 | 有 | GATE-02/05/07 |
+
+### Gate 结果
+
+| Gate | Result | 原因 |
+|---|---|---|
+| GATE-01 Agent Binding → Auto Reply | ENVIRONMENT_BLOCKED | 需真实 webhook + DOUYIN_AUTO_REPLY_ENABLED=true + AI_AUTO_REPLY_OUTBOX_ENABLED=true |
+| GATE-02 Auto Reply Customer Facts | ENVIRONMENT_BLOCKED | 需真实 webhook + 真实 DB 客户档案 |
+| GATE-03 Real Send + Receipt | ENVIRONMENT_BLOCKED | 需 DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED=true + 真实抖音 API |
+| GATE-04 Manual Takeover | ENVIRONMENT_BLOCKED | 需真实 im_send_msg 回调 |
+| GATE-04B Human Workbench Send Webhook | ENVIRONMENT_BLOCKED | 需真实抖音工作台人工发送 |
+| GATE-05 latest_message_changed | ENVIRONMENT_BLOCKED | 需真实 webhook 触发 auto-reply 处理窗口 |
+| GATE-06 Webhook/Run Idempotency | PASS（Docker 串行已验证）+ OPEN（并发 KNOWN ISSUE） | Docker E2E-A PASS；生产并发保持 ISSUE-M01-004 OPEN |
+| GATE-07 Contact State 真实消息矩阵 | ENVIRONMENT_BLOCKED | 需真实 webhook；Docker 五态已验证 |
+| GATE-08 Observability | ENVIRONMENT_BLOCKED | 需真实 SENT/BLOCKED/FAILED/takeover 四类结果 |
+
+### M03 Gate 回填
+
+```
+GATE-M03-01 = PENDING_STAGING（ENVIRONMENT_BLOCKED，需真实 webhook→auto-reply→binding.agent 消费链路）
+GATE-M03-02 = PENDING_STAGING（ENVIRONMENT_BLOCKED，需真实 DB 客户档案 + webhook）
+GATE-M03-03 = PENDING_STAGING（Training 隔离，需真实知识库训练端）
+```
+
+### ISSUE-M01-004 状态
+
+- Docker 串行重复投递：PASS
+- Production 并发 duplicate-insert：**OPEN / KNOWN ISSUE**（未获得并发证据，不关闭）
+
+### Compute
+
+- DEFERRED → M07（本轮未观察到真实算力行为）
+
+### super_admin
+
+- POLICY_PENDING（无 RBAC 基线可比对）
+
+### 结束状态
+
+`M01_DOCKER_E2E_VERIFIED_PENDING_STAGING_INTEGRATION`（环境阻断，8 个 Gate 全部 ENVIRONMENT_BLOCKED，仅 GATE-06 Docker 串行 PASS + 并发 OPEN）
+
+### 解除阻断条件
+
+需以下 staging 环境准备：
+1. staging PostgreSQL 环境（APP_ENV=production + DATABASE_URL=PG）
+2. 真实测试抖音企业号 + Agent 绑定
+3. DOUYIN_AUTO_REPLY_ENABLED=true + DOUYIN_AUTO_REPLY_REAL_SEND_ENABLED=true
+4. AI_AUTO_REPLY_OUTBOX_ENABLED=true
+5. NEWCAR_AUTH_ENABLED=true + NEWCAR_AUTH_MOCK_ENABLED=false
+6. 明确允许接收测试 AI 回复的测试客户账号
+7. 可控的 GMP webhook 触发方式（测试客户真实发私信）
+
+满足以上条件后补验证 8 个 Gate，不重做 Docker E2E 已验证项。
