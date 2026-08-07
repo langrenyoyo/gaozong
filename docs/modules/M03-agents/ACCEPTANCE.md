@@ -31,12 +31,21 @@
 
 | E2E | 域 | 原因 |
 |---|---|---|
-| 4 | Douyin Binding | 需真实抖音授权账号 |
-| 6 | Agent Contract → Auto Reply | 需真实 webhook 触发 auto-reply |
-| 7b | Auto Reply 污染测试 | 需真实 webhook + customer_memory |
-| 7c | Training 污染测试 | 需真实知识库训练端调用 |
-| 9 | Compute | LLM 调用成功但未确认算力记录（rag_used=False，需更精确的消耗场景） |
-| 专项1 | super_admin | 需 RBAC 基线后验证（POLICY_PENDING） |
+| 4 | Douyin Binding → Auto Reply 真实消费 | docker dev 有抖音账号但无 Agent↔账号绑定；需真实 webhook 触发 auto-reply 链路（binding.agent 读取 → 9100 → 日志证明正确 Agent） |
+| 6 | Agent Contract → Auto Reply 消费一致性 | 需真实 webhook 触发 auto-reply，对比 binding.agent DB 配置与 preview 草稿值 |
+| 7b | Auto Reply 客户事实隔离 | 需真实 DB 客户档案（车型/预算/城市）+ webhook 触发 auto-reply，证明可读可信事实（与 Preview 不读形成对比） |
+| 7c | Training 客户事实/商户变量隔离 | 需真实知识库训练端调用，证明不读取真实客户事实/不注入真实商户变量 |
+| 9 | Compute | BASELINE KNOWN GAP，留 M07 |
+| 专项1 | super_admin | POLICY_PENDING，留 RBAC 基线 |
+
+### Staging E2E 缺口说明
+
+3 个核心缺口（Agent 绑定→Auto Reply / Auto Reply 事实隔离 / Training 事实隔离）需要：
+- 真实抖音授权账号 + Agent 绑定（docker dev 有账号但无绑定关系）
+- 真实 webhook 事件触发 auto-reply 完整链路（dev 环境 LEADS_WEBHOOK_INTERNAL_ENABLED=false，无真实回调）
+- 真实 DB 客户档案（customer_profiles 表有数据）+ 会话历史
+
+这些在 docker dev 环境无法完整验证，需 staging/生产环境补验证。不构成 BLOCKER（功能链路已通过代码核查 + Preview E2E 间接验证），但 Auto Reply/Training 事实隔离是关键门，staging E2E 必须通过后才能冻结 Baseline。
 
 **E2E 状态：`M03_DOCKER_E2E_VERIFIED_PENDING_STAGING_INTEGRATION`**（无 BLOCKER，Preview 事实隔离通过，三场景整体事实隔离 PARTIAL 待 staging E2E）
 
