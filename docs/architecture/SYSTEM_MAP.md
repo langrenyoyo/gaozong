@@ -7,17 +7,36 @@
 
 ## 一、运行组件
 
+区分三类：进程/服务（auto_wechat 自己启动）、数据基础设施、外部运行依赖。
+
+### 进程/服务
+
 | 组件 | 端口 | 数据库 | 职责 | 边界 |
 |---|---|---|---|---|
+| React 前端 | 5173 | 无 | React + TS + Vite，所有页面 | `frontend/`；vite 默认端口（无显式 server.port）；代理 `/api`→9000、`/ai-cs-api`→9100（`vite.config.ts:17-41`） |
 | auto_wechat 主服务 | 9000 | `auto_wechat`（`DATABASE_URL`，`app/config.py:166`） | FastAPI 业务 API、webhook 直收、NewCar 鉴权门面、9100 可信代理、自动回复 gate、报表、回访 | 注册 40+ router（`app/main.py:125-164`）；`SERVER_PORT=9000`（`app/config.py:199`）；SQLite 默认回退 `data/auto_wechat.db` |
 | 抖音AI小高客服 | 9100 | `xg_douyin_ai_cs`（`RAG_DATABASE_URL`，`apps/.../config.py:36-44`） | RAG 检索、LLM 回复、知识库 metadata、独立 FastAPI 子应用 | `apps/xg_douyin_ai_cs/main.py:89`；默认 `127.0.0.1:9100`（`constants.py:5-6`）；9 个 router；CORS 仅 5173 |
 | Local Agent（小高AI微信助手.exe） | 19000 | 无独立库（只连 9000） | 微信 UI 自动化（通知/检测），运行在微信所在 Windows 电脑，不容器化 | `app/local_agent_main.py:66-67`；默认 `127.0.0.1:19000`；不监听 0.0.0.0 |
-| React 前端 | 5173 | 无 | React + TS + Vite，所有页面 | `frontend/`；vite 默认端口（无显式 server.port）；代理 `/api`→9000、`/ai-cs-api`→9100（`vite.config.ts:17-41`） |
-| 外部 Milvus | 外部 | 向量副本（非 metadata 真源） | embedding + 向量检索 | 由 9100 配置（`MILVUS_URI`，`apps/.../config.py:78-79`）；**不存在 `MILVUS_HOST`/`MILVUS_PORT`**，用单一 URI |
-| 外部 NewCarProject | 外部 | 外部 | 商户/账号/权限/菜单/套餐权威 | `NEWCAR_AUTH_BASE_URL`（`config.py:262`，注意非 `NEWCAR_BASE_URL`）；登录委托 |
-| 抖音 GMP | 外部 | 外部 | webhook 回调 + OpenAPI（签名下载/解码） | `DY_GMP_SECRET_KEY`/`DY_OPENAPI_BASE_URL`（`config.py:225-226`，默认 `https://gmp.bytedanceapi.com`） |
 
-**双库方案 A**：一个 PG 实例、两个 database——`auto_wechat`（9000，`DATABASE_URL`）与 `xg_douyin_ai_cs`（9100，`RAG_DATABASE_URL`）。生产均 PostgreSQL，dev 回退 SQLite。
+### 数据基础设施
+
+| 组件 | 说明 |
+|---|---|
+| PostgreSQL | 生产唯一数据库实例，方案 A 一个实例两个 database：`auto_wechat`（9000 主库，`DATABASE_URL`）与 `xg_douyin_ai_cs`（9100 RAG 库，`RAG_DATABASE_URL`）；dev 回退 SQLite（非生产）。9000 用 SQLAlchemy ORM（`app/database.py`、`app/models.py` 54 表），9100 用原生 SQL 建表（`apps/.../rag/database.py` 7 表）。 |
+
+### 外部运行依赖（External runtime dependencies）
+
+非 auto_wechat 自己托管的业务服务，生产为外部依赖：
+
+| 外部服务 | 职责 | 集成 | 配置项 |
+|---|---|---|---|
+| Milvus | embedding + 向量检索副本（非 metadata 真源） | 9100 通过 pymilvus 连接 | `MILVUS_URI`（`apps/.../config.py:78-79`）；**不存在 `MILVUS_HOST`/`MILVUS_PORT`**，用单一 URI |
+| NewCarProject | 商户/账号/权限/菜单/套餐权威 | 9000 HTTP 代理（登录/改密/退出/切换） | `NEWCAR_AUTH_BASE_URL`（`config.py:262`，注意非 `NEWCAR_BASE_URL`） |
+| 抖音 GMP | webhook 回调 + OpenAPI（签名下载/解码） | 9000 webhook 直收 + 签名调用 | `DY_GMP_SECRET_KEY`/`DY_OPENAPI_BASE_URL`（`config.py:225-226`，默认 `https://gmp.bytedanceapi.com`） |
+| LAS（火山引擎） | AI 剪辑云端混剪 | 9000 组装参数→submit→轮询→存产物 | `LAS_API_KEY`/`LAS_BASE_URL`（`config.py:392-393`） |
+| TOS（火山引擎对象存储） | LAS 产物预签名上传/下载 | 9000 预签名 | `TOS_ACCESS_KEY`/`TOS_SECRET_KEY`/`TOS_BUCKET`/`TOS_REGION`/`TOS_ENDPOINT`（`config.py:401-405`） |
+
+**Milvus 说明**：生产为外部运行依赖（非 auto_wechat 自托管业务服务），仅作向量检索副本；documents/chunks/feedback/training_run 与状态字段的 metadata 真源是 `xg_douyin_ai_cs` 库。本地图第三节"外部系统"仍保留 Milvus 条目，两处标注一致。
 
 ---
 
@@ -39,7 +58,7 @@
 
 ## 三、公共能力
 
-跨模块共享的底座能力：
+### 平台公共底座（跨所有业务模块的基础设施）
 
 | 能力 | 代码位置 | 说明 |
 |---|---|---|
@@ -49,7 +68,12 @@
 | outbox | `app/services/ai_auto_reply_outbox_service.py` | 发件箱持久化任务调度（claim/lease/恢复）；`main.py:228-229` 启动 |
 | 调度器 | `app/scheduler/*` + `main.py` lifespan | check_scheduler / wechat_auto_detect_scheduler / daily_report_scheduler / return_visit_silent_scan_scheduler / outbox / contact_invalid_followup |
 | 商户隔离 | `app/services/douyin_merchant_isolation.py` | 账号归属校验、可信商户过滤 |
-| 联系方式提取 | `app/services/contact_extractor.py` + `contact_state_service.py` + `customer_profile_service.py` + `contact_completion_resolver.py` + `contact_validity_analyzer.py` + `contact_invalid_followup_service.py` + `douyin_customer_profile_deriver.py` | 线索识别引擎（清洗/号段/置信度/状态机/空号追问） |
+
+### 领域共享能力（客户/线索领域共享，非平台基础设施）
+
+| 能力 | 代码位置 | 说明 |
+|---|---|---|
+| 联系方式提取 | `app/services/contact_extractor.py` + `contact_state_service.py` + `customer_profile_service.py` + `contact_completion_resolver.py` + `contact_validity_analyzer.py` + `contact_invalid_followup_service.py` + `douyin_customer_profile_deriver.py` | 线索识别引擎（清洗/号段/置信度/状态机/空号追问）；属客户/线索领域共享，不是平台级基础设施 |
 
 ---
 
