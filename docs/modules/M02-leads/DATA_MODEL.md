@@ -30,6 +30,17 @@
 
 **唯一约束**：`(account_open_id, conversation_short_id)` — `models.py:145-148`（不含 merchant_id，靠 account_open_id 天然隔离）
 
+### Lead Identity 三个概念（不混用）
+
+| 概念 | 含义 | 证据 |
+|---|---|---|
+| Database identity | Lead 主键（id 自增） | models.py:151 |
+| Webhook aggregation identity | (account_open_id, conversation_short_id) | douyin_webhook.py:604-608 find_lead_by_session |
+| Legacy sync identity | source_id | douyin_sync_service.py:52 _find_existing_lead |
+| Manual create | **当前无业务归并键** | lead_service.py:8 create_lead 无归并 |
+
+> **结论**：Webhook 路径以账号+会话作为聚合身份，但 M02 整体尚无统一 Lead Identity Contract。
+
 **无 phone/wechat 独立列**（存于 extracted_phone/extracted_wechat/customer_contact）。无 tenant_id（merchant_id 承担）。
 
 ## 写入入口（3 个，聚合键不一致）

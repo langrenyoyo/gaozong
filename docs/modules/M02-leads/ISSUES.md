@@ -11,21 +11,24 @@
 - **影响**：sync-leads 仍可写库时按旧 source_id 逻辑，与 webhook 会话归并并存，同一客户可能产生重复 Lead
 - **建议**：sync-leads 完全停用后风险消除；当前 COMPAT 但非完全停用
 
-### ISSUE-M02-002 手工 create 绕过会话归并
+## POLICY_PENDING / CONTRACT_GAP
+
+### ISSUE-M02-002 手工 create 绕过会话归并（POLICY_PENDING / CONTRACT_GAP）
 
 - **位置**：app/services/lead_service.py:8 create_lead
-- **事实**：POST /leads 不经 find_lead_by_session，无租户冲突检测，可能产生违反会话唯一约束或重复 Lead
-- **影响**：手工创建的 Lead 无会话维度去重，可能与 webhook 线索冲突
-- **建议**：手工 create 应走统一 upsert 逻辑或禁止绕过归并
+- **事实**：POST /leads 不经 find_lead_by_session，无租户冲突检测
+- **当前定性**：POLICY_PENDING / CONTRACT_GAP — Manual Create 是否应走与 webhook 相同的归并逻辑取决于 Lead Identity Contract 设计（DATA_MODEL.md 明确"M02 整体尚无统一 Lead Identity Contract"）
+- **升级条件**：Docker E2E 证明 Manual API 携带完全相同业务身份仍产生不可区分重复 Lead → 升级 HIGH
 
-## MEDIUM
+## ARCHITECTURE_OBSERVATION + PRODUCT_POLICY_PENDING
 
-### ISSUE-M02-003 同客户多会话 = 多条 Lead（无跨会话合并）
+### ISSUE-M02-003 同客户多会话 = 多条 Lead
 
 - **位置**：find_lead_by_session 聚合键是会话维度
 - **事实**：同一客户 from_user_id 在不同 conversation_short_id 下创建独立 Lead，无手机号归并、无 CustomerProfile 自动合并
+- **当前定性**：ARCHITECTURE_OBSERVATION + PRODUCT_POLICY_PENDING — Lead 是否应 customer-unique 是产品语义问题，未明确前不是 Bug
 - **影响**：客户身份分散，跨会话/跨平台身份不打通
-- **建议**：PLANNED_NOT_IMPLEMENTED（需产品确认是否需要跨会话合并）
+- **处理**：等产品确认是否需要跨会话合并
 
 ## LOW
 
@@ -68,27 +71,33 @@
 
 - NOT_IMPLEMENTED（无 FK 关系、无自动同步写入）
 
-## DRIFT
+## LEGACY（引用 LEGACY_REGISTER，不重新定性）
+
+### LEGACY-M02-001 sync-leads 仍可写库
+
+- **位置**：douyin_sync_service.py:190 _execute_create/_execute_update
+- **Lifecycle**：LEGACY（引用 LEGACY_REGISTER LEGACY-005）
+- **Runtime state**：still writable/reachable（dry_run=false 时按旧 source_id 逻辑写 Lead）
+- **处理**：保持 LEGACY + still writable，不混用 DRIFT
+
+## DRIFT（仅与正式文档/基线冲突时才加）
 
 ### DRIFT-M02-001 webhook 自动通知已禁用
 
 - **位置**：douyin_webhook.py:1030 auto_notify_disabled
+- **Runtime state**：DISABLED
 - **事实**：webhook 自动建微信通知任务已阶段性禁用，只保留手动 send-to-staff
-- **处理**：登记为 DRIFT（CONFIG_DISABLED）
-
-### DRIFT-M02-002 sync-leads 仍可写库
-
-- **位置**：douyin_sync_service.py:190 _execute_create/_execute_update
-- **事实**：dry_run=false 时仍按旧 source_id 逻辑写 Lead
-- **处理**：登记为 DRIFT（COMPAT），引用 LEGACY_REGISTER LEGACY-005
+- **处理**：Runtime State=DISABLED，不标 LEGACY（auto_notify 是当前设计决策非旧方案替代）
 
 ## 总结
 
 | 级别 | 数量 |
 |---|---|
 | BLOCKER | 0 |
-| HIGH | 2（聚合键双轨制 / 手工 create 绕过归并） |
-| MEDIUM | 1（同客户多会话多条 Lead） |
+| HIGH | 1（聚合键双轨制） |
+| POLICY_PENDING / CONTRACT_GAP | 1（手工 create 绕归并，待 E2E 升级条件） |
+| ARCHITECTURE_OBSERVATION + PRODUCT_POLICY_PENDING | 1（同客户多会话多条 Lead） |
 | LOW | 3（状态无约束 / 状态变更无审计 / reassign_count 未自增） |
-| PLANNED_NOT_IMPLEMENTED | 2（分配算法未实现项 / Lead-CustomerProfile 自动合并） |
-| DRIFT | 2（自动通知已禁用 / sync-leads 仍可写库） |
+| PLANNED_NOT_IMPLEMENTED | 2（分配算法未实现项 / Lead-CustomerProfile 合并） |
+| LEGACY | 1（sync-leads 仍可写库，引用 LEGACY-005） |
+| DRIFT | 1（webhook 自动通知已禁用，Runtime State=DISABLED） |

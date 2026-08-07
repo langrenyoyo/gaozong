@@ -52,8 +52,20 @@ _dispatch_lead_after_create (douyin_webhook.py:876)
     → LeadFollowupRecord record_type="assign" (:74-81)
 ```
 
-已实现：轮询 / 同级少者优先 / 商户隔离 / 跳过关闭分配 / 首次不重复
-未实现：权重 / 优先级 / 每日上限 / 超时回收重分配 / reassign_count 从不自增
+已实现 / 未实现逐项：
+
+| 能力 | 当前现实 |
+|---|---|
+| 候选销售筛选 | IMPLEMENTED（merchant_id 匹配 + enable_lead_assignment!=False + status="active"） |
+| 商户隔离 | IMPLEMENTED |
+| 轮询 | IMPLEMENTED（按 SalesStaff.id 排序遍历） |
+| 当前 Lead 数量比较 | IMPLEMENTED（统计 assigned/pending 状态线索数，取 min） |
+| 可配置优先级 1~5 | NOT_IMPLEMENTED |
+| 每日上限 | NOT_IMPLEMENTED |
+| 满额剔除 | NOT_IMPLEMENTED |
+| 全员满额后权重随机 | NOT_IMPLEMENTED |
+| 回收 | NOT_IMPLEMENTED |
+| reassign_count 自增 | NOT_IMPLEMENTED（字段存在但从未自增） |
 
 ## 5. Transfer / Recycle
 
