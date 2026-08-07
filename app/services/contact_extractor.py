@@ -31,12 +31,15 @@ class ContactExtractResult:
     wechat: str | None
     phones: list[str]
     wechats: list[str]
-    all_contacts: list[dict[str, str | int]]
+    all_contacts: list[dict[str, str | int | float]]
     status: ContactExtractStatus
     failure_reason: str | None
     raw_text: str | None
     # 疑似不完整手机号（7-10 位纯数字），供 LLM 追问补全
     partial_phone: str | None = None
+    # 任务 2.3 置信度（规则文档 4.1）：1.0 标准+白名单 / 0.8 清洗S0-S4 / 0.7 清洗S5 /
+    # 0.95 微信关键词 / 0.85 微信全文本 / 0.4 非白名单降级 / 0.0 无匹配。与五态并存，辅助可信度。
+    confidence: float = 0.0
 
 
 _PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
@@ -109,9 +112,10 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
     # 后续 mask_contacts_in_text 用 value.replace 脱敏可能替换不到，原文片段保留；
     # 这是既有脱敏策略局限，本任务只增强提取，不改脱敏逻辑。升级路径：脱敏改为基于 start/end 区间。
     if not phones:
-        pipeline_phone = _extract_phone_with_pipeline(text)
-        if pipeline_phone:
-            matches.append({"type": "phone", "value": pipeline_phone, "start": -1, "end": -1})
+        pipeline_result = _extract_phone_with_pipeline(text)
+        if pipeline_result:
+            pipeline_phone, pipeline_confidence = pipeline_result
+            matches.append({"type": "phone", "value": pipeline_phone, "start": -1, "end": -1, "confidence": pipeline_confidence})
             phones = [pipeline_phone]
 
     # 号段白名单：1[3-9]xxxxxxxxx 格式但号段不在白名单的，降级为 partial_phone（供 LLM 追问核实）。
@@ -147,6 +151,17 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
     if not phones and partial_phone is None:
         partial_phone = _detect_partial_phone(text)
 
+    # 任务 2.3 置信度（规则文档 4.1）：取所有匹配项的最高 confidence。
+    # 非白名单降级为 partial_phone 时 confidence=0.4（规则文档 4.1：待确认线索）；
+    # 无匹配 0.0。
+    if matches:
+        best_confidence = max(float(m.get("confidence", 0.0) or 0.0) for m in matches)
+    else:
+        best_confidence = 0.0
+    if partial_phone_fallback and not phones:
+        # 全部非白名单降级：confidence=0.4（待确认线索）
+        best_confidence = 0.4
+
     return ContactExtractResult(
         phone=phones[0] if phones else None,
         wechat=wechats[0] if wechats else None,
@@ -157,6 +172,7 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
         failure_reason=None if matches else "contact_not_found",
         raw_text=text,
         partial_phone=partial_phone,
+        confidence=best_confidence,
     )
 
 
@@ -192,8 +208,8 @@ def mask_contacts_in_text(text: str | None) -> str:
     return value
 
 
-def _collect_matches(text: str) -> list[dict[str, str | int]]:
-    matches: list[dict[str, str | int]] = []
+def _collect_matches(text: str) -> list[dict[str, str | int | float]]:
+    matches: list[dict[str, str | int | float]] = []
     seen_values: set[tuple[str, str]] = set()
 
     for match in _PHONE_RE.finditer(text):
@@ -204,6 +220,7 @@ def _collect_matches(text: str) -> list[dict[str, str | int]]:
             value=match.group(1),
             start=match.start(1),
             end=match.end(1),
+            confidence=1.0,
         )
 
     for regex in (_WECHAT_KEYWORD_RE, _SINGLE_V_WECHAT_RE):
@@ -214,6 +231,7 @@ def _collect_matches(text: str) -> list[dict[str, str | int]]:
                 value=match.group(1),
                 start=match.start(1),
                 end=match.end(1),
+                confidence=0.95,
             )
 
     if _has_weak_wechat_context(text):
@@ -228,6 +246,7 @@ def _collect_matches(text: str) -> list[dict[str, str | int]]:
                 value=value,
                 start=match.start(1),
                 end=match.end(1),
+                confidence=0.85,
             )
 
     matches.sort(key=lambda item: (int(item["start"]), int(item["end"])))
@@ -307,25 +326,30 @@ _PHONE_CLEAN_STEPS = (
 )
 
 
-def _extract_phone_with_pipeline(text: str) -> str | None:
-    """清洗管道兜底提取手机号。
+def _extract_phone_with_pipeline(text: str) -> tuple[str, float] | None:
+    """清洗管道兜底提取手机号，返回 (phone, confidence)。
 
     独立式策略：每步从原文独立清洗，清洗结果用 _PHONE_RE 重试，命中即返回 11 位号码。
     标准格式已在 _collect_matches 命中，进此函数说明标准匹配失败。
     全不命中返回 None。只兜底手机号，不做微信号混淆。
     平台脱敏（138****8002）清洗后不足 11 位，不会被误判。
+
+    confidence（规则文档 4.1）：标准直接匹配 1.0 / S0-S4 清洗 0.8 / S5 中文数字映射 0.7。
+    S0-S4 是符号/字母/中文剔除，可信度较高；S5 中文数字映射有谐音歧义风险，可信度略低。
     """
     s = str(text or "")
-    # 先用 _PHONE_RE 直接匹配（标准格式不走清洗）
+    # 先用 _PHONE_RE 直接匹配（标准格式不走清洗，confidence=1.0）
     m = _PHONE_RE.search(s)
     if m:
-        return m.group(1)
+        return (m.group(1), 1.0)
     # 独立式依次清洗：每步从原文独立清洗，命中即返回
-    for cleaner in _PHONE_CLEAN_STEPS:
+    for index, cleaner in enumerate(_PHONE_CLEAN_STEPS):
         cleaned = cleaner(s)
         m = _PHONE_RE.search(cleaned)
         if m:
-            return m.group(1)
+            # S5（index=5）是中文数字映射+全剔，confidence=0.7；S0-S4 confidence=0.8
+            confidence = 0.7 if index == 5 else 0.8
+            return (m.group(1), confidence)
     return None
 
 
@@ -368,12 +392,13 @@ def _has_weak_wechat_context(text: str) -> bool:
 
 
 def _append_wechat_candidate(
-    matches: list[dict[str, str | int]],
+    matches: list[dict[str, str | int | float]],
     seen_values: set[tuple[str, str]],
     *,
     value: str,
     start: int,
     end: int,
+    confidence: float = 0.85,
 ) -> None:
     if value.lower() in _WECHAT_NOISE_VALUES:
         return
@@ -384,17 +409,19 @@ def _append_wechat_candidate(
         value=value,
         start=start,
         end=end,
+        confidence=confidence,
     )
 
 
 def _append_unique(
-    matches: list[dict[str, str | int]],
+    matches: list[dict[str, str | int | float]],
     seen_values: set[tuple[str, str]],
     *,
     contact_type: str,
     value: str,
     start: int,
     end: int,
+    confidence: float = 1.0,
 ) -> None:
     key = (contact_type, value)
     if key in seen_values:
@@ -405,6 +432,7 @@ def _append_unique(
         "value": value,
         "start": start,
         "end": end,
+        "confidence": confidence,
     })
 
 
@@ -512,7 +540,9 @@ def analyze_contact_state(
     loose_phone = _extract_loose_phone(raw)
     # step 1 未命中（含字母/中文等 _PHONE_LOOSE_RE 无法处理的形态）→ 走清洗管道兜底，与 extract 对齐
     if not loose_phone:
-        loose_phone = _extract_phone_with_pipeline(raw)
+        pipeline_result = _extract_phone_with_pipeline(raw)
+        if pipeline_result:
+            loose_phone = pipeline_result[0]
     if loose_phone:
         # 号段白名单校验：1[3-9]xxxxxxxxx 格式但号段不在白名单 → 降级 PARTIAL（与 extract_contacts_from_text 一致）
         if not _is_operator_phone(loose_phone):

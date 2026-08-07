@@ -33,7 +33,10 @@ from app.services.contact_extractor import (
     ],
 )
 def test_pipeline_extracts_phone(text, expected):
-    assert _extract_phone_with_pipeline(text) == expected
+    # _extract_phone_with_pipeline 返回 (phone, confidence) 元组（任务 2.3）
+    result = _extract_phone_with_pipeline(text)
+    assert result is not None
+    assert result[0] == expected
 
 
 def test_pipeline_no_false_positive_on_plain_text():
@@ -53,7 +56,9 @@ def test_pipeline_no_false_positive_on_short_digits():
 
 def test_pipeline_cn_digit_with_noise():
     # 中文数字夹噪音字符：映射后剔非数字仍命中
-    assert _extract_phone_with_pipeline("幺叁八哦一二三四五六七八") == "13812345678"
+    result = _extract_phone_with_pipeline("幺叁八哦一二三四五六七八")
+    assert result is not None
+    assert result[0] == "13812345678"
 
 
 def test_pipeline_cn_digit_homophones_complete():
@@ -63,7 +68,9 @@ def test_pipeline_cn_digit_homophones_complete():
     assert CN_DIGIT_MAP["俩"] == "2"
     assert CN_DIGIT_MAP["仨"] == "3"
     # 妖=1 替代幺/一 作为首位，验证映射在完整号码场景可用
-    assert _extract_phone_with_pipeline("妖叁八一二三四五六七八") == "13812345678"
+    result = _extract_phone_with_pipeline("妖叁八一二三四五六七八")
+    assert result is not None
+    assert result[0] == "13812345678"
 
 
 # ---- extract_contacts_from_text 集成测试 ----
@@ -191,6 +198,72 @@ def test_whitelist_masked_phone_not_affected():
     result = extract_contacts_from_text("138****8002")
     assert result.phone is None
     assert result.phones == []
+
+
+# ---- 2.3 置信度分级（规则文档 4.1） ----
+
+def test_confidence_standard_match_whitelist_1_0():
+    """标准格式直接匹配 + 白名单号段 → confidence=1.0。"""
+    result = extract_contacts_from_text("电话13812345678")
+    assert result.phone == "13812345678"
+    assert result.confidence == 1.0
+
+
+def test_confidence_pipeline_s0_country_code():
+    """S0 区号剥离清洗命中 → confidence=0.8。"""
+    result = extract_contacts_from_text("+8613812345678")
+    assert result.phone == "13812345678"
+    assert result.confidence == 0.8
+
+
+def test_confidence_pipeline_s4_strip_non_digits():
+    """S4 全剔非数字清洗命中 → confidence=0.8。"""
+    result = extract_contacts_from_text("1-3-8-a-1-2-3-4-b-5-6-7-8")
+    assert result.phone == "13812345678"
+    assert result.confidence == 0.8
+
+
+def test_confidence_pipeline_s5_cn_digit():
+    """S5 中文数字映射命中 → confidence=0.7。"""
+    result = extract_contacts_from_text("幺叁八一二三四五六七八")
+    assert result.phone == "13812345678"
+    assert result.confidence == 0.7
+
+
+def test_confidence_non_whitelist_degraded_0_4():
+    """非白名单号段降级 partial_phone → confidence=0.4。"""
+    result = extract_contacts_from_text("电话14012345678")
+    assert result.phone is None
+    assert result.partial_phone == "14012345678"
+    assert result.confidence == 0.4
+
+
+def test_confidence_wechat_keyword_0_95():
+    """微信号关键词定位 → confidence=0.95。"""
+    result = extract_contacts_from_text("微信：zhangsan123")
+    assert result.wechat == "zhangsan123"
+    assert result.confidence == 0.95
+
+
+def test_confidence_no_match_0_0():
+    """无匹配 → confidence=0.0。"""
+    result = extract_contacts_from_text("老板您看的是奥迪A6")
+    assert result.phone is None
+    assert result.wechat is None
+    assert result.confidence == 0.0
+
+
+def test_confidence_takes_max_when_multiple_matches():
+    """多条匹配取最高 confidence（标准匹配 1.0 > 微信 0.95）。"""
+    result = extract_contacts_from_text("13812345678 微信：zhangsan123")
+    assert result.confidence == 1.0
+
+
+def test_confidence_default_in_empty_text():
+    """空文本 → confidence=0.0（默认）。"""
+    result = extract_contacts_from_text("")
+    assert result.confidence == 0.0
+
 
 
 # ---- analyze_contact_state 号段白名单一致性（审查发现1修复） ----
