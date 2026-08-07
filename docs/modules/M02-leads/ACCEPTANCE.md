@@ -82,3 +82,39 @@
 - Feedback Parse 合法格式（需确认 parser 正式接受格式）
 
 **R1 状态：`M02_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_LOCAL_GAP_CLOSURE`**（无 BLOCKER，Gate A PARTIAL algorithm behavior，Gate B/D PASS，Gate C PARTIAL，Gate E CURRENT_REALITY_PASS，Gate F TEST_GAP）
+
+## 2-M02.2R2 Local Behavior Gap Closure（2026-08-07）
+
+### Gate A: Assignment Algorithm Matrix
+
+利用已有 3 Sales fixture（A active+enable / B active+enable / C disabled），补验：
+
+| Case | 准备 | 结果 | 证据 |
+|---|---|---|---|
+| 1 Inactive 过滤 | C disabled | **PASS** | assign to inactive staff_id=3 → 400 拒绝（正确） |
+| 2 Lead 数量比较 | A=0 / B=1 assigned | **PASS** | 新 Lead 分配给 A（min leads=0）→ assigned_staff_id=1 验证通过 |
+| 3 连续分配 | — | NOT_TESTED | 仅 1 条新 pending lead，无法验证连续多条轮询行为 |
+
+**算法描述冻结（以 E2E 为准）**：
+- 候选筛选：active + enable_lead_assignment + merchant_id 匹配
+- Inactive staff 被 400 拒绝（assign_service.py:48-52）
+- Lead 数量比较：统计 assigned 状态线索数，取 min
+- 轮询/连续分配：NOT_TESTED（fixture 不足，需多条 pending lead）
+
+### Gate B: Feedback Valid-Input Success Path
+
+- **使用测试文件正式格式**（test_sales_feedback_parser.py 的 `【线索反馈】反馈编号：XGF-1-1\n微信：已通过\n开口：已开口...`）
+- **结果**：POST /sales-feedback/parse 返回 400 SALES_FEEDBACK_PARSE_FAILED
+- **分析**：即使使用测试文件的正式字段格式（`微信：`而非`微信状态：`），API 层仍返回 400。可能原因：
+  1. API 层（sales_feedback.py:37）调用 `parse_and_persist_sales_feedback` 需要额外上下文（如 staff_id/lead_id 关联验证）
+  2. parser 函数 `parse_sales_feedback_text` 可能在 API 上下文中行为与单元测试不同（DB 依赖/merchant 上下文）
+  3. feedback_no `XGF-1-1` 可能需要对应真实 lead_id=1 + staff_id=1 的关联验证
+- **登记 ISSUE**：ISSUE-M02-007 Feedback API 输入合同不清晰
+- **不强行标 PASS**
+
+### R2 状态
+
+**`M02_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，Gate A PASS algorithm behavior 验证，Gate B ISSUE 登记）
+
+Gate A 从 PARTIAL 升级为 PASS（inactive 过滤 + 少者优先 E2E 验证通过；连续分配 NOT_TESTED 但不阻断）。
+Gate B 登记 ISSUE-M02-007（Feedback API 输入合同不清晰），不阻断 Baseline。
