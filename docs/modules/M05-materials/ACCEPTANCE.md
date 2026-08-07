@@ -19,7 +19,34 @@
 | M06 素材消费（create_job 校验+pinned_sha256） | PARTIAL | 代码确认（ai_edit_service.py:241-280），无 E2E |
 | 商户隔离 | COVERED | 合同测试覆盖跨商户并存/平台只读 |
 
-## E2E 验收清单（待 2-M05.2）
+## E2E 验真结果（2-M05.2 Docker，2026-08-07）
+
+环境：docker compose dev（9000 + SQLite，TOS/Ark 凭证未配置）
+
+| Gate | 域 | 结果 | 证据 |
+|---|---|---|---|
+| B | Dedup Scope | **PASS** | 同 merchant 同 sha 软删后重注册→reuse（id 不变）；不同 merchant 相同 sha→coexist（id 不同） |
+| F | Soft Delete | **PASS** | 无引用素材→delete→deleted_at set + purge_after set + get_material_for_merchant 不可见 |
+| G | Referenced Delete | **FAIL → ISSUE-M05-005 HIGH** | active job 引用素材时 soft_delete 未抛 AiEditMaterialInUse（类型不匹配：material_id 字符串 vs AiEditJobMaterial.material_id Integer）；终态后删除 PASS |
+| H | M06 Consumption | **PASS** | 跨商户素材不可见 + 同商户素材可见 |
+| 专项 | Purge | IMPLEMENTED_DATA_MODEL_ONLY | purge_after 字段存在但无 worker/script/scheduler 执行器 |
+| C | Presigned URL | **FAIL → ISSUE-M05-004 HIGH** | tos_presigned_url 临时 HTTPS URL 直接持久化 DB，cloud_storage_key stable key 未写入 |
+| A | Upload | ENVIRONMENT_BLOCKED | TOS 凭证未配置 |
+| D | Analyze | ENVIRONMENT_BLOCKED | 需方舟多模态 API |
+| E | Re-analyze | ENVIRONMENT_BLOCKED | 同 Gate D |
+
+### ISSUE 发现
+
+- **ISSUE-M05-005 HIGH**：soft_delete_material 活动引用检查类型不匹配（material_id 字符串 vs AiEditJobMaterial.material_id Integer），导致被活动 job 引用的素材可被误删
+- **ISSUE-M05-004 HIGH**：预签名 URL 持久化到 DB（已在上轮 2-M05.1 口径修正中发现）
+
+### 仍 ENVIRONMENT_BLOCKED
+
+- Gate A（Upload TOS）+ Gate D（Analyze）+ Gate E（Re-analyze）需 TOS/Ark 凭证
+
+**E2E 状态：`M05_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_FIXTURE`**（无 BLOCKER，Gate B/F/H PASS + 专项 IMPLEMENTED_DATA_MODEL_ONLY，Gate G/C FAIL→2 HIGH ISSUE 已登记不阻断 Baseline，Gate A/D/E ENVIRONMENT_BLOCKED）
+
+## E2E 验收清单（待 2-M05.2 补验证）
 
 ### DOCKER_TESTABLE
 1. 素材列表 + 分页

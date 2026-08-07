@@ -4,6 +4,15 @@
 
 ## HIGH
 
+### ISSUE-M05-005 soft_delete_material 活动引用检查类型不匹配
+
+- **位置**：app/services/ai_edit_service.py:214-220
+- **事实**：`soft_delete_material` 传参 `material_id` 是字符串（如 `"mat_g1"`），但查询 `AiEditJobMaterial.material_id` 是 Integer FK→`AiEditMaterial.id`；类型不匹配导致查询不命中，活动引用检查失效
+- **E2E 证据**：2-M05.2 Gate G——active job 引用素材时 `soft_delete_material` 未抛 `AiEditMaterialInUse`，直接执行了软删除
+- **影响**：被活动 job 引用的素材可能被误删，导致 M06 剪辑任务引用失效
+- **根因**：`soft_delete_material` 用 `material_id`（字符串）查 `AiEditJobMaterial.material_id`（Integer），应先查 `AiEditMaterial.id` 再用 id 查引用
+- **建议**：修复查询为先 `material = get_material_for_merchant(...)` 再用 `material.id` 查 `AiEditJobMaterial.material_id`
+
 ### ISSUE-M05-004 预签名 URL 持久化到 DB（非 stable key）
 
 - **位置**：app/routers/ai_edit.py:301,326（tos_presigned_url 直接存 presigned HTTPS URL）；app/models.py:1644-1645
@@ -58,7 +67,7 @@
 | 级别 | 数量 |
 |---|---|
 | BLOCKER | 0 |
-| HIGH | 1（预签名 URL 持久化到 DB 非 stable key） |
+| HIGH | 2（预签名 URL 持久化 / soft_delete 引用检查类型不匹配） |
 | MEDIUM | 0 |
 | LOW | 3（共用 router/feature / purge 无执行 / scenes 空） |
 | TEST_GAP | 1（端点级 E2E 全 MISSING） |
