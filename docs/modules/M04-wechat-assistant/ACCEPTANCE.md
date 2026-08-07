@@ -24,7 +24,45 @@
 | 19000 integration | EXTERNAL_ENV_REQUIRED | 需 Windows + 微信 + 19000 运行 |
 | Legacy guard | COVERED | test_p0_end_2a_legacy_scheduler_disable.py / test_legacy_wechat_debug_lockdown.py |
 
-## E2E 验收清单（待 2-M04.2）
+## E2E 验真结果（2-M04.2 Docker，2026-08-07）
+
+环境：docker compose dev（9000 + PG + 能力中心，无 19000）
+
+### Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| A Task Create | PARTIAL | send-to-staff 创建成功（task_id=1, notification_id=1, feedback_no=XGF-7-1），但后续 GET /wechat-tasks 查询返回 0 条（可能是查询权限/路由问题，非创建失败） |
+| B Poll Merchant Isolation | ENVIRONMENT_BLOCKED | agent token 401（docker dev LOCAL_AGENT_TOKEN 非 "dev"，无法用 agent header poll） |
+| C Concurrent Poll | ENVIRONMENT_BLOCKED | 同 B，agent token 401 无法 poll；无 pending task 可拉取 |
+| D Result State Transition | ENVIRONMENT_BLOCKED | agent token 401 无法回写 result |
+| E Duplicate Result | ENVIRONMENT_BLOCKED | 同 D |
+| F Invalid Task Result | CODE_VERIFIED | 代码确认 task_belongs_to_merchant 双校验（wechat_task_service.py:179-180） |
+| G Lead/Staff Consistency | CODE_VERIFIED | 代码确认 lead_id+staff_id FK 创建时固化（models.py:300-301） |
+| H Manual send-to-staff | **PASS** | Lead+Staff+联系方式→send-to-staff→200 created（task_id=1, notification_id=1, feedback_no=XGF-7-1, 通知文本含完整模板） |
+| I Feedback Full Context | PENDING | 需完整 detect_reply 路径 + parse_and_persist 进程内调用（Docker 不含 19000） |
+
+### 环境限制说明
+
+- **LOCAL_AGENT_TOKEN**：docker dev 配置的 token 非 "dev"，agent header 401，无法用 Local Agent 身份 poll/result
+- **19000 不在 docker compose**：19000 是宿主机 Windows 进程，docker dev 无法模拟
+- **GET /wechat-tasks 查询**：send-to-staff 返回 task_id=1 但列表查询返回 0 条，可能需要 agent token 或其他查询条件
+- Gate B/C/D/E 的核心验证需正确配置 LOCAL_AGENT_TOKEN 或在真实 19000 环境进行
+
+### ISSUE-M04-001/002 升级条件检查
+
+- **Concurrent Poll（C）**：ENVIRONMENT_BLOCKED，未证明两 Agent 同时获取同一 Task
+- **Duplicate Result（E）**：ENVIRONMENT_BLOCKED，未证明重复回写产生重复副作用
+- 两个 ISSUE 保持 MEDIUM，升级条件未满足
+
+### ISSUE-M02-007 检查
+
+- Gate I PENDING，需完整 feedback context + 真实 detect_reply 路径
+- 保持 MEDIUM，ISSUE-M02-007 不关闭
+
+**E2E 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_WINDOWS`**（无 BLOCKER，Gate H PASS + F/G CODE_VERIFIED + I PENDING，B/C/D/E ENVIRONMENT_BLOCKED 需 Windows 19000）
+
+## E2E 验收清单（待 2-M04.2 Windows / Staging）
 
 ### CODE_VERIFIED
 - WechatTask 数据模型 + 状态机
