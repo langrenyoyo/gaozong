@@ -4,6 +4,14 @@
 
 ## LOW
 
+### ISSUE-M01-004 AiAutoReplyRun duplicate-insert under concurrency
+
+- **位置**：`ai_auto_reply_outbox_service.py:139-194` enqueue_auto_reply_run
+- **区分**：
+  - Docker controlled duplicate webhook（串行重复投递）：**PASS**（E2E-A 验证，trigger_event_key 唯一约束阻止重复创建）
+  - Production duplicate-insert under concurrency/race：**KNOWN ISSUE**（保持开放，并发/竞争场景下 trigger_event_key 唯一约束可能产生 IntegrityError→需 SAVEPOINT 恢复，待 staging 并发双投递测试验证）
+- **处理**：后续 staging 追加并发双投递测试
+
 ### ISSUE-M01-001 agent_config 三处重复组装逻辑（与 ISSUE-M03-002 同源）
 
 - **位置**：① `agents.py:241-262`（preview）② `douyin_ai_cs_proxy.py:322-343`（会话预览）③ `dry_run_service.py:315-336`（auto-reply）
@@ -82,7 +90,7 @@
 | BLOCKER | 0 |
 | HIGH | 0 |
 | MEDIUM | 0 |
-| LOW | 2（重复组装 / unfounded停用） |
+| LOW | 3（重复组装 / unfounded停用 / duplicate-insert under concurrency） |
 | ARCHITECTURE_OBSERVATION | 1（prompt_injection 安全边界分层，待验证） |
 | DRIFT | 4（Legacy入口 / 渐进窗口 / 注释口径 / CONFIG_BYPASS） |
 | TECH_DEBT | 2（@on_event / latest_message 窗口） |

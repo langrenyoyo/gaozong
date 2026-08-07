@@ -40,7 +40,7 @@
 | A | Webhook 幂等 | **PASS** | 重复事件 is_duplicate=True；WebhookEvent 胜出者=1；AutoReplyRun 不重复创建 |
 | B | Outbox 状态机 | **PASS** | pending/retry_wait 可处理；processing/send_processing 可恢复；sent/send_unknown 终态不重发；failed 可人工重试(仅 pre_send_temporary_failure 白名单) |
 | C | Gate Matrix | **PASS** | HARD_BLOCK 3 flag（虚假确认/重复索要/资料承诺）不可豁免；prompt_injection 不在 9000；unfounded 已停用 |
-| D | Customer Fact Matrix | **PASS** | NONE/PARTIAL/VALID/AMBIGUOUS 五态全覆盖，confidence 分级正确 |
+| D | Customer Fact Matrix | **PASS** | NONE/PARTIAL/VALID/INVALID/AMBIGUOUS 五态全部 PASS（analyze_contact_state 五态全覆盖，confidence 分级正确；INVALID 由 12012345678 触发 invalid_mobile_prefix） |
 | E | Agent Contract | **PASS** | DB 保存 prompt/knowledge_base_text/store_address 一致；知识绑定 read-back 一致；Preview 用 DB 配置+LLM 回复成功 |
 | F | Preview/Auto 事实源 | PARTIAL | Preview 已验证（M03 复用）；Auto Reply 事实源需真实 webhook 触发 |
 
@@ -48,8 +48,11 @@
 
 | Gate | 状态 | 证据 |
 |---|---|---|
-| GATE-M03-01（Agent Binding→Auto Reply） | **可关闭** | E2E-E 验证 DB 保存配置 = Preview 使用的配置；agent_config 三处组装字段一致 |
-| GATE-M03-02（Auto Reply 事实隔离） | **PENDING** | E2E-F PARTIAL，Auto Reply 事实源需真实 webhook 触发验证 |
+| GATE-M03-01（Agent Binding→Auto Reply） | **PENDING_STAGING** | 已验证子结论 M03-CONTRACT-PREVIEW（Agent persisted config → Preview consumption）PASS，但不能替代 Agent Binding→Auto Reply 真实消费 |
+| GATE-M03-02（Auto Reply 事实隔离） | **PENDING_STAGING** | E2E-F PARTIAL，Auto Reply 事实源需真实 webhook 触发验证 |
+| GATE-M03-03（Training 隔离） | **PENDING_STAGING** | 需真实知识库训练端调用验证 |
+
+> M03 三个 Staging Gate 全部 PENDING_STAGING。M03-CONTRACT-PREVIEW 是已验证子结论（Preview 消费 DB 配置一致），但不替代真实 webhook→auto-reply→binding.agent 消费链路。
 
 ### 仍 SKIP（需 staging/生产）
 
