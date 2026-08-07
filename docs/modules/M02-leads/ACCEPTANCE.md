@@ -28,17 +28,19 @@
 
 | E2E | 域 | 结果 | 证据 |
 |---|---|---|---|
-| 1 | 三入口 Identity Matrix | **PASS** | Webhook create→created；同会话重复→duplicate_event；同客户新会话→created（新建）；Manual create→200 |
-| 2 | Cross-merchant | **PASS** | list 只返回 dev-merchant leads，all dev-merchant=True |
-| 3 | Assignment 真实算法 | **SKIP** | 0 staff（docker dev 无销售数据），无法验证轮询/少者优先 |
-| 4 | Reassign | **SKIP** | 0 assigned lead + 0 staff，无法验证转派/reassign_count |
-| 5 | Feedback Parse | **PARTIAL** | POST /sales-feedback/parse 返回 400 SALES_FEEDBACK_PARSE_FAILED（feedback_no 格式或上下文问题，非代码 Bug）；代码核查 parser 逻辑完整（三类模板+首行精确匹配） |
-| 6 | Data Scope | **PASS**（代码核查） | 无"仅本人"强制（assigned_staff_id 可选过滤）；商户内全部可见已代码确认 |
-| 7 | Status 自由字符串 | **PASS** | status=Column(String(20)) 无 DB 约束（models.py:164），update_lead_status 接受任意字符串（lead_service.py:28-32） |
+| 1 | Webhook Identity/Aggregation Matrix | **PASS** | Webhook create→created；同会话重复→duplicate_event；同客户新会话→created（新建）；Manual create→200 |
+| 1 | Legacy sync identity | NOT_VERIFIED | sync-leads 未在 Docker E2E 中触发（dry_run=false 写库路径未测） |
+| 1 | Manual create identity | PARTIAL | Manual create→200 成功，但未携带相同业务身份验证是否产生重复 Lead；ISSUE-M02-002 不升级 HIGH |
+| 2 | Cross-merchant | **TEST_GAP** | list 只返回 dev-merchant，但测试库无第二 merchant fixture（mock auth 固定 dev-merchant），无法构造跨商户场景 |
+| 3 | Assignment 真实算法 | **TEST_FIXTURE_GAP** | 0 staff（docker dev 无销售 fixture），无法验证轮询/少者优先；需补 staff fixture 重测 |
+| 4 | Reassign | **TEST_FIXTURE_GAP** | 0 assigned lead + 0 staff，无法验证转派/reassign_count；需补 fixture 重测 |
+| 5 | Feedback Parse | **TEST_INPUT_GAP** | POST /sales-feedback/parse 返回 400（feedback_no 格式或上下文问题）；需找到正式接受格式构造合法/非法输入 |
+| 6 | Data Scope | **CODE_VERIFIED + PENDING_E2E** | 代码确认无"仅本人"强制（assigned_staff_id 可选过滤）；但未用两 Sales + 两 Lead 真实 API 验证 |
+| 7 | Status 自由字符串 | **DB_VERIFIED + APPLICATION_PENDING** | DB 无约束已验证（models.py:164）；但 API/service 写入链对未知 status 的行为需 E2E |
 
 ### ISSUE-M02-002 升级条件检查
 
-- Manual create（E2E-1）PASS：不带 account_open_id/conversation_short_id 创建成功（200），但不会与 webhook 线索冲突（无相同业务身份）
+- Manual create（E2E-1）PARTIAL：不带 account_open_id/conversation_short_id 创建成功（200），但不会与 webhook 线索冲突（无相同业务身份）
 - **不升级 HIGH**：未证明 Manual API 携带完全相同业务身份仍产生不可区分重复 Lead
 
 ### 仍 SKIP（需 staging/外部环境）
@@ -48,4 +50,4 @@
 - 销售数据范围真实行为（需真实商户上下文 + 多角色）
 - Assignment + Reassign（需多销售数据）
 
-**E2E 状态：`M02_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，E2E-1/2/6/7 PASS，E2E-3/4 SKIP 无数据，E2E-5 PARTIAL）
+**E2E 状态：`M02_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_FIXTURE_GAPS`**（无 BLOCKER，Webhook Identity PASS，Cross-merchant/Assignment/Reassign/Feedback/Data Scope/Status 有 fixture/input gap 待 R1 补）
