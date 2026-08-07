@@ -4,7 +4,10 @@
 > 1A.5 是定性而非重新探索。每项有运行证据（不只 grep 命名）。
 > 本登记簿不改代码、不删代码，只记录定性结论与删除前置。
 
-## 生命周期标签
+## 两个独立维度
+
+### Lifecycle（未来还要不要）
+判断代码在未来架构中的去留定性，与"能不能删"是**两个独立维度**：
 
 | 标签 | 含义 |
 |---|---|
@@ -13,6 +16,19 @@
 | LEGACY | 已被新方案替代，但仍存在调用/env 开关控制，默认关 |
 | DEAD_CANDIDATE | 初步认为无人使用，等待证据后删除 |
 | UNKNOWN | 仍无法判断，需补充证据 |
+
+**Lifecycle ≠ Deletion Eligibility**：Lifecycle 是"未来还要不要"，Deletion Eligibility 是"现在能不能删"。COMPAT 不得在普通业务任务中顺手删除。状态机：`UNKNOWN → LEGACY/COMPAT/ACTIVE → DEAD_CANDIDATE → DELETION_READY → REMOVED`，当前最多 DEAD_CANDIDATE（尚无 DELETION_READY）。
+
+### quality_flags（实现质量标签，不改变 lifecycle）
+TECH_DEBT / CONFIG_BYPASS 等是质量标签，**不作为生命周期**。标了 TECH_DEBT 的项仍是 ACTIVE 正式运行能力，只是实现方式需治理。不要因在 LEGACY_REGISTER 里就让 VibeCoding 误判可淘汰。
+
+## UNKNOWN 规则
+
+证据不足时 **UNKNOWN 优先于推测**。禁止删除/重构/改为 LEGACY/假设无人使用，直到补充证据。
+
+---
+
+## 15 个 Legacy 项
 
 ---
 
@@ -58,7 +74,7 @@
   - 1A.1：标 demo/参考实现非生产依赖
   - 1A.4：外部系统表中 lifecycle=UNKNOWN，无模块实际调用 8081 生产链路
   - 1A.3：无 8081 端口的 Docker command 或启动入口
-- **是否允许删除**：是
+- **是否允许删除**：满足删除前置后允许删除（当前 DEAD_CANDIDATE，未到 DELETION_READY）
 - **删除前置**：grep 确认 `DOUYIN_API_BASE_URL` 无生产调用方；`douyin_api_client.py` 确认无 import；移除默认值和 client 文件
 
 ## LEGACY-004 callback.misanduo.com 硬编码域名
@@ -208,15 +224,16 @@
   - 1A.1：标 CANCELLED_BY_CUSTOMER，不删除历史记录不回退已落地代码
   - 1A.3：无 AdReview 路由注册（grep main.py 无 ad_review router）
   - 1A.4：无模块依赖 AdReview 表
-- **是否允许删除**：是
+- **是否允许删除**：满足删除前置后允许删除（当前 DEAD_CANDIDATE，未到 DELETION_READY）
 - **删除前置**：确认无任何路由/前端引用 AdReview 三表；移除三表 model + 迁移降级脚本；CLAUDE.md 同步移除"一键过审"条目
 
 ## LEGACY-014 CONTACT_INVALID_FOLLOWUP_ENABLED CONFIG_BYPASS
 
 - **能力**：空号追问调度器开关直接读 os.environ 未进 config.py
 - **代码位置**：`app/main.py:236` `os.environ.get("CONTACT_INVALID_FOLLOWUP_ENABLED", "false")`；`app/services/contact_invalid_followup_service.py:46`
-- **当前状态**：ACTIVE（CONFIG_BYPASS / CONFIG_DRIFT）
-- **新方案**：无（功能是主线，但配置方式是 drift）
+- **当前状态**：ACTIVE
+- **quality_flags**：CONFIG_BYPASS / CONFIG_DRIFT
+- **新方案**：无（功能是主线，配置方式需治理）
 - **启用条件**：env `CONTACT_INVALID_FOLLOWUP_ENABLED=true`
 - **生产默认**：关
 - **运行证据**：
@@ -230,7 +247,8 @@
 
 - **能力**：FastAPI 已废弃的 startup/shutdown API
 - **代码位置**：`app/main.py:171` `@app.on_event("startup")`；`app/main.py:240` `@app.on_event("shutdown")`
-- **当前状态**：ACTIVE（TECH_DEBT）
+- **当前状态**：ACTIVE
+- **quality_flags**：TECH_DEBT
 - **新方案**：迁移到 `lifespan` / `asynccontextmanager`
 - **启用条件**：无开关，启动即触发
 - **生产默认**：开
@@ -250,14 +268,14 @@
 | LEGACY | 5 | 001/002/005/007/009 |
 | COMPAT | 5 | 004/006/008/011/012 |
 | DEAD_CANDIDATE | 2 | 003/013 |
-| ACTIVE（含 CONFIG_BYPASS/TECH_DEBT） | 2 | 014/015 |
+| ACTIVE | 2 | 014(quality_flags=CONFIG_BYPASS) / 015(quality_flags=TECH_DEBT) |
 | UNKNOWN | 1 | 010 |
 | 合计 | 15 | |
 
-**是否允许删除**：
+**是否允许删除（Deletion Eligibility，独立于 Lifecycle）**：
 - 否（不可删）：004/006/011/014/015
 - 待证据：001/002/005/007/008/009/010/012
-- 是（可删）：003/013
+- 满足删除前置后允许删除（当前 DEAD_CANDIDATE，未到 DELETION_READY）：003/013
 
 **DEAD_CANDIDATE 删除前置**：
 - LEGACY-003（douyinAPI 8081）：grep 确认无生产调用方 → 移除默认值和 client 文件
