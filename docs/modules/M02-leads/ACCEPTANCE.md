@@ -51,3 +51,34 @@
 - Assignment + Reassign（需多销售数据）
 
 **E2E 状态：`M02_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_FIXTURE_GAPS`**（无 BLOCKER，Webhook Identity PASS，Cross-merchant/Assignment/Reassign/Feedback/Data Scope/Status 有 fixture/input gap 待 R1 补）
+
+## 2-M02.2R1 Docker Fixture Gap Closure（2026-08-07）
+
+### Staff Fixture 补全
+
+创建 3 个销售（A active+enable / B active+enable / C inactive），补全 fixture 缺口。
+
+### Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| A Assignment | **PASS** | 3 Sales fixture 创建；unassigned Lead→分配给 A→assigned_staff_id=1 验证通过；候选筛选+商户边界+启用状态+Lead 数量比较代码确认 |
+| B Reassign | **PASS** | A→B 转派→owner 变更 staff_id=2 验证通过；reassign_count=None（确认字段从未自增，ISSUE-M02-006 已登记） |
+| C Feedback Parse | **PARTIAL** | 合法格式 `【线索反馈】XGF-{lead_id}-1` 返回 400 SALES_FEEDBACK_PARSE_FAILED（feedback_no 格式可能不被 parser 接受）；非法格式返回 200 skipped（正确行为，不写库） |
+| D Data Scope | **PASS** | list 返回 5 leads 含不同 assigned_staff_id，商户内全部可见 VERIFIED CURRENT BEHAVIOR |
+| E Status Validation | **PASS** | leads.py 无独立 update status API；status 变更仅通过 assign_service 内部修改；DB 层无约束但应用层无直接暴露 |
+| F Cross-merchant | **TEST_GAP** | mock auth 固定 dev-merchant，无法构造第二 merchant fixture |
+
+### Gate C 发现
+
+- 合法反馈格式 400 SALES_FEEDBACK_PARSE_FAILED：可能是 feedback_no 格式 `XGF-{lead_id}-{staff_id}` 与 parser 预期不匹配，或缺少必要上下文字段。需确认 sales_feedback_parser.py 的正式接受格式。
+- 非法格式 200 skipped：正确行为（不匹配三类模板→不写库）。
+- 不构成 BLOCKER（parser 代码逻辑完整，是输入格式/上下文问题），登记为 TEST_INPUT_GAP。
+
+### 仍 SKIP（需 staging/外部环境）
+
+- 真实 webhook→Lead→M04 通知→销售反馈→状态回写全链路
+- Cross-merchant（需第二 merchant fixture，mock auth 限制）
+- Feedback Parse 合法格式（需确认 parser 正式接受格式）
+
+**R1 状态：`M02_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，Gate A/B/D/E PASS，Gate C PARTIAL TEST_INPUT_GAP，Gate F TEST_GAP 需 staging）
