@@ -32,15 +32,16 @@
 
 | Gate | 结果 | 证据 |
 |---|---|---|
-| A Task Create | PARTIAL | send-to-staff 创建成功（task_id=1, notification_id=1, feedback_no=XGF-7-1），但后续 GET /wechat-tasks 查询返回 0 条（可能是查询权限/路由问题，非创建失败） |
-| B Poll Merchant Isolation | ENVIRONMENT_BLOCKED | agent token 401（docker dev LOCAL_AGENT_TOKEN 非 "dev"，无法用 agent header poll） |
-| C Concurrent Poll | ENVIRONMENT_BLOCKED | 同 B，agent token 401 无法 poll；无 pending task 可拉取 |
-| D Result State Transition | ENVIRONMENT_BLOCKED | agent token 401 无法回写 result |
-| E Duplicate Result | ENVIRONMENT_BLOCKED | 同 D |
-| F Invalid Task Result | CODE_VERIFIED | 代码确认 task_belongs_to_merchant 双校验（wechat_task_service.py:179-180） |
-| G Lead/Staff Consistency | CODE_VERIFIED | 代码确认 lead_id+staff_id FK 创建时固化（models.py:300-301） |
-| H Manual send-to-staff | **PASS** | Lead+Staff+联系方式→send-to-staff→200 created（task_id=1, notification_id=1, feedback_no=XGF-7-1, 通知文本含完整模板） |
-| I Feedback Full Context | PENDING | 需完整 detect_reply 路径 + parse_and_persist 进程内调用（Docker 不含 19000） |
+| A Task Create | PARTIAL | send-to-staff 创建成功（task_id=1），但 GET /wechat-tasks 查询返回 0 条——**需 R1 定位**：POST create result → DB WechatTask row → task.status → task.merchant_id → GET list query filter → GET pending query filter，明确是 CURRENT_BEHAVIOR 还是 ISSUE |
+| B Poll Merchant Isolation | **TEST_AUTH_FIXTURE_GAP** | LOCAL_AGENT_TOKEN 非 "dev"，agent header 401——是测试身份 fixture 问题，非 Windows 依赖。R1 用合法 token fixture 补 |
+| C Concurrent Poll | **TEST_AUTH_FIXTURE_GAP** | 同 B，需合法 agent token fixture |
+| D Result State Transition | **TEST_AUTH_FIXTURE_GAP** | 同 B |
+| E Duplicate Result | **TEST_AUTH_FIXTURE_GAP** | 同 B |
+| F Invalid Task Result | CODE_VERIFIED | 代码确认 task_belongs_to_merchant 双校验 |
+| G Lead/Staff Consistency | CODE_VERIFIED | 代码确认 lead_id+staff_id FK 创建时固化 |
+| H Manual send-to-staff | **PASS** | Lead+Staff+联系方式→send-to-staff→200 created（task_id=1, feedback_no=XGF-7-1） |
+| I-A Server-side Feedback Persistence | **PENDING R1** | Lead+Staff+WechatTask+feedback_no+合法模板→write-back→parse_and_persist→SalesLeadFeedback/ReplyCheck/Lead。Docker 可测（进程内调用）。决定 ISSUE-M02-007 能否关闭 |
+| I-B Real Feedback Collection | **WINDOWS_REQUIRED** | 19000→detect_reply→真实微信消息→write-back。需 Windows 19000 |
 
 ### 环境限制说明
 
@@ -60,7 +61,7 @@
 - Gate I PENDING，需完整 feedback context + 真实 detect_reply 路径
 - 保持 MEDIUM，ISSUE-M02-007 不关闭
 
-**E2E 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_WINDOWS`**（无 BLOCKER，Gate H PASS + F/G CODE_VERIFIED + I PENDING，B/C/D/E ENVIRONMENT_BLOCKED 需 Windows 19000）
+**E2E 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_AUTH_FIXTURE`**（无 BLOCKER，Gate H PASS + F/G CODE_VERIFIED + I-A PENDING R1 + I-B WINDOWS_REQUIRED，B/C/D/E TEST_AUTH_FIXTURE_GAP）
 
 ## E2E 验收清单（待 2-M04.2 Windows / Staging）
 
