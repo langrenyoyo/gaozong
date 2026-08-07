@@ -1,12 +1,20 @@
 # auto_wechat 机器代码索引
 # 基于 1A.1 SYSTEM_MAP 事实（commit c26ec227e70d），广度优先，不深挖到函数。
 # 模块稳定 ID M01-M07 沿用 SYSTEM_MAP，不重新分类。
+#
+# 依赖语义（REQUIRED-1 修正）：
+#   dependencies 只记录"当前模块主动依赖/消费谁"，单向维护，反向关系由生成器计算。
+#   type 四种：runtime（运行时调用）/ data（跨模块读写表）/ shared_implementation（共用代码）/ integration（边界集成）
+#   区分实现耦合与正式业务依赖，避免把代码共置误当架构事实。
+#
+# source_baseline 表示"这张地图审计的是哪个代码版本"，非文档自身提交版本。
 
-schema_version: 1
+schema_version: 2
 
 project:
   name: auto_wechat
-  source_baseline: "c26ec227e70d689e1b98f838253a36685aa6b0a6"
+  source_baseline:
+    git_commit: "c26ec227e70d689e1b98f838253a36685aa6b0a6"
   last_verified_at: "2026-08-07"
   database:
     primary: "auto_wechat (PostgreSQL, DATABASE_URL, app/database.py, 54 ORM 表)"
@@ -20,6 +28,10 @@ project:
     merchant_isolation: "app/services/douyin_merchant_isolation.py"
   domain_shared:
     contact_extraction: "app/services/contact_extractor.py + contact_state_service.py + customer_profile_service.py + contact_completion_resolver.py + contact_validity_analyzer.py + contact_invalid_followup_service.py + douyin_customer_profile_deriver.py（客户/线索领域共享，非平台基础设施）"
+  index_generation:
+    source: "docs/architecture/CODE_INDEX.yaml"
+    target: "docs/architecture/CODE_INDEX.md"
+    rule: "CODE_INDEX.md 从 YAML 生成，禁止手工编辑；YAML 是唯一事实源"
 
 modules:
   M01:
@@ -84,10 +96,30 @@ modules:
       - "tests/test_douyin_decode_msg_content.py"
       - "tests/test_xg_douyin_ai_cs_llm.py"
       - "tests/test_xg_douyin_ai_cs_rag.py"
-    dependencies: ["M02", "M03"]
-    legacy_paths:
-      - "app/routers/integrations.py:595 (sync-leads, auto_notify 已禁用)"
-      - "app/routers/integrations.py:45,867 (legacy_webhook_router 兼容路径)"
+    dependencies:
+      - module: M02
+        type: data
+        direction: writes
+        reason: "webhook 入口 upsert DouyinLead + 联动 customer_profile_service.recover_contact_valid（app/integrations/douyin_webhook.py:678,1194）"
+      - module: M02
+        type: data
+        direction: reads
+        reason: "客服工作台读 customer_profiles 档案（douyin_workbench_conversation_service.py:28 load_customer_profile）"
+      - module: M07
+        type: runtime
+        direction: calls
+        reason: "9100 compute_usage_client HTTP 上报算力消耗到 9000 /internal/compute/usage（apps/.../compute_usage_client.py:172,199）"
+      - module: M03
+        type: integration
+        direction: consumes
+        reason: "9100 接收 request.agent_config（随 HTTP payload 传入，非直查 M03 库；apps/.../reply_decision_service.py:832）"
+    lifecycle_candidates:
+      - path: "app/routers/integrations.py:595"
+        note: "sync-leads 旧拉取链路, auto_notify 已禁用 (LEGACY_AUTO_NOTIFY_DISABLED)"
+        lifecycle: UNKNOWN
+      - path: "app/routers/integrations.py:45,867"
+        note: "legacy_webhook_router GMP 兼容路径"
+        lifecycle: UNKNOWN
 
   M02:
     name: AI小高线索
@@ -151,10 +183,22 @@ modules:
       - "tests/test_contact_invalid_followup.py"
       - "tests/test_lead_request_context_boost.py"
       - "tests/test_agent_write_back_contact_validity.py"
-    dependencies: ["M03", "M04"]
-    legacy_paths:
-      - "app/routers/integrations.py:595 (sync-leads)"
-      - "app/config.py:217 (DOUYIN_API_BASE_URL 默认 8081 demo)"
+    dependencies:
+      - module: M03
+        type: runtime
+        direction: calls
+        reason: "线索/客服读智能体配置（经 payload，非直查）；webhook 解析绑定智能体"
+      - module: M04
+        type: data
+        direction: writes
+        reason: "webhook 新建线索后建 notify_sales WechatTask 供 M04 执行（当前 auto_notify_disabled 禁用自动建；douyin_webhook.py:929,1030）"
+    lifecycle_candidates:
+      - path: "app/routers/integrations.py:595"
+        note: "sync-leads 旧拉取链路"
+        lifecycle: UNKNOWN
+      - path: "app/config.py:217"
+        note: "DOUYIN_API_BASE_URL 默认 8081 (demo/参考实现非生产依赖)"
+        lifecycle: UNKNOWN
 
   M03:
     name: AI小高智能体
@@ -190,8 +234,16 @@ modules:
       - "tests/test_agent_status.py"
       - "tests/test_douyin_account_agent_binding_service.py"
       - "tests/test_knowledge_categories_api.py"
-    dependencies: ["M01"]
-    legacy_paths: []
+    dependencies:
+      - module: M01
+        type: runtime
+        direction: calls
+        reason: "router 预览调 9100 suggest_reply HTTP 回复生成（app/routers/agents.py:272）"
+      - module: M01
+        type: integration
+        direction: provides
+        reason: "agent_config 随 request payload 传入 M01（非 M01 直查 M03 库）"
+    lifecycle_candidates: []
 
   M04:
     name: AI小高微信助手
@@ -242,11 +294,21 @@ modules:
       - "tests/test_wechat_task_history_api.py"
       - "tests/test_daily_report_service.py"
       - "tests/test_p0_reply_2_agent_write_back.py"
-    dependencies: ["M02"]
-    legacy_paths:
-      - "app/config.py:349 (AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT 旧自动检测)"
-      - "app/routers/replies.py (LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫)"
-      - "app/auth/local_agent_auth.py:62,67 (auth_mode=legacy 未认证回退)"
+    dependencies:
+      - module: M02
+        type: data
+        direction: writes
+        reason: "agent_write_back_reply / record_manual_reply 更新 ReplyCheck + DouyinLead + LeadNotification（wechat_ui_reply_service.py:332; reply_checker.py:15）"
+    lifecycle_candidates:
+      - path: "app/config.py:349"
+        note: "AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT 旧自动检测 (默认 0)"
+        lifecycle: UNKNOWN
+      - path: "app/routers/replies.py"
+        note: "LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫 (默认关)"
+        lifecycle: UNKNOWN
+      - path: "app/auth/local_agent_auth.py:62,67"
+        note: "auth_mode=legacy 未认证回退"
+        lifecycle: UNKNOWN
 
   M05:
     name: 小高素材库
@@ -280,8 +342,12 @@ modules:
       - "tests/test_phase12_task12_material_api.py"
       - "tests/test_phase12_task12_material_analysis.py"
       - "tests/test_ai_edit_download_token.py"
-    dependencies: ["M06"]
-    legacy_paths: []
+    dependencies:
+      - module: M06
+        type: shared_implementation
+        direction: co_located
+        reason: "与 M06 共用 app/routers/ai_edit.py router 和 features/ai-edit 目录（解耦候选，非正式业务依赖）"
+    lifecycle_candidates: []
 
   M06:
     name: AI小高剪辑
@@ -312,8 +378,20 @@ modules:
     tests:
       - "tests/test_las_client.py"
       - "tests/test_ai_edit_result_delivery.py"
-    dependencies: ["M05"]
-    legacy_paths: []
+    dependencies:
+      - module: M05
+        type: data
+        direction: reads
+        reason: "create_job 校验并绑定 AiEditMaterial（ai_edit_service.py:256-265；删除被引用素材抛 AiEditMaterialInUse）"
+      - module: M05
+        type: shared_implementation
+        direction: co_located
+        reason: "与 M05 共用 router 和 feature 目录（解耦候选）"
+      - module: M07
+        type: data
+        direction: calls
+        reason: "LAS 成功后同进程调 compute_service.record_usage 记 ai_edit 消耗（ai_edit_las_service.py:735-746）"
+    lifecycle_candidates: []
 
   M07:
     name: AI小高算力
@@ -344,8 +422,11 @@ modules:
       - "tests/test_compute_models.py"
       - "tests/test_phase10_compute_metering.py"
     dependencies: []
-    legacy_paths:
-      - "app/services/compute_service.py:1-4 (Phase 3-B 兼容入口, 实现已迁移到 apps/compute/services/)"
+    # M07 无主动上游依赖；下游消费者（M01 HTTP 上报 / M06 同进程 record_usage）由生成器反向计算
+    lifecycle_candidates:
+      - path: "app/services/compute_service.py:1-4"
+        note: "Phase 3-B 兼容入口, 实现已迁移到 apps/compute/services/"
+        lifecycle: UNKNOWN
 
 # 平台公共底座测试（跨模块）
 platform_tests:

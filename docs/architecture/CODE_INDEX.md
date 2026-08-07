@@ -1,7 +1,8 @@
+<!-- GENERATED FILE - 从 docs/architecture/CODE_INDEX.yaml 生成，禁止手工编辑 -->
 # auto_wechat 机器代码索引（CODE_INDEX）
 
-> 本文档从 CODE_INDEX.yaml 生成，不两处人工维护。基于 1A.1 SYSTEM_MAP 事实，广度优先。
-> source_baseline: `c26ec227e70d689e1b98f838253a36685aa6b0a6` | last_verified_at: 2026-08-07
+> 本文档从 `CODE_INDEX.yaml` 自动生成，**禁止手工编辑**。YAML 是唯一事实源。
+> source_baseline: `c26ec227e70d689e1b98f838253a36685aa6b0a6` | last_verified_at: 2026-08-07 | schema_version: 2
 
 ## 平台公共底座（跨所有模块）
 
@@ -20,6 +21,12 @@
 
 - 主库: auto_wechat (PostgreSQL, DATABASE_URL, app/database.py, 54 ORM 表)
 - RAG 库: xg_douyin_ai_cs (PostgreSQL, RAG_DATABASE_URL, apps/xg_douyin_ai_cs/rag/database.py, 7 原生 SQL 表)
+
+## 依赖语义说明
+
+- `dependencies` 只记录**当前模块主动依赖/消费谁**，单向维护，反向关系由本生成器计算。
+- `type`: runtime（运行时调用）/ data（跨模块读写表）/ shared_implementation（共用代码，解耦候选）/ integration（边界集成）
+- `lifecycle_candidates`: 未定性候选（UNKNOWN ≠ LEGACY，正式定性见 1A.5）
 
 ---
 
@@ -90,11 +97,26 @@
 - `tests/test_xg_douyin_ai_cs_llm.py`
 - `tests/test_xg_douyin_ai_cs_rag.py`
 
-### 依赖: M02, M03
+### 依赖（主动方向，单向维护）
 
-### legacy_paths（只标记，不正式定性）
-- app/routers/integrations.py:595 (sync-leads, auto_notify 已禁用)
-- app/routers/integrations.py:45,867 (legacy_webhook_router 兼容路径)
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M02 | data | writes | webhook 入口 upsert DouyinLead + 联动 customer_profile_service.recover_contact_valid（app/integrations/douyin_webhook.py:678,1194） |
+| M02 | data | reads | 客服工作台读 customer_profiles 档案（douyin_workbench_conversation_service.py:28 load_customer_profile） |
+| M07 | runtime | calls | 9100 compute_usage_client HTTP 上报算力消耗到 9000 /internal/compute/usage（apps/.../compute_usage_client.py:172,199） |
+| M03 | integration | consumes | 9100 接收 request.agent_config（随 HTTP payload 传入，非直查 M03 库；apps/.../reply_decision_service.py:832） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M03 | runtime | calls | router 预览调 9100 suggest_reply HTTP 回复生成（app/routers/agents.py:272） |
+| M03 | integration | provides | agent_config 随 request payload 传入 M01（非 M01 直查 M03 库） |
+
+### lifecycle_candidates（UNKNOWN ≠ LEGACY，正式定性见 1A.5）
+
+- `app/routers/integrations.py:595` — sync-leads 旧拉取链路, auto_notify 已禁用 (LEGACY_AUTO_NOTIFY_DISABLED) (`UNKNOWN`)
+- `app/routers/integrations.py:45,867` — legacy_webhook_router GMP 兼容路径 (`UNKNOWN`)
 
 ---
 
@@ -166,11 +188,25 @@
 - `tests/test_lead_request_context_boost.py`
 - `tests/test_agent_write_back_contact_validity.py`
 
-### 依赖: M03, M04
+### 依赖（主动方向，单向维护）
 
-### legacy_paths（只标记，不正式定性）
-- app/routers/integrations.py:595 (sync-leads)
-- app/config.py:217 (DOUYIN_API_BASE_URL 默认 8081 demo)
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M03 | runtime | calls | 线索/客服读智能体配置（经 payload，非直查）；webhook 解析绑定智能体 |
+| M04 | data | writes | webhook 新建线索后建 notify_sales WechatTask 供 M04 执行（当前 auto_notify_disabled 禁用自动建；douyin_webhook.py:929,1030） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M01 | data | writes | webhook 入口 upsert DouyinLead + 联动 customer_profile_service.recover_contact_valid（app/integrations/douyin_webhook.py:678,1194） |
+| M01 | data | reads | 客服工作台读 customer_profiles 档案（douyin_workbench_conversation_service.py:28 load_customer_profile） |
+| M04 | data | writes | agent_write_back_reply / record_manual_reply 更新 ReplyCheck + DouyinLead + LeadNotification（wechat_ui_reply_service.py:332; reply_checker.py:15） |
+
+### lifecycle_candidates（UNKNOWN ≠ LEGACY，正式定性见 1A.5）
+
+- `app/routers/integrations.py:595` — sync-leads 旧拉取链路 (`UNKNOWN`)
+- `app/config.py:217` — DOUYIN_API_BASE_URL 默认 8081 (demo/参考实现非生产依赖) (`UNKNOWN`)
 
 ---
 
@@ -213,7 +249,19 @@
 - `tests/test_douyin_account_agent_binding_service.py`
 - `tests/test_knowledge_categories_api.py`
 
-### 依赖: M01
+### 依赖（主动方向，单向维护）
+
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M01 | runtime | calls | router 预览调 9100 suggest_reply HTTP 回复生成（app/routers/agents.py:272） |
+| M01 | integration | provides | agent_config 随 request payload 传入 M01（非 M01 直查 M03 库） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M01 | integration | consumes | 9100 接收 request.agent_config（随 HTTP payload 传入，非直查 M03 库；apps/.../reply_decision_service.py:832） |
+| M02 | runtime | calls | 线索/客服读智能体配置（经 payload，非直查）；webhook 解析绑定智能体 |
 
 ---
 
@@ -271,12 +319,23 @@
 - `tests/test_daily_report_service.py`
 - `tests/test_p0_reply_2_agent_write_back.py`
 
-### 依赖: M02
+### 依赖（主动方向，单向维护）
 
-### legacy_paths（只标记，不正式定性）
-- app/config.py:349 (AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT 旧自动检测)
-- app/routers/replies.py (LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫)
-- app/auth/local_agent_auth.py:62,67 (auth_mode=legacy 未认证回退)
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M02 | data | writes | agent_write_back_reply / record_manual_reply 更新 ReplyCheck + DouyinLead + LeadNotification（wechat_ui_reply_service.py:332; reply_checker.py:15） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M02 | data | writes | webhook 新建线索后建 notify_sales WechatTask 供 M04 执行（当前 auto_notify_disabled 禁用自动建；douyin_webhook.py:929,1030） |
+
+### lifecycle_candidates（UNKNOWN ≠ LEGACY，正式定性见 1A.5）
+
+- `app/config.py:349` — AUTO_WECHAT_ENABLE_LEGACY_AUTO_DETECT 旧自动检测 (默认 0) (`UNKNOWN`)
+- `app/routers/replies.py` — LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫 (默认关) (`UNKNOWN`)
+- `app/auth/local_agent_auth.py:62,67` — auth_mode=legacy 未认证回退 (`UNKNOWN`)
 
 ---
 
@@ -317,7 +376,18 @@
 - `tests/test_phase12_task12_material_analysis.py`
 - `tests/test_ai_edit_download_token.py`
 
-### 依赖: M06
+### 依赖（主动方向，单向维护）
+
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M06 | shared_implementation | co_located | 与 M06 共用 app/routers/ai_edit.py router 和 features/ai-edit 目录（解耦候选，非正式业务依赖） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M06 | data | reads | create_job 校验并绑定 AiEditMaterial（ai_edit_service.py:256-265；删除被引用素材抛 AiEditMaterialInUse） |
+| M06 | shared_implementation | co_located | 与 M05 共用 router 和 feature 目录（解耦候选） |
 
 ---
 
@@ -355,7 +425,19 @@
 - `tests/test_las_client.py`
 - `tests/test_ai_edit_result_delivery.py`
 
-### 依赖: M05
+### 依赖（主动方向，单向维护）
+
+| 目标 | type | direction | reason |
+|---|---|---|---|
+| M05 | data | reads | create_job 校验并绑定 AiEditMaterial（ai_edit_service.py:256-265；删除被引用素材抛 AiEditMaterialInUse） |
+| M05 | shared_implementation | co_located | 与 M05 共用 router 和 feature 目录（解耦候选） |
+| M07 | data | calls | LAS 成功后同进程调 compute_service.record_usage 记 ai_edit 消耗（ai_edit_las_service.py:735-746） |
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M05 | shared_implementation | co_located | 与 M06 共用 app/routers/ai_edit.py router 和 features/ai-edit 目录（解耦候选，非正式业务依赖） |
 
 ---
 
@@ -391,8 +473,20 @@
 - `tests/test_compute_models.py`
 - `tests/test_phase10_compute_metering.py`
 
-### legacy_paths（只标记，不正式定性）
-- app/services/compute_service.py:1-4 (Phase 3-B 兼容入口, 实现已迁移到 apps/compute/services/)
+### 依赖（主动方向）
+
+无主动上游依赖。
+
+### 被消费方（生成器计算，反向）
+
+| 来源 | type | direction | reason |
+|---|---|---|---|
+| M01 | runtime | calls | 9100 compute_usage_client HTTP 上报算力消耗到 9000 /internal/compute/usage（apps/.../compute_usage_client.py:172,199） |
+| M06 | data | calls | LAS 成功后同进程调 compute_service.record_usage 记 ai_edit 消耗（ai_edit_las_service.py:735-746） |
+
+### lifecycle_candidates（UNKNOWN ≠ LEGACY，正式定性见 1A.5）
+
+- `app/services/compute_service.py:1-4` — Phase 3-B 兼容入口, 实现已迁移到 apps/compute/services/ (`UNKNOWN`)
 
 ---
 
