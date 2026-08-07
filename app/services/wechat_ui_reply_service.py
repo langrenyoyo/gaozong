@@ -395,6 +395,54 @@ def agent_write_back_reply(
         expected_reply_text_list=expected_reply_list,
     )
 
+    # 1.6 空号识别（与 record_manual_reply 对齐）：销售回写含联系方式失效/恢复表达时触发空号追问链路
+    # analyze_msgs 是销售回复消息列表（friend/non_system），合并文本做空号识别
+    # 失败不阻断回写主流程（replied/pending 判定照常）
+    try:
+        from app.services.contact_validity_analyzer import analyze_contact_validity
+        from app.services.customer_profile_service import mark_contact_invalid, recover_contact_valid
+        from app.services.contact_invalid_followup_service import create_followup_task
+
+        reply_text = " ".join(str(m.get("content", "")) for m in analyze_msgs)
+        validity = analyze_contact_validity(reply_text)
+
+        lead = db.get(DouyinLead, lead_id)
+        if lead and lead.account_open_id and lead.source_id:
+            if validity.status == "invalid":
+                new_version = mark_contact_invalid(
+                    db,
+                    merchant_id=str(lead.merchant_id or ""),
+                    account_open_id=str(lead.account_open_id),
+                    customer_open_id=str(lead.source_id),
+                    reason=validity.reason or "other",
+                    source="wechat_reply",
+                    source_message_id=str(check.id),
+                )
+                # 块3触发：状态迁移（new_version 非 None）时创建追问任务
+                if new_version is not None and lead.conversation_short_id:
+                    create_followup_task(
+                        db,
+                        merchant_id=str(lead.merchant_id or ""),
+                        lead_id=lead_id,
+                        account_open_id=str(lead.account_open_id),
+                        conversation_short_id=str(lead.conversation_short_id),
+                        customer_open_id=str(lead.source_id),
+                        invalid_version=new_version,
+                        trigger_source="wechat_reply",
+                        trigger_message_id=str(check.id),
+                        invalid_reason=validity.reason or "other",
+                    )
+            elif validity.status == "valid":
+                recover_contact_valid(
+                    db,
+                    merchant_id=str(lead.merchant_id or ""),
+                    account_open_id=str(lead.account_open_id),
+                    customer_open_id=str(lead.source_id),
+                )
+    except Exception:
+        # 空号识别/状态迁移/追问任务创建失败不阻断回写主流程
+        logger.warning("agent_write_back_contact_validity_failed lead_id=%s", lead_id, exc_info=True)
+
     # 7. 根据分析结果更新数据库
     if is_effective and has_friend:
         # friend 消息命中关键词 → replied
