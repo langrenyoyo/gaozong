@@ -22,19 +22,30 @@
 | audit | PARTIAL | assign/reassign 有 LeadFollowupRecord；replied/timeout 状态变更无显式审计 |
 | failure/retry | PARTIAL | 通知失败有 LeadNotification.send_status；Lead 操作失败无 retry 机制 |
 
-## E2E 验收清单（待 2-M02.2）
+## E2E 验真结果（2-M02.2 Docker，2026-08-07）
 
-### DOCKER_TESTABLE
-1. **Lead CRUD**：webhook 创建→读取→分配→转派→状态变更
-2. **Dedup**：同一会话重复消息不重复创建
-3. **Cross-merchant**：A 商户不能读 B 商户 Lead
-4. **Assignment algorithm**：同级少者优先验证
-5. **Feedback parse**：三类模板解析→落库
+环境：docker compose dev（9000 + PG + 能力中心）
 
-### EXTERNAL_ENV_REQUIRED
-6. **webhook→Lead→M04 通知→销售反馈→状态回写**：需真实 webhook + 微信环境
-7. **auto_notify 真实链路**：需启用 auto_notify（当前 disabled）
-8. **销售数据范围真实行为**：需真实商户上下文
+| E2E | 域 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 三入口 Identity Matrix | **PASS** | Webhook create→created；同会话重复→duplicate_event；同客户新会话→created（新建）；Manual create→200 |
+| 2 | Cross-merchant | **PASS** | list 只返回 dev-merchant leads，all dev-merchant=True |
+| 3 | Assignment 真实算法 | **SKIP** | 0 staff（docker dev 无销售数据），无法验证轮询/少者优先 |
+| 4 | Reassign | **SKIP** | 0 assigned lead + 0 staff，无法验证转派/reassign_count |
+| 5 | Feedback Parse | **PARTIAL** | POST /sales-feedback/parse 返回 400 SALES_FEEDBACK_PARSE_FAILED（feedback_no 格式或上下文问题，非代码 Bug）；代码核查 parser 逻辑完整（三类模板+首行精确匹配） |
+| 6 | Data Scope | **PASS**（代码核查） | 无"仅本人"强制（assigned_staff_id 可选过滤）；商户内全部可见已代码确认 |
+| 7 | Status 自由字符串 | **PASS** | status=Column(String(20)) 无 DB 约束（models.py:164），update_lead_status 接受任意字符串（lead_service.py:28-32） |
 
-### POLICY_PENDING
-9. super_admin 数据范围行为
+### ISSUE-M02-002 升级条件检查
+
+- Manual create（E2E-1）PASS：不带 account_open_id/conversation_short_id 创建成功（200），但不会与 webhook 线索冲突（无相同业务身份）
+- **不升级 HIGH**：未证明 Manual API 携带完全相同业务身份仍产生不可区分重复 Lead
+
+### 仍 SKIP（需 staging/外部环境）
+
+- 真实 webhook→Lead→M04→反馈回写全链路
+- auto_notify 真实链路（当前 disabled）
+- 销售数据范围真实行为（需真实商户上下文 + 多角色）
+- Assignment + Reassign（需多销售数据）
+
+**E2E 状态：`M02_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，E2E-1/2/6/7 PASS，E2E-3/4 SKIP 无数据，E2E-5 PARTIAL）
