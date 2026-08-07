@@ -205,3 +205,50 @@ LOCAL_AGENT_TOKENS: "dev-merchant:test-agent-token"
 
 ### POLICY_PENDING
 - super_admin Local Agent 访问行为
+
+---
+
+## M04_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> Windows 恢复后只补 W01-W06，不重做 Docker E2E
+
+### VERIFIED
+
+- M04 owns WechatTask
+- Manual send-to-staff → persistent task + feedback_no (XGF-{lead}-{staff})
+- Local Agent auth contract（X-Local-Agent-Token → merchant_id）
+- Task → Agent pending 可见
+- Result state: pending → pasted
+- Feedback server-side persistence（parse_and_persist 进程内 PASS）
+- M04↔M02 feedback contract MATCH
+- auto_notify: implemented but disabled
+- Manual notification: ACTIVE
+- Duplicate result: detect_reply DEDUP VERIFIED
+- Cross-merchant task ownership: CODE_VERIFIED
+
+### KNOWN HIGH ISSUE
+
+- ISSUE-M04-001: No atomic claim/lease → concurrent agents can receive same task → DUPLICATE_EXECUTION_RISK (E2E VERIFIED)
+
+### KNOWN MEDIUM ISSUE
+
+- ISSUE-M04-002: Compute/financial duplicate side effect NOT VERIFIED → defer to M07
+
+### PENDING_WINDOWS
+
+- W01 Heartbeat/offline
+- W02 Sender Identity（最高优先级）
+- W03 Recipient Identity
+- W04 Foreground Guard
+- W05 Real Feedback (detect_reply → write-back)
+- W06 Full Chain (9000→19000→微信→result→9000)
+
+### LIFECYCLE_PENDING
+
+- legacy_foreground_ok / diag: UNKNOWN → ACTIVE candidate pending W04 evidence
+
+### 冻结路径
+
+Windows 恢复 → 补 W01-W06 → `M04_MODULE_BASELINE_APPROVED`
