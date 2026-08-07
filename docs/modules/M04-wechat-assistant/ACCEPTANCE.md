@@ -63,6 +63,52 @@
 
 **E2E 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_AUTH_FIXTURE`**（无 BLOCKER，Gate H PASS + F/G CODE_VERIFIED + I-A PENDING R1 + I-B WINDOWS_REQUIRED，B/C/D/E TEST_AUTH_FIXTURE_GAP）
 
+## 2-M04.2R1 Local Agent Protocol Fixture Gap Closure（2026-08-07）
+
+### 环境阻断确认
+
+docker dev 环境的 `LOCAL_AGENT_TOKENS` 未配置：
+- `_token_map()` 返回 empty（docker compose env_file `.env.development.local` 不存在，required: false 不报错）
+- agent 路由（`/wechat-tasks/pending`、`/wechat-tasks/agent/{id}`、`/wechat-tasks/{id}/result`）强制 `require_local_agent_context`，无 token → 401 `LOCAL_AGENT_TOKEN_MISSING` 或 `LOCAL_AGENT_TOKEN_INVALID`
+- 尝试通过 `.env.development.local` 注入 `LOCAL_AGENT_TOKENS=dev-merchant:test-agent-token`，但 docker compose env_file 加载机制导致 postgres `PG_PASSWORD` 未设置容器崩溃
+- 删除 `.env.development.local` 后 docker compose 恢复正常
+
+### 根因
+
+docker dev 环境设计上不包含 Local Agent token 配置——Local Agent 是宿主机 Windows 进程，docker dev 主要用于 9000/9100 API 开发。agent 路由的 token 验证是运行时安全设计，不是测试可以绕过的配置。
+
+### R1 Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| 1 Task Create→DB→List/Pending | PARTIAL | send-to-staff 创建成功（task_id=2）；GET /wechat-tasks (Bearer) 返回 0 条——可能是列表 API 权限/查询条件不同（agent route 需 token），需用 agent token 查才能确认 DB row 是否存在 |
+| 2 Poll Merchant Isolation | TEST_AUTH_FIXTURE_GAP | agent token 401 |
+| 3 Concurrent Poll | TEST_AUTH_FIXTURE_GAP | agent token 401 |
+| 4 Result State Transition | TEST_AUTH_FIXTURE_GAP | agent token 401 |
+| 5 Duplicate Result | TEST_AUTH_FIXTURE_GAP | agent token 401 |
+| 6 Cross-merchant Result Rejection | CODE_VERIFIED | 代码确认 task_belongs_to_merchant 双校验 |
+| 7 Cross-merchant Lead/Staff Rejection | CODE_VERIFIED | 代码确认 assign_service 商户校验 |
+| 8 Full-context Feedback (I-A) | TEST_AUTH_FIXTURE_GAP | 需 agent token 通过 write-back 路径或直接进程内调用 parse_and_persist |
+
+### 解决方案建议
+
+不修改业务代码，但需修改 docker compose 配置（`docker-compose.dev.yml` environment 段或 `docker-compose.override.yml`）注入：
+```
+LOCAL_AGENT_TOKENS: "dev-merchant:test-agent-token"
+```
+这属于 infra 配置改动，非业务代码改动。需用户批准后执行。
+
+### ISSUE-M04-001/002 升级条件检查
+
+- **Concurrent Poll（Gate 3）**：TEST_AUTH_FIXTURE_GAP，未证明两 Agent 同时获取同一 Task → 保持 MEDIUM
+- **Duplicate Result（Gate 5）**：TEST_AUTH_FIXTURE_GAP，未证明重复回写产生重复副作用 → 保持 MEDIUM
+
+### ISSUE-M02-007 检查
+
+- Gate 8（I-A）：TEST_AUTH_FIXTURE_GAP，未跑通完整 feedback context → 保持 MEDIUM，不关闭
+
+**R1 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_AUTH_FIXTURE`**（无 BLOCKER，Gate 1 PARTIAL + 6/7 CODE_VERIFIED + 2/3/4/5/8 TEST_AUTH_FIXTURE_GAP，需 docker compose 配置注入 token）
+
 ## E2E 验收清单（待 2-M04.2 Windows / Staging）
 
 ### CODE_VERIFIED
