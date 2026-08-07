@@ -22,7 +22,8 @@
 |---|---|---|---|
 | 5 | Preview 真实 9100+LLM | **PASS** | LLM 真实回复"老板，20万左右的奔驰C级确实是热门选择。您留个联系方式..."；llm_used=True；auto_send=False |
 | 5 | Preview 不触发发送 | **PASS** | auto_send=False 硬编码；AiAutoReplyRun=0 |
-| 7 | 三场景污染测试 | **PASS** | Preview 输入"想看宝马5系" → 回复"咱们店主营奔驰，宝马5系我需要帮您核实下..." 不含奥迪A6/10-15万/深圳（关键门通过） |
+| 7 | 三场景污染测试 | **PASS（Preview 事实隔离）** | Preview 输入"想看宝马5系" → 回复"咱们店主营奔驰，宝马5系我需要帮您核实下..." 不含奥迪A6/10-15万/深圳（关键门通过） |
+| 7 | 三场景整体事实隔离 | **PARTIAL / PENDING STAGING E2E** | Preview 事实隔离 PASS；Auto Reply 事实隔离 NOT VERIFIED；Training 事实隔离 NOT VERIFIED |
 | 8 | 9100 真实集成 | **PASS** | docker 内部域名可达，非 Mock |
 | ISSUE-004 | 四层定位 | **已定位** | E 层断言取错（测试脚本用 persona_prompt 调 Create/Update，但前端实际用 prompt）；非真实 Bug，已关闭 |
 
@@ -37,7 +38,7 @@
 | 9 | Compute | LLM 调用成功但未确认算力记录（rag_used=False，需更精确的消耗场景） |
 | 专项1 | super_admin | 需 RBAC 基线后验证（POLICY_PENDING） |
 
-**E2E 状态：`M03_E2E_VERIFIED_PENDING_BASELINE`**（无 BLOCKER，三场景污染测试通过，关键门已过）
+**E2E 状态：`M03_DOCKER_E2E_VERIFIED_PENDING_STAGING_INTEGRATION`**（无 BLOCKER，Preview 事实隔离通过，三场景整体事实隔离 PARTIAL 待 staging E2E）
 
 ## 当前已有验收能力
 

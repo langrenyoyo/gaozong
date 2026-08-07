@@ -14,9 +14,9 @@
 - **需要的 E2E**：把实际行为跑出来（super_admin=True 时能否访问他商户 Agent 的回复建议），再与 RBAC 正式基线比对
 - **建议**：等 2-M03.2 E2E 专项 1 跑出实际行为后再定性
 
-## LOW
+## 已关闭
 
-### ISSUE-M03-004 Update 后 Read 返回 prompt 为空（E2E 四层定位：E 层断言取错，非真实 Bug）
+### ISSUE-M03-004 Update 后 Read 返回 prompt 为空（root cause: E2E assertion field mismatch）
 
 - **位置**：`apps/agents/services.py:98-122` update_agent + `app/schemas.py:152-157` AiAgentUpdate
 - **四层定位结果**：
@@ -25,9 +25,11 @@
   - C. Service update_agent：`model_dump(exclude_unset=True)` 更新 DB prompt 列（正确）
   - D. DB row：用正确字段名 `prompt` 创建时 DB 存值正确（`prompt='你是客服2'`）
   - E. **E2E 断言取错**：测试脚本用 `persona_prompt` 调 Create/Update API（Preview schema 字段名），但 Create/Update schema 用 `prompt`，导致字段被忽略存空
-- **结论**：**非真实 Bug，E2E 测试脚本字段名用错**。前端 `AgentEditor` 提交用 `prompt`（正确），`AiAgentPreviewRequest` 用 `persona_prompt`（preview 专用 schema，`agents.py:244` 做映射）。两套字段名各自正确，仅 E2E 脚本混用。
-- **验证**：用正确字段名 `prompt` 创建 → DB 正确存值（`prompt='你是客服2'`）；用错误字段名 `persona_prompt` 创建 → DB 存空（字段被忽略）
-- **状态**：已定位，非 Bug，关闭
+- **root cause**：E2E assertion field mismatch（测试脚本字段名与 API schema 不一致）
+- **production behavior defect**：NO（前端 AgentEditor 提交用 `prompt` 正确，preview 用 `persona_prompt` 正确，两套字段名各自正确）
+- **状态**：已关闭
+
+## LOW
 
 ### ISSUE-M03-002 agent_config 三处重复组装逻辑
 
@@ -83,7 +85,7 @@
 | LOW | 2（重复组装 / 停用不可达） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
 | UNKNOWN | 1（super_admin bypass POLICY_PENDING，E2E 待 RBAC 基线） |
-| 已关闭 | 2（路径歧义 E2E PASS / Update prompt 空 E 层断言取错非 Bug） |
+| 已关闭 | 3（路径歧义 E2E PASS / Update prompt 空 E2E assertion field mismatch production defect=NO / 同前） |
 | MEDIUM | 0 |
 | LOW | 3（重复组装 / 停用不可达 / Update prompt 空） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
