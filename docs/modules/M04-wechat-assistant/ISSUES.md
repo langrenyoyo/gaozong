@@ -9,14 +9,14 @@
 - **位置**：wechat_task_service.py（grep lease/claim 无匹配）
 - **事实**：服务端无原子认领/锁标记，get_pending_wechat_tasks 按 merchant_id 过滤 status==pending 直接返回；Agent 端有 _wechat_task_lock 防并发（local_agent_main.py:2279），但服务端无 lease
 - **影响**：多 Agent 同商户理论上可能拉同一 pending 任务
-- **建议**：如多 Agent 部署需加服务端 lease/claim 机制
+- **升级条件**：Docker E2E 证明两 Agent 同时获取同一 Task → HIGH / DUPLICATE_EXECUTION_RISK
 
 ### ISSUE-M04-002 result report 非严格幂等，重复回写可能重复扣算力
 
 - **位置**：wechat_task_service.py:348-352, 437-464, 462
 - **事实**：submit_wechat_task_result 无幂等键/版本号校验，重复回写直接覆盖 status/raw_result；已 sent 任务再次回写 sent=true 会重复 _report_wechat_task_compute_usage（:462）
 - **影响**：重复回写可能重复扣算力
-- **建议**：加幂等校验（版本号/已处理标记）
+- **升级条件**：Docker E2E 证明相同 result 提交两次产生重复副作用/计费 → HIGH / FINANCIAL_INTEGRITY + IDEMPOTENCY
 
 ## LOW
 
@@ -47,7 +47,10 @@
 
 ```
 ISSUE-M02-007 Feedback parse-and-persist contract failure
-最终结论: CONTRACT_MATCHES
+最终结论:
+  Contract shape: CODE_VERIFIED_MATCH
+  M04 call path: CODE_VERIFIED
+  Parse-and-persist runtime success: NOT YET E2E VERIFIED
 
 M04 实际输出格式（_try_parse_sales_feedback_from_reply 传入 raw_text）:
   - 含【线索反馈】模板首行
@@ -59,11 +62,10 @@ M02 parse_and_persist 接受格式:
   - feedback_no 正则 ^XGF-\d+-\d+$ 校验
   - 上下文校验: lead/staff 归属 + feedback_no==build_feedback_no
 
-两端格式完全一致。ISSUE-M02-007 的 400 根因不在 M04→M02 合同不匹配，
+两端格式一致（CODE_VERIFIED_MATCH）。ISSUE-M02-007 的 400 根因不在合同不匹配，
 而在 E2E 测试未携带完整上下文（需真实 lead_id+staff_id 关联的 DB 记录）。
 
-升级条件: staging 证明 M04 生产反馈路径使用相同合同且合法反馈无法持久化 → HIGH
-当前建议: 保持 MEDIUM，staging E2E 验证 parse_and_persist 真实调用路径
+保留 ISSUE，等 M04.2 完整 feedback context Docker E2E 跑通才关闭。
 ```
 
 ## Legacy 补充

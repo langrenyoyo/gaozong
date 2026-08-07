@@ -66,8 +66,23 @@ pending → (detect_count >= 30) → completed (max_retries_exceeded)
 - 跨商户 task_id → 404（不泄露存在性）
 - 通用 HTTP 创建已 410 关闭（wechat_tasks.py:35-48），仅服务端内部 create_wechat_task
 
-## 关键缺失
+### 隔离能力拆分
 
-- **无 lease/claim**：服务端无原子认领，多 Agent 同商户可能拉同一 pending 任务
-- **无崩溃恢复**：Agent 执行中崩溃，任务永久停留 pending/processing
-- **result report 非严格幂等**：重复回写可能重复扣算力（wechat_task_service.py:462）
+| 层面 | 状态 | 说明 |
+|---|---|---|
+| Merchant boundary | CODE_VERIFIED | token→merchant_id + lead/staff FK 反查 |
+| Lead/staff consistency | CODE_VERIFIED | task.lead_id + task.staff_id 创建时固化，商户归属继承 |
+| Device-level task ownership | NOT_VERIFIED / POSSIBLY_ABSENT | 无 agent_id 列，仅 agent_hostname+agent_pid 事后审计；无领取前设备绑定 |
+| Sender WeChat identity | NOT_VERIFIED | 哪个微信账号发（本机微信进程），待 Windows E2E |
+
+> **区分**：Recipient Identity（target_nickname 防护完整，CODE_VERIFIED）vs Sender Identity（哪个微信账号发，NOT_VERIFIED 待 Windows E2E）
+
+### 持久/恢复能力拆分
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| Durable persistence | VERIFIED | WechatTask 表持久化 |
+| Claim/lease | ABSENT | 无原子认领/锁标记 |
+| Automatic retry/requeue | ABSENT | failed 无自动重入队 |
+| Crash recovery | NOT_VERIFIED / likely limited | Agent 崩溃任务停留 pending/processing，无超时回收 |
+| Manual recovery | 按代码记录 | notify_sales failed 需人工重新 send-to-staff；detect_reply 未命中回退 pending |
