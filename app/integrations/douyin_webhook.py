@@ -1169,7 +1169,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                 db, message_text, account_open_id, conversation_short_id, from_user_id, merchant_id,
                 context_boost=context_boost,
             )
-            contact_result = extract_contacts_from_text(combined_text)
+            contact_result = extract_contacts_from_text(combined_text, context_boost=context_boost)
             lead, upsert_action = upsert_lead_from_webhook(
                 db,
                 payload,

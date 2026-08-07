@@ -265,6 +265,77 @@ def test_confidence_default_in_empty_text():
     assert result.confidence == 0.0
 
 
+# ---- 2.5 干扰词上下文降权 + context_boost 加成 ----
+
+def test_interference_penalty_without_context_boost():
+    """干扰词邻近（公里）+ 无 context_boost → confidence 降 0.2（1.0-0.2=0.8）。"""
+    # "这台车跑了13800138000公里"——13800138000 是 11 位但前缀 1380 非白名单号段，
+    # 会走白名单降级。改用白名单号段 + 干扰词邻近测试降权
+    result = extract_contacts_from_text("跑了13812345678公里")
+    assert result.phone == "13812345678"
+    assert result.confidence == pytest.approx(0.8)
+
+
+def test_interference_penalty_with_context_boost():
+    """干扰词邻近（公里）+ context_boost=True → confidence 降 0.05 + 加 0.05（1.0-0.05+0.05=1.0）。"""
+    result = extract_contacts_from_text("跑了13812345678公里", context_boost=True)
+    assert result.phone == "13812345678"
+    # 1.0 - 0.05(干扰词降权) + 0.05(context_boost加成) = 1.0
+    assert result.confidence == pytest.approx(1.0)
+
+
+def test_interference_penalty_price_without_context_boost():
+    """干扰词邻近（万/元价格）+ 无 context_boost → 降 0.2。"""
+    result = extract_contacts_from_text("价格13812345678元")
+    assert result.phone == "13812345678"
+    assert result.confidence == pytest.approx(0.8)
+
+
+def test_interference_penalty_year_without_context_boost():
+    """干扰词邻近（年）+ 无 context_boost → 降 0.2。"""
+    result = extract_contacts_from_text("13812345678年上牌")
+    assert result.phone == "13812345678"
+    assert result.confidence == pytest.approx(0.8)
+
+
+def test_no_interference_no_penalty():
+    """无干扰词邻近 → 不降权（confidence=1.0）。"""
+    result = extract_contacts_from_text("我的电话是13812345678")
+    assert result.phone == "13812345678"
+    assert result.confidence == 1.0
+
+
+def test_context_boost_bonus_capped_at_1_0():
+    """context_boost +0.05 封顶 1.0（标准匹配本就 1.0，+0.05 仍 1.0）。"""
+    result = extract_contacts_from_text("我的电话是13812345678", context_boost=True)
+    assert result.phone == "13812345678"
+    assert result.confidence == 1.0
+
+
+def test_interference_penalty_not_below_zero():
+    """降权不低于 0.0。非白名单降级到 partial_phone 时 confidence 已是 0.4，
+    干扰词降权只针对 phone 匹配（partial_phone 不再降权，它本就是低可信待确认）。"""
+    # 非白名单降级 partial_phone，confidence=0.4（干扰词降权不作用于 partial_phone）
+    result = extract_contacts_from_text("跑了14012345678公里")
+    assert result.partial_phone == "14012345678"
+    assert result.confidence == pytest.approx(0.4)
+
+
+def test_interference_window_nearby_only():
+    """干扰词超出窗口（6 字符）不降权。"""
+    # 干扰词"公里"在 phone 前 8 个字符处，超出窗口
+    result = extract_contacts_from_text("公里好远啊电话13812345678")
+    assert result.phone == "13812345678"
+    assert result.confidence == 1.0
+
+
+def test_interference_km_case_insensitive():
+    """km 大小写不敏感（KM/Km 都降权）。"""
+    result = extract_contacts_from_text("13812345678KM")
+    assert result.phone == "13812345678"
+    assert result.confidence == pytest.approx(0.8)
+
+
 
 # ---- analyze_contact_state 号段白名单一致性（审查发现1修复） ----
 

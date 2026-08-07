@@ -76,8 +76,12 @@ _WECHAT_NOISE_VALUES = {
 }
 
 
-def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
-    """从私信纯文本中提取手机号和微信号。"""
+def extract_contacts_from_text(text: str | None, *, context_boost: bool = False) -> ContactExtractResult:
+    """从私信纯文本中提取手机号和微信号。
+
+    context_boost（任务 2.4/2.5）：LEAD_REQUEST 上下文时干扰词降权幅度小（-0.05 vs -0.2），
+    且 confidence +0.05 封顶 1.0。默认 False 不影响现有行为。
+    """
     if text is None or text.strip() == "":
         return ContactExtractResult(
             phone=None,
@@ -161,6 +165,19 @@ def extract_contacts_from_text(text: str | None) -> ContactExtractResult:
     if partial_phone_fallback and not phones:
         # 全部非白名单降级：confidence=0.4（待确认线索）
         best_confidence = 0.4
+
+    # 任务 2.5 干扰词上下文降权（规则文档 8.1）：phone 紧邻干扰词（公里/万/元/年等）降 confidence。
+    # 有 LEAD_REQUEST 上下文（context_boost=True）降 0.05（客户回复留资引导不太可能发里程/价格）；
+    # 无上下文降 0.2（严格过滤）。配套 2.4 context_boost + 2.3 confidence。
+    if phones and best_confidence > 0:
+        phone_match = next((m for m in matches if m["type"] == "phone" and m["value"] == phones[0]), None)
+        if phone_match and _has_nearby_interference(text, str(phones[0]), int(phone_match.get("start", -1)), int(phone_match.get("end", -1))):
+            penalty = 0.05 if context_boost else 0.2
+            best_confidence = max(0.0, best_confidence - penalty)
+
+    # 任务 2.4/2.5：context_boost 置信度加成（规则文档 0.3 第②项），+0.05 封顶 1.0
+    if context_boost and best_confidence > 0:
+        best_confidence = min(1.0, best_confidence + 0.05)
 
     return ContactExtractResult(
         phone=phones[0] if phones else None,
@@ -476,6 +493,43 @@ def is_lead_request_message(text: str | None) -> bool:
         return False
     s = str(text)
     return any(keyword in s for keyword in _LEAD_REQUEST_KEYWORDS)
+
+
+# ---- 干扰词上下文降权（任务 2.5，规则文档 8.1） ----
+# 二手车场景：数字紧邻里程/价格/年份/排量等干扰词时，大概率不是手机号。
+# 规则文档 8.1 关键干扰词：公里/km/迈/万/元/块/价格/年/款/排量。
+# ponytail 已知局限：窗口固定 6 字符（经验值），极少数长句中干扰词可能落在窗口外；
+# 升级路径：按句号/逗号切分后只看同句干扰词。
+_INTERFERENCE_KEYWORDS = ("公里", "km", "迈", "万", "元", "块", "价格", "年", "款", "排量")
+_INTERFERENCE_WINDOW = 6
+
+
+def _has_nearby_interference(text: str, phone_value: str, start: int, end: int) -> bool:
+    """检测 phone 在原文中是否紧邻干扰词（前后 _INTERFERENCE_WINDOW 字符内有干扰词）。
+
+    标准匹配用 start/end 精确定位；管道兜底（start=-1）用 text.find 兜底定位。
+    返回 True 表示数字紧邻干扰词，应降 confidence。
+    """
+    s = str(text or "")
+    if not phone_value:
+        return False
+    # 定位 phone 在原文中的位置
+    pos = start if start >= 0 else s.find(phone_value)
+    if pos < 0:
+        return False
+    phone_len = (end - start) if (start >= 0 and end > start) else len(phone_value)
+    # 前后 window 字符窗口
+    before = s[max(0, pos - _INTERFERENCE_WINDOW):pos]
+    after = s[pos + phone_len:pos + phone_len + _INTERFERENCE_WINDOW]
+    window_text = before + after
+    lower_window = window_text.lower()
+    for keyword in _INTERFERENCE_KEYWORDS:
+        if keyword == "km":
+            if "km" in lower_window:
+                return True
+        elif keyword in window_text:
+            return True
+    return False
 
 
 # ---- 联系方式确定性状态机（9000 判定，9100 消费） ----
