@@ -40,6 +40,16 @@
 1. **Preview 真实调 9100**：验证 preview 走 RAG + LLM + 算力消耗上报 + auto_send=False
 2. **Auto-reply agent_config 来源**：验证 binding.agent DB 模型与 preview 草稿值字段一致
 3. **商户隔离 E2E**：super_admin 跨商户访问 Agent 的真实行为（binding service 绕过路径）
-4. **三场景隔离**：preview / auto-reply / training 确认 LLM 路径隔离（preview 与 auto-reply 共享，training 独立）
+4. **三场景隔离**：preview / auto-reply / training 确认事实来源隔离（代码路径存在共享，事实来源隔离尚待 E2E 验证）
 5. **知识库绑定 E2E**：Agent 绑定 category_key → 9100 RAG 检索 → rag_results 注入
 6. **删除有 active 绑定的 Agent**：确认 409 阻断 + 硬删除（含 agent_knowledge_categories 级联清理）
+
+## 三场景正式隔离规则
+
+代码路径存在共享（preview 与 auto-reply 共用 9100 `build_reply_suggestion` LLM 链路），**事实来源隔离尚待 E2E 验证**。共用 9100 LLM 代码本身没问题，真正要 E2E 证明的是"同一套策略，不同事实源"。
+
+| 场景 | 客户事实 | 商户/Agent 变量 | DB 真实客户档案 | 真实发送 |
+|---|---|---|---|---|
+| Preview | 当前预览会话允许 | 允许 | **禁止** | **禁止** |
+| Auto Reply | 当前消息+历史 | 允许 | 允许可信事实 | Gate 通过后允许 |
+| Training | 通用训练上下文 | **禁止商户变量污染** | **禁止** | **禁止** |

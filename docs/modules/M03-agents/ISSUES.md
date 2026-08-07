@@ -2,15 +2,17 @@
 
 > source_baseline: c26ec227e70d | 本轮只登记不修复
 
-## MEDIUM
+## UNKNOWN
 
-### ISSUE-M03-001 super_admin 回复建议路径可绕过商户绑定校验
+### ISSUE-M03-001 super_admin 回复建议路径可绕过商户绑定校验（POLICY_PENDING）
 
 - **位置**：`app/services/douyin_ai_cs_binding_service.py:42-47`
 - **事实**：`if context.super_admin: return allowed=True` with warning `SUPER_ADMIN_BYPASS_REQUIRES_AUDIT`，绕过商户绑定校验
-- **影响**：super_admin 可访问任意商户的智能体回复建议，仅留审计 warning
+- **当前定性**：UNKNOWN / POLICY_PENDING（Security-sensitive，不能仅凭 `if super_admin: bypass` 就判断成漏洞）
+- **为什么不是 MEDIUM**：是否是 Bug 取决于正式权限设计——(A) super_admin 可跨商户管理是设计意图？还是 (B) super_admin 仍必须明确 merchant context？当前无正式 RBAC 基线可比对
 - **测试**：MISSING — 无 `super_admin=True` 用例
-- **建议**：下一轮 E2E 验证 super_admin 真实行为；考虑是否保留此特权路径
+- **需要的 E2E**：把实际行为跑出来（super_admin=True 时能否访问他商户 Agent 的回复建议），再与 RBAC 正式基线比对
+- **建议**：等 2-M03.2 E2E 专项 1 跑出实际行为后再定性
 
 ## LOW
 
@@ -66,7 +68,7 @@
 |---|---|
 | BLOCKER | 0 |
 | HIGH | 0 |
-| MEDIUM | 1（super_admin bypass） |
+| MEDIUM | 0 |
 | LOW | 2（重复组装 / 停用不可达） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
-| UNKNOWN | 1（路径歧义） |
+| UNKNOWN | 2（super_admin bypass POLICY_PENDING / 路径歧义） |

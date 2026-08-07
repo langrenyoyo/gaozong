@@ -74,4 +74,6 @@
 | LLM 路径 | 9100 build_reply_suggestion → _build_llm_reply | **同 preview**（共享 9100 管线） | **独立**（_build_answer，不经 build_reply_suggestion） |
 | 算力 capability_key | douyin-cs | douyin-cs | knowledge |
 | 真实发送 | **否**（auto_send=False 硬编码） | 可能（decided + real_send + auto_send=True） | 否 |
-| 隔离程度 | 与 auto-reply 共享 9100 LLM 链路 | 与 preview 共享 | 真正独立 |
+| 隔离程度 | 与 auto-reply 共享 9100 LLM 代码路径 | 与 preview 共享 | 独立 LLM 路径 |
+
+> **三场景隔离口径**：代码路径存在共享（preview 与 auto-reply 共用 9100 `build_reply_suggestion`），**事实来源隔离尚待 E2E 验证**。共用 LLM 代码本身没问题，真正要证明的是"同一套策略，不同事实源"。正式隔离规则见 ACCEPTANCE.md。
