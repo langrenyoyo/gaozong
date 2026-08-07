@@ -16,14 +16,18 @@
 
 ## LOW
 
-### ISSUE-M03-004 Update 后 Read 返回 prompt 为空
+### ISSUE-M03-004 Update 后 Read 返回 prompt 为空（E2E 四层定位：E 层断言取错，非真实 Bug）
 
-- **位置**：`apps/agents/services.py:98-122` update_agent + `app/routers/agents.py:114-126`
-- **事实**：E2E-1 PUT /agents/{id} 传 `persona_prompt='你是奔驰客服'` → 200 OK；但再次 GET 返回 `prompt=''`（空）。name 更新成功，prompt 未更新。
-- **影响**：商户编辑智能体 Prompt 后，读取可能拿到空值；若 auto-reply 读到空 prompt 会走固定模板兜底（不致命但行为不符预期）
-- **可能根因**：update_agent 的 `model_dump(exclude_unset=True)` 字段映射 `persona_prompt` → `prompt` 可能有遗漏，或 GET 响应序列化 prompt 字段名不一致
-- **测试**：test_ai_agents.py:133 的 test_get_update_and_delete_agent 未断言 prompt 更新后值
-- **建议**：下一轮修复前先确认 update_agent 的字段映射逻辑
+- **位置**：`apps/agents/services.py:98-122` update_agent + `app/schemas.py:152-157` AiAgentUpdate
+- **四层定位结果**：
+  - A. Frontend 提交字段：`prompt` / `knowledge_base_text`（`SuperMerchantAgent.tsx:203-204`，正确与后端一致）
+  - B. API Schema：`AiAgentCreate`/`AiAgentUpdate` 用 `prompt` / `knowledge_base_text`（`app/schemas.py:135-136,156-157`）
+  - C. Service update_agent：`model_dump(exclude_unset=True)` 更新 DB prompt 列（正确）
+  - D. DB row：用正确字段名 `prompt` 创建时 DB 存值正确（`prompt='你是客服2'`）
+  - E. **E2E 断言取错**：测试脚本用 `persona_prompt` 调 Create/Update API（Preview schema 字段名），但 Create/Update schema 用 `prompt`，导致字段被忽略存空
+- **结论**：**非真实 Bug，E2E 测试脚本字段名用错**。前端 `AgentEditor` 提交用 `prompt`（正确），`AiAgentPreviewRequest` 用 `persona_prompt`（preview 专用 schema，`agents.py:244` 做映射）。两套字段名各自正确，仅 E2E 脚本混用。
+- **验证**：用正确字段名 `prompt` 创建 → DB 正确存值（`prompt='你是客服2'`）；用错误字段名 `persona_prompt` 创建 → DB 存空（字段被忽略）
+- **状态**：已定位，非 Bug，关闭
 
 ### ISSUE-M03-002 agent_config 三处重复组装逻辑
 
@@ -76,10 +80,10 @@
 | BLOCKER | 0 |
 | HIGH | 0 |
 | MEDIUM | 0 |
-| LOW | 3（重复组装 / 停用不可达 / Update prompt 空） |
+| LOW | 2（重复组装 / 停用不可达） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |
 | UNKNOWN | 1（super_admin bypass POLICY_PENDING，E2E 待 RBAC 基线） |
-| 已关闭 | 1（路径歧义，E2E 验证 PASS） |
+| 已关闭 | 2（路径歧义 E2E PASS / Update prompt 空 E 层断言取错非 Bug） |
 | MEDIUM | 0 |
 | LOW | 3（重复组装 / 停用不可达 / Update prompt 空） |
 | DRIFT | 3（死分支 navId / 旧权限码 / 兼容壳） |

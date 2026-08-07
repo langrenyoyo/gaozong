@@ -3,33 +3,41 @@
 > source_baseline: c26ec227e70d
 > 本任务只制定验收基线，不要求为了通过验收修改代码。
 
-## E2E 验真结果（2-M03.2，2026-08-07）
+## E2E 验真结果（2-M03.2 + 2-M03.2B，2026-08-07）
 
-环境：dev SQLite + mock auth + 9100 可达（但 docker 内部域名 `xg-douyin-ai-cs` 本地不可解析）
+### 本地 TestClient 验证
 
 | E2E | 域 | 结果 | 证据 |
 |---|---|---|---|
-| 1 | Agent CRUD | PASS（5/6，Read-after-Update prompt 为空见 ISSUE-M03-004） | Create→Read→Update→Read→Delete→Confirm-Deleted 全链路 |
-| 2 | 商户隔离 | PASS | list 只返回 dev-merchant agents；跨商户 agent_id → 404 |
+| 1 | Agent CRUD | PASS | Create→Read→Update→Read→Delete→Confirm-Deleted 全链路 |
+| 2 | 商户隔离 | PASS | list 只返回 dev-merchant；跨商户 agent_id → 404 |
 | 3 | Knowledge Binding | PASS | bind base → read-back `['base']` 一致 |
-| 4 | Douyin Binding | SKIP（需真实抖音授权账号，本地无） | — |
-| 5 | Preview 真实 9100 | PARTIAL（环境限制） | HTTP 调用发起到 9100（日志可见 POST xg-douyin-ai-cs:9100），但 docker 域名本地不可解析返回 502。降级行为正确：manual_required=True, auto_send=False |
-| 5 | Preview 不触发发送 | **PASS** | auto_send=False 硬编码；AiAutoReplyRun=0 / DouyinPrivateMessageSend=0 |
-| 5 | Preview 副作用 | **PASS** | AiAutoReplyRun=0 / CustomerProfile=0 / DouyinPrivateMessageSend=0（preview 不写客户档案） |
-| 6 | Agent Contract | SKIP（需 auto-reply 真实 webhook 触发） | — |
-| 7 | 三场景隔离 | SKIP（需 auto-reply + training 真实运行） | — |
-| 8 | 9100 真实集成 | PARTIAL（环境限制） | 调用发起确认，但 502（docker 域名）；需在 docker compose 内或配 127.0.0.1:9100 验证 |
-| 9 | Compute | SKIP（LLM 未成功调用，无算力消耗） | — |
-| 专项1 | super_admin 实际行为 | SKIP（mock auth 不设 super_admin=True） | 需 RBAC 基线后验证 |
-| 专项2 | /agents/preview 路径歧义 | **PASS** | POST /agents/preview → 200（命中 preview handler）；GET /agents/preview → 404（未误命中 {agent_id}） |
+| 专项2 | 路径歧义 | **PASS** | POST /agents/preview → 200；GET → 404。UNKNOWN-M03-001 关闭 |
 
-**E2E 状态：`M03_E2E_VERIFIED_PENDING_BASELINE`**（无 BLOCKER，5/9+2 项 PASS/SKIP，2 项 PARTIAL 受环境限制）
+### Docker compose 集成验证（2-M03.2B）
 
-### 环境限制说明
-- 本地 dev SQLite + mock auth，无法构造 super_admin=True 场景
-- 9100 虽可达但 client base_url 是 docker 内部域名 `xg-douyin-ai-cs`，本地不可解析
-- Douyin Binding / Auto Reply Contract / 三场景隔离 / Compute 需 docker compose 环境或真实 webhook 触发
-- 以上 SKIP 项不构成 BLOCKER，待生产/staging 环境补验证
+环境：docker compose dev（9000 + 9100 + PG + 能力中心 9201-9206），9100 走 docker 内部域名 `xg-douyin-ai-cs:9100`
+
+| E2E | 域 | 结果 | 证据 |
+|---|---|---|---|
+| 5 | Preview 真实 9100+LLM | **PASS** | LLM 真实回复"老板，20万左右的奔驰C级确实是热门选择。您留个联系方式..."；llm_used=True；auto_send=False |
+| 5 | Preview 不触发发送 | **PASS** | auto_send=False 硬编码；AiAutoReplyRun=0 |
+| 7 | 三场景污染测试 | **PASS** | Preview 输入"想看宝马5系" → 回复"咱们店主营奔驰，宝马5系我需要帮您核实下..." 不含奥迪A6/10-15万/深圳（关键门通过） |
+| 8 | 9100 真实集成 | **PASS** | docker 内部域名可达，非 Mock |
+| ISSUE-004 | 四层定位 | **已定位** | E 层断言取错（测试脚本用 persona_prompt 调 Create/Update，但前端实际用 prompt）；非真实 Bug，已关闭 |
+
+### 仍 SKIP（需生产/staging 环境）
+
+| E2E | 域 | 原因 |
+|---|---|---|
+| 4 | Douyin Binding | 需真实抖音授权账号 |
+| 6 | Agent Contract → Auto Reply | 需真实 webhook 触发 auto-reply |
+| 7b | Auto Reply 污染测试 | 需真实 webhook + customer_memory |
+| 7c | Training 污染测试 | 需真实知识库训练端调用 |
+| 9 | Compute | LLM 调用成功但未确认算力记录（rag_used=False，需更精确的消耗场景） |
+| 专项1 | super_admin | 需 RBAC 基线后验证（POLICY_PENDING） |
+
+**E2E 状态：`M03_E2E_VERIFIED_PENDING_BASELINE`**（无 BLOCKER，三场景污染测试通过，关键门已过）
 
 ## 当前已有验收能力
 
