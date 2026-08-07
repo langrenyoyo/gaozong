@@ -39,19 +39,14 @@
 - **影响**：可能写入非法状态值
 - **建议**：加 DB CHECK 约束或代码层枚举校验
 
-### ISSUE-M02-007 Feedback parse-and-persist 合同失败（MEDIUM / FUNCTIONAL_GAP / CONTRACT_GAP）
+### ISSUE-M02-007 Feedback parse-and-persist 合同失败（已关闭）
 
 - **位置**：app/routers/sales_feedback.py:37 + app/services/sales_feedback_parser.py
-- **事实**：即使使用测试文件（test_sales_feedback_parser.py）的正式字段格式（`微信：`而非`微信状态：`等），POST /sales-feedback/parse 仍返回 400 SALES_FEEDBACK_PARSE_FAILED。单元测试 parse_sales_feedback_text 直接调用 PASS，但 API 层 parse_and_persist_sales_feedback 失败。
-- **可能原因**：API 层需要额外上下文（staff_id/lead_id 关联验证/merchant 上下文/DB 依赖），或 feedback_no 需对应真实 lead_id+staff_id
-- **影响**：核心集成入口失败——parser 单测 PASS 但 API 层 400，外部调用方无法确定正确格式
-- **升级条件**：staging 证明 M04 生产反馈路径使用相同合同且合法反馈无法持久化 → 升级 HIGH
-- **不阻断 BASELINE_CANDIDATE**
-- **Feedback 三层状态**：
-  - Parser core: VERIFIED（parse_sales_feedback_text 单测 PASS）
-  - Invalid-input behavior: VERIFIED（非法→skipped/expected handling）
-  - Parse-and-persist success path: KNOWN ISSUE（formal expected input→HTTP 400，ISSUE-M02-007）
-  - Real M04→M02 feedback: PENDING_STAGING
+- **事实**：即使使用测试文件的正式字段格式，POST /sales-feedback/parse 仍返回 400。单元测试 parse_sales_feedback_text 直接调用 PASS，但 API 层 parse_and_persist_sales_feedback 失败。
+- **关闭证据**：2-M04.2R2 Gate 6 进程内调用 parse_and_persist_sales_feedback（完整上下文: lead_id=11 + staff_id=1 + feedback_no=XGF-11-1 + 正式模板）→ parse_status=success, kind=lead_feedback, error=None
+- **root cause**：earlier E2E fixture lacked DB/task context（API 层需要真实 lead_id+staff_id 关联的 DB 记录做上下文校验）
+- **production contract defect**: NO
+- **关闭位置**：M04 ACCEPTANCE.md + M04 ISSUES.md（引用同一证据）
 
 ### ISSUE-M02-005 状态变更无显式审计
 
@@ -109,7 +104,8 @@
 |---|---|
 | BLOCKER | 0 |
 | HIGH | 1（聚合键双轨制） |
-| MEDIUM | 1（Feedback parse-and-persist 合同失败，FUNCTIONAL_GAP/CONTRACT_GAP） |
+| MEDIUM | 0 |
+| 已关闭 | 1（ISSUE-M02-007 Feedback parse-and-persist，2-M04.2R2 Gate 6 E2E PASS） |
 | POLICY_PENDING / CONTRACT_GAP | 1（手工 create 绕归并，待 E2E 升级条件） |
 | ARCHITECTURE_OBSERVATION + PRODUCT_POLICY_PENDING | 1（同客户多会话多条 Lead） |
 | LOW | 3（状态无约束 / 状态变更无审计 / reassign_count 未自增） |

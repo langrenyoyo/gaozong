@@ -109,6 +109,38 @@ LOCAL_AGENT_TOKENS: "dev-merchant:test-agent-token"
 
 **R1 状态：`M04_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_AUTH_FIXTURE`**（无 BLOCKER，Gate 1 PARTIAL + 6/7 CODE_VERIFIED + 2/3/4/5/8 TEST_AUTH_FIXTURE_GAP，需 docker compose 配置注入 token）
 
+## 2-M04.2R2 Local Agent Auth Fixture + Protocol Gate Closure（2026-08-07）
+
+### Auth Fixture 注入
+
+- `docker-compose.dev.yml` environment 段加 `LOCAL_AGENT_TOKENS: "${LOCAL_AGENT_TOKENS:-}"`（透传，不硬编码）
+- `.env.development.local`（gitignored）设置 `LOCAL_AGENT_TOKENS=dev-merchant:test-agent-token`
+- 用 `docker compose -f docker-compose.dev.yml` 运行（dev.yml 是独立完整编排非 override）
+- 验证：valid token `test-agent-token` → agent route 200 + 映射 merchant_id=dev-merchant ✓
+
+### Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| 1 Task Create→DB→Agent Pending | **PASS** | send-to-staff→task_id=3 created；agent pending 查询找到 task_id=3（status=pending, lead_id=11, staff_id=1, target=测试销售微信） |
+| 2 Concurrent Poll | **FAIL → ISSUE-M04-001 升级 HIGH** | 两客户端同时 GET pending→A1=1 A2=1 same=True（拿到同一 Task）→ **DUPLICATE_EXECUTION_RISK** |
+| 3 Result State Transition | **PASS** | pending→POST result→status=pasted（task_id=1, 200 OK, 含完整 task 数据） |
+| 4 Duplicate Result | **PASS** | 重复提交 200 OK；detect_reply=1（去重正确，不重复创建）；**无重复副作用证据 → ISSUE-M04-002 不升级** |
+| 5 Merchant/Task Ownership | CODE_VERIFIED | 代码确认 task_belongs_to_merchant 双校验，跨商户 404 |
+| 6 Full-context Feedback (I-A) | **PASS** | parse_and_persist_sales_feedback 进程内调用成功（parse_status=success, kind=lead_feedback, error=None）→ **ISSUE-M02-007 可关闭** |
+
+### ISSUE 升级/关闭
+
+| ISSUE | 变化 | 原因 |
+|---|---|---|
+| ISSUE-M04-001 无 lease/claim | MEDIUM → **HIGH / DUPLICATE_EXECUTION_RISK** | Gate 2 E2E 证明两 Agent 同时获取同一 Task |
+| ISSUE-M04-002 result report 非幂等 | 保持 MEDIUM | Gate 4 重复提交无重复副作用证据（detect_reply 去重正确），但 _report_wechat_task_compute_usage 重复调用风险仍在 |
+| ISSUE-M02-007 Feedback parse-and-persist | **CLOSED** | Gate 6 进程内调用成功；root cause: earlier E2E fixture lacked DB/task context, production contract defect=NO |
+
+### R2 状态
+
+**`M04_DOCKER_E2E_VERIFIED_PENDING_WINDOWS`**（无 BLOCKER，Gate 1/3/4/6 PASS + 5 CODE_VERIFIED，Gate 2 FAIL→ISSUE-M04-001 升级 HIGH 不阻断 Baseline）
+
 ## E2E 验收清单（待 2-M04.2 Windows / Staging）
 
 ### CODE_VERIFIED

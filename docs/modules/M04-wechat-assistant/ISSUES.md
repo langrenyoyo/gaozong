@@ -4,12 +4,14 @@
 
 ## MEDIUM
 
-### ISSUE-M04-001 无 lease/claim，多 Agent 同商户可能重复拉取
+### ISSUE-M04-001 无 lease/claim，多 Agent 同商户可能重复拉取（HIGH / DUPLICATE_EXECUTION_RISK）
 
 - **位置**：wechat_task_service.py（grep lease/claim 无匹配）
-- **事实**：服务端无原子认领/锁标记，get_pending_wechat_tasks 按 merchant_id 过滤 status==pending 直接返回；Agent 端有 _wechat_task_lock 防并发（local_agent_main.py:2279），但服务端无 lease
-- **影响**：多 Agent 同商户理论上可能拉同一 pending 任务
-- **升级条件**：Docker E2E 证明两 Agent 同时获取同一 Task → HIGH / DUPLICATE_EXECUTION_RISK
+- **事实**：服务端无原子认领/锁标记，get_pending_wechat_tasks 按 merchant_id 过滤 status==pending 直接返回
+- **E2E 证据**：2-M04.2R2 Gate 2 Concurrent Poll 证明两客户端同时 GET pending → A1=1 A2=1 same=True（拿到同一 Task）
+- **影响**：多 Agent 同商户会拉同一 pending 任务，导致重复执行
+- **升级**：MEDIUM → HIGH（Docker E2E 证明 DUPLICATE_EXECUTION_RISK）
+- **建议**：加服务端 lease/claim 机制（原子 UPDATE SET status=processing WHERE status=pending RETURNING）
 
 ### ISSUE-M04-002 result report 非严格幂等，重复回写可能重复扣算力
 
@@ -43,29 +45,24 @@
 - **影响**：M04 直接操作 M02 ORM，不经正式 M02 service
 - **处理**：登记 DATA_COUPLING，不重构（天然业务依赖）
 
-## ISSUE-M02-007 专项结论
+## 已关闭
+
+### ISSUE-M02-007 Feedback parse-and-persist 合同失败（已关闭）
 
 ```
 ISSUE-M02-007 Feedback parse-and-persist contract failure
-最终结论:
-  Contract shape: CODE_VERIFIED_MATCH
-  M04 call path: CODE_VERIFIED
-  Parse-and-persist runtime success: NOT YET E2E VERIFIED
+最终结论: CLOSED
 
-M04 实际输出格式（_try_parse_sales_feedback_from_reply 传入 raw_text）:
-  - 含【线索反馈】模板首行
-  - 含 feedback_no: XGF-{lead_id}-{staff_id}
-  - 进程内直接函数调用（非 HTTP），无序列化漂移
+Contract shape: CODE_VERIFIED_MATCH
+M04 call path: CODE_VERIFIED
+Parse-and-persist runtime success: E2E VERIFIED (2-M04.2R2 Gate 6)
 
-M02 parse_and_persist 接受格式:
-  - 首行精确匹配【线索反馈】
-  - feedback_no 正则 ^XGF-\d+-\d+$ 校验
-  - 上下文校验: lead/staff 归属 + feedback_no==build_feedback_no
-
-两端格式一致（CODE_VERIFIED_MATCH）。ISSUE-M02-007 的 400 根因不在合同不匹配，
-而在 E2E 测试未携带完整上下文（需真实 lead_id+staff_id 关联的 DB 记录）。
-
-保留 ISSUE，等 M04.2 完整 feedback context Docker E2E 跑通才关闭。
+2-M04.2R2 Gate 6 证据:
+  - parse_and_persist_sales_feedback 进程内调用成功
+  - parse_status=success, kind=lead_feedback, error=None
+  - 完整上下文: lead_id=11 + staff_id=1 + feedback_no=XGF-11-1 + 正式模板
+  - root cause: earlier E2E fixture lacked DB/task context
+  - production contract defect: NO
 ```
 
 ## Legacy 补充
@@ -82,8 +79,9 @@ M02 parse_and_persist 接受格式:
 | 级别 | 数量 |
 |---|---|
 | BLOCKER | 0 |
-| HIGH | 0 |
-| MEDIUM | 2（无 lease/claim / result report 非幂等） |
+| HIGH | 1（无 lease/claim → DUPLICATE_EXECUTION_RISK，E2E 证明） |
+| MEDIUM | 1（result report 非幂等，重复扣费风险未消除但 Gate 4 未证明重复副作用） |
 | LOW | 2（无崩溃恢复 / failed 无 requeue） |
 | ARCHITECTURE_OBSERVATION | 1（M04 直接写 M02 DATA_COUPLING） |
+| 已关闭 | 1（ISSUE-M02-007 parse-and-persist 合同，Gate 6 E2E PASS） |
 | Legacy 建议 | 1（legacy_foreground_ok/diag UNKNOWN→ACTIVE） |

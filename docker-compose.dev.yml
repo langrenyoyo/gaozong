@@ -118,6 +118,7 @@ services:
       KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID: "${KNOWLEDGE_TRAINING_DEFAULT_MERCHANT_ID:-xiaogao_base}"
       KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS: "${KNOWLEDGE_TRAINING_TRUST_PROXY_HEADERS:-false}"
       COMPUTE_INTERNAL_TOKEN: "${COMPUTE_INTERNAL_TOKEN:-}"
+      LOCAL_AGENT_TOKENS: "${LOCAL_AGENT_TOKENS:-}"
     depends_on:
       auto-wechat-sqlite-migrate:
         condition: service_completed_successfully
@@ -183,6 +184,7 @@ services:
       XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED: "${XG_DOUYIN_AI_AGENT_RUNTIME_ENABLED:-false}"
       AUTO_WECHAT_9000_BASE_URL: "${AUTO_WECHAT_9000_BASE_URL:-http://auto-wechat-api:9000}"
       COMPUTE_INTERNAL_TOKEN: "${COMPUTE_INTERNAL_TOKEN:-}"
+      LOCAL_AGENT_TOKENS: "${LOCAL_AGENT_TOKENS:-}"
       COMPUTE_USAGE_TIMEOUT_SECONDS: "${COMPUTE_USAGE_TIMEOUT_SECONDS:-3}"
       PYTHONUNBUFFERED: "1"
     command: ["python", "-m", "uvicorn", "apps.xg_douyin_ai_cs.main:app", "--host", "0.0.0.0", "--port", "9100"]
