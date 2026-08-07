@@ -99,3 +99,48 @@
 | Preview | 当前预览会话允许 | 允许 | **禁止** | **禁止** |
 | Auto Reply | 当前消息+历史 | 允许 | 允许可信事实 | Gate 通过后允许 |
 | Training | 通用训练上下文 | **禁止商户变量污染** | **禁止** | **禁止** |
+
+---
+
+## M03_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> 测试环境：docker dev（9100 docker 内部域名可达）
+> 后续补 staging 时只补 3 门，不重做全套探索/E2E
+
+### VERIFIED
+
+- Agent CRUD（Create/Read/Update/Delete）
+- 商户隔离（跨商户 404）
+- Knowledge Binding（bind→read-back 一致）
+- Preview→9100→真实 LLM（llm_used=True，auto_send=False）
+- Preview 不触发发送（AiAutoReplyRun=0，DouyinPrivateMessageSend=0）
+- Preview 不写 CustomerProfile（副作用=0）
+- Preview 事实隔离（不偷 DB 客户档案，关键门通过）
+- /agents/preview 路由行为（POST→200 / GET→404）
+
+### PENDING_STAGING（环境阻塞，非代码失败）
+
+1. Agent 绑定→Auto Reply 真实消费（需真实 webhook + 抖音授权）
+2. Auto Reply 客户事实隔离（需真实 DB 档案 + webhook，证明可读可信事实）
+3. Training 事实隔离（需真实知识库训练端，证明不读客户事实/不注入商户变量）
+
+### DEFERRED
+
+- Compute → M07 验真
+
+### POLICY_PENDING
+
+- super_admin bypass（Security-sensitive，需 RBAC 基线比对）
+
+### KNOWN ISSUE（不阻塞基线）
+
+- agent_config 三处重复组装（LOW，解耦候选，需 M01 验真后处理）
+- 停用/启用前端不可达（LOW）
+- ai_agent_service.py 兼容壳（DRIFT/COMPAT）
+
+### 冻结路径
+
+staging 可用 → 补 3 门 → `M03_MODULE_BASELINE_APPROVED`
+M01 验真期间若取得合格证据可复用，但必须回填 M03 验收记录
