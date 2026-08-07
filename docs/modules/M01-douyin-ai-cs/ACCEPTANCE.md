@@ -31,11 +31,30 @@
 | 9100 真实集成 | 无 xg_douyin_ai_cs_client 真实调用集成测试（dry_run 用 mock） |
 | 三场景隔离 E2E | Preview/Auto Reply/Training 事实隔离未 E2E 验证 |
 
-## E2E 验收清单（待 2-M01.2）
+## E2E 验真结果（2-M01.2 Docker，2026-08-07）
 
-1. **webhook→outbox→9100→发送 端到端**：真实 webhook 事件触发 auto-reply 完整链路
-2. **Agent Contract 一致性**：binding.agent DB 配置与 preview 草稿值字段一致（复用 M03 ISSUE-M03-002 三处组装验证）
-3. **三场景事实隔离**：Preview 不偷 DB 档案 / Auto Reply 可读可信事实 / Training 无真实客户信息
-4. **空号追问端到端**：mark_contact_invalid → create_followup_task → Worker claim → send → 回写
-5. **outbox 恢复**：send_authorized 崩溃 → 按流水对账 → sent/send_unknown
-6. **manual_takeover 端到端**：人工发送 → im_send_msg 标记 → auto-reply 阻断
+环境：docker compose dev（9000 + 9100 + PG + 能力中心）
+
+| E2E | 域 | 结果 | 证据 |
+|---|---|---|---|
+| A | Webhook 幂等 | **PASS** | 重复事件 is_duplicate=True；WebhookEvent 胜出者=1；AutoReplyRun 不重复创建 |
+| B | Outbox 状态机 | **PASS** | pending/retry_wait 可处理；processing/send_processing 可恢复；sent/send_unknown 终态不重发；failed 可人工重试(仅 pre_send_temporary_failure 白名单) |
+| C | Gate Matrix | **PASS** | HARD_BLOCK 3 flag（虚假确认/重复索要/资料承诺）不可豁免；prompt_injection 不在 9000；unfounded 已停用 |
+| D | Customer Fact Matrix | **PASS** | NONE/PARTIAL/VALID/AMBIGUOUS 五态全覆盖，confidence 分级正确 |
+| E | Agent Contract | **PASS** | DB 保存 prompt/knowledge_base_text/store_address 一致；知识绑定 read-back 一致；Preview 用 DB 配置+LLM 回复成功 |
+| F | Preview/Auto 事实源 | PARTIAL | Preview 已验证（M03 复用）；Auto Reply 事实源需真实 webhook 触发 |
+
+### M03 Gate 回填
+
+| Gate | 状态 | 证据 |
+|---|---|---|
+| GATE-M03-01（Agent Binding→Auto Reply） | **可关闭** | E2E-E 验证 DB 保存配置 = Preview 使用的配置；agent_config 三处组装字段一致 |
+| GATE-M03-02（Auto Reply 事实隔离） | **PENDING** | E2E-F PARTIAL，Auto Reply 事实源需真实 webhook 触发验证 |
+
+### 仍 SKIP（需 staging/生产）
+
+- 真实 GMP webhook → 9000 → outbox → 9100 → LLM → 发送 → im_send_msg 回执全链路
+- Auto Reply 事实源差异（需真实 webhook + customer_memory）
+- 空号追问端到端（需 CONTACT_INVALID_FOLLOWUP_ENABLED=true + 真实发送）
+
+**E2E 状态：`M01_DOCKER_E2E_VERIFIED_PENDING_STAGING`**（无 BLOCKER，A-E 全 PASS，F PARTIAL）
