@@ -37,6 +37,7 @@ from app.routers import (
     admin_autoreply_rollout,
     admin_return_visits,
     admin_test_customer_reset,
+    admin_contact_invalid_mark,
     forbidden_words,
     ai_edit,
     douyin_accounts,
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_auto_reply_runs.router)
     app.include_router(admin_autoreply_rollout.router)
     app.include_router(admin_test_customer_reset.router)
+    app.include_router(admin_contact_invalid_mark.router)
     app.include_router(admin_return_visits.router)
     app.include_router(forbidden_words.router)
     app.include_router(ai_edit.router)

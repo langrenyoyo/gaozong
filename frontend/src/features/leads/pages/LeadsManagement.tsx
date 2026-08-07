@@ -23,6 +23,7 @@ import { syncDouyinLeads } from "../api";
 import { fetchChecks } from "../api";
 import { setWechatAutoDetectTarget, fetchWechatAutoDetectStatus, clearWechatAutoDetectTarget } from "../api";
 import { sendLeadToStaff } from "../api";
+import { markContactInvalid } from "../../../api/contactInvalid";
 import { fetchNotificationRecords } from "../../../api/notifications";
 import { fetchAgentStatus } from "../api";
 import { fetchWebhookEvents } from "../api";
@@ -615,12 +616,14 @@ interface LeadDetailProps {
   notifyLoading: boolean;
   notifyStatus: LeadWechatNotifyStatus | null;
   notifyStatusLoading: boolean;
+  markInvalidLoading: boolean;
   agentStatus: AgentStatusData;
   onOpenAssign: () => void;
   onDetect: () => void;
   onSetAutoDetect: () => void;
   onClearAutoDetect: () => void;
   onSendToStaff: () => void;
+  onMarkContactInvalid: () => void;
 }
 
 function DouyinChatTimeline({ lead }: { lead: Lead }) {
@@ -738,7 +741,7 @@ function DouyinChatTimeline({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, loadingNotifications, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, notifyStatus, notifyStatusLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff }: LeadDetailProps) {
+function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, loadingNotifications, assignSubmitting, detectLoading, detectResult, pendingCheckId, isAutoDetectTarget, intervalSeconds, notifyLoading, notifyStatus, notifyStatusLoading, markInvalidLoading, agentStatus, onOpenAssign, onDetect, onSetAutoDetect, onClearAutoDetect, onSendToStaff, onMarkContactInvalid }: LeadDetailProps) {
   // 按钮启用条件：有可用销售
   const canAssign = staffList.length > 0 && !assignSubmitting;
   const scorePercent = leadScorePercent(lead);
@@ -1008,6 +1011,19 @@ function LeadDetail({ lead, staffName, staffList, checks, notificationRecords, l
             </button>
           </div>
         ) : null}
+        {/* 任务1.4：手动标记联系方式失效（空号/打不通/号码错误），触发块3追问链路 */}
+        {lead.phone || lead.wechat || lead.customer_contact ? (
+          <div className="mt-2">
+            <button
+              onClick={onMarkContactInvalid}
+              disabled={markInvalidLoading}
+              title="标记该线索联系方式为空号/打不通/号码错误，触发 AI 主动追问客户重发"
+              className="h-9 w-full rounded-xl border border-amber-200 bg-amber-50 text-xs font-semibold text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-amber-100"
+            >
+              {markInvalidLoading ? "标记中…" : "标记为空号"}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="p-4">
@@ -1122,6 +1138,7 @@ export default function LeadsManagement() {
   const [checksData, setChecksData] = useState<CheckRecord[]>([]);
   const [autoDetectStatus, setAutoDetectStatus] = useState<WechatAutoDetectStatus | null>(null);
   const [notifyLoading, setNotifyLoading] = useState(false);
+  const [markInvalidLoading, setMarkInvalidLoading] = useState(false);
   const [notifyStatus, setNotifyStatus] = useState<LeadWechatNotifyStatus | null>(null);
   const [notifyStatusLoading, setNotifyStatusLoading] = useState(false);
   const [notificationRecords, setNotificationRecords] = useState<NotificationRecord[]>([]);
@@ -1519,7 +1536,58 @@ export default function LeadsManagement() {
     }
   };
 
-  // 统计卡片
+  // 任务1.4：手动标记联系方式失效（空号/打不通/号码错误），触发块3追问链路
+  const handleMarkContactInvalid = async () => {
+    if (!selectedLead) return;
+    if (!selectedLead.merchant_id || !selectedLead.account_open_id || !selectedLead.source_id) {
+      toast.error("当前线索缺少商户/企业号/客户标识，无法标记");
+      return;
+    }
+
+    const reason = window.prompt(
+      "请选择失效原因，输入对应数字：\n1. 空号\n2. 打不通\n3. 号码错误\n4. 停机\n5. 其他",
+      "1",
+    );
+    if (reason === null) return;
+    const reasonMap: Record<string, string> = {
+      "1": "空号", "2": "打不通", "3": "号码错误", "4": "停机", "5": "其他",
+    };
+    const finalReason = reasonMap[reason.trim()] || reason.trim();
+    if (!["空号", "打不通", "号码错误", "停机", "其他"].includes(finalReason)) {
+      toast.error("原因无效，请输入 1-5 或直接输入：空号/打不通/号码错误/停机/其他");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确认将该线索联系方式标记为「${finalReason}」？\n标记后将触发空号追问任务（块3），AI 会主动追问客户重发号码。`,
+    );
+    if (!confirmed) return;
+
+    setMarkInvalidLoading(true);
+    try {
+      const result = await markContactInvalid({
+        lead_id: selectedLead.id,
+        merchant_id: selectedLead.merchant_id,
+        account_open_id: selectedLead.account_open_id,
+        customer_open_id: selectedLead.source_id,
+        reason: finalReason as "空号" | "打不通" | "号码错误" | "停机" | "其他",
+      });
+      if (result.success) {
+        if (result.data.already_invalid) {
+          toast.info("该联系方式已标记为失效，无需重复标记");
+        } else if (result.data.followup_triggered) {
+          toast.success(`已标记失效并创建追问任务（版本 ${result.data.invalid_version}）`);
+        } else {
+          toast.success(`已标记失效（版本 ${result.data.invalid_version}）`);
+        }
+        await refreshData();
+      }
+    } catch (err) {
+      toast.error(userFacingError(err, "标记失效失败"));
+    } finally {
+      setMarkInvalidLoading(false);
+    }
+  };
   const statCards = summary
     ? [
         {
@@ -1959,7 +2027,9 @@ export default function LeadsManagement() {
             notifyLoading={notifyLoading}
             notifyStatus={notifyStatus}
             notifyStatusLoading={notifyStatusLoading}
+            markInvalidLoading={markInvalidLoading}
             onSendToStaff={handleSendToStaff}
+            onMarkContactInvalid={handleMarkContactInvalid}
           />
         ) : (
           <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-[#e4e8f0] bg-white">
