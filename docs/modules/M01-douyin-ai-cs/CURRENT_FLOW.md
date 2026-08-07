@@ -61,6 +61,10 @@ GMP webhook
 - has_encoded 解码：`integrations.py:540-555`（DOUYIN_DECODE_MASKED_ENABLED + im_receive_msg）
 - internal 模式：`integrations.py:566`（LEADS_WEBHOOK_INTERNAL_ENABLED → 9202 LeadsClient）
 
+> **冲突安全区分（重要）**：
+> - **Webhook Event Idempotency**：`ON CONFLICT DO NOTHING` + claim 胜出者机制 → **已验证**（test_douyin_webhook_atomic_idempotency.py A1-A14 全覆盖）
+> - **AiAutoReplyRun creation idempotency**：`trigger_event_key` 唯一约束保护 → **KNOWN ISSUE**：历史/生产存在 duplicate INSERT 竞争场景，待 E2E 继续观察。Webhook 幂等 ≠ Run 创建全链路冲突安全。
+
 ### 会话聚合
 - 代码：`douyin_workbench_conversation_service.py`
 - 增量协议：`after_event_id` 游标（:742 cursor_mode）
@@ -198,10 +202,18 @@ GMP webhook
 
 ### 空号追问
 - 主动追问：create_followup_task（状态迁移时创建）→ Worker run_followup_cycle 周期 claim 发送
+  - 状态：IMPLEMENTED（代码完整）+ CONFIG_DISABLED（CONTACT_INVALID_FOLLOWUP_ENABLED 默认关）→ 生产非默认启用
 - 被动兜底：_check_freshness 检测客户发新消息→取消主动追问→交被动 AI 主链路
-- 固定话术不依赖 LLM：_build_followup_text
-- 门禁：_check_gates（G4 manual_takeover + 24h/send_context）
+  - 状态：IMPLEMENTED + ACTIVE（被动兜底在 auto-reply 主链路内，不受独立 env 开关控制）
+- 固定话术不依赖 LLM：_build_followup_text — IMPLEMENTED
+- 门禁：_check_gates（G4 manual_takeover + 24h/send_context）— IMPLEMENTED
 - scheduler：CONTACT_INVALID_FOLLOWUP_ENABLED（**CONFIG_BYPASS**，直接读 os.environ 未进 config.py）
+  - 状态：IMPLEMENTED + CONFIG_DISABLED（默认关）→ 生产非默认启用
+
+> **代码实现存在 ≠ 当前生产默认启用**：
+> - 主动追问 Worker：IMPLEMENTED + CONFIG_DISABLED（需显式 CONTACT_INVALID_FOLLOWUP_ENABLED=true 才启动）
+> - 被动兜底：IMPLEMENTED + ACTIVE（在 auto-reply 主链路内，随主链路启用）
+> - 回访 silent_scan：IMPLEMENTED + CONFIG_DISABLED（RETURN_VISIT_SILENT_SCAN_ENABLED 默认关）
 
 ## M01-H 可观测
 

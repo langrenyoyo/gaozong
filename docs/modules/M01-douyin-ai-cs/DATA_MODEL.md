@@ -18,6 +18,18 @@
 | customer_profiles | CustomerProfile (models.py:1748) | M01/M02 共享 | gender/preferred_salutation/intent_car/car_year/budget/city/contact_state/confirmed_fields_json/inferred_fields_json/contact_invalid_* | PG 0026/0027 |
 | contact_invalid_followup_tasks | ContactInvalidFollowupTask (models.py:1793) | M01/M02 共享 | invalid_version/followup_sequence/status/lease_owner/sent_message_id | PG 0028 |
 
+## CustomerProfile 术语明确
+
+代码实际**无第三个持久化层**。`derived` 不是持久化层，是运行时派生上下文：
+
+- **Persistent（持久层，2 层）**：
+  - `confirmed_fields_json` — 客户明确确认的字段集（高可信）
+  - `inferred_fields_json` — LLM 推断的字段集（低可信）
+  - 顶层业务字段（gender/intent_car/budget 等）— confirmed/inferred 的投影（confirmed 覆盖顶层，inferred 不覆盖 confirmed）
+- **Runtime（运行时派生，非持久化）**：
+  - `derived` context — 根据 confirmed/inferred/顶层字段 + 当前消息实时派生的运行时事实，**非第三个持久化层**
+  - `field_sources` 标注：confirmed > inferred > derived（运行时生成，不落库）
+
 ## 商户隔离
 
 所有核心表均按 merchant_id 过滤：

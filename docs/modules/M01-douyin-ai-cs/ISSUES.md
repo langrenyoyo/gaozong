@@ -18,11 +18,14 @@
 - **影响**：HARD_BLOCK_RISK_FLAGS 从 4 个降为 3 个
 - **状态**：已知设计决策，非 Bug
 
-### ISSUE-M01-003 prompt_injection 不在 9000 HARD_BLOCK
+### ARCHITECTURE_OBSERVATION-M01-001 prompt_injection 安全边界分层设计
 
 - **位置**：`reply_decision_service.py:2392`（9100 侧确定性检测）vs `gate_service.py:30-36`（9000 HARD_BLOCK 仅 3 flag）
-- **事实**：prompt_injection 是 9100 守卫层 C 类风险无条件阻断（manual_required=True），但不进 9000 HARD_BLOCK_RISK_FLAGS
-- **影响**：9100 返回的 prompt_injection 走 9100 侧阻断，9000 post-gate 不重复阻断——设计意图（避免双重阻断），但需确认 9100 阻断后 9000 收到的 risk_flags 状态
+- **观察**：prompt_injection 在 9100 侧确定性检测（C 类风险无条件阻断，manual_required=True），不进 9000 HARD_BLOCK_RISK_FLAGS
+- **架构解读**：安全边界设计可能是 9100 负责 LLM 输入安全，9000 负责业务上下文/调度。这是分层设计，不是"9000 漏检"
+- **真正需验证的**：所有进入 LLM 的路径是否 100% 经过 9100 该保护（而非"为什么 9000 没有再检查一次"）
+- **升级条件**：E2E 发现绕过 9100 安全处理的 LLM 入口才升级为真正 ISSUE
+- **状态**：ARCHITECTURE_OBSERVATION（待验证），非 LOW ISSUE
 
 ## DRIFT
 
@@ -64,13 +67,13 @@
 - **事实**：latest_message_changed/server_message_id 比对在 send_processing 之后，不在 pre-LLM gate
 - **影响**：LLM 处理期间客户发新消息，pre-LLM gate 不拦，发送服务二次校验才拦——设计意图（减少 LLM 浪费），但存在窗口
 
-## UNKNOWN
+## TEST_GAP
 
-### UNKNOWN-M01-001 9100 集成测试缺失
+### TEST_GAP-M01-001 9100 集成测试缺失
 
 - **事实**：dry_run 测试用 mock（FakeClient），无真实 9100 调用集成测试
-- **缺什么证据**：需 E2E 验证真实 9100 suggest_reply → RAG → LLM → 算力上报完整链路
-- **处理**：待 2-M01.2 E2E
+- **状态**：已知 9100 存在/调用合同存在/路径存在，未知的是行为是否满足验收标准——由 E2E 消除，不是生命周期 UNKNOWN
+- **处理**：待 2-M01.2 E2E 验证真实 9100 suggest_reply → RAG → LLM → 算力上报完整链路
 
 ## 总结
 
@@ -79,7 +82,8 @@
 | BLOCKER | 0 |
 | HIGH | 0 |
 | MEDIUM | 0 |
-| LOW | 3（重复组装 / unfounded停用 / prompt_injection 不在 9000） |
+| LOW | 2（重复组装 / unfounded停用） |
+| ARCHITECTURE_OBSERVATION | 1（prompt_injection 安全边界分层，待验证） |
 | DRIFT | 4（Legacy入口 / 渐进窗口 / 注释口径 / CONFIG_BYPASS） |
 | TECH_DEBT | 2（@on_event / latest_message 窗口） |
-| UNKNOWN | 1（9100 集成测试缺失） |
+| TEST_GAP | 1（9100 集成测试缺失，由 E2E 消除） |
