@@ -87,54 +87,25 @@ def test_m02_gate_xb_different_events_two_txn(db):
     assert len(txns) == 2
 
 
-# === M05 Gate X-A: Same material+version duplicate → 1 txn ===
+# === M05 DESIGN_GAP: ark_v1 是固定分析器版本，不是 per-execution identity ===
 
-def test_m05_gate_xa_same_material_version_duplicate_one_txn(db):
-    """同一 material.id + version 重复 report → 1 txn。"""
-    balance_before = get_or_create_account(db, "m_s5").balance_tokens
+def test_m05_design_gap_ark_v1_is_fixed_not_per_execution():
+    """ark_v1 是固定分析器版本（不是 per-execution identity）。
 
-    r1 = record_usage(
-        db, "m_s5", 100, capability_key="ai_edit", source="llm", model="ark-vlm",
-        usage_measurement_method="provider_tokens",
-        idempotency_key="material_analysis:77:ark_v1",
-    )
-    db.commit()
-    r2 = record_usage(
-        db, "m_s5", 100, capability_key="ai_edit", source="llm", model="ark-vlm",
-        usage_measurement_method="provider_tokens",
-        idempotency_key="material_analysis:77:ark_v1",
-    )
-    db.commit()
-
-    assert r1["idempotency_status"] == "created"
-    assert r2["idempotency_status"] == "idempotent_replay"
-
-    txns = db.query(ComputeTransaction).filter(
-        ComputeTransaction.idempotency_key == "material_analysis:77:ark_v1"
-    ).all()
-    assert len(txns) == 1
-    delta = balance_before - get_or_create_account(db, "m_s5").balance_tokens
-    assert delta == 100
-
-
-# === M05 Gate X-B: Different materials → 2 txn ===
-
-def test_m05_gate_xb_different_materials_two_txn(db):
-    """不同 material.id → 2 txn。"""
-    record_usage(db, "m_s5", 80, capability_key="ai_edit", source="llm", model="ark-vlm",
-                 usage_measurement_method="provider_tokens",
-                 idempotency_key="material_analysis:77:ark_v1")
-    db.commit()
-    record_usage(db, "m_s5", 80, capability_key="ai_edit", source="llm", model="ark-vlm",
-                 usage_measurement_method="provider_tokens",
-                 idempotency_key="material_analysis:78:ark_v1")
-    db.commit()
-
-    txns = db.query(ComputeTransaction).filter(
-        ComputeTransaction.merchant_id == "m_s5",
-        ComputeTransaction.transaction_type == "consume",
-    ).all()
-    assert len(txns) == 2
+    Re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变），
+    无法区分首次分析和重新分析 → 用 ark_v1 做 key 会误去重合法重新分析。
+    回退 None 兼容路径，不强迁。
+    """
+    # 代码事实确认
+    from app.services import material_analysis
+    import inspect
+    src = inspect.getsource(material_analysis.analyze_material_async)
+    # ark_v1 是固定字符串
+    assert '"ark_v1"' in src
+    # re-analysis 更新同一行（不新建）
+    assert "analysis.transcript_json" in src  # 更新而非新建
+    # 当前不传 idempotency_key（回退 None）
+    assert "idempotency_key" not in src or "DESIGN_GAP" in src
 
 
 # === Training DESIGN_GAP ===

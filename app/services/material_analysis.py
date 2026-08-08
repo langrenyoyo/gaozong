@@ -261,7 +261,9 @@ def _report_analysis_usage(
             usage_measurement_method="provider_tokens" if (pt or ct) else "estimated_tokens",
             prompt_tokens=pt or None,
             completion_tokens=ct or None,
-            idempotency_key=f"material_analysis:{material_id}:ark_v1",
+            # M05 DESIGN_GAP：ark_v1 是固定分析器版本不是 per-execution identity，
+            # re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变），无法区分重新分析。
+            # 回退 None 兼容路径，不强迁（避免误去重合法重新分析）。
         )
     except Exception as exc:  # noqa: BLE001 算力上报失败不阻断
         logger.warning("material_analysis_usage_report_error merchant_id=%s error=%s", merchant_id, exc)
