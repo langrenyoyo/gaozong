@@ -19,7 +19,42 @@
 | 算力上报（_report_las_compute_usage） | MISSING | 无 LAS→compute 联动测试 |
 | 端到端（真实 LAS submit→poll→archive） | MISSING | 全 mock 不触网 |
 
-## E2E 验收清单（待 2-M06.2）
+## E2E 验真结果（2-M06.2 Docker，2026-08-08）
+
+环境：docker compose dev（9000 + SQLite，LAS/TOS/Ark 凭证未配置）
+
+### Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| A Manual Material Contract | **PASS** | AiEditJobMaterial.pinned_sha256 == AiEditMaterial.source_sha256 验证通过 |
+| B Material Delete After Pin | **FAIL → ISSUE-M05-005 确认** | active job 引用素材时 soft_delete 未阻断（类型不匹配 IMPACT VERIFIED for Manual/AiEditJobMaterial-backed jobs） |
+| C LAS Input URL Provenance | **CODE_VERIFIED + ISSUE-M05-004 影响确认** | LAS video_urls 来自请求体（前端传 tos_presigned_url）；**M05 tos_presigned_url 是临时 URL 持久化到 DB（ISSUE-M05-004），LAS 消费该 URL，过期后 LAS submit 可能失败** → ISSUE-M05-004 影响域扩展到 M06 |
+| D LAS Submit | PENDING_EXTERNAL | LAS_API_KEY 未配置 |
+| E Terminal Processing | PENDING_EXTERNAL | 依赖 LAS submit；status CHECK APPLICATION_VALIDATION_PENDING |
+| F Archive | PENDING_EXTERNAL | 依赖 LAS submit |
+| G Download Token | **PASS** | fail-closed（DY_SECRET_KEY 缺失→RuntimeError→安全拒绝） |
+| H Delete | **PASS** | succeeded job→delete_las_job→delete_status 流转（operator_id 参数） |
+| I Orchestration Recovery | ABSENT + NOT_VERIFIED | Automatic durable worker recovery: ABSENT；Manual recovery: delete_las_job 幂等但无 archive 补偿脚本；Process restart: 无启动恢复逻辑 |
+
+### Gate C 关键发现
+
+LAS 链路消费 M05 的 `tos_presigned_url`（临时 HTTPS URL）作为 LAS submit 的 `video_urls` 输入。这意味着 **ISSUE-M05-004（预签名 URL 持久化到 DB）的影响域扩展到 M06**——如果预签名 URL 过期，LAS submit 会收到过期 URL 导致失败。
+
+### Gate I 结论（REQUIRED-3 定性）
+
+- Automatic durable worker recovery: **ABSENT**（BackgroundTask 非持久化，无 outbox/scheduler，main.py startup 无 LAS 恢复）
+- Process restart recovery: **NOT_VERIFIED**（无启动恢复逻辑，job 停留 processing 需人工查 las_task_id 重跑）
+- Manual/ops recovery: **LIMITED**（delete_las_job 幂等可重跑，但无 archive 补偿脚本）
+
+### 仍 PENDING_EXTERNAL
+
+- Gate D/F（LAS submit + archive）需 LAS_API_KEY + TOS 凭证
+- Gate E（Terminal Processing）依赖 LAS submit 成功
+
+**E2E 状态：`M06_DOCKER_E2E_PARTIALLY_VERIFIED_PENDING_EXTERNAL`**（无 BLOCKER，Gate A/G/H PASS + C CODE_VERIFIED + I 定性完成，Gate B 确认 ISSUE-M05-005，Gate D/E/F PENDING_EXTERNAL）
+
+## E2E 验收清单（待 2-M06.2 补验证）
 
 ### DOCKER_TESTABLE
 1. 创建 LAS job（mock LAS client submit）
