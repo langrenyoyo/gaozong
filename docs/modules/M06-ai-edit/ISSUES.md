@@ -2,30 +2,33 @@
 
 > source_baseline: c26ec227e70d | 本轮只登记不修复
 
-## MEDIUM
+## TECH_DEBT / LOW
 
-### ISSUE-M06-001 无 status CHECK 约束
+### ISSUE-M06-001 无 status CHECK 约束（TECH_DEBT / APPLICATION_VALIDATION_PENDING）
 
 - **位置**：models.py:1510（status）/ :1520（stage）/ :1545（delivery_status）/ :1550（delete_status）
 - **事实**：4 个状态字段均为自由 String，无 DB CHECK 约束；迁移 0045 也未加 CHECK
-- **影响**：可写入任意字符串状态值，无数据库级枚举保护
-- **建议**：加 CHECK 约束或代码层枚举校验（与 M02 ISSUE-M02-004 同类）
+- **影响**：DB constraint ABSENT ≠ 业务缺陷——需 E2E 证明 API 可写非法状态才升级
+- **建议**：E2E Gate E（Terminal Processing）验证后定性
 
-### ISSUE-M06-002 process_las_job 单点轮询无恢复
+### ISSUE-M06-002 process_las_job 无持久化恢复（拆分）
 
 - **位置**：ai_edit_las_service.py:119-194（BackgroundTask + wait_for_terminal 阻塞轮询）
-- **事实**：无任务队列/重试调度，进程崩溃则轮询中断且无自动恢复
-- **影响**：需人工查 las_task_id 重跑
-- **建议**：考虑引入持久化任务调度（与 M01 outbox 模式类比）
+- **Automatic durable worker recovery**: ABSENT（BackgroundTask 非持久化，进程崩溃轮询中断）
+- **Process restart recovery**: 需 Gate I 查是否有启动恢复/补偿脚本
+- **Manual/ops recovery**: 需 Gate I 查是否有 archive 补偿脚本
+- **不写"完全无恢复"**——此前项目可能存在 LAS 归档补偿脚本
 
 ## LOW
 
-### ISSUE-M06-003 算力上报无幂等键（与 ISSUE-M04-002 同源）
+### ISSUE-M06-003 Compute 幂等 → CROSS_MODULE_COMPUTE_IDEMPOTENCY_GAP
 
-- **位置**：ai_edit_las_service.py:723-748 _report_las_compute_usage → apps/compute/services.py:537-611 record_usage
-- **事实**：record_usage 无 idempotency/jti/dedup；正常路径靠 archived 幂等 gate 避免重复；异常重入路径存在理论重复风险
-- **影响**：异常重入可能重复扣算力
-- **建议**：加 job 级幂等键（与 ISSUE-M04-002 同源治理，留 M07）
+- **Owner verification**: M07
+- **Observed consumers**:
+  - M04 result path（ISSUE-M04-002）
+  - M06 LAS archive/usage path（ISSUE-M06-003）
+- **M07 统一回答**：什么叫一次 usage / 幂等键 / 重复 report / transaction 唯一性 / 失败重试
+- **不单独维护**——M06 侧只记录 M06→M07 record_usage 调用点（ai_edit_las_service.py:737-746）和"archived 幂等 gate 避免正常路径重复"事实
 
 ### ISSUE-M06-004 下载 token 可重放（自认 tradeoff）
 
@@ -49,6 +52,7 @@
 |---|---|
 | BLOCKER | 0 |
 | HIGH | 0 |
-| MEDIUM | 2（无 status CHECK / process_las_job 单点轮询无恢复） |
-| LOW | 2（算力无幂等 / 下载 token 可重放） |
+| MEDIUM | 0 |
+| TECH_DEBT / LOW | 3（无 status CHECK APPLICATION_VALIDATION_PENDING / process_las_job 无持久化恢复三层拆分 / 下载 token 可重放） |
+| CROSS_MODULE | 1（CROSS_MODULE_COMPUTE_IDEMPOTENCY_GAP，owner=M07） |
 | ARCHITECTURE_OBSERVATION | 1（LAS 任务对素材无强引用） |

@@ -9,9 +9,12 @@
 - **位置**：app/services/ai_edit_service.py:214-220
 - **事实**：`soft_delete_material` 传参 `material_id` 是字符串（如 `"mat_g1"`），但查询 `AiEditJobMaterial.material_id` 是 Integer FK→`AiEditMaterial.id`；类型不匹配导致查询不命中，活动引用检查失效
 - **E2E 证据**：2-M05.2 Gate G——active job 引用素材时 `soft_delete_material` 未抛 `AiEditMaterialInUse`，直接执行了软删除
-- **影响**：被活动 job 引用的素材可能被误删，导致 M06 剪辑任务引用失效
+- **影响域精确**：
+  - Manual / AiEditJobMaterial-backed jobs: **IMPACT VERIFIED**（E2E 证明 active job 引用素材时可被误删）
+  - LAS URL-driven jobs: **NOT COVERED BY THIS GUARD MODEL**（LAS 不写 AiEditJobMaterial，对素材无强引用）
 - **根因**：`soft_delete_material` 用 `material_id`（字符串）查 `AiEditJobMaterial.material_id`（Integer），应先查 `AiEditMaterial.id` 再用 id 查引用
 - **建议**：修复查询为先 `material = get_material_for_merchant(...)` 再用 `material.id` 查 `AiEditJobMaterial.material_id`
+- **HIGH 仍成立**，但影响域精确收窄到 Manual/AiEditJobMaterial-backed jobs
 
 ### ISSUE-M05-004 预签名 URL 持久化到 DB（非 stable key）
 

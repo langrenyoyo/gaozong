@@ -79,21 +79,20 @@
 - 软删除（deleted_at + purge_after + 不可见）
 - M06 消费校验（get_material_for_merchant + pinned_sha256 防漂移）
 - 商户隔离（cross-merchant 不可见 + platform 只读）
-- TOS 上传链路代码事实（服务器中转式）
-- 方舟多模态分析代码事实（has_speech/transcript/description/category）
 - Local Agent 注册 ≠ M04 19000（术语区分）
 - Purge = IMPLEMENTED_DATA_MODEL_ONLY（字段存在无执行器）
 
-### KNOWN HIGH ISSUE
+### CODE_VERIFIED
 
-- ISSUE-M05-004: 预签名 URL 持久化到 DB（非 stable key）
-- ISSUE-M05-005: soft_delete_material 活动引用检查类型不匹配（material_id 字符串 vs Integer）
+- TOS upload implementation path（服务器中转式，ai_edit.py:224-351）
+- Ark multimodal analysis path（material_analysis.py, has_speech/transcript/description/category）
+- Re-analysis implementation path
 
-### PENDING_FIXTURE
+### PENDING_EXTERNAL_INTEGRATION
 
-- Gate A Upload（TOS 凭证）
-- Gate D Analyze（方舟 API）
-- Gate E Re-analyze（方舟 API）
+- Real TOS upload（需 TOS 凭证）
+- Real Ark analysis（需方舟 API key）
+- Real Ark re-analysis（需方舟 API key）
 
 ### NOT_APPLICABLE
 
