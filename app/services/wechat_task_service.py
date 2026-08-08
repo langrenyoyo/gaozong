@@ -478,6 +478,8 @@ def _report_wechat_task_compute_usage(db: Session, task: WechatTask) -> None:
     """微信助手任务完成时上报算力消耗：按消息字符数÷2 估算 token。
 
     仅在任务执行成功（sent/pasted/completed）时上报，失败/blocked 不扣。
+    P1 Stage 2：传入 idempotency_key=wechat_task:{task.id}:result_usage，
+    防止重复 result report 导致 double charge。
     """
     if task.status not in ("sent", "pasted", "completed"):
         return
@@ -495,6 +497,9 @@ def _report_wechat_task_compute_usage(db: Session, task: WechatTask) -> None:
     tokens = max(1, len(message_text) // 2)
     try:
         from app.services.compute_service import record_usage as _record_usage
+        # P1 COMPUTE-IDEMPOTENCY-001：幂等键 = event_namespace:business_event_id
+        # event_namespace=wechat_task（稳定合同，不随 source 重命名改变）
+        # business_event_id={task.id}:result_usage（一个 Task + 一个 charge operation → 最多一笔）
         _record_usage(
             db,
             merchant_id,
@@ -504,6 +509,7 @@ def _report_wechat_task_compute_usage(db: Session, task: WechatTask) -> None:
             model="message-token-estimate",
             remark=f"微信助手任务 task_id={task.id}",
             usage_measurement_method="estimated_tokens",
+            idempotency_key=f"wechat_task:{task.id}:result_usage",
         )
     except Exception as exc:
         logger.warning("wechat_task_compute_usage stage=report_error task_id=%s error=%s", task.id, exc)
