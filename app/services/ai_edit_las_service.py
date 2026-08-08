@@ -726,6 +726,9 @@ def _report_las_compute_usage(db: Session, job: AiEditJob) -> None:
     估算口径：按 script 字符数 ÷2 估算 token（视频混剪消耗主要在云端算子，
     此处仅作商户侧配额/展示用，非 LAS 实际计费）。失败/blocked 不扣。
     上报异常不影响主流程。
+
+    P1 Stage 3：传入 idempotency_key=las_job:{job.id}:archive_usage，
+    防止异常重入重复扣算力。event_namespace=las_job（稳定合同）。
     """
     script = str(job.las_script or "").strip()
     if not script:
@@ -743,6 +746,7 @@ def _report_las_compute_usage(db: Session, job: AiEditJob) -> None:
             model="las-speech-auto",
             remark=f"AI剪辑 LAS 任务 job_id={job.id}",
             usage_measurement_method="estimated_tokens",
+            idempotency_key=f"las_job:{job.id}:archive_usage",
         )
     except Exception as exc:  # noqa: BLE001 算力上报失败不阻断任务
         logger.warning("ai_edit_las_compute_usage stage=report_error job_id=%s error=%s", job.id, exc)
