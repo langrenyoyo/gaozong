@@ -1,6 +1,6 @@
 # P1 Daily Report Generation Identity 技术设计（Stage 5C-3）
 
-> 状态：TECHNICAL_DESIGN_APPROVED + OPTION_B_APPROVED（Stage 5C-3R1 修正后）
+> 状态：TECHNICAL_DESIGN_APPROVED + OPTION_B_APPROVED + RESPONSE_LOST_OPTION_C_APPROVED（Stage 5C-3R2 收口后）
 > 前置：Stage 5C-2 已验真 DailyReportJob.id 是 1:N parent（结论 B）
 > 关联：`P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` Charge Path #10
 > 范围：设计 generation identity，回答"什么动作创造一个新的、应单独收费的 Daily Report generation"
@@ -116,7 +116,9 @@ Process restart 后恢复场景分析：
   - Generation identity 已持久化（C 要求，方案 B 的 DailyReportGeneration 行已 INSERT）
   - 无自动恢复 → job 留在 generating 直到超时 → 用户 regenerate 触发 NEW Generation
   - 但**技术性 retry / process recovery 复用同一 Generation identity**（REQUIRED-2）：已计费 → M07 replay；未计费 → retry execution → eventual first charge
-- **response lost 关键场景**：崩溃在"9100 已计费、响应未回到 9000"（ComputeTransaction 已提交），9000 侧认为失败 → recovery 读 DailyReportGeneration billing status=billed → REUSE 同一 Generation → M07 replay（不重复计费）。方案 B 的 billing status 天然支持此对账。
+- **response lost 场景（P1 范围内）**：9100 已完成 `client.chat` + M07 已 commit ComputeTransaction，但 9000 未收到 9100 的 HTTP 响应。
+  - **P1 解决的部分（DR-5 缩窄）**：同一 Generation + 同一 usage report 再次到达 M07 → M07 UniqueConstraint + payload_evidence replay。这是 **billing-report replay**，M07 已完全可以保护，不重复扣费。
+  - **P1 不解决的部分（SEPARATE_REQUEST_RECOVERY_GAP）**：9000 重新执行 LLM（`client.chat` 再调一次）可能产生不同 usage evidence；若用 same Generation key + different payload → M07 返回 IDEMPOTENCY_CONFLICT（正确行为，不重复扣费）。这是 full 9000→9100 请求级响应丢失，属于 Daily Report 可靠性 Gap，**不属于 P1 财务幂等职责**，登记为独立 Gap 后续处理。
 
 **是否会创建新 generation 而非恢复？** 技术性 retry / process recovery **不会**（REQUIRED-2：always REUSE same Generation identity）。只有显式业务动作（manual regenerate）才 NEW——而 manual regenerate 是用户明知"重来一次"的显式选择，产生新合法 charge。
 
@@ -140,10 +142,43 @@ Process restart 后恢复场景分析：
 **Billing truth = committed ComputeTransaction**（已提交的计费流水），而非仅仅 `client.chat` 成功。`_report_usage`（`daily_report_summary_service.py:193`）在 LLM `chat` 成功后执行，但其本身仍可能失败（9000↔9100 网络异常）。
 
 - LLM 失败 → 不计费 → Generation 处于 unbilled/failed（但**仍存在**，不消失）
-- LLM 成功 + `_report_usage` 成功 → ComputeTransaction 提交 → Generation 处于 billed
-- LLM 成功 + `_report_usage` 失败 → ComputeTransaction 未提交 → Generation 处于 unbilled → retry 复用同一 Generation
+- LLM 成功 + `_report_usage` 成功 → ComputeTransaction 提交 → Generation 概念上处于 billed（账务真相以 M07 ComputeTransaction 为准，非 Generation 字段）
+- LLM 成功 + `_report_usage` 失败 → ComputeTransaction 未提交 → Generation 概念上处于 unbilled → retry 复用同一 Generation
 
 **Generation identity 在 LLM 调用前已持久化（计费点之前）**，因此无论计费成功与否，identity 始终存在并可恢复。这与"Generation 最多产生一次 charge"的账务不变量一致。
+
+### Response-Lost 语义收口（Stage 5C-3R2 冻结方案 C）
+
+**核心问题**：当 9100 已完成 LLM 并且 M07 已 commit ComputeTransaction，但 9000 没收到 HTTP 响应时，下一次调用如何处理？
+
+**三选一决策（冻结方案 C）：**
+
+| 方案 | 描述 | 结论 |
+|---|---|---|
+| A | Persist/reuse original generation result（请求级幂等，持久化 summary result + billing evidence，response-lost 后 find completed result 不重跑 LLM） | ❌ 侵入明显大于当前设计，需 summary result 持久化机制，扩大 P1 范围 |
+| B | Re-run LLM but suppress billing（恢复时重新 `client.chat`，不再调 `report_usage`） | ❌ 第二次真实模型调用有供应商成本但不计费，Billing Policy 不明；summary 内容可能与第一次不同 |
+| **C** | **P1 不解决 full-request response loss（推荐）** | ✅ **冻结 APPROVED** |
+
+**冻结方案 C 理由：**
+1. P1 解决的是 **Compute Idempotency / Financial Integrity**，不是重构 Daily Report 完整的跨进程请求级幂等系统
+2. 当前无现成 summary result persistence，硬上方案 A 会明显扩大范围
+3. 选 C 后 Stage 5C-4 保持最小（DailyReportGeneration 实体 + 9000→9100 透传 + billing-report replay），风险最低
+4. 不虚假宣称 P1 已解决跨进程请求级幂等
+
+**方案 C 冻结内容：**
+
+#### DR-5（缩窄后）：Billing Report Response-Lost
+
+- **same Generation + same usage report → replay**（M07 已完全可以保护）
+- 9100 侧 `_report_usage` 重发同一 idempotency_key + 同一 payload_evidence → M07 IDEMPOTENT_REPLAY，不重复扣费
+- 这是 P1 财务幂等的职责边界
+
+#### SEPARATE_REQUEST_RECOVERY_GAP（新登记）
+
+- **Full 9000→9100 response-lost after completed LLM**：9000 未收到 9100 响应 → 重新执行 LLM → 可能产生不同 usage
+- M07 行为：same Generation key + different payload → **IDEMPOTENCY_CONFLICT**（正确行为，不重复扣费，发出警报）
+- **不属于 P1 财务幂等职责** → 登记为 Daily Report 可靠性 Gap，后续独立处理
+- P1 不虚假宣称已解决跨进程请求级幂等
 
 ---
 
@@ -175,9 +210,32 @@ idempotency_key = f"daily_report_job:{job_id}:{generation_identity}:summary"
 | lifecycle/status | 支持 `generating` / `unbilled` / `billed` / `failed` 等状态 |
 | created_at | 创建时间 |
 
-每次 `_claim_generating` INSERT 一行新 DailyReportGeneration（与 generation_token 同事务 commit）。finalize **不清空** generation 行（只清 generation_token）。billing status 在 ComputeTransaction 提交后更新为 billed。
+每次 `_claim_generating` INSERT 一行新 DailyReportGeneration（与 generation_token 同事务 commit）。finalize **不清空** generation 行（只清 generation_token）。
+
+> **注意**：Generation 可有执行生命周期状态（pending/running/failed/succeeded）用于执行编排，但**不得**让 `generation.is_billed` 成为账务真相。committed ComputeTransaction 是唯一 billing truth；Generation 上的 billed/unbilled 标记只是派生/缓存辅助状态，用于恢复决策，恢复时仍需以 M07 ComputeTransaction 为准（见实施约束 3）。
 
 **不借 P1 重写 Daily Report 架构**：DailyReportJob 现有 claim/finalize 逻辑保留，DailyReportGeneration 只作为 billing identity 层叠加。
+
+### 实施约束（3 条，Stage 5C-4 必须遵守）
+
+**约束 1：Generation 创建与 claim 原子绑定**
+- successful `_claim_generating` + create DailyReportGeneration → **same DB transaction**（与 generation_token 同 commit，`:220`）
+- DailyReportGeneration 行的 INSERT 必须在 `_claim_generating` 的 commit 内完成，不能是独立事务
+- DR-7 实施时必须断言：**NEW DailyReportGeneration rows = 1**（不只断言一个 409；要断言 claim 成功恰好创建 1 行 Generation）
+
+**约束 2：恢复时确定性引用 Generation（不猜恢复对象）**
+- **禁止** `ORDER BY id DESC` 取最新行猜测恢复对象
+- Stage 5C-4 必须存在明确、持久的关联方式，使 restart/recovery → deterministic same generation：
+  - Job 上持有 current/active generation reference，或
+  - generation 状态上的唯一活动约束（同一 job 至多一个 active generation），或
+  - 调用方显式携带 generation_id
+- 恢复逻辑通过该确定性引用找到正确 Generation，而非按时间/序号猜
+
+**约束 3：Billing truth 仍只属于 M07**
+- Generation 可有执行生命周期（pending/running/failed/succeeded），用于执行编排
+- **但不得新增 `generation.is_billed` 成为账务真相**
+- **committed ComputeTransaction 仍是唯一 billing truth**
+- Generation 里的 billing-related 状态（如 billed/unbilled）只能是**派生/缓存/可恢复辅助状态**，用于恢复决策，不作为账务权威
 
 ### 跨进程透传
 - payload（`daily_report_service.py:555`）当前只含 merchant_id/report_day/summaries
@@ -196,8 +254,9 @@ idempotency_key = f"daily_report_job:{job_id}:{generation_identity}:summary"
 5. **lease identity（generation_token）≠ billing identity（generation identity）**
 6. **Generation 在 LLM 调用前已持久化（计费点之前）；LLM/执行失败时 Generation 仍存在（unbilled/failed），不产新 Generation**
 7. **Billing truth = committed ComputeTransaction（不只 `client.chat` 成功）；LLM 成功 + report 失败 → retry 复用同一 Generation**
-8. **response lost 时重试必须复用原 generation identity（replay，不重复计费）**
+8. **billing-report response-lost（same Generation + same usage report）→ M07 replay（P1 职责）；full 9000→9100 request-lost after completed LLM → SEPARATE_REQUEST_RECOVERY_GAP（非 P1 职责，M07 IDEMPOTENCY_CONFLICT 兜底）**
 9. **Technical retry / process recovery / response-lost retry → always REUSE same Generation identity（无论是否已计费）；只有显式业务动作（首次/regenerate/manual retry）才 NEW**
+10. **Stage 5C-4 实施约束**：(a) Generation 创建与 `_claim_generating` 同事务原子绑定；(b) 恢复时确定性引用 Generation，禁止 `ORDER BY id DESC` 猜测；(c) billing truth 只属于 M07 committed ComputeTransaction，Generation 不得新增 `is_billed` 成为账务真相，billing 状态仅作派生辅助
 
 ---
 
@@ -209,14 +268,14 @@ idempotency_key = f"daily_report_job:{job_id}:{generation_identity}:summary"
 | DR-2 | Same Generation Replay | report twice → 1 txn / replay |
 | DR-3 | Explicit Regenerate | G1≠G2 / 2 txn / 2 charges |
 | DR-4 | LLM Failure | G3 identity 仍持久 / 0 txn / 0 debit |
-| DR-5 | Response Lost After Charge | recovery retry same G4 → 1 txn / replay |
-| DR-6 | Compute Report Failure | LLM success + report fail → retry same G5 → 1 txn |
-| DR-7 | Concurrent Generate | 409 阻止并发 / only one NEW Generation |
+| DR-5 | **Billing Report Response-Lost**（缩窄） | same Generation + same usage report 重发 → M07 replay / 1 txn（commit 后 response-lost，billing-report replay；full-request recovery 见 SEPARATE_REQUEST_RECOVERY_GAP） |
+| DR-6 | **Compute Report Failure**（与 DR-5 分开） | LLM success + report fail（**commit 前**）→ retry same G5 → 新 txn 首次成功计费（DR-6 是 commit 前 retry → 新 txn；DR-5 是 commit 后 response-lost → replay） |
+| DR-7 | Concurrent Generate | 409 阻止并发 / only one NEW Generation（断言 NEW Generation rows = 1） |
 
 ---
 
 ## 待审批决策点
 
 1. ~~方案 A vs 方案 B~~ → **方案 B 已冻结 APPROVED**
-2. response lost 恢复策略：DailyReportGeneration 的 billing status（billed/unbilled）天然支持恢复对账；recovery 时读 Generation status 判断是否已计费，已计费 → replay，未计费 → 重试执行
-3. 审查通过后授权 Stage 5C-4 实施（DailyReportGeneration 实体 + 9000→9100 透传 + 7 Gate）
+2. ~~response lost 恢复策略~~ → **方案 C 已冻结 APPROVED**：DR-5 缩窄为 billing-report replay（M07 保护）；full-request response-lost 登记 SEPARATE_REQUEST_RECOVERY_GAP（非 P1 职责，IDEMPOTENCY_CONFLICT 兜底）
+3. 审查通过后授权 Stage 5C-4 实施（DailyReportGeneration 实体 + 9000→9100 透传 + 7 Gate + 3 实施约束）
