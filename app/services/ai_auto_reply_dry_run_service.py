@@ -354,6 +354,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             customer_memory=reply_context.customer_memory,
             lead=reply_context.lead,
         ),
+        # P1 Stage 4B：M01 Auto Reply 幂等 identity 透传（9000→9100）
+        # run_id=AiAutoReplyRun.id（已 commit），attempt_count=claim 时快照（不重新读 DB）
+        "run_id": run.id,
+        "attempt_count": run.attempt_count,
     }
     timing["forbidden_words_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     timing["pre_llm_total_ms"] = round((_time.perf_counter() - t_total) * 1000, 1)

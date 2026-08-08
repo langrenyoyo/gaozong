@@ -172,6 +172,11 @@ class ReplySuggestionRequest(BaseModel):
     contact_state: dict | None = None
     contact_action: str | None = None
     contact_state_source: str | None = None
+    # P1 Stage 4B：M01 Auto Reply 幂等 identity 透传（9000→9100）
+    # run_id=AiAutoReplyRun.id（已 commit），attempt_count=claim 时快照
+    # 两者非空时 _report_llm_usage 构造 idempotency_key；None 时走兼容路径（Preview）
+    run_id: int | None = None
+    attempt_count: int | None = None
 
 
 class RecommendedVehicle(BaseModel):

@@ -3775,9 +3775,27 @@ def _report_llm_usage(
     供应商未返回有效用量时才回退估算；每次重试独立记录调用阶段。
     上报失败只记日志，**绝不影响**回复建议主流程。
     安全边界：本函数不涉及 auto_send，不改变回复内容；payload/日志不含提示词或回复原文。
+
+    P1 Stage 4B：Auto Reply 路径用 run_id + attempt_count + llm_call_stage 构造幂等键。
+    Preview 路径（run_id=None / attempt_count=None）走兼容路径不传 key。
+    Partial identity（一个有一个无）→ warning + 不生成错误 key。
     """
     if not request.merchant_id:
         return
+    # P1 Stage 4B：构造幂等键（三维 identity）
+    run_id = getattr(request, "run_id", None)
+    attempt_count = getattr(request, "attempt_count", None)
+    idempotency_key = None
+    if run_id is not None and attempt_count is not None:
+        # Auto Reply 完整 identity → 构造 key
+        idempotency_key = f"ai_auto_reply_run:{run_id}:{attempt_count}:{llm_call_stage}"
+    elif run_id is not None or attempt_count is not None:
+        # Partial identity → 不生成错误 key，记 warning
+        _logger.warning(
+            "compute_usage stage=partial_identity run_id=%s attempt_count=%s stage=%s",
+            run_id, attempt_count, llm_call_stage,
+        )
+    # run_id=None AND attempt_count=None → Preview 兼容路径，不传 key（不改计费行为）
     usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
@@ -3794,6 +3812,7 @@ def _report_llm_usage(
             completion_tokens=usage.completion_tokens,
             cached_tokens=usage.cached_tokens,
             llm_call_stage=llm_call_stage,
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001  双重保险：上报失败绝不影响 AI 回复主流程
         _logger.warning("compute_usage stage=report_call_error error=%s", exc)
