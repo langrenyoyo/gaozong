@@ -317,6 +317,13 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 > 结果：transaction +1 / balance 只扣一次 / 两请求获得同一结果 / ledger invariant 成立。
 > **SQLite 不能替代。**
 
+> **既有失败基线（PG Closure 验收时区分 baseline 噪声 vs P1 回归，不得笼统记为"10 existing failures"）**：
+> PG Closure 前后端专项存在既定红灯集，非 P1 引入，closure 验收须按"零新增回归"放行而非"历史全绿"。保留具体测试集合引用：
+> - `tests/test_phase10_compute_schema.py`（SQLite schema 合同断言，如 `test_phase10_sqlite_migration_files_exist` / `test_sqlite_0031_rebuilds_only_two_compute_tables`）
+> - `tests/test_phase10_compute_no_network.py`（组合跑 401 鉴权中间件污染，单独跑 PASSED；见 `docs/ai/05_acceptance/PHASE10_COMPUTE_ACCEPTANCE.md`）
+> - SQLite 迁移 `migrations/versions/0031_compute_billing.sql`（0031 compute billing，与 PG Alembic `0030` / `0032` 分属 SQLite-SQL / PG-Alembic 两套迁移系统，编号相近易误读）
+> 这些是 PG Closure 前的 baseline 红灯，不得与 P1 幂等回归混计。
+
 ### PG CORE RELEASE GATE（新增）
 
 > **在 M07 Core 实现完成后、Consumer 迁移前，至少跑一次 PostgreSQL：**
@@ -431,7 +438,7 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 7 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置 | training_id 在 _report_usage 之后才生成+commit | DESIGN_GAP | None | ⏸ 需 training_id 前置 |
 | 8 | RAG Embedding | `rag/repository.py:481` | ACTIVE | 无 per-embedding identity | 每 chunk 一次 embedding API；3 个调用点（search/ingest×2）；无持久 per-embedding execution entity | DESIGN_GAP | None | ⏸ 需 per-embedding identity 设计 |
 | 9 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
-| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 SEPARATE_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ MIGRATED（Stage 5C-4） |
+| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
 
 ### Stage 5B 身份验真详情
 
@@ -494,9 +501,18 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 - **Identity 合同**：`daily_report_generation:{generation_id}:summary`（event_namespace=`daily_report_generation`，business_event_id=`{generation_id}:summary`）
 - **三层 identity 严格分离**：DailyReportJob(parent) / DailyReportGeneration(billing) / generation_token(lease 临时)
 - **3 实施约束已落地**：(1) Generation 创建与 claim 同事务原子绑定；(2) `job.current_generation_id` 确定性引用（禁 `ORDER BY id DESC` 猜测）；(3) Generation 无 is_billed 字段，billing truth 只属于 M07 committed ComputeTransaction
-- **billing-report replay only**：full 9000→9100 request response-lost 登记为 SEPARATE_REQUEST_RECOVERY_GAP（非 P1 职责，M07 IDEMPOTENCY_CONFLICT 兜底）
+- **billing-report replay only**：full 9000→9100 request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP（非 P1 职责，M07 IDEMPOTENCY_CONFLICT 兜底）
 - **7 Gate PASS**：DR-1~DR-7（见 `P1_DAILY_REPORT_GENERATION_DESIGN.md`）
 - **migration**：`0032_daily_report_generations.py`（revision 0032，backward-compatible nullable）
+
+> **PENDING_PG_VERIFICATION（Stage 5C-4）**：functional migration COMPLETE，但 PostgreSQL schema application 仍未验证。
+> 最终 P1 closure 前必须验证：`alembic upgrade 0030 → 0032` 在生产 PG 上成功 apply，`daily_report_generations` 表 + FK + `ck_daily_report_generations_status` CHECK 约束 + `daily_report_jobs.current_generation_id` 列真实存在且语义有效；并复跑 DR-7 并发语义（原子 claim + NEW Generation rows=1）确认在 PG 行级锁下成立。
+> **SQLite / 单进程测试不替代 PG 证据**（P1 CLOSURE MANDATORY GATE 明确要求 PostgreSQL Concurrent Duplicate）。当前 5C-4 验收基于 SQLite + 单进程，PG 级证据留待 PG Closure Gate 闭环时补齐。
+
+> **Reliability Gap 分离登记（防根因混淆）**：
+> - Daily Report charge path consumer 迁移状态 = **IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED**（P1 财务幂等职责已完成）。
+> - **DAILY_REPORT_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：full 9000→9100 request response-lost（9100 已完成 LLM + M07 已 commit ComputeTransaction，但 9000 未收到 HTTP 响应 → 重跑 LLM 可能产生不同 usage）。M07 行为 = same Generation key + different payload → IDEMPOTENCY_CONFLICT（正确，不重复扣费，发出警报）。
+> - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级响应丢失可靠性差距。不得把 DAILY_REPORT_REQUEST_RECOVERY_GAP 并入 P1 consumer 迁移状态，也不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN——该 Gap 属可靠性范畴（OUT_OF_P1），由独立可靠性工作流处理，P1 不虚假宣称已解决跨进程请求级幂等。
 
 #### M05 Material Analysis（DESIGN_GAP — 已确认）
 

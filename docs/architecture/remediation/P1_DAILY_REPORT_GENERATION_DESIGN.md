@@ -62,6 +62,14 @@
 2. Generation 在 LLM 调用前已持久化（unbilled 状态）；LLM 失败 → Generation 仍存在，后续 retry 复用同一 identity
 3. response lost 时计费可能已发生，重试必须复用 identity 才不重复扣费
 
+### claim count ≠ generation count（长期实现约束）
+
+> **claim 次数不等于 Generation 数量。** `_claim_generating` 每次成功调用创建 NEW Generation，因为它绑定的是**显式 claim 动作**（首次 generate / regenerate / manual retry）；但**技术性 retry / process recovery / response-lost retry 不得再调 `_claim_generating` 重建 Generation**——它们必须通过 `job.current_generation_id` 确定性引用复用既有 Generation identity（已计费→M07 replay，未计费→重试执行→首次计费）。
+>
+> 此约束防止未来 full-request recovery（9000→9100 响应丢失后重跑）误把每次 claim / 重试都建 NEW Generation，导致同一逻辑生成被拆成多个 billing identity、绕过 M07 幂等重放。Generation 数量 = 显式业务动作数，不是 claim 调用数，也不是 LLM 调用数。
+>
+> 代码锚点：`daily_report_job_service.py::_claim_generating` docstring 已落地同一约束。
+
 ### Failure Boundary：LLM 成功 + Compute report 失败
 
 **LLM success + Compute reporting failure（`_report_usage` 本身失败，如 9000↔9100 网络异常）→ does not create a new Generation → retry billing/report reuses same Generation identity.**

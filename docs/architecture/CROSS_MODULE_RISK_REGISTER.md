@@ -41,6 +41,9 @@ COMPUTE-IDEMPOTENCY-001（M07 ROOT CAUSE — HIGH-01）
 
 > 不把"存在 record_usage 调用"自动翻译成"E2E 证明重复扣费"。
 
+> **P1 consumer 迁移状态（2026-08）**：6/10 charge path MIGRATED（M04 / M06 / M01 Auto Reply / M02 / Return Visit Judge / Daily Report），4/10 OPEN（Preview POLICY_PENDING+IDENTITY_OPEN / M05·Training·RAG Embedding DESIGN_GAP）。详见 `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` Charge Path Migration Register。
+> **可靠性差距分离（防根因混淆）**：**DAILY_REPORT_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**——full 9000→9100 request response-lost（9100 已完成 LLM + M07 已 commit，但 9000 未收到响应 → 重跑 LLM 可能不同 usage → M07 IDEMPOTENCY_CONFLICT 兜底）。此 Gap 属可靠性范畴，**不是** COMPUTE-IDEMPOTENCY-001 财务幂等未完成的证据，不得据此判定根因仍 OPEN 或与 consumer 迁移状态合并。P1 不虚假宣称已解决跨进程请求级幂等。
+
 ---
 
 ## 3. STRUCTURAL PRIORITIES（单独队列，不进 HIGH）

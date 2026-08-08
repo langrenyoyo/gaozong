@@ -211,6 +211,15 @@ def _claim_generating(db: Session, job: DailyReportJob) -> tuple[str, int]:
     返回 (token, generation_id)。generation_id 是持久化 billing identity 快照，
     供 9000→9100 透传构造 M07 幂等键。
     硬约束：Generation 无 is_billed，billing truth 只属于 M07 committed ComputeTransaction。
+
+    claim count ≠ generation count（长期实现约束，防 full-request recovery 误判）：
+    - 显式业务动作（首次 generate / 用户 regenerate / manual retry）→ NEW Generation
+    - 技术性 retry / process recovery / response-lost retry → REUSE 同一 Generation identity
+      （无论计费是否已提交；已计费→M07 replay，未计费→重试执行→首次计费）
+    本函数每次成功调用都创建 NEW Generation，因为它绑定的是显式 claim 动作；
+    技术性 retry / process recovery 不应再调本函数重建 Generation，而应通过
+    job.current_generation_id 确定性引用复用既有 Generation identity。
+    详见 docs/architecture/remediation/P1_DAILY_REPORT_GENERATION_DESIGN.md B 节。
     """
     token = secrets.token_hex(16)
     now = datetime.now()
