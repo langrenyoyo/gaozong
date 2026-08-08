@@ -576,29 +576,28 @@ def grant_package_to_merchant(
 def _compute_payload_evidence(
     *,
     capability_key: str,
-    source: str,
     model: str,
     tokens: int,
     usage_measurement_method: str,
     llm_call_stage: str | None,
-    agent_id: str | None,
-    conversation_id: int | None,
 ) -> str:
     """计算 stable payload 一致性证据（canonical fingerprint）。
 
     只含 stable business billing inputs（不含 ratio/billed_amount/pricing）。
-    具体实现留给实施选择，此处用 canonical JSON + SHA-256。
+    Payload Evidence Field Mapping:
+      INCLUDE: capability_key（稳定计费语义）/ model（稳定计费语义）/
+               tokens raw usage（稳定计费语义）/ usage_measurement_method（稳定计费语义）/
+               llm_call_stage（consumer-defined business operation）
+      EXCLUDE: source（observability 运营归因，非稳定计费语义——event_namespace 已在 idempotency_key 中）/
+               agent_id（上下文，非计费语义——哪个智能体不影响计费）/
+               conversation_id（上下文，非事件——已冻结"conversation 是上下文不是事件"）
     """
-    # canonical JSON：key 排序 + separators 消除空白差异
     stable = {
         "capability_key": capability_key,
-        "source": source,
         "model": model,
         "tokens": int(tokens),
         "usage_measurement_method": usage_measurement_method,
         "llm_call_stage": llm_call_stage,
-        "agent_id": agent_id,
-        "conversation_id": conversation_id,
     }
     canonical = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -674,13 +673,10 @@ def record_usage(
         idempotency_key = str(idempotency_key).strip()
         payload_evidence = _compute_payload_evidence(
             capability_key=capability_key,
-            source=source,
             model=model_name,
             tokens=tokens,
             usage_measurement_method=measurement_method,
             llm_call_stage=normalized_stage,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
         )
 
         # 尝试 INSERT（跨方言：PG ON CONFLICT / SQLite INSERT OR IGNORE + 查询）
@@ -708,24 +704,22 @@ def record_usage(
         )
         db.add(tx_candidate)
         try:
-            db.flush()  # 尝试 INSERT
-            # flush 后立即 commit 触发唯一约束检查（SQLite flush 不触发约束，commit 才触发）
-            db.commit()
-            # commit 成功 → 获得 ownership → 扣余额（新事务）
+            db.flush()  # INSERT 到事务内（未 commit）
+            # flush 成功 → 获得 ownership → 同一事务内扣余额
             account = get_or_create_account(db, merchant_id, autocommit=False)
             _write_transaction_balance_only(
                 db, account, delta_tokens=-billed_tokens,
                 capability_key=capability_key,
             )
-            # 更新 balance_after_tokens 到已写入的 txn
+            # 更新 balance_after_tokens 到已写入的 txn（同一事务）
             tx_candidate.balance_after_tokens = account.balance_tokens
-            db.commit()
+            db.commit()  # 单次 commit：transaction + balance 原子
             db.refresh(account)
             return {"account": account, "idempotency_status": "created"}
         except IntegrityError:
-            # 用 SAVEPOINT 隔离回滚，不破坏已 commit 的外层数据
+            # INSERT 唯一约束冲突 → rollback 本事务（transaction + balance 均未 commit，无副作用）
             db.rollback()
-            # UNIQUE CONFLICT → 读取已存在 transaction（新 session 上下文）
+            # UNIQUE CONFLICT → 读取已存在 transaction
             existing = (
                 db.query(ComputeTransaction)
                 .filter(
