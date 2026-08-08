@@ -1248,6 +1248,7 @@ def process_webhook_event(db: Session, payload: dict[str, Any]) -> dict[str, Any
                     model="message-token-estimate",
                     remark="线索服务私信入站",
                     usage_measurement_method="estimated_tokens",
+                    idempotency_key=f"webhook_event:{event.id}:lead_usage",
                 )
             except Exception as exc:
                 logger.warning("webhook_compute_usage stage=leads_report_error event_id=%s error=%s", event.id, exc)

@@ -261,6 +261,7 @@ def _report_analysis_usage(
             usage_measurement_method="provider_tokens" if (pt or ct) else "estimated_tokens",
             prompt_tokens=pt or None,
             completion_tokens=ct or None,
+            idempotency_key=f"material_analysis:{material_id}:ark_v1",
         )
     except Exception as exc:  # noqa: BLE001 算力上报失败不阻断
         logger.warning("material_analysis_usage_report_error merchant_id=%s error=%s", merchant_id, exc)
