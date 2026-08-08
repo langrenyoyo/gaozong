@@ -1,6 +1,6 @@
 # P1 COMPUTE-IDEMPOTENCY-001 技术方案设计
 
-> 状态：TECHNICAL_DESIGN_APPROVED + IMPLEMENTATION_SCOPE_READY（只设计不实施）
+> 状态：TECHNICAL_DESIGN_APPROVED + IMPLEMENTATION_SCOPE_APPROVED + PHASE_3A_P1_IMPLEMENTATION_READY（设计阶段正式结束，进入实施）
 > 代码基线：c26ec227e70d
 > 风险等级：HIGH — FINANCIAL_INTEGRITY
 > E2E 证据：Gate A（balance delta = 2 × charge）+ Gate F（M04 double charge E2E_VERIFIED_IMPACTED）
@@ -35,7 +35,7 @@
 
 | Consumer | Charge Event | 稳定身份 | Retry 复用 | 多次合法收费 | Cardinality |
 |---|---|---|---|---|---|
-| M04 | Task result usage | WechatTask.id + operation（paste/sent） | 必须 | 通常 1 次 | 1:1 |
+| M04 | Task result usage | WechatTask.id + operation（paste/sent） | 必须 | 通常 1 次 | 1:1（冻结：一个 WechatTask + 一个具体 charge operation → 最多一笔该类型 Compute usage；如存在多个合法收费阶段，event identity 必须包含 operation，不得只有 task id） |
 | M06 | LAS archive usage | AiEditJob.id + archive operation | 必须 | 通常 1 次 | 1:1 |
 | M01 | LLM usage | **待确认**：需绑定持久化 run/event（AiAutoReplyRun.id 是否可作为 LLM usage 的稳定 event identity？待确认） | 必须 | 同 conversation 可多次合法 | 1:N |
 | M02 | webhook event charge | WebhookEvent.id + operation | 必须 | 按事实 | 1:1 |
@@ -135,6 +135,17 @@ UniqueConstraint(merchant_id, idempotency_key)
 
 > **关键不变量：只有成功创建幂等流水的那个事务拥有修改余额的权利。**
 > **绝不能 INSERT ON CONFLICT 后不管是否成功都继续 UPDATE balance。**
+
+### Idempotency Payload Evidence Invariant
+
+> **对于每一笔带 idempotency identity 的成功 ComputeTransaction，M07 必须持久化足够的 immutable consistency evidence，使任何未来 retry 都能够判断：**
+>
+> - A. Same Key + Same Stable Semantic Billing Inputs → IDEMPOTENT_REPLAY
+> - B. Same Key + Different Stable Semantic Billing Inputs → IDEMPOTENCY_CONFLICT
+>
+> 具体实现留给实施窗口选择（canonical payload fingerprint / DB 保存 stable input fields / 两者结合）。
+> 不冻结字段名、hash 算法、JSON 结构。
+> **但"必须有可持久化的 Payload 一致性证据"是正式设计合同。**
 
 ### DB 约束兜底 + 单事务原子单元
 
@@ -294,7 +305,7 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 7 Merchant isolation | A 不能读写 B | PASS |
 | 8 Failed-retry | commit 失败 + retry | 1 条 transaction |
 | 9 Old consumer (idempotency_key=None) | 阶段 1 兼容 | 旧逻辑不报错（无去重） |
-| **10** | **Same Key + Different Payload** | **不二次扣费 / 不覆盖原流水 / 报告 IDEMPOTENCY_CONFLICT** |
+| **10** | **Same Key + Different Stable Payload** | E1 stable payload A → commit / same E1 key stable payload B → retry → **IDEMPOTENCY_CONFLICT** / transaction count = 1 / balance unchanged / original transaction unchanged / original payload evidence unchanged（不被第二次请求覆盖）/ conflict observable |
 | **11** | **Same Context + Two Legitimate Events** | **two keys / two transactions / two legitimate charges** |
 | **12** | **Retry After Pricing Configuration Change** | business event E1 usage=100 price V1 → charge 100 → commit；修改计费比例到 V2；同 E1 retry → **仍 IDEMPOTENT_REPLAY** / transactions 仍 1 条 / balance 不再变化 / 返回第一次结果 / 不二次扣费 / 不报 IDEMPOTENCY_CONFLICT |
 
@@ -305,6 +316,17 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 > 两请求 same merchant + same business event + same idempotency identity 并发进入。
 > 结果：transaction +1 / balance 只扣一次 / 两请求获得同一结果 / ledger invariant 成立。
 > **SQLite 不能替代。**
+
+### PG CORE RELEASE GATE（新增）
+
+> **在 M07 Core 实现完成后、Consumer 迁移前，至少跑一次 PostgreSQL：**
+>
+> same merchant + same idempotency identity + two concurrent requests
+> 结果：1 transaction / 1 balance mutation
+>
+> **通过后才允许幂等能力进入生产 Consumer。**
+>
+> 即：PG concurrency = core rollout safety gate + final P1 closure gate（两次验证）。
 
 ### 防止误去重
 
@@ -324,8 +346,10 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 ### DB Migration
 
-- `compute_transactions` 加 `idempotency_key` 列（String(255), nullable=True）
-- 加 `UniqueConstraint(merchant_id, idempotency_key)`（nullable 时 NULL 不参与唯一约束，兼容阶段 1）
+`compute_transactions` 新增：
+- `idempotency_key`（幂等身份，String, nullable=True 阶段 1）
+- **persisted semantic consistency evidence**（stable payload 一致性证据，实现留给实施审批）
+- `UniqueConstraint(merchant_id, idempotency_key)`（nullable 时 NULL 不参与唯一约束，兼容阶段 1）
 - 阶段 3 必填后可加 NOT NULL（但需确保所有历史行已回填或接受 NULL）
 
 ### API Migration
