@@ -79,7 +79,6 @@
 - Sampled fee calculation
 - Consumer/source identity traceability
 - Merchant isolation
-- Payment runtime = MOCK_ONLY / DEFERRED
 
 ### KNOWN HIGH — ROOT CAUSE
 
