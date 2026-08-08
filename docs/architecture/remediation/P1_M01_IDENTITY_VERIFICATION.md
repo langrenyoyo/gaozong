@@ -86,3 +86,93 @@ AiAutoReplyRun.id 是稳定的「1 Run : N charge events」分组键，**不能*
 - `app/routers/agents.py`：Preview 路径传 `run_id=None`（标注 PREVIEW_NOT_CHARGED）
 - `apps/xg_douyin_ai_cs/services/reply_decision_service.py`：`_report_llm_usage` 传入 `idempotency_key`
 - `apps/xg_douyin_ai_cs/services/compute_usage_client.py`：`report_usage` 传 `idempotency_key`
+
+---
+
+## Stage 4A-R1 补充验真（outbox retry cardinality + invocation identity + scene billing）
+
+### R1-Q1：Outbox retry 重新触发的 LLM 调用是合法新消费还是 replay？
+
+**结论：合法新消费（独立 client.chat + 独立 token 计量）**
+
+追踪完整流程：
+1. Run 123 → `_run_with_session` → `suggest_reply`（9000→9100 HTTP）→ 9100 `_build_llm_reply` → `client.chat(primary_messages)` → 成功 → `_report_llm_usage(stage=primary)` (#1)
+2. Run 123 LLM 失败或 9000 侧异常 → `_handle_llm_failure` → `status=retry_wait`（`dry_run_service.py:944`）
+3. outbox 调度器重新 claim（`outbox_service.py:244` `attempt_count+1`）→ `_run_with_session_for_outbox`（`dry_run_service.py:66-89`）→ 重新加载原 run（line 80）→ 重新执行 `_run_with_session` → 再次 `suggest_reply` → 9100 再次 `_build_llm_reply` → 再次 `client.chat(primary_messages)` → 成功 → `_report_llm_usage(stage=primary)` (#2)
+
+**#2 是合法新消费**：
+- 独立的 `client.chat()` 调用（新的 HTTP 请求到 LLM 供应商）
+- 独立的 token 计量（供应商返回新的 usage）
+- 代码注释"每次成功调用独立计量"（`reply_decision_service.py:1159`）
+- 不是同一 event 的 replay——是新的 LLM 供应商请求
+
+**含义**：`run_id + stage` **不够**——同一 Run 同一 stage 在 outbox retry 后会产生第二次合法消费，需要 attempt/invocation 维度区分。
+
+### R1-Q2：是否存在持久化 invocation/attempt identity？
+
+**结论：存在——`AiAutoReplyRun.attempt_count`**
+
+| 检查项 | 结果 | 证据 |
+|---|---|---|
+| 字段存在 | ✓ | `models.py:569` `attempt_count = Column(Integer, nullable=False, default=0)` |
+| LLM 调用前持久化 | ✓ | `_add_run` 在 `suggest_reply` 前 commit（`dry_run_service.py:376,764`）；`claim_next_batch` 在原子 UPDATE 中 `attempt_count=attempt_count+1` + commit（`outbox_service.py:244,249`）→ attempt_count 在 LLM 调用前已 commit |
+| retry/restart 复用同一值 | ✓ | outbox retry 不创建新 Run，claim 时 `attempt_count+1` 原子递增（`outbox_service.py:244`）；recover 不改 attempt_count；manual_retry 重置为 0（`outbox_service.py:502`） |
+| 并发不会两个 attempt 拿同值 | ✓ | claim 用原子条件 UPDATE `WHERE status IN (pending, retry_wait) AND ... SET attempt_count=attempt_count+1 RETURNING`（`outbox_service.py:230-249`），只有一个线程成功 |
+| replay 能恢复原值 | ✓ | attempt_count 持久化在 DB，retry 重新加载原 run 时读到的就是已 commit 的值 |
+
+**满足全部 4 个条件**——`attempt_count` 可用作持久化 invocation identity。
+
+**最终 key 结构**：`ai_auto_reply_run:{run.id}:{attempt_count}:{llm_call_stage}`
+
+- `run.id`：稳定持久化分组键
+- `attempt_count`：持久化 invocation identity（每次 outbox retry 递增，区分同一 Run 的不同 LLM 调用周期）
+- `llm_call_stage`：primary / retry_combined（同一次 suggest_reply 内的 2 个合法收费 operation）
+
+**Cardinality**：1 Run : N attempts × 2 stages = 最多 2N 次合法收费
+
+### R1-Q3：Preview 当前计费行为
+
+**结论：B（当前计费）**
+
+- `app/routers/agents.py:272-276` `preview_agent` 调 `suggest_reply` → 9100 `build_reply_suggestion` → `_build_llm_reply` → `_report_llm_usage`（`reply_decision_service.py:1160,1236`）
+- `_report_llm_usage` 调 `ComputeUsageClient().report_usage`（`reply_decision_service.py:3783`）→ HTTP POST 到 9000 `/internal/compute/usage` → `record_usage` 写 ComputeTransaction
+- **当前确实产生 ComputeTransaction**（无 run_id 透传，`conversation_id="agent-preview"`，`idempotency_key=None`）
+- Preview 路径当前**计费且无幂等**——同一商户多次预览各扣一次
+
+**需要决策**：Preview 是否应免费？如果免费 → 业务变更单独批准；如果计费 → 需稳定 identity（如 timestamp + merchant_id + agent_id 不可靠，需持久化实体或接受 None 不去重）。
+
+### R1-Q4：Training/共享 9100 计费路径
+
+**结论：Training 走独立 `_report_usage`，不共享 `_report_llm_usage`，但同样不传 `idempotency_key`**
+
+- `apps/xg_douyin_ai_cs/services/knowledge_training_service.py:475-485` 独立 `_report_usage` 函数，直接调 `ComputeUsageClient().report_usage`
+- capability_key=`knowledge`（不同于 auto-reply 的 `douyin-cs`）
+- **不共享** `_report_llm_usage` 路径——Training 有自己的 LLM 调用 + 自己的 report_usage
+- **但不传 `idempotency_key`**（`knowledge_training_service.py:481` 无 idempotency_key 参数）
+- Training 是独立 consumer（CALL_SITE_IDENTIFIED），M01 迁移不影响 Training
+
+---
+
+## 二维合同表（最终产出）
+
+| Scene | Persistent Parent | Invocation Identity | Stage | Current Charge | Final Identity Status |
+|---|---|---|---|---|---|
+| Auto Reply（首调） | AiAutoReplyRun.id | attempt_count | primary | chargeable | `ai_auto_reply_run:{run.id}:{attempt_count}:primary` |
+| Auto Reply（retry_combined） | AiAutoReplyRun.id | attempt_count | retry_combined | chargeable | `ai_auto_reply_run:{run.id}:{attempt_count}:retry_combined` |
+| Outbox retry（重新触发） | same Run | attempt_count+1 | primary/... | 合法新消费 | `ai_auto_reply_run:{run.id}:{attempt_count+1}:primary` |
+| Preview | 无 Run | 无 | primary/retry_combined | 当前计费（POLICY_PENDING） | PREVIEW_CHARGED_NO_IDENTITY（需产品决策） |
+| Training | 无 Run（独立路径） | 无 | N/A | chargeable（knowledge） | 独立 consumer（Stage 5 迁移） |
+
+### 最终结论
+
+**有持久化 attempt identity → Stage 4B M01 迁移可行**
+
+最终 key：`ai_auto_reply_run:{run.id}:{attempt_count}:{llm_call_stage}`
+
+- `run.id` 稳定持久化（LLM 调用前 commit）
+- `attempt_count` 稳定持久化（claim 原子递增，LLM 调用前 commit，满足全部 4 个条件）
+- `llm_call_stage` 区分 primary / retry_combined（2 个合法收费 operation）
+
+**Preview 路径**：POLICY_PENDING（当前计费但无 identity，需产品决策是否免费）
+
+**Training 路径**：独立 consumer，Stage 5 迁移
