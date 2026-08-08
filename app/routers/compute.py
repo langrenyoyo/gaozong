@@ -479,6 +479,7 @@ def report_usage(
             completion_tokens=payload.completion_tokens,
             cached_tokens=payload.cached_tokens,
             llm_call_stage=payload.llm_call_stage,
+            idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
         code = str(exc)

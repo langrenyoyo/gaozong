@@ -212,6 +212,7 @@ class ComputeUsageClient:
         completion_tokens: int | None = None,
         cached_tokens: int | None = None,
         llm_call_stage: str | None = None,
+        idempotency_key: str | None = None,
     ) -> bool:
         """上报一次算力消耗。成功返回 True，跳过/失败返回 False，**绝不抛异常**。
 
@@ -256,6 +257,7 @@ class ComputeUsageClient:
             "completion_tokens": completion_tokens,
             "cached_tokens": cached_tokens,
             "llm_call_stage": llm_call_stage,
+            "idempotency_key": idempotency_key,
         }
         req = urllib_request.Request(
             f"{self.config.base_url}{self.USAGE_PATH}",

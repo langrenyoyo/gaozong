@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.models import ComputeAccount, ComputeMarkupRatio, ComputePackage, ComputeTransaction
 from apps.compute.schemas import ComputePackageCreate, ComputePackageUpdate, ComputeRechargeOrderRequest
@@ -143,6 +145,43 @@ def get_or_create_account(
             db.commit()
             db.refresh(account)
     return account
+
+
+def _write_transaction_balance_only(
+    db: Session,
+    account: ComputeAccount,
+    *,
+    delta_tokens: int,
+    capability_key: str | None = None,
+) -> None:
+    """幂等路径专用：已获得 ownership（txn 已 flush），只扣余额不写新流水。
+
+    与 _write_transaction 的区别：不 db.add(tx)（txn 已在调用前 add+flush），
+    只做 balance 更新 + flush。由 record_usage 幂等路径顶层 commit。
+    """
+    locked = (
+        db.query(ComputeAccount)
+        .filter(ComputeAccount.merchant_id == account.merchant_id)
+        .with_for_update()
+        .first()
+    )
+    if locked is None:
+        raise ValueError("COMPUTE_ACCOUNT_MISSING")
+    new_balance = locked.balance_tokens + delta_tokens
+    if not _balance_within_bigint_range(new_balance):
+        raise ValueError("COMPUTE_BALANCE_OUT_OF_RANGE")
+    if new_balance < 0:
+        _logger.warning(
+            "compute stage=negative_balance merchant_id=%s capability=%s "
+            "balance_after=%d delta=%d",
+            locked.merchant_id,
+            capability_key,
+            new_balance,
+            delta_tokens,
+        )
+    locked.balance_tokens = new_balance
+    locked.updated_at = _now()
+    db.flush()
 
 
 def _write_transaction(
@@ -534,6 +573,37 @@ def grant_package_to_merchant(
     return account
 
 
+def _compute_payload_evidence(
+    *,
+    capability_key: str,
+    source: str,
+    model: str,
+    tokens: int,
+    usage_measurement_method: str,
+    llm_call_stage: str | None,
+    agent_id: str | None,
+    conversation_id: int | None,
+) -> str:
+    """计算 stable payload 一致性证据（canonical fingerprint）。
+
+    只含 stable business billing inputs（不含 ratio/billed_amount/pricing）。
+    具体实现留给实施选择，此处用 canonical JSON + SHA-256。
+    """
+    # canonical JSON：key 排序 + separators 消除空白差异
+    stable = {
+        "capability_key": capability_key,
+        "source": source,
+        "model": model,
+        "tokens": int(tokens),
+        "usage_measurement_method": usage_measurement_method,
+        "llm_call_stage": llm_call_stage,
+        "agent_id": agent_id,
+        "conversation_id": conversation_id,
+    }
+    canonical = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def record_usage(
     db: Session,
     merchant_id: str,
@@ -550,14 +620,15 @@ def record_usage(
     completion_tokens: int | None = None,
     cached_tokens: int | None = None,
     llm_call_stage: str | None = None,
-) -> ComputeAccount:
+    idempotency_key: str | None = None,
+) -> ComputeAccount | dict:
     """内部 AI 消耗上报：按能力上浮计费，写 consume 流水（一期不拦截余额，允许负）。
 
-    tokens 是应用上浮前的基础用量；按 capability_key 读取唯一比例行计算计费量，
-    并保存计量方式、供应商明细和调用阶段。旧调用省略计量方式时标记为 legacy_characters。
-    Phase 10 §0.2：账户创建与流水写入只做一次顶层 commit（get_or_create_account +
-    _write_transaction 均 autocommit=False），避免"账户已建、流水未写"半成品；并发首次
-    建账由 get_or_create_account 的 SAVEPOINT + IntegrityError 恢复兜底，失败方不漏记。
+    P1 COMPUTE-IDEMPOTENCY-001：idempotency_key 非空时走幂等路径（ON CONFLICT 原子），
+    返回 dict 含 account + idempotency_status。None 时走旧逻辑（裸扣，可追踪 warning），
+    返回 ComputeAccount（向后兼容）。
+
+    技术方案：docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md
     """
     merchant_id = str(merchant_id or "").strip()
     if not merchant_id:
@@ -596,12 +667,115 @@ def record_usage(
     else:
         base_tokens = tokens
     billed_tokens = calculate_billed_tokens(base_tokens, effective_markup)
+
+    # === P1 幂等路径 ===
+    idempotency_status = "created"  # 默认首次创建
+    if idempotency_key:
+        idempotency_key = str(idempotency_key).strip()
+        payload_evidence = _compute_payload_evidence(
+            capability_key=capability_key,
+            source=source,
+            model=model_name,
+            tokens=tokens,
+            usage_measurement_method=measurement_method,
+            llm_call_stage=normalized_stage,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+        )
+
+        # 尝试 INSERT（跨方言：PG ON CONFLICT / SQLite INSERT OR IGNORE + 查询）
+        tx_candidate = ComputeTransaction(
+            merchant_id=merchant_id,
+            transaction_type=CONSUME_TYPE,
+            delta_tokens=-billed_tokens,
+            balance_after_tokens=0,  # 占位，获得 ownership 后更新
+            source=source,
+            remark=remark,
+            model=model_name,
+            agent_id=agent_id,
+            conversation_id=conversation_id,
+            created_at=_now(),
+            actual_tokens=tokens,
+            capability_key=capability_key,
+            markup_basis_points=effective_markup,
+            usage_measurement_method=measurement_method,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            llm_call_stage=normalized_stage,
+            idempotency_key=idempotency_key,
+            payload_evidence=payload_evidence,
+        )
+        db.add(tx_candidate)
+        try:
+            db.flush()  # 尝试 INSERT
+            # flush 后立即 commit 触发唯一约束检查（SQLite flush 不触发约束，commit 才触发）
+            db.commit()
+            # commit 成功 → 获得 ownership → 扣余额（新事务）
+            account = get_or_create_account(db, merchant_id, autocommit=False)
+            _write_transaction_balance_only(
+                db, account, delta_tokens=-billed_tokens,
+                capability_key=capability_key,
+            )
+            # 更新 balance_after_tokens 到已写入的 txn
+            tx_candidate.balance_after_tokens = account.balance_tokens
+            db.commit()
+            db.refresh(account)
+            return {"account": account, "idempotency_status": "created"}
+        except IntegrityError:
+            # 用 SAVEPOINT 隔离回滚，不破坏已 commit 的外层数据
+            db.rollback()
+            # UNIQUE CONFLICT → 读取已存在 transaction（新 session 上下文）
+            existing = (
+                db.query(ComputeTransaction)
+                .filter(
+                    ComputeTransaction.merchant_id == merchant_id,
+                    ComputeTransaction.idempotency_key == idempotency_key,
+                )
+                .first()
+            )
+            if existing is None:
+                # 理论上不应发生（刚冲突），保守走旧逻辑
+                _logger.warning(
+                    "compute_idempotency stage=conflict_but_not_found merchant_id=%s key=%s",
+                    merchant_id, idempotency_key,
+                )
+            elif existing.payload_evidence == payload_evidence:
+                # Same Key + Same Stable Payload → IDEMPOTENT_REPLAY
+                idempotency_status = "idempotent_replay"
+                account = get_or_create_account(db, merchant_id, autocommit=False)
+                db.commit()
+                _logger.info(
+                    "compute_idempotency stage=replay merchant_id=%s key=%s txn_id=%s",
+                    merchant_id, idempotency_key, existing.id,
+                )
+                return {"account": account, "idempotency_status": "idempotent_replay"}
+            else:
+                # Same Key + Different Stable Payload → IDEMPOTENCY_CONFLICT
+                idempotency_status = "idempotency_conflict"
+                account = get_or_create_account(db, merchant_id, autocommit=False)
+                db.commit()
+                _logger.warning(
+                    "compute_idempotency stage=CONFLICT merchant_id=%s key=%s "
+                    "existing_evidence=%s new_evidence=%s",
+                    merchant_id, idempotency_key,
+                    str(existing.payload_evidence or "")[:16],
+                    payload_evidence[:16],
+                )
+                return {"account": account, "idempotency_status": "idempotency_conflict"}
+
+    # === 旧兼容路径（idempotency_key=None）===
+    if idempotency_key is None:
+        _logger.warning(
+            "compute stage=record_usage_no_idempotency_key merchant_id=%s capability=%s",
+            merchant_id, capability_key,
+        )
     account = get_or_create_account(db, merchant_id, autocommit=False)
     _write_transaction(
         db,
         account,
         transaction_type=CONSUME_TYPE,
-        delta_tokens=-billed_tokens,  # 消耗记为负计费值
+        delta_tokens=-billed_tokens,
         source=source,
         remark=remark,
         model=model_name,
@@ -617,9 +791,9 @@ def record_usage(
         llm_call_stage=normalized_stage,
         autocommit=False,
     )
-    db.commit()  # 顶层一次 commit：账户 + 流水原子持久化（合同）
+    db.commit()
     db.refresh(account)
-    return account
+    return account  # 旧兼容路径返回 ComputeAccount（向后兼容）
 
 
 def list_markup_ratios(db: Session) -> list[ComputeMarkupRatio]:

@@ -937,6 +937,8 @@ class ComputeTransaction(Base):
     __tablename__ = "compute_transactions"
     __table_args__ = (
         Index("idx_compute_transactions_merchant_created", "merchant_id", "created_at"),
+        # P1 COMPUTE-IDEMPOTENCY-001：幂等唯一约束（nullable NULL 不参与约束，兼容阶段1）
+        UniqueConstraint("merchant_id", "idempotency_key", name="uk_compute_transactions_merchant_idempotency"),
         # Phase 10 §0.2 合同：actual_tokens 为空（充值/套餐/历史未知）或正数；markup 快照为空或非负
         CheckConstraint(
             "actual_tokens IS NULL OR actual_tokens > 0",
@@ -991,6 +993,9 @@ class ComputeTransaction(Base):
     completion_tokens = Column(BigInteger, nullable=True, comment="供应商输出 Token")
     cached_tokens = Column(BigInteger, nullable=True, comment="供应商缓存命中 Token")
     llm_call_stage = Column(String(32), nullable=True, comment="模型调用阶段")
+    # P1 COMPUTE-IDEMPOTENCY-001：幂等基础设施（阶段1可选，None 走旧逻辑）
+    idempotency_key = Column(String(255), nullable=True, comment="幂等身份（None 走旧逻辑裸扣）")
+    payload_evidence = Column(Text, nullable=True, comment="幂等 payload 一致性证据（stable inputs canonical fingerprint）")
 
 
 class ComputePackage(Base):

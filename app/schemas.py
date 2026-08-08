@@ -1400,6 +1400,8 @@ class ComputeUsageRequest(BaseModel):
     llm_call_stage: Optional[
         Literal["primary", "retry_known_customer", "retry_phone_goal", "retry_combined"]
     ] = None
+    # P1 COMPUTE-IDEMPOTENCY-001：幂等身份（阶段1可选，None 走旧逻辑）
+    idempotency_key: Optional[str] = Field(None, max_length=255, description="幂等身份（None 走旧逻辑裸扣）")
 
     @field_validator("merchant_id")
     @classmethod
