@@ -466,13 +466,40 @@ def _embed_with_usage(
     text: str,
     merchant_id: str | None,
     remark: str | None = None,
+    run_id: int | None = None,
+    document_id: int | None = None,
+    chunk_index: int | None = None,
 ) -> dict:
     """Phase 10 §0.2：统一 embedding 调用 + 字符计量上报；mock_for_test_only 跳过上报。
 
     所有训练 ingest 与查询 embedding 必须经此 helper；返回 embed 原始 payload，兼容既有读取。
     真实 embedding 按 count_embedding_characters 计量、capability=knowledge、source=embedding；
     mock 分支（model=mock_for_test_only，未配置真实 Ark）不计费。
+
+    P1 Stage 5E-3：Ingest chunk embedding 幂等身份构造（partial identity 三态，D5）：
+    - run_id / document_id / chunk_index ALL PRESENT → 构造 ingest idempotency_key
+    - ALL ABSENT → non-Ingest / Query legacy path（key=None，独立 #10a Charge Path 不合并）
+    - PARTIAL → identity contract violation → 显式 warning 诊断 + 不构造畸形 key（不静默退 None）
+    chunk_hash 不进 billing key（P3，保持 semantic evidence）。billing truth 只归 M07。
     """
+    # P1 Stage 5E-3：partial identity 三态判定（D5）
+    identity_args = [run_id, document_id, chunk_index]
+    present_count = sum(1 for v in identity_args if v is not None)
+    if present_count == 3:
+        # ALL PRESENT → Ingest 正式路径，构造 key
+        idempotency_key = f"rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest"
+    elif present_count == 0:
+        # ALL ABSENT → Query legacy / 旧调用，不构造 key
+        idempotency_key = None
+    else:
+        # PARTIAL → identity contract violation，显式 warning 不构造畸形 key
+        _logger.warning(
+            "rag_embed stage=partial_identity_violation run_id=%s document_id=%s chunk_index=%s "
+            "remark=%s（不构造畸形 idempotency_key，退 None）",
+            run_id, document_id, chunk_index, remark,
+        )
+        idempotency_key = None
+
     result = client.embed(text)
     model = str(result.get("model") or result.get("embedding_provider") or "")
     if model and model != "mock_for_test_only" and merchant_id:
@@ -487,6 +514,7 @@ def _embed_with_usage(
                 remark=remark,
                 usage_measurement_method="estimated_tokens",
                 llm_call_stage=None,
+                idempotency_key=idempotency_key,
             )
         except Exception as exc:  # noqa: BLE001  上报失败绝不影响 RAG 主流程
             _logger.warning("rag_embed stage=compute_report_error error=%s", exc)
@@ -528,6 +556,9 @@ def train_document(
             ),
             document_id=document_id,
         )
+        # P1 Stage 5E-3：选项 A durable boundary（RI-0）——run_id 在首次 embedding/计费前
+        # 显式 commit 持久化，满足 P1 硬约束：Business Event Identity 必须在收费副作用前稳定持久。
+        conn.commit()
         chunk_count = 0
         milvus_chunks: list[dict] = []
         try:
@@ -546,6 +577,7 @@ def train_document(
                 embedding = _embed_with_usage(
                     client=client, text=chunk, merchant_id=merchant_id,
                     remark="knowledge_training_ingest",
+                    run_id=run_id, document_id=doc["id"], chunk_index=index,
                 )
                 conn.execute(
                     text(
@@ -635,18 +667,29 @@ def train_document(
                 "chunk_count": chunk_count,
             }
         except Exception as exc:
-            conn.execute(
-                text(
-                    """
-                    UPDATE rag_training_runs
-                    SET status = 'failed', document_count = 1, chunk_count = :chunk_count,
-                        error = :error, finished_at = CURRENT_TIMESTAMP
-                    WHERE id = :run_id
-                    """
-                ),
-                {"chunk_count": chunk_count, "error": _error_summary(exc), "run_id": run_id},
-            )
-            conn.commit()
+            # P1 Stage 5E-3 REQUIRED-1：run 行已 durable commit（选项 A），后续工作事务可能因
+            # SQL 错误进入 aborted state，现有 except 的 UPDATE+commit 可能失败。
+            # 必须 rollback 失败工作事务 → fresh transaction → UPDATE durable Run→failed → commit。
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with get_rag_engine().connect() as fresh_conn:
+                    fresh_conn.execute(
+                        text(
+                            """
+                            UPDATE rag_training_runs
+                            SET status = 'failed', document_count = 1, chunk_count = :chunk_count,
+                                error = :error, finished_at = CURRENT_TIMESTAMP
+                            WHERE id = :run_id
+                            """
+                        ),
+                        {"chunk_count": chunk_count, "error": _error_summary(exc), "run_id": run_id},
+                    )
+                    fresh_conn.commit()
+            except Exception as finalize_exc:  # noqa: BLE001
+                _logger.warning("rag_train_document stage=finalize_failed error=%s", finalize_exc)
             raise
 
 
@@ -654,6 +697,9 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
     client = llm_client or OpenAICompatibleClient()
     with get_rag_engine().connect() as conn:
         run_id = _create_training_run(conn, payload)
+        # P1 Stage 5E-3：选项 A durable boundary（RI-0）——run_id 在首次 embedding/计费前
+        # 显式 commit 持久化，满足 P1 硬约束：Business Event Identity 必须在收费副作用前稳定持久。
+        conn.commit()
         docs = conn.execute(
             text(
                 """
@@ -692,6 +738,7 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                     embedding = _embed_with_usage(
                         client=client, text=chunk, merchant_id=payload.merchant_id,
                         remark="knowledge_training_ingest",
+                        run_id=run_id, document_id=doc["id"], chunk_index=index,
                     )
                     conn.execute(
                         text(
@@ -774,23 +821,34 @@ def train_scope(payload: RagTrainRequest, llm_client: OpenAICompatibleClient | N
                 "chunk_count": chunk_count,
             }
         except Exception as exc:
-            conn.execute(
-                text(
-                    """
-                    UPDATE rag_training_runs
-                    SET status = 'failed', document_count = :document_count,
-                        chunk_count = :chunk_count, error = :error, finished_at = CURRENT_TIMESTAMP
-                    WHERE id = :run_id
-                    """
-                ),
-                {
-                    "document_count": len(docs),
-                    "chunk_count": chunk_count,
-                    "error": _error_summary(exc),
-                    "run_id": run_id,
-                },
-            )
-            conn.commit()
+            # P1 Stage 5E-3 REQUIRED-1：run 行已 durable commit（选项 A），后续工作事务可能因
+            # SQL 错误进入 aborted state，现有 except 的 UPDATE+commit 可能失败。
+            # 必须 rollback 失败工作事务 → fresh transaction → UPDATE durable Run→failed → commit。
+            try:
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with get_rag_engine().connect() as fresh_conn:
+                    fresh_conn.execute(
+                        text(
+                            """
+                            UPDATE rag_training_runs
+                            SET status = 'failed', document_count = :document_count,
+                                chunk_count = :chunk_count, error = :error, finished_at = CURRENT_TIMESTAMP
+                            WHERE id = :run_id
+                            """
+                        ),
+                        {
+                            "document_count": len(docs),
+                            "chunk_count": chunk_count,
+                            "error": _error_summary(exc),
+                            "run_id": run_id,
+                        },
+                    )
+                    fresh_conn.commit()
+            except Exception as finalize_exc:  # noqa: BLE001
+                _logger.warning("rag_train_scope stage=finalize_failed error=%s", finalize_exc)
             raise
 
 
