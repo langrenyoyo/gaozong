@@ -431,7 +431,7 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 7 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置 | training_id 在 _report_usage 之后才生成+commit | DESIGN_GAP | None | ⏸ 需 training_id 前置 |
 | 8 | RAG Embedding | `rag/repository.py:481` | ACTIVE | 无 per-embedding identity | 每 chunk 一次 embedding API；3 个调用点（search/ingest×2）；无持久 per-embedding execution entity | DESIGN_GAP | None | ⏸ 需 per-embedding identity 设计 |
 | 9 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
-| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportJob.id + report_day | DailyReportJob 有 UniqueConstraint(merchant_id, report_day, report_type, report_variant)；但 _report_usage 在 9100 侧，无 DailyReportJob.id 透传 | CANDIDATE_IDENTITY_FOUND / LIFECYCLE_VERIFICATION_REQUIRED | None | ⏸ LIFECYCLE_VERIFICATION_REQUIRED |
+| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportJob.id（parent，1:N） | DailyReportJob 有 UniqueConstraint；job.id 前置持久化且 retry 复用；但 1 Job : N 次合法生成（regenerate），job.id 只能做 parent；无持久化 generation/attempt 维度（generation_token 是临时租约令牌，生成后清空） | DESIGN_GAP（结论 B：parent identity 已找到，差 generation 维度 + 9000→9100 透传） | None | ⏸ 需持久化 generation_attempt + 9000→9100 透传 |
 
 ### Stage 5B 身份验真详情
 
@@ -454,13 +454,40 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 - **结论**：**IDENTITY_VERIFIED — MIGRATED**（Stage 5C-1）
 - **迁移实现**：9000 `_judge_via_9100` 传 `return_visit_run_id=run.id`（claim 前 commit 持久化快照）→ 9100 `ReturnVisitJudgeRequest.return_visit_run_id` → `_report_usage` 构造 `return_visit_run:{run_id}:judge`。getattr 兼容测试双打（与 M01 `_report_llm_usage` run_id/attempt_count 同模式）。
 
-#### Daily Report Summary（CANDIDATE_IDENTITY_FOUND / LIFECYCLE_VERIFICATION_REQUIRED）
+#### Daily Report Summary（Stage 5C-2 验真：结论 B — 1:N，Job 是 parent）
 
-- **触发动作**：`summarize_daily_sales_feedback`（`daily_report_summary_service.py:163`）→ `_report_usage`
-- **持久实体**：`DailyReportJob` 有 `UniqueConstraint(merchant_id, report_day, report_type, report_variant)`，但 `_report_usage` 在 9100 侧不透传 DailyReportJob.id
-- **同一商户同一天**：`report_day` 不唯一（可人工重新生成/补跑/失败重试），但 DailyReportJob.id 唯一
-- **结论**：DailyReportJob.id 是**候选身份**（持久 + UNIQUE 存在），但需验真其生命周期语义（重跑/补跑是新建行还是复用既有行；复用则 id 不变会误去重合法补跑）→ **CANDIDATE_IDENTITY_FOUND / LIFECYCLE_VERIFICATION_REQUIRED**（非纯 DESIGN_GAP：identity 候选已存在，只差生命周期验真 + 9000→9100 透传）
-- **设计方向**：先验真 DailyReportJob 生命周期（重跑是否新建行），再 9000→9100 透传 `report_job_id`（类似 M01 Stage 4B）
+**验真问题与证据（file:line）：**
+
+**Q1：DailyReportJob.id 是否在 summary LLM 调用前稳定持久化？**
+- 三阶段生成（`daily_report_job_service.py:315 generate_one`）：阶段一 `_get_or_create_job`（`:176`）create-or-get + `_claim_generating`（`:202`，`db.commit()` at `:220`）→ 阶段二事务外 `_build_daily_report` → 调 9100 summary（`daily_report_service.py:574`）
+- **Q1 答**：✅ 是。`_claim_generating` 在 `_post_json` 调用 9100 前已 `db.commit()`（`:220`），job.id 已持久化。满足前置持久化条件。
+
+**Q2：Retry 是否复用 Job.id？**
+- `_get_or_create_job`（`:176-199`）按 `(merchant_id, report_day, report_type, report_variant)` 查 existing，存在则返回既有行（`:184-185`）。`UniqueConstraint("merchant_id","report_day","report_type","report_variant")`（`models.py:1280`）阻止同键新建。
+- 任何 retry/regenerate（`regenerate_job` `:400` → `generate_one` `:415`）走同一 `_get_or_create_job`，**复用同一 job.id**（不变）。
+- **Q2 答**：✅ 是。所有 retry/regenerate 复用 same job.id；UniqueConstraint 阻止同键新建。
+
+**Q3：一个 Job 是否可能合法收费多次？**
+- regenerate 语义：同一 Job 生命周期内，summary LLM 可被合法调用多次（first generate + 失败后 regenerate + 日常重新生成）。每次都是真实合法 LLM 消费（`summarize_daily_sales_feedback` 每次都调 `_report_usage` `:193`）。
+- 若用 `daily_report_job:{job.id}:summary`，则 regenerate（同 job.id）会被误去重为 replay，**漏扣合法重新生成的 LLM 消费**。
+- **Q3 答**：✅ 是。1 Job : N 次合法 summary 计费事件。job.id 只能做 parent identity，不能做 chargeable event identity。
+
+**Q4：合法重新生成是更新同一 Job 还是新建？**
+- `_get_or_create_job` 复用同一行（`:184-185`）；`_finalize_success`/`_finalize_failure` 是条件 UPDATE（按 `job_id + generation_token`，`:236-251`/`:271-281`），**不新建行**。
+- 每次生成有独立 `generation_token`（`secrets.token_hex(16)`，`:204`），但生成结束即清空（finalize 后置 None，`:247`/`:278`）→ **generation_token 是租约令牌不是持久化身份**，生成后丢失，不可做幂等维度。
+- **无持久化 generation/attempt/version 字段**：DailyReportJob 字段（`models.py:1288+`）只有 id/merchant_id/report_day/report_type/report_variant/status/file_*/generated_at 等，无 attempt_count 或 generation 序号。`generation_version`（`:218`）是固定常量 `"daily_report_v1"`（`:68`），非 per-execution identity。
+- **Q4 答**：复用同一 Job（不新建）。无持久化 generation 维度，无法区分同 job 的多次合法生成。
+
+**结论 B：1:N（Job 是 parent，多个合法 generation）**
+
+- DailyReportJob.id 满足 Q1（前置持久化）+ Q2（retry 复用），但 **Q3 判定它是 parent 不是 chargeable event**——一个 Job 生命周期内可被合法收费 N 次（regenerate/重试），job.id 单独做 key 会误去重。
+- 需 generation 维度身份才能安全迁移（类似 M01 的 attempt_count），但当前**无持久化 generation/attempt 字段**（generation_token 是临时租约令牌，生成后清空）。
+- **当前迁移状态：DESIGN_GAP（等价 Stage 5C-2 前），但身份候选已找到（job.id 作 parent），只差 generation 维度**
+- **设计方向（不实施）**：
+  1. 引入持久化 `generation_attempt` 字段（每次 `_claim_generating` 递增，finalize 保留不清空），或
+  2. 用独立 `daily_report_generation` 子表记录每次生成（job_id + attempt + started_at + 持久化 token）
+  3. 迁移 key 形态：`daily_report_job:{job.id}:{attempt}:summary`（类比 M01 `ai_auto_reply_run:{run_id}:{attempt_count}:{stage}`）
+- **跨进程透传**：除 generation 维度外，还需 9000→9100 透传（payload `daily_report_service.py:555` 当前只含 merchant_id/report_day/summaries，不含 job_id → 需加 report_job_id + generation_attempt，类似 M01 Stage 4B）
 
 #### M05 Material Analysis（DESIGN_GAP — 已确认）
 
