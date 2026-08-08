@@ -459,7 +459,7 @@ PG Closure Gate 最终结果为以下三态之一：
 | 6 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
 | 7 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 Preview execution identity 设计（POLICY_PENDING 不停止 identity 设计，现在就应设计） |
 | 8 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ NOT MIGRATED；方向：不破坏共享行模型新增 per-execution 层（不称"永续"） |
-| 9 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置（候选 key `knowledge_training:{training_id}:ask`） | training_id 在 _report_usage 之后才生成+commit | CANDIDATE_IDENTITY_VERIFIED / LIFECYCLE_ORDERING_CHANGE_REQUIRED / TECHNICAL_DESIGN_AUTHORIZED | None | ⏸ 不升级 READY_TO_MIGRATE，等 5D-1 钉死 retry cardinality |
+| 9 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | candidate: pre-persisted Training Ask Execution（不写 `knowledge_training:{training_id}:ask`，因 training_id 在 charge 后才生成，方案 A/B 未定） | training_id 在 charge 后才生成，不可作 billing identity；candidate future persistent ask identity → 1:1 charge cardinality | CANDIDATE_EXECUTION_IDENTITY_MODEL_VERIFIED | None | ⏸ TECHNICAL_DESIGN_IN_PROGRESS（方案 A/B 待 5D-1 比较） |
 | 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
 | 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | 无 stable per-chunk execution discriminator | Parent: Training Run.id VERIFIED（embedding 前持久化）；1 Run : N chunk charges；缺 per-chunk discriminator（same chunk retry→same id / different chunk→different id / new run→different id） | CHILD_EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 per-chunk identity 设计（不预设必须 embedding 前 INSERT chunk row，先检查更小稳定 discriminator：run_id + document identity + deterministic chunk ordinal/hash） |
 
@@ -559,12 +559,13 @@ PG Closure Gate 最终结果为以下三态之一：
 - **设计方向**：不破坏共享行模型，新增 per-execution 层（不称"永续"）；可新建 AiEditMaterialAnalysis 行而非更新（version 递增），或引入 analysis_execution_id
 - **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
-#### Training（#9 — CANDIDATE_IDENTITY_VERIFIED / LIFECYCLE_ORDERING_CHANGE_REQUIRED / TECHNICAL_DESIGN_AUTHORIZED）
+#### Training（#9 — CANDIDATE_EXECUTION_IDENTITY_MODEL_VERIFIED / TECHNICAL_DESIGN_IN_PROGRESS）
 
-- 候选 key：`knowledge_training:{training_id}:ask`
-- `training_id` 在 `_build_answer`（含 `_report_usage`）之后才生成+commit → 候选 identity 已验证但生命周期顺序需调整（前置 training_id 生成）
-- **不升级 READY_TO_MIGRATE**：等 Stage 5D-1 钉死 retry cardinality
-- **设计方向**：将 training_id 生成提前到 `_build_answer` 前
+- **Current candidate**：pre-persisted Training Ask Execution（**不写** `knowledge_training:{training_id}:ask`，因 training_id 在 charge 后才生成，且方案 A/B 未定）
+- **Current business session training_id**：generated too late for billing identity（`ask` L120 生成，charge L539 在 `_build_answer` 内，L120 在 L539 之后）
+- **Blocker**：execution/session lifecycle design（方案 A 提前创建现有 Session vs 方案 B 独立 Execution 实体，待 5D-1 设计比较）
+- **Migration**：TECHNICAL_DESIGN_IN_PROGRESS（不升级 READY_TO_MIGRATE）
+- **设计方向**：见 `docs/architecture/remediation/P1_TRAINING_IDENTITY_LIFECYCLE_DESIGN.md`（Stage 5D-1，倾向方案 B）
 - **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
 #### Preview（#7 — CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP）
