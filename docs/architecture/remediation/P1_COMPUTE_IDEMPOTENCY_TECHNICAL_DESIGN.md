@@ -1,6 +1,6 @@
 # P1 COMPUTE-IDEMPOTENCY-001 技术方案设计
 
-> 状态：TECHNICAL_DESIGN_PENDING_APPROVAL（只设计不实施）
+> 状态：TECHNICAL_DESIGN_APPROVED + IMPLEMENTATION_SCOPE_READY（只设计不实施）
 > 代码基线：c26ec227e70d
 > 风险等级：HIGH — FINANCIAL_INTEGRITY
 > E2E 证据：Gate A（balance delta = 2 × charge）+ Gate F（M04 double charge E2E_VERIFIED_IMPACTED）
@@ -41,13 +41,22 @@
 | M02 | webhook event charge | WebhookEvent.id + operation | 必须 | 按事实 | 1:1 |
 | M05 | Material analysis | Material.id + analysis_version | 必须 | re-analysis 是新事件 | 1:N |
 
-### M01 LLM 特殊处理
+### M01 LLM Business Event Identity 正式标注
+
+```
+STATUS: DESIGN_OPEN_ITEM
+Candidate: AiAutoReplyRun.id
+Requirement: 必须在迁移 M01 consumer 之前用 Current Reality 事实确认：
+  一个 AiAutoReplyRun 到底是否唯一对应一次 chargeable LLM event
+不阻止 P1 开始实施，但限制实施范围：
+  M01 不能在 identity 未确认时迁移
+```
 
 > **从正式方案中删除 `llm_call:{conversation_id}:{call_count}`**（运行时计算序号不稳定，进程重启/重试后无法复用）。
 >
 > 替换为需绑定持久化 run/event ID 的设计方向。
 >
-> **标注"待确认 AiAutoReplyRun.id 是否可作为 LLM usage 的稳定 event identity"**：
+> 待确认项：
 > - 如果 AiAutoReplyRun 每次 LLM 调用都有独立行 → `ai_auto_reply_run:{run.id}` 可用
 > - 如果一个 run 内有 retry（多次 LLM 调用）→ 需确认 retry 是否产生新 run 行或需子序号
 > - 如果是 preview（非 auto-reply run）→ 需确认是否有持久化实体可绑定
@@ -140,12 +149,37 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
   4. COMMIT
 ```
 
-### Idempotency Payload Consistency Contract（REQUIRED-2）
+### Idempotency Payload Consistency Contract（REQUIRED-2 + 最终修正）
+
+#### 应参与一致性判断（stable business billing inputs）
+
+- `capability_key` / charge type
+- model identity（如果该消费按 model 区分）
+- raw usage quantity（tokens）
+- usage unit/type（usage_measurement_method）
+- consumer-defined business operation（event_namespace + business_event_id 的语义等价性）
+
+> 具体按现有 `record_usage` 合同填写。
+
+#### 不应参与一致性判断（mutable/derived pricing state）
+
+- 计费比例（ratio / basis_points）
+- 重新计算后的 billed amount
+- 当前配置变化后的价格
+
+#### 核心原则
+
+> **Idempotency payload consistency 应比较稳定的业务事件输入，不是 retry 时基于当前配置重新计算的可变派生价格。**
+>
+> 首次交易成功后，duplicate replay 返回原 transaction + 原 billed amount + 原 balance_after。
+> **不重新定价。**
+
+#### 行为冻结
 
 | 场景 | 行为 |
 |---|---|
-| Same Key + Same Semantic Billing Payload | **IDEMPOTENT REPLAY**（返回原结果，不扣费） |
-| Same Key + Different Semantic Billing Payload | **IDEMPOTENCY_CONFLICT**（不扣费，不覆盖原流水，记录异常/告警） |
+| Same Key + Same Stable Business Billing Inputs | **IDEMPOTENT_REPLAY**（即使 pricing config 已变化） |
+| Same Key + Different Stable Business Billing Inputs | **IDEMPOTENCY_CONFLICT**（不扣费，不覆盖原流水，记录异常/告警） |
 
 > 具体 payload fingerprint 比较留给实施设计，但行为现在冻结。
 
@@ -262,6 +296,7 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 9 Old consumer (idempotency_key=None) | 阶段 1 兼容 | 旧逻辑不报错（无去重） |
 | **10** | **Same Key + Different Payload** | **不二次扣费 / 不覆盖原流水 / 报告 IDEMPOTENCY_CONFLICT** |
 | **11** | **Same Context + Two Legitimate Events** | **two keys / two transactions / two legitimate charges** |
+| **12** | **Retry After Pricing Configuration Change** | business event E1 usage=100 price V1 → charge 100 → commit；修改计费比例到 V2；同 E1 retry → **仍 IDEMPOTENT_REPLAY** / transactions 仍 1 条 / balance 不再变化 / 返回第一次结果 / 不二次扣费 / 不报 IDEMPOTENCY_CONFLICT |
 
 ### P1 CLOSURE MANDATORY GATE（REQUIRED-6）
 
@@ -349,8 +384,8 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | A. 一次消费的业务身份 | consumer 侧持久化业务实体 ID；M01 LLM 待确认 AiAutoReplyRun.id；运行时序号不可用 |
 | B. 幂等键由谁生成 | Consumer 生成 `idempotency_key = f"{event_namespace}:{business_event_id}"`；event_namespace 稳定不随 source 变 |
 | C. 幂等作用域 | `UniqueConstraint(merchant_id, idempotency_key)` |
-| D. DB 原子性 | ON CONFLICT DO NOTHING RETURNING 获得 ownership → 只有 owner 扣余额；Same Key + Different Payload = IDEMPOTENCY_CONFLICT |
-| E. 重复调用返回什么 | 200 + 原交易结果；内部区分 created vs idempotent_replay |
+| D. DB 原子性 | ON CONFLICT DO NOTHING RETURNING 获得 ownership → 只有 owner 扣余额；Same Key + Same Stable Inputs = IDEMPOTENT_REPLAY（不重新定价）；Same Key + Different Stable Inputs = IDEMPOTENCY_CONFLICT |
+| E. 重复调用返回什么 | 200 + 原交易结果（原 billed amount + 原 balance_after，不重新定价）；内部区分 created vs idempotent_replay |
 | F. 失败边界 | 只有获得 ownership 的事务才扣余额；commit 失败回滚可重试；commit 成功 retry 幂等 |
 | G. 老消费者兼容 | 阶段 1 可选（None 可追踪）→ 阶段 2 逐个迁移 → 阶段 3 必填（None=0 closure gate） |
-| H. 回归验收 | 11 个 Acceptance Gate + PG Concurrent Mandatory Gate + 防误去重 + Payload Consistency |
+| H. 回归验收 | 12 个 Acceptance Gate + PG Concurrent Mandatory Gate + 防误去重 + Payload Consistency + Retry After Pricing Change |
