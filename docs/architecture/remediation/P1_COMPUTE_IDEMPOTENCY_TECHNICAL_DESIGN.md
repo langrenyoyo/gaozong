@@ -458,14 +458,14 @@ PG Closure Gate 最终结果为以下三态之一：
 | 5 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
 | 6 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
 | 7 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 Preview execution identity 设计（POLICY_PENDING 不停止 identity 设计，现在就应设计） |
-| 8 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ NOT MIGRATED；方向：不破坏共享行模型新增 per-execution 层（不称"永续"） |
+| 8 | M05 Material Analysis | `material_analysis.py:89` | ACTIVE | AiEditMaterialAnalysisExecution.id（独立 billing identity，方案 B） | execution 在 ark call 前 durable commit（MA-0）；ark 成功立即 COMPLETED 先于 usage report（C1 红线）；Analysis 表不变（按 source_sha256 复用，result model only）；1:1（YAGNI 不引入 attempt_count）；不激活 dormant Process 表 | IDENTITY_VERIFIED | `material_analysis_execution:{execution_id}:ark_analysis` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5F-3） |
 | 9 | Training Knowledge | `knowledge_training_service.py:539` | ACTIVE | KnowledgeTrainingExecution.execution_id（独立 billing identity，方案 B） | execution_id 复用 request_id（kt-req-{uuid4}），在 RAG search 前 commit（charge 点前持久）；1:1 cardinality（1 execution : 1 ask charge，YAGNI 不引入 attempt_count）；billing-report replay only（full-request response-lost 登记 TRAINING_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `knowledge_training_execution:{execution_id}:ask` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5D-2） |
 | 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
 | 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | KnowledgeTrainingRun.id + document_id + chunk_index（child discriminator） | Parent: Training Run.id VERIFIED + 选项 A durable commit（embedding 前持久化）；1 Run : N chunk charges；child = document_id + deterministic chunk_index（embedding 前 enumerate 可得）；chunk_hash 不进 billing key（P3，保持 semantic evidence）；partial identity 三态（D5）；billing-report replay only（full-request response-lost 登记 RAG_INGEST_RUN/REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5E-3） |
 
-**汇总：8/11 MIGRATED / 3/11 OPEN（#7 Preview / #8 M05 / #10a RAG Query）。**
+**汇总：9/11 MIGRATED / 2/11 OPEN（#7 Preview / #10a RAG Query）。**
 
-> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：所有 3 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
+> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：所有 2 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
 
 ### Stage 5B 身份验真详情
 
@@ -565,12 +565,28 @@ PG Closure Gate 最终结果为以下三态之一：
 > - **DAILY_REPORT_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：full 9000→9100 request response-lost（9100 已完成 LLM + M07 已 commit ComputeTransaction，但 9000 未收到 HTTP 响应 → 重跑 LLM 可能产生不同 usage）。M07 行为 = same Generation key + different payload → IDEMPOTENCY_CONFLICT（正确，不重复扣费，发出警报）。
 > - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级响应丢失可靠性差距。不得把 DAILY_REPORT_REQUEST_RECOVERY_GAP 并入 P1 consumer 迁移状态，也不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN——该 Gap 属可靠性范畴（OUT_OF_P1），由独立可靠性工作流处理，P1 不虚假宣称已解决跨进程请求级幂等。
 
-#### M05 Material Analysis（#8 — EXECUTION_IDENTITY_DESIGN_GAP / NOT MIGRATED）
+#### M05 Material Analysis（#8 — IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，Stage 5F-3）
 
-- `ark_v1` 固定分析器版本；re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变）
-- 无 per-execution identity（Analysis.id 是行 id 不是执行 id；AiEditMaterialProcess 表有 attempt_count 但用于处理状态不是计费身份）
-- **设计方向**：不破坏共享行模型，新增 per-execution 层（不称"永续"）；可新建 AiEditMaterialAnalysis 行而非更新（version 递增），或引入 analysis_execution_id
-- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
+**Stage 5F-2 设计结论（方案 B 冻结 APPROVED）：**
+- 见 `docs/architecture/remediation/P1_M05_IDENTITY_LIFECYCLE_DESIGN.md`：方案 B（新建 AiEditMaterialAnalysisExecution）优于方案 A（激活 dormant AiEditMaterialProcess 五阶段表，语义不一致产生概念债务）
+
+**Stage 5F-3 迁移实施（MIGRATED）：**
+- **方案 B 冻结**：新建 `AiEditMaterialAnalysisExecution` 独立持久实体（`models.py`），与 KnowledgeTrainingExecution / DailyReportGeneration / RAG Ingest 同构
+- **Identity 合同（冻结为最终 contract）**：`material_analysis_execution:{execution_id}:ark_analysis`
+- **execution 在 ark call 前 durable commit**（MA-0，合同 1）：满足 Business Event Identity 在收费副作用前稳定持久存在
+- **C1 红线**：ark 成功 → execution 立即 finalize COMPLETED（**先于 usage report**）；usage report 失败不降级 Execution、不重跑 Ark（Ark 已成功的 Execution 不得仅因 usage reporting 失败重新执行）；ark 失败 → Execution=FAILED（不计费）
+- **lifecycle 三态**：running / completed / failed
+- **Analysis 表不变**：按 source_sha256 复用（result model only，合同 5），不影响 billing identity
+- **不激活 dormant Process 表**（方案 B preferred）；**不引入 attempt_count**（YAGNI 1:1）
+- **7 Gate PASS**：MA-0~MA-6（见 `tests/test_material_analysis_compute_idempotency_migration.py`），含 MA-5 关键 Gate（ark success + usage report failure → COMPLETED 不降级 / retry same E4 最多 1 committed txn）
+- **migration**：`0033_material_analysis_executions.py`（revision 0033，down_revision 0032，backward-compatible）
+
+> **PENDING_PG_VERIFICATION（Stage 5F-3，PG migration 0033）**：M05 functional migration COMPLETE / idempotency contract MIGRATED_AND_VERIFIED，但 PostgreSQL schema application（0033）仍未验证（BLOCKED_BY_SCHEMA_BASELINE_MISMATCH，未验证不得 deploy）。Closure 前必须验证 `alembic upgrade 0032 → 0033` + `ai_edit_material_analysis_executions` 表 + `ck_ai_edit_material_analysis_executions_status` CHECK + 索引 + normal create/finalize lifecycle 在 PG 可运行。**SQLite evidence ≠ PostgreSQL evidence**。
+
+> **Reliability Gap 分离登记（防根因混淆）**：
+> - M05 charge path consumer 迁移状态 = **IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED**（P1 财务幂等职责已完成）。
+> - **M05_ANALYSIS_USAGE_REPORT_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：Ark completed → usage report failed/response-lost → 无自动 billing-report recovery。★ same Execution usage report replay → P1 保护（同 key → IDEMPOTENT_REPLAY）；★ 但不保证失败的 usage report 一定被自动重试。
+> - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ usage report 自动恢复可靠性差距。不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN。
 
 #### Training（#9 — IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，Stage 5D-2）
 

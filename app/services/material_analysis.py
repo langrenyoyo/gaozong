@@ -23,7 +23,7 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
     失败不抛异常（后台任务），仅记日志 + 设 analysis_status=failed。
     """
     from app.database import SessionLocal
-    from app.models import AiEditMaterial, AiEditMaterialAnalysis
+    from app.models import AiEditMaterial, AiEditMaterialAnalysis, AiEditMaterialAnalysisExecution
 
     ark_api_key = os.getenv("ARK_API_KEY", "").strip()
     if not ark_api_key:
@@ -41,9 +41,21 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
         material.analysis_status = "analyzing"
         db.commit()
 
+        # P1 Stage 5F-3：execution 在 ark 外部 API 调用前 durable commit（MA-0，合同 1）。
+        # execution_id 是 billing identity 来源，先于 ark 计费副作用持久化。
+        execution = AiEditMaterialAnalysisExecution(
+            material_id=str(material_id), source_sha256=material.source_sha256,
+            lifecycle_status="running",
+        )
+        db.add(execution)
+        db.commit()  # durable before ark
+
         # 调方舟多模态分析
         result = _analyze_via_ark(presigned_url, ark_api_key)
         if result is None:
+            # C1：ark 失败 → Execution=FAILED（不计费）
+            execution.lifecycle_status = "failed"
+            db.commit()
             material.analysis_status = "failed"
             db.commit()
             logger.warning("material_analysis_failed material_id=%s reason=ark_analysis_error", material_id)
@@ -54,7 +66,7 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
         category = "口播" if has_speech else "高光"
         material.category = category
 
-        # 写/更新 AiEditMaterialAnalysis
+        # 写/更新 AiEditMaterialAnalysis（shared result，按 source_sha256 复用，不变）
         analysis = (
             db.query(AiEditMaterialAnalysis)
             .filter(AiEditMaterialAnalysis.source_sha256 == material.source_sha256)
@@ -83,14 +95,20 @@ def analyze_material_async(material_id: int, presigned_url: str) -> None:
             analysis.analysis_version = "ark_v1"
 
         material.analysis_status = "analyzed"
+        # ★ C1 红线：Ark 成功 → Execution 立即 finalize COMPLETED（先于 usage report）。
+        # usage report 失败不降级 Execution、不重跑 Ark（Ark 已成功的 Execution 不得仅因
+        # usage reporting 失败重新执行）。
+        execution.lifecycle_status = "completed"
         db.commit()
 
-        # 算力上报：方舟多模态分析消耗 LLM token，归类 ai_edit
+        # 算力上报：方舟多模态分析消耗 LLM token，归类 ai_edit。
+        # usage report 失败由 _report_analysis_usage 内部 catch，不影响 execution COMPLETED 状态。
         _report_analysis_usage(
             db,
             merchant_id=material.merchant_id,
             prompt_tokens=result.get("_prompt_tokens"),
             completion_tokens=result.get("_completion_tokens"),
+            execution_id=execution.id,
         )
         logger.info(
             "material_analysis_done material_id=%s category=%s has_speech=%s",
@@ -232,14 +250,25 @@ def _report_analysis_usage(
     merchant_id: str | None,
     prompt_tokens: int | None,
     completion_tokens: int | None,
+    execution_id: int | None = None,
 ) -> None:
     """素材分析成功后上报算力消耗（capability_key=ai_edit，归类 AI剪辑）。
 
     按 prompt+completion token 总和计费；方舟未返回 usage 时按估算（prompt 字符数÷2）。
     上报失败不阻断分析流程。
+
+    P1 Stage 5F-3：构造幂等键（身份来自前置持久化的 AiEditMaterialAnalysisExecution.id）。
+    execution_id 非空 → 构造 key；None → 兼容路径（旧调用/测试双打，无 key）。
+    billing truth 只归 M07 committed ComputeTransaction，execution 无 is_billed。
     """
     if not merchant_id:
         return
+    # P1 Stage 5F-3：execution_id 非空 → 构造幂等键（非 conversation/时间戳推导）
+    idempotency_key = (
+        f"material_analysis_execution:{execution_id}:ark_analysis"
+        if execution_id is not None
+        else None
+    )
     # 优先用方舟返回的真实 token；缺失时估算
     pt = int(prompt_tokens) if prompt_tokens else 0
     ct = int(completion_tokens) if completion_tokens else 0
@@ -261,9 +290,7 @@ def _report_analysis_usage(
             usage_measurement_method="provider_tokens" if (pt or ct) else "estimated_tokens",
             prompt_tokens=pt or None,
             completion_tokens=ct or None,
-            # M05 DESIGN_GAP：ark_v1 是固定分析器版本不是 per-execution identity，
-            # re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变），无法区分重新分析。
-            # 回退 None 兼容路径，不强迁（避免误去重合法重新分析）。
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001 算力上报失败不阻断
         logger.warning("material_analysis_usage_report_error merchant_id=%s error=%s", merchant_id, exc)

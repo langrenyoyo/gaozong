@@ -230,7 +230,19 @@ analyze_material_async L20
 
 ## 待审批决策点
 
-1. ~~方案 A vs 方案 B~~ → **方案 B preferred**（待审查确认；方案 A 否决：旧五阶段模型语义不一致）
-2. execution 创建 ordering（ark call 前单 commit / 与 status=analyzing 合并 commit）→ 实施期决策，不冻结
-3. candidate key `material_analysis_execution:{execution_id}:ark_analysis` → 审查通过后登记为最终 contract
-4. 审查通过后授权实施（新建 `AiEditMaterialAnalysisExecution` 实体 + migration + `analyze_material_async` 改造 + `_report_analysis_usage` 传 execution_id + 7 Gate）
+1. ~~方案 A vs 方案 B~~ → **方案 B 已冻结 APPROVED**（Stage 5F-3 已实施；方案 A 否决：旧五阶段模型语义不一致）
+2. execution 创建 ordering（ark call 前单 commit / 与 status=analyzing 合并 commit）→ **实施决策：ark call 前单 commit**（MA-0，status=analyzing commit 在前，execution 创建+commit 在后，先于 ark call）
+3. ~~candidate key `material_analysis_execution:{execution_id}:ark_analysis`~~ → **冻结为最终 contract**（Stage 5F-3 已实施）
+4. ~~审查通过后授权实施~~ → **Stage 5F-3 已实施**（migration 0033 + model + analyze_material_async 改造 + _report_analysis_usage 传 execution_id + 7 Gate PASS）
+
+## Stage 5F-3 实施落记
+
+- **方案 B 已实施**：migration `0033_material_analysis_executions.py` + ORM model `AiEditMaterialAnalysisExecution`
+- **execution 在 ark call 前 durable commit**（MA-0，合同 1）
+- **C1 红线落地**：ark 成功 → execution COMPLETED 先于 usage report；ark 失败 → FAILED（不计费）；usage report 失败不降级 Execution、不重跑 Ark
+- **lifecycle 三态**：running / completed / failed
+- **C2 Gap 登记**：**M05_ANALYSIS_USAGE_REPORT_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**——Ark completed → usage report failed/response-lost → 无自动 billing-report recovery。★ same Execution usage report replay → P1 保护（同 key → IDEMPOTENT_REPLAY）；★ 但不保证失败的 usage report 一定被自动重试。不并入 #8 迁移状态。
+- **7 Gate PASS**：MA-0~MA-6（`tests/test_material_analysis_compute_idempotency_migration.py`），含 MA-5 关键 Gate
+- **None count**：M05 正式链 idempotency_key≠None = 0
+- **0033 PG = PENDING_PG_VERIFICATION / BLOCKED_BY_SCHEMA_BASELINE_MISMATCH**（未验证不得 deploy）
+- **COMPUTE-IDEMPOTENCY-001 仍 OPEN**（2/11 剩余：Preview / RAG Query）

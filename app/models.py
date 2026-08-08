@@ -1696,6 +1696,34 @@ class AiEditMaterialAnalysis(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class AiEditMaterialAnalysisExecution(Base):
+    """M05 素材分析 billing identity 实体（P1 Stage 5F-3，方案 B）。
+
+    与 KnowledgeTrainingExecution / DailyReportGeneration 同构。
+    每次显式分析新建一行，持久不可清空（finalize 只更新 lifecycle 不删行）。
+    execution 在 ark 外部 API 调用前 durable commit（MA-0，合同 1）。
+    无 is_billed / 无 billing_status：billing truth 只归 M07 committed ComputeTransaction。
+    不激活 dormant AiEditMaterialProcess 五阶段表。
+    """
+
+    __tablename__ = "ai_edit_material_analysis_executions"
+    __table_args__ = (
+        Index("idx_ai_edit_material_analysis_executions_material", "material_id"),
+        CheckConstraint(
+            "lifecycle_status IN ('running', 'completed', 'failed')",
+            name="ck_ai_edit_material_analysis_executions_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    material_id = Column(String(64), nullable=False, comment="素材 ID")
+    source_sha256 = Column(String(64), nullable=False, comment="被分析素材 SHA-256")
+    lifecycle_status = Column(String(20), nullable=False, default="running",
+                              comment="执行生命周期 running/completed/failed，非 billing truth")
+    created_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, comment="执行完成时间")
+
+
 class AiEditMaterialProcess(Base):
     """AI 剪辑素材分阶段处理状态：每阶段独立 attempt/令牌/CAS 回写（Task 12）。
 

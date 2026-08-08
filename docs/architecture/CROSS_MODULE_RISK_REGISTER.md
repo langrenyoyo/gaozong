@@ -41,13 +41,14 @@ COMPUTE-IDEMPOTENCY-001（M07 ROOT CAUSE — HIGH-01）
 
 > 不把"存在 record_usage 调用"自动翻译成"E2E 证明重复扣费"。
 
-> **P1 consumer 迁移状态（2026-08）**：11 TOTAL charge path / 8 MIGRATED（M04 / M06 / M01 Auto Reply / M02 / Return Visit Judge / Daily Report / Training / RAG Ingest）/ 3 OPEN。Open 路径：#7 Preview（CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP）/ #8 M05（EXECUTION_IDENTITY_DESIGN_GAP）/ #10a RAG Query Embedding（EXECUTION_IDENTITY_DESIGN_GAP）。原 #10 RAG Embedding 已按 query/ingest 拆为 #10a/#10b，#10b Ingest 已 MIGRATED（`rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest`，见 `docs/architecture/remediation/P1_RAG_INGEST_EMBEDDING_IDEMPOTENCY_DESIGN.md`）。详见 `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` Charge Path Migration Register（Stage 5D-R1 冻结版 + 5D-2 Training + 5E-3 RAG Ingest 迁移）。
-> **Open 路径统一风险描述**：所有 3 条 Open 路径 `idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；重复扣费暴露证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
+> **P1 consumer 迁移状态（2026-08）**：11 TOTAL charge path / 9 MIGRATED（M04 / M06 / M01 Auto Reply / M02 / Return Visit Judge / Daily Report / Training / RAG Ingest / M05 Material Analysis）/ 2 OPEN。Open 路径：#7 Preview（CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP）/ #10a RAG Query Embedding（EXECUTION_IDENTITY_DESIGN_GAP）。原 #10 RAG Embedding 已按 query/ingest 拆为 #10a/#10b，#10b Ingest 已 MIGRATED（`rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest`，见 `docs/architecture/remediation/P1_RAG_INGEST_EMBEDDING_IDEMPOTENCY_DESIGN.md`）。#8 M05 已 MIGRATED（`material_analysis_execution:{execution_id}:ark_analysis`，见 `docs/architecture/remediation/P1_M05_IDENTITY_LIFECYCLE_DESIGN.md`）。详见 `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` Charge Path Migration Register（Stage 5D-R1 冻结版 + 5D-2 Training + 5E-3 RAG Ingest + 5F-3 M05 迁移）。
+> **Open 路径统一风险描述**：所有 2 条 Open 路径 `idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；重复扣费暴露证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
 > **可靠性差距分离（防根因混淆）**：以下 Gap 均 = OPEN / RELIABILITY / OUT_OF_P1，属可靠性范畴，**不是** COMPUTE-IDEMPOTENCY-001 财务幂等未完成的证据，不得据此判定根因仍 OPEN 或与 consumer 迁移状态合并：
 > - **DAILY_REPORT_REQUEST_RECOVERY_GAP**（full 9000→9100 response-lost）
 > - **TRAINING_REQUEST_RECOVERY_GAP**（Training ask full-request response-lost）
 > - **RAG_INGEST_RUN_RECOVERY_GAP**（durable TrainingRun created → crash before finalize → running 孤儿行；★ 持久孤儿 Run ≠ 未来 retry 复用该 Run，crash 后建新 Run #N+1 不同 key；same Run replay→P1 保护 / full request retry→未保证→P1 不解决）
 > - **RAG_INGEST_REQUEST_RECOVERY_GAP**（train_document/train_scope HTTP 请求失败/响应丢失 → 重新提交建新 Run，无 durable client request identity 证明 Run#N+1==Run#N）
+> - **M05_ANALYSIS_USAGE_REPORT_RECOVERY_GAP**（Ark completed → usage report failed/response-lost → 无自动 billing-report recovery；★ same Execution usage report replay→P1 保护 / 但不保证失败 report 一定被自动重试）
 > - ★ **RUN_RECOVERY ≠ REQUEST_RECOVERY**（已有 Run 怎么恢复 vs 新 HTTP 调用怎么知道属于旧 Run），不合并
 > P1 不虚假宣称已解决跨进程请求级幂等。
 
