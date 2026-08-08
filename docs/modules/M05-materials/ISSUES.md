@@ -20,7 +20,10 @@
 
 - **位置**：app/routers/ai_edit.py:301,326（tos_presigned_url 直接存 presigned HTTPS URL）；app/models.py:1644-1645
 - **事实**：上传端点将 TOS 预签名 HTTPS URL 直接持久化到 `AiEditMaterial.tos_presigned_url` 列；`cloud_storage_key`（stable TOS object key）字段存在但上传链路未写入
-- **影响**：预签名 URL 有过期时间（tos_presigned_expires_at），过期后 DB 中的 URL 失效，M06 LAS 消费时可能拿到过期 URL 导致失败；同素材复活时刷新预签名（:301）但两次上传之间窗口内 URL 可能过期
+- **影响域精确分层**：
+  - Dependency impact: **VERIFIED**（M06 LAS 消费 M05 tos_presigned_url 路径已确认，2-M06.2 Gate C）
+  - Runtime expiry failure: **PENDING_EXTERNAL**（expired URL 导致 LAS submit 失败尚未 E2E 证明）
+- **不写"已 E2E 证明 URL 过期导致 LAS 失败"**
 - **根因**：上传链路设计为"存 presigned URL 喂 LAS"而非"存 stable key + 按需生成 presigned URL"
 - **建议**：改为存 `cloud_storage_key`（stable TOS path），按需动态生成 presigned URL（不在本轮修复）
 

@@ -70,3 +70,57 @@ LAS 链路消费 M05 的 `tos_presigned_url`（临时 HTTPS URL）作为 LAS sub
 ### NOT_APPLICABLE
 8. Windows 19000 — M06 不依赖 Local Agent
 9. 真实微信 — M06 不依赖微信
+
+---
+
+## M06_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> 后续补 LAS 凭证时只补 D/E/F，不重做 Docker E2E
+
+### VERIFIED
+
+- Manual material → Job contract（pinned_sha256 == source_sha256）
+- AiEditJobMaterial strong reference（Manual 链路）
+- M05/M06 merchant boundary（跨商户不可见）
+- LAS input source contract（代码事实：消费 M05 tos_presigned_url）
+- Download authorization fail-closed
+- Delete status flow（succeeded→deleting→deleted/delete_failed）
+- M06 final archive uses stable object reference（非临时 URL）
+
+### KNOWN CROSS-MODULE HIGH
+
+- ISSUE-M05-004: M06 LAS consumes persisted M05 temporary presigned URL
+  - Dependency impact: VERIFIED（M06 LAS 消费 M05 tos_presigned_url）
+  - Runtime expiry failure: PENDING_EXTERNAL（expired URL 导致 LAS submit 失败尚未 E2E 证明）
+- ISSUE-M05-005: Manual active-job material deletion guard broken（IMPACT VERIFIED for Manual / NOT COVERED for LAS）
+
+### KNOWN MEDIUM
+
+- LAS orchestration automatic recovery: ABSENT（BackgroundTask 非持久化）
+  - Process restart recovery: NOT_VERIFIED
+  - Manual/ops recovery: LIMITED（delete 幂等但无 archive 补偿脚本）
+
+### TECH_DEBT / LOW
+
+- DB job status CHECK absent（APPLICATION_VALIDATION_PENDING）
+- Download token replay: LOW SECURITY_OBSERVATION（authorization fail-closed PASS / replay semantics 未完全验证）
+
+### PENDING_EXTERNAL
+
+- D LAS Submit（LAS_API_KEY 未配置）
+- E LAS Terminal Processing
+- F LAS Archive
+
+### NOT_VERIFIED
+
+- Process restart recovery
+
+### DEFERRED_TO_M07
+
+- CROSS_MODULE_COMPUTE_IDEMPOTENCY_GAP（observed: M04 result path + M06 LAS archive/usage path）
+
+### 冻结路径
+
+LAS 凭证 → 补 D/E/F + 验证 M05-004 runtime expiry → `M06_MODULE_BASELINE_APPROVED`
