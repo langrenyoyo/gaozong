@@ -571,6 +571,9 @@ def _judge_via_9100(run: ReturnVisitRun, prompt_inputs: dict) -> dict:
         "dispatch_context": {
             "dispatch_notification_id": run.dispatch_notification_id,
         },
+        # P1 Stage 5C-1：透传持久化 run.id（claim 前 commit 快照，不重读 DB）供 9100 构造幂等键。
+        # run.id 在 _process_run_with_session claim+commit 后已持久化，此处为只读快照。
+        "return_visit_run_id": run.id,
     }
     client = get_xg_douyin_ai_cs_client()
     raw = client.judge_return_visit(request)

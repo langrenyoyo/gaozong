@@ -266,9 +266,23 @@ def _report_usage(
     messages: list[dict],
     result: dict,
 ) -> None:
-    """回访判定成功后优先按供应商真实 Token 上报。"""
+    """回访判定成功后优先按供应商真实 Token 上报。
+
+    P1 Stage 5C-1：return_visit_run_id 非空时构造幂等键
+    `return_visit_run:{run_id}:judge`（event_namespace=return_visit_run，business_event_id={run_id}:judge）。
+    None 时走兼容路径不传 key（旧计费行为）。
+    """
     if not request.merchant_id:
         return
+    # P1 Stage 5C-1：构造幂等键（身份来自 9000 透传的持久化 run.id，非 conversation/时间戳推导）
+    # getattr 兼容测试双打与部分请求对象（与 _report_llm_usage 的 run_id/attempt_count 同模式）；
+    # 真实 ReturnVisitJudgeRequest 由 Pydantic 校验 return_visit_run_id 字段。
+    return_visit_run_id = getattr(request, "return_visit_run_id", None)
+    idempotency_key = (
+        f"return_visit_run:{return_visit_run_id}:judge"
+        if return_visit_run_id is not None
+        else None
+    )
     usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
@@ -283,6 +297,7 @@ def _report_usage(
             completion_tokens=usage.completion_tokens,
             cached_tokens=usage.cached_tokens,
             llm_call_stage="primary",
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响回访主流程
         logger.warning("return_visit stage=compute_report_error error=%s", exc)

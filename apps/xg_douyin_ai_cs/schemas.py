@@ -305,6 +305,11 @@ class ReturnVisitJudgeRequest(BaseModel):
     prompts: dict[str, ReturnVisitPromptInput]
     sales_reply_text: str = Field(..., min_length=1)
     dispatch_context: dict
+    # P1 Stage 5C-1：Return Visit Judge 幂等 identity 透传（9000→9100）
+    # return_visit_run_id=ReturnVisitRun.id（claim 前 commit 持久化快照）
+    # 非空时 _report_usage 构造 idempotency_key=return_visit_run:{run_id}:judge；
+    # None 时走兼容路径（不传 key，旧计费行为）。
+    return_visit_run_id: int | None = None
 
 
 # 判定来源仍为枚举；场景键与判定结果放宽为 str，支持管理员自定义场景。
