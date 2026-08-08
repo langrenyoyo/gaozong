@@ -62,3 +62,55 @@
 
 ### NOT_APPLICABLE
 6. Windows 19000 / 真实微信 / staging webhook — M07 不依赖
+
+---
+
+## M07_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+
+### VERIFIED
+
+- Compute Account / Transaction ownership
+- Sequential consume flow
+- record_usage write behavior
+- Sequential ledger invariant
+- Sampled fee calculation
+- Consumer/source identity traceability
+- Merchant isolation
+- Payment runtime = MOCK_ONLY / DEFERRED
+
+### KNOWN HIGH — ROOT CAUSE
+
+- COMPUTE-IDEMPOTENCY-001: record_usage 无业务幂等合同
+  - Gate A: E2E_VERIFIED（balance delta = 2 × charge）
+  - Gate F: same M04 business event replay → double charge E2E_VERIFIED
+  - Category: FINANCIAL_INTEGRITY
+
+### IMPACTED CONSUMERS
+
+- M04: E2E_VERIFIED_IMPACTED（Gate F 证明）
+- M06: CODE_VERIFIED_EXPOSED（静态暴露，无 LAS E2E）
+- M01/M02/M05: 按实际调用事实登记
+
+### PENDING_STAGING
+
+- Concurrent consume（Gate B，需 PG）
+- Concurrent ledger consistency / lost-update
+
+### POLICY_PENDING
+
+- Negative balance semantics
+
+### COMPAT / TECH_DEBT
+
+- 兼容入口 MIGRATION_INCOMPLETE（LEGACY-012）
+
+### DEFERRED_CAPABILITY
+
+- Payment: MOCK_ONLY
+
+### 冻结路径
+
+PG staging → 补 Concurrent Gate → `M07_MODULE_BASELINE_APPROVED`

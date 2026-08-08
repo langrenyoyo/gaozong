@@ -21,14 +21,12 @@
 
 ## LOW
 
-### ISSUE-M06-003 Compute 幂等 → CROSS_MODULE_COMPUTE_IDEMPOTENCY_GAP
+### ISSUE-M06-003 Compute 幂等 → CODE_VERIFIED_EXPOSED（不标 E2E impacted）
 
-- **Owner verification**: M07
-- **Observed consumers**:
-  - M04 result path（ISSUE-M04-002）
-  - M06 LAS archive/usage path（ISSUE-M06-003）
-- **M07 统一回答**：什么叫一次 usage / 幂等键 / 重复 report / transaction 唯一性 / 失败重试
-- **不单独维护**——M06 侧只记录 M06→M07 record_usage 调用点（ai_edit_las_service.py:737-746）和"archived 幂等 gate 避免正常路径重复"事实
+- **Owner verification**: M07（COMPUTE-IDEMPOTENCY-001）
+- **M06 侧状态**: CODE_VERIFIED_EXPOSED（静态暴露——ai_edit_las_service.py:737-746 调 record_usage，无 LAS E2E 证明 double charge）
+- **不标 E2E impacted**——LAS 链路需外部凭证才能 E2E
+- **archived 幂等 gate** 仅正常路径有效，异常重入绕过
 
 ### ISSUE-M06-004 下载 token 可重放（自认 tradeoff）
 

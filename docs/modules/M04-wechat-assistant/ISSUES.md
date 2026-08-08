@@ -13,15 +13,13 @@
 - **升级**：MEDIUM → HIGH（Docker E2E 证明 DUPLICATE_EXECUTION_RISK）
 - **建议**：加服务端 lease/claim 机制（原子 UPDATE SET status=processing WHERE status=pending RETURNING）
 
-### ISSUE-M04-002 Result duplicate side-effect coverage incomplete
+### ISSUE-M04-002 Result duplicate side-effect → LINKED_TO_ROOT_CAUSE / E2E_VERIFIED_IMPACTED
 
-- **Category**: MEDIUM
+- **Category**: LINKED_TO_ROOT_CAUSE（根因归 M07 COMPUTE-IDEMPOTENCY-001 HIGH，不独立计）
 - **位置**：wechat_task_service.py:348-352, 437-464, 462
-- **Business persistence duplicate**: E2E NOT REPRODUCED（Gate 4 重复提交未产生重复业务写入）
-- **detect_reply duplicate**: DEDUP VERIFIED（Gate 4 detect_reply=1 去重正确，不重复创建）
-- **_compute_usage / financial side effect**: NOT VERIFIED（重复回写可能重复调用 _report_wechat_task_compute_usage :462，但 Docker E2E 未观察到实际算力副作用）
-- **Close condition**: M07 proves compute also dedup → close
-- **不继续笼统称 "result report 非幂等"**
+- **E2E 证据**：M07 Gate F 证明重复调用 _report_wechat_task_compute_usage 产生 2 条 wechat-assistant 流水（double charge E2E_VERIFIED_IMPACTED）
+- **根因**：M07 record_usage 无幂等键（COMPUTE-IDEMPOTENCY-001）
+- **不独立计 MEDIUM**——根因归 M07，M04 侧只记录 impacted consumer 状态
 
 ## LOW
 
