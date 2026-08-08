@@ -587,10 +587,19 @@ def _compute_payload_evidence(
     Payload Evidence Field Mapping:
       INCLUDE: capability_key（稳定计费语义）/ model（稳定计费语义）/
                tokens raw usage（稳定计费语义）/ usage_measurement_method（稳定计费语义）/
-               llm_call_stage（consumer-defined business operation）
+               llm_call_stage（consumer-defined business operation；LEGACY_NAMING——
+               字段名为历史 LLM 语境，但语义是通用的 consumer business operation，
+               M04 task operation / M06 archive operation 均可用此字段承载区分）
       EXCLUDE: source（observability 运营归因，非稳定计费语义——event_namespace 已在 idempotency_key 中）/
                agent_id（上下文，非计费语义——哪个智能体不影响计费）/
                conversation_id（上下文，非事件——已冻结"conversation 是上下文不是事件"）
+
+    Canonicalization 确认：
+    - Python 字段组装顺序固定（dict literal 有序）
+    - JSON sort_keys=True 确保 key 排序固定
+    - separators=(",", ":") 消除空白差异
+    - None 表示固定（Python json.dumps(None) → "null"）
+    - 同一组 stable inputs → 相同 canonical representation → 相同 SHA-256
     """
     stable = {
         "capability_key": capability_key,
@@ -717,7 +726,8 @@ def record_usage(
             db.refresh(account)
             return {"account": account, "idempotency_status": "created"}
         except IntegrityError:
-            # INSERT 唯一约束冲突 → rollback 本事务（transaction + balance 均未 commit，无副作用）
+            # IntegrityError may be raised during flush/commit → rollback entire current transaction
+            # → transaction + balance 均未 commit，无副作用（无"有流水无扣费"半成品）
             db.rollback()
             # UNIQUE CONFLICT → 读取已存在 transaction
             existing = (
