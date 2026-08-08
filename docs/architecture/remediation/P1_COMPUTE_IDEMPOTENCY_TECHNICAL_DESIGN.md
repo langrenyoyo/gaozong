@@ -461,7 +461,7 @@ PG Closure Gate 最终结果为以下三态之一：
 | 8 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ NOT MIGRATED；方向：不破坏共享行模型新增 per-execution 层（不称"永续"） |
 | 9 | Training Knowledge | `knowledge_training_service.py:539` | ACTIVE | KnowledgeTrainingExecution.execution_id（独立 billing identity，方案 B） | execution_id 复用 request_id（kt-req-{uuid4}），在 RAG search 前 commit（charge 点前持久）；1:1 cardinality（1 execution : 1 ask charge，YAGNI 不引入 attempt_count）；billing-report replay only（full-request response-lost 登记 TRAINING_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `knowledge_training_execution:{execution_id}:ask` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5D-2） |
 | 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
-| 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | 无 stable per-chunk execution discriminator | Parent: Training Run.id VERIFIED（embedding 前持久化）；1 Run : N chunk charges；缺 per-chunk discriminator（same chunk retry→same id / different chunk→different id / new run→different id） | CHILD_EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 per-chunk identity 设计（不预设必须 embedding 前 INSERT chunk row，先检查更小稳定 discriminator：run_id + document identity + deterministic chunk ordinal/hash） |
+| 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | KnowledgeTrainingRun.id + document_id + chunk_index（child discriminator） | Parent: Training Run.id VERIFIED + 选项 A durable commit（embedding 前持久化）；1 Run : N chunk charges；child = document_id + deterministic chunk_index（embedding 前 enumerate 可得）；chunk_hash 不进 billing key（P3，保持 semantic evidence） | IDENTITY_MODEL_VERIFIED / PARENT_DURABILITY_SOLUTION_APPROVED | None | ⏸ READY_FOR_IMPLEMENTATION_REVIEW（5E-2R1：identity + 选项 A durable commit + PG 失败 finalize 已冻结；见 `P1_RAG_INGEST_EMBEDDING_IDEMPOTENCY_DESIGN.md`） |
 
 **汇总：7/11 MIGRATED / 4/11 OPEN（#7 Preview / #8 M05 / #10a RAG Query / #10b RAG Ingest）。**
 
@@ -479,14 +479,18 @@ PG Closure Gate 最终结果为以下三态之一：
 - **设计方向**：若 1:1 则 `search_request_id` 可行；若多次则需 operation/attempt 维度
 - **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
-#### RAG Ingest Chunk Embedding（#10b — CHILD_EXECUTION_IDENTITY_DESIGN_GAP）
+#### RAG Ingest Chunk Embedding（#10b — IDENTITY_MODEL_VERIFIED / PARENT_DURABILITY_SOLUTION_APPROVED / READY_FOR_IMPLEMENTATION_REVIEW，Stage 5E-2R1）
 
 - **触发动作**：ingest path 每 chunk 一次 embedding API 调用（`repository.py:546,692`）
-- **Parent**：Training Run.id VERIFIED（embedding 前已持久化）；charge cardinality = 1 Run : N chunk charges
-- **缺失**：stable per-chunk execution discriminator（knowledge_chunks 表有 `id` + `document_id` + `chunk_index`，但 `_embed_with_usage` 调用时 chunk 行尚未 INSERT → embedding 在 INSERT 前）
-- **re-embedding**：重新训练时删除旧 chunks 重新 ingest → 新 chunk 行 → 新 id
-- **结论**：parent identity 已验证但 child per-chunk identity 缺失 → **CHILD_EXECUTION_IDENTITY_DESIGN_GAP**
-- **设计方向（未冻结）**：不预设"必须 embedding 前 INSERT chunk row"，先检查更小稳定 per-chunk discriminator（`run_id` + document identity + deterministic chunk ordinal/hash），需满足：same logical chunk retry→same identity / different chunk→different identity / new run→different identity
+- **Parent**：Training Run.id VERIFIED + **选项 A durable commit**（`_create_training_run` INSERT RETURNING id 后、首次 embedding 前显式 commit，RI-0）；charge cardinality = 1 Run : N chunk charges
+- **Child discriminator**：`document_id` + deterministic `chunk_index`（`enumerate(chunk_text(...), start=1)`，embedding 前可得）；不新增表、不预 INSERT chunk row
+- **chunk_hash**：不进 billing uniqueness identity（P3，保持 semantic/debug evidence）
+- **identity 合同（冻结）**：`rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest`
+- **partial identity 规则**：三参数 ALL PRESENT→构造 key / ALL ABSENT→Query legacy path（None）/ PARTIAL→违反+显式 warning（不静默退 None，与 M01 同治理）
+- **结论**：identity model 已验证 + parent durability 方案已批准 → **READY_FOR_IMPLEMENTATION_REVIEW**（5E-2R1，见 `P1_RAG_INGEST_EMBEDDING_IDEMPOTENCY_DESIGN.md`）
+- **状态演进**：5E-R1 READY_FOR_TECHNICAL_DESIGN → 5E-2 finding PARENT_DURABILITY_DESIGN_REQUIRED → 5E-2R1 OPTION A APPROVED → READY_FOR_IMPLEMENTATION_REVIEW
+- **PG 失败 finalize（REQUIRED-1）**：后续工作事务进入 aborted state 时，须 rollback→fresh transaction→UPDATE durable Run→failed→commit，不依赖现有 except UPDATE+commit 原样成功（Stage 5E-3 实施细节）
+- **两个 Reliability Gap（OUT_OF_P1）**：`RAG_INGEST_RUN_RECOVERY_GAP`（crash 孤儿 running）/ `RAG_INGEST_REQUEST_RECOVERY_GAP`（HTTP request replay），两者不合并
 - **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
 #### Return Visit Judge（IDENTITY_VERIFIED — MIGRATED，Stage 5C-1）
