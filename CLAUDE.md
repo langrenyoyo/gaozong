@@ -305,6 +305,36 @@ Reality Map → Module Verification → Behavior Baseline → Approved Change Sc
 
 **未完成模块验真、未冻结行为基线前，不进行该模块的大规模结构重构。**
 
+### 当前治理状态（2026-08-08）
+
+```
+PHASE 1   Reality Map              ✅ COMPLETE
+PHASE 1B  Governance Wiring         ✅ COMPLETE
+PHASE 2A  Current Reality          ✅ COMPLETE（7/7 模块验真）
+PHASE 2B  Controlled E2E + Candidate ✅ COMPLETE（7/7 BASELINE_CANDIDATE + CROSS_MODULE_RISK_REGISTER 冻结）
+PHASE 2C  External Gate            ⏸ OPEN（26 Gate Records：Staging 16 / Windows 6 / External 6）
+PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 实施 6/10 charge path MIGRATED）
+```
+
+- 7 模块全部 `BASELINE_CANDIDATE`（非 `MODULE_BASELINE_APPROVED`，外部环境 Gate 未闭环）
+- 4 个 HIGH 生产安全风险 + 5 个 STRUCTURAL 架构风险（分队列）
+- Consumer 证据四级：`E2E_VERIFIED_IMPACTED` / `CODE_VERIFIED_EXPOSED` / `CALL_SITE_IDENTIFIED` / `NOT_VERIFIED`
+- 阶段 3A 优先级：P1 Compute Idempotency → P2 M04 Claim/Lease → P3a M05 Reference → P3b M05 URL
+- **P1 当前状态：实施中（6/10 charge path MIGRATED，4/10 OPEN）**
+- **P1 关键产出**：
+  - `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` — 技术方案（APPROVED）+ Charge Path Migration Register（10 条唯一事实源）
+  - `docs/architecture/remediation/P1_M01_IDENTITY_VERIFICATION.md` — M01 身份验真（run.id + attempt_count + llm_call_stage 三维）
+  - M07 Core（record_usage + DB migration 0030 + atomic ownership + IntegrityError replay/conflict）+ PG_CORE_GATE PASS
+  - 5 consumer 迁移完成：M04(E2E_VERIFIED_FIXED) / M06 / M01 Auto Reply / M02 / Return Visit Judge
+- 跨模块根因不重复统计：一个 Root Cause → 多个 impacted/exposed consumers
+
+**关键产出文件**（修改前必读）：
+- `docs/architecture/CROSS_MODULE_RISK_REGISTER.md` — 跨模块风险排序（冻结）
+- `docs/architecture/SYSTEM_MAP.md` — 系统现实地图
+- `docs/architecture/CODE_INDEX.yaml` — 机器代码索引（唯一事实源）
+- `docs/modules/M01-M07/` — 7 模块验真文档（每模块 6 份）
+- `docs/architecture/STAGING_E2E_READINESS.md` + `WINDOWS_E2E_READINESS.md` — 共享环境准备
+
 ------
 
 # Reading Completion Gate
