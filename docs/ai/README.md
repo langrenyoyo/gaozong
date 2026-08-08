@@ -74,6 +74,23 @@ docs/ai/04_OUTPUT_RULES.md
 | Webhook 鉴权 | `04_interface_contracts/10_WEBHOOK_AUTH_MIGRATION.md` |
 | 抖音私信能力 OpenAPI（含消息解码/资源下载） | `04_interface_contracts/抖音OpenAPI/抖音私信能力对外OpenApi.docx` |
 | 线索识别 AI 技能规则 | `01_product_prd/线索识别AI技能规则.md` |
+| **项目治理：跨模块风险排序** | `architecture/CROSS_MODULE_RISK_REGISTER.md` |
+| **项目治理：系统现实地图** | `architecture/SYSTEM_MAP.md` |
+| **项目治理：机器代码索引** | `architecture/CODE_INDEX.yaml`（唯一事实源）+ `CODE_INDEX.md`（派生） |
+| **项目治理：运行入口盘点** | `architecture/RUNTIME_ENTRYPOINTS.md` |
+| **项目治理：依赖矩阵** | `architecture/DEPENDENCY_MATRIX.md` |
+| **项目治理：Legacy 登记** | `architecture/LEGACY_REGISTER.md` |
+| **项目治理：Staging 共享环境准备** | `architecture/STAGING_E2E_READINESS.md` |
+| **项目治理：Windows 共享环境准备** | `architecture/WINDOWS_E2E_READINESS.md` |
+| **模块验真：M01 抖音AI客服** | `modules/M01-douyin-ai-cs/`（6 份文档） |
+| **模块验真：M02 AI小高线索** | `modules/M02-leads/`（6 份文档） |
+| **模块验真：M03 AI小高智能体** | `modules/M03-agents/`（6 份文档） |
+| **模块验真：M04 AI小高微信助手** | `modules/M04-wechat-assistant/`（6 份文档） |
+| **模块验真：M05 小高素材库** | `modules/M05-materials/`（6 份文档） |
+| **模块验真：M06 AI小高剪辑** | `modules/M06-ai-edit/`（6 份文档） |
+| **模块验真：M07 AI小高算力** | `modules/M07-compute/`（6 份文档） |
+| **P1 修复：算力幂等技术方案 + Charge Path Register** | `architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` |
+| **P1 修复：M01 身份验真** | `architecture/remediation/P1_M01_IDENTITY_VERIFICATION.md` |
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |
 | P1-END-1 验收（改微信自动化前必读） | `05_acceptance/P1_END_1_ACCEPTANCE.md` |
 | 微信回复检测规则 | `10_local_agent_wechat/WECHAT_REPLY_DETECTION_RULES.md` |

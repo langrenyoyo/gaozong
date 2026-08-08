@@ -325,7 +325,7 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 实施 6/10 charg
   - `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` — 技术方案（APPROVED）+ Charge Path Migration Register（10 条唯一事实源）
   - `docs/architecture/remediation/P1_M01_IDENTITY_VERIFICATION.md` — M01 身份验真（run.id + attempt_count + llm_call_stage 三维）
   - M07 Core（record_usage + DB migration 0030 + atomic ownership + IntegrityError replay/conflict）+ PG_CORE_GATE PASS
-  - 5 consumer 迁移完成：M04(E2E_VERIFIED_FIXED) / M06 / M01 Auto Reply / M02 / Return Visit Judge
+  - 6 consumer 迁移完成：M04(E2E_VERIFIED_FIXED) / M06 / M01 Auto Reply / M02 / Return Visit Judge / Daily Report
 - 跨模块根因不重复统计：一个 Root Cause → 多个 impacted/exposed consumers
 
 **关键产出文件**（修改前必读）：
