@@ -335,6 +335,28 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 >
 > 即：PG concurrency = core rollout safety gate + final P1 closure gate（两次验证）。
 
+### PG Closure Gate 三态冻结（REQUIRED，Stage 5D 冻结）
+
+PG Closure Gate 最终结果为以下三态之一：
+
+**PASS**
+- 所有 active charge-producing paths 满足以下之一：
+  - A. stable idempotency identity migrated → charge path `idempotency_key=None` = 0
+  - B. formally approved non-chargeable policy → charge-producing call removed
+- + Global charge path audit clean
+- + PG final concurrency closure gate PASS
+- + required PG migrations verified（含 `0030→0032` alembic upgrade + FK/约束 + DR-7 PG 并发语义）
+
+**FAIL**
+- 仍存在未批准的 active `None` charge path
+- 或 PG 验证失败
+
+**WAIVED_WITH_ACCEPTED_RESIDUAL_RISK**
+- 管理层正式接受剩余风险并允许阶段退出
+- 但 COMPUTE-IDEMPOTENCY-001 **不得**标记 E2E_VERIFIED_FIXED（技术事实不被治理语言掩盖）
+
+> **关键：Risk Acceptance 可结束项目动作，但不能把技术 Gate 从 FAIL 变 PASS。** 治理语言（"接受剩余风险"）不等于技术修复（"charge-producing + None = 0"）；WAIVED 态下根因仍技术性 OPEN，仅被管理层有条件豁免。
+
 ### 防止误去重
 
 > **关键验收**：同一 conversation_id 的两次真实 LLM 消费（不同 business_event_id）必须产生两条 transaction。如果 idempotency_key 误用 conversation_id 而非持久化事件 ID，第二次合法消费会被错误去重。
@@ -423,9 +445,9 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 ---
 
-## Charge Path Migration Register（全局审计 + 身份验真，Stage 5B 最终版）
+## Charge Path Migration Register（全局审计 + 身份验真，Stage 5D-R1 冻结版）
 
-> 完整 10 条 charge-producing 路径审计。Identity Readiness 枚举：IDENTITY_VERIFIED / CANDIDATE_IDENTITY_FOUND / DESIGN_GAP / POLICY_PENDING / IDENTITY_REQUIRED / CALL_SITE_IDENTIFIED。Daily Report 与 Preview 采用多维度复合标签（身份候选 / 计费状态 / 产品策略 / 生命周期）。
+> 完整 11 条 charge-producing 路径审计（原 #10 RAG Embedding 按 query/ingest 两条调用链拆为 #10a/#10b）。Identity Readiness 枚举：IDENTITY_VERIFIED / IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED / CANDIDATE_IDENTITY_VERIFIED / EXECUTION_IDENTITY_DESIGN_GAP / CHILD_EXECUTION_IDENTITY_DESIGN_GAP / LIFECYCLE_ORDERING_CHANGE_REQUIRED / TECHNICAL_DESIGN_AUTHORIZED / CHARGEABLE / POLICY_PENDING。多维度复合标签用 `/` 分隔（身份候选 / 计费状态 / 产品策略 / 生命周期）。
 
 | # | Charge Path | 调用点 | Charging | Identity | Billing Semantics | Identity Readiness | idempotency_key | Migration |
 |---|---|---|---|---|---|---|---|---|
@@ -433,23 +455,39 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 2 | M06 LAS Archive | `ai_edit_las_service.py:740` | ACTIVE | AiEditJob.id + operation | one job + archive = one charge | IDENTITY_VERIFIED | `las_job:{job.id}:archive_usage` | ✅ MIGRATED |
 | 3 | M01 Auto Reply | `reply_decision_service.py:3801` | ACTIVE | Run.id + attempt_count + stage | 1 Run : N attempts × 2 stages | IDENTITY_VERIFIED | `ai_auto_reply_run:{run_id}:{attempt}:{stage}` | ✅ MIGRATED |
 | 4 | M02 Webhook Lead | `douyin_webhook.py:1242` | ACTIVE | WebhookEvent.id + operation | one event = one lead charge | IDENTITY_VERIFIED | `webhook_event:{event.id}:lead_usage` | ✅ MIGRATED |
-| 5 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | CHARGEABLE / POLICY_PENDING / DESIGN_GAP / IDENTITY_REQUIRED | None | ⏸ POLICY_PENDING + IDENTITY_OPEN |
-| 6 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | DESIGN_GAP | None | ⏸ 需 per-execution identity 设计 |
-| 7 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置 | training_id 在 _report_usage 之后才生成+commit | DESIGN_GAP | None | ⏸ 需 training_id 前置 |
-| 8 | RAG Embedding | `rag/repository.py:481` | ACTIVE | 无 per-embedding identity | 每 chunk 一次 embedding API；3 个调用点（search/ingest×2）；无持久 per-embedding execution entity | DESIGN_GAP | None | ⏸ 需 per-embedding identity 设计 |
-| 9 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
-| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
+| 5 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
+| 6 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
+| 7 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 Preview execution identity 设计（POLICY_PENDING 不停止 identity 设计，现在就应设计） |
+| 8 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ NOT MIGRATED；方向：不破坏共享行模型新增 per-execution 层（不称"永续"） |
+| 9 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置（候选 key `knowledge_training:{training_id}:ask`） | training_id 在 _report_usage 之后才生成+commit | CANDIDATE_IDENTITY_VERIFIED / LIFECYCLE_ORDERING_CHANGE_REQUIRED / TECHNICAL_DESIGN_AUTHORIZED | None | ⏸ 不升级 READY_TO_MIGRATE，等 5D-1 钉死 retry cardinality |
+| 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
+| 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | 无 stable per-chunk execution discriminator | Parent: Training Run.id VERIFIED（embedding 前持久化）；1 Run : N chunk charges；缺 per-chunk discriminator（same chunk retry→same id / different chunk→different id / new run→different id） | CHILD_EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 per-chunk identity 设计（不预设必须 embedding 前 INSERT chunk row，先检查更小稳定 discriminator：run_id + document identity + deterministic chunk ordinal/hash） |
+
+**汇总：6/11 MIGRATED / 5/11 OPEN（#7 Preview / #8 M05 / #9 Training / #10a RAG Query / #10b RAG Ingest）。**
+
+> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：所有 5 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
 
 ### Stage 5B 身份验真详情
 
-#### RAG Embedding（DESIGN_GAP）
+#### RAG Query Embedding（#10a — EXECUTION_IDENTITY_DESIGN_GAP）
 
-- **触发动作**：每 chunk 一次 embedding API 调用（`repository.py:546,692` ingest；`:441` search）
-- **持久实体**：knowledge_chunks 表有 `id` + `document_id` + `chunk_index`，但 `_embed_with_usage` 调用时 chunk 行尚未 INSERT（embedding 在 INSERT 前）
+- **触发动作**：search path 一次 query embedding API 调用（`repository.py:441`）；Milvus path → fallback SQLite path
+- **持久实体**：无 per-query execution identity（search request 非持久化）
 - **retry**：无 retry 机制（embedding 失败 → 空 embedding → 词法检索降级）
+- **MINOR VERIFICATION ITEM**：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1 → `search_request_id` 可行；多次 → 需 operation/attempt 维度）
+- **结论**：query embedding 无前置持久 identity → **EXECUTION_IDENTITY_DESIGN_GAP / ⏸ 需 scope 决策**
+- **设计方向**：若 1:1 则 `search_request_id` 可行；若多次则需 operation/attempt 维度
+- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
+
+#### RAG Ingest Chunk Embedding（#10b — CHILD_EXECUTION_IDENTITY_DESIGN_GAP）
+
+- **触发动作**：ingest path 每 chunk 一次 embedding API 调用（`repository.py:546,692`）
+- **Parent**：Training Run.id VERIFIED（embedding 前已持久化）；charge cardinality = 1 Run : N chunk charges
+- **缺失**：stable per-chunk execution discriminator（knowledge_chunks 表有 `id` + `document_id` + `chunk_index`，但 `_embed_with_usage` 调用时 chunk 行尚未 INSERT → embedding 在 INSERT 前）
 - **re-embedding**：重新训练时删除旧 chunks 重新 ingest → 新 chunk 行 → 新 id
-- **结论**：chunk 行在 embedding 后才 INSERT，`report_usage` 在 INSERT 前调用 → 无前置持久 identity → **DESIGN_GAP**
-- **设计方向**：用 `(document_id, chunk_index)` 组合（document+chunk 位置稳定）+ training_run_id（区分重新训练）
+- **结论**：parent identity 已验证但 child per-chunk identity 缺失 → **CHILD_EXECUTION_IDENTITY_DESIGN_GAP**
+- **设计方向（未冻结）**：不预设"必须 embedding 前 INSERT chunk row"，先检查更小稳定 per-chunk discriminator（`run_id` + document identity + deterministic chunk ordinal/hash），需满足：same logical chunk retry→same identity / different chunk→different identity / new run→different identity
+- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
 #### Return Visit Judge（IDENTITY_VERIFIED — MIGRATED，Stage 5C-1）
 
@@ -514,20 +552,26 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 > - **DAILY_REPORT_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：full 9000→9100 request response-lost（9100 已完成 LLM + M07 已 commit ComputeTransaction，但 9000 未收到 HTTP 响应 → 重跑 LLM 可能产生不同 usage）。M07 行为 = same Generation key + different payload → IDEMPOTENCY_CONFLICT（正确，不重复扣费，发出警报）。
 > - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级响应丢失可靠性差距。不得把 DAILY_REPORT_REQUEST_RECOVERY_GAP 并入 P1 consumer 迁移状态，也不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN——该 Gap 属可靠性范畴（OUT_OF_P1），由独立可靠性工作流处理，P1 不虚假宣称已解决跨进程请求级幂等。
 
-#### M05 Material Analysis（DESIGN_GAP — 已确认）
+#### M05 Material Analysis（#8 — EXECUTION_IDENTITY_DESIGN_GAP / NOT MIGRATED）
 
 - `ark_v1` 固定分析器版本；re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变）
 - 无 per-execution identity（Analysis.id 是行 id 不是执行 id；AiEditMaterialProcess 表有 attempt_count 但用于处理状态不是计费身份）
-- **设计方向**：新建 AiEditMaterialAnalysis 行而非更新（version 递增），或引入 analysis_execution_id
+- **设计方向**：不破坏共享行模型，新增 per-execution 层（不称"永续"）；可新建 AiEditMaterialAnalysis 行而非更新（version 递增），或引入 analysis_execution_id
+- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
-#### Training（DESIGN_GAP — 已确认）
+#### Training（#9 — CANDIDATE_IDENTITY_VERIFIED / LIFECYCLE_ORDERING_CHANGE_REQUIRED / TECHNICAL_DESIGN_AUTHORIZED）
 
-- `training_id` 在 `_build_answer`（含 `_report_usage`）之后才生成+commit
+- 候选 key：`knowledge_training:{training_id}:ask`
+- `training_id` 在 `_build_answer`（含 `_report_usage`）之后才生成+commit → 候选 identity 已验证但生命周期顺序需调整（前置 training_id 生成）
+- **不升级 READY_TO_MIGRATE**：等 Stage 5D-1 钉死 retry cardinality
 - **设计方向**：将 training_id 生成提前到 `_build_answer` 前
+- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
 
-#### Preview（CURRENT BILLING: CHARGEABLE / PRODUCT POLICY: POLICY_PENDING / IDENTITY READINESS: DESIGN_GAP / IDENTITY_REQUIRED）
+#### Preview（#7 — CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP）
 
 - 无 Run 持久化，`conversation_id="agent-preview"` 共用
-- 当前计费且无 identity（CHARGEABLE + DESIGN_GAP）
-- **产品决策待定**（POLICY_PENDING）：免费 → 不计费；收费 → 需 preview request record（IDENTITY_REQUIRED）
+- 当前计费且无 identity（CHARGEABLE）
+- **产品决策待定**（POLICY_PENDING）：免费 → 不计费；收费 → 需 preview request record
+- **POLICY_PENDING 不停止 identity 设计**：现在就应设计 Preview execution identity（不等产品策略）
 - **设计方向**：先产品决策收费策略；若保持收费，则需 per-preview identity（preview request record）
+- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
