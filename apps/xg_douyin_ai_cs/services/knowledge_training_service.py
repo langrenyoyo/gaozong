@@ -72,6 +72,62 @@ class TrainingSessionForbiddenError(ValueError):
     """训练会话不属于当前商户或租户。"""
 
 
+def _create_execution(execution_id: str, payload: KnowledgeTrainingAskInput) -> None:
+    """创建 KnowledgeTrainingExecution 行（billing identity 前置持久化，C1）。
+
+    在 RAG search / LLM / 计费前创建并 commit，确保 identity 在 charge 点前已稳定存在。
+    execution_id 复用 ask() 的 request_id（C2：不造第三套 ID）。
+    无 is_billed / 无 billing_status：billing truth 只归 M07 committed ComputeTransaction（C4）。
+    """
+    with get_rag_engine().connect() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO knowledge_training_executions(
+                  execution_id, tenant_id, merchant_id, douyin_account_id, question, lifecycle_status
+                )
+                VALUES (:execution_id, :tenant_id, :merchant_id, :douyin_account_id, :question, 'running')
+                """
+            ),
+            {
+                "execution_id": execution_id,
+                "tenant_id": payload.tenant_id,
+                "merchant_id": payload.merchant_id,
+                "douyin_account_id": repository.UNIFIED_KB_DOUYIN_ACCOUNT_ID,
+                "question": payload.question,
+            },
+        )
+        conn.commit()
+
+
+def _finalize_execution(
+    execution_id: str, lifecycle: str, outcome: str | None = None, error_type: str | None = None
+) -> None:
+    """更新 execution 终态（执行生命周期，非账务；billing truth 归 M07）。
+
+    COMPLETED（LLM 成功）/ COMPLETED_FALLBACK（fallback 返回，C3）/ FAILED（ask 抛异常无结果，C3）。
+    CURRENT_TIMESTAMP 兼容 SQLite / PostgreSQL 两种 backend。
+    """
+    with get_rag_engine().connect() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE knowledge_training_executions
+                SET lifecycle_status = :lifecycle, outcome = :outcome,
+                    error_type = :error_type, completed_at = CURRENT_TIMESTAMP
+                WHERE execution_id = :execution_id
+                """
+            ),
+            {
+                "execution_id": execution_id,
+                "lifecycle": lifecycle,
+                "outcome": outcome,
+                "error_type": error_type,
+            },
+        )
+        conn.commit()
+
+
 def ask(payload: KnowledgeTrainingAskInput) -> dict:
     request_id = f"kt-req-{uuid4().hex[:12]}"
     started = time.perf_counter()
@@ -91,6 +147,8 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
     active_doc_count_source = "sqlite"
     active_doc_count_reliable = vector_backend != "milvus"
     try:
+        # P1 Stage 5D-2：execution 在 RAG search / LLM / 计费前创建并 commit（C1：identity 前置持久化）
+        _create_execution(request_id, payload)
         if payload.use_xiaogao_knowledge_base:
             active_doc_count = _active_base_chunk_count(
                 tenant_id=payload.tenant_id,
@@ -114,9 +172,16 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
                 )
                 rag_ms = _elapsed_ms(rag_started)
 
-        answer, llm_ms, fallback, llm_error_type = _build_answer(payload, source_chunks)
+        answer, llm_ms, fallback, llm_error_type = _build_answer(payload, source_chunks, execution_id=request_id)
         if llm_error_type:
             error_type = llm_error_type
+        # P1 Stage 5D-2：execution 终态（C3：LLM fallback=COMPLETED_FALLBACK，非 failed；FAILED 只给 ask 抛异常）
+        _finalize_execution(
+            request_id,
+            "COMPLETED_FALLBACK" if fallback else "COMPLETED",
+            outcome="fallback" if fallback else "llm",
+            error_type=(llm_error_type or None),
+        )
         training_id = f"kt-{uuid4().hex[:12]}"
         used_knowledge_base = bool(source_chunks)
         db_started = time.perf_counter()
@@ -156,6 +221,11 @@ def ask(payload: KnowledgeTrainingAskInput) -> dict:
         }
     except Exception as exc:
         error_type = type(exc).__name__
+        # P1 Stage 5D-2：ask 抛异常无结果 → execution 标 FAILED（C3）；finalization 失败绝不掩盖原异常
+        try:
+            _finalize_execution(request_id, "FAILED", error_type=error_type)
+        except Exception:  # noqa: BLE001
+            _logger.warning("knowledge_training stage=execution_finalize_failed error=%s", exc)
         raise
     finally:
         _log_ask_timing(
@@ -472,10 +542,21 @@ def _feedback_document_content(
     return "\n".join(lines)
 
 
-def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
-    """知识问答成功后优先按供应商真实 Token 上报。"""
+def _report_usage(merchant_id: str, messages: list[dict], result: dict, execution_id: str | None = None) -> None:
+    """知识问答成功后优先按供应商真实 Token 上报。
+
+    P1 Stage 5D-2：构造幂等键（身份来自前置持久化的 KnowledgeTrainingExecution.execution_id）。
+    execution_id 非空 → 构造 key；None → 兼容路径（旧调用/测试双打，无 key）。
+    billing truth 只归 M07 committed ComputeTransaction，execution 无 is_billed。
+    """
     if not merchant_id:
         return
+    # P1 Stage 5D-2：execution_id 非空 → 构造幂等键（非 conversation/时间戳推导）
+    idempotency_key = (
+        f"knowledge_training_execution:{execution_id}:ask"
+        if execution_id is not None
+        else None
+    )
     usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
@@ -490,12 +571,13 @@ def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
             completion_tokens=usage.completion_tokens,
             cached_tokens=usage.cached_tokens,
             llm_call_stage="primary",
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响问答主流程
         _logger.warning("knowledge_training stage=compute_report_error error=%s", exc)
 
 
-def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tuple[str, int, bool, str]:
+def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list, execution_id: str | None = None) -> tuple[str, int, bool, str]:
     # 统一使用 V2.0 固定提示词模板，与预览/自动回复一致。
     # training/ask 无 Agent 配置，变量用"未配置"占位。
     from apps.xg_douyin_ai_cs.services.reply_decision_service import _build_fixed_prompt_template
@@ -536,7 +618,7 @@ def _build_answer(payload: KnowledgeTrainingAskInput, source_chunks: list) -> tu
         )
 
     # 问答 chat 成功后优先按供应商真实 Token 上报，缺失时估算（capability=knowledge），再做解析
-    _report_usage(payload.merchant_id, messages, result)
+    _report_usage(payload.merchant_id, messages, result, execution_id=execution_id)
 
     # LLM 可能返回 JSON 结构（V2.0 模板要求）或纯文本，用结构化解析兜底
     raw_answer = str(result.get("reply_text") or "").strip()

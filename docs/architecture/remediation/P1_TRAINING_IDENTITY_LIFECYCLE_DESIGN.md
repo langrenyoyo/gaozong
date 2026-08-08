@@ -217,7 +217,17 @@ ask(payload) L75
 
 ## 待审批决策点
 
-1. ~~方案 A vs 方案 B~~ → **倾向方案 B**（待审查确认）
-2. execution 创建 ordering（RAG search 前覆盖 #10a 父级 / RAG search 后仅覆盖 #9）→ 实施期决策，不冻结
-3. LLM 失败时 Session 是否仍 INSERT fallback answered → 实施期决策，P1 不强制改变现有行为
-4. 审查通过后授权实施（新建 `KnowledgeTrainingExecution` 实体 + migration + `ask` 改造 + `_report_usage` 传 execution_id + 9000↔9100 透传若跨进程）
+1. ~~方案 A vs 方案 B~~ → **方案 B 已冻结 APPROVED**（Stage 5D-2 已实施）
+2. execution 创建 ordering（RAG search 前覆盖 #10a 父级 / RAG search 后仅覆盖 #9）→ **实施决策：RAG search 前创建**（C1，覆盖 #9；#10a 父级上下文仅记录不实施）
+3. LLM 失败时 Session 是否仍 INSERT fallback answered → **实施决策：Session 行为不变**（P1 不改变现有行为）
+4. ~~审查通过后授权实施~~ → **Stage 5D-2 已实施**（migration 0004 + model 原生 SQL + ask 改造 + _report_usage 传 execution_id + 6 Gate PASS）
+
+## Stage 5D-2 实施落记
+
+- **方案 B 已实施**：migration `0004_knowledge_training_executions.py` + SQLite `init_db` 兜底建表
+- **execution_id 复用 request_id**（C2），在 RAG search 前 commit（C1）
+- **lifecycle 四态**：running / COMPLETED / COMPLETED_FALLBACK（C3）/ FAILED（C3）
+- **TRAINING_REQUEST_RECOVERY_GAP 登记（C5）**：full 9000→9100 request response-lost（E1 LLM 成功 + charge commit，但 Session INSERT / HTTP response 失败 → client 重调 ask → new E2 → new charge；无 durable client request identity 证明 E1==E2）。= OPEN / RELIABILITY / OUT_OF_P1，与 DAILY_REPORT_REQUEST_RECOVERY_GAP 同口径，不并入 #9 迁移状态。
+- **6 Gate PASS**：TR-1~TR-6（`tests/test_training_compute_idempotency_migration.py`）
+- **None count**：Training 正式链 idempotency_key≠None = 0
+- **COMPUTE-IDEMPOTENCY-001 仍 OPEN**（4/11 剩余：Preview / M05 / RAG Query / RAG Ingest）

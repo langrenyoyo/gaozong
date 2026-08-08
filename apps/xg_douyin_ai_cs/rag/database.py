@@ -236,6 +236,20 @@ def init_db(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS knowledge_training_executions (
+          execution_id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          merchant_id TEXT NOT NULL,
+          douyin_account_id INTEGER NOT NULL DEFAULT 0,
+          question TEXT NOT NULL,
+          lifecycle_status TEXT NOT NULL DEFAULT 'running',
+          outcome TEXT,
+          error_type TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT,
+          CHECK(lifecycle_status IN ('running', 'COMPLETED', 'COMPLETED_FALLBACK', 'FAILED'))
+        );
+
         CREATE TABLE IF NOT EXISTS knowledge_training_feedbacks (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           training_id TEXT NOT NULL,
@@ -294,6 +308,9 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_knowledge_training_feedbacks_ingestion
         ON knowledge_training_feedbacks(tenant_id, merchant_id, training_id, answer_hash, ingestion_status);
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_training_executions_scope
+        ON knowledge_training_executions(tenant_id, merchant_id, douyin_account_id);
         """
     )
     conn.commit()
