@@ -63,3 +63,42 @@
 ### NOT_APPLICABLE
 9. Windows 19000 — M05 不依赖 Local Agent
 10. 真实微信 — M05 不依赖微信
+
+---
+
+## M05_BASELINE_CANDIDATE
+
+> 状态：**BASELINE_CANDIDATE**（非 MODULE_BASELINE_APPROVED）
+> 代码基线：c26ec227e70d
+> 后续补 TOS/Ark 凭证时只补 Gate A/D/E，不重做已验证项
+
+### VERIFIED
+
+- M05 owns AiEditMaterial/Analysis/Process/Template
+- SHA-256 幂等去重（merchant scope, reuse + coexist）
+- 软删除（deleted_at + purge_after + 不可见）
+- M06 消费校验（get_material_for_merchant + pinned_sha256 防漂移）
+- 商户隔离（cross-merchant 不可见 + platform 只读）
+- TOS 上传链路代码事实（服务器中转式）
+- 方舟多模态分析代码事实（has_speech/transcript/description/category）
+- Local Agent 注册 ≠ M04 19000（术语区分）
+- Purge = IMPLEMENTED_DATA_MODEL_ONLY（字段存在无执行器）
+
+### KNOWN HIGH ISSUE
+
+- ISSUE-M05-004: 预签名 URL 持久化到 DB（非 stable key）
+- ISSUE-M05-005: soft_delete_material 活动引用检查类型不匹配（material_id 字符串 vs Integer）
+
+### PENDING_FIXTURE
+
+- Gate A Upload（TOS 凭证）
+- Gate D Analyze（方舟 API）
+- Gate E Re-analyze（方舟 API）
+
+### NOT_APPLICABLE
+
+- Windows 19000 / 真实微信 / staging webhook
+
+### 冻结路径
+
+TOS/Ark 凭证可用 → 补 Gate A/D/E → `M05_MODULE_BASELINE_APPROVED`
