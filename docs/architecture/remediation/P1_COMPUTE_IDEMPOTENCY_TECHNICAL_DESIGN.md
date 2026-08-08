@@ -24,25 +24,44 @@
 
 **一次消费 = 一个具体业务事件产生的一次算力计费。** idempotency identity 必须对应具体业务事件，不是业务上下文。
 
-### 各消费者的业务身份候选
+### 硬规则：Business Event ID 必须预先持久化
 
-| Consumer | 调用点 | 业务事件 | 候选 identity | 不稳定/不安全候选 |
-|---|---|---|---|---|
-| M04 WechatTask | wechat_task_service.py:430,462 | 一个 WechatTask 到达 sent/pasted 终态 | `wechat_task:{task.id}` | ❌ conversation_id+model（同一会话两次真实消费会被误去重） |
-| M06 LAS | ai_edit_las_service.py:186 | 一个 LAS job 归档成功 | `las_job:{job.id}` | ❌ merchant+script_hash（同脚本重跑是不同消费） |
-| M01 LLM | reply_decision_service.py _report_llm_usage | 一次 LLM 调用成功 | `llm_call:{conversation_id}:{llm_call_count}` | ❌ conversation_id 单独（同一会话多次 LLM 是不同消费） |
-| M02 Leads | douyin_webhook.py:1242 | 一条 im_receive_msg webhook 事件入库 | `webhook_event:{event.id}` | ❌ merchant+conversation（同会话多消息是不同消费） |
-| M05 Material | material_analysis.py:251 | 一次素材分析完成 | `material_analysis:{material.id}:{analysis_version}` | ❌ material_id 单独（重新分析是不同消费） |
+> **Business Event ID 必须在计费副作用发生之前已经稳定存在。**
+> retry / process restart / duplicate delivery 必须复用同一个 ID。
+> 优先使用已有持久化业务实体（AiAutoReplyRun.id / WebhookEvent.id / WechatTask.id / AiEditJob.id / MaterialAnalysis.id+version）。
+> **不允许使用运行时计算序号（如 call_count）——进程重启/重试后序号不稳定。**
+
+### Consumer Business Event Identity Matrix（正式合同表）
+
+| Consumer | Charge Event | 稳定身份 | Retry 复用 | 多次合法收费 | Cardinality |
+|---|---|---|---|---|---|
+| M04 | Task result usage | WechatTask.id + operation（paste/sent） | 必须 | 通常 1 次 | 1:1 |
+| M06 | LAS archive usage | AiEditJob.id + archive operation | 必须 | 通常 1 次 | 1:1 |
+| M01 | LLM usage | **待确认**：需绑定持久化 run/event（AiAutoReplyRun.id 是否可作为 LLM usage 的稳定 event identity？待确认） | 必须 | 同 conversation 可多次合法 | 1:N |
+| M02 | webhook event charge | WebhookEvent.id + operation | 必须 | 按事实 | 1:1 |
+| M05 | Material analysis | Material.id + analysis_version | 必须 | re-analysis 是新事件 | 1:N |
+
+### M01 LLM 特殊处理
+
+> **从正式方案中删除 `llm_call:{conversation_id}:{call_count}`**（运行时计算序号不稳定，进程重启/重试后无法复用）。
+>
+> 替换为需绑定持久化 run/event ID 的设计方向。
+>
+> **标注"待确认 AiAutoReplyRun.id 是否可作为 LLM usage 的稳定 event identity"**：
+> - 如果 AiAutoReplyRun 每次 LLM 调用都有独立行 → `ai_auto_reply_run:{run.id}` 可用
+> - 如果一个 run 内有 retry（多次 LLM 调用）→ 需确认 retry 是否产生新 run 行或需子序号
+> - 如果是 preview（非 auto-reply run）→ 需确认是否有持久化实体可绑定
+> - **不强行指定方案，待确认后补入**
 
 ### 关键约束
 
 > **兼容陷阱**：`idempotency_key = merchant + conversation_id + model` → 同一会话第 1 次和第 2 次真实 LLM 消费会被错误去重。
 >
-> **idempotency identity 必须对应具体业务事件，不是业务上下文。** conversation_id 是上下文不是事件；task.id / job.id / event.id / llm_call_count 才是事件级标识。
+> **idempotency identity 必须对应具体业务事件，不是业务上下文。** conversation_id 是上下文不是事件。
 
 ### 设计结论
 
-每个 consumer 传入一个 **business_event_id**（字符串），代表"这一笔只允许扣一次"的业务事件唯一标识。M07 不派生，由 consumer 生成（consumer 最清楚自己的业务事件边界）。
+每个 consumer 传入一个 **business_event_id**（字符串），代表"这一笔只允许扣一次"的业务事件唯一标识。M07 不派生，由 consumer 生成（consumer 最清楚自己的业务事件边界）。Business Event ID 必须预先持久化。
 
 ---
 
@@ -52,18 +71,20 @@
 
 | 层 | 职责 |
 |---|---|
-| Consumer | 生成 `idempotency_key`（基于自己的业务事件 ID） |
+| Consumer | 生成 `idempotency_key`（基于自己的持久化业务事件 ID） |
 | M07 | 存储 `idempotency_key` 到 ComputeTransaction，DB 唯一约束兜底 |
 
-### Consumer 生成规则
+### 幂等 namespace 与可变 source 分离
 
 ```
-idempotency_key = f"{source}:{business_event_id}"
+idempotency_key = f"{event_namespace}:{business_event_id}"
 ```
 
-- `source` = consumer 标识（wechat_task / las_job / llm_call / webhook_event / material_analysis）
-- `business_event_id` = consumer 侧的业务事件唯一 ID（task.id / job.id / event.id / conversation_id+call_count / material.id+version）
-- **不用时间戳/随机 request_id**（每次 retry 变新 key = 无幂等）
+- **event_namespace** = 稳定合同标识符（参与幂等身份，**不得随 source 重命名/模块调整而改变**）
+- **business_event_id** = 稳定事件身份（预先持久化的业务实体 ID）
+- **source** = 运营归因（observability，**不参与幂等身份**）
+
+> **REQUIRED-4 硬规则**：event_namespace 是幂等合同的一部分，source 只是运维标签。如果未来 source 从 "wechat-assistant" 改为 "m04_task"，event_namespace 不变。
 
 ### 为什么不由 M07 派生
 
@@ -79,37 +100,54 @@ M07 不知道 consumer 的业务事件边界（conversation_id 是上下文不�
 UniqueConstraint(merchant_id, idempotency_key)
 ```
 
-- **不跨商户误判重复**：不同 merchant 相同 idempotency_key 各自独立（与 SHA-256 去重 scope 一致）
-- **不跨 source 误判重复**：source 前缀确保不同 consumer 的 event_id 不冲突
-- **不跨业务事件误判重复**：同一会话两次真实 LLM 消费有不同的 llm_call_count
+- **不跨商户误判重复**：不同 merchant 相同 idempotency_key 各自独立
+- **不跨 event_namespace 误判重复**：namespace 前缀确保不同 consumer 的 event_id 不冲突
+- **不跨业务事件误判重复**：同一 conversation 的两次合法 LLM 消费有不同 business_event_id
 
 ### 不需要的字段
 
-- 不需要 `source` 参与唯一约束（已在 idempotency_key 前缀中）
+- 不需要 `source` 参与唯一约束（event_namespace 已在 idempotency_key 中）
 - 不需要 `capability_key` 参与唯一约束（同一事件不会跨 capability）
 
 ---
 
 ## D. DB 原子性
 
-### 方案：DB 约束兜底 + 单事务原子单元
+### 冻结正式 invariant（REQUIRED-3）
+
+```
+首次调用：
+  INSERT transaction → 成功 → 获得 ownership → UPDATE balance → COMMIT → 返回 transaction
+
+重复调用：
+  INSERT transaction → UNIQUE CONFLICT → 读取已存在 transaction → 校验 payload 一致
+    → DO NOT UPDATE balance → 返回原 transaction
+```
+
+> **关键不变量：只有成功创建幂等流水的那个事务拥有修改余额的权利。**
+> **绝不能 INSERT ON CONFLICT 后不管是否成功都继续 UPDATE balance。**
+
+### DB 约束兜底 + 单事务原子单元
 
 ```
 record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
   1. INSERT INTO compute_transactions (..., idempotency_key=...)
      ON CONFLICT (merchant_id, idempotency_key) DO NOTHING RETURNING id
-  2. 若 RETURNING 有行 → 写流水成功 → 继续扣余额（同一事务）
-     若 RETURNING 无行 → 已存在 → 幂等返回
+  2. 若 RETURNING 有行 → 获得 ownership → 继续扣余额（同一事务）
+     若 RETURNING 无行 → 已存在 → 校验 payload 一致 → 幂等返回（不扣余额）
   3. UPDATE compute_accounts SET balance_tokens = balance_tokens - billed_tokens
      WHERE merchant_id = ? (with_for_update)
   4. COMMIT
 ```
 
-### 关键约束
+### Idempotency Payload Consistency Contract（REQUIRED-2）
 
-- **transaction insert + balance update 必须作为一个账务原子单元**（同一 DB 事务）
-- **由数据库约束兜底**（非 Python 先 SELECT 再 INSERT 的 race-prone 逻辑）
-- ON CONFLICT 是 PostgreSQL 原生语法；SQLite 需 INSERT OR IGNORE + 查询验证（已有跨方言先例：webhook 幂等 claim_webhook_event）
+| 场景 | 行为 |
+|---|---|
+| Same Key + Same Semantic Billing Payload | **IDEMPOTENT REPLAY**（返回原结果，不扣费） |
+| Same Key + Different Semantic Billing Payload | **IDEMPOTENCY_CONFLICT**（不扣费，不覆盖原流水，记录异常/告警） |
+
+> 具体 payload fingerprint 比较留给实施设计，但行为现在冻结。
 
 ### 失败场景分析
 
@@ -132,7 +170,11 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 - **不返回 409**（幂等 API 应把重复视为"已成功完成的同一请求"）
 - **不返回 duplicated=true**（consumer 不需要区分首次/重复，只需知道"这次消费已记账"）
-- 返回值与首次成功调用一致（ComputeAccount 或 ComputeTransaction）
+- 返回值与首次成功调用一致
+
+### Observability 补充
+
+> 重复调用内部区分 `created` vs `idempotent_replay`（不一定暴露给 API 响应，但运维可追踪）。
 
 ### 内部 HTTP 上报（M01 9100 → 9000）
 
@@ -146,16 +188,16 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 ### 必须保证的账本不变量
 
 1. **同一 idempotency_key 最多一笔 transaction**（DB UniqueConstraint 兜底）
-2. **同一 idempotency_key 最多一次余额修改**（transaction + balance 在同一事务）
+2. **同一 idempotency_key 最多一次余额修改**（只有获得 ownership 的事务才扣余额）
 3. **balance_tokens == initial + sum(delta_tokens)**（ledger invariant，Gate C 已验证 sequential）
 
 ### 不可能场景
 
 | 场景 | 是否可能 | 原因 |
 |---|---|---|
-| 重复 transaction 无余额修改 | ❌ 不可能 | 同一事务原子 |
+| 重复 transaction 无余额修改 | ❌ 不可能 | 只有获得 ownership 的事务才扣余额 |
 | 余额修改无 transaction | ❌ 不可能 | 同一事务原子 |
-| 重复 transaction + 重复余额修改 | ❌ 不可能（修复后） | ON CONFLICT DO NOTHING |
+| 重复 transaction + 重复余额修改 | ❌ 不可能（修复后） | ON CONFLICT DO NOTHING，未获得 ownership 不扣余额 |
 
 ### 残留风险
 
@@ -167,13 +209,16 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 ## G. 老消费者兼容
 
-### 兼容窗口 + 迁移计划
+### 兼容窗口 + 迁移计划 + Closure Gate（REQUIRED-5）
 
-| 阶段 | 行为 | 风险 |
-|---|---|---|
-| 阶段 1：idempotency_key 可选 | `idempotency_key=None` 时走旧逻辑（无去重，裸扣） | 旧 consumer 不报错，但无幂等保护 |
-| 阶段 2：逐个迁移 consumer | 每个 consumer 改为传入 idempotency_key | 迁移一个保护一个 |
-| 阶段 3：idempotency_key 必填 | `idempotency_key=None` → raise ValueError | 所有 consumer 必须已迁移 |
+| 阶段 | 行为 | 风险 | Closure |
+|---|---|---|---|
+| 阶段 1：idempotency_key 可选 | `idempotency_key=None` 时走旧逻辑（无去重，裸扣） | 旧 consumer 不报错，但无幂等保护 | None 调用必须可计数/可追踪到 consumer |
+| 阶段 2：逐个迁移 consumer | 每个 consumer 改为传入 idempotency_key | 迁移一个保护一个 | — |
+| 阶段 3：idempotency_key 必填 | `idempotency_key=None` → raise ValueError | 所有 consumer 必须已迁移 | **production charge-producing consumers using None = 0** |
+
+> **COMPUTE-IDEMPOTENCY-001 在 Phase 1/2 期间仍然 OPEN**（None 调用仍可重复扣费）。
+> **Required enforcement 必须落实到 M07 核心 service contract（record_usage），不能只在 HTTP API。**
 
 ### 迁移顺序（按 E2E_IMPACTED 优先）
 
@@ -208,17 +253,27 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 |---|---|---|
 | 1 Sequential duplicate | 同一 idempotency_key 调用两次 | 1 条 transaction，balance delta = 1 × charge |
 | 2 Concurrent duplicate | 并发同一 idempotency_key | 1 条 transaction，无 lost update |
-| 3 Two legitimate usages | 不同 idempotency_key | 2 条 transaction，balance delta = 2 × charge |
+| 3 Two legitimate usages | 不同 idempotency_key（同 context 不同 event） | 2 条 transaction，balance delta = 2 × charge |
 | 4 Ledger invariant | balance == initial + sum(delta) | PASS |
 | 5 M04 duplicate result → compute | 重复 _report_wechat_task_compute_usage | 1 条 transaction（ISSUE-M04-002 CLOSED） |
 | 6 M06 exposed path | 重复 _report_las_compute_usage | 1 条 transaction |
 | 7 Merchant isolation | A 不能读写 B | PASS |
 | 8 Failed-retry | commit 失败 + retry | 1 条 transaction |
 | 9 Old consumer (idempotency_key=None) | 阶段 1 兼容 | 旧逻辑不报错（无去重） |
+| **10** | **Same Key + Different Payload** | **不二次扣费 / 不覆盖原流水 / 报告 IDEMPOTENCY_CONFLICT** |
+| **11** | **Same Context + Two Legitimate Events** | **two keys / two transactions / two legitimate charges** |
+
+### P1 CLOSURE MANDATORY GATE（REQUIRED-6）
+
+> **PostgreSQL Concurrent Duplicate Gate = REQUIRED FOR P1 CLOSURE**
+>
+> 两请求 same merchant + same business event + same idempotency identity 并发进入。
+> 结果：transaction +1 / balance 只扣一次 / 两请求获得同一结果 / ledger invariant 成立。
+> **SQLite 不能替代。**
 
 ### 防止误去重
 
-> **关键验收**：同一 conversation_id 的两次真实 LLM 消费（不同 llm_call_count）必须产生两条 transaction。如果 idempotency_key 误用 conversation_id 而非 llm_call:{conversation_id}:{call_count}，第二次合法消费会被错误去重。
+> **关键验收**：同一 conversation_id 的两次真实 LLM 消费（不同 business_event_id）必须产生两条 transaction。如果 idempotency_key 误用 conversation_id 而非持久化事件 ID，第二次合法消费会被错误去重。
 
 ### Cross-module Regression
 
@@ -261,13 +316,16 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 ---
 
-## Rollback Strategy
+## Rollback Strategy（REQUIRED-7：code-first / schema-last）
 
 | 阶段 | 回滚方式 |
 |---|---|
-| DB migration | `idempotency_key` 列 nullable，可安全 DROP COLUMN |
-| API 签名 | `idempotency_key=None` 默认值，移除参数不影响旧调用 |
-| Consumer 迁移 | 每个 consumer 独立迁移，可单独回滚 |
+| Consumer rollback | 先回滚 consumer 代码（不再传 idempotency_key → 走旧逻辑） |
+| M07 application rollback | 回滚 record_usage 代码（移除 idempotency_key 参数 → 旧逻辑） |
+| 确认旧代码不依赖新字段 | 验证旧代码不引用 `idempotency_key` 列 |
+| Schema rollback（最后才考虑） | nullable 字段和 unique index 通常不需要第一时间删除；如需删除才 DROP |
+
+> **不把 DROP 列作为首选安全回滚策略。** 新增 nullable 字段和 unique index 通常不需要第一时间删除。
 
 ---
 
@@ -276,9 +334,11 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 以下留给实施审批：
 - 具体字段名（`idempotency_key` vs `dedup_key` vs `business_event_id`）
 - 具体 SQL 语法（ON CONFLICT vs INSERT OR IGNORE + 查询）
-- idempotency_key 的具体格式（`source:event_id` vs `source:event_id:version`）
+- idempotency_key 的具体格式（`event_namespace:event_id` 的具体拼接方式）
+- payload fingerprint 比较的具体实现
 - 迁移文件编号
 - 测试文件结构
+- M01 LLM event identity 的具体方案（待确认 AiAutoReplyRun.id 后补入）
 
 ---
 
@@ -286,11 +346,11 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 
 | 问题 | 回答 |
 |---|---|
-| A. 一次消费的业务身份 | consumer 侧具体业务事件 ID（task.id / job.id / event.id / conversation_id+call_count / material.id+version） |
-| B. 幂等键由谁生成 | Consumer 生成 `idempotency_key = f"{source}:{business_event_id}"` |
+| A. 一次消费的业务身份 | consumer 侧持久化业务实体 ID；M01 LLM 待确认 AiAutoReplyRun.id；运行时序号不可用 |
+| B. 幂等键由谁生成 | Consumer 生成 `idempotency_key = f"{event_namespace}:{business_event_id}"`；event_namespace 稳定不随 source 变 |
 | C. 幂等作用域 | `UniqueConstraint(merchant_id, idempotency_key)` |
-| D. DB 原子性 | ON CONFLICT DO NOTHING RETURNING + balance UPDATE 同一事务 |
-| E. 重复调用返回什么 | 200 + 原交易结果（不 409 不 duplicated=true） |
-| F. 失败边界 | 同一事务原子；commit 失败回滚可重试；commit 成功 retry 幂等 |
-| G. 老消费者兼容 | 阶段 1 可选 → 阶段 2 逐个迁移 → 阶段 3 必填 |
-| H. 回归验收 | 9 个 Acceptance Gate + 防误去重关键验收 |
+| D. DB 原子性 | ON CONFLICT DO NOTHING RETURNING 获得 ownership → 只有 owner 扣余额；Same Key + Different Payload = IDEMPOTENCY_CONFLICT |
+| E. 重复调用返回什么 | 200 + 原交易结果；内部区分 created vs idempotent_replay |
+| F. 失败边界 | 只有获得 ownership 的事务才扣余额；commit 失败回滚可重试；commit 成功 retry 幂等 |
+| G. 老消费者兼容 | 阶段 1 可选（None 可追踪）→ 阶段 2 逐个迁移 → 阶段 3 必填（None=0 closure gate） |
+| H. 回归验收 | 11 个 Acceptance Gate + PG Concurrent Mandatory Gate + 防误去重 + Payload Consistency |
