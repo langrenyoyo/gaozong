@@ -1309,6 +1309,36 @@ class DailyReportJob(Base):
     generation_token = Column(String(64), comment="generating 期间 claim 令牌，防旧 worker 覆盖")
     generation_started_at = Column(DateTime, comment="generating 开始时间，超 30 分钟视为 stale")
     artifact_status = Column(String(16), default="none", comment="文件指针状态 none/available")
+    # P1 Stage 5C-4：确定性恢复引用（禁止 ORDER BY id DESC 猜测恢复对象）
+    current_generation_id = Column(Integer, comment="当前活动 generation 引用（确定性恢复，非猜测）")
+
+
+class DailyReportGeneration(Base):
+    """日报生成 billing identity 实体（P1 Stage 5C-4 方案 B）。
+
+    每次 _claim_generating 创建一行，持久不可清空。
+    id 是 M07 幂等键的 billing identity 来源：daily_report_generation:{id}:summary。
+
+    硬约束：本实体无 is_billed 字段——billing truth 只属于 M07 committed ComputeTransaction。
+    lifecycle_status 是执行生命周期（pending/running/succeeded/failed），用于执行编排，
+    非账务真相；恢复决策仍需以 M07 ComputeTransaction 为准。
+    设计：docs/architecture/remediation/P1_DAILY_REPORT_GENERATION_DESIGN.md
+    """
+
+    __tablename__ = "daily_report_generations"
+    __table_args__ = (
+        Index("idx_daily_report_generations_job", "job_id"),
+        CheckConstraint(
+            "lifecycle_status IN ('pending', 'running', 'succeeded', 'failed')",
+            name="ck_daily_report_generations_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, ForeignKey("daily_report_jobs.id"), nullable=False, comment="关联日报任务")
+    lifecycle_status = Column(String(20), nullable=False, default="pending",
+                              comment="执行生命周期，非 billing truth")
+    created_at = Column(DateTime, default=datetime.now)
 
 
 class DailyReportDelivery(Base):

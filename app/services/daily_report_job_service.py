@@ -30,7 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import DAILY_REPORT_STORAGE_DIR
-from app.models import DailyReportJob
+from app.models import DailyReportGeneration, DailyReportJob
 from app.schemas import DailyReportDiagnostic, DailyReportJobItem
 from app.services.autoreply_admin_rollout_service import record_admin_audit
 from app.services.daily_report_excel import build_daily_report_workbook
@@ -199,8 +199,19 @@ def _get_or_create_job(db: Session, *, merchant_id, report_day, report_type, rep
     return job
 
 
-def _claim_generating(db: Session, job: DailyReportJob) -> str:
-    """原子 claim：status != generating 或 started_at 超时。rowcount=0 抛 ClaimConflictError。"""
+def _claim_generating(db: Session, job: DailyReportJob) -> tuple[str, int]:
+    """原子 claim + 创建 Generation（同事务原子绑定，P1 Stage 5C-4）。
+
+    同一 DB 事务：
+      1. 原子条件 UPDATE（获得执行权，rowcount=0 抛 ClaimConflictError）
+      2. create DailyReportGeneration（NEW billing identity）
+      3. update job.current_generation_id = generation.id（确定性恢复引用）
+      4. db.commit()（单次 commit 原子）
+
+    返回 (token, generation_id)。generation_id 是持久化 billing identity 快照，
+    供 9000→9100 透传构造 M07 幂等键。
+    硬约束：Generation 无 is_billed，billing truth 只属于 M07 committed ComputeTransaction。
+    """
     token = secrets.token_hex(16)
     now = datetime.now()
     stale_threshold = now - timedelta(minutes=STALE_MINUTES)
@@ -217,10 +228,23 @@ def _claim_generating(db: Session, job: DailyReportJob) -> str:
         DailyReportJob.generation_started_at: now,
         DailyReportJob.generation_version: GENERATION_VERSION,
     }, synchronize_session=False)
-    db.commit()
     if rowcount == 0:
+        db.rollback()
         raise ClaimConflictError()
-    return token
+
+    # claim 成功 → 同事务创建 Generation（billing identity）+ 更新确定性引用
+    # lifecycle_status 用 running（执行中）；CHECK 约束只允许 pending/running/succeeded/failed
+    generation = DailyReportGeneration(
+        job_id=job.id, lifecycle_status="running",
+    )
+    db.add(generation)
+    db.flush()  # 获取 generation.id（未 commit，与 claim 同事务）
+    db.query(DailyReportJob).filter(DailyReportJob.id == job.id).update(
+        {DailyReportJob.current_generation_id: generation.id},
+        synchronize_session=False,
+    )
+    db.commit()  # 单次 commit：claim + Generation + current_generation_id 原子
+    return token, generation.id
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +255,7 @@ def _finalize_success(
     db: Session, *, job_id, token, build_result: ReportBuildResult,
     storage_key: str, sha256: str, size: int, merchant_id: str,
     report_type: str, report_variant: str, report_day, operator_id, operator_name,
+    generation_id: int | None = None,
 ) -> bool:
     status = STATUS_GENERATED if build_result.is_complete else STATUS_PARTIAL
     rowcount = db.query(DailyReportJob).filter(
@@ -250,6 +275,12 @@ def _finalize_success(
         DailyReportJob.error_message: None,
     }, synchronize_session=False)
     if rowcount == 1:
+        # P1 5C-4：更新 Generation 执行生命周期（succeeded，非 billing truth）
+        if generation_id is not None:
+            db.query(DailyReportGeneration).filter(
+                DailyReportGeneration.id == generation_id
+            ).update({DailyReportGeneration.lifecycle_status: "succeeded"},
+                      synchronize_session=False)
         record_admin_audit(
             db, action="daily_report_generated", merchant_id=merchant_id,
             target_type="daily_report_job", target_id=str(job_id),
@@ -265,6 +296,7 @@ def _finalize_success(
 def _finalize_failure(
     db: Session, *, job_id, token, exc: BaseException, merchant_id: str,
     report_type: str, report_variant: str, had_previous: bool, operator_id, operator_name,
+    generation_id: int | None = None,
 ) -> None:
     """异常：条件写 failed + 诊断；有旧文件保留 available，否则 none。token 失效不改任务。"""
     diagnostics = [{"code": "generation_failed", "count": 1, "exception_type": type(exc).__name__}]
@@ -280,6 +312,12 @@ def _finalize_failure(
         DailyReportJob.error_message: f"{type(exc).__name__}: generation_failed",
     }, synchronize_session=False)
     if rowcount == 1:
+        # P1 5C-4：更新 Generation 执行生命周期（failed，非 billing truth）
+        if generation_id is not None:
+            db.query(DailyReportGeneration).filter(
+                DailyReportGeneration.id == generation_id
+            ).update({DailyReportGeneration.lifecycle_status: STATUS_FAILED},
+                      synchronize_session=False)
         record_admin_audit(
             db, action="daily_report_failed", merchant_id=merchant_id,
             target_type="daily_report_job", target_id=str(job_id),
@@ -324,7 +362,7 @@ def generate_one(
     had_previous = job.artifact_status == ARTIFACT_AVAILABLE and bool(job.file_storage_key)
     # 活跃租约 raise ClaimConflictError：默认集由 generate_reports 捕获跳过，
     # regenerate 由 router 捕获转 409
-    token = _claim_generating(db, job)
+    token, generation_id = _claim_generating(db, job)
 
     # 阶段二：事务外聚合 + 摘要 + Excel + 写新版本文件
     new_storage_key = build_storage_key(report_type, report_day, generate_storage_token())
@@ -333,6 +371,7 @@ def generate_one(
             db, merchant_id=merchant_id, report_day=report_day,
             report_type=report_type, report_variant=report_variant,
             summary_client=summary_client,
+            report_generation_id=generation_id,  # P1 5C-4：billing identity 透传
         )
         workbook = build_daily_report_workbook(build_result)
         sha256, size = save_workbook_to_storage(workbook, new_storage_key)
@@ -343,6 +382,7 @@ def generate_one(
             db, job_id=job.id, token=token, exc=exc, merchant_id=merchant_id,
             report_type=report_type, report_variant=report_variant,
             had_previous=had_previous, operator_id=operator_id, operator_name=operator_name,
+            generation_id=generation_id,
         )
         db.refresh(job)
         return job
@@ -353,6 +393,7 @@ def generate_one(
         storage_key=new_storage_key, sha256=sha256, size=size, merchant_id=merchant_id,
         report_type=report_type, report_variant=report_variant, report_day=report_day,
         operator_id=operator_id, operator_name=operator_name,
+        generation_id=generation_id,
     )
     if committed:
         # Phase 8-B：finalize 后独立短事务建投递（钉住 new artifact）；投递失败不回滚报表

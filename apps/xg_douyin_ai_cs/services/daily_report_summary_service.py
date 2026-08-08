@@ -137,10 +137,23 @@ def _fallback(report_day: str, reason: str, *, model: str | None = None) -> dict
     }
 
 
-def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
-    """LLM 成功后优先按供应商真实 Token 上报，失败不影响摘要。"""
+def _report_usage(merchant_id: str, messages: list[dict], result: dict,
+                  report_generation_id: int | None = None) -> None:
+    """LLM 成功后优先按供应商真实 Token 上报，失败不影响摘要。
+
+    P1 Stage 5C-4：report_generation_id 非空时构造幂等键
+    `daily_report_generation:{generation_id}:summary`（billing-report replay only；
+    full-request response-lost 登记 SEPARATE_REQUEST_RECOVERY_GAP，非 P1 职责）。
+    None 时走兼容路径不传 key（旧计费行为）。
+    """
     if not merchant_id:
         return
+    # P1 5C-4：构造幂等键（身份来自 9000 透传的持久化 generation_id）
+    idempotency_key = (
+        f"daily_report_generation:{report_generation_id}:summary"
+        if report_generation_id is not None
+        else None
+    )
     usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
@@ -155,6 +168,7 @@ def _report_usage(merchant_id: str, messages: list[dict], result: dict) -> None:
             completion_tokens=usage.completion_tokens,
             cached_tokens=usage.cached_tokens,
             llm_call_stage="primary",
+            idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001  上报失败绝不影响摘要主流程
         _logger.warning("daily_summary stage=compute_report_error error=%s", exc)
@@ -190,7 +204,8 @@ def summarize_daily_sales_feedback(request: DailySalesSummaryRequest) -> dict:
         return _fallback(request.report_day, reason)
 
     # chat 成功后优先按供应商真实 Token 上报，缺失时估算，再做解析（空/畸形输出也计量）
-    _report_usage(request.merchant_id, messages, result)
+    _report_usage(request.merchant_id, messages, result,
+                  report_generation_id=request.report_generation_id)
 
     summary_text = _parse_summary_text(result.get("reply_text"))
     if not summary_text:

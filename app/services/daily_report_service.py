@@ -448,7 +448,8 @@ def _budget_intersects(b_min: Decimal, b_max: Decimal | None,
 
 
 def _build_daily_sales_feedback_report(
-    db: Session, *, merchant_id: str, report_day: date, report_variant: str, summary_client
+    db: Session, *, merchant_id: str, report_day: date, report_variant: str, summary_client,
+    report_generation_id: int | None = None,
 ) -> ReportBuildResult:
     """报表 2：每日线索销售反馈表（执行包主工作表 10 列单行汇总 + 原始总结 8 列）。
 
@@ -555,6 +556,8 @@ def _build_daily_sales_feedback_report(
         payload = {
             "merchant_id": merchant_id,
             "report_day": report_day.isoformat(),
+            # P1 5C-4：billing identity 透传（持久化快照，claim 时已 commit）供 9100 构造幂等键
+            "report_generation_id": report_generation_id,
             "summaries": [
                 {
                     "sales_name": s.sales_name,
@@ -928,11 +931,14 @@ def build_daily_report(
     report_type: str,
     report_variant: str = "default",
     summary_client=None,
+    report_generation_id: int | None = None,
 ) -> ReportBuildResult:
     """按 report_type 分发到四类私有报表函数。
 
     merchant_id 必须来自可信上下文（不接受请求体/查询参数伪造）。
     不新增策略工厂/插件/通用 DSL；四类各一个私有函数。
+
+    report_generation_id（P1 5C-4）：billing identity 透传，仅 feedback 分支调 LLM 时使用。
     """
     if not merchant_id:
         raise ValueError("merchant_id 必须来自可信上下文")
@@ -947,6 +953,7 @@ def build_daily_report(
         return _build_daily_sales_feedback_report(
             db, merchant_id=merchant_id, report_day=report_day,
             report_variant=report_variant, summary_client=summary_client,
+            report_generation_id=report_generation_id,
         )
     if report_type == REPORT_LEAD_TRACE:
         return _build_lead_trace_report(

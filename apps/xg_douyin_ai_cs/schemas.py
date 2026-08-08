@@ -269,6 +269,10 @@ class DailySalesSummaryRequest(BaseModel):
     merchant_id: str = Field(..., min_length=1, max_length=128)
     report_day: str = Field(..., min_length=1, max_length=10)
     summaries: list[DailySalesSummaryItem] = Field(..., min_length=1, max_length=DAILY_SUMMARY_MAX_ITEMS)
+    # P1 Stage 5C-4：billing identity 透传（9000→9100，持久化快照）
+    # 非空时 _report_usage 构造 idempotency_key=daily_report_generation:{generation_id}:summary；
+    # None 时走兼容路径不传 key（旧计费行为）。
+    report_generation_id: int | None = None
 
 
 class DailySalesSummaryResponse(BaseModel):

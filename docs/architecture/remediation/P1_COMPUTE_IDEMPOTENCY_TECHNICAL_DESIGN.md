@@ -431,7 +431,7 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | 7 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置 | training_id 在 _report_usage 之后才生成+commit | DESIGN_GAP | None | ⏸ 需 training_id 前置 |
 | 8 | RAG Embedding | `rag/repository.py:481` | ACTIVE | 无 per-embedding identity | 每 chunk 一次 embedding API；3 个调用点（search/ingest×2）；无持久 per-embedding execution entity | DESIGN_GAP | None | ⏸ 需 per-embedding identity 设计 |
 | 9 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
-| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportJob.id（parent，1:N） | DailyReportJob 有 UniqueConstraint；job.id 前置持久化且 retry 复用；但 1 Job : N 次合法生成（regenerate），job.id 只能做 parent；无持久化 generation/attempt 维度（generation_token 是临时租约令牌，生成后清空） | DESIGN_GAP（结论 B：parent identity 已找到，差 generation 维度 + 9000→9100 透传） | None | ⏸ 需持久化 generation_attempt + 9000→9100 透传 |
+| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 SEPARATE_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ MIGRATED（Stage 5C-4） |
 
 ### Stage 5B 身份验真详情
 
@@ -454,9 +454,9 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 - **结论**：**IDENTITY_VERIFIED — MIGRATED**（Stage 5C-1）
 - **迁移实现**：9000 `_judge_via_9100` 传 `return_visit_run_id=run.id`（claim 前 commit 持久化快照）→ 9100 `ReturnVisitJudgeRequest.return_visit_run_id` → `_report_usage` 构造 `return_visit_run:{run_id}:judge`。getattr 兼容测试双打（与 M01 `_report_llm_usage` run_id/attempt_count 同模式）。
 
-#### Daily Report Summary（Stage 5C-2 验真：结论 B — 1:N，Job 是 parent）
+#### Daily Report Summary（Stage 5C-2 验真结论 B + Stage 5C-4 迁移 MIGRATED）
 
-**验真问题与证据（file:line）：**
+**Stage 5C-2 验真问题与证据（file:line）：**
 
 **Q1：DailyReportJob.id 是否在 summary LLM 调用前稳定持久化？**
 - 三阶段生成（`daily_report_job_service.py:315 generate_one`）：阶段一 `_get_or_create_job`（`:176`）create-or-get + `_claim_generating`（`:202`，`db.commit()` at `:220`）→ 阶段二事务外 `_build_daily_report` → 调 9100 summary（`daily_report_service.py:574`）
@@ -488,6 +488,15 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
   2. 用独立 `daily_report_generation` 子表记录每次生成（job_id + attempt + started_at + 持久化 token）
   3. 迁移 key 形态：`daily_report_job:{job.id}:{attempt}:summary`（类比 M01 `ai_auto_reply_run:{run_id}:{attempt_count}:{stage}`）
 - **跨进程透传**：除 generation 维度外，还需 9000→9100 透传（payload `daily_report_service.py:555` 当前只含 merchant_id/report_day/summaries，不含 job_id → 需加 report_job_id + generation_attempt，类似 M01 Stage 4B）
+
+**Stage 5C-4 迁移实施（MIGRATED）：**
+- **方案 B 冻结**：新建 `DailyReportGeneration` 独立持久实体（`models.py`），每次 `_claim_generating` 同事务创建一行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）
+- **Identity 合同**：`daily_report_generation:{generation_id}:summary`（event_namespace=`daily_report_generation`，business_event_id=`{generation_id}:summary`）
+- **三层 identity 严格分离**：DailyReportJob(parent) / DailyReportGeneration(billing) / generation_token(lease 临时)
+- **3 实施约束已落地**：(1) Generation 创建与 claim 同事务原子绑定；(2) `job.current_generation_id` 确定性引用（禁 `ORDER BY id DESC` 猜测）；(3) Generation 无 is_billed 字段，billing truth 只属于 M07 committed ComputeTransaction
+- **billing-report replay only**：full 9000→9100 request response-lost 登记为 SEPARATE_REQUEST_RECOVERY_GAP（非 P1 职责，M07 IDEMPOTENCY_CONFLICT 兜底）
+- **7 Gate PASS**：DR-1~DR-7（见 `P1_DAILY_REPORT_GENERATION_DESIGN.md`）
+- **migration**：`0032_daily_report_generations.py`（revision 0032，backward-compatible nullable）
 
 #### M05 Material Analysis（DESIGN_GAP — 已确认）
 
