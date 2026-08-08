@@ -128,14 +128,21 @@ def test_tr3_explicit_new_ask_two_txn(db):
     assert len(set(keys)) == 2  # 不同 key = 不同合法消费
 
 
-# === TR-4: LLM Failure/Fallback — 0 txn / COMPLETED_FALLBACK ===
+# === TR-4: LLM Failure/Fallback — 0 txn / COMPLETED_FALLBACK（CODE_VERIFIED）===
 
 def test_tr4_llm_failure_fallback_zero_charge():
     """LLM 失败但 fallback 返回 → 0 txn（不计费）+ Execution=COMPLETED_FALLBACK（非 failed）。
 
-    代码事实确认（不改代码）：
+    证据等级：CODE_VERIFIED（inspect.getsource 代码结构确认，非 runtime mock）。
+    ★ inspect.getsource PASS ≠ runtime/E2E PASS。
+
+    已验证（代码结构）：
     1. _report_usage 仅在 chat 成功路径调用（fallback 路径不计费）。
     2. ask() 中 fallback=True → COMPLETED_FALLBACK（C3：非 failed）。
+
+    PENDING runtime gate（不在本轮 H 范围，仅登记）：
+      mock client.chat 抛 LLMRequestError → 断言 Execution=COMPLETED_FALLBACK /
+      Session=answered / ComputeTransaction=0 / balance unchanged。
     """
     from apps.xg_douyin_ai_cs.services import knowledge_training_service as svc
 
@@ -158,14 +165,20 @@ def test_tr4_llm_failure_fallback_zero_charge():
     assert "_report_usage" not in after_except
 
 
-# === TR-5: Real Ask Failure — Execution=FAILED / 无假成功 charge ===
+# === TR-5A: Failure Before Successful LLM/Billing — Execution=FAILED / 0 charge（CODE_VERIFIED）===
 
-def test_tr5_ask_failure_failed_no_charge():
-    """ask 抛异常（RAG/DB 失败）→ Execution=FAILED / 无假成功 charge / 无永远 running。
+def test_tr5a_failure_before_billing_zero_charge():
+    """账务前失败（RAG/前置流程失败 或 LLM 未成功进入 _report_usage）→ Execution=FAILED / 0 ComputeTransaction / 0 debit。
 
-    代码事实确认（不改代码）：
+    证据等级：CODE_VERIFIED（inspect：_create_execution 在 try 开头 + except 标 FAILED）。
+    ★ inspect.getsource PASS ≠ runtime/E2E PASS。
+
+    已验证（代码结构）：
     1. _create_execution 在 try 块开头（RAG search 前），异常前已 commit = persistent。
     2. except 块标 FAILED（C3），不留永远 running。
+
+    PENDING runtime gate（不在本轮 H 范围，仅登记）：
+      runtime mock RAG/DB 异常 → 断言 Execution=FAILED / 0 ComputeTransaction / 0 debit。
     """
     from apps.xg_douyin_ai_cs.services import knowledge_training_service as svc
 
@@ -182,6 +195,52 @@ def test_tr5_ask_failure_failed_no_charge():
     after_except = ask_src[except_idx:]
     assert "FAILED" in after_except
     assert "_finalize_execution" in after_except
+
+
+# === TR-5B: Failure After Billing Commit — 1 committed txn 保留（★账务红线，CODE_VERIFIED）===
+
+def test_tr5b_failure_after_billing_commit_redline():
+    """★账务红线：billing 后 workflow 失败 → Execution=FAILED 与 1 committed ComputeTransaction 可合法并存。
+
+    场景：Execution → LLM success → ComputeTransaction committed → 后续 Session INSERT/DB
+    operation fails → ask() throws → Execution=FAILED。
+
+    ★★ 绝不能因 KnowledgeTrainingExecution.status=FAILED 回滚/删除/冲销/否认已提交的
+    ComputeTransaction。Execution.status ≠ Billing truth；M07 committed ComputeTransaction
+    = sole authoritative billing truth。
+
+    证据等级：CODE_VERIFIED（由 P1 核心合同推导：committed txn 不因后续失败回滚；非 runtime mock）。
+    ★ inspect.getsource PASS ≠ runtime/E2E PASS。
+
+    已验证（代码结构 + P1 核心合同）：
+    1. ComputeUsageClient().report_usage（HTTP→9000 record_usage）一旦 commit 即成 billing truth，
+       ask() 后续 Session INSERT 失败是独立事务，不回滚已 commit 的 ComputeTransaction。
+    2. except 块标 Execution=FAILED，但 Execution.status 不参与账务（C4：无 is_billed），
+       不触发任何 ComputeTransaction 回滚/冲销。
+
+    PENDING runtime gate（不在本轮 H 范围，仅登记）：
+      runtime mock Session INSERT 失败 → 断言 Execution=FAILED + 1 committed txn 保留 + balance 已扣。
+    """
+    from apps.xg_douyin_ai_cs.services import knowledge_training_service as svc
+
+    ask_src = inspect.getsource(svc.ask)
+
+    # 1. _report_usage 在 try 块内、Session INSERT 之前（billing 可先于 workflow 失败成立）
+    report_idx = ask_src.index("_build_answer")  # _build_answer 内含 _report_usage
+    session_insert_idx = ask_src.index("INSERT INTO knowledge_training_sessions")
+    assert report_idx < session_insert_idx  # billing 在 Session INSERT 前
+
+    # 2. except 块标 FAILED（billing 后 workflow 失败 → Execution=FAILED）
+    except_idx = ask_src.index("except Exception as exc:")
+    after_except = ask_src[except_idx:]
+    assert "FAILED" in after_except
+
+    # 3. ★ C4 红线：Execution 无 is_billed / billing_status 字段——FAILED 不触发账务回滚
+    finalize_src = inspect.getsource(svc._finalize_execution)
+    assert "is_billed" not in finalize_src
+    assert "billing_status" not in finalize_src
+    # finalize 只更新 lifecycle_status（执行生命周期），不碰 ComputeTransaction
+    assert "lifecycle_status" in finalize_src
 
 
 # === TR-6: None count = 0（正式链 idempotency_key≠None）===

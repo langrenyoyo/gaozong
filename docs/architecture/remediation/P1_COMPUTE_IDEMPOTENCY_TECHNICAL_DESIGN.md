@@ -569,11 +569,24 @@ PG Closure Gate 最终结果为以下三态之一：
 - **execution_id 复用 request_id**（`kt-req-{uuid4().hex[:12]}`，C2：不造第三套 ID），在 RAG search / LLM / 计费前已创建并 commit（C1）
 - **Identity 合同**：`knowledge_training_execution:{execution_id}:ask`（event_namespace=`knowledge_training_execution`，business_event_id=`{execution_id}:ask`）
 - **lifecycle 四态**：running（初始过渡态）/ COMPLETED（LLM 成功）/ COMPLETED_FALLBACK（fallback 返回，C3：非 failed）/ FAILED（ask 抛异常无结果，C3）
-- **6 Gate PASS**：TR-1~TR-6（见 `tests/test_training_compute_idempotency_migration.py`）
+- **Gate 证据等级（Stage 5D-2，TR-1~TR-6 → 9 test，见 `tests/test_training_compute_idempotency_migration.py`）**：
+  - TR-1/2/3/6：runtime SQLite `record_usage` 验证（created/replay/2-charge/None=0）
+  - **TR-4 LLM Failure/Fallback：CODE_VERIFIED**（inspect.getsource 代码结构确认，非 runtime mock）——已验证 `_report_usage` 仅 chat 成功路径调用 / fallback 提前 return 不计费 / COMPLETED_FALLBACK 状态。**★ inspect.getsource PASS ≠ runtime/E2E PASS**。PENDING runtime gate：mock `client.chat` 抛错 → 断言 Execution=COMPLETED_FALLBACK / Session=answered / ComputeTransaction=0 / balance unchanged。
+  - **TR-5 拆分为 TR-5A / TR-5B（账务红线）**：
+    - **TR-5A Failure Before Successful LLM/Billing**：Execution → RAG/前置流程失败 或 LLM 未成功进入 `_report_usage` → Execution=FAILED / 0 ComputeTransaction / 0 debit。当前 CODE_VERIFIED（inspect：`_create_execution` 在 try 开头 + except 标 FAILED）。PENDING：runtime mock RAG/DB 异常 → 断言 Execution=FAILED / 0 txn。
+    - **TR-5B Failure After Billing Commit（★账务红线）**：Execution → LLM success → ComputeTransaction committed → 后续 Session INSERT/DB operation fails → ask() throws → Execution=FAILED。**预期：Execution=FAILED 与 1 committed ComputeTransaction 可合法并存**。★★ **绝不能因 `KnowledgeTrainingExecution.status=FAILED` 回滚/删除/冲销/否认已提交的 ComputeTransaction**——`Execution.status ≠ Billing truth`，M07 committed ComputeTransaction = sole authoritative billing truth。当前 CODE_VERIFIED（由 P1 核心合同推导：committed txn 不因后续失败回滚）。PENDING：runtime mock Session INSERT 失败 → 断言 Execution=FAILED + 1 committed txn 保留 + balance 已扣。
 - **migration**：`migrations/postgres/xg_douyin_ai_cs/versions/0004_knowledge_training_executions.py`（revision 0004，down_revision 0003，backward-compatible）+ SQLite `init_db` 兜底建表
 - **Session 表不变**：answer NOT NULL / status="answered" / fallback 行为保持（C4：billing truth 归 M07，execution 无 is_billed）
 - **billing-report replay only**：full 9000→9100 request response-lost 登记为 TRAINING_REQUEST_RECOVERY_GAP（非 P1 职责，M07 IDEMPOTENCY_CONFLICT 兜底）
 - **YAGNI**：不引入 attempt_count（当前无 technical retry，1:1 成立）；不合并 #9 与 #10a（execution 作 #10a 父级上下文仅记录，不给 Query Embedding 加 key）
+
+> **PENDING_PG_VERIFICATION（Stage 5D-2，9100 PG migration 0004）**：Training functional migration COMPLETE / idempotency contract MIGRATED_AND_VERIFIED，但 9100 PostgreSQL schema application（0004）仍未验证。最终 P1 closure 前必须验证：
+> - `alembic current → 0004` / `alembic heads → 0004`（在 9100 `RAG_DATABASE_URL` 指向的 PG 实例上）
+> - `knowledge_training_executions` 表存在
+> - PK（`execution_id`）/ `ck_knowledge_training_executions_status` CHECK 约束 / `idx_knowledge_training_executions_scope` 索引有效
+> - normal create/finalize lifecycle 在 PostgreSQL 可运行
+> - 若有并发 Ask 约束，PG 环境验证（不依赖 SQLite）
+> **SQLite evidence ≠ PostgreSQL evidence**（P1 CLOSURE MANDATORY GATE 明确要求 PostgreSQL）。当前 5D-2 验收基于 SQLite + inspect 代码结构，PG 级证据留待 PG Closure Gate 闭环时补齐。**证据纠正不改变迁移结论**：Training 仍为 IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，非 Migration Rollback。
 
 > **Reliability Gap 分离登记（防根因混淆）**：
 > - Training charge path consumer 迁移状态 = **IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED**（P1 财务幂等职责已完成）。
