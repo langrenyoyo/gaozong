@@ -413,3 +413,68 @@ record_usage(db, merchant_id, tokens, *, idempotency_key, ...):
 | F. 失败边界 | 只有获得 ownership 的事务才扣余额；commit 失败回滚可重试；commit 成功 retry 幂等 |
 | G. 老消费者兼容 | 阶段 1 可选（None 可追踪）→ 阶段 2 逐个迁移 → 阶段 3 必填（None=0 closure gate） |
 | H. 回归验收 | 12 个 Acceptance Gate + PG Concurrent Mandatory Gate + 防误去重 + Payload Consistency + Retry After Pricing Change |
+
+---
+
+## Charge Path Migration Register（全局审计 + 身份验真，Stage 5B 最终版）
+
+> 完整 10 条 charge-producing 路径审计。Identity Readiness 枚举：IDENTITY_VERIFIED / DESIGN_GAP / POLICY_PENDING / CALL_SITE_IDENTIFIED
+
+| # | Charge Path | 调用点 | Charging | Identity | Billing Semantics | Identity Readiness | idempotency_key | Migration |
+|---|---|---|---|---|---|---|---|---|
+| 1 | M04 WeChat Task | `wechat_task_service.py:503` | ACTIVE | WechatTask.id + operation | one task + one charge op = one charge | IDENTITY_VERIFIED | `wechat_task:{task.id}:result_usage` | ✅ MIGRATED |
+| 2 | M06 LAS Archive | `ai_edit_las_service.py:740` | ACTIVE | AiEditJob.id + operation | one job + archive = one charge | IDENTITY_VERIFIED | `las_job:{job.id}:archive_usage` | ✅ MIGRATED |
+| 3 | M01 Auto Reply | `reply_decision_service.py:3801` | ACTIVE | Run.id + attempt_count + stage | 1 Run : N attempts × 2 stages | IDENTITY_VERIFIED | `ai_auto_reply_run:{run_id}:{attempt}:{stage}` | ✅ MIGRATED |
+| 4 | M02 Webhook Lead | `douyin_webhook.py:1242` | ACTIVE | WebhookEvent.id + operation | one event = one lead charge | IDENTITY_VERIFIED | `webhook_event:{event.id}:lead_usage` | ✅ MIGRATED |
+| 5 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | POLICY_PENDING | None | ⏸ 需产品决策 |
+| 6 | M05 Material Analysis | `material_analysis.py:253` | ACTIVE | 无 per-execution identity | ark_v1 固定分析器版本；re-analysis 更新同一行 id 不变 | DESIGN_GAP | None | ⏸ 需 per-execution identity 设计 |
+| 7 | Training Knowledge | `knowledge_training_service.py:481` | ACTIVE | training_id 后置 | training_id 在 _report_usage 之后才生成+commit | DESIGN_GAP | None | ⏸ 需 training_id 前置 |
+| 8 | RAG Embedding | `rag/repository.py:481` | ACTIVE | 无 per-embedding identity | 每 chunk 一次 embedding API；3 个调用点（search/ingest×2）；无持久 per-embedding execution entity | DESIGN_GAP | None | ⏸ 需 per-embedding identity 设计 |
+| 9 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ READY TO MIGRATE |
+| 10 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportJob.id + report_day | DailyReportJob 有 UniqueConstraint(merchant_id, report_day, report_type, report_variant)；但 _report_usage 在 9100 侧，无 DailyReportJob.id 透传 | DESIGN_GAP | None | ⏸ 需 9000→9100 job_id 透传 |
+
+### Stage 5B 身份验真详情
+
+#### RAG Embedding（DESIGN_GAP）
+
+- **触发动作**：每 chunk 一次 embedding API 调用（`repository.py:546,692` ingest；`:441` search）
+- **持久实体**：knowledge_chunks 表有 `id` + `document_id` + `chunk_index`，但 `_embed_with_usage` 调用时 chunk 行尚未 INSERT（embedding 在 INSERT 前）
+- **retry**：无 retry 机制（embedding 失败 → 空 embedding → 词法检索降级）
+- **re-embedding**：重新训练时删除旧 chunks 重新 ingest → 新 chunk 行 → 新 id
+- **结论**：chunk 行在 embedding 后才 INSERT，`report_usage` 在 INSERT 前调用 → 无前置持久 identity → **DESIGN_GAP**
+- **设计方向**：用 `(document_id, chunk_index)` 组合（document+chunk 位置稳定）+ training_run_id（区分重新训练）
+
+#### Return Visit Judge（IDENTITY_VERIFIED — READY TO MIGRATE）
+
+- **触发动作**：一次 ReturnVisitRun → `_judge_via_9100` → 9100 `_report_usage`
+- **持久实体**：`ReturnVisitRun.id`（`models.py:1113`），有 `UniqueConstraint(idempotency_key)`
+- **run.id 在 judge 前已 flush**：`return_visit_run_service.py:306` `db.flush()` 后才调 `process_return_visit_run`（line 442），judge 在 `_process_run_with_session` 内
+- **retry**：复用同一 run.id（idempotency_key 去重）
+- **cardinality**：1:1（一个 run = 一次 judge 调用）
+- **结论**：**IDENTITY_VERIFIED** — `return_visit_run:{run.id}:judge` 可用
+- **迁移障碍**：`_report_usage` 在 9100 侧，ReturnVisitRun.id 在 9000 侧 → 需 9000→9100 透传 run_id（类似 M01 Stage 4B）
+
+#### Daily Report Summary（DESIGN_GAP）
+
+- **触发动作**：`summarize_daily_sales_feedback`（`daily_report_summary_service.py:163`）→ `_report_usage`
+- **持久实体**：`DailyReportJob` 有 `UniqueConstraint(merchant_id, report_day, report_type, report_variant)`，但 `_report_usage` 在 9100 侧不透传 DailyReportJob.id
+- **同一商户同一天**：`report_day` 不唯一（可人工重新生成/补跑/失败重试），但 DailyReportJob.id 唯一
+- **结论**：`_report_usage` 在 9100 侧，DailyReportJob.id 在 9000 侧不透传 → **DESIGN_GAP**
+- **设计方向**：9000→9100 透传 `report_job_id`（类似 M01 Stage 4B）
+
+#### M05 Material Analysis（DESIGN_GAP — 已确认）
+
+- `ark_v1` 固定分析器版本；re-analysis 更新同一 AiEditMaterialAnalysis 行（id 不变）
+- 无 per-execution identity（Analysis.id 是行 id 不是执行 id；AiEditMaterialProcess 表有 attempt_count 但用于处理状态不是计费身份）
+- **设计方向**：新建 AiEditMaterialAnalysis 行而非更新（version 递增），或引入 analysis_execution_id
+
+#### Training（DESIGN_GAP — 已确认）
+
+- `training_id` 在 `_build_answer`（含 `_report_usage`）之后才生成+commit
+- **设计方向**：将 training_id 生成提前到 `_build_answer` 前
+
+#### Preview（POLICY_PENDING）
+
+- 无 Run 持久化，`conversation_id="agent-preview"` 共用
+- 当前计费且无 identity
+- **设计方向**：需产品决策（免费 → 不计费；收费 → 需 preview request record）
