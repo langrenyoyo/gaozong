@@ -21,7 +21,37 @@
 | M04/M06→M07 联动上报 | MISSING | 无跨模块 record_usage 联动测试 |
 | 支付 mock（实现矛盾） | PARTIAL | test_compute_service.py:612 断言"不改变余额"但实现实际改余额 |
 
-## E2E 验收清单（待 2-M07.2）
+## E2E 验真结果（2-M07.2 Docker，2026-08-08）
+
+环境：docker compose dev（9000 + SQLite）
+
+### Gate 结果
+
+| Gate | 结果 | 证据 |
+|---|---|---|
+| A Sequential Duplicate Usage | **PASS → COMPUTE-IDEMPOTENCY-001 E2E_VERIFIED** | 同一业务输入执行两次→balance delta=200=2×100（charge=100, basis_points=0, billed=100），2 条 consume 流水→**FINANCIAL_INTEGRITY E2E 证明** |
+| B Concurrent Duplicate | STAGING_PENDING | SQLite 并发锁限制，需 PG 验证真实并发 |
+| C Ledger Invariant | **PASS** | balance=9800 == initial(0) + sum_delta(9800)，每条 balance_after 一致 |
+| D Fee/Ratio Calculation | **PASS** | tokens=100, basis_points=0, billed=100, mode=actual |
+| E Negative Balance | **CODE_VERIFIED** | balance=-100000（负值允许不阻断，warning 写但不拒绝） |
+| F Duplicate M04 Result → Compute | **PASS → M04_VERIFIED_IMPACTED** | 重复调 _report_wechat_task_compute_usage 两次→2 条 wechat-assistant 流水→**M04 是 impacted consumer（double charge E2E 证明）** |
+| G Consumer Identity | **PASS** | transaction 含 capability_key/source/model/agent_id/conversation_id/merchant_id/remark |
+| H Merchant Isolation | **PASS** | other-merchant txns=0 |
+
+### 关键结论
+
+| ISSUE | 变化 | 原因 |
+|---|---|---|
+| COMPUTE-IDEMPOTENCY-001 (ISSUE-M07-001) | CODE_VERIFIED → **E2E_VERIFIED FINANCIAL_INTEGRITY** | Gate A 证明 balance delta = 2 × charge |
+| ISSUE-M04-002 | 保持 MEDIUM → **M04_VERIFIED_IMPACTED** | Gate F 证明 M04 重复调用 _report_wechat_task_compute_usage 产生 double charge |
+
+### 仍 STAGING_PENDING
+
+- Gate B Concurrent（需 PG 验证真实并发 + lost update/race）
+
+**E2E 状态：`M07_DOCKER_E2E_VERIFIED_PENDING_BASELINE`**（无 BLOCKER，Gate A/C/D/E/F/G/H PASS + B STAGING_PENDING，COMPUTE-IDEMPOTENCY-001 E2E_VERIFIED FINANCIAL_INTEGRITY）
+
+## E2E 验收清单（待 2-M07.2 补验证）
 
 ### DOCKER_TESTABLE
 1. record_usage 基本扣费+余额
