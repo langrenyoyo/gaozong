@@ -313,24 +313,25 @@ PHASE 1B  Governance Wiring         ✅ COMPLETE
 PHASE 2A  Current Reality          ✅ COMPLETE（7/7 模块验真）
 PHASE 2B  Controlled E2E + Candidate ✅ COMPLETE（7/7 BASELINE_CANDIDATE + CROSS_MODULE_RISK_REGISTER 冻结）
 PHASE 2C  External Gate            ⏸ OPEN（26 Gate Records：Staging 16 / Windows 6 / External 6）
-PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 实施 10/11 charge path MIGRATED，检查点 `P1_CHECKPOINT_10_OF_11.md`）
+PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migration 11/11 COMPLETE，进入 Technical Closure；检查点 `P1_CHECKPOINT_11_OF_11_CONSUMER_MIGRATION_COMPLETE.md`）
 ```
 
 - 7 模块全部 `BASELINE_CANDIDATE`（非 `MODULE_BASELINE_APPROVED`，外部环境 Gate 未闭环）
 - 4 个 HIGH 生产安全风险 + 5 个 STRUCTURAL 架构风险（分队列）
 - Consumer 证据四级：`E2E_VERIFIED_IMPACTED` / `CODE_VERIFIED_EXPOSED` / `CALL_SITE_IDENTIFIED` / `NOT_VERIFIED`
 - 阶段 3A 优先级：P1 Compute Idempotency → P2 M04 Claim/Lease → P3a M05 Reference → P3b M05 URL
-- **P1 当前状态：实施中（10/11 charge path MIGRATED，1/11 OPEN；COMPUTE-IDEMPOTENCY-001 OPEN / PARTIAL_REMEDIATION_VERIFIED）**
+- **P1 当前状态：CONSUMER_MIGRATION=COMPLETE（11/11 charge path MIGRATED，0 OPEN）→ TECHNICAL_CLOSURE=PENDING；COMPUTE-IDEMPOTENCY-001 仍 OPEN**
+  - ★ Consumer Migration Complete ≠ Technical Closure Complete（≠ E2E_VERIFIED_FIXED）
+  - Consumer 层工作完成，进入 Technical Closure（schema baseline + PG evidence + global audit + concurrency closure）
 - **P1 关键产出**：
-  - `docs/architecture/remediation/P1_CHECKPOINT_10_OF_11.md` — 10/11 治理检查点（commit + evidence + PG pending + Reliability Gap 矩阵）
+  - `docs/architecture/remediation/P1_CHECKPOINT_11_OF_11_CONSUMER_MIGRATION_COMPLETE.md` — 11/11 Consumer Migration 里程碑检查点（charge path matrix + identity contract + evidence level + Technical Closure blockers）
   - `docs/architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` — 技术方案（APPROVED）+ Charge Path Migration Register（11 条唯一事实源，RAG 按 query/ingest 拆分）
-  - `docs/architecture/remediation/P1_M01_IDENTITY_VERIFICATION.md` — M01 身份验真（run.id + attempt_count + llm_call_stage 三维）
   - M07 Core（record_usage + DB migration 0030 + atomic ownership + IntegrityError replay/conflict）+ PG_CORE_GATE PASS
-  - 10 consumer 迁移完成：M04 / M06 / M01 Auto Reply / M02 / Return Visit Judge / Daily Report / Training / RAG Ingest / M05 Material Analysis / M01 Preview
-  - 1 条 OPEN：#10a RAG Query（需新建 SearchExecution + stage，1:1 normal + 1:2 timeout 边界，daemon timeout 设计风险最高）
+  - 11 consumer 迁移完成：M04 / M06 / M01 Auto Reply / M02 / Return Visit / Daily Report / Training / RAG Ingest / M05 / M01 Preview / RAG Query
   - PG Closure Gate 三态冻结：PASS / FAIL / WAIVED_WITH_ACCEPTED_RESIDUAL_RISK（WAIVED≠PASS，risk-accept 不得标 E2E_VERIFIED_FIXED）
-  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / Daily Report 0032 + M05 0033 + Preview 0034 BLOCKED_BY_SCHEMA_BASELINE_MISMATCH（待 DB-BL 基线修复）
-  - 6 个 Reliability Gap 均 OUT_OF_P1：DAILY_REPORT/TRAINING/RAG_INGEST_RUN/RAG_INGEST_REQUEST/M05_ANALYSIS_USAGE_REPORT/PREVIEW_REQUEST
+  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / RAG Query 0005 PENDING_PG_VERIFICATION（BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT）/ Daily Report 0032 + M05 0033 + Preview 0034 BLOCKED_BY_SCHEMA_BASELINE_MISMATCH（待 DB-BL-2 基线修复）
+  - 7 个 Reliability Gap 均 OUT_OF_P1：DAILY_REPORT/TRAINING/RAG_INGEST_RUN/RAG_INGEST_REQUEST/M05_ANALYSIS_USAGE_REPORT/PREVIEW_REQUEST/RAG_QUERY_REQUEST
+  - **Technical Closure Blockers**：A. auto_wechat schema baseline（DB-BL-2，解锁 0032/0033/0034）/ B. RAG Query 0005 PG（Docker 恢复后独立补）/ C. Global Active None Audit（重新全局搜索）/ D. Final PG Concurrent Closure Gate
 - 跨模块根因不重复统计：一个 Root Cause → 多个 impacted/exposed consumers
 
 **关键产出文件**（修改前必读）：

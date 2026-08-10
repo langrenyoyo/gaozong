@@ -91,7 +91,7 @@ docs/ai/04_OUTPUT_RULES.md
 | **模块验真：M07 AI小高算力** | `modules/M07-compute/`（6 份文档） |
 | **P1 修复：算力幂等技术方案 + Charge Path Register** | `architecture/remediation/P1_COMPUTE_IDEMPOTENCY_TECHNICAL_DESIGN.md` |
 | **P1 修复：M01 身份验真** | `architecture/remediation/P1_M01_IDENTITY_VERIFICATION.md` |
-| **P1 检查点：10/11 MIGRATED 治理状态** | `architecture/remediation/P1_CHECKPOINT_10_OF_11.md`（commit + evidence + PG pending + Reliability Gap 矩阵）|
+| **P1 里程碑：11/11 Consumer Migration Complete** | `architecture/remediation/P1_CHECKPOINT_11_OF_11_CONSUMER_MIGRATION_COMPLETE.md`（charge path matrix + identity contract + evidence level + Technical Closure blockers）|
 | 测试计划 | `05_acceptance/12_TEST_PLAN_AUTO_WECHAT.md` |
 | P1-END-1 验收（改微信自动化前必读） | `05_acceptance/P1_END_1_ACCEPTANCE.md` |
 | 微信回复检测规则 | `10_local_agent_wechat/WECHAT_REPLY_DETECTION_RULES.md` |
