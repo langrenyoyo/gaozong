@@ -337,7 +337,10 @@ def upgrade() -> None:
         sa.Column("storage_key", sa.String(length=255), nullable=True),
         sa.Column("file_name", sa.String(length=255), nullable=True),
         sa.Column("mime_type", sa.String(length=64), nullable=True),
-        sa.Column("file_size_bytes", sa.BigInteger(), nullable=True),
+        # file_size_bytes 不在此预声明：该列由 0025_ai_edit_result_delivery 正典引入
+        # （ORM 字段 + add_column + 结果交付功能同提交 231808d5 抵达，GIT_HISTORY_VERIFIED）。
+        # 0008 此处曾为 authoring-time forward declaration（PREDECLARED_FUTURE_SCHEMA），
+        # 导致空库自举在 0025 触发 DuplicateColumn；DB-BL-2C-R2 移除以恢复 canonical 时间线。
         _created_at_column(),
         sa.UniqueConstraint("artifact_id", name="uk_ai_edit_job_artifacts_artifact_id"),
     )
