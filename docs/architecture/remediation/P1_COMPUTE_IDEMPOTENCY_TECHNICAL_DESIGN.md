@@ -460,24 +460,37 @@ PG Closure Gate 最终结果为以下三态之一：
 | 7 | M01 Preview | `reply_decision_service.py:3815` | ACTIVE | AiPreviewExecution.id（方案 A：9000 创建 → 透传到 9100） | execution 在 9100 HTTP call 前 durable commit（PV-0）；C1 lifecycle=整次请求结果（非 stage 状态）；cardinality 1:N(2) primary+retry_combined，key 含 llm_call_stage；独立 namespace ai_preview_execution（不污染 Auto Reply ai_auto_reply_run）；POLICY_PENDING 不阻塞 identity 设计 | IDENTITY_VERIFIED | `ai_preview_execution:{preview_execution_id}:{llm_call_stage}` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5G-2） |
 | 8 | M05 Material Analysis | `material_analysis.py:89` | ACTIVE | AiEditMaterialAnalysisExecution.id（独立 billing identity，方案 B） | execution 在 ark call 前 durable commit（MA-0）；ark 成功立即 COMPLETED 先于 usage report（C1 红线）；Analysis 表不变（按 source_sha256 复用，result model only）；1:1（YAGNI 不引入 attempt_count）；不激活 dormant Process 表 | IDENTITY_VERIFIED | `material_analysis_execution:{execution_id}:ark_analysis` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5F-3） |
 | 9 | Training Knowledge | `knowledge_training_service.py:539` | ACTIVE | KnowledgeTrainingExecution.execution_id（独立 billing identity，方案 B） | execution_id 复用 request_id（kt-req-{uuid4}），在 RAG search 前 commit（charge 点前持久）；1:1 cardinality（1 execution : 1 ask charge，YAGNI 不引入 attempt_count）；billing-report replay only（full-request response-lost 登记 TRAINING_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `knowledge_training_execution:{execution_id}:ask` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5D-2） |
-| 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
+| 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | RagSearchExecution.id（9100 统一入口创建） | execution 在 embedding worker 前 durable commit（RQ-0）；统一入口 search_with_diagnostics 创建（不在 _search_sqlite 内，避免 fallback 误建第二 Execution）；primary 与 fallback 复用同一 execution_id，不同 embedding_stage；1:N(2) cardinality（primary + fallback_embedding）；daemon timeout 边界：primary daemon 晚完成 usage report 用原 primary key，E1.status 不因晚报告无效 | IDENTITY_VERIFIED | `rag_search_execution:{search_execution_id}:{embedding_stage}` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5H-2） |
 | 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | KnowledgeTrainingRun.id + document_id + chunk_index（child discriminator） | Parent: Training Run.id VERIFIED + 选项 A durable commit（embedding 前持久化）；1 Run : N chunk charges；child = document_id + deterministic chunk_index（embedding 前 enumerate 可得）；chunk_hash 不进 billing key（P3，保持 semantic evidence）；partial identity 三态（D5）；billing-report replay only（full-request response-lost 登记 RAG_INGEST_RUN/REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5E-3） |
 
-**汇总：10/11 MIGRATED / 1/11 OPEN（#10a RAG Query）。**
+**汇总：11/11 MIGRATED / 0 OPEN。★ P1 Consumer Migration Complete。**
 
-> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：剩余 1 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
+> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：剩余 0 条 Open 路径。所有 active charge-producing path 已迁移或经正式 non-chargeable policy 处理，`idempotency_key=None` 正式链 = 0。
 
 ### Stage 5B 身份验真详情
 
-#### RAG Query Embedding（#10a — EXECUTION_IDENTITY_DESIGN_GAP）
+#### RAG Query Embedding（#10a — IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，Stage 5H-2）
 
-- **触发动作**：search path 一次 query embedding API 调用（`repository.py:441`）；Milvus path → fallback SQLite path
-- **持久实体**：无 per-query execution identity（search request 非持久化）
-- **retry**：无 retry 机制（embedding 失败 → 空 embedding → 词法检索降级）
-- **MINOR VERIFICATION ITEM**：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1 → `search_request_id` 可行；多次 → 需 operation/attempt 维度）
-- **结论**：query embedding 无前置持久 identity → **EXECUTION_IDENTITY_DESIGN_GAP / ⏸ 需 scope 决策**
-- **设计方向**：若 1:1 则 `search_request_id` 可行；若多次则需 operation/attempt 维度
-- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
+**Stage 5H-1 设计结论（9100 创建 + 统一入口冻结 APPROVED）：**
+- 见 `docs/architecture/remediation/P1_RAG_QUERY_EMBEDDING_IDENTITY_DESIGN.md`：RAG Query 是 9100 内部 RAG 能力，9100 统一入口创建（避免多 consumer 各自建 identity）；SearchExecution 在 `search_with_diagnostics`（L908）创建，不在 `_search_sqlite` 内创建（避免 fallback 误建第二 Execution）
+
+**Stage 5H-2 迁移实施（MIGRATED）：**
+- **owner 9100/xg_douyin_ai_cs**：新建 `RagSearchExecution`（原生 SQL，与 knowledge_training_executions 同库），9100 统一入口创建
+- **Identity 合同（冻结为最终 contract）**：`rag_search_execution:{search_execution_id}:{embedding_stage}`（embedding_stage = primary / fallback_embedding，1:N(2) cardinality）
+- **execution 在 embedding worker 前 durable commit**（RQ-0）：`search_with_diagnostics`（L908）创建 + commit，先于 primary embedding daemon
+- **R1 stage=logical embedding attempt**：SQLite-only 首次 embedding=primary（非 fallback）；Milvus fallback 时 query_embedding 非空→不传 stage（复用不计费），为空→fallback_embedding
+- **R3 identity matrix 严格互斥**：`_embed_with_usage` 扩展 Ingest/Query/None/partial+mixed 四态（Ingest 三参数与 Query 两参数互斥，mixed→warning 不构造畸形 key）；不影响 RAG Ingest 已冻结 key
+- **C1 lifecycle=整次搜索结果**（非 stage 状态）：primary 超时+fallback 成功→completed；整次搜索失败→failed；daemon 晚完成 usage report 用原 primary key，E1.status 不因晚报告无效
+- **daemon timeout 边界**：primary daemon 晚完成时 usage report 用原 `primary` key（合法独立 charge，M07 replay 保护）；SearchExecution.status ≠ individual embedding stage status ≠ billing truth
+- **7 Gate PASS**：RQ-0~RQ-6（见 `tests/test_rag_query_compute_idempotency_migration.py`）
+- **migration**：`0005_rag_search_executions.py`（revision 0005，down_revision 0004，backward-compatible）+ SQLite `init_db` 兜底建表
+
+> **PENDING_PG_VERIFICATION（Stage 5H-2，PG migration 0005）**：RAG Query functional migration COMPLETE / idempotency contract MIGRATED_AND_VERIFIED。xg_douyin_ai_cs 库有可信 Alembic 基线，0005 PG 验证作为 Stage 一部分（0004→0005 PG_VERIFIED）。closure 前必须验证 `alembic upgrade 0004 → 0005` + `rag_search_executions` 表 + `ck_rag_search_executions_status` CHECK + 索引 + normal create/finalize lifecycle 在 PG 可运行。
+
+> **Reliability Gap 分离登记（防根因混淆）**：
+> - RAG Query charge path consumer 迁移状态 = **IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED**（P1 财务幂等职责已完成）。
+> - **RAG_QUERY_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：whole search request retry（上游重新调 `search_with_diagnostics`）→ 新 Execution → 新 charge；无 durable client request identity 证明 E1==E2。★ same Execution + same stage replay→P1 保护 / whole-request retry→未保证→P1 不解决。与已登记的 REQUEST_RECOVERY_GAP 同口径。
+> - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级重试可靠性差距。不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN。
 
 #### RAG Ingest Chunk Embedding（#10b — IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，Stage 5E-3）
 

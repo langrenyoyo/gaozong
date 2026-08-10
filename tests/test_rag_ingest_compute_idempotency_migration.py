@@ -195,17 +195,20 @@ def test_ri5_ingest_none_zero_query_still_none(db):
 
 
 def test_ri5_query_path_still_none():
-    """Query 路径（_embed_with_usage 不传三参数）仍 None（独立 #10a，不合并）。
+    """Query 路径（_embed_with_usage 不传 Ingest 三参数）仍独立（#10a 已在 5H-2 迁移）。
 
-    代码事实确认：Query 调用点（search 路径 L441）不传 run_id/document_id/chunk_index。
+    代码事实确认：identity matrix（5H-2 扩展自 5E-3）严格互斥。
+    Ingest key 不变；Query 用独立 namespace（5H-2 新增）。
     """
     from apps.xg_douyin_ai_cs.rag import repository as repo
 
     src = inspect.getsource(repo._embed_with_usage)
-    # partial identity 三态逻辑存在
-    assert "partial_identity_violation" in src
-    # key 构造格式
+    # identity matrix 严格互斥逻辑存在（5H-2 扩展自 5E-3 partial identity）
+    assert "identity_violation" in src
+    # Ingest key 构造格式不变
     assert "rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest" in src
+    # Query 独立 namespace（5H-2 新增，不影响 Ingest）
+    assert "rag_search_execution:{search_execution_id}:{embedding_stage}" in src
 
 
 # === RI-6A: External/Normal Workflow Failure（账务红线，CODE_VERIFIED）===
@@ -277,23 +280,24 @@ def test_ri6b_db_transaction_unusable_pg_finalize():
     assert "fresh_conn.commit()" in after_except2
 
 
-# === partial identity 约束（D5）===
+# === partial identity 约束（D5，5H-2 扩展为 identity matrix R3）===
 
 def test_partial_identity_no_malformed_key():
-    """PARTIAL identity → 显式 warning + 不构造畸形 key（不静默退 None，D5）。
+    """partial/mixed identity → 显式 warning + 不构造畸形 key（不静默退 None，D5/R3）。
 
-    代码事实确认：三参数 PARTIAL → warning + idempotency_key=None。
+    代码事实确认：identity matrix（5H-2）严格互斥；partial/mixed → warning + idempotency_key=None。
     """
     from apps.xg_douyin_ai_cs.rag import repository as repo
 
     src = inspect.getsource(repo._embed_with_usage)
-    # partial identity 三态判定逻辑存在
-    assert "partial_identity_violation" in src
-    # PARTIAL 分支：warning 诊断 + 退 None（不构造畸形 key）
-    assert "present_count" in src  # 三态计数
-    # 三态分支：== 3 构造 / == 0 None / else（PARTIAL）warning + None
-    assert "== 3" in src
-    assert "== 0" in src
+    # identity matrix 严格互斥判定逻辑存在（5H-2 扩展自 5E-3）
+    assert "identity_violation" in src  # partial/mixed warning
+    # identity matrix 计数（ingest_count / query_count 互斥）
+    assert "ingest_count" in src
+    assert "query_count" in src
+    # 互斥分支：Ingest 完整 / Query 完整 / legacy / else（partial+mixed）warning
+    assert "ingest_count == 3 and query_count == 0" in src
+    assert "query_count == 2 and ingest_count == 0" in src
 
 
 # === chunk_hash 不进 billing key（P3）===

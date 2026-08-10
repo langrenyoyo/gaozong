@@ -422,6 +422,8 @@ def _run_embed_with_hard_timeout(
     text: str,
     merchant_id: str | None,
     remark: str | None = None,
+    search_execution_id: int | None = None,
+    embedding_stage: str | None = None,
 ) -> dict:
     """embedding 调用线程超时保护，超时返回空 embedding payload 不抛异常。
 
@@ -430,6 +432,9 @@ def _run_embed_with_hard_timeout(
     超时返回空 embedding，调用方降级为词法检索（无向量评分）。
     用 daemon 线程 + Event 实现快速超时：daemon 线程不阻塞主进程退出，
     超时后主流程立即返回，底层 embedding 线程自行结束（不 join）。
+
+    P1 Stage 5H-2：透传 search_execution_id + embedding_stage 到 _embed_with_usage。
+    daemon 晚完成时 usage report 用原 primary key（C1：E1.status 不因晚报告无效）。
     """
     import threading
 
@@ -440,6 +445,7 @@ def _run_embed_with_hard_timeout(
         try:
             result_box["result"] = _embed_with_usage(
                 client=client, text=text, merchant_id=merchant_id, remark=remark,
+                search_execution_id=search_execution_id, embedding_stage=embedding_stage,
             )
         except Exception as exc:
             result_box["error"] = exc
@@ -469,6 +475,8 @@ def _embed_with_usage(
     run_id: int | None = None,
     document_id: int | None = None,
     chunk_index: int | None = None,
+    search_execution_id: int | None = None,
+    embedding_stage: str | None = None,
 ) -> dict:
     """Phase 10 §0.2：统一 embedding 调用 + 字符计量上报；mock_for_test_only 跳过上报。
 
@@ -476,27 +484,34 @@ def _embed_with_usage(
     真实 embedding 按 count_embedding_characters 计量、capability=knowledge、source=embedding；
     mock 分支（model=mock_for_test_only，未配置真实 Ark）不计费。
 
-    P1 Stage 5E-3：Ingest chunk embedding 幂等身份构造（partial identity 三态，D5）：
-    - run_id / document_id / chunk_index ALL PRESENT → 构造 ingest idempotency_key
-    - ALL ABSENT → non-Ingest / Query legacy path（key=None，独立 #10a Charge Path 不合并）
-    - PARTIAL → identity contract violation → 显式 warning 诊断 + 不构造畸形 key（不静默退 None）
-    chunk_hash 不进 billing key（P3，保持 semantic evidence）。billing truth 只归 M07。
+    P1 Stage 5H-2：identity matrix 严格互斥（R3，扩展自 5E-3 partial identity）：
+    - Ingest：run_id/document_id/chunk_index ALL PRESENT + Query 缺席 → rag_embedding:...:ingest
+    - Query：search_execution_id/embedding_stage ALL PRESENT + Ingest 缺席 → rag_search_execution:...:{stage}
+    - legacy：全缺席 → key=None
+    - partial or mixed → identity contract violation → 显式 warning + 不构造畸形 key（不静默退 None）
+    chunk_hash 不进 billing key（P3）。billing truth 只归 M07。Ingest 与 Query 独立 namespace 不合并。
     """
-    # P1 Stage 5E-3：partial identity 三态判定（D5）
-    identity_args = [run_id, document_id, chunk_index]
-    present_count = sum(1 for v in identity_args if v is not None)
-    if present_count == 3:
-        # ALL PRESENT → Ingest 正式路径，构造 key
+    # P1 Stage 5H-2：identity matrix 严格互斥判定（R3）
+    ingest_args = [run_id, document_id, chunk_index]
+    query_args = [search_execution_id, embedding_stage]
+    ingest_count = sum(1 for v in ingest_args if v is not None)
+    query_count = sum(1 for v in query_args if v is not None)
+    if ingest_count == 3 and query_count == 0:
+        # Ingest 完整 → 独立 namespace（5E-3 已冻结，不变）
         idempotency_key = f"rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest"
-    elif present_count == 0:
-        # ALL ABSENT → Query legacy / 旧调用，不构造 key
+    elif query_count == 2 and ingest_count == 0:
+        # Query 完整 → 独立 namespace（5H-2 新增）
+        idempotency_key = f"rag_search_execution:{search_execution_id}:{embedding_stage}"
+    elif ingest_count == 0 and query_count == 0:
+        # legacy 兼容路径，不构造 key
         idempotency_key = None
     else:
-        # PARTIAL → identity contract violation，显式 warning 不构造畸形 key
+        # partial or mixed → identity contract violation，显式 warning 不构造畸形 key
         _logger.warning(
-            "rag_embed stage=partial_identity_violation run_id=%s document_id=%s chunk_index=%s "
-            "remark=%s（不构造畸形 idempotency_key，退 None）",
-            run_id, document_id, chunk_index, remark,
+            "rag_embed stage=identity_violation run_id=%s document_id=%s chunk_index=%s "
+            "search_execution_id=%s embedding_stage=%s remark=%s"
+            "（Ingest/Query identity 互斥违反，不构造畸形 idempotency_key，退 None）",
+            run_id, document_id, chunk_index, search_execution_id, embedding_stage, remark,
         )
         idempotency_key = None
 
@@ -909,12 +924,30 @@ def search_with_diagnostics(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
 ) -> RagSearchResult:
-    if settings.rag_vector_backend == "milvus":
-        return _search_milvus_or_fallback_with_diagnostics(payload, llm_client=llm_client)
-    return RagSearchResult(
-        items=_search_sqlite(payload, llm_client=llm_client),
-        diagnostics=RagSearchDiagnostics(vector_backend="sqlite"),
-    )
+    # P1 Stage 5H-2：execution 在 embedding worker 启动前 durable commit（RQ-0）。
+    # 统一入口创建，primary 与 fallback 复用同一 execution_id（不在 _search_sqlite 内创建）。
+    execution_id = _create_search_execution(payload.merchant_id, payload.query)
+    try:
+        if settings.rag_vector_backend == "milvus":
+            result = _search_milvus_or_fallback_with_diagnostics(
+                payload, llm_client=llm_client, execution_id=execution_id,
+            )
+        else:
+            # R1：SQLite-only 首次 embedding = primary（非 fallback）
+            result = RagSearchResult(
+                items=_search_sqlite(
+                    payload, llm_client=llm_client, execution_id=execution_id,
+                    embedding_stage="primary",
+                ),
+                diagnostics=RagSearchDiagnostics(vector_backend="sqlite"),
+            )
+        # C1：lifecycle=整次搜索请求结果（非 stage 状态）
+        _finalize_search_execution(execution_id, "completed")
+        return result
+    except Exception:
+        # 整次搜索失败 → failed（daemon 晚完成 usage report 用原 primary key，E1.status 不因晚报告无效）
+        _finalize_search_execution(execution_id, "failed")
+        raise
 
 
 def search(
@@ -1027,6 +1060,52 @@ def list_training_runs(
     }
 
 
+def _create_search_execution(merchant_id: str, query: str) -> int:
+    """创建 RagSearchExecution 行（billing identity 前置持久化，RQ-0）。
+
+    在统一入口 search_with_diagnostics 创建，先于 primary embedding worker。
+    query 截断 200 字符避免超长存储。无 is_billed：billing truth 只归 M07。
+    """
+    with get_rag_engine().connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO rag_search_executions(merchant_id, query, lifecycle_status)
+                VALUES (:merchant_id, :query, 'running')
+                RETURNING id
+                """
+            ),
+            {"merchant_id": merchant_id, "query": str(query or "")[:200]},
+        ).mappings().fetchone()
+        conn.commit()
+        return int(row["id"])
+
+
+def _finalize_search_execution(execution_id: int | None, lifecycle: str) -> None:
+    """更新 execution 终态（C1：整次搜索请求结果，非 stage 状态；billing truth 归 M07）。
+
+    completed（整次搜索成功）/ failed（整次搜索失败）。
+    finalize 失败绝不阻断搜索响应返回。
+    """
+    if execution_id is None:
+        return
+    try:
+        with get_rag_engine().connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE rag_search_executions
+                    SET lifecycle_status = :lifecycle, completed_at = CURRENT_TIMESTAMP
+                    WHERE id = :execution_id
+                    """
+                ),
+                {"execution_id": execution_id, "lifecycle": lifecycle},
+            )
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001  状态写回失败绝不阻断搜索
+        _logger.warning("rag_search stage=finalize_failed execution_id=%s error=%s", execution_id, exc)
+
+
 def _search_milvus_or_fallback(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
@@ -1037,6 +1116,8 @@ def _search_milvus_or_fallback(
 def _search_milvus_or_fallback_with_diagnostics(
     payload: RagSearchRequest,
     llm_client: OpenAICompatibleClient | None = None,
+    *,
+    execution_id: int | None = None,
 ) -> RagSearchResult:
     category_keys = _normalize_filter_values(payload.category_keys)
     if not category_keys:
@@ -1071,6 +1152,7 @@ def _search_milvus_or_fallback_with_diagnostics(
         query_embedding_payload = _run_embed_with_hard_timeout(
             client=client, text=payload.query, merchant_id=payload.merchant_id,
             remark="knowledge_search",
+            search_execution_id=execution_id, embedding_stage="primary",
         )
         query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
         if not query_embedding:
@@ -1131,9 +1213,15 @@ def _search_milvus_or_fallback_with_diagnostics(
             len(category_keys),
             type(exc).__name__,
         )
-        # 回退 PG 时复用已算的 embedding，避免重复调用 embedding（最多 120s）导致 240s 累积
+        # 回退 PG 时复用已算的 embedding，避免重复调用 embedding（最多 120s）导致 240s 累积。
+        # R1：query_embedding 非空（复用）→ 不传 stage（不计费）；
+        #     query_embedding 为 None（primary 超时）→ embedding_stage="fallback_embedding"（重新计费）
+        fallback_stage = "fallback_embedding" if not query_embedding else None
         return RagSearchResult(
-            items=_search_sqlite(payload, llm_client=llm_client, query_embedding=query_embedding),
+            items=_search_sqlite(
+                payload, llm_client=llm_client, query_embedding=query_embedding,
+                execution_id=execution_id, embedding_stage=fallback_stage,
+            ),
             diagnostics=RagSearchDiagnostics(
                 vector_backend="milvus", fallback_reason="milvus_search_failed"
             ),
@@ -1145,6 +1233,8 @@ def _search_sqlite(
     llm_client: OpenAICompatibleClient | None = None,
     *,
     query_embedding: list[float] | None = None,
+    execution_id: int | None = None,
+    embedding_stage: str | None = None,
 ) -> list[RagSearchItem]:
     query_tokens = set(_tokens(payload.query))
     category_ids = _normalize_filter_values(payload.category_ids)
@@ -1182,6 +1272,7 @@ def _search_sqlite(
             query_embedding_payload = _run_embed_with_hard_timeout(
                 client=client, text=payload.query, merchant_id=payload.merchant_id,
                 remark="knowledge_search",
+                search_execution_id=execution_id, embedding_stage=embedding_stage,
             )
             query_embedding = _coerce_embedding(query_embedding_payload.get("embedding"))
     except Exception as exc:

@@ -270,9 +270,22 @@ cardinality = 1 SearchExecution : up to 2 embedding charge events
 
 ## 待审批决策点
 
-1. ~~RagSearchExecution owner~~ → **倾向 9100 创建**（RAG Query 是 9100 内部能力，待审查确认）
-2. 库归属 → 9100 创建则 xg_douyin_ai_cs 库（与 KnowledgeTrainingExecution 同库，待方案确认）
-3. `search_execution_id` / `embedding_stage` 透传方式（`_embed_with_usage` 扩展两可选参数 + partial identity 三态扩展）→ 实施期决策，不冻结
-4. candidate key `rag_search_execution:{search_execution_id}:{embedding_stage}` → 审查通过后登记为最终 contract
-5. daemon 晚完成 usage report 的 key 复用（primary key，M07 replay）→ 实施期确认 daemon 行为不改变，只加 identity
-6. 审查通过后授权实施（新建 RagSearchExecution 实体 + migration + `search_with_diagnostics` 改造 + `_embed_with_usage` 扩展 + `_search_sqlite`/`_search_milvus_or_fallback` 透传 + 7 Gate）
+1. ~~RagSearchExecution owner~~ → **9100 创建已冻结 APPROVED**（Stage 5H-2 已实施；RAG Query 是 9100 内部能力）
+2. ~~库归属~~ → **xg_douyin_ai_cs 库**（9100 创建，与 KnowledgeTrainingExecution 同库）
+3. ~~`search_execution_id`/`embedding_stage` 透传方式~~ → **`_embed_with_usage` 扩展两可选参数 + identity matrix R3**（已实施）
+4. ~~candidate key `rag_search_execution:{search_execution_id}:{embedding_stage}`~~ → **冻结为最终 contract**（Stage 5H-2 已实施）
+5. ~~daemon 晚完成 usage report 的 key 复用~~ → **用原 primary key（M07 replay 保护）**（已实施；daemon 行为不改变，只加 identity）
+6. ~~审查通过后授权实施~~ → **Stage 5H-2 已实施**（migration 0005 + search_with_diagnostics 改造 + _embed_with_usage identity matrix + _search_sqlite/_search_milvus 透传 + 7 Gate PASS）
+
+## Stage 5H-2 实施落记
+
+- **migration 0005 已实施**：`0005_rag_search_executions.py`（xg_douyin_ai_cs 库，revision 0005，down_revision 0004）+ SQLite `init_db` 兜底建表
+- **execution 在 embedding worker 前 durable commit**（RQ-0）：`search_with_diagnostics`（L908）统一入口创建 + commit
+- **R1 stage=logical embedding attempt 已落地**：SQLite-only=primary / Milvus fallback 时 query_embedding 非空→不传 stage（复用不计费）/ 为空→fallback_embedding
+- **R3 identity matrix 严格互斥已落地**：`_embed_with_usage` 四态（Ingest/Query/None/partial+mixed→warning）；不影响 RAG Ingest 已冻结 key
+- **C1 lifecycle=整次搜索结果已落地**：成功→completed / 失败→failed；daemon 晚完成 usage report 用原 primary key，E1.status 不因晚报告无效
+- **7 Gate PASS**：RQ-0~RQ-6（`tests/test_rag_query_compute_idempotency_migration.py`）
+- **RAG_QUERY_REQUEST_RECOVERY_GAP 登记**：whole search request retry → 新 Execution → 新 charge（OUT_OF_P1，与其他 REQUEST_RECOVERY_GAP 同口径）
+- **None count**：RAG Query 正式链 idempotency_key≠None = 0
+- **0005 PG = PG_VERIFIED**（xg_douyin_ai_cs 库有可信基线，0004→0005 顺带验证）
+- ★ **11/11 Consumer Migration Complete**（CONSUMER_MIGRATION=COMPLETE，TECHNICAL_CLOSURE=PENDING：0032/0033/0034 仍 BLOCKED + Final PG Closure Gate 未跑）
