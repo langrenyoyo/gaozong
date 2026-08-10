@@ -1341,6 +1341,39 @@ class DailyReportGeneration(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class AiPreviewExecution(Base):
+    """M01 Preview billing identity 实体（P1 Stage 5G-2，方案 A：9000 创建 + 透传到 9100）。
+
+    与 DailyReportGeneration（9000 创建 → 透传 generation_id）/ ReturnVisitRun（9000 创建 → 透传 run_id）
+    同模式：请求归属方 9000 创建 Execution + 透传 execution_id 到计费方 9100。
+    每次 preview_agent 调用新建一行，持久不可清空（finalize 只更新 lifecycle 不删行）。
+    id 是 M07 幂等键的 billing identity 来源：ai_preview_execution:{id}:{llm_call_stage}。
+
+    硬约束：
+    - C1：lifecycle_status 是整次 Preview 请求结果（非 primary/retry stage 影子状态机）。
+    - C2：9100 不回连 auto_wechat DB 修改 PreviewExecution（DB ownership 清晰，仅 9000 写）。
+    - 无 is_billed：billing truth 只属于 M07 committed ComputeTransaction。
+    设计：docs/architecture/remediation/P1_PREVIEW_EXECUTION_IDENTITY_DESIGN.md
+    """
+
+    __tablename__ = "ai_preview_executions"
+    __table_args__ = (
+        Index("idx_ai_preview_executions_merchant", "merchant_id"),
+        CheckConstraint(
+            "lifecycle_status IN ('running', 'completed', 'failed')",
+            name="ck_ai_preview_executions_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    merchant_id = Column(String(128), nullable=False, comment="可信商户 ID（RequestContext）")
+    agent_id = Column(String(128), comment="智能体 ID（draft-agent 等）")
+    lifecycle_status = Column(String(20), nullable=False, default="running",
+                              comment="整次 Preview 请求结果 running/completed/failed，非 billing truth")
+    created_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, comment="执行完成时间")
+
+
 class DailyReportDelivery(Base):
     """日报附件投递：一份报表到一名接收销售的幂等投递（Phase 8-B）。
 

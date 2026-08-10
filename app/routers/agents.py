@@ -58,6 +58,43 @@ def _bad_request(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=400, detail={"code": code, "message": message})
 
 
+def _create_preview_execution(db: Session, merchant_id: str, agent_id: str | None) -> int:
+    """创建 AiPreviewExecution 行（billing identity 前置持久化，PV-0）。
+
+    在 9100 HTTP call 前创建并 commit，确保 identity 在 9100 LLM 计费点前已稳定持久存在。
+    无 is_billed：billing truth 只归 M07 committed ComputeTransaction。
+    C2：仅 9000 写 PreviewExecution，9100 不回连 auto_wechat DB。
+    """
+    from app.models import AiPreviewExecution
+
+    execution = AiPreviewExecution(
+        merchant_id=merchant_id, agent_id=agent_id, lifecycle_status="running",
+    )
+    db.add(execution)
+    db.commit()
+    db.refresh(execution)
+    return execution.id
+
+
+def _finalize_preview_execution(db: Session, execution_id: int | None, lifecycle: str) -> None:
+    """更新 execution 终态（C1：整次 Preview 请求结果，非 stage 状态；billing truth 归 M07）。
+
+    completed（9100 正常返回有效 response）/ failed（整次 9100 请求失败）。
+    finalize 失败绝不阻断响应返回（C3：usage report 失败/状态写回失败不重跑 LLM）。
+    """
+    if execution_id is None:
+        return
+    try:
+        from app.models import AiPreviewExecution
+
+        execution = db.query(AiPreviewExecution).filter(AiPreviewExecution.id == execution_id).first()
+        if execution is not None:
+            execution.lifecycle_status = lifecycle
+            db.commit()
+    except Exception:  # noqa: BLE001  状态写回失败绝不阻断 preview 响应
+        db.rollback()
+
+
 def _conflict(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=409, detail={"code": code, "message": message})
 
@@ -268,6 +305,12 @@ def preview_agent(
         "forbidden_words": load_forbidden_words_for_llm(db),
     }
 
+    # P1 Stage 5G-2：execution 在 9100 HTTP call 前 durable commit（PV-0，方案 A：9000 创建 + 透传）
+    # execution_id 是 billing identity 来源，先于 9100 LLM 计费副作用持久化。
+    # C2：9100 不回连 auto_wechat DB 修改 PreviewExecution（DB ownership 仅 9000）。
+    _preview_exec_id = _create_preview_execution(db, context.merchant_id, agent_id)
+    request_payload["preview_execution_id"] = _preview_exec_id
+
     try:
         result = get_xg_douyin_ai_cs_client().suggest_reply(
             context=context,
@@ -275,6 +318,8 @@ def preview_agent(
             request=request_payload,
         )
     except XgDouyinAiCsClientError as exc:
+        # C1：整次 9100 请求失败 → execution=failed（仅 9000 写，9100 不回连 auto_wechat DB）
+        _finalize_preview_execution(db, _preview_exec_id, "failed")
         logger.warning(
             "agent_preview_llm_failed merchant_id=%s agent_id=%s error=%s",
             context.merchant_id,
@@ -294,6 +339,8 @@ def preview_agent(
             "message": "success",
         }
 
+    # C1：9100 正常返回有效 response → execution=completed（lifecycle=整次请求结果，非 stage 状态）
+    _finalize_preview_execution(db, _preview_exec_id, "completed")
     raw_warnings = result.get("warnings")
     warnings = raw_warnings if isinstance(raw_warnings, list) else []
     source_chunks = result.get("source_chunks")

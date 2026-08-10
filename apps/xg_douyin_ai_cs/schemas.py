@@ -177,6 +177,11 @@ class ReplySuggestionRequest(BaseModel):
     # 两者非空时 _report_llm_usage 构造 idempotency_key；None 时走兼容路径（Preview）
     run_id: int | None = None
     attempt_count: int | None = None
+    # P1 Stage 5G-2：M01 Preview 幂等 identity 透传（9000→9100）
+    # preview_execution_id=AiPreviewExecution.id（9000 durable commit before 9100 call，PV-0）
+    # 非空且 run_id/attempt_count 均空时 → 独立 namespace ai_preview_execution 构造 key；
+    # 与 run_id/attempt_count 互斥（mixed identity → warning 不构造畸形 key）。
+    preview_execution_id: int | None = None
 
 
 class RecommendedVehicle(BaseModel):

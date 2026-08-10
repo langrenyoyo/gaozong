@@ -457,15 +457,15 @@ PG Closure Gate 最终结果为以下三态之一：
 | 4 | M02 Webhook Lead | `douyin_webhook.py:1242` | ACTIVE | WebhookEvent.id + operation | one event = one lead charge | IDENTITY_VERIFIED | `webhook_event:{event.id}:lead_usage` | ✅ MIGRATED |
 | 5 | Return Visit Judge | `return_visit_judge_service.py:274` | ACTIVE | ReturnVisitRun.id | ReturnVisitRun 有 UniqueConstraint(idempotency_key)；run.id 在 judge 前已 flush；1:1 cardinality（一个 run = 一次 judge） | IDENTITY_VERIFIED | `return_visit_run:{run.id}:judge` | ✅ MIGRATED |
 | 6 | Daily Report Summary | `daily_report_summary_service.py:146` | ACTIVE | DailyReportGeneration.id（独立 billing identity，方案 B） | DailyReportJob.id 是 1:N parent；每次 claim 创建独立 DailyReportGeneration 行作 billing identity（持久不可清空，finalize 只更新 lifecycle 不删行）；billing-report replay only（full-request response-lost 登记为 DAILY_REPORT_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `daily_report_generation:{generation_id}:summary` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5C-4） |
-| 7 | M01 Preview | `reply_decision_service.py:3801` | ACTIVE | 无 Run | conversation_id="agent-preview" 共用 | CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 Preview execution identity 设计（POLICY_PENDING 不停止 identity 设计，现在就应设计） |
+| 7 | M01 Preview | `reply_decision_service.py:3815` | ACTIVE | AiPreviewExecution.id（方案 A：9000 创建 → 透传到 9100） | execution 在 9100 HTTP call 前 durable commit（PV-0）；C1 lifecycle=整次请求结果（非 stage 状态）；cardinality 1:N(2) primary+retry_combined，key 含 llm_call_stage；独立 namespace ai_preview_execution（不污染 Auto Reply ai_auto_reply_run）；POLICY_PENDING 不阻塞 identity 设计 | IDENTITY_VERIFIED | `ai_preview_execution:{preview_execution_id}:{llm_call_stage}` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5G-2） |
 | 8 | M05 Material Analysis | `material_analysis.py:89` | ACTIVE | AiEditMaterialAnalysisExecution.id（独立 billing identity，方案 B） | execution 在 ark call 前 durable commit（MA-0）；ark 成功立即 COMPLETED 先于 usage report（C1 红线）；Analysis 表不变（按 source_sha256 复用，result model only）；1:1（YAGNI 不引入 attempt_count）；不激活 dormant Process 表 | IDENTITY_VERIFIED | `material_analysis_execution:{execution_id}:ark_analysis` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5F-3） |
 | 9 | Training Knowledge | `knowledge_training_service.py:539` | ACTIVE | KnowledgeTrainingExecution.execution_id（独立 billing identity，方案 B） | execution_id 复用 request_id（kt-req-{uuid4}），在 RAG search 前 commit（charge 点前持久）；1:1 cardinality（1 execution : 1 ask charge，YAGNI 不引入 attempt_count）；billing-report replay only（full-request response-lost 登记 TRAINING_REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `knowledge_training_execution:{execution_id}:ask` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5D-2） |
 | 10a | RAG Query Embedding | `rag/repository.py:441`（search path） | ACTIVE | 无 per-query execution identity | Milvus path → fallback SQLite path；MINOR VERIFICATION：确认同一逻辑 Search Request 内是否再次进入 query embedding helper（1:1→search_request_id 可行；多次→需 operation/attempt 维度） | EXECUTION_IDENTITY_DESIGN_GAP | None | ⏸ 需 scope 决策 |
 | 10b | RAG Ingest Chunk Embedding | `rag/repository.py:546,692`（ingest path） | ACTIVE | KnowledgeTrainingRun.id + document_id + chunk_index（child discriminator） | Parent: Training Run.id VERIFIED + 选项 A durable commit（embedding 前持久化）；1 Run : N chunk charges；child = document_id + deterministic chunk_index（embedding 前 enumerate 可得）；chunk_hash 不进 billing key（P3，保持 semantic evidence）；partial identity 三态（D5）；billing-report replay only（full-request response-lost 登记 RAG_INGEST_RUN/REQUEST_RECOVERY_GAP） | IDENTITY_VERIFIED | `rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest` | ✅ IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（Stage 5E-3） |
 
-**汇总：9/11 MIGRATED / 2/11 OPEN（#7 Preview / #10a RAG Query）。**
+**汇总：10/11 MIGRATED / 1/11 OPEN（#10a RAG Query）。**
 
-> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：所有 2 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
+> **Open 路径统一风险描述（C4/C5，Stage 5D-R1 冻结）**：剩余 1 条 Open 路径 `idempotency_key=None` → **无 M07 业务事件幂等保护**（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）。重复扣费暴露证据等级 = **CODE_VERIFIED_EXPOSED**（非 E2E_VERIFIED_DOUBLE_CHARGE，未经受控 E2E 复现）。不得把"存在 record_usage 调用"夸大为 E2E 证明重复扣费。
 
 ### Stage 5B 身份验真详情
 
@@ -622,11 +622,26 @@ PG Closure Gate 最终结果为以下三态之一：
 > - **TRAINING_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：full 9000→9100 request response-lost（Execution E1 LLM 成功 + charge commit，但 Session INSERT / HTTP response 失败 → client 重调 ask → new E2 → new charge；无 durable client request identity 证明 E1==E2）。M07 行为 = same Generation key + different payload → IDEMPOTENCY_CONFLICT（正确，不重复扣费，发出警报）。与 DAILY_REPORT_REQUEST_RECOVERY_GAP 同口径。
 > - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级响应丢失可靠性差距。不得把 TRAINING_REQUEST_RECOVERY_GAP 并入 P1 consumer 迁移状态，也不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN——该 Gap 属可靠性范畴（OUT_OF_P1），由独立可靠性工作流处理。
 
-#### Preview（#7 — CHARGEABLE / POLICY_PENDING / EXECUTION_IDENTITY_DESIGN_GAP）
+#### Preview（#7 — IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED，Stage 5G-2）
 
-- 无 Run 持久化，`conversation_id="agent-preview"` 共用
-- 当前计费且无 identity（CHARGEABLE）
-- **产品决策待定**（POLICY_PENDING）：免费 → 不计费；收费 → 需 preview request record
-- **POLICY_PENDING 不停止 identity 设计**：现在就应设计 Preview execution identity（不等产品策略）
-- **设计方向**：先产品决策收费策略；若保持收费，则需 per-preview identity（preview request record）
-- **重复扣费暴露**：`idempotency_key=None` → 无 M07 业务事件幂等保护（call#1→txn#1，call#2→txn#2，无 REPLAY，无 IDEMPOTENCY_CONFLICT）；证据 = CODE_VERIFIED_EXPOSED（非 E2E_VERIFIED_DOUBLE_CHARGE）
+**Stage 5G-1 设计结论（方案 A 冻结 APPROVED）：**
+- 见 `docs/architecture/remediation/P1_PREVIEW_EXECUTION_IDENTITY_DESIGN.md`：方案 A（9000 创建 AiPreviewExecution → 透传 execution_id 到 9100），与 Daily Report / Return Visit 同模式（请求归属方创建 + 透传到计费方）
+
+**Stage 5G-2 迁移实施（MIGRATED）：**
+- **方案 A 冻结**：新建 `AiPreviewExecution` 独立持久实体（`models.py`，auto_wechat 库），与 DailyReportGeneration / ReturnVisitRun 同构（9000 创建 + 透传）
+- **Identity 合同（冻结为最终 contract）**：`ai_preview_execution:{preview_execution_id}:{llm_call_stage}`（llm_call_stage = primary / retry_combined，1:N(2) cardinality）
+- **execution 在 9100 HTTP call 前 durable commit**（PV-0）：9000 `preview_agent` 创建 execution + commit + 透传 `request_payload["preview_execution_id"]`，先于 9100 LLM 计费副作用
+- **C1 lifecycle 红线**：lifecycle_status = 整次 Preview 请求结果（非 primary/retry stage 影子状态机）；9100 正常返回→completed；整次 9100 失败→failed；primary 成功+retry 失败但 9100 正常返回→completed
+- **C2 DB ownership**：9100 不回连 auto_wechat DB 修改 PreviewExecution（仅 9000 写）；9100 只读 `request.preview_execution_id` 构造 key
+- **C4 Auto Reply contract 不变**：独立 namespace `ai_preview_execution` + 独立字段 `preview_execution_id`；`_report_llm_usage` 三分支（Auto Reply / Preview / legacy）；mixed identity（run_id+preview_execution_id）→ warning 不构造畸形 key
+- **C3**：usage report 失败不重跑 LLM（`_report_llm_usage` 内部 catch，不改 execution 状态）
+- **7 Gate PASS**：PV-0~PV-6（见 `tests/test_preview_compute_idempotency_migration.py`），含 PV-5 request lifecycle boundary + PV-6 mixed identity isolation
+- **migration**：`0034_preview_executions.py`（revision 0034，down_revision 0033，backward-compatible）
+- **POLICY_PENDING 不阻塞 identity 设计**：Preview 保持 CHARGEABLE 当前行为；若将来 policy 决定免费 → 移除 charge-producing call（PG Closure Gate B 路径），identity 设计仍有效
+
+> **PENDING_PG_VERIFICATION（Stage 5G-2，PG migration 0034）**：Preview functional migration COMPLETE / idempotency contract MIGRATED_AND_VERIFIED，但 PostgreSQL schema application（0034）仍未验证（BLOCKED_BY_SCHEMA_BASELINE_MISMATCH，未验证不得 deploy）。Closure 前必须验证 `alembic upgrade 0033 → 0034` + `ai_preview_executions` 表 + `ck_ai_preview_executions_status` CHECK + 索引 + normal create/finalize lifecycle 在 PG 可运行。**SQLite evidence ≠ PostgreSQL evidence**。
+
+> **Reliability Gap 分离登记（防根因混淆）**：
+> - Preview charge path consumer 迁移状态 = **IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED**（P1 财务幂等职责已完成）。
+> - **PREVIEW_REQUEST_RECOVERY_GAP = OPEN / RELIABILITY / OUT_OF_P1**：full 9000→9100 request response-lost（9100 已完成 LLM + M07 已 commit，但 9000 未收到 HTTP 响应 → 重发 preview → 新 execution → 新 charge；无 durable client request identity 证明 E1==E2）。与 DAILY_REPORT/TRAINING/RAG_INGEST_REQUEST_RECOVERY_GAP 同口径。★ same Execution + same stage replay → P1 保护；full request retry after response-lost → 未保证→P1 不解决。
+> - 两者**严格分离**：consumer 迁移状态（财务幂等）≠ 请求级响应丢失可靠性差距。不得据此判定 COMPUTE-IDEMPOTENCY-001 仍 OPEN。

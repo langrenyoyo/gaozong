@@ -251,8 +251,21 @@ cardinality = 1 execution : up to 2 charge events
 
 ## 待审批决策点
 
-1. ~~方案 A vs 方案 B~~ → **倾向方案 A**（9000 创建 + 透传，待审查确认；与 Daily Report / Return Visit 同模式）
-2. 库归属 → 方案 A 则 auto_wechat 库（待方案确认）
-3. `preview_execution_id` 字段透传方式（ReplySuggestionRequest 加字段 + getattr）→ 实施期决策，不冻结
-4. candidate key `ai_preview_execution:{preview_execution_id}:{llm_call_stage}` → 审查通过后登记为最终 contract
-5. 审查通过后授权实施（新建 AiPreviewExecution 实体 + migration + preview_agent 改造 + ReplySuggestionRequest 加字段 + _report_llm_usage 新分支 + 7 Gate）
+1. ~~方案 A vs 方案 B~~ → **方案 A 已冻结 APPROVED**（Stage 5G-2 已实施；9000 创建 + 透传，与 Daily Report / Return Visit 同模式）
+2. ~~库归属~~ → **auto_wechat 库**（方案 A，AiPreviewExecution 在 9000 创建）
+3. ~~`preview_execution_id` 字段透传方式~~ → **ReplySuggestionRequest 加 `preview_execution_id: int | None = None` 字段 + getattr 透传**（已实施）
+4. ~~candidate key `ai_preview_execution:{preview_execution_id}:{llm_call_stage}`~~ → **冻结为最终 contract**（Stage 5G-2 已实施）
+5. ~~审查通过后授权实施~~ → **Stage 5G-2 已实施**（migration 0034 + model + preview_agent 改造 + ReplySuggestionRequest 加字段 + _report_llm_usage 三分支 + 7 Gate PASS）
+
+## Stage 5G-2 实施落记
+
+- **方案 A 已实施**：migration `0034_preview_executions.py` + ORM model `AiPreviewExecution`（auto_wechat 库）
+- **execution 在 9100 HTTP call 前 durable commit**（PV-0）：`_create_preview_execution` + commit + 透传 `request_payload["preview_execution_id"]`
+- **C1 lifecycle 红线落地**：lifecycle_status = 整次 Preview 请求结果（非 stage 状态）；9100 正常返回→completed；整次 9100 失败→failed
+- **C2 DB ownership**：9100 不回连 auto_wechat DB（`_report_llm_usage` 只读 `request.preview_execution_id` 构造 key，不查/写 AiPreviewExecution 表）
+- **C4 Auto Reply contract 不变**：独立 namespace `ai_preview_execution` + 独立字段；三分支（Auto Reply / Preview / legacy）；mixed identity（run_id+preview_execution_id）→ warning 不构造畸形 key
+- **PREVIEW_REQUEST_RECOVERY_GAP 登记**：full 9000→9100 request response-lost → 重发 preview → 新 execution → 新 charge（OUT_OF_P1，与其他 REQUEST_RECOVERY_GAP 同口径）。★ same Execution + same stage replay→P1 保护 / full request retry→未保证→P1 不解决。
+- **7 Gate PASS**：PV-0~PV-6（`tests/test_preview_compute_idempotency_migration.py`），含 PV-5 request lifecycle boundary + PV-6 mixed identity isolation
+- **None count**：Preview 正式链 idempotency_key≠None = 0
+- **0034 PG = PENDING_PG_VERIFICATION / BLOCKED_BY_SCHEMA_BASELINE_MISMATCH**（未验证不得 deploy）
+- **COMPUTE-IDEMPOTENCY-001 仍 OPEN**（1/11 剩余：RAG Query #10a）

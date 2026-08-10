@@ -3782,20 +3782,33 @@ def _report_llm_usage(
     """
     if not request.merchant_id:
         return
-    # P1 Stage 4B：构造幂等键（三维 identity）
+    # P1 Stage 4B/5G-2：构造幂等键（Auto Reply 三维 identity / Preview 独立 namespace）
     run_id = getattr(request, "run_id", None)
     attempt_count = getattr(request, "attempt_count", None)
+    preview_execution_id = getattr(request, "preview_execution_id", None)
     idempotency_key = None
     if run_id is not None and attempt_count is not None:
         # Auto Reply 完整 identity → 构造 key
-        idempotency_key = f"ai_auto_reply_run:{run_id}:{attempt_count}:{llm_call_stage}"
+        if preview_execution_id is not None:
+            # C4：mixed identity（Auto Reply + Preview 同时存在）→ 契约违反 warning，不构造畸形 key
+            _logger.warning(
+                "compute_usage stage=mixed_identity_violation run_id=%s attempt_count=%s "
+                "preview_execution_id=%s stage=%s（不构造畸形 idempotency_key，退 None）",
+                run_id, attempt_count, preview_execution_id, llm_call_stage,
+            )
+        else:
+            idempotency_key = f"ai_auto_reply_run:{run_id}:{attempt_count}:{llm_call_stage}"
     elif run_id is not None or attempt_count is not None:
         # Partial identity → 不生成错误 key，记 warning
         _logger.warning(
             "compute_usage stage=partial_identity run_id=%s attempt_count=%s stage=%s",
             run_id, attempt_count, llm_call_stage,
         )
-    # run_id=None AND attempt_count=None → Preview 兼容路径，不传 key（不改计费行为）
+    elif preview_execution_id is not None:
+        # ★ P1 Stage 5G-2：Preview 独立分支（独立 namespace ai_preview_execution，不影响 Auto Reply）
+        # cardinality 1:N(2)，key 含 llm_call_stage 区分 primary/retry_combined
+        idempotency_key = f"ai_preview_execution:{preview_execution_id}:{llm_call_stage}"
+    # run_id=None AND attempt_count=None AND preview_execution_id=None → legacy 兼容路径，不传 key
     usage = measure_chat_usage(messages, result)
     try:
         ComputeUsageClient().report_usage(
