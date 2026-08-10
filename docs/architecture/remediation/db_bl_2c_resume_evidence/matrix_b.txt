@@ -1,0 +1,40 @@
+=== Matrix B: Expected@0030 vs Expected@0034 ===
+left  = expected_0030
+right = expected_0034
+counts: semantic=30 name_only=0 normalization_only=0
+
+--- SEMANTIC_DIFF (30) ---
+  [extra_table] table=ai_edit_material_analysis_executions side=right_only
+  [extra_table] table=ai_preview_executions side=right_only
+  [extra_table] table=daily_report_generations side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.completed_at side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.created_at side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.id side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.lifecycle_status side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.material_id side=right_only
+  [extra_column] column=ai_edit_material_analysis_executions.source_sha256 side=right_only
+  [extra_column] column=ai_preview_executions.agent_id side=right_only
+  [extra_column] column=ai_preview_executions.completed_at side=right_only
+  [extra_column] column=ai_preview_executions.created_at side=right_only
+  [extra_column] column=ai_preview_executions.id side=right_only
+  [extra_column] column=ai_preview_executions.lifecycle_status side=right_only
+  [extra_column] column=ai_preview_executions.merchant_id side=right_only
+  [extra_column] column=daily_report_generations.created_at side=right_only
+  [extra_column] column=daily_report_generations.id side=right_only
+  [extra_column] column=daily_report_generations.job_id side=right_only
+  [extra_column] column=daily_report_generations.lifecycle_status side=right_only
+  [extra_column] column=daily_report_jobs.current_generation_id side=right_only
+  [extra_pk] table=ai_edit_material_analysis_executions columns=['id']
+  [extra_pk] table=ai_preview_executions columns=['id']
+  [extra_pk] table=daily_report_generations columns=['id']
+  [extra_fk] key=daily_report_generations|job_id|daily_report_jobs|id name=daily_report_generations_job_id_fkey
+  [extra_check] key=ai_edit_material_analysis_executions|CHECK (lifecycle_status::text = ANY (ARRAY['running'::character varying, 'completed'::character varying, 'failed'::character varying]::text[])) name=ck_ai_edit_material_analysis_executions_status
+  [extra_check] key=ai_preview_executions|CHECK (lifecycle_status::text = ANY (ARRAY['running'::character varying, 'completed'::character varying, 'failed'::character varying]::text[])) name=ck_ai_preview_executions_status
+  [extra_check] key=daily_report_generations|CHECK (lifecycle_status::text = ANY (ARRAY['pending'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])) name=ck_daily_report_generations_status
+  [extra_index] key=ai_edit_material_analysis_executions|material_id|btree|False| name=idx_ai_edit_material_analysis_executions_material
+  [extra_index] key=ai_preview_executions|merchant_id|btree|False| name=idx_ai_preview_executions_merchant
+  [extra_index] key=daily_report_generations|job_id|btree|False| name=idx_daily_report_generations_job
+
+--- NAME_ONLY_DIFF (0) ---
+
+--- NORMALIZATION_ONLY (0) ---

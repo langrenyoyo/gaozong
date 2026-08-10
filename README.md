@@ -71,8 +71,15 @@ pip install -r requirements.txt
 
 ### 2. 初始化数据库
 
+> **后端边界**：`scripts/init_db.py` 仅用于 **SQLite** 开发库（create_all + 默认配置 seed）。
+> **PostgreSQL 禁止用 init_db.py 建表**——PG schema 必须由 Alembic 创建/演进（init_db.py 会在 PG 下拒绝并退出）。
+
 ```bash
+# SQLite 开发库（默认 DATABASE_URL=sqlite:///./data/auto_wechat.db）
 python scripts/init_db.py
+
+# PostgreSQL（生产/staging/本地 PG）：用 Alembic，不用 init_db.py
+alembic -c migrations/postgres/auto_wechat/alembic.ini upgrade head
 ```
 
 ### 3. 插入演示数据

@@ -1,0 +1,1224 @@
+=== Matrix A: Legacy Actual vs Expected@0030 ===
+left  = legacy_actual
+right = expected_0030
+counts: semantic=1205 name_only=9 normalization_only=0
+
+--- SEMANTIC_DIFF (1205) ---
+  [type_diff] column=ad_review_adopt_tasks.completed_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ad_review_adopt_tasks.completed_at left=完成时间 right=
+  [type_diff] column=ad_review_adopt_tasks.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_adopt_tasks.created_at left=False right=True
+  [default_diff] column=ad_review_adopt_tasks.created_at left=None right=now()
+  [comment_diff] column=ad_review_adopt_tasks.error_message left=错误信息 right=
+  [type_diff] column=ad_review_adopt_tasks.id left=integer right=bigint
+  [comment_diff] column=ad_review_adopt_tasks.merchant_id left=可信商户 ID right=
+  [type_diff] column=ad_review_adopt_tasks.oauth_account_id left=integer right=bigint
+  [comment_diff] column=ad_review_adopt_tasks.oauth_account_id left=关联一键过审授权账号 ID（弱引用，不强外键） right=
+  [type_diff] column=ad_review_adopt_tasks.request_body_json left=text right=jsonb
+  [comment_diff] column=ad_review_adopt_tasks.request_body_json left=请求体 JSON right=
+  [type_diff] column=ad_review_adopt_tasks.response_body_json left=text right=jsonb
+  [comment_diff] column=ad_review_adopt_tasks.response_body_json left=响应体 JSON right=
+  [comment_diff] column=ad_review_adopt_tasks.status left=任务状态 right=
+  [type_diff] column=ad_review_adopt_tasks.suggestion_ids_json left=text right=jsonb
+  [comment_diff] column=ad_review_adopt_tasks.suggestion_ids_json left=采纳的建议 ID 列表 JSON right=
+  [comment_diff] column=ad_review_adopt_tasks.task_key left=任务幂等 key right=
+  [type_diff] column=ad_review_adopt_tasks.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_adopt_tasks.updated_at left=False right=True
+  [default_diff] column=ad_review_adopt_tasks.updated_at left=None right=now()
+  [comment_diff] column=ad_review_oauth_accounts.access_token_cipher left=access_token 密文 right=
+  [comment_diff] column=ad_review_oauth_accounts.account_name left=账号名称 right=
+  [comment_diff] column=ad_review_oauth_accounts.advertiser_id left=巨量广告主 ID right=
+  [comment_diff] column=ad_review_oauth_accounts.auth_status left=授权状态 right=
+  [type_diff] column=ad_review_oauth_accounts.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_oauth_accounts.created_at left=False right=True
+  [default_diff] column=ad_review_oauth_accounts.created_at left=None right=now()
+  [type_diff] column=ad_review_oauth_accounts.deleted_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ad_review_oauth_accounts.deleted_at left=软删除时间 right=
+  [type_diff] column=ad_review_oauth_accounts.id left=integer right=bigint
+  [comment_diff] column=ad_review_oauth_accounts.merchant_id left=可信商户 ID right=
+  [type_diff] column=ad_review_oauth_accounts.raw_body_json left=text right=jsonb
+  [comment_diff] column=ad_review_oauth_accounts.raw_body_json left=授权原始响应 JSON right=
+  [comment_diff] column=ad_review_oauth_accounts.refresh_token_cipher left=refresh_token 密文 right=
+  [type_diff] column=ad_review_oauth_accounts.token_expires_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ad_review_oauth_accounts.token_expires_at left=token 过期时间 right=
+  [type_diff] column=ad_review_oauth_accounts.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_oauth_accounts.updated_at left=False right=True
+  [default_diff] column=ad_review_oauth_accounts.updated_at left=None right=now()
+  [comment_diff] column=ad_review_suggestions.ad_id left=广告 ID right=
+  [comment_diff] column=ad_review_suggestions.adopt_status left=采纳状态 right=
+  [comment_diff] column=ad_review_suggestions.advertiser_id left=巨量广告主 ID right=
+  [type_diff] column=ad_review_suggestions.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_suggestions.created_at left=False right=True
+  [default_diff] column=ad_review_suggestions.created_at left=None right=now()
+  [type_diff] column=ad_review_suggestions.id left=integer right=bigint
+  [comment_diff] column=ad_review_suggestions.material_id left=素材 ID right=
+  [comment_diff] column=ad_review_suggestions.merchant_id left=可信商户 ID right=
+  [type_diff] column=ad_review_suggestions.oauth_account_id left=integer right=bigint
+  [comment_diff] column=ad_review_suggestions.oauth_account_id left=关联一键过审授权账号 ID（弱引用，不强外键） right=
+  [type_diff] column=ad_review_suggestions.pulled_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ad_review_suggestions.pulled_at left=拉取时间 right=
+  [type_diff] column=ad_review_suggestions.raw_body_json left=text right=jsonb
+  [comment_diff] column=ad_review_suggestions.raw_body_json left=原始响应 JSON right=
+  [comment_diff] column=ad_review_suggestions.rejection_reason left=拒审原因 right=
+  [comment_diff] column=ad_review_suggestions.suggestion_key left=建议幂等 key right=
+  [comment_diff] column=ad_review_suggestions.suggestion_text left=过审建议文本 right=
+  [type_diff] column=ad_review_suggestions.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ad_review_suggestions.updated_at left=False right=True
+  [default_diff] column=ad_review_suggestions.updated_at left=None right=now()
+  [comment_diff] column=agent_knowledge_categories.agent_id left=AI 智能体业务 ID right=
+  [comment_diff] column=agent_knowledge_categories.category_key left=9100 RAG 分类稳定标识 right=
+  [type_diff] column=agent_knowledge_categories.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=agent_knowledge_categories.created_at left=False right=True
+  [default_diff] column=agent_knowledge_categories.created_at left=None right=now()
+  [type_diff] column=agent_knowledge_categories.deleted_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=agent_knowledge_categories.id left=integer right=bigint
+  [comment_diff] column=agent_knowledge_categories.is_base left=是否 base 分类，0/1 right=
+  [default_diff] column=agent_knowledge_categories.is_base left=None right=false
+  [comment_diff] column=agent_knowledge_categories.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=agent_knowledge_categories.scope_type left=merchant/system right=
+  [default_diff] column=agent_knowledge_categories.scope_type left=None right='merchant'::character varying
+  [comment_diff] column=agent_knowledge_categories.status left=active/deleted right=
+  [default_diff] column=agent_knowledge_categories.status left=None right='active'::character varying
+  [comment_diff] column=agent_knowledge_categories.tenant_id left=预留租户 ID right=
+  [type_diff] column=agent_knowledge_categories.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=agent_knowledge_categories.updated_at left=False right=True
+  [default_diff] column=agent_knowledge_categories.updated_at left=None right=now()
+  [comment_diff] column=ai_agents.agent_id left=智能体业务唯一 ID right=
+  [comment_diff] column=ai_agents.avatar_seed left=随机头像种子 right=
+  [comment_diff] column=ai_agents.avatar_url left=头像地址 right=
+  [type_diff] column=ai_agents.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_agents.created_at left=False right=True
+  [default_diff] column=ai_agents.created_at left=None right=now()
+  [type_diff] column=ai_agents.id left=integer right=bigint
+  [comment_diff] column=ai_agents.knowledge_base_text left=普通文本知识库 right=
+  [default_diff] column=ai_agents.knowledge_base_text left=None right=''::text
+  [comment_diff] column=ai_agents.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=ai_agents.name left=智能体名称 right=
+  [comment_diff] column=ai_agents.prompt left=智能体提示词 right=
+  [default_diff] column=ai_agents.prompt left=None right=''::text
+  [comment_diff] column=ai_agents.status left=active/disabled/deleted right=
+  [default_diff] column=ai_agents.status left=None right='active'::character varying
+  [type_diff] column=ai_agents.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_agents.updated_at left=False right=True
+  [default_diff] column=ai_agents.updated_at left=None right=now()
+  [comment_diff] column=ai_auto_reply_runs.attempt_count left=累计尝试次数（含首次） right=
+  [default_diff] column=ai_auto_reply_runs.attempt_count left=None right=0
+  [type_diff] column=ai_auto_reply_runs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_auto_reply_runs.created_at left=False right=True
+  [default_diff] column=ai_auto_reply_runs.created_at left=None right=now()
+  [type_diff] column=ai_auto_reply_runs.decision_log_id left=integer right=bigint
+  [type_diff] column=ai_auto_reply_runs.id left=integer right=bigint
+  [comment_diff] column=ai_auto_reply_runs.last_failure_stage left=最后失败阶段，用于诊断和重试白名单 right=
+  [type_diff] column=ai_auto_reply_runs.lease_expires_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ai_auto_reply_runs.lease_expires_at left=租约过期时间 right=
+  [comment_diff] column=ai_auto_reply_runs.lease_owner left=当前持有租约的进程标识 right=
+  [default_diff] column=ai_auto_reply_runs.mode left=None right='dry_run'::character varying
+  [type_diff] column=ai_auto_reply_runs.next_attempt_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ai_auto_reply_runs.next_attempt_at left=下次可处理时间；retry_wait 退避后填入 right=
+  [type_diff] column=ai_auto_reply_runs.trigger_event_id left=integer right=bigint
+  [type_diff] column=ai_auto_reply_runs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_auto_reply_runs.updated_at left=False right=True
+  [default_diff] column=ai_auto_reply_runs.updated_at left=None right=now()
+  [comment_diff] column=ai_edit_job_artifacts.agent_client_id left=产生产物的设备 ID right=
+  [comment_diff] column=ai_edit_job_artifacts.artifact_id left=产物幂等 ID right=
+  [comment_diff] column=ai_edit_job_artifacts.artifact_type left=产物类型 right=
+  [comment_diff] column=ai_edit_job_artifacts.content_sha256 left=产物内容 SHA-256 right=
+  [type_diff] column=ai_edit_job_artifacts.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_edit_job_artifacts.created_at left=False right=True
+  [default_diff] column=ai_edit_job_artifacts.created_at left=None right=now()
+  [comment_diff] column=ai_edit_job_artifacts.file_name left=文件名 right=
+  [type_diff] column=ai_edit_job_artifacts.id left=integer right=bigint
+  [comment_diff] column=ai_edit_job_artifacts.integrity_status left=完整性状态（verified/missing/corrupted） right=
+  [comment_diff] column=ai_edit_job_artifacts.job_id left=关联剪辑任务 ID right=
+  [comment_diff] column=ai_edit_job_artifacts.location_type left=位置类型（local/cloud） right=
+  [comment_diff] column=ai_edit_job_artifacts.media_profile_json left=媒体属性 JSON（分辨率/时长/编码） right=
+  [comment_diff] column=ai_edit_job_artifacts.merchant_id left=可信商户 ID right=
+  [comment_diff] column=ai_edit_job_artifacts.mime_type left=MIME 类型 right=
+  [comment_diff] column=ai_edit_job_artifacts.source_artifact_id left=来源产物 ID（720P 草稿派生 1080P） right=
+  [comment_diff] column=ai_edit_job_artifacts.storage_key left=内部存储键，不存绝对路径 right=
+  [comment_diff] column=ai_edit_job_materials.job_id left=任务 ID right=
+  [comment_diff] column=ai_edit_job_materials.material_id left=素材 ID right=
+  [comment_diff] column=ai_edit_job_materials.pinned_sha256 left=钉住的素材哈希（防漂移） right=
+  [comment_diff] column=ai_edit_job_materials.position left=同角色内顺序 right=
+  [comment_diff] column=ai_edit_job_materials.role left=素材角色（main/broll/audio） right=
+  [comment_diff] column=ai_edit_job_materials.source_end left=源片段结束秒 right=
+  [comment_diff] column=ai_edit_job_materials.source_start left=源片段起始秒 right=
+  [comment_diff] column=ai_edit_jobs.agent_client_id left=执行设备的 Local Agent 客户端 ID right=
+  [comment_diff] column=ai_edit_jobs.attempt_count left=重试 attempt 计数（新 attempt 旧令牌不能覆盖新结果） right=
+  [comment_diff] column=ai_edit_jobs.cancel_requested_at left=取消请求时间 right=
+  [type_diff] column=ai_edit_jobs.completed_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=ai_edit_jobs.completed_at left=完成时间 right=
+  [type_diff] column=ai_edit_jobs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_edit_jobs.created_at left=False right=True
+  [default_diff] column=ai_edit_jobs.created_at left=None right=now()
+  [comment_diff] column=ai_edit_jobs.engine_version left=渲染引擎版本 right=
+  [comment_diff] column=ai_edit_jobs.error_message left=错误信息 right=
+  [comment_diff] column=ai_edit_jobs.error_summary left=错误摘要（不含敏感原文） right=
+  [comment_diff] column=ai_edit_jobs.execution_token_hash left=本次 attempt 执行令牌哈希（防旧 attempt 回写） right=
+  [comment_diff] column=ai_edit_jobs.failure_code left=稳定失败码（机器可读） right=
+  [comment_diff] column=ai_edit_jobs.heartbeat_at left=Worker 最近心跳时间 right=
+  [type_diff] column=ai_edit_jobs.id left=integer right=bigint
+  [comment_diff] column=ai_edit_jobs.input_fingerprint left=输入素材指纹摘要 right=
+  [comment_diff] column=ai_edit_jobs.input_json left=输入 JSON right=
+  [comment_diff] column=ai_edit_jobs.job_id left=任务幂等 ID right=
+  [comment_diff] column=ai_edit_jobs.las_business_code left=LAS 业务码（0=成功，非 0=业务失败） right=
+  [comment_diff] column=ai_edit_jobs.las_error_msg left=LAS 失败错误信息 right=
+  [comment_diff] column=ai_edit_jobs.las_idempotent_id left=提交 LAS 的幂等 ID（持久化复用，重试不重复创建） right=
+  [comment_diff] column=ai_edit_jobs.las_metadata_json left=LAS 轮询返回的完整 metadata JSON right=
+  [comment_diff] column=ai_edit_jobs.las_script left=本次成片创作指令（自然语言，≤4000 字） right=
+  [comment_diff] column=ai_edit_jobs.las_task_id left=LAS 返回的 task_id right=
+  [comment_diff] column=ai_edit_jobs.las_template left=LAS 行业模板，固定 automotive_headtalk right=
+  [comment_diff] column=ai_edit_jobs.merchant_id left=可信商户 ID right=
+  [comment_diff] column=ai_edit_jobs.model_version left=规划模型版本 right=
+  [comment_diff] column=ai_edit_jobs.progress left=进度 0..100 right=
+  [comment_diff] column=ai_edit_jobs.result_json left=结果 JSON right=
+  [comment_diff] column=ai_edit_jobs.source_type left=来源类型 right=
+  [comment_diff] column=ai_edit_jobs.stage left=处理阶段（preflight/analyze/stabilize/plan/render_preview/render_final/verify） right=
+  [comment_diff] column=ai_edit_jobs.status left=任务状态 right=
+  [comment_diff] column=ai_edit_jobs.template_version left=剪辑模板版本 right=
+  [type_diff] column=ai_edit_jobs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_edit_jobs.updated_at left=False right=True
+  [default_diff] column=ai_edit_jobs.updated_at left=None right=now()
+  [comment_diff] column=ai_edit_material_analyses.analysis_version left=分析版本（算法+模型） right=
+  [comment_diff] column=ai_edit_material_analyses.material_id left=素材 ID right=
+  [comment_diff] column=ai_edit_material_analyses.scenes_json left=分镜 JSON（严格 schema） right=
+  [comment_diff] column=ai_edit_material_analyses.source_sha256 left=被分析的素材 SHA-256 right=
+  [comment_diff] column=ai_edit_material_analyses.tags_json left=标签 JSON（严格 schema） right=
+  [comment_diff] column=ai_edit_material_analyses.transcript_json left=ASR 转写 JSON（严格 schema） right=
+  [comment_diff] column=ai_edit_material_analyses.usable_ranges_json left=可用区间 JSON（严格 schema） right=
+  [comment_diff] column=ai_edit_material_processes.attempt_count left=尝试次数 right=
+  [comment_diff] column=ai_edit_material_processes.completed_at left=完成时间 right=
+  [comment_diff] column=ai_edit_material_processes.error_summary left=脱敏错误摘要 right=
+  [comment_diff] column=ai_edit_material_processes.execution_token_hash left=执行令牌 SHA-256（不存原始） right=
+  [comment_diff] column=ai_edit_material_processes.failure_code left=失败错误码 right=
+  [comment_diff] column=ai_edit_material_processes.material_id left=素材 ID right=
+  [comment_diff] column=ai_edit_material_processes.progress left=进度 0-100 right=
+  [comment_diff] column=ai_edit_material_processes.source_sha256 left=被处理的素材 SHA-256 right=
+  [comment_diff] column=ai_edit_material_processes.stage left=阶段 right=
+  [comment_diff] column=ai_edit_material_processes.started_at left=开始时间 right=
+  [comment_diff] column=ai_edit_material_processes.status left=状态 right=
+  [comment_diff] column=ai_edit_materials.agent_client_id left=来源设备 Local Agent 客户端 ID right=
+  [comment_diff] column=ai_edit_materials.analysis_status left=分析状态 right=
+  [comment_diff] column=ai_edit_materials.category left=分类（spoken/broll/highlight/uncategorized） right=
+  [comment_diff] column=ai_edit_materials.cloud_storage_key left=云端产物内部存储键（主动上传后） right=
+  [comment_diff] column=ai_edit_materials.deleted_at left=软删除时间（7 天回收站） right=
+  [comment_diff] column=ai_edit_materials.description left=当前 AI/人工描述 right=
+  [comment_diff] column=ai_edit_materials.display_name left=展示名 right=
+  [comment_diff] column=ai_edit_materials.duration_seconds left=时长（秒） right=
+  [comment_diff] column=ai_edit_materials.file_size_bytes left=文件字节数（BigInteger 防 2GB 溢出） right=
+  [comment_diff] column=ai_edit_materials.fps left=帧率 right=
+  [comment_diff] column=ai_edit_materials.height left=高 right=
+  [comment_diff] column=ai_edit_materials.manual_confirmed_at left=人工确认时间 right=
+  [comment_diff] column=ai_edit_materials.manual_override_json left=人工覆盖严格 JSON right=
+  [comment_diff] column=ai_edit_materials.material_id left=素材幂等 ID right=
+  [comment_diff] column=ai_edit_materials.media_type left=媒体类型（video/audio/image） right=
+  [comment_diff] column=ai_edit_materials.merchant_id left=所属商户 ID（平台素材为空） right=
+  [comment_diff] column=ai_edit_materials.parent_material_id left=父素材 ID（增稳/转码派生） right=
+  [comment_diff] column=ai_edit_materials.purge_after left=物理清除截止时间 right=
+  [comment_diff] column=ai_edit_materials.purge_operation_id left=永久删除操作 ID right=
+  [comment_diff] column=ai_edit_materials.purge_status left=永久删除状态（preparing/completed） right=
+  [comment_diff] column=ai_edit_materials.scope left=作用域（merchant/platform） right=
+  [comment_diff] column=ai_edit_materials.source_sha256 left=原始素材 SHA-256 right=
+  [comment_diff] column=ai_edit_materials.stabilization_status left=增稳状态 right=
+  [comment_diff] column=ai_edit_materials.storage_mode left=存储状态四态 right=
+  [comment_diff] column=ai_edit_materials.thumbnail_storage_key left=缩略图内部存储键 right=
+  [comment_diff] column=ai_edit_materials.tos_presigned_expires_at left=预签名 URL 过期时间 right=
+  [comment_diff] column=ai_edit_materials.tos_presigned_url left=喂给 LAS 的 TOS 预签名 https URL right=
+  [comment_diff] column=ai_edit_materials.width left=宽 right=
+  [comment_diff] column=ai_edit_templates.enabled left=是否启用 right=
+  [comment_diff] column=ai_edit_templates.name left=模板名称 right=
+  [comment_diff] column=ai_edit_templates.prompt_version left=Prompt 版本 right=
+  [comment_diff] column=ai_edit_templates.rules_json left=剪辑规则 JSON（严格 schema） right=
+  [comment_diff] column=ai_edit_templates.template_key left=模板幂等 key right=
+  [comment_diff] column=ai_reply_decision_logs.account_open_id left=已校验的抖音企业号 open_id right=
+  [comment_diff] column=ai_reply_decision_logs.agent_id left=真实智能体业务 ID right=
+  [comment_diff] column=ai_reply_decision_logs.agent_name left=真实智能体名称 right=
+  [comment_diff] column=ai_reply_decision_logs.allowed_category_keys_json left=9000 注入的可信知识分类 key JSON right=
+  [comment_diff] column=ai_reply_decision_logs.confidence left=模型置信度 right=
+  [comment_diff] column=ai_reply_decision_logs.conversation_id left=reply-suggestion 路由中的会话 ID right=
+  [comment_diff] column=ai_reply_decision_logs.conversation_short_id left=抖音会话短 ID，当前与 conversation_id 同源 right=
+  [type_diff] column=ai_reply_decision_logs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=ai_reply_decision_logs.created_at left=False right=True
+  [default_diff] column=ai_reply_decision_logs.created_at left=None right=now()
+  [comment_diff] column=ai_reply_decision_logs.customer_open_id left=客户 open_id，预留 right=
+  [comment_diff] column=ai_reply_decision_logs.decision_version left=决策版本 right=
+  [comment_diff] column=ai_reply_decision_logs.effectiveness_reason left=人工标记有效/无效原因 right=
+  [comment_diff] column=ai_reply_decision_logs.error_message left=日志记录错误信息，预留 right=
+  [comment_diff] column=ai_reply_decision_logs.final_auto_send left=9000 最终返回是否自动发送，必须为 0 right=
+  [default_diff] column=ai_reply_decision_logs.final_auto_send left=None right=false
+  [type_diff] column=ai_reply_decision_logs.id left=integer right=bigint
+  [comment_diff] column=ai_reply_decision_logs.intent left=结构化客户意图 right=
+  [comment_diff] column=ai_reply_decision_logs.is_effective left=超管人工标记：null 未标记 / true 有效 / false 无效 right=
+  [comment_diff] column=ai_reply_decision_logs.latest_message left=触发本次建议的最新用户消息 right=
+  [comment_diff] column=ai_reply_decision_logs.lead_level left=结构化意向等级 right=
+  [comment_diff] column=ai_reply_decision_logs.llm_used left=是否使用 LLM 0/1 right=
+  [default_diff] column=ai_reply_decision_logs.llm_used left=None right=false
+  [comment_diff] column=ai_reply_decision_logs.manual_required left=最终是否需要人工确认 0/1 right=
+  [default_diff] column=ai_reply_decision_logs.manual_required left=None right=true
+  [comment_diff] column=ai_reply_decision_logs.manual_required_reason left=需要人工确认原因 right=
+  [comment_diff] column=ai_reply_decision_logs.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=ai_reply_decision_logs.model left=实际模型，对齐 ComputeTransaction.model right=
+  [comment_diff] column=ai_reply_decision_logs.open_id left=客户 open_id，预留 right=
+  [comment_diff] column=ai_reply_decision_logs.rag_sources_json left=RAG 来源 JSON right=
+  [comment_diff] column=ai_reply_decision_logs.rag_used left=是否使用 RAG 0/1 right=
+  [default_diff] column=ai_reply_decision_logs.rag_used left=None right=false
+  [comment_diff] column=ai_reply_decision_logs.raw_response_json left=9100 原始响应 JSON 副本 right=
+  [comment_diff] column=ai_reply_decision_logs.reply_text left=最终返回给前端的建议回复 right=
+  [comment_diff] column=ai_reply_decision_logs.risk_flags_json left=最终风险标记 JSON right=
+  [comment_diff] column=ai_reply_decision_logs.source_chunks_json left=旧版 source_chunks JSON right=
+  [comment_diff] column=ai_reply_decision_logs.tags_json left=客户标签 JSON right=
+  [comment_diff] column=ai_reply_decision_logs.tenant_id left=可信租户 / 来源系统 ID，来自 RequestContext right=
+  [comment_diff] column=ai_reply_decision_logs.upstream_auto_send left=9100 原始响应是否请求自动发送 0/1 right=
+  [default_diff] column=ai_reply_decision_logs.upstream_auto_send left=None right=false
+  [extra_column] column=alembic_version.version_num side=right_only
+  [type_diff] column=autoreply_admin_audit_logs.after_json left=json right=jsonb
+  [type_diff] column=autoreply_admin_audit_logs.before_json left=json right=jsonb
+  [type_diff] column=autoreply_admin_audit_logs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=autoreply_admin_audit_logs.created_at left=False right=True
+  [default_diff] column=autoreply_admin_audit_logs.created_at left=None right=now()
+  [type_diff] column=autoreply_admin_audit_logs.id left=integer right=bigint
+  [default_diff] column=autoreply_rollout_configs.allow_full_rollout left=None right=false
+  [default_diff] column=autoreply_rollout_configs.auto_reply_enabled left=None right=false
+  [type_diff] column=autoreply_rollout_configs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=autoreply_rollout_configs.created_at left=False right=True
+  [default_diff] column=autoreply_rollout_configs.created_at left=None right=now()
+  [type_diff] column=autoreply_rollout_configs.id left=integer right=bigint
+  [default_diff] column=autoreply_rollout_configs.real_send_enabled left=None right=false
+  [default_diff] column=autoreply_rollout_configs.scope left=None right='global'::character varying
+  [type_diff] column=autoreply_rollout_configs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=autoreply_rollout_configs.updated_at left=False right=True
+  [default_diff] column=autoreply_rollout_configs.updated_at left=None right=now()
+  [type_diff] column=autoreply_whitelist_entries.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=autoreply_whitelist_entries.created_at left=False right=True
+  [default_diff] column=autoreply_whitelist_entries.created_at left=None right=now()
+  [type_diff] column=autoreply_whitelist_entries.disabled_at left=timestamp without time zone right=timestamp with time zone
+  [default_diff] column=autoreply_whitelist_entries.enabled left=None right=true
+  [type_diff] column=autoreply_whitelist_entries.id left=integer right=bigint
+  [type_diff] column=check_configs.id left=integer right=bigint
+  [type_diff] column=check_configs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=check_configs.updated_at left=False right=True
+  [default_diff] column=check_configs.updated_at left=None right=now()
+  [type_diff] column=compute_accounts.balance_tokens left=integer right=bigint
+  [comment_diff] column=compute_accounts.balance_tokens left=当前 Token 余额（整数） right=
+  [default_diff] column=compute_accounts.balance_tokens left=None right='0'::bigint
+  [type_diff] column=compute_accounts.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_accounts.created_at left=False right=True
+  [default_diff] column=compute_accounts.created_at left=None right=now()
+  [type_diff] column=compute_accounts.id left=integer right=bigint
+  [comment_diff] column=compute_accounts.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=compute_accounts.tenant_id left=预留租户 ID right=
+  [type_diff] column=compute_accounts.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_accounts.updated_at left=False right=True
+  [default_diff] column=compute_accounts.updated_at left=None right=now()
+  [comment_diff] column=compute_markup_ratios.capability_key left=能力 key right=
+  [comment_diff] column=compute_markup_ratios.consumption_mode left=消耗模式 actual/custom right=
+  [default_diff] column=compute_markup_ratios.consumption_mode left=None right='actual'::character varying
+  [type_diff] column=compute_markup_ratios.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_markup_ratios.created_at left=False right=True
+  [default_diff] column=compute_markup_ratios.created_at left=None right=now()
+  [comment_diff] column=compute_markup_ratios.enabled left=启用/禁用 right=
+  [default_diff] column=compute_markup_ratios.enabled left=None right=true
+  [comment_diff] column=compute_markup_ratios.fixed_tokens_per_call left=custom 模式固定单次 Token 定额 right=
+  [type_diff] column=compute_markup_ratios.id left=integer right=bigint
+  [comment_diff] column=compute_markup_ratios.markup_basis_points left=上浮基点，3300 表示 33% right=
+  [default_diff] column=compute_markup_ratios.markup_basis_points left=None right=0
+  [type_diff] column=compute_markup_ratios.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_markup_ratios.updated_at left=False right=True
+  [default_diff] column=compute_markup_ratios.updated_at left=None right=now()
+  [type_diff] column=compute_packages.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_packages.created_at left=False right=True
+  [default_diff] column=compute_packages.created_at left=None right=now()
+  [comment_diff] column=compute_packages.enabled left=启用/禁用 right=
+  [default_diff] column=compute_packages.enabled left=None right=true
+  [type_diff] column=compute_packages.id left=integer right=bigint
+  [comment_diff] column=compute_packages.name left=套餐名称 right=
+  [comment_diff] column=compute_packages.price_yuan left=套餐价格（元），整数 right=
+  [type_diff] column=compute_packages.token_amount left=integer right=bigint
+  [comment_diff] column=compute_packages.token_amount left=套餐 Token 数量（整数，大于 0） right=
+  [type_diff] column=compute_packages.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_packages.updated_at left=False right=True
+  [default_diff] column=compute_packages.updated_at left=None right=now()
+  [comment_diff] column=compute_transactions.actual_tokens left=应用上浮前的基础用量 right=
+  [comment_diff] column=compute_transactions.agent_id left=AI 消耗所属智能体，预留 right=
+  [type_diff] column=compute_transactions.balance_after_tokens left=integer right=bigint
+  [comment_diff] column=compute_transactions.balance_after_tokens left=本次变动后余额 right=
+  [comment_diff] column=compute_transactions.cached_tokens left=供应商缓存命中 Token right=
+  [comment_diff] column=compute_transactions.capability_key left=六能力 key；历史未知允许空 right=
+  [comment_diff] column=compute_transactions.completion_tokens left=供应商输出 Token right=
+  [type_diff] column=compute_transactions.conversation_id left=integer right=bigint
+  [comment_diff] column=compute_transactions.conversation_id left=AI 消耗所属会话，预留 right=
+  [type_diff] column=compute_transactions.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=compute_transactions.created_at left=False right=True
+  [default_diff] column=compute_transactions.created_at left=None right=now()
+  [type_diff] column=compute_transactions.delta_tokens left=integer right=bigint
+  [comment_diff] column=compute_transactions.delta_tokens left=Token 变动，充值发放为正、消耗为负，禁止 0 right=
+  [type_diff] column=compute_transactions.id left=integer right=bigint
+  [comment_diff] column=compute_transactions.idempotency_key left=幂等身份（None 走旧逻辑裸扣） right=幂等身份（P1 阶段1可选，None 走旧逻辑裸扣）
+  [comment_diff] column=compute_transactions.llm_call_stage left=模型调用阶段 right=
+  [comment_diff] column=compute_transactions.markup_basis_points left=本次计费上浮基点快照 right=
+  [comment_diff] column=compute_transactions.merchant_id left=可信商户 ID right=
+  [comment_diff] column=compute_transactions.model left=AI 消耗所用模型，预留 right=
+  [comment_diff] column=compute_transactions.prompt_tokens left=供应商输入 Token right=
+  [comment_diff] column=compute_transactions.remark left=展示备注 right=
+  [comment_diff] column=compute_transactions.source left=manual_recharge/package_grant/recharge_order/llm right=
+  [comment_diff] column=compute_transactions.tenant_id left=预留租户 ID right=
+  [comment_diff] column=compute_transactions.transaction_type left=recharge/consume/grant_package right=
+  [comment_diff] column=compute_transactions.usage_measurement_method left=用量计量方式 right=
+  [default_diff] column=contact_invalid_followup_tasks.attempt_count left=None right=0
+  [default_diff] column=contact_invalid_followup_tasks.created_at left=None right=now()
+  [default_diff] column=contact_invalid_followup_tasks.followup_sequence left=None right=1
+  [default_diff] column=contact_invalid_followup_tasks.status left=None right='pending'::character varying
+  [default_diff] column=contact_invalid_followup_tasks.updated_at left=None right=now()
+  [type_diff] column=conversation_autopilot_states.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=conversation_autopilot_states.created_at left=False right=True
+  [default_diff] column=conversation_autopilot_states.created_at left=None right=now()
+  [type_diff] column=conversation_autopilot_states.id left=integer right=bigint
+  [type_diff] column=conversation_autopilot_states.last_ai_reply_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=conversation_autopilot_states.last_human_message_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=conversation_autopilot_states.manual_takeover_until left=timestamp without time zone right=timestamp with time zone
+  [default_diff] column=conversation_autopilot_states.mode left=None right='ai'::character varying
+  [type_diff] column=conversation_autopilot_states.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=conversation_autopilot_states.updated_at left=False right=True
+  [default_diff] column=conversation_autopilot_states.updated_at left=None right=now()
+  [comment_diff] column=customer_profiles.contact_invalid_reason left=联系方式失效原因 empty_number/unreachable/wechat_add_failed/wrong_number/customer_denied/other right=联系方式失效原因
+  [default_diff] column=customer_profiles.contact_invalid_version left=None right=0
+  [comment_diff] column=customer_profiles.contact_state left=联系方式状态 none/partial/valid/invalid（只读镜像） right=联系方式状态 none/partial/valid（只读镜像，写入走 P0.2 contact_state 链路）
+  [default_diff] column=customer_profiles.contact_state left=None right='none'::character varying
+  [comment_diff] column=customer_profiles.created_at left= right=创建时间
+  [default_diff] column=customer_profiles.created_at left=None right=now()
+  [default_diff] column=customer_profiles.gender left=None right='unknown'::character varying
+  [default_diff] column=customer_profiles.source left=None right='auto_reply'::character varying
+  [comment_diff] column=customer_profiles.updated_at left= right=更新时间
+  [default_diff] column=customer_profiles.updated_at left=None right=now()
+  [comment_diff] column=daily_ad_metrics.channel left=渠道，一期固定 douyin right=
+  [comment_diff] column=daily_ad_metrics.content_type left=内容类型 short_video/live right=
+  [type_diff] column=daily_ad_metrics.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_ad_metrics.created_at left=False right=True
+  [default_diff] column=daily_ad_metrics.created_at left=None right=now()
+  [type_diff] column=daily_ad_metrics.id left=integer right=bigint
+  [comment_diff] column=daily_ad_metrics.merchant_id left=可信商户 ID right=
+  [comment_diff] column=daily_ad_metrics.metric_day left=业务日期 right=
+  [comment_diff] column=daily_ad_metrics.private_message_count left=私信量，非负 right=
+  [comment_diff] column=daily_ad_metrics.source_system left=来源 manual/api right=
+  [comment_diff] column=daily_ad_metrics.spend_amount left=消耗金额，非负，禁止 Float right=
+  [type_diff] column=daily_ad_metrics.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_ad_metrics.updated_at left=False right=True
+  [default_diff] column=daily_ad_metrics.updated_at left=None right=now()
+  [comment_diff] column=daily_report_deliveries.artifact_file_name left=钉住的文件名 right=
+  [comment_diff] column=daily_report_deliveries.artifact_sha256 left=钉住的内容 sha256 right=
+  [comment_diff] column=daily_report_deliveries.artifact_size_bytes left=钉住的字节数 right=
+  [comment_diff] column=daily_report_deliveries.artifact_storage_key left=内部存储键，仅 9000 内部，不返回前端 right=
+  [comment_diff] column=daily_report_deliveries.attempt_count left=已创建 attempt 数 right=
+  [default_diff] column=daily_report_deliveries.attempt_count left=None right=0
+  [type_diff] column=daily_report_deliveries.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_report_deliveries.created_at left=False right=True
+  [default_diff] column=daily_report_deliveries.created_at left=None right=now()
+  [type_diff] column=daily_report_deliveries.delivered_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=daily_report_deliveries.delivered_at left=发送成功时间 right=
+  [type_diff] column=daily_report_deliveries.id left=integer right=bigint
+  [comment_diff] column=daily_report_deliveries.last_failure_stage left=最近失败阶段标识 right=
+  [comment_diff] column=daily_report_deliveries.merchant_id left=可信商户 ID right=
+  [type_diff] column=daily_report_deliveries.receiver_staff_id left=integer right=bigint
+  [comment_diff] column=daily_report_deliveries.receiver_staff_id left=接收销售 right=
+  [type_diff] column=daily_report_deliveries.report_job_id left=integer right=bigint
+  [comment_diff] column=daily_report_deliveries.report_job_id left=关联日报任务 right=
+  [comment_diff] column=daily_report_deliveries.status left=投递状态 held/pending/running/send_authorized/sent/failed/blocked/verify_pending/cancelled right=
+  [default_diff] column=daily_report_deliveries.status left=None right='held'::character varying
+  [type_diff] column=daily_report_deliveries.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_report_deliveries.updated_at left=False right=True
+  [default_diff] column=daily_report_deliveries.updated_at left=None right=now()
+  [nullable_diff] column=daily_report_jobs.artifact_status left=False right=True
+  [comment_diff] column=daily_report_jobs.artifact_status left=文件指针状态 none/available right=
+  [default_diff] column=daily_report_jobs.artifact_status left=None right='none'::character varying
+  [comment_diff] column=daily_report_jobs.content_sha256 left=文件内容 sha256 right=
+  [type_diff] column=daily_report_jobs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_report_jobs.created_at left=False right=True
+  [default_diff] column=daily_report_jobs.created_at left=None right=now()
+  [comment_diff] column=daily_report_jobs.diagnostics_json left=诊断 JSON 数组，元素 {code,count,exception_type?} right=
+  [comment_diff] column=daily_report_jobs.error_message left=错误信息 right=
+  [comment_diff] column=daily_report_jobs.file_name left=文件名 right=
+  [comment_diff] column=daily_report_jobs.file_size_bytes left=文件字节数 right=
+  [comment_diff] column=daily_report_jobs.file_storage_key left=内部存储键，不返回绝对路径 right=
+  [type_diff] column=daily_report_jobs.generated_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=daily_report_jobs.generated_at left=生成时间 right=
+  [type_diff] column=daily_report_jobs.generation_started_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=daily_report_jobs.generation_started_at left=generating 开始时间，超 30 分钟视为 stale right=
+  [comment_diff] column=daily_report_jobs.generation_token left=generating 期间 claim 令牌，防旧 worker 覆盖 right=
+  [comment_diff] column=daily_report_jobs.generation_version left=生成版本，初始 daily_report_v1 right=
+  [type_diff] column=daily_report_jobs.id left=integer right=bigint
+  [comment_diff] column=daily_report_jobs.merchant_id left=可信商户 ID right=
+  [type_diff] column=daily_report_jobs.receiver_staff_id left=integer right=bigint
+  [comment_diff] column=daily_report_jobs.receiver_staff_id left=旧接收销售字段（保留兼容，Phase 8-A 不用） right=
+  [type_diff] column=daily_report_jobs.report_date left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=daily_report_jobs.report_date left=旧报表日期字段（保留兼容，新代码用 report_day） right=
+  [comment_diff] column=daily_report_jobs.report_day left=Phase 8 权威业务日期 right=
+  [comment_diff] column=daily_report_jobs.report_type left=报表类型 right=
+  [nullable_diff] column=daily_report_jobs.report_variant left=False right=True
+  [comment_diff] column=daily_report_jobs.report_variant left=报表变体 default/created/assigned right=
+  [default_diff] column=daily_report_jobs.report_variant left=None right='default'::character varying
+  [type_diff] column=daily_report_jobs.sent_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=daily_report_jobs.sent_at left=旧发送时间字段（保留兼容，Phase 8-A 不用） right=
+  [comment_diff] column=daily_report_jobs.status left=任务最近一次生成尝试状态 right=
+  [type_diff] column=daily_report_jobs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=daily_report_jobs.updated_at left=False right=True
+  [default_diff] column=daily_report_jobs.updated_at left=None right=now()
+  [comment_diff] column=douyin_account_agent_bindings.account_open_id left=抖音授权企业号 open_id right=
+  [comment_diff] column=douyin_account_agent_bindings.agent_id left=AI 智能体业务 ID right=
+  [type_diff] column=douyin_account_agent_bindings.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_account_agent_bindings.created_at left=False right=True
+  [default_diff] column=douyin_account_agent_bindings.created_at left=None right=now()
+  [type_diff] column=douyin_account_agent_bindings.deleted_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_account_agent_bindings.douyin_authorized_account_id left=integer right=bigint
+  [comment_diff] column=douyin_account_agent_bindings.douyin_authorized_account_id left=关联 douyin_authorized_accounts.id right=
+  [type_diff] column=douyin_account_agent_bindings.id left=integer right=bigint
+  [comment_diff] column=douyin_account_agent_bindings.is_default left=一期一个企业号只绑定一个默认智能体 right=
+  [default_diff] column=douyin_account_agent_bindings.is_default left=None right=true
+  [comment_diff] column=douyin_account_agent_bindings.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=douyin_account_agent_bindings.status left=active/unbound/invalid/deleted right=
+  [default_diff] column=douyin_account_agent_bindings.status left=None right='active'::character varying
+  [comment_diff] column=douyin_account_agent_bindings.tenant_id left=预留租户 ID right=
+  [type_diff] column=douyin_account_agent_bindings.unbound_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_account_agent_bindings.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_account_agent_bindings.updated_at left=False right=True
+  [default_diff] column=douyin_account_agent_bindings.updated_at left=None right=now()
+  [default_diff] column=douyin_account_autoreply_settings.allow_release_manual_required left=None right=false
+  [type_diff] column=douyin_account_autoreply_settings.conversation_whitelist_ids left=jsonb right=text
+  [type_diff] column=douyin_account_autoreply_settings.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_account_autoreply_settings.created_at left=False right=True
+  [default_diff] column=douyin_account_autoreply_settings.created_at left=None right=now()
+  [type_diff] column=douyin_account_autoreply_settings.customer_whitelist_open_ids left=jsonb right=text
+  [default_diff] column=douyin_account_autoreply_settings.dry_run_enabled left=None right=false
+  [default_diff] column=douyin_account_autoreply_settings.enabled left=None right=false
+  [type_diff] column=douyin_account_autoreply_settings.id left=integer right=bigint
+  [default_diff] column=douyin_account_autoreply_settings.max_auto_replies_per_conversation_per_day left=None right=80
+  [default_diff] column=douyin_account_autoreply_settings.max_replies_per_account_per_hour left=None right=300
+  [default_diff] column=douyin_account_autoreply_settings.max_replies_per_conversation_per_hour left=None right=20
+  [default_diff] column=douyin_account_autoreply_settings.min_confidence left=None right='0.85'::double precision
+  [default_diff] column=douyin_account_autoreply_settings.min_interval_seconds left=None right=10
+  [default_diff] column=douyin_account_autoreply_settings.require_rag left=None right=true
+  [default_diff] column=douyin_account_autoreply_settings.require_rag_sources left=None right=true
+  [default_diff] column=douyin_account_autoreply_settings.send_enabled left=None right=false
+  [type_diff] column=douyin_account_autoreply_settings.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_account_autoreply_settings.updated_at left=False right=True
+  [default_diff] column=douyin_account_autoreply_settings.updated_at left=None right=now()
+  [comment_diff] column=douyin_authorized_accounts.account_name left=Douyin account name right=
+  [comment_diff] column=douyin_authorized_accounts.account_type left=Douyin account type right=
+  [comment_diff] column=douyin_authorized_accounts.avatar_url left=Douyin account avatar right=
+  [comment_diff] column=douyin_authorized_accounts.bind_status left=0 unbound / 1 success / 2 failed / 3 unbound right=
+  [default_diff] column=douyin_authorized_accounts.bind_status left=None right=0
+  [comment_diff] column=douyin_authorized_accounts.bind_time left=上游 bind_time，aware datetime 写入 right=
+  [type_diff] column=douyin_authorized_accounts.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_authorized_accounts.created_at left=False right=True
+  [default_diff] column=douyin_authorized_accounts.created_at left=None right=now()
+  [type_diff] column=douyin_authorized_accounts.id left=integer right=bigint
+  [type_diff] column=douyin_authorized_accounts.last_synced_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_authorized_accounts.main_account_id left=integer right=bigint
+  [comment_diff] column=douyin_authorized_accounts.main_account_id left=GMP main account id right=
+  [comment_diff] column=douyin_authorized_accounts.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=douyin_authorized_accounts.open_id left=Authorized Douyin account open_id right=
+  [type_diff] column=douyin_authorized_accounts.raw_body_json left=json right=jsonb
+  [comment_diff] column=douyin_authorized_accounts.raw_body_json left=Raw list_bind_info item，dict 写入 right=
+  [comment_diff] column=douyin_authorized_accounts.source_created_at left=上游 created_at，aware datetime 写入 right=
+  [comment_diff] column=douyin_authorized_accounts.tenant_id left=预留租户 ID，用于后续上游隔离 right=
+  [comment_diff] column=douyin_authorized_accounts.unbind_time left=上游 unbind_time，aware datetime 写入 right=
+  [comment_diff] column=douyin_authorized_accounts.union_id left=Douyin union_id right=
+  [type_diff] column=douyin_authorized_accounts.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_authorized_accounts.updated_at left=False right=True
+  [default_diff] column=douyin_authorized_accounts.updated_at left=None right=now()
+  [comment_diff] column=douyin_authorized_accounts.user_id left=Douyin user id right=
+  [type_diff] column=douyin_conversation_read_states.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_conversation_read_states.created_at left=False right=True
+  [default_diff] column=douyin_conversation_read_states.created_at left=None right=now()
+  [type_diff] column=douyin_conversation_read_states.id left=integer right=bigint
+  [type_diff] column=douyin_conversation_read_states.last_read_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_conversation_read_states.last_read_event_id left=integer right=bigint
+  [type_diff] column=douyin_conversation_read_states.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_conversation_read_states.updated_at left=False right=True
+  [default_diff] column=douyin_conversation_read_states.updated_at left=None right=now()
+  [type_diff] column=douyin_image_uploads.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_image_uploads.created_at left=False right=True
+  [default_diff] column=douyin_image_uploads.created_at left=None right=now()
+  [comment_diff] column=douyin_image_uploads.error_message left=安全错误信息 right=
+  [type_diff] column=douyin_image_uploads.file_size_bytes left=integer right=bigint
+  [type_diff] column=douyin_image_uploads.id left=integer right=bigint
+  [type_diff] column=douyin_image_uploads.main_account_id left=integer right=bigint
+  [comment_diff] column=douyin_image_uploads.main_account_id left=GMP 主账号 id right=
+  [comment_diff] column=douyin_image_uploads.open_id left=可选客户 open_id right=
+  [comment_diff] column=douyin_image_uploads.request_body_json left=脱敏后的上游请求 JSON right=
+  [comment_diff] column=douyin_image_uploads.response_body_json left=上游响应 JSON 或安全错误详情 right=
+  [type_diff] column=douyin_image_uploads.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_image_uploads.updated_at left=False right=True
+  [default_diff] column=douyin_image_uploads.updated_at left=None right=now()
+  [comment_diff] column=douyin_image_uploads.upload_status left=pending/success/failed right=
+  [default_diff] column=douyin_image_uploads.upload_status left=None right='pending'::character varying
+  [type_diff] column=douyin_image_uploads.uploaded_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=douyin_image_uploads.uploaded_at left=上游上传成功时间 right=
+  [comment_diff] column=douyin_image_uploads.upstream_code left=上游 code right=
+  [comment_diff] column=douyin_image_uploads.upstream_height left=上游 data.height right=
+  [comment_diff] column=douyin_image_uploads.upstream_image_id left=上游 data.image_id right=
+  [comment_diff] column=douyin_image_uploads.upstream_md5 left=上游 data.md5 right=
+  [comment_diff] column=douyin_image_uploads.upstream_msg left=上游 msg right=
+  [comment_diff] column=douyin_image_uploads.upstream_width left=上游 data.width right=
+  [comment_diff] column=douyin_leads.account_open_id left=企业号 open_id（私信接收方 to_user_id） right=
+  [comment_diff] column=douyin_leads.all_extracted_contacts left=全部提取到的联系方式 JSON（迁移 0001） right=
+  [type_diff] column=douyin_leads.assigned_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=douyin_leads.assigned_at left=分配时间 right=
+  [type_diff] column=douyin_leads.assigned_staff_id left=integer right=bigint
+  [comment_diff] column=douyin_leads.assigned_staff_id left=分配的销售ID right=
+  [comment_diff] column=douyin_leads.contact_extract_reason left=联系方式提取原因/失败说明（迁移 0001） right=
+  [comment_diff] column=douyin_leads.contact_extract_status left=联系方式提取状态（迁移 0001） right=
+  [comment_diff] column=douyin_leads.content left=线索内容 right=
+  [comment_diff] column=douyin_leads.conversation_short_id left=抖音会话短 ID，线索聚合主键 right=
+  [type_diff] column=douyin_leads.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_leads.created_at left=False right=True
+  [default_diff] column=douyin_leads.created_at left=None right=now()
+  [comment_diff] column=douyin_leads.customer_contact left=联系方式 right=
+  [comment_diff] column=douyin_leads.customer_id left=内部客户 ID 预留（迁移 0001） right=
+  [comment_diff] column=douyin_leads.customer_name left=客户名称/昵称 right=
+  [comment_diff] column=douyin_leads.external_customer_id left=外部客户 ID 预留（迁移 0001） right=
+  [comment_diff] column=douyin_leads.extracted_phone left=提取的手机号（迁移 0001） right=
+  [comment_diff] column=douyin_leads.extracted_wechat left=提取的微信号（迁移 0001） right=
+  [type_diff] column=douyin_leads.id left=integer right=bigint
+  [comment_diff] column=douyin_leads.lead_type left=线索类型: lead/comment/chat right=
+  [comment_diff] column=douyin_leads.merchant_id left=可信商户 ID，来自 RequestContext right=
+  [comment_diff] column=douyin_leads.raw_data left=原始数据JSON right=
+  [comment_diff] column=douyin_leads.raw_message_text left=原始消息文本（迁移 0001） right=
+  [comment_diff] column=douyin_leads.reassign_count left=超时重分配次数（迁移 0001，对齐 migration DEFAULT 0） right=
+  [nullable_diff] column=douyin_leads.source left=False right=True
+  [comment_diff] column=douyin_leads.source left=来源平台 right=
+  [default_diff] column=douyin_leads.source left=None right='douyin'::character varying
+  [comment_diff] column=douyin_leads.source_id left=客户 open_id（from_user_id，保留不再作聚合主键） right=
+  [comment_diff] column=douyin_leads.source_url left=来源链接 right=
+  [nullable_diff] column=douyin_leads.status left=False right=True
+  [comment_diff] column=douyin_leads.status left=状态: pending/assigned/replied/timeout/closed right=
+  [default_diff] column=douyin_leads.status left=None right='pending'::character varying
+  [extra_column] column=douyin_leads.tenant_id side=right_only
+  [type_diff] column=douyin_leads.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_leads.updated_at left=False right=True
+  [default_diff] column=douyin_leads.updated_at left=None right=now()
+  [type_diff] column=douyin_message_resource_downloads.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_message_resource_downloads.created_at left=False right=True
+  [default_diff] column=douyin_message_resource_downloads.created_at left=None right=now()
+  [comment_diff] column=douyin_message_resource_downloads.download_url left=Upstream downloadable url right=
+  [type_diff] column=douyin_message_resource_downloads.downloaded_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=douyin_message_resource_downloads.downloaded_at left=Sent when resource download succeeds right=
+  [comment_diff] column=douyin_message_resource_downloads.error_message left=Safe error message right=
+  [type_diff] column=douyin_message_resource_downloads.id left=integer right=bigint
+  [type_diff] column=douyin_message_resource_downloads.main_account_id left=integer right=bigint
+  [comment_diff] column=douyin_message_resource_downloads.main_account_id left=GMP main account id right=
+  [comment_diff] column=douyin_message_resource_downloads.media_type left=image/video right=
+  [comment_diff] column=douyin_message_resource_downloads.open_id left=Customer open_id right=
+  [comment_diff] column=douyin_message_resource_downloads.request_body_json left=Sanitized upstream request JSON right=
+  [comment_diff] column=douyin_message_resource_downloads.resource_status left=pending/success/failed right=
+  [default_diff] column=douyin_message_resource_downloads.resource_status left=None right='pending'::character varying
+  [comment_diff] column=douyin_message_resource_downloads.response_body_json left=Upstream response JSON right=
+  [type_diff] column=douyin_message_resource_downloads.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_message_resource_downloads.updated_at left=False right=True
+  [default_diff] column=douyin_message_resource_downloads.updated_at left=None right=now()
+  [comment_diff] column=douyin_message_resource_downloads.upstream_err_msg left=Upstream err_msg right=
+  [comment_diff] column=douyin_message_resource_downloads.upstream_err_no left=Upstream err_no right=
+  [comment_diff] column=douyin_message_resource_downloads.upstream_log_id left=Upstream log_id right=
+  [type_diff] column=douyin_message_resource_downloads.webhook_event_id left=integer right=bigint
+  [comment_diff] column=douyin_message_resource_downloads.webhook_event_id left=Related douyin_webhook_events.id right=
+  [type_diff] column=douyin_oauth_states.consumed_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_oauth_states.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_oauth_states.created_at left=False right=True
+  [default_diff] column=douyin_oauth_states.created_at left=None right=now()
+  [type_diff] column=douyin_oauth_states.expires_at left=timestamp without time zone right=timestamp with time zone
+  [type_diff] column=douyin_oauth_states.id left=integer right=bigint
+  [comment_diff] column=douyin_oauth_states.merchant_id left=发起授权时的可信商户 ID right=
+  [comment_diff] column=douyin_oauth_states.redirect_target left=授权完成后允许回跳的前端基址 right=
+  [default_diff] column=douyin_oauth_states.source_system left=None right='new_car_project'::character varying
+  [comment_diff] column=douyin_oauth_states.user_id left=发起授权的 NewCar 用户 ID right=
+  [comment_diff] column=douyin_private_message_sends.account_open_id left=Authorized account open_id right=
+  [type_diff] column=douyin_private_message_sends.auto_reply_run_id left=integer right=bigint
+  [comment_diff] column=douyin_private_message_sends.auto_reply_run_id left=自动回复 run ID，用于防重复发送 right=
+  [comment_diff] column=douyin_private_message_sends.auto_send left=P1-H must always be 0 right=
+  [default_diff] column=douyin_private_message_sends.auto_send left=None right=false
+  [type_diff] column=douyin_private_message_sends.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_private_message_sends.created_at left=False right=True
+  [default_diff] column=douyin_private_message_sends.created_at left=None right=now()
+  [comment_diff] column=douyin_private_message_sends.customer_open_id left=Customer open_id right=
+  [type_diff] column=douyin_private_message_sends.decision_log_id left=integer right=bigint
+  [comment_diff] column=douyin_private_message_sends.decision_log_id left=AI 回复决策日志 ID，自动发送时写入 right=
+  [comment_diff] column=douyin_private_message_sends.error_code left=Upstream or local error code right=
+  [comment_diff] column=douyin_private_message_sends.error_message left=Safe error message right=
+  [comment_diff] column=douyin_private_message_sends.from_user_id left=Authorized account open_id right=
+  [type_diff] column=douyin_private_message_sends.id left=integer right=bigint
+  [type_diff] column=douyin_private_message_sends.main_account_id left=integer right=bigint
+  [comment_diff] column=douyin_private_message_sends.main_account_id left=GMP main account id right=
+  [comment_diff] column=douyin_private_message_sends.manual_confirmed left=Must be 1 before upstream call right=
+  [default_diff] column=douyin_private_message_sends.manual_confirmed left=None right=true
+  [comment_diff] column=douyin_private_message_sends.operator_id left=Optional operator id right=
+  [comment_diff] column=douyin_private_message_sends.request_body_json left=Sanitized upstream request JSON right=
+  [comment_diff] column=douyin_private_message_sends.response_body_json left=Upstream response JSON right=
+  [comment_diff] column=douyin_private_message_sends.return_visit_run_id left=Phase 9 回访 run ID，用于防重复发送 right=
+  [default_diff] column=douyin_private_message_sends.scene left=None right='im_reply_msg'::character varying
+  [comment_diff] column=douyin_private_message_sends.send_source left=manual/ai_auto right=
+  [default_diff] column=douyin_private_message_sends.send_source left=None right='manual'::character varying
+  [type_diff] column=douyin_private_message_sends.sent_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=douyin_private_message_sends.sent_at left=Sent time when upstream code=0 right=
+  [comment_diff] column=douyin_private_message_sends.status left=pending/sent/failed right=
+  [default_diff] column=douyin_private_message_sends.status left=None right='pending'::character varying
+  [comment_diff] column=douyin_private_message_sends.to_user_id left=Customer open_id right=
+  [type_diff] column=douyin_private_message_sends.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_private_message_sends.updated_at left=False right=True
+  [default_diff] column=douyin_private_message_sends.updated_at left=None right=now()
+  [comment_diff] column=douyin_private_message_sends.upstream_msg_id left=Upstream data.msg_id right=
+  [comment_diff] column=douyin_webhook_events.client_key left=Douyin callback client_key right=
+  [comment_diff] column=douyin_webhook_events.conversation_short_id left=Conversation id used by send_msg right=
+  [comment_diff] column=douyin_webhook_events.conversation_type left=Conversation type from callback content right=
+  [type_diff] column=douyin_webhook_events.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=douyin_webhook_events.created_at left=False right=True
+  [default_diff] column=douyin_webhook_events.created_at left=None right=now()
+  [comment_diff] column=douyin_webhook_events.event left=事件类型: im_receive_msg / im_send_msg / im_enter_direct_msg 等 right=
+  [nullable_diff] column=douyin_webhook_events.event_key left=False right=True
+  [comment_diff] column=douyin_webhook_events.event_key left=幂等去重键 right=
+  [comment_diff] column=douyin_webhook_events.from_user_avatar left=Sender avatar from user_infos right=
+  [comment_diff] column=douyin_webhook_events.from_user_id left=发送者 open_id right=
+  [comment_diff] column=douyin_webhook_events.from_user_nick_name left=Sender nick_name from user_infos right=
+  [type_diff] column=douyin_webhook_events.id left=integer right=bigint
+  [comment_diff] column=douyin_webhook_events.is_duplicate left=是否重复事件 False/True right=
+  [default_diff] column=douyin_webhook_events.is_duplicate left=None right=false
+  [type_diff] column=douyin_webhook_events.lead_id left=integer right=bigint
+  [comment_diff] column=douyin_webhook_events.lead_id left=关联的 douyin_leads.id（仅 im_receive_msg） right=
+  [comment_diff] column=douyin_webhook_events.merchant_id left=可信商户 ID，入库时按事件归属固化 right=
+  [type_diff] column=douyin_webhook_events.message_create_time left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=douyin_webhook_events.message_create_time left=Message create_time converted from callback milliseconds right=
+  [comment_diff] column=douyin_webhook_events.message_source left=Callback content source right=
+  [comment_diff] column=douyin_webhook_events.message_type left=Message type from callback content right=
+  [comment_diff] column=douyin_webhook_events.parse_error left=Safe content parse error right=
+  [comment_diff] column=douyin_webhook_events.parse_status left=content parse status: parsed/empty/parse_failed right=
+  [comment_diff] column=douyin_webhook_events.parsed_content_json left=Parsed content JSON object right=
+  [comment_diff] column=douyin_webhook_events.raw_body left=原始 payload JSON right=
+  [comment_diff] column=douyin_webhook_events.server_message_id left=Server message id used by send_msg right=
+  [comment_diff] column=douyin_webhook_events.tenant_id left=可信租户 ID，随商户归属固化 right=
+  [comment_diff] column=douyin_webhook_events.to_user_avatar left=Receiver avatar from user_infos right=
+  [comment_diff] column=douyin_webhook_events.to_user_id left=接收者 open_id right=
+  [comment_diff] column=douyin_webhook_events.to_user_nick_name left=Receiver nick_name from user_infos right=
+  [type_diff] column=external_merchant_bindings.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=external_merchant_bindings.created_at left=False right=True
+  [default_diff] column=external_merchant_bindings.created_at left=None right=now()
+  [comment_diff] column=external_merchant_bindings.external_account left=外部登录账号 right=
+  [comment_diff] column=external_merchant_bindings.external_user_id left=外部用户 ID right=
+  [type_diff] column=external_merchant_bindings.id left=integer right=bigint
+  [comment_diff] column=external_merchant_bindings.merchant_id left=本地可信商户 ID right=
+  [comment_diff] column=external_merchant_bindings.source_system left=外部来源系统 right=
+  [comment_diff] column=external_merchant_bindings.status left=active/disabled/deleted right=
+  [default_diff] column=external_merchant_bindings.status left=None right='active'::character varying
+  [type_diff] column=external_merchant_bindings.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=external_merchant_bindings.updated_at left=False right=True
+  [default_diff] column=external_merchant_bindings.updated_at left=None right=now()
+  [comment_diff] column=feedback_records.chat_title left=发送时当前微信聊天窗口标题 right=
+  [type_diff] column=feedback_records.check_id left=integer right=bigint
+  [comment_diff] column=feedback_records.check_id left=关联的检测记录ID，可为空 right=
+  [type_diff] column=feedback_records.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=feedback_records.created_at left=False right=True
+  [default_diff] column=feedback_records.created_at left=None right=now()
+  [comment_diff] column=feedback_records.error_message left=失败原因 right=
+  [comment_diff] column=feedback_records.feedback_status left=状态: pending/composed/sent/failed/skipped right=
+  [default_diff] column=feedback_records.feedback_status left=None right='composed'::character varying
+  [comment_diff] column=feedback_records.feedback_text left=实际生成/准备发送给数据源微信 A 的反馈文本 right=
+  [type_diff] column=feedback_records.id left=integer right=bigint
+  [type_diff] column=feedback_records.lead_id left=integer right=bigint
+  [comment_diff] column=feedback_records.lead_id left=线索ID right=
+  [comment_diff] column=feedback_records.send_mode left=发送模式: dry_run/require_confirm/auto_send right=
+  [type_diff] column=feedback_records.sent_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=feedback_records.sent_at left=实际发送时间 right=
+  [type_diff] column=feedback_records.staff_id left=integer right=bigint
+  [comment_diff] column=feedback_records.staff_id left=销售ID right=
+  [comment_diff] column=forbidden_word_hit_logs.after_text_summary left=替换后文本摘要 right=
+  [comment_diff] column=forbidden_word_hit_logs.before_text_summary left=替换前文本摘要 right=
+  [comment_diff] column=forbidden_word_hit_logs.context_id left=上下文 ID right=
+  [comment_diff] column=forbidden_word_hit_logs.context_type left=上下文类型 right=
+  [type_diff] column=forbidden_word_hit_logs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=forbidden_word_hit_logs.created_at left=False right=True
+  [default_diff] column=forbidden_word_hit_logs.created_at left=None right=now()
+  [type_diff] column=forbidden_word_hit_logs.id left=integer right=bigint
+  [comment_diff] column=forbidden_word_hit_logs.library_key left=命中的词库 key right=
+  [comment_diff] column=forbidden_word_hit_logs.merchant_id left=可信商户 ID right=
+  [comment_diff] column=forbidden_word_hit_logs.safe_word left=替换后的安全词 right=
+  [comment_diff] column=forbidden_word_hit_logs.source left=命中来源（如 douyin_cs / wechat） right=
+  [comment_diff] column=forbidden_word_hit_logs.word left=命中的违禁词 right=
+  [type_diff] column=forbidden_word_libraries.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=forbidden_word_libraries.created_at left=False right=True
+  [default_diff] column=forbidden_word_libraries.created_at left=None right=now()
+  [comment_diff] column=forbidden_word_libraries.description left=词库说明 right=
+  [comment_diff] column=forbidden_word_libraries.enabled left=启用/禁用 right=
+  [default_diff] column=forbidden_word_libraries.enabled left=None right=true
+  [type_diff] column=forbidden_word_libraries.id left=integer right=bigint
+  [comment_diff] column=forbidden_word_libraries.library_key left=词库固定 key right=
+  [comment_diff] column=forbidden_word_libraries.name left=词库名称 right=
+  [comment_diff] column=forbidden_word_libraries.scope left=作用域 right=
+  [default_diff] column=forbidden_word_libraries.scope left=None right='global'::character varying
+  [comment_diff] column=forbidden_word_libraries.sort_order left=排序 right=
+  [default_diff] column=forbidden_word_libraries.sort_order left=None right=0
+  [type_diff] column=forbidden_word_libraries.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=forbidden_word_libraries.updated_at left=False right=True
+  [default_diff] column=forbidden_word_libraries.updated_at left=None right=now()
+  [type_diff] column=forbidden_words.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=forbidden_words.created_at left=False right=True
+  [default_diff] column=forbidden_words.created_at left=None right=now()
+  [comment_diff] column=forbidden_words.enabled left=启用/禁用 right=
+  [default_diff] column=forbidden_words.enabled left=None right=true
+  [comment_diff] column=forbidden_words.hit_count left=命中次数 right=
+  [default_diff] column=forbidden_words.hit_count left=None right=0
+  [type_diff] column=forbidden_words.id left=integer right=bigint
+  [type_diff] column=forbidden_words.library_id left=integer right=bigint
+  [comment_diff] column=forbidden_words.library_id left=所属违禁词库 ID right=
+  [comment_diff] column=forbidden_words.safe_word left=替换安全词 right=
+  [comment_diff] column=forbidden_words.severity left=严重程度 right=
+  [type_diff] column=forbidden_words.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=forbidden_words.updated_at left=False right=True
+  [default_diff] column=forbidden_words.updated_at left=None right=now()
+  [comment_diff] column=forbidden_words.word left=违禁词 right=
+  [comment_diff] column=knowledge_categories.category_key left=知识分类稳定标识 right=
+  [type_diff] column=knowledge_categories.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=knowledge_categories.created_at left=False right=True
+  [default_diff] column=knowledge_categories.created_at left=None right=now()
+  [type_diff] column=knowledge_categories.deleted_at left=timestamp without time zone right=timestamp with time zone
+  [extra_column] column=knowledge_categories.description side=right_only
+  [type_diff] column=knowledge_categories.id left=integer right=bigint
+  [comment_diff] column=knowledge_categories.is_base left=是否 base 分类，0/1 right=
+  [default_diff] column=knowledge_categories.is_base left=None right=false
+  [extra_column] column=knowledge_categories.key side=right_only
+  [comment_diff] column=knowledge_categories.merchant_id left=商户 ID；merchant 分类必填，system 分类为空 right=
+  [comment_diff] column=knowledge_categories.name left=知识分类展示名称 right=
+  [type_diff] column=knowledge_categories.scope_type left=character varying(20) right=character varying(32)
+  [comment_diff] column=knowledge_categories.scope_type left=system/merchant right=
+  [default_diff] column=knowledge_categories.scope_type left=None right='merchant'::character varying
+  [comment_diff] column=knowledge_categories.sort_order left=排序值 right=
+  [default_diff] column=knowledge_categories.sort_order left=None right=0
+  [type_diff] column=knowledge_categories.status left=character varying(20) right=character varying(32)
+  [comment_diff] column=knowledge_categories.status left=active/disabled/deleted right=
+  [default_diff] column=knowledge_categories.status left=None right='active'::character varying
+  [comment_diff] column=knowledge_categories.tenant_id left=预留租户 ID right=
+  [type_diff] column=knowledge_categories.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=knowledge_categories.updated_at left=False right=True
+  [default_diff] column=knowledge_categories.updated_at left=None right=now()
+  [comment_diff] column=lead_followup_records.content left=跟进内容或分配备注 right=
+  [type_diff] column=lead_followup_records.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=lead_followup_records.created_at left=False right=True
+  [default_diff] column=lead_followup_records.created_at left=None right=now()
+  [type_diff] column=lead_followup_records.id left=integer right=bigint
+  [type_diff] column=lead_followup_records.lead_id left=integer right=bigint
+  [comment_diff] column=lead_followup_records.lead_id left=线索ID right=
+  [comment_diff] column=lead_followup_records.operator_id left=操作人ID right=
+  [comment_diff] column=lead_followup_records.record_type left=assign/reassign/reply_check/notification/feedback/manual_note right=
+  [type_diff] column=lead_followup_records.staff_id left=integer right=bigint
+  [comment_diff] column=lead_followup_records.staff_id left=关联销售ID right=
+  [comment_diff] column=lead_notifications.chat_title left=发送时当前微信聊天窗口标题 right=
+  [type_diff] column=lead_notifications.check_id left=integer right=bigint
+  [comment_diff] column=lead_notifications.check_id left=关联的检测记录ID right=
+  [type_diff] column=lead_notifications.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=lead_notifications.created_at left=False right=True
+  [default_diff] column=lead_notifications.created_at left=None right=now()
+  [comment_diff] column=lead_notifications.error_message left=失败原因 right=
+  [type_diff] column=lead_notifications.id left=integer right=bigint
+  [type_diff] column=lead_notifications.lead_id left=integer right=bigint
+  [comment_diff] column=lead_notifications.lead_id left=线索ID right=
+  [comment_diff] column=lead_notifications.notification_text left=实际生成的通知文本 right=
+  [comment_diff] column=lead_notifications.send_mode left=发送模式: auto_send/require_confirm right=
+  [default_diff] column=lead_notifications.send_mode left=None right='auto_send'::character varying
+  [comment_diff] column=lead_notifications.send_status left=状态: composed/sent/failed/skipped right=
+  [default_diff] column=lead_notifications.send_status left=None right='composed'::character varying
+  [type_diff] column=lead_notifications.sent_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=lead_notifications.sent_at left=实际发送时间 right=
+  [type_diff] column=lead_notifications.staff_id left=integer right=bigint
+  [comment_diff] column=lead_notifications.staff_id left=销售ID right=
+  [comment_diff] column=lead_notifications.template_name left=使用的通知模板名称 right=
+  [default_diff] column=lead_notifications.template_name left=None right='default'::character varying
+  [comment_diff] column=lead_report_attributions.ad_id left=广告 ID right=
+  [comment_diff] column=lead_report_attributions.content_type left=内容类型 short_video/live/other/unknown right=
+  [type_diff] column=lead_report_attributions.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=lead_report_attributions.created_at left=False right=True
+  [default_diff] column=lead_report_attributions.created_at left=None right=now()
+  [type_diff] column=lead_report_attributions.id left=integer right=bigint
+  [type_diff] column=lead_report_attributions.lead_id left=integer right=bigint
+  [comment_diff] column=lead_report_attributions.lead_id left=关联线索 ID right=
+  [comment_diff] column=lead_report_attributions.material_id left=素材 ID right=
+  [comment_diff] column=lead_report_attributions.merchant_id left=可信商户 ID right=
+  [comment_diff] column=lead_report_attributions.source_system left=来源 manual/api right=
+  [comment_diff] column=lead_report_attributions.trace_url left=溯源链接，仅允许 http/https right=
+  [comment_diff] column=lead_report_attributions.traffic_type left=流量类型 paid/organic/unknown right=
+  [type_diff] column=lead_report_attributions.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=lead_report_attributions.updated_at left=False right=True
+  [default_diff] column=lead_report_attributions.updated_at left=None right=now()
+  [type_diff] column=merchant_report_profiles.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=merchant_report_profiles.created_at left=False right=True
+  [default_diff] column=merchant_report_profiles.created_at left=None right=now()
+  [type_diff] column=merchant_report_profiles.id left=integer right=bigint
+  [comment_diff] column=merchant_report_profiles.merchant_id left=可信商户 ID right=
+  [comment_diff] column=merchant_report_profiles.showroom_price_max_yuan left=展厅最高价，非负 right=
+  [comment_diff] column=merchant_report_profiles.showroom_price_min_yuan left=展厅最低价，非负 right=
+  [type_diff] column=merchant_report_profiles.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=merchant_report_profiles.updated_at left=False right=True
+  [default_diff] column=merchant_report_profiles.updated_at left=None right=now()
+  [type_diff] column=reply_checks.actual_reply_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=reply_checks.actual_reply_at left=实际回复时间 right=
+  [nullable_diff] column=reply_checks.check_status left=False right=True
+  [comment_diff] column=reply_checks.check_status left=检测状态: pending/replied/timeout/invalid right=
+  [default_diff] column=reply_checks.check_status left=None right='pending'::character varying
+  [type_diff] column=reply_checks.checked_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=reply_checks.checked_at left=检测时间 right=
+  [type_diff] column=reply_checks.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=reply_checks.created_at left=False right=True
+  [default_diff] column=reply_checks.created_at left=None right=now()
+  [comment_diff] column=reply_checks.effectiveness_reason left=判定原因 right=
+  [type_diff] column=reply_checks.id left=integer right=bigint
+  [type_diff] column=reply_checks.is_effective left=integer right=boolean
+  [nullable_diff] column=reply_checks.is_effective left=False right=True
+  [comment_diff] column=reply_checks.is_effective left=是否有效回复 0/1 right=
+  [default_diff] column=reply_checks.is_effective left=None right=false
+  [type_diff] column=reply_checks.lead_id left=integer right=bigint
+  [comment_diff] column=reply_checks.lead_id left=线索ID right=
+  [comment_diff] column=reply_checks.reply_content left=回复内容 right=
+  [type_diff] column=reply_checks.reply_deadline left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=reply_checks.reply_deadline left=要求回复截止时间 right=
+  [type_diff] column=reply_checks.staff_id left=integer right=bigint
+  [comment_diff] column=reply_checks.staff_id left=销售ID right=
+  [comment_diff] column=return_visit_followup_tasks.actual_followup_at left=销售实际跟进时间（detect_reply 回写） right=销售实际跟进时间
+  [comment_diff] column=return_visit_followup_tasks.deadline left=SLA 截止时间（创建时刻 + sla_minutes） right=SLA 截止时间
+  [default_diff] column=return_visit_followup_tasks.status left=None right='pending'::character varying
+  [comment_diff] column=return_visit_prompts.action_payload_json left=动作参数 JSON，如 notify_sales 的 sla_minutes/notify_message right=
+  [comment_diff] column=return_visit_prompts.action_type left=命中后动作类型：notify_sales/send_light_reminder，空=只发话术 right=
+  [comment_diff] column=return_visit_prompts.confidence_threshold left=场景置信度阈值 0.50-1.00，仅约束 LLM right=
+  [comment_diff] column=return_visit_prompts.cooldown_hours left=G7 冷却时长小时数，空=默认24 right=
+  [type_diff] column=return_visit_prompts.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=return_visit_prompts.created_at left=False right=True
+  [default_diff] column=return_visit_prompts.created_at left=None right=now()
+  [comment_diff] column=return_visit_prompts.enabled left=启用/禁用 right=
+  [default_diff] column=return_visit_prompts.enabled left=None right=true
+  [comment_diff] column=return_visit_prompts.fallback_message left=LLM 不可用且关键词触发词命中时兜底文案（已批准三条） right=
+  [type_diff] column=return_visit_prompts.id left=integer right=bigint
+  [comment_diff] column=return_visit_prompts.name left=提示词名称 right=
+  [comment_diff] column=return_visit_prompts.prompt_key left=提示词固定 key right=
+  [comment_diff] column=return_visit_prompts.scene_description left=触发描述/内容预览，注入 LLM system prompt 动态枚举场景 right=
+  [comment_diff] column=return_visit_prompts.scene_type left=场景类型 right=
+  [comment_diff] column=return_visit_prompts.scope left=作用域 right=
+  [default_diff] column=return_visit_prompts.scope left=None right='global'::character varying
+  [comment_diff] column=return_visit_prompts.silence_hours left=沉默触发阈值小时数，仅 trigger_source_type=silent_scan 场景生效 right=
+  [comment_diff] column=return_visit_prompts.sort_order left=排序 right=
+  [default_diff] column=return_visit_prompts.sort_order left=None right=0
+  [comment_diff] column=return_visit_prompts.template_text left=提示词模板文本 right=
+  [comment_diff] column=return_visit_prompts.trigger_source_type left=触发源类型：writeback/silent_scan right=
+  [type_diff] column=return_visit_prompts.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=return_visit_prompts.updated_at left=False right=True
+  [default_diff] column=return_visit_prompts.updated_at left=None right=now()
+  [comment_diff] column=return_visit_runs.account_open_id left=抖音授权账号 open_id right=
+  [comment_diff] column=return_visit_runs.attempt_count left=崩溃恢复尝试计数 right=
+  [comment_diff] column=return_visit_runs.confidence left=LLM 置信度 0-1，关键词命中仅审计值不过阈值门禁 right=
+  [comment_diff] column=return_visit_runs.context_server_message_id left=触发时最新客户消息 server_message_id（漂移检测） right=
+  [comment_diff] column=return_visit_runs.conversation_short_id left=抖音会话 short_id right=
+  [type_diff] column=return_visit_runs.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=return_visit_runs.created_at left=False right=True
+  [default_diff] column=return_visit_runs.created_at left=None right=now()
+  [comment_diff] column=return_visit_runs.customer_open_id left=客户 open_id right=
+  [comment_diff] column=return_visit_runs.dispatch_notification_id left=触发回访的销售派单通知 ID（锚点查询） right=
+  [comment_diff] column=return_visit_runs.error_message left=错误信息 right=
+  [comment_diff] column=return_visit_runs.final_content left=最终发送内容 right=
+  [comment_diff] column=return_visit_runs.gate_results_json left=门禁逐项结果 JSON right=
+  [comment_diff] column=return_visit_runs.generated_content left=生成的话术内容 right=
+  [type_diff] column=return_visit_runs.id left=integer right=bigint
+  [comment_diff] column=return_visit_runs.idempotency_key left=幂等键 sha256(merchant+dispatch_notification_id+trigger_message_fp) right=
+  [comment_diff] column=return_visit_runs.judgement_result left=判断结果 right=
+  [comment_diff] column=return_visit_runs.judgement_source left=判断来源 right=
+  [comment_diff] column=return_visit_runs.last_failure_stage left=最后失败阶段（门禁/发送/恢复等） right=
+  [type_diff] column=return_visit_runs.lead_id left=integer right=bigint
+  [comment_diff] column=return_visit_runs.lead_id left=关联线索 ID right=
+  [comment_diff] column=return_visit_runs.lease_expires_at left=租约过期时间 right=
+  [comment_diff] column=return_visit_runs.lease_owner left=租约持有者（崩溃恢复单飞） right=
+  [comment_diff] column=return_visit_runs.manual_takeover left=人工接管标记 right=
+  [comment_diff] column=return_visit_runs.merchant_id left=可信商户 ID right=
+  [comment_diff] column=return_visit_runs.model left=LLM 模型标识 right=
+  [comment_diff] column=return_visit_runs.prompt_key left=使用的回访提示词 key right=
+  [type_diff] column=return_visit_runs.reply_check_id left=integer right=bigint
+  [comment_diff] column=return_visit_runs.reply_check_id left=关联回复检测 ID right=
+  [comment_diff] column=return_visit_runs.risk_flags_json left=风险标记 JSON（6 枚举，安全命中阻断进 blocked） right=
+  [comment_diff] column=return_visit_runs.send_id left=发送 ID right=
+  [comment_diff] column=return_visit_runs.send_status left=发送状态 right=
+  [type_diff] column=return_visit_runs.staff_id left=integer right=bigint
+  [comment_diff] column=return_visit_runs.staff_id left=关联销售 ID right=
+  [comment_diff] column=return_visit_runs.trigger_message_fp left=触发消息指纹摘要，日志/审计用，不回显原文 right=
+  [comment_diff] column=return_visit_runs.trigger_source left=触发来源 right=
+  [comment_diff] column=return_visit_runs.trigger_text left=触发文本 right=
+  [type_diff] column=return_visit_runs.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=return_visit_runs.updated_at left=False right=True
+  [default_diff] column=return_visit_runs.updated_at left=None right=now()
+  [comment_diff] column=sales_daily_summaries.budget_summary left=预算汇总 right=
+  [comment_diff] column=sales_daily_summaries.car_model_summary left=车型汇总 right=
+  [comment_diff] column=sales_daily_summaries.cooperation_level left=配合程度 right=
+  [type_diff] column=sales_daily_summaries.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_daily_summaries.created_at left=False right=True
+  [default_diff] column=sales_daily_summaries.created_at left=None right=now()
+  [comment_diff] column=sales_daily_summaries.extra_feedback left=额外反馈 right=
+  [type_diff] column=sales_daily_summaries.id left=integer right=bigint
+  [comment_diff] column=sales_daily_summaries.main_problem left=主要问题 right=
+  [comment_diff] column=sales_daily_summaries.merchant_id left=可信商户 ID right=
+  [comment_diff] column=sales_daily_summaries.overall_quality left=整体质量评级 right=
+  [comment_diff] column=sales_daily_summaries.parse_error left=解析错误 right=
+  [comment_diff] column=sales_daily_summaries.parse_status left=解析状态 right=
+  [comment_diff] column=sales_daily_summaries.raw_text left=原始总结文本 right=
+  [comment_diff] column=sales_daily_summaries.sales_name left=销售姓名 right=
+  [type_diff] column=sales_daily_summaries.staff_id left=integer right=bigint
+  [comment_diff] column=sales_daily_summaries.staff_id left=关联销售 ID right=
+  [comment_diff] column=sales_daily_summaries.summary_date left=汇总业务日期（Phase 8 从 DateTime 收敛为 Date） right=
+  [comment_diff] column=sales_daily_summaries.today_suggestion left=今日建议 right=
+  [type_diff] column=sales_daily_summaries.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_daily_summaries.updated_at left=False right=True
+  [default_diff] column=sales_daily_summaries.updated_at left=None right=now()
+  [comment_diff] column=sales_lead_feedbacks.budget_text left=预算描述 right=
+  [comment_diff] column=sales_lead_feedbacks.car_model left=关注车型 right=
+  [type_diff] column=sales_lead_feedbacks.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_lead_feedbacks.created_at left=False right=True
+  [default_diff] column=sales_lead_feedbacks.created_at left=None right=now()
+  [type_diff] column=sales_lead_feedbacks.feedback_date left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=sales_lead_feedbacks.feedback_date left=反馈日期 right=
+  [comment_diff] column=sales_lead_feedbacks.feedback_no left=反馈编号（同一次提交内唯一） right=
+  [type_diff] column=sales_lead_feedbacks.id left=integer right=bigint
+  [comment_diff] column=sales_lead_feedbacks.imprecision_reason left=意向不精准原因 right=
+  [comment_diff] column=sales_lead_feedbacks.intention_level left=意向等级 right=
+  [type_diff] column=sales_lead_feedbacks.lead_id left=integer right=bigint
+  [comment_diff] column=sales_lead_feedbacks.lead_id left=关联线索 ID right=
+  [comment_diff] column=sales_lead_feedbacks.match_status left=车源匹配状态 right=
+  [comment_diff] column=sales_lead_feedbacks.merchant_id left=可信商户 ID right=
+  [comment_diff] column=sales_lead_feedbacks.no_intention_reason left=无意向原因 right=
+  [comment_diff] column=sales_lead_feedbacks.opening_status left=开口状态 right=
+  [comment_diff] column=sales_lead_feedbacks.parse_error left=解析错误 right=
+  [comment_diff] column=sales_lead_feedbacks.parse_status left=解析状态 right=
+  [comment_diff] column=sales_lead_feedbacks.payment_method left=金融方案 right=
+  [comment_diff] column=sales_lead_feedbacks.precision_status left=意向精准度 right=
+  [comment_diff] column=sales_lead_feedbacks.raw_text left=原始反馈文本 right=
+  [comment_diff] column=sales_lead_feedbacks.region_text left=区域描述 right=
+  [comment_diff] column=sales_lead_feedbacks.remark left=备注 right=
+  [type_diff] column=sales_lead_feedbacks.staff_id left=integer right=bigint
+  [comment_diff] column=sales_lead_feedbacks.staff_id left=关联销售 ID right=
+  [type_diff] column=sales_lead_feedbacks.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_lead_feedbacks.updated_at left=False right=True
+  [default_diff] column=sales_lead_feedbacks.updated_at left=None right=now()
+  [comment_diff] column=sales_lead_feedbacks.wechat_status left=微信状态 right=
+  [type_diff] column=sales_lead_updates.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_lead_updates.created_at left=False right=True
+  [default_diff] column=sales_lead_updates.created_at left=None right=now()
+  [comment_diff] column=sales_lead_updates.deal_status left=成交状态 right=
+  [comment_diff] column=sales_lead_updates.deal_time_text left=成交时间描述 right=
+  [comment_diff] column=sales_lead_updates.feedback_no left=关联反馈编号 right=
+  [type_diff] column=sales_lead_updates.id left=integer right=bigint
+  [type_diff] column=sales_lead_updates.lead_id left=integer right=bigint
+  [comment_diff] column=sales_lead_updates.lead_id left=关联线索 ID right=
+  [comment_diff] column=sales_lead_updates.merchant_id left=可信商户 ID right=
+  [comment_diff] column=sales_lead_updates.parse_error left=解析错误 right=
+  [comment_diff] column=sales_lead_updates.parse_status left=解析状态 right=
+  [comment_diff] column=sales_lead_updates.raw_text left=原始文本 right=
+  [comment_diff] column=sales_lead_updates.remark left=备注 right=
+  [type_diff] column=sales_lead_updates.staff_id left=integer right=bigint
+  [comment_diff] column=sales_lead_updates.staff_id left=关联销售 ID right=
+  [type_diff] column=sales_lead_updates.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_lead_updates.updated_at left=False right=True
+  [default_diff] column=sales_lead_updates.updated_at left=None right=now()
+  [comment_diff] column=sales_lead_updates.visit_status left=到店状态 right=
+  [comment_diff] column=sales_lead_updates.visit_time_text left=到店时间描述 right=
+  [type_diff] column=sales_staff.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_staff.created_at left=False right=True
+  [default_diff] column=sales_staff.created_at left=None right=now()
+  [comment_diff] column=sales_staff.enable_daily_sales_feedback_report left=是否接收每日线索销售反馈表 right=
+  [default_diff] column=sales_staff.enable_daily_sales_feedback_report left=None right=false
+  [comment_diff] column=sales_staff.enable_lead_assignment left=是否参与线索分配，默认 true right=
+  [default_diff] column=sales_staff.enable_lead_assignment left=None right=true
+  [comment_diff] column=sales_staff.enable_lead_trace_report left=是否接收线索溯源表 right=
+  [default_diff] column=sales_staff.enable_lead_trace_report left=None right=false
+  [comment_diff] column=sales_staff.enable_sales_unit_cost_report left=是否接收销售单车成本表 right=
+  [default_diff] column=sales_staff.enable_sales_unit_cost_report left=None right=false
+  [comment_diff] column=sales_staff.enable_short_video_live_lead_report left=是否接收短视频/直播留资管理表 right=
+  [default_diff] column=sales_staff.enable_short_video_live_lead_report left=None right=false
+  [type_diff] column=sales_staff.id left=integer right=bigint
+  [comment_diff] column=sales_staff.merchant_id left=所属商户 ID（商户隔离分配依据） right=
+  [comment_diff] column=sales_staff.name left=销售姓名 right=
+  [comment_diff] column=sales_staff.phone left=手机号 right=
+  [extra_column] column=sales_staff.remark side=right_only
+  [extra_column] column=sales_staff.sort_order side=right_only
+  [nullable_diff] column=sales_staff.status left=False right=True
+  [comment_diff] column=sales_staff.status left=状态: active/inactive right=
+  [default_diff] column=sales_staff.status left=None right='active'::character varying
+  [extra_column] column=sales_staff.tenant_id side=right_only
+  [type_diff] column=sales_staff.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=sales_staff.updated_at left=False right=True
+  [default_diff] column=sales_staff.updated_at left=None right=now()
+  [comment_diff] column=sales_staff.wechat_id left=微信号 right=
+  [comment_diff] column=sales_staff.wechat_nickname left=微信昵称 right=
+  [comment_diff] column=wechat_tasks.agent_hostname left=执行 Agent 的主机名 right=
+  [comment_diff] column=wechat_tasks.agent_pid left=执行 Agent 的进程 ID right=
+  [comment_diff] column=wechat_tasks.attachment_file_name left=attempt 级文件名快照 right=
+  [comment_diff] column=wechat_tasks.attachment_sha256 left=attempt 级内容 hash 快照 right=
+  [comment_diff] column=wechat_tasks.attachment_size_bytes left=attempt 级字节数快照 right=
+  [type_diff] column=wechat_tasks.attachment_verified_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.attachment_verified_at left=附件本地校验完成时间 right=
+  [type_diff] column=wechat_tasks.created_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=wechat_tasks.created_at left=False right=True
+  [default_diff] column=wechat_tasks.created_at left=None right=now()
+  [comment_diff] column=wechat_tasks.delivery_attempt_no left=投递 attempt 序号（从 1 开始） right=
+  [type_diff] column=wechat_tasks.download_ticket_expires_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.download_ticket_expires_at left=下载票据过期时间 right=
+  [comment_diff] column=wechat_tasks.download_ticket_hash left=单次下载票据 SHA-256 right=
+  [type_diff] column=wechat_tasks.downloaded_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.downloaded_at left=下载完成时间 right=
+  [type_diff] column=wechat_tasks.execution_started_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.execution_started_at left=execution 开始时间 right=
+  [comment_diff] column=wechat_tasks.execution_token_hash left=execution token SHA-256，claim 级 right=
+  [comment_diff] column=wechat_tasks.failure_stage left=失败阶段标识 right=
+  [type_diff] column=wechat_tasks.id left=integer right=bigint
+  [type_diff] column=wechat_tasks.lead_id left=integer right=bigint
+  [comment_diff] column=wechat_tasks.lead_id left=关联线索 ID right=
+  [extra_column] column=wechat_tasks.merchant_id side=right_only
+  [comment_diff] column=wechat_tasks.message left=要粘贴/发送的消息内容 right=
+  [comment_diff] column=wechat_tasks.mode left=执行模式: paste_only / single_send right=
+  [default_diff] column=wechat_tasks.mode left=None right='paste_only'::character varying
+  [type_diff] column=wechat_tasks.pasted_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.pasted_at left=粘贴完成时间 right=
+  [comment_diff] column=wechat_tasks.raw_result left=Agent 返回的原始结果 JSON right=
+  [type_diff] column=wechat_tasks.reply_check_id left=integer right=bigint
+  [comment_diff] column=wechat_tasks.reply_check_id left=关联检测记录 ID（可为空） right=
+  [type_diff] column=wechat_tasks.report_delivery_id left=integer right=bigint
+  [comment_diff] column=wechat_tasks.report_delivery_id left=关联投递 ID（send_report_attachment 专用） right=
+  [type_diff] column=wechat_tasks.send_authorized_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.send_authorized_at left=send-intent 授权时间 right=
+  [type_diff] column=wechat_tasks.send_nonce_expires_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.send_nonce_expires_at left=发送 nonce 过期时间 right=
+  [comment_diff] column=wechat_tasks.send_nonce_hash left=15 秒单次发送 nonce SHA-256 right=
+  [type_diff] column=wechat_tasks.sent_at left=timestamp without time zone right=timestamp with time zone
+  [comment_diff] column=wechat_tasks.sent_at left=发送完成时间（P0-5A 期间必须为 None） right=
+  [type_diff] column=wechat_tasks.staff_id left=integer right=bigint
+  [comment_diff] column=wechat_tasks.staff_id left=关联销售 ID right=
+  [comment_diff] column=wechat_tasks.status left=任务状态: pending / running / pasted / sent / failed / blocked / cancelled right=
+  [default_diff] column=wechat_tasks.status left=None right='pending'::character varying
+  [comment_diff] column=wechat_tasks.target_nickname left=目标微信联系人昵称 right=
+  [comment_diff] column=wechat_tasks.task_type left=任务类型: notify_sales / detect_reply / send_report_attachment right=
+  [default_diff] column=wechat_tasks.task_type left=None right='notify_sales'::character varying
+  [extra_column] column=wechat_tasks.tenant_id side=right_only
+  [type_diff] column=wechat_tasks.updated_at left=timestamp without time zone right=timestamp with time zone
+  [nullable_diff] column=wechat_tasks.updated_at left=False right=True
+  [default_diff] column=wechat_tasks.updated_at left=None right=now()
+  [extra_pk] table=alembic_version columns=['version_num']
+  [extra_fk] key=ai_auto_reply_runs|trigger_event_id|douyin_webhook_events|id name=ai_auto_reply_runs_trigger_event_id_fkey
+  [extra_fk] key=douyin_message_resource_downloads|webhook_event_id|douyin_webhook_events|id name=douyin_message_resource_downloads_webhook_event_id_fkey
+  [extra_fk] key=douyin_webhook_events|lead_id|douyin_leads|id name=douyin_webhook_events_lead_id_fkey
+  [missing_fk] key=wechat_tasks|reply_check_id|reply_checks|id name=wechat_tasks_reply_check_id_fkey
+  [extra_unique] key=douyin_authorized_accounts|merchant_id,open_id name=uk_douyin_authorized_accounts_merchant_open
+  [extra_unique] key=douyin_private_message_sends|return_visit_run_id name=uk_douyin_private_message_sends_return_visit_run
+  [extra_unique] key=douyin_webhook_events|event_key name=uk_douyin_webhook_events_event_key
+  [missing_unique] key=knowledge_categories|merchant_id,category_key name=uk_knowledge_categories_merchant_key
+  [extra_unique] key=knowledge_categories|scope_type,merchant_id,key name=uk_knowledge_categories_scope_merchant_key
+  [missing_check] key=ai_edit_jobs|CHECK (attempt_count >= 0) name=ck_ai_edit_jobs_attempt_nonnegative
+  [extra_check] key=ai_edit_jobs|CHECK (attempt_count IS NULL OR attempt_count >= 0) name=ck_ai_edit_jobs_attempt_nonnegative
+  [missing_check] key=ai_edit_jobs|CHECK (progress >= 0 AND progress <= 100) name=ck_ai_edit_jobs_progress_range
+  [extra_check] key=ai_edit_jobs|CHECK (progress IS NULL OR progress >= 0 AND progress <= 100) name=ck_ai_edit_jobs_progress_range
+  [extra_check] key=compute_packages|CHECK (price_yuan >= 0) name=ck_compute_packages_price_nonnegative
+  [extra_check] key=compute_packages|CHECK (token_amount > 0) name=ck_compute_packages_token_amount_positive
+  [extra_check] key=compute_transactions|CHECK (delta_tokens <> 0) name=ck_compute_transactions_delta_nonzero
+  [extra_check] key=daily_ad_metrics|CHECK (channel::text = 'douyin'::text) name=ck_daily_ad_metrics_channel
+  [extra_check] key=daily_ad_metrics|CHECK (content_type::text = ANY (ARRAY['short_video'::character varying, 'live'::character varying]::text[])) name=ck_daily_ad_metrics_content_type
+  [extra_check] key=daily_ad_metrics|CHECK (private_message_count >= 0) name=ck_daily_ad_metrics_msg_nonneg
+  [extra_check] key=daily_ad_metrics|CHECK (spend_amount >= 0::numeric) name=ck_daily_ad_metrics_spend_nonneg
+  [extra_check] key=external_merchant_bindings|CHECK (COALESCE(external_user_id, ''::character varying)::text <> ''::text OR COALESCE(external_account, ''::character varying)::text <> ''::text) name=ck_external_merchant_bindings_has_external_identity
+  [extra_check] key=external_merchant_bindings|CHECK (status::text = ANY (ARRAY['active'::character varying, 'disabled'::character varying, 'deleted'::character varying]::text[])) name=ck_external_merchant_bindings_status
+  [extra_check] key=knowledge_categories|CHECK (key::text = category_key::text) name=ck_knowledge_categories_key_matches_category_key
+  [extra_check] key=merchant_report_profiles|CHECK (showroom_price_min_yuan IS NULL AND showroom_price_max_yuan IS NULL OR showroom_price_min_yuan IS NOT NULL AND showroom_price_max_yuan IS NOT NULL AND showroom_price_min_yuan >= 0::numeric AND showroom_price_max_yuan >= 0::numeric AND showroom_price_min_yuan <= showroom_price_max_yuan) name=ck_merchant_report_profiles_price_range
+  [extra_index] key=ad_review_adopt_tasks|merchant_id,status|btree|False| name=idx_ad_review_adopt_tasks_merchant_status
+  [extra_index] key=ad_review_oauth_accounts|merchant_id,advertiser_id|btree|False| name=idx_ad_review_oauth_accounts_merchant_advertiser
+  [extra_index] key=ad_review_suggestions|merchant_id,oauth_account_id|btree|False| name=idx_ad_review_suggestions_merchant_oauth
+  [extra_index] key=agent_knowledge_categories|category_key|btree|False| name=idx_agent_knowledge_categories_category_key
+  [extra_index] key=agent_knowledge_categories|merchant_id,agent_id,category_key|btree|True|(((status)::text = 'active'::text) AND (deleted_at IS NULL)) name=ux_agent_knowledge_categories_active
+  [extra_index] key=ai_agents|merchant_id,name|btree|False| name=idx_ai_agents_merchant_name
+  [extra_index] key=ai_agents|merchant_id,updated_at|btree|False| name=idx_ai_agents_merchant_updated
+  [extra_index] key=ai_edit_job_artifacts|merchant_id,job_id|btree|False| name=idx_ai_edit_job_artifacts_merchant_job
+  [extra_index] key=ai_edit_job_materials|material_id|btree|False| name=idx_ai_edit_job_materials_material
+  [extra_index] key=ai_edit_jobs|merchant_id,status|btree|False| name=idx_ai_edit_jobs_merchant_status
+  [extra_index] key=ai_edit_material_analyses|material_id|btree|False| name=idx_ai_edit_material_analyses_material
+  [extra_index] key=ai_edit_material_analyses|source_sha256,analysis_version|btree|False| name=idx_ai_edit_material_analyses_sha256_version
+  [extra_index] key=ai_edit_materials|merchant_id,scope|btree|False| name=idx_ai_edit_materials_merchant_scope
+  [extra_index] key=ai_edit_materials|source_sha256|btree|False| name=idx_ai_edit_materials_sha256
+  [extra_index] key=compute_accounts|updated_at|btree|False| name=idx_compute_accounts_updated
+  [extra_index] key=compute_packages|enabled,price_yuan|btree|False| name=idx_compute_packages_enabled_price
+  [extra_index] key=compute_transactions|merchant_id,transaction_type,created_at|btree|False| name=idx_compute_transactions_merchant_type_created
+  [extra_index] key=compute_transactions|source,created_at|btree|False| name=idx_compute_transactions_source_created
+  [extra_index] key=douyin_account_agent_bindings|merchant_id,account_open_id|btree|True|(((status)::text = 'active'::text) AND (is_default IS TRUE) AND (deleted_at IS NULL)) name=uk_dy_account_agent_bindings_active_default
+  [extra_index] key=douyin_account_agent_bindings|status,is_default|btree|False| name=idx_dy_account_agent_bindings_status_default
+  [extra_index] key=douyin_authorized_accounts|last_synced_at|btree|False| name=idx_douyin_authorized_accounts_last_synced
+  [extra_index] key=douyin_authorized_accounts|merchant_id,bind_status|btree|False| name=idx_douyin_authorized_accounts_merchant_bind_status
+  [missing_index] key=douyin_authorized_accounts|merchant_id|btree|False| name=ix_douyin_authorized_accounts_merchant_id
+  [extra_index] key=douyin_authorized_accounts|open_id|btree|False| name=idx_douyin_authorized_accounts_open_id
+  [missing_index] key=douyin_authorized_accounts|tenant_id|btree|False| name=ix_douyin_authorized_accounts_tenant_id
+  [extra_index] key=douyin_image_uploads|image_base64_sha256|btree|False| name=idx_douyin_image_uploads_hash
+  [extra_index] key=douyin_image_uploads|main_account_id,upload_status,created_at|btree|False| name=idx_douyin_image_uploads_main_status_created
+  [extra_index] key=douyin_image_uploads|open_id,created_at|btree|False| name=idx_douyin_image_uploads_open_created
+  [missing_index] key=douyin_leads|account_open_id|btree|False| name=ix_douyin_leads_account_open_id
+  [extra_index] key=douyin_leads|assigned_staff_id,status|btree|False| name=idx_douyin_leads_assigned_staff_status
+  [missing_index] key=douyin_leads|conversation_short_id|btree|False| name=ix_douyin_leads_conversation_short_id
+  [extra_index] key=douyin_leads|merchant_id,account_open_id,conversation_short_id|btree|False| name=idx_douyin_leads_merchant_account_conversation
+  [missing_index] key=douyin_leads|merchant_id,account_open_id|btree|False| name=idx_douyin_leads_merchant_account
+  [extra_index] key=douyin_leads|merchant_id,status,updated_at|btree|False| name=idx_douyin_leads_merchant_status_updated
+  [extra_index] key=douyin_leads|merchant_id,updated_at|btree|False| name=idx_douyin_leads_merchant_updated
+  [missing_index] key=douyin_leads|merchant_id|btree|False| name=ix_douyin_leads_merchant_id
+  [extra_index] key=douyin_message_resource_downloads|conversation_short_id,server_message_id|btree|False| name=idx_douyin_message_resource_downloads_message_ids
+  [missing_index] key=douyin_message_resource_downloads|conversation_short_id|btree|False| name=ix_douyin_message_resource_downloads_conversation_short_id
+  [extra_index] key=douyin_message_resource_downloads|resource_status,created_at|btree|False| name=idx_douyin_message_resource_downloads_status_created
+  [missing_index] key=douyin_message_resource_downloads|server_message_id|btree|False| name=ix_douyin_message_resource_downloads_server_message_id
+  [extra_index] key=douyin_private_message_sends|account_open_id,created_at|btree|False| name=idx_douyin_private_message_sends_account_created
+  [index_def_diff] key=douyin_private_message_sends|conversation_short_id|btree|False| left=CREATE INDEX ix_douyin_private_message_sends_conversation_short_id ON douyin_private_message_sends USING btree (conversation_short_id) right=CREATE INDEX idx_douyin_private_message_sends_conversation ON douyin_private_message_sends USING btree (conversation_short_id)
+  [index_def_diff] key=douyin_private_message_sends|decision_log_id|btree|False| left=CREATE INDEX ix_douyin_private_message_sends_decision_log_id ON douyin_private_message_sends USING btree (decision_log_id) right=CREATE INDEX idx_douyin_private_message_sends_decision_log ON douyin_private_message_sends USING btree (decision_log_id)
+  [missing_index] key=douyin_private_message_sends|return_visit_run_id|btree|True| name=ix_douyin_private_message_sends_return_visit_run_id
+  [index_def_diff] key=douyin_private_message_sends|send_source|btree|False| left=CREATE INDEX ix_douyin_private_message_sends_send_source ON douyin_private_message_sends USING btree (send_source) right=CREATE INDEX idx_douyin_private_message_sends_send_source ON douyin_private_message_sends USING btree (send_source)
+  [index_def_diff] key=douyin_private_message_sends|server_message_id|btree|False| left=CREATE INDEX ix_douyin_private_message_sends_server_message_id ON douyin_private_message_sends USING btree (server_message_id) right=CREATE INDEX idx_douyin_private_message_sends_server_message ON douyin_private_message_sends USING btree (server_message_id)
+  [extra_index] key=douyin_webhook_events|conversation_short_id,server_message_id|btree|False| name=idx_douyin_webhook_events_message_ids
+  [missing_index] key=douyin_webhook_events|conversation_short_id|btree|False| name=ix_douyin_webhook_events_conversation_short_id
+  [extra_index] key=douyin_webhook_events|event,created_at|btree|False| name=idx_douyin_webhook_events_event_created
+  [missing_index] key=douyin_webhook_events|event_key|btree|True| name=ix_douyin_webhook_events_event_key
+  [extra_index] key=douyin_webhook_events|from_user_id,to_user_id,created_at|btree|False| name=idx_douyin_webhook_events_open_id_created
+  [extra_index] key=douyin_webhook_events|merchant_id,created_at|btree|False| name=idx_douyin_webhook_events_merchant_created
+  [missing_index] key=douyin_webhook_events|merchant_id|btree|False| name=ix_douyin_webhook_events_merchant_id
+  [missing_index] key=douyin_webhook_events|server_message_id|btree|False| name=ix_douyin_webhook_events_server_message_id
+  [missing_index] key=douyin_webhook_events|tenant_id|btree|False| name=ix_douyin_webhook_events_tenant_id
+  [extra_index] key=douyin_webhook_events|to_user_id,conversation_short_id|btree|False| name=idx_douyin_webhook_events_account_conversation
+  [extra_index] key=feedback_records|check_id|btree|False| name=idx_feedback_records_check
+  [extra_index] key=feedback_records|lead_id,created_at|btree|False| name=idx_feedback_records_lead_created
+  [extra_index] key=feedback_records|staff_id,feedback_status,created_at|btree|False| name=idx_feedback_records_staff_status_created
+  [extra_index] key=forbidden_word_hit_logs|merchant_id,created_at|btree|False| name=idx_forbidden_word_hit_logs_merchant_created
+  [extra_index] key=forbidden_words|library_id|btree|False| name=idx_forbidden_words_library
+  [index_def_diff] key=knowledge_categories|merchant_id,category_key,status|btree|False| left=CREATE INDEX idx_knowledge_categories_merchant_key_status ON knowledge_categories USING btree (merchant_id, category_key, status) right=CREATE INDEX idx_knowledge_categories_merchant_category_status ON knowledge_categories USING btree (merchant_id, category_key, status)
+  [extra_index] key=knowledge_categories|merchant_id,scope_type,status,deleted_at,sort_order|btree|False| name=idx_knowledge_categories_visible_lookup
+  [missing_index] key=knowledge_categories|merchant_id,status,sort_order|btree|False| name=idx_knowledge_categories_merchant_status_sort
+  [extra_index] key=lead_followup_records|staff_id,created_at|btree|False| name=idx_lead_followup_records_staff_created
+  [extra_index] key=lead_notifications|check_id|btree|False| name=idx_lead_notifications_check
+  [extra_index] key=lead_notifications|lead_id,created_at|btree|False| name=idx_lead_notifications_lead_created
+  [extra_index] key=lead_notifications|staff_id,send_status,created_at|btree|False| name=idx_lead_notifications_staff_status_created
+  [extra_index] key=reply_checks|lead_id,check_status,created_at|btree|False| name=idx_reply_checks_lead_status_created
+  [extra_index] key=reply_checks|reply_deadline,check_status|btree|False| name=idx_reply_checks_deadline_status
+  [extra_index] key=reply_checks|staff_id,check_status,created_at|btree|False| name=idx_reply_checks_staff_status_created
+  [extra_index] key=return_visit_runs|lead_id|btree|False| name=idx_return_visit_runs_lead
+  [extra_index] key=return_visit_runs|merchant_id,created_at|btree|False| name=idx_return_visit_runs_merchant_created
+  [extra_index] key=sales_daily_summaries|merchant_id,summary_date|btree|False| name=idx_sales_daily_summaries_merchant_date
+  [extra_index] key=sales_lead_feedbacks|merchant_id,lead_id|btree|False| name=idx_sales_lead_feedbacks_merchant_lead
+  [extra_index] key=sales_lead_feedbacks|merchant_id,staff_id|btree|False| name=idx_sales_lead_feedbacks_merchant_staff
+  [extra_index] key=sales_lead_updates|merchant_id,feedback_no|btree|False| name=idx_sales_lead_updates_merchant_feedback
+  [extra_index] key=sales_lead_updates|merchant_id,lead_id|btree|False| name=idx_sales_lead_updates_merchant_lead
+  [extra_index] key=sales_staff|merchant_id,status|btree|False| name=idx_sales_staff_merchant_status
+  [extra_index] key=sales_staff|merchant_id,wechat_id|btree|False| name=idx_sales_staff_merchant_wechat_id
+  [extra_index] key=sales_staff|merchant_id,wechat_nickname|btree|False| name=idx_sales_staff_merchant_wechat_nickname
+  [missing_index] key=sales_staff|merchant_id|btree|False| name=ix_sales_staff_merchant_id
+  [extra_index] key=wechat_tasks|lead_id,task_type|btree|False| name=idx_wechat_tasks_lead_type
+  [extra_index] key=wechat_tasks|merchant_id,status,created_at|btree|False| name=idx_wechat_tasks_merchant_status_created
+  [extra_index] key=wechat_tasks|staff_id,status|btree|False| name=idx_wechat_tasks_staff_status
+  [extra_index] key=wechat_tasks|task_type,status,created_at|btree|False| name=idx_wechat_tasks_type_status_created
+
+--- NAME_ONLY_DIFF (9) ---
+  [fk_name_diff] key=wechat_tasks|report_delivery_id|daily_report_deliveries|id left=wechat_tasks_report_delivery_id_fkey right=fk_wechat_tasks_report_delivery_id
+  [unique_name_diff] key=ai_auto_reply_runs|trigger_event_key left=ai_auto_reply_runs_trigger_event_key_key right=uk_ai_auto_reply_runs_trigger_event_key
+  [unique_name_diff] key=check_configs|config_key left=check_configs_config_key_key right=uk_check_configs_config_key
+  [unique_name_diff] key=douyin_private_message_sends|auto_reply_run_id left=douyin_private_message_sends_auto_reply_run_id_key right=uk_douyin_private_message_sends_auto_reply_run
+  [index_name_diff] key=douyin_private_message_sends|conversation_short_id|btree|False| left=ix_douyin_private_message_sends_conversation_short_id right=idx_douyin_private_message_sends_conversation
+  [index_name_diff] key=douyin_private_message_sends|decision_log_id|btree|False| left=ix_douyin_private_message_sends_decision_log_id right=idx_douyin_private_message_sends_decision_log
+  [index_name_diff] key=douyin_private_message_sends|send_source|btree|False| left=ix_douyin_private_message_sends_send_source right=idx_douyin_private_message_sends_send_source
+  [index_name_diff] key=douyin_private_message_sends|server_message_id|btree|False| left=ix_douyin_private_message_sends_server_message_id right=idx_douyin_private_message_sends_server_message
+  [index_name_diff] key=knowledge_categories|merchant_id,category_key,status|btree|False| left=idx_knowledge_categories_merchant_key_status right=idx_knowledge_categories_merchant_category_status
+
+--- NORMALIZATION_ONLY (0) ---

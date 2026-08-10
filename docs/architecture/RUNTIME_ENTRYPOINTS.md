@@ -239,7 +239,7 @@ shutdown 钩子在 `main.py:240`（`@app.on_event("shutdown")`，TECH_DEBT 同�
 | 标识 | 代码位置 | execution_class | runtime_state | lifecycle | 模块 | 备注 |
 |---|---|---|---|---|---|---|
 | local_agent_main（19000） | local_agent_main.py:2904；argparse:2881 | production_runtime | manual_only（宿主机运行；LOCAL_AGENT_AUTH_REQUIRED） | ACTIVE | M04 | 新主线，替代旧 wechat_auto_detect_scheduler |
-| scripts/init_db.py | scripts/ | maintenance | manual_only | ACTIVE | PLATFORM | DB 初始化 |
+| scripts/init_db.py | scripts/ | maintenance | manual_only | ACTIVE | PLATFORM | DB 初始化（**SQLite-only**：PG 下拒绝 create_all 并退出，PG schema 须由 Alembic 创建/演进，DB-BL-2D prevention closure） |
 | scripts/migrate_*_sqlite_to_postgres*.py（7 个） | scripts/ | migration | manual_only | ACTIVE | PLATFORM | SQLite→PG 一次性迁移 |
 | scripts/production_pg_*.sh（10 个 shell） | scripts/ | production_ops | manual_only | ACTIVE | PLATFORM | PG 切换 Runbook（alembic/backup/cutover/smoke） |
 | scripts/smoke_*.py / p0_c_deployment_verify.py / verify_phase8*.py / preflight*.py | scripts/ | smoke_test | manual_only | ACTIVE | PLATFORM | 部署验证 |

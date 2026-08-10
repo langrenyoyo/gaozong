@@ -329,9 +329,9 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migratio
   - M07 Core（record_usage + DB migration 0030 + atomic ownership + IntegrityError replay/conflict）+ PG_CORE_GATE PASS
   - 11 consumer 迁移完成：M04 / M06 / M01 Auto Reply / M02 / Return Visit / Daily Report / Training / RAG Ingest / M05 / M01 Preview / RAG Query
   - PG Closure Gate 三态冻结：PASS / FAIL / WAIVED_WITH_ACCEPTED_RESIDUAL_RISK（WAIVED≠PASS，risk-accept 不得标 E2E_VERIFIED_FIXED）
-  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / RAG Query 0005 PENDING_PG_VERIFICATION（BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT）/ Daily Report 0032 + M05 0033 + Preview 0034 BLOCKED_BY_SCHEMA_BASELINE_MISMATCH（待 DB-BL-2 基线修复）
+  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / RAG Query 0005 PENDING_PG_VERIFICATION（BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT）/ Daily Report 0032 + M05 0033 + Preview 0034 = UNBLOCKED_FOR_PG_VERIFICATION（SCHEMA_BASELINE_MISMATCH 已 REMEDIATED，DB-BL-2D 独立审批 APPROVED_WITH_CORRECTIONS；CR-4 待修：app-role GRANT 实际未落地，consumer PG verification 若用 app 角色须先补 GRANT 或以 superuser 连接）
   - 7 个 Reliability Gap 均 OUT_OF_P1：DAILY_REPORT/TRAINING/RAG_INGEST_RUN/RAG_INGEST_REQUEST/M05_ANALYSIS_USAGE_REPORT/PREVIEW_REQUEST/RAG_QUERY_REQUEST
-  - **Technical Closure Blockers**：A. auto_wechat schema baseline（DB-BL-2，解锁 0032/0033/0034）/ B. RAG Query 0005 PG（Docker 恢复后独立补）/ C. Global Active None Audit（重新全局搜索）/ D. Final PG Concurrent Closure Gate
+  - **Technical Closure Blockers**：A. auto_wechat schema baseline（DB-BL-2D = REMEDIATED / REPAIR_VERIFIED，auto_wechat dev PG = CANONICAL_ALEMBIC_BASELINE@0034；0032/0033/0034 已解锁 UNBLOCKED_FOR_PG_VERIFICATION，不等于 PG_VERIFIED）/ B. RAG Query 0005 PG（Docker 恢复后独立补）/ C. Global Active None Audit（重新全局搜索）/ D. Final PG Concurrent Closure Gate
 - 跨模块根因不重复统计：一个 Root Cause → 多个 impacted/exposed consumers
 
 **关键产出文件**（修改前必读）：

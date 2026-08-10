@@ -1,5 +1,10 @@
 # DB-BL-2C — auto_wechat PostgreSQL Exact Reconciliation
 
+> ⚠️ **本报告为原始 2C 尝试的历史阻断证据（保留不删）。**
+> 该 `BLOCKED_BY_MIGRATION_CHAIN_BOOTSTRAP_FAILURE` 已由 R2 修复并 `AUTHORIZED_TO_RESUME`；2C 复跑结果见
+> `DB_BL_2C_EXACT_RECONCILIATION_RESUME.md`（Revision Identity = `NOT_EQUIVALENT_TO_0030`）。
+> 本文件以下内容为 2026-08-10 R2 修复前的真实 runtime 事实，不作为当前 2C 结论。
+
 > 报告日期：2026-08-10
 > 阶段：P1 `COMPUTE-IDEMPOTENCY-001` Technical Closure / Blocker A（auto_wechat schema baseline）
 > 模式：**EXACT RECONCILIATION**（只读对账 + disposable PG 受控 bootstrap）
