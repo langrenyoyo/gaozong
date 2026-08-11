@@ -23,7 +23,7 @@
 | 8 | RAG Ingest Chunk Embedding | `0fee74a` | `rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest` | IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（RI-1~5 实跑，RI-0/6B PG 运行证据）| **PG_VERIFIED_MIDPOINT**（事务边界）|
 | 9 | M05 Material Analysis | `fe91a05` | `material_analysis_execution:{execution_id}:ark_analysis` | IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（MA-1/2/3/6 实跑，MA-0/4/5 CODE_VERIFIED）| **BLOCKED_BY_SCHEMA_BASELINE_MISMATCH**（0033 待 DB-BL-2）|
 | 10 | M01 Preview | `3eddc84` | `ai_preview_execution:{preview_execution_id}:{llm_call_stage}` | IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（PV-1~4 实跑，PV-0/5 CODE_VERIFIED）| **BLOCKED_BY_SCHEMA_BASELINE_MISMATCH**（0034 待 DB-BL-2）|
-| 11 | RAG Query Embedding | `67eb1f9` | `rag_search_execution:{search_execution_id}:{embedding_stage}` | IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（RQ-1/4/5 实跑，RQ-0/2/3/6 CODE_VERIFIED）| **PENDING_PG_VERIFICATION / BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT**（0005 待 Docker 恢复）|
+| 11 | RAG Query Embedding | `67eb1f9` | `rag_search_execution:{search_execution_id}:{embedding_stage}` | IDEMPOTENCY_CONTRACT_MIGRATED_AND_VERIFIED（RQ-1/4/5 实跑，RQ-0/2/3/6 CODE_VERIFIED → 13 RQ Gate 全 PASS，独立审批窗口自有 fixture 复现）| **PG_RUNTIME_VERIFIED**（2026-08-11 独立审批 APPROVED_WITH_CORRECTIONS；详见 `P1_PG_RAG_QUERY_0005_CONSUMER_APPROVAL.md`）|
 
 ---
 
@@ -60,7 +60,7 @@ Execution.status ≠ Billing truth（M07 committed ComputeTransaction = sole led
 | M07 Core | 0030（auto_wechat）| PG_VERIFIED（PG Core Gate）|
 | Training | 0004（xg_douyin_ai_cs）| PG_VERIFIED_MIDPOINT |
 | RAG Ingest | 无新迁移（事务边界）| PG_VERIFIED_MIDPOINT（RI-0/6B）|
-| RAG Query | 0005（xg_douyin_ai_cs）| PENDING_PG_VERIFICATION / BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT |
+| RAG Query | 0005（xg_douyin_ai_cs）| **PG_RUNTIME_VERIFIED**（2026-08-11 独立审批 APPROVED_WITH_CORRECTIONS；BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT = RESOLVED）|
 | Daily Report | 0032（auto_wechat）| BLOCKED_BY_SCHEMA_BASELINE_MISMATCH |
 | M05 | 0033（auto_wechat）| BLOCKED_BY_SCHEMA_BASELINE_MISMATCH |
 | Preview | 0034（auto_wechat）| BLOCKED_BY_SCHEMA_BASELINE_MISMATCH |
@@ -81,6 +81,8 @@ Execution.status ≠ Billing truth（M07 committed ComputeTransaction = sole led
 - xg_douyin_ai_cs 库有可信 Alembic 基线（Training 0004 PG_VERIFIED_MIDPOINT）
 - 待 Docker Desktop 恢复后独立补：0004→0005 upgrade + table/PK/CHECK/索引 + SearchExecution lifecycle
 - 不依赖 DB-BL-2，独立完成
+- **2026-08-11 更新（RAG Query 0005 consumer PG verification 完成）**：Docker 已恢复（`auto-wechat-postgres-dev` Up healthy）；本轮执行 alembic upgrade 0004→0005（before=0004 / after=0005，`rag_search_executions` 表落地）+ 真实双库 runtime consumer 验证（DB-A xg_douyin_ai_cs execution 库 principal=`xg_douyin_ai_cs` / DB-B auto_wechat compute ledger principal=`auto_wechat`），13 个 RQ Gate 全 PASS（Q-A first/replay NO_DOUBLE_CHARGE/Q-B distinct/Q-R primary+fallback_embedding stage separation/non-null/persistence/balance closure）。候选 `PG_VERIFICATION_COMPLETE_PENDING_APPROVAL`（不得自行标 PG_VERIFIED，待独立审批窗口裁定）。验证报告：`P1_PG_RAG_QUERY_0005_CONSUMER_VERIFICATION.md`。
+- **2026-08-11 独立审批结论（APPROVED_WITH_CORRECTIONS）**：独立审批窗口用独立 merchant `rq5-approval` / 独立端口 9001 自有 fixture 复现全部核心命题（Q-A first/replay NO_DOUBLE_CHARGE/Q-B distinct/Q-R stage separation/non-null/persistence/balance closure），13 个 RQ Gate 全 PASS。冻结 `RAG QUERY 0005 CONSUMER: PG_RUNTIME_VERIFIED`，`HISTORICAL BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT = RESOLVED`。Correction：Q-R `fallback_embedding` 的 runtime 计费证据经 consumer usage-report seam（`_embed_with_usage` 传 stage 参数）获得，非自然 Milvus primary 超时路径 runtime 触发（自然可达性 code-verified，repository.py:1219）；9100 `xg_douyin_ai_cs` 角色权限较宽（CREATE/TRUNCATE 持有）登记为 future least-privilege gap，不写 `APPLICATION_ROLE_RUNTIME_VERIFIED`。审批报告：`P1_PG_RAG_QUERY_0005_CONSUMER_APPROVAL.md`。**Blocker B 关闭**。
 
 ### Blocker C — Global Active None Audit
 
@@ -126,7 +128,7 @@ WAIVED_WITH_ACCEPTED_RESIDUAL_RISK
   管理层接受剩余风险，但不得标 E2E_VERIFIED_FIXED（WAIVED ≠ PASS）
 ```
 
-当前 PG Closure Gate = **FAIL**（4 项 Technical Closure Blockers 未闭环）。
+当前 PG Closure Gate = **FAIL**（3 项 Technical Closure Blockers 未闭环：A′ LOCAL_PG_BOOTSTRAP_DATABASE_OWNER_DRIFT_GAP / C Global Active None Audit / D Final PG Concurrent Closure Gate；B RAG Query 0005 已于 2026-08-11 PG_RUNTIME_VERIFIED 关闭）。
 
 ---
 
