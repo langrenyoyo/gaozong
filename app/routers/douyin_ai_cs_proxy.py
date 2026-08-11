@@ -35,6 +35,10 @@ from app.services.douyin_autoreply_settings_service import (
     get_account_autoreply_settings,
     parse_direct_llm_policy,
 )
+# P1-F1：复用 Preview 的 durable billing identity helper（Candidate A，router→router 直接 import，
+# 符合 douyin_live_check 先例）。Trusted Reply-Suggestion 与 Preview 计费业务事件同构，
+# 共享 AiPreviewExecution 作为计费 identity 容器 + ai_preview_execution:{id}:{stage} namespace。
+from app.routers.agents import _create_preview_execution, _finalize_preview_execution
 
 
 router = APIRouter(prefix="/integrations/douyin-ai-cs", tags=["抖音AI客服可信代理"])
@@ -228,7 +232,7 @@ def _build_preview_contact_state(
 
 
 @router.post("/conversations/{conversation_id}/reply-suggestion")
-async def create_reply_suggestion_proxy(
+def create_reply_suggestion_proxy(
     conversation_id: str,
     request: ReplySuggestionProxyRequest,
     context: RequestContext = Depends(get_request_context_required),
@@ -361,6 +365,30 @@ async def create_reply_suggestion_proxy(
         ),
     }
 
+    # P1-F1：Trusted Reply-Suggestion durable billing identity（Candidate A，复用 AiPreviewExecution）。
+    # execution 在 9100 LLM 计费前 durable commit（与 Preview 同模式 PV-0），identity 先于计费副作用持久化。
+    # identity 由 9000 服务端创建，对 caller 透明；preview_execution_id 透传到 9100，
+    # _report_llm_usage 走 Preview 分支构造 ai_preview_execution:{id}:{stage} 幂等键（9100 零改）。
+    # C2 fail-closed：execution 创建失败 → 不调 9100/LLM → 无计费副作用 → 返回 502（不得 fallback 旧 proxy 行为）。
+    try:
+        preview_exec_id = _create_preview_execution(db, context.merchant_id, agent.agent_id)
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "douyin_ai_cs_reply_suggestion stage=preview_execution_create_failed "
+            "merchant_id=%s agent_id=%s failure_stage=execution_create error_type=%s",
+            context.merchant_id, agent.agent_id, type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "PREVIEW_EXECUTION_CREATE_FAILED",
+                "message": "建议生成身份创建失败，请稍后重试",
+            },
+        ) from exc
+    # exactly one top-level execution identity source：只设 preview_execution_id，不设 run_id/attempt_count
+    payload["preview_execution_id"] = preview_exec_id
+
     try:
         result = get_xg_douyin_ai_cs_client().suggest_reply(
             context=context,
@@ -368,11 +396,15 @@ async def create_reply_suggestion_proxy(
             request=payload,
         )
     except XgDouyinAiCsClientError as exc:
+        # 9100 请求失败 → execution=failed（stable identity 保留供审计/billing reconciliation）
+        _finalize_preview_execution(db, preview_exec_id, "failed")
         raise HTTPException(
             status_code=502,
             detail={"code": "XG_DOUYIN_AI_CS_UNAVAILABLE", "message": str(exc)},
         ) from exc
 
+    # 9100 正常返回有效 response → execution=completed（lifecycle=整次 9100 请求结果，非 stage 状态）
+    _finalize_preview_execution(db, preview_exec_id, "completed")
     upstream_raw_result = deepcopy(result)
     upstream_requested_auto_send = result.get("auto_send") is True
     result["auto_send"] = False

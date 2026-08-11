@@ -50,6 +50,7 @@ COMPUTE-IDEMPOTENCY-001（M07 ROOT CAUSE — HIGH-01）
 > - **RAG_INGEST_REQUEST_RECOVERY_GAP**（train_document/train_scope HTTP 请求失败/响应丢失 → 重新提交建新 Run，无 durable client request identity 证明 Run#N+1==Run#N）
 > - **M05_ANALYSIS_USAGE_REPORT_RECOVERY_GAP**（Ark completed → usage report failed/response-lost → 无自动 billing-report recovery；★ same Execution usage report replay→P1 保护 / 但不保证失败 report 一定被自动重试）
 > - **PREVIEW_REQUEST_RECOVERY_GAP**（full 9000→9100 preview request response-lost → 重发 preview → 新 execution → 新 charge；无 durable client request identity 证明 E1==E2；★ same Execution + same stage replay→P1 保护 / full request retry→未保证→P1 不解决）
+>   - **C4 覆盖扩展（2026-08-11 P1-F1 Candidate A）**：本 Gap 现覆盖两类计费同域入口——① draft-agent AI Preview（`POST /agents/{id}/preview`）；② Trusted Reply-Suggestion（`POST /integrations/douyin-ai-cs/conversations/{id}/reply-suggestion`）。Candidate A 让 Trusted Reply-Suggestion 复用 AiPreviewExecution 作 durable billing identity 容器 + `ai_preview_execution:{id}:{stage}` namespace，与 Preview 计费同域，故其 full HTTP request response-lost gap 被本 Gap 准确覆盖，不新建独立 `TRUSTED_REPLY_SUGGESTION_REQUEST_RECOVERY_GAP`。两者同为"9000 工作台人工触发 suggest_reply → 9100 response-lost → 重发 → 新 execution → 新 charge"，`same durable execution + same stage replay` P1 保护，`full request retry` OUT_OF_P1。
 > - **RAG_QUERY_REQUEST_RECOVERY_GAP**（whole search request retry → 新 Execution → 新 charge；无 durable client request identity 证明 E1==E2；★ same Execution + same stage replay→P1 保护 / whole-request retry→未保证→P1 不解决）
 > - ★ **RUN_RECOVERY ≠ REQUEST_RECOVERY**（已有 Run 怎么恢复 vs 新 HTTP 调用怎么知道属于旧 Run），不合并
 > P1 不虚假宣称已解决跨进程请求级幂等。
@@ -66,6 +67,7 @@ COMPUTE-IDEMPOTENCY-001（M07 ROOT CAUSE — HIGH-01）
 | S3 | M01 → M02 direct data write（DATA_COUPLING） | M01→M02 | ARCHITECTURE_OBSERVATION |
 | S4 | M04 → M02 direct data write（DATA_COUPLING） | M04→M02 | ARCHITECTURE_OBSERVATION |
 | S5 | M05/M06 shared implementation coupling（共用 router/feature） | M05/M06 | S 解耦候选 |
+| S6 | AIPREVIEWEXECUTION_NAMING_DEBT（表/模型名"Preview"承载两类计费场景：draft-agent Preview + Trusted Reply-Suggestion；DOMAIN_MODEL_CONTAMINATION=NOT PRESENT，模型本身是通用计费 identity 容器，仅命名反映 Preview 专属）| M01 | NON_BLOCKING / NAMING_DEBT（P1-F1 Candidate A 后登记；不在 P1 重命名，未来加可选 source 字段属 OUT_OF_P1）|
 
 ---
 
