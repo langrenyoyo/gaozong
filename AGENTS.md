@@ -305,7 +305,7 @@ Reality Map → Module Verification → Behavior Baseline → Approved Change Sc
 
 **未完成模块验真、未冻结行为基线前，不进行该模块的大规模结构重构。**
 
-### 当前治理状态（2026-08-08）
+### 当前治理状态（2026-08-11）
 
 ```
 PHASE 1   Reality Map              ✅ COMPLETE
@@ -320,7 +320,7 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migratio
 - 4 个 HIGH 生产安全风险 + 5 个 STRUCTURAL 架构风险（分队列）
 - Consumer 证据四级：`E2E_VERIFIED_IMPACTED` / `CODE_VERIFIED_EXPOSED` / `CALL_SITE_IDENTIFIED` / `NOT_VERIFIED`
 - 阶段 3A 优先级：P1 Compute Idempotency → P2 M04 Claim/Lease → P3a M05 Reference → P3b M05 URL
-- **P1 当前状态：CONSUMER_MIGRATION=COMPLETE（11/11 charge path MIGRATED，0 OPEN）→ TECHNICAL_CLOSURE=PENDING；COMPUTE-IDEMPOTENCY-001 仍 OPEN**
+- **P1 当前状态：CONSUMER_MIGRATION=COMPLETE（11/11 charge path MIGRATED，0 OPEN）+ ACTIVE CONSUMER PG VERIFICATION=COMPLETE（0032/0033/0034/RAG Query 0005 全 PG_RUNTIME_VERIFIED）+ F-1 RESOLVED（closure commit cab2e96）+ GLOBAL_ACTIVE_NONE_AUDIT=VERIFIED（Audit-2 独立审批 APPROVED，`P1_GLOBAL_ACTIVE_NONE_AUDIT_2_APPROVAL.md`）→ TECHNICAL_CLOSURE=PENDING_FINAL_POSTGRESQL_CONCURRENT_CLOSURE；Final PostgreSQL Concurrent Closure=AUTHORIZED_TO_START；COMPUTE-IDEMPOTENCY-001 仍 OPEN**
   - ★ Consumer Migration Complete ≠ Technical Closure Complete（≠ E2E_VERIFIED_FIXED）
   - Consumer 层工作完成，进入 Technical Closure（schema baseline + PG evidence + global audit + concurrency closure）
 - **P1 关键产出**：
@@ -329,9 +329,9 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migratio
   - M07 Core（record_usage + DB migration 0030 + atomic ownership + IntegrityError replay/conflict）+ PG_CORE_GATE PASS
   - 11 consumer 迁移完成：M04 / M06 / M01 Auto Reply / M02 / Return Visit / Daily Report / Training / RAG Ingest / M05 / M01 Preview / RAG Query
   - PG Closure Gate 三态冻结：PASS / FAIL / WAIVED_WITH_ACCEPTED_RESIDUAL_RISK（WAIVED≠PASS，risk-accept 不得标 E2E_VERIFIED_FIXED）
-  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / RAG Query 0005 PENDING_PG_VERIFICATION（BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT）/ Daily Report 0032 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-10 独立审批 APPROVED）/ M05 0033 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-11 独立审批 APPROVED；进程内 consumer 无 HTTP hop）/ Preview 0034 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-11 独立审批 APPROVED，`P1_PG_0034_PREVIEW_CONSUMER_APPROVAL.md`；9000→9100→9000 双 HTTP hop + 余额门禁真实路径 + P-A replay NO_DOUBLE_CHARGE + P-B distinct + P-R primary/retry_combined stage separation 全 PASS）
-  - 7 个 Reliability Gap 均 OUT_OF_P1：DAILY_REPORT/TRAINING/RAG_INGEST_RUN/RAG_INGEST_REQUEST/M05_ANALYSIS_USAGE_REPORT/PREVIEW_REQUEST/RAG_QUERY_REQUEST
-  - **Technical Closure Blockers**：A. auto_wechat schema baseline（DB-BL-2，解锁 0032/0033/0034）/ B. RAG Query 0005 PG（Docker 恢复后独立补）/ C. Global Active None Audit（重新全局搜索）/ D. Final PG Concurrent Closure Gate
+  - PG Verification：M07 Core PG_VERIFIED / Training 0004 + RAG Ingest 事务边界 PG_VERIFIED_MIDPOINT / RAG Query 0005 = PG_RUNTIME_VERIFIED @5d8b6ba（原 BLOCKED_BY_LOCAL_DOCKER_ENVIRONMENT 已解除）/ Daily Report 0032 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-10 独立审批 APPROVED）/ M05 0033 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-11 独立审批 APPROVED；进程内 consumer 无 HTTP hop）/ Preview 0034 = PG_RUNTIME_VERIFIED + APPLICATION_ROLE_RUNTIME_VERIFIED（2026-08-11 独立审批 APPROVED，`P1_PG_0034_PREVIEW_CONSUMER_APPROVAL.md`；9000→9100→9000 双 HTTP hop + 余额门禁真实路径 + P-A replay NO_DOUBLE_CHARGE + P-B distinct + P-R primary/retry_combined stage separation 全 PASS）—— **P1 ACTIVE CONSUMER PG VERIFICATION = COMPLETE（4/4：0032/0033/0034/RAG Query 0005）**
+  - 7 个 Reliability Gap 均 OUT_OF_P1：DAILY_REPORT/TRAINING/RAG_INGEST_RUN/RAG_INGEST_REQUEST/M05_ANALYSIS_USAGE_REPORT/PREVIEW_REQUEST（含 Trusted Reply-Suggestion，C4 扩展覆盖）/RAG_QUERY_REQUEST
+  - **Technical Closure Blockers**：A. ~~auto_wechat schema baseline~~ DB-BL-2D = REMEDIATED（auto_wechat dev PG = CANONICAL_ALEMBIC_BASELINE@0034）/ A′. LOCAL_PG_BOOTSTRAP_DATABASE_OWNER_DRIFT_GAP = RESOLVED / B. ~~RAG Query 0005 PG~~ = PG_RUNTIME_VERIFIED @5d8b6ba（不再 blocker）/ C. ~~Global Active None Audit~~ = VERIFIED（Audit-2 独立审批 APPROVED，`P1_GLOBAL_ACTIVE_NONE_AUDIT_2_APPROVAL.md`：15 call site 全分类 ACTIVE None=0；F-1 RESOLVED closure commit cab2e96）→ **TECHNICAL_CLOSURE = PENDING_FINAL_POSTGRESQL_CONCURRENT_CLOSURE** / D. Final PG Concurrent Closure Gate = AUTHORIZED_TO_START
 - 跨模块根因不重复统计：一个 Root Cause → 多个 impacted/exposed consumers
 
 **关键产出文件**（修改前必读）：
