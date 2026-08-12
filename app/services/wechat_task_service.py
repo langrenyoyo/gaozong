@@ -7,12 +7,15 @@ P0-MAIN-5A：submit result 联动 lead_notifications、check_configs。
 P1-AUTO-1：支持 detect_reply 任务类型，notify_sales pasted 后自动创建。
 """
 
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, update
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import WechatTask, LeadNotification, CheckConfig, ReplyCheck, DouyinLead, SalesStaff, ReturnVisitFollowupTask
@@ -30,6 +33,34 @@ _DETECT_REPLY_ALLOWED_MODES = {"read_only", "paste_only"}
 
 # P1-AUTO-1：detect_reply 最大检测次数（防止无限循环）
 _MAX_DETECT_COUNT = 30
+
+# P2-M04 notify_sales claim/lease（Candidate C）
+# C3：lease 300s 默认（> 2 min 真实 UIA 上界 + safety margin），首批 NO HEARTBEAT
+DEFAULT_LEASE_SECONDS = 300
+STATUS_UNCERTAIN = "uncertain"
+STATUS_CANCELLED = "cancelled"
+# C2：producer dedup 必须含 uncertain（running 已在 ACTIVE_NOTIFY_TASK_STATUSES）
+NOTIFY_SALES_OUTSTANDING_STATUSES = {"pending", "running", "uncertain", "pasted", "sent"}
+
+
+class ClaimConflictError(Exception):
+    """notify_sales claim 冲突（任务已被其他 agent claim 或不再 pending）。"""
+
+
+class StaleAttemptError(Exception):
+    """notify_sales callback token 不匹配当前 attempt（stale attempt fencing）。"""
+
+
+def _hash_token(token: str) -> str:
+    """令牌 SHA-256 摘要（DB 只存 hash，不存明文）。"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _const_eq(stored_hash: str | None, token: str | None) -> bool:
+    """常量时间比较 stored_hash 与 token 的 hash；None 直接 False（不泄露存在性）。"""
+    if not stored_hash or not token:
+        return False
+    return hmac.compare_digest(stored_hash, _hash_token(token))
 
 
 def create_wechat_task(
@@ -315,8 +346,17 @@ def submit_wechat_task_result(
     raw_result: dict | None = None,
     detected_status: str | None = None,
     detect_count: int | None = None,
+    claim_token: str | None = None,
 ) -> WechatTask:
     """回写任务执行结果。
+
+    P2-M04 Candidate C：notify_sales 回写新增 claim_token CAS 校验（C5 三类 callback）：
+    - A. Current first callback: running + token 匹配 → 终态转换
+    - B. Duplicate same-attempt: 已 terminal + token 匹配 → 幂等 replay（C9 terminal 保留 hash）
+    - C. Stale attempt: token 不匹配 → StaleAttemptError
+
+    C14：claim_token 对 notify_sales running attempt REQUIRED，对 detect_reply 无要求。
+    detect_reply / send_report_attachment 行为不变。
 
     通用规则：
     - sent=true + verified=true → status=sent；安全门禁失败仍 blocked/failed
@@ -351,7 +391,7 @@ def submit_wechat_task_result(
     task.agent_hostname = agent_hostname
     task.agent_pid = agent_pid
 
-    # ---- P1-AUTO-1：detect_reply 类型的专用处理 ----
+    # ---- P1-AUTO-1：detect_reply 类型的专用处理（无 claim_token，C14 mode-specific）----
     if task.task_type == "detect_reply":
         return _submit_detect_reply_result(
             db, task,
@@ -363,6 +403,57 @@ def submit_wechat_task_result(
             detected_status=detected_status,
             detect_count=detect_count,
         )
+
+    # ---- P2-M04 Candidate C：notify_sales claim_token CAS 校验（C5 三类 callback）----
+    # C14：claim_token 条件性 required — 仅当 task 经过新 claim 流程（claim_token_hash is not None）时强制 CAS。
+    # 向后兼容：未通过新 claim 流程的 task（claim_token_hash=None）走旧 result 逻辑（coordinated cutover R2）。
+    _NOTIFY_SALES_TERMINAL = {"pasted", "sent", "failed", "blocked", STATUS_CANCELLED}
+    if task.task_type == "notify_sales" and task.claim_token_hash is not None:
+        if task.status == "running":
+            # A. Current first callback: running + token 匹配 → 终态转换
+            if not _const_eq(task.claim_token_hash, claim_token):
+                raise StaleAttemptError(
+                    f"stale attempt: task={task.id} attempt={task.attempt_count} "
+                    f"callback token does not match current claim_token_hash"
+                )
+            # C4/P2-R9：SELECT FOR UPDATE 锁行，防止并发 reclaim CAS（running→uncertain）覆盖
+            locked = (
+                db.query(WechatTask)
+                .filter(WechatTask.id == task.id, WechatTask.status == "running")
+                .with_for_update()
+                .first()
+            )
+            if locked is None:
+                raise StaleAttemptError(
+                    f"stale attempt: task={task.id} was modified by concurrent stale transition"
+                )
+            task = locked  # 使用锁定的版本继续下方终态转换
+        elif task.status in _NOTIFY_SALES_TERMINAL:
+            # B. Duplicate same-attempt callback: 已 terminal + token 匹配 → 幂等 replay（C9）
+            if _const_eq(task.claim_token_hash, claim_token):
+                logger.info(
+                    "P2-M04 idempotent replay: task=%s status=%s attempt=%s（duplicate same-attempt callback）",
+                    task.id, task.status, task.attempt_count,
+                )
+                return task
+            # C. Stale attempt: token 不匹配 → reject
+            raise StaleAttemptError(
+                f"stale attempt: task={task.id} is terminal({task.status}) "
+                f"but callback token does not match last attempt's claim_token_hash"
+            )
+        elif task.status == STATUS_UNCERTAIN:
+            # uncertain: lease expired quarantine，需 manual resolution
+            raise StaleAttemptError(
+                f"stale attempt: task={task.id} is uncertain（lease expired quarantine），"
+                f"requires manual resolution"
+            )
+        elif task.status == "pending":
+            # 有 claim_token_hash 但 status=pending（异常状态，可能是 manual retry 后未 claim）
+            raise StaleAttemptError(
+                f"stale attempt: task={task.id} has claim_token_hash but status=pending，"
+                f"must be claimed first"
+            )
+    # else: claim_token_hash is None（未通过新 claim 流程）或 detect_reply → 旧 result 逻辑（向后兼容）
 
     # ---- 以下为 notify_sales 类型的原有处理逻辑 ----
 
@@ -1114,3 +1205,179 @@ def _auto_create_detect_reply_task(db: Session, notify_task: WechatTask) -> Wech
     except Exception as exc:
         logger.error("自动创建 detect_reply task 失败: %s", exc)
         return None
+
+
+# ============================================================================
+# P2-M04 notify_sales Claim / Lease / Callback CAS / Stale Quarantine / Manual Resolution
+# Candidate C — 设计审批 APPROVED_WITH_CORRECTIONS
+# ============================================================================
+
+
+def claim_notify_sales_task(
+    db: Session,
+    *,
+    merchant_id: str,
+    agent_hostname: str | None = None,
+    agent_pid: int | None = None,
+) -> dict | None:
+    """P2-M04 Candidate C：原子 claim 一个 pending notify_sales task。
+
+    B-Order-1：UNIQUE gate（status=pending CAS）在 account mutation 前。
+    C11：claimed_at 复用 execution_started_at。
+    C12：merchant boundary 靠 JOIN lead+staff（不依赖 merchant_id 列）。
+    C13：每次 poll 最多 claim 1 个。
+
+    返回 dict 含 task payload + raw claim_token（明文，只返回给当前 agent）。
+    无 eligible task 或 claim 冲突 → None。
+    """
+    # C12: merchant boundary via JOIN lead+staff
+    eligible = (
+        db.query(WechatTask)
+        .join(DouyinLead, WechatTask.lead_id == DouyinLead.id)
+        .join(SalesStaff, WechatTask.staff_id == SalesStaff.id)
+        .filter(
+            WechatTask.task_type == "notify_sales",
+            WechatTask.status == "pending",
+            and_(
+                DouyinLead.merchant_id == merchant_id,
+                SalesStaff.merchant_id == merchant_id,
+            ),
+        )
+        .order_by(WechatTask.id.asc())
+        .first()
+    )
+    if eligible is None:
+        return None
+
+    # C22: 生成 cryptographic attempt token
+    raw_token = secrets.token_hex(32)
+    token_hash = _hash_token(raw_token)
+    now = datetime.now(timezone.utc)
+    lease_expires = now + timedelta(seconds=DEFAULT_LEASE_SECONDS)
+    claimed_by = f"{agent_hostname or 'unknown'}:{agent_pid or 0}"
+
+    # Atomic CAS: pending → running（B-Order-1，C9: new attempt = new token = new hash）
+    rowcount = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.id == eligible.id,
+            WechatTask.status == "pending",  # CAS condition
+        )
+        .update({
+            WechatTask.status: "running",
+            WechatTask.claim_token_hash: token_hash,
+            WechatTask.lease_expires_at: lease_expires,
+            WechatTask.attempt_count: WechatTask.attempt_count + 1,
+            WechatTask.claimed_by: claimed_by,
+            WechatTask.execution_started_at: now,  # C11: reuse as claimed_at
+        }, synchronize_session=False)
+    )
+    if rowcount == 0:
+        db.rollback()
+        return None  # Race lost（另一个 agent 已 claim）
+
+    db.commit()
+    db.refresh(eligible)
+
+    # C24: 日志不记录 raw token，只记 token presence + attempt_count
+    logger.info(
+        "P2-M04 claim_notify_sales: task=%s attempt=%s claimed_by=%s lease_expires=%s",
+        eligible.id, eligible.attempt_count, claimed_by, lease_expires.isoformat(),
+    )
+    return {
+        "task": eligible,
+        "claim_token": raw_token,  # raw token，只返回给当前 agent（DB 只存 hash）
+        "attempt_count": eligible.attempt_count,
+        "lease_expires_at": lease_expires,
+    }
+
+
+def reclaim_expired_claims(db: Session) -> dict:
+    """P2-M04 C1/C4：stale quarantine — running → uncertain（非 reclaim for resend）。
+
+    C1 Strategy-1：无 attempt_started phase，无法区分 pre/post side-effect → uncertain。
+    C4 Semantics A：lease expiry = eligible for stale CAS（非 immediate revocation）。
+    C8：原子 CAS WHERE status='running' AND lease_expires_at <= now。
+    """
+    now = datetime.now(timezone.utc)
+    # Atomic CAS: running + lease expired → uncertain（C1: STALE ATTEMPT QUARANTINE）
+    rowcount = (
+        db.query(WechatTask)
+        .filter(
+            WechatTask.task_type == "notify_sales",
+            WechatTask.status == "running",
+            WechatTask.lease_expires_at.isnot(None),
+            WechatTask.lease_expires_at <= now,
+        )
+        .update({
+            WechatTask.status: STATUS_UNCERTAIN,
+            WechatTask.failure_stage: "lease_expired_uncertain",
+        }, synchronize_session=False)
+    )
+    if rowcount > 0:
+        db.commit()
+        logger.warning(
+            "P2-M04 stale_quarantine: %s running task(s) → uncertain（lease expired，no blind resend）",
+            rowcount,
+        )
+    return {"running_to_uncertain": rowcount}
+
+
+def resolve_uncertain_task(
+    db: Session,
+    *,
+    task_id: int,
+    merchant_id: str,
+    action: str,
+    operator: str,
+    reason: str = "",
+) -> WechatTask:
+    """P2-M04 C8：uncertain → manual resolution（API-only 首批）。
+
+    Actions（C8 审批冻结）:
+    - mark_sent: uncertain → sent（operator 确认已发送）
+    - retry: uncertain → pending（旧 token 保留，下次 claim 覆盖）
+    - cancel: uncertain → cancelled
+
+    C12: merchant boundary via JOIN lead+staff。
+    C32: 复用 raw_result + failure_stage 记录审计。
+    """
+    task = get_agent_task(db, task_id, merchant_id)
+    if task is None:
+        raise ValueError("TASK_NOT_FOUND")
+    if task.status != STATUS_UNCERTAIN:
+        raise ValueError(f"TASK_NOT_UNCERTAIN(current={task.status})")
+    if action not in ("mark_sent", "retry", "cancel"):
+        raise ValueError(f"INVALID_ACTION: {action}")
+
+    now = datetime.now(timezone.utc)
+    # C32: 审计记录（复用 raw_result）
+    audit = {
+        "manual_resolution": action,
+        "operator": operator,
+        "reason": reason,
+        "from_status": "uncertain",
+        "to_status": "sent" if action == "mark_sent" else ("pending" if action == "retry" else STATUS_CANCELLED),
+        "timestamp": now.isoformat(),
+    }
+    task.raw_result = json.dumps(audit, ensure_ascii=False)
+
+    if action == "mark_sent":
+        task.status = "sent"
+        task.sent_at = now
+        task.failure_stage = "manual_resolved_sent"
+    elif action == "retry":
+        # C33: 旧 token 保留（下次 claim 覆盖 → 旧 token 永久 fenced）
+        task.status = "pending"
+        task.failure_stage = "manual_retry_from_uncertain"
+    elif action == "cancel":
+        task.status = STATUS_CANCELLED
+        task.failure_stage = "manual_cancel_from_uncertain"
+
+    db.commit()
+    db.refresh(task)
+    logger.info(
+        "P2-M04 manual_resolution: task=%s action=%s operator=%s reason=%s",
+        task_id, action, operator, reason,
+    )
+    return task

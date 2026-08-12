@@ -557,11 +557,13 @@ def _write_back_task_result(
     raw_result: dict | None = None,
     detected_status: str | None = None,
     detect_count: int | None = None,
+    claim_token: str | None = None,
 ) -> dict | None:
     """P0-MAIN-5B：回写任务结果到主系统。
 
     调用 POST {server_url}/wechat-tasks/{task_id}/result。
     将回写响应存入 result["write_back"]。
+    P2-M04 C35/C36：notify_sales 回写必须携带 claim_token（opaque credential）。
     """
     if not task_id:
         result["write_back"] = {"skipped": True, "reason": "no_task_id"}
@@ -589,6 +591,11 @@ def _write_back_task_result(
         payload["detected_status"] = detected_status
     if detect_count is not None:
         payload["detect_count"] = detect_count
+    # P2-M04 C36：notify_sales 必须带回原始 claim_token（Local Agent 不生成新 token）
+    # 优先用显式参数，fallback 从 result dict 读取（避免 25+ 调用点逐一传参）
+    _effective_token = claim_token or result.get("_claim_token")
+    if _effective_token is not None:
+        payload["claim_token"] = _effective_token
 
     wb_url = f"{server_url}/wechat-tasks/{task_id}/result"
     resp = _http_post_json(wb_url, payload)
@@ -1984,6 +1991,8 @@ def create_local_agent_app(
             target_nickname = task_data.get("target_nickname", "")
             mode = task_data.get("mode", "")
             message = task_data.get("message", "")
+            # P2-M04 C35：从 poll 响应提取 claim_token（opaque credential，Agent 不解析）
+            result["_claim_token"] = task_data.get("claim_token")
 
             # 3. 安全验证
             if task_type != "notify_sales":

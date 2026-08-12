@@ -329,6 +329,12 @@ class WechatTask(Base):
     attachment_file_name = Column(String(255), comment="attempt 级文件名快照")
     attachment_sha256 = Column(String(64), comment="attempt 级内容 hash 快照")
     attachment_size_bytes = Column(BigInteger, comment="attempt 级字节数快照")
+    # P2-M04 notify_sales claim/lease（Candidate C，claim 所有权 + lease + uncertain state）
+    # C11：claimed_at 复用 execution_started_at（已有列），不新增 claimed_at
+    claim_token_hash = Column(String(64), comment="P2-M04 claim token SHA-256（callback CAS）")
+    lease_expires_at = Column(DateTime, comment="P2-M04 lease 过期时间（DB authoritative time）")
+    attempt_count = Column(Integer, nullable=False, default=0, comment="P2-M04 执行尝试次数")
+    claimed_by = Column(String(100), comment="P2-M04 claim 时 agent identity（hostname+pid）")
 
     # 关联
     lead = relationship("DouyinLead")

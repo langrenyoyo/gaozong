@@ -1063,6 +1063,8 @@ class WechatTaskResultRequest(BaseModel):
     # P1-AUTO-1：detect_reply 专用字段
     detected_status: Optional[str] = Field(None, description="P1-AUTO-1：检测结果（仅 detect_reply 类型）: replied / pending / manual_review / failed / blocked")
     detect_count: Optional[int] = Field(None, description="P1-AUTO-1：累计检测次数（仅 detect_reply 类型）")
+    # P2-M04 C14：claim_token optional globally，required conditionally for notify_sales running attempts
+    claim_token: Optional[str] = Field(None, description="P2-M04：claim 所有权 token（notify_sales running attempt REQUIRED，detect_reply 无要求）")
 
 
 class WechatTaskResponse(BaseModel):
@@ -1084,6 +1086,10 @@ class WechatTaskResponse(BaseModel):
     sent_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # P2-M04：claim/lease 元数据（仅 notify_sales claim 后返回）
+    attempt_count: Optional[int] = None
+    lease_expires_at: Optional[datetime] = None
+    claim_token: Optional[str] = Field(None, description="P2-M04：raw claim token（仅 claim 时返回给当前 agent，不持久化到 ORM）")
 
     model_config = {"from_attributes": True}
 

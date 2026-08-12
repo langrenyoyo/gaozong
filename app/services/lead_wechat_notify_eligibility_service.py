@@ -16,7 +16,8 @@ from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 # Phase 7-FIX1：固定 10 秒限频窗口；O(1) 查询，上限为同商户同销售并发数
 NOTIFY_SALES_RATE_LIMIT_SECONDS = 10
 # 限频视为"活跃任务"的状态集合（包括 pasted 和 sent，补齐 Phase 7 遗漏）
-ACTIVE_NOTIFY_TASK_STATUSES = {"pending", "running", "pasted", "sent"}
+# P2-M04 C2：新增 uncertain（running/uncertain outstanding 均阻断 producer 创建新 task）
+ACTIVE_NOTIFY_TASK_STATUSES = {"pending", "running", "uncertain", "pasted", "sent"}
 
 
 class LeadWechatNotifyReason:

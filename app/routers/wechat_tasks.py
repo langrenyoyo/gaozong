@@ -107,9 +107,41 @@ def get_pending_wechat_tasks(
     """查询 pending 状态的微信任务（Local Agent 专用，需 token 鉴权）。
 
     Phase 7-FIX2：强制 Local Agent token 鉴权 + 商户隔离。
-    只返回当前 token 对应商户的 pending 任务。
+    P2-M04 Candidate C：notify_sales 走 claim-and-return-one（C13），
+    detect_reply 保持 read-only（C12 mode-specific behavior）。
     """
     ctx = require_local_agent_context(request)
+
+    # P2-M04：notify_sales claim-and-return-one（C13: 每次 poll 最多 claim 1 个）
+    if task_type == "notify_sales":
+        agent_hostname = request.headers.get("X-Agent-Hostname")
+        agent_pid_str = request.headers.get("X-Agent-Pid")
+        agent_pid = int(agent_pid_str) if agent_pid_str and agent_pid_str.isdigit() else None
+        claimed = wechat_task_service.claim_notify_sales_task(
+            db,
+            merchant_id=ctx.merchant_id,
+            agent_hostname=agent_hostname,
+            agent_pid=agent_pid,
+        )
+        if claimed is None:
+            return []
+        task = claimed["task"]
+        return [WechatTaskResponse(
+            id=task.id, task_type=task.task_type,
+            lead_id=task.lead_id, staff_id=task.staff_id,
+            reply_check_id=task.reply_check_id,
+            target_nickname=task.target_nickname, message=task.message,
+            mode=task.mode, status=task.status,
+            failure_stage=task.failure_stage, raw_result=task.raw_result,
+            agent_hostname=task.agent_hostname, agent_pid=task.agent_pid,
+            pasted_at=task.pasted_at, sent_at=task.sent_at,
+            created_at=task.created_at, updated_at=task.updated_at,
+            attempt_count=claimed["attempt_count"],
+            lease_expires_at=claimed["lease_expires_at"],
+            claim_token=claimed["claim_token"],
+        )]
+
+    # detect_reply / 其他：保持原 read-only 查询（C12）
     return wechat_task_service.get_pending_wechat_tasks(
         db,
         limit=limit,
@@ -187,19 +219,76 @@ def submit_wechat_task_result(
     if task.task_type == "send_report_attachment":
         raise HTTPException(409, "附件任务须走专用 result 端点")
 
-    return wechat_task_service.submit_wechat_task_result(
-        db,
-        task,
-        success=data.success,
-        verified=data.verified,
-        partial_match=data.partial_match,
-        manual_review_required=data.manual_review_required,
-        pasted=data.pasted,
-        sent=data.sent,
-        failure_stage=data.failure_stage,
-        agent_hostname=data.agent_hostname,
-        agent_pid=data.agent_pid,
-        raw_result=data.raw_result,
-        detected_status=data.detected_status,
-        detect_count=data.detect_count,
-    )
+    try:
+        return wechat_task_service.submit_wechat_task_result(
+            db,
+            task,
+            success=data.success,
+            verified=data.verified,
+            partial_match=data.partial_match,
+            manual_review_required=data.manual_review_required,
+            pasted=data.pasted,
+            sent=data.sent,
+            failure_stage=data.failure_stage,
+            agent_hostname=data.agent_hostname,
+            agent_pid=data.agent_pid,
+            raw_result=data.raw_result,
+            detected_status=data.detected_status,
+            detect_count=data.detect_count,
+            claim_token=data.claim_token,  # P2-M04 C14: notify_sales required, detect_reply optional
+        )
+    except wechat_task_service.StaleAttemptError as exc:
+        raise HTTPException(409, detail={"code": "STALE_ATTEMPT", "message": str(exc)}) from exc
+
+
+# ============================================================================
+# P2-M04 Manual Resolution API（C8：uncertain → explicit operator resolution，API-only 首批）
+# ============================================================================
+
+
+@router.post("/{task_id}/resolve", response_model=WechatTaskResponse)
+def resolve_uncertain_task(
+    task_id: int,
+    action: str,
+    reason: str = "",
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+):
+    """P2-M04 C8：uncertain task 手动解决（API-only，需人类用户鉴权）。
+
+    Actions: mark_sent / retry / cancel
+    C31: 复用现有权限体系（auto_wechat:agent）
+    C32: 复用 raw_result + failure_stage 审计
+    """
+    require_permission("auto_wechat:agent")(context)
+    if not context.merchant_id:
+        raise HTTPException(403, "缺少可信商户上下文")
+    try:
+        return wechat_task_service.resolve_uncertain_task(
+            db,
+            task_id=task_id,
+            merchant_id=context.merchant_id,
+            action=action,
+            operator=str(context.user_id or "unknown"),
+            reason=reason,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if "NOT_FOUND" in code:
+            raise HTTPException(404, "微信任务不存在") from exc
+        if "NOT_UNCERTAIN" in code:
+            raise HTTPException(409, detail={"code": "TASK_NOT_UNCERTAIN", "message": str(exc)}) from exc
+        raise HTTPException(400, detail={"code": "INVALID_ACTION", "message": str(exc)}) from exc
+
+
+@router.post("/reclaim-stale", response_model=dict)
+def reclaim_stale_claims(
+    context: RequestContext = Depends(get_request_context_required),
+    db: Session = Depends(get_db),
+):
+    """P2-M04 C1/C4：stale lease quarantine — running+expired → uncertain（opportunistic scan）。
+
+    可由 poll 端点内部触发或独立调度。需人类用户鉴权（非 Local Agent）。
+    """
+    require_permission("auto_wechat:agent")(context)
+    return wechat_task_service.reclaim_expired_claims(db)
