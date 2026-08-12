@@ -54,7 +54,7 @@ COMPUTE-IDEMPOTENCY-001（M07 ROOT CAUSE — HIGH-01）
 > - **RAG_QUERY_REQUEST_RECOVERY_GAP**（whole search request retry → 新 Execution → 新 charge；无 durable client request identity 证明 E1==E2；★ same Execution + same stage replay→P1 保护 / whole-request retry→未保证→P1 不解决）
 > - ★ **RUN_RECOVERY ≠ REQUEST_RECOVERY**（已有 Run 怎么恢复 vs 新 HTTP 调用怎么知道属于旧 Run），不合并
 > P1 不虚假宣称已解决跨进程请求级幂等。
-> ★ **CONSUMER_MIGRATION=COMPLETE / TECHNICAL_CLOSURE=BLOCKED_BY_CONCURRENT_LOST_UPDATE_REMEDIATION**：11/11 charge path MIGRATED + ACTIVE CONSUMER PG VERIFICATION=COMPLETE + F-1 RESOLVED + GLOBAL_ACTIVE_NONE_AUDIT=VERIFIED；**Final PG Concurrent Closure Gate = FAILED**（FC-F1: concurrent lost update，同 merchant distinct identity 并发扣费时 balance 部分覆盖；same-identity exactly-once 正确 FC-1/2/6 PASS；需独立返工设计修复 `_write_transaction_balance_only` FOR UPDATE + identity map，`P1_FINAL_POSTGRESQL_CONCURRENT_CLOSURE.md`）。COMPUTE-IDEMPOTENCY-001 仍 OPEN。
+> ★ **CONSUMER_MIGRATION=COMPLETE / TECHNICAL_CLOSURE=PENDING_FINAL_POSTGRESQL_CONCURRENT_CLOSURE_RERUN**：11/11 charge path MIGRATED + PG_VERIFICATION_COMPLETE + F-1 RESOLVED + GLOBAL_AUDIT_VERIFIED + FC-F1 RESOLVED（Candidate B atomic UPDATE RETURNING，`P1_FC_F1_CONCURRENT_BALANCE_LOST_UPDATE_IMPLEMENTATION_APPROVAL.md`）；**Final PG Concurrent Closure = FAILED / AUTHORIZED_FOR_FULL_RERUN**（须完整重跑 Final Closure-2）。COMPUTE-IDEMPOTENCY-001 仍 OPEN。
 
 ---
 

@@ -17,6 +17,7 @@ import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -153,35 +154,48 @@ def _write_transaction_balance_only(
     *,
     delta_tokens: int,
     capability_key: str | None = None,
-) -> None:
-    """幂等路径专用：已获得 ownership（txn 已 flush），只扣余额不写新流水。
+) -> int:
+    """幂等路径专用：已获得 ownership（txn 已 flush），原子更新余额。
 
-    与 _write_transaction 的区别：不 db.add(tx)（txn 已在调用前 add+flush），
-    只做 balance 更新 + flush。由 record_usage 幂等路径顶层 commit。
+    P1-FC-F1 Candidate B：PostgreSQL/SQLite atomic UPDATE ... RETURNING balance_tokens。
+    余额正确性从 ORM identity-map 读-改-写转为 DB 单语句行级原子算术，
+    消除并发 distinct identity 时的 lost update（identity-map stale read）。
+
+    C2：synchronize_session=False，不同步已缓存 ORM 对象。
+    C7：post-UPDATE 对 RETURNING new_balance 做范围校验。
+    C8：0-rows → COMPUTE_ACCOUNT_MISSING ValueError（非 IntegrityError，不进 replay catch）。
+
+    返回 RETURNING 的 new_balance（authoritative，非 ORM cached state）。
     """
-    locked = (
-        db.query(ComputeAccount)
-        .filter(ComputeAccount.merchant_id == account.merchant_id)
-        .with_for_update()
-        .first()
+    stmt = (
+        update(ComputeAccount)
+        .where(ComputeAccount.merchant_id == account.merchant_id)
+        .values(
+            balance_tokens=ComputeAccount.balance_tokens + delta_tokens,
+            updated_at=_now(),
+        )
+        .returning(ComputeAccount.balance_tokens)
     )
-    if locked is None:
+    result = db.execute(
+        stmt.execution_options(synchronize_session=False)
+    )
+    new_balance = result.scalar_one_or_none()
+    if new_balance is None:
+        # C8：account 不存在（step2 已 ensure，0-rows 为防御性）
         raise ValueError("COMPUTE_ACCOUNT_MISSING")
-    new_balance = locked.balance_tokens + delta_tokens
     if not _balance_within_bigint_range(new_balance):
+        # C7：范围守卫，超出触发 rollback
         raise ValueError("COMPUTE_BALANCE_OUT_OF_RANGE")
     if new_balance < 0:
         _logger.warning(
             "compute stage=negative_balance merchant_id=%s capability=%s "
             "balance_after=%d delta=%d",
-            locked.merchant_id,
+            account.merchant_id,
             capability_key,
             new_balance,
             delta_tokens,
         )
-    locked.balance_tokens = new_balance
-    locked.updated_at = _now()
-    db.flush()
+    return new_balance
 
 
 def _write_transaction(
@@ -713,17 +727,18 @@ def record_usage(
         )
         db.add(tx_candidate)
         try:
-            db.flush()  # INSERT 到事务内（未 commit）
+            db.flush()  # INSERT 到事务内（未 commit）— B-Order-1：UNIQUE gate 在 account mutation 前
             # flush 成功 → 获得 ownership → 同一事务内扣余额
             account = get_or_create_account(db, merchant_id, autocommit=False)
-            _write_transaction_balance_only(
+            # P1-FC-F1 Candidate B：atomic UPDATE ... RETURNING（C2：不读 stale account.balance_tokens）
+            new_balance = _write_transaction_balance_only(
                 db, account, delta_tokens=-billed_tokens,
                 capability_key=capability_key,
             )
-            # 更新 balance_after_tokens 到已写入的 txn（同一事务）
-            tx_candidate.balance_after_tokens = account.balance_tokens
-            db.commit()  # 单次 commit：transaction + balance 原子
-            db.refresh(account)
+            # C2：balance_after_tokens 来自 RETURNING authoritative 值，非 ORM cached state
+            tx_candidate.balance_after_tokens = new_balance
+            db.commit()  # 单次 commit：transaction INSERT + account UPDATE 原子
+            db.refresh(account)  # commit 后回填，返回 caller 正确 account
             return {"account": account, "idempotency_status": "created"}
         except IntegrityError:
             # IntegrityError may be raised during flush/commit → rollback entire current transaction
