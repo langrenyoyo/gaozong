@@ -2,6 +2,13 @@
 # 本文件是唯一 production 主入口（PostgreSQL + 外部 Milvus + 真实 NewCar）。
 # 本地开发 / LAN 使用独立的 docker-compose.dev.yml（SQLite + mock + 能力中心），不是本文件的 override。
 # staging 使用 docker-compose.yml + docker-compose.staging.yml 组合，staging 文件禁止单独运行。
+#
+# 部署镜像身份（S10-B，RE-B per-service image env var）：
+# - auto-wechat-api（9000）image = ${AUTO_WECHAT_API_IMAGE:-xg-ai-system-backend:latest}
+# - xg-douyin-ai-cs（9100）image = ${XG_DOUYIN_AI_CS_IMAGE:-xg-ai-system-backend:latest}
+# - 未显式配置时回落共享 :latest（开发/默认行为，RG-7 向后兼容）。
+# - 正式 baseline catch-up 必须用两个独立 immutable image identity（9000 ≠ 9100），
+#   不得依赖歧义的共享 mutable :latest（RG-8 / RE-AC11）。变量由 --env-file 传入。
 
 services:
   # PostgreSQL（方案 A：一个 PG 实例两个 database）
@@ -26,7 +33,9 @@ services:
     restart: unless-stopped
 
   auto-wechat-api:
-    image: xg-ai-system-backend:latest
+    # S10-B（RE-B）：9000 image identity 可被独立指定（AUTO_WECHAT_API_IMAGE），默认回落 :latest。
+    # baseline catch-up 期间 9000 必须用 immutable target image，9100 不受影响。
+    image: ${AUTO_WECHAT_API_IMAGE:-xg-ai-system-backend:latest}
     build:
       context: .
       dockerfile: Dockerfile.backend.dev
@@ -59,7 +68,9 @@ services:
       start_period: 20s
 
   xg-douyin-ai-cs:
-    image: xg-ai-system-backend:latest
+    # S10-B（RE-B）：9100 image identity 可被独立指定（XG_DOUYIN_AI_CS_IMAGE），默认回落 :latest。
+    # catch-up 期间 9100 冻结（frozen old image / DB 0003），不得 recreate / migrate。
+    image: ${XG_DOUYIN_AI_CS_IMAGE:-xg-ai-system-backend:latest}
     build:
       context: .
       dockerfile: Dockerfile.backend.dev

@@ -197,6 +197,39 @@ P3-CONFIG-EXTERNAL-MILVUS-CORRECTION-1：production 固定使用外部 Milvus（
 3. 两者必须相等，且等于 collection 实际维度（`_validate_collection_schema` 比对）
 不一致 → `MILVUS_DIMENSION_MISMATCH`，启动/readiness 失败，不静默修正、不回退 SQLite。
 
+### Compose 部署镜像身份（S10-B，production 模板）
+
+S10-B（RE-B，per-service image env var）：9000 与 9100 的部署镜像身份解耦，可分别指定不同的 immutable image ref。这两个变量由 `docker compose --env-file .env.production.local` 变量插值消费，作用于 `docker-compose.yml` 中 `auto-wechat-api` / `xg-douyin-ai-cs` 的 `image` 字段。
+
+> 消费事实修正：`.env.production.local` 同时是 9000/9100 的 service `env_file`，因此真实文件中的这两个键也会进入容器环境；但应用不读取它们（服务=compose 插值），进容器只是 env_file 副作用。
+
+| 变量 | 服务 | 默认值 | 模板 | 类别 | 用途 |
+|---|---|---|---|---|---|
+| `AUTO_WECHAT_API_IMAGE` | compose | xg-ai-system-backend:latest | prod | deploy | 9000 部署镜像 ref；catch-up 期间必须为 immutable target image |
+| `XG_DOUYIN_AI_CS_IMAGE` | compose | xg-ai-system-backend:latest | prod | deploy | 9100 部署镜像 ref；catch-up 期间冻结为 preserved old image |
+
+语义约束（RG-1~RG-8 / RE-AC11）：
+- 默认值 `:latest` 仅代表开发/默认行为（向后兼容）；正式 baseline catch-up 禁止依赖共享 mutable `:latest`。
+- 9000 ≠ 9100 成为两个独立 image contract；只改 9000 不影响 9100。
+- 变更 image 只影响容器启动时的镜像选择，不引入任何 migration 命令，不触发 9100 0003→0005。
+- 完整 contract 见 `docs/architecture/remediation/S10_B_9000_9100_IMAGE_IDENTITY_ISOLATION_IMPLEMENTATION.md`。
+
+**宿主环境 precedence 警告（Correction-1 真实验证）**：Docker Compose 插值 precedence 是「宿主 shell 环境 > `--env-file` 文件」，`--env-file` 不能覆盖宿主已经导出的同名变量（已用真实 `docker compose config` 验证）。因此 production/rehearsal 执行 MUST 使用受控 wrapper（`scripts/release_9000_s10b.py`）做环境 sanitization + fail-closed preflight + canonical 9000-only compose invocation，并带 `--expected-9000` / `--expected-9100` 校验；不得假设 `--env-file` 单独就能击败每个已导出的 shell 变量，除非经真实验证的机制能保证（当前 wrapper 通过显式移除宿主 IMAGE 变量保证）。
+
+**Canonical 9000-only release command（C1，唯一受支持）**：
+
+```bash
+docker compose --env-file .env.production.local -f docker-compose.yml up -d --no-deps --no-build auto-wechat-api
+```
+
+- `--env-file`：强制使用显式 production/rehearsal identity contract，避免错误继承宿主 shell 环境；
+- `--no-deps`：9000-only，避免依赖服务被带动，特别保护 frozen 9100（本就不在 9000 依赖图）；
+- `--no-build`：禁止 recreate 时基于当前 source 意外重建，保持 exact prebuilt image identity；
+- 仅 target `auto-wechat-api`，不含 `xg-douyin-ai-cs`。
+- `restart` ≠ recreate using target image，不得用 `docker compose restart auto-wechat-api` 作为镜像切换。
+
+**Fail-closed preflight（C2）**：`python scripts/release_9000_s10b.py --env-file <ENV> [--expected-9000 <img>] [--expected-9100 <img>] [--dry-run|--apply]`。校验两服务最终 image identity，拒绝 missing/empty/`:latest`/相同共享 mutable/expected 不一致/env 文件不可读/compose config 解析失败；成功仅输出 resolved image 摘要与 `identity isolation PASS`，不输出 secret。
+
 ---
 
 ## 2. 高级调优变量（不进入模板）
