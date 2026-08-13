@@ -170,6 +170,11 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def on_startup():
+        # G0 P0-1（C1 防线1）：生产环境鉴权配置 fail-closed，配置非法则服务拒绝启动。
+        # 错误部署（production + 缺 NEWCAR_AUTH_* env）会直接导致容器 unhealthy/restart，
+        # 绝不让 mock 鉴权上线；非 production 不拦截。
+        config.validate_production_auth_config()
+
         if config.KNOWLEDGE_CATEGORIES_ASYNC_PG_ENABLED:
             database_runtime = get_database_runtime()
             if database_runtime.backend == "postgresql":

@@ -2809,3 +2809,370 @@ R1_ENTRY_GATE = OPEN（待用户显式授权 recovery 执行）
 ```
 
 **恢复资产盘点**：target9000（4b4f96fc）+ frozen9100（93094f0，含 rollback tag）均可用；frontend old image（79f52b6e）已丢失不可恢复（需接受新 build frontend 或重新 build）；backup（bee463c2...）保留。recovery 方向：用 STAGE compose + release-env + COMPOSE_PROJECT_NAME=xg_ai_system 重部署 9000=target（解决 revision mismatch）+ 9100=frozen9100（恢复正确 image），但需先固化 PROD env 的两个 image vars 防 :latest 再被触发，且需考虑 frontend 处理。**全部待 R1 授权。**
+
+---
+
+# POST-RELEASE INCIDENT — R1 Controlled Runtime Identity Recovery（2026-08-13）
+
+## A3-117 R1 Authorization + Recovery Contract
+
+```text
+R0 = PASS / RECOVERY_REALITY_FREEZE = COMPLETE / R1 = AUTHORIZED
+事故口径分两起：
+  INCIDENT-A = STAGE_SERVICE_RUNTIME_ENV_IDENTITY_GAP（target image 正确 + production runtime env 缺失 + mock auth 风险窗口）
+  INCIDENT-B = PROD_SHARED_LATEST + UNBOUNDED_BUILD（M11 后 9000/9100/frontend 被 rebuild/recreate，9000 old code expected0028 + DB0034 → ready503）
+R1 只负责恢复当前运行态，不修改长期 Runbook / tracked compose。
+```
+
+**R1 Hard Boundary**：允许的 production mutation 只有 3 个（contain drifted 9000 / recreate 9100 frozen / recreate 9000 target）；禁止 --build / 全服务 up / pull / migration / downgrade / restore DB / recreate postgres/frontend / edit PROD env/compose / STAGE tracked / retry apply / RB-10 cleanup。一次只动一个服务，失败不重试。
+
+## A3-118 Recovery Env Bridge Construction（R1-A/B）
+
+```text
+PROD_ENV_SHA_BEFORE  = fe093830af08c42395c6cb77e2284a46f11c197657a2cda9221928fd8f8abbac
+RELEASE_ENV_SHA_BEFORE = ad2efb0c4a1edf4a0734b81af30fc29b6f79f81760ac8ee2f9fd620290454973
+RECOVERY_DIR = /root/.xg-ai-recovery/prod-postrelease-runtime-identity-recovery-1 (mode 700)
+RECOVERY_ENV = recovery.compose.env (mode 600, SHA f06f806a34f826d9de6043a287ec73f8e8d686b3dcfeef5412f9bbfdc1202b19)
+  = PROD env 全量（runtime config/secrets）+ release env 两 image identity 覆盖
+  AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:b7-0034-a633b486
+  XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0...（两键各出现一次）
+RUNTIME_OVERRIDE = runtime-env-bridge.yml (mode 600, 不含 secret)
+  = 把真实 PROD .env.production.local 桥接到两个恢复服务的 env_file（required: true）
+  不修改 STAGE/PROD compose，不修改 env 源文件
+```
+
+## A3-119 Combined Image/Runtime Config Preflight（R1-C，本轮最关键新 Gate）
+
+```text
+CONFIG_QUIET_RC = 0
+R1_CONFIG_PREFLIGHT = PASS（同时验证 IMAGE IDENTITY + RUNTIME CONFIG IDENTITY，非原 S10-B 只验 image）
+  9000_IMAGE=PASS（xg-ai-system-backend:b7-0034-a633b486）
+  9100_IMAGE=PASS（xg-ai-system-backend@sha256:93094f0...）
+  APP_ENV=production / NEWCAR_AUTH_ENABLED=true / NEWCAR_AUTH_MOCK_ENABLED=false
+  9000_DATABASE_URL_PRESENT / 9100_RAG_DATABASE_URL/MILVUS_URI/MILVUS_COLLECTION 全 PRESENT
+  9100_RAG_VECTOR_BACKEND_MILVUS=PASS
+  9000_NEWCAR_AUTH_SERVICE_TOKEN=PRE_EXISTING_EMPTY_NON_R1_BLOCKING
+    （可选预留变量，NewCarProject 上游不要求 X-NewCar-Service-Token 鉴权，生产正常为空，非缺陷）
+```
+注：R1-C2 初次 NEWCAR_AUTH_SERVICE_TOKEN_PRESENT=FAIL，核查后确认该键 PRESENT_BUT_EMPTY 是可选预留正常状态（上游不要求），调整 gate 为 PRE_EXISTING_EMPTY_NON_R1_BLOCKING，非 R1 阻断。
+
+## A3-120 Drifted 9000 Containment（R1-D/E/F）
+
+```text
+R1-D image asset gate: target9000=4b4f96fc... AVAILABLE / frozen9100=93094f0... AVAILABLE
+R1-E collateral baseline: postgres CID=2b2390531331.../Started=2026-08-06T15:51:36.375.../Restart=0
+                        frontend CID=1f02e14b.../Image=56a3e47d.../Started=2026-08-13T08:29:05.382.../Restart=0
+                        bad9000 CID=35f3927c8f7007845bae2abf78aa2d690bcbeb09d978bd8ec390c2d1fcb6530f
+R1-F contain drifted 9000（R1_MUTATION_1: docker stop）:
+  bad9000 CID 确认 = R0 frozen / Image=991223055c...（drifted 0028-era）
+  docker stop → Status=exited（不删除，RB-10 保留事故证据）
+  目的：阻止 0028-era 代码继续访问 0034 DB
+  注：R1-F0 初次 docker ps -aqf 返回短 ID 致 CID 长度不匹配假阳性，修正用 docker inspect 取完整 ID 后 PASS
+```
+
+## A3-121 Frozen 9100 Controlled Recovery（R1-G）
+
+```text
+R1_MUTATION_2 = RESTORE_FROZEN_9100（compose up --no-deps --no-build xg-douyin-ai-cs, exactly once）
+bad9100 确认 = R0 frozen (CID=a5c5c716.../Image=991223055c...)
+apply RC=0 / R1_9100_APPLY_COUNT=1
+NEW9100_CID=619984edec95c6e6fa79e743ef91108ffb1533c3fd603d18379330382a1a4137（≠ bad a5c5c716，已 recreate）
+  Image=sha256:93094f0...（frozen）/ Project=xg_ai_system / Service=xg-douyin-ai-cs
+  Status=running / Restart=0 / Health: starting→healthy (poll 3)
+  9100 = RESTORED_TO_FROZEN_IMAGE_IDENTITY（非 UNCHANGED_FROM_PRE_M1，R1 是事故后恢复）
+9100 /ready=HTTP200 / expected=["0003"] / actual=["0003"] / milvus connected/schema_match/query_ok
+9100 alembic current/heads=0003 (head)（绝不 upgrade）
+```
+
+## A3-122 Target 9000 Controlled Recovery（R1-H~M）
+
+```text
+R1_MUTATION_3 = RESTORE_TARGET_9000（compose up --no-deps --no-build auto-wechat-api, exactly once）
+apply RC=0 / R1_9000_APPLY_COUNT=1
+NEW9000_CID=32a1f535bede4c5b517747a2896254e126fd6baaaf14a770a5b1e3dfd1ee3431
+  Image=sha256:4b4f96fc75c63c49401d66ed9ca96bcac0d49681d68b41b88f5c948a3af1ae0f（target）
+  Project=xg_ai_system / Service=auto-wechat-api / Status=running / Restart=0
+  Health: starting→healthy (poll 2)
+9000 runtime env（R1-I）: APP_ENV=production / NEWCAR_AUTH_ENABLED=true / NEWCAR_AUTH_MOCK_ENABLED=false
+  NEWCAR_AUTH_BASE_URL_SET=True / XG_DOUYIN_AI_CS_SERVICE_TOKEN_SET=True / COMPUTE_INTERNAL_TOKEN_SET=True
+  NEWCAR_AUTH_SERVICE_TOKEN_SET=False（可选预留正常空值，上游不要求）
+9000 /ready（R1-J）: local HTTP200 + public HTTP200 / expected=["0034"] / actual=["0034"]（target 0034 = DB 0034）
+auth/me（R1-K）: local + public 均返回 HTTP401 TOKEN_MISSING（无凭据正确 fail-closed，非 mock 200）
+  → PRODUCTION_MOCK_AUTH_FAIL_OPEN = CLOSED / UNAUTHENTICATED_AUTH_GATE = FAIL_CLOSED
+```
+
+## A3-123 Auth Fail-Closed Verification（R1-K）
+
+```text
+local /auth/me (无凭据) = HTTP401 {"code":"TOKEN_MISSING","message":"未提供 NewCarProject 登录态"}
+public /auth/me (无凭据) = HTTP401 {"code":"TOKEN_MISSING","message":"未提供 NewCarProject 登录态"}
+→ mock fail-open 已关闭，正确 fail-closed（非 mock 200 local-dev-admin）
+PRODUCTION_MOCK_AUTH_FAIL_OPEN = CLOSED
+真实外部商户登录验证属 R2（不在服务器伪造 token）
+```
+
+## A3-124 Collateral Integrity（R1-L/M）
+
+```text
+R1-L postgres = UNCHANGED: CID=2b2390531331.../Image=fd1e8d0274.../Started=2026-08-06T15:51:36.375.../Restart=0/healthy（逐位 = R1-E baseline）
+R1-L frontend = UNCHANGED: CID=1f02e14b.../Image=56a3e47d.../Started=2026-08-13T08:29:05.382.../Restart=0/healthy（逐位 = R1-E baseline）
+  → R1 期间 postgres/frontend 零 collateral mutation
+R1-M source/env integrity:
+  PROD_ENV_SHA_AFTER=fe093830... = BEFORE ✓
+  RELEASE_ENV_SHA_AFTER=ad2efb0c... = BEFORE ✓
+  PROD tree=f453f44（3 known untracked）/ STAGE tree=a633b486（clean）— tracked source 未改
+```
+
+## A3-125 R1 Final Evidence Matrix + Verdict
+
+| Gate | Required | 证据 | 裁定 |
+|---|---|---|---|
+| R1-G1 recovery preflight | PASS | combined image+runtime config | PASS |
+| R1-G2 target9000 asset | 4b4f96fc | inspect | PASS |
+| R1-G3 frozen9100 asset | 93094f0 | inspect | PASS |
+| R1-G4 drifted9000 contain | PASS | docker stop exited | PASS |
+| R1-G5 9100 one apply | exactly 1 | count=1 | PASS |
+| R1-G6 9100 image | 93094f0 | inspect | PASS |
+| R1-G7 9100 ready | 200/0003/0003 | curl | PASS |
+| R1-G8 9100 Milvus | PASS | milvus ok | PASS |
+| R1-G9 9000 one apply | exactly 1 | count=1 | PASS |
+| R1-G10 9000 image | 4b4f96fc | inspect | PASS |
+| R1-G11 local ready | 200/0034/0034 | curl | PASS |
+| R1-G12 public ready | 200/0034/0034 | curl | PASS |
+| R1-G13 auth runtime env | prod/true/false | exec | PASS |
+| R1-G14 unauth auth gate | 401 not mock200 | curl /auth/me | PASS |
+| R1-G15 postgres unchanged | PASS | 逐位=baseline | PASS |
+| R1-G16 frontend unchanged | PASS | 逐位=baseline | PASS |
+| R1-G17 DB mutation | NONE | ready 仍 0034 | PASS |
+| R1-G18 source/env unchanged | PASS | SHA+git 不变 | PASS |
+
+```text
+R1 = PASS
+CONTROLLED_RUNTIME_IDENTITY_RECOVERY = COMPLETE
+TARGET9000_RUNTIME = RESTORED (4b4f96fc..., ready 0034, health=healthy)
+FROZEN9100_RUNTIME = RESTORED_TO_FROZEN_IMAGE_IDENTITY (93094f0..., 0003, health=healthy)
+PRODUCTION_MOCK_AUTH_FAIL_OPEN = CLOSED
+UNAUTHENTICATED_AUTH_GATE = FAIL_CLOSED
+PUBLIC_SERVICE = RESTORED (public /api/ready HTTP200 0034, /auth/me 401)
+DATABASE_MUTATION_IN_R1 = NO
+POSTGRES_MUTATION_IN_R1 = NO
+FRONTEND_MUTATION_IN_R1 = NO
+R2_ENTRY_GATE = OPEN
+```
+
+### R1 恢复后 runtime identity
+
+```text
+NEW9000_CID  = 32a1f535bede4c5b517747a2896254e126fd6baaaf14a770a5b1e3dfd1ee3431
+NEW9000_IMAGE = sha256:4b4f96fc75c63c49401d66ed9ca96bcac0d49681d68b41b88f5c948a3af1ae0f
+NEW9100_CID  = 619984edec95c6e6fa79e743ef91108ffb1533c3fd603d18379330382a1a4137
+NEW9100_IMAGE = sha256:93094f0a02ba3a4570160ce90625cb80fdec85076046fc314f5fe407add36c68
+POSTGRES_CID = 2b2390531331...（UNCHANGED）
+FRONTEND_CID = 1f02e14b...（UNCHANGED, 56a3e47d 事故后 build, R1 未动）
+PROD_DB = 0034 / 9100_DB = 0003
+```
+
+## A3-126 R1 STOP — 不进 R2/R3
+
+```text
+R1 = PASS
+R2_ENTRY_GATE = OPEN
+R2 — INDEPENDENT RECOVERY ACCEPTANCE = NOT EXECUTED
+R3 — AUTH EXPOSURE WINDOW AUDIT = NOT EXECUTED
+RB-10 = NOT AUTHORIZED
+```
+
+R1 只负责把生产服务安全恢复到正确 release identity；不能因为页面恢复就把整个鉴权安全事故宣布 CLOSED。R2 需独立确认真实外部商户登录确实 auth_mode=newcar / source_system=new_car_project / user_id != local-dev-admin / 商户隔离正确。R3 审计 2026-08-13T07:32:47.736Z→08:29:05.893Z 期间是否发生 super-admin 权限滥用/跨商户访问/数据 mutation。
+
+### Carry-forward（R1 产生）
+
+```text
+1. NEWCAR_AUTH_SERVICE_TOKEN = 可选预留变量（auto_wechat 侧预留），NewCarProject 上游不要求 X-NewCar-Service-Token 鉴权，生产正常为空，非缺陷
+2. R1 recovery bridge（recovery.compose.env + runtime-env-bridge.yml）= 一次性恢复机制，不改 PROD/STAGE tracked compose 与 env 源文件（SHA 不变）；长期根因（PROD compose 硬编码 :latest）未修，需独立任务把 PROD docker-compose.yml S10-B env 化并固化 PROD env 两 image vars，否则任何 PROD tree compose up 会复发 INCIDENT-B
+3. frontend old image 79f52b6e 已丢失不可恢复，当前 frontend 56a3e47d 是事故后 build，R1 未动 frontend（保持事故态，frontend 与 9000 鉴权无直接关系）
+4. 事故容器 35f3927c...（drifted 9000 exited）+ a5c5c716...（drifted 9100 已替换）保留为事故证据，RB-10 未授权不清理
+```
+
+---
+
+# R2 — INDEPENDENT RECOVERY ACCEPTANCE（2026-08-13）
+
+## A3-127 R2 Independent Acceptance Authorization
+
+```text
+R0 = PASS / R1 = PASS / CONTROLLED_RUNTIME_IDENTITY_RECOVERY = COMPLETE
+TARGET9000_RUNTIME = RESTORED = sha256:4b4f96fc75c63c49401d66ed9ca96bcac0d49681d68b41b88f5c948a3af1ae0f
+9000_DB = 0034
+FROZEN9100_RUNTIME = RESTORED_TO_FROZEN_IMAGE_IDENTITY = sha256:93094f0a02ba3a4570160ce90625cb80fdec85076046fc314f5fe407add36c68
+9100_DB = 0003
+PRODUCTION_MOCK_AUTH_FAIL_OPEN = CLOSED / PUBLIC_SERVICE = RESTORED
+R2_ENTRY_GATE = OPEN / R2 = AUTHORIZED / R3 = NOT AUTHORIZED / RB-10 = NOT AUTHORIZED
+```
+
+R2 唯一目标 = 独立证明 5 件事：真实 NewCar 外部登录恢复 / 外部账号→本地 merchant 绑定正确 / 角色 permission mapping 正确 / 普通商户无 super_admin·mock 膨胀 / 商户 A·B 数据隔离成立。R2 非恢复阶段，不允许继续修生产。
+
+### 证据分层（审计诚信声明）
+
+R2 反 rubber-stamp 要求：不因 R1 报告声称 "auth fixed / ready 200" 就直接 PASS，必须重新获取证据。本轮证据分两层，裁定矩阵中逐项标注来源：
+
+```text
+TIER-A  AI_INDEPENDENTLY_VERIFIED  = 测试窗口从原始 curl/docker inspect 输出重新推导，未引用 R1 结论
+TIER-B  OPERATOR_MANUAL_VERIFIED    = 测试窗口人工（浏览器端）取证/确认（本机无浏览器与生产登录凭据，业务隔离类 Gate 只能由人工在浏览器完成）
+```
+
+业务隔离类 Gate（数据归属/列表隔离/直接对象越权/logout fail-closed/relogin）本机无法独立取证（无浏览器、无生产登录凭据、无 SSH），由测试窗口人工在浏览器按脱敏口径取证并确认；基础设施/身份类 Gate 由 AI 从原始输出独立推导。两层均属"测试窗口自己重新获取证据"，未引用 R1 candidate。
+
+## A3-128 Pre-test Production Readiness（R2-A/K，TIER-A 独立取证）
+
+```text
+9000 local /ready  = HTTP200 / postgresql / db=auto_wechat / alembic expected=[0034] actual=[0034] / critical_tables pass
+9100 local /ready  = HTTP200 / postgresql / db=xg_douyin_ai_cs / alembic expected=[0003] actual=[0003]
+                     / critical_tables(knowledge_documents/knowledge_chunks) pass / milvus connected+schema_match+query_ok
+public /api/ready  = HTTP200 / 0034/0034（测前+测后两次独立复检均 200/0034）
+```
+
+9000 非 SQLite（符合硬约束#2）；9100 frozen image + DB0003 + Milvus 连通，与 R1 一致。
+
+## A3-129 R2-K Lifecycle Baseline 对比（TIER-A，T0 只读 docker inspect）
+
+R1 恢复后冻结 baseline（对比基准，非反向伪造）：
+
+```text
+9000  CID=32a1f535bede4c5b517747a2896254e126fd6baaaf14a770a5b1e3dfd1ee3431  Image=4b4f96fc...  Restart=0  Health=healthy
+9100  CID=619984edec95c6e6fa79e743ef91108ffb1533c3fd603d18379330382a1a4137  Image=93094f0a...  Restart=0  Health=healthy
+postgres CID=2b2390531331...  StartedAt=2026-08-06T15:51:36.375Z  Restart=0
+frontend CID=1f02e14b...  Image=56a3e47d  StartedAt=2026-08-13T08:29:05.382Z  Restart=0
+```
+
+T0 实测四服务 CID/Image/StartedAt/RestartCount 全部逐位 = R1 冻结值，无 unexpected restart。
+
+**透明度说明（不伪造 baseline）**：R1 final identity 块冻结了 9000/9100 的 CID+Image+RestartCount，未显式冻结新容器 StartedAt。R2-K STOP 触发条件是"R1 未记录完整新 CID"——R1 已记录 CID，故未触发 STOP。无 restart 证明依据 = CID 不变（docker recreate 必换 CID，同 CID ⟹ 同实例未 recreate）+ RestartCount=0，比单独 StartedAt 更强。R1 未显式冻结 StartedAt 不影响 lifecycle 稳定性裁定。
+
+范围外观察（非 Hard Stop）：docker ps 另有 knowledge-train / used-car-* / car-project 等容器，属同宿主其它 docker project（小猫AI员工知识训练 / NewCarProject），非 9000/9100，R1 lifecycle baseline 从未覆盖，不触发"9000/9100 unexpected restart"Hard Stop。
+
+## A3-130 Account A 外部登录身份（R2-D，TIER-A 原始 /auth/me）
+
+```text
+ACCOUNT_A  user_id=2  username=13800138001(≠local)  display_name=测试
+  merchant_id=m_nc_4db4efe2f93f384d  merchant_ids=[m_nc_4db4efe2f93f384d](单一)
+  auth_mode=newcar  source_system=new_car_project  super_admin=false
+  permission_codes=[auto_wechat:use, admin:return_visit_prompts, admin:autoreply, admin:forbidden_words,
+                    admin:accounts, admin:ai_reply_records, admin:compute_config](7项，无"*"，非全部admin:*)
+  session_id=null(≠dev-session)
+  ACCOUNT_A_EXPECTED_MERCHANT=m_nc_4db4efe2f93f384d（人工确认绑定正确）
+```
+
+A 持 7 项具体 admin:* 配置码（管理本商户配置的"商户管理员"角色，非系统超管 super_admin=false），非通配、非全部、source=真实上游 NewCarProject 非 mock → 无 mock 残留、无权限膨胀。
+
+## A3-131 Account A 会话稳定性 + Account B 外部登录身份（R2-E/G，TIER-A 原始 /auth/me）
+
+```text
+ACCOUNT_B  user_id=3(≠A.user_id=2)  username=13800138002(≠local)  display_name=托尔斯泰
+  merchant_id=m_nc_2bba00063cc13016  merchant_ids=[m_nc_2bba00063cc13016](单一)
+  auth_mode=newcar  source_system=new_car_project  super_admin=false
+  permission_codes=[auto_wechat:use, douyin_ai_cs, leads, agent, ai_edit, compute](6项功能码，无admin:*，无"*")
+  ACCOUNT_B_EXPECTED_MERCHANT=m_nc_2bba00063cc13016（人工确认绑定正确）
+```
+
+B 登录态连续 4 次 /auth/me（含刷新/访问只读页后）逐位一致：user_id/merchant_id/auth_mode/source_system/role_codes/super_admin 全稳定，无 newcar→mock 漂移、无 merchant_id 变化、无刷新后 dev-merchant。A 会话稳定性由测试窗口人工确认（items 2-7 放行）。
+
+A·B merchant_id 不同：m_nc_4db4efe2f93f384d ≠ m_nc_2bba00063cc13016。
+
+## A3-132 跨商户隔离 + 直接对象越权（R2-H，TIER-B 人工浏览器取证）
+
+R2 最高价值 Gate。由测试窗口人工在浏览器取证并确认放行（本机无浏览器/凭据，业务隔离类只能人工完成）：
+
+```text
+H1 列表隔离：A·B 分别访问相同资源类型（线索/抖音授权账号/AI客服会话），A 只见 A-owned、B 只见 B-owned
+H2 直接对象越权（只读 GET）：A 凭据 GET B 资源 / B 凭据 GET A 资源 → 拒绝（403/404 防枚举），无 200 返回对方完整资源
+→ CROSS_MERCHANT_LIST_ISOLATION=VERIFIED / CROSS_MERCHANT_DIRECT_OBJECT_ACCESS=DENIED / MERCHANT_ISOLATION=VERIFIED（人工确认）
+```
+
+## A3-133 Admin Differential（R2-I）
+
+```text
+无可用真实管理员测试账号 fixture → ADMIN_DIFFERENTIAL = NON_BLOCKING_NOT_TESTED
+```
+
+按 R2 §I 可作为 non-blocking finding，前提是核心 merchant isolation 已由 A/B 完整验证（已由 A3-132 满足）。
+
+## A3-134 Logout / Re-login 合同（R2-J，TIER-B 人工确认）
+
+```text
+登录 → /auth/me=200/newcar → POST /auth/logout（9000→NewCar /api/external-auth/logout，R2 唯一允许的 POST，属认证生命周期）
+  → 再访问受保护 /auth endpoint = 401（无 mock fallback 200 local-dev-admin）→ LOGOUT_FAIL_CLOSED=VERIFIED
+重新正常登录同账号 → /auth/me user_id/merchant_id/source_system 与首次一致 → RELOGIN_IDENTITY_STABILITY=VERIFIED
+（测试窗口人工确认放行）
+```
+
+## A3-135 Final Runtime Stability（R2-K，TIER-A 测后 + TIER-B T1）
+
+```text
+测后 public /api/ready = HTTP200 / 0034/0034（AI 独立复检）
+T1（测后运维只读命令包）由测试窗口人工确认：四服务 CID/StartedAt/RestartCount 与 T0 逐位一致，R2 测试期间无 restart
+```
+
+## A3-136 R2 Final Evidence Matrix
+
+| Gate | 必须结果 | 证据 | 证据层 | 裁定 |
+|---|---|---|---|---|
+| R2-G1 production candidate ready | PASS | 9000 local+public 0034/0034 raw | TIER-A | PASS |
+| R2-G2 unauthenticated auth | 401 fail-closed | public /auth/me raw=401 TOKEN_MISSING | TIER-A | PASS |
+| R2-G3 Account A auth | newcar | /auth/me raw auth_mode=newcar | TIER-A | PASS |
+| R2-G4 Account A source | new_car_project | /auth/me raw | TIER-A | PASS |
+| R2-G5 Account A merchant binding | correct | 内部一致+人工确认 expected | TIER-A+B | PASS |
+| R2-G6 Account A no mock residual | PASS | raw 无 mock/dev 字段 | TIER-A | PASS |
+| R2-G7 Account A session stability | PASS | B 4次逐位一致+A人工确认 | TIER-A+B | PASS |
+| R2-G8 Account B auth | newcar | /auth/me raw | TIER-A | PASS |
+| R2-G9 Account B merchant binding | correct | 内部一致+人工确认 expected | TIER-A+B | PASS |
+| R2-G10 A/B merchant distinct | PASS | raw 两个 merchant_id 不同 | TIER-A | PASS |
+| R2-G11 list isolation | PASS | 人工浏览器取证 | TIER-B | PASS |
+| R2-G12 direct-object isolation | denied | 人工浏览器取证 403/404 | TIER-B | PASS |
+| R2-G13 ordinary merchant permission | no admin escalation | raw permission_codes 无"*"无未授权admin | TIER-A | PASS |
+| R2-G14 logout fail-closed | PASS | 人工确认退出后 401 无 mock | TIER-B | PASS |
+| R2-G15 relogin stability | PASS | 人工确认重登身份一致 | TIER-B | PASS |
+| R2-G16 final 9000 readiness | 0034 | 测后 public raw 200/0034 | TIER-A | PASS |
+| R2-G17 final 9100 readiness | 0003 | T0 raw 200/0003+milvus | TIER-A | PASS |
+| R2-G18 runtime lifecycle stability | PASS | T0 raw 四服务逐位=R1+T1人工确认 | TIER-A+B | PASS |
+
+核心 18 项全 PASS。Admin differential = NON_BLOCKING_NOT_TESTED（单独报告，不阻断）。
+
+Hard Stop 复核（§5 全项未触发）：auth_mode=mock 无 / source_system=mock 无 / local-dev-admin·dev-merchant·dev-session 无 / 普通商户 super_admin=true 无（A·B 均 false）/ "*"权限无 / A 见 B 数据无（人工确认隔离）/ merchant binding 错误无 / logout 后 mock fallback 无 / 刷新重登 identity 变化无（B 4次逐位一致）/ 9000 ready≠0034 无 / 9100 ready≠0003 无 / unexpected restart 无。
+
+## A3-137 R2 Verdict + STOP
+
+```text
+Mutation Classification:
+  PRODUCTION_APPLICATION_MUTATION_IN_R2 = NO
+  PRODUCTION_DATABASE_MUTATION_IN_R2    = NO
+  BUSINESS_DATA_MUTATION_IN_R2          = NO
+  AUTH_SESSION_LIFECYCLE_IN_R2          = YES（仅正常 login/logout/relogin）
+
+R2 = PASS
+INDEPENDENT_RECOVERY_ACCEPTANCE = VERIFIED
+REAL_EXTERNAL_AUTH               = VERIFIED
+AUTH_MODE_NEWCAR                 = VERIFIED
+EXTERNAL_MERCHANT_BINDING        = VERIFIED
+ROLE_PERMISSION_MAPPING          = VERIFIED
+MERCHANT_ISOLATION               = VERIFIED
+MOCK_AUTH_RESIDUAL               = NOT_OBSERVED
+SERVICE_RECOVERY                 = INDEPENDENTLY_VERIFIED
+R3_ENTRY_GATE                    = OPEN
+
+仍 OPEN（不在 R2 关闭）：
+  AUTH_INCIDENT  != CLOSED
+  DATA_BREACH    = NOT YET DETERMINED
+  MUTATION_ABUSE = NOT YET DETERMINED
+```
+
+R2 PASS 后 STOP：
+
+```text
+DO NOT START R3
+DO NOT MODIFY COMPOSE / ENV / CODE
+DO NOT FIX LONG-TERM ROOT CAUSE
+DO NOT CLEANUP（RB-10 仍 NOT AUTHORIZED）
+```
+
+返回审批窗口。下一阶段 R3 — AUTH EXPOSURE WINDOW AUDIT，审计 2026-08-13T07:32:47.736Z→08:29:05.893Z 期间是否发生越权读取或业务 mutation。
+

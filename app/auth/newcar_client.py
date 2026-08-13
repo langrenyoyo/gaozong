@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from app.auth.context import RequestContext
-from app.config import parse_bool
+from app.config import is_production_env, parse_bool, validate_production_auth_config
 
 
 class NewCarAuthError(Exception):
@@ -38,7 +38,13 @@ class NewCarProjectAuthClient:
 
     @classmethod
     def from_env(cls) -> "NewCarProjectAuthClient":
-        """从环境变量创建客户端，避免测试依赖模块级配置缓存。"""
+        """从环境变量创建客户端，避免测试依赖模块级配置缓存。
+
+        G0 P0-1（C1 防线2）：生产环境再次 fail-closed —— 配置非法时拒绝构造客户端。
+        dependencies._client() 每次请求都调用本方法，因此 production + 缺 auth env
+        时请求路径（含 /auth/me）直接失败，绝不会返回 HTTP200 mock。
+        """
+        validate_production_auth_config()
         return cls(
             auth_enabled=parse_bool(os.getenv("NEWCAR_AUTH_ENABLED"), False, name="NEWCAR_AUTH_ENABLED"),
             mock_enabled=parse_bool(os.getenv("NEWCAR_AUTH_MOCK_ENABLED"), True, name="NEWCAR_AUTH_MOCK_ENABLED"),
@@ -332,7 +338,13 @@ class NewCarProjectAuthClient:
         permission_codes: list[str] | None = None,
         session_id: str | None = "dev-session",
     ) -> RequestContext:
-        """构造本地开发和测试用上下文。"""
+        """构造本地开发和测试用上下文。
+
+        G0 P0-1（C1 兜底）：production 永远不能构造 mock 上下文 —— 即使客户端被
+        绕过 from_env 手工构造（测试/维护脚本），生产环境也一律拒绝，避免 mock 鉴权上线。
+        """
+        if is_production_env():
+            raise RuntimeError("生产环境禁止构造 mock 鉴权上下文（fail-closed，G0 P0-1）")
         permissions = permission_codes or [
             "*",
             "auto_wechat:use",

@@ -335,6 +335,36 @@ def is_production_env() -> bool:
     return APP_ENV == "production"
 
 
+def validate_production_auth_config() -> None:
+    """生产环境鉴权配置 fail-closed 校验（G0 P0-1，C1 双防线）。
+
+    双防线（APPROVED_WITH_4_CONSTRAINTS C1）：
+      防线1 = FastAPI startup 调用本函数：配置非法则服务不能正常启动；
+      防线2 = NewCarProjectAuthClient.from_env() 调用本函数：production 下再次 fail-closed
+              （dependencies._client() 每次请求都 from_env，因此请求路径绝不会返回 mock）。
+    非 production（development/lan/staging）不拦截，保持 mock 开发态。
+
+    APP_ENV=production 时必须 NEWCAR_AUTH_ENABLED=true 且 NEWCAR_AUTH_MOCK_ENABLED=false；
+    否则抛 RuntimeError —— 确保错误部署（production + 缺 auth env）绝不让 mock 鉴权上线
+    （GET /auth/me 绝不返回 HTTP200 mock）。
+    注意：本函数不做 import-time 校验（C1 约束），避免阻断 alembic/维护/诊断脚本；
+    显式调用点：app/main.py on_startup + app/auth/newcar_client.py from_env。
+    """
+    if not is_production_env():
+        return
+    problems = []
+    if not NEWCAR_AUTH_ENABLED:
+        problems.append("NEWCAR_AUTH_ENABLED 必须为 true")
+    if NEWCAR_AUTH_MOCK_ENABLED:
+        problems.append("NEWCAR_AUTH_MOCK_ENABLED 必须为 false")
+    if problems:
+        raise RuntimeError(
+            "生产环境鉴权配置非法（fail-closed，G0 P0-1）："
+            + "; ".join(problems)
+            + "。禁止在 APP_ENV=production 下以缺省/错误鉴权配置启动或构造 mock 鉴权上下文。"
+        )
+
+
 def is_douyin_webhook_auth_required() -> bool:
     """返回当前 webhook 是否需要验签。
 

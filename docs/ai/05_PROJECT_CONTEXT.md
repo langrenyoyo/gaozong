@@ -83,6 +83,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 - `.env.development.example` / `.env.lan.example` / `.env.production.example` 三份根模板（前端 `VITE_*` 已合并入内）。
 - production 模板要点：`APP_ENV=production`、`DATABASE_URL=postgresql+psycopg://...@postgres:5432/auto_wechat`、`RAG_DATABASE_URL=postgresql+psycopg://...@postgres:5432/xg_douyin_ai_cs`、`RAG_VECTOR_BACKEND=milvus` 固定、`NEWCAR_AUTH_ENABLED=true` + `NEWCAR_AUTH_MOCK_ENABLED=false`。
 - production 不允许缺 `DATABASE_URL` 回退 SQLite（仅 dev 允许回退）。
+- **G0 Release Governance 硬化（2026-08-13，实现完成 + R1 返工完成）**：生产部署只允许 canonical runner `scripts/release_9000_s10b.py`，命令显式 `-p xg_ai_system` + `--no-deps --no-build auto-wechat-api`；release identity env（`AUTO_WECHAT_API_IMAGE`/`XG_DOUYIN_AI_CS_IMAGE` + R1-1 `AUTO_WECHAT_API_EXPECTED_REVISION`/`XG_DOUYIN_AI_CS_EXPECTED_REVISION` 强制键，root-only release-exec.env）与 runtime env（`.env.production.local`）由 runner `--env-file`/`--runtime-env-file` 双参数分离消费（G0 C4）；统一 preflight 覆盖 Image/Project/Runtime/DB 四类 identity + R1 三方 gate（G0 P0-4，P1~P12：P10 expected revision 由 release env 强制、P11 actual runtime env binding（`!override` 绑定显式 runtime env）、P12 DB actual revision 三方一致只读 gate）。详见 `docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md`。
 
 ### 4.3 LAN 演示
 
@@ -104,6 +105,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 
 - 登录委托 NewCarProject：浏览器直接调用 NewCarProject `exchange-code` 换取 external token，再调用 9000 `/auth/me` 获取 auto_wechat 可信用户与权限上下文；9000 是业务鉴权门面。
 - 代码默认值是开发态：`NEWCAR_AUTH_ENABLED` 默认 `False`、`NEWCAR_AUTH_MOCK_ENABLED` 默认 `True`（`app/config.py`）。本地真实鉴权联调必须显式 `NEWCAR_AUTH_ENABLED=true` + `NEWCAR_AUTH_MOCK_ENABLED=false`；生产模板已固定真实鉴权。
+- **生产鉴权 fail-closed 已代码强制（G0 P0-1，2026-08-13）**：`validate_production_auth_config()` 在 `APP_ENV=production` 且鉴权配置非法时抛 RuntimeError（startup 拒启动 + `NewCarProjectAuthClient.from_env()` 请求路径双重防线），production 下 `build_mock_context()` 一律拒绝；`/auth/me` 绝不返回 HTTP200 mock。不做 import-time raise（避免阻断 alembic/维护/诊断脚本）。
 - 侧栏底部动作按 `isAdminLike(user)`（`super_admin` 或任一 `auto_wechat:admin:*` 权限）互斥：管理员显示“切换到 NewCar”和“退出登录”两个动作；普通商户显示“修改密码”和“退出登录”两个动作。管理员不显示商户改密，普通商户不显示切换到 NewCar。
 - 管理员“切换到 NewCar”：浏览器直接携带 external Bearer token 调 NewCarProject `POST /api/external-auth/switch-to-internal`，校验上游 `redirect_url` 仅为 HTTP(S) 后跳转。切换失败保持当前 URL、页面和登录态；切换过程不清 external token、NewCar 回跳状态或 Local Agent token。
 - 管理员“退出登录”（退出当前浏览器全部登录态）：浏览器直调 NewCarProject `POST /api/external-auth/logout-current-browser`，携带 `credentials: include` 与 Bearer；上游撤销当前 external 与同用户 internal session、删除两个内部 Cookie、返回 `redirect_url?logged_out=1`。9000 无法读 NewCar 域 Cookie，故管理员退出禁止走 9000 `/auth/logout` 或 9000 代理该接口；不等价于全设备退出。退出开始抑制 401、卸载受保护页，token 只存页面内存 ref；成功校验 redirect_url 后 `window.location.replace()` 跳转；失败清本地持久状态并停留当前 URL 提示重试，不跳错系统。

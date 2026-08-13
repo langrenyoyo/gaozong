@@ -481,10 +481,16 @@ def test_re_t09_scope_guard():
 
 
 def test_re_t10_br_24_30_rehearsal_contract():
-    """RE-T10：实现暴露 BR-24~BR-30 rehearsal 所需的全部控制。"""
+    """RE-T10：实现暴露 BR-24~BR-30 rehearsal 所需的全部控制。
+
+    G0 C4（2026-08-13）：release identity 键从 production runtime env 模板移除，
+    由 release-exec.env 经 runner --env-file 消费；模板不得再提供 :latest 默认赋值。
+    """
     prod_env = PROD_ENV_EXAMPLE.read_text(encoding="utf-8")
-    assert "AUTO_WECHAT_API_IMAGE=" in prod_env
-    assert "XG_DOUYIN_AI_CS_IMAGE=" in prod_env
+    assert "AUTO_WECHAT_API_IMAGE=" not in prod_env
+    assert "XG_DOUYIN_AI_CS_IMAGE=" not in prod_env
+    assert "release-exec.env" in prod_env
+    assert "不写 AUTO_WECHAT_API_IMAGE" in prod_env
     report = REPORT.read_text(encoding="utf-8")
     assert ":latest" in report
     assert "禁止" in report

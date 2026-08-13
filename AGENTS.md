@@ -141,6 +141,12 @@ Output Rules
     2. **文档影响同步**：本轮改动使 `docs/` 下哪份文档结论过期的，必须在任务结束前按"AI 文档自治维护要求"受影响同轮更新；不得只改代码、留下过期文档结论。治理规则文件（01~04）的较高修改门槛不变。
     3. **不确认即停**：对需求、调用链、数据流、权限校验、影响面或方案中任一不确定的，必须先向用户/审批窗口确认后再动手，禁止凭假设推进；满足不了 Reading Completion Gate 时按其规则继续阅读而非编码。
     4. **任务展开先复述**：每个新需求或新任务（含 plan 内每个 Task）展开前，必须先复述该任务的允许范围、调用链、数据来源与去向、权限校验点、风险等级、最小修改方案与验收标准，经确认后再进入实现。
+12. **Release Governance G0 硬化（2026-08-13 审批 APPROVED_WITH_4_CONSTRAINTS，R1 返工完成）**：
+    1. **生产鉴权 fail-closed 已代码强制（P0-1）**：`APP_ENV=production` 时必须 `NEWCAR_AUTH_ENABLED=true` 且 `NEWCAR_AUTH_MOCK_ENABLED=false`，否则 `validate_production_auth_config()` 抛 RuntimeError（startup 拒启动 + `NewCarProjectAuthClient.from_env()` 请求路径双重防线），production 下 `build_mock_context()` 一律拒绝；GET /auth/me 绝不返回 HTTP200 mock。不做 import-time raise（避免阻断 alembic/维护/诊断脚本）。
+    2. **生产部署只允许 canonical runner**（`scripts/release_9000_s10b.py`，P0-3）：命令必须显式 `-p xg_ai_system`（C2，命令行优先级高于 COMPOSE_PROJECT_NAME env）+ `up -d --no-deps --no-build auto-wechat-api`；禁止新建并行部署框架。
+    3. **release identity env 与 runtime secrets env 分离（C4 + R1-1）**：release identity env（root-only release-exec.env，非敏感）除 `AUTO_WECHAT_API_IMAGE`/`XG_DOUYIN_AI_CS_IMAGE` 外必须含 `AUTO_WECHAT_API_EXPECTED_REVISION`/`XG_DOUYIN_AI_CS_EXPECTED_REVISION`（expected revision canonical source，缺失 → PREFLIGHT FAIL）；`.env.production.local` 只放业务运行配置，由 `--runtime-env-file` 消费，两者不得混写、不得含 expected revision 键；`.env.production.example` 不再提供 `:latest` 默认值（compose 回落 `:latest` 会被 preflight 拒绝）。
+    4. **统一 preflight 覆盖 4 类 identity + R1 三方 gate（P0-4 + R1-1/2/3）**：Image（P1~P6 拒 missing/empty/:latest/相同共享 mutable/expected mismatch）、Project（P7 宿主 COMPOSE_PROJECT_NAME 污染）、Runtime（P8 存在性 + P9 APP_ENV/auth/DATABASE_URL）、DB compat（P10 target image 迁移 head ↔ release env expected revision，C3：不拿 master head 作 release target；CLI 仅作显式断言且必须等于 release env）、P11（R1-3 actual runtime env binding：runner 生成临时 `!override` env_file 绑定显式 runtime env，required:true、只写 path、mode 600、不落 secret，最终 service env 必须含显式 runtime 关键值）、P12（R1-2 DB actual revision：compose up 前只读 `SELECT version_num FROM alembic_version`，TARGET_IMAGE_HEAD == RELEASE_EXPECTED == ACTUAL_DB 三方一致，0028 image + DB0034 组合在 preflight 层拒绝，DB 连接用显式 --runtime-env-file 的 DATABASE_URL/RAG_DATABASE_URL，日志不落 secrets）。
+    - 详见 `docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md` 与 `tests/test_auth_fail_closed.py` / `tests/test_release_g0_hardening.py`（含 T-R1-1~T-R1-10）。
 
 ## 小高AI系统一期确认范围（2026-07-10 确认，2026-07-18 勘误）
 
