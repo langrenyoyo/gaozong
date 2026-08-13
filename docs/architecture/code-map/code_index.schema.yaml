@@ -1,0 +1,117 @@
+# ============================================================
+# G1 CODE REALITY MAP — 机器可读 Code Index Schema（DRAFT）
+# ============================================================
+# 状态：DRAFT（G1 探索产物，非最终 Code Map，不进入 production runtime）
+# 层级声明：
+#   - 模块级索引（唯一事实源）：docs/architecture/CODE_INDEX.yaml
+#       · 键为 modules，描述「模块边界 + 模块级依赖」，由 scripts/generate_code_index.py
+#         生成 .md 派生视图，禁止手工编辑派生文件。
+#   - 文件级 Code Map（本 schema）：docs/architecture/code-map/code_index.yaml（待生成）
+#       · 键为 entries，描述「每个代码资产的文件级归属」。
+#       · 与模块级索引通过 `module` 字段关联；不取代模块级 CODE_INDEX.yaml。
+# 约定：
+#   - 本文件只定义 schema，不承载实例数据。
+#   - 所有新增/修改必须走 G1 后续执行窗口，禁止直接填全仓。
+# ============================================================
+
+schema_version: "0.1.0-draft"        # 本 schema 版本
+governance_artifact: true            # DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
+source_baseline_required: true       # 实例必须记录 source_commit（见下方 project）
+
+# ------------------------------------------------------------
+# project（元数据）
+# ------------------------------------------------------------
+project:
+  source_commit: "<G0_CANDIDATE_SHA>"        # 生成时的 git commit（必填）
+  generated_at: "<ISO8601>"                  # 生成时间（生成后填）
+  last_verified_at: "<ISO8601>"              # 最近一次核实时间
+  generator_script: "scripts/generate_code_index.py"  # 与模块级索引共用生成器家族
+
+# ------------------------------------------------------------
+# entries（文件级资产清单）
+# ------------------------------------------------------------
+entries:
+  - id: "ENT-000001"                 # 稳定唯一 ID（不建议用路径当 ID，路径可迁移）
+    path: "app/routers/leads.py"     # 仓库相对路径
+    artifact_type: "ROUTER"          # 见下方枚举
+    owner_type: "MODULE"             # PLATFORM / MODULE / COMPATIBILITY / UNKNOWN
+    owner_id: "M03-LEADS"            # 归属模块 ID（与模块级 CODE_INDEX.yaml 的 modules 键对应）
+    module: "M03-LEADS"              # 冗余锚点：明确所属模块
+    status: "ACTIVE"                 # 见下方枚举
+    runtime_role: "HTTP_API"         # HTTP_API / WORKER / SCHEDULER / STARTUP / SUBAPP / SCRIPT / NONE
+    entrypoints:                     # 对外/对内入口（HTTP 方法+路径，或函数名）
+      - "POST /api/leads/webhook"
+    data_owned:                      # 该资产拥有/写的数据（表名）
+      - "douyin_leads"
+    data_read:                       # 只读的数据（表名）
+      - "ai_agents"
+    dependencies:                    # 主动依赖（代码/模块级）
+      - type: "module"               # module / service / table / external
+        target: "M01-AGENTS"
+        reason: "读取智能体配置"
+    depended_by: []                  # 反向依赖（可由生成器计算，不人工双写）
+    external_dependencies:           # 外部集成（NewCar / Douyin GMP / Milvus / LLM / LAS / TOS / 19000）
+      - "douyin-gmp"
+    compatibility:                   # 若为兼容路径
+      comp_for: null
+      purpose: null
+      removal_prerequisite: null
+    legacy:                          # 若为 Legacy Candidate（≠ SAFE_TO_DELETE）
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    evidence:                        # 事实来源（文件:行号 / 运行证据）
+      - "app/routers/leads.py:20"
+    notes: ""
+
+# ------------------------------------------------------------
+# artifact_type 枚举
+# ------------------------------------------------------------
+artifact_type_enum:
+  - FRONTEND_PAGE
+  - FRONTEND_COMPONENT
+  - API_CLIENT
+  - ROUTER
+  - SERVICE
+  - MODEL
+  - TABLE
+  - WORKER
+  - SCHEDULER
+  - INTEGRATION
+  - CONFIG
+  - AUTH
+  - SCRIPT
+  - MIGRATION
+  - TEST
+  - DOC
+  - OTHER
+
+# ------------------------------------------------------------
+# owner_type 枚举
+# ------------------------------------------------------------
+owner_type_enum:
+  - PLATFORM         # 跨所有业务模块的公共底座
+  - MODULE           # 归属某个业务模块（owner_id 必填）
+  - COMPATIBILITY    # 合法调用者的历史接口/旧数据兼容（不应成为新代码首选入口）
+  - UNKNOWN          # 无法确认归属（必须写 notes 说明缺什么证据）
+
+# ------------------------------------------------------------
+# status 枚举
+# ------------------------------------------------------------
+status_enum:
+  - ACTIVE
+  - PLATFORM
+  - COMPATIBILITY
+  - LEGACY_CANDIDATE   # ≠ SAFE_TO_DELETE；本轮严禁删除
+  - DEV_ONLY
+  - TEST
+  - UNKNOWN
+
+# ------------------------------------------------------------
+# 禁止事项
+# ------------------------------------------------------------
+forbidden:
+  - "应用启动读取 code_index.yaml 决定业务行为"   # 本文件是 DERIVED GOVERNANCE ARTIFACT
+  - "以 status=LEGACY_CANDIDATE 为由删除代码"      # 删除需 G2 独立授权
+  - "手工编辑 CODE_INDEX.md（派生视图）"           # 由生成器产生
