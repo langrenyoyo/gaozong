@@ -51,7 +51,7 @@
 | `NEWCAR_AUTH_ME_URL` | 9000 | 空 | 是 | auth | 覆盖 external-auth/me 完整地址 |
 | `NEWCAR_AUTH_LOGOUT_URL` | 9000 | 空 | 是 | auth | 覆盖 logout 完整地址 |
 | `NEWCAR_AUTH_LOGIN_URL` | 9000 | 空 | 是 | auth | 前端登录页跳转地址 |
-| `NEWCAR_AUTH_SERVICE_TOKEN` | 9000 | 空 | 是 | auth | 服务间令牌（X-NewCar-Service-Token） |
+| `NEWCAR_AUTH_SERVICE_TOKEN` | 9000 | 空 | 否 | auth | 可选预留：服务间令牌（X-NewCar-Service-Token），used-car 端暂未校验该 header |
 | `NEWCAR_AUTH_TIMEOUT_SECONDS` | 9000 | 5 | 是 | auth | 调用 NewCar 超时 |
 
 ### 抖音 GMP / OpenAPI / webhook
