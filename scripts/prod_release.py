@@ -180,17 +180,24 @@ def cmd_inspect(argv: list[str]) -> int:
     print(f"ORIGIN_STATUS        = {'REACHABLE' if origin.returncode == 0 else 'UNREACHABLE'}")
     print(f"FAST_FORWARD_STATUS  = {'see deploy gate' if origin.returncode == 0 else 'UNKNOWN'}")
 
-    # 当前镜像身份（release identity 目录最新记录 + 当前 compose resolved）
+    # 当前真实运行镜像（R2-2：接入 _current_production_images，容器 image 优先 + 历史 provenance）
+    images, recon_err = _current_production_images(rel_dir)
+    if recon_err:
+        print(f"IMAGE_CONFLICT        = {recon_err}")
+    print(f"CURRENT_API_IMAGE     = {images['api'] or '<missing>'}")
+    print(f"CURRENT_9100_IMAGE    = {images['douyin-ai-cs'] or '<missing>'}")
+    print(f"CURRENT_FRONTEND_IMAGE= {images['frontend'] or '<missing>'}")
+
+    # 历史 release 记录（provenance，非三服务完整 SSOT）
     identities = sorted(rel_dir.glob("*.env")) if rel_dir.is_dir() else []
     if identities:
         latest = identities[-1]
+        print(f"LATEST_RELEASE_RECORD = {latest.name}")
         kv = _parse_env(latest)
-        print(f"CURRENT_RELEASE      = {latest.name}")
-        print(f"CURRENT_API_IMAGE    = {kv.get('AUTO_WECHAT_API_IMAGE') or '<missing>'}")
-        print(f"CURRENT_9100_IMAGE   = {kv.get('XG_DOUYIN_AI_CS_IMAGE') or '<missing>'}")
-        print(f"CURRENT_FRONTEND_IMAGE = {kv.get('AUTO_WECHAT_FRONTEND_IMAGE') or '<missing>'}")
+        print(f"  (record api/9100/frontend 字段可能 split：{kv.get('AUTO_WECHAT_API_IMAGE') or '<empty>'} / "
+              f"{kv.get('XG_DOUYIN_AI_CS_IMAGE') or '<empty>'} / {kv.get('AUTO_WECHAT_FRONTEND_IMAGE') or '<empty>'}）")
     else:
-        print(f"CURRENT_RELEASE      = <none in {rel_dir}>")
+        print(f"LATEST_RELEASE_RECORD = <none in {rel_dir}>")
 
     # 容器 ID（只读 docker ps）
     ps = _run_argv(["docker", "ps", "--format", "{{.Names}} {{.Image}}"], check=False)
@@ -446,28 +453,62 @@ def _previous_release_identity(service: str, release_dir: Path) -> tuple[Path | 
 # ---------------------------------------------------------------------------
 # deploy
 # ---------------------------------------------------------------------------
-def _frontend_build_config_gate() -> tuple[bool, str]:
-    """frontend 生产关键 build-time VITE 配置 fail-closed（RG-FOLLOWUP-02 吸收）。
+# frontend 生产关键 build-time VITE 配置（R2-1：正式配置来源 = <prod-tree>/.env.production.local）
 
-    校验来源：docker-compose.yml 的 environment 默认值（生产构建实际由 compose/Dockerfile 注入）。
-    缺失/为空 → FRONTEND_BUILD BLOCKED。不做 bundle 内容级验证（避免越界），
-    但保证"生产关键 VITE 变量非空"这一最小 fail-closed gate。
+
+def _frontend_build_args(runtime_env_file: Path) -> tuple[dict[str, str], str]:
+    """从 <prod-tree>/.env.production.local 读取 frontend build args（R2-1）。
+
+    返回 (build_args, error)。build_args 键 = Dockerfile.frontend.prod 的 ARG 名。
+    这是 GATE_CONFIG_SOURCE 与 BUILD_ARG_CONFIG_SOURCE 的唯一共同来源：
+    gate 检查什么值，docker build --build-arg 就使用完全相同值。
     """
-    if not COMPOSE_FILE.is_file():
-        return True, "MISSING_COMPOSE_FILE"
-    text = COMPOSE_FILE.read_text(encoding="utf-8")
-    missing = []
+    if not runtime_env_file.is_file():
+        return {}, f"MISSING_RUNTIME_ENV: {runtime_env_file} 不存在（frontend build config 无法读取）"
+    kv = _parse_env(runtime_env_file)
+    args: dict[str, str] = {}
+    missing: list[str] = []
     for key in FRONTEND_REQUIRED_BUILD_ARGS:
-        # compose 中 environment 默认值：VITE_NEWCAR_AUTH_BASE_URL: ${VITE_NEWCAR_AUTH_BASE_URL:-<default>}
-        # 用普通字符串拼接正则，避免嵌套 f-string 大括号转义错误
-        pat = re.compile(key + r":\s*\$\{" + re.escape(key) + r":-([^}]*)\}")
-        m = pat.search(text)
-        default = m.group(1).strip() if m else ""
-        if not default:
+        val = kv.get(key, "").strip()
+        if not val:
             missing.append(key)
+        else:
+            args[key] = val
     if missing:
-        return True, f"FRONTEND_BUILD_CONFIG_MISSING: 生产关键 VITE build 配置为空 {missing}（RG-FOLLOWUP-02 fail-closed）"
-    return False, ""
+        return {}, f"FRONTEND_BUILD_CONFIG_MISSING: 生产关键 VITE build 配置为空 {missing}（RG-FOLLOWUP-02 fail-closed；配置来源=<prod-tree>/.env.production.local）"
+    # 可选 args：env 有值则透传；无值用 Dockerfile 默认（显式透传默认值保证 build 可复现）
+    for key in FRONTEND_OPTIONAL_BUILD_ARGS:
+        val = kv.get(key, "").strip()
+        args[key] = val if val else _FRONTEND_DEFAULT_ARGS.get(key, "")
+    return args, ""
+
+
+# Dockerfile.frontend.prod 的 ARG 默认值（与 Dockerfile 保持一致的构建契约；R2-3 build 复用）
+_FRONTEND_DEFAULT_ARGS = {
+    "VITE_API_BASE_URL": "/api",
+    "VITE_AUTO_WECHAT_API_BASE_URL": "/api",
+    "VITE_DOUYIN_AI_CS_API_BASE_URL": "/ai-cs-api",
+    "VITE_LOCAL_WECHAT_AGENT_BASE_URL": "",
+}
+
+
+def _frontend_build_config_gate(runtime_env_file: Path) -> tuple[bool, str, dict[str, str]]:
+    """frontend 生产关键 build-time VITE 配置 fail-closed（R2-1，RG-FOLLOWUP-02 吸收）。
+
+    正式配置来源：<prod-tree>/.env.production.local（经 --prod-tree 传递，不散落绝对路径）。
+    验证 VITE_NEWCAR_AUTH_BASE_URL / VITE_NEWCAR_LOGIN_URL PRESENT_NONEMPTY，
+    缺失/为空 → FRONTEND_BUILD_CONFIG_MISSING → BLOCK。
+    不打印实际 URL，只输出 PRESENT_NONEMPTY 状态。
+
+    Returns (blocked, message, build_args)。build_args 与 docker build --build-arg 共用（同源约束）。
+    """
+    build_args, err = _frontend_build_args(runtime_env_file)
+    if err:
+        return True, err, {}
+    for key in FRONTEND_REQUIRED_BUILD_ARGS:
+        print(f"{key} = PRESENT_NONEMPTY")
+    print("FRONTEND_BUILD_CONFIG_GATE = PASS")
+    return False, "", build_args
 
 
 def _temp_identity_file(images: dict[str, str], short_sha: str) -> tuple[Path, None] | tuple[None, str]:
@@ -632,6 +673,37 @@ def _deploy_backend(service: str, identity_path: Path, runtime_env_file: Path, *
     return 0
 
 
+def _build_frontend_image(target_image: str, build_args: dict[str, str]) -> tuple[bool, str]:
+    """R2-3：docker build Dockerfile.frontend.prod（复用现有正式 build contract，不新建 framework）。
+
+    build args 与 gate 同源（GATE_CONFIG_SOURCE == BUILD_ARG_CONFIG_SOURCE）：
+    gate 从 <prod-tree>/.env.production.local 读取的值，原样传入 --build-arg。
+    """
+    dockerfile = ROOT / "Dockerfile.frontend.prod"
+    if not dockerfile.is_file():
+        return False, f"MISSING_DOCKERFILE: {dockerfile}"
+    cmd = [
+        "docker", "build",
+        "-f", str(dockerfile),
+        "-t", target_image,
+    ]
+    for key, val in build_args.items():
+        if val:
+            cmd += ["--build-arg", f"{key}={val}"]
+    cmd += ["."]
+    print("FRONTEND_BUILD         = START")
+    print(f"  TARGET_IMAGE         = {target_image}")
+    for key in build_args:
+        if build_args[key]:
+            print(f"  BUILD_ARG {key}      = PRESENT_NONEMPTY（与 gate 同源）")
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        return False, f"FRONTEND_BUILD_FAIL: docker build exit={proc.returncode}（{detail[-400:]}）"
+    print("FRONTEND_BUILD         = SUCCESS")
+    return True, ""
+
+
 def _deploy_frontend(identity_path: Path, runtime_env_file: Path, *, apply: bool) -> int:
     """复用 release_frontend_immutable（R6：frontend = 复用现有 immutable release path）。"""
     import importlib.util
@@ -716,12 +788,14 @@ def cmd_deploy(argv: list[str]) -> int:
         _err(reason)
         return 1
 
-    # ---- frontend build config gate ----
+    # ---- frontend build config gate（R2-1：来源 = <prod-tree>/.env.production.local，与 build 同源） ----
+    frontend_build_args: dict[str, str] = {}
     if args.service == "frontend":
-        blocked, reason = _frontend_build_config_gate()
+        blocked, reason, build_args = _frontend_build_config_gate(runtime_env)
         if blocked:
             _err(reason)
             return 1
+        frontend_build_args = build_args
 
     # ---- 当前生产 image identity 对账（R1-3：容器 image 优先 + 历史 identity provenance） ----
     short_sha = _short(_git(["rev-parse", "HEAD"]).stdout.strip())
@@ -732,7 +806,7 @@ def cmd_deploy(argv: list[str]) -> int:
         _err(f"IMAGE_RECONCILIATION_FAIL: {recon_err}")
         return 1
 
-    # 目标服务新 image：release-<SHORT_SHA>（immutable tag 由构建方预构建，脚本不 build）
+    # 目标服务新 image：release-<SHORT_SHA>
     target_img = _target_image_tag(args.service, short_sha)
     images[args.service] = target_img
 
@@ -751,19 +825,35 @@ def cmd_deploy(argv: list[str]) -> int:
     print(f"  AUTO_WECHAT_FRONTEND_IMAGE     = {images['frontend']}")
 
     if args.apply:
-        # ---- R1-4：apply 前确认目标 immutable image 已存在（--no-build 前提） ----
+        if args.service == "frontend":
+            # ---- R2-3：frontend apply 固定顺序：build → image inspect → identity → recreate ----
+            print(f"TARGET_IMAGE           = {target_img}")
+            print("BUILD_REQUIRED         = YES")
+            ok_build, build_err = _build_frontend_image(target_img, frontend_build_args)
+            if not ok_build:
+                _err(build_err)
+                return 1  # build fail → 不写 identity、不 recreate（当前 frontend 继续跑旧镜像）
+            ok_img, img_err = _ensure_target_image_exists(target_img)
+            if not ok_img:
+                _err(img_err)
+                return 1  # image gate 仍保留（build 成功 + inspect 成功才继续）
+            identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
+            print(f"RELEASE_IDENTITY     = {identity_path}")
+            return _deploy_frontend(identity_path, runtime_env, apply=True)
+        # ---- 后端 apply：R1-4 image 存在 gate（--no-build 前提） + R1-2 identity 写入 ----
         ok_img, img_err = _ensure_target_image_exists(target_img)
         if not ok_img:
             _err(img_err)
             return 1
-        # ---- R1-2：只有 apply 才写 release identity ----
         identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
         print(f"RELEASE_IDENTITY     = {identity_path}")
-        if args.service == "frontend":
-            return _deploy_frontend(identity_path, runtime_env, apply=True)
         return _deploy_backend(args.service, identity_path, runtime_env, apply=True)
 
-    # ---- R1-2：dry-run 零写入——identity 内容纯内存预览，不写 release dir ----
+    # ---- R1-2/R2-3：dry-run 零写入零 build——identity 内容纯内存预览 + build plan ----
+    if args.service == "frontend":
+        print(f"TARGET_IMAGE           = {target_img}")
+        print("BUILD_REQUIRED         = YES")
+        print("BUILD_EXECUTED         = NO（dry-run 不 build）")
     preview_content = _identity_content(args.service, images, short_sha)
     print("RELEASE_IDENTITY     = <dry-run 预览，未写入>（--apply 才写 release identity）")
     for line in preview_content.splitlines():

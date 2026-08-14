@@ -175,7 +175,10 @@ def _make_prod_tree(base: Path) -> Path:
     (prod / ".env.production.local").write_text(
         "APP_ENV=production\nNEWCAR_AUTH_ENABLED=true\nNEWCAR_AUTH_MOCK_ENABLED=false\n"
         "DATABASE_URL=postgresql://u:p@localhost/auto_wechat\n"
-        "RAG_DATABASE_URL=postgresql://u:p@localhost/xg_douyin_ai_cs\n",
+        "RAG_DATABASE_URL=postgresql://u:p@localhost/xg_douyin_ai_cs\n"
+        # R2-1：生产关键 frontend build-time VITE 配置（PRESENT_NONEMPTY）
+        "VITE_NEWCAR_AUTH_BASE_URL=https://newcar.example.com\n"
+        "VITE_NEWCAR_LOGIN_URL=https://newcar.example.com/login\n",
         encoding="utf-8",
     )
     return prod
@@ -383,16 +386,14 @@ def test_r11_frontend_build_config_missing_blocks(monkeypatch, scratch, capsys):
     prod = _make_prod_tree(scratch)
     _patch_paths(monkeypatch, rel, prod)
     _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40)
-    # 临时 compose 文件缺 VITE_NEWCAR_* 关键配置（默认空）
-    bad_compose = scratch / "docker-compose.yml"
-    bad_compose.write_text(
-        "services:\n  auto-wechat-frontend:\n    environment:\n"
-        "      VITE_NEWCAR_AUTH_BASE_URL: ${VITE_NEWCAR_AUTH_BASE_URL:-}\n"
-        "      VITE_NEWCAR_LOGIN_URL: ${VITE_NEWCAR_LOGIN_URL:-}\n",
+    # R2-1：正式配置来源是 <prod-tree>/.env.production.local——移除 VITE_NEWCAR_* → BLOCK
+    env_path = prod / ".env.production.local"
+    env_path.write_text(
+        "APP_ENV=production\nNEWCAR_AUTH_ENABLED=true\nNEWCAR_AUTH_MOCK_ENABLED=false\n"
+        "DATABASE_URL=postgresql://u:p@localhost/auto_wechat\n"
+        "RAG_DATABASE_URL=postgresql://u:p@localhost/xg_douyin_ai_cs\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "COMPOSE_FILE", bad_compose)
-
     rc = mod.cmd_deploy(["--service", "frontend", "--prod-tree", str(prod), "--release-dir", str(rel)])
     assert rc != 0
     assert "FRONTEND_BUILD_CONFIG_MISSING" in capsys.readouterr().err
@@ -807,3 +808,283 @@ def test_r26b_frontend_no_previous_blocks(monkeypatch, scratch):
     prev, note = mod._previous_release_identity("frontend", rel)
     assert prev is None
     assert note  # 有明确原因（记录不足 → 无法确定 previous）
+
+
+# ===========================================================================
+# R27~R37：PROD-RELEASE-AUTOMATION-R2 regression（frontend build 闭环）
+# ===========================================================================
+
+def _make_prod_tree_without_vite(base: Path) -> Path:
+    """无 VITE_NEWCAR_* 的生产 env（R28 用）。"""
+    prod = base / "prod_no_vite"
+    prod.mkdir(parents=True, exist_ok=True)
+    (prod / ".env.production.local").write_text(
+        "APP_ENV=production\nNEWCAR_AUTH_ENABLED=true\nNEWCAR_AUTH_MOCK_ENABLED=false\n"
+        "DATABASE_URL=postgresql://u:p@localhost/auto_wechat\n"
+        "RAG_DATABASE_URL=postgresql://u:p@localhost/xg_douyin_ai_cs\n",
+        encoding="utf-8",
+    )
+    return prod
+
+
+# ---------------------------------------------------------------------------
+# R27: production env 两个 required VITE 非空 → frontend config gate PASS
+# ---------------------------------------------------------------------------
+def test_r27_frontend_config_gate_pass(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    blocked, reason, build_args = mod._frontend_build_config_gate(prod / ".env.production.local")
+    assert not blocked, reason
+    assert build_args["VITE_NEWCAR_AUTH_BASE_URL"] == "https://newcar.example.com"
+    assert build_args["VITE_NEWCAR_LOGIN_URL"] == "https://newcar.example.com/login"
+    out = capsys.readouterr().out
+    assert "PRESENT_NONEMPTY" in out
+    assert "FRONTEND_BUILD_CONFIG_GATE = PASS" in out
+    # 不打印实际 URL
+    assert "newcar.example.com" not in out
+
+
+# ---------------------------------------------------------------------------
+# R28: required VITE missing/empty → BLOCK
+# ---------------------------------------------------------------------------
+def test_r28_frontend_config_gate_missing_blocks(monkeypatch, scratch, capsys):
+    prod = _make_prod_tree_without_vite(scratch)
+    blocked, reason, _ = mod._frontend_build_config_gate(prod / ".env.production.local")
+    assert blocked
+    assert "FRONTEND_BUILD_CONFIG_MISSING" in reason
+
+
+# ---------------------------------------------------------------------------
+# R29: gate 使用值 == docker build --build-arg 使用值（同源）
+# ---------------------------------------------------------------------------
+def test_r29_gate_build_args_same_source(monkeypatch, scratch):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    blocked, reason, gate_args = mod._frontend_build_config_gate(prod / ".env.production.local")
+    assert not blocked
+    # 构造 build cmd（与 _build_frontend_image 相同逻辑）并断言 --build-arg 与 gate 同值
+    captured: list[str] = []
+
+    def fake_build(target_image, build_args):
+        for key, val in build_args.items():
+            if val:
+                captured.append(f"{key}={val}")
+        return True, ""
+
+    monkeypatch.setattr(mod, "_build_frontend_image", fake_build)
+    ok, _ = mod._build_frontend_image("xg-ai-system-frontend:release-aaaaaaaaaaaa", gate_args)
+    assert ok
+    for key, val in gate_args.items():
+        if val:
+            assert f"{key}={val}" in captured, f"build-arg 缺失 {key}={val}"
+
+
+# ---------------------------------------------------------------------------
+# R30: inspect split-history production case → CURRENT_FRONTEND_IMAGE 来自 running container
+# ---------------------------------------------------------------------------
+def test_r30_inspect_uses_running_container_image(monkeypatch, scratch, capsys):
+    # 历史 env 的 frontend 是旧值；运行容器是 frontend-8968c8fe-prod1 → CURRENT 应为容器值
+    rel = _make_release_dir(scratch, names=("hotfix.env", "prod1.env"))
+    (rel / "hotfix.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=\n")
+    (rel / "prod1.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=\nXG_DOUYIN_AI_CS_IMAGE=\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:old-frontend\n")
+    prod = _make_prod_tree(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+    monkeypatch.setattr(mod, "PROD_TREE", prod)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "git":
+            sub = argv[1:]
+            if sub[0] == "status":
+                return FakeProc(stdout="")
+            if sub[0] == "rev-parse":
+                return FakeProc(stdout="a" * 40 + "\n")
+            if sub[0] == "ls-remote":
+                return FakeProc(stdout="a" * 40 + "\n")
+            if sub[0] == "diff":
+                return FakeProc(stdout="")
+            return FakeProc()
+        if argv[0] == "docker":
+            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
+                                   "xg-douyin-ai-cs|xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
+                                   "auto-wechat-frontend|xg-ai-system-frontend:frontend-8968c8fe-prod1\n")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = mod.cmd_inspect([])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "CURRENT_FRONTEND_IMAGE= xg-ai-system-frontend:frontend-8968c8fe-prod1" in out
+    assert "LATEST_RELEASE_RECORD = prod1.env" in out
+
+
+# ---------------------------------------------------------------------------
+# R31: frontend dry-run → docker build 未执行
+# ---------------------------------------------------------------------------
+def test_r31_dryrun_no_build(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    calls = _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                          compose_service="auto-wechat-frontend",
+                          compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                          compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "BUILD_EXECUTED         = NO" in out
+    flat = [" ".join(c) for c, _ in calls]
+    assert not any("docker build" in c for c in flat), f"dry-run 不得 build: {flat}"
+
+
+# ---------------------------------------------------------------------------
+# R32: frontend dry-run → release dir 零写入
+# ---------------------------------------------------------------------------
+def test_r32_dryrun_release_dir_zero_write(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("release-aaa.env", "release-bbb.env"))
+    before = sorted(p.name for p in rel.iterdir())
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    after = sorted(p.name for p in rel.iterdir())
+    assert before == after
+
+
+# ---------------------------------------------------------------------------
+# R33: frontend apply → build 在 compose up 之前
+# ---------------------------------------------------------------------------
+def test_r33_apply_build_before_up(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    calls = _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                          compose_service="auto-wechat-frontend",
+                          compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                          compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--apply",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    flat = [" ".join(c) for c, _ in calls]
+    # docker build 必须先于 compose up
+    build_idx = next((i for i, c in enumerate(flat) if "docker build" in c), None)
+    up_idx = next((i for i, c in enumerate(flat) if "compose" in c and " up " in c), None)
+    assert build_idx is not None, f"应执行 docker build: {flat}"
+    assert up_idx is not None, f"应执行 compose up: {flat}"
+    assert build_idx < up_idx, f"build 必须在 up 之前: {flat}"
+
+
+# ---------------------------------------------------------------------------
+# R34: build fail → 不写 release identity、不 compose up
+# ---------------------------------------------------------------------------
+def test_r34_build_fail_no_identity_no_up(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("release-aaa.env",))
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+
+    def fake_build(target_image, build_args):
+        return False, "FRONTEND_BUILD_FAIL: docker build exit=1"
+
+    monkeypatch.setattr(mod, "_build_frontend_image", fake_build)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--apply",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc != 0
+    assert "FRONTEND_BUILD_FAIL" in capsys.readouterr().err
+    # 不写 identity（release dir 仍只有原 1 条）
+    assert sorted(p.name for p in rel.iterdir()) == ["release-aaa.env"]
+
+
+# ---------------------------------------------------------------------------
+# R35: build success + target image inspect fail → BLOCK、不 compose up
+# ---------------------------------------------------------------------------
+def test_r35_build_ok_inspect_fail_blocks(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("release-aaa.env",))
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    monkeypatch.setattr(mod, "_build_frontend_image", lambda img, args: (True, ""))
+    monkeypatch.setattr(mod, "_ensure_target_image_exists", lambda img: (False, "TARGET_IMAGE_NOT_FOUND: x"))
+    rc = mod.cmd_deploy(["--service", "frontend", "--apply",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc != 0
+    assert "TARGET_IMAGE_NOT_FOUND" in capsys.readouterr().err
+    assert sorted(p.name for p in rel.iterdir()) == ["release-aaa.env"]
+
+
+# ---------------------------------------------------------------------------
+# R36: frontend apply canonical deploy → 仅 auto-wechat-frontend、--no-deps、--no-build
+# ---------------------------------------------------------------------------
+def test_r36_apply_canonical_frontend_only(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--apply",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    preview = out.split("COMMAND_PREVIEW")[1] if "COMMAND_PREVIEW" in out else out
+    assert "--no-deps" in preview
+    assert "--no-build" in preview
+    assert "auto-wechat-frontend" in preview
+    assert "auto-wechat-api" not in preview
+    assert "xg-douyin-ai-cs" not in preview
+
+
+# ---------------------------------------------------------------------------
+# R37: composite identity → API/9100 继承当前 running images、frontend 用新 image
+# ---------------------------------------------------------------------------
+def test_r37_composite_identity_inherits_running(monkeypatch, scratch, capsys):
+    # split history：api 在 hotfix env、frontend 在 prod1 env；容器确认当前运行状态
+    rel = _make_release_dir(scratch, names=("hotfix.env", "prod1.env"))
+    (rel / "hotfix.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=\n")
+    (rel / "prod1.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=\nXG_DOUYIN_AI_CS_IMAGE=\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:frontend-8968c8fe-prod1\n")
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "frontend", "--apply",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    # composite identity：API/9100 继承当前真实（历史/容器），frontend 为新 release tag
+    written = [p for p in rel.iterdir() if p.name.startswith("release-")]
+    assert written, "apply 应写入 composite release identity"
+    content = written[0].read_text(encoding="utf-8")
+    assert "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54" in content
+    assert "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890" in content
+    assert "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-aaaaaaaaaaaa" in content
