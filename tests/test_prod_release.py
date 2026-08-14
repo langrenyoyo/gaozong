@@ -675,9 +675,15 @@ def test_r21b_split_identities_conflict_fail_closed(monkeypatch, scratch):
     # 容器 image 与历史冲突（容器=release-c，历史=release-b）
     def fake_run(argv, **kwargs):
         if argv[0] == "docker":
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-c\n"
-                                   "xg-douyin-ai-cs|xg-ai-system-backend@sha256:1111\n"
-                                   "auto-wechat-frontend|xg-ai-system-frontend:release-a\n")
+            cname = argv[2] if len(argv) > 2 else ""
+            images_by_container = {
+                "xg-auto-wechat-api": "xg-ai-system-backend:release-c",
+                "xg-douyin-ai-cs": "xg-ai-system-backend@sha256:1111",
+                "xg-auto-wechat-frontend": "xg-ai-system-frontend:release-a",
+            }
+            if cname in images_by_container:
+                return FakeProc(stdout=images_by_container[cname] + "\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -919,9 +925,16 @@ def test_r30_inspect_uses_running_container_image(monkeypatch, scratch, capsys):
                 return FakeProc(stdout="")
             return FakeProc()
         if argv[0] == "docker":
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
-                                   "xg-douyin-ai-cs|xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
-                                   "auto-wechat-frontend|xg-ai-system-frontend:frontend-8968c8fe-prod1\n")
+            # R2.1：running image canonical source = docker inspect <container> --format {{.Config.Image}}
+            cname = argv[2] if len(argv) > 2 else ""
+            images_by_container = {
+                "xg-auto-wechat-api": "xg-ai-system-backend:hotfix-material-presign-0ceee54",
+                "xg-douyin-ai-cs": "xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890",
+                "xg-auto-wechat-frontend": "xg-ai-system-frontend:frontend-8968c8fe-prod1",
+            }
+            if cname in images_by_container:
+                return FakeProc(stdout=images_by_container[cname] + "\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1088,3 +1101,139 @@ def test_r37_composite_identity_inherits_running(monkeypatch, scratch, capsys):
     assert "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54" in content
     assert "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890" in content
     assert "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-aaaaaaaaaaaa" in content
+
+
+# ===========================================================================
+# R38~R39：PROD-RELEASE-AUTOMATION-R2.1 regression（digest-pinned reconciliation）
+# ===========================================================================
+
+DIGEST_9100 = "xg-ai-system-backend@sha256:93094f0a02ba3a4570160ce90625cb80fdec85076046fc314f5fe407add36c68"
+
+
+def _inspect_fake_for(images_by_container: dict[str, str]):
+    """构造 docker inspect <container> --format {{.Config.Image}} 的 fake_run（R2.1 canonical source）。"""
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker":
+            cname = argv[2] if len(argv) > 2 else ""
+            if cname in images_by_container:
+                return FakeProc(stdout=images_by_container[cname] + "\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    return fake_run
+
+
+# ---------------------------------------------------------------------------
+# R38: docker ps 缩写不参与 reconciliation；.Config.Image 完整 == provenance → PASS
+# ---------------------------------------------------------------------------
+def test_r38_digest_pinned_9100_no_false_conflict(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("prod.env",))
+    (rel / "prod.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
+        f"XG_DOUYIN_AI_CS_IMAGE={DIGEST_9100}\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:frontend-8968c8fe-prod1\n")
+    prod = _make_prod_tree(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+    monkeypatch.setattr(mod, "PROD_TREE", prod)
+
+    # docker ps 会显示缩写（93094f0a02ba），但 canonical source 是 docker inspect .Config.Image（完整）
+    ps_called = {"called": False}
+    original_run = subprocess.run
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "git":
+            sub = argv[1:]
+            if sub[0] == "status":
+                return FakeProc(stdout="")
+            if sub[0] == "rev-parse":
+                return FakeProc(stdout="a" * 40 + "\n")
+            if sub[0] == "ls-remote":
+                return FakeProc(stdout="a" * 40 + "\n")
+            if sub[0] == "diff":
+                return FakeProc(stdout="")
+            return FakeProc()
+        if argv[0] == "docker" and argv[1] == "ps":
+            ps_called["called"] = True
+            return FakeProc(stdout="xg-douyin-ai-cs|93094f0a02ba\n")  # 生产 docker ps 缩写（应被忽略）
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2] if len(argv) > 2 else ""
+            images_by_container = {
+                "xg-auto-wechat-api": "xg-ai-system-backend:hotfix-material-presign-0ceee54",
+                "xg-douyin-ai-cs": DIGEST_9100,
+                "xg-auto-wechat-frontend": "xg-ai-system-frontend:frontend-8968c8fe-prod1",
+            }
+            if cname in images_by_container:
+                return FakeProc(stdout=images_by_container[cname] + "\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    images, err = mod._current_production_images(rel)
+    assert err == "", f"不应 IMAGE_CONFLICT（docker ps 缩写不得参与 reconciliation）: {err}"
+    assert images["douyin-ai-cs"] == DIGEST_9100
+    assert images["api"] == "xg-ai-system-backend:hotfix-material-presign-0ceee54"
+    assert images["frontend"] == "xg-ai-system-frontend:frontend-8968c8fe-prod1"
+    # 三个 service 都走 .Config.Image（docker ps 不再被 reconciliation 使用）
+    assert not ps_called["called"], "reconciliation 不应调用 docker ps"
+
+    # inspect 输出：CURRENT_9100_IMAGE 使用完整 configured image，无 IMAGE_CONFLICT
+    rc = mod.cmd_inspect([])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"CURRENT_9100_IMAGE    = {DIGEST_9100}" in out
+    assert "IMAGE_CONFLICT" not in out
+
+
+# ---------------------------------------------------------------------------
+# R39: 真冲突（.Config.Image digest A vs provenance digest B）→ IMAGE_CONFLICT → BLOCK
+# ---------------------------------------------------------------------------
+def test_r39_true_conflict_still_fail_closed(monkeypatch, scratch):
+    rel = _make_release_dir(scratch, names=("prod.env",))
+    (rel / "prod.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-a\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-a\n")
+    # 容器 .Config.Image = digest AAAA（真冲突）
+    fake = _inspect_fake_for({
+        "xg-auto-wechat-api": "xg-ai-system-backend:release-a",
+        "xg-douyin-ai-cs": "xg-ai-system-backend@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "xg-auto-wechat-frontend": "xg-ai-system-frontend:release-a",
+    })
+    monkeypatch.setattr(subprocess, "run", fake)
+    images, err = mod._current_production_images(rel)
+    assert err != "", "真冲突必须 fail-closed"
+    assert "IMAGE_CONFLICT" in err
+    assert "douyin-ai-cs" in err
+
+
+# ---------------------------------------------------------------------------
+# R39b: 三个 service 统一走 docker inspect .Config.Image（非 9100 特判）
+# ---------------------------------------------------------------------------
+def test_r39b_all_services_use_config_image(monkeypatch, scratch):
+    rel = _make_release_dir(scratch, names=("prod.env",))
+    (rel / "prod.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:old-api\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:old-frontend\n")
+    inspect_calls: list[str] = []
+    orig = _inspect_fake_for({
+        "xg-auto-wechat-api": "xg-ai-system-backend:new-api",
+        "xg-douyin-ai-cs": "xg-ai-system-backend@sha256:2222",
+        "xg-auto-wechat-frontend": "xg-ai-system-frontend:new-frontend",
+    })
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "docker" and argv[1] == "inspect":
+            inspect_calls.append(argv[2])
+        return orig(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    images, err = mod._current_production_images(rel)
+    assert err != ""  # 容器新值 vs 历史旧值 → 全部冲突（证明三服务都走了 .Config.Image）
+    assert "api" in err and "douyin-ai-cs" in err and "frontend" in err
+    # 三个容器都 inspect 过（带 compose project 前缀的实际容器名）
+    assert "xg-auto-wechat-api" in inspect_calls
+    assert "xg-douyin-ai-cs" in inspect_calls
+    assert "xg-auto-wechat-frontend" in inspect_calls
+    assert len(inspect_calls) == 3

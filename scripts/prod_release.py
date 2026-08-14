@@ -57,6 +57,8 @@ PROJECT_NAME = "xg_ai_system"
 SERVICE_TARGETS = {
     "api": {
         "compose_service": "auto-wechat-api",
+        "container_name": "xg-auto-wechat-api",
+        "container_name_fallback": "auto-wechat-api",
         "image_var": "AUTO_WECHAT_API_IMAGE",
         "expected_revision_var": "AUTO_WECHAT_API_EXPECTED_REVISION",
         "port_check": ("/ready", 9000),
@@ -64,6 +66,8 @@ SERVICE_TARGETS = {
     },
     "douyin-ai-cs": {
         "compose_service": "xg-douyin-ai-cs",
+        "container_name": "xg-douyin-ai-cs",
+        "container_name_fallback": "xg-douyin-ai-cs",
         "image_var": "XG_DOUYIN_AI_CS_IMAGE",
         "expected_revision_var": "XG_DOUYIN_AI_CS_EXPECTED_REVISION",
         "port_check": ("/ready", 9100),
@@ -71,6 +75,8 @@ SERVICE_TARGETS = {
     },
     "frontend": {
         "compose_service": "auto-wechat-frontend",
+        "container_name": "xg-auto-wechat-frontend",
+        "container_name_fallback": "auto-wechat-frontend",
         "image_var": "AUTO_WECHAT_FRONTEND_IMAGE",
         "expected_revision_var": None,
         "port_check": (None, 5173),
@@ -292,13 +298,35 @@ def _db_migration_gate() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Release identity 准备（/root/.xg-ai-release/<release>.env）
 # ---------------------------------------------------------------------------
+def _running_container_image(svc_key: str) -> str:
+    """读取运行容器 configured image reference（R2.1）。
+
+    Canonical source = docker inspect <container> --format {{.Config.Image}}。
+    不用 docker ps {{.Image}}（生产会缩写 digest → 假 IMAGE_CONFLICT）。
+    容器名：优先实际生产容器名（compose project 前缀，如 xg-auto-wechat-api），
+    回退 compose service 名（dev 环境）。三个 service 统一走本函数，非特判。
+    容器不存在/不可查 → 返回 ""（调用方回退历史 provenance）。
+    """
+    info = SERVICE_TARGETS[svc_key]
+    for cname in (info["container_name"], info["container_name_fallback"]):
+        proc = _run_argv(
+            ["docker", "inspect", cname, "--format", "{{.Config.Image}}"],
+            check=False,
+        )
+        if proc.returncode == 0:
+            img = proc.stdout.strip()
+            if img:
+                return img
+    return ""
+
+
 def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
-    """解析当前真实生产三服务 image identity（R1-3）。
+    """解析当前真实生产三服务 image identity（R1-3 + R2.1）。
 
     CURRENT IMAGE SOURCE PRIORITY：
-      1. 实际运行容器 image（docker inspect <compose_service>，按 compose service 名）
+      1. 实际运行容器 image（docker inspect .Config.Image，完整 configured reference，非 docker ps 缩写）
       2. 对应历史 release identity 作为 provenance（全目录扫描，非 sorted[-1]）
-      3. 两者冲突 → fail-closed / report
+      3. 两者严格字符串对账：一致 → PASS；真冲突 → fail-closed / report
 
     Returns (images, error)。images 键：api / douyin-ai-cs / frontend。
     容器可查询时以容器为准；容器不可查询（docker 不可用）时回退历史 identity；
@@ -307,19 +335,9 @@ def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
     images: dict[str, str] = {"api": "", "douyin-ai-cs": "", "frontend": ""}
     errors: list[str] = []
 
-    # 1. 实际运行容器 image（优先）
-    container_images: dict[str, str] = {}
-    ps = _run_argv(["docker", "ps", "--format", "{{.Names}}|{{.Image}}"], check=False)
-    if ps.returncode == 0:
-        for line in ps.stdout.splitlines():
-            parts = line.split("|", 1)
-            if len(parts) == 2:
-                container_images[parts[0].strip()] = parts[1].strip()
-    for svc_key, info in SERVICE_TARGETS.items():
-        cname = info["compose_service"]
-        img = container_images.get(cname, "")
-        if img:
-            images[svc_key] = img
+    # 1. 实际运行容器 image（docker inspect .Config.Image，优先；三个 service 统一走 _running_container_image）
+    for svc_key in SERVICE_TARGETS:
+        images[svc_key] = _running_container_image(svc_key)
 
     # 2. 历史 release identity provenance（全目录扫描，按服务键取最新非空）
     history: dict[str, str] = {"api": "", "douyin-ai-cs": "", "frontend": ""}
@@ -331,13 +349,13 @@ def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
                 if v:
                     history[svc_key] = v  # 时间序覆盖 → 最后是最近值
 
-    # 3. 对账：容器有值且历史有值且不同 → fail-closed report（不自动选）
+    # 3. 对账：容器有值且历史有值且不同 → fail-closed report（不自动选；严格字符串比较，禁止模糊匹配）
     for svc_key in images:
         cimg = images[svc_key]
         himg = history[svc_key]
         if cimg and himg and cimg != himg:
             errors.append(
-                f"IMAGE_CONFLICT: {svc_key} 运行容器 {cimg!r} != 历史 release identity {himg!r}"
+                f"IMAGE_CONFLICT: {svc_key} 运行容器 .Config.Image={cimg!r} != 历史 release identity {himg!r}"
                 "（fail-closed：不自动选择，需 Owner 裁决）"
             )
         elif not cimg and himg:
