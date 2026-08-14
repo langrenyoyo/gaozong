@@ -1,12 +1,12 @@
 # ============================================================
-# G1 CODE REALITY MAP — 机器可读 Code Index Schema（DRAFT）
+# G1 CODE REALITY MAP — 机器可读 Code Index Schema（APPROVED）
 # ============================================================
-# 状态：DRAFT（G1 探索产物，非最终 Code Map，不进入 production runtime）
+# 状态：APPROVED_FOR_G1_BUILD（2026-08-14 Owner 批准 4 项 OD-G1-* 决议后定稿）
 # 层级声明：
 #   - 模块级索引（唯一事实源）：docs/architecture/CODE_INDEX.yaml
 #       · 键为 modules，描述「模块边界 + 模块级依赖」，由 scripts/generate_code_index.py
 #         生成 .md 派生视图，禁止手工编辑派生文件。
-#   - 文件级 Code Map（本 schema）：docs/architecture/code-map/code_index.yaml（待生成）
+#   - 文件级 Code Map（本 schema）：docs/architecture/code-map/code_index.yaml
 #       · 键为 entries，描述「每个代码资产的文件级归属」。
 #       · 与模块级索引通过 `module` 字段关联；不取代模块级 CODE_INDEX.yaml。
 # 约定：
@@ -14,99 +14,144 @@
 #   - 所有新增/修改必须走 G1 后续执行窗口，禁止直接填全仓。
 # ============================================================
 
-schema_version: "0.1.0-draft"        # 本 schema 版本
+schema_version: "1.0.0"              # 本 schema 版本（DRAFT 0.1.0-draft → APPROVED 1.0.0）
 governance_artifact: true            # DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
+approval: "APPROVED_FOR_G1_BUILD"    # G1 Full Build 授权状态（原 PENDING_OWNER_APPROVAL）
 source_baseline_required: true       # 实例必须记录 source_commit（见下方 project）
+
+# ------------------------------------------------------------
+# OD-G1-* Owner 决议（2026-08-14 全部 Option A 通过，定稿依据）
+# ------------------------------------------------------------
+owner_decisions:
+  od_g1_01: "APPROVED_OPTION_A"   # integrations.py 单文件多 status → status=MIXED + section_evidence 块
+  od_g1_02: "APPROVED_OPTION_A"   # Stable ID 跟随逻辑制品 → path_history[]（git rename detection 保留 ID）
+  od_g1_03: "APPROVED_OPTION_A"   # tracked generated 进分母 → artifact_type=GENERATED + generated_by + derived_from
+  od_g1_04: "APPROVED_OPTION_A"   # DOMAIN_SHARED = owner_type=MODULE + runtime_role=DOMAIN_SHARED（不新增 owner_type）
 
 # ------------------------------------------------------------
 # project（元数据）
 # ------------------------------------------------------------
 project:
-  source_commit: "<G0_CANDIDATE_SHA>"        # 生成时的 git commit（必填）
+  source_commit: "<G1_CANDIDATE_SHA>"        # 生成时的 git commit（必填，CODE_SOURCE_BASE=88235b5）
   generated_at: "<ISO8601>"                  # 生成时间（生成后填）
   last_verified_at: "<ISO8601>"              # 最近一次核实时间
-  generator_script: "scripts/generate_code_index.py"  # 与模块级索引共用生成器家族
+  generator_script: "scripts/generate_code_index.py"  # 与模块级索引共用生成器家族（G1 用 e:/tmp/g1_build 生成器）
 
 # ------------------------------------------------------------
 # entries（文件级资产清单）
 # ------------------------------------------------------------
 entries:
-  - id: "ENT-000001"                 # 稳定唯一 ID（不建议用路径当 ID，路径可迁移）
-    path: "app/routers/leads.py"     # 仓库相对路径
-    artifact_type: "ROUTER"          # 见下方枚举
-    owner_type: "MODULE"             # PLATFORM / MODULE / COMPATIBILITY / UNKNOWN
-    owner_id: "M03-LEADS"            # 归属模块 ID（与模块级 CODE_INDEX.yaml 的 modules 键对应）
-    module: "M03-LEADS"              # 冗余锚点：明确所属模块
-    status: "ACTIVE"                 # 见下方枚举
-    runtime_role: "HTTP_API"         # HTTP_API / WORKER / SCHEDULER / STARTUP / SUBAPP / SCRIPT / NONE
+  - id: "FILE-000001"                # 稳定唯一 ID（append-only，ID 跟随逻辑制品，见 OD-G1-02）
+    path: "app/routers/leads.py"     # 仓库相对路径（git canonical path，Windows 原样存储）
+    artifact_type: "BACKEND_ROUTER"  # 见下方 artifact_type_enum
+    owner_type: "MODULE"             # MODULE / PLATFORM / COMPATIBILITY / UNKNOWN
+    owner_id: "M02"                  # 归属模块 ID（MODULE 时 ∈ M01..M07；PLATFORM 时 ∈ PLATFORM-*；UNKNOWN 时 null）
+    module: "M02"                    # 派生字段 = owner_id when MODULE，否则 null（生成器计算，禁双写）
+    status: "ACTIVE"                 # 见 status_enum（含 MIXED，OD-G1-01）
+    runtime_role: "HTTP_API"         # 见 runtime_role_enum（含 DOMAIN_SHARED / WINDOWS_ONLY，OD-G1-04）
+    confidence: "HIGH"               # HIGH / MEDIUM / LOW / UNKNOWN
+    generated: false                 # OD-G1-03：true 时必填 generated_by + derived_from
+    generated_by: null               # 生成器标识（如 "scripts/generate_code_index.py"）
+    derived_from: null               # 源路径（如 "packages/foo/schema.proto"）
     entrypoints:                     # 对外/对内入口（HTTP 方法+路径，或函数名）
       - "POST /api/leads/webhook"
     data_owned:                      # 该资产拥有/写的数据（表名）
       - "douyin_leads"
     data_read:                       # 只读的数据（表名）
       - "ai_agents"
-    dependencies:                    # 主动依赖（代码/模块级）
+    dependencies:                    # 主动依赖（代码/模块级，须有 evidence）
       - type: "module"               # module / service / table / external
-        target: "M01-AGENTS"
+        target: "M01"
         reason: "读取智能体配置"
-    depended_by: []                  # 反向依赖（可由生成器计算，不人工双写）
+    depended_by: []                  # 反向依赖（由生成器计算，不人工双写）
     external_dependencies:           # 外部集成（NewCar / Douyin GMP / Milvus / LLM / LAS / TOS / 19000）
       - "douyin-gmp"
-    compatibility:                   # 若为兼容路径
+    compatibility:                   # COMPAT 层（comp_for/purpose/current_caller/removal_prerequisite/redirects[]）
       comp_for: null
       purpose: null
+      current_caller: null
       removal_prerequisite: null
-    legacy:                          # 若为 Legacy Candidate（≠ SAFE_TO_DELETE）
+      redirects: []
+    legacy:                          # Legacy Candidate（≠ SAFE_TO_DELETE）
       legacy_id: null
       historical_purpose: null
       evidence: null
       risk: null
-    evidence:                        # 事实来源（文件:行号 / 运行证据）
-      - "app/routers/leads.py:20"
-    notes: ""
+    section_evidence: []             # OD-G1-01：status=MIXED 时的结构化 section 证据（line range + section status）
+    path_history: []                 # OD-G1-02：rename/move 历史（生成器维护，禁人工双写）
+    evidence:                        # 事实来源（结构化，不得空、不得"看代码判断"）
+      - type: "FILE_PATH"            # IMPORT/ROUTER/DB_MODEL/MIGRATION/TEST_REFERENCE/DOCUMENT/RUNTIME_REGISTRATION/MANUAL_OWNER_DECISION/GIT_COMMIT/FILE_PATH/LINE
+        source: "app/main.py"
+        line: 126
+        note: "leads router 注册于此"
+    notes: ""                        # BC 链接 / UNKNOWN 理由 / rename-with-edit 标注
 
 # ------------------------------------------------------------
-# artifact_type 枚举
+# artifact_type 枚举（与 G1 Build Contract §7 对齐定稿）
 # ------------------------------------------------------------
 artifact_type_enum:
-  - FRONTEND_PAGE
-  - FRONTEND_COMPONENT
-  - API_CLIENT
-  - ROUTER
-  - SERVICE
-  - MODEL
-  - TABLE
-  - WORKER
-  - SCHEDULER
-  - INTEGRATION
-  - CONFIG
-  - AUTH
-  - SCRIPT
-  - MIGRATION
-  - TEST
-  - DOC
-  - OTHER
+  - BACKEND_ROUTER        # 后端 router 文件
+  - BACKEND_SERVICE       # 后端 service 文件
+  - BACKEND_MODEL         # ORM 模型 / 数据访问
+  - BACKEND_AUTH          # 认证/RBAC
+  - BACKEND_WORKER        # 后台 worker / outbox
+  - BACKEND_SCHEDULER     # 调度器
+  - BACKEND_INTEGRATION   # 外部集成 client
+  - BACKEND_ENTRY         # main / lifespan / 启动入口
+  - BACKEND_CODE          # 其它后端 .py
+  - FRONTEND_PAGE         # 前端页面
+  - FRONTEND_COMPONENT    # 前端组件
+  - FRONTEND_API_CLIENT   # 前端 API 客户端
+  - FRONTEND_HOOK         # 前端 hook/util
+  - FRONTEND_CONFIG       # vite/tsconfig/package.json
+  - FRONTEND_CODE         # 其它前端代码
+  - TEST                  # 测试文件
+  - MIGRATION             # Alembic 迁移脚本
+  - SCRIPT                # 部署/迁移/调试脚本
+  - CONFIG                # 运行时配置（compose/env/Dockerfile/ini/requirements）
+  - AUTH                  # 独立鉴权模块文件集
+  - DOCUMENT              # 治理/需求/计划文档（不进 code-ownership 分母）
+  - GENERATED             # 生成器产物（OD-G1-03，进分母但 owner=GENERATOR）
+  - ASSET                 # 静态资源（排除）
+  - GOVERNANCE            # 治理契约/索引本身（code-map/* 自身）
+  - OTHER                 # 兜底（必须 notes 说明）
 
 # ------------------------------------------------------------
-# owner_type 枚举
+# owner_type 枚举（OD-G1-04：不新增 DOMAIN_SHARED 作为 owner_type）
 # ------------------------------------------------------------
 owner_type_enum:
-  - PLATFORM         # 跨所有业务模块的公共底座
-  - MODULE           # 归属某个业务模块（owner_id 必填）
-  - COMPATIBILITY    # 合法调用者的历史接口/旧数据兼容（不应成为新代码首选入口）
-  - UNKNOWN          # 无法确认归属（必须写 notes 说明缺什么证据）
+  - MODULE           # 归属某个业务模块（owner_id ∈ M01..M07）
+  - PLATFORM         # 跨所有业务模块的公共底座（owner_id ∈ PLATFORM-AUTH/-DB/-GATE/-OUTBOX/-SCHED/-ISO/-RELEASE）
+  - COMPATIBILITY    # 合法调用者的历史接口/旧数据兼容（owner_id = COMPAT-*）
+  - UNKNOWN          # 无法确认归属（必须写 notes 说明缺什么证据 + follow-up）
 
 # ------------------------------------------------------------
-# status 枚举
+# status 枚举（OD-G1-01：新增 MIXED）
 # ------------------------------------------------------------
 status_enum:
-  - ACTIVE
-  - PLATFORM
-  - COMPATIBILITY
-  - LEGACY_CANDIDATE   # ≠ SAFE_TO_DELETE；本轮严禁删除
-  - DEV_ONLY
-  - TEST
-  - UNKNOWN
+  - ACTIVE            # 现役，正式运行路径
+  - COMPAT            # 仍被 runtime/route/import 使用，主要服务向后兼容
+  - LEGACY            # 有真实证据的历史方案（已被替代但仍有 env 控制/调用）
+  - LEGACY_CANDIDATE  # 疑似历史但未证明可安全删除（≠ SAFE_TO_DELETE）
+  - DEV_ONLY          # 仅开发/调试态
+  - TEST              # 仅测试态
+  - UNKNOWN           # 证据不足
+  - MIXED             # 单文件内多区域不同 status（须 section_evidence，OD-G1-01）
+  - DOCUMENT          # 文档（仅 DOCUMENT 类型 entry 使用）
+
+# ------------------------------------------------------------
+# runtime_role 枚举（OD-G1-04：含 DOMAIN_SHARED）
+# ------------------------------------------------------------
+runtime_role_enum:
+  - HTTP_API          # router 提供 HTTP 端点
+  - WORKER            # 后台 worker / outbox consumer
+  - SCHEDULER         # 定时调度器
+  - STARTUP           # lifespan / 启动钩子
+  - SUBAPP            # 子应用（9100 / apps/compute）
+  - SCRIPT            # 脚本入口
+  - DOMAIN_SHARED     # 领域共享能力（contact_extraction*，owner=M02）
+  - WINDOWS_ONLY      # 仅 Windows 平台运行（feedback/lead_notifications；与 owner 正交）
+  - NONE              # 无 runtime 角色（文档/配置/资产）
 
 # ------------------------------------------------------------
 # 禁止事项
@@ -115,3 +160,5 @@ forbidden:
   - "应用启动读取 code_index.yaml 决定业务行为"   # 本文件是 DERIVED GOVERNANCE ARTIFACT
   - "以 status=LEGACY_CANDIDATE 为由删除代码"      # 删除需 G2 独立授权
   - "手工编辑 CODE_INDEX.md（派生视图）"           # 由生成器产生
+  - "人工双写派生字段（module / depended_by / path_history）"  # 由生成器计算
+  - "用规范化路径覆盖 git canonical path"          # Windows 大小写/斜杠仅作比较索引，不落库
