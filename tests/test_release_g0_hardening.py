@@ -168,7 +168,7 @@ def test_t14_image_revision_mismatch_fails(monkeypatch):
     （禁止 0028-era image 对 DB0034 部署；不绑定仓库 master head）。"""
     monkeypatch.setattr(
         S10B, "image_migration_heads",
-        lambda image, timeout=120: ["0035"] if "9db3f58" in image else ["0003"],
+        lambda image, script_location, timeout=120: ["0035"] if "9db3f58" in image else ["0003"],
     )
     env_path = _release_env()
     try:
@@ -185,7 +185,7 @@ def test_t14b_image_revision_match_pass(monkeypatch):
     """target image 实际 head 与 expected 一致 → PREFLIGHT PASS（G0-B5 半程）。"""
     monkeypatch.setattr(
         S10B, "image_migration_heads",
-        lambda image, timeout=120: ["0034"] if "9db3f58" in image else ["0003"],
+        lambda image, script_location, timeout=120: ["0034"] if "9db3f58" in image else ["0003"],
     )
     env_path = _release_env()
     try:
@@ -257,7 +257,7 @@ def test_tr1_2_cli_revision_conflicts_release_env_fails(capsys):
 def _patch_three_way(monkeypatch, image9000: str, db9000: str, db9100: str = "0003"):
     monkeypatch.setattr(
         S10B, "image_migration_heads",
-        lambda image, timeout=120: [image9000] if "9db3f58" in image else ["0003"],
+        lambda image, script_location, timeout=120: [image9000] if "9db3f58" in image else ["0003"],
     )
     monkeypatch.setattr(
         S10B, "db_actual_revision",
@@ -419,7 +419,7 @@ def test_tr1_8_runtime_env_missing_fails(capsys, monkeypatch):
     monkeypatch.setattr(S10B, "run_apply", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
     monkeypatch.setattr(
         S10B, "image_migration_heads",
-        lambda image, timeout=120: ["0034"] if "9db3f58" in image else ["0003"],
+        lambda image, script_location, timeout=120: ["0034"] if "9db3f58" in image else ["0003"],
     )
     env_path = _release_env()
     missing = os.path.join(tempfile.gettempdir(), "g0-r1-missing-runtime.env")

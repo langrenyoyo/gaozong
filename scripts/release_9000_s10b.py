@@ -72,8 +72,13 @@ EXPECTED_REVISION_VARS = {
 PROJECT_NAME = "xg_ai_system"
 # G0 C4：runtime config env file 默认值（service env_file 指向，.env.production.local）。
 DEFAULT_RUNTIME_ENV_FILE = ".env.production.local"
-# 镜像内 alembic migrations 目录（Dockerfile.backend.dev COPY migrations/ → /workspace/migrations）。
-IMAGE_MIGRATIONS_DIR = "/workspace/migrations"
+# 镜像内各服务的 alembic migrations script location（Dockerfile.backend.dev COPY migrations/ → /workspace/migrations/...）。
+# P10 探针必须用 service-specific script location：9000→auto_wechat、9100→xg_douyin_ai_cs。
+# 禁止把聚合 /workspace/migrations 当单一 Alembic script location（ScriptDirectory().get_heads() 会探测为空）。
+IMAGE_MIGRATION_DIRS = {
+    "9000": "/workspace/migrations/postgres/auto_wechat",
+    "9100": "/workspace/migrations/postgres/xg_douyin_ai_cs",
+}
 # 当前定义的共享 mutable default（未显式配置时回落），preflight 必须拒绝（P3）。
 DEFAULT_IMAGE = "xg-ai-system-backend:latest"
 # 简单 immutable 判定：拒绝精确 known mutable :latest 后缀；不声称验证 registry 侧 immutability（§12）。
@@ -236,17 +241,20 @@ def is_immutable(ref: str) -> bool:
     return bool(ref) and not MUTABLE_LATEST_RE.search(ref)
 
 
-def image_migration_heads(image: str, timeout: int = 120) -> list[str]:
-    """只读提取镜像内 alembic migration head（docker run --rm，无任何副作用）。
+def image_migration_heads(image: str, script_location: str, timeout: int = 120) -> list[str]:
+    """只读提取镜像内指定 service 的 alembic migration head（docker run --rm，无任何副作用）。
 
     G0 C3：DB compatibility 必须绑定 target image 实际携带的 migration head，
     不能绑定仓库当前 master（master head=0035 而生产已接受 release=0034）。
-    镜像内含 /workspace/migrations + alembic（Dockerfile.backend.dev COPY migrations/）。
+    P10 契约：SERVICE → SERVICE-SPECIFIC MIGRATION IDENTITY。script_location 必须指向镜像内
+    该 service 的真实 Alembic script location（9000→/workspace/migrations/postgres/auto_wechat，
+    9100→/workspace/migrations/postgres/xg_douyin_ai_cs）；禁止把聚合 /workspace/migrations 当单一
+    script location（会探测为空，导致三方 gate 误判）。
     镜像已在本地（production 运行中）时启动容器 ~1-2s。
     """
     code = (
         f"from alembic.script import ScriptDirectory;"
-        f"print(','.join(sorted(ScriptDirectory('{IMAGE_MIGRATIONS_DIR}').get_heads())))"
+        f"print(','.join(sorted(ScriptDirectory('{script_location}').get_heads())))"
     )
     cmd = ["docker", "run", "--rm", "--entrypoint", "python", image, "-c", code]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -440,7 +448,8 @@ def preflight(
         if not image:
             continue  # image 缺失已有 P1/P2 报
         try:
-            heads = image_migration_heads(image)
+            # P10：按 service 传其专属 Alembic script location（9000→auto_wechat、9100→xg_douyin_ai_cs）
+            heads = image_migration_heads(image, IMAGE_MIGRATION_DIRS[name])
         except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
             errors.append(f"{name} image={image!r} 迁移 head 读取失败：{exc}（G0 P10/C3）")
             continue
