@@ -4,7 +4,8 @@
 # 状态：APPROVED_FOR_G1_BUILD（G1-CODE-REALITY-MAP-BUILD-1）
 # CODE_SOURCE_BASE: 88235b5bba363fd0dec4945b8e38aba1e82e2d9b
 # G1-DELTA-RECONCILIATION-1：d1fbd04..44c5914，eligible 957→965（+8：D1 presign M05 / D2 migration dirs PLATFORM-RELEASE / D3 上传反馈 M05 / D4 前端 immutable PLATFORM-RELEASE）
-# ELIGIBLE / MAPPED / UNMAPPED = 965 / 965 / 0
+# G1-DELTA-RECONCILIATION-2（PROD-RELEASE-AUTOMATION-MINIMAL-1）：eligible 965→968（+3：scripts/prod_release.py、tests/test_prod_release.py、docs/operations/PRODUCTION_RELEASE.md，均 PLATFORM-RELEASE）
+# ELIGIBLE / MAPPED / UNMAPPED = 968 / 968 / 0
 # 派生字段（module/depended_by/path_history）由生成器计算，禁人工双写
 # 本文件是 DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
 # ============================================================
@@ -37742,3 +37743,120 @@ entries:
         line: 1
         note: "G1 分类依据：G0 Release Governance"
     notes: "G0 Release Governance"
+  - id: "FILE-000966"
+    path: "scripts/prod_release.py"
+    artifact_type: "SCRIPT"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "ACTIVE"
+    runtime_role: "SCRIPT"
+    confidence: "HIGH"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "scripts/prod_release.py"
+        line: 1
+        note: "G1 分类依据：SCRIPT/PLATFORM-RELEASE（PROD-RELEASE-AUTOMATION-MINIMAL-1）"
+    notes: "最小生产发布自动化统一 CLI（inspect/deploy/verify/rollback）"
+  - id: "FILE-000967"
+    path: "tests/test_prod_release.py"
+    artifact_type: "TEST"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "tests/test_prod_release.py"
+        line: 1
+        note: "G1 分类依据：G0 Release Governance（PROD-RELEASE-AUTOMATION-MINIMAL-1）"
+    notes: "prod_release 行为保护测试（R1~R18）"
+  - id: "FILE-000968"
+    path: "docs/operations/PRODUCTION_RELEASE.md"
+    artifact_type: "DOC"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "docs/operations/PRODUCTION_RELEASE.md"
+        line: 1
+        note: "G1 分类依据：DOC/PLATFORM-RELEASE（PROD-RELEASE-AUTOMATION-MINIMAL-1）"
+    notes: "生产发布 Runbook（prod_release CLI 操作指引）"

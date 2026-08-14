@@ -410,8 +410,8 @@ items:
     severity: MEDIUM
     source_stage: G0
     ssot_ref: "docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md"
-    evidence: "canonical command 输出存在误粘贴执行的人因风险（release runner 命令回显）"
-    recommended_followup: "PLATFORM-RELEASE 独立治理：输出防误粘贴/确认 gate"
+    evidence: "canonical command 输出存在误粘贴执行的人因风险（release runner 命令回显）。PROD-RELEASE-AUTOMATION-MINIMAL-1 的 prod_release.py 已实现逐 token 命令预览（_render_command_preview，R18 测试保护）：复制整段日志 ≠ 意外执行 production command。关闭需经正式 Governance Delta 审批，本条目暂保持 OPEN"
+    recommended_followup: "PLATFORM-RELEASE 独立治理：确认 prod_release.py 覆盖所有 canonical 输出路径后，经 Governance Delta 关闭本项"
     status: OPEN
   - id: RG-FOLLOWUP-02
     bucket: RELEASE_FOLLOWUP
@@ -419,8 +419,8 @@ items:
     severity: MEDIUM
     source_stage: G0
     ssot_ref: "docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md"
-    evidence: "frontend production VITE build args 缺少完整 fail-closed build-config gate"
-    recommended_followup: "PLATFORM-RELEASE 独立治理：生产构建 fail-closed build-config 校验"
+    evidence: "frontend production VITE build args 缺少完整 fail-closed build-config gate。PROD-RELEASE-AUTOMATION-MINIMAL-1 的 prod_release.py 已实现 _frontend_build_config_gate（VITE_NEWCAR_AUTH_BASE_URL/VITE_NEWCAR_LOGIN_URL 非空校验，R11 测试保护）：缺失 → FRONTEND_BUILD BLOCKED。关闭需经正式 Governance Delta 审批，本条目暂保持 OPEN"
+    recommended_followup: "PLATFORM-RELEASE 独立治理：确认 gate 覆盖全部生产必需 VITE 变量后，经 Governance Delta 关闭本项"
     status: OPEN
 
 summary:
