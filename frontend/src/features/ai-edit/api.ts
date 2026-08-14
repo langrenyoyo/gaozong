@@ -5,6 +5,7 @@
 // 不直连 9100 或向量库、不接受前端自报 merchant_id（由 9000 可信上下文注入）。
 
 import apiClient from "../../api/client";
+import { MATERIAL_UPLOAD_TIMEOUT_MS } from "./uploadFeedback";
 import type {
   AiEditJob,
   AiEditJobCreateRequest,
@@ -45,13 +46,18 @@ export interface TosUploadResult {
   display_name: string;
 }
 
-/** 上传素材到 TOS 生成预签名 URL（喂给 LAS 混剪）。 */
+/** 上传素材到 TOS 生成预签名 URL（喂给 LAS 混剪）。
+ *
+ * 视频文件大，必须覆盖全局 10s timeout（否则大文件/慢网络会被误判超时，见 uploadFeedback.ts）。
+ * 只覆盖本请求，全局 axios timeout 保持不变。
+ */
 export async function uploadMaterialToTos(file: File, category?: string): Promise<TosUploadResult> {
   const form = new FormData();
   form.append("file", file);
   if (category) form.append("category", category);
   return unwrap(await apiClient.post("/ai-edit/materials/upload-tos", form, {
     headers: { "Content-Type": "multipart/form-data" },
+    timeout: MATERIAL_UPLOAD_TIMEOUT_MS,
   }));
 }
 

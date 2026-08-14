@@ -9,6 +9,7 @@
     "dev": "vite",
     "dev:lan": "vite --mode lan --host 0.0.0.0 --port 5173",
     "lint": "eslint .",
+    "test:upload": "node --test tests/uploadFeedback.test.ts",
     "preview": "vite preview",
     "encoding:check": "node scripts/check-frontend-encoding.mjs",
     "auth:check": "node scripts/check-newcar-direct-auth.mjs",

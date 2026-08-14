@@ -14,6 +14,7 @@ import {
   UploadCloudIcon,
 } from "lucide-react";
 import { fetchAiEditMaterials, uploadMaterialToTos, deleteMaterial, reanalyzeMaterial } from "../api";
+import { runUpload, summarizeUploadResults } from "../uploadFeedback";
 import type { AiEditMaterial } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
@@ -126,23 +127,13 @@ export default function MaterialLibrary({ merchantId }: { merchantId: string }) 
       if (files.length === 0) return;
       setTosUploading(true);
       setError(null);
-      let ok = 0;
-      let fail = 0;
-      for (const file of files) {
-        try {
-          await uploadMaterialToTos(file);
-          ok += 1;
-        } catch {
-          fail += 1;
-        }
-      }
+      // 逐文件上传；timeout/network 只计 unknown（客户端超时 ≠ 服务端失败），不自动重试
+      const counts = await runUpload(files, (f) => uploadMaterialToTos(f as File));
       setTosUploading(false);
-      if (ok > 0) {
-        toast.success(`已上传 ${ok} 个素材${fail > 0 ? `，${fail} 个失败` : ""}`);
-        await load();
-      } else if (fail > 0) {
-        setError("上传失败，请稍后重试");
-      }
+      const fb = summarizeUploadResults(counts);
+      if (fb.toastText) toast.success(fb.toastText);
+      if (fb.errorText) setError(fb.errorText);
+      if (fb.callLoad) await load();
     },
     [load],
   );
