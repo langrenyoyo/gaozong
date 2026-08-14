@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+import logging
+import urllib.parse
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -23,6 +26,8 @@ from app.services import ai_edit_service as svc
 
 
 router = APIRouter(prefix="/ai-edit", tags=["AI剪辑"])
+
+logger = logging.getLogger(__name__)
 
 
 _PERMISSION = "auto_wechat:ai_edit"
@@ -186,7 +191,76 @@ def list_materials(
     _require_ai_edit(context)
     merchant_id = _merchant(context)
     rows = svc.list_materials(db, merchant_id=merchant_id)
+    # HIGH-03 / M05-004：过期 TOS 预签名 URL 惰性重签（stable key + dynamic presign）
+    _refresh_expired_presigned_urls(db, rows)
     return _ok({"total": len(rows), "items": [svc.to_material_out(m).model_dump() for m in rows]})
+
+
+def _object_key_from_presigned_url(url: str) -> str | None:
+    """从 TOS 预签名 URL 解析 object key（域名后的路径部分）。
+
+    存量数据 cloud_storage_key 为空时的回填依据：URL 形如
+    https://<bucket>.<region-endpoint>/<key>?X-Tos-*，key = 去掉 path 前导斜杠。
+    """
+    try:
+        path = urllib.parse.urlsplit(url).path
+    except ValueError:
+        return None
+    key = path.lstrip("/")
+    return key or None
+
+
+def _refresh_expired_presigned_urls(db: Session, materials: list) -> None:
+    """对已过期的 TOS 预签名 URL 惰性重签并回填 cloud_storage_key（HIGH-03 / M05-004）。
+
+    只读列表路径上的惰性修复（stable key storage + dynamic presign）：
+    - 仅处理 tos_presigned_expires_at 已过期（或缺失）的行，未过期直接透传存储值，
+      避免每次刷新都更换 URL。
+    - cloud_storage_key 为空时从已存 URL 解析回填（存量数据第一次被访问即修复）。
+    - presign 为本地 HMAC 计算，无网络 IO；任何失败仅记日志并透传旧值，不阻断列表。
+    """
+    from datetime import datetime, timedelta
+
+    from app import config
+    from app.services.las_tos_uploader import TOSUploader
+
+    if not materials:
+        return
+    now = datetime.now()
+    try:
+        uploader = TOSUploader()  # 无 prefix：cloud_storage_key 已是含前缀的完整 key
+    except Exception as exc:  # TOS 配置缺失等，不阻断列表
+        logger.warning("预签名 URL 刷新：TOSUploader 初始化失败，跳过刷新：%s", exc)
+        return
+    changed = False
+    for material in materials:
+        if not material.tos_presigned_url:
+            continue
+        if (
+            material.tos_presigned_expires_at is not None
+            and material.tos_presigned_expires_at > now
+        ):
+            continue  # 未过期，直接透传存储值
+        key = material.cloud_storage_key or _object_key_from_presigned_url(
+            material.tos_presigned_url
+        )
+        if not key:
+            logger.warning("素材 %s 无法确定 TOS object key，跳过重签", material.material_id)
+            continue
+        try:
+            new_url = uploader.presign(key)
+        except Exception as exc:
+            logger.warning("素材 %s 预签名 URL 重签失败，透传旧值：%s", material.material_id, exc)
+            continue
+        material.cloud_storage_key = key
+        material.tos_presigned_url = new_url
+        material.tos_presigned_expires_at = now + timedelta(
+            seconds=config.LAS_TOS_PRESIGN_EXPIRES_SECONDS
+        )
+        material.updated_at = now
+        changed = True
+    if changed:
+        db.commit()
 
 
 @router.post("/materials")
@@ -300,6 +374,7 @@ def upload_material_to_tos(
         material.display_name = filename
         material.tos_presigned_url = presigned_url
         material.tos_presigned_expires_at = expires_at
+        material.cloud_storage_key = tos_key
         material.storage_mode = "cloud_available"
         if category.strip():
             material.category = category.strip()
@@ -325,6 +400,7 @@ def upload_material_to_tos(
             display_name=filename,
             tos_presigned_url=presigned_url,
             tos_presigned_expires_at=expires_at,
+            cloud_storage_key=tos_key,
             category=(category.strip() or None),
             duration_seconds=probe.get("duration_seconds") if probe else None,
             width=probe.get("width") if probe else None,
