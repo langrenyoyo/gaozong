@@ -25,7 +25,7 @@ stages:
     purpose: "Code Reality Map（文件级 owner/依赖/chain 事实源）"
     status: COMPLETE_AND_CURRENT
     ssot: "docs/architecture/code-map/code_index.yaml"
-    key_metric: "ELIGIBLE/MAPPED/UNMAPPED = 965/965/0"
+    key_metric: "ELIGIBLE/MAPPED/UNMAPPED = 968/968/0"
   G2:
     purpose: "Legacy 五分类登记簿"
     status: COMPLETE
@@ -100,8 +100,8 @@ ssot:
 
 metrics:
   g1:
-    eligible: 965
-    mapped: 965
+    eligible: 968
+    mapped: 968
     unmapped: 0
   g2:
     candidates: 62
