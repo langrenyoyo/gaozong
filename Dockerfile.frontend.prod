@@ -1,0 +1,42 @@
+# 生产不可变 frontend image（G0-R3）：构建产物 dist 固化进镜像，运行时只 preview。
+# 开发仍用 Dockerfile.frontend.dev（源码挂载 + Vite dev server），二者互不影响。
+#
+# 构建（VITE_* 为构建期注入，Vite import.meta.env.VITE_* 编译进 dist；默认对齐 docker-compose.yml）：
+#   docker build -f Dockerfile.frontend.prod -t xg-ai-system-frontend:<tag> \
+#     --build-arg VITE_API_BASE_URL=/api --build-arg VITE_DOUYIN_AI_CS_API_BASE_URL=/ai-cs-api ... .
+# 运行时：vite preview 直接 serve 镜像内 dist，不依赖宿主源码、不重新 npm run build。
+# 生产 compose 组合见 docker-compose.frontend-prod.yml（image 注入 + 移除源码 bind mount）。
+
+FROM node:22-slim AS build
+WORKDIR /workspace/frontend
+
+# 先装依赖（利用层缓存，源码改动不触发重装）
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm config set registry https://registry.npmmirror.com/ && \
+    npm ci --no-fund --no-audit
+
+COPY frontend/ ./
+# VITE_* 构建期注入（默认值 = docker-compose.yml 的 environment 默认值；生产可用 --build-arg 覆盖）
+ARG VITE_API_BASE_URL=/api
+ARG VITE_AUTO_WECHAT_API_BASE_URL=/api
+ARG VITE_DOUYIN_AI_CS_API_BASE_URL=/ai-cs-api
+ARG VITE_NEWCAR_AUTH_BASE_URL=
+ARG VITE_NEWCAR_LOGIN_URL=
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
+    VITE_AUTO_WECHAT_API_BASE_URL=$VITE_AUTO_WECHAT_API_BASE_URL \
+    VITE_DOUYIN_AI_CS_API_BASE_URL=$VITE_DOUYIN_AI_CS_API_BASE_URL \
+    VITE_NEWCAR_AUTH_BASE_URL=$VITE_NEWCAR_AUTH_BASE_URL \
+    VITE_NEWCAR_LOGIN_URL=$VITE_NEWCAR_LOGIN_URL
+RUN npm run build
+
+# 运行阶段：只保留 preview 所需（package.json + node_modules + dist + vite.config），
+# 不含宿主源码 bind mount；容器启动不再执行 npm run build。
+FROM node:22-slim
+WORKDIR /workspace/frontend
+COPY --from=build /workspace/frontend/package.json /workspace/frontend/package-lock.json ./
+COPY --from=build /workspace/frontend/node_modules ./node_modules
+COPY --from=build /workspace/frontend/dist ./dist
+# vite preview 读取 vite.config（可含 preview/server 配置）
+COPY --from=build /workspace/frontend/vite.config.ts ./vite.config.ts
+EXPOSE 5173
+CMD ["sh", "-c", "npm run preview -- --host 0.0.0.0 --port 5173"]

@@ -1,0 +1,24 @@
+# G0-R3：生产 frontend 不可变镜像 override（与 docker-compose.yml 组合，禁止单独运行）。
+#
+# 解决：生产 frontend 由「源码 bind mount + 容器启动 npm run build」改为 immutable image
+#       （AUTO_WECHAT_FRONTEND_IMAGE 显式 identity，构建在 docker build 阶段完成）。
+#
+# 组合（frontend-only release）：
+#   docker compose --env-file <release-identity.env> -p xg_ai_system \
+#     -f docker-compose.yml -f docker-compose.frontend-prod.yml \
+#     up -d --no-deps --no-build auto-wechat-frontend
+#
+# 关键 Compose merge 语义（继承项目 staging 已验证的 !override 模式）：
+#   - image: ${AUTO_WECHAT_FRONTEND_IMAGE:?...} 显式注入，缺失即 fail-closed（:? 必填语法）
+#   - build: !reset      清除 base 的 build（生产 --no-build，不现场构建）
+#   - volumes: !override []  完全清空 base 的源码 bind mount / node_modules 匿名卷
+#     （compose list 默认 append，不用 !override 会残留 base 卷）
+#   - command: !override [...] 运行时只 preview 镜像内 dist，不执行 npm run build
+#   - env_file/environment/ports/healthcheck 继承 base（VITE_* 已编译进 dist，运行时无需）
+
+services:
+  auto-wechat-frontend:
+    image: ${AUTO_WECHAT_FRONTEND_IMAGE:?AUTO_WECHAT_FRONTEND_IMAGE is required}
+    build: !reset
+    volumes: !override []
+    command: !override ["sh", "-c", "npm run preview -- --host 0.0.0.0 --port 5173"]

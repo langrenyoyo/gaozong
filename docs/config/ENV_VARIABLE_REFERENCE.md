@@ -207,6 +207,7 @@ S10-B（RE-B，per-service image env var）：9000 与 9100 的部署镜像身�
 |---|---|---|---|---|---|
 | `AUTO_WECHAT_API_IMAGE` | compose | xg-ai-system-backend:latest | prod | deploy | 9000 部署镜像 ref；catch-up 期间必须为 immutable target image |
 | `XG_DOUYIN_AI_CS_IMAGE` | compose | xg-ai-system-backend:latest | prod | deploy | 9100 部署镜像 ref；catch-up 期间冻结为 preserved old image |
+| `AUTO_WECHAT_FRONTEND_IMAGE` | compose | 无默认（:? 必填） | prod | deploy | 9000 前端部署镜像 ref（G0-R3）；经 `docker-compose.frontend-prod.yml` 注入，缺失即 fail-closed，不得为 `:latest`；运行时 preview 镜像内 dist，不 bind 宿主源码、不执行 npm run build |
 
 语义约束（RG-1~RG-8 / RE-AC11）：
 - 默认值 `:latest` 仅代表开发/默认行为（向后兼容）；正式 baseline catch-up 禁止依赖共享 mutable `:latest`。
