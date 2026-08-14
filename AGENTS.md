@@ -357,16 +357,21 @@ GOVERNANCE_BASELINE = CLOSED_AND_VALIDATED / DEVELOPMENT_MODE = GOVERNED_FEATURE
 
 - Manifest（治理入口 SSOT）：`docs/architecture/governance/GOVERNANCE_BASELINE.yaml`
 - 开放问题索引（7 bucket）：`docs/architecture/governance/GOVERNANCE_BACKLOG.yaml`
+- 工作流模型（L1/L2/L3）：`docs/architecture/governance/DEVELOPMENT_WORKFLOW.md`
 - G1 Code Map：`docs/architecture/code-map/code_index.yaml` ｜ G2 Legacy：`docs/architecture/LEGACY_REGISTER.md`
 - G3 Verification：`docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml` ｜ G4 Coupling：`docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml`
 
-**开发前声明（低风险/单模块可精简为 Owner/Chain/Tests）**：
-1. identify owner（M01~M07 / PLATFORM / PLATFORM-RELEASE / DOMAIN_SHARED）
-2. identify affected chain（引用 G1 CHAIN）
-3. inspect legacy impact（引用 G2 legacy_id）与 coupling impact（引用 G4 coupling_id）
-4. select verification baseline（引用 G3 matrix）
-跨模块 → coupling review；LEGACY TOUCH → lifecycle review；DB/API/PROD → enhanced review；HIGH SIDE EFFECT → strict safety gate。
-治理阶段不可自动重开：代码/legacy/关键链/依赖变化走 G1~G4 触发式 delta，不是阶段重做。
+**任务分级（默认 L1，治理存在本身不构成升级理由）**：
+- **L1 普通任务**（单模块/无 schema/API/coupling/legacy/副作用）：最小流程——Owner确认 → 最小实现 → 相关测试；首轮 10~20 行短输出，不要求完整 Impact Contract。
+- **L2 受控任务**（跨模块/Legacy/Coupling/CHAIN/ownership 变化）：简版 Impact Contract（LEGACY_IMPACT/COUPLING_IMPACT/VERIFICATION/MINIMAL_SCOPE/OUT_OF_SCOPE）。
+- **L3 高风险任务**（DB/Auth/merchant 隔离/真实发送/扣费/outbox/生产数据删除/API breaking/发布机制）：完整 Impact Contract + 严格审批 + 独立测试验收；可读各 SSOT，但只读与任务有关的事实。
+- 分级细则与典型场景（Case A~G）见 `DEVELOPMENT_WORKFLOW.md`。
+
+**Governance Delta = 触发式（NO FACT CHANGE → NO GOVERNANCE DELTA）**：
+- 代码/owner 事实变化 → G1 delta；Legacy 变化 → G2 delta；关键 CHAIN/verification 变化 → G3 delta；跨 owner 依赖变化 → G4 delta。
+- 普通单模块修改（owner/CHAIN/Legacy/Coupling/Verification 均未变）：`GOVERNANCE_DELTA = NONE`，只运行相关 G3 测试。
+
+**保留**：Owner 确认门（分析 → Owner确认 → 执行，禁止"用户提需求即自动改"）；三权分离按风险启用（L1 同窗口 / L2 视风险 / L3 默认分离）；治理阶段不可自动重开（变化走触发式 delta，不是阶段重做）。
 
 ------
 
