@@ -10,9 +10,10 @@ P7 安全机制：提供紧急停止和恢复自动化的 HTTP 端点。
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.auth.dependencies import get_request_context_required
 from app.services import automation_control
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,9 @@ class AutomationActionResponse(BaseModel):
 
 
 @router.get("/status", response_model=AutomationStatusResponse)
-def get_automation_status():
+def get_automation_status(
+    context=Depends(get_request_context_required),
+):
     """
     查询当前自动化状态。
 
@@ -52,7 +55,10 @@ def get_automation_status():
 
 
 @router.post("/emergency-stop", response_model=AutomationActionResponse)
-def emergency_stop(request: EmergencyStopRequest = None):
+def emergency_stop(
+    request: EmergencyStopRequest = None,
+    context=Depends(get_request_context_required),
+):
     """
     紧急停止所有自动化。
 
@@ -69,7 +75,9 @@ def emergency_stop(request: EmergencyStopRequest = None):
 
 
 @router.post("/resume", response_model=AutomationActionResponse)
-def resume_automation():
+def resume_automation(
+    context=Depends(get_request_context_required),
+):
     """
     恢复自动化。
 

@@ -1,0 +1,1696 @@
+# ============================================================
+# G4 COUPLING REGISTRY（唯一 SSOT）
+# ============================================================
+# 任务：G4-CONTROLLED-DECOUPLING-1
+# BASE_SHA: 1f556978ba856a1d330e8e26376326c3e7aed8b5
+# 状态：PHASE A（发现+四分类）归并完成 + PHASE B（唯一 CRITICAL 最小 remediation）完成
+# 数据来源：G1（code_index/CHAIN/DEPENDENCY_MATRIX）+ G2（LEGACY_REGISTER）
+#          + G3（VERIFICATION_MATRIX）+ A1~A8 子代理静态审计（只读，BASE_SHA 上未改业务）
+# 机器验收：python scripts/validate_g4_coupling_registry.py
+# 性质：DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
+# ============================================================
+schema_version: "1.0"
+g4_base_sha: "1f556978ba856a1d330e8e26376326c3e7aed8b5"
+couplings:
+  # ============================================================
+  # COUPLING-001  CRITICAL（唯一，已 REMEDIATED）
+  # ============================================================
+  - coupling_id: COUPLING-001
+    name: automation_control_endpoints_no_auth
+    source_owner: M04
+    target_owner: PLATFORM
+    dependency_type: API
+    source_files:
+      - app/routers/automation_control.py
+    target_files:
+      - app/services/automation_control.py
+      - app/main.py
+    current_contract: "修复前无鉴权 contract：GET /automation/status、POST /automation/emergency-stop、POST /automation/resume 未挂任何鉴权依赖（无 get_request_context_required / require_permission / token 校验），未声明 ACL；紧急停止/恢复属安全机制但无人工/权限 gate"
+    current_role: "9000 进程内自动化全局开关（is_automation_allowed 的消费方覆盖 wechat_ui/input_writer、notification_service、feedback_service、wechat_auto_detect_scheduler 等）"
+    classification: CRITICAL_UNCONTROLLED
+    severity: HIGH
+    evidence: "automation_control.py:43-51 GET /status 无鉴权；:54-68 POST /emergency-stop 无鉴权直接改全局状态；:71-83 POST /resume 无鉴权可解除紧急停止；main.py:132 include_router(automation_control.router) 无条件挂载；main.py:117-122 仅 CORS 中间件；automation_control.py:56-121 状态被端点直接改写；G4 boundary test 修复后验证"
+    risk: "任意可达 9000 者（含低权限商户用户；生产经反代可达时含公网）可 POST /automation/resume 解除操作员紧急停止，使人工接管/紧急停止安全 gate 失效（违反 AGENTS.md 真实发送保护底线）；POST /automation/emergency-stop 可无差别停摆全部自动化"
+    key_chain_impact: "全部 is_automation_allowed() 消费方的开关被未授权方改写；resume 直接撤销安全停止状态，涉及真实发送安全 gate"
+    side_effect_impact: "request_emergency_stop 附带清空 DB 中 wechat_active_check_id（automation_control.py:148-167），无鉴权触发产生跨进程 DB 副作用"
+    data_ownership: "自动化启停状态为 M04 进程内共享 mutable state；修复后由 PLATFORM auth 边界保护（owner 经认证上下文确认）"
+    legacy_dependencies: []
+    verification_evidence: "tests/test_g4_automation_auth_boundary.py 7/7 PASS（行为保持 3 + fail-closed 3 + 静态契约 1）；tests/test_automation_control.py 17/18 PASS（1 失败为 G3 已知漂移 FAILURE-M04-002，unchanged）"
+    recommended_action: "已实施：为 /automation/* 三端点挂载正式鉴权依赖 Depends(get_request_context_required)（§十八'让调用方走已有 public service + 增加 contract type'；与 G0 P0-1 生产鉴权 fail-closed 同型硬化）；前端 automation.ts 已经 apiClient 带 token 调用，行为保持"
+    remediation_required: true
+    remediation_status: REMEDIATED
+    remediation_blocker: N/A
+    exit_condition: "生产 auth_enabled=true 时匿名请求 401/403 fail-closed；已认证请求行为不变；boundary test 持续保护"
+    classification_before: CRITICAL_UNCONTROLLED
+    classification_after: CONTROLLED
+    contract_before: "无鉴权（匿名可调用）"
+    contract_after: "Depends(get_request_context_required)（登录态必需）"
+    remediation: "app/routers/automation_control.py 三个端点挂载 get_request_context_required"
+    verification: "tests/test_g4_automation_auth_boundary.py 7/7 PASS"
+  # ============================================================
+  # M01/M02 边界（A1，12 条）
+  # ============================================================
+  - coupling_id: COUPLING-002
+    name: webhook 入口 MIXED（M02 归属文件承载 M01 副作用）
+    source_owner: M02
+    target_owner: M01
+    dependency_type: IMPORT
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/routers/integrations.py
+    target_files:
+      - app/services/ai_auto_reply_outbox_service.py
+      - app/services/conversation_autopilot_state_service.py
+      - app/services/douyin_webhook_idempotency_service.py
+    current_contract: "GMP 事件单一入口（/integrations/douyin/webhook + /webhook/douyin 兼容路径），按事件类型分派；M01 侧副作用经正式 service 调用，无私有实现穿透"
+    current_role: "webhook 事件处理核心（M02 文件承载 M01 的 outbox enqueue / manual takeover / webhook 幂等 / M07 计费上报）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "douyin_webhook.py:1224 enqueue_auto_reply_run（M01 outbox，同事务仅 flush）；:1317 mark_manual_takeover；:1105 claim_webhook_event（douyin_webhook_events M01 表）；:1240-1252 compute_service.record_usage（幂等键 webhook_event:{id}:lead_usage）；CODE_INDEX.yaml:148 归 M02 而 DEPENDENCY_MATRIX.md:33 E1 记 M01→M02——Reality Map 归属不一致（drift）"
+    risk: "单入口承载 M01/M02 双模块职责；归属漂移导致治理决策方向不明；改动 webhook 核心同时影响线索与自动回复两侧"
+    key_chain_impact: "是（webhook 入口是 webhook→线索→分配→通知→回访→反馈全链起点）"
+    side_effect_impact: "同事务 enqueue outbox、manual takeover、M07 算力上报、异步素材下载调度"
+    data_ownership: "DouyinWebhookEvent 由 M01 幂等服务创建；同事务写 M02 DouyinLead；无独立数据写冲突"
+    legacy_dependencies:
+      - LEGACY-001
+      - LEGACY-005
+    recommended_action: "保持单一入口设计；固化文件归属（建议 webhook 事件处理核心定义为 M01 域，M02 经事件/outbox 消费）；补 boundary test 验证事件→线索→outbox 三者同事务原子性与归属"
+    remediation_status: N/A
+  - coupling_id: COUPLING-003
+    name: E1 webhook upsert DouyinLead（会话归并）
+    source_owner: M01
+    target_owner: M02
+    dependency_type: DATABASE
+    source_files:
+      - app/integrations/douyin_webhook.py
+    target_files:
+      - app/models.py
+      - app/services/lead_management_service.py
+    current_contract: "会话归并 upsert（account_open_id+conversation_short_id 聚合键，merchant_id 必填）；pending 才更新、非 pending 不覆盖业务状态；R2-6 租户冲突显式阻断；R4/R5 SAVEPOINT 隔离 + 唯一约束识别；上游 claim 幂等"
+    current_role: "webhook 线索落库（链上第一数据环节）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py:678-870 upsert_lead_from_webhook（新建 :765-839 / 更新 :841-861 / 跳过 :863-870）；:603 ValueError('merchant_id_required_for_lead_query')；:744 冲突返回 tenant_scope_conflict_blocked；:1105 上游 claim 幂等"
+    risk: "无当前风险；契约完整（幂等+租户隔离+状态保护）；依赖方向与 owner 明确（DEPENDENCY_MATRIX E1 已登记）"
+    key_chain_impact: "是（线索落库是链上第一数据环节）"
+    side_effect_impact: "无（纯 upsert；创建后才触发 _dispatch_lead_after_create）"
+    data_ownership: "DouyinLead 创建/更新由 webhook 入口承担（M02 entrypoint）；状态字段在非 pending 时不被 webhook 覆盖"
+    legacy_dependencies: []
+    recommended_action: "keep；维持 R2-6/R4/R5 防御与 tests/test_douyin_webhook.py、test_douyin_leads_session_isolation.py 边界测试"
+    remediation_status: N/A
+  - coupling_id: COUPLING-004
+    name: E1 关联 recover_contact_valid 跨 owner 写 CustomerProfile.contact_state
+    source_owner: M01
+    target_owner: M02
+    dependency_type: API
+    source_files:
+      - app/integrations/douyin_webhook.py
+    target_files:
+      - app/services/customer_profile_service.py
+      - app/models.py
+    current_contract: "P-0-C 空号追问链路：客户发来新有效联系方式时经 customer_profile_service.recover_contact_valid（:304-342）恢复 VALID，invalid_version 保留审计不归零；写入失败不阻断 webhook（try/except）"
+    current_role: "空号追问链路的联系方式恢复入口之一"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py:1194-1213 调用 recover_contact_valid；customer_profile_service.py:304-342 实现（仅 contact_state!=invalid 时迁移）；:256-301 mark_contact_invalid 同门面；写者收敛于 customer_profile_service（webhook/reply_checker:57/wechat_ui_reply_service:412/agent_write_back/admin 路由）"
+    risk: "无当前风险；contact_state 所有写者经同一正式 service 门面，owner=M02 冻结，契约（P-0-C 链路）明确"
+    key_chain_impact: "是（空号追问链路的恢复入口之一，影响回访链）"
+    side_effect_impact: "清除 CustomerProfile 失效字段 + updated_at，事务内 flush"
+    data_ownership: "contact_state 由 customer_profile_service 独占写（mark_contact_invalid/recover_contact_valid），读方为 contact_state_service（只读镜像）与 followup worker"
+    legacy_dependencies: []
+    recommended_action: "keep；建议将'contact_state 写入口唯一门面'固化为文档契约并补跨写者一致性测试"
+    remediation_status: N/A
+  - coupling_id: COUPLING-005
+    name: E2 客服工作台读 M02 数据（CustomerProfile 走正式 service + DouyinLead 直接 ORM 双轨）
+    source_owner: M01
+    target_owner: M02
+    dependency_type: DATABASE
+    source_files:
+      - app/services/douyin_workbench_conversation_service.py
+    target_files:
+      - app/services/customer_profile_service.py
+      - app/services/lead_management_service.py
+      - app/models.py
+    current_contract: "工作台画像聚合：load_customer_profile（M02 正式只读 service）优先覆盖意图字段；_find_conversation_lead 直接 ORM query DouyinLead（merchant_id 过滤）；lead_has_retained_contact/lead_is_high_intent/compute_lead_score 走 M02 正式 service"
+    current_role: "客服工作台（M01 核心 UI）读线索/档案支撑人工介入"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "douyin_workbench_conversation_service.py:986 load_customer_profile；:1904 query = db.query(DouyinLead).filter(source_id == open_id)；:1906 商户过滤；读表异常降级（:997-1001）；路由层商户归属校验（integrations.py:78-87 _workbench_merchant_scope + require_owned_account :93-132）"
+    risk: "同文件消费方式不一致（正式 service + 直接 ORM 读 M02 表）；DouyinLead schema 变更直接冲击工作台查询；无 M02 只读 facade；当前只读+商户隔离完整，非关键风险"
+    key_chain_impact: "是（客服工作台是 M01 核心 UI）"
+    side_effect_impact: "无（纯只读）"
+    data_ownership: "只读消费；M02 持有表"
+    legacy_dependencies: []
+    recommended_action: "可选优化：为 workbench 建立 M02 只读 facade（lead_query_service），统一 load_customer_profile/_find_conversation_lead 的消费入口；不构成当前必需"
+    remediation_status: N/A
+  - coupling_id: COUPLING-006
+    name: E8 M04→M02 回写链直接 ORM 写（ReplyCheck/DouyinLead/LeadNotification 无正式 contract）
+    source_owner: M04
+    target_owner: M02
+    dependency_type: DATABASE
+    source_files:
+      - app/services/reply_checker.py
+      - app/services/wechat_ui_reply_service.py
+      - app/services/wechat_task_service.py
+      - app/scheduler/check_scheduler.py
+    target_files:
+      - app/models.py
+      - app/services/lead_management_service.py
+    current_contract: "无正式跨模块 service contract；仅 DEPENDENCY_MATRIX.md:40 E8 登记 direction（Feedback Contract 命名但无接口/schema 契约文档）；回复检测语义（replied/assigned/timeout）由 M04 持有并直接 ORM 改 M02 表"
+    current_role: "回复检测回写链（M04 微信 UI 检测 → M02 ReplyCheck/DouyinLead 状态更新 → 空号追问三路触发源之一）"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "reply_checker.py:15-45 record_manual_reply 更新 ReplyCheck + DouyinLead.status + commit；:100-102 超时置 timeout；wechat_ui_reply_service.py:247-276/332-336/497-508 直接 ORM；wechat_task_service.py:869-948/963-976/979-1043 直接 ORM（第三入口）；check_scheduler.py:68 周期调 run_checks；多 owner 直接写 DouyinLead.status：M02 assign_service.py:60（assigned）、M04 reply_checker.py:45/102、wechat_ui_reply_service.py:274"
+    risk: "①DouyinLead.status 多 owner 直接写入且无状态机单一权威/最终一致性责任方；②M02 改 schema/状态机字段即破坏 M04 回写；③无 boundary test。未达 CRITICAL：无租户隔离突破、无发送/安全 gate 绕过、无账务/算力错误扣减"
+    key_chain_impact: "是（通知→回访→反馈链上的回复检测回写环节）"
+    side_effect_impact: "ReplyCheck/DouyinLead.status/LeadNotification.send_status/ReturnVisitFollowupTask.status 多处独立 commit（非同一事务协调）"
+    data_ownership: "表 owner=M02（reply_checks/lead_notifications/douyin_leads）；状态机语义实际由 M04 持有；最终一致性无单一责任方（核心问题）"
+    legacy_dependencies:
+      - LEGACY-047
+    recommended_action: "后续治理：建立 M02 线索状态机 facade（如 apply_sales_reply_detection_result），M04 回写经 facade（含状态迁移规则 + 冲突防御）；短期先补 E8 跨模块 boundary test 固化现有行为"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-007
+    name: E7 关联 通知资格 gate 直接读 M04 wechat_tasks 表（幂等/限频）
+    source_owner: M02
+    target_owner: M04
+    dependency_type: DATABASE
+    source_files:
+      - app/services/lead_wechat_notify_eligibility_service.py
+    target_files:
+      - app/models.py
+      - app/services/wechat_task_service.py
+    current_contract: "无 M04 侧只读 facade；资格判断直接 ORM query WechatTask（同商户隔离）"
+    current_role: "通知资格判断（通知环节的前置 gate）"
+    classification: UNCONTROLLED
+    severity: LOW
+    evidence: "lead_wechat_notify_eligibility_service.py:153-163 直接 query WechatTask（notify_sales + ACTIVE_NOTIFY_TASK_STATUSES 幂等）；:239-251 _check_rate_limit JOIN DouyinLead 按 merchant_id 限频；:134-143 读 LeadNotification（M02 自身表）"
+    risk: "跨 owner 直接访问私有 model（只读）；WechatTask schema/状态枚举变更直接冲击 M02 资格判断；无 contract/边界测试；影响面小（只读幂等保护，不写、不绕过 gate）"
+    key_chain_impact: "是（通知资格判断是通知环节的前置 gate）"
+    side_effect_impact: "无（纯只读；lock_staff=True 时仅 SalesStaff FOR UPDATE 锁）"
+    data_ownership: "只读；WechatTask owner=M04"
+    legacy_dependencies: []
+    recommended_action: "低优先治理：M04 提供 task 只读查询 API（如 list_active_notify_tasks(lead_id, staff_id)）或将该只读依赖写入 contract 文档；当前可不阻塞"
+    remediation_status: N/A
+  - coupling_id: COUPLING-008
+    name: E7 webhook 自动建 notify_sales WechatTask（当前 auto_notify_disabled 硬禁用）
+    source_owner: M02
+    target_owner: M04
+    dependency_type: API
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/routers/lead_notification_actions.py
+    target_files:
+      - app/services/wechat_task_service.py
+    current_contract: "Task Contract（DEPENDENCY_MATRIX.md:39 E7）；webhook 自动建任务路径硬禁用（_dispatch_lead_after_create 返回 auto_notify_disabled，不创建 WechatTask）；手动路径 lead_notification_actions.py:120-136 create_wechat_task（M04 正式 API）+ _create_notification 同原子事务"
+    current_role: "通知环节任务创建的自动候选路径（当前禁用）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py:929-936/:1012-1021 幂等查询 WechatTask（只读）；:1030 '阶段性禁用自动微信任务创建：自动路径缺少可信商户权益判断，只保留手动 send-to-staff'；lead_notification_actions.py:104-137 违禁词替换 + create_wechat_task + notification 同一事务"
+    risk: "无当前风险（自动路径禁用）；若未来启用 auto_notify，需先解决'webhook 直接建 M04 表 + 幂等查询直读 M04 表'的契约问题"
+    key_chain_impact: "是（通知环节任务创建的自动候选路径）"
+    side_effect_impact: "当前无副作用（禁用分支仅日志）；手动路径副作用明确（任务+通知同事务）"
+    data_ownership: "WechatTask 创建归 M04 wechat_task_service（正式 API）；LeadNotification 归 M02 路由创建"
+    legacy_dependencies:
+      - LEGACY-005
+    recommended_action: "keep（保持禁用）；启用条件：webhook 建任务改为仅经 M04 正式 API 并补 boundary test"
+    remediation_status: N/A
+  - coupling_id: COUPLING-009
+    name: 空号追问 Worker import M01 私有发送函数（_send_private_message_with_context）
+    source_owner: DOMAIN_SHARED
+    target_owner: M01
+    dependency_type: IMPORT
+    source_files:
+      - app/services/contact_invalid_followup_service.py
+    target_files:
+      - app/services/douyin_private_message_send_service.py
+      - app/services/douyin_workbench_conversation_service.py
+    current_contract: "无正式跨 owner contract：_send_private_message_with_context 为下划线私有函数（douyin_private_message_send_service.py:102），未公开封装/文档化 API；唯一隐式约定是 send_source 白名单与位置参数契约；无跨 owner boundary test"
+    current_role: "空号追问自动发送链（webhook/M04 回写触发 → Worker claim → 门禁 → 真实发送）的核心发送环节"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "contact_invalid_followup_service.py:42 from app.services.douyin_private_message_send_service import _send_private_message_with_context；:243-250 真实发送（auto_send=True, send_source=contact_invalid_followup），仅 _check_gates（:340-366）保留 G4 人工接管 + 24h 窗口，无 require_owned_account / require_douyin_account_for_merchant / 显式限频；douyin_private_message_send_service.py:82 公开入口才做 require_douyin_account_for_merchant；:102 私有函数内部无商户归属校验；:303-309 唯一商户隔离是 task.merchant_id 创建时快照"
+    risk: "真实私信自动发送链依赖另一 owner 的私有实现且无稳定契约；发送环节商户隔离依赖任务创建时快照而非发送时实时归属校验；账号转移商户/解绑后理论上仍可能向旧会话发送（受 CustomerProfile 存在性 + 24h 窗口 + G4 人工接管缓解）；M01 重构该私有函数签名会静默破坏 DOMAIN_SHARED 链路"
+    key_chain_impact: "空号追问自动发送链（默认关闭 CONTACT_INVALID_FOLLOWUP_ENABLED=false，发送受 invalid_version 幂等 + max_attempts=3 + 每失效事件最多 2 条约束）"
+    side_effect_impact: "发送流水 DouyinPrivateMessageSend 由 M01 私有函数代写（跨 owner 写 M01 表，但经其内部统一流水与违禁词替换）；发送成功后可创建 sequence=2 追问任务（:262-276）"
+    data_ownership: "ContactInvalidFollowupTask = DOMAIN_SHARED(M02)；DouyinPrivateMessageSend 写入由 M01 函数代写（表归属 M01）；CustomerProfile 只读消费"
+    legacy_dependencies: []
+    recommended_action: "①将 _send_private_message_with_context 提升为 M01 正式 public API（或经 ai_auto_reply_send_service 等正式门面暴露），并补跨 owner boundary test（含发送前商户实时归属校验）；②空号追问发送前补 require_owned_account / require_douyin_account_for_merchant 实时校验，消除创建时快照依赖"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-010
+    name: webhook 事件持久化与线索 upsert 的最终一致性责任方（事件 M01 表 + 线索 M02 表同事务）
+    source_owner: M01
+    target_owner: M02
+    dependency_type: DATABASE
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/routers/integrations.py
+    target_files:
+      - app/services/douyin_webhook_idempotency_service.py
+      - app/models.py
+    current_contract: "同一 webhook 事务原子写入 DouyinWebhookEvent（claim）+ DouyinLead（upsert）+ event.lead_id 回写，由 _process_webhook_locally 统一 commit；失败整体回滚 → GMP 重推 → event_key 幂等键去重；竞争失败者写派生键重复审计行"
+    current_role: "webhook 全链第一环的数据一致基础"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py:1043-1270 process_webhook_event 固定顺序（只读解析→原子占位→胜出者副作用）；douyin_webhook_idempotency_service.py:54-92 claim_webhook_event（PG/SQLite ON CONFLICT DO NOTHING RETURNING，:29-51）；integrations.py:194-204 事务边界；:1105 claim；:1173 upsert；:1216 lead_id 回写"
+    risk: "无当前风险；最终一致性责任方明确：webhook 事务 + GMP 重推 + claim 幂等；跨 owner 写由同一事务绑定，无独立提交窗口"
+    key_chain_impact: "是（全链第一环的数据一致基础）"
+    side_effect_impact: "事件+线索+outbox enqueue 同一事务原子；失败重推不重复建线索"
+    data_ownership: "事件 owner=M01（幂等服务创建）；线索 owner=M02（webhook entrypoint 写入）；event.lead_id 关联字段由 webhook 维护"
+    legacy_dependencies:
+      - LEGACY-033
+    recommended_action: "keep；维持原子占位与事务边界测试（tests/test_douyin_webhook_atomic_idempotency.py）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-011
+    name: M02 webhook_event_service 直读 M01 douyin_webhook_events 表（展示域）
+    source_owner: M02
+    target_owner: M01
+    dependency_type: DATABASE
+    source_files:
+      - app/services/webhook_event_service.py
+    target_files:
+      - app/models.py
+    current_contract: "无 M01 只读 facade；M02 webhook_events 路由经 webhook_event_service 直接 ORM 读 DouyinWebhookEvent；商户隔离（merchant_id 过滤）+ raw_body 脱敏（普通商户返回 None）+ super_admin 全量"
+    current_role: "webhook 事件展示/诊断辅助链路"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "webhook_event_service.py:57 db.query(DouyinWebhookEvent)；:59-60 非 super_admin 必须 merchant_id 匹配；:211-213 raw_body 仅 super_admin；app/routers/webhook_events.py 归 M02（CODE_INDEX.yaml:138）"
+    risk: "跨 owner 只读访问私有表（展示用途）；M01 事件表 schema 变更直接冲击 M02 展示；当前只读+隔离+脱敏完整，非关键风险"
+    key_chain_impact: "否（事件展示/诊断辅助链路）"
+    side_effect_impact: "无"
+    data_ownership: "只读；DouyinWebhookEvent owner=M01"
+    legacy_dependencies: []
+    recommended_action: "可选优化：M01 提供事件只读查询 API 或维持现状（低风险）；不构成当前必需"
+    remediation_status: N/A
+  - coupling_id: COUPLING-012
+    name: DOMAIN_SHARED contact 公共只读域
+    source_owner: DOMAIN_SHARED
+    target_owner: DOMAIN_SHARED
+    shared_boundary_reason: "DOMAIN_SHARED 领域共享域（owner=M02 冻结的只读公共层），source==target 为领域内自依赖，符合任务书 §三 contact_extraction=DOMAIN_SHARED 定义"
+    dependency_type: SHARED_STATE
+    source_files:
+      - app/services/contact_extractor.py
+      - app/services/contact_state_service.py
+      - app/services/contact_completion_resolver.py
+      - app/services/contact_validity_analyzer.py
+    target_files:
+      - app/models.py
+    current_contract: "共享状态机单一可信源（P0-B + P0.2-B）：contact_extractor 纯函数（无 DB 写）；contact_state_service 只计算不落库；contact_completion_resolver 只读事件做事件溯源补全；contact_validity_analyzer 纯文本语义分析；DEPENDENCY_MATRIX.md:108 登记 M01/M02 共享"
+    current_role: "联系方式提取/状态机贯穿 webhook→自动回复→回访链"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "contact_extractor.py grep 无 Session/DB 引用；contact_state_service.py:183-298 build_request_contact_state（只计算，异常降级返回 {}）；contact_completion_resolver.py:70-94 只读事件；contact_validity_analyzer.py:66-116 纯函数"
+    risk: "无当前风险；共享只读域不写任何私有表，owner 边界清晰（写走 customer_profile_service 门面）"
+    key_chain_impact: "是（联系方式提取/状态机贯穿 webhook→自动回复→回访链）"
+    side_effect_impact: "无（纯计算/只读）"
+    data_ownership: "无表写入；状态事实由 customer_profile_service（M02）持久化"
+    legacy_dependencies:
+      - LEGACY-048
+      - LEGACY-049
+    recommended_action: "keep；维持只读契约，禁止向该域引入 DB 写"
+    remediation_status: N/A
+  - coupling_id: COUPLING-013
+    name: E6 核对 M02→M03 智能体配置（agent_config 经 payload，9000 侧无直查）
+    source_owner: M02
+    target_owner: M03
+    dependency_type: CONFIG
+    source_files:
+      - app/integrations/douyin_webhook.py
+    target_files:
+      - app/routers/douyin_ai_cs_proxy.py
+      - app/routers/agents.py
+      - app/services/ai_auto_reply_dry_run_service.py
+    current_contract: "E6 登记为 M02→M03 R（webhook 解析绑定智能体，agent_config 经 payload）；9000 侧 M02 无直查 M03 库代码；agent_config 由 9000 组装注入 payload（9100 消费）"
+    current_role: "自动回复绑定智能体环节"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py 全文件 grep 无 AiAgent/agent_config 查询（仅 :1077-1092 商户绑定解析）；app/routers/douyin_ai_cs_proxy.py:326、agents.py:278、ai_auto_reply_dry_run_service.py:315 组装 agent_config；注意 drift：9000 侧直查 M03 表实际发生在 M01 autoreply gate（douyin_autoreply_gate_service.py:319-334），属 M01→M03 方向且未在 DEPENDENCY_MATRIX 登记"
+    risk: "无当前风险（M02 侧不穿透 M03）；E6 描述与 M01→M03 实际直查存在 Reality Map drift"
+    key_chain_impact: "是（自动回复绑定智能体环节）"
+    side_effect_impact: "无"
+    data_ownership: "ai_agents/douyin_account_agent_bindings owner=M03；9000 为权威源"
+    legacy_dependencies: []
+    recommended_action: "keep（M02 侧）；建议主窗口核实 M01→M03 直查表依赖是否应在 DEPENDENCY_MATRIX 补登记"
+    remediation_status: N/A
+  # ============================================================
+  # M03 能力/智能体边界（A2，9 条）
+  # ============================================================
+  - coupling_id: COUPLING-014
+    name: M03_agents_preview_to_9100_suggest_reply
+    source_owner: M03
+    target_owner: M01
+    dependency_type: IMPORT
+    source_files:
+      - app/routers/agents.py
+    target_files:
+      - apps/xg_douyin_ai_cs/services/reply_decision_service.py
+      - apps/xg_douyin_ai_cs/routers/ai_reply.py
+    current_contract: "XgDouyinAiCsClient 统一门面 + X-Internal-Service-Token + ReplySuggestionRequest schema；9100 require_internal_service_token（生产缺 token fail-closed）；preview_execution_id 由 9000 创建透传（C2：9100 不回连 auto_wechat DB）"
+    current_role: "M03 preview → 9100 LLM 回复生成（E4）"
+    classification: CONTROLLED
+    severity: MEDIUM
+    evidence: "E4（DEPENDENCY_MATRIX 冻结边）；agents.py:315 get_xg_douyin_ai_cs_client().suggest_reply()，:272-306 组装 agent_config/allowed_category_keys/direct_llm_policy/forbidden_words；9100 ai_reply.py:23 dependencies=[Depends(require_internal_service_token)]"
+    risk: "核心回复生成跨进程依赖 9100；9100 故障时 preview 降级返回 error 响应不阻断（agents.py:320-340）"
+    key_chain_impact: "M03 preview → 9100 LLM 回复生成；9100 计费上报回 9000"
+    side_effect_impact: "9100 LLM 调用产生算力消耗（M07 记账）；9000 写 AiPreviewExecution 状态"
+    data_ownership: "agent_config/allowed_category_keys 由 9000（M03）注入，9100 只消费不直读"
+    legacy_dependencies:
+      - LEGACY-023
+      - LEGACY-024
+      - LEGACY-025
+    recommended_action: "维持现状；若 9100 独立部署则需将 ReplySuggestionRequest 升级为版本化契约"
+    remediation_status: N/A
+  - coupling_id: COUPLING-015
+    name: M01_9100_consumes_agent_config_payload
+    source_owner: M01
+    target_owner: M03
+    dependency_type: API
+    source_files:
+      - apps/xg_douyin_ai_cs/schemas.py
+      - apps/xg_douyin_ai_cs/services/reply_decision_service.py
+    target_files:
+      - app/routers/agents.py
+      - app/routers/douyin_ai_cs_proxy.py
+      - app/services/ai_auto_reply_dry_run_service.py
+    current_contract: "agent_config 随 HTTP payload 传入（E5，X/payload 类型）；9100 只读 request.agent_config，缺失时退 9100 本地 mock 表（mock_workbench_service.py:242-282）"
+    current_role: "9100 回复决策依赖 M03 智能体配置（prompt/知识库/商家变量）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "E5（DEPENDENCY_MATRIX 冻结边）；reply_decision_service.py:832 if request.agent_config: config=request.agent_config（纯消费）；9100 仅连 RAG_DATABASE_URL（config.py:37），无 DATABASE_URL 直连 9000 库"
+    risk: "agent_config 为无版本 dict 契约，字段增删依赖 9000/9100 同步修改"
+    key_chain_impact: "9100 回复决策依赖 M03 智能体配置"
+    side_effect_impact: "无（纯只读 payload 消费）"
+    data_ownership: "M03（9000）为 AiAgent 权威数据源；9100 无 M03 库读写权"
+    legacy_dependencies:
+      - LEGACY-025
+    recommended_action: "后续可将 agent_config 定义版本化 schema 并由 9000 侧 Pydantic 模型生成，消除 dict 隐式契约"
+    remediation_status: N/A
+  - coupling_id: COUPLING-016
+    name: M02_webhook_to_M03_agent_binding_resolution
+    source_owner: M02
+    target_owner: M03
+    dependency_type: API
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/services/ai_auto_reply_dry_run_service.py
+    target_files:
+      - app/services/douyin_account_agent_binding_service.py
+      - app/services/ai_agent_service.py
+    current_contract: "E6：webhook（M02）enqueue outbox 任务 → M01 outbox worker 调 resolve_webhook_bound_agent（M03 域绑定服务）解析企业号默认智能体 → agent_config 经 payload 注入 9100；merchant_id 取自 DouyinAuthorizedAccount，agent_id 取自 DouyinAccountAgentBinding"
+    current_role: "webhook → outbox → 自动回复 → 9100 全链路依赖企业号-智能体绑定正确"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "douyin_webhook.py:1222-1225 enqueue_auto_reply_run（同事务 flush）；dry_run_service.py:167 resolve_webhook_bound_agent(db, account_open_id)；binding_service.py:417-494 校验账号授权/merchant/agent active"
+    risk: "M02 事件链依赖 M03 绑定数据；绑定缺失时 reason_code=agent_binding_not_found 阻断自动回复（fail-closed 语义）"
+    key_chain_impact: "webhook → outbox → 自动回复 → 9100 全链路"
+    side_effect_impact: "无（绑定解析只读）"
+    data_ownership: "M03 拥有 AiAgent/DouyinAccountAgentBinding 表（SYSTEM_MAP 数据域 agents 4 表）"
+    legacy_dependencies:
+      - LEGACY-044
+    recommended_action: "维持现状；绑定解析已收敛单一函数，后续可抽为 M03 正式 service 接口"
+    remediation_status: N/A
+  - coupling_id: COUPLING-017
+    name: 9000_9100_double_http_hop_billing_loop
+    source_owner: M03
+    target_owner: M07
+    dependency_type: API
+    source_files:
+      - app/routers/agents.py
+      - app/routers/douyin_ai_cs_proxy.py
+      - apps/xg_douyin_ai_cs/services/compute_usage_client.py
+    target_files:
+      - app/routers/compute.py
+      - app/services/compute_service.py
+      - apps/xg_douyin_ai_cs/services/reply_decision_service.py
+    current_contract: "E3（9100→9000 上报）+ E4 组合成 9000→9100→9000 双 HTTP hop：9000 创建 preview_execution_id/run_id+attempt_count 透传 → 9100 LLM 计费点 → 9100 report_usage → 9000 /internal/compute/usage（X-Internal-Token gate + record_usage M07 原子扣费）；P1 COMPUTE-IDEMPOTENCY-001=CLOSED（F-1 RESOLVED + PG 0034 VERIFIED）"
+    current_role: "M03 preview/Trusted Reply-Suggestion 的算力扣费经 9100 回环 9000 M07"
+    classification: CONTROLLED
+    severity: MEDIUM
+    evidence: "compute_usage_client.py:172 USAGE_PATH=/internal/compute/usage、:199 report_usage；compute.py:458-463 _require_internal（生产缺 COMPUTE_INTERNAL_TOKEN 500 fail-closed）；P1_FINAL_POSTGRESQL_CONCURRENT_CLOSURE_2.md（FC-0~FC-12 全 PASS）"
+    risk: "计费正确性依赖跨进程时序与幂等 key 契约；9100 故障/超时不阻断回复但可能漏记（report_usage 绝不抛异常）"
+    key_chain_impact: "M03 preview/Trusted Reply-Suggestion 的算力扣费经 9100 回环 9000 M07"
+    side_effect_impact: "9100 LLM 成功即触发 9000 扣费副作用（幂等 key 防止重复扣费）"
+    data_ownership: "billing truth 只归 M07 committed ComputeTransaction；AiPreviewExecution 仅 9000 写"
+    legacy_dependencies:
+      - LEGACY-025
+    recommended_action: "维持现状；保持幂等 key contract 不变，9100 独立部署时需同步升级契约"
+    remediation_status: CLOSED_BY_P1
+  - coupling_id: COUPLING-018
+    name: M01_proxy_imports_M03_router_private_billing_helpers
+    source_owner: M01
+    target_owner: M03
+    dependency_type: IMPORT
+    source_files:
+      - app/routers/douyin_ai_cs_proxy.py
+    target_files:
+      - app/routers/agents.py
+    current_contract: "无正式契约：M01 router 直接 import M03 router 的下划线私有函数 _create_preview_execution/_finalize_preview_execution（P1-F1 Candidate A 引入，复用 AiPreviewExecution 作计费身份容器）；注释自称符合 douyin_live_check 先例"
+    current_role: "关键计费链（billing identity 创建→透传→幂等扣费）依赖跨模块私有实现"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "douyin_ai_cs_proxy.py:38-41 注释 + :41 from app.routers.agents import _create_preview_execution, _finalize_preview_execution；agents.py:61-96 定义（模块私有，无公开导出）；调用 :374、:400、:407"
+    risk: "M03 若重构/改名/改签名这两个私有函数，M01 Trusted Reply-Suggestion 计费身份链立即破坏（改变一侧即破坏另一侧）；当前无文档化 contract，仅靠 P1 测试固化行为"
+    key_chain_impact: "关键计费链（billing identity 创建→透传→幂等扣费）依赖跨模块私有实现"
+    side_effect_impact: "_create_preview_execution 写 AiPreviewExecution 表（9000 库）；创建失败 fail-closed 502 不调 LLM"
+    data_ownership: "AiPreviewExecution 归 M03 域，但被 M01 计费链复用"
+    legacy_dependencies:
+      - LEGACY-025
+    recommended_action: "将 _create_preview_execution/_finalize_preview_execution 提升为正式命名模块（如 app/services/ai_preview_execution_service.py）并公开导出，或定义 preview 计费身份 service 接口；禁止继续跨 router import 私有函数"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-019
+    name: capability_gateway_meta_shell
+    source_owner: PLATFORM
+    target_owner: M03
+    dependency_type: OTHER
+    source_files:
+      - app/routers/capability_gateway.py
+    target_files:
+      - apps/agents/service.py
+      - apps/knowledge/service.py
+      - apps/compute/service.py
+      - apps/leads/service.py
+      - apps/douyin_cs/service.py
+      - apps/wechat_assistant/service.py
+    current_contract: "仅 /api/{capability}/health 返回 META 元数据 status=ok（硬编码）；无业务能力转发；前端零消费证据"
+    current_role: "能力中心网关（META 聚合，当前为空壳 health）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "capability_gateway.py 全文件 29 行，唯一端点 health；前端 capabilityRoutes 为前端路由概念非本端点；7 模块互调均不经过 gateway"
+    risk: "空壳 gateway 产生'存在正式网关'的假象，实际无收敛能力"
+    key_chain_impact: "无（不参与任何关键链）"
+    side_effect_impact: "无"
+    data_ownership: "不持有数据"
+    legacy_dependencies:
+      - LEGACY-028
+    recommended_action: "保留 health 或按真实能力探测实现；不得宣称其为模块间 gateway 契约"
+    remediation_status: N/A
+  - coupling_id: COUPLING-020
+    name: compat_dev_services_share_9000_sqlite_file
+    source_owner: M03
+    target_owner: M03
+    shared_boundary_reason: "同 owner（M03）内部 dev 入口与生产实现的物理共址与共享文件，非跨 owner 穿透；登记目的是后续 PG cutover 治理"
+    dependency_type: DATABASE
+    source_files:
+      - docker-compose.dev.yml
+    target_files:
+      - apps/agents/main.py
+      - apps/knowledge/main.py
+      - apps/leads/main.py
+      - apps/douyin_cs/main.py
+      - apps/wechat_assistant/main.py
+      - apps/compute/main.py
+    current_contract: "dev-only：9203/9204/9205/9206 独立 uvicorn 与 9000 共享 sqlite:////workspace/data/auto_wechat.db（DATABASE_URL 同值）；生产 docker-compose.yml 不引用（LEGACY-028）"
+    current_role: "dev 能力中心入口（生产不可达）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "docker-compose.dev.yml:244,262,282,301 相同 DATABASE_URL sqlite 路径；:248 apps.agents.main 9203、:305 apps.knowledge.main 9206；apps/*/main.py 仅被 dev compose 与 tests 引用"
+    risk: "dev 多进程并发写同一 SQLite 文件（系统红线'禁止 SQLite 文件共享'，但仅 dev 环境）；9203 dev 入口连 9000 库意味着 dev 下存在 M03 双写入口"
+    key_chain_impact: "无（生产不可达）"
+    side_effect_impact: "dev 下 9203 与 9000 并发写 AiAgent 表"
+    data_ownership: "M03（9000）为生产权威；dev 9203 共享文件"
+    legacy_dependencies:
+      - LEGACY-027
+      - LEGACY-028
+      - LEGACY-029
+    recommended_action: "dev 入口接入 PG 独立库或显式隔离；随 PG cutover（LEGACY-034/036）自然消除"
+    remediation_status: N/A
+  - coupling_id: COUPLING-021
+    name: apps_leads_compat_delegates_to_9000_webhook_core
+    source_owner: M02
+    target_owner: M02
+    shared_boundary_reason: "同 owner（M02）COMPAT 层（apps/leads）委托 ACTIVE 主实现（9000 douyin_webhook），方向与 owner 声明一致，非跨 owner 穿透"
+    dependency_type: IMPORT
+    source_files:
+      - apps/leads/webhook_events.py
+      - apps/leads/services.py
+    target_files:
+      - app/integrations/douyin_webhook.py
+      - app/services/lead_management_service.py
+      - app/models.py
+    current_contract: "LEADS_WEBHOOK_INTERNAL_ENABLED 默认 false；9202 dev 入口委托 9000 process_webhook_event 保证双入口一致；同 owner（M02）COMPAT→ACTIVE 方向一致"
+    current_role: "9202 dev 入口（默认关闭）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "webhook_events.py:336 from app.integrations.douyin_webhook import process_webhook_event（函数内延迟 import）；:300-312 自身另存 lead upsert 重复实现（LEGACY-033 死函数）；services.py:14-17 import 9000 主实现"
+    risk: "COMPAT 层与主实现存在重复 upsert 逻辑，未来删除 COMPAT 层需先清理；方向与 owner 声明一致，无冲突"
+    key_chain_impact: "无（dev-only 入口，默认关闭）"
+    side_effect_impact: "9202 启用时会与 9000 直收路径并发处理同事件（委托主实现保证一致性）"
+    data_ownership: "M02 拥有 DouyinLead/DouyinWebhookEvent"
+    legacy_dependencies:
+      - LEGACY-029
+      - LEGACY-033
+    recommended_action: "随 COMPAT 层退役清理重复实现；不构成当前关键风险"
+    remediation_status: N/A
+  - coupling_id: COUPLING-022
+    name: m03_service_impl_physically_in_apps_with_app_reexport
+    source_owner: M03
+    target_owner: M03
+    shared_boundary_reason: "同 owner（M03）服务实现分层（apps/ 为 ACTIVE 实现层，app/services 为 re-export 兼容入口），非跨 owner"
+    dependency_type: IMPORT
+    source_files:
+      - app/services/ai_agent_service.py
+      - app/services/agent_knowledge_category_service.py
+      - app/services/knowledge_category_service.py
+      - app/repositories/knowledge_categories_async_repository.py
+    target_files:
+      - apps/agents/services.py
+      - apps/knowledge/services.py
+      - apps/agents/service.py
+      - apps/knowledge/service.py
+    current_contract: "LEGACY-027/045：apps/{agents,knowledge}.services 为当前正式实现层（ACTIVE），app/services 为 re-export 兼容入口；apps 实现层 import app.models/app.auth.context（9000 底座）；同 owner 内分层，无运行时 import 环"
+    current_role: "M03 服务实现分层（实现迁入 apps/，9000 re-export）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "ai_agent_service.py:3 from apps.agents.services import (...)；knowledge_category_service.py:1-4 docstring 'Phase 3-C 后真实实现迁入 apps.knowledge.services，旧导入路径保留 re-export'；apps/agents/services.py:12-13 import app.auth.context/app.models；app 侧无 import apps/leads|douyin_cs|wechat_assistant（除 capability_gateway META）"
+    risk: "双路径 import（app.services.* 与 apps.*.services 均可到达同一实现）增加重构面；但同 owner 且方向单向"
+    key_chain_impact: "无（同 owner 内部）"
+    side_effect_impact: "无"
+    data_ownership: "M03 拥有 AiAgent/AgentKnowledgeCategory/KnowledgeCategory/DouyinAccountAgentBinding"
+    legacy_dependencies:
+      - LEGACY-027
+      - LEGACY-045
+      - LEGACY-032
+    recommended_action: "保留现状（re-export 已登记 LEGACY-045，deletion_condition=所有调用方迁移到 apps.*.services 后移除）；不得在普通任务中顺手删除"
+    remediation_status: N/A
+  # ============================================================
+  # M04 本地代理边界（A3，5 条独立 + CRITICAL 已编号 001）
+  # ============================================================
+  - coupling_id: COUPLING-023
+    name: automation_control_cross_process_state_split
+    source_owner: M04
+    target_owner: M04
+    shared_boundary_reason: "同 owner（M04）9000 与 19000 双进程共享 automation_control 状态但无同步契约；跨进程边界耦合，非跨 owner"
+    dependency_type: SHARED_STATE
+    source_files:
+      - app/services/automation_control.py
+    target_files:
+      - app/local_agent_main.py
+      - app/services/hotkey_listener.py
+      - app/scheduler/wechat_auto_detect_scheduler.py
+      - app/services/agent_status_service.py
+      - app/wechat_ui/input_writer.py
+    current_contract: "无跨进程契约。automation_control._state（dict + threading.Lock）为模块级进程内全局，9000 与 19000 各持独立副本；heartbeat 仅上报不拉取（local_agent_main.py:502-513）；19000 无本地 emergency-stop 端点；9000 侧 emergency-stop 只改 9000 进程状态"
+    current_role: "紧急停止状态跨进程同步（缺失）——9000 面板/热键紧急停止无法阻止 19000 poll-and-execute 真实发送"
+    classification: UNCONTROLLED
+    severity: HIGH
+    evidence: "automation_control.py:27-35 模块级 _state + _state_lock（进程内全局 mutable state）；local_agent_main.py:24 import is_automation_allowed（19000 独立副本）；:2029/2175/2401/2604/2710 发送/检测前检查本进程状态（默认 enabled=True）；:502-513 heartbeat 仅上报无拉取；hotkey_listener.py:81-82 Alt+Q 只改 9000 进程状态；automation_control.py:148-167 _clear_active_detect_target lazy import SessionLocal（19000 进程内触发时潜在 DB 直连）"
+    risk: "9000 紧急停止无法阻止 19000（正式发送主链路）poll-and-execute 真实发送——紧急停止安全 gate 对正式发送面跨进程失效；同一能力（紧急停止）双 owner 无 contract；19000 侧 emergency stop 触发路径会尝试直连数据库"
+    key_chain_impact: "19000 发送链（poll-and-execute/poll-and-detect/poll-and-send-report/file-message-probe）的紧急停止检查全部基于本进程状态，9000 远程停止命令不达执行面"
+    side_effect_impact: "19000 进程内触发 request_emergency_stop 时 lazy import SessionLocal 直连 9000 数据库清 wechat_active_check_id（若 19000 部署环境含 DATABASE_URL 则成立）"
+    data_ownership: "紧急停止状态 owner 未声明；DB 副作用对象 wechat_active_check_id（CheckConfig 表）归 M04"
+    legacy_dependencies:
+      - LEGACY-002
+      - LEGACY-009
+    recommended_action: "收敛紧急停止为单一权威源（DB 状态或 9000 下发），19000 每次执行前经 HTTP 拉取 9000 automation 状态；或为 19000 提供本地受控 emergency-stop 通道并明确 owner；消除 19000 侧 DB 直连副作用"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-024
+    name: m04_9000_side_wechat_ui_execution_imports
+    source_owner: M04
+    target_owner: M04
+    shared_boundary_reason: "同 owner（M04）9000 进程内 wechat_ui 执行性 import（Windows-only 旧链路），非跨 owner"
+    dependency_type: IMPORT
+    source_files:
+      - app/main.py
+      - app/routers/feedback.py
+      - app/routers/lead_notifications.py
+      - app/services/notification_service.py
+      - app/services/feedback_service.py
+    target_files:
+      - app/wechat_ui/input_writer.py
+      - app/wechat_ui/contact_searcher.py
+      - app/wechat_ui/window_locator.py
+      - app/wechat_ui/contact_verifier.py
+    current_contract: "无正式契约。feedback/lead_notifications 为 Windows 专用路由（main.py:61-64,167-169，comtypes/uiautomation ImportError 时跳过，生产 Docker Linux 不注册）；POST /feedback/send-current-chat 与 POST /lead-notifications/open-chat 无鉴权；notification_service 为无调用方旧链路；正式主链路（19000）不依赖这些 import"
+    current_role: "9000 进程内历史 P3 反馈模块与旧通知发送链路残留（Windows-only）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "main.py:61-64,167-169 Windows 专用路由注册逻辑；feedback.py:26-32 import window_locator（find_wechat_window/find_current_chat_title/find_message_list/activate_wechat_window）；feedback.py:58-80 POST /feedback/send-current-chat 无鉴权，写微信输入框并可回车发送；lead_notifications.py:21 import open_chat_by_nickname；:72-94 POST /open-chat 无鉴权；notification_service.py:33-36 import open_chat_by_nickname/verify_current_chat_contact/write_text_to_input（全库无调用方=死代码）；feedback_service.py:248,306 lazy import"
+    risk: "9000 进程（Windows 运行时）具备直接操作微信执行能力（打开聊天/写输入框/可真实发送），与底线'9000 不直接操作微信；检测链路只读'漂移；无鉴权端点暴露面存在（仅 Windows 本机运行 9000 时可达）"
+    key_chain_impact: "非正式主链路（正式发送主链路在 19000）"
+    side_effect_impact: "9000 进程内操作微信若与 19000 同机并存会产生操作冲突（main.py:199 注释已声明旧检测调度器同机冲突风险）"
+    data_ownership: "wechat_ui 基座归 M04（UI 自动化能力，无独立 owner 契约）"
+    legacy_dependencies:
+      - LEGACY-007
+    recommended_action: "删除或硬禁用 9000 侧 wechat_ui 执行性 import（写输入框/发送路径），仅保留只读能力；残留调试端点补鉴权或并入 LEGACY-007 统一治理；明确'9000 不操作微信'为硬边界"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-025
+    name: daily_report_delivery_direct_wechat_task_orm
+    source_owner: M04
+    target_owner: M04
+    shared_boundary_reason: "同 owner（M04）日报投递链与 wechat_task_service 双 service 共享 WechatTask 表（task_type 分治），非跨 owner"
+    dependency_type: DATABASE
+    source_files:
+      - app/services/daily_report_delivery_service.py
+    target_files:
+      - app/services/wechat_task_service.py
+      - app/models.py
+    current_contract: "task_type 分治约定（send_report_attachment 归投递链专用端点管理，wechat_task_service.submit_wechat_task_result 对该类型显式抛 PermissionError）+ Phase 8-B 四层令牌协议（execution_token/download_ticket/send_nonce）；无统一 WechatTask 表访问层"
+    current_role: "日报附件投递链状态机直接在 WechatTask 表上实现"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "daily_report_delivery_service.py:28 import WechatTask；:240-251 retry_delivery 直接构造 WechatTask(task_type='send_report_attachment')；:446-454 claim 直接 UPDATE execution_token_hash；:545-549 send-intent 直接 UPDATE send_nonce_hash；:621-640 result 直接 UPDATE 状态；wechat_task_service.py:385-386 submit_wechat_task_result 对 send_report_attachment 抛 PermissionError"
+    risk: "WechatTask 表（M04）有两个写入 service，无统一入口；未来新增 task_type 会继续扩散裸写；任务状态机（claim/lease/nonce/CAS）在两处独立实现，重构时双写点易漂移"
+    key_chain_impact: "日报附件投递链（claim→download→send-intent→result）状态机与 notify_sales/detect_reply 状态机并存于同一表"
+    side_effect_impact: "无跨模块副作用（M04 内部双 service 共享表）"
+    data_ownership: "WechatTask 归 M04；日报投递与任务队列双 service 共享，task_type 分治为事实 owner 划分"
+    legacy_dependencies: []
+    recommended_action: "将 WechatTask 的创建/claim/回写收敛到 wechat_task_service 统一入口（扩展支持 send_report_attachment），或抽出共享表访问层；至少以文档/测试冻结 task_type 分治契约"
+    remediation_status: N/A
+  - coupling_id: COUPLING-026
+    name: local_agent_19000_no_inbound_auth
+    source_owner: M04
+    target_owner: PLATFORM
+    shared_boundary_reason: "19000 入站无鉴权属 loopback 信任模型，target 为 PLATFORM auth 边界（前端 UI 直连 19000 为正式 contract，归 PLATFORM）"
+    dependency_type: API
+    source_files:
+      - app/local_agent_main.py
+      - app/local_agent_exe_entry.py
+    target_files:
+      - frontend/src/api/localWechatAgent.ts
+      - frontend/src/features/ai-edit/localApi.ts
+    current_contract: "正式 UI contract（AGENTS.md 底线 7 明确'React 本机 Agent 面板必须调用浏览器所在电脑的 127.0.0.1:19000'；localWechatAgent.ts 三层优先级）；但 19000 入站端点无 token 校验（X-Local-Agent-Token 仅用于 19000→9000 出站）"
+    current_role: "19000 Local Agent（本机执行面）入站 API（loopback 信任模型）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "local_agent_main.py:66-67 DEFAULT_HOST=127.0.0.1 / DEFAULT_PORT=19000（loopback-only，底线 6）；:117-122 CORS 白名单（localhost/127.0.0.1:5173/192.168.110.113:5173/douyinapi.misanduo.com）；:227-295 出站请求带 X-Local-Agent-Token；入站端点（/agent/tasks/poll-and-execute、/agent/wechat/test、/agent/replies/detect 等）无任何入站校验；local_agent_exe_entry.py:28-29 默认 127.0.0.1:19000；localWechatAgent.ts:341-486 直连 19000 poll-and-execute/poll-and-detect/replies-detect"
+    risk: "本机任意进程/页面可直接 POST http://127.0.0.1:19000/agent/tasks/poll-and-execute 触发 19000 真实微信发送（无入站鉴权）；CORS 白名单仅缓解浏览器跨域读取（带自定义 header 请求先 preflight），对本机恶意进程无效"
+    key_chain_impact: "19000 是正式发送执行面（poll-and-execute 真实发送 / poll-and-send-report / wechat/test），入站无鉴权=纯本机信任模型"
+    side_effect_impact: "无 DB 副作用（19000 主流程不连 DB；automation_control lazy import 例外见 COUPLING-023）"
+    data_ownership: "不涉及（执行面，非数据写入方）"
+    legacy_dependencies: []
+    recommended_action: "为 19000 敏感执行端点（poll-and-execute/wechat/test/file-message-probe/replies-detect）增加入站 token 或来源校验（至少校验本机来源 + 可选 X-Local-Agent-Token 匹配 9000 下发值），或在设计文档中显式声明并冻结本机信任模型边界"
+    remediation_status: N/A
+  - coupling_id: COUPLING-027
+    name: replies_manual_unauthenticated_writeback
+    source_owner: M04
+    target_owner: M02
+    dependency_type: API
+    source_files:
+      - app/routers/replies.py
+    target_files:
+      - app/services/reply_checker.py
+      - app/models.py
+    current_contract: "无。POST /replies/manual 未挂鉴权（无 get_request_context_required）且未纳入 _require_legacy_wechat_debug_enabled 守卫（同文件其他旧端点均有守卫）；前端无调用方"
+    current_role: "手动回复记录端点（旧微信 debug 端点群之一）"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "replies.py:48-53 POST /replies/manual 仅 db: Session = Depends(get_db)，无鉴权无守卫；replies.py:28-38 _legacy_wechat_debug_enabled / _require_legacy_wechat_debug_enabled（:56-81 current-wechat-detect、:175-196 debug 端点均受守卫，/manual 独缺）；reply_checker.py:11-79 record_manual_reply 直接 ORM 写 ReplyCheck + DouyinLead.status（replied/assigned）+ 空号追问（mark_contact_invalid/recover_contact_valid）；前端 grep 无调用方"
+    risk: "任意调用者可伪造销售回复，把线索状态改为 replied/assigned、创建 ReplyCheck 记录、触发空号追问链路（create_followup_task），污染 M02 关键业务状态（关键数据写错风险）"
+    key_chain_impact: "线索状态机（pending→replied/assigned）可被未授权写入；空号追问三路触发源之一（销售回写 1.6）可被伪造触发"
+    side_effect_impact: "空号追问任务创建（M02/M01 shared worker 消费）副作用可被未授权触发"
+    data_ownership: "M02 为 ReplyCheck/DouyinLead owner；M04 以无鉴权端点直接写入"
+    legacy_dependencies:
+      - LEGACY-007
+    recommended_action: "POST /replies/manual 补正式鉴权（get_request_context_required + merchant 校验）或纳入 LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫；若已无业务用途则按 DELETE_CANDIDATE 走删除审批"
+    remediation_status: REQUIRED
+  # ============================================================
+  # M05/M06 BC-02（A4，7 条）
+  # ============================================================
+  - coupling_id: COUPLING-028
+    name: BC02_M05_M06_boundary_owner_drift
+    source_owner: M05
+    target_owner: M06
+    dependency_type: DATABASE
+    source_files:
+      - app/services/ai_edit_service.py
+      - app/routers/ai_edit.py
+      - frontend/src/features/ai-edit/api.ts
+      - frontend/src/features/ai-edit/types.ts
+    target_files:
+      - app/models.py
+      - docs/architecture/code-map/code_index.yaml
+      - docs/architecture/DEPENDENCY_MATRIX.md
+    current_contract: "BC-02 正式审计结论：owner 判定漂移（CODE_INDEX.yaml:326 文件级归 M05 vs DEPENDENCY_MATRIX.md:42,84 E10 功能级归 M06，同一 create_job 双重归属）+ G1 未登记的 M05→M06 DATABASE 读依赖（ai_edit_service.py:214-220 素材软删直接查 M06 ai_edit_jobs 表，无 facade）+ 共享代码无契约（M05 router 依赖 M06 文件的 TOSUploader、前端 api.ts 混合、同文件多 owner 变更风险）"
+    current_role: "M05（素材库）↔ M06（剪辑）边界整体（物理共址 ai_edit.py router / features/ai-edit 目录）"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "CODE_INDEX.yaml:326 把 app/services/ai_edit_service.py 归 M05 但 create_job/update_job_status/retry_job/cancel_job（:241-374）是任务状态机被 DEPENDENCY_MATRIX E10 视为 M06；CODE_INDEX.yaml:371 把 ai_edit_jobs 表归 M06；ai_edit_service.py:214-220 soft_delete_material 直接 db.query(AiEditJobMaterial).join(AiEditJob).filter(~AiEditJob.status.in_(...)) 读 M06 表；DEPENDENCY_MATRIX.md:85 声称'M05 不依赖 M06 业务能力'——存在 G1 未登记的 M05→M06 DATABASE 读依赖；ai_edit.py:225,317 from app.services.las_tos_uploader import TOSUploader（las_tos_uploader.py 归 M06）；同一 router 文件三段落（materials:186-500/jobs:508-714/las:732-940）共用 _require_ai_edit 权限门"
+    risk: "owner 判定不唯一（文件级 M05 vs 功能级 M06 冲突）；存在未登记的跨 owner 表读依赖；共享 router/frontend/TOS 工具无边界契约；修改一侧易误伤另一侧（同文件多 owner）；CODE_INDEX 与 DEPENDENCY_MATRIX 治理记录与实际代码拓扑漂移；M05 删除素材与 M06 任务引用间无独立边界测试。不因'目录混/文件大'判 CRITICAL，故未达 CRITICAL"
+    key_chain_impact: "ai_edit 链：素材（M05）→任务（M06）→LAS 产物（M06）→record_usage（M07）；跨 M05/M06/M07 三模块"
+    side_effect_impact: "素材软删时活动引用检查跨 M06 表；上传/删除/TOS 副作用由 9000 gate 控制"
+    data_ownership: "ai_edit_materials/ai_edit_job_materials 归 M05；ai_edit_jobs/ai_edit_job_artifacts 归 M06；M05 写 M06 表未登记（见 COUPLING-037）"
+    legacy_dependencies:
+      - LEGACY-060
+    recommended_action: "为 ai_edit_service.py 的素材函数/任务函数补 owner 契约登记（或按功能拆分文件）；为 M05→M06 活动引用检查补 boundary test；不强制拆 router/feature 目录（物理共址本身非关键风险）"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-029
+    name: TOS 工具类归属错位（las_tos_uploader 文件归 M06，M05 是主要消费者之一）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: FILE_STORAGE
+    source_files:
+      - app/services/las_tos_uploader.py
+    target_files:
+      - app/routers/ai_edit.py
+      - app/services/ai_edit_las_service.py
+    current_contract: "TOSUploader 为无业务状态通用工具（las_tos_uploader.py:48-242），上传/预签名/删除对象能力被 M05 素材上传与 M06 产物归档共用，object key 空间由各 owner 自行控制（ai-edit/{merchant_id}/ 素材 vs ai-edit/{merchant_id}/{job_id}/final.mp4 产物）"
+    current_role: "共享 TOS 基础设施工具（文件归属 M06 但 M05 主要消费）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "CODE_INDEX.yaml:367 将 las_tos_uploader.py 归 M06；M05 段 router 三处使用：ai_edit.py:225(_refresh_expired_presigned_urls)、:317(upload_material_to_tos)、:347；M06 使用点：ai_edit_las_service.py:29,290,292,580,639"
+    risk: "工具接口变更（如 presign 签名变化）同时影响 M05/M06；文件名前缀误导归属判断"
+    key_chain_impact: "素材上传（M05）与 LAS 产物归档（M06）共享 TOS 工具"
+    side_effect_impact: "无状态共享；各 owner 控制自身 object key 空间"
+    data_ownership: "共享基础设施工具，无业务状态"
+    legacy_dependencies: []
+    recommended_action: "保持现状可接受；如未来重构可将 TOSUploader 归公共底座并在 CODE_INDEX 注明共享"
+    remediation_status: N/A
+  - coupling_id: COUPLING-030
+    name: 前端 feature 共址（api.ts/types.ts 混合 M05+M06 客户端）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: API
+    source_files:
+      - frontend/src/features/ai-edit/api.ts
+      - frontend/src/features/ai-edit/types.ts
+      - frontend/src/features/ai-edit/routes.ts
+    target_files:
+      - frontend/src/features/ai-edit/pages/MaterialLibrary.tsx
+      - frontend/src/features/ai-edit/pages/LasRemixWorkbench.tsx
+    current_contract: "feature 内共享模块契约（M05+M06 共址共享，符合冻结映射）；9000 /ai-edit/* HTTP 为正式 contract（apiClient，merchant_id 由 9000 注入）"
+    current_role: "M05/M06 前端页面共享 api.ts/types.ts（页面级 owner 可按路由/页面区分）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "ai-edit/api.ts 单文件同时承载 M05（fetchAiEditMaterials:35、uploadMaterialToTos:54、deleteMaterial:65、reanalyzeMaterial:70）与 M06（createLasJob:109、listLasJobs:127、deleteLasJob:144）；types.ts 混合 AiEditMaterial(:31) 与 LasJobStatus 类型；LasRemixWorkbench.tsx:23 import { createLasJob, ..., fetchAiEditMaterials }（M06 页面读 M05 素材列表）；MaterialLibrary.tsx:16 仅 import M05 函数；两页面组件间无互相 import；routes.ts:5-8 两条路由"
+    risk: "api.ts 变更影响双侧页面；页面级 owner 仍可按路由/页面明确区分"
+    key_chain_impact: "LAS 混剪链（M06）+ 素材库链（M05）共享 api.ts"
+    side_effect_impact: "无跨 owner 写；上传/删除/任务操作副作用由 9000 gate 控制"
+    data_ownership: "素材/TOS 产物归 M05/M06 共享业务域（9000 注入 merchant_id，前端不自报）"
+    legacy_dependencies: []
+    recommended_action: "保持现状可接受；如未来解耦可拆分 api.ts 为 materialsApi/lasApi"
+    remediation_status: N/A
+  - coupling_id: COUPLING-031
+    name: 计费 identity 双 owner 同 capability（M05/M06 各自上报 capability_key=ai_edit）
+    source_owner: M05
+    target_owner: M07
+    dependency_type: SHARED_STATE
+    source_files:
+      - app/services/material_analysis.py
+      - app/services/ai_edit_las_service.py
+    target_files:
+      - app/services/compute_service.py
+      - apps/compute/services.py
+    current_contract: "M05 上报点 material_analysis.py:247-296：idempotency_key=material_analysis_execution:{execution_id}:ark_analysis，仅在 ark 成功后上报；M06 上报点 ai_edit_las_service.py:723-752：idempotency_key=las_job:{job.id}:archive_usage，仅在 archived=True 时上报；两个 identity namespace 前缀不冲突，各 owner 只报自己的消耗；P1 COMPUTE-IDEMPOTENCY-001 已 CLOSED"
+    current_role: "同一能力桶 ai_edit 的两个上报方（各自独立幂等 key）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "material_analysis.py:268 idempotency_key=material_analysis_execution:{execution_id}:ark_analysis；ai_edit_las_service.py:749 idempotency_key=las_job:{job.id}:archive_usage；compute_service.py:7 为 M07 统一入口；apps/compute/services.py:629,695-786 幂等路径（P1 验证）"
+    risk: "无当前风险；幂等 key 独立、触发条件明确、M07 contract 统一且经 P1 验证"
+    key_chain_impact: "M05/M06 计费上报链（能力桶维度聚合 ai_edit 总消耗属预期语义）"
+    side_effect_impact: "每成功分析/任务一笔 consume 流水 + 余额扣减"
+    data_ownership: "billing truth 归 M07；各 owner 只报自己的消耗"
+    legacy_dependencies:
+      - LEGACY-012
+    recommended_action: "无需处理；如商户侧需要区分素材分析与混剪消耗，可在 remark/model 维度细分"
+    remediation_status: N/A
+  - coupling_id: COUPLING-032
+    name: M05 素材写入口不唯一（router 直写 AiEditMaterial 绕过 register_material）
+    source_owner: M05
+    target_owner: M05
+    shared_boundary_reason: "同 owner（M05）router 层与 service 层双写入口并存（幂等语义不一致），非跨 owner"
+    dependency_type: OTHER
+    source_files:
+      - app/routers/ai_edit.py
+    target_files:
+      - app/services/ai_edit_service.py
+      - app/models.py
+    current_contract: "ai_edit.py:363-411 upload_material_to_tos 在 router 层直接 db.query(AiEditMaterial) 并按 (merchant_id, source_sha256) 幂等更新/新建，绕过 ai_edit_service.register_material（ai_edit_service.py:108-160，按 material_id 幂等）；两入口幂等键不同（register_material 按 material_id，router 按 merchant+sha256）；uk_ai_edit_materials_merchant_sha256 唯一约束存在（models.py:1667-1669）"
+    current_role: "M05 素材写入口（双入口并存）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "ai_edit.py:363-411 upload_material_to_tos 直接 ORM；ai_edit_service.py:108-160 register_material；models.py:1667-1669 唯一约束；router 层还直接写素材字段：ai_edit.py:213-263 _refresh_expired_presigned_urls 直接改 AiEditMaterial 字段并 db.commit()"
+    risk: "同源素材经双入口注册存在唯一约束竞争→500 风险（与 G3 Protected Fact FAILURE-M05-001 register_material 500 的可能触发路径一致，仅作 evidence）；素材写契约（幂等语义）不唯一；M05/M06 共址 router 文件中提高两侧变更互扰风险"
+    key_chain_impact: "素材上传链（M05）：TOS 直传 → 持久化 → 分析 → M06 消费"
+    side_effect_impact: "register_material 无 IntegrityError 重试；router 路径有幂等收敛"
+    data_ownership: "AiEditMaterial 归 M05；写入口分散于 router 与 service"
+    legacy_dependencies: []
+    recommended_action: "将 upload_material_to_tos 的写库逻辑收敛进 ai_edit_service（复用 register_material 或补 sha 收敛语义），并补 IntegrityError 处理"
+    remediation_status: N/A
+  - coupling_id: COUPLING-033
+    name: M05/M06 测试独立性（无共享状态污染，但依赖共址文件布局）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: OTHER
+    source_files:
+      - tests/test_ai_edit_presign_refresh.py
+      - tests/test_phase12_task12_material_api.py
+    target_files:
+      - app/routers/ai_edit.py
+      - app/services/las_tos_uploader.py
+    current_contract: "无全局 conftest，各测试文件自带 fixture；M05/M06 测试文件分属不同文件，各自建独立内存库，无共享状态互相污染；M05 测试穿透共址代码（import ai_edit 私有函数 _refresh_expired_presigned_urls、monkeypatch M06 工具类路径）"
+    current_role: "测试层（可分别测试，M05 测试不需执行 M06 组件逻辑）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "无全局 conftest；test_ai_edit_result_delivery.py:73-74 db_session(tmp_path, monkeypatch)；test_ai_edit_presign_refresh.py:18 直接 import app.routers.ai_edit 私有函数，:55 monkeypatch app.services.las_tos_uploader.TOSUploader；test_phase12_task12_material_api.py:63-77 用 create_app() 拉起全 app（含 M06 /las/* 路由段）；las_svc 为函数内延迟 import（ai_edit.py:742 等）"
+    risk: "M06 工具类改名/移动会破坏 M05 测试；共址 router 重构需同步维护跨模块测试"
+    key_chain_impact: "无（测试层）"
+    side_effect_impact: "无（测试隔离良好）"
+    data_ownership: "不涉及（内存库）"
+    legacy_dependencies: []
+    recommended_action: "保持现状可接受；如未来拆分 router 文件，需同步更新 presign_refresh 测试的 import 路径"
+    remediation_status: N/A
+  - coupling_id: COUPLING-034
+    name: model 表归属（ai_edit_job_materials 归 M05 但由 M06 功能写入）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: DATABASE
+    source_files:
+      - app/services/ai_edit_service.py
+      - app/services/ai_edit_las_service.py
+    target_files:
+      - app/models.py
+    current_contract: "CODE_INDEX.yaml:336 将 ai_edit_job_materials 表归 M05，但唯一写入方是 create_job（功能级归 M06）；读取方 soft_delete_material（M05）——表 owner 与写者功能 owner 不一致；AiEditJob 表字段混合 Phase 12 老任务字段 + LAS 扩展字段 + 交付闭环字段，两个创建点均属功能级 M06，source_type 区分"
+    current_role: "ai_edit 数据层表归属（M05/M06 共享模型）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "CODE_INDEX.yaml:336 ai_edit_job_materials 归 M05；ai_edit_service.py:270-295 create_job 写入（功能级 M06）；:214-220 soft_delete_material 读取（M05）；models.py:1571-1625 AiEditJob 字段混合（:1607-1614 LAS 扩展、:1615-1625 交付闭环）；ai_edit_service.py:282（manual）与 ai_edit_las_service.py:90（las_speech_auto）两创建点；AiPreviewExecution（models.py:1350-1381）是 M01 Preview billing identity，M05/M06 均不读写"
+    risk: "ai_edit_jobs 单表承载 M05 老任务流与 M06 LAS 流，schema 变更影响两侧；表 owner 登记与代码事实不一致"
+    key_chain_impact: "素材→任务→LAS 链的数据层"
+    side_effect_impact: "无跨 owner 写穿透（各表功能级 owner 可明确区分）"
+    data_ownership: "各表功能级 owner 可明确区分（素材表=M05、任务/产物表=M06）；仅 ai_edit_job_materials 表 owner 登记漂移"
+    legacy_dependencies: []
+    recommended_action: "在 CODE_INDEX 补注 ai_edit_job_materials 的写者功能归属（M06），保持表级 owner 记录与实际代码一致"
+    remediation_status: N/A
+  # ============================================================
+  # M07 算力边界（A5，7 条独立 + PRIVATE-IMPORT 并入 COUPLING-018）
+  # ============================================================
+  - coupling_id: COUPLING-035
+    name: M01→M07 跨进程算力消耗上报（9100 compute_usage_client → 9000 /internal/compute/usage）
+    source_owner: M01
+    target_owner: M07
+    dependency_type: API
+    source_files:
+      - apps/xg_douyin_ai_cs/services/compute_usage_client.py
+      - apps/xg_douyin_ai_cs/services/reply_decision_service.py
+      - apps/xg_douyin_ai_cs/rag/repository.py
+      - apps/xg_douyin_ai_cs/services/knowledge_training_service.py
+      - apps/xg_douyin_ai_cs/services/daily_report_summary_service.py
+      - apps/xg_douyin_ai_cs/services/return_visit_judge_service.py
+    target_files:
+      - app/routers/compute.py
+      - app/schemas.py
+      - app/services/compute_service.py
+      - apps/compute/services.py
+    current_contract: "ComputeUsageRequest DTO（含 idempotency_key）+ X-Internal-Token（COMPUTE_INTERNAL_TOKEN）双向校验 + 幂等键 event_namespace:business_event_id + GET /internal/compute/balance 余额查询；9000 侧生产缺 token 500 拒启动（fail-closed）"
+    current_role: "11 计费 consumer 中 5 个经此 HTTP 链路上报（Auto Reply/Preview/RAG Query/RAG Ingest/Training/Daily Report/Return Visit）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "compute_usage_client.py:172 USAGE_PATH=/internal/compute/usage；:199 report_usage；:215 idempotency_key 参数；:260 payload 含 idempotency_key；compute.py:458 /internal/compute/usage；:482 透传 idempotency_key；:436-455 _require_internal（配置 token 校验 401，production 缺配置 500）；compute_usage_client.py:156-157 enabled=base_url+token 双配置；:217,282 上报失败绝不抛异常（documented tradeoff）"
+    risk: "上报失败/缺配置 → 计费静默漏记（业务主流程不阻断）；幂等键依赖 consumer 构造，None 退路存在；G3 缺陷证据（非耦合）：compute_usage_client.py:187 httpx.get 未 import → check_balance 恒 None → 余额门禁实际 fail-open（与一期'不做余额拦截'语义一致，建议单独立项）"
+    key_chain_impact: "计费上报主链路（跨进程 HTTP）"
+    side_effect_impact: "每次 LLM/embedding 成功调用在 9000 写 consume 流水 + 余额扣减；9100 无直接 DB 副作用"
+    data_ownership: "M07 唯一拥有 ComputeTransaction/ComputeAccount；9100 不直读 9000 库"
+    legacy_dependencies:
+      - LEGACY-025
+    recommended_action: "无需修复（CONTROLLED）；建议将 check_balance 的 httpx 引用 bug 单独立项（G3 缺陷）；余额门禁语义与一期文档对齐"
+    remediation_status: N/A
+  - coupling_id: COUPLING-036
+    name: M06→M07 同进程算力上报（LAS 混剪成功后 record_usage）
+    source_owner: M06
+    target_owner: M07
+    dependency_type: IMPORT
+    source_files:
+      - app/services/ai_edit_las_service.py
+    target_files:
+      - app/services/compute_service.py
+      - apps/compute/services.py
+    current_contract: "record_usage(db, merchant_id, tokens, capability_key='ai_edit', source='other', model='las-speech-auto', usage_measurement_method='estimated_tokens', idempotency_key='las_job:{job.id}:archive_usage')；P1 Stage 3 冻结；仅成功任务上报，失败/blocked 不扣"
+    current_role: "LAS 任务成功后唯一计费点（E11）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "ai_edit_las_service.py:723-752 _report_las_compute_usage：:738 import app.services.compute_service.record_usage；:740-750 调用；:749 idempotency_key=las_job:{job.id}:archive_usage；DEPENDENCY_MATRIX E11；LEGACY_REGISTER LEGACY-012 调用方之一"
+    risk: "上报异常被 :751 except 吞掉 → 消费漏记（业务不阻断）；幂等键防异常重入重复扣费"
+    key_chain_impact: "LAS 任务成功后唯一计费点；失败/blocked 不产生计费"
+    side_effect_impact: "每成功任务一笔 consume 流水 + 余额扣减（估算 token）"
+    data_ownership: "AiEditJob 归 M06；计费账目（流水/余额）归 M07"
+    legacy_dependencies:
+      - LEGACY-012
+    recommended_action: "无需修复（CONTROLLED）；未来随 LEGACY-012 迁移改直接 import apps.compute.services"
+    remediation_status: N/A
+  - coupling_id: COUPLING-037
+    name: PLATFORM 管理员放行规则稀释 compute_config 精确权限
+    source_owner: PLATFORM
+    target_owner: M07
+    dependency_type: CAPABILITY
+    source_files:
+      - app/auth/context.py
+      - app/auth/dependencies.py
+    target_files:
+      - app/routers/compute.py
+      - apps/compute/dependencies.py
+    current_contract: "权限码 auto_wechat:admin:compute_config（app/routers/compute.py:54）；2026-07-31 管理员放行规则：持有任意 auto_wechat:admin:* 权限的管理员自动拥有所有 auto_wechat:* 功能权限（app/auth/context.py:35-42）"
+    current_role: "管理端充值/发放/套餐 CRUD/markup 配置的授权策略"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "app/auth/context.py:32-43 has_permission：:42 permission_code.startswith('auto_wechat:') and has_admin_permission() → 任意 admin 权限放行全部功能权限；:54-56 has_admin_permission 仅查任意 auto_wechat:admin:* 前缀；compute.py:222-229 _require_compute_config_admin 仅查 has_permission('auto_wechat:admin:compute_config') → 实际任意 admin 权限持有人可通过（充值/发放套餐/改 markup 直接改余额）；apps/compute/dependencies.py:78-88 require_compute_config_admin 精确匹配——9000 侧宽松 / 9205 侧严格，两侧语义不一致"
+    risk: "权限粒度比名义宽：持有任意 admin 权限即可给任意商户充值/发放/改计费比例；非商户隔离突破（管理员本身跨商户），是最小权限未落地"
+    key_chain_impact: "管理端充值/发放/套餐 CRUD/markup 配置（直接影响余额与计费比例）"
+    side_effect_impact: "recharge/grant_package 流水 + 余额正 delta（管理员正式操作，副作用明确）"
+    data_ownership: "授权策略归 PLATFORM；余额/流水账目归 M07"
+    legacy_dependencies: []
+    recommended_action: "观察项（正式策略，默认放行合理）；若需最小权限，将 _require_compute_config_admin 改为精确权限码匹配并对齐 9205 侧语义，属 Platform 授权模型独立治理"
+    remediation_status: N/A
+  - coupling_id: COUPLING-038
+    name: COMPAT-012/LEGACY-012 compute_service 兼容 re-export 入口（双实现物理并存）
+    source_owner: M07
+    target_owner: M07
+    shared_boundary_reason: "同 owner（M07）兼容 re-export 入口与 apps/compute 实现层物理并存（LEGACY-012），非跨 owner"
+    dependency_type: IMPORT
+    source_files:
+      - app/services/compute_service.py
+      - app/integrations/douyin_webhook.py
+      - app/services/wechat_task_service.py
+      - app/services/material_analysis.py
+      - app/services/ai_edit_las_service.py
+      - app/routers/compute.py
+    target_files:
+      - apps/compute/services.py
+    current_contract: "兼容 re-export（app/services/compute_service.py:1-31，__all__ 21 个符号，无业务逻辑）；LEGACY_REGISTER LEGACY-012=COMPATIBILITY，removal_prerequisite=全部调用方迁移到 apps.compute.services"
+    current_role: "5 个生产调用方的 record_usage 统一入口（M01/M02/M04/M05/M06/M07 计费链）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "compute_service.py:1-31 纯 re-export（文档串 :3-4）；5 个生产调用方：douyin_webhook.py:1240、wechat_task_service.py:590、material_analysis.py:280、ai_edit_las_service.py:738、compute.py:39；grep 证实唯一直接写 ComputeTransaction/ComputeAccount 的生产代码是 apps/compute/services.py——无绕过直写"
+    risk: "低——re-export 无逻辑，仅 import 多一跳；未迁移前删除入口 → 5 调用方 ImportError（计费中断）"
+    key_chain_impact: "5 个调用方的 record_usage 统一入口（计费链）"
+    side_effect_impact: "无（re-export 层无副作用）"
+    data_ownership: "M07（唯一 owner，无模糊）"
+    legacy_dependencies:
+      - LEGACY-012
+    recommended_action: "保持现状（COMPAT 不可删）；未来将 5 调用方迁移为直接 import apps.compute.services 后移除入口文件"
+    remediation_status: N/A
+  - coupling_id: COUPLING-039
+    name: F-2 dev_only /api/compute/internal/usage 未透传 idempotency_key（裸扣路径，DORMANT）
+    source_owner: M07
+    target_owner: M07
+    shared_boundary_reason: "同 owner（M07）9205 dev 端点与正式幂等路径的契约缺口（DORMANT），非跨 owner"
+    dependency_type: API
+    source_files:
+      - apps/compute/routers.py
+      - apps/compute/main.py
+      - apps/compute/router.py
+    target_files:
+      - apps/compute/services.py
+    current_contract: "无幂等 contract——report_usage 调 record_usage 未传 idempotency_key（apps/compute/routers.py:362-377）；端点为 COMPUTE_INTERNAL_TOKEN 保护（:331-350，production 缺配置 500 fail-closed）"
+    current_role: "9205 dev 能力中心的内部 usage 上报端点（DORMANT，无 ACTIVE 触发）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "apps/compute/routers.py:353-395 report_usage：:362-377 调 record_usage 未传 idempotency_key（对比 9000 compute.py:467-483 传 payload.idempotency_key）；docker-compose.dev.yml:270-287 compute-service 9205 仅 dev compose；生产 compose 无 compute-service；9100 USAGE_PATH=/internal/compute/usage（compute_usage_client.py:172）与 9205 路径 /api/compute/internal/usage 不同 → 9100 不可能命中该端点；LEGACY-025 Global Active None Audit-2：15 call-site 全分类，1 DORMANT + 0 UNKNOWN"
+    risk: "若 9205 被误配置为上报目标 → idempotency_key=NULL 裸扣（models.py:947 NULL 不参与唯一约束）→ 重试重复扣费；当前无 ACTIVE 触发路径，风险休眠"
+    key_chain_impact: "计费幂等链路的缺口端点（当前不可达）"
+    side_effect_impact: "无当前副作用（DORMANT）；若启用则每次请求一笔 consume 流水且无去重"
+    data_ownership: "M07"
+    legacy_dependencies:
+      - LEGACY-025
+      - LEGACY-052
+    recommended_action: "收敛：给该端点透传 idempotency_key（与 9000 端点对齐）或显式禁用；确认 9205 永不作为生产计费上报目标"
+    remediation_status: N/A
+  - coupling_id: COUPLING-040
+    name: 9205 dev 能力中心：X-Gateway-* header 信任无前置网关 + 与 9000 共享同一 SQLite 文件
+    source_owner: PLATFORM
+    target_owner: M07
+    dependency_type: API
+    source_files:
+      - apps/compute/dependencies.py
+      - apps/compute/routers.py
+      - docker-compose.dev.yml
+    target_files:
+      - apps/compute/services.py
+    current_contract: "无服务间鉴权 contract——get_gateway_context 仅信任 9000 gateway 注入的 X-Gateway-Merchant-Id/Tenant-Id/User-Id/Permissions/Super-Admin headers（apps/compute/dependencies.py:21-58），无 token/签名校验；9205 无网关前置"
+    current_role: "9205 dev 能力中心（dev-only，生产不可达）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "apps/compute/dependencies.py:21-58 get_gateway_context 仅读 X-Gateway-* headers；:61-75 require_merchant_context 仅查权限码+merchant_id；:78-88 require_compute_config_admin 精确权限；docker-compose.dev.yml:277,280-286：9205 直曝 0.0.0.0:9205；DATABASE_URL=sqlite:////workspace/data/auto_wechat.db 与 9000 共享 volume；LEGACY_REGISTER LEGACY-052；dependencies.py:1-5 自声明'9205 当前是 dev/internal-only 过渡服务：生产前必须补齐服务间鉴权'"
+    risk: "dev 网络内可伪造 X-Gateway-* headers 操作任意商户算力（含 admin 充值/发放/改 markup）；9205 与 9000 共享 SQLite 物理文件（同文件并发写）；dev-only + 生产不可达，风险低"
+    key_chain_impact: "商户算力展示/充值订单/管理端在 dev 环境的独立入口"
+    side_effect_impact: "若被伪造访问可写 recharge/grant_package 流水与余额（dev 库）；共享 SQLite 与 9000 存在并发写同一文件的隐患"
+    data_ownership: "M07（与 9000 共享同一 SQLite 文件）"
+    legacy_dependencies:
+      - LEGACY-052
+      - LEGACY-012
+    recommended_action: "dev 形态保留但标注风险；若 9205 生产化，必须先接 gateway 前置或服务间 token 鉴权"
+    remediation_status: N/A
+  - coupling_id: COUPLING-041
+    name: 幂等契约无强制 enforcement（idempotency_key=None 裸扣退路仅 warning 不拒绝）
+    source_owner: M07
+    target_owner: M07
+    shared_boundary_reason: "同 owner（M07）幂等契约执行机制的自身退路缺口（None 路径无 fail-closed），非跨 owner"
+    dependency_type: CAPABILITY
+    source_files:
+      - apps/compute/services.py
+      - app/models.py
+    target_files:
+      - apps/compute/services.py
+    current_contract: "idempotency_key 非空 → ON CONFLICT/INSERT OR IGNORE 原子幂等路径（payload_evidence 校验）；None → 旧兼容路径裸扣 + warning（apps/compute/services.py:786-815）；DB 唯一约束 (merchant_id, idempotency_key)（models.py:947），NULL 不参与"
+    current_role: "计费幂等主契约的执行机制（所有 consumer 的扣费去重保障）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "apps/compute/services.py:786-815：None → get_or_create_account + _write_transaction 裸扣；:787-791 warning 'compute stage=record_usage_no_idempotency_key'；app/models.py:947 UniqueConstraint('merchant_id','idempotency_key')——NULL 行不参与唯一约束；P1_CHECKPOINT_11_OF_11_CONSUMER_MIGRATION_COMPLETE.md:16-26：11 consumer identity contract 全部 MIGRATED_AND_VERIFIED；LEGACY-025 COMPATIBILITY None 退路 4 处；Global Active None Audit-2 VERIFIED（12 ACTIVE identity-bearing + 2 COMPATIBILITY None 退路 + 1 DORMANT + 0 UNKNOWN）"
+    risk: "当前无 ACTIVE None 触发（审计 VERIFIED），11 consumer 均遵守契约；但无 fail-closed 保护——新调用方遗漏 identity 会静默裸扣（重试重复扣费），仅 warning + NULL 流水可事后核查"
+    key_chain_impact: "计费幂等主契约的执行机制（所有 consumer 的扣费去重保障）"
+    side_effect_impact: "None 路径每次调用一笔 consume 流水 + 余额扣减，无去重（潜在重复扣费）"
+    data_ownership: "M07"
+    legacy_dependencies:
+      - LEGACY-025
+      - LEGACY-011
+    recommended_action: "未来将 None 路径改为显式 opt-in/拒绝（fail-closed）；新 consumer 代码评审强制 identity 构造；依赖已冻结的 Global None Audit 机制持续核查"
+    remediation_status: N/A
+  # ============================================================
+  # PLATFORM/DOMAIN_SHARED（A6，2 条独立 + PLAT-01 并入 COUPLING-009 + PLAT-04 并入 COUPLING-006）
+  # ============================================================
+  - coupling_id: COUPLING-042
+    name: 空号追问调度配置绕过 config 单点直接 os.getenv
+    source_owner: DOMAIN_SHARED
+    target_owner: PLATFORM
+    dependency_type: CONFIG
+    source_files:
+      - app/services/contact_invalid_followup_service.py
+    target_files:
+      - app/config.py
+    current_contract: "app/config.py 为项目配置单点（_env_str/_env_bool/_env_positive_int 读取器 + 校验函数），其余调度器配置（outbox/daily_report/return_visit）均集中登记；本模块 4 项配置未登记，属配置事实分散"
+    current_role: "空号追问调度配置（4 项 env 直读）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "contact_invalid_followup_service.py:46-49: CONTACT_INVALID_FOLLOWUP_INTERVAL_SECONDS/_LEASE_SECONDS/_MAX_ATTEMPTS/_SEQUENCE2_DELAY 直接 os.getenv，未入 app/config.py；对比 config.py:303-312（outbox）、:405-408（daily_report）、:411-418（return_visit_silent_scan）集中登记"
+    risk: "无功能风险；配置事实分散，审计/运维需两处查找，存在后续配置漂移的轻微治理隐患"
+    key_chain_impact: "无（不影响调度行为与业务链）"
+    side_effect_impact: "无"
+    data_ownership: "不涉及数据表；仅环境变量读取位置不一致"
+    legacy_dependencies: []
+    recommended_action: "将 CONTACT_INVALID_FOLLOWUP_* 4 项并入 app/config.py（低优先，可随 COUPLING-009 修复一并处理）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-043
+    name: 回访（M01）调用 M04 正式 service create_wechat_task 未在 DEPENDENCY_MATRIX 登记
+    source_owner: M01
+    target_owner: M04
+    dependency_type: CAPABILITY
+    source_files:
+      - app/services/return_visit_run_service.py
+    target_files:
+      - app/services/wechat_task_service.py
+    current_contract: "M04 wechat_task_service.create_wechat_task 为正式 service 入口（非私有函数，有明确 Task Contract 语义）；DEPENDENCY_MATRIX E7 仅登记 M02→M04（webhook 建 WechatTask），未登记 M01→M04 边——文档漂移"
+    current_role: "回访通知销售链路（M01 判定 → M04 微信任务执行 → 19000 Local Agent 通知）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "return_visit_run_service.py:60 from app.services.wechat_task_service import create_wechat_task（M04 正式 service）；:691-714 回访动作 notify_sales 时创建 WechatTask 复用 Local Agent 链路（sla_minutes/wechat_task_id 回写 ReturnVisitRun）；DEPENDENCY_MATRIX E7 仅登记 M02→M04"
+    risk: "依赖事实未登记，后续模块解耦/依赖分析可能漏判该边；无运行风险"
+    key_chain_impact: "回访通知销售链路"
+    side_effect_impact: "无（经 M04 正式 service 创建任务，不写 M04 私有状态）"
+    data_ownership: "WechatTask 表归 M04；ReturnVisitRun 归 M01"
+    legacy_dependencies: []
+    recommended_action: "更新 DEPENDENCY_MATRIX 登记 M01→M04 edge（文档治理，不涉及代码改动）"
+    remediation_status: N/A
+  # ============================================================
+  # 前端依赖图（A7，10 条）
+  # ============================================================
+  - coupling_id: COUPLING-044
+    name: 共享 api 层保留直连 9100 的 axios 客户端（潜伏绕过 9000 gateway）
+    source_owner: PLATFORM
+    target_owner: M01
+    shared_boundary_reason: "前端共享 api 层（src/api/）归 PLATFORM（前端 UI 壳层），直连 9100 绕过 9000 gateway"
+    dependency_type: API
+    source_files:
+      - frontend/src/api/douyinAiCsClient.ts
+      - frontend/src/features/douyin-cs/api.ts
+      - frontend/src/features/douyin-cs/types.ts
+    target_files:
+      - frontend/src/features/douyin-cs/components/ReplyDecisionPanel.tsx
+    current_contract: "无正式 contract。独立 axios 实例 douyinAiCsClient 直连 9100（baseURL 默认 http://127.0.0.1:9100），不经 9000 apiClient、不注入 Authorization/token、不经过 9000 可信上下文注入。同文件内 getTrustedReplySuggestion / getDouyinConversationProfileFrom9000 / listDouyinAccounts 等 9000 代理版本为正式 contract（页面实际使用路径）"
+    current_role: "历史 9100 直连客户端保留（潜伏，当前无激活 UI 调用者）"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "douyinAiCsClient.ts:4-5 DOUYIN_AI_CS_API_BASE_URL = import.meta.env.VITE_DOUYIN_AI_CS_API_BASE_URL || 'http://127.0.0.1:9100'；:7-13 独立 axios 实例（不经 apiClient/9000）；:518-531 getDouyinAiCsHealth/Ready/Version、getDouyinAccounts 直连；:743-764 getDouyinConversationProfile、getReplySuggestion 直连；features/douyin-cs/api.ts:9-23 re-export 直连函数；DouyinAiCsWorkbenchPage.tsx:1229/1303/1481/1528/1630/2280 实际均使用 9000 代理版本，直连函数当前无激活 UI 调用者"
+    risk: "若任一 feature 页面误用直连函数，将绕过 9000 RequestContext 可信上下文注入（getReplySuggestion payload 允许前端自报 tenant_id/merchant_id），可能突破商户/租户隔离；且绕过 9000 的鉴权与 gate。当前无激活调用者，风险处于潜伏状态"
+    key_chain_impact: "无激活调用链（潜伏）；若被启用则绕过 9000 鉴权与上下文注入"
+    side_effect_impact: "当前无（未激活）；潜在：商户上下文自报导致跨商户数据暴露、绕过审计链"
+    data_ownership: "9100 侧 metadata（RAG/AI 客服/回复建议）；可信上下文真源为 9000，直连路径使 owner 校验失效"
+    legacy_dependencies: []
+    recommended_action: "删除直连函数或将它们移入 dev-only 调试入口；正式商户侧强制走 getTrustedReplySuggestion（9000 可信代理，已去除 tenant/merchant 自报字段）；清理 features/douyin-cs/api.ts 中对应 re-export"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-045
+    name: UI 壳层（App.tsx）直接 import feature 私有模块 features/ai-edit/localApi（旧 19000 执行面残留）
+    source_owner: PLATFORM
+    target_owner: M05
+    shared_boundary_reason: "前端 UI 壳层（App.tsx）归 PLATFORM，直接 import M05 feature 私有模块"
+    dependency_type: IMPORT
+    source_files:
+      - frontend/src/App.tsx
+    target_files:
+      - frontend/src/features/ai-edit/localApi.ts
+      - frontend/src/features/ai-edit/api.ts
+    current_contract: "无正式共享契约：App 直接 import feature 私有文件并消费 clearAllAgentTokens()。localApi 内部经 9000 /ai-edit/agent-token 获取 token（该 HTTP 接口本身为正式 contract，token 绑定 merchant_id、存 sessionStorage，符合硬约束 6）"
+    current_role: "App 登录/登出/改密/401 → clearAllAgentTokens → sessionStorage ai_edit_agent_token:* 清理（防跨商户残留）"
+    classification: UNCONTROLLED
+    severity: LOW
+    evidence: "App.tsx:37 import { clearAllAgentTokens } from './features/ai-edit/localApi'；App.tsx:400/432/451/478/583 clearAllAgentTokens() 调用点；ai-edit/localApi.ts:1-6 注释声明「Phase 12 Task 9 AI 剪辑 Local API 客户端（127.0.0.1:19000）」，与 AGENTS.md「旧 19000 执行面已删除、改为纯 LAS 云端方案」矛盾（文档漂移）；:19-68 sessionStorage 保存 ai_edit_agent_token + clearAllAgentTokens；MaterialLibrary.tsx:16-18 与 LasRemixWorkbench.tsx:23-25 均不使用 localApi；localApi 其余 19000 函数（fetchLocalMaterials/importLocalMaterial/createLocalJob 等）无调用者"
+    risk: "UI 壳层生命周期逻辑依赖 feature 私有模块；该模块为已声明废弃的 19000 执行面残留代码。未来删除/重构 ai-edit 本地执行面时可能破坏 App 登录/登出 token 清理（残留 token 跨商户复用风险，FIX3-1/FIX4-3 防护失效）。不涉及发送/账务/隔离"
+    key_chain_impact: "App 登录/登出/改密/401 → clearAllAgentTokens → sessionStorage ai_edit_agent_token:* 清理（功能链，非发送/账务链）"
+    side_effect_impact: "清理 ai_edit_agent_token:* 前缀 sessionStorage 键；当前副作用正确且必要（退出防残留）"
+    data_ownership: "token 缓存（9000 下发、绑定 merchant_id）归 M05/M06 业务域；清理职责被 UI 壳层承担，归属错位"
+    legacy_dependencies:
+      - LEGACY-018
+    recommended_action: "将 clearAllAgentTokens 上移至共享层（如 api/client 或独立 auth/session 工具模块），App 经共享层调用；随后删除或归档 localApi.ts 残留（其 19000 直连函数已无调用者），并同步 AGENTS.md 文档声明"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-046
+    name: 共享 api 层反向 re-export feature 私有 api（api/douyinCs.ts → features/douyin-cs/api）
+    source_owner: PLATFORM
+    target_owner: M01
+    shared_boundary_reason: "前端共享 api 层归 PLATFORM，反向 re-export M01 feature 私有 api"
+    dependency_type: IMPORT
+    source_files:
+      - frontend/src/api/douyinCs.ts
+    target_files:
+      - frontend/src/features/douyin-cs/api.ts
+      - frontend/src/features/douyin-cs/types.ts
+    current_contract: "无（死壳层；全量 grep api/douyinCs 无任何 import 引用者）"
+    current_role: "历史迁移壳层（旧 api/douyinCs 路径 → feature 新路径）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "frontend/src/api/douyinCs.ts:1-2 export * from '../features/douyin-cs/api'; export type * from '../features/douyin-cs/types'；全量 grep 确认无文件 import api/douyinCs（死壳层）"
+    risk: "无当前风险（无引用者）；方向反转的共享层文件易被未来代码误用为新入口，形成隐式耦合面"
+    key_chain_impact: "无（无调用链）"
+    side_effect_impact: "无"
+    data_ownership: "M01（douyin-cs）数据，经共享层转发；owner 仍为 M01"
+    legacy_dependencies: []
+    recommended_action: "确认无外部引用后删除该文件；如确需保留，改为 feature 内直接引用而非共享层反向 re-export"
+    remediation_status: N/A
+  - coupling_id: COUPLING-047
+    name: UI 壳层聚合页 pages/Index.tsx 静态 import 多个 feature 私有组件与 api
+    source_owner: PLATFORM
+    target_owner: M02
+    shared_boundary_reason: "前端 UI 壳层（pages/Index.tsx）归 PLATFORM，聚合 import M02 等 feature 私有组件"
+    dependency_type: UI
+    source_files:
+      - frontend/src/pages/Index.tsx
+    target_files:
+      - frontend/src/features/leads/components/ChatPanel.tsx
+      - frontend/src/features/leads/components/ContactInfo.tsx
+      - frontend/src/features/leads/components/ContactList.tsx
+      - frontend/src/features/wechat-assistant/api.ts
+      - frontend/src/features/wechat-assistant/types.ts
+      - frontend/src/features/douyin-cs/api.ts
+    current_contract: "UI 壳层导航聚合契约（owner=UI 壳层）；feature 组件/api 为各自 feature 内部实现，无独立对外 contract"
+    current_role: "首屏导航聚合、本机 Agent 离线检测（checkLocalAgentHealth 直连 19000）、待审回复计数（getPendingReviewCount）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "Index.tsx:9-11 import ChatPanel/ContactInfo/ContactList from '../features/leads/components/*'（M02 私有组件）；:21-23 import type WechatAgentTab / checkLocalAgentHealth / fetchLocalAgentRuntimeStatus / LocalAgentRuntimeStatus（M04 api+types）；:25 import { getPendingReviewCount } from '../features/douyin-cs/api'（M01 api）；:30-39 lazy import 各 feature 页面组件"
+    risk: "壳层聚合面较宽；feature 内部组件签名变更会波及 Index。owner 仍明确（UI 壳层）、无私有实现穿透，不构成关键风险"
+    key_chain_impact: "首屏导航聚合、本机 Agent 离线检测、待审回复计数"
+    side_effect_impact: "无跨 owner 写；仅 UI 状态与只读请求"
+    data_ownership: "各 feature 数据归属各自 owner；Index 仅消费展示"
+    legacy_dependencies: []
+    recommended_action: "保持壳层聚合语义；如需收窄耦合面，可将 ChatPanel/ContactInfo/ContactList 提升为共享组件层（components/ 下）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-048
+    name: pages/ 与 components/ 历史兼容 re-export 壳层（旧路径 → feature 新路径，约 20 处）
+    source_owner: PLATFORM
+    target_owner: M02
+    shared_boundary_reason: "前端 UI 壳层（pages/、components/ 顶层）归 PLATFORM，历史兼容 re-export 壳"
+    dependency_type: UI
+    source_files:
+      - frontend/src/components/ChatPanel.tsx
+      - frontend/src/components/ContactInfo.tsx
+      - frontend/src/components/ContactList.tsx
+      - frontend/src/components/WechatTaskPanel.tsx
+      - frontend/src/components/LocalWechatAgentTestPanel.tsx
+      - frontend/src/pages/WechatAgent.tsx
+      - frontend/src/pages/DailyReports.tsx
+      - frontend/src/pages/ComputeCenter.tsx
+    target_files:
+      - frontend/src/features/leads/components/ChatPanel.tsx
+      - frontend/src/features/leads/pages/LeadsManagement.tsx
+      - frontend/src/features/wechat-assistant/pages/WechatAgent.tsx
+      - frontend/src/features/compute/pages/ComputeCenter.tsx
+    current_contract: "单行 re-export 兼容契约（旧路径转发新路径），owner 均为 UI 壳层"
+    current_role: "历史迁移兼容层（feature 化改造前旧路径）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "components/ChatPanel.tsx:1 export { default } from '../features/leads/components/ChatPanel'；components/ContactInfo.tsx:1 / ContactList.tsx:1 / WechatTaskPanel.tsx:1 / LocalWechatAgentTestPanel.tsx:1；pages/WechatAgent.tsx:1 / DailyReports.tsx:1 / ComputeCenter.tsx:1 / SuperComputeConfig.tsx:1 / LasRemixWorkbench.tsx:1 / LeadsManagement.tsx:1 / LeadsModulePage.tsx:1 / DouyinAiCsWorkbenchPage.tsx:1 / DouyinAutoReplyRunsPage.tsx:1 / DouyinAutoReplySettingsPage.tsx:1 / AiReplyDecisionLogsPage.tsx:1 / DouyinLiveCheckPage.tsx:1 / WebhookEventsPage.tsx:1 / SuperMerchantAgent.tsx:1（约 20 处）"
+    risk: "低；双路径并存易出现漂移（新代码误 import 旧路径），但均为纯转发、无私有实现"
+    key_chain_impact: "无（纯转发壳）"
+    side_effect_impact: "无"
+    data_ownership: "各 feature 自身数据 owner 不变"
+    legacy_dependencies: []
+    recommended_action: "确认无外部引用后批量删除；未删除前禁止新代码使用旧路径（pages/、components/ 顶层壳）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-049
+    name: feature api 聚合层跨 owner re-export 后端 HTTP 端点（M04 聚合 M02/M01；M02 聚合 M01/M03/M04）
+    source_owner: M04
+    target_owner: M02
+    dependency_type: API
+    source_files:
+      - frontend/src/features/wechat-assistant/api.ts
+      - frontend/src/features/leads/api.ts
+    target_files:
+      - frontend/src/api/leads.ts
+      - frontend/src/api/integrations.ts
+      - frontend/src/api/reports.ts
+      - frontend/src/api/staff.ts
+      - frontend/src/api/wechatAutoDetect.ts
+      - frontend/src/api/notifications.ts
+      - frontend/src/api/agent.ts
+      - frontend/src/api/webhookEvents.ts
+    current_contract: "后端 HTTP API 正式 contract（走 9000 apiClient，token 注入、错误解包）；feature api.ts 仅做 re-export 聚合，未定义新契约"
+    current_role: "前端 feature api 聚合层（跨 owner re-export）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "wechat-assistant/api.ts:46-47 export { assignLead, createLead } from '../../api/leads'; export { syncDouyinLeads } from '../../api/integrations'；leads/api.ts:10-24 re-export fetchSummary/syncDouyinLeads/fetchStaffList/wechatAutoDetect/sendLeadToStaff/fetchAgentStatus/fetchWebhookEvents"
+    risk: "聚合层掩盖跨 owner 依赖面，增加隐式耦合与误用可能；但 owner 仍明确、均为正式 HTTP contract、无绕过，风险低"
+    key_chain_impact: "M04 页面可经聚合层调 M02（assignLead/createLead）与 M01（syncDouyinLeads）端点；M02 页面调 M01/M03/M04 端点。均为正式 HTTP 链"
+    side_effect_impact: "无前端侧副作用；写操作副作用由后端 gate 控制"
+    data_ownership: "端点数据归属各自后端 owner，前端聚合层不改变 owner"
+    legacy_dependencies: []
+    recommended_action: "保持 HTTP contract 语义；如需收紧，将跨 owner 调用改为页面内显式 import 共享 api 层，避免 feature api.ts 成为跨模块聚合器"
+    remediation_status: N/A
+  - coupling_id: COUPLING-050
+    name: M02 UI 页面调用 M01/M03/M04 后端 HTTP contract（走 9000 正式 API）
+    source_owner: M02
+    target_owner: M04
+    dependency_type: API
+    source_files:
+      - frontend/src/features/leads/pages/LeadsManagement.tsx
+    target_files:
+      - frontend/src/api/agent.ts
+      - frontend/src/api/wechatAutoDetect.ts
+      - frontend/src/api/integrations.ts
+      - frontend/src/api/notifications.ts
+      - frontend/src/api/staff.ts
+      - frontend/src/api/checks.ts
+      - frontend/src/api/reports.ts
+      - frontend/src/api/webhookEvents.ts
+    current_contract: "HTTP API 正式 contract（共享 api 层 → apiClient → 9000，Authorization 注入、响应解包、401 跳转统一处理）"
+    current_role: "线索管理页面对 M01/M03/M04 后端端点的消费面（全部经 9000 正式 contract）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "LeadsManagement.tsx:28 import { fetchAgentStatus } from '../api'；:1199-1203 fetchStaffList/fetchSummary/fetchChecks/fetchWechatAutoDetectStatus/fetchAgentStatus；:1350-1366 syncDouyinLeads（M01 /integrations/douyin/sync-leads）；:1480 setWechatAutoDetectTarget(check.id)（M04 /wechat-auto-detect/target）；:1516 sendLeadToStaff(selectedLead.id, false)（M04 /lead-notifications/send-to-staff）；:26 markContactInvalid（/admin/contact-invalid/mark）"
+    risk: "无当前关键风险；M02 UI 对 M01/M03/M04 后端端点存在跨 owner 消费面，但全部经 9000 正式 contract、owner 明确、无绕过"
+    key_chain_impact: "线索同步（M01）、微信自动检测与通知销售（M04）、Agent 状态（M03）等业务链，均经 9000 gate"
+    side_effect_impact: "sendLeadToStaff/setWechatAutoDetectTarget/syncLeads 有后端副作用，均由后端 gate 与权限控制"
+    data_ownership: "线索数据归 M02；agent/wechat 状态与通知归 M04；webhook 事件归 M01"
+    legacy_dependencies: []
+    recommended_action: "无需整改；作为 UI contract 对齐观察项，可后续收敛 M02 对 M04/M01 端点依赖面"
+    remediation_status: N/A
+  - coupling_id: COUPLING-051
+    name: ai-edit feature 内 M05/M06 共享模块（api.ts/uploadFeedback/localApi/types/routes）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: IMPORT
+    source_files:
+      - frontend/src/features/ai-edit/api.ts
+      - frontend/src/features/ai-edit/uploadFeedback.ts
+      - frontend/src/features/ai-edit/localApi.ts
+      - frontend/src/features/ai-edit/types.ts
+      - frontend/src/features/ai-edit/routes.ts
+    target_files:
+      - frontend/src/features/ai-edit/pages/MaterialLibrary.tsx
+      - frontend/src/features/ai-edit/pages/LasRemixWorkbench.tsx
+    current_contract: "feature 内共享模块契约（M05+M06 共址共享，符合冻结映射）；9000 /ai-edit/* HTTP 为正式 contract（apiClient，merchant_id 由 9000 注入）"
+    current_role: "M05/M06 前端共享模块（上传分类/汇总纯逻辑 + api 客户端）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "ai-edit/api.ts:25-146 同时承载 M05（/templates、/materials、/materials/upload-tos）与 M06（/las/jobs、/video/play、/video/download-link）端点；MaterialLibrary.tsx:16-18 使用 ../api + ../uploadFeedback；LasRemixWorkbench.tsx:23-25 使用 ../api + ../types；uploadFeedback.ts:1-114 纯逻辑共享模块（含单测）；routes.ts:5-8 单一路由文件同时挂载 /ai-edit/materials 与 /ai-edit/editor"
+    risk: "无关键风险；M05/M06 边界物理共址、共享模块为 feature 内约定，未发现 M05↔M06 私有实现穿透（各自页面仅消费共享 api/types/uploadFeedback）"
+    key_chain_impact: "LAS 混剪链（M06）+ 素材库链（M05）共享 api.ts；任一模块接口变更互相影响（如 fetchAiEditMaterials 被两页面共用）"
+    side_effect_impact: "无跨 owner 写；上传/删除/任务操作副作用由 9000 gate 控制"
+    data_ownership: "素材/TOS 产物归 M05/M06 共享业务域（9000 注入 merchant_id）"
+    legacy_dependencies: []
+    recommended_action: "可未来将 api.ts 拆分为 materials.ts 与 las.ts 以显式化 M05/M06 边界；清理 localApi.ts 残留（并入 COUPLING-045 处理）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-052
+    name: Local Agent 直连 19000 客户端（localWechatAgent.ts）三层优先级符合硬约束 7
+    source_owner: PLATFORM
+    target_owner: M04
+    shared_boundary_reason: "前端共享 api 层归 PLATFORM，直连 19000 为正式 UI contract（硬约束 7）"
+    dependency_type: API
+    source_files:
+      - frontend/src/api/localWechatAgent.ts
+      - frontend/src/features/ai-edit/localApi.ts
+    target_files:
+      - app/local_agent_main.py
+      - frontend/src/features/ai-edit/api.ts
+    current_contract: "19000 本机 HTTP contract（/health /runtime/* /agent/wechat/* /agent/tasks/* /agent/replies/* /agent/ai-edit/*）；token 经 9000 下发（X-Local-Agent-Token，绑定 merchant_id，前端不自报）"
+    current_role: "React 本机 Agent 面板 → 127.0.0.1:19000（正式 UI contract，三层优先级）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "localWechatAgent.ts:1-11 LOCAL_AGENT_BASE_URL = localStorage('local_wechat_agent_url') || import.meta.env.VITE_LOCAL_WECHAT_AGENT_BASE_URL || 'http://127.0.0.1:19000'（不走 VITE_API_BASE_URL）；:340-352 fetch 直连 19000 不带 internal token；:446-491 getAgentServerUrl/pollAndExecuteWechatTask/detectReply/pollAndDetectReply；ai-edit/localApi.ts:93-127 requestLocal 带 X-Local-Agent-Token（9000 下发、sessionStorage 绑定 merchant_id、401 清缓存重试一次）；全量扫描确认无直连 9100/Milvus 的激活业务路径"
+    risk: "无当前关键风险；符合硬约束 7 与硬约束 6（token 由 9000 下发，前端不持 internal token）"
+    key_chain_impact: "微信检测/派单/回复检测链；AI 剪辑素材导入链"
+    side_effect_impact: "真实发送仍由后端 gate 与 19000 前台焦点/联系人验证守卫"
+    data_ownership: "本机微信任务数据归 M04；merchant 由 Local Agent token 映射"
+    legacy_dependencies: []
+    recommended_action: "无需整改；维持三层优先级与 9000 下发 token 机制"
+    remediation_status: N/A
+  - coupling_id: COUPLING-053
+    name: vite proxy 与生产 API 基址配置（/api→9000、/ai-cs-api→9100 仅 dev/preview；生产 fail-closed）
+    source_owner: PLATFORM
+    target_owner: M01
+    dependency_type: OTHER
+    source_files:
+      - frontend/vite.config.ts
+      - frontend/src/api/client.ts
+      - frontend/src/authToken.ts
+      - frontend/src/api/auth.ts
+    target_files:
+      - app/main.py
+    current_contract: "dev/preview 经 Vite proxy 转发 /api→9000（rewrite 去前缀）、/ai-cs-api→9100；生产构建（vite build）不含 proxy，浏览器侧基址由 VITE_AUTO_WECHAT_API_BASE_URL 决定（硬约束不能用 127.0.0.1），未配置时回落同源（由部署侧反代承担转发）"
+    current_role: "全部前端→后端 HTTP 链的基址与代理配置"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "vite.config.ts:17-25 apiProxyTarget 默认 http://127.0.0.1:9000；douyinAiCsProxyTarget 默认 http://127.0.0.1:9100；:29-42 sharedProxyConfig：/api → 9000（rewrite 去前缀）、/ai-cs-api → 9100；:71-74 proxy 仅挂 server 与 preview，build 产物不含 proxy；client.ts:11-14 API_BASE_URL = VITE_API_BASE_URL || VITE_AUTO_WECHAT_API_BASE_URL || (DEV ? http://127.0.0.1:9000 : undefined)；authToken.ts:1-13 external token 仅存 sessionStorage；auth.ts:178-186 logoutAutoWechat 走 POST /auth/logout（符合硬约束 9）"
+    risk: "无；RG-FOLLOWUP-02 确认不构成 coupling，维持 unchanged。生产未配置基址时回落同源属 fail-closed（不直连内部服务）"
+    key_chain_impact: "全部前端→后端 HTTP 链的基址与代理"
+    side_effect_impact: "无"
+    data_ownership: "后端各 owner 数据不变"
+    legacy_dependencies: []
+    recommended_action: "维持现状；保持'生产基址显式配置 + 前端不直连 9100/Milvus + 不持 internal token'的 fail-closed 语义"
+    remediation_status: N/A
+  # ============================================================
+  # Cross-cutting（A8，12 条独立 + C08 并入 COUPLING-006）
+  # ============================================================
+  - coupling_id: COUPLING-054
+    name: M01/M02/PLATFORM 回复编排-线索-webhook 交织环（8 文件，函数级 import 打破）
+    source_owner: M01
+    target_owner: M02
+    dependency_type: IMPORT
+    source_files:
+      - app/services/ai_auto_reply_dry_run_service.py
+      - app/services/ai_auto_reply_outbox_service.py
+      - app/services/ai_auto_reply_send_service.py
+      - app/services/douyin_conversation_history_service.py
+      - app/services/douyin_workbench_conversation_service.py
+      - app/services/douyin_private_message_send_service.py
+      - app/services/douyin_merchant_isolation.py
+    target_files:
+      - app/integrations/douyin_webhook.py
+      - app/services/lead_management_service.py
+    current_contract: "无正式 contract；跨模块共享的是 douyin_webhook.py 内的解析工具函数（parse_content/normalize_message_text），非契约化 API"
+    current_role: "跨模块共享解析工具（被错误共址在 M02 的 webhook 实现文件中）"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "Tarjan SCC 全量扫描 267 文件，唯一跨模块大环（8 节点）；runtime_cycle=false；douyin_merchant_isolation.py:12 from app.integrations.douyin_webhook import parse_content（PLATFORM 底座→M02 业务模块，依赖方向反转）；douyin_workbench_conversation_service.py:18 from app.integrations.douyin_webhook import normalize_message_text, parse_content；:39 from app.services.lead_management_service import ...；douyin_private_message_send_service.py:19 from app.services.douyin_merchant_isolation import ...；函数级反向边打破 import-time 死锁：douyin_webhook.py:1224 → outbox；ai_auto_reply_outbox_service.py:616 → dry_run；lead_management_service.py:201 → workbench"
+    risk: "非运行时环：反向边全为函数内 import，Python 模块加载不死锁，不影响启动/事务顺序。实质风险是依赖方向反转（平台底座依赖业务模块）与解析工具共址在 M02 私有实现文件，未来重构 webhook 时易误伤 M01/PLATFORM 消费者"
+    key_chain_impact: "横跨 webhook 链（M02）、回复编排链（M01）、outbox 链；均为函数级打破，无启动顺序影响"
+    side_effect_impact: "无 import 时副作用；函数内 import 延迟到调用时执行"
+    data_ownership: "无 DB 数据参与，纯代码层耦合"
+    legacy_dependencies:
+      - LEGACY-044
+    recommended_action: "将 parse_content/normalize_message_text 等解析工具下沉到 domain_shared（如 app/services/contact_extractor 同层），消除 PLATFORM/M01 对 M02 webhook 实现文件的模块级 import；重构前先建解析函数的 boundary test"
+    remediation_status: N/A
+  - coupling_id: COUPLING-055
+    name: 9100 内部 rag.repository ↔ vector_store 环（2 文件）
+    source_owner: M01
+    target_owner: M01
+    shared_boundary_reason: "同 owner（M01）9100 子应用内部模块环（非运行时，单顶层边 + 函数级反向），非跨 owner"
+    dependency_type: IMPORT
+    source_files:
+      - apps/xg_douyin_ai_cs/rag/repository.py
+      - apps/xg_douyin_ai_cs/services/vector_store.py
+    target_files:
+      - apps/xg_douyin_ai_cs/rag/repository.py
+      - apps/xg_douyin_ai_cs/services/vector_store.py
+    current_contract: "M01 子应用内部共享，无跨模块 contract 要求"
+    current_role: "9100 内部 RAG 检索与向量存储模块"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "rag/repository.py:40 from apps.xg_douyin_ai_cs.services.vector_store import ...（顶层 import）；apps/xg_douyin_ai_cs/services/vector_store.py:90 from apps.xg_douyin_ai_cs.rag.repository import ...（函数内 import）"
+    risk: "单条顶层边 + 函数级反向边，import 时无死锁；9100 内部模块，无启动/事务影响"
+    key_chain_impact: "涉及回复编排链（9100 RAG 检索），但非运行时环"
+    side_effect_impact: "无"
+    data_ownership: "9100 自有库（xg_douyin_ai_cs），无跨 owner 数据"
+    legacy_dependencies: []
+    recommended_action: "低优先级；如需消除可把 vector_store 的函数级 import 提为类型注解（TYPE_CHECKING）或调整依赖方向，非必需"
+    remediation_status: N/A
+  - coupling_id: COUPLING-056
+    name: LEGACY-012 compute_service 兼容 re-export 入口被 4 个模块消费
+    source_owner: M02
+    target_owner: M07
+    dependency_type: CAPABILITY
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/services/wechat_task_service.py
+      - app/services/material_analysis.py
+      - app/services/ai_edit_las_service.py
+      - app/routers/compute.py
+    target_files:
+      - app/services/compute_service.py
+      - apps/compute/services.py
+    current_contract: "有正式 contract：record_usage(merchant_id, tokens, capability_key, model, idempotency_key,...) + P1 幂等键（idempotency_key 由各 consumer 构造，P1 11/11 consumer 迁移完成）"
+    current_role: "record_usage 链（计费上报）的全部 4 个跨模块消费者经此入口"
+    classification: BOUNDARY
+    severity: MEDIUM
+    evidence: "跨模块消费者均为函数内 import：M02 douyin_webhook.py:1240；M04 wechat_task_service.py:590；M05 material_analysis.py:280；M06 ai_edit_las_service.py:738；M07 自身 compute.py:39,467；compute_service.py:28,54 re-export record_usage；LEGACY-012 登记 COMPATIBILITY；DEPENDENCY_MATRIX E11 只登记 M06 一个消费者"
+    risk: "兼容入口方向明确（M*→M07）、幂等键已就位，无计费重复风险；风险仅为矩阵登记不全导致未来迁移时漏改调用方"
+    key_chain_impact: "record_usage 链（计费上报）的全部 4 个跨模块消费者"
+    side_effect_impact: "record_usage 写 M07 compute_transactions 表（有 idempotency_key 防重）；上报失败被各调用方 try/except 吞掉"
+    data_ownership: "compute_transactions 归 M07；M02/M04/M05/M06 仅上报不拥有"
+    legacy_dependencies:
+      - LEGACY-012
+      - LEGACY-011
+    recommended_action: "补全 DEPENDENCY_MATRIX 消费者登记（M02/M04/M05→M07）；规划全部调用方直接 import apps.compute.services 后移除兼容入口"
+    remediation_status: N/A
+  - coupling_id: COUPLING-057
+    name: LEGACY-045 knowledge_category_service re-export 桥被 M01 消费
+    source_owner: M01
+    target_owner: M03
+    dependency_type: CAPABILITY
+    source_files:
+      - app/routers/douyin_ai_cs_proxy.py
+    target_files:
+      - app/services/knowledge_category_service.py
+      - apps/knowledge/services.py
+    current_contract: "函数级 contract：ensure_category_usable_for_merchant 等知识分类能力；re-export 为薄层（无私有实现穿透）"
+    current_role: "M01 9100 代理调知识分类能力（回复编排链）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "M01 douyin_ai_cs_proxy.py:20 from app.services.knowledge_category_service import ensure_category_usable_for_merchant；M03 自身 router knowledge_categories.py:12 同样消费；knowledge_category_service.py:1-6 docstring 'Phase 3-C 后真实实现迁入 apps.knowledge.services，旧导入路径保留 re-export'（LEGACY-045 COMPATIBILITY）"
+    risk: "薄 re-export 无穿透，删除/迁移时需同步 M01 调用方（douyin_ai_cs_proxy 是 9100 可信代理入口，M01 关键链）"
+    key_chain_impact: "回复编排链（M01 9100 代理）调知识分类能力；低影响"
+    side_effect_impact: "无额外副作用"
+    data_ownership: "knowledge_categories 表归 M03；M01 只调用能力不写数据"
+    legacy_dependencies:
+      - LEGACY-045
+      - LEGACY-027
+    recommended_action: "M01 调用方迁移到 apps.knowledge.services 直连后移除 re-export（与 LEGACY-012 同型处理）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-058
+    name: LEGACY-025 幂等 key None 兼容退路（9100 同族 4 处）
+    source_owner: M01
+    target_owner: M07
+    dependency_type: CAPABILITY
+    source_files:
+      - apps/xg_douyin_ai_cs/rag/repository.py
+      - apps/xg_douyin_ai_cs/services/reply_decision_service.py
+      - apps/xg_douyin_ai_cs/services/daily_report_summary_service.py
+      - apps/xg_douyin_ai_cs/services/knowledge_training_service.py
+      - apps/xg_douyin_ai_cs/services/return_visit_judge_service.py
+    target_files:
+      - apps/xg_douyin_ai_cs/services/compute_usage_client.py
+      - app/routers/compute.py
+    current_contract: "P1 计费幂等 contract：identity-bearing → idempotency_key；None 路径为 COMPATIBILITY 退路（当前无 ACTIVE 触发）"
+    current_role: "9100 侧计费幂等兼容退路（COMPATIBILITY，P1 已审计 ACTIVE None=0）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "rag/repository.py:490,506 'legacy 兼容路径，不构造 key'；reply_decision_service.py:3811 'run_id=None AND attempt_count=None AND preview_execution_id=None → legacy 兼容路径'；P1 Global Active None Audit-2：15 call-site 全分类，12 ACTIVE identity-bearing + 2 COMPATIBILITY legacy None 退路 + 1 DORMANT，ACTIVE None=0"
+    risk: "若未来新增未迁移 consumer 走 None 路径会裸扣费；当前证据显示无 ACTIVE 触发，风险受控"
+    key_chain_impact: "record_usage 链（9100 侧全部经 compute_usage_client → E3 HTTP 上报 9000）"
+    side_effect_impact: "None 路径下 idempotency_key=NULL 不参与唯一约束（P1 审计 F-1 已 RESOLVED）"
+    data_ownership: "compute_transactions 归 M07"
+    legacy_dependencies:
+      - LEGACY-025
+    recommended_action: "维持 COMPATIBILITY 保留；按 LEGACY-025 deletion_condition：确认全部 consumer 迁移后移除 None 退路分支"
+    remediation_status: N/A
+  - coupling_id: COUPLING-059
+    name: apps/*.service META 能力网关启动期 import 群（LEGACY-027/056/057/058）
+    source_owner: PLATFORM
+    target_owner: M01
+    dependency_type: IMPORT
+    source_files:
+      - app/routers/capability_gateway.py
+    target_files:
+      - apps/agents/service.py
+      - apps/knowledge/service.py
+      - apps/leads/service.py
+      - apps/douyin_cs/service.py
+      - apps/wechat_assistant/service.py
+      - apps/compute/service.py
+    current_contract: "META 能力元信息（health 挂载），启动期 import；各模块 service 实现层 owner 明确（LEGACY-027 判 ACTIVE）"
+    current_role: "9000 启动期 import 链（capability_gateway 是生产路由挂载点，import 失败即启动失败）"
+    classification: CONTROLLED
+    severity: LOW
+    evidence: "capability_gateway.py:5-10 顶层 import 6 个 apps.*.service.META；apps.agents.services → ai_agent_service.py:3、agent_knowledge_category_service.py:3（M03）；apps.knowledge.services → knowledge_categories_async_repository.py:8、knowledge_category_service.py:6（M03）；apps.compute.services → compute_service.py:7（M07）；apps.leads.service → 9202 链路（M02）"
+    risk: "owner 归属明确、物理位置在 apps/ 仅是历史布局；删除任一 service 会破坏 9000 启动（有启动期依赖），需按 LEGACY deletion_condition 处理"
+    key_chain_impact: "启动链：capability_gateway 是 9000 生产路由挂载点"
+    side_effect_impact: "apps/leads/service.py:9 副作用 import apps.leads.services（9202 链路）——PLATFORM→M02 启动期连带"
+    data_ownership: "各模块自有表；PLATFORM 不写业务数据"
+    legacy_dependencies:
+      - LEGACY-027
+      - LEGACY-056
+      - LEGACY-057
+      - LEGACY-058
+      - LEGACY-028
+    recommended_action: "保持现状（ACTIVE 正式实现）；未来 capability_gateway META 机制迁移时统一评估，不单独拆"
+    remediation_status: N/A
+  - coupling_id: COUPLING-060
+    name: LEADS internal 9202 兼容桥（LEGACY-001/029）
+    source_owner: M02
+    target_owner: M02
+    shared_boundary_reason: "同 owner（M02）9202 dev 入口与 9000 本地直收双路径（LEGACY-001/029），非跨 owner"
+    dependency_type: EVENT
+    source_files:
+      - app/routers/integrations.py
+      - packages/clients/leads_client.py
+    target_files:
+      - apps/leads/services.py
+      - apps/leads/webhook_events.py
+      - apps/leads/routers.py
+    current_contract: "env 开关 LEADS_WEBHOOK_INTERNAL_ENABLED（默认 false）控制 internal 转发；正式路径为 9000 本地直收 _process_webhook_locally"
+    current_role: "9202 internal webhook 转发桥（默认关闭）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "integrations.py:38 import LeadsClient；:215 LeadsClient.from_env().create_internal_webhook_event；:566 if config.LEADS_WEBHOOK_INTERNAL_ENABLED；apps/leads/services.py:99-125 create_internal_webhook_event → 委托 app.integrations.douyin_webhook.process_webhook_event；LEGACY-001/029 登记"
+    risk: "9202 同为 M02，非跨 owner 穿透；风险仅为 cutover 未闭合（internal 模式残留），生产默认走本地直收"
+    key_chain_impact: "webhook 链（线索入口）双路径：本地直收（默认）vs 9202 转发（env 开启）；共用 process_webhook_event 核心，行为一致"
+    side_effect_impact: "internal 模式经 HTTP 转发 9202，9202 再调回 9000 核心——往返多一跳"
+    data_ownership: "douyin_leads 归 M02；9202 不独立拥有数据"
+    legacy_dependencies:
+      - LEGACY-001
+      - LEGACY-029
+      - LEGACY-033
+    recommended_action: "按 LEGACY-001/029 deletion_condition 联动：确认全环境本地直收后移除 env 分支与 9202 服务"
+    remediation_status: N/A
+  - coupling_id: COUPLING-061
+    name: M02→M04 直接写表：sales_feedback_parser 直写 sales_daily_summaries（未登记）
+    source_owner: M02
+    target_owner: M04
+    dependency_type: DATABASE
+    source_files:
+      - app/services/sales_feedback_parser.py
+    target_files:
+      - app/models.py
+    current_contract: "无正式 contract 登记：DEPENDENCY_MATRIX 无 M02→M04 data 边（E7 仅为 task 投递且禁用态）"
+    current_role: "销售反馈链（M02）→ 日报汇总（M04 的 daily_report 域）"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "sales_feedback_parser.py:441-460 _upsert_daily_summary：db.query(SalesDailySummary).filter_by(merchant_id, staff_id, summary_date) → 无则 SalesDailySummary(...) + db.add :457-460，有则更新 raw_text/parse_status；调用链：销售反馈（M02 sales_feedback router）解析后直写 M04 的 sales_daily_summaries 表"
+    risk: "跨 owner 直接 upsert 未登记表，无 contract 边界；若 M04 未来重构日报汇总（如迁移 PG/加列），M02 写入方不在矩阵中易被漏改。数据为日报汇总（非账务/发送/隔离），未达 CRITICAL"
+    key_chain_impact: "销售反馈链（M02）→ 日报汇总（M04）；与 daily_report_service 的汇总生成存在双写面"
+    side_effect_impact: "upsert 自带业务日期 strptime 严格解析（:452）；写操作在销售反馈请求事务内"
+    data_ownership: "sales_daily_summaries 表归 M04；实际写入方 M02——表归属与写入方不一致"
+    legacy_dependencies:
+      - LEGACY-048
+      - LEGACY-049
+    recommended_action: "登记 M02→M04 data 边到 DEPENDENCY_MATRIX；或将 SalesDailySummary 写入收敛到 M04 daily_report_service（同进程 service call）后移除 M02 直写"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-062
+    name: M02→M01 直接写表：douyin_resource_download_service 写 M01 归属表（未登记）
+    source_owner: M02
+    target_owner: M01
+    dependency_type: DATABASE
+    source_files:
+      - app/services/douyin_resource_download_service.py
+    target_files:
+      - app/models.py
+    current_contract: "无正式 contract 登记：DEPENDENCY_MATRIX 无 M02→M01 边"
+    current_role: "webhook 链（M02 资源下载分支）：下载记录与 webhook 事件状态回写"
+    classification: UNCONTROLLED
+    severity: MEDIUM
+    evidence: "douyin_resource_download_service.py:84-98 DouyinMessageResourceDownload(...) + db.add + db.flush；:230-294 更新 DouyinWebhookEvent 资源下载状态字段；CODE_INDEX 将 douyin_webhook_events/douyin_message_resource_downloads 归 M01，实际主要写入方是 M02 webhook 链"
+    risk: "M02 webhook 资源下载域写 M01 归属表，未登记；且表归属与写入方漂移，未来按模块拆表时存在归属争议"
+    key_chain_impact: "webhook 链（M02 资源下载分支）"
+    side_effect_impact: "写操作在下载请求事务内（db.flush）；不触发发送/计费副作用"
+    data_ownership: "douyin_webhook_events/douyin_message_resource_downloads 表 CODE_INDEX 归 M01，实际写入核心是 M02 webhook 链——归属漂移，需裁决"
+    legacy_dependencies:
+      - LEGACY-044
+    recommended_action: "裁决 douyin_webhook_events/douyin_message_resource_downloads 表归属（建议按实际写入方归 M02 webhook 域或明确共享域）；登记 M02→M01 data 边"
+    remediation_status: REQUIRED
+  - coupling_id: COUPLING-063
+    name: M01→M03 直查：douyin_autoreply_settings_service 直接 ORM 查 AiAgent（E5 声明例外）
+    source_owner: M01
+    target_owner: M03
+    dependency_type: DATABASE
+    source_files:
+      - app/services/douyin_autoreply_settings_service.py
+      - app/services/douyin_account_agent_binding_service.py
+    target_files:
+      - app/models.py
+    current_contract: "E5 声明 'M01 非直查 M03 库（agent_config 经 payload）'——但设置视图存在直查例外；绑定表写操作经 douyin_account_agent_binding_service（绑定表正式操作者）"
+    current_role: "M01 自动回复设置视图直查 M03 配置（只读）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "douyin_autoreply_settings_service.py:140-144 db.query(AiAgent).filter(AiAgent.merchant_id==..., AiAgent.agent_id==...).first() 只读；:418 DouyinAccountAgentBinding 引用；douyin_account_agent_binding_service.py:160-236 bind_agent_to_account（DouyinAccountAgentBinding(...) + db.add + db.commit :222-236）；调用方 douyin_accounts.py:146、douyin_ai_cs_proxy.py:25"
+    risk: "只读配置视图直查 M03 表（带 merchant_id 过滤，有商户隔离）；绑定写经 binding service（含 _validate_account_context 校验）。风险低，但 E5 语义需补充例外说明"
+    key_chain_impact: "回复编排链（M01 自动回复设置绑定智能体）依赖 M03 配置数据"
+    side_effect_impact: "无写副作用（只读查询）；binding 写操作在独立事务（:236 db.commit）"
+    data_ownership: "ai_agents/douyin_account_agent_bindings 归 M03；M01 只读消费"
+    legacy_dependencies:
+      - LEGACY-027
+    recommended_action: "E5 语义补充 '设置视图直查例外'；M01 直查迁移到 M03 ai_agent_service 只读方法；绑定写统一经 M03 入口"
+    remediation_status: N/A
+  - coupling_id: COUPLING-064
+    name: record_usage 多模块消费者矩阵缺口（E11 只登记 M06）
+    source_owner: M02
+    target_owner: M07
+    dependency_type: CAPABILITY
+    source_files:
+      - app/integrations/douyin_webhook.py
+      - app/services/wechat_task_service.py
+      - app/services/material_analysis.py
+      - app/services/ai_edit_las_service.py
+    target_files:
+      - app/services/compute_service.py
+      - apps/compute/services.py
+    current_contract: "有正式 contract：record_usage + 各消费者构造幂等键（P1 11/11 consumer 迁移完成；M02 webhook_event:{id}:lead_usage、M05 material_analysis_execution:{id}、M06 LAS 任务键、M04 任务键）"
+    current_role: "record_usage 链全部 4 个同进程消费者 + E3 HTTP 消费者（M01 9100）——计费上报总图"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "M02 douyin_webhook.py:1236-1254（capability_key=leads，幂等键 webhook_event:{event.id}:lead_usage）；M04 wechat_task_service.py:590-594；M05 material_analysis.py:280-282（幂等键 material_analysis_execution:{execution_id}:ark_analysis）；M06 ai_edit_las_service.py:738-740（E11 已登记）；DEPENDENCY_MATRIX 仅登记 E11（M06→M07）+ E3（M01→M07 HTTP）"
+    risk: "代码层幂等已完备（P1 完成），无重复计费风险；风险为矩阵登记不全：未来 record_usage 签名/幂等键规则变更时，未登记消费者易被漏改"
+    key_chain_impact: "record_usage 链全部 4 个同进程消费者 + E3 HTTP 消费者"
+    side_effect_impact: "各调用方 try/except 吞上报异常（不阻断主流程）；写 M07 compute_transactions 有幂等键防重"
+    data_ownership: "compute_transactions 归 M07；各消费者仅上报"
+    legacy_dependencies:
+      - LEGACY-012
+      - LEGACY-025
+    recommended_action: "DEPENDENCY_MATRIX 增补 M02/M04/M05→M07 record_usage 边（同 E11 型，机制 service call）"
+    remediation_status: N/A
+  - coupling_id: COUPLING-065
+    name: M05↔M06 互写 ai_edit_jobs（E10 方向缺口 + BC-02 物理共址）
+    source_owner: M05
+    target_owner: M06
+    dependency_type: DATABASE
+    source_files:
+      - app/services/ai_edit_service.py
+      - app/routers/ai_edit.py
+    target_files:
+      - app/services/ai_edit_las_service.py
+      - app/models.py
+    current_contract: "E10 登记 M06→M05 reads（create_job 校验并绑定 AiEditMaterial）；M05→M06 write 未登记；M05/M06 共享 router/feature 目录（E9 S 关系，BC-02 已知）"
+    current_role: "ai_edit 任务状态机写入（M05 文件写 M06 表）"
+    classification: BOUNDARY
+    severity: LOW
+    evidence: "ai_edit_service.py（M05）:241 def create_job；:265 get_material_for_merchant 读 M05 素材；:282 job = AiEditJob(...) 写 M06 表；ai_edit_las_service.py（M06）:90 AiEditJob(...)（LAS 任务直接创建）；共享 router ai_edit.py:25、:525-615（create_job/agent_create_job 调 svc.create_job）、:758-769（create_las_job_route 调 las_svc）"
+    risk: "M05/M06 owner 边界靠 nav id 区分，物理共址导致 create_job（M05 文件）写 M06 表；E10 只登记单向，矩阵不对称；LAS 任务创建有两处入口，行为一致性依赖共享 router"
+    key_chain_impact: "ai_edit las 链：素材（M05）→任务（M06）→LAS 产物（M06）→record_usage（M07）；跨三模块"
+    side_effect_impact: "LAS 提交/轮询副作用在 M06；M05 create_job 只建任务不触发 LAS"
+    data_ownership: "ai_edit_jobs/ai_edit_job_artifacts 归 M06；ai_edit_materials/ai_edit_job_materials 归 M05；M05 写 M06 表未登记"
+    legacy_dependencies:
+      - LEGACY-060
+    recommended_action: "补登 M05→M06 write 边；长期解耦需先拆分共享 router ai_edit.py（E9 解耦候选），拆分后再明确 create_job 归属"
+    remediation_status: N/A
+summary:
+  coupling_candidates: 65
+  classified_total: 65
+  controlled: 20
+  boundary: 33
+  uncontrolled: 11
+  critical_uncontrolled_before: 1
+  critical_remediated: 1
+  critical_blocked: 0
+  critical_uncontrolled_remaining: 0
+  unknown_coupling: 0
+  owner_conflict: 0
+  invalid_classification: 0
+  missing_evidence: 0
+  missing_risk: 0
+  missing_exit_condition: 0
+  new_regression: 0
+  boundary_tests: 7
+  business_behavior_delta: 0

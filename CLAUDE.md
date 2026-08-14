@@ -348,6 +348,7 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migratio
 - `docs/architecture/CODE_INDEX.yaml` — 机器代码索引（唯一事实源）
 - `docs/modules/M01-M07/` — 7 模块验真文档（每模块 6 份）
 - `docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml` — **G3 七模块关键链验证矩阵（唯一 SSOT，G3-SEVEN-MODULE-VERIFICATION-1）**；报告见 `G3_SEVEN_MODULE_VERIFICATION_REPORT.md`
+- `docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml` — **G4 跨模块耦合治理总账（唯一 SSOT，G4-CONTROLLED-DECOUPLING-1）**；报告见 `G4_CONTROLLED_DECOUPLING_REPORT.md`
 - `docs/architecture/STAGING_E2E_READINESS.md` + `WINDOWS_E2E_READINESS.md` — 共享环境准备
 
 ------
