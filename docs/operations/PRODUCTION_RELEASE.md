@@ -67,9 +67,11 @@ python3 scripts/prod_release.py verify --service douyin-ai-cs
 python3 scripts/prod_release.py verify --service frontend
 ```
 
-- api：container running / restart count / `/ready` HTTP 200 / `/auth/me` 未认证 401 fail-closed（200 = mock 泄漏失败）/ image identity
+- 容器识别（R2.2）：优先实际生产容器名 `container_name`（如 `xg-auto-wechat-frontend`），回退 compose service 名（dev 环境）；两处都查不到 → `CONTAINER_NOT_FOUND`（fail-closed）。
+- 镜像 identity（R2.1/R2.2）：`docker inspect <container> --format {{.Config.Image}}` 与最新有效 release identity 严格字符串比较（禁止前缀/缩写/自动补 repository）；真正不同 → `IDENTITY_MISMATCH`（fail-closed）。
+- api：container running（`.State.Status`）/ `/ready` HTTP 200 / `/auth/me` 未认证 401 fail-closed（200 = mock 泄漏失败）/ image identity
 - douyin-ai-cs：container running / `/ready` HTTP 200 / image identity
-- frontend：container running / 127.0.0.1:5173 reachable / image identity
+- frontend：container running / 127.0.0.1:5173 HTTP 200（不可达或非 200 均 → `READY_FAILED`，fail-closed）/ image identity
 - 输出 `BUSINESS_ACCEPTANCE = REQUIRED` + G3 提示：**发布关闭前请运行受影响模块 G3 smoke/manual acceptance**（脚本不猜 TASK_OWNER）。
 - verify 失败 → `ROLLBACK_RECOMMENDED = YES`，但**不自动回滚**（AUTO_ROLLBACK=NO）。
 

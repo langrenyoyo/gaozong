@@ -407,8 +407,12 @@ def test_r12_verify_api_ready_fail_exit_nonzero(monkeypatch, scratch, capsys):
     monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
 
     def fake_run(argv, **kwargs):
-        if argv[0] == "docker":
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-aaa|Up 2 minutes\n")
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            if cname in ("xg-auto-wechat-api", "auto-wechat-api"):
+                # R2.2：.Config.Image|.State.Status；image == release identity（release-aaa）
+                return FakeProc(stdout="xg-ai-system-backend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -472,8 +476,11 @@ def test_r15_no_automatic_rollback(monkeypatch, scratch, capsys):
     monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
 
     def fake_run(argv, **kwargs):
-        if argv[0] == "docker":
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-aaa|Up 2 minutes\n")
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            if cname in ("xg-auto-wechat-api", "auto-wechat-api"):
+                return FakeProc(stdout="xg-ai-system-backend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -493,9 +500,12 @@ def test_r16_non_target_identity_change_fails(monkeypatch, scratch, capsys):
     monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
 
     def fake_run(argv, **kwargs):
-        if argv[0] == "docker":
-            # 运行镜像与 release identity 不一致
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-OTHER|Up 2 minutes\n")
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            if cname in ("xg-auto-wechat-api", "auto-wechat-api"):
+                # 运行镜像与 release identity 不一致（.Config.Image，严格比较）
+                return FakeProc(stdout="xg-ai-system-backend:release-OTHER|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -594,8 +604,12 @@ def test_r19c_cli_main_dispatch_verify(monkeypatch, scratch, capsys):
     monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
 
     def fake_run(argv, **kwargs):
-        if argv[0] == "docker":
-            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-aaa|Up 2 minutes\n")
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            if cname in ("xg-auto-wechat-api", "auto-wechat-api"):
+                # R2.2：verify 走 docker inspect .Config.Image|.State.Status
+                return FakeProc(stdout="xg-ai-system-backend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
         raise AssertionError(f"unexpected: {argv}")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1237,3 +1251,174 @@ def test_r39b_all_services_use_config_image(monkeypatch, scratch):
     assert "xg-douyin-ai-cs" in inspect_calls
     assert "xg-auto-wechat-frontend" in inspect_calls
     assert len(inspect_calls) == 3
+
+
+# ===========================================================================
+# R40~R45：PROD-RELEASE-AUTOMATION-R2.2 regression
+# （verify 容器识别 = container_name → fallback；image identity = .Config.Image；HTTP fail-closed）
+# ===========================================================================
+
+def test_r40_verify_frontend_container_name_pass(monkeypatch, scratch, capsys):
+    """R40：frontend 真实生产容器名（xg-auto-wechat-frontend）命中 → PLATFORM_VERIFY=PASS。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+    inspect_calls: list[str] = []
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            inspect_calls.append(cname)
+            if cname == "xg-auto-wechat-frontend":
+                return FakeProc(stdout="xg-ai-system-frontend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", lambda url, timeout=5.0: (200, None))
+    rc = mod.cmd_verify(["--service", "frontend", "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "xg-auto-wechat-frontend（running）" in out
+    assert "IMAGE                = xg-ai-system-frontend:release-aaa" in out
+    assert "HTTP 5173            = 200" in out
+    assert "PLATFORM_VERIFY      = PASS" in out
+    assert "BUSINESS_ACCEPTANCE  = REQUIRED" in out
+    # container_name 优先于 fallback（三服务统一 helper，非 frontend 特判）
+    assert inspect_calls and inspect_calls[0] == "xg-auto-wechat-frontend"
+
+
+def test_r41_verify_container_not_found(monkeypatch, scratch, capsys):
+    """R41：真实 container_name 与 fallback 都不存在 → CONTAINER_NOT_FOUND（fail-closed）。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = mod.cmd_verify(["--service", "frontend", "--release-dir", str(rel)])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "CONTAINER_NOT_FOUND" in err
+    assert "xg-auto-wechat-frontend" in err  # 报告已尝试容器名（container_name + fallback）
+
+
+def test_r42_verify_identity_mismatch(monkeypatch, scratch, capsys):
+    """R42：容器 running 但 .Config.Image != release identity → IDENTITY_MISMATCH（fail-closed）。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            if argv[2] == "xg-auto-wechat-frontend":
+                return FakeProc(stdout="xg-ai-system-frontend:release-WRONG|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", lambda url, timeout=5.0: (200, None))
+    rc = mod.cmd_verify(["--service", "frontend", "--release-dir", str(rel)])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "IDENTITY_MISMATCH" in err
+    assert "release-WRONG" in err
+
+
+def test_r43_verify_frontend_http_non_200_fails(monkeypatch, scratch, capsys):
+    """R43：container/image 正常但 HTTP 5173 != 200 → READY_FAILED（fail-closed）。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            if argv[2] == "xg-auto-wechat-frontend":
+                return FakeProc(stdout="xg-ai-system-frontend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", lambda url, timeout=5.0: (503, None))
+    rc = mod.cmd_verify(["--service", "frontend", "--release-dir", str(rel)])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "READY_FAILED" in err
+    assert "HTTP 503" in err
+
+
+def test_r43b_verify_frontend_http_unreachable_fails(monkeypatch, scratch, capsys):
+    """R43b：HTTP 5173 unreachable → READY_FAILED（fail-closed）。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            if argv[2] == "xg-auto-wechat-frontend":
+                return FakeProc(stdout="xg-ai-system-frontend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", lambda url, timeout=5.0: (None, "connection refused"))
+    rc = mod.cmd_verify(["--service", "frontend", "--release-dir", str(rel)])
+    assert rc != 0
+    assert "READY_FAILED" in capsys.readouterr().err
+
+
+def test_r44_verify_api_container_name_pass(monkeypatch, scratch, capsys):
+    """R44：api 同样走 container_name（xg-auto-wechat-api）→ PASS（非 frontend 特判）。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            if argv[2] == "xg-auto-wechat-api":
+                return FakeProc(stdout="xg-ai-system-backend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    def fake_ready(url, timeout=5.0):
+        if url.endswith("/auth/me"):
+            return (401, None)
+        return (200, None)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", fake_ready)
+    rc = mod.cmd_verify(["--service", "api", "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "xg-auto-wechat-api（running）" in out
+    assert "PLATFORM_VERIFY      = PASS" in out
+    assert "AUTH_FAIL_CLOSED     = OK" in out
+
+
+def test_r45_verify_api_fallback_container_name(monkeypatch, scratch, capsys):
+    """R45：container_name 不可查时回退 compose service 名（auto-wechat-api）→ PASS。"""
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+    inspect_calls: list[str] = []
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker" and argv[1] == "inspect":
+            cname = argv[2]
+            inspect_calls.append(cname)
+            if cname == "auto-wechat-api":
+                return FakeProc(stdout="xg-ai-system-backend:release-aaa|running\n")
+            return FakeProc(returncode=1, stderr="No such container")
+        raise AssertionError(f"unexpected: {argv}")
+
+    def fake_ready(url, timeout=5.0):
+        if url.endswith("/auth/me"):
+            return (401, None)
+        return (200, None)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_http_ready", fake_ready)
+    rc = mod.cmd_verify(["--service", "api", "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "auto-wechat-api（running）" in out
+    assert "PLATFORM_VERIFY      = PASS" in out
+    # 先试 container_name 再 fallback
+    assert inspect_calls[:2] == ["xg-auto-wechat-api", "auto-wechat-api"]

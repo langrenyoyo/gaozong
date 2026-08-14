@@ -298,26 +298,38 @@ def _db_migration_gate() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Release identity 准备（/root/.xg-ai-release/<release>.env）
 # ---------------------------------------------------------------------------
-def _running_container_image(svc_key: str) -> str:
-    """读取运行容器 configured image reference（R2.1）。
+def _running_container_state(svc_key: str) -> tuple[str, str, str]:
+    """读取运行容器（R2.2 verify）：返回 (容器名, State.Status, .Config.Image)。
 
-    Canonical source = docker inspect <container> --format {{.Config.Image}}。
-    不用 docker ps {{.Image}}（生产会缩写 digest → 假 IMAGE_CONFLICT）。
-    容器名：优先实际生产容器名（compose project 前缀，如 xg-auto-wechat-api），
+    Canonical source = docker inspect <container> --format "{{.Config.Image}}|{{.State.Status}}"
+    （R2.1 起不用 docker ps {{.Image}}：生产会缩写 digest → 假冲突）。
+    容器名：优先实际生产容器名（compose project 前缀，如 xg-auto-wechat-frontend），
     回退 compose service 名（dev 环境）。三个 service 统一走本函数，非特判。
-    容器不存在/不可查 → 返回 ""（调用方回退历史 provenance）。
+    容器不存在/不可查 → ("", "", "")。
     """
     info = SERVICE_TARGETS[svc_key]
     for cname in (info["container_name"], info["container_name_fallback"]):
         proc = _run_argv(
-            ["docker", "inspect", cname, "--format", "{{.Config.Image}}"],
+            ["docker", "inspect", cname, "--format", "{{.Config.Image}}|{{.State.Status}}"],
             check=False,
         )
         if proc.returncode == 0:
-            img = proc.stdout.strip()
-            if img:
-                return img
-    return ""
+            out = proc.stdout.strip()
+            if out:
+                img, _, st = out.partition("|")
+                return cname, st.strip(), img.strip()
+    return "", "", ""
+
+
+def _running_container_image(svc_key: str) -> str:
+    """读取运行容器 configured image reference（R2.1）。
+
+    Canonical source = docker inspect <container> --format {{.Config.Image}}（.Config.Image 字段，
+    由 _running_container_state 一次 inspect 同时取回 State.Status）。
+    不用 docker ps {{.Image}}（生产会缩写 digest → 假 IMAGE_CONFLICT）。
+    容器不可查 → 返回 ""（调用方回退历史 provenance）。
+    """
+    return _running_container_state(svc_key)[2]
 
 
 def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
@@ -904,53 +916,44 @@ def cmd_verify(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     target = SERVICE_TARGETS[args.service]
-    svc = target["compose_service"]
 
-    # container running + restart count + image identity
-    ps = _run_argv(["docker", "ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}"], check=False)
-    if ps.returncode != 0:
-        _err("DOCKER_UNAVAILABLE: docker ps 失败（verify 无法执行）")
+    # 1. 容器存在 + running + .Config.Image（R2.2：container_name → fallback，三服务统一 helper，非特判）
+    cname, cstatus, image = _running_container_state(args.service)
+    if not cname:
+        _err(
+            f"CONTAINER_NOT_FOUND: {args.service} 未运行"
+            f"（已尝试容器名：{target['container_name']} / {target['container_name_fallback']}）"
+        )
         return 1
-    found = False
-    running = False
-    image = ""
-    for line in ps.stdout.splitlines():
-        name, img, status = line.split("|", 2)
-        if name.strip() == svc:
-            found = True
-            running = "Up" in status
-            image = img.strip()
-            print(f"CONTAINER            = {name}（{status.strip()}）")
-    if not found:
-        _err(f"CONTAINER_NOT_FOUND: {svc} 未运行")
-        return 1
-    if not running:
-        _err(f"CONTAINER_NOT_RUNNING: {svc}")
+    print(f"CONTAINER            = {cname}（{cstatus}）")
+    if cstatus != "running":
+        _err(f"CONTAINER_NOT_RUNNING: {cname} 状态 {cstatus!r}（预期 running）")
         return 1
 
-    # image identity 校验（与 release identity 最新记录一致）
+    # 2. image identity 校验：.Config.Image vs 最新有效 release identity（严格字符串比较，禁止模糊匹配）
     rel_dir = Path(args.release_dir)
     expected_image = ""
     if rel_dir.is_dir():
-        cands = sorted(rel_dir.glob("*.env"))
-        if cands:
-            expected_image = _parse_env(cands[-1]).get(target["image_var"], "")
-    if expected_image and image and image != expected_image:
-        _err(f"IDENTITY_MISMATCH: {svc} 运行镜像 {image!r} != release identity {expected_image!r}")
+        for c in sorted(rel_dir.glob("*.env")):
+            v = _parse_env(c).get(target["image_var"], "").strip()
+            if v:
+                expected_image = v  # 时间序覆盖 → 最后是最近有效值（与 inspect 对账同源）
+    if expected_image and image != expected_image:
+        _err(f"IDENTITY_MISMATCH: {cname} 运行镜像 {image!r} != release identity {expected_image!r}")
         return 1
     print(f"IMAGE                = {image or '<unknown>'}")
 
-    # HTTP ready（api/douyin-ai-cs）
+    # 3. HTTP ready（api/douyin-ai-cs：/ready 200 + api /auth/me fail-closed；frontend：5173 200）
     port_path, port = target["port_check"]
     if port_path:
         status, exc = _http_ready(f"http://127.0.0.1:{port}{port_path}")
         if status is None:
-            _err(f"READY_FAILED: {svc} {port_path} 不可达（{exc}）")
+            _err(f"READY_FAILED: {cname} {port_path} 不可达（{exc}）")
             return 1
         print(f"HTTP {port_path}          = {status}")
         if status != 200:
             # /ready 必须 200（fail-closed）；401 只属于 /auth/me 语义，不属于 /ready
-            _err(f"READY_FAILED: {svc} {port_path} HTTP {status}（预期 200）")
+            _err(f"READY_FAILED: {cname} {port_path} HTTP {status}（预期 200）")
             return 1
         if args.service == "api":
             # /auth/me 未认证 fail-closed 语义：401 TOKEN_MISSING 是正式预期，不是失败
@@ -965,12 +968,15 @@ def cmd_verify(argv: list[str]) -> int:
             else:
                 print(f"AUTH_FAIL_CLOSED     = CHECK（/auth/me HTTP {me_status}；仅提示）")
     else:
-        # frontend：localhost 5173 reachable
+        # frontend：localhost 5173 必须 200（fail-closed，R2.2 补非 200 判定）
         status, exc = _http_ready("http://127.0.0.1:5173", timeout=5.0)
         if status is None:
             _err(f"READY_FAILED: frontend 5173 不可达（{exc}）")
             return 1
         print(f"HTTP 5173            = {status}")
+        if status != 200:
+            _err(f"READY_FAILED: frontend 5173 HTTP {status}（预期 200）")
+            return 1
 
     print("PLATFORM_VERIFY      = PASS")
     print("BUSINESS_ACCEPTANCE  = REQUIRED")
