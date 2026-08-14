@@ -31,7 +31,7 @@
 - 被其他模块读写：M01 读取 agent 配置判定自动回复；M02 读取 agent 归属；9100 消费 knowledge_categories。
 
 ## 7. Async / Worker Chain
-- 知识训练：9000 knowledge_training router → 9100 knowledge_training_service（RAG ingest）→ 训练反馈自动入库（M01 库）；训练 run 计费（M07 幂等，identity=rag_training_run:{id}）。
+- 知识训练：9000 knowledge_training router → 9100 knowledge_training_service（RAG ingest）→ 训练反馈自动入库（M01 库）；训练 run 计费（M07 幂等，identity=`knowledge_training_execution:{execution_id}:ask`（知识问答）/ `rag_embedding:{run_id}:{document_id}:{chunk_index}:ingest`（RAG ingest）——G3 修正：原登记 `rag_training_run:{id}` 与代码不符，见 G3_SEVEN_MODULE_VERIFICATION_REPORT.md G1_FACTUAL_CORRECTION_DURING_G3）。
 - 能力中心：capability_gateway 聚合各子应用 META（静态 import，无运行 worker）。
 
 ## 8. External Dependencies

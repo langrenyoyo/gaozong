@@ -1,0 +1,610 @@
+# ============================================================
+# G3 SEVEN-MODULE VERIFICATION MATRIX（唯一 SSOT）
+# ============================================================
+# 任务：G3-SEVEN-MODULE-VERIFICATION-1
+# BASE_SHA: 154d65f8ee178cc4514c8bb2df70c64911110c3e
+# 状态：G3 归并完成（7/7 模块关键链验证基线）
+# 数据来源：docs/architecture/modules/M01~M07/CHAIN.md（G1 事实来源）
+#          + 7 个模块子代理实际运行测试（pytest @ C:\Python314）+ G2 LEGACY_REGISTER
+# 机器验收：python scripts/validate_g3_module_verification.py
+# 性质：DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
+# ============================================================
+schema_version: "1.0"
+g3_base_sha: "154d65f8ee178cc4514c8bb2df70c64911110c3e"
+modules:
+  - module_id: M01
+    module_name: 抖音AI小高客服
+    owner: M01
+    chain_path: docs/architecture/modules/M01/CHAIN.md
+    key_chain: "GMP webhook 入站（integrations.py，M02 MIXED 入口）→ webhook_event_service 事件持久化+幂等 → PLATFORM-OUTBOX（ai_auto_reply_outbox_service）→ AI 回复编排（ai_auto_reply_dry_run_service 决策）→ 9100 RAG/LLM（douyin_ai_cs_proxy + xg_douyin_ai_cs_client → reply_kernel/reply_decision_service）→ post-LLM gates（违禁词/人工接管/限频/幂等/紧急停止）→ send gate（ai_auto_reply_send_service → douyin_private_message_send_service，G3 禁真发）→ 失败回写 + M07 计费上报（NO_DOUBLE_CHARGE）"
+    entrypoints:
+      - "app/routers/integrations.py（webhook 直收）"
+      - "app/routers/douyin_ai_cs_proxy.py（9000→9100 客服代理）"
+      - "app/routers/{ai_reply_decision_logs,ai_auto_reply_runs,douyin_autoreply_settings,admin_autoreply_rollout,forbidden_words,douyin_live_check}.py"
+      - "frontend/src/features/douyin-cs/（workbench/autoreply/runs/live check）"
+    critical_components:
+      - "app/services/ai_auto_reply_dry_run_service.py"
+      - "app/services/ai_auto_reply_send_service.py"
+      - "app/services/ai_auto_reply_outbox_service.py"
+      - "app/services/douyin_private_message_send_service.py"
+      - "app/services/douyin_autoreply_gate_service.py"
+      - "app/services/douyin_conversation_history_service.py"
+      - "app/services/xg_douyin_ai_cs_client.py"
+      - "app/routers/douyin_ai_cs_proxy.py"
+      - "apps/xg_douyin_ai_cs/{llm,rag,services/reply_kernel,services/reply_decision_service}"
+    critical_dependencies:
+      - "PLATFORM-AUTH（auto_wechat:douyin_ai_cs）、PLATFORM-GATE、PLATFORM-OUTBOX"
+      - "M02（webhook_event_service/contact_* DOMAIN_SHARED）、M03（agent 配置）、M07（计费幂等键）"
+      - "9100 子应用、Milvus（向量副本，禁因 active=0 跳过）、GMP、Douyin OpenAPI、NewCarProject"
+    verification_levels:
+      STATIC: "链路/代码审计（本 G3 归并分析）"
+      UNIT: "send_service 62/62、webhook 61/61、kernel 37/37、proxy 52/53、outbox 28/31、compute 幂等 19/19 实际运行"
+      INTEGRATION: "9100 proxy/LLM/RAG mock 路径（LLM/RAG 因 tmp_path 受限 ENV_CONSTRAINED）"
+      SMOKE: "未做真实发送（G3 禁真发）"
+      MANUAL: "真实抖音发送/9100 真实 LLM/人工接管人工验收（protocol 见 manual_checks）"
+    machine_tests:
+      - path: tests/test_douyin_webhook.py
+        result: "61 passed"
+      - path: tests/test_ai_auto_reply_send_service.py
+        result: "62 passed"
+      - path: tests/test_douyin_ai_cs_proxy.py
+        result: "52 passed / 1 failed（断言漂移 720d133）"
+      - path: tests/test_ai_auto_reply_outbox_service.py
+        result: "28 passed / 3 errors（ENV tmp_path）"
+      - path: tests/test_reply_kernel.py
+        result: "37 passed"
+      - path: tests/test_ai_auto_reply_dry_run.py
+        result: "29 passed / 31 failed（真实回归：run_id 前向引用）"
+      - path: tests/test_m01_compute_idempotency_migration.py
+        result: "19 passed（含 test_rag_query_compute_idempotency_migration.py）"
+      - path: tests/test_douyin_webhook_atomic_idempotency.py
+        result: "8 passed / 20 errors（ENV tmp_path）"
+    manual_checks:
+      - id: M01-MANUAL-1
+        description: "真实抖音发送验收（staging，需审批）：preconditions=本机 PG（SMOKE_DATABASE_URL）+ 9100 真实 Ark LLM + 无 0o700 沙箱限制；steps=①真实 webhook 入站→自动回复决策→send gate 全链 ②人工接管后确认 AI 不继续自动回复 ③RAG ask 命中 Milvus 不跳过 ④M07 计费重放 NO_DOUBLE_CHARGE；expected=决策日志完整、gate_results 保留、无重复扣费；failure_signal=决策未产出/AI 绕过接管/计费重复；side_effect_warning=会真实发送抖音私信并扣费（测试账号）；cleanup=测试账号解绑+测试库清理"
+    fixtures_or_mocks:
+      - "FakeDouyinAiCsClient（proxy）、SQLite :memory:/StaticPool、monkeypatch NEWCAR_AUTH_ENABLED=false、StaticEmbeddingClient、fake LLM chat（kernel）、outbox_restart_worker 子进程"
+    success_criteria:
+      - "关键链各环节有可运行测试且 PASS"
+      - "dry-run/real-send gate、人工接管、幂等、计费幂等均有断言"
+      - "未授权不发送有断言"
+    failure_criteria:
+      - "dry_run 决策链路 UnboundLocalError（当前真实存在，31 failed）"
+      - "测试断言与有意行为漂移（proxy 1 failed）"
+      - "tmp_path 依赖测试在沙箱不可跑（ENV）"
+    side_effect_policy: "未触发真实抖音发送、未真实扣费、未连生产；全部 dry_run/mock/SQLite 隔离"
+    known_failures:
+      - "FAILURE-M01-001（HIGH）：ai_auto_reply_dry_run_service.py:359 run_id/attempt_count 前向引用 run（364 行才创建）→ UnboundLocalError；引入 7b2b6d7（P1 Stage 4B M01 Auto Reply Consumer 迁移），当前 HEAD 未修复；影响 webhook→自动回复编排主路径（含 outbox _run_with_session_for_outbox 路径）；tests/test_ai_auto_reply_dry_run.py 31 failed"
+      - "FAILURE-M01-002（LOW）：test_douyin_ai_cs_proxy.py::test_proxy_injects_merged_customer_memory_and_masks_contacts 断言过时（720d133 P0 止血改为 9000 侧明文透传 + 9100 _mask_latest_message_for_llm 语义占位，测试未同步）"
+    known_risks:
+      - "U-001 douyin_accounts M01/M03 边界未冻结"
+      - "U-002 决策日志与 send gate 时序无 staging E2E"
+      - "U-003 9100 training_feedback_auto_ingest PG 事务边界 PG_VERIFIED_MIDPOINT"
+      - "FAILURE-M01-001 回归未修复（当前主路径异常）"
+    environment_constraints:
+      - "沙箱拒绝 mkdir(mode=0o700) 目录（pytest basetemp/tmp_path、tempfile.mkdtemp）→ tmp_path 依赖测试不可跑（atomic_idempotency 20E、outbox 3E、legacy_reply 10E、p0_2/p0a、pg_mvcc 14E）"
+      - "data/ 目录沙箱不可写 → 需显式 DATABASE_URL 指向可写路径"
+      - "本机 PG 5432 开放但无 SMOKE_DATABASE_URL 凭据 → PG 专项 skip"
+      - "测试解释器必须用 C:\\Python314\\python.exe（anaconda/.crg-venv 缺 fastapi）"
+    current_result: KNOWN_FAIL
+    evidence: "实际运行 19 文件：PASSED≈316 / FAILED=32（dry_run 31 真实回归 + proxy 1 漂移）/ SKIPPED=1（PG 凭据）/ ERRORS≈60+（沙箱 0o700 环境约束）"
+    g1_owner_check_files:
+      - "app/services/ai_auto_reply_dry_run_service.py"
+      - "app/routers/douyin_ai_cs_proxy.py"
+    known_legacy_dependencies:
+      - LEGACY-002
+      - LEGACY-006
+      - LEGACY-007
+      - LEGACY-009
+      - LEGACY-010
+      - LEGACY-023
+      - LEGACY-024
+      - LEGACY-025
+      - LEGACY-026
+      - LEGACY-044
+      - LEGACY-050
+      - LEGACY-054
+      - LEGACY-055
+
+  - module_id: M02
+    module_name: AI小高线索
+    owner: M02
+    chain_path: docs/architecture/modules/M02/CHAIN.md
+    key_chain: "GMP webhook（integrations.py）→ webhook_event_service（幂等，atomic UPDATE RETURNING + 事务回滚）→ 线索创建/去重（lead_management_service）→ contact 三态提取（DOMAIN_SHARED：contact_extractor/contact_state/contact_completion_resolver）→ 分配（assign_service，原子带 UTC-aware 时区，Phase 7-FIX2 跨商户校验）→ 通知资格判定（lead_wechat_notify_eligibility）→ 通知任务（M04 消费）；回访（return_visit_run_service）→ 反馈（sales_feedback_parser）；线索列表/详情/状态时间线/会话定位"
+    entrypoints:
+      - "app/routers/{leads,webhook_events,lead_notifications,lead_notification_actions,lead_notification_records,sales_feedback,admin_return_visits,reports,staff,integrations}.py"
+      - "frontend/src/features/leads/（LeadsManagement/WebhookEventsPage/ChatPanel/ContactInfo）"
+    critical_components:
+      - "app/services/{lead_service,lead_management_service,webhook_event_service,douyin_webhook_idempotency_service,assign_service,lead_wechat_notify_eligibility_service,sales_feedback_parser,return_visit_run_service}.py"
+      - "DOMAIN_SHARED：app/services/{contact_extractor,contact_state_service,contact_completion_resolver,contact_validity_analyzer,contact_invalid_followup_service,customer_profile_service}.py"
+    critical_dependencies:
+      - "DOMAIN_SHARED contact_*（被 M01 消费，OD-G1-04）"
+      - "PLATFORM-ISO（merchant/tenant 隔离）、M01（消息消费）、M04（通知任务/日报）、M07（return_visit/preview 计费幂等）"
+    verification_levels:
+      STATIC: "链路/代码审计"
+      UNIT: "contact 三态/parser/eligibility 纯逻辑（152 用例全过）"
+      INTEGRATION: "webhook 幂等/分配/回访计费/隔离（in-memory SQLite，443+ 用例）"
+      SMOKE: "TestClient create_app + dependency override（L3 API）"
+      MANUAL: "真实 GMP 签名 webhook、真实微信派单、真实扣费为人工/外部 Gate（本轮未执行）"
+    machine_tests:
+      - path: tests/test_douyin_webhook_atomic_idempotency.py
+        result: "8 passed / 20 errors（ENV tmp_path）"
+      - path: tests/test_contact_extractor.py
+        result: "152 passed（contact 三态 6 文件全过）"
+      - path: tests/test_leads_management.py
+        result: "12 passed / 1 failed（fixture 漂移：SalesStaff 缺 merchant_id）"
+      - path: tests/test_lead_wechat_notify_eligibility_service.py
+        result: "15 passed / 1 failed（时区漂移：naive vs UTC-aware）"
+      - path: tests/test_douyin_workbench_tenant_isolation_r2.py
+        result: "3 failed（RED 红灯：latest_message 脱敏缺口）"
+      - path: tests/test_sales_feedback_parser.py
+        result: "PASS"
+      - path: tests/test_return_visit_compute_idempotency_migration.py
+        result: "PASS（NO_DOUBLE_CHARGE）"
+      - path: tests/test_lead_notifications.py
+        result: "17 passed（Windows-only 注册 + 手动派单）"
+    manual_checks:
+      - id: M02-MANUAL-1
+        description: "U-004 空号反馈追问门禁豁免清单（G4/G5 豁免、G3/24h/Hard 保留）逐项人工确认"
+      - id: M02-MANUAL-2
+        description: "U-005 lead_notifications Windows-only 与 M04 消费端到端时序 staging 双 19000 复核"
+      - id: M02-MANUAL-3
+        description: "真实 GMP 签名 webhook 回调烟测（staging）"
+    fixtures_or_mocks:
+      - "in-memory SQLite（StaticPool）+ Base.metadata.create_all；RequestContext 直接构造（merchant_id 来自登录态）；无共享 conftest"
+    success_criteria:
+      - "关键链各环节至少 1 个机器测试覆盖且 PASS"
+      - "merchant 隔离（跨商户访问 rejected）、pagination total、locator 提取、会话定位 safe failure、Windows-only 注册、M07 计费幂等有明确断言"
+    failure_criteria:
+      - "任何环节无覆盖（GAP）"
+      - "机器测试有未解释失败"
+      - "失败由业务代码缺陷引起且无 RED 测试登记"
+    side_effect_policy: "只读 + 测试执行；未修改业务代码；测试全部 in-memory SQLite；无真实线索写入/微信发送/扣费"
+    known_failures:
+      - "FAILURE-M02-001（MEDIUM）：build_reply_conversation_context 不脱敏 latest_message（douyin_conversation_history_service.py:88-91 只脱敏 history，:113 latest_message 原样透传），douyin_ai_cs_proxy reply 路径原始手机号/微信号进 LLM 上下文（对比 agents.py:260 预览路径调用前 mask）；test_douyin_workbench_tenant_isolation_r2.py 3 个 RED 断言失败（9100 侧 _mask_latest_message_for_llm 兜底存在，属纵深防御缺口，非直接泄露）"
+      - "FAILURE-M02-002（LOW）：test_leads_management.py::test_assign_and_reassign 测试 fixture 漂移（seed SalesStaff 无 merchant_id，实现 Phase 7-FIX2 跨商户校验正确）"
+      - "FAILURE-M02-003（LOW）：test_eligibility_rate_limit_allows_after_window_expires 时区漂移（测试用本地 naive UTC+8，实现按 UTC-aware 比较）"
+    known_risks:
+      - "U-004 空号反馈追问门禁豁免清单待用户确认"
+      - "U-005 Windows-only 通知与 M04 端到端时序未 staging 复核"
+      - "FAILURE-M02-001 脱敏缺口（纵深防御）"
+    environment_constraints:
+      - "默认 D:\\anaconda3 缺 fastapi → 用 C:\\Python314"
+      - "data/ 目录沙箱不可写 → DATABASE_URL 指向可写 TEMP"
+      - "pytest tmp_path/basetemp 沙箱不可用 → atomic_idempotency 20 errors（ENV）"
+      - "系统时区 UTC+8 暴露 naive/aware 时区漂移"
+    current_result: KNOWN_FAIL
+    evidence: "实际运行 23 文件 5 组：PASSED≈443 / FAILED=4（3 RED + 1 fixture 漂移）+ 1 时区漂移 / ERRORS=20（ENV tmp_path）"
+    g1_owner_check_files:
+      - "app/services/lead_management_service.py"
+      - "app/services/contact_state_service.py"
+    known_legacy_dependencies:
+      - LEGACY-001
+      - LEGACY-003
+      - LEGACY-005
+      - LEGACY-006
+      - LEGACY-029
+      - LEGACY-033
+      - LEGACY-046
+      - LEGACY-047
+      - LEGACY-048
+      - LEGACY-049
+      - LEGACY-056
+
+  - module_id: M03
+    module_name: AI小高智能体
+    owner: M03
+    chain_path: docs/architecture/modules/M03/CHAIN.md
+    key_chain: "agent 定义/配置（agent.py/agents.py + ai_agent_service/agent_status_service）→ 抖音账号↔agent 绑定（douyin_account_agent_binding_service）→ 能力/配置消费（M01 读取 agent_config/allowed_category_keys，仅 9000 注入）→ 知识分类/训练（knowledge_categories/knowledge_training → 9100 RAG ingest，统一 scope tenant=xiaogao_system/merchant=xiaogao_base/account=0/category=base）→ capability_gateway META 聚合"
+    entrypoints:
+      - "app/routers/{agent,agents,knowledge_categories,knowledge_training,capability_gateway}.py"
+      - "frontend/src/features/agents/（SuperMerchantAgent/SuperMerchantManagement）"
+    critical_components:
+      - "app/services/{ai_agent_service,agent_status_service,agent_knowledge_category_service,knowledge_category_service,douyin_account_agent_binding_service}.py"
+      - "app/repositories/knowledge_categories_async_repository.py"
+      - "apps/agents/、apps/knowledge/（COMPAT：service 层被 9000 引用）"
+      - "app/routers/capability_gateway.py"
+    critical_dependencies:
+      - "M01（agent 配置消费 + 9100 训练/检索执行）、M07（训练/检索计费幂等）"
+      - "NewCar 权限（auto_wechat:ai_agent / douyin_ai_cs）、Milvus（向量副本）"
+    verification_levels:
+      STATIC: "链路/代码审计"
+      UNIT: "agent CRUD/绑定/分类/训练 API 契约（业务契约测试已运行）"
+      INTEGRATION: "跨模块边界（M01 proxy 注入/计费幂等模拟）部分"
+      SMOKE: "未做"
+      MANUAL: "U-002 三隔离门 staging 补测；capability_gateway META 内容一致性人工核验"
+    machine_tests:
+      - path: tests/test_ai_agents.py
+        result: "16 passed"
+      - path: tests/test_agent_status.py
+        result: "8 passed"
+      - path: tests/test_agent_knowledge_categories.py
+        result: "9 passed"
+      - path: tests/test_knowledge_categories_api.py
+        result: "10 passed"
+      - path: tests/test_douyin_account_agent_binding_service.py
+        result: "13 passed"
+      - path: tests/test_douyin_accounts_router.py
+        result: "21 passed"
+      - path: tests/test_knowledge_training_api.py
+        result: "13 passed"
+      - path: tests/test_agents_app.py
+        result: "2 passed / 3 failed（COMPAT 层 schema 缺陷）"
+      - path: tests/test_capability_service_boundaries.py
+        result: "5 passed"
+      - path: tests/test_training_compute_idempotency_migration.py
+        result: "10 passed"
+      - path: tests/test_rag_ingest_compute_idempotency_migration.py
+        result: "12 passed"
+      - path: tests/test_knowledge_categories_async_pg_pilot.py
+        result: "2 passed / 3 failed（权限码过时）"
+    manual_checks:
+      - id: M03-MANUAL-1
+        description: "U-002 三个隔离门（Agent 绑定→Auto Reply 启用 / 事实隔离 / Training 隔离）staging 补测"
+      - id: M03-MANUAL-2
+        description: "训练计费幂等 PG runtime（对齐 M07 0034 同型）"
+      - id: M03-MANUAL-3
+        description: "capability_gateway 聚合 META 内容一致性人工核验"
+    fixtures_or_mocks:
+      - "SQLite in-memory + StaticPool + TestClient + get_db/RequestContext override；9100 侧 monkeypatch；计费幂等用 in-memory SQLite 模拟键构造"
+    success_criteria:
+      - "agent CRUD+商户隔离+权限门禁、绑定语义（单 active default、重绑 revive、409 保护）、分类绑定幂等/软删、训练 ask/feedback 白名单+系统上下文、统一知识 scope 默认值、allowed_category_keys 仅 9000 注入、训练/ingest 计费幂等键构造——机器测试全部 PASS"
+    failure_criteria:
+      - "COMPAT 层 agent 创建 500（apps/agents schema 缺 11 字段）"
+      - "测试代码与 FastAPI 0.139 路由结构漂移（route.path）"
+      - "pilot 测试权限码过时（ai_agents→douyin_ai_cs）"
+    side_effect_policy: "不真写生产知识库/不真扣费；所有训练/计费测试均为 monkeypatch 或 in-memory 模拟"
+    known_failures:
+      - "FAILURE-M03-001（MEDIUM）：apps/agents（COMPAT）POST /api/agents 500——services.py:66-76 访问 payload.store_address 等 11 字段，schemas.py::AiAgentCreate 未定义（迁移 0019 表字段与旧子应用 DTO 不同步）；test_agents_app.py 3 failed，真实业务缺陷"
+      - "FAILURE-M03-002（LOW）：test_no_forbidden_rag_routes_are_registered 测试漂移（FastAPI 0.139 _IncludedRouter 无 .path）"
+      - "FAILURE-M03-003（LOW）：async_pg_pilot 权限码过时（auto_wechat:ai_agents → 现要求 douyin_ai_cs）"
+    known_risks:
+      - "U-002（绑定→Auto Reply/事实/Training 隔离门未 staging 补测）"
+      - "U-006（capability_gateway 仅 health 端点，无聚合 META 列表端点测试）"
+      - "CHAIN.md §7 文档漂移（identity 声称 rag_training_run:{id}，实际 knowledge_training_execution:{execution_id}:ask 与 rag_embedding:{run_id}:{doc}:{chunk}:ingest）——G3 期间登记 G1_FACTUAL_CORRECTION"
+    environment_constraints:
+      - "沙箱拒绝 data/ 写入（DATABASE_URL 重定向 workspace 根临时文件）"
+      - "pytest tmp_path fixture 不可用（basetemp ACL）→ xg unified 8 个测试 ENV_CONSTRAINED"
+      - "无 PG/Milvus 环境"
+    current_result: KNOWN_FAIL
+    evidence: "实际运行 15 文件 3 组：140 passed / 7 failed / 8 errors（组1 77p/22.42s、组2 41p/4f/8e、组3 22p/3f）；失败根因定位（services.py:66-76 vs schemas.py、FastAPI 0.139、权限码）"
+    g1_owner_check_files:
+      - "app/services/ai_agent_service.py"
+      - "apps/agents/services.py"
+    known_legacy_dependencies:
+      - LEGACY-027
+      - LEGACY-028
+      - LEGACY-032
+      - LEGACY-045
+
+  - module_id: M04
+    module_name: AI小高微信助手
+    owner: M04
+    chain_path: docs/architecture/modules/M04/CHAIN.md
+    key_chain: "M02 通知/回访任务 → 9000 派单（wechat_tasks，atomic claim，P2-M04 Candidate C）→ 19000 拉取（claim_token/lease/attempt token）→ UI 自动化发送（gate：联系人验证/前台焦点/违禁词/人工接管/限频/幂等/紧急停止）→ 回写状态（current-attempt CAS callback）→ uncertain 处理（lease 过期 reclaim 不 blind resend，at-most-once）；日报：PLATFORM-SCHED → daily_report_job_service → daily_report_delivery_service（claim/lease/execution_token）→ 投递（文件/Excel）"
+    entrypoints:
+      - "app/routers/{wechat_tasks,automation_control,daily_reports,daily_report_deliveries,wechat_auto_detect,replies,lead_notification_actions}.py"
+      - "app/local_agent_main.py（19000 ~20 endpoint）"
+      - "frontend/src/features/wechat-assistant/ + localWechatAgent.ts（127.0.0.1:19000 三层优先级）"
+    critical_components:
+      - "app/services/wechat_task_service.py（claim/lease/token/CAS/uncertain）"
+      - "app/services/{daily_report_service,daily_report_delivery_service,daily_report_excel,daily_report_storage}.py"
+      - "app/services/automation_control.py（紧急停止）"
+      - "app/wechat_ui/（UI 自动化基座，只读审计）"
+      - "app/auth/local_agent_auth.py（X-Local-Agent-Token + merchant 隔离）"
+    critical_dependencies:
+      - "M02（通知/回访任务消费并回写）、PLATFORM-AUTH/GATE/SCHED"
+      - "19000 Local Agent（小高AI微信助手.exe）、微信客户端（只读，禁数据库/注入/逆向）"
+      - "NewCar 权限（auto_wechat:wechat/automation）"
+    verification_levels:
+      STATIC: "链路/代码审计"
+      UNIT: "派单/claim/lease/CAS/uncertain（test_p2_m04_claim_lease 35 用例全 PASS）、紧急停止、日报聚合 51 PASS"
+      INTEGRATION: "19000 token/heartbeat/runtime/CORS（mock UIA）"
+      SMOKE: "未做真实微信（G3 禁）"
+      MANUAL: "19000 真人微信验收协议（BASELINE_ONLY + ENV_CONSTRAINED，本沙箱严禁执行）"
+    machine_tests:
+      - path: tests/test_p2_m04_claim_lease.py
+        result: "35 passed / 3 skipped（SQLite 并发）"
+      - path: tests/test_p0_5a_wechat_tasks.py
+        result: "PASS（派单链+鉴权 55 passed 组）"
+      - path: tests/test_wechat_task_history_api.py
+        result: "1 failed（KNOWN_FAIL：pending 孤立任务期望过期，当前 INNER JOIN 排除更安全）"
+      - path: tests/test_automation_control.py
+        result: "1 failed（KNOWN_FAIL：调已废弃 410 端点）"
+      - path: tests/test_local_agent_runtime.py
+        result: "PASS（19000 33 passed 组）"
+      - path: tests/test_daily_report_service.py
+        result: "51 passed"
+      - path: tests/test_daily_report_delivery_service.py
+        result: "ENV（tmp_path 沙箱）"
+      - path: tests/test_frontend_local_agent_url.py
+        result: "PASS（127.0.0.1:19000 契约静态测试）"
+      - path: tests/test_legacy_wechat_debug_lockdown.py
+        result: "PASS"
+    manual_checks:
+      - id: M04-MANUAL-1
+        description: "19000 真人微信验收协议：preconditions=微信所在 Windows 电脑（非开发主机）+ 微信登录前台 + 小高AI微信助手.exe 仅监听 127.0.0.1:19000 + LOCAL_AGENT_AUTH_REQUIRED=true + 测试专用联系人；steps=①9000 建任务 ②1900 poll pending 获 claim_token ③UI 自动化逐步 gate ④制造 gate 失败验证阻断回写 ⑤CAS 回写 ⑥lease 过期 reclaim→uncertain ⑦紧急停止即时生效；expected=at-most-once、失败不伪造成功、紧急停止即时生效；failure_signal=重复发送/绕过 gate/失败回写 success/监听 0.0.0.0/token 泄漏；side_effect_warning=测试联系人会收到真实消息、操作真实微信窗口；cleanup=撤销紧急停止+删除测试任务+确认无残留输入框焦点+netstat 复核 127.0.0.1"
+    fixtures_or_mocks:
+      - "内存 SQLite + TestClient + unittest.mock（UIA 窗口/剪贴板/SendKeys 全 mock 断言不调用）+ 本地替身 HTTP server + mock 9100 摘要客户端"
+    success_criteria:
+      - "派单→claim→lease→token→回写→uncertain 全链机器测试 PASS"
+      - "紧急停止单测 PASS、鉴权 401/404 隔离矩阵 PASS、日报聚合/Excel/投递协议契约 PASS"
+      - "19000 只监听 127.0.0.1 契约（前端 URL 静态测试 PASS）"
+    failure_criteria:
+      - "任何绕过 gate 的发送路径被测试放行"
+      - "uncertain 任务被再次 claim（blind resend）"
+      - "紧急停止不生效、token 泄露、监听非 127.0.0.1"
+    side_effect_policy: "绝不操作真实微信、绝不发送微信消息、绝不启动 exe/真实 UIA；只运行 mock/TestClient/内存库测试；19000 真人场景仅提供 MANUAL 协议"
+    known_failures:
+      - "FAILURE-M04-001（LOW/测试期望过期）：test_pending_endpoint 期望 pending 返回孤立任务，当前 Phase 7-FIX2 INNER JOIN 排除（当前行为更安全，测试需更新）"
+      - "FAILURE-M04-002（LOW/测试期望过期）：test_send_to_staff_blocked_when_stopped 调已废弃 410 端点 /lead-notifications/send-to-staff"
+      - "FAILURE-M04-003（ENV）：test_workbook_empty_data_still_valid 向 tests/ 目录写文件被沙箱拒绝（测试自身缺陷）"
+    known_risks:
+      - "U-005（通知/回访真实发送端到端未在 staging 双 19000 复核）"
+      - "日报投递文件消息控件行为 phase8b probe 部分未定论"
+      - "19000 在非开发主机无源码可运行性（验收不得要求 python 命令）"
+      - "FastAPI 0.139.2 惰性 include_router 使 app.routes 断言失效（3 处测试漂移，路由实际可达）"
+    environment_constraints:
+      - "沙箱拒绝 data/、tests/、.pytest_cache、pytest 默认 basetemp 写入"
+      - "Python 3.14 os.mkdir(mode=0o700) 目录只读 → pytest 9.x tmp_path 全挂（ENV）"
+      - "FastAPI 0.139.2 惰性 include（app.routes 不即时展开）"
+      - "测试解释器 C:\\Python314；DATABASE_URL 重定向 TEMP；LOCAL_AGENT_TOKENS 需外部预置"
+    current_result: ENV_CONSTRAINED
+    evidence: "实际运行 6 批次 25 文件：核心链 claim/lease/CAS/uncertain 35 用例 + 派单鉴权 55 + 19000 33 + 日报聚合 51 + 补充 128 全 PASS；tmp_path 类测试在沙箱+py3.14 组合下不可运行（ENV）；真人微信项 MANUAL"
+    g1_owner_check_files:
+      - "app/services/wechat_task_service.py"
+      - "app/routers/wechat_tasks.py"
+    known_legacy_dependencies:
+      - LEGACY-002
+      - LEGACY-007
+      - LEGACY-009
+      - LEGACY-010
+      - LEGACY-031
+      - LEGACY-040
+      - LEGACY-047
+      - LEGACY-058
+
+  - module_id: M05
+    module_name: 小高素材库
+    owner: M05
+    chain_path: docs/architecture/modules/M05/CHAIN.md
+    key_chain: "上传链：frontend(5173 MaterialLibrary) → TOS 直传 → POST /ai-edit/materials/upload-tos（auto_wechat:ai_edit 权限门 + merchant 隔离）→ ai_edit_materials 持久化（cloud_storage_key，同 merchant_id+source_sha256 幂等）→ POST /materials/{id}/analyze → material_analysis.analyze_material_async（方舟多模态，计费 identity=material_analysis_execution:{execution_id}:ark_analysis）→ M06 消费；前端反馈（D3）：uploadMaterialToTos 显式 120s timeout → SUCCESS/FAILED/UNKNOWN（UNKNOWN≠backend failed）；历史读取链：GET /materials → 过期 presign 检测 → _object_key_from_presigned_url（URL 回填 cloud_storage_key）→ _refresh_expired_presigned_urls（幂等刷新）→ 重新生成 TOS 预签名 URL → playback。M05 historical material presign = CLOSED"
+    entrypoints:
+      - "app/routers/ai_edit.py（MIXED BC-02）：GET/POST /materials、POST /materials/upload-tos、POST /materials/{id}/analyze、DELETE /materials/{id}"
+      - "frontend/src/features/ai-edit/{MaterialLibrary,uploadFeedback.ts,api.ts}"
+    critical_components:
+      - "app/services/{ai_edit_service,ai_edit_storage,material_analysis,las_tos_uploader}.py"
+      - "app/routers/ai_edit.py（upload-tos 幂等持久化 + _refresh_expired_presigned_urls）"
+      - "frontend/src/features/ai-edit/uploadFeedback.ts（三态分类）"
+    critical_dependencies:
+      - "TOS（上传/presign 刷新，凭证 env 注入）、M06（素材供混剪，BC-02 共置）、M07（material_analysis 计费，0033 PG_RUNTIME_VERIFIED）"
+      - "PLATFORM-ISO（merchant 隔离）、auto_wechat:ai_edit 权限门"
+    verification_levels:
+      STATIC: "链路/代码审计"
+      UNIT: "后端 9 文件 72 用例（63 PASS / 9 FAIL）；前端 uploadFeedback 9/9 PASS"
+      INTEGRATION: "接口级 TestClient（内存 SQLite + mock auth）"
+      SMOKE: "未做真实 TOS/方舟（禁真实副作用）"
+      MANUAL: "真实 TOS 上传验收协议 + 真实方舟分析验收（staging，需审批）"
+    machine_tests:
+      - path: tests/test_phase12_task12_material_api.py
+        result: "部分 PASS / 3 failed（红灯：list_trash/same_sha/platform_lifecycle）"
+      - path: tests/test_phase12_task12_material_cloud.py
+        result: "4 failed（过期红灯：断言已废弃 store_material_stream）"
+      - path: tests/test_phase12_task12_material_schema.py
+        result: "PASS"
+      - path: tests/test_phase12_task12_material_analysis.py
+        result: "2 failed（过期红灯：save_ai_analysis 不存在）"
+      - path: tests/test_phase12_task12_duplicate_audit.py
+        result: "14/14 PASS"
+      - path: tests/test_ai_edit_presign_refresh.py
+        result: "9/9 PASS（历史 presign 刷新链）"
+      - path: tests/test_material_analysis_compute_idempotency_migration.py
+        result: "MA-0~MA-6 全 PASS（计费幂等）"
+      - path: tests/test_m02_m05_compute_idempotency_migration.py
+        result: "PASS（M05 identity 合同）"
+      - path: frontend/tests/uploadFeedback.test.ts
+        result: "9/9 PASS（node --test --test-isolation=none）"
+    manual_checks:
+      - id: M05-MANUAL-1
+        description: "真实 TOS 上传验收（staging，需审批）：注入 TOS 凭证 → 前端真实上传 ≥1 视频 → 断言 ai_edit_materials 行（cloud_storage_key 非空、storage_mode=cloud_available）→ 同文件重传幂等更新不重复插行 → 跨商户 404/403 → 播放 URL 可达"
+      - id: M05-MANUAL-2
+        description: "真实方舟分析验收：配置 ARK_API_KEY → analyze → 断言 execution 落库 + ComputeTransaction 1 笔（NO_DOUBLE_CHARGE）+ 分析结果写回"
+    fixtures_or_mocks:
+      - "TOSUploader 全 mock（fake uploader 断言 presign 调用）+ 内存 SQLite + TestClient + RequestContext(mock auth) + 前端 uploadOne mock"
+    success_criteria:
+      - "presign 刷新 9/9（未过期透传/过期重签/URL 回填/失败容错）、计费幂等 MA-0~MA-6、M05 identity 合同、前端三态 9/9（120s 显式覆盖/UNKNOWN 不误报/无自动重试）、商户隔离+权限门、duplicate_audit 14/14"
+    failure_criteria:
+      - "register_material 同 SHA 撞唯一约束 500（真实缺口）"
+      - "回收站 lifecycle 视图未实现（红灯）"
+      - "人工覆盖优先语义未实现（红灯）"
+      - "material_cloud 4 个过期红灯（断言已废弃函数）"
+    side_effect_policy: "未真实上传 TOS（仅 mock 验证）、未真实删除素材、未真实扣费、未触碰活动库 data/auto_wechat.db"
+    known_failures:
+      - "FAILURE-M05-001（MEDIUM）：register_material 同 merchant 同 SHA 不同 material_id 直接 INSERT 撞 (merchant_id, source_sha256) 唯一约束抛未捕获 IntegrityError → HTTP 500（ai_edit_service.py:108-160，与 upload-tos 先查后插幂等语义不一致）"
+      - "FAILURE-M05-002（LOW）：回收站 lifecycle=trash 视图未实现（list_materials 无 lifecycle 参数）"
+      - "FAILURE-M05-003（LOW）：人工覆盖优先语义未实现（manual_override_json 仅 models.py:1713 列定义，无业务逻辑）"
+      - "FAILURE-M05-004（LOW/测试过期）：material_cloud 4 个断言已废弃函数（2026-07-31 LAS 方案已改 TOS 直传）"
+    known_risks:
+      - "U-007 重复素材批量处理未定论（duplicate_audit 脚本已就绪）"
+      - "FAILURE-M05-001 唯一约束 500（新发现）"
+      - "HIGH-03 不属 M05（M05 presign=CLOSED）"
+      - "CHAIN.md §7 计费 identity 写 material_analysis:{id} 与实际 material_analysis_execution:{execution_id}:ark_analysis 不一致——G3 期间登记 G1_FACTUAL_CORRECTION"
+    environment_constraints:
+      - "默认 anaconda 缺 fastapi → C:\\Python314"
+      - "沙箱 0o700 目录不可访问 → sitecustomize + pytest 8.3.4 副本 mode 0o755"
+      - "node --test 默认 spawn 子进程 EPERM → --test-isolation=none"
+      - "真实 TOS 上传/方舟分析无凭证且禁止副作用"
+    current_result: KNOWN_FAIL
+    evidence: "后端 pytest 8.3.4：63 passed / 9 failed（0 error/skip，8.67s）；前端 node --test --test-isolation=none：9/9 pass；9 失败全为 Task 12 红灯（5 项映射真实缺口 + 4 项测试过期）"
+    g1_owner_check_files:
+      - "app/services/ai_edit_service.py"
+      - "app/services/material_analysis.py"
+    known_legacy_dependencies:
+      - LEGACY-018
+      - LEGACY-019
+      - LEGACY-022
+
+  - module_id: M06
+    module_name: AI小高剪辑
+    owner: M06
+    chain_path: docs/architecture/modules/M06/CHAIN.md
+    key_chain: "参数组装（las_script/video_urls/template，LAS_MAX_VIDEOS=30/LAS_SCRIPT_MAX_LEN=4000）→ LAS submit（las_client，Bearer LAS_API_KEY）→ 写 AiEditJob(status=processing,stage=submitted,las_task_id,las_idempotent_id) → 后台轮询（process_las_job → wait_for_terminal，TERMINAL_STATUSES）→ 终态写库（非 COMPLETED→failed+las_{status}；COMPLETED→_persist_artifacts→archive_final_video→_fill_job_title）→ 计费（las_job:{id}:archive_usage）→ 前端拉取（LasRemixWorkbench）→ 播放/下载/删除（generate_playback_url/generate_download_token TTL=120s/delete_las_job 软删除）"
+    entrypoints:
+      - "app/routers/ai_edit.py（/ai-edit/las/* 段：list/create/get/play/download-link/download/delete）"
+      - "frontend/src/features/ai-edit/pages/LasRemixWorkbench.tsx + api.ts"
+    critical_components:
+      - "app/services/{ai_edit_las_service,las_client,las_tos_uploader,media_probe}.py"
+      - "app/models.py（AiEditJob/AiEditJobArtifact/AiPreviewExecution）"
+      - "app/routers/ai_edit.py（LAS 段 + _require_ai_edit 权限门）"
+    critical_dependencies:
+      - "火山引擎 LAS（las_video_remix speech_auto，LAS_API_KEY env）、TOS（素材/产物对象存储）"
+      - "M05 素材（BC-02 共置）、M07 计费（ai_preview_execution:{id}:{stage}，0034 PG_RUNTIME_VERIFIED）"
+      - "DY_SECRET_KEY（下载 token 签名，fail-closed）"
+    verification_levels:
+      STATIC: "链路/代码审计"
+      UNIT: "las_client 4/4、download_token 7/7、计费幂等 14/14、presign_refresh 10/10"
+      INTEGRATION: "route 级攻击面（TestClient + 内存库，attack 20/24 PASS）"
+      SMOKE: "未做真实 LAS/TOS（无凭证，MANUAL 协议覆盖）"
+      MANUAL: "真实 LAS 混剪验收协议（见 manual_checks）"
+    machine_tests:
+      - path: tests/test_ai_edit_download_token.py
+        result: "7/7 PASS"
+      - path: tests/test_las_client.py
+        result: "4/4 PASS（mock session 不触网）"
+      - path: tests/test_m06_compute_idempotency_migration.py
+        result: "4/4 PASS（Gate 6A-6D）"
+      - path: tests/test_preview_compute_idempotency_migration.py
+        result: "10/10 PASS（PV-0~PV-6）"
+      - path: tests/test_ai_edit_presign_refresh.py
+        result: "10/10 PASS（M05 交叉）"
+      - path: tests/test_independent_ai_edit_attack.py
+        result: "20/24 PASS（4 FAIL=TOS 凭证缺失环境）"
+      - path: tests/test_ai_edit_result_delivery.py
+        result: "3/33 PASS（30 ERROR=tmp_path 沙箱）"
+      - path: tests/test_phase12_task11_launcher.py
+        result: "ENV_CONSTRAINED（numpy/uiautomation Windows 栈）"
+    manual_checks:
+      - id: M06-MANUAL-1
+        description: "真实 LAS 混剪验收协议：preconditions=生产/staging LAS_API_KEY+TOS 凭证（env 不落前端）+ auto_wechat:ai_edit 权限账号 + ≤30 个 .mp4 素材；steps=①前端提交混剪 ②观察轮询 processing→succeeded ③校验产物落库 AiEditJobArtifact（storage_key 只含 tos_path）④播放/下载（token TTL 内+过期拒绝）⑤删除（软删除+自有 TOS 清理）⑥商户 B 访问商户 A 任务 404/403 ⑦M07 计费 identity=las_job:{id}:archive_usage 重放不重复扣费；expected=全链 succeeded+产物可操作+跨商户隔离+单次扣费；failure_signal=任务 failed 且 failure_code=las_{status}/archive_failed、下载 token 过期仍可用、双扣费；side_effect_warning=真实调用 LAS 付费算子/真实上传 TOS/真实扣费/真实删除产物（隔离测试商户）；cleanup=删除验收任务+核对计费流水+清理测试素材，Shot.Empty 故障态记录回写"
+    fixtures_or_mocks:
+      - "las_client mock requests.Session；内存 SQLite + StaticPool + dependency_overrides；TOSUploader delete_object 由测试 patch；无真实 LAS/TOS 调用"
+    success_criteria:
+      - "纯服务层/安全攻击面测试在隔离环境全 PASS"
+      - "download token 闭环（跨商户/篡改/过期/fail-closed）PASS"
+      - "计费幂等 Gate（las_job + ai_preview_execution 两族）PASS"
+      - "merchant isolation 路由攻击面 PASS；HIGH-03 显式登记 OPEN 不误标"
+    failure_criteria:
+      - "任何 M06 测试在无环境限制下 FAIL"
+      - "download token fail-closed 退化、计费重放双扣、跨商户越权可读/可删、LAS 故障态未回写 failed、凭证出现在前端/日志"
+    side_effect_policy: "不真调 LAS 付费能力、不真上传 TOS 生产桶、不真扣费、不真删素材/产物、不改业务代码"
+    known_failures:
+      - "无业务代码缺陷性失败；4 个 TOS 删除测试（TOSUploader 构造需凭证）+ 30 个 tmp_path 测试 + launcher 均为环境限制"
+    known_risks:
+      - "HIGH-03=OPEN（LAS long queued video_urls 可过期>7 天，归属 M06/LAS 长任务链，独立于 M05 presign=CLOSED；G3 不修仅登记）"
+      - "U-008=OPEN（Shot.Empty 服务端故障与素材质量判定边界，代码已修 4 处但无 staging 复核）"
+      - "生产 LAS 凭证注入/轮询策略未 staging 复核"
+    environment_constraints:
+      - "沙箱禁止 python 子进程 mkdir/枚举部分目录（tmp_path sessionfinish 必崩 → 30 ERROR）"
+      - "无 TOS 凭证（TOSUploader.__init__ 构造即抛 → 4 FAIL）"
+      - "无 numpy/uiautomation（launcher 收集失败）"
+      - "环境：.crg-venv Python 3.12.13 离线拼装（fastapi 0.141.1/sqlalchemy 2.0.51/pytest 9.1.1）"
+    current_result: ENV_CONSTRAINED
+    evidence: "实际运行 9 文件：60 passed / 4 failed（TOS 凭证）/ 30 errors（tmp_path 沙箱）/ launcher ENV；计费 identity 双族 14/14 PASS；merchant isolation 攻击面 20/24"
+    g1_owner_check_files:
+      - "app/services/ai_edit_las_service.py"
+      - "app/services/las_client.py"
+    known_legacy_dependencies:
+      - LEGACY-039
+      - LEGACY-060
+
+  - module_id: M07
+    module_name: AI小高算力
+    owner: M07
+    chain_path: docs/architecture/modules/M07/CHAIN.md
+    key_chain: "compute account→transaction/usage→balance→merchant isolation→query/display；业务模块→11 consumer（rag_search_execution/ai_preview_execution/material_analysis/rag_training_run 等 M07 identity 键）→ record_usage（原子）→ 余额扣减（atomic UPDATE...RETURNING，P1-FC-F1 Candidate B）→ 幂等冲突（IntegrityError replay / same-identity return / payload_evidence 区分 REPLAY vs CONFLICT）→ compute_transactions(idempotency_key 唯一约束, PG 0030)→balance→/compute 商户查询 /admin 管理 /internal 上报（F-2 DORMANT）"
+    entrypoints:
+      - "app/routers/compute.py（compute/admin/internal 三 router）"
+      - "apps/compute/{main,router,routers,service,services}.py"
+      - "app/services/compute_service.py（COMPAT-012 兼容入口，LEGACY-012）"
+      - "frontend/src/features/compute/"
+    critical_components:
+      - "apps/compute/services.py（record_usage 幂等路径、atomic UPDATE...RETURNING、get_or_create_account SAVEPOINT、calculate_billed_tokens）"
+      - "app/routers/compute.py（账号反查、充值/发放、管理员放行规则）"
+      - "app/services/compute_service.py（COMPAT-012）"
+      - "app/auth/context.py（管理员放行规则 2026-07-31）"
+    critical_dependencies:
+      - "M01/M02/M03/M05/M06 计费上报（11 consumer 迁移完成）"
+      - "PG 唯一约束（0030）、PLATFORM-ISO 商户隔离、COMPAT-012 兼容入口（5 调用方）"
+      - "P1 Final Closure-2 独立 PG 并发脚本（FC-0~FC-12+FC-R1/R2 全 PASS）"
+    verification_levels:
+      STATIC: "L1 纯函数/ORM 合同（PASS）"
+      UNIT: "L2 service 单测（PASS，1 drift）"
+      INTEGRATION: "L3 router/HTTP 集成（16/28 PASS，12 drift）"
+      SMOKE: "L4 PG runtime（ENV_CONSTRAINED，引用 P1 审批证据）"
+      MANUAL: "FC-3/FC-R1/FC-R2 真 PG 并发（P1 Final Closure-2 隔离脚本已覆盖全 PASS）；0034 PREVIEW 双 HTTP hop（P1_PG_0034_PREVIEW_CONSUMER_APPROVAL.md 证据）"
+    machine_tests:
+      - path: tests/test_compute_idempotency.py
+        result: "5/5 PASS（幂等）"
+      - path: tests/test_compute_concurrent_balance_atomic_update.py
+        result: "5 passed / 4 skipped（显式 PG-only，P1 隔离脚本覆盖）"
+      - path: tests/test_compute_models.py
+        result: "PASS（ORM 合同）"
+      - path: tests/test_trusted_reply_suggestion_compute_idempotency.py
+        result: "PASS"
+      - path: tests/test_rag_query_compute_idempotency_migration.py
+        result: "PASS（11 consumer 迁移 62 用例组）"
+      - path: tests/test_compute_router.py
+        result: "16 passed / 12 failed（drift：eb7a3ac 账号反查未同步测试）"
+      - path: tests/test_compute_service.py
+        result: "57 passed / 1 failed（drift）"
+      - path: tests/test_compute_app.py
+        result: "10 passed / 1 failed（drift）"
+      - path: tests/test_compute_usage_client.py
+        result: "15 passed / 1 failed（drift：idempotency_key 字段）"
+      - path: tests/test_phase10_compute_markup_api.py
+        result: "1 failed（drift：管理员放行规则）"
+    manual_checks:
+      - id: M07-MANUAL-1
+        description: "真 PG 并发原子性（FC-3/FC-R1/FC-R2）→ 复用 P1 Final Closure-2 隔离 PG 脚本（P1_FINAL_POSTGRESQL_CONCURRENT_CLOSURE_2.md，全 PASS，无需新写）"
+      - id: M07-MANUAL-2
+        description: "0034 PREVIEW 双 HTTP hop 余额门禁 → 复用 P1_PG_0034_PREVIEW_CONSUMER_APPROVAL.md 证据"
+      - id: M07-MANUAL-3
+        description: "staging/prod app-role GRANT 落地后补 RUNTIME 验证（CR-4 独立部署审批）"
+    fixtures_or_mocks:
+      - "SQLite 内存库（StaticPool）+ TEMP 临时库（DATABASE_URL/RAG_DATABASE_URL 重定向）+ monkeypatch urlopen 网络哨兵 + monkeypatch COMPUTE_INTERNAL_TOKEN + RequestContext 手工构造"
+    success_criteria:
+      - "record_usage 幂等 NO_DOUBLE_CHARGE（replay 不重复扣费）、并发原子扣费无 lost update、余额/流水 attribution 完整、商户隔离、internal fail-closed、COMPAT-012 兼容——机器可验证部分全部满足"
+    failure_criteria:
+      - "任意幂等/并发/余额原子性用例失败；PG 唯一约束失效；越权可访问"
+    side_effect_policy: "不真扣费/不真改余额/不真充值；测试全部走内存或 TEMP 临时库；未发真实网络请求（哨兵断言触发数=0）"
+    known_failures:
+      - "FAILURE-M07-001~004（LOW/测试漂移，非生产缺陷）：①eb7a3ac 管理员充值/发放改账号反查 → test_compute_router.py 12 failed；②create_mock_recharge_order 状态 mock_pending→mock_completed → service/app 各 1；③compute_usage_client 新增 idempotency_key 字段 → usage_client 1；④has_permission 2026-07-31 管理员放行规则 → markup 权限矩阵 1"
+    known_risks:
+      - "余额并发上限生产 RUNTIME_UNKNOWN（CR-4：staging/prod app-role GRANT 未落地）"
+      - "markup/metering 计费矩阵未在 G1 冻结（SuperComputeConfig 全规则未锁定）"
+      - "7 REQUEST_RECOVERY_GAP 保留非 RESOLVED；F-2 DORMANT /api/compute/internal/usage 丢 idempotency_key 无 ACTIVE 触发但为潜在隐患"
+    environment_constraints:
+      - "沙箱拒写 data/ 与 9100 默认 RAG 库路径（TEMP 重定向）"
+      - "pytest tmp_path basetemp 目录枚举被沙箱 ACL 拦截（37 ERROR）"
+      - "4 个真 PG 并发用例显式 skip（needs PostgreSQL，由 P1 独立脚本覆盖，未用 SQLite 冒充）"
+    current_result: KNOWN_FAIL
+    evidence: "20 文件核心集：149 passed / 4 skipped（PG-only）/ 7.86s；逐文件基线 16 failed 全为 4 类测试-代码 drift（有 git commit 证据）；37 errors 全为沙箱 tmp_path 环境约束；未发现生产代码缺陷证据"
+    g1_owner_check_files:
+      - "apps/compute/services.py"
+      - "app/routers/compute.py"
+    known_legacy_dependencies:
+      - LEGACY-011
+      - LEGACY-012
+      - LEGACY-025
+      - LEGACY-052
+
+summary:
+  modules_total: 7
+  modules_with_baseline: 7
+  module_key_chain_baseline: "7/7"
+  pass_modules: 0
+  known_fail_modules: 5
+  baseline_only_modules: 0
+  env_constrained_modules: 2
+  unknown_verification: 0
+  owner_conflict: 0

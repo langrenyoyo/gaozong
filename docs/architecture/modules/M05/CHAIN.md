@@ -35,7 +35,7 @@
 ## 7. Async / Worker Chain
 - 上传链：browser → TOS（直传）→ /ai-edit/materials/upload-tos → material persistence（ai_edit_materials，cloud_storage_key 持久化）→ material_analysis（异步分析）→ 分析结果写回 → M06 消费。
 - 读取历史素材链：material list → detect expired presigned URL → cloud_storage_key / historical object key recovery（_object_key_from_presigned_url）→ regenerate presigned URL（_refresh_expired_presigned_urls）→ frontend playback。
-- material_analysis 计费：M07 consumer（identity=material_analysis:{id}，进程内无 HTTP hop）。
+- material_analysis 计费：M07 consumer（identity=`material_analysis_execution:{execution_id}:ark_analysis`，进程内无 HTTP hop——G3 修正：原登记 `material_analysis:{id}` 与代码不符，见 G3_SEVEN_MODULE_VERIFICATION_REPORT.md G1_FACTUAL_CORRECTION_DURING_G3）。
 
 ## 8. External Dependencies
 - 对象存储：素材文件存储（本地/可配置）。
