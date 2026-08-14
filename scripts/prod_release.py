@@ -219,7 +219,14 @@ def cmd_inspect(argv: list[str]) -> int:
 # Git gate（deploy / rollback 前置）
 # ---------------------------------------------------------------------------
 def _git_gate() -> str | None:
-    """返回错误消息或 None（通过）。允许 git fetch / pull --ff-only；禁止 reset/clean/force。"""
+    """返回错误消息或 None（通过）。允许 git fetch / pull --ff-only；禁止 reset/clean/force。
+
+    fast-forward 方向语义（R1-5）：
+      local == remote                → PASS
+      local 落后 remote（可 ff）     → git pull --ff-only → PASS
+      local 领先 remote              → BLOCK（生产不允许 push）
+      local 与 remote 分叉           → BLOCK NON_FAST_FORWARD
+    """
     st = _git(["status", "--porcelain"])
     if st.stdout.strip():
         return "DIRTY_WORKTREE: 生产工作树不干净，deploy 已阻断（禁止 --ignore-dirty）"
@@ -229,8 +236,9 @@ def _git_gate() -> str | None:
     if fetch.returncode != 0:
         return "ORIGIN_UNREACHABLE: origin fetch 失败，deploy 已阻断"
     local = _git(["rev-parse", "HEAD"]).stdout.strip()
-    remote = _git(["rev-parse", "origin/master"]).stdout.strip() if branch != "master" else _git(["rev-parse", "origin/HEAD"]).stdout.strip()
-    if branch != "master":
+    if branch == "master":
+        remote = _git(["rev-parse", "origin/HEAD"]).stdout.strip()
+    else:
         # 非 master 分支：检查其 upstream
         upstream = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], check=False)
         if upstream.returncode != 0:
@@ -238,15 +246,21 @@ def _git_gate() -> str | None:
         remote = _git(["rev-parse", "@{u}"]).stdout.strip()
     if not local or not remote:
         return "GIT_STATE_UNKNOWN: 无法确定本地/远端 HEAD"
-    if local != remote:
-        merge_base = _git(["merge-base", local, remote]).stdout.strip()
-        if merge_base != remote:
-            return f"NON_FAST_FORWARD: 本地 {_short(local)} 落后于远端 {_short(remote)} 且非 ff（禁止 reset/force）"
-        # 本地领先（可 ff 合入远端）：执行 pull --ff-only 对齐
+    if local == remote:
+        return None  # 已同步 → PASS
+    # local != remote：用 merge-base 判定方向
+    merge_base = _git(["merge-base", local, remote]).stdout.strip()
+    if merge_base == local:
+        # 本地是远端的祖先 → 本地落后，可 fast-forward → pull --ff-only 对齐
         pull = _git(["pull", "--ff-only"], check=False)
         if pull.returncode != 0:
             return f"NON_FAST_FORWARD: pull --ff-only 失败（{pull.stderr.strip()[:200]}）"
-    return None
+        return None
+    if merge_base == remote:
+        # 本地领先远端（remote 是 local 的祖先）→ 生产不允许 push
+        return f"LOCAL_AHEAD: 本地 {_short(local)} 领先远端 {_short(remote)}，deploy 已阻断（生产不允许 push）"
+    # 分叉：merge_base 既不是 local 也不是 remote
+    return f"NON_FAST_FORWARD: 本地 {_short(local)} 与远端 {_short(remote)} 已分叉（merge-base={_short(merge_base)}），deploy 已阻断（禁止 reset/force）"
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +285,89 @@ def _db_migration_gate() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Release identity 准备（/root/.xg-ai-release/<release>.env）
 # ---------------------------------------------------------------------------
+def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
+    """解析当前真实生产三服务 image identity（R1-3）。
+
+    CURRENT IMAGE SOURCE PRIORITY：
+      1. 实际运行容器 image（docker inspect <compose_service>，按 compose service 名）
+      2. 对应历史 release identity 作为 provenance（全目录扫描，非 sorted[-1]）
+      3. 两者冲突 → fail-closed / report
+
+    Returns (images, error)。images 键：api / douyin-ai-cs / frontend。
+    容器可查询时以容器为准；容器不可查询（docker 不可用）时回退历史 identity；
+    历史 identity 缺失某服务键 → 该键空字符串（调用方 fail-closed）。
+    """
+    images: dict[str, str] = {"api": "", "douyin-ai-cs": "", "frontend": ""}
+    errors: list[str] = []
+
+    # 1. 实际运行容器 image（优先）
+    container_images: dict[str, str] = {}
+    ps = _run_argv(["docker", "ps", "--format", "{{.Names}}|{{.Image}}"], check=False)
+    if ps.returncode == 0:
+        for line in ps.stdout.splitlines():
+            parts = line.split("|", 1)
+            if len(parts) == 2:
+                container_images[parts[0].strip()] = parts[1].strip()
+    for svc_key, info in SERVICE_TARGETS.items():
+        cname = info["compose_service"]
+        img = container_images.get(cname, "")
+        if img:
+            images[svc_key] = img
+
+    # 2. 历史 release identity provenance（全目录扫描，按服务键取最新非空）
+    history: dict[str, str] = {"api": "", "douyin-ai-cs": "", "frontend": ""}
+    if release_dir.is_dir():
+        for c in sorted(release_dir.glob("*.env")):
+            kv = _parse_env(c)
+            for svc_key, info in SERVICE_TARGETS.items():
+                v = kv.get(info["image_var"], "").strip()
+                if v:
+                    history[svc_key] = v  # 时间序覆盖 → 最后是最近值
+
+    # 3. 对账：容器有值且历史有值且不同 → fail-closed report（不自动选）
+    for svc_key in images:
+        cimg = images[svc_key]
+        himg = history[svc_key]
+        if cimg and himg and cimg != himg:
+            errors.append(
+                f"IMAGE_CONFLICT: {svc_key} 运行容器 {cimg!r} != 历史 release identity {himg!r}"
+                "（fail-closed：不自动选择，需 Owner 裁决）"
+            )
+        elif not cimg and himg:
+            images[svc_key] = himg  # 容器不可查 → 回退历史
+
+    if errors:
+        return images, "；".join(errors)
+    return images, ""
+
+
+def _identity_content(service: str, images: dict[str, str], short_sha: str) -> str:
+    """构造 release identity env 内容（纯内存，不写盘；R1-2 dry-run 使用）。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "# 生成自 prod_release.py（非 secret release identity；runtime secrets 在 .env.production.local）",
+        f"# SOURCE_SHA={short_sha}",
+        f"# CREATED_AT={stamp}",
+        f"AUTO_WECHAT_API_IMAGE={images.get('api', '')}",
+        f"XG_DOUYIN_AI_CS_IMAGE={images.get('douyin-ai-cs', '')}",
+        f"AUTO_WECHAT_FRONTEND_IMAGE={images.get('frontend', '')}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _target_image_tag(service: str, short_sha: str) -> str:
+    """目标服务 immutable image tag（release-<SHORT_SHA>）。"""
+    return f"xg-ai-system-{service}:release-{short_sha}"
+
+
+def _ensure_target_image_exists(image: str) -> tuple[bool, str]:
+    """apply 前确认目标镜像存在（R1-4）。dry-run 不调用（不 build 不 inspect 副作用判定）。"""
+    proc = _run_argv(["docker", "image", "inspect", image], check=False)
+    if proc.returncode != 0:
+        return False, f"TARGET_IMAGE_NOT_FOUND: {image} 不存在（--no-build apply 前必须确认目标 immutable image 已构建；dry-run 不 build）"
+    return True, ""
+
+
 def _prepare_release_identity(service: str, images: dict[str, str], short_sha: str,
                               release_dir: Path) -> Path:
     """写入新的 release identity env（非 secret：仅 image/revision 身份键）。
@@ -283,16 +380,10 @@ def _prepare_release_identity(service: str, images: dict[str, str], short_sha: s
     name = f"release-{short_sha}-{stamp}.env"
     path = release_dir / name
 
-    # 现有 identity（继承未更新服务）
-    existing: dict[str, str] = {}
-    if release_dir.is_dir():
-        candidates = sorted(release_dir.glob("*.env"))
-        if candidates:
-            existing = _parse_env(candidates[-1])
-
-    api_img = images.get("api") or existing.get("AUTO_WECHAT_API_IMAGE", "")
-    cs_img = images.get("douyin-ai-cs") or existing.get("XG_DOUYIN_AI_CS_IMAGE", "")
-    fe_img = images.get("frontend") or existing.get("AUTO_WECHAT_FRONTEND_IMAGE", "")
+    # R1-3：images 已由调用方 reconcile（容器 image 优先 + 历史 provenance），直接使用
+    api_img = images.get("api") or ""
+    cs_img = images.get("douyin-ai-cs") or ""
+    fe_img = images.get("frontend") or ""
 
     lines = [
         "# 生成自 prod_release.py（非 secret release identity；runtime secrets 在 .env.production.local）",
@@ -306,19 +397,50 @@ def _prepare_release_identity(service: str, images: dict[str, str], short_sha: s
     return path
 
 
-def _previous_release_identity(service: str, release_dir: Path) -> Path | None:
-    """选择 previous immutable release identity（回滚用）。
+def _previous_release_identity(service: str, release_dir: Path) -> tuple[Path | None, str]:
+    """按目标 service 查找 previous immutable release identity（R1-6）。
 
-    规则：排除本次要回滚的目标 release 后，取最近一个含目标服务 image 的记录。
-    无法唯一确定 → 返回 None（ROLLBACK BLOCKED）。
+    规则（不再用 candidates[-2]）：
+      1. 按目标服务的 image_var（AUTO_WECHAT_API_IMAGE / XG_DOUYIN_AI_CS_IMAGE / AUTO_WECHAT_FRONTEND_IMAGE）
+         扫描 release_dir 全部 *.env（时间序）。
+      2. 找到最近一个：含合法（非空、immutable）目标 image，且目标 image != 当前目标 image 的记录。
+      3. 中间出现的其它服务 release（API-only / 9100-only）自动跳过——它们不携带目标服务的变更。
+      4. 无法唯一/可靠确定 → (None, reason)。
+
+    Returns (identity_path | None, note)。
     """
     if not release_dir.is_dir():
-        return None
+        return None, "release_dir 不存在"
+    target_var = SERVICE_TARGETS[service]["image_var"]
     candidates = sorted(release_dir.glob("*.env"))
     if len(candidates) < 2:
-        return None
-    # 排除最新（当前），取前一个
-    return candidates[-2]
+        return None, "release 记录不足 2 条（无 previous）"
+
+    # 当前目标 image = 最近一条携带该服务 image 的记录
+    current_image = ""
+    current_name = ""
+    for c in reversed(candidates):
+        kv = _parse_env(c)
+        img = kv.get(target_var, "").strip()
+        if img:
+            current_image = img
+            current_name = c.name
+            break
+    if not current_image:
+        return None, f"当前 {target_var} 无法从任何 release identity 解析"
+
+    # 从新到旧找 previous：目标 image 存在、immutable、且 != 当前
+    for c in reversed(candidates):
+        kv = _parse_env(c)
+        img = kv.get(target_var, "").strip()
+        if not img:
+            continue  # 该 release 未携带目标服务（如 API-only release），跳过
+        if img == current_image:
+            continue  # 同一 image（可能是当前 release 或重复记录），跳过
+        if not _is_immutable(img):
+            continue  # 非法 mutable，跳过
+        return c, f"previous={c.name}（{target_var}={img}）"
+    return None, f"PREVIOUS_RELEASE_UNKNOWN: 未找到 {service} 的历史有效 immutable identity（不猜测）"
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +468,119 @@ def _frontend_build_config_gate() -> tuple[bool, str]:
     if missing:
         return True, f"FRONTEND_BUILD_CONFIG_MISSING: 生产关键 VITE build 配置为空 {missing}（RG-FOLLOWUP-02 fail-closed）"
     return False, ""
+
+
+def _temp_identity_file(images: dict[str, str], short_sha: str) -> tuple[Path, None] | tuple[None, str]:
+    """dry-run 用临时 identity 文件（系统 TEMP，非 release dir）；调用方负责 finally 删除。
+
+    R1-2：dry-run 不写 /root/.xg-ai-release；临时文件只供 preflight 只读解析。
+    """
+    import tempfile
+
+    try:
+        fd, name = tempfile.mkstemp(prefix="prod_release_dryrun_", suffix=".env")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_identity_content("", images, short_sha))
+        return Path(name), None
+    except OSError as exc:
+        return None, f"TEMP_IDENTITY_WRITE_FAILED: {exc}"
+
+
+def _deploy_backend_dryrun(service: str, images: dict[str, str], runtime_env_file: Path,
+                           short_sha: str) -> int:
+    """dry-run：复用 release_9000 preflight（只读）解析/校验 + 渲染 preview；不写 identity、不 up。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("release_9000", ROOT / "scripts" / "release_9000_s10b.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    tmp_path = None
+    try:
+        tmp_path, err = _temp_identity_file(images, short_sha)
+        if err:
+            _err(err)
+            return 1
+        key = SERVICE_TARGETS[service]["release_backend"]
+        expected = {key: None}
+        ok, msg, resolved = mod.preflight(tmp_path, expected, runtime_env_file=runtime_env_file)
+        print(msg)
+        if not ok:
+            _err("PREFLIGHT FAILED（fail-closed，已停止）")
+            return 1
+        if service == "api":
+            cmd = mod.canonical_up_command(tmp_path)
+        else:
+            cmd = mod._pick_compose_cmd() + [
+                "--env-file", str(tmp_path),
+                "-p", PROJECT_NAME,
+                "-f", str(mod.COMPOSE_FILE),
+                "up", "-d", "--no-deps", "--no-build", SERVICE_TARGETS[service]["compose_service"],
+            ]
+        print(f"DEPLOY SERVICE       = {service}（{SERVICE_TARGETS[service]['compose_service']}）")
+        print(f"IMAGE                = {resolved.get(key) or '<unresolved>'}")
+        print("COMMAND_PREVIEW（防误粘贴，逐 token）:")
+        print(_render_command_preview(cmd))
+        print("DRY-RUN（默认）：未执行任何生产变更、未写入 release identity；确认后使用 --apply")
+        return 0
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _deploy_frontend_dryrun(images: dict[str, str], runtime_env_file: Path, short_sha: str) -> int:
+    """dry-run：复用 release_frontend_immutable 只读解析 + 渲染 preview；不写 identity、不 up。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("release_frontend", ROOT / "scripts" / "release_frontend_immutable.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    tmp_path = None
+    try:
+        tmp_path, err = _temp_identity_file(images, short_sha)
+        if err:
+            _err(err)
+            return 1
+        runtime_kv = _parse_env(runtime_env_file) if runtime_env_file.is_file() else {}
+        try:
+            svc = mod._resolved_frontend(tmp_path, runtime_kv)
+        except RuntimeError as exc:
+            _err(f"FRONTEND PREFLIGHT FAIL: {exc}")
+            return 1
+        img = svc.get("image") or ""
+        if not img or not _is_immutable(img):
+            _err(f"FRONTEND PREFLIGHT FAIL: resolved image={img!r}（immutable identity 未生效）")
+            return 1
+        if mod._volumes_have_source_bind(svc.get("volumes")):
+            _err("FRONTEND PREFLIGHT FAIL: 残留源码 bind mount")
+            return 1
+        cmd_txt = " ".join(svc.get("command") or []) if isinstance(svc.get("command"), list) else str(svc.get("command") or "")
+        if "npm run build" in cmd_txt:
+            _err("FRONTEND PREFLIGHT FAIL: runtime command 仍执行 npm run build")
+            return 1
+        canonical = mod._compose() + [
+            "--env-file", str(tmp_path),
+            "-p", PROJECT_NAME,
+            "-f", str(COMPOSE_FILE),
+            "-f", str(FRONTEND_OVERRIDE),
+            "up", "-d", "--no-deps", "--no-build", SERVICE_TARGETS["frontend"]["compose_service"],
+        ]
+        print(f"DEPLOY SERVICE       = frontend（{SERVICE_TARGETS['frontend']['compose_service']}）")
+        print(f"IMAGE                = {img}")
+        print("COMMAND_PREVIEW（防误粘贴，逐 token）:")
+        print(_render_command_preview(canonical))
+        print("DRY-RUN（默认）：未执行任何生产变更、未写入 release identity；确认后使用 --apply")
+        return 0
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _deploy_backend(service: str, identity_path: Path, runtime_env_file: Path, *, apply: bool) -> int:
@@ -488,31 +723,20 @@ def cmd_deploy(argv: list[str]) -> int:
             _err(reason)
             return 1
 
-    # ---- Release identity 准备（继承未更新服务） ----
+    # ---- 当前生产 image identity 对账（R1-3：容器 image 优先 + 历史 identity provenance） ----
     short_sha = _short(_git(["rev-parse", "HEAD"]).stdout.strip())
     full_sha = _git(["rev-parse", "HEAD"]).stdout.strip()
-    images: dict[str, str] = {}
-    # 当前生产 identity（继承基础）
     rel_dir = Path(args.release_dir)
-    existing: dict[str, str] = {}
-    if rel_dir.is_dir():
-        cands = sorted(rel_dir.glob("*.env"))
-        if cands:
-            existing = _parse_env(cands[-1])
-    images["api"] = existing.get("AUTO_WECHAT_API_IMAGE", "")
-    images["douyin-ai-cs"] = existing.get("XG_DOUYIN_AI_CS_IMAGE", "")
-    images["frontend"] = existing.get("AUTO_WECHAT_FRONTEND_IMAGE", "")
+    images, recon_err = _current_production_images(rel_dir)
+    if recon_err:
+        _err(f"IMAGE_RECONCILIATION_FAIL: {recon_err}")
+        return 1
 
     # 目标服务新 image：release-<SHORT_SHA>（immutable tag 由构建方预构建，脚本不 build）
-    target_img = f"xg-ai-system-{args.service}:release-{short_sha}"
-    if args.service == "api":
-        images["api"] = target_img
-    elif args.service == "douyin-ai-cs":
-        images["douyin-ai-cs"] = target_img
-    else:
-        images["frontend"] = target_img
+    target_img = _target_image_tag(args.service, short_sha)
+    images[args.service] = target_img
 
-    # 未更新服务必须非空（fail-closed：不能把未更新服务偷偷切到空 tag）
+    # 未更新服务必须非空且 immutable（fail-closed：不能把未更新服务偷偷切到空 tag / :latest）
     for k, v in images.items():
         if not v:
             _err(f"MISSING_IMAGE: {k} 当前生产 image identity 缺失（无法继承），deploy 阻断")
@@ -521,16 +745,34 @@ def cmd_deploy(argv: list[str]) -> int:
             _err(f"MISSING_IMAGE: {k}={v!r} 不是 immutable（:latest 不可接受）")
             return 1
 
-    identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
     print(f"FROZEN_SOURCE_SHA    = {full_sha}（{short_sha}）")
-    print(f"RELEASE_IDENTITY     = {identity_path}")
     print(f"  AUTO_WECHAT_API_IMAGE          = {images['api']}")
     print(f"  XG_DOUYIN_AI_CS_IMAGE          = {images['douyin-ai-cs']}")
     print(f"  AUTO_WECHAT_FRONTEND_IMAGE     = {images['frontend']}")
 
+    if args.apply:
+        # ---- R1-4：apply 前确认目标 immutable image 已存在（--no-build 前提） ----
+        ok_img, img_err = _ensure_target_image_exists(target_img)
+        if not ok_img:
+            _err(img_err)
+            return 1
+        # ---- R1-2：只有 apply 才写 release identity ----
+        identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
+        print(f"RELEASE_IDENTITY     = {identity_path}")
+        if args.service == "frontend":
+            return _deploy_frontend(identity_path, runtime_env, apply=True)
+        return _deploy_backend(args.service, identity_path, runtime_env, apply=True)
+
+    # ---- R1-2：dry-run 零写入——identity 内容纯内存预览，不写 release dir ----
+    preview_content = _identity_content(args.service, images, short_sha)
+    print("RELEASE_IDENTITY     = <dry-run 预览，未写入>（--apply 才写 release identity）")
+    for line in preview_content.splitlines():
+        if line.startswith("#"):
+            continue
+        print(f"  {line}")
     if args.service == "frontend":
-        return _deploy_frontend(identity_path, runtime_env, apply=args.apply)
-    return _deploy_backend(args.service, identity_path, runtime_env, apply=args.apply)
+        return _deploy_frontend_dryrun(images, runtime_env, short_sha)
+    return _deploy_backend_dryrun(args.service, images, runtime_env, short_sha)
 
 
 # ---------------------------------------------------------------------------
@@ -651,10 +893,11 @@ def cmd_rollback(argv: list[str]) -> int:
         return 1
 
     rel_dir = Path(args.release_dir)
-    prev = _previous_release_identity(args.service, rel_dir)
+    prev, note = _previous_release_identity(args.service, rel_dir)
     if prev is None:
-        _err("PREVIOUS_RELEASE_UNKNOWN: 无法唯一确定 previous release identity（ROLLBACK BLOCKED，不猜测）")
+        _err(f"ROLLBACK BLOCKED: {note}")
         return 1
+    print(f"ROLLBACK_LINEAGE     = {note}")
     prev_kv = _parse_env(prev)
     target_var = SERVICE_TARGETS[args.service]["image_var"]
     prev_image = prev_kv.get(target_var, "")
@@ -662,23 +905,39 @@ def cmd_rollback(argv: list[str]) -> int:
         _err(f"PREVIOUS_RELEASE_INVALID: {prev.name} {target_var}={prev_image!r}（ROLLBACK BLOCKED）")
         return 1
 
-    # 构造回滚 identity（目标服务 = previous image；其余继承 previous）
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    rollback_path = rel_dir / f"rollback-{args.service}-{stamp}.env"
-    rel_dir.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "# 生成自 prod_release.py rollback（非 secret）",
-        f"# SOURCE_SHA={prev_kv.get('SOURCE_SHA', '')}",
-        f"AUTO_WECHAT_API_IMAGE={prev_kv.get('AUTO_WECHAT_API_IMAGE', '')}",
-        f"XG_DOUYIN_AI_CS_IMAGE={prev_kv.get('XG_DOUYIN_AI_CS_IMAGE', '')}",
-        f"AUTO_WECHAT_FRONTEND_IMAGE={prev_kv.get('AUTO_WECHAT_FRONTEND_IMAGE', '')}",
-    ]
-    rollback_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # 构造回滚 identity 内容（R1-2：dry-run 不写盘，用临时文件；apply 才写 release dir）
+    rollback_content = (
+        "# 生成自 prod_release.py rollback（非 secret）\n"
+        f"# SOURCE_SHA={prev_kv.get('SOURCE_SHA', '')}\n"
+        f"AUTO_WECHAT_API_IMAGE={prev_kv.get('AUTO_WECHAT_API_IMAGE', '')}\n"
+        f"XG_DOUYIN_AI_CS_IMAGE={prev_kv.get('XG_DOUYIN_AI_CS_IMAGE', '')}\n"
+        f"AUTO_WECHAT_FRONTEND_IMAGE={prev_kv.get('AUTO_WECHAT_FRONTEND_IMAGE', '')}\n"
+    )
 
     print(f"ROLLBACK SERVICE     = {args.service}")
     print(f"PREVIOUS_IDENTITY    = {prev.name}")
-    print(f"ROLLBACK_IDENTITY    = {rollback_path.name}")
     print(f"  {target_var} = {prev_image}")
+
+    identity_for_cmd: Path
+    tmp_identity = None
+    if args.apply:
+        # apply：写 rollback identity 到 release dir（可追溯）
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        rollback_path = rel_dir / f"rollback-{args.service}-{stamp}.env"
+        rollback_path.write_text(rollback_content, encoding="utf-8")
+        identity_for_cmd = rollback_path
+        print(f"ROLLBACK_IDENTITY    = {rollback_path.name}")
+    else:
+        # dry-run：临时文件（不写 release dir）
+        import tempfile
+
+        fd, name = tempfile.mkstemp(prefix="prod_release_rollback_dryrun_", suffix=".env")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(rollback_content)
+        identity_for_cmd = Path(name)
+        tmp_identity = identity_for_cmd
+        print("ROLLBACK_IDENTITY    = <dry-run 预览，未写入 release dir>（--apply 才写）")
 
     # 构造 canonical 单服务命令（复用 G0 后端）
     import importlib.util
@@ -688,7 +947,7 @@ def cmd_rollback(argv: list[str]) -> int:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         cmd = mod._compose() + [
-            "--env-file", str(rollback_path),
+            "--env-file", str(identity_for_cmd),
             "-p", PROJECT_NAME,
             "-f", str(COMPOSE_FILE),
             "-f", str(FRONTEND_OVERRIDE),
@@ -698,13 +957,13 @@ def cmd_rollback(argv: list[str]) -> int:
         spec = importlib.util.spec_from_file_location("release_9000", ROOT / "scripts" / "release_9000_s10b.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        cmd = mod.canonical_up_command(rollback_path)
+        cmd = mod.canonical_up_command(identity_for_cmd)
     else:  # douyin-ai-cs：与 G0 canonical 同构（单服务 9100）
         spec = importlib.util.spec_from_file_location("release_9000", ROOT / "scripts" / "release_9000_s10b.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         cmd = mod._pick_compose_cmd() + [
-            "--env-file", str(rollback_path),
+            "--env-file", str(identity_for_cmd),
             "-p", PROJECT_NAME,
             "-f", str(mod.COMPOSE_FILE),
             "up", "-d", "--no-deps", "--no-build", SERVICE_TARGETS["douyin-ai-cs"]["compose_service"],
@@ -712,41 +971,51 @@ def cmd_rollback(argv: list[str]) -> int:
 
     print("COMMAND_PREVIEW（防误粘贴，逐 token）:")
     print(_render_command_preview(cmd))
-    if args.apply:
-        print("APPLY...")
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
-        if proc.returncode != 0:
-            print((proc.stderr or proc.stdout or "").strip(), file=sys.stderr)
-            return proc.returncode
-    else:
-        print("DRY-RUN（默认）：未执行任何生产变更；确认后使用 --apply")
-    return 0
+    try:
+        if args.apply:
+            print("APPLY...")
+            proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+            if proc.returncode != 0:
+                print((proc.stderr or proc.stdout or "").strip(), file=sys.stderr)
+                return proc.returncode
+        else:
+            print("DRY-RUN（默认）：未执行任何生产变更；确认后使用 --apply")
+        return 0
+    finally:
+        if tmp_identity is not None:
+            try:
+                tmp_identity.unlink()
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="最小生产发布自动化统一 CLI（prod_release）")
-    sub = parser.add_subparsers(dest="command", required=True)
+    """CLI 入口（R1-1）。
 
-    sub.add_parser("inspect", help="只读检查生产发布事实")
-    sub.add_parser("deploy", help="单服务发布（默认 dry-run）")
-    sub.add_parser("verify", help="单服务平台级验证")
-    sub.add_parser("rollback", help="单服务回滚（默认 dry-run）")
-
-    args = parser.parse_args(argv)
-    cmd = args.command
+    顶层只识别命令名，剩余参数原样透传给子命令自己的 argparse——
+    修复 `deploy --service frontend --dry-run` 被顶层 parse_args 拒绝的派发缺陷。
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        print("用法：prod_release.py {inspect|deploy|verify|rollback} [options]", file=sys.stderr)
+        return 2
+    cmd = argv[0]
+    rest = argv[1:]
     if cmd == "inspect":
-        return cmd_inspect([])
-    # 透传剩余参数（子命令自己的 argparse 处理）
-    rest = argv[1:] if argv else []
+        return cmd_inspect(rest)
     if cmd == "deploy":
         return cmd_deploy(rest)
     if cmd == "verify":
         return cmd_verify(rest)
     if cmd == "rollback":
         return cmd_rollback(rest)
+    if cmd in ("-h", "--help"):
+        print("用法：prod_release.py {inspect|deploy|verify|rollback} [options]")
+        return 0
+    print(f"未知命令：{cmd!r}（支持 inspect / deploy / verify / rollback）", file=sys.stderr)
     return 2
 
 

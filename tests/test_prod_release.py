@@ -425,14 +425,30 @@ def test_r13_rollback_requires_known_previous(monkeypatch, scratch, capsys):
     prod = _make_prod_tree(scratch)
     rc = mod.cmd_rollback(["--service", "api", "--prod-tree", str(prod), "--release-dir", str(rel)])
     assert rc != 0
-    assert "PREVIOUS_RELEASE_UNKNOWN" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "ROLLBACK BLOCKED" in err  # R1-6：无法唯一确定 previous → BLOCK
 
 
 # ---------------------------------------------------------------------------
 # R14: rollback 只影响目标服务
 # ---------------------------------------------------------------------------
 def test_r14_rollback_only_target_service(monkeypatch, scratch, capsys):
-    rel = _make_release_dir(scratch)
+    # 两条历史：api image 不同（release-aaa=api:v1 旧、release-bbb=api:v2 新）→ previous=release-aaa
+    rel = _make_release_dir(
+        scratch,
+        names=("release-aaa.env", "release-bbb.env"),
+        images={
+            "AUTO_WECHAT_API_IMAGE": "xg-ai-system-backend:release-aaa",
+            "XG_DOUYIN_AI_CS_IMAGE": "xg-ai-system-backend@sha256:1111",
+            "AUTO_WECHAT_FRONTEND_IMAGE": "xg-ai-system-frontend:release-aaa",
+        },
+    )
+    (rel / "release-bbb.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-bbb\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-aaa\n",
+        encoding="utf-8",
+    )
     prod = _make_prod_tree(scratch)
     _patch_paths(monkeypatch, rel, prod)
     calls = _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
@@ -539,3 +555,255 @@ def test_r18_preview_not_single_line_command(monkeypatch, scratch, capsys):
     for line in lines:
         assert line.startswith("  ")
     assert "\n".join(lines) != " ".join(cmd)
+
+
+# ===========================================================================
+# R19~R26：PROD-RELEASE-AUTOMATION-R1 regression（真实 CLI 入口 + 修复项）
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# R19: 真实 CLI main() 入口（deploy frontend --dry-run 正常进入 deploy）
+# ---------------------------------------------------------------------------
+def test_r19_cli_main_dispatch_dry_run(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    monkeypatch.setattr(mod, "COMPOSE_FILE", _good_compose(scratch))
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    # 真实 CLI 入口（R1-1）：main(["deploy", "--service", "frontend", "--dry-run"])
+    rc = mod.main(["deploy", "--service", "frontend", "--dry-run",
+                   "--prod-tree", str(prod), "--release-dir", str(rel)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DEPLOY SERVICE       = frontend" in out
+    assert "DRY-RUN" in out
+
+
+def test_r19b_cli_main_dispatch_unknown_command(capsys):
+    rc = mod.main(["frobnicate"])
+    assert rc == 2
+    assert "未知命令" in capsys.readouterr().err
+
+
+def test_r19c_cli_main_dispatch_verify(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    monkeypatch.setattr(mod, "RELEASE_IDENTITY_DIR", rel)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker":
+            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-aaa|Up 2 minutes\n")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def fake_http(url, timeout=5.0):
+        if "/auth/me" in url:
+            return 401, None  # fail-closed 预期
+        return 200, None
+
+    monkeypatch.setattr(mod, "_http_ready", fake_http)
+    rc = mod.main(["verify", "--service", "api", "--release-dir", str(rel)])
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# R20: dry-run 前后 release dir 文件列表完全相同（零写入）
+# ---------------------------------------------------------------------------
+def test_r20_dry_run_release_dir_unchanged(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("release-aaa.env", "release-bbb.env"))
+    before = sorted(p.name for p in rel.iterdir())
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    monkeypatch.setattr(mod, "COMPOSE_FILE", _good_compose(scratch))
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    rc = mod.main(["deploy", "--service", "frontend", "--dry-run",
+                   "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    after = sorted(p.name for p in rel.iterdir())
+    assert before == after, f"dry-run 不得写 release dir: {before} != {after}"
+    out = capsys.readouterr().out
+    assert "未写入" in out
+
+
+# ---------------------------------------------------------------------------
+# R21: split identities 对账（api-only + frontend-only 历史 → 三服务 reconcile）
+# ---------------------------------------------------------------------------
+def test_r21_split_identities_reconcile(monkeypatch, scratch):
+    # 模拟生产事实：API identity 在 hotfix env、frontend identity 在 prod1 env（split history）
+    rel = _make_release_dir(scratch, names=("hotfix-material-presign-0ceee54.env", "frontend-8968c8fe-prod1.env"))
+    (rel / "hotfix-material-presign-0ceee54.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:hotfix-material-presign-0ceee54\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=\n",
+        encoding="utf-8",
+    )
+    (rel / "frontend-8968c8fe-prod1.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=\n"
+        "XG_DOUYIN_AI_CS_IMAGE=\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:frontend-8968c8fe-prod1\n",
+        encoding="utf-8",
+    )
+    # 容器不可查询（docker 失败）→ 回退历史 provenance
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker":
+            return FakeProc(returncode=1, stderr="docker unavailable")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    images, err = mod._current_production_images(rel)
+    assert err == "", f"不应冲突: {err}"
+    assert images["api"] == "xg-ai-system-backend:hotfix-material-presign-0ceee54"
+    assert images["douyin-ai-cs"] == "xg-ai-system-backend@sha256:93094f0abcdef1234567890abcdef1234567890"
+    assert images["frontend"] == "xg-ai-system-frontend:frontend-8968c8fe-prod1"
+
+
+def test_r21b_split_identities_conflict_fail_closed(monkeypatch, scratch):
+    rel = _make_release_dir(scratch, names=("a.env", "b.env"))
+    (rel / "a.env").write_text("AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-a\n"
+                               "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+                               "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-a\n")
+    (rel / "b.env").write_text("AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-b\n"
+                               "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+                               "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:release-a\n")
+    # 容器 image 与历史冲突（容器=release-c，历史=release-b）
+    def fake_run(argv, **kwargs):
+        if argv[0] == "docker":
+            return FakeProc(stdout="auto-wechat-api|xg-ai-system-backend:release-c\n"
+                                   "xg-douyin-ai-cs|xg-ai-system-backend@sha256:1111\n"
+                                   "auto-wechat-frontend|xg-ai-system-frontend:release-a\n")
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    images, err = mod._current_production_images(rel)
+    assert err != "", "容器与历史冲突必须 fail-closed"
+    assert "IMAGE_CONFLICT" in err
+
+
+# ---------------------------------------------------------------------------
+# R22: target image missing → apply BLOCK（R1-4）
+# ---------------------------------------------------------------------------
+def test_r22_target_image_missing_blocks_apply(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    monkeypatch.setattr(mod, "COMPOSE_FILE", _good_compose(scratch))
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+
+    def fake_inspect(image):
+        return False, f"TARGET_IMAGE_NOT_FOUND: {image}"
+
+    monkeypatch.setattr(mod, "_ensure_target_image_exists", fake_inspect)
+    rc = mod.main(["deploy", "--service", "frontend", "--apply",
+                   "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc != 0
+    assert "TARGET_IMAGE_NOT_FOUND" in capsys.readouterr().err
+
+
+def test_r22b_target_image_exists_apply_proceeds(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    monkeypatch.setattr(mod, "COMPOSE_FILE", _good_compose(scratch))
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  compose_service="auto-wechat-frontend",
+                  compose_image="xg-ai-system-frontend:release-aaaaaaaaaaaa",
+                  compose_enabled=True)
+    monkeypatch.setattr(mod, "_ensure_target_image_exists", lambda image: (True, ""))
+    rc = mod.main(["deploy", "--service", "frontend", "--apply",
+                   "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "APPLY" in out
+    # apply 写入了 release identity
+    assert any(p.name.startswith("release-") for p in rel.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# R23: local behind remote → pull --ff-only（R1-5）
+# ---------------------------------------------------------------------------
+def test_r23_local_behind_pull_ff(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    calls = _install_fake(monkeypatch, local="a" * 40, remote="b" * 40, merge_base="a" * 40,
+                          compose_enabled=True)
+    rc = mod.cmd_deploy(["--service", "api", "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    # 应执行 pull --ff-only
+    flat = [" ".join(c) for c, _ in calls]
+    assert any("pull" in c and "--ff-only" in c for c in flat), f"应 pull --ff-only: {flat}"
+
+
+# ---------------------------------------------------------------------------
+# R24: local ahead remote → BLOCK（R1-5，生产不允许 push）
+# ---------------------------------------------------------------------------
+def test_r24_local_ahead_blocks(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    # local=b（新），remote=a（旧），merge-base=a==remote → local ahead
+    _install_fake(monkeypatch, local="b" * 40, remote="a" * 40, merge_base="a" * 40)
+    rc = mod.cmd_deploy(["--service", "api", "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc != 0
+    assert "LOCAL_AHEAD" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# R25: diverged → BLOCK（R1-5）
+# ---------------------------------------------------------------------------
+def test_r25_diverged_blocks(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch)
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    # local=c, remote=d, merge-base=e（既不是 local 也不是 remote）→ diverged
+    _install_fake(monkeypatch, local="c" * 40, remote="d" * 40, merge_base="e" * 40)
+    rc = mod.cmd_deploy(["--service", "api", "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc != 0
+    assert "NON_FAST_FORWARD" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# R26: frontend previous identity 跳过中间 API-only release（R1-6）
+# ---------------------------------------------------------------------------
+def test_r26_frontend_lineage_skips_api_only(monkeypatch, scratch):
+    # 时间序：fe-v1 → api-only → fe-v2（当前）
+    rel = _make_release_dir(scratch, names=("fe-v1.env", "api-only.env", "fe-v2.env"))
+    (rel / "fe-v1.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-a\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:fe-v1\n")
+    (rel / "api-only.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-b\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=\n")  # 不携带 frontend
+    (rel / "fe-v2.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-a\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:fe-v2\n")
+
+    prev, note = mod._previous_release_identity("frontend", rel)
+    assert prev is not None, note
+    assert prev.name == "fe-v1.env", f"应跳过 API-only 找到 fe-v1: {note}"
+    kv = mod._parse_env(prev)
+    assert kv["AUTO_WECHAT_FRONTEND_IMAGE"] == "xg-ai-system-frontend:fe-v1"
+
+
+def test_r26b_frontend_no_previous_blocks(monkeypatch, scratch):
+    # 只有一条 frontend 记录 → previous unknown（无法确定）
+    rel = _make_release_dir(scratch, names=("fe-only.env",))
+    (rel / "fe-only.env").write_text(
+        "AUTO_WECHAT_API_IMAGE=xg-ai-system-backend:release-a\n"
+        "XG_DOUYIN_AI_CS_IMAGE=xg-ai-system-backend@sha256:1111\n"
+        "AUTO_WECHAT_FRONTEND_IMAGE=xg-ai-system-frontend:fe-v1\n")
+    prev, note = mod._previous_release_identity("frontend", rel)
+    assert prev is None
+    assert note  # 有明确原因（记录不足 → 无法确定 previous）
