@@ -282,7 +282,7 @@ Output Rules
 
 ### Lifecycle 规则（引用 LEGACY_REGISTER 定义）
 
-5 种生命周期：`ACTIVE` / `COMPAT` / `LEGACY` / `DEAD_CANDIDATE` / `UNKNOWN`
+5 种生命周期：`ACTIVE` / `COMPAT` / `LEGACY` / `DEAD_CANDIDATE` / `UNKNOWN`（G1 维度，对应 code_index status；**G2-LEGACY-CONSOLIDATION-1 起 Legacy 登记簿升级为 G2 五分类**：`ACTIVE` / `COMPATIBILITY` / `LEGACY_KEEP` / `LEGACY_MIGRATE` / `DELETE_CANDIDATE`，以 `docs/architecture/LEGACY_REGISTER.md` 为准，G1 标签保留为追溯维度）
 
 - `COMPAT ≠ 可删除`（兼容路径，GMP/外部已配置，不得顺手删）
 - `LEGACY ≠ 可删除`（已被替代但仍有调用/env 控制，默认关）
