@@ -58,6 +58,7 @@
 ## 13. Known Unknowns
 - U-008：LAS `speech_auto` 模式下 Shot.Empty 服务端故障与素材质量判定边界（7/28 成功 8/3 失败同配置=服务端故障，代码已修 4 处，见记忆 las-speech-auto-material-requirements）。
 - 生产 LAS 凭证注入与轮询策略未在 staging 复核（生产验证仍需另行审批）。
+- **HIGH-03 = OPEN（G1-Delta-1 复核，不得误标关闭）**：LAS long queued video_urls 仍可能过期 >7 天。归属 M06/LAS 长任务链，独立于 M05 历史素材 presign 修复（M05 presign = CLOSED，见 M05 §13）。D1（M05 presign hotfix）不覆盖 LAS 任务产物临时 URL 的长队列过期问题。
 
 ## 14. Future G3 Acceptance Boundary
 - G3 验收应覆盖：参数组装→LAS submit→轮询→产物→前端工作台全链路（含 TOS 上传）；preview/剪辑计费幂等（0034 NO_DOUBLE_CHARGE）；LAS 故障态（Shot.Empty）正确回写；凭证不落前端/日志；`auto_wechat:ai_edit` 权限门。G1 阶段不展开。

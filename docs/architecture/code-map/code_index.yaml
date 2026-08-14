@@ -3,7 +3,8 @@
 # ============================================================
 # 状态：APPROVED_FOR_G1_BUILD（G1-CODE-REALITY-MAP-BUILD-1）
 # CODE_SOURCE_BASE: 88235b5bba363fd0dec4945b8e38aba1e82e2d9b
-# ELIGIBLE / MAPPED / UNMAPPED = 957 / 957 / 0
+# G1-DELTA-RECONCILIATION-1：d1fbd04..44c5914，eligible 957→965（+8：D1 presign M05 / D2 migration dirs PLATFORM-RELEASE / D3 上传反馈 M05 / D4 前端 immutable PLATFORM-RELEASE）
+# ELIGIBLE / MAPPED / UNMAPPED = 965 / 965 / 0
 # 派生字段（module/depended_by/path_history）由生成器计算，禁人工双写
 # 本文件是 DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
 # ============================================================
@@ -16,8 +17,8 @@ project:
   last_verified_at: "2026-08-14T00:00:00Z"
   generator_script: "e:/tmp/g1_build/build_code_index.py"
 summary:
-  eligible_files: 957
-  mapped_files: 957
+  eligible_files: 965
+  mapped_files: 965
   unmapped_files: 0
   repository_head_relation:
     auto_wechat_9000: "0035"
@@ -27,6 +28,14 @@ summary:
     xg_douyin_ai_cs_9100: "0003 (Attempt3 冻结)"
     legacy_callback: "SQLite/0033 (callback.misanduo.com)"
   alembic_gap: "9000: 0035(repo) vs 0034(prod)，0035 production_verified=NO"
+  delta_reconciliation_1:
+    base_g1_sha: "d1fbd046da9f9c63b17912f0311d7201441ffdfe"
+    base_g1_tree: "f8825e092b3bfa005bc633dca0c63335c4d871ee"
+    current_head: "44c591434f5c968a2b06c7a46cf33e43c88c5e6e"
+    delta_range: "d1fbd04..44c5914"
+    delta_commits: ["ace33f1 (D1 presign M05)", "97528ae (D2 migration dirs PLATFORM-RELEASE)", "8968c8f (D3 上传反馈 M05)", "44c5914 (D4 前端 immutable PLATFORM-RELEASE)"]
+    eligible_delta: "957 -> 965 (+8 新增，0 删除)"
+    g1_result: "COMPLETE_AND_CURRENT"
 entries:
   - id: "FILE-000001"
     path: ".dockerignore"
@@ -37421,3 +37430,315 @@ entries:
         line: 1
         note: "G1 分类依据：抖音客服入口/上下文"
     notes: "抖音客服入口/上下文"
+  - id: "FILE-000958"
+    path: "Dockerfile.frontend.prod"
+    artifact_type: "CONFIG"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "HIGH"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "Dockerfile.frontend.prod"
+        line: 1
+        note: "G1 分类依据：前端生产不可变镜像构建（G0-R3，D4）"
+    notes: "前端生产不可变镜像构建（G0-R3，D4）"
+  - id: "FILE-000959"
+    path: "docker-compose.frontend-prod.yml"
+    artifact_type: "CONFIG"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "HIGH"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "docker-compose.frontend-prod.yml"
+        line: 1
+        note: "G1 分类依据：前端生产不可变 compose（G0-R3，D4）"
+    notes: "前端生产不可变 compose（G0-R3，D4）"
+  - id: "FILE-000960"
+    path: "frontend/src/features/ai-edit/uploadFeedback.ts"
+    artifact_type: "FRONTEND_CODE"
+    owner_type: "MODULE"
+    owner_id: "M05"
+    module: "M05"
+    status: "ACTIVE"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: ['app/routers/ai_edit.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "frontend/src/features/ai-edit/uploadFeedback.ts"
+        line: 1
+        note: "G1 分类依据：BC-02：素材/剪辑共置 feature（含 M06 LasRemixWorkbench，M05 主导）"
+    notes: "BC-02：素材/剪辑共置 feature（含 M06 LasRemixWorkbench，M05 主导）"
+  - id: "FILE-000961"
+    path: "frontend/tests/uploadFeedback.test.ts"
+    artifact_type: "TEST"
+    owner_type: "MODULE"
+    owner_id: "M05"
+    module: "M05"
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: ['app/routers/ai_edit.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "frontend/tests/uploadFeedback.test.ts"
+        line: 1
+        note: "G1 分类依据：素材上传反馈三态 UI 逻辑测试（D3）"
+    notes: "素材上传反馈三态 UI 逻辑测试（D3）"
+  - id: "FILE-000962"
+    path: "scripts/release_frontend_immutable.py"
+    artifact_type: "SCRIPT"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "ACTIVE"
+    runtime_role: "SCRIPT"
+    confidence: "HIGH"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "scripts/release_frontend_immutable.py"
+        line: 1
+        note: "G1 分类依据：前端不可变镜像发布（G0-R3，D4）"
+    notes: "前端不可变镜像发布（G0-R3，D4）"
+  - id: "FILE-000963"
+    path: "tests/test_ai_edit_presign_refresh.py"
+    artifact_type: "TEST"
+    owner_type: "MODULE"
+    owner_id: "M05"
+    module: "M05"
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: ['app/routers/ai_edit.py']
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "tests/test_ai_edit_presign_refresh.py"
+        line: 1
+        note: "G1 分类依据：素材 presign 刷新（D1）"
+    notes: "素材 presign 刷新（D1）"
+  - id: "FILE-000964"
+    path: "tests/test_release_g0_r2_migration_dirs.py"
+    artifact_type: "TEST"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "tests/test_release_g0_r2_migration_dirs.py"
+        line: 1
+        note: "G1 分类依据：G0 Release Governance"
+    notes: "G0 Release Governance"
+  - id: "FILE-000965"
+    path: "tests/test_release_g0_r3_frontend_immutable.py"
+    artifact_type: "TEST"
+    owner_type: "PLATFORM"
+    owner_id: "PLATFORM-RELEASE"
+    module: null
+    status: "TEST"
+    runtime_role: "NONE"
+    confidence: "MEDIUM"
+    generated: false
+    generated_by: null
+    derived_from: null
+    entrypoints: []
+    data_owned: []
+    data_read: []
+    dependencies:
+      []
+    depended_by: []
+    external_dependencies: []
+    compatibility:
+      comp_for: null
+      purpose: null
+      current_caller: null
+      removal_prerequisite: null
+      redirects: []
+    legacy:
+      legacy_id: null
+      historical_purpose: null
+      evidence: null
+      risk: null
+    section_evidence:
+      []
+    path_history: []
+    evidence:
+      - type: "FILE_PATH"
+        source: "tests/test_release_g0_r3_frontend_immutable.py"
+        line: 1
+        note: "G1 分类依据：G0 Release Governance"
+    notes: "G0 Release Governance"

@@ -1,6 +1,6 @@
 # M05 小高素材库 链路说明
 
-> 状态：G1 BASELINE（2026-08-14，基于 CODE_SOURCE_BASE=88235b5 冻结文件地图）
+> 状态：G1 BASELINE（2026-08-14，基于 CODE_SOURCE_BASE=88235b5 冻结文件地图）；G1-DELTA-RECONCILIATION-1（2026-08-14）已对账至 HEAD 44c5914
 > 用途：M05 模块的链路骨架，支撑 G3 模块验真与独立验收。G1 阶段只登记事实，不展开 G3 验收。
 
 ## 1. Responsibility
@@ -17,6 +17,7 @@
 - 页面：MaterialLibrary、LasRemixWorkbench。
 - API clients：ai-edit/api.ts、ai-edit/localApi.ts（19000 本地旧接口，DEV_ONLY）。
 - 状态逻辑测试：features/ai-edit/pages/__status_logic_test__.js（DEV_ONLY 自检）。
+- 上传反馈（D3 新增）：`uploadFeedback.ts` + `frontend/tests/uploadFeedback.test.ts`。链：uploadMaterialToTos → 显式 120s timeout → runUpload → SUCCESS / FAILED / UNKNOWN → MaterialLibrary 反馈。**UNKNOWN ≠ backend failed**：UNKNOWN 表示 client 无法确认最终结果（超时/响应丢失），按未知语义占位，不伪造失败。
 
 ## 4. Backend API Entrypoints
 - `app/routers/ai_edit.py`：MIXED（BC-02）——M05 素材库 API + M06 剪辑 API 共置。
@@ -24,6 +25,7 @@
 
 ## 5. Core Services
 - `app/services/`：ai_edit_service（BC-02 共置域）、ai_edit_storage（素材存储）、material_analysis（素材分析）。
+- 历史素材 presign 刷新（D1 hotfix，owner=M05，非 PLATFORM/非 M06）：`app/routers/ai_edit.py` 新增 `_object_key_from_presigned_url`（历史 object key recovery）+ `_refresh_expired_presigned_urls`（检测过期 URL → cloud_storage_key 持久化 → 重新生成 TOS 预签名 URL）+ 幂等刷新（同 merchant_id + source_sha256）+ merchant isolation（素材归属商户校验）。**M05 historical material presign = CLOSED**（HIGH-03 仅指 M06 LAS 长队列，见 §13）。
 - 脚本：scripts/audit_phase12_task12_duplicate_materials.py（DEV_ONLY 去重审计）。
 
 ## 6. Data Ownership
@@ -31,7 +33,8 @@
 - 被其他模块读写：M06 读取素材产物做混剪；M07 计费（material_analysis usage，幂等，P3b M05 0033 PG_RUNTIME_VERIFIED）。
 
 ## 7. Async / Worker Chain
-- 素材上传 → ai_edit_storage（文件 + 元数据）→ material_analysis（异步分析）→ 分析结果写回 → M06 消费。
+- 上传链：browser → TOS（直传）→ /ai-edit/materials/upload-tos → material persistence（ai_edit_materials，cloud_storage_key 持久化）→ material_analysis（异步分析）→ 分析结果写回 → M06 消费。
+- 读取历史素材链：material list → detect expired presigned URL → cloud_storage_key / historical object key recovery（_object_key_from_presigned_url）→ regenerate presigned URL（_refresh_expired_presigned_urls）→ frontend playback。
 - material_analysis 计费：M07 consumer（identity=material_analysis:{id}，进程内无 HTTP hop）。
 
 ## 8. External Dependencies
@@ -61,6 +64,7 @@
 - U-007：素材重复审计（task12 duplicate audit）发现的重复素材批量处理未定论。
 - 素材文件存储位置/容量在 staging 未复核。
 - 剪辑产物归档与素材库的引用关系未完全冻结（M06 边界）。
+- **HIGH-03 分离（G1-Delta-1 复核，不得误标关闭）**：M05 historical material presign = **CLOSED**（D1 修复已覆盖历史 TOS URL 过期刷新）；**M06 LAS long-queued temporary URL expiry = OPEN**（LAS 长队列任务 video_urls 仍可能过期 >7 天，归属 M06/LAS 长任务链，见 M06 §13）。
 
 ## 14. Future G3 Acceptance Boundary
 - G3 验收应覆盖：素材上传→存储→分析→结果读回；素材归属商户隔离；material_analysis 计费幂等（0033 NO_DOUBLE_CHARGE）；素材供 M06 混剪的引用完整性；`auto_wechat:ai_edit` 权限门。G1 阶段不展开。
