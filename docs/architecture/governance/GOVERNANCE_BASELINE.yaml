@@ -1,0 +1,153 @@
+# ============================================================
+# GOVERNANCE BASELINE（GC 唯一治理入口 SSOT）
+# ============================================================
+# 任务：GC-GOVERNANCE-BASELINE-CLOSURE-1
+# baseline_source_sha: cd4d8a344965c39f39c98c3c1f23423a903ea3e3（GC 开始时 HEAD）
+# closure_commit: 由 GC 报告记录（避免自引用 SHA）
+# 状态：GOVERNANCE_BASELINE = CLOSED_AND_VALIDATED / DEVELOPMENT_MODE = GOVERNED_FEATURE_DEVELOPMENT
+# 性质：DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取；本文件只做指针/状态/指标，不复制 G1~G4 内容
+# 机器验收：python scripts/validate_governance_baseline.py
+# ============================================================
+baseline:
+  version: "1.0"
+  source_sha: "cd4d8a344965c39f39c98c3c1f23423a903ea3e3"
+  status: CLOSED_AND_VALIDATED
+  development_mode: GOVERNED_FEATURE_DEVELOPMENT
+  pre_governance_mode: CLOSED
+
+stages:
+  G0:
+    purpose: "Release Governance（生产安全/鉴权 fail-closed/镜像身份/DB 兼容 gate）"
+    status: COMPLETE
+    ssot: "docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md"
+    key_metric: "P0-1/P0-3/P0-4 + R1 硬化 APPROVED；tests/test_auth_fail_closed.py + tests/test_release_g0_hardening.py"
+  G1:
+    purpose: "Code Reality Map（文件级 owner/依赖/chain 事实源）"
+    status: COMPLETE_AND_CURRENT
+    ssot: "docs/architecture/code-map/code_index.yaml"
+    key_metric: "ELIGIBLE/MAPPED/UNMAPPED = 965/965/0"
+  G2:
+    purpose: "Legacy 五分类登记簿"
+    status: COMPLETE
+    ssot: "docs/architecture/LEGACY_REGISTER.md"
+    key_metric: "62 条 / UNKNOWN=0"
+  G3:
+    purpose: "七模块关键链验证基线"
+    status: COMPLETE
+    ssot: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    key_metric: "MODULE_KEY_CHAIN_BASELINE = 7/7 / UNKNOWN_VERIFICATION=0"
+  G4:
+    purpose: "跨模块耦合治理总账"
+    status: COMPLETE
+    ssot: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    key_metric: "65 条 / CRITICAL_REMAINING=0 / UNKNOWN_COUPLING=0"
+  GC:
+    purpose: "Governance Baseline Closure（本阶段）"
+    status: CLOSED_AND_VALIDATED
+    ssot: "docs/architecture/governance/GOVERNANCE_BASELINE.yaml"
+    key_metric: "GOVERNANCE_BASELINE_VALIDATION = PASS"
+
+modules:
+  - M01
+  - M02
+  - M03
+  - M04
+  - M05
+  - M06
+  - M07
+
+owners:
+  - PLATFORM
+  - PLATFORM-RELEASE
+  - DOMAIN_SHARED
+  - M01
+  - M02
+  - M03
+  - M04
+  - M05
+  - M06
+  - M07
+
+module_names:
+  M01: "抖音AI客服"
+  M02: "线索"
+  M03: "智能体"
+  M04: "微信助手"
+  M05: "素材库"
+  M06: "剪辑"
+  M07: "算力"
+
+domain_shared:
+  contact_extraction:
+    owner: M02
+
+# 每个阶段唯一 SSOT pointer（禁止第二套 authoritative registry）
+ssot:
+  code_map: "docs/architecture/code-map/code_index.yaml"
+  module_chains:
+    - "docs/architecture/modules/M01/CHAIN.md"
+    - "docs/architecture/modules/M02/CHAIN.md"
+    - "docs/architecture/modules/M03/CHAIN.md"
+    - "docs/architecture/modules/M04/CHAIN.md"
+    - "docs/architecture/modules/M05/CHAIN.md"
+    - "docs/architecture/modules/M06/CHAIN.md"
+    - "docs/architecture/modules/M07/CHAIN.md"
+  legacy_registry: "docs/architecture/LEGACY_REGISTER.md"
+  verification_matrix: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+  coupling_registry: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+  governance_backlog: "docs/architecture/governance/GOVERNANCE_BACKLOG.yaml"
+  governance_report: "docs/architecture/governance/GC_GOVERNANCE_BASELINE_CLOSURE_REPORT.md"
+
+metrics:
+  g1:
+    eligible: 965
+    mapped: 965
+    unmapped: 0
+  g2:
+    candidates: 62
+    active: 15
+    compatibility: 21
+    legacy_keep: 15
+    legacy_migrate: 2
+    delete_candidate: 9
+    unknown: 0
+  g3:
+    modules: 7
+    key_chain_baseline: "7/7"
+    unknown_verification: 0
+    known_fail_modules: 5
+    env_constrained_modules: 2
+  g4:
+    coupling_candidates: 65
+    controlled: 20
+    boundary: 33
+    uncontrolled: 11
+    critical_before: 1
+    critical_remediated: 1
+    critical_blocked: 0
+    critical_remaining: 0
+    unknown_coupling: 0
+
+validators:
+  g1: "scripts/generate_code_index.py（生成器）+ code_index.yaml 头部 ELIGIBLE/MAPPED/UNMAPPED 声明（G1 无独立 validator，accepted via generator + 声明）"
+  g2: "scripts/validate_g2_legacy_registry.py"
+  g3: "scripts/validate_g3_module_verification.py"
+  g4: "scripts/validate_g4_coupling_registry.py"
+  gc: "scripts/validate_governance_baseline.py"
+
+# 未来开发规则（简短指针；完整规则见 AGENTS.md/CLAUDE.md Governance Baseline 段）
+future_development:
+  impact_contract_required: true
+  gates:
+    - OWNER_KNOWN
+    - AFFECTED_CHAIN_KNOWN
+    - LEGACY_IMPACT_KNOWN
+    - COUPLING_IMPACT_KNOWN
+    - VERIFICATION_PLAN_KNOWN
+  lightweight_for_low_risk: true
+  delta_maintenance:
+    code_change: "G1 delta"
+    legacy_lifecycle_change: "G2 delta"
+    key_chain_verification_change: "G3 delta"
+    cross_owner_dependency_change: "G4 delta"
+  stage_reopen_forbidden: true

@@ -1,0 +1,437 @@
+# ============================================================
+# GOVERNANCE BACKLOG（GC 开放问题唯一索引）
+# ============================================================
+# 任务：GC-GOVERNANCE-BASELINE-CLOSURE-1
+# 性质：只做索引/治理分类，不替代各阶段详细 SSOT（详见 GOVERNANCE_BASELINE.yaml ssot 段）
+# 正式 bucket 仅允许：PRODUCT_FAILURE / KNOWN_RISK / TEST_DRIFT / ENV_CONSTRAINT /
+#                    LEGACY_DEBT / COUPLING_DEBT / RELEASE_FOLLOWUP
+# 禁止 OTHER/TODO/MAYBE/UNKNOWN/MISC 作为最终 bucket
+# ============================================================
+backlog_version: "1.0"
+source_sha: "cd4d8a344965c39f39c98c3c1f23423a903ea3e3"
+
+items:
+  # ============ PRODUCT_FAILURE（6 项，来源 G3；GC MUST NOT FIX） ============
+  - id: FAILURE-M01-001
+    bucket: PRODUCT_FAILURE
+    module: M01
+    severity: HIGH
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "ai_auto_reply_dry_run_service.py:359 run_id 前向引用 → UnboundLocalError（7b2b6d7 引入），test_ai_auto_reply_dry_run.py 31 failed"
+    recommended_followup: "run_id/attempt_count 后移至 _add_run 之后（批准最小修复）；修复后 31 测试回归验收；G3 matrix/result 做 delta update"
+    status: OPEN
+  - id: FAILURE-M02-001
+    bucket: PRODUCT_FAILURE
+    module: M02
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "douyin_conversation_history_service.py:88-91/:113 latest_message 不脱敏，proxy:299 明文进 LLM（9100 兜底存在）"
+    recommended_followup: "9000 侧构建上下文时即脱敏（与 preview 路径对齐）+ NEW_G3_TEST_LLM_CONTEXT_MASK_LATEST_MESSAGE"
+    status: OPEN
+  - id: FAILURE-M03-001
+    bucket: PRODUCT_FAILURE
+    module: M03
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "apps/agents/services.py:66-76 访问 11 个 payload 字段，schemas.py::AiAgentCreate 未定义 → POST /api/agents 500"
+    recommended_followup: "schemas 补齐 11 字段（与迁移 0019 同步）+ POST /api/agents 契约测试"
+    status: OPEN
+  - id: FAILURE-M05-001
+    bucket: PRODUCT_FAILURE
+    module: M05
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "ai_edit_service.py:108-160 register_material 撞 (merchant_id, source_sha256) 唯一约束 → 未捕获 IntegrityError 500"
+    recommended_followup: "与 upload-tos 一致先查后插幂等收敛或 409 + NEW_G3_TEST-M05-01"
+    status: OPEN
+  - id: FAILURE-M05-002
+    bucket: PRODUCT_FAILURE
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "list_materials 无 lifecycle 参数，回收站视图未实现（test list_trash 红灯）"
+    recommended_followup: "确认产品需求后实现 lifecycle=trash 过滤视图 + NEW_G3_TEST-M05-04"
+    status: OPEN
+  - id: FAILURE-M05-003
+    bucket: PRODUCT_FAILURE
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "models.py:1713 manual_override_json 仅列定义无业务逻辑（test save_analysis 红灯）"
+    recommended_followup: "确认产品需求是否保留后实现 manual_override_json > AI 快照 > 空值 + NEW_G3_TEST-M05-03"
+    status: OPEN
+
+  # ============ KNOWN_RISK（来源 G3；HIGH-03 必须保留 OPEN） ============
+  - id: HIGH-03
+    bucket: KNOWN_RISK
+    module: M06
+    severity: HIGH
+    source_stage: G3
+    ssot_ref: "docs/architecture/CROSS_MODULE_RISK_REGISTER.md"
+    evidence: "LAS long queued video_urls 可过期 >7 天（M06/LAS 长任务链；独立于 M05 presign=CLOSED）"
+    recommended_followup: "独立于 coupling；作为 KNOWN PRODUCT/ARCHITECTURAL RISK 保留 OPEN，不得误登记为 PRODUCT_FAILURE/LEGACY_DEBT/COUPLING_DEBT"
+    status: OPEN
+  - id: U-001
+    bucket: KNOWN_RISK
+    module: M01
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "douyin_accounts M01/M03 边界未冻结"
+    status: OPEN
+  - id: U-002
+    bucket: KNOWN_RISK
+    module: M03
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "绑定→Auto Reply/事实/Training 三隔离门未 staging 补测"
+    status: OPEN
+  - id: U-003
+    bucket: KNOWN_RISK
+    module: M01
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "9100 training_feedback_auto_ingest PG 事务边界 PG_VERIFIED_MIDPOINT"
+    status: OPEN
+  - id: U-004
+    bucket: KNOWN_RISK
+    module: M02
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "空号反馈追问门禁豁免清单待用户确认（G4/G5 豁免、G3/24h/Hard 保留）"
+    status: OPEN
+  - id: U-005
+    bucket: KNOWN_RISK
+    module: M02
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "Windows-only 通知与 M04 消费端到端时序未 staging 双 19000 复核"
+    status: OPEN
+  - id: U-006
+    bucket: KNOWN_RISK
+    module: M03
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "capability_gateway 仅 health 端点，无聚合 META 列表端点测试"
+    status: OPEN
+  - id: U-007
+    bucket: KNOWN_RISK
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "重复素材批量处理未定论（duplicate_audit 脚本已就绪）"
+    status: OPEN
+  - id: U-008
+    bucket: KNOWN_RISK
+    module: M06
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "Shot.Empty 服务端故障与素材质量判定边界（代码已修 4 处但无 staging 复核）"
+    status: OPEN
+
+  # ============ TEST_DRIFT（来源 G3 清单，独立于 PRODUCT_FAILURE） ============
+  - id: DRIFT-M01-001
+    bucket: TEST_DRIFT
+    module: M01
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_douyin_ai_cs_proxy.py 1 failed（720d133 P0 止血改 9000 侧明文透传，断言未同步）"
+    status: OPEN
+  - id: DRIFT-M02-001
+    bucket: TEST_DRIFT
+    module: M02
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_leads_management.py 1 failed（seed SalesStaff 无 merchant_id，Phase 7-FIX2 正确）"
+    status: OPEN
+  - id: DRIFT-M02-002
+    bucket: TEST_DRIFT
+    module: M02
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_eligibility_rate_limit 时区漂移（测试本地 naive UTC+8 vs 实现 UTC-aware）"
+    status: OPEN
+  - id: DRIFT-M03-001
+    bucket: TEST_DRIFT
+    module: M03
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_no_forbidden_rag_routes_are_registered 1 failed（FastAPI 0.139.2 _IncludedRouter 无 .path）"
+    status: OPEN
+  - id: DRIFT-M03-002
+    bucket: TEST_DRIFT
+    module: M03
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_knowledge_categories_async_pg_pilot 3 failed（权限码过时 ai_agents→douyin_ai_cs）"
+    status: OPEN
+  - id: DRIFT-M04-001
+    bucket: TEST_DRIFT
+    module: M04
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_wechat_task_history_api 1 failed（pending 孤立任务期望过期，INNER JOIN 排除更安全）"
+    status: OPEN
+  - id: DRIFT-M04-002
+    bucket: TEST_DRIFT
+    module: M04
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_automation_control.py test_send_to_staff_blocked_when_stopped 1 failed（调已废弃 410 端点；GC 复跑确认 unchanged）"
+    status: OPEN
+  - id: DRIFT-M04-003
+    bucket: TEST_DRIFT
+    module: M04
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "p0_end_2a/dispatch_trust_boundary 2 failed（FastAPI 0.139.2 路由断言方式）"
+    status: OPEN
+  - id: DRIFT-M05-001
+    bucket: TEST_DRIFT
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_phase12_task12_material_cloud 4 failed（断言已废弃 store_material_stream，LAS 改 TOS 直传）"
+    status: OPEN
+  - id: DRIFT-M05-002
+    bucket: TEST_DRIFT
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_phase12_task12_material_analysis 2 failed（断言不存在 save_ai_analysis）"
+    status: OPEN
+  - id: DRIFT-M07-001
+    bucket: TEST_DRIFT
+    module: M07
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
+    evidence: "test_compute_router 等 4 文件 16 failed（eb7a3ac 账号反查/mock 订单状态/idempotency_key 字段/管理员放行规则未同步）——M07 core 149 PASS，非生产缺陷"
+    status: OPEN
+
+  # ============ ENV_CONSTRAINT（仅保留具未来验收意义的约束） ============
+  - id: ENV-001
+    bucket: ENV_CONSTRAINT
+    module: ALL
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "DSH 沙箱拒绝 mkdir(mode=0o700) 目录 → pytest tmp_path/basetemp 全挂（约 300+ errors）；需无沙箱 Windows 环境补跑"
+    status: OPEN
+  - id: ENV-002
+    bucket: ENV_CONSTRAINT
+    module: M04
+    severity: HIGH
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "真人微信验收（M04-MANUAL-1 六项）需微信所在 Windows 电脑，本沙箱严禁执行"
+    status: OPEN
+  - id: ENV-003
+    bucket: ENV_CONSTRAINT
+    module: M06
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "无 TOS/LAS 凭证 → M06 4 FAIL + 真实 LAS 混剪 MANUAL；生产验证需另行审批"
+    status: OPEN
+  - id: ENV-004
+    bucket: ENV_CONSTRAINT
+    module: M07
+    severity: MEDIUM
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "真 PG 并发用例显式 skip（由 P1 Final Closure-2 隔离脚本覆盖 FC-0~FC-12+FC-R1/R2，未用 SQLite 冒充）；SMOKE_DATABASE_URL 凭据缺失"
+    status: OPEN
+  - id: ENV-005
+    bucket: ENV_CONSTRAINT
+    module: M01
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "outbox MVCC/PG 专项需 SMOKE_DATABASE_URL（PG-only skip）"
+    status: OPEN
+  - id: ENV-006
+    bucket: ENV_CONSTRAINT
+    module: M05
+    severity: LOW
+    source_stage: G3
+    ssot_ref: "docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml"
+    evidence: "node --test 默认 spawn EPERM → --test-isolation=none（9/9 PASS）；真实 TOS/方舟 MANUAL"
+    status: OPEN
+
+  # ============ LEGACY_DEBT（引用 G2，不复制 62 条） ============
+  - id: LEGACY_DEBT-001
+    bucket: LEGACY_DEBT
+    module: G2_SUMMARY
+    severity: MEDIUM
+    source_stage: G2
+    ssot_ref: "docs/architecture/LEGACY_REGISTER.md"
+    evidence: "G2 全量 62 条分类：ACTIVE=15 / COMPATIBILITY=21 / LEGACY_KEEP=15 / LEGACY_MIGRATE=2 / DELETE_CANDIDATE=9 / UNKNOWN=0（详细事实以 LEGACY_REGISTER.md 为准，此处仅摘要）"
+    recommended_followup: "LEGACY_MIGRATE=2 与 DELETE_CANDIDATE=9 为未来迁移/删除候选池；删除前置见 GC 报告 §23 规则（deletion_condition + Owner 审批）"
+    status: OPEN
+
+  # ============ COUPLING_DEBT（引用 G4，不继续 remediation） ============
+  - id: COUPLING-006
+    bucket: COUPLING_DEBT
+    module: M04
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "E8 M04→M02 回写链直接 ORM 写（5 写入点，DouyinLead.status 双 owner）"
+    recommended_followup: "建立 M02 线索状态机 facade；短期补 E8 boundary test"
+    status: OPEN
+  - id: COUPLING-007
+    bucket: COUPLING_DEBT
+    module: M02
+    severity: LOW
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "通知资格 gate 直读 M04 wechat_tasks 表（只读）"
+    recommended_followup: "M04 提供 task 只读查询 API 或写入 contract 文档"
+    status: OPEN
+  - id: COUPLING-009
+    bucket: COUPLING_DEBT
+    module: DOMAIN_SHARED
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "空号追问 Worker import M01 私有发送函数 _send_private_message_with_context（隔离依赖创建时快照）"
+    recommended_followup: "提升为 M01 正式 public API + 发送前实时 require_owned_account"
+    status: OPEN
+  - id: COUPLING-018
+    bucket: COUPLING_DEBT
+    module: M01
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "douyin_ai_cs_proxy.py:41 跨 router import M03 私有 billing helper（计费身份链）"
+    recommended_followup: "提取 app/services/ai_preview_execution_service.py 公开导出"
+    status: OPEN
+  - id: COUPLING-023
+    bucket: COUPLING_DEBT
+    module: M04
+    severity: HIGH
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "automation_control 紧急停止跨进程状态分裂（9000↔19000 无同步）"
+    recommended_followup: "收敛为单一权威源（DB 或 9000 下发）；19000 执行前拉取；消除 19000 侧 DB 直连副作用"
+    status: OPEN
+  - id: COUPLING-024
+    bucket: COUPLING_DEBT
+    module: M04
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "9000 侧 wechat_ui 执行性 import（Windows-only 旧链路/调试端点，部分无鉴权）"
+    recommended_followup: "删除或硬禁用执行性 import；残留调试端点补鉴权或并入 LEGACY-007"
+    status: OPEN
+  - id: COUPLING-027
+    bucket: COUPLING_DEBT
+    module: M04
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "POST /replies/manual 无鉴权直接写 M02 业务表（伪造销售回复污染线索状态）"
+    recommended_followup: "补正式鉴权或纳入 LEGACY_WECHAT_DEBUG_ENDPOINTS 守卫；无用途则 DELETE_CANDIDATE"
+    status: OPEN
+  - id: COUPLING-028
+    bucket: COUPLING_DEBT
+    module: M05
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "BC-02 整体：owner 判定漂移 + 未登记 M05→M06 DATABASE 读依赖（ai_edit_service.py:214-220）"
+    recommended_followup: "补 owner 契约登记 + M05→M06 活动引用检查 boundary test；不强制拆目录"
+    status: OPEN
+  - id: COUPLING-044
+    bucket: COUPLING_DEBT
+    module: PLATFORM
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "前端 api/douyinAiCsClient.ts 直连 9100 潜伏路径（绕过 9000 gateway）"
+    recommended_followup: "删除直连函数或移入 dev-only；正式路径强制 getTrustedReplySuggestion"
+    status: OPEN
+  - id: COUPLING-045
+    bucket: COUPLING_DEBT
+    module: PLATFORM
+    severity: LOW
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "App.tsx:37 import features/ai-edit/localApi（旧 19000 执行面残留，UI 壳层穿透 feature 私有模块）"
+    recommended_followup: "clearAllAgentTokens 上移共享层；清理 localApi.ts 残留；同步 AGENTS.md 声明"
+    status: OPEN
+  - id: COUPLING-061
+    bucket: COUPLING_DEBT
+    module: M02
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "sales_feedback_parser 直写 M04 sales_daily_summaries 表（未登记）"
+    recommended_followup: "登记 M02→M04 data 边；写入收敛到 daily_report_service"
+    status: OPEN
+  - id: COUPLING-062
+    bucket: COUPLING_DEBT
+    module: M02
+    severity: MEDIUM
+    source_stage: G4
+    ssot_ref: "docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml"
+    evidence: "douyin_resource_download_service 直写 M01 归属表（douyin_message_resource_downloads，未登记）"
+    recommended_followup: "裁决表归属（建议按实际写入方归 M02 webhook 域）；登记 M02→M01 data 边"
+    status: OPEN
+
+  # ============ RELEASE_FOLLOWUP（owner=PLATFORM-RELEASE，OPEN，不修复） ============
+  - id: RG-FOLLOWUP-01
+    bucket: RELEASE_FOLLOWUP
+    module: PLATFORM-RELEASE
+    severity: MEDIUM
+    source_stage: G0
+    ssot_ref: "docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md"
+    evidence: "canonical command 输出存在误粘贴执行的人因风险（release runner 命令回显）"
+    recommended_followup: "PLATFORM-RELEASE 独立治理：输出防误粘贴/确认 gate"
+    status: OPEN
+  - id: RG-FOLLOWUP-02
+    bucket: RELEASE_FOLLOWUP
+    module: PLATFORM-RELEASE
+    severity: MEDIUM
+    source_stage: G0
+    ssot_ref: "docs/architecture/remediation/G0_RELEASE_GOVERNANCE_P0_HARDENING_EXPLORATION_1.md"
+    evidence: "frontend production VITE build args 缺少完整 fail-closed build-config gate"
+    recommended_followup: "PLATFORM-RELEASE 独立治理：生产构建 fail-closed build-config 校验"
+    status: OPEN
+
+summary:
+  bucket_counts:
+    PRODUCT_FAILURE: 6
+    KNOWN_RISK: 9
+    TEST_DRIFT: 11
+    ENV_CONSTRAINT: 6
+    LEGACY_DEBT: 1
+    COUPLING_DEBT: 12
+    RELEASE_FOLLOWUP: 2
+  unknown_bucket: 0
+  total_items: 47
+  note: "各项均为索引引用；详细证据/行号/补跑命令以各阶段 SSOT（G2 LEGACY_REGISTER / G3 REPORT+MATRIX / G4 REGISTRY）为准"

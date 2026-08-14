@@ -349,6 +349,25 @@ PHASE 3A  Production Safety Stabilization ⬜ IN PROGRESS（P1 Consumer Migratio
 - `docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml` — **G4 跨模块耦合治理总账（唯一 SSOT，G4-CONTROLLED-DECOUPLING-1）**；报告见 `G4_CONTROLLED_DECOUPLING_REPORT.md`
 - `docs/architecture/STAGING_E2E_READINESS.md` + `WINDOWS_E2E_READINESS.md` — 共享环境准备
 
+### Governance Baseline（GC-GOVERNANCE-BASELINE-CLOSURE-1 闭合）
+
+```text
+GOVERNANCE_BASELINE = CLOSED_AND_VALIDATED / DEVELOPMENT_MODE = GOVERNED_FEATURE_DEVELOPMENT
+```
+
+- Manifest（治理入口 SSOT）：`docs/architecture/governance/GOVERNANCE_BASELINE.yaml`
+- 开放问题索引（7 bucket）：`docs/architecture/governance/GOVERNANCE_BACKLOG.yaml`
+- G1 Code Map：`docs/architecture/code-map/code_index.yaml` ｜ G2 Legacy：`docs/architecture/LEGACY_REGISTER.md`
+- G3 Verification：`docs/architecture/verification/G3_MODULE_VERIFICATION_MATRIX.yaml` ｜ G4 Coupling：`docs/architecture/coupling/G4_COUPLING_REGISTRY.yaml`
+
+**开发前声明（低风险/单模块可精简为 Owner/Chain/Tests）**：
+1. identify owner（M01~M07 / PLATFORM / PLATFORM-RELEASE / DOMAIN_SHARED）
+2. identify affected chain（引用 G1 CHAIN）
+3. inspect legacy impact（引用 G2 legacy_id）与 coupling impact（引用 G4 coupling_id）
+4. select verification baseline（引用 G3 matrix）
+跨模块 → coupling review；LEGACY TOUCH → lifecycle review；DB/API/PROD → enhanced review；HIGH SIDE EFFECT → strict safety gate。
+治理阶段不可自动重开：代码/legacy/关键链/依赖变化走 G1~G4 触发式 delta，不是阶段重做。
+
 ------
 
 # Reading Completion Gate
