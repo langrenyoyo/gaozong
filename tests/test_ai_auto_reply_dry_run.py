@@ -1944,6 +1944,41 @@ def test_run_with_session_for_outbox_propagates_lease_owner_and_clears_context()
         db.close()
 
 
+def test_outbox_run_identity_is_ready_before_9100_request():
+    """outbox 处理进入 9100 前必须透传已持久化的运行幂等标识。"""
+    from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
+
+    event_id = _insert_event(event_key="event-outbox-request-identity")
+    _insert_account_agent_binding()
+    _insert_autoreply_settings(send_enabled=True)
+    db, placeholder = _make_outbox_run(
+        attempt_count=3,
+        owner="host:request-identity",
+    )
+    placeholder.trigger_event_id = event_id
+    placeholder.trigger_event_key = "event-outbox-request-identity"
+    db.commit()
+    fake_client = FakeAiCsClient()
+    try:
+        with patch(
+            "app.services.ai_auto_reply_dry_run_service.get_xg_douyin_ai_cs_client",
+            lambda: fake_client,
+        ):
+            _run_with_session_for_outbox(
+                db,
+                run_id=placeholder.id,
+                lease_owner="host:request-identity",
+            )
+
+        assert len(fake_client.calls) == 1
+        request = fake_client.calls[0]["request"]
+        assert request["run_id"] == placeholder.id
+        assert request["attempt_count"] == 3
+    finally:
+        _set_outbox_lease_owner("")
+        db.close()
+
+
 def test_run_with_session_for_outbox_skips_missing_run():
     """真实入口：run 不存在时安全跳过，不抛错。"""
     from app.services.ai_auto_reply_dry_run_service import _run_with_session_for_outbox
