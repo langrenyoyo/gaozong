@@ -304,28 +304,6 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         return
     timing["conversation_context_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
 
-    # 先持久化运行记录，再将其幂等标识透传给 9100；outbox 占位行由租约保护更新。
-    run = AiAutoReplyRun(
-        **{
-            **base,
-            "merchant_id": binding.merchant_id or "",
-            "account_open_id": account_open_id,
-            "agent_id": binding.agent.agent_id,
-            "status": "processing",
-            "gate_results_json": _json_dumps({
-                "pre_llm": pre_gate.gate_results or {},
-                "history": history_gate,
-                "agent": agent_gate,
-            }),
-            "created_at": datetime.now(),
-            "updated_at": datetime.now(),
-        }
-    )
-    run = _add_run(db, run)
-    if run is None:
-        return
-    run_id_for_log = run.id
-
     # forbidden_words + contact_state
     t0 = _time.perf_counter()
     payload = {
@@ -376,13 +354,33 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
             customer_memory=reply_context.customer_memory,
             lead=reply_context.lead,
         ),
-        # P1 Stage 4B：M01 Auto Reply 幂等 identity 透传（9000→9100）
-        # run_id=AiAutoReplyRun.id（已 commit），attempt_count=claim 时快照（不重新读 DB）
-        "run_id": run.id,
-        "attempt_count": run.attempt_count,
     }
     timing["forbidden_words_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     timing["pre_llm_total_ms"] = round((_time.perf_counter() - t_total) * 1000, 1)
+    run = AiAutoReplyRun(
+        **{
+            **base,
+            "merchant_id": binding.merchant_id or "",
+            "account_open_id": account_open_id,
+            "agent_id": binding.agent.agent_id,
+            "status": "processing",
+            "gate_results_json": _json_dumps({
+                "pre_llm": pre_gate.gate_results or {},
+                "history": history_gate,
+                "agent": agent_gate,
+            }),
+            "created_at": datetime.now(),
+            "updated_at": datetime.now(),
+        }
+    )
+    run = _add_run(db, run)
+    if run is None:
+        return
+    run_id_for_log = run.id
+    # P1 Stage 4B：M01 自动回复幂等标识透传（9000→9100）。
+    # run_id 为已提交的运行记录 ID；attempt_count 为 claim 时快照，不重新读取数据库。
+    payload["run_id"] = run.id
+    payload["attempt_count"] = run.attempt_count
 
     # 9100 LLM 调用
     t0 = _time.perf_counter()
