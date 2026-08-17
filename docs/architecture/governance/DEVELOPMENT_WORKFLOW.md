@@ -104,7 +104,7 @@ Outbox / 高风险 scheduler
 流程：
 
 ```text
-完整 Impact Contract → 严格审批 → 执行窗口 → 独立测试/验收 → 审批 → 必要 Governance Delta
+完整 Impact Contract → Decision 批准 Spec/Plan → Implementation 实施 → Verification 独立验收 → Decision ACCEPT → 必要 Governance Delta → DONE
 ```
 
 L3 可读取 `GOVERNANCE_BASELINE.yaml`、G1 Code Map、G2 Legacy Registry、G3 Verification Matrix、G4 Coupling Registry、Governance Backlog；但只读取与任务有关的事实，禁止为单个 L3 任务重扫全仓库建立"新现实地图"。
@@ -154,9 +154,9 @@ G4_DELTA = NO
 ## 四、三权分离按风险启用
 
 ```text
-L1：同一 VibeCoding 窗口（分析 → Owner确认 → 实施 → 测试），最终由 Owner/审批方 review
-L2：视风险决定（同窗口实施 + 独立 review，或三权分离）
-L3：默认 审批 → 执行 → 测试 → 审批
+L1：可由同一协调节点承载 Decision + Acceptance，Implementation 与 Verification 按风险分离
+L2：推荐 Decision / Implementation / Verification 三权分离；窗口数量可为两个或更多
+L3：Decision → Implementation → Verification → Decision Acceptance；生产动作另加 Human Safety Gate
 ```
 
 ---
@@ -169,7 +169,7 @@ L3：默认 审批 → 执行 → 测试 → 审批
 分析 → Owner确认 → 执行
 ```
 
-不得变成"用户提出需求 → VibeCoding 自动直接修改"。这是执行窗口协作纪律的延续。
+不得变成“用户提出需求 → Implementation Authority 自动直接修改”。这是 Owner 确认门和决策权优先纪律的延续。
 
 ---
 

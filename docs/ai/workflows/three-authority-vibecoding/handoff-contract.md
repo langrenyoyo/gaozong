@@ -12,6 +12,10 @@ Plan-Hash:
 Base-Commit:
 Candidate-Commit:
 Role:
+Authority:
+Authority-Carrier:
+Spec-Identifier:
+Spec-Revision:
 Allowed-Files:
 Forbidden-Files:
 Acceptance-Matrix:
@@ -19,7 +23,23 @@ Environment:
 Residual-Risks:
 ~~~
 
-Plan-Identifier 与 Plan-Hash 至少提供一项。Candidate-Commit 在 PLAN_DRAFT、PLAN_APPROVED 和 IMPLEMENTING 阶段可以为空；进入 CANDIDATE_READY、代码审查和测试后必须是完整 Git 提交哈希。
+Plan-Identifier 与 Plan-Hash 至少提供一项。L2/L3 必须提供 Spec-Identifier 和 Spec-Revision；L0/L1 无独立 Spec 时填写 `LEGACY_VALID_NONE` 并在冻结需求中给出等价合同。Authority 使用 `decision`、`implementation`、`verification`；Authority-Carrier 记录承载窗口、Agent、模型或人工节点，但不改变权力边界。Candidate-Commit 在 PLAN_DRAFT、PLAN_APPROVED 和 IMPLEMENTING 阶段可以为空；进入 CANDIDATE_READY、代码审查和验收后必须是完整 Git 提交哈希。
+
+## Authority 交接边界
+
+- Decision 向 Implementation 交付 Approved Spec、Approved Plan、Allowed/Forbidden Files、Invariants 和 Acceptance Matrix。
+- Implementation 只回传系统变更和 Implementation Evidence，不得附带最终通过或接受结论。
+- Decision 向 Verification 交付冻结合同和客观约束，不把实施者的主观评价作为验收前提。
+- Verification 只回传逐项证据和技术结论，不修改候选或最终接受交付。
+- Decision 只能基于独立 Verification Evidence 输出 ACCEPTED，并在适用 Gate 闭合后输出 DONE。
+
+## 偏离事件
+
+`PLAN_DEVIATION` 和 `SPEC_DRIFT` 是事实事件/原因码，不是平行状态机：
+
+- `PLAN_DEVIATION`：实施路径不可行，但批准 Spec 未变化。Implementation 停止相关写操作并回传证据，由 Decision 裁决 R1、R2 或 REPLAN。
+- `SPEC_DRIFT`：Goal、Scope、AC、API/DB/安全边界需要变化。Implementation 立即停止，旧 PLAN_APPROVED 失效，由 Decision 裁决 REPLAN 或 REJECT_SCOPE。
+- Verification 发现合同冲突、缺失或不可判定时输出 `SPEC_GAP`，不得自行补写或猜测 Spec。
 
 ## 完整哈希
 
@@ -34,13 +54,13 @@ SHA-1 仓库通常为 40 位十六进制，SHA-256 仓库通常为 64 位；协�
 
 ## 不可变候选提交
 
-Candidate-Commit 是审批和测试共同引用的不可变审查对象。执行窗口回传 CANDIDATE_READY 后：
+Candidate-Commit 是 Decision 和 Verification 共同引用的不可变审查对象。Implementation Authority 回传 CANDIDATE_READY 后：
 
 - 不再改变该提交；
 - 不在同一候选上追加未提交业务代码；
 - 本地提交不授予推送、合并或发布权限；
-- 审批窗口核对 Base-Commit 到 Candidate-Commit 的实际差异；
-- 测试窗口只检出并测试该 Candidate-Commit。
+- Decision Authority 核对 Base-Commit 到 Candidate-Commit 的实际差异；
+- Verification Authority 只检出并验收该 Candidate-Commit。
 
 ## 基线与候选关系
 
@@ -69,18 +89,18 @@ Candidate-Commit 是审批和测试共同引用的不可变审查对象。执行
 ## 推送、发布与 Owner 证据
 
 - APPROVE_PUSH 的正式信封必须包含 Push-Remote、Push-Ref、Push-Mode=fast-forward-only 和 Expected-Remote-Hash。推送前后都核对远端实际哈希，并使用完整 Candidate-Commit 的显式 refspec。
-- 本工作流禁止强制推送。远端偏离 Expected-Remote-Hash 或普通推送失败时，执行窗口必须停止并重新读取精确 Push-Ref；只有实际哈希等于 Candidate-Commit 才可输出 PUSHED。远端仍等于 Expected-Remote-Hash、其他哈希或 UNKNOWN 时，执行窗口只回传证据和原因码 REMOTE_DRIFT 或 PUSH_OUTCOME_UNKNOWN，由审批窗口输出 REPLAN；旧 APPROVE_PUSH 不得重试，不得改用 `--force`、`--force-with-lease` 或删除远端引用。
-- 需要发布时，TEST_REQUEST 必须声明 Release-Artifact-Required、构建命令和制品位置。测试窗口或隔离 CI 从完整 Candidate-Commit 的干净工作树构建一次不可变制品，计算 Artifact-Digest，并在独立测试报告中记录 Artifact-Source-Commit、构建证据和制品测试结果。
+- 本工作流禁止强制推送。远端偏离 Expected-Remote-Hash 或普通推送失败时，Implementation Authority 必须停止并重新读取精确 Push-Ref；只有实际哈希等于 Candidate-Commit 才可输出 PUSHED。远端仍等于 Expected-Remote-Hash、其他哈希或 UNKNOWN 时，Implementation Authority 只回传证据和原因码 REMOTE_DRIFT 或 PUSH_OUTCOME_UNKNOWN，由 Decision Authority 输出 REPLAN；旧 APPROVE_PUSH 不得重试，不得改用 `--force`、`--force-with-lease` 或删除远端引用。
+- 需要发布时，TEST_REQUEST 必须声明 Release-Artifact-Required、构建命令和制品位置。Verification Authority 或隔离 CI 从完整 Candidate-Commit 的干净工作树构建一次不可变制品，计算 Artifact-Digest，并在 Verification Report 中记录 Artifact-Source-Commit、构建证据和制品测试结果。
 - APPROVE_RELEASE 必须绑定 Task-ID、完整 Candidate-Commit、目标环境和同一制品版本/Artifact-Digest；L3 或项目策略要求 Owner 时，还必须绑定决定、Owner 身份和带时区时间戳。
-- 发布动作只能提升或部署已测试、已批准的同一制品，不得重新构建。发布前制品缺失、需要重建或摘要变化，且尚无部署副作用、Candidate-Commit 未变化时，旧测试、APPROVE_RELEASE 和 Owner-Evidence 立即失效；执行窗口只回报原因码 ARTIFACT_INVALIDATED 和证据，由审批窗口重新输出 TEST_REQUEST。
-- 发布开始前，若部署策略、目标环境或其他发布前提变化或失效，执行窗口或获授权发布者只回传证据，由审批窗口输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
-- 发布已经开始后如失败、部分成功或结果未知，执行窗口不得输出 RELEASED 或自行测试，必须回传每个目标的实际 Artifact-Digest、健康检查、执行步骤和回滚情况。已知失败或部分成功使用原因码 RELEASE_PARTIAL，包括 0 个或仅部分目标成功；结果无法确认时才使用 RELEASE_OUTCOME_UNKNOWN。由审批窗口输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
+- 发布动作只能提升或部署已验收、已批准的同一制品，不得重新构建。发布前制品缺失、需要重建或摘要变化，且尚无部署副作用、Candidate-Commit 未变化时，旧 Verification、APPROVE_RELEASE 和 Owner-Evidence 立即失效；Implementation Authority 只回报原因码 ARTIFACT_INVALIDATED 和证据，由 Decision Authority 重新输出 TEST_REQUEST。
+- 发布开始前，若部署策略、目标环境或其他发布前提变化或失效，Implementation Authority 或获授权发布者只回传证据，由 Decision Authority 输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
+- 发布已经开始后如失败、部分成功或结果未知，Implementation Authority 不得输出 RELEASED 或自行验收，必须回传每个目标的实际 Artifact-Digest、健康检查、执行步骤和回滚情况。已知失败或部分成功使用原因码 RELEASE_PARTIAL，包括 0 个或仅部分目标成功；结果无法确认时才使用 RELEASE_OUTCOME_UNKNOWN。由 Decision Authority 输出 REPLAN <full-candidate-hash>；旧 APPROVE_RELEASE 和 Owner-Evidence 均失效且不得重放，重新发布前必须重新批准并在适用时取得新的 Owner 证据。
 - 全部目标的实际 Artifact-Digest 均与批准摘要一致（每个目标的逐项匹配结果均一致地为“与批准摘要一致”），且健康检查均通过，才可输出 RELEASED。
 - 任一绑定字段变化都会使旧 Owner-Evidence 失效；批准推送不隐含批准发布，批准发布也不隐含推送。
 
 ## 必须 REPLAN
 
-出现以下情况不能由执行或测试窗口自行解释：
+出现以下情况不能由 Implementation 或 Verification Authority 自行解释：
 
 - 目标、范围或验收标准需要变化；
 - Base-Commit 漂移导致计划假设失效；
@@ -101,7 +121,7 @@ REPLAN 必须废止旧 Plan-Revision；已有候选不能跨计划复用。
 - 存在充分、可审计的替代证据；
 - 报告列出补测条件、责任人和残余风险。
 
-它不得掩盖失败、哈希不一致、权限/安全缺测或数据库迁移未验证。审批窗口可以拒绝该结论并返回 R1、R2 或 REPLAN。
+它不得掩盖失败、哈希不一致、权限/安全缺测或数据库迁移未验证。Decision Authority 可以拒绝该结论并返回 R1、R2 或 REPLAN。
 
 ## 原因码
 

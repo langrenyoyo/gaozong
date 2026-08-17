@@ -1,4 +1,6 @@
-# EXECUTION_REPORT
+# IMPLEMENTATION_REPORT
+
+> 兼容旧名称：`EXECUTION_REPORT`。
 
 ## Identity
 
@@ -9,7 +11,11 @@
 - Base-Commit: {{FULL_BASE_COMMIT}}
 - Candidate-Commit: {{FULL_CANDIDATE_COMMIT}}
 - Branch: {{BRANCH}}
-- Role: executor
+- Role: implementation
+- Authority: implementation
+- Authority-Carrier: {{WINDOW_AGENT_MODEL_OR_HUMAN_NODE}}
+- Spec-Identifier: {{SPEC_IDENTIFIER_OR_LEGACY_VALID_NONE}}
+- Spec-Revision: {{SPEC_REVISION_OR_LEGACY_VALID_NONE}}
 
 ## Scope
 
@@ -33,6 +39,12 @@
 ## Plan-Deviations
 
 {{NONE_OR_EXACT_DEVIATION_AND_APPROVAL}}
+
+## Authority-Escalations
+
+- PLAN_DEVIATION: {{NONE_OR_EVIDENCE}}
+- SPEC_DRIFT: {{NONE_OR_EVIDENCE}}
+- Decision-Reference: {{NONE_OR_DECISION_REFERENCE}}
 
 ## Evidence
 
@@ -88,3 +100,5 @@ git rev-list --parents {{FULL_BASE_COMMIT}}..{{FULL_CANDIDATE_COMMIT}}
 ~~~text
 CANDIDATE_READY {{FULL_CANDIDATE_COMMIT}}
 ~~~
+
+本报告是 Implementation Evidence，不是独立 Verification，不得输出 `VERIFY_PASS`、`ACCEPTED` 或 `DONE`。

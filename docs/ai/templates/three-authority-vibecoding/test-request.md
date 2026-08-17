@@ -1,4 +1,6 @@
-# TEST_WINDOW_INSTRUCTION
+# VERIFICATION_AUTHORITY_INSTRUCTION
+
+> 兼容旧名称：`TEST_WINDOW_INSTRUCTION`。新任务使用本标题。
 
 ## Identity
 
@@ -8,7 +10,11 @@
 - Plan-Hash: {{PLAN_HASH}}
 - Base-Commit: {{FULL_BASE_COMMIT}}
 - Candidate-Commit: {{FULL_CANDIDATE_COMMIT}}
-- Role: tester
+- Role: verification
+- Authority: verification
+- Authority-Carrier: {{WINDOW_AGENT_MODEL_OR_HUMAN_NODE}}
+- Spec-Identifier: {{SPEC_IDENTIFIER_OR_LEGACY_VALID_NONE}}
+- Spec-Revision: {{SPEC_REVISION_OR_LEGACY_VALID_NONE}}
 
 ## Frozen-Requirements
 
@@ -22,12 +28,12 @@
 
 ## Scope
 
-- Allowed-Files: NONE（测试窗口不得修改业务代码）
+- Allowed-Files: NONE（Verification Authority 不得修改业务代码）
 - Forbidden-Files: {{ALL_CONTROLLED_SOURCE_AND_PROJECT_FORBIDDEN_FILES}}
 
 ## Test-Environment
 
-{{ISOLATED_WORKTREE_RUNTIME_AND_DEPENDENCIES}}
+{{INDEPENDENT_CONTEXT_OR_WORKTREE_RUNTIME_AND_DEPENDENCIES}}
 
 ## Test-Data
 

@@ -66,7 +66,7 @@ docs/ai/03_data_and_migration/POSTGRESQL_MIGRATION_NOTES.md
 
 # 可选三权分离治理
 
-本项目已接入审批、执行、测试三权分离模块，但模块安装不等于任务启用。每项任务仍须按 L0～L3 逐项判定；启用条件和降级边界以 `docs/ai/workflows/three-authority-vibecoding/activation-rules.md` 为准。
+本项目已接入 Three Authorities 治理模块：Decision Authority（决策权）、Implementation Authority（实施权）、Verification Authority（验收权）。窗口、Agent 和模型只是权力承载方式，不是三权本体。模块安装不等于任务启用；每项任务仍须按 L0～L3 逐项判定，启用条件和降级边界以 `docs/ai/workflows/three-authority-vibecoding/activation-rules.md` 为准。
 
 该模块默认关闭，不改变 Required Reading。只有任务决定启用后，才按需阅读 `docs/ai/workflows/three-authority-vibecoding/README.md` 及对应角色 Prompt；不得把三份角色 Prompt 加入默认 Required Reading。
 
@@ -136,10 +136,10 @@ Output Rules
 8. NewCar 真实鉴权本地联调必须显式设置：`NEWCAR_AUTH_ENABLED=true`、`NEWCAR_AUTH_MOCK_ENABLED=false`（代码默认值是 mock 开发态）。
 9. 退出登录必须走 `POST /auth/logout`，由 9000 调用 NewCarProject `POST /api/external-auth/logout`，不能只清理前端本地 token。
 10. **worktree 偏好声明（针对 superpowers skill 链）**：执行 `docs/superpowers/plans/*.md` 等 implementation plan 时，本项目声明固定偏好——**原地执行，不开 git worktree、不新建分支、不切目录**。`superpowers:using-git-worktrees` 检测到本指令即视为已声明偏好，跳过 Step 1 创建，直接在当前工作区执行；`superpowers:executing-plans` / `subagent-driven-development` 不得因"不在 worktree"而强制创建分支。此偏好覆盖 plan 文档开头 `REQUIRED SUB-SKILL` 段落隐含的隔离假设，但**不豁免**各 plan 自身的"允许范围 / 禁止事项"与发送安全、迁移、鉴权等 gate。如某高风险阶段确需隔离，必须由用户当轮显式批准后才可临时开 worktree。
-11. **执行窗口协作纪律（2026-07-28 用户硬约束）**：以下四条对执行窗口、测试窗口及所有子 agent 等效生效，与三权分离或 plan 文档的允许范围叠加，不得因任何理由放宽：
+11. **Authority 协作纪律（2026-07-28 用户硬约束，2026-08-17 权力主体升级）**：以下四条对 Decision、Implementation、Verification Authority 及所有承载窗口/Agent 等效生效，与 plan 文档的允许范围叠加，不得因任何理由放宽：
     1. **禁止范围外发散**：未经用户当轮显式允许，不得对当前任务"允许范围"之外的文件、模块、能力做任何修改或"顺手实现"；遇到范围外问题只记录回传，不顺带改。
     2. **文档影响同步**：本轮改动使 `docs/` 下哪份文档结论过期的，必须在任务结束前按"AI 文档自治维护要求"受影响同轮更新；不得只改代码、留下过期文档结论。治理规则文件（01~04）的较高修改门槛不变。
-    3. **不确认即停**：对需求、调用链、数据流、权限校验、影响面或方案中任一不确定的，必须先向用户/审批窗口确认后再动手，禁止凭假设推进；满足不了 Reading Completion Gate 时按其规则继续阅读而非编码。
+    3. **不确认即停**：对需求、调用链、数据流、权限校验、影响面或方案中任一不确定的，Implementation 必须先交 Decision Authority 或用户裁决后再动手，禁止凭假设推进；满足不了 Reading Completion Gate 时按其规则继续阅读而非编码。
     4. **任务展开先复述**：每个新需求或新任务（含 plan 内每个 Task）展开前，必须先复述该任务的允许范围、调用链、数据来源与去向、权限校验点、风险等级、最小修改方案与验收标准，经确认后再进入实现。
 12. **Release Governance G0 硬化（2026-08-13 审批 APPROVED_WITH_4_CONSTRAINTS，R1 返工完成）**：
     1. **生产鉴权 fail-closed 已代码强制（P0-1）**：`APP_ENV=production` 时必须 `NEWCAR_AUTH_ENABLED=true` 且 `NEWCAR_AUTH_MOCK_ENABLED=false`，否则 `validate_production_auth_config()` 抛 RuntimeError（startup 拒启动 + `NewCarProjectAuthClient.from_env()` 请求路径双重防线），production 下 `build_mock_context()` 一律拒绝；GET /auth/me 绝不返回 HTTP200 mock。不做 import-time raise（避免阻断 alembic/维护/诊断脚本）。

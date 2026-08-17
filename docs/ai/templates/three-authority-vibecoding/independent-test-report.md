@@ -1,4 +1,6 @@
-# INDEPENDENT_TEST_REPORT
+# VERIFICATION_REPORT
+
+> 兼容旧名称：`INDEPENDENT_TEST_REPORT`。
 
 ## Identity
 
@@ -9,7 +11,11 @@
 - Base-Commit: {{FULL_BASE_COMMIT}}
 - Candidate-Commit: {{FULL_CANDIDATE_COMMIT}}
 - Actual-HEAD: {{FULL_ACTUAL_HEAD}}
-- Role: tester
+- Role: verification
+- Authority: verification
+- Authority-Carrier: {{WINDOW_AGENT_MODEL_OR_HUMAN_NODE}}
+- Spec-Identifier: {{SPEC_IDENTIFIER_OR_LEGACY_VALID_NONE}}
+- Spec-Revision: {{SPEC_REVISION_OR_LEGACY_VALID_NONE}}
 
 ## Scope
 
@@ -69,7 +75,7 @@ git status --short
 
 ## Conclusion
 
-- Decision: {{PASS_CONDITIONAL_PASS_FAIL_TEST_BLOCKED_SPEC_GAP}}
+- Decision: {{VERIFY_PASS_CONDITIONAL_PASS_VERIFY_FAIL_TEST_BLOCKED_SPEC_GAP}}
 - Candidate-Binding: {{FULL_CANDIDATE_COMMIT_OR_NONE}}
 - Alternative-Evidence: {{NONE_OR_EVIDENCE}}
 - Retest-Conditions: {{NONE_OR_CONDITIONS}}
@@ -77,3 +83,5 @@ git status --short
 ~~~text
 {{DECISION}} {{FULL_CANDIDATE_COMMIT_OR_NONE}} {{OPTIONAL_REASON_CODE}}
 ~~~
+
+兼容旧消费者时可以同时记录 `PASS`/`FAIL` 别名，但新任务的权威结论使用 `VERIFY_PASS`/`VERIFY_FAIL`。Verification 结论不等于 `ACCEPTED` 或 `DONE`。

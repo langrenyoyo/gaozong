@@ -1,4 +1,6 @@
-# APPROVAL_RECORD
+# DECISION_AND_ACCEPTANCE_RECORD
+
+> 兼容旧名称：`APPROVAL_RECORD`。
 
 ## Identity
 
@@ -8,7 +10,11 @@
 - Plan-Hash: {{PLAN_HASH}}
 - Base-Commit: {{FULL_BASE_COMMIT}}
 - Candidate-Commit: {{FULL_CANDIDATE_COMMIT}}
-- Role: approver
+- Role: decision
+- Authority: decision
+- Authority-Carrier: {{WINDOW_AGENT_MODEL_OR_HUMAN_NODE}}
+- Spec-Identifier: {{SPEC_IDENTIFIER_OR_LEGACY_VALID_NONE}}
+- Spec-Revision: {{SPEC_REVISION_OR_LEGACY_VALID_NONE}}
 
 ## Scope
 
@@ -30,7 +36,12 @@
 ## Decisions
 
 - Code-Review-Decision: {{APPROVE_TEST_R1_R2_REPLAN_REJECT_SCOPE}}
-- Test-Decision: {{PASS_CONDITIONAL_PASS_FAIL_TEST_BLOCKED_SPEC_GAP}}
+- Verification-Decision: {{VERIFY_PASS_CONDITIONAL_PASS_VERIFY_FAIL_TEST_BLOCKED_SPEC_GAP}}
+- Verification-Evidence: {{VERIFICATION_REPORT_REFERENCE}}
+- Acceptance-Decision: {{ACCEPTED_REJECTED_PENDING}}
+- Acceptance-Rationale: {{EVIDENCE_AND_RESIDUAL_RISK_DISPOSITION}}
+- Done-Decision: {{DONE_PENDING_NOT_APPLICABLE}}
+- Gate-Disposition: {{PUSH_RELEASE_OWNER_HUMAN_SAFETY_GATES}}
 - Push-Decision: {{APPROVE_PUSH_DENY_PENDING_NOT_APPLICABLE}}
 - Push-Remote: {{REMOTE_OR_NOT_APPLICABLE}}
 - Push-Ref: {{FULL_REF_OR_NOT_APPLICABLE}}
@@ -51,7 +62,7 @@
 
 - Plan-Evidence: {{LINK_OR_COMMAND_OUTPUT}}
 - Diff-Evidence: {{BASE_TO_CANDIDATE_DIFF}}
-- Test-Evidence: {{INDEPENDENT_TEST_REPORT_REFERENCE}}
+- Test-Evidence: {{VERIFICATION_REPORT_REFERENCE}}
 - Risk-Acceptance: {{NONE_OR_ACCEPTED_RESIDUAL_RISKS}}
 - Owner-Evidence: {{NONE_OR_REFERENCE_BINDING_ALL_OWNER_FIELDS_ABOVE}}
 

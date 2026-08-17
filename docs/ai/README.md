@@ -35,7 +35,7 @@ docs/ai/04_OUTPUT_RULES.md
 |---|---|
 | `workflows/three-authority-vibecoding/README.md` | 三权分离总入口、角色边界和标准流程 |
 | `workflows/three-authority-vibecoding/activation-rules.md` | L0～L3 风险判定、启用与降级规则 |
-| `prompts/three-authority-vibecoding/README.md` | 审批、执行、测试窗口 Prompt 导航，仅在任务启用后读取 |
+| `prompts/three-authority-vibecoding/README.md` | Decision、Implementation、Verification Authority Prompt 导航；旧 Window Prompt 仅为兼容入口，仅在任务启用后读取 |
 | `templates/three-authority-vibecoding/README.md` | 执行包、执行报告、测试请求、独立测试报告和审批记录模板 |
 
 ## 分阶段归档

@@ -1,4 +1,6 @@
-# EXECUTION_WINDOW_INSTRUCTION
+# IMPLEMENTATION_AUTHORITY_INSTRUCTION
+
+> 兼容旧名称：`EXECUTION_WINDOW_INSTRUCTION`。新任务使用本标题。
 
 ## Identity
 
@@ -9,12 +11,20 @@
 - Base-Commit: {{FULL_BASE_COMMIT}}
 - Candidate-Commit: NONE
 - Target-Branch: {{TARGET_BRANCH}}
-- Role: executor
+- Role: implementation
+- Authority: implementation
+- Authority-Carrier: {{WINDOW_AGENT_MODEL_OR_HUMAN_NODE}}
+- Spec-Identifier: {{SPEC_IDENTIFIER_OR_LEGACY_VALID_NONE}}
+- Spec-Revision: {{SPEC_REVISION_OR_LEGACY_VALID_NONE}}
 - Risk-Level: {{L0_L1_L2_L3}}
 
 ## Goal
 
 {{GOAL}}
+
+## Invariants
+
+{{MUST_REMAIN_UNCHANGED}}
 
 ## Known-Facts
 
@@ -52,6 +62,12 @@
 ## Implementation-Steps
 
 1. {{MINIMAL_IMPLEMENTATION_STEP}}
+
+## Drift-Protocol
+
+- Plan 技术路径不可行但 Spec 未变化：停止相关写操作，回传 `PLAN_DEVIATION`。
+- Goal、Scope、AC、API/DB/安全边界需要变化：立即停止，回传 `SPEC_DRIFT`。
+- Implementation Authority 不得自行批准偏离或重写 Spec。
 
 ## Green-Test
 
