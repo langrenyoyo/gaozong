@@ -457,7 +457,7 @@ modules:
       - "app/models.py（AiEditJob/AiEditJobArtifact/AiPreviewExecution）"
       - "app/routers/ai_edit.py（LAS 段 + _require_ai_edit 权限门）"
     critical_dependencies:
-      - "火山引擎 LAS（las_video_remix speech_auto，LAS_API_KEY env）、TOS（素材/产物对象存储）"
+      - "火山引擎 LAS（las_video_remix 三模式 marketing_headtalk/long_real_shot/real_shot_headtalk，LAS_API_KEY env）、TOS（素材/产物对象存储）"
       - "M05 素材（BC-02 共置）、M07 计费（ai_preview_execution:{id}:{stage}，0034 PG_RUNTIME_VERIFIED）"
       - "DY_SECRET_KEY（下载 token 签名，fail-closed）"
     verification_levels:

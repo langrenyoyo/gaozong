@@ -125,7 +125,7 @@ G4 CONTROLLED DECOUPLING
 | M03 | AI小高智能体 | 抖音企业号绑定 LLM 客服配置 + 知识分类/训练入口 | 前端 `/agents`；后端 `agents`/`agent`/`knowledge_categories`/`knowledge_training` | ai_agents 等 4 表 | HIGH |
 | M04 | AI小高微信助手 | 本机微信 UI 自动化（通知/检测/回复回写）+ 日报/回访 + 19000 Local Agent | 前端 `/wechat/*`；后端 `wechat_tasks`/`wechat_auto_detect`/`replies`/`checks`/`daily_reports` | wechat_tasks 等 6 表 | HIGH |
 | M05 | 小高素材库 | AI 剪辑素材管理 + 素材分析 | 前端 `/ai-edit/materials`；后端 `ai_edit`（与 M06 共置） | ai_edit_materials 等 5 表 | MEDIUM（与 M06 共享实现，见 BC-02） |
-| M06 | AI小高剪辑 | LAS 云端混剪（火山 `las_video_remix` `speech_auto`）+ 产物交付 + 算力记录 | 前端 `/ai-edit/editor`；后端 `ai_edit`（与 M05 共置） | ai_edit_jobs + ai_edit_job_artifacts | MEDIUM（与 M05 共享实现，见 BC-02） |
+| M06 | AI小高剪辑 | LAS 云端混剪（火山 `las_video_remix` 三模式 `marketing_headtalk`/`long_real_shot`/`real_shot_headtalk`）+ 产物交付 + 算力记录 | 前端 `/ai-edit/editor`；后端 `ai_edit`（与 M05 共置） | ai_edit_jobs + ai_edit_job_artifacts | MEDIUM（与 M05 共享实现，见 BC-02） |
 | M07 | AI小高算力 | 商户算力套餐/消耗/计费展示（兼容入口→`apps/compute/services/`） | 前端 `/compute`；后端 `compute`(+admin+internal) | compute_accounts 等 4 表 | HIGH |
 
 **Confidence 汇总（M01–M07 每模块明确）**：`5 HIGH + 2 MEDIUM`。

@@ -30,7 +30,7 @@ auto_wechat / 小高AI系统属于 NewCarProject 外部客户系统下的一组�
 
 以 `docs/ai/01_product_prd/小高AI系统一期_需求理解与VibeCoding指令.md` 为一期需求权威文档；与旧文档冲突时以该文档及本节为准。
 
-1. **AI剪辑已于 2026-07-31 按甲方书面授权恢复开发（原 2026-07-18 FROZEN_BY_CUSTOMER 已解除）**。已放弃原 FFmpeg/9100规划/19000本地执行面三段架构，改为纯 LAS 云端方案（火山 LAS `las_video_remix` 算子 `speech_auto` 模式）：9000 组装参数→LAS submit→后台轮询→存产物；前端新工作台 LasRemixWorkbench。旧冻结代码（worker/pipeline/stabilizer/9100规划/19000执行面/旧 AiVideoEditor/Task 11 测试包）已删除，数据模型 7 表+迁移保留复用，新增 LAS 字段迁移 0022/0042，算力 capability_key 加 `ai_edit`。设计文档 `docs/superpowers/plans/2026-07-31-ai-edit-las-remix-redesign.md`。生产验证仍需另行审批；TOS/LAS 凭证从环境变量注入，前端不持有 LAS_API_KEY。
+1. **AI剪辑已于 2026-07-31 按甲方书面授权恢复开发（原 2026-07-18 FROZEN_BY_CUSTOMER 已解除）**。已放弃原 FFmpeg/9100规划/19000本地执行面三段架构，改为纯 LAS 云端方案（火山 LAS `las_video_remix` 算子，2026-08-17 起为三模式 `marketing_headtalk`/`long_real_shot`/`real_shot_headtalk`，旧名 `speech_auto` 等价 `marketing_headtalk` 仅作兼容别名）：9000 组装参数（规范化+规则校验）→LAS submit→后台轮询→存产物；前端新工作台 LasRemixWorkbench。旧冻结代码（worker/pipeline/stabilizer/9100规划/19000执行面/旧 AiVideoEditor/Task 11 测试包）已删除，数据模型 7 表+迁移保留复用，新增 LAS 字段迁移 0022/0042，算力 capability_key 加 `ai_edit`。设计文档 `docs/superpowers/plans/2026-07-31-ai-edit-las-remix-redesign.md`；接口合同 `docs/ai/13_ai_edit/contracts/LAS视频混剪_las_video_remix_接口调用说明_for小高.pdf`。生产验证仍需另行审批；TOS/LAS 凭证从环境变量注入，前端不持有 LAS_API_KEY。
 2. **一键过审已于 2026-07-13 被客户取消（CANCELLED_BY_CUSTOMER）**，不再是一期交付范围；不删除历史记录、不回退已落地代码和兼容字段。注意与历史 Phase 8 Task 11（日报样本对齐，已 VERIFIED）重名但无关。
 3. `auto_wechat:ai_edit` 为 AI剪辑入口权限（2026-07-31 已恢复，承载 LAS 混剪工作台 + 素材库）；仍不新增 `auto_wechat:ai_video` / `auto_wechat:ad_review`。
 4. 微信助手规则字段为 5 项：线索分配、短视频/直播留资管理表、每日线索销售反馈表、线索溯源表、销售单车成本表。
