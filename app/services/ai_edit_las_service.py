@@ -1,9 +1,11 @@
-"""AI剪辑 LAS speech_auto 编排服务。
+"""AI剪辑 LAS 视频混剪编排服务（三模式）。
 
 职责（纯 LAS 云端方案）：
 - create_las_job：创建 AiEditJob + 调 LAS submit + 写 las_task_id，入轮询队列。
 - process_las_job：轮询 LAS wait_for_terminal + 终态写库 + COMPLETED 时存产物到 artifacts。
 - get_las_job_status：查任务状态 + 产物（脱敏，不返回 tos_path 原始）。
+- normalize_las_mode / normalize_las_template / validate_las_request：三模式规范化与
+  规则校验（对齐接口文档 §3/§5/§6，fail-closed）。
 
 不做本地 FFmpeg/9100 规划（纯 LAS 云端，能力迁移自 demo）。
 """
@@ -30,37 +32,266 @@ from app.services.las_tos_uploader import TOSUploader, UploadError
 
 logger = logging.getLogger(__name__)
 
+# 行业模板：接受旧名 automotive_headtalk，发往 LAS 时规范化为 automotive（接口文档 §5.1）
 LAS_TEMPLATE = "automotive_headtalk"
+LAS_TEMPLATE_SEND = "automotive"
 LAS_MAX_VIDEOS = 30
 LAS_SCRIPT_MAX_LEN = 4000
 
+# 三模式（接口文档 §3，旧名 speech_auto 仍可传，等价 marketing_headtalk）
+MODE_MARKETING = "marketing_headtalk"      # 口播营销混剪
+MODE_LONG_REAL = "long_real_shot"          # 长实拍流水
+MODE_REAL_HEAD = "real_shot_headtalk"      # 实拍 + 口播复合成片
+MODE_ALIAS_SPEECH_AUTO = "speech_auto"
+LAS_MODES = {MODE_MARKETING, MODE_LONG_REAL, MODE_REAL_HEAD}
+
+# 素材角色与分段（接口文档 §3/§5）
+ROLE_SPEECH = "speech"
+ROLE_VOICEOVER = "voiceover"
+ROLE_BROLL = "broll"
+SECTION_REAL_SHOT = "real_shot"
+SECTION_HEADTALK = "headtalk"
+
+# 各模式数量/时长限额（接口文档 §3/§6）
+MARKETING_MAX_VIDEOS = 30
+LONG_REAL_MAX_VIDEOS = 100
+REAL_HEAD_TOTAL_MAX = 130       # 自动分段合计上限
+REAL_HEAD_REAL_SHOT_MAX = 100   # 显式分段：实拍段上限
+REAL_HEAD_HEADTALK_MAX = 30     # 显式分段：口播段上限
+TARGET_DURATION_MIN = 10
+TARGET_DURATION_MAX = 3600
+
 # 最终视频选择顺序：subtitled 优先，clean 回退
 FINAL_VIDEO_FIELDS = ("video_subtitled_url", "video_clean_url")
+
+
+# ---------------------------------------------------------------------------
+# 模式规范化与规则校验（接口文档 §3/§5/§6，fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def normalize_las_mode(mode: str | None) -> str:
+    """规范化 LAS mode：speech_auto→marketing_headtalk，缺失→marketing_headtalk。
+
+    只做别名映射，不校验业务规则（业务规则在 validate_las_request）。
+    非法 mode 抛 ValueError（信任边界输入校验）。
+    """
+    if not mode:
+        return MODE_MARKETING
+    m = mode.strip()
+    if m == MODE_ALIAS_SPEECH_AUTO:
+        return MODE_MARKETING
+    if m not in LAS_MODES:
+        raise ValueError(f"不支持的 mode：{mode}")
+    return m
+
+
+def normalize_las_template(template: str | None) -> str:
+    """规范化 LAS template：automotive_headtalk→automotive（接口文档 §5.1）。"""
+    t = (template or "").strip() or LAS_TEMPLATE
+    if t == LAS_TEMPLATE:
+        return LAS_TEMPLATE_SEND
+    return t
+
+
+def _normalize_video_item(item) -> dict:
+    """把 video_urls 数组元素规范化为 {url, role, section}；裸 URL 等价 role=speech。
+
+    只做结构规整，业务规则（角色/分段合法性）由调用方校验。
+    """
+    if isinstance(item, str):
+        url = item.strip()
+        if not url:
+            raise ValueError("video_urls 元素不能为空字符串")
+        return {"url": url, "role": ROLE_SPEECH}
+    if isinstance(item, dict):
+        url = item.get("url")
+        if not url or not isinstance(url, str) or not url.strip():
+            raise ValueError("素材对象必须包含 url")
+        out: dict = {"url": url}
+        role = item.get("role")
+        if role is not None:
+            out["role"] = role
+        section = item.get("section")
+        if section is not None:
+            out["section"] = section
+        return out
+    raise ValueError("video_urls 元素必须是字符串或 {url, role, section} 对象")
+
+
+def validate_las_request(
+    *,
+    mode: str | None,
+    video_urls,
+    script: str,
+    template: str | None,
+    target_duration_sec: int | None,
+    render_video: bool | None,
+    video_edit_mode: str | None,
+    smart_packaging: dict | None,
+) -> dict:
+    """校验并规范化 LAS 请求，返回可发送/持久化的 payload。
+
+    规则（对齐接口文档 §3/§5/§6）：
+    - mode：speech_auto→marketing_headtalk，缺失→marketing_headtalk。
+    - template：automotive_headtalk→automotive。
+    - render_video：缺失→true。
+    - marketing_headtalk：≤30 条，禁 target_duration_sec，禁 section；
+      role 取 speech/voiceover/broll。
+    - long_real_shot：单字符串=TOS 目录前缀；数组 ≤100 条；支持
+      target_duration_sec(10~3600)；role 取 speech/voiceover；禁 section/broll。
+    - real_shot_headtalk：显式/自动分段二选一（section 要么全带要么全不带）；
+      显式需两段非空 + 实拍段禁 broll + 全模式禁 voiceover + 分别 ≤100/≤30；
+      自动需 ≥2 条 speech + 总数 ≤130；支持 target_duration_sec(10~3600)。
+    - smart_packaging 只允许对象（子字段透传，不猜测）。
+    违规抛 ValueError（router 转 HTTP 400）。
+    """
+    norm_mode = normalize_las_mode(mode)
+    norm_template = normalize_las_template(template)
+
+    if not script or not script.strip():
+        raise ValueError("script（创作指令）不能为空")
+    if len(script) > LAS_SCRIPT_MAX_LEN:
+        raise ValueError(f"script 不能超过 {LAS_SCRIPT_MAX_LEN} 字")
+
+    if isinstance(video_urls, str):
+        items = [{"url": video_urls, "role": ROLE_SPEECH}]
+        is_prefix_string = True
+    elif isinstance(video_urls, list):
+        if not video_urls:
+            raise ValueError("video_urls 不能为空")
+        items = [_normalize_video_item(i) for i in video_urls]
+        is_prefix_string = False
+    else:
+        raise ValueError("video_urls 必须是字符串（TOS 目录前缀）或数组")
+
+    if target_duration_sec is not None and not (
+        TARGET_DURATION_MIN <= target_duration_sec <= TARGET_DURATION_MAX
+    ):
+        raise ValueError(
+            f"target_duration_sec 必须在 {TARGET_DURATION_MIN}~{TARGET_DURATION_MAX} 秒之间"
+        )
+
+    if norm_mode == MODE_MARKETING:
+        if len(items) > MARKETING_MAX_VIDEOS:
+            raise ValueError(f"口播营销模式最多 {MARKETING_MAX_VIDEOS} 条素材")
+        if target_duration_sec is not None:
+            raise ValueError("口播营销模式不支持 target_duration_sec")
+        for it in items:
+            role = it.get("role", ROLE_SPEECH)
+            if role not in (ROLE_SPEECH, ROLE_VOICEOVER, ROLE_BROLL):
+                raise ValueError(f"不支持的 role：{role}")
+            if "section" in it:
+                raise ValueError("口播营销模式不支持 section")
+
+    elif norm_mode == MODE_LONG_REAL:
+        # 单字符串 = TOS 目录前缀（由服务列举），不限制条数
+        if not is_prefix_string and len(items) > LONG_REAL_MAX_VIDEOS:
+            raise ValueError(f"长实拍模式最多 {LONG_REAL_MAX_VIDEOS} 条素材")
+        for it in items:
+            role = it.get("role", ROLE_SPEECH)
+            if role not in (ROLE_SPEECH, ROLE_VOICEOVER):
+                raise ValueError("长实拍模式不接受 role=broll")
+            if "section" in it:
+                raise ValueError("长实拍模式不支持 section")
+
+    else:  # real_shot_headtalk
+        sections = [it.get("section") for it in items]
+        has_section = [s for s in sections if s is not None]
+        if has_section and len(has_section) != len(items):
+            raise ValueError("section 必须全部素材都带或全部都不带，不能只标一部分")
+        if has_section:
+            # 显式分段
+            for it in items:
+                s = it.get("section")
+                if s not in (SECTION_REAL_SHOT, SECTION_HEADTALK):
+                    raise ValueError(f"不支持的 section：{s}")
+            real_shot = [it for it in items if it.get("section") == SECTION_REAL_SHOT]
+            headtalk = [it for it in items if it.get("section") == SECTION_HEADTALK]
+            if not real_shot:
+                raise ValueError("实拍+口播模式至少需要一条 section=real_shot 素材")
+            if not any(
+                it.get("section") == SECTION_HEADTALK
+                and it.get("role", ROLE_SPEECH) == ROLE_SPEECH
+                for it in headtalk
+            ):
+                raise ValueError("实拍+口播模式至少需要一条 section=headtalk 且 role=speech 素材")
+            if len(real_shot) > REAL_HEAD_REAL_SHOT_MAX:
+                raise ValueError(f"实拍段最多 {REAL_HEAD_REAL_SHOT_MAX} 条素材")
+            if len(headtalk) > REAL_HEAD_HEADTALK_MAX:
+                raise ValueError(f"口播段最多 {REAL_HEAD_HEADTALK_MAX} 条素材")
+            for it in items:
+                role = it.get("role", ROLE_SPEECH)
+                if role == ROLE_VOICEOVER:
+                    raise ValueError("实拍+口播模式不支持 role=voiceover")
+                if it.get("section") == SECTION_REAL_SHOT and role == ROLE_BROLL:
+                    raise ValueError("实拍段（section=real_shot）不接受 role=broll")
+        else:
+            # 自动分段
+            if len(items) > REAL_HEAD_TOTAL_MAX:
+                raise ValueError(f"自动分段素材总数不能超过 {REAL_HEAD_TOTAL_MAX} 条")
+            speech_count = sum(1 for it in items if it.get("role", ROLE_SPEECH) == ROLE_SPEECH)
+            if speech_count < 2:
+                raise ValueError("自动分段至少需要 2 条 role=speech 素材")
+            for it in items:
+                if it.get("role", ROLE_SPEECH) == ROLE_VOICEOVER:
+                    raise ValueError("实拍+口播模式不支持 role=voiceover")
+
+    if video_edit_mode is not None and video_edit_mode not in ("lite", "pro"):
+        raise ValueError("video_edit_mode 只能是 lite 或 pro")
+    if smart_packaging is not None and not isinstance(smart_packaging, dict):
+        raise ValueError("smart_packaging 必须是对象")
+
+    render = True if render_video is None else bool(render_video)
+
+    # 发送给 LAS 的 video_urls：字符串（TOS 目录前缀）原样透传，数组用规范化对象
+    las_video_urls = video_urls if isinstance(video_urls, str) else items
+
+    return {
+        "mode": norm_mode,
+        "template": norm_template,
+        "script": script,
+        "video_urls": las_video_urls,
+        "items": items,
+        "render_video": render,
+        "target_duration_sec": target_duration_sec,
+        "video_edit_mode": video_edit_mode,
+        "smart_packaging": smart_packaging,
+    }
 
 
 def create_las_job(
     db: Session,
     *,
     merchant_id: str,
-    video_urls: list[str],
+    video_urls,
     script: str,
     template: str = LAS_TEMPLATE,
+    mode: str | None = None,
+    target_duration_sec: int | None = None,
+    video_edit_mode: str | None = None,
+    render_video: bool | None = None,
+    smart_packaging: dict | None = None,
     output_tos_path: str | None = None,
     idempotent_id: str | None = None,
 ) -> AiEditJob:
-    """创建 LAS 混剪任务：组装参数 → 调 LAS submit → 写库 las_task_id。
+    """创建 LAS 混剪任务：规范化校验 → 组装参数 → 调 LAS submit → 写库 las_task_id。
 
     幂等：复用传入 idempotent_id（持久化 las_idempotent_id），网络重试用同 id 不重复创建。
+    三模式规范化（speech_auto→marketing_headtalk 等）与规则校验见
+    normalize_las_mode / normalize_las_template / validate_las_request。
     """
-    # 能力边界校验（对齐接口文档 §4）
-    if not video_urls:
-        raise ValueError("video_urls 不能为空")
-    if len(video_urls) > LAS_MAX_VIDEOS:
-        raise ValueError(f"视频数量不能超过 {LAS_MAX_VIDEOS} 个")
-    if not script or not script.strip():
-        raise ValueError("script（创作指令）不能为空")
-    if len(script) > LAS_SCRIPT_MAX_LEN:
-        raise ValueError(f"script 不能超过 {LAS_SCRIPT_MAX_LEN} 字")
+    # 规范化 + 规则校验（对齐接口文档 §3/§5/§6，fail-closed；违规抛 ValueError）
+    payload = validate_las_request(
+        mode=mode,
+        video_urls=video_urls,
+        script=script,
+        template=template,
+        target_duration_sec=target_duration_sec,
+        render_video=render_video,
+        video_edit_mode=video_edit_mode,
+        smart_packaging=smart_packaging,
+    )
 
     las_idempotent_id = idempotent_id or f"las-{uuid.uuid4().hex[:16]}"
     job_id = f"las-{uuid.uuid4().hex[:16]}"
@@ -69,12 +300,16 @@ def create_las_job(
     client = get_las_speech_auto_client()
     try:
         resp = client.submit(
-            video_urls=video_urls,
-            script=script,
-            template=template,
-            render_video=True,
+            video_urls=payload["video_urls"],
+            script=payload["script"],
+            template=payload["template"],
+            mode=payload["mode"],
+            render_video=payload["render_video"],
             output_tos_path=output_tos_path,
             idempotent_id=las_idempotent_id,
+            target_duration_sec=payload["target_duration_sec"],
+            video_edit_mode=payload["video_edit_mode"],
+            smart_packaging=payload["smart_packaging"],
         )
     except LASError as exc:
         logger.warning(
@@ -95,23 +330,32 @@ def create_las_job(
         stage="submitted",
         progress=0,
         attempt_count=1,
-        # 持久化提交参数，失败后可回溯 video_urls/script/template（input_json 为 jsonb 列）
+        # 持久化完整规范化请求，失败后可回溯（input_json 为 jsonb 列）
         input_json=json.dumps(
-            {"video_urls": video_urls, "script": script, "template": template},
+            {
+                "mode": payload["mode"],
+                "template": payload["template"],
+                "script": payload["script"],
+                "video_urls": payload["video_urls"],
+                "render_video": payload["render_video"],
+                "target_duration_sec": payload["target_duration_sec"],
+                "video_edit_mode": payload["video_edit_mode"],
+                "smart_packaging": payload["smart_packaging"],
+            },
             ensure_ascii=False,
         ),
         las_task_id=las_task_id,
         las_idempotent_id=las_idempotent_id,
         las_script=script,
-        las_template=template,
+        las_template=payload["template"],
         las_metadata_json=str(resp.get("metadata", {})),
     )
     db.add(job)
     db.commit()
     db.refresh(job)
     logger.info(
-        "ai_edit_las_job_created job_id=%s las_task_id=%s merchant_id=%s",
-        job.id, las_task_id, merchant_id,
+        "ai_edit_las_job_created job_id=%s las_task_id=%s merchant_id=%s mode=%s",
+        job.id, las_task_id, merchant_id, payload["mode"],
     )
     return job
 
@@ -340,10 +584,10 @@ def archive_final_video(db: Session, job: AiEditJob, artifacts: dict[str, Any]) 
 def compute_video_tags(job: AiEditJob, artifacts: dict[str, Any]) -> list[str]:
     """根据任务真实配置与处理模式计算视频能力标签（不依赖完成状态）。
 
-    当前 las_video_remix v1 speech_auto + automotive_headtalk 链路：
+    当前 las_video_remix v1 三模式链路（marketing_headtalk 等）：
     - script_driven：有创作指令（las_script 非空）→ 口播文案驱动
     - ai_subtitle：生成字幕产物（subtitle_srt_url 非空）→ AI智能字幕
-    - ai_clip_matching：speech_auto 空镜匹配（template=automotive_headtalk）→ AI片段拼接
+    - ai_clip_matching：空镜匹配（template=automotive/automotive_headtalk）→ AI片段拼接
     没有执行的能力不返回对应标签。
     """
     tags: list[str] = []
@@ -351,7 +595,8 @@ def compute_video_tags(job: AiEditJob, artifacts: dict[str, Any]) -> list[str]:
         tags.append("script_driven")
     if artifacts.get("subtitle_srt_url"):
         tags.append("ai_subtitle")
-    if job.las_template == LAS_TEMPLATE:
+    # 兼容规范化后的 automotive 与历史 automotive_headtalk（新请求存 automotive）
+    if job.las_template in (LAS_TEMPLATE, LAS_TEMPLATE_SEND):
         tags.append("ai_clip_matching")
     return tags
 
@@ -418,8 +663,10 @@ def _fill_job_title(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -> N
         input_data = json.loads(job.input_json) if job.input_json else {}
         video_urls = input_data.get("video_urls") or []
         if isinstance(video_urls, list) and video_urls:
-            first_url = str(video_urls[0])
-            fname = os.path.basename(first_url.split("?")[0])
+            # 兼容规范化对象 {url, role, section} 与裸地址字符串
+            first_item = video_urls[0]
+            first_url = first_item.get("url") if isinstance(first_item, dict) else str(first_item)
+            fname = os.path.basename(str(first_url).split("?")[0])
             fname = os.path.splitext(fname)[0]
             # 去掉常见前缀编号如 client_001
             fname = re.sub(r"^(client|second_client|third_client|fourth_client)_\d+", "", fname)

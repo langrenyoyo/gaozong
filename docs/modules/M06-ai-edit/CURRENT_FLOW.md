@@ -5,22 +5,26 @@
 ## 1. LAS 混剪全链路
 
 ```
-Frontend: LasRemixWorkbench.tsx:118 createLasJob({video_urls, script, template:"automotive_headtalk"})
+Frontend: LasRemixWorkbench.tsx NewTaskModal createLasJob({video_urls(对象数组), script, mode, template:"automotive_headtalk", target_duration_sec?})
+  → 模式选择（口播营销/长实拍纪实/实拍+口播）+ PDF 4.7 脚本示例自动填充/防覆盖 + 按 mode 动态角色/section/时长控件
   → api.ts POST /ai-edit/las/jobs
-Router: ai_edit.py:681-714 create_las_job_route
+Router: ai_edit.py create_las_job_route
   → _require_ai_edit (auto_wechat:ai_edit)
-  → las_svc.create_las_job(db, merchant_id, video_urls, script, template, output_tos_path, idempotent_id)
-  → background_tasks.add_task(las_svc.process_las_job, job.id) (:713)
+  → las_svc.create_las_job(db, merchant_id, video_urls, script, template, mode, target_duration_sec, video_edit_mode, render_video, smart_packaging, output_tos_path, idempotent_id)
+  → background_tasks.add_task(las_svc.process_las_job, job.id)
 
-Service create_las_job (ai_edit_las_service.py:41-116):
-  → 边界校验 video_urls(1-30)/script(1-4000) (:46-54)
-  → 构造 las_idempotent_id (:65)
-  → client = get_las_speech_auto_client() (:69)
-  → client.submit(video_urls, script, template, render_video=True, output_tos_path, idempotent_id) (:71-78)
-  → LAS API: POST /api/v1/submit (las_client.py:65-102)
-    operator_id="las_video_remix", operator_version="v1", mode="speech_auto"
-  → 取 las_task_id (:86)
-  → 写 AiEditJob(status="processing", stage="submitted", progress=0, las_task_id, las_idempotent_id, input_json) (:90-108)
+Service create_las_job (ai_edit_las_service.py):
+  → validate_las_request：mode 规范化（speech_auto→marketing_headtalk，缺失→marketing_headtalk）
+    + template 规范化（automotive_headtalk→automotive）+ render_video 缺省 true
+    + 分模式规则校验 fail-closed（marketing ≤30 禁 target_duration_sec/section；long_real 目录前缀或 ≤100
+    支持 10~3600 禁 broll/section；real_shot_headtalk 显式/自动分段二选一 显式两段非空+实拍禁 broll+全禁 voiceover+≤100/≤30 自动 ≥2speech+≤130）
+  → 构造 las_idempotent_id
+  → client = get_las_speech_auto_client()
+  → client.submit(video_urls, script, template, mode, render_video, output_tos_path, idempotent_id, target_duration_sec, video_edit_mode, smart_packaging)
+  → LAS API: POST /api/v1/submit (las_client.py)
+    operator_id="las_video_remix", operator_version="v1", mode=三模式之一
+  → 取 las_task_id
+  → 写 AiEditJob(status="processing", stage="submitted", progress=0, las_task_id, las_idempotent_id, input_json=完整规范化请求) （无 DB 迁移）
 
 Service process_las_job (ai_edit_las_service.py:119-194) [BackgroundTask]:
   → SessionLocal() (:123), 取 job (:125)

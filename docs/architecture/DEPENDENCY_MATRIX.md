@@ -118,7 +118,7 @@ M07     -     -     -     -     -     -     -
 | 抖音 GMP | M02（webhook 直收）/M01（OpenAPI 解码下载） | webhook 回调 + 签名调用 | `app/routers/integrations.py:845`；`DY_GMP_SECRET_KEY` config.py:225 |
 | Milvus | M01（9100 RAG 向量检索） | 9100 pymilvus | `MILVUS_URI` apps/.../config.py:78；仅向量副本非 metadata 真源 |
 | NewCarProject | PLATFORM（auth 全模块登录委托） | 9000 HTTP 代理 | `NEWCAR_AUTH_BASE_URL` config.py:262；`app/routers/auth.py` |
-| LAS（火山引擎） | M06（云端混剪） | 9000 组装参数→submit→轮询→存产物 | `LAS_API_KEY` config.py:392；`app/services/ai_edit_las_service.py` |
+| LAS（火山引擎） | M06（云端混剪） | 9000 组装参数（三模式规范化+规则校验）→submit→轮询→存产物 | `LAS_API_KEY` config.py:392；`app/services/ai_edit_las_service.py` |
 | TOS（火山引擎） | M05（素材存储）/M06（LAS 产物） | 9000 预签名 | `TOS_ACCESS_KEY` config.py:401；`app/services/ai_edit_storage.py` |
 | douyinAPI 8081 | （demo/参考实现，非生产依赖） | — | `DOUYIN_API_BASE_URL` config.py:217 默认值；lifecycle=UNKNOWN |
 

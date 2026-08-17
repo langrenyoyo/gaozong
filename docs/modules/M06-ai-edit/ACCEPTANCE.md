@@ -6,7 +6,8 @@
 
 | 能力 | 状态 | 测试文件 |
 |---|---|---|
-| LAS client submit/poll/wait/parse | COVERED | test_las_client.py（4 用例） |
+| LAS client submit/poll/wait/parse（三模式参数化） | COVERED | test_las_client.py（7 用例） |
+| 三模式规范化/规则校验/兼容别名/400 vs 502 边界/smart_packaging 透传 | COVERED | test_ai_edit_las_modes.py（51 用例，M06-LAS-REMIX-MODES-20260817-1） |
 | process_las_job 轮询→终态→归档 | PARTIAL | test_ai_edit_result_delivery.py（32 用例，用 mock artifacts 非 mock LAS client.wait_for_terminal） |
 | 临时 URL 不入 storage_key | COVERED | test_ai_edit_result_delivery.py:331,344 + test_independent_ai_edit_attack.py:711 |
 | 标题三件套 | COVERED | test_ai_edit_result_delivery.py:251,259,425 |
@@ -15,7 +16,7 @@
 | 软删除四件套+幂等+TOS失败 | COVERED | test_ai_edit_result_delivery.py:207,219,229,241,404,518,555 |
 | 越权（跨商户/无商户/已删/未归档） | COVERED | test_independent_ai_edit_attack.py（17 用例） |
 | 下载 token fail-closed | COVERED | test_ai_edit_download_token.py（7 用例） |
-| create_las_job 组装参数/submit/写库 | MISSING | 无直接测试 |
+| create_las_job 组装参数/submit/写库（input_json 规范化持久化） | COVERED | test_ai_edit_las_modes.py TestCreateLasJob |
 | 算力上报（_report_las_compute_usage） | MISSING | 无 LAS→compute 联动测试 |
 | 端到端（真实 LAS submit→poll→archive） | MISSING | 全 mock 不触网 |
 

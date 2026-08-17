@@ -1,7 +1,8 @@
-"""LAS speech_auto（视频混剪）异步接口客户端。
+"""LAS 视频混剪（las_video_remix）异步接口客户端。
 
 迁移自甲方已验证的 demo E:\\work\\demo\\las_speech_auto\\las_client.py，
-对应接口文档 E:\\work\\project\\project_info\\LAS 视频混剪（speech_auto）接口调用说明.md。
+对应接口文档 docs/ai/13_ai_edit/contracts/LAS视频混剪_las_video_remix_接口调用说明_for小高.pdf
+（三模式：marketing_headtalk / long_real_shot / real_shot_headtalk）。
 
 封装 submit / poll / 等待终态 / 下载产物。鉴权用 LAS_API_KEY，端点 LAS_BASE_URL，
 均从 config 读取。失败带 metadata 便于排查。
@@ -45,7 +46,7 @@ class LASError(Exception):
 
 
 class LASSpeechAutoClient:
-    """LAS speech_auto 异步混剪客户端。
+    """LAS 视频混剪异步客户端（三模式共用）。
 
     非单例：每次构造一个独立 requests.Session。从 config 取 base_url/api_key。
     测试可注入 base_url/api_key 或 mock session。
@@ -64,26 +65,41 @@ class LASSpeechAutoClient:
 
     def submit(
         self,
-        video_urls: list[str] | str,
+        video_urls: list[str] | str | list[dict],
         script: str,
         template: str,
+        mode: str = "marketing_headtalk",
         render_video: bool = True,
         output_tos_path: str | None = None,
         idempotent_id: str | None = None,
+        target_duration_sec: int | None = None,
+        video_edit_mode: str | None = None,
+        smart_packaging: dict | None = None,
     ) -> dict[str, Any]:
-        """提交任务，返回完整响应 JSON（含 metadata.task_id）。"""
+        """提交任务，返回完整响应 JSON（含 metadata.task_id）。
+
+        mode 透传（规范化在 service 层完成）：marketing_headtalk / long_real_shot /
+        real_shot_headtalk。video_urls 支持裸地址数组、{url, role, section} 对象数组、
+        或单个字符串（long_real_shot 的 TOS 目录前缀）。
+        """
         if not idempotent_id:
-            idempotent_id = f"speech-auto-{uuid.uuid4().hex[:12]}"
+            idempotent_id = f"las-{uuid.uuid4().hex[:12]}"
 
         data: dict[str, Any] = {
             "video_urls": video_urls,
-            "mode": "speech_auto",
+            "mode": mode,
             "template": template,
             "script": script,
             "render_video": render_video,
         }
         if output_tos_path:
             data["output_tos_path"] = output_tos_path
+        if target_duration_sec is not None:
+            data["target_duration_sec"] = target_duration_sec
+        if video_edit_mode:
+            data["video_edit_mode"] = video_edit_mode
+        if smart_packaging is not None:
+            data["smart_packaging"] = smart_packaging
 
         body = {
             "operator_id": OPERATOR_ID,

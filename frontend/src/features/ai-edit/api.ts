@@ -101,6 +101,11 @@ export type {
   AiEditTemplate,
   LasJobCreateRequest,
   LasJobStatus,
+  LasRemixMode,
+  LasRemixModeAlias,
+  LasVideoItem,
+  LasVideoRole,
+  LasVideoSection,
 } from "./types";
 
 // ===== LAS speech_auto 云端混剪（2026-07-31 重做）=====

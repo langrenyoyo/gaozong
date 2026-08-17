@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -720,11 +721,21 @@ def update_job_status(
 
 
 class LasJobCreateRequest(BaseModel):
-    """LAS 混剪任务提交请求。"""
+    """LAS 混剪任务提交请求（接口文档 §3/§5）。
 
-    video_urls: list[str] = Field(..., min_length=1, max_length=30, description="视频地址（tos:// 或 https 预签名）")
+    video_urls 支持：单个字符串（long_real_shot 的 TOS 目录前缀）或数组，
+    数组元素为具体地址字符串或 {url, role?, section?} 对象。元素结构校验放
+    service 层（validate_las_request），此处仅做宽松类型初检。
+    """
+
+    video_urls: str | list[Any] = Field(..., description="视频地址：字符串（TOS 目录前缀）或 数组（地址字符串 / {url, role, section} 对象）")
     script: str = Field(..., min_length=1, max_length=4000, description="自然语言创作指令")
-    template: str = Field(default="automotive_headtalk", description="行业模板")
+    mode: str | None = Field(default=None, description="marketing_headtalk / long_real_shot / real_shot_headtalk；旧名 speech_auto 等价 marketing_headtalk；缺省按 marketing_headtalk")
+    template: str = Field(default="automotive_headtalk", description="行业模板（automotive_headtalk 规范化为 automotive）")
+    target_duration_sec: int | None = Field(default=None, ge=10, le=3600, description="成片目标时长（秒），仅 long_real_shot / real_shot_headtalk")
+    video_edit_mode: str | None = Field(default=None, description="lite（默认）/ pro")
+    render_video: bool | None = Field(default=None, description="默认 true；false 只出剪辑方案不渲染")
+    smart_packaging: dict | None = Field(default=None, description="字幕特效/音效/BGM 开关对象，原样透传")
     output_tos_path: str | None = Field(default=None, description="产物输出 TOS 目录，可空")
     idempotent_id: str | None = Field(default=None, description="幂等 ID，复用可避免重复创建")
 
@@ -761,10 +772,11 @@ def create_las_job_route(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """提交 LAS speech_auto 云端混剪任务。
+    """提交 LAS 云端混剪任务（三模式）。
 
     纯 LAS 云端方案：9000 组装参数 → LAS submit → 写库 → 后台轮询。
-    不做本地 FFmpeg/9100 规划。
+    不做本地 FFmpeg/9100 规划。模式/规则校验在 service 层 fail-closed
+    （违规→ValueError→HTTP 400），LAS 提交失败→HTTP 502。
     """
     from app.services import ai_edit_las_service as las_svc
 
@@ -777,6 +789,11 @@ def create_las_job_route(
             video_urls=payload.video_urls,
             script=payload.script,
             template=payload.template,
+            mode=payload.mode,
+            target_duration_sec=payload.target_duration_sec,
+            video_edit_mode=payload.video_edit_mode,
+            render_video=payload.render_video,
+            smart_packaging=payload.smart_packaging,
             output_tos_path=payload.output_tos_path,
             idempotent_id=payload.idempotent_id,
         )

@@ -33,7 +33,7 @@
 | Milvus | embedding + 向量检索副本（非 metadata 真源） | 9100 通过 pymilvus 连接 | `MILVUS_URI`（`apps/.../config.py:78-79`）；**不存在 `MILVUS_HOST`/`MILVUS_PORT`**，用单一 URI |
 | NewCarProject | 商户/账号/权限/菜单/套餐权威 | 9000 HTTP 代理（登录/改密/退出/切换） | `NEWCAR_AUTH_BASE_URL`（`config.py:262`，注意非 `NEWCAR_BASE_URL`） |
 | 抖音 GMP | webhook 回调 + OpenAPI（签名下载/解码） | 9000 webhook 直收 + 签名调用 | `DY_GMP_SECRET_KEY`/`DY_OPENAPI_BASE_URL`（`config.py:225-226`，默认 `https://gmp.bytedanceapi.com`） |
-| LAS（火山引擎） | AI 剪辑云端混剪 | 9000 组装参数→submit→轮询→存产物 | `LAS_API_KEY`/`LAS_BASE_URL`（`config.py:392-393`） |
+| LAS（火山引擎） | AI 剪辑云端混剪 | 9000 组装参数（三模式规范化+规则校验）→submit→轮询→存产物 | `LAS_API_KEY`/`LAS_BASE_URL`（`config.py:392-393`） |
 | TOS（火山引擎对象存储） | LAS 产物预签名上传/下载 | 9000 预签名 | `TOS_ACCESS_KEY`/`TOS_SECRET_KEY`/`TOS_BUCKET`/`TOS_REGION`/`TOS_ENDPOINT`（`config.py:401-405`） |
 
 **Milvus 说明**：生产为外部运行依赖（非 auto_wechat 自托管业务服务），仅作向量检索副本；documents/chunks/feedback/training_run 与状态字段的 metadata 真源是 `xg_douyin_ai_cs` 库。本地图第三节"外部系统"仍保留 Milvus 条目，两处标注一致。
@@ -49,7 +49,7 @@
 | AI小高线索 | `leads` `/leads` + `chat` | `features/leads/` | `routers/leads.py:20` + `routers/integrations.py:42`(webhook) | `lead_management_service.py` + `integrations/douyin_webhook.py` | 抖音私信线索 webhook 直收→入库→分配→微信通知→回复检测→回访 |
 | AI小高微信助手 | `ai-agent`/`wechat-config`/`wechat-tasks`/`wechat-download-test`/`wechat-daily-reports` | `features/wechat-assistant/` | `routers/wechat_tasks.py:25` | `wechat_ui_reply_service.py`/`wechat_task_service.py` + `local_agent_main.py` | 本机微信 UI 自动化（通知/检测），小高AI微信助手.exe |
 | 小高素材库 | `ai-edit-materials` `/ai-edit/materials` | `features/ai-edit/`（与剪辑共享） | `routers/ai_edit.py:25`（与剪辑共享） | `ai_edit_service.py`/`ai_edit_storage.py`/`material_analysis.py` | AI 剪辑素材管理与分析 |
-| AI小高剪辑 | `ai-edit-editor` `/ai-edit/editor` | `features/ai-edit/`（与素材库共享） | `routers/ai_edit.py`（与素材库共享） | `ai_edit_las_service.py`/`las_client.py`/`las_tos_uploader.py` | LAS 云端混剪（火山 `las_video_remix` `speech_auto`） |
+| AI小高剪辑 | `ai-edit-editor` `/ai-edit/editor` | `features/ai-edit/`（与素材库共享） | `routers/ai_edit.py`（与素材库共享） | `ai_edit_las_service.py`/`las_client.py`/`las_tos_uploader.py` | LAS 云端混剪（火山 `las_video_remix` 三模式 `marketing_headtalk`/`long_real_shot`/`real_shot_headtalk`） |
 | AI小高算力 | `compute`/`compute-token-transactions`/`compute-recharge-orders` | `features/compute/` | `routers/compute.py:99` | `compute_service.py`（兼容入口，实现收敛到 `apps/compute/services/`） | 商户算力套餐/消耗/计费展示 |
 
 **注意**：素材库与剪辑共用 router 和 feature 目录，靠 nav id 区分；算力 service 是兼容入口，实现已迁移到 `apps/compute/services/`。
@@ -84,7 +84,7 @@
 | 抖音 GMP | webhook 回调（9000 直收）+ OpenAPI 签名调用 | `DY_SECRET_KEY`/`DY_GMP_SECRET_KEY`（`config.py:224-225`）、`DY_OPENAPI_BASE_URL`（默认 `https://gmp.bytedanceapi.com`，`config.py:226`） |
 | Milvus | 9100 通过 pymilvus 连接 | `MILVUS_URI`/`MILVUS_USERNAME`/`MILVUS_PASSWORD`/`MILVUS_COLLECTION`/`MILVUS_DIMENSION=2048`（9100 侧 `apps/.../config.py`） |
 | NewCarProject | 9000 HTTP 代理（登录/改密/退出/切换） | `NEWCAR_AUTH_ENABLED`（默认 False）/`NEWCAR_AUTH_MOCK_ENABLED`（默认 True）/`NEWCAR_AUTH_BASE_URL`（`config.py:260-262`） |
-| LAS（火山引擎） | 9000 组装参数→submit→轮询→存产物 | `LAS_API_KEY`/`LAS_BASE_URL`（默认 `https://operator.las.cn-beijing.volces.com`，`config.py:392-393`） |
+| LAS（火山引擎） | 9000 组装参数（三模式规范化+规则校验）→submit→轮询→存产物 | `LAS_API_KEY`/`LAS_BASE_URL`（默认 `https://operator.las.cn-beijing.volces.com`，`config.py:392-393`） |
 | TOS（火山引擎对象存储） | LAS 产物预签名上传/下载 | `TOS_ACCESS_KEY`/`TOS_SECRET_KEY`/`TOS_BUCKET`/`TOS_REGION`/`TOS_ENDPOINT`（`config.py:401-405`） |
 | douyinAPI（8081） | **demo/参考实现**，非生产依赖 | `DOUYIN_API_BASE_URL`（默认 `http://127.0.0.1:8081`，`config.py:217`，仍硬编码默认值） |
 

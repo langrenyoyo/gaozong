@@ -21,10 +21,52 @@ import {
   XIcon,
 } from "lucide-react";
 import { createLasJob, deleteLasJob, fetchAiEditMaterials, fetchDownloadLink, fetchPlayUrl, listLasJobs } from "../api";
-import type { AiEditMaterial, LasJobStatus } from "../types";
+import type { AiEditMaterial, LasJobStatus, LasVideoItem } from "../types";
 import { userFacingError } from "../../../lib/userFacingError";
 
-const SCRIPT_EXAMPLE = `剪成一条约 60 秒的汽车真人讲解视频。开头优先保留最有吸引力的车辆信息，随后按外观、座舱、配置、车况和总结组织。删除口误与重复表述，同一信息多次录制时优先保留最后一次完整自然的口播。讲到具体部位、配置、屏幕、座椅、空间或车况时，必须优先匹配能够直接证明该信息的对应空镜；泛化空镜不能抢占更匹配的素材。默认硬切，只有口播切到重点产品细节时使用轻量转场。`;
+// 三模式配置（2026-08-17 三模式升级）：中文名 + PDF 第 4.7 节 Script 示例（不自行创作新文案）。
+// 素材角色/分段/时长控件随 mode 动态显示（AC-010）。
+const MODE_OPTIONS: Array<{
+  value: "marketing_headtalk" | "long_real_shot" | "real_shot_headtalk";
+  label: string;
+  hint: string;
+  scriptExample: string;
+  showDuration: boolean;
+  showRole: boolean;
+  showSection: boolean;
+}> = [
+  {
+    value: "marketing_headtalk",
+    label: "口播营销",
+    hint: "拍好的真人口播成品，最多 30 条，关键处切空镜佐证",
+    showDuration: false,
+    showRole: true,
+    showSection: false,
+    scriptExample: "剪成一条约 60 秒的产品讲解视频。开头留最能抓住人的完整表达，随后按 问题 → 功能 → 效果 → 总结 组织。删除口误、重复信息和无效停顿；同一内容多次录制时保留最后一次完整自然的表述。讲到外观、功能细节和实际操作时必须切能直接证明该信息的空镜，泛化画面不要抢占更匹配的素材；其余保持人物原画。默认硬切，只在口播切到关键细节时用轻量转场。BGM 有节奏感一点，音效克制。",
+  },
+  {
+    value: "long_real_shot",
+    label: "长实拍纪实",
+    hint: "一件事的完整过程，最多 100 条，按事件顺序推进，支持目标时长",
+    showDuration: true,
+    showRole: true,
+    showSection: false,
+    scriptExample: "把这次上门维修的完整过程剪成两分半。按 到场 → 排查 → 报价确认 → 维修 → 验收 的顺序推进。开场用师傅敲门到场、说明这次来处理什么那段；结尾切在客户验收签字、双方道别。保留问题暴露和解决的完整链条，以及客户的疑问与师傅的回应（成对保留，不要只留一半）；删掉等待、重复寒暄和没有新信息的闲聊。字幕特效克制，只在关键结论处用。BGM 舒缓衬底，不要抢人声。",
+  },
+  {
+    value: "real_shot_headtalk",
+    label: "实拍 + 口播",
+    hint: "前段实拍现场 + 后段口播营销，两段拼接；支持目标时长",
+    showDuration: true,
+    showRole: true,
+    showSection: true,
+    scriptExample: "整片两分钟左右。前半段用交车现场的真实过程：验车、办手续、交钥匙、叮嘱注意事项，保留现场感和原声，结尾切在交钥匙和送别；后半段接销售面向镜头的总结，讲到具体配置和服务承诺时切对应空镜。两段都删掉口误和重复表述。实拍段保持纪实调性，口播段可以有节奏一点。",
+  },
+];
+
+// 素材角色/分段中文名
+const ROLE_LABELS: Record<string, string> = { speech: "口播", voiceover: "配音", broll: "空镜" };
+const SECTION_LABELS: Record<string, string> = { real_shot: "实拍", headtalk: "口播" };
 
 // 中文任务状态映射（兼容规范状态与现有旧状态，不展示英文技术枚举）
 const STATUS_VISUALS: Record<string, { label: string; tone: string; accent: string }> = {
@@ -69,6 +111,21 @@ const VIDEO_TAG_LABELS: Record<string, string> = {
   ai_clip_matching: "AI片段拼接",
 };
 
+/** 单个选中素材：url + 展示名 + 可选角色/分段（按 mode 显示与清理）。 */
+interface MaterialSelection {
+  url: string;
+  displayName: string;
+  role?: "speech" | "voiceover" | "broll";
+  section?: "real_shot" | "headtalk";
+}
+
+/** 各 mode 合法的角色集合（用于切换 mode 时清理失效值）。 */
+const MODE_ROLES: Record<string, string[]> = {
+  marketing_headtalk: ["speech", "voiceover", "broll"],
+  long_real_shot: ["speech", "voiceover"],
+  real_shot_headtalk: ["speech", "broll"],
+};
+
 function NewTaskModal({
   onClose,
   onSubmitted,
@@ -78,12 +135,16 @@ function NewTaskModal({
 }) {
   const [materials, setMaterials] = useState<AiEditMaterial[]>([]);
   const [loadingMaterials, setLoadingMaterials] = useState(false);
-  const [selectedUrls, setSelectedUrls] = useState<string[]>([]);
+  const [mode, setMode] = useState<"marketing_headtalk" | "long_real_shot" | "real_shot_headtalk">("marketing_headtalk");
+  const [selectedItems, setSelectedItems] = useState<MaterialSelection[]>([]);
   const [script, setScript] = useState("");
+  const [autoScriptRef] = useState<{ current: string }>({ current: "" });
+  const [targetDuration, setTargetDuration] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const cloudMaterials = useMemo(() => materials.filter((m) => m.tos_presigned_url), [materials]);
+  const currentModeCfg = MODE_OPTIONS.find((m) => m.value === mode) ?? MODE_OPTIONS[0];
 
   useEffect(() => {
     void (async () => {
@@ -99,13 +160,57 @@ function NewTaskModal({
     })();
   }, []);
 
-  const toggleUrl = (url: string) => {
-    setSelectedUrls((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
+  /** 切换 mode：清理失效角色/分段值（不合法控件不得只隐藏值），并处理脚本自动填充/防覆盖。 */
+  const handleModeChange = (nextMode: (typeof mode)) => {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    const nextCfg = MODE_OPTIONS.find((m) => m.value === nextMode)!;
+    // 清理失效值：删除当前 mode 不合法的 role；section 一律清空（实拍+口播需重新选择/走自动分段）
+    const validRoles = MODE_ROLES[nextMode];
+    setSelectedItems((prev) =>
+      prev.map((it) => {
+        const next: MaterialSelection = { url: it.url, displayName: it.displayName };
+        if (it.role && validRoles.includes(it.role)) next.role = it.role;
+        return next;
+      }),
+    );
+    // 脚本：空 或 仍等于系统自动填充内容 → 自动替换；已修改 → 确认后才替换
+    const scriptModified = script.trim() !== "" && script.trim() !== autoScriptRef.current;
+    if (!scriptModified) {
+      setScript(nextCfg.scriptExample);
+      autoScriptRef.current = nextCfg.scriptExample;
+    } else {
+      // 不静默覆盖：确认后才替换（计划 Frontend Contract）
+      // 因 confirm 阻塞与 setState 同异步问题，此处用二次点击语义：
+      // 弹出原生确认，确认则替换脚本，取消则保留商户已编辑内容（mode 切换仍生效）。
+      if (window.confirm("切换模式将替换你已编辑的创作指令为对应示例，是否替换？")) {
+        setScript(nextCfg.scriptExample);
+        autoScriptRef.current = nextCfg.scriptExample;
+      }
+    }
+  };
+
+  const toggleUrl = (m: AiEditMaterial) => {
+    const url = m.tos_presigned_url as string;
+    setSelectedItems((prev) => {
+      if (prev.some((it) => it.url === url)) {
+        return prev.filter((it) => it.url !== url);
+      }
+      return [...prev, { url, displayName: m.display_name || m.material_id }];
+    });
+  };
+
+  const updateItemRole = (url: string, role: MaterialSelection["role"]) => {
+    setSelectedItems((prev) => prev.map((it) => (it.url === url ? { ...it, role } : it)));
+  };
+
+  const updateItemSection = (url: string, section: MaterialSelection["section"]) => {
+    setSelectedItems((prev) => prev.map((it) => (it.url === url ? { ...it, section } : it)));
   };
 
   const submit = async () => {
     setError(null);
-    if (selectedUrls.length === 0) {
+    if (selectedItems.length === 0) {
       setError("请至少选择一个已上传到云的素材");
       return;
     }
@@ -113,9 +218,39 @@ function NewTaskModal({
       setError("请填写创作指令");
       return;
     }
+    // 目标时长仅 long_real_shot / real_shot_headtalk 支持，且需在 10~3600
+    let duration: number | undefined;
+    if (currentModeCfg.showDuration && targetDuration.trim() !== "") {
+      duration = Number(targetDuration.trim());
+      if (!Number.isInteger(duration) || duration < 10 || duration > 3600) {
+        setError("目标时长需为 10~3600 秒之间的整数");
+        return;
+      }
+    }
+    // 实拍+口播：部分选中素材标了 section 时必须全部标（后端兜底校验）
+    if (mode === "real_shot_headtalk") {
+      const sectioned = selectedItems.filter((it) => it.section);
+      if (sectioned.length > 0 && sectioned.length !== selectedItems.length) {
+        setError("实拍+口播模式下分段要么全部素材都选，要么全部留自动判定");
+        return;
+      }
+    }
+    // 组装 video_urls：对象数组（含可选 role/section）
+    const video_urls: LasVideoItem[] = selectedItems.map((it) => {
+      const obj: LasVideoItem = { url: it.url };
+      if (it.role) obj.role = it.role;
+      if (it.section) obj.section = it.section;
+      return obj;
+    });
     setSubmitting(true);
     try {
-      await createLasJob({ video_urls: selectedUrls, script: script.trim(), template: "automotive_headtalk" });
+      await createLasJob({
+        video_urls,
+        script: script.trim(),
+        mode,
+        template: "automotive_headtalk",
+        ...(duration !== undefined ? { target_duration_sec: duration } : {}),
+      });
       toast.success("任务已提交，云端混剪中");
       onSubmitted();
       onClose();
@@ -132,7 +267,7 @@ function NewTaskModal({
         <div className="flex items-center justify-between border-b border-[#e4e8f0] px-5 py-4">
           <div>
             <h2 className="text-base font-bold text-[#1a1f2e]">新建剪辑任务</h2>
-            <p className="mt-1 text-xs text-[#8b95a6]">选择已上传到云的素材，填写创作指令，提交云端混剪</p>
+            <p className="mt-1 text-xs text-[#8b95a6]">选择模式与已上传素材，填写创作指令，提交云端混剪</p>
           </div>
           <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-xl text-[#8b95a6] hover:bg-[#f4f6f8]">
             <XIcon size={16} />
@@ -140,8 +275,32 @@ function NewTaskModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-          <h3 className="text-sm font-bold text-[#1a1f2e]">选择素材</h3>
-          <p className="mt-1 text-xs text-[#8b95a6]">仅显示已上传到云的素材（在素材库上传到 TOS）</p>
+          {/* 模式选择 */}
+          <h3 className="text-sm font-bold text-[#1a1f2e]">混剪模式</h3>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {MODE_OPTIONS.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => handleModeChange(m.value)}
+                className={`rounded-xl border px-3 py-2 text-left transition-colors ${
+                  mode === m.value
+                    ? "border-[#2563eb] bg-[#eff6ff] text-[#1d4ed8]"
+                    : "border-[#e4e8f0] bg-white text-[#475467] hover:bg-[#f8fafc]"
+                }`}
+              >
+                <div className="text-xs font-bold">{m.label}</div>
+                <div className="mt-0.5 text-[10px] leading-snug text-[#8b95a6]">{m.hint}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* 素材选择 */}
+          <h3 className="mt-5 text-sm font-bold text-[#1a1f2e]">选择素材</h3>
+          <p className="mt-1 text-xs text-[#8b95a6]">
+            仅显示已上传到云的素材（在素材库上传到 TOS）
+            {mode === "real_shot_headtalk" ? "；实拍+口播模式下可为每条素材指定分段，留“自动判定”由系统按原声分段" : ""}
+          </p>
           <div className="mt-3 max-h-[240px] overflow-y-auto rounded-xl border border-[#e4e8f0] bg-[#f8fafc] p-3">
             {loadingMaterials ? (
               <div className="text-xs text-[#8b95a6]">加载中…</div>
@@ -150,35 +309,85 @@ function NewTaskModal({
             ) : (
               cloudMaterials.map((m) => {
                 const url = m.tos_presigned_url as string;
-                const checked = selectedUrls.includes(url);
+                const selected = selectedItems.find((it) => it.url === url);
+                const checked = selected !== undefined;
                 return (
-                  <label key={m.material_id} className="flex items-center gap-2 py-1.5 text-xs text-[#475467]">
+                  <div key={m.material_id} className="flex items-center gap-2 py-1.5 text-xs text-[#475467]">
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => toggleUrl(url)}
-                      className="h-3.5 w-3.5 rounded border-[#cbd5e1] text-[#2563eb]"
+                      onChange={() => toggleUrl(m)}
+                      className="h-3.5 w-3.5 shrink-0 rounded border-[#cbd5e1] text-[#2563eb]"
                     />
-                    <span className="truncate">{m.display_name || m.material_id}</span>
-                  </label>
+                    <span className="min-w-0 flex-1 truncate">{m.display_name || m.material_id}</span>
+                    {checked && currentModeCfg.showSection ? (
+                      <select
+                        value={selected?.section ?? ""}
+                        onChange={(e) => updateItemSection(url, (e.target.value || undefined) as MaterialSelection["section"])}
+                        className="h-7 shrink-0 rounded-lg border border-[#e4e8f0] bg-white px-1.5 text-[11px] text-[#374151] outline-none"
+                      >
+                        <option value="">自动判定</option>
+                        <option value="real_shot">实拍段</option>
+                        <option value="headtalk">口播段</option>
+                      </select>
+                    ) : null}
+                    {checked && currentModeCfg.showRole ? (
+                      <select
+                        value={selected?.role ?? ""}
+                        onChange={(e) => updateItemRole(url, (e.target.value || undefined) as MaterialSelection["role"])}
+                        className="h-7 shrink-0 rounded-lg border border-[#e4e8f0] bg-white px-1.5 text-[11px] text-[#374151] outline-none"
+                      >
+                        <option value="">{ROLE_LABELS.speech}（默认）</option>
+                        {MODE_ROLES[mode].map((r) => (
+                          <option key={r} value={r}>
+                            {ROLE_LABELS[r] ?? r}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                  </div>
                 );
               })
             )}
           </div>
 
+          {/* 目标时长（仅 long_real_shot / real_shot_headtalk） */}
+          {currentModeCfg.showDuration ? (
+            <div className="mt-4 flex items-center gap-2">
+              <h3 className="shrink-0 text-sm font-bold text-[#1a1f2e]">目标时长</h3>
+              <input
+                type="number"
+                min={10}
+                max={3600}
+                value={targetDuration}
+                onChange={(e) => setTargetDuration(e.target.value)}
+                placeholder="秒（10~3600，可留空由系统决定）"
+                className="h-9 w-72 rounded-xl border border-[#e4e8f0] px-3 text-xs outline-none focus:border-[#2563eb] focus:ring-4 focus:ring-blue-500/10"
+              />
+            </div>
+          ) : null}
+
+          {/* 创作指令 */}
           <div className="mt-5 flex items-center justify-between">
             <h3 className="text-sm font-bold text-[#1a1f2e]">创作指令</h3>
-            <button type="button" onClick={() => setScript(SCRIPT_EXAMPLE)} className="text-[11px] font-semibold text-[#2563eb] hover:underline">
-              填入示例
+            <button
+              type="button"
+              onClick={() => {
+                setScript(currentModeCfg.scriptExample);
+                autoScriptRef.current = currentModeCfg.scriptExample;
+              }}
+              className="text-[11px] font-semibold text-[#2563eb] hover:underline"
+            >
+              填入当前模式示例
             </button>
           </div>
-          <p className="mt-1 text-xs text-[#8b95a6]">自然语言描述目标时长、保留/删除内容、叙事顺序，最长 4000 字</p>
+          <p className="mt-1 text-xs text-[#8b95a6]">自然语言描述目标时长、保留/删除内容、叙事顺序，最长 4000 字；切换模式可自动填入对应示例</p>
           <textarea
             value={script}
             onChange={(e) => setScript(e.target.value)}
             rows={6}
             maxLength={4000}
-            placeholder="如：剪成一条约 60 秒的汽车真人讲解视频，删除口误与重复表述…"
+            placeholder={currentModeCfg.scriptExample.slice(0, 60) + "…"}
             className="mt-2 w-full resize-y rounded-xl border border-[#e4e8f0] px-3 py-2 text-xs text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:ring-4 focus:ring-blue-500/10"
           />
           <div className="mt-1 text-right text-[10px] text-[#8b95a6]">{script.length}/4000</div>

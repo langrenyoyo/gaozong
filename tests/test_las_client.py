@@ -1,7 +1,7 @@
-"""LAS speech_auto 客户端测试（不触网，mock session）。
+"""LAS 视频混剪客户端测试（不触网，mock session）。
 
-覆盖：submit 组装请求体 + 解析 task_id；poll 查询；_parse 业务码非 0 抛错；
-wait_for_terminal 轮询到终态返回。
+覆盖：submit 组装请求体（三模式参数化）+ 解析 task_id；poll 查询；
+_parse 业务码非 0 抛错；wait_for_terminal 轮询到终态返回。
 """
 from __future__ import annotations
 
@@ -44,12 +44,65 @@ def test_submit_parses_task_id():
     called_body = client.session.post.call_args.kwargs["json"]
     assert called_body["operator_id"] == "las_video_remix"
     assert called_body["operator_version"] == "v1"
-    assert called_body["data"]["mode"] == "speech_auto"
+    # 未传 mode 时默认 marketing_headtalk（不再硬编码 speech_auto）
+    assert called_body["data"]["mode"] == "marketing_headtalk"
     assert called_body["data"]["template"] == "automotive_headtalk"
     assert called_body["data"]["script"] == "剪成约 60 秒的汽车讲解"
     assert called_body["data"]["video_urls"] == ["https://example.com/a.mp4", "https://example.com/b.mp4"]
     assert called_body["data"]["render_video"] is True
     assert called_body["idempotent_id"]  # 未传则自动生成
+
+
+def test_submit_long_real_shot_mode_fields():
+    """long_real_shot 透传 mode + target_duration_sec，字符串目录前缀原样发送。"""
+    client = LASSpeechAutoClient(base_url="https://example.com", api_key="k")
+    client.session = MagicMock()
+    client.session.post.return_value = _mock_response({
+        "metadata": {"task_id": "task_lrs", "task_status": "PENDING", "business_code": "0"}
+    })
+
+    client.submit(
+        video_urls="tos://customer-bucket/deal-record/",
+        script="把这场谈价的完整过程剪成三分钟",
+        template="automotive",
+        mode="long_real_shot",
+        target_duration_sec=180,
+        video_edit_mode="pro",
+        smart_packaging={"bgm": {"enabled": False}},
+    )
+
+    called_body = client.session.post.call_args.kwargs["json"]
+    data = called_body["data"]
+    assert data["mode"] == "long_real_shot"
+    assert data["video_urls"] == "tos://customer-bucket/deal-record/"
+    assert data["target_duration_sec"] == 180
+    assert data["video_edit_mode"] == "pro"
+    assert data["smart_packaging"] == {"bgm": {"enabled": False}}
+
+
+def test_submit_real_shot_headtalk_object_items():
+    """real_shot_headtalk 对象数组元素原样透传（含 role/section）。"""
+    client = LASSpeechAutoClient(base_url="https://example.com", api_key="k")
+    client.session = MagicMock()
+    client.session.post.return_value = _mock_response({
+        "metadata": {"task_id": "task_rs", "task_status": "PENDING", "business_code": "0"}
+    })
+
+    client.submit(
+        video_urls=[
+            {"url": "tos://bucket/handover-01.mp4", "role": "speech", "section": "real_shot"},
+            {"url": "tos://bucket/sales-talk.mp4", "role": "speech", "section": "headtalk"},
+        ],
+        script="前半段实拍交付，后半段口播总结",
+        template="automotive",
+        mode="real_shot_headtalk",
+        render_video=False,
+    )
+
+    data = client.session.post.call_args.kwargs["json"]["data"]
+    assert data["mode"] == "real_shot_headtalk"
+    assert data["video_urls"][0] == {"url": "tos://bucket/handover-01.mp4", "role": "speech", "section": "real_shot"}
+    assert data["render_video"] is False
 
 
 def test_submit_business_failure_raises():

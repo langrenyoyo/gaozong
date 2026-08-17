@@ -1,5 +1,12 @@
 # LAS speech_auto 请求代码与测试记录（2026-08-03）
 
+> **冻结快照 / 历史追溯用，非当前事实**
+> 本记录基于旧 `speech_auto` 单模式。2026-08-17 M06 三模式升级（M06-LAS-REMIX-MODES-20260817-1）后，
+> 当前事实为 `marketing_headtalk / long_real_shot / real_shot_headtalk` 三模式，`speech_auto` 仅作兼容别名
+> 规范化到 `marketing_headtalk`，`automotive_headtalk` 规范化到 `automotive`。当前接口合同见
+> `docs/ai/13_ai_edit/contracts/LAS视频混剪_las_video_remix_接口调用说明_for小高.pdf`。
+> 本快照仅保留 Shot.Empty 服务端故障排查历史（U-008）的追溯价值。
+
 > 提供给 LAS 上游排查 `Shot.Empty: 初始化未产出分镜` / `Parameter.Invalid: 无法识别时长` 问题。
 
 ---

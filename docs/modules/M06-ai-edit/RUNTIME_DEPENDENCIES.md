@@ -16,9 +16,11 @@
 
 | 边 | 类型 | mechanism | 证据 |
 |---|---|---|---|
-| M06→LAS | X | HTTP | submit POST /api/v1/submit（las_client.py:65-102）; poll POST /api/v1/poll（:104-118）; wait_for_terminal 循环（:120-154） |
+| M06→LAS | X | HTTP | submit POST /api/v1/submit（las_client.py，三模式 mode 参数化透传，默认 marketing_headtalk）; poll POST /api/v1/poll; wait_for_terminal 循环 |
 
 > 依赖：LAS_API_KEY / LAS_BASE_URL（config.py:392-393）; LAS_POLL_INTERVAL_SECONDS / LAS_MAX_WAIT_SECONDS
+> 接口合同：docs/ai/13_ai_edit/contracts/LAS视频混剪_las_video_remix_接口调用说明_for小高.pdf（三模式）
+> 规范化与规则校验：ai_edit_las_service.py normalize_las_mode / normalize_las_template / validate_las_request（fail-closed）
 
 ## M06 → TOS（external）
 

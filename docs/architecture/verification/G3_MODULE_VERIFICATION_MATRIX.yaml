@@ -448,7 +448,7 @@ modules:
     module_name: AI小高剪辑
     owner: M06
     chain_path: docs/architecture/modules/M06/CHAIN.md
-    key_chain: "参数组装（las_script/video_urls/template，LAS_MAX_VIDEOS=30/LAS_SCRIPT_MAX_LEN=4000）→ LAS submit（las_client，Bearer LAS_API_KEY）→ 写 AiEditJob(status=processing,stage=submitted,las_task_id,las_idempotent_id) → 后台轮询（process_las_job → wait_for_terminal，TERMINAL_STATUSES）→ 终态写库（非 COMPLETED→failed+las_{status}；COMPLETED→_persist_artifacts→archive_final_video→_fill_job_title）→ 计费（las_job:{id}:archive_usage）→ 前端拉取（LasRemixWorkbench）→ 播放/下载/删除（generate_playback_url/generate_download_token TTL=120s/delete_las_job 软删除）"
+    key_chain: "参数组装（三模式规范化：normalize_las_mode（speech_auto→marketing_headtalk）/normalize_las_template（automotive_headtalk→automotive）/validate_las_request 规则校验（数量/角色/section/target_duration_sec，marketing≤30/long_real≤100/real_shot_headtalk 显式≤100+≤30 或自动≤130，全 fail-closed）；render_video 缺省 true；smart_packaging 只透传对象；input_json 持久化完整规范化请求）→ LAS submit（las_client，Bearer LAS_API_KEY）→ 写 AiEditJob(status=processing,stage=submitted,las_task_id,las_idempotent_id) → 后台轮询（process_las_job → wait_for_terminal，TERMINAL_STATUSES）→ 终态写库（非 COMPLETED→failed+las_{status}；COMPLETED→_persist_artifacts→archive_final_video→_fill_job_title）→ 计费（las_job:{id}:archive_usage）→ 前端拉取（LasRemixWorkbench 三模式选择+PDF4.7 脚本示例自动填充/防覆盖+按 mode 动态控件）→ 播放/下载/删除（generate_playback_url/generate_download_token TTL=120s/delete_las_job 软删除）"
     entrypoints:
       - "app/routers/ai_edit.py（/ai-edit/las/* 段：list/create/get/play/download-link/download/delete）"
       - "frontend/src/features/ai-edit/pages/LasRemixWorkbench.tsx + api.ts"
@@ -462,7 +462,7 @@ modules:
       - "DY_SECRET_KEY（下载 token 签名，fail-closed）"
     verification_levels:
       STATIC: "链路/代码审计"
-      UNIT: "las_client 4/4、download_token 7/7、计费幂等 14/14、presign_refresh 10/10"
+      UNIT: "las_client 7/7、las_modes 51/51（三模式规则+兼容+400/502 边界）、download_token 7/7、计费幂等 14/14、presign_refresh 10/10"
       INTEGRATION: "route 级攻击面（TestClient + 内存库，attack 20/24 PASS）"
       SMOKE: "未做真实 LAS/TOS（无凭证，MANUAL 协议覆盖）"
       MANUAL: "真实 LAS 混剪验收协议（见 manual_checks）"
@@ -470,7 +470,9 @@ modules:
       - path: tests/test_ai_edit_download_token.py
         result: "7/7 PASS"
       - path: tests/test_las_client.py
-        result: "4/4 PASS（mock session 不触网）"
+        result: "7/7 PASS（mock session 不触网）"
+      - path: tests/test_ai_edit_las_modes.py
+        result: "51/51 PASS（三模式规则/兼容别名/400 vs 502 边界/smart_packaging 透传/不触网）"
       - path: tests/test_m06_compute_idempotency_migration.py
         result: "4/4 PASS（Gate 6A-6D）"
       - path: tests/test_preview_compute_idempotency_migration.py

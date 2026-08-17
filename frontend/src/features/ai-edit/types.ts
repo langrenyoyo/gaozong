@@ -114,13 +114,35 @@ export interface LocalAiEditStatus {
   queued_count: number;
 }
 
-// ===== LAS speech_auto 云端混剪（2026-07-31 重做）=====
+// ===== LAS 云端混剪（2026-07-31 重做，2026-08-17 三模式升级）=====
 
-/** LAS 混剪任务提交请求。 */
+/** LAS 三模式（旧名 speech_auto 等价 marketing_headtalk，兼容别名）。 */
+export type LasRemixMode = "marketing_headtalk" | "long_real_shot" | "real_shot_headtalk";
+export type LasRemixModeAlias = LasRemixMode | "speech_auto";
+
+/** 素材角色：speech 口播（默认）/ voiceover 现成配音 / broll 纯空镜。 */
+export type LasVideoRole = "speech" | "voiceover" | "broll";
+
+/** 分段（仅 real_shot_headtalk）：real_shot 实拍段 / headtalk 口播段。 */
+export type LasVideoSection = "real_shot" | "headtalk";
+
+/** LAS 素材项：裸地址字符串等价 {url, role:"speech"}。 */
+export interface LasVideoItem {
+  url: string;
+  role?: LasVideoRole;
+  section?: LasVideoSection;
+}
+
+/** LAS 混剪任务提交请求（接口文档 §3/§5）。 */
 export interface LasJobCreateRequest {
-  video_urls: string[];
+  video_urls: string | Array<string | LasVideoItem>;
   script: string;
+  mode?: LasRemixModeAlias;
   template?: string;
+  target_duration_sec?: number;
+  video_edit_mode?: "lite" | "pro";
+  render_video?: boolean;
+  smart_packaging?: Record<string, unknown>;
   output_tos_path?: string | null;
   idempotent_id?: string | null;
 }
