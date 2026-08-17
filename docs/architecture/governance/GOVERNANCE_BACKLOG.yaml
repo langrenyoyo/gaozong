@@ -11,16 +11,7 @@ backlog_version: "1.0"
 source_sha: "cd4d8a344965c39f39c98c3c1f23423a903ea3e3"
 
 items:
-  # ============ PRODUCT_FAILURE（6 项，来源 G3；GC MUST NOT FIX） ============
-  - id: FAILURE-M01-001
-    bucket: PRODUCT_FAILURE
-    module: M01
-    severity: HIGH
-    source_stage: G3
-    ssot_ref: "docs/architecture/verification/G3_SEVEN_MODULE_VERIFICATION_REPORT.md"
-    evidence: "ai_auto_reply_dry_run_service.py:359 run_id 前向引用 → UnboundLocalError（7b2b6d7 引入），test_ai_auto_reply_dry_run.py 31 failed"
-    recommended_followup: "run_id/attempt_count 后移至 _add_run 之后（批准最小修复）；修复后 31 测试回归验收；G3 matrix/result 做 delta update"
-    status: OPEN
+  # ============ PRODUCT_FAILURE（5 项，来源 G3；GC MUST NOT FIX） ============
   - id: FAILURE-M02-001
     bucket: PRODUCT_FAILURE
     module: M02

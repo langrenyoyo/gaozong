@@ -38,7 +38,7 @@ modules:
       - "9100 子应用、Milvus（向量副本，禁因 active=0 跳过）、GMP、Douyin OpenAPI、NewCarProject"
     verification_levels:
       STATIC: "链路/代码审计（本 G3 归并分析）"
-      UNIT: "send_service 62/62、webhook 61/61、kernel 37/37、proxy 52/53、outbox 28/31、compute 幂等 19/19 实际运行"
+      UNIT: "send_service 62/62、webhook 61/61、kernel 37/37、dry_run 61/61、proxy 52/53、outbox 28/31、compute 幂等 19/19 实际运行"
       INTEGRATION: "9100 proxy/LLM/RAG mock 路径（LLM/RAG 因 tmp_path 受限 ENV_CONSTRAINED）"
       SMOKE: "未做真实发送（G3 禁真发）"
       MANUAL: "真实抖音发送/9100 真实 LLM/人工接管人工验收（protocol 见 manual_checks）"
@@ -54,7 +54,7 @@ modules:
       - path: tests/test_reply_kernel.py
         result: "37 passed"
       - path: tests/test_ai_auto_reply_dry_run.py
-        result: "29 passed / 31 failed（真实回归：run_id 前向引用）"
+        result: "61 passed（FAILURE-M01-001 已由 aa58f96 修复并独立验收通过）"
       - path: tests/test_m01_compute_idempotency_migration.py
         result: "19 passed（含 test_rag_query_compute_idempotency_migration.py）"
       - path: tests/test_douyin_webhook_atomic_idempotency.py
@@ -69,25 +69,22 @@ modules:
       - "dry-run/real-send gate、人工接管、幂等、计费幂等均有断言"
       - "未授权不发送有断言"
     failure_criteria:
-      - "dry_run 决策链路 UnboundLocalError（当前真实存在，31 failed）"
       - "测试断言与有意行为漂移（proxy 1 failed）"
       - "tmp_path 依赖测试在沙箱不可跑（ENV）"
     side_effect_policy: "未触发真实抖音发送、未真实扣费、未连生产；全部 dry_run/mock/SQLite 隔离"
     known_failures:
-      - "FAILURE-M01-001（HIGH）：ai_auto_reply_dry_run_service.py:359 run_id/attempt_count 前向引用 run（364 行才创建）→ UnboundLocalError；引入 7b2b6d7（P1 Stage 4B M01 Auto Reply Consumer 迁移），当前 HEAD 未修复；影响 webhook→自动回复编排主路径（含 outbox _run_with_session_for_outbox 路径）；tests/test_ai_auto_reply_dry_run.py 31 failed"
       - "FAILURE-M01-002（LOW）：test_douyin_ai_cs_proxy.py::test_proxy_injects_merged_customer_memory_and_masks_contacts 断言过时（720d133 P0 止血改为 9000 侧明文透传 + 9100 _mask_latest_message_for_llm 语义占位，测试未同步）"
     known_risks:
       - "U-001 douyin_accounts M01/M03 边界未冻结"
       - "U-002 决策日志与 send gate 时序无 staging E2E"
       - "U-003 9100 training_feedback_auto_ingest PG 事务边界 PG_VERIFIED_MIDPOINT"
-      - "FAILURE-M01-001 回归未修复（当前主路径异常）"
     environment_constraints:
       - "沙箱拒绝 mkdir(mode=0o700) 目录（pytest basetemp/tmp_path、tempfile.mkdtemp）→ tmp_path 依赖测试不可跑（atomic_idempotency 20E、outbox 3E、legacy_reply 10E、p0_2/p0a、pg_mvcc 14E）"
       - "data/ 目录沙箱不可写 → 需显式 DATABASE_URL 指向可写路径"
       - "本机 PG 5432 开放但无 SMOKE_DATABASE_URL 凭据 → PG 专项 skip"
       - "测试解释器必须用 C:\\Python314\\python.exe（anaconda/.crg-venv 缺 fastapi）"
     current_result: KNOWN_FAIL
-    evidence: "实际运行 19 文件：PASSED≈316 / FAILED=32（dry_run 31 真实回归 + proxy 1 漂移）/ SKIPPED=1（PG 凭据）/ ERRORS≈60+（沙箱 0o700 环境约束）"
+    evidence: "实际运行 19 文件：PASSED≈348 / FAILED=1（proxy 断言漂移）/ SKIPPED=1（PG 凭据）/ ERRORS≈60+（沙箱 0o700 环境约束）；FAILURE-M01-001 于 aa58f96 修复，dry_run+outbox 92 passed 并经独立 Verification PASS"
     g1_owner_check_files:
       - "app/services/ai_auto_reply_dry_run_service.py"
       - "app/routers/douyin_ai_cs_proxy.py"

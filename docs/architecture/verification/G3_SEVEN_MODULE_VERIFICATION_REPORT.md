@@ -62,7 +62,7 @@ M07_RESULT
 = KNOWN_FAIL
 
 KNOWN_PRODUCT_FAILURES
-= 6（见第四节）
+= 5（见第四节；FAILURE-M01-001 已关闭）
 
 HIGH_03
 = OPEN / unchanged（M06 known risk，G3 不修，仅登记）
@@ -92,7 +92,7 @@ MACHINE_TESTS_PASS
 = 约 1900+ 用例（跨 7 模块，含 M01 webhook 61/send 62/kernel 37、M02 contact 152、M04 claim 35/日报 51、M05 presign 9/前端 9、M06 计费 14、M07 核心集 149）
 
 MACHINE_TESTS_FAIL
-= 约 90（真实缺陷 31+3+3+9=46，测试漂移 32，环境类不在 FAIL 计数）
+= 约 59（真实缺陷 3+3+9=15，测试漂移 32，环境类不在 FAIL 计数；FAILURE-M01-001 的 31 项失败已修复）
 
 MANUAL_PROTOCOLS
 = 11（M01 真发验收 / M02 门禁+staging / M03 隔离门 / M04 真人微信 6 项 / M05 TOS+方舟 / M06 LAS 混剪 / M07 PG 并发复用 P1 证据）
@@ -140,7 +140,7 @@ G3_RESULT
 
 | Module | Key Chain | Machine Baseline | Manual Baseline | Current Result | Known Risk/Failure |
 |---|---|---|---|---|---|
-| M01 | webhook→幂等→outbox→回复编排→9100→gates→send gate | 316P/32F/60E（19 文件） | M01-MANUAL-1 真发验收 | **KNOWN_FAIL** | FAILURE-M01-001（HIGH dry_run UnboundLocalError）、U-001~003 |
+| M01 | webhook→幂等→outbox→回复编排→9100→gates→send gate | 348P/1F/60E（19 文件） | M01-MANUAL-1 真发验收 | **KNOWN_FAIL** | FAILURE-M01-002（proxy 断言漂移）、U-001~003 |
 | M02 | webhook 幂等→线索→contact 三态→分配→通知→回访→反馈 | 443P/4F/20E（23 文件） | M02-MANUAL-1~3 | **KNOWN_FAIL** | FAILURE-M02-001（latest_message 脱敏 RED）、U-004/005 |
 | M03 | agent 定义→绑定→配置消费→知识训练→capability 聚合 | 140P/7F/8E（15 文件） | M03-MANUAL-1~3 | **KNOWN_FAIL** | FAILURE-M03-001（COMPAT schema 500）、U-002/006 |
 | M04 | 9000 派单→19000 claim/lease/token→UI 发送(gate)→CAS 回写→uncertain；日报 | 核心链 35P+55P+33P+51P/3F/78E（25 文件） | M04-MANUAL-1 真人微信 6 项 | **ENV_CONSTRAINED** | U-005、FastAPI 0.139.2 断言漂移（3 处测试） |
@@ -158,16 +158,17 @@ ENV_ERRORS          = 约 300+（沙箱 0o700 tmp_path 为主，跨全部模块�
 MANUAL_PROTOCOLS    = 11
 ```
 
-## 四、KNOWN_PRODUCT_FAILURES（真实产品缺陷，G3 不修，登记为后续开发候选）
+## 四、KNOWN_PRODUCT_FAILURES（真实产品缺陷，登记为后续开发候选）
 
 | Failure ID | Module | Chain | Evidence | Impact | Current Behavior | Expected Behavior | Recommended Follow-up |
 |---|---|---|---|---|---|---|---|
-| FAILURE-M01-001 | M01 | webhook→自动回复编排（outbox 主路径） | ai_auto_reply_dry_run_service.py:359 `"run_id": run.id` 在 run 创建（:364）之前；引入 7b2b6d7（P1 Stage 4B M01 Auto Reply Consumer 迁移），HEAD 未修复；test_ai_auto_reply_dry_run.py 31 failed | **HIGH**：webhook→自动回复决策主路径（含 outbox `_run_with_session_for_outbox`）抛 UnboundLocalError | 函数 359 行访问未定义局部变量 run → 异常 | 359-360 行移入 `run = _add_run(db, run)`（:380）之后，或从 event claim 快照读取 | 批准最小修复（run_id/attempt_count 后移），修复后 31 测试即回归验收；属 P1 Stage 4B 迁移漏网回归 |
 | FAILURE-M02-001 | M02 | contact_state → 9100 LLM 上下文 | douyin_conversation_history_service.py:88-91 只脱敏 history、:113 latest_message 原样透传；douyin_ai_cs_proxy.py:299 明文进 LLM 上下文（对比 agents.py:260 预览路径调用前 mask）；test_douyin_workbench_tenant_isolation_r2.py 3 RED 断言失败 | **MEDIUM**：纵深防御缺口（9100 侧 `_mask_latest_message_for_llm` 兜底存在，非直接泄露） | 9000→9100 链路上 latest_message 含原始联系方式（内部 HTTP） | 9000 侧构建上下文时即脱敏（与 preview 路径对齐）或 proxy 调用前 mask | 新增绿灯回归测试（NEW_G3_TEST_LLM_CONTEXT_MASK_LATEST_MESSAGE）后修复 |
 | FAILURE-M03-001 | M03 | COMPAT 层 agent 创建 | apps/agents/services.py:66-76 访问 payload.store_address 等 11 字段，apps/agents/schemas.py::AiAgentCreate 未定义（迁移 0019 表字段与旧子应用 DTO 不同步）；test_agents_app.py 3 failed | **MEDIUM**：apps/agents（COMPAT）POST /api/agents → 500 AttributeError | 创建 agent 时 AttributeError | schemas.py 补齐 11 个商家变量字段（与迁移 0019 同步） | 修复 services/schemas 不同步 + 补 POST /api/agents 契约测试 |
 | FAILURE-M05-001 | M05 | register_material（Local Agent 路径）上传幂等 | ai_edit_service.py:108-160 同 merchant 同 SHA 不同 material_id 直接 INSERT 撞 (merchant_id, source_sha256) 唯一约束 → 未捕获 IntegrityError；test_phase12_task12_material_api.py same_sha_canonical 红灯 | **MEDIUM**：HTTP 500 | register_material 撞唯一约束抛 500 | 与 upload-tos 一致：先查后插幂等收敛或 409 | 修复幂等语义一致 + NEW_G3_TEST-M05-01 回归 |
 | FAILURE-M05-002 | M05 | 素材回收站视图 | list_materials 无 lifecycle 参数；test list_trash 红灯 | **LOW**：软删素材列表不可见 | 回收站视图未实现 | lifecycle=trash 过滤视图 | 确认产品需求后实现 + NEW_G3_TEST-M05-04 |
 | FAILURE-M05-003 | M05 | 人工覆盖优先语义 | models.py:1713 manual_override_json 仅列定义，无业务读取/合并逻辑；test save_analysis 红灯 | **LOW**：人工覆盖不生效 | manual_override_json 无逻辑 | manual_override_json > AI 快照 > 空值 | 确认产品需求是否保留后实现 + NEW_G3_TEST-M05-03 |
+
+`FAILURE-M01-001` 已由候选 `aa58f96` 修复：`run_id`/`attempt_count` 在 `_add_run` 成功后、9100 调用前注入；两个 M01 回归文件合计 92 passed，独立验收结论为 `VERIFY PASS`。
 
 ## 五、测试漂移清单（非产品缺陷，需测试同步；不属 KNOWN_PRODUCT_FAILURES）
 
