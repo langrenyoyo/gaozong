@@ -360,6 +360,50 @@ class TestCommonValidation:
         with pytest.raises(ValueError):
             validate_las_request(**_submit_payload(video_edit_mode="turbo"))
 
+    # ---------- P2：地址/角色/分段 fail-closed ----------
+
+    def test_empty_url_rejected(self):
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(video_urls=[""]))
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(video_urls=["  "]))
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(video_urls=[{"url": ""}]))
+        # 目录前缀字符串为空/空白同样拒绝
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(video_urls=""))
+
+    def test_invalid_protocol_rejected(self):
+        # 非 tos:// http:// https:// 协议一律拒绝（任意模式）
+        for bad in ["a.mp4", "ftp://x/y.mp4", "file:///c:/a.mp4", "C:\\a.mp4", "tos:a.mp4"]:
+            with pytest.raises(ValueError):
+                validate_las_request(**_submit_payload(video_urls=[bad]))
+            with pytest.raises(ValueError):
+                validate_las_request(**_submit_payload(video_urls=[{"url": bad}]))
+        # 目录前缀也须合法协议
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(
+                mode=MODE_LONG_REAL, video_urls="not-a-protocol/prefix/",
+            ))
+
+    def test_unknown_role_rejected_everywhere(self):
+        """未知 role 在任何模式下一律拒绝（_normalize_video_item 层 fail-closed）。"""
+        for m in (None, MODE_LONG_REAL, MODE_REAL_HEAD):
+            with pytest.raises(ValueError):
+                validate_las_request(**_submit_payload(
+                    mode=m, video_urls=[{"url": "https://x/a.mp4", "role": "talking_head"}],
+                ))
+
+    def test_unknown_section_rejected_everywhere(self):
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(video_urls=[
+                {"url": "https://x/a.mp4", "section": "unknown_seg"},
+            ]))
+        with pytest.raises(ValueError):
+            validate_las_request(**_submit_payload(mode=MODE_REAL_HEAD, video_urls=[
+                {"url": "https://x/a.mp4", "role": "speech", "section": "unknown_seg"},
+            ]))
+
 
 # ---------- create_las_job 持久化与提交 ----------
 
@@ -421,8 +465,30 @@ class TestCreateLasJob:
                 )
         client.submit.assert_not_called()
 
+    def test_output_tos_path_in_input_json(self, db_session):
+        """output_tos_path 纳入 input_json（完整规范化请求持久化）；idempotent_id 不重复写入。"""
+        client = _mock_las_client()
+        with patch.object(las_svc, "get_las_speech_auto_client", return_value=client):
+            job = las_svc.create_las_job(
+                db_session,
+                merchant_id="m1",
+                video_urls=["https://example.com/a.mp4"],
+                script="剪成一条约 60 秒的产品讲解视频",
+                output_tos_path="tos://bucket/out/",
+                idempotent_id="idem-xyz",
+            )
+        import json
+        inp = json.loads(job.input_json)
+        assert inp["output_tos_path"] == "tos://bucket/out/"
+        # idempotent_id 走专用字段，不重复写入 input_json
+        assert "idempotent_id" not in inp
+        assert job.las_idempotent_id == "idem-xyz"
+
     def test_las_error_propagates_to_router_boundary(self, db_session):
-        """LAS 提交失败抛 LASError（router 转 502），与参数校验 ValueError（转 400）区分。"""
+        """LAS 提交失败抛 LASError（router 转 502），与参数校验 ValueError（转 400）区分。
+
+        注意：地址校验先行（非法协议抛 ValueError），故用合法地址才走到 LAS submit。
+        """
         client = MagicMock()
         client.submit.side_effect = las_svc.LASError("提交失败", metadata={"business_code": "System.Upstream"})
         with patch.object(las_svc, "get_las_speech_auto_client", return_value=client):
@@ -430,7 +496,7 @@ class TestCreateLasJob:
                 las_svc.create_las_job(
                     db_session,
                     merchant_id="m1",
-                    video_urls=["a.mp4"],
+                    video_urls=["https://example.com/a.mp4"],
                     script="x",
                 )
 
@@ -560,3 +626,141 @@ class TestLasJobsRoute:
             client.submit.assert_not_called()
         finally:
             self._teardown()
+
+    def test_invalid_protocol_returns_400(self):
+        """非法协议地址 → 400（P2 校验 fail-closed）。"""
+        self._setup()
+        try:
+            client = _mock_las_client()
+            with patch.object(las_svc, "get_las_speech_auto_client", return_value=client):
+                r = _route_client("m1").post("/ai-edit/las/jobs", json={
+                    "video_urls": ["a.mp4"],
+                    "script": "剪成一条约 60 秒的产品讲解视频",
+                })
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"]["code"] == "LAS_INVALID_PARAM"
+            client.submit.assert_not_called()
+        finally:
+            self._teardown()
+
+
+# ---------- render_video=false 方案型成功（P2） ----------
+
+
+def _make_processing_job(engine, render_video=None):
+    """构造一个 processing 状态的 LAS job，input_json 可指定 render_video。"""
+    import json as _json
+    from sqlalchemy.orm import sessionmaker
+    from app.models import AiEditJob
+    input_data = {
+        "mode": MODE_MARKETING,
+        "template": "automotive",
+        "script": "剪成一条约 60 秒的产品讲解视频",
+        "video_urls": ["https://example.com/a.mp4"],
+        "render_video": True if render_video is None else render_video,
+    }
+    job = AiEditJob(
+        merchant_id="m1",
+        job_id="las-scheme-1",
+        status="processing",
+        source_type="las_speech_auto",
+        stage="submitted",
+        progress=0,
+        las_task_id="task_scheme",
+        las_idempotent_id="idem_scheme",
+        las_script="剪成一条约 60 秒的产品讲解视频",
+        las_template="automotive",
+        title="方案型标题",  # 预设标题，避免 _fill_job_title 下载 result_json 触网
+        input_json=_json.dumps(input_data, ensure_ascii=False),
+    )
+    s = sessionmaker(bind=engine)()
+    s.add(job)
+    s.commit()
+    job_id = job.id
+    s.close()
+    return job_id
+
+
+def _mock_completed_client(artifacts):
+    """mock LAS client：wait_for_terminal 返回 COMPLETED（无视频只有方案产物）。"""
+    client = MagicMock()
+    client.wait_for_terminal.return_value = {
+        "metadata": {"task_id": "task_scheme", "task_status": "COMPLETED", "business_code": "0"},
+        "data": {"artifacts": artifacts},
+    }
+    return client
+
+
+class TestProcessLasJobRenderVideo:
+    """P2：render_video=false 的 COMPLETED 任务为方案型成功，不得因无视频而失败。
+
+    process_las_job 内部会 db.close()，故用 StaticPool 共享内存库 + 独立 runner session，
+    避免 fixture session 被关闭后无法断言。
+    """
+
+    @pytest.fixture
+    def engine(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import StaticPool
+        from app.models import Base
+        e = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
+        Base.metadata.create_all(e)
+        yield e
+        e.dispose()
+
+    def _run(self, engine, job_id, client):
+        from sqlalchemy.orm import sessionmaker
+        import app.database as _database
+        runner = sessionmaker(bind=engine)()
+        with patch.object(las_svc, "get_las_speech_auto_client", return_value=client), \
+             patch.object(_database, "SessionLocal", return_value=runner), \
+             patch.object(las_svc, "archive_final_video", wraps=las_svc.archive_final_video) as arch, \
+             patch.object(las_svc, "_report_las_compute_usage") as report:
+            las_svc.process_las_job(job_id)
+            return arch, report
+
+    def _load(self, engine, job_id):
+        from sqlalchemy.orm import sessionmaker
+        from app.models import AiEditJob, AiEditJobArtifact
+        s = sessionmaker(bind=engine)()
+        job = s.query(AiEditJob).filter(AiEditJob.id == job_id).first()
+        arts = s.query(AiEditJobArtifact).filter(AiEditJobArtifact.job_id == job.job_id).all()
+        result = (job, arts)
+        s.close()
+        return result
+
+    def test_render_video_false_succeeds_without_archive(self, engine):
+        """COMPLETED 且 render_video=false：succeeded；不触发视频归档；算力上报仍执行。"""
+        job_id = _make_processing_job(engine, render_video=False)
+        # 方案产物：只有 match_scheme / result_json，无视频
+        artifacts = {
+            "match_scheme_url": "https://signed/plan.json",
+            "match_scheme_tos_path": "tos://bucket/plan.json",
+        }
+        client = _mock_completed_client(artifacts)
+        arch, report = self._run(engine, job_id, client)
+
+        job, arts = self._load(engine, job_id)
+        assert job.status == "succeeded"          # 方案型成功，不是 failed
+        assert job.stage == "completed"
+        assert job.progress == 100
+        assert job.failure_code is None
+        arch.assert_not_called()                   # 不触发视频归档
+        report.assert_called_once()                # LAS 任务确实执行，算力上报语义保留
+        # 产物已持久化（match_scheme）
+        assert any(a.artifact_type == "match_scheme" for a in arts)
+
+    def test_render_video_default_true_still_archives(self, engine):
+        """render_video 缺省/true：COMPLETED 仍走视频归档（默认语义不变）。"""
+        job_id = _make_processing_job(engine)  # render_video 缺省按 True
+        artifacts = {"video_subtitled_url": "https://signed/sub.mp4"}
+        client = _mock_completed_client(artifacts)
+        with patch.object(las_svc, "archive_final_video", return_value=True):
+            arch, report = self._run(engine, job_id, client)
+
+        job, _ = self._load(engine, job_id)
+        assert job.status == "succeeded"
+        # 归档路径已被执行（patch 返回值 True 走成功分支）
+        report.assert_called_once()

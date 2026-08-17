@@ -6,8 +6,8 @@
 
 | 能力 | 状态 | 测试文件 |
 |---|---|---|
-| LAS client submit/poll/wait/parse（三模式参数化） | COVERED | test_las_client.py（7 用例） |
-| 三模式规范化/规则校验/兼容别名/400 vs 502 边界/smart_packaging 透传 | COVERED | test_ai_edit_las_modes.py（51 用例，M06-LAS-REMIX-MODES-20260817-1） |
+| LAS client submit/poll/wait/parse（三模式参数化） | COVERED | test_las_client.py（6 用例） |
+| 三模式规范化/规则校验/地址与角色分段 fail-closed/兼容别名/400 vs 502 边界/render_video=false 方案型成功 | COVERED | test_ai_edit_las_modes.py（53 用例，M06-LAS-REMIX-MODES-20260817-1 P2） |
 | process_las_job 轮询→终态→归档 | PARTIAL | test_ai_edit_result_delivery.py（32 用例，用 mock artifacts 非 mock LAS client.wait_for_terminal） |
 | 临时 URL 不入 storage_key | COVERED | test_ai_edit_result_delivery.py:331,344 + test_independent_ai_edit_attack.py:711 |
 | 标题三件套 | COVERED | test_ai_edit_result_delivery.py:251,259,425 |

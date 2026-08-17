@@ -11144,7 +11144,7 @@ entries:
         note: "G1 分类依据：DOCUMENT/MODULE"
     notes: ""
   - id: "FILE-000284"
-    path: "docs/ai/13_ai_edit/LAS_请求代码与测试记录_20260803.md"
+    path: "docs/ai/archive/2026-08-03_LAS_speech_auto_请求代码与测试记录_历史快照.md"
     artifact_type: "DOCUMENT"
     owner_type: "MODULE"
     owner_id: "M06"
@@ -11178,10 +11178,10 @@ entries:
     path_history: []
     evidence:
       - type: "FILE_PATH"
-        source: "docs/ai/13_ai_edit/LAS_请求代码与测试记录_20260803.md"
+        source: "docs/ai/archive/2026-08-03_LAS_speech_auto_请求代码与测试记录_历史快照.md"
         line: 1
-        note: "G1 分类依据：DOCUMENT/MODULE"
-    notes: ""
+        note: "G1 分类依据：DOCUMENT/MODULE；2026-08-17 M06-LAS-REMIX-MODES-20260817-1 归档（非当前事实，仅追溯 Shot.Empty 排查历史）"
+    notes: "旧路径 docs/ai/13_ai_edit/LAS_请求代码与测试记录_20260803.md 已随三模式升级归档；当前 LAS 接口合同见 docs/ai/13_ai_edit/contracts/LAS视频混剪_las_video_remix_接口调用说明_for小高.pdf"
   - id: "FILE-000285"
     path: "docs/ai/13_ai_edit/auto_edit_Phase12_AI剪辑迁入准备审计报告.md"
     artifact_type: "DOCUMENT"

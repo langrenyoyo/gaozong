@@ -462,7 +462,7 @@ modules:
       - "DY_SECRET_KEY（下载 token 签名，fail-closed）"
     verification_levels:
       STATIC: "链路/代码审计"
-      UNIT: "las_client 7/7、las_modes 51/51（三模式规则+兼容+400/502 边界）、download_token 7/7、计费幂等 14/14、presign_refresh 10/10"
+      UNIT: "las_client 6/6、las_modes 53/53（三模式规则+兼容+400/502 边界+方案型成功）、download_token 7/7、计费幂等 14/14、presign_refresh 10/10"
       INTEGRATION: "route 级攻击面（TestClient + 内存库，attack 20/24 PASS）"
       SMOKE: "未做真实 LAS/TOS（无凭证，MANUAL 协议覆盖）"
       MANUAL: "真实 LAS 混剪验收协议（见 manual_checks）"
@@ -470,9 +470,9 @@ modules:
       - path: tests/test_ai_edit_download_token.py
         result: "7/7 PASS"
       - path: tests/test_las_client.py
-        result: "7/7 PASS（mock session 不触网）"
+        result: "6/6 PASS（mock session 不触网）"
       - path: tests/test_ai_edit_las_modes.py
-        result: "51/51 PASS（三模式规则/兼容别名/400 vs 502 边界/smart_packaging 透传/不触网）"
+        result: "53/53 PASS（三模式规则/兼容别名/地址与角色分段 fail-closed/400 vs 502 边界/render_video=false 方案型成功/不触网）"
       - path: tests/test_m06_compute_idempotency_migration.py
         result: "4/4 PASS（Gate 6A-6D）"
       - path: tests/test_preview_compute_idempotency_migration.py

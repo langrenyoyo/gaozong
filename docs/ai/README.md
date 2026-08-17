@@ -55,7 +55,7 @@ docs/ai/04_OUTPUT_RULES.md
 | `10_local_agent_wechat/` | Local Agent、微信自动化、安全边界和探索报告 |
 | `11_deployment_ops/` | Docker、本地/宝塔部署、OpenAPI、live-check 安全清单 |
 | `12_legacy_research/` | 历史代码计划、旧探索和低频参考资料 |
-| `13_ai_edit/` | AI剪辑历史设计与评估；模块当前为 `FROZEN_BY_CUSTOMER`，不可作为施工入口 |
+| `13_ai_edit/` | AI剪辑历史设计与评估；**AI剪辑已恢复开发**（2026-07-31 甲方授权解除冻结，纯 LAS 云端方案），当前事实见 `05_PROJECT_CONTEXT.md`；`contracts/` 存 LAS 接口合同 PDF |
 | `06_ui_audit/` | UI/UX 基准审查、响应式和视觉回归记录 |
 | `archive/` | 冻结历史快照（非当前事实，仅追溯用） |
 

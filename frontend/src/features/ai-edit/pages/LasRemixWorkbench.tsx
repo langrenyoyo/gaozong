@@ -119,12 +119,51 @@ interface MaterialSelection {
   section?: "real_shot" | "headtalk";
 }
 
-/** 各 mode 合法的角色集合（用于切换 mode 时清理失效值）。 */
-const MODE_ROLES: Record<string, string[]> = {
-  marketing_headtalk: ["speech", "voiceover", "broll"],
-  long_real_shot: ["speech", "voiceover"],
-  real_shot_headtalk: ["speech", "broll"],
-};
+// ===== 模式逻辑纯函数（P2 抽出；Node 测试 __las_mode_logic_test__.js 直接引用真实实现，
+// 不依赖 React/JSX，变更需保持组件与测试同步）=====
+
+export type LasModeKey = "marketing_headtalk" | "long_real_shot" | "real_shot_headtalk";
+export type LasModeRole = "speech" | "voiceover" | "broll";
+export type LasModeSection = "real_shot" | "headtalk";
+
+export interface LasSelectionItem {
+  url: string;
+  displayName?: string;
+  role?: LasModeRole;
+  section?: LasModeSection;
+}
+
+/** 默认模式（口播营销）的 PDF 4.7 节 Script 示例：新建任务首次打开即填充。 */
+export const DEFAULT_MODE_SCRIPT: string = MODE_OPTIONS[0].scriptExample;
+
+/** 各 mode 是否支持目标时长（仅实拍类支持；口播营销禁用）。 */
+export function modeSupportsDuration(mode: LasModeKey): boolean {
+  return mode !== "marketing_headtalk";
+}
+
+/** 各 mode 合法的角色集合（用于清理失效值与下拉选项）。 */
+export function modeAllowedRoles(mode: LasModeKey): LasModeRole[] {
+  if (mode === "long_real_shot") return ["speech", "voiceover"];
+  if (mode === "real_shot_headtalk") return ["speech", "broll"];
+  return ["speech", "voiceover", "broll"];
+}
+
+/** Script 是否可自动替换为系统示例：为空 或 仍等于上次自动填入内容（未被打断）。 */
+export function shouldAutoReplaceScript(script: string, autoScript: string): boolean {
+  const t = (script || "").trim();
+  return t === "" || t === (autoScript || "").trim();
+}
+
+/** 切换 mode 时清理失效值：保留新 mode 合法的 role，清空 section（实拍+口播需重新选择/走自动分段）。
+ *  不合法控件不得只隐藏值——清理后提交值必然合法。泛型保留元素类型（displayName 等字段原样保留）。 */
+export function cleanupSelectionForMode<T extends LasSelectionItem>(items: T[], mode: LasModeKey): T[] {
+  const allowed = modeAllowedRoles(mode);
+  return items.map((it) => {
+    const next = { url: it.url, displayName: it.displayName } as T;
+    if (it.role && allowed.includes(it.role)) next.role = it.role;
+    return next;
+  });
+}
 
 function NewTaskModal({
   onClose,
@@ -137,8 +176,9 @@ function NewTaskModal({
   const [loadingMaterials, setLoadingMaterials] = useState(false);
   const [mode, setMode] = useState<"marketing_headtalk" | "long_real_shot" | "real_shot_headtalk">("marketing_headtalk");
   const [selectedItems, setSelectedItems] = useState<MaterialSelection[]>([]);
-  const [script, setScript] = useState("");
-  const [autoScriptRef] = useState<{ current: string }>({ current: "" });
+  // 首次打开即填充当前模式（口播营销）的 PDF 4.7 节 Script 示例，不出现空脚本
+  const [script, setScript] = useState(DEFAULT_MODE_SCRIPT);
+  const [autoScriptRef] = useState<{ current: string }>({ current: DEFAULT_MODE_SCRIPT });
   const [targetDuration, setTargetDuration] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -160,33 +200,22 @@ function NewTaskModal({
     })();
   }, []);
 
-  /** 切换 mode：清理失效角色/分段值（不合法控件不得只隐藏值），并处理脚本自动填充/防覆盖。 */
+  /** 切换 mode：清理失效角色/分段/时长值（不合法控件不得只隐藏值），并处理脚本自动填充/防覆盖。 */
   const handleModeChange = (nextMode: (typeof mode)) => {
     if (nextMode === mode) return;
     setMode(nextMode);
     const nextCfg = MODE_OPTIONS.find((m) => m.value === nextMode)!;
-    // 清理失效值：删除当前 mode 不合法的 role；section 一律清空（实拍+口播需重新选择/走自动分段）
-    const validRoles = MODE_ROLES[nextMode];
-    setSelectedItems((prev) =>
-      prev.map((it) => {
-        const next: MaterialSelection = { url: it.url, displayName: it.displayName };
-        if (it.role && validRoles.includes(it.role)) next.role = it.role;
-        return next;
-      }),
-    );
-    // 脚本：空 或 仍等于系统自动填充内容 → 自动替换；已修改 → 确认后才替换
-    const scriptModified = script.trim() !== "" && script.trim() !== autoScriptRef.current;
-    if (!scriptModified) {
+    // 失效值清理（纯函数）：删除新 mode 不合法的 role，清空 section；
+    // 目标时长仅实拍类支持，切到口播营销时清空已填时长。
+    setSelectedItems((prev) => cleanupSelectionForMode(prev, nextMode));
+    if (!modeSupportsDuration(nextMode)) setTargetDuration("");
+    // 脚本：空 或 仍等于系统自动填充内容 → 自动替换；已修改 → 确认后才替换（不静默覆盖）
+    if (shouldAutoReplaceScript(script, autoScriptRef.current)) {
       setScript(nextCfg.scriptExample);
       autoScriptRef.current = nextCfg.scriptExample;
-    } else {
-      // 不静默覆盖：确认后才替换（计划 Frontend Contract）
-      // 因 confirm 阻塞与 setState 同异步问题，此处用二次点击语义：
-      // 弹出原生确认，确认则替换脚本，取消则保留商户已编辑内容（mode 切换仍生效）。
-      if (window.confirm("切换模式将替换你已编辑的创作指令为对应示例，是否替换？")) {
-        setScript(nextCfg.scriptExample);
-        autoScriptRef.current = nextCfg.scriptExample;
-      }
+    } else if (window.confirm("切换模式将替换你已编辑的创作指令为对应示例，是否替换？")) {
+      setScript(nextCfg.scriptExample);
+      autoScriptRef.current = nextCfg.scriptExample;
     }
   };
 
@@ -338,7 +367,7 @@ function NewTaskModal({
                         className="h-7 shrink-0 rounded-lg border border-[#e4e8f0] bg-white px-1.5 text-[11px] text-[#374151] outline-none"
                       >
                         <option value="">{ROLE_LABELS.speech}（默认）</option>
-                        {MODE_ROLES[mode].map((r) => (
+                        {modeAllowedRoles(mode).map((r) => (
                           <option key={r} value={r}>
                             {ROLE_LABELS[r] ?? r}
                           </option>

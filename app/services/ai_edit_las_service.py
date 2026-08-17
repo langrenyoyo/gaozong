@@ -94,26 +94,46 @@ def normalize_las_template(template: str | None) -> str:
     return t
 
 
+# 素材地址协议白名单（接口文档 §5/§6：具体地址为 tos:// 或 HTTP(S)）
+_URL_PROTOCOLS = ("tos://", "http://", "https://")
+
+
+def _validate_url(url) -> str:
+    """校验素材地址：非空、协议为 tos:// 或 http(s)://，返回 strip 后地址。
+
+    fail-closed（信任边界输入校验）：空字符串、非白名单协议一律拒绝。
+    """
+    if not isinstance(url, str):
+        raise ValueError("素材地址必须是字符串")
+    url = url.strip()
+    if not url:
+        raise ValueError("素材地址不能为空")
+    if not url.startswith(_URL_PROTOCOLS):
+        raise ValueError("素材地址必须以 tos:// 或 http(s):// 开头")
+    return url
+
+
 def _normalize_video_item(item) -> dict:
     """把 video_urls 数组元素规范化为 {url, role, section}；裸 URL 等价 role=speech。
 
-    只做结构规整，业务规则（角色/分段合法性）由调用方校验。
+    fail-closed：空 URL / 非法协议 / 未知 role / 未知 section 一律拒绝
+    （未知 role/section 在任何模式下都不接受，见接口文档 §3/§5）。
     """
     if isinstance(item, str):
-        url = item.strip()
-        if not url:
-            raise ValueError("video_urls 元素不能为空字符串")
+        url = _validate_url(item)
         return {"url": url, "role": ROLE_SPEECH}
     if isinstance(item, dict):
-        url = item.get("url")
-        if not url or not isinstance(url, str) or not url.strip():
-            raise ValueError("素材对象必须包含 url")
+        url = _validate_url(item.get("url"))
         out: dict = {"url": url}
         role = item.get("role")
         if role is not None:
+            if role not in (ROLE_SPEECH, ROLE_VOICEOVER, ROLE_BROLL):
+                raise ValueError(f"不支持的 role：{role}")
             out["role"] = role
         section = item.get("section")
         if section is not None:
+            if section not in (SECTION_REAL_SHOT, SECTION_HEADTALK):
+                raise ValueError(f"不支持的 section：{section}")
             out["section"] = section
         return out
     raise ValueError("video_urls 元素必须是字符串或 {url, role, section} 对象")
@@ -155,7 +175,8 @@ def validate_las_request(
         raise ValueError(f"script 不能超过 {LAS_SCRIPT_MAX_LEN} 字")
 
     if isinstance(video_urls, str):
-        items = [{"url": video_urls, "role": ROLE_SPEECH}]
+        # 单字符串（long_real_shot 的 TOS 目录前缀）也须通过地址校验
+        items = [{"url": _validate_url(video_urls), "role": ROLE_SPEECH}]
         is_prefix_string = True
     elif isinstance(video_urls, list):
         if not video_urls:
@@ -330,7 +351,8 @@ def create_las_job(
         stage="submitted",
         progress=0,
         attempt_count=1,
-        # 持久化完整规范化请求，失败后可回溯（input_json 为 jsonb 列）
+        # 持久化完整规范化请求，失败后可回溯（input_json 为 jsonb 列）。
+        # idempotent_id 继续用专用字段 las_idempotent_id，不重复写入 input_json。
         input_json=json.dumps(
             {
                 "mode": payload["mode"],
@@ -341,6 +363,7 @@ def create_las_job(
                 "target_duration_sec": payload["target_duration_sec"],
                 "video_edit_mode": payload["video_edit_mode"],
                 "smart_packaging": payload["smart_packaging"],
+                "output_tos_path": output_tos_path,
             },
             ensure_ascii=False,
         ),
@@ -411,24 +434,33 @@ def process_las_job(job_id: int) -> None:
         data = result.get("data") or {}
         artifacts = data.get("artifacts") or {}
         _persist_artifacts(db, job, artifacts)
-        # 结果交付闭环：归档最终视频到自有 TOS（subtitled 优先 clean 回退）
-        archived = archive_final_video(db, job, artifacts)
+        # render_video=false（接口文档 §5：只出剪辑方案不渲染，用于快速验证 script）：
+        # 方案型成功，不触发视频归档，也不因无最终视频而失败。
+        render_video = _job_render_video(db, job)
+        deliverable = True
+        if render_video:
+            # 结果交付闭环：归档最终视频到自有 TOS（subtitled 优先 clean 回退）
+            deliverable = archive_final_video(db, job, artifacts)
         # 视频能力标签（基于真实处理模式，不依赖完成状态）
         job.video_tags = json.dumps(compute_video_tags(job, artifacts), ensure_ascii=False)
         # 标题生成（确定性规则 + 兜底，失败不影响完成）
         if not job.title:
             _fill_job_title(db, job, artifacts)
-        # 归档成功才标 succeeded；归档失败保留 delivery_status=failed，任务不可交付
-        job.status = "succeeded" if archived else "failed"
+        # 归档成功（或 render_video=false 方案型成功）才标 succeeded；
+        # 仅 render_video=true 且归档失败时 delivery_status=failed，任务不可交付
+        job.status = "succeeded" if deliverable else "failed"
         job.stage = "completed"
         job.progress = 100
-        job.failure_code = None if archived else "archive_failed"
+        job.failure_code = None if deliverable else "archive_failed"
         job.completed_at = datetime.now()
         job.las_metadata_json = str(metadata)
         db.commit()
-        if archived:
+        if deliverable:
             _report_las_compute_usage(db, job)
-            logger.info("ai_edit_las_succeeded job_id=%s artifacts=%s archived=true", job_id, len(artifacts))
+            logger.info(
+                "ai_edit_las_succeeded job_id=%s artifacts=%s render_video=%s archived=%s",
+                job_id, len(artifacts), render_video, render_video and deliverable,
+            )
         else:
             logger.warning("ai_edit_las_completed_but_not_archived job_id=%s", job_id)
     except Exception as exc:  # noqa: BLE001 后台任务异常不向上抛
@@ -436,6 +468,22 @@ def process_las_job(job_id: int) -> None:
         logger.error("ai_edit_las_process_error job_id=%s error_type=%s", job_id, type(exc).__name__, exc_info=True)
     finally:
         db.close()
+
+
+def _job_render_video(db: Session, job: AiEditJob) -> bool:
+    """从 input_json 读取 render_video，缺失按 True（默认渲染）。
+
+    render_video=false（只出剪辑方案不渲染）时，COMPLETED 任务为方案型成功，
+    不触发视频归档，也不因无最终视频而失败（接口文档 §5）。
+    """
+    try:
+        input_data = json.loads(job.input_json) if job.input_json else {}
+        rv = input_data.get("render_video")
+        if isinstance(rv, bool):
+            return rv
+    except (TypeError, ValueError):
+        pass
+    return True
 
 
 def _persist_artifacts(db: Session, job: AiEditJob, artifacts: dict[str, Any]) -> None:
