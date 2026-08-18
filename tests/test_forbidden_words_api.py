@@ -147,6 +147,34 @@ def test_admin_creates_word_under_library_key():
     db2.close()
 
 
+def test_admin_creates_word_without_safe_word():
+    """safe_word 为兼容可选字段（不再必填，不参与替换）：不传也能创建成功。"""
+    db = TestSession()
+    _seed_library(db)
+    db.close()
+
+    client = _client(_context())
+    resp = client.post(
+        "/admin/forbidden-words",
+        json={
+            "library_key": "used_car_sales_base",
+            "word": "现车很多",
+            "severity": "high",
+            "enabled": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["word"] == "现车很多"
+    assert resp.json()["data"]["safe_word"] is None
+
+    # 校验已落库且 safe_word 为空
+    db2 = TestSession()
+    word = db2.query(ForbiddenWord).filter_by(word="现车很多").first()
+    assert word is not None
+    assert word.safe_word in (None, "")
+    db2.close()
+
+
 def test_admin_rejects_duplicate_word_case_insensitive():
     db = TestSession()
     lib = _seed_library(db)

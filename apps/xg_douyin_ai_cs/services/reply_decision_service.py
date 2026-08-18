@@ -1220,7 +1220,13 @@ def _build_llm_reply(
         and not _customer_asking_contact
         and _contains_any(reply_text, _redundant_contact_phrases)
     )
-    if reasking_known or missing_phone_goal or contact_violation or off_platform_promise or unfounded_followup or redundant_contact_mention:
+    # 首调后违禁词确定性检查：命中并入 retry_combined（最多 1 次合并纠正，总模型调用 ≤2）。
+    forbidden_words = list(getattr(request, "forbidden_words", None) or [])
+    first_forbidden_hits = _check_forbidden_words(reply_text, forbidden_words)
+    if (
+        reasking_known or missing_phone_goal or contact_violation or off_platform_promise
+        or unfounded_followup or redundant_contact_mention or first_forbidden_hits
+    ):
         retry_messages = _build_llm_combined_retry_messages(
             messages,
             reasking_known=reasking_known,
@@ -1229,6 +1235,7 @@ def _build_llm_reply(
             off_platform_promise=off_platform_promise,
             unfounded_followup=unfounded_followup,
             redundant_contact_mention=redundant_contact_mention,
+            forbidden_hits=first_forbidden_hits,
             bad_reply=reply_text,
         )
         try:
@@ -1289,17 +1296,17 @@ def _build_llm_reply(
                     f"回复仍存在 Hard 违规，需人工确认；违规：{', '.join(hard_flags)}"
                 )
                 retry_warnings.append("hard_violation_blocked")
-    # 第五节：合并纠正后做确定性违禁词检查，命中即阻断转人工，不再额外重试。
-    forbidden_words = list(getattr(request, "forbidden_words", None) or [])
-    if forbidden_words:
-        forbidden_hits = _check_forbidden_words(str(decision.get("reply_text") or ""), forbidden_words)
-        if forbidden_hits:
-            decision["manual_required"] = True
-            decision["manual_required_reason"] = (
-                f"回复命中违禁词，需人工确认；命中词：{'、'.join(forbidden_hits)}"
-            )
-            decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | {"forbidden_word_hit"})
-            retry_warnings.append("forbidden_word_hit")
+    # 第五节：违禁词最终检查——首调命中已在阶段四并入 retry_combined（最多 1 次合并纠正）；
+    # 合并纠正后（或首调未触发 retry 时）仍命中则阻断转人工，不再调用模型。
+    retry_forbidden_hits = _check_forbidden_words(str(decision.get("reply_text") or ""), forbidden_words)
+    if retry_forbidden_hits:
+        decision["manual_required"] = True
+        decision["manual_required_reason"] = (
+            f"回复命中违禁词，需人工确认；命中词：{'、'.join(retry_forbidden_hits)}"
+        )
+        decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | {"forbidden_word_hit"})
+        decision["auto_send"] = False
+        retry_warnings.append("forbidden_word_hit")
     if decision.get("llm_raw_auto_send"):
         retry_warnings.append("llm_requested_auto_send_ignored")
     decision = _apply_safety_postprocess(
@@ -1352,11 +1359,22 @@ def _build_llm_reply(
     # fallback_reason 回归纯检索诊断（不入 risk_flags，不单独阻断候选）。
     # 知识不可信时的事实声明阻断已由 _apply_safety_postprocess 的 knowledge_untrusted
     # 守卫处理；候选资格由 _direct_llm_auto_send_allowed 统一收敛，9000 Gate 兜底。
-    # 敏感词代码层兜底：AI 回复中出现平台禁用词时自动替换，不依赖 LLM 自觉
-    reply_text = _replace_sensitive_words(str(decision["reply_text"] or ""))
+    # 固定敏感词替换语义已删除（不再执行"微信→绿泡泡"等替换）；违禁词只检测不替换。
     # P0 止血：后置校验——客户已提供完整联系方式时，AI 不得说"有星号""号码不完整"
-    reply_text = _check_valid_contact_conflict(reply_text, contact_state, decision)
+    reply_text = _check_valid_contact_conflict(str(decision["reply_text"] or ""), contact_state, decision)
     decision["reply_text"] = reply_text
+    # 违禁词最终门禁：必须位于全部文本突变之后（_check_valid_contact_conflict 是最后一处改写），
+    # 对最终 reply_text 确定性检查，覆盖 postprocess 与 contact-conflict 改写引入违禁词路径；
+    # 命中 → 阻断转人工（manual_required=true / auto_send=false），不调用模型。
+    _post_forbidden_hits = _check_forbidden_words(reply_text, forbidden_words)
+    if _post_forbidden_hits:
+        decision["risk_flags"] = list(set(decision.get("risk_flags") or []) | {"forbidden_word_hit"})
+        decision["manual_required"] = True
+        decision["auto_send"] = False
+        decision["manual_required_reason"] = (
+            f"回复最终文本仍命中违禁词，需人工确认；命中词：{'、'.join(_post_forbidden_hits)}"
+        )
+        retry_warnings.append("postprocess_forbidden_word_blocked")
     log_llm_call(
         tenant_id=request.tenant_id,
         merchant_id=request.merchant_id,
@@ -1969,12 +1987,14 @@ def _build_llm_combined_retry_messages(
     off_platform_promise: str | None = None,
     unfounded_followup: str | None = None,
     redundant_contact_mention: bool = False,
+    forbidden_hits: list[str] | None = None,
     bad_reply: str,
 ) -> list[dict]:
     """阶段四合并纠正：首调后一次性检查"重复询问已知信息"+"遗漏手机号目标"+
-    "联系方式语义违规"+"资料报价承诺违规"+"无条件联系承诺违规"+"冗余联系方式提及"，
-    命中任一时最多追加一次合并纠正调用（计量阶段 retry_combined）。
+    "联系方式语义违规"+"资料报价承诺违规"+"无条件联系承诺违规"+"冗余联系方式提及"+
+    "违禁词命中"，命中任一时最多追加一次合并纠正调用（计量阶段 retry_combined）。
 
+    违禁词命中时，具体命中词注入第二次模型请求（forbidden_hits），要求重新生成不得出现这些词或变体。
     单份客户上下文合同：首条 user 消息已含 known_customer，纠正消息只含触发原因、坏回复和纠正指令，
     不重复客户上下文或内部字段。
     """
@@ -1993,6 +2013,13 @@ def _build_llm_combined_retry_messages(
         reasons.append("客户尚未提供有效联系方式，上一版回复却无条件承诺安排同事联系，应改为引导客户先留联系方式")
     if redundant_contact_mention:
         reasons.append("联系方式已确认，但客户本轮未询问联系方式，请静默使用该事实，不要主动提及客户以前留过联系方式")
+    if forbidden_hits:
+        reasons.append("上一版回复命中平台违禁词：" + "、".join(forbidden_hits) + "，不得出现这些词或其变体")
+    forbidden_instruction = (
+        f"严禁出现违禁词：{'、'.join(forbidden_hits)}。"
+        if forbidden_hits
+        else ""
+    )
     retry_payload = {
         "retry_reason": "；".join(reasons),
         "bad_reply": bad_reply,
@@ -2002,6 +2029,7 @@ def _build_llm_combined_retry_messages(
             "联系方式不完整时引导补全而不是说已收到，已收到有效联系方式时不得再次索要；"
             "客户索要资料/报价/检测报告等时，说明平台内不方便展开，引导客户留个联系方式后再沟通，"
             "不得承诺把具体内容发到客户手机或绿泡泡；客户未留有效联系方式时不得无条件承诺安排同事联系。"
+            + forbidden_instruction
         ),
     }
     return [
@@ -2299,9 +2327,10 @@ def _clean_structured_reply_text(value: object) -> str | None:
 
 
 def _check_forbidden_words(reply_text: str, forbidden_words: list[str]) -> list[str]:
-    """第五节：LLM 生成后确定性违禁词检查。返回命中的违禁词原文列表（去重）。
+    """LLM 生成后确定性违禁词检查。返回命中的违禁词原文列表（去重）。
 
-    检查在第四节合并纠正之后做——命中即阻断转人工，不额外重试。
+    首调命中并入 retry_combined（最多 1 次合并纠正，命中词注入第二次请求）；
+    retry 后与安全后处理后仍命中则阻断转人工（manual_required=true, auto_send=false）。
     日志只记录命中词，不保存完整敏感正文。
     """
     if not reply_text or not forbidden_words:
@@ -3404,25 +3433,6 @@ def _build_specific_model_safe_clarify_reply(latest_message: str) -> str:
             return f"{vehicle}我们有，您更关注 {common_models} 哪款？"
         return f"{vehicle}我们有，具体车源我帮您核实。"
     return "这个车型我们有，我帮您核实下。"
-
-
-# 抖音平台敏感词代码层兜底——AI 回复中出现禁用词时自动替换，不依赖 LLM 自觉。
-# 替换规则：微信→绿泡泡，手机号/电话号码→联系方式，个人号→v。
-# 注意：仅替换 AI 回复文本，不影响代码层关键词检测常量（CONTACT_KEYWORDS 等）。
-_SENSITIVE_WORD_REPLACEMENTS = (
-    ("加微信", "加绿泡泡"),
-    ("微信", "绿泡泡"),
-    ("手机号", "联系方式"),
-    ("电话号码", "联系方式"),
-    ("个人号", "v"),
-)
-
-
-def _replace_sensitive_words(text: str) -> str:
-    """代码层兜底：替换 AI 回复中的平台敏感词。"""
-    for old, new in _SENSITIVE_WORD_REPLACEMENTS:
-        text = text.replace(old, new)
-    return text
 
 
 # P0 止血：客户已提供完整联系方式时 AI 不得说"有星号""号码不完整"

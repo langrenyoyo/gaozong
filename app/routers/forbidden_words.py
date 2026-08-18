@@ -3,7 +3,8 @@
 复用既有权限码 auto_wechat:admin:forbidden_words，不新增权限码。
 一期为全局词库，管理接口只做词库只读 + 词条 CRUD + 启停；
 命中日志查询不在本阶段提供，测试直接查数据库验证。
-所有写接口对 word/safe_word 做 strip，拒绝空 safe_word，拒绝同库大小写等价重复词。
+所有写接口对 word/safe_word 做 strip；safe_word 为兼容可选字段（不参与替换，不再必填）；
+拒绝同库大小写等价重复词。
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ class ForbiddenWordCreateRequest(BaseModel):
 
     library_key: str = Field(..., min_length=1, max_length=64)
     word: str = Field(..., min_length=1, max_length=100)
-    safe_word: str = Field(..., min_length=1, max_length=100)
+    safe_word: str | None = Field(None, max_length=100)
     severity: str | None = Field(None, max_length=32)
     enabled: bool = True
 
@@ -164,12 +165,10 @@ def create_word(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """新增词条；校验词库存在、safe_word 非空、同库大小写等价查重。"""
+    """新增词条；校验词库存在、同库大小写等价查重；safe_word 为兼容可选字段（不再必填）。"""
     _require_admin(context)
     word = _validate_word_required(payload.word)
-    safe_word = payload.safe_word.strip()
-    if not safe_word:
-        raise _bad_request("SAFE_WORD_REQUIRED", "安全替换词不能为空")
+    safe_word = (payload.safe_word or "").strip() or None
     library = _library_by_key(db, payload.library_key)
     if library is None:
         raise _not_found("LIBRARY_NOT_FOUND", "违禁词库不存在")
@@ -196,7 +195,7 @@ def update_word(
     db: Session = Depends(get_db),
     context: RequestContext = Depends(get_request_context_required),
 ):
-    """更新词条字段；word 变更需重新查重，safe_word 不得置空。"""
+    """更新词条字段；word 变更需重新查重，safe_word 为兼容可选字段（空值清空）。"""
     _require_admin(context)
     record = db.get(ForbiddenWord, word_id)
     if record is None:
@@ -210,11 +209,8 @@ def update_word(
             if _has_casefold_duplicate(db, record.library_id, new_word, exclude_id=record.id):
                 raise _bad_request("WORD_DUPLICATED", "同一词库已存在相同违禁词")
             record.word = new_word
-    if "safe_word" in data and data["safe_word"] is not None:
-        new_safe = data["safe_word"].strip()
-        if not new_safe:
-            raise _bad_request("SAFE_WORD_REQUIRED", "安全替换词不能为空")
-        record.safe_word = new_safe
+    if "safe_word" in data:
+        record.safe_word = (data["safe_word"] or "").strip() or None
     if "severity" in data:
         record.severity = data["severity"]
     if "enabled" in data and data["enabled"] is not None:

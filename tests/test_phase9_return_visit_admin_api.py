@@ -6,7 +6,7 @@
 覆盖：
 - 三条 prompt 列表；逐字 fallback（PUT 原文保存）。
 - PUT reason 必填 / 范围校验（template_text 1..500、confidence_threshold 0.50..1.00、enabled bool、未知字段 422）。
-- 审计写入；违禁词命中告警（ForbiddenWordHitLog）但数据库保存原文。
+- 审计写入；违禁词命中 → 400 FORBIDDEN_WORD_HIT 拒绝保存（不落库，命中词随响应返回）。
 - 无权限 403；未知 key 404。
 - runs 过滤（send_status/prompt_key/judgement_source）与统计。
 - 商户隔离：非 super_admin 看其他商户 run 详情 → 404。
@@ -130,7 +130,7 @@ def _seed_prompts() -> None:
 
 
 def _seed_forbidden_word(word: str = "敏感词A", safe: str = "安全词A") -> None:
-    """seed 全局违禁词库 + 词条，验证 PUT 命中告警但数据库保存原文。"""
+    """seed 全局违禁词库 + 词条，验证 PUT 命中违禁词 → 400 拒绝保存。"""
     db = TestSession()
     try:
         db.add(
@@ -369,8 +369,8 @@ def test_update_prompt_writes_audit():
         db.close()
 
 
-def test_update_prompt_forbidden_word_alert_preserves_original():
-    """违禁词命中写 ForbiddenWordHitLog；数据库仍保存管理员原文（不被安全词替换）。"""
+def test_update_prompt_forbidden_word_rejected():
+    """回访模板命中违禁词 → 400 FORBIDDEN_WORD_HIT + hits，拒绝保存（不落库）。"""
     _seed_prompts()
     _seed_forbidden_word(word="敏感词A", safe="安全词A")
     payload = {
@@ -378,26 +378,24 @@ def test_update_prompt_forbidden_word_alert_preserves_original():
         "fallback_message": "兜底无违禁",
         "confidence_threshold": 0.80,
         "enabled": True,
-        "reason": "违禁词告警测试",
+        "reason": "违禁词拒绝测试",
     }
     resp = _client(_context()).put(
         "/admin/return-visit-prompts/retain_contact_conversion", json=payload
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 400
+    detail = resp.json().get("detail") or resp.json()
+    assert (detail.get("code") if isinstance(detail, dict) else None) == "FORBIDDEN_WORD_HIT"
+    if isinstance(detail, dict):
+        assert any(h.get("word") == "敏感词A" for h in detail.get("hits", []))
 
     db = TestSession()
     try:
-        # 命中日志写入
-        hits = db.query(ForbiddenWordHitLog).filter(
-            ForbiddenWordHitLog.source == "return_visit_prompt_edit"
-        ).all()
-        assert len(hits) >= 1
-        assert any(h.word == "敏感词A" for h in hits)
-        # 数据库保存管理员原文，未被安全词替换
+        # 拒绝保存：整个请求无副作用（含审计日志随拒绝事务回滚），原模板文本不被覆盖
         row = db.query(ReturnVisitPrompt).filter(
             ReturnVisitPrompt.prompt_key == "retain_contact_conversion"
         ).first()
-        assert row.template_text == "话术含敏感词A请留意"
+        assert row.template_text != "话术含敏感词A请留意"
     finally:
         db.close()
 

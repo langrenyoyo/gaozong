@@ -26,7 +26,7 @@ from app.database import get_db
 from app.models import ReturnVisitPrompt, ReturnVisitRun
 from app.schemas import ReturnVisitPromptCreateRequest, ReturnVisitPromptUpdateRequest
 from app.services.autoreply_admin_rollout_service import record_admin_audit
-from app.services.forbidden_word_service import replace_forbidden_words
+from app.services.forbidden_word_service import check_forbidden_words
 
 
 router = APIRouter(prefix="/admin", tags=["管理员-回访配置与审计"])
@@ -51,6 +51,26 @@ def _bad_request(code: str, message: str) -> HTTPException:
 
 def _not_found(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": code, "message": message})
+
+
+def _reject_if_forbidden_hit(db: Session, context: RequestContext, content: str, field: str) -> None:
+    """回访模板违禁词只检测：命中即抛 400 FORBIDDEN_WORD_HIT + hits，不落库（不替换）。"""
+    check = check_forbidden_words(
+        db,
+        merchant_id=context.merchant_id or "global",
+        source="return_visit_prompt_edit",
+        content=content,
+        context={"context_type": "return_visit_prompt", "field": field},
+    )
+    if check.changed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "FORBIDDEN_WORD_HIT",
+                "message": f"回访话术命中违禁词，拒绝保存；字段：{field}",
+                "hits": [{"word": h.word, "count": h.count} for h in check.hits],
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -85,17 +105,12 @@ def create_prompt(
 ):
     """新建回访场景（系统生成 custom_ key，写审计）。"""
     _require_admin(context)
+    # 违禁词处理方案：回访模板命中违禁词即拒绝保存（400 + FORBIDDEN_WORD_HIT + hits，不落库）。
+    _reject_if_forbidden_hit(db, context, payload.template_text, "template_text")
+    _reject_if_forbidden_hit(db, context, payload.fallback_message, "fallback_message")
     # 系统生成 key：custom_<毫秒时间戳>，保证唯一
     prompt_key = f"custom_{int(datetime.now().timestamp() * 1000)}"
     merchant_id = context.merchant_id or "global"
-    replace_forbidden_words(
-        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
-        content=payload.template_text,
-    )
-    replace_forbidden_words(
-        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
-        content=payload.fallback_message,
-    )
     prompt = ReturnVisitPrompt(
         prompt_key=prompt_key,
         name=payload.name,
@@ -139,8 +154,8 @@ def update_prompt(
 ):
     """更新回访提示词配置。
 
-    同一事务：先调 replace_forbidden_words 仅写命中日志与告警（数据库仍保存管理员原文），
-    再 record_admin_audit 留痕，最后一次 commit。不触发发送。
+    违禁词只检测：命中即 400 FORBIDDEN_WORD_HIT 拒绝保存（不落库）；
+    通过后再 record_admin_audit 留痕，最后一次 commit。不触发发送。
     """
     _require_admin(context)
     prompt = (
@@ -155,17 +170,10 @@ def update_prompt(
 
     before = _prompt_summary(prompt)
 
-    # 违禁词命中日志与告警：replace_forbidden_words 内部写 ForbiddenWordHitLog 并累计 hit_count；
-    # 数据库仍保存管理员提交原文（不使用替换结果），仅用于审计与告警。
+    # 违禁词处理方案：回访模板命中违禁词即拒绝保存（400 + FORBIDDEN_WORD_HIT + hits，不落库）。
+    _reject_if_forbidden_hit(db, context, payload.template_text, "template_text")
+    _reject_if_forbidden_hit(db, context, payload.fallback_message, "fallback_message")
     merchant_id = context.merchant_id or "global"
-    replace_forbidden_words(
-        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
-        content=payload.template_text,
-    )
-    replace_forbidden_words(
-        db, merchant_id=merchant_id, source="return_visit_prompt_edit",
-        content=payload.fallback_message,
-    )
 
     prompt.template_text = payload.template_text
     prompt.fallback_message = payload.fallback_message

@@ -157,8 +157,8 @@ def test_return_visit_auto_writes_return_visit_run_id():
 # ---------------------------------------------------------------------------
 
 
-def test_return_visit_auto_maps_forbidden_source():
-    """send_source=return_visit_auto → 违禁词命中 source=douyin_return_visit（非 douyin_manual）。"""
+def test_return_visit_auto_keeps_original_text():
+    """send_source=return_visit_auto 直调发送：保留原文（发送前检测由 return_visit_run_service 负责）。"""
     db = TestSession()
     try:
         _seed_forbidden_words(db)
@@ -189,9 +189,10 @@ def test_return_visit_auto_maps_forbidden_source():
     db3 = TestSession()
     try:
         record = db3.query(DouyinPrivateMessageSend).one()
-        assert record.content == "我们可到店详询"
+        # 原文发送，不替换、不写命中日志（发送前检测在 return_visit_run_service 层）
+        assert record.content == "我们现车很多"
         assert (
-            db3.query(ForbiddenWordHitLog).filter_by(source="douyin_return_visit").count() == 1
+            db3.query(ForbiddenWordHitLog).filter_by(source="douyin_return_visit").count() == 0
         )
     finally:
         db3.close()
@@ -328,7 +329,7 @@ def test_duplicate_return_visit_run_id_blocked():
 
 
 def test_manual_source_unchanged():
-    """manual 发送 source=douyin_manual + return_visit_run_id=None（回归不变）。"""
+    """manual 发送 source=douyin_manual + return_visit_run_id=None；人工私信保留原文（回归不变）。"""
     db = TestSession()
     try:
         _seed_forbidden_words(db)
@@ -360,8 +361,10 @@ def test_manual_source_unchanged():
         record = db3.query(DouyinPrivateMessageSend).one()
         assert record.send_source == "manual"
         assert record.return_visit_run_id is None
+        # 人工私信原文发送，不替换、不写命中日志
+        assert record.content == "我们现车很多"
         assert (
-            db3.query(ForbiddenWordHitLog).filter_by(source="douyin_manual").count() == 1
+            db3.query(ForbiddenWordHitLog).filter_by(source="douyin_manual").count() == 0
         )
     finally:
         db3.close()

@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.config import DEFAULT_CONFIGS
 from app.models import DouyinLead, ReplyCheck, SalesStaff, FeedbackRecord
-from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.reply_analyzer import get_config_value
 
 logger = logging.getLogger(__name__)
@@ -293,15 +292,8 @@ def send_feedback_current_chat(
             )
 
     # --- 第 6 步：写入微信输入框 ---
-    # 违禁词替换：仅用于本次写入，不新增字段保存原文，不修改 write_text_to_input。
-    replacement = replace_forbidden_words(
-        db,
-        merchant_id=_resolve_feedback_merchant_id(db, record),
-        source="wechat_feedback",
-        content=record.feedback_text,
-        context={"context_type": "feedback_record", "context_id": str(record.id)},
-    )
-    feedback_text = replacement.final_content
+    # 违禁词处理方案：纯微信链路完全豁免抖音违禁词，不替换、不阻断，保留原微信文本。
+    feedback_text = record.feedback_text
     try:
         from app.wechat_ui.input_writer import write_text_to_input
         write_result = write_text_to_input(

@@ -17,7 +17,7 @@ export interface ForbiddenWord {
   library_id: number;
   library_key: string;
   word: string;
-  safe_word: string;
+  safe_word?: string | null;
   severity?: string | null;
   enabled: boolean;
   hit_count: number;
@@ -37,7 +37,7 @@ export interface ForbiddenWordQueryParams {
 export interface ForbiddenWordCreatePayload {
   library_key: string;
   word: string;
-  safe_word: string;
+  safe_word?: string | null;
   severity?: string | null;
   enabled?: boolean;
 }

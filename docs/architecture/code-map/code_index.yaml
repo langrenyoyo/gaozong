@@ -5,7 +5,8 @@
 # CODE_SOURCE_BASE: 88235b5bba363fd0dec4945b8e38aba1e82e2d9b
 # G1-DELTA-RECONCILIATION-1：d1fbd04..44c5914，eligible 957→965（+8：D1 presign M05 / D2 migration dirs PLATFORM-RELEASE / D3 上传反馈 M05 / D4 前端 immutable PLATFORM-RELEASE）
 # G1-DELTA-RECONCILIATION-2（PROD-RELEASE-AUTOMATION-MINIMAL-1）：eligible 965→968（+3：scripts/prod_release.py、tests/test_prod_release.py、docs/operations/PRODUCTION_RELEASE.md，均 PLATFORM-RELEASE）
-# ELIGIBLE / MAPPED / UNMAPPED = 968 / 968 / 0
+# G1-DELTA B-2（DECISION AUTHORITY 裁定）：移除 FILE-000921（tests/test_replace_sensitive_words.py，随固定敏感词替换删除），eligible 968→967
+# ELIGIBLE / MAPPED / UNMAPPED = 967 / 967 / 0
 # 派生字段（module/depended_by/path_history）由生成器计算，禁人工双写
 # 本文件是 DERIVED GOVERNANCE ARTIFACT，禁止被应用启动读取
 # ============================================================
@@ -18,8 +19,8 @@ project:
   last_verified_at: "2026-08-14T00:00:00Z"
   generator_script: "e:/tmp/g1_build/build_code_index.py"
 summary:
-  eligible_files: 965
-  mapped_files: 965
+  eligible_files: 967
+  mapped_files: 967
   unmapped_files: 0
   repository_head_relation:
     auto_wechat_9000: "0035"
@@ -35,7 +36,7 @@ summary:
     current_head: "44c591434f5c968a2b06c7a46cf33e43c88c5e6e"
     delta_range: "d1fbd04..44c5914"
     delta_commits: ["ace33f1 (D1 presign M05)", "97528ae (D2 migration dirs PLATFORM-RELEASE)", "8968c8f (D3 上传反馈 M05)", "44c5914 (D4 前端 immutable PLATFORM-RELEASE)"]
-    eligible_delta: "957 -> 965 (+8 新增，0 删除)"
+    eligible_delta: "957 -> 965 (+8 新增，0 删除) -> 968 (RECONCILIATION-2 +3) -> 967 (B-2 -1)"
     g1_result: "COMPLETE_AND_CURRENT"
 entries:
   - id: "FILE-000001"
@@ -35988,45 +35989,8 @@ entries:
         line: 1
         note: "G1 分类依据：G0 Release Governance"
     notes: "G0 Release Governance"
-  - id: "FILE-000921"
-    path: "tests/test_replace_sensitive_words.py"
-    artifact_type: "TEST"
-    owner_type: "MODULE"
-    owner_id: "M01"
-    module: "M01"
-    status: "TEST"
-    runtime_role: "NONE"
-    confidence: "MEDIUM"
-    generated: false
-    generated_by: null
-    derived_from: null
-    entrypoints: []
-    data_owned: []
-    data_read: []
-    dependencies:
-      []
-    depended_by: ['app/routers/capability_gateway.py', 'app/routers/douyin_ai_cs_proxy.py']
-    external_dependencies: []
-    compatibility:
-      comp_for: null
-      purpose: null
-      current_caller: null
-      removal_prerequisite: null
-      redirects: []
-    legacy:
-      legacy_id: null
-      historical_purpose: null
-      evidence: null
-      risk: null
-    section_evidence:
-      []
-    path_history: []
-    evidence:
-      - type: "FILE_PATH"
-        source: "tests/test_replace_sensitive_words.py"
-        line: 1
-        note: "G1 分类依据：客服/自动回复"
-    notes: "客服/自动回复"
+  # G1-DELTA B-2：FILE-000921（tests/test_replace_sensitive_words.py）已随固定敏感词替换删除（git D），
+  # 条目不再代表现实，已移除（原 depended_by 指向 capability_gateway/douyin_ai_cs_proxy 为冻结时证据缺陷，随条目删除而消失）。
   - id: "FILE-000922"
     path: "tests/test_reply_consistency.py"
     artifact_type: "TEST"

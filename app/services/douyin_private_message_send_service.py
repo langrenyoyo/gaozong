@@ -15,7 +15,6 @@ from app import config
 from app.models import DouyinAuthorizedAccount, DouyinPrivateMessageSend, DouyinWebhookEvent
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.conversation_autopilot_state_service import mark_manual_takeover
-from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.douyin_merchant_isolation import require_douyin_account_for_merchant
 from app.services.douyin_openapi_client import call_douyin_openapi
 from app.services.douyin_workbench_conversation_service import get_send_msg_context
@@ -129,21 +128,9 @@ def _send_private_message_with_context(
     forbidden_source = _FORBIDDEN_SOURCE_BY_SEND_SOURCE.get(send_source)
     if forbidden_source is None:
         raise HTTPException(status_code=400, detail="unknown_send_source")
-    # 第五节：自动回复（auto_send=True）的违禁词已由 9100 生成后确定性检查，
-    # 不再在此处生成前替换；人工发送和回访话术仍走旧替换逻辑（命中只替换不拦截）。
-    if not auto_send:
-        replacement = replace_forbidden_words(
-            db,
-            merchant_id=_resolve_merchant_id_for_account(db, context["account_open_id"]) or "unknown_merchant",
-            source=forbidden_source,
-            content=content_text,
-            context={
-                "context_type": "douyin_conversation",
-                "context_id": context.get("conversation_short_id"),
-                "conversation_short_id": context.get("conversation_short_id"),
-            },
-        )
-        content_text = replacement.final_content
+    # 违禁词处理方案（G1-DELTA 后冻结）：人工私信保留原文发送，不替换、不阻断；
+    # 自动回复（auto_send=True）的违禁词由 9100 生成后确定性检查并阻断转人工。
+    # 回访话术的发送前检测由 return_visit_run_service 在调用本函数前完成。
     send_scene = _default_scene(context)
     request_payload = {
         "main_account_id": config.DY_MAIN_ACCOUNT_ID,

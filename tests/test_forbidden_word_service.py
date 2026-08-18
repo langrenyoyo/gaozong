@@ -1,8 +1,8 @@
-"""违禁词统一替换服务单元测试。
+"""违禁词只检测/审计服务单元测试（G1-DELTA 后冻结方案）。
 
-覆盖 Phase 2 执行包 Task 1 要求的 8 个场景：
-单词命中、长短词重叠、英文大小写、重复命中累计、禁用词库/词条、空安全词、
-摘要脱敏、空内容 no-op。
+方案：违禁词只检测不替换（final_content == original_content），命中写 ForbiddenWordHitLog 审计。
+覆盖：单词命中、长短词重叠、英文大小写、重复命中累计、禁用词库/词条、
+safe_word 为空词条仍进入检测、摘要脱敏、空内容 no-op。
 """
 
 from __future__ import annotations
@@ -16,9 +16,8 @@ import app.models  # noqa: F401  确保 metadata 注册全部模型
 from app.database import Base
 from app.models import ForbiddenWord, ForbiddenWordHitLog, ForbiddenWordLibrary
 from app.services.forbidden_word_service import (
-    ForbiddenWordHit,
-    ForbiddenWordReplacementResult,
-    replace_forbidden_words,
+    check_forbidden_words,
+    load_forbidden_words_for_llm,
     summarize_replacement_text,
 )
 
@@ -87,89 +86,82 @@ def _seed(
     return lib
 
 
-def test_replace_forbidden_words_replaces_and_logs_hit():
+def test_check_forbidden_words_detects_and_logs_hit():
     db = _session()
     _seed(db, words=[("现车很多", "可到店详询"), ("微信13800138000", "联系方式")])
 
-    result = replace_forbidden_words(
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
         content="我们现车很多，微信13800138000可以聊",
-        context={"context_type": "douyin_conversation", "context_id": "conv-1"},
     )
-    db.commit()
-
     assert result.changed is True
-    assert result.final_content == "我们可到店详询，联系方式可以聊"
+    # 只检测不替换：final_content 恒等于原文
+    assert result.final_content == "我们现车很多，微信13800138000可以聊"
     assert [hit.word for hit in result.hits] == ["现车很多", "微信13800138000"]
     assert result.hits[0].count == 1
     assert result.hits[1].count == 1
     assert db.query(ForbiddenWordHitLog).count() == 2
     first_log = db.query(ForbiddenWordHitLog).first()
     assert "13800138000" not in first_log.before_text_summary
-    # 审计 id 已回写
     assert result.audit_ids is not None
     assert len(result.audit_ids) == 2
 
 
-def test_replace_forbidden_words_prefers_longest_word():
+def test_check_forbidden_words_prefers_longest_word():
     db = _session()
-    _seed(db, words=[("现车", "可咨询"), ("现车很多", "可到店详询")])
+    _seed(db, words=[("现车", "可到店"), ("现车很多", "可到店详询")])
 
-    result = replace_forbidden_words(
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
         content="现车很多",
     )
-
-    assert result.final_content == "可到店详询"
+    # 长词优先命中：只命中"现车很多"一次
+    assert result.changed is True
+    assert result.final_content == "现车很多"
     assert [hit.word for hit in result.hits] == ["现车很多"]
 
 
-def test_replace_forbidden_words_is_case_insensitive_for_latin_text():
+def test_check_forbidden_words_is_case_insensitive_for_latin_text():
     db = _session()
     _seed(db, words=[("loan", "financing")])
 
-    result = replace_forbidden_words(
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
-        content="We offer Loan now",
+        content="Loan is not financing",
     )
-
     assert result.changed is True
-    assert "Loan" not in result.final_content
-    assert "financing" in result.final_content
+    assert "Loan" in result.final_content  # 不替换
     assert result.hits[0].word == "loan"
 
 
-def test_replace_forbidden_words_counts_repeated_hits_once_per_log_row():
+def test_check_forbidden_words_counts_repeated_hits_once_per_log_row():
     db = _session()
-    _seed(db, words=[("现车", "现货")])
+    _seed(db, words=[("现车", "可到店")])
 
-    result = replace_forbidden_words(
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
         content="现车 现车 现车",
     )
-    db.commit()
-
-    # 同词出现 3 次：hits 里该词 count=3，日志只写 1 行，hit_count 累加 3
     assert len(result.hits) == 1
     assert result.hits[0].count == 3
     assert db.query(ForbiddenWordHitLog).count() == 1
-    word_row = db.query(ForbiddenWord).filter_by(word="现车").one()
+
+    word_row = db.query(ForbiddenWord).one()
     assert word_row.hit_count == 3
 
 
-def test_replace_forbidden_words_ignores_disabled_library_and_word():
-    # 词库禁用：不替换、不写日志
+def test_check_forbidden_words_ignores_disabled_library_and_word():
     db = _session()
-    _seed(db, library_enabled=False, words=[("现车", "现货")])
-    result = replace_forbidden_words(
+    _seed(db, library_enabled=False, words=[("现车", "可到店")])
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
@@ -179,11 +171,10 @@ def test_replace_forbidden_words_ignores_disabled_library_and_word():
     assert result.final_content == "现车"
     assert db.query(ForbiddenWordHitLog).count() == 0
 
-    # 词条禁用：同样不参与
     _reset_db()
     db2 = _session()
-    _seed(db2, words=[("现车", "现货", False)])
-    result2 = replace_forbidden_words(
+    _seed(db2, words=[("现车", "可到店", False)])
+    result2 = check_forbidden_words(
         db2,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
@@ -194,49 +185,54 @@ def test_replace_forbidden_words_ignores_disabled_library_and_word():
     assert db2.query(ForbiddenWordHitLog).count() == 0
 
 
-def test_replace_forbidden_words_skips_blank_safe_word():
+def test_check_forbidden_words_includes_blank_safe_word_words():
+    """safe_word 为空的词条仍进入检测（验收 9：safe_word 为空也能进入 LLM 检查与检测）。"""
     db = _session()
-    # safe_word 为空的词条不参与替换
-    _seed(db, words=[("现车", ""), ("可到店", "现货")])
+    _seed(db, words=[("现车", None), ("可到店", "可到店详询")])
 
-    result = replace_forbidden_words(
+    # LLM 检查词列表包含 safe_word 为空的词条
+    llm_words = load_forbidden_words_for_llm(db)
+    assert "现车" in llm_words
+    assert "可到店" in llm_words
+
+    result = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
-        content="现车 可到店",
+        content="现车 现货",
     )
-
-    assert result.final_content == "现车 现货"
-    assert [hit.word for hit in result.hits] == ["可到店"]
-
-
-def test_replace_forbidden_words_masks_summary_sensitive_values():
-    db = _session()
-    _seed(db, words=[("现车很多", "可到店详询")])
-
-    result = replace_forbidden_words(
-        db,
-        merchant_id="merchant-1",
-        source="douyin_ai_auto",
-        content="现车很多，手机13800138000，微信wxid_abc123456联系",
-    )
-    db.commit()
-
     assert result.changed is True
-    log = db.query(ForbiddenWordHitLog).one()
-    # 摘要不得出现明文手机号、明文微信号账号
-    assert "13800138000" not in log.before_text_summary
-    assert "wxid_abc123456" not in log.before_text_summary
-    assert "138****8000" in log.before_text_summary
-    assert "微信号[masked]" in log.before_text_summary
+    assert result.final_content == "现车 现货"  # 不替换
+    assert [hit.word for hit in result.hits] == ["现车"]
 
 
-def test_replace_forbidden_words_empty_content_is_noop():
+def test_check_forbidden_words_masks_summary_sensitive_values():
     db = _session()
-    _seed(db, words=[("现车", "现货")])
+    _seed(db, words=[("现车", "可到店"), ("微信13800138000", "联系方式")])
+
+    result = check_forbidden_words(
+        db,
+        merchant_id="merchant-1",
+        source="douyin_ai_auto",
+        content="现车 微信13800138000 wxid_abc123456",
+    )
+    assert result.changed is True
+    assert len(result.hits) == 2
+    logs = db.query(ForbiddenWordHitLog).all()
+    assert len(logs) == 2
+    for log in logs:
+        # 完整手机号/微信号账号值不得进入摘要；掩码标记必须存在
+        assert "13800138000" not in log.before_text_summary
+        assert "wxid_abc123456" not in log.before_text_summary
+        assert "微信号[masked]" in log.before_text_summary
+
+
+def test_check_forbidden_words_empty_content_is_noop():
+    db = _session()
+    _seed(db, words=[("现车", "可到店")])
 
     # 空内容
-    r1 = replace_forbidden_words(
+    r1 = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
@@ -247,7 +243,7 @@ def test_replace_forbidden_words_empty_content_is_noop():
     assert r1.hits == []
 
     # 纯空白内容
-    r2 = replace_forbidden_words(
+    r2 = check_forbidden_words(
         db,
         merchant_id="merchant-1",
         source="douyin_ai_auto",
@@ -259,7 +255,7 @@ def test_replace_forbidden_words_empty_content_is_noop():
     # 无启用词：原文返回，不写日志
     _reset_db()
     db2 = _session()
-    r3 = replace_forbidden_words(
+    r3 = check_forbidden_words(
         db2,
         merchant_id="merchant-1",
         source="douyin_ai_auto",

@@ -308,7 +308,7 @@ def _client_with_admin_context() -> TestClient:
 # ---------------------------------------------------------------------------
 # 接入点 1：抖音人工私信中心 helper
 # ---------------------------------------------------------------------------
-def test_douyin_manual_send_replaces_forbidden_words_before_upstream_call():
+def test_douyin_manual_send_keeps_original_text():
     db = TestSession()
     _seed_forbidden_words(db)
     _seed_authorized_account(db)
@@ -340,11 +340,13 @@ def test_douyin_manual_send_replaces_forbidden_words_before_upstream_call():
         db2.close()
 
     request_payload = upstream.call_args.args[1]
-    assert request_payload["content"] == "我们可到店详询"
+    # 人工私信：保留原文发送，不替换、不阻断（违禁词处理方案冻结）。
+    assert request_payload["content"] == "我们现车很多"
     db3 = TestSession()
     record = db3.query(DouyinPrivateMessageSend).one()
-    assert record.content == "我们可到店详询"
-    assert db3.query(ForbiddenWordHitLog).filter_by(source="douyin_manual").count() == 1
+    assert record.content == "我们现车很多"
+    # 人工私信不再调用替换服务，不写命中日志
+    assert db3.query(ForbiddenWordHitLog).filter_by(source="douyin_manual").count() == 0
     db3.close()
 
 
@@ -377,7 +379,7 @@ def test_douyin_ai_auto_send_reuses_private_message_replacement():
     record = db3.query(DouyinPrivateMessageSend).one()
     assert record.content == "我们现车很多"
     assert record.send_source == "ai_auto"
-    # 自动回复不再走 replace_forbidden_words，不写命中日志
+    # 自动回复违禁词由 9100 生成后检查（命中并入 retry_combined，仍命中转人工），9000 发送侧不写命中日志
     assert db3.query(ForbiddenWordHitLog).filter_by(source="douyin_ai_auto").count() == 0
     db3.close()
 
@@ -385,7 +387,7 @@ def test_douyin_ai_auto_send_reuses_private_message_replacement():
 # ---------------------------------------------------------------------------
 # 接入点 3：微信反馈服务（write_text_to_input 前）
 # ---------------------------------------------------------------------------
-def test_wechat_feedback_replaces_forbidden_words_before_write_text():
+def test_wechat_feedback_keeps_original_text():
     db = TestSession()
     _seed_forbidden_words(db)
     lead = DouyinLead(
@@ -424,19 +426,19 @@ def test_wechat_feedback_replaces_forbidden_words_before_write_text():
         db2.close()
 
     written_text = wt_mock.call_args.kwargs.get("text")
-    assert written_text == "我们可到店详询"
+    # 纯微信链路完全豁免抖音违禁词，保留原微信文本
+    assert written_text == "我们现车很多"
 
 
 # ---------------------------------------------------------------------------
 # 接入点 4：微信通知路由 send_to_staff（write_text_to_input + LeadNotification 前）
 # ---------------------------------------------------------------------------
-def test_lead_notification_route_replaces_forbidden_words_before_write_text():
-    """Phase 7-FIX2 Task 8 续修：通过正式 create_notify_sales_task 路径验证违禁词替换。
+def test_lead_notification_route_keeps_original_text():
+    """通过正式 create_notify_sales_task 路径验证微信派单链路保留原微信文本（豁免抖音违禁词）。
 
     直接调用 lead_notification_actions.create_notify_sales_task 路由处理函数
     （即 /lead-notifications/send-to-staff 的正式入口），验证 WechatTask.message 与
-    LeadNotification.notification_text 在原子持久化前已完成违禁词替换。
-    不再弱化为只调用 replace_forbidden_words() 本身。
+    LeadNotification.notification_text 为原文，不调用替换服务。
     """
     db = TestSession()
     _seed_forbidden_words(db)
@@ -482,15 +484,13 @@ def test_lead_notification_route_replaces_forbidden_words_before_write_text():
         assert response.task_id is not None
         assert response.notification_id is not None
 
-        # 验证返回的 notification_text 已替换违禁词
-        assert "现车很多" not in (response.notification_text or "")
-        assert "可到店详询" in (response.notification_text or "")
+        # 验证返回的 notification_text 保留原微信文本（豁免抖音违禁词，不替换）
+        assert "现车很多" in (response.notification_text or "")
 
-        # 验证持久化的 WechatTask.message 与 LeadNotification.notification_text 一致且已替换
+        # 验证持久化的 WechatTask.message 与 LeadNotification.notification_text 一致且为原文
         task = db2.query(WechatTask).filter_by(id=response.task_id).one()
         notification = db2.query(LeadNotification).filter_by(id=response.notification_id).one()
-        assert "现车很多" not in task.message
-        assert "可到店详询" in task.message
+        assert "现车很多" in task.message
         assert notification.notification_text == task.message
     finally:
         db2.close()
@@ -499,7 +499,7 @@ def test_lead_notification_route_replaces_forbidden_words_before_write_text():
 # ---------------------------------------------------------------------------
 # 接入点 5：微信自动通知服务 auto_notify_assigned_lead（write_text_to_input 前）
 # ---------------------------------------------------------------------------
-def test_notification_service_replaces_forbidden_words_before_write_text():
+def test_notification_service_keeps_original_text():
     db = TestSession()
     _seed_forbidden_words(db)
     staff = SalesStaff(name="svc-staff", status="active", wechat_nickname="测试昵称", merchant_id="merchant-1")
@@ -540,24 +540,23 @@ def test_notification_service_replaces_forbidden_words_before_write_text():
         db2.close()
 
     written_text = wt_mock.call_args.args[1]
-    assert "可到店详询" in written_text
-    assert "现车很多" not in written_text
+    # 纯微信链路完全豁免抖音违禁词，保留原微信文本
+    assert "现车很多" in written_text
     db3 = TestSession()
     notif = db3.query(LeadNotification).filter_by(lead_id=lead_id).first()
     assert notif is not None
-    assert "可到店详询" in notif.notification_text
-    assert "现车很多" not in notif.notification_text
+    assert "现车很多" in notif.notification_text
     db3.close()
 
 
 # ---------------------------------------------------------------------------
 # 接入点 6：主线 /lead-notifications/send-to-staff（Phase 7 WechatTask.message 前替换）
 # ---------------------------------------------------------------------------
-def test_send_to_staff_task_message_uses_forbidden_word_replacement():
-    """Phase 7：主线 send-to-staff 创建的 WechatTask.message 与 LeadNotification 必须是替换后文本。
+def test_send_to_staff_task_message_keeps_original_text():
+    """Phase 7：主线 send-to-staff 创建的 WechatTask.message 与 LeadNotification 保留原微信文本。
 
     主线 send-to-staff 只在 9000 创建 WechatTask(mode=single_send)，不操作微信 UI；
-    因此无需 mock Windows 自动化，只需断言入库文本已替换。
+    因此无需 mock Windows 自动化，只需断言入库文本为原文（豁免抖音违禁词）。
     """
     db = TestSession()
     _seed_forbidden_words(db)
@@ -610,8 +609,7 @@ def test_send_to_staff_task_message_uses_forbidden_word_replacement():
     try:
         task = db2.query(WechatTask).filter_by(id=body["task_id"]).one()
         notification = db2.query(LeadNotification).filter_by(id=body["notification_id"]).one()
-        assert "现车很多" not in task.message
-        assert "可到店详询" in task.message
+        assert "现车很多" in task.message
         assert notification.notification_text == task.message
     finally:
         db2.close()

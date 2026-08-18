@@ -56,6 +56,7 @@ from app.services.douyin_workbench_conversation_service import (
     get_latest_private_message_state,
     get_send_msg_context,
 )
+from app.services.forbidden_word_service import check_forbidden_words
 from app.services.xg_douyin_ai_cs_client import get_xg_douyin_ai_cs_client
 from app.services.wechat_task_service import create_wechat_task
 
@@ -921,6 +922,21 @@ def _send_and_classify(
     code=0 → sent；明确 upstream_business_error → failed；
     网络/超时/HTTP/非法/空响应等"请求可能已到上游" → send_unknown（永不重发）。
     """
+    # 违禁词处理方案：发送给抖音客户的回访话术做发送前只检测（命中阻断，不替换、不重生成）。
+    # notify_sales 微信任务不做违禁词处理（由 create_wechat_task 链路豁免）。
+    forbidden_check = check_forbidden_words(
+        db,
+        merchant_id=run.merchant_id or "unknown_merchant",
+        source="return_visit_send",
+        content=content,
+        context={"context_type": "return_visit_run", "context_id": str(run_id)},
+    )
+    if forbidden_check.changed:
+        logger.warning(
+            "return_visit_send_forbidden run_id=%s stage=forbidden_word_hit hits=%s",
+            run_id, [h.word for h in forbidden_check.hits],
+        )
+        return {"status": "blocked", "failure_stage": "forbidden_word_hit", "send_id": None}
     try:
         send_result = _send_private_message_with_context(
             db,

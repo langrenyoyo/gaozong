@@ -1050,7 +1050,7 @@ class ForbiddenWordLibrary(Base):
 
 
 class ForbiddenWord(Base):
-    """违禁词条目：归属某个词库，word -> safe_word 一一映射，只替换不拦截。"""
+    """违禁词条目：归属某个词库，word 为违禁词；只检测/审计，不替换正文（safe_word 为兼容可选字段）。"""
 
     __tablename__ = "forbidden_words"
     __table_args__ = (
@@ -1060,7 +1060,7 @@ class ForbiddenWord(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     library_id = Column(Integer, nullable=False, comment="所属违禁词库 ID")
     word = Column(String(100), nullable=False, comment="违禁词")
-    safe_word = Column(String(100), comment="替换安全词")
+    safe_word = Column(String(100), comment="安全词（兼容可选，不参与替换）")
     severity = Column(String(32), comment="严重程度")
     enabled = Column(Boolean, nullable=False, default=True, comment="启用/禁用")
     hit_count = Column(Integer, nullable=False, default=0, comment="命中次数")
@@ -1077,7 +1077,7 @@ class ForbiddenWordHitLog(Base):
     merchant_id = Column(String(128), nullable=False, comment="可信商户 ID")
     library_key = Column(String(64), comment="命中的词库 key")
     word = Column(String(100), comment="命中的违禁词")
-    safe_word = Column(String(100), comment="替换后的安全词")
+    safe_word = Column(String(100), comment="安全词（兼容可选，审计保留）")
     source = Column(String(32), comment="命中来源（如 douyin_cs / wechat）")
     context_type = Column(String(32), comment="上下文类型")
     context_id = Column(String(64), comment="上下文 ID")

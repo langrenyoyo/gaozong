@@ -14,7 +14,6 @@ from app.auth.dependencies import get_request_context_required, require_permissi
 from app.database import get_db
 from app.models import DouyinLead, LeadNotification, SalesStaff, WechatTask
 from app.schemas import SendToStaffRequest, SendToStaffResponse
-from app.services.forbidden_word_service import replace_forbidden_words
 from app.services.lead_wechat_notify_eligibility_service import (
     NOTIFY_SALES_RATE_LIMIT_SECONDS,
     LeadWechatNotifyDecision,
@@ -96,27 +95,12 @@ def create_notify_sales_task(
         lead, feedback_no=feedback_no,
     )
 
-    # Phase 7-FIX2 Task 8 续修：违禁词替换（命中写 ForbiddenWordHitLog）+ task + notification
-    # 必须在同一原子事务内。旧实现违禁词 flush 在 try 外，flush 失败无法回滚；
-    # commit 成功后的 refresh 也原样放在可回滚块内，refresh 失败时会错误声称"已回滚"。
+    # 违禁词处理方案：纯微信链路完全豁免抖音违禁词，不替换、不阻断，保留原微信文本。
+    # task + notification 必须在同一原子事务内（SQLAlchemyError 回滚语义保留）。
     from sqlalchemy.exc import SQLAlchemyError
 
     try:
-        # Phase 7：派单文本进入 WechatTask / LeadNotification 前走违禁词替换（命中只替换不拦截）
-        replacement = replace_forbidden_words(
-            db,
-            merchant_id=merchant_id,
-            source="wechat_dispatch",
-            content=notification_text,
-            context={
-                "context_type": "lead_notification",
-                "context_id": str(lead.id),
-                "lead_id": lead.id,
-                "staff_id": staff.id,
-                "feedback_no": feedback_no,
-            },
-        )
-        notification_text = replacement.final_content
+        # Phase 7：派单文本进入 WechatTask / LeadNotification，保持原微信文本
         task = create_wechat_task(
             db,
             task_type="notify_sales",

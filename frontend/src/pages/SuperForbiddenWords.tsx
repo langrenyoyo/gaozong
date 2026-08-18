@@ -14,14 +14,14 @@ import { userFacingError } from "../lib/userFacingError";
 
 // 违禁词超管管理页：词库筛选 + 关键词搜索 + 词条 CRUD（新增/编辑/启停）。
 // 后端一期未提供 DELETE，删除通过禁用实现；命中日志查询不在本阶段。
+// 违禁词只检测/审计，不再配置替换词（safe_word 兼容可选，前端不再录入/展示）。
 interface EditState {
   word: string;
-  safe_word: string;
   severity: string;
   library_key: string;
 }
 
-const EMPTY_EDIT: EditState = { word: "", safe_word: "", severity: "", library_key: "" };
+const EMPTY_EDIT: EditState = { word: "", severity: "", library_key: "" };
 
 export default function SuperForbiddenWords() {
   const [libraries, setLibraries] = useState<ForbiddenWordLibrary[]>([]);
@@ -89,7 +89,6 @@ export default function SuperForbiddenWords() {
     setEditingId(item.id);
     setForm({
       word: item.word,
-      safe_word: item.safe_word,
       severity: item.severity || "",
       library_key: item.library_key,
     });
@@ -102,22 +101,20 @@ export default function SuperForbiddenWords() {
       toast.error("请选择违禁词库");
       return;
     }
-    if (!form.word.trim() || !form.safe_word.trim()) {
-      toast.error("违禁词和安全替换词均不能为空");
+    if (!form.word.trim()) {
+      toast.error("违禁词不能为空");
       return;
     }
     setSubmitting(true);
     try {
       const payload = {
         word: form.word.trim(),
-        safe_word: form.safe_word.trim(),
         severity: form.severity.trim() || null,
         library_key: form.library_key,
       };
       if (editingId !== null) {
         await updateForbiddenWord(editingId, {
           word: payload.word,
-          safe_word: payload.safe_word,
           severity: payload.severity,
         });
         toast.success("违禁词已更新");
@@ -155,7 +152,7 @@ export default function SuperForbiddenWords() {
           </div>
           <div>
             <h1 className="text-[15px] font-bold text-[#1a1f2e]">违禁词配置</h1>
-            <p className="mt-1 text-xs text-[#8b95a6]">自动回复：LLM 不得使用该词，生成后检查命中转人工；人工发送/回访：替换为安全词</p>
+            <p className="mt-1 text-xs text-[#8b95a6]">自动回复：LLM 不得使用该词，命中最多重生成 1 次，仍命中转人工；回访话术发送前命中阻断</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -217,7 +214,6 @@ export default function SuperForbiddenWords() {
                 <tr>
                   <th className="px-4 py-3 font-semibold">词库</th>
                   <th className="px-4 py-3 font-semibold">违禁词</th>
-                  <th className="px-4 py-3 font-semibold">安全替换词<span className="ml-1 text-[10px] font-normal text-[#8b95a6]">仅人工/回访</span></th>
                   <th className="px-4 py-3 font-semibold">严重级别</th>
                   <th className="px-4 py-3 font-semibold">命中次数</th>
                   <th className="px-4 py-3 font-semibold">状态</th>
@@ -227,18 +223,17 @@ export default function SuperForbiddenWords() {
               <tbody className="divide-y divide-[#f1f5f9]">
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-[#8b95a6]">加载中...</td>
+                    <td colSpan={6} className="px-4 py-10 text-center text-[#8b95a6]">加载中...</td>
                   </tr>
                 ) : items.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-[#8b95a6]">暂无违禁词</td>
+                    <td colSpan={6} className="px-4 py-10 text-center text-[#8b95a6]">暂无违禁词</td>
                   </tr>
                 ) : (
                   items.map((item) => (
                     <tr key={item.id} className="text-[#1a1f2e]">
                       <td className="px-4 py-3">{libraryName(item.library_key)}</td>
                       <td className="px-4 py-3 font-medium">{item.word}</td>
-                      <td className="px-4 py-3 text-[#0f766e]">{item.safe_word}</td>
                       <td className="px-4 py-3 text-[#64748b]">{item.severity || "-"}</td>
                       <td className="px-4 py-3 text-[#64748b]">{item.hit_count}</td>
                       <td className="px-4 py-3">
@@ -311,14 +306,6 @@ export default function SuperForbiddenWords() {
                 <input
                   value={form.word}
                   onChange={(e) => setForm((f) => ({ ...f, word: e.target.value }))}
-                  className="mt-1 h-9 w-full rounded-lg border border-[#e4e8f0] px-3 text-xs outline-none focus:border-[#2563eb]"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium text-[#475569]">安全替换词<span className="ml-1 text-[10px] font-normal text-[#8b95a6]">仅人工发送/回访链路使用</span></span>
-                <input
-                  value={form.safe_word}
-                  onChange={(e) => setForm((f) => ({ ...f, safe_word: e.target.value }))}
                   className="mt-1 h-9 w-full rounded-lg border border-[#e4e8f0] px-3 text-xs outline-none focus:border-[#2563eb]"
                 />
               </label>
