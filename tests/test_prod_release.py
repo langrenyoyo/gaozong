@@ -470,6 +470,67 @@ def test_r7g_verified_attestation_writes_expected_revisions_to_preview(monkeypat
     assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003" in out
 
 
+def test_r7j_same_source_sha_attestation_refreshes_late_rag_revision(monkeypatch, scratch, capsys):
+    """同一源码已发布后补做 9100 迁移时，预览必须采用新证明的 revision。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    prod = _make_prod_tree(scratch)
+    _write_db_attestation(rel)
+    attestation = rel / "db-attestations" / "attestation.json"
+    payload = json.loads(attestation.read_text(encoding="utf-8"))
+    payload["rag_expected_revision"] = "0005"
+    payload["rag_actual_revision"] = "0005"
+    attestation.write_text(json.dumps(payload), encoding="utf-8")
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  diff="")
+
+    rc = mod.cmd_deploy(["--service", "douyin-ai-cs", "--dry-run",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0005" in out
+
+
+def test_r7k_late_rag_attestation_does_not_compare_9100_to_api_digest(monkeypatch, scratch):
+    """9100 后补发布只消费 revision，不能拿 API 镜像 digest 校验 9100 镜像。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40)
+    attestation = {
+        "target_api_image": "xg-ai-system-api:release-aaaaaaaaaaaa",
+        "target_api_image_digest": "sha256:" + "1" * 64,
+        "api_expected_revision": "0037",
+        "rag_expected_revision": "0005",
+    }
+    monkeypatch.setattr(mod, "_git_gate", lambda: None)
+    monkeypatch.setattr(mod, "_db_migration_gate", lambda *args, **kwargs: (False, ""))
+    monkeypatch.setattr(mod, "_migration_changes_since_release", lambda *args: ("a" * 40, [], ""))
+    monkeypatch.setattr(mod, "_load_db_attestation", lambda *args: (attestation, ""))
+    monkeypatch.setattr(
+        mod,
+        "_current_production_images",
+        lambda *args: ({
+            "api": "xg-ai-system-api:release-aaaaaaaaaaaa",
+            "douyin-ai-cs": "xg-ai-system-backend:release-old",
+            "frontend": "xg-ai-system-frontend:release-aaaaaaaaaaaa",
+        }, ""),
+    )
+    monkeypatch.setattr(mod, "_ensure_target_image_exists", lambda image: (True, ""))
+    monkeypatch.setattr(
+        mod,
+        "_verify_target_image_digest",
+        lambda *args: pytest.fail("9100 不得使用 API digest 校验"),
+    )
+    monkeypatch.setattr(mod, "_prepare_release_identity", lambda *args: rel / "release-new.env")
+    monkeypatch.setattr(mod, "_deploy_backend", lambda *args, **kwargs: 0)
+
+    assert mod.cmd_deploy([
+        "--service", "douyin-ai-cs", "--apply",
+        "--prod-tree", str(prod), "--release-dir", str(rel),
+    ]) == 0
+
+
 def test_r7h_attestation_target_image_digest_must_match(monkeypatch):
     def fake_run(argv, **kwargs):
         assert kwargs.get("shell", False) is False

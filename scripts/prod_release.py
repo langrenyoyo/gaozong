@@ -983,13 +983,18 @@ def cmd_deploy(argv: list[str]) -> int:
             for prefix in DB_MIGRATION_PATHS
         )
     )
-    if migration_changed:
-        attestation, attestation_err = _load_db_attestation(rel_dir, full_sha)
-        if attestation_err:
-            _err(f"DB_MIGRATION_ATTESTATION: {attestation_err}")
-            return 1
+    attestation, attestation_err = _load_db_attestation(rel_dir, full_sha)
+    expected_api_image = _target_image_tag("api", short_sha)
+    if not attestation_err and attestation.get("target_api_image") == expected_api_image:
+        # 同一源码后补迁移时，证明比旧 release identity 更接近当前数据库事实。
         db_attestation = attestation
         expected_revisions = _expected_revisions_from_attestation(attestation)
+    elif migration_changed:
+        if attestation_err:
+            _err(f"DB_MIGRATION_ATTESTATION: {attestation_err}")
+        else:
+            _err("DB_MIGRATION_ATTESTATION: target_api_image 与当前 HEAD 不匹配")
+        return 1
 
     # ---- frontend build config gate（R2-1：来源 = <prod-tree>/.env.production.local，与 build 同源） ----
     frontend_build_args: dict[str, str] = {}
@@ -1047,7 +1052,7 @@ def cmd_deploy(argv: list[str]) -> int:
         if not ok_img:
             _err(img_err)
             return 1
-        if db_attestation is not None:
+        if args.service == "api" and db_attestation is not None:
             ok_digest, digest_err = _verify_target_image_digest(
                 target_img, str(db_attestation["target_api_image_digest"])
             )

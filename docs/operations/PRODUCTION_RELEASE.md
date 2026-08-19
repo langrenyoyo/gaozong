@@ -72,7 +72,9 @@ expected/actual revision、迁移清单摘要、备份引用与校验值、执�
 
 只有在证明与当前 `HEAD`、目标 API 镜像和数据库 revision 全部匹配时，
 `DB_MIGRATION_ATTESTATION = PASS` 才能放行下一阶段；迁移提交存在时必须先发布 `api`，
-禁止 frontend/9100 抢先发布。正式 release identity 由发布脚本生成，禁止人工编辑；
+禁止 frontend/9100 抢先发布。若同一 `SOURCE_SHA` 的 API 已发布后才完成经审批的 9100
+迁移，发布脚本必须以该 SHA 的最新有效证明刷新两个 expected revision，再发布 9100；
+不得继承旧 release identity 的过期 revision。正式 release identity 由发布脚本生成，禁止人工编辑；
 生成内容必须包含：
 
 ```text
