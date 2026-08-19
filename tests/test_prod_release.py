@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -632,6 +633,99 @@ def test_r7i_non_migration_release_preserves_expected_revisions(scratch):
     )
     assert "AUTO_WECHAT_API_EXPECTED_REVISION=0037" in content
     assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003" in content
+
+
+def test_r7n_release_records_use_created_at_not_filename_order(scratch):
+    """新提交短 SHA 的 identity 不能因文件名字典序而被旧记录覆盖。"""
+    rel = _make_release_dir(scratch, names=())
+    (rel / "release-80ec1f68c3af-20260819T153152Z.env").write_text(
+        "# SOURCE_SHA=80ec1f68c3af\n"
+        "# CREATED_AT=20260819T153152Z\n"
+        "AUTO_WECHAT_API_EXPECTED_REVISION=0037\n"
+        "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0005\n",
+        encoding="utf-8",
+    )
+    (rel / "release-9f243c3cef4c-20260819T132630Z.env").write_text(
+        "# SOURCE_SHA=9f243c3cef4c\n"
+        "# CREATED_AT=20260819T132630Z\n"
+        "AUTO_WECHAT_API_EXPECTED_REVISION=0037\n"
+        "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003\n",
+        encoding="utf-8",
+    )
+
+    assert mod._release_source_sha(rel) == ("80ec1f68c3af", "")
+    assert mod._latest_expected_revisions(rel) == {
+        "AUTO_WECHAT_API_EXPECTED_REVISION": "0037",
+        "XG_DOUYIN_AI_CS_EXPECTED_REVISION": "0005",
+    }
+
+
+def test_r7o_douyin_apply_binds_explicit_runtime_env(monkeypatch, scratch):
+    """9100 apply 必须绑定显式 runtime env override，避免容器丢失数据库密码。"""
+    identity = scratch / "release.env"
+    identity.write_text("XG_DOUYIN_AI_CS_IMAGE=cs:image\n", encoding="utf-8")
+    runtime = scratch / ".env.production.local"
+    runtime.write_text(
+        "APP_ENV=production\n"
+        "NEWCAR_AUTH_ENABLED=true\n"
+        "NEWCAR_AUTH_MOCK_ENABLED=false\n"
+        "DATABASE_URL=postgresql://u:p@localhost/auto_wechat\n"
+        "RAG_DATABASE_URL=postgresql://u:p@localhost/xg_douyin_ai_cs\n",
+        encoding="utf-8",
+    )
+
+    class Loader:
+        def exec_module(self, module):
+            return None
+
+    def _write_test_runtime_override(runtime_file):
+        fd, name = tempfile.mkstemp(prefix="test-runtime-", suffix=".yml")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(f"services:\n  xg-douyin-ai-cs:\n    env_file: !override\n      - {Path(runtime_file).resolve()}\n")
+        return Path(name)
+
+    fake_release = type(
+        "FakeRelease",
+        (),
+        {
+            "COMPOSE_FILE": scratch / "docker-compose.yml",
+            "_pick_compose_cmd": staticmethod(lambda: ["docker", "compose"]),
+            "write_runtime_env_override": staticmethod(
+                lambda runtime_file: _write_test_runtime_override(runtime_file)
+            ),
+            "compose_env": staticmethod(
+                lambda runtime_kv=None: dict(runtime_kv or {})
+            ),
+            "preflight": staticmethod(
+                lambda *args, **kwargs: (
+                    True,
+                    "identity isolation PASS",
+                    {"9100": "cs:image"},
+                )
+            ),
+        },
+    )()
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *args: type("Spec", (), {"loader": Loader()})())
+    monkeypatch.setattr(importlib.util, "module_from_spec", lambda spec: fake_release)
+
+    observed = {}
+
+    def fake_run(cmd, **kwargs):
+        observed["cmd"] = list(cmd)
+        observed["env"] = kwargs.get("env", {})
+        override_idx = cmd.index("-f", cmd.index("-f") + 1)
+        override = Path(cmd[override_idx + 1])
+        observed["override_content"] = override.read_text(encoding="utf-8")
+        observed["override_path"] = override
+        return FakeProc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod._deploy_backend("douyin-ai-cs", identity, runtime, apply=True) == 0
+    assert "env_file: !override" in observed["override_content"]
+    assert str(runtime.resolve()) in observed["override_content"]
+    assert observed["env"]["RAG_DATABASE_URL"] == "postgresql://u:p@localhost/xg_douyin_ai_cs"
+    assert not observed["override_path"].exists()
 
 
 # ---------------------------------------------------------------------------

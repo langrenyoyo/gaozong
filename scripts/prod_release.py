@@ -103,6 +103,7 @@ DB_MIGRATION_PATHS = (
 
 MUTABLE_LATEST_RE = re.compile(r":latest$")
 SOURCE_SHA_RE = re.compile(r"^\s*#?\s*SOURCE_SHA\s*=\s*([0-9a-fA-F]{7,40})\s*$")
+CREATED_AT_RE = re.compile(r"^\s*#?\s*CREATED_AT\s*=\s*(\d{8}T\d{6}Z)\s*$")
 EXPECTED_REVISION_VARS = {
     "api": "AUTO_WECHAT_API_EXPECTED_REVISION",
     "douyin-ai-cs": "XG_DOUYIN_AI_CS_EXPECTED_REVISION",
@@ -172,6 +173,28 @@ def _render_command_preview(cmd: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _release_records(release_dir: Path) -> list[Path]:
+    """按 identity 创建时间排序；旧记录缺少时间戳时使用文件时间保守回退。"""
+    records = list(release_dir.glob("*.env")) if release_dir.is_dir() else []
+
+    def sort_key(path: Path) -> tuple[int, str, str]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            match = CREATED_AT_RE.match(line)
+            if match:
+                return 1, match.group(1), path.name
+        try:
+            fallback = f"{path.stat().st_mtime_ns:020d}"
+        except OSError:
+            fallback = "0"
+        return 0, fallback, path.name
+
+    return sorted(records, key=sort_key)
+
+
 def _release_source_sha(release_dir: Path) -> tuple[str | None, str]:
     """读取当前生产 release identity 的源码基线。
 
@@ -180,7 +203,7 @@ def _release_source_sha(release_dir: Path) -> tuple[str | None, str]:
     """
     if not release_dir.is_dir():
         return None, f"release identity 目录不存在: {release_dir}"
-    records = sorted(release_dir.glob("*.env"))
+    records = _release_records(release_dir)
     if not records:
         return None, f"release identity 目录为空: {release_dir}"
     latest = records[-1]
@@ -295,7 +318,7 @@ def _latest_expected_revisions(release_dir: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not release_dir.is_dir():
         return values
-    for path in sorted(release_dir.glob("*.env")):
+    for path in _release_records(release_dir):
         kv = _parse_env(path)
         for key in EXPECTED_REVISION_VARS.values():
             value = kv.get(key, "").strip()
@@ -339,7 +362,7 @@ def cmd_inspect(argv: list[str]) -> int:
     print(f"CURRENT_FRONTEND_IMAGE= {images['frontend'] or '<missing>'}")
 
     # 历史 release 记录（provenance，非三服务完整 SSOT）
-    identities = sorted(rel_dir.glob("*.env")) if rel_dir.is_dir() else []
+    identities = _release_records(rel_dir)
     if identities:
         latest = identities[-1]
         print(f"LATEST_RELEASE_RECORD = {latest.name}")
@@ -523,7 +546,7 @@ def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
     # 2. 历史 release identity provenance（全目录扫描，按服务键取最新非空）
     history: dict[str, str] = {"api": "", "douyin-ai-cs": "", "frontend": ""}
     if release_dir.is_dir():
-        for c in sorted(release_dir.glob("*.env")):
+        for c in _release_records(release_dir):
             kv = _parse_env(c)
             for svc_key, info in SERVICE_TARGETS.items():
                 v = kv.get(info["image_var"], "").strip()
@@ -642,7 +665,7 @@ def _previous_release_identity(service: str, release_dir: Path) -> tuple[Path | 
     if not release_dir.is_dir():
         return None, "release_dir 不存在"
     target_var = SERVICE_TARGETS[service]["image_var"]
-    candidates = sorted(release_dir.glob("*.env"))
+    candidates = _release_records(release_dir)
     if len(candidates) < 2:
         return None, "release 记录不足 2 条（无 previous）"
 
@@ -869,33 +892,46 @@ def _deploy_backend(service: str, identity_path: Path, runtime_env_file: Path, *
         _err("PREFLIGHT FAILED（fail-closed，已停止）")
         return 1
 
-    if service == "api":
-        # 9000：复用 G0 canonical（固定 auto-wechat-api）
-        cmd = mod.canonical_up_command(identity_path)
-    else:
-        # 9100：与 G0 canonical 同构（--env-file -p -f up -d --no-deps --no-build xg-douyin-ai-cs）
-        cmd = mod._pick_compose_cmd() + [
-            "--env-file", str(identity_path),
-            "-p", PROJECT_NAME,
-            "-f", str(mod.COMPOSE_FILE),
-            "up", "-d", "--no-deps", "--no-build", SERVICE_TARGETS[service]["compose_service"],
-        ]
-    print(f"DEPLOY SERVICE       = {service}（{SERVICE_TARGETS[service]['compose_service']}）")
-    print(f"IMAGE                = {resolved.get(key) or '<unresolved>'}")
-    print("COMMAND_PREVIEW（防误粘贴，逐 token）:")
-    print(_render_command_preview(cmd))
-    if apply:
-        print("APPLY...")
+    runtime_override = None
+    try:
+        runtime_kv = _parse_env(runtime_env_file)
         if service == "api":
-            return mod.run_apply(identity_path, runtime_env_file=runtime_env_file)
-        # 9100：与 canonical 同构直接执行（单服务 immutable recreate）
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
-        if proc.returncode != 0:
-            print((proc.stderr or proc.stdout or "").strip(), file=sys.stderr)
-            return proc.returncode
-    else:
-        print("DRY-RUN（默认）：未执行任何生产变更；确认后使用 --apply")
-    return 0
+            # 9000：复用 G0 canonical（固定 auto-wechat-api）
+            cmd = mod.canonical_up_command(identity_path)
+        else:
+            # 9100：与 9000 一样绑定显式 runtime env，避免数据库凭据丢失。
+            runtime_override = mod.write_runtime_env_override(runtime_env_file)
+            cmd = mod._pick_compose_cmd() + [
+                "--env-file", str(identity_path),
+                "-p", PROJECT_NAME,
+                "-f", str(mod.COMPOSE_FILE),
+                "-f", str(runtime_override),
+                "up", "-d", "--no-deps", "--no-build", SERVICE_TARGETS[service]["compose_service"],
+            ]
+        print(f"DEPLOY SERVICE       = {service}（{SERVICE_TARGETS[service]['compose_service']}）")
+        print(f"IMAGE                = {resolved.get(key) or '<unresolved>'}")
+        print("COMMAND_PREVIEW（防误粘贴，逐 token）:")
+        print(_render_command_preview(cmd))
+        if apply:
+            print("APPLY...")
+            if service == "api":
+                return mod.run_apply(identity_path, runtime_env_file=runtime_env_file)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(ROOT),
+                env=mod.compose_env(runtime_kv=runtime_kv),
+            )
+            if proc.returncode != 0:
+                print((proc.stderr or proc.stdout or "").strip(), file=sys.stderr)
+                return proc.returncode
+        else:
+            print("DRY-RUN（默认）：未执行任何生产变更；确认后使用 --apply")
+        return 0
+    finally:
+        if runtime_override is not None:
+            runtime_override.unlink(missing_ok=True)
 
 
 def _build_frontend_image(target_image: str, build_args: dict[str, str]) -> tuple[bool, str]:
@@ -1173,7 +1209,7 @@ def cmd_verify(argv: list[str]) -> int:
     rel_dir = Path(args.release_dir)
     expected_image = ""
     if rel_dir.is_dir():
-        for c in sorted(rel_dir.glob("*.env")):
+        for c in _release_records(rel_dir):
             v = _parse_env(c).get(target["image_var"], "").strip()
             if v:
                 expected_image = v  # 时间序覆盖 → 最后是最近有效值（与 inspect 对账同源）
