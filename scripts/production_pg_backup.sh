@@ -92,7 +92,8 @@ elif command -v docker-compose >/dev/null 2>&1; then COMPOSE_CMD="docker-compose
 PG_CONTAINER="${PG_CONTAINER:-postgres}"
 
 pg_dump_db() {
-  local db="$1" out="$BACKUP_DIR/pg-${db}.dump"
+  local db="$1"
+  local out="$BACKUP_DIR/pg-${db}.dump"
   echo "[INFO] pg_dump database=$db ..."
   local rc=0
   if [[ -n "$COMPOSE_CMD" ]] && $COMPOSE_CMD ps -q "$PG_CONTAINER" >/dev/null 2>&1; then
