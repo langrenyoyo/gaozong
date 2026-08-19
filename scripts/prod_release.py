@@ -236,6 +236,51 @@ def _load_db_attestation(release_dir: Path, head: str) -> tuple[dict | None, str
     return None, f"没有找到 source_sha={head} 的数据库证明"
 
 
+def _load_ancestor_db_attestation(
+    release_dir: Path, head: str
+) -> tuple[dict | None, str, str]:
+    """读取无新增迁移的祖先提交证明，返回 (证明, 证明源码 SHA, 错误)。"""
+    attest_dir = release_dir / "db-attestations"
+    if not attest_dir.is_dir():
+        return None, "", ""
+    for path in sorted(attest_dir.glob("*.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        source_sha = str(payload.get("source_sha", "")).strip()
+        if not source_sha or source_sha.lower() == head.lower():
+            continue
+        ancestor = _git(["merge-base", "--is-ancestor", source_sha, head], check=False)
+        if ancestor.returncode != 0:
+            continue
+        diff = _git(["diff", "--name-only", f"{source_sha}..{head}"], check=False)
+        if diff.returncode != 0:
+            return None, "", f"无法比较数据库证明 {source_sha}..{head}"
+        if any(
+            path_name.startswith(prefix) or path_name == prefix.rstrip("/")
+            for path_name in diff.stdout.splitlines()
+            for prefix in DB_MIGRATION_PATHS
+        ):
+            continue
+        missing = [key for key in DB_ATTESTATION_REQUIRED_FIELDS if not payload.get(key)]
+        if missing:
+            return None, "", f"数据库证明字段缺失: {missing}"
+        if payload.get("schema") != 1 or payload.get("status") != "VERIFIED":
+            return None, "", f"数据库证明状态无效: {path.name}"
+        if payload.get("api_expected_revision") != payload.get("api_actual_revision"):
+            return None, "", "数据库证明 9000 expected/actual revision 不一致"
+        if payload.get("rag_expected_revision") != payload.get("rag_actual_revision"):
+            return None, "", "数据库证明 9100 expected/actual revision 不一致"
+        expected_image = _target_image_tag("api", _short(source_sha))
+        if payload.get("target_api_image") != expected_image:
+            return None, "", "祖先数据库证明 target_api_image 与证明源码不匹配"
+        return payload, source_sha, ""
+    return None, "", ""
+
+
 def _expected_revisions_from_attestation(attestation: dict | None) -> dict[str, str]:
     if not attestation:
         return {}
@@ -989,6 +1034,14 @@ def cmd_deploy(argv: list[str]) -> int:
         # 同一源码后补迁移时，证明比旧 release identity 更接近当前数据库事实。
         db_attestation = attestation
         expected_revisions = _expected_revisions_from_attestation(attestation)
+    elif not migration_changed:
+        ancestor_attestation, _, ancestor_err = _load_ancestor_db_attestation(rel_dir, full_sha)
+        if ancestor_err:
+            _err(f"DB_MIGRATION_ATTESTATION: {ancestor_err}")
+            return 1
+        if ancestor_attestation is not None:
+            # 祖先证明只刷新数据库 revision，不用于当前 API 镜像 digest 校验。
+            expected_revisions = _expected_revisions_from_attestation(ancestor_attestation)
     elif migration_changed:
         if attestation_err:
             _err(f"DB_MIGRATION_ATTESTATION: {attestation_err}")

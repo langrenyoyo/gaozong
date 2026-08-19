@@ -531,6 +531,69 @@ def test_r7k_late_rag_attestation_does_not_compare_9100_to_api_digest(monkeypatc
     ]) == 0
 
 
+def test_r7l_ancestor_attestation_refreshes_revision_after_release_script_commit(
+    monkeypatch, scratch, capsys
+):
+    """证明绑定旧祖先提交且中间无迁移时，当前发布仍继承已验证 revision。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    prod = _make_prod_tree(scratch)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="b" * 40, remote="b" * 40, merge_base="b" * 40,
+                  diff="")
+    ancestor_attestation = {
+        "target_api_image": "xg-ai-system-api:release-aaaaaaaaaaaa",
+        "target_api_image_digest": "sha256:" + "1" * 64,
+        "api_expected_revision": "0037",
+        "rag_expected_revision": "0005",
+    }
+    monkeypatch.setattr(mod, "_load_db_attestation", lambda *args: (None, "当前 SHA 无证明"))
+    monkeypatch.setattr(
+        mod,
+        "_load_ancestor_db_attestation",
+        lambda *args: (ancestor_attestation, "a" * 40, ""),
+        raising=False,
+    )
+
+    rc = mod.cmd_deploy(["--service", "douyin-ai-cs", "--dry-run",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0005" in out
+
+
+def test_r7m_ancestor_attestation_requires_no_migration_between_commits(monkeypatch, scratch):
+    """祖先证明只有在证明提交到当前提交无迁移文件时才有效。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    _write_db_attestation(rel)
+    calls = []
+
+    def fake_git(argv, *, check=True):
+        calls.append(argv)
+        if argv[:2] == ["merge-base", "--is-ancestor"]:
+            return FakeProc()
+        if argv[:2] == ["diff", "--name-only"]:
+            return FakeProc(stdout="scripts/prod_release.py\n")
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(mod, "_git", fake_git)
+    payload, source_sha, err = mod._load_ancestor_db_attestation(rel, "b" * 40)
+    assert err == ""
+    assert payload is not None
+    assert source_sha == "a" * 40
+    assert calls[0][:2] == ["merge-base", "--is-ancestor"]
+
+    def fake_git_with_migration(argv, *, check=True):
+        if argv[:2] == ["merge-base", "--is-ancestor"]:
+            return FakeProc()
+        if argv[:2] == ["diff", "--name-only"]:
+            return FakeProc(stdout="migrations/postgres/auto_wechat/versions/0037_forbidden_word_seed.py\n")
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(mod, "_git", fake_git_with_migration)
+    payload, source_sha, err = mod._load_ancestor_db_attestation(rel, "b" * 40)
+    assert (payload, source_sha, err) == (None, "", "")
+
+
 def test_r7h_attestation_target_image_digest_must_match(monkeypatch):
     def fake_run(argv, **kwargs):
         assert kwargs.get("shell", False) is False

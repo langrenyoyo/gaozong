@@ -70,7 +70,8 @@ REASON = MANUAL_DB_RELEASE_GATE_REQUIRED
 expected/actual revision、迁移清单摘要、备份引用与校验值、执行/验证时间和操作人。
 证明不得包含数据库 URL、密码或 token。
 
-只有在证明与当前 `HEAD`、目标 API 镜像和数据库 revision 全部匹配时，
+只有在证明源码为当前 `HEAD`，或为当前 `HEAD` 的祖先且两者之间无新增迁移，且证明自身的目标 API
+镜像与证明源码匹配、数据库 revision 内部一致时，
 `DB_MIGRATION_ATTESTATION = PASS` 才能放行下一阶段；迁移提交存在时必须先发布 `api`，
 禁止 frontend/9100 抢先发布。若同一 `SOURCE_SHA` 的 API 已发布后才完成经审批的 9100
 迁移，发布脚本必须以该 SHA 的最新有效证明刷新两个 expected revision，再发布 9100；
