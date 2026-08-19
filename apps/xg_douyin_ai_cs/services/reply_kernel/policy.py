@@ -12,16 +12,47 @@ from typing import Literal
 from apps.xg_douyin_ai_cs.services.reply_kernel.context import ReplyContext
 
 # 资料/车源/报价请求关键词（用于 OFF_PLATFORM_DETAIL_HANDOFF 判定）
+# P0-V3.1：金融/价格常见问法也路由到 OFF_PLATFORM_DETAIL_HANDOFF（不展开 + 留资承接）。
 _OFF_PLATFORM_REQUEST_KEYWORDS = (
     "资料", "车源", "报价", "底价", "检测报告", "图片", "配置", "金融方案",
     "发我看看", "发给我", "能发", "能不能发",
 )
 
+# 金融/价格输入意图触发词（客户在问方案/价格，不是陈述自己的预算）
+# 与 reply_decision_service 的 FINANCE_INQUIRY_TRIGGERS / PRICE_INQUIRY_TRIGGERS 对齐口径
+_FINANCE_INQUIRY_KEYWORDS = (
+    "分期", "按揭", "贷款", "车贷", "首付", "0首付", "零首付", "月供",
+    "利率", "利息", "免息", "征信", "资质", "审批", "能批", "能贷",
+    "多少期", "贷款年限", "金融方案", "金融", "贷款保险", "保险怎么算",
+)
+_PRICE_INQUIRY_KEYWORDS = (
+    "多少钱", "什么价", "报价", "最低多少", "底价", "能便宜", "便宜多少",
+    "落地多少", "裸车价", "成交价", "一口价", "优惠多少", "还能优惠", "可以优惠",
+)
+
+# 预算事实保护：客户陈述自己预算（"我预算20万""20万左右"）不是向 AI 索价
+_BUDGET_FACT_MARKERS = ("预算", "左右", "上下", "大概", "差不多")
+
 
 def _is_off_platform_request(latest_message: str) -> bool:
-    """判断客户是否索要资料/报价/检测报告等平台外内容。"""
+    """判断客户是否索要资料/报价/金融方案/价格等平台外内容。
+
+    P0-V3.1：金融/价格问法也路由到 OFF_PLATFORM_DETAIL_HANDOFF。
+    但预算陈述（"我预算20万"）不触发——那是客户需求事实，不是向 AI 索价。
+    """
     text = str(latest_message or "")
-    return any(kw in text for kw in _OFF_PLATFORM_REQUEST_KEYWORDS)
+    if any(kw in text for kw in _OFF_PLATFORM_REQUEST_KEYWORDS):
+        return True
+    if any(kw in text for kw in _FINANCE_INQUIRY_KEYWORDS):
+        return True
+    if any(kw in text for kw in _PRICE_INQUIRY_KEYWORDS):
+        # 价格问句触发；但若同时是预算陈述（"我预算X万"），不触发
+        if any(m in text for m in _BUDGET_FACT_MARKERS) and not any(
+            kw in text for kw in ("多少钱", "什么价", "报价", "最低", "底价", "优惠")
+        ):
+            return False
+        return True
+    return False
 
 
 def _contact_action(

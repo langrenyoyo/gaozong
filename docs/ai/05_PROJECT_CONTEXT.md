@@ -218,9 +218,14 @@ gate 链（`app/services/douyin_autoreply_gate_service.py` 等）：
 5. 幂等去重（`already_sent`）；人工发送后标记 manual_takeover。
 6. 紧急停止（`POST /automation/emergency-stop`）。
 
-### 8.3 固定提示词模板 V2.0（2026-07-29 落地）
+### 8.3 固定提示词模板 V3.1（2026-08-19 升级，前序 V2.0 2026-07-29 落地）
 
-- 9100 系统提示词使用甲方确认的固定模板 V2.0（12 节完整规则：身份目标、知识库使用、回复原则、联系方式用语、留资引导、敏感业务处理、对话流程、常见场景、回复风格、严禁内容、输出要求），模板内容固定不可改（第一版不支持管理员自定义）。
+- 9100 系统提示词使用固定模板（V3.1，6 节结构：商家事实/身份与目标/回复决策与风格/联系方式规则/特殊场景规则/安全与输出格式），模板内容固定不可改。
+- **P0-DOUYIN-AI-PROMPT-V3.1-SHORT-REPLY-FINANCE-HANDOFF-1（2026-08-19）**：V2.0（13节+附加，~8086字符）压缩为 V3.1（6节，~3394字符，压缩~58%）；回复长度由"1-2句最多3句"改为"默认1句最多2句"；一轮一动作（回答 或 留资，不堆叠）；删金融"简短基础说明"权限→平台内不展开+不报首付/月供/利率数字+不判资质；删价格"受车型年份配置车况影响"解释→平台内不展开+不报数字；删"禁止二选一/不追问"→允许最多一个自然澄清问题；地址 store_address 有值直接回答、空值留资承接（不输出"未配置"）；称呼 preferred_salutation 优先、未知性别不猜；去重（sales/purchase/after_hours/address 不重复注入）；示例 7 个；`PROMPT_VERSION="v3.1"`。
+- **关键词职责拆分**：`FINANCE_INQUIRY_TRIGGERS`（输入意图，含分期/按揭/贷款/首付/月供/利率/免息/征信/零首付/车贷等，单独"保险"移出避免"保险到期"误判）+ `FINANCE_CLAIM_PATTERNS`（输出违规正则：首付/月供/利率+数字、能批/能贷承诺、黑户/征信差+能）；`PRICE_INQUIRY_TRIGGERS`（多少钱/什么价/最低/底价/落地/优惠等）+ `PRICE_CLAIM_PATTERNS`（价格词+数字、数字+万/元/块）；预算事实保护（"我预算20万"不触发价格 handoff）。
+- **Reply Kernel deterministic 路由**：`OFF_PLATFORM_DETAIL_HANDOFF` 扩展覆盖金融/价格常见问法（`reply_kernel/policy.py` `_is_off_platform_request`），金融/价格走确定性留资承接而非依赖 LLM 自觉；`_build_decision_constraint_text` 约束覆盖"价格/金融/资料不展开"。
+- **Retry/Fallback**：retry 由"1-3句"改为"1句最多2句"+金融/价格纠正指令；`_build_safe_direct_reply` 金融/价格分开短句（"老板这个不太方便在这里说，你留个联系方式我+你"/"老板，这里不方便展开，留个联系方式我+你"，不再共用旧长模板）；`_needs_safe_direct_reply_override`/`_direct_llm_reply_text_is_safe_for_auto_send`/`_apply_safety_postprocess` 清零放行改用 `FINANCE_CLAIM_PATTERNS`/`PRICE_CLAIM_PATTERNS`（输出违规），不因合规话术含"分期/价格"误杀；`_direct_llm_reply_text_is_safe_for_auto_send` 的联系方式检测改用 `WECHAT_CONTACT_KEYWORDS`（不阻拦合规"联系方式"留资话术）。knowledge degraded rule 压缩（删三动作追问）。
+- 保留安全机制：ContactState 五态、历史信任规则、prompt_injection 检测、customer_profile_update、RAG 降级事实守卫、Agent Contract R1（store_name/四旧字段退出）。
 - **P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1（2026-08-19）**：`store_name`（门店名称）仅归属 `AiAgent`（String(255)，迁移 0046/0036，历史回填 TRIM(name) or "未命名门店"）；固定 Prompt 的店铺名称使用 `agent_config.store_name`（不再由 `merchant_prompt.merchant_name` 派生）；三条调用链（Agent Preview / 会话 Preview / 自动回复）统一走唯一白名单构造器 `build_agent_config`，从可信 AiAgent ORM 读取；**Agent 自定义 Prompt（prompt/knowledge_base_text/store_phone/store_wechat）已完整退出**前端、9000 请求/响应、9000→9100 payload、9100 AgentConfig Schema 与 LLM 上下文（携带即 422/4xx 拒绝，不静默忽略；不物理删除既有列）。固定模板注入的门店普通事实字段：store_name、门店地址、门店营业时间、销售城市范围、销售汽车品牌、收车城市范围、收车汽车品牌、销售下班留资回复、顾客问车况回复、评估师下班留资回复。
 - 前端智能体编辑（`SuperMerchantAgent.tsx`）为傻瓜式表单：门店名称（必填）+ 门店普通事实字段输入框，不再有提示词/知识参考提示词/门店电话/门店微信录入。
 - 旧 `_SYSTEM_PREFIX` 与仅被它引用的 `CONVERSATION_HISTORY_POLICY` 已删除（2026-07-31 P0 Batch A 清理失效死代码，原注释称"位于 system 首部"与实现不符）；`_build_fixed_prompt_template` 是唯一主系统提示词。
