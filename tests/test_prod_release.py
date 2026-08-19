@@ -191,6 +191,34 @@ def _patch_paths(monkeypatch, rel: Path, prod: Path):
     monkeypatch.setattr(mod, "COMPOSE_FILE", REPO / "docker-compose.yml")
 
 
+def _write_db_attestation(rel: Path, *, source_sha: str = "a" * 40,
+                          status: str = "VERIFIED") -> Path:
+    attest_dir = rel / "db-attestations"
+    attest_dir.mkdir(parents=True, exist_ok=True)
+    path = attest_dir / "attestation.json"
+    path.write_text(json.dumps({
+        "schema": 1,
+        "status": status,
+        "source_sha": source_sha,
+        "target_api_image": "xg-ai-system-api:release-" + source_sha[:12],
+        "target_api_image_digest": "sha256:" + "1" * 64,
+        "api_database": "auto_wechat",
+        "api_from_revision": "0035",
+        "api_expected_revision": "0037",
+        "api_actual_revision": "0037",
+        "rag_database": "xg_douyin_ai_cs",
+        "rag_expected_revision": "0003",
+        "rag_actual_revision": "0003",
+        "migration_manifest_sha256": "2" * 64,
+        "backup_ref": "pg-backup-20260820",
+        "backup_sha256": "3" * 64,
+        "applied_at": "2026-08-20T00:00:00Z",
+        "verified_at": "2026-08-20T00:01:00Z",
+        "operator": "owner",
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # R1: inspect 只读
 # ---------------------------------------------------------------------------
@@ -360,7 +388,7 @@ def test_r7b_migration_gate_uses_current_release_source_sha(monkeypatch, scratch
         return FakeProc(stdout="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    blocked, reason = mod._db_migration_gate(rel)
+    blocked, reason = mod._db_migration_gate(rel, head=source_sha)
     assert blocked is True
     assert "MANUAL_DB_RELEASE_GATE_REQUIRED" in reason
     assert ["git", "diff", "--name-only", f"{source_sha}..HEAD"] in calls
@@ -377,6 +405,109 @@ def test_r7c_missing_release_source_sha_fails_closed(scratch):
     assert blocked is True
     assert "DB_MIGRATION_UNKNOWN" in reason
     assert "SOURCE_SHA" in reason
+
+
+def test_r7d_verified_db_attestation_allows_api_only(monkeypatch, scratch):
+    """迁移已验证时，仅允许 API 进入下一阶段。"""
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    _write_db_attestation(rel)
+
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("shell", False) is False
+        if argv[0] == "git" and argv[1] == "diff":
+            return FakeProc(stdout="migrations/versions/0047_forbidden_word_seed.sql\n")
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    blocked, reason = mod._db_migration_gate(rel, service="api", head="a" * 40)
+    assert blocked is False, reason
+
+
+def test_r7e_verified_db_attestation_blocks_non_api_first(monkeypatch, scratch):
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    _write_db_attestation(rel)
+
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("shell", False) is False
+        if argv[0] == "git" and argv[1] == "diff":
+            return FakeProc(stdout="migrations/versions/0047_forbidden_word_seed.sql\n")
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    blocked, reason = mod._db_migration_gate(rel, service="frontend", head="a" * 40)
+    assert blocked is True
+    assert "SERVICE_ORDER" in reason
+
+
+def test_r7f_missing_db_attestation_fails_closed(monkeypatch, scratch):
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("shell", False) is False
+        if argv[0] == "git" and argv[1] == "diff":
+            return FakeProc(stdout="migrations/versions/0047_forbidden_word_seed.sql\n")
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    blocked, reason = mod._db_migration_gate(rel, service="api", head="a" * 40)
+    assert blocked is True
+    assert "DB_MIGRATION_ATTESTATION" in reason
+
+
+def test_r7g_verified_attestation_writes_expected_revisions_to_preview(monkeypatch, scratch, capsys):
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    prod = _make_prod_tree(scratch)
+    _write_db_attestation(rel)
+    _patch_paths(monkeypatch, rel, prod)
+    _install_fake(monkeypatch, local="a" * 40, remote="a" * 40, merge_base="a" * 40,
+                  diff="migrations/versions/0047_forbidden_word_seed.sql\n")
+
+    rc = mod.cmd_deploy(["--service", "api", "--dry-run",
+                         "--prod-tree", str(prod), "--release-dir", str(rel)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "AUTO_WECHAT_API_EXPECTED_REVISION=0037" in out
+    assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003" in out
+
+
+def test_r7h_attestation_target_image_digest_must_match(monkeypatch):
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("shell", False) is False
+        assert argv[:4] == ["docker", "image", "inspect", "target:image"]
+        return FakeProc(stdout="sha256:" + "1" * 64 + "\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ok, reason = mod._verify_target_image_digest(
+        "target:image", "sha256:" + "1" * 64
+    )
+    assert ok is True, reason
+    ok, reason = mod._verify_target_image_digest(
+        "target:image", "sha256:" + "2" * 64
+    )
+    assert ok is False
+    assert "DIGEST_MISMATCH" in reason
+
+
+def test_r7i_non_migration_release_preserves_expected_revisions(scratch):
+    rel = _make_release_dir(scratch, names=("release-current.env",))
+    (rel / "release-current.env").write_text(
+        "AUTO_WECHAT_API_EXPECTED_REVISION=0037\n"
+        "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003\n",
+        encoding="utf-8",
+    )
+
+    assert mod._latest_expected_revisions(rel) == {
+        "AUTO_WECHAT_API_EXPECTED_REVISION": "0037",
+        "XG_DOUYIN_AI_CS_EXPECTED_REVISION": "0003",
+    }
+    content = mod._identity_content(
+        "frontend",
+        {"api": "api:image", "douyin-ai-cs": "cs:image", "frontend": "fe:image"},
+        "b" * 12,
+        mod._latest_expected_revisions(rel),
+    )
+    assert "AUTO_WECHAT_API_EXPECTED_REVISION=0037" in content
+    assert "XG_DOUYIN_AI_CS_EXPECTED_REVISION=0003" in content
 
 
 # ---------------------------------------------------------------------------

@@ -103,6 +103,17 @@ DB_MIGRATION_PATHS = (
 
 MUTABLE_LATEST_RE = re.compile(r":latest$")
 SOURCE_SHA_RE = re.compile(r"^\s*#?\s*SOURCE_SHA\s*=\s*([0-9a-fA-F]{7,40})\s*$")
+EXPECTED_REVISION_VARS = {
+    "api": "AUTO_WECHAT_API_EXPECTED_REVISION",
+    "douyin-ai-cs": "XG_DOUYIN_AI_CS_EXPECTED_REVISION",
+}
+DB_ATTESTATION_REQUIRED_FIELDS = (
+    "schema", "status", "source_sha", "target_api_image", "target_api_image_digest",
+    "api_database", "api_expected_revision", "api_actual_revision",
+    "rag_database", "rag_expected_revision", "rag_actual_revision",
+    "migration_manifest_sha256", "backup_ref", "backup_sha256",
+    "applied_at", "verified_at", "operator",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +206,59 @@ def _migration_changes_since_release(release_dir: Path) -> tuple[str | None, lis
     return source_sha, diff.stdout.splitlines(), ""
 
 
+def _load_db_attestation(release_dir: Path, head: str) -> tuple[dict | None, str]:
+    """读取并校验与当前 HEAD 精确绑定的数据库迁移证明。"""
+    attest_dir = release_dir / "db-attestations"
+    if not attest_dir.is_dir():
+        return None, f"证明目录不存在: {attest_dir}"
+    candidates = sorted(attest_dir.glob("*.json"), reverse=True)
+    if not candidates:
+        return None, f"证明目录为空: {attest_dir}"
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"无法读取数据库证明 {path.name}: {exc}"
+        if not isinstance(payload, dict):
+            return None, f"数据库证明不是 JSON object: {path.name}"
+        if str(payload.get("source_sha", "")).lower() != head.lower():
+            continue
+        missing = [key for key in DB_ATTESTATION_REQUIRED_FIELDS if not payload.get(key)]
+        if missing:
+            return None, f"数据库证明字段缺失: {missing}"
+        if payload.get("schema") != 1 or payload.get("status") != "VERIFIED":
+            return None, f"数据库证明状态无效: {path.name}"
+        if payload.get("api_expected_revision") != payload.get("api_actual_revision"):
+            return None, "数据库证明 9000 expected/actual revision 不一致"
+        if payload.get("rag_expected_revision") != payload.get("rag_actual_revision"):
+            return None, "数据库证明 9100 expected/actual revision 不一致"
+        return payload, ""
+    return None, f"没有找到 source_sha={head} 的数据库证明"
+
+
+def _expected_revisions_from_attestation(attestation: dict | None) -> dict[str, str]:
+    if not attestation:
+        return {}
+    return {
+        EXPECTED_REVISION_VARS["api"]: str(attestation["api_expected_revision"]),
+        EXPECTED_REVISION_VARS["douyin-ai-cs"]: str(attestation["rag_expected_revision"]),
+    }
+
+
+def _latest_expected_revisions(release_dir: Path) -> dict[str, str]:
+    """继承最近一次 release identity 的数据库 revision 身份键。"""
+    values: dict[str, str] = {}
+    if not release_dir.is_dir():
+        return values
+    for path in sorted(release_dir.glob("*.env")):
+        kv = _parse_env(path)
+        for key in EXPECTED_REVISION_VARS.values():
+            value = kv.get(key, "").strip()
+            if value:
+                values[key] = value
+    return values
+
+
 # ---------------------------------------------------------------------------
 # inspect（只读）
 # ---------------------------------------------------------------------------
@@ -264,6 +328,18 @@ def cmd_inspect(argv: list[str]) -> int:
         mig = [p for p in changed if any(p.startswith(prefix) or p == prefix.rstrip("/") for prefix in DB_MIGRATION_PATHS)]
         print(f"DB_MIGRATION_BASELINE = {source_sha}")
         print(f"DB_MIGRATION_CHANGE   = {'YES' if mig else 'NO'}")
+        if mig:
+            head_sha = head.stdout.strip()
+            attestation, attestation_err = _load_db_attestation(rel_dir, head_sha)
+            expected_image = _target_image_tag("api", _short(head_sha)) if head_sha else ""
+            if attestation_err:
+                print("DB_MIGRATION_ATTESTATION = MISSING_OR_INVALID")
+                print(f"DB_MIGRATION_ATTESTATION_REASON = {attestation_err}")
+            elif attestation.get("target_api_image") != expected_image:
+                print("DB_MIGRATION_ATTESTATION = INVALID")
+                print("DB_MIGRATION_ATTESTATION_REASON = target_api_image 与当前 HEAD 不匹配")
+            else:
+                print("DB_MIGRATION_ATTESTATION = PASS")
     return 0
 
 
@@ -318,19 +394,28 @@ def _git_gate() -> str | None:
 # ---------------------------------------------------------------------------
 # DB migration gate（deploy 前置，最高优先级）
 # ---------------------------------------------------------------------------
-def _db_migration_gate(release_dir: Path | None = None) -> tuple[bool, str]:
+def _db_migration_gate(release_dir: Path | None = None, *, service: str = "api",
+                       head: str | None = None) -> tuple[bool, str]:
     """检测本次 HEAD 相对当前生产 release 是否含 DB migration 变化。
 
     Returns (blocked, message)。blocked=True → DEPLOY BLOCKED MANUAL_DB_RELEASE_GATE_REQUIRED。
     """
-    source_sha, changed, migration_err = _migration_changes_since_release(
-        release_dir or RELEASE_IDENTITY_DIR
-    )
+    rel_dir = release_dir or RELEASE_IDENTITY_DIR
+    source_sha, changed, migration_err = _migration_changes_since_release(rel_dir)
     if migration_err:
         return True, f"DB_MIGRATION_UNKNOWN: {migration_err}，保守阻断"
     mig = [p for p in changed if any(p.startswith(prefix) or p == prefix.rstrip("/") for prefix in DB_MIGRATION_PATHS)]
     if mig:
-        return True, f"DB_MIGRATION_DETECTED: {source_sha}..HEAD 涉及迁移文件 {mig[:5]} → MANUAL_DB_RELEASE_GATE_REQUIRED（禁止自动 alembic，无 --force/--skip-db 逃生参数）"
+        full_head = head or _git(["rev-parse", "HEAD"]).stdout.strip()
+        attestation, attestation_err = _load_db_attestation(rel_dir, full_head)
+        if attestation_err:
+            return True, f"DB_MIGRATION_ATTESTATION: {attestation_err} → MANUAL_DB_RELEASE_GATE_REQUIRED"
+        expected_image = _target_image_tag("api", _short(full_head))
+        if attestation.get("target_api_image") != expected_image:
+            return True, "DB_MIGRATION_ATTESTATION: target_api_image 与当前 HEAD 不匹配 → MANUAL_DB_RELEASE_GATE_REQUIRED"
+        if service != "api":
+            return True, "DB_MIGRATION_SERVICE_ORDER_REQUIRED: 数据库迁移后必须先发布 api，再发布其他 service"
+        return False, ""
     return False, ""
 
 
@@ -417,7 +502,8 @@ def _current_production_images(release_dir: Path) -> tuple[dict[str, str], str]:
     return images, ""
 
 
-def _identity_content(service: str, images: dict[str, str], short_sha: str) -> str:
+def _identity_content(service: str, images: dict[str, str], short_sha: str,
+                      expected_revisions: dict[str, str] | None = None) -> str:
     """构造 release identity env 内容（纯内存，不写盘；R1-2 dry-run 使用）。"""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lines = [
@@ -428,6 +514,10 @@ def _identity_content(service: str, images: dict[str, str], short_sha: str) -> s
         f"XG_DOUYIN_AI_CS_IMAGE={images.get('douyin-ai-cs', '')}",
         f"AUTO_WECHAT_FRONTEND_IMAGE={images.get('frontend', '')}",
     ]
+    for key in EXPECTED_REVISION_VARS.values():
+        value = (expected_revisions or {}).get(key, "")
+        if value:
+            lines.append(f"{key}={value}")
     return "\n".join(lines) + "\n"
 
 
@@ -444,8 +534,23 @@ def _ensure_target_image_exists(image: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _verify_target_image_digest(image: str, expected_digest: str) -> tuple[bool, str]:
+    """对账 attestation 声明的目标镜像 digest 与本机镜像 ID。"""
+    proc = _run_argv(
+        ["docker", "image", "inspect", image, "--format", "{{.Id}}"],
+        check=False,
+    )
+    if proc.returncode != 0:
+        return False, f"TARGET_IMAGE_NOT_FOUND: {image} 无法读取 digest"
+    actual = proc.stdout.strip()
+    if actual != expected_digest:
+        return False, f"TARGET_IMAGE_DIGEST_MISMATCH: {image} actual={actual!r} expected={expected_digest!r}"
+    return True, ""
+
+
 def _prepare_release_identity(service: str, images: dict[str, str], short_sha: str,
-                              release_dir: Path) -> Path:
+                              release_dir: Path,
+                              expected_revisions: dict[str, str] | None = None) -> Path:
     """写入新的 release identity env（非 secret：仅 image/revision 身份键）。
 
     未更新服务继承当前生产 image identity（从现有 release identity 读取，缺省则用传入 images）。
@@ -469,6 +574,10 @@ def _prepare_release_identity(service: str, images: dict[str, str], short_sha: s
         f"XG_DOUYIN_AI_CS_IMAGE={cs_img}",
         f"AUTO_WECHAT_FRONTEND_IMAGE={fe_img}",
     ]
+    for key in EXPECTED_REVISION_VARS.values():
+        value = (expected_revisions or {}).get(key, "")
+        if value:
+            lines.append(f"{key}={value}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -580,7 +689,8 @@ def _frontend_build_config_gate(runtime_env_file: Path) -> tuple[bool, str, dict
     return False, "", build_args
 
 
-def _temp_identity_file(images: dict[str, str], short_sha: str) -> tuple[Path, None] | tuple[None, str]:
+def _temp_identity_file(images: dict[str, str], short_sha: str,
+                        expected_revisions: dict[str, str] | None = None) -> tuple[Path, None] | tuple[None, str]:
     """dry-run 用临时 identity 文件（系统 TEMP，非 release dir）；调用方负责 finally 删除。
 
     R1-2：dry-run 不写 /root/.xg-ai-release；临时文件只供 preflight 只读解析。
@@ -590,14 +700,14 @@ def _temp_identity_file(images: dict[str, str], short_sha: str) -> tuple[Path, N
     try:
         fd, name = tempfile.mkstemp(prefix="prod_release_dryrun_", suffix=".env")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(_identity_content("", images, short_sha))
+            f.write(_identity_content("", images, short_sha, expected_revisions))
         return Path(name), None
     except OSError as exc:
         return None, f"TEMP_IDENTITY_WRITE_FAILED: {exc}"
 
 
 def _deploy_backend_dryrun(service: str, images: dict[str, str], runtime_env_file: Path,
-                           short_sha: str) -> int:
+                           short_sha: str, expected_revisions: dict[str, str] | None = None) -> int:
     """dry-run：复用 release_9000 preflight（只读）解析/校验 + 渲染 preview；不写 identity、不 up。"""
     import importlib.util
 
@@ -607,7 +717,7 @@ def _deploy_backend_dryrun(service: str, images: dict[str, str], runtime_env_fil
 
     tmp_path = None
     try:
-        tmp_path, err = _temp_identity_file(images, short_sha)
+        tmp_path, err = _temp_identity_file(images, short_sha, expected_revisions)
         if err:
             _err(err)
             return 1
@@ -641,7 +751,8 @@ def _deploy_backend_dryrun(service: str, images: dict[str, str], runtime_env_fil
                 pass
 
 
-def _deploy_frontend_dryrun(images: dict[str, str], runtime_env_file: Path, short_sha: str) -> int:
+def _deploy_frontend_dryrun(images: dict[str, str], runtime_env_file: Path, short_sha: str,
+                            expected_revisions: dict[str, str] | None = None) -> int:
     """dry-run：复用 release_frontend_immutable 只读解析 + 渲染 preview；不写 identity、不 up。"""
     import importlib.util
 
@@ -651,7 +762,7 @@ def _deploy_frontend_dryrun(images: dict[str, str], runtime_env_file: Path, shor
 
     tmp_path = None
     try:
-        tmp_path, err = _temp_identity_file(images, short_sha)
+        tmp_path, err = _temp_identity_file(images, short_sha, expected_revisions)
         if err:
             _err(err)
             return 1
@@ -851,11 +962,34 @@ def cmd_deploy(argv: list[str]) -> int:
         _err(git_err)
         return 1
 
+    rel_dir = Path(args.release_dir)
+    full_sha = _git(["rev-parse", "HEAD"]).stdout.strip()
+    short_sha = _short(full_sha)
+
     # ---- DB migration gate（最高优先级） ----
-    blocked, reason = _db_migration_gate(Path(args.release_dir))
+    blocked, reason = _db_migration_gate(rel_dir, service=args.service, head=full_sha)
     if blocked:
         _err(reason)
         return 1
+
+    expected_revisions: dict[str, str] = _latest_expected_revisions(rel_dir)
+    db_attestation: dict | None = None
+    _, changed_since_release, migration_err = _migration_changes_since_release(rel_dir)
+    migration_changed = (
+        not migration_err
+        and any(
+            p.startswith(prefix) or p == prefix.rstrip("/")
+            for p in changed_since_release
+            for prefix in DB_MIGRATION_PATHS
+        )
+    )
+    if migration_changed:
+        attestation, attestation_err = _load_db_attestation(rel_dir, full_sha)
+        if attestation_err:
+            _err(f"DB_MIGRATION_ATTESTATION: {attestation_err}")
+            return 1
+        db_attestation = attestation
+        expected_revisions = _expected_revisions_from_attestation(attestation)
 
     # ---- frontend build config gate（R2-1：来源 = <prod-tree>/.env.production.local，与 build 同源） ----
     frontend_build_args: dict[str, str] = {}
@@ -867,9 +1001,6 @@ def cmd_deploy(argv: list[str]) -> int:
         frontend_build_args = build_args
 
     # ---- 当前生产 image identity 对账（R1-3：容器 image 优先 + 历史 identity provenance） ----
-    short_sha = _short(_git(["rev-parse", "HEAD"]).stdout.strip())
-    full_sha = _git(["rev-parse", "HEAD"]).stdout.strip()
-    rel_dir = Path(args.release_dir)
     images, recon_err = _current_production_images(rel_dir)
     if recon_err:
         _err(f"IMAGE_RECONCILIATION_FAIL: {recon_err}")
@@ -906,7 +1037,9 @@ def cmd_deploy(argv: list[str]) -> int:
             if not ok_img:
                 _err(img_err)
                 return 1  # image gate 仍保留（build 成功 + inspect 成功才继续）
-            identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
+            identity_path = _prepare_release_identity(
+                args.service, images, short_sha, rel_dir, expected_revisions
+            )
             print(f"RELEASE_IDENTITY     = {identity_path}")
             return _deploy_frontend(identity_path, runtime_env, apply=True)
         # ---- 后端 apply：R1-4 image 存在 gate（--no-build 前提） + R1-2 identity 写入 ----
@@ -914,7 +1047,16 @@ def cmd_deploy(argv: list[str]) -> int:
         if not ok_img:
             _err(img_err)
             return 1
-        identity_path = _prepare_release_identity(args.service, images, short_sha, rel_dir)
+        if db_attestation is not None:
+            ok_digest, digest_err = _verify_target_image_digest(
+                target_img, str(db_attestation["target_api_image_digest"])
+            )
+            if not ok_digest:
+                _err(digest_err)
+                return 1
+        identity_path = _prepare_release_identity(
+            args.service, images, short_sha, rel_dir, expected_revisions
+        )
         print(f"RELEASE_IDENTITY     = {identity_path}")
         return _deploy_backend(args.service, identity_path, runtime_env, apply=True)
 
@@ -923,15 +1065,15 @@ def cmd_deploy(argv: list[str]) -> int:
         print(f"TARGET_IMAGE           = {target_img}")
         print("BUILD_REQUIRED         = YES")
         print("BUILD_EXECUTED         = NO（dry-run 不 build）")
-    preview_content = _identity_content(args.service, images, short_sha)
+    preview_content = _identity_content(args.service, images, short_sha, expected_revisions)
     print("RELEASE_IDENTITY     = <dry-run 预览，未写入>（--apply 才写 release identity）")
     for line in preview_content.splitlines():
         if line.startswith("#"):
             continue
         print(f"  {line}")
     if args.service == "frontend":
-        return _deploy_frontend_dryrun(images, runtime_env, short_sha)
-    return _deploy_backend_dryrun(args.service, images, runtime_env, short_sha)
+        return _deploy_frontend_dryrun(images, runtime_env, short_sha, expected_revisions)
+    return _deploy_backend_dryrun(args.service, images, runtime_env, short_sha, expected_revisions)
 
 
 # ---------------------------------------------------------------------------

@@ -53,11 +53,35 @@ python3 scripts/prod_release.py deploy --service frontend [--dry-run|--apply]
 
 ```text
 DB_MIGRATION_DETECTED = YES
+DB_MIGRATION_ATTESTATION = MISSING_OR_INVALID
 DEPLOY = BLOCKED
 REASON = MANUAL_DB_RELEASE_GATE_REQUIRED
 ```
 
 绝不自动执行 `alembic upgrade head`；数据库发布单独审批。
+
+数据库迁移完成后，必须由独立数据库执行流程生成与目标 `SOURCE_SHA` 精确绑定的证明文件：
+
+```text
+/root/.xg-ai-release/db-attestations/<full-source-sha>-<utc>.json
+```
+
+证明至少包含：`status=VERIFIED`、目标 API 镜像及 digest、9000/9100 数据库
+expected/actual revision、迁移清单摘要、备份引用与校验值、执行/验证时间和操作人。
+证明不得包含数据库 URL、密码或 token。
+
+只有在证明与当前 `HEAD`、目标 API 镜像和数据库 revision 全部匹配时，
+`DB_MIGRATION_ATTESTATION = PASS` 才能放行下一阶段；迁移提交存在时必须先发布 `api`，
+禁止 frontend/9100 抢先发布。正式 release identity 由发布脚本生成，禁止人工编辑；
+生成内容必须包含：
+
+```text
+AUTO_WECHAT_API_EXPECTED_REVISION
+XG_DOUYIN_AI_CS_EXPECTED_REVISION
+```
+
+数据库迁移失败或服务发布失败时，优先使用已验证备份恢复；不得把 Alembic downgrade
+当作本批生产回滚方案。
 
 ## Verify（平台级验证）
 
