@@ -818,6 +818,7 @@ class AiAgent(Base):
     agent_id = Column(String(64), nullable=False, comment="智能体业务唯一 ID")
     merchant_id = Column(String(128), nullable=False, comment="可信商户 ID，来自 RequestContext")
     name = Column(String(100), nullable=False, comment="智能体名称")
+    store_name = Column(String(255), nullable=False, server_default="", comment="门店名称（仅归属 AiAgent，String(255)，历史回填见 0046/0036）")
     avatar_seed = Column(String(128), nullable=False, comment="随机头像种子")
     avatar_url = Column(String(1000), comment="头像地址")
     prompt = Column(Text, nullable=False, default="", comment="智能体提示词")

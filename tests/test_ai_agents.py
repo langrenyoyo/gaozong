@@ -56,13 +56,12 @@ def _context(
     )
 
 
-def _create_agent(client: TestClient, name: str = "门店接待智能体") -> dict:
+def _create_agent(client: TestClient, name: str = "门店接待智能体", store_name: str = "XX精品车行") -> dict:
     response = client.post(
         "/agents",
         json={
             "name": name,
-            "prompt": "你是二手车门店销售客服，需要先确认客户关注车型、预算和到店意向。",
-            "knowledge_base_text": "门店主营二手车，支持到店看车、检测报告说明和金融方案咨询。",
+            "store_name": store_name,
         },
     )
     assert response.status_code == 200
@@ -142,13 +141,13 @@ def test_get_update_and_delete_agent():
         f"/agents/{agent['agent_id']}",
         json={
             "name": "更新后的智能体",
-            "prompt": "更新后的提示词",
-            "knowledge_base_text": "更新后的知识库",
+            "store_name": "更新后的门店",
             "status": "disabled",
         },
     )
     assert updated.status_code == 200
     assert updated.json()["data"]["name"] == "更新后的智能体"
+    assert updated.json()["data"]["store_name"] == "更新后的门店"
     assert updated.json()["data"]["status"] == "disabled"
 
     deleted = client.delete(f"/agents/{agent['agent_id']}")
@@ -276,7 +275,7 @@ def test_training_chat_uses_agent_configuration_without_llm():
     assert data["knowledge_used"] is True
     assert "精品车顾问" in data["reply_text"]
     assert "这台车最低多少钱" in data["reply_text"]
-    assert "门店主营二手车" in data["reply_text"]
+    assert "XX精品车行" in data["reply_text"]
 
 
 def test_training_chat_rejects_empty_message():
@@ -339,15 +338,17 @@ def test_agent_preview_uses_draft_config_and_forces_auto_send_false(monkeypatch)
     monkeypatch.setattr(agents, "get_xg_douyin_ai_cs_client", lambda: fake_client)
     client = _client(_context())
     agent = _create_agent(client)
+    # P0-V3：Agent 配置从服务端读取（含知识绑定），Preview 前先绑定 base 分类
+    saved = client.put(
+        f"/agents/{agent['agent_id']}/knowledge-categories",
+        json={"category_keys": ["base"]},
+    )
+    assert saved.status_code == 200
 
     response = client.post(
         "/agents/preview",
         json={
             "agent_id": agent["agent_id"],
-            "name": "草稿智能体",
-            "persona_prompt": "只使用草稿人设",
-            "knowledge_prompt": "只使用草稿知识库提示词",
-            "knowledge_category_keys": ["base"],
             "message": "客户问预算10万买什么",
         },
     )
@@ -367,10 +368,12 @@ def test_agent_preview_uses_draft_config_and_forces_auto_send_false(monkeypatch)
     payload = call["request"]
     assert payload["merchant_id"] == "merchant-a"
     assert payload["latest_message"] == "客户问预算10万买什么"
+    # Agent 配置必须从服务端可信 ORM 读取（不再接受前端 persona/knowledge 覆盖）
     assert payload["agent_config"]["agent_id"] == agent["agent_id"]
-    assert payload["agent_config"]["agent_name"] == "草稿智能体"
-    assert payload["agent_config"]["prompt"] == "只使用草稿人设"
-    assert payload["agent_config"]["knowledge_base_text"] == "只使用草稿知识库提示词"
+    assert payload["agent_config"]["agent_name"] == "门店接待智能体"
+    assert payload["agent_config"]["store_name"] == "XX精品车行"
+    assert "prompt" not in payload["agent_config"]
+    assert "knowledge_base_text" not in payload["agent_config"]
     assert payload["agent_config"]["allowed_category_keys"] == ["base"]
     assert payload["agent_config"]["rag_enabled"] is True
 
@@ -395,10 +398,6 @@ def test_agent_preview_forwards_masked_recent_history(monkeypatch):
         "/agents/preview",
         json={
             "agent_id": agent["agent_id"],
-            "name": "草稿智能体",
-            "persona_prompt": "",
-            "knowledge_prompt": "",
-            "knowledge_category_keys": [],
             "message": "我刚才发了什么内容",
             "conversation_history": [
                 {"role": "user", "content": "测试，我的电话是13812345678"},
@@ -424,10 +423,6 @@ def test_agent_preview_rejects_cross_merchant_agent(monkeypatch):
         "/agents/preview",
         json={
             "agent_id": agent["agent_id"],
-            "name": "草稿智能体",
-            "persona_prompt": "",
-            "knowledge_prompt": "",
-            "knowledge_category_keys": [],
             "message": "hello",
         },
     )

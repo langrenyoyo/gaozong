@@ -125,6 +125,7 @@ def _insert_account_agent_binding(
                 agent_id=agent_id,
                 merchant_id=merchant_id,
                 name="测试智能体",
+                store_name="测试门店",
                 avatar_seed="seed",
                 prompt=agent_prompt,
                 knowledge_base_text="A6 可介绍配置和到店咨询。",
@@ -698,8 +699,11 @@ def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
 
     assert len(fake_client.calls) == 1
     payload = fake_client.calls[0]["request"]
-    assert payload["agent_config"]["system_prompt"] == agent_prompt
-    assert payload["agent_config"]["prompt"] == agent_prompt
+    # P0-V3：Agent 自定义 Prompt 已退出，构造器输出 store_name 白名单
+    assert payload["agent_config"]["store_name"] == "测试门店"
+    assert "system_prompt" not in payload["agent_config"]
+    assert "prompt" not in payload["agent_config"]
+    assert "knowledge_base_text" not in payload["agent_config"]
 
     db = TestSession()
     try:
@@ -708,7 +712,8 @@ def test_auto_reply_run_injects_bound_agent_prompt_and_records_prompt_digest():
         assert gate_results["agent"]["status"] == "ok"
         assert gate_results["agent"]["agent_id"] == "agent-1"
         assert gate_results["agent"]["agent_name"] == "测试智能体"
-        assert gate_results["agent"]["prompt_chars"] == len(agent_prompt)
+        # gate 摘要记录 store_name（Agent 自定义 Prompt 退出后的可信配置指纹）
+        assert gate_results["agent"]["prompt_chars"] == len("测试门店")
         assert len(gate_results["agent"]["prompt_sha256"]) == 64
     finally:
         db.close()

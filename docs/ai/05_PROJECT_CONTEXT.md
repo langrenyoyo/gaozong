@@ -221,8 +221,8 @@ gate 链（`app/services/douyin_autoreply_gate_service.py` 等）：
 ### 8.3 固定提示词模板 V2.0（2026-07-29 落地）
 
 - 9100 系统提示词使用甲方确认的固定模板 V2.0（12 节完整规则：身份目标、知识库使用、回复原则、联系方式用语、留资引导、敏感业务处理、对话流程、常见场景、回复风格、严禁内容、输出要求），模板内容固定不可改（第一版不支持管理员自定义）。
-- 10 个商家可配置变量从 `ai_agents` 表注入（迁移 0019 新增字段）：门店地址、门店联系方式、门店微信号、门店营业时间、销售城市范围、销售汽车品牌、收车城市范围、收车汽车品牌、销售下班留资回复、顾客问车况回复、评估师下班留资回复。
-- 前端智能体编辑（`SuperMerchantAgent.tsx`）改为傻瓜式表单：11 个简单输入框替代旧的大 textarea，商户只需填内容不需写提示词。
+- **P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1（2026-08-19）**：`store_name`（门店名称）仅归属 `AiAgent`（String(255)，迁移 0046/0036，历史回填 TRIM(name) or "未命名门店"）；固定 Prompt 的店铺名称使用 `agent_config.store_name`（不再由 `merchant_prompt.merchant_name` 派生）；三条调用链（Agent Preview / 会话 Preview / 自动回复）统一走唯一白名单构造器 `build_agent_config`，从可信 AiAgent ORM 读取；**Agent 自定义 Prompt（prompt/knowledge_base_text/store_phone/store_wechat）已完整退出**前端、9000 请求/响应、9000→9100 payload、9100 AgentConfig Schema 与 LLM 上下文（携带即 422/4xx 拒绝，不静默忽略；不物理删除既有列）。固定模板注入的门店普通事实字段：store_name、门店地址、门店营业时间、销售城市范围、销售汽车品牌、收车城市范围、收车汽车品牌、销售下班留资回复、顾客问车况回复、评估师下班留资回复。
+- 前端智能体编辑（`SuperMerchantAgent.tsx`）为傻瓜式表单：门店名称（必填）+ 门店普通事实字段输入框，不再有提示词/知识参考提示词/门店电话/门店微信录入。
 - 旧 `_SYSTEM_PREFIX` 与仅被它引用的 `CONVERSATION_HISTORY_POLICY` 已删除（2026-07-31 P0 Batch A 清理失效死代码，原注释称"位于 system 首部"与实现不符）；`_build_fixed_prompt_template` 是唯一主系统提示词。
 - 旧安全后处理覆盖已移除：`_apply_safety_postprocess` 不再用 `_build_safe_direct_reply`/`sanitize_direct_llm_reply_text` 覆盖 LLM 回复；合并纠正 fallback 也不覆盖。信任 V2.0 模板生成的回复。
 - 预览与自动回复使用同一 9100 入口 `build_reply_suggestion` → `build_llm_messages` → `_build_fixed_prompt_template`，预览补传 `direct_llm_policy` + `forbidden_words` 与自动回复统一。

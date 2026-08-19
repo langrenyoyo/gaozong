@@ -51,21 +51,23 @@ def list_agents(db: Session, context: RequestContext) -> list[AiAgent]:
 
 
 def create_agent(db: Session, context: RequestContext, payload: AiAgentCreate) -> AiAgent:
-    """创建智能体，merchant_id 只取可信上下文。"""
+    """创建智能体，merchant_id 只取可信上下文。
+
+    store_name 服务端校验：trim 后必须非空、长度 ≤255（P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1）。
+    prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，不再写入。
+    """
     merchant_id = require_context_merchant(context)
+    store_name = _validate_store_name(payload.store_name)
     agent = AiAgent(
         agent_id=f"agent_{uuid4().hex[:16]}",
         merchant_id=merchant_id,
         name=payload.name.strip(),
+        store_name=store_name,
         avatar_seed=f"{merchant_id}-{uuid4().hex[:12]}",
         avatar_url=payload.avatar_url,
-        prompt=payload.prompt or "",
-        knowledge_base_text=payload.knowledge_base_text or "",
         status="active",
-        # 商家可配置变量（固定提示词模板 V2.0）
+        # 商家可配置变量（固定提示词模板 V2.0 注入）
         store_address=payload.store_address,
-        store_phone=payload.store_phone,
-        store_wechat=payload.store_wechat,
         business_hours=payload.business_hours,
         sales_cities=payload.sales_cities,
         sales_brands=payload.sales_brands,
@@ -96,21 +98,23 @@ def get_agent(db: Session, context: RequestContext, agent_id: str) -> AiAgent | 
 
 
 def update_agent(db: Session, agent: AiAgent, payload: AiAgentUpdate) -> AiAgent:
-    """更新智能体配置。"""
+    """更新智能体配置。
+
+    store_name 更新执行同校验（trim 后非空、≤255）；
+    prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，不再更新。
+    """
     data = payload.model_dump(exclude_unset=True)
     if "name" in data and data["name"] is not None:
         agent.name = data["name"].strip()
-    if "prompt" in data and data["prompt"] is not None:
-        agent.prompt = data["prompt"]
-    if "knowledge_base_text" in data and data["knowledge_base_text"] is not None:
-        agent.knowledge_base_text = data["knowledge_base_text"]
+    if "store_name" in data and data["store_name"] is not None:
+        agent.store_name = _validate_store_name(data["store_name"])
     if "avatar_url" in data:
         agent.avatar_url = data["avatar_url"]
     if "status" in data and data["status"] is not None:
         agent.status = data["status"]
-    # 商家可配置变量（固定提示词模板 V2.0）
+    # 商家可配置变量（固定提示词模板 V2.0 注入）
     _STORE_CONFIG_FIELDS = (
-        "store_address", "store_phone", "store_wechat", "business_hours",
+        "store_address", "business_hours",
         "sales_cities", "sales_brands", "purchase_cities", "purchase_brands",
         "after_hours_reply", "vehicle_condition_reply", "appraiser_off_hours_reply",
     )
@@ -120,6 +124,49 @@ def update_agent(db: Session, agent: AiAgent, payload: AiAgentUpdate) -> AiAgent
     db.commit()
     db.refresh(agent)
     return agent
+
+
+def _validate_store_name(store_name: str) -> str:
+    """store_name 服务端校验：trim 后必须非空、长度 ≤255。返回 trim 后的值。"""
+    value = (store_name or "").strip()
+    if not value:
+        raise ValueError("store_name 不能为空")
+    if len(value) > 255:
+        raise ValueError("store_name 长度不能超过 255")
+    return value
+
+
+def build_agent_config(agent: AiAgent, *, category_keys: list[str]) -> dict:
+    """唯一服务端白名单构造器：从可信 AiAgent ORM + 服务端知识绑定读取。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：三个场景（Agent Preview / 会话 Preview / 自动回复）
+    必须调用同一实现。前端或调用方不得提交 agent_config 覆盖以下可信数据：
+    agent_id / agent_name / store_name / 门店普通事实字段 / status / allowed_category_keys / rag_enabled。
+
+    store_name 运行时兜底（混合版本/异常数据防御）：trim(store_name) or trim(agent.name) or "未命名门店"。
+    不包含四旧字段（prompt/knowledge_base_text/store_phone/store_wechat）与运行态字段
+    （conversation_history/known_customer/contact_state/customer_memory/run_id/attempt_count/发送策略）。
+    """
+    keys = list(category_keys or [])
+    store_name = (agent.store_name or "").strip() or (agent.name or "").strip() or "未命名门店"
+    return {
+        "agent_id": agent.agent_id,
+        "agent_name": agent.name or "",
+        "store_name": store_name,
+        "status": agent.status,
+        "allowed_category_keys": keys,
+        "rag_enabled": bool(keys),
+        # 门店普通事实字段（固定提示词模板 V2.0 注入）
+        "store_address": agent.store_address or "",
+        "business_hours": agent.business_hours or "",
+        "sales_cities": agent.sales_cities or "",
+        "sales_brands": agent.sales_brands or "",
+        "purchase_cities": agent.purchase_cities or "",
+        "purchase_brands": agent.purchase_brands or "",
+        "after_hours_reply": agent.after_hours_reply or "",
+        "vehicle_condition_reply": agent.vehicle_condition_reply or "",
+        "appraiser_off_hours_reply": agent.appraiser_off_hours_reply or "",
+    }
 
 
 def has_active_douyin_account_binding(db: Session, *, merchant_id: str, agent_id: str) -> bool:
@@ -158,18 +205,20 @@ def soft_delete_agent(db: Session, agent: AiAgent) -> dict[str, Any]:
 
 
 def preview_training_chat(agent: AiAgent, message: str) -> TrainingChatResult:
-    """生成训练预览回复，不调用 LLM 或外部系统。"""
+    """生成训练预览回复，不调用 LLM 或外部系统。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：prompt/knowledge_base_text 已完整退出，
+    训练预览仅使用 store_name（门店名称）等可信字段。
+    """
     text = message.strip()
     if not text:
         raise ValueError("MESSAGE_REQUIRED")
 
-    prompt_hint = agent.prompt.strip() or "暂无提示词"
-    knowledge_hint = agent.knowledge_base_text.strip() or "暂无知识库内容"
+    store_name = (agent.store_name or "").strip() or (agent.name or "").strip() or "未命名门店"
     reply_text = (
         f"{agent.name}：我会按当前智能体配置回答。"
         f"客户问题是“{text}”。"
-        f"当前提示词要求：{prompt_hint}"
-        f"。可参考知识库：{knowledge_hint}"
+        f"门店名称：{store_name}"
         "。建议先确认车型、预算、看车时间和联系方式，再引导客户留资。"
     )
     return TrainingChatResult(

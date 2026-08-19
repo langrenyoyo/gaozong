@@ -223,6 +223,12 @@ MODEL_OR_BRAND_KEYWORDS = (
     "5系",
     "X3",
     "X5",
+    "揽胜",
+    "仰望",
+    "坦克",
+    "艾瑞泽",
+    "星途",
+
 )
 INVENTORY_CLAIM_KEYWORDS = (
     "现车挺多",
@@ -836,15 +842,18 @@ def resolve_reply_agent(
                     "agent_id": config.agent_id or request.agent_id,
                     "agent_name": config.agent_name or config.agent_id or request.agent_id,
                     "agent_category": "bound_agent",
-                    "system_prompt": config.system_prompt or config.prompt or "",
-                    "knowledge_base_text": config.knowledge_base_text or "",
+                    # system_prompt 仅作留资目标等确定性判定的服务端信号（不注入 LLM 上下文，
+                    # Agent 自定义 Prompt 已退出）。
+                    "system_prompt": config.system_prompt or "",
+                    # P0-DOUYIN-AI-PROMPT-V3：store_name 仅归属 AiAgent；运行时兜底
+                    # trim(store_name) or trim(agent_name) or "未命名门店"（混合版本/异常数据防御）
+                    "store_name": (config.store_name or "").strip()
+                        or (config.agent_name or "").strip() or "未命名门店",
                     "reply_style": "",
-                    "business_scope": config.knowledge_base_text or "",
+                    "business_scope": "",
                     "is_active": config.status in (None, "", "active"),
-                    # 商家可配置变量（固定提示词模板 V2.0）
+                    # 门店普通事实字段（固定提示词模板 V2.0 注入）
                     "store_address": config.store_address or "",
-                    "store_phone": config.store_phone or "",
-                    "store_wechat": config.store_wechat or "",
                     "business_hours": config.business_hours or "",
                     "sales_cities": config.sales_cities or "",
                     "sales_brands": config.sales_brands or "",
@@ -861,7 +870,8 @@ def resolve_reply_agent(
                 "agent_id": request.agent_id,
                 "agent_name": request.agent_id,
                 "agent_category": "bound_agent",
-                "system_prompt": None,
+                "system_prompt": "",
+                "store_name": "未命名门店",
                 "reply_style": "",
                 "business_scope": "",
                 "is_active": True,
@@ -942,23 +952,27 @@ def load_merchant_prompt(tenant_id: str, merchant_id: str, douyin_account_id: in
 
 
 def apply_agent_prompt(merchant_prompt: dict, agent: dict) -> dict:
-    """把当前选中的 Agent 配置合并进 prompt 上下文。"""
+    """把当前选中的 Agent 配置合并进 prompt 上下文。
+
+    P0-DOUYIN-AI-PROMPT-V3：store_name 来自 agent_config.store_name（不再由 merchant_name 派生）；
+    prompt/knowledge_base_text/store_phone/store_wechat 已完整退出。
+    """
     return {
         **merchant_prompt,
         "role_name": agent.get("agent_name"),
         "category": agent.get("agent_category"),
         "persona": agent.get("business_scope"),
         "style": agent.get("reply_style"),
-        "system_prompt": agent.get("system_prompt"),
+        # system_prompt 仅作留资目标等确定性判定的服务端信号（Agent 自定义 Prompt 已退出 LLM 上下文）。
+        "system_prompt": agent.get("system_prompt") or "",
         "agent_id": agent.get("agent_id"),
         "agent_name": agent.get("agent_name"),
+        "store_name": agent.get("store_name") or agent.get("agent_name") or "未命名门店",
         "agent_category": agent.get("agent_category"),
         "reply_style": agent.get("reply_style"),
         "business_scope": agent.get("business_scope"),
-        # 商家可配置变量（固定提示词模板 V2.0）
+        # 门店普通事实字段（固定提示词模板 V2.0 注入）
         "store_address": agent.get("store_address", ""),
-        "store_phone": agent.get("store_phone", ""),
-        "store_wechat": agent.get("store_wechat", ""),
         "business_hours": agent.get("business_hours", ""),
         "sales_cities": agent.get("sales_cities", ""),
         "sales_brands": agent.get("sales_brands", ""),
@@ -1430,13 +1444,16 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
     """固定提示词模板 V2.0：用商家可配置变量替换占位符，生成完整 system prompt。
 
     模板内容固定不可改（第一版不支持管理员自定义模板）。
-    10 个变量从 Agent 配置注入，空值用"未配置"占位。
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：
+    - store_name 仅来自 agent_config.store_name（不再由 merchant_name 派生）；
+      运行时兜底 trim(store_name) or trim(agent_name) or "未命名门店"；
+    - prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，不再出现在 LLM 上下文。
+    门店普通事实字段从 Agent 配置注入，空值用"未配置"占位。
     """
     agent_name = merchant_prompt.get("agent_name") or "AI客服"
-    store_name = merchant_prompt.get("merchant_name") or agent_name
+    store_name = (merchant_prompt.get("store_name") or "").strip() \
+        or (merchant_prompt.get("agent_name") or "").strip() or "未命名门店"
     store_address = merchant_prompt.get("store_address") or "未配置"
-    store_phone = merchant_prompt.get("store_phone") or "未配置"
-    store_wechat = merchant_prompt.get("store_wechat") or "未配置"
     business_hours = merchant_prompt.get("business_hours") or "未配置"
     sales_cities = merchant_prompt.get("sales_cities") or "未配置"
     sales_brands = merchant_prompt.get("sales_brands") or "未配置"
@@ -1453,8 +1470,6 @@ def _build_fixed_prompt_template(merchant_prompt: dict) -> str:
 智能体名称：{agent_name}
 店铺名称：{store_name}
 门店地址：{store_address}
-门店联系方式：{store_phone}
-门店v：{store_wechat}
 门店营业时间：{business_hours}
 销售城市范围：{sales_cities}
 销售汽车品牌：{sales_brands}
@@ -1685,9 +1700,6 @@ known_customer.info 已有的字段，不得再追问。
 销售城市范围：{sales_cities}，销售汽车品牌：{sales_brands}。
 收车城市范围：{purchase_cities}，收车汽车品牌：{purchase_brands}。
 
-## 附加：联系方式
-门店联系方式：{store_phone}，门店v：{store_wechat}。
-
 ## 附加：输出格式
 你只能返回 JSON，不要输出 JSON 之外的任何文本。
 JSON 必须包含 reply_text、intent、lead_level、tags、manual_required、manual_required_reason、risk_flags、confidence、auto_send、customer_profile_update；auto_send 字段返回 false。
@@ -1858,11 +1870,9 @@ def build_llm_messages(request: ReplySuggestionRequest, merchant_prompt: dict, s
     # agent_phone_goal 判定与 _build_llm_reply（line 995 _agent_requires_phone_lead_capture）对齐口径，
     # 避免 Prompt 注入留资指令但守卫判定无留资目标的错配。
     agent_phone_goal = _agent_requires_phone_lead_capture(merchant_prompt)
-    # 顺序：固定提示词模板 V2.0（完整12节+商家变量注入）→ Agent 自定义提示 → 留资目标 → 违禁词 → Decision 约束
+    # 顺序：固定提示词模板 V2.0（完整12节+商家变量注入）→ 留资目标 → 违禁词 → Decision 约束。
+    # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：Agent 自定义 Prompt 已完整退出 LLM 上下文。
     system_parts: list[str] = [_build_fixed_prompt_template(merchant_prompt)]
-    agent_system_prompt = merchant_prompt.get("system_prompt")
-    if agent_system_prompt:
-        system_parts.append(_sanitize_merchant_system_prompt(agent_system_prompt))
     if agent_phone_goal:
         system_parts.append("当前绑定 Agent 要求自然引导客户留下联系方式；不要引导加绿泡泡或个人号。")
     else:

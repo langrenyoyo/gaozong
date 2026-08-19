@@ -96,19 +96,27 @@ class UserProfileResponse(BaseModel):
 
 
 class AgentConfig(BaseModel):
+    """9000→9100 Agent 配置白名单（唯一构造器产出）。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：
+    - store_name 仅归属 AiAgent（String(255)）；
+    - prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，直接携带即 422 拒绝；
+    - extra=forbid：前端/调用方不得提交 agent_config 覆盖可信 Agent 数据。
+    """
+
+    model_config = {"extra": "forbid"}
+
     agent_id: str
     agent_name: str | None = None
+    store_name: str | None = None
+    # system_prompt 为兼容字段（不在四旧字段列表）：9100 不注入 LLM 上下文（Agent 自定义 Prompt 已退出）。
     system_prompt: str | None = None
-    prompt: str | None = None
-    knowledge_base_text: str | None = None
     status: str | None = None
     allowed_category_keys: list[str] | None = None
     allowed_category_ids: list[str] | None = None
     rag_enabled: bool | None = None
-    # 商家可配置变量（固定提示词模板 V2.0）
+    # 门店普通事实字段（固定提示词模板 V2.0 注入）
     store_address: str | None = None
-    store_phone: str | None = None
-    store_wechat: str | None = None
     business_hours: str | None = None
     sales_cities: str | None = None
     sales_brands: str | None = None

@@ -697,6 +697,7 @@ def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
                 agent_id="agent-sales",
                 merchant_id="dev-merchant",
                 name="真实小高客服",
+                store_name="真实门店",
                 avatar_seed="seed-sales",
                 prompt="只回答真实库存，不承诺自动发送。",
                 knowledge_base_text="A6 暂无现车，可推荐同级车型。",
@@ -732,8 +733,11 @@ def test_proxy_injects_real_agent_config_after_binding_validation(monkeypatch):
     agent_config = fake_client.calls[0]["request"]["agent_config"]
     assert agent_config["agent_id"] == "agent-sales"
     assert agent_config["agent_name"] == "真实小高客服"
-    assert agent_config["system_prompt"] == "只回答真实库存，不承诺自动发送。"
-    assert agent_config["knowledge_base_text"] == "A6 暂无现车，可推荐同级车型。"
+    # P0-V3：构造器从服务端可信 ORM 读取；store_name 加入，四旧字段不输出
+    assert agent_config["store_name"] == "真实门店"
+    assert "system_prompt" not in agent_config
+    assert "prompt" not in agent_config
+    assert "knowledge_base_text" not in agent_config
     assert agent_config["status"] == "active"
     assert agent_config["allowed_category_keys"] == []
     assert agent_config["rag_enabled"] is False

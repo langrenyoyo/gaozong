@@ -18,6 +18,7 @@ from app.integrations.douyin_webhook import normalize_message_text, parse_conten
 from app.models import AiAutoReplyRun, DouyinWebhookEvent
 from app.services.ai_auto_reply_content_sanitizer import sanitize_ai_reply_content
 from app.services.agent_knowledge_category_service import list_agent_category_keys
+from app.services.ai_agent_service import build_agent_config
 from app.services.ai_reply_decision_log_service import record_ai_reply_decision
 from app.services.ai_auto_reply_send_service import send_ai_auto_reply_for_run
 from app.services.douyin_account_agent_binding_service import resolve_webhook_bound_agent
@@ -254,10 +255,11 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         source_system=binding.tenant_id or "douyin_webhook",
     )
     allowed_category_keys = _build_allowed_category_keys(db, context=context, agent_id=binding.agent.agent_id)
+    # P0-V3：Agent 自定义 Prompt 已退出；gate 摘要记录 store_name（可信配置指纹）
     agent_gate = _build_agent_gate_result(
         agent_id=binding.agent.agent_id,
         agent_name=binding.agent.name,
-        prompt=binding.agent.prompt or "",
+        prompt=binding.agent.store_name or "",
     )
     history_gate: dict[str, Any] = {"status": "ok"}
     # conversation_context
@@ -312,28 +314,10 @@ def _run_with_session(db, *, event_id: int, expected_lease_owner: str = "") -> N
         "account_id": account_open_id,
         "douyin_account_id": account_open_id,
         "agent_id": binding.agent.agent_id,
-        "agent_config": {
-            "agent_id": binding.agent.agent_id,
-            "agent_name": binding.agent.name,
-            "system_prompt": binding.agent.prompt or "",
-            "prompt": binding.agent.prompt or "",
-            "knowledge_base_text": binding.agent.knowledge_base_text or "",
-            "status": binding.agent.status,
-            "allowed_category_keys": allowed_category_keys,
-            "rag_enabled": bool(allowed_category_keys),
-            # 商家可配置变量（固定提示词模板 V2.0）
-            "store_address": binding.agent.store_address or "",
-            "store_phone": binding.agent.store_phone or "",
-            "store_wechat": binding.agent.store_wechat or "",
-            "business_hours": binding.agent.business_hours or "",
-            "sales_cities": binding.agent.sales_cities or "",
-            "sales_brands": binding.agent.sales_brands or "",
-            "purchase_cities": binding.agent.purchase_cities or "",
-            "purchase_brands": binding.agent.purchase_brands or "",
-            "after_hours_reply": binding.agent.after_hours_reply or "",
-            "vehicle_condition_reply": binding.agent.vehicle_condition_reply or "",
-            "appraiser_off_hours_reply": binding.agent.appraiser_off_hours_reply or "",
-        },
+        "agent_config": build_agent_config(
+            binding.agent,
+            category_keys=allowed_category_keys,
+        ),
         "latest_message": reply_context.latest_message,
         "conversation_history": reply_context.conversation_history,
         "customer_memory": reply_context.customer_memory,

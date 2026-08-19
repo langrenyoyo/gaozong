@@ -159,7 +159,11 @@ def update_agent(
     agent = ai_agent_service.get_agent(db, context, agent_id)
     if not agent:
         raise _not_found()
-    agent = ai_agent_service.update_agent(db, agent, payload)
+    try:
+        agent = ai_agent_service.update_agent(db, agent, payload)
+    except ValueError as exc:
+        # store_name 等字段校验失败 → 明确 400（不 500）
+        raise _bad_request(str(exc), "智能体更新失败") from exc
     return {"success": True, "data": agent, "message": "success"}
 
 
@@ -242,20 +246,19 @@ def preview_agent(
     if not text:
         raise _bad_request("MESSAGE_REQUIRED", "预览问题不能为空")
 
-    agent_id = (payload.agent_id or "draft-agent").strip() or "draft-agent"
-    if payload.agent_id:
-        agent = ai_agent_service.get_agent(db, context, payload.agent_id)
-        if not agent:
-            raise _not_found()
-
-    try:
-        category_keys = normalize_category_keys(payload.knowledge_category_keys)
-        for key in category_keys:
+    # P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：Agent 配置必须按 agent_id 从服务端可信 ORM 读取，
+    # 前端/调用方不得提交 agent_config 覆盖可信数据。
+    agent = ai_agent_service.get_agent(db, context, payload.agent_id)
+    if not agent:
+        raise _not_found()
+    agent_id = agent.agent_id
+    category_keys = list_agent_category_keys(db, context=context, agent_id=agent_id)
+    for key in category_keys:
+        try:
             ensure_category_usable_for_merchant(db, context=context, category_key=key)
-    except ValueError as exc:
-        raise _binding_not_found(exc) from exc
+        except ValueError as exc:
+            raise _binding_not_found(exc) from exc
 
-    name = payload.name.strip() or "AI小高智能体"
     try:
         latest_message = mask_contacts_in_text(text)
         conversation_history = [
@@ -275,28 +278,10 @@ def preview_agent(
         "douyin_account_id": "agent-preview",
         "merchant_id": context.merchant_id,
         "agent_id": agent_id,
-        "agent_config": {
-            "agent_id": agent_id,
-            "agent_name": name,
-            "system_prompt": payload.persona_prompt or "",
-            "prompt": payload.persona_prompt or "",
-            "knowledge_base_text": payload.knowledge_prompt or "",
-            "status": "active",
-            "allowed_category_keys": category_keys,
-            "rag_enabled": bool(category_keys),
-            # 商家可配置变量（固定提示词模板 V2.0）
-            "store_address": payload.store_address or "",
-            "store_phone": payload.store_phone or "",
-            "store_wechat": payload.store_wechat or "",
-            "business_hours": payload.business_hours or "",
-            "sales_cities": payload.sales_cities or "",
-            "sales_brands": payload.sales_brands or "",
-            "purchase_cities": payload.purchase_cities or "",
-            "purchase_brands": payload.purchase_brands or "",
-            "after_hours_reply": payload.after_hours_reply or "",
-            "vehicle_condition_reply": payload.vehicle_condition_reply or "",
-            "appraiser_off_hours_reply": payload.appraiser_off_hours_reply or "",
-        },
+        "agent_config": ai_agent_service.build_agent_config(
+            agent,
+            category_keys=category_keys,
+        ),
         "latest_message": latest_message,
         "max_history_messages": 10,
         "conversation_history": conversation_history,

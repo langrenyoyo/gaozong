@@ -129,16 +129,19 @@ class WebhookEventDetailResponse(BaseModel):
 
 
 class AiAgentCreate(BaseModel):
-    """AI小高智能体创建请求。"""
+    """AI小高智能体创建请求。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：store_name（门店名称）必填；
+    prompt/knowledge_base_text/store_phone/store_wechat 已完整退出，携带即 422 拒绝。
+    """
+
+    model_config = {"extra": "forbid"}
 
     name: str = Field(..., min_length=1, max_length=100)
-    prompt: str = ""
-    knowledge_base_text: str = ""
+    store_name: str = Field(..., min_length=1, max_length=255)
     avatar_url: Optional[str] = None
-    # 商家可配置变量（固定提示词模板 V2.0）
+    # 商家可配置变量（固定提示词模板 V2.0 注入；门店普通事实字段，由服务端可信 Agent 读取）
     store_address: Optional[str] = None
-    store_phone: Optional[str] = None
-    store_wechat: Optional[str] = None
     business_hours: Optional[str] = None
     sales_cities: Optional[str] = None
     sales_brands: Optional[str] = None
@@ -150,17 +153,19 @@ class AiAgentCreate(BaseModel):
 
 
 class AiAgentUpdate(BaseModel):
-    """AI小高智能体更新请求。"""
+    """AI小高智能体更新请求。
+
+    store_name 更新同校验（trim 后非空、≤255）；四旧字段携带即 422 拒绝。
+    """
+
+    model_config = {"extra": "forbid"}
 
     name: Optional[str] = Field(None, min_length=1, max_length=100)
-    prompt: Optional[str] = None
-    knowledge_base_text: Optional[str] = None
+    store_name: Optional[str] = Field(None, min_length=1, max_length=255)
     avatar_url: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|disabled)$")
-    # 商家可配置变量（固定提示词模板 V2.0）
+    # 商家可配置变量（固定提示词模板 V2.0 注入；门店普通事实字段）
     store_address: Optional[str] = None
-    store_phone: Optional[str] = None
-    store_wechat: Optional[str] = None
     business_hours: Optional[str] = None
     sales_cities: Optional[str] = None
     sales_brands: Optional[str] = None
@@ -172,20 +177,21 @@ class AiAgentUpdate(BaseModel):
 
 
 class AiAgentOut(BaseModel):
-    """AI小高智能体响应。"""
+    """AI小高智能体响应。
+
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：store_name 加入；
+    prompt/knowledge_base_text/store_phone/store_wechat 已完整退出响应。
+    """
 
     id: int
     agent_id: str
     merchant_id: str
     name: str
+    store_name: str = ""
     avatar_seed: str
     avatar_url: Optional[str] = None
-    prompt: str = ""
-    knowledge_base_text: str = ""
-    # 商家可配置变量（固定提示词模板 V2.0）
+    # 商家可配置变量（固定提示词模板 V2.0 注入）
     store_address: Optional[str] = None
-    store_phone: Optional[str] = None
-    store_wechat: Optional[str] = None
     business_hours: Optional[str] = None
     sales_cities: Optional[str] = None
     sales_brands: Optional[str] = None
@@ -248,27 +254,18 @@ class AiAgentPreviewHistoryItem(BaseModel):
 
 
 class AiAgentPreviewRequest(BaseModel):
-    """AI小高智能体草稿预览请求。"""
+    """AI小高智能体预览请求。
 
-    agent_id: Optional[str] = None
-    name: str = Field("", max_length=100)
-    persona_prompt: str = ""
-    knowledge_prompt: str = ""
-    knowledge_category_keys: list[str] = Field(default_factory=list)
+    P0-DOUYIN-AI-PROMPT-V3-AGENT-CONTRACT-R1：Agent 配置必须按 agent_id 从服务端读取，
+    本请求只允许携带消息和必要会话预览输入；携带 persona_prompt/knowledge_prompt/store_phone/
+    store_wechat/prompt/knowledge_base_text 等旧字段即 422 拒绝。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    agent_id: str = Field(..., min_length=1, max_length=64)
     message: str = Field(..., min_length=1)
     conversation_history: list[AiAgentPreviewHistoryItem] = Field(default_factory=list, max_length=10)
-    # 商家可配置变量（固定提示词模板 V2.0）
-    store_address: Optional[str] = None
-    store_phone: Optional[str] = None
-    store_wechat: Optional[str] = None
-    business_hours: Optional[str] = None
-    sales_cities: Optional[str] = None
-    sales_brands: Optional[str] = None
-    purchase_cities: Optional[str] = None
-    purchase_brands: Optional[str] = None
-    after_hours_reply: Optional[str] = None
-    vehicle_condition_reply: Optional[str] = None
-    appraiser_off_hours_reply: Optional[str] = None
 
 
 class AiAgentPreviewResponseData(BaseModel):

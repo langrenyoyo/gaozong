@@ -27,12 +27,12 @@ GMP webhook
             → build_reply_conversation_context (douyin_conversation_history_service.py)
               → 读取会话历史(脱敏) + customer_memory + CustomerProfile(merge)
               → build_request_contact_state (contact_state_service.py:183)
-            → agent_config 组装 (dry_run_service.py:315-336, binding.agent DB)
+            → agent_config 组装 (build_agent_config, binding.agent DB；P0-V3 唯一白名单构造器)
             → 9100 suggest_reply (xg_douyin_ai_cs_client.py:52, HTTP)
               → 9100 build_reply_suggestion (reply_decision_service.py)
                 → resolve_reply_agent(agent_config) → _merge_agent_into_prompt
                 → RAG search_with_diagnostics (rag_enabled 由 allowed_category_keys 推导)
-                → _build_fixed_prompt_template(固定V2.0) + 商户system_prompt + 运行时约束
+                → _build_fixed_prompt_template(固定V2.0, store_name 来自 agent_config) + 运行时约束
                 → LLM chat (OpenAICompatibleClient, :1060)
                 → _apply_safety_postprocess (hard guard + prompt_injection 确定性检测)
                 → 算力上报 compute_usage_client.report_usage (capability_key=douyin-cs)
@@ -102,16 +102,19 @@ GMP webhook
 - 权威服务：`douyin_account_agent_binding_service.py:333-399`（merchant/账号/agent 三重校验）
 - webhook 解析：`resolve_webhook_bound_agent`（:402-494，不依赖 RequestContext）
 
-### agent_config 组装（三处一致）
+### agent_config 组装（三处一致，P0-V3 唯一白名单构造器）
 - auto-reply：`dry_run_service.py:315-336`（binding.agent DB）
-- 会话预览：`douyin_ai_cs_proxy.py:322-343`（agent DB + getattr）
-- preview：`agents.py:241-262`（前端 payload 草稿）
-- 字段：13 基础 + 10 商家变量，三处完全一致
+- 会话预览：`douyin_ai_cs_proxy.py`（agent DB）
+- preview：`agents.py`（按 agent_id 服务端 AiAgent ORM 读取，不再接受前端草稿）
+- 三者统一调用 `ai_agent_service.build_agent_config`（apps/agents/services.py），
+  字段：agent_id/agent_name/store_name/status/allowed_category_keys/rag_enabled + 门店普通事实字段；
+  不含 system_prompt/prompt/knowledge_base_text/store_phone/store_wechat（四旧字段已退出，携带即 422/4xx 拒绝）
 
 ### Prompt 三层
-1. 固定模板：`reply_decision_service.py:1411-1735`（V2.0 硬编码，13 变量占位）
-2. 商户 system_prompt：`:839` resolve_reply_agent（config.system_prompt or config.prompt）
-3. 运行时约束：`:3051-3073` known_customer_info（budget/brand/city/salutation/contact_invalid）
+1. 固定模板：`reply_decision_service.py`（V2.0 硬编码，店铺名称用 agent_config.store_name，不再由 merchant_name 派生）
+2. 运行时约束：known_customer_info（budget/brand/city/salutation/contact_invalid）
+   （Agent 自定义 system_prompt 已退出 LLM 上下文；system_prompt 仅作留资目标等确定性判定的服务端信号）
+3. （历史注释：原"商户 system_prompt config.system_prompt or config.prompt"已随 P0-V3 移除）
 
 ### RAG 触发
 - rag_enabled：`reply_decision_service.py:3746-3760`（显式或 allowed_category_keys 非空）
@@ -246,8 +249,8 @@ GMP webhook
 | 维度 | Preview | Auto Reply | Training |
 |---|---|---|---|
 | 入口 | POST /agents/preview | webhook→outbox→dry_run | POST /knowledge-training/ask |
-| agent_config 来源 | 前端 payload 草稿 | DB binding.agent | 不注入 |
-| 商户变量 | 前端传入 | DB 真实值 | 全部"未配置" |
+| agent_config 来源 | 服务端 AiAgent ORM（按 agent_id） | DB binding.agent | 不注入 |
+| 商户变量（门店普通事实字段） | 服务端 ORM 真实值 | DB 真实值 | 全部"未配置" |
 | 客户事实 | 前端传入(脱敏) | DB 会话历史+customer_memory+contact_state | 无 |
 | LLM 路径 | 9100 build_reply_suggestion | 同 preview（共享） | 独立 _build_answer |
 | 真实发送 | 否(auto_send=False硬编码) | 可能(decided+real_send+auto_send) | 否 |

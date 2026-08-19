@@ -14,12 +14,13 @@
 | agent_id | String(64), 唯一 | 业务 ID `agent_{uuid4().hex[:16]}` |
 | merchant_id | String(128), 非空 | 可信商户 ID（从 RequestContext 取，非前端传入） |
 | name | String | 智能体名称 |
+| store_name | String(255), 非空 | **门店名称（仅归属 AiAgent，P0-V3，迁移 0046/0036，历史回填 TRIM(name) or "未命名门店"）** |
 | avatar_seed / avatar_url | String | 头像 |
-| prompt | Text | **商户自定义 Prompt** |
-| knowledge_base_text | Text | **普通文本知识库** |
-| store_address | String | 门店地址（迁移 0019） |
-| store_phone | String | 门店电话 |
-| store_wechat | String | 门店微信号 |
+| prompt | Text | **已退出（P0-V3：不保存/不读取/不转发/不注入 LLM，列保留兼容不物理删除）** |
+| knowledge_base_text | Text | **已退出（同上）** |
+| store_address | String | 门店地址（迁移 0019/0039） |
+| store_phone | String | **已退出（不录入/不转发/不注入 LLM，列保留）** |
+| store_wechat | String | **已退出（同上）** |
 | business_hours | String | 营业时间 |
 | sales_cities | String | 销售城市范围 |
 | sales_brands | String | 销售汽车品牌 |

@@ -1,10 +1,8 @@
 import apiClient from "./client";
 
-// 商家可配置变量（固定提示词模板 V2.0）
+// 门店普通事实字段（固定提示词模板 V2.0 注入）
 export interface AiAgentStoreConfig {
   store_address?: string | null;
-  store_phone?: string | null;
-  store_wechat?: string | null;
   business_hours?: string | null;
   sales_cities?: string | null;
   sales_brands?: string | null;
@@ -20,10 +18,9 @@ export interface AiAgent extends AiAgentStoreConfig {
   agent_id: string;
   merchant_id: string;
   name: string;
+  store_name: string;
   avatar_seed: string;
   avatar_url?: string | null;
-  prompt: string;
-  knowledge_base_text: string;
   status: "active" | "disabled" | "deleted";
   created_at?: string | null;
   updated_at?: string | null;
@@ -31,8 +28,7 @@ export interface AiAgent extends AiAgentStoreConfig {
 
 export interface AiAgentPayload extends AiAgentStoreConfig {
   name: string;
-  prompt: string;
-  knowledge_base_text: string;
+  store_name: string;
   avatar_url?: string | null;
 }
 
@@ -43,12 +39,8 @@ export interface AiAgentTrainingChatResult {
   knowledge_used: boolean;
 }
 
-export interface AiAgentPreviewPayload extends AiAgentStoreConfig {
-  agent_id?: string | null;
-  name: string;
-  persona_prompt: string;
-  knowledge_prompt: string;
-  knowledge_category_keys: string[];
+export interface AiAgentPreviewPayload {
+  agent_id: string;
   message: string;
   conversation_history: Array<{
     role: "user" | "assistant";

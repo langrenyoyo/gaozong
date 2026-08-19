@@ -42,11 +42,8 @@ const welcomeMessage: ChatMessage = {
 
 const emptyDraft: AiAgentPayload = {
   name: "",
-  prompt: "",
-  knowledge_base_text: "",
+  store_name: "",
   store_address: "",
-  store_phone: "",
-  store_wechat: "",
   business_hours: "",
   sales_cities: "",
   sales_brands: "",
@@ -58,10 +55,6 @@ const emptyDraft: AiAgentPayload = {
 };
 
 const BASE_CATEGORY_KEY = "base";
-
-function promptPreview(prompt: string): string {
-  return prompt.trim() || "暂无提示词";
-}
 
 function agentAvatar(agent: AiAgent) {
   return agent.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(agent.avatar_seed)}`;
@@ -105,12 +98,9 @@ function AgentEditor({
       agent
         ? {
             name: agent.name,
-            prompt: agent.prompt,
-            knowledge_base_text: agent.knowledge_base_text,
+            store_name: agent.store_name || "",
             avatar_url: agent.avatar_url,
             store_address: agent.store_address || "",
-            store_phone: agent.store_phone || "",
-            store_wechat: agent.store_wechat || "",
             business_hours: agent.business_hours || "",
             sales_cities: agent.sales_cities || "",
             sales_brands: agent.sales_brands || "",
@@ -196,12 +186,15 @@ function AgentEditor({
       toast.error("请填写智能体名称");
       return;
     }
+    if (!draft.store_name.trim()) {
+      toast.error("请填写门店名称");
+      return;
+    }
     const categoryKeys = categoryLoadFailed || bindingLoadFailed ? null : selectedCategoryKeys;
     onSave({
       ...draft,
       name: draft.name.trim(),
-      prompt: draft.prompt || "",
-      knowledge_base_text: draft.knowledge_base_text || "",
+      store_name: draft.store_name.trim(),
     }, categoryKeys);
   };
 
@@ -218,7 +211,7 @@ function AgentEditor({
             </div>
             <div>
               <h2 id="agent-editor-title" className="text-base font-bold text-[#1a1f2e]">{agent ? "编辑AI小高智能体" : "创建AI小高智能体"}</h2>
-              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、提示词、知识参考提示词和 AI 客服知识范围。</p>
+              <p className="mt-1 text-xs text-[#8b95a6]">配置名称、门店名称和 AI 客服知识范围。</p>
             </div>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭智能体编辑弹窗" className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#f4f6f8]">
@@ -240,40 +233,22 @@ function AgentEditor({
           </label>
 
           <label className="grid gap-1.5 text-xs">
-            <span className="font-semibold text-[#475569]">智能体提示词</span>
-            <textarea
-              value={draft.prompt}
-              onChange={(event) => setDraft({ ...draft, prompt: event.target.value })}
-              className="min-h-[150px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="请填写智能体的人设、语气、角色定位和销售风格，例如你是一名专业二手车销售顾问，语气热情、专业、不过度承诺。"
+            <span className="font-semibold text-[#475569]">门店名称 <span className="text-rose-500">*</span></span>
+            <input
+              value={draft.store_name}
+              onChange={(event) => setDraft({ ...draft, store_name: event.target.value })}
+              className="h-10 rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 text-sm text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              placeholder="请输入门店名称，例如 XX 精品车行"
             />
           </label>
 
-          <label className="grid gap-1.5 text-xs">
-            <span className="font-semibold text-[#475569]">知识参考提示词</span>
-            <textarea
-              value={draft.knowledge_base_text}
-              onChange={(event) => setDraft({ ...draft, knowledge_base_text: event.target.value })}
-              className="min-h-[120px] resize-none rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-3 py-3 text-sm leading-6 text-[#1a1f2e] outline-none focus:border-[#2563eb] focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-              placeholder="请填写该智能体在使用知识和组织答案时需要遵循的规则，例如优先回答车型、价格、车况、门店位置；客户有购车意向时，引导留下手机号或微信；不确定的信息不要编造。"
-            />
-          </label>
-
-          {/* 商家可配置变量（固定提示词模板 V2.0）：傻瓜式表单，商户只需填简单内容 */}
+          {/* 门店普通事实字段（固定提示词模板 V2.0 注入）：傻瓜式表单，商户只需填简单内容 */}
           <div className="rounded-xl border border-[#dfe5ee] bg-[#f8fafc] px-4 py-4">
             <div className="mb-3 text-xs font-bold text-[#1a1f2e]">门店信息配置</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-xs">
                 <span className="font-semibold text-[#475569]">门店地址</span>
                 <input value={draft.store_address || ""} onChange={(e) => setDraft({ ...draft, store_address: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店详细地址" />
-              </label>
-              <label className="grid gap-1 text-xs">
-                <span className="font-semibold text-[#475569]">门店联系方式</span>
-                <input value={draft.store_phone || ""} onChange={(e) => setDraft({ ...draft, store_phone: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店联系电话" />
-              </label>
-              <label className="grid gap-1 text-xs">
-                <span className="font-semibold text-[#475569]">门店微信号</span>
-                <input value={draft.store_wechat || ""} onChange={(e) => setDraft({ ...draft, store_wechat: e.target.value })} className="h-9 rounded-lg border border-[#dfe5ee] bg-white px-3 text-sm outline-none focus:border-[#2563eb]" placeholder="请输入门店微信号" />
               </label>
               <label className="grid gap-1 text-xs">
                 <span className="font-semibold text-[#475569]">门店营业时间</span>
@@ -319,7 +294,7 @@ function AgentEditor({
               {categoryLoading ? <span className="text-[11px] text-[#8b95a6]">加载中...</span> : null}
             </div>
             <p className="mb-3 text-[11px] leading-5 text-[#8b95a6]">
-              小高知识库由管理员统一维护。关闭后，AI 将只按人设提示词和当前对话生成回复，不检索知识库。
+              小高知识库由管理员统一维护。关闭后，AI 将只按固定提示词模板和当前对话生成回复，不检索知识库。
             </p>
             <div className="flex flex-wrap gap-2">
               {selectableCategories.map((category) => (
@@ -419,23 +394,8 @@ function TrainingPanel({ agent }: { agent: AiAgent | null }) {
     try {
       const result = await previewAiAgent({
         agent_id: agent.agent_id,
-        name: agent.name,
-        persona_prompt: agent.prompt || "",
-        knowledge_prompt: agent.knowledge_base_text || "",
-        knowledge_category_keys: categoryKeys,
         message: text,
         conversation_history: conversationHistory,
-        store_address: agent.store_address || "",
-        store_phone: agent.store_phone || "",
-        store_wechat: agent.store_wechat || "",
-        business_hours: agent.business_hours || "",
-        sales_cities: agent.sales_cities || "",
-        sales_brands: agent.sales_brands || "",
-        purchase_cities: agent.purchase_cities || "",
-        purchase_brands: agent.purchase_brands || "",
-        after_hours_reply: agent.after_hours_reply || "",
-        vehicle_condition_reply: agent.vehicle_condition_reply || "",
-        appraiser_off_hours_reply: agent.appraiser_off_hours_reply || "",
       });
       setMessages((current) => [
         ...current,
@@ -666,7 +626,7 @@ export default function SuperMerchantAgent() {
                     />
                   </div>
                   <h2 className="mt-4 truncate text-sm font-bold text-[#1a1f2e]">{agent.name}</h2>
-                  <p className="mt-3 line-clamp-2 min-h-10 text-xs leading-5 text-[#64748b]">{promptPreview(agent.prompt)}</p>
+                  <p className="mt-3 line-clamp-2 min-h-10 text-xs leading-5 text-[#64748b]">{agent.store_name || agent.name || "未命名门店"}</p>
                   <div className="mt-auto flex items-center justify-between gap-3 pt-4">
                     <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-[#94a3b8]">
                       <ClockIcon size={13} />

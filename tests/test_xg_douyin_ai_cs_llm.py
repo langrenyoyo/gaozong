@@ -1162,7 +1162,6 @@ def test_bound_agent_prompt_can_guide_phone_lead_capture(tmp_path, monkeypatch):
                 "agent_id": "agent-phone",
                 "agent_name": "留资智能体",
                 "system_prompt": "每次回复都要自然引导客户留下联系方式，检测报告、报价和车源资料通过手机发送；绝不说加绿泡泡。",
-                "prompt": "每次回复都要自然引导客户留下手机号。",
                 "status": "active",
             },
             "latest_message": "这俩我都关注。要是有现车，能先把检测报告和最低价发我看看吗？",

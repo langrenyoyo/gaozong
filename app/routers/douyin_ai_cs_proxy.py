@@ -18,7 +18,7 @@ from app.services.agent_knowledge_category_service import (
     list_agent_category_keys,
 )
 from app.services.knowledge_category_service import ensure_category_usable_for_merchant
-from app.services.ai_agent_service import get_agent
+from app.services.ai_agent_service import build_agent_config, get_agent
 from app.services.douyin_ai_cs_binding_service import validate_douyin_agent_binding
 from app.services.forbidden_word_service import load_forbidden_words_for_llm
 from app.services.contact_state_service import build_request_contact_state
@@ -323,28 +323,10 @@ def create_reply_suggestion_proxy(
         "douyin_account_id": request.douyin_account_id,
         "merchant_id": context.merchant_id,
         "agent_id": request.agent_id,
-        "agent_config": {
-            "agent_id": agent.agent_id,
-            "agent_name": agent.name,
-            "system_prompt": agent.prompt or "",
-            "prompt": agent.prompt or "",
-            "knowledge_base_text": agent.knowledge_base_text or "",
-            "status": agent.status,
-            "allowed_category_keys": allowed_category_keys,
-            "rag_enabled": bool(allowed_category_keys),
-            # P0-B：会话预览补齐商家变量（与自动回复一致，缺失值用空字符串）
-            "store_address": getattr(agent, "store_address", "") or "",
-            "store_phone": getattr(agent, "store_phone", "") or "",
-            "store_wechat": getattr(agent, "store_wechat", "") or "",
-            "business_hours": getattr(agent, "business_hours", "") or "",
-            "sales_cities": getattr(agent, "sales_cities", "") or "",
-            "sales_brands": getattr(agent, "sales_brands", "") or "",
-            "purchase_cities": getattr(agent, "purchase_cities", "") or "",
-            "purchase_brands": getattr(agent, "purchase_brands", "") or "",
-            "after_hours_reply": getattr(agent, "after_hours_reply", "") or "",
-            "vehicle_condition_reply": getattr(agent, "vehicle_condition_reply", "") or "",
-            "appraiser_off_hours_reply": getattr(agent, "appraiser_off_hours_reply", "") or "",
-        },
+        "agent_config": build_agent_config(
+            agent,
+            category_keys=allowed_category_keys,
+        ),
         "latest_message": reply_context.latest_message,
         "max_history_messages": min(request.max_history_messages, 10),
         "conversation_history": reply_context.conversation_history,
